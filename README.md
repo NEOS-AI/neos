@@ -14,6 +14,8 @@ python3 scripts/setup.py
 python3 scripts/setup.py --ml
 ```
 
+TODO: need to document the crawler setup
+
 2. Run servers:
 ```bash
 # API server
