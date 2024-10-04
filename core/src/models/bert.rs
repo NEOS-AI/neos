@@ -524,20 +524,6 @@ impl BertModel {
         self.pooler = pooler;
     }
 
-    fn extended_attention_mask(
-        &self,
-        attention_mask: &Tensor,
-        input_ids_dims: &[usize],
-    ) -> Result<Tensor> {
-        let bs = input_ids_dims[0];
-        let seq = input_ids_dims[input_ids_dims.len() - 1];
-        let attention_mask = attention_mask.reshape(&[bs, 1, 1, seq])?;
-
-        // TODO: subtract min value of dtype instead of 1e4
-        // i.e. something like: (1.0 - attention_mask)? * dtype.min_value()?
-        (1.0 - attention_mask)? * -1e4
-    }
-
     pub fn forward(
         &self,
         input_ids: &Tensor,
