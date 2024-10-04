@@ -64,12 +64,22 @@ pub fn run(config: &config::IndexerConfig) -> Result<()> {
         })
         .collect();
 
+    // merge indexes (parallelized)
     let index = merge(indexes)?;
     crate::mv(index.path(), &config.output_path)?;
 
     Ok(())
 }
 
+///
+/// Merge multiple indexes into one.
+/// This function is parallelized.
+/// The number of threads is determined by the number of cores.
+///
+/// ## Arguments
+/// * `indexes` - A list of indexes to merge.
+/// ## Returns
+/// * A merged index.
 pub fn merge(indexes: Vec<IndexPointer>) -> Result<Index> {
     let num_indexes = indexes.len();
     let mut it = indexes.into_iter();
