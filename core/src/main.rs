@@ -1,4 +1,4 @@
-// neos is an open source web search engine.
+// Neos is an open source web search engine.
 // Copyright (C) 2024 Yeonwoo Sung
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -171,15 +171,18 @@ enum LiveIndex {
 
 #[derive(Subcommand)]
 enum Crawler {
-    /// Deploy the crawl worker. The worker is responsible for downloading webpages, saving them to S3,
+    /// Deploy the crawl worker.
+    /// The worker is responsible for downloading webpages, saving them to S3,
     /// and sending newly discovered urls back to the crawl coordinator.
     Worker { config_path: String },
 
-    /// Deploy the crawl coordinator. The crawl coordinator is responsible for
-    /// distributing crawl jobs to the crawles and deciding which urls to crawl next.
+    /// Deploy the crawl coordinator.
+    /// The crawl coordinator is responsible for distributing crawl jobs
+    /// to the crawles and deciding which urls to crawl next.
     Coordinator { config_path: String },
 
-    /// Deploy the crawl router. The crawl router is responsible for routing job responses and requests
+    /// Deploy the crawl router.
+    /// The crawl router is responsible for routing job responses and requests
     /// from the workers to the correct crawl coordinators.
     Router { config_path: String },
 
