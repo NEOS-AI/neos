@@ -47,6 +47,16 @@ cargo run entity-search-server configs/entity_search_server.toml
 cargo run webgraph server configs/webgraph/host_server.toml" && cargo run webgraph server configs/webgraph/page_server.toml
 ```
 
+## TODO
+
+- [ ] Crawl the data from the web
+    - [ ] run the crawler with the seed URLs
+- [ ] Enhance the indexer for faster indexing
+- [ ] Update the ranking algorithms, prove the efficiency
+- [ ] Need web interface
+    - [ ] Search page
+    - [ ] Entity search page
+
 ## References
 
 - [tantivy](https://crates.io/crates/tantivy)
