@@ -1,0 +1,7 @@
+output_path = "./data/feed_index"
+# minimum_clean_words = 40
+
+[warc_source]
+folder = "./data"
+names = ["sample.warc.gz"]
+type = "Local"

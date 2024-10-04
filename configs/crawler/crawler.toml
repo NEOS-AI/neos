@@ -1,0 +1,17 @@
+dry_run = true
+num_jobs_per_fetch = 10
+num_worker_threads = 1
+politeness_factor = 1.0
+router_hosts = ["0.0.0.0:8181"]
+timeout_seconds = 30
+
+[user_agent]
+full = "<user_agent>" 
+token = "<user_agent_token>" # e.g. 'CrawlBot'
+
+[s3]
+access_key = "<access_key>"
+bucket = "crawl"
+endpoint = "http://s3.stract.com"
+folder = "test"
+secret_key = "<secret_key>"
