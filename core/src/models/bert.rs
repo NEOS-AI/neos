@@ -10,7 +10,7 @@ use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use candle_transformers::models::with_tracing::{layer_norm, linear, LayerNorm, Linear};
 use serde::Deserialize;
 
-pub const DTYPE: DType = DType::F32;
+// pub const DTYPE: DType = DType::F32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]

@@ -125,9 +125,11 @@ impl CrossEncoderModel {
             .to_dtype(self.dtype)
             .unwrap();
 
+        let attention_mask = Some(&attention_mask);
+
         let logits = self
             .encoder
-            .forward(&input_ids, &token_type_ids, &attention_mask)
+            .forward(&input_ids, &token_type_ids, attention_mask)
             .unwrap();
 
         let scores = self

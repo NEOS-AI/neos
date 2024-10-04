@@ -87,11 +87,14 @@ impl DualEncoder {
             .iter()
             .map(|enc| Tensor::new(enc.get_attention_mask(), &self.device).map_err(|e| anyhow!(e)))
             .collect::<Result<Vec<_>>>()?;
-        let attention_mask = Tensor::stack(&attention_mask, 0)?.to_dtype(self.dtype);
+        let attention_mask = Tensor::stack(&attention_mask, 0)?.to_dtype(self.dtype)?;
+
+        // Tensor to Option<&Tensor>
+        let attention_mask_option = Some(&attention_mask);
 
         let emb = self
             .model
-            .forward(&input_ids, &token_type_ids, &attention_mask)?;
+            .forward(&input_ids, &token_type_ids, attention_mask_option)?;
 
         let (_n_sentence, n_tokens, _hidden_size) = emb.dims3()?;
 
