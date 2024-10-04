@@ -1,7 +1,7 @@
 // Neos is an open source web search engine.
 // Copyright (C) 2024 Yeonwoo Sung
 //
-// This code is copied from Stract, which is licensed under the GNU Affero General Public License.
+// This code is originated from Stract, which is licensed under the GNU Affero General Public License.
 
 //! This has been copied from `bincode` so that we can derive Clone, serde::Serialize and serde::Deserialize for `Compat`
 #[derive(Clone, serde::Serialize, serde::Deserialize, thiserror::Error)]

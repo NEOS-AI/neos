@@ -1,7 +1,7 @@
 // Neos is an open source web search engine.
 // Copyright (C) 2024 Yeonwoo Sung
 //
-// This code is copied from Stract, which is licensed under the GNU Affero General Public License.
+// This code is originated from Stract, which is licensed under the GNU Affero General Public License.
 
 //! This module is a hacky workaround for the fact that the `openapi` does not
 //! like generics very much.

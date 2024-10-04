@@ -3,7 +3,7 @@ use tantivy::tokenizer::BoxTokenStream;
 // Neos is an open source web search engine.
 // Copyright (C) 2024 Yeonwoo Sung
 //
-// This code is copied from Stract, which is licensed under the GNU Affero General Public License.
+// This code is originated from Stract, which is licensed under the GNU Affero General Public License.
 #[derive(Clone, Default, Debug)]
 pub struct Identity {}
 

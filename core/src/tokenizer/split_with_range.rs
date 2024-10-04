@@ -1,7 +1,7 @@
 // Neos is an open source web search engine.
 // Copyright (C) 2024 Yeonwoo Sung
 //
-// This code is copied from Stract, which is licensed under the GNU Affero General Public License.
+// This code is originated from Stract, which is licensed under the GNU Affero General Public License.
 
 pub trait SplitWithRange {
     fn split_with_range<P>(&self, pred: P) -> impl Iterator<Item = (&str, std::ops::Range<usize>)>

@@ -1,7 +1,7 @@
 // Neos is an open source web search engine.
 // Copyright (C) 2024 Yeonwoo Sung
 //
-// This code is copied from Stract, which is licensed under the GNU Affero General Public License.
+// This code is originated from Stract, which is licensed under the GNU Affero General Public License.
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
