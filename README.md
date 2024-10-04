@@ -2,6 +2,22 @@
 
 Highly efficient web search engine.
 
+## Why new search engine?
+
+Clearly, there are so many search engines available.
+And they are doing a great job.
+But, there are some issues with them.
+
+Google is great, but it is not open source.
+Also, some people are concerned about privacy, and some people are concerned about the monopoly of Google.
+Furthermore, it is clear that many Search Engines gets profit from ads, which might affect the search results.
+
+Metasearch engines like searxng are relying too much on other search engines.
+
+RAG-based search engines could be a game-changer, but not all companies can afford to use the LLMs due to the high cost of GPUs.
+
+This is why I am spending my time to build a new classic search engine.
+
 ## Instructions
 
 1. Set up the environment:
@@ -34,3 +50,4 @@ cargo run webgraph server configs/webgraph/host_server.toml" && cargo run webgra
 ## References
 
 - [tantivy](https://crates.io/crates/tantivy)
+- [stract](https://github.com/StractOrg/stract)
