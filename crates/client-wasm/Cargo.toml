@@ -1,0 +1,29 @@
+[package]
+authors = ['Stract <hello@stract.com>']
+edition = "2021"
+license = "AGPL-3.0"
+name = "client-wasm"
+publish = false
+version = "0.1.0"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[package.metadata.wasm-pack.profile.dev]
+wasm-opt = false
+
+[package.metadata.wasm-pack.profile.profiling]
+wasm-opt = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bincode.workspace = true
+js-sys.workspace = true
+optics = {path = "../optics"}
+serde-wasm-bindgen.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+wasm-bindgen.workspace = true
