@@ -1,5 +1,8 @@
 // Neos is an open source web search engine.
 // Copyright (C) 2024 Yeonwoo Sung
+//
+// This code is copied from Stract, which is licensed under the GNU Affero General Public License.
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use neos::config;
@@ -289,6 +292,7 @@ fn main() -> Result<()> {
         .finish()
         .init();
 
+    // Parse the command line arguments.
     let args = Args::parse();
 
     match args.command {
