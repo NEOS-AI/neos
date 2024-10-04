@@ -38,10 +38,11 @@ pub fn run(config: &config::IndexerConfig) -> Result<()> {
     let worker = crate::block_on(IndexingWorker::new(config.clone().into()));
 
     let indexes = warc_paths
-        .into_par_iter()
-        .skip(config.skip_warc_files.unwrap_or(0))
-        .take(config.limit_warc_files.unwrap_or(usize::MAX))
+        .into_par_iter() // iterate over warc files in parallel
+        .skip(config.skip_warc_files.unwrap_or(0)) // if "skip_warc_files" is not set, use 0 as default
+        .take(config.limit_warc_files.unwrap_or(usize::MAX)) // if "limit_warc_files" is not set, use usize::MAX as default
         .map(|warc_path| Job {
+            // map each warc file to a Job instance
             source_config: job_config.clone(),
             warc_path,
             base_path: config.output_path.clone(),
@@ -53,6 +54,7 @@ pub fn run(config: &config::IndexerConfig) -> Result<()> {
             },
         })
         .map(|job| {
+            // map each Job instance to an IndexPointer instance
             IndexPointer(
                 job.process(&worker)
                     .path()
@@ -62,7 +64,7 @@ pub fn run(config: &config::IndexerConfig) -> Result<()> {
                     .to_string(),
             )
         })
-        .collect();
+        .collect(); // collects the IndexPointer instances into a Vec
 
     // merge indexes (parallelized)
     let index = merge(indexes)?;
