@@ -5,10 +5,12 @@
 //!
 //! https://github.com/huggingface/candle/blob/main/candle-examples/examples/bert/main.rs
 
-use candle_core::{Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use candle_transformers::models::with_tracing::{layer_norm, linear, LayerNorm, Linear};
 use serde::Deserialize;
+
+pub const DTYPE: DType = DType::F32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -29,7 +31,7 @@ impl HiddenActLayer {
         Self { act, span }
     }
 
-    fn forward(&self, xs: &Tensor) -> candle_core::Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         match self.act {
             // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/activations.py#L213
@@ -42,7 +44,7 @@ impl HiddenActLayer {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum PositionEmbeddingType {
+enum PositionEmbeddingType {
     #[default]
     Absolute,
 }
@@ -78,7 +80,7 @@ impl Default for Config {
             num_hidden_layers: 12,
             num_attention_heads: 12,
             intermediate_size: 3072,
-            hidden_act: HiddenAct::GeluApproximate,
+            hidden_act: HiddenAct::Gelu,
             hidden_dropout_prob: 0.1,
             max_position_embeddings: 512,
             type_vocab_size: 2,
@@ -102,7 +104,7 @@ impl Config {
             num_hidden_layers: 6,
             num_attention_heads: 12,
             intermediate_size: 1536,
-            hidden_act: HiddenAct::GeluApproximate,
+            hidden_act: HiddenAct::Gelu,
             hidden_dropout_prob: 0.1,
             max_position_embeddings: 512,
             type_vocab_size: 2,
@@ -235,10 +237,8 @@ impl BertSelfAttention {
         let xs = xs.reshape(new_x_shape.as_slice())?.transpose(1, 2)?;
         xs.contiguous()
     }
-}
 
-impl BertSelfAttention {
-    pub fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let query_layer = self.query.forward(hidden_states)?;
         let key_layer = self.key.forward(hidden_states)?;
@@ -251,16 +251,15 @@ impl BertSelfAttention {
         let attention_scores = query_layer.matmul(&key_layer.t()?)?;
         let attention_scores = (attention_scores / (self.attention_head_size as f64).sqrt())?;
         let attention_scores = attention_scores.broadcast_add(attention_mask)?;
-
         let attention_probs = {
             let _enter_sm = self.span_softmax.enter();
-            candle_nn::ops::softmax(&attention_scores, candle_core::D::Minus1)?
+            candle_nn::ops::softmax(&attention_scores, D::Minus1)?
         };
         let attention_probs = self.dropout.forward(&attention_probs)?;
 
         let context_layer = attention_probs.matmul(&value_layer)?;
         let context_layer = context_layer.transpose(1, 2)?.contiguous()?;
-        let context_layer = context_layer.flatten_from(candle_core::D::Minus2)?;
+        let context_layer = context_layer.flatten_from(D::Minus2)?;
         Ok(context_layer)
     }
 }
@@ -314,9 +313,7 @@ impl BertAttention {
             span: tracing::span!(tracing::Level::TRACE, "attn"),
         })
     }
-}
 
-impl BertAttention {
     fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let self_outputs = self.self_attention.forward(hidden_states, attention_mask)?;
@@ -405,9 +402,7 @@ impl BertLayer {
             span: tracing::span!(tracing::Level::TRACE, "layer"),
         })
     }
-}
 
-impl BertLayer {
     fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let attention_output = self.attention.forward(hidden_states, attention_mask)?;
@@ -436,9 +431,7 @@ impl BertEncoder {
         let span = tracing::span!(tracing::Level::TRACE, "encoder");
         Ok(BertEncoder { layers, span })
     }
-}
 
-impl BertEncoder {
     fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let mut hidden_states = hidden_states.clone();
@@ -475,6 +468,7 @@ pub struct BertModel {
     embeddings: BertEmbeddings,
     encoder: BertEncoder,
     pooler: Option<BertPooler>,
+    pub device: Device,
     span: tracing::Span,
 }
 
@@ -515,10 +509,17 @@ impl BertModel {
             embeddings,
             encoder,
             pooler,
+            device: vb.device().clone(),
             span: tracing::span!(tracing::Level::TRACE, "model"),
         })
     }
 
+    /// Set the pooler layer to `None` to use mean pooling.
+    ///
+    /// ## Arguments
+    /// * `pooler` - The pooler layer to use.
+    ///             If `None`, the model will use mean pooling.
+    ///            If `Some`, the model will use the provided pooler layer.
     pub fn set_pooler(&mut self, pooler: Option<BertPooler>) {
         self.pooler = pooler;
     }
@@ -541,7 +542,7 @@ impl BertModel {
         &self,
         input_ids: &Tensor,
         token_type_ids: &Tensor,
-        attention_mask: &Tensor,
+        attention_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let dims = input_ids.dims();
@@ -554,9 +555,13 @@ impl BertModel {
             });
         }
 
-        let attention_mask = self.extended_attention_mask(attention_mask, dims)?;
-
         let embedding_output = self.embeddings.forward(input_ids, token_type_ids)?;
+        let attention_mask = match attention_mask {
+            Some(attention_mask) => attention_mask.clone(),
+            None => input_ids.ones_like()?,
+        };
+        // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L995
+        let attention_mask = get_extended_attention_mask(&attention_mask, DType::F32)?;
         let sequence_output = self.encoder.forward(&embedding_output, &attention_mask)?;
 
         match &self.pooler {
@@ -564,4 +569,16 @@ impl BertModel {
             None => Ok(sequence_output),
         }
     }
+}
+
+fn get_extended_attention_mask(attention_mask: &Tensor, dtype: DType) -> Result<Tensor> {
+    let attention_mask = match attention_mask.rank() {
+        3 => attention_mask.unsqueeze(1)?,
+        2 => attention_mask.unsqueeze(1)?.unsqueeze(1)?,
+        _ => candle_core::bail!("Wrong shape for input_ids or attention_mask"),
+    };
+    let attention_mask = attention_mask.to_dtype(dtype)?;
+    // torch.finfo(dtype).min
+    (attention_mask.ones_like()? - &attention_mask)?
+        .broadcast_mul(&Tensor::try_from(f32::MIN)?.to_device(attention_mask.device())?)
 }
