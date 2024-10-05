@@ -1,0 +1,960 @@
+DiscardNonMatching;
+Rule {
+        Matches {
+            MicroformatTag("|h-entry|")
+        },
+        Action(Boost(0))
+};
+
+Rule {
+        Matches {
+            Site("|overcomingbias.com|")
+        },
+        Matches {
+            Site("|blog.jim-nielsen.com|")
+        },
+        Matches {
+            Site("|bix.blog|")
+        },
+        Matches {
+            Site("|blog.zedas.fr|")
+        },
+        Matches {
+            Site("|gwennseemel.com|")
+        },
+        Matches {
+            Site("|duckrowing.com|")
+        },
+        Matches {
+            Site("|miskatonic.org|")
+        },
+        Matches {
+            Site("|williamgallagher.com|")
+        },
+        Matches {
+            Site("|writingball.blogspot.com|")
+        },
+        Matches {
+            Site("|blog.benjojo.co.uk|")
+        },
+        Matches {
+            Site("|simply.jenett.org|")
+        },
+        Matches {
+            Site("|bellard.org|")
+        },
+        Matches {
+            Site("|nicktaurojr.com|")
+        },
+        Matches {
+            Site("|alirezahayati.com|")
+        },
+        Matches {
+            Site("|aworkinglibrary.com|")
+        },
+        Matches {
+            Site("|nancyfriedman.typepad.com|")
+        },
+        Matches {
+            Site("|ruk.ca|")
+        },
+        Matches {
+            Site("|bt.ht|")
+        },
+        Matches {
+            Site("|scottnesbitt.online|")
+        },
+        Matches {
+            Site("|darice.org|")
+        },
+        Matches {
+            Site("|alongtheray.com|")
+        },
+        Matches {
+            Site("|andregarzia.com|")
+        },
+        Matches {
+            Site("|cmhb.de|")
+        },
+        Matches {
+            Site("|xianblog.wordpress.com|")
+        },
+        Matches {
+            Site("|maggiemcneill.com|")
+        },
+        Matches {
+            Site("|justine.lol|")
+        },
+        Matches {
+            Site("|mnmlscholar.com|")
+        },
+        Matches {
+            Site("|dynomight.net|")
+        },
+        Matches {
+            Site("|tonsky.me|")
+        },
+        Matches {
+            Site("|75centralphotography.com|")
+        },
+        Matches {
+            Site("|hootreview.com|")
+        },
+        Matches {
+            Site("|siamorweng.wordpress.com|")
+        },
+        Matches {
+            Site("|davidbordwell.net|")
+        },
+        Matches {
+            Site("|oceanicwilderness.com|")
+        },
+        Matches {
+            Site("|zachholman.com|")
+        },
+        Matches {
+            Site("|hearthwilde.com|")
+        },
+        Matches {
+            Site("|brickexperimentchannel.wordpress.com|")
+        },
+        Matches {
+            Site("|charlenewinfred.com|")
+        },
+        Matches {
+            Site("|thenewleafjournal.com|")
+        },
+        Matches {
+            Site("|boffosocko.com|")
+        },
+        Matches {
+            Site("|kevq.uk|")
+        },
+        Matches {
+            Site("|rollingsteeltent.blogspot.com|")
+        },
+        Matches {
+            Site("|musingsfromatangledmind.com|")
+        },
+        Matches {
+            Site("|miriamsuzanne.com|")
+        },
+        Matches {
+            Site("|theprivacydad.com|")
+        },
+        Matches {
+            Site("|words.steveklabnik.com|")
+        },
+        Matches {
+            Site("|pepysdiary.com|")
+        },
+        Matches {
+            Site("|statmodeling.stat.columbia.edu|")
+        },
+        Matches {
+            Site("|wildmanlife.com|")
+        },
+        Matches {
+            Site("|rollofnickels.blogspot.com|")
+        },
+        Matches {
+            Site("|type-writer.org|")
+        },
+        Matches {
+            Site("|interconnected.org|")
+        },
+        Matches {
+            Site("|kwon.nyc|")
+        },
+        Matches {
+            Site("|seanbonner.com|")
+        },
+        Matches {
+            Site("|alittlebitofrest.com|")
+        },
+        Matches {
+            Site("|beetleypete.com|")
+        },
+        Matches {
+            Site("|hiphopisntdead.blogspot.com|")
+        },
+        Matches {
+            Site("|campegg.com|")
+        },
+        Matches {
+            Site("|jamierubin.net|")
+        },
+        Matches {
+            Site("|cheapskatesguide.org|")
+        },
+        Matches {
+            Site("|blog.rachelbinx.com|")
+        },
+        Matches {
+            Site("|adventuretaco.com|")
+        },
+        Matches {
+            Site("|fullmoonfiberart.com|")
+        },
+        Matches {
+            Site("|blog.tobiasrevell.com|")
+        },
+        Matches {
+            Site("|jeffperry.me|")
+        },
+        Matches {
+            Site("|theusedlife.com|")
+        },
+        Matches {
+            Site("|aows.co|")
+        },
+        Matches {
+            Site("|blog.samaltman.com|")
+        },
+        Matches {
+            Site("|lordmatt.co.uk|")
+        },
+        Matches {
+            Site("|kristybowen.blogspot.com|")
+        },
+        Matches {
+            Site("|thewrittenaddiction.com|")
+        },
+        Matches {
+            Site("|appellationbeer.com|")
+        },
+        Matches {
+            Site("|eli.li|")
+        },
+        Matches {
+            Site("|blog.dshr.org|")
+        },
+        Matches {
+            Site("|walkingarizona.blogspot.com|")
+        },
+        Matches {
+            Site("|troyhunt.com|")
+        },
+        Matches {
+            Site("|johnpweiss.com|")
+        },
+        Matches {
+            Site("|sarahavenir.com|")
+        },
+        Matches {
+            Site("|junkcharts.typepad.com|")
+        },
+        Matches {
+            Site("|jacquesmattheij.com|")
+        },
+        Matches {
+            Site("|gilest.org|")
+        },
+        Matches {
+            Site("|goodoptics.wordpress.com|")
+        },
+        Matches {
+            Site("|antirez.com|")
+        },
+        Matches {
+            Site("|casualoptimist.com|")
+        },
+        Matches {
+            Site("|findingcoopersvoice.com|")
+        },
+        Matches {
+            Site("|ritaottramstad.com|")
+        },
+        Matches {
+            Site("|rollingexistence.com|")
+        },
+        Matches {
+            Site("|themarginalian.org|")
+        },
+        Matches {
+            Site("|exilelifestyle.com|")
+        },
+        Matches {
+            Site("|kelake.org|")
+        },
+        Matches {
+            Site("|winnielim.org|")
+        },
+        Matches {
+            Site("|davesmyth.com|")
+        },
+        Matches {
+            Site("|noisydeadlines.net|")
+        },
+        Matches {
+            Site("|veronique.ink|")
+        },
+        Matches {
+            Site("|sinclairtrails.com|")
+        },
+        Matches {
+            Site("|ciechanow.ski|")
+        },
+        Matches {
+            Site("|ethanhein.com|")
+        },
+        Matches {
+            Site("|appalachianground.com|")
+        },
+        Matches {
+            Site("|50watts.com|")
+        },
+        Matches {
+            Site("|velveteenrabbi.blogs.com|")
+        },
+        Matches {
+            Site("|cjchilvers.com|")
+        },
+        Matches {
+            Site("|hikingdude.com|")
+        },
+        Matches {
+            Site("|ribbonfarm.com|")
+        },
+        Matches {
+            Site("|bbbhltz.codeberg.page|")
+        },
+        Matches {
+            Site("|bookandsword.com|")
+        },
+        Matches {
+            Site("|harsimony.wordpress.com|")
+        },
+        Matches {
+            Site("|inthewilderness.net|")
+        },
+        Matches {
+            Site("|blog.acolyer.org|")
+        },
+        Matches {
+            Site("|inhab.it|")
+        },
+        Matches {
+            Site("|thenewsprint.co|")
+        },
+        Matches {
+            Site("|inthemargins.ca|")
+        },
+        Matches {
+            Site("|davidrevoy.com|")
+        },
+        Matches {
+            Site("|piperhaywood.com|")
+        },
+        Matches {
+            Site("|morningporch.com|")
+        },
+        Matches {
+            Site("|putah-creek.tumblr.com|")
+        },
+        Matches {
+            Site("|marginalrevolution.com|")
+        },
+        Matches {
+            Site("|profmattstrassler.com|")
+        },
+        Matches {
+            Site("|bruh.ltd|")
+        },
+        Matches {
+            Site("|dreamvalleyfarmstead.com|")
+        },
+        Matches {
+            Site("|minutestomidnight.co.uk|")
+        },
+        Matches {
+            Site("|stephenfollows.com|")
+        },
+        Matches {
+            Site("|acorneredgurl.com|")
+        },
+        Matches {
+            Site("|opensourcemusings.com|")
+        },
+        Matches {
+            Site("|baldurbjarnason.com|")
+        },
+        Matches {
+            Site("|kristinberkey-abbott.blogspot.com|")
+        },
+        Matches {
+            Site("|widowbadass.com|")
+        },
+        Matches {
+            Site("|islandinthenet.com|")
+        },
+        Matches {
+            Site("|lucasdidthis.com|")
+        },
+        Matches {
+            Site("|protesilaos.com|")
+        },
+        Matches {
+            Site("|thevisualchronicle.com|")
+        },
+        Matches {
+            Site("|rasterweb.net|")
+        },
+        Matches {
+            Site("|jonathanwrotethis.wordpress.com|")
+        },
+        Matches {
+            Site("|backreaction.blogspot.com|")
+        },
+        Matches {
+            Site("|daringfireball.net|")
+        },
+        Matches {
+            Site("|mpmilestogo.site|")
+        },
+        Matches {
+            Site("|paulgraham.com|")
+        },
+        Matches {
+            Site("|mtlynch.io|")
+        },
+        Matches {
+            Site("|nitinkhanna.com|")
+        },
+        Matches {
+            Site("|teachertomsblog.blogspot.com|")
+        },
+        Matches {
+            Site("|danielsisson.com|")
+        },
+        Matches {
+            Site("|derekkedziora.com|")
+        },
+        Matches {
+            Site("|mavengame.com|")
+        },
+        Matches {
+            Site("|chrishannah.me|")
+        },
+        Matches {
+            Site("|davidffisher.com|")
+        },
+        Matches {
+            Site("|pxlnv.com|")
+        },
+        Matches {
+            Site("|hyperborea.org|")
+        },
+        Matches {
+            Site("|jpkoning.blogspot.com|")
+        },
+        Matches {
+            Site("|numericcitizen.me|")
+        },
+        Matches {
+            Site("|cimple.life|")
+        },
+        Matches {
+            Site("|theonlinephotographer.com|")
+        },
+        Matches {
+            Site("|hermitary.com|")
+        },
+        Matches {
+            Site("|zettl.blog|")
+        },
+        Matches {
+            Site("|roadtothesea.com|")
+        },
+        Matches {
+            Site("|nintil.com|")
+        },
+        Matches {
+            Site("|languagelog.ldc.upenn.edu|")
+        },
+        Matches {
+            Site("|fabiensanglard.net|")
+        },
+        Matches {
+            Site("|47nil.com|")
+        },
+        Matches {
+            Site("|popagandhi.com|")
+        },
+        Matches {
+            Site("|cdevroe.com|")
+        },
+        Matches {
+            Site("|joevancleave.blogspot.com|")
+        },
+        Matches {
+            Site("|centauri-dreams.org|")
+        },
+        Matches {
+            Site("|theschoolofthetransferofenergy.com|")
+        },
+        Matches {
+            Site("|analogoffice.net|")
+        },
+        Matches {
+            Site("|drwho.virtadpt.net|")
+        },
+        Matches {
+            Site("|cubicgarden.com|")
+        },
+        Matches {
+            Site("|calpaterson.com|")
+        },
+        Matches {
+            Site("|andy-bell.co.uk|")
+        },
+        Matches {
+            Site("|kickscondor.com|")
+        },
+        Matches {
+            Site("|werd.io|")
+        },
+        Matches {
+            Site("|rusingh.com|")
+        },
+        Matches {
+            Site("|righto.com|")
+        },
+        Matches {
+            Site("|pedestrianobservations.com|")
+        },
+        Matches {
+            Site("|brewedjourney.blogspot.com|")
+        },
+        Matches {
+            Site("|refarmer.ca|")
+        },
+        Matches {
+            Site("|thedruidsgarden.com|")
+        },
+        Matches {
+            Site("|whatever.scalzi.com|")
+        },
+        Matches {
+            Site("|ganzeer.today|")
+        },
+        Matches {
+            Site("|florinpopa.blog|")
+        },
+        Matches {
+            Site("|gregmorris.co.uk|")
+        },
+        Matches {
+            Site("|roytang.net|")
+        },
+        Matches {
+            Site("|andrewskurka.com|")
+        },
+        Matches {
+            Site("|tracydurnell.com|")
+        },
+        Matches {
+            Site("|davidduchemin.com|")
+        },
+        Matches {
+            Site("|dylanharris.org|")
+        },
+        Matches {
+            Site("|anniemueller.com|")
+        },
+        Matches {
+            Site("|bedlamfarm.com|")
+        },
+        Matches {
+            Site("|lessthan1000followers.com|")
+        },
+        Matches {
+            Site("|scripting.com|")
+        },
+        Matches {
+            Site("|steve-best.github.io|")
+        },
+        Matches {
+            Site("|thecrow.uk|")
+        },
+        Matches {
+            Site("|geographicaljourneys.wordpress.com|")
+        },
+        Matches {
+            Site("|log.kvl.me|")
+        },
+        Matches {
+            Site("|kottke.org|")
+        },
+        Matches {
+            Site("|wendyprattpoetry.com|")
+        },
+        Matches {
+            Site("|vzqk50.com|")
+        },
+        Matches {
+            Site("|scholars-stage.org|")
+        },
+        Matches {
+            Site("|om.co|")
+        },
+        Matches {
+            Site("|wellappointeddesk.com|")
+        },
+        Matches {
+            Site("|raymondcamden.com|")
+        },
+        Matches {
+            Site("|blindjournalist.wordpress.com|")
+        },
+        Matches {
+            Site("|hamneggs716.com|")
+        },
+        Matches {
+            Site("|robert.winter.ink|")
+        },
+        Matches {
+            Site("|jvt.me|")
+        },
+        Matches {
+            Site("|chuq.me|")
+        },
+        Matches {
+            Site("|nhgardensolutions.wordpress.com|")
+        },
+        Matches {
+            Site("|verisimilitudes.net|")
+        },
+        Matches {
+            Site("|observationalepidemiology.blogspot.com|")
+        },
+        Matches {
+            Site("|transactionswithbeauty.com|")
+        },
+        Matches {
+            Site("|steelthistles.blogspot.com|")
+        },
+        Matches {
+            Site("|baileysbeerblog.blogspot.com|")
+        },
+        Matches {
+            Site("|takeonrules.com|")
+        },
+        Matches {
+            Site("|disquiet.com|")
+        },
+        Matches {
+            Site("|terriwindling.com|")
+        },
+        Matches {
+            Site("|shiftinglight.com|")
+        },
+        Matches {
+            Site("|siderea.dreamwidth.org|")
+        },
+        Matches {
+            Site("|rubenerd.com|")
+        },
+        Matches {
+            Site("|skullsinthestars.com|")
+        },
+        Matches {
+            Site("|marcthiele.com|")
+        },
+        Matches {
+            Site("|autodidacts.io|")
+        },
+        Matches {
+            Site("|pluralistic.net|")
+        },
+        Matches {
+            Site("|danluu.com|")
+        },
+        Matches {
+            Site("|photothunk.blogspot.com|")
+        },
+        Matches {
+            Site("|tmichellemoore.com|")
+        },
+        Matches {
+            Site("|robert.ocallahan.org|")
+        },
+        Matches {
+            Site("|renpowell.com|")
+        },
+        Matches {
+            Site("|schwitzsplinters.blogspot.com|")
+        },
+        Matches {
+            Site("|notes.ghed.in|")
+        },
+        Matches {
+            Site("|notesfromtheroad.com|")
+        },
+        Matches {
+            Site("|joelchrono12.xyz|")
+        },
+        Matches {
+            Site("|bfoliver.com|")
+        },
+        Matches {
+            Site("|atlasminor.com|")
+        },
+        Matches {
+            Site("|adactio.com|")
+        },
+        Matches {
+            Site("|blog.thenewoil.org|")
+        },
+        Matches {
+            Site("|silverscreenings.org|")
+        },
+        Matches {
+            Site("|urbannature.blog|")
+        },
+        Matches {
+            Site("|david-smith.org|")
+        },
+        Matches {
+            Site("|adamenglebright.com|")
+        },
+        Matches {
+            Site("|joshwithers.blog|")
+        },
+        Matches {
+            Site("|summerhillstead.wordpress.com|")
+        },
+        Matches {
+            Site("|steelsnowflake.org|")
+        },
+        Matches {
+            Site("|going-medieval.com|")
+        },
+        Matches {
+            Site("|morrick.me|")
+        },
+        Matches {
+            Site("|luxagraf.net|")
+        },
+        Matches {
+            Site("|mudkri.ca|")
+        },
+        Matches {
+            Site("|theredhandfiles.com|")
+        },
+        Matches {
+            Site("|thesphinxblog.com|")
+        },
+        Matches {
+            Site("|mariovillalobos.com|")
+        },
+        Matches {
+            Site("|timapple.com|")
+        },
+        Matches {
+            Site("|bottledaux.com|")
+        },
+        Matches {
+            Site("|furbo.org|")
+        },
+        Matches {
+            Site("|dansinker.com|")
+        },
+        Matches {
+            Site("|lucybellwood.com|")
+        },
+        Matches {
+            Site("|denisebushphoto.wordpress.com|")
+        },
+        Matches {
+            Site("|manuelmoreale.com|")
+        },
+        Matches {
+            Site("|nomadonline.blog|")
+        },
+        Matches {
+            Site("|blog.nuclearsecrecy.com|")
+        },
+        Matches {
+            Site("|karlcalagan.com|")
+        },
+        Matches {
+            Site("|granolashotgun.com|")
+        },
+        Matches {
+            Site("|sidewayseye.net|")
+        },
+        Matches {
+            Site("|lizclimo.tumblr.com|")
+        },
+        Matches {
+            Site("|grammarphobia.com|")
+        },
+        Matches {
+            Site("|jamesg.blog|")
+        },
+        Matches {
+            Site("|caseyhandmer.wordpress.com|")
+        },
+        Matches {
+            Site("|rachelbythebay.com|")
+        },
+        Matches {
+            Site("|capnaux.com|")
+        },
+        Matches {
+            Site("|100r.co|")
+        },
+        Matches {
+            Site("|stephendiehl.com|")
+        },
+        Matches {
+            Site("|krebsonsecurity.com|")
+        },
+        Matches {
+            Site("|craigmod.com|")
+        },
+        Matches {
+            Site("|simonwillison.net|")
+        },
+        Matches {
+            Site("|thisdaysportion.com|")
+        },
+        Matches {
+            Site("|brainbaking.com|")
+        },
+        Matches {
+            Site("|blog.lostartpress.com|")
+        },
+        Matches {
+            Site("|cultrface.co.uk|")
+        },
+        Matches {
+            Site("|iancylkowski.com|")
+        },
+        Matches {
+            Site("|diasyrmus.com|")
+        },
+        Matches {
+            Site("|typeoff.de|")
+        },
+        Matches {
+            Site("|darknetdiaries.com|")
+        },
+        Matches {
+            Site("|impossiblesongs.blogspot.com|")
+        },
+        Matches {
+            Site("|swistle.com|")
+        },
+        Matches {
+            Site("|lkhrs.com|")
+        },
+        Matches {
+            Site("|ericwbailey.website|")
+        },
+        Matches {
+            Site("|flameeyes.blog|")
+        },
+        Matches {
+            Site("|astroanarchy.blogspot.com|")
+        },
+        Matches {
+            Site("|zerokspot.com|")
+        },
+        Matches {
+            Site("|daverupert.com|")
+        },
+        Matches {
+            Site("|austinkleon.com|")
+        },
+        Matches {
+            Site("|grahamsisland.com|")
+        },
+        Matches {
+            Site("|jon.bo|")
+        },
+        Matches {
+            Site("|somewherein.jp|")
+        },
+        Matches {
+            Site("|a.wholelottanothing.org|")
+        },
+        Matches {
+            Site("|lazybear.io|")
+        },
+        Matches {
+            Site("|thepassivevoice.com|")
+        },
+        Matches {
+            Site("|zylstra.org|")
+        },
+        Matches {
+            Site("|rodneybrooks.com|")
+        },
+        Matches {
+            Site("|futurelawyer.typepad.com|")
+        },
+        Matches {
+            Site("|colly.com|")
+        },
+        Matches {
+            Site("|jvns.ca|")
+        },
+        Matches {
+            Site("|seirdy.one|")
+        },
+        Matches {
+            Site("|charliebleecker.com|")
+        },
+        Matches {
+            Site("|ben-evans.com|")
+        },
+        Matches {
+            Site("|shadycharacters.co.uk|")
+        },
+        Matches {
+            Site("|foodandwineaesthetics.com|")
+        },
+        Matches {
+            Site("|chris-granger.com|")
+        },
+        Matches {
+            Site("|lichvanwinkle.blogspot.com|")
+        },
+        Matches {
+            Site("|silviamaggidesign.com|")
+        },
+        Matches {
+            Site("|jeffgeerling.com|")
+        },
+        Matches {
+            Site("|chriscoyier.net|")
+        },
+        Matches {
+            Site("|oh.mg|")
+        },
+        Matches {
+            Site("|heydingus.net|")
+        },
+        Matches {
+            Site("|cyclostationary.blog|")
+        },
+        Matches {
+            Site("|drewdevault.com|")
+        },
+        Matches {
+            Site("|cabel.com|")
+        },
+        Matches {
+            Site("|radicalcut.blogspot.com|")
+        },
+        Matches {
+            Site("|susanrigetti.com|")
+        },
+        Matches {
+            Site("|awhiskandaspoon.com|")
+        },
+        Action(Boost(0))
+};
+

@@ -1,0 +1,795 @@
+// Github translations
+// source: https://raw.githubusercontent.com/arosh/ublacklist-github-translation/master/uBlacklist.txt
+Rule {
+	Matches {
+		Domain("|bleepcoder.com|")
+	},
+	Matches {
+		Domain("|githubja.com|")
+	},
+	Matches {
+		Domain("|gitmemory.com|")
+	},
+	Matches {
+		Domain("|giters.com|")
+	},
+	Matches {
+		Domain("|githubmemory.com|")
+	},
+	Matches {
+		Domain("|githubmate.com|")
+	},
+	Matches {
+		Domain("|wenyanet.com|")
+	},
+	Matches {
+		Domain("|issueexplorer.com|")
+	},
+	Matches {
+		Domain("|opensourcelibs.com|")
+	},
+	Matches {
+		Domain("|awesomeopensource.com|")
+	},
+	Matches {
+		Domain("|findbestopensource.com|")
+	},
+	Matches {
+		Domain("|githubhelp.com|")
+	},
+	Matches {
+		Domain("|golangrepo.com|")
+	},
+	Matches {
+		Domain("|gitmemory.cn|")
+	},
+	Matches {
+		Domain("|pythonissues.com|")
+	},
+	Matches {
+		Domain("|reposhub.com|")
+	},
+	Matches {
+		Domain("|openprojectrepo.com|")
+	},
+	Matches {
+		Domain("|gitanswer.com|")
+	},
+	Matches {
+		Domain("|githubplus.com|")
+	},
+	Matches {
+		Domain("|pythonrepo.com|")
+	},
+	Matches {
+		Domain("|bestofcpp.com|")
+	},
+	Matches {
+		Domain("|github.innominds.com|")
+	},
+	Matches {
+		Domain("|higithub.com|")
+	},
+	Matches {
+		Domain("|githublab.com|")
+	},
+	Matches {
+		Domain("|githubhot.com|")
+	},
+	Matches {
+		Domain("|issuehint.com|")
+	},
+	Action(Discard)
+};
+
+// Stackoverflow translations
+// source: https://raw.githubusercontent.com/arosh/ublacklist-stackoverflow-translation/master/uBlacklist.txt
+Rule {
+	Matches {
+		Domain("|code-examples.net|")
+	},
+	Matches {
+		Domain("|kotaeta.com|")
+	},
+	Matches {
+		Domain("|answer-id.com|")
+	},
+	Matches {
+		Domain("|de-vraag.com|")
+	},
+	Matches {
+		Domain("|code.i-harness.com|")
+	},
+	Matches {
+		Domain("|living-sun.com|")
+	},
+	Matches {
+		Domain("|qastack.jp|")
+	},
+	Matches {
+		Domain("|qastack.ru|")
+	},
+	Matches {
+		Domain("|qastack.it|")
+	},
+	Matches {
+		Domain("|qastack.mx|")
+	},
+	Matches {
+		Domain("|qastack.com.br|")
+	},
+	Matches {
+		Domain("|qastack.info.tr|")
+	},
+	Matches {
+		Domain("|qastack.in.th|")
+	},
+	Matches {
+		Domain("|qastack.com.de|")
+	},
+	Matches {
+		Domain("|qastack.fr|")
+	},
+	Matches {
+		Domain("|qastack.cn|")
+	},
+	Matches {
+		Domain("|qastack.com.ua|")
+	},
+	Matches {
+		Domain("|qastack.co.in|")
+	},
+	Matches {
+		Domain("|qastack.kr|")
+	},
+	Matches {
+		Domain("|qastack.vn|")
+	},
+	Matches {
+		Domain("|qastack.net.bd|")
+	},
+	Matches {
+		Domain("|qa-stack.pl|")
+	},
+	Matches {
+		Domain("|qastack.id|")
+	},
+	Matches {
+		Domain("|coder.work|")
+	},
+	Matches {
+		Domain("|it-swarm-ja.tech|")
+	},
+	Matches {
+		Domain("|it-swarm.jp.net|")
+	},
+	Matches {
+		Domain("|it-swarm-ja.com|")
+	},
+	Matches {
+		Domain("|webdevqa.jp.net|")
+	},
+	Matches {
+		Domain("|web-dev-qa-db-ja.com|")
+	},
+	Matches {
+		Domain("|it-swarm-fr.com|")
+	},
+	Matches {
+		Domain("|web-dev-qa-db-fr.com|")
+	},
+	Matches {
+		Domain("|codeflow.site|")
+	},
+	Matches {
+		Domain("|codeguides.site|")
+	},
+	Matches {
+		Domain("|overcoder.net|")
+	},
+	Matches {
+		Domain("|coderoad.ru|")
+	},
+	Matches {
+		Domain("|javaer101.com|")
+	},
+	Matches {
+		Domain("|voidcc.com|")
+	},
+	Matches {
+		Domain("|siwib.org|")
+	},
+	Matches {
+		Domain("|fluffyfables.com|")
+	},
+	Matches {
+		Domain("|fixes.pub|")
+	},
+	Matches {
+		Domain("|knews.vip|")
+	},
+	Matches {
+		Domain("|isolution.pro|")
+	},
+	Matches {
+		Domain("|uwenku.com|")
+	},
+	Matches {
+		Domain("|athabasca-foto.com|")
+	},
+	Matches {
+		Domain("|zsharp.org|")
+	},
+	Matches {
+		Domain("|projectbackpack.org|")
+	},
+	Matches {
+		Domain("|waymanamechurch.org|")
+	},
+	Matches {
+		Domain("|sunflowercreations.org|")
+	},
+	Matches {
+		Domain("|cfadnc.org|")
+	},
+	Matches {
+		Domain("|fitforlearning.org|")
+	},
+	Matches {
+		Domain("|panaindustrial.com|")
+	},
+	Matches {
+		Domain("|sierrasummit2005.org|")
+	},
+	Matches {
+		Domain("|theshuggahpies.com|")
+	},
+	Matches {
+		Domain("|pcbconline.org|")
+	},
+	Matches {
+		Domain("|nuomiphp.com|")
+	},
+	Matches {
+		Domain("|ubuntu.buildwebhost.com|")
+	},
+	Matches {
+		Domain("|ubuntuaa.com|")
+	},
+	Matches {
+		Domain("|debugcn.com|")
+	},
+	Matches {
+		Domain("|sch22.org|")
+	},
+	Matches {
+		Domain("|gupgallery.com|")
+	},
+	Matches {
+		Domain("|amuddycup.com|")
+	},
+	Matches {
+		Domain("|ecnf2016.org|")
+	},
+	Matches {
+		Domain("|softwareuser.asklobster.com|")
+	},
+	Matches {
+		Domain("|domainelespailles.net|")
+	},
+	Matches {
+		Domain("|ec-europe.org|")
+	},
+	Matches {
+		Domain("|pakostnici.com|")
+	},
+	Matches {
+		Domain("|try2explore.com|")
+	},
+	Matches {
+		Domain("|itectec.com|")
+	},
+	Matches {
+		Domain("|stackovergo.com|")
+	},
+	Matches {
+		Domain("|faithcov.org|")
+	},
+	Matches {
+		Domain("|noblenaz.org|")
+	},
+	Matches {
+		Domain("|culinarydegree.info|")
+	},
+	Matches {
+		Domain("|qapicks.com|")
+	},
+	Matches {
+		Domain("|narkive.jp|")
+	},
+	Matches {
+		Domain("|ourladylakes.org|")
+	},
+	Matches {
+		Domain("|intellipaat.com|")
+	},
+	Matches {
+		Domain("|newbedev.com|")
+	},
+	Matches {
+		Domain("|codenong.com|")
+	},
+	Matches {
+		Domain("|routinepanic.com|")
+	},
+	Matches {
+		Domain("|tousu.in|")
+	},
+	Matches {
+		Domain("|tutorialmore.com|")
+	},
+	Matches {
+		Domain("|titanwolf.org|")
+	},
+	Matches {
+		Domain("|coderedirect.com|")
+	},
+	Matches {
+		Domain("|fullstackuser.com|")
+	},
+	Matches {
+		Domain("|ostack.cn|")
+	},
+	Matches {
+		Domain("|wujigu.com|")
+	},
+	Matches {
+		Domain("|webdevdesigner.com|")
+	},
+	Matches {
+		Domain("|ghcc.net|")
+	},
+	Matches {
+		Domain("|developreference.com|")
+	},
+	Matches {
+		Domain("|semicolonworld.com|")
+	},
+	Matches {
+		Domain("|tipsfordev.com|")
+	},
+	Matches {
+		Domain("|qi-u.com|")
+	},
+	Matches {
+		Domain("|xsprogram.com|")
+	},
+	Matches {
+		Domain("|stackoom.com|")
+	},
+	Matches {
+		Domain("|cndgn.com|")
+	},
+	Matches {
+		Domain("|generacodice.com|")
+	},
+	Matches {
+		Domain("|stackfinder.jp.net|")
+	},
+	Matches {
+		Domain("|uebu-kaihatsu.jp.net|")
+	},
+	Matches {
+		Domain("|sqlite.in|")
+	},
+	Matches {
+		Domain("|stackguides.com|")
+	},
+	Matches {
+		Domain("|younggeeks.in|")
+	},
+	Matches {
+		Domain("|answerlib.com|")
+	},
+	Matches {
+		Domain("|edupro.id|")
+	},
+	Matches {
+		Domain("|stackfinder.ru|")
+	},
+	Matches {
+		Domain("|desenv-web-rp.com|")
+	},
+	Matches {
+		Domain("|web-dev-qa-db-pt.com|")
+	},
+	Matches {
+		Domain("|jscodetips.com|")
+	},
+	Matches {
+		Domain("|5axxw.com|")
+	},
+	Matches {
+		Domain("|question-it.com|")
+	},
+	Matches {
+		Domain("|codefaq.info|")
+	},
+	Matches {
+		Domain("|codefaq.ru|")
+	},
+	Matches {
+		Domain("|mediatagtw.com|")
+	},
+	Matches {
+		Domain("|progi.pro|")
+	},
+	Matches {
+		Domain("|elfishgene.com|")
+	},
+	Matches {
+		Domain("|sysadminde.com|")
+	},
+	Matches {
+		Domain("|answacode.com|")
+	},
+	Matches {
+		Domain("|ask-dev.ru|")
+	},
+	Matches {
+		Domain("|arip-photo.org|")
+	},
+	Matches {
+		Domain("|jablogs.com|")
+	},
+	Matches {
+		Domain("|jpdebug.com|")
+	},
+	Matches {
+		Domain("|askcodez.com|")
+	},
+	Matches {
+		Domain("|iquestion.pro|")
+	},
+	Matches {
+		Domain("|ntcdoon.org|")
+	},
+	Matches {
+		Domain("|programmierfrage.com|")
+	},
+	Matches {
+		Domain("|microeducate.tech|")
+	},
+	Matches {
+		Domain("|debugko.com|")
+	},
+	Matches {
+		Domain("|devdreamz.com|")
+	},
+	Matches {
+		Domain("|catwolf.org|")
+	},
+	Matches {
+		Domain("|1r1g.com|")
+	},
+	Matches {
+		Domain("|string.quest|")
+	},
+	Matches {
+		Domain("|reddit.fun|")
+	},
+	Matches {
+		Domain("|qa.icopy.site|")
+	},
+	Matches {
+		Domain("|errorsfixing.com|")
+	},
+	Matches {
+		Domain("|syntaxfix.com|")
+	},
+	Matches {
+		Domain("|codegrepr.com|")
+	},
+	Matches {
+		Domain("|quabr.com|")
+	},
+	Matches {
+		Domain("|serveanswer.com|")
+	},
+	Matches {
+		Domain("|safehavenpetrescue.org|")
+	},
+	Matches {
+		Domain("|cainiaojiaocheng.com|")
+	},
+	Matches {
+		Domain("|linuxfixes.com|")
+	},
+	Matches {
+		Domain("|it-roy-ru.com|")
+	},
+	Matches {
+		Domain("|web-dev-qa.com|")
+	},
+	Matches {
+		Domain("|flutterhq.com|")
+	},
+	Matches {
+		Domain("|dailydevsblog.com|")
+	},
+	Matches {
+		Domain("|711web.com|")
+	},
+	Matches {
+		Domain("|binarydevelop.com|")
+	},
+	Matches {
+		Domain("|so.muouseo.com|")
+	},
+	Matches {
+		Domain("|coder-solution-es.com|")
+	},
+	Matches {
+		Domain("|peaku.co|")
+	},
+	Matches {
+		Domain("|learnfk.com|")
+	},
+	Matches {
+		Domain("|solveforum.com|")
+	},
+	Matches {
+		Domain("|edureka.co|")
+	},
+	Matches {
+		Domain("|itecnote.com|")
+	},
+	Matches {
+		Domain("|tagsqa.com|")
+	},
+	Matches {
+		Domain("|faqcode4u.com|")
+	},
+	Matches {
+		Domain("|digitrain.ru|")
+	},
+	Matches {
+		Domain("|prograide.com|")
+	},
+	Matches {
+		Domain("|dovov.com|")
+	},
+	Matches {
+		Domain("|oomake.com|")
+	},
+	Matches {
+		Domain("|ajaxhispano.com|")
+	},
+	Matches {
+		Domain("|codebaoku.com|")
+	},
+	Matches {
+		Domain("|daplus.net|")
+	},
+	Matches {
+		Domain("|questu.ru|")
+	},
+	Matches {
+		Domain("|itranslater.com|")
+	},
+	Matches {
+		Domain("|doraprojects.net|")
+	},
+	Matches {
+		Domain("|iteramos.com|")
+	},
+	Matches {
+		Domain("|faqcodes.com|")
+	},
+	Matches {
+		Domain("|mejorcodigo.com|")
+	},
+	Matches {
+		Domain("|anycodings.com|")
+	},
+	Matches {
+		Domain("|javafixing.com|")
+	},
+	Matches {
+		Domain("|xstack.us|")
+	},
+	Matches {
+		Domain("|shenghuobao.net|")
+	},
+	Matches {
+		Domain("|overstack.in|")
+	},
+	Matches {
+		Domain("|zaizhele.cn|")
+	},
+	Matches {
+		Domain("|zaizhele.net|")
+	},
+	Matches {
+		Domain("|xstack.ru|")
+	},
+	Matches {
+		Domain("|mlink.in|")
+	},
+	Matches {
+		Domain("|jonic.cn|")
+	},
+	Matches {
+		Domain("|jike.in|")
+	},
+	Matches {
+		Domain("|16892.net|")
+	},
+	Matches {
+		Domain("|vigges.net|")
+	},
+	Matches {
+		Domain("|55276.net|")
+	},
+	Matches {
+		Domain("|ogeek.cn|")
+	},
+	Matches {
+		Domain("|shenzhenjia.net|")
+	},
+	Matches {
+		Domain("|shenzhenjia.cn|")
+	},
+	Matches {
+		Domain("|9ishenzhen.com|")
+	},
+	Matches {
+		Domain("|vigge.net|")
+	},
+	Matches {
+		Domain("|vigge.cn|")
+	},
+	Matches {
+		Domain("|web-dev-qa-db-fra.com|")
+	},
+	Matches {
+		Domain("|ape-ask.com|")
+	},
+	Matches {
+		Domain("|yaoply.com|")
+	},
+	Matches {
+		Domain("|techhelpnotes.com|")
+	},
+	Matches {
+		Domain("|wp-qa.com|")
+	},
+	Matches {
+		Domain("|querythreads.com|")
+	},
+	Matches {
+		Domain("|appsloveworld.com|")
+	},
+	Matches {
+		Domain("|dtuto.com|")
+	},
+	Matches {
+		Domain("|qatop.pythonwood.com|")
+	},
+	Matches {
+		Domain("|webdevask.com|")
+	},
+	Action(Discard)
+};
+
+
+// Shitty Copy-Paste websites
+// source: https://raw.githubusercontent.com/stroobants-dev/ublock-origin-shitty-copies-filter/main/combined-list.txt
+Rule {
+	Matches {
+		Domain("|laravelquestions.com|")
+	},
+	Matches {
+		Domain("|py4u.net|")
+	},
+	Matches {
+		Domain("|issues-world.com|")
+	},
+	Matches {
+		Domain("|article.docway.net|")
+	},
+	Matches {
+		Domain("|xiu2.net|")
+	},
+	Matches {
+		Domain("|codehero.jp|")
+	},
+	Matches {
+		Domain("|quabr.com|")
+	},
+	Matches {
+		Domain("|webdevqa.jp.net|")
+	},
+	Matches {
+		Domain("|exceptionshub.com|")
+	},
+	Matches {
+		Domain("|pythonwd.com|")
+	},
+	Matches {
+		Domain("|alwaysemmyhope.com|")
+	},
+	Matches {
+		Domain("|pretagteam.com|")
+	},
+	Matches {
+		Domain("|easysavecode.com|")
+	},
+	Matches {
+		Domain("|stackqna.com|")
+	},
+	Matches {
+		Domain("|imtqy.com|")
+	},
+	Matches {
+		Domain("|christfever.in|")
+	},
+	Matches {
+		Domain("|codersatellite.com|")
+	},
+	Matches {
+		Domain("|coredump.biz|")
+	},
+	Matches {
+		Domain("|farath.com|")
+	},
+	Matches {
+		Domain("|devbugfix.com|")
+	},
+	Matches {
+		Domain("|tech.wayne-chu.com|")
+	},
+	Matches {
+		Domain("|stackify.dev|")
+	},
+	Matches {
+		Domain("|webknox.com|")
+	},
+	Matches {
+		Domain("|coder-solution-jp.com|")
+	},
+	Matches {
+		Domain("|jpndev.com|")
+	},
+	Matches {
+		Domain("|python-stack.de|")
+	},
+	Matches {
+		Domain("|stackfault.net|")
+	},
+	Matches {
+		Domain("|howtofix.io|")
+	},
+	Matches {
+		Domain("|buzzphp.com|")
+	},
+	Matches {
+		Domain("|askdev.vn|")
+	},
+	Matches {
+		Domain("|quares.ru|")
+	},
+	Matches {
+		Domain("|examplefiles.net|")
+	},
+	Matches {
+		Domain("|codewdw.com|")
+	},
+	Matches {
+		Domain("|jpcodeqa.com|")
+	},
+	Matches {
+		Domain("|tutorialguruji.com|")
+	},
+	Action(Discard)
+}

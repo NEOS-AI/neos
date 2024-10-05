@@ -1,0 +1,124 @@
+DiscardNonMatching;
+
+/*
+    Some documentation sites from devdocs.io
+    Please open a PR if you feel like some sites are missing
+*/
+
+Rule {
+    Matches {
+        Site("|developer.mozilla.org|")
+    },
+    Matches {
+        Domain("|docs.rs|")
+    },
+    Matches {
+        Domain("|readthedocs.org|")
+    },
+    Matches {
+        Domain("|cppreference.com|")
+    },
+    Matches {
+        Domain("|python.org|")
+    },
+    Matches {
+        Domain("|pytorch.org|")
+    },
+    Matches {
+        Site("|doc.rust-lang.org|")
+    },
+    Matches {
+        Site("|docs.npmjs.com|")
+    },
+    Matches {
+        Site("|docs.julialang.org|")
+    },
+    Matches {
+        Domain("|kotlinlang.org|")
+    },
+    Matches {
+        Domain("|kubernetes.io|")
+    },
+    Matches {
+        Domain("|latexref.xyz|")
+    },
+    Matches {
+        Domain("|mariadb.com|")
+    },
+    Matches {
+        Domain("|nginx.org|")
+    },
+    Matches {
+        Domain("|nim-lang.org|")
+    },
+    Matches {
+        Domain("|nixos.org|")
+    },
+    Matches {
+        Domain("|nodejs.org|")
+    },
+    Matches {
+        Domain("|numpy.org|")
+    },
+    Matches {
+        Domain("|openjdk.java.net|")
+    },
+    Matches {
+        Domain("|php.net|")
+    },
+    Matches {
+        Domain("|postgresql.org|")
+    },
+    Matches {
+        Domain("|qt.io|")
+    },
+    Matches {
+        Domain("|reactjs.org|")
+    },
+    Matches {
+        Domain("|reactnative.dev|")
+    },
+    Matches {
+        Domain("|redis.io|")
+    },
+    Matches {
+        Domain("|scala-lang.org|")
+    },
+    Matches {
+        Domain("|scikit-learn.org|")
+    },
+    Matches {
+        Domain("|sqlite.org|")
+    },
+    Matches {
+        Domain("|tailwindcss.com|")
+    },
+    Matches {
+        Domain("|typescriptlang.org|")
+    },
+    Matches {
+        Domain("|devdocs.io|")
+    },
+    Matches { // VS Code internal api for extension developers
+        Site("|code.visualstudio.com|"),
+        Url("api")
+    },
+    Matches { // Microsoft APIs and languages
+        Site("|learn.microsoft.com|")
+    },
+    Matches {
+        Site("|docs.saltproject.io|")
+    },
+    Matches {
+        Site("|developer.hashicorp.com|")
+    },
+    Matches {
+        Domain("|go.dev|")
+    },
+    Matches {
+        Site("|docs.docker.com|")
+    },
+    Matches {
+        Domain("|svelte.dev|")
+    },
+};

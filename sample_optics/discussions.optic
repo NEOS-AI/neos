@@ -1,0 +1,2651 @@
+DiscardNonMatching;
+
+Rule {
+    Matches {
+        Schema("DiscussionForumPosting"),
+    }
+};
+
+Rule {
+    Matches {
+        Domain("|reddit.com|"),
+        Url("comments"),
+    }
+};
+
+Rule {
+    Matches {
+        Schema("QAPage"),
+        Domain("|superuser.com|")
+    },
+    Matches {
+        Schema("QAPage"),
+        Domain("|serverfault.com|")
+    },
+    Matches {
+        Schema("QAPage"),
+        Domain("|askubuntu.com|")
+    },
+    Matches {
+        Schema("QAPage"),
+        Domain("|stackoverflow.com|")
+    },
+    Matches {
+        Schema("QAPage"),
+        Domain("|stackexchange.com|")
+    },
+};
+
+// source of instances: https://github.com/maltfield/awesome-lemmy-instances
+Rule {
+    Matches {
+        Domain("|lemmy.world|")
+    },
+    Matches {
+        Domain("|lemmy.ml|")
+    },
+    Matches {
+        Domain("|feddit.de|")
+    },
+    Matches {
+        Site("|sh.itjust.works|")
+    },
+    Matches {
+        Domain("|lemmy.one|")
+    },
+    Matches {
+        Domain("|lemmynsfw.com|")
+    },
+    Matches {
+        Domain("|lemmy.ca|")
+    },
+    Matches {
+        Site("|lemmy.fmhy.ml|")
+    },
+    Matches {
+        Domain("|lemm.ee|")
+    },
+    Matches {
+        Site("|lemmy.blahaj.zone|")
+    },
+    Matches {
+        Site("|lemmy.dbzer0.com|")
+    },
+    Matches {
+        Domain("|lemmygrad.ml|")
+    },
+    Matches {
+        Domain("|programming.dev|")
+    },
+    Matches {
+        Domain("|sopuli.xyz|")
+    },
+    Matches {
+        Site("|discuss.tchncs.de|")
+    },
+    Matches {
+        Site("|lemmy.sdf.org|")
+    },
+    Matches {
+        Domain("|vlemmy.net|")
+    },
+    Matches {
+        Domain("|aussie.zone|")
+    },
+    Matches {
+        Domain("|feddit.uk|")
+    },
+    Matches {
+        Domain("|startrek.website|")
+    },
+    Matches {
+        Domain("|dormi.zone|")
+    },
+    Matches {
+        Domain("|feddit.it|")
+    },
+    Matches {
+        Domain("|infosec.pub|")
+    },
+    Matches {
+        Domain("|pawb.social|")
+    },
+    Matches {
+        Domain("|feddit.nl|")
+    },
+    Matches {
+        Site("|lemmy.burger.rodeo|")
+    },
+    Matches {
+        Domain("|burggit.moe|")
+    },
+    Matches {
+        Domain("|slrpnk.net|")
+    },
+    Matches {
+        Domain("|feddit.dk|")
+    },
+    Matches {
+        Domain("|lemmy.nz|")
+    },
+    Matches {
+        Domain("|mander.xyz|")
+    },
+    Matches {
+        Domain("|feddit.cl|")
+    },
+    Matches {
+        Domain("|reddthat.com|")
+    },
+    Matches {
+        Domain("|lemmy.zip|")
+    },
+    Matches {
+        Site("|latte.isnot.coffee|")
+    },
+    Matches {
+        Domain("|szmer.info|")
+    },
+    Matches {
+        Domain("|dataterm.digital|")
+    },
+    Matches {
+        Domain("|exploding-heads.com|")
+    },
+    Matches {
+        Domain("|pathofexile-discuss.com|")
+    },
+    Matches {
+        Domain("|monyet.cc|")
+    },
+    Matches {
+        Domain("|iusearchlinux.fyi|")
+    },
+    Matches {
+        Domain("|yiffit.net|")
+    },
+    Matches {
+        Site("|sub.wetshaving.social|")
+    },
+    Matches {
+        Site("|geddit.social|")
+    },
+    Matches {
+        Site("|lemmyrs.org|")
+    },
+    Matches {
+        Site("|monero.town|")
+    },
+    Matches {
+        Site("|partizle.com|")
+    },
+    Matches {
+        Site("|mtgzone.com|")
+    },
+    Matches {
+        Site("|toast.ooo|")
+    },
+    Matches {
+        Site("|lemmy.studio|")
+    },
+    Matches {
+        Site("|lemmy.click|")
+    },
+    Matches {
+        Site("|lemmy.film|")
+    },
+    Matches {
+        Site("|lemmy.radio|")
+    },
+    Matches {
+        Site("|fanaticus.social|")
+    },
+    Matches {
+        Site("|rammy.site|")
+    },
+    Matches {
+        Site("|lemmy.villa-straylight.social|")
+    },
+    Matches {
+        Site("|lemmy.whynotdrs.org|")
+    },
+    Matches {
+        Site("|ttrpg.network|")
+    },
+    Matches {
+        Site("|lemmy.antemeridiem.xyz|")
+    },
+    Matches {
+        Site("|r-sauna.fi|")
+    },
+    Matches {
+        Site("|lemmy.cafe|")
+    },
+    Matches {
+        Site("|ash1-lem-i1-u4829.vm.elestio.app|")
+    },
+    Matches {
+        Site("|discuss.online|")
+    },
+    Matches {
+        Site("|thegarden.land|")
+    },
+    Matches {
+        Site("|lemmy.spacestation14.com|")
+    },
+    Matches {
+        Site("|bookwormstory.social|")
+    },
+    Matches {
+        Site("|lemmy.eus|")
+    },
+    Matches {
+        Site("|forum.basedcount.com|")
+    },
+    Matches {
+        Site("|possumpat.io|")
+    },
+    Matches {
+        Site("|lemmy.wtf|")
+    },
+    Matches {
+        Site("|thelemmy.club|")
+    },
+    Matches {
+        Site("|lemmy.perthchat.org|")
+    },
+    Matches {
+        Site("|compuverse.uk|")
+    },
+    Matches {
+        Site("|preserve.games|")
+    },
+    Matches {
+        Site("|lemmy.tf|")
+    },
+    Matches {
+        Site("|dmv.social|")
+    },
+    Matches {
+        Site("|lemmy.eco.br|")
+    },
+    Matches {
+        Site("|social.fossware.space|")
+    },
+    Matches {
+        Site("|lemmy.podycust.co.uk|")
+    },
+    Matches {
+        Site("|diggit.xyz|")
+    },
+    Matches {
+        Site("|feddit.ch|")
+    },
+    Matches {
+        Site("|picify.podycust.co.uk|")
+    },
+    Matches {
+        Site("|feddit.nu|")
+    },
+    Matches {
+        Site("|bolha.social|")
+    },
+    Matches {
+        Site("|lemmy.ko4abp.com|")
+    },
+    Matches {
+        Site("|lib.lgbt|")
+    },
+    Matches {
+        Site("|lemmy.kya.moe|")
+    },
+    Matches {
+        Site("|terefere.eu|")
+    },
+    Matches {
+        Site("|lemmyfly.org|")
+    },
+    Matches {
+        Site("|sffa.community|")
+    },
+    Matches {
+        Site("|lemmy.picote.ch|")
+    },
+    Matches {
+        Site("|feddit.ro|")
+    },
+    Matches {
+        Site("|apollo.town|")
+    },
+    Matches {
+        Site("|tucson.social|")
+    },
+    Matches {
+        Site("|aiparadise.moe|")
+    },
+    Matches {
+        Site("|seemel.ink|")
+    },
+    Matches {
+        Site("|eslemmy.es|")
+    },
+    Matches {
+        Site("|poptalk.scrubbles.tech|")
+    },
+    Matches {
+        Site("|lemmy.justin.rs|")
+    },
+    Matches {
+        Site("|booty.world|")
+    },
+    Matches {
+        Site("|lemmy.srv.eco|")
+    },
+    Matches {
+        Site("|group.lt|")
+    },
+    Matches {
+        Site("|lemdit.com|")
+    },
+    Matches {
+        Site("|news.cosocial.ca|")
+    },
+    Matches {
+        Site("|wirebase.org|")
+    },
+    Matches {
+        Site("|crystals.rest|")
+    },
+    Matches {
+        Site("|suppo.fi|")
+    },
+    Matches {
+        Site("|lemmy.blugatch.tube|")
+    },
+    Matches {
+        Site("|baomi.tv|")
+    },
+    Matches {
+        Site("|links.dartboard.social|")
+    },
+    Matches {
+        Site("|lemmy.ptznetwork.org|")
+    },
+    Matches {
+        Site("|notdigg.com|")
+    },
+    Matches {
+        Site("|cubing.social|")
+    },
+    Matches {
+        Site("|fadoverso.pt|")
+    },
+    Matches {
+        Site("|dubvee.org|")
+    },
+    Matches {
+        Site("|digipres.cafe|")
+    },
+    Matches {
+        Site("|fig.systems|")
+    },
+    Matches {
+        Site("|lemmyunchained.net|")
+    },
+    Matches {
+        Site("|lemmy.easfrq.live|")
+    },
+    Matches {
+        Site("|lemmy.bulwarkob.com|")
+    },
+    Matches {
+        Site("|links.rebel.ar|")
+    },
+    Matches {
+        Site("|lemmy.juggler.jp|")
+    },
+    Matches {
+        Site("|lm.bittervets.org|")
+    },
+    Matches {
+        Site("|yall.theatl.social|")
+    },
+    Matches {
+        Site("|lemmy.suchmeme.nl|")
+    },
+    Matches {
+        Site("|derpzilla.net|")
+    },
+    Matches {
+        Site("|lemmy.nexus|")
+    },
+    Matches {
+        Site("|lemmy.onlylans.io|")
+    },
+    Matches {
+        Site("|lm.korako.me|")
+    },
+    Matches {
+        Site("|lemmy.rollenspiel.monster|")
+    },
+    Matches {
+        Site("|wayfarershaven.eu|")
+    },
+    Matches {
+        Site("|outpost.zeuslink.net|")
+    },
+    Matches {
+        Site("|lemmy.graz.social|")
+    },
+    Matches {
+        Site("|bbs.darkwitch.net|")
+    },
+    Matches {
+        Site("|lemmy.4d2.org|")
+    },
+    Matches {
+        Site("|baraza.africa|")
+    },
+    Matches {
+        Site("|lemmy.loomy.li|")
+    },
+    Matches {
+        Site("|centennialstate.social|")
+    },
+    Matches {
+        Site("|weiner.zone|")
+    },
+    Matches {
+        Site("|bbs.9tail.net|")
+    },
+    Matches {
+        Site("|voxpop.social|")
+    },
+    Matches {
+        Site("|lemmy.funami.tech|")
+    },
+    Matches {
+        Site("|skein.city|")
+    },
+    Matches {
+        Site("|quex.cc|")
+    },
+    Matches {
+        Site("|dot.surf|")
+    },
+    Matches {
+        Site("|lemmy.today|")
+    },
+    Matches {
+        Site("|lemmy.reckless.dev|")
+    },
+    Matches {
+        Site("|feddit.pontual.social|")
+    },
+    Matches {
+        Site("|federated.community|")
+    },
+    Matches {
+        Site("|mindshare.space|")
+    },
+    Matches {
+        Site("|lemmy.cock.social|")
+    },
+    Matches {
+        Site("|lemmy.pro|")
+    },
+    Matches {
+        Site("|frig.social|")
+    },
+    Matches {
+        Site("|lemmy.kemomimi.fans|")
+    },
+    Matches {
+        Site("|mylem.my|")
+    },
+    Matches {
+        Site("|goddess.name|")
+    },
+    Matches {
+        Site("|tagpro.lol|")
+    },
+    Matches {
+        Site("|lemmy.jamesj999.co.uk|")
+    },
+    Matches {
+        Site("|prime8s.xyz|")
+    },
+    Matches {
+        Site("|oceanbreeze.earth|")
+    },
+    Matches {
+        Site("|lemmy.roombob.cat|")
+    },
+    Matches {
+        Site("|eviltoast.org|")
+    },
+    Matches {
+        Site("|sub.rdls.dev|")
+    },
+    Matches {
+        Site("|feddit.jp|")
+    },
+    Matches {
+        Site("|keeb.lol|")
+    },
+    Matches {
+        Site("|lemmy.stuart.fun|")
+    },
+    Matches {
+        Site("|lemmy.darmstadt.social|")
+    },
+    Matches {
+        Site("|lemmy.einval.net|")
+    },
+    Matches {
+        Site("|lemmy.themainframe.org|")
+    },
+    Matches {
+        Site("|lm.madiator.cloud|")
+    },
+    Matches {
+        Site("|posta.no|")
+    },
+    Matches {
+        Site("|wizanons.dev|")
+    },
+    Matches {
+        Site("|databend.run|")
+    },
+    Matches {
+        Site("|tabletop.place|")
+    },
+    Matches {
+        Site("|lemmy.wiuf.net|")
+    },
+    Matches {
+        Site("|lemmy.dormedas.com|")
+    },
+    Matches {
+        Site("|lemmy.jpiolho.com|")
+    },
+    Matches {
+        Site("|linkopath.com|")
+    },
+    Matches {
+        Site("|coeus.sbs|")
+    },
+    Matches {
+        Site("|lemmy.avata.social|")
+    },
+    Matches {
+        Site("|whiskers.bim.boats|")
+    },
+    Matches {
+        Site("|lemmy.media|")
+    },
+    Matches {
+        Site("|lemmy.g97.top|")
+    },
+    Matches {
+        Site("|darmok.xyz|")
+    },
+    Matches {
+        Site("|keylog.zip|")
+    },
+    Matches {
+        Site("|lemmy.iys.io|")
+    },
+    Matches {
+        Site("|lem.monster|")
+    },
+    Matches {
+        Site("|normalcity.life|")
+    },
+    Matches {
+        Site("|lolimbeer.com|")
+    },
+    Matches {
+        Site("|bulletintree.com|")
+    },
+    Matches {
+        Site("|lemmy.tebro.fi|")
+    },
+    Matches {
+        Site("|no.lastname.nz|")
+    },
+    Matches {
+        Site("|sowhois.gay|")
+    },
+    Matches {
+        Site("|lemmy.starlightkel.xyz|")
+    },
+    Matches {
+        Site("|lemmy.ninja|")
+    },
+    Matches {
+        Site("|lemmywinks.com|")
+    },
+    Matches {
+        Site("|lemmy.vanoverloop.xyz|")
+    },
+    Matches {
+        Site("|foros.fediverso.gal|")
+    },
+    Matches {
+        Site("|lemmy.coeus.icu|")
+    },
+    Matches {
+        Site("|lemmy.place|")
+    },
+    Matches {
+        Site("|lemmy.wizjenkins.com|")
+    },
+    Matches {
+        Site("|social.dn42.us|")
+    },
+    Matches {
+        Site("|l.roofo.cc|")
+    },
+    Matches {
+        Site("|voltage.vn|")
+    },
+    Matches {
+        Site("|lemmy.piperservers.net|")
+    },
+    Matches {
+        Site("|feddit.nz|")
+    },
+    Matches {
+        Site("|feditown.com|")
+    },
+    Matches {
+        Site("|lemmy.pathoris.de|")
+    },
+    Matches {
+        Site("|lemmy.run|")
+    },
+    Matches {
+        Site("|lemmy.krobier.com|")
+    },
+    Matches {
+        Site("|lm.put.tf|")
+    },
+    Matches {
+        Site("|livy.one|")
+    },
+    Matches {
+        Site("|moot.place|")
+    },
+    Matches {
+        Site("|lemmy.my.id|")
+    },
+    Matches {
+        Site("|lemmy.loungerat.io|")
+    },
+    Matches {
+        Site("|feddi.no|")
+    },
+    Matches {
+        Site("|social.doudp.com|")
+    },
+    Matches {
+        Site("|lemmy.alexland.ca|")
+    },
+    Matches {
+        Site("|shork.online|")
+    },
+    Matches {
+        Site("|lemmyfi.com|")
+    },
+    Matches {
+        Site("|laguna.chat|")
+    },
+    Matches {
+        Site("|lemmy.marud.fr|")
+    },
+    Matches {
+        Site("|communick.news|")
+    },
+    Matches {
+        Site("|narod.city|")
+    },
+    Matches {
+        Site("|links.hackliberty.org|")
+    },
+    Matches {
+        Site("|lemmy.rat.academy|")
+    },
+    Matches {
+        Site("|lemmy.jigoku.us.to|")
+    },
+    Matches {
+        Site("|lemmy.linuxuserspace.show|")
+    },
+    Matches {
+        Site("|orava.dev|")
+    },
+    Matches {
+        Site("|forum.liberatedsystems.co.uk|")
+    },
+    Matches {
+        Site("|sha1.nl|")
+    },
+    Matches {
+        Site("|tslemmy.duckdns.org|")
+    },
+    Matches {
+        Site("|moto.teamswollen.org|")
+    },
+    Matches {
+        Site("|dgngrnder.com|")
+    },
+    Matches {
+        Site("|lemmy.minji.xyz|")
+    },
+    Matches {
+        Site("|social.sour.is|")
+    },
+    Matches {
+        Site("|lemmy.burningboard.net|")
+    },
+    Matches {
+        Site("|nlemmy.nl|")
+    },
+    Matches {
+        Site("|lemmy.bunbi.net|")
+    },
+    Matches {
+        Site("|fenbushi.site|")
+    },
+    Matches {
+        Site("|lef.li|")
+    },
+    Matches {
+        Site("|lm.inu.is|")
+    },
+    Matches {
+        Site("|iboughtthisdomainbecauseithoughtitscheap.uk|")
+    },
+    Matches {
+        Site("|lemmy.ppl.town|")
+    },
+    Matches {
+        Site("|1337lemmy.com|")
+    },
+    Matches {
+        Site("|lsmu.schmurian.xyz|")
+    },
+    Matches {
+        Site("|stanx.page|")
+    },
+    Matches {
+        Site("|melly.0x-ia.moe|")
+    },
+    Matches {
+        Site("|lemmy.mildgrim.com|")
+    },
+    Matches {
+        Site("|lemmy.elmusfire.xyz|")
+    },
+    Matches {
+        Site("|wallstreets.bet|")
+    },
+    Matches {
+        Site("|lem.lyk.pw|")
+    },
+    Matches {
+        Site("|lemmy.jtmn.dev|")
+    },
+    Matches {
+        Site("|lemmy.nilskrau.de|")
+    },
+    Matches {
+        Site("|lemmy.zroot.org|")
+    },
+    Matches {
+        Site("|philly.page|")
+    },
+    Matches {
+        Site("|s.jape.work|")
+    },
+    Matches {
+        Site("|lemmy.pipipopo.pl|")
+    },
+    Matches {
+        Site("|lm.qtt.no|")
+    },
+    Matches {
+        Site("|lemmy.eic.lu|")
+    },
+    Matches {
+        Site("|dendarii.alaeron.com|")
+    },
+    Matches {
+        Site("|civilloquy.com|")
+    },
+    Matches {
+        Site("|parapheum.com|")
+    },
+    Matches {
+        Site("|lemmy.sbs|")
+    },
+    Matches {
+        Site("|federated.ninja|")
+    },
+    Matches {
+        Site("|lemmy.scam-mail.me|")
+    },
+    Matches {
+        Site("|lemmy.cablepick.net|")
+    },
+    Matches {
+        Site("|lemmy.gtfo.social|")
+    },
+    Matches {
+        Site("|ripo.st|")
+    },
+    Matches {
+        Site("|lemmy.xoynq.com|")
+    },
+    Matches {
+        Site("|lemmy.norbz.org|")
+    },
+    Matches {
+        Site("|lemmy.snoot.tube|")
+    },
+    Matches {
+        Site("|lemmy.skillissue.dk|")
+    },
+    Matches {
+        Site("|lemmy.jamestrey.com|")
+    },
+    Matches {
+        Site("|insane.dev|")
+    },
+    Matches {
+        Site("|lemmy.nrd.li|")
+    },
+    Matches {
+        Site("|lemmy.intai.tech|")
+    },
+    Matches {
+        Site("|thechurchofmemes.com|")
+    },
+    Matches {
+        Site("|lemmy.plasmatrap.com|")
+    },
+    Matches {
+        Site("|lemmy.1204.org|")
+    },
+    Matches {
+        Site("|lemmy.remotelab.uk|")
+    },
+    Matches {
+        Site("|invariant-marxism.red|")
+    },
+    Matches {
+        Site("|red.cyberhase.de|")
+    },
+    Matches {
+        Site("|lemmy.scottlabs.io|")
+    },
+    Matches {
+        Site("|lemmy.gamingnight.uy|")
+    },
+    Matches {
+        Site("|www.jrz.city|")
+    },
+    Matches {
+        Site("|lemmy.nerdcore.social|")
+    },
+    Matches {
+        Site("|bluuit.org|")
+    },
+    Matches {
+        Site("|lemmy.funkyfish.cool|")
+    },
+    Matches {
+        Site("|lemmy.trippy.pizza|")
+    },
+    Matches {
+        Site("|techy.news|")
+    },
+    Matches {
+        Site("|lemmy.fromshado.ws|")
+    },
+    Matches {
+        Site("|lemmy.comfysnug.space|")
+    },
+    Matches {
+        Site("|zemmy.cc|")
+    },
+    Matches {
+        Site("|lululemmy.com|")
+    },
+    Matches {
+        Site("|lemmy.timdn.com|")
+    },
+    Matches {
+        Site("|lemmy.sascamooch.com|")
+    },
+    Matches {
+        Site("|labdegato.com|")
+    },
+    Matches {
+        Site("|lemmy.quad442.com|")
+    },
+    Matches {
+        Site("|lemmy.nerdcruft.net|")
+    },
+    Matches {
+        Site("|proit.org|")
+    },
+    Matches {
+        Site("|lemmonade.marbledfennec.net|")
+    },
+    Matches {
+        Site("|lemmy.lukeog.com|")
+    },
+    Matches {
+        Site("|lemmy.tillicumnet.com|")
+    },
+    Matches {
+        Site("|anarch.is|")
+    },
+    Matches {
+        Site("|clatter.eu|")
+    },
+    Matches {
+        Site("|lemmy.staphup.nl|")
+    },
+    Matches {
+        Site("|lemmy.direktoratet.se|")
+    },
+    Matches {
+        Site("|fedibb.ml|")
+    },
+    Matches {
+        Site("|kek.henlo.fi|")
+    },
+    Matches {
+        Site("|nrsk.no|")
+    },
+    Matches {
+        Site("|lemmy.emopolarbear.com|")
+    },
+    Matches {
+        Site("|caint.org|")
+    },
+    Matches {
+        Site("|social.hamington.net|")
+    },
+    Matches {
+        Site("|lemmy.glasgow.social|")
+    },
+    Matches {
+        Site("|lemmy.mlsn.fr|")
+    },
+    Matches {
+        Site("|lm.halfassmart.net|")
+    },
+    Matches {
+        Site("|lemmy.calvss.com|")
+    },
+    Matches {
+        Site("|bigfoot.ninja|")
+    },
+    Matches {
+        Site("|lemmy.pipe01.net|")
+    },
+    Matches {
+        Site("|lemmy.jmtr.org|")
+    },
+    Matches {
+        Site("|fedit.io|")
+    },
+    Matches {
+        Site("|links.lowsec.club|")
+    },
+    Matches {
+        Site("|lemmy.pussthecat.org|")
+    },
+    Matches {
+        Site("|lemmy.link|")
+    },
+    Matches {
+        Site("|lemmy.notdead.net|")
+    },
+    Matches {
+        Site("|hakbox.social|")
+    },
+    Matches {
+        Site("|lemmy.arclight.pro|")
+    },
+    Matches {
+        Site("|mobilemmohub.com|")
+    },
+    Matches {
+        Site("|hammerdown.0fucks.nl|")
+    },
+    Matches {
+        Site("|chat.maiion.com|")
+    },
+    Matches {
+        Site("|lm.melonbread.dev|")
+    },
+    Matches {
+        Site("|lemmy.astheriver.art|")
+    },
+    Matches {
+        Site("|lemmy.havocperil.uk|")
+    },
+    Matches {
+        Site("|lemmy.douwes.co.uk|")
+    },
+    Matches {
+        Site("|lem.serkozh.me|")
+    },
+    Matches {
+        Site("|le.fduck.net|")
+    },
+    Matches {
+        Site("|lemmy.simpl.website|")
+    },
+    Matches {
+        Site("|lemmy.mazurka.xyz|")
+    },
+    Matches {
+        Site("|lemmy.lpcha.im|")
+    },
+    Matches {
+        Site("|lemmy.isamp.com|")
+    },
+    Matches {
+        Site("|lemmy.shwizard.chat|")
+    },
+    Matches {
+        Site("|lemmy.nerdcave.us|")
+    },
+    Matches {
+        Site("|feddit.fun|")
+    },
+    Matches {
+        Site("|hqueue.dev|")
+    },
+    Matches {
+        Site("|lemmony.click|")
+    },
+    Matches {
+        Site("|lucitt.social|")
+    },
+    Matches {
+        Site("|feddit.win|")
+    },
+    Matches {
+        Site("|lemmy.beru.co|")
+    },
+    Matches {
+        Site("|lm.gsk.moe|")
+    },
+    Matches {
+        Site("|animoe.xyz|")
+    },
+    Matches {
+        Site("|lemmy.temporus.me|")
+    },
+    Matches {
+        Site("|lemmy.thanatos.at|")
+    },
+    Matches {
+        Site("|lemmy.philipcristiano.com|")
+    },
+    Matches {
+        Site("|lemmy.l00p.org|")
+    },
+    Matches {
+        Site("|lemmy.vrchat-dev.tech|")
+    },
+    Matches {
+        Site("|endofti.me|")
+    },
+    Matches {
+        Site("|werm.social|")
+    },
+    Matches {
+        Site("|lemmy.fbxl.net|")
+    },
+    Matches {
+        Site("|hoodlem.me|")
+    },
+    Matches {
+        Site("|fanexus.com|")
+    },
+    Matches {
+        Site("|lemmy.morrisherd.com|")
+    },
+    Matches {
+        Site("|r.rosettast0ned.com|")
+    },
+    Matches {
+        Site("|lemmy.mbl.social|")
+    },
+    Matches {
+        Site("|cnvrs.net|")
+    },
+    Matches {
+        Site("|lemmy.dominikoso.me|")
+    },
+    Matches {
+        Site("|local106.com|")
+    },
+    Matches {
+        Site("|lemthony.com|")
+    },
+    Matches {
+        Site("|lemmy.dupper.net|")
+    },
+    Matches {
+        Site("|le.mnau.xyz|")
+    },
+    Matches {
+        Site("|lemmy.wraithsquadrongaming.com|")
+    },
+    Matches {
+        Site("|lemmy.weiser.social|")
+    },
+    Matches {
+        Site("|spgrn.com|")
+    },
+    Matches {
+        Site("|zerobytes.monster|")
+    },
+    Matches {
+        Site("|c.calciumlabs.com|")
+    },
+    Matches {
+        Site("|lemmy.tancomps.net|")
+    },
+    Matches {
+        Site("|demmy.co.uk|")
+    },
+    Matches {
+        Site("|lemmy.doomeer.com|")
+    },
+    Matches {
+        Site("|lemmy.steken.xyz|")
+    },
+    Matches {
+        Site("|lemmy.fwgx.uk|")
+    },
+    Matches {
+        Site("|014450.xyz|")
+    },
+    Matches {
+        Site("|lemmy.pub|")
+    },
+    Matches {
+        Site("|lemmy.fauxreigner.net|")
+    },
+    Matches {
+        Site("|lemmy.fribyte.no|")
+    },
+    Matches {
+        Site("|lemmy.weckhorst.no|")
+    },
+    Matches {
+        Site("|lemmy.songsforno.one|")
+    },
+    Matches {
+        Site("|lemmy.chiisana.net|")
+    },
+    Matches {
+        Site("|nunu.dev|")
+    },
+    Matches {
+        Site("|lemmy.dyslexicjedi.com|")
+    },
+    Matches {
+        Site("|lemmy.deadca.de|")
+    },
+    Matches {
+        Site("|lemmy2.addictmud.org|")
+    },
+    Matches {
+        Site("|lemmywinks.xyz|")
+    },
+    Matches {
+        Site("|lemmy.thepixelproject.com|")
+    },
+    Matches {
+        Site("|lemmy.pcft.eu|")
+    },
+    Matches {
+        Site("|social.poisson.me|")
+    },
+    Matches {
+        Site("|lemmy.stellarvortex.com|")
+    },
+    Matches {
+        Site("|lemmy.mywire.xyz|")
+    },
+    Matches {
+        Site("|greg.city|")
+    },
+    Matches {
+        Site("|lemmy.calebmharper.com|")
+    },
+    Matches {
+        Site("|lemmy.gregw.us|")
+    },
+    Matches {
+        Site("|lemmy.nope.ly|")
+    },
+    Matches {
+        Site("|lemmus.org|")
+    },
+    Matches {
+        Site("|lemmy.amyjnobody.com|")
+    },
+    Matches {
+        Site("|mesita.link|")
+    },
+    Matches {
+        Site("|localghost.org|")
+    },
+    Matches {
+        Site("|acqrs.co.uk|")
+    },
+    Matches {
+        Site("|lemmy.x3i.tech|")
+    },
+    Matches {
+        Site("|lemmy.kagura.eu|")
+    },
+    Matches {
+        Site("|lemmit.xyz|")
+    },
+    Matches {
+        Site("|lemmit.online|")
+    },
+    Matches {
+        Site("|lm.rdbt.no|")
+    },
+    Matches {
+        Site("|lemmy.meli.dev|")
+    },
+    Matches {
+        Site("|algebro.xyz|")
+    },
+    Matches {
+        Site("|lemmy.timwaterhouse.com|")
+    },
+    Matches {
+        Site("|lemmy.kiberness.xyz|")
+    },
+    Matches {
+        Site("|toons.zone|")
+    },
+    Matches {
+        Site("|orzen.games|")
+    },
+    Matches {
+        Site("|lemmy.webgirand.eu|")
+    },
+    Matches {
+        Site("|lemmy.moonling.nl|")
+    },
+    Matches {
+        Site("|lemmyonline.com|")
+    },
+    Matches {
+        Site("|lemmyland.com|")
+    },
+    Matches {
+        Site("|tortoisewrath.com|")
+    },
+    Matches {
+        Site("|mlem.a-smol-cat.fr|")
+    },
+    Matches {
+        Site("|lemmy.comm.social|")
+    },
+    Matches {
+        Site("|jamie.moe|")
+    },
+    Matches {
+        Site("|lemmy.fakecake.org|")
+    },
+    Matches {
+        Site("|snkkis.me|")
+    },
+    Matches {
+        Site("|lm.byteme.social|")
+    },
+    Matches {
+        Site("|lemmy.gross.hosting|")
+    },
+    Matches {
+        Site("|lemmy.tarsis.org|")
+    },
+    Matches {
+        Site("|lemmy.javant.xyz|")
+    },
+    Matches {
+        Site("|feddit.strike23.de|")
+    },
+    Matches {
+        Site("|solstice.etbr.top|")
+    },
+    Matches {
+        Site("|0v0.social|")
+    },
+    Matches {
+        Site("|lemmy.self-hosted.site|")
+    },
+    Matches {
+        Site("|mcr.town|")
+    },
+    Matches {
+        Site("|lemmy.srv0.lol|")
+    },
+    Matches {
+        Site("|popplesburger.hilciferous.nl|")
+    },
+    Matches {
+        Site("|lemmy.lif.ovh|")
+    },
+    Matches {
+        Site("|lemmy.recursed.net|")
+    },
+    Matches {
+        Site("|lemmy.kghorvath.com|")
+    },
+    Matches {
+        Site("|lemmy.devils.house|")
+    },
+    Matches {
+        Site("|versalife.duckdns.org|")
+    },
+    Matches {
+        Site("|upvote.au|")
+    },
+    Matches {
+        Site("|social.cyb3r.dog|")
+    },
+    Matches {
+        Site("|lemmy.0x3d.uk|")
+    },
+    Matches {
+        Site("|rustyshackleford.cfd|")
+    },
+    Matches {
+        Site("|lemmy.dustybeer.com|")
+    },
+    Matches {
+        Site("|lemmy.onitato.com|")
+    },
+    Matches {
+        Site("|lemmy.skl.works|")
+    },
+    Matches {
+        Site("|lemmy.selfip.org|")
+    },
+    Matches {
+        Site("|endlesstalk.org|")
+    },
+    Matches {
+        Site("|lmy.drundo.com.au|")
+    },
+    Matches {
+        Site("|lemmy.eatsleepcode.ca|")
+    },
+    Matches {
+        Site("|lemmings.online|")
+    },
+    Matches {
+        Site("|thegarden-u4873.vm.elestio.app|")
+    },
+    Matches {
+        Site("|jemmy.jeena.net|")
+    },
+    Matches {
+        Site("|sedd.it|")
+    },
+    Matches {
+        Site("|lemmy.6px.eu|")
+    },
+    Matches {
+        Site("|lm.williampuckering.com|")
+    },
+    Matches {
+        Site("|lemmy.pe1uca.dev|")
+    },
+    Matches {
+        Site("|lemmy.cornspace.space|")
+    },
+    Matches {
+        Site("|occult.social|")
+    },
+    Matches {
+        Site("|kleptonix.com|")
+    },
+    Matches {
+        Site("|negativenull.com|")
+    },
+    Matches {
+        Site("|lemmy.dnet.social|")
+    },
+    Matches {
+        Site("|drachennetz.com|")
+    },
+    Matches {
+        Site("|lemmy.littlejth.com|")
+    },
+    Matches {
+        Site("|moose.best|")
+    },
+    Matches {
+        Site("|digitalgoblin.uk|")
+    },
+    Matches {
+        Site("|lemmy.the-goblin.net|")
+    },
+    Matches {
+        Site("|lemmy.pryst.de|")
+    },
+    Matches {
+        Site("|re.tei.li|")
+    },
+    Matches {
+        Site("|links.decafbad.com|")
+    },
+    Matches {
+        Site("|lemmy.hamrick.xyz|")
+    },
+    Matches {
+        Site("|netmonkey.tech|")
+    },
+    Matches {
+        Site("|lemmy.sh|")
+    },
+    Matches {
+        Site("|lemmy.kizaing.ca|")
+    },
+    Matches {
+        Site("|lemmy.sumuun.net|")
+    },
+    Matches {
+        Site("|lemmy.monster|")
+    },
+    Matches {
+        Site("|lemmy.timon.sh|")
+    },
+    Matches {
+        Site("|thaumatur.ge|")
+    },
+    Matches {
+        Site("|xrs.cx|")
+    },
+    Matches {
+        Site("|community.nicfab.it|")
+    },
+    Matches {
+        Site("|lemmy.escapebigtech.info|")
+    },
+    Matches {
+        Site("|lemmyverse.org|")
+    },
+    Matches {
+        Site("|lemmy.thesmokinglounge.club|")
+    },
+    Matches {
+        Site("|lemmy.stark-enterprise.net|")
+    },
+    Matches {
+        Site("|shitposting.monster|")
+    },
+    Matches {
+        Site("|kale.social|")
+    },
+    Matches {
+        Site("|lemmy.schmeisserweb.at|")
+    },
+    Matches {
+        Site("|leby.dev|")
+    },
+    Matches {
+        Site("|lemmy.munsell.io|")
+    },
+    Matches {
+        Site("|lemmy.mlaga97.space|")
+    },
+    Matches {
+        Site("|lemmy.pastwind.top|")
+    },
+    Matches {
+        Site("|mylemmy.win|")
+    },
+    Matches {
+        Site("|lemmy.management|")
+    },
+    Matches {
+        Site("|lemmy.proxmox-lab.com|")
+    },
+    Matches {
+        Site("|lemmy.livesound.world|")
+    },
+    Matches {
+        Site("|lemmy.leafylibrary.uk|")
+    },
+    Matches {
+        Site("|lemmy.schlunker.com|")
+    },
+    Matches {
+        Site("|lemmy.nopro.be|")
+    },
+    Matches {
+        Site("|lemmy.haigner.me|")
+    },
+    Matches {
+        Site("|l.biendeo.com|")
+    },
+    Matches {
+        Site("|lemmy.sebbem.se|")
+    },
+    Matches {
+        Site("|lemmy.austinwadeheller.com|")
+    },
+    Matches {
+        Site("|lemmy.graphics|")
+    },
+    Matches {
+        Site("|lemmy.helvetet.eu|")
+    },
+    Matches {
+        Site("|lemmy.beckmeyer.us|")
+    },
+    Matches {
+        Site("|leddit.minnal.icu|")
+    },
+    Matches {
+        Site("|radiation.party|")
+    },
+    Matches {
+        Site("|lemmy.seifert.id|")
+    },
+    Matches {
+        Site("|fjdk.uk|")
+    },
+    Matches {
+        Site("|lemmy.fail|")
+    },
+    Matches {
+        Site("|lemmy.tr00st.co.uk|")
+    },
+    Matches {
+        Site("|lemmy.jacaranda.club|")
+    },
+    Matches {
+        Site("|lemmy.website|")
+    },
+    Matches {
+        Site("|lemmy.xce.pt|")
+    },
+    Matches {
+        Site("|hc.frorayz.tech|")
+    },
+    Matches {
+        Site("|lemmy.vinodjam.com|")
+    },
+    Matches {
+        Site("|jalim.xyz|")
+    },
+    Matches {
+        Site("|xffxe4.lol|")
+    },
+    Matches {
+        Site("|granitestate.social|")
+    },
+    Matches {
+        Site("|nc.gnzl.cl|")
+    },
+    Matches {
+        Site("|lemmy.zell-mbc.com|")
+    },
+    Matches {
+        Site("|lemmy.uhhoh.com|")
+    },
+    Matches {
+        Site("|lemmy.jasonsanta.xyz|")
+    },
+    Matches {
+        Site("|social.ggbox.fr|")
+    },
+    Matches {
+        Site("|l.bxy.sh|")
+    },
+    Matches {
+        Site("|ascy.mooo.com|")
+    },
+    Matches {
+        Site("|leaf.dance|")
+    },
+    Matches {
+        Site("|lemmy.lucaslower.com|")
+    },
+    Matches {
+        Site("|lemmy.fdvrs.xyz|")
+    },
+    Matches {
+        Site("|l.jugregator.org|")
+    },
+    Matches {
+        Site("|lemmy.cloudhub.social|")
+    },
+    Matches {
+        Site("|omg.qa|")
+    },
+    Matches {
+        Site("|areality.social|")
+    },
+    Matches {
+        Site("|lemmy.gareth.computer|")
+    },
+    Matches {
+        Site("|matts.digital|")
+    },
+    Matches {
+        Site("|lemmy.commodore.social|")
+    },
+    Matches {
+        Site("|forkk.me|")
+    },
+    Matches {
+        Site("|lemmy.chromozone.dev|")
+    },
+    Matches {
+        Site("|community.adiquaints.moe|")
+    },
+    Matches {
+        Site("|discuss.dizl.de|")
+    },
+    Matches {
+        Site("|lemmy.pit.ninja|")
+    },
+    Matches {
+        Site("|bubblesthebunny.com|")
+    },
+    Matches {
+        Site("|lemmy.clueware.org|")
+    },
+    Matches {
+        Site("|lemmy.mb-server.com|")
+    },
+    Matches {
+        Site("|feedly.j-cloud.uk|")
+    },
+    Matches {
+        Site("|lemmy.socdojo.com|")
+    },
+    Matches {
+        Site("|lemmy.serverfail.party|")
+    },
+    Matches {
+        Site("|libreauto.app|")
+    },
+    Matches {
+        Site("|actuallyruben.nl|")
+    },
+    Matches {
+        Site("|typemi.me|")
+    },
+    Matches {
+        Site("|lemmy.helios42.de|")
+    },
+    Matches {
+        Site("|lmmy.tvdl.dev|")
+    },
+    Matches {
+        Site("|rabbitea.rs|")
+    },
+    Matches {
+        Site("|lemmy.k6qw.com|")
+    },
+    Matches {
+        Site("|lemmy.borlax.com|")
+    },
+    Matches {
+        Site("|psychedelia.ink|")
+    },
+    Matches {
+        Site("|lemmy.stormlight.space|")
+    },
+    Matches {
+        Site("|lemmy.dudeami.win|")
+    },
+    Matches {
+        Site("|social.vmdk.ca|")
+    },
+    Matches {
+        Site("|lemmy.benrasich.com|")
+    },
+    Matches {
+        Site("|lemmy.pineapplemachine.com|")
+    },
+    Matches {
+        Site("|www.korzekwa.io|")
+    },
+    Matches {
+        Site("|lemmy.gjz010.com|")
+    },
+    Matches {
+        Site("|biglemmowski.win|")
+    },
+    Matches {
+        Site("|lem.cochrun.xyz|")
+    },
+    Matches {
+        Site("|lemmy.austinite.online|")
+    },
+    Matches {
+        Site("|abstract-scones.crabdance.com|")
+    },
+    Matches {
+        Site("|lem.southcape.social|")
+    },
+    Matches {
+        Site("|lem.simple-gear.com|")
+    },
+    Matches {
+        Site("|meganice.online|")
+    },
+    Matches {
+        Site("|lemmy.bringdaruck.us|")
+    },
+    Matches {
+        Site("|lemmypets.xyz|")
+    },
+    Matches {
+        Site("|lemmy.fediverse.jp|")
+    },
+    Matches {
+        Site("|reddrefuge.com|")
+    },
+    Matches {
+        Site("|lem.elbullazul.com|")
+    },
+    Matches {
+        Site("|femboys.bar|")
+    },
+    Matches {
+        Site("|lemmerz.org|")
+    },
+    Matches {
+        Site("|lemmydeals.com|")
+    },
+    Matches {
+        Site("|lemmybedan.com|")
+    },
+    Matches {
+        Site("|lemmy.fyi|")
+    },
+    Matches {
+        Site("|lemmy.davidfreina.at|")
+    },
+    Matches {
+        Site("|distress.digital|")
+    },
+    Matches {
+        Site("|lemmy.cook.gg|")
+    },
+    Matches {
+        Site("|lemmy.koski.co|")
+    },
+    Matches {
+        Site("|lemmy.dcrich.net|")
+    },
+    Matches {
+        Site("|selfhosted.forum|")
+    },
+    Matches {
+        Site("|lemmy.mixdown.ca|")
+    },
+    Matches {
+        Site("|lemmy.wxbu.de|")
+    },
+    Matches {
+        Site("|lemmy.dekay.se|")
+    },
+    Matches {
+        Site("|links.wageoffsite.com|")
+    },
+    Matches {
+        Site("|lemmy.jpaulus.io|")
+    },
+    Matches {
+        Site("|links.roobre.es|")
+    },
+    Matches {
+        Site("|notlemmy.notawebsite.fr|")
+    },
+    Matches {
+        Site("|hive.atlanten.se|")
+    },
+    Matches {
+        Site("|lemitar.meta1203.com|")
+    },
+    Matches {
+        Site("|thediscussion.site|")
+    },
+    Matches {
+        Site("|lemmy.amxl.com|")
+    },
+    Matches {
+        Site("|syrma.cc|")
+    },
+    Matches {
+        Site("|lemmy.virtim.dev|")
+    },
+    Matches {
+        Site("|l.twos.dev|")
+    },
+    Matches {
+        Site("|lemmy.s9m.xyz|")
+    },
+    Matches {
+        Site("|lemmy.sysctl.io|")
+    },
+    Matches {
+        Site("|lemmy.vepta.org|")
+    },
+    Matches {
+        Site("|lemmy.bradis.me|")
+    },
+    Matches {
+        Site("|eventfrontier.com|")
+    },
+    Matches {
+        Site("|lemmy.jlh.name|")
+    },
+    Matches {
+        Site("|l.nulltext.org|")
+    },
+    Matches {
+        Site("|lemmy.dork.lol|")
+    },
+    Matches {
+        Site("|pwzle.com|")
+    },
+    Matches {
+        Site("|linkage.ds8.zone|")
+    },
+    Matches {
+        Site("|lemmy.aucubin.de|")
+    },
+    Matches {
+        Site("|lemmy.w9r.de|")
+    },
+    Matches {
+        Site("|lemmy.belclayfer.net|")
+    },
+    Matches {
+        Site("|lemmy.zone|")
+    },
+    Matches {
+        Site("|lemmy.nauk.io|")
+    },
+    Matches {
+        Site("|silicon-dragon.com|")
+    },
+    Matches {
+        Site("|lemmy.loutsenhizer.com|")
+    },
+    Matches {
+        Site("|lemmy.vyizis.tech|")
+    },
+    Matches {
+        Site("|lemmy.lylapol.com|")
+    },
+    Matches {
+        Site("|shinobu.cloud|")
+    },
+    Matches {
+        Site("|tezzo.f0rk.pl|")
+    },
+    Matches {
+        Site("|lemmy.game-files.net|")
+    },
+    Matches {
+        Site("|link.fossdle.org|")
+    },
+    Matches {
+        Site("|gonelemmy.xyz|")
+    },
+    Matches {
+        Site("|wilbo.tech|")
+    },
+    Matches {
+        Site("|l.plabs.social|")
+    },
+    Matches {
+        Site("|beer.andma.la|")
+    },
+    Matches {
+        Site("|lemmy.demonoftheday.eu|")
+    },
+    Matches {
+        Site("|lemmy.pwzle.com|")
+    },
+    Matches {
+        Site("|lemmy.zelinsky.dev|")
+    },
+    Matches {
+        Site("|lemmy.mira.pm|")
+    },
+    Matches {
+        Site("|heckoverflow.net|")
+    },
+    Matches {
+        Site("|lme.smn.sh|")
+    },
+    Matches {
+        Site("|culture0.cc|")
+    },
+    Matches {
+        Site("|lemmy.anonion.social|")
+    },
+    Matches {
+        Site("|lemmy.saik0.com|")
+    },
+    Matches {
+        Site("|lemmy.thias.xyz|")
+    },
+    Matches {
+        Site("|lemmy.elest.io|")
+    },
+    Matches {
+        Site("|whata.clusterfsck.com|")
+    },
+    Matches {
+        Site("|aulem.org|")
+    },
+    Matches {
+        Site("|l.vidja.social|")
+    },
+    Matches {
+        Site("|lmmy.net|")
+    },
+    Matches {
+        Site("|lemmy.thetaits.net|")
+    },
+    Matches {
+        Site("|wumbo.buzz|")
+    },
+    Matches {
+        Site("|lemmy.uncomfortable.business|")
+    },
+    Matches {
+        Site("|snuv.win|")
+    },
+    Matches {
+        Site("|lemmy.keychat.org|")
+    },
+    Matches {
+        Site("|lemmy.best|")
+    },
+    Matches {
+        Site("|lemmy-u3.vm.elestio.app|")
+    },
+    Matches {
+        Site("|hyperfair.link|")
+    },
+    Matches {
+        Site("|lemmy.aguiarvieira.pt|")
+    },
+    Matches {
+        Site("|lemmy.itermori.de|")
+    },
+    Matches {
+        Site("|lemmy.pierre-couy.fr|")
+    },
+    Matches {
+        Site("|cigar.cx|")
+    },
+    Matches {
+        Site("|lemmy.help|")
+    },
+    Matches {
+        Site("|lemmy.grygon.com|")
+    },
+    Matches {
+        Site("|lemmy.tanktrace.de|")
+    },
+    Matches {
+        Site("|lm.electrospek.com|")
+    },
+    Matches {
+        Site("|lemmy.matthe815.dev|")
+    },
+    Matches {
+        Site("|lemmy.bloodmoon-network.de|")
+    },
+    Matches {
+        Site("|lm.paradisus.day|")
+    },
+    Matches {
+        Site("|fed.rosssi.co.uk|")
+    },
+    Matches {
+        Site("|lemmy.atheos.org|")
+    },
+    Matches {
+        Site("|thesidewalkends.io|")
+    },
+    Matches {
+        Site("|androiddev.network|")
+    },
+    Matches {
+        Site("|lemmy-ujt-u4842.vm.elestio.app|")
+    },
+    Matches {
+        Site("|leddit.social|")
+    },
+    Matches {
+        Site("|lm.kalinowski.dev|")
+    },
+    Matches {
+        Site("|lemmy.johnpanos.com|")
+    },
+    Matches {
+        Site("|lemmy.kitsuna.net|")
+    },
+    Matches {
+        Site("|thesimplecorner.org|")
+    },
+    Matches {
+        Site("|lemmy.knocknet.net|")
+    },
+    Matches {
+        Site("|lemmy.davidbuckley.ca|")
+    },
+    Matches {
+        Site("|lemmy.coupou.fr|")
+    },
+    Matches {
+        Site("|lemmy.syrasu.com|")
+    },
+    Matches {
+        Site("|lemmy.umainfo.live|")
+    },
+    Matches {
+        Site("|lemmy.rimkus.it|")
+    },
+    Matches {
+        Site("|lem.free.as|")
+    },
+    Matches {
+        Site("|discuss.ntfy.sh|")
+    },
+    Matches {
+        Site("|lemmy.pec0ra.ch|")
+    },
+    Matches {
+        Site("|lemmy.foxden.party|")
+    },
+    Matches {
+        Site("|lemmy.sprawl.club|")
+    },
+    Matches {
+        Site("|lemmy.iswhereits.at|")
+    },
+    Matches {
+        Site("|butts.international|")
+    },
+    Matches {
+        Site("|lmmy.io|")
+    },
+    Matches {
+        Site("|lemmy.schuerz.at|")
+    },
+    Matches {
+        Site("|pasta.faith|")
+    },
+    Matches {
+        Site("|rational-racoon.de|")
+    },
+    Matches {
+        Site("|lemmy.obrell.se|")
+    },
+    Matches {
+        Site("|lemmy.gmprojects.pro|")
+    },
+    Matches {
+        Site("|lemmy.ubergeek77.chat|")
+    },
+    Matches {
+        Site("|lemmy.helheim.net|")
+    },
+    Matches {
+        Site("|lemmit-u4849.vm.elestio.app|")
+    },
+    Matches {
+        Site("|sambaspy.com|")
+    },
+    Matches {
+        Site("|theotter.social|")
+    },
+    Matches {
+        Site("|lemmy.sweevo.net|")
+    },
+    Matches {
+        Site("|lemmy.ch3n2k.com|")
+    },
+    Matches {
+        Site("|lemmy.secnd.me|")
+    },
+    Matches {
+        Site("|ani.social|")
+    },
+    Matches {
+        Site("|stammtisch.hallertau.social|")
+    },
+    Matches {
+        Site("|discuss.jacen.moe|")
+    },
+    Matches {
+        Site("|lemmy.korgen.xyz|")
+    },
+    Matches {
+        Site("|donky.social|")
+    },
+    Matches {
+        Site("|retarded.dev|")
+    },
+    Matches {
+        Site("|lostcheese.com|")
+    },
+    Matches {
+        Site("|lemmy.maples.dev|")
+    },
+    Matches {
+        Site("|lemmy.2kd.de|")
+    },
+    Matches {
+        Site("|neodrain.net|")
+    },
+    Matches {
+        Site("|lemmy.beebl.es|")
+    },
+    Matches {
+        Site("|lemmy.frozeninferno.xyz|")
+    },
+    Matches {
+        Site("|support-futbol-u4947.vm.elestio.app|")
+    },
+    Matches {
+        Site("|support.futbol|")
+    },
+    Matches {
+        Site("|social.nerdhouse.io|")
+    },
+    Matches {
+        Site("|lemmy.cnschn.com|")
+    },
+    Matches {
+        Site("|lm.runnerd.net|")
+    },
+    Matches {
+        Site("|lemmy.friheter.com|")
+    },
+    Matches {
+        Site("|lemmy.hosted.frl|")
+    },
+    Matches {
+        Site("|drak.gg|")
+    },
+    Matches {
+        Site("|lm.suitwaffle.com|")
+    },
+    Matches {
+        Site("|cavy.rocks|")
+    },
+    Matches {
+        Site("|lemmy.smoothbrain.org|")
+    },
+    Matches {
+        Site("|lemmy.scav1.com|")
+    },
+    Matches {
+        Site("|lemmy.perigrine.ca|")
+    },
+    Matches {
+        Site("|lemmy.mrm.one|")
+    },
+    Matches {
+        Site("|lemmy.belegost.net|")
+    },
+    Matches {
+        Site("|lemmy.andiru.de|")
+    },
+    Matches {
+        Site("|iceorchid.net|")
+    },
+    Matches {
+        Site("|einweckglas.com|")
+    },
+    Matches {
+        Site("|lemmy.edgarchirivella.com|")
+    },
+    Matches {
+        Site("|lemmy.karaolidis.com|")
+    },
+    Matches {
+        Site("|lemmy.brief.guru|")
+    },
+    Matches {
+        Site("|lm.curlefry.net|")
+    },
+    Matches {
+        Site("|lemmy.nikore.net|")
+    },
+    Matches {
+        Site("|lemmy.telaax.com|")
+    },
+    Matches {
+        Site("|lemmy.sedimentarymountains.com|")
+    },
+    Matches {
+        Site("|lemmy.azamserver.com|")
+    },
+    Matches {
+        Site("|lemmy.mooo.com|")
+    },
+    Matches {
+        Site("|l.1in1.net|")
+    },
+    Matches {
+        Site("|lemmy.unfiltered.social|")
+    },
+    Matches {
+        Site("|lemmy.modshiftx.com|")
+    },
+    Matches {
+        Site("|lemmy.theonecurly.page|")
+    },
+    Matches {
+        Site("|lemmy.mutation.observer|")
+    },
+    Matches {
+        Site("|lemmy.sietch.online|")
+    },
+    Matches {
+        Site("|lemmy.meridiangrp.co.uk|")
+    },
+    Matches {
+        Site("|feddit.tech|")
+    },
+    Matches {
+        Site("|lemmy.mambastretch.com|")
+    },
+    Matches {
+        Site("|lemmy.fedihub.social|")
+    },
+    Matches {
+        Site("|feddit.pl|")
+    },
+    Matches {
+        Site("|lemmy.l0nax.org|")
+    },
+    Matches {
+        Site("|lemmy.freewilltiger.page|")
+    },
+    Matches {
+        Site("|lemmy.techstache.com|")
+    },
+    Matches {
+        Site("|lemmy.qpixel.pw|")
+    },
+    Matches {
+        Site("|lemmy.pen15.club|")
+    },
+    Matches {
+        Site("|lemmy.safe-internet.org|")
+    },
+    Matches {
+        Site("|lemmy.tario.org|")
+    },
+    Matches {
+        Site("|lemmy.mats.ooo|")
+    },
+    Matches {
+        Site("|lemnt.telaax.com|")
+    },
+    Matches {
+        Site("|glasstower.nl|")
+    },
+    Matches {
+        Site("|p9.wtf|")
+    },
+    Matches {
+        Site("|lemmy.tobyvin.dev|")
+    },
+    Matches {
+        Site("|lemmy.soontm.de|")
+    },
+    Matches {
+        Site("|lemmy.appeine.com|")
+    },
+    Matches {
+        Site("|lemmy.ghostplanet.org|")
+    },
+    Matches {
+        Site("|lemmy.hpost.no|")
+    },
+    Matches {
+        Site("|lemmy.lettucegarden.net|")
+    },
+    Matches {
+        Site("|drlemmy.net|")
+    },
+    Matches {
+        Site("|badblocks.rocks|")
+    },
+    Matches {
+        Site("|scif6.nsalanparty.com|")
+    },
+    Matches {
+        Site("|notlemmy.site|")
+    },
+    Matches {
+        Site("|lemmy.cultimean.group|")
+    },
+    Matches {
+        Site("|lemmy.fucs.io|")
+    },
+    Matches {
+        Site("|lemmy.batlord.org|")
+    },
+    Matches {
+        Site("|lemmy.croc.pw|")
+    },
+    Matches {
+        Site("|fedi.shadowtoot.world|")
+    },
+    Matches {
+        Site("|lemmy.deev.io|")
+    },
+    Matches {
+        Site("|lmmy.ylwsgn.cc|")
+    },
+    Matches {
+        Site("|lemmy.mayes.io|")
+    },
+    Matches {
+        Site("|skwerl.dev|")
+    },
+    Matches {
+        Site("|le-me.xyz|")
+    },
+    Matches {
+        Site("|lemmy.mxh.nu|")
+    },
+    Matches {
+        Site("|lemmy.pxm.nl|")
+    },
+    Matches {
+        Site("|nwdr.club|")
+    },
+    Matches {
+        Site("|discuss.as200950.com|")
+    },
+    Matches {
+        Site("|lemmy.whalesinspace.de|")
+    },
+    Matches {
+        Site("|lemmy.vskr.net|")
+    },
+    Matches {
+        Site("|lemmy.shattervideoisland.com|")
+    },
+    Matches {
+        Site("|opendmz.social|")
+    },
+    Matches {
+        Site("|lemmy.corrigan.xyz|")
+    },
+    Matches {
+        Site("|lemmy.nathaneaston.com|")
+    },
+    Matches {
+        Site("|lemmy.productionservers.net|")
+    },
+    Matches {
+        Site("|lemmy.r6e.dev|")
+    },
+    Matches {
+        Site("|0xdd.org.ru|")
+    },
+    Matches {
+        Site("|lemmy.root6.de|")
+    },
+    Matches {
+        Site("|lemmy.dlgreen.com|")
+    },
+    Matches {
+        Site("|lemmy.fun|")
+    },
+    Matches {
+        Site("|lemmy.freddeliv.me|")
+    },
+    Matches {
+        Site("|lemmy.therhys.co.uk|")
+    },
+    Matches {
+        Site("|thepride.hexodine.com|")
+    },
+    Matches {
+        Site("|talka.live|")
+    },
+    Matches {
+        Site("|lemmy.m1k.cloud|")
+    },
+    Matches {
+        Site("|social.fr4me.io|")
+    },
+    Matches {
+        Site("|lemmy.fredhs.net|")
+    },
+    Matches {
+        Site("|lemmy.rhymelikedi.me|")
+    },
+    Matches {
+        Site("|feddit.at|")
+    },
+    Matches {
+        Site("|purrito.kamartaj.xyz|")
+    },
+    Matches {
+        Site("|bethe.kingofdog.de|")
+    },
+    Matches {
+        Site("|lemmy.kodeklang.social|")
+    },
+    Matches {
+        Site("|dsilo061298.ddns.net|")
+    },
+    Matches {
+        Site("|nonewfriends.club|")
+    },
+    Matches {
+        Site("|soccer.forum|")
+    },
+    Matches {
+        Site("|lemmy.wyattsmith.org|")
+    },
+    Matches {
+        Site("|liminal.southfox.me|")
+    },
+    Matches {
+        Site("|lemmy.brad.ee|")
+    },
+    Matches {
+        Site("|lemmy.mypinghertz.com|")
+    },
+    Matches {
+        Site("|lemmy.gsp8181.co.uk|")
+    },
+    Matches {
+        Site("|surlesworld.com|")
+    },
+    Matches {
+        Site("|lemmyis.fun|")
+    },
+    Matches {
+        Site("|lm.sethp.cc|")
+    },
+    Matches {
+        Site("|lemmy.datatekniker.dev|")
+    },
+    Matches {
+        Site("|lemmy.arun.cloud|")
+    },
+    Matches {
+        Site("|lemmy.barnacles.one|")
+    },
+    Matches {
+        Site("|lemmy.macaddict89.me|")
+    },
+    Matches {
+        Site("|lemmy.holmosapien.com|")
+    },
+    Matches {
+        Site("|feddit.site|")
+    },
+    Matches {
+        Site("|mayheminc.win|")
+    },
+    Matches {
+        Site("|lem.zevs.me|")
+    },
+    Matches {
+        Site("|lemmy.toot.pt|")
+    },
+    Matches {
+        Site("|lemmy.finance|")
+    },
+    Matches {
+        Site("|lemmy.halfbro.xyz|")
+    },
+    Matches {
+        Site("|rlyeh.cc|")
+    },
+    Matches {
+        Site("|lemmy.services.coupou.fr|")
+    },
+    Matches {
+        Site("|ue.reddiverse.umbraluvine.xyz|")
+    },
+    Matches {
+        Site("|mh.znark.us|")
+    },
+    Matches {
+        Site("|gertie.uk|")
+    },
+    Matches {
+        Site("|lemmy.naga.sh|")
+    },
+    Matches {
+        Site("|lemmy.mpcjanssen.nl|")
+    },
+    Matches {
+        Site("|lemmy.neeley.cloud|")
+    },
+    Matches {
+        Site("|overctrl.dbzer0.com|")
+    },
+    Matches {
+        Site("|lemmy.sarcasticdeveloper.com|")
+    },
+    Matches {
+        Site("|l.mathers.fr|")
+    },
+    Matches {
+        Site("|lemmy.rubenernst.dev|")
+    },
+    Matches {
+        Site("|lemmy.dogboy.xyz|")
+    },
+    Matches {
+        Site("|lemmy.jasondove.me|")
+    },
+    Matches {
+        Site("|lemmy.eldarerathis.com|")
+    },
+    Matches {
+        Site("|lemmy.enchanted.social|")
+    },
+    Matches {
+        Site("|sublight.one|")
+    },
+    Matches {
+        Site("|botnet.club|")
+    },
+    Matches {
+        Site("|lemmy.meissners.me|")
+    },
+    Matches {
+        Site("|lemmy.albertoluna.es|")
+    },
+    Matches {
+        Site("|lemmy.zkr.io|")
+    },
+    Matches {
+        Site("|readit.space|")
+    },
+    Matches {
+        Site("|lemmy.ravc.tech|")
+    },
+    Matches {
+        Site("|lemmy.scurry.io|")
+    },
+    Matches {
+        Site("|anime-pub.moe|")
+    },
+    Matches {
+        Site("|lemmy.buller.cc|")
+    },
+    Matches {
+        Site("|lmy.dotcomitsa.website|")
+    },
+    Matches {
+        Site("|lemmy.namwen.me|")
+    },
+    Matches {
+        Site("|lemmy.funkylab.xyz|")
+    },
+    Matches {
+        Site("|lemmygrid.com|")
+    },
+    Matches {
+        Site("|mlemmy.de|")
+    },
+    Matches {
+        Site("|lemmy.flugratte.dev|")
+    },
+    Matches {
+        Site("|feddit.eu|")
+    },
+    Matches {
+        Site("|pootusmaximus.xyz|")
+    },
+    Matches {
+        Site("|lemmy.fap.ie|")
+    },
+    Matches {
+        Site("|lemmy.hellwhore.com|")
+    },
+    Matches {
+        Site("|lemmy.austinvaness.com|")
+    },
+};

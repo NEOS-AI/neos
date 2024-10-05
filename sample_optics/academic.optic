@@ -1,0 +1,13 @@
+DiscardNonMatching;
+
+Rule {
+    Matches {
+        Domain(".edu|")
+    },
+    Matches {
+        Domain(".ac.uk|")
+    },
+    Matches {
+        Domain("|arxiv.org|")
+    }
+};
