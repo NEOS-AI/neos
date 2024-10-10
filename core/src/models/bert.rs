@@ -65,7 +65,7 @@ pub struct Config {
     pub layer_norm_eps: f64,
     pub pad_token_id: usize,
     #[serde(default)]
-    pub position_embedding_type: PositionEmbeddingType,
+    position_embedding_type: PositionEmbeddingType,
     #[serde(default)]
     pub use_cache: bool,
     pub classifier_dropout: Option<f64>,
