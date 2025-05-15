@@ -39,7 +39,7 @@ export function Jumbotron() {
           <AuroraText>at Your Fingertips</AuroraText>
         </h1>
         <p className="max-w-4xl p-2 text-center text-sm opacity-85 md:text-2xl">
-          Meet DeerFlow, your personal Deep Research assistant. With powerful
+          Meet NEOS, your personal Deep Research assistant. With powerful
           tools like search engines, web crawlers, Python and MCP services, it
           delivers instant insights, comprehensive reports, and even captivating
           podcasts.
@@ -52,7 +52,7 @@ export function Jumbotron() {
               }
               href={
                 env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY
-                  ? "https://github.com/bytedance/deer-flow"
+                  ? "https://github.com/NEOS-AI/neos"
                   : "/chat"
               }
             >
@@ -67,7 +67,7 @@ export function Jumbotron() {
               asChild
             >
               <Link
-                href="https://github.com/bytedance/deer-flow"
+                href="https://github.com/NEOS-AI/neos"
                 target="_blank"
               >
                 <GithubFilled />

@@ -9,14 +9,14 @@ IF "%MODE%"=="dev" GOTO DEV
 IF "%MODE%"=="development" GOTO DEV
 
 :PROD
-echo Starting DeerFlow in [PRODUCTION] mode...
+echo Starting NEOS in [PRODUCTION] mode...
 uv run server.py
 cd web
 pnpm start
 GOTO END
 
 :DEV
-echo Starting DeerFlow in [DEVELOPMENT] mode...
+echo Starting NEOS in [DEVELOPMENT] mode...
 start uv run server.py --reload
 cd web
 start pnpm dev

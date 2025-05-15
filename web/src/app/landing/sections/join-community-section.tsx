@@ -16,13 +16,13 @@ export function JoinCommunitySection() {
         anchor="join-community"
         title={
           <AuroraText colors={["#60A5FA", "#A5FA60", "#A560FA"]}>
-            Join the DeerFlow Community
+            Join the NEOS Community
           </AuroraText>
         }
-        description="Contribute brilliant ideas to shape the future of DeerFlow. Collaborate, innovate, and make impacts."
+        description="Contribute brilliant ideas to shape the future of NEOS. Collaborate, innovate, and make impacts."
       />
       <Button className="text-xl" size="lg" asChild>
-        <Link href="https://github.com/bytedance/deer-flow" target="_blank">
+        <Link href="https://github.com/NEOS-AI/neos" target="_blank">
           <GithubFilled />
           Contribute Now
         </Link>

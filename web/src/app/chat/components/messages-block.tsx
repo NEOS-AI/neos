@@ -133,10 +133,10 @@ export function MessagesBlock({ className }: { className?: string }) {
                     <CardDescription>
                       <RainbowText animated={responding}>
                         {responding
-                          ? "DeerFlow is now replaying the conversation..."
+                          ? "NEOS is now replaying the conversation..."
                           : replayStarted
                             ? "The replay has been stopped."
-                            : `You're now in DeerFlow's replay mode. Click the "Play" button on the right to start.`}
+                            : `You're now in NEOS's replay mode. Click the "Play" button on the right to start.`}
                       </RainbowText>
                     </CardDescription>
                   </CardHeader>
@@ -169,7 +169,7 @@ export function MessagesBlock({ className }: { className?: string }) {
                 own question, please{" "}
                 <a
                   className="underline"
-                  href="https://github.com/bytedance/deer-flow"
+                  href="https://github.com/NEOS-AI/neos"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
