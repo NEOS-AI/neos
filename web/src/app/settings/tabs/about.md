@@ -8,7 +8,7 @@
 
 ## 🌟 GitHub Repository
 
-Explore NEOS on GitHub: [github.com/bytedance/deer-flow](https://github.com/NEOS-AI/neos)
+Explore NEOS on GitHub: [github.com/bytedance/neos](https://github.com/NEOS-AI/neos)
 
 ---
 

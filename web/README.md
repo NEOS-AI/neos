@@ -18,7 +18,7 @@ This is the web UI for [`NEOS`](https://github.com/NEOS-AI/neos).
 
 Create a `.env` file in the project root and configure the following environment variables:
 
-- `NEXT_PUBLIC_API_URL`: The URL of the deer-flow API.
+- `NEXT_PUBLIC_API_URL`: The URL of the neos API.
 
 It's always a good idea to start with the given example file, and edit the `.env` file with your own values:
 
@@ -66,17 +66,17 @@ First, you need read the [configuration](#configuration) below. Make sure `.env`
 Second, to build a Docker image of your own web server:
 
 ```bash
-docker build --build-arg NEXT_PUBLIC_API_URL=YOUR_DEER-FLOW_API -t deer-flow-web .
+docker build --build-arg NEXT_PUBLIC_API_URL=YOUR_neos_API -t neos-web .
 ```
 
 Final, start up a docker container running the web server:
 
 ```bash
-# Replace deer-flow-web-app with your preferred container name
-docker run -d -t -p 3000:3000 --env-file .env --name deer-flow-web-app deer-flow-web
+# Replace neos-web-app with your preferred container name
+docker run -d -t -p 3000:3000 --env-file .env --name neos-web-app neos-web
 
 # stop the server
-docker stop deer-flow-web-app
+docker stop neos-web-app
 ```
 
 ### Docker Compose

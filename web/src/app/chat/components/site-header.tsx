@@ -49,7 +49,7 @@ export async function StarCounter() {
 
   try {
     const response = await fetch(
-      "https://api.github.com/repos/bytedance/deer-flow",
+      "https://api.github.com/repos/bytedance/neos",
       {
         headers: env.GITHUB_OAUTH_TOKEN
           ? {
