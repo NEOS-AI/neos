@@ -5,8 +5,8 @@
 
 import { useMemo } from "react";
 
-import { useStore } from "~/core/store";
-import { cn } from "~/lib/utils";
+import { useStore } from "@/core/store";
+import { cn } from "@/lib/utils";
 
 import { MessagesBlock } from "./components/messages-block";
 import { ResearchBlock } from "./components/research-block";

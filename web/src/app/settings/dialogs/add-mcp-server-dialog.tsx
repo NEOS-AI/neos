@@ -4,7 +4,7 @@
 import { Loader2 } from "lucide-react";
 import { useCallback, useState } from "react";
 
-import { Button } from "~/components/ui/button";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -13,16 +13,16 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "~/components/ui/dialog";
-import { Textarea } from "~/components/ui/textarea";
-import { queryMCPServerMetadata } from "~/core/api";
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { queryMCPServerMetadata } from "@/core/api";
 import {
   MCPConfigSchema,
   type MCPServerMetadata,
   type SimpleMCPServerMetadata,
   type SimpleSSEMCPServerMetadata,
   type SimpleStdioMCPServerMetadata,
-} from "~/core/mcp";
+} from "@/core/mcp";
 
 export function AddMCPServerDialog({
   onAdd,

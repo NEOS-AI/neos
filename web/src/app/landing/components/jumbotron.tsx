@@ -5,10 +5,10 @@ import { GithubFilled } from "@ant-design/icons";
 import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 
-import { AuroraText } from "~/components/magicui/aurora-text";
-import { FlickeringGrid } from "~/components/magicui/flickering-grid";
-import { Button } from "~/components/ui/button";
-import { env } from "~/env";
+import { AuroraText } from "@/components/magicui/aurora-text";
+import { FlickeringGrid } from "@/components/magicui/flickering-grid";
+import { Button } from "@/components/ui/button";
+import { env } from "@/env";
 
 export function Jumbotron() {
   return (

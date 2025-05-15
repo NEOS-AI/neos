@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
 // SPDX-License-Identifier: MIT
 
-import { env } from "~/env";
+import { env } from "@/env";
 
 import type { MCPServerMetadata } from "../mcp";
 import { extractReplayIdFromSearchParams } from "../replay/get-replay-id";

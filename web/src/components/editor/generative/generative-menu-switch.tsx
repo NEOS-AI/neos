@@ -6,9 +6,9 @@ import { Fragment, type ReactNode, useEffect } from "react";
 import { Button } from "../../ui/button";
 import Magic from "../../ui/icons/magic";
 import { AISelector } from "./ai-selector";
-import { useReplay } from "~/core/replay";
-import { TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
-import { Tooltip } from "~/components/ui/tooltip";
+import { useReplay } from "@/core/replay";
+import { TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip } from "@/components/ui/tooltip";
 
 interface GenerativeMenuSwitchProps {
   children: ReactNode;

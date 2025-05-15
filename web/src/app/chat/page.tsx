@@ -8,7 +8,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { Suspense } from "react";
 
-import { Button } from "~/components/ui/button";
+import { Button } from "@/components/ui/button";
 
 import { Logo } from "../../components/neos/logo";
 import { ThemeToggle } from "../../components/neos/theme-toggle";

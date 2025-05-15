@@ -33,7 +33,7 @@ import { TextButtons } from "./selectors/text-buttons";
 import { slashCommand, suggestionItems } from "./slash-command";
 // import { defaultEditorContent } from "./content";
 
-import "~/styles/prosemirror.css";
+import "@/styles/prosemirror.css";
 
 const hljs = require("highlight.js");
 

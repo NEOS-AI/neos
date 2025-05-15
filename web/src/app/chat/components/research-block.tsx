@@ -4,17 +4,18 @@
 import { Check, Copy, Headphones, Pencil, Undo2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { ScrollContainer } from "~/components/neos/scroll-container";
-import { Tooltip } from "~/components/neos/tooltip";
-import { Button } from "~/components/ui/button";
-import { Card } from "~/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
-import { useReplay } from "~/core/replay";
-import { closeResearch, listenToPodcast, useStore } from "~/core/store";
-import { cn } from "~/lib/utils";
+import { ScrollContainer } from "@/components/neos/scroll-container";
+import { Tooltip } from "@/components/neos/tooltip";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useReplay } from "@/core/replay";
+import { closeResearch, listenToPodcast, useStore } from "@/core/store";
+import { cn } from "@/lib/utils";
 
 import { ResearchActivitiesBlock } from "./research-activities-block";
 import { ResearchReportBlock } from "./research-report-block";
+
 
 export function ResearchBlock({
   className,

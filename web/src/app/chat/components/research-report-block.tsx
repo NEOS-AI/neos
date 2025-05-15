@@ -3,12 +3,12 @@
 
 import { useCallback, useRef } from "react";
 
-import { LoadingAnimation } from "~/components/neos/loading-animation";
-import { Markdown } from "~/components/neos/markdown";
-import ReportEditor from "~/components/editor";
-import { useReplay } from "~/core/replay";
-import { useMessage, useStore } from "~/core/store";
-import { cn } from "~/lib/utils";
+import { LoadingAnimation } from "@/components/neos/loading-animation";
+import { Markdown } from "@/components/neos/markdown";
+import ReportEditor from "@/components/editor";
+import { useReplay } from "@/core/replay";
+import { useMessage, useStore } from "@/core/store";
+import { cn } from "@/lib/utils";
 
 export function ResearchReportBlock({
   className,

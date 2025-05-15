@@ -11,15 +11,15 @@ import {
   useState,
 } from "react";
 
-import { Detective } from "~/components/neos/icons/detective";
-import { Tooltip } from "~/components/neos/tooltip";
-import { Button } from "~/components/ui/button";
-import type { Option } from "~/core/messages";
+import { Detective } from "@/components/neos/icons/detective";
+import { Tooltip } from "@/components/neos/tooltip";
+import { Button } from "@/components/ui/button";
+import type { Option } from "@/core/messages";
 import {
   setEnableBackgroundInvestigation,
   useSettingsStore,
-} from "~/core/store";
-import { cn } from "~/lib/utils";
+} from "@/core/store";
+import { cn } from "@/lib/utils";
 
 export function InputBox({
   className,

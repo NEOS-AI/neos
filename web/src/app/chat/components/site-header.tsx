@@ -4,9 +4,9 @@
 import { StarFilledIcon, GitHubLogoIcon } from "@radix-ui/react-icons";
 import Link from "next/link";
 
-import { NumberTicker } from "~/components/magicui/number-ticker";
-import { Button } from "~/components/ui/button";
-import { env } from "~/env";
+import { NumberTicker } from "@/components/magicui/number-ticker";
+import { Button } from "@/components/ui/button";
+import { env } from "@/env";
 
 export async function SiteHeader() {
   return (

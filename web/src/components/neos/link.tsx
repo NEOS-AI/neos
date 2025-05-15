@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useStore, useToolCalls } from "~/core/store";
+import { useStore, useToolCalls } from "@/core/store";
 import { Tooltip } from "./tooltip";
 import { WarningFilled } from "@ant-design/icons";
 
