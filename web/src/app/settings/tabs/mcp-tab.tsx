@@ -5,11 +5,11 @@ import { motion } from "framer-motion";
 import { Blocks, PencilRuler, Trash } from "lucide-react";
 import { useCallback, useState } from "react";
 
-import { Tooltip } from "@/components/neos/tooltip";
-import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
-import type { MCPServerMetadata } from "@/core/mcp";
-import { cn } from "@/lib/utils";
+import { Tooltip } from "~/components/deer-flow/tooltip";
+import { Button } from "~/components/ui/button";
+import { Switch } from "~/components/ui/switch";
+import type { MCPServerMetadata } from "~/core/mcp";
+import { cn } from "~/lib/utils";
 
 import { AddMCPServerDialog } from "../dialogs/add-mcp-server-dialog";
 
@@ -74,7 +74,7 @@ export const MCPTab: Tab = ({ settings, onChange }) => {
           <AddMCPServerDialog onAdd={handleAddServers} />
         </div>
         <div className="text-muted-foreground markdown text-sm">
-          The Model Context Protocol boosts NEOS by integrating external
+          The Model Context Protocol boosts DeerFlow by integrating external
           tools for tasks like private domain searches, web browsing, food
           ordering, and more. Click here to
           <a
@@ -179,7 +179,9 @@ export const MCPTab: Tab = ({ settings, onChange }) => {
   );
 };
 MCPTab.icon = Blocks;
+MCPTab.displayName = "MCP";
 MCPTab.badge = "Beta";
+MCPTab.displayName = "MCP";
 
 function mergeServers(
   existing: MCPServerMetadata[],

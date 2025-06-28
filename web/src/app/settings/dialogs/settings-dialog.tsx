@@ -4,9 +4,9 @@
 import { Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { Tooltip } from "@/components/neos/tooltip";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Tooltip } from "~/components/deer-flow/tooltip";
+import { Badge } from "~/components/ui/badge";
+import { Button } from "~/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -15,16 +15,16 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@/components/ui/dialog";
-import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { useReplay } from "@/core/replay";
+} from "~/components/ui/dialog";
+import { Tabs, TabsContent } from "~/components/ui/tabs";
+import { useReplay } from "~/core/replay";
 import {
   type SettingsState,
   changeSettings,
   saveSettings,
   useSettingsStore,
-} from "@/core/store";
-import { cn } from "@/lib/utils";
+} from "~/core/store";
+import { cn } from "~/lib/utils";
 
 import { SETTINGS_TABS } from "../tabs";
 
@@ -101,9 +101,9 @@ export function SettingsDialog() {
       </Tooltip>
       <DialogContent className="sm:max-w-[850px]">
         <DialogHeader>
-          <DialogTitle>NEOS Settings</DialogTitle>
+          <DialogTitle>DeerFlow Settings</DialogTitle>
           <DialogDescription>
-            Manage your NEOS settings here.
+            Manage your DeerFlow settings here.
           </DialogDescription>
         </DialogHeader>
         <Tabs value={activeTabId}>

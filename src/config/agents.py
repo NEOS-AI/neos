@@ -1,4 +1,5 @@
-
+# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
+# SPDX-License-Identifier: MIT
 
 from typing import Literal
 
@@ -15,4 +16,5 @@ AGENT_LLM_MAP: dict[str, LLMType] = {
     "podcast_script_writer": "basic",
     "ppt_composer": "basic",
     "prose_writer": "basic",
+    "prompt_enhancer": "basic",
 }

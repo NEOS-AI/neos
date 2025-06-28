@@ -3,12 +3,12 @@
 
 import { useCallback, useRef } from "react";
 
-import { LoadingAnimation } from "@/components/neos/loading-animation";
-import { Markdown } from "@/components/neos/markdown";
-import ReportEditor from "@/components/editor";
-import { useReplay } from "@/core/replay";
-import { useMessage, useStore } from "@/core/store";
-import { cn } from "@/lib/utils";
+import { LoadingAnimation } from "~/components/deer-flow/loading-animation";
+import { Markdown } from "~/components/deer-flow/markdown";
+import ReportEditor from "~/components/editor";
+import { useReplay } from "~/core/replay";
+import { useMessage, useStore } from "~/core/store";
+import { cn } from "~/lib/utils";
 
 export function ResearchReportBlock({
   className,
@@ -53,10 +53,7 @@ export function ResearchReportBlock({
   // }, [isCompleted]);
 
   return (
-    <div
-      ref={contentRef}
-      className={cn("relative flex flex-col pt-4 pb-8", className)}
-    >
+    <div ref={contentRef} className={cn("w-full pt-4 pb-8", className)}>
       {!isReplay && isCompleted && editing ? (
         <ReportEditor
           content={message?.content}

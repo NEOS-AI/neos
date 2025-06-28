@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: neos-backend
+    container_name: deer-flow-backend
     ports:
       - "8000:8000"
     env_file:
@@ -12,7 +12,7 @@ services:
       - ./conf.yaml:/app/conf.yaml
     restart: unless-stopped
     networks:
-      - neos-network
+      - deer-flow-network
 
   frontend:
     build:
@@ -20,7 +20,7 @@ services:
       dockerfile: Dockerfile
       args:
         - NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-    container_name: neos-frontend
+    container_name: deer-flow-frontend
     ports:
       - "3000:3000"
     env_file:
@@ -29,8 +29,8 @@ services:
       - backend
     restart: unless-stopped
     networks:
-      - neos-network
+      - deer-flow-network
 
 networks:
-  neos-network:
+  deer-flow-network:
     driver: bridge

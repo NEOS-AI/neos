@@ -3,7 +3,7 @@
 
 import { motion } from "framer-motion";
 
-import { cn } from "@/lib/utils";
+import { cn } from "~/lib/utils";
 
 export function Welcome({ className }: { className?: string }) {
   return (
@@ -19,12 +19,12 @@ export function Welcome({ className }: { className?: string }) {
       <div className="text-muted-foreground px-4 text-center text-lg">
         Welcome to{" "}
         <a
-          href="https://github.com/NEOS-AI/neos"
+          href="https://github.com/bytedance/deer-flow"
           target="_blank"
           rel="noopener noreferrer"
           className="hover:underline"
         >
-          🦌 NEOS
+          🦌 DeerFlow
         </a>
         , a deep research assistant built on cutting-edge language models, helps
         you search on web, browse information, and handle complex tasks.

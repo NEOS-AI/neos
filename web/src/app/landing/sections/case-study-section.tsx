@@ -4,7 +4,7 @@
 import { Bike, Building, Film, Github, Ham, Home, Pizza } from "lucide-react";
 import { Bot } from "lucide-react";
 
-import { BentoCard } from "@/components/magicui/bento-grid";
+import { BentoCard } from "~/components/magicui/bento-grid";
 
 import { SectionHeader } from "../components/section-header";
 
@@ -73,7 +73,7 @@ export function CaseStudySection() {
       <SectionHeader
         anchor="case-studies"
         title="Case Studies"
-        description="See NEOS in action through replays."
+        description="See DeerFlow in action through replays."
       />
       <div className="grid w-3/4 grid-cols-1 gap-2 sm:w-full sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {caseStudies.map((caseStudy) => (

@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 import { Loader2 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "~/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -13,16 +13,16 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
-import { queryMCPServerMetadata } from "@/core/api";
+} from "~/components/ui/dialog";
+import { Textarea } from "~/components/ui/textarea";
+import { queryMCPServerMetadata } from "~/core/api";
 import {
   MCPConfigSchema,
   type MCPServerMetadata,
   type SimpleMCPServerMetadata,
   type SimpleSSEMCPServerMetadata,
   type SimpleStdioMCPServerMetadata,
-} from "@/core/mcp";
+} from "~/core/mcp";
 
 export function AddMCPServerDialog({
   onAdd,
@@ -34,6 +34,8 @@ export function AddMCPServerDialog({
   const [validationError, setValidationError] = useState<string | null>("");
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   const handleChange = useCallback((value: string) => {
     setInput(value);
     if (!value.trim()) {
@@ -74,7 +76,9 @@ export function AddMCPServerDialog({
       return;
     }
   }, []);
+
   const handleAdd = useCallback(async () => {
+    abortControllerRef.current = new AbortController();
     const config = MCPConfigSchema.parse(JSON.parse(input));
     setInput(JSON.stringify(config, null, 2));
     const addingServers: SimpleMCPServerMetadata[] = [];
@@ -105,7 +109,7 @@ export function AddMCPServerDialog({
       setError(null);
       for (const server of addingServers) {
         processingServer = server.name;
-        const metadata = await queryMCPServerMetadata(server);
+        const metadata = await queryMCPServerMetadata(server, abortControllerRef.current.signal);
         results.push({ ...metadata, name: server.name, enabled: true });
       }
       if (results.length > 0) {
@@ -115,11 +119,22 @@ export function AddMCPServerDialog({
       setOpen(false);
     } catch (e) {
       console.error(e);
-      setError(`Failed to add server: ${processingServer}`);
+      if (e instanceof Error && e.name === 'AbortError') {
+        setError(`Request was cancelled`);
+      } else {
+        setError(`Failed to add server: ${processingServer}`);
+      }
     } finally {
       setProcessing(false);
+      abortControllerRef.current = null;
     }
   }, [input, onAdd]);
+
+  const handleAbort = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -131,14 +146,14 @@ export function AddMCPServerDialog({
           <DialogTitle>Add New MCP Servers</DialogTitle>
         </DialogHeader>
         <DialogDescription>
-          NEOS uses the standard JSON MCP config to create a new server.
+          DeerFlow uses the standard JSON MCP config to create a new server.
           <br />
           Paste your config below and click &quot;Add&quot; to add new servers.
         </DialogDescription>
 
         <main>
           <Textarea
-            className="h-[360px]"
+            className="h-[360px] sm:max-w-[510px] break-all"
             placeholder={
               'Example:\n\n{\n  "mcpServers": {\n    "My Server": {\n      "command": "python",\n      "args": [\n        "-m", "mcp_server"\n      ],\n      "env": {\n        "API_KEY": "YOUR_API_KEY"\n      }\n    }\n  }\n}'
             }
@@ -165,6 +180,11 @@ export function AddMCPServerDialog({
                 {processing && <Loader2 className="animate-spin" />}
                 Add
               </Button>
+              {
+                processing && (
+                  <Button variant="destructive" onClick={handleAbort}>Abort</Button>
+                )
+              }
             </div>
           </div>
         </DialogFooter>

@@ -15,23 +15,29 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
-} from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import type { SettingsState } from "@/core/store";
+} from "~/components/ui/form";
+import { Input } from "~/components/ui/input";
+import { Label } from "~/components/ui/label";
+import { Switch } from "~/components/ui/switch";
+import type { SettingsState } from "~/core/store";
 
 import type { Tab } from "./types";
 
 const generalFormSchema = z.object({
   autoAcceptedPlan: z.boolean(),
-  enableBackgroundInvestigation: z.boolean(),
   maxPlanIterations: z.number().min(1, {
     message: "Max plan iterations must be at least 1.",
   }),
   maxStepNum: z.number().min(1, {
     message: "Max step number must be at least 1.",
   }),
+  maxSearchResults: z.number().min(1, {
+    message: "Max search results must be at least 1.",
+  }),
+  // Others
+  enableBackgroundInvestigation: z.boolean(),
+  enableDeepThinking: z.boolean(),
+  reportStyle: z.enum(["academic", "popular_science", "news", "social_media"]),
 });
 
 export const GeneralTab: Tab = ({
@@ -143,11 +149,35 @@ export const GeneralTab: Tab = ({
                 </FormItem>
               )}
             />
+            <FormField
+              control={form.control}
+              name="maxSearchResults"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Max search results</FormLabel>
+                  <FormControl>
+                    <Input
+                      className="w-60"
+                      type="number"
+                      defaultValue={field.value}
+                      min={1}
+                      onChange={(event) =>
+                        field.onChange(parseInt(event.target.value || "0"))
+                      }
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    By default, each search step has 3 results.
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
           </form>
         </Form>
       </main>
     </div>
   );
 };
-GeneralTab.displayName = "";
+GeneralTab.displayName = "General";
 GeneralTab.icon = Settings;

@@ -1,11 +1,11 @@
 services:
-  neos-web:
+  deer-flow-web:
     build:
       context: .
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
-    image: neos-web
+    image: deer-flow-web
     ports:
       - "3000:3000"
     env_file:

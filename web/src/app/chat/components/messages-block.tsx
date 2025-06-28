@@ -5,21 +5,21 @@ import { motion } from "framer-motion";
 import { FastForward, Play } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
-import { RainbowText } from "@/components/neos/rainbow-text";
-import { Button } from "@/components/ui/button";
+import { RainbowText } from "~/components/deer-flow/rainbow-text";
+import { Button } from "~/components/ui/button";
 import {
   Card,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
-import { fastForwardReplay } from "@/core/api";
-import { useReplayMetadata } from "@/core/api/hooks";
-import type { Option } from "@/core/messages";
-import { useReplay } from "@/core/replay";
-import { sendMessage, useMessageIds, useStore } from "@/core/store";
-import { env } from "@/env";
-import { cn } from "@/lib/utils";
+} from "~/components/ui/card";
+import { fastForwardReplay } from "~/core/api";
+import { useReplayMetadata } from "~/core/api/hooks";
+import type { Option, Resource } from "~/core/messages";
+import { useReplay } from "~/core/replay";
+import { sendMessage, useMessageIds, useStore } from "~/core/store";
+import { env } from "~/env";
+import { cn } from "~/lib/utils";
 
 import { ConversationStarter } from "./conversation-starter";
 import { InputBox } from "./input-box";
@@ -36,7 +36,13 @@ export function MessagesBlock({ className }: { className?: string }) {
   const abortControllerRef = useRef<AbortController | null>(null);
   const [feedback, setFeedback] = useState<{ option: Option } | null>(null);
   const handleSend = useCallback(
-    async (message: string, options?: { interruptFeedback?: string }) => {
+    async (
+      message: string,
+      options?: {
+        interruptFeedback?: string;
+        resources?: Array<Resource>;
+      },
+    ) => {
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
       try {
@@ -45,6 +51,7 @@ export function MessagesBlock({ className }: { className?: string }) {
           {
             interruptFeedback:
               options?.interruptFeedback ?? feedback?.option.value,
+            resources: options?.resources,
           },
           {
             abortSignal: abortController.signal,
@@ -123,8 +130,26 @@ export function MessagesBlock({ className }: { className?: string }) {
               )}
             >
               <div className="flex items-center justify-between">
-                <div className="flex-grow">
-                  <CardHeader>
+                <div className="flex flex-grow items-center">
+                  {responding && (
+                    <motion.div
+                      className="ml-3"
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.8 }}
+                      transition={{ duration: 0.3 }}
+                    >
+                      <video
+                        // Walking deer animation, designed by @liangzhaojun. Thank you for creating it!
+                        src="/images/walking_deer.webm"
+                        autoPlay
+                        loop
+                        muted
+                        className="h-[42px] w-[42px] object-contain"
+                      />
+                    </motion.div>
+                  )}
+                  <CardHeader className={cn("flex-grow", responding && "pl-3")}>
                     <CardTitle>
                       <RainbowText animated={responding}>
                         {responding ? "Replaying" : `${replayTitle}`}
@@ -133,10 +158,10 @@ export function MessagesBlock({ className }: { className?: string }) {
                     <CardDescription>
                       <RainbowText animated={responding}>
                         {responding
-                          ? "NEOS is now replaying the conversation..."
+                          ? "DeerFlow is now replaying the conversation..."
                           : replayStarted
                             ? "The replay has been stopped."
-                            : `You're now in NEOS's replay mode. Click the "Play" button on the right to start.`}
+                            : `You're now in DeerFlow's replay mode. Click the "Play" button on the right to start.`}
                       </RainbowText>
                     </CardDescription>
                   </CardHeader>
@@ -169,7 +194,7 @@ export function MessagesBlock({ className }: { className?: string }) {
                 own question, please{" "}
                 <a
                   className="underline"
-                  href="https://github.com/NEOS-AI/neos"
+                  href="https://github.com/bytedance/deer-flow"
                   target="_blank"
                   rel="noopener noreferrer"
                 >

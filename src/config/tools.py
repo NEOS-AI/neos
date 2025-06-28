@@ -1,4 +1,5 @@
-
+# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
+# SPDX-License-Identifier: MIT
 
 import os
 import enum
@@ -16,4 +17,10 @@ class SearchEngine(enum.Enum):
 
 # Tool configuration
 SELECTED_SEARCH_ENGINE = os.getenv("SEARCH_API", SearchEngine.TAVILY.value)
-SEARCH_MAX_RESULTS = 3
+
+
+class RAGProvider(enum.Enum):
+    RAGFLOW = "ragflow"
+
+
+SELECTED_RAG_PROVIDER = os.getenv("RAG_PROVIDER")

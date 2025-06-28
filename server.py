@@ -1,12 +1,15 @@
+# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
+# SPDX-License-Identifier: MIT
+
 """
 Server script for running the NEOS API.
 """
 
 import argparse
 import logging
-
+import signal
+import sys
 import uvicorn
-
 
 # Configure logging
 logging.basicConfig(
@@ -16,6 +19,16 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
+def handle_shutdown(signum, frame):
+    """Handle graceful shutdown on SIGTERM/SIGINT"""
+    logger.info("Received shutdown signal. Starting graceful shutdown...")
+    sys.exit(0)
+
+
+# Register signal handlers
+signal.signal(signal.SIGTERM, handle_shutdown)
+signal.signal(signal.SIGINT, handle_shutdown)
 
 if __name__ == "__main__":
     # Parse command line arguments
@@ -49,16 +62,18 @@ if __name__ == "__main__":
 
     # Determine reload setting
     reload = False
-
-    # Command line arguments override defaults
     if args.reload:
         reload = True
 
-    logger.info("Starting NEOS API server")
-    uvicorn.run(
-        "src.server:app",
-        host=args.host,
-        port=args.port,
-        reload=reload,
-        log_level=args.log_level,
-    )
+    try:
+        logger.info(f"Starting NEOS API server on {args.host}:{args.port}")
+        uvicorn.run(
+            "src.server:app",
+            host=args.host,
+            port=args.port,
+            reload=reload,
+            log_level=args.log_level,
+        )
+    except Exception as e:
+        logger.error(f"Failed to start server: {str(e)}")
+        sys.exit(1)

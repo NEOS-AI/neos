@@ -1,4 +1,5 @@
-
+# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
+# SPDX-License-Identifier: MIT
 
 import pytest
 from src.tools.python_repl import python_repl_tool

@@ -23,12 +23,12 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useCallback, useRef, useState } from "react";
 
-import { Tooltip } from "@/components/neos/tooltip";
-import { ShineBorder } from "@/components/magicui/shine-border";
-import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider";
-import { useIntersectionObserver } from "@/hooks/use-intersection-observer";
-import { cn } from "@/lib/utils";
+import { Tooltip } from "~/components/deer-flow/tooltip";
+import { ShineBorder } from "~/components/magicui/shine-border";
+import { Button } from "~/components/ui/button";
+import { Slider } from "~/components/ui/slider";
+import { useIntersectionObserver } from "~/hooks/use-intersection-observer";
+import { cn } from "~/lib/utils";
 
 import { playbook, type GraphNode } from "../store";
 import {

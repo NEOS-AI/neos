@@ -1,19 +1,19 @@
 // Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
 // SPDX-License-Identifier: MIT
 
-import "@/styles/globals.css";
+import "~/styles/globals.css";
 
 import { type Metadata } from "next";
 import { Geist } from "next/font/google";
 import Script from "next/script";
 
-import { ThemeProviderWrapper } from "@/components/neos/theme-provider-wrapper";
-import { env } from "@/env";
+import { ThemeProviderWrapper } from "~/components/deer-flow/theme-provider-wrapper";
+import { env } from "~/env";
 
-import { Toaster } from "../components/neos/toaster";
+import { Toaster } from "../components/deer-flow/toaster";
 
 export const metadata: Metadata = {
-  title: "🦌 NEOS",
+  title: "🦌 DeerFlow",
   description:
     "Deep Exploration and Efficient Research, an AI tool that combines language models with specialized tools for research tasks.",
   icons: [{ rel: "icon", url: "/favicon.ico" }],
@@ -24,7 +24,7 @@ const geist = Geist({
   variable: "--font-geist-sans",
 });
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (

@@ -4,9 +4,9 @@
 import { StarFilledIcon, GitHubLogoIcon } from "@radix-ui/react-icons";
 import Link from "next/link";
 
-import { NumberTicker } from "@/components/magicui/number-ticker";
-import { Button } from "@/components/ui/button";
-import { env } from "@/env";
+import { NumberTicker } from "~/components/magicui/number-ticker";
+import { Button } from "~/components/ui/button";
+import { env } from "~/env";
 
 export async function SiteHeader() {
   return (
@@ -14,7 +14,7 @@ export async function SiteHeader() {
       <div className="container flex h-15 items-center justify-between px-3">
         <div className="text-xl font-medium">
           <span className="mr-1 text-2xl">🦌</span>
-          <span>NEOS</span>
+          <span>DeerFlow</span>
         </div>
         <div className="relative flex items-center">
           <div
@@ -30,7 +30,7 @@ export async function SiteHeader() {
             asChild
             className="group relative z-10"
           >
-            <Link href="https://github.com/NEOS-AI/neos" target="_blank">
+            <Link href="https://github.com/bytedance/deer-flow" target="_blank">
               <GitHubLogoIcon className="size-4" />
               Star on GitHub
               {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY &&
@@ -49,7 +49,7 @@ export async function StarCounter() {
 
   try {
     const response = await fetch(
-      "https://api.github.com/repos/bytedance/neos",
+      "https://api.github.com/repos/bytedance/deer-flow",
       {
         headers: env.GITHUB_OAUTH_TOKEN
           ? {

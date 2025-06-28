@@ -1,4 +1,5 @@
-
+# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
+# SPDX-License-Identifier: MIT
 
 from enum import Enum
 from typing import List, Optional
@@ -12,9 +13,7 @@ class StepType(str, Enum):
 
 
 class Step(BaseModel):
-    need_web_search: bool = Field(
-        ..., description="Must be explicitly set for each step"
-    )
+    need_search: bool = Field(..., description="Must be explicitly set for each step")
     title: str
     description: str = Field(..., description="Specify exactly what data to collect")
     step_type: StepType = Field(..., description="Indicates the nature of the step")
@@ -46,7 +45,7 @@ class Plan(BaseModel):
                     "title": "AI Market Research Plan",
                     "steps": [
                         {
-                            "need_web_search": True,
+                            "need_search": True,
                             "title": "Current AI Market Analysis",
                             "description": (
                                 "Collect data on market size, growth rates, major players, and investment trends in AI sector."
