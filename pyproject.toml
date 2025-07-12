@@ -70,3 +70,6 @@ extend-exclude = '''
 # in the root of the project.
 ^/build/
 '''
+
+[tool.uv.workspace]
+members = ["neosearch"]
