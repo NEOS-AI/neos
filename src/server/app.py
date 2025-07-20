@@ -1,6 +1,3 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import base64
 import json
 import logging
@@ -48,7 +45,7 @@ INTERNAL_SERVER_ERROR_DETAIL = "Internal Server Error"
 
 app = FastAPI(
     title="NEOS API",
-    description="API for Deer",
+    description="API for NEOS",
     version="0.1.0",
 )
 
