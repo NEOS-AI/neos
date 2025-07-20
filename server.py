@@ -30,6 +30,7 @@ def handle_shutdown(signum, frame):
 signal.signal(signal.SIGTERM, handle_shutdown)
 signal.signal(signal.SIGINT, handle_shutdown)
 
+
 if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Run the NEOS API server")
@@ -75,5 +76,5 @@ if __name__ == "__main__":
             log_level=args.log_level,
         )
     except Exception as e:
-        logger.error(f"Failed to start server: {str(e)}")
+        logger.error(f"Exception occurred while running the server: {str(e)}")
         sys.exit(1)
