@@ -198,6 +198,7 @@ export const suggestionItems = createSuggestionItems([
   },
 ]);
 
+
 export const slashCommand = Command.configure({
   suggestion: {
     items: () => suggestionItems,

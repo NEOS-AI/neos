@@ -20,7 +20,7 @@ const Main = dynamic(() => import("./main"), {
   ssr: false,
   loading: () => (
     <div className="flex h-full w-full items-center justify-center">
-      Loading DeerFlow...
+      Loading Neos...
     </div>
   ),
 });

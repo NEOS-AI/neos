@@ -23,7 +23,7 @@ import React, { forwardRef, useEffect, useMemo, useRef } from "react";
 import type { Resource } from "~/core/messages";
 import { useConfig } from "~/core/api/hooks";
 import { LoadingOutlined } from "@ant-design/icons";
-import type { DeerFlowConfig } from "~/core/config";
+import type { NeosConfig } from "~/core/config";
 
 export interface MessageInputRef {
   focus: () => void;
@@ -35,7 +35,7 @@ export interface MessageInputProps {
   className?: string;
   placeholder?: string;
   loading?: boolean;
-  config?: DeerFlowConfig | null;
+  config?: NeosConfig | null;
   onChange?: (markdown: string) => void;
   onEnter?: (message: string, resources: Array<Resource>) => void;
 }
