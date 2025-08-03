@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 INTERNAL_SERVER_ERROR_DETAIL = "Internal Server Error"
 
 app = FastAPI(
-    title="DeerFlow API",
+    title="Neos API",
     description="API for Deer",
     version="0.1.0",
 )

@@ -1,8 +1,5 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 """
-Entry point script for the NEOS project.
+Entry point script for the Neos project.
 """
 
 import argparse
@@ -140,7 +137,11 @@ if __name__ == "__main__":
         if args.query:
             user_query = " ".join(args.query)
         else:
-            user_query = input("Enter your query: ")
+            # Loop until user provides non-empty input
+            while True:
+                user_query = input("Enter your query: ")
+                if user_query is not None and user_query != "":
+                    break
 
         # Run the agent workflow with the provided parameters
         ask(

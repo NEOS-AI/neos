@@ -1,8 +1,5 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 """
-Server script for running the NEOS API.
+Server script for running the Neos API.
 """
 
 import argparse
@@ -33,7 +30,7 @@ signal.signal(signal.SIGINT, handle_shutdown)
 
 if __name__ == "__main__":
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description="Run the NEOS API server")
+    parser = argparse.ArgumentParser(description="Run the Neos API server")
     parser.add_argument(
         "--reload",
         action="store_true",
@@ -67,7 +64,7 @@ if __name__ == "__main__":
         reload = True
 
     try:
-        logger.info(f"Starting NEOS API server on {args.host}:{args.port}")
+        logger.info(f"Starting Neos API server on {args.host}:{args.port}")
         uvicorn.run(
             "src.server:app",
             host=args.host,
@@ -76,5 +73,5 @@ if __name__ == "__main__":
             log_level=args.log_level,
         )
     except Exception as e:
-        logger.error(f"Exception occurred while running the server: {str(e)}")
+        logger.error(f"Failed to start server: {str(e)}")
         sys.exit(1)
