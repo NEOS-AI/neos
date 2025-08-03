@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
+# SPDX-License-Identifier: MIT
+
 import base64
 import json
 import logging
@@ -11,6 +14,7 @@ from fastapi.responses import Response, StreamingResponse
 from langchain_core.messages import AIMessageChunk, BaseMessage, ToolMessage
 from langgraph.types import Command
 
+from src.config.configuration import get_recursion_limit
 from src.config.report_style import ReportStyle
 from src.config.tools import SELECTED_RAG_PROVIDER
 from src.graph.builder import build_graph_with_memory
@@ -147,6 +151,7 @@ async def _astream_workflow_generator(
             "mcp_settings": mcp_settings,
             "report_style": report_style.value,
             "enable_deep_thinking": enable_deep_thinking,
+            "recursion_limit": get_recursion_limit(),
         },
         stream_mode=["messages", "updates"],
         subgraphs=True,
@@ -172,7 +177,7 @@ async def _astream_workflow_generator(
             tuple[BaseMessage, dict[str, any]], event_data
         )
         # Handle empty agent tuple gracefully
-        agent_name = "unknown"
+        agent_name = "planner"
         if agent and len(agent) > 0:
             agent_name = agent[0].split(":")[0] if ":" in agent[0] else agent[0]
         event_stream_message: dict[str, any] = {
