@@ -4,6 +4,8 @@
 
 **NEOS** (**D**eep **E**xploration and **E**fficient **R**esearch **Flow**) is a community-driven Deep Research framework that builds upon the incredible work of the open source community. Our goal is to combine language models with specialized tools for tasks like web search, crawling, and Python code execution, while giving back to the community that made this possible.
 
+![system architecture](./assets/system_architecture.png)
+
 ## Demo
 
 ### Video
@@ -246,6 +248,12 @@ The system employs a streamlined workflow with the following components:
    - Aggregates findings from the research team
    - Processes and structures the collected information
    - Generates comprehensive research reports
+
+![Agent Node System](./assets/agent_node_system.png)
+
+### Core Agent Functions
+
+![Core Agent Functions](./assets/core_agent_functions.png)
 
 ## Text-to-Speech Integration
 
