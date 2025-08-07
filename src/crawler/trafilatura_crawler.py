@@ -102,9 +102,9 @@ def extract_url_content(
         return None
 
     return {
-        "url":url,
-        "content":content,
-        "description":description,
+        "url": url,
+        "crawled_content": content,
+        "description": description,
         "title": title,
         "metadata":metadata_str,
     }
