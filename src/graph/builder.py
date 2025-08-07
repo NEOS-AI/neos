@@ -13,7 +13,7 @@ from .nodes import (
     coder_node,
     human_feedback_node,
     background_investigation_node,
-    # react_coder_node, #TODO add react coder node
+    react_coder_node,
 )
 
 
@@ -50,6 +50,8 @@ def continue_to_running_research_team(state: State) -> str:
         return "researcher"
     if incomplete_step.step_type == StepType.PROCESSING:
         return "coder"
+    if incomplete_step.step_type == StepType.WEB_FE_CODING:
+        return "react_coder"
     return "planner"
 
 
@@ -73,12 +75,13 @@ def _build_base_graph() -> StateGraph:
     builder.add_node("research_team", research_team_node)
     builder.add_node("researcher", researcher_node)
     builder.add_node("coder", coder_node)
+    builder.add_node("react_coder", react_coder_node)
     builder.add_node("human_feedback", human_feedback_node)
     builder.add_edge("background_investigator", "planner")
     builder.add_conditional_edges(
         "research_team",
         continue_to_running_research_team,
-        ["planner", "researcher", "coder"],
+        ["planner", "researcher", "coder", "react_coder"],
     )
     builder.add_edge("reporter", END)
     return builder
