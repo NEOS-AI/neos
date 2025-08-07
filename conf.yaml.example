@@ -7,9 +7,9 @@
 # - A restart is required every time you change the `config.yaml` file.
 
 BASIC_MODEL:
-  base_url: https://ark.cn-beijing.volces.com/api/v3
-  model: "doubao-1-5-pro-32k-250115"
-  api_key: xxxx
+  base_url: "https://api.anthropic.com/v1/"
+  model: "claude-3-5-sonnet-20240229"
+  api_key: YOUR_API_KEY
   # verify_ssl: false  # Uncomment this line to disable SSL certificate verification for self-signed certificates
  
 # Reasoning model is optional.
