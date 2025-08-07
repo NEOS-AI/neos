@@ -16,7 +16,18 @@ from .nodes import (
 )
 
 
-def continue_to_running_research_team(state: State):
+def continue_to_running_research_team(state: State) -> str:
+    """
+    Determine the next node based on the current state of the research team.
+    If the current plan is empty or all steps are executed, continue to planner.
+    If there are incomplete steps, return the first incomplete step's type.
+
+    Args:
+        state (State): The current state of the workflow.
+
+    Returns:
+        str: The next node to transition to.
+    """
     current_plan = state.get("current_plan")
     if not current_plan or not current_plan.steps:
         return "planner"
@@ -41,8 +52,17 @@ def continue_to_running_research_team(state: State):
     return "planner"
 
 
-def _build_base_graph():
-    """Build and return the base state graph with all nodes and edges."""
+def _build_base_graph() -> StateGraph:
+    """
+    Build and return the base state graph with all nodes and edges.
+    This graph includes the coordinator, planner, reporter, research team,
+    researcher, coder, human feedback, and background investigation nodes.
+    It defines the workflow for handling user queries and coordinating tasks
+    among different roles in the agent system.
+
+    Returns:
+        StateGraph: The constructed state graph with all nodes and edges.
+    """
     builder = StateGraph(State)
     builder.add_edge(START, "coordinator")
     builder.add_node("coordinator", coordinator_node)
