@@ -1,6 +1,3 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import logging
 import os
 from dataclasses import dataclass, field, fields
@@ -10,6 +7,7 @@ from langchain_core.runnables import RunnableConfig
 
 from src.rag.retriever import Resource
 from src.config.report_style import ReportStyle
+
 
 logger = logging.getLogger(__name__)
 

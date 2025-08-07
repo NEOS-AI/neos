@@ -1,8 +1,5 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 """
-Built-in questions for Deer.
+Built-in questions for Neos.
 """
 
 # English built-in questions
