@@ -504,3 +504,16 @@ async def coder_node(
         "coder",
         [python_repl_tool],
     )
+
+
+async def react_coder_node(
+    state: State, config: RunnableConfig
+) -> Command[Literal["research_team"]]:
+    """React Coder node that do code analysis."""
+    logger.info("React Coder node is coding.")
+    return await _setup_and_execute_agent_step(
+        state,
+        config,
+        "react_coder",
+        [python_repl_tool],
+    )
