@@ -428,13 +428,17 @@ async def mcp_server_metadata(request: MCPServerMetadataRequest):
 
 @app.get("/api/rag/config", response_model=RAGConfigResponse)
 async def rag_config():
-    """Get the config of the RAG."""
+    """
+    Get the config of the RAG.
+    """
     return RAGConfigResponse(provider=SELECTED_RAG_PROVIDER)
 
 
 @app.get("/api/rag/resources", response_model=RAGResourcesResponse)
 async def rag_resources(request: Annotated[RAGResourceRequest, Query()]):
-    """Get the resources of the RAG."""
+    """
+    Get the resources of the RAG.
+    """
     retriever = build_retriever()
     if retriever:
         return RAGResourcesResponse(resources=retriever.list_resources(request.query))
@@ -443,7 +447,9 @@ async def rag_resources(request: Annotated[RAGResourceRequest, Query()]):
 
 @app.get("/api/config", response_model=ConfigResponse)
 async def config():
-    """Get the config of the server."""
+    """
+    Get the config of the server.
+    """
     return ConfigResponse(
         rag=RAGConfigResponse(provider=SELECTED_RAG_PROVIDER),
         models=get_configured_llm_models(),

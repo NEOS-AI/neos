@@ -1,6 +1,3 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import logging
 from src.config.configuration import get_recursion_limit
 from src.graph import build_graph
@@ -21,6 +18,28 @@ logger = logging.getLogger(__name__)
 
 # Create the graph
 graph = build_graph()
+
+
+def _get_agent_config(max_plan_iterations: int, max_step_num: int, recursion_limit: int = 100):
+    return {
+        "configurable": {
+            "thread_id": "default",
+            "max_plan_iterations": max_plan_iterations,
+            "max_step_num": max_step_num,
+            "mcp_settings": {
+                "servers": {
+                    "mcp-github-trending": {
+                        "transport": "stdio",
+                        "command": "uvx",
+                        "args": ["mcp-github-trending"],
+                        "enabled_tools": ["get_github_trending_repositories"],
+                        "add_to_agents": ["researcher"],
+                    }
+                }
+            },
+        },
+        "recursion_limit": get_recursion_limit(default=recursion_limit),
+    }
 
 
 async def run_agent_workflow_async(
@@ -55,25 +74,10 @@ async def run_agent_workflow_async(
         "auto_accepted_plan": True,
         "enable_background_investigation": enable_background_investigation,
     }
-    config = {
-        "configurable": {
-            "thread_id": "default",
-            "max_plan_iterations": max_plan_iterations,
-            "max_step_num": max_step_num,
-            "mcp_settings": {
-                "servers": {
-                    "mcp-github-trending": {
-                        "transport": "stdio",
-                        "command": "uvx",
-                        "args": ["mcp-github-trending"],
-                        "enabled_tools": ["get_github_trending_repositories"],
-                        "add_to_agents": ["researcher"],
-                    }
-                }
-            },
-        },
-        "recursion_limit": get_recursion_limit(default=100),
-    }
+    config = _get_agent_config(
+        max_plan_iterations, max_step_num, recursion_limit=100
+    )
+
     last_message_cnt = 0
     async for s in graph.astream(
         input=initial_state, config=config, stream_mode="values"
