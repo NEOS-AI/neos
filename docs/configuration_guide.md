@@ -5,7 +5,7 @@
 Copy the `conf.yaml.example` file to `conf.yaml` and modify the configurations to match your specific settings and requirements.
 
 ```bash
-cd deer-flow
+cd neos
 cp conf.yaml.example conf.yaml
 ```
 
@@ -33,6 +33,12 @@ NEOS supports integration with OpenAI-Compatible models, which are models that i
 The following is a configuration example of `conf.yaml` for using OpenAI-Compatible models:
 
 ```yaml
+# An example of Claude APIs
+BASIC_MODEL:
+  base_url: "https://api.anthropic.com/v1/"
+  model: "claude-3-5-sonnet-20240229"
+  api_key: YOUR_API_KEY
+
 # An example of Doubao models served by VolcEngine
 BASIC_MODEL:
   base_url: "https://ark.cn-beijing.volces.com/api/v3"
@@ -82,7 +88,7 @@ The following is a configuration example of `conf.yaml` for using Ollama models(
 BASIC_MODEL:
   model: "model-name"  # Model name, which supports the completions API(important), such as: qwen3:8b, mistral-small3.1:24b, qwen2.5:3b
   base_url: "http://localhost:11434/v1" # Local service address of Ollama, which can be started/viewed via ollama serve
-  api_key: "whatever"  # Mandatory, fake api_key with a random string you like :-)
+  api_key: "ollama"  # Mandatory, fake api_key with a random string you like :-)
 ```
 
 ### How to use OpenRouter models?
@@ -107,7 +113,8 @@ Note: The available models and their exact names may change over time. Please ve
 
 ### How to use Azure models?
 
-NEOS supports the integration of Azure models. You can refer to [litellm Azure](https://docs.litellm.ai/docs/providers/azure). Configuration example of `conf.yaml`:
+NEOS supports the integration of Azure models. You can refer to [litellm Azure](https://docs.litellm.ai/docs/providers/azure).
+Configuration example of `conf.yaml`:
 ```yaml
 BASIC_MODEL:
   model: "azure/gpt-4o-2024-08-06"
