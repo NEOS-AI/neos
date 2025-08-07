@@ -1,11 +1,8 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import json
 from unittest.mock import patch, MagicMock
 import base64
 
-from src.tools.tts import VolcengineTTS
+from neos.tools.tts import VolcengineTTS
 
 
 class TestVolcengineTTS:
@@ -43,7 +40,7 @@ class TestVolcengineTTS:
         assert tts.host == "openspeech.bytedance.com"
         assert tts.api_url == "https://openspeech.bytedance.com/api/v1/tts"
 
-    @patch("src.tools.tts.requests.post")
+    @patch("neos.tools.tts.requests.post")
     def test_text_to_speech_success(self, mock_post):
         """Test successful text-to-speech conversion."""
         # Mock response
@@ -86,7 +83,7 @@ class TestVolcengineTTS:
         assert request_json["audio"]["encoding"] == "mp3"
         assert request_json["request"]["text"] == "Hello, world!"
 
-    @patch("src.tools.tts.requests.post")
+    @patch("neos.tools.tts.requests.post")
     def test_text_to_speech_api_error(self, mock_post):
         """Test error handling when API returns an error."""
         # Mock response
@@ -112,7 +109,7 @@ class TestVolcengineTTS:
         assert result["error"] == {"code": 400, "message": "Bad request"}
         assert result["audio_data"] is None
 
-    @patch("src.tools.tts.requests.post")
+    @patch("neos.tools.tts.requests.post")
     def test_text_to_speech_no_data(self, mock_post):
         """Test error handling when API response doesn't contain data."""
         # Mock response
@@ -139,7 +136,7 @@ class TestVolcengineTTS:
         assert result["error"] == "No audio data returned"
         assert result["audio_data"] is None
 
-    @patch("src.tools.tts.requests.post")
+    @patch("neos.tools.tts.requests.post")
     def test_text_to_speech_with_custom_parameters(self, mock_post):
         """Test text_to_speech with custom parameters."""
         # Mock response
@@ -190,8 +187,8 @@ class TestVolcengineTTS:
         assert request_json["request"]["frontend_type"] == "custom"
         assert request_json["user"]["uid"] == "custom-uid"
 
-    @patch("src.tools.tts.requests.post")
-    @patch("src.tools.tts.uuid.uuid4")
+    @patch("neos.tools.tts.requests.post")
+    @patch("neos.tools.tts.uuid.uuid4")
     def test_text_to_speech_auto_generated_uid(self, mock_uuid, mock_post):
         """Test that UUID is auto-generated if not provided."""
         # Mock UUID
@@ -228,7 +225,7 @@ class TestVolcengineTTS:
         request_json = json.loads(args[1])
         assert request_json["user"]["uid"] == str(mock_uuid_value)
 
-    @patch("src.tools.tts.requests.post")
+    @patch("neos.tools.tts.requests.post")
     def test_text_to_speech_request_exception(self, mock_post):
         """Test error handling when requests.post raises an exception."""
         # Mock requests.post to raise an exception

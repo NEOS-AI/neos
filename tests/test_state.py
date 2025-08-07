@@ -1,6 +1,3 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import sys
 import os
 from typing import Annotated
@@ -42,7 +39,7 @@ def load_state_class():
     # Create a namespace for the module
     import types
 
-    module_name = "src.graph.types_direct"
+    module_name = "neos.graph.types_direct"
     spec = types.ModuleType(module_name)
 
     # Add the module to sys.modules to avoid import loops

@@ -1,8 +1,5 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import pytest
-from src.rag.retriever import Chunk, Document, Resource, Retriever
+from neos.rag.retriever import Chunk, Document, Resource, Retriever
 
 
 def test_chunk_init():

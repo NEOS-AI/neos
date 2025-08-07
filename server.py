@@ -66,7 +66,7 @@ if __name__ == "__main__":
     try:
         logger.info(f"Starting Neos API server on {args.host}:{args.port}")
         uvicorn.run(
-            "src.server:app",
+            "neos.server:app",
             host=args.host,
             port=args.port,
             reload=reload,

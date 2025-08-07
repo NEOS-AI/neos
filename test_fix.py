@@ -18,7 +18,7 @@ mock_llm_module.basic_llm = mock_llm
 mock_llm_module._create_llm_use_conf = lambda llm_type, conf: mock_llm
 
 # Set the mock module
-sys.modules["src.llms.llm"] = mock_llm_module
+sys.modules["neos.llms.llm"] = mock_llm_module
 
 print("Successfully patched LLM module. You can now run your tests.")
 print("Example: uv run pytest tests/test_types.py -v")

@@ -1,14 +1,11 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 from unittest.mock import Mock, patch
 from langchain_core.callbacks import (
     CallbackManagerForToolRun,
     AsyncCallbackManagerForToolRun,
 )
 import pytest
-from src.tools.retriever import RetrieverInput, RetrieverTool, get_retriever_tool
-from src.rag import Document, Retriever, Resource, Chunk
+from neos.tools.retriever import RetrieverInput, RetrieverTool, get_retriever_tool
+from neos.rag import Document, Retriever, Resource, Chunk
 
 
 def test_retriever_input_model():
@@ -81,7 +78,7 @@ async def test_retriever_tool_arun():
     assert result[0] == doc.to_dict()
 
 
-@patch("src.tools.retriever.build_retriever")
+@patch("neos.tools.retriever.build_retriever")
 def test_get_retriever_tool_success(mock_build_retriever):
     mock_retriever = Mock(spec=Retriever)
     mock_build_retriever.return_value = mock_retriever
@@ -99,7 +96,7 @@ def test_get_retriever_tool_empty_resources():
     assert result is None
 
 
-@patch("src.tools.retriever.build_retriever")
+@patch("neos.tools.retriever.build_retriever")
 def test_get_retriever_tool_no_retriever(mock_build_retriever):
     mock_build_retriever.return_value = None
 

@@ -1,9 +1,6 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import pytest
 from pydantic import ValidationError
-from src.server.mcp_request import MCPServerMetadataRequest, MCPServerMetadataResponse
+from neos.server.mcp_request import MCPServerMetadataRequest, MCPServerMetadataResponse
 
 
 def test_mcp_server_metadata_request_required_fields():

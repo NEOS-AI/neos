@@ -1,15 +1,12 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi import HTTPException
 
-import src.server.mcp_utils as mcp_utils
+import neos.server.mcp_utils as mcp_utils
 
 
 @pytest.mark.asyncio
-@patch("src.server.mcp_utils.ClientSession")
+@patch("neos.server.mcp_utils.ClientSession")
 async def test__get_tools_from_client_session_success(mock_ClientSession):
     mock_read = AsyncMock()
     mock_write = AsyncMock()
@@ -35,9 +32,9 @@ async def test__get_tools_from_client_session_success(mock_ClientSession):
 
 
 @pytest.mark.asyncio
-@patch("src.server.mcp_utils._get_tools_from_client_session", new_callable=AsyncMock)
-@patch("src.server.mcp_utils.StdioServerParameters")
-@patch("src.server.mcp_utils.stdio_client")
+@patch("neos.server.mcp_utils._get_tools_from_client_session", new_callable=AsyncMock)
+@patch("neos.server.mcp_utils.StdioServerParameters")
+@patch("neos.server.mcp_utils.stdio_client")
 async def test_load_mcp_tools_stdio_success(
     mock_stdio_client, mock_StdioServerParameters, mock_get_tools
 ):
@@ -71,8 +68,8 @@ async def test_load_mcp_tools_stdio_missing_command():
 
 
 @pytest.mark.asyncio
-@patch("src.server.mcp_utils._get_tools_from_client_session", new_callable=AsyncMock)
-@patch("src.server.mcp_utils.sse_client")
+@patch("neos.server.mcp_utils._get_tools_from_client_session", new_callable=AsyncMock)
+@patch("neos.server.mcp_utils.sse_client")
 async def test_load_mcp_tools_sse_success(mock_sse_client, mock_get_tools):
     mock_get_tools.return_value = ["toolB"]
     mock_client = MagicMock()
@@ -105,9 +102,9 @@ async def test_load_mcp_tools_unsupported_type():
 
 
 @pytest.mark.asyncio
-@patch("src.server.mcp_utils._get_tools_from_client_session", new_callable=AsyncMock)
-@patch("src.server.mcp_utils.StdioServerParameters")
-@patch("src.server.mcp_utils.stdio_client")
+@patch("neos.server.mcp_utils._get_tools_from_client_session", new_callable=AsyncMock)
+@patch("neos.server.mcp_utils.StdioServerParameters")
+@patch("neos.server.mcp_utils.stdio_client")
 async def test_load_mcp_tools_exception_handling(
     mock_stdio_client, mock_StdioServerParameters, mock_get_tools
 ):

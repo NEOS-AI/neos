@@ -1,14 +1,11 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import base64
 import os
 from unittest.mock import MagicMock, patch, mock_open
 import pytest
 from fastapi.testclient import TestClient
 from fastapi import HTTPException
-from src.server.app import app, _make_event, _astream_workflow_generator
-from src.config.report_style import ReportStyle
+from neos.server.app import app, _make_event, _astream_workflow_generator
+from neos.config.report_style import ReportStyle
 from langgraph.types import Command
 from langchain_core.messages import ToolMessage
 from langchain_core.messages import AIMessageChunk
@@ -56,7 +53,7 @@ class TestTTSEndpoint:
             "VOLCENGINE_TTS_VOICE_TYPE": "test_voice",
         },
     )
-    @patch("src.server.app.VolcengineTTS")
+    @patch("neos.server.app.VolcengineTTS")
     def test_tts_success(self, mock_tts_class, client):
         mock_tts_instance = MagicMock()
         mock_tts_class.return_value = mock_tts_instance
@@ -113,7 +110,7 @@ class TestTTSEndpoint:
             "VOLCENGINE_TTS_ACCESS_TOKEN": "test_token",
         },
     )
-    @patch("src.server.app.VolcengineTTS")
+    @patch("neos.server.app.VolcengineTTS")
     def test_tts_api_error(self, mock_tts_class, client):
         mock_tts_instance = MagicMock()
         mock_tts_class.return_value = mock_tts_instance
@@ -132,7 +129,7 @@ class TestTTSEndpoint:
         assert "Internal Server Error" in response.json()["detail"]
 
     @pytest.mark.skip(reason="TTS server exception is catched")
-    @patch("src.server.app.VolcengineTTS")
+    @patch("neos.server.app.VolcengineTTS")
     def test_tts_api_exception(self, mock_tts_class, client):
         mock_tts_instance = MagicMock()
         mock_tts_class.return_value = mock_tts_instance
@@ -149,7 +146,7 @@ class TestTTSEndpoint:
 
 
 class TestPodcastEndpoint:
-    @patch("src.server.app.build_podcast_graph")
+    @patch("neos.server.app.build_podcast_graph")
     def test_generate_podcast_success(self, mock_build_graph, client):
         mock_workflow = MagicMock()
         mock_build_graph.return_value = mock_workflow
@@ -163,7 +160,7 @@ class TestPodcastEndpoint:
         assert response.headers["content-type"] == "audio/mp3"
         assert response.content == b"fake_audio_data"
 
-    @patch("src.server.app.build_podcast_graph")
+    @patch("neos.server.app.build_podcast_graph")
     def test_generate_podcast_error(self, mock_build_graph, client):
         mock_build_graph.side_effect = Exception("Podcast generation failed")
 
@@ -176,7 +173,7 @@ class TestPodcastEndpoint:
 
 
 class TestPPTEndpoint:
-    @patch("src.server.app.build_ppt_graph")
+    @patch("neos.server.app.build_ppt_graph")
     @patch("builtins.open", new_callable=mock_open, read_data=b"fake_ppt_data")
     def test_generate_ppt_success(self, mock_file, mock_build_graph, client):
         mock_workflow = MagicMock()
@@ -196,7 +193,7 @@ class TestPPTEndpoint:
         )
         assert response.content == b"fake_ppt_data"
 
-    @patch("src.server.app.build_ppt_graph")
+    @patch("neos.server.app.build_ppt_graph")
     def test_generate_ppt_error(self, mock_build_graph, client):
         mock_build_graph.side_effect = Exception("PPT generation failed")
 
@@ -209,7 +206,7 @@ class TestPPTEndpoint:
 
 
 class TestEnhancePromptEndpoint:
-    @patch("src.server.app.build_prompt_enhancer_graph")
+    @patch("neos.server.app.build_prompt_enhancer_graph")
     def test_enhance_prompt_success(self, mock_build_graph, client):
         mock_workflow = MagicMock()
         mock_build_graph.return_value = mock_workflow
@@ -226,7 +223,7 @@ class TestEnhancePromptEndpoint:
         assert response.status_code == 200
         assert response.json()["result"] == "Enhanced prompt"
 
-    @patch("src.server.app.build_prompt_enhancer_graph")
+    @patch("neos.server.app.build_prompt_enhancer_graph")
     def test_enhance_prompt_with_different_styles(self, mock_build_graph, client):
         mock_workflow = MagicMock()
         mock_build_graph.return_value = mock_workflow
@@ -246,7 +243,7 @@ class TestEnhancePromptEndpoint:
             response = client.post("/api/prompt/enhance", json=request_data)
             assert response.status_code == 200
 
-    @patch("src.server.app.build_prompt_enhancer_graph")
+    @patch("neos.server.app.build_prompt_enhancer_graph")
     def test_enhance_prompt_error(self, mock_build_graph, client):
         mock_build_graph.side_effect = Exception("Enhancement failed")
 
@@ -259,7 +256,7 @@ class TestEnhancePromptEndpoint:
 
 
 class TestMCPEndpoint:
-    @patch("src.server.app.load_mcp_tools")
+    @patch("neos.server.app.load_mcp_tools")
     @patch.dict(
         os.environ,
         {"ENABLE_MCP_SERVER_CONFIGURATION": "true"},
@@ -284,7 +281,7 @@ class TestMCPEndpoint:
         assert response_data["command"] == "test_command"
         assert len(response_data["tools"]) == 1
 
-    @patch("src.server.app.load_mcp_tools")
+    @patch("neos.server.app.load_mcp_tools")
     @patch.dict(
         os.environ,
         {"ENABLE_MCP_SERVER_CONFIGURATION": "true"},
@@ -303,7 +300,7 @@ class TestMCPEndpoint:
         assert response.status_code == 200
         mock_load_tools.assert_called_once()
 
-    @patch("src.server.app.load_mcp_tools")
+    @patch("neos.server.app.load_mcp_tools")
     @patch.dict(
         os.environ,
         {"ENABLE_MCP_SERVER_CONFIGURATION": "true"},
@@ -325,7 +322,7 @@ class TestMCPEndpoint:
         assert response.status_code == 500
         assert response.json()["detail"] == "Internal Server Error"
 
-    @patch("src.server.app.load_mcp_tools")
+    @patch("neos.server.app.load_mcp_tools")
     @patch.dict(
         os.environ,
         {"ENABLE_MCP_SERVER_CONFIGURATION": ""},
@@ -351,14 +348,14 @@ class TestMCPEndpoint:
 
 
 class TestRAGEndpoints:
-    @patch("src.server.app.SELECTED_RAG_PROVIDER", "test_provider")
+    @patch("neos.server.app.SELECTED_RAG_PROVIDER", "test_provider")
     def test_rag_config(self, client):
         response = client.get("/api/rag/config")
 
         assert response.status_code == 200
         assert response.json()["provider"] == "test_provider"
 
-    @patch("src.server.app.build_retriever")
+    @patch("neos.server.app.build_retriever")
     def test_rag_resources_with_retriever(self, mock_build_retriever, client):
         mock_retriever = MagicMock()
         mock_retriever.list_resources.return_value = [
@@ -375,7 +372,7 @@ class TestRAGEndpoints:
         assert response.status_code == 200
         assert len(response.json()["resources"]) == 1
 
-    @patch("src.server.app.build_retriever")
+    @patch("neos.server.app.build_retriever")
     def test_rag_resources_without_retriever(self, mock_build_retriever, client):
         mock_build_retriever.return_value = None
 
@@ -386,7 +383,7 @@ class TestRAGEndpoints:
 
 
 class TestChatStreamEndpoint:
-    @patch("src.server.app.graph")
+    @patch("neos.server.app.graph")
     def test_chat_stream_with_default_thread_id(self, mock_graph, client):
         # Mock the async stream
         async def mock_astream(*args, **kwargs):
@@ -413,7 +410,7 @@ class TestChatStreamEndpoint:
         assert response.status_code == 200
         assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
 
-    @patch("src.server.app.graph")
+    @patch("neos.server.app.graph")
     def test_chat_stream_with_mcp_settings(self, mock_graph, client):
         # Mock the async stream
         async def mock_astream(*args, **kwargs):
@@ -454,7 +451,7 @@ class TestChatStreamEndpoint:
             == "MCP server configuration is disabled. Set ENABLE_MCP_SERVER_CONFIGURATION=true to enable MCP features."
         )
 
-    @patch("src.server.app.graph")
+    @patch("neos.server.app.graph")
     @patch.dict(
         os.environ,
         {"ENABLE_MCP_SERVER_CONFIGURATION": "true"},
@@ -499,7 +496,7 @@ class TestChatStreamEndpoint:
 
 class TestAstreamWorkflowGenerator:
     @pytest.mark.asyncio
-    @patch("src.server.app.graph")
+    @patch("neos.server.app.graph")
     async def test_astream_workflow_generator_basic_flow(self, mock_graph):
         # Mock AI message chunk
         mock_message = AIMessageChunk(content="Hello world")
@@ -545,7 +542,7 @@ class TestAstreamWorkflowGenerator:
         assert '"agent": "a"' in events[0]
 
     @pytest.mark.asyncio
-    @patch("src.server.app.graph")
+    @patch("neos.server.app.graph")
     async def test_astream_workflow_generator_with_interrupt_feedback(self, mock_graph):
 
         # Mock the async stream
@@ -579,7 +576,7 @@ class TestAstreamWorkflowGenerator:
             events.append(event)
 
     @pytest.mark.asyncio
-    @patch("src.server.app.graph")
+    @patch("neos.server.app.graph")
     async def test_astream_workflow_generator_interrupt_event(self, mock_graph):
         # Mock interrupt data
         mock_interrupt = MagicMock()
@@ -618,7 +615,7 @@ class TestAstreamWorkflowGenerator:
         assert "interrupt_id" in events[0]
 
     @pytest.mark.asyncio
-    @patch("src.server.app.graph")
+    @patch("neos.server.app.graph")
     async def test_astream_workflow_generator_tool_message(self, mock_graph):
 
         # Mock tool message
@@ -655,7 +652,7 @@ class TestAstreamWorkflowGenerator:
         assert "tool_123" in events[0]
 
     @pytest.mark.asyncio
-    @patch("src.server.app.graph")
+    @patch("neos.server.app.graph")
     async def test_astream_workflow_generator_ai_message_with_tool_calls(
         self, mock_graph
     ):
@@ -697,7 +694,7 @@ class TestAstreamWorkflowGenerator:
         assert "tool_calls" in events[0]
 
     @pytest.mark.asyncio
-    @patch("src.server.app.graph")
+    @patch("neos.server.app.graph")
     async def test_astream_workflow_generator_ai_message_with_tool_call_chunks(
         self, mock_graph
     ):
@@ -738,7 +735,7 @@ class TestAstreamWorkflowGenerator:
         assert "Streaming tool call" in events[0]
 
     @pytest.mark.asyncio
-    @patch("src.server.app.graph")
+    @patch("neos.server.app.graph")
     async def test_astream_workflow_generator_with_finish_reason(self, mock_graph):
 
         # Mock AI message with finish reason
@@ -778,7 +775,7 @@ class TestAstreamWorkflowGenerator:
         assert "stop" in events[0]
 
     @pytest.mark.asyncio
-    @patch("src.server.app.graph")
+    @patch("neos.server.app.graph")
     async def test_astream_workflow_generator_config_passed_correctly(self, mock_graph):
 
         mock_ai_message = AIMessageChunk(content="Test")
@@ -798,7 +795,7 @@ class TestAstreamWorkflowGenerator:
 
 
 class TestGenerateProseEndpoint:
-    @patch("src.server.app.build_prose_graph")
+    @patch("neos.server.app.build_prose_graph")
     def test_generate_prose_success(self, mock_build_graph, client):
         # Mock the workflow and its astream method
         mock_workflow = MagicMock()
@@ -828,7 +825,7 @@ class TestGenerateProseEndpoint:
         content = b"".join(response.iter_bytes())
         assert b"Generated prose 1" in content or b"Generated prose 2" in content
 
-    @patch("src.server.app.build_prose_graph")
+    @patch("neos.server.app.build_prose_graph")
     def test_generate_prose_error(self, mock_build_graph, client):
         mock_build_graph.side_effect = Exception("Prose generation failed")
         request_data = {

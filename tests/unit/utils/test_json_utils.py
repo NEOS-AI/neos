@@ -1,8 +1,5 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import json
-from src.utils.json_utils import repair_json_output
+from neos.utils.json_utils import repair_json_output
 
 
 class TestRepairJsonOutput:

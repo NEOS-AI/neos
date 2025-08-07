@@ -1,7 +1,4 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
-from src.tools.python_repl import python_repl_tool
+from neos.tools.python_repl import python_repl_tool
 
 
 def test_python_repl_tool_success():

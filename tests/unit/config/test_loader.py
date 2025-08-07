@@ -1,9 +1,6 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import os
 import tempfile
-from src.config.loader import load_yaml_config, process_dict, replace_env_vars
+from neos.config.loader import load_yaml_config, process_dict, replace_env_vars
 
 
 def test_replace_env_vars_with_env(monkeypatch):

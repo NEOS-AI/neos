@@ -1,7 +1,4 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
-from src.crawler import Crawler
+from neos.crawler import Crawler
 
 
 def test_crawler_initialization():

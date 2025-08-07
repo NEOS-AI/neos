@@ -2,19 +2,19 @@ from collections import namedtuple
 import json
 import pytest
 from unittest.mock import patch, MagicMock
-from src.graph.nodes import planner_node
-from src.graph.nodes import human_feedback_node
-from src.graph.nodes import coordinator_node
-from src.graph.nodes import reporter_node
-from src.graph.nodes import _execute_agent_step
-from src.graph.nodes import _setup_and_execute_agent_step
-from src.graph.nodes import researcher_node
+from neos.graph.nodes import planner_node
+from neos.graph.nodes import human_feedback_node
+from neos.graph.nodes import coordinator_node
+from neos.graph.nodes import reporter_node
+from neos.graph.nodes import _execute_agent_step
+from neos.graph.nodes import _setup_and_execute_agent_step
+from neos.graph.nodes import researcher_node
 
 # 在这里 mock 掉 get_llm_by_type，避免 ValueError
-with patch("src.llms.llm.get_llm_by_type", return_value=MagicMock()):
+with patch("neos.llms.llm.get_llm_by_type", return_value=MagicMock()):
     from langgraph.types import Command
-    from src.graph.nodes import background_investigation_node
-    from src.config import SearchEngine
+    from neos.graph.nodes import background_investigation_node
+    from neos.config import SearchEngine
     from langchain_core.messages import HumanMessage
 
 
@@ -50,7 +50,7 @@ def mock_config():
 @pytest.fixture
 def patch_config_from_runnable_config(mock_configurable):
     with patch(
-        "src.graph.nodes.Configuration.from_runnable_config",
+        "neos.graph.nodes.Configuration.from_runnable_config",
         return_value=mock_configurable,
     ):
         yield
@@ -58,7 +58,7 @@ def patch_config_from_runnable_config(mock_configurable):
 
 @pytest.fixture
 def mock_tavily_search():
-    with patch("src.graph.nodes.LoggedTavilySearch") as mock:
+    with patch("neos.graph.nodes.LoggedTavilySearch") as mock:
         instance = mock.return_value
         instance.invoke.return_value = [
             {"title": "Test Title 1", "content": "Test Content 1"},
@@ -69,7 +69,7 @@ def mock_tavily_search():
 
 @pytest.fixture
 def mock_web_search_tool():
-    with patch("src.graph.nodes.get_web_search_tool") as mock:
+    with patch("neos.graph.nodes.get_web_search_tool") as mock:
         instance = mock.return_value
         instance.invoke.return_value = [
             {"title": "Test Title 1", "content": "Test Content 1"},
@@ -88,7 +88,7 @@ def test_background_investigation_node_tavily(
     mock_config,
 ):
     """Test background_investigation_node with Tavily search engine"""
-    with patch("src.graph.nodes.SELECTED_SEARCH_ENGINE", search_engine):
+    with patch("neos.graph.nodes.SELECTED_SEARCH_ENGINE", search_engine):
         result = background_investigation_node(mock_state, mock_config)
 
         # Verify the result structure
@@ -117,7 +117,7 @@ def test_background_investigation_node_malformed_response(
     mock_state, mock_tavily_search, patch_config_from_runnable_config, mock_config
 ):
     """Test background_investigation_node with malformed Tavily response"""
-    with patch("src.graph.nodes.SELECTED_SEARCH_ENGINE", SearchEngine.TAVILY.value):
+    with patch("neos.graph.nodes.SELECTED_SEARCH_ENGINE", SearchEngine.TAVILY.value):
         # Mock a malformed response
         mock_tavily_search.return_value.invoke.return_value = "invalid response"
 
@@ -166,7 +166,7 @@ def mock_configurable_planner():
 @pytest.fixture
 def patch_config_from_runnable_config_planner(mock_configurable_planner):
     with patch(
-        "src.graph.nodes.Configuration.from_runnable_config",
+        "neos.graph.nodes.Configuration.from_runnable_config",
         return_value=mock_configurable_planner,
     ):
         yield
@@ -175,7 +175,7 @@ def patch_config_from_runnable_config_planner(mock_configurable_planner):
 @pytest.fixture
 def patch_apply_prompt_template():
     with patch(
-        "src.graph.nodes.apply_prompt_template",
+        "neos.graph.nodes.apply_prompt_template",
         return_value=[{"role": "user", "content": "plan this"}],
     ) as mock:
         yield mock
@@ -183,13 +183,13 @@ def patch_apply_prompt_template():
 
 @pytest.fixture
 def patch_repair_json_output():
-    with patch("src.graph.nodes.repair_json_output", side_effect=lambda x: x) as mock:
+    with patch("neos.graph.nodes.repair_json_output", side_effect=lambda x: x) as mock:
         yield mock
 
 
 @pytest.fixture
 def patch_plan_model_validate():
-    with patch("src.graph.nodes.Plan.model_validate", side_effect=lambda x: x) as mock:
+    with patch("neos.graph.nodes.Plan.model_validate", side_effect=lambda x: x) as mock:
         yield mock
 
 
@@ -197,7 +197,7 @@ def patch_plan_model_validate():
 def patch_ai_message():
     AIMessage = namedtuple("AIMessage", ["content", "name"])
     with patch(
-        "src.graph.nodes.AIMessage",
+        "neos.graph.nodes.AIMessage",
         side_effect=lambda content, name: AIMessage(content, name),
     ) as mock:
         yield mock
@@ -214,8 +214,8 @@ def test_planner_node_basic_has_enough_context(
 ):
     # AGENT_LLM_MAP["planner"] == "basic" and not thinking mode
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"planner": "basic"}),
-        patch("src.graph.nodes.get_llm_by_type") as mock_get_llm,
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"planner": "basic"}),
+        patch("neos.graph.nodes.get_llm_by_type") as mock_get_llm,
     ):
         mock_llm = MagicMock()
         mock_llm.with_structured_output.return_value = mock_llm
@@ -249,8 +249,8 @@ def test_planner_node_basic_not_enough_context(
         "locale": "en-US",
     }
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"planner": "basic"}),
-        patch("src.graph.nodes.get_llm_by_type") as mock_get_llm,
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"planner": "basic"}),
+        patch("neos.graph.nodes.get_llm_by_type") as mock_get_llm,
     ):
         mock_llm = MagicMock()
         mock_llm.with_structured_output.return_value = mock_llm
@@ -278,8 +278,8 @@ def test_planner_node_stream_mode_has_enough_context(
 ):
     # AGENT_LLM_MAP["planner"] != "basic"
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"planner": "other"}),
-        patch("src.graph.nodes.get_llm_by_type") as mock_get_llm,
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"planner": "other"}),
+        patch("neos.graph.nodes.get_llm_by_type") as mock_get_llm,
     ):
         mock_llm = MagicMock()
         # Simulate streaming chunks
@@ -312,8 +312,8 @@ def test_planner_node_stream_mode_not_enough_context(
         "locale": "en-US",
     }
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"planner": "other"}),
-        patch("src.graph.nodes.get_llm_by_type") as mock_get_llm,
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"planner": "other"}),
+        patch("neos.graph.nodes.get_llm_by_type") as mock_get_llm,
     ):
         mock_llm = MagicMock()
         chunk = MagicMock()
@@ -333,8 +333,8 @@ def test_planner_node_plan_iterations_exceeded(mock_state_planner):
     state = dict(mock_state_planner)
     state["plan_iterations"] = 5
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"planner": "basic"}),
-        patch("src.graph.nodes.get_llm_by_type", return_value=MagicMock()),
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"planner": "basic"}),
+        patch("neos.graph.nodes.get_llm_by_type", return_value=MagicMock()),
     ):
         result = planner_node(state, MagicMock())
         assert isinstance(result, Command)
@@ -344,10 +344,10 @@ def test_planner_node_plan_iterations_exceeded(mock_state_planner):
 def test_planner_node_json_decode_error_first_iteration(mock_state_planner):
     # Simulate JSONDecodeError on first iteration
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"planner": "basic"}),
-        patch("src.graph.nodes.get_llm_by_type") as mock_get_llm,
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"planner": "basic"}),
+        patch("neos.graph.nodes.get_llm_by_type") as mock_get_llm,
         patch(
-            "src.graph.nodes.json.loads",
+            "neos.graph.nodes.json.loads",
             side_effect=json.JSONDecodeError("err", "doc", 0),
         ),
     ):
@@ -368,10 +368,10 @@ def test_planner_node_json_decode_error_second_iteration(mock_state_planner):
     state = dict(mock_state_planner)
     state["plan_iterations"] = 1
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"planner": "basic"}),
-        patch("src.graph.nodes.get_llm_by_type") as mock_get_llm,
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"planner": "basic"}),
+        patch("neos.graph.nodes.get_llm_by_type") as mock_get_llm,
         patch(
-            "src.graph.nodes.json.loads",
+            "neos.graph.nodes.json.loads",
             side_effect=json.JSONDecodeError("err", "doc", 0),
         ),
     ):
@@ -390,8 +390,8 @@ def test_planner_node_json_decode_error_second_iteration(mock_state_planner):
 # Patch Plan.model_validate and repair_json_output globally for these tests
 @pytest.fixture(autouse=True)
 def patch_plan_and_repair(monkeypatch):
-    monkeypatch.setattr("src.graph.nodes.Plan.model_validate", lambda x: x)
-    monkeypatch.setattr("src.graph.nodes.repair_json_output", lambda x: x)
+    monkeypatch.setattr("neos.graph.nodes.Plan.model_validate", lambda x: x)
+    monkeypatch.setattr("neos.graph.nodes.repair_json_output", lambda x: x)
     yield
 
 
@@ -426,7 +426,7 @@ def test_human_feedback_node_edit_plan(monkeypatch, mock_state_base):
     # interrupt returns [EDIT_PLAN]..., should return Command to planner
     state = dict(mock_state_base)
     state["auto_accepted_plan"] = False
-    with patch("src.graph.nodes.interrupt", return_value="[EDIT_PLAN] Please revise"):
+    with patch("neos.graph.nodes.interrupt", return_value="[EDIT_PLAN] Please revise"):
         result = human_feedback_node(state)
         assert isinstance(result, Command)
         assert result.goto == "planner"
@@ -438,7 +438,7 @@ def test_human_feedback_node_accepted(monkeypatch, mock_state_base):
     # interrupt returns [ACCEPTED]..., should proceed to parse plan
     state = dict(mock_state_base)
     state["auto_accepted_plan"] = False
-    with patch("src.graph.nodes.interrupt", return_value="[ACCEPTED] Looks good!"):
+    with patch("neos.graph.nodes.interrupt", return_value="[ACCEPTED] Looks good!"):
         result = human_feedback_node(state)
         assert isinstance(result, Command)
         assert result.goto == "research_team"
@@ -450,7 +450,7 @@ def test_human_feedback_node_invalid_interrupt(monkeypatch, mock_state_base):
     # interrupt returns something else, should raise TypeError
     state = dict(mock_state_base)
     state["auto_accepted_plan"] = False
-    with patch("src.graph.nodes.interrupt", return_value="RANDOM_FEEDBACK"):
+    with patch("neos.graph.nodes.interrupt", return_value="RANDOM_FEEDBACK"):
         with pytest.raises(TypeError):
             human_feedback_node(state)
 
@@ -463,7 +463,7 @@ def test_human_feedback_node_json_decode_error_first_iteration(
     state["auto_accepted_plan"] = True
     state["plan_iterations"] = 0
     with patch(
-        "src.graph.nodes.json.loads", side_effect=json.JSONDecodeError("err", "doc", 0)
+        "neos.graph.nodes.json.loads", side_effect=json.JSONDecodeError("err", "doc", 0)
     ):
         result = human_feedback_node(state)
         assert isinstance(result, Command)
@@ -478,7 +478,7 @@ def test_human_feedback_node_json_decode_error_second_iteration(
     state["auto_accepted_plan"] = True
     state["plan_iterations"] = 2
     with patch(
-        "src.graph.nodes.json.loads", side_effect=json.JSONDecodeError("err", "doc", 0)
+        "neos.graph.nodes.json.loads", side_effect=json.JSONDecodeError("err", "doc", 0)
     ):
         result = human_feedback_node(state)
         assert isinstance(result, Command)
@@ -522,7 +522,7 @@ def mock_configurable_coordinator():
 @pytest.fixture
 def patch_config_from_runnable_config_coordinator(mock_configurable_coordinator):
     with patch(
-        "src.graph.nodes.Configuration.from_runnable_config",
+        "neos.graph.nodes.Configuration.from_runnable_config",
         return_value=mock_configurable_coordinator,
     ):
         yield
@@ -531,7 +531,7 @@ def patch_config_from_runnable_config_coordinator(mock_configurable_coordinator)
 @pytest.fixture
 def patch_apply_prompt_template_coordinator():
     with patch(
-        "src.graph.nodes.apply_prompt_template",
+        "neos.graph.nodes.apply_prompt_template",
         return_value=[{"role": "user", "content": "test"}],
     ) as mock:
         yield mock
@@ -539,13 +539,13 @@ def patch_apply_prompt_template_coordinator():
 
 @pytest.fixture
 def patch_handoff_to_planner():
-    with patch("src.graph.nodes.handoff_to_planner", MagicMock()):
+    with patch("neos.graph.nodes.handoff_to_planner", MagicMock()):
         yield
 
 
 @pytest.fixture
 def patch_logger():
-    with patch("src.graph.nodes.logger") as mock_logger:
+    with patch("neos.graph.nodes.logger") as mock_logger:
         yield mock_logger
 
 
@@ -564,8 +564,8 @@ def test_coordinator_node_no_tool_calls(
 ):
     # No tool calls, should goto __end__
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"coordinator": "basic"}),
-        patch("src.graph.nodes.get_llm_by_type") as mock_get_llm,
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"coordinator": "basic"}),
+        patch("neos.graph.nodes.get_llm_by_type") as mock_get_llm,
     ):
         mock_llm = MagicMock()
         mock_llm.bind_tools.return_value = mock_llm
@@ -588,8 +588,8 @@ def test_coordinator_node_with_tool_calls_planner(
     # tool_calls present, should goto planner
     tool_calls = [{"name": "handoff_to_planner", "args": {}}]
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"coordinator": "basic"}),
-        patch("src.graph.nodes.get_llm_by_type") as mock_get_llm,
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"coordinator": "basic"}),
+        patch("neos.graph.nodes.get_llm_by_type") as mock_get_llm,
     ):
         mock_llm = MagicMock()
         mock_llm.bind_tools.return_value = mock_llm
@@ -614,8 +614,8 @@ def test_coordinator_node_with_tool_calls_background_investigator(
     state["enable_background_investigation"] = True
     tool_calls = [{"name": "handoff_to_planner", "args": {}}]
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"coordinator": "basic"}),
-        patch("src.graph.nodes.get_llm_by_type") as mock_get_llm,
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"coordinator": "basic"}),
+        patch("neos.graph.nodes.get_llm_by_type") as mock_get_llm,
     ):
         mock_llm = MagicMock()
         mock_llm.bind_tools.return_value = mock_llm
@@ -643,8 +643,8 @@ def test_coordinator_node_with_tool_calls_locale_override(
         }
     ]
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"coordinator": "basic"}),
-        patch("src.graph.nodes.get_llm_by_type") as mock_get_llm,
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"coordinator": "basic"}),
+        patch("neos.graph.nodes.get_llm_by_type") as mock_get_llm,
     ):
         mock_llm = MagicMock()
         mock_llm.bind_tools.return_value = mock_llm
@@ -667,8 +667,8 @@ def test_coordinator_node_tool_calls_exception_handling(
     patch_logger,
 ):
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"coordinator": "basic"}),
-        patch("src.graph.nodes.get_llm_by_type") as mock_get_llm,
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"coordinator": "basic"}),
+        patch("neos.graph.nodes.get_llm_by_type") as mock_get_llm,
     ):
         mock_llm = MagicMock()
         mock_llm.bind_tools.return_value = mock_llm
@@ -722,7 +722,7 @@ def mock_configurable_reporter():
 @pytest.fixture
 def patch_config_from_runnable_config_reporter(mock_configurable_reporter):
     with patch(
-        "src.graph.nodes.Configuration.from_runnable_config",
+        "neos.graph.nodes.Configuration.from_runnable_config",
         return_value=mock_configurable_reporter,
     ):
         yield
@@ -731,7 +731,7 @@ def patch_config_from_runnable_config_reporter(mock_configurable_reporter):
 @pytest.fixture
 def patch_apply_prompt_template_reporter():
     with patch(
-        "src.graph.nodes.apply_prompt_template",
+        "neos.graph.nodes.apply_prompt_template",
         side_effect=lambda *args, **kwargs: [MagicMock()],
     ) as mock:
         yield mock
@@ -740,13 +740,13 @@ def patch_apply_prompt_template_reporter():
 @pytest.fixture
 def patch_human_message():
     HumanMessage = MagicMock()
-    with patch("src.graph.nodes.HumanMessage", HumanMessage):
+    with patch("neos.graph.nodes.HumanMessage", HumanMessage):
         yield HumanMessage
 
 
 @pytest.fixture
 def patch_logger_reporter():
-    with patch("src.graph.nodes.logger") as mock_logger:
+    with patch("neos.graph.nodes.logger") as mock_logger:
         yield mock_logger
 
 
@@ -765,8 +765,8 @@ def test_reporter_node_basic(
 ):
     # Patch get_llm_by_type and AGENT_LLM_MAP
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"reporter": "basic"}),
-        patch("src.graph.nodes.get_llm_by_type") as mock_get_llm,
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"reporter": "basic"}),
+        patch("neos.graph.nodes.get_llm_by_type") as mock_get_llm,
     ):
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = make_mock_llm_response_reporter(
@@ -792,8 +792,8 @@ def test_reporter_node_with_observations(
     patch_logger_reporter,
 ):
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"reporter": "basic"}),
-        patch("src.graph.nodes.get_llm_by_type") as mock_get_llm,
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"reporter": "basic"}),
+        patch("neos.graph.nodes.get_llm_by_type") as mock_get_llm,
     ):
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = make_mock_llm_response_reporter(
@@ -825,8 +825,8 @@ def test_reporter_node_locale_default(
         "observations": [],
     }
     with (
-        patch("src.graph.nodes.AGENT_LLM_MAP", {"reporter": "basic"}),
-        patch("src.graph.nodes.get_llm_by_type") as mock_get_llm,
+        patch("neos.graph.nodes.AGENT_LLM_MAP", {"reporter": "basic"}),
+        patch("neos.graph.nodes.get_llm_by_type") as mock_get_llm,
     ):
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = make_mock_llm_response_reporter(
@@ -903,7 +903,7 @@ def mock_agent():
 async def test_execute_agent_step_basic(mock_state_with_steps, mock_agent):
     # Should execute the first unexecuted step and update execution_res
     with patch(
-        "src.graph.nodes.HumanMessage",
+        "neos.graph.nodes.HumanMessage",
         side_effect=lambda content, name=None: MagicMock(content=content, name=name),
     ):
         result = await _execute_agent_step(
@@ -927,7 +927,7 @@ async def test_execute_agent_step_no_unexecuted_step(
     mock_state_no_unexecuted, mock_agent
 ):
     # Should return Command with goto="research_team" and not fail
-    with patch("src.graph.nodes.logger") as mock_logger:
+    with patch("neos.graph.nodes.logger") as mock_logger:
         result = await _execute_agent_step(
             mock_state_no_unexecuted, mock_agent, "researcher"
         )
@@ -960,7 +960,7 @@ async def test_execute_agent_step_with_resources_and_researcher(mock_step):
 
     agent.ainvoke = ainvoke
     with patch(
-        "src.graph.nodes.HumanMessage",
+        "neos.graph.nodes.HumanMessage",
         side_effect=lambda content, name=None: MagicMock(content=content, name=name),
     ):
         result = await _execute_agent_step(state, agent, "researcher")
@@ -976,9 +976,9 @@ async def test_execute_agent_step_recursion_limit_env(
     # Should respect AGENT_RECURSION_LIMIT env variable if set and valid
     monkeypatch.setenv("AGENT_RECURSION_LIMIT", "42")
     with (
-        patch("src.graph.nodes.logger") as mock_logger,
+        patch("neos.graph.nodes.logger") as mock_logger,
         patch(
-            "src.graph.nodes.HumanMessage",
+            "neos.graph.nodes.HumanMessage",
             side_effect=lambda content, name=None: MagicMock(
                 content=content, name=name
             ),
@@ -996,9 +996,9 @@ async def test_execute_agent_step_recursion_limit_env_invalid(
     # Should fallback to default if env variable is invalid
     monkeypatch.setenv("AGENT_RECURSION_LIMIT", "notanint")
     with (
-        patch("src.graph.nodes.logger") as mock_logger,
+        patch("neos.graph.nodes.logger") as mock_logger,
         patch(
-            "src.graph.nodes.HumanMessage",
+            "neos.graph.nodes.HumanMessage",
             side_effect=lambda content, name=None: MagicMock(
                 content=content, name=name
             ),
@@ -1018,9 +1018,9 @@ async def test_execute_agent_step_recursion_limit_env_negative(
     # Should fallback to default if env variable is negative or zero
     monkeypatch.setenv("AGENT_RECURSION_LIMIT", "-5")
     with (
-        patch("src.graph.nodes.logger") as mock_logger,
+        patch("neos.graph.nodes.logger") as mock_logger,
         patch(
-            "src.graph.nodes.HumanMessage",
+            "neos.graph.nodes.HumanMessage",
             side_effect=lambda content, name=None: MagicMock(
                 content=content, name=name
             ),
@@ -1063,7 +1063,7 @@ def mock_configurable_without_mcp():
 @pytest.fixture
 def patch_config_from_runnable_config_with_mcp(mock_configurable_with_mcp):
     with patch(
-        "src.graph.nodes.Configuration.from_runnable_config",
+        "neos.graph.nodes.Configuration.from_runnable_config",
         return_value=mock_configurable_with_mcp,
     ):
         yield
@@ -1072,7 +1072,7 @@ def patch_config_from_runnable_config_with_mcp(mock_configurable_with_mcp):
 @pytest.fixture
 def patch_config_from_runnable_config_without_mcp(mock_configurable_without_mcp):
     with patch(
-        "src.graph.nodes.Configuration.from_runnable_config",
+        "neos.graph.nodes.Configuration.from_runnable_config",
         return_value=mock_configurable_without_mcp,
     ):
         yield
@@ -1080,7 +1080,7 @@ def patch_config_from_runnable_config_without_mcp(mock_configurable_without_mcp)
 
 @pytest.fixture
 def patch_create_agent():
-    with patch("src.graph.nodes.create_agent") as mock:
+    with patch("neos.graph.nodes.create_agent") as mock:
         yield mock
 
 
@@ -1090,7 +1090,7 @@ def patch_execute_agent_step():
         return "EXECUTED"
 
     with patch(
-        "src.graph.nodes._execute_agent_step", side_effect=fake_execute_agent_step
+        "neos.graph.nodes._execute_agent_step", side_effect=fake_execute_agent_step
     ) as mock:
         yield mock
 
@@ -1118,7 +1118,7 @@ def patch_multiserver_mcp_client():
             ]
 
     with patch(
-        "src.graph.nodes.MultiServerMCPClient", return_value=FakeClient()
+        "neos.graph.nodes.MultiServerMCPClient", return_value=FakeClient()
     ) as mock:
         yield mock
 
@@ -1202,7 +1202,7 @@ async def test_setup_and_execute_agent_step_with_mcp_no_enabled_tools(
     configurable = MagicMock()
     configurable.mcp_settings = mcp_settings
     with patch(
-        "src.graph.nodes.Configuration.from_runnable_config",
+        "neos.graph.nodes.Configuration.from_runnable_config",
         return_value=configurable,
     ):
         default_tools = [MagicMock(name="default_tool")]
@@ -1247,7 +1247,7 @@ async def test_setup_and_execute_agent_step_with_mcp_tools_description_update(
         def get_tools(self):
             return [FakeTool("toolA", "descA")]
 
-    with patch("src.graph.nodes.MultiServerMCPClient", return_value=FakeClient()):
+    with patch("neos.graph.nodes.MultiServerMCPClient", return_value=FakeClient()):
         await _setup_and_execute_agent_step(
             mock_state_with_steps,
             mock_config,
@@ -1277,7 +1277,7 @@ def mock_state_without_resources():
 
 @pytest.fixture
 def patch_get_web_search_tool():
-    with patch("src.graph.nodes.get_web_search_tool") as mock:
+    with patch("neos.graph.nodes.get_web_search_tool") as mock:
         mock_tool = MagicMock(name="web_search_tool")
         mock.return_value = mock_tool
         yield mock
@@ -1285,13 +1285,13 @@ def patch_get_web_search_tool():
 
 @pytest.fixture
 def patch_crawl_tool():
-    with patch("src.graph.nodes.crawl_tool", MagicMock(name="crawl_tool")):
+    with patch("neos.graph.nodes.crawl_tool", MagicMock(name="crawl_tool")):
         yield
 
 
 @pytest.fixture
 def patch_get_retriever_tool():
-    with patch("src.graph.nodes.get_retriever_tool") as mock:
+    with patch("neos.graph.nodes.get_retriever_tool") as mock:
         yield mock
 
 
@@ -1301,7 +1301,7 @@ def patch_setup_and_execute_agent_step():
         return "RESEARCHER_RESULT"
 
     with patch(
-        "src.graph.nodes._setup_and_execute_agent_step",
+        "neos.graph.nodes._setup_and_execute_agent_step",
         side_effect=fake_setup_and_execute_agent_step,
     ) as mock:
         yield mock

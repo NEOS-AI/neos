@@ -1,13 +1,10 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import json
 import pytest
 from unittest.mock import Mock, patch, AsyncMock
-from src.tools.tavily_search.tavily_search_results_with_images import (
+from neos.tools.tavily_search.tavily_search_results_with_images import (
     TavilySearchResultsWithImages,
 )
-from src.tools.tavily_search.tavily_search_api_wrapper import (
+from neos.tools.tavily_search.tavily_search_api_wrapper import (
     EnhancedTavilySearchAPIWrapper,
 )
 

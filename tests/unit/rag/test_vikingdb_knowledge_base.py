@@ -1,11 +1,8 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import os
 import pytest
 import json
 from unittest.mock import patch, MagicMock
-from src.rag.vikingdb_knowledge_base import VikingDBKnowledgeBaseProvider, parse_uri
+from neos.rag.vikingdb_knowledge_base import VikingDBKnowledgeBaseProvider, parse_uri
 
 
 # Dummy classes to mock dependencies
@@ -33,9 +30,9 @@ class MockDocument:
 @pytest.fixture(autouse=True)
 def patch_imports():
     with (
-        patch("src.rag.vikingdb_knowledge_base.Resource", MockResource),
-        patch("src.rag.vikingdb_knowledge_base.Chunk", MockChunk),
-        patch("src.rag.vikingdb_knowledge_base.Document", MockDocument),
+        patch("neos.rag.vikingdb_knowledge_base.Resource", MockResource),
+        patch("neos.rag.vikingdb_knowledge_base.Chunk", MockChunk),
+        patch("neos.rag.vikingdb_knowledge_base.Document", MockDocument),
     ):
         yield
 
@@ -172,9 +169,9 @@ class TestVikingDBKnowledgeBaseProviderPrepareRequest:
     def test_prepare_request_basic(self, provider):
         """Test basic request preparation"""
         with (
-            patch("src.rag.vikingdb_knowledge_base.Request") as mock_request,
-            patch("src.rag.vikingdb_knowledge_base.Credentials") as _mock_credentials,
-            patch("src.rag.vikingdb_knowledge_base.SignerV4.sign") as _mock_sign,
+            patch("neos.rag.vikingdb_knowledge_base.Request") as mock_request,
+            patch("neos.rag.vikingdb_knowledge_base.Credentials") as _mock_credentials,
+            patch("neos.rag.vikingdb_knowledge_base.SignerV4.sign") as _mock_sign,
         ):
 
             mock_req_instance = MagicMock()
@@ -190,9 +187,9 @@ class TestVikingDBKnowledgeBaseProviderPrepareRequest:
     def test_prepare_request_with_params(self, provider):
         """Test request preparation with parameters"""
         with (
-            patch("src.rag.vikingdb_knowledge_base.Request") as mock_request,
-            patch("src.rag.vikingdb_knowledge_base.Credentials"),
-            patch("src.rag.vikingdb_knowledge_base.SignerV4.sign"),
+            patch("neos.rag.vikingdb_knowledge_base.Request") as mock_request,
+            patch("neos.rag.vikingdb_knowledge_base.Credentials"),
+            patch("neos.rag.vikingdb_knowledge_base.SignerV4.sign"),
         ):
 
             mock_req_instance = MagicMock()
@@ -207,9 +204,9 @@ class TestVikingDBKnowledgeBaseProviderPrepareRequest:
     def test_prepare_request_with_data(self, provider):
         """Test request preparation with data"""
         with (
-            patch("src.rag.vikingdb_knowledge_base.Request") as mock_request,
-            patch("src.rag.vikingdb_knowledge_base.Credentials"),
-            patch("src.rag.vikingdb_knowledge_base.SignerV4.sign"),
+            patch("neos.rag.vikingdb_knowledge_base.Request") as mock_request,
+            patch("neos.rag.vikingdb_knowledge_base.Credentials"),
+            patch("neos.rag.vikingdb_knowledge_base.SignerV4.sign"),
         ):
 
             mock_req_instance = MagicMock()
@@ -231,7 +228,7 @@ class TestVikingDBKnowledgeBaseProviderQueryRelevantDocuments:
         result = provider.query_relevant_documents("test query", [])
         assert result == []
 
-    @patch("src.rag.vikingdb_knowledge_base.requests.request")
+    @patch("neos.rag.vikingdb_knowledge_base.requests.request")
     def test_query_relevant_documents_success(self, mock_request, provider):
         """Test successful document query"""
         # Mock response
@@ -274,7 +271,7 @@ class TestVikingDBKnowledgeBaseProviderQueryRelevantDocuments:
             assert result[0].chunks[0].content == "Test content"
             assert result[0].chunks[0].similarity == 0.95
 
-    @patch("src.rag.vikingdb_knowledge_base.requests.request")
+    @patch("neos.rag.vikingdb_knowledge_base.requests.request")
     def test_query_relevant_documents_with_document_filter(
         self, mock_request, provider
     ):
@@ -301,7 +298,7 @@ class TestVikingDBKnowledgeBaseProviderQueryRelevantDocuments:
             assert doc_filter["field"] == "doc_id"
             assert doc_filter["conds"] == ["doc456"]
 
-    @patch("src.rag.vikingdb_knowledge_base.requests.request")
+    @patch("neos.rag.vikingdb_knowledge_base.requests.request")
     def test_query_relevant_documents_api_error(self, mock_request, provider):
         """Test handling of API error response"""
         mock_response = MagicMock()
@@ -315,7 +312,7 @@ class TestVikingDBKnowledgeBaseProviderQueryRelevantDocuments:
             ):
                 provider.query_relevant_documents("test query", resources)
 
-    @patch("src.rag.vikingdb_knowledge_base.requests.request")
+    @patch("neos.rag.vikingdb_knowledge_base.requests.request")
     def test_query_relevant_documents_json_decode_error(self, mock_request, provider):
         """Test handling of JSON decode error"""
         mock_response = MagicMock()
@@ -327,7 +324,7 @@ class TestVikingDBKnowledgeBaseProviderQueryRelevantDocuments:
             with pytest.raises(ValueError, match="Failed to parse JSON response"):
                 provider.query_relevant_documents("test query", resources)
 
-    @patch("src.rag.vikingdb_knowledge_base.requests.request")
+    @patch("neos.rag.vikingdb_knowledge_base.requests.request")
     def test_query_relevant_documents_multiple_resources(self, mock_request, provider):
         """Test querying multiple resources and merging results"""
         # Mock responses for different resources
@@ -398,7 +395,7 @@ class TestVikingDBKnowledgeBaseProviderListResources:
     def provider(self, env_vars):
         return VikingDBKnowledgeBaseProvider()
 
-    @patch("src.rag.vikingdb_knowledge_base.requests.request")
+    @patch("neos.rag.vikingdb_knowledge_base.requests.request")
     def test_list_resources_success(self, mock_request, provider):
         """Test successful resource listing"""
         mock_response = MagicMock()
@@ -437,7 +434,7 @@ class TestVikingDBKnowledgeBaseProviderListResources:
             assert result[1].title == "Dataset 2"
             assert result[1].description == "Description 2"
 
-    @patch("src.rag.vikingdb_knowledge_base.requests.request")
+    @patch("neos.rag.vikingdb_knowledge_base.requests.request")
     def test_list_resources_with_query_filter(self, mock_request, provider):
         """Test resource listing with query filter"""
         mock_response = MagicMock()
@@ -469,7 +466,7 @@ class TestVikingDBKnowledgeBaseProviderListResources:
             assert len(result) == 1
             assert result[0].title == "Test Dataset"
 
-    @patch("src.rag.vikingdb_knowledge_base.requests.request")
+    @patch("neos.rag.vikingdb_knowledge_base.requests.request")
     def test_list_resources_api_error(self, mock_request, provider):
         """Test handling of API error in list_resources"""
         mock_response = MagicMock()
@@ -480,7 +477,7 @@ class TestVikingDBKnowledgeBaseProviderListResources:
             with pytest.raises(Exception, match="Failed to list resources: API Error"):
                 provider.list_resources()
 
-    @patch("src.rag.vikingdb_knowledge_base.requests.request")
+    @patch("neos.rag.vikingdb_knowledge_base.requests.request")
     def test_list_resources_json_decode_error(self, mock_request, provider):
         """Test handling of JSON decode error in list_resources"""
         mock_response = MagicMock()
@@ -491,7 +488,7 @@ class TestVikingDBKnowledgeBaseProviderListResources:
             with pytest.raises(ValueError, match="Failed to parse JSON response"):
                 provider.list_resources()
 
-    @patch("src.rag.vikingdb_knowledge_base.requests.request")
+    @patch("neos.rag.vikingdb_knowledge_base.requests.request")
     def test_list_resources_empty_response(self, mock_request, provider):
         """Test handling of empty response"""
         mock_response = MagicMock()

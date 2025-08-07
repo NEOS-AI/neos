@@ -1,7 +1,4 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
-import src.crawler as crawler_module
+import neos.crawler as crawler_module
 
 
 def test_crawler_sets_article_url(monkeypatch):
@@ -22,9 +19,9 @@ def test_crawler_sets_article_url(monkeypatch):
         def extract_article(self, html):
             return DummyArticle()
 
-    monkeypatch.setattr("src.crawler.crawler.JinaClient", DummyJinaClient)
+    monkeypatch.setattr("neos.crawler.crawler.JinaClient", DummyJinaClient)
     monkeypatch.setattr(
-        "src.crawler.crawler.ReadabilityExtractor", DummyReadabilityExtractor
+        "neos.crawler.crawler.ReadabilityExtractor", DummyReadabilityExtractor
     )
 
     crawler = crawler_module.Crawler()
@@ -55,9 +52,9 @@ def test_crawler_calls_dependencies(monkeypatch):
 
             return DummyArticle()
 
-    monkeypatch.setattr("src.crawler.crawler.JinaClient", DummyJinaClient)
+    monkeypatch.setattr("neos.crawler.crawler.JinaClient", DummyJinaClient)
     monkeypatch.setattr(
-        "src.crawler.crawler.ReadabilityExtractor", DummyReadabilityExtractor
+        "neos.crawler.crawler.ReadabilityExtractor", DummyReadabilityExtractor
     )
 
     crawler = crawler_module.Crawler()

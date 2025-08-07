@@ -1,9 +1,6 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import pytest
 from unittest.mock import patch, MagicMock
-from src.rag.ragflow import RAGFlowProvider, parse_uri
+from neos.rag.ragflow import RAGFlowProvider, parse_uri
 
 
 # Dummy classes to mock dependencies
@@ -30,7 +27,7 @@ class DummyDocument:
 # Patch imports in ragflow.py to use dummy classes
 @pytest.fixture(autouse=True)
 def patch_imports(monkeypatch):
-    import src.rag.ragflow as ragflow
+    import neos.rag.ragflow as ragflow
 
     ragflow.Resource = DummyResource
     ragflow.Chunk = DummyChunk
@@ -79,7 +76,7 @@ def test_init_missing_env(monkeypatch):
         RAGFlowProvider()
 
 
-@patch("src.rag.ragflow.requests.post")
+@patch("neos.rag.ragflow.requests.post")
 def test_query_relevant_documents_success(mock_post, monkeypatch):
     monkeypatch.setenv("RAGFLOW_API_URL", "http://api")
     monkeypatch.setenv("RAGFLOW_API_KEY", "key")
@@ -105,7 +102,7 @@ def test_query_relevant_documents_success(mock_post, monkeypatch):
     assert docs[0].chunks[0].similarity == 0.9
 
 
-@patch("src.rag.ragflow.requests.post")
+@patch("neos.rag.ragflow.requests.post")
 def test_query_relevant_documents_error(mock_post, monkeypatch):
     monkeypatch.setenv("RAGFLOW_API_URL", "http://api")
     monkeypatch.setenv("RAGFLOW_API_KEY", "key")
@@ -118,7 +115,7 @@ def test_query_relevant_documents_error(mock_post, monkeypatch):
         provider.query_relevant_documents("query", [])
 
 
-@patch("src.rag.ragflow.requests.get")
+@patch("neos.rag.ragflow.requests.get")
 def test_list_resources_success(mock_get, monkeypatch):
     monkeypatch.setenv("RAGFLOW_API_URL", "http://api")
     monkeypatch.setenv("RAGFLOW_API_KEY", "key")
@@ -142,7 +139,7 @@ def test_list_resources_success(mock_get, monkeypatch):
     assert resources[1].description == "desc2"
 
 
-@patch("src.rag.ragflow.requests.get")
+@patch("neos.rag.ragflow.requests.get")
 def test_list_resources_error(mock_get, monkeypatch):
     monkeypatch.setenv("RAGFLOW_API_URL", "http://api")
     monkeypatch.setenv("RAGFLOW_API_KEY", "key")

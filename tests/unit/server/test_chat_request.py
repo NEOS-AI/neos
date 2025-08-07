@@ -1,14 +1,11 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 import pytest
 from pydantic import ValidationError
-from src.config.report_style import ReportStyle
-from src.rag.retriever import Resource
+from neos.config.report_style import ReportStyle
+from neos.rag.retriever import Resource
 from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi import HTTPException
 
-from src.server.chat_request import (
+from neos.server.chat_request import (
     ContentItem,
     ChatMessage,
     ChatRequest,
@@ -18,7 +15,7 @@ from src.server.chat_request import (
     GenerateProseRequest,
     EnhancePromptRequest,
 )
-import src.server.mcp_utils as mcp_utils  # Assuming mcp_utils is the module to test
+import neos.server.mcp_utils as mcp_utils  # Assuming mcp_utils is the module to test
 
 
 def test_content_item_text_and_image():
@@ -151,9 +148,9 @@ def test_tts_request_validation_error():
 
 
 @pytest.mark.asyncio
-@patch("src.server.mcp_utils._get_tools_from_client_session", new_callable=AsyncMock)
-@patch("src.server.mcp_utils.StdioServerParameters")
-@patch("src.server.mcp_utils.stdio_client")
+@patch("neos.server.mcp_utils._get_tools_from_client_session", new_callable=AsyncMock)
+@patch("neos.server.mcp_utils.StdioServerParameters")
+@patch("neos.server.mcp_utils.stdio_client")
 async def test_load_mcp_tools_exception_handling(
     mock_stdio_client, mock_StdioServerParameters, mock_get_tools
 ):  # Changed to async def

@@ -1,8 +1,5 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 from unittest.mock import Mock, call, patch
-from src.tools.decorators import create_logged_tool
+from neos.tools.decorators import create_logged_tool
 
 
 class MockBaseTool:
@@ -55,7 +52,7 @@ class TestLoggedToolMixin:
         LoggedTool = create_logged_tool(MockBaseTool)
         tool = LoggedTool()
 
-        with patch("src.tools.decorators.logger.debug") as mock_debug:
+        with patch("neos.tools.decorators.logger.debug") as mock_debug:
             tool._run("test_arg")
 
             # Verify debug log was called with correct message
@@ -79,7 +76,7 @@ class TestLoggedToolMixin:
         LoggedTool = create_logged_tool(MockBaseTool)
         tool = LoggedTool()
 
-        with patch("src.tools.decorators.logger.debug") as mock_debug:
+        with patch("neos.tools.decorators.logger.debug") as mock_debug:
             tool._log_operation = Mock()
 
             result = tool._run()
@@ -110,7 +107,7 @@ class TestLoggedToolMixin:
         LoggedTool = create_logged_tool(MockBaseTool)
         tool = LoggedTool()
 
-        with patch("src.tools.decorators.logger.debug") as mock_debug:
+        with patch("neos.tools.decorators.logger.debug") as mock_debug:
             tool._run()
 
             # Verify the logged class name has 'Logged' prefix removed
