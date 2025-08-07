@@ -68,8 +68,8 @@ Make sure your system meets the following minimum requirements:
 
 ```bash
 # Clone the repository
-git clone https://github.com/bytedance/deer-flow.git
-cd deer-flow
+git clone https://github.com/NEOS-AI/neos.git
+cd neos
 
 # Install dependencies, uv will take care of the python interpreter and venv creation, and install the required packages
 uv sync
