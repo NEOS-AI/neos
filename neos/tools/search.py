@@ -19,8 +19,8 @@ from neos.config import load_yaml_config
 from neos.tools.tavily_search.tavily_search_results_with_images import (
     TavilySearchResultsWithImages,
 )
-
 from neos.tools.decorators import create_logged_tool
+
 
 logger = logging.getLogger(__name__)
 
