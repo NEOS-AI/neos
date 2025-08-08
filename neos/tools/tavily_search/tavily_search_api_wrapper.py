@@ -1,4 +1,3 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
 import json
 from typing import Dict, List, Optional
 
@@ -42,6 +41,7 @@ class EnhancedTavilySearchAPIWrapper(OriginalTavilySearchAPIWrapper):
         )
         response.raise_for_status()
         return response.json()
+
 
     async def raw_results_async(
         self,

@@ -128,6 +128,7 @@ class TavilySearchResultsWithImages(TavilySearchResults):  # type: ignore[overri
         )
         return cleaned_results, raw_results
 
+
     async def _arun(
         self,
         query: str,
