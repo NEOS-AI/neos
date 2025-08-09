@@ -1,5 +1,6 @@
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import CachePolicy
 
 from neos.prompts.planner_model import StepType
 
@@ -55,7 +56,7 @@ def continue_to_running_research_team(state: State) -> str:
     return "planner"
 
 
-def _build_base_graph() -> StateGraph:
+def _build_base_graph(use_cache: bool = False, cache_ttl: int = 3) -> StateGraph:
     """
     Build and return the base state graph with all nodes and edges.
     This graph includes the coordinator, planner, reporter, research team,
@@ -63,20 +64,28 @@ def _build_base_graph() -> StateGraph:
     It defines the workflow for handling user queries and coordinating tasks
     among different roles in the agent system.
 
+    Args:
+        use_cache (bool): If True, enables caching for the graph.
+        cache_ttl (int): Time-to-live for the cache in seconds.
+
     Returns:
         StateGraph: The constructed state graph with all nodes and edges.
     """
+    config_map = {}
+    if use_cache:
+        config_map['cache_policy'] = CachePolicy(ttl=cache_ttl)
+
     builder = StateGraph(State)
     builder.add_edge(START, "coordinator")
-    builder.add_node("coordinator", coordinator_node)
-    builder.add_node("background_investigator", background_investigation_node)
-    builder.add_node("planner", planner_node)
-    builder.add_node("reporter", reporter_node)
-    builder.add_node("research_team", research_team_node)
-    builder.add_node("researcher", researcher_node)
-    builder.add_node("coder", coder_node)
-    builder.add_node("react_coder", react_coder_node)
-    builder.add_node("human_feedback", human_feedback_node)
+    builder.add_node("coordinator", coordinator_node, **config_map)
+    builder.add_node("background_investigator", background_investigation_node, **config_map)
+    builder.add_node("planner", planner_node, **config_map)
+    builder.add_node("reporter", reporter_node, **config_map)
+    builder.add_node("research_team", research_team_node, **config_map)
+    builder.add_node("researcher", researcher_node, **config_map)
+    builder.add_node("coder", coder_node, **config_map)
+    builder.add_node("react_coder", react_coder_node, **config_map)
+    builder.add_node("human_feedback", human_feedback_node, **config_map)
     builder.add_edge("background_investigator", "planner")
     builder.add_conditional_edges(
         "research_team",
