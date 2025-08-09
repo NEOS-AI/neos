@@ -42,6 +42,24 @@ def _get_agent_config(max_plan_iterations: int, max_step_num: int, recursion_lim
     }
 
 
+def _get_initial_state_of_workflow(user_input: str, enable_background_investigation: bool) -> dict:
+    """Get the initial state for the workflow based on user input and configuration.
+
+    Args:
+        user_input (str): The user's query or request.
+        enable_background_investigation (bool): If True, performs web search before planning to enhance context.
+
+    Returns:
+        dict: The initial state for the workflow.
+    """
+    return {
+        # Runtime Variables
+        "messages": [{"role": "user", "content": user_input}],
+        "auto_accepted_plan": True,
+        "enable_background_investigation": enable_background_investigation,
+    }
+
+
 async def run_agent_workflow_async(
     user_input: str,
     debug: bool = False,
@@ -68,12 +86,7 @@ async def run_agent_workflow_async(
         enable_debug_logging()
 
     logger.info(f"Starting async workflow with user input: {user_input}")
-    initial_state = {
-        # Runtime Variables
-        "messages": [{"role": "user", "content": user_input}],
-        "auto_accepted_plan": True,
-        "enable_background_investigation": enable_background_investigation,
-    }
+    initial_state = _get_initial_state_of_workflow(user_input, enable_background_investigation)
     config = _get_agent_config(
         max_plan_iterations, max_step_num, recursion_limit=100
     )
