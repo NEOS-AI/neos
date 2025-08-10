@@ -15,7 +15,7 @@ from neos.tools import (
     crawl_tool,
     get_web_search_tool,
     get_retriever_tool,
-    python_repl_tool,
+    python_repl_sandbox_tool,
 )
 
 from neos.config.agents import AGENT_LLM_MAP
@@ -34,11 +34,20 @@ logger = logging.getLogger(__name__)
 @tool
 def handoff_to_planner(
     research_topic: Annotated[str, "The topic of the research task to be handed off."],
-    locale: Annotated[str, "The user's detected language locale (e.g., en-US, zh-CN)."],
-):
-    """Handoff to planner agent to do plan."""
+    locale: Annotated[str, "The user's detected language locale (e.g., en-US, ko-KR)."],
+) -> None:
+    """
+    Handoff to planner agent to do plan.
+    This tool is used to signal the planner agent to take over the task.
+    Args:
+        research_topic (str): The topic of the research task to be handed off.
+        locale (str): The user's detected language locale (e.g., en-US, ko-KR).
+    """
     # This tool is not returning anything: we're just using it
     # as a way for LLM to signal that it needs to hand off to planner agent
+    logger.info(
+        f"Handoff to planner with research topic: {research_topic}, locale: {locale}"
+    )
     return
 
 
@@ -47,10 +56,15 @@ def background_investigation_node(state: State, config: RunnableConfig):
     configurable = Configuration.from_runnable_config(config)
     query = state.get("research_topic")
     background_investigation_results = None
+
+    logger.info(
+        f" > Using {SELECTED_SEARCH_ENGINE} for background investigation."
+    )
     if SELECTED_SEARCH_ENGINE == SearchEngine.TAVILY.value:
         searched_content = LoggedTavilySearch(
             max_results=configurable.max_search_results
         ).invoke(query)
+
         if isinstance(searched_content, list):
             background_investigation_results = [
                 f"## {elem['title']}\n\n{elem['content']}" for elem in searched_content
@@ -68,6 +82,7 @@ def background_investigation_node(state: State, config: RunnableConfig):
         background_investigation_results = get_web_search_tool(
             configurable.max_search_results
         ).invoke(query)
+
     return {
         "background_investigation_results": json.dumps(
             background_investigation_results, ensure_ascii=False
@@ -500,5 +515,5 @@ async def coder_node(
         state,
         config,
         "coder",
-        [python_repl_tool],
+        [python_repl_sandbox_tool],
     )

@@ -24,6 +24,7 @@ from neos.tools.decorators import create_logged_tool
 
 logger = logging.getLogger(__name__)
 
+
 # Create logged versions of the search tools
 LoggedTavilySearch = create_logged_tool(TavilySearchResultsWithImages)
 LoggedDuckDuckGoSearch = create_logged_tool(DuckDuckGoSearchResults)
