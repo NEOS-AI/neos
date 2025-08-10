@@ -10,12 +10,13 @@ from neos.graph.nodes import _execute_agent_step
 from neos.graph.nodes import _setup_and_execute_agent_step
 from neos.graph.nodes import researcher_node
 
-# 在这里 mock 掉 get_llm_by_type，避免 ValueError
+# Mock get_llm_by_type here to avoid ValueError
 with patch("neos.llms.llm.get_llm_by_type", return_value=MagicMock()):
     from langgraph.types import Command
+    from langchain_core.messages import HumanMessage
+
     from neos.graph.nodes import background_investigation_node
     from neos.config import SearchEngine
-    from langchain_core.messages import HumanMessage
 
 
 # Mock data
@@ -1110,7 +1111,7 @@ def patch_multiserver_mcp_client():
         async def __aexit__(self, exc_type, exc, tb):
             pass
 
-        def get_tools(self):
+        async def get_tools(self):
             return [
                 FakeTool("toolA", "descA"),
                 FakeTool("toolB", "descB"),
@@ -1244,7 +1245,7 @@ async def test_setup_and_execute_agent_step_with_mcp_tools_description_update(
         async def __aexit__(self, exc_type, exc, tb):
             pass
 
-        def get_tools(self):
+        async def get_tools(self):
             return [FakeTool("toolA", "descA")]
 
     with patch("neos.graph.nodes.MultiServerMCPClient", return_value=FakeClient()):

@@ -37,6 +37,7 @@ dependencies = [
     "trafilatura>=2.0.0",
     "langchain-aws>=0.2.30",
     "langgraph-checkpoint-postgres>=2.0.23",
+    "pytest>=8.4.1",
 ]
 
 [project.optional-dependencies]
