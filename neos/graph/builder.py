@@ -114,4 +114,7 @@ def build_graph():
     return builder.compile()
 
 
-# graph = build_graph()
+if __name__ == "__main__":
+    # This is just for testing purposes, not used in production
+    graph = build_graph()
+    print("Graph built successfully.")
