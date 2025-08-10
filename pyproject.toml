@@ -36,6 +36,7 @@ dependencies = [
     "volcengine>=1.0.191",
     "trafilatura>=2.0.0",
     "langchain-aws>=0.2.30",
+    "langgraph-checkpoint-postgres>=2.0.23",
 ]
 
 [project.optional-dependencies]
