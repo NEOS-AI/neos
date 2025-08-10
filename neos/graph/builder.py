@@ -14,7 +14,6 @@ from .nodes import (
     coder_node,
     human_feedback_node,
     background_investigation_node,
-    react_coder_node,
 )
 
 
@@ -84,13 +83,12 @@ def _build_base_graph(use_cache: bool = False, cache_ttl: int = 3) -> StateGraph
     builder.add_node("research_team", research_team_node, **config_map)
     builder.add_node("researcher", researcher_node, **config_map)
     builder.add_node("coder", coder_node, **config_map)
-    builder.add_node("react_coder", react_coder_node, **config_map)
     builder.add_node("human_feedback", human_feedback_node, **config_map)
     builder.add_edge("background_investigator", "planner")
     builder.add_conditional_edges(
         "research_team",
         continue_to_running_research_team,
-        ["planner", "researcher", "coder", "react_coder"],
+        ["planner", "researcher", "coder"],
     )
     builder.add_edge("reporter", END)
     return builder
