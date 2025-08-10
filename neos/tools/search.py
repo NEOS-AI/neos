@@ -41,6 +41,7 @@ def get_search_config():
 # Get the selected search tool
 def get_web_search_tool(max_search_results: int):
     search_config = get_search_config()
+    websearch_tool_name = "web_search"
 
     if SELECTED_SEARCH_ENGINE == SearchEngine.TAVILY.value:
         # Only get and apply include/exclude domains for Tavily
@@ -52,7 +53,7 @@ def get_web_search_tool(max_search_results: int):
         )
 
         return LoggedTavilySearch(
-            name="web_search",
+            name=websearch_tool_name,
             max_results=max_search_results,
             include_raw_content=True,
             include_images=True,
@@ -62,12 +63,12 @@ def get_web_search_tool(max_search_results: int):
         )
     elif SELECTED_SEARCH_ENGINE == SearchEngine.DUCKDUCKGO.value:
         return LoggedDuckDuckGoSearch(
-            name="web_search",
+            name=websearch_tool_name,
             num_results=max_search_results,
         )
     elif SELECTED_SEARCH_ENGINE == SearchEngine.BRAVE_SEARCH.value:
         return LoggedBraveSearch(
-            name="web_search",
+            name=websearch_tool_name,
             search_wrapper=BraveSearchWrapper(
                 api_key=os.getenv("BRAVE_SEARCH_API_KEY", ""),
                 search_kwargs={"count": max_search_results},
@@ -75,7 +76,7 @@ def get_web_search_tool(max_search_results: int):
         )
     elif SELECTED_SEARCH_ENGINE == SearchEngine.ARXIV.value:
         return LoggedArxivSearch(
-            name="web_search",
+            name=websearch_tool_name,
             api_wrapper=ArxivAPIWrapper(
                 top_k_results=max_search_results,
                 load_max_docs=max_search_results,
@@ -88,7 +89,7 @@ def get_web_search_tool(max_search_results: int):
             "wikipedia_doc_content_chars_max", 4000
         )
         return LoggedWikipediaSearch(
-            name="web_search",
+            name=websearch_tool_name,
             api_wrapper=WikipediaAPIWrapper(
                 lang=wiki_lang,
                 top_k_results=max_search_results,
