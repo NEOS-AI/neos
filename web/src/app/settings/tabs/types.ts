@@ -2,7 +2,7 @@
 import type { LucideIcon } from "lucide-react";
 import type { FunctionComponent } from "react";
 
-import type { SettingsState } from "~/core/store";
+import type { SettingsState } from "@/core/store";
 
 export type Tab = FunctionComponent<{
   settings: SettingsState;

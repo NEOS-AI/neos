@@ -3,7 +3,7 @@
 
 import { usePathname } from "next/navigation";
 
-import { ThemeProvider } from "~/components/theme-provider";
+import { ThemeProvider } from "@/components/theme-provider";
 
 export function ThemeProviderWrapper({
   children,

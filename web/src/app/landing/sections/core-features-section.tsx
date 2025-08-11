@@ -10,7 +10,7 @@ import {
 import { useTranslations } from "next-intl";
 import type { ForwardRefExoticComponent, RefAttributes } from "react";
 
-import { BentoCard, BentoGrid } from "~/components/magicui/bento-grid";
+import { BentoCard, BentoGrid } from "@/components/magicui/bento-grid";
 
 import { SectionHeader } from "../components/section-header";
 

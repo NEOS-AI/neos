@@ -7,8 +7,8 @@ import {
 } from "./resource-mentions";
 import type { Instance, Props } from "tippy.js";
 import tippy from "tippy.js";
-import { resolveServiceURL } from "~/core/api/resolve-service-url";
-import type { Resource } from "~/core/messages";
+import { resolveServiceURL } from "@/core/api/resolve-service-url";
+import type { Resource } from "@/core/messages";
 
 export const resourceSuggestion: MentionOptions["suggestion"] = {
   items: ({ query }) => {

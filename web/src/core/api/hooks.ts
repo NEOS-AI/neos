@@ -1,7 +1,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { env } from "~/env";
+import { env } from "@/env";
 
 import type { NeosConfig } from "../config";
 import { useReplay } from "../replay";

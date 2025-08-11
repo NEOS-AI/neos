@@ -1,5 +1,5 @@
 
-import { env } from "~/env";
+import { env } from "@/env";
 
 import type { MCPServerMetadata } from "../mcp";
 import type { Resource } from "../messages";

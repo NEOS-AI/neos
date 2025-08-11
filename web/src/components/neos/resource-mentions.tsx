@@ -1,8 +1,8 @@
 
 import { useTranslations } from "next-intl";
 import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
-import type { Resource } from "~/core/messages";
-import { cn } from "~/lib/utils";
+import type { Resource } from "@/core/messages";
+import { cn } from "@/lib/utils";
 
 export interface ResourceMentionsProps {
   items: Array<Resource>;

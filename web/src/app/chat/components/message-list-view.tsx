@@ -11,29 +11,29 @@ import {
 import { useTranslations } from "next-intl";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 
-import { LoadingAnimation } from "~/components/neos/loading-animation";
-import { Markdown } from "~/components/neos/markdown";
-import { RainbowText } from "~/components/neos/rainbow-text";
-import { RollingText } from "~/components/neos/rolling-text";
+import { LoadingAnimation } from "@/components/neos/loading-animation";
+import { Markdown } from "@/components/neos/markdown";
+import { RainbowText } from "@/components/neos/rainbow-text";
+import { RollingText } from "@/components/neos/rolling-text";
 import {
   ScrollContainer,
   type ScrollContainerRef,
-} from "~/components/neos/scroll-container";
-import { Tooltip } from "~/components/neos/tooltip";
-import { Button } from "~/components/ui/button";
+} from "@/components/neos/scroll-container";
+import { Tooltip } from "@/components/neos/tooltip";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
   CardFooter,
   CardHeader,
   CardTitle,
-} from "~/components/ui/card";
+} from "@/components/ui/card";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from "~/components/ui/collapsible";
-import type { Message, Option } from "~/core/messages";
+} from "@/components/ui/collapsible";
+import type { Message, Option } from "@/core/messages";
 import {
   closeResearch,
   openResearch,
@@ -43,9 +43,9 @@ import {
   useMessageIds,
   useResearchMessage,
   useStore,
-} from "~/core/store";
-import { parseJSON } from "~/core/utils";
-import { cn } from "~/lib/utils";
+} from "@/core/store";
+import { parseJSON } from "@/core/utils";
+import { cn } from "@/lib/utils";
 
 export function MessageListView({
   className,

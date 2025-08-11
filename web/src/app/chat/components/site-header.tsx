@@ -1,11 +1,9 @@
-import { StarFilledIcon, GitHubLogoIcon } from "@radix-ui/react-icons";
-import Link from "next/link";
+import { StarFilledIcon } from "@radix-ui/react-icons";
 import { useTranslations } from 'next-intl';
 
-import { LanguageSwitcher } from "~/components/neos/language-switcher";
-import { NumberTicker } from "~/components/magicui/number-ticker";
-import { Button } from "~/components/ui/button";
-import { env } from "~/env";
+import { LanguageSwitcher } from "@/components/neos/language-switcher";
+import { NumberTicker } from "@/components/magicui/number-ticker";
+import { env } from "@/env";
 
 
 export function SiteHeader() {
@@ -27,19 +25,6 @@ export function SiteHeader() {
               filter: "blur(32px)",
             }}
           />
-          <Button
-            variant="outline"
-            size="sm"
-            asChild
-            className="group relative z-10"
-          >
-            <Link href="https://github.com/bytedance/deer-flow" target="_blank">
-              <GitHubLogoIcon className="size-4" />
-              {t('starOnGitHub')}
-              {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY &&
-                env.GITHUB_OAUTH_TOKEN && <StarCounter />}
-            </Link>
-          </Button>
         </div>
       </div>
       <hr className="from-border/0 via-border/70 to-border/0 m-0 h-px w-full border-none bg-gradient-to-r" />
@@ -47,12 +32,13 @@ export function SiteHeader() {
   );
 }
 
+
 export async function StarCounter() {
   let stars = 1000; // Default value
 
   try {
     const response = await fetch(
-      "https://api.github.com/repos/bytedance/deer-flow",
+      "https://github.com/NEOS-AI/neos",
       {
         headers: env.GITHUB_OAUTH_TOKEN
           ? {

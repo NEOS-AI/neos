@@ -3,8 +3,8 @@ import { GithubFilled } from "@ant-design/icons";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 
-import { AuroraText } from "~/components/magicui/aurora-text";
-import { Button } from "~/components/ui/button";
+import { AuroraText } from "@/components/magicui/aurora-text";
+import { Button } from "@/components/ui/button";
 
 import { SectionHeader } from "../components/section-header";
 

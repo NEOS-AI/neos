@@ -3,7 +3,7 @@ import { useTranslations } from "next-intl";
 import { useState } from "react";
 import { Check, FileText, Newspaper, Users, GraduationCap } from "lucide-react";
 
-import { Button } from "~/components/ui/button";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -11,9 +11,9 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "~/components/ui/dialog";
-import { setReportStyle, useSettingsStore } from "~/core/store";
-import { cn } from "~/lib/utils";
+} from "@/components/ui/dialog";
+import { setReportStyle, useSettingsStore } from "@/core/store";
+import { cn } from "@/lib/utils";
 
 import { Tooltip } from "./tooltip";
 
