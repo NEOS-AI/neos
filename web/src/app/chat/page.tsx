@@ -1,4 +1,3 @@
-
 "use client";
 
 import { GithubOutlined } from "@ant-design/icons";
@@ -8,11 +7,11 @@ import { useTranslations } from "next-intl";
 import { Suspense } from "react";
 
 import { Button } from "@/components/ui/button";
-
-import { Logo } from "../../components/neos/logo";
-import { ThemeToggle } from "../../components/neos/theme-toggle";
-import { Tooltip } from "../../components/neos/tooltip";
+import { Logo } from "@/components/neos/logo";
+import { ThemeToggle } from "@/components/neos/theme-toggle";
+import { Tooltip } from "@/components/neos/tooltip";
 import { SettingsDialog } from "../settings/dialogs/settings-dialog";
+
 
 const Main = dynamic(() => import("./main"), {
   ssr: false,
@@ -22,6 +21,7 @@ const Main = dynamic(() => import("./main"), {
     </div>
   ),
 });
+
 
 export default function HomePage() {
   const t = useTranslations("chat.page");
