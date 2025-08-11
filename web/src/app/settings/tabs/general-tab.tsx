@@ -1,4 +1,3 @@
-
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Settings } from "lucide-react";
 import { useTranslations } from "next-intl";
@@ -21,6 +20,7 @@ import { Switch } from "~/components/ui/switch";
 import type { SettingsState } from "~/core/store";
 
 import type { Tab } from "./types";
+
 
 const generalFormSchema = z.object({
   autoAcceptedPlan: z.boolean(),

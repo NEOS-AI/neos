@@ -1,14 +1,14 @@
-# Neos [关于 Neos](https://github.com/bytedance/deer-flow)
+# Neos [Neos](https://github.com/NEOS-AI/neos)
 
 > **源于开源，回馈开源**
 
-**Neos**（**深度探索**和**高效研究**流程）是一个由社区驱动的 AI 自动化框架，受到开源社区卓越贡献的启发。我们的使命是将语言模型与专业工具无缝集成，用于网络搜索、爬取和 Python 代码执行等任务——同时回馈使这种创新成为可能的社区。
+**Neos** 是一个由社区驱动的 AI 自动化框架，受到开源社区卓越贡献的启发。我们的使命是将语言模型与专业工具无缝集成，用于网络搜索、爬取和 Python 代码执行等任务——同时回馈使这种创新成为可能的社区。
 
 ---
 
 ## 🌟 GitHub 仓库
 
-在 GitHub 上探索 Neos：[github.com/bytedance/deer-flow](https://github.com/bytedance/deer-flow)
+在 GitHub 上探索 Neos：[https://github.com/NEOS-AI/neos](https://github.com/NEOS-AI/neos)
 
 ---
 
@@ -35,11 +35,3 @@ Neos 作为开源项目，在 **MIT 许可证** 下分发。
 - **[SToneX](https://github.com/stonexer)**：感谢他对逐字符视觉效果的宝贵贡献。
 
 这些杰出的项目构成了 Neos 的骨干，体现了开源协作的变革力量。
-
-### 特别感谢
-最后，我们要向 `Neos` 的核心作者表达衷心的感谢：
-
-- **[Daniel Walnut](https://github.com/hetaoBackend/)**
-- **[Henry Li](https://github.com/magiccube/)**
-
-没有他们的愿景、热情和奉献，`Neos` 就不会有今天的成就。

@@ -1,14 +1,14 @@
-# Neos [About Neos](https://github.com/bytedance/deer-flow)
+# Neos [About Neos](https://github.com/NEOS-AI/neos)
 
 > **From Open Source, Back to Open Source**
 
-**Neos** (**D**eep **E**xploration and **E**fficient **R**esearch **Flow**) is a community-driven AI automation framework inspired by the remarkable contributions of the open source community. Our mission is to seamlessly integrate language models with specialized tools for tasks such as web search, crawling, and Python code execution—all while giving back to the community that made this innovation possible.
+**Neos** is a community-driven AI automation framework inspired by the remarkable contributions of the open source community. Our mission is to seamlessly integrate language models with specialized tools for tasks such as web search, crawling, and Python code execution—all while giving back to the community that made this innovation possible.
 
 ---
 
 ## 🌟 GitHub Repository
 
-Explore Neos on GitHub: [github.com/bytedance/deer-flow](https://github.com/bytedance/deer-flow)
+Explore Neos on GitHub: [https://github.com/NEOS-AI/neos](https://github.com/NEOS-AI/neos)
 
 ---
 
@@ -33,13 +33,3 @@ We extend our heartfelt gratitude to the open source projects and contributors w
 - **[Framer Motion](https://www.framer.com/motion/)**: An amazing animation library.
 - **[React Markdown](https://www.npmjs.com/package/react-markdown)**: Exceptional markdown rendering with customizability.
 - **[SToneX](https://github.com/stonexer)**: For his invaluable contribution to token-by-token visual effects.
-
-These outstanding projects form the backbone of Neos and exemplify the transformative power of open source collaboration.
-
-### Special Thanks
-Finally, we want to express our heartfelt gratitude to the core authors of `Neos`:
-
-- **[Daniel Walnut](https://github.com/hetaoBackend/)**
-- **[Henry Li](https://github.com/magiccube/)**
-
-Without their vision, passion and dedication, `Neos` would not be what it is today.

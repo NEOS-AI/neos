@@ -1,4 +1,3 @@
-
 import { MagicWandIcon } from "@radix-ui/react-icons";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUp, Lightbulb, X } from "lucide-react";
@@ -22,6 +21,7 @@ import {
   useSettingsStore,
 } from "~/core/store";
 import { cn } from "~/lib/utils";
+
 
 export function InputBox({
   className,
