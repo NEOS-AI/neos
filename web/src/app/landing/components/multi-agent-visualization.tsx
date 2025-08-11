@@ -1,4 +1,3 @@
-
 "use client";
 
 import {
@@ -38,6 +37,7 @@ import {
   togglePlay,
   useMAVStore,
 } from "../store/mav-store";
+
 
 const nodeTypes = {
   circle: CircleNode,

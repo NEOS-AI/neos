@@ -1,5 +1,4 @@
-
-import { GithubFilled } from "@ant-design/icons";
+// import { GithubFilled } from "@ant-design/icons";
 import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useTranslations } from 'next-intl';
@@ -9,14 +8,15 @@ import { FlickeringGrid } from "~/components/magicui/flickering-grid";
 import { Button } from "~/components/ui/button";
 import { env } from "~/env";
 
+
 export function Jumbotron() {
   const t = useTranslations('hero');
   const tCommon = useTranslations('common');
-  
+
   return (
     <section className="flex h-[95vh] w-full flex-col items-center justify-center pb-15">
       <FlickeringGrid
-        id="deer-hero-bg"
+        id="neos-hero-bg"
         className={`absolute inset-0 z-0 [mask-image:radial-gradient(800px_circle_at_center,white,transparent)]`}
         squareSize={4}
         gridGap={4}
@@ -25,9 +25,9 @@ export function Jumbotron() {
         flickerChance={0.1}
       />
       <FlickeringGrid
-        id="deer-hero"
-        className="absolute inset-0 z-0 translate-y-[2vh] mask-[url(/images/deer-hero.svg)] mask-size-[100vw] mask-center mask-no-repeat md:mask-size-[72vh]"
-        squareSize={3}
+        id="neos-hero"
+        className="absolute inset-0 z-0 translate-y-[2vh] mask-[url(/images/neos-wordmark.svg)] mask-size-[200vw] mask-center mask-no-repeat md:mask-size-[100vh]"
+        squareSize={6}
         gridGap={6}
         color="#60A5FA"
         maxOpacity={0.64}
