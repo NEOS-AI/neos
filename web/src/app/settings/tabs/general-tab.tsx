@@ -1,5 +1,3 @@
-// Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-// SPDX-License-Identifier: MIT
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Settings } from "lucide-react";

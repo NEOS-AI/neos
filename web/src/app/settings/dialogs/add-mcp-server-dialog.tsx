@@ -1,5 +1,3 @@
-// Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-// SPDX-License-Identifier: MIT
 
 import { Loader2 } from "lucide-react";
 import { useTranslations } from "next-intl";

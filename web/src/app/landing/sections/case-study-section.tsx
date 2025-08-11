@@ -1,5 +1,3 @@
-// Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-// SPDX-License-Identifier: MIT
 
 import { Bike, Building, Film, Github, Ham, Home, Pizza } from "lucide-react";
 import { Bot } from "lucide-react";
