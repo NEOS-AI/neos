@@ -18,8 +18,8 @@ There are many ways you can contribute to NEOS:
 1. Fork the repository
 2. Clone your fork:
    ```bash
-   git clone https://github.com/bytedance/deer-flow.git
-   cd deer-flow
+   git clone https://github.com/NEOS-AI/neos
+   cd neos
    ```
 3. Set up your development environment:
    ```bash
