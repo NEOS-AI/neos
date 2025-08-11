@@ -18,14 +18,6 @@ In this demo, we showcase how to use Neos to:
 - Conduct the Deep Research process and produce a comprehensive report with images
 - Create podcast audio based on the generated report
 
-### Replays
-
-- [How tall is Eiffel Tower compared to tallest building?](https://Neos.tech/chat?replay=eiffel-tower-vs-tallest-building)
-- [What are the top trending repositories on GitHub?](https://Neos.tech/chat?replay=github-top-trending-repo)
-- [Write an article about Nanjing's traditional dishes](https://Neos.tech/chat?replay=nanjing-traditional-dishes)
-- [How to decorate a rental apartment?](https://Neos.tech/chat?replay=rental-apartment-decoration)
-- [Visit our official website to explore more replays.](https://Neos.tech/#case-studies)
-
 ---
 
 ## 📑 Table of Contents
