@@ -1,7 +1,7 @@
 import { BadgeInfo } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
 
-import { Markdown } from "~/components/deer-flow/markdown";
+import { Markdown } from "~/components/neos/markdown";
 
 import aboutEn from "./about-en.md";
 import aboutZh from "./about-zh.md";
