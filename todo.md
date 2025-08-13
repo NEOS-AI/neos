@@ -9,3 +9,7 @@
 - [ ] [OpenWeatherMap](https://python.langchain.com/docs/integrations/tools/openweathermap/)
 - [ ] [SteamToolkit](https://python.langchain.com/docs/integrations/tools/steam/)
 - [ ] [ZenGaurd AI](https://python.langchain.com/docs/integrations/tools/zenguard/)
+
+## Frontend
+
+- [ ] [Action Search Bar](https://v0.app/community/action-search-bar-S3nMPSmpQzk)
