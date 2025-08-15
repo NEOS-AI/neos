@@ -107,7 +107,6 @@ class TavilySearchResultsWithImages(TavilySearchResults):  # type: ignore[overri
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[Union[List[Dict[str, str]], str], Dict]:
         """Use the tool."""
-        # TODO: remove try/except, should be handled by BaseTool
         try:
             raw_results = self.api_wrapper.raw_results(
                 query,

@@ -82,6 +82,7 @@ class EnhancedTavilySearchAPIWrapper(OriginalTavilySearchAPIWrapper):
         results_json_str = await fetch()
         return json.loads(results_json_str)
 
+
     def clean_results_with_images(
         self, raw_results: Dict[str, List[Dict]]
     ) -> List[Dict]:
