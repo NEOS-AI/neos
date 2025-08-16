@@ -1,7 +1,7 @@
 from langchain_community.tools import YouTubeSearchTool
 
 from neos.tools.decorators import create_logged_tool
-from neos.tools.youtube import YoutubeTranscriptTool, GoogleYoutubeTranscriptTool
+from neos.tools.youtube_api import YoutubeTranscriptTool, GoogleYoutubeTranscriptTool
 
 
 LoggedYoutubeSearchTool = create_logged_tool(YouTubeSearchTool)
