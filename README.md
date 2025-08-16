@@ -2,7 +2,7 @@
 
 > Originated from Open Source, give back to Open Source.
 
-**NEOS** (**D**eep **E**xploration and **E**fficient **R**esearch **Flow**) is a community-driven Deep Research framework that builds upon the incredible work of the open source community. Our goal is to combine language models with specialized tools for tasks like web search, crawling, and Python code execution, while giving back to the community that made this possible.
+**NEOS** is a Deep Research framework. Our goal is to combine language models with specialized tools for tasks like web search, crawling, and Python code execution, while giving back to the community that made this possible.
 
 ![system architecture](./assets/system_architecture.png)
 
@@ -545,16 +545,3 @@ We would like to extend our sincere appreciation to the following projects for t
 - **[RAGFlow](https://github.com/infiniflow/ragflow)**: We have achieved support for research on users' private knowledge bases through integration with RAGFlow.
 
 These projects exemplify the transformative power of open-source collaboration, and we are proud to build upon their foundations.
-
-### Key Contributors
-
-A heartfelt thank you goes out to the core authors of `Neos`, whose vision, passion, and dedication have brought this project to life:
-
-- **[Daniel Walnut](https://github.com/hetaoBackend/)**
-- **[Henry Li](https://github.com/magiccube/)**
-
-Your unwavering commitment and expertise have been the driving force behind Neos's success. We are honored to have you at the helm of this journey.
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=bytedance/deer-flow&type=Date)](https://star-history.com/#bytedance/deer-flow&Date)
