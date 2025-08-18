@@ -137,6 +137,7 @@ async def _astream_workflow_generator(
         if messages:
             resume_msg += f" {messages[-1]['content']}"
         input_ = Command(resume=resume_msg)
+
     async for agent, _, event_data in graph.astream(
         input_,
         config={

@@ -62,11 +62,13 @@ def get_web_search_tool(max_search_results: int):
             include_domains=include_domains,
             exclude_domains=exclude_domains,
         )
+
     elif SELECTED_SEARCH_ENGINE == SearchEngine.DUCKDUCKGO.value:
         return LoggedDuckDuckGoSearch(
             name=websearch_tool_name,
             num_results=max_search_results,
         )
+
     elif SELECTED_SEARCH_ENGINE == SearchEngine.BRAVE_SEARCH.value:
         return LoggedBraveSearch(
             name=websearch_tool_name,
@@ -75,6 +77,7 @@ def get_web_search_tool(max_search_results: int):
                 search_kwargs={"count": max_search_results},
             ),
         )
+
     elif SELECTED_SEARCH_ENGINE == SearchEngine.ARXIV.value:
         return LoggedArxivSearch(
             name=websearch_tool_name,
@@ -84,6 +87,7 @@ def get_web_search_tool(max_search_results: int):
                 load_all_available_meta=True,
             ),
         )
+
     elif SELECTED_SEARCH_ENGINE == SearchEngine.WIKIPEDIA.value:
         wiki_lang = search_config.get("wikipedia_lang", "en")
         wiki_doc_content_chars_max = search_config.get(
@@ -98,5 +102,6 @@ def get_web_search_tool(max_search_results: int):
                 doc_content_chars_max=wiki_doc_content_chars_max,
             ),
         )
+
     else:
         raise ValueError(f"Unsupported search engine: {SELECTED_SEARCH_ENGINE}")

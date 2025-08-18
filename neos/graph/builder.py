@@ -76,6 +76,7 @@ def _build_base_graph(use_cache: bool = False, cache_ttl: int = 3) -> StateGraph
 
     builder = StateGraph(State)
     builder.add_edge(START, "coordinator")
+
     builder.add_node("coordinator", coordinator_node, **config_map)
     builder.add_node("background_investigator", background_investigation_node, **config_map)
     builder.add_node("planner", planner_node, **config_map)
@@ -84,12 +85,15 @@ def _build_base_graph(use_cache: bool = False, cache_ttl: int = 3) -> StateGraph
     builder.add_node("researcher", researcher_node, **config_map)
     builder.add_node("coder", coder_node, **config_map)
     builder.add_node("human_feedback", human_feedback_node, **config_map)
+
     builder.add_edge("background_investigator", "planner")
     builder.add_conditional_edges(
         "research_team",
         continue_to_running_research_team,
         ["planner", "researcher", "coder"],
+        #TODO ["planner", "researcher", "coder", "youtube_researcher", "wikipedia_researcher"],
     )
+
     builder.add_edge("reporter", END)
     return builder
 

@@ -3,6 +3,7 @@ from typing import Any, Dict
 import os
 import httpx
 
+from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI, AzureChatOpenAI
 from langchain_deepseek import ChatDeepSeek
@@ -110,6 +111,13 @@ def _create_llm_use_conf(llm_type: LLMType, conf: Dict[str, Any]) -> BaseChatMod
     if llm_type == "reasoning":
         return ChatDeepSeek(**merged_conf)
     else:
+        if "base_url" in merged_conf and "anthropic" in merged_conf["base_url"]:
+            return ChatAnthropic(
+                model_name=merged_conf["model"],
+                api_key= merged_conf.get("api_key"),
+                base_url=merged_conf.get("base_url"),
+                max_tokens_to_sample=merged_conf.get("max_tokens", 8192),
+            )
         return ChatOpenAI(**merged_conf)
 
 

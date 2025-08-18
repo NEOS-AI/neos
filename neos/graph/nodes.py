@@ -3,7 +3,7 @@ import logging
 import os
 from typing import Annotated, Literal
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.types import Command, interrupt
@@ -102,16 +102,66 @@ def planner_node(
     if state.get("enable_background_investigation") and state.get(
         "background_investigation_results"
     ):
+        bg_inv_results = state["background_investigation_results"]
         messages += [
             {
                 "role": "user",
                 "content": (
                     "background investigation results of user query:\n"
-                    + state["background_investigation_results"]
+                    + bg_inv_results
                     + "\n"
                 ),
             }
         ]
+
+    # 메시지들에서 불필요한 필드들을 정리
+    def clean_message_content(content):
+        """메시지 content에서 불필요한 필드들을 제거"""
+        if isinstance(content, list):
+            clean_list = []
+            for item in content:
+                if isinstance(item, dict):
+                    clean_item = {k: v for k, v in item.items() 
+                                if k not in ['index', 'partial_json']}
+                    clean_list.append(clean_item)
+                else:
+                    clean_list.append(item)
+            return clean_list
+        return content
+
+    # 메시지들을 정리
+    clean_messages = []
+    for message in messages:
+        if isinstance(message, dict):
+            # 딕셔너리 형태의 메시지 처리
+            clean_msg = message.copy()
+            if 'content' in clean_msg:
+                clean_msg['content'] = clean_message_content(clean_msg['content'])
+            clean_messages.append(clean_msg)
+        elif hasattr(message, 'content'):
+            # LangChain 메시지 객체 처리
+            from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+            content = clean_message_content(message.content)
+            
+            # 메시지 타입에 따라 새로운 메시지 생성
+            if isinstance(message, AIMessage):
+                clean_messages.append(AIMessage(content=content, name=getattr(message, 'name', None)))
+            elif isinstance(message, HumanMessage):
+                clean_messages.append(HumanMessage(content=content, name=getattr(message, 'name', None)))
+            elif isinstance(message, SystemMessage):
+                clean_messages.append(SystemMessage(content=content, name=getattr(message, 'name', None)))
+            elif isinstance(message, ToolMessage):
+                clean_messages.append(ToolMessage(
+                    content=content, 
+                    tool_call_id=getattr(message, 'tool_call_id', ''),
+                    name=getattr(message, 'name', None)
+                ))
+            else:
+                clean_messages.append(message)
+        else:
+            clean_messages.append(message)
+
+    messages = clean_messages
 
     if configurable.enable_deep_thinking:
         llm = get_llm_by_type("reasoning")
@@ -129,7 +179,9 @@ def planner_node(
 
     full_response = ""
     if AGENT_LLM_MAP["planner"] == "basic" and not configurable.enable_deep_thinking:
+        print(messages)
         response = llm.invoke(messages)
+
         full_response = response.model_dump_json(indent=4, exclude_none=True)
     else:
         response = llm.stream(messages)
@@ -146,7 +198,7 @@ def planner_node(
             return Command(goto="reporter")
         else:
             return Command(goto="__end__")
-    if isinstance(curr_plan, dict) and curr_plan.get("has_enough_context"):
+    if isinstance(curr_plan, dict): #and curr_plan.get("has_enough_context"):
         logger.info("Planner response has enough context.")
         new_plan = Plan.model_validate(curr_plan)
         return Command(
@@ -222,11 +274,12 @@ def coordinator_node(
     logger.info("Coordinator talking.")
     configurable = Configuration.from_runnable_config(config)
     messages = apply_prompt_template("coordinator", state)
-    response = (
-        get_llm_by_type(AGENT_LLM_MAP["coordinator"])
-        .bind_tools([handoff_to_planner])
-        .invoke(messages)
-    )
+    print('messages (before invoking LLM):', messages)
+
+    llm = get_llm_by_type(AGENT_LLM_MAP["coordinator"])
+    
+    # 중복된 LLM 호출 제거 - 한 번만 호출
+    response = llm.bind_tools([handoff_to_planner]).invoke(messages)
     logger.debug(f"Current state messages: {state['messages']}")
 
     goto = "__end__"
@@ -250,14 +303,48 @@ def coordinator_node(
                     break
         except Exception as e:
             logger.error(f"Error processing tool calls: {e}")
+
     else:
         logger.warning(
             "Coordinator response contains no tool calls. Terminating workflow execution."
         )
         logger.debug(f"Coordinator response: {response}")
+
     messages = state.get("messages", [])
-    if response.content:
-        messages.append(HumanMessage(content=response.content, name="coordinator"))
+    
+    # Tool call이 있는 경우, tool result를 추가해야 함
+    if response.tool_calls:
+        # response.content에서 불필요한 필드들을 제거한 새로운 content 생성
+        clean_content = []
+        if response.content:
+            for content_item in response.content:
+                if isinstance(content_item, dict):
+                    # 딕셔너리인 경우 불필요한 필드 제거
+                    clean_item = {k: v for k, v in content_item.items() 
+                                if k not in ['index', 'partial_json']}
+                    clean_content.append(clean_item)
+                else:
+                    # 딕셔너리가 아닌 경우 그대로 추가
+                    clean_content.append(content_item)
+        
+        # coordinator의 tool use 메시지 추가
+        messages.append(AIMessage(content=clean_content, name="coordinator"))
+        
+        # 각 tool call에 대한 tool result 추가
+        from langchain_core.messages import ToolMessage
+        for tool_call in response.tool_calls:
+            if tool_call.get("name") == "handoff_to_planner":
+                # handoff_to_planner 도구는 실제로 실행되지 않고 신호 역할만 하므로
+                # 빈 결과를 반환
+                tool_result = ToolMessage(
+                    content="Handoff completed successfully",
+                    tool_call_id=tool_call.get("id", "")
+                )
+                messages.append(tool_result)
+    elif response.content:
+        # tool call이 없는 경우에만 일반 메시지로 추가
+        messages.append(AIMessage(content=response.content, name="coordinator"))
+
     return Command(
         update={
             "messages": messages,
