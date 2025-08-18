@@ -1,4 +1,5 @@
 import logging
+
 from neos.config.configuration import get_recursion_limit
 from neos.graph import build_graph
 
@@ -18,46 +19,6 @@ logger = logging.getLogger(__name__)
 
 # Create the graph
 graph = build_graph()
-
-
-def _get_agent_config(max_plan_iterations: int, max_step_num: int, recursion_limit: int = 100):
-    return {
-        "configurable": {
-            "thread_id": "default",
-            "max_plan_iterations": max_plan_iterations,
-            "max_step_num": max_step_num,
-            "mcp_settings": {
-                "servers": {
-                    "mcp-github-trending": {
-                        "transport": "stdio",
-                        "command": "uvx",
-                        "args": ["mcp-github-trending"],
-                        "enabled_tools": ["get_github_trending_repositories"],
-                        "add_to_agents": ["researcher"],
-                    }
-                }
-            },
-        },
-        "recursion_limit": get_recursion_limit(default=recursion_limit),
-    }
-
-
-def _get_initial_state_of_workflow(user_input: str, enable_background_investigation: bool) -> dict:
-    """Get the initial state for the workflow based on user input and configuration.
-
-    Args:
-        user_input (str): The user's query or request.
-        enable_background_investigation (bool): If True, performs web search before planning to enhance context.
-
-    Returns:
-        dict: The initial state for the workflow.
-    """
-    return {
-        # Runtime Variables
-        "messages": [{"role": "user", "content": user_input}],
-        "auto_accepted_plan": True,
-        "enable_background_investigation": enable_background_investigation,
-    }
 
 
 async def run_agent_workflow_async(
@@ -86,11 +47,31 @@ async def run_agent_workflow_async(
         enable_debug_logging()
 
     logger.info(f"Starting async workflow with user input: {user_input}")
-    initial_state = _get_initial_state_of_workflow(user_input, enable_background_investigation)
-    config = _get_agent_config(
-        max_plan_iterations, max_step_num, recursion_limit=100
-    )
-
+    initial_state = {
+        # Runtime Variables
+        "messages": [{"role": "user", "content": user_input}],
+        "auto_accepted_plan": True,
+        "enable_background_investigation": enable_background_investigation,
+    }
+    config = {
+        "configurable": {
+            "thread_id": "default",
+            "max_plan_iterations": max_plan_iterations,
+            "max_step_num": max_step_num,
+            "mcp_settings": {
+                "servers": {
+                    "mcp-github-trending": {
+                        "transport": "stdio",
+                        "command": "uvx",
+                        "args": ["mcp-github-trending"],
+                        "enabled_tools": ["get_github_trending_repositories"],
+                        "add_to_agents": ["researcher"],
+                    }
+                }
+            },
+        },
+        "recursion_limit": get_recursion_limit(default=100),
+    }
     last_message_cnt = 0
     async for s in graph.astream(
         input=initial_state, config=config, stream_mode="values"

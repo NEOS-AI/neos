@@ -1,12 +1,14 @@
-import os
-import requests
-import json
 import hashlib
 import hmac
+import json
+import os
 import urllib.parse
 from datetime import datetime
-from neos.rag.retriever import Chunk, Document, Resource, Retriever
 from urllib.parse import urlparse
+
+import requests
+
+from neos.rag.retriever import Chunk, Document, Resource, Retriever
 
 
 class VikingDBKnowledgeBaseProvider(Retriever):

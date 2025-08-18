@@ -1,5 +1,5 @@
 """
-Built-in questions for Neos.
+Built-in questions for Deer.
 """
 
 # English built-in questions

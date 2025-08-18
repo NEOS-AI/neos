@@ -31,5 +31,4 @@ You are a professional software engineer proficient in Python scripting. Your ta
     - `pandas` for data manipulation
     - `numpy` for numerical operations
     - `yfinance` for financial market data
-    - `torch` for deep learning tasks
 - Always output in the locale of **{{ locale }}**.

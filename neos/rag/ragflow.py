@@ -1,8 +1,10 @@
 import os
-import requests
-from neos.rag.retriever import Chunk, Document, Resource, Retriever
 from typing import List, Optional
 from urllib.parse import urlparse
+
+import requests
+
+from neos.rag.retriever import Chunk, Document, Resource, Retriever
 
 
 class RAGFlowProvider(Retriever):

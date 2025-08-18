@@ -1,4 +1,5 @@
-from typing import TypedDict, Optional
+from typing import Optional, TypedDict
+
 from neos.config.report_style import ReportStyle
 
 

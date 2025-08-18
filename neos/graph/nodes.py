@@ -3,30 +3,29 @@ import logging
 import os
 from typing import Annotated, Literal
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from langgraph.types import Command, interrupt
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.types import Command, interrupt
 
 from neos.agents import create_agent
-from neos.tools.search import LoggedTavilySearch
-from neos.tools import (
-    crawl_tool,
-    get_web_search_tool,
-    get_retriever_tool,
-    python_repl_sandbox_tool,
-)
-
 from neos.config.agents import AGENT_LLM_MAP
 from neos.config.configuration import Configuration
 from neos.llms.llm import get_llm_by_type
 from neos.prompts.planner_model import Plan
 from neos.prompts.template import apply_prompt_template
+from neos.tools import (
+    crawl_tool,
+    get_retriever_tool,
+    get_web_search_tool,
+    python_repl_tool,
+)
+from neos.tools.search import LoggedTavilySearch
 from neos.utils.json_utils import repair_json_output
 
-from .types import State
 from ..config import SELECTED_SEARCH_ENGINE, SearchEngine
+from .types import State
 
 logger = logging.getLogger(__name__)
 
@@ -34,15 +33,9 @@ logger = logging.getLogger(__name__)
 @tool
 def handoff_to_planner(
     research_topic: Annotated[str, "The topic of the research task to be handed off."],
-    locale: Annotated[str, "The user's detected language locale (e.g., en-US, ko-KR)."],
-) -> None:
-    """
-    Handoff to planner agent to do plan.
-    This tool is used to signal the planner agent to take over the task.
-    Args:
-        research_topic (str): The topic of the research task to be handed off.
-        locale (str): The user's detected language locale (e.g., en-US, ko-KR).
-    """
+    locale: Annotated[str, "The user's detected language locale (e.g., en-US, zh-CN)."],
+):
+    """Handoff to planner agent to do plan."""
     # This tool is not returning anything: we're just using it
     # as a way for LLM to signal that it needs to hand off to planner agent
     logger.info(
@@ -56,15 +49,10 @@ def background_investigation_node(state: State, config: RunnableConfig):
     configurable = Configuration.from_runnable_config(config)
     query = state.get("research_topic")
     background_investigation_results = None
-
-    logger.info(
-        f" > Using {SELECTED_SEARCH_ENGINE} for background investigation."
-    )
     if SELECTED_SEARCH_ENGINE == SearchEngine.TAVILY.value:
         searched_content = LoggedTavilySearch(
             max_results=configurable.max_search_results
         ).invoke(query)
-
         if isinstance(searched_content, list):
             background_investigation_results = [
                 f"## {elem['title']}\n\n{elem['content']}" for elem in searched_content
@@ -82,7 +70,6 @@ def background_investigation_node(state: State, config: RunnableConfig):
         background_investigation_results = get_web_search_tool(
             configurable.max_search_results
         ).invoke(query)
-
     return {
         "background_investigation_results": json.dumps(
             background_investigation_results, ensure_ascii=False
@@ -198,7 +185,7 @@ def planner_node(
             return Command(goto="reporter")
         else:
             return Command(goto="__end__")
-    if isinstance(curr_plan, dict): #and curr_plan.get("has_enough_context"):
+    if isinstance(curr_plan, dict): # and curr_plan.get("has_enough_context"):
         logger.info("Planner response has enough context.")
         new_plan = Plan.model_validate(curr_plan)
         return Command(
@@ -602,5 +589,5 @@ async def coder_node(
         state,
         config,
         "coder",
-        [python_repl_sandbox_tool],
+        [python_repl_tool],
     )

@@ -2,8 +2,8 @@ from typing import List, Optional, Union
 
 from pydantic import BaseModel, Field
 
-from neos.rag.retriever import Resource
 from neos.config.report_style import ReportStyle
+from neos.rag.retriever import Resource
 
 
 class ContentItem(BaseModel):

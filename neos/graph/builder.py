@@ -1,34 +1,22 @@
-from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import CachePolicy
+from langgraph.graph import END, START, StateGraph
 
 from neos.prompts.planner_model import StepType
 
-from .types import State
 from .nodes import (
+    background_investigation_node,
+    coder_node,
     coordinator_node,
+    human_feedback_node,
     planner_node,
     reporter_node,
     research_team_node,
     researcher_node,
-    coder_node,
-    human_feedback_node,
-    background_investigation_node,
 )
+from .types import State
 
 
-def continue_to_running_research_team(state: State) -> str:
-    """
-    Determine the next node based on the current state of the research team.
-    If the current plan is empty or all steps are executed, continue to planner.
-    If there are incomplete steps, return the first incomplete step's type.
-
-    Args:
-        state (State): The current state of the workflow.
-
-    Returns:
-        str: The next node to transition to.
-    """
+def continue_to_running_research_team(state: State):
     current_plan = state.get("current_plan")
     if not current_plan or not current_plan.steps:
         return "planner"
@@ -50,50 +38,27 @@ def continue_to_running_research_team(state: State) -> str:
         return "researcher"
     if incomplete_step.step_type == StepType.PROCESSING:
         return "coder"
-    if incomplete_step.step_type == StepType.WEB_FE_CODING:
-        return "react_coder"
     return "planner"
 
 
-def _build_base_graph(use_cache: bool = False, cache_ttl: int = 3) -> StateGraph:
-    """
-    Build and return the base state graph with all nodes and edges.
-    This graph includes the coordinator, planner, reporter, research team,
-    researcher, coder, human feedback, and background investigation nodes.
-    It defines the workflow for handling user queries and coordinating tasks
-    among different roles in the agent system.
-
-    Args:
-        use_cache (bool): If True, enables caching for the graph.
-        cache_ttl (int): Time-to-live for the cache in seconds.
-
-    Returns:
-        StateGraph: The constructed state graph with all nodes and edges.
-    """
-    config_map = {}
-    if use_cache:
-        config_map['cache_policy'] = CachePolicy(ttl=cache_ttl)
-
+def _build_base_graph():
+    """Build and return the base state graph with all nodes and edges."""
     builder = StateGraph(State)
     builder.add_edge(START, "coordinator")
-
-    builder.add_node("coordinator", coordinator_node, **config_map)
-    builder.add_node("background_investigator", background_investigation_node, **config_map)
-    builder.add_node("planner", planner_node, **config_map)
-    builder.add_node("reporter", reporter_node, **config_map)
-    builder.add_node("research_team", research_team_node, **config_map)
-    builder.add_node("researcher", researcher_node, **config_map)
-    builder.add_node("coder", coder_node, **config_map)
-    builder.add_node("human_feedback", human_feedback_node, **config_map)
-
+    builder.add_node("coordinator", coordinator_node)
+    builder.add_node("background_investigator", background_investigation_node)
+    builder.add_node("planner", planner_node)
+    builder.add_node("reporter", reporter_node)
+    builder.add_node("research_team", research_team_node)
+    builder.add_node("researcher", researcher_node)
+    builder.add_node("coder", coder_node)
+    builder.add_node("human_feedback", human_feedback_node)
     builder.add_edge("background_investigator", "planner")
     builder.add_conditional_edges(
         "research_team",
         continue_to_running_research_team,
         ["planner", "researcher", "coder"],
-        #TODO ["planner", "researcher", "coder", "youtube_researcher", "wikipedia_researcher"],
     )
-
     builder.add_edge("reporter", END)
     return builder
 
@@ -116,7 +81,4 @@ def build_graph():
     return builder.compile()
 
 
-if __name__ == "__main__":
-    # This is just for testing purposes, not used in production
-    graph = build_graph()
-    print("Graph built successfully.")
+graph = build_graph()

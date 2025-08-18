@@ -4,8 +4,8 @@ from langchain.schema import HumanMessage, SystemMessage
 
 from neos.config.agents import AGENT_LLM_MAP
 from neos.llms.llm import get_llm_by_type
-from neos.prose.graph.state import ProseState
 from neos.prompts.template import get_prompt_template
+from neos.prose.graph.state import ProseState
 
 logger = logging.getLogger(__name__)
 

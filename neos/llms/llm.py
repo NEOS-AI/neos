@@ -1,18 +1,17 @@
-from pathlib import Path
-from typing import Any, Dict
 import os
+from pathlib import Path
+from typing import Any, Dict, get_args
+
 import httpx
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI, AzureChatOpenAI
 from langchain_deepseek import ChatDeepSeek
-from langchain_aws import ChatBedrockConverse
-import boto3
-from typing import get_args
 
 from neos.config import load_yaml_config
 from neos.config.agents import LLMType
+from neos.llms.providers.dashscope import ChatDashscope
 
 # Cache for LLM instances
 _llm_cache: dict[LLMType, BaseChatModel] = {}
@@ -22,9 +21,6 @@ def _get_config_file_path() -> str:
     """Get the path to the configuration file."""
     return str((Path(__file__).parent.parent.parent / "conf.yaml").resolve())
 
-def _get_bedrock_config_file_path() -> str:
-    """Get the path to the Bedrock configuration file."""
-    return str((Path(__file__).parent.parent.parent / "bedrock_conf.yaml").resolve())
 
 def _get_llm_type_config_keys() -> dict[str, str]:
     """Get mapping of LLM types to their configuration keys."""
@@ -32,6 +28,7 @@ def _get_llm_type_config_keys() -> dict[str, str]:
         "reasoning": "REASONING_MODEL",
         "basic": "BASIC_MODEL",
         "vision": "VISION_MODEL",
+        "code": "CODE_MODEL",
     }
 
 
@@ -75,9 +72,6 @@ def _create_llm_use_conf(llm_type: LLMType, conf: Dict[str, Any]) -> BaseChatMod
     if "max_retries" not in merged_conf:
         merged_conf["max_retries"] = 3
 
-    if llm_type == "reasoning":
-        merged_conf["api_base"] = merged_conf.pop("base_url", None)
-
     # Handle SSL verification settings
     verify_ssl = merged_conf.pop("verify_ssl", True)
 
@@ -91,24 +85,16 @@ def _create_llm_use_conf(llm_type: LLMType, conf: Dict[str, Any]) -> BaseChatMod
     if "azure_endpoint" in merged_conf or os.getenv("AZURE_OPENAI_ENDPOINT"):
         return AzureChatOpenAI(**merged_conf)
 
-    # Support for Bedrock models
-    if "amazonaws.com" in merged_conf['base_url']:
-        # Load Bedrock configuration from file
-        bedrock_conf = load_yaml_config(_get_bedrock_config_file_path())
-        merged_conf['bedrock_config'] = bedrock_conf.get("BEDROCK", {})
-        BEDROCK_REGION = merged_conf['bedrock_config'].get("BEDROCK_REGION", "us-east-1")
-        MAX_TOKENS = merged_conf['bedrock_config'].get("MAX_TOKENS", 4096)
-
-        bedrock_client = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
-
-        return ChatBedrockConverse(
-            model=merged_conf["model"],
-            temperature=0,
-            max_tokens=MAX_TOKENS,
-            client=bedrock_client,
-        )
+    # Check if base_url is dashscope endpoint
+    if "base_url" in merged_conf and "dashscope." in merged_conf["base_url"]:
+        if llm_type == "reasoning":
+            merged_conf["extra_body"] = {"enable_thinking": True}
+        else:
+            merged_conf["extra_body"] = {"enable_thinking": False}
+        return ChatDashscope(**merged_conf)
 
     if llm_type == "reasoning":
+        merged_conf["api_base"] = merged_conf.pop("base_url", None)
         return ChatDeepSeek(**merged_conf)
     else:
         if "base_url" in merged_conf and "anthropic" in merged_conf["base_url"]:
@@ -121,9 +107,7 @@ def _create_llm_use_conf(llm_type: LLMType, conf: Dict[str, Any]) -> BaseChatMod
         return ChatOpenAI(**merged_conf)
 
 
-def get_llm_by_type(
-    llm_type: LLMType,
-) -> BaseChatModel:
+def get_llm_by_type(llm_type: LLMType) -> BaseChatModel:
     """
     Get LLM instance by type. Returns cached instance if available.
     """

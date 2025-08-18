@@ -1,7 +1,7 @@
 from neos.config.tools import SELECTED_RAG_PROVIDER, RAGProvider
 from neos.rag.ragflow import RAGFlowProvider
-from neos.rag.vikingdb_knowledge_base import VikingDBKnowledgeBaseProvider
 from neos.rag.retriever import Retriever
+from neos.rag.vikingdb_knowledge_base import VikingDBKnowledgeBaseProvider
 
 
 def build_retriever() -> Retriever | None:

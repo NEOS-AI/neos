@@ -1,10 +1,11 @@
+# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
 import json
 from typing import Dict, List, Optional
 
 import aiohttp
 import requests
-from langchain_community.utilities.tavily_search import TAVILY_API_URL
-from langchain_community.utilities.tavily_search import (
+from langchain_tavily._utilities import TAVILY_API_URL
+from langchain_tavily.tavily_search import (
     TavilySearchAPIWrapper as OriginalTavilySearchAPIWrapper,
 )
 
@@ -41,7 +42,6 @@ class EnhancedTavilySearchAPIWrapper(OriginalTavilySearchAPIWrapper):
         )
         response.raise_for_status()
         return response.json()
-
 
     async def raw_results_async(
         self,
@@ -81,7 +81,6 @@ class EnhancedTavilySearchAPIWrapper(OriginalTavilySearchAPIWrapper):
 
         results_json_str = await fetch()
         return json.loads(results_json_str)
-
 
     def clean_results_with_images(
         self, raw_results: Dict[str, List[Dict]]

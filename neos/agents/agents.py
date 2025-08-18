@@ -1,8 +1,8 @@
 from langgraph.prebuilt import create_react_agent
 
-from neos.prompts import apply_prompt_template
-from neos.llms.llm import get_llm_by_type
 from neos.config.agents import AGENT_LLM_MAP
+from neos.llms.llm import get_llm_by_type
+from neos.prompts import apply_prompt_template
 
 
 # Create agents using configured LLM types
