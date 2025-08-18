@@ -89,6 +89,24 @@ wheels = [
 ]
 
 [[package]]
+name = "anthropic"
+version = "0.64.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d8/4f/f2b880cba1a76f3acc7d5eb2ae217632eac1b8cef5ed3027493545c59eba/anthropic-0.64.0.tar.gz", hash = "sha256:3d496c91a63dff64f451b3e8e4b238a9640bf87b0c11d0b74ddc372ba5a3fe58", size = 427893, upload-time = "2025-08-13T17:09:49.915Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a9/b2/2d268bcd5d6441df9dc0ebebc67107657edb8b0150d3fda1a5b81d1bec45/anthropic-0.64.0-py3-none-any.whl", hash = "sha256:6f5f7d913a6a95eb7f8e1bda4e75f76670e8acd8d4cd965e02e2a256b0429dd1", size = 297244, upload-time = "2025-08-13T17:09:47.908Z" },
+]
+
+[[package]]
 name = "anyio"
 version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1099,6 +1117,20 @@ wheels = [
 ]
 
 [[package]]
+name = "langchain-anthropic"
+version = "0.3.18"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anthropic" },
+    { name = "langchain-core" },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/67/2c/7da4fc946ee9b6b1fc629c165a15413f73705be9cac2e477736a22eeaae0/langchain_anthropic-0.3.18.tar.gz", hash = "sha256:f18970ae58fc4d79c8431dd67f8ab777de5e6d2f92285c8c9af1999cd126fb0a", size = 276719, upload-time = "2025-07-28T21:14:25.964Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2b/e2/980619565df5045cec91eb978019a4ea66247ccd1f06589fb2a5f576acc5/langchain_anthropic-0.3.18-py3-none-any.whl", hash = "sha256:1be6ece317f08b3d780671fd4425b1dd05fd291a751e3debe3d4704bcf785082", size = 29817, upload-time = "2025-07-28T21:14:24.556Z" },
+]
+
+[[package]]
 name = "langchain-aws"
 version = "0.2.30"
 source = { registry = "https://pypi.org/simple" }
@@ -1651,8 +1683,10 @@ dependencies = [
     { name = "inquirerpy" },
     { name = "jinja2" },
     { name = "json-repair" },
+    { name = "langchain-anthropic" },
     { name = "langchain-aws" },
     { name = "langchain-community" },
+    { name = "langchain-core" },
     { name = "langchain-deepseek" },
     { name = "langchain-experimental" },
     { name = "langchain-mcp-adapters" },
@@ -1702,8 +1736,10 @@ requires-dist = [
     { name = "inquirerpy", specifier = ">=0.3.4" },
     { name = "jinja2", specifier = ">=3.1.3" },
     { name = "json-repair", specifier = ">=0.7.0" },
+    { name = "langchain-anthropic", specifier = ">=0.3.18" },
     { name = "langchain-aws", specifier = ">=0.2.30" },
     { name = "langchain-community", specifier = ">=0.3.19" },
+    { name = "langchain-core", specifier = ">=0.3.74" },
     { name = "langchain-deepseek", specifier = ">=0.1.3" },
     { name = "langchain-experimental", specifier = ">=0.3.4" },
     { name = "langchain-mcp-adapters", specifier = ">=0.0.9" },
