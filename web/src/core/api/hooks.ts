@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { env } from "~/env";
+import { env } from "@/env";
 
 import type { DeerFlowConfig } from "../config";
 import { useReplay } from "../replay";

@@ -8,8 +8,8 @@ import {
 } from "react";
 import { useStickToBottom } from "use-stick-to-bottom";
 
-import { ScrollArea } from "~/components/ui/scroll-area";
-import { cn } from "~/lib/utils";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { cn } from "@/lib/utils";
 
 export interface ScrollContainerProps {
   className?: string;

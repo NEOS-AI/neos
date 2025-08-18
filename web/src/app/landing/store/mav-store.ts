@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import { sleep } from "~/core/utils";
+import { sleep } from "@/core/utils";
 
 import { graph, type Graph } from "./graph";
 import { playbook } from "./playbook";

@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { useTranslations } from "next-intl";
 
-import { cn } from "~/lib/utils";
+import { cn } from "@/lib/utils";
 
 export function Welcome({ className }: { className?: string }) {
   const t = useTranslations("chat.welcome");

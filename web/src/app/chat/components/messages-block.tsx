@@ -3,21 +3,21 @@ import { FastForward, Play } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useCallback, useRef, useState } from "react";
 
-import { RainbowText } from "~/components/deer-flow/rainbow-text";
-import { Button } from "~/components/ui/button";
+import { RainbowText } from "@/components/deer-flow/rainbow-text";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "~/components/ui/card";
-import { fastForwardReplay } from "~/core/api";
-import { useReplayMetadata } from "~/core/api/hooks";
-import type { Option, Resource } from "~/core/messages";
-import { useReplay } from "~/core/replay";
-import { sendMessage, useMessageIds, useStore } from "~/core/store";
-import { env } from "~/env";
-import { cn } from "~/lib/utils";
+} from "@/components/ui/card";
+import { fastForwardReplay } from "@/core/api";
+import { useReplayMetadata } from "@/core/api/hooks";
+import type { Option, Resource } from "@/core/messages";
+import { useReplay } from "@/core/replay";
+import { sendMessage, useMessageIds, useStore } from "@/core/store";
+import { env } from "@/env";
+import { cn } from "@/lib/utils";
 
 import { ConversationStarter } from "./conversation-starter";
 import { InputBox } from "./input-box";

@@ -9,24 +9,24 @@ import SyntaxHighlighter from "react-syntax-highlighter";
 import { docco } from "react-syntax-highlighter/dist/esm/styles/hljs";
 import { dark } from "react-syntax-highlighter/dist/esm/styles/prism";
 
-import { FavIcon } from "~/components/deer-flow/fav-icon";
-import Image from "~/components/deer-flow/image";
-import { LoadingAnimation } from "~/components/deer-flow/loading-animation";
-import { Markdown } from "~/components/deer-flow/markdown";
-import { RainbowText } from "~/components/deer-flow/rainbow-text";
-import { Tooltip } from "~/components/deer-flow/tooltip";
+import { FavIcon } from "@/components/deer-flow/fav-icon";
+import Image from "@/components/deer-flow/image";
+import { LoadingAnimation } from "@/components/deer-flow/loading-animation";
+import { Markdown } from "@/components/deer-flow/markdown";
+import { RainbowText } from "@/components/deer-flow/rainbow-text";
+import { Tooltip } from "@/components/deer-flow/tooltip";
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
-} from "~/components/ui/accordion";
-import { Skeleton } from "~/components/ui/skeleton";
-import { findMCPTool } from "~/core/mcp";
-import type { ToolCallRuntime } from "~/core/messages";
-import { useMessage, useStore } from "~/core/store";
-import { parseJSON } from "~/core/utils";
-import { cn } from "~/lib/utils";
+} from "@/components/ui/accordion";
+import { Skeleton } from "@/components/ui/skeleton";
+import { findMCPTool } from "@/core/mcp";
+import type { ToolCallRuntime } from "@/core/messages";
+import { useMessage, useStore } from "@/core/store";
+import { parseJSON } from "@/core/utils";
+import { cn } from "@/lib/utils";
 
 export function ResearchActivitiesBlock({
   className,

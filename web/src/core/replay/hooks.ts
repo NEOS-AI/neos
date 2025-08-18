@@ -1,7 +1,7 @@
 import { useSearchParams } from "next/navigation";
 import { useMemo } from "react";
 
-import { env } from "~/env";
+import { env } from "@/env";
 
 import { extractReplayIdFromSearchParams } from "./get-replay-id";
 

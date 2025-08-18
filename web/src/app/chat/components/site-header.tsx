@@ -2,10 +2,10 @@ import { StarFilledIcon } from "@radix-ui/react-icons";
 // import Link from "next/link";
 import { useTranslations } from 'next-intl';
 
-import { LanguageSwitcher } from "~/components/deer-flow/language-switcher";
-import { NumberTicker } from "~/components/magicui/number-ticker";
-// import { Button } from "~/components/ui/button";
-import { env } from "~/env";
+import { LanguageSwitcher } from "@/components/deer-flow/language-switcher";
+import { NumberTicker } from "@/components/magicui/number-ticker";
+// import { Button } from "@/components/ui/button";
+import { env } from "@/env";
 
 
 export function SiteHeader() {
