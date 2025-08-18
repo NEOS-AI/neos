@@ -1,9 +1,8 @@
-
 import { Bike, Building, Film, Github, Ham, Home, Pizza } from "lucide-react";
 import { Bot } from "lucide-react";
 import { useTranslations } from "next-intl";
 
-import { BentoCard } from "@/components/magicui/bento-grid";
+import { BentoCard } from "~/components/magicui/bento-grid";
 
 import { SectionHeader } from "../components/section-header";
 

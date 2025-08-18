@@ -1,4 +1,3 @@
-
 import {
   AIHighlight,
   CharacterCount,

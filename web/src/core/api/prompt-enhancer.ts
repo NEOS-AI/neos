@@ -1,4 +1,3 @@
-
 import { resolveServiceURL } from "./resolve-service-url";
 
 export interface EnhancePromptRequest {

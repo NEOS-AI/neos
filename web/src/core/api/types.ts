@@ -1,4 +1,3 @@
-
 import type { Option } from "../messages";
 
 // Tool Calls

@@ -1,8 +1,7 @@
-
 import { motion } from "framer-motion";
 import { useTranslations } from "next-intl";
 
-import { cn } from "@/lib/utils";
+import { cn } from "~/lib/utils";
 
 import { Welcome } from "./welcome";
 

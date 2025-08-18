@@ -4,24 +4,23 @@ import { ArrowUp, Lightbulb, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import { Detective } from "@/components/neos/icons/detective";
+import { Detective } from "~/components/deer-flow/icons/detective";
 import MessageInput, {
   type MessageInputRef,
-} from "@/components/neos/message-input";
-import { ReportStyleDialog } from "@/components/neos/report-style-dialog";
-import { Tooltip } from "@/components/neos/tooltip";
-import { BorderBeam } from "@/components/magicui/border-beam";
-import { Button } from "@/components/ui/button";
-import { enhancePrompt } from "@/core/api";
-import { useConfig } from "@/core/api/hooks";
-import type { Option, Resource } from "@/core/messages";
+} from "~/components/deer-flow/message-input";
+import { ReportStyleDialog } from "~/components/deer-flow/report-style-dialog";
+import { Tooltip } from "~/components/deer-flow/tooltip";
+import { BorderBeam } from "~/components/magicui/border-beam";
+import { Button } from "~/components/ui/button";
+import { enhancePrompt } from "~/core/api";
+import { useConfig } from "~/core/api/hooks";
+import type { Option, Resource } from "~/core/messages";
 import {
   setEnableDeepThinking,
   setEnableBackgroundInvestigation,
   useSettingsStore,
-} from "@/core/store";
-import { cn } from "@/lib/utils";
-
+} from "~/core/store";
+import { cn } from "~/lib/utils";
 
 export function InputBox({
   className,

@@ -12,6 +12,7 @@ import {
 import { Command, createSuggestionItems, renderItems } from "novel";
 // import { uploadFn } from "./image-upload";
 
+
 export const suggestionItems = createSuggestionItems([
   {
     title: "Text",

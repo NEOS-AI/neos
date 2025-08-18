@@ -1,12 +1,16 @@
-# Neos Web UI
+# 🦌 DeerFlow Web UI
 
-This is the web UI for [`Neos`](https://github.com/NEOS-AI/neos).
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+> Originated from Open Source, give back to Open Source.
+
+This is the web UI for [`DeerFlow`](https://github.com/bytedance/deer-flow).
 
 ## Quick Start
 
 ### Prerequisites
 
-- [`Neos`](https://github.com/NEOS-AI/neos)
+- [`DeerFlow`](https://github.com/bytedance/deer-flow)
 - Node.js (v22.14.0+)
 - pnpm (v10.6.2+) as package manager
 
@@ -24,7 +28,7 @@ cp .env.example .env
 
 ## How to Install
 
-Neos Web UI uses `pnpm` as its package manager.
+DeerFlow Web UI uses `pnpm` as its package manager.
 To install the dependencies, run:
 
 ```bash
@@ -94,7 +98,7 @@ This project is open source and available under the [MIT License](../LICENSE).
 ## Acknowledgments
 
 We extend our heartfelt gratitude to the open source community for their invaluable contributions.
-Neos is built upon the foundation of these outstanding projects:
+DeerFlow is built upon the foundation of these outstanding projects:
 
 In particular, we want to express our deep appreciation for:
 
@@ -105,4 +109,4 @@ In particular, we want to express our deep appreciation for:
 - [React Markdown](https://www.npmjs.com/package/react-markdown) for their exceptional markdown rendering and customizability
 - Last but not least, special thanks to [SToneX](https://github.com/stonexer) for his great contribution for [token-by-token visual effect](./src/core/rehype/rehype-split-words-into-spans.ts)
 
-These outstanding projects form the backbone of Neos and exemplify the transformative power of open source collaboration.
+These outstanding projects form the backbone of DeerFlow and exemplify the transformative power of open source collaboration.

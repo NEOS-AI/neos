@@ -1,5 +1,4 @@
-
-import "@/styles/globals.css";
+import "~/styles/globals.css";
 
 import { type Metadata } from "next";
 import { Geist } from "next/font/google";
@@ -7,13 +6,13 @@ import Script from "next/script";
 import { NextIntlClientProvider } from 'next-intl';
 import { getLocale, getMessages } from 'next-intl/server';
 
-import { ThemeProviderWrapper } from "@/components/neos/theme-provider-wrapper";
-import { env } from "@/env";
+import { ThemeProviderWrapper } from "~/components/deer-flow/theme-provider-wrapper";
+import { env } from "~/env";
 
-import { Toaster } from "../components/neos/toaster";
+import { Toaster } from "../components/deer-flow/toaster";
 
 export const metadata: Metadata = {
-  title: "Neos Neos",
+  title: "🦌 DeerFlow",
   description:
     "Deep Exploration and Efficient Research, an AI tool that combines language models with specialized tools for research tasks.",
   icons: [{ rel: "icon", url: "/favicon.ico" }],

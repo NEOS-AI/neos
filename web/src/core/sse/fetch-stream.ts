@@ -1,4 +1,3 @@
-
 import { type StreamEvent } from "./StreamEvent";
 
 export async function* fetchStream(

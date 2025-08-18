@@ -1,4 +1,3 @@
-
 import { FlatCompat } from "@eslint/eslintrc";
 import tseslint from "typescript-eslint";
 
@@ -57,7 +56,7 @@ export default tseslint.config(
           ],
           pathGroups: [
             {
-              pattern: "@/**",
+              pattern: "~/**",
               group: "internal",
             },
             {

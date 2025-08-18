@@ -1,4 +1,3 @@
-
 import type { Element, Root, ElementContent } from "hast";
 import { visit } from "unist-util-visit";
 import type { BuildVisitor } from "unist-util-visit";

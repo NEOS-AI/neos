@@ -1,4 +1,3 @@
-
 export interface MCPToolMetadata {
   name: string;
   description: string;

@@ -6,10 +6,11 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Suspense } from "react";
 
-import { Button } from "@/components/ui/button";
-import { Logo } from "@/components/neos/logo";
-import { ThemeToggle } from "@/components/neos/theme-toggle";
-import { Tooltip } from "@/components/neos/tooltip";
+import { Button } from "~/components/ui/button";
+
+import { Logo } from "../../components/neos/logo";
+import { ThemeToggle } from "../../components/neos/theme-toggle";
+import { Tooltip } from "../../components/neos/tooltip";
 import { SettingsDialog } from "../settings/dialogs/settings-dialog";
 
 

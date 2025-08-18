@@ -1,4 +1,3 @@
-
 import { useSettingsStore } from "../store";
 
 export function findMCPTool(name: string) {

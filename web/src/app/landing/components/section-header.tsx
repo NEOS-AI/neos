@@ -1,4 +1,3 @@
-
 export function SectionHeader({
   anchor,
   title,

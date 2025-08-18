@@ -1,4 +1,3 @@
-
 import type { SimpleMCPServerMetadata } from "../mcp";
 
 import { resolveServiceURL } from "./resolve-service-url";

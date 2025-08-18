@@ -1,9 +1,8 @@
-
 import { useEffect, useRef, useState } from "react";
 
-import { env } from "@/env";
+import { env } from "~/env";
 
-import type { NeosConfig } from "../config";
+import type { DeerFlowConfig } from "../config";
 import { useReplay } from "../replay";
 
 import { fetchReplayTitle } from "./chat";
@@ -27,13 +26,13 @@ export function useReplayMetadata() {
         setError(false);
         setTitle(title ?? null);
         if (title) {
-          document.title = `${title} - Neos`;
+          document.title = `${title} - DeerFlow`;
         }
       })
       .catch(() => {
         setError(true);
         setTitle("Error: the replay is not available.");
-        document.title = "Neos";
+        document.title = "DeerFlow";
       })
       .finally(() => {
         isLoading.current = false;
@@ -43,11 +42,11 @@ export function useReplayMetadata() {
 }
 
 export function useConfig(): {
-  config: NeosConfig | null;
+  config: DeerFlowConfig | null;
   loading: boolean;
 } {
   const [loading, setLoading] = useState(true);
-  const [config, setConfig] = useState<NeosConfig | null>(null);
+  const [config, setConfig] = useState<DeerFlowConfig | null>(null);
 
   useEffect(() => {
     if (env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY) {

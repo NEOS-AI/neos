@@ -7,7 +7,7 @@ export interface RagConfig {
   provider: string;
 }
 
-export interface NeosConfig {
+export interface DeerFlowConfig {
   rag: RagConfig;
   models: ModelConfig;
 }

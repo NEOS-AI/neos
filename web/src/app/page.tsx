@@ -1,4 +1,3 @@
-
 import { useTranslations } from 'next-intl';
 import { useMemo } from "react";
 
