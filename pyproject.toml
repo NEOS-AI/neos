@@ -45,6 +45,8 @@ dependencies = [
     "google-auth-oauthlib>=1.2.2",
     "langchain-anthropic>=0.3.18",
     "langchain-core>=0.3.74",
+    "langgraph-checkpoint-mongodb>=0.1.4",
+    "langchain-tavily>=0.2.11",
 ]
 
 [project.optional-dependencies]
