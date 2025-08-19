@@ -207,10 +207,35 @@ async def _process_message_chunk(message_chunk, message_metadata, thread_id, age
         message_chunk, message_metadata, thread_id, agent_name
     )
 
+    # When the message content is empty and response metadata indicates completion,
+    # we create a completion event.
+    if (
+        message_chunk.content == "" and 
+        message_chunk.response_metadata.get("stop_reason") and
+        hasattr(message_chunk, 'usage_metadata') and message_chunk.usage_metadata
+    ):
+        # 응답 완료 이벤트 생성
+        completion_event = {
+            "thread_id": thread_id,
+            "agent": agent_name,
+            "id": message_chunk.id,
+            "role": "assistant",
+            "checkpoint_ns": event_stream_message.get("checkpoint_ns", ""),
+            "langgraph_node": event_stream_message.get("langgraph_node", ""),
+            "langgraph_path": event_stream_message.get("langgraph_path", ""),
+            "langgraph_step": event_stream_message.get("langgraph_step", ""),
+            "finish_reason": message_chunk.response_metadata.get("stop_reason", "end_turn"),
+            "usage_metadata": message_chunk.usage_metadata,
+            "status": "completed"
+        }
+        yield _make_event("response_completed", completion_event)
+
+
     if isinstance(message_chunk, ToolMessage):
         # Tool Message - Return the result of the tool call
         event_stream_message["tool_call_id"] = message_chunk.tool_call_id
         yield _make_event("tool_call_result", event_stream_message)
+
     elif isinstance(message_chunk, AIMessageChunk):
         # AI Message - Raw message tokens
         if message_chunk.tool_calls:
@@ -221,12 +246,14 @@ async def _process_message_chunk(message_chunk, message_metadata, thread_id, age
                 message_chunk.tool_call_chunks
             )
             yield _make_event("tool_calls", event_stream_message)
+
         elif message_chunk.tool_call_chunks:
             # AI Message - Tool Call Chunks
             event_stream_message["tool_call_chunks"] = _process_tool_call_chunks(
                 message_chunk.tool_call_chunks
             )
             yield _make_event("tool_call_chunks", event_stream_message)
+
         else:
             # AI Message - Raw message tokens
             yield _make_event("message_chunk", event_stream_message)
@@ -239,7 +266,7 @@ async def _stream_graph_events(
     async for agent, _, event_data in graph_instance.astream(
         workflow_input,
         config=workflow_config,
-        stream_mode=["messages", "updates"],
+        stream_mode=["messages", "updates", "values"],
         subgraphs=True,
     ):
         if isinstance(event_data, dict):
@@ -255,6 +282,7 @@ async def _stream_graph_events(
             message_chunk, message_metadata, thread_id, agent
         ):
             yield event
+            #TODO
 
 
 async def _astream_workflow_generator(
@@ -309,12 +337,14 @@ async def _astream_workflow_generator(
 
     checkpoint_saver = get_bool_env("LANGGRAPH_CHECKPOINT_SAVER", False)
     checkpoint_url = get_str_env("LANGGRAPH_CHECKPOINT_DB_URL", "")
+
     # Handle checkpointer if configured
     connection_kwargs = {
         "autocommit": True,
         "row_factory": "dict_row",
         "prepare_threshold": 0,
     }
+
     if checkpoint_saver and checkpoint_url != "":
         if checkpoint_url.startswith("postgresql://"):
             logger.info("start async postgres checkpointer.")
@@ -346,6 +376,7 @@ async def _astream_workflow_generator(
         async for event in _stream_graph_events(
             graph, workflow_input, workflow_config, thread_id
         ):
+            logger.debug(f"Yielding event: {event}")
             yield event
 
 

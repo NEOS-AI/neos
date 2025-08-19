@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { ResearchActivitiesBlock } from "./research-activities-block";
 import { ResearchReportBlock } from "./research-report-block";
 
+
 export function ResearchBlock({
   className,
   researchId = null,

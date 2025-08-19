@@ -57,7 +57,7 @@ export function Jumbotron() {
               {tCommon('getStarted')} <ChevronRight />
             </Link>
           </Button>
-          {!env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY && (
+          {/* {!env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY && (
             <Button
               className="w-42 text-lg"
               size="lg"
@@ -65,14 +65,14 @@ export function Jumbotron() {
               asChild
             >
               <Link
-                href="https://github.com/bytedance/deer-flow"
+                href="https://github.com/NEOS-AI/neos"
                 target="_blank"
               >
                 <GithubFilled />
                 {tCommon('learnMore')}
               </Link>
             </Button>
-          )}
+          )} */}
         </div>
       </div>
       <div className="absolute bottom-8 flex text-xs opacity-50">

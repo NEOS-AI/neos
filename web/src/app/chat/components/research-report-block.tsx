@@ -35,6 +35,7 @@ export function ResearchReportBlock({
   );
   const contentRef = useRef<HTMLDivElement>(null);
   const isCompleted = message?.isStreaming === false && message?.content !== "";
+
   // TODO: scroll to top when completed, but it's not working
   // useEffect(() => {
   //   if (isCompleted && contentRef.current) {

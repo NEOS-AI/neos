@@ -49,10 +49,12 @@ def background_investigation_node(state: State, config: RunnableConfig):
     configurable = Configuration.from_runnable_config(config)
     query = state.get("research_topic")
     background_investigation_results = None
+
     if SELECTED_SEARCH_ENGINE == SearchEngine.TAVILY.value:
         searched_content = LoggedTavilySearch(
             max_results=configurable.max_search_results
         ).invoke(query)
+
         if isinstance(searched_content, list):
             background_investigation_results = [
                 f"## {elem['title']}\n\n{elem['content']}" for elem in searched_content
@@ -62,9 +64,21 @@ def background_investigation_node(state: State, config: RunnableConfig):
                     background_investigation_results
                 )
             }
+
+        elif isinstance(searched_content, tuple) and isinstance(searched_content[0], list):
+            searched_content = searched_content[0]
+            background_investigation_results = [
+                f"## {elem['title']}\n\n{elem['content']}" for elem in searched_content
+            ]
+            return {
+                "background_investigation_results": "\n\n".join(
+                    background_investigation_results
+                )
+            }
+
         else:
             logger.error(
-                f"Tavily search returned malformed response: {searched_content}"
+                f"Tavily search returned malformed response: ({type(searched_content)}) {searched_content}"
             )
     else:
         background_investigation_results = get_web_search_tool(
@@ -261,10 +275,9 @@ def coordinator_node(
     logger.info("Coordinator talking.")
     configurable = Configuration.from_runnable_config(config)
     messages = apply_prompt_template("coordinator", state)
-    print('messages (before invoking LLM):', messages)
 
     llm = get_llm_by_type(AGENT_LLM_MAP["coordinator"])
-    
+
     # 중복된 LLM 호출 제거 - 한 번만 호출
     response = llm.bind_tools([handoff_to_planner]).invoke(messages)
     logger.debug(f"Current state messages: {state['messages']}")

@@ -1,5 +1,6 @@
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
+import logging
 
 from neos.prompts.planner_model import StepType
 
@@ -16,12 +17,18 @@ from .nodes import (
 from .types import State
 
 
-def continue_to_running_research_team(state: State):
+logger = logging.getLogger(__name__)
+
+
+def continue_to_running_research_team(state: State) -> str:
+    logger.info("Checking if research team should continue running")
     current_plan = state.get("current_plan")
     if not current_plan or not current_plan.steps:
+        logger.info("No current plan or steps found, continuing to planner")
         return "planner"
 
     if all(step.execution_res for step in current_plan.steps):
+        logger.info("All steps in the current plan are completed, continuing to planner")
         return "planner"
 
     # Find first incomplete step
@@ -32,12 +39,17 @@ def continue_to_running_research_team(state: State):
             break
 
     if not incomplete_step:
+        logger.info("No incomplete steps found, continuing to planner")
         return "planner"
 
     if incomplete_step.step_type == StepType.RESEARCH:
+        logger.info("Incompleted step is research, continuing to researcher")
         return "researcher"
     if incomplete_step.step_type == StepType.PROCESSING:
+        logger.info("Incompleted step is processing, continuing to coder")
         return "coder"
+
+    logger.info("Incompleted step is not research or processing, continuing to planner")
     return "planner"
 
 

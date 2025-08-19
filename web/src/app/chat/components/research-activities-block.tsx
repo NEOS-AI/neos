@@ -28,6 +28,7 @@ import { useMessage, useStore } from "@/core/store";
 import { parseJSON } from "@/core/utils";
 import { cn } from "@/lib/utils";
 
+
 export function ResearchActivitiesBlock({
   className,
   researchId,
