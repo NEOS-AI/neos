@@ -13,3 +13,4 @@
 ## Frontend
 
 - [ ] [Action Search Bar](https://v0.app/community/action-search-bar-S3nMPSmpQzk)
+- [ ] Add pdf download button to the research page
