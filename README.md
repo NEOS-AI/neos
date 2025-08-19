@@ -32,7 +32,6 @@ In this demo, we showcase how to use Neos to:
 - [❓ FAQ](#faq)
 - [📜 License](#license)
 - [💖 Acknowledgments](#acknowledgments)
-- [⭐ Star History](#star-history)
 
 ## Quick Start
 
