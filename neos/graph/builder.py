@@ -6,6 +6,7 @@ from neos.prompts.planner_model import StepType
 
 from .nodes import (
     background_investigation_node,
+    casual_chat_node,
     coder_node,
     coordinator_node,
     human_feedback_node,
@@ -58,6 +59,8 @@ def _build_base_graph():
     builder = StateGraph(State)
     builder.add_edge(START, "coordinator")
     builder.add_node("coordinator", coordinator_node)
+
+    # Add nodes for deep research
     builder.add_node("background_investigator", background_investigation_node)
     builder.add_node("planner", planner_node)
     builder.add_node("reporter", reporter_node)
@@ -65,6 +68,11 @@ def _build_base_graph():
     builder.add_node("researcher", researcher_node)
     builder.add_node("coder", coder_node)
     builder.add_node("human_feedback", human_feedback_node)
+
+    # Add casual chat node
+    builder.add_node("casual_chat", casual_chat_node)  # 새로 추가
+
+    # Define edges between nodes for the deep research workflow
     builder.add_edge("background_investigator", "planner")
     builder.add_conditional_edges(
         "research_team",
@@ -72,6 +80,10 @@ def _build_base_graph():
         ["planner", "researcher", "coder"],
     )
     builder.add_edge("reporter", END)
+
+    # Add edges for casual chat
+    builder.add_edge("casual_chat", END)
+
     return builder
 
 
