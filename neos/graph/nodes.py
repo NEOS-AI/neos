@@ -179,71 +179,18 @@ def casual_chat_node(state: State, config: RunnableConfig):
     """Casual chat node for simple conversations."""
     logger.info("Casual chat node handling simple conversation")
     configurable = Configuration.from_runnable_config(config)
-    
-    # 사용자의 메시지와 로케일 가져오기
-    user_message = state.get("user_message", "")
-    locale = state.get("locale", "en-US")
-    
-    # 캐주얼 대화용 프롬프트 생성
-    messages = [
-        {
-            "role": "system", 
-            "content": f"""You are a friendly, helpful assistant engaging in casual conversation. You've been specifically chosen to handle this query because it's conversational rather than requiring deep research or analysis.
 
-**Your Role:**
-- Provide warm, natural, and helpful responses
-- Keep conversations light and engaging
-- Be concise but friendly (1-3 paragraphs typically)
-- Show personality while remaining professional
+    # casual
+    messages = apply_prompt_template("casual_chat", state)
 
-**Response Guidelines:**
-
-**For Greetings & Social Interaction:**
-- Respond warmly and ask appropriate follow-up questions
-- Match the user's energy level and formality
-- Be genuinely friendly without being overly chatty
-
-**For Simple Questions:**
-- Give clear, direct answers using your existing knowledge
-- Provide helpful context when useful
-- Avoid going into research-level depth
-
-**For Personal Topics:**
-- Be supportive and encouraging
-- Offer practical, common-sense advice
-- Acknowledge limitations when appropriate ("I don't have real-time data, but generally...")
-
-**For Basic Help:**
-- Provide straightforward, actionable guidance
-- Use simple language and clear steps
-- Suggest when they might need to look elsewhere for specialized help
-
-**Important Boundaries:**
-- Don't attempt to conduct research or provide detailed analysis
-- For complex topics, briefly acknowledge them but keep responses general
-- If a question clearly needs research, politely suggest they ask a more specific research-oriented question
-- Don't cite sources or provide detailed technical documentation
-
-**Tone & Style:**
-- Conversational and approachable
-- Helpful without being overwhelming
-- Appropriately enthusiastic
-- Respectful of cultural context (locale: {locale})
-
-Remember: You're here for friendly conversation and simple assistance, not deep analysis or research."""
-        },
-        {
-            "role": "user",
-            "content": user_message
-        }
-    ]
-    
-    # LLM으로 응답 생성
-    llm = get_llm_by_type(AGENT_LLM_MAP.get("coordinator", "basic"))
+    # invoke the LLM for casual chat
+    llm = get_llm_by_type(AGENT_LLM_MAP.get("casual_chat", "basic"))
+    #TODO consider thinking model? llm.stream()?
     response = llm.invoke(messages)
-    
+
     logger.info(f"Casual chat response: {response.content}")
-    
+
+    #TODO 일상 대화에서도 final_report?
     return {
         "final_report": response.content,
         "messages": [AIMessage(content=response.content, name="casual_chat")]
@@ -302,7 +249,7 @@ def planner_node(
             # LangChain 메시지 객체 처리
             from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
             content = clean_message_content(message.content)
-            
+
             # 메시지 타입에 따라 새로운 메시지 생성
             if isinstance(message, AIMessage):
                 clean_messages.append(AIMessage(content=content, name=getattr(message, 'name', None)))
@@ -339,7 +286,6 @@ def planner_node(
 
     full_response = ""
     if AGENT_LLM_MAP["planner"] == "basic" and not configurable.enable_deep_thinking:
-        print(messages)
         response = llm.invoke(messages)
 
         full_response = response.model_dump_json(indent=4, exclude_none=True)
@@ -433,111 +379,7 @@ def coordinator_node(
     """Coordinator node that communicate with customers."""
     logger.info("Coordinator talking.")
     configurable = Configuration.from_runnable_config(config)
-
-    # coordinator용 프롬프트에 쿼리 분류 로직 추가
-    user_query = state.get("user_query", "")
-    messages = [
-        {
-            "role": "system",
-            "content": """You are an intelligent query router that determines whether a user's request requires comprehensive research planning or simple conversational response.
-
-**ANALYSIS FRAMEWORK:**
-
-Evaluate the query based on these dimensions:
-- **Complexity**: Does it require multi-step investigation?
-- **Depth**: Does it need specialized knowledge or expertise?
-- **Scope**: Does it involve multiple sources or comparative analysis?
-- **Deliverable**: Does it require structured output or professional documentation?
-
-**USE handoff_to_casual_chat FOR:**
-
-**Simple Social Interactions:**
-- Greetings: "Hello", "Hi", "How are you today?"
-- Personal check-ins: "What's up?", "How's it going?"
-- Thank you messages and polite acknowledgments
-
-**Basic Informational Queries:**
-- Simple definitions: "What is photosynthesis?"
-- Well-known facts: "What's the capital of France?"
-- Basic calculations: "What's 15% of 200?"
-- Common knowledge: "How many days in a year?"
-
-**Light Conversational Topics:**
-- Weather chitchat: "Nice weather today, isn't it?"
-- General opinions: "Do you like pizza?"
-- Simple recommendations: "Any movie suggestions?"
-- Casual advice: "Should I wear a jacket today?"
-
-**USE handoff_to_planner FOR:**
-
-**Research-Intensive Queries:**
-- "What are the best marketing strategies for SaaS companies in 2024?"
-- "Compare the top 5 project management tools for remote teams"
-- "Analyze the impact of AI on the healthcare industry"
-- "Research sustainable packaging solutions for e-commerce"
-
-**Strategic Analysis & Planning:**
-- "Create a market entry strategy for Southeast Asia"
-- "Evaluate investment opportunities in renewable energy"
-- "Develop a competitive analysis for our product launch"
-- "What are the regulatory requirements for fintech startups in Europe?"
-
-**Technical & Professional Documentation:**
-- "Write a technical specification for a mobile app"
-- "Research the latest cybersecurity best practices"
-- "Create a comprehensive guide to database migration"
-- "Analyze the pros and cons of different cloud architectures"
-
-**Data-Driven Investigations:**
-- "What are the current trends in remote work productivity?"
-- "Research customer satisfaction metrics in the retail industry"
-- "Analyze pricing strategies for subscription-based businesses"
-- "Study the effectiveness of different lead generation methods"
-
-**Complex Problem-Solving:**
-- "How can we reduce customer churn in our SaaS business?"
-- "What's the best approach to scale a machine learning team?"
-- "Research solutions for supply chain optimization"
-- "Develop a framework for measuring product-market fit"
-
-**KEY DECISION FACTORS:**
-
-- **Trigger Words for Research**: research, analyze, compare, evaluate, investigate, study, create strategy, develop plan, comprehensive guide, best practices, market trends, competitive analysis
-- **Complexity Indicators**: Multiple variables, industry-specific knowledge, data requirements, strategic implications
-- **Output Expectations**: Reports, documentation, structured analysis, actionable recommendations
-
-**When in doubt, consider:**
-- Can this be answered with general knowledge? → Casual Chat
-- Does this require investigation and structured thinking? → Planner
-- Would a professional need to research this? → Planner
-
-Choose the appropriate tool and extract the relevant information for the handoff."""
-        },
-        {
-            "role": "user", 
-            "content": f"""**USER QUERY TO ANALYZE:**
-"{user_query}"
-
-**TASK:** 
-Analyze the above query and determine the appropriate routing:
-
-1. **First, identify the query type:**
-   - What is the user actually asking for?
-   - What level of complexity is involved?
-   - What kind of output would best serve them?
-
-2. **Then choose the appropriate tool:**
-   - handoff_to_casual_chat: For conversational, simple, or immediate-answer queries
-   - handoff_to_planner: For research, analysis, or complex problem-solving needs
-
-3. **Extract relevant information:**
-   - Detect the user's language/locale from their message
-   - Identify the core topic or research area (if applicable)
-   - Preserve the original message context
-
-**Make your decision and use the appropriate tool.**"""
-        }
-    ]
+    messages = apply_prompt_template("coordinator", state)
 
     llm = get_llm_by_type(AGENT_LLM_MAP["coordinator"])
 
@@ -548,7 +390,6 @@ Analyze the above query and determine the appropriate routing:
     goto = "__end__"
     locale = state.get("locale", "en-US")  # Default locale if not specified
     research_topic = state.get("research_topic", "")
-    user_message = user_query
 
     if len(response.tool_calls) > 0:
         try:
@@ -569,9 +410,8 @@ Analyze the above query and determine the appropriate routing:
                 elif tool_name == "handoff_to_casual_chat":
                     goto = "casual_chat"
                     args = tool_call.get("args", {})
-                    if args.get("locale") and args.get("user_message"):
+                    if args.get("locale"):
                         locale = args.get("locale")
-                        user_message = args.get("user_message")
                     break
         except Exception as e:
             logger.error(f"Error processing tool calls: {e}")
@@ -619,7 +459,6 @@ Analyze the above query and determine the appropriate routing:
     update_dict = {
         "messages": messages,
         "locale": locale,
-        "user_message": user_message,
         "resources": configurable.resources,
     }
 
