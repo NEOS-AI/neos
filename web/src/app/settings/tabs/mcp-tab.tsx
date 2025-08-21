@@ -3,7 +3,7 @@ import { Blocks, PencilRuler, Trash } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useCallback, useState } from "react";
 
-import { Tooltip } from "@/components/deer-flow/tooltip";
+import { Tooltip } from "@/components/neos/tooltip";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import type { MCPServerMetadata } from "@/core/mcp";

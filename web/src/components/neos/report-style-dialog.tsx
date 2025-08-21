@@ -1,4 +1,3 @@
-
 import { useTranslations } from "next-intl";
 import { useState } from "react";
 import { Check, FileText, Newspaper, Users, GraduationCap } from "lucide-react";

@@ -1,4 +1,3 @@
-
 import { cn } from "@/lib/utils";
 
 import styles from "./rainbow-text.module.css";

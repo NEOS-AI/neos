@@ -85,7 +85,7 @@ brew install marp-cli
 Optionally, install web UI dependencies via [pnpm](https://pnpm.io/installation):
 
 ```bash
-cd deer-flow/web
+cd neos/web
 pnpm install
 ```
 
@@ -377,17 +377,17 @@ First, you need read the [configuration](docs/configuration_guide.md) below. Mak
 Second, to build a Docker image of your own web server:
 
 ```bash
-docker build -t deer-flow-api .
+docker build -t neos-api .
 ```
 
 Final, start up a docker container running the web server:
 
 ```bash
-# Replace deer-flow-api-app with your preferred container name
-docker run -d -t -p 8000:8000 --env-file .env --name deer-flow-api-app deer-flow-api
+# Replace neos-api-app with your preferred container name
+docker run -d -t -p 8000:8000 --env-file .env --name neos-api-app neos-api
 
 # stop the server
-docker stop deer-flow-api-app
+docker stop neos-api-app
 ```
 
 ### Docker Compose (include both backend and frontend)

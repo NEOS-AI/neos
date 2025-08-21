@@ -1,4 +1,3 @@
-
 import { cn } from "@/lib/utils";
 
 import styles from "./loading-animation.module.css";

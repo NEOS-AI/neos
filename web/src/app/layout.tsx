@@ -6,10 +6,10 @@ import Script from "next/script";
 import { NextIntlClientProvider } from 'next-intl';
 import { getLocale, getMessages } from 'next-intl/server';
 
-import { ThemeProviderWrapper } from "@/components/deer-flow/theme-provider-wrapper";
+import { ThemeProviderWrapper } from "@/components/neos/theme-provider-wrapper";
 import { env } from "@/env";
 
-import { Toaster } from "../components/deer-flow/toaster";
+import { Toaster } from "../components/neos/toaster";
 
 export const metadata: Metadata = {
   title: "🦌 Neos",

@@ -1,5 +1,5 @@
-
 import Link from "next/link";
+
 
 export function Logo() {
   return (
@@ -7,7 +7,7 @@ export function Logo() {
       className="opacity-70 transition-opacity duration-300 hover:opacity-100"
       href="/"
     >
-      Neos
+      NEOS
     </Link>
   );
 }

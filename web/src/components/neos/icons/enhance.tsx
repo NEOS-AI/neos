@@ -1,4 +1,3 @@
-
 import type { SVGProps } from "react";
 
 export function Enhance(props: SVGProps<SVGSVGElement>) {

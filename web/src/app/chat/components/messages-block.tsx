@@ -3,7 +3,7 @@ import { FastForward, Play } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useCallback, useRef, useState } from "react";
 
-import { RainbowText } from "@/components/deer-flow/rainbow-text";
+import { RainbowText } from "@/components/neos/rainbow-text";
 import { Button } from "@/components/ui/button";
 import {
   Card,
