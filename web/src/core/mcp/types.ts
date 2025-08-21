@@ -12,6 +12,7 @@ export interface GenericMCPServerMetadata<T extends string> {
   tools: MCPToolMetadata[];
   createdAt: number;
   updatedAt: number;
+  headers?: Record<string, string>;
 }
 
 export interface StdioMCPServerMetadata

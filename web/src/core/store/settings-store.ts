@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 import type { MCPServerMetadata, SimpleMCPServerMetadata } from "../mcp";
 
-const SETTINGS_KEY = "deerflow.settings";
+const SETTINGS_KEY = "neos.settings";
 
 const DEFAULT_SETTINGS: SettingsState = {
   general: {
@@ -91,7 +91,7 @@ export const getChatStreamSettings = () => {
   if (mcpServers.length > 0) {
     mcpSettings = {
       servers: mcpServers.reduce((acc, cur) => {
-        const { transport, env } = cur;
+        const { transport, env, headers } = cur;
         let server: SimpleMCPServerMetadata;
         if (transport === "stdio") {
           server = {
@@ -106,6 +106,7 @@ export const getChatStreamSettings = () => {
             name: cur.name,
             transport,
             env,
+            headers,
             url: cur.url,
           };
         }
