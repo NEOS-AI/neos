@@ -1,26 +1,26 @@
-# 🦌 [关于 DeerFlow](https://github.com/bytedance/deer-flow)
+# [NEOS](https://github.com/bytedance/deer-flow)
 
 > **源于开源，回馈开源**
 
-**DeerFlow**（**深度探索**和**高效研究**流程）是一个由社区驱动的 AI 自动化框架，受到开源社区卓越贡献的启发。我们的使命是将语言模型与专业工具无缝集成，用于网络搜索、爬取和 Python 代码执行等任务——同时回馈使这种创新成为可能的社区。
+**NEOS**（**深度探索**和**高效研究**流程）是一个由社区驱动的 AI 自动化框架，受到开源社区卓越贡献的启发。我们的使命是将语言模型与专业工具无缝集成，用于网络搜索、爬取和 Python 代码执行等任务——同时回馈使这种创新成为可能的社区。
 
 ---
 
 ## 🌟 GitHub 仓库
 
-在 GitHub 上探索 DeerFlow：[github.com/bytedance/deer-flow](https://github.com/bytedance/deer-flow)
+在 GitHub 上探索 NEOS：[github.com/NEOS-AI/neos](https://github.com/NEOS-AI/neos)
 
 ---
 
 ## 📜 软件许可证
 
-DeerFlow 作为开源项目，在 **MIT 许可证** 下分发。
+NEOS 作为开源项目，在 **MIT 许可证** 下分发。
 
 ---
 
 ## 🙌 致谢
 
-我们衷心感谢使 DeerFlow 成为现实的开源项目和贡献者。我们真正站在巨人的肩膀上。
+我们衷心感谢使 NEOS 成为现实的开源项目和贡献者。我们真正站在巨人的肩膀上。
 
 ### 核心框架
 - **[LangChain](https://github.com/langchain-ai/langchain)**：支持我们 LLM 交互和链的卓越框架。
@@ -34,12 +34,12 @@ DeerFlow 作为开源项目，在 **MIT 许可证** 下分发。
 - **[React Markdown](https://www.npmjs.com/package/react-markdown)**：具有可定制性的卓越 markdown 渲染。
 - **[SToneX](https://github.com/stonexer)**：感谢他对逐字符视觉效果的宝贵贡献。
 
-这些杰出的项目构成了 DeerFlow 的骨干，体现了开源协作的变革力量。
+这些杰出的项目构成了 NEOS 的骨干，体现了开源协作的变革力量。
 
 ### 特别感谢
-最后，我们要向 `DeerFlow` 的核心作者表达衷心的感谢：
+最后，我们要向 `NEOS` 的核心作者表达衷心的感谢：
 
 - **[Daniel Walnut](https://github.com/hetaoBackend/)**
 - **[Henry Li](https://github.com/magiccube/)**
 
-没有他们的愿景、热情和奉献，`DeerFlow` 就不会有今天的成就。
+没有他们的愿景、热情和奉献，`NEOS` 就不会有今天的成就。

@@ -50,8 +50,8 @@ logger = logging.getLogger(__name__)
 INTERNAL_SERVER_ERROR_DETAIL = "Internal Server Error"
 
 app = FastAPI(
-    title="DeerFlow API",
-    description="API for Deer",
+    title="NEOS API",
+    description="API for NEOS",
     version="0.1.0",
 )
 
@@ -580,6 +580,7 @@ async def mcp_server_metadata(request: MCPServerMetadataRequest):
             args=request.args,
             url=request.url,
             env=request.env,
+            headers=request.headers,
             timeout_seconds=timeout,
         )
 
@@ -590,6 +591,7 @@ async def mcp_server_metadata(request: MCPServerMetadataRequest):
             args=request.args,
             url=request.url,
             env=request.env,
+            headers=request.headers,
             tools=tools,
         )
 
