@@ -82,6 +82,7 @@ class EnhancedTavilySearchAPIWrapper(OriginalTavilySearchAPIWrapper):
         results_json_str = await fetch()
         return json.loads(results_json_str)
 
+
     def clean_results_with_images(
         self, raw_results: Dict[str, List[Dict]]
     ) -> List[Dict]:
@@ -101,10 +102,24 @@ class EnhancedTavilySearchAPIWrapper(OriginalTavilySearchAPIWrapper):
             clean_results.append(clean_result)
         images = raw_results["images"]
         for image in images:
-            clean_result = {
-                "type": "image",
-                "image_url": image["url"],
-                "image_description": image["description"],
-            }
+            if isinstance(image, str):
+                clean_result = {
+                    "type": "image",
+                    "image_url": image,
+                    "image_description": "",
+                }
+            elif isinstance(image, dict):
+                clean_result = {
+                    "type": "image",
+                    "image_url": image.get("url"),
+                    "image_description": image.get("description", ""),
+                }
+            else:
+                clean_result = {
+                    "type": "image",
+                    "image_url": image["url"],
+                    "image_description": image["description"],
+                }
+
             clean_results.append(clean_result)
         return clean_results
