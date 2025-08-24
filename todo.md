@@ -23,3 +23,8 @@
 - [ ] [Implement conversation history](https://github.com/bytedance/deer-flow/pull/524)
 - [ ] Upload file to the chat
 - [ ] Analyze file content (especially pdf for research papers)
+
+## Database
+
+- [x] Add custom postgres docker image with pgvectorscale and paradedb
+- [ ] Use PgDog for connection pooling and sharding
