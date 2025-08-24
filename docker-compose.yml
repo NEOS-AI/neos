@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: neos-backend
     ports:
-      - "8000:8000"
+      - "5180:5180"
     env_file:
       - .env
     volumes:
