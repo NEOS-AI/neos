@@ -3,7 +3,7 @@ import logging
 import os
 from typing import Annotated, Literal
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -24,8 +24,10 @@ from neos.tools import (
 from neos.tools.search import LoggedTavilySearch
 from neos.utils.json_utils import repair_json_output
 
+from .checkpoint import log_research_replays, log_graph_event
 from ..config import SELECTED_SEARCH_ENGINE, SearchEngine
 from .types import State
+
 
 logger = logging.getLogger(__name__)
 
@@ -141,12 +143,19 @@ def background_investigation_node(state: State, config: RunnableConfig):
 
         if isinstance(searched_content, list):
             background_investigation_results = [
-                f"## {elem['title']}\n\n{elem['content']}" for elem in searched_content
+                f"## {elem['title']}\n\n{elem['content'] }"
+                for elem in searched_content  # if elem.get("type") == "page"
             ]
+            results = "\n\n".join(background_investigation_results)
+            # Build checkpoint with the background investigation results
+            log_graph_event(
+                configurable.thread_id,
+                "background_investigator",
+                "info",
+                {"goto": "planner", "investigations": results},
+            )
             return {
-                "background_investigation_results": "\n\n".join(
-                    background_investigation_results
-                )
+                "background_investigation_results": results
             }
 
         elif isinstance(searched_content, tuple) and isinstance(searched_content[0], list):
@@ -168,11 +177,16 @@ def background_investigation_node(state: State, config: RunnableConfig):
         background_investigation_results = get_web_search_tool(
             configurable.max_search_results
         ).invoke(query)
-    return {
-        "background_investigation_results": json.dumps(
-            background_investigation_results, ensure_ascii=False
-        )
-    }
+
+    results = json.dumps(background_investigation_results, ensure_ascii=False)
+    # Build checkpoint with the background investigation results
+    log_graph_event(
+        configurable.thread_id,
+        "background_investigator",
+        "info",
+        {"goto": "planner", "investigations": results},
+    )
+    return {"background_investigation_results": results}
 
 
 def casual_chat_node(state: State, config: RunnableConfig):
@@ -189,6 +203,7 @@ def casual_chat_node(state: State, config: RunnableConfig):
     response = llm.invoke(messages)
 
     logger.info(f"Casual chat response: {response.content}")
+    log_research_replays(configurable.thread_id, '', configurable.report_style, len(messages))
 
     #TODO 일상 대화에서도 final_report?
     return {
@@ -247,7 +262,6 @@ def planner_node(
             clean_messages.append(clean_msg)
         elif hasattr(message, 'content'):
             # LangChain 메시지 객체 처리
-            from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
             content = clean_message_content(message.content)
 
             # 메시지 타입에 따라 새로운 메시지 생성
@@ -286,6 +300,7 @@ def planner_node(
 
     full_response = ""
     if AGENT_LLM_MAP["planner"] == "basic" and not configurable.enable_deep_thinking:
+        # print(messages)
         response = llm.invoke(messages)
 
         full_response = response.model_dump_json(indent=4, exclude_none=True)
@@ -303,10 +318,21 @@ def planner_node(
         if plan_iterations > 0:
             return Command(goto="reporter")
         else:
+            log_research_replays(configurable.thread_id, '', configurable.report_style, len(messages))
             return Command(goto="__end__")
+
     if isinstance(curr_plan, dict): # and curr_plan.get("has_enough_context"):
         logger.info("Planner response has enough context.")
         new_plan = Plan.model_validate(curr_plan)
+
+        # Build checkpoint with the current plan
+        log_graph_event(
+            configurable.thread_id,
+            "planner",
+            "info",
+            {"goto": "reporter", "current_plan": curr_plan},
+        )
+
         return Command(
             update={
                 "messages": [AIMessage(content=full_response, name="planner")],
@@ -314,6 +340,15 @@ def planner_node(
             },
             goto="reporter",
         )
+
+    # Build checkpoint with the current plan
+    log_graph_event(
+        configurable.thread_id,
+        "planner",
+        "info",
+        {"goto": "human_feedback", "current_plan": curr_plan},
+    )
+    log_research_replays(configurable.thread_id, '', configurable.report_style, len(messages))
     return Command(
         update={
             "messages": [AIMessage(content=full_response, name="planner")],
@@ -324,8 +359,10 @@ def planner_node(
 
 
 def human_feedback_node(
-    state: State,
+    state: State, config: RunnableConfig
 ) -> Command[Literal["planner", "research_team", "reporter", "__end__"]]:
+    configurable = Configuration.from_runnable_config(config)
+
     current_plan = state.get("current_plan", "")
     # check if the plan is auto accepted
     auto_accepted_plan = state.get("auto_accepted_plan", False)
@@ -363,6 +400,13 @@ def human_feedback_node(
         else:
             return Command(goto="__end__")
 
+    # Build checkpoint with the current plan
+    log_graph_event(
+        configurable.thread_id,
+        "human_feedback",
+        "info",
+        {"goto": goto, "current_plan": new_plan, "plan_iterations": plan_iterations},
+    )
     return Command(
         update={
             "current_plan": Plan.model_validate(new_plan),
@@ -466,6 +510,15 @@ def coordinator_node(
     if goto in ["planner", "background_investigator"]:
         update_dict["research_topic"] = research_topic
 
+    # Build checkpoint with the current plan
+    log_research_replays(configurable.thread_id, research_topic, configurable.report_style, 0)
+    log_graph_event(
+        configurable.thread_id,
+        "coordinator",
+        "info",
+        {"goto": goto, "research_topic": research_topic},
+    )
+
     return Command(
         update=update_dict,
         goto=goto,
@@ -508,6 +561,15 @@ def reporter_node(state: State, config: RunnableConfig):
     response_content = response.content
     logger.info(f"reporter response: {response_content}")
 
+    # Build checkpoint with the current plan
+    log_graph_event(
+        configurable.thread_id,
+        "reporter",
+        "info",
+        {"goto": "end", "final_report": response_content},
+    )
+    log_research_replays(configurable.thread_id, '', configurable.report_style, len(invoke_messages))
+
     return {"final_report": response_content}
 
 
@@ -518,12 +580,13 @@ def research_team_node(state: State):
 
 
 async def _execute_agent_step(
-    state: State, agent, agent_name: str
+    state: State, config: RunnableConfig, agent, agent_name: str
 ) -> Command[Literal["research_team"]]:
     """Helper function to execute a step using the specified agent."""
     current_plan = state.get("current_plan")
     plan_title = current_plan.title
     observations = state.get("observations", [])
+    configurable = Configuration.from_runnable_config(config)
 
     # Find the first unexecuted step
     current_step = None
@@ -616,6 +679,29 @@ async def _execute_agent_step(
     current_step.execution_res = response_content
     logger.info(f"Step '{current_step.title}' execution completed by {agent_name}")
 
+    # Build checkpoint with the current plan
+    agent_input_messages = []
+    for message in agent_input["messages"]:
+        if isinstance(message, tuple):
+            agent_input_messages.append(
+                {
+                    "role": message.type,
+                    "content": message.content,
+                    "name": message.name,
+                }
+            )
+    log_graph_event(
+        configurable.thread_id,
+        "agent",
+        "info",
+        {
+            "goto": "research_team",
+            "agent": agent_name,
+            "input": agent_input_messages,
+            "observations": observations + [response_content],
+        },
+    )
+
     return Command(
         update={
             "messages": [
@@ -683,11 +769,11 @@ async def _setup_and_execute_agent_step(
                 )
                 loaded_tools.append(tool)
         agent = create_agent(agent_type, agent_type, loaded_tools, agent_type)
-        return await _execute_agent_step(state, agent, agent_type)
+        return await _execute_agent_step(state, config, agent, agent_type)
     else:
         # Use default tools if no MCP servers are configured
         agent = create_agent(agent_type, agent_type, default_tools, agent_type)
-        return await _execute_agent_step(state, agent, agent_type)
+        return await _execute_agent_step(state, config, agent, agent_type)
 
 
 async def researcher_node(

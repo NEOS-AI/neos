@@ -89,6 +89,10 @@ function ActivityListItem({ messageId }: { messageId: string }) {
   if (message) {
     if (!message.isStreaming && message.toolCalls?.length) {
       for (const toolCall of message.toolCalls) {
+        if (toolCall.result?.startsWith("Error")) {
+          return null;
+        }
+
         if (toolCall.name === "web_search") {
           return <WebSearchToolCall key={toolCall.id} toolCall={toolCall} />;
         } else if (toolCall.name === "crawl_tool") {

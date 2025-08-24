@@ -2,12 +2,14 @@ import { env } from "@/env";
 
 import type { MCPServerMetadata } from "../mcp";
 import type { Resource } from "../messages";
-import { extractReplayIdFromSearchParams } from "../replay/get-replay-id";
+import { extractFromSearchParams } from "../replay/get-replay-id";
 import { fetchStream } from "../sse";
 import { sleep } from "../utils";
 
+import { queryConversationByPath } from "./conversations";
 import { resolveServiceURL } from "./resolve-service-url";
 import type { ChatEvent } from "./types";
+
 
 export async function* chatStream(
   userMessage: string,
@@ -37,11 +39,12 @@ export async function* chatStream(
   if (
     env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY ||
     location.search.includes("mock") ||
-    location.search.includes("replay=")
-  ) 
+    location.search.includes("replay=") ||
+    location.search.includes("thread_id=")
+  )
     return yield* chatReplayStream(userMessage, params, options);
-  
-  try{
+
+  try {
     const stream = fetchStream(resolveServiceURL("chat/stream"), {
       body: JSON.stringify({
         messages: [{ role: "user", content: userMessage }],
@@ -49,14 +52,14 @@ export async function* chatStream(
       }),
       signal: options.abortSignal,
     });
-    
+
     for await (const event of stream) {
       yield {
         type: event.event,
         data: JSON.parse(event.data),
       } as ChatEvent;
     }
-  }catch(e){
+  } catch(e) {
     console.error(e);
   }
 }
@@ -95,8 +98,18 @@ async function* chatReplayStream(
       }
     }
     fastForwardReplaying = true;
+  } else if (urlParams.has("thread_id")) {
+    const threadId = extractFromSearchParams(window.location.search, "thread_id");
+    if (threadId) {
+      replayFilePath = `/api/conversation/${threadId}`;
+    } else {
+      // Fallback to a default replay
+      replayFilePath = `/replay/eiffel-tower-vs-tallest-building.txt`;
+    }
+    fastForwardReplaying = true;
   } else {
-    const replayId = extractReplayIdFromSearchParams(window.location.search);
+    // const replayId = extractReplayIdFromSearchParams(window.location.search);
+    const replayId = extractFromSearchParams(window.location.search, "replay");
     if (replayId) {
       replayFilePath = `/replay/${replayId}.txt`;
     } else {
@@ -104,7 +117,10 @@ async function* chatReplayStream(
       replayFilePath = `/replay/eiffel-tower-vs-tallest-building.txt`;
     }
   }
-  const text = await fetchReplay(replayFilePath, {
+
+  const text = replayFilePath.startsWith("/api/conversation") ? await queryConversationByPath(replayFilePath, {
+    abortSignal: options.abortSignal,
+  }) : await fetchReplay(replayFilePath, {
     abortSignal: options.abortSignal,
   });
   const normalizedText = text.replace(/\r\n/g, "\n");

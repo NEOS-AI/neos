@@ -41,9 +41,19 @@ from neos.server.rag_request import (
     RAGResourceRequest,
     RAGResourcesResponse,
 )
+from neos.server.conversation_request import (
+    Conversation,
+    ConversationsRequest,
+    ConversationsResponse,
+)
 from neos.tools import VolcengineTTS
-from neos.graph.checkpoint import chat_stream_message
 from neos.utils.json_utils import sanitize_args
+from neos.graph.checkpoint import (
+    chat_stream_message,
+    get_conversation,
+    list_conversations,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -86,9 +96,11 @@ async def chat_stream(request: ChatRequest):
             detail="MCP server configuration is disabled. Set ENABLE_MCP_SERVER_CONFIGURATION=true to enable MCP features.",
         )
 
+    #TODO get user_id from request or session to identify the conversation
+
     thread_id = request.thread_id
     if thread_id == "__default__":
-        thread_id = str(uuid4())
+        thread_id = str(uuid4()) #TODO convert to uuid v7 if possible
 
     return StreamingResponse(
         _astream_workflow_generator(
@@ -263,6 +275,8 @@ async def _stream_graph_events(
     graph_instance, workflow_input, workflow_config, thread_id
 ):
     """Stream events from the graph and process them."""
+    logger.debug(f"Starting async graph stream with input: {workflow_input}")
+
     async for agent, _, event_data in graph_instance.astream(
         workflow_input,
         config=workflow_config,
@@ -351,10 +365,13 @@ async def _astream_workflow_generator(
             async with AsyncConnectionPool(
                 checkpoint_url, kwargs=connection_kwargs
             ) as conn:
+                logger.info("Postgres connection pool created.")
                 checkpointer = AsyncPostgresSaver(conn)
                 await checkpointer.setup()
+                logger.info("Postgres checkpointer setup complete.")
                 graph.checkpointer = checkpointer
                 graph.store = in_memory_store
+
                 async for event in _stream_graph_events(
                     graph, workflow_input, workflow_config, thread_id
                 ):
@@ -623,3 +640,48 @@ async def config():
         rag=RAGConfigResponse(provider=SELECTED_RAG_PROVIDER),
         models=get_configured_llm_models(),
     )
+
+
+@app.get("/api/conversation/{thread_id}", response_model=str)
+async def get_converstation(thread_id: str) -> Response:
+    """Get the Conversation content for a specific thread ID."""
+    try:
+        content = get_conversation(thread_id)
+        if not content:
+            raise HTTPException(status_code=404, detail="Converstation not found")
+
+        return Response(
+            content=content,
+            media_type="text/plain",
+            headers={"Content-Type": "text/plain; charset=utf-8"},
+        )
+
+    except Exception as e:
+        logger.exception(f"Error getting Converstation: {str(e)}")
+        raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
+
+
+@app.get("/api/conversations", response_model=ConversationsResponse)
+async def get_conversations(
+    request: Annotated[ConversationsRequest, Query()],
+) -> ConversationsResponse:
+    """Get conversations based on the provided request parameters."""
+    try:
+        conversations = list_conversations(limit=request.limit, sort=request.sort)
+        response = []
+        for conversation in conversations:
+            response.append(
+                Conversation(
+                    id=conversation.get("thread_id", ""),
+                    title=conversation.get("research_topic", ""),
+                    count=conversation.get("messages", 0),
+                    date=conversation.get("ts", ""),
+                    category=conversation.get("report_style", ""),
+                    data_type="database",  # Assuming default data type is 'txt'
+                )
+            )
+        data = ConversationsResponse(data=response)
+        return data
+    except Exception as e:
+        logger.exception(f"Error getting conversations: {str(e)}")
+        raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)

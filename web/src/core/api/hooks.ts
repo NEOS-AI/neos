@@ -2,11 +2,14 @@ import { useEffect, useRef, useState } from "react";
 
 import { env } from "@/env";
 
+import type { Conversation } from "../messages";
 import type { NeosConfig } from "../config";
 import { useReplay } from "../replay";
 
 import { fetchReplayTitle } from "./chat";
+import { queryConversations } from "./conversations";
 import { resolveServiceURL } from "./resolve-service-url";
+
 
 export function useReplayMetadata() {
   const { isReplay } = useReplay();
@@ -41,6 +44,7 @@ export function useReplayMetadata() {
   return { title, isLoading, hasError: error };
 }
 
+
 export function useConfig(): {
   config: NeosConfig | null;
   loading: boolean;
@@ -67,4 +71,49 @@ export function useConfig(): {
   }, []);
 
   return { config, loading };
+}
+
+
+export function useConversations(): {
+  results: Conversation[] | null;
+  loading: boolean;
+} {
+  const [results, setResults] = useState<Array<Conversation>>([]);
+  const [loading, setLoading] = useState(true);
+  const hasInitialized = useRef(false);
+  const maxRetries = useRef(3);
+
+  useEffect(() => {
+    if (env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY) {
+      setLoading(false);
+      return;
+    }
+    // Prevent multiple calls
+    if (hasInitialized.current || maxRetries.current <= 0) {
+      return;
+    }
+
+    queryConversations()
+      .then((data) => {
+        setResults(data);
+        setLoading(false);
+        hasInitialized.current = true;
+        maxRetries.current = 0; // Reset retries after successful fetch
+      })
+      .catch((error) => {
+        console.error("Failed to fetch replays", error);
+        setLoading(false);
+        if (maxRetries.current > 0) {
+          maxRetries.current -= 1;
+          console.warn(`Retrying... (${3 - maxRetries.current} attempts left)`);
+        }
+      });
+
+    return () => {
+      hasInitialized.current = false;
+      maxRetries.current = 3; // Reset retries on unmount
+    };
+  }, []);
+
+  return { results, loading };
 }

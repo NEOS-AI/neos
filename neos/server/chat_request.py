@@ -25,6 +25,9 @@ class ChatMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    thread_id: str = Field(
+        "__default__", description="A specific conversation identifier"
+    )
     messages: Optional[List[ChatMessage]] = Field(
         [], description="History of messages between the user and the assistant"
     )

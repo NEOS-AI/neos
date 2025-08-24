@@ -8,6 +8,7 @@ from langchain_core.runnables import RunnableConfig
 from neos.config.report_style import ReportStyle
 from neos.rag.retriever import Resource
 
+
 logger = logging.getLogger(__name__)
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
@@ -65,6 +66,7 @@ def get_recursion_limit(default: int = 25) -> int:
 class Configuration:
     """The configurable fields."""
 
+    thread_id: str = field(default="")
     resources: list[Resource] = field(
         default_factory=list
     )  # Resources to be used for the research
@@ -74,6 +76,7 @@ class Configuration:
     mcp_settings: dict = None  # MCP settings, including dynamic loaded tools
     report_style: str = ReportStyle.ACADEMIC.value  # Report style
     enable_deep_thinking: bool = False  # Whether to enable deep thinking
+
 
     @classmethod
     def from_runnable_config(
