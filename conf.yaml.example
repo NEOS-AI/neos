@@ -38,3 +38,10 @@ BASIC_MODEL:
 #   # Exclude results from these domains
 #   exclude_domains:
 #     - example.com
+
+
+# Cohere API
+# <https://dashboard.cohere.com/api-keys>
+COHERE:
+  API_KEY: <YOUR_API_KEY>
+
