@@ -782,7 +782,11 @@ async def researcher_node(
     """Researcher node that do research"""
     logger.info("Researcher node is researching.")
     configurable = Configuration.from_runnable_config(config)
-    tools = [get_web_search_tool(configurable.max_search_results), crawl_tool]
+
+    # prepare tools for researcher
+    websearch_tool = get_web_search_tool(configurable.max_search_results)
+    tools = [websearch_tool, crawl_tool]
+
     retriever_tool = get_retriever_tool(state.get("resources", []))
     if retriever_tool:
         tools.insert(0, retriever_tool)

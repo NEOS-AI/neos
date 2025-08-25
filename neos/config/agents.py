@@ -4,6 +4,7 @@ from typing import Literal
 LLMType = Literal["basic", "reasoning", "vision", "code"]
 
 # Define agent-LLM mapping
+#TODO add small model support
 AGENT_LLM_MAP: dict[str, LLMType] = {
     "coordinator": "basic",
     "casual_chat": "basic",
