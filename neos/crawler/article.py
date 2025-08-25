@@ -10,8 +10,15 @@ class Article:
     def __init__(self, title: str, html_content: str):
         self.title = title
         self.html_content = html_content
+        self.markdown_content = None
+
+    def set_markdown(self, markdown: str):
+        self.markdown_content = markdown
 
     def to_markdown(self, including_title: bool = True) -> str:
+        if self.markdown_content is not None:
+            return self.markdown_content
+
         markdown = ""
         if including_title:
             markdown += f"# {self.title}\n\n"

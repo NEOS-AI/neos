@@ -1,11 +1,11 @@
 import logging
 from typing import Annotated
-
 from langchain_core.tools import tool
 
-from neos.crawler import Crawler
+from neos.crawler import TrafilaturaCrawler
 
 from .decorators import log_io
+
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ def crawl_tool(
 ) -> str:
     """Use this to crawl a url and get a readable content in markdown format."""
     try:
-        crawler = Crawler()
+        crawler = TrafilaturaCrawler()
         article = crawler.crawl(url)
         return {"url": url, "crawled_content": article.to_markdown()[:1000]}
     except BaseException as e:
