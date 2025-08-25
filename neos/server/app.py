@@ -62,7 +62,7 @@ INTERNAL_SERVER_ERROR_DETAIL = "Internal Server Error"
 app = FastAPI(
     title="NEOS API",
     description="API for NEOS",
-    version="0.1.0",
+    version="0.2.2",
 )
 
 # Add CORS middleware
