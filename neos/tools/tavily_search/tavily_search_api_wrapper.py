@@ -1,5 +1,4 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-import json
+import orjson
 from typing import Dict, List, Optional
 
 import aiohttp
@@ -43,6 +42,7 @@ class EnhancedTavilySearchAPIWrapper(OriginalTavilySearchAPIWrapper):
         response.raise_for_status()
         return response.json()
 
+
     async def raw_results_async(
         self,
         query: str,
@@ -80,7 +80,7 @@ class EnhancedTavilySearchAPIWrapper(OriginalTavilySearchAPIWrapper):
                         raise Exception(f"Error {res.status}: {res.reason}")
 
         results_json_str = await fetch()
-        return json.loads(results_json_str)
+        return orjson.loads(results_json_str)
 
 
     def clean_results_with_images(

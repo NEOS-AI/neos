@@ -89,9 +89,9 @@ def handoff_to_casual_chat(
     locale: Annotated[str, "The user's detected language locale (e.g., en-US, zh-CN)."],
 ):
     """Handoff to casual conversation handler for simple, direct interactions.
-    
+
     Use this tool when the user's query is:
-    
+
     **Social & Conversational:**
     - Greetings and pleasantries: "Hello", "Hi there", "Good morning"
     - Check-ins: "How are you?", "What's up?", "How's your day?"
@@ -103,25 +103,25 @@ def handoff_to_casual_chat(
     - Well-established facts: "What's the capital of Japan?"
     - Simple calculations: "What's 20% of 100?"
     - Common knowledge: "How many continents are there?"
-    
+
     **Light Personal Assistance:**
     - Weather chitchat: "Nice day today", "Is it cold outside?"
     - Basic suggestions without research: "What should I have for lunch?"
     - Simple decision support: "Should I go for a walk?"
     - General encouragement: "I'm feeling down today"
-    
+
     **Quick Help & Guidance:**
     - Simple how-to questions with obvious answers: "How do I restart my computer?"
     - Basic explanations: "What's the difference between HTTP and HTTPS?"
     - Common troubleshooting: "My phone is slow, any quick tips?"
-    
+
     **Characteristics of casual chat queries:**
     - Can be answered immediately without investigation
     - Don't require multiple sources or data collection
     - Are conversational rather than analytical in nature
     - Don't need structured reports or documentation
     - Are typically personal, social, or basic informational
-    
+
     Do NOT use for complex analysis, research requests, technical investigations, or professional documentation needs.
     """
     logger.info(
@@ -143,7 +143,7 @@ def background_investigation_node(state: State, config: RunnableConfig):
 
         if isinstance(searched_content, list):
             background_investigation_results = [
-                f"## {elem['title']}\n\n{elem['content'] }"
+                f"## [{elem['title']}]({elem['url']})\n\n{elem['content']}"
                 for elem in searched_content  # if elem.get("type") == "page"
             ]
             results = "\n\n".join(background_investigation_results)
@@ -161,7 +161,8 @@ def background_investigation_node(state: State, config: RunnableConfig):
         elif isinstance(searched_content, tuple) and isinstance(searched_content[0], list):
             searched_content = searched_content[0]
             background_investigation_results = [
-                f"## {elem['title']}\n\n{elem['content']}" for elem in searched_content
+                f"## [{elem['title']}]({elem['url']})\n\n{elem['content']}"
+                for elem in searched_content
             ]
             return {
                 "background_investigation_results": "\n\n".join(

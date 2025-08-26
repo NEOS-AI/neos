@@ -6,14 +6,13 @@ from langchain.callbacks.manager import (
     AsyncCallbackManagerForToolRun,
     CallbackManagerForToolRun,
 )
-
-# from langchain_tavily.tavily_search import TavilySearch
 from langchain_community.tools.tavily_search.tool import TavilySearchResults
 from pydantic import Field
 
 from neos.tools.tavily_search.tavily_search_api_wrapper import (
     EnhancedTavilySearchAPIWrapper,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +110,6 @@ class TavilySearchWithImages(TavilySearchResults):  # type: ignore[override, ove
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[Union[List[Dict[str, str]], str], Dict]:
         """Use the tool."""
-        # TODO: remove try/except, should be handled by BaseTool
         try:
             raw_results = self.api_wrapper.raw_results(
                 query,
