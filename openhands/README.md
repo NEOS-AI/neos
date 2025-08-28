@@ -1,13 +1,13 @@
-# OpenHands Architecture
+# NEOS Architecture
 
-This directory contains the core components of OpenHands.
+This directory contains the core components of NEOS.
 
 This diagram provides an overview of the roles of each component and how they communicate and collaborate.
-![OpenHands System Architecture Diagram (July 4, 2024)](../docs/static/img/system_architecture_overview.png)
+![NEOS System Architecture Diagram](../docs/static/img/system_architecture_overview.png)
 
 ## Classes
 
-The key classes in OpenHands are:
+The key classes in NEOS are:
 
 * LLM: brokers all interactions with large language models. Works with any underlying completion model, thanks to LiteLLM.
 * Agent: responsible for looking at the current State, and producing an Action that moves one step closer toward the end-goal.
