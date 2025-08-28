@@ -1,6 +1,6 @@
 # ML-Bench Evaluation with OpenHands
 
-This project implements the evaluation of agents on the [ML-Bench](https://arxiv.org/abs/2311.09835) dataset using OpenHands. [ML-Bench](https://arxiv.org/abs/2311.09835) is a comprehensive benchmark designed to assess the effectiveness of Large Language Models (LLMs) in leveraging existing functions in open-source libraries for machine learning tasks. The benchmark consists of 10,040 samples spanning 130 tasks over 14 notable machine learning GitHub repositories.
+This project implements the evaluation of agents on the [ML-Bench](https://arxiv.org/abs/2311.09835) dataset using neos. [ML-Bench](https://arxiv.org/abs/2311.09835) is a comprehensive benchmark designed to assess the effectiveness of Large Language Models (LLMs) in leveraging existing functions in open-source libraries for machine learning tasks. The benchmark consists of 10,040 samples spanning 130 tasks over 14 notable machine learning GitHub repositories.
 
 ## Task Overview
 

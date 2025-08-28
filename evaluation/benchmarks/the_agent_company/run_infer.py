@@ -16,21 +16,21 @@ from evaluation.utils.shared import (
     get_default_sandbox_config_for_eval,
     get_openhands_config_for_eval,
 )
-from openhands.controller.state.state import State
-from openhands.core.config import (
+from neos.controller.state.state import State
+from neos.core.config import (
     LLMConfig,
     OpenHandsConfig,
     get_agent_config_arg,
     get_evaluation_parser,
     get_llm_config_arg,
 )
-from openhands.core.config.agent_config import AgentConfig
-from openhands.core.logger import openhands_logger as logger
-from openhands.core.main import create_runtime, run_controller
-from openhands.events.action import CmdRunAction, MessageAction
-from openhands.events.observation import BrowserOutputObservation, CmdOutputObservation
-from openhands.runtime.base import Runtime
-from openhands.utils.async_utils import call_async_from_sync
+from neos.core.config.agent_config import AgentConfig
+from neos.core.logger import openhands_logger as logger
+from neos.core.main import create_runtime, run_controller
+from neos.events.action import CmdRunAction, MessageAction
+from neos.events.observation import BrowserOutputObservation, CmdOutputObservation
+from neos.runtime.base import Runtime
+from neos.utils.async_utils import call_async_from_sync
 
 
 def get_config(

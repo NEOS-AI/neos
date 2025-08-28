@@ -6,14 +6,14 @@ from fastapi import Request
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from openhands.integrations.provider import ProviderToken, ProviderType
-from openhands.server.app import app
-from openhands.server.user_auth.user_auth import UserAuth
-from openhands.storage.data_models.user_secrets import UserSecrets
-from openhands.storage.memory import InMemoryFileStore
-from openhands.storage.secrets.secrets_store import SecretsStore
-from openhands.storage.settings.file_settings_store import FileSettingsStore
-from openhands.storage.settings.settings_store import SettingsStore
+from neos.integrations.provider import ProviderToken, ProviderType
+from neos.server.app import app
+from neos.server.user_auth.user_auth import UserAuth
+from neos.storage.data_models.user_secrets import UserSecrets
+from neos.storage.memory import InMemoryFileStore
+from neos.storage.secrets.secrets_store import SecretsStore
+from neos.storage.settings.file_settings_store import FileSettingsStore
+from neos.storage.settings.settings_store import SettingsStore
 
 
 class MockUserAuth(UserAuth):
@@ -56,11 +56,11 @@ def test_client():
     # Create a test client
     with (
         patch(
-            'openhands.server.user_auth.user_auth.UserAuth.get_instance',
+            'neos.server.user_auth.user_auth.UserAuth.get_instance',
             return_value=MockUserAuth(),
         ),
         patch(
-            'openhands.storage.settings.file_settings_store.FileSettingsStore.get_instance',
+            'neos.storage.settings.file_settings_store.FileSettingsStore.get_instance',
             AsyncMock(return_value=FileSettingsStore(InMemoryFileStore())),
         ),
     ):

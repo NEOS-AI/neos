@@ -11,7 +11,7 @@ import toml
 from datasets import load_dataset
 from jinja2 import Environment, FileSystemLoader
 
-import openhands.agenthub
+import neos.agenthub
 from evaluation.benchmarks.nocode_bench.binary_patch_utils import (
     remove_binary_diffs,
     remove_binary_files_from_git,
@@ -38,28 +38,28 @@ from evaluation.utils.shared import (
     reset_logger_for_multiprocessing,
     update_llm_config_for_completions_logging,
 )
-from openhands.controller.state.state import State
-from openhands.core.config import (
+from neos.controller.state.state import State
+from neos.core.config import (
     AgentConfig,
     OpenHandsConfig,
     get_evaluation_parser,
     get_llm_config_arg,
 )
-from openhands.core.config.condenser_config import NoOpCondenserConfig
-from openhands.core.config.utils import get_condenser_config_arg
-from openhands.core.logger import openhands_logger as logger
-from openhands.core.main import create_runtime, run_controller
-from openhands.critic import AgentFinishedCritic
-from openhands.events.action import CmdRunAction, FileReadAction, MessageAction
-from openhands.events.observation import (
+from neos.core.config.condenser_config import NoOpCondenserConfig
+from neos.core.config.utils import get_condenser_config_arg
+from neos.core.logger import openhands_logger as logger
+from neos.core.main import create_runtime, run_controller
+from neos.critic import AgentFinishedCritic
+from neos.events.action import CmdRunAction, FileReadAction, MessageAction
+from neos.events.observation import (
     CmdOutputObservation,
     ErrorObservation,
     FileReadObservation,
 )
-from openhands.events.serialization.event import event_from_dict, event_to_dict
-from openhands.runtime.base import Runtime
-from openhands.utils.async_utils import call_async_from_sync
-from openhands.utils.shutdown_listener import sleep_if_should_continue
+from neos.events.serialization.event import event_from_dict, event_to_dict
+from neos.runtime.base import Runtime
+from neos.utils.async_utils import call_async_from_sync
+from neos.utils.shutdown_listener import sleep_if_should_continue
 
 USE_HINT_TEXT = os.environ.get('USE_HINT_TEXT', 'false').lower() == 'true'
 RUN_WITH_BROWSING = os.environ.get('RUN_WITH_BROWSING', 'false').lower() == 'true'
@@ -742,7 +742,7 @@ if __name__ == '__main__':
         )
 
     details = {'mode': args.mode}
-    _agent_cls = openhands.agenthub.Agent.get_cls(args.agent_cls)
+    _agent_cls = neos.agenthub.Agent.get_cls(args.agent_cls)
 
     dataset_descrption = (
         args.dataset.replace('/', '__') + '-' + args.split.replace('/', '__')

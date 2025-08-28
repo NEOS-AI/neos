@@ -3,7 +3,7 @@
 Terminal-Bench has its own evaluation harness that is very different from OpenHands'. We
 implemented [OpenHands agent](https://github.com/laude-institute/terminal-bench/tree/main/terminal_bench/agents/installed_agents/openhands) using OpenHands local runtime
 inside terminal-bench framework. Hereby we introduce how to use the terminal-bench
-harness to evaluate OpenHands.
+harness to evaluate neos.
 
 ## Installation
 

@@ -33,27 +33,27 @@ from evaluation.utils.shared import (
     reset_logger_for_multiprocessing,
     run_evaluation,
 )
-from openhands.agenthub import Agent
-from openhands.controller.state.state import State
-from openhands.core.config import (
+from neos.agenthub import Agent
+from neos.controller.state.state import State
+from neos.core.config import (
     AgentConfig,
     LLMConfig,
     OpenHandsConfig,
     SandboxConfig,
 )
-from openhands.core.logger import openhands_logger as logger
-from openhands.core.main import create_runtime, run_controller
-from openhands.events.action import (
+from neos.core.logger import openhands_logger as logger
+from neos.core.main import create_runtime, run_controller
+from neos.events.action import (
     CmdRunAction,
     FileEditAction,
     FileWriteAction,
     MessageAction,
 )
-from openhands.events.observation import CmdOutputObservation
-from openhands.events.serialization.event import event_to_dict
-from openhands.llm import LLM
-from openhands.runtime.base import Runtime
-from openhands.utils.async_utils import call_async_from_sync
+from neos.events.observation import CmdOutputObservation
+from neos.events.serialization.event import event_to_dict
+from neos.llm import LLM
+from neos.runtime.base import Runtime
+from neos.utils.async_utils import call_async_from_sync
 
 AGENT_CLS_TO_FAKE_USER_RESPONSE_FN = {
     'CodeActAgent': codeact_user_response,

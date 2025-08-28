@@ -6,9 +6,9 @@ import pytest
 from conftest import TEST_IN_CI, _close_test_runtime, _load_runtime
 from openhands_aci.utils.diff import get_diff
 
-from openhands.core.logger import openhands_logger as logger
-from openhands.events.action import FileEditAction, FileReadAction
-from openhands.events.observation import FileEditObservation
+from neos.core.logger import openhands_logger as logger
+from neos.events.action import FileEditAction, FileReadAction
+from neos.events.observation import FileEditObservation
 
 ORGINAL = """from flask import Flask
 app = Flask(__name__)

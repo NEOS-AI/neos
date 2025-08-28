@@ -11,30 +11,30 @@ class TestCircularImports(unittest.TestCase):
         Test that there are no circular imports in key modules that were previously problematic.
 
         This test specifically checks the modules that were involved in a previous circular import issue:
-        - openhands.utils.prompt
-        - openhands.agenthub.codeact_agent.tools.bash
-        - openhands.agenthub.codeact_agent.tools.prompt
-        - openhands.memory.memory
-        - openhands.memory.conversation_memory
+        - neos.utils.prompt
+        - neos.agenthub.codeact_agent.tools.bash
+        - neos.agenthub.codeact_agent.tools.prompt
+        - neos.memory.memory
+        - neos.memory.conversation_memory
         """
         # Get the project root directory
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
         # Map module names to file paths
         module_paths = {
-            'openhands.utils.prompt': os.path.join(
+            'neos.utils.prompt': os.path.join(
                 project_root, 'openhands/utils/prompt.py'
             ),
-            'openhands.agenthub.codeact_agent.tools.bash': os.path.join(
+            'neos.agenthub.codeact_agent.tools.bash': os.path.join(
                 project_root, 'openhands/agenthub/codeact_agent/tools/bash.py'
             ),
-            'openhands.agenthub.codeact_agent.tools.prompt': os.path.join(
+            'neos.agenthub.codeact_agent.tools.prompt': os.path.join(
                 project_root, 'openhands/agenthub/codeact_agent/tools/prompt.py'
             ),
-            'openhands.memory.memory': os.path.join(
+            'neos.memory.memory': os.path.join(
                 project_root, 'openhands/memory/memory.py'
             ),
-            'openhands.memory.conversation_memory': os.path.join(
+            'neos.memory.conversation_memory': os.path.join(
                 project_root, 'openhands/memory/conversation_memory.py'
             ),
         }
@@ -89,12 +89,12 @@ class TestCircularImports(unittest.TestCase):
                         parts = line[7:].split(',')
                         for part in parts:
                             module_part = part.strip().split(' as ')[0].strip()
-                            if module_part.startswith('openhands.'):
+                            if module_part.startswith('neos.'):
                                 imported_modules.append(module_part)
                     elif line.startswith('from '):
                         # Handle "from module import name" or "from module import name as alias"
                         module_part = line[5:].split(' import ')[0].strip()
-                        if module_part.startswith('openhands.'):
+                        if module_part.startswith('neos.'):
                             imported_modules.append(module_part)
 
                 module_imports[module_name] = imported_modules
@@ -114,9 +114,9 @@ class TestCircularImports(unittest.TestCase):
         Test for the specific circular import pattern that caused the issue in the stack trace.
 
         The problematic pattern was:
-        openhands.utils.prompt imports from openhands.agenthub.codeact_agent.tools.bash
-        openhands.agenthub.codeact_agent.tools.bash imports from openhands.agenthub.codeact_agent.tools.prompt
-        openhands.agenthub.codeact_agent.tools.prompt imports from openhands.utils.prompt
+        neos.utils.prompt imports from neos.agenthub.codeact_agent.tools.bash
+        neos.agenthub.codeact_agent.tools.bash imports from neos.agenthub.codeact_agent.tools.prompt
+        neos.agenthub.codeact_agent.tools.prompt imports from neos.utils.prompt
         """
         # Get the project root directory
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -174,9 +174,9 @@ class TestCircularImports(unittest.TestCase):
         ):
             self.fail(
                 'Circular import pattern detected:\n'
-                'openhands.utils.prompt imports from openhands.agenthub.codeact_agent.tools.bash\n'
-                'openhands.agenthub.codeact_agent.tools.bash imports from openhands.agenthub.codeact_agent.tools.prompt\n'
-                'openhands.agenthub.codeact_agent.tools.prompt imports from openhands.utils.prompt'
+                'neos.utils.prompt imports from neos.agenthub.codeact_agent.tools.bash\n'
+                'neos.agenthub.codeact_agent.tools.bash imports from neos.agenthub.codeact_agent.tools.prompt\n'
+                'neos.agenthub.codeact_agent.tools.prompt imports from neos.utils.prompt'
             )
 
     def test_detect_circular_imports_in_server_modules(self):
@@ -184,31 +184,31 @@ class TestCircularImports(unittest.TestCase):
         Test for circular imports in the server modules that were involved in the stack trace.
 
         The problematic modules were:
-        - openhands.server.shared
-        - openhands.server.conversation_manager.conversation_manager
-        - openhands.server.session.agent_session
-        - openhands.server.session
-        - openhands.server.session.session
+        - neos.server.shared
+        - neos.server.conversation_manager.conversation_manager
+        - neos.server.session.agent_session
+        - neos.server.session
+        - neos.server.session.session
         """
         # Get the project root directory
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
         # Map module names to file paths
         module_paths = {
-            'openhands.server.shared': os.path.join(
+            'neos.server.shared': os.path.join(
                 project_root, 'openhands/server/shared.py'
             ),
-            'openhands.server.conversation_manager.conversation_manager': os.path.join(
+            'neos.server.conversation_manager.conversation_manager': os.path.join(
                 project_root,
                 'openhands/server/conversation_manager/conversation_manager.py',
             ),
-            'openhands.server.session.agent_session': os.path.join(
+            'neos.server.session.agent_session': os.path.join(
                 project_root, 'openhands/server/session/agent_session.py'
             ),
-            'openhands.server.session.__init__': os.path.join(
+            'neos.server.session.__init__': os.path.join(
                 project_root, 'openhands/server/session/__init__.py'
             ),
-            'openhands.server.session.session': os.path.join(
+            'neos.server.session.session': os.path.join(
                 project_root, 'openhands/server/session/session.py'
             ),
         }
@@ -233,20 +233,20 @@ class TestCircularImports(unittest.TestCase):
         Test for circular imports in the MCP modules that were involved in the stack trace.
 
         The problematic modules were:
-        - openhands.mcp
-        - openhands.mcp.utils
-        - openhands.memory.memory
+        - neos.mcp
+        - neos.mcp.utils
+        - neos.memory.memory
         """
         # Get the project root directory
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
         # Map module names to file paths
         module_paths = {
-            'openhands.mcp.__init__': os.path.join(
+            'neos.mcp.__init__': os.path.join(
                 project_root, 'openhands/mcp/__init__.py'
             ),
-            'openhands.mcp.utils': os.path.join(project_root, 'openhands/mcp/utils.py'),
-            'openhands.memory.memory': os.path.join(
+            'neos.mcp.utils': os.path.join(project_root, 'openhands/mcp/utils.py'),
+            'neos.memory.memory': os.path.join(
                 project_root, 'openhands/memory/memory.py'
             ),
         }
@@ -278,18 +278,18 @@ class TestCircularImports(unittest.TestCase):
 
         # Define the modules involved in the stack trace
         modules = [
-            'openhands.utils.prompt',
-            'openhands.agenthub.codeact_agent.tools.bash',
-            'openhands.agenthub.codeact_agent.tools.prompt',
-            'openhands.memory.memory',
-            'openhands.memory.conversation_memory',
-            'openhands.server.shared',
-            'openhands.server.conversation_manager.conversation_manager',
-            'openhands.server.session.agent_session',
-            'openhands.server.session.__init__',
-            'openhands.server.session.session',
-            'openhands.mcp.__init__',
-            'openhands.mcp.utils',
+            'neos.utils.prompt',
+            'neos.agenthub.codeact_agent.tools.bash',
+            'neos.agenthub.codeact_agent.tools.prompt',
+            'neos.memory.memory',
+            'neos.memory.conversation_memory',
+            'neos.server.shared',
+            'neos.server.conversation_manager.conversation_manager',
+            'neos.server.session.agent_session',
+            'neos.server.session.__init__',
+            'neos.server.session.session',
+            'neos.mcp.__init__',
+            'neos.mcp.utils',
         ]
 
         # Map module names to file paths
@@ -329,12 +329,12 @@ class TestCircularImports(unittest.TestCase):
                     parts = line[7:].split(',')
                     for part in parts:
                         module_part = part.strip().split(' as ')[0].strip()
-                        if module_part.startswith('openhands.'):
+                        if module_part.startswith('neos.'):
                             imported_modules.append(module_part)
                 elif line.startswith('from '):
                     # Handle "from module import name" or "from module import name as alias"
                     module_part = line[5:].split(' import ')[0].strip()
-                    if module_part.startswith('openhands.'):
+                    if module_part.startswith('neos.'):
                         imported_modules.append(module_part)
 
             import_graph[module_name] = [

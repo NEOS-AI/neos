@@ -1,4 +1,4 @@
-"""Third-party runtime implementations for OpenHands.
+"""Third-party runtime implementations for neos.
 
 This module contains runtime implementations provided by third-party vendors.
 These runtimes are optional and require additional dependencies to be installed.

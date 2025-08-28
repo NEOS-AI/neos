@@ -1,88 +1,88 @@
 @startuml openhands
 !pragma useIntermediatePackages false
 
-class openhands.action.agent.AgentEchoAction {
+class neos.action.agent.AgentEchoAction {
   content: str
   runnable: bool
   action: str
 }
-class openhands.action.agent.AgentFinishAction {
+class neos.action.agent.AgentFinishAction {
   runnable: bool
   action: str
 }
-class openhands.observation.AgentMessageObservation {
+class neos.observation.AgentMessageObservation {
   role: str
   observation: str
 }
-class openhands.action.agent.AgentSummarizeAction {
+class neos.action.agent.AgentSummarizeAction {
   summary: str
   action: str
 }
-class openhands.action.agent.AgentThinkAction {
+class neos.action.agent.AgentThinkAction {
   thought: str
   runnable: bool
   action: str
 }
-class openhands.action.base.ExecutableAction {
+class neos.action.base.ExecutableAction {
 }
-class openhands.action.base.NotExecutableAction {
+class neos.action.base.NotExecutableAction {
 }
-class openhands.observation.Observation {
+class neos.observation.Observation {
   content: str
 }
-class openhands.action.base.Action {
+class neos.action.base.Action {
 }
-class openhands.action.base.NullAction {
+class neos.action.base.NullAction {
   action: str
 }
-class openhands.action.bash.CmdRunAction {
+class neos.action.bash.CmdRunAction {
   command: str
   action: str
 }
-class openhands.action.browse.BrowseURLAction {
+class neos.action.browse.BrowseURLAction {
   url: str
   action: str
 }
-class openhands.observation.BrowserOutputObservation {
+class neos.observation.BrowserOutputObservation {
   url: str
   status_code: int
   error: bool
   observation: str
 }
-class openhands.action.fileop.FileReadAction {
+class neos.action.fileop.FileReadAction {
   path: str
   action: str
 }
-class openhands.observation.FileReadObservation {
+class neos.observation.FileReadObservation {
   path: str
   observation: str
 }
-class openhands.action.fileop.FileWriteAction {
+class neos.action.fileop.FileWriteAction {
   path: str
   contents: str
   action: str
 }
-class openhands.observation.FileWriteObservation {
+class neos.observation.FileWriteObservation {
   path: str
   observation: str
 }
-class openhands.action.tasks.AddTaskAction {
+class neos.action.tasks.AddTaskAction {
   parent: str
   goal: str
   subtasks: list
   action: str
 }
-class openhands.action.tasks.ModifyTaskAction {
+class neos.action.tasks.ModifyTaskAction {
   id: str
   state: str
   action: str
 }
-abstract class openhands.agent.Agent {
+abstract class neos.agent.Agent {
   _registry: Dict[str, Type[Agent]] {static}
   llm: LLM
   _complete: None
 }
-class openhands.llm.llm.LLM {
+class neos.llm.llm.LLM {
   model: None
   api_key: None
   base_url: None
@@ -91,7 +91,7 @@ class openhands.llm.llm.LLM {
   _debug_id: None
   _completion: None
 }
-class openhands.controller.agent_controller.AgentController {
+class neos.controller.agent_controller.AgentController {
   agent: Agent
   max_iterations: int
   workdir: str
@@ -100,34 +100,34 @@ class openhands.controller.agent_controller.AgentController {
   plan: Plan
   callbacks: List[Callable]
 }
-class openhands.observation.AgentErrorObservation {
+class neos.observation.AgentErrorObservation {
   observation: str
 }
-class openhands.controller.command_manager.CommandManager {
+class neos.controller.command_manager.CommandManager {
   directory: None
   shell: None
 }
-class openhands.observation.NullObservation {
+class neos.observation.NullObservation {
   observation: str
 }
-class openhands.plan.Plan {
+class neos.plan.Plan {
   main_goal: str {static}
   task: Task {static}
   main_goal: str
   task: None
 }
-class openhands.state.State {
+class neos.state.State {
   plan: Plan
   iteration: int
   history: List[Tuple[Action, Observation]]
   updated_info: List[Tuple[Action, Observation]]
 }
-class openhands.observation.CmdOutputObservation {
+class neos.observation.CmdOutputObservation {
   command: str
   exit_code: int
   observation: str
 }
-class openhands.sandbox.sandbox.DockerInteractive {
+class neos.sandbox.sandbox.DockerInteractive {
   instance_id: None
   instance_id: None
   workspace_dir: None
@@ -137,11 +137,11 @@ class openhands.sandbox.sandbox.DockerInteractive {
   base_container_image: None
   container_name: None
 }
-class openhands.observation.UserMessageObservation {
+class neos.observation.UserMessageObservation {
   role: str
   observation: str
 }
-class openhands.plan.Task {
+class neos.plan.Task {
   id: str {static}
   goal: str {static}
   parent: Task | None {static}
@@ -153,49 +153,49 @@ class openhands.plan.Task {
   subtasks: None
 }
 
-class openhands.server.session.Session {
+class neos.server.session.Session {
   websocket: None
   controller: Optional[AgentController]
   agent: Optional[Agent]
   agent_task: None
 }
 
-openhands.action.base.ExecutableAction <|-- openhands.action.agent.AgentEchoAction
-openhands.action.base.NotExecutableAction <|-- openhands.action.agent.AgentFinishAction
-openhands.observation.Observation <|-- openhands.observation.AgentMessageObservation
-openhands.action.base.NotExecutableAction <|-- openhands.action.agent.AgentSummarizeAction
-openhands.action.base.NotExecutableAction <|-- openhands.action.agent.AgentThinkAction
-openhands.action.base.Action <|-- openhands.action.base.ExecutableAction
-openhands.action.base.Action <|-- openhands.action.base.NotExecutableAction
-openhands.action.base.NotExecutableAction <|-- openhands.action.base.NullAction
-openhands.action.base.ExecutableAction <|-- openhands.action.bash.CmdRunAction
-openhands.action.base.ExecutableAction <|-- openhands.action.browse.BrowseURLAction
-openhands.observation.Observation <|-- openhands.observation.BrowserOutputObservation
-openhands.action.base.ExecutableAction <|-- openhands.action.fileop.FileReadAction
-openhands.observation.Observation <|-- openhands.observation.FileReadObservation
-openhands.action.base.ExecutableAction <|-- openhands.action.fileop.FileWriteAction
-openhands.observation.Observation <|-- openhands.observation.FileWriteObservation
-openhands.action.base.NotExecutableAction <|-- openhands.action.tasks.AddTaskAction
-openhands.action.base.NotExecutableAction <|-- openhands.action.tasks.ModifyTaskAction
-openhands.agent.Agent *-- openhands.agent.Agent
-openhands.agent.Agent *-- openhands.llm.llm.LLM
-openhands.controller.agent_controller.AgentController *-- openhands.agent.Agent
-openhands.observation.Observation <|-- openhands.observation.AgentErrorObservation
-openhands.observation.Observation <|-- openhands.observation.NullObservation
-openhands.plan.Plan *-- openhands.plan.Task
-openhands.state.State *-- openhands.plan.Plan
-openhands.state.State *-- openhands.observation.CmdOutputObservation
-openhands.state.State *-- openhands.action.base.Action
-openhands.state.State *-- openhands.observation.Observation
-openhands.observation.Observation <|-- openhands.observation.CmdOutputObservation
-openhands.observation.Observation <|-- openhands.observation.UserMessageObservation
-openhands.plan.Task *-- openhands.plan.Task
-openhands.server.session.Session *-- openhands.controller.agent_controller.AgentController
-openhands.server.session.Session *-- openhands.agent.Agent
-openhands.controller.agent_controller.AgentController -> openhands.state.State
-openhands.controller.agent_controller.AgentController -> openhands.plan.Plan
-openhands.controller.agent_controller.AgentController -> openhands.controller.command_manager.CommandManager
-openhands.controller.command_manager.CommandManager -> openhands.sandbox.sandbox.DockerInteractive
+neos.action.base.ExecutableAction <|-- neos.action.agent.AgentEchoAction
+neos.action.base.NotExecutableAction <|-- neos.action.agent.AgentFinishAction
+neos.observation.Observation <|-- neos.observation.AgentMessageObservation
+neos.action.base.NotExecutableAction <|-- neos.action.agent.AgentSummarizeAction
+neos.action.base.NotExecutableAction <|-- neos.action.agent.AgentThinkAction
+neos.action.base.Action <|-- neos.action.base.ExecutableAction
+neos.action.base.Action <|-- neos.action.base.NotExecutableAction
+neos.action.base.NotExecutableAction <|-- neos.action.base.NullAction
+neos.action.base.ExecutableAction <|-- neos.action.bash.CmdRunAction
+neos.action.base.ExecutableAction <|-- neos.action.browse.BrowseURLAction
+neos.observation.Observation <|-- neos.observation.BrowserOutputObservation
+neos.action.base.ExecutableAction <|-- neos.action.fileop.FileReadAction
+neos.observation.Observation <|-- neos.observation.FileReadObservation
+neos.action.base.ExecutableAction <|-- neos.action.fileop.FileWriteAction
+neos.observation.Observation <|-- neos.observation.FileWriteObservation
+neos.action.base.NotExecutableAction <|-- neos.action.tasks.AddTaskAction
+neos.action.base.NotExecutableAction <|-- neos.action.tasks.ModifyTaskAction
+neos.agent.Agent *-- neos.agent.Agent
+neos.agent.Agent *-- neos.llm.llm.LLM
+neos.controller.agent_controller.AgentController *-- neos.agent.Agent
+neos.observation.Observation <|-- neos.observation.AgentErrorObservation
+neos.observation.Observation <|-- neos.observation.NullObservation
+neos.plan.Plan *-- neos.plan.Task
+neos.state.State *-- neos.plan.Plan
+neos.state.State *-- neos.observation.CmdOutputObservation
+neos.state.State *-- neos.action.base.Action
+neos.state.State *-- neos.observation.Observation
+neos.observation.Observation <|-- neos.observation.CmdOutputObservation
+neos.observation.Observation <|-- neos.observation.UserMessageObservation
+neos.plan.Task *-- neos.plan.Task
+neos.server.session.Session *-- neos.controller.agent_controller.AgentController
+neos.server.session.Session *-- neos.agent.Agent
+neos.controller.agent_controller.AgentController -> neos.state.State
+neos.controller.agent_controller.AgentController -> neos.plan.Plan
+neos.controller.agent_controller.AgentController -> neos.controller.command_manager.CommandManager
+neos.controller.command_manager.CommandManager -> neos.sandbox.sandbox.DockerInteractive
 
 footer Based on f3fda42; Generated by //py2puml//
 @enduml

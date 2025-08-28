@@ -5,13 +5,13 @@ from litellm.exceptions import (
     RateLimitError,
 )
 
-from openhands.core.config.llm_config import LLMConfig
-from openhands.core.config.openhands_config import OpenHandsConfig
-from openhands.llm.llm_registry import LLMRegistry
-from openhands.runtime.runtime_status import RuntimeStatus
-from openhands.server.services.conversation_stats import ConversationStats
-from openhands.server.session.session import Session
-from openhands.storage.memory import InMemoryFileStore
+from neos.core.config.llm_config import LLMConfig
+from neos.core.config.openhands_config import OpenHandsConfig
+from neos.llm.llm_registry import LLMRegistry
+from neos.runtime.runtime_status import RuntimeStatus
+from neos.server.services.conversation_stats import ConversationStats
+from neos.server.session.session import Session
+from neos.storage.memory import InMemoryFileStore
 
 
 @pytest.fixture
@@ -50,7 +50,7 @@ def conversation_stats():
 
 
 @pytest.mark.asyncio
-@patch('openhands.llm.llm.litellm_completion')
+@patch('neos.llm.llm.litellm_completion')
 async def test_notify_on_llm_retry(
     mock_litellm_completion,
     mock_sio,

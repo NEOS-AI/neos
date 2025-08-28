@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from openhands.server.listen_socket import oh_action, oh_user_action
+from neos.server.listen_socket import oh_action, oh_user_action
 
 
 @pytest.mark.asyncio
@@ -12,7 +12,7 @@ async def test_oh_user_action():
     test_data = {'action': 'test_action', 'data': 'test_data'}
 
     # Mock the conversation_manager
-    with patch('openhands.server.listen_socket.conversation_manager') as mock_manager:
+    with patch('neos.server.listen_socket.conversation_manager') as mock_manager:
         mock_manager.send_to_event_stream = AsyncMock()
 
         # Call the function
@@ -31,7 +31,7 @@ async def test_oh_action():
     test_data = {'action': 'test_action', 'data': 'test_data'}
 
     # Mock the conversation_manager
-    with patch('openhands.server.listen_socket.conversation_manager') as mock_manager:
+    with patch('neos.server.listen_socket.conversation_manager') as mock_manager:
         mock_manager.send_to_event_stream = AsyncMock()
 
         # Call the function

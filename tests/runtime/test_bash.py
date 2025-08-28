@@ -11,12 +11,12 @@ from conftest import (
     _load_runtime,
 )
 
-from openhands.core.logger import openhands_logger as logger
-from openhands.events.action import CmdRunAction
-from openhands.events.observation import CmdOutputObservation, ErrorObservation
-from openhands.runtime.impl.cli.cli_runtime import CLIRuntime
-from openhands.runtime.impl.local.local_runtime import LocalRuntime
-from openhands.runtime.utils.bash_constants import TIMEOUT_MESSAGE_TEMPLATE
+from neos.core.logger import openhands_logger as logger
+from neos.events.action import CmdRunAction
+from neos.events.observation import CmdOutputObservation, ErrorObservation
+from neos.runtime.impl.cli.cli_runtime import CLIRuntime
+from neos.runtime.impl.local.local_runtime import LocalRuntime
+from neos.runtime.utils.bash_constants import TIMEOUT_MESSAGE_TEMPLATE
 
 
 def get_timeout_suffix(timeout_seconds):

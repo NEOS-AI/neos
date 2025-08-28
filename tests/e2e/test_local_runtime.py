@@ -22,7 +22,7 @@ def test_headless_mode_with_dummy_agent_no_browser():
     ENV ENABLE_BROWSER=false
     ENV AGENT_ENABLE_BROWSING=false
     ENV SKIP_DEPENDENCY_CHECK=1
-    CMD ["python", "-m", "openhands.core.main", "-c", "DummyAgent", "-t", "Hello world"]
+    CMD ["python", "-m", "neos.core.main", "-c", "DummyAgent", "-t", "Hello world"]
     """
 
     with tempfile.TemporaryDirectory() as tmpdir:

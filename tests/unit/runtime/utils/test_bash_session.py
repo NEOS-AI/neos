@@ -2,10 +2,10 @@ import os
 import tempfile
 import time
 
-from openhands.core.logger import openhands_logger as logger
-from openhands.events.action import CmdRunAction
-from openhands.runtime.utils.bash import BashCommandStatus, BashSession
-from openhands.runtime.utils.bash_constants import TIMEOUT_MESSAGE_TEMPLATE
+from neos.core.logger import openhands_logger as logger
+from neos.events.action import CmdRunAction
+from neos.runtime.utils.bash import BashCommandStatus, BashSession
+from neos.runtime.utils.bash_constants import TIMEOUT_MESSAGE_TEMPLATE
 
 
 def get_no_change_timeout_suffix(timeout_seconds):

@@ -4,19 +4,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from openhands.controller.agent import Agent
-from openhands.core.config import OpenHandsConfig, load_from_env
-from openhands.core.config.mcp_config import (
+from neos.controller.agent import Agent
+from neos.core.config import OpenHandsConfig, load_from_env
+from neos.core.config.mcp_config import (
     MCPConfig,
     MCPSHTTPServerConfig,
     MCPSSEServerConfig,
     MCPStdioServerConfig,
 )
-from openhands.llm.llm_registry import LLMRegistry
-from openhands.server.services.conversation_stats import ConversationStats
-from openhands.server.session.conversation_init_data import ConversationInitData
-from openhands.server.session.session import Session
-from openhands.storage.memory import InMemoryFileStore
+from neos.llm.llm_registry import LLMRegistry
+from neos.server.services.conversation_stats import ConversationStats
+from neos.server.session.conversation_init_data import ConversationInitData
+from neos.server.session.session import Session
+from neos.storage.memory import InMemoryFileStore
 
 
 def test_valid_sse_config():
@@ -349,7 +349,7 @@ shttp_servers = [
     config = OpenHandsConfig()
 
     # Load from TOML first
-    from openhands.core.config import load_from_toml
+    from neos.core.config import load_from_toml
 
     load_from_toml(config, str(toml_file))
 

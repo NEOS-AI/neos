@@ -3,15 +3,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from openhands.integrations.provider import ProviderHandler
-from openhands.server.data_models.conversation_info_result_set import (
+from neos.integrations.provider import ProviderHandler
+from neos.server.data_models.conversation_info_result_set import (
     ConversationInfoResultSet,
 )
-from openhands.server.routes.manage_conversations import (
+from neos.server.routes.manage_conversations import (
     get_microagent_management_conversations,
 )
-from openhands.storage.conversation.conversation_store import ConversationStore
-from openhands.storage.data_models.conversation_metadata import (
+from neos.storage.conversation.conversation_store import ConversationStore
+from neos.storage.data_models.conversation_metadata import (
     ConversationMetadata,
     ConversationTrigger,
 )
@@ -66,13 +66,13 @@ async def test_get_microagent_management_conversations_success():
 
     with (
         patch(
-            'openhands.server.routes.manage_conversations.ProviderHandler',
+            'neos.server.routes.manage_conversations.ProviderHandler',
             return_value=mock_provider_handler,
         ),
         patch(
-            'openhands.server.routes.manage_conversations._build_conversation_result_set'
+            'neos.server.routes.manage_conversations._build_conversation_result_set'
         ) as mock_build_result,
-        patch('openhands.server.routes.manage_conversations.config') as mock_config,
+        patch('neos.server.routes.manage_conversations.config') as mock_config,
     ):
         # Mock the build result function
         mock_build_result.return_value = ConversationInfoResultSet(
@@ -115,11 +115,11 @@ async def test_get_microagent_management_conversations_no_results():
     mock_provider_tokens = {'github': 'token_123'}
 
     with (
-        patch('openhands.server.routes.manage_conversations.ProviderHandler'),
+        patch('neos.server.routes.manage_conversations.ProviderHandler'),
         patch(
-            'openhands.server.routes.manage_conversations._build_conversation_result_set'
+            'neos.server.routes.manage_conversations._build_conversation_result_set'
         ) as mock_build_result,
-        patch('openhands.server.routes.manage_conversations.config') as mock_config,
+        patch('neos.server.routes.manage_conversations.config') as mock_config,
     ):
         # Mock the build result function
         mock_build_result.return_value = ConversationInfoResultSet(
@@ -186,13 +186,13 @@ async def test_get_microagent_management_conversations_filter_by_repository():
 
     with (
         patch(
-            'openhands.server.routes.manage_conversations.ProviderHandler',
+            'neos.server.routes.manage_conversations.ProviderHandler',
             return_value=mock_provider_handler,
         ),
         patch(
-            'openhands.server.routes.manage_conversations._build_conversation_result_set'
+            'neos.server.routes.manage_conversations._build_conversation_result_set'
         ) as mock_build_result,
-        patch('openhands.server.routes.manage_conversations.config') as mock_config,
+        patch('neos.server.routes.manage_conversations.config') as mock_config,
     ):
         # Mock the build result function - only repo1 should be included
         mock_build_result.return_value = ConversationInfoResultSet(
@@ -259,13 +259,13 @@ async def test_get_microagent_management_conversations_filter_by_trigger():
 
     with (
         patch(
-            'openhands.server.routes.manage_conversations.ProviderHandler',
+            'neos.server.routes.manage_conversations.ProviderHandler',
             return_value=mock_provider_handler,
         ),
         patch(
-            'openhands.server.routes.manage_conversations._build_conversation_result_set'
+            'neos.server.routes.manage_conversations._build_conversation_result_set'
         ) as mock_build_result,
-        patch('openhands.server.routes.manage_conversations.config') as mock_config,
+        patch('neos.server.routes.manage_conversations.config') as mock_config,
     ):
         # Mock the build result function - only microagent_management should be included
         mock_build_result.return_value = ConversationInfoResultSet(
@@ -332,13 +332,13 @@ async def test_get_microagent_management_conversations_filter_inactive_pr():
 
     with (
         patch(
-            'openhands.server.routes.manage_conversations.ProviderHandler',
+            'neos.server.routes.manage_conversations.ProviderHandler',
             return_value=mock_provider_handler,
         ),
         patch(
-            'openhands.server.routes.manage_conversations._build_conversation_result_set'
+            'neos.server.routes.manage_conversations._build_conversation_result_set'
         ) as mock_build_result,
-        patch('openhands.server.routes.manage_conversations.config') as mock_config,
+        patch('neos.server.routes.manage_conversations.config') as mock_config,
     ):
         # Mock the build result function - only active PR should be included
         mock_build_result.return_value = ConversationInfoResultSet(
@@ -395,13 +395,13 @@ async def test_get_microagent_management_conversations_no_pr_number():
 
     with (
         patch(
-            'openhands.server.routes.manage_conversations.ProviderHandler',
+            'neos.server.routes.manage_conversations.ProviderHandler',
             return_value=mock_provider_handler,
         ),
         patch(
-            'openhands.server.routes.manage_conversations._build_conversation_result_set'
+            'neos.server.routes.manage_conversations._build_conversation_result_set'
         ) as mock_build_result,
-        patch('openhands.server.routes.manage_conversations.config') as mock_config,
+        patch('neos.server.routes.manage_conversations.config') as mock_config,
     ):
         # Mock the build result function
         mock_build_result.return_value = ConversationInfoResultSet(
@@ -458,13 +458,13 @@ async def test_get_microagent_management_conversations_no_repository():
 
     with (
         patch(
-            'openhands.server.routes.manage_conversations.ProviderHandler',
+            'neos.server.routes.manage_conversations.ProviderHandler',
             return_value=mock_provider_handler,
         ),
         patch(
-            'openhands.server.routes.manage_conversations._build_conversation_result_set'
+            'neos.server.routes.manage_conversations._build_conversation_result_set'
         ) as mock_build_result,
-        patch('openhands.server.routes.manage_conversations.config') as mock_config,
+        patch('neos.server.routes.manage_conversations.config') as mock_config,
     ):
         # Mock the build result function - conversation should be filtered out due to repository mismatch
         mock_build_result.return_value = ConversationInfoResultSet(
@@ -534,13 +534,13 @@ async def test_get_microagent_management_conversations_age_filter():
 
     with (
         patch(
-            'openhands.server.routes.manage_conversations.ProviderHandler',
+            'neos.server.routes.manage_conversations.ProviderHandler',
             return_value=mock_provider_handler,
         ),
         patch(
-            'openhands.server.routes.manage_conversations._build_conversation_result_set'
+            'neos.server.routes.manage_conversations._build_conversation_result_set'
         ) as mock_build_result,
-        patch('openhands.server.routes.manage_conversations.config') as mock_config,
+        patch('neos.server.routes.manage_conversations.config') as mock_config,
     ):
         # Mock the build result function - only recent conversation should be included
         mock_build_result.return_value = ConversationInfoResultSet(
@@ -575,11 +575,11 @@ async def test_get_microagent_management_conversations_pagination():
     mock_provider_tokens = {'github': 'token_123'}
 
     with (
-        patch('openhands.server.routes.manage_conversations.ProviderHandler'),
+        patch('neos.server.routes.manage_conversations.ProviderHandler'),
         patch(
-            'openhands.server.routes.manage_conversations._build_conversation_result_set'
+            'neos.server.routes.manage_conversations._build_conversation_result_set'
         ) as mock_build_result,
-        patch('openhands.server.routes.manage_conversations.config') as mock_config,
+        patch('neos.server.routes.manage_conversations.config') as mock_config,
     ):
         # Mock the build result function
         mock_build_result.return_value = ConversationInfoResultSet(
@@ -616,11 +616,11 @@ async def test_get_microagent_management_conversations_default_parameters():
     mock_provider_tokens = {'github': 'token_123'}
 
     with (
-        patch('openhands.server.routes.manage_conversations.ProviderHandler'),
+        patch('neos.server.routes.manage_conversations.ProviderHandler'),
         patch(
-            'openhands.server.routes.manage_conversations._build_conversation_result_set'
+            'neos.server.routes.manage_conversations._build_conversation_result_set'
         ) as mock_build_result,
-        patch('openhands.server.routes.manage_conversations.config') as mock_config,
+        patch('neos.server.routes.manage_conversations.config') as mock_config,
     ):
         # Mock the build result function
         mock_build_result.return_value = ConversationInfoResultSet(

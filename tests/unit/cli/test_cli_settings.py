@@ -5,16 +5,16 @@ import pytest
 from prompt_toolkit.formatted_text import HTML
 from pydantic import SecretStr
 
-from openhands.cli.settings import (
+from neos.cli.settings import (
     display_settings,
     modify_llm_settings_advanced,
     modify_llm_settings_basic,
     modify_search_api_settings,
 )
-from openhands.cli.tui import UserCancelledError
-from openhands.core.config import OpenHandsConfig
-from openhands.storage.data_models.settings import Settings
-from openhands.storage.settings.file_settings_store import FileSettingsStore
+from neos.cli.tui import UserCancelledError
+from neos.core.config import OpenHandsConfig
+from neos.storage.data_models.settings import Settings
+from neos.storage.settings.file_settings_store import FileSettingsStore
 
 
 # Mock classes for condensers
@@ -78,7 +78,7 @@ class TestDisplaySettings:
         config.search_api_key = SecretStr('tvly-test-key')
         return config
 
-    @patch('openhands.cli.settings.print_container')
+    @patch('neos.cli.settings.print_container')
     def test_display_settings_standard_config(self, mock_print_container, app_config):
         display_settings(app_config)
         mock_print_container.assert_called_once()
@@ -106,7 +106,7 @@ class TestDisplaySettings:
         assert 'Configuration File' in settings_text
         assert str(Path(app_config.file_store_path)) in settings_text
 
-    @patch('openhands.cli.settings.print_container')
+    @patch('neos.cli.settings.print_container')
     def test_display_settings_advanced_config(
         self, mock_print_container, advanced_app_config
     ):
@@ -159,12 +159,12 @@ class TestModifyLLMSettingsBasic:
         return store
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.get_supported_llm_models')
-    @patch('openhands.cli.settings.organize_models_and_providers')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.get_supported_llm_models')
+    @patch('neos.cli.settings.organize_models_and_providers')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     async def test_modify_llm_settings_basic_success(
@@ -224,12 +224,12 @@ class TestModifyLLMSettingsBasic:
         assert settings.llm_base_url is None
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.get_supported_llm_models')
-    @patch('openhands.cli.settings.organize_models_and_providers')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.get_supported_llm_models')
+    @patch('neos.cli.settings.organize_models_and_providers')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     async def test_modify_llm_settings_basic_user_cancels(
@@ -259,13 +259,13 @@ class TestModifyLLMSettingsBasic:
         settings_store.store.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.get_supported_llm_models')
-    @patch('openhands.cli.settings.organize_models_and_providers')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
-    @patch('openhands.cli.settings.print_formatted_text')
+    @patch('neos.cli.settings.get_supported_llm_models')
+    @patch('neos.cli.settings.organize_models_and_providers')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.print_formatted_text')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     async def test_modify_llm_settings_basic_invalid_provider_input(
@@ -338,7 +338,7 @@ class TestModifyLLMSettingsBasic:
 
         import inspect
 
-        import openhands.cli.settings as settings_module
+        import neos.cli.settings as settings_module
 
         source_lines = inspect.getsource(
             settings_module.modify_llm_settings_basic
@@ -380,17 +380,17 @@ class TestModifyLLMSettingsBasic:
 
     @pytest.mark.asyncio
     @patch(
-        'openhands.cli.settings.VERIFIED_PROVIDERS',
+        'neos.cli.settings.VERIFIED_PROVIDERS',
         ['openhands', 'anthropic', 'openai'],
     )
-    @patch('openhands.cli.settings.VERIFIED_ANTHROPIC_MODELS', ['claude-3-opus'])
-    @patch('openhands.cli.settings.get_supported_llm_models')
-    @patch('openhands.cli.settings.organize_models_and_providers')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
-    @patch('openhands.cli.settings.print_formatted_text')
+    @patch('neos.cli.settings.VERIFIED_ANTHROPIC_MODELS', ['claude-3-opus'])
+    @patch('neos.cli.settings.get_supported_llm_models')
+    @patch('neos.cli.settings.organize_models_and_providers')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.print_formatted_text')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     async def test_default_provider_print_and_initial_selection(
@@ -465,19 +465,19 @@ class TestModifyLLMSettingsBasic:
 
     @pytest.mark.asyncio
     @patch(
-        'openhands.cli.settings.VERIFIED_PROVIDERS',
+        'neos.cli.settings.VERIFIED_PROVIDERS',
         ['openhands', 'anthropic'],
     )
     @patch(
-        'openhands.cli.settings.VERIFIED_ANTHROPIC_MODELS',
+        'neos.cli.settings.VERIFIED_ANTHROPIC_MODELS',
         ['claude-3-opus', 'claude-3-sonnet'],
     )
-    @patch('openhands.cli.settings.get_supported_llm_models')
-    @patch('openhands.cli.settings.organize_models_and_providers')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.get_supported_llm_models')
+    @patch('neos.cli.settings.organize_models_and_providers')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     async def test_modify_llm_settings_basic_keep_existing_values(
@@ -546,19 +546,19 @@ class TestModifyLLMSettingsBasic:
 
     @pytest.mark.asyncio
     @patch(
-        'openhands.cli.settings.VERIFIED_PROVIDERS',
+        'neos.cli.settings.VERIFIED_PROVIDERS',
         ['openhands', 'anthropic'],
     )
     @patch(
-        'openhands.cli.settings.VERIFIED_ANTHROPIC_MODELS',
+        'neos.cli.settings.VERIFIED_ANTHROPIC_MODELS',
         ['claude-3-opus', 'claude-3-sonnet'],
     )
-    @patch('openhands.cli.settings.get_supported_llm_models')
-    @patch('openhands.cli.settings.organize_models_and_providers')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.get_supported_llm_models')
+    @patch('neos.cli.settings.organize_models_and_providers')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     async def test_modify_llm_settings_basic_change_only_api_key(
@@ -610,19 +610,19 @@ class TestModifyLLMSettingsBasic:
 
     @pytest.mark.asyncio
     @patch(
-        'openhands.cli.settings.VERIFIED_PROVIDERS',
+        'neos.cli.settings.VERIFIED_PROVIDERS',
         ['openhands', 'anthropic'],
     )
     @patch(
-        'openhands.cli.settings.VERIFIED_OPENHANDS_MODELS',
+        'neos.cli.settings.VERIFIED_OPENHANDS_MODELS',
         ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'o3'],
     )
-    @patch('openhands.cli.settings.get_supported_llm_models')
-    @patch('openhands.cli.settings.organize_models_and_providers')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.get_supported_llm_models')
+    @patch('neos.cli.settings.organize_models_and_providers')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     async def test_modify_llm_settings_basic_change_provider_and_model(
@@ -693,23 +693,23 @@ class TestModifyLLMSettingsBasic:
 
     @pytest.mark.asyncio
     @patch(
-        'openhands.cli.settings.VERIFIED_PROVIDERS',
+        'neos.cli.settings.VERIFIED_PROVIDERS',
         ['openhands', 'anthropic'],
     )
     @patch(
-        'openhands.cli.settings.VERIFIED_OPENHANDS_MODELS',
+        'neos.cli.settings.VERIFIED_OPENHANDS_MODELS',
         ['anthropic/claude-3-opus', 'anthropic/claude-3-sonnet'],
     )
     @patch(
-        'openhands.cli.settings.VERIFIED_ANTHROPIC_MODELS',
+        'neos.cli.settings.VERIFIED_ANTHROPIC_MODELS',
         ['claude-sonnet-4-20250514', 'claude-3-opus'],
     )
-    @patch('openhands.cli.settings.get_supported_llm_models')
-    @patch('openhands.cli.settings.organize_models_and_providers')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.get_supported_llm_models')
+    @patch('neos.cli.settings.organize_models_and_providers')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     async def test_modify_llm_settings_basic_from_scratch(
@@ -831,19 +831,19 @@ class TestModifyLLMSettingsAdvanced:
         return store
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.Agent.list_agents')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.Agent.list_agents')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     @patch(
-        'openhands.cli.settings.ConversationWindowCondenserConfig',
+        'neos.cli.settings.ConversationWindowCondenserConfig',
         MockConversationWindowCondenserConfig,
     )
     @patch(
-        'openhands.cli.settings.CondenserPipelineConfig', MockCondenserPipelineConfig
+        'neos.cli.settings.CondenserPipelineConfig', MockCondenserPipelineConfig
     )
     async def test_modify_llm_settings_advanced_success(
         self, mock_confirm, mock_session, mock_list_agents, app_config, settings_store
@@ -891,15 +891,15 @@ class TestModifyLLMSettingsAdvanced:
         assert settings.enable_default_condenser is True
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.Agent.list_agents')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.Agent.list_agents')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     @patch(
-        'openhands.cli.settings.ConversationWindowCondenserConfig',
+        'neos.cli.settings.ConversationWindowCondenserConfig',
         MockConversationWindowCondenserConfig,
     )
     async def test_modify_llm_settings_advanced_user_cancels(
@@ -920,16 +920,16 @@ class TestModifyLLMSettingsAdvanced:
         settings_store.store.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.Agent.list_agents')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
-    @patch('openhands.cli.settings.print_formatted_text')
+    @patch('neos.cli.settings.Agent.list_agents')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.print_formatted_text')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     @patch(
-        'openhands.cli.settings.ConversationWindowCondenserConfig',
+        'neos.cli.settings.ConversationWindowCondenserConfig',
         MockConversationWindowCondenserConfig,
     )
     async def test_modify_llm_settings_advanced_invalid_agent(
@@ -975,15 +975,15 @@ class TestModifyLLMSettingsAdvanced:
         settings_store.store.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.Agent.list_agents')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.Agent.list_agents')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     @patch(
-        'openhands.cli.settings.ConversationWindowCondenserConfig',
+        'neos.cli.settings.ConversationWindowCondenserConfig',
         MockConversationWindowCondenserConfig,
     )
     async def test_modify_llm_settings_advanced_user_rejects_save(
@@ -1041,19 +1041,19 @@ class TestModifyLLMSettingsAdvanced:
         return config
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.Agent.list_agents')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.Agent.list_agents')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     @patch(
-        'openhands.cli.settings.ConversationWindowCondenserConfig',
+        'neos.cli.settings.ConversationWindowCondenserConfig',
         MockConversationWindowCondenserConfig,
     )
     @patch(
-        'openhands.cli.settings.CondenserPipelineConfig', MockCondenserPipelineConfig
+        'neos.cli.settings.CondenserPipelineConfig', MockCondenserPipelineConfig
     )
     async def test_modify_llm_settings_advanced_keep_existing_values(
         self,
@@ -1122,19 +1122,19 @@ class TestModifyLLMSettingsAdvanced:
         assert settings.enable_default_condenser is False
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.Agent.list_agents')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.Agent.list_agents')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     @patch(
-        'openhands.cli.settings.ConversationWindowCondenserConfig',
+        'neos.cli.settings.ConversationWindowCondenserConfig',
         MockConversationWindowCondenserConfig,
     )
     @patch(
-        'openhands.cli.settings.CondenserPipelineConfig', MockCondenserPipelineConfig
+        'neos.cli.settings.CondenserPipelineConfig', MockCondenserPipelineConfig
     )
     async def test_modify_llm_settings_advanced_partial_change(
         self,
@@ -1180,19 +1180,19 @@ class TestModifyLLMSettingsAdvanced:
         assert settings.enable_default_condenser is False  # Kept same
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.Agent.list_agents')
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.Agent.list_agents')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
     @patch(
-        'openhands.cli.settings.LLMSummarizingCondenserConfig',
+        'neos.cli.settings.LLMSummarizingCondenserConfig',
         MockLLMSummarizingCondenserConfig,
     )
     @patch(
-        'openhands.cli.settings.ConversationWindowCondenserConfig',
+        'neos.cli.settings.ConversationWindowCondenserConfig',
         MockConversationWindowCondenserConfig,
     )
     @patch(
-        'openhands.cli.settings.CondenserPipelineConfig', MockCondenserPipelineConfig
+        'neos.cli.settings.CondenserPipelineConfig', MockCondenserPipelineConfig
     )
     async def test_modify_llm_settings_advanced_from_scratch(
         self, mock_confirm, mock_session, mock_list_agents, settings_store
@@ -1278,10 +1278,10 @@ class TestModifyLLMSettingsAdvanced:
 
 class TestGetValidatedInput:
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.PromptSession')
+    @patch('neos.cli.settings.PromptSession')
     async def test_get_validated_input_with_prefill(self, mock_session):
         """Test get_validated_input with default_value prefilled."""
-        from openhands.cli.settings import get_validated_input
+        from neos.cli.settings import get_validated_input
 
         session_instance = MagicMock()
         session_instance.prompt_async = AsyncMock(return_value='modified-value')
@@ -1299,10 +1299,10 @@ class TestGetValidatedInput:
         assert result == 'modified-value'
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.PromptSession')
+    @patch('neos.cli.settings.PromptSession')
     async def test_get_validated_input_empty_returns_current(self, mock_session):
         """Test that pressing Enter with empty input returns enter_keeps_value."""
-        from openhands.cli.settings import get_validated_input
+        from neos.cli.settings import get_validated_input
 
         session_instance = MagicMock()
         # Simulate user pressing Enter (empty input)
@@ -1323,10 +1323,10 @@ class TestGetValidatedInput:
         assert result == 'existing-value'
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.PromptSession')
+    @patch('neos.cli.settings.PromptSession')
     async def test_get_validated_input_with_validator(self, mock_session):
         """Test get_validated_input with validator and error message."""
-        from openhands.cli.settings import get_validated_input
+        from neos.cli.settings import get_validated_input
 
         session_instance = MagicMock()
         # First attempt fails validation, second succeeds
@@ -1335,7 +1335,7 @@ class TestGetValidatedInput:
         )
 
         # Mock print_formatted_text to verify error message
-        with patch('openhands.cli.settings.print_formatted_text') as mock_print:
+        with patch('neos.cli.settings.print_formatted_text') as mock_print:
             result = await get_validated_input(
                 session_instance,
                 'Enter value: ',
@@ -1369,9 +1369,9 @@ class TestModifySearchApiSettings:
         return store
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
-    @patch('openhands.cli.settings.print_formatted_text')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.print_formatted_text')
     async def test_modify_search_api_settings_set_new_key(
         self, mock_print, mock_confirm, mock_session, app_config, settings_store
     ):
@@ -1396,9 +1396,9 @@ class TestModifySearchApiSettings:
         assert settings.search_api_key.get_secret_value() == 'tvly-new-key'
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
-    @patch('openhands.cli.settings.print_formatted_text')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.print_formatted_text')
     async def test_modify_search_api_settings_remove_key(
         self, mock_print, mock_confirm, mock_session, app_config, settings_store
     ):
@@ -1422,9 +1422,9 @@ class TestModifySearchApiSettings:
         assert settings.search_api_key is None
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.settings.PromptSession')
-    @patch('openhands.cli.settings.cli_confirm')
-    @patch('openhands.cli.settings.print_formatted_text')
+    @patch('neos.cli.settings.PromptSession')
+    @patch('neos.cli.settings.cli_confirm')
+    @patch('neos.cli.settings.print_formatted_text')
     async def test_modify_search_api_settings_keep_current(
         self, mock_print, mock_confirm, mock_session, app_config, settings_store
     ):

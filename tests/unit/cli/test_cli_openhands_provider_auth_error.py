@@ -6,10 +6,10 @@ import pytest_asyncio
 from litellm.exceptions import AuthenticationError
 from pydantic import SecretStr
 
-from openhands.cli import main as cli
-from openhands.core.config.llm_config import LLMConfig
-from openhands.events import EventSource
-from openhands.events.action import MessageAction
+from neos.cli import main as cli
+from neos.core.config.llm_config import LLMConfig
+from neos.events import EventSource
+from neos.events.action import MessageAction
 
 
 @pytest_asyncio.fixture
@@ -75,17 +75,17 @@ def mock_settings_store():
 
 
 @pytest.mark.asyncio
-@patch('openhands.cli.main.display_runtime_initialization_message')
-@patch('openhands.cli.main.display_initialization_animation')
-@patch('openhands.cli.main.create_agent')
-@patch('openhands.cli.main.add_mcp_tools_to_agent')
-@patch('openhands.cli.main.create_runtime')
-@patch('openhands.cli.main.create_controller')
-@patch('openhands.cli.main.create_memory')
-@patch('openhands.cli.main.run_agent_until_done')
-@patch('openhands.cli.main.cleanup_session')
-@patch('openhands.cli.main.initialize_repository_for_runtime')
-@patch('openhands.llm.llm.litellm_completion')
+@patch('neos.cli.main.display_runtime_initialization_message')
+@patch('neos.cli.main.display_initialization_animation')
+@patch('neos.cli.main.create_agent')
+@patch('neos.cli.main.add_mcp_tools_to_agent')
+@patch('neos.cli.main.create_runtime')
+@patch('neos.cli.main.create_controller')
+@patch('neos.cli.main.create_memory')
+@patch('neos.cli.main.run_agent_until_done')
+@patch('neos.cli.main.cleanup_session')
+@patch('neos.cli.main.initialize_repository_for_runtime')
+@patch('neos.llm.llm.litellm_completion')
 async def test_openhands_provider_authentication_error(
     mock_litellm_completion,
     mock_initialize_repo,
@@ -151,14 +151,14 @@ async def test_openhands_provider_authentication_error(
     )
 
     with patch(
-        'openhands.cli.main.read_prompt_input', new_callable=AsyncMock
+        'neos.cli.main.read_prompt_input', new_callable=AsyncMock
     ) as mock_read_prompt:
         # Set up read_prompt_input to return a string that will trigger the command handler
         mock_read_prompt.return_value = '/exit'
 
         # Mock handle_commands to return values that will exit the loop
         with patch(
-            'openhands.cli.main.handle_commands', new_callable=AsyncMock
+            'neos.cli.main.handle_commands', new_callable=AsyncMock
         ) as mock_handle_commands:
             mock_handle_commands.return_value = (
                 True,
@@ -167,7 +167,7 @@ async def test_openhands_provider_authentication_error(
             )  # close_repl, reload_microagents, new_session_requested
 
             # Mock logger.error to capture the error message
-            with patch('openhands.core.logger.openhands_logger.error'):
+            with patch('neos.core.logger.openhands_logger.error'):
                 # Run the function with an initial action that will trigger the OpenHands provider
                 initial_action_content = 'Hello, I need help with a task'
 

@@ -6,7 +6,7 @@ import json
 import pytest
 from litellm import ChatCompletionToolParam
 
-from openhands.llm.fn_call_converter import (
+from neos.llm.fn_call_converter import (
     IN_CONTEXT_LEARNING_EXAMPLE_PREFIX,
     IN_CONTEXT_LEARNING_EXAMPLE_SUFFIX,
     TOOL_EXAMPLES,
@@ -101,7 +101,7 @@ def test_malformed_parameter_parsing_recovery():
 
     This simulates a tool call to str_replace_editor where the 'command' parameter is malformed.
     """
-    from openhands.llm.fn_call_converter import (
+    from neos.llm.fn_call_converter import (
         convert_non_fncall_messages_to_fncall_messages,
     )
 

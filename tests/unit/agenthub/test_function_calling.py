@@ -6,16 +6,16 @@ from unittest.mock import patch
 import pytest
 from litellm import ModelResponse
 
-from openhands.agenthub.codeact_agent.function_calling import response_to_actions
-from openhands.core.exceptions import FunctionCallValidationError
-from openhands.events.action import (
+from neos.agenthub.codeact_agent.function_calling import response_to_actions
+from neos.core.exceptions import FunctionCallValidationError
+from neos.events.action import (
     BrowseInteractiveAction,
     CmdRunAction,
     FileEditAction,
     FileReadAction,
     IPythonRunCellAction,
 )
-from openhands.events.event import FileEditSource, FileReadSource
+from neos.events.event import FileEditSource, FileReadSource
 
 
 def create_mock_response(function_name: str, arguments: dict) -> ModelResponse:

@@ -1,7 +1,7 @@
 from unittest.mock import patch
 
-from openhands.core.config import OpenHandsConfig
-from openhands.io import read_input
+from neos.core.config import OpenHandsConfig
+from neos.io import read_input
 
 
 def test_single_line_input():

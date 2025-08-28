@@ -4,11 +4,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from openhands.core.config import load_openhands_config
-from openhands.core.exceptions import UserCancelledError
-from openhands.llm.async_llm import AsyncLLM
-from openhands.llm.llm import LLM
-from openhands.llm.streaming_llm import StreamingLLM
+from neos.core.config import load_openhands_config
+from neos.core.exceptions import UserCancelledError
+from neos.llm.async_llm import AsyncLLM
+from neos.llm.llm import LLM
+from neos.llm.streaming_llm import StreamingLLM
 
 config = load_openhands_config()
 
@@ -46,7 +46,7 @@ def mock_response():
 
 @contextmanager
 def _patch_http():
-    with patch('openhands.llm.llm.httpx.get', MagicMock()) as mock_http:
+    with patch('neos.llm.llm.httpx.get', MagicMock()) as mock_http:
         mock_http.json.return_value = {
             'data': [
                 {'model_name': 'some_model'},

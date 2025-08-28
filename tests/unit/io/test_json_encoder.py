@@ -3,7 +3,7 @@ from datetime import datetime
 
 import psutil
 
-from openhands.io.json import dumps
+from neos.io.json import dumps
 
 
 def get_memory_usage():

@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 import pytest
 
-from openhands.runtime.utils import git_changes, git_diff, git_handler
-from openhands.runtime.utils.git_handler import CommandResult, GitHandler
+from neos.runtime.utils import git_changes, git_diff, git_handler
+from neos.runtime.utils.git_handler import CommandResult, GitHandler
 
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='Windows is not supported')
@@ -257,7 +257,7 @@ class TestGitHandler(unittest.TestCase):
         """Test that get_git_changes falls back to creating a script file when needed."""
         # Break the git changes command
         with patch(
-            'openhands.runtime.utils.git_handler.GIT_CHANGES_CMD',
+            'neos.runtime.utils.git_handler.GIT_CHANGES_CMD',
             'non-existant-command',
         ):
             self.git_handler.git_changes_cmd = git_handler.GIT_CHANGES_CMD
@@ -282,7 +282,7 @@ class TestGitHandler(unittest.TestCase):
         """Test that get_git_diff delegates to the git_diff module."""
         # Break the git diff command
         with patch(
-            'openhands.runtime.utils.git_handler.GIT_DIFF_CMD', 'non-existant-command'
+            'neos.runtime.utils.git_handler.GIT_DIFF_CMD', 'non-existant-command'
         ):
             self.git_handler.git_diff_cmd = git_handler.GIT_DIFF_CMD
 

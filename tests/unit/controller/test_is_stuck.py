@@ -4,21 +4,21 @@ from unittest.mock import Mock, patch
 import pytest
 from pytest import TempPathFactory
 
-from openhands.controller.agent_controller import AgentController
-from openhands.controller.state.state import State
-from openhands.controller.stuck import StuckDetector
-from openhands.events.action import CmdRunAction, FileReadAction, MessageAction
-from openhands.events.action.commands import IPythonRunCellAction
-from openhands.events.observation import (
+from neos.controller.agent_controller import AgentController
+from neos.controller.state.state import State
+from neos.controller.stuck import StuckDetector
+from neos.events.action import CmdRunAction, FileReadAction, MessageAction
+from neos.events.action.commands import IPythonRunCellAction
+from neos.events.observation import (
     CmdOutputObservation,
     FileReadObservation,
 )
-from openhands.events.observation.agent import AgentCondensationObservation
-from openhands.events.observation.commands import IPythonRunCellObservation
-from openhands.events.observation.empty import NullObservation
-from openhands.events.observation.error import ErrorObservation
-from openhands.events.stream import EventSource, EventStream
-from openhands.storage import get_file_store
+from neos.events.observation.agent import AgentCondensationObservation
+from neos.events.observation.commands import IPythonRunCellObservation
+from neos.events.observation.empty import NullObservation
+from neos.events.observation.error import ErrorObservation
+from neos.events.stream import EventSource, EventStream
+from neos.storage import get_file_store
 
 
 def collect_events(stream):

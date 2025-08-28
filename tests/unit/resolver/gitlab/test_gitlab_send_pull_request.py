@@ -5,12 +5,12 @@ from urllib.parse import quote
 
 import pytest
 
-from openhands.core.config import LLMConfig
-from openhands.integrations.service_types import ProviderType
-from openhands.resolver.interfaces.gitlab import GitlabIssueHandler
-from openhands.resolver.interfaces.issue import ReviewThread
-from openhands.resolver.resolver_output import Issue, ResolverOutput
-from openhands.resolver.send_pull_request import (
+from neos.core.config import LLMConfig
+from neos.integrations.service_types import ProviderType
+from neos.resolver.interfaces.gitlab import GitlabIssueHandler
+from neos.resolver.interfaces.issue import ReviewThread
+from neos.resolver.resolver_output import Issue, ResolverOutput
+from neos.resolver.send_pull_request import (
     apply_patch,
     initialize_repo,
     load_single_resolver_output,
@@ -243,10 +243,10 @@ def test_initialize_repo(mock_output_dir):
         assert f.read() == 'hello world'
 
 
-@patch('openhands.resolver.interfaces.gitlab.GitlabIssueHandler.reply_to_comment')
+@patch('neos.resolver.interfaces.gitlab.GitlabIssueHandler.reply_to_comment')
 @patch('httpx.post')
 @patch('subprocess.run')
-@patch('openhands.resolver.send_pull_request.LLM')
+@patch('neos.resolver.send_pull_request.LLM')
 def test_update_existing_pull_request(
     mock_llm_class,
     mock_subprocess_run,
@@ -709,10 +709,10 @@ def test_reply_to_comment(mock_get, mock_post, mock_issue):
     mock_response.raise_for_status.assert_called_once()
 
 
-@patch('openhands.resolver.send_pull_request.initialize_repo')
-@patch('openhands.resolver.send_pull_request.apply_patch')
-@patch('openhands.resolver.send_pull_request.update_existing_pull_request')
-@patch('openhands.resolver.send_pull_request.make_commit')
+@patch('neos.resolver.send_pull_request.initialize_repo')
+@patch('neos.resolver.send_pull_request.apply_patch')
+@patch('neos.resolver.send_pull_request.update_existing_pull_request')
+@patch('neos.resolver.send_pull_request.make_commit')
 def test_process_single_pr_update(
     mock_make_commit,
     mock_update_existing_pull_request,
@@ -798,10 +798,10 @@ def test_process_single_pr_update(
     )
 
 
-@patch('openhands.resolver.send_pull_request.initialize_repo')
-@patch('openhands.resolver.send_pull_request.apply_patch')
-@patch('openhands.resolver.send_pull_request.send_pull_request')
-@patch('openhands.resolver.send_pull_request.make_commit')
+@patch('neos.resolver.send_pull_request.initialize_repo')
+@patch('neos.resolver.send_pull_request.apply_patch')
+@patch('neos.resolver.send_pull_request.send_pull_request')
+@patch('neos.resolver.send_pull_request.make_commit')
 def test_process_single_issue(
     mock_make_commit,
     mock_send_pull_request,
@@ -891,10 +891,10 @@ def test_process_single_issue(
     )
 
 
-@patch('openhands.resolver.send_pull_request.initialize_repo')
-@patch('openhands.resolver.send_pull_request.apply_patch')
-@patch('openhands.resolver.send_pull_request.send_pull_request')
-@patch('openhands.resolver.send_pull_request.make_commit')
+@patch('neos.resolver.send_pull_request.initialize_repo')
+@patch('neos.resolver.send_pull_request.apply_patch')
+@patch('neos.resolver.send_pull_request.send_pull_request')
+@patch('neos.resolver.send_pull_request.make_commit')
 def test_process_single_issue_unsuccessful(
     mock_make_commit,
     mock_send_pull_request,
@@ -1018,10 +1018,10 @@ def test_send_pull_request_branch_naming(
     )
 
 
-@patch('openhands.resolver.send_pull_request.argparse.ArgumentParser')
-@patch('openhands.resolver.send_pull_request.process_single_issue')
-@patch('openhands.resolver.send_pull_request.load_single_resolver_output')
-@patch('openhands.resolver.send_pull_request.identify_token')
+@patch('neos.resolver.send_pull_request.argparse.ArgumentParser')
+@patch('neos.resolver.send_pull_request.process_single_issue')
+@patch('neos.resolver.send_pull_request.load_single_resolver_output')
+@patch('neos.resolver.send_pull_request.identify_token')
 @patch('os.path.exists')
 @patch('os.getenv')
 def test_main(

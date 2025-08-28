@@ -8,13 +8,13 @@ from conftest import (
     _load_runtime,
 )
 
-from openhands.agenthub.readonly_agent.function_calling import (
+from neos.agenthub.readonly_agent.function_calling import (
     glob_to_cmdrun,
     grep_to_cmdrun,
 )
-from openhands.core.logger import openhands_logger as logger
-from openhands.events.action import CmdRunAction
-from openhands.events.observation import CmdOutputObservation, ErrorObservation
+from neos.core.logger import openhands_logger as logger
+from neos.events.action import CmdRunAction
+from neos.events.observation import CmdOutputObservation, ErrorObservation
 
 # Skip all tests in this file if running with CLIRuntime,
 # as they depend on `rg` (ripgrep) which is not guaranteed to be available.

@@ -2,10 +2,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openhands.core.config import OpenHandsConfig
-from openhands.events import EventStream
-from openhands.llm.llm_registry import LLMRegistry
-from openhands.runtime.impl.docker.docker_runtime import DockerRuntime
+from neos.core.config import OpenHandsConfig
+from neos.events import EventStream
+from neos.llm.llm_registry import LLMRegistry
+from neos.runtime.impl.docker.docker_runtime import DockerRuntime
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ def llm_registry():
     return MagicMock(spec=LLMRegistry)
 
 
-@patch('openhands.runtime.impl.docker.docker_runtime.stop_all_containers')
+@patch('neos.runtime.impl.docker.docker_runtime.stop_all_containers')
 def test_container_stopped_when_keep_runtime_alive_false(
     mock_stop_containers, mock_docker_client, config, event_stream, llm_registry
 ):
@@ -61,7 +61,7 @@ def test_container_stopped_when_keep_runtime_alive_false(
     mock_stop_containers.assert_called_once_with('openhands-runtime-test-sid')
 
 
-@patch('openhands.runtime.impl.docker.docker_runtime.stop_all_containers')
+@patch('neos.runtime.impl.docker.docker_runtime.stop_all_containers')
 def test_container_not_stopped_when_keep_runtime_alive_true(
     mock_stop_containers, mock_docker_client, config, event_stream, llm_registry
 ):
@@ -81,7 +81,7 @@ def test_volumes_mode_extraction():
     """Test that the mount mode is correctly extracted from sandbox.volumes."""
     import os
 
-    from openhands.runtime.impl.docker.docker_runtime import DockerRuntime
+    from neos.runtime.impl.docker.docker_runtime import DockerRuntime
 
     # Create a DockerRuntime instance with a mock config
     runtime = DockerRuntime.__new__(DockerRuntime)
@@ -104,7 +104,7 @@ def test_volumes_multiple_mounts():
     """Test that multiple mounts in sandbox.volumes are correctly processed."""
     import os
 
-    from openhands.runtime.impl.docker.docker_runtime import DockerRuntime
+    from neos.runtime.impl.docker.docker_runtime import DockerRuntime
 
     # Create a DockerRuntime instance with a mock config
     runtime = DockerRuntime.__new__(DockerRuntime)
@@ -131,7 +131,7 @@ def test_multiple_volumes():
     """Test that multiple volumes are correctly processed."""
     import os
 
-    from openhands.runtime.impl.docker.docker_runtime import DockerRuntime
+    from neos.runtime.impl.docker.docker_runtime import DockerRuntime
 
     # Create a DockerRuntime instance with a mock config
     runtime = DockerRuntime.__new__(DockerRuntime)
@@ -157,7 +157,7 @@ def test_volumes_default_mode():
     """Test that the default mount mode (rw) is used when not specified in sandbox.volumes."""
     import os
 
-    from openhands.runtime.impl.docker.docker_runtime import DockerRuntime
+    from neos.runtime.impl.docker.docker_runtime import DockerRuntime
 
     # Create a DockerRuntime instance with a mock config
     runtime = DockerRuntime.__new__(DockerRuntime)

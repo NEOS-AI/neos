@@ -20,19 +20,19 @@ from evaluation.utils.shared import (
 from evaluation.utils.shared import (
     codeact_user_response as fake_user_response,
 )
-from openhands.controller.state.state import State
-from openhands.core.config import (
+from neos.controller.state.state import State
+from neos.core.config import (
     AgentConfig,
     OpenHandsConfig,
     get_llm_config_arg,
     parse_arguments,
 )
-from openhands.core.logger import openhands_logger as logger
-from openhands.core.main import create_runtime, run_controller
-from openhands.events.action import MessageAction
-from openhands.events.serialization.event import event_to_dict
-from openhands.runtime.base import Runtime
-from openhands.utils.async_utils import call_async_from_sync
+from neos.core.logger import openhands_logger as logger
+from neos.core.main import create_runtime, run_controller
+from neos.events.action import MessageAction
+from neos.events.serialization.event import event_to_dict
+from neos.runtime.base import Runtime
+from neos.utils.async_utils import call_async_from_sync
 
 FAKE_RESPONSES = {
     'CodeActAgent': fake_user_response,

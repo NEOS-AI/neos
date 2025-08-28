@@ -3,8 +3,8 @@ from unittest.mock import patch
 import pytest
 from litellm.exceptions import APIConnectionError
 
-from openhands.core.config import LLMConfig
-from openhands.llm.llm import LLM
+from neos.core.config import LLMConfig
+from neos.llm.llm import LLM
 
 
 @pytest.fixture
@@ -18,7 +18,7 @@ def default_config():
     )
 
 
-@patch('openhands.llm.llm.litellm_completion')
+@patch('neos.llm.llm.litellm_completion')
 def test_completion_retries_api_connection_error(
     mock_litellm_completion, default_config
 ):
@@ -45,7 +45,7 @@ def test_completion_retries_api_connection_error(
     assert mock_litellm_completion.call_count == 2  # Initial call + 1 retry
 
 
-@patch('openhands.llm.llm.litellm_completion')
+@patch('neos.llm.llm.litellm_completion')
 def test_completion_max_retries_api_connection_error(
     mock_litellm_completion, default_config
 ):

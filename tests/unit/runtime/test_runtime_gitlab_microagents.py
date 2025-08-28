@@ -6,15 +6,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openhands.core.config import OpenHandsConfig, SandboxConfig
-from openhands.events import EventStream
-from openhands.integrations.service_types import ProviderType, Repository
-from openhands.llm.llm_registry import LLMRegistry
-from openhands.microagent.microagent import (
+from neos.core.config import OpenHandsConfig, SandboxConfig
+from neos.events import EventStream
+from neos.integrations.service_types import ProviderType, Repository
+from neos.llm.llm_registry import LLMRegistry
+from neos.microagent.microagent import (
     RepoMicroagent,
 )
-from openhands.runtime.base import Runtime
-from openhands.storage import get_file_store
+from neos.runtime.base import Runtime
+from neos.storage import get_file_store
 
 
 class MockRuntime(Runtime):
@@ -58,13 +58,13 @@ class MockRuntime(Runtime):
     def run_action(self, action):
         """Mock run_action method."""
         # For testing, we'll simulate successful cloning
-        from openhands.events.observation import CmdOutputObservation
+        from neos.events.observation import CmdOutputObservation
 
         return CmdOutputObservation(content='', exit_code=0)
 
     def read(self, action):
         """Mock read method."""
-        from openhands.events.observation import ErrorObservation
+        from neos.events.observation import ErrorObservation
 
         return ErrorObservation('File not found')
 
@@ -80,7 +80,7 @@ class MockRuntime(Runtime):
                 continue
 
             # Create a simple mock microagent
-            from openhands.microagent.types import MicroagentMetadata, MicroagentType
+            from neos.microagent.types import MicroagentMetadata, MicroagentType
 
             agent = RepoMicroagent(
                 name=f'mock_{md_file.stem}',
@@ -98,32 +98,32 @@ class MockRuntime(Runtime):
         pass
 
     def run(self, action):
-        from openhands.events.observation import CmdOutputObservation
+        from neos.events.observation import CmdOutputObservation
 
         return CmdOutputObservation(content='', exit_code=0)
 
     def run_ipython(self, action):
-        from openhands.events.observation import IPythonRunCellObservation
+        from neos.events.observation import IPythonRunCellObservation
 
         return IPythonRunCellObservation(content='', code='')
 
     def edit(self, action):
-        from openhands.events.observation import FileEditObservation
+        from neos.events.observation import FileEditObservation
 
         return FileEditObservation(content='', path='')
 
     def browse(self, action):
-        from openhands.events.observation import BrowserObservation
+        from neos.events.observation import BrowserObservation
 
         return BrowserObservation(content='', url='', screenshot='')
 
     def browse_interactive(self, action):
-        from openhands.events.observation import BrowserObservation
+        from neos.events.observation import BrowserObservation
 
         return BrowserObservation(content='', url='', screenshot='')
 
     def write(self, action):
-        from openhands.events.observation import FileWriteObservation
+        from neos.events.observation import FileWriteObservation
 
         return FileWriteObservation(content='', path='')
 
@@ -137,12 +137,12 @@ class MockRuntime(Runtime):
         return []
 
     def get_mcp_config(self, extra_stdio_servers=None):
-        from openhands.core.config.mcp_config import MCPConfig
+        from neos.core.config.mcp_config import MCPConfig
 
         return MCPConfig()
 
     def call_tool_mcp(self, action):
-        from openhands.events.observation import MCPObservation
+        from neos.events.observation import MCPObservation
 
         return MCPObservation(content='', tool='', result='')
 
@@ -187,11 +187,11 @@ def test_is_gitlab_repository_github(temp_workspace):
         is_public=True,
     )
 
-    with patch('openhands.runtime.base.ProviderHandler') as mock_handler_class:
+    with patch('neos.runtime.base.ProviderHandler') as mock_handler_class:
         mock_handler = MagicMock()
         mock_handler_class.return_value = mock_handler
 
-        with patch('openhands.runtime.base.call_async_from_sync') as mock_async:
+        with patch('neos.runtime.base.call_async_from_sync') as mock_async:
             mock_async.return_value = mock_repo
 
             result = runtime._is_gitlab_repository('github.com/owner/repo')
@@ -210,11 +210,11 @@ def test_is_gitlab_repository_gitlab(temp_workspace):
         is_public=True,
     )
 
-    with patch('openhands.runtime.base.ProviderHandler') as mock_handler_class:
+    with patch('neos.runtime.base.ProviderHandler') as mock_handler_class:
         mock_handler = MagicMock()
         mock_handler_class.return_value = mock_handler
 
-        with patch('openhands.runtime.base.call_async_from_sync') as mock_async:
+        with patch('neos.runtime.base.call_async_from_sync') as mock_async:
             mock_async.return_value = mock_repo
 
             result = runtime._is_gitlab_repository('gitlab.com/owner/repo')
@@ -225,7 +225,7 @@ def test_is_gitlab_repository_exception(temp_workspace):
     """Test that exceptions in provider detection return False."""
     runtime = MockRuntime(temp_workspace)
 
-    with patch('openhands.runtime.base.ProviderHandler') as mock_handler_class:
+    with patch('neos.runtime.base.ProviderHandler') as mock_handler_class:
         mock_handler_class.side_effect = Exception('Provider error')
 
         result = runtime._is_gitlab_repository('unknown.com/owner/repo')
@@ -239,7 +239,7 @@ def test_get_microagents_from_org_or_user_github(temp_workspace):
     # Mock the provider detection to return GitHub
     with patch.object(runtime, '_is_gitlab_repository', return_value=False):
         # Mock the _get_authenticated_git_url to simulate failure (no org repo)
-        with patch('openhands.runtime.base.call_async_from_sync') as mock_async:
+        with patch('neos.runtime.base.call_async_from_sync') as mock_async:
             mock_async.side_effect = Exception('Repository not found')
 
             result = runtime.get_microagents_from_org_or_user('github.com/owner/repo')
@@ -261,7 +261,7 @@ def test_get_microagents_from_org_or_user_gitlab_success_with_config(temp_worksp
     # Mock the provider detection to return GitLab
     with patch.object(runtime, '_is_gitlab_repository', return_value=True):
         # Mock successful cloning for openhands-config
-        with patch('openhands.runtime.base.call_async_from_sync') as mock_async:
+        with patch('neos.runtime.base.call_async_from_sync') as mock_async:
             mock_async.return_value = 'https://gitlab.com/owner/openhands-config.git'
 
             result = runtime.get_microagents_from_org_or_user('gitlab.com/owner/repo')
@@ -279,7 +279,7 @@ def test_get_microagents_from_org_or_user_gitlab_failure(temp_workspace):
     # Mock the provider detection to return GitLab
     with patch.object(runtime, '_is_gitlab_repository', return_value=True):
         # Mock the _get_authenticated_git_url to fail for openhands-config
-        with patch('openhands.runtime.base.call_async_from_sync') as mock_async:
+        with patch('neos.runtime.base.call_async_from_sync') as mock_async:
             mock_async.side_effect = Exception('openhands-config not found')
 
             result = runtime.get_microagents_from_org_or_user('gitlab.com/owner/repo')

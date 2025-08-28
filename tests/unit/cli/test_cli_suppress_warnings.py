@@ -4,7 +4,7 @@ import warnings
 from io import StringIO
 from unittest.mock import patch
 
-from openhands.cli.suppress_warnings import suppress_cli_warnings
+from neos.cli.suppress_warnings import suppress_cli_warnings
 
 
 class TestWarningSuppressionCLI:
@@ -94,9 +94,9 @@ class TestWarningSuppressionCLI:
         # Re-import the module to trigger suppression again
         import importlib
 
-        import openhands.cli.suppress_warnings
+        import neos.cli.suppress_warnings
 
-        importlib.reload(openhands.cli.suppress_warnings)
+        importlib.reload(neos.cli.suppress_warnings)
 
         # Capture stderr to check if warnings are printed
         captured_output = StringIO()

@@ -5,9 +5,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openhands.core.config import OpenHandsConfig
-from openhands.events import EventStream
-from openhands.runtime.impl.local.local_runtime import LocalRuntime
+from neos.core.config import OpenHandsConfig
+from neos.events import EventStream
+from neos.runtime.impl.local.local_runtime import LocalRuntime
 
 
 @pytest.fixture

@@ -4,13 +4,13 @@ import pprint
 
 import tqdm
 
-from openhands.core.config import (
+from neos.core.config import (
     get_evaluation_parser,
     get_llm_config_arg,
     load_openhands_config,
 )
-from openhands.core.logger import openhands_logger as logger
-from openhands.llm.llm import LLM
+from neos.core.logger import openhands_logger as logger
+from neos.llm.llm import LLM
 
 config = load_openhands_config()
 

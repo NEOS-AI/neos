@@ -3,9 +3,9 @@ from unittest.mock import patch
 
 import pytest
 
-from openhands.agenthub.codeact_agent.codeact_agent import CodeActAgent
-from openhands.core.config import AgentConfig
-from openhands.llm.llm import LLM
+from neos.agenthub.codeact_agent.codeact_agent import CodeActAgent
+from neos.core.config import AgentConfig
+from neos.llm.llm import LLM
 
 # Skip all tests in this module if not running on Windows
 pytestmark = pytest.mark.skipif(
@@ -83,12 +83,12 @@ def test_codeact_agent_tool_descriptions_no_bash_on_windows(mock_llm, agent_conf
 
 def test_in_context_learning_example_no_bash_on_windows():
     """Test that in-context learning examples don't contain 'bash' on Windows."""
-    from openhands.agenthub.codeact_agent.tools.bash import create_cmd_run_tool
-    from openhands.agenthub.codeact_agent.tools.finish import FinishTool
-    from openhands.agenthub.codeact_agent.tools.str_replace_editor import (
+    from neos.agenthub.codeact_agent.tools.bash import create_cmd_run_tool
+    from neos.agenthub.codeact_agent.tools.finish import FinishTool
+    from neos.agenthub.codeact_agent.tools.str_replace_editor import (
         create_str_replace_editor_tool,
     )
-    from openhands.llm.fn_call_converter import get_example_for_tools
+    from neos.llm.fn_call_converter import get_example_for_tools
 
     # Create a sample set of tools
     tools = [
@@ -117,7 +117,7 @@ def test_in_context_learning_example_no_bash_on_windows():
 
 def test_refine_prompt_function_works():
     """Test that the refine_prompt function correctly replaces 'bash' with 'powershell'."""
-    from openhands.agenthub.codeact_agent.tools.bash import refine_prompt
+    from neos.agenthub.codeact_agent.tools.bash import refine_prompt
 
     # Test basic replacement
     test_prompt = 'Execute a bash command to list files'
@@ -167,10 +167,10 @@ def test_refine_prompt_function_works():
 
 def test_refine_prompt_function_on_non_windows():
     """Test that the refine_prompt function doesn't change anything on non-Windows platforms."""
-    from openhands.agenthub.codeact_agent.tools.bash import refine_prompt
+    from neos.agenthub.codeact_agent.tools.bash import refine_prompt
 
     # Mock sys.platform to simulate non-Windows
-    with patch('openhands.agenthub.codeact_agent.tools.bash.sys.platform', 'linux'):
+    with patch('neos.agenthub.codeact_agent.tools.bash.sys.platform', 'linux'):
         test_prompt = 'Execute a bash command to list files'
         refined_prompt = refine_prompt(test_prompt)
 

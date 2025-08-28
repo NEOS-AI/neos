@@ -1,6 +1,6 @@
 import json
 
-from openhands.events.observation.commands import (
+from neos.events.observation.commands import (
     CMD_OUTPUT_METADATA_PS1_REGEX,
     CMD_OUTPUT_PS1_BEGIN,
     CMD_OUTPUT_PS1_END,

@@ -3,9 +3,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from openhands.cli.commands import handle_commands
-from openhands.core.schema import AgentState
-from openhands.core.schema.exit_reason import ExitReason
+from neos.cli.commands import handle_commands
+from neos.core.schema import AgentState
+from neos.core.schema.exit_reason import ExitReason
 
 
 def test_exit_reason_enum_values():
@@ -27,7 +27,7 @@ def test_exit_reason_str_representation():
 
 @pytest.mark.asyncio
 async def test_handle_exit_command_returns_intentional(monkeypatch):
-    monkeypatch.setattr('openhands.cli.commands.cli_confirm', lambda *a, **k: 0)
+    monkeypatch.setattr('neos.cli.commands.cli_confirm', lambda *a, **k: 0)
 
     mock_usage_metrics = MagicMock()
     mock_usage_metrics.session_init_time = time.time() - 3600

@@ -5,10 +5,10 @@ from unittest.mock import MagicMock
 
 from conftest import _close_test_runtime, _load_runtime
 
-from openhands.core.logger import openhands_logger as logger
-from openhands.events.action import FileEditAction, FileWriteAction
-from openhands.runtime.action_execution_server import _execute_file_editor
-from openhands.runtime.impl.cli.cli_runtime import CLIRuntime
+from neos.core.logger import openhands_logger as logger
+from neos.events.action import FileEditAction, FileWriteAction
+from neos.runtime.action_execution_server import _execute_file_editor
+from neos.runtime.impl.cli.cli_runtime import CLIRuntime
 
 
 def test_view_file(temp_dir, runtime_cls, run_as_openhands):

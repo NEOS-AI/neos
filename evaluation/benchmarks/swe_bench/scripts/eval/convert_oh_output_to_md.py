@@ -10,7 +10,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from evaluation.benchmarks.swe_bench.eval_infer import process_git_patch
-from openhands.events.serialization import event_from_dict
+from neos.events.serialization import event_from_dict
 
 tqdm.pandas()
 

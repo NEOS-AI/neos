@@ -1,4 +1,4 @@
-from openhands.events.observation.commands import (
+from neos.events.observation.commands import (
     CmdOutputMetadata,
     CmdOutputObservation,
     IPythonRunCellObservation,

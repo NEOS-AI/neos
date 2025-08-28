@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from openhands.core.config.kubernetes_config import KubernetesConfig
+from neos.core.config.kubernetes_config import KubernetesConfig
 
 
 def test_kubernetes_config_defaults():

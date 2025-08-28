@@ -1,8 +1,8 @@
 import pytest
 
-from openhands.core.config.agent_config import AgentConfig
-from openhands.core.config.openhands_config import OpenHandsConfig
-from openhands.core.config.utils import finalize_config
+from neos.core.config.agent_config import AgentConfig
+from neos.core.config.openhands_config import OpenHandsConfig
+from neos.core.config.utils import finalize_config
 
 # Define a dummy agent name often used in tests or as a default
 DEFAULT_AGENT_NAME = 'CodeActAgent'

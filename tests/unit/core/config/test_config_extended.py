@@ -2,9 +2,9 @@ import os
 
 import pytest
 
-from openhands.core.config.extended_config import ExtendedConfig
-from openhands.core.config.openhands_config import OpenHandsConfig
-from openhands.core.config.utils import load_from_toml
+from neos.core.config.extended_config import ExtendedConfig
+from neos.core.config.openhands_config import OpenHandsConfig
+from neos.core.config.utils import load_from_toml
 
 
 def test_extended_config_from_dict():

@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import psutil
 
-from openhands.runtime.utils.system_stats import (
+from neos.runtime.utils.system_stats import (
     get_system_info,
     get_system_stats,
     update_last_execution_time,
@@ -70,7 +70,7 @@ def test_get_system_stats_stability():
 def test_get_system_info():
     """Test that get_system_info returns valid system information."""
     with patch(
-        'openhands.runtime.utils.system_stats.get_system_stats'
+        'neos.runtime.utils.system_stats.get_system_stats'
     ) as mock_get_stats:
         mock_get_stats.return_value = {'cpu_percent': 10.0}
 
@@ -146,12 +146,12 @@ def test_idle_time_calculation(mock_time):
     # Import the module again to reset the global variables with our mocked time
     import importlib
 
-    import openhands.runtime.utils.system_stats
+    import neos.runtime.utils.system_stats
 
-    importlib.reload(openhands.runtime.utils.system_stats)
+    importlib.reload(neos.runtime.utils.system_stats)
 
     # Get system info
-    from openhands.runtime.utils.system_stats import get_system_info
+    from neos.runtime.utils.system_stats import get_system_info
 
     info = get_system_info()
 

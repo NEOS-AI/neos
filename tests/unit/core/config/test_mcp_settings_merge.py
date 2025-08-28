@@ -4,12 +4,12 @@ from unittest.mock import patch
 
 import pytest
 
-from openhands.core.config.mcp_config import (
+from neos.core.config.mcp_config import (
     MCPConfig,
     MCPSSEServerConfig,
     MCPStdioServerConfig,
 )
-from openhands.storage.data_models.settings import Settings
+from neos.storage.data_models.settings import Settings
 
 
 @pytest.mark.asyncio

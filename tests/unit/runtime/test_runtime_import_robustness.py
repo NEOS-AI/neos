@@ -22,7 +22,7 @@ def test_cli_import_with_broken_third_party_runtime():
 
     # This should not raise an exception even if third-party runtimes have broken dependencies
     try:
-        import openhands.cli.main  # noqa: F401
+        import neos.cli.main  # noqa: F401
 
         assert True
     except Exception as e:
@@ -32,13 +32,13 @@ def test_cli_import_with_broken_third_party_runtime():
 def test_runtime_import_robustness():
     """Test that runtime import system is robust against broken dependencies."""
     # Clear any cached runtime modules
-    modules_to_clear = [k for k in sys.modules.keys() if 'openhands.runtime' in k]
+    modules_to_clear = [k for k in sys.modules.keys() if 'neos.runtime' in k]
     for module in modules_to_clear:
         del sys.modules[module]
 
     # Import the runtime module - should succeed even with broken third-party runtimes
     try:
-        import openhands.runtime  # noqa: F401
+        import neos.runtime  # noqa: F401
 
         assert True
     except Exception as e:
@@ -48,18 +48,18 @@ def test_runtime_import_robustness():
 def test_get_runtime_cls_works():
     """Test that get_runtime_cls works even when third-party runtimes are broken."""
     # Import the runtime module
-    import openhands.runtime
+    import neos.runtime
 
     # Test that we can still get core runtime classes
-    docker_runtime = openhands.runtime.get_runtime_cls('docker')
+    docker_runtime = neos.runtime.get_runtime_cls('docker')
     assert docker_runtime is not None
 
-    local_runtime = openhands.runtime.get_runtime_cls('local')
+    local_runtime = neos.runtime.get_runtime_cls('local')
     assert local_runtime is not None
 
     # Test that requesting a non-existent runtime raises appropriate error
     with pytest.raises(ValueError, match='Runtime nonexistent not supported'):
-        openhands.runtime.get_runtime_cls('nonexistent')
+        neos.runtime.get_runtime_cls('nonexistent')
 
 
 def test_runtime_exception_handling():
@@ -68,13 +68,13 @@ def test_runtime_exception_handling():
     # properly catches all exceptions (not just ImportError) during
     # third-party runtime discovery
 
-    import openhands.runtime
+    import neos.runtime
 
     # The fact that we can import this module successfully means
     # the exception handling is working correctly, even if there
     # are broken third-party runtime dependencies
-    assert hasattr(openhands.runtime, 'get_runtime_cls')
-    assert hasattr(openhands.runtime, '_THIRD_PARTY_RUNTIME_CLASSES')
+    assert hasattr(neos.runtime, 'get_runtime_cls')
+    assert hasattr(neos.runtime, '_THIRD_PARTY_RUNTIME_CLASSES')
 
 
 def test_runtime_import_exception_handling_behavior():
@@ -82,7 +82,7 @@ def test_runtime_import_exception_handling_behavior():
     # Test the exception handling logic by simulating the exact code from runtime init
     from io import StringIO
 
-    from openhands.core.logger import openhands_logger as logger
+    from neos.core.logger import openhands_logger as logger
 
     # Create a string buffer to capture log output
     log_capture = StringIO()
@@ -134,7 +134,7 @@ def test_runtime_import_exception_handling_behavior():
 def test_import_error_handled_silently(caplog):
     """Test that ImportError is handled silently (no logging) as it means library is not installed."""
     # Simulate the exact code path for ImportError
-    logging.getLogger('openhands.runtime')
+    logging.getLogger('neos.runtime')
 
     with caplog.at_level(logging.WARNING):
         # Simulate ImportError handling - this should NOT log anything

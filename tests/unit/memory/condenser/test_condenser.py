@@ -4,8 +4,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from openhands.controller.state.state import State
-from openhands.core.config.condenser_config import (
+from neos.controller.state.state import State
+from neos.core.config.condenser_config import (
     AmortizedForgettingCondenserConfig,
     BrowserOutputCondenserConfig,
     CondenserPipelineConfig,
@@ -16,19 +16,19 @@ from openhands.core.config.condenser_config import (
     RecentEventsCondenserConfig,
     StructuredSummaryCondenserConfig,
 )
-from openhands.core.config.llm_config import LLMConfig
-from openhands.core.config.openhands_config import OpenHandsConfig
-from openhands.core.message import Message, TextContent
-from openhands.core.schema.action import ActionType
-from openhands.events.event import Event, EventSource
-from openhands.events.observation import BrowserOutputObservation
-from openhands.events.observation.agent import AgentCondensationObservation
-from openhands.events.observation.observation import Observation
-from openhands.llm import LLM
-from openhands.llm.llm_registry import LLMRegistry
-from openhands.memory.condenser import Condenser
-from openhands.memory.condenser.condenser import Condensation, RollingCondenser, View
-from openhands.memory.condenser.impl import (
+from neos.core.config.llm_config import LLMConfig
+from neos.core.config.openhands_config import OpenHandsConfig
+from neos.core.message import Message, TextContent
+from neos.core.schema.action import ActionType
+from neos.events.event import Event, EventSource
+from neos.events.observation import BrowserOutputObservation
+from neos.events.observation.agent import AgentCondensationObservation
+from neos.events.observation.observation import Observation
+from neos.llm import LLM
+from neos.llm.llm_registry import LLMRegistry
+from neos.memory.condenser import Condenser
+from neos.memory.condenser.condenser import Condensation, RollingCondenser, View
+from neos.memory.condenser.impl import (
     AmortizedForgettingCondenser,
     BrowserOutputCondenser,
     ImportantEventSelection,
@@ -39,8 +39,8 @@ from openhands.memory.condenser.impl import (
     RecentEventsCondenser,
     StructuredSummaryCondenser,
 )
-from openhands.memory.condenser.impl.pipeline import CondenserPipeline
-from openhands.server.services.conversation_stats import ConversationStats
+from neos.memory.condenser.impl.pipeline import CondenserPipeline
+from neos.server.services.conversation_stats import ConversationStats
 
 
 def create_test_event(

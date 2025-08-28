@@ -7,12 +7,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openhands.events.action import CmdRunAction
-from openhands.events.observation import ErrorObservation
-from openhands.events.observation.commands import (
+from neos.events.action import CmdRunAction
+from neos.events.observation import ErrorObservation
+from neos.events.observation.commands import (
     CmdOutputObservation,
 )
-from openhands.runtime.utils.bash_constants import TIMEOUT_MESSAGE_TEMPLATE
+from neos.runtime.utils.bash_constants import TIMEOUT_MESSAGE_TEMPLATE
 
 
 def get_timeout_suffix(timeout_seconds):
@@ -51,7 +51,7 @@ def windows_bash_session(temp_work_dir):
 
 
 if sys.platform == 'win32':
-    from openhands.runtime.utils.windows_bash import WindowsPowershellSession
+    from neos.runtime.utils.windows_bash import WindowsPowershellSession
 
 
 def test_command_execution(windows_bash_session):
@@ -344,7 +344,7 @@ def test_empty_command(windows_bash_session):
 def test_exception_during_execution(windows_bash_session):
     """Test handling of exceptions during command execution."""
     # Patch the PowerShell class itself within the module where it's used
-    patch_target = 'openhands.runtime.utils.windows_bash.PowerShell'
+    patch_target = 'neos.runtime.utils.windows_bash.PowerShell'
 
     # Create a mock PowerShell class
     mock_powershell_class = MagicMock()

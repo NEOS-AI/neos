@@ -4,11 +4,11 @@ from unittest.mock import Mock
 import pytest
 from litellm import ChatCompletionMessageToolCall
 
-from openhands.agenthub.codeact_agent.codeact_agent import CodeActAgent
-from openhands.agenthub.codeact_agent.function_calling import (
+from neos.agenthub.codeact_agent.codeact_agent import CodeActAgent
+from neos.agenthub.codeact_agent.function_calling import (
     response_to_actions as codeact_response_to_actions,
 )
-from openhands.agenthub.codeact_agent.tools import (
+from neos.agenthub.codeact_agent.tools import (
     BrowserTool,
     IPythonTool,
     LLMBasedFileEditTool,
@@ -16,35 +16,35 @@ from openhands.agenthub.codeact_agent.tools import (
     create_cmd_run_tool,
     create_str_replace_editor_tool,
 )
-from openhands.agenthub.codeact_agent.tools.browser import (
+from neos.agenthub.codeact_agent.tools.browser import (
     _BROWSER_DESCRIPTION,
     _BROWSER_TOOL_DESCRIPTION,
 )
-from openhands.agenthub.readonly_agent.function_calling import (
+from neos.agenthub.readonly_agent.function_calling import (
     response_to_actions as readonly_response_to_actions,
 )
-from openhands.agenthub.readonly_agent.readonly_agent import ReadOnlyAgent
-from openhands.agenthub.readonly_agent.tools import (
+from neos.agenthub.readonly_agent.readonly_agent import ReadOnlyAgent
+from neos.agenthub.readonly_agent.tools import (
     GlobTool,
     GrepTool,
 )
-from openhands.controller.state.state import State
-from openhands.core.config import AgentConfig, LLMConfig
-from openhands.core.config.openhands_config import OpenHandsConfig
-from openhands.core.exceptions import FunctionCallNotExistsError
-from openhands.core.message import ImageContent, Message, TextContent
-from openhands.events.action import (
+from neos.controller.state.state import State
+from neos.core.config import AgentConfig, LLMConfig
+from neos.core.config.openhands_config import OpenHandsConfig
+from neos.core.exceptions import FunctionCallNotExistsError
+from neos.core.message import ImageContent, Message, TextContent
+from neos.events.action import (
     CmdRunAction,
     MessageAction,
 )
-from openhands.events.action.message import SystemMessageAction
-from openhands.events.event import EventSource
-from openhands.events.observation.commands import (
+from neos.events.action.message import SystemMessageAction
+from neos.events.event import EventSource
+from neos.events.observation.commands import (
     CmdOutputObservation,
 )
-from openhands.events.tool import ToolCallMetadata
-from openhands.llm.llm_registry import LLMRegistry
-from openhands.memory.condenser import View
+from neos.events.tool import ToolCallMetadata
+from neos.llm.llm_registry import LLMRegistry
+from neos.memory.condenser import View
 
 
 @pytest.fixture
@@ -62,7 +62,7 @@ def agent_class(request):
     if request.param == 'CodeActAgent':
         return CodeActAgent
     else:
-        from openhands.agenthub.readonly_agent.readonly_agent import ReadOnlyAgent
+        from neos.agenthub.readonly_agent.readonly_agent import ReadOnlyAgent
 
         return ReadOnlyAgent
 
@@ -323,11 +323,11 @@ def test_correct_tool_description_loaded_based_on_model_name(
     """Tests that the simplified tool descriptions are loaded for specific models."""
     o3_mock_config = LLMConfig(model='mock_o3_model', api_key='test_key')
     if agent_type == 'CodeActAgent':
-        from openhands.agenthub.codeact_agent.codeact_agent import CodeActAgent
+        from neos.agenthub.codeact_agent.codeact_agent import CodeActAgent
 
         agent_class = CodeActAgent
     else:
-        from openhands.agenthub.readonly_agent.readonly_agent import ReadOnlyAgent
+        from neos.agenthub.readonly_agent.readonly_agent import ReadOnlyAgent
 
         agent_class = ReadOnlyAgent
 

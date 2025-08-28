@@ -6,23 +6,23 @@ import pytest
 from fastapi import status
 from fastapi.responses import JSONResponse
 
-from openhands.microagent.microagent import KnowledgeMicroagent, RepoMicroagent
-from openhands.microagent.types import MicroagentMetadata, MicroagentType
-from openhands.server.routes.conversation import get_microagents
-from openhands.server.routes.manage_conversations import (
+from neos.microagent.microagent import KnowledgeMicroagent, RepoMicroagent
+from neos.microagent.types import MicroagentMetadata, MicroagentType
+from neos.server.routes.conversation import get_microagents
+from neos.server.routes.manage_conversations import (
     UpdateConversationRequest,
     update_conversation,
 )
-from openhands.server.session.conversation import ServerConversation
-from openhands.storage.conversation.conversation_store import ConversationStore
-from openhands.storage.data_models.conversation_metadata import ConversationMetadata
+from neos.server.session.conversation import ServerConversation
+from neos.storage.conversation.conversation_store import ConversationStore
+from neos.storage.data_models.conversation_metadata import ConversationMetadata
 
 
 @pytest.mark.asyncio
 async def test_get_microagents():
     """Test the get_microagents function directly."""
     # Create mock microagents
-    from openhands.core.config.mcp_config import MCPConfig, MCPStdioServerConfig
+    from neos.core.config.mcp_config import MCPConfig, MCPStdioServerConfig
 
     repo_microagent = RepoMicroagent(
         name='test_repo',
@@ -75,7 +75,7 @@ async def test_get_microagents():
 
     # Mock the conversation manager
     with patch(
-        'openhands.server.routes.conversation.conversation_manager'
+        'neos.server.routes.conversation.conversation_manager'
     ) as mock_manager:
         # Set up the mocks
         mock_manager.get_agent_session.return_value = mock_agent_session
@@ -120,7 +120,7 @@ async def test_get_microagents_no_agent_session():
 
     # Mock the conversation manager
     with patch(
-        'openhands.server.routes.conversation.conversation_manager'
+        'neos.server.routes.conversation.conversation_manager'
     ) as mock_manager:
         # Set up the mocks
         mock_manager.get_agent_session.return_value = None
@@ -147,7 +147,7 @@ async def test_get_microagents_exception():
 
     # Mock the conversation manager
     with patch(
-        'openhands.server.routes.conversation.conversation_manager'
+        'neos.server.routes.conversation.conversation_manager'
     ) as mock_manager:
         # Set up the mocks to raise an exception
         mock_manager.get_agent_session.side_effect = Exception('Test exception')
@@ -196,7 +196,7 @@ async def test_update_conversation_success():
     mock_sio = AsyncMock()
 
     with patch(
-        'openhands.server.routes.manage_conversations.conversation_manager'
+        'neos.server.routes.manage_conversations.conversation_manager'
     ) as mock_manager:
         mock_manager.sio = mock_sio
 
@@ -373,7 +373,7 @@ async def test_update_conversation_socket_emission_error():
     mock_sio.emit.side_effect = Exception('Socket error')
 
     with patch(
-        'openhands.server.routes.manage_conversations.conversation_manager'
+        'neos.server.routes.manage_conversations.conversation_manager'
     ) as mock_manager:
         mock_manager.sio = mock_sio
 
@@ -457,7 +457,7 @@ async def test_update_conversation_title_whitespace_trimming():
     mock_sio = AsyncMock()
 
     with patch(
-        'openhands.server.routes.manage_conversations.conversation_manager'
+        'neos.server.routes.manage_conversations.conversation_manager'
     ) as mock_manager:
         mock_manager.sio = mock_sio
 
@@ -507,7 +507,7 @@ async def test_update_conversation_user_owns_conversation():
     mock_sio = AsyncMock()
 
     with patch(
-        'openhands.server.routes.manage_conversations.conversation_manager'
+        'neos.server.routes.manage_conversations.conversation_manager'
     ) as mock_manager:
         mock_manager.sio = mock_sio
 
@@ -554,7 +554,7 @@ async def test_update_conversation_last_updated_at_set():
     mock_sio = AsyncMock()
 
     with patch(
-        'openhands.server.routes.manage_conversations.conversation_manager'
+        'neos.server.routes.manage_conversations.conversation_manager'
     ) as mock_manager:
         mock_manager.sio = mock_sio
 
@@ -604,7 +604,7 @@ async def test_update_conversation_no_user_id_no_metadata_user_id():
     mock_sio = AsyncMock()
 
     with patch(
-        'openhands.server.routes.manage_conversations.conversation_manager'
+        'neos.server.routes.manage_conversations.conversation_manager'
     ) as mock_manager:
         mock_manager.sio = mock_sio
 

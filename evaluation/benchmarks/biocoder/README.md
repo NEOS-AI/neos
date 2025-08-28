@@ -8,7 +8,7 @@ Please follow instruction [here](../../README.md#setup) to setup your local deve
 
 ## BioCoder Docker Image
 
-In the openhands branch of the Biocoder repository, we have slightly modified our original Docker image to work with the OpenHands environment. In the Docker image are testing scripts (`/testing/start_test_openhands.py` and aux files in `/testing_files/`) to assist with evaluation. Additionally, we have installed all dependencies, including OpenJDK, mamba (with Python 3.6), and many system libraries. Notably, we have **not** packaged all repositories into the image, so they are downloaded at runtime.
+In the openhands branch of the Biocoder repository, we have slightly modified our original Docker image to work with the OpenHands environment. In the Docker image are testing scripts (`/testing/start_test_neos.py` and aux files in `/testing_files/`) to assist with evaluation. Additionally, we have installed all dependencies, including OpenJDK, mamba (with Python 3.6), and many system libraries. Notably, we have **not** packaged all repositories into the image, so they are downloaded at runtime.
 
 **Before first execution, pull our Docker image with the following command**
 

@@ -4,17 +4,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openhands.core.config import OpenHandsConfig
-from openhands.core.config.mcp_config import (
+from neos.core.config import OpenHandsConfig
+from neos.core.config.mcp_config import (
     MCPConfig,
     MCPSSEServerConfig,
     MCPStdioServerConfig,
 )
-from openhands.events.action.mcp import MCPAction
-from openhands.events.observation import ErrorObservation
-from openhands.events.observation.mcp import MCPObservation
-from openhands.llm.llm_registry import LLMRegistry
-from openhands.runtime.impl.cli.cli_runtime import CLIRuntime
+from neos.events.action.mcp import MCPAction
+from neos.events.observation import ErrorObservation
+from neos.events.observation.mcp import MCPObservation
+from neos.llm.llm_registry import LLMRegistry
+from neos.runtime.impl.cli.cli_runtime import CLIRuntime
 
 
 class TestCLIRuntimeMCP:
@@ -47,7 +47,7 @@ class TestCLIRuntimeMCP:
         assert 'No MCP servers configured' in result.content
 
     @pytest.mark.asyncio
-    @patch('openhands.mcp.utils.create_mcp_clients')
+    @patch('neos.mcp.utils.create_mcp_clients')
     async def test_call_tool_mcp_no_clients_created(self, mock_create_clients):
         """Test MCP call when no clients can be created."""
         # Set up MCP config with servers
@@ -68,8 +68,8 @@ class TestCLIRuntimeMCP:
         mock_create_clients.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch('openhands.mcp.utils.create_mcp_clients')
-    @patch('openhands.mcp.utils.call_tool_mcp')
+    @patch('neos.mcp.utils.create_mcp_clients')
+    @patch('neos.mcp.utils.call_tool_mcp')
     async def test_call_tool_mcp_success(self, mock_call_tool, mock_create_clients):
         """Test successful MCP tool call."""
         # Set up MCP config with servers
@@ -105,7 +105,7 @@ class TestCLIRuntimeMCP:
         mock_call_tool.assert_called_once_with([mock_client], action)
 
     @pytest.mark.asyncio
-    @patch('openhands.mcp.utils.create_mcp_clients')
+    @patch('neos.mcp.utils.create_mcp_clients')
     async def test_call_tool_mcp_exception_handling(self, mock_create_clients):
         """Test exception handling in MCP tool call."""
         # Set up MCP config with servers

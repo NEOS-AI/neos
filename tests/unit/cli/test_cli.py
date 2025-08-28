@@ -4,11 +4,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
-from openhands.cli import main as cli
-from openhands.controller.state.state import State
-from openhands.core.config.llm_config import LLMConfig
-from openhands.events import EventSource
-from openhands.events.action import MessageAction
+from neos.cli import main as cli
+from neos.controller.state.state import State
+from neos.core.config.llm_config import LLMConfig
+from neos.events import EventSource
+from neos.events.action import MessageAction
 
 
 @pytest_asyncio.fixture
@@ -101,7 +101,7 @@ async def test_cleanup_session_handles_exceptions(
     """Test that cleanup_session handles exceptions during cleanup gracefully."""
     loop = asyncio.get_running_loop()
     mock_controller.close.side_effect = Exception('Test cleanup error')
-    with patch('openhands.cli.main.logger.error') as mock_log_error:
+    with patch('neos.cli.main.logger.error') as mock_log_error:
         await cli.cleanup_session(loop, mock_agent, mock_runtime, mock_controller)
 
         # Check that cleanup continued despite the error
@@ -144,18 +144,18 @@ def mock_settings_store():
 
 
 @pytest.mark.asyncio
-@patch('openhands.cli.main.display_runtime_initialization_message')
-@patch('openhands.cli.main.display_initialization_animation')
-@patch('openhands.cli.main.create_agent')
-@patch('openhands.cli.main.add_mcp_tools_to_agent')
-@patch('openhands.cli.main.create_runtime')
-@patch('openhands.cli.main.create_controller')
+@patch('neos.cli.main.display_runtime_initialization_message')
+@patch('neos.cli.main.display_initialization_animation')
+@patch('neos.cli.main.create_agent')
+@patch('neos.cli.main.add_mcp_tools_to_agent')
+@patch('neos.cli.main.create_runtime')
+@patch('neos.cli.main.create_controller')
 @patch(
-    'openhands.cli.main.create_memory',
+    'neos.cli.main.create_memory',
 )
-@patch('openhands.cli.main.run_agent_until_done')
-@patch('openhands.cli.main.cleanup_session')
-@patch('openhands.cli.main.initialize_repository_for_runtime')
+@patch('neos.cli.main.run_agent_until_done')
+@patch('neos.cli.main.cleanup_session')
+@patch('neos.cli.main.initialize_repository_for_runtime')
 async def test_run_session_without_initial_action(
     mock_initialize_repo,
     mock_cleanup_session,
@@ -193,14 +193,14 @@ async def test_run_session_without_initial_action(
     mock_create_memory.return_value = mock_memory
 
     with patch(
-        'openhands.cli.main.read_prompt_input', new_callable=AsyncMock
+        'neos.cli.main.read_prompt_input', new_callable=AsyncMock
     ) as mock_read_prompt:
         # Set up read_prompt_input to return a string that will trigger the command handler
         mock_read_prompt.return_value = '/exit'
 
         # Mock handle_commands to return values that will exit the loop
         with patch(
-            'openhands.cli.main.handle_commands', new_callable=AsyncMock
+            'neos.cli.main.handle_commands', new_callable=AsyncMock
         ) as mock_handle_commands:
             mock_handle_commands.return_value = (
                 True,
@@ -237,16 +237,16 @@ async def test_run_session_without_initial_action(
 
 
 @pytest.mark.asyncio
-@patch('openhands.cli.main.display_runtime_initialization_message')
-@patch('openhands.cli.main.display_initialization_animation')
-@patch('openhands.cli.main.create_agent')
-@patch('openhands.cli.main.add_mcp_tools_to_agent')
-@patch('openhands.cli.main.create_runtime')
-@patch('openhands.cli.main.create_controller')
-@patch('openhands.cli.main.create_memory', new_callable=AsyncMock)
-@patch('openhands.cli.main.run_agent_until_done')
-@patch('openhands.cli.main.cleanup_session')
-@patch('openhands.cli.main.initialize_repository_for_runtime')
+@patch('neos.cli.main.display_runtime_initialization_message')
+@patch('neos.cli.main.display_initialization_animation')
+@patch('neos.cli.main.create_agent')
+@patch('neos.cli.main.add_mcp_tools_to_agent')
+@patch('neos.cli.main.create_runtime')
+@patch('neos.cli.main.create_controller')
+@patch('neos.cli.main.create_memory', new_callable=AsyncMock)
+@patch('neos.cli.main.run_agent_until_done')
+@patch('neos.cli.main.cleanup_session')
+@patch('neos.cli.main.initialize_repository_for_runtime')
 async def test_run_session_with_initial_action(
     mock_initialize_repo,
     mock_cleanup_session,
@@ -289,14 +289,14 @@ async def test_run_session_with_initial_action(
 
     # Run the function with the initial action
     with patch(
-        'openhands.cli.main.read_prompt_input', new_callable=AsyncMock
+        'neos.cli.main.read_prompt_input', new_callable=AsyncMock
     ) as mock_read_prompt:
         # Set up read_prompt_input to return a string that will trigger the command handler
         mock_read_prompt.return_value = '/exit'
 
         # Mock handle_commands to return values that will exit the loop
         with patch(
-            'openhands.cli.main.handle_commands', new_callable=AsyncMock
+            'neos.cli.main.handle_commands', new_callable=AsyncMock
         ) as mock_handle_commands:
             mock_handle_commands.return_value = (
                 True,
@@ -332,15 +332,15 @@ async def test_run_session_with_initial_action(
 
 
 @pytest.mark.asyncio
-@patch('openhands.cli.main.setup_config_from_args')
-@patch('openhands.cli.main.FileSettingsStore.get_instance')
-@patch('openhands.cli.main.check_folder_security_agreement')
-@patch('openhands.cli.main.read_task')
-@patch('openhands.cli.main.run_session')
-@patch('openhands.cli.main.LLMSummarizingCondenserConfig')
-@patch('openhands.cli.main.NoOpCondenserConfig')
-@patch('openhands.cli.main.finalize_config')
-@patch('openhands.cli.main.aliases_exist_in_shell_config')
+@patch('neos.cli.main.setup_config_from_args')
+@patch('neos.cli.main.FileSettingsStore.get_instance')
+@patch('neos.cli.main.check_folder_security_agreement')
+@patch('neos.cli.main.read_task')
+@patch('neos.cli.main.run_session')
+@patch('neos.cli.main.LLMSummarizingCondenserConfig')
+@patch('neos.cli.main.NoOpCondenserConfig')
+@patch('neos.cli.main.finalize_config')
+@patch('neos.cli.main.aliases_exist_in_shell_config')
 async def test_main_without_task(
     mock_aliases_exist,
     mock_finalize_config,
@@ -424,15 +424,15 @@ async def test_main_without_task(
 
 
 @pytest.mark.asyncio
-@patch('openhands.cli.main.setup_config_from_args')
-@patch('openhands.cli.main.FileSettingsStore.get_instance')
-@patch('openhands.cli.main.check_folder_security_agreement')
-@patch('openhands.cli.main.read_task')
-@patch('openhands.cli.main.run_session')
-@patch('openhands.cli.main.LLMSummarizingCondenserConfig')
-@patch('openhands.cli.main.NoOpCondenserConfig')
-@patch('openhands.cli.main.finalize_config')
-@patch('openhands.cli.main.aliases_exist_in_shell_config')
+@patch('neos.cli.main.setup_config_from_args')
+@patch('neos.cli.main.FileSettingsStore.get_instance')
+@patch('neos.cli.main.check_folder_security_agreement')
+@patch('neos.cli.main.read_task')
+@patch('neos.cli.main.run_session')
+@patch('neos.cli.main.LLMSummarizingCondenserConfig')
+@patch('neos.cli.main.NoOpCondenserConfig')
+@patch('neos.cli.main.finalize_config')
+@patch('neos.cli.main.aliases_exist_in_shell_config')
 async def test_main_with_task(
     mock_aliases_exist,
     mock_finalize_config,
@@ -527,15 +527,15 @@ async def test_main_with_task(
 
 
 @pytest.mark.asyncio
-@patch('openhands.cli.main.setup_config_from_args')
-@patch('openhands.cli.main.FileSettingsStore.get_instance')
-@patch('openhands.cli.main.check_folder_security_agreement')
-@patch('openhands.cli.main.read_task')
-@patch('openhands.cli.main.run_session')
-@patch('openhands.cli.main.LLMSummarizingCondenserConfig')
-@patch('openhands.cli.main.NoOpCondenserConfig')
-@patch('openhands.cli.main.finalize_config')
-@patch('openhands.cli.main.aliases_exist_in_shell_config')
+@patch('neos.cli.main.setup_config_from_args')
+@patch('neos.cli.main.FileSettingsStore.get_instance')
+@patch('neos.cli.main.check_folder_security_agreement')
+@patch('neos.cli.main.read_task')
+@patch('neos.cli.main.run_session')
+@patch('neos.cli.main.LLMSummarizingCondenserConfig')
+@patch('neos.cli.main.NoOpCondenserConfig')
+@patch('neos.cli.main.finalize_config')
+@patch('neos.cli.main.aliases_exist_in_shell_config')
 async def test_main_with_session_name_passes_name_to_run_session(
     mock_aliases_exist,
     mock_finalize_config,
@@ -620,24 +620,24 @@ async def test_main_with_session_name_passes_name_to_run_session(
 
 
 @pytest.mark.asyncio
-@patch('openhands.cli.main.generate_sid')
-@patch('openhands.cli.main.create_agent')
-@patch('openhands.cli.main.create_runtime')  # Returns mock_runtime
-@patch('openhands.cli.main.create_memory')
-@patch('openhands.cli.main.add_mcp_tools_to_agent')
-@patch('openhands.cli.main.run_agent_until_done')
-@patch('openhands.cli.main.cleanup_session')
+@patch('neos.cli.main.generate_sid')
+@patch('neos.cli.main.create_agent')
+@patch('neos.cli.main.create_runtime')  # Returns mock_runtime
+@patch('neos.cli.main.create_memory')
+@patch('neos.cli.main.add_mcp_tools_to_agent')
+@patch('neos.cli.main.run_agent_until_done')
+@patch('neos.cli.main.cleanup_session')
 @patch(
-    'openhands.cli.main.read_prompt_input', new_callable=AsyncMock
+    'neos.cli.main.read_prompt_input', new_callable=AsyncMock
 )  # For REPL control
-@patch('openhands.cli.main.handle_commands', new_callable=AsyncMock)  # For REPL control
-@patch('openhands.core.setup.State.restore_from_session')  # Key mock
-@patch('openhands.controller.AgentController.__init__')  # To check initial_state
-@patch('openhands.cli.main.display_runtime_initialization_message')  # Cosmetic
-@patch('openhands.cli.main.display_initialization_animation')  # Cosmetic
-@patch('openhands.cli.main.initialize_repository_for_runtime')  # Cosmetic / setup
-@patch('openhands.cli.main.display_initial_user_prompt')  # Cosmetic
-@patch('openhands.cli.main.finalize_config')
+@patch('neos.cli.main.handle_commands', new_callable=AsyncMock)  # For REPL control
+@patch('neos.core.setup.State.restore_from_session')  # Key mock
+@patch('neos.controller.AgentController.__init__')  # To check initial_state
+@patch('neos.cli.main.display_runtime_initialization_message')  # Cosmetic
+@patch('neos.cli.main.display_initialization_animation')  # Cosmetic
+@patch('neos.cli.main.initialize_repository_for_runtime')  # Cosmetic / setup
+@patch('neos.cli.main.display_initial_user_prompt')  # Cosmetic
+@patch('neos.cli.main.finalize_config')
 async def test_run_session_with_name_attempts_state_restore(
     mock_finalize_config,
     mock_display_initial_user_prompt,
@@ -719,15 +719,15 @@ async def test_run_session_with_name_attempts_state_restore(
 
 
 @pytest.mark.asyncio
-@patch('openhands.cli.main.setup_config_from_args')
-@patch('openhands.cli.main.FileSettingsStore.get_instance')
-@patch('openhands.cli.main.check_folder_security_agreement')
-@patch('openhands.cli.main.read_task')
-@patch('openhands.cli.main.run_session')
-@patch('openhands.cli.main.LLMSummarizingCondenserConfig')
-@patch('openhands.cli.main.NoOpCondenserConfig')
-@patch('openhands.cli.main.finalize_config')
-@patch('openhands.cli.main.aliases_exist_in_shell_config')
+@patch('neos.cli.main.setup_config_from_args')
+@patch('neos.cli.main.FileSettingsStore.get_instance')
+@patch('neos.cli.main.check_folder_security_agreement')
+@patch('neos.cli.main.read_task')
+@patch('neos.cli.main.run_session')
+@patch('neos.cli.main.LLMSummarizingCondenserConfig')
+@patch('neos.cli.main.NoOpCondenserConfig')
+@patch('neos.cli.main.finalize_config')
+@patch('neos.cli.main.aliases_exist_in_shell_config')
 async def test_main_security_check_fails(
     mock_aliases_exist,
     mock_finalize_config,
@@ -789,15 +789,15 @@ async def test_main_security_check_fails(
 
 
 @pytest.mark.asyncio
-@patch('openhands.cli.main.setup_config_from_args')
-@patch('openhands.cli.main.FileSettingsStore.get_instance')
-@patch('openhands.cli.main.check_folder_security_agreement')
-@patch('openhands.cli.main.read_task')
-@patch('openhands.cli.main.run_session')
-@patch('openhands.cli.main.LLMSummarizingCondenserConfig')
-@patch('openhands.cli.main.NoOpCondenserConfig')
-@patch('openhands.cli.main.finalize_config')
-@patch('openhands.cli.main.aliases_exist_in_shell_config')
+@patch('neos.cli.main.setup_config_from_args')
+@patch('neos.cli.main.FileSettingsStore.get_instance')
+@patch('neos.cli.main.check_folder_security_agreement')
+@patch('neos.cli.main.read_task')
+@patch('neos.cli.main.run_session')
+@patch('neos.cli.main.LLMSummarizingCondenserConfig')
+@patch('neos.cli.main.NoOpCondenserConfig')
+@patch('neos.cli.main.finalize_config')
+@patch('neos.cli.main.aliases_exist_in_shell_config')
 async def test_config_loading_order(
     mock_aliases_exist,
     mock_finalize_config,
@@ -906,15 +906,15 @@ async def test_config_loading_order(
 
 
 @pytest.mark.asyncio
-@patch('openhands.cli.main.setup_config_from_args')
-@patch('openhands.cli.main.FileSettingsStore.get_instance')
-@patch('openhands.cli.main.check_folder_security_agreement')
-@patch('openhands.cli.main.read_task')
-@patch('openhands.cli.main.run_session')
-@patch('openhands.cli.main.LLMSummarizingCondenserConfig')
-@patch('openhands.cli.main.NoOpCondenserConfig')
-@patch('openhands.cli.main.finalize_config')
-@patch('openhands.cli.main.aliases_exist_in_shell_config')
+@patch('neos.cli.main.setup_config_from_args')
+@patch('neos.cli.main.FileSettingsStore.get_instance')
+@patch('neos.cli.main.check_folder_security_agreement')
+@patch('neos.cli.main.read_task')
+@patch('neos.cli.main.run_session')
+@patch('neos.cli.main.LLMSummarizingCondenserConfig')
+@patch('neos.cli.main.NoOpCondenserConfig')
+@patch('neos.cli.main.finalize_config')
+@patch('neos.cli.main.aliases_exist_in_shell_config')
 @patch('builtins.open', new_callable=MagicMock)
 async def test_main_with_file_option(
     mock_open,

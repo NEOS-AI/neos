@@ -15,14 +15,14 @@ import pandas as pd
 from pydantic import BaseModel
 from tqdm import tqdm
 
-from openhands.controller.state.state import State
-from openhands.core.config import LLMConfig, SandboxConfig
-from openhands.core.config.agent_config import AgentConfig
-from openhands.core.config.condenser_config import (
+from neos.controller.state.state import State
+from neos.core.config import LLMConfig, SandboxConfig
+from neos.core.config.agent_config import AgentConfig
+from neos.core.config.condenser_config import (
     CondenserConfig,
     NoOpCondenserConfig,
 )
-from openhands.core.exceptions import (
+from neos.core.exceptions import (
     AgentRuntimeBuildError,
     AgentRuntimeDisconnectedError,
     AgentRuntimeError,
@@ -31,14 +31,14 @@ from openhands.core.exceptions import (
     AgentRuntimeTimeoutError,
     AgentRuntimeUnavailableError,
 )
-from openhands.core.logger import get_console_handler
-from openhands.core.logger import openhands_logger as logger
-from openhands.events.action import Action
-from openhands.events.action.message import MessageAction
-from openhands.events.event import Event
-from openhands.events.serialization.event import event_to_dict
-from openhands.events.utils import get_pairs_from_events
-from openhands.memory.condenser import get_condensation_metadata
+from neos.core.logger import get_console_handler
+from neos.core.logger import openhands_logger as logger
+from neos.events.action import Action
+from neos.events.action.message import MessageAction
+from neos.events.event import Event
+from neos.events.serialization.event import event_to_dict
+from neos.events.utils import get_pairs_from_events
+from neos.memory.condenser import get_condensation_metadata
 
 
 class EvalMetadata(BaseModel):
@@ -326,7 +326,7 @@ def log_skipped_maximum_retries_exceeded(instance, metadata, error, max_retries=
     Returns:
         EvalOutput with the error information
     """
-    from openhands.core.logger import openhands_logger as logger
+    from neos.core.logger import openhands_logger as logger
 
     # Log the error
     logger.exception(error)
@@ -371,7 +371,7 @@ def log_skipped_maximum_retries_exceeded(instance, metadata, error, max_retries=
 
 def check_maximum_retries_exceeded(eval_output_dir):
     """Check if maximum_retries_exceeded.jsonl exists and output a message."""
-    from openhands.core.logger import openhands_logger as logger
+    from neos.core.logger import openhands_logger as logger
 
     retries_file_path = os.path.join(eval_output_dir, 'maximum_retries_exceeded.jsonl')
     if os.path.exists(retries_file_path):
@@ -736,7 +736,7 @@ def get_openhands_config_for_eval(
         OpenHandsConfig: Configured for evaluation with eval-specific overrides applied
     """
     # Defer import to avoid circular imports at module load time
-    from openhands.core.config.openhands_config import (
+    from neos.core.config.openhands_config import (
         OpenHandsConfig as _OHConfig,  # type: ignore
     )
 

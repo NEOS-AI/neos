@@ -5,12 +5,12 @@ from typing import Any
 
 from pydantic import SecretStr
 
-from openhands.integrations.provider import (
+from neos.integrations.provider import (
     CustomSecret,
     ProviderToken,
     ProviderType,
 )
-from openhands.storage.data_models.user_secrets import UserSecrets
+from neos.storage.data_models.user_secrets import UserSecrets
 
 
 class TestUserSecrets:

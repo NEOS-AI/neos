@@ -3,9 +3,9 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock, patch
 
-from openhands.core.config.llm_config import LLMConfig
-from openhands.core.config.openhands_config import OpenHandsConfig
-from openhands.llm.llm_registry import LLMRegistry, RegistryEvent
+from neos.core.config.llm_config import LLMConfig
+from neos.core.config.openhands_config import OpenHandsConfig
+from neos.llm.llm_registry import LLMRegistry, RegistryEvent
 
 
 class TestLLMRegistry(unittest.TestCase):

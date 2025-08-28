@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from prompt_toolkit.formatted_text import HTML
 
-from openhands.cli.commands import (
+from neos.cli.commands import (
     display_mcp_servers,
     handle_commands,
     handle_exit_command,
@@ -15,13 +15,13 @@ from openhands.cli.commands import (
     handle_settings_command,
     handle_status_command,
 )
-from openhands.cli.tui import UsageMetrics
-from openhands.core.config import OpenHandsConfig
-from openhands.core.schema import AgentState
-from openhands.events import EventSource
-from openhands.events.action import ChangeAgentStateAction, MessageAction
-from openhands.events.stream import EventStream
-from openhands.storage.settings.file_settings_store import FileSettingsStore
+from neos.cli.tui import UsageMetrics
+from neos.core.config import OpenHandsConfig
+from neos.core.schema import AgentState
+from neos.events import EventSource
+from neos.events.action import ChangeAgentStateAction, MessageAction
+from neos.events.stream import EventStream
+from neos.storage.settings.file_settings_store import FileSettingsStore
 
 
 class TestHandleCommands:
@@ -46,7 +46,7 @@ class TestHandleCommands:
         }
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.handle_exit_command')
+    @patch('neos.cli.commands.handle_exit_command')
     async def test_handle_exit_command(self, mock_handle_exit, mock_dependencies):
         mock_handle_exit.return_value = True
 
@@ -65,7 +65,7 @@ class TestHandleCommands:
         assert new_session is False
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.handle_help_command')
+    @patch('neos.cli.commands.handle_help_command')
     async def test_handle_help_command(self, mock_handle_help, mock_dependencies):
         mock_handle_help.return_value = (False, False, False)
 
@@ -79,7 +79,7 @@ class TestHandleCommands:
         assert new_session is False
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.handle_init_command')
+    @patch('neos.cli.commands.handle_init_command')
     async def test_handle_init_command(self, mock_handle_init, mock_dependencies):
         mock_handle_init.return_value = (True, True)
 
@@ -97,7 +97,7 @@ class TestHandleCommands:
         assert new_session is False
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.handle_status_command')
+    @patch('neos.cli.commands.handle_status_command')
     async def test_handle_status_command(self, mock_handle_status, mock_dependencies):
         mock_handle_status.return_value = (False, False, False)
 
@@ -113,7 +113,7 @@ class TestHandleCommands:
         assert new_session is False
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.handle_new_command')
+    @patch('neos.cli.commands.handle_new_command')
     async def test_handle_new_command(self, mock_handle_new, mock_dependencies):
         mock_handle_new.return_value = (True, True)
 
@@ -132,7 +132,7 @@ class TestHandleCommands:
         assert new_session is True
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.handle_settings_command')
+    @patch('neos.cli.commands.handle_settings_command')
     async def test_handle_settings_command(
         self, mock_handle_settings, mock_dependencies
     ):
@@ -149,7 +149,7 @@ class TestHandleCommands:
         assert new_session is False
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.handle_mcp_command')
+    @patch('neos.cli.commands.handle_mcp_command')
     async def test_handle_mcp_command(self, mock_handle_mcp, mock_dependencies):
         close_repl, reload_microagents, new_session, _ = await handle_commands(
             '/mcp', **mock_dependencies
@@ -182,8 +182,8 @@ class TestHandleCommands:
 
 
 class TestHandleExitCommand:
-    @patch('openhands.cli.commands.cli_confirm')
-    @patch('openhands.cli.commands.display_shutdown_message')
+    @patch('neos.cli.commands.cli_confirm')
+    @patch('neos.cli.commands.display_shutdown_message')
     def test_exit_with_confirmation(self, mock_display_shutdown, mock_cli_confirm):
         config = MagicMock(spec=OpenHandsConfig)
         event_stream = MagicMock(spec=EventStream)
@@ -208,8 +208,8 @@ class TestHandleExitCommand:
         mock_display_shutdown.assert_called_once_with(usage_metrics, sid)
         assert result is True
 
-    @patch('openhands.cli.commands.cli_confirm')
-    @patch('openhands.cli.commands.display_shutdown_message')
+    @patch('neos.cli.commands.cli_confirm')
+    @patch('neos.cli.commands.display_shutdown_message')
     def test_exit_without_confirmation(self, mock_display_shutdown, mock_cli_confirm):
         config = MagicMock(spec=OpenHandsConfig)
         event_stream = MagicMock(spec=EventStream)
@@ -230,16 +230,16 @@ class TestHandleExitCommand:
 
 
 class TestHandleHelpCommand:
-    @patch('openhands.cli.commands.display_help')
+    @patch('neos.cli.commands.display_help')
     def test_help_command(self, mock_display_help):
         handle_help_command()
         mock_display_help.assert_called_once()
 
 
 class TestDisplayMcpServers:
-    @patch('openhands.cli.commands.print_formatted_text')
+    @patch('neos.cli.commands.print_formatted_text')
     def test_display_mcp_servers_no_servers(self, mock_print):
-        from openhands.core.config.mcp_config import MCPConfig
+        from neos.core.config.mcp_config import MCPConfig
 
         config = MagicMock(spec=OpenHandsConfig)
         config.mcp = MCPConfig()  # Empty config with no servers
@@ -254,9 +254,9 @@ class TestDisplayMcpServers:
             in call_args
         )
 
-    @patch('openhands.cli.commands.print_formatted_text')
+    @patch('neos.cli.commands.print_formatted_text')
     def test_display_mcp_servers_with_servers(self, mock_print):
-        from openhands.core.config.mcp_config import (
+        from neos.core.config.mcp_config import (
             MCPConfig,
             MCPSHTTPServerConfig,
             MCPSSEServerConfig,
@@ -286,8 +286,8 @@ class TestDisplayMcpServers:
 
 class TestHandleMcpCommand:
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.cli_confirm')
-    @patch('openhands.cli.commands.display_mcp_servers')
+    @patch('neos.cli.commands.cli_confirm')
+    @patch('neos.cli.commands.display_mcp_servers')
     async def test_handle_mcp_command_list_action(self, mock_display, mock_cli_confirm):
         config = MagicMock(spec=OpenHandsConfig)
         mock_cli_confirm.return_value = 0  # List action
@@ -309,7 +309,7 @@ class TestHandleMcpCommand:
 
 
 class TestHandleStatusCommand:
-    @patch('openhands.cli.commands.display_status')
+    @patch('neos.cli.commands.display_status')
     def test_status_command(self, mock_display_status):
         usage_metrics = MagicMock(spec=UsageMetrics)
         sid = 'test-session-id'
@@ -320,8 +320,8 @@ class TestHandleStatusCommand:
 
 
 class TestHandleNewCommand:
-    @patch('openhands.cli.commands.cli_confirm')
-    @patch('openhands.cli.commands.display_shutdown_message')
+    @patch('neos.cli.commands.cli_confirm')
+    @patch('neos.cli.commands.display_shutdown_message')
     def test_new_with_confirmation(self, mock_display_shutdown, mock_cli_confirm):
         config = MagicMock(spec=OpenHandsConfig)
         event_stream = MagicMock(spec=EventStream)
@@ -349,8 +349,8 @@ class TestHandleNewCommand:
         assert close_repl is True
         assert new_session is True
 
-    @patch('openhands.cli.commands.cli_confirm')
-    @patch('openhands.cli.commands.display_shutdown_message')
+    @patch('neos.cli.commands.cli_confirm')
+    @patch('neos.cli.commands.display_shutdown_message')
     def test_new_without_confirmation(self, mock_display_shutdown, mock_cli_confirm):
         config = MagicMock(spec=OpenHandsConfig)
         event_stream = MagicMock(spec=EventStream)
@@ -375,7 +375,7 @@ class TestHandleNewCommand:
 
 class TestHandleInitCommand:
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.init_repository')
+    @patch('neos.cli.commands.init_repository')
     async def test_init_local_runtime_successful(self, mock_init_repository):
         config = MagicMock(spec=OpenHandsConfig)
         config.runtime = 'local'
@@ -403,7 +403,7 @@ class TestHandleInitCommand:
         assert reload_microagents is True
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.init_repository')
+    @patch('neos.cli.commands.init_repository')
     async def test_init_local_runtime_unsuccessful(self, mock_init_repository):
         config = MagicMock(spec=OpenHandsConfig)
         config.runtime = 'local'
@@ -426,8 +426,8 @@ class TestHandleInitCommand:
         assert reload_microagents is False
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.print_formatted_text')
-    @patch('openhands.cli.commands.init_repository')
+    @patch('neos.cli.commands.print_formatted_text')
+    @patch('neos.cli.commands.init_repository')
     async def test_init_non_local_runtime(self, mock_init_repository, mock_print):
         config = MagicMock(spec=OpenHandsConfig)
         config.runtime = 'remote'  # Not local
@@ -450,9 +450,9 @@ class TestHandleInitCommand:
 
 class TestHandleSettingsCommand:
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.display_settings')
-    @patch('openhands.cli.commands.cli_confirm')
-    @patch('openhands.cli.commands.modify_llm_settings_basic')
+    @patch('neos.cli.commands.display_settings')
+    @patch('neos.cli.commands.cli_confirm')
+    @patch('neos.cli.commands.modify_llm_settings_basic')
     async def test_settings_basic_with_changes(
         self,
         mock_modify_basic,
@@ -474,9 +474,9 @@ class TestHandleSettingsCommand:
         mock_modify_basic.assert_called_once_with(config, settings_store)
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.display_settings')
-    @patch('openhands.cli.commands.cli_confirm')
-    @patch('openhands.cli.commands.modify_llm_settings_basic')
+    @patch('neos.cli.commands.display_settings')
+    @patch('neos.cli.commands.cli_confirm')
+    @patch('neos.cli.commands.modify_llm_settings_basic')
     async def test_settings_basic_without_changes(
         self,
         mock_modify_basic,
@@ -498,9 +498,9 @@ class TestHandleSettingsCommand:
         mock_modify_basic.assert_called_once_with(config, settings_store)
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.display_settings')
-    @patch('openhands.cli.commands.cli_confirm')
-    @patch('openhands.cli.commands.modify_llm_settings_advanced')
+    @patch('neos.cli.commands.display_settings')
+    @patch('neos.cli.commands.cli_confirm')
+    @patch('neos.cli.commands.modify_llm_settings_advanced')
     async def test_settings_advanced_with_changes(
         self,
         mock_modify_advanced,
@@ -522,9 +522,9 @@ class TestHandleSettingsCommand:
         mock_modify_advanced.assert_called_once_with(config, settings_store)
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.display_settings')
-    @patch('openhands.cli.commands.cli_confirm')
-    @patch('openhands.cli.commands.modify_llm_settings_advanced')
+    @patch('neos.cli.commands.display_settings')
+    @patch('neos.cli.commands.cli_confirm')
+    @patch('neos.cli.commands.modify_llm_settings_advanced')
     async def test_settings_advanced_without_changes(
         self,
         mock_modify_advanced,
@@ -546,8 +546,8 @@ class TestHandleSettingsCommand:
         mock_modify_advanced.assert_called_once_with(config, settings_store)
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.display_settings')
-    @patch('openhands.cli.commands.cli_confirm')
+    @patch('neos.cli.commands.display_settings')
+    @patch('neos.cli.commands.cli_confirm')
     async def test_settings_go_back(self, mock_cli_confirm, mock_display_settings):
         config = MagicMock(spec=OpenHandsConfig)
         settings_store = MagicMock(spec=FileSettingsStore)
@@ -565,7 +565,7 @@ class TestHandleSettingsCommand:
 
 class TestHandleResumeCommand:
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.print_formatted_text')
+    @patch('neos.cli.commands.print_formatted_text')
     async def test_handle_resume_command_paused_state(self, mock_print):
         """Test that handle_resume_command works when agent is in PAUSED state."""
         # Create a mock event stream
@@ -596,7 +596,7 @@ class TestHandleResumeCommand:
     @pytest.mark.parametrize(
         'invalid_state', [AgentState.RUNNING, AgentState.FINISHED, AgentState.ERROR]
     )
-    @patch('openhands.cli.commands.print_formatted_text')
+    @patch('neos.cli.commands.print_formatted_text')
     async def test_handle_resume_command_invalid_states(
         self, mock_print, invalid_state
     ):
@@ -627,10 +627,10 @@ class TestHandleResumeCommand:
 class TestMCPErrorHandling:
     """Test MCP error handling in commands."""
 
-    @patch('openhands.cli.commands.display_mcp_errors')
+    @patch('neos.cli.commands.display_mcp_errors')
     def test_handle_mcp_errors_command(self, mock_display_errors):
         """Test handling MCP errors command."""
-        from openhands.cli.commands import handle_mcp_errors_command
+        from neos.cli.commands import handle_mcp_errors_command
 
         handle_mcp_errors_command()
 

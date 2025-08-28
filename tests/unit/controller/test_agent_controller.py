@@ -10,45 +10,45 @@ from litellm import (
     ContextWindowExceededError,
 )
 
-from openhands.controller.agent import Agent
-from openhands.controller.agent_controller import AgentController
-from openhands.controller.state.control_flags import (
+from neos.controller.agent import Agent
+from neos.controller.agent_controller import AgentController
+from neos.controller.state.control_flags import (
     BudgetControlFlag,
 )
-from openhands.controller.state.state import State
-from openhands.core.config import OpenHandsConfig
-from openhands.core.config.agent_config import AgentConfig
-from openhands.core.config.llm_config import LLMConfig
-from openhands.core.main import run_controller
-from openhands.core.schema import AgentState
-from openhands.events import Event, EventSource, EventStream, EventStreamSubscriber
-from openhands.events.action import ChangeAgentStateAction, CmdRunAction, MessageAction
-from openhands.events.action.agent import CondensationAction, RecallAction
-from openhands.events.action.message import SystemMessageAction
-from openhands.events.event import RecallType
-from openhands.events.observation import (
+from neos.controller.state.state import State
+from neos.core.config import OpenHandsConfig
+from neos.core.config.agent_config import AgentConfig
+from neos.core.config.llm_config import LLMConfig
+from neos.core.main import run_controller
+from neos.core.schema import AgentState
+from neos.events import Event, EventSource, EventStream, EventStreamSubscriber
+from neos.events.action import ChangeAgentStateAction, CmdRunAction, MessageAction
+from neos.events.action.agent import CondensationAction, RecallAction
+from neos.events.action.message import SystemMessageAction
+from neos.events.event import RecallType
+from neos.events.observation import (
     AgentStateChangedObservation,
     ErrorObservation,
 )
-from openhands.events.observation.agent import RecallObservation
-from openhands.events.observation.empty import NullObservation
-from openhands.events.serialization import event_to_dict
-from openhands.llm import LLM
-from openhands.llm.llm_registry import LLMRegistry, RegistryEvent
-from openhands.llm.metrics import Metrics, TokenUsage
-from openhands.memory.condenser.condenser import Condensation
-from openhands.memory.condenser.impl.conversation_window_condenser import (
+from neos.events.observation.agent import RecallObservation
+from neos.events.observation.empty import NullObservation
+from neos.events.serialization import event_to_dict
+from neos.llm import LLM
+from neos.llm.llm_registry import LLMRegistry, RegistryEvent
+from neos.llm.metrics import Metrics, TokenUsage
+from neos.memory.condenser.condenser import Condensation
+from neos.memory.condenser.impl.conversation_window_condenser import (
     ConversationWindowCondenser,
 )
-from openhands.memory.memory import Memory
-from openhands.memory.view import View
-from openhands.runtime.base import Runtime
-from openhands.runtime.impl.action_execution.action_execution_client import (
+from neos.memory.memory import Memory
+from neos.memory.view import View
+from neos.runtime.base import Runtime
+from neos.runtime.impl.action_execution.action_execution_client import (
     ActionExecutionClient,
 )
-from openhands.runtime.runtime_status import RuntimeStatus
-from openhands.server.services.conversation_stats import ConversationStats
-from openhands.storage.memory import InMemoryFileStore
+from neos.runtime.runtime_status import RuntimeStatus
+from neos.server.services.conversation_stats import ConversationStats
+from neos.storage.memory import InMemoryFileStore
 
 
 @pytest.fixture
@@ -131,7 +131,7 @@ def test_event_stream():
 
 @pytest.fixture
 def mock_runtime() -> Runtime:
-    from openhands.runtime.impl.action_execution.action_execution_client import (
+    from neos.runtime.impl.action_execution.action_execution_client import (
         ActionExecutionClient,
     )
 
@@ -337,7 +337,7 @@ async def test_run_controller_with_fatal_error(
     )
 
     # Mock the create_agent function to return our mock agent
-    with patch('openhands.core.main.create_agent', return_value=mock_agent):
+    with patch('neos.core.main.create_agent', return_value=mock_agent):
         state = await run_controller(
             config=config,
             initial_user_action=MessageAction(content='Test message'),
@@ -404,7 +404,7 @@ async def test_run_controller_stop_with_stuck(
     )
 
     # Mock the create_agent function to return our mock agent
-    with patch('openhands.core.main.create_agent', return_value=mock_agent):
+    with patch('neos.core.main.create_agent', return_value=mock_agent):
         state = await run_controller(
             config=config,
             initial_user_action=MessageAction(content='Test message'),
@@ -928,7 +928,7 @@ async def test_run_controller_max_iterations_has_metrics(
     event_stream.subscribe(EventStreamSubscriber.MEMORY, on_event_memory, str(uuid4()))
 
     # Mock the create_agent function to return our mock agent
-    with patch('openhands.core.main.create_agent', return_value=mock_agent):
+    with patch('neos.core.main.create_agent', return_value=mock_agent):
         state = await run_controller(
             config=config,
             initial_user_action=MessageAction(content='Test message'),
@@ -1082,7 +1082,7 @@ async def test_context_window_exceeded_error_handling(
     # record of the error being thrown we can be confident that the controller
     # handles the truncation correctly.
     # Mock the create_agent function to return our mock agent
-    with patch('openhands.core.main.create_agent', return_value=mock_agent):
+    with patch('neos.core.main.create_agent', return_value=mock_agent):
         final_state = await asyncio.wait_for(
             run_controller(
                 config=config,
@@ -1235,7 +1235,7 @@ async def test_run_controller_with_context_window_exceeded_with_truncation(
 
     try:
         # Mock the create_agent function to return our mock agent
-        with patch('openhands.core.main.create_agent', return_value=mock_agent):
+        with patch('neos.core.main.create_agent', return_value=mock_agent):
             state = await asyncio.wait_for(
                 run_controller(
                     config=config,
@@ -1318,7 +1318,7 @@ async def test_run_controller_with_context_window_exceeded_without_truncation(
     mock_runtime.config = copy.deepcopy(config)
     try:
         # Mock the create_agent function to return our mock agent
-        with patch('openhands.core.main.create_agent', return_value=mock_agent):
+        with patch('neos.core.main.create_agent', return_value=mock_agent):
             state = await asyncio.wait_for(
                 run_controller(
                     config=config,
@@ -1397,7 +1397,7 @@ async def test_run_controller_with_memory_error(
         memory, '_find_microagent_knowledge', side_effect=mock_find_microagent_knowledge
     ):
         # Mock the create_agent function to return our mock agent
-        with patch('openhands.core.main.create_agent', return_value=mock_agent):
+        with patch('neos.core.main.create_agent', return_value=mock_agent):
             state = await run_controller(
                 config=config,
                 initial_user_action=MessageAction(content='Test message'),

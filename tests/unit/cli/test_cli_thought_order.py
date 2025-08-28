@@ -4,18 +4,18 @@ This ensures that agent thoughts are displayed before commands, not after.
 
 from unittest.mock import MagicMock, patch
 
-from openhands.cli.tui import display_event
-from openhands.core.config import OpenHandsConfig
-from openhands.events import EventSource
-from openhands.events.action import Action, ActionConfirmationStatus, CmdRunAction
-from openhands.events.action.message import MessageAction
+from neos.cli.tui import display_event
+from neos.core.config import OpenHandsConfig
+from neos.events import EventSource
+from neos.events.action import Action, ActionConfirmationStatus, CmdRunAction
+from neos.events.action.message import MessageAction
 
 
 class TestThoughtDisplayOrder:
     """Test that thoughts are displayed in the correct order relative to commands."""
 
-    @patch('openhands.cli.tui.display_thought_if_new')
-    @patch('openhands.cli.tui.display_command')
+    @patch('neos.cli.tui.display_thought_if_new')
+    @patch('neos.cli.tui.display_command')
     def test_cmd_run_action_thought_before_command(
         self, mock_display_command, mock_display_thought_if_new
     ):
@@ -54,8 +54,8 @@ class TestThoughtDisplayOrder:
         assert mock_display_thought_if_new.called
         assert mock_display_command.called
 
-    @patch('openhands.cli.tui.display_thought_if_new')
-    @patch('openhands.cli.tui.display_command')
+    @patch('neos.cli.tui.display_thought_if_new')
+    @patch('neos.cli.tui.display_command')
     def test_cmd_run_action_no_thought(
         self, mock_display_command, mock_display_thought_if_new
     ):
@@ -72,8 +72,8 @@ class TestThoughtDisplayOrder:
         mock_display_thought_if_new.assert_not_called()
         mock_display_command.assert_called_once_with(cmd_action)
 
-    @patch('openhands.cli.tui.display_thought_if_new')
-    @patch('openhands.cli.tui.display_command')
+    @patch('neos.cli.tui.display_thought_if_new')
+    @patch('neos.cli.tui.display_command')
     def test_cmd_run_action_empty_thought(
         self, mock_display_command, mock_display_thought_if_new
     ):
@@ -90,9 +90,9 @@ class TestThoughtDisplayOrder:
         mock_display_thought_if_new.assert_not_called()
         mock_display_command.assert_called_once_with(cmd_action)
 
-    @patch('openhands.cli.tui.display_thought_if_new')
-    @patch('openhands.cli.tui.display_command')
-    @patch('openhands.cli.tui.initialize_streaming_output')
+    @patch('neos.cli.tui.display_thought_if_new')
+    @patch('neos.cli.tui.display_command')
+    @patch('neos.cli.tui.initialize_streaming_output')
     def test_cmd_run_action_confirmed_no_display(
         self, mock_init_streaming, mock_display_command, mock_display_thought_if_new
     ):
@@ -117,7 +117,7 @@ class TestThoughtDisplayOrder:
         # Streaming should be initialized
         mock_init_streaming.assert_called_once()
 
-    @patch('openhands.cli.tui.display_thought_if_new')
+    @patch('neos.cli.tui.display_thought_if_new')
     def test_other_action_thought_display(self, mock_display_thought_if_new):
         """Test that other Action types still display thoughts normally."""
         config = MagicMock(spec=OpenHandsConfig)
@@ -133,7 +133,7 @@ class TestThoughtDisplayOrder:
             'This is a thought for a generic action.'
         )
 
-    @patch('openhands.cli.tui.display_message')
+    @patch('neos.cli.tui.display_message')
     def test_other_action_final_thought_display(self, mock_display_message):
         """Test that other Action types display final thoughts as agent messages."""
         config = MagicMock(spec=OpenHandsConfig)
@@ -149,7 +149,7 @@ class TestThoughtDisplayOrder:
             'This is a final thought.', is_agent_message=True
         )
 
-    @patch('openhands.cli.tui.display_thought_if_new')
+    @patch('neos.cli.tui.display_thought_if_new')
     def test_message_action_from_agent(self, mock_display_thought_if_new):
         """Test that MessageAction from agent is displayed."""
         config = MagicMock(spec=OpenHandsConfig)
@@ -165,7 +165,7 @@ class TestThoughtDisplayOrder:
             'Hello from agent', is_agent_message=True
         )
 
-    @patch('openhands.cli.tui.display_thought_if_new')
+    @patch('neos.cli.tui.display_thought_if_new')
     def test_message_action_from_user_not_displayed(self, mock_display_thought_if_new):
         """Test that MessageAction from user is not displayed."""
         config = MagicMock(spec=OpenHandsConfig)
@@ -179,8 +179,8 @@ class TestThoughtDisplayOrder:
         # Verify that message is not displayed (only agent messages are shown)
         mock_display_thought_if_new.assert_not_called()
 
-    @patch('openhands.cli.tui.display_thought_if_new')
-    @patch('openhands.cli.tui.display_command')
+    @patch('neos.cli.tui.display_thought_if_new')
+    @patch('neos.cli.tui.display_command')
     def test_cmd_run_action_with_both_thoughts(
         self, mock_display_command, mock_display_thought_if_new
     ):
@@ -218,10 +218,10 @@ class TestThoughtDisplayIntegration:
 
         with (
             patch(
-                'openhands.cli.tui.display_message', side_effect=track_display_message
+                'neos.cli.tui.display_message', side_effect=track_display_message
             ),
             patch(
-                'openhands.cli.tui.display_command', side_effect=track_display_command
+                'neos.cli.tui.display_command', side_effect=track_display_command
             ),
         ):
             # Create the scenario from the issue

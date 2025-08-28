@@ -6,10 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
-from openhands.events.stream import EventStream
-from openhands.memory.memory import Memory
-from openhands.microagent import KnowledgeMicroagent, MicroagentType, RepoMicroagent
-from openhands.storage import get_file_store
+from neos.events.stream import EventStream
+from neos.memory.memory import Memory
+from neos.microagent import KnowledgeMicroagent, MicroagentType, RepoMicroagent
+from neos.storage import get_file_store
 
 
 @pytest.fixture
@@ -53,7 +53,7 @@ Personal repository-specific instructions.
 def test_user_microagents_loading(temp_user_microagents_dir):
     """Test that user microagents are loaded from ~/.openhands/microagents/."""
     with patch(
-        'openhands.memory.memory.USER_MICROAGENTS_DIR', str(temp_user_microagents_dir)
+        'neos.memory.memory.USER_MICROAGENTS_DIR', str(temp_user_microagents_dir)
     ):
         with tempfile.TemporaryDirectory() as temp_dir:
             # Create event stream and memory
@@ -83,7 +83,7 @@ def test_user_microagents_directory_creation():
         non_existent_dir = Path(temp_dir) / 'non_existent' / 'microagents'
 
         with patch(
-            'openhands.memory.memory.USER_MICROAGENTS_DIR', str(non_existent_dir)
+            'neos.memory.memory.USER_MICROAGENTS_DIR', str(non_existent_dir)
         ):
             with tempfile.TemporaryDirectory() as temp_store_dir:
                 # Create event stream and memory
@@ -118,7 +118,7 @@ My personal GitHub workflow and preferences.
 """
         (user_dir / 'github.md').write_text(github_agent)
 
-        with patch('openhands.memory.memory.USER_MICROAGENTS_DIR', str(user_dir)):
+        with patch('neos.memory.memory.USER_MICROAGENTS_DIR', str(user_dir)):
             with tempfile.TemporaryDirectory() as temp_store_dir:
                 # Create event stream and memory
                 file_store = get_file_store('local', temp_store_dir)
@@ -147,7 +147,7 @@ type: invalid_type
 """
         (user_dir / 'invalid.md').write_text(invalid_agent)
 
-        with patch('openhands.memory.memory.USER_MICROAGENTS_DIR', str(user_dir)):
+        with patch('neos.memory.memory.USER_MICROAGENTS_DIR', str(user_dir)):
             with tempfile.TemporaryDirectory() as temp_store_dir:
                 # Create event stream and memory - should not crash
                 file_store = get_file_store('local', temp_store_dir)
@@ -166,7 +166,7 @@ def test_user_microagents_empty_directory():
     with tempfile.TemporaryDirectory() as temp_dir:
         empty_dir = Path(temp_dir)
 
-        with patch('openhands.memory.memory.USER_MICROAGENTS_DIR', str(empty_dir)):
+        with patch('neos.memory.memory.USER_MICROAGENTS_DIR', str(empty_dir)):
             with tempfile.TemporaryDirectory() as temp_store_dir:
                 # Create event stream and memory
                 file_store = get_file_store('local', temp_store_dir)
@@ -200,7 +200,7 @@ My personal development tools and workflows.
     (nested_dir / 'tool.md').write_text(nested_agent)
 
     with patch(
-        'openhands.memory.memory.USER_MICROAGENTS_DIR', str(temp_user_microagents_dir)
+        'neos.memory.memory.USER_MICROAGENTS_DIR', str(temp_user_microagents_dir)
     ):
         with tempfile.TemporaryDirectory() as temp_store_dir:
             # Create event stream and memory

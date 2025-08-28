@@ -5,35 +5,35 @@ from uuid import uuid4
 
 import pytest
 
-from openhands.controller.agent import Agent
-from openhands.controller.agent_controller import AgentController
-from openhands.controller.state.control_flags import (
+from neos.controller.agent import Agent
+from neos.controller.agent_controller import AgentController
+from neos.controller.state.control_flags import (
     BudgetControlFlag,
     IterationControlFlag,
 )
-from openhands.controller.state.state import State
-from openhands.core.config import OpenHandsConfig
-from openhands.core.config.agent_config import AgentConfig
-from openhands.core.config.llm_config import LLMConfig
-from openhands.core.schema import AgentState
-from openhands.events import EventSource, EventStream
-from openhands.events.action import (
+from neos.controller.state.state import State
+from neos.core.config import OpenHandsConfig
+from neos.core.config.agent_config import AgentConfig
+from neos.core.config.llm_config import LLMConfig
+from neos.core.schema import AgentState
+from neos.events import EventSource, EventStream
+from neos.events.action import (
     AgentDelegateAction,
     AgentFinishAction,
     MessageAction,
 )
-from openhands.events.action.agent import RecallAction
-from openhands.events.action.commands import CmdRunAction
-from openhands.events.action.message import SystemMessageAction
-from openhands.events.event import Event, RecallType
-from openhands.events.observation.agent import RecallObservation
-from openhands.events.stream import EventStreamSubscriber
-from openhands.llm.llm import LLM
-from openhands.llm.llm_registry import LLMRegistry
-from openhands.llm.metrics import Metrics
-from openhands.memory.memory import Memory
-from openhands.server.services.conversation_stats import ConversationStats
-from openhands.storage.memory import InMemoryFileStore
+from neos.events.action.agent import RecallAction
+from neos.events.action.commands import CmdRunAction
+from neos.events.action.message import SystemMessageAction
+from neos.events.event import Event, RecallType
+from neos.events.observation.agent import RecallObservation
+from neos.events.stream import EventStreamSubscriber
+from neos.llm.llm import LLM
+from neos.llm.llm_registry import LLMRegistry
+from neos.llm.metrics import Metrics
+from neos.memory.memory import Memory
+from neos.server.services.conversation_stats import ConversationStats
+from neos.storage.memory import InMemoryFileStore
 
 
 @pytest.fixture

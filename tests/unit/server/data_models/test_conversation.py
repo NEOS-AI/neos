@@ -9,19 +9,19 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
-from openhands.integrations.service_types import (
+from neos.integrations.service_types import (
     AuthenticationError,
     CreateMicroagent,
     ProviderType,
     SuggestedTask,
     TaskType,
 )
-from openhands.runtime.runtime_status import RuntimeStatus
-from openhands.server.data_models.conversation_info import ConversationInfo
-from openhands.server.data_models.conversation_info_result_set import (
+from neos.runtime.runtime_status import RuntimeStatus
+from neos.server.data_models.conversation_info import ConversationInfo
+from neos.server.data_models.conversation_info_result_set import (
     ConversationInfoResultSet,
 )
-from openhands.server.routes.manage_conversations import (
+from neos.server.routes.manage_conversations import (
     ConversationResponse,
     InitSessionRequest,
     delete_conversation,
@@ -29,16 +29,16 @@ from openhands.server.routes.manage_conversations import (
     new_conversation,
     search_conversations,
 )
-from openhands.server.routes.manage_conversations import app as conversation_app
-from openhands.server.types import LLMAuthenticationError, MissingSettingsError
-from openhands.server.user_auth.user_auth import AuthType
-from openhands.storage.data_models.conversation_metadata import (
+from neos.server.routes.manage_conversations import app as conversation_app
+from neos.server.types import LLMAuthenticationError, MissingSettingsError
+from neos.server.user_auth.user_auth import AuthType
+from neos.storage.data_models.conversation_metadata import (
     ConversationMetadata,
     ConversationTrigger,
 )
-from openhands.storage.data_models.conversation_status import ConversationStatus
-from openhands.storage.locations import get_conversation_metadata_filename
-from openhands.storage.memory import InMemoryFileStore
+from neos.storage.data_models.conversation_status import ConversationStatus
+from neos.storage.locations import get_conversation_metadata_filename
+from neos.storage.memory import InMemoryFileStore
 
 
 @contextmanager
@@ -58,11 +58,11 @@ def _patch_store():
         ),
     )
     with patch(
-        'openhands.storage.conversation.file_conversation_store.get_file_store',
+        'neos.storage.conversation.file_conversation_store.get_file_store',
         MagicMock(return_value=file_store),
     ):
         with patch(
-            'openhands.server.routes.manage_conversations.conversation_manager.file_store',
+            'neos.server.routes.manage_conversations.conversation_manager.file_store',
             file_store,
         ):
             yield
@@ -95,7 +95,7 @@ def create_new_test_conversation(
 @pytest.fixture
 def provider_handler_mock():
     with patch(
-        'openhands.server.routes.manage_conversations.ProviderHandler'
+        'neos.server.routes.manage_conversations.ProviderHandler'
     ) as mock_cls:
         mock_instance = MagicMock()
         mock_instance.verify_repo_provider = AsyncMock(return_value=ProviderType.GITHUB)
@@ -107,11 +107,11 @@ def provider_handler_mock():
 async def test_search_conversations():
     with _patch_store():
         with patch(
-            'openhands.server.routes.manage_conversations.config'
+            'neos.server.routes.manage_conversations.config'
         ) as mock_config:
             mock_config.conversation_max_age_seconds = 864000  # 10 days
             with patch(
-                'openhands.server.routes.manage_conversations.conversation_manager'
+                'neos.server.routes.manage_conversations.conversation_manager'
             ) as mock_manager:
 
                 async def mock_get_running_agent_loops(*args, **kwargs):
@@ -127,7 +127,7 @@ async def test_search_conversations():
                 mock_manager.get_connections = mock_get_connections
                 mock_manager.get_agent_loop_info = get_agent_loop_info
                 with patch(
-                    'openhands.server.routes.manage_conversations.datetime'
+                    'neos.server.routes.manage_conversations.datetime'
                 ) as mock_datetime:
                     mock_datetime.now.return_value = datetime.fromisoformat(
                         '2025-01-01T00:00:00+00:00'
@@ -191,11 +191,11 @@ async def test_search_conversations_with_repository_filter():
     """Test searching conversations with repository filter."""
     with _patch_store():
         with patch(
-            'openhands.server.routes.manage_conversations.config'
+            'neos.server.routes.manage_conversations.config'
         ) as mock_config:
             mock_config.conversation_max_age_seconds = 864000  # 10 days
             with patch(
-                'openhands.server.routes.manage_conversations.conversation_manager'
+                'neos.server.routes.manage_conversations.conversation_manager'
             ) as mock_manager:
 
                 async def mock_get_running_agent_loops(*args, **kwargs):
@@ -211,7 +211,7 @@ async def test_search_conversations_with_repository_filter():
                 mock_manager.get_connections = mock_get_connections
                 mock_manager.get_agent_loop_info = get_agent_loop_info
                 with patch(
-                    'openhands.server.routes.manage_conversations.datetime'
+                    'neos.server.routes.manage_conversations.datetime'
                 ) as mock_datetime:
                     mock_datetime.now.return_value = datetime.fromisoformat(
                         '2025-01-01T00:00:00+00:00'
@@ -261,11 +261,11 @@ async def test_search_conversations_with_trigger_filter():
     """Test searching conversations with conversation trigger filter."""
     with _patch_store():
         with patch(
-            'openhands.server.routes.manage_conversations.config'
+            'neos.server.routes.manage_conversations.config'
         ) as mock_config:
             mock_config.conversation_max_age_seconds = 864000  # 10 days
             with patch(
-                'openhands.server.routes.manage_conversations.conversation_manager'
+                'neos.server.routes.manage_conversations.conversation_manager'
             ) as mock_manager:
 
                 async def mock_get_running_agent_loops(*args, **kwargs):
@@ -281,7 +281,7 @@ async def test_search_conversations_with_trigger_filter():
                 mock_manager.get_connections = mock_get_connections
                 mock_manager.get_agent_loop_info = get_agent_loop_info
                 with patch(
-                    'openhands.server.routes.manage_conversations.datetime'
+                    'neos.server.routes.manage_conversations.datetime'
                 ) as mock_datetime:
                     mock_datetime.now.return_value = datetime.fromisoformat(
                         '2025-01-01T00:00:00+00:00'
@@ -332,11 +332,11 @@ async def test_search_conversations_with_both_filters():
     """Test searching conversations with both repository and trigger filters."""
     with _patch_store():
         with patch(
-            'openhands.server.routes.manage_conversations.config'
+            'neos.server.routes.manage_conversations.config'
         ) as mock_config:
             mock_config.conversation_max_age_seconds = 864000  # 10 days
             with patch(
-                'openhands.server.routes.manage_conversations.conversation_manager'
+                'neos.server.routes.manage_conversations.conversation_manager'
             ) as mock_manager:
 
                 async def mock_get_running_agent_loops(*args, **kwargs):
@@ -352,7 +352,7 @@ async def test_search_conversations_with_both_filters():
                 mock_manager.get_connections = mock_get_connections
                 mock_manager.get_agent_loop_info = get_agent_loop_info
                 with patch(
-                    'openhands.server.routes.manage_conversations.datetime'
+                    'neos.server.routes.manage_conversations.datetime'
                 ) as mock_datetime:
                     mock_datetime.now.return_value = datetime.fromisoformat(
                         '2025-01-01T00:00:00+00:00'
@@ -405,11 +405,11 @@ async def test_search_conversations_with_pagination():
     """Test searching conversations with pagination."""
     with _patch_store():
         with patch(
-            'openhands.server.routes.manage_conversations.config'
+            'neos.server.routes.manage_conversations.config'
         ) as mock_config:
             mock_config.conversation_max_age_seconds = 864000  # 10 days
             with patch(
-                'openhands.server.routes.manage_conversations.conversation_manager'
+                'neos.server.routes.manage_conversations.conversation_manager'
             ) as mock_manager:
 
                 async def mock_get_running_agent_loops(*args, **kwargs):
@@ -425,7 +425,7 @@ async def test_search_conversations_with_pagination():
                 mock_manager.get_connections = mock_get_connections
                 mock_manager.get_agent_loop_info = get_agent_loop_info
                 with patch(
-                    'openhands.server.routes.manage_conversations.datetime'
+                    'neos.server.routes.manage_conversations.datetime'
                 ) as mock_datetime:
                     mock_datetime.now.return_value = datetime.fromisoformat(
                         '2025-01-01T00:00:00+00:00'
@@ -475,11 +475,11 @@ async def test_search_conversations_with_filters_and_pagination():
     """Test searching conversations with filters and pagination."""
     with _patch_store():
         with patch(
-            'openhands.server.routes.manage_conversations.config'
+            'neos.server.routes.manage_conversations.config'
         ) as mock_config:
             mock_config.conversation_max_age_seconds = 864000  # 10 days
             with patch(
-                'openhands.server.routes.manage_conversations.conversation_manager'
+                'neos.server.routes.manage_conversations.conversation_manager'
             ) as mock_manager:
 
                 async def mock_get_running_agent_loops(*args, **kwargs):
@@ -495,7 +495,7 @@ async def test_search_conversations_with_filters_and_pagination():
                 mock_manager.get_connections = mock_get_connections
                 mock_manager.get_agent_loop_info = get_agent_loop_info
                 with patch(
-                    'openhands.server.routes.manage_conversations.datetime'
+                    'neos.server.routes.manage_conversations.datetime'
                 ) as mock_datetime:
                     mock_datetime.now.return_value = datetime.fromisoformat(
                         '2025-01-01T00:00:00+00:00'
@@ -550,11 +550,11 @@ async def test_search_conversations_empty_results():
     """Test searching conversations that returns empty results."""
     with _patch_store():
         with patch(
-            'openhands.server.routes.manage_conversations.config'
+            'neos.server.routes.manage_conversations.config'
         ) as mock_config:
             mock_config.conversation_max_age_seconds = 864000  # 10 days
             with patch(
-                'openhands.server.routes.manage_conversations.conversation_manager'
+                'neos.server.routes.manage_conversations.conversation_manager'
             ) as mock_manager:
 
                 async def mock_get_running_agent_loops(*args, **kwargs):
@@ -570,7 +570,7 @@ async def test_search_conversations_empty_results():
                 mock_manager.get_connections = mock_get_connections
                 mock_manager.get_agent_loop_info = get_agent_loop_info
                 with patch(
-                    'openhands.server.routes.manage_conversations.datetime'
+                    'neos.server.routes.manage_conversations.datetime'
                 ) as mock_datetime:
                     mock_datetime.now.return_value = datetime.fromisoformat(
                         '2025-01-01T00:00:00+00:00'
@@ -620,7 +620,7 @@ async def test_get_conversation():
 
         # Mock the conversation manager
         with patch(
-            'openhands.server.routes.manage_conversations.conversation_manager'
+            'neos.server.routes.manage_conversations.conversation_manager'
         ) as mock_manager:
             mock_manager.is_agent_loop_running = AsyncMock(return_value=False)
             mock_manager.get_connections = AsyncMock(return_value={})
@@ -665,7 +665,7 @@ async def test_new_conversation_success(provider_handler_mock):
     with _patch_store():
         # Mock the create_new_conversation function directly
         with patch(
-            'openhands.server.routes.manage_conversations.create_new_conversation'
+            'neos.server.routes.manage_conversations.create_new_conversation'
         ) as mock_create_conversation:
             # Set up the mock to return a conversation ID
             mock_create_conversation.return_value = MagicMock(
@@ -709,7 +709,7 @@ async def test_new_conversation_with_suggested_task(provider_handler_mock):
     with _patch_store():
         # Mock the create_new_conversation function directly
         with patch(
-            'openhands.server.routes.manage_conversations.create_new_conversation'
+            'neos.server.routes.manage_conversations.create_new_conversation'
         ) as mock_create_conversation:
             # Set up the mock to return a conversation ID
             mock_create_conversation.return_value = MagicMock(
@@ -721,7 +721,7 @@ async def test_new_conversation_with_suggested_task(provider_handler_mock):
 
             # Mock SuggestedTask.get_prompt_for_task
             with patch(
-                'openhands.integrations.service_types.SuggestedTask.get_prompt_for_task'
+                'neos.integrations.service_types.SuggestedTask.get_prompt_for_task'
             ) as mock_get_prompt:
                 mock_get_prompt.return_value = (
                     'Please fix the failing checks in PR #123'
@@ -776,7 +776,7 @@ async def test_new_conversation_missing_settings(provider_handler_mock):
     with _patch_store():
         # Mock the create_new_conversation function to raise MissingSettingsError
         with patch(
-            'openhands.server.routes.manage_conversations.create_new_conversation'
+            'neos.server.routes.manage_conversations.create_new_conversation'
         ) as mock_create_conversation:
             # Set up the mock to raise MissingSettingsError
             mock_create_conversation.side_effect = MissingSettingsError(
@@ -805,7 +805,7 @@ async def test_new_conversation_invalid_session_api_key(provider_handler_mock):
     with _patch_store():
         # Mock the create_new_conversation function to raise LLMAuthenticationError
         with patch(
-            'openhands.server.routes.manage_conversations.create_new_conversation'
+            'neos.server.routes.manage_conversations.create_new_conversation'
         ) as mock_create_conversation:
             # Set up the mock to raise LLMAuthenticationError
             mock_create_conversation.side_effect = LLMAuthenticationError(
@@ -837,7 +837,7 @@ async def test_delete_conversation():
     with _patch_store():
         # Mock the ConversationStoreImpl.get_instance
         with patch(
-            'openhands.server.routes.manage_conversations.ConversationStoreImpl.get_instance'
+            'neos.server.routes.manage_conversations.ConversationStoreImpl.get_instance'
         ) as mock_get_instance:
             # Create a mock conversation store
             mock_store = MagicMock()
@@ -860,14 +860,14 @@ async def test_delete_conversation():
 
             # Mock the conversation manager
             with patch(
-                'openhands.server.routes.manage_conversations.conversation_manager'
+                'neos.server.routes.manage_conversations.conversation_manager'
             ) as mock_manager:
                 mock_manager.is_agent_loop_running = AsyncMock(return_value=False)
                 mock_manager.get_connections = AsyncMock(return_value={})
 
                 # Mock the runtime class
                 with patch(
-                    'openhands.server.routes.manage_conversations.get_runtime_cls'
+                    'neos.server.routes.manage_conversations.get_runtime_cls'
                 ) as mock_get_runtime_cls:
                     mock_runtime_cls = MagicMock()
                     mock_runtime_cls.delete = AsyncMock()
@@ -898,7 +898,7 @@ async def test_new_conversation_with_bearer_auth(provider_handler_mock):
     with _patch_store():
         # Mock the create_new_conversation function
         with patch(
-            'openhands.server.routes.manage_conversations.create_new_conversation'
+            'neos.server.routes.manage_conversations.create_new_conversation'
         ) as mock_create_conversation:
             # Set up the mock to return a conversation ID
             mock_create_conversation.return_value = MagicMock(
@@ -936,7 +936,7 @@ async def test_new_conversation_with_null_repository():
     with _patch_store():
         # Mock the create_new_conversation function
         with patch(
-            'openhands.server.routes.manage_conversations.create_new_conversation'
+            'neos.server.routes.manage_conversations.create_new_conversation'
         ) as mock_create_conversation:
             # Set up the mock to return a conversation ID
             mock_create_conversation.return_value = MagicMock(
@@ -978,7 +978,7 @@ async def test_new_conversation_with_provider_authentication_error(
     with _patch_store():
         # Mock the create_new_conversation function
         with patch(
-            'openhands.server.routes.manage_conversations.create_new_conversation'
+            'neos.server.routes.manage_conversations.create_new_conversation'
         ) as mock_create_conversation:
             # Set up the mock to return a conversation ID
             mock_create_conversation.return_value = 'test_conversation_id'
@@ -1029,7 +1029,7 @@ async def test_new_conversation_with_create_microagent(provider_handler_mock):
     with _patch_store():
         # Mock the create_new_conversation function directly
         with patch(
-            'openhands.server.routes.manage_conversations.create_new_conversation'
+            'neos.server.routes.manage_conversations.create_new_conversation'
         ) as mock_create_conversation:
             # Set up the mock to return a conversation ID
             mock_create_conversation.return_value = MagicMock(
@@ -1088,7 +1088,7 @@ async def test_new_conversation_with_create_microagent_repository_override(
     with _patch_store():
         # Mock the create_new_conversation function directly
         with patch(
-            'openhands.server.routes.manage_conversations.create_new_conversation'
+            'neos.server.routes.manage_conversations.create_new_conversation'
         ) as mock_create_conversation:
             # Set up the mock to return a conversation ID
             mock_create_conversation.return_value = MagicMock(
@@ -1145,7 +1145,7 @@ async def test_new_conversation_with_create_microagent_minimal(provider_handler_
     with _patch_store():
         # Mock the create_new_conversation function directly
         with patch(
-            'openhands.server.routes.manage_conversations.create_new_conversation'
+            'neos.server.routes.manage_conversations.create_new_conversation'
         ) as mock_create_conversation:
             # Set up the mock to return a conversation ID
             mock_create_conversation.return_value = MagicMock(
@@ -1199,11 +1199,11 @@ async def test_search_conversations_with_pr_number():
     """Test searching conversations includes pr_number field in response."""
     with _patch_store():
         with patch(
-            'openhands.server.routes.manage_conversations.config'
+            'neos.server.routes.manage_conversations.config'
         ) as mock_config:
             mock_config.conversation_max_age_seconds = 864000  # 10 days
             with patch(
-                'openhands.server.routes.manage_conversations.conversation_manager'
+                'neos.server.routes.manage_conversations.conversation_manager'
             ) as mock_manager:
 
                 async def mock_get_running_agent_loops(*args, **kwargs):
@@ -1219,7 +1219,7 @@ async def test_search_conversations_with_pr_number():
                 mock_manager.get_connections = mock_get_connections
                 mock_manager.get_agent_loop_info = get_agent_loop_info
                 with patch(
-                    'openhands.server.routes.manage_conversations.datetime'
+                    'neos.server.routes.manage_conversations.datetime'
                 ) as mock_datetime:
                     mock_datetime.now.return_value = datetime.fromisoformat(
                         '2025-01-01T00:00:00+00:00'
@@ -1270,11 +1270,11 @@ async def test_search_conversations_with_empty_pr_number():
     """Test searching conversations with empty pr_number field."""
     with _patch_store():
         with patch(
-            'openhands.server.routes.manage_conversations.config'
+            'neos.server.routes.manage_conversations.config'
         ) as mock_config:
             mock_config.conversation_max_age_seconds = 864000  # 10 days
             with patch(
-                'openhands.server.routes.manage_conversations.conversation_manager'
+                'neos.server.routes.manage_conversations.conversation_manager'
             ) as mock_manager:
 
                 async def mock_get_running_agent_loops(*args, **kwargs):
@@ -1290,7 +1290,7 @@ async def test_search_conversations_with_empty_pr_number():
                 mock_manager.get_connections = mock_get_connections
                 mock_manager.get_agent_loop_info = get_agent_loop_info
                 with patch(
-                    'openhands.server.routes.manage_conversations.datetime'
+                    'neos.server.routes.manage_conversations.datetime'
                 ) as mock_datetime:
                     mock_datetime.now.return_value = datetime.fromisoformat(
                         '2025-01-01T00:00:00+00:00'
@@ -1341,11 +1341,11 @@ async def test_search_conversations_with_single_pr_number():
     """Test searching conversations with single PR number."""
     with _patch_store():
         with patch(
-            'openhands.server.routes.manage_conversations.config'
+            'neos.server.routes.manage_conversations.config'
         ) as mock_config:
             mock_config.conversation_max_age_seconds = 864000  # 10 days
             with patch(
-                'openhands.server.routes.manage_conversations.conversation_manager'
+                'neos.server.routes.manage_conversations.conversation_manager'
             ) as mock_manager:
 
                 async def mock_get_running_agent_loops(*args, **kwargs):
@@ -1361,7 +1361,7 @@ async def test_search_conversations_with_single_pr_number():
                 mock_manager.get_connections = mock_get_connections
                 mock_manager.get_agent_loop_info = get_agent_loop_info
                 with patch(
-                    'openhands.server.routes.manage_conversations.datetime'
+                    'neos.server.routes.manage_conversations.datetime'
                 ) as mock_datetime:
                     mock_datetime.now.return_value = datetime.fromisoformat(
                         '2025-01-01T00:00:00+00:00'
@@ -1427,7 +1427,7 @@ async def test_get_conversation_with_pr_number():
 
         # Mock the conversation manager
         with patch(
-            'openhands.server.routes.manage_conversations.conversation_manager'
+            'neos.server.routes.manage_conversations.conversation_manager'
         ) as mock_manager:
             mock_manager.is_agent_loop_running = AsyncMock(return_value=False)
             mock_manager.get_connections = AsyncMock(return_value={})
@@ -1456,11 +1456,11 @@ async def test_search_conversations_multiple_with_pr_numbers():
     """Test searching conversations with multiple conversations having different PR numbers."""
     with _patch_store():
         with patch(
-            'openhands.server.routes.manage_conversations.config'
+            'neos.server.routes.manage_conversations.config'
         ) as mock_config:
             mock_config.conversation_max_age_seconds = 864000  # 10 days
             with patch(
-                'openhands.server.routes.manage_conversations.conversation_manager'
+                'neos.server.routes.manage_conversations.conversation_manager'
             ) as mock_manager:
 
                 async def mock_get_running_agent_loops(*args, **kwargs):
@@ -1476,7 +1476,7 @@ async def test_search_conversations_multiple_with_pr_numbers():
                 mock_manager.get_connections = mock_get_connections
                 mock_manager.get_agent_loop_info = get_agent_loop_info
                 with patch(
-                    'openhands.server.routes.manage_conversations.datetime'
+                    'neos.server.routes.manage_conversations.datetime'
                 ) as mock_datetime:
                     mock_datetime.now.return_value = datetime.fromisoformat(
                         '2025-01-01T00:00:00+00:00'

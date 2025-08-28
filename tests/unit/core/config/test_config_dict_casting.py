@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from openhands.core.config import OpenHandsConfig, load_from_env
+from neos.core.config import OpenHandsConfig, load_from_env
 
 
 def test_load_from_env_with_dict(monkeypatch, default_config):

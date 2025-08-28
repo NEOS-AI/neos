@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from openhands.microagent import (
+from neos.microagent import (
     BaseMicroagent,
     KnowledgeMicroagent,
     MicroagentMetadata,
@@ -188,7 +188,7 @@ This microagent has an invalid type.
     invalid_file.write_text(invalid_agent)
 
     # Attempt to load the microagent should raise a MicroagentValidationError
-    from openhands.core.exceptions import MicroagentValidationError
+    from neos.core.exceptions import MicroagentValidationError
 
     with pytest.raises(MicroagentValidationError) as excinfo:
         load_microagents_from_dir(temp_microagents_dir)

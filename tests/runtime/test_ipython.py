@@ -9,14 +9,14 @@ from conftest import (
     _load_runtime,
 )
 
-from openhands.core.logger import openhands_logger as logger
-from openhands.events.action import (
+from neos.core.logger import openhands_logger as logger
+from neos.events.action import (
     CmdRunAction,
     FileReadAction,
     FileWriteAction,
     IPythonRunCellAction,
 )
-from openhands.events.observation import (
+from neos.events.observation import (
     CmdOutputObservation,
     ErrorObservation,
     FileReadObservation,

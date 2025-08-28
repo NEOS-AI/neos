@@ -11,16 +11,16 @@ from conftest import (
     _load_runtime,
 )
 
-from openhands.core.config import MCPConfig
-from openhands.core.config.mcp_config import MCPStdioServerConfig
-from openhands.mcp.utils import add_mcp_tools_to_agent
-from openhands.microagent.microagent import (
+from neos.core.config import MCPConfig
+from neos.core.config.mcp_config import MCPStdioServerConfig
+from neos.mcp.utils import add_mcp_tools_to_agent
+from neos.microagent.microagent import (
     BaseMicroagent,
     KnowledgeMicroagent,
     RepoMicroagent,
     TaskMicroagent,
 )
-from openhands.microagent.types import MicroagentType
+from neos.microagent.types import MicroagentType
 
 
 def _create_test_microagents(test_dir: str):
@@ -353,9 +353,9 @@ This is a test task microagent.
 def test_default_tools_microagent_exists():
     """Test that the default-tools microagent exists in the global microagents directory."""
     # Get the path to the global microagents directory
-    import openhands
+    import neos
 
-    project_root = os.path.dirname(openhands.__file__)
+    project_root = os.path.dirname(neos.__file__)
     parent_dir = os.path.dirname(project_root)
     microagents_dir = os.path.join(parent_dir, 'microagents')
 
@@ -385,7 +385,7 @@ async def test_add_mcp_tools_from_microagents():
     """Test that add_mcp_tools_to_agent adds tools from microagents."""
     # Import ActionExecutionClient for mocking
 
-    from openhands.runtime.impl.action_execution.action_execution_client import (
+    from neos.runtime.impl.action_execution.action_execution_client import (
         ActionExecutionClient,
     )
 
@@ -416,7 +416,7 @@ async def test_add_mcp_tools_from_microagents():
     }
 
     with patch(
-        'openhands.mcp.utils.fetch_mcp_tools_from_config',
+        'neos.mcp.utils.fetch_mcp_tools_from_config',
         new=AsyncMock(return_value=[mock_tool]),
     ):
         # Call the function with the OpenHandsConfig instead of MCPConfig

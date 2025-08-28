@@ -7,18 +7,18 @@ import time
 import pytest
 from pytest import TempPathFactory
 
-from openhands.core.config import MCPConfig, OpenHandsConfig, load_openhands_config
-from openhands.core.logger import openhands_logger as logger
-from openhands.events import EventStream
-from openhands.llm.llm_registry import LLMRegistry
-from openhands.runtime.base import Runtime
-from openhands.runtime.impl.cli.cli_runtime import CLIRuntime
-from openhands.runtime.impl.docker.docker_runtime import DockerRuntime
-from openhands.runtime.impl.local.local_runtime import LocalRuntime
-from openhands.runtime.impl.remote.remote_runtime import RemoteRuntime
-from openhands.runtime.plugins import AgentSkillsRequirement, JupyterRequirement
-from openhands.storage import get_file_store
-from openhands.utils.async_utils import call_async_from_sync
+from neos.core.config import MCPConfig, OpenHandsConfig, load_openhands_config
+from neos.core.logger import openhands_logger as logger
+from neos.events import EventStream
+from neos.llm.llm_registry import LLMRegistry
+from neos.runtime.base import Runtime
+from neos.runtime.impl.cli.cli_runtime import CLIRuntime
+from neos.runtime.impl.docker.docker_runtime import DockerRuntime
+from neos.runtime.impl.local.local_runtime import LocalRuntime
+from neos.runtime.impl.remote.remote_runtime import RemoteRuntime
+from neos.runtime.plugins import AgentSkillsRequirement, JupyterRequirement
+from neos.storage import get_file_store
+from neos.utils.async_utils import call_async_from_sync
 
 TEST_IN_CI = os.getenv('TEST_IN_CI', 'False').lower() in ['true', '1', 'yes']
 TEST_RUNTIME = os.getenv('TEST_RUNTIME', 'docker').lower()

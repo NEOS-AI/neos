@@ -16,7 +16,7 @@ The following `launch.json` will allow debugging the agent, controller and serve
             "name": "OpenHands CLI",
             "type": "debugpy",
             "request": "launch",
-            "module": "openhands.cli.main",
+            "module": "neos.cli.main",
             "justMyCode": false
         },
         {
@@ -25,7 +25,7 @@ The following `launch.json` will allow debugging the agent, controller and serve
             "request": "launch",
             "module": "uvicorn",
             "args": [
-                "openhands.server.listen:app",
+                "neos.server.listen:app",
                 "--reload",
                 "--reload-exclude",
                 "${workspaceFolder}/workspace",
@@ -46,7 +46,7 @@ More specific debugging configurations which include more parameters may be spec
       "name": "Debug CodeAct",
       "type": "debugpy",
       "request": "launch",
-      "module": "openhands.core.main",
+      "module": "neos.core.main",
       "args": [
         "-t",
         "Ask me what your task is.",

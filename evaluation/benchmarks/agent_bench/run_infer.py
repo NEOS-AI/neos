@@ -24,18 +24,18 @@ from evaluation.utils.shared import (
     reset_logger_for_multiprocessing,
     run_evaluation,
 )
-from openhands.controller.state.state import State
-from openhands.core.config import (
+from neos.controller.state.state import State
+from neos.core.config import (
     OpenHandsConfig,
     get_llm_config_arg,
     parse_arguments,
 )
-from openhands.core.logger import openhands_logger as logger
-from openhands.core.main import create_runtime, run_controller
-from openhands.events.action import AgentFinishAction, CmdRunAction, MessageAction
-from openhands.events.observation import CmdOutputObservation
-from openhands.runtime.base import Runtime
-from openhands.utils.async_utils import call_async_from_sync
+from neos.core.logger import openhands_logger as logger
+from neos.core.main import create_runtime, run_controller
+from neos.events.action import AgentFinishAction, CmdRunAction, MessageAction
+from neos.events.observation import CmdOutputObservation
+from neos.runtime.base import Runtime
+from neos.utils.async_utils import call_async_from_sync
 
 
 def get_config(

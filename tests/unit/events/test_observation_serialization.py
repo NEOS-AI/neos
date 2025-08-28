@@ -1,21 +1,21 @@
-from openhands.core.schema.observation import ObservationType
-from openhands.events.action.files import FileEditSource
-from openhands.events.event import RecallType
-from openhands.events.observation import (
+from neos.core.schema.observation import ObservationType
+from neos.events.action.files import FileEditSource
+from neos.events.event import RecallType
+from neos.events.observation import (
     CmdOutputMetadata,
     CmdOutputObservation,
     FileEditObservation,
     Observation,
     RecallObservation,
 )
-from openhands.events.observation.agent import MicroagentKnowledge
-from openhands.events.observation.commands import MAX_CMD_OUTPUT_SIZE
-from openhands.events.serialization import (
+from neos.events.observation.agent import MicroagentKnowledge
+from neos.events.observation.commands import MAX_CMD_OUTPUT_SIZE
+from neos.events.serialization import (
     event_from_dict,
     event_to_dict,
     event_to_trajectory,
 )
-from openhands.events.serialization.observation import observation_from_dict
+from neos.events.serialization.observation import observation_from_dict
 
 
 def serialization_deserialization(

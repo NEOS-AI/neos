@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-Update OpenHands OpenAPI documentation.
+Update Neos OpenAPI documentation.
 
 Generates the OpenAPI specification from the FastAPI application and writes it
 to docs/openapi.json.
@@ -9,10 +8,10 @@ Usage:
     python scripts/update_openapi.py
 
 Behavior:
-- Uses openhands.server.app.app.openapi() to build the spec.
+- Uses neos.server.app.app.openapi() to build the spec.
 - Preserves existing "servers" from docs/openapi.json if present; otherwise
   writes sensible defaults.
-- Sets info.version to openhands.__version__.
+- Sets info.version to neos.__version__.
 - Sanitizes endpoint descriptions to remove code blocks and internal-only sections.
 - Excludes operational/UI-only convenience endpoints:
   - /server_info
@@ -41,8 +40,8 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 try:
-    from openhands import __version__
-    from openhands.server.app import app
+    from neos import __version__
+    from neos.server.app import app
 except ImportError as e:
     print(f'Error importing OpenHands modules: {e}')
     print(

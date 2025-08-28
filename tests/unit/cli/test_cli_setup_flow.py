@@ -2,16 +2,16 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from openhands.cli.main import run_setup_flow
-from openhands.core.config import OpenHandsConfig
-from openhands.storage.settings.file_settings_store import FileSettingsStore
+from neos.cli.main import run_setup_flow
+from neos.core.config import OpenHandsConfig
+from neos.storage.settings.file_settings_store import FileSettingsStore
 
 
 class TestCLISetupFlow(unittest.TestCase):
     """Test the CLI setup flow."""
 
-    @patch('openhands.cli.settings.modify_llm_settings_basic')
-    @patch('openhands.cli.main.print_formatted_text')
+    @patch('neos.cli.settings.modify_llm_settings_basic')
+    @patch('neos.cli.main.print_formatted_text')
     async def test_run_setup_flow(self, mock_print, mock_modify_settings):
         """Test that the setup flow calls the modify_llm_settings_basic function."""
         # Setup
@@ -33,11 +33,11 @@ class TestCLISetupFlow(unittest.TestCase):
         # Verify that the function returns True when settings are found
         self.assertTrue(result)
 
-    @patch('openhands.cli.main.print_formatted_text')
-    @patch('openhands.cli.main.run_setup_flow')
-    @patch('openhands.cli.main.FileSettingsStore.get_instance')
-    @patch('openhands.cli.main.setup_config_from_args')
-    @patch('openhands.cli.main.parse_arguments')
+    @patch('neos.cli.main.print_formatted_text')
+    @patch('neos.cli.main.run_setup_flow')
+    @patch('neos.cli.main.FileSettingsStore.get_instance')
+    @patch('neos.cli.main.setup_config_from_args')
+    @patch('neos.cli.main.parse_arguments')
     async def test_main_calls_setup_flow_when_no_settings(
         self,
         mock_parse_args,
@@ -63,7 +63,7 @@ class TestCLISetupFlow(unittest.TestCase):
         mock_run_setup_flow.return_value = True
 
         # Import here to avoid circular imports during patching
-        from openhands.cli.main import main
+        from neos.cli.main import main
 
         # Execute
         loop = asyncio.get_event_loop()

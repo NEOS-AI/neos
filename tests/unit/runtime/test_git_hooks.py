@@ -2,13 +2,13 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
-from openhands.events.action import CmdRunAction, FileReadAction
-from openhands.events.observation import (
+from neos.events.action import CmdRunAction, FileReadAction
+from neos.events.observation import (
     CmdOutputObservation,
     ErrorObservation,
     FileReadObservation,
 )
-from openhands.runtime.base import Runtime
+from neos.runtime.base import Runtime
 
 
 class TestGitHooks:

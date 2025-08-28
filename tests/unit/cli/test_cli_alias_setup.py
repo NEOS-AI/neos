@@ -4,22 +4,22 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from openhands.cli.main import alias_setup_declined as main_alias_setup_declined
-from openhands.cli.main import aliases_exist_in_shell_config, run_alias_setup_flow
-from openhands.cli.shell_config import (
+from neos.cli.main import alias_setup_declined as main_alias_setup_declined
+from neos.cli.main import aliases_exist_in_shell_config, run_alias_setup_flow
+from neos.cli.shell_config import (
     ShellConfigManager,
     add_aliases_to_shell_config,
     alias_setup_declined,
     get_shell_config_path,
     mark_alias_setup_declined,
 )
-from openhands.core.config import OpenHandsConfig
+from neos.core.config import OpenHandsConfig
 
 
 def test_get_shell_config_path_no_files_fallback():
     """Test shell config path fallback when no shell detection and no config files exist."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Mock shellingham to raise an exception (detection failure)
             with patch(
                 'shellingham.detect_shell',
@@ -32,7 +32,7 @@ def test_get_shell_config_path_no_files_fallback():
 def test_get_shell_config_path_bash_fallback():
     """Test shell config path fallback to bash when it exists."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Create .bashrc
             bashrc = Path(temp_dir) / '.bashrc'
             bashrc.touch()
@@ -49,7 +49,7 @@ def test_get_shell_config_path_bash_fallback():
 def test_get_shell_config_path_with_bash_detection():
     """Test shell config path when bash is detected."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Create .bashrc
             bashrc = Path(temp_dir) / '.bashrc'
             bashrc.touch()
@@ -63,7 +63,7 @@ def test_get_shell_config_path_with_bash_detection():
 def test_get_shell_config_path_with_zsh_detection():
     """Test shell config path when zsh is detected."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Create .zshrc
             zshrc = Path(temp_dir) / '.zshrc'
             zshrc.touch()
@@ -77,7 +77,7 @@ def test_get_shell_config_path_with_zsh_detection():
 def test_get_shell_config_path_with_fish_detection():
     """Test shell config path when fish is detected."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Create fish config directory and file
             fish_config_dir = Path(temp_dir) / '.config' / 'fish'
             fish_config_dir.mkdir(parents=True)
@@ -94,7 +94,7 @@ def test_get_shell_config_path_with_fish_detection():
 def test_add_aliases_to_shell_config_bash():
     """Test adding aliases to bash config."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Mock shellingham to return bash
             with patch('shellingham.detect_shell', return_value=('bash', 'bash')):
                 # Add aliases
@@ -116,7 +116,7 @@ def test_add_aliases_to_shell_config_bash():
 def test_add_aliases_to_shell_config_zsh():
     """Test adding aliases to zsh config."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Mock shellingham to return zsh
             with patch('shellingham.detect_shell', return_value=('zsh', 'zsh')):
                 # Add aliases
@@ -135,7 +135,7 @@ def test_add_aliases_to_shell_config_zsh():
 def test_add_aliases_handles_existing_aliases():
     """Test that adding aliases handles existing aliases correctly."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Mock shellingham to return bash
             with patch('shellingham.detect_shell', return_value=('bash', 'bash')):
                 # Add aliases first time
@@ -163,7 +163,7 @@ def test_add_aliases_handles_existing_aliases():
 def test_aliases_exist_in_shell_config_no_file():
     """Test alias detection when no shell config exists."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Mock shellingham to return bash
             with patch('shellingham.detect_shell', return_value=('bash', 'bash')):
                 assert aliases_exist_in_shell_config() is False
@@ -172,7 +172,7 @@ def test_aliases_exist_in_shell_config_no_file():
 def test_aliases_exist_in_shell_config_no_aliases():
     """Test alias detection when shell config exists but has no aliases."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Mock shellingham to return bash
             with patch('shellingham.detect_shell', return_value=('bash', 'bash')):
                 # Create bash profile with other content
@@ -186,7 +186,7 @@ def test_aliases_exist_in_shell_config_no_aliases():
 def test_aliases_exist_in_shell_config_with_aliases():
     """Test alias detection when aliases exist."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Mock shellingham to return bash
             with patch('shellingham.detect_shell', return_value=('bash', 'bash')):
                 # Add aliases first
@@ -232,7 +232,7 @@ def test_shell_config_manager_template_rendering():
     manager = ShellConfigManager(command='test-command')
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Create a bash config file
             bashrc = Path(temp_dir) / '.bashrc'
             bashrc.touch()
@@ -253,14 +253,14 @@ def test_shell_config_manager_template_rendering():
 def test_alias_setup_declined_false():
     """Test alias setup declined check when marker file doesn't exist."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             assert alias_setup_declined() is False
 
 
 def test_alias_setup_declined_true():
     """Test alias setup declined check when marker file exists."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Create the marker file
             mark_alias_setup_declined()
             assert alias_setup_declined() is True
@@ -269,7 +269,7 @@ def test_alias_setup_declined_true():
 def test_mark_alias_setup_declined():
     """Test marking alias setup as declined creates the marker file."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Initially should be False
             assert alias_setup_declined() is False
 
@@ -289,14 +289,14 @@ def test_alias_setup_declined_persisted():
     config = OpenHandsConfig()
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             with patch('shellingham.detect_shell', return_value=('bash', 'bash')):
                 with patch(
-                    'openhands.cli.shell_config.aliases_exist_in_shell_config',
+                    'neos.cli.shell_config.aliases_exist_in_shell_config',
                     return_value=False,
                 ):
                     with patch(
-                        'openhands.cli.main.cli_confirm', return_value=1
+                        'neos.cli.main.cli_confirm', return_value=1
                     ):  # User chooses "No"
                         with patch('prompt_toolkit.print_formatted_text'):
                             # Initially, user hasn't declined
@@ -314,17 +314,17 @@ def test_alias_setup_skipped_when_previously_declined():
     OpenHandsConfig()
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             # Mark that user has previously declined
             mark_alias_setup_declined()
             assert alias_setup_declined()
 
             with patch('shellingham.detect_shell', return_value=('bash', 'bash')):
                 with patch(
-                    'openhands.cli.shell_config.aliases_exist_in_shell_config',
+                    'neos.cli.shell_config.aliases_exist_in_shell_config',
                     return_value=False,
                 ):
-                    with patch('openhands.cli.main.cli_confirm'):
+                    with patch('neos.cli.main.cli_confirm'):
                         with patch('prompt_toolkit.print_formatted_text'):
                             # This should not show the setup flow since user previously declined
                             # We test this by checking the main logic conditions
@@ -344,17 +344,17 @@ def test_alias_setup_accepted_does_not_set_declined_flag():
     config = OpenHandsConfig()
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        with patch('openhands.cli.shell_config.Path.home', return_value=Path(temp_dir)):
+        with patch('neos.cli.shell_config.Path.home', return_value=Path(temp_dir)):
             with patch('shellingham.detect_shell', return_value=('bash', 'bash')):
                 with patch(
-                    'openhands.cli.shell_config.aliases_exist_in_shell_config',
+                    'neos.cli.shell_config.aliases_exist_in_shell_config',
                     return_value=False,
                 ):
                     with patch(
-                        'openhands.cli.main.cli_confirm', return_value=0
+                        'neos.cli.main.cli_confirm', return_value=0
                     ):  # User chooses "Yes"
                         with patch(
-                            'openhands.cli.shell_config.add_aliases_to_shell_config',
+                            'neos.cli.shell_config.add_aliases_to_shell_config',
                             return_value=True,
                         ):
                             with patch('prompt_toolkit.print_formatted_text'):

@@ -3,8 +3,8 @@ import argparse
 import json
 from collections import Counter
 
-from openhands.events.serialization import event_from_dict
-from openhands.events.utils import get_pairs_from_events
+from neos.events.serialization import event_from_dict
+from neos.events.utils import get_pairs_from_events
 
 ERROR_KEYWORDS = [
     'Agent encountered an error while processing the last action',

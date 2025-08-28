@@ -5,15 +5,15 @@ from pathlib import Path
 
 from conftest import _close_test_runtime, _load_runtime
 
-from openhands.controller.state.state import State
-from openhands.core.config.config_utils import OH_DEFAULT_AGENT
-from openhands.core.config.openhands_config import OpenHandsConfig
-from openhands.core.main import run_controller
-from openhands.core.schema.agent import AgentState
-from openhands.events.action.empty import NullAction
-from openhands.events.action.message import MessageAction
-from openhands.events.event import EventSource
-from openhands.events.observation.commands import CmdOutputObservation
+from neos.controller.state.state import State
+from neos.core.config.config_utils import OH_DEFAULT_AGENT
+from neos.core.config.openhands_config import OpenHandsConfig
+from neos.core.main import run_controller
+from neos.core.schema.agent import AgentState
+from neos.events.action.empty import NullAction
+from neos.events.action.message import MessageAction
+from neos.events.event import EventSource
+from neos.events.observation.commands import CmdOutputObservation
 
 
 def _get_config(trajectory_name: str, agent: str = OH_DEFAULT_AGENT):

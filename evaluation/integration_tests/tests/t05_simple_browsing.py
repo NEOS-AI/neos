@@ -3,10 +3,10 @@ import tempfile
 
 from evaluation.integration_tests.tests.base import BaseIntegrationTest, TestResult
 from evaluation.utils.shared import assert_and_raise
-from openhands.events.action import AgentFinishAction, CmdRunAction, MessageAction
-from openhands.events.event import Event
-from openhands.events.observation import AgentDelegateObservation
-from openhands.runtime.base import Runtime
+from neos.events.action import AgentFinishAction, CmdRunAction, MessageAction
+from neos.events.event import Event
+from neos.events.observation import AgentDelegateObservation
+from neos.runtime.base import Runtime
 
 HTML_FILE = """
 <!DOCTYPE html>
@@ -107,7 +107,7 @@ class Test(BaseIntegrationTest):
 
     @classmethod
     def verify_result(cls, runtime: Runtime, histories: list[Event]) -> TestResult:
-        from openhands.core.logger import openhands_logger as logger
+        from neos.core.logger import openhands_logger as logger
 
         # check if the "The answer is OpenHands is all you need!" is in any message
         message_actions = [

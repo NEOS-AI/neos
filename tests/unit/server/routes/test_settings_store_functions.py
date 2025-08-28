@@ -5,18 +5,18 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from openhands.integrations.provider import ProviderToken
-from openhands.integrations.service_types import ProviderType
-from openhands.server.routes.secrets import (
+from neos.integrations.provider import ProviderToken
+from neos.integrations.service_types import ProviderType
+from neos.server.routes.secrets import (
     app,
     check_provider_tokens,
 )
-from openhands.server.routes.settings import store_llm_settings
-from openhands.server.settings import POSTProviderModel
-from openhands.storage import get_file_store
-from openhands.storage.data_models.settings import Settings
-from openhands.storage.data_models.user_secrets import UserSecrets
-from openhands.storage.secrets.file_secrets_store import FileSecretsStore
+from neos.server.routes.settings import store_llm_settings
+from neos.server.settings import POSTProviderModel
+from neos.storage import get_file_store
+from neos.storage.data_models.settings import Settings
+from neos.storage.data_models.user_secrets import UserSecrets
+from neos.storage.secrets.file_secrets_store import FileSecretsStore
 
 
 # Mock functions to simulate the actual functions in settings.py
@@ -30,9 +30,9 @@ def test_client():
     # Create a test client
     with (
         patch.dict(os.environ, {'SESSION_API_KEY': ''}, clear=False),
-        patch('openhands.server.dependencies._SESSION_API_KEY', None),
+        patch('neos.server.dependencies._SESSION_API_KEY', None),
         patch(
-            'openhands.server.routes.secrets.check_provider_tokens',
+            'neos.server.routes.secrets.check_provider_tokens',
             AsyncMock(return_value=''),
         ),
     ):
@@ -50,7 +50,7 @@ def file_secrets_store(temp_dir):
     file_store = get_file_store('local', temp_dir)
     store = FileSecretsStore(file_store)
     with patch(
-        'openhands.storage.secrets.file_secrets_store.FileSecretsStore.get_instance',
+        'neos.storage.secrets.file_secrets_store.FileSecretsStore.get_instance',
         AsyncMock(return_value=store),
     ):
         yield store
@@ -68,7 +68,7 @@ async def test_check_provider_tokens_valid():
 
     # Mock the validate_provider_token function to return GITHUB for valid tokens
     with patch(
-        'openhands.server.routes.secrets.validate_provider_token'
+        'neos.server.routes.secrets.validate_provider_token'
     ) as mock_validate:
         mock_validate.return_value = ProviderType.GITHUB
 
@@ -90,7 +90,7 @@ async def test_check_provider_tokens_invalid():
 
     # Mock the validate_provider_token function to return None for invalid tokens
     with patch(
-        'openhands.server.routes.secrets.validate_provider_token'
+        'neos.server.routes.secrets.validate_provider_token'
     ) as mock_validate:
         mock_validate.return_value = None
 

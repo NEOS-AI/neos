@@ -1,10 +1,10 @@
 from unittest.mock import patch
 
-from openhands.controller.state.state import State, TrafficControlState
-from openhands.core.schema import AgentState
-from openhands.events.event import Event
-from openhands.llm.metrics import Metrics
-from openhands.storage.memory import InMemoryFileStore
+from neos.controller.state.state import State, TrafficControlState
+from neos.core.schema import AgentState
+from neos.events.event import Event
+from neos.llm.metrics import Metrics
+from neos.storage.memory import InMemoryFileStore
 
 
 def example_event(index: int) -> Event:

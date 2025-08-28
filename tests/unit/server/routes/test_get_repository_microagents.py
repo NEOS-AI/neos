@@ -9,15 +9,15 @@ from fastapi.testclient import TestClient
 from httpcore import Request
 from pydantic import SecretStr
 
-from openhands.integrations.provider import ProviderToken, ProviderType
-from openhands.integrations.service_types import (
+from neos.integrations.provider import ProviderToken, ProviderType
+from neos.integrations.service_types import (
     AuthenticationError,
     Repository,
 )
-from openhands.microagent.types import MicroagentContentResponse
-from openhands.server.dependencies import check_session_api_key
-from openhands.server.routes.git import app as git_app
-from openhands.server.user_auth import (
+from neos.microagent.types import MicroagentContentResponse
+from neos.server.dependencies import check_session_api_key
+from neos.server.routes.git import app as git_app
+from neos.server.user_auth import (
     get_access_token,
     get_provider_tokens,
     get_user_id,
@@ -144,7 +144,7 @@ class TestGetRepositoryMicroagents:
     """Test cases for the get_repository_microagents API endpoint."""
 
     @pytest.mark.asyncio
-    @patch('openhands.server.routes.git.ProviderHandler')
+    @patch('neos.server.routes.git.ProviderHandler')
     async def test_get_microagents_github_success(
         self,
         mock_provider_handler_cls,
@@ -194,7 +194,7 @@ class TestGetRepositoryMicroagents:
             assert 'tools' not in microagent
 
     @pytest.mark.asyncio
-    @patch('openhands.server.routes.git.ProviderHandler')
+    @patch('neos.server.routes.git.ProviderHandler')
     async def test_get_microagents_gitlab_success(
         self,
         mock_provider_handler_cls,
@@ -225,7 +225,7 @@ class TestGetRepositoryMicroagents:
         assert 'content' not in data[0]  # Content should not be present in listing API
 
     @pytest.mark.asyncio
-    @patch('openhands.server.routes.git.ProviderHandler')
+    @patch('neos.server.routes.git.ProviderHandler')
     async def test_get_microagents_bitbucket_success(
         self,
         mock_provider_handler_cls,
@@ -256,7 +256,7 @@ class TestGetRepositoryMicroagents:
         assert 'content' not in data[0]  # Content should not be present in listing API
 
     @pytest.mark.asyncio
-    @patch('openhands.server.routes.git.ProviderHandler')
+    @patch('neos.server.routes.git.ProviderHandler')
     async def test_get_microagents_no_directory_found(
         self,
         mock_provider_handler_cls,
@@ -280,7 +280,7 @@ class TestGetRepositoryMicroagents:
         assert data == []
 
     @pytest.mark.asyncio
-    @patch('openhands.server.routes.git.ProviderHandler')
+    @patch('neos.server.routes.git.ProviderHandler')
     async def test_get_microagents_authentication_error(
         self,
         mock_provider_handler_cls,
@@ -308,7 +308,7 @@ class TestGetRepositoryMicroagentContent:
     """Test cases for the get_repository_microagent_content API endpoint."""
 
     @pytest.mark.asyncio
-    @patch('openhands.server.routes.git.ProviderHandler')
+    @patch('neos.server.routes.git.ProviderHandler')
     async def test_get_microagent_content_github_success(
         self,
         mock_provider_handler_cls,
@@ -345,7 +345,7 @@ class TestGetRepositoryMicroagentContent:
         assert data['triggers'] == ['test', 'agent']
 
     @pytest.mark.asyncio
-    @patch('openhands.server.routes.git.ProviderHandler')
+    @patch('neos.server.routes.git.ProviderHandler')
     async def test_get_microagent_content_gitlab_success(
         self,
         mock_provider_handler_cls,
@@ -381,7 +381,7 @@ class TestGetRepositoryMicroagentContent:
         assert data['triggers'] == ['test', 'agent']
 
     @pytest.mark.asyncio
-    @patch('openhands.server.routes.git.ProviderHandler')
+    @patch('neos.server.routes.git.ProviderHandler')
     async def test_get_microagent_content_bitbucket_success(
         self,
         mock_provider_handler_cls,
@@ -417,7 +417,7 @@ class TestGetRepositoryMicroagentContent:
         assert data['triggers'] == ['test', 'agent']
 
     @pytest.mark.asyncio
-    @patch('openhands.server.routes.git.ProviderHandler')
+    @patch('neos.server.routes.git.ProviderHandler')
     async def test_get_microagent_content_file_not_found(
         self,
         mock_provider_handler_cls,
@@ -445,7 +445,7 @@ class TestGetRepositoryMicroagentContent:
         assert 'File not found' in response.json()
 
     @pytest.mark.asyncio
-    @patch('openhands.server.routes.git.ProviderHandler')
+    @patch('neos.server.routes.git.ProviderHandler')
     async def test_get_microagent_content_authentication_error(
         self,
         mock_provider_handler_cls,
@@ -472,7 +472,7 @@ class TestGetRepositoryMicroagentContent:
         assert response.json() == 'Invalid credentials'
 
     @pytest.mark.asyncio
-    @patch('openhands.server.routes.git.ProviderHandler')
+    @patch('neos.server.routes.git.ProviderHandler')
     async def test_get_microagent_content_cursorrules(
         self,
         mock_provider_handler_cls,
@@ -512,7 +512,7 @@ class TestSpecialRepositoryStructures:
     """Test cases for special repository structures."""
 
     @pytest.mark.asyncio
-    @patch('openhands.server.routes.git.ProviderHandler')
+    @patch('neos.server.routes.git.ProviderHandler')
     async def test_get_microagents_openhands_repo_structure(
         self,
         mock_provider_handler_cls,
@@ -544,7 +544,7 @@ class TestSpecialRepositoryStructures:
         )  # Should be in microagents folder, not .openhands/microagents
 
     @pytest.mark.asyncio
-    @patch('openhands.server.routes.git.ProviderHandler')
+    @patch('neos.server.routes.git.ProviderHandler')
     async def test_get_microagents_gitlab_openhands_config_structure(
         self,
         mock_provider_handler_cls,

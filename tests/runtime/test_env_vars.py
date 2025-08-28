@@ -6,8 +6,8 @@ from unittest.mock import patch
 import pytest
 from conftest import _close_test_runtime, _load_runtime
 
-from openhands.events.action import CmdRunAction
-from openhands.events.observation import CmdOutputObservation
+from neos.events.action import CmdRunAction
+from neos.events.observation import CmdOutputObservation
 
 # ============================================================================================================================
 # Environment variables tests
@@ -89,7 +89,7 @@ def test_env_vars_added_by_config(temp_dir, runtime_cls):
     reason='This test is specific to DockerRuntime and its pause/resume persistence',
 )
 def test_docker_runtime_env_vars_persist_after_restart(temp_dir):
-    from openhands.runtime.impl.docker.docker_runtime import DockerRuntime
+    from neos.runtime.impl.docker.docker_runtime import DockerRuntime
 
     runtime, config = _load_runtime(temp_dir, DockerRuntime)
 

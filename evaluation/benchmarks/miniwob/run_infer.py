@@ -21,29 +21,29 @@ from evaluation.utils.shared import (
     run_evaluation,
     update_llm_config_for_completions_logging,
 )
-from openhands.controller.state.state import State
-from openhands.core.config import (
+from neos.controller.state.state import State
+from neos.core.config import (
     OpenHandsConfig,
     get_llm_config_arg,
     parse_arguments,
 )
-from openhands.core.logger import openhands_logger as logger
-from openhands.core.main import create_runtime, run_controller
-from openhands.events.action import (
+from neos.core.logger import openhands_logger as logger
+from neos.core.main import create_runtime, run_controller
+from neos.events.action import (
     BrowseInteractiveAction,
     CmdRunAction,
     MessageAction,
 )
-from openhands.events.observation import (
+from neos.events.observation import (
     BrowserOutputObservation,
     CmdOutputObservation,
 )
-from openhands.runtime.base import Runtime
-from openhands.runtime.browser.browser_env import (
+from neos.runtime.base import Runtime
+from neos.runtime.browser.browser_env import (
     BROWSER_EVAL_GET_GOAL_ACTION,
     BROWSER_EVAL_GET_REWARDS_ACTION,
 )
-from openhands.utils.async_utils import call_async_from_sync
+from neos.utils.async_utils import call_async_from_sync
 
 SUPPORTED_AGENT_CLS = {'BrowsingAgent', 'CodeActAgent'}
 

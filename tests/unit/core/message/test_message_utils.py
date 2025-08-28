@@ -1,10 +1,10 @@
-from openhands.core.message_utils import (
+from neos.core.message_utils import (
     get_token_usage_for_event,
     get_token_usage_for_event_id,
 )
-from openhands.events.event import Event
-from openhands.events.tool import ToolCallMetadata
-from openhands.llm.metrics import Metrics, TokenUsage
+from neos.events.event import Event
+from neos.events.tool import ToolCallMetadata
+from neos.llm.metrics import Metrics, TokenUsage
 
 
 def test_get_token_usage_for_event():

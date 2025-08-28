@@ -2,10 +2,10 @@
 
 from unittest.mock import MagicMock, patch
 
-from openhands.events.action import CmdRunAction, FileReadAction
-from openhands.events.event import EventSource
-from openhands.events.observation import ErrorObservation, FileReadObservation
-from openhands.runtime.base import Runtime
+from neos.events.action import CmdRunAction, FileReadAction
+from neos.events.event import EventSource
+from neos.events.observation import ErrorObservation, FileReadObservation
+from neos.runtime.base import Runtime
 
 
 def test_maybe_run_setup_script_executes_action():

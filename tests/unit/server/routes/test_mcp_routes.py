@@ -2,9 +2,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from openhands.integrations.service_types import GitService
-from openhands.server.routes.mcp import get_conversation_link
-from openhands.server.types import AppMode
+from neos.integrations.service_types import GitService
+from neos.server.routes.mcp import get_conversation_link
+from neos.server.types import AppMode
 
 
 @pytest.mark.asyncio
@@ -14,7 +14,7 @@ async def test_get_conversation_link_non_saas_mode():
     mock_service = AsyncMock(spec=GitService)
 
     # Test with non-SAAS mode
-    with patch('openhands.server.routes.mcp.server_config') as mock_config:
+    with patch('neos.server.routes.mcp.server_config') as mock_config:
         mock_config.app_mode = AppMode.OSS
 
         # Call the function
@@ -39,9 +39,9 @@ async def test_get_conversation_link_saas_mode():
 
     # Test with SAAS mode
     with (
-        patch('openhands.server.routes.mcp.server_config') as mock_config,
+        patch('neos.server.routes.mcp.server_config') as mock_config,
         patch(
-            'openhands.server.routes.mcp.CONVERSATION_URL',
+            'neos.server.routes.mcp.CONVERSATION_URL',
             'https://test.example.com/conversations/{}',
         ),
     ):
@@ -71,9 +71,9 @@ async def test_get_conversation_link_empty_body():
 
     # Test with SAAS mode and empty body
     with (
-        patch('openhands.server.routes.mcp.server_config') as mock_config,
+        patch('neos.server.routes.mcp.server_config') as mock_config,
         patch(
-            'openhands.server.routes.mcp.CONVERSATION_URL',
+            'neos.server.routes.mcp.CONVERSATION_URL',
             'https://test.example.com/conversations/{}',
         ),
     ):

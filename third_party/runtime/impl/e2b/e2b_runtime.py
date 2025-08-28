@@ -1,25 +1,25 @@
 from typing import Callable
 
-from openhands.core.config import OpenHandsConfig
-from openhands.events.action import (
+from neos.core.config import OpenHandsConfig
+from neos.events.action import (
     FileReadAction,
     FileWriteAction,
 )
-from openhands.events.observation import (
+from neos.events.observation import (
     ErrorObservation,
     FileReadObservation,
     FileWriteObservation,
     Observation,
 )
-from openhands.events.stream import EventStream
-from openhands.integrations.provider import PROVIDER_TOKEN_TYPE
-from openhands.runtime.impl.action_execution.action_execution_client import (
+from neos.events.stream import EventStream
+from neos.integrations.provider import PROVIDER_TOKEN_TYPE
+from neos.runtime.impl.action_execution.action_execution_client import (
     ActionExecutionClient,
 )
 from third_party.runtime.impl.e2b.filestore import E2BFileStore
 from third_party.runtime.impl.e2b.sandbox import E2BSandbox
-from openhands.runtime.plugins import PluginRequirement
-from openhands.runtime.utils.files import insert_lines, read_lines
+from neos.runtime.plugins import PluginRequirement
+from neos.runtime.utils.files import insert_lines, read_lines
 
 
 class E2BRuntime(ActionExecutionClient):

@@ -2,7 +2,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from openhands.runtime.utils.log_streamer import LogStreamer
+from neos.runtime.utils.log_streamer import LogStreamer
 
 
 @pytest.fixture

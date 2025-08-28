@@ -4,17 +4,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import SecretStr
 
-from openhands.core.config import OpenHandsConfig
-from openhands.core.config.mcp_config import MCPConfig, MCPStdioServerConfig
-from openhands.events.action import Action
-from openhands.events.action.commands import CmdRunAction
-from openhands.events.observation import NullObservation, Observation
-from openhands.events.stream import EventStream
-from openhands.integrations.provider import ProviderHandler, ProviderToken, ProviderType
-from openhands.integrations.service_types import AuthenticationError, Repository
-from openhands.llm.llm_registry import LLMRegistry
-from openhands.runtime.base import Runtime
-from openhands.storage import get_file_store
+from neos.core.config import OpenHandsConfig
+from neos.core.config.mcp_config import MCPConfig, MCPStdioServerConfig
+from neos.events.action import Action
+from neos.events.action.commands import CmdRunAction
+from neos.events.observation import NullObservation, Observation
+from neos.events.stream import EventStream
+from neos.integrations.provider import ProviderHandler, ProviderToken, ProviderType
+from neos.integrations.service_types import AuthenticationError, Repository
+from neos.llm.llm_registry import LLMRegistry
+from neos.runtime.base import Runtime
+from neos.storage import get_file_store
 
 
 class MockRuntime(Runtime):

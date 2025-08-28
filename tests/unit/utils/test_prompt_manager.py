@@ -3,12 +3,12 @@ import shutil
 
 import pytest
 
-from openhands.controller.state.control_flags import IterationControlFlag
-from openhands.controller.state.state import State
-from openhands.core.message import Message, TextContent
-from openhands.events.observation.agent import MicroagentKnowledge
-from openhands.microagent import BaseMicroagent
-from openhands.utils.prompt import (
+from neos.controller.state.control_flags import IterationControlFlag
+from neos.controller.state.state import State
+from neos.core.message import Message, TextContent
+from neos.events.observation.agent import MicroagentKnowledge
+from neos.microagent import BaseMicroagent
+from neos.utils.prompt import (
     ConversationInstructions,
     PromptManager,
     RepositoryInfo,

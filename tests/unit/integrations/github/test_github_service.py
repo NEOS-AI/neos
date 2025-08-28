@@ -4,15 +4,15 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from openhands.integrations.github.github_service import GitHubService
-from openhands.integrations.service_types import (
+from neos.integrations.github.github_service import GitHubService
+from neos.integrations.service_types import (
     AuthenticationError,
     OwnerType,
     ProviderType,
     Repository,
     User,
 )
-from openhands.server.types import AppMode
+from neos.server.types import AppMode
 
 
 @pytest.mark.asyncio
@@ -266,7 +266,7 @@ async def test_github_search_repositories_with_organizations():
                 'full_name': 'All-Hands-AI/OpenHands',
                 'private': False,
                 'html_url': 'https://github.com/All-Hands-AI/OpenHands',
-                'clone_url': 'https://github.com/All-Hands-AI/OpenHands.git',
+                'clone_url': 'https://github.com/All-Hands-AI/neos.git',
                 'pushed_at': '2023-01-01T00:00:00Z',
                 'owner': {'login': 'All-Hands-AI', 'type': 'Organization'},
             }

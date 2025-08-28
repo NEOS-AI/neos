@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from openhands.events.action import MessageAction
-from openhands.io import json
+from neos.events.action import MessageAction
+from neos.io import json
 
 
 def test_event_serialization_deserialization():

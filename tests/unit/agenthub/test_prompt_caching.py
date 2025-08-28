@@ -1,11 +1,11 @@
 import pytest
 from litellm import ModelResponse
 
-from openhands.agenthub.codeact_agent.codeact_agent import CodeActAgent
-from openhands.core.config import AgentConfig, LLMConfig
-from openhands.core.config.openhands_config import OpenHandsConfig
-from openhands.events.action import MessageAction
-from openhands.llm.llm_registry import LLMRegistry
+from neos.agenthub.codeact_agent.codeact_agent import CodeActAgent
+from neos.core.config import AgentConfig, LLMConfig
+from neos.core.config.openhands_config import OpenHandsConfig
+from neos.events.action import MessageAction
+from neos.llm.llm_registry import LLMRegistry
 
 
 @pytest.fixture

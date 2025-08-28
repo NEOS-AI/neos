@@ -7,19 +7,19 @@ from unittest import mock
 import pytest
 from mcp import McpError
 
-from openhands.controller.agent import Agent
-from openhands.controller.agent_controller import AgentController
-from openhands.core.schema import AgentState
-from openhands.events.action.mcp import MCPAction
-from openhands.events.action.message import SystemMessageAction
-from openhands.events.event import EventSource
-from openhands.events.observation.mcp import MCPObservation
-from openhands.events.stream import EventStream
-from openhands.mcp.client import MCPClient
-from openhands.mcp.tool import MCPClientTool
-from openhands.mcp.utils import call_tool_mcp
-from openhands.server.services.conversation_stats import ConversationStats
-from openhands.storage.memory import InMemoryFileStore
+from neos.controller.agent import Agent
+from neos.controller.agent_controller import AgentController
+from neos.core.schema import AgentState
+from neos.events.action.mcp import MCPAction
+from neos.events.action.message import SystemMessageAction
+from neos.events.event import EventSource
+from neos.events.observation.mcp import MCPObservation
+from neos.events.stream import EventStream
+from neos.mcp.client import MCPClient
+from neos.mcp.tool import MCPClientTool
+from neos.mcp.utils import call_tool_mcp
+from neos.server.services.conversation_stats import ConversationStats
+from neos.storage.memory import InMemoryFileStore
 
 
 class MockConfig:
@@ -232,7 +232,7 @@ async def test_mcp_tool_timeout_agent_continuation(conversation_stats):
 
     # Use our fixed function
     with mock.patch(
-        'openhands.mcp.utils.call_tool_mcp', side_effect=fixed_call_tool_mcp
+        'neos.mcp.utils.call_tool_mcp', side_effect=fixed_call_tool_mcp
     ):
         # Call the function that would normally be called by the agent controller
         result = await call_tool_mcp([mock_client], mcp_action)

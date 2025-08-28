@@ -2,9 +2,9 @@ from unittest import mock
 
 import pytest
 
-from openhands.core.config import OpenHandsConfig, SandboxConfig
-from openhands.events.action import CmdRunAction
-from openhands.resolver.issue_resolver import IssueResolver
+from neos.core.config import OpenHandsConfig, SandboxConfig
+from neos.events.action import CmdRunAction
+from neos.resolver.issue_resolver import IssueResolver
 
 
 def assert_sandbox_config(
@@ -26,7 +26,7 @@ def assert_sandbox_config(
 
 def test_setup_sandbox_config_default():
     """Test default configuration when no images provided and not experimental"""
-    with mock.patch('openhands.__version__', 'mock'):
+    with mock.patch('neos.__version__', 'mock'):
         openhands_config = OpenHandsConfig()
 
         IssueResolver.update_sandbox_config(
@@ -95,7 +95,7 @@ def test_setup_sandbox_config_runtime_only():
 
 def test_setup_sandbox_config_experimental():
     """Test configuration when experimental mode is enabled"""
-    with mock.patch('openhands.__version__', 'mock'):
+    with mock.patch('neos.__version__', 'mock'):
         openhands_config = OpenHandsConfig()
 
         IssueResolver.update_sandbox_config(
@@ -108,11 +108,11 @@ def test_setup_sandbox_config_experimental():
         assert_sandbox_config(openhands_config.sandbox, runtime_container_image=None)
 
 
-@mock.patch('openhands.resolver.issue_resolver.os.getuid', return_value=0)
-@mock.patch('openhands.resolver.issue_resolver.get_unique_uid', return_value=1001)
+@mock.patch('neos.resolver.issue_resolver.os.getuid', return_value=0)
+@mock.patch('neos.resolver.issue_resolver.get_unique_uid', return_value=1001)
 def test_setup_sandbox_config_gitlab_ci(mock_get_unique_uid, mock_getuid):
     """Test GitLab CI specific configuration when running as root"""
-    with mock.patch('openhands.__version__', 'mock'):
+    with mock.patch('neos.__version__', 'mock'):
         with mock.patch.object(IssueResolver, 'GITLAB_CI', True):
             openhands_config = OpenHandsConfig()
 
@@ -128,10 +128,10 @@ def test_setup_sandbox_config_gitlab_ci(mock_get_unique_uid, mock_getuid):
             )
 
 
-@mock.patch('openhands.resolver.issue_resolver.os.getuid', return_value=1000)
+@mock.patch('neos.resolver.issue_resolver.os.getuid', return_value=1000)
 def test_setup_sandbox_config_gitlab_ci_non_root(mock_getuid):
     """Test GitLab CI configuration when not running as root"""
-    with mock.patch('openhands.__version__', 'mock'):
+    with mock.patch('neos.__version__', 'mock'):
         with mock.patch.object(IssueResolver, 'GITLAB_CI', True):
             openhands_config = OpenHandsConfig()
 
@@ -147,8 +147,8 @@ def test_setup_sandbox_config_gitlab_ci_non_root(mock_getuid):
             )
 
 
-@mock.patch('openhands.events.observation.CmdOutputObservation')
-@mock.patch('openhands.runtime.base.Runtime')
+@mock.patch('neos.events.observation.CmdOutputObservation')
+@mock.patch('neos.runtime.base.Runtime')
 def test_initialize_runtime_runs_setup_script_and_git_hooks(
     mock_runtime, mock_cmd_output
 ):

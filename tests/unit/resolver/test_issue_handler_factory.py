@@ -1,15 +1,15 @@
 import pytest
 from pydantic import SecretStr
 
-from openhands.core.config import LLMConfig
-from openhands.integrations.provider import ProviderType
-from openhands.resolver.interfaces.github import GithubIssueHandler, GithubPRHandler
-from openhands.resolver.interfaces.gitlab import GitlabIssueHandler, GitlabPRHandler
-from openhands.resolver.interfaces.issue_definitions import (
+from neos.core.config import LLMConfig
+from neos.integrations.provider import ProviderType
+from neos.resolver.interfaces.github import GithubIssueHandler, GithubPRHandler
+from neos.resolver.interfaces.gitlab import GitlabIssueHandler, GitlabPRHandler
+from neos.resolver.interfaces.issue_definitions import (
     ServiceContextIssue,
     ServiceContextPR,
 )
-from openhands.resolver.issue_handler_factory import IssueHandlerFactory
+from neos.resolver.issue_handler_factory import IssueHandlerFactory
 
 
 @pytest.fixture

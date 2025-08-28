@@ -7,19 +7,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import SecretStr
 
-from openhands.integrations.bitbucket.bitbucket_service import BitBucketService
-from openhands.integrations.provider import ProviderToken, ProviderType
-from openhands.integrations.service_types import OwnerType, Repository
-from openhands.integrations.service_types import ProviderType as ServiceProviderType
-from openhands.integrations.utils import validate_provider_token
-from openhands.resolver.interfaces.bitbucket import BitbucketIssueHandler
-from openhands.resolver.interfaces.issue import Issue
-from openhands.resolver.interfaces.issue_definitions import ServiceContextIssue
-from openhands.resolver.send_pull_request import send_pull_request
-from openhands.runtime.base import Runtime
-from openhands.server.routes.secrets import check_provider_tokens
-from openhands.server.settings import POSTProviderModel
-from openhands.server.types import AppMode
+from neos.integrations.bitbucket.bitbucket_service import BitBucketService
+from neos.integrations.provider import ProviderToken, ProviderType
+from neos.integrations.service_types import OwnerType, Repository
+from neos.integrations.service_types import ProviderType as ServiceProviderType
+from neos.integrations.utils import validate_provider_token
+from neos.resolver.interfaces.bitbucket import BitbucketIssueHandler
+from neos.resolver.interfaces.issue import Issue
+from neos.resolver.interfaces.issue_definitions import ServiceContextIssue
+from neos.resolver.send_pull_request import send_pull_request
+from neos.runtime.base import Runtime
+from neos.server.routes.secrets import check_provider_tokens
+from neos.server.settings import POSTProviderModel
+from neos.server.types import AppMode
 
 
 # BitbucketIssueHandler Tests
@@ -148,8 +148,8 @@ def test_create_pr(mock_post, bitbucket_handler):
 
 
 # Bitbucket Send Pull Request Tests
-@patch('openhands.resolver.send_pull_request.ServiceContextIssue')
-@patch('openhands.resolver.send_pull_request.BitbucketIssueHandler')
+@patch('neos.resolver.send_pull_request.ServiceContextIssue')
+@patch('neos.resolver.send_pull_request.BitbucketIssueHandler')
 @patch('subprocess.run')
 def test_send_pull_request_bitbucket(
     mock_run, mock_bitbucket_handler, mock_service_context
@@ -235,11 +235,11 @@ def test_send_pull_request_bitbucket(
 class TestBitbucketProviderDomain(unittest.TestCase):
     """Test that Bitbucket provider domain is properly handled in Runtime.clone_or_init_repo."""
 
-    @patch('openhands.runtime.base.Runtime.__abstractmethods__', set())
+    @patch('neos.runtime.base.Runtime.__abstractmethods__', set())
     @patch(
-        'openhands.runtime.utils.edit.FileEditRuntimeMixin.__init__', return_value=None
+        'neos.runtime.utils.edit.FileEditRuntimeMixin.__init__', return_value=None
     )
-    @patch('openhands.runtime.base.ProviderHandler')
+    @patch('neos.runtime.base.ProviderHandler')
     @pytest.mark.asyncio
     async def test_get_authenticated_git_url_bitbucket(
         self, mock_provider_handler, mock_file_edit_init, *args
@@ -309,7 +309,7 @@ class TestBitbucketProviderDomain(unittest.TestCase):
             url, 'https://x-token-auth:simple_token@bitbucket.org/workspace/repo.git'
         )
 
-    @patch('openhands.runtime.base.ProviderHandler')
+    @patch('neos.runtime.base.ProviderHandler')
     @patch.object(Runtime, 'run_action')
     async def test_bitbucket_provider_domain(
         self, mock_run_action, mock_provider_handler
@@ -358,10 +358,10 @@ async def test_validate_provider_token_with_bitbucket_token():
     """
     # Mock the service classes to avoid actual API calls
     with (
-        patch('openhands.integrations.utils.GitHubService') as mock_github_service,
-        patch('openhands.integrations.utils.GitLabService') as mock_gitlab_service,
+        patch('neos.integrations.utils.GitHubService') as mock_github_service,
+        patch('neos.integrations.utils.GitLabService') as mock_gitlab_service,
         patch(
-            'openhands.integrations.utils.BitBucketService'
+            'neos.integrations.utils.BitBucketService'
         ) as mock_bitbucket_service,
     ):
         # Set up the mocks
@@ -413,7 +413,7 @@ async def test_check_provider_tokens_with_only_bitbucket():
 
     # Call check_provider_tokens with the patched validate_provider_token
     with patch(
-        'openhands.server.routes.secrets.validate_provider_token', mock_validate
+        'neos.server.routes.secrets.validate_provider_token', mock_validate
     ):
         result = await check_provider_tokens(post_model, None)
 
@@ -536,10 +536,10 @@ async def test_validate_provider_token_with_empty_tokens():
     """Test that validate_provider_token handles empty tokens correctly."""
     # Create a mock for each service
     with (
-        patch('openhands.integrations.utils.GitHubService') as mock_github_service,
-        patch('openhands.integrations.utils.GitLabService') as mock_gitlab_service,
+        patch('neos.integrations.utils.GitHubService') as mock_github_service,
+        patch('neos.integrations.utils.GitLabService') as mock_gitlab_service,
         patch(
-            'openhands.integrations.utils.BitBucketService'
+            'neos.integrations.utils.BitBucketService'
         ) as mock_bitbucket_service,
     ):
         # Configure mocks to raise exceptions for invalid tokens
@@ -711,15 +711,15 @@ async def test_bitbucket_get_repositories_mixed_owner_types():
 
 
 # Setup.py Bitbucket Token Tests
-@patch('openhands.core.setup.call_async_from_sync')
-@patch('openhands.core.setup.get_file_store')
-@patch('openhands.core.setup.EventStream')
+@patch('neos.core.setup.call_async_from_sync')
+@patch('neos.core.setup.get_file_store')
+@patch('neos.core.setup.EventStream')
 def test_initialize_repository_for_runtime_with_bitbucket_token(
     mock_event_stream, mock_get_file_store, mock_call_async_from_sync
 ):
     """Test that initialize_repository_for_runtime properly handles BITBUCKET_TOKEN."""
-    from openhands.core.setup import initialize_repository_for_runtime
-    from openhands.integrations.provider import ProviderType
+    from neos.core.setup import initialize_repository_for_runtime
+    from neos.integrations.provider import ProviderType
 
     # Mock runtime
     mock_runtime = MagicMock()
@@ -760,15 +760,15 @@ def test_initialize_repository_for_runtime_with_bitbucket_token(
     assert args[4] is None  # selected_branch
 
 
-@patch('openhands.core.setup.call_async_from_sync')
-@patch('openhands.core.setup.get_file_store')
-@patch('openhands.core.setup.EventStream')
+@patch('neos.core.setup.call_async_from_sync')
+@patch('neos.core.setup.get_file_store')
+@patch('neos.core.setup.EventStream')
 def test_initialize_repository_for_runtime_with_multiple_tokens(
     mock_event_stream, mock_get_file_store, mock_call_async_from_sync
 ):
     """Test that initialize_repository_for_runtime handles multiple provider tokens including Bitbucket."""
-    from openhands.core.setup import initialize_repository_for_runtime
-    from openhands.integrations.provider import ProviderType
+    from neos.core.setup import initialize_repository_for_runtime
+    from neos.integrations.provider import ProviderType
 
     # Mock runtime
     mock_runtime = MagicMock()
@@ -823,15 +823,15 @@ def test_initialize_repository_for_runtime_with_multiple_tokens(
     )
 
 
-@patch('openhands.core.setup.call_async_from_sync')
-@patch('openhands.core.setup.get_file_store')
-@patch('openhands.core.setup.EventStream')
+@patch('neos.core.setup.call_async_from_sync')
+@patch('neos.core.setup.get_file_store')
+@patch('neos.core.setup.EventStream')
 def test_initialize_repository_for_runtime_without_bitbucket_token(
     mock_event_stream, mock_get_file_store, mock_call_async_from_sync
 ):
     """Test that initialize_repository_for_runtime works without BITBUCKET_TOKEN."""
-    from openhands.core.setup import initialize_repository_for_runtime
-    from openhands.integrations.provider import ProviderType
+    from neos.core.setup import initialize_repository_for_runtime
+    from neos.integrations.provider import ProviderType
 
     # Mock runtime
     mock_runtime = MagicMock()

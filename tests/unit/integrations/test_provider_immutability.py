@@ -3,14 +3,14 @@ from types import MappingProxyType
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from openhands.events.action.commands import CmdRunAction
-from openhands.integrations.provider import (
+from neos.events.action.commands import CmdRunAction
+from neos.integrations.provider import (
     ProviderHandler,
     ProviderToken,
     ProviderType,
 )
-from openhands.storage.data_models.settings import Settings
-from openhands.storage.data_models.user_secrets import UserSecrets
+from neos.storage.data_models.settings import Settings
+from neos.storage.data_models.user_secrets import UserSecrets
 
 
 def test_provider_token_immutability():
@@ -327,7 +327,7 @@ def test_check_cmd_action_for_provider_token_ref():
     assert len(providers) == 0
 
     # Test non-command action
-    from openhands.events.action import MessageAction
+    from neos.events.action import MessageAction
 
     msg = MessageAction(content='test')
     providers = ProviderHandler.check_cmd_action_for_provider_token_ref(msg)

@@ -2,12 +2,12 @@ from unittest.mock import patch
 
 from pydantic import SecretStr
 
-from openhands.core.config.llm_config import LLMConfig
-from openhands.core.config.openhands_config import OpenHandsConfig
-from openhands.core.config.sandbox_config import SandboxConfig
-from openhands.core.config.security_config import SecurityConfig
-from openhands.server.routes.settings import convert_to_settings
-from openhands.storage.data_models.settings import Settings
+from neos.core.config.llm_config import LLMConfig
+from neos.core.config.openhands_config import OpenHandsConfig
+from neos.core.config.sandbox_config import SandboxConfig
+from neos.core.config.security_config import SecurityConfig
+from neos.server.routes.settings import convert_to_settings
+from neos.storage.data_models.settings import Settings
 
 
 def test_settings_from_config():
@@ -30,7 +30,7 @@ def test_settings_from_config():
     )
 
     with patch(
-        'openhands.storage.data_models.settings.load_openhands_config',
+        'neos.storage.data_models.settings.load_openhands_config',
         return_value=mock_app_config,
     ):
         settings = Settings.from_config()
@@ -66,7 +66,7 @@ def test_settings_from_config_no_api_key():
     )
 
     with patch(
-        'openhands.storage.data_models.settings.load_openhands_config',
+        'neos.storage.data_models.settings.load_openhands_config',
         return_value=mock_app_config,
     ):
         settings = Settings.from_config()

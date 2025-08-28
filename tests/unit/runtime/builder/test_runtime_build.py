@@ -11,11 +11,11 @@ import pytest
 import toml
 from pytest import TempPathFactory
 
-import openhands
-from openhands import __version__ as oh_version
-from openhands.core.logger import openhands_logger as logger
-from openhands.runtime.builder.docker import DockerRuntimeBuilder
-from openhands.runtime.utils.runtime_build import (
+import neos
+from neos import __version__ as oh_version
+from neos.core.logger import openhands_logger as logger
+from neos.runtime.builder.docker import DockerRuntimeBuilder
+from neos.runtime.utils.runtime_build import (
     BuildFromImageType,
     _generate_dockerfile,
     build_runtime_image,
@@ -143,7 +143,7 @@ def test_get_hash_for_source_files():
         result = get_hash_for_source_files()
         assert result == truncate_hash(dirhash_mock.return_value)
         dirhash_mock.assert_called_once_with(
-            Path(openhands.__file__).parent,
+            Path(neos.__file__).parent,
             'md5',
             ignore=[
                 '.*/',  # hidden directories

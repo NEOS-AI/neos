@@ -9,10 +9,10 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Union
 
-from openhands.core.logger import openhands_logger as logger
-from openhands.events.action import BrowseInteractiveAction
-from openhands.events.observation import BrowserOutputObservation
-from openhands.runtime.base import Runtime
+from neos.core.logger import openhands_logger as logger
+from neos.events.action import BrowseInteractiveAction
+from neos.events.observation import BrowserOutputObservation
+from neos.runtime.base import Runtime
 
 
 class ActionType(Enum):

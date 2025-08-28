@@ -11,12 +11,12 @@ from conftest import (
     _load_runtime,
 )
 
-import openhands
-from openhands.core.config import MCPConfig
-from openhands.core.config.mcp_config import MCPSSEServerConfig, MCPStdioServerConfig
-from openhands.core.logger import openhands_logger as logger
-from openhands.events.action import CmdRunAction, MCPAction
-from openhands.events.observation import CmdOutputObservation, MCPObservation
+import neos
+from neos.core.config import MCPConfig
+from neos.core.config.mcp_config import MCPSSEServerConfig, MCPStdioServerConfig
+from neos.core.logger import openhands_logger as logger
+from neos.events.action import CmdRunAction, MCPAction
+from neos.events.observation import CmdOutputObservation, MCPObservation
 
 # ============================================================================================================================
 # Bash-specific tests
@@ -55,7 +55,7 @@ def sse_mcp_docker_server():
     log_streamer = None
 
     # Import LogStreamer here as it's specific to this fixture's needs
-    from openhands.runtime.utils.log_streamer import LogStreamer
+    from neos.runtime.utils.log_streamer import LogStreamer
 
     try:
         logger.info(
@@ -107,7 +107,7 @@ def sse_mcp_docker_server():
 
 
 def test_default_activated_tools():
-    project_root = os.path.dirname(openhands.__file__)
+    project_root = os.path.dirname(neos.__file__)
     mcp_config_path = os.path.join(project_root, 'runtime', 'mcp', 'config.json')
     assert os.path.exists(mcp_config_path), (
         f'MCP config file not found at {mcp_config_path}'

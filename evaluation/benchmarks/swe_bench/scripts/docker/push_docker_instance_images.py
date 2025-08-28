@@ -29,7 +29,7 @@ import docker
 from datasets import load_dataset
 from tqdm import tqdm
 
-from openhands.core.logger import openhands_logger as logger
+from neos.core.logger import openhands_logger as logger
 
 logger.setLevel('ERROR')
 from evaluation.benchmarks.swe_bench.run_infer import get_instance_docker_image  # noqa

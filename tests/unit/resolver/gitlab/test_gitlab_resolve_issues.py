@@ -4,25 +4,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from openhands.core.config import LLMConfig
-from openhands.events.action import CmdRunAction
-from openhands.events.observation import (
+from neos.core.config import LLMConfig
+from neos.events.action import CmdRunAction
+from neos.events.observation import (
     CmdOutputMetadata,
     CmdOutputObservation,
     NullObservation,
 )
-from openhands.integrations.service_types import ProviderType
-from openhands.llm.llm import LLM
-from openhands.resolver.interfaces.gitlab import GitlabIssueHandler, GitlabPRHandler
-from openhands.resolver.interfaces.issue import Issue, ReviewThread
-from openhands.resolver.interfaces.issue_definitions import (
+from neos.integrations.service_types import ProviderType
+from neos.llm.llm import LLM
+from neos.resolver.interfaces.gitlab import GitlabIssueHandler, GitlabPRHandler
+from neos.resolver.interfaces.issue import Issue, ReviewThread
+from neos.resolver.interfaces.issue_definitions import (
     ServiceContextIssue,
     ServiceContextPR,
 )
-from openhands.resolver.issue_resolver import (
+from neos.resolver.issue_resolver import (
     IssueResolver,
 )
-from openhands.resolver.resolver_output import ResolverOutput
+from neos.resolver.resolver_output import ResolverOutput
 
 
 @pytest.fixture
@@ -58,7 +58,7 @@ def mock_gitlab_token():
     This eliminates the need for repeated patching in each test function.
     """
     with patch(
-        'openhands.resolver.issue_resolver.identify_token',
+        'neos.resolver.issue_resolver.identify_token',
         return_value=ProviderType.GITLAB,
     ) as patched:
         yield patched
@@ -516,17 +516,17 @@ async def test_process_issue(
 
     # Patch the necessary functions and methods
     with (
-        patch('openhands.resolver.issue_resolver.create_runtime', mock_create_runtime),
-        patch('openhands.resolver.issue_resolver.run_controller', mock_run_controller),
+        patch('neos.resolver.issue_resolver.create_runtime', mock_create_runtime),
+        patch('neos.resolver.issue_resolver.run_controller', mock_run_controller),
         patch.object(
             resolver, 'complete_runtime', return_value={'git_patch': 'test patch'}
         ),
         patch.object(resolver, 'initialize_runtime') as mock_initialize_runtime,
         patch(
-            'openhands.resolver.issue_resolver.SandboxConfig', return_value=MagicMock()
+            'neos.resolver.issue_resolver.SandboxConfig', return_value=MagicMock()
         ),
         patch(
-            'openhands.resolver.issue_resolver.OpenHandsConfig',
+            'neos.resolver.issue_resolver.OpenHandsConfig',
             return_value=MagicMock(),
         ),
     ):
@@ -708,7 +708,7 @@ This is a test issue"""
 You SHOULD INCLUDE PROPER INDENTATION in your edit commands.
 
 Some basic information about this repository:
-This is a Python repo for openhands-resolver, a library that attempts to resolve github issues with the AI agent OpenHands.
+This is a Python repo for openhands-resolver, a library that attempts to resolve github issues with the AI agent neos.
 
 - Setup: `poetry install --with test --with dev`
 - Testing: `poetry run pytest tests/test_*.py`

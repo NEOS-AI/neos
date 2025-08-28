@@ -19,18 +19,18 @@ from evaluation.utils.shared import (
     get_openhands_config_for_eval,
     make_metadata,
 )
-from openhands.core.config import (
+from neos.core.config import (
     LLMConfig,
     OpenHandsConfig,
     get_evaluation_parser,
     load_openhands_config,
 )
-from openhands.core.logger import openhands_logger as logger
-from openhands.core.main import create_runtime
-from openhands.events.action import CmdRunAction
-from openhands.events.observation import CmdOutputObservation
-from openhands.runtime.base import Runtime
-from openhands.utils.async_utils import call_async_from_sync
+from neos.core.logger import openhands_logger as logger
+from neos.core.main import create_runtime
+from neos.events.action import CmdRunAction
+from neos.events.observation import CmdOutputObservation
+from neos.runtime.base import Runtime
+from neos.utils.async_utils import call_async_from_sync
 
 
 def get_config(

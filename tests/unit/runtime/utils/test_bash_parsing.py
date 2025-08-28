@@ -1,6 +1,6 @@
 import pytest
 
-from openhands.runtime.utils.bash import escape_bash_special_chars, split_bash_commands
+from neos.runtime.utils.bash import escape_bash_special_chars, split_bash_commands
 
 
 def test_split_commands_util():

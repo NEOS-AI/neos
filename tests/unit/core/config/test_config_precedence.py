@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openhands.core.config import (
+from neos.core.config import (
     OH_DEFAULT_AGENT,
     OH_MAX_ITERATIONS,
     OpenHandsConfig,
@@ -67,7 +67,7 @@ api_key = "current-dir-specific-api-key"
     }
 
 
-@patch('openhands.core.config.utils.os.path.expanduser')
+@patch('neos.core.config.utils.os.path.expanduser')
 def test_llm_config_precedence_cli_highest(mock_expanduser, temp_config_files):
     """Test that CLI parameters have the highest precedence."""
     mock_expanduser.side_effect = lambda path: path.replace(
@@ -95,7 +95,7 @@ def test_llm_config_precedence_cli_highest(mock_expanduser, temp_config_files):
     )
 
 
-@patch('openhands.core.config.utils.os.path.expanduser')
+@patch('neos.core.config.utils.os.path.expanduser')
 def test_current_dir_toml_precedence_over_user_config(
     mock_expanduser, temp_config_files
 ):
@@ -122,7 +122,7 @@ def test_current_dir_toml_precedence_over_user_config(
     assert config.get_llm_config().api_key.get_secret_value() == 'current-dir-api-key'
 
 
-@patch('openhands.core.config.utils.os.path.expanduser')
+@patch('neos.core.config.utils.os.path.expanduser')
 def test_get_llm_config_arg_precedence(mock_expanduser, temp_config_files):
     """Test that get_llm_config_arg prioritizes the specified config file."""
     mock_expanduser.side_effect = lambda path: path.replace(
@@ -153,14 +153,14 @@ def test_get_llm_config_arg_precedence(mock_expanduser, temp_config_files):
     assert llm_config is None
 
 
-@patch('openhands.core.config.utils.os.path.expanduser')
-@patch('openhands.cli.main.FileSettingsStore.get_instance')
-@patch('openhands.cli.main.FileSettingsStore.load')
+@patch('neos.core.config.utils.os.path.expanduser')
+@patch('neos.cli.main.FileSettingsStore.get_instance')
+@patch('neos.cli.main.FileSettingsStore.load')
 def test_cli_main_settings_precedence(
     mock_load, mock_get_instance, mock_expanduser, temp_config_files
 ):
     """Test that the CLI main.py correctly applies settings precedence."""
-    from openhands.cli.main import setup_config_from_args
+    from neos.cli.main import setup_config_from_args
 
     mock_expanduser.side_effect = lambda path: path.replace(
         '~', temp_config_files['home_dir']
@@ -197,14 +197,14 @@ def test_cli_main_settings_precedence(
     assert config.get_llm_config().api_key.get_secret_value() == 'current-dir-api-key'
 
 
-@patch('openhands.core.config.utils.os.path.expanduser')
-@patch('openhands.cli.main.FileSettingsStore.get_instance')
-@patch('openhands.cli.main.FileSettingsStore.load')
+@patch('neos.core.config.utils.os.path.expanduser')
+@patch('neos.cli.main.FileSettingsStore.get_instance')
+@patch('neos.cli.main.FileSettingsStore.load')
 def test_cli_with_l_parameter_precedence(
     mock_load, mock_get_instance, mock_expanduser, temp_config_files
 ):
     """Test that CLI -l parameter has highest precedence in CLI mode."""
-    from openhands.cli.main import setup_config_from_args
+    from neos.cli.main import setup_config_from_args
 
     mock_expanduser.side_effect = lambda path: path.replace(
         '~', temp_config_files['home_dir']
@@ -244,9 +244,9 @@ def test_cli_with_l_parameter_precedence(
     )
 
 
-@patch('openhands.core.config.utils.os.path.expanduser')
-@patch('openhands.cli.main.FileSettingsStore.get_instance')
-@patch('openhands.cli.main.FileSettingsStore.load')
+@patch('neos.core.config.utils.os.path.expanduser')
+@patch('neos.cli.main.FileSettingsStore.get_instance')
+@patch('neos.cli.main.FileSettingsStore.load')
 def test_cli_settings_json_not_override_config_toml(
     mock_load, mock_get_instance, mock_expanduser, temp_config_files
 ):
@@ -256,11 +256,11 @@ def test_cli_settings_json_not_override_config_toml(
     from unittest.mock import patch
 
     # First, ensure we can import the CLI main module
-    if 'openhands.cli.main' in sys.modules:
-        importlib.reload(sys.modules['openhands.cli.main'])
+    if 'neos.cli.main' in sys.modules:
+        importlib.reload(sys.modules['neos.cli.main'])
 
     # Now import the specific function we want to test
-    from openhands.cli.main import setup_config_from_args
+    from neos.cli.main import setup_config_from_args
 
     mock_expanduser.side_effect = lambda path: path.replace(
         '~', temp_config_files['home_dir']
@@ -323,7 +323,7 @@ def test_default_values_applied_when_none():
 
     # Load config
     with patch(
-        'openhands.core.config.utils.load_openhands_config',
+        'neos.core.config.utils.load_openhands_config',
         return_value=OpenHandsConfig(),
     ):
         config = setup_config_from_args(mock_args)
@@ -344,7 +344,7 @@ def test_cli_args_override_defaults():
 
     # Load config
     with patch(
-        'openhands.core.config.utils.load_openhands_config',
+        'neos.core.config.utils.load_openhands_config',
         return_value=OpenHandsConfig(),
     ):
         config = setup_config_from_args(mock_args)
@@ -370,7 +370,7 @@ def test_cli_args_none_uses_config_toml_values():
 
     # Load config
     with patch(
-        'openhands.core.config.utils.load_openhands_config',
+        'neos.core.config.utils.load_openhands_config',
         return_value=config_from_toml,
     ):
         config = setup_config_from_args(mock_args)

@@ -5,7 +5,7 @@ from unittest import mock
 
 import pytest
 
-from openhands.cli import vscode_extension
+from neos.cli import vscode_extension
 
 
 @pytest.fixture
@@ -20,10 +20,10 @@ def mock_env_and_dependencies():
         mock.patch('subprocess.run') as mock_subprocess,
         mock.patch('importlib.resources.as_file') as mock_as_file,
         mock.patch(
-            'openhands.cli.vscode_extension.download_latest_vsix_from_github'
+            'neos.cli.vscode_extension.download_latest_vsix_from_github'
         ) as mock_download,
         mock.patch('builtins.print') as mock_print,
-        mock.patch('openhands.cli.vscode_extension.logger.debug') as mock_logger,
+        mock.patch('neos.cli.vscode_extension.logger.debug') as mock_logger,
     ):
         # Setup a temporary directory for home
         temp_dir = pathlib.Path.cwd() / 'temp_test_home'
@@ -85,7 +85,7 @@ def test_extension_already_installed_detected(mock_env_and_dependencies):
     mock_env_and_dependencies['subprocess'].return_value = subprocess.CompletedProcess(
         returncode=0,
         args=[],
-        stdout='openhands.openhands-vscode\nother.extension',
+        stdout='neos.openhands-vscode\nother.extension',
         stderr='',
     )
 
@@ -115,7 +115,7 @@ def test_extension_detection_in_middle_of_list(mock_env_and_dependencies):
     mock_env_and_dependencies['subprocess'].return_value = subprocess.CompletedProcess(
         returncode=0,
         args=[],
-        stdout='first.extension\nopenhands.openhands-vscode\nlast.extension',
+        stdout='first.extension\nneos.openhands-vscode\nlast.extension',
         stderr='',
     )
 

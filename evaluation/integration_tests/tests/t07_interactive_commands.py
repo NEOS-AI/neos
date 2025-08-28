@@ -1,14 +1,14 @@
 import hashlib
 
 from evaluation.integration_tests.tests.base import BaseIntegrationTest, TestResult
-from openhands.events.action import (
+from neos.events.action import (
     AgentFinishAction,
     FileWriteAction,
     MessageAction,
 )
-from openhands.events.event import Event
-from openhands.events.observation import AgentDelegateObservation
-from openhands.runtime.base import Runtime
+from neos.events.event import Event
+from neos.events.observation import AgentDelegateObservation
+from neos.runtime.base import Runtime
 
 
 class Test(BaseIntegrationTest):
@@ -17,7 +17,7 @@ class Test(BaseIntegrationTest):
 
     @classmethod
     def initialize_runtime(cls, runtime: Runtime) -> None:
-        from openhands.core.logger import openhands_logger as logger
+        from neos.core.logger import openhands_logger as logger
 
         action = FileWriteAction(
             path='/workspace/python_script.py',
@@ -33,7 +33,7 @@ class Test(BaseIntegrationTest):
 
     @classmethod
     def verify_result(cls, runtime: Runtime, histories: list[Event]) -> TestResult:
-        from openhands.core.logger import openhands_logger as logger
+        from neos.core.logger import openhands_logger as logger
 
         # check if the license information is in any message
         message_actions = [

@@ -2,16 +2,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from openhands.cli.settings import modify_llm_settings_basic
-from openhands.cli.utils import VERIFIED_ANTHROPIC_MODELS
+from neos.cli.settings import modify_llm_settings_basic
+from neos.cli.utils import VERIFIED_ANTHROPIC_MODELS
 
 
 @pytest.mark.asyncio
-@patch('openhands.cli.settings.get_supported_llm_models')
-@patch('openhands.cli.settings.organize_models_and_providers')
-@patch('openhands.cli.settings.PromptSession')
-@patch('openhands.cli.settings.cli_confirm')
-@patch('openhands.cli.settings.print_formatted_text')
+@patch('neos.cli.settings.get_supported_llm_models')
+@patch('neos.cli.settings.organize_models_and_providers')
+@patch('neos.cli.settings.PromptSession')
+@patch('neos.cli.settings.cli_confirm')
+@patch('neos.cli.settings.print_formatted_text')
 async def test_anthropic_default_model_is_best_verified(
     mock_print,
     mock_confirm,

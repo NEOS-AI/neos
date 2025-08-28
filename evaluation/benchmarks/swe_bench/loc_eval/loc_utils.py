@@ -7,7 +7,7 @@ from typing import Any, Union
 import pandas as pd
 from datasets import load_dataset
 
-from openhands.runtime.base import Runtime
+from neos.runtime.base import Runtime
 
 
 @dataclass
@@ -638,7 +638,7 @@ class LocMeta:
                 return [], [], {}, {}
 
             # Read the file content using runtime
-            from openhands.events.action import CmdRunAction
+            from neos.events.action import CmdRunAction
 
             # First check if file exists
             check_action = CmdRunAction(

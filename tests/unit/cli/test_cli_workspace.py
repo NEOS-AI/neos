@@ -5,12 +5,12 @@ import tempfile
 
 import pytest
 
-from openhands.core.config import OpenHandsConfig
-from openhands.events import EventStream
+from neos.core.config import OpenHandsConfig
+from neos.events import EventStream
 
 # Mock LLMRegistry
-from openhands.runtime.impl.cli.cli_runtime import CLIRuntime
-from openhands.storage import get_file_store
+from neos.runtime.impl.cli.cli_runtime import CLIRuntime
+from neos.storage import get_file_store
 
 
 # Create a mock LLMRegistry class

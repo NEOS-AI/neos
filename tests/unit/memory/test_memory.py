@@ -6,31 +6,31 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from openhands.controller.agent import Agent
-from openhands.controller.agent_controller import AgentController
-from openhands.core.config import OpenHandsConfig
-from openhands.core.main import run_controller
-from openhands.core.schema.agent import AgentState
-from openhands.events.action.agent import RecallAction
-from openhands.events.action.message import MessageAction, SystemMessageAction
-from openhands.events.event import EventSource
-from openhands.events.observation.agent import (
+from neos.controller.agent import Agent
+from neos.controller.agent_controller import AgentController
+from neos.core.config import OpenHandsConfig
+from neos.core.main import run_controller
+from neos.core.schema.agent import AgentState
+from neos.events.action.agent import RecallAction
+from neos.events.action.message import MessageAction, SystemMessageAction
+from neos.events.event import EventSource
+from neos.events.observation.agent import (
     RecallObservation,
     RecallType,
 )
-from openhands.events.serialization.observation import observation_from_dict
-from openhands.events.stream import EventStream
-from openhands.llm import LLM
-from openhands.llm.llm_registry import LLMRegistry
-from openhands.llm.metrics import Metrics
-from openhands.memory.memory import Memory
-from openhands.runtime.impl.action_execution.action_execution_client import (
+from neos.events.serialization.observation import observation_from_dict
+from neos.events.stream import EventStream
+from neos.llm import LLM
+from neos.llm.llm_registry import LLMRegistry
+from neos.llm.metrics import Metrics
+from neos.memory.memory import Memory
+from neos.runtime.impl.action_execution.action_execution_client import (
     ActionExecutionClient,
 )
-from openhands.server.services.conversation_stats import ConversationStats
-from openhands.server.session.agent_session import AgentSession
-from openhands.storage.memory import InMemoryFileStore
-from openhands.utils.prompt import (
+from neos.server.services.conversation_stats import ConversationStats
+from neos.server.session.agent_session import AgentSession
+from neos.storage.memory import InMemoryFileStore
+from neos.utils.prompt import (
     ConversationInstructions,
     PromptManager,
     RepositoryInfo,
@@ -109,7 +109,7 @@ async def test_memory_on_event_exception_handling(memory, event_stream, mock_age
         patch.object(
             memory, '_on_workspace_context_recall', side_effect=Exception('Test error')
         ),
-        patch('openhands.core.main.create_agent', return_value=mock_agent),
+        patch('neos.core.main.create_agent', return_value=mock_agent),
     ):
         state = await run_controller(
             config=OpenHandsConfig(),
@@ -142,7 +142,7 @@ async def test_memory_on_workspace_context_recall_exception_handling(
             '_find_microagent_knowledge',
             side_effect=Exception('Test error from _find_microagent_knowledge'),
         ),
-        patch('openhands.core.main.create_agent', return_value=mock_agent),
+        patch('neos.core.main.create_agent', return_value=mock_agent),
     ):
         state = await run_controller(
             config=OpenHandsConfig(),
@@ -259,7 +259,7 @@ REPOSITORY INSTRUCTIONS: This is a test repository.
 
     # Patch the global microagents directory to use our test directory
     test_microagents_dir = os.path.join(prompt_dir, 'micro')
-    with patch('openhands.memory.memory.GLOBAL_MICROAGENTS_DIR', test_microagents_dir):
+    with patch('neos.memory.memory.GLOBAL_MICROAGENTS_DIR', test_microagents_dir):
         # Initialize Memory
         memory = Memory(
             event_stream=event_stream,
@@ -554,7 +554,7 @@ REPOSITORY INSTRUCTIONS: This is the second test repository.
 
     # Patch the global microagents directory to use our test directory
     test_microagents_dir = os.path.join(prompt_dir, 'micro')
-    with patch('openhands.memory.memory.GLOBAL_MICROAGENTS_DIR', test_microagents_dir):
+    with patch('neos.memory.memory.GLOBAL_MICROAGENTS_DIR', test_microagents_dir):
         # Initialize Memory
         memory = Memory(
             event_stream=event_stream,
@@ -638,7 +638,7 @@ async def test_conversation_instructions_plumbed_to_memory(
     # Patch AgentController
     with (
         patch(
-            'openhands.server.session.agent_session.AgentController', SpyAgentController
+            'neos.server.session.agent_session.AgentController', SpyAgentController
         ),
     ):
         await session.start(

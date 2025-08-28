@@ -4,7 +4,7 @@ from io import StringIO
 
 import pytest
 
-from openhands.core.config import (
+from neos.core.config import (
     AgentConfig,
     LLMConfig,
     OpenHandsConfig,
@@ -15,13 +15,13 @@ from openhands.core.config import (
     load_from_toml,
     load_openhands_config,
 )
-from openhands.core.config.condenser_config import (
+from neos.core.config.condenser_config import (
     ConversationWindowCondenserConfig,
     LLMSummarizingCondenserConfig,
     NoOpCondenserConfig,
     RecentEventsCondenserConfig,
 )
-from openhands.core.logger import openhands_logger
+from neos.core.logger import openhands_logger
 
 
 @pytest.fixture
@@ -396,7 +396,7 @@ security_analyzer = "semgrep"
 
 def test_security_config_from_dict():
     """Test creating SecurityConfig instance from dictionary."""
-    from openhands.core.config.security_config import SecurityConfig
+    from neos.core.config.security_config import SecurityConfig
 
     # Test with all fields
     config_dict = {
@@ -729,7 +729,7 @@ max_events = 15
     assert agent_config.condenser.max_events == 15
 
     # We can also verify the function works directly
-    from openhands.core.config.condenser_config import (
+    from neos.core.config.condenser_config import (
         condenser_config_from_toml_section,
     )
 
@@ -771,7 +771,7 @@ max_size = 50
     assert agent_config.condenser.llm_config.model == 'gpt-4'
 
     # Test the condenser config with the LLM reference
-    from openhands.core.config.condenser_config import (
+    from neos.core.config.condenser_config import (
         condenser_config_from_toml_section,
     )
 
@@ -808,7 +808,7 @@ max_size = 50
     load_from_toml(default_config, temp_toml_file)
 
     # Test the condenser config with a missing LLM reference
-    from openhands.core.config.condenser_config import (
+    from neos.core.config.condenser_config import (
         condenser_config_from_toml_section,
     )
 
@@ -839,7 +839,7 @@ type = "invalid_type"
     load_from_toml(default_config, temp_toml_file)
 
     # Test the condenser config with an invalid type
-    from openhands.core.config.condenser_config import (
+    from neos.core.config.condenser_config import (
         condenser_config_from_toml_section,
     )
 
@@ -866,7 +866,7 @@ max_events = 0   # Invalid: must be >= 1
     load_from_toml(default_config, temp_toml_file)
 
     # Test the condenser config with validation errors
-    from openhands.core.config.condenser_config import (
+    from neos.core.config.condenser_config import (
         condenser_config_from_toml_section,
     )
 
@@ -1136,7 +1136,7 @@ enable_prompt_extensions = false
 
 def test_agent_config_from_toml_section():
     """Test that AgentConfig.from_toml_section correctly parses agent configurations from TOML."""
-    from openhands.core.config.agent_config import AgentConfig
+    from neos.core.config.agent_config import AgentConfig
 
     # Test with base config and custom configs
     agent_section = {
@@ -1172,7 +1172,7 @@ def test_agent_config_from_toml_section():
 
 def test_agent_config_from_toml_section_with_invalid_base():
     """Test that AgentConfig.from_toml_section handles invalid base configurations gracefully."""
-    from openhands.core.config.agent_config import AgentConfig
+    from neos.core.config.agent_config import AgentConfig
 
     # Test with invalid base config but valid custom configs
     agent_section = {

@@ -4,12 +4,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openhands.cli.commands import (
+from neos.cli.commands import (
     display_mcp_servers,
     remove_mcp_server,
 )
-from openhands.core.config import OpenHandsConfig
-from openhands.core.config.mcp_config import (
+from neos.core.config import OpenHandsConfig
+from neos.core.config.mcp_config import (
     MCPConfig,
     MCPSSEServerConfig,
     MCPStdioServerConfig,
@@ -25,7 +25,7 @@ class TestMCPServerManagement:
         self.config.cli = MagicMock()
         self.config.cli.vi_mode = False
 
-    @patch('openhands.cli.commands.print_formatted_text')
+    @patch('neos.cli.commands.print_formatted_text')
     def test_display_mcp_servers_no_servers(self, mock_print):
         """Test displaying MCP servers when none are configured."""
         self.config.mcp = MCPConfig()  # Empty config
@@ -36,7 +36,7 @@ class TestMCPServerManagement:
         call_args = mock_print.call_args[0][0]
         assert 'No custom MCP servers configured' in call_args
 
-    @patch('openhands.cli.commands.print_formatted_text')
+    @patch('neos.cli.commands.print_formatted_text')
     def test_display_mcp_servers_with_servers(self, mock_print):
         """Test displaying MCP servers when some are configured."""
         self.config.mcp = MCPConfig(
@@ -56,8 +56,8 @@ class TestMCPServerManagement:
         assert 'Stdio servers: 1' in first_call
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.cli_confirm')
-    @patch('openhands.cli.commands.print_formatted_text')
+    @patch('neos.cli.commands.cli_confirm')
+    @patch('neos.cli.commands.print_formatted_text')
     async def test_remove_mcp_server_no_servers(self, mock_print, mock_cli_confirm):
         """Test removing MCP server when none are configured."""
         self.config.mcp = MCPConfig()  # Empty config
@@ -68,10 +68,10 @@ class TestMCPServerManagement:
         mock_cli_confirm.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch('openhands.cli.commands.cli_confirm')
-    @patch('openhands.cli.commands.load_config_file')
-    @patch('openhands.cli.commands.save_config_file')
-    @patch('openhands.cli.commands.print_formatted_text')
+    @patch('neos.cli.commands.cli_confirm')
+    @patch('neos.cli.commands.load_config_file')
+    @patch('neos.cli.commands.save_config_file')
+    @patch('neos.cli.commands.print_formatted_text')
     async def test_remove_mcp_server_success(
         self, mock_print, mock_save, mock_load, mock_cli_confirm
     ):
