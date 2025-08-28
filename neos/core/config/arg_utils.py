@@ -1,4 +1,4 @@
-"""Centralized command line argument configuration for OpenHands CLI and headless modes."""
+"""Centralized command line argument configuration for NEOS CLI and headless modes."""
 
 import argparse
 from argparse import ArgumentParser, _SubParsersAction
