@@ -1,546 +1,183 @@
-# NEOS
+<a name="readme-top"></a>
 
-> Originated from Open Source, give back to Open Source.
+<div align="center">
+  <img src="./docs/static/img/logo.png" alt="Logo" width="200">
+  <h1 align="center">OpenHands: Code Less, Make More</h1>
+</div>
 
-**NEOS** is a Deep Research framework. Our goal is to combine language models with specialized tools for tasks like web search, crawling, and Python code execution, while giving back to the community that made this possible.
 
-![system architecture](./assets/system_architecture.png)
+<div align="center">
+  <a href="https://github.com/All-Hands-AI/OpenHands/graphs/contributors"><img src="https://img.shields.io/github/contributors/All-Hands-AI/OpenHands?style=for-the-badge&color=blue" alt="Contributors"></a>
+  <a href="https://github.com/All-Hands-AI/OpenHands/stargazers"><img src="https://img.shields.io/github/stars/All-Hands-AI/OpenHands?style=for-the-badge&color=blue" alt="Stargazers"></a>
+  <a href="https://github.com/All-Hands-AI/OpenHands/blob/main/LICENSE"><img src="https://img.shields.io/github/license/All-Hands-AI/OpenHands?style=for-the-badge&color=blue" alt="MIT License"></a>
+  <br/>
+  <a href="https://join.slack.com/t/openhands-ai/shared_invite/zt-3847of6xi-xuYJIPa6YIPg4ElbDWbtSA"><img src="https://img.shields.io/badge/Slack-Join%20Us-red?logo=slack&logoColor=white&style=for-the-badge" alt="Join our Slack community"></a>
+  <a href="https://discord.gg/ESHStjSjD4"><img src="https://img.shields.io/badge/Discord-Join%20Us-purple?logo=discord&logoColor=white&style=for-the-badge" alt="Join our Discord community"></a>
+  <a href="https://github.com/All-Hands-AI/OpenHands/blob/main/CREDITS.md"><img src="https://img.shields.io/badge/Project-Credits-blue?style=for-the-badge&color=FFE165&logo=github&logoColor=white" alt="Credits"></a>
+  <br/>
+  <a href="https://docs.all-hands.dev/usage/getting-started"><img src="https://img.shields.io/badge/Documentation-000?logo=googledocs&logoColor=FFE165&style=for-the-badge" alt="Check out the documentation"></a>
+  <a href="https://arxiv.org/abs/2407.16741"><img src="https://img.shields.io/badge/Paper%20on%20Arxiv-000?logoColor=FFE165&logo=arxiv&style=for-the-badge" alt="Paper on Arxiv"></a>
+  <a href="https://docs.google.com/spreadsheets/d/1wOUdFCMyY6Nt0AIqF705KN4JKOWgeI4wUGUP60krXXs/edit?gid=0#gid=0"><img src="https://img.shields.io/badge/Benchmark%20score-000?logoColor=FFE165&logo=huggingface&style=for-the-badge" alt="Evaluation Benchmark Score"></a>
 
-## Demo
+  <!-- Keep these links. Translations will automatically update with the README. -->
+  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=de">Deutsch</a> |
+  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=es">Español</a> |
+  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=fr">français</a> |
+  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=ja">日本語</a> |
+  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=ko">한국어</a> |
+  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=pt">Português</a> |
+  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=ru">Русский</a> |
+  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=zh">中文</a>
 
-### Video
+  <hr>
+</div>
 
-https://github.com/user-attachments/assets/f3786598-1f2a-4d07-919e-8b99dfa1de3e
+Welcome to OpenHands (formerly OpenDevin), a platform for software development agents powered by AI.
 
-In this demo, we showcase how to use Neos to:
+OpenHands agents can do anything a human developer can: modify code, run commands, browse the web,
+call APIs, and yes—even copy code snippets from StackOverflow.
 
-- Seamlessly integrate with MCP services
-- Conduct the Deep Research process and produce a comprehensive report with images
-- Create podcast audio based on the generated report
+Learn more at [docs.all-hands.dev](https://docs.all-hands.dev), or [sign up for OpenHands Cloud](https://app.all-hands.dev) to get started.
 
----
+> [!IMPORTANT]
+> Using OpenHands for work? We'd love to chat! Fill out
+> [this short form](https://docs.google.com/forms/d/e/1FAIpQLSet3VbGaz8z32gW9Wm-Grl4jpt5WgMXPgJ4EDPVmCETCBpJtQ/viewform)
+> to join our Design Partner program, where you'll get early access to commercial features and the opportunity to provide input on our product roadmap.
 
-## 📑 Table of Contents
+![App screenshot](./docs/static/img/screenshot.png)
 
-- [🚀 Quick Start](#quick-start)
-- [🌟 Features](#features)
-- [🏗️ Architecture](#architecture)
-- [🛠️ Development](#development)
-- [🐳 Docker](#docker)
-- [🗣️ Text-to-Speech Integration](#text-to-speech-integration)
-- [📚 Examples](#examples)
-- [❓ FAQ](#faq)
-- [📜 License](#license)
-- [💖 Acknowledgments](#acknowledgments)
+## ☁️ OpenHands Cloud
+The easiest way to get started with OpenHands is on [OpenHands Cloud](https://app.all-hands.dev),
+which comes with $20 in free credits for new users.
 
-## Quick Start
+## 💻 Running OpenHands Locally
 
-Neos is developed in Python, and comes with a web UI written in Node.js. To ensure a smooth setup process, we recommend using the following tools:
+### Option 1: CLI Launcher (Recommended)
 
-### Recommended Tools
+The easiest way to run OpenHands locally is using the CLI launcher with [uv](https://docs.astral.sh/uv/). This provides better isolation from your current project's virtual environment and is required for OpenHands' default MCP servers.
 
-- **[`uv`](https://docs.astral.sh/uv/getting-started/installation/):**
-  Simplify Python environment and dependency management. `uv` automatically creates a virtual environment in the root directory and installs all required packages for you—no need to manually install Python environments.
+**Install uv** (if you haven't already):
 
-- **[`nvm`](https://github.com/nvm-sh/nvm):**
-  Manage multiple versions of the Node.js runtime effortlessly.
+See the [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/) for the latest installation instructions for your platform.
 
-- **[`pnpm`](https://pnpm.io/installation):**
-  Install and manage dependencies of Node.js project.
-
-### Environment Requirements
-
-Make sure your system meets the following minimum requirements:
-
-- **[Python](https://www.python.org/downloads/):** Version `3.12+`
-- **[Node.js](https://nodejs.org/en/download/):** Version `22+`
-
-### Installation
-
+**Launch OpenHands**:
 ```bash
-# Clone the repository
-git clone https://github.com/NEOS-AI/neos.git
-cd neos
+# Launch the GUI server
+uvx --python 3.12 --from openhands-ai openhands serve
 
-# Install dependencies, uv will take care of the python interpreter and venv creation, and install the required packages
-uv sync
-
-# Configure .env with your API keys
-# Tavily: https://app.tavily.com/home
-# Brave_SEARCH: https://brave.com/search/api/
-# volcengine TTS: Add your TTS credentials if you have them
-cp .env.example .env
-
-# See the 'Supported Search Engines' and 'Text-to-Speech Integration' sections below for all available options
-
-# Configure conf.yaml for your LLM model and API keys
-# Please refer to 'docs/configuration_guide.md' for more details
-cp conf.yaml.example conf.yaml
-
-# Install marp for ppt generation
-# https://github.com/marp-team/marp-cli?tab=readme-ov-file#use-package-manager
-brew install marp-cli
+# Or launch the CLI
+uvx --python 3.12 --from openhands-ai openhands
 ```
 
-Optionally, install web UI dependencies via [pnpm](https://pnpm.io/installation):
+You'll find OpenHands running at [http://localhost:3000](http://localhost:3000) (for GUI mode)!
+
+### Option 2: Docker
+
+<details>
+<summary>Click to expand Docker command</summary>
+
+You can also run OpenHands directly with Docker:
 
 ```bash
-cd neos/web
-pnpm install
+docker pull docker.all-hands.dev/all-hands-ai/runtime:0.54-nikolaik
+
+docker run -it --rm --pull=always \
+    -e SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.all-hands.dev/all-hands-ai/runtime:0.54-nikolaik \
+    -e LOG_ALL_EVENTS=true \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v ~/.openhands:/.openhands \
+    -p 3000:3000 \
+    --add-host host.docker.internal:host-gateway \
+    --name openhands-app \
+    docker.all-hands.dev/all-hands-ai/openhands:0.54
 ```
 
-### Configurations
+</details>
 
-Please refer to the [Configuration Guide](docs/configuration_guide.md) for more details.
+> **Note**: If you used OpenHands before version 0.44, you may want to run `mv ~/.openhands-state ~/.openhands` to migrate your conversation history to the new location.
 
-> [!NOTE]
-> Before you start the project, read the guide carefully, and update the configurations to match your specific settings and requirements.
+> [!WARNING]
+> On a public network? See our [Hardened Docker Installation Guide](https://docs.all-hands.dev/usage/runtimes/docker#hardened-docker-installation)
+> to secure your deployment by restricting network binding and implementing additional security measures.
 
-### Console UI
+### Getting Started
 
-The quickest way to run the project is to use the console UI.
+When you open the application, you'll be asked to choose an LLM provider and add an API key.
+[Anthropic's Claude Sonnet 4](https://www.anthropic.com/api) (`anthropic/claude-sonnet-4-20250514`)
+works best, but you have [many options](https://docs.all-hands.dev/usage/llms).
 
-```bash
-# Run the project in a bash-like shell
-uv run main.py
+See the [Running OpenHands](https://docs.all-hands.dev/usage/installation) guide for
+system requirements and more information.
+
+## 💡 Other ways to run OpenHands
+
+> [!WARNING]
+> OpenHands is meant to be run by a single user on their local workstation.
+> It is not appropriate for multi-tenant deployments where multiple users share the same instance. There is no built-in authentication, isolation, or scalability.
+>
+> If you're interested in running OpenHands in a multi-tenant environment, check out the source-available, commercially-licensed
+> [OpenHands Cloud Helm Chart](https://github.com/all-Hands-AI/OpenHands-cloud)
+
+You can [connect OpenHands to your local filesystem](https://docs.all-hands.dev/usage/runtimes/docker#connecting-to-your-filesystem),
+interact with it via a [friendly CLI](https://docs.all-hands.dev/usage/how-to/cli-mode),
+run OpenHands in a scriptable [headless mode](https://docs.all-hands.dev/usage/how-to/headless-mode),
+or run it on tagged issues with [a github action](https://docs.all-hands.dev/usage/how-to/github-action).
+
+Visit [Running OpenHands](https://docs.all-hands.dev/usage/installation) for more information and setup instructions.
+
+If you want to modify the OpenHands source code, check out [Development.md](https://github.com/All-Hands-AI/OpenHands/blob/main/Development.md).
+
+Having issues? The [Troubleshooting Guide](https://docs.all-hands.dev/usage/troubleshooting) can help.
+
+## 📖 Documentation
+  <a href="https://deepwiki.com/All-Hands-AI/OpenHands"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" title="Autogenerated Documentation by DeepWiki"></a>
+
+To learn more about the project, and for tips on using OpenHands,
+check out our [documentation](https://docs.all-hands.dev/usage/getting-started).
+
+There you'll find resources on how to use different LLM providers,
+troubleshooting resources, and advanced configuration options.
+
+## 🤝 How to Join the Community
+
+OpenHands is a community-driven project, and we welcome contributions from everyone. We do most of our communication
+through Slack, so this is the best place to start, but we also are happy to have you contact us on Discord or Github:
+
+- [Join our Slack workspace](https://join.slack.com/t/openhands-ai/shared_invite/zt-3847of6xi-xuYJIPa6YIPg4ElbDWbtSA) - Here we talk about research, architecture, and future development.
+- [Join our Discord server](https://discord.gg/ESHStjSjD4) - This is a community-run server for general discussion, questions, and feedback.
+- [Read or post Github Issues](https://github.com/All-Hands-AI/OpenHands/issues) - Check out the issues we're working on, or add your own ideas.
+
+See more about the community in [COMMUNITY.md](./COMMUNITY.md) or find details on contributing in [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+## 📈 Progress
+
+See the monthly OpenHands roadmap [here](https://github.com/orgs/All-Hands-AI/projects/1) (updated at the maintainer's meeting at the end of each month).
+
+<p align="center">
+  <a href="https://star-history.com/#All-Hands-AI/OpenHands&Date">
+    <img src="https://api.star-history.com/svg?repos=All-Hands-AI/OpenHands&type=Date" width="500" alt="Star History Chart">
+  </a>
+</p>
+
+## 📜 License
+
+Distributed under the MIT License. See [`LICENSE`](./LICENSE) for more information.
+
+## 🙏 Acknowledgements
+
+OpenHands is built by a large number of contributors, and every contribution is greatly appreciated! We also build upon other open source projects, and we are deeply thankful for their work.
+
+For a list of open source projects and licenses used in OpenHands, please see our [CREDITS.md](./CREDITS.md) file.
+
+## 📚 Cite
+
 ```
-
-### Web UI
-
-This project also includes a Web UI, offering a more dynamic and engaging interactive experience.
-
-> [!NOTE]
-> You need to install the dependencies of web UI first.
-
-```bash
-# Run both the backend and frontend servers in development mode
-# On macOS/Linux
-./bootstrap.sh -d
-
-# On Windows
-bootstrap.bat -d
+@inproceedings{
+  wang2025openhands,
+  title={OpenHands: An Open Platform for {AI} Software Developers as Generalist Agents},
+  author={Xingyao Wang and Boxuan Li and Yufan Song and Frank F. Xu and Xiangru Tang and Mingchen Zhuge and Jiayi Pan and Yueqi Song and Bowen Li and Jaskirat Singh and Hoang H. Tran and Fuqiang Li and Ren Ma and Mingzhang Zheng and Bill Qian and Yanjun Shao and Niklas Muennighoff and Yizhe Zhang and Binyuan Hui and Junyang Lin and Robert Brennan and Hao Peng and Heng Ji and Graham Neubig},
+  booktitle={The Thirteenth International Conference on Learning Representations},
+  year={2025},
+  url={https://openreview.net/forum?id=OJd3ayDDoF}
+}
 ```
-
-Open your browser and visit [`http://localhost:3000`](http://localhost:3000) to explore the web UI.
-
-Explore more details in the [`web`](./web/) directory.
-
-## Supported Search Engines
-
-Neos supports multiple search engines that can be configured in your `.env` file using the `SEARCH_API` variable:
-
-- **Tavily** (default): A specialized search API for AI applications
-
-  - Requires `TAVILY_API_KEY` in your `.env` file
-  - Sign up at: https://app.tavily.com/home
-
-- **DuckDuckGo**: Privacy-focused search engine
-
-  - No API key required
-
-- **Brave Search**: Privacy-focused search engine with advanced features
-
-  - Requires `BRAVE_SEARCH_API_KEY` in your `.env` file
-  - Sign up at: https://brave.com/search/api/
-
-- **Arxiv**: Scientific paper search for academic research
-  - No API key required
-  - Specialized for scientific and academic papers
-
-To configure your preferred search engine, set the `SEARCH_API` variable in your `.env` file:
-
-```bash
-# Choose one: tavily, duckduckgo, brave_search, arxiv
-SEARCH_API=tavily
-```
-
-## Features
-
-### Core Capabilities
-
-- 🤖 **LLM Integration**
-  - It supports the integration of most models through [litellm](https://docs.litellm.ai/docs/providers).
-  - Support for open source models like Qwen
-  - OpenAI-compatible API interface
-  - Multi-tier LLM system for different task complexities
-
-### Tools and MCP Integrations
-
-- 🔍 **Search and Retrieval**
-
-  - Web search via Tavily, Brave Search and more
-  - Crawling with Jina
-  - Advanced content extraction
-
-- 📃 **RAG Integration**
-
-  - Supports mentioning files from [RAGFlow](https://github.com/infiniflow/ragflow) within the input box. [Start up RAGFlow server](https://ragflow.io/docs/dev/).
-
-  ```bash
-     # .env
-     RAG_PROVIDER=ragflow
-     RAGFLOW_API_URL="http://localhost:9388"
-     RAGFLOW_API_KEY="ragflow-xxx"
-     RAGFLOW_RETRIEVAL_SIZE=10
-  ```
-
-- 🔗 **MCP Seamless Integration**
-  - Expand capabilities for private domain access, knowledge graph, web browsing and more
-  - Facilitates integration of diverse research tools and methodologies
-
-### Human Collaboration
-
-- 🧠 **Human-in-the-loop**
-
-  - Supports interactive modification of research plans using natural language
-  - Supports auto-acceptance of research plans
-
-- 📝 **Report Post-Editing**
-  - Supports Notion-like block editing
-  - Allows AI refinements, including AI-assisted polishing, sentence shortening, and expansion
-  - Powered by [tiptap](https://tiptap.dev/)
-
-### Content Creation
-
-- 🎙️ **Podcast and Presentation Generation**
-  - AI-powered podcast script generation and audio synthesis
-  - Automated creation of simple PowerPoint presentations
-  - Customizable templates for tailored content
-
-## Architecture
-
-Neos implements a modular multi-agent system architecture designed for automated research and code analysis. The system is built on LangGraph, enabling a flexible state-based workflow where components communicate through a well-defined message passing system.
-
-![Architecture Diagram](./assets/architecture.png)
-
-> See it live at [Neos.tech](https://Neos.tech/#multi-agent-architecture)
-
-The system employs a streamlined workflow with the following components:
-
-1. **Coordinator**: The entry point that manages the workflow lifecycle
-
-   - Initiates the research process based on user input
-   - Delegates tasks to the planner when appropriate
-   - Acts as the primary interface between the user and the system
-
-2. **Planner**: Strategic component for task decomposition and planning
-
-   - Analyzes research objectives and creates structured execution plans
-   - Determines if enough context is available or if more research is needed
-   - Manages the research flow and decides when to generate the final report
-
-3. **Research Team**: A collection of specialized agents that execute the plan:
-
-   - **Researcher**: Conducts web searches and information gathering using tools like web search engines, crawling and even MCP services.
-   - **Coder**: Handles code analysis, execution, and technical tasks using Python REPL tool.
-     Each agent has access to specific tools optimized for their role and operates within the LangGraph framework
-
-4. **Reporter**: Final stage processor for research outputs
-   - Aggregates findings from the research team
-   - Processes and structures the collected information
-   - Generates comprehensive research reports
-
-![Agent Node System](./assets/agent_node_system.png)
-
-### Core Agent Functions
-
-![Core Agent Functions](./assets/core_agent_functions.png)
-
-## Text-to-Speech Integration
-
-Neos now includes a Text-to-Speech (TTS) feature that allows you to convert research reports to speech. This feature uses the volcengine TTS API to generate high-quality audio from text. Features like speed, volume, and pitch are also customizable.
-
-### Using the TTS API
-
-You can access the TTS functionality through the `/api/tts` endpoint:
-
-```bash
-# Example API call using curl
-curl --location 'http://localhost:8000/api/tts' \
---header 'Content-Type: application/json' \
---data '{
-    "text": "This is a test of the text-to-speech functionality.",
-    "speed_ratio": 1.0,
-    "volume_ratio": 1.0,
-    "pitch_ratio": 1.0
-}' \
---output speech.mp3
-```
-
-## Development
-
-### Testing
-
-Run the test suite:
-
-```bash
-# Run all tests
-make test
-
-# Run specific test file
-pytest tests/integration/test_workflow.py
-
-# Run with coverage
-make coverage
-```
-
-### Code Quality
-
-```bash
-# Run linting
-make lint
-
-# Format code
-make format
-```
-
-### Debugging with LangGraph Studio
-
-Neos uses LangGraph for its workflow architecture. You can use LangGraph Studio to debug and visualize the workflow in real-time.
-
-#### Running LangGraph Studio Locally
-
-Neos includes a `langgraph.json` configuration file that defines the graph structure and dependencies for the LangGraph Studio. This file points to the workflow graphs defined in the project and automatically loads environment variables from the `.env` file.
-
-##### Mac
-
-```bash
-# Install uv package manager if you don't have it
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install dependencies and start the LangGraph server
-uvx --refresh --from "langgraph-cli[inmem]" --with-editable . --python 3.12 langgraph dev --allow-blocking
-```
-
-##### Windows / Linux
-
-```bash
-# Install dependencies
-pip install -e .
-pip install -U "langgraph-cli[inmem]"
-
-# Start the LangGraph server
-langgraph dev
-```
-
-After starting the LangGraph server, you'll see several URLs in the terminal:
-
-- API: http://127.0.0.1:2024
-- Studio UI: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024
-- API Docs: http://127.0.0.1:2024/docs
-
-Open the Studio UI link in your browser to access the debugging interface.
-
-#### Using LangGraph Studio
-
-In the Studio UI, you can:
-
-1. Visualize the workflow graph and see how components connect
-2. Trace execution in real-time to see how data flows through the system
-3. Inspect the state at each step of the workflow
-4. Debug issues by examining inputs and outputs of each component
-5. Provide feedback during the planning phase to refine research plans
-
-When you submit a research topic in the Studio UI, you'll be able to see the entire workflow execution, including:
-
-- The planning phase where the research plan is created
-- The feedback loop where you can modify the plan
-- The research and writing phases for each section
-- The final report generation
-
-### Enabling LangSmith Tracing
-
-Neos supports LangSmith tracing to help you debug and monitor your workflows. To enable LangSmith tracing:
-
-1. Make sure your `.env` file has the following configurations (see `.env.example`):
-
-   ```bash
-   LANGSMITH_TRACING=true
-   LANGSMITH_ENDPOINT="https://api.smith.langchain.com"
-   LANGSMITH_API_KEY="xxx"
-   LANGSMITH_PROJECT="xxx"
-   ```
-
-2. Start tracing and visualize the graph locally with LangSmith by running:
-   ```bash
-   langgraph dev
-   ```
-
-This will enable trace visualization in LangGraph Studio and send your traces to LangSmith for monitoring and analysis.
-
-## Docker
-
-You can also run this project with Docker.
-
-First, you need read the [configuration](docs/configuration_guide.md) below. Make sure `.env`, `.conf.yaml` files are ready.
-
-Second, to build a Docker image of your own web server:
-
-```bash
-docker build -t neos-api .
-```
-
-Final, start up a docker container running the web server:
-
-```bash
-# Replace neos-api-app with your preferred container name
-docker run -d -t -p 8000:8000 --env-file .env --name neos-api-app neos-api
-
-# stop the server
-docker stop neos-api-app
-```
-
-### Docker Compose (include both backend and frontend)
-
-Neos provides a docker-compose setup to easily run both the backend and frontend together:
-
-```bash
-# building docker image
-docker compose build
-
-# start the server
-docker compose up
-```
-
-## Examples
-
-The following examples demonstrate the capabilities of Neos:
-
-### Research Reports
-
-1. **OpenAI Sora Report** - Analysis of OpenAI's Sora AI tool
-
-   - Discusses features, access, prompt engineering, limitations, and ethical considerations
-   - [View full report](examples/openai_sora_report.md)
-
-2. **Google's Agent to Agent Protocol Report** - Overview of Google's Agent to Agent (A2A) protocol
-
-   - Discusses its role in AI agent communication and its relationship with Anthropic's Model Context Protocol (MCP)
-   - [View full report](examples/what_is_agent_to_agent_protocol.md)
-
-3. **What is MCP?** - A comprehensive analysis of the term "MCP" across multiple contexts
-
-   - Explores Model Context Protocol in AI, Monocalcium Phosphate in chemistry, and Micro-channel Plate in electronics
-   - [View full report](examples/what_is_mcp.md)
-
-4. **Bitcoin Price Fluctuations** - Analysis of recent Bitcoin price movements
-
-   - Examines market trends, regulatory influences, and technical indicators
-   - Provides recommendations based on historical data
-   - [View full report](examples/bitcoin_price_fluctuation.md)
-
-5. **What is LLM?** - An in-depth exploration of Large Language Models
-
-   - Discusses architecture, training, applications, and ethical considerations
-   - [View full report](examples/what_is_llm.md)
-
-6. **How to Use Claude for Deep Research?** - Best practices and workflows for using Claude in deep research
-
-   - Covers prompt engineering, data analysis, and integration with other tools
-   - [View full report](examples/how_to_use_claude_deep_research.md)
-
-7. **AI Adoption in Healthcare: Influencing Factors** - Analysis of factors driving AI adoption in healthcare
-
-   - Discusses AI technologies, data quality, ethical considerations, economic evaluations, organizational readiness, and digital infrastructure
-   - [View full report](examples/AI_adoption_in_healthcare.md)
-
-8. **Quantum Computing Impact on Cryptography** - Analysis of quantum computing's impact on cryptography
-
-   - Discusses vulnerabilities of classical cryptography, post-quantum cryptography, and quantum-resistant cryptographic solutions
-   - [View full report](examples/Quantum_Computing_Impact_on_Cryptography.md)
-
-9. **Cristiano Ronaldo's Performance Highlights** - Analysis of Cristiano Ronaldo's performance highlights
-   - Discusses his career achievements, international goals, and performance in various matches
-   - [View full report](examples/Cristiano_Ronaldo's_Performance_Highlights.md)
-
-To run these examples or create your own research reports, you can use the following commands:
-
-```bash
-# Run with a specific query
-uv run main.py "What factors are influencing AI adoption in healthcare?"
-
-# Run with custom planning parameters
-uv run main.py --max_plan_iterations 3 "How does quantum computing impact cryptography?"
-
-# Run in interactive mode with built-in questions
-uv run main.py --interactive
-
-# Or run with basic interactive prompt
-uv run main.py
-
-# View all available options
-uv run main.py --help
-```
-
-### Interactive Mode
-
-The application now supports an interactive mode with built-in questions in both English and Chinese:
-
-1. Launch the interactive mode:
-
-   ```bash
-   uv run main.py --interactive
-   ```
-
-2. Select your preferred language (English or 中文)
-
-3. Choose from a list of built-in questions or select the option to ask your own question
-
-4. The system will process your question and generate a comprehensive research report
-
-### Human in the Loop
-
-Neos includes a human in the loop mechanism that allows you to review, edit, and approve research plans before they are executed:
-
-1. **Plan Review**: When human in the loop is enabled, the system will present the generated research plan for your review before execution
-
-2. **Providing Feedback**: You can:
-
-   - Accept the plan by responding with `[ACCEPTED]`
-   - Edit the plan by providing feedback (e.g., `[EDIT PLAN] Add more steps about technical implementation`)
-   - The system will incorporate your feedback and generate a revised plan
-
-3. **Auto-acceptance**: You can enable auto-acceptance to skip the review process:
-
-   - Via API: Set `auto_accepted_plan: true` in your request
-
-4. **API Integration**: When using the API, you can provide feedback through the `feedback` parameter:
-   ```json
-   {
-     "messages": [{ "role": "user", "content": "What is quantum computing?" }],
-     "thread_id": "my_thread_id",
-     "auto_accepted_plan": false,
-     "feedback": "[EDIT PLAN] Include more about quantum algorithms"
-   }
-   ```
-
-### Command Line Arguments
-
-The application supports several command-line arguments to customize its behavior:
-
-- **query**: The research query to process (can be multiple words)
-- **--interactive**: Run in interactive mode with built-in questions
-- **--max_plan_iterations**: Maximum number of planning cycles (default: 1)
-- **--max_step_num**: Maximum number of steps in a research plan (default: 3)
-- **--debug**: Enable detailed debug logging
-
-## FAQ
-
-Please refer to the [FAQ.md](docs/FAQ.md) for more details.
-
-## License
-
-This project is open source and available under the [MIT License](./LICENSE).
-
-## Acknowledgments
-
-Neos is built upon the incredible work of the open-source community. We are deeply grateful to all the projects and contributors whose efforts have made Neos possible. Truly, we stand on the shoulders of giants.
-
-We would like to extend our sincere appreciation to the following projects for their invaluable contributions:
-
-- **[LangChain](https://github.com/langchain-ai/langchain)**: Their exceptional framework powers our LLM interactions and chains, enabling seamless integration and functionality.
-- **[LangGraph](https://github.com/langchain-ai/langgraph)**: Their innovative approach to multi-agent orchestration has been instrumental in enabling Neos's sophisticated workflows.
-- **[Novel](https://github.com/steven-tey/novel)**: Their Notion-style WYSIWYG editor supports our report editing and AI-assisted rewriting.
-- **[RAGFlow](https://github.com/infiniflow/ragflow)**: We have achieved support for research on users' private knowledge bases through integration with RAGFlow.
-
-These projects exemplify the transformative power of open-source collaboration, and we are proud to build upon their foundations.
