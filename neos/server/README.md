@@ -1,4 +1,4 @@
-# OpenHands Server
+# NEOS Server
 
 This is a WebSocket server that executes tasks using an agent.
 
