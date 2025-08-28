@@ -21,7 +21,7 @@ def default_config():
 def temp_config_files(tmp_path):
     """Create temporary config files for testing precedence."""
     # Create a directory structure mimicking ~/.openhands/
-    user_config_dir = tmp_path / 'home' / '.openhands'
+    user_config_dir = tmp_path / 'home' / '.neos'
     user_config_dir.mkdir(parents=True, exist_ok=True)
 
     # Create ~/.openhands/config.toml

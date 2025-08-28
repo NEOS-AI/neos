@@ -44,7 +44,7 @@ def mock_env_and_dependencies():
             }
         finally:
             # Teardown the temporary directory, ignoring errors if files don't exist
-            openhands_dir = temp_dir / '.openhands'
+            openhands_dir = temp_dir / '.neos'
             if openhands_dir.exists():
                 for f in openhands_dir.glob('*'):
                     if f.is_file():

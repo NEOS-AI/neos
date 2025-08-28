@@ -750,10 +750,10 @@ def setup_config_from_args(args: argparse.Namespace) -> OpenHandsConfig:
 
             # If not found in the specified config file, try the user's config.toml
             if llm_config is None and args.config_file != os.path.join(
-                os.path.expanduser('~'), '.openhands', 'config.toml'
+                os.path.expanduser('~'), '.neos', 'config.toml'
             ):
                 user_config = os.path.join(
-                    os.path.expanduser('~'), '.openhands', 'config.toml'
+                    os.path.expanduser('~'), '.neos', 'config.toml'
                 )
                 if os.path.exists(user_config):
                     logger.openhands_logger.debug(

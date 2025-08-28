@@ -578,7 +578,7 @@ async def main_with_loop(loop: asyncio.AbstractEventLoop, args) -> None:
     # If `config.toml` does not exist in current directory, use the file under home directory
     if not os.path.exists(args.config_file):
         home_config_file = os.path.join(
-            os.path.expanduser('~'), '.openhands', 'config.toml'
+            os.path.expanduser('~'), '.neos', 'config.toml'
         )
         logger.info(
             f'Config file {args.config_file} does not exist, using default config file in home directory: {home_config_file}.'

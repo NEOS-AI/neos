@@ -147,7 +147,7 @@ class MockRuntime(Runtime):
         return MCPObservation(content='', tool='', result='')
 
 
-def create_test_microagents(base_dir: Path, config_dir_name: str = '.openhands'):
+def create_test_microagents(base_dir: Path, config_dir_name: str = '.neos'):
     """Create test microagent files in the specified directory."""
     microagents_dir = base_dir / config_dir_name / 'microagents'
     microagents_dir.mkdir(parents=True, exist_ok=True)
@@ -299,7 +299,7 @@ def test_get_microagents_from_selected_repo_gitlab_uses_openhands(temp_workspace
     repo_dir.mkdir()
 
     # Create microagents in .openhands directory
-    create_test_microagents(repo_dir, '.openhands')
+    create_test_microagents(repo_dir, '.neos')
 
     # Mock the provider detection to return GitLab
     with patch.object(runtime, '_is_gitlab_repository', return_value=True):
@@ -323,7 +323,7 @@ def test_get_microagents_from_selected_repo_github_only_openhands(temp_workspace
 
     # Create microagents in both directories
     create_test_microagents(repo_dir, 'openhands-config')
-    create_test_microagents(repo_dir, '.openhands')
+    create_test_microagents(repo_dir, '.neos')
 
     # Mock the provider detection to return GitHub
     with patch.object(runtime, '_is_gitlab_repository', return_value=False):

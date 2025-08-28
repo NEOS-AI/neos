@@ -323,7 +323,7 @@ async def handle_resume_command(
 
 
 async def init_repository(config: OpenHandsConfig, current_dir: str) -> bool:
-    repo_file_path = Path(current_dir) / '.openhands' / 'microagents' / 'repo.md'
+    repo_file_path = Path(current_dir) / '.neos' / 'microagents' / 'repo.md'
     init_repo = False
 
     if repo_file_path.exists():
@@ -512,7 +512,7 @@ def get_config_file_path() -> Path:
         return current_dir
 
     # Fallback to the user's home directory
-    return Path.home() / '.openhands' / 'config.toml'
+    return Path.home() / '.neos' / 'config.toml'
 
 
 def load_config_file(file_path: Path) -> dict:

@@ -35,7 +35,7 @@ GLOBAL_MICROAGENTS_DIR = os.path.join(
     'microagents',
 )
 
-USER_MICROAGENTS_DIR = Path.home() / '.openhands' / 'microagents'
+USER_MICROAGENTS_DIR = Path.home() / '.neos' / 'microagents'
 
 
 class Memory:

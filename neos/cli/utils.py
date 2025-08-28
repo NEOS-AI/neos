@@ -9,7 +9,7 @@ from neos.cli.tui import (
 from neos.events.event import Event
 from neos.llm.metrics import Metrics
 
-_LOCAL_CONFIG_FILE_PATH = Path.home() / '.openhands' / 'config.toml'
+_LOCAL_CONFIG_FILE_PATH = Path.home() / '.neos' / 'config.toml'
 _DEFAULT_CONFIG: dict[str, dict[str, list[str]]] = {'sandbox': {'trusted_dirs': []}}
 
 

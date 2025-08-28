@@ -80,7 +80,7 @@ def attempt_vscode_extension_install():
         editor_command, editor_name, flag_suffix = 'code', 'VS Code', 'vscode'
 
     # 3. Check if we've already successfully installed the extension.
-    flag_dir = pathlib.Path.home() / '.openhands'
+    flag_dir = pathlib.Path.home() / '.neos'
     flag_file = flag_dir / f'.{flag_suffix}_extension_installed'
     extension_id = 'neos.openhands-vscode'
 

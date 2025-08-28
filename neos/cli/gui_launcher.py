@@ -67,14 +67,14 @@ def check_docker_requirements() -> bool:
 
 
 def ensure_config_dir_exists() -> Path:
-    """Ensure the OpenHands configuration directory exists and return its path."""
-    config_dir = Path.home() / '.openhands'
+    """Ensure the NEOS configuration directory exists and return its path."""
+    config_dir = Path.home() / '.neos'
     config_dir.mkdir(exist_ok=True)
     return config_dir
 
 
 def launch_gui_server(mount_cwd: bool = False, gpu: bool = False) -> None:
-    """Launch the OpenHands GUI server using Docker.
+    """Launch the NEOS GUI server using Docker.
 
     Args:
         mount_cwd: If True, mount the current working directory into the container.

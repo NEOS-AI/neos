@@ -162,7 +162,7 @@ class TestGetRepositoryMicroagents:
         mock_provider_handler.get_microagents.return_value = [
             {
                 'name': 'test_agent',
-                'path': '.openhands/microagents/test_agent.md',
+                'path': '.neos/microagents/test_agent.md',
                 'created_at': '2024-01-01T00:00:00',
             },
             {
@@ -210,7 +210,7 @@ class TestGetRepositoryMicroagents:
         mock_provider_handler.get_microagents.return_value = [
             {
                 'name': 'test_agent',
-                'path': '.openhands/microagents/test_agent.md',
+                'path': '.neos/microagents/test_agent.md',
                 'created_at': '2024-01-01T00:00:00',
             }
         ]
@@ -241,7 +241,7 @@ class TestGetRepositoryMicroagents:
         mock_provider_handler.get_microagents.return_value = [
             {
                 'name': 'test_agent',
-                'path': '.openhands/microagents/test_agent.md',
+                'path': '.neos/microagents/test_agent.md',
                 'created_at': '2024-01-01T00:00:00',
             }
         ]
@@ -324,13 +324,13 @@ class TestGetRepositoryMicroagentContent:
         mock_provider_handler.get_microagent_content.return_value = (
             MicroagentContentResponse(
                 content=sample_microagent_content,
-                path='.openhands/microagents/test_agent.md',
+                path='.neos/microagents/test_agent.md',
                 triggers=['test', 'agent'],
             )
         )
 
         # Execute test
-        file_path = '.openhands/microagents/test_agent.md'
+        file_path = '.neos/microagents/test_agent.md'
         response = test_client.get(
             f'/api/user/repository/test/repo/microagents/content?file_path={quote(file_path)}'
         )
@@ -361,13 +361,13 @@ class TestGetRepositoryMicroagentContent:
         mock_provider_handler.get_microagent_content.return_value = (
             MicroagentContentResponse(
                 content=sample_microagent_content,
-                path='.openhands/microagents/test_agent.md',
+                path='.neos/microagents/test_agent.md',
                 triggers=['test', 'agent'],
             )
         )
 
         # Execute test
-        file_path = '.openhands/microagents/test_agent.md'
+        file_path = '.neos/microagents/test_agent.md'
         response = test_client.get(
             f'/api/user/repository/test/repo/microagents/content?file_path={quote(file_path)}'
         )
@@ -397,13 +397,13 @@ class TestGetRepositoryMicroagentContent:
         mock_provider_handler.get_microagent_content.return_value = (
             MicroagentContentResponse(
                 content=sample_microagent_content,
-                path='.openhands/microagents/test_agent.md',
+                path='.neos/microagents/test_agent.md',
                 triggers=['test', 'agent'],
             )
         )
 
         # Execute test
-        file_path = '.openhands/microagents/test_agent.md'
+        file_path = '.neos/microagents/test_agent.md'
         response = test_client.get(
             f'/api/user/repository/test/repo/microagents/content?file_path={quote(file_path)}'
         )
@@ -435,7 +435,7 @@ class TestGetRepositoryMicroagentContent:
         )
 
         # Execute test
-        file_path = '.openhands/microagents/nonexistent.md'
+        file_path = '.neos/microagents/nonexistent.md'
         response = test_client.get(
             f'/api/user/repository/test/repo/microagents/content?file_path={quote(file_path)}'
         )
@@ -462,7 +462,7 @@ class TestGetRepositoryMicroagentContent:
         )
 
         # Execute test
-        file_path = '.openhands/microagents/test_agent.md'
+        file_path = '.neos/microagents/test_agent.md'
         response = test_client.get(
             f'/api/user/repository/test/repo/microagents/content?file_path={quote(file_path)}'
         )

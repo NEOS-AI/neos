@@ -38,7 +38,7 @@ def test_maybe_run_setup_script(temp_dir, runtime_cls, run_as_openhands):
     """Test that setup script is executed when it exists."""
     runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
 
-    setup_script = '.openhands/setup.sh'
+    setup_script = '.neos/setup.sh'
     write_obs = runtime.write(
         FileWriteAction(
             path=setup_script, content="#!/bin/bash\necho 'Hello World' >> README.md\n"
@@ -66,7 +66,7 @@ def test_maybe_run_setup_script_with_long_timeout(
         runtime_startup_env_vars={'NO_CHANGE_TIMEOUT_SECONDS': '1'},
     )
 
-    setup_script = '.openhands/setup.sh'
+    setup_script = '.neos/setup.sh'
     write_obs = runtime.write(
         FileWriteAction(
             path=setup_script,

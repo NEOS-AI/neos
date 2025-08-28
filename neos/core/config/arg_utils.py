@@ -146,18 +146,18 @@ def get_cli_parser() -> argparse.ArgumentParser:
     """Create argument parser for CLI mode with simplified argument set."""
     # Create a description with welcome message explaining available commands
     description = (
-        'Welcome to OpenHands: Code Less, Make More\n\n'
-        'OpenHands supports two main commands:\n'
-        '  serve - Launch the OpenHands GUI server (web interface)\n'
-        '  cli   - Run OpenHands in CLI mode (terminal interface)\n\n'
-        'Running "openhands" without a command is the same as "openhands cli"'
+        'Welcome to NEOS: Code Less, Make More\n\n'
+        'NEOS supports two main commands:\n'
+        '  serve - Launch the NEOS GUI server (web interface)\n'
+        '  cli   - Run NEOS in CLI mode (terminal interface)\n\n'
+        'Running "neos" without a command is the same as "neos cli"'
     )
 
     parser = argparse.ArgumentParser(
         description=description,
-        prog='openhands',
+        prog='neos',
         formatter_class=argparse.RawDescriptionHelpFormatter,  # Preserve formatting in description
-        epilog='For more information about a command, run: openhands COMMAND --help',
+        epilog='For more information about a command, run: neos COMMAND --help',
     )
 
     # Create subparsers

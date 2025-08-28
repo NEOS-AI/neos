@@ -462,7 +462,7 @@ class Runtime(FileEditRuntimeMixin):
 
     def maybe_run_setup_script(self):
         """Run .openhands/setup.sh if it exists in the workspace or repository."""
-        setup_script = '.openhands/setup.sh'
+        setup_script = '.neos/setup.sh'
         read_obs = self.read(FileReadAction(path=setup_script))
         if isinstance(read_obs, ErrorObservation):
             return
@@ -494,7 +494,7 @@ class Runtime(FileEditRuntimeMixin):
 
     def maybe_setup_git_hooks(self):
         """Set up git hooks if .openhands/pre-commit.sh exists in the workspace or repository."""
-        pre_commit_script = '.openhands/pre-commit.sh'
+        pre_commit_script = '.neos/pre-commit.sh'
         read_obs = self.read(FileReadAction(path=pre_commit_script))
         if isinstance(read_obs, ErrorObservation):
             return
@@ -836,7 +836,7 @@ fi
         characters.
         """
         loaded_microagents: list[BaseMicroagent] = []
-        microagents_dir = self.workspace_root / '.openhands' / 'microagents'
+        microagents_dir = self.workspace_root / '.neos' / 'microagents'
         repo_root = None
 
         # Check for user/org level microagents if a repository is selected
@@ -847,7 +847,7 @@ fi
 
             # Continue with repository-specific microagents
             repo_root = self.workspace_root / selected_repository.split('/')[-1]
-            microagents_dir = repo_root / '.openhands' / 'microagents'
+            microagents_dir = repo_root / '.neos' / 'microagents'
 
         self.log(
             'info',
@@ -857,23 +857,23 @@ fi
         # Legacy Repo Instructions
         # Check for legacy .openhands_instructions file
         obs = self.read(
-            FileReadAction(path=str(self.workspace_root / '.openhands_instructions'))
+            FileReadAction(path=str(self.workspace_root / '.neos_instructions'))
         )
         if isinstance(obs, ErrorObservation) and repo_root is not None:
             # If the instructions file is not found in the workspace root, try to load it from the repo root
             self.log(
                 'debug',
-                f'.openhands_instructions not present, trying to load from repository {microagents_dir=}',
+                f'.neos_instructions not present, trying to load from repository {microagents_dir=}',
             )
             obs = self.read(
-                FileReadAction(path=str(repo_root / '.openhands_instructions'))
+                FileReadAction(path=str(repo_root / '.neos_instructions'))
             )
 
         if isinstance(obs, FileReadObservation):
             self.log('info', 'openhands_instructions microagent loaded.')
             loaded_microagents.append(
                 BaseMicroagent.load(
-                    path='.openhands_instructions',
+                    path='.neos_instructions',
                     microagent_dir=None,
                     file_content=obs.content,
                 )

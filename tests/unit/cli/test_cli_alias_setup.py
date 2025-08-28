@@ -280,7 +280,7 @@ def test_mark_alias_setup_declined():
             assert alias_setup_declined() is True
 
             # Verify the file exists
-            marker_file = Path(temp_dir) / '.openhands' / '.cli_alias_setup_declined'
+            marker_file = Path(temp_dir) / '.neos' / '.cli_alias_setup_declined'
             assert marker_file.exists()
 
 

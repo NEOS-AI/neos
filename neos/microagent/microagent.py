@@ -52,7 +52,7 @@ class BaseMicroagent(BaseModel):
                 file_content = f.read()
 
         # Legacy repo instructions are stored in .openhands_instructions
-        if path.name == '.openhands_instructions':
+        if path.name == '.neos_instructions':
             return RepoMicroagent(
                 name='repo_legacy',
                 content=file_content,

@@ -593,7 +593,7 @@ class IssueResolver:
         if self.repo_instruction is None:
             # Check for .openhands_instructions file in the workspace directory
             openhands_instructions_path = os.path.join(
-                repo_dir, '.openhands_instructions'
+                repo_dir, '.neos_instructions'
             )
             if os.path.exists(openhands_instructions_path):
                 with open(openhands_instructions_path, 'r') as f:  # noqa: ASYNC101

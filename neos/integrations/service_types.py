@@ -273,12 +273,12 @@ class BaseGitService(ABC):
         actual_repo_name = repository_name.split('/')[-1]
 
         # Check for special repository names that use a different structure
-        if actual_repo_name == '.openhands' or actual_repo_name == 'openhands-config':
+        if actual_repo_name == '.neos' or actual_repo_name == 'openhands-config':
             # For repository name ".openhands", scan "microagents" folder
             return 'microagents'
         else:
             # Default behavior: look for .openhands/microagents directory
-            return '.openhands/microagents'
+            return '.neos/microagents'
 
     def _create_microagent_response(
         self, file_name: str, path: str

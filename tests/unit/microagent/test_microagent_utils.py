@@ -19,7 +19,7 @@ CONTENT = '# dummy header\ndummy content\n## dummy subheader\ndummy subcontent\n
 
 def test_legacy_micro_agent_load(tmp_path):
     """Test loading of legacy microagents."""
-    legacy_file = tmp_path / '.openhands_instructions'
+    legacy_file = tmp_path / '.neos_instructions'
     legacy_file.write_text(CONTENT)
 
     # Pass microagent_dir (tmp_path in this case) to load
@@ -321,7 +321,7 @@ def temp_microagents_dir_with_cursorrules():
         root = Path(temp_dir)
 
         # Create .openhands/microagents directory structure
-        microagents_dir = root / '.openhands' / 'microagents'
+        microagents_dir = root / '.neos' / 'microagents'
         microagents_dir.mkdir(parents=True, exist_ok=True)
 
         # Create .cursorrules file in repository root
@@ -348,7 +348,7 @@ Repository-specific test instructions.
 def test_load_microagents_with_cursorrules(temp_microagents_dir_with_cursorrules):
     """Test loading microagents when .cursorrules file exists."""
     microagents_dir = (
-        temp_microagents_dir_with_cursorrules / '.openhands' / 'microagents'
+        temp_microagents_dir_with_cursorrules / '.neos' / 'microagents'
     )
 
     repo_agents, knowledge_agents = load_microagents_from_dir(microagents_dir)

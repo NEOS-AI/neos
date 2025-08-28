@@ -25,7 +25,7 @@ from neos.microagent.types import MicroagentType
 
 def _create_test_microagents(test_dir: str):
     """Create test microagent files in the given directory."""
-    microagents_dir = Path(test_dir) / '.openhands' / 'microagents'
+    microagents_dir = Path(test_dir) / '.neos' / 'microagents'
     microagents_dir.mkdir(parents=True, exist_ok=True)
 
     # Create test knowledge agent
@@ -66,7 +66,7 @@ Repository-specific test instructions.
 
 These are legacy repository instructions.
 """
-    (Path(test_dir) / '.openhands_instructions').write_text(legacy_instructions)
+    (Path(test_dir) / '.neos_instructions').write_text(legacy_instructions)
 
 
 def test_load_microagents_with_trailing_slashes(
@@ -143,7 +143,7 @@ def test_load_microagents_with_selected_repo(temp_dir, runtime_cls, run_as_openh
 def test_load_microagents_with_missing_files(temp_dir, runtime_cls, run_as_openhands):
     """Test loading microagents when some files are missing."""
     # Create only repo.md, no other files
-    microagents_dir = Path(temp_dir) / '.openhands' / 'microagents'
+    microagents_dir = Path(temp_dir) / '.neos' / 'microagents'
     microagents_dir.mkdir(parents=True, exist_ok=True)
 
     repo_agent = """---
