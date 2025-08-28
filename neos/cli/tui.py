@@ -31,7 +31,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.shortcuts import print_container
 from prompt_toolkit.widgets import Frame, TextArea
 
-from openhands import __version__
+from neos import __version__
 from neos.cli.pt_style import (
     COLOR_AGENT_BLUE,
     COLOR_GOLD,

@@ -12,7 +12,7 @@ import toml
 from dotenv import load_dotenv
 from pydantic import BaseModel, SecretStr, ValidationError
 
-from openhands import __version__
+from neos import __version__
 from neos.core import logger
 from neos.core.config.agent_config import AgentConfig
 from neos.core.config.arg_utils import get_headless_parser

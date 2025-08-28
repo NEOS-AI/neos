@@ -9,7 +9,7 @@ from pathlib import Path
 from prompt_toolkit import print_formatted_text
 from prompt_toolkit.formatted_text import HTML
 
-from openhands import __version__
+from neos import __version__
 
 
 def _format_docker_command_for_logging(cmd: list[str]) -> str:

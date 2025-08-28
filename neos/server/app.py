@@ -14,8 +14,8 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 
-import neos.agenthub  # noqa F401 (we import this to get the agents registered)
-from openhands import __version__
+# import neos.agenthub  # noqa F401 (we import this to get the agents registered)
+from neos import __version__
 from neos.integrations.service_types import AuthenticationError
 from neos.server.routes.conversation import app as conversation_api_router
 from neos.server.routes.feedback import app as feedback_api_router
@@ -33,6 +33,7 @@ from neos.server.routes.settings import app as settings_router
 from neos.server.routes.trajectory import app as trajectory_router
 from neos.server.shared import conversation_manager, server_config
 from neos.server.types import AppMode
+
 
 mcp_app = mcp_server.http_app(path='/mcp')
 

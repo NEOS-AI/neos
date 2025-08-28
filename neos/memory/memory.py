@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-import openhands
+import neos
 from neos.core.config.mcp_config import MCPConfig
 from neos.core.logger import openhands_logger as logger
 from neos.events.action.agent import RecallAction

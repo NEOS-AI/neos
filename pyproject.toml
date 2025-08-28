@@ -76,6 +76,7 @@ dependencies = [
     "redis>=6.4.0",
     "retry>=0.9.2",
     "runloop-api-client>=0.57.0",
+    "scikit-learn>=1.7.1",
     "seaborn>=0.13.2",
     "shellingham>=1.5.4",
     "sse-starlette>=3.0.2",

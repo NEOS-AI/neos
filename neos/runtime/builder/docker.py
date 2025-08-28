@@ -5,7 +5,7 @@ import time
 
 import docker
 
-from openhands import __version__ as oh_version
+from neos import __version__ as oh_version
 from neos.core.exceptions import AgentRuntimeBuildError
 from neos.core.logger import RollingLogger
 from neos.core.logger import openhands_logger as logger

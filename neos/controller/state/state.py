@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-import openhands
+import neos
 from neos.controller.state.control_flags import (
     BudgetControlFlag,
     IterationControlFlag,

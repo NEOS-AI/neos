@@ -1,8 +1,6 @@
-"""Main entry point for OpenHands CLI with subcommand support."""
-
 import sys
 
-import openhands
+import neos
 import neos.cli.suppress_warnings  # noqa: F401
 from neos.cli.gui_launcher import launch_gui_server
 from neos.cli.main import run_cli_command
@@ -28,7 +26,7 @@ def main():
 
         sys.exit(0)
 
-    # Special case: no subcommand provided, simulate "openhands cli"
+    # Special case: no subcommand provided, simulate "neos cli"
     if len(sys.argv) == 1 or (
         len(sys.argv) > 1 and sys.argv[1] not in ['cli', 'serve']
     ):
@@ -38,7 +36,7 @@ def main():
     args = parser.parse_args()
 
     if hasattr(args, 'version') and args.version:
-        print(f'OpenHands CLI version: {neos.get_version()}')
+        print(f'NEOS CLI version: {neos.get_version()}')
         sys.exit(0)
 
     if args.command == 'serve':

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-import openhands
+import neos
 from neos.core.schema import ActionType
 from neos.events.action.action import Action, ActionSecurityRisk
 

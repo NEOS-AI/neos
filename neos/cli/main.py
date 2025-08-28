@@ -496,12 +496,12 @@ def run_alias_setup_flow(config: OpenHandsConfig) -> None:
     )
     print_formatted_text(
         HTML(
-            '<grey>  • <b>openhands</b> → uvx --python 3.12 --from openhands-ai openhands</grey>'
+            '<grey>  • <b>neos</b> → uvx --python 3.12 --from neos openhands</grey>'
         )
     )
     print_formatted_text(
         HTML(
-            '<grey>  • <b>oh</b> → uvx --python 3.12 --from openhands-ai openhands</grey>'
+            '<grey>  • <b>oh</b> → uvx --python 3.12 --from neos openhands</grey>'
         )
     )
     print_formatted_text('')
