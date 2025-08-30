@@ -1,7 +1,7 @@
 <a name="readme-top"></a>
 
 <div align="center">
-  <img src="./docs/static/img/logo.png" alt="Logo" width="200">
+  <!-- <img src="./docs/static/img/logo.png" alt="Logo" width="200"> -->
   <h1 align="center">NEOS</h1>
 </div>
 
@@ -10,9 +10,6 @@ Welcome to NEOS, a platform for software development agents powered by AI.
 NEOS agents can do anything a human developer can: modify code, run commands, browse the web, call APIs, and yes—even copy code snippets from StackOverflow.
 
 ![App screenshot](./docs/static/img/screenshot.png)
-
-- []
-- []
 
 ## 💻 Running NEOS Locally
 
@@ -28,10 +25,10 @@ See the [uv installation guide](https://docs.astral.sh/uv/getting-started/instal
 <!-- TODO -->
 ```bash
 # Launch the GUI server
-uvx --python 3.12 --from openhands-ai openhands serve
+uv run python3 -m neos.cli.entry serve
 
 # Or launch the CLI
-uvx --python 3.12 --from openhands-ai openhands
+uv run python3 -m neos.cli.entry
 ```
 
 You'll find NEOS running at [http://localhost:3000](http://localhost:3000) (for GUI mode)!
