@@ -5,11 +5,13 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+import torch
 
 from prompt_toolkit import print_formatted_text
 from prompt_toolkit.formatted_text import HTML
 
-from neos import __version__
+# from neos import __version__
+from neos import open_hands_version as __version__
 
 
 def _format_docker_command_for_logging(cmd: list[str]) -> str:
@@ -148,6 +150,14 @@ def launch_gui_server(mount_cwd: bool = False, gpu: bool = False) -> None:
 
     # Add GPU support if requested
     if gpu:
+        if not torch.cuda.is_available():
+            print_formatted_text(
+                HTML(
+                    '<ansiyellow>⚠️ Warning: No GPUs detected on the host machine. Continuing without GPU support.</ansiyellow>'
+                )
+            )
+            raise SystemExit(0)
+
         print_formatted_text(
             HTML('<ansigreen>🖥️ Enabling GPU support via nvidia-docker...</ansigreen>')
         )

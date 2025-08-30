@@ -3,6 +3,7 @@ from pathlib import Path
 
 
 __package_name__ = 'neos'
+open_hands_version = '0.54.0'
 
 
 def get_version():
