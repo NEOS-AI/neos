@@ -26,7 +26,7 @@ import { LlmSettingsInputsSkeleton } from "#/components/features/settings/llm-se
 import { KeyStatusIcon } from "#/components/features/settings/key-status-icon";
 import { DEFAULT_SETTINGS } from "#/services/settings";
 import { getProviderId } from "#/utils/map-provider";
-import { DEFAULT_OPENHANDS_MODEL } from "#/utils/verified-models";
+import { DEFAULT_NEOS_MODEL } from "#/utils/verified-models";
 
 function LlmSettingsScreen() {
   const { t } = useTranslation();
@@ -415,7 +415,7 @@ function LlmSettingsScreen() {
                 <>
                   <ModelSelector
                     models={modelsAndProviders}
-                    currentModel={settings.LLM_MODEL || DEFAULT_OPENHANDS_MODEL}
+                    currentModel={settings.LLM_MODEL || DEFAULT_NEOS_MODEL}
                     onChange={handleModelIsDirty}
                   />
                   {(settings.LLM_MODEL?.startsWith("openhands/") ||
@@ -487,8 +487,8 @@ function LlmSettingsScreen() {
                 testId="llm-custom-model-input"
                 name="llm-custom-model-input"
                 label={t(I18nKey.SETTINGS$CUSTOM_MODEL)}
-                defaultValue={settings.LLM_MODEL || DEFAULT_OPENHANDS_MODEL}
-                placeholder={DEFAULT_OPENHANDS_MODEL}
+                defaultValue={settings.LLM_MODEL || DEFAULT_NEOS_MODEL}
+                placeholder={DEFAULT_NEOS_MODEL}
                 type="text"
                 className="w-full max-w-[680px]"
                 onChange={handleCustomModelIsDirty}

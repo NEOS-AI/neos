@@ -11,6 +11,7 @@ import {
 import * as AdvancedSettingsUtlls from "#/utils/has-advanced-settings-set";
 import * as ToastHandlers from "#/utils/custom-toast-handlers";
 
+
 const renderLlmSettingsScreen = () =>
   render(<LlmSettingsScreen />, {
     wrapper: ({ children }) => (
@@ -160,7 +161,7 @@ describe("Content", () => {
       const agent = screen.getByTestId("agent-input");
       const condensor = screen.getByTestId("enable-memory-condenser-switch");
 
-      expect(model).toHaveValue("openhands/claude-sonnet-4-20250514");
+      expect(model).toHaveValue("neos/claude-sonnet-4-20250514");
       expect(baseUrl).toHaveValue("");
       expect(apiKey).toHaveValue("");
       expect(apiKey).toHaveProperty("placeholder", "");
@@ -572,7 +573,7 @@ describe("Form submission", () => {
 
     expect(saveSettingsSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        llm_model: "openhands/claude-sonnet-4-20250514",
+        llm_model: "neos/claude-sonnet-4-20250514",
         llm_base_url: "",
         confirmation_mode: true, // Confirmation mode is now a basic setting, should be preserved
       }),

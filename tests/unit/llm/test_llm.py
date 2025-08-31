@@ -1296,7 +1296,7 @@ def test_openhands_provider_rewrite_and_caching_prompt(
     }
 
     config = LLMConfig(
-        model='openhands/claude-3.7-sonnet', api_key='k', caching_prompt=True
+        model='neos/claude-3.7-sonnet', api_key='k', caching_prompt=True
     )
     llm = LLM(config, service_id='svc')
     # Model should be rewritten to litellm_proxy/...

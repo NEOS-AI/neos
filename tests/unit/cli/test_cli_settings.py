@@ -637,12 +637,12 @@ class TestModifyLLMSettingsBasic:
         """Test changing provider and model requires re-entering API key when provider changes."""
         # Setup mocks
         mock_get_models.return_value = [
-            'openhands/claude-sonnet-4-20250514',
-            'openhands/claude-opus-4-20250514',
-            'openhands/o3',
+            'neos/claude-sonnet-4-20250514',
+            'neos/claude-opus-4-20250514',
+            'neos/o3',
         ]
         mock_organize.return_value = {
-            'openhands': {
+            'neos': {
                 'models': [
                     'claude-sonnet-4-20250514',
                     'claude-opus-4-20250514',

@@ -13,7 +13,7 @@ Please follow instruction [here](../../README.md#setup) to setup your local deve
 
 ## OpenHands Commit0 Instance-level Docker Support
 
-OpenHands supports using the Commit0 Docker for **[inference](#run-inference-on-commit0-instances).
+NEOS supports using the Commit0 Docker for **[inference](#run-inference-on-commit0-instances).
 This is now the default behavior.
 
 ## Run Inference on Commit0 Instances

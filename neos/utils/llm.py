@@ -53,21 +53,21 @@ def get_supported_llm_models(config: OpenHandsConfig) -> list[str]:
             except httpx.HTTPError as e:
                 logger.error(f'Error getting OLLAMA models: {e}')
 
-    # Add OpenHands provider models
-    openhands_models = [
-        'openhands/claude-sonnet-4-20250514',
-        'openhands/gpt-5-2025-08-07',
-        'openhands/gpt-5-mini-2025-08-07',
-        'openhands/claude-opus-4-20250514',
-        'openhands/gemini-2.5-pro',
-        'openhands/o3',
-        'openhands/o4-mini',
-        'openhands/devstral-small-2505',
-        'openhands/devstral-small-2507',
-        'openhands/devstral-medium-2507',
-        'openhands/kimi-k2-0711-preview',
-        'openhands/qwen3-coder-480b',
+    # Add NEOS provider models
+    neos_models = [
+        'neos/claude-sonnet-4-20250514',
+        'neos/gpt-5-2025-08-07',
+        'neos/gpt-5-mini-2025-08-07',
+        'neos/claude-opus-4-20250514',
+        'neos/gemini-2.5-pro',
+        'neos/o3',
+        'neos/o4-mini',
+        'neos/devstral-small-2505',
+        'neos/devstral-small-2507',
+        'neos/devstral-medium-2507',
+        'neos/kimi-k2-0711-preview',
+        'neos/qwen3-coder-480b',
     ]
-    model_list = openhands_models + model_list
+    model_list = neos_models + model_list
 
     return list(sorted(set(model_list)))
