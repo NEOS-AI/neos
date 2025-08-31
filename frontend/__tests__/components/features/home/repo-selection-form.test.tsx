@@ -6,6 +6,7 @@ import { RepositorySelectionForm } from "../../../../src/components/features/hom
 import OpenHands from "#/api/open-hands";
 import { GitRepository } from "#/types/git";
 
+
 // Create mock functions
 const mockUseUserRepositories = vi.fn();
 const mockUseCreateConversation = vi.fn();
@@ -151,7 +152,7 @@ describe("RepositorySelectionForm", () => {
     });
 
     renderForm();
-    expect(await screen.findByTestId("repo-dropdown")).toBeInTheDocument();
+    expect(await screen.findByTestId("git-repo-dropdown")).toBeInTheDocument();
   });
 
   it("shows error message when repository fetch fails", async () => {
@@ -168,10 +169,10 @@ describe("RepositorySelectionForm", () => {
     renderForm();
 
     expect(
-      await screen.findByTestId("repo-dropdown-error"),
+      await screen.findByTestId("dropdown-error"),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("HOME$FAILED_TO_LOAD_REPOSITORIES"),
+      screen.getByText("Failed to load data"),
     ).toBeInTheDocument();
   });
 
@@ -231,11 +232,7 @@ describe("RepositorySelectionForm", () => {
 
     renderForm();
 
-    const dropdown = await screen.findByTestId("repo-dropdown");
-    const input = dropdown.querySelector(
-      'input[type="text"]',
-    ) as HTMLInputElement;
-    expect(input).toBeInTheDocument();
+    const input = await screen.findByTestId("git-repo-dropdown");
 
     await userEvent.type(input, "https://github.com/kubernetes/kubernetes");
     expect(searchGitReposSpy).toHaveBeenLastCalledWith(
@@ -270,10 +267,7 @@ describe("RepositorySelectionForm", () => {
 
     renderForm();
 
-    const dropdown = await screen.findByTestId("repo-dropdown");
-    const input = dropdown.querySelector(
-      'input[type="text"]',
-    ) as HTMLInputElement;
+    const input = await screen.findByTestId("git-repo-dropdown");
     expect(input).toBeInTheDocument();
 
     await userEvent.type(input, "https://github.com/kubernetes/kubernetes");
