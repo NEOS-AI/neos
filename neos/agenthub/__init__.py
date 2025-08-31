@@ -13,6 +13,7 @@ from neos.agenthub import (  # noqa: E402
 )
 from neos.controller.agent import Agent  # noqa: E402
 
+
 __all__ = [
     'Agent',
     'codeact_agent',

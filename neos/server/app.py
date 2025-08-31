@@ -14,7 +14,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 
-# import neos.agenthub  # noqa F401 (we import this to get the agents registered)
+import neos.agenthub  # noqa F401 (we import this to get the agents registered)
 from neos import __version__
 from neos.integrations.service_types import AuthenticationError
 from neos.server.routes.conversation import app as conversation_api_router
@@ -57,8 +57,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title='OpenHands',
-    description='OpenHands: Code Less, Make More',
+    title='NEOS',
+    description='NEOS: Code Less, Make More',
     version=__version__,
     lifespan=combine_lifespans(_lifespan, mcp_app.lifespan),
     routes=[Mount(path='/mcp', app=mcp_app)],
