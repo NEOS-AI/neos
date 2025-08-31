@@ -64,7 +64,6 @@ class CodeActAgent(Agent):
     - Execute any valid `Python` code with [an interactive Python interpreter](https://ipython.org/). This is simulated through `bash` command, see plugin system below for more details.
 
     ![image](https://github.com/All-Hands-AI/OpenHands/assets/38853559/92b622e3-72ad-4a61-8f41-8c040b6d5fb3)
-
     """
 
     sandbox_plugins: list[PluginRequirement] = [
@@ -92,6 +91,7 @@ class CodeActAgent(Agent):
         self.condenser = Condenser.from_config(self.config.condenser, llm_registry)
         logger.debug(f'Using condenser: {type(self.condenser)}')
 
+
     @property
     def prompt_manager(self) -> PromptManager:
         if self._prompt_manager is None:
@@ -101,6 +101,7 @@ class CodeActAgent(Agent):
             )
 
         return self._prompt_manager
+
 
     def _get_tools(self) -> list['ChatCompletionToolParam']:
         # For these models, we use short tool descriptions ( < 1024 tokens)
@@ -148,11 +149,13 @@ class CodeActAgent(Agent):
             )
         return tools
 
+
     def reset(self) -> None:
         """Resets the CodeAct Agent's internal state."""
         super().reset()
         # Only clear pending actions, not LLM metrics
         self.pending_actions.clear()
+
 
     def step(self, state: State) -> 'Action':
         """Performs one step using the CodeAct Agent.
@@ -220,6 +223,7 @@ class CodeActAgent(Agent):
             self.pending_actions.append(action)
         return self.pending_actions.popleft()
 
+
     def _get_initial_user_message(self, history: list[Event]) -> MessageAction:
         """Finds the initial user message action from the full history."""
         initial_user_message: MessageAction | None = None
@@ -239,6 +243,7 @@ class CodeActAgent(Agent):
                 'Initial user message not found in history. Please report this issue.'
             )
         return initial_user_message
+
 
     def _get_messages(
         self, events: list[Event], initial_user_message: MessageAction
@@ -288,6 +293,7 @@ class CodeActAgent(Agent):
             self.conversation_memory.apply_prompt_caching(messages)
 
         return messages
+
 
     def response_to_actions(self, response: 'ModelResponse') -> list['Action']:
         return codeact_function_calling.response_to_actions(

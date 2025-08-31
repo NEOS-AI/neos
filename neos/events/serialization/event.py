@@ -165,7 +165,16 @@ def event_to_trajectory(event: 'Event', include_screenshots: bool = False) -> di
 
 
 def truncate_content(content: str, max_chars: int | None = None) -> str:
-    """Truncate the middle of the observation content if it is too long."""
+    """
+    Truncate the middle of the observation content if it is too long.
+
+    Args:
+        content (str): The content to potentially truncate.
+        max_chars (int | None): The maximum number of characters to keep. If None or
+            negative, no truncation is performed.
+    Returns:
+        str: The potentially truncated content.
+    """
     if max_chars is None or len(content) <= max_chars or max_chars < 0:
         return content
 

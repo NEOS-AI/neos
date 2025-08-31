@@ -71,6 +71,7 @@ class ConversationMemory:
         """
         return bool(url and url.strip())
 
+
     def process_events(
         self,
         condensed_history: list[Event],
@@ -108,6 +109,7 @@ class ConversationMemory:
         for i, event in enumerate(events):
             # create a regular message from an event
             if isinstance(event, Action):
+                # SystemMessageAction, MessageAction, etc
                 messages_to_add = self._process_action(
                     action=event,
                     pending_tool_call_action_messages=pending_tool_call_action_messages,
@@ -163,6 +165,7 @@ class ConversationMemory:
 
         return messages
 
+
     def _apply_user_message_formatting(self, messages: list[Message]) -> list[Message]:
         """Applies formatting rules, such as adding newlines between consecutive user messages."""
         formatted_messages = []
@@ -180,13 +183,15 @@ class ConversationMemory:
             prev_role = msg.role  # Update prev_role after processing each message
         return formatted_messages
 
+
     def _process_action(
         self,
         action: Action,
         pending_tool_call_action_messages: dict[str, Message],
         vision_is_active: bool = False,
     ) -> list[Message]:
-        """Converts an action into a message format that can be sent to the LLM.
+        """
+        Converts an action into a message format that can be sent to the LLM.
 
         This method handles different types of actions and formats them appropriately:
         1. For tool-based actions (AgentDelegate, CmdRun, IPythonRunCell, FileEdit) and agent-sourced AgentFinish:
@@ -218,8 +223,7 @@ class ConversationMemory:
             rather than being returned immediately. They will be processed later when all corresponding
             tool call results are available.
         """
-        # create a regular message from an event
-        if isinstance(
+        _is_agent_action = isinstance(
             action,
             (
                 AgentDelegateAction,
@@ -232,7 +236,10 @@ class ConversationMemory:
                 MCPAction,
                 TaskTrackingAction,
             ),
-        ) or (isinstance(action, CmdRunAction) and action.source == 'agent'):
+        ) or (isinstance(action, CmdRunAction) and action.source == 'agent')
+
+        # create a regular message from an event
+        if _is_agent_action:
             tool_metadata = action.tool_call_metadata
 
             # Allow user actions to skip tool metadata validation
@@ -339,7 +346,9 @@ class ConversationMemory:
                     tool_calls=None,
                 )
             ]
+
         return []
+
 
     def _process_observation(
         self,
@@ -397,10 +406,12 @@ class ConversationMemory:
             else:
                 text = truncate_content(obs.to_agent_observation(), max_message_chars)
             message = Message(role='user', content=[TextContent(text=text)])
+
         elif isinstance(obs, MCPObservation):
             # logger.warning(f'MCPObservation: {obs}')
             text = truncate_content(obs.content, max_message_chars)
             message = Message(role='user', content=[TextContent(text=text)])
+
         elif isinstance(obs, IPythonRunCellObservation):
             text = obs.content
             # Clean up any remaining base64 images in text content

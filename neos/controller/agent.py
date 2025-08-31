@@ -149,6 +149,7 @@ class Agent(ABC):
             raise AgentNotRegisteredError(name)
         return cls._registry[name]
 
+
     @classmethod
     def list_agents(cls) -> list[str]:
         """Retrieves the list of all agent names from the registry.
@@ -159,6 +160,7 @@ class Agent(ABC):
         if not bool(cls._registry):
             raise AgentNotRegisteredError()
         return list(cls._registry.keys())
+
 
     def set_mcp_tools(self, mcp_tools: list[dict]) -> None:
         """Sets the list of MCP tools for the agent.
