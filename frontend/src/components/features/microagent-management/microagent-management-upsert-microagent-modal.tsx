@@ -11,10 +11,8 @@ import XIcon from "#/icons/x.svg?react";
 import { cn, extractRepositoryInfo } from "#/utils/utils";
 import { BadgeInput } from "#/components/shared/inputs/badge-input";
 import { MicroagentFormData } from "#/types/microagent-management";
-import { Branch, GitRepository } from "#/types/git";
-import { useRepositoryBranches } from "#/hooks/query/use-repository-branches";
+import { GitRepository } from "#/types/git";
 import { useRepositoryMicroagentContent } from "#/hooks/query/use-repository-microagent-content";
-
 
 interface MicroagentManagementUpsertMicroagentModalProps {
   onConfirm: (formData: MicroagentFormData) => void;

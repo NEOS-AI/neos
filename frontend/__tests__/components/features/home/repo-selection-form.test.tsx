@@ -6,7 +6,6 @@ import { RepositorySelectionForm } from "../../../../src/components/features/hom
 import OpenHands from "#/api/open-hands";
 import { GitRepository } from "#/types/git";
 
-
 // Create mock functions
 const mockUseUserRepositories = vi.fn();
 const mockUseCreateConversation = vi.fn();
@@ -268,7 +267,6 @@ describe("RepositorySelectionForm", () => {
     renderForm();
 
     const input = await screen.findByTestId("git-repo-dropdown");
-    expect(input).toBeInTheDocument();
 
     await userEvent.type(input, "https://github.com/kubernetes/kubernetes");
     expect(searchGitReposSpy).toHaveBeenLastCalledWith(

@@ -10,7 +10,6 @@ import { GitRepository } from "#/types/git";
 import { RepoConnector } from "#/components/features/home/repo-connector";
 import { MOCK_DEFAULT_USER_SETTINGS } from "#/mocks/handlers";
 
-
 const renderRepoConnector = () => {
   const mockRepoSelection = vi.fn();
   const RouterStub = createRoutesStub([
@@ -152,6 +151,7 @@ describe("RepoConnector", () => {
     const repoInput = await waitFor(() =>
       screen.getByTestId("git-repo-dropdown"),
     );
+
     await userEvent.click(repoInput);
 
     // Wait for the options to be loaded and displayed
@@ -275,6 +275,7 @@ describe("RepoConnector", () => {
     const repoInput = await waitFor(() =>
       within(repoConnector).getByTestId("git-repo-dropdown"),
     );
+
     await userEvent.click(repoInput);
 
     // Wait for the options to be loaded and displayed
@@ -305,7 +306,6 @@ describe("RepoConnector", () => {
   it("should change the launch button text to 'Loading...' when creating a conversation", async () => {
     const createConversationSpy = vi.spyOn(OpenHands, "createConversation");
     createConversationSpy.mockImplementation(() => new Promise(() => {})); // Never resolves to keep loading state
-
     const retrieveUserGitRepositoriesSpy = vi.spyOn(
       OpenHands,
       "retrieveUserGitRepositories",
@@ -336,6 +336,7 @@ describe("RepoConnector", () => {
     const repoInput = await waitFor(() =>
       screen.getByTestId("git-repo-dropdown"),
     );
+
     await userEvent.click(repoInput);
 
     // Wait for the options to be loaded and displayed
