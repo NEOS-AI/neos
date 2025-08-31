@@ -18,7 +18,9 @@ from neos.storage.secrets.secrets_store import SecretsStore
 from neos.storage.settings.settings_store import SettingsStore
 from neos.utils.import_utils import get_impl
 
+
 load_dotenv()
+
 
 config: OpenHandsConfig = load_openhands_config()
 server_config_interface: ServerConfigInterface = load_server_config()

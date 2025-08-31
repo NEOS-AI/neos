@@ -3,6 +3,7 @@ import os
 from fastapi import Depends, HTTPException, status
 from fastapi.security import APIKeyHeader
 
+
 _SESSION_API_KEY = os.getenv('SESSION_API_KEY')
 _SESSION_API_KEY_HEADER = APIKeyHeader(name='X-Session-API-Key', auto_error=False)
 

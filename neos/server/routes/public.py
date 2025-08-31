@@ -8,6 +8,7 @@ from neos.server.dependencies import get_dependencies
 from neos.server.shared import config, server_config
 from neos.utils.llm import get_supported_llm_models
 
+
 app = APIRouter(prefix='/api/options', dependencies=get_dependencies())
 
 

@@ -1,4 +1,5 @@
 import os
+from typing import Dict
 
 from neos.core.logger import openhands_logger as logger
 from neos.server.types import AppMode, ServerConfigInterface
@@ -36,7 +37,7 @@ class ServerConfig(ServerConfigInterface):
         if self.config_cls:
             raise ValueError('Unexpected config path provided')
 
-    def get_config(self):
+    def get_config(self) -> Dict:
         config = {
             'APP_MODE': self.app_mode,
             'GITHUB_CLIENT_ID': self.github_client_id,
