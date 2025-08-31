@@ -23,11 +23,12 @@ from neos.server.user_auth import (
 )
 from neos.storage.data_models.conversation_metadata import ConversationMetadata
 
+
 mcp_server = FastMCP(
     'mcp', stateless_http=True, dependencies=get_dependencies(), mask_error_details=True
 )
 
-HOST = f'https://{os.getenv("WEB_HOST", "app.all-hands.dev").strip()}'
+HOST = f'https://{os.getenv("WEB_HOST", "localhost:3000").strip()}'
 CONVERSATION_URL = HOST + '/conversations/{}'
 
 
@@ -206,7 +207,7 @@ async def create_mr(
             labels=labels,
         )
 
-        if conversation_id and user_id:
+        if conversation_id:
             await save_pr_metadata(user_id, conversation_id, response)
 
     except Exception as e:
@@ -272,7 +273,7 @@ async def create_bitbucket_pr(
             body=description,
         )
 
-        if conversation_id and user_id:
+        if conversation_id:
             await save_pr_metadata(user_id, conversation_id, response)
 
     except Exception as e:

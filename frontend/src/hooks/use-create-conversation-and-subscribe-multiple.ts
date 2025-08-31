@@ -10,6 +10,7 @@ import { CreateMicroagent, Conversation } from "#/api/open-hands.types";
 import OpenHands from "#/api/open-hands";
 import { renderConversationStartingToast } from "#/components/features/chat/microagent/microagent-status-toast";
 
+
 interface ConversationData {
   conversationId: string;
   sessionApiKey: string | null;
@@ -128,7 +129,7 @@ export const useCreateConversationAndSubscribeMultiple = () => {
       conversationInstructions: string;
       repository: {
         name: string;
-        branch: string;
+        branch?: string;
         gitProvider: Provider;
       };
       createMicroagent?: CreateMicroagent;
