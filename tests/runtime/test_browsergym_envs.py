@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action.browse import BrowseInteractiveAction
 from neos.events.observation.browse import BrowserOutputObservation
 from tests.runtime.conftest import _close_test_runtime, _load_runtime

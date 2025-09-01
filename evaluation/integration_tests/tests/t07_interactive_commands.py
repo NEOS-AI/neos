@@ -17,7 +17,7 @@ class Test(BaseIntegrationTest):
 
     @classmethod
     def initialize_runtime(cls, runtime: Runtime) -> None:
-        from neos.core.logger import openhands_logger as logger
+        from neos.core.logger import neos_logger as logger
 
         action = FileWriteAction(
             path='/workspace/python_script.py',
@@ -33,7 +33,7 @@ class Test(BaseIntegrationTest):
 
     @classmethod
     def verify_result(cls, runtime: Runtime, histories: list[Event]) -> TestResult:
-        from neos.core.logger import openhands_logger as logger
+        from neos.core.logger import neos_logger as logger
 
         # check if the license information is in any message
         message_actions = [

@@ -27,7 +27,7 @@ from neos.core.config import (
     get_llm_config_arg,
     parse_arguments,
 )
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.main import create_runtime, run_controller
 from neos.events.action import (
     BrowseInteractiveAction,

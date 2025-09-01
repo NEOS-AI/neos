@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.integrations.service_types import (
     BaseGitService,
     Branch,

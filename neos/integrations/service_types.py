@@ -8,7 +8,7 @@ from httpx import AsyncClient, HTTPError, HTTPStatusError
 from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel, SecretStr
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.microagent.microagent import BaseMicroagent
 from neos.microagent.types import MicroagentContentResponse, MicroagentResponse
 from neos.server.types import AppMode

@@ -5,7 +5,7 @@ from typing import Any, Callable
 from litellm import acompletion as litellm_acompletion
 
 from neos.core.exceptions import UserCancelledError
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.llm.llm import (
     LLM,
     LLM_RETRY_EXCEPTIONS,

@@ -8,7 +8,7 @@ import jinja2
 from pydantic import SecretStr
 
 from neos.core.config import LLMConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.integrations.service_types import ProviderType
 from neos.llm.llm import LLM
 from neos.resolver.interfaces.bitbucket import BitbucketIssueHandler

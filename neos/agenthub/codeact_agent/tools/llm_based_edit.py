@@ -5,6 +5,7 @@ from neos.agenthub.codeact_agent.tools.security_utils import (
     SECURITY_RISK_DESC,
 )
 
+
 _FILE_EDIT_DESCRIPTION = """Edit a file in plain-text format.
 * The assistant can edit files by specifying the file path and providing a draft of the new file content.
 * The draft content doesn't need to be exactly the same as the existing file; the assistant may skip unchanged lines using comments like `# ... existing code ...` to indicate unchanged sections.
@@ -118,6 +119,7 @@ content=```
 print(MyClass().y)
 ```
 """
+
 
 LLMBasedFileEditTool = ChatCompletionToolParam(
     type='function',

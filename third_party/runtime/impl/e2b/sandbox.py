@@ -7,7 +7,7 @@ from e2b import Sandbox as E2BSandbox
 from e2b.exceptions import TimeoutException
 
 from neos.core.config import SandboxConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 
 class E2BBox:

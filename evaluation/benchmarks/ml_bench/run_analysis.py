@@ -9,7 +9,7 @@ from neos.core.config import (
     get_llm_config_arg,
     load_openhands_config,
 )
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.llm.llm import LLM
 
 config = load_openhands_config()

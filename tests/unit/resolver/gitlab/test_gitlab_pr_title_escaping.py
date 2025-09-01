@@ -2,7 +2,7 @@ import os
 import subprocess
 import tempfile
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.integrations.service_types import ProviderType
 from neos.resolver.interfaces.issue import Issue
 from neos.resolver.send_pull_request import make_commit, send_pull_request

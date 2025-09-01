@@ -16,7 +16,7 @@ import tenacity
 import neos
 from neos.core.config import OpenHandsConfig
 from neos.core.exceptions import AgentRuntimeDisconnectedError
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events import EventStream
 from neos.events.action import (
     Action,

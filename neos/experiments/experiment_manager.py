@@ -3,7 +3,7 @@ import os
 from pydantic import BaseModel
 
 from neos.core.config.openhands_config import OpenHandsConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.server.session.conversation_init_data import ConversationInitData
 from neos.server.shared import file_store
 from neos.storage.locations import get_experiment_config_filename

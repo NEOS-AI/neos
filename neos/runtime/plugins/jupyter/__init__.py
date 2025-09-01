@@ -5,7 +5,7 @@ import sys
 import time
 from dataclasses import dataclass
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import Action, IPythonRunCellAction
 from neos.events.observation import IPythonRunCellObservation
 from neos.runtime.plugins.jupyter.execute_server import JupyterKernel

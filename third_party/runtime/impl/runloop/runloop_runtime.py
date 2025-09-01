@@ -8,7 +8,7 @@ from runloop_api_client.types import DevboxView
 from runloop_api_client.types.shared_params import LaunchParameters
 
 from neos.core.config import OpenHandsConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events import EventStream
 from neos.integrations.provider import PROVIDER_TOKEN_TYPE
 from neos.runtime.impl.action_execution.action_execution_client import (

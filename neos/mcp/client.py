@@ -15,7 +15,7 @@ from neos.core.config.mcp_config import (
     MCPSSEServerConfig,
     MCPStdioServerConfig,
 )
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.mcp.error_collector import mcp_error_collector
 from neos.mcp.tool import MCPClientTool
 

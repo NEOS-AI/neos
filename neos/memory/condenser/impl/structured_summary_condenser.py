@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from neos.core.config.condenser_config import (
     StructuredSummaryCondenserConfig,
 )
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.message import Message, TextContent
 from neos.events.action.agent import CondensationAction
 from neos.events.observation.agent import AgentCondensationObservation

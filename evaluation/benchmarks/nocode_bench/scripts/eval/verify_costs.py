@@ -2,7 +2,7 @@ import argparse
 
 import pandas as pd
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 
 def verify_instance_costs(row: pd.Series) -> float:

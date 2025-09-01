@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 import neos.agenthub.loc_agent.function_calling as locagent_function_calling
 from neos.agenthub.codeact_agent import CodeActAgent
 from neos.core.config import AgentConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.llm.llm_registry import LLMRegistry
 
 if TYPE_CHECKING:

@@ -8,7 +8,7 @@ import pytest
 from pytest import TempPathFactory
 
 from neos.core.config import MCPConfig, OpenHandsConfig, load_openhands_config
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events import EventStream
 from neos.llm.llm_registry import LLMRegistry
 from neos.runtime.base import Runtime

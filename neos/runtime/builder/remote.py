@@ -6,7 +6,7 @@ import time
 import httpx
 
 from neos.core.exceptions import AgentRuntimeBuildError
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.runtime.builder import RuntimeBuilder
 from neos.runtime.utils.request import send_request
 from neos.utils.http_session import HttpSession

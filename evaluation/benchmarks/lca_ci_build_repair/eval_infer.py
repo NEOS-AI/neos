@@ -25,7 +25,7 @@ from neos.core.config import (
     get_evaluation_parser,
     load_openhands_config,
 )
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.main import create_runtime
 from neos.events.action import CmdRunAction
 from neos.events.observation import CmdOutputObservation

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.integrations.github.queries import (
     get_review_threads_graphql_query,
     get_thread_comments_graphql_query,

@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict
 from neos.core.config.agent_config import AgentConfig
 from neos.core.config.llm_config import LLMConfig
 from neos.core.config.openhands_config import OpenHandsConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.llm.llm import LLM
 
 

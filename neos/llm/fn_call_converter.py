@@ -26,6 +26,7 @@ from neos.llm.tool_names import (
     STR_REPLACE_EDITOR_TOOL_NAME,
 )
 
+
 # Inspired by: https://docs.together.ai/docs/llama-3-function-calling#function-calling-w-llama-31-70b
 SYSTEM_PROMPT_SUFFIX_TEMPLATE = """
 You have access to the following functions:

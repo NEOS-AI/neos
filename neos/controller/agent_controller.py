@@ -41,7 +41,7 @@ from neos.core.exceptions import (
     LLMResponseError,
 )
 from neos.core.logger import LOG_ALL_EVENTS
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.schema import AgentState
 from neos.events import (
     EventSource,

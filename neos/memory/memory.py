@@ -7,7 +7,7 @@ from typing import Callable
 
 import neos
 from neos.core.config.mcp_config import MCPConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action.agent import RecallAction
 from neos.events.event import Event, EventSource, RecallType
 from neos.events.observation.agent import (

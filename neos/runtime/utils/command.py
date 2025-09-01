@@ -1,5 +1,5 @@
 from neos.core.config import OpenHandsConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.runtime.plugins import PluginRequirement
 
 DEFAULT_PYTHON_PREFIX = [

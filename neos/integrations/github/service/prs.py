@@ -1,4 +1,4 @@
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.integrations.github.service.base import GitHubMixinBase
 from neos.integrations.service_types import RequestMethod
 

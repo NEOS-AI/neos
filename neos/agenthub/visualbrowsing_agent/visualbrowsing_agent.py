@@ -5,7 +5,7 @@ from neos.agenthub.browsing_agent.response_parser import BrowsingResponseParser
 from neos.controller.agent import Agent
 from neos.controller.state.state import State
 from neos.core.config import AgentConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.message import ImageContent, Message, TextContent
 from neos.events.action import (
     Action,

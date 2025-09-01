@@ -24,7 +24,7 @@ from neos.core.exceptions import (
     FunctionCallNotExistsError,
     FunctionCallValidationError,
 )
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import (
     Action,
     ActionSecurityRisk,

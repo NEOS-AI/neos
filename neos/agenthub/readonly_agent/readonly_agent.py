@@ -16,7 +16,7 @@ from neos.agenthub.readonly_agent import (
     function_calling as readonly_function_calling,
 )
 from neos.core.config import AgentConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.utils.prompt import PromptManager
 
 

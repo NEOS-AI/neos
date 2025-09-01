@@ -1,6 +1,6 @@
 import boto3
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 
 def list_foundation_models(

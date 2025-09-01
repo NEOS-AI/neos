@@ -5,7 +5,7 @@ from urllib.parse import parse_qs
 
 from socketio.exceptions import ConnectionRefusedError
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import (
     NullAction,
 )

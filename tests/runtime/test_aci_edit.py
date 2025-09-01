@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 from conftest import _close_test_runtime, _load_runtime
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import FileEditAction, FileWriteAction
 from neos.runtime.action_execution_server import _execute_file_editor
 from neos.runtime.impl.cli.cli_runtime import CLIRuntime

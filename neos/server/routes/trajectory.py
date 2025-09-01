@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.async_event_store_wrapper import AsyncEventStoreWrapper
 from neos.events.event_filter import EventFilter
 from neos.events.serialization import event_to_trajectory

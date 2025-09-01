@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import Action
 from neos.events.observation import Observation
 from neos.runtime.plugins.requirement import Plugin, PluginRequirement

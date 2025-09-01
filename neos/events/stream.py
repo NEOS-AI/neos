@@ -7,7 +7,7 @@ from enum import Enum
 from functools import partial
 from typing import Any, Callable
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.event import Event, EventSource
 from neos.events.event_store import EventStore
 from neos.events.serialization.event import event_from_dict, event_to_dict

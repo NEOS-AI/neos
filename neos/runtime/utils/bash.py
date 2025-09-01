@@ -9,7 +9,7 @@ from typing import Any
 import bashlex
 import libtmux
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import CmdRunAction
 from neos.events.observation import ErrorObservation
 from neos.events.observation.commands import (

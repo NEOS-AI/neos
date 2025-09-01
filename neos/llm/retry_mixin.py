@@ -8,7 +8,7 @@ from tenacity import (
 )
 
 from neos.core.exceptions import LLMNoResponseError
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.utils.tenacity_stop import stop_if_should_exit
 
 

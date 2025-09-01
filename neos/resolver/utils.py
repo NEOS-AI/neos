@@ -8,7 +8,7 @@ from pydantic import SecretStr
 
 from neos.controller.state.state import State
 from neos.core.logger import get_console_handler
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import Action
 from neos.events.action.message import MessageAction
 from neos.integrations.service_types import ProviderType

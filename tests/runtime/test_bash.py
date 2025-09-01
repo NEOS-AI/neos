@@ -11,7 +11,7 @@ from conftest import (
     _load_runtime,
 )
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import CmdRunAction
 from neos.events.observation import CmdOutputObservation, ErrorObservation
 from neos.runtime.impl.cli.cli_runtime import CLIRuntime

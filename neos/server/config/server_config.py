@@ -1,7 +1,7 @@
 import os
 from typing import Dict
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.server.types import AppMode, ServerConfigInterface
 from neos.utils.import_utils import get_impl
 

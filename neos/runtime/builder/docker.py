@@ -8,7 +8,7 @@ import docker
 from neos import __version__ as oh_version
 from neos.core.exceptions import AgentRuntimeBuildError
 from neos.core.logger import RollingLogger
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.runtime.builder.base import RuntimeBuilder
 from neos.utils.term_color import TermColor, colorize
 

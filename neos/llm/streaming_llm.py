@@ -3,7 +3,7 @@ from functools import partial
 from typing import Any, Callable
 
 from neos.core.exceptions import UserCancelledError
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.llm.async_llm import LLM_RETRY_EXCEPTIONS, AsyncLLM
 from neos.llm.model_features import get_features
 

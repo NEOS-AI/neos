@@ -2,7 +2,7 @@ import base64
 import pickle
 from threading import Lock
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.llm.llm_registry import RegistryEvent
 from neos.llm.metrics import Metrics
 from neos.storage.files import FileStore

@@ -3,7 +3,7 @@
 from typing import Optional
 
 from neos.core.config import LLMConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action.message import MessageAction
 from neos.events.event import EventSource
 from neos.events.event_store import EventStore

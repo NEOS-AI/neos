@@ -132,7 +132,7 @@ class OpenHandsConfig(BaseModel):
         if name in self.llms:
             return self.llms[name]
         if name is not None and name != 'llm':
-            logger.openhands_logger.warning(
+            logger.neos_logger.warning(
                 f'llm config group {name} not found, using default config'
             )
         if 'llm' not in self.llms:

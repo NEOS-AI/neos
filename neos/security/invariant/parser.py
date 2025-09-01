@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import (
     Action,
     ChangeAgentStateAction,

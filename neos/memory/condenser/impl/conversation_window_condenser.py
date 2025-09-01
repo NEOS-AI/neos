@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from neos.core.config.condenser_config import ConversationWindowCondenserConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action.agent import (
     CondensationAction,
     RecallAction,

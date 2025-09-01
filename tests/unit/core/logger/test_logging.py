@@ -11,7 +11,7 @@ from neos.core.logger import (
     OpenHandsLoggerAdapter,
     json_log_handler,
 )
-from neos.core.logger import openhands_logger as openhands_logger
+from neos.core.logger import neos_logger as neos_logger
 
 
 @pytest.fixture
@@ -21,18 +21,18 @@ def test_handler():
     handler.setLevel(logging.INFO)
     formatter = logging.Formatter('%(message)s')
     handler.setFormatter(formatter)
-    openhands_logger.addHandler(handler)
-    yield openhands_logger, stream
-    openhands_logger.removeHandler(handler)
+    neos_logger.addHandler(handler)
+    yield neos_logger, stream
+    neos_logger.removeHandler(handler)
 
 
 @pytest.fixture
 def json_handler():
     stream = StringIO()
     json_handler = json_log_handler(logging.INFO, _out=stream)
-    openhands_logger.addHandler(json_handler)
-    yield openhands_logger, stream
-    openhands_logger.removeHandler(json_handler)
+    neos_logger.addHandler(json_handler)
+    yield neos_logger, stream
+    neos_logger.removeHandler(json_handler)
 
 
 def test_openai_api_key_masking(test_handler):

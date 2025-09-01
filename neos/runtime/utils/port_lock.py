@@ -7,7 +7,7 @@ import tempfile
 import time
 from typing import Optional
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 # Import fcntl only on Unix systems
 try:

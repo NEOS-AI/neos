@@ -2,7 +2,7 @@ import uuid
 
 from fastapi import Depends, HTTPException, Request, status
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.server.shared import (
     ConversationStoreImpl,
     config,

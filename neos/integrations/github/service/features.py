@@ -1,6 +1,6 @@
 import base64
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.integrations.github.queries import (
     suggested_task_issue_graphql_query,
     suggested_task_pr_graphql_query,

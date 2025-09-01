@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Union
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import BrowseInteractiveAction
 from neos.events.observation import BrowserOutputObservation
 from neos.runtime.base import Runtime

@@ -1,5 +1,5 @@
 from neos.controller.state.state import State
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action.action import Action
 from neos.events.action.commands import IPythonRunCellAction
 from neos.events.action.empty import NullAction

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from rapidfuzz.distance import LCSseq
 from tree_sitter_language_pack import get_parser
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 
 class Chunk(BaseModel):

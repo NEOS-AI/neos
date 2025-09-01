@@ -7,7 +7,7 @@ from typing import Any
 from openhands_aci.utils.diff import get_diff  # type: ignore
 
 from neos.core.config import OpenHandsConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import (
     FileEditAction,
     FileReadAction,

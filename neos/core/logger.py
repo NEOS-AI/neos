@@ -361,27 +361,27 @@ def log_uncaught_exceptions(
 
 
 sys.excepthook = log_uncaught_exceptions
-openhands_logger = logging.getLogger('openhands')
+neos_logger = logging.getLogger('neos')
 current_log_level = logging.INFO
 
 if LOG_LEVEL in logging.getLevelNamesMapping():
     current_log_level = logging.getLevelNamesMapping()[LOG_LEVEL]
-openhands_logger.setLevel(current_log_level)
+neos_logger.setLevel(current_log_level)
 
 if DEBUG:
-    openhands_logger.addFilter(StackInfoFilter())
+    neos_logger.addFilter(StackInfoFilter())
 
 if current_log_level == logging.DEBUG:
-    openhands_logger.debug('DEBUG mode enabled.')
+    neos_logger.debug('DEBUG mode enabled.')
 
 if LOG_JSON:
-    openhands_logger.addHandler(json_log_handler(current_log_level))
+    neos_logger.addHandler(json_log_handler(current_log_level))
 else:
-    openhands_logger.addHandler(get_console_handler(current_log_level))
+    neos_logger.addHandler(get_console_handler(current_log_level))
 
-openhands_logger.addFilter(SensitiveDataFilter(openhands_logger.name))
-openhands_logger.propagate = False
-openhands_logger.debug('Logging initialized')
+neos_logger.addFilter(SensitiveDataFilter(neos_logger.name))
+neos_logger.propagate = False
+neos_logger.debug('Logging initialized')
 
 LOG_DIR = os.path.join(
     # parent dir of openhands/core (i.e., root of the repo)
@@ -390,10 +390,10 @@ LOG_DIR = os.path.join(
 )
 
 if LOG_TO_FILE:
-    openhands_logger.addHandler(
+    neos_logger.addHandler(
         get_file_handler(LOG_DIR, current_log_level)
     )  # default log to project root
-    openhands_logger.debug(f'Logging to file in: {LOG_DIR}')
+    neos_logger.debug(f'Logging to file in: {LOG_DIR}')
 
 # Exclude LiteLLM from logging output as it can leak keys
 logging.getLogger('LiteLLM').disabled = True
@@ -446,7 +446,7 @@ class LlmFileHandler(logging.FileHandler):
                 try:
                     os.unlink(file_path)
                 except Exception as e:
-                    openhands_logger.error(
+                    neos_logger.error(
                         'Failed to delete %s. Reason: %s', file_path, e
                     )
         filename = f'{self.filename}_{self.message_counter:03}.log'
@@ -464,7 +464,7 @@ class LlmFileHandler(logging.FileHandler):
         self.stream = self._open()
         super().emit(record)
         self.stream.close()
-        openhands_logger.debug('Logging to %s', self.baseFilename)
+        neos_logger.debug('Logging to %s', self.baseFilename)
         self.message_counter += 1
 
 
@@ -494,7 +494,7 @@ class OpenHandsLoggerAdapter(logging.LoggerAdapter):
     extra: dict
 
     def __init__(
-        self, logger: logging.Logger = openhands_logger, extra: dict | None = None
+        self, logger: logging.Logger = neos_logger, extra: dict | None = None
     ) -> None:
         self.logger = logger
         self.extra = extra or {}

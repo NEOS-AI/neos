@@ -2,6 +2,7 @@ from litellm import ChatCompletionToolParam, ChatCompletionToolParamFunctionChun
 
 from neos.llm.tool_names import FINISH_TOOL_NAME
 
+
 _FINISH_DESCRIPTION = """Signals the completion of the current task or conversation.
 
 Use this tool when:
@@ -14,6 +15,7 @@ The message should include:
 - Explanation if you're unable to complete the task
 - Any follow-up questions if more information is needed
 """
+
 
 FinishTool = ChatCompletionToolParam(
     type='function',

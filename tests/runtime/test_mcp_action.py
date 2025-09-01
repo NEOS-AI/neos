@@ -14,7 +14,7 @@ from conftest import (
 import neos
 from neos.core.config import MCPConfig
 from neos.core.config.mcp_config import MCPSSEServerConfig, MCPStdioServerConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import CmdRunAction, MCPAction
 from neos.events.observation import CmdOutputObservation, MCPObservation
 

@@ -7,7 +7,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_request
 from pydantic import Field
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.integrations.bitbucket.bitbucket_service import BitBucketServiceImpl
 from neos.integrations.github.github_service import GithubServiceImpl
 from neos.integrations.gitlab.gitlab_service import GitLabServiceImpl

@@ -1,7 +1,7 @@
 import os
 import shutil
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.storage.files import FileStore
 
 

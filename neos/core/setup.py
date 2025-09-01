@@ -13,7 +13,7 @@ from neos.core.config import (
     OpenHandsConfig,
 )
 from neos.core.config.config_utils import DEFAULT_WORKSPACE_MOUNT_PATH_IN_SANDBOX
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events import EventStream
 from neos.events.event import Event
 from neos.integrations.provider import (

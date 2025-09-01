@@ -1,4 +1,4 @@
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action.action import Action
 from neos.events.action.empty import NullAction
 from neos.events.event import Event

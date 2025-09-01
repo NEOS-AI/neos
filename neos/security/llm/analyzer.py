@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import Request
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action.action import Action, ActionSecurityRisk
 from neos.security.analyzer import SecurityAnalyzer
 

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.integrations.provider import PROVIDER_TOKEN_TYPE, CustomSecret
 from neos.integrations.service_types import ProviderType
 from neos.integrations.utils import validate_provider_token

@@ -5,7 +5,7 @@ from litellm import ChatCompletionMessageToolCall
 from litellm.types.utils import ModelResponse
 
 from neos.core.logger import llm_prompt_logger, llm_response_logger
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 MESSAGE_SEPARATOR = '\n\n----------\n\n'
 

@@ -3,7 +3,7 @@ from types import MappingProxyType
 from typing import Any
 
 from neos.core.config.mcp_config import MCPConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action.message import MessageAction
 from neos.experiments.experiment_manager import ExperimentManagerImpl
 from neos.integrations.provider import (

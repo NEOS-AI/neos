@@ -2,7 +2,7 @@ import os
 import re
 
 from neos.core.config import OpenHandsConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.server.shared import config as shared_config
 
 FILES_TO_IGNORE = [

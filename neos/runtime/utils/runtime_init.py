@@ -2,7 +2,7 @@ import os
 import subprocess
 import sys
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 
 def init_user_and_working_directory(

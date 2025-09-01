@@ -24,7 +24,7 @@ from pydantic import SecretStr
 
 from neos.core.config import OpenHandsConfig
 from neos.core.config.mcp_config import MCPConfig, MCPStdioServerConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events import EventStream
 from neos.events.action import (
     BrowseInteractiveAction,

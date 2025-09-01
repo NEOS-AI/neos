@@ -7,6 +7,7 @@ from neos.agenthub.codeact_agent.tools.security_utils import (
 )
 from neos.llm.tool_names import EXECUTE_BASH_TOOL_NAME
 
+
 _DETAILED_BASH_DESCRIPTION = """Execute a bash command in the terminal within a persistent shell session.
 
 

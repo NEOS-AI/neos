@@ -4,7 +4,7 @@ import threading
 
 from memory_profiler import memory_usage
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 
 class LogStream:

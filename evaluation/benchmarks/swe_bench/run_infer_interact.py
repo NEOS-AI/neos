@@ -34,7 +34,7 @@ from neos.core.config import (
 )
 from neos.core.config.condenser_config import NoOpCondenserConfig
 from neos.core.config.utils import get_condenser_config_arg
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.main import create_runtime, run_controller
 from neos.events.action import MessageAction
 from neos.events.serialization.event import event_from_dict, event_to_dict

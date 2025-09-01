@@ -12,7 +12,7 @@ from neos.controller.state.control_flags import (
     BudgetControlFlag,
     IterationControlFlag,
 )
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.schema import AgentState
 from neos.events.action import (
     MessageAction,

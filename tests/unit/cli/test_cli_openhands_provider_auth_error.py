@@ -167,7 +167,7 @@ async def test_openhands_provider_authentication_error(
             )  # close_repl, reload_microagents, new_session_requested
 
             # Mock logger.error to capture the error message
-            with patch('neos.core.logger.openhands_logger.error'):
+            with patch('neos.core.logger.neos_logger.error'):
                 # Run the function with an initial action that will trigger the OpenHands provider
                 initial_action_content = 'Hello, I need help with a task'
 

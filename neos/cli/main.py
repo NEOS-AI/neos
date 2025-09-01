@@ -53,7 +53,7 @@ from neos.core.config.mcp_config import (
     OpenHandsMCPConfigImpl,
 )
 from neos.core.config.utils import finalize_config
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.loop import run_agent_until_done
 from neos.core.schema import AgentState
 from neos.core.schema.exit_reason import ExitReason

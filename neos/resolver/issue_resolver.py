@@ -17,7 +17,7 @@ import openhands
 from neos.controller.state.state import State
 from neos.core.config import AgentConfig, OpenHandsConfig, SandboxConfig
 from neos.core.config.utils import load_openhands_config
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.main import create_runtime, run_controller
 from neos.events.action import CmdRunAction, MessageAction
 from neos.events.event import Event

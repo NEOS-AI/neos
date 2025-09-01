@@ -4,7 +4,7 @@ from typing import Optional
 import httpx
 import tenacity
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.storage.files import FileStore
 from neos.utils.async_utils import EXECUTOR
 

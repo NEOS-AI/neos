@@ -4,7 +4,7 @@ from typing import Any, Literal
 import httpx
 from pydantic import BaseModel
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 
 class FeedbackDataModel(BaseModel):

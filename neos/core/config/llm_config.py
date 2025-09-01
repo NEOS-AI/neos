@@ -6,7 +6,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
 from neos.core.logger import LOG_DIR
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 
 class LLMConfig(BaseModel):

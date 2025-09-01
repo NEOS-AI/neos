@@ -3,7 +3,7 @@ from typing import Generator
 from litellm import ModelResponse
 
 from neos.core.config.agent_config import AgentConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.message import ImageContent, Message, TextContent
 from neos.core.schema import ActionType
 from neos.events.action import (

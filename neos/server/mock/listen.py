@@ -1,7 +1,7 @@
 import uvicorn
 from fastapi import FastAPI, WebSocket
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.utils.shutdown_listener import should_continue
 
 app = FastAPI()

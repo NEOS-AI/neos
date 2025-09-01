@@ -14,7 +14,7 @@ from jinja2 import Environment, FileSystemLoader
 import neos
 from neos import __version__ as oh_version
 from neos.core.exceptions import AgentRuntimeBuildError
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.runtime.builder import DockerRuntimeBuilder, RuntimeBuilder
 
 

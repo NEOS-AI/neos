@@ -16,7 +16,7 @@ from docker.models.containers import Container
 from neos.controller.agent import Agent
 from neos.core.config import OpenHandsConfig
 from neos.core.config.llm_config import LLMConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import MessageAction
 from neos.events.nested_event_store import NestedEventStore
 from neos.events.stream import EventStream

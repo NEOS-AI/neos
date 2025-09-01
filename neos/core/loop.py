@@ -1,7 +1,7 @@
 import asyncio
 
 from neos.controller import AgentController
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.schema import AgentState
 from neos.memory.memory import Memory
 from neos.runtime.base import Runtime

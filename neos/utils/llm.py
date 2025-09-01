@@ -7,7 +7,7 @@ with warnings.catch_warnings():
     import litellm
 
 from neos.core.config import LLMConfig, OpenHandsConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.llm import bedrock
 
 

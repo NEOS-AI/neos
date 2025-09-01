@@ -2,7 +2,7 @@ import os
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 
 class SandboxConfig(BaseModel):

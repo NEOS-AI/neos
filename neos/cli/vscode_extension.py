@@ -7,7 +7,7 @@ import tempfile
 import urllib.request
 from urllib.error import URLError
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 
 def download_latest_vsix_from_github() -> str | None:

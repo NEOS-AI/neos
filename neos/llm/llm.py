@@ -28,7 +28,7 @@ from litellm.types.utils import CostPerToken, ModelResponse, Usage
 from litellm.utils import create_pretrained_tokenizer
 
 from neos.core.exceptions import LLMNoResponseError
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.message import Message
 from neos.llm.debug_mixin import DebugMixin
 from neos.llm.fn_call_converter import (

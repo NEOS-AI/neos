@@ -25,7 +25,7 @@ from neos.core.config import (
     get_llm_config_arg,
 )
 from neos.core.config.agent_config import AgentConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.main import create_runtime, run_controller
 from neos.events.action import CmdRunAction, MessageAction
 from neos.events.observation import BrowserOutputObservation, CmdOutputObservation

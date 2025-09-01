@@ -15,7 +15,7 @@ from neos.core.config.mcp_config import (
     MCPSSEServerConfig,
     MCPStdioServerConfig,
 )
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action.mcp import MCPAction
 from neos.events.observation.mcp import MCPObservation
 from neos.events.observation.observation import Observation

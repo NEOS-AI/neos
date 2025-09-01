@@ -6,7 +6,7 @@ import pytest
 from conftest import TEST_IN_CI, _close_test_runtime, _load_runtime
 from openhands_aci.utils.diff import get_diff
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import FileEditAction, FileReadAction
 from neos.events.observation import FileEditObservation
 

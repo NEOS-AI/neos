@@ -21,7 +21,7 @@ from neos.core.config.condenser_config import (
     NoOpCondenserConfig,
     RecentEventsCondenserConfig,
 )
-from neos.core.logger import openhands_logger
+from neos.core.logger import neos_logger
 
 
 @pytest.fixture
@@ -578,7 +578,7 @@ invalid_field_in_sandbox = "test"
     handler.setLevel(logging.WARNING)
     formatter = logging.Formatter('%(message)s')
     handler.setFormatter(formatter)
-    openhands_logger.addHandler(handler)
+    neos_logger.addHandler(handler)
 
     try:
         # Since sandbox_config.from_toml_section now raises ValueError for invalid fields,
@@ -597,7 +597,7 @@ invalid_field_in_sandbox = "test"
         # Verify valid configurations are loaded before the error was raised
         assert default_config.debug is True
     finally:
-        openhands_logger.removeHandler(handler)
+        neos_logger.removeHandler(handler)
 
 
 def test_load_from_toml_security_invalid(default_config, temp_toml_file):

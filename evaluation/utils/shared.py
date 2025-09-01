@@ -32,7 +32,7 @@ from neos.core.exceptions import (
     AgentRuntimeUnavailableError,
 )
 from neos.core.logger import get_console_handler
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import Action
 from neos.events.action.message import MessageAction
 from neos.events.event import Event
@@ -326,7 +326,7 @@ def log_skipped_maximum_retries_exceeded(instance, metadata, error, max_retries=
     Returns:
         EvalOutput with the error information
     """
-    from neos.core.logger import openhands_logger as logger
+    from neos.core.logger import neos_logger as logger
 
     # Log the error
     logger.exception(error)
@@ -371,7 +371,7 @@ def log_skipped_maximum_retries_exceeded(instance, metadata, error, max_retries=
 
 def check_maximum_retries_exceeded(eval_output_dir):
     """Check if maximum_retries_exceeded.jsonl exists and output a message."""
-    from neos.core.logger import openhands_logger as logger
+    from neos.core.logger import neos_logger as logger
 
     retries_file_path = os.path.join(eval_output_dir, 'maximum_retries_exceeded.jsonl')
     if os.path.exists(retries_file_path):

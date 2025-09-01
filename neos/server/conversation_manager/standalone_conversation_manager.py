@@ -9,7 +9,7 @@ import socketio
 from neos.core.config.llm_config import LLMConfig
 from neos.core.config.openhands_config import OpenHandsConfig
 from neos.core.exceptions import AgentRuntimeUnavailableError
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.schema.agent import AgentState
 from neos.core.schema.observation import ObservationType
 from neos.events.action import MessageAction

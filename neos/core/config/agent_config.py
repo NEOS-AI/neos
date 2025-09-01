@@ -7,7 +7,7 @@ from neos.core.config.condenser_config import (
     ConversationWindowCondenserConfig,
 )
 from neos.core.config.extended_config import ExtendedConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.utils.import_utils import get_impl
 
 

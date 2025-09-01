@@ -17,7 +17,7 @@ from neos.core.exceptions import (
     AgentAlreadyRegisteredError,
     AgentNotRegisteredError,
 )
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.event import EventSource
 from neos.runtime.plugins import PluginRequirement
 

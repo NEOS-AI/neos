@@ -3,7 +3,7 @@ from typing import Any
 import pandas as pd
 
 from evaluation.utils.shared import assert_and_raise
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import CmdRunAction
 from neos.events.observation import (
     CmdOutputObservation,

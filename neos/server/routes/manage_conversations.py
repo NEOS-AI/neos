@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from neos.core.config.llm_config import LLMConfig
 from neos.core.config.mcp_config import MCPConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import (
     ChangeAgentStateAction,
     NullAction,

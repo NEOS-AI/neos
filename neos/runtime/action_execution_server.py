@@ -36,7 +36,7 @@ from uvicorn import run
 
 from neos.core.config.mcp_config import MCPStdioServerConfig
 from neos.core.exceptions import BrowserUnavailableException
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import (
     Action,
     BrowseInteractiveAction,

@@ -192,13 +192,12 @@ Here's a guide to the important documentation files in the repository:
 
 - [/README.md](./README.md): Main project overview, features, and basic setup instructions
 - [/Development.md](./Development.md) (this file): Comprehensive guide for developers working on OpenHands
-- [/CONTRIBUTING.md](./CONTRIBUTING.md): Guidelines for contributing to the project, including code style and PR process
 - [/docs/DOC_STYLE_GUIDE.md](./docs/DOC_STYLE_GUIDE.md): Standards for writing and maintaining project documentation
-- [/openhands/README.md](./openhands/README.md): Details about the backend Python implementation
+- [/neos/README.md](./neos/README.md): Details about the backend Python implementation
 - [/frontend/README.md](./frontend/README.md): Frontend React application setup and development guide
 - [/containers/README.md](./containers/README.md): Information about Docker containers and deployment
 - [/tests/unit/README.md](./tests/unit/README.md): Guide to writing and running unit tests
 - [/evaluation/README.md](./evaluation/README.md): Documentation for the evaluation framework and benchmarks
 - [/microagents/README.md](./microagents/README.md): Information about the microagents architecture and implementation
-- [/openhands/server/README.md](./openhands/server/README.md): Server implementation details and API documentation
-- [/openhands/runtime/README.md](./openhands/runtime/README.md): Documentation for the runtime environment and execution model
+- [/neos/server/README.md](./neos/server/README.md): Server implementation details and API documentation
+- [/neos/runtime/README.md](./neos/runtime/README.md): Documentation for the runtime environment and execution model

@@ -12,7 +12,7 @@ from neos.agenthub.readonly_agent.function_calling import (
     glob_to_cmdrun,
     grep_to_cmdrun,
 )
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import CmdRunAction
 from neos.events.observation import CmdOutputObservation, ErrorObservation
 

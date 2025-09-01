@@ -7,7 +7,7 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from neos.core.config.openhands_config import OpenHandsConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.storage import get_file_store
 from neos.storage.conversation.conversation_store import ConversationStore
 from neos.storage.data_models.conversation_metadata import ConversationMetadata

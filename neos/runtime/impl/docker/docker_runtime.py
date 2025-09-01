@@ -17,7 +17,7 @@ from neos.core.exceptions import (
     AgentRuntimeNotFoundError,
 )
 from neos.core.logger import DEBUG, DEBUG_RUNTIME
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events import EventStream
 from neos.integrations.provider import PROVIDER_TOKEN_TYPE
 from neos.llm.llm_registry import LLMRegistry

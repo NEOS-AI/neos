@@ -13,7 +13,7 @@ from evaluation.utils.shared import (
     _process_instance_wrapper,
     _process_instance_wrapper_mp,
 )
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 
 def update_progress_nc(

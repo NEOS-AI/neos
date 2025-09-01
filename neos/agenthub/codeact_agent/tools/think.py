@@ -1,5 +1,6 @@
 from litellm import ChatCompletionToolParam, ChatCompletionToolParamFunctionChunk
 
+
 _THINK_DESCRIPTION = """Use the tool to think about something. It will not obtain new information or make any changes to the repository, but just log the thought. Use it when complex reasoning or brainstorming is needed.
 
 Common use cases:
@@ -10,6 +11,7 @@ Common use cases:
 5. When debugging a complex issue, use this tool to organize your thoughts and hypotheses.
 
 The tool simply logs your thought process for better transparency and does not execute any code or make changes."""
+
 
 ThinkTool = ChatCompletionToolParam(
     type='function',

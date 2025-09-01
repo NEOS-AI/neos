@@ -82,7 +82,7 @@ def test_runtime_import_exception_handling_behavior():
     # Test the exception handling logic by simulating the exact code from runtime init
     from io import StringIO
 
-    from neos.core.logger import openhands_logger as logger
+    from neos.core.logger import neos_logger as logger
 
     # Create a string buffer to capture log output
     log_capture = StringIO()

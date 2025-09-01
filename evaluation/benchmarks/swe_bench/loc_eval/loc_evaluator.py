@@ -11,7 +11,7 @@ from tqdm import tqdm
 from evaluation.benchmarks.swe_bench.loc_eval.loc_utils import LocMeta
 from evaluation.benchmarks.swe_bench.run_infer import filter_dataset
 from evaluation.utils.shared import prepare_dataset
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 
 class LocEvaluator:

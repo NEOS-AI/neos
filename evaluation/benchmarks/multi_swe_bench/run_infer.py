@@ -36,7 +36,7 @@ from neos.core.config import (
     get_evaluation_parser,
     get_llm_config_arg,
 )
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.main import create_runtime, run_controller
 from neos.events.action import CmdRunAction, FileReadAction, MessageAction
 from neos.events.observation import CmdOutputObservation, ErrorObservation

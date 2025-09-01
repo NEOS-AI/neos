@@ -8,7 +8,7 @@ from pathspec.patterns import GitWildMatchPattern
 from starlette.background import BackgroundTask
 
 from neos.core.exceptions import AgentRuntimeUnavailableError
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import (
     FileReadAction,
 )

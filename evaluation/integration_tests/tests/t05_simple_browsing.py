@@ -107,7 +107,7 @@ class Test(BaseIntegrationTest):
 
     @classmethod
     def verify_result(cls, runtime: Runtime, histories: list[Event]) -> TestResult:
-        from neos.core.logger import openhands_logger as logger
+        from neos.core.logger import neos_logger as logger
 
         # check if the "The answer is OpenHands is all you need!" is in any message
         message_actions = [

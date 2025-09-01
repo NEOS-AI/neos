@@ -3,7 +3,7 @@ from typing import MutableMapping
 
 import httpx
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 CLIENT = httpx.Client()
 

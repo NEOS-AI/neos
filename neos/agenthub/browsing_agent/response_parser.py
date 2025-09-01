@@ -2,7 +2,7 @@ import ast
 import re
 
 from neos.controller.action_parser import ActionParser, ResponseParser
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import (
     Action,
     BrowseInteractiveAction,

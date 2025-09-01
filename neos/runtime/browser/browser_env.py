@@ -11,7 +11,7 @@ import tenacity
 from browsergym.utils.obs import flatten_dom_to_str, overlay_som
 
 from neos.core.exceptions import BrowserInitException
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.runtime.browser.base64 import image_to_png_base64_url
 from neos.utils.shutdown_listener import should_continue, should_exit
 from neos.utils.tenacity_stop import stop_if_should_exit

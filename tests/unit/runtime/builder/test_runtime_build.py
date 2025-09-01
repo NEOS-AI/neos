@@ -13,7 +13,7 @@ from pytest import TempPathFactory
 
 import neos
 from neos import __version__ as oh_version
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.runtime.builder.docker import DockerRuntimeBuilder
 from neos.runtime.utils.runtime_build import (
     BuildFromImageType,

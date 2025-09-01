@@ -4,7 +4,7 @@ from typing import overload
 
 from pydantic import BaseModel
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action.agent import CondensationAction, CondensationRequestAction
 from neos.events.event import Event
 from neos.events.observation.agent import AgentCondensationObservation

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from neos.controller.state.state import State
 from neos.core.config.condenser_config import CondenserConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action.agent import CondensationAction
 from neos.llm.llm_registry import LLMRegistry
 from neos.memory.view import View

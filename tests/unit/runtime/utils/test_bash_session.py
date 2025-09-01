@@ -2,7 +2,7 @@ import os
 import tempfile
 import time
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action import CmdRunAction
 from neos.runtime.utils.bash import BashCommandStatus, BashSession
 from neos.runtime.utils.bash_constants import TIMEOUT_MESSAGE_TEMPLATE

@@ -119,7 +119,7 @@ def load_from_env(
                             cast_value = field_type(value)
                     setattr(sub_config, field_name, cast_value)
                 except (ValueError, TypeError):
-                    logger.openhands_logger.error(
+                    logger.neos_logger.error(
                         f'Error setting env var {env_var_name}={value}: check that the value is of the right type'
                     )
 
@@ -151,14 +151,14 @@ def load_from_toml(cfg: OpenHandsConfig, toml_file: str = 'config.toml') -> None
     except FileNotFoundError:
         return
     except toml.TomlDecodeError as e:
-        logger.openhands_logger.warning(
+        logger.neos_logger.warning(
             f'Cannot parse config from toml, toml values have not been applied.\nError: {e}',
         )
         return
 
     # Check for the [core] section
     if 'core' not in toml_config:
-        logger.openhands_logger.warning(
+        logger.neos_logger.warning(
             f'No [core] section found in {toml_file}. Core settings will use defaults.'
         )
         core_config = {}
@@ -184,7 +184,7 @@ def load_from_toml(cfg: OpenHandsConfig, toml_file: str = 'config.toml') -> None
 
             setattr(cfg, key, value)
         else:
-            logger.openhands_logger.warning(
+            logger.neos_logger.warning(
                 f'Unknown config key "{key}" in [core] section'
             )
 
@@ -195,7 +195,7 @@ def load_from_toml(cfg: OpenHandsConfig, toml_file: str = 'config.toml') -> None
             for agent_key, agent_conf in agent_mapping.items():
                 cfg.set_agent_config(agent_conf, agent_key)
         except (TypeError, KeyError, ValidationError) as e:
-            logger.openhands_logger.warning(
+            logger.neos_logger.warning(
                 f'Cannot parse [agent] config from toml, values have not been applied.\nError: {e}'
             )
 
@@ -206,7 +206,7 @@ def load_from_toml(cfg: OpenHandsConfig, toml_file: str = 'config.toml') -> None
             for llm_key, llm_conf in llm_mapping.items():
                 cfg.set_llm_config(llm_conf, llm_key)
         except (TypeError, KeyError, ValidationError) as e:
-            logger.openhands_logger.warning(
+            logger.neos_logger.warning(
                 f'Cannot parse [llm] config from toml, values have not been applied.\nError: {e}'
             )
 
@@ -218,7 +218,7 @@ def load_from_toml(cfg: OpenHandsConfig, toml_file: str = 'config.toml') -> None
             if 'security' in security_mapping:
                 cfg.security = security_mapping['security']
         except (TypeError, KeyError, ValidationError) as e:
-            logger.openhands_logger.warning(
+            logger.neos_logger.warning(
                 f'Cannot parse [security] config from toml, values have not been applied.\nError: {e}'
             )
         except ValueError:
@@ -233,7 +233,7 @@ def load_from_toml(cfg: OpenHandsConfig, toml_file: str = 'config.toml') -> None
             if 'sandbox' in sandbox_mapping:
                 cfg.sandbox = sandbox_mapping['sandbox']
         except (TypeError, KeyError, ValidationError) as e:
-            logger.openhands_logger.warning(
+            logger.neos_logger.warning(
                 f'Cannot parse [sandbox] config from toml, values have not been applied.\nError: {e}'
             )
         except ValueError as e:
@@ -248,7 +248,7 @@ def load_from_toml(cfg: OpenHandsConfig, toml_file: str = 'config.toml') -> None
             if 'mcp' in mcp_mapping:
                 cfg.mcp = mcp_mapping['mcp']
         except (TypeError, KeyError, ValidationError) as e:
-            logger.openhands_logger.warning(
+            logger.neos_logger.warning(
                 f'Cannot parse MCP config from toml, values have not been applied.\nError: {e}'
             )
         except ValueError:
@@ -264,7 +264,7 @@ def load_from_toml(cfg: OpenHandsConfig, toml_file: str = 'config.toml') -> None
             if 'kubernetes' in kubernetes_mapping:
                 cfg.kubernetes = kubernetes_mapping['kubernetes']
         except (TypeError, KeyError, ValidationError) as e:
-            logger.openhands_logger.warning(
+            logger.neos_logger.warning(
                 f'Cannot parse [kubernetes] config from toml, values have not been applied.\nError: {e}'
             )
 
@@ -280,11 +280,11 @@ def load_from_toml(cfg: OpenHandsConfig, toml_file: str = 'config.toml') -> None
                 # Get the default agent config and assign the condenser config to it
                 default_agent_config = cfg.get_agent_config()
                 default_agent_config.condenser = condenser_mapping['condenser']
-                logger.openhands_logger.debug(
+                logger.neos_logger.debug(
                     'Default condenser configuration loaded from config toml and assigned to default agent'
                 )
         except (TypeError, KeyError, ValidationError) as e:
-            logger.openhands_logger.warning(
+            logger.neos_logger.warning(
                 f'Cannot parse [condenser] config from toml, values have not been applied.\nError: {e}'
             )
     # If no condenser section is in toml but enable_default_condenser is True,
@@ -303,7 +303,7 @@ def load_from_toml(cfg: OpenHandsConfig, toml_file: str = 'config.toml') -> None
 
         # Set as default condenser
         default_agent_config.condenser = default_condenser
-        logger.openhands_logger.debug(
+        logger.neos_logger.debug(
             'Default LLM summarizing condenser assigned to default agent (no condenser in config)'
         )
 
@@ -312,7 +312,7 @@ def load_from_toml(cfg: OpenHandsConfig, toml_file: str = 'config.toml') -> None
         try:
             cfg.extended = ExtendedConfig(toml_config['extended'])
         except (TypeError, KeyError, ValidationError) as e:
-            logger.openhands_logger.warning(
+            logger.neos_logger.warning(
                 f'Cannot parse [extended] config from toml, values have not been applied.\nError: {e}'
             )
 
@@ -330,7 +330,7 @@ def load_from_toml(cfg: OpenHandsConfig, toml_file: str = 'config.toml') -> None
     }
     for key in toml_config:
         if key.lower() not in known_sections:
-            logger.openhands_logger.warning(f'Unknown section [{key}] in {toml_file}')
+            logger.neos_logger.warning(f'Unknown section [{key}] in {toml_file}')
 
 
 def get_or_create_jwt_secret(file_store: FileStore) -> str:
@@ -347,7 +347,7 @@ def finalize_config(cfg: OpenHandsConfig) -> None:
     """More tweaks to the config after it's been loaded."""
     # Handle the sandbox.volumes parameter
     if cfg.workspace_base is not None or cfg.workspace_mount_path is not None:
-        logger.openhands_logger.warning(
+        logger.neos_logger.warning(
             'DEPRECATED: The WORKSPACE_BASE and WORKSPACE_MOUNT_PATH environment variables are deprecated. '
             "Please use SANDBOX_VOLUMES instead, e.g. 'SANDBOX_VOLUMES=/my/host/dir:/workspace:rw'"
         )
@@ -374,7 +374,7 @@ def finalize_config(cfg: OpenHandsConfig) -> None:
         # If no explicit /workspace mount was found, don't set any workspace mount
         # This allows users to mount volumes without affecting the workspace
         if not workspace_mount_found:
-            logger.openhands_logger.debug(
+            logger.neos_logger.debug(
                 'No explicit /workspace mount found in SANDBOX_VOLUMES. '
                 'Using default workspace path in sandbox.'
             )
@@ -409,7 +409,7 @@ def finalize_config(cfg: OpenHandsConfig) -> None:
         llm.log_completions_folder = os.path.abspath(llm.log_completions_folder)
 
     if cfg.sandbox.use_host_network and platform.system() == 'Darwin':
-        logger.openhands_logger.warning(
+        logger.neos_logger.warning(
             'Please upgrade to Docker Desktop 4.29.0 or later to use host network mode on macOS. '
             'See https://github.com/docker/roadmap/issues/238#issuecomment-2044688144 for more information.'
         )
@@ -433,7 +433,7 @@ def finalize_config(cfg: OpenHandsConfig) -> None:
                 agent_config.enable_jupyter = False
             if agent_config.enable_browsing:
                 agent_config.enable_browsing = False
-        logger.openhands_logger.debug(
+        logger.neos_logger.debug(
             'Automatically disabled Jupyter plugin and browsing for all agents '
             'because CLIRuntime is selected and does not support IPython execution.'
         )
@@ -470,17 +470,17 @@ def get_agent_config_arg(
     if agent_config_arg.startswith('agent.'):
         agent_config_arg = agent_config_arg[6:]
 
-    logger.openhands_logger.debug(f'Loading agent config from {agent_config_arg}')
+    logger.neos_logger.debug(f'Loading agent config from {agent_config_arg}')
 
     # load the toml file
     try:
         with open(toml_file, 'r', encoding='utf-8') as toml_contents:
             toml_config = toml.load(toml_contents)
     except FileNotFoundError as e:
-        logger.openhands_logger.error(f'Config file not found: {e}')
+        logger.neos_logger.error(f'Config file not found: {e}')
         return None
     except toml.TomlDecodeError as e:
-        logger.openhands_logger.error(
+        logger.neos_logger.error(
             f'Cannot parse agent group from {agent_config_arg}. Exception: {e}'
         )
         return None
@@ -488,7 +488,7 @@ def get_agent_config_arg(
     # update the agent config with the specified section
     if 'agent' in toml_config and agent_config_arg in toml_config['agent']:
         return AgentConfig(**toml_config['agent'][agent_config_arg])
-    logger.openhands_logger.debug(f'Loading from toml failed for {agent_config_arg}')
+    logger.neos_logger.debug(f'Loading from toml failed for {agent_config_arg}')
     return None
 
 
@@ -527,13 +527,13 @@ def get_llm_config_arg(
     if llm_config_arg.startswith('llm.'):
         llm_config_arg = llm_config_arg[4:]
 
-    logger.openhands_logger.debug(
+    logger.neos_logger.debug(
         f'Loading llm config "{llm_config_arg}" from {toml_file}'
     )
 
     # Check if the file exists
     if not os.path.exists(toml_file):
-        logger.openhands_logger.debug(f'Config file not found: {toml_file}')
+        logger.neos_logger.debug(f'Config file not found: {toml_file}')
         return None
 
     # load the toml file
@@ -541,10 +541,10 @@ def get_llm_config_arg(
         with open(toml_file, 'r', encoding='utf-8') as toml_contents:
             toml_config = toml.load(toml_contents)
     except FileNotFoundError as e:
-        logger.openhands_logger.error(f'Config file not found: {e}')
+        logger.neos_logger.error(f'Config file not found: {e}')
         return None
     except toml.TomlDecodeError as e:
-        logger.openhands_logger.error(
+        logger.neos_logger.error(
             f'Cannot parse llm group from {llm_config_arg}. Exception: {e}'
         )
         return None
@@ -553,7 +553,7 @@ def get_llm_config_arg(
     if 'llm' in toml_config and llm_config_arg in toml_config['llm']:
         return LLMConfig(**toml_config['llm'][llm_config_arg])
 
-    logger.openhands_logger.debug(
+    logger.neos_logger.debug(
         f'LLM config "{llm_config_arg}" not found in {toml_file}'
     )
     return None
@@ -595,7 +595,7 @@ def get_condenser_config_arg(
     if condenser_config_arg.startswith('condenser.'):
         condenser_config_arg = condenser_config_arg[10:]
 
-    logger.openhands_logger.debug(
+    logger.neos_logger.debug(
         f'Loading condenser config [{condenser_config_arg}] from {toml_file}'
     )
 
@@ -604,10 +604,10 @@ def get_condenser_config_arg(
         with open(toml_file, 'r', encoding='utf-8') as toml_contents:
             toml_config = toml.load(toml_contents)
     except FileNotFoundError as e:
-        logger.openhands_logger.error(f'Config file not found: {toml_file}. Error: {e}')
+        logger.neos_logger.error(f'Config file not found: {toml_file}. Error: {e}')
         return None
     except toml.TomlDecodeError as e:
-        logger.openhands_logger.error(
+        logger.neos_logger.error(
             f'Cannot parse condenser group [{condenser_config_arg}] from {toml_file}. Exception: {e}'
         )
         return None
@@ -617,7 +617,7 @@ def get_condenser_config_arg(
         'condenser' not in toml_config
         or condenser_config_arg not in toml_config['condenser']
     ):
-        logger.openhands_logger.error(
+        logger.neos_logger.error(
             f'Condenser config section [condenser.{condenser_config_arg}] not found in {toml_file}'
         )
         return None
@@ -629,7 +629,7 @@ def get_condenser_config_arg(
     # Determine the type and handle potential LLM dependency
     condenser_type = condenser_data.get('type')
     if not condenser_type:
-        logger.openhands_logger.error(
+        logger.neos_logger.error(
             f'Missing "type" field in [condenser.{condenser_config_arg}] section of {toml_file}'
         )
         return None
@@ -641,7 +641,7 @@ def get_condenser_config_arg(
         and isinstance(condenser_data['llm_config'], str)
     ):
         llm_config_name = condenser_data['llm_config']
-        logger.openhands_logger.debug(
+        logger.neos_logger.debug(
             f'Condenser [{condenser_config_arg}] requires LLM config [{llm_config_name}]. Loading it...'
         )
         # Use the existing function to load the specific LLM config
@@ -652,7 +652,7 @@ def get_condenser_config_arg(
             condenser_data['llm_config'] = referenced_llm_config
         else:
             # get_llm_config_arg already logs the error if not found
-            logger.openhands_logger.error(
+            logger.neos_logger.error(
                 f"Failed to load required LLM config '{llm_config_name}' for condenser '{condenser_config_arg}'."
             )
             return None
@@ -660,12 +660,12 @@ def get_condenser_config_arg(
     # Create the condenser config instance
     try:
         config = create_condenser_config(condenser_type, condenser_data)
-        logger.openhands_logger.info(
+        logger.neos_logger.info(
             f'Successfully loaded condenser config [{condenser_config_arg}] from {toml_file}'
         )
         return config
     except (ValidationError, ValueError) as e:
-        logger.openhands_logger.error(
+        logger.neos_logger.error(
             f'Invalid condenser configuration for [{condenser_config_arg}]: {e}.'
         )
         return None
@@ -697,11 +697,11 @@ def register_custom_agents(config: OpenHandsConfig) -> None:
             try:
                 agent_cls = get_impl(Agent, agent_config.classpath)
                 Agent.register(agent_name, agent_cls)
-                logger.openhands_logger.info(
+                logger.neos_logger.info(
                     f"Registered custom agent '{agent_name}' from {agent_config.classpath}"
                 )
             except Exception as e:
-                logger.openhands_logger.error(
+                logger.neos_logger.error(
                     f"Failed to register agent '{agent_name}': {e}"
                 )
 
@@ -741,7 +741,7 @@ def setup_config_from_args(args: argparse.Namespace) -> OpenHandsConfig:
 
     # Override with command line arguments if provided
     if args.llm_config:
-        logger.openhands_logger.debug(f'CLI specified LLM config: {args.llm_config}')
+        logger.neos_logger.debug(f'CLI specified LLM config: {args.llm_config}')
 
         # Check if the LLM config is NOT in the loaded configs
         if args.llm_config not in config.llms:
@@ -756,14 +756,14 @@ def setup_config_from_args(args: argparse.Namespace) -> OpenHandsConfig:
                     os.path.expanduser('~'), '.neos', 'config.toml'
                 )
                 if os.path.exists(user_config):
-                    logger.openhands_logger.debug(
+                    logger.neos_logger.debug(
                         f"Trying to load LLM config '{args.llm_config}' from user config: {user_config}"
                     )
                     llm_config = get_llm_config_arg(args.llm_config, user_config)
         else:
             # If it's already in the loaded configs, use that
             llm_config = config.llms[args.llm_config]
-            logger.openhands_logger.debug(
+            logger.neos_logger.debug(
                 f"Using LLM config '{args.llm_config}' from loaded configuration"
             )
         if llm_config is None:
@@ -773,7 +773,7 @@ def setup_config_from_args(args: argparse.Namespace) -> OpenHandsConfig:
 
         # Set this as the default LLM config (highest precedence)
         config.set_llm_config(llm_config)
-        logger.openhands_logger.debug(
+        logger.neos_logger.debug(
             f'Set LLM config from CLI parameter: {args.llm_config}'
         )
 

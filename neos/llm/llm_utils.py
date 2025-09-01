@@ -2,7 +2,7 @@ import copy
 from typing import TYPE_CHECKING
 
 from neos.core.config import LLMConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 
 if TYPE_CHECKING:
     from litellm import ChatCompletionToolParam

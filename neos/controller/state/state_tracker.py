@@ -3,7 +3,7 @@ from neos.controller.state.control_flags import (
     IterationControlFlag,
 )
 from neos.controller.state.state import State
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.action.agent import AgentDelegateAction, ChangeAgentStateAction
 from neos.events.action.empty import NullAction
 from neos.events.event import Event

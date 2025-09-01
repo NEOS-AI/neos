@@ -18,7 +18,7 @@ from pydantic import (
 if TYPE_CHECKING:
     from neos.core.config.openhands_config import OpenHandsConfig
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.utils.import_utils import get_impl
 
 

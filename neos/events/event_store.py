@@ -2,7 +2,7 @@ import json
 from dataclasses import dataclass
 from typing import Iterable
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.events.event import Event, EventSource
 from neos.events.event_filter import EventFilter
 from neos.events.event_store_abc import EventStoreABC

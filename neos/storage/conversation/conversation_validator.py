@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timezone
 
 from neos.core.config.utils import load_openhands_config
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.server.config.server_config import ServerConfig
 from neos.storage.conversation.conversation_store import ConversationStore
 from neos.storage.data_models.conversation_metadata import ConversationMetadata

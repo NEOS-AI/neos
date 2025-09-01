@@ -6,7 +6,7 @@ from typing import Any, Self
 
 from pydantic import BaseModel
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.schema import ObservationType
 from neos.events.observation.observation import Observation
 

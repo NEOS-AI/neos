@@ -3,7 +3,7 @@ from typing import Any
 
 import httpx
 
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.resolver.interfaces.issue import (
     Issue,
     IssueHandlerInterface,

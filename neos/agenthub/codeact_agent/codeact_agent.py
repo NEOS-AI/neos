@@ -30,7 +30,7 @@ from neos.agenthub.codeact_agent.tools.think import ThinkTool
 from neos.controller.agent import Agent
 from neos.controller.state.state import State
 from neos.core.config import AgentConfig
-from neos.core.logger import openhands_logger as logger
+from neos.core.logger import neos_logger as logger
 from neos.core.message import Message
 from neos.events.action import AgentFinishAction, MessageAction
 from neos.events.event import Event
