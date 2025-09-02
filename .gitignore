@@ -6,8 +6,6 @@ dist/
 wheels/
 *.egg-info
 .coverage
-agent_history.gif
-static/browser_history/*.gif
 
 # Virtual environments
 .venv
