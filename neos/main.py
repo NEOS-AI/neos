@@ -23,6 +23,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+TEST_EMBEDDING_ON_STARTUP = False  # 시작 시 임베딩 테스트 여부
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """애플리케이션 생명주기 관리"""
@@ -39,37 +42,38 @@ async def lifespan(app: FastAPI):
         logger.info("🔄 Initializing cache connection...")
         await cache_manager.initialize()
         logger.info("✅ Cache connection established")
-        
+
         # 임베딩 매니저 테스트
-        logger.info("🤖 Testing AI services...")
-        test_embedding = await embedding_manager.get_embedding("test connection", use_cache=False)
-        if test_embedding:
-            logger.info("✅ OpenAI API connection verified")
-        else:
-            logger.warning("⚠️ OpenAI API connection issue")
-        
+        if TEST_EMBEDDING_ON_STARTUP:
+            logger.info("🤖 Testing AI services...")
+            test_embedding = await embedding_manager.get_embedding("test connection", use_cache=False)
+            if test_embedding:
+                logger.info("✅ OpenAI API connection verified")
+            else:
+                logger.warning("⚠️ OpenAI API connection issue")
+
         logger.info("🎉 Multi-Agent AI System startup completed successfully!")
-        
+
     except Exception as e:
         logger.error(f"❌ Startup failed: {e}")
         raise e
-    
+
     yield
-    
+
     # 종료 시 실행
     logger.info("🔄 Shutting down Multi-Agent AI System...")
-    
+
     try:
         # 데이터베이스 연결 종료
         await db_manager.close()
         logger.info("📊 Database connection closed")
-        
+
         # Redis 캐시 연결 종료
         await cache_manager.close()
         logger.info("🔄 Cache connection closed")
-        
+
         logger.info("✅ Shutdown completed successfully")
-        
+
     except Exception as e:
         logger.error(f"❌ Shutdown error: {e}")
 
@@ -270,10 +274,10 @@ if __name__ == "__main__":
     import uvicorn
     
     uvicorn.run(
-        "main:app",
+        app,
         host="0.0.0.0",
-        port=8000,
-        reload=settings.DEBUG,
+        port=8518,
+        # reload=settings.DEBUG,
         log_level=settings.LOG_LEVEL.lower(),
         access_log=True
     )

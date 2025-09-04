@@ -3,7 +3,7 @@ import openai
 import numpy as np
 import hashlib
 
-from config.settings import settings
+from neos.config.settings import settings
 
 from .cache import cache_manager
 
@@ -13,7 +13,7 @@ class EmbeddingManager:
         self.client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
         self.model = settings.EMBEDDING_MODEL
         self.dimension = settings.EMBEDDING_DIMENSION
-    
+
     async def get_embedding(self, text: str, use_cache: bool = True) -> Optional[List[float]]:
         """텍스트 임베딩 생성"""
         if use_cache:
@@ -22,7 +22,7 @@ class EmbeddingManager:
             cached_embedding = await cache_manager.get(cache_key, deserialize="pickle")
             if cached_embedding:
                 return cached_embedding
-        
+
         try:
             response = await self.client.embeddings.create(
                 input=text,
