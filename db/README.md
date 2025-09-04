@@ -12,6 +12,13 @@ docker build -t neos-paradedb -f docker/Dockerfile.psql .
 docker run --name neos-paradedb -e POSTGRES_PASSWORD=password -p 5432:5432 -d neos-paradedb
 ```
 
+Running valkey:
+```bash
+docker pull valkey/valkey
+
+docker run --name my-valkey -p 6379:6379 -d valkey/valkey
+```
+
 ## Connecting to the database
 
 ```bash
