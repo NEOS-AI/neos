@@ -66,8 +66,6 @@ CREATE TABLE search_sessions (
 );
 
 -- 인덱스 생성
-CREATE INDEX idx_query_vector ON query_history USING ivfflat (query_vector vector_cosine_ops);
-CREATE INDEX idx_trending_vector ON trending_queries USING ivfflat (query_vector vector_cosine_ops);
 CREATE INDEX idx_query_created_at ON query_history(created_at);
 CREATE INDEX idx_query_user_id ON query_history(user_id);
 CREATE INDEX idx_trending_period ON trending_queries(time_period, last_searched);
@@ -76,3 +74,7 @@ CREATE INDEX idx_session_user ON search_sessions(user_id, created_at);
 -- 트리그램 인덱스 (텍스트 유사성 검색용)
 CREATE INDEX idx_query_text_trgm ON query_history USING gin (original_query gin_trgm_ops);
 CREATE INDEX idx_trending_text_trgm ON trending_queries USING gin (query_text gin_trgm_ops);
+
+-- 벡터 인덱스 (유사도 검색용) - 충분한 데이터가 쌓인 후 생성
+CREATE INDEX idx_query_vector ON query_history USING ivfflat (query_vector vector_cosine_ops);
+CREATE INDEX idx_trending_vector ON trending_queries USING ivfflat (query_vector vector_cosine_ops);
