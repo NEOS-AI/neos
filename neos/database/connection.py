@@ -1,3 +1,4 @@
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
@@ -47,10 +48,11 @@ class DatabaseManager:
     async def health_check(self) -> bool:
         """DB 연결 상태 확인"""
         try:
-            async with self.get_session() as session:
-                await session.execute("SELECT 1")
+            async with await self.get_session() as session:
+                await session.execute(text("SELECT 1"))
                 return True
-        except Exception:
+        except Exception as e:
+            print(f"Database health check error: {e}")
             return False
 
 
