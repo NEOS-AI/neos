@@ -62,8 +62,8 @@ class KnowledgeSearchAgent(SearchAgent):
         """유사한 쿼리 검색"""
         if not query_embedding:
             return []
-        
-        async with db_manager.get_session() as session:
+
+        async with await db_manager.get_session() as session:
             # 벡터 유사도 검색
             sql = text("""
                 SELECT original_query, search_results, response_quality_score,
@@ -88,10 +88,11 @@ class KnowledgeSearchAgent(SearchAgent):
                     })
             
             return similar_queries
-    
+
+
     async def _search_knowledge_base(self, query: str) -> List[Dict[str, Any]]:
         """지식 베이스 검색 (트리그램 기반)"""
-        async with db_manager.get_session() as session:
+        async with await db_manager.get_session() as session:
             sql = text("""
                 SELECT original_query, search_results, response_quality_score,
                        similarity(original_query, :query) as sim_score
@@ -100,10 +101,10 @@ class KnowledgeSearchAgent(SearchAgent):
                 ORDER BY similarity(original_query, :query) DESC
                 LIMIT 3
             """)
-            
+
             result = await session.execute(sql, {"query": query})
             rows = result.fetchall()
-            
+
             knowledge_results = []
             for row in rows:
                 knowledge_results.append({
@@ -112,8 +113,9 @@ class KnowledgeSearchAgent(SearchAgent):
                     "score": row.sim_score,
                     "metadata": {"quality_score": row.response_quality_score}
                 })
-            
+
             return knowledge_results
+
 
 class RealtimeInfoSearchAgent(SearchAgent):
     """실시간 정보 검색 에이전트"""

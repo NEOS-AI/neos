@@ -53,7 +53,7 @@ class RelatedQuery(BaseModel):
 # 의존성 함수들
 async def get_or_create_user(user_id: str) -> User:
     """사용자 조회 또는 생성"""
-    async with db_manager.get_session() as session:
+    async with await db_manager.get_session() as session:
         # 사용자 조회
         result = await session.execute(
             select(User).where(User.user_id == user_id)
@@ -89,7 +89,7 @@ async def save_query_history(
     tools_used: List[str]
 ) -> int:
     """쿼리 히스토리 저장"""
-    async with db_manager.get_session() as session:
+    async with await db_manager.get_session() as session:
         query_history = QueryHistory(
             user_id=user_id,
             original_query=original_query,
@@ -258,7 +258,7 @@ async def get_trending_queries(
 ):
     """인기 검색어 조회"""
     try:
-        async with db_manager.get_session() as session:
+        async with await db_manager.get_session() as session:
             from database.models import TrendingQuery as TrendingQueryModel
             
             result = await session.execute(
@@ -287,7 +287,7 @@ async def get_trending_queries(
 async def get_related_queries(query_id: int, limit: int = 5):
     """연관 검색어 조회"""
     try:
-        async with db_manager.get_session() as session:
+        async with await db_manager.get_session() as session:
             from database.models import RelatedQuery as RelatedQueryModel
             
             # 연관 쿼리 조회
@@ -321,7 +321,7 @@ async def get_user_query_history(
 ):
     """사용자 쿼리 히스토리 조회"""
     try:
-        async with db_manager.get_session() as session:
+        async with await db_manager.get_session() as session:
             result = await session.execute(
                 select(QueryHistory)
                 .where(QueryHistory.user_id == user_id)
@@ -361,7 +361,7 @@ async def clear_cache(cache_key: str):
 async def get_system_stats():
     """시스템 통계"""
     try:
-        async with db_manager.get_session() as session:
+        async with await db_manager.get_session() as session:
             # 총 쿼리 수
             total_queries = await session.execute(
                 select(QueryHistory.id).count()
