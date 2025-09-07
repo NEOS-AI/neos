@@ -4,7 +4,6 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-# from fastapi.staticfiles import StaticFiles
 import time
 import uuid
 
@@ -24,6 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TEST_EMBEDDING_ON_STARTUP = False  # 시작 시 임베딩 테스트 여부
+IS_DEBUG = settings.DEBUG
 
 
 @asynccontextmanager
@@ -98,15 +98,15 @@ app = FastAPI(
     """,
     version="0.1.0",
     lifespan=lifespan,
-    docs_url="/docs" if settings.DEBUG else None,
-    redoc_url="/redoc" if settings.DEBUG else None
+    docs_url="/docs" if IS_DEBUG else None,
+    redoc_url="/redoc" if IS_DEBUG else None
 )
 
 
 # CORS 미들웨어 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.DEBUG else ["https://yourdomain.com"],
+    allow_origins=["*"] if IS_DEBUG else ["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
@@ -157,7 +157,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={
             "error": "Internal server error",
             "request_id": request_id,
-            "detail": str(exc) if settings.DEBUG else "An unexpected error occurred"
+            "detail": str(exc) if IS_DEBUG else "An unexpected error occurred"
         }
     )
 
@@ -205,13 +205,14 @@ async def root():
         ]
     }
 
+
 # 시스템 정보 엔드포인트
 @app.get("/info")
 async def system_info():
     """시스템 정보 및 설정"""
     return {
         "system": {
-            "debug": settings.DEBUG,
+            "debug": IS_DEBUG,
             "log_level": settings.LOG_LEVEL,
             "api_prefix": settings.API_V1_PREFIX
         },
@@ -236,7 +237,7 @@ async def system_info():
     }
 
 # 개발용 테스트 엔드포인트 (디버그 모드에서만)
-if settings.DEBUG:
+if IS_DEBUG:
     @app.get("/debug/test-workflow")
     async def test_workflow():
         """워크플로우 테스트 (디버그 전용)"""
@@ -267,17 +268,14 @@ if settings.DEBUG:
         except Exception as e:
             return {"error": str(e), "cache_available": False}
 
-# 정적 파일 서빙 (선택사항)
-# app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     uvicorn.run(
         app,
         host="0.0.0.0",
         port=8518,
-        # reload=settings.DEBUG,
         log_level=settings.LOG_LEVEL.lower(),
         access_log=True
     )
