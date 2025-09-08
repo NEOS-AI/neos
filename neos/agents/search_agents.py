@@ -6,6 +6,7 @@ from neos.config.settings import settings
 from neos.workflow.state import SearchResult
 from neos.utils.cache import cache_manager
 from neos.database.connection import db_manager
+# from neos.database.models import QueryHistory
 
 from .base import SearchAgent
 
@@ -25,22 +26,17 @@ class KnowledgeSearchAgent(SearchAgent):
     async def execute(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         if not self.validate_input(query, context):
             return {"success": False, "error": "Invalid input"}
-        
+
         # 캐시 확인
         cache_key = f"knowledge_search:{hash(query)}"
         cached_result = await cache_manager.get(cache_key)
         if cached_result:
             return cached_result
-        
+
         try:
-            # 벡터 유사도 검색
-            similar_queries = await self._search_similar_queries(query, context.get('query_embedding'))
-            
-            # 지식 베이스 검색 (여기서는 과거 쿼리 결과 활용)
-            knowledge_results = await self._search_knowledge_base(query)
-            
+            similar_queries = await self._search_knowledge_base(query, context.get('query_embedding'))
             results = []
-            for item in similar_queries + knowledge_results:
+            for item in similar_queries:
                 results.append(SearchResult(
                     source="knowledge_base",
                     title=item.get("title", "Knowledge Item"),
@@ -48,23 +44,20 @@ class KnowledgeSearchAgent(SearchAgent):
                     score=item.get("score", 0.0),
                     metadata=item.get("metadata", {})
                 ))
-            
+
             result = self.format_output(results, {"search_type": "knowledge"})
-            
+
             # 결과 캐싱
             await cache_manager.set(cache_key, result, ttl=3600)
             return result
-            
         except Exception as e:
             return {"success": False, "error": str(e), "agent": self.name}
-    
-    async def _search_similar_queries(self, query: str, query_embedding: List[float]) -> List[Dict[str, Any]]:
-        """유사한 쿼리 검색"""
-        if not query_embedding:
-            return []
 
+
+    async def _search_knowledge_base(self, query: str, query_embedding: List[float]) -> List[Dict[str, Any]]:
+        """지식 베이스 검색 (트리그램 기반)"""
         async with await db_manager.get_session() as session:
-            # 벡터 유사도 검색
+            #TODO pg_search 등 paradedb 기능 도입!
             sql = text("""
                 SELECT original_query, search_results, response_quality_score,
                        query_vector <=> :query_vector as distance
@@ -75,34 +68,6 @@ class KnowledgeSearchAgent(SearchAgent):
             """)
             
             result = await session.execute(sql, {"query_vector": str(query_embedding)})
-            rows = result.fetchall()
-            
-            similar_queries = []
-            for row in rows:
-                if row.distance < 0.3:  # 유사도 임계값
-                    similar_queries.append({
-                        "title": row.original_query,
-                        "content": str(row.search_results) if row.search_results else "",
-                        "score": 1 - row.distance,
-                        "metadata": {"quality_score": row.response_quality_score}
-                    })
-            
-            return similar_queries
-
-
-    async def _search_knowledge_base(self, query: str) -> List[Dict[str, Any]]:
-        """지식 베이스 검색 (트리그램 기반)"""
-        async with await db_manager.get_session() as session:
-            sql = text("""
-                SELECT original_query, search_results, response_quality_score,
-                       similarity(original_query, :query) as sim_score
-                FROM query_history
-                WHERE similarity(original_query, :query) > 0.3
-                ORDER BY similarity(original_query, :query) DESC
-                LIMIT 3
-            """)
-
-            result = await session.execute(sql, {"query": query})
             rows = result.fetchall()
 
             knowledge_results = []
