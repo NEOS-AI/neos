@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Multi-Agent AI System CLI Tool
 에이전트와 워크플로우를 테스트하고 관리하는 CLI 도구
@@ -59,7 +60,7 @@ def cli(verbose: bool, profile: bool):
     """
     cli_state["verbose"] = verbose
     cli_state["profile"] = profile
-
+    
     if verbose:
         console.print("🔧 Verbose mode enabled", style="dim")
     if profile:
@@ -134,21 +135,21 @@ async def _check_services() -> Dict[str, Any]:
         "openai": False,
         "workflow": False
     }
-
+    
     try:
         # 데이터베이스
         status["database"] = await db_manager.health_check()
     except Exception as e:
         if cli_state["verbose"]:
             console.print(f"DB check error: {e}", style="dim red")
-
+    
     try:
         # 캐시
         status["cache"] = await cache_manager.health_check()
     except Exception as e:
         if cli_state["verbose"]:
             console.print(f"Cache check error: {e}", style="dim red")
-
+    
     try:
         # OpenAI
         test_embedding = await embedding_manager.get_embedding("test", use_cache=False)
@@ -191,8 +192,7 @@ def _check_agents() -> Dict[str, Any]:
         status[category] = {}
         for name, agent_class in agent_classes.items():
             try:
-                agent = agent_class()
-                print(agent)
+                _ = agent_class()
                 status[category][name] = True
             except Exception as e:
                 status[category][name] = False
@@ -202,7 +202,7 @@ def _check_agents() -> Dict[str, Any]:
 
 def _display_status_results(config_status: Dict, services_status: Dict, agents_status: Dict):
     """상태 결과 표시"""
-
+    
     # 설정 상태
     config_table = Table(title="📋 Configuration Status")
     config_table.add_column("Category", style="cyan")
@@ -514,6 +514,7 @@ def workflow():
 @click.option('--session-id', default=None, help='세션 ID')
 def test(query: str, output: str, user_id: Optional[str], session_id: Optional[str]):
     """전체 워크플로우 테스트
+    
     QUERY: 테스트할 쿼리
     """
     user_id = user_id or cli_state["user_id"]
@@ -840,7 +841,7 @@ def config():
     providers_table.add_column("Available", style="green")
     providers_table.add_column("Current", style="yellow")
     providers_table.add_column("Models", style="magenta")
-
+    
     available_providers = llm_factory.get_available_providers()
     current_provider = settings.LLM_PROVIDER
     
@@ -869,9 +870,11 @@ def config():
     current_table.add_row("LLM Model", settings.LLM_MODEL)
     current_table.add_row("LLM Temperature", str(settings.LLM_TEMPERATURE))
     current_table.add_row("Embedding Model", settings.EMBEDDING_MODEL)
+    current_table.add_row("Search System", "Hybrid (Vector + Keyword)")
+    current_table.add_row("Vector Extension", "pgvector")
     current_table.add_row("Debug Mode", str(settings.DEBUG))
     current_table.add_row("Log Level", settings.LOG_LEVEL)
-    
+
     console.print()
     console.print(current_table)
 
