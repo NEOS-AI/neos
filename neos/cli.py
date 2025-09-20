@@ -4,6 +4,7 @@ Multi-Agent AI System CLI Tool
 에이전트와 워크플로우를 테스트하고 관리하는 CLI 도구
 """
 
+import traceback
 import asyncio
 import json
 import time
@@ -545,39 +546,69 @@ async def _test_full_workflow(query: str, user_id: str, session_id: str, progres
     """전체 워크플로우 테스트"""
     try:
         start_time = time.time()
-        
+
         workflow_input = {
             "user_id": user_id,
             "session_id": session_id,
             "query": query
         }
-        
-        progress.update(task, description="🔍 Classifying query...")
+
+        if cli_state["verbose"]:
+            console.print(f"[dim]Starting workflow with input: {workflow_input}[/dim]")
+
+        if progress:
+            progress.update(task, description="🔍 Classifying query...")
         await asyncio.sleep(0.1)  # UI 업데이트를 위한 짧은 대기
-        
-        progress.update(task, description="🤖 Executing agents...")
-        
-        result = await multi_agent_workflow.execute_workflow(workflow_input)
-        
+
+        if progress:
+            progress.update(task, description="🤖 Executing agents...")
+
+        if cli_state["verbose"]:
+            console.print("[dim]Calling multi_agent_workflow.execute_workflow...[/dim]")
+
+        # Add timeout to prevent hanging
+        try:
+            result = await asyncio.wait_for(
+                multi_agent_workflow.execute_workflow(workflow_input),
+                timeout=300  # 5 minutes timeout
+            )
+        except asyncio.TimeoutError:
+            if cli_state["verbose"]:
+                console.print("[red]Workflow execution timed out after 5 minutes[/red]")
+            return {
+                "success": False,
+                "error": "Workflow execution timed out after 5 minutes",
+                "query": query,
+                "timestamp": datetime.now().isoformat()
+            }
+
+        if cli_state["verbose"]:
+            console.print(f"[dim]Workflow completed with result keys: {list(result.keys()) if result else 'None'}[/dim]")
+
         execution_time = time.time() - start_time
         result["total_execution_time_ms"] = int(execution_time * 1000)
         result["query"] = query
         result["user_id"] = user_id
         result["session_id"] = session_id
         result["timestamp"] = datetime.now().isoformat()
-        
+
         return result
-        
+
     except Exception as e:
+        if cli_state["verbose"]:
+            console.print(f"[red]Workflow exception: {e}[/red]")
+            console.print(f"[dim]Traceback: {traceback.format_exc()}[/dim]")
         return {
             "success": False,
             "error": str(e),
             "query": query,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "traceback": traceback.format_exc() if cli_state["verbose"] else None
         }
 
 def _display_workflow_result(result: Dict[str, Any]):
     """워크플로우 결과 표시"""
+    console.print(result)
     if result.get("success", False):
         console.print("✅ [green]Workflow executed successfully[/green]")
         

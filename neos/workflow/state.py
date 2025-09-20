@@ -59,6 +59,7 @@ class AgentState(TypedDict):
     execution_start: datetime
     execution_steps: List[Dict[str, Any]]
     errors: Annotated[List[str], operator.add]
+    retry_count: int
     
     # 성능 지표
     execution_time_ms: Optional[int]
@@ -70,7 +71,8 @@ class WorkflowConfig:
     """워크플로우 설정"""
     MAX_ITERATIONS = 10
     TIMEOUT_SECONDS = 300
-    MIN_QUALITY_SCORE = 0.7
+    MIN_QUALITY_SCORE = 0.4  # Lower threshold to prevent infinite loops
+    MAX_RETRIES = 2  # Maximum number of retries for quality improvement
     
     # 에이전트 타입
     SEARCH_AGENTS = [
