@@ -4,6 +4,10 @@
 import asyncio
 import logging
 from datetime import datetime
+import sys
+
+sys.path.append(".")   # 현재 디렉토리를 sys.path에 추가
+sys.path.append("..")  # 상위 디렉토리를 sys.path에 추가
 
 # 로깅 설정
 logging.basicConfig(
@@ -19,7 +23,7 @@ async def test_refactored_workflow():
 
     try:
         # 리팩토링된 워크플로우 import
-        from neos.workflow import MultiAgentWorkflow, multi_agent_workflow
+        from neos.workflow import multi_agent_workflow
 
         print("✅ 모듈 import 성공")
 

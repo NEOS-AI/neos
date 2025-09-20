@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
-"""MCP 기능 테스트 예제"""
-
 import asyncio
 import logging
-from datetime import datetime
+import sys
+
+sys.path.append(".")   # 현재 디렉토리를 sys.path에 추가
+sys.path.append("..")  # 상위 디렉토리를 sys.path에 추가
 
 from neos.tools.tool_selector import tool_selector, ToolContext
 from neos.tools.mcp_integration import mcp_manager
