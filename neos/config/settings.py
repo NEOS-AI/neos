@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     REDIS_URL: str = env_vars.get("REDIS_URL", "redis://localhost:6379")
     REDIS_TTL: int = int(env_vars.get("REDIS_TTL", 3600))  # 1시간
 
+    # 캐시 설정
+    WORKFLOW_RESPONSE_CACHE_TTL: int = int(env_vars.get("WORKFLOW_RESPONSE_CACHE_TTL", 86400))  # 24시간
+
     # AI 서비스 API 키
     OPENAI_API_KEY: str = env_vars.get("OPENAI_API_KEY", "")
     ANTHROPIC_API_KEY: Optional[str] = env_vars.get("ANTHROPIC_API_KEY", None)

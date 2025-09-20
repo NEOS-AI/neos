@@ -1,6 +1,7 @@
 from typing import Dict, Any, List
 from datetime import datetime
 import asyncio
+import hashlib
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -21,6 +22,7 @@ from neos.agents.generation_agents import (
 )
 from neos.utils.embeddings import embedding_manager
 from neos.utils.cache import cache_manager
+from neos.config.settings import settings
 
 from .state import AgentState, WorkflowConfig
 
@@ -869,11 +871,30 @@ class MultiAgentWorkflow:
     
     async def execute_workflow(self, user_input: Dict[str, Any]) -> Dict[str, Any]:
         """워크플로우 실행"""
+        query = user_input["query"]
+
+        # 캐시 키 생성 (쿼리 기반) - 일관성을 위해 hashlib 사용
+        query_normalized = query.strip().lower()
+        query_hash = hashlib.md5(query_normalized.encode('utf-8')).hexdigest()
+        cache_key = cache_manager.make_key("workflow_response", query_hash)
+
+        # 캐시된 응답 확인
+        print(f"[DEBUG] Checking workflow response cache with key: {cache_key}")
+        cached_response = await cache_manager.get(cache_key, deserialize="json")
+        if cached_response:
+            print("[DEBUG] Found cached workflow response, returning cached result")
+            # 캐시 히트 정보 추가
+            cached_response["cache_hit"] = True
+            cached_response["timestamp"] = datetime.utcnow().isoformat()
+            return cached_response
+
+        print("[DEBUG] No cached response found, executing workflow")
+
         # 초기 상태 생성
         initial_state = AgentState(
             user_id=user_input["user_id"],
             session_id=user_input["session_id"],
-            original_query=user_input["query"],
+            original_query=query,
             query_intent=None,
             query_embedding=None,
             query_classification=None,
@@ -894,26 +915,43 @@ class MultiAgentWorkflow:
             tokens_used=None,
             api_calls_made=None
         )
-        
+
         try:
             # 워크플로우 실행
             config = {"configurable": {"thread_id": user_input["session_id"]}}
             final_state = await self.graph.ainvoke(initial_state, config)
-            
-            return {
+
+            result = {
                 "success": True,
                 "response": final_state["final_response"],
                 "metadata": final_state["response_metadata"],
                 "execution_time_ms": final_state["execution_time_ms"],
                 "quality_score": final_state.get("quality_score", 0.0),
-                "errors": final_state["errors"]
+                "errors": final_state["errors"],
+                "cache_hit": False
             }
-            
+
+            # 성공적인 결과를 캐시에 저장
+            if result["success"] and result["response"]:
+                print(f"[DEBUG] Caching workflow response for {settings.WORKFLOW_RESPONSE_CACHE_TTL} seconds")
+                # 캐시할 때는 cache_hit 정보 제외
+                cache_data = {k: v for k, v in result.items() if k != "cache_hit"}
+                await cache_manager.set(
+                    cache_key,
+                    cache_data,
+                    ttl=settings.WORKFLOW_RESPONSE_CACHE_TTL,
+                    serialize="json"
+                )
+                print("[DEBUG] Workflow response cached successfully")
+
+            return result
+
         except Exception as e:
             return {
                 "success": False,
                 "error": str(e),
-                "partial_state": initial_state
+                "partial_state": initial_state,
+                "cache_hit": False
             }
 
 
