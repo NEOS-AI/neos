@@ -64,6 +64,19 @@ class Settings(BaseSettings):
     TRACK_AGENT_PERFORMANCE: bool = True
     TRACK_WORKFLOW_METRICS: bool = True
 
+    # MCP (Model Context Protocol) 설정
+    MCP_ENABLED: bool = bool(env_vars.get("MCP_ENABLED", True))
+    MCP_SERVER_HOST: str = env_vars.get("MCP_SERVER_HOST", "localhost")
+    MCP_SERVER_PORT: int = int(env_vars.get("MCP_SERVER_PORT", 8000))
+    MCP_TIMEOUT: int = int(env_vars.get("MCP_TIMEOUT", 30))
+    MCP_RETRY_COUNT: int = int(env_vars.get("MCP_RETRY_COUNT", 3))
+    MCP_FALLBACK_ENABLED: bool = bool(env_vars.get("MCP_FALLBACK_ENABLED", True))
+
+    # 도구 선택 설정
+    TOOL_SELECTION_STRATEGY: str = env_vars.get("TOOL_SELECTION_STRATEGY", "mcp_fallback")  # always, mcp_available, mcp_fallback, preference_based
+    TOOL_QUALITY_THRESHOLD: float = float(env_vars.get("TOOL_QUALITY_THRESHOLD", 0.7))
+    TOOL_PERFORMANCE_PRIORITY: bool = bool(env_vars.get("TOOL_PERFORMANCE_PRIORITY", False))
+
     # 환경 설정
     ENVIRONMENT: str = "development"  # development, staging, production
     

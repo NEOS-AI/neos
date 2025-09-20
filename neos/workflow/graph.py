@@ -23,18 +23,20 @@ from neos.agents.generation_agents import (
 from neos.utils.embeddings import embedding_manager
 from neos.utils.cache import cache_manager
 from neos.config.settings import settings
+from neos.tools.tool_selector import tool_selector, ToolContext
 
 from .state import AgentState, WorkflowConfig
 
 
 class MultiAgentWorkflow:
     """멀티 에이전트 워크플로우 관리 클래스"""
-    
+
     def __init__(self):
         self.agents = self._initialize_agents()
         self.graph = self._create_workflow_graph()
         self.config = WorkflowConfig()
-    
+        self.tool_selector = tool_selector
+
     def _initialize_agents(self) -> Dict[str, Any]:
         """에이전트 초기화"""
         return {
@@ -53,7 +55,8 @@ class MultiAgentWorkflow:
             "file_processing": FileProcessingAgent(),
             "task_creation": TaskCreationAgent()
         }
-    
+
+
     def _create_workflow_graph(self) -> StateGraph:
         """워크플로우 그래프 생성"""
         workflow = StateGraph(AgentState)
@@ -133,7 +136,8 @@ class MultiAgentWorkflow:
         })
         
         return state
-    
+
+
     async def _classify_intent(self, query: str) -> str:
         """쿼리 의도 분류"""
         query_lower = query.lower()
@@ -151,7 +155,8 @@ class MultiAgentWorkflow:
             return "task_execution"
         else:
             return "information_seeking"
-    
+
+
     def _determine_required_agents(self, query: str, intent: str) -> List[str]:
         """필요한 에이전트 결정"""
         agents = []
@@ -182,8 +187,8 @@ class MultiAgentWorkflow:
         return list(set(agents))  # 중복 제거
     
     async def _orchestrate_search(self, state: AgentState) -> Dict[str, Any]:
-        """검색 에이전트들 오케스트레이션"""
-        print("[DEBUG] Starting search orchestration...")
+        """검색 에이전트들 오케스트레이션 (MCP 통합)"""
+        print("[DEBUG] Starting search orchestration with MCP integration...")
         required_agents = state["required_agents"]
         search_agents = [agent for agent in required_agents if agent in self.config.SEARCH_AGENTS]
         print(f"[DEBUG] Search agents to execute: {search_agents}")
@@ -196,6 +201,11 @@ class MultiAgentWorkflow:
                 "timestamp": datetime.utcnow().isoformat()
             })
             return state
+
+        # MCP 도구 선택기 초기화 (필요시)
+        if not self.tool_selector.initialized:
+            print("[DEBUG] Initializing tool selector...")
+            await self.tool_selector.initialize()
         
         # 검색 결과 캐시 키 생성 (쿼리와 에이전트 조합 기반)
         search_cache_key = cache_manager.make_key(
@@ -215,9 +225,42 @@ class MultiAgentWorkflow:
             })
             return state
         
-        # 병렬 검색 실행
-        print("[DEBUG] Creating search tasks...")
+        # MCP 및 기본 에이전트 병렬 검색 실행
+        print("[DEBUG] Creating search tasks with MCP integration...")
         search_tasks = []
+
+        # 도구 컨텍스트 생성
+        tool_context = ToolContext(
+            query=state["original_query"],
+            user_id=state["user_id"],
+            session_id=state["session_id"],
+            intent=state.get("query_intent"),
+            urgency="normal",
+            quality_requirement="standard",
+            mcp_preference=True,
+            fallback_allowed=True
+        )
+
+        # MCP 웹 검색 도구 실행 시도
+        if any("search" in agent for agent in search_agents):
+            try:
+                print("[DEBUG] Attempting MCP web search...")
+                mcp_search_params = {
+                    "query": state["original_query"],
+                    "max_results": 10
+                }
+
+                mcp_task = self.tool_selector.select_and_execute_tool(
+                    "web_search",
+                    mcp_search_params,
+                    tool_context
+                )
+                search_tasks.append(mcp_task)
+                print("[DEBUG] MCP search task created")
+            except Exception as e:
+                print(f"[WARNING] Failed to create MCP search task: {e}")
+
+        # 기본 에이전트 태스크 생성
         for agent_name in search_agents:
             try:
                 print(f"[DEBUG] Setting up task for agent: {agent_name}")
@@ -244,18 +287,56 @@ class MultiAgentWorkflow:
             )
             print(f"[DEBUG] Search execution completed, got {len(search_results)} results")
 
-            # 결과 처리 및 수집
+            # 결과 처리 및 수집 (MCP 결과 포함)
             valid_results = []
             seen_content = set()  # Track seen content for deduplication
+            mcp_results_count = 0
 
             for i, result in enumerate(search_results):
-                print(f"[DEBUG] Processing result {i+1}/{len(search_results)} from agent {search_agents[i]}")
-                if isinstance(result, Exception):
-                    print(f"[ERROR] Search agent {search_agents[i]} failed: {str(result)}")
-                    state["errors"].append(f"Search agent {search_agents[i]} failed: {str(result)}")
-                elif result.get("success"):
-                    agent_results = result.get("result", [])
-                    print(f"[DEBUG] Agent {search_agents[i]} returned {len(agent_results)} results")
+                # MCP 결과인지 확인
+                is_mcp_result = isinstance(result, tuple) and len(result) == 2
+
+                if is_mcp_result:
+                    mcp_result, selected_tool = result
+                    print(f"[DEBUG] Processing MCP result from tool: {selected_tool}")
+
+                    if mcp_result.success:
+                        # MCP 결과를 기존 형식으로 변환
+                        mcp_data = mcp_result.data
+                        if isinstance(mcp_data, list):
+                            agent_results = mcp_data
+                        elif isinstance(mcp_data, dict) and "results" in mcp_data:
+                            agent_results = mcp_data["results"]
+                        else:
+                            agent_results = []
+
+                        print(f"[DEBUG] MCP tool {selected_tool} returned {len(agent_results)} results")
+                        mcp_results_count += len(agent_results)
+                    else:
+                        print(f"[ERROR] MCP tool failed: {mcp_result.error}")
+                        state["errors"].append(f"MCP tool failed: {mcp_result.error}")
+                        continue
+
+                else:
+                    # 기본 에이전트 결과 처리
+                    agent_index = i - (1 if any("search" in agent for agent in search_agents) else 0)
+                    if agent_index < len(search_agents):
+                        agent_name = search_agents[agent_index]
+                        print(f"[DEBUG] Processing result {i+1}/{len(search_results)} from agent {agent_name}")
+
+                    if isinstance(result, Exception):
+                        if agent_index < len(search_agents):
+                            print(f"[ERROR] Search agent {search_agents[agent_index]} failed: {str(result)}")
+                            state["errors"].append(f"Search agent {search_agents[agent_index]} failed: {str(result)}")
+                        continue
+                    elif result.get("success"):
+                        agent_results = result.get("result", [])
+                        if agent_index < len(search_agents):
+                            print(f"[DEBUG] Agent {search_agents[agent_index]} returned {len(agent_results)} results")
+                    else:
+                        if agent_index < len(search_agents):
+                            print(f"[WARNING] Agent {search_agents[agent_index]} returned unsuccessful result: {result}")
+                        continue
 
                     # Deduplicate results based on title and content similarity
                     unique_results = []
@@ -274,18 +355,16 @@ class MultiAgentWorkflow:
                     print(f"[DEBUG] After deduplication: {len(unique_results)} unique results from {len(agent_results)} total")
                     state["search_results"].extend(unique_results)
                     valid_results.extend(unique_results)
-                else:
-                    print(f"[WARNING] Agent {search_agents[i]} returned unsuccessful result: {result}")
 
             # 유효한 결과가 있으면 캐싱 (30분)
             if valid_results:
                 print(f"[DEBUG] Caching {len(valid_results)} valid search results")
                 await cache_manager.set(search_cache_key, valid_results, ttl=1800, serialize="pickle")
 
-            print(f"[DEBUG] Search orchestration completed with {len(valid_results)} total results")
+            print(f"[DEBUG] Search orchestration completed with {len(valid_results)} total results (including {mcp_results_count} MCP results)")
             state["execution_steps"].append({
                 "step": "search_orchestration",
-                "result": f"completed - {len([r for r in search_results if not isinstance(r, Exception)])} agents succeeded",
+                "result": f"completed - {len([r for r in search_results if not isinstance(r, Exception)])} agents/tools succeeded, MCP results: {mcp_results_count}",
                 "timestamp": datetime.utcnow().isoformat()
             })
 
@@ -297,7 +376,8 @@ class MultiAgentWorkflow:
             state["errors"].append(f"Search orchestration failed: {str(e)}")
         
         return state
-    
+
+
     async def _orchestrate_analysis(self, state: AgentState) -> Dict[str, Any]:
         """분석 에이전트들 오케스트레이션"""
         required_agents = state["required_agents"]
@@ -606,7 +686,8 @@ class MultiAgentWorkflow:
         })
         
         return state
-    
+
+
     def _create_search_summary(self, results: List[Any]) -> str:
         """검색 결과 요약 생성"""
         if not results:
@@ -693,6 +774,7 @@ class MultiAgentWorkflow:
         except Exception:
             # Fallback for invalid URLs
             return f"\n   *출처: [링크]({url})*"
+
 
     def _categorize_results_by_topic(self, results: List[Any]) -> Dict[str, List[Any]]:
         """Categorize search results by company/topic"""
