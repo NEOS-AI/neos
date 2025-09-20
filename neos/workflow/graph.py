@@ -621,7 +621,7 @@ class MultiAgentWorkflow:
         if not any(categorized_results.values()):
             return "## 검색 결과\n검색된 고유한 결과가 없습니다."
 
-        summary_lines = ["## 2025년 주요 IT 기업 주식 전망 분석"]
+        summary_lines = []
 
         # Company-specific sections with clear outlook statements
         company_sections = {
