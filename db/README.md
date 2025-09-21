@@ -16,7 +16,7 @@ Running valkey:
 ```bash
 docker pull valkey/valkey
 
-docker run --name my-valkey -p 6379:6379 -d valkey/valkey
+docker run --name neos-valkey -p 6379:6379 -d valkey/valkey
 ```
 
 ## Connecting to the database
