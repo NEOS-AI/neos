@@ -249,7 +249,7 @@ class RealtimeInfoSearchAgent(SearchAgent):
                     return []
 
         except asyncio.TimeoutError:
-            print(f"[ERROR] Tavily search timed out after 30 seconds")
+            print("[ERROR] Tavily search timed out after 30 seconds")
             return []
         except Exception as e:
             print(f"[ERROR] Tavily search error: {e}")
