@@ -292,6 +292,30 @@ Query> help                            # 도움말
 Query> exit                            # 종료
 ```
 
+#### 7. **MCP 테스트**
+```bash
+# MCP 서버 및 도구 상태 확인
+python neos/cli.py mcp status
+
+# 실제 웹 검색 테스트
+python -m neos.cli mcp test-tool web_search_mcp -p '{"query":"Python 최신 기능","max_results":5}'
+
+# 파일 시스템 작업 테스트  
+python -m neos.cli mcp test-tool file_processing_mcp -p '{"operation":"list","file_path":"."}'
+
+# 데이터베이스 상태 확인
+python -m neos.cli mcp test-tool database_mcp -p '{"operation":"health_check"}'
+
+# Git 상태 확인
+python -m neos.cli mcp test-tool git_mcp -p '{"operation":"status"}'
+
+# 모든 도구 일괄 테스트
+python -m neos.cli mcp test-all
+
+# 새 도구 템플릿 생성
+python -m neos.cli mcp register custom_api api_integration -d "커스텀 API 도구"
+```
+
 ### 테스트 마커 및 분류
 
 #### 테스트 마커

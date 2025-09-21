@@ -34,6 +34,8 @@ try:
     from neos.agents.search_agents import KnowledgeSearchAgent, RealtimeInfoSearchAgent, RealtimeDataSearchAgent
     from neos.agents.analysis_agents import DataAnalysisAgent, ComparativeAnalysisAgent
     from neos.agents.generation_agents import ImageGenerationAgent, ApiCallAgent, FileProcessingAgent, TaskCreationAgent
+    from neos.tools.mcp_integration import mcp_manager, MCPTool, MCPToolType, MCPToolResult
+    from neos.tools.tool_selector import tool_selector
 except ImportError as e:
     click.echo(f"❌ 모듈 import 실패: {e}")
     click.echo("프로젝트 루트 디렉토리에서 실행해주세요.")
@@ -134,7 +136,9 @@ async def _check_services() -> Dict[str, Any]:
         "database": False,
         "cache": False,
         "openai": False,
-        "workflow": False
+        "workflow": False,
+        "mcp": False,
+        "tool_selector": False
     }
     
     try:
@@ -165,7 +169,25 @@ async def _check_services() -> Dict[str, Any]:
     except Exception as e:
         if cli_state["verbose"]:
             console.print(f"Workflow check error: {e}", style="dim red")
-    
+
+    try:
+        # MCP 매니저
+        if settings.MCP_ENABLED:
+            init_results = await mcp_manager.initialize()
+            status["mcp"] = any(init_results.values()) if init_results else False
+        else:
+            status["mcp"] = False
+    except Exception as e:
+        if cli_state["verbose"]:
+            console.print(f"MCP check error: {e}", style="dim red")
+
+    try:
+        # 도구 선택기
+        status["tool_selector"] = await tool_selector.health_check()
+    except Exception as e:
+        if cli_state["verbose"]:
+            console.print(f"Tool selector check error: {e}", style="dim red")
+
     return status
 
 def _check_agents() -> Dict[str, Any]:
@@ -908,6 +930,559 @@ def config():
 
     console.print()
     console.print(current_table)
+
+@cli.group()
+def mcp():
+    """MCP (Model Context Protocol) 관리"""
+    pass
+
+@mcp.command()
+def mcp_status():
+    """MCP 서버 및 도구 상태 확인"""
+    console.print(Panel.fit("🔧 MCP Status Check", style="bold blue"))
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console
+    ) as progress:
+
+        task = progress.add_task("Checking MCP status...", total=None)
+
+        status_result = asyncio.run(_check_mcp_status())
+
+        progress.update(task, description="✅ MCP status checked")
+
+    _display_mcp_status(status_result)
+
+async def _check_mcp_status() -> Dict[str, Any]:
+    """MCP 상태 확인"""
+    status = {
+        "enabled": settings.MCP_ENABLED,
+        "config": {
+            "host": settings.MCP_SERVER_HOST,
+            "port": settings.MCP_SERVER_PORT,
+            "timeout": settings.MCP_TIMEOUT,
+            "retry_count": settings.MCP_RETRY_COUNT,
+            "fallback_enabled": settings.MCP_FALLBACK_ENABLED
+        },
+        "manager_status": False,
+        "initialized_tools": {},
+        "available_tools": [],
+        "tool_selector_status": False
+    }
+
+    if not settings.MCP_ENABLED:
+        return status
+
+    try:
+        # MCP 매니저 초기화 및 상태 확인
+        init_results = await mcp_manager.initialize()
+        status["manager_status"] = True
+        status["initialized_tools"] = init_results
+
+        # 사용 가능한 도구 목록
+        available_tools = mcp_manager.get_available_tools()
+        status["available_tools"] = [
+            {
+                "name": tool.name,
+                "type": tool.tool_type.value,
+                "description": tool.description,
+                "capabilities": tool.capabilities
+            }
+            for tool in available_tools
+        ]
+
+    except Exception as e:
+        status["error"] = str(e)
+
+    try:
+        # 도구 선택기 상태
+        status["tool_selector_status"] = await tool_selector.health_check()
+    except Exception as e:
+        status["tool_selector_error"] = str(e)
+
+    return status
+
+def _display_mcp_status(status: Dict[str, Any]):
+    """MCP 상태 표시"""
+
+    # 기본 설정
+    config_table = Table(title="⚙️ MCP Configuration")
+    config_table.add_column("Setting", style="cyan")
+    config_table.add_column("Value", style="green")
+
+    config_table.add_row("Enabled", "✅" if status["enabled"] else "❌")
+    config_table.add_row("Host", status["config"]["host"])
+    config_table.add_row("Port", str(status["config"]["port"]))
+    config_table.add_row("Timeout", f"{status['config']['timeout']}s")
+    config_table.add_row("Retry Count", str(status["config"]["retry_count"]))
+    config_table.add_row("Fallback Enabled", "✅" if status["config"]["fallback_enabled"] else "❌")
+    config_table.add_row("Manager Status", "✅" if status["manager_status"] else "❌")
+    config_table.add_row("Tool Selector", "✅" if status["tool_selector_status"] else "❌")
+
+    console.print(config_table)
+
+    if not status["enabled"]:
+        console.print("\n[yellow]MCP is disabled. Set MCP_ENABLED=true to enable.[/yellow]")
+        return
+
+    # 초기화된 도구들
+    if status.get("initialized_tools"):
+        init_table = Table(title="🔧 Tool Initialization Results")
+        init_table.add_column("Tool", style="cyan")
+        init_table.add_column("Status", style="green")
+
+        for tool_name, is_init in status["initialized_tools"].items():
+            status_icon = "✅" if is_init else "❌"
+            init_table.add_row(tool_name, f"{status_icon} {'Initialized' if is_init else 'Failed'}")
+
+        console.print()
+        console.print(init_table)
+
+    # 사용 가능한 도구들
+    if status.get("available_tools"):
+        tools_table = Table(title="🛠️ Available MCP Tools")
+        tools_table.add_column("Name", style="cyan")
+        tools_table.add_column("Type", style="magenta")
+        tools_table.add_column("Description", style="green")
+        tools_table.add_column("Capabilities", style="blue")
+
+        for tool in status["available_tools"]:
+            capabilities = ", ".join(tool["capabilities"][:3])
+            if len(tool["capabilities"]) > 3:
+                capabilities += "..."
+
+            tools_table.add_row(
+                tool["name"],
+                tool["type"],
+                tool["description"][:50] + "..." if len(tool["description"]) > 50 else tool["description"],
+                capabilities
+            )
+
+        console.print()
+        console.print(tools_table)
+
+    # 에러가 있다면 표시
+    if status.get("error"):
+        console.print()
+        console.print(Panel(status["error"], title="❌ Error", style="red"))
+
+@mcp.command()
+@click.argument('tool_name')
+@click.option('--params', '-p', help='도구 실행 파라미터 (JSON 형식)')
+def test_tool(tool_name: str, params: Optional[str]):
+    """특정 MCP 도구 테스트"""
+    console.print(f"🧪 Testing MCP tool: [bold]{tool_name}[/bold]")
+
+    # 파라미터 파싱
+    tool_params = {}
+    if params:
+        try:
+            tool_params = json.loads(params)
+        except json.JSONDecodeError as e:
+            console.print(f"❌ Invalid JSON parameters: {e}")
+            return
+
+    result = asyncio.run(_test_mcp_tool(tool_name, tool_params))
+    _display_mcp_tool_result(tool_name, result)
+
+async def _test_mcp_tool(tool_name: str, params: Dict[str, Any]) -> MCPToolResult:
+    """MCP 도구 테스트"""
+    try:
+        if not settings.MCP_ENABLED:
+            return MCPToolResult(
+                success=False,
+                data=None,
+                error="MCP is not enabled",
+                tool_name=tool_name
+            )
+
+        # MCP 매니저 초기화 (필요시)
+        if not mcp_manager.initialization_complete:
+            await mcp_manager.initialize()
+
+        return await mcp_manager.execute_tool(tool_name, params)
+
+    except Exception as e:
+        return MCPToolResult(
+            success=False,
+            data=None,
+            error=str(e),
+            tool_name=tool_name
+        )
+
+def _display_mcp_tool_result(tool_name: str, result: MCPToolResult):
+    """MCP 도구 결과 표시"""
+    if result.success:
+        console.print(f"✅ [green]MCP tool {tool_name} executed successfully[/green]")
+
+        result_table = Table(title=f"🛠️ {tool_name} Result")
+        result_table.add_column("Field", style="cyan")
+        result_table.add_column("Value", style="green")
+
+        result_table.add_row("Tool Name", result.tool_name)
+        result_table.add_row("Execution Time", f"{result.execution_time_ms}ms")
+        result_table.add_row("Success", "✅")
+
+        if result.metadata:
+            for key, value in result.metadata.items():
+                result_table.add_row(key.replace("_", " ").title(), str(value))
+
+        console.print(result_table)
+
+        # 결과 데이터 표시
+        if result.data:
+            console.print()
+            if isinstance(result.data, (list, dict)):
+                console.print(Panel(Syntax(json.dumps(result.data, indent=2, ensure_ascii=False), "json"), title="📊 Data", style="blue"))
+            else:
+                console.print(Panel(str(result.data), title="📊 Data", style="blue"))
+
+    else:
+        console.print(f"❌ [red]MCP tool {tool_name} failed[/red]")
+        if result.error:
+            console.print(Panel(result.error, title="🚨 Error", style="red"))
+
+@mcp.command()
+@click.option('--type', 'tool_type', type=click.Choice(['web_search', 'file_processing', 'data_analysis', 'api_integration', 'code_execution', 'image_processing']), help='특정 도구 타입만 테스트')
+def test_all(tool_type: Optional[str]):
+    """모든 MCP 도구 테스트"""
+    console.print("🔄 Testing all MCP tools...")
+
+    results = asyncio.run(_test_all_mcp_tools(tool_type))
+    _display_all_mcp_results(results)
+
+async def _test_all_mcp_tools(tool_type_filter: Optional[str]) -> List[Dict[str, Any]]:
+    """모든 MCP 도구 테스트"""
+    results = []
+
+    try:
+        if not settings.MCP_ENABLED:
+            return [{"error": "MCP is not enabled"}]
+
+        # MCP 매니저 초기화
+        await mcp_manager.initialize()
+
+        # 도구 타입 필터링
+        if tool_type_filter:
+            tool_type_enum = MCPToolType(tool_type_filter)
+            available_tools = mcp_manager.get_available_tools(tool_type_enum)
+        else:
+            available_tools = mcp_manager.get_available_tools()
+
+        # 각 도구별 테스트 파라미터
+        test_params = {
+            "web_search_mcp": {"query": "AI technology trends 2024", "max_results": 3},
+            "file_processing_mcp": {"operation": "list", "file_path": "."},
+            "database_mcp": {"operation": "health_check"},
+            "git_mcp": {"operation": "status"},
+        }
+
+        # 특정 도구별 추가 테스트 케이스
+        additional_test_cases = {
+            "database_mcp": [
+                {"operation": "query", "query": "SELECT 1 as test_column"},
+                {"operation": "query", "query": "WITH test_cte AS (SELECT 1 as id) SELECT * FROM test_cte"}
+            ]
+        }
+
+        for tool in available_tools:
+            # 기본 테스트 실행
+            start_time = time.time()
+            params = test_params.get(tool.name, {"test": True})
+            result = await mcp_manager.execute_tool(tool.name, params)
+            execution_time = int((time.time() - start_time) * 1000)
+
+            results.append({
+                "tool_name": tool.name,
+                "tool_type": tool.tool_type.value,
+                "success": result.success,
+                "error": result.error,
+                "execution_time_ms": execution_time,
+                "data_size": len(str(result.data)) if result.data else 0,
+                "metadata": result.metadata,
+                "test_case": "basic"
+            })
+
+            # 추가 테스트 케이스 실행 (있는 경우)
+            if tool.name in additional_test_cases:
+                for i, additional_params in enumerate(additional_test_cases[tool.name]):
+                    start_time = time.time()
+                    result = await mcp_manager.execute_tool(tool.name, additional_params)
+                    execution_time = int((time.time() - start_time) * 1000)
+
+                    results.append({
+                        "tool_name": f"{tool.name}_case_{i+1}",
+                        "tool_type": tool.tool_type.value,
+                        "success": result.success,
+                        "error": result.error,
+                        "execution_time_ms": execution_time,
+                        "data_size": len(str(result.data)) if result.data else 0,
+                        "metadata": result.metadata,
+                        "test_case": f"additional_{i+1}",
+                        "params": additional_params
+                    })
+
+    except Exception as e:
+        results.append({"error": str(e)})
+
+    return results
+
+def _display_all_mcp_results(results: List[Dict[str, Any]]):
+    """모든 MCP 도구 결과 표시"""
+    table = Table(title="🧪 MCP Tools Test Results")
+    table.add_column("Tool", style="cyan")
+    table.add_column("Type", style="magenta")
+    table.add_column("Status", style="green")
+    table.add_column("Time (ms)", style="yellow")
+    table.add_column("Data Size", style="blue")
+
+    success_count = 0
+    total_time = 0
+
+    for result in results:
+        if "error" in result and "tool_name" not in result:
+            table.add_row("System Error", "-", "❌", "-", result["error"][:50])
+            continue
+
+        tool_name = result.get("tool_name", "Unknown")
+        tool_type = result.get("tool_type", "Unknown")
+        success = result.get("success", False)
+        exec_time = result.get("execution_time_ms", 0)
+        data_size = result.get("data_size", 0)
+
+        status = "✅" if success else "❌"
+        time_str = f"{exec_time}"
+        size_str = f"{data_size} chars"
+
+        table.add_row(tool_name, tool_type, status, time_str, size_str)
+
+        if success:
+            success_count += 1
+        total_time += exec_time
+
+    console.print(table)
+
+    # 요약 통계
+    total_tests = len([r for r in results if "tool_name" in r])
+    if total_tests > 0:
+        avg_time = total_time / total_tests
+        success_rate = (success_count / total_tests) * 100
+
+        summary_table = Table(title="📈 Test Summary")
+        summary_table.add_column("Metric", style="cyan")
+        summary_table.add_column("Value", style="green")
+
+        summary_table.add_row("Total Tests", str(total_tests))
+        summary_table.add_row("Successful", str(success_count))
+        summary_table.add_row("Success Rate", f"{success_rate:.1f}%")
+        summary_table.add_row("Average Time", f"{avg_time:.0f}ms")
+
+        console.print()
+        console.print(summary_table)
+
+@mcp.command()
+@click.argument('name')
+@click.argument('tool_type', type=click.Choice(['web_search', 'file_processing', 'data_analysis', 'api_integration', 'code_execution', 'image_processing']))
+@click.option('--description', '-d', default="Custom MCP tool", help='도구 설명')
+@click.option('--capabilities', '-c', multiple=True, help='도구 기능 목록')
+def register(name: str, tool_type: str, description: str, capabilities: tuple):
+    """새로운 MCP 도구 등록 (예제 코드 생성)"""
+    console.print(f"📝 Generating MCP tool template: [bold]{name}[/bold]")
+
+    template = _generate_mcp_tool_template(name, tool_type, description, list(capabilities))
+
+    console.print()
+    console.print(Panel(Syntax(template, "python"), title=f"🛠️ {name} MCP Tool Template", style="blue"))
+
+    console.print("\n[yellow]💡 이 템플릿을 사용하여 새로운 MCP 도구를 구현하고 mcp_manager.register_tool()로 등록하세요.[/yellow]")
+
+@mcp.command()
+@click.argument('query')
+@click.option('--format', '-f', type=click.Choice(['json', 'table']), default='table', help='출력 형식')
+def test_query(query: str, format: str):
+    """데이터베이스 쿼리 테스트 (SELECT 및 CTE WITH 문 지원)"""
+    console.print(f"🔍 Testing database query: [bold]{query[:50]}...[/bold]")
+
+    params = {"operation": "query", "query": query}
+    result = asyncio.run(_test_mcp_tool("database_mcp", params))
+
+    if result.success:
+        console.print("✅ [green]Query validation successful[/green]")
+
+        if format == 'json':
+            console.print(Panel(Syntax(json.dumps(result.data, indent=2, ensure_ascii=False), "json"), title="📊 Query Result", style="blue"))
+        else:
+            result_table = Table(title="🔍 Query Test Result")
+            result_table.add_column("Field", style="cyan")
+            result_table.add_column("Value", style="green")
+
+            result_table.add_row("Query", query)
+            result_table.add_row("Validation", "✅ Passed")
+            result_table.add_row("Execution Time", f"{result.execution_time_ms}ms")
+
+            if result.metadata:
+                for key, value in result.metadata.items():
+                    result_table.add_row(key.replace("_", " ").title(), str(value))
+
+            console.print(result_table)
+    else:
+        console.print("❌ [red]Query validation failed[/red]")
+        console.print(Panel(result.error, title="🚨 Error", style="red"))
+
+@mcp.command()
+def demo_queries():
+    """CTE 및 복잡한 쿼리 데모"""
+    console.print(Panel.fit("📚 Database Query Examples", style="bold blue"))
+
+    demo_queries = [
+        {
+            "name": "Simple SELECT",
+            "query": "SELECT 1 as test_column, 'Hello' as message",
+            "description": "기본 SELECT 문"
+        },
+        {
+            "name": "Basic CTE",
+            "query": "WITH test_cte AS (SELECT 1 as id, 'Test' as name) SELECT * FROM test_cte",
+            "description": "기본 CTE (Common Table Expression)"
+        },
+        {
+            "name": "Multiple CTE",
+            "query": """WITH
+                users_cte AS (SELECT 1 as user_id, 'Alice' as name),
+                orders_cte AS (SELECT 1 as order_id, 1 as user_id, 100 as amount)
+            SELECT u.name, o.amount
+            FROM users_cte u
+            JOIN orders_cte o ON u.user_id = o.user_id""",
+            "description": "다중 CTE 및 JOIN"
+        },
+        {
+            "name": "Recursive CTE",
+            "query": """WITH RECURSIVE numbers AS (
+                SELECT 1 as n
+                UNION ALL
+                SELECT n + 1 FROM numbers WHERE n < 5
+            ) SELECT * FROM numbers""",
+            "description": "재귀 CTE"
+        }
+    ]
+
+    for demo in demo_queries:
+        console.print(f"\n[bold cyan]{demo['name']}[/bold cyan]: {demo['description']}")
+        console.print(Panel(Syntax(demo['query'], "sql"), style="dim"))
+
+        # 실제 테스트 실행
+        params = {"operation": "query", "query": demo['query']}
+        result = asyncio.run(_test_mcp_tool("database_mcp", params))
+
+        if result.success:
+            console.print(f"✅ [green]Valid query[/green] ({result.execution_time_ms}ms)")
+        else:
+            console.print(f"❌ [red]Invalid query: {result.error}[/red]")
+
+def _generate_mcp_tool_template(name: str, tool_type: str, description: str, capabilities: List[str]) -> str:
+    """MCP 도구 템플릿 생성"""
+    class_name = ''.join(word.capitalize() for word in name.split('_')) + 'MCPTool'
+
+    template = f'''from neos.tools.mcp_integration import MCPTool, MCPToolType, MCPToolResult
+from typing import Dict, Any
+from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
+
+class {class_name}(MCPTool):
+    """{description}"""
+
+    def __init__(self):
+        super().__init__(
+            name="{name}",
+            tool_type=MCPToolType.{tool_type.upper()},
+            description="{description}",
+            capabilities={capabilities}
+        )
+        self.client = None
+
+    async def initialize(self) -> bool:
+        """도구 초기화"""
+        try:
+            # TODO: MCP 서버 연결 또는 클라이언트 초기화 로직 구현
+            logger.info(f"Initializing {{self.name}} MCP tool")
+
+            # 예: 외부 API 클라이언트 초기화
+            # self.client = SomeAPIClient(api_key=settings.API_KEY)
+
+            self.is_available = True
+            return True
+        except Exception as e:
+            logger.error(f"Failed to initialize {{self.name}} MCP tool: {{e}}")
+            return False
+
+    async def execute(self, params: Dict[str, Any]) -> MCPToolResult:
+        """도구 실행"""
+        start_time = datetime.now()
+
+        try:
+            # TODO: 파라미터 검증
+            required_params = ["param1"]  # 필요한 파라미터 목록
+            for param in required_params:
+                if param not in params:
+                    return MCPToolResult(
+                        success=False,
+                        data=None,
+                        error=f"Required parameter '{{param}}' is missing",
+                        tool_name=self.name
+                    )
+
+            # TODO: 실제 도구 실행 로직 구현
+            result_data = {{
+                "message": f"{{self.name}} executed successfully",
+                "params": params,
+                "timestamp": datetime.now().isoformat()
+            }}
+
+            execution_time = int((datetime.now() - start_time).total_seconds() * 1000)
+
+            return MCPToolResult(
+                success=True,
+                data=result_data,
+                tool_name=self.name,
+                execution_time_ms=execution_time,
+                metadata={{"source": "mcp", "tool_type": "{tool_type}"}}
+            )
+
+        except Exception as e:
+            execution_time = int((datetime.now() - start_time).total_seconds() * 1000)
+            return MCPToolResult(
+                success=False,
+                data=None,
+                error=str(e),
+                tool_name=self.name,
+                execution_time_ms=execution_time
+            )
+
+    async def cleanup(self) -> None:
+        """도구 정리"""
+        if self.client:
+            try:
+                # TODO: 클라이언트 정리 로직
+                logger.info(f"Cleaning up {{self.name}} MCP tool")
+            except Exception as e:
+                logger.error(f"Error cleaning up {{self.name}} MCP tool: {{e}}")
+
+# 사용 예제:
+# from neos.tools.mcp_integration import mcp_manager
+#
+# # 도구 등록
+# custom_tool = {class_name}()
+# mcp_manager.register_tool(custom_tool)
+#
+# # 도구 사용
+# result = await mcp_manager.execute_tool("{name}", {{"param1": "value1"}})
+'''
+
+    return template
 
 
 if __name__ == '__main__':
