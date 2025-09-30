@@ -36,6 +36,7 @@ try:
     from neos.agents.generation_agents import ImageGenerationAgent, ApiCallAgent, FileProcessingAgent, TaskCreationAgent
     from neos.tools.mcp_integration import mcp_manager, MCPTool, MCPToolType, MCPToolResult
     from neos.tools.tool_selector import tool_selector
+    from neos.dataset import llm_call_collector, dataset_manager
 except ImportError as e:
     click.echo(f"❌ 모듈 import 실패: {e}")
     click.echo("프로젝트 루트 디렉토리에서 실행해주세요.")
@@ -1380,6 +1381,238 @@ def demo_queries():
             console.print(f"✅ [green]Valid query[/green] ({result.execution_time_ms}ms)")
         else:
             console.print(f"❌ [red]Invalid query: {result.error}[/red]")
+
+@cli.group()
+def dataset():
+    """LLM 호출 데이터셋 관리"""
+    pass
+
+@dataset.command()
+def status():
+    """데이터셋 수집 상태 확인"""
+    console.print(Panel.fit("📊 Dataset Collection Status", style="bold blue"))
+
+    stats = llm_call_collector.get_statistics()
+
+    status_table = Table(title="📈 Collection Statistics")
+    status_table.add_column("Metric", style="cyan")
+    status_table.add_column("Value", style="green")
+
+    status_table.add_row("Enabled", "✅" if stats.get("enabled") else "❌")
+    status_table.add_row("Total Records", str(stats.get("total_records", 0)))
+    status_table.add_row("Successful Calls", str(stats.get("successful_calls", 0)))
+    status_table.add_row("Failed Calls", str(stats.get("failed_calls", 0)))
+    status_table.add_row("Success Rate", f"{stats.get('success_rate', 0) * 100:.1f}%")
+    status_table.add_row("Total Tokens", f"{stats.get('total_tokens', 0):,}")
+    status_table.add_row("Avg Latency", f"{stats.get('average_latency_ms', 0):.1f}ms")
+
+    console.print(status_table)
+
+    # 워크플로우 단계별
+    if stats.get("workflow_steps"):
+        steps_table = Table(title="🔄 Workflow Steps")
+        steps_table.add_column("Step", style="cyan")
+
+        for step in stats.get("workflow_steps", []):
+            steps_table.add_row(step)
+
+        console.print()
+        console.print(steps_table)
+
+    # 에이전트별
+    if stats.get("agents"):
+        agents_table = Table(title="🤖 Agents")
+        agents_table.add_column("Agent", style="magenta")
+
+        for agent in stats.get("agents", []):
+            agents_table.add_row(agent)
+
+        console.print()
+        console.print(agents_table)
+
+    # 모델별
+    if stats.get("models"):
+        models_table = Table(title="🧠 Models")
+        models_table.add_column("Provider", style="yellow")
+        models_table.add_column("Model", style="blue")
+
+        for provider in stats.get("providers", []):
+            for model in stats.get("models", []):
+                if provider in model.lower():
+                    models_table.add_row(provider, model)
+
+        console.print()
+        console.print(models_table)
+
+@dataset.command()
+@click.option('--format', '-f', type=click.Choice(['jsonl', 'json', 'csv', 'openai', 'anthropic']), default='jsonl', help='출력 형식')
+@click.option('--session', '-s', help='특정 세션만 내보내기')
+@click.option('--agent', '-a', help='특정 에이전트만 내보내기')
+@click.option('--step', help='특정 워크플로우 단계만 내보내기')
+def export(format: str, session: Optional[str], agent: Optional[str], step: Optional[str]):
+    """데이터셋 내보내기"""
+    console.print(f"💾 Exporting dataset in {format} format...")
+
+    try:
+        # 필터링된 내보내기
+        if session:
+            filepath = dataset_manager.export_by_session(session, format if format in ['jsonl', 'json', 'csv'] else 'jsonl')
+        elif agent:
+            filepath = dataset_manager.export_by_agent(agent, format if format in ['jsonl', 'json', 'csv'] else 'jsonl')
+        elif step:
+            filepath = dataset_manager.export_by_workflow_step(step, format if format in ['jsonl', 'json', 'csv'] else 'jsonl')
+        else:
+            # 전체 내보내기
+            if format == 'openai':
+                filepath = dataset_manager.save_training_format(format_type='openai')
+            elif format == 'anthropic':
+                filepath = dataset_manager.save_training_format(format_type='anthropic')
+            elif format == 'jsonl':
+                filepath = dataset_manager.save_jsonl()
+            elif format == 'json':
+                filepath = dataset_manager.save_json()
+            elif format == 'csv':
+                filepath = dataset_manager.save_csv()
+            else:
+                console.print(f"❌ Unsupported format: {format}")
+                return
+
+        if filepath:
+            console.print(f"✅ [green]Dataset exported successfully![/green]")
+            console.print(f"📁 File: {filepath}")
+
+            # 파일 정보 표시
+            from pathlib import Path
+            file_size = Path(filepath).stat().st_size
+            console.print(f"📊 Size: {file_size:,} bytes")
+        else:
+            console.print("⚠️  [yellow]No records to export[/yellow]")
+
+    except Exception as e:
+        console.print(f"❌ [red]Export failed:[/red] {e}")
+        if cli_state.get("verbose"):
+            import traceback
+            console.print(traceback.format_exc())
+
+@dataset.command()
+def clear():
+    """수집된 데이터 초기화"""
+    from rich.prompt import Confirm
+
+    if Confirm.ask("⚠️  정말로 모든 수집된 데이터를 삭제하시겠습니까?"):
+        count = llm_call_collector.clear_records()
+        console.print(f"✅ [green]{count}개의 레코드가 삭제되었습니다.[/green]")
+    else:
+        console.print("취소되었습니다.")
+
+@dataset.command()
+def enable():
+    """데이터 수집 활성화"""
+    llm_call_collector.enable()
+    console.print("✅ [green]Dataset collection enabled[/green]")
+
+@dataset.command()
+def disable():
+    """데이터 수집 비활성화"""
+    llm_call_collector.disable()
+    console.print("⏸️  [yellow]Dataset collection disabled[/yellow]")
+
+@dataset.command()
+def list_files():
+    """저장된 데이터셋 파일 목록"""
+    console.print(Panel.fit("📚 Saved Datasets", style="bold blue"))
+
+    datasets = dataset_manager.list_datasets()
+
+    if not datasets:
+        console.print("📭 No datasets found")
+        return
+
+    table = Table(title=f"Found {len(datasets)} dataset(s)")
+    table.add_column("Name", style="cyan")
+    table.add_column("Size", style="yellow")
+    table.add_column("Modified", style="green")
+
+    for ds in datasets:
+        size_kb = ds['size_bytes'] / 1024
+        table.add_row(
+            ds['name'],
+            f"{size_kb:.1f} KB",
+            ds['modified_at'][:19]
+        )
+
+    console.print(table)
+
+@dataset.command()
+@click.argument('filepath')
+def info(filepath: str):
+    """데이터셋 파일 정보 확인"""
+    console.print(f"📊 Loading dataset info from: {filepath}")
+
+    try:
+        if filepath.endswith('.jsonl'):
+            records = dataset_manager.load_jsonl(filepath)
+            metadata = None
+        elif filepath.endswith('.json'):
+            records, metadata = dataset_manager.load_json(filepath)
+        else:
+            console.print("❌ Unsupported file format. Use .jsonl or .json")
+            return
+
+        if not records:
+            console.print("⚠️  No records found in file")
+            return
+
+        # 통계 생성
+        from neos.dataset.models import DatasetMetadata
+        if metadata is None:
+            metadata = DatasetMetadata()
+            metadata.update_statistics(records)
+
+        # 메타데이터 표시
+        info_table = Table(title="📋 Dataset Information")
+        info_table.add_column("Field", style="cyan")
+        info_table.add_column("Value", style="green")
+
+        info_table.add_row("Dataset ID", metadata.dataset_id[:8] + "...")
+        info_table.add_row("Name", metadata.name)
+        info_table.add_row("Total Records", str(metadata.total_records))
+        info_table.add_row("Sessions", str(metadata.total_sessions))
+        info_table.add_row("Users", str(metadata.total_users))
+        info_table.add_row("Total Tokens", f"{metadata.total_tokens:,}")
+        info_table.add_row("Avg Latency", f"{metadata.average_latency_ms:.1f}ms")
+        info_table.add_row("Success Rate", f"{metadata.success_rate * 100:.1f}%")
+
+        console.print(info_table)
+
+        # 상세 통계
+        if metadata.step_counts:
+            steps_table = Table(title="🔄 Workflow Steps")
+            steps_table.add_column("Step", style="cyan")
+            steps_table.add_column("Count", style="yellow")
+
+            for step, count in sorted(metadata.step_counts.items(), key=lambda x: x[1], reverse=True):
+                steps_table.add_row(step, str(count))
+
+            console.print()
+            console.print(steps_table)
+
+        if metadata.agent_counts:
+            agents_table = Table(title="🤖 Agents")
+            agents_table.add_column("Agent", style="magenta")
+            agents_table.add_column("Count", style="yellow")
+
+            for agent, count in sorted(metadata.agent_counts.items(), key=lambda x: x[1], reverse=True):
+                agents_table.add_row(agent, str(count))
+
+            console.print()
+            console.print(agents_table)
+
+    except Exception as e:
+        console.print(f"❌ [red]Failed to load dataset:[/red] {e}")
+        if cli_state.get("verbose"):
+            import traceback
+            console.print(traceback.format_exc())
 
 def _generate_mcp_tool_template(name: str, tool_type: str, description: str, capabilities: List[str]) -> str:
     """MCP 도구 템플릿 생성"""
