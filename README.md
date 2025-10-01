@@ -255,7 +255,7 @@ python neos/cli.py agent benchmark-agent --category all --concurrent
 #### 4. **전체 워크플로우 테스트**
 ```bash
 # 단일 쿼리 워크플로우 테스트
-python neos/cli.py workflow test "2024년 AI 트렌드를 분석해주세요"
+python neos/cli.py workflow test "2025년 AI 트렌드를 분석해주세요"
 
 # 커스텀 사용자/세션으로
 python neos/cli.py workflow test "분석 요청" --user-id custom_user --session-id custom_session
@@ -473,6 +473,82 @@ GRANT SELECT, INSERT, UPDATE ON query_history TO app_user;
 - SQL 인젝션 방지
 - XSS 공격 방지
 
+## 📊 LLM 호출 데이터셋 수집
+
+NEOS는 모델 학습을 위해 모든 LLM 호출을 자동으로 추적하고 저장합니다.
+
+### 주요 기능
+- **자동 수집**: 워크플로우 실행 시 LLM 호출 자동 추적
+- **상세 메타데이터**: 세션, 사용자, 워크플로우 단계, 에이전트, 토큰 사용량, 레이턴시 등
+- **다양한 포맷**: JSONL, JSON, CSV, OpenAI fine-tuning, Anthropic 형식 지원
+- **자동 저장**: 워크플로우 완료 시 자동으로 `datasets/` 디렉토리에 저장
+
+### 설정
+`.env` 파일에서 데이터셋 수집을 제어할 수 있습니다:
+
+```bash
+# 데이터셋 자동 저장 활성화/비활성화
+DATASET_AUTO_SAVE=true
+
+# 저장 형식 (jsonl, json, csv)
+DATASET_SAVE_FORMAT=jsonl
+
+# 데이터셋 저장 경로
+DATASET_BASE_PATH=datasets
+```
+
+### CLI 명령어
+
+```bash
+# 수집 상태 확인
+uv run python -m neos.cli dataset status
+
+# 데이터셋 내보내기
+uv run python -m neos.cli dataset export -f jsonl
+uv run python -m neos.cli dataset export -f openai    # OpenAI fine-tuning 형식
+uv run python -m neos.cli dataset export -f anthropic # Anthropic 형식
+
+# 특정 세션/에이전트 데이터만 내보내기
+uv run python -m neos.cli dataset export --session <session_id>
+uv run python -m neos.cli dataset export --agent realtime_info_search
+
+# 수집 활성화/비활성화
+uv run python -m neos.cli dataset enable
+uv run python -m neos.cli dataset disable
+
+# 수집된 데이터 초기화
+uv run python -m neos.cli dataset clear
+
+# 저장된 데이터셋 파일 목록
+uv run python -m neos.cli dataset list-files
+```
+
+### 데이터 구조
+
+각 레코드는 다음 정보를 포함합니다:
+
+```json
+{
+  "call_id": "unique-uuid",
+  "timestamp": "2025-10-01T13:52:20",
+  "session_id": "session-uuid",
+  "user_id": "user-id",
+  "workflow_step": "realtime_info_search",
+  "agent_name": "realtime_info_search",
+  "provider": "anthropic",
+  "model": "claude-sonnet-4",
+  "temperature": 0.1,
+  "input_messages": [...],
+  "output_text": "...",
+  "prompt_tokens": 1234,
+  "completion_tokens": 567,
+  "total_tokens": 1801,
+  "latency_ms": 2481.18,
+  "success": true,
+  "tags": ["web_search", "synthesis"]
+}
+```
+
 ## 🗺️ 로드맵
 
 ### ✅ v1.0 (완료)
@@ -482,6 +558,7 @@ GRANT SELECT, INSERT, UPDATE ON query_history TO app_user;
 - [x] 벡터 기반 의미적 검색
 - [x] 실시간 WebSocket 통신
 - [x] 품질 기반 자동 재처리
+- [x] LLM 호출 데이터셋 자동 수집 및 저장
 
 ### v1.1 (예정)
 - [ ] 멀티모달 입력 지원 (이미지, 오디오)
