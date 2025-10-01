@@ -179,7 +179,10 @@ class RealtimeInfoSearchAgent(SearchAgent):
 
             # Process top N results with LLM to generate comprehensive response with citations
             print("[DEBUG] Processing Tavily results with LLM...")
-            processed_results = await self._process_with_llm(query, search_results[:5])  # Top 5 results
+            # Extract session_id and user_id from context
+            session_id = context.get("session_id", "") if context else ""
+            user_id = context.get("user_id", "") if context else ""
+            processed_results = await self._process_with_llm(query, search_results[:5], session_id=session_id, user_id=user_id)  # Top 5 results
             print(f"[DEBUG] LLM processing returned {len(processed_results)} results")
 
             print(f"[DEBUG] Created {len(processed_results)} SearchResult objects")
@@ -257,7 +260,7 @@ class RealtimeInfoSearchAgent(SearchAgent):
             print(f"[ERROR] Tavily search traceback: {traceback.format_exc()}")
             return []
 
-    async def _process_with_llm(self, query: str, tavily_results: List[Dict[str, Any]]) -> List[SearchResult]:
+    async def _process_with_llm(self, query: str, tavily_results: List[Dict[str, Any]], session_id: str = "", user_id: str = "") -> List[SearchResult]:
         """LLM을 사용하여 Tavily 검색 결과를 처리하고 citation이 포함된 응답 생성"""
         try:
             if not tavily_results:
@@ -267,7 +270,18 @@ class RealtimeInfoSearchAgent(SearchAgent):
             print(f"[DEBUG] Processing {len(tavily_results)} Tavily results with LLM...")
 
             # Create LLM instance with higher max_tokens for comprehensive responses
-            llm = create_llm(temperature=0.1, max_tokens=4000)  # Low temperature for factual accuracy, higher token limit
+            from neos.utils.llm_wrapper import create_tracked_llm
+            base_llm = create_llm(temperature=0.1, max_tokens=4000)  # Low temperature for factual accuracy, higher token limit
+
+            # Wrap LLM with tracking for dataset collection
+            llm = create_tracked_llm(
+                llm=base_llm,
+                session_id=session_id,
+                user_id=user_id,
+                workflow_step="realtime_info_search",
+                agent_name=self.name,
+                tags=["web_search", "synthesis"]
+            )
 
             # Prepare search results context for LLM
             search_context = self._prepare_search_context(tavily_results)

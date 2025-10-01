@@ -174,6 +174,9 @@ class MultiAgentWorkflow:
             if result["success"] and result["response"]:
                 await self._cache_workflow_result(cache_key, result)
 
+            # 데이터셋 자동 저장 (LLM 호출이 있었을 경우)
+            await self._auto_save_dataset()
+
             print("[DEBUG] Workflow execution completed successfully")
             return result
 
@@ -269,6 +272,45 @@ class MultiAgentWorkflow:
         )
 
         print("[DEBUG] Workflow response cached successfully")
+
+    async def _auto_save_dataset(self) -> None:
+        """워크플로우 실행 후 데이터셋 자동 저장"""
+        # 자동 저장이 비활성화되어 있으면 건너뛰기
+        if not settings.DATASET_AUTO_SAVE:
+            return
+
+        from neos.dataset import llm_call_collector, dataset_manager
+
+        # 수집된 레코드 확인
+        stats = llm_call_collector.get_statistics()
+        record_count = stats.get("total_records", 0)
+
+        if record_count > 0:
+            try:
+                print(f"[DEBUG] Auto-saving dataset with {record_count} records...")
+
+                # 설정된 형식으로 저장
+                save_format = settings.DATASET_SAVE_FORMAT.lower()
+
+                if save_format == "json":
+                    filepath = dataset_manager.save_json(include_metadata=True)
+                elif save_format == "csv":
+                    filepath = dataset_manager.save_csv()
+                else:  # 기본값: jsonl
+                    filepath = dataset_manager.save_jsonl(include_metadata=True)
+
+                if filepath:
+                    print(f"[DEBUG] Dataset auto-saved to: {filepath}")
+
+                    # 저장 후 메모리 정리 (선택적 - 계속 수집하려면 주석 처리)
+                    # llm_call_collector.clear_records()
+                else:
+                    print("[DEBUG] No dataset records to save")
+
+            except Exception as e:
+                print(f"[WARNING] Failed to auto-save dataset: {e}")
+        else:
+            print("[DEBUG] No LLM calls recorded, skipping dataset save")
 
     # 유틸리티 메서드들
     def get_workflow_stats(self) -> Dict[str, Any]:
