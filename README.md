@@ -8,6 +8,10 @@ LangGraph, CrewAI, FastAPI를 활용한 지능형 멀티 에이전트 AI 시스�
 - **지식 기반 검색**: 과거 쿼리와 지식 베이스에서 유사 정보 검색
 - **실시간 정보 검색**: Tavily API를 통한 최신 웹 정보 수집
 - **실시간 데이터 검색**: 통계, 시장 정보 등 수치 데이터 전문 검색
+- **🆕 복합검색 에이전트**: 복잡한 쿼리를 여러 관점으로 분해하여 심층 분석
+  - LLM 기반 검색 쿼리 다각화 (2-5개)
+  - 병렬 검색 및 요약으로 빠른 처리
+  - 다중 소스 정보의 종합적 통합 분석
 
 ### 📊 **고급 분석 에이전트**
 - **데이터 분석**: 수집된 정보의 통계 분석 및 패턴 발견
@@ -21,45 +25,63 @@ LangGraph, CrewAI, FastAPI를 활용한 지능형 멀티 에이전트 AI 시스�
 
 ### 🚀 **지능형 워크플로우**
 - **LangGraph** 기반 복잡한 에이전트 오케스트레이션
-- **동적 라우팅**: 쿼리 의도에 따른 최적 에이전트 선택
+- **동적 라우팅**: 쿼리 의도 및 복잡도에 따른 최적 에이전트 자동 선택
+  - 간단한 검색: 기본 검색 에이전트
+  - 복잡한 분석: 복합검색 에이전트 (자동 전환)
 - **품질 검증**: 응답 품질 자동 평가 및 재처리
 - **실시간 처리**: WebSocket 지원으로 실시간 상호작용
+- **쿼리 복잡도 분석**: 자동으로 쿼리 복잡도 측정 (0.0-1.0)
+  - 쿼리 길이, 다중 주제, 심층 분석 키워드 등 종합 평가
+  - 임계값 이상 시 복합검색 에이전트 자동 활성화
 
 ## 🏗️ 시스템 아키텍처
 
 ```mermaid
 graph TB
-    A[사용자 쿼리] --> B[쿼리 분류기]
-    B --> C[검색 오케스트레이터]
-    B --> D[분석 오케스트레이터] 
+    A[사용자 쿼리] --> B[쿼리 분류기<br/>+ 복잡도 분석]
+    B -->|복잡도 >= 0.5| C[검색 오케스트레이터]
+    B --> D[분석 오케스트레이터]
     B --> E[생성 오케스트레이터]
-    
-    C --> C1[지식 검색]
-    C --> C2[실시간 정보 검색]
-    C --> C3[실시간 데이터 검색]
-    
+
+    C -->|간단한 쿼리| C1[지식 검색]
+    C -->|간단한 쿼리| C2[실시간 정보 검색]
+    C -->|간단한 쿼리| C3[실시간 데이터 검색]
+    C -->|복잡한 쿼리| C4[🆕 복합검색 에이전트]
+
+    C4 --> C4A[다중 쿼리 생성<br/>2-5개]
+    C4A --> C4B[병렬 검색 실행]
+    C4B --> C4C[병렬 요약 생성]
+    C4C --> C4D[최종 종합 분석]
+
     D --> D1[데이터 분석]
     D --> D2[비교 분석]
-    
+
     E --> E1[이미지 생성]
     E --> E2[API 호출]
     E --> E3[파일 처리]
     E --> E4[작업 생성]
-    
+
     C1 --> F[결과 통합기]
     C2 --> F
     C3 --> F
+    C4D --> F
     D1 --> F
     D2 --> F
     E1 --> F
     E2 --> F
     E3 --> F
     E4 --> F
-    
+
     F --> G[품질 검증기]
     G --> H[응답 생성기]
     G -->|품질 낮음| C
     H --> I[최종 응답]
+
+    style C4 fill:#e1f5fe
+    style C4A fill:#b3e5fc
+    style C4B fill:#b3e5fc
+    style C4C fill:#b3e5fc
+    style C4D fill:#b3e5fc
 ```
 
 ## 🛠️ 기술 스택
@@ -381,6 +403,58 @@ make docker-restart
 make dev-clean dev-setup
 ```
 
+## 🔬 복합검색 에이전트 상세
+
+### 작동 원리
+
+복합검색 에이전트는 복잡한 질문을 여러 관점에서 분석하여 심층적인 답변을 제공합니다.
+
+#### 1. 자동 활성화 조건
+- **복잡도 점수 ≥ 0.5**: 자동으로 쿼리 복잡도를 분석하여 임계값 이상 시 활성화
+- **다중 주제 감지**: 2개 이상의 연결어(와, 과, 그리고, and, ,) 포함 시
+- **명시적 의도**: "심층 분석", "종합", "포괄적" 등의 키워드 감지
+
+#### 2. 처리 과정
+
+```
+사용자 쿼리: "GRPO vs PPO? 알고리즘 차이와 성능 분석"
+    ↓
+[1단계] LLM 기반 쿼리 다각화
+    → "GRPO algorithm technical details"
+    → "PPO vs GRPO differences comparison"
+    → "GRPO performance benchmarks"
+    → "PPO clipping mechanism analysis"
+    → "GRPO vs PPO empirical results"
+    ↓
+[2단계] 병렬 검색 실행 (5 queries × 3 results = 15개)
+    ↓
+[3단계] 병렬 요약 생성 (60초 타임아웃)
+    → 각 검색 결과를 LLM으로 3-5문장 요약
+    ↓
+[4단계] 최종 종합 분석 (90초 타임아웃)
+    → 모든 요약을 통합하여 마크다운 형식의 심층 분석 생성
+    ↓
+[결과] 구조화된 종합 리포트
+```
+
+#### 3. 성능 최적화
+- **병렬 처리**: 요약 작업을 동시에 실행하여 5배 속도 향상
+- **타임아웃 관리**: 각 단계별 타임아웃으로 무한 대기 방지
+- **토큰 최적화**: 적절한 max_tokens와 컨텐츠 길이 제한
+
+#### 4. 사용 예시
+
+```bash
+# 복잡한 기술 비교 분석
+uv run python -m neos.cli workflow test "Transformer vs State Space Model 아키텍처 비교 및 성능 분석"
+
+# 다중 주제 종합 분석
+uv run python -m neos.cli workflow test "엔비디아, AMD, 인텔의 AI 칩 전략과 시장 전망 분석"
+
+# 심층 알고리즘 분석
+uv run python -m neos.cli workflow test "RLHF, DPO, GRPO의 알고리즘적 차이와 실용성 비교"
+```
+
 ### 에이전트 커스터마이징
 ```python
 # agents/custom_agent.py에서 새로운 에이전트 생성
@@ -393,7 +467,7 @@ class CustomSearchAgent(SearchAgent):
             goal="Your specific goal",
             backstory="Agent background"
         )
-    
+
     async def execute(self, query: str, context: Dict[str, Any]):
         # 커스텀 로직 구현
         pass
@@ -559,6 +633,11 @@ uv run python -m neos.cli dataset list-files
 - [x] 실시간 WebSocket 통신
 - [x] 품질 기반 자동 재처리
 - [x] LLM 호출 데이터셋 자동 수집 및 저장
+- [x] 🆕 복합검색 에이전트 (Multi-Query Search Agent)
+  - [x] 쿼리 복잡도 자동 분석 시스템
+  - [x] LLM 기반 다중 쿼리 생성 (2-5개)
+  - [x] 병렬 검색 및 요약 처리
+  - [x] 종합 분석 리포트 생성
 
 ### v1.1 (예정)
 - [ ] 멀티모달 입력 지원 (이미지, 오디오)
