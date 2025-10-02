@@ -540,7 +540,7 @@ class RealtimeDataSearchAgent(SearchAgent):
     def _classify_data_type(self, content: str) -> str:
         """데이터 유형 분류"""
         content_lower = content.lower()
-        
+
         if any(word in content_lower for word in ["financial", "stock", "price", "market"]):
             return "financial"
         elif any(word in content_lower for word in ["demographic", "population", "census"]):
@@ -551,3 +551,349 @@ class RealtimeDataSearchAgent(SearchAgent):
             return "technology"
         else:
             return "general"
+
+
+class MultiQuerySearchAgent(SearchAgent):
+    """복합검색 에이전트 - 여러 검색 쿼리를 생성하고 종합 분석"""
+
+    def __init__(self):
+        super().__init__(
+            name="multi_query_search",
+            search_type="multi_query",
+            role="Multi-Query Search Specialist",
+            goal="Generate multiple search queries, execute them, and synthesize comprehensive results",
+            backstory="You are an expert at breaking down complex questions into multiple targeted search queries and synthesizing the results into comprehensive insights."
+        )
+        # Tavily client 초기화
+        self.tavily_client = None
+        self.api_available = False
+
+        print(f"[DEBUG] MultiQuerySearchAgent checking TAVILY_API_KEY: {'SET' if settings.TAVILY_API_KEY else 'NOT SET'}")
+        if settings.TAVILY_API_KEY and settings.TAVILY_API_KEY.strip():
+            try:
+                print("[DEBUG] Creating TavilyClient for multi-query search...")
+                self.tavily_client = TavilyClient(api_key=settings.TAVILY_API_KEY)
+                self.api_available = True
+                print("[DEBUG] TavilyClient created successfully for multi-query search")
+            except Exception as e:
+                print(f"[WARNING] Failed to create TavilyClient for multi-query search: {e}")
+                self.tavily_client = None
+                self.api_available = False
+        else:
+            print("[WARNING] TAVILY_API_KEY not set, MultiQuerySearchAgent will return empty results")
+
+    async def execute(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        print(f"[DEBUG] MultiQuerySearchAgent.execute called with query: {query[:50]}...")
+
+        if not self.validate_input(query, context):
+            print("[ERROR] MultiQuerySearchAgent: Invalid input")
+            return {"success": False, "error": "Invalid input"}
+
+        if not self.api_available:
+            print("[WARNING] TAVILY_API_KEY not available, returning empty results")
+            return self.format_output([], {"search_type": "multi_query", "warning": "API key not available"})
+
+        try:
+            # Extract session_id and user_id from context
+            session_id = context.get("session_id", "") if context else ""
+            user_id = context.get("user_id", "") if context else ""
+
+            # Step 1: LLM을 사용하여 검색 쿼리 후보 생성 (2-5개)
+            print("[DEBUG] Generating search query candidates...")
+            search_queries = await self._generate_search_queries(query, session_id, user_id)
+            print(f"[DEBUG] Generated {len(search_queries)} search queries")
+
+            # Step 2: 각 쿼리에 대해 병렬 검색 실행
+            print("[DEBUG] Executing parallel searches...")
+            search_results = await self._execute_parallel_searches(search_queries)
+            print(f"[DEBUG] Completed parallel searches, total results: {sum(len(r) for r in search_results)}")
+
+            # Step 3: 각 검색 결과를 LLM으로 요약
+            print("[DEBUG] Summarizing individual search results...")
+            summaries = await self._summarize_results(search_queries, search_results, session_id, user_id)
+            print(f"[DEBUG] Generated {len(summaries)} summaries")
+
+            # Step 4: 모든 요약을 종합하여 최종 분석 결과 생성
+            print("[DEBUG] Synthesizing final comprehensive analysis...")
+            final_analysis = await self._synthesize_final_analysis(query, search_queries, summaries, session_id, user_id)
+            print("[DEBUG] Final analysis completed")
+
+            # 결과 생성
+            result = SearchResult(
+                source="multi_query_analysis",
+                title=f"복합 분석: {query}",
+                content=final_analysis,
+                url="",
+                score=0.98,  # High score for comprehensive multi-query analysis
+                metadata={
+                    "processing_type": "multi_query_synthesis",
+                    "query_count": len(search_queries),
+                    "search_queries": search_queries,
+                    "total_sources": sum(len(r) for r in search_results),
+                    "summaries": summaries
+                }
+            )
+
+            print("[DEBUG] MultiQuerySearchAgent execution completed successfully")
+            return self.format_output([result], {"search_type": "multi_query"})
+
+        except Exception as e:
+            print(f"[ERROR] MultiQuerySearchAgent execution failed: {e}")
+            import traceback
+            print(f"[ERROR] Traceback: {traceback.format_exc()}")
+            return {"success": False, "error": str(e), "agent": self.name}
+
+    async def _generate_search_queries(self, original_query: str, session_id: str = "", user_id: str = "") -> List[str]:
+        """LLM을 사용하여 검색 쿼리 후보 2-5개 생성"""
+        try:
+            from neos.utils.llm_wrapper import create_tracked_llm
+            base_llm = create_llm(temperature=0.3, max_tokens=1000)
+
+            llm = create_tracked_llm(
+                llm=base_llm,
+                session_id=session_id,
+                user_id=user_id,
+                workflow_step="multi_query_search",
+                agent_name=self.name,
+                tags=["query_generation"]
+            )
+
+            prompt = f"""사용자 질문: {original_query}
+
+위 질문에 대해 포괄적이고 정확한 답변을 얻기 위해 필요한 검색 쿼리 2-5개를 생성해주세요.
+
+요구사항:
+1. 각 쿼리는 서로 다른 관점이나 측면을 다뤄야 합니다
+2. 너무 일반적이지 않고 구체적인 쿼리를 만드세요
+3. 한국어와 영어를 적절히 혼합하여 사용하세요
+4. 각 쿼리는 한 줄로 작성하고, 번호를 붙이지 마세요
+5. 쿼리 사이는 빈 줄로 구분하세요
+
+검색 쿼리:"""
+
+            response = await llm.ainvoke([HumanMessage(content=prompt)])
+            query_text = response.content.strip()
+
+            # 쿼리 파싱 (빈 줄 또는 줄바꿈으로 구분)
+            queries = [q.strip() for q in query_text.split('\n') if q.strip() and not q.strip().startswith('#')]
+
+            # 2-5개로 제한
+            queries = queries[:5] if len(queries) >= 2 else queries
+
+            # 최소 2개 보장
+            if len(queries) < 2:
+                queries = [original_query, f"{original_query} 최신 동향"]
+
+            print(f"[DEBUG] Generated queries: {queries}")
+            return queries
+
+        except Exception as e:
+            print(f"[ERROR] Failed to generate search queries: {e}")
+            # Fallback: 원본 쿼리만 사용
+            return [original_query]
+
+    async def _execute_parallel_searches(self, queries: List[str]) -> List[List[Dict[str, Any]]]:
+        """여러 검색 쿼리를 병렬로 실행"""
+        import asyncio
+
+        search_tasks = [self._single_tavily_search(q) for q in queries]
+        results = await asyncio.gather(*search_tasks, return_exceptions=True)
+
+        # Exception 처리
+        processed_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                print(f"[WARNING] Search for query '{queries[i]}' failed: {result}")
+                processed_results.append([])
+            else:
+                processed_results.append(result)
+
+        return processed_results
+
+    async def _single_tavily_search(self, query: str) -> List[Dict[str, Any]]:
+        """단일 Tavily 검색"""
+        try:
+            if not self.api_available or not self.tavily_client:
+                return []
+
+            import asyncio
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                try:
+                    future = executor.submit(
+                        self.tavily_client.search,
+                        query=query,
+                        search_depth="advanced",
+                        max_results=3,  # 각 쿼리당 3개 결과
+                        include_answer=True,
+                        include_raw_content=True
+                    )
+
+                    def get_result_with_timeout():
+                        try:
+                            return future.result(timeout=20)
+                        except concurrent.futures.TimeoutError:
+                            return None
+
+                    response = await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(None, get_result_with_timeout),
+                        timeout=25
+                    )
+
+                    return response.get("results", []) if response else []
+
+                except Exception as e:
+                    print(f"[ERROR] Single search failed for '{query}': {e}")
+                    return []
+
+        except Exception as e:
+            print(f"[ERROR] Tavily search error: {e}")
+            return []
+
+    async def _summarize_results(self, queries: List[str], results: List[List[Dict[str, Any]]], session_id: str = "", user_id: str = "") -> List[str]:
+        """각 검색 결과를 LLM으로 요약 (병렬 처리)"""
+        import asyncio
+
+        async def summarize_single_query(query: str, search_results: List[Dict[str, Any]]) -> str:
+            """단일 쿼리 결과 요약"""
+            if not search_results:
+                return f"검색 쿼리 '{query}'에 대한 결과를 찾지 못했습니다."
+
+            try:
+                from neos.utils.llm_wrapper import create_tracked_llm
+                base_llm = create_llm(temperature=0.1, max_tokens=1500)  # 토큰 수 줄임
+
+                llm = create_tracked_llm(
+                    llm=base_llm,
+                    session_id=session_id,
+                    user_id=user_id,
+                    workflow_step="multi_query_search",
+                    agent_name=self.name,
+                    tags=["result_summarization"]
+                )
+
+                # 검색 결과를 문맥으로 준비
+                context_parts = []
+                for i, result in enumerate(search_results[:3], 1):  # 상위 3개만
+                    title = result.get("title", "")
+                    content = result.get("content", "")[:400]  # 400자로 줄임
+                    url = result.get("url", "")
+
+                    context_parts.append(f"""
+결과 {i}:
+제목: {title}
+출처: {url}
+내용: {content}
+""")
+
+                context = "\n".join(context_parts)
+
+                prompt = f"""검색 쿼리: {query}
+
+검색 결과:
+{context}
+
+위 검색 결과들을 바탕으로 핵심 정보를 간결하게 요약해주세요 (3-5문장). 출처를 명시하고, 중요한 사실과 수치를 포함하세요.
+
+요약:"""
+
+                response = await llm.ainvoke([HumanMessage(content=prompt)])
+                return response.content.strip()
+
+            except Exception as e:
+                print(f"[ERROR] Failed to summarize results for '{query}': {e}")
+                return f"검색 쿼리 '{query}'에 대한 요약 생성 실패"
+
+        # 모든 요약을 병렬로 처리
+        print(f"[DEBUG] Starting parallel summarization for {len(queries)} queries...")
+        summary_tasks = [summarize_single_query(q, r) for q, r in zip(queries, results)]
+
+        try:
+            summaries = await asyncio.wait_for(
+                asyncio.gather(*summary_tasks, return_exceptions=True),
+                timeout=60  # 60초 타임아웃
+            )
+
+            # Exception 처리
+            processed_summaries = []
+            for i, summary in enumerate(summaries):
+                if isinstance(summary, Exception):
+                    print(f"[ERROR] Summary task {i+1} failed: {summary}")
+                    processed_summaries.append(f"검색 쿼리 '{queries[i]}'에 대한 요약 생성 실패")
+                else:
+                    processed_summaries.append(summary)
+
+            print(f"[DEBUG] Parallel summarization completed: {len(processed_summaries)} summaries")
+            return processed_summaries
+
+        except asyncio.TimeoutError:
+            print("[ERROR] Summarization timed out after 60 seconds")
+            return [f"검색 쿼리 '{q}'에 대한 요약 생성 시간 초과" for q in queries]
+
+    async def _synthesize_final_analysis(self, original_query: str, search_queries: List[str], summaries: List[str], session_id: str = "", user_id: str = "") -> str:
+        """모든 요약을 종합하여 최종 분석 결과 생성"""
+        try:
+            from neos.utils.llm_wrapper import create_tracked_llm
+            base_llm = create_llm(temperature=0.2, max_tokens=4000)
+
+            llm = create_tracked_llm(
+                llm=base_llm,
+                session_id=session_id,
+                user_id=user_id,
+                workflow_step="multi_query_search",
+                agent_name=self.name,
+                tags=["final_synthesis"]
+            )
+
+            # 요약들을 하나의 문맥으로 결합
+            summary_context = ""
+            for i, (query, summary) in enumerate(zip(search_queries, summaries), 1):
+                summary_context += f"""
+검색 관점 {i}: {query}
+분석 결과: {summary}
+
+"""
+
+            prompt = f"""사용자 질문: {original_query}
+
+다음은 여러 관점에서 수집하고 분석한 정보입니다:
+
+{summary_context}
+
+위의 모든 분석 결과를 종합하여 사용자의 질문에 대한 포괄적이고 심층적인 답변을 작성해주세요.
+
+요구사항:
+1. 모든 관점의 정보를 통합하여 전체적인 그림을 제시하세요
+2. 상충되는 정보가 있다면 명시하고 설명하세요
+3. 구체적인 수치, 날짜, 출처를 반드시 인용하세요
+4. 각 기업/주제별로 구조화된 분석을 제공하세요
+5. 객관적이고 전문적인 톤을 유지하세요
+6. 답변을 완전히 작성하세요 (중간에 끊지 마세요)
+7. 마크다운 형식으로 보기 좋게 구조화하세요
+
+종합 분석:"""
+
+            import asyncio
+
+            # 최종 분석에도 타임아웃 추가 (90초)
+            response = await asyncio.wait_for(
+                llm.ainvoke([HumanMessage(content=prompt)]),
+                timeout=90
+            )
+            final_analysis = response.content.strip()
+
+            return final_analysis
+
+        except asyncio.TimeoutError:
+            print("[ERROR] Final analysis synthesis timed out after 90 seconds")
+            # Fallback: 요약들을 단순 결합
+            return "\n\n".join([f"**{q}**\n{s}" for q, s in zip(search_queries, summaries)])
+
+        except Exception as e:
+            print(f"[ERROR] Failed to synthesize final analysis: {e}")
+            import traceback
+            print(f"[ERROR] Traceback: {traceback.format_exc()}")
+
+            # Fallback: 요약들을 단순 결합
+            return "\n\n".join([f"**{q}**\n{s}" for q, s in zip(search_queries, summaries)])

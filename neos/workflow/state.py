@@ -77,8 +77,9 @@ class WorkflowConfig:
     # 에이전트 타입
     SEARCH_AGENTS = [
         "knowledge_search",
-        "realtime_info_search", 
-        "realtime_data_search"
+        "realtime_info_search",
+        "realtime_data_search",
+        "multi_query_search"
     ]
     
     ANALYSIS_AGENTS = [

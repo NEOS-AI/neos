@@ -593,14 +593,14 @@ async def _test_full_workflow(query: str, user_id: str, session_id: str, progres
         try:
             result = await asyncio.wait_for(
                 multi_agent_workflow.execute_workflow(workflow_input),
-                timeout=300  # 5 minutes timeout
+                timeout=600  # 10 minutes timeout (복합검색 에이전트 사용시 더 오래 걸림)
             )
         except asyncio.TimeoutError:
             if cli_state["verbose"]:
-                console.print("[red]Workflow execution timed out after 5 minutes[/red]")
+                console.print("[red]Workflow execution timed out after 10 minutes[/red]")
             return {
                 "success": False,
-                "error": "Workflow execution timed out after 5 minutes",
+                "error": "Workflow execution timed out after 10 minutes",
                 "query": query,
                 "timestamp": datetime.now().isoformat()
             }

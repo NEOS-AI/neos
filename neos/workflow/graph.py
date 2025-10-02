@@ -7,7 +7,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from neos.agents.search_agents import (
     KnowledgeSearchAgent,
     RealtimeInfoSearchAgent,
-    RealtimeDataSearchAgent
+    RealtimeDataSearchAgent,
+    MultiQuerySearchAgent
 )
 from neos.agents.analysis_agents import (
     DataAnalysisAgent,
@@ -58,6 +59,7 @@ class MultiAgentWorkflow:
             "knowledge_search": KnowledgeSearchAgent(),
             "realtime_info_search": RealtimeInfoSearchAgent(),
             "realtime_data_search": RealtimeDataSearchAgent(),
+            "multi_query_search": MultiQuerySearchAgent(),
 
             # 분석 에이전트들
             "data_analysis": DataAnalysisAgent(),

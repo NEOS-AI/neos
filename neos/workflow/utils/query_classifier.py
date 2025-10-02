@@ -19,7 +19,16 @@ class QueryClassifier:
             "realtime_info": ["최신", "현재", "실시간", "current", "latest", "now", "today"],
             "task_execution": ["작업", "계획", "task", "plan", "실행", "execute", "수행"],
             "financial_analysis": ["주식", "stock", "투자", "investment", "전망", "outlook", "재무", "finance"],
-            "technical_analysis": ["기술", "technology", "개발", "development", "프로그래밍", "programming"]
+            "technical_analysis": ["기술", "technology", "개발", "development", "프로그래밍", "programming"],
+            "complex_analysis": ["심층", "종합", "포괄적", "전반적", "심도있는", "detailed", "comprehensive", "in-depth"]
+        }
+
+        # 복잡한 쿼리 판별을 위한 키워드
+        self.complexity_indicators = {
+            "multiple_subjects": ["와", "과", "그리고", "and", ","],  # 여러 주제
+            "depth_required": ["심층", "상세", "자세히", "깊이있는", "detailed", "in-depth", "comprehensive"],
+            "comparison_multiple": ["비교", "compare", "차이", "vs"],  # 비교 분석
+            "multi_aspect": ["관점", "측면", "aspect", "perspective", "각도"],
         }
 
     async def classify_query(self, state: AgentState) -> Dict[str, Any]:
@@ -31,18 +40,22 @@ class QueryClassifier:
             # 쿼리 임베딩 생성
             await self._generate_embedding(state, query)
 
+            # 쿼리 복잡도 분석
+            complexity_score = self._analyze_query_complexity(query)
+            print(f"[DEBUG] Query complexity score: {complexity_score}")
+
             # 쿼리 의도 분류
-            intent = await self._classify_intent(query)
+            intent = await self._classify_intent(query, complexity_score)
             state["query_intent"] = intent
             print(f"[DEBUG] Intent classified as: {intent}")
 
-            # 필요한 에이전트들 결정
-            required_agents = self._determine_required_agents(query, intent)
+            # 필요한 에이전트들 결정 (복잡도 고려)
+            required_agents = self._determine_required_agents(query, intent, complexity_score)
             state["required_agents"] = required_agents
             print(f"[DEBUG] Required agents: {required_agents}")
 
-            # 분류 결과 저장
-            classification_result = self._create_classification_result(intent, required_agents, query)
+            # 분류 결과 저장 (복잡도 포함)
+            classification_result = self._create_classification_result(intent, required_agents, query, complexity_score)
             state["query_classification"] = classification_result
 
         except Exception as e:
@@ -70,7 +83,42 @@ class QueryClassifier:
             state["query_embedding"] = embedding
             print(f"[DEBUG] Embedding generated, length: {len(embedding) if embedding else 'None'}")
 
-    async def _classify_intent(self, query: str) -> str:
+    def _analyze_query_complexity(self, query: str) -> float:
+        """쿼리 복잡도 분석 (0.0 ~ 1.0)"""
+        query_lower = query.lower()
+        complexity_score = 0.0
+
+        # 1. 쿼리 길이 (긴 쿼리 = 복잡함)
+        length_score = min(len(query) / 100.0, 0.3)  # 최대 0.3
+        complexity_score += length_score
+
+        # 2. 여러 주제 포함 여부
+        multiple_subjects_count = sum(1 for keyword in self.complexity_indicators["multiple_subjects"] if keyword in query_lower)
+        if multiple_subjects_count >= 2:  # 2개 이상의 연결어
+            complexity_score += 0.25
+
+        # 3. 심층 분석 요구 키워드
+        depth_keywords_count = sum(1 for keyword in self.complexity_indicators["depth_required"] if keyword in query_lower)
+        if depth_keywords_count > 0:
+            complexity_score += 0.2
+
+        # 4. 비교 분석 키워드
+        comparison_count = sum(1 for keyword in self.complexity_indicators["comparison_multiple"] if keyword in query_lower)
+        if comparison_count > 0 and multiple_subjects_count >= 1:  # 비교 + 여러 주제
+            complexity_score += 0.15
+
+        # 5. 다각도 분석 요구
+        multi_aspect_count = sum(1 for keyword in self.complexity_indicators["multi_aspect"] if keyword in query_lower)
+        if multi_aspect_count > 0:
+            complexity_score += 0.1
+
+        # 최종 점수 (0.0 ~ 1.0 범위로 정규화)
+        final_score = min(complexity_score, 1.0)
+        print(f"[DEBUG] Complexity breakdown - length: {length_score:.2f}, multi_subject: {multiple_subjects_count}, depth: {depth_keywords_count}, comparison: {comparison_count}, multi_aspect: {multi_aspect_count}")
+
+        return final_score
+
+    async def _classify_intent(self, query: str, complexity_score: float = 0.0) -> str:
         """쿼리 의도 분류"""
         query_lower = query.lower()
         print("[DEBUG] Classifying query intent...")
@@ -82,6 +130,12 @@ class QueryClassifier:
             if score > 0:
                 intent_scores[intent] = score
 
+        # 복잡도가 높으면 complex_analysis 의도 우선 고려
+        if complexity_score >= 0.6:
+            if "complex_analysis" in intent_scores or any(intent in intent_scores for intent in ["financial_analysis", "comparison", "data_analysis"]):
+                print(f"[DEBUG] High complexity ({complexity_score:.2f}) detected, considering complex_analysis")
+                intent_scores["complex_analysis"] = intent_scores.get("complex_analysis", 0) + 2  # 가중치 부여
+
         # 가장 높은 점수의 의도 반환
         if intent_scores:
             best_intent = max(intent_scores, key=intent_scores.get)
@@ -91,10 +145,32 @@ class QueryClassifier:
         # 기본 의도
         return "information_seeking"
 
-    def _determine_required_agents(self, query: str, intent: str) -> List[str]:
-        """필요한 에이전트 결정"""
+    def _determine_required_agents(self, query: str, intent: str, complexity_score: float = 0.0) -> List[str]:
+        """필요한 에이전트 결정 (복잡도 고려)"""
         agents = []
 
+        # 1. 복잡도가 높으면 (>= 0.5) 복합검색 에이전트 사용
+        if complexity_score >= 0.5:
+            print(f"[DEBUG] High complexity ({complexity_score:.2f}), using multi_query_search agent")
+            agents.append("multi_query_search")
+            # 복합검색 에이전트를 사용할 때는 다른 검색 에이전트는 불필요
+            return agents
+
+        # 2. 여러 기업/주제를 동시에 분석하는 경우 복합검색 사용
+        query_lower = query.lower()
+        connector_count = sum(1 for keyword in ["와", "과", "그리고", "and", ","] if keyword in query_lower)
+        if connector_count >= 2:  # 2개 이상의 연결어가 있으면 복잡한 쿼리로 판단
+            print(f"[DEBUG] Multiple subjects detected ({connector_count} connectors), using multi_query_search agent")
+            agents.append("multi_query_search")
+            return agents
+
+        # 3. complex_analysis 의도면 복합검색 사용
+        if intent == "complex_analysis":
+            print(f"[DEBUG] Complex analysis intent detected, using multi_query_search agent")
+            agents = ["multi_query_search"]
+            return agents
+
+        # 복잡도가 낮으면 기존 로직 사용
         # 기본적으로 지식 검색은 항상 포함
         agents.append("knowledge_search")
 
@@ -132,7 +208,7 @@ class QueryClassifier:
 
         return generation_agents
 
-    def _create_classification_result(self, intent: str, required_agents: List[str], query: str) -> Dict[str, Any]:
+    def _create_classification_result(self, intent: str, required_agents: List[str], query: str, complexity_score: float = 0.0) -> Dict[str, Any]:
         """분류 결과 생성"""
         confidence = self._calculate_confidence(intent, query)
 
@@ -140,6 +216,7 @@ class QueryClassifier:
             "intent": intent,
             "required_agents": required_agents,
             "confidence": confidence,
+            "complexity_score": complexity_score,
             "timestamp": datetime.utcnow().isoformat(),
             "query_length": len(query),
             "agent_count": len(required_agents)
