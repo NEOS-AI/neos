@@ -326,20 +326,47 @@ async def _test_single_agent(agent_type: str, query: str) -> Dict[str, Any]:
         
         # 분석 에이전트의 경우 더미 검색 결과 제공
         if agent_type in ['data_analysis', 'comparative_analysis']:
-            from workflow.state import SearchResult
+            from neos.workflow.state import SearchResult
             context["search_results"] = [
                 SearchResult(
-                    source="test",
-                    title="Test Result",
-                    content=f"Test content for query: {query}",
-                    score=0.8
+                    source="test_source_1",
+                    title=f"{query} - 분석 결과 1",
+                    content=f"{query}에 대한 데이터: 성장률 15.3%, 시장 규모 $2.5B, 2024-01-15 기준. 전년 대비 12% 증가.",
+                    score=0.85,
+                    metadata={"date": "2024-01-15", "category": "analysis"}
+                ),
+                SearchResult(
+                    source="test_source_2",
+                    title=f"{query} - 분석 결과 2",
+                    content=f"{query} 관련 통계: 평균값 87.2, 중간값 82.5, 최대값 95.8, 최소값 72.3. 표준편차 8.4.",
+                    score=0.78,
+                    metadata={"date": "2024-02-20", "category": "statistics"}
+                ),
+                SearchResult(
+                    source="test_source_3",
+                    title=f"{query} - 트렌드 분석",
+                    content=f"{query} 트렌드: Q1 $1.2M, Q2 $1.5M, Q3 $1.8M, Q4 예상 $2.1M. 2023-01-01부터 2023-12-31까지 데이터.",
+                    score=0.92,
+                    metadata={"date": "2023-12-31", "category": "trend"}
                 )
             ]
         
         result = await agent.execute(query, context)
-        
+
         execution_time = time.time() - start_time
-        
+
+        # 데이터셋 자동 저장 (LLM 호출이 있었다면)
+        records = llm_call_collector.get_all_records()
+        if records:
+            try:
+                print(f"[DEBUG] Auto-saving dataset with {len(records)} records...")
+                filepath = dataset_manager.save_jsonl(records=records)
+                print(f"[DEBUG] Dataset auto-saved to: {filepath}")
+                # 저장 후 레코드 초기화
+                llm_call_collector.clear_records()
+            except Exception as e:
+                print(f"[WARNING] Failed to auto-save dataset: {e}")
+
         return {
             "agent_type": agent_type,
             "query": query,
@@ -347,7 +374,7 @@ async def _test_single_agent(agent_type: str, query: str) -> Dict[str, Any]:
             "result": result,
             "timestamp": datetime.now().isoformat()
         }
-        
+
     except Exception as e:
         return {
             "agent_type": agent_type,
