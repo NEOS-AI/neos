@@ -34,7 +34,7 @@ try:
     from neos.agents.search_agents import KnowledgeSearchAgent, RealtimeInfoSearchAgent, RealtimeDataSearchAgent
     from neos.agents.analysis_agents import DataAnalysisAgent, ComparativeAnalysisAgent
     from neos.agents.generation_agents import ImageGenerationAgent, ApiCallAgent, FileProcessingAgent, TaskCreationAgent
-    from neos.tools.mcp_integration import mcp_manager, MCPTool, MCPToolType, MCPToolResult
+    from neos.tools.mcp_integration import mcp_manager, MCPToolType, MCPToolResult
     from neos.tools.tool_selector import tool_selector
     from neos.dataset import llm_call_collector, dataset_manager
 except ImportError as e:
@@ -1574,7 +1574,7 @@ def dataset():
     pass
 
 @dataset.command()
-def status():
+def dataset_status():
     """데이터셋 수집 상태 확인"""
     console.print(Panel.fit("📊 Dataset Collection Status", style="bold blue"))
 
@@ -1664,7 +1664,7 @@ def export(format: str, session: Optional[str], agent: Optional[str], step: Opti
                 return
 
         if filepath:
-            console.print(f"✅ [green]Dataset exported successfully![/green]")
+            console.print("✅ [green]Dataset exported successfully![/green]")
             console.print(f"📁 File: {filepath}")
 
             # 파일 정보 표시
