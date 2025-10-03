@@ -96,7 +96,7 @@ app = FastAPI(
     - 📈 실시간 모니터링 및 품질 평가
     - 🔧 확장 가능한 에이전트 아키텍처
     """,
-    version="0.2.1",
+    version="0.2.2",
     lifespan=lifespan,
     docs_url="/docs" if IS_DEBUG else None,
     redoc_url="/redoc" if IS_DEBUG else None
