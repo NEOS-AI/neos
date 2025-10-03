@@ -2,6 +2,7 @@
 
 from typing import Dict, Any, List
 from datetime import datetime
+import re
 
 from neos.utils.embeddings import embedding_manager
 from ..state import AgentState
@@ -20,13 +21,14 @@ class QueryClassifier:
             "task_execution": ["작업", "계획", "task", "plan", "실행", "execute", "수행"],
             "financial_analysis": ["주식", "stock", "투자", "investment", "전망", "outlook", "재무", "finance"],
             "technical_analysis": ["기술", "technology", "개발", "development", "프로그래밍", "programming"],
-            "complex_analysis": ["심층", "종합", "포괄적", "전반적", "심도있는", "detailed", "comprehensive", "in-depth"]
+            "complex_analysis": ["심층", "종합", "포괄적", "전반적", "심도있는", "detailed", "comprehensive", "in-depth"],
+            "deep_research": ["deep research", "심층 조사", "철저히", "깊이있게", "전문적인 분석", "리포트", "보고서", "detailed report", "연구"]
         }
 
         # 복잡한 쿼리 판별을 위한 키워드
         self.complexity_indicators = {
             "multiple_subjects": ["와", "과", "그리고", "and", ","],  # 여러 주제
-            "depth_required": ["심층", "상세", "자세히", "깊이있는", "detailed", "in-depth", "comprehensive"],
+            "depth_required": ["심층", "상세", "자세히", "깊이있는", "깊이있게", "detailed", "in-depth", "comprehensive", "철저히", "전문적"],
             "comparison_multiple": ["비교", "compare", "차이", "vs"],  # 비교 분석
             "multi_aspect": ["관점", "측면", "aspect", "perspective", "각도"],
         }
@@ -37,6 +39,11 @@ class QueryClassifier:
         print(f"[DEBUG] Starting query classification for: {query[:50]}...")
 
         try:
+            # 언어 감지
+            detected_language = self._detect_language(query)
+            state["detected_language"] = detected_language
+            print(f"[DEBUG] Detected language: {detected_language}")
+
             # 쿼리 임베딩 생성
             await self._generate_embedding(state, query)
 
@@ -74,6 +81,53 @@ class QueryClassifier:
         })
 
         return state
+
+    def _detect_language(self, query: str) -> str:
+        """사용자 쿼리의 주 언어 감지"""
+        # 각 언어별 문자 수 카운트
+        korean_chars = len(re.findall(r'[가-힣]', query))
+
+        # 일본어: 히라가나, 가타카나, 한자 포함
+        hiragana_chars = len(re.findall(r'[ぁ-ん]', query))
+        katakana_chars = len(re.findall(r'[ァ-ヶー]', query))
+        kanji_chars = len(re.findall(r'[一-龯]', query))
+
+        # 일본어는 히라가나/가타카나가 있으면 확실
+        japanese_chars = hiragana_chars + katakana_chars + kanji_chars
+        has_kana = hiragana_chars > 0 or katakana_chars > 0
+
+        # 중국어: 한자만 (일본어 가나가 없을 때)
+        chinese_chars = kanji_chars if not has_kana else 0
+
+        english_chars = len(re.findall(r'[a-zA-Z]', query))
+
+        # 총 문자 수 (공백 제외)
+        total_chars = len(re.findall(r'\S', query))
+
+        if total_chars == 0:
+            return 'en'  # 기본값
+
+        # 일본어 확정: 히라가나나 가타카나가 있으면
+        if has_kana and japanese_chars / total_chars >= 0.3:
+            return 'ja'
+
+        # 각 언어 비율 계산
+        lang_ratios = {
+            'ko': korean_chars / total_chars,
+            'ja': japanese_chars / total_chars,
+            'zh': chinese_chars / total_chars,
+            'en': english_chars / total_chars
+        }
+
+        # 가장 높은 비율의 언어 선택 (최소 30% 이상)
+        max_lang = max(lang_ratios, key=lang_ratios.get)
+        max_ratio = lang_ratios[max_lang]
+
+        # 30% 미만이면 영어로 기본 설정
+        if max_ratio < 0.3:
+            return 'en'
+
+        return max_lang
 
     async def _generate_embedding(self, state: AgentState, query: str) -> None:
         """쿼리 임베딩 생성"""
@@ -149,6 +203,21 @@ class QueryClassifier:
         """필요한 에이전트 결정 (복잡도 고려)"""
         agents = []
 
+        # 0. Deep Research 활성화 조건 (최우선)
+        query_lower = query.lower()
+
+        # Deep Research 명시적 요청 또는 매우 높은 복잡도
+        if intent == "deep_research" or complexity_score >= 0.75:
+            print(f"[DEBUG] Deep research activated (intent: {intent}, complexity: {complexity_score:.2f})")
+            agents.append("deep_research")
+            return agents
+
+        # 복잡한 분석 + 높은 복잡도 조합
+        if intent == "complex_analysis" and complexity_score >= 0.65:
+            print(f"[DEBUG] Deep research activated for complex analysis (complexity: {complexity_score:.2f})")
+            agents.append("deep_research")
+            return agents
+
         # 1. 복잡도가 높으면 (>= 0.5) 복합검색 에이전트 사용
         if complexity_score >= 0.5:
             print(f"[DEBUG] High complexity ({complexity_score:.2f}), using multi_query_search agent")
@@ -157,7 +226,6 @@ class QueryClassifier:
             return agents
 
         # 2. 여러 기업/주제를 동시에 분석하는 경우 복합검색 사용
-        query_lower = query.lower()
         connector_count = sum(1 for keyword in ["와", "과", "그리고", "and", ","] if keyword in query_lower)
         if connector_count >= 2:  # 2개 이상의 연결어가 있으면 복잡한 쿼리로 판단
             print(f"[DEBUG] Multiple subjects detected ({connector_count} connectors), using multi_query_search agent")

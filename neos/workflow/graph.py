@@ -8,7 +8,8 @@ from neos.agents.search_agents import (
     KnowledgeSearchAgent,
     RealtimeInfoSearchAgent,
     RealtimeDataSearchAgent,
-    MultiQuerySearchAgent
+    MultiQuerySearchAgent,
+    DeepResearchAgent
 )
 from neos.agents.analysis_agents import (
     DataAnalysisAgent,
@@ -60,6 +61,7 @@ class MultiAgentWorkflow:
             "realtime_info_search": RealtimeInfoSearchAgent(),
             "realtime_data_search": RealtimeDataSearchAgent(),
             "multi_query_search": MultiQuerySearchAgent(),
+            "deep_research": DeepResearchAgent(),
 
             # 분석 에이전트들
             "data_analysis": DataAnalysisAgent(),
@@ -216,6 +218,7 @@ class MultiAgentWorkflow:
             original_query=user_input["query"],
             query_intent=None,
             query_embedding=None,
+            detected_language=None,
             query_classification=None,
             required_agents=[],
             search_results=[],

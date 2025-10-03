@@ -133,7 +133,8 @@ class SearchOrchestrator:
                     "user_id": state["user_id"],
                     "session_id": state["session_id"],
                     "query_embedding": state.get("query_embedding"),
-                    "query_intent": state.get("query_intent")
+                    "query_intent": state.get("query_intent"),
+                    "detected_language": state.get("detected_language")
                 }
                 task = agent.execute(state["original_query"], context)
                 agent_tasks.append(task)

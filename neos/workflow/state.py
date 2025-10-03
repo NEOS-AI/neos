@@ -14,6 +14,10 @@ class SearchResult:
     score: float = 0.0
     metadata: Dict[str, Any] = None
 
+    def __post_init__(self):
+        """Convert numpy types to native Python types for msgpack serialization"""
+        self.score = float(self.score)
+
 @dataclass
 class AnalysisResult:
     """분석 결과"""
@@ -21,6 +25,10 @@ class AnalysisResult:
     data: Dict[str, Any]
     confidence: float
     insights: List[str]
+
+    def __post_init__(self):
+        """Convert numpy types to native Python types for msgpack serialization"""
+        self.confidence = float(self.confidence)
 
 @dataclass
 class GenerationResult:
@@ -36,7 +44,8 @@ class AgentState(TypedDict):
     original_query: str
     query_intent: Optional[str]
     query_embedding: Optional[List[float]]
-    
+    detected_language: Optional[str]  # 감지된 사용자 질문 언어
+
     # 쿼리 분류 결과
     query_classification: Optional[Dict[str, Any]]
     required_agents: List[str]
@@ -79,7 +88,8 @@ class WorkflowConfig:
         "knowledge_search",
         "realtime_info_search",
         "realtime_data_search",
-        "multi_query_search"
+        "multi_query_search",
+        "deep_research"
     ]
     
     ANALYSIS_AGENTS = [

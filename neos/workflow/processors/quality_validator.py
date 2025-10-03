@@ -17,13 +17,13 @@ class QualityValidator:
         print("[DEBUG] Starting quality validation...")
 
         quality_metrics = {
-            "completeness": self._calculate_completeness(state),
-            "relevance": self._calculate_relevance(state),
-            "coherence": self._calculate_coherence(state)
+            "completeness": float(self._calculate_completeness(state)),
+            "relevance": float(self._calculate_relevance(state)),
+            "coherence": float(self._calculate_coherence(state))
         }
 
-        # 전체 품질 점수 계산
-        overall_score = sum(quality_metrics.values()) / len(quality_metrics)
+        # 전체 품질 점수 계산 (ensure native Python float)
+        overall_score = float(sum(quality_metrics.values()) / len(quality_metrics))
 
         state["quality_score"] = overall_score
         state["quality_feedback"] = self._generate_quality_feedback(quality_metrics)
@@ -80,7 +80,7 @@ class QualityValidator:
 
     def _calculate_relevance(self, state: AgentState) -> float:
         """관련성 계산"""
-        search_scores = [r.score for r in state["search_results"] if hasattr(r, 'score')]
+        search_scores = [float(r.score) for r in state["search_results"] if hasattr(r, 'score')]
 
         if not search_scores:
             # 검색 결과가 없거나 점수가 없는 경우, 다른 지표로 평가
@@ -89,13 +89,13 @@ class QualityValidator:
             else:
                 return 0.3  # 결과가 없으면 낮은 점수
 
-        avg_score = sum(search_scores) / len(search_scores)
+        avg_score = float(sum(search_scores) / len(search_scores))
 
         # 점수 분포 고려
-        score_variance = sum([(score - avg_score) ** 2 for score in search_scores]) / len(search_scores)
-        consistency_bonus = max(0, 0.1 - score_variance / 10)  # 점수가 일관될수록 보너스
+        score_variance = float(sum([(score - avg_score) ** 2 for score in search_scores]) / len(search_scores))
+        consistency_bonus = float(max(0, 0.1 - score_variance / 10))  # 점수가 일관될수록 보너스
 
-        return min(1.0, avg_score + consistency_bonus)
+        return float(min(1.0, avg_score + consistency_bonus))
 
     def _calculate_coherence(self, state: AgentState) -> float:
         """일관성 계산"""

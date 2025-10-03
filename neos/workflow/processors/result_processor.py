@@ -46,16 +46,16 @@ class ResultProcessor:
             return {"count": 0, "sources": [], "avg_score": 0.0}
 
         sources = list(set([r.source for r in results if hasattr(r, 'source')]))
-        scores = [r.score for r in results if hasattr(r, 'score')]
-        avg_score = sum(scores) / len(scores) if scores else 0.0
+        scores = [float(r.score) for r in results if hasattr(r, 'score')]
+        avg_score = float(sum(scores) / len(scores)) if scores else 0.0
 
         return {
             "count": len(results),
             "sources": sources,
             "avg_score": avg_score,
             "score_range": {
-                "min": min(scores) if scores else 0.0,
-                "max": max(scores) if scores else 0.0
+                "min": float(min(scores)) if scores else 0.0,
+                "max": float(max(scores)) if scores else 0.0
             }
         }
 
@@ -72,7 +72,7 @@ class ResultProcessor:
             "count": len(results),
             "types": types,
             "total_insights": total_insights,
-            "avg_insights_per_analysis": total_insights / len(results) if results else 0
+            "avg_insights_per_analysis": float(total_insights / len(results)) if results else 0.0
         }
 
     def _summarize_generation_results(self, results: List[Any]) -> Dict[str, Any]:
@@ -88,7 +88,7 @@ class ResultProcessor:
             "count": len(results),
             "types": types,
             "total_size": total_size,
-            "avg_size": total_size / len(results) if results else 0
+            "avg_size": float(total_size / len(results)) if results else 0.0
         }
 
     def _extract_confidence_scores(self, analysis_results: List[Any]) -> List[float]:
@@ -97,9 +97,9 @@ class ResultProcessor:
 
         for analysis in analysis_results:
             if hasattr(analysis, 'confidence'):
-                confidence_scores.append(analysis.confidence)
+                confidence_scores.append(float(analysis.confidence))
             elif isinstance(analysis, dict) and 'confidence' in analysis:
-                confidence_scores.append(analysis['confidence'])
+                confidence_scores.append(float(analysis['confidence']))
 
         return confidence_scores
 
@@ -111,11 +111,11 @@ class ResultProcessor:
             "total_search_results": integrated_results.get("total_sources", 0),
             "analysis_types": len(integrated_results.get("analysis_summary", {}).get("types", [])),
             "generation_types": len(integrated_results.get("generation_summary", {}).get("types", [])),
-            "avg_confidence": (
+            "avg_confidence": float(
                 sum(integrated_results.get("confidence_scores", [])) /
                 len(integrated_results.get("confidence_scores", [1]))
             ),
-            "processing_completeness": self._calculate_processing_completeness(state)
+            "processing_completeness": float(self._calculate_processing_completeness(state))
         }
 
     def _calculate_processing_completeness(self, state: AgentState) -> float:
@@ -126,4 +126,4 @@ class ResultProcessor:
             if "completed" in step.get("result", "")
         ])
 
-        return completed_steps / total_steps if total_steps > 0 else 0.0
+        return float(completed_steps / total_steps) if total_steps > 0 else 0.0

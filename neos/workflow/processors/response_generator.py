@@ -43,8 +43,9 @@ class ResponseGenerator:
             if generation_summary:
                 response_parts.append(generation_summary)
 
-        # 최종 응답 구성
-        final_response = self._construct_final_response(response_parts)
+        # 최종 응답 구성 (언어 정보 전달)
+        detected_language = state.get("detected_language", "ko")
+        final_response = self._construct_final_response(response_parts, detected_language)
 
         # 실행 시간 계산
         execution_time = int((datetime.utcnow() - state["execution_start"]).total_seconds() * 1000)
@@ -64,12 +65,19 @@ class ResponseGenerator:
 
         return state
 
-    def _construct_final_response(self, response_parts: List[str]) -> str:
+    def _construct_final_response(self, response_parts: List[str], detected_language: str = "ko") -> str:
         """최종 응답 구성"""
         if response_parts:
             return "\n\n".join(response_parts)
         else:
-            return "죄송합니다. 요청하신 주제에 대한 관련 정보를 찾지 못했습니다. 다른 키워드로 다시 시도해 보시기 바랍니다."
+            # 언어별 기본 메시지
+            default_messages = {
+                "ko": "죄송합니다. 요청하신 주제에 대한 관련 정보를 찾지 못했습니다. 다른 키워드로 다시 시도해 보시기 바랍니다.",
+                "en": "Sorry, we couldn't find relevant information on the requested topic. Please try again with different keywords.",
+                "ja": "申し訳ございません。お探しのトピックに関する関連情報が見つかりませんでした。別のキーワードで再度お試しください。",
+                "zh": "抱歉，我们未能找到有关所请求主题的相关信息。请尝试使用不同的关键词重新搜索。"
+            }
+            return default_messages.get(detected_language, default_messages["en"])
 
     def _create_response_metadata(self, state: AgentState) -> Dict[str, Any]:
         """응답 메타데이터 생성"""

@@ -823,6 +823,165 @@ def _display_workflow_benchmark_results(results: List[Dict[str, Any]]):
         console.print()
         console.print(summary_table)
 
+
+@workflow.command()
+@click.argument('query')
+@click.option('--output', '-o', type=click.Choice(['json', 'text']), default='text', help='출력 형식')
+@click.option('--user-id', default=None, help='사용자 ID')
+@click.option('--session-id', default=None, help='세션 ID')
+def deep_research(query: str, output: str, user_id: Optional[str], session_id: Optional[str]):
+    """Deep Research 모드 - 장시간 심층 조사 및 고품질 리포트 생성
+    
+    QUERY: 조사할 주제
+    
+    예시:
+      uv run python -m neos.cli workflow deep-research "AI 반도체 시장 전망 및 주요 기업 분석"
+    """
+    user_id = user_id or cli_state["user_id"]
+    session_id = session_id or cli_state["session_id"]
+    
+    console.print(Panel.fit(
+        f"🔬 [bold]Deep Research Mode[/bold]\n"
+        f"주제: {query}\n\n"
+        f"예상 소요 시간: 15-25분\n"
+        f"수집 예상 소스: 30-50개\n"
+        f"처리 단계: 4단계 (탐색 → Gap분석 → 검증 → 리포트)",
+        style="bold blue"
+    ))
+    
+    console.print()
+    console.print("[yellow]⚠️  Deep Research는 장시간 실행됩니다. 진행 상황을 모니터링하세요.[/yellow]")
+    console.print()
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console
+    ) as progress:
+        
+        task = progress.add_task("Executing deep research...", total=None)
+        
+        result = asyncio.run(_test_deep_research(query, user_id, session_id, progress, task))
+        
+        progress.update(task, description="✅ Deep Research completed")
+    
+    if output == 'json':
+        console.print(Syntax(json.dumps(result, indent=2, ensure_ascii=False), "json"))
+    else:
+        _display_deep_research_result(result)
+
+async def _test_deep_research(query: str, user_id: str, session_id: str, progress, task) -> Dict[str, Any]:
+    """Deep Research 실행"""
+    try:
+        start_time = time.time()
+
+        # Deep Research를 위해 쿼리에 힌트 추가
+        enhanced_query = f"[Deep Research] {query}"
+
+        workflow_input = {
+            "user_id": user_id,
+            "session_id": session_id,
+            "query": enhanced_query
+        }
+
+        if progress:
+            progress.update(task, description="Phase 1/4: Initial Exploration...")
+        await asyncio.sleep(0.1)
+
+        # 긴 타임아웃 설정 (30분)
+        try:
+            result = await asyncio.wait_for(
+                multi_agent_workflow.execute_workflow(workflow_input),
+                timeout=1800  # 30 minutes timeout for deep research
+            )
+        except asyncio.TimeoutError:
+            return {
+                "success": False,
+                "error": "Deep research timed out after 30 minutes",
+                "query": query,
+                "timestamp": datetime.now().isoformat()
+            }
+
+        execution_time = time.time() - start_time
+        result["total_execution_time_ms"] = int(execution_time * 1000)
+        result["query"] = query
+        result["user_id"] = user_id
+        result["session_id"] = session_id
+        result["timestamp"] = datetime.now().isoformat()
+
+        return result
+
+    except Exception as e:
+        import traceback
+        return {
+            "success": False,
+            "error": str(e),
+            "query": query,
+            "timestamp": datetime.now().isoformat(),
+            "traceback": traceback.format_exc()
+        }
+
+def _display_deep_research_result(result: Dict[str, Any]):
+    """Deep Research 결과 표시"""
+    if result.get("success", False):
+        console.print("✅ [green]Deep Research completed successfully[/green]")
+        
+        # 기본 정보
+        info_table = Table(title="🔬 Deep Research Information")
+        info_table.add_column("Field", style="cyan")
+        info_table.add_column("Value", style="green")
+        
+        info_table.add_row("Query", result.get("query", ""))
+        info_table.add_row("User ID", result.get("user_id", ""))
+        info_table.add_row("Session ID", result.get("session_id", ""))
+        info_table.add_row("Total Time", f"{result.get('total_execution_time_ms', 0) / 1000:.1f}s")
+        info_table.add_row("Quality Score", f"{result.get('quality_score', 0):.2f}")
+        
+        console.print(info_table)
+        
+        # 메타데이터
+        if "metadata" in result:
+            metadata = result["metadata"]
+            meta_table = Table(title="📊 Research Statistics")
+            meta_table.add_column("Metric", style="cyan")
+            meta_table.add_column("Value", style="green")
+            
+            meta_table.add_row("Total Sources", str(metadata.get("total_sources", 0)))
+            meta_table.add_row("Processing Steps", str(metadata.get("processing_steps", 0)))
+            
+            console.print()
+            console.print(meta_table)
+        
+        # 리포트 내용 - Deep Research는 매우 긴 리포트를 생성하므로 Markdown으로 렌더링
+        console.print()
+        response_text = result.get("response", "No response")
+
+        # Markdown 형식으로 렌더링 (Deep Research 리포트는 마크다운 형식)
+        try:
+            from rich.markdown import Markdown
+            console.print(Panel(
+                Markdown(response_text),
+                title="📝 Deep Research Report",
+                style="blue",
+                expand=True
+            ))
+        except Exception:
+            # Markdown 렌더링 실패시 일반 텍스트로 표시
+            console.print(Panel(
+                response_text,
+                title="📝 Deep Research Report",
+                style="blue",
+                expand=True
+            ))
+        
+    else:
+        console.print("❌ [red]Deep Research failed[/red]")
+        if "error" in result:
+            console.print(Panel(result["error"], title="🚨 Error", style="red"))
+
+
 @cli.command()
 def interactive():
     """대화형 모드"""

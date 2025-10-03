@@ -201,11 +201,11 @@ class DataAnalysisAgent(AnalysisAgent):
             return {}
         
         return {
-            "mean": np.mean(numbers),
-            "median": np.median(numbers),
-            "std": np.std(numbers),
-            "min": np.min(numbers),
-            "max": np.max(numbers),
+            "mean": float(np.mean(numbers)),
+            "median": float(np.median(numbers)),
+            "std": float(np.std(numbers)),
+            "min": float(np.min(numbers)),
+            "max": float(np.max(numbers)),
             "count": len(numbers)
         }
     
@@ -351,7 +351,7 @@ class ComparativeAnalysisAgent(AnalysisAgent):
         insights.append(f"총 {len(source_groups)}개의 서로 다른 소스에서 정보 수집")
 
         for source, items in source_groups.items():
-            avg_score = np.mean([item["score"] for item in items])
+            avg_score = float(np.mean([item["score"] for item in items]))
             insights.append(f"{source}: {len(items)}개 결과, 평균 점수 {avg_score:.2f}")
 
         return {
@@ -380,7 +380,7 @@ class ComparativeAnalysisAgent(AnalysisAgent):
                     similarities.append(sim)
             
             if similarities:
-                avg_similarity = np.mean(similarities)
+                avg_similarity = float(np.mean(similarities))
                 insights.append(f"콘텐츠 평균 유사도: {avg_similarity:.2f}")
                 
                 if avg_similarity > 0.7:
@@ -420,9 +420,9 @@ class ComparativeAnalysisAgent(AnalysisAgent):
         insights = []
 
         if scores:
-            max_score = max(scores)
-            min_score = min(scores)
-            avg_score = np.mean(scores)
+            max_score = float(max(scores))
+            min_score = float(min(scores))
+            avg_score = float(np.mean(scores))
 
             insights.append(f"점수 범위: {min_score:.2f} ~ {max_score:.2f} (평균: {avg_score:.2f})")
 
