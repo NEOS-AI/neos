@@ -172,16 +172,23 @@ class ResponseGenerator:
         if not results:
             return ""
 
+        print(f"[DEBUG] Creating analysis summary from {len(results)} results: ", results)
         summary_lines = ["## 분석 결과"]
+        found_insights = False
 
         for result in results:
             analysis_type = getattr(result, 'analysis_type', '분석')
             insights = getattr(result, 'insights', [])
+            if not insights:
+                continue
+            found_insights = True
 
             summary_lines.append(f"### {analysis_type}")
             for insight in insights[:3]:  # 최대 3개의 인사이트
                 summary_lines.append(f"- {insight}")
 
+        if not found_insights:
+            return ""
         return "\n".join(summary_lines)
 
     def _create_generation_summary(self, results: List[Any]) -> str:
