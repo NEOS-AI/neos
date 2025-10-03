@@ -81,22 +81,8 @@ async def lifespan(app: FastAPI):
 # FastAPI 애플리케이션 생성
 app = FastAPI(
     title="Multi-Agent AI System",
-    description="""
-    🤖 **멀티 에이전트 AI 기반 지능형 검색 및 분석 시스템**
-    
-    이 시스템은 다음과 같은 기능을 제공합니다:
-    - 🔍 **지능형 검색**: 지식 기반, 실시간 정보, 데이터 검색
-    - 📊 **고급 분석**: 데이터 분석, 비교 분석
-    - 🎨 **콘텐츠 생성**: 이미지, 작업, 파일 처리
-    - 🚀 **워크플로우 자동화**: LangGraph 기반 멀티 에이전트 오케스트레이션
-    
-    ## 주요 특징
-    - ⚡ 비동기 처리 및 캐싱으로 최적화된 성능
-    - 🎯 벡터 임베딩 기반 의미적 검색
-    - 📈 실시간 모니터링 및 품질 평가
-    - 🔧 확장 가능한 에이전트 아키텍처
-    """,
-    version="0.3.0",
+    description="""**멀티 에이전트 AI 기반 지능형 검색 및 분석 시스템**""",
+    version="0.3.1",
     lifespan=lifespan,
     docs_url="/docs" if IS_DEBUG else None,
     redoc_url="/redoc" if IS_DEBUG else None
