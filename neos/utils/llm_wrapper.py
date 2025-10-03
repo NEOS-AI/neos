@@ -39,7 +39,8 @@ class TrackedLLM:
         user_id: str = "",
         workflow_step: str = "",
         agent_name: Optional[str] = None,
-        tags: Optional[List[str]] = None
+        tags: Optional[List[str]] = None,
+        custom_metadata: Optional[Dict[str, Any]] = None
     ):
         self.llm = llm
         self.session_id = session_id
@@ -47,6 +48,7 @@ class TrackedLLM:
         self.workflow_step = workflow_step
         self.agent_name = agent_name
         self.tags = tags or []
+        self.custom_metadata = custom_metadata or {}
 
         # LLM 설정 추출
         self.provider = self._extract_provider()
@@ -161,7 +163,8 @@ class TrackedLLM:
                 latency_ms=latency_ms,
                 temperature=self.temperature,
                 success=True,
-                tags=self.tags
+                tags=self.tags,
+                custom_metadata=self.custom_metadata
             )
 
             return response
@@ -183,7 +186,8 @@ class TrackedLLM:
                 temperature=self.temperature,
                 success=False,
                 error_message=str(e),
-                tags=self.tags
+                tags=self.tags,
+                custom_metadata=self.custom_metadata
             )
 
             raise
@@ -213,7 +217,8 @@ class TrackedLLM:
                 latency_ms=latency_ms,
                 temperature=self.temperature,
                 success=True,
-                tags=self.tags
+                tags=self.tags,
+                custom_metadata=self.custom_metadata
             )
 
             return response
@@ -234,7 +239,8 @@ class TrackedLLM:
                 temperature=self.temperature,
                 success=False,
                 error_message=str(e),
-                tags=self.tags
+                tags=self.tags,
+                custom_metadata=self.custom_metadata
             )
 
             raise
@@ -296,7 +302,8 @@ def create_tracked_llm(
     user_id: str = "",
     workflow_step: str = "",
     agent_name: Optional[str] = None,
-    tags: Optional[List[str]] = None
+    tags: Optional[List[str]] = None,
+    custom_metadata: Optional[Dict[str, Any]] = None
 ) -> TrackedLLM:
     """
     추적 가능한 LLM 인스턴스 생성
@@ -322,5 +329,6 @@ def create_tracked_llm(
         user_id=user_id,
         workflow_step=workflow_step,
         agent_name=agent_name,
-        tags=tags
+        tags=tags,
+        custom_metadata=custom_metadata
     )

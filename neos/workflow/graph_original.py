@@ -280,10 +280,10 @@ class MultiAgentWorkflow:
 
         print(f"[DEBUG] Executing {len(search_tasks)} search tasks...")
         try:
-            print("[DEBUG] Starting asyncio.gather with 120s timeout...")
+            print("[DEBUG] Starting asyncio.gather with timeout...")
             search_results = await asyncio.wait_for(
                 asyncio.gather(*search_tasks, return_exceptions=True),
-                timeout=120  # 2 minutes timeout for search
+                timeout=600  # 10 minutes timeout for search
             )
             print(f"[DEBUG] Search execution completed, got {len(search_results)} results")
 
@@ -369,12 +369,12 @@ class MultiAgentWorkflow:
             })
 
         except asyncio.TimeoutError:
-            print("[ERROR] Search orchestration timed out after 2 minutes")
-            state["errors"].append("Search orchestration timed out after 2 minutes")
+            print("[ERROR] Search orchestration timed out after 10 minutes")
+            state["errors"].append("Search orchestration timed out after 10 minutes")
         except Exception as e:
             print(f"[ERROR] Search orchestration failed: {str(e)}")
             state["errors"].append(f"Search orchestration failed: {str(e)}")
-        
+
         return state
 
 

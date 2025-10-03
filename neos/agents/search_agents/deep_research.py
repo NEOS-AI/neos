@@ -10,6 +10,7 @@ from datetime import datetime
 from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
 from ..base import SearchAgent
+from ..planning_agent import PlanningAgent
 
 if TYPE_CHECKING:
     from neos.workflow.state import SearchResult
@@ -56,6 +57,9 @@ class DeepResearchAgent(SearchAgent):
 
         # 체크포인트 저장용
         self.checkpoints = []
+
+        # Planning agent 초기화
+        self.planning_agent = PlanningAgent()
 
     def _get_language_instruction(self, language: str) -> str:
         """언어별 리포트 생성 지침 반환"""
@@ -298,10 +302,29 @@ Report Structure:
         """4단계 심층 조사 프로세스"""
         print("[INFO] ==================== Deep Research Process Started ====================")
 
+        # Get detected language
+        detected_language = context.get("detected_language", "ko")
+
+        # Create research plan using planning agent
+        print("[INFO] Creating comprehensive research plan...")
+        research_plan = await self.planning_agent.create_research_plan(
+            query=query,
+            research_type="deep_research",
+            session_id=session_id,
+            user_id=user_id,
+            detected_language=detected_language
+        )
+        print(f"[INFO] Research plan created with {len(research_plan)} tasks")
+        print(f"[INFO] Plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
         all_search_results = []
         all_summaries = []
 
         # Phase 1: 초기 탐색 (광범위한 검색)
+        if research_plan and len(research_plan) > 0:
+            self.planning_agent.update_task_status(research_plan, 1, "in_progress")
+            print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
         print("[INFO] Phase 1/4: Initial Exploration - Broad search across multiple perspectives")
         phase1_queries = await self._generate_initial_queries(query, session_id, user_id)
         phase1_results = await self._execute_parallel_searches(phase1_queries)
@@ -317,7 +340,19 @@ Report Structure:
             "summaries": phase1_summaries
         })
 
+        # Mark Phase 1 complete
+        if research_plan and len(research_plan) > 0:
+            self.planning_agent.update_task_status(
+                research_plan, 1, "completed",
+                result=f"Explored {len(phase1_queries)} queries, collected {sum(len(r) for r in phase1_results)} sources"
+            )
+            print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
         # Phase 2: Gap 분석 및 심화 탐색
+        if research_plan and len(research_plan) > 1:
+            self.planning_agent.update_task_status(research_plan, 2, "in_progress")
+            print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
         print("[INFO] Phase 2/4: Gap Analysis - Identifying and filling knowledge gaps")
         gaps = await self._identify_gaps(query, all_summaries, session_id, user_id)
         phase2_queries = await self._generate_targeted_queries(gaps, session_id, user_id)
@@ -335,7 +370,19 @@ Report Structure:
             "summaries": phase2_summaries
         })
 
+        # Mark Phase 2 complete
+        if research_plan and len(research_plan) > 1:
+            self.planning_agent.update_task_status(
+                research_plan, 2, "completed",
+                result=f"Filled {len(gaps)} gaps with {len(phase2_queries)} targeted queries"
+            )
+            print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
         # Phase 3: 크로스 레퍼런스 및 검증
+        if research_plan and len(research_plan) > 2:
+            self.planning_agent.update_task_status(research_plan, 3, "in_progress")
+            print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
         print("[INFO] Phase 3/4: Verification - Cross-referencing and fact-checking")
         verification_insights = await self._cross_reference_sources(all_summaries, session_id, user_id)
 
@@ -345,7 +392,19 @@ Report Structure:
             "total_sources": sum(len(r) for r in all_search_results)
         })
 
+        # Mark Phase 3 complete
+        if research_plan and len(research_plan) > 2:
+            self.planning_agent.update_task_status(
+                research_plan, 3, "completed",
+                result=f"Verified information from {sum(len(r) for r in all_search_results)} sources"
+            )
+            print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
         # Phase 4: 종합 리포트 생성
+        if research_plan and len(research_plan) > 3:
+            self.planning_agent.update_task_status(research_plan, 4, "in_progress")
+            print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
         print("[INFO] Phase 4/4: Report Generation - Synthesizing comprehensive report")
         final_report = await self._generate_comprehensive_report(
             query,
@@ -362,6 +421,14 @@ Report Structure:
             "report_length": len(final_report),
             "total_phases": 4
         })
+
+        # Mark Phase 4 complete
+        if research_plan and len(research_plan) > 3:
+            self.planning_agent.update_task_status(
+                research_plan, 4, "completed",
+                result=f"Generated comprehensive report ({len(final_report)} characters)"
+            )
+            print(f"[INFO] Final plan:\n{self.planning_agent.get_task_summary(research_plan)}")
 
         print("[INFO] ==================== Deep Research Completed ====================")
         print(f"[INFO] Total Sources: {sum(len(r) for r in all_search_results)}")

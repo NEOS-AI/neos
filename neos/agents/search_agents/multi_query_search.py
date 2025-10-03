@@ -9,6 +9,7 @@ from langchain.schema import HumanMessage
 from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
 from ..base import SearchAgent
+from ..planning_agent import PlanningAgent
 
 if TYPE_CHECKING:
     from neos.workflow.state import SearchResult
@@ -28,6 +29,8 @@ class MultiQuerySearchAgent(SearchAgent):
         # Tavily client 초기화
         self.tavily_client = None
         self.api_available = False
+        # Planning agent 초기화
+        self.planning_agent = PlanningAgent()
 
         print(f"[DEBUG] MultiQuerySearchAgent checking TAVILY_API_KEY: {'SET' if settings.TAVILY_API_KEY else 'NOT SET'}")
         if settings.TAVILY_API_KEY and settings.TAVILY_API_KEY.strip():
@@ -124,25 +127,83 @@ Comprehensive Analysis:""",
             # Extract detected_language from context
             detected_language = context.get("detected_language", "ko") if context else "ko"
 
+            # Step 0: Create research plan using planning agent
+            print("[DEBUG] Creating research plan...")
+            research_plan = await self.planning_agent.create_research_plan(
+                query=query,
+                research_type="multi_query",
+                session_id=session_id,
+                user_id=user_id,
+                detected_language=detected_language
+            )
+            print(f"[DEBUG] Research plan created with {len(research_plan)} tasks")
+            print(f"[DEBUG] Plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
             # Step 1: LLM을 사용하여 검색 쿼리 후보 생성 (2-5개)
+            # Update plan: mark query generation as in progress
+            if research_plan:
+                self.planning_agent.update_task_status(research_plan, 1, "in_progress")
+                print(f"[DEBUG] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
             print("[DEBUG] Generating search query candidates...")
             search_queries = await self._generate_search_queries(query, session_id, user_id, detected_language)
             print(f"[DEBUG] Generated {len(search_queries)} search queries")
 
+            # Mark query generation as completed
+            if research_plan:
+                self.planning_agent.update_task_status(
+                    research_plan, 1, "completed",
+                    result=f"Generated {len(search_queries)} queries: {', '.join(search_queries[:3])}"
+                )
+                print(f"[DEBUG] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
             # Step 2: 각 쿼리에 대해 병렬 검색 실행
+            if research_plan and len(research_plan) > 1:
+                self.planning_agent.update_task_status(research_plan, 2, "in_progress")
+                print(f"[DEBUG] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
             print("[DEBUG] Executing parallel searches...")
             search_results = await self._execute_parallel_searches(search_queries)
             print(f"[DEBUG] Completed parallel searches, total results: {sum(len(r) for r in search_results)}")
 
+            if research_plan and len(research_plan) > 1:
+                self.planning_agent.update_task_status(
+                    research_plan, 2, "completed",
+                    result=f"Collected {sum(len(r) for r in search_results)} search results"
+                )
+                print(f"[DEBUG] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
             # Step 3: 각 검색 결과를 LLM으로 요약
+            if research_plan and len(research_plan) > 2:
+                self.planning_agent.update_task_status(research_plan, 3, "in_progress")
+                print(f"[DEBUG] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
             print("[DEBUG] Summarizing individual search results...")
             summaries = await self._summarize_results(search_queries, search_results, session_id, user_id, detected_language)
             print(f"[DEBUG] Generated {len(summaries)} summaries")
 
+            if research_plan and len(research_plan) > 2:
+                self.planning_agent.update_task_status(
+                    research_plan, 3, "completed",
+                    result=f"Generated {len(summaries)} summaries"
+                )
+                print(f"[DEBUG] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
             # Step 4: 모든 요약을 종합하여 최종 분석 결과 생성
+            if research_plan and len(research_plan) > 3:
+                self.planning_agent.update_task_status(research_plan, 4, "in_progress")
+                print(f"[DEBUG] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
+
             print("[DEBUG] Synthesizing final comprehensive analysis...")
             final_analysis = await self._synthesize_final_analysis(query, search_queries, summaries, session_id, user_id, context)
             print("[DEBUG] Final analysis completed")
+
+            if research_plan and len(research_plan) > 3:
+                self.planning_agent.update_task_status(
+                    research_plan, 4, "completed",
+                    result=f"Completed final analysis ({len(final_analysis)} characters)"
+                )
+                print(f"[DEBUG] Final plan:\n{self.planning_agent.get_task_summary(research_plan)}")
 
             # 결과 생성
             from neos.workflow.state import SearchResult
