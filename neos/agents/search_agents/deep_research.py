@@ -326,11 +326,11 @@ Report Structure:
             print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
 
         print("[INFO] Phase 1/4: Initial Exploration - Broad search across multiple perspectives")
-        phase1_queries = await self._generate_initial_queries(query, session_id, user_id)
+        phase1_queries = await self._generate_initial_queries(query, session_id, user_id, detected_language)
         phase1_results = await self._execute_parallel_searches(phase1_queries)
         all_search_results.extend(phase1_results)
 
-        phase1_summaries = await self._summarize_results_batch(phase1_queries, phase1_results, session_id, user_id)
+        phase1_summaries = await self._summarize_results_batch(phase1_queries, phase1_results, session_id, user_id, detected_language)
         all_summaries.extend(phase1_summaries)
 
         # 체크포인트 저장
@@ -354,12 +354,12 @@ Report Structure:
             print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
 
         print("[INFO] Phase 2/4: Gap Analysis - Identifying and filling knowledge gaps")
-        gaps = await self._identify_gaps(query, all_summaries, session_id, user_id)
-        phase2_queries = await self._generate_targeted_queries(gaps, session_id, user_id)
+        gaps = await self._identify_gaps(query, all_summaries, session_id, user_id, detected_language)
+        phase2_queries = await self._generate_targeted_queries(gaps, session_id, user_id, detected_language)
         phase2_results = await self._execute_parallel_searches(phase2_queries)
         all_search_results.extend(phase2_results)
 
-        phase2_summaries = await self._summarize_results_batch(phase2_queries, phase2_results, session_id, user_id)
+        phase2_summaries = await self._summarize_results_batch(phase2_queries, phase2_results, session_id, user_id, detected_language)
         all_summaries.extend(phase2_summaries)
 
         # 체크포인트 저장
@@ -384,7 +384,7 @@ Report Structure:
             print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
 
         print("[INFO] Phase 3/4: Verification - Cross-referencing and fact-checking")
-        verification_insights = await self._cross_reference_sources(all_summaries, session_id, user_id)
+        verification_insights = await self._cross_reference_sources(all_summaries, session_id, user_id, detected_language)
 
         # 체크포인트 저장
         await self._save_checkpoint("phase3", {
@@ -437,7 +437,7 @@ Report Structure:
 
         return final_report
 
-    async def _generate_initial_queries(self, original_query: str, session_id: str, user_id: str) -> List[str]:
+    async def _generate_initial_queries(self, original_query: str, session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """초기 광범위 검색 쿼리 생성 (8-10개)"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
@@ -449,21 +449,61 @@ Report Structure:
                 user_id=user_id,
                 workflow_step="deep_research",
                 agent_name=self.name,
-                tags=["initial_query_generation"]
+                tags=["initial_query_generation", f"language:{detected_language}"]
             )
 
-            prompt = f"""사용자 질문: {original_query}
+            # Language-specific prompts
+            prompts = {
+                "ko": f"""사용자 질문: {original_query}
 
-위 질문에 대한 포괄적인 심층 조사를 위해 8-10개의 다각도 검색 쿼리를 생성해주세요.
+위 질문에 대한 포괄적인 심층 조사를 위해 8-10개의 다각도 검색 쿼리를 **한국어로** 생성해주세요.
 
 요구사항:
 1. 각 쿼리는 서로 다른 관점이나 측면을 다뤄야 합니다
 2. 기술적, 시장적, 역사적, 미래 전망 등 다양한 각도 포함
 3. 구체적이고 검색 가능한 쿼리로 작성
-4. 영어와 한국어를 적절히 혼합
-5. 각 쿼리는 한 줄로 작성
+4. 각 쿼리는 한 줄로 작성
 
-검색 쿼리:"""
+검색 쿼리:""",
+
+                "en": f"""User Question: {original_query}
+
+Generate 8-10 multi-perspective search queries for comprehensive deep research on the above question **in English**.
+
+Requirements:
+1. Each query should cover different perspectives or aspects
+2. Include technical, market, historical, and future outlook angles
+3. Write specific and searchable queries
+4. Write each query on a single line
+
+Search Queries:""",
+
+                "ja": f"""ユーザーの質問: {original_query}
+
+上記の質問に関する包括的な詳細調査のために、8-10個の多角的な検索クエリを**日本語で**生成してください。
+
+要件:
+1. 各クエリは異なる観点や側面をカバーする必要があります
+2. 技術的、市場的、歴史的、将来の見通しなど、さまざまな角度を含めてください
+3. 具体的で検索可能なクエリを作成してください
+4. 各クエリは1行で記述してください
+
+検索クエリ:""",
+
+                "zh": f"""用户问题: {original_query}
+
+针对上述问题进行全面深入研究，请生成8-10个多角度搜索查询（**用中文**）。
+
+要求:
+1. 每个查询应涵盖不同的观点或方面
+2. 包括技术、市场、历史和未来展望等多种角度
+3. 编写具体且可搜索的查询
+4. 每个查询写在一行
+
+搜索查询:"""
+            }
+
+            prompt = prompts.get(detected_language, prompts["en"])
 
             response = await llm.ainvoke([HumanMessage(content=prompt)])
             query_text = response.content.strip()
@@ -493,7 +533,7 @@ Report Structure:
             print(f"[ERROR] Failed to generate initial queries: {e}")
             return [original_query]
 
-    async def _identify_gaps(self, original_query: str, summaries: List[str], session_id: str, user_id: str) -> List[str]:
+    async def _identify_gaps(self, original_query: str, summaries: List[str], session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """수집된 정보에서 부족한 부분 식별"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
@@ -505,19 +545,51 @@ Report Structure:
                 user_id=user_id,
                 workflow_step="deep_research",
                 agent_name=self.name,
-                tags=["gap_analysis"]
+                tags=["gap_analysis", f"language:{detected_language}"]
             )
 
             summaries_text = "\n\n".join([f"정보 {i+1}: {s[:300]}" for i, s in enumerate(summaries[:5])])
 
-            prompt = f"""원래 질문: {original_query}
+            # Language-specific prompts
+            prompts = {
+                "ko": f"""원래 질문: {original_query}
 
 현재까지 수집된 정보:
 {summaries_text}
 
-위 정보를 분석하여 아직 답변되지 않은 중요한 질문이나 부족한 측면을 3-5개 식별해주세요.
+위 정보를 분석하여 아직 답변되지 않은 중요한 질문이나 부족한 측면을 3-5개 **한국어로** 식별해주세요.
 
-각 gap은 한 줄로 작성하고, 번호를 붙이지 마세요."""
+각 gap은 한 줄로 작성하고, 번호를 붙이지 마세요.""",
+
+                "en": f"""Original Question: {original_query}
+
+Information collected so far:
+{summaries_text}
+
+Analyze the above information and identify 3-5 important questions or missing aspects that have not been answered yet **in English**.
+
+Write each gap on one line without numbering.""",
+
+                "ja": f"""元の質問: {original_query}
+
+これまでに収集された情報:
+{summaries_text}
+
+上記の情報を分析し、まだ回答されていない重要な質問や不足している側面を3-5個**日本語で**特定してください。
+
+各ギャップは1行で記述し、番号を付けないでください。""",
+
+                "zh": f"""原始问题: {original_query}
+
+目前收集到的信息:
+{summaries_text}
+
+分析以上信息，识别3-5个尚未回答的重要问题或缺失方面（**用中文**）。
+
+每个缺口写在一行，不要编号。"""
+            }
+
+            prompt = prompts.get(detected_language, prompts["en"])
 
             response = await llm.ainvoke([HumanMessage(content=prompt)])
             gaps_text = response.content.strip()
@@ -530,7 +602,7 @@ Report Structure:
             print(f"[ERROR] Failed to identify gaps: {e}")
             return []
 
-    async def _generate_targeted_queries(self, gaps: List[str], session_id: str, user_id: str) -> List[str]:
+    async def _generate_targeted_queries(self, gaps: List[str], session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """Gap을 메우기 위한 targeted 검색 쿼리 생성"""
         if not gaps:
             return []
@@ -545,12 +617,22 @@ Report Structure:
                 user_id=user_id,
                 workflow_step="deep_research",
                 agent_name=self.name,
-                tags=["targeted_query_generation"]
+                tags=["targeted_query_generation", f"language:{detected_language}"]
             )
 
             gaps_text = "\n".join(gaps)
 
-            prompt = f"""다음 지식 gap들을 메우기 위한 구체적인 검색 쿼리를 각각 1-2개씩 생성해주세요:
+            # Add language instruction
+            language_instructions = {
+                "ko": "**한국어로** 다음 지식 gap들을 메우기 위한 구체적인 검색 쿼리를 각각 1-2개씩 생성해주세요:",
+                "en": "Generate 1-2 specific search queries **in English** to fill each of the following knowledge gaps:",
+                "ja": "**日本語で**次のナレッジギャップを埋めるための具体的な検索クエリを各1-2個生成してください:",
+                "zh": "**用中文**为以下每个知识缺口生成1-2个具体的搜索查询:"
+            }
+
+            instruction = language_instructions.get(detected_language, language_instructions["en"])
+
+            prompt = f"""{instruction}
 
 {gaps_text}
 
@@ -567,7 +649,7 @@ Report Structure:
             print(f"[ERROR] Failed to generate targeted queries: {e}")
             return []
 
-    async def _cross_reference_sources(self, summaries: List[str], session_id: str, user_id: str) -> List[str]:
+    async def _cross_reference_sources(self, summaries: List[str], session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """소스 간 크로스 레퍼런스 및 일관성 확인"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
@@ -738,7 +820,7 @@ Report Structure:
             print(f"[ERROR] Tavily search error: {e}")
             return []
 
-    async def _summarize_results_batch(self, queries: List[str], results: List[List[Dict[str, Any]]], session_id: str, user_id: str) -> List[str]:
+    async def _summarize_results_batch(self, queries: List[str], results: List[List[Dict[str, Any]]], session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """검색 결과 배치 요약"""
         import asyncio
 
