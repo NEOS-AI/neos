@@ -121,9 +121,12 @@ Comprehensive Analysis:""",
             session_id = context.get("session_id", "") if context else ""
             user_id = context.get("user_id", "") if context else ""
 
+            # Extract detected_language from context
+            detected_language = context.get("detected_language", "ko") if context else "ko"
+
             # Step 1: LLM을 사용하여 검색 쿼리 후보 생성 (2-5개)
             print("[DEBUG] Generating search query candidates...")
-            search_queries = await self._generate_search_queries(query, session_id, user_id)
+            search_queries = await self._generate_search_queries(query, session_id, user_id, detected_language)
             print(f"[DEBUG] Generated {len(search_queries)} search queries")
 
             # Step 2: 각 쿼리에 대해 병렬 검색 실행
@@ -133,7 +136,7 @@ Comprehensive Analysis:""",
 
             # Step 3: 각 검색 결과를 LLM으로 요약
             print("[DEBUG] Summarizing individual search results...")
-            summaries = await self._summarize_results(search_queries, search_results, session_id, user_id)
+            summaries = await self._summarize_results(search_queries, search_results, session_id, user_id, detected_language)
             print(f"[DEBUG] Generated {len(summaries)} summaries")
 
             # Step 4: 모든 요약을 종합하여 최종 분석 결과 생성
@@ -167,7 +170,7 @@ Comprehensive Analysis:""",
             print(f"[ERROR] Traceback: {traceback.format_exc()}")
             return {"success": False, "error": str(e), "agent": self.name}
 
-    async def _generate_search_queries(self, original_query: str, session_id: str = "", user_id: str = "") -> List[str]:
+    async def _generate_search_queries(self, original_query: str, session_id: str = "", user_id: str = "", detected_language: str = "ko") -> List[str]:
         """LLM을 사용하여 검색 쿼리 후보 2-5개 생성"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
@@ -182,7 +185,9 @@ Comprehensive Analysis:""",
                 tags=["query_generation"]
             )
 
-            prompt = f"""사용자 질문: {original_query}
+            # 언어별 프롬프트
+            prompts = {
+                "ko": f"""사용자 질문: {original_query}
 
 위 질문에 대해 포괄적이고 정확한 답변을 얻기 위해 필요한 검색 쿼리 2-5개를 생성해주세요.
 
@@ -193,7 +198,49 @@ Comprehensive Analysis:""",
 4. 각 쿼리는 한 줄로 작성하고, 번호를 붙이지 마세요
 5. 쿼리 사이는 빈 줄로 구분하세요
 
-검색 쿼리:"""
+검색 쿼리:""",
+
+                "en": f"""User Question: {original_query}
+
+Generate 2-5 search queries needed to obtain comprehensive and accurate answers to the above question.
+
+Requirements:
+1. Each query should cover a different perspective or aspect
+2. Make specific queries rather than too general ones
+3. Use English appropriately
+4. Write each query on a single line without numbering
+5. Separate queries with blank lines
+
+Search Queries:""",
+
+                "ja": f"""ユーザーの質問: {original_query}
+
+上記の質問に対して包括的で正確な回答を得るために必要な検索クエリを2-5個生成してください。
+
+要件:
+1. 各クエリは異なる観点や側面を扱う必要があります
+2. あまり一般的でなく、具体的なクエリを作成してください
+3. 日本語を適切に使用してください
+4. 各クエリは1行で作成し、番号を付けないでください
+5. クエリ間は空白行で区切ってください
+
+検索クエリ:""",
+
+                "zh": f"""用户问题: {original_query}
+
+生成2-5个搜索查询，以获得对上述问题的全面准确的回答。
+
+要求:
+1. 每个查询应涵盖不同的观点或方面
+2. 创建具体的查询，而不是过于笼统的
+3. 适当使用中文
+4. 每个查询写在一行，不要编号
+5. 查询之间用空行分隔
+
+搜索查询:"""
+            }
+
+            prompt = prompts.get(detected_language, prompts["en"])
 
             response = await llm.ainvoke([HumanMessage(content=prompt)])
             query_text = response.content.strip()
@@ -275,14 +322,22 @@ Comprehensive Analysis:""",
             print(f"[ERROR] Tavily search error: {e}")
             return []
 
-    async def _summarize_results(self, queries: List[str], results: List[List[Dict[str, Any]]], session_id: str = "", user_id: str = "") -> List[str]:
+    async def _summarize_results(self, queries: List[str], results: List[List[Dict[str, Any]]], session_id: str = "", user_id: str = "", detected_language: str = "ko") -> List[str]:
         """각 검색 결과를 LLM으로 요약 (병렬 처리)"""
         import asyncio
 
         async def summarize_single_query(query: str, search_results: List[Dict[str, Any]]) -> str:
             """단일 쿼리 결과 요약"""
+            # 언어별 fallback 메시지
+            no_results_messages = {
+                "ko": f"검색 쿼리 '{query}'에 대한 결과를 찾지 못했습니다.",
+                "en": f"No results found for search query '{query}'.",
+                "ja": f"検索クエリ '{query}' の結果が見つかりませんでした。",
+                "zh": f"未找到搜索查询 '{query}' 的结果。"
+            }
+
             if not search_results:
-                return f"검색 쿼리 '{query}'에 대한 결과를 찾지 못했습니다."
+                return no_results_messages.get(detected_language, no_results_messages["en"])
 
             try:
                 from neos.utils.llm_wrapper import create_tracked_llm
@@ -305,29 +360,67 @@ Comprehensive Analysis:""",
                     url = result.get("url", "")
 
                     context_parts.append(f"""
-결과 {i}:
-제목: {title}
-출처: {url}
-내용: {content}
+Result {i}:
+Title: {title}
+Source: {url}
+Content: {content}
 """)
 
                 context = "\n".join(context_parts)
 
-                prompt = f"""검색 쿼리: {query}
+                # 언어별 프롬프트
+                prompts = {
+                    "ko": f"""검색 쿼리: {query}
 
 검색 결과:
 {context}
 
-위 검색 결과들을 바탕으로 핵심 정보를 간결하게 요약해주세요 (3-5문장). 출처를 명시하고, 중요한 사실과 수치를 포함하세요.
+위 검색 결과들을 바탕으로 핵심 정보를 간결하게 **한국어로** 요약해주세요 (3-5문장). 출처를 명시하고, 중요한 사실과 수치를 포함하세요.
 
-요약:"""
+요약:""",
+
+                    "en": f"""Search Query: {query}
+
+Search Results:
+{context}
+
+Based on the above search results, please provide a concise summary of key information **in English** (3-5 sentences). Include sources and important facts and figures.
+
+Summary:""",
+
+                    "ja": f"""検索クエリ: {query}
+
+検索結果:
+{context}
+
+上記の検索結果に基づいて、重要な情報を簡潔に**日本語で**要約してください（3-5文）。出典を明記し、重要な事実と数値を含めてください。
+
+要約:""",
+
+                    "zh": f"""搜索查询: {query}
+
+搜索结果:
+{context}
+
+根据以上搜索结果，请用**中文**简要总结关键信息（3-5句）。请注明来源，并包含重要事实和数据。
+
+摘要:"""
+                }
+
+                prompt = prompts.get(detected_language, prompts["en"])
 
                 response = await llm.ainvoke([HumanMessage(content=prompt)])
                 return response.content.strip()
 
             except Exception as e:
                 print(f"[ERROR] Failed to summarize results for '{query}': {e}")
-                return f"검색 쿼리 '{query}'에 대한 요약 생성 실패"
+                error_messages = {
+                    "ko": f"검색 쿼리 '{query}'에 대한 요약 생성 실패",
+                    "en": f"Failed to generate summary for search query '{query}'",
+                    "ja": f"検索クエリ '{query}' の要約生成に失敗しました",
+                    "zh": f"生成搜索查询 '{query}' 的摘要失败"
+                }
+                return error_messages.get(detected_language, error_messages["en"])
 
         # 모든 요약을 병렬로 처리
         print(f"[DEBUG] Starting parallel summarization for {len(queries)} queries...")
@@ -340,11 +433,25 @@ Comprehensive Analysis:""",
             )
 
             # Exception 처리
+            error_messages = {
+                "ko": "요약 생성 실패",
+                "en": "Failed to generate summary",
+                "ja": "要約生成に失敗しました",
+                "zh": "生成摘要失败"
+            }
+            timeout_messages = {
+                "ko": "요약 생성 시간 초과",
+                "en": "Summary generation timed out",
+                "ja": "要約生成がタイムアウトしました",
+                "zh": "摘要生成超时"
+            }
+
             processed_summaries = []
             for i, summary in enumerate(summaries):
                 if isinstance(summary, Exception):
                     print(f"[ERROR] Summary task {i+1} failed: {summary}")
-                    processed_summaries.append(f"검색 쿼리 '{queries[i]}'에 대한 요약 생성 실패")
+                    error_msg = error_messages.get(detected_language, error_messages["en"])
+                    processed_summaries.append(f"{error_msg}: '{queries[i]}'")
                 else:
                     processed_summaries.append(summary)
 
@@ -353,7 +460,8 @@ Comprehensive Analysis:""",
 
         except asyncio.TimeoutError:
             print("[ERROR] Summarization timed out after 60 seconds")
-            return [f"검색 쿼리 '{q}'에 대한 요약 생성 시간 초과" for q in queries]
+            timeout_msg = timeout_messages.get(detected_language, timeout_messages["en"])
+            return [f"{timeout_msg}: '{q}'" for q in queries]
 
     async def _synthesize_final_analysis(self, original_query: str, search_queries: List[str], summaries: List[str], session_id: str = "", user_id: str = "", context: Dict[str, Any] = None) -> str:
         """모든 요약을 종합하여 최종 분석 결과 생성"""
