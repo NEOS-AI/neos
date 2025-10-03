@@ -12,6 +12,10 @@ LangGraph, CrewAI, FastAPI를 활용한 지능형 멀티 에이전트 AI 시스�
   - LLM 기반 검색 쿼리 다각화 (2-5개)
   - 병렬 검색 및 요약으로 빠른 처리
   - 다중 소스 정보의 종합적 통합 분석
+- **🔬 Deep Research 모드**: 전문가 수준의 심층 조사 리포트 생성
+  - 4단계 탐색 프로세스 (15-30분)
+  - 30-50개 이상 소스에서 정보 수집
+  - 전문가급 구조화된 마크다운 리포트
 
 ### 📊 **고급 분석 에이전트**
 - **데이터 분석**: 수집된 정보의 통계 분석 및 패턴 발견
@@ -47,11 +51,17 @@ graph TB
     C -->|간단한 쿼리| C2[실시간 정보 검색]
     C -->|간단한 쿼리| C3[실시간 데이터 검색]
     C -->|복잡한 쿼리| C4[🆕 복합검색 에이전트]
+    C -->|Deep Research 모드| C5[🔬 Deep Research 에이전트]
 
     C4 --> C4A[다중 쿼리 생성<br/>2-5개]
     C4A --> C4B[병렬 검색 실행]
     C4B --> C4C[병렬 요약 생성]
     C4C --> C4D[최종 종합 분석]
+
+    C5 --> C5A[Phase 1: 초기 탐색<br/>8-10 쿼리]
+    C5A --> C5B[Phase 2: Gap 분석]
+    C5B --> C5C[Phase 3: 검증]
+    C5C --> C5D[Phase 4: 리포트 생성]
 
     D --> D1[데이터 분석]
     D --> D2[비교 분석]
@@ -65,6 +75,7 @@ graph TB
     C2 --> F
     C3 --> F
     C4D --> F
+    C5D --> F
     D1 --> F
     D2 --> F
     E1 --> F
@@ -82,6 +93,11 @@ graph TB
     style C4B fill:#b3e5fc
     style C4C fill:#b3e5fc
     style C4D fill:#b3e5fc
+    style C5 fill:#fff3e0
+    style C5A fill:#ffe0b2
+    style C5B fill:#ffe0b2
+    style C5C fill:#ffe0b2
+    style C5D fill:#ffe0b2
 ```
 
 ## 🛠️ 기술 스택
@@ -455,6 +471,186 @@ uv run python -m neos.cli workflow test "엔비디아, AMD, 인텔의 AI 칩 전
 uv run python -m neos.cli workflow test "RLHF, DPO, GRPO의 알고리즘적 차이와 실용성 비교"
 ```
 
+## 🔬 Deep Research 모드
+
+Deep Research는 복잡한 주제에 대한 **전문가 수준의 심층 조사 리포트**를 생성하는 특별 모드입니다. 단순 검색이 아닌 **다단계 탐색, 검증, 종합**을 통해 고품질의 연구 보고서를 제공합니다.
+
+### 📋 주요 특징
+
+- **장시간 실행**: 15-30분간 심층적인 조사 수행
+- **대량 소스 수집**: 30-50개 이상의 웹 소스에서 정보 수집
+- **4단계 심층 프로세스**:
+  - Phase 1: 초기 광범위 탐색 (8-10개 다각도 쿼리)
+  - Phase 2: Gap 분석 및 심화 탐색
+  - Phase 3: 크로스 레퍼런스 및 검증
+  - Phase 4: 전문가급 종합 리포트 생성
+- **체크포인트 시스템**: 각 단계별 진행 상황 저장
+- **마크다운 리포트**: 구조화된 Executive Summary, 상세 분석, 인사이트 제공
+
+### 🆚 복합검색 vs Deep Research 비교
+
+| 특징 | 복합검색 에이전트 | Deep Research |
+|-----|----------------|---------------|
+| **소요 시간** | 2-5분 | 15-30분 |
+| **검색 쿼리 수** | 2-5개 | 15-20개 (다단계) |
+| **소스 수** | 10-15개 | 30-50개+ |
+| **분석 단계** | 1단계 (종합) | 4단계 (탐색→분석→검증→종합) |
+| **적합한 용도** | 빠른 비교 분석 | 심층 연구 보고서 |
+| **리포트 형식** | 간결한 분석 | 전문가급 구조화 리포트 |
+
+### 🚀 사용법
+
+#### CLI 명령어
+
+```bash
+# 기본 사용
+uv run python -m neos.cli workflow deep-research "AI 반도체 시장 전망"
+
+# 상세 출력
+uv run python -m neos.cli workflow deep-research "양자컴퓨팅 기술 동향" --output text
+
+# JSON 형식으로
+uv run python -m neos.cli workflow deep-research "메타버스 산업 분석" --output json
+```
+
+#### API 호출
+
+```bash
+curl -X POST http://localhost:8000/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "[Deep Research] 2024년 글로벌 AI 규제 동향 및 영향 분석"
+  }'
+```
+
+### 📊 처리 과정 상세
+
+```
+사용자 요청: "올해 엔비디아, 알파벳, 그리고 메타의 주식 전망"
+    ↓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 1: 초기 광범위 탐색 (8-10개 쿼리)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    → "NVIDIA stock forecast 2024 analysis"
+    → "Alphabet Google AI business growth"
+    → "Meta metaverse revenue outlook"
+    → "NVIDIA AI chip market dominance"
+    → "Google Cloud vs competitors"
+    → "Meta Reality Labs financial impact"
+    → "Tech stocks comparison 2024"
+    → "NVIDIA data center revenue trends"
+    ↓
+    병렬 검색 → 40-50개 웹 소스 수집
+    병렬 요약 → 8개 관점별 요약 생성
+    ↓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 2: Gap 분석 및 심화 탐색
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    LLM 분석: "어떤 정보가 부족한가?"
+    → Gap 1: "엔비디아의 경쟁사 대비 우위"
+    → Gap 2: "메타의 VR/AR 수익화 전략"
+    → Gap 3: "알파벳의 AI 규제 리스크"
+    ↓
+    Targeted 검색 → 추가 10-15개 소스
+    ↓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 3: 크로스 레퍼런스 및 검증
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    LLM 검증: 소스 간 일관성 확인
+    → "여러 소스에서 확인된 사실"
+    → "상충되는 정보 및 해석"
+    → "신뢰도가 높은 핵심 인사이트"
+    ↓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase 4: 전문가급 종합 리포트 생성
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    구조화된 마크다운 리포트:
+
+    # 엔비디아, 알파벳, 메타 주식 전망 - Deep Research Report
+
+    ## 📋 Executive Summary
+    [3-5문장의 핵심 요약]
+
+    ## 🔍 상세 분석
+    ### 엔비디아 (NVIDIA)
+    - AI 칩 시장 지배력
+    - 데이터센터 매출 성장
+    - 경쟁 환경 분석
+
+    ### 알파벳 (Google)
+    - AI 비즈니스 전략
+    - 클라우드 성장세
+    - 규제 리스크
+
+    ### 메타 (Meta)
+    - 메타버스 투자 ROI
+    - Reality Labs 현황
+    - 광고 사업 안정성
+
+    ## 💡 핵심 인사이트
+    - [5-7개 bullet points]
+
+    ## ⚠️ 주의사항 및 제한사항
+
+    ## 📚 참고 정보
+    - 총 47개 소스에서 정보 수집
+    - 분석 완료: 2024-10-02
+```
+
+### 💡 사용 사례
+
+#### 1. 기술 트렌드 조사
+```bash
+uv run python -m neos.cli workflow deep-research \
+  "Transformer vs Mamba: 차세대 시퀀스 모델링 아키텍처 비교 분석"
+```
+
+#### 2. 시장 분석 리포트
+```bash
+uv run python -m neos.cli workflow deep-research \
+  "2024년 글로벌 전기차 배터리 시장 동향 및 주요 기업 전략"
+```
+
+#### 3. 정책 및 규제 연구
+```bash
+uv run python -m neos.cli workflow deep-research \
+  "EU AI Act의 주요 내용과 글로벌 기업들에 대한 영향 분석"
+```
+
+#### 4. 학술 주제 종합
+```bash
+uv run python -m neos.cli workflow deep-research \
+  "RLHF, DPO, GRPO 알고리즘의 수학적 기반과 실용적 트레이드오프"
+```
+
+### ⚙️ 설정 및 튜닝
+
+Deep Research Agent는 `search_agents.py`의 `DeepResearchAgent` 클래스에서 설정을 조정할 수 있습니다:
+
+```python
+self.config = {
+    "max_queries_per_phase": 10,      # 각 단계별 최대 쿼리 수
+    "results_per_query": 5,           # 각 쿼리당 결과 수
+    "max_phases": 4,                  # 최대 탐색 단계
+    "timeout_per_phase": 300,         # 각 단계당 타임아웃 (초)
+    "min_sources": 30,                # 최소 소스 수
+    "quality_threshold": 0.7          # 품질 임계값
+}
+```
+
+### 🎯 언제 Deep Research를 사용해야 할까?
+
+**Deep Research 사용 권장:**
+- ✅ 복잡한 주제에 대한 종합 보고서 필요
+- ✅ 다각도 분석 및 검증이 중요
+- ✅ 전문가 수준의 인사이트 요구
+- ✅ 시간 제약이 덜 중요 (15-30분 소요)
+
+**복합검색 에이전트 사용 권장:**
+- ✅ 빠른 비교 분석 (2-5분)
+- ✅ 실시간 응답이 중요
+- ✅ 간결한 답변 선호
+
 ### 에이전트 커스터마이징
 ```python
 # agents/custom_agent.py에서 새로운 에이전트 생성
@@ -638,6 +834,12 @@ uv run python -m neos.cli dataset list-files
   - [x] LLM 기반 다중 쿼리 생성 (2-5개)
   - [x] 병렬 검색 및 요약 처리
   - [x] 종합 분석 리포트 생성
+- [x] 🔬 Deep Research 모드
+  - [x] 4단계 심층 탐색 프로세스 (초기 탐색 → Gap 분석 → 검증 → 리포트)
+  - [x] 체크포인트 시스템 및 진행 상황 추적
+  - [x] 대량 소스 수집 (30-50개+)
+  - [x] 전문가급 마크다운 리포트 생성
+  - [x] CLI 명령어 지원 (`workflow deep-research`)
 
 ### v1.1 (예정)
 - [ ] 멀티모달 입력 지원 (이미지, 오디오)
