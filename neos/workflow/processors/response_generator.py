@@ -107,24 +107,14 @@ class ResponseGenerator:
 
         summary_lines = []
 
-        # 회사별 섹션
-        company_sections = {
-            'nvidia': '### 🔹 엔비디아 (NVIDIA) 관련 정보',
-            'meta': '### 🔹 메타 (Meta) 관련 정보',
-            'alphabet': '### 🔹 알파벳/구글 (Alphabet/Google) 관련 정보'
-        }
+        # 모든 카테고리의 결과를 통합 (nvidia, meta, alphabet, general)
+        all_results = []
+        for category in ['nvidia', 'meta', 'alphabet', 'general']:
+            all_results.extend(categorized_results.get(category, []))
 
-        for company, section_title in company_sections.items():
-            company_results = categorized_results.get(company, [])
-            if company_results:
-                summary_lines.append(f"\n{section_title}")
-                summary_lines.extend(self._format_company_results(company_results))
-
-        # 일반 결과
-        general_results = categorized_results.get('general', [])
-        if general_results:
-            summary_lines.append("\n### 🔹 추가 정보")
-            summary_lines.extend(self._format_general_results(general_results))
+        if all_results:
+            summary_lines.append("\n### 🔹 검색 결과")
+            summary_lines.extend(self._format_general_results(all_results))
 
         return "\n".join(summary_lines)
 
@@ -154,7 +144,18 @@ class ResponseGenerator:
         """일반 결과 포맷팅"""
         formatted_results = []
 
-        for result in results[:2]:  # 상위 2개 결과만
+        # LLM이 처리한 결과가 있으면 우선 표시
+        llm_processed = [r for r in results if getattr(r, 'source', '') in ['llm_processed_web', 'multi_query_analysis', 'deep_research_report']]
+        other_results = [r for r in results if getattr(r, 'source', '') not in ['llm_processed_web', 'multi_query_analysis', 'deep_research_report']]
+
+        # LLM 처리 결과는 전체 표시 (이미 요약되어 있음)
+        for result in llm_processed[:3]:  # 최대 3개
+            title = getattr(result, 'title', '제목 없음')
+            content = getattr(result, 'content', '')
+            formatted_results.append(f"**{title}**\n{content}\n")
+
+        # 일반 검색 결과는 일부만 표시
+        for result in other_results[:2]:  # 상위 2개
             title = getattr(result, 'title', '제목 없음')
             content = getattr(result, 'content', '')
             url = getattr(result, 'url', '')
