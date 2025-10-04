@@ -9,7 +9,8 @@ from neos.agents.search_agents import (
     RealtimeInfoSearchAgent,
     RealtimeDataSearchAgent,
     MultiQuerySearchAgent,
-    DeepResearchAgent
+    DeepResearchAgent,
+    HyperDeepResearchAgent
 )
 from neos.agents.analysis_agents import (
     DataAnalysisAgent,
@@ -62,6 +63,7 @@ class MultiAgentWorkflow:
             "realtime_data_search": RealtimeDataSearchAgent(),
             "multi_query_search": MultiQuerySearchAgent(),
             "deep_research": DeepResearchAgent(),
+            "hyper_deep_research": HyperDeepResearchAgent(),
 
             # 분석 에이전트들
             "data_analysis": DataAnalysisAgent(),

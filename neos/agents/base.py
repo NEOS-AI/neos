@@ -92,7 +92,8 @@ class BaseAgent(ABC):
         """출력 형식 표준화"""
         return {
             "agent": self.name,
-            "result": result,
+            "result": result,  # 하위 호환성
+            "results": result if isinstance(result, list) else [result],  # CLI 호환성
             "metadata": metadata or {},
             "timestamp": datetime.utcnow().isoformat(),
             "success": True

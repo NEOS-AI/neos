@@ -831,15 +831,15 @@ def _display_workflow_benchmark_results(results: List[Dict[str, Any]]):
 @click.option('--session-id', default=None, help='세션 ID')
 def deep_research(query: str, output: str, user_id: Optional[str], session_id: Optional[str]):
     """Deep Research 모드 - 장시간 심층 조사 및 고품질 리포트 생성
-    
+
     QUERY: 조사할 주제
-    
+
     예시:
       uv run python -m neos.cli workflow deep-research "AI 반도체 시장 전망 및 주요 기업 분석"
     """
     user_id = user_id or cli_state["user_id"]
     session_id = session_id or cli_state["session_id"]
-    
+
     console.print(Panel.fit(
         f"🔬 [bold]Deep Research Mode[/bold]\n"
         f"주제: {query}\n\n"
@@ -848,11 +848,11 @@ def deep_research(query: str, output: str, user_id: Optional[str], session_id: O
         f"처리 단계: 4단계 (탐색 → Gap분석 → 검증 → 리포트)",
         style="bold blue"
     ))
-    
+
     console.print()
     console.print("[yellow]⚠️  Deep Research는 장시간 실행됩니다. 진행 상황을 모니터링하세요.[/yellow]")
     console.print()
-    
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -860,40 +860,97 @@ def deep_research(query: str, output: str, user_id: Optional[str], session_id: O
         TimeElapsedColumn(),
         console=console
     ) as progress:
-        
+
         task = progress.add_task("Executing deep research...", total=None)
-        
+
         result = asyncio.run(_test_deep_research(query, user_id, session_id, progress, task))
-        
+
         progress.update(task, description="✅ Deep Research completed")
-    
+
     if output == 'json':
         console.print(Syntax(json.dumps(result, indent=2, ensure_ascii=False), "json"))
     else:
         _display_deep_research_result(result)
 
+
+@workflow.command()
+@click.argument('query')
+@click.option('--output', '-o', type=click.Choice(['json', 'text']), default='text', help='출력 형식')
+@click.option('--user-id', default=None, help='사용자 ID')
+@click.option('--session-id', default=None, help='세션 ID')
+def hyper_deep_research(query: str, output: str, user_id: Optional[str], session_id: Optional[str]):
+    """HyperDeepResearch 모드 - 최고 수준의 체계적 심층 조사 및 DB 저장
+
+    QUERY: 조사할 주제
+
+    예시:
+      uv run python -m neos.cli workflow hyper-deep-research "2025년 글로벌 AI 시장 전망과 주요 기업 전략 분석"
+    """
+    user_id = user_id or cli_state["user_id"]
+    session_id = session_id or cli_state["session_id"]
+
+    console.print(Panel.fit(
+        f"🚀 [bold]HyperDeepResearch Mode[/bold]\n"
+        f"주제: {query}\n\n"
+        f"예상 소요 시간: 30-60분\n"
+        f"수집 예상 소스: 200-320개 (복합 검색 포함)\n"
+        f"처리 단계: 8단계 (주제분석 → 방법론 → 데이터수집 → 심층분석 → 갭분석 → 교차검증 → 비판적사고 → 보고서)\n"
+        f"🔄 복합 검색: 8회 multi-query 검색 실행\n"
+        f"💾 모든 결과가 데이터베이스에 저장됩니다",
+        style="bold cyan"
+    ))
+
+    console.print()
+    console.print("[yellow]⚠️  HyperDeepResearch는 매우 장시간 실행됩니다. 진행 상황을 모니터링하세요.[/yellow]")
+    console.print()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console
+    ) as progress:
+
+        task = progress.add_task("Executing HyperDeepResearch...", total=None)
+
+        result = asyncio.run(_test_hyper_deep_research(query, user_id, session_id, progress, task))
+
+        progress.update(task, description="✅ HyperDeepResearch completed")
+
+    if output == 'json':
+        console.print(Syntax(json.dumps(result, indent=2, ensure_ascii=False), "json"))
+    else:
+        _display_hyper_deep_research_result(result)
+
 async def _test_deep_research(query: str, user_id: str, session_id: str, progress, task) -> Dict[str, Any]:
-    """Deep Research 실행"""
+    """Deep Research 실행 - 직접 에이전트 호출"""
     try:
         start_time = time.time()
-
-        # Deep Research를 위해 쿼리에 힌트 추가
-        enhanced_query = f"[Deep Research] {query}"
-
-        workflow_input = {
-            "user_id": user_id,
-            "session_id": session_id,
-            "query": enhanced_query
-        }
 
         if progress:
             progress.update(task, description="Phase 1/4: Initial Exploration...")
         await asyncio.sleep(0.1)
 
+        # Deep Research 에이전트 직접 생성 및 실행
+        from neos.agents.search_agents.deep_research import DeepResearchAgent
+        from neos.utils.language_detection import detect_language
+
+        deep_agent = DeepResearchAgent()
+
+        # 언어 감지
+        detected_language = detect_language(query)
+
+        context = {
+            "user_id": user_id,
+            "session_id": session_id,
+            "detected_language": detected_language
+        }
+
         # 긴 타임아웃 설정 (30분)
         try:
-            result = await asyncio.wait_for(
-                multi_agent_workflow.execute_workflow(workflow_input),
+            agent_result = await asyncio.wait_for(
+                deep_agent.execute(query, context),
                 timeout=1800  # 30 minutes timeout for deep research
             )
         except asyncio.TimeoutError:
@@ -902,6 +959,23 @@ async def _test_deep_research(query: str, user_id: str, session_id: str, progres
                 "error": "Deep research timed out after 30 minutes",
                 "query": query,
                 "timestamp": datetime.now().isoformat()
+            }
+
+        # 결과 변환
+        if agent_result.get("success") and agent_result.get("results"):
+            search_result = agent_result["results"][0]
+
+            result = {
+                "success": True,
+                "response": search_result.get("content", ""),
+                "metadata": search_result.get("metadata", {}),
+                "quality_score": search_result.get("score", 0.95)
+            }
+        else:
+            result = {
+                "success": False,
+                "error": agent_result.get("error", "Unknown error"),
+                "response": ""
             }
 
         execution_time = time.time() - start_time
@@ -927,33 +1001,33 @@ def _display_deep_research_result(result: Dict[str, Any]):
     """Deep Research 결과 표시"""
     if result.get("success", False):
         console.print("✅ [green]Deep Research completed successfully[/green]")
-        
+
         # 기본 정보
         info_table = Table(title="🔬 Deep Research Information")
         info_table.add_column("Field", style="cyan")
         info_table.add_column("Value", style="green")
-        
+
         info_table.add_row("Query", result.get("query", ""))
         info_table.add_row("User ID", result.get("user_id", ""))
         info_table.add_row("Session ID", result.get("session_id", ""))
         info_table.add_row("Total Time", f"{result.get('total_execution_time_ms', 0) / 1000:.1f}s")
         info_table.add_row("Quality Score", f"{result.get('quality_score', 0):.2f}")
-        
+
         console.print(info_table)
-        
+
         # 메타데이터
         if "metadata" in result:
             metadata = result["metadata"]
             meta_table = Table(title="📊 Research Statistics")
             meta_table.add_column("Metric", style="cyan")
             meta_table.add_column("Value", style="green")
-            
+
             meta_table.add_row("Total Sources", str(metadata.get("total_sources", 0)))
             meta_table.add_row("Processing Steps", str(metadata.get("processing_steps", 0)))
-            
+
             console.print()
             console.print(meta_table)
-        
+
         # 리포트 내용 - Deep Research는 매우 긴 리포트를 생성하므로 Markdown으로 렌더링
         console.print()
         response_text = result.get("response", "No response")
@@ -975,9 +1049,152 @@ def _display_deep_research_result(result: Dict[str, Any]):
                 style="blue",
                 expand=True
             ))
-        
+
     else:
         console.print("❌ [red]Deep Research failed[/red]")
+        if "error" in result:
+            console.print(Panel(result["error"], title="🚨 Error", style="red"))
+
+
+async def _test_hyper_deep_research(query: str, user_id: str, session_id: str, progress, task) -> Dict[str, Any]:
+    """HyperDeepResearch 실행 - 직접 에이전트 호출"""
+    try:
+        start_time = time.time()
+
+        if progress:
+            progress.update(task, description="Phase 1/8: Multi-Dimensional Topic Analysis...")
+        await asyncio.sleep(0.1)
+
+        # HyperDeepResearch 에이전트 직접 생성 및 실행
+        from neos.agents.search_agents.hyper_deep_research import HyperDeepResearchAgent
+        from neos.utils.language_detection import detect_language
+
+        hyper_agent = HyperDeepResearchAgent()
+
+        # 언어 감지
+        detected_language = detect_language(query)
+
+        context = {
+            "user_id": user_id,
+            "session_id": session_id,
+            "detected_language": detected_language
+        }
+
+        # 매우 긴 타임아웃 설정 (60분)
+        try:
+            agent_result = await asyncio.wait_for(
+                hyper_agent.execute(query, context),
+                timeout=3600  # 60 minutes timeout for hyper deep research
+            )
+        except asyncio.TimeoutError:
+            return {
+                "success": False,
+                "error": "HyperDeepResearch timed out after 60 minutes",
+                "query": query,
+                "timestamp": datetime.now().isoformat()
+            }
+
+        # 결과 변환
+        print(f"[DEBUG] HyperDeepResearch agent result keys: {agent_result.keys() if agent_result else 'None'}")
+        print(f"[DEBUG] HyperDeepResearch agent result success: {agent_result.get('success') if agent_result else 'None'}")
+
+        if agent_result.get("success") and agent_result.get("results"):
+            search_result = agent_result["results"][0]
+
+            result = {
+                "success": True,
+                "response": search_result.get("content", ""),
+                "metadata": search_result.get("metadata", {}),
+                "quality_score": search_result.get("score", 0.95)
+            }
+        else:
+            error_msg = agent_result.get("error", "Unknown error") if agent_result else "No result returned"
+            print(f"[DEBUG] HyperDeepResearch failed or no results. Error: {error_msg}")
+            print(f"[DEBUG] Full agent_result: {agent_result}")
+            result = {
+                "success": False,
+                "error": error_msg,
+                "response": ""
+            }
+
+        execution_time = time.time() - start_time
+        result["total_execution_time_ms"] = int(execution_time * 1000)
+        result["query"] = query
+        result["user_id"] = user_id
+        result["session_id"] = session_id
+        result["timestamp"] = datetime.now().isoformat()
+
+        return result
+
+    except Exception as e:
+        import traceback
+        return {
+            "success": False,
+            "error": str(e),
+            "query": query,
+            "timestamp": datetime.now().isoformat(),
+            "traceback": traceback.format_exc()
+        }
+
+
+def _display_hyper_deep_research_result(result: Dict[str, Any]):
+    """HyperDeepResearch 결과 표시"""
+    if result.get("success", False):
+        console.print("✅ [green]HyperDeepResearch completed successfully[/green]")
+
+        # 기본 정보
+        info_table = Table(title="🚀 HyperDeepResearch Information")
+        info_table.add_column("Field", style="cyan")
+        info_table.add_column("Value", style="green")
+
+        info_table.add_row("Query", result.get("query", ""))
+        info_table.add_row("User ID", result.get("user_id", ""))
+        info_table.add_row("Session ID", result.get("session_id", ""))
+        info_table.add_row("Total Time", f"{result.get('total_execution_time_ms', 0) / 1000:.1f}s")
+        info_table.add_row("Quality Score", f"{result.get('quality_score', 0):.2f}")
+
+        console.print(info_table)
+
+        # 메타데이터 - HyperDeepResearch 전용
+        if "metadata" in result:
+            metadata = result["metadata"]
+            meta_table = Table(title="📊 HyperDeepResearch Statistics")
+            meta_table.add_column("Metric", style="cyan")
+            meta_table.add_column("Value", style="green")
+
+            meta_table.add_row("Report ID", str(metadata.get("report_id", "N/A")))
+            meta_table.add_row("Total Sections", str(metadata.get("total_sections", 0)))
+            meta_table.add_row("Total Sources", str(metadata.get("total_sources", 0)))
+            meta_table.add_row("Total Queries", str(metadata.get("total_queries", 0)))
+            meta_table.add_row("Complex Searches", str(metadata.get("multi_query_searches", 0)) if metadata.get("multi_query_searches") else "N/A")
+            meta_table.add_row("Unique Domains", str(metadata.get("unique_domains", 0)))
+            meta_table.add_row("DB Stored", "✅ Yes" if metadata.get("db_stored") else "❌ No")
+
+            console.print()
+            console.print(meta_table)
+
+        # 리포트 내용
+        console.print()
+        response_text = result.get("response", "No response")
+
+        try:
+            from rich.markdown import Markdown
+            console.print(Panel(
+                Markdown(response_text),
+                title="📝 HyperDeepResearch Report",
+                style="cyan",
+                expand=True
+            ))
+        except Exception:
+            console.print(Panel(
+                response_text,
+                title="📝 HyperDeepResearch Report",
+                style="cyan",
+                expand=True
+            ))
+
+    else:
+        console.print("❌ [red]HyperDeepResearch failed[/red]")
         if "error" in result:
             console.print(Panel(result["error"], title="🚨 Error", style="red"))
 

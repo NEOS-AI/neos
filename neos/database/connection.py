@@ -55,6 +55,71 @@ class DatabaseManager:
             print(f"Database health check error: {e}")
             return False
 
+    async def execute(self, query: str, *params):
+        """쿼리 실행 (INSERT, UPDATE, DELETE)
+
+        Args:
+            query: SQL 쿼리 문자열 ($1, $2 형식의 플레이스홀더 사용)
+            *params: 순서대로 바인딩될 파라미터들
+        """
+        try:
+            # PostgreSQL의 $1, $2 형식을 :param1, :param2 형식으로 변환
+            param_dict = {}
+            converted_query = query
+            for i, param in enumerate(params, 1):
+                placeholder = f"${i}"
+                param_name = f"param{i}"
+                converted_query = converted_query.replace(placeholder, f":{param_name}")
+                param_dict[param_name] = param
+
+            async with await self.get_session() as session:
+                result = await session.execute(text(converted_query), param_dict)
+                await session.commit()
+                return result
+        except Exception as e:
+            print(f"[ERROR] Database execute error: {e}")
+            print(f"[ERROR] Query: {query}")
+            print(f"[ERROR] Params: {params}")
+            raise
+
+    async def fetch_one(self, query: str, *params):
+        """단일 row 조회"""
+        try:
+            # PostgreSQL의 $1, $2 형식을 :param1, :param2 형식으로 변환
+            param_dict = {}
+            converted_query = query
+            for i, param in enumerate(params, 1):
+                placeholder = f"${i}"
+                param_name = f"param{i}"
+                converted_query = converted_query.replace(placeholder, f":{param_name}")
+                param_dict[param_name] = param
+
+            async with await self.get_session() as session:
+                result = await session.execute(text(converted_query), param_dict)
+                return result.fetchone()
+        except Exception as e:
+            print(f"[ERROR] Database fetch_one error: {e}")
+            raise
+
+    async def fetch_all(self, query: str, *params):
+        """모든 row 조회"""
+        try:
+            # PostgreSQL의 $1, $2 형식을 :param1, :param2 형식으로 변환
+            param_dict = {}
+            converted_query = query
+            for i, param in enumerate(params, 1):
+                placeholder = f"${i}"
+                param_name = f"param{i}"
+                converted_query = converted_query.replace(placeholder, f":{param_name}")
+                param_dict[param_name] = param
+
+            async with await self.get_session() as session:
+                result = await session.execute(text(converted_query), param_dict)
+                return result.fetchall()
+        except Exception as e:
+            print(f"[ERROR] Database fetch_all error: {e}")
+            raise
+
 
 # 전역 데이터베이스 매니저
 db_manager = DatabaseManager()
