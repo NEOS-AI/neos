@@ -31,4 +31,8 @@ psql postgres --host localhost --port 5432 --user postgres
 # ParadeDB
 docker tag neos-paradedb neos960518/neos-paradedb:latest
 docker push neos960518/neos-paradedb:latest
+
+# Valkey
+docker tag valkey/valkey neos960518/neos-valkey:latest
+docker push neos960518/neos-valkey:latest
 ```
