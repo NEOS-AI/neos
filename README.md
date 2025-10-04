@@ -849,6 +849,9 @@ uv run python -m neos.cli dataset list-files
   - [x] CLI 명령어 지원 (`workflow deep-research`)
 
 ### v1.1 (예정)
+- [x] 🔬 HyperDeepResearch 모드 추가
+  - [x] 계획 산출 → 순차적 조사 → 다중 쿼리 서치 → 반복적 심층 분석 → 보고서 섹션별 생성
+  - [x] DB 스키마 확장 및 섹션 별 저장 처리
 - [ ] 멀티모달 입력 지원 (이미지, 오디오)
 - [ ] 그래프 데이터베이스 통합
 - [ ] 고급 A/B 테스트 프레임워크
