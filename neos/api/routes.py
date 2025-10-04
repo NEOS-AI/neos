@@ -465,3 +465,269 @@ async def websocket_endpoint(websocket, session_id: str):
         print(f"WebSocket error: {e}")
     finally:
         await websocket.close()
+
+
+# HyperDeepResearch 관련 엔드포인트
+class HyperResearchReportResponse(BaseModel):
+    success: bool
+    report_id: str
+    markdown_content: str
+    metadata: Dict[str, Any]
+
+
+@router.get("/hyper-research/{report_uuid}", response_model=HyperResearchReportResponse)
+async def get_hyper_research_report(report_uuid: str):
+    """HyperDeepResearch 보고서 조회
+
+    Args:
+        report_uuid: 보고서 UUID (hyper_report_{UUID} 형식에서 UUID 부분만)
+
+    Returns:
+        보고서 전체 내용을 마크다운 형식으로 반환
+    """
+    try:
+        # report_id 구성
+        report_id = f"hyper_report_{report_uuid}"
+
+        # 보고서 메타데이터 조회
+        report_query = """
+        SELECT
+            report_id,
+            user_id,
+            session_id,
+            research_topic,
+            research_status,
+            created_at,
+            completed_at,
+            total_sections,
+            total_sources,
+            total_queries,
+            quality_score,
+            metadata
+        FROM hyper_research_reports
+        WHERE report_id = $1 AND deleted_at IS NULL
+        """
+
+        report = await db_manager.fetch_one(report_query, report_id)
+
+        if not report:
+            raise HTTPException(status_code=404, detail=f"Report not found: {report_uuid}")
+
+        # 섹션 데이터 조회 (순서대로)
+        sections_query = """
+        SELECT
+            section_id,
+            section_order,
+            section_type,
+            section_title,
+            section_content,
+            section_summary,
+            sources_count,
+            created_at,
+            completed_at
+        FROM hyper_research_sections
+        WHERE report_id = $1
+        ORDER BY section_order ASC
+        """
+
+        sections = await db_manager.fetch_all(sections_query, report_id)
+
+        # 마크다운 생성
+        markdown_parts = []
+
+        # 헤더
+        markdown_parts.append(f"# {report[3]}\n")  # research_topic
+        markdown_parts.append(f"**Status:** {report[4]}\n")  # research_status
+        markdown_parts.append(f"**Created:** {report[5]}\n")  # created_at
+        if report[6]:  # completed_at
+            markdown_parts.append(f"**Completed:** {report[6]}\n")
+        markdown_parts.append("\n---\n")
+
+        # 통계
+        markdown_parts.append("\n## 📊 Research Statistics\n")
+        markdown_parts.append(f"- **Total Sections:** {report[7] or 0}\n")  # total_sections
+        markdown_parts.append(f"- **Total Sources:** {report[8] or 0}\n")  # total_sources
+        markdown_parts.append(f"- **Total Queries:** {report[9] or 0}\n")  # total_queries
+        if report[10]:  # quality_score
+            markdown_parts.append(f"- **Quality Score:** {report[10]:.2f}\n")
+
+        # 메타데이터에서 추가 정보
+        metadata = report[11] if report[11] else {}
+        if metadata:
+            if 'unique_domains' in metadata:
+                markdown_parts.append(f"- **Unique Domains:** {metadata['unique_domains']}\n")
+            if 'multi_query_searches' in metadata:
+                markdown_parts.append(f"- **Complex Searches:** {metadata['multi_query_searches']}\n")
+            if 'analysis_iterations' in metadata:
+                markdown_parts.append(f"- **Analysis Iterations:** {metadata['analysis_iterations']}\n")
+
+        markdown_parts.append("\n---\n")
+
+        # 섹션들
+        for section in sections:
+            section_title = section[3]  # section_title
+            section_content = section[4]  # section_content
+            sources_count = section[6]  # sources_count
+
+            markdown_parts.append(f"\n## {section_title}\n")
+
+            if section_content:
+                markdown_parts.append(f"\n{section_content}\n")
+
+            if sources_count and sources_count > 0:
+                markdown_parts.append(f"\n*Sources: {sources_count}*\n")
+
+        markdown_content = "".join(markdown_parts)
+
+        # 응답 메타데이터
+        response_metadata = {
+            "user_id": report[1],
+            "session_id": report[2],
+            "research_topic": report[3],
+            "research_status": report[4],
+            "created_at": str(report[5]),
+            "completed_at": str(report[6]) if report[6] else None,
+            "total_sections": report[7] or 0,
+            "total_sources": report[8] or 0,
+            "total_queries": report[9] or 0,
+            "quality_score": report[10],
+            "sections_count": len(sections),
+            "custom_metadata": metadata
+        }
+
+        return HyperResearchReportResponse(
+            success=True,
+            report_id=report_id,
+            markdown_content=markdown_content,
+            metadata=response_metadata
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Failed to retrieve HyperResearch report: {e}")
+        import traceback
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve report: {str(e)}")
+
+
+class HyperResearchReportSummary(BaseModel):
+    report_id: str
+    report_uuid: str
+    research_topic: str
+    research_status: str
+    created_at: str
+    completed_at: Optional[str]
+    total_sections: int
+    total_sources: int
+    total_queries: int
+    quality_score: Optional[float]
+
+
+class HyperResearchReportsListResponse(BaseModel):
+    success: bool
+    reports: List[HyperResearchReportSummary]
+    total_count: int
+
+
+@router.get("/hyper-research", response_model=HyperResearchReportsListResponse)
+async def list_hyper_research_reports(
+    user_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+):
+    """HyperDeepResearch 보고서 목록 조회
+
+    Args:
+        user_id: 특정 사용자의 보고서만 조회 (선택)
+        status: 보고서 상태 필터 (pending, in_progress, completed, failed)
+        limit: 최대 결과 수 (기본 50)
+        offset: 페이지네이션 오프셋 (기본 0)
+
+    Returns:
+        보고서 목록
+    """
+    try:
+        # WHERE 절 구성
+        where_clauses = ["deleted_at IS NULL"]
+        params = []
+        param_idx = 1
+
+        if user_id:
+            where_clauses.append(f"user_id = ${param_idx}")
+            params.append(user_id)
+            param_idx += 1
+
+        if status:
+            where_clauses.append(f"research_status = ${param_idx}")
+            params.append(status)
+            param_idx += 1
+
+        where_sql = " AND ".join(where_clauses)
+
+        # 보고서 목록 조회
+        list_query = f"""
+        SELECT
+            report_id,
+            user_id,
+            research_topic,
+            research_status,
+            created_at,
+            completed_at,
+            total_sections,
+            total_sources,
+            total_queries,
+            quality_score
+        FROM hyper_research_reports
+        WHERE {where_sql}
+        ORDER BY created_at DESC
+        LIMIT ${param_idx} OFFSET ${param_idx + 1}
+        """
+
+        params.extend([limit, offset])
+        reports = await db_manager.fetch_all(list_query, *params)
+
+        # 전체 개수 조회
+        count_query = f"""
+        SELECT COUNT(*)
+        FROM hyper_research_reports
+        WHERE {where_sql}
+        """
+
+        # limit, offset 제외한 파라미터만 사용
+        count_params = params[:-2]
+        count_result = await db_manager.fetch_one(count_query, *count_params)
+        total_count = count_result[0] if count_result else 0
+
+        # 응답 데이터 구성
+        report_summaries = []
+        for report in reports:
+            report_id = report[0]
+            # UUID 추출 (hyper_report_{UUID} 형식)
+            report_uuid = report_id.replace("hyper_report_", "")
+
+            report_summaries.append(HyperResearchReportSummary(
+                report_id=report_id,
+                report_uuid=report_uuid,
+                research_topic=report[2],
+                research_status=report[3],
+                created_at=str(report[4]),
+                completed_at=str(report[5]) if report[5] else None,
+                total_sections=report[6] or 0,
+                total_sources=report[7] or 0,
+                total_queries=report[8] or 0,
+                quality_score=report[9]
+            ))
+
+        return HyperResearchReportsListResponse(
+            success=True,
+            reports=report_summaries,
+            total_count=total_count
+        )
+
+    except Exception as e:
+        print(f"[ERROR] Failed to list HyperResearch reports: {e}")
+        import traceback
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to list reports: {str(e)}")
