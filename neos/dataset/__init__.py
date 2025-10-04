@@ -14,5 +14,7 @@ __all__ = [
     "DatasetMetadata",
     "LLMCallCollector",
     "track_llm_call",
-    "DatasetManager"
+    "DatasetManager",
+    "llm_call_collector",
+    "dataset_manager"
 ]

@@ -10,6 +10,7 @@ from neos.config.settings import settings
 from neos.workflow.state import SearchResult
 from neos.utils.llm_factory import create_llm
 from neos.database.connection import db_manager
+
 from ..base import SearchAgent
 from ..planning_agent import PlanningAgent
 from .multi_query_search import MultiQuerySearchAgent
@@ -636,18 +637,20 @@ Write a very detailed and actionable plan in English."""
                 # 결과 추출
                 if result.get("success") and result.get("results"):
                     search_result = result["results"][0]
-                    metadata = search_result.get("metadata", {})
 
-                    # 복합 검색에서 얻은 실제 소스들을 추출
-                    if "summaries" in metadata:
-                        # summaries에는 각 sub-query에 대한 분석이 들어있음
-                        # 실제 raw 결과를 가져오기 위해 metadata 활용
-                        print(f"[INFO] ✅ Complex search {idx} found {metadata.get('total_sources', 0)} sources")
+                    # SearchResult는 dataclass이므로 속성으로 접근
+                    metadata = search_result.metadata if hasattr(search_result, 'metadata') else {}
+                    content = search_result.content if hasattr(search_result, 'content') else ""
 
-                        # 가상의 결과 생성 (복합 검색 결과를 표현)
+                    # 복합 검색 결과가 있으면 저장
+                    if content:  # summaries 체크 제거 - content만 있으면 OK
+                        total_sources = metadata.get('total_sources', 0) if metadata else 0
+                        print(f"[INFO] ✅ Complex search {idx} found {total_sources} sources")
+
+                        # 복합 검색 결과 생성
                         complex_source = {
                             "title": f"Complex Analysis: {base_query}",
-                            "content": search_result.get("content", "")[:500],
+                            "content": content[:500] if len(content) > 500 else content,
                             "url": f"multi_query_analysis_{idx}",
                             "score": 0.95,
                             "type": "multi_query_synthesis"
@@ -663,9 +666,13 @@ Write a very detailed and actionable plan in English."""
                             3,
                             [complex_source]
                         )
+                    else:
+                        print(f"[WARNING] Complex search {idx} returned no content")
 
             except Exception as e:
                 print(f"[WARNING] Complex search {idx} failed: {e}")
+                import traceback
+                print(f"[DEBUG] Traceback: {traceback.format_exc()}")
                 continue
 
         print(f"[INFO] 🎯 Complex searches completed: {len(all_complex_results)} synthesized sources")

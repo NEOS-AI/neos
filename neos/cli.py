@@ -1101,12 +1101,21 @@ async def _test_hyper_deep_research(query: str, user_id: str, session_id: str, p
         if agent_result.get("success") and agent_result.get("results"):
             search_result = agent_result["results"][0]
 
-            result = {
-                "success": True,
-                "response": search_result.get("content", ""),
-                "metadata": search_result.get("metadata", {}),
-                "quality_score": search_result.get("score", 0.95)
-            }
+            if isinstance(search_result, dict):
+                result = {
+                    "success": True,
+                    "response": search_result.get("content", ""),
+                    "metadata": search_result.get("metadata", {}),
+                    "quality_score": search_result.get("score", 0.95)
+                }
+            else:
+                # SearchResult
+                result = {
+                    "success": True,
+                    "response": search_result.content,
+                    "metadata": search_result.metadata,
+                    "quality_score": search_result.score
+                }
         else:
             error_msg = agent_result.get("error", "Unknown error") if agent_result else "No result returned"
             print(f"[DEBUG] HyperDeepResearch failed or no results. Error: {error_msg}")
@@ -1124,10 +1133,26 @@ async def _test_hyper_deep_research(query: str, user_id: str, session_id: str, p
         result["session_id"] = session_id
         result["timestamp"] = datetime.now().isoformat()
 
+        # 데이터셋 수집 종료 및 저장
+        try:
+            from neos.dataset import dataset_manager
+
+            dataset_manager.export_by_session(session_id)
+        except Exception as e:
+            print(f"[WARNING] Failed to save HyperDeepResearch dataset: {e}")
+
         return result
 
     except Exception as e:
         import traceback
+        # 에러 발생 시에도 데이터셋 저장 시도
+        try:
+            from neos.dataset import dataset_manager
+
+            dataset_manager.export_by_session(session_id)
+        except Exception:
+            print(f"[WARNING] Failed to save HyperDeepResearch dataset: {e}")
+
         return {
             "success": False,
             "error": str(e),

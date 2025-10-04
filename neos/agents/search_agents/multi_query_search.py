@@ -1,13 +1,12 @@
 """Multi-query search agent - generates multiple queries and synthesizes results"""
 
 from typing import Dict, Any, List, TYPE_CHECKING
-import asyncio
-import concurrent.futures
 from tavily import TavilyClient
 from langchain.schema import HumanMessage
 
 from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
+
 from ..base import SearchAgent
 from ..planning_agent import PlanningAgent
 
