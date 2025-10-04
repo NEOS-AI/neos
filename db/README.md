@@ -24,3 +24,11 @@ docker run --name neos-valkey -p 6379:6379 -d valkey/valkey
 ```bash
 psql postgres --host localhost --port 5432 --user postgres
 ```
+
+## Publish the database image to docker hub
+
+```bash
+# ParadeDB
+docker tag neos-paradedb neos960518/neos-paradedb:latest
+docker push neos960518/neos-paradedb:latest
+```
