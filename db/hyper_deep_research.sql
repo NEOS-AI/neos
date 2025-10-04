@@ -30,7 +30,10 @@ CREATE TABLE IF NOT EXISTS hyper_research_reports (
     completeness_score FLOAT,
 
     -- 추가 메타데이터
-    metadata JSONB DEFAULT '{}'
+    metadata JSONB DEFAULT '{}',
+
+    -- deleted_at 컬럼 추가 (soft delete 용)
+    deleted_at TIMESTAMP
 
     -- Note: Foreign key to users table removed to allow independent operation
     -- FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
@@ -116,6 +119,11 @@ CREATE INDEX idx_hyper_sections_parent ON hyper_research_sections(parent_section
 CREATE INDEX idx_hyper_data_collection_report_id ON hyper_research_data_collection(report_id);
 CREATE INDEX idx_hyper_data_collection_section_id ON hyper_research_data_collection(section_id);
 CREATE INDEX idx_hyper_data_collection_phase ON hyper_research_data_collection(search_phase);
+
+-- add index for deleted_at and research_status for efficient soft delete queries
+CREATE INDEX idx_hyper_reports_deleted_at ON hyper_research_reports(deleted_at);
+CREATE INDEX idx_hyper_reports_research_status ON hyper_research_reports(research_status);
+
 
 -- 트리거: 보고서 업데이트 시간 자동 갱신
 CREATE OR REPLACE FUNCTION update_hyper_report_updated_at()
