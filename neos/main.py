@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
         logger.info("📊 Initializing database connection...")
         await db_manager.initialize()
         logger.info("✅ Database connection established")
-        
+
         # Redis 캐시 연결 초기화
         logger.info("🔄 Initializing cache connection...")
         await cache_manager.initialize()
