@@ -852,6 +852,12 @@ uv run python -m neos.cli dataset list-files
 - [x] 🔬 HyperDeepResearch 모드 추가
   - [x] 계획 산출 → 순차적 조사 → 다중 쿼리 서치 → 반복적 심층 분석 → 보고서 섹션별 생성
   - [x] DB 스키마 확장 및 섹션 별 저장 처리
+- [ ] HyperDeepResearch CLI 지원
+- [ ] HyperDeepResearch API 지원
+- [ ] Web LookUp Agent (쿼리 검색 대신 URL이 주어지면 해당 웹 페이지 내용을 읽어오는 에이전트) 추가
+  - [ ] Web LookUp Agent Tool 구현
+  - [ ] Web LookUp Agent CLI 지원
+  - [ ] Web LookUp Agent API 지원
 - [ ] 멀티모달 입력 지원 (이미지, 오디오)
 - [ ] 그래프 데이터베이스 통합
 - [ ] 고급 A/B 테스트 프레임워크
@@ -862,3 +868,4 @@ uv run python -m neos.cli dataset list-files
 - [ ] 실시간 협업 기능  
 - [ ] 로컬 LLM 지원 (Ollama)
 - [ ] 고급 워크플로우 빌더 UI
+- [ ] API Rate Limiting
