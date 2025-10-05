@@ -104,6 +104,23 @@ CREATE TABLE IF NOT EXISTS hyper_research_data_collection (
     FOREIGN KEY (section_id) REFERENCES hyper_research_sections(section_id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS hyper_research_criticism_feedback (
+    id SERIAL PRIMARY KEY,
+    feedback_id VARCHAR(255) UNIQUE NOT NULL,
+    report_id VARCHAR(255) NOT NULL,
+    section_type VARCHAR(100) NOT NULL,
+    section_title TEXT NOT NULL,
+    severity VARCHAR(50) DEFAULT 'none',
+    has_issues BOOLEAN DEFAULT FALSE,
+    feedback_text TEXT,
+    suggested_queries JSONB DEFAULT '[]',
+    missing_perspectives JSONB DEFAULT '[]',
+    redirect_suggestion TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    metadata JSONB DEFAULT '{}'
+);
+
+
 -- 인덱스 생성
 CREATE INDEX idx_hyper_reports_user_id ON hyper_research_reports(user_id);
 CREATE INDEX idx_hyper_reports_session_id ON hyper_research_reports(session_id);
