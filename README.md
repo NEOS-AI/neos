@@ -22,6 +22,12 @@ LangGraph, CrewAI, FastAPI를 활용한 지능형 멀티 에이전트 AI 시스�
   - **복합 검색 통합**: 5-8회 multi-query 검색 실행
   - 멀티 쿼리 서치: 20개 검색 쿼리 자동 생성
   - 3회 반복 심층 분석 + 교차 검증 + 비판적 사고
+  - **🔍 Criticism Feedback Sub-Agent**: 중간 보고서 비판적 검토
+    - 각 주요 Phase 완료 후 자동 피드백 생성
+    - 논리적 타당성, 완전성, 균형성, 깊이 평가
+    - 누락된 관점 및 추가 조사 영역 식별
+    - 필요시 자동으로 추가 조사 트리거
+    - 모든 피드백 및 추가 조사 내역 DB 저장
   - 완전한 DB 추적 (모든 단계 저장)
 
 ### 📊 **고급 분석 에이전트**
@@ -476,6 +482,9 @@ uv run python -m neos.cli workflow test "엔비디아, AMD, 인텔의 AI 칩 전
 
 # 심층 알고리즘 분석
 uv run python -m neos.cli workflow test "RLHF, DPO, GRPO의 알고리즘적 차이와 실용성 비교"
+
+# HyperDeepResearch 모드
+uv run python -m neos.cli workflow hyper-deep-research "Tavily와 같은 검색 API 서비스들은 어떻게 유튜브 영상까지 검색에 활용할 수 있을까?"
 ```
 
 ## 🔬 Deep Research 모드
@@ -828,34 +837,17 @@ uv run python -m neos.cli dataset list-files
 
 ## 🗺️ 로드맵
 
-### ✅ v1.0 (완료)
-- [x] 멀티 에이전트 LangGraph 워크플로우
-- [x] OpenAI + Anthropic 멀티 Provider 지원
-- [x] 다층 캐싱 시스템
-- [x] 벡터 기반 의미적 검색
-- [x] 실시간 WebSocket 통신
-- [x] 품질 기반 자동 재처리
-- [x] LLM 호출 데이터셋 자동 수집 및 저장
-- [x] 🆕 복합검색 에이전트 (Multi-Query Search Agent)
-  - [x] 쿼리 복잡도 자동 분석 시스템
-  - [x] LLM 기반 다중 쿼리 생성 (2-5개)
-  - [x] 병렬 검색 및 요약 처리
-  - [x] 종합 분석 리포트 생성
-- [x] 🔬 Deep Research 모드
-  - [x] 4단계 심층 탐색 프로세스 (초기 탐색 → Gap 분석 → 검증 → 리포트)
-  - [x] 체크포인트 시스템 및 진행 상황 추적
-  - [x] 대량 소스 수집 (30-50개+)
-  - [x] 전문가급 마크다운 리포트 생성
-  - [x] CLI 명령어 지원 (`workflow deep-research`)
-
 ### v1.1 (예정)
 - [x] 🔬 HyperDeepResearch 모드 추가
   - [x] 계획 산출 → 순차적 조사 → 다중 쿼리 서치 → 반복적 심층 분석 → 보고서 섹션별 생성
   - [x] DB 스키마 확장 및 섹션 별 저장 처리
   - [x] HyperDeepResearch CLI 지원
   - [x] HyperDeepResearch API 지원
-- [ ] HyperDeepResearch 에서 'critical thinking' 기능 도입
-  - [ ] Self-critique 및 반대 의견 생성이나 미심쩍은 부분에 대한 자문자답형 검증
+- [x] HyperDeepResearch 에서 'critical thinking' 기능 도입
+  - [x] Self-critique 및 반대 의견 생성이나 미심쩍은 부분에 대한 자문자답형 검증
+  - [ ] 무조건 반대하지 않고, 내용이 합리적이면 "none" 또는 "minor" 평가
+  - [ ] 중요한 문제만 지적 (사소한 문제는 무시)
+  - [ ] 피드백 기반 추가 조사는 phase=99로 특별 표시
 - [ ] Web LookUp Agent (쿼리 검색 대신 URL이 주어지면 해당 웹 페이지 내용을 읽어오는 에이전트) 추가
   - [ ] Web LookUp Agent Tool 구현
   - [ ] Web LookUp Agent CLI 지원
