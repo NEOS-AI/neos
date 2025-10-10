@@ -1,6 +1,11 @@
 # Changelog
 
-## ✅ v0.4 (2025-10-03)
+## v0.4.1 (2025-10-10)
+- [x] 자기비판 피드백 에이전트 (Self-Criticism Feedback Agent)
+  - [x] 피드백 분석 및 추가 연구 트리거링
+  - [x] 개선된 보고서 품질 및 정확성
+
+## v0.4 (2025-10-03)
 
 - [x] 멀티 에이전트 LangGraph 워크플로우
 - [x] OpenAI + Anthropic 멀티 Provider 지원
