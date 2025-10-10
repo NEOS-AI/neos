@@ -13,6 +13,9 @@ CREATE TABLE users (
     preferences JSONB DEFAULT '{}'
 );
 
+-- insert base user for cli
+INSERT INTO users (user_id) VALUES ('cli_user') ON CONFLICT (user_id) DO NOTHING;
+
 -- 쿼리 히스토리 테이블
 CREATE TABLE query_history (
     id SERIAL PRIMARY KEY,
