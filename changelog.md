@@ -1,0 +1,22 @@
+# Changelog
+
+## ✅ v0.4 (2025-10-03)
+
+- [x] 멀티 에이전트 LangGraph 워크플로우
+- [x] OpenAI + Anthropic 멀티 Provider 지원
+- [x] 다층 캐싱 시스템
+- [x] 벡터 기반 의미적 검색
+- [x] 실시간 WebSocket 통신
+- [x] 품질 기반 자동 재처리
+- [x] LLM 호출 데이터셋 자동 수집 및 저장
+- [x] 🆕 복합검색 에이전트 (Multi-Query Search Agent)
+  - [x] 쿼리 복잡도 자동 분석 시스템
+  - [x] LLM 기반 다중 쿼리 생성 (2-5개)
+  - [x] 병렬 검색 및 요약 처리
+  - [x] 종합 분석 리포트 생성
+- [x] 🔬 Deep Research 모드
+  - [x] 4단계 심층 탐색 프로세스 (초기 탐색 → Gap 분석 → 검증 → 리포트)
+  - [x] 체크포인트 시스템 및 진행 상황 추적
+  - [x] 대량 소스 수집 (30-50개+)
+  - [x] 전문가급 마크다운 리포트 생성
+  - [x] CLI 명령어 지원 (`workflow deep-research`)
