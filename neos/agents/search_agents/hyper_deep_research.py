@@ -14,6 +14,7 @@ from neos.database.connection import db_manager
 from ..base import SearchAgent
 from ..planning_agent import PlanningAgent
 from .multi_query_search import MultiQuerySearchAgent
+from .criticism_feedback_agent import CriticismFeedbackAgent
 
 
 class HyperDeepResearchAgent(SearchAgent):
@@ -84,6 +85,9 @@ class HyperDeepResearchAgent(SearchAgent):
         # Multi-query search agent for complex searches
         self.multi_query_agent = MultiQuerySearchAgent()
 
+        # Criticism feedback agent for quality control
+        self.criticism_agent = CriticismFeedbackAgent()
+
         # 현재 보고서 상태
         self.current_report_id = None
         self.sections_data = []
@@ -94,7 +98,9 @@ class HyperDeepResearchAgent(SearchAgent):
             "unique_domains": set(),
             "analysis_iterations_completed": 0,
             "critical_reviews_completed": 0,
-            "multi_query_searches": 0  # 복합 검색 횟수
+            "multi_query_searches": 0,  # 복합 검색 횟수
+            "criticism_feedbacks_generated": 0,  # 비판 피드백 생성 횟수
+            "additional_research_triggered": 0  # 피드백으로 인한 추가 조사 횟수
         }
 
     async def execute(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -197,6 +203,28 @@ class HyperDeepResearchAgent(SearchAgent):
             deep_analysis["synthesis"], "completed"
         )
 
+        # Criticism Feedback for Deep Analysis
+        print("\n[INFO] 🔍 Criticism Feedback: Reviewing Deep Analysis...")
+        deep_analysis_feedback = await self._get_criticism_feedback(
+            section_type="deep_analysis",
+            section_title="Iterative Deep Analysis",
+            section_content=deep_analysis["synthesis"],
+            topic=query,
+            research_context={
+                "sources_count": self.research_metadata["total_sources_collected"],
+                "research_questions": topic_analysis.get("research_questions", []),
+                "previous_sections": ["topic_analysis", "methodology", "initial_collection"]
+            },
+            session_id=session_id,
+            user_id=user_id,
+            language=detected_language
+        )
+
+        # 피드백 기반 추가 조사
+        await self._handle_feedback_and_investigate(
+            deep_analysis_feedback, "deep_analysis", session_id, user_id, detected_language
+        )
+
         # Phase 5: 갭 분석 및 집중 조사
         print("\n[INFO] ========== Phase 5/8: Gap Analysis & Targeted Investigation ==========")
         gap_data = await self._comprehensive_gap_analysis(
@@ -216,6 +244,28 @@ class HyperDeepResearchAgent(SearchAgent):
         await self._create_section_in_db(
             "validation", 6, "Cross-Validation & Triangulation",
             validation["report"], "completed"
+        )
+
+        # Criticism Feedback for Validation
+        print("\n[INFO] 🔍 Criticism Feedback: Reviewing Cross-Validation...")
+        validation_feedback = await self._get_criticism_feedback(
+            section_type="validation",
+            section_title="Cross-Validation & Triangulation",
+            section_content=validation["report"],
+            topic=query,
+            research_context={
+                "sources_count": self.research_metadata["total_sources_collected"],
+                "research_questions": topic_analysis.get("research_questions", []),
+                "previous_sections": ["deep_analysis", "gap_analysis"]
+            },
+            session_id=session_id,
+            user_id=user_id,
+            language=detected_language
+        )
+
+        # 피드백 기반 추가 조사
+        await self._handle_feedback_and_investigate(
+            validation_feedback, "validation", session_id, user_id, detected_language
         )
 
         # Phase 7: 비판적 사고 및 다관점 분석
@@ -246,6 +296,8 @@ class HyperDeepResearchAgent(SearchAgent):
         print(f"[INFO] 🔄 Complex Multi-Query Searches: {self.research_metadata['multi_query_searches']}")
         print(f"[INFO] 📄 Total Sources Collected: {self.research_metadata['total_sources_collected']}")
         print(f"[INFO] 🌐 Unique Domains: {len(self.research_metadata['unique_domains'])}")
+        print(f"[INFO] 🔍 Criticism Feedbacks Generated: {self.research_metadata['criticism_feedbacks_generated']}")
+        print(f"[INFO] 🔄 Additional Research Triggered: {self.research_metadata['additional_research_triggered']}")
         print(f"[INFO] 📝 Report Length: {len(final_report)} characters")
 
         return final_report
@@ -974,6 +1026,161 @@ Write a very detailed and actionable plan in English."""
 
         return report
 
+    # ==================== Criticism Feedback 관련 메서드들 ====================
+
+    async def _get_criticism_feedback(
+        self,
+        section_type: str,
+        section_title: str,
+        section_content: str,
+        topic: str,
+        research_context: Dict[str, Any],
+        session_id: str,
+        user_id: str,
+        language: str
+    ) -> Dict[str, Any]:
+        """섹션에 대한 비판적 피드백 받기"""
+        try:
+            print(f"[INFO] 🔍 Requesting criticism feedback for: {section_title}")
+
+            feedback = await self.criticism_agent.generate_feedback(
+                topic=topic,
+                section_type=section_type,
+                section_content=section_content,
+                research_context=research_context,
+                session_id=session_id,
+                user_id=user_id,
+                language=language
+            )
+
+            self.research_metadata["criticism_feedbacks_generated"] += 1
+
+            # 피드백 로깅
+            severity = feedback.get("severity", "none")
+            has_issues = feedback.get("has_issues", False)
+
+            print(f"[INFO] ✅ Feedback received - Severity: {severity}")
+
+            if has_issues:
+                print(f"[INFO] ⚠️  Issues found: {feedback.get('feedback', '')[:100]}...")
+                if feedback.get("suggested_queries"):
+                    print(f"[INFO] 📋 Suggested {len(feedback['suggested_queries'])} additional queries")
+                if feedback.get("redirect_suggestion"):
+                    print(f"[INFO] 🔄 Redirect suggestion: {feedback['redirect_suggestion'][:100]}...")
+
+            # DB에 피드백 저장
+            await self._record_criticism_feedback(section_type, section_title, feedback)
+
+            return feedback
+
+        except Exception as e:
+            print(f"[ERROR] Failed to get criticism feedback: {e}")
+            return {
+                "has_issues": False,
+                "severity": "none",
+                "feedback": "",
+                "suggested_queries": [],
+                "redirect_suggestion": "",
+                "missing_perspectives": []
+            }
+
+    async def _handle_feedback_and_investigate(
+        self,
+        feedback: Dict[str, Any],
+        section_type: str,
+        session_id: str,
+        user_id: str,
+        language: str
+    ) -> Dict[str, Any]:
+        """피드백을 기반으로 추가 조사 수행"""
+        if not self.criticism_agent.should_trigger_additional_research(feedback):
+            print("[INFO] ✅ No additional research needed based on feedback")
+            return {"additional_sources": [], "sources_count": 0}
+
+        print("\n[INFO] 🔄 Triggering additional research based on feedback...")
+        self.research_metadata["additional_research_triggered"] += 1
+
+        suggested_queries = feedback.get("suggested_queries", [])
+        missing_perspectives = feedback.get("missing_perspectives", [])
+
+        # 쿼리 준비
+        queries = suggested_queries[:5]  # 최대 5개
+
+        # 누락된 관점을 쿼리로 변환
+        for perspective in missing_perspectives[:3]:
+            queries.append(f"{perspective} detailed analysis")
+
+        if not queries:
+            return {"additional_sources": [], "sources_count": 0}
+
+        print(f"[INFO] 🔍 Executing {len(queries)} additional queries from feedback...")
+
+        # 병렬 검색 실행
+        results = await self._parallel_search_batch(queries)
+        flat_results = [item for sublist in results for item in sublist]
+
+        # DB에 기록
+        for query, result in zip(queries, results):
+            await self._record_data_collection(
+                query,
+                f"criticism_feedback_{section_type}",
+                phase=99,  # 피드백 기반 조사는 특별한 phase
+                results=result
+            )
+            self.research_metadata["total_queries_executed"] += 1
+
+        # 중복 제거 및 추가
+        unique_sources = self._deduplicate_sources([flat_results])
+        self.all_collected_sources.extend(unique_sources)
+        self.research_metadata["total_sources_collected"] = len(self.all_collected_sources)
+
+        print(f"[INFO] ✅ Feedback-driven research completed: {len(unique_sources)} additional sources")
+
+        return {
+            "additional_sources": unique_sources,
+            "sources_count": len(unique_sources)
+        }
+
+    async def _record_criticism_feedback(
+        self,
+        section_type: str,
+        section_title: str,
+        feedback: Dict[str, Any]
+    ) -> None:
+        """비판 피드백을 DB에 저장"""
+        try:
+            import json
+            import uuid
+
+            feedback_id = f"feedback_{uuid.uuid4()}"
+
+            query = """
+            INSERT INTO hyper_research_criticism_feedback
+            (feedback_id, report_id, section_type, section_title, severity, has_issues,
+             feedback_text, suggested_queries, missing_perspectives, redirect_suggestion)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            """
+
+            await db_manager.execute(
+                query,
+                feedback_id,
+                self.current_report_id,
+                section_type,
+                section_title,
+                feedback.get("severity", "none"),
+                feedback.get("has_issues", False),
+                feedback.get("feedback", ""),
+                json.dumps(feedback.get("suggested_queries", [])),
+                json.dumps(feedback.get("missing_perspectives", [])),
+                feedback.get("redirect_suggestion", "")
+            )
+
+            print(f"[DEBUG] Recorded criticism feedback in DB: {feedback_id}")
+
+        except Exception as e:
+            print(f"[ERROR] Failed to record criticism feedback in DB: {e}")
+            # DB 저장 실패해도 계속 진행
+
     # ==================== 헬퍼 메서드들 ====================
 
     def _extract_research_questions(self, text: str) -> List[str]:
@@ -1362,6 +1569,8 @@ Write a very detailed and actionable plan in English."""
             f"- **Unique Domains:** {len(self.research_metadata['unique_domains'])}\n",
             f"- **Analysis Iterations:** {self.research_metadata['analysis_iterations_completed']}\n",
             f"- **Critical Reviews:** {self.research_metadata['critical_reviews_completed']}\n",
+            f"- **Criticism Feedbacks Generated:** {self.research_metadata['criticism_feedbacks_generated']}\n",
+            f"- **Additional Research Triggered by Feedback:** {self.research_metadata['additional_research_triggered']}\n",
             "\n---\n"
         ]
 
@@ -1471,9 +1680,28 @@ Write a very detailed and actionable plan in English."""
                 )
                 """
 
+                create_criticism_feedback_table = """
+                CREATE TABLE IF NOT EXISTS hyper_research_criticism_feedback (
+                    id SERIAL PRIMARY KEY,
+                    feedback_id VARCHAR(255) UNIQUE NOT NULL,
+                    report_id VARCHAR(255) NOT NULL,
+                    section_type VARCHAR(100) NOT NULL,
+                    section_title TEXT NOT NULL,
+                    severity VARCHAR(50) DEFAULT 'none',
+                    has_issues BOOLEAN DEFAULT FALSE,
+                    feedback_text TEXT,
+                    suggested_queries JSONB DEFAULT '[]',
+                    missing_perspectives JSONB DEFAULT '[]',
+                    redirect_suggestion TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    metadata JSONB DEFAULT '{}'
+                )
+                """
+
                 await db_manager.execute(create_reports_table)
                 await db_manager.execute(create_sections_table)
                 await db_manager.execute(create_data_collection_table)
+                await db_manager.execute(create_criticism_feedback_table)
 
                 print("[INFO] HyperDeepResearch tables created successfully")
             except Exception as e:
@@ -1509,7 +1737,9 @@ Write a very detailed and actionable plan in English."""
                 "unique_domains": len(self.research_metadata["unique_domains"]),
                 "analysis_iterations": self.research_metadata["analysis_iterations_completed"],
                 "critical_reviews": self.research_metadata["critical_reviews_completed"],
-                "multi_query_searches": self.research_metadata["multi_query_searches"]
+                "multi_query_searches": self.research_metadata["multi_query_searches"],
+                "criticism_feedbacks_generated": self.research_metadata["criticism_feedbacks_generated"],
+                "additional_research_triggered": self.research_metadata["additional_research_triggered"]
             })
 
             await db_manager.execute(
