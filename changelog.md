@@ -7,6 +7,12 @@
   - [x] 데이터베이스 스키마 개선 및 인덱스 추가
 
 ## v0.4.1 (2025-10-10)
+- [x] 🔬 HyperDeepResearch 모드 추가
+  - [x] 계획 산출 → 순차적 조사 → 다중 쿼리 서치 → 반복적 심층 분석 → 보고서 섹션별 생성
+  - [x] DB 스키마 확장 및 섹션 별 저장 처리
+  - [x] HyperDeepResearch CLI 지원
+  - [x] HyperDeepResearch API 지원
+- [x] HyperDeepResearch 에서 'critical thinking' 기능 도입
 - [x] 자기비판 피드백 에이전트 (Self-Criticism Feedback Agent)
   - [x] 피드백 분석 및 추가 연구 트리거링
   - [x] 개선된 보고서 품질 및 정확성

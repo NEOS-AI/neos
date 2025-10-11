@@ -838,16 +838,6 @@ uv run python -m neos.cli dataset list-files
 ## 🗺️ 로드맵
 
 ### v1.1 (예정)
-- [x] 🔬 HyperDeepResearch 모드 추가
-  - [x] 계획 산출 → 순차적 조사 → 다중 쿼리 서치 → 반복적 심층 분석 → 보고서 섹션별 생성
-  - [x] DB 스키마 확장 및 섹션 별 저장 처리
-  - [x] HyperDeepResearch CLI 지원
-  - [x] HyperDeepResearch API 지원
-- [x] HyperDeepResearch 에서 'critical thinking' 기능 도입
-  - [x] Self-critique 및 반대 의견 생성이나 미심쩍은 부분에 대한 자문자답형 검증
-  - [ ] 무조건 반대하지 않고, 내용이 합리적이면 "none" 또는 "minor" 평가
-  - [ ] 중요한 문제만 지적 (사소한 문제는 무시)
-  - [ ] 피드백 기반 추가 조사는 phase=99로 특별 표시
 - [ ] Web LookUp Agent (쿼리 검색 대신 URL이 주어지면 해당 웹 페이지 내용을 읽어오는 에이전트) 추가
   - [ ] Web LookUp Agent Tool 구현
   - [ ] Web LookUp Agent CLI 지원
