@@ -3,6 +3,8 @@ import pandas as pd
 import re
 import numpy as np
 from dataclasses import asdict
+import httpx
+import trafilatura
 
 from neos.workflow.state import AnalysisResult
 from neos.utils.llm_factory import create_llm
@@ -469,3 +471,213 @@ class ComparativeAnalysisAgent(AnalysisAgent):
             "metadata_summary": metadata_summary,
             "insights": insights
         }
+
+
+class WebLookupAgent(AnalysisAgent):
+    """웹 페이지 콘텐츠 추출 에이전트 (trafilatura 사용)"""
+
+    def __init__(self):
+        super().__init__(
+            name="web_lookup",
+            analysis_type="web_content",
+            role="Web Content Extractor",
+            goal="Extract and analyze content from web pages using URLs",
+            backstory="You are a web content extraction specialist who retrieves clean, readable content from URLs."
+        )
+        self.http_client = None
+
+    async def execute(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """URL에서 웹 페이지 콘텐츠를 추출합니다."""
+        if not self.validate_input(query, context):
+            return {"success": False, "error": "Invalid input"}
+
+        try:
+            # URL 추출 (쿼리나 컨텍스트에서)
+            url = self._extract_url(query, context)
+            if not url:
+                return {
+                    "success": False,
+                    "error": "No valid URL found in query or context",
+                    "agent": self.name
+                }
+
+            # 웹 페이지 콘텐츠 추출
+            content_data = await self._fetch_and_extract_content(url)
+
+            if not content_data:
+                return {
+                    "success": False,
+                    "error": f"Failed to extract content from URL: {url}",
+                    "agent": self.name
+                }
+
+            # Extract session and user info from context
+            session_id = context.get("session_id", "") if context else ""
+            user_id = context.get("user_id", "") if context else ""
+
+            # LLM을 사용한 콘텐츠 분석 (선택적)
+            insights = await self._analyze_content(content_data, query, session_id, user_id)
+
+            # 결과 생성
+            analysis_result = AnalysisResult(
+                analysis_type="web_content_extraction",
+                data=content_data,
+                confidence=0.9 if content_data.get("text") else 0.3,
+                insights=insights
+            )
+
+            return self.format_output(asdict(analysis_result), {"url": url})
+
+        except Exception as e:
+            return {"success": False, "error": str(e), "agent": self.name}
+
+    def _extract_url(self, query: str, context: Dict[str, Any] = None) -> str:
+        """쿼리나 컨텍스트에서 URL을 추출합니다."""
+        # 1. 컨텍스트에서 직접 URL이 제공된 경우
+        if context and "url" in context:
+            return context["url"]
+
+        # 2. 쿼리에서 URL 패턴 찾기
+        url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+        urls = re.findall(url_pattern, query)
+
+        if urls:
+            return urls[0]  # 첫 번째 URL 사용
+
+        return None
+
+    async def _fetch_and_extract_content(self, url: str) -> Dict[str, Any]:
+        """URL에서 웹 페이지를 가져오고 trafilatura로 콘텐츠를 추출합니다."""
+        try:
+            # HTTP 클라이언트 초기화
+            if self.http_client is None:
+                self.http_client = httpx.AsyncClient(
+                    timeout=30.0,
+                    follow_redirects=True,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (compatible; NEOSBot/1.0; +https://neos.ai)"
+                    }
+                )
+
+            print(f"[DEBUG] Fetching content from URL: {url}")
+
+            # 웹 페이지 다운로드
+            response = await self.http_client.get(url)
+            response.raise_for_status()
+
+            html_content = response.text
+
+            # trafilatura로 콘텐츠 추출
+            extracted_text = trafilatura.extract(
+                html_content,
+                include_comments=False,
+                include_tables=True,
+                include_images=False,
+                output_format="txt"
+            )
+
+            # 메타데이터 추출 (제목, 날짜, 저자 등)
+            metadata = trafilatura.extract_metadata(html_content)
+
+            content_data = {
+                "url": url,
+                "text": extracted_text or "",
+                "title": metadata.title if metadata and metadata.title else "",
+                "author": metadata.author if metadata and metadata.author else "",
+                "date": metadata.date if metadata and metadata.date else "",
+                "description": metadata.description if metadata and metadata.description else "",
+                "sitename": metadata.sitename if metadata and metadata.sitename else "",
+                "language": metadata.language if metadata and metadata.language else "",
+                "content_length": len(extracted_text) if extracted_text else 0,
+                "status_code": response.status_code
+            }
+
+            print(f"[DEBUG] Successfully extracted {content_data['content_length']} characters from {url}")
+
+            return content_data
+
+        except httpx.HTTPError as e:
+            print(f"[ERROR] HTTP error fetching {url}: {e}")
+            return {"error": f"HTTP error: {str(e)}", "url": url}
+        except Exception as e:
+            print(f"[ERROR] Error extracting content from {url}: {e}")
+            return {"error": str(e), "url": url}
+
+    async def _analyze_content(self, content_data: Dict[str, Any], query: str, session_id: str = "", user_id: str = "") -> List[str]:
+        """추출된 콘텐츠를 LLM으로 분석하여 인사이트를 생성합니다."""
+        insights = []
+
+        try:
+            text = content_data.get("text", "")
+            title = content_data.get("title", "")
+
+            if not text:
+                return ["콘텐츠를 추출할 수 없습니다."]
+
+            # 기본 통계
+            word_count = len(text.split())
+            insights.append(f"문서 길이: {word_count} 단어, {content_data.get('content_length', 0)} 문자")
+
+            if title:
+                insights.append(f"제목: {title}")
+
+            if content_data.get("author"):
+                insights.append(f"저자: {content_data.get('author')}")
+
+            if content_data.get("date"):
+                insights.append(f"발행일: {content_data.get('date')}")
+
+            # LLM을 사용한 콘텐츠 요약 (쿼리가 요약을 요구하는 경우)
+            if word_count > 100 and query:  # 충분히 긴 콘텐츠가 있을 때만
+                summary_insights = await self._generate_content_summary(text, query, session_id, user_id)
+                insights.extend(summary_insights)
+
+            return insights
+
+        except Exception as e:
+            print(f"[WARNING] Failed to analyze content: {e}")
+            return ["콘텐츠 분석 중 오류가 발생했습니다."]
+
+    async def _generate_content_summary(self, text: str, query: str, session_id: str = "", user_id: str = "") -> List[str]:
+        """LLM을 사용하여 콘텐츠 요약 생성"""
+        try:
+            # 텍스트가 너무 길면 잘라내기 (처음 3000자)
+            truncated_text = text[:3000] + ("..." if len(text) > 3000 else "")
+
+            # LLM 생성 및 추적
+            base_llm = create_llm(temperature=0.3, max_tokens=500)
+            llm = create_tracked_llm(
+                llm=base_llm,
+                session_id=session_id,
+                user_id=user_id,
+                workflow_step="web_lookup",
+                agent_name=self.name,
+                tags=["content_analysis", "summarization"]
+            )
+
+            prompt = f"""사용자 쿼리: {query}
+
+웹 페이지 콘텐츠:
+{truncated_text}
+
+위 콘텐츠를 분석하여 사용자 쿼리와 관련된 핵심 정보를 2-3개의 인사이트로 요약해주세요.
+각 인사이트는 한 문장으로 작성하고, 번호 없이 작성해주세요."""
+
+            response = await llm.ainvoke([HumanMessage(content=prompt)])
+            summary_text = response.content.strip()
+
+            # 인사이트를 줄 단위로 분리
+            summary_insights = [line.strip() for line in summary_text.split('\n') if line.strip() and not line.strip().startswith('#')]
+
+            print(f"[DEBUG] Generated {len(summary_insights)} summary insights")
+            return summary_insights[:3]  # 최대 3개
+
+        except Exception as e:
+            print(f"[WARNING] Failed to generate content summary: {e}")
+            return []
+
+    async def cleanup(self):
+        """HTTP 클라이언트 정리"""
+        if self.http_client:
+            await self.http_client.aclose()
+            self.http_client = None

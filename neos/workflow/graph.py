@@ -14,7 +14,8 @@ from neos.agents.search_agents import (
 )
 from neos.agents.analysis_agents import (
     DataAnalysisAgent,
-    ComparativeAnalysisAgent
+    ComparativeAnalysisAgent,
+    WebLookupAgent
 )
 from neos.agents.generation_agents import (
     ImageGenerationAgent,
@@ -68,6 +69,7 @@ class MultiAgentWorkflow:
             # 분석 에이전트들
             "data_analysis": DataAnalysisAgent(),
             "comparative_analysis": ComparativeAnalysisAgent(),
+            "web_lookup": WebLookupAgent(),
 
             # 생성 에이전트들
             "image_generation": ImageGenerationAgent(),
