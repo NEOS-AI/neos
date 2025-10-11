@@ -33,6 +33,10 @@ LangGraph, CrewAI, FastAPI를 활용한 지능형 멀티 에이전트 AI 시스�
 ### 📊 **고급 분석 에이전트**
 - **데이터 분석**: 수집된 정보의 통계 분석 및 패턴 발견
 - **비교 분석**: 다중 소스 정보 비교 및 유사성 분석
+- **🆕 웹 콘텐츠 조회**: URL에서 웹 페이지 내용 추출 및 분석
+  - trafilatura 기반 깔끔한 텍스트 추출
+  - 메타데이터 자동 수집 (제목, 저자, 날짜 등)
+  - LLM 기반 콘텐츠 요약 및 인사이트 생성
 
 ### 🎨 **콘텐츠 생성 에이전트**
 - **이미지 생성**: OpenAI DALL-E를 통한 이미지 생성
@@ -78,6 +82,7 @@ graph TB
 
     D --> D1[데이터 분석]
     D --> D2[비교 분석]
+    D --> D3[🆕 웹 콘텐츠 조회]
 
     E --> E1[이미지 생성]
     E --> E2[API 호출]
@@ -91,6 +96,7 @@ graph TB
     C5D --> F
     D1 --> F
     D2 --> F
+    D3 --> F
     E1 --> F
     E2 --> F
     E3 --> F
@@ -667,6 +673,115 @@ self.config = {
 - ✅ 실시간 응답이 중요
 - ✅ 간결한 답변 선호
 
+## 🌐 웹 콘텐츠 조회 에이전트 (WebLookupAgent)
+
+WebLookupAgent는 URL에서 직접 웹 페이지 콘텐츠를 추출하고 분석하는 전문 에이전트입니다.
+
+### 주요 기능
+
+- **깔끔한 텍스트 추출**: trafilatura 라이브러리를 사용하여 광고, 메뉴 등을 제거하고 본문만 추출
+- **메타데이터 수집**: 제목, 저자, 발행일, 설명, 언어 등 자동 추출
+- **LLM 기반 분석**: 추출된 콘텐츠를 사용자 쿼리 맥락에 맞게 요약 및 인사이트 생성
+- **비동기 처리**: httpx 기반 고성능 비동기 HTTP 요청
+
+### 사용 방법
+
+#### 1. 쿼리에 URL 포함
+```bash
+uv run python -m neos.cli workflow test "https://example.com 이 페이지의 내용을 요약해줘"
+```
+
+#### 2. API로 URL 전달
+```bash
+curl -X POST http://localhost:8000/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "이 기사의 핵심 내용을 분석해줘",
+    "context": {
+      "url": "https://techcrunch.com/article/ai-trends-2025"
+    }
+  }'
+```
+
+#### 3. Python 코드에서 직접 사용
+```python
+from neos.agents.analysis_agents import WebLookupAgent
+
+agent = WebLookupAgent()
+result = await agent.execute(
+    query="이 블로그 글의 핵심 포인트를 정리해줘",
+    context={
+        "url": "https://blog.example.com/post",
+        "session_id": "session-123",
+        "user_id": "user-456"
+    }
+)
+
+# 결과 확인
+print(f"제목: {result['data']['title']}")
+print(f"콘텐츠 길이: {result['data']['content_length']} 문자")
+print(f"인사이트: {result['insights']}")
+
+# 정리
+await agent.cleanup()
+```
+
+### 추출 가능한 정보
+
+WebLookupAgent는 다음 정보를 자동으로 추출합니다:
+
+| 필드 | 설명 |
+|-----|------|
+| `text` | 본문 텍스트 (광고, 메뉴 제거됨) |
+| `title` | 페이지 제목 |
+| `author` | 저자 (가능한 경우) |
+| `date` | 발행일 (가능한 경우) |
+| `description` | 메타 설명 |
+| `sitename` | 사이트 이름 |
+| `language` | 콘텐츠 언어 |
+| `content_length` | 추출된 텍스트 길이 |
+
+### 사용 예시
+
+#### 뉴스 기사 분석
+```bash
+uv run python -m neos.cli workflow test \
+  "https://www.nytimes.com/2024/10/ai-breakthrough.html 이 기사의 핵심 내용과 시사점을 분석해줘"
+```
+
+#### 블로그 글 요약
+```bash
+uv run python -m neos.cli workflow test \
+  "https://medium.com/@author/deep-learning-guide 이 글의 주요 개념을 3가지로 요약해줘"
+```
+
+#### 기술 문서 이해
+```bash
+uv run python -m neos.cli workflow test \
+  "https://docs.python.org/3/library/asyncio.html asyncio의 핵심 기능을 설명해줘"
+```
+
+#### 논문 초록 추출
+```bash
+uv run python -m neos.cli workflow test \
+  "https://arxiv.org/abs/2301.12345 이 논문의 주요 기여점을 정리해줘"
+```
+
+### 기술적 특징
+
+- **HTML 파싱**: trafilatura의 고급 파싱 알고리즘으로 정확한 본문 추출
+- **리다이렉트 처리**: 자동으로 리다이렉트 따라가기
+- **타임아웃 관리**: 30초 타임아웃으로 무한 대기 방지
+- **User-Agent 설정**: 봇 차단 회피를 위한 적절한 User-Agent
+- **에러 처리**: HTTP 에러 및 파싱 실패 시 명확한 에러 메시지
+
+### 제한사항
+
+- JavaScript로 렌더링되는 콘텐츠는 추출 불가 (정적 HTML만 지원)
+- 로그인이 필요한 페이지는 접근 불가
+- 일부 사이트는 봇 차단 정책으로 접근 제한 가능
+- 페이지 크기가 매우 클 경우 처음 3000자만 LLM 분석에 사용
+
 ### 에이전트 커스터마이징
 ```python
 # agents/custom_agent.py에서 새로운 에이전트 생성
@@ -837,11 +952,12 @@ uv run python -m neos.cli dataset list-files
 
 ## 🗺️ 로드맵
 
-### v1.1 (예정)
-- [ ] Web LookUp Agent (쿼리 검색 대신 URL이 주어지면 해당 웹 페이지 내용을 읽어오는 에이전트) 추가
-  - [ ] Web LookUp Agent Tool 구현
+### v1.1 (진행 중)
+- [x] Web LookUp Agent (쿼리 검색 대신 URL이 주어지면 해당 웹 페이지 내용을 읽어오는 에이전트) 추가
+  - [x] Web LookUp Agent Tool 구현 (trafilatura 기반)
   - [ ] Web LookUp Agent CLI 지원
   - [ ] Web LookUp Agent API 지원
+  - [ ] 동적 웹 페이지 렌더링 지원 (Selenium, Playwright)
 - [ ] 멀티모달 입력 지원 (이미지, 오디오)
 - [ ] 그래프 데이터베이스 통합
 - [ ] 고급 A/B 테스트 프레임워크
