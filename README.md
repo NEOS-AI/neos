@@ -956,7 +956,6 @@ uv run python -m neos.cli dataset list-files
 - [x] Web LookUp Agent (쿼리 검색 대신 URL이 주어지면 해당 웹 페이지 내용을 읽어오는 에이전트) 추가
   - [x] Web LookUp Agent Tool 구현 (trafilatura 기반)
   - [ ] Web LookUp Agent CLI 지원
-  - [ ] Web LookUp Agent API 지원
   - [ ] 동적 웹 페이지 렌더링 지원 (Selenium, Playwright)
 - [ ] 멀티모달 입력 지원 (이미지, 오디오)
 - [ ] 그래프 데이터베이스 통합
