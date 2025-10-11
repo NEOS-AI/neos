@@ -3,10 +3,13 @@
 from typing import Dict, Any, List, TYPE_CHECKING
 import asyncio
 import concurrent.futures
+import time
 from tavily import TavilyClient
 
 from neos.config.settings import settings
 from ..base import SearchAgent
+from neos.database.web_search_logger import get_search_logger
+from neos.database.web_search_types import SearchLogRequest, SearchLogComplete, SearchResultItem, SearchQueryStatus
 
 if TYPE_CHECKING:
     from neos.workflow.state import SearchResult
@@ -55,7 +58,26 @@ class RealtimeDataSearchAgent(SearchAgent):
             print("[WARNING] TAVILY_API_KEY not available, returning empty results")
             return self.format_output([], {"search_type": "data", "warning": "API key not available"})
 
+        # 검색 로거 초기화
+        search_logger = await get_search_logger()
+        query_id = None
+        start_time = time.time()
+
         try:
+            # 검색 시작 로그
+            log_request = SearchLogRequest(
+                query_text=query,
+                engine_name="tavily",
+                user_id=context.get("user_id") if context else None,
+                session_id=context.get("session_id") if context else None,
+                query_language=context.get("detected_language") if context else None,
+                query_intent=context.get("query_intent") if context else None,
+                search_params={"search_type": "data", "search_depth": "advanced"},
+                trace_id=context.get("trace_id") if context else None
+            )
+            query_id = await search_logger.log_search_start(log_request)
+            print(f"[DEBUG] Search logging started with query_id={query_id}")
+
             print("[DEBUG] Starting data search...")
             # 데이터 중심 검색
             data_results = await self._search_data_sources(query)
@@ -63,6 +85,7 @@ class RealtimeDataSearchAgent(SearchAgent):
             from neos.workflow.state import SearchResult
 
             results = []
+            log_results = []
             for item in data_results:
                 results.append(SearchResult(
                     source="data_source",
@@ -77,10 +100,55 @@ class RealtimeDataSearchAgent(SearchAgent):
                     }
                 ))
 
+                # 로깅용 결과 아이템
+                log_results.append(SearchResultItem(
+                    url=item.get("url", ""),
+                    title=item.get("title"),
+                    content=item.get("content"),
+                    score=item.get("score"),
+                    metadata={"data_type": item.get("data_type", "general")}
+                ))
+
+            # 검색 완료 로그
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            log_complete = SearchLogComplete(
+                query_id=query_id,
+                results=log_results,
+                execution_time_ms=execution_time_ms,
+                status=SearchQueryStatus.COMPLETED,
+                quality_score=self._calculate_quality_score(results)
+            )
+            await search_logger.log_search_complete(log_complete)
+            print(f"[DEBUG] Search logging completed for query_id={query_id}")
+
             return self.format_output(results, {"search_type": "data"})
 
         except Exception as e:
+            # 에러 로그
+            if query_id:
+                execution_time_ms = int((time.time() - start_time) * 1000)
+                log_complete = SearchLogComplete(
+                    query_id=query_id,
+                    results=[],
+                    execution_time_ms=execution_time_ms,
+                    status=SearchQueryStatus.FAILED,
+                    error_message=str(e)
+                )
+                await search_logger.log_search_complete(log_complete)
+
             return {"success": False, "error": str(e), "agent": self.name}
+
+    def _calculate_quality_score(self, results: List) -> float:
+        """결과 품질 점수 계산"""
+        if not results:
+            return 0.0
+
+        # 평균 스코어 계산
+        avg_score = sum(r.score for r in results if hasattr(r, 'score')) / len(results)
+        # 결과 수에 따른 보정 (최대 10개 결과 기준)
+        count_factor = min(len(results) / 10.0, 1.0)
+
+        return min(avg_score * count_factor, 1.0)
 
     async def _search_data_sources(self, query: str) -> List[Dict[str, Any]]:
         """데이터 소스 검색"""
