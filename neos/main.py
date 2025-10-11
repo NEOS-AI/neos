@@ -12,6 +12,7 @@ from neos.database.connection import db_manager
 from neos.utils.cache import cache_manager
 from neos.utils.embeddings import embedding_manager
 from neos.api.routes import router
+from neos.api.web_search_analytics_routes import router as web_search_analytics_router
 from neos.workflow.graph import multi_agent_workflow
 
 
@@ -164,6 +165,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 # API 라우터 등록
 app.include_router(router, prefix=settings.API_V1_PREFIX, tags=["Multi-Agent AI"])
+app.include_router(web_search_analytics_router, prefix=f"{settings.API_V1_PREFIX}/analytics", tags=["Web Search Analytics"])
 
 # 루트 엔드포인트
 @app.get("/")
