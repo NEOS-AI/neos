@@ -37,6 +37,7 @@ try:
     from neos.tools.mcp_integration import mcp_manager, MCPToolType, MCPToolResult
     from neos.tools.tool_selector import tool_selector
     from neos.dataset import llm_call_collector, dataset_manager
+    from neos.cli_workflow_builder import workflow_builder
 except ImportError as e:
     click.echo(f"❌ 모듈 import 실패: {e}")
     click.echo("프로젝트 루트 디렉토리에서 실행해주세요.")
@@ -59,16 +60,19 @@ cli_state = {
 @click.version_option(version='1.0.0', prog_name='Multi-Agent AI CLI')
 def cli(verbose: bool, profile: bool):
     """🤖 Multi-Agent AI System CLI Tool
-    
+
     에이전트, 워크플로우, 시스템을 테스트하고 관리하는 도구입니다.
     """
     cli_state["verbose"] = verbose
     cli_state["profile"] = profile
-    
+
     if verbose:
         console.print("🔧 Verbose mode enabled", style="dim")
     if profile:
         console.print("📊 Performance profiling enabled", style="dim")
+
+# 워크플로우 빌더 명령어 그룹 등록
+cli.add_command(workflow_builder)
 
 @cli.command()
 def status():

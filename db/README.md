@@ -49,4 +49,7 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/hyper_deep_research.
 psql -U postgres -d neos --port 5432 --host localhost -f db/web_search_log.sql
 # add schemas for web search analytics
 psql -U postgres -d neos --port 5432 --host localhost -f db/web_search_analytics.sql
+
+# add schemas for workflow builder
+psql -U postgres -d neos --port 5432 --host localhost -f db/add_workflow_tables.sql
 ```
