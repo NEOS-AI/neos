@@ -958,6 +958,9 @@ uv run python -m neos.cli dataset list-files
   - [ ] Web LookUp Agent CLI 지원
   - [ ] 동적 웹 페이지 렌더링 지원 (Selenium, Playwright)
 - [ ] 멀티모달 입력 지원 (이미지, 오디오)
+  - [ ] 이미지 기반 입력 지원
+  - [ ] PDF 및 문서 파일 분석 지원
+  - [ ] 오디오 파일 분석
 - [ ] 그래프 데이터베이스 통합
 - [ ] 고급 A/B 테스트 프레임워크
 - [ ] Google Gemini, Cohere 등 추가 LLM Provider
@@ -968,3 +971,4 @@ uv run python -m neos.cli dataset list-files
 - [ ] 로컬 LLM 지원 (Ollama)
 - [ ] 고급 워크플로우 빌더 UI
 - [ ] API Rate Limiting
+- [ ] 영상 분석 에이전트
