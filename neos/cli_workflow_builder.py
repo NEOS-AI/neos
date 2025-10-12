@@ -18,6 +18,7 @@ from neos.workflow.builder import (
 )
 from neos.tools.mcp_server_manager import mcp_server_manager
 from neos.database.workflow_models import WorkflowStatus
+from neos.workflow.agent_registry import agent_registry
 
 
 console = Console()
@@ -206,6 +207,123 @@ def delete_mcp_server(server_id: int, yes: bool):
         console.print(f"\n❌ 오류: {e}", style="red")
 
 
+# ==================== 에이전트 관리 명령어 ====================
+
+@workflow_builder.group(name='agent')
+def agent():
+    """Neos 에이전트 관리"""
+    pass
+
+
+@agent.command(name='list')
+@click.option('--category', '-c', help='카테고리로 필터링 (search, analysis, generation)')
+def list_agents(category: Optional[str]):
+    """사용 가능한 에이전트 목록 조회
+
+    예시:
+      uv run python -m neos.cli workflow-builder agent list
+      uv run python -m neos.cli workflow-builder agent list --category search
+    """
+    console.print(Panel.fit("🤖 사용 가능한 에이전트 목록", style="bold blue"))
+
+    try:
+        agents = agent_registry.list_agents(category=category)
+
+        if not agents:
+            console.print("\n⚠️  등록된 에이전트가 없습니다.")
+            return
+
+        # 카테고리별로 그룹화
+        from collections import defaultdict
+        agents_by_category = defaultdict(list)
+        for agent in agents:
+            agents_by_category[agent.category].append(agent)
+
+        for cat, cat_agents in sorted(agents_by_category.items()):
+            console.print(f"\n[bold cyan]{cat.upper()} ({len(cat_agents)}개)[/bold cyan]")
+
+            table = Table(show_header=True, box=None)
+            table.add_column("이름", style="green")
+            table.add_column("설명", style="white")
+            table.add_column("주요 기능", style="yellow")
+
+            for agent in cat_agents:
+                capabilities = ", ".join(agent.capabilities[:2])
+                if len(agent.capabilities) > 2:
+                    capabilities += "..."
+
+                table.add_row(
+                    agent.name,
+                    agent.description[:50] + "..." if len(agent.description) > 50 else agent.description,
+                    capabilities
+                )
+
+            console.print(table)
+
+        # 요약
+        console.print(f"\n[dim]총 {len(agents)}개의 에이전트 사용 가능[/dim]")
+        categories = agent_registry.get_categories()
+        console.print(f"[dim]카테고리: {', '.join(categories)}[/dim]")
+
+    except Exception as e:
+        console.print(f"\n❌ 오류: {e}", style="red")
+
+
+@agent.command(name='info')
+@click.argument('agent_name')
+def agent_info(agent_name: str):
+    """에이전트 상세 정보
+
+    예시:
+      uv run python -m neos.cli workflow-builder agent info knowledge_search
+      uv run python -m neos.cli workflow-builder agent info deep_research
+    """
+    console.print(Panel.fit(f"ℹ️  에이전트 상세 정보: {agent_name}", style="bold blue"))
+
+    try:
+        agent_info_obj = agent_registry.get_agent_info(agent_name)
+
+        if not agent_info_obj:
+            console.print(f"\n❌ 에이전트 '{agent_name}'를 찾을 수 없습니다.", style="red")
+
+            # 유사한 에이전트 제안
+            all_agents = agent_registry.list_agents()
+            console.print("\n[dim]사용 가능한 에이전트:[/dim]")
+            for agent in all_agents[:5]:
+                console.print(f"  • {agent.name}")
+            return
+
+        info_table = Table(show_header=False, box=None)
+        info_table.add_column("속성", style="cyan bold")
+        info_table.add_column("값", style="white")
+
+        info_table.add_row("이름", agent_info_obj.name)
+        info_table.add_row("카테고리", agent_info_obj.category)
+        info_table.add_row("설명", agent_info_obj.description)
+        info_table.add_row("클래스", agent_info_obj.agent_class.__name__)
+
+        console.print()
+        console.print(info_table)
+
+        if agent_info_obj.capabilities:
+            console.print("\n[bold cyan]기능:[/bold cyan]")
+            for cap in agent_info_obj.capabilities:
+                console.print(f"  • {cap}")
+
+        # 사용 예제
+        console.print("\n[bold cyan]워크플로우에서 사용:[/bold cyan]")
+        console.print(f"""
+[dim]builder.add_node(
+    name="my_node",
+    node_type="agent",
+    config={{"agent_name": "{agent_name}"}}
+)[/dim]
+        """)
+
+    except Exception as e:
+        console.print(f"\n❌ 오류: {e}", style="red")
+
+
 # ==================== 워크플로우 관리 명령어 ====================
 
 @workflow_builder.command(name='create')
@@ -263,7 +381,36 @@ def _interactive_workflow_creation(builder: CustomWorkflowBuilder, name: str, de
         config = {}
         mcp_server_name = None
 
-        if node_type == "mcp_tool":
+        if node_type == "agent":
+            # 에이전트 목록 표시
+            agents = agent_registry.list_agents()
+
+            if not agents:
+                console.print("\n⚠️  등록된 에이전트가 없습니다.")
+                continue
+
+            console.print("\n[bold]사용 가능한 에이전트:[/bold]")
+
+            # 카테고리별로 표시
+            from collections import defaultdict
+            agents_by_category = defaultdict(list)
+            for agent in agents:
+                agents_by_category[agent.category].append(agent)
+
+            agent_list = []
+            idx = 1
+            for cat, cat_agents in sorted(agents_by_category.items()):
+                console.print(f"\n[cyan]{cat.upper()}:[/cyan]")
+                for agent in cat_agents:
+                    console.print(f"  {idx}. {agent.name} - {agent.description[:50]}")
+                    agent_list.append(agent)
+                    idx += 1
+
+            agent_choice = int(Prompt.ask("에이전트 선택", choices=[str(i) for i in range(1, len(agent_list) + 1)]))
+            selected_agent = agent_list[agent_choice - 1]
+            config["agent_name"] = selected_agent.name
+
+        elif node_type == "mcp_tool":
             # MCP 서버 목록 표시
             servers = asyncio.run(mcp_server_manager.list_servers(is_active=True))
 

@@ -18,6 +18,8 @@ from neos.database.workflow_models import (
 )
 from neos.workflow.state import AgentState
 from neos.tools.mcp_integration import mcp_manager, MCPToolResult
+from neos.workflow.agent_registry import agent_registry
+from neos.utils.language_detection import detect_language
 
 
 logger = logging.getLogger(__name__)
@@ -384,22 +386,109 @@ class WorkflowExecutor:
 
         return "\n".join(response_parts)
 
+
     async def _execute_agent(
         self,
         node: WorkflowNode,
         state: AgentState
     ) -> Dict[str, Any]:
         """에이전트 노드 실행"""
-        # 기존 에이전트 시스템과 통합
-        agent_type = node.config.get("agent_type", "")
+        start_time = datetime.utcnow()
 
-        return {
-            "node": node.name,
-            "type": "agent",
-            "agent_type": agent_type,
-            "success": True,
-            "data": {"message": f"Agent {agent_type} executed"},
-        }
+        # 노드 설정에서 에이전트 이름 가져오기
+        agent_name = node.config.get("agent_name", "")
+
+        if not agent_name:
+            return {
+                "node": node.name,
+                "type": "agent",
+                "success": False,
+                "error": "agent_name not specified in node config",
+                "execution_time_ms": 0
+            }
+
+        # 에이전트 레지스트리에서 에이전트 가져오기
+        agent = agent_registry.get_agent(agent_name)
+
+        if not agent:
+            return {
+                "node": node.name,
+                "type": "agent",
+                "agent_name": agent_name,
+                "success": False,
+                "error": f"Agent '{agent_name}' not found in registry",
+                "execution_time_ms": 0
+            }
+
+        try:
+            # 쿼리 준비
+            query = state.get("original_query", "")
+
+            # 언어 감지
+            detected_language = state.get("detected_language")
+            if not detected_language:
+                detected_language = detect_language(query)
+
+            # 에이전트 실행을 위한 컨텍스트 준비
+            context = {
+                "user_id": state.get("user_id", ""),
+                "session_id": state.get("session_id", ""),
+                "detected_language": detected_language,
+                **node.config.get("context", {})  # 추가 컨텍스트
+            }
+
+            # 에이전트 실행
+            logger.info(f"Executing agent '{agent_name}' with query: {query[:50]}...")
+            agent_result = await agent.execute(query, context)
+
+            # 실행 시간 계산
+            execution_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+
+            # 결과 처리
+            if agent_result.get("success"):
+                results = agent_result.get("results", [])
+
+                # 결과 포맷팅
+                formatted_results = []
+                for result in results:
+                    formatted_results.append({
+                        "title": result.get("title", ""),
+                        "content": result.get("content", ""),
+                        "url": result.get("url", ""),
+                        "score": result.get("score", 0.0),
+                        "metadata": result.get("metadata", {})
+                    })
+
+                return {
+                    "node": node.name,
+                    "type": "agent",
+                    "agent_name": agent_name,
+                    "success": True,
+                    "data": formatted_results,
+                    "metadata": agent_result.get("metadata", {}),
+                    "execution_time_ms": execution_time_ms
+                }
+            else:
+                return {
+                    "node": node.name,
+                    "type": "agent",
+                    "agent_name": agent_name,
+                    "success": False,
+                    "error": agent_result.get("error", "Unknown agent error"),
+                    "execution_time_ms": execution_time_ms
+                }
+
+        except Exception as e:
+            execution_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            logger.error(f"Error executing agent '{agent_name}': {e}")
+            return {
+                "node": node.name,
+                "type": "agent",
+                "agent_name": agent_name,
+                "success": False,
+                "error": str(e),
+                "execution_time_ms": execution_time_ms
+            }
 
     async def execute(
         self,
