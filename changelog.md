@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.5.5 (2025-10-15)
+- [x] PPT 파서 추가
+  - [x] python-pptx 라이브러리 도입
+  - [x] PPT 파일 텍스트 추출 및 전처리
+- [x] CSV 파서 추가
+  - [x] 대용량 CSV 파일 처리 최적화
+  - [x] 다양한 인코딩 지원 강화
+
+## v0.5.4 (2025-10-15)
+- [x] 문서 파이프라인에 Word, Excel 파서 추가
+  - [x] python-docx, openpyxl 라이브러리 도입
+  - [x] Word, Excel 파일 텍스트 추출 및 전처리
+
 ## v0.5.3 (2025-10-14)
 - [x] Multimodal LLM 통합
   - [x] GPT-4V, Claude Vision 지원
