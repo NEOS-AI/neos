@@ -529,8 +529,8 @@ class FileInput:
 ### Phase 2 (진행 중)
 - [x] Vision 모델 통합 (GPT-4V, Claude Vision)
 - [x] PDF 파싱 (PyPDF2, pdfplumber)
-- [ ] Word/Excel 파싱 (python-docx, openpyxl)
-- [ ] STT 통합 (OpenAI Whisper)
+- [x] Word/Excel 파싱 (python-docx, openpyxl)
+- [x] STT 통합 (OpenAI Whisper)
 - [ ] 화자 분리 (pyannote.audio)
 
 ### Phase 3 (계획)
