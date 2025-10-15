@@ -18,6 +18,8 @@ from .base import (
 from .pdf_parser import PDFParser
 from .word_parser import WordParser
 from .excel_parser import ExcelParser
+from .csv_parser import CSVParser
+from .ppt_parser import PPTParser
 
 
 class DocumentPipeline(BasePipeline):
@@ -49,6 +51,8 @@ class DocumentPipeline(BasePipeline):
         self.pdf_parser = PDFParser()
         self.word_parser = WordParser()
         self.excel_parser = ExcelParser()
+        self.csv_parser = CSVParser()
+        self.ppt_parser = PPTParser()
 
     async def validate(self, context: PipelineContext) -> bool:
         """문서 입력 검증"""
@@ -333,27 +337,97 @@ class DocumentPipeline(BasePipeline):
         """
         PowerPoint 문서 추출
 
-        TODO: python-pptx 통합
+        python-pptx를 사용하여 PowerPoint 파일에서 텍스트, 이미지, 노트를 추출합니다.
         """
-        return {
-            "text": "PowerPoint extraction not yet implemented",
-            "slide_count": None,
-            "has_images": False,
-            "implementation_needed": "python-pptx"
-        }
+        # PPT 파서 사용 가능 여부 확인
+        if not self.ppt_parser.is_available():
+            return {
+                "text": "python-pptx is not installed. Install it with: pip install python-pptx",
+                "slide_count": 0,
+                "has_images": False,
+                "has_tables": False,
+                "error": "python-pptx not installed",
+                "installation_command": "pip install python-pptx"
+            }
+
+        try:
+            # PPT 파싱 실행
+            result = await self.ppt_parser.parse(
+                file_content=file.file_content,
+                file_path=file.file_path
+            )
+
+            # 결과 반환
+            return {
+                "text": result.get("text", ""),
+                "slide_count": result.get("slide_count", 0),
+                "slides": result.get("slides", []),
+                "has_images": result.get("has_images", False),
+                "has_tables": result.get("has_tables", False),
+                "has_notes": result.get("has_notes", False),
+                "metadata": result.get("metadata", {}),
+                "total_shapes": result.get("total_shapes", 0),
+                "extraction_method": "python-pptx",
+            }
+
+        except Exception as e:
+            return {
+                "text": "",
+                "slide_count": 0,
+                "has_images": False,
+                "has_tables": False,
+                "error": f"PowerPoint extraction failed: {str(e)}",
+                "extraction_method": "python-pptx",
+            }
 
     async def _extract_csv(self, file: FileInput, context: PipelineContext) -> Dict[str, Any]:
         """
         CSV 파일 추출
 
-        TODO: pandas 통합
+        pandas를 사용하여 CSV 파일에서 데이터와 통계 정보를 추출합니다.
         """
-        return {
-            "text": "CSV extraction not yet implemented",
-            "row_count": None,
-            "column_count": None,
-            "implementation_needed": "pandas"
-        }
+        # CSV 파서 사용 가능 여부 확인
+        if not self.csv_parser.is_available():
+            return {
+                "text": "pandas is not installed. Install it with: pip install pandas",
+                "row_count": 0,
+                "column_count": 0,
+                "has_tables": False,
+                "error": "pandas not installed",
+                "installation_command": "pip install pandas"
+            }
+
+        try:
+            # CSV 파싱 실행
+            result = await self.csv_parser.parse(
+                file_content=file.file_content,
+                file_path=file.file_path
+            )
+
+            # 결과 반환
+            return {
+                "text": result.get("text", ""),
+                "row_count": result.get("row_count", 0),
+                "column_count": result.get("column_count", 0),
+                "columns": result.get("columns", []),
+                "data_preview": result.get("data_preview", []),
+                "statistics": result.get("statistics", {}),
+                "missing_values": result.get("missing_values", {}),
+                "data_types": result.get("data_types", {}),
+                "has_tables": True,  # CSV는 항상 테이블 형태
+                "memory_usage": result.get("memory_usage", 0),
+                "extraction_method": "pandas",
+            }
+
+        except Exception as e:
+            return {
+                "text": "",
+                "row_count": 0,
+                "column_count": 0,
+                "has_tables": False,
+                "error": f"CSV extraction failed: {str(e)}",
+                "extraction_method": "pandas",
+            }
 
     async def _extract_text(self, file: FileInput, context: PipelineContext) -> Dict[str, Any]:
         """텍스트 파일 추출 (간단 구현)"""

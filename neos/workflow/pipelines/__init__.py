@@ -25,6 +25,8 @@ from .vision_models import (
     analyze_image_with_vision
 )
 from .pdf_parser import PDFParser, parse_pdf
+from .csv_parser import CSVParser, parse_csv
+from .ppt_parser import PPTParser, parse_ppt
 
 __all__ = [
     "BasePipeline",
@@ -48,4 +50,8 @@ __all__ = [
     "analyze_image_with_vision",
     "PDFParser",
     "parse_pdf",
+    "CSVParser",
+    "parse_csv",
+    "PPTParser",
+    "parse_ppt",
 ]
