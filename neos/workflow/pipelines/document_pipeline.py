@@ -16,6 +16,8 @@ from .base import (
     FileInput
 )
 from .pdf_parser import PDFParser
+from .word_parser import WordParser
+from .excel_parser import ExcelParser
 
 
 class DocumentPipeline(BasePipeline):
@@ -45,6 +47,8 @@ class DocumentPipeline(BasePipeline):
     def __init__(self):
         super().__init__(name="DocumentPipeline", input_type=InputType.DOCUMENT)
         self.pdf_parser = PDFParser()
+        self.word_parser = WordParser()
+        self.excel_parser = ExcelParser()
 
     async def validate(self, context: PipelineContext) -> bool:
         """문서 입력 검증"""
@@ -82,6 +86,13 @@ class DocumentPipeline(BasePipeline):
         """문서에서 정보 추출"""
         file = context.files[0]
         doc_type = context.additional_context.get("document_type")
+        if not doc_type or doc_type not in self.SUPPORTED_FORMATS.values():
+            return PipelineResult(
+                success=False,
+                input_type=InputType.DOCUMENT,
+                stage=ProcessingStage.EXTRACTION,
+                error="Unsupported or unknown document type"
+            )
 
         # 문서 타입별 추출 로직
         if doc_type == "pdf":
@@ -224,28 +235,99 @@ class DocumentPipeline(BasePipeline):
         """
         Word 문서 추출
 
-        TODO: python-docx 통합
+        python-docx를 사용하여 Word 문서에서 텍스트, 테이블, 스타일 정보를 추출합니다.
         """
-        return {
-            "text": "Word document extraction not yet implemented",
-            "page_count": None,
-            "has_images": False,
-            "has_tables": False,
-            "implementation_needed": "python-docx"
-        }
+        # Word 파서 사용 가능 여부 확인
+        if not self.word_parser.is_available():
+            return {
+                "text": "python-docx is not installed. Install it with: pip install python-docx",
+                "paragraph_count": 0,
+                "has_images": False,
+                "has_tables": False,
+                "error": "python-docx not installed",
+                "installation_command": "pip install python-docx"
+            }
+
+        try:
+            # Word 파싱 실행
+            result = await self.word_parser.parse(
+                file_content=file.file_content,
+                file_path=file.file_path
+            )
+
+            # 결과 반환
+            return {
+                "text": result.get("text", ""),
+                "paragraph_count": result.get("paragraph_count", 0),
+                "char_count": result.get("char_count", 0),
+                "word_count": result.get("word_count", 0),
+                "has_images": result.get("has_images", False),
+                "has_tables": result.get("has_tables", False),
+                "table_count": result.get("table_count", 0),
+                "tables": result.get("tables", []),
+                "metadata": result.get("metadata", {}),
+                "styles": result.get("styles", {}),
+                "extraction_method": "python-docx",
+            }
+
+        except Exception as e:
+            return {
+                "text": "",
+                "paragraph_count": 0,
+                "has_images": False,
+                "has_tables": False,
+                "error": f"Word extraction failed: {str(e)}",
+                "extraction_method": "python-docx",
+            }
 
     async def _extract_excel(self, file: FileInput, context: PipelineContext) -> Dict[str, Any]:
         """
         Excel 문서 추출
 
-        TODO: openpyxl or pandas 통합
+        openpyxl을 사용하여 Excel 파일에서 데이터, 수식, 차트 정보를 추출합니다.
         """
-        return {
-            "text": "Excel extraction not yet implemented",
-            "sheet_count": None,
-            "has_charts": False,
-            "implementation_needed": "openpyxl or pandas"
-        }
+        # Excel 파서 사용 가능 여부 확인
+        if not self.excel_parser.is_available():
+            return {
+                "text": "openpyxl is not installed. Install it with: pip install openpyxl",
+                "sheet_count": 0,
+                "has_charts": False,
+                "has_tables": False,
+                "error": "openpyxl not installed",
+                "installation_command": "pip install openpyxl"
+            }
+
+        try:
+            # Excel 파싱 실행
+            result = await self.excel_parser.parse(
+                file_content=file.file_content,
+                file_path=file.file_path
+            )
+
+            # 결과 반환
+            return {
+                "text": result.get("text", ""),
+                "sheet_count": result.get("sheet_count", 0),
+                "sheet_names": result.get("sheet_names", []),
+                "sheets": result.get("sheets", []),
+                "has_formulas": result.get("has_formulas", False),
+                "has_charts": result.get("has_charts", False),
+                "has_tables": result.get("sheet_count", 0) > 0,  # Excel 시트는 테이블로 간주
+                "metadata": result.get("metadata", {}),
+                "total_rows": result.get("total_rows", 0),
+                "total_cols": result.get("total_cols", 0),
+                "extraction_method": "openpyxl",
+            }
+
+        except Exception as e:
+            return {
+                "text": "",
+                "sheet_count": 0,
+                "has_charts": False,
+                "has_tables": False,
+                "error": f"Excel extraction failed: {str(e)}",
+                "extraction_method": "openpyxl",
+            }
 
     async def _extract_powerpoint(self, file: FileInput, context: PipelineContext) -> Dict[str, Any]:
         """
