@@ -1559,7 +1559,7 @@ Write a very detailed and actionable plan in English."""
         parts = [
             f"# {topic}\n",
             "## HyperDeepResearch Comprehensive Report\n",
-            "\n**Report ID:** `{self.current_report_id}`\n",
+            f"\n**Report ID:** `{self.current_report_id}`\n",
             f"**Generated:** {datetime.utcnow().isoformat()}\n",
             "\n---\n",
             "\n## 📊 Research Statistics\n",
