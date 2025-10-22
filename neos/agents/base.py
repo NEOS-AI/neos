@@ -114,7 +114,7 @@ class SearchAgent(BaseAgent):
     
     async def search(self, query: str, **kwargs) -> List[Dict[str, Any]]:
         """검색 실행 (하위 클래스에서 구현)"""
-        pass
+        raise NotImplementedError("Subclasses must implement the search method.")
 
 class AnalysisAgent(BaseAgent):
     """분석 에이전트 기본 클래스"""
@@ -131,7 +131,7 @@ class AnalysisAgent(BaseAgent):
     
     async def analyze(self, data: Any, **kwargs) -> Dict[str, Any]:
         """데이터 분석 (하위 클래스에서 구현)"""
-        pass
+        raise NotImplementedError("Subclasses must implement the analyze method.")
 
 
 class GenerationAgent(BaseAgent):
@@ -149,4 +149,4 @@ class GenerationAgent(BaseAgent):
 
     async def generate(self, prompt: str, **kwargs) -> Dict[str, Any]:
         """콘텐츠 생성 (하위 클래스에서 구현)"""
-        pass
+        raise NotImplementedError("Subclasses must implement the generate method.")
