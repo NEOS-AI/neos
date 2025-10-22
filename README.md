@@ -961,6 +961,10 @@ uv run python -m neos.cli dataset list-files
   - [ ] 이미지 기반 입력 지원
   - [ ] PDF 및 문서 파일 분석 지원
   - [ ] 오디오 파일 분석
+- [ ] API 호출 에이전트 (ApiCallAgent)
+  - [ ] 날씨 API 통합
+  - [ ] 환율 데이터 API 통합
+  - [ ] 주식 시장 데이터 API 통합
 - [ ] 그래프 데이터베이스 통합
 - [ ] 고급 A/B 테스트 프레임워크
 - [ ] Google Gemini, Cohere 등 추가 LLM Provider
