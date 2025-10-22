@@ -131,7 +131,7 @@ class LLMFactory:
                 return fallback_provider.create_llm(**kwargs)
             
             raise e
-    
+
     @classmethod
     def get_available_providers(cls) -> list[str]:
         """사용 가능한 provider 목록 반환"""
@@ -159,8 +159,10 @@ class LLMFactory:
         except ValueError:
             return False
 
+
 # 전역 LLM Factory 인스턴스
 llm_factory = LLMFactory()
+
 
 # 편의 함수들
 def create_llm(**kwargs) -> BaseLanguageModel:
@@ -179,14 +181,14 @@ def get_recommended_models(provider: str) -> dict[str, str]:
     """Provider별 추천 모델"""
     recommendations = {
         "openai": {
-            "fast": "gpt-3.5-turbo",
-            "balanced": "gpt-4-turbo-preview", 
-            "powerful": "gpt-4"
+            "fast": "gpt-5-mini-2025-08-07",
+            "balanced": "gpt-5-2025-08-07",
+            "powerful": "gpt-5-2025-08-07"
         },
         "anthropic": {
-            "fast": "claude-3-haiku-20240307",
-            "balanced": "claude-3-sonnet-20240229",
-            "powerful": "claude-3-opus-20240229"
+            "fast": "claude-haiku-4-5-20251001",
+            "balanced": "claude-sonnet-4-5-20250929",
+            "powerful": "claude-sonnet-4-5-20250929"
         }
     }
     

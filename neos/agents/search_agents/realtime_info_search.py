@@ -8,6 +8,8 @@ from langchain.schema import HumanMessage
 
 from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
+from neos.utils.llm_wrapper import create_tracked_llm
+
 from ..base import SearchAgent
 
 if TYPE_CHECKING:
@@ -161,7 +163,6 @@ class RealtimeInfoSearchAgent(SearchAgent):
             print(f"[DEBUG] Processing {len(tavily_results)} Tavily results with LLM...")
 
             # Create LLM instance with higher max_tokens for comprehensive responses
-            from neos.utils.llm_wrapper import create_tracked_llm
             base_llm = create_llm(temperature=0.1, max_tokens=4000)  # Low temperature for factual accuracy, higher token limit
 
             # Wrap LLM with tracking for dataset collection
