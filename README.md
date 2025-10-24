@@ -175,10 +175,10 @@ docker로 DB와 Redis 실행 방법은 [여기](./db/README.md)를 참고하세�
 ### 4. 애플리케이션 실행
 ```bash
 # 개발 서버 시작
-python main.py
+python3 -m neos.main
 
 # 또는 uvicorn 직접 실행
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uvicorn neos.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### 5. API 테스트
