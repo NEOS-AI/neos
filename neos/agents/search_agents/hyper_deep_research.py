@@ -103,6 +103,47 @@ class HyperDeepResearchAgent(SearchAgent):
             "additional_research_triggered": 0  # 피드백으로 인한 추가 조사 횟수
         }
 
+    def _detect_language(self, text: str) -> str:
+        """텍스트의 언어 감지 (영어, 한글, 일본어, 중국어)"""
+        import re
+
+        # 한글 체크
+        korean_chars = len(re.findall(r'[가-힣]', text))
+        # 일본어 체크 (히라가나, 가타카나)
+        hiragana_chars = len(re.findall(r'[ぁ-ん]', text))
+        katakana_chars = len(re.findall(r'[ァ-ヶー]', text))
+        # 중국어/일본어 한자 (CJK Unified Ideographs)
+        cjk_chars = len(re.findall(r'[一-龯]', text))
+        # 영어 체크
+        english_chars = len(re.findall(r'[a-zA-Z]', text))
+
+        total_chars = len(re.findall(r'\S', text))
+
+        if total_chars == 0:
+            return "en"  # 기본값
+
+        # 우선순위: 한글 > 히라가나/가타카나(일본어) > 한자만(중국어) > 영어
+
+        # 한글이 30% 이상이면 한국어
+        if korean_chars / total_chars > 0.3:
+            return "ko"
+
+        # 히라가나나 가타카나가 있으면 일본어 (일본어는 가나 문자가 특징)
+        if hiragana_chars > 0 or katakana_chars > 0:
+            return "ja"
+
+        # 한자가 50% 이상이고 히라가나/가타카나가 없으면 중국어
+        # 중국어는 영어로 처리 (프롬프트에 중국어가 없으므로)
+        if cjk_chars / total_chars > 0.5:
+            return "en"  # 중국어는 영어 프롬프트 사용
+
+        # 영어가 50% 이상이면 영어
+        if english_chars / total_chars > 0.5:
+            return "en"
+
+        # 기본값
+        return "en"
+
     async def execute(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """HyperDeepResearch 실행"""
         print(f"[DEBUG] HyperDeepResearchAgent.execute called with query: {query[:50]}...")
@@ -118,6 +159,15 @@ class HyperDeepResearchAgent(SearchAgent):
         try:
             session_id = context.get("session_id", "") if context else ""
             user_id = context.get("user_id", "") if context else ""
+
+            # 쿼리 언어 자동 감지
+            detected_language = self._detect_language(query)
+            print(f"[INFO] Detected query language: {detected_language}")
+
+            # context에 detected_language 설정 (context가 None일 수 있으므로 처리)
+            if context is None:
+                context = {}
+            context["detected_language"] = detected_language
 
             # 전체 프로세스 실행
             report_content = await self._run_hyper_deep_research(query, session_id, user_id, context)
@@ -393,7 +443,45 @@ Include all of the following:
    - Areas requiring expert opinions
    - Areas requiring case studies
 
-Write a very detailed and structured analysis in English."""
+Write a very detailed and structured analysis in English.""",
+
+                "ja": f"""以下の研究テーマについて、多次元的な詳細分析を実施してください:
+
+テーマ: {query}
+
+以下の全てを含めて分析してください:
+
+1. **核心概念の分解**
+   - 主要キーワードとその意味
+   - 関連概念と用語
+   - 概念間の関係
+
+2. **多次元的観点**
+   - 技術的観点
+   - 経済的/市場的観点
+   - 社会的/文化的観点
+   - 歴史的観点
+   - 将来展望の観点
+
+3. **研究範囲の設定**
+   - 地理的範囲（グローバル/地域）
+   - 時間的範囲（過去/現在/未来）
+   - テーマの深さ（概要/詳細）
+
+4. **核心研究質問（10-15個）**
+   - What（何）: 現象、定義、構成要素
+   - Why（なぜ）: 原因、動機、背景
+   - How（どのように）: メカニズム、プロセス、方法
+   - Who（誰）: 主体、利害関係者
+   - When（いつ）: 時点、トレンド、変化
+   - Where（どこ）: 地域、場所、文脈
+
+5. **潜在的調査領域**
+   - データが必要な領域
+   - 専門家意見が必要な領域
+   - ケーススタディが必要な領域
+
+非常に詳細で構造化された分析を日本語で作成してください。"""
             }
 
             response = await llm.ainvoke([HumanMessage(content=prompts.get(language, prompts["en"]))])
@@ -506,7 +594,44 @@ Create a detailed research plan including:
    - Cross-validation methods
    - Bias prevention strategies
 
-Write a very detailed and actionable plan in English."""
+Write a very detailed and actionable plan in English.""",
+
+                "ja": f"""以下のテーマ分析に基づいて、包括的な研究計画を作成してください:
+
+テーマ分析:
+{topic_analysis['full_analysis'][:1500]}
+
+以下を含む詳細な研究計画を作成してください:
+
+1. **研究方法論**
+   - 探索的調査 (Exploratory Research)
+   - 記述的調査 (Descriptive Research)
+   - 因果的調査 (Causal Research)
+   - 各方法論の適用領域
+
+2. **理論的フレームワーク**
+   - 関連理論とモデル
+   - 分析フレームワーク
+   - 評価基準
+
+3. **多層調査戦略**
+   - Layer 1: 基本情報収集（定義、概念、現状）
+   - Layer 2: 詳細分析（メカニズム、原因、影響）
+   - Layer 3: 比較分析（事例、代替案、国際比較）
+   - Layer 4: 将来展望（トレンド、予測、シナリオ）
+
+4. **データ収集計画**
+   - 1次データタイプ: 統計、事例、専門家意見
+   - 2次データタイプ: 学術論文、産業レポート、ニュース
+   - 検索キーワード戦略（20個以上）
+   - ソース多様化戦略
+
+5. **品質管理戦略**
+   - ソース信頼性評価基準
+   - クロス検証方法
+   - バイアス防止戦略
+
+非常に詳細で実行可能な計画を日本語で作成してください。"""
             }
 
             response = await llm.ainvoke([HumanMessage(content=prompts.get(language, prompts["en"]))])
@@ -617,7 +742,8 @@ Write a very detailed and actionable plan in English."""
                 tags=["multi_query_generation"]
             )
 
-            prompt = f"""다음 연구 주제에 대해 다양한 관점과 각도에서 검색 쿼리를 생성해주세요:
+            prompts = {
+                "ko": f"""다음 연구 주제에 대해 다양한 관점과 각도에서 검색 쿼리를 생성해주세요:
 
 주제: {topic_analysis['original_query']}
 
@@ -633,9 +759,46 @@ Write a very detailed and actionable plan in English."""
 5. 사례 및 실제 (5개): 사례 연구, 실제 적용, 성공/실패 사례
 
 각 쿼리는 한 줄로, 구체적이고 검색 가능하게 작성하세요.
-번호나 카테고리 표시 없이 쿼리만 작성하세요."""
+번호나 카테고리 표시 없이 쿼리만 작성하세요.""",
 
-            response = await llm.ainvoke([HumanMessage(content=prompt)])
+                "en": f"""Generate diverse search queries from various perspectives and angles for the following research topic:
+
+Topic: {topic_analysis['original_query']}
+
+Research Questions:
+{chr(10).join(topic_analysis['research_questions'][:10])}
+
+Generate **25 diverse search queries** using the following strategies:
+
+1. Direct Questions (5): Core questions about the topic
+2. Related Concepts (5): Associated keywords, similar topics
+3. Specific Aspects (5): Technology, market, society, history, future
+4. Comparison and Contrast (5): A vs B, pros and cons, alternatives
+5. Cases and Practice (5): Case studies, practical applications, success/failure cases
+
+Write each query on one line, specific and searchable.
+Write only the queries without numbers or category labels.""",
+
+                "ja": f"""以下の研究テーマについて、様々な観点と角度から検索クエリを生成してください:
+
+テーマ: {topic_analysis['original_query']}
+
+研究質問:
+{chr(10).join(topic_analysis['research_questions'][:10])}
+
+以下の戦略で **25個の多様な検索クエリ** を生成してください:
+
+1. 直接質問 (5個): テーマの核心的な質問
+2. 関連概念 (5個): 関連キーワード、類似テーマ
+3. 特定側面 (5個): 技術、市場、社会、歴史、未来
+4. 比較対照 (5個): A vs B、長所短所、代替案
+5. 事例と実践 (5個): ケーススタディ、実際の応用、成功/失敗事例
+
+各クエリは1行で、具体的で検索可能に作成してください。
+番号やカテゴリ表示なしで、クエリのみを記述してください。"""
+            }
+
+            response = await llm.ainvoke([HumanMessage(content=prompts.get(language, prompts["en"]))])
             queries = [q.strip() for q in response.content.strip().split('\n') if q.strip() and len(q.strip()) > 5]
 
             # 최소 보장
@@ -862,7 +1025,8 @@ Write a very detailed and actionable plan in English."""
                 for i, s in enumerate(sampled_sources)
             ])
 
-            prompt = f"""다음 {len(sampled_sources)}개의 소스를 교차 검증하고 삼각측량(Triangulation)을 수행해주세요:
+            prompts = {
+                "ko": f"""다음 {len(sampled_sources)}개의 소스를 교차 검증하고 삼각측량(Triangulation)을 수행해주세요:
 
 {sources_text}
 
@@ -890,9 +1054,70 @@ Write a very detailed and actionable plan in English."""
    - 중간 신뢰도 정보 목록
    - 낮은 신뢰도 정보 목록
 
-상세한 교차 검증 보고서를 작성해주세요."""
+상세한 교차 검증 보고서를 작성해주세요.""",
 
-            response = await llm.ainvoke([HumanMessage(content=prompt)])
+                "en": f"""Perform cross-validation and triangulation on the following {len(sampled_sources)} sources:
+
+{sources_text}
+
+Analyze the following:
+
+1. **Consistency Analysis**
+   - Core facts consistently confirmed across multiple sources
+   - High-confidence information (verified by 3+ sources)
+
+2. **Discrepancy Analysis**
+   - Conflicting information between sources
+   - Causes of discrepancies (timing, perspective, data differences, etc.)
+
+3. **Information Quality Assessment**
+   - High-quality sources (academic, official institutions)
+   - Medium-quality sources (news, industry reports)
+   - Sources requiring caution (opinions, blogs)
+
+4. **Triangulation Results**
+   - Key findings cross-verified from various sources
+   - Information from single sources only (requires additional verification)
+
+5. **Reliability Matrix**
+   - High-reliability information list
+   - Medium-reliability information list
+   - Low-reliability information list
+
+Write a detailed cross-validation report.""",
+
+                "ja": f"""以下の {len(sampled_sources)} 個のソースについて、クロス検証と三角測量(Triangulation)を実施してください:
+
+{sources_text}
+
+以下を分析してください:
+
+1. **一貫性分析**
+   - 複数のソースで一貫して確認される核心的な事実
+   - 信頼度が高い情報（3個以上のソースで確認）
+
+2. **不一致分析**
+   - ソース間で矛盾する情報
+   - 不一致の原因（時点、観点、データの違いなど）
+
+3. **情報品質評価**
+   - 高品質ソース（学術、公式機関）
+   - 中間品質ソース（ニュース、産業レポート）
+   - 注意が必要なソース（意見、ブログ）
+
+4. **三角測量結果**
+   - 多様なソースでクロス確認された核心的な発見
+   - 単一ソースのみの情報（追加検証が必要）
+
+5. **信頼度マトリックス**
+   - 高信頼度情報リスト
+   - 中信頼度情報リスト
+   - 低信頼度情報リスト
+
+詳細なクロス検証レポートを作成してください。"""
+            }
+
+            response = await llm.ainvoke([HumanMessage(content=prompts.get(language, prompts["en"]))])
 
             return {
                 "report": response.content.strip(),
