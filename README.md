@@ -40,7 +40,10 @@ LangGraph, CrewAI, FastAPI를 활용한 지능형 멀티 에이전트 AI 시스�
 
 ### 🎨 **콘텐츠 생성 에이전트**
 - **이미지 생성**: OpenAI DALL-E를 통한 이미지 생성
-- **API 호출**: 외부 서비스 통합 (날씨, 환율, 주식 등)
+- **🆕 API 호출**: 외부 서비스 통합
+  - **날씨 API**: OpenWeatherMap 기반 실시간 날씨 정보
+  - **환율 API**: 실시간 환율 정보 (160+ 통화 지원)
+  - **주식 API**: Yahoo Finance + FinancialDatasets.ai 주가 및 재무제표 조회
 - **파일 처리**: 문서 분석, 변환, 요약
 - **작업 생성**: 프로젝트 계획 및 태스크 자동 생성
 
@@ -166,13 +169,8 @@ cp .env.example .env
 ```
 
 ### 3. 데이터베이스 시작
-```bash
-# Docker Compose로 PostgreSQL, Redis 시작
-docker-compose up -d postgres redis
 
-# 또는 수동 설치 후 데이터베이스 초기화
-psql -U postgres -d ai_system -f init.sql
-```
+docker로 DB와 Redis 실행 방법은 [여기](./db/README.md)를 참고하세요.
 
 ### 4. 애플리케이션 실행
 ```bash
@@ -267,6 +265,187 @@ ws.send(JSON.stringify({
   "query": "웹 애플리케이션 개발 프로젝트의 상세 계획을 세워주세요"
 }
 ```
+
+## 🌐 API Call Agent 사용법
+
+API Call Agent는 날씨, 환율, 주식 시장 데이터 등 외부 API와 통합하여 실시간 정보를 제공합니다.
+
+### 📦 설정
+
+#### 1. API 키 설정
+```bash
+# .env.template을 .env로 복사
+cp .env.template .env
+
+# .env 파일 편집
+# 날씨 API (필수)
+OPENWEATHER_API_KEY=your_api_key_here
+
+# 환율 API (선택사항 - 없으면 무료 API 자동 사용)
+EXCHANGERATE_API_KEY=your_api_key_here
+
+# 주식 API (Yahoo Finance는 키 불필요, 기본값)
+STOCK_API_PROVIDER=yahoo  # or "financialdatasets"
+```
+
+#### 2. API 키 발급
+- **날씨**: https://openweathermap.org/api (무료)
+- **환율**: https://www.exchangerate-api.com/ (선택사항)
+- **주식**: Yahoo Finance (무료, 키 불필요) 또는 https://financialdatasets.ai/ (유료)
+
+### 🌤️ 날씨 API 사용 (CLI)
+
+```bash
+# 기본 사용 (서울 날씨)
+python -m neos.cli workflow test "서울 날씨 알려줘"
+
+# 다른 도시 날씨
+python -m neos.cli workflow test "도쿄 날씨는?"
+python -m neos.cli workflow test "What's the weather in New York?"
+
+# 상세 정보 포함
+python -m neos.cli workflow test "뉴욕의 현재 기온과 습도 알려줘"
+```
+
+**응답 예시:**
+```
+Location: Seoul, KR
+Temperature: 15.3°C (feels like 14.1°C)
+Condition: partly cloudy
+Humidity: 65%
+Wind Speed: 3.5 m/s
+Visibility: 10.0 km
+```
+
+### 💱 환율 API 사용 (CLI)
+
+```bash
+# 기본 환율 조회 (USD to KRW)
+python -m neos.cli workflow test "달러 원화 환율"
+python -m neos.cli workflow test "USD to KRW 환율"
+
+# 다른 통화 쌍
+python -m neos.cli workflow test "EUR to JPY 환율"
+python -m neos.cli workflow test "유로 엔화 환율은?"
+
+# 상세 정보 요청
+python -m neos.cli workflow test "현재 달러 환율과 최근 변동 추이"
+```
+
+**응답 예시:**
+```
+From: USD
+To: KRW
+Exchange Rate: 1,320.50
+Last Update: 2025-01-20 00:00:01 UTC
+```
+
+### 📈 주식 API 사용 (CLI)
+
+#### 주가 조회
+```bash
+# 티커 심볼로 조회
+python -m neos.cli workflow test "AAPL 주식 가격"
+python -m neos.cli workflow test "NVDA 주가는?"
+
+# 회사명으로 조회 (자동 매핑)
+python -m neos.cli workflow test "애플 주식 정보"
+python -m neos.cli workflow test "엔비디아 주가 알려줘"
+python -m neos.cli workflow test "테슬라 주식은 어때?"
+
+# 한국 주식
+python -m neos.cli workflow test "삼성전자 주가"
+python -m neos.cli workflow test "네이버 주식 정보"
+python -m neos.cli workflow test "카카오 주가는?"
+
+# 상세 정보 요청
+python -m neos.cli workflow test "애플 주식의 현재가, 거래량, 시가총액 알려줘"
+```
+
+**응답 예시:**
+```
+Ticker: AAPL
+Name: Apple Inc.
+Current Price: $185.50
+Change: +2.15 (+1.17%)
+Volume: 58,234,567
+Market Cap: $2.88T
+P/E Ratio: 28.5
+52-Week High: $199.62
+52-Week Low: $164.08
+```
+
+#### 재무제표 조회
+```bash
+# 기본 재무제표
+python -m neos.cli workflow test "애플 재무제표 보여줘"
+python -m neos.cli workflow test "TSLA 재무제표"
+
+# 특정 재무 정보
+python -m neos.cli workflow test "엔비디아의 매출과 순이익은?"
+python -m neos.cli workflow test "마이크로소프트의 현금흐름 정보"
+python -m neos.cli workflow test "구글의 자산과 부채 현황"
+```
+
+**응답 예시:**
+```
+Financial Statements for AAPL:
+
+Income Statement:
+  - Total Revenue: $383.29B
+  - Gross Profit: $170.78B
+  - Operating Income: $114.30B
+  - Net Income: $97.00B
+  - EBITDA: $129.96B
+
+Balance Sheet:
+  - Total Assets: $352.76B
+  - Total Liabilities: $290.44B
+  - Stockholders Equity: $62.32B
+  - Cash: $29.97B
+  - Total Debt: $108.05B
+
+Cash Flow:
+  - Operating Cash Flow: $110.54B
+  - Free Cash Flow: $99.58B
+```
+
+### 🔍 복합 쿼리 (CLI)
+
+여러 API를 동시에 활용하는 쿼리도 가능합니다:
+
+```bash
+# 날씨 + 환율
+python -m neos.cli workflow test "서울 날씨와 달러 환율 알려줘"
+
+# 여러 주식 비교
+python -m neos.cli workflow test "애플, 마이크로소프트, 구글 주가 비교"
+
+# 주식 + 환율
+python -m neos.cli workflow test "엔비디아 주가와 현재 달러 환율"
+```
+
+### 🎯 지원되는 회사명 → 티커 자동 매핑
+
+| 한글 | 영문 | 티커 |
+|-----|------|------|
+| 애플 | Apple | AAPL |
+| 마이크로소프트 | Microsoft | MSFT |
+| 구글, 알파벳 | Google, Alphabet | GOOGL |
+| 아마존 | Amazon | AMZN |
+| 테슬라 | Tesla | TSLA |
+| 엔비디아 | NVIDIA | NVDA |
+| 삼성 | Samsung | 005930.KS |
+| 네이버 | Naver | 035420.KS |
+| 카카오 | Kakao | 035720.KS |
+
+### 📚 더 알아보기
+
+- **전체 문서**: [docs/API_INTEGRATIONS.md](docs/API_INTEGRATIONS.md)
+- **빠른 시작**: [docs/API_QUICK_START.md](docs/API_QUICK_START.md)
+- **예제 코드**: [examples/api_agent_example.py](examples/api_agent_example.py)
+
+---
 
 ### CLI 도구 사용법
 
@@ -961,10 +1140,13 @@ uv run python -m neos.cli dataset list-files
   - [ ] 이미지 기반 입력 지원
   - [ ] PDF 및 문서 파일 분석 지원
   - [ ] 오디오 파일 분석
-- [ ] API 호출 에이전트 (ApiCallAgent)
-  - [ ] 날씨 API 통합
-  - [ ] 환율 데이터 API 통합
-  - [ ] 주식 시장 데이터 API 통합
+- [x] API 호출 에이전트 (ApiCallAgent)
+  - [x] 날씨 API 통합 (OpenWeatherMap)
+  - [x] 환율 데이터 API 통합 (ExchangeRate-API + 무료 폴백)
+  - [x] 주식 시장 데이터 API 통합 (Yahoo Finance + FinancialDatasets.ai)
+  - [x] 재무제표 조회 (손익계산서, 대차대조표, 현금흐름표)
+  - [x] 자연어 파라미터 추출 (도시명, 통화, 티커 자동 인식)
+  - [x] CLI 사용법 문서화
 - [ ] 그래프 데이터베이스 통합
 - [ ] 고급 A/B 테스트 프레임워크
 - [ ] Google Gemini, Cohere 등 추가 LLM Provider
