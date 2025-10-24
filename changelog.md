@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.6.0 (2025-10-25)
+- [x] Hyper Deep Research 응답 시 언어 감지 및 사용자 쿼리와 동일 언어 사용 진행
+  - [x] Hyper Deep Research 응답 생성 시 감지된 언어로 출력
+
+## v0.5.6 (2025-10-22)
+- [x] various refactorings (no functional changes)
+
 ## v0.5.5 (2025-10-15)
 - [x] PPT 파서 추가
   - [x] python-pptx 라이브러리 도입
