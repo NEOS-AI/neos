@@ -42,6 +42,9 @@ docker push neos960518/neos-valkey:latest
 Pre-requisite: `CREATE DATABASE neos;` in PostgreSQL
 
 ```bash
+# add schemas for initial setup
+psql -U postgres -d neos --port 5432 --host localhost -f db/init.sql
+
 # add schemas for hyper-deep-research
 psql -U postgres -d neos --port 5432 --host localhost -f db/hyper_deep_research.sql
 
