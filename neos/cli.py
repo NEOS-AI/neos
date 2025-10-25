@@ -1084,16 +1084,16 @@ async def _test_hyper_deep_research(query: str, user_id: str, session_id: str, p
             "detected_language": detected_language
         }
 
-        # 매우 긴 타임아웃 설정 (60분)
+        # 매우 긴 타임아웃 설정 (120분)
         try:
             agent_result = await asyncio.wait_for(
                 hyper_agent.execute(query, context),
-                timeout=3600  # 60 minutes timeout for hyper deep research
+                timeout=7200  # 120 minutes timeout for hyper deep research
             )
         except asyncio.TimeoutError:
             return {
                 "success": False,
-                "error": "HyperDeepResearch timed out after 60 minutes",
+                "error": "HyperDeepResearch timed out after 120 minutes",
                 "query": query,
                 "timestamp": datetime.now().isoformat()
             }
