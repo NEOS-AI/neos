@@ -1,6 +1,6 @@
 """Planning agent for complex research tasks"""
 
-from typing import Dict, Any, List
+from typing import List
 from dataclasses import dataclass
 from langchain.schema import HumanMessage
 
@@ -93,7 +93,7 @@ class PlanningAgent:
             }
 
             print(f"[DEBUG] Created research plan with {len(tasks)} tasks")
-            print(f"[DEBUG] Planning LLM call has been tracked for dataset collection")
+            print("[DEBUG] Planning LLM call has been tracked for dataset collection")
             print(f"[DEBUG] Plan metadata: {plan_summary}")
             return tasks
 
