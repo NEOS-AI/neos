@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.1 (2025-10-26)
+- [x] change timeout of hyper-deep-research from 60 minutes to 120 minutes in CLI and agent code
+- [x] Make API-call agent to work with real API keys and endpoints
+
 ## v0.6.0 (2025-10-25)
 - [x] Hyper Deep Research 응답 시 언어 감지 및 사용자 쿼리와 동일 언어 사용 진행
   - [x] Hyper Deep Research 응답 생성 시 감지된 언어로 출력
