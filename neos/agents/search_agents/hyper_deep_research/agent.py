@@ -1031,7 +1031,7 @@ class HyperDeepResearchAgent(SearchAgent):
                 tags=["gap_summary"]
             )
 
-            gaps_text = '\n'.join([f"- {g}" for g in gaps[:10]])
+            # gaps_text = '\n'.join([f"- {g}" for g in gaps[:10]])
             sources_sample = '\n'.join([f"- {s.get('title', '')}" for s in sources[:15]])
 
             prompt = AnalysisPrompts.get_gap_summary_prompt(
