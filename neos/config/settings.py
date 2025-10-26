@@ -26,6 +26,18 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: Optional[str] = env_vars.get("ANTHROPIC_API_KEY", None)
     TAVILY_API_KEY: str = env_vars.get("TAVILY_API_KEY", "")
 
+    # 외부 API 키 설정
+    # Weather API
+    OPENWEATHER_API_KEY: str = env_vars.get("OPENWEATHER_API_KEY", "")
+
+    # Currency Exchange API
+    EXCHANGERATE_API_KEY: str = env_vars.get("EXCHANGERATE_API_KEY", "")
+
+    # Stock Market APIs
+    STOCK_API_PROVIDER: str = env_vars.get("STOCK_API_PROVIDER", "yahoo")  # "yahoo" or "financialdatasets"
+    FINANCIALDATASETS_API_KEY: str = env_vars.get("FINANCIALDATASETS_API_KEY", "")
+    ALPHA_VANTAGE_API_KEY: str = env_vars.get("ALPHA_VANTAGE_API_KEY", "")  # Optional backup for financial statements
+
     # LLM 설정
     LLM_PROVIDER: str = env_vars.get("LLM_PROVIDER", "anthropic")  # "openai" or "anthropic"
     LLM_MODEL: str = env_vars.get("LLM_MODEL", "gpt-4-turbo-preview")  # or "claude-3-sonnet-20240229"
