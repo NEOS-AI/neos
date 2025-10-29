@@ -21,3 +21,6 @@ conf.yaml
 
 # MAC OS
 .DS_Store
+
+# Claude
+.claude/
