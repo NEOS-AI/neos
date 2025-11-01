@@ -139,13 +139,13 @@ async def process_query(
             "session_id": session_id,
             "query": request.query
         }
-        
+
         start_time = datetime.utcnow()
         result = await multi_agent_workflow.execute_workflow(workflow_input)
         end_time = datetime.utcnow()
-        
+
         execution_time = int((end_time - start_time).total_seconds() * 1000)
-        
+
         if result["success"]:
             # 응답 객체 생성
             response = QueryResponse(

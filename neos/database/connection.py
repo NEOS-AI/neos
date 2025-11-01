@@ -45,6 +45,7 @@ class DatabaseManager:
             await self.initialize()
         return self.session_factory()
 
+
     async def health_check(self) -> bool:
         """DB 연결 상태 확인"""
         try:

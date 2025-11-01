@@ -43,4 +43,5 @@ dependencies = [
     "yfinance>=0.2.66",
     "python-dotenv>=1.1.1",
     "requests>=2.32.5",
+    "boto3>=1.35.0",
 ]

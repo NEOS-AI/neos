@@ -13,6 +13,7 @@ from neos.utils.cache import cache_manager
 from neos.utils.embeddings import embedding_manager
 from neos.api.routes import router
 from neos.api.web_search_analytics_routes import router as web_search_analytics_router
+from neos.api.document_routes import router as document_router
 from neos.workflow.graph import multi_agent_workflow
 
 
@@ -32,7 +33,7 @@ async def lifespan(app: FastAPI):
     """애플리케이션 생명주기 관리"""
     # 시작 시 실행
     logger.info("🚀 Starting Multi-Agent AI System...")
-    
+
     try:
         # 데이터베이스 연결 초기화
         logger.info("📊 Initializing database connection...")
@@ -163,9 +164,12 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         }
     )
 
+
 # API 라우터 등록
 app.include_router(router, prefix=settings.API_V1_PREFIX, tags=["Multi-Agent AI"])
 app.include_router(web_search_analytics_router, prefix=f"{settings.API_V1_PREFIX}/analytics", tags=["Web Search Analytics"])
+app.include_router(document_router, prefix=f"{settings.API_V1_PREFIX}/documents", tags=["Document Management"])
+
 
 # 루트 엔드포인트
 @app.get("/")
