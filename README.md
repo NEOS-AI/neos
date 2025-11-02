@@ -1228,18 +1228,6 @@ uv run python -m neos.cli dataset list-files
 ## 🗺️ 로드맵
 
 ### v1.1 (진행 중)
-- [x] **WebLookUp Agent** - 사용자 제공 URL 콘텐츠 추출 및 분석 **[COMPLETED]**
-  - [x] URL 자동 감지 및 라우팅
-  - [x] 다중 URL 병렬 처리
-  - [x] BeautifulSoup 기반 HTML 파싱
-  - [x] LLM 기반 콘텐츠 분석 및 요약
-  - [x] 다국어 지원 (한국어, 영어, 일본어, 중국어)
-  - [x] 쿼리 분류기 통합
-  - [x] 워크플로우 통합 (검색 에이전트)
-  - [x] 문서화 및 테스트
-  - [x] TrackedLLM 통합
-  - [x] CLI 지원 (`workflow web-lookup`)
-  - [x] **Playwright 동적 렌더링 지원** (`--dynamic` 플래그) **[NEW]**
 - [ ] 멀티모달 입력 지원 (이미지, 오디오)
   - [ ] 이미지 기반 입력 지원
   - [ ] PDF 및 문서 파일 분석 지원
