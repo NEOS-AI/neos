@@ -5,6 +5,7 @@ from datetime import datetime
 
 from neos.utils.embeddings import embedding_manager
 from neos.utils.language_detection import detect_language
+from neos.utils.url_detector import has_urls, extract_urls
 
 from ..state import AgentState
 
@@ -160,6 +161,14 @@ class QueryClassifier:
     def _determine_required_agents(self, query: str, intent: str, complexity_score: float = 0.0) -> List[str]:
         """필요한 에이전트 결정 (복잡도 고려)"""
         agents = []
+
+        # 0-1. URL이 포함된 경우 WebLookUpAgent 사용 (최우선)
+        if has_urls(query):
+            urls = extract_urls(query)
+            print(f"[DEBUG] URLs detected in query: {urls}")
+            print("[DEBUG] Using web_lookup agent for URL content extraction")
+            agents.append("web_lookup")
+            return agents
 
         # 0. Deep Research 활성화 조건 (최우선)
         query_lower = query.lower()

@@ -10,12 +10,13 @@ from neos.agents.search_agents import (
     RealtimeDataSearchAgent,
     MultiQuerySearchAgent,
     DeepResearchAgent,
-    HyperDeepResearchAgent
+    HyperDeepResearchAgent,
+    WebLookUpAgent
 )
 from neos.agents.analysis_agents import (
     DataAnalysisAgent,
     ComparativeAnalysisAgent,
-    WebLookupAgent
+    WebLookupAgent as WebContentAnalysisAgent
 )
 from neos.agents.generation_agents import (
     ImageGenerationAgent,
@@ -65,11 +66,12 @@ class MultiAgentWorkflow:
             "multi_query_search": MultiQuerySearchAgent(),
             "deep_research": DeepResearchAgent(),
             "hyper_deep_research": HyperDeepResearchAgent(),
+            "web_lookup": WebLookUpAgent(),
 
             # 분석 에이전트들
             "data_analysis": DataAnalysisAgent(),
             "comparative_analysis": ComparativeAnalysisAgent(),
-            "web_lookup": WebLookupAgent(),
+            "web_content_analysis": WebContentAnalysisAgent(),
 
             # 생성 에이전트들
             "image_generation": ImageGenerationAgent(),

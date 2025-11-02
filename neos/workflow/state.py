@@ -89,7 +89,8 @@ class WorkflowConfig:
         "realtime_info_search",
         "realtime_data_search",
         "multi_query_search",
-        "deep_research"
+        "deep_research",
+        "web_lookup"
     ]
     
     ANALYSIS_AGENTS = [
