@@ -8,6 +8,12 @@ LangGraph, CrewAI, FastAPI를 활용한 지능형 멀티 에이전트 AI 시스�
 - **지식 기반 검색**: 과거 쿼리와 지식 베이스에서 유사 정보 검색
 - **실시간 정보 검색**: Tavily API를 통한 최신 웹 정보 수집
 - **실시간 데이터 검색**: 통계, 시장 정보 등 수치 데이터 전문 검색
+- **🔗 WebLookUp 에이전트**: 사용자가 제공한 URL의 내용을 직접 추출하고 분석 **[NEW]**
+  - 자동 URL 감지 및 라우팅
+  - 다중 URL 병렬 처리
+  - BeautifulSoup 기반 HTML 파싱 및 콘텐츠 추출
+  - LLM 기반 콘텐츠 분석 및 요약
+  - 다국어 지원 (한국어, 영어, 일본어, 중국어)
 - **🆕 복합검색 에이전트**: 복잡한 쿼리를 여러 관점으로 분해하여 심층 분석
   - LLM 기반 검색 쿼리 다각화 (2-5개)
   - 병렬 검색 및 요약으로 빠른 처리
@@ -62,10 +68,16 @@ LangGraph, CrewAI, FastAPI를 활용한 지능형 멀티 에이전트 AI 시스�
 
 ```mermaid
 graph TB
-    A[사용자 쿼리] --> B[쿼리 분류기<br/>+ 복잡도 분석]
+    A[사용자 쿼리] --> B[쿼리 분류기<br/>+ 복잡도 분석<br/>+ URL 감지]
+
+    B -->|URL 포함| C0[🔗 WebLookUp 에이전트]
     B -->|복잡도 >= 0.5| C[검색 오케스트레이터]
     B --> D[분석 오케스트레이터]
     B --> E[생성 오케스트레이터]
+
+    C0 --> C0A[URL 추출]
+    C0A --> C0B[병렬 콘텐츠 추출]
+    C0B --> C0C[LLM 분석]
 
     C -->|간단한 쿼리| C1[지식 검색]
     C -->|간단한 쿼리| C2[실시간 정보 검색]
@@ -85,14 +97,15 @@ graph TB
 
     D --> D1[데이터 분석]
     D --> D2[비교 분석]
-    D --> D3[🆕 웹 콘텐츠 조회]
+    D --> D3[웹 콘텐츠 조회]
 
     E --> E1[이미지 생성]
     E --> E2[API 호출]
     E --> E3[파일 처리]
     E --> E4[작업 생성]
 
-    C1 --> F[결과 통합기]
+    C0C --> F[결과 통합기]
+    C1 --> F
     C2 --> F
     C3 --> F
     C4D --> F
@@ -110,6 +123,10 @@ graph TB
     G -->|품질 낮음| C
     H --> I[최종 응답]
 
+    style C0 fill:#e8f5e9
+    style C0A fill:#c8e6c9
+    style C0B fill:#c8e6c9
+    style C0C fill:#c8e6c9
     style C4 fill:#e1f5fe
     style C4A fill:#b3e5fc
     style C4B fill:#b3e5fc
@@ -238,6 +255,22 @@ ws.send(JSON.stringify({
 
 ## 🎯 사용 예시
 
+### URL 콘텐츠 분석 (WebLookUp 에이전트) 🔗
+```bash
+# 단일 URL 분석
+uv run python -m neos.cli workflow test "https://www.anthropic.com/claude 이 페이지를 요약해줘"
+
+# 다중 URL 비교
+uv run python -m neos.cli workflow test "이 두 사이트를 비교해줘: https://github.com, https://gitlab.com"
+
+# API 호출
+curl -X POST http://localhost:8000/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "https://blog.openai.com/chatgpt 이 글의 핵심 내용은?"
+  }'
+```
+
 ### 정보 검색 쿼리
 ```json
 {
@@ -245,7 +278,7 @@ ws.send(JSON.stringify({
 }
 ```
 
-### 비교 분석 쿼리  
+### 비교 분석 쿼리
 ```json
 {
   "query": "ChatGPT와 Claude의 성능을 비교 분석해주세요"
@@ -852,114 +885,138 @@ self.config = {
 - ✅ 실시간 응답이 중요
 - ✅ 간결한 답변 선호
 
-## 🌐 웹 콘텐츠 조회 에이전트 (WebLookupAgent)
+## 🔗 WebLookUp 에이전트 **[NEW]**
 
-WebLookupAgent는 URL에서 직접 웹 페이지 콘텐츠를 추출하고 분석하는 전문 에이전트입니다.
+WebLookUp 에이전트는 사용자가 제공한 URL의 내용을 직접 추출하고 분석하는 검색 전문 에이전트입니다.
 
-### 주요 기능
+### 🎯 주요 특징
 
-- **깔끔한 텍스트 추출**: trafilatura 라이브러리를 사용하여 광고, 메뉴 등을 제거하고 본문만 추출
-- **메타데이터 수집**: 제목, 저자, 발행일, 설명, 언어 등 자동 추출
-- **LLM 기반 분석**: 추출된 콘텐츠를 사용자 쿼리 맥락에 맞게 요약 및 인사이트 생성
-- **비동기 처리**: httpx 기반 고성능 비동기 HTTP 요청
+- **🔍 자동 URL 감지**: 쿼리에서 URL을 자동으로 감지하고 WebLookUp 에이전트로 라우팅
+- **⚡ 다중 URL 병렬 처리**: 여러 URL을 동시에 다운로드하고 분석
+- **📄 스마트 콘텐츠 추출**: BeautifulSoup을 사용하여 주요 콘텐츠만 정확하게 추출
+- **🤖 LLM 기반 분석**: 추출된 콘텐츠를 사용자 질문에 맞게 분석 및 요약
+- **🌏 다국어 지원**: 한국어, 영어, 일본어, 중국어 자동 감지 및 대응
+- **🔄 최우선 라우팅**: URL이 포함된 쿼리는 자동으로 WebLookUp 에이전트 선택
 
-### 사용 방법
+### 💡 작동 방식
 
-#### 1. 쿼리에 URL 포함
-```bash
-uv run python -m neos.cli workflow test "https://example.com 이 페이지의 내용을 요약해줘"
+```
+사용자 쿼리: "https://www.anthropic.com/claude 이 페이지 요약해줘"
+      ↓
+[쿼리 분류기] → URL 감지: True
+      ↓
+[WebLookUp 에이전트 자동 선택]
+      ↓
+1. URL 추출 및 검증
+2. 병렬 콘텐츠 다운로드
+3. HTML 파싱 및 정리
+4. LLM 분석 및 요약
+      ↓
+사용자 질문에 최적화된 답변 생성
 ```
 
-#### 2. API로 URL 전달
+### 🚀 사용 방법
+
+#### CLI에서 URL 직접 입력
+```bash
+# 단일 URL 분석
+uv run python -m neos.cli workflow test "https://www.anthropic.com/claude 이 페이지를 요약해줘"
+
+# 다중 URL 비교
+uv run python -m neos.cli workflow test "이 두 사이트를 비교해줘: https://github.com, https://gitlab.com"
+
+# 특정 글 분석
+uv run python -m neos.cli workflow test "https://blog.openai.com/chatgpt 이 글의 핵심 내용은?"
+```
+
+#### API 호출
 ```bash
 curl -X POST http://localhost:8000/api/v1/query \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "이 기사의 핵심 내용을 분석해줘",
-    "context": {
-      "url": "https://techcrunch.com/article/ai-trends-2025"
-    }
+    "query": "https://techcrunch.com/article/ai-trends-2025 이 기사 분석해줘"
   }'
 ```
 
-#### 3. Python 코드에서 직접 사용
+#### Python 코드
 ```python
-from neos.agents.analysis_agents import WebLookupAgent
+from neos.agents.search_agents import WebLookUpAgent
 
-agent = WebLookupAgent()
+agent = WebLookUpAgent()
 result = await agent.execute(
-    query="이 블로그 글의 핵심 포인트를 정리해줘",
+    query="https://blog.example.com/post 이 글의 핵심 포인트를 정리해줘",
     context={
-        "url": "https://blog.example.com/post",
         "session_id": "session-123",
-        "user_id": "user-456"
+        "user_id": "user-456",
+        "detected_language": "ko"
     }
 )
 
 # 결과 확인
-print(f"제목: {result['data']['title']}")
-print(f"콘텐츠 길이: {result['data']['content_length']} 문자")
-print(f"인사이트: {result['insights']}")
-
-# 정리
-await agent.cleanup()
+for search_result in result['result']:
+    print(f"제목: {search_result.title}")
+    print(f"내용: {search_result.content[:200]}...")
+    print(f"점수: {search_result.score}")
 ```
 
-### 추출 가능한 정보
+### 📊 지원 URL 형식
 
-WebLookupAgent는 다음 정보를 자동으로 추출합니다:
+| 형식 | 예시 | 자동 변환 |
+|-----|------|---------|
+| HTTPS | `https://example.com` | 그대로 사용 |
+| HTTP | `http://example.com` | 그대로 사용 |
+| www | `www.example.com` | `https://www.example.com` |
+| 도메인만 | `example.com` | `https://example.com` |
 
-| 필드 | 설명 |
-|-----|------|
-| `text` | 본문 텍스트 (광고, 메뉴 제거됨) |
-| `title` | 페이지 제목 |
-| `author` | 저자 (가능한 경우) |
-| `date` | 발행일 (가능한 경우) |
-| `description` | 메타 설명 |
-| `sitename` | 사이트 이름 |
-| `language` | 콘텐츠 언어 |
-| `content_length` | 추출된 텍스트 길이 |
+### 💼 실사용 예시
 
-### 사용 예시
-
-#### 뉴스 기사 분석
+#### 1️⃣ 뉴스 기사 분석
 ```bash
 uv run python -m neos.cli workflow test \
-  "https://www.nytimes.com/2024/10/ai-breakthrough.html 이 기사의 핵심 내용과 시사점을 분석해줘"
+  "https://techcrunch.com/ai-trends 이 기사의 핵심 내용과 시사점을 분석해줘"
 ```
+**자동 처리**: URL 감지 → WebLookUp 에이전트 선택 → 기사 다운로드 → 핵심 내용 추출 → LLM 분석
 
-#### 블로그 글 요약
+#### 2️⃣ 다중 사이트 비교
 ```bash
 uv run python -m neos.cli workflow test \
-  "https://medium.com/@author/deep-learning-guide 이 글의 주요 개념을 3가지로 요약해줘"
+  "https://github.com과 https://gitlab.com의 주요 차이점을 비교해줘"
 ```
+**자동 처리**: 2개 URL 감지 → 병렬 다운로드 → 각 사이트 분석 → 비교 리포트 생성
 
-#### 기술 문서 이해
+#### 3️⃣ 블로그 글 요약
+```bash
+uv run python -m neos.cli workflow test \
+  "https://blog.anthropic.com/claude 이 글의 주요 개념을 3가지로 요약해줘"
+```
+**자동 처리**: 블로그 콘텐츠 추출 → 주요 개념 식별 → 3가지 핵심 요약
+
+#### 4️⃣ 기술 문서 분석
 ```bash
 uv run python -m neos.cli workflow test \
   "https://docs.python.org/3/library/asyncio.html asyncio의 핵심 기능을 설명해줘"
 ```
+**자동 처리**: 문서 페이지 파싱 → 핵심 기능 추출 → 쉬운 설명으로 변환
 
-#### 논문 초록 추출
-```bash
-uv run python -m neos.cli workflow test \
-  "https://arxiv.org/abs/2301.12345 이 논문의 주요 기여점을 정리해줘"
-```
+### ⚙️ 기술적 특징
 
-### 기술적 특징
+- **🎨 스마트 파싱**: BeautifulSoup4로 main, article, content 영역 우선 추출
+- **🚀 비동기 처리**: aiohttp 기반 고속 병렬 다운로드
+- **⏱️ 타임아웃 관리**: 30초 타임아웃으로 무한 대기 방지
+- **🤖 User-Agent**: 적절한 User-Agent 설정으로 봇 차단 회피
+- **📦 콘텐츠 정리**: 광고, 메뉴, 사이드바 자동 제거
+- **🔍 메타데이터**: 제목, 설명, 주요 콘텐츠 자동 추출
 
-- **HTML 파싱**: trafilatura의 고급 파싱 알고리즘으로 정확한 본문 추출
-- **리다이렉트 처리**: 자동으로 리다이렉트 따라가기
-- **타임아웃 관리**: 30초 타임아웃으로 무한 대기 방지
-- **User-Agent 설정**: 봇 차단 회피를 위한 적절한 User-Agent
-- **에러 처리**: HTTP 에러 및 파싱 실패 시 명확한 에러 메시지
+### ⚠️ 제한사항
 
-### 제한사항
+- ❌ JavaScript 렌더링 콘텐츠 미지원 (정적 HTML만)
+- ❌ 로그인 필요 페이지 접근 불가
+- ❌ 일부 사이트 봇 차단 가능
+- ⚠️ 매우 긴 페이지는 10,000자로 제한
 
-- JavaScript로 렌더링되는 콘텐츠는 추출 불가 (정적 HTML만 지원)
-- 로그인이 필요한 페이지는 접근 불가
-- 일부 사이트는 봇 차단 정책으로 접근 제한 가능
-- 페이지 크기가 매우 클 경우 처음 3000자만 LLM 분석에 사용
+### 📚 더 알아보기
+
+자세한 정보는 [WebLookUp Agent 가이드](docs/WEB_LOOKUP_AGENT.md)를 참고하세요.
 
 ### 에이전트 커스터마이징
 ```python
@@ -1132,8 +1189,15 @@ uv run python -m neos.cli dataset list-files
 ## 🗺️ 로드맵
 
 ### v1.1 (진행 중)
-- [x] Web LookUp Agent (쿼리 검색 대신 URL이 주어지면 해당 웹 페이지 내용을 읽어오는 에이전트) 추가
-  - [x] Web LookUp Agent Tool 구현 (trafilatura 기반)
+- [x] **WebLookUp Agent** - 사용자 제공 URL 콘텐츠 추출 및 분석 **[COMPLETED]**
+  - [x] URL 자동 감지 및 라우팅
+  - [x] 다중 URL 병렬 처리
+  - [x] BeautifulSoup 기반 HTML 파싱
+  - [x] LLM 기반 콘텐츠 분석 및 요약
+  - [x] 다국어 지원 (한국어, 영어, 일본어, 중국어)
+  - [x] 쿼리 분류기 통합
+  - [x] 워크플로우 통합 (검색 에이전트)
+  - [x] 문서화 및 테스트
   - [ ] Web LookUp Agent CLI 지원
   - [ ] 동적 웹 페이지 렌더링 지원 (Selenium, Playwright)
 - [ ] 멀티모달 입력 지원 (이미지, 오디오)
