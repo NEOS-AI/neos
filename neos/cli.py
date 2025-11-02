@@ -1232,9 +1232,10 @@ def _display_hyper_deep_research_result(result: Dict[str, Any]):
 @click.argument('urls', nargs=-1, required=True)
 @click.option('--query', '-q', default=None, help='URL 콘텐츠에 대한 질문 (선택사항)')
 @click.option('--output', '-o', type=click.Choice(['json', 'text']), default='text', help='출력 형식')
+@click.option('--dynamic', '-d', is_flag=True, help='Playwright로 동적 페이지 렌더링 (JavaScript 지원)')
 @click.option('--user-id', default=None, help='사용자 ID')
 @click.option('--session-id', default=None, help='세션 ID')
-def web_lookup(urls: tuple, query: Optional[str], output: str, user_id: Optional[str], session_id: Optional[str]):
+def web_lookup(urls: tuple, query: Optional[str], output: str, dynamic: bool, user_id: Optional[str], session_id: Optional[str]):
     """WebLookUp 에이전트 - URL 콘텐츠 추출 및 분석
 
     URLS: 분석할 URL(들) (여러 개 가능)
@@ -1248,6 +1249,9 @@ def web_lookup(urls: tuple, query: Optional[str], output: str, user_id: Optional
 
       # 특정 질문과 함께
       uv run python -m neos.cli workflow web-lookup https://blog.openai.com/chatgpt --query "이 글의 핵심 내용은?"
+
+      # 동적 페이지 렌더링 (JavaScript 지원)
+      uv run python -m neos.cli workflow web-lookup https://spa-app.com --dynamic
     """
     user_id = user_id or cli_state["user_id"]
     session_id = session_id or cli_state["session_id"]
@@ -1258,12 +1262,16 @@ def web_lookup(urls: tuple, query: Optional[str], output: str, user_id: Optional
     else:
         full_query = f"{' '.join(urls)} 이 페이지의 내용을 분석해줘"
 
+    rendering_method = "🎭 Playwright (동적)" if dynamic else "📄 Static HTML"
+    estimated_time = "10-30초" if dynamic else "5-15초"
+
     console.print(Panel.fit(
         f"🔗 [bold]WebLookUp Agent[/bold]\n"
         f"URL(s): {', '.join(urls)}\n"
-        f"질문: {query or '기본 분석'}\n\n"
+        f"질문: {query or '기본 분석'}\n"
+        f"렌더링 방식: {rendering_method}\n\n"
         f"URL 개수: {len(urls)}개\n"
-        f"예상 소요 시간: 5-15초 (URL당)",
+        f"예상 소요 시간: {estimated_time} (URL당)",
         style="bold green"
     ))
 
@@ -1277,7 +1285,7 @@ def web_lookup(urls: tuple, query: Optional[str], output: str, user_id: Optional
 
         task = progress.add_task("Executing WebLookUp...", total=None)
 
-        result = asyncio.run(_test_web_lookup(full_query, urls, user_id, session_id, progress, task))
+        result = asyncio.run(_test_web_lookup(full_query, urls, dynamic, user_id, session_id, progress, task))
 
         progress.update(task, description="✅ WebLookUp completed")
 
@@ -1287,20 +1295,21 @@ def web_lookup(urls: tuple, query: Optional[str], output: str, user_id: Optional
         _display_web_lookup_result(result)
 
 
-async def _test_web_lookup(query: str, urls: tuple, user_id: str, session_id: str, progress, task) -> Dict[str, Any]:
+async def _test_web_lookup(query: str, urls: tuple, dynamic: bool, user_id: str, session_id: str, progress, task) -> Dict[str, Any]:
     """WebLookUp 에이전트 실행"""
     try:
         start_time = time.time()
 
         if progress:
-            progress.update(task, description=f"Fetching {len(urls)} URL(s)...")
+            rendering_desc = "with Playwright" if dynamic else "statically"
+            progress.update(task, description=f"Fetching {len(urls)} URL(s) {rendering_desc}...")
         await asyncio.sleep(0.1)
 
         # WebLookUp 에이전트 직접 생성 및 실행
         from neos.agents.search_agents import WebLookUpAgent
         from neos.utils.language_detection import detect_language
 
-        web_agent = WebLookUpAgent()
+        web_agent = WebLookUpAgent(use_playwright=dynamic)
 
         # 언어 감지
         detected_language = detect_language(query)
@@ -1308,7 +1317,8 @@ async def _test_web_lookup(query: str, urls: tuple, user_id: str, session_id: st
         context = {
             "user_id": user_id,
             "session_id": session_id,
-            "detected_language": detected_language
+            "detected_language": detected_language,
+            "use_playwright": dynamic
         }
 
         if progress:
@@ -1350,6 +1360,15 @@ async def _test_web_lookup(query: str, urls: tuple, user_id: str, session_id: st
                     if sr.metadata and "sources" in sr.metadata:
                         sources_info.extend(sr.metadata["sources"])
 
+                # 렌더링 방식 추출
+                rendering_method = "playwright" if dynamic else "static"
+                if search_results and search_results[0].metadata:
+                    # SearchResult의 메타데이터에서 실제 렌더링 방식 확인
+                    if search_results[0].metadata.get("sources"):
+                        sources = search_results[0].metadata.get("sources", [])
+                        if sources and sources[0].get("rendering_method"):
+                            rendering_method = sources[0]["rendering_method"]
+
                 result = {
                     "success": True,
                     "response": "\n\n".join(response_parts),
@@ -1357,7 +1376,8 @@ async def _test_web_lookup(query: str, urls: tuple, user_id: str, session_id: st
                         "urls_processed": list(urls),
                         "urls_count": len(urls),
                         "sources": sources_info,
-                        "processing_type": "web_lookup"
+                        "processing_type": "web_lookup",
+                        "rendering_method": rendering_method
                     },
                     "quality_score": search_results[0].score if search_results else 0.0
                 }
@@ -1411,7 +1431,11 @@ def _display_web_lookup_result(result: Dict[str, Any]):
         info_table.add_column("Field", style="cyan")
         info_table.add_column("Value", style="green")
 
+        rendering_method = result.get("metadata", {}).get("rendering_method", "static")
+        rendering_display = "🎭 Playwright (동적)" if rendering_method == "playwright" else "📄 Static HTML"
+
         info_table.add_row("Query", result.get("query", ""))
+        info_table.add_row("Rendering Method", rendering_display)
         info_table.add_row("URLs Processed", str(result.get("metadata", {}).get("urls_count", len(result.get("urls", [])))))
         info_table.add_row("Total Time", f"{result.get('total_execution_time_ms', 0)}ms")
         info_table.add_row("Quality Score", f"{result.get('quality_score', 0):.2f}")

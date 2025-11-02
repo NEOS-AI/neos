@@ -11,6 +11,7 @@ LangGraph, CrewAI, FastAPI를 활용한 지능형 멀티 에이전트 AI 시스�
 - **🔗 WebLookUp 에이전트**: 사용자가 제공한 URL의 내용을 직접 추출하고 분석 **[NEW]**
   - 자동 URL 감지 및 라우팅
   - 다중 URL 병렬 처리
+  - **🎭 Playwright 동적 렌더링 지원** - JavaScript 기반 SPA 페이지 처리 **[NEW]**
   - BeautifulSoup 기반 HTML 파싱 및 콘텐츠 추출
   - LLM 기반 콘텐츠 분석 및 요약
   - 다국어 지원 (한국어, 영어, 일본어, 중국어)
@@ -972,8 +973,11 @@ for search_result in result['result']:
 
 #### 1️⃣ CLI 명령어로 직접 사용 (권장)
 ```bash
-# 단일 URL 분석
+# 단일 URL 분석 (정적 HTML)
 uv run python -m neos.cli workflow web-lookup https://www.example.com
+
+# 동적 페이지 렌더링 (JavaScript 지원) 🎭
+uv run python -m neos.cli workflow web-lookup https://spa-app.com --dynamic
 
 # 다중 URL 비교
 uv run python -m neos.cli workflow web-lookup https://github.com https://gitlab.com
@@ -1030,14 +1034,28 @@ uv run python -m neos.cli workflow web-lookup https://docs.python.org/3/library/
 
 ### ⚠️ 제한사항
 
-- ❌ JavaScript 렌더링 콘텐츠 미지원 (정적 HTML만)
+#### 정적 HTML 모드 (기본)
+- ❌ JavaScript 렌더링 콘텐츠 미지원
+- ✅ 빠른 처리 (1-3초/URL)
+- ✅ 낮은 리소스 사용
+
+#### Playwright 동적 모드 (--dynamic)
+- ✅ JavaScript 렌더링 지원
+- ✅ SPA (React, Vue, Angular) 지원
+- ⚠️ 느린 처리 (10-30초/URL)
+- ⚠️ 높은 메모리 사용 (~200MB/URL)
+- ✅ 설치: `pip install playwright && playwright install chromium`
+
+#### 공통 제한사항
 - ❌ 로그인 필요 페이지 접근 불가
+- ❌ CAPTCHA가 있는 페이지 처리 불가
 - ❌ 일부 사이트 봇 차단 가능
 - ⚠️ 매우 긴 페이지는 10,000자로 제한
 
 ### 📚 더 알아보기
 
-자세한 정보는 [WebLookUp Agent 가이드](docs/WEB_LOOKUP_AGENT.md)를 참고하세요.
+- [WebLookUp Agent 가이드](docs/WEB_LOOKUP_AGENT.md)
+- [Playwright 설치 및 설정](docs/PLAYWRIGHT_SETUP.md)
 
 ### 에이전트 커스터마이징
 ```python
@@ -1219,8 +1237,9 @@ uv run python -m neos.cli dataset list-files
   - [x] 쿼리 분류기 통합
   - [x] 워크플로우 통합 (검색 에이전트)
   - [x] 문서화 및 테스트
-  - [x] Web LookUp Agent CLI 지원
-  - [ ] 동적 웹 페이지 렌더링 지원 (Selenium, Playwright)
+  - [x] TrackedLLM 통합
+  - [x] CLI 지원 (`workflow web-lookup`)
+  - [x] **Playwright 동적 렌더링 지원** (`--dynamic` 플래그) **[NEW]**
 - [ ] 멀티모달 입력 지원 (이미지, 오디오)
   - [ ] 이미지 기반 입력 지원
   - [ ] PDF 및 문서 파일 분석 지원

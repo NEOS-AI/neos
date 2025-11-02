@@ -1,6 +1,6 @@
 """Web content lookup agent - fetches and analyzes specific URLs"""
 
-from typing import Dict, Any, List, TYPE_CHECKING
+from typing import Dict, Any, List, TYPE_CHECKING, Optional
 import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
@@ -15,6 +15,14 @@ from ..base import SearchAgent
 if TYPE_CHECKING:
     from neos.workflow.state import SearchResult
 
+# Playwright는 선택적 의존성
+try:
+    from playwright.async_api import async_playwright, Browser, Page
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
+    print("[WARNING] Playwright not installed. Dynamic page rendering will not be available.")
+
 
 class WebLookUpAgent(SearchAgent):
     """웹 콘텐츠 조회 에이전트
@@ -22,7 +30,7 @@ class WebLookUpAgent(SearchAgent):
     사용자가 제공한 특정 URL들을 방문하여 내용을 추출하고 분석합니다.
     """
 
-    def __init__(self):
+    def __init__(self, use_playwright: bool = False):
         super().__init__(
             name="web_lookup",
             search_type="web_content",
@@ -31,6 +39,11 @@ class WebLookUpAgent(SearchAgent):
             backstory="You specialize in extracting and analyzing web page content from user-provided URLs."
         )
         self.session = None
+        self.use_playwright = use_playwright and PLAYWRIGHT_AVAILABLE
+
+        if use_playwright and not PLAYWRIGHT_AVAILABLE:
+            print("[WARNING] Playwright requested but not available. Falling back to static HTML fetching.")
+            print("[INFO] Install Playwright: pip install playwright && playwright install")
 
     async def execute(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """URL에서 콘텐츠를 추출하고 분석합니다.
@@ -71,8 +84,17 @@ class WebLookUpAgent(SearchAgent):
         print(f"[DEBUG] Processing {len(valid_urls)} valid URLs")
 
         try:
+            # 컨텍스트에서 렌더링 방식 확인
+            use_dynamic = context.get("use_playwright", self.use_playwright) if context else self.use_playwright
+
             # 각 URL에서 콘텐츠 추출
-            contents = await self._fetch_urls(valid_urls)
+            if use_dynamic:
+                print("[DEBUG] Using Playwright for dynamic rendering")
+                contents = await self._fetch_urls_with_playwright(valid_urls)
+            else:
+                print("[DEBUG] Using static HTML fetching")
+                contents = await self._fetch_urls(valid_urls)
+
             print(f"[DEBUG] Fetched content from {len(contents)} URLs")
 
             # 컨텍스트에서 메타정보 추출
@@ -251,6 +273,108 @@ class WebLookUpAgent(SearchAgent):
             text = text[:10000] + "..."
 
         return text
+
+    async def _fetch_urls_with_playwright(self, urls: List[str]) -> List[Dict[str, Any]]:
+        """Playwright를 사용하여 동적 페이지를 렌더링하고 콘텐츠를 가져옵니다.
+
+        Args:
+            urls: 가져올 URL 리스트
+
+        Returns:
+            URL별 콘텐츠 정보 리스트
+        """
+        if not PLAYWRIGHT_AVAILABLE:
+            print("[ERROR] Playwright not available")
+            return []
+
+        print("[DEBUG] Using Playwright for dynamic page rendering")
+        results = []
+
+        async with async_playwright() as p:
+            # 브라우저 실행 (headless 모드)
+            browser = await p.chromium.launch(headless=True)
+
+            try:
+                # 각 URL에 대해 순차 처리 (병렬 처리 시 리소스 문제 가능)
+                for url in urls:
+                    try:
+                        result = await self._fetch_single_url_with_playwright(browser, url)
+                        if result:
+                            results.append(result)
+                    except Exception as e:
+                        print(f"[ERROR] Failed to fetch {url} with Playwright: {e}")
+
+            finally:
+                await browser.close()
+
+        return results
+
+    async def _fetch_single_url_with_playwright(
+        self,
+        browser: "Browser",
+        url: str
+    ) -> Optional[Dict[str, Any]]:
+        """Playwright를 사용하여 단일 URL을 렌더링하고 콘텐츠를 가져옵니다.
+
+        Args:
+            browser: Playwright 브라우저 인스턴스
+            url: 가져올 URL
+
+        Returns:
+            URL 콘텐츠 정보
+        """
+        print(f"[DEBUG] Fetching (Playwright): {url}")
+
+        context = await browser.new_context(
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        )
+
+        try:
+            page = await context.new_page()
+
+            # 페이지 로드 (네트워크 idle 대기)
+            await page.goto(url, wait_until='networkidle', timeout=30000)
+
+            # JavaScript 실행 완료를 위한 추가 대기
+            await page.wait_for_timeout(2000)
+
+            # 페이지 내용 가져오기
+            html = await page.content()
+
+            # BeautifulSoup으로 파싱
+            soup = BeautifulSoup(html, 'html.parser')
+
+            # 메타데이터 추출
+            title = self._extract_title(soup)
+            description = self._extract_description(soup)
+            main_content = self._extract_main_content(soup)
+
+            # 스크린샷 캡처 (선택사항, 디버깅용)
+            # await page.screenshot(path=f'screenshot_{hash(url)}.png')
+
+            await page.close()
+
+            print(f"[DEBUG] Successfully extracted content from {url} (Playwright)")
+            print(f"[DEBUG] Title: {title}")
+            print(f"[DEBUG] Content length: {len(main_content)} characters")
+
+            return {
+                'url': url,
+                'title': title,
+                'description': description,
+                'content': main_content,
+                'status': 'success',
+                'rendering_method': 'playwright'
+            }
+
+        except asyncio.TimeoutError:
+            print(f"[ERROR] Timeout fetching {url} with Playwright")
+            return None
+        except Exception as e:
+            print(f"[ERROR] Error fetching {url} with Playwright: {e}")
+            return None
+        finally:
+            await context.close()
 
     async def _process_with_llm(
         self,
