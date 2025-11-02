@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.2 (2025-11-02)
+- [x] Fix knowledge graph extractor to use the correct LLM instance
+  - [x] Replace `get_llm` with `create_llm` in `knowledge_graph.py`
+  - [x] Ensure proper logging setup for knowledge graph extraction
+- [x] Update tests to reflect changes in LLM instantiation
+- [x] Refactor codes for MCP manager
+- [x] Add S3-like storage support to document management pipeline
+  - [x] Integrate `boto3` for AWS S3 support
+  - [x] Implement `rustfs` support for S3-compatible storage
+  - [x] Update document processing pipeline to handle file uploads to S3/rustfs/local storage
+
 ## v0.6.1 (2025-10-26)
 - [x] change timeout of hyper-deep-research from 60 minutes to 120 minutes in CLI and agent code
 - [x] Make API-call agent to work with real API keys and endpoints
