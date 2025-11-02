@@ -6,7 +6,6 @@ import aiohttp
 from bs4 import BeautifulSoup
 from langchain.schema import HumanMessage
 
-from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import create_tracked_llm
 from neos.utils.url_detector import extract_urls, is_valid_url

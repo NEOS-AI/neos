@@ -970,31 +970,52 @@ for search_result in result['result']:
 
 ### 💼 실사용 예시
 
-#### 1️⃣ 뉴스 기사 분석
+#### 1️⃣ CLI 명령어로 직접 사용 (권장)
 ```bash
+# 단일 URL 분석
+uv run python -m neos.cli workflow web-lookup https://www.example.com
+
+# 다중 URL 비교
+uv run python -m neos.cli workflow web-lookup https://github.com https://gitlab.com
+
+# 특정 질문과 함께
+uv run python -m neos.cli workflow web-lookup https://blog.openai.com/chatgpt --query "이 글의 핵심 내용은?"
+
+# JSON 출력
+uv run python -m neos.cli workflow web-lookup https://www.anthropic.com/claude --output json
+```
+
+#### 2️⃣ 워크플로우를 통한 자동 라우팅
+```bash
+# URL이 포함된 쿼리는 자동으로 WebLookUp 에이전트 선택
 uv run python -m neos.cli workflow test \
   "https://techcrunch.com/ai-trends 이 기사의 핵심 내용과 시사점을 분석해줘"
 ```
 **자동 처리**: URL 감지 → WebLookUp 에이전트 선택 → 기사 다운로드 → 핵심 내용 추출 → LLM 분석
 
-#### 2️⃣ 다중 사이트 비교
+#### 3️⃣ 다중 사이트 비교
 ```bash
+# CLI 명령어
+uv run python -m neos.cli workflow web-lookup https://github.com https://gitlab.com
+
+# 또는 워크플로우 자동 라우팅
 uv run python -m neos.cli workflow test \
   "https://github.com과 https://gitlab.com의 주요 차이점을 비교해줘"
 ```
 **자동 처리**: 2개 URL 감지 → 병렬 다운로드 → 각 사이트 분석 → 비교 리포트 생성
 
-#### 3️⃣ 블로그 글 요약
+#### 4️⃣ 블로그 글 요약
 ```bash
-uv run python -m neos.cli workflow test \
-  "https://blog.anthropic.com/claude 이 글의 주요 개념을 3가지로 요약해줘"
+# 질문과 함께
+uv run python -m neos.cli workflow web-lookup https://blog.anthropic.com/claude \
+  --query "이 글의 주요 개념을 3가지로 요약해줘"
 ```
 **자동 처리**: 블로그 콘텐츠 추출 → 주요 개념 식별 → 3가지 핵심 요약
 
-#### 4️⃣ 기술 문서 분석
+#### 5️⃣ 기술 문서 분석
 ```bash
-uv run python -m neos.cli workflow test \
-  "https://docs.python.org/3/library/asyncio.html asyncio의 핵심 기능을 설명해줘"
+uv run python -m neos.cli workflow web-lookup https://docs.python.org/3/library/asyncio.html \
+  --query "asyncio의 핵심 기능을 설명해줘"
 ```
 **자동 처리**: 문서 페이지 파싱 → 핵심 기능 추출 → 쉬운 설명으로 변환
 
@@ -1198,7 +1219,7 @@ uv run python -m neos.cli dataset list-files
   - [x] 쿼리 분류기 통합
   - [x] 워크플로우 통합 (검색 에이전트)
   - [x] 문서화 및 테스트
-  - [ ] Web LookUp Agent CLI 지원
+  - [x] Web LookUp Agent CLI 지원
   - [ ] 동적 웹 페이지 렌더링 지원 (Selenium, Playwright)
 - [ ] 멀티모달 입력 지원 (이미지, 오디오)
   - [ ] 이미지 기반 입력 지원

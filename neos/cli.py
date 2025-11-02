@@ -1228,13 +1228,263 @@ def _display_hyper_deep_research_result(result: Dict[str, Any]):
             console.print(Panel(result["error"], title="🚨 Error", style="red"))
 
 
+@workflow.command()
+@click.argument('urls', nargs=-1, required=True)
+@click.option('--query', '-q', default=None, help='URL 콘텐츠에 대한 질문 (선택사항)')
+@click.option('--output', '-o', type=click.Choice(['json', 'text']), default='text', help='출력 형식')
+@click.option('--user-id', default=None, help='사용자 ID')
+@click.option('--session-id', default=None, help='세션 ID')
+def web_lookup(urls: tuple, query: Optional[str], output: str, user_id: Optional[str], session_id: Optional[str]):
+    """WebLookUp 에이전트 - URL 콘텐츠 추출 및 분석
+
+    URLS: 분석할 URL(들) (여러 개 가능)
+
+    예시:
+      # 단일 URL 분석
+      uv run python -m neos.cli workflow web-lookup https://www.anthropic.com/claude
+
+      # 다중 URL 비교
+      uv run python -m neos.cli workflow web-lookup https://github.com https://gitlab.com
+
+      # 특정 질문과 함께
+      uv run python -m neos.cli workflow web-lookup https://blog.openai.com/chatgpt --query "이 글의 핵심 내용은?"
+    """
+    user_id = user_id or cli_state["user_id"]
+    session_id = session_id or cli_state["session_id"]
+
+    # URL 리스트를 쿼리 형식으로 변환
+    if query:
+        full_query = f"{' '.join(urls)} {query}"
+    else:
+        full_query = f"{' '.join(urls)} 이 페이지의 내용을 분석해줘"
+
+    console.print(Panel.fit(
+        f"🔗 [bold]WebLookUp Agent[/bold]\n"
+        f"URL(s): {', '.join(urls)}\n"
+        f"질문: {query or '기본 분석'}\n\n"
+        f"URL 개수: {len(urls)}개\n"
+        f"예상 소요 시간: 5-15초 (URL당)",
+        style="bold green"
+    ))
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console
+    ) as progress:
+
+        task = progress.add_task("Executing WebLookUp...", total=None)
+
+        result = asyncio.run(_test_web_lookup(full_query, urls, user_id, session_id, progress, task))
+
+        progress.update(task, description="✅ WebLookUp completed")
+
+    if output == 'json':
+        console.print(Syntax(json.dumps(result, indent=2, ensure_ascii=False), "json"))
+    else:
+        _display_web_lookup_result(result)
+
+
+async def _test_web_lookup(query: str, urls: tuple, user_id: str, session_id: str, progress, task) -> Dict[str, Any]:
+    """WebLookUp 에이전트 실행"""
+    try:
+        start_time = time.time()
+
+        if progress:
+            progress.update(task, description=f"Fetching {len(urls)} URL(s)...")
+        await asyncio.sleep(0.1)
+
+        # WebLookUp 에이전트 직접 생성 및 실행
+        from neos.agents.search_agents import WebLookUpAgent
+        from neos.utils.language_detection import detect_language
+
+        web_agent = WebLookUpAgent()
+
+        # 언어 감지
+        detected_language = detect_language(query)
+
+        context = {
+            "user_id": user_id,
+            "session_id": session_id,
+            "detected_language": detected_language
+        }
+
+        if progress:
+            progress.update(task, description="Parsing HTML and extracting content...")
+
+        # 타임아웃 설정 (URL당 30초 + 여유)
+        timeout = max(60, len(urls) * 30 + 30)
+
+        try:
+            agent_result = await asyncio.wait_for(
+                web_agent.execute(query, context),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            return {
+                "success": False,
+                "error": f"WebLookUp timed out after {timeout} seconds",
+                "query": query,
+                "urls": list(urls),
+                "timestamp": datetime.now().isoformat()
+            }
+
+        if progress:
+            progress.update(task, description="Analyzing content with LLM...")
+
+        # 결과 변환
+        if agent_result.get("success") and agent_result.get("result"):
+            search_results = agent_result["result"]
+
+            # SearchResult 객체들을 딕셔너리로 변환
+            if search_results and hasattr(search_results[0], '__dict__'):
+                response_parts = []
+                sources_info = []
+
+                for sr in search_results:
+                    response_parts.append(sr.content)
+
+                    # 메타데이터에서 소스 정보 추출
+                    if sr.metadata and "sources" in sr.metadata:
+                        sources_info.extend(sr.metadata["sources"])
+
+                result = {
+                    "success": True,
+                    "response": "\n\n".join(response_parts),
+                    "metadata": {
+                        "urls_processed": list(urls),
+                        "urls_count": len(urls),
+                        "sources": sources_info,
+                        "processing_type": "web_lookup"
+                    },
+                    "quality_score": search_results[0].score if search_results else 0.0
+                }
+            else:
+                result = {
+                    "success": True,
+                    "response": str(search_results),
+                    "metadata": {
+                        "urls_processed": list(urls),
+                        "urls_count": len(urls)
+                    },
+                    "quality_score": 0.8
+                }
+        else:
+            result = {
+                "success": False,
+                "error": agent_result.get("error", "Unknown error"),
+                "query": query,
+                "urls": list(urls)
+            }
+
+        execution_time = time.time() - start_time
+        result["total_execution_time_ms"] = int(execution_time * 1000)
+        result["query"] = query
+        result["urls"] = list(urls)
+        result["user_id"] = user_id
+        result["session_id"] = session_id
+        result["timestamp"] = datetime.now().isoformat()
+
+        return result
+
+    except Exception as e:
+        import traceback
+        return {
+            "success": False,
+            "error": str(e),
+            "query": query,
+            "urls": list(urls),
+            "timestamp": datetime.now().isoformat(),
+            "traceback": traceback.format_exc() if cli_state["verbose"] else None
+        }
+
+
+def _display_web_lookup_result(result: Dict[str, Any]):
+    """WebLookUp 결과 표시"""
+    if result.get("success", False):
+        console.print("✅ [green]WebLookUp completed successfully[/green]")
+
+        # 기본 정보
+        info_table = Table(title="🔗 WebLookUp Information")
+        info_table.add_column("Field", style="cyan")
+        info_table.add_column("Value", style="green")
+
+        info_table.add_row("Query", result.get("query", ""))
+        info_table.add_row("URLs Processed", str(result.get("metadata", {}).get("urls_count", len(result.get("urls", [])))))
+        info_table.add_row("Total Time", f"{result.get('total_execution_time_ms', 0)}ms")
+        info_table.add_row("Quality Score", f"{result.get('quality_score', 0):.2f}")
+
+        console.print(info_table)
+
+        # URL 목록
+        if result.get("urls"):
+            urls_table = Table(title="📄 Analyzed URLs")
+            urls_table.add_column("#", style="cyan", width=4)
+            urls_table.add_column("URL", style="blue")
+
+            for i, url in enumerate(result["urls"], 1):
+                urls_table.add_row(str(i), url)
+
+            console.print()
+            console.print(urls_table)
+
+        # 소스 정보
+        if result.get("metadata", {}).get("sources"):
+            sources = result["metadata"]["sources"]
+            sources_table = Table(title="📚 Source Details")
+            sources_table.add_column("#", style="cyan", width=4)
+            sources_table.add_column("Title", style="yellow")
+            sources_table.add_column("URL", style="blue")
+
+            for i, source in enumerate(sources[:10], 1):  # 최대 10개만 표시
+                title = source.get("title", "N/A")[:50]
+                url = source.get("url", "N/A")[:60]
+                sources_table.add_row(str(i), title, url)
+
+            console.print()
+            console.print(sources_table)
+
+            if len(sources) > 10:
+                console.print(f"[dim]... and {len(sources) - 10} more sources[/dim]")
+
+        # 분석 결과
+        console.print()
+        response_text = result.get("response", "No response")
+
+        try:
+            from rich.markdown import Markdown
+            console.print(Panel(
+                Markdown(response_text),
+                title="💬 Analysis Result",
+                style="green",
+                expand=True
+            ))
+        except Exception:
+            console.print(Panel(
+                response_text,
+                title="💬 Analysis Result",
+                style="green",
+                expand=True
+            ))
+
+    else:
+        console.print("❌ [red]WebLookUp failed[/red]")
+        if "error" in result:
+            console.print(Panel(result["error"], title="🚨 Error", style="red"))
+        if cli_state["verbose"] and "traceback" in result:
+            console.print()
+            console.print(Panel(result["traceback"], title="🐛 Traceback", style="dim red"))
+
+
 @cli.command()
 def interactive():
     """대화형 모드"""
     console.print(Panel.fit("🤖 Multi-Agent AI Interactive Mode", style="bold blue"))
     console.print("Type 'exit' to quit, 'help' for commands")
     console.print()
-    
+
     session_id = str(uuid.uuid4())
     user_id = "interactive_user"
     
