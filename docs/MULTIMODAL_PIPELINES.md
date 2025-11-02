@@ -531,7 +531,11 @@ class FileInput:
 - [x] PDF 파싱 (PyPDF2, pdfplumber)
 - [x] Word/Excel 파싱 (python-docx, openpyxl)
 - [x] STT 통합 (OpenAI Whisper)
-- [ ] 화자 분리 (pyannote.audio)
+- [ ] 문서 파일 S3 API 기반 저장
+    - [ ] 문서 파일 S3 업로드/다운로드 구현
+    - [ ] S3 연동 테스트 및 최적화
+    - [ ] 문서 메타데이터에 S3 경로 포함
+    - [ ] S3 호환 스토리지 지원 (MinIO, rustfs 등)
 
 ### Phase 3 (계획)
 - [ ] 비디오 처리 파이프라인
