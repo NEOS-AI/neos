@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import logging
 
 from neos.config.settings import settings
-from neos.utils.llm_factory import get_llm
+from neos.utils.llm_factory import create_llm
 
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ class KnowledgeGraphExtractor:
         """
         self.model_name = model_name or settings.KG_EXTRACTION_MODEL
         self.min_confidence = min_confidence or settings.KG_MIN_CONFIDENCE
-        self.llm = get_llm(model=self.model_name)
+        self.llm = create_llm(model=self.model_name)
 
         logger.info(
             f"KnowledgeGraphExtractor initialized: model={self.model_name}, min_confidence={self.min_confidence}"
