@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.7.0 (2025-11-02)
+- [x] Add WebLookupAgent to support advanced web content extraction
+  - [x] Integrate trafilatura for robust HTML parsing
+  - [x] Implement metadata extraction and structured data handling
+  - [x] Develop reliability scoring for search results
+- [x] Add Playwright support for dynamic web page rendering
+  - [x] Integrate Playwright for JavaScript-heavy SPA content extraction
+  - [x] Provide CLI option for dynamic rendering
+  - [x] Update documentation for Playwright setup and usage
+
 ## v0.6.2 (2025-11-02)
 - [x] Fix knowledge graph extractor to use the correct LLM instance
   - [x] Replace `get_llm` with `create_llm` in `knowledge_graph.py`
