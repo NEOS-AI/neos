@@ -3,11 +3,12 @@
 import re
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+import logging
 
 from neos.config.settings import settings
-from neos.utils.logger import get_logger
 
-logger = get_logger(__name__)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass

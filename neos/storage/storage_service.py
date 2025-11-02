@@ -6,16 +6,16 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import BinaryIO, Dict, Optional, Tuple
-
+from typing import BinaryIO, Dict, Optional
+import logging
 import aiofiles
 import boto3
 from botocore.exceptions import ClientError
 
 from neos.config.settings import settings
-from neos.utils.logger import get_logger
 
-logger = get_logger(__name__)
+
+logger = logging.getLogger(__name__)
 
 
 class StorageProvider(ABC):

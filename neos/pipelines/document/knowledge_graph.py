@@ -2,13 +2,14 @@
 
 import json
 from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
+import logging
 
 from neos.config.settings import settings
-from neos.utils.logger import get_logger
 from neos.utils.llm_factory import get_llm
 
-logger = get_logger(__name__)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass

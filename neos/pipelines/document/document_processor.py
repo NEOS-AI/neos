@@ -1,11 +1,9 @@
 """Main document processing pipeline"""
 
-import asyncio
 from datetime import datetime
-from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO, Dict, List, Optional, Any
-
+import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,9 +14,9 @@ from neos.pipelines.document.chunker import DocumentChunker
 from neos.pipelines.document.knowledge_graph import KnowledgeGraphExtractor
 from neos.storage.storage_service import StorageService
 from neos.utils.embeddings import EmbeddingService
-from neos.utils.logger import get_logger
 
-logger = get_logger(__name__)
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentProcessor:
