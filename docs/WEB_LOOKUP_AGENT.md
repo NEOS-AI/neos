@@ -36,19 +36,48 @@ WebLookUpAgent는 사용자가 제공한 특정 URL의 내용을 추출하고 �
 
 ## 사용 예시
 
-### 단일 URL 분석
+### CLI 명령어 (권장)
+
+#### 단일 URL 분석
+```bash
+uv run python -m neos.cli workflow web-lookup https://www.example.com
+```
+
+#### 다중 URL 비교
+```bash
+uv run python -m neos.cli workflow web-lookup https://github.com https://gitlab.com
+```
+
+#### 특정 질문과 함께
+```bash
+uv run python -m neos.cli workflow web-lookup https://blog.openai.com/chatgpt --query "이 글의 핵심 내용은?"
+```
+
+#### JSON 출력
+```bash
+uv run python -m neos.cli workflow web-lookup https://www.anthropic.com/claude --output json
+```
+
+#### Verbose 모드
+```bash
+uv run python -m neos.cli workflow web-lookup https://example.com -v
+```
+
+### 워크플로우 통합 (자동 라우팅)
+
+#### 단일 URL 분석
 ```python
 query = "https://www.example.com에 대해 설명해줘"
 # WebLookUpAgent가 자동으로 선택되어 해당 URL의 내용을 분석합니다
 ```
 
-### 다중 URL 비교
+#### 다중 URL 비교
 ```python
 query = "이 두 사이트를 비교해줘: https://github.com, https://gitlab.com"
 # 두 URL의 내용을 모두 추출하고 비교 분석을 제공합니다
 ```
 
-### 특정 글 요약
+#### 특정 글 요약
 ```python
 query = "https://blog.openai.com/chatgpt 이 글을 요약해줘"
 # 해당 블로그 글의 내용을 추출하고 요약을 제공합니다
