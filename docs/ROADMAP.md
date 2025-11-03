@@ -1,10 +1,8 @@
 # NEOS 로드맵 🗺️
 
-## 현재 버전: v1.1
-
 ## ✅ 완료된 주요 기능
 
-### WebLookUp Agent (v1.1)
+### WebLookUp Agent
 - [x] URL 자동 감지 및 라우팅
 - [x] 다중 URL 병렬 처리
 - [x] BeautifulSoup 기반 HTML 파싱
@@ -15,7 +13,7 @@
 - [x] CLI 지원 (`workflow web-lookup`)
 - [x] 문서화 및 테스트
 
-### API 호출 에이전트 (v1.0)
+### API 호출 에이전트
 - [x] 날씨 API 통합 (OpenWeatherMap)
 - [x] 환율 데이터 API 통합 (ExchangeRate-API)
 - [x] 주식 시장 데이터 API 통합 (Yahoo Finance + FinancialDatasets.ai)
@@ -23,7 +21,7 @@
 - [x] 자연어 파라미터 추출
 - [x] CLI 사용법 문서화
 
-### 검색 에이전트 (v1.0)
+### 검색 에이전트
 - [x] Knowledge Search (지식 기반 검색)
 - [x] Realtime Info Search (실시간 정보)
 - [x] Realtime Data Search (실시간 데이터)
@@ -33,7 +31,7 @@
 
 ---
 
-## 🚧 v1.1 (진행 중)
+## 🚧 진행 중
 
 ### 멀티모달 입력 지원
 - [ ] **이미지 기반 입력**
@@ -77,7 +75,7 @@
 
 ---
 
-## 📅 v1.2 (예정: 2025 Q2)
+## 📅 예정: 2026 Q1
 
 ### 분산 시스템
 - [ ] **분산 에이전트 실행**
@@ -123,7 +121,7 @@
 
 ---
 
-## 🔮 v2.0 (예정: 2025 Q3-Q4)
+## 🔮 예정: 2026 Q2-Q4
 
 ### 고급 AI 기능
 - [ ] **자동 워크플로우 생성**
@@ -158,46 +156,3 @@
   - [ ] 플러그인 API
   - [ ] 마켓플레이스
   - [ ] 커뮤니티 플러그인
-
----
-
-## 💡 제안 및 피드백
-
-새로운 기능 제안이나 피드백은 다음 채널을 통해 제출해주세요:
-
-- **GitHub Issues**: https://github.com/your-repo/neos/issues
-- **Discussion**: https://github.com/your-repo/neos/discussions
-- **이메일**: feedback@neos.ai
-
----
-
-## 📊 버전 히스토리
-
-### v1.1 (2025-01)
-- WebLookUp Agent 추가
-- Playwright 동적 렌더링 지원
-- TrackedLLM 통합
-- CLI 기능 확장
-
-### v1.0 (2024-12)
-- 초기 릴리스
-- 멀티 에이전트 시스템
-- Deep Research 기능
-- API Call Agent
-- MCP 통합
-
----
-
-## 🎯 장기 비전
-
-### 2026년까지
-- **Universal AI Assistant**: 모든 유형의 작업을 처리하는 범용 AI 어시스턴트
-- **자율 에이전트**: 최소한의 지시로 복잡한 작업 완수
-- **하이브리드 클라우드**: 온프레미스와 클라우드의 완벽한 통합
-- **AI Marketplace**: 커뮤니티 기여 에이전트 및 워크플로우 마켓플레이스
-
----
-
-*이 로드맵은 커뮤니티 피드백과 기술 발전에 따라 변경될 수 있습니다.*
-
-*마지막 업데이트: 2025-01-20*

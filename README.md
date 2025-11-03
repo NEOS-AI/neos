@@ -214,13 +214,6 @@ After running the application, access interactive API documentation at:
 
 ## 🗺️ Roadmap
 
-### Completed
-- ✅ WebLookUp Agent (Playwright support)
-- ✅ Deep Research & HyperDeepResearch
-- ✅ API Call Agent (weather, currency, stocks)
-- ✅ TrackedLLM integration
-- ✅ MCP integration
-
 ### In Progress
 - 🚧 Multimodal input (images, PDF, audio)
 - 🚧 Graph database integration
