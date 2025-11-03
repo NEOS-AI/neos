@@ -29,15 +29,15 @@
 - [x] Deep Research (심층 조사)
 - [x] HyperDeepResearch (극도로 고도화된 심층 조사)
 
----
-
-## 🚧 진행 중
-
 ### 멀티모달 입력 지원
 - [x] **이미지 기반 입력**
   - [x] 이미지 업로드 API
   - [x] Vision 모델 통합 (GPT-4 Vision, Claude 3)
   - [x] 이미지 기반 질의응답
+
+---
+
+## 🚧 진행 중
 
 - [ ] **PDF 및 문서 파일 분석**
   - [ ] PDF 파싱 (텍스트, 이미지, 표)
@@ -62,7 +62,6 @@
 - [ ] **추가 LLM Provider**
   - [ ] Google Gemini 통합
   - [ ] Cohere 통합
-  - [ ] Anthropic Claude (확장)
   - [ ] 모델 간 자동 전환
 
 ### 테스팅 및 품질
