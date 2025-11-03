@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.0 (2025-11-03)
+- [x] Add image inference API
+  - [x] Implement image upload endpoint
+  - [x] Integrate GPT-4 Vision and Claude 3 for image analysis
+  - [x] Develop image-based question answering functionality
+- [x] Refactor the image processing module
+  - [x] Modularize image preprocessing and inference components
+  - [x] Optimize performance for large image files
+
 ## v0.7.0 (2025-11-02)
 - [x] Add WebLookupAgent to support advanced web content extraction
   - [x] Integrate trafilatura for robust HTML parsing
