@@ -214,8 +214,6 @@ After running the application, access interactive API documentation at:
 
 ## 🗺️ Roadmap
 
-Current Version: **v1.1**
-
 ### Completed
 - ✅ WebLookUp Agent (Playwright support)
 - ✅ Deep Research & HyperDeepResearch
@@ -239,7 +237,7 @@ See [ROADMAP.md](./docs/ROADMAP.md) for the complete roadmap.
 ## 🙏 Acknowledgments
 
 - [LangGraph](https://github.com/langchain-ai/langgraph)
-- [CrewAI](https://github.com/joaomdmoura/crewAI)
-- [FastAPI](https://github.com/tiangolo/fastapi)
+- [CrewAI](https://github.com/crewAIInc/crewAI)
+- [FastAPI](https://github.com/fastapi/fastapi)
 - [Tavily](https://tavily.com)
 - [Playwright](https://playwright.dev)
