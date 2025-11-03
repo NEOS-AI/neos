@@ -223,11 +223,16 @@ class ImagePipeline(BasePipeline):
         # 분석 프롬프트 생성
         prompt = self._create_vision_prompt(query, context)
 
-        # Vision 모델 호출
+        # 파일 정보 가져오기
+        file = context.files[0] if context.files else None
+
+        # Vision 모델 호출 (미디어 타입 정보 포함)
         result = await vision_model.analyze_image(
             image_data=image_base64,
             prompt=prompt,
-            max_tokens=context.preferences.get("max_tokens", 1000)
+            max_tokens=context.preferences.get("max_tokens", 1000),
+            filename=file.filename if file else None,
+            mime_type=file.mime_type if file else None
         )
 
         return result
