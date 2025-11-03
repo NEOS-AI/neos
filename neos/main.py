@@ -11,10 +11,10 @@ from neos.config.settings import settings
 from neos.database.connection import db_manager
 from neos.utils.cache import cache_manager
 from neos.utils.embeddings import embedding_manager
-from neos.api.routes import router
-from neos.api.web_search_analytics_routes import router as web_search_analytics_router
-from neos.api.document_routes import router as document_router
-from neos.api.multimodal_routes import router as multimodal_router
+from neos.api.handlers.query_handlers import router
+from neos.api.handlers.analytics_handlers import router as web_search_analytics_router
+from neos.api.handlers.document_handlers import router as document_router
+from neos.api.handlers.multimodal_handlers import router as multimodal_router
 from neos.workflow.graph import multi_agent_workflow
 
 
