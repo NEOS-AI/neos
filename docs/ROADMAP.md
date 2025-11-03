@@ -1,42 +1,5 @@
 # NEOS 로드맵 🗺️
 
-## ✅ 완료된 주요 기능
-
-### WebLookUp Agent
-- [x] URL 자동 감지 및 라우팅
-- [x] 다중 URL 병렬 처리
-- [x] BeautifulSoup 기반 HTML 파싱
-- [x] **Playwright 동적 렌더링 지원** (JavaScript/SPA)
-- [x] LLM 기반 콘텐츠 분석 및 요약
-- [x] 다국어 지원 (한국어, 영어, 일본어, 중국어)
-- [x] TrackedLLM 통합
-- [x] CLI 지원 (`workflow web-lookup`)
-- [x] 문서화 및 테스트
-
-### API 호출 에이전트
-- [x] 날씨 API 통합 (OpenWeatherMap)
-- [x] 환율 데이터 API 통합 (ExchangeRate-API)
-- [x] 주식 시장 데이터 API 통합 (Yahoo Finance + FinancialDatasets.ai)
-- [x] 재무제표 조회 (손익계산서, 대차대조표, 현금흐름표)
-- [x] 자연어 파라미터 추출
-- [x] CLI 사용법 문서화
-
-### 검색 에이전트
-- [x] Knowledge Search (지식 기반 검색)
-- [x] Realtime Info Search (실시간 정보)
-- [x] Realtime Data Search (실시간 데이터)
-- [x] Multi-Query Search (복합 검색)
-- [x] Deep Research (심층 조사)
-- [x] HyperDeepResearch (극도로 고도화된 심층 조사)
-
-### 멀티모달 입력 지원
-- [x] **이미지 기반 입력**
-  - [x] 이미지 업로드 API
-  - [x] Vision 모델 통합 (GPT-4 Vision, Claude 3)
-  - [x] 이미지 기반 질의응답
-
----
-
 ## 🚧 진행 중
 
 - [ ] **PDF 및 문서 파일 분석**
