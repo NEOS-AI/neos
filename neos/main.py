@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Multi-Agent AI System",
     description="""**멀티 에이전트 AI 기반 지능형 검색 및 분석 시스템**""",
-    version="0.7.0",
+    version="0.8.0",
     lifespan=lifespan,
     docs_url="/docs" if IS_DEBUG else None,
     redoc_url="/redoc" if IS_DEBUG else None
