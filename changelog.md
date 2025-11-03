@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.1 (2025-11-03)
+- [x] Refactor API handlers
+  - [x] Move route definitions to dedicated handler modules
+  - [x] Improve modularity and maintainability of API code
+
 ## v0.8.0 (2025-11-03)
 - [x] Add image inference API
   - [x] Implement image upload endpoint
