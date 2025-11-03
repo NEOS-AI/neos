@@ -193,7 +193,8 @@ class ClaudeVision(VisionModel):
 
     def __init__(self, api_key: Optional[str] = None):
         super().__init__(api_key or settings.ANTHROPIC_API_KEY)
-        self.model = "claude-3-5-sonnet-20241022"  # Claude 3.5 Sonnet
+        self.model = "claude-sonnet-4-5-20250929"  # Claude 4.5 Sonnet (2025년 9월 버전)
+
 
     async def analyze_image(
         self,
@@ -255,11 +256,21 @@ class ClaudeVision(VisionModel):
         except ImportError:
             raise ImportError("anthropic package not installed. Run: pip install anthropic")
         except Exception as e:
+            import traceback
+
+            error_detail = traceback.format_exc()
+            print(f"[ClaudeVision] Error: {str(e)}")
+            print(f"[ClaudeVision] Full traceback:\n{error_detail}")
             return {
                 "description": f"Error analyzing image with Claude: {str(e)}",
                 "objects": [],
                 "text": "",
-                "metadata": {"error": str(e), "provider": "claude"},
+                "metadata": {
+                    "error": str(e),
+                    "provider": "claude",
+                    "error_type": type(e).__name__,
+                    "traceback": error_detail
+                },
                 "confidence": 0.0
             }
 
@@ -316,17 +327,25 @@ class VisionModelFactory:
                 else:
                     raise ValueError("No Vision model API key configured")
 
-        # 모델 생성
+        # 모델 생성 (fallback 포함)
         if provider == VisionProvider.GPT4O:
             model = GPT4oVision()
+            if not model.is_available():
+                # OpenAI 실패 시 Claude로 fallback
+                print("[VisionModelFactory] GPT4o not available, trying Claude...")
+                model = ClaudeVision()
         elif provider == VisionProvider.CLAUDE:
             model = ClaudeVision()
+            if not model.is_available():
+                # Claude 실패 시 GPT4o로 fallback
+                print("[VisionModelFactory] Claude not available, trying GPT4o...")
+                model = GPT4oVision()
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
-        # 사용 가능 여부 확인
+        # 최종 사용 가능 여부 확인
         if not model.is_available():
-            raise ValueError(f"{provider.value} API key not configured")
+            raise ValueError(f"No Vision model API key configured (tried {provider.value})")
 
         return model
 

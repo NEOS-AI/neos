@@ -97,6 +97,11 @@ class EmbeddingManager:
         text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
         return f"embedding:{self.model}:{text_hash}"
 
+    # Alias for compatibility
+    async def embed_batch(self, texts: List[str], use_cache: bool = True) -> List[Optional[List[float]]]:
+        """Alias for get_embeddings_batch"""
+        return await self.get_embeddings_batch(texts, use_cache)
+
 
 # 전역 임베딩 매니저
 embedding_manager = EmbeddingManager()

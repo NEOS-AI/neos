@@ -117,6 +117,7 @@ class MultiModalWorkflow:
                 workflow_state = {
                     "user_id": user_id or "unknown",
                     "session_id": session_id or "unknown",
+                    "query": query,  # Added for execute_workflow compatibility
                     "original_query": query,
                     "detected_language": context.language,
                     "query_intent": None,
@@ -142,7 +143,7 @@ class MultiModalWorkflow:
 
             # 6. 기존 워크플로우 실행
             print("[MultiModalWorkflow] Starting agent workflow...")
-            final_result = await self.agent_workflow.run(workflow_state)
+            final_result = await self.agent_workflow.execute_workflow(workflow_state)
 
             # 7. 실행 시간 계산
             end_time = datetime.now(timezone.utc)

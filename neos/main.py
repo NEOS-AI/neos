@@ -14,6 +14,7 @@ from neos.utils.embeddings import embedding_manager
 from neos.api.routes import router
 from neos.api.web_search_analytics_routes import router as web_search_analytics_router
 from neos.api.document_routes import router as document_router
+from neos.api.multimodal_routes import router as multimodal_router
 from neos.workflow.graph import multi_agent_workflow
 
 
@@ -169,6 +170,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 app.include_router(router, prefix=settings.API_V1_PREFIX, tags=["Multi-Agent AI"])
 app.include_router(web_search_analytics_router, prefix=f"{settings.API_V1_PREFIX}/analytics", tags=["Web Search Analytics"])
 app.include_router(document_router, prefix=f"{settings.API_V1_PREFIX}/documents", tags=["Document Management"])
+app.include_router(multimodal_router, prefix=f"{settings.API_V1_PREFIX}/multimodal", tags=["Multimodal Processing"])
 
 
 # 루트 엔드포인트
@@ -184,6 +186,8 @@ async def root():
             "docs": "/docs",
             "health": f"{settings.API_V1_PREFIX}/health",
             "query": f"{settings.API_V1_PREFIX}/query",
+            "multimodal_query": f"{settings.API_V1_PREFIX}/multimodal/query",
+            "image_analysis": f"{settings.API_V1_PREFIX}/multimodal/image/analyze",
             "trending": f"{settings.API_V1_PREFIX}/trending",
             "websocket": f"{settings.API_V1_PREFIX}/ws/{{session_id}}"
         },

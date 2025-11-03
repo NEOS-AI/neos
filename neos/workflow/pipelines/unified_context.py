@@ -169,6 +169,7 @@ class UnifiedContextLayer:
         state = {
             "user_id": unified_context.get("user_id", "unknown"),
             "session_id": unified_context.get("session_id", "unknown"),
+            "query": unified_context.get("query", ""),  # Added for execute_workflow compatibility
             "original_query": unified_context.get("query", ""),
             "query_intent": None,
             "query_embedding": None,

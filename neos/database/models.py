@@ -128,7 +128,7 @@ class Document(Base):
     fts_index_date = Column(TIMESTAMP)
 
     # 추가 메타데이터
-    metadata = Column(JSONB, default=dict)
+    extra_metadata = Column(JSONB, default=dict)
 
     # 타임스탬프
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
@@ -168,7 +168,7 @@ class DocumentChunk(Base):
     # (별도 마이그레이션에서 처리)
 
     # 추가 메타데이터
-    metadata = Column(JSONB, default=dict)
+    extra_metadata = Column(JSONB, default=dict)
 
     # 타임스탬프
     created_at = Column(TIMESTAMP, default=datetime.utcnow)

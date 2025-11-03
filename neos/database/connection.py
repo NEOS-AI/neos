@@ -124,3 +124,12 @@ class DatabaseManager:
 
 # 전역 데이터베이스 매니저
 db_manager = DatabaseManager()
+
+
+async def get_session():
+    """세션 생성 헬퍼 함수 (async generator)"""
+    session = await db_manager.get_session()
+    try:
+        yield session
+    finally:
+        await session.close()

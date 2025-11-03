@@ -13,7 +13,7 @@ from neos.database.models import Document, DocumentChunk, KnowledgeGraph
 from neos.pipelines.document.chunker import DocumentChunker
 from neos.pipelines.document.knowledge_graph import KnowledgeGraphExtractor
 from neos.storage.storage_service import StorageService
-from neos.utils.embeddings import EmbeddingService
+from neos.utils.embeddings import EmbeddingManager
 
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ class DocumentProcessor:
         # 서비스 초기화
         self.storage = StorageService.create_provider(self.storage_provider)
         self.chunker = DocumentChunker()
-        self.embedding_service = EmbeddingService()
+        self.embedding_service = EmbeddingManager()
 
         if self.enable_kg_extraction:
             self.kg_extractor = KnowledgeGraphExtractor()
@@ -241,7 +241,7 @@ class DocumentProcessor:
             storage_provider=self.storage_provider,
             storage_key=storage_key,
             mime_type=mime_type,
-            metadata=metadata or {},
+            extra_metadata=metadata or {},
             processing_status="processing",
         )
 
@@ -350,7 +350,7 @@ class DocumentProcessor:
                 chunk_type=chunk.chunk_type,
                 heading_hierarchy=chunk.heading_hierarchy,
                 embedding=embedding,
-                metadata=chunk.metadata or {},
+                extra_metadata=chunk.metadata or {},
             )
             session.add(db_chunk)
 
