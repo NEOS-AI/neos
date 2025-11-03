@@ -214,17 +214,6 @@ After running the application, access interactive API documentation at:
 
 ## 🗺️ Roadmap
 
-### In Progress
-- 🚧 Multimodal input (images, PDF, audio)
-- 🚧 Graph database integration
-- 🚧 Additional LLM providers (Gemini, Cohere)
-
-### Planned
-- 📅 Distributed agent execution
-- 📅 Local LLM support (Ollama)
-- 📅 Workflow builder UI
-- 📅 Video analysis agent
-
 See [ROADMAP.md](./docs/ROADMAP.md) for the complete roadmap.
 
 ## 🙏 Acknowledgments
