@@ -33,9 +33,7 @@ export default function ChatInterface() {
         </div>
 
         {/* Input */}
-        <div className="border-t border-claude-border">
-          <InputBox />
-        </div>
+        <InputBox />
       </div>
     </div>
   );

@@ -17,12 +17,12 @@ const config: Config = {
           hover: "#B86A4E",
         },
         claude: {
-          dark: "#1F1F1F",
-          darker: "#171717",
+          dark: "#1A1A1A",
+          darker: "#0F0F0F",
           light: "#2A2A2A",
-          border: "#3A3A3A",
+          border: "#2A2A2A",
           text: "#E5E5E5",
-          "text-secondary": "#A3A3A3",
+          "text-secondary": "#9CA3AF",
         },
       },
       fontFamily: {

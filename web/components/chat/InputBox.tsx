@@ -2,7 +2,7 @@
 
 import { useState, useRef, KeyboardEvent } from "react";
 import { useChatStore } from "@/lib/stores/chat-store";
-import { Send, Loader2 } from "lucide-react";
+import { ArrowUp, StopCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export default function InputBox() {
@@ -40,47 +40,68 @@ export default function InputBox() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto w-full p-4">
-      <div className="relative bg-claude-light rounded-2xl border border-claude-border focus-within:border-primary transition-colors">
-        <textarea
-          ref={textareaRef}
-          value={input}
-          onChange={handleInput}
-          onKeyDown={handleKeyDown}
-          placeholder="Ask NEOS anything..."
-          disabled={isLoading}
-          rows={1}
-          className={cn(
-            "w-full bg-transparent text-claude-text placeholder-claude-text-secondary",
-            "px-4 py-3 pr-12 resize-none outline-none",
-            "max-h-[200px] overflow-y-auto",
-            "disabled:opacity-50 disabled:cursor-not-allowed"
-          )}
-          style={{ minHeight: "48px" }}
-        />
+    <div className="border-t border-claude-border bg-claude-darker">
+      <div className="max-w-3xl mx-auto w-full px-6 py-6">
+        <div className="relative">
+          {/* Input Container */}
+          <div className={cn(
+            "relative rounded-2xl border transition-all duration-200",
+            "bg-claude-dark/60",
+            input.trim()
+              ? "border-claude-text-secondary shadow-lg shadow-black/20"
+              : "border-claude-border"
+          )}>
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={handleInput}
+              onKeyDown={handleKeyDown}
+              placeholder="Message NEOS..."
+              disabled={isLoading}
+              rows={1}
+              className={cn(
+                "w-full bg-transparent text-claude-text placeholder-claude-text-secondary/70",
+                "px-5 py-4 pr-14 resize-none outline-none",
+                "text-[15px] leading-relaxed",
+                "max-h-[200px] overflow-y-auto",
+                "disabled:opacity-50 disabled:cursor-not-allowed"
+              )}
+              style={{ minHeight: "52px" }}
+            />
 
-        <button
-          onClick={handleSubmit}
-          disabled={!input.trim() || isLoading}
-          className={cn(
-            "absolute right-2 bottom-2 p-2 rounded-lg transition-colors",
-            "disabled:opacity-40 disabled:cursor-not-allowed",
-            input.trim() && !isLoading
-              ? "bg-primary hover:bg-primary-hover text-white"
-              : "bg-claude-border text-claude-text-secondary"
-          )}
-          aria-label="Send message"
-        >
-          {isLoading ? (
-            <Loader2 size={20} className="animate-spin" />
-          ) : (
-            <Send size={20} />
-          )}
-        </button>
-      </div>
+            {/* Send/Stop Button */}
+            <div className="absolute right-3 bottom-3">
+              {isLoading ? (
+                <button
+                  onClick={() => {/* TODO: Implement stop */}}
+                  className="w-8 h-8 rounded-lg bg-claude-text-secondary/20 hover:bg-claude-text-secondary/30 flex items-center justify-center transition-colors"
+                  aria-label="Stop generating"
+                >
+                  <StopCircle size={18} className="text-claude-text" />
+                </button>
+              ) : (
+                <button
+                  onClick={handleSubmit}
+                  disabled={!input.trim()}
+                  className={cn(
+                    "w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-200",
+                    input.trim()
+                      ? "bg-claude-text text-claude-darker hover:bg-white"
+                      : "bg-claude-border/40 text-claude-text-secondary cursor-not-allowed"
+                  )}
+                  aria-label="Send message"
+                >
+                  <ArrowUp size={18} strokeWidth={2.5} />
+                </button>
+              )}
+            </div>
+          </div>
 
-      <div className="mt-2 text-xs text-center text-claude-text-secondary">
-        Press Enter to send, Shift+Enter for new line
+          {/* Helper Text */}
+          <div className="mt-3 text-xs text-center text-claude-text-secondary/80">
+            NEOS can make mistakes. Consider checking important information.
+          </div>
+        </div>
       </div>
     </div>
   );
