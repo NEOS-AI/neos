@@ -19,7 +19,7 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 ```bash
 cd ../neos
-uvicorn neos.main:app --reload --port 8000
+uvicorn neos.main:app --reload --port 8518
 ```
 
 ### 3. Start Frontend

@@ -156,7 +156,7 @@
 2. **Backend Running**
    ```bash
    cd neos
-   uvicorn neos.main:app --reload --port 8000
+   uvicorn neos.main:app --reload --port 8518
    # Verify: curl http://localhost:8518/api/v1/health
    ```
 

@@ -333,7 +333,7 @@ cd /Users/ywsung/Desktop/neos
 
 # Backend 실행
 cd neos
-uvicorn neos.main:app --reload --port 8000
+uvicorn neos.main:app --reload --port 8518
 
 # Frontend 실행 (새 터미널)
 cd web

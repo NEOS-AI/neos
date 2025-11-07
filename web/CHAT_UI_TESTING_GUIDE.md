@@ -16,7 +16,7 @@
 ### Step 1: 백엔드 실행
 ```bash
 cd /Users/ywsung/Desktop/neos/neos
-uvicorn neos.main:app --reload --port 8000
+uvicorn neos.main:app --reload --port 8518
 ```
 
 ### Step 2: 프론트엔드 실행
@@ -169,7 +169,7 @@ open http://localhost:3000
 **가능한 원인**:
 1. 백엔드가 실행되지 않음
    ```bash
-   curl http://localhost:8000/api/v1/health
+   curl http://localhost:8518/api/v1/health
    ```
 
 2. CORS 에러

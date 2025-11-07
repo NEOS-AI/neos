@@ -108,7 +108,7 @@ Ensure your NEOS backend is running:
 
 ```bash
 cd neos
-uvicorn neos.main:app --reload --port 8000
+uvicorn neos.main:app --reload --port 8518
 ```
 
 ### Step 5: Start the Frontend

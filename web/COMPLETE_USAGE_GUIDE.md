@@ -7,12 +7,12 @@
 #### 백엔드 실행
 ```bash
 cd /Users/ywsung/Desktop/neos/neos
-uvicorn neos.main:app --reload --port 8000
+uvicorn neos.main:app --reload --port 8518
 ```
 
 백엔드가 정상 실행되면:
 ```
-INFO:     Uvicorn running on http://127.0.0.1:8000
+INFO:     Uvicorn running on http://127.0.0.1:8518
 INFO:     Application startup complete.
 ```
 
@@ -369,7 +369,7 @@ Bot: [스토리 작성]
 
 1. **백엔드 확인**
    ```bash
-   curl http://localhost:8000/api/v1/health
+   curl http://localhost:8518/api/v1/health
    ```
 
 2. **네트워크 탭 확인** (F12 → Network)
@@ -379,7 +379,7 @@ Bot: [스토리 작성]
 3. **백엔드 재시작**
    ```bash
    # Ctrl+C로 중지
-   uvicorn neos.main:app --reload --port 8000
+   uvicorn neos.main:app --reload --port 8518
    ```
 
 ### 응답이 느림

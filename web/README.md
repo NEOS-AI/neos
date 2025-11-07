@@ -80,7 +80,7 @@ Or use standalone output for Docker:
 
 ```bash
 docker build -t neos-web .
-docker run -p 3000:3000 -e BACKEND_URL=http://backend:8000 neos-web
+docker run -p 3000:3000 -e BACKEND_URL=http://backend:8518 neos-web
 ```
 
 ## Project Structure
