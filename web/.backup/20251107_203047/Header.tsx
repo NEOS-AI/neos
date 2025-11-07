@@ -5,7 +5,7 @@ import { Menu, Sparkles } from "lucide-react";
 import { useState } from "react";
 
 export default function Header() {
-  const { currentConversation } = useChatStore();
+  const { currentSession } = useChatStore();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   return (
@@ -27,18 +27,18 @@ export default function Header() {
           <h1 className="text-base font-semibold text-claude-text">NEOS</h1>
         </div>
 
-        {/* Conversation Title */}
-        {currentConversation && currentConversation.message_count > 0 && (
+        {/* Session Title */}
+        {currentSession && currentSession.messages.length > 0 && (
           <div className="flex items-center gap-2 text-sm text-claude-text-secondary">
             <span className="opacity-40">•</span>
             <span className="truncate max-w-xs">
-              {currentConversation.title}
+              {currentSession.title}
             </span>
           </div>
         )}
       </div>
 
-      {/* AI Badge */}
+      {/* Pro Badge (Optional) */}
       <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-orange-500/10 to-amber-500/10 border border-orange-500/20 rounded-full">
         <Sparkles size={14} className="text-orange-400" />
         <span className="text-xs font-medium text-orange-400">AI Powered</span>

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { chatAPI, type MessageResponse, type ConversationResponse } from "@/lib/api/chat-api";
+import { chatAPI } from "@/lib/api/chat-api";
 import type {
   ChatStore,
   Conversation,
@@ -29,38 +29,6 @@ const DEFAULT_SETTINGS: ChatSettings = {
   enable_auto_embedding: true,
 };
 
-// Helper function to convert MessageResponse to Message
-const toMessage = (response: MessageResponse): Message => {
-  return {
-    message_id: response.message_id,
-    conversation_id: response.conversation_id,
-    role: response.role,
-    content: response.content,
-    content_type: response.content_type,
-    sequence_number: response.sequence_number,
-    parent_message_id: response.parent_message_id,
-    status: response.status,
-    model_name: response.model_name,
-    prompt_tokens: response.prompt_tokens,
-    completion_tokens: response.completion_tokens,
-    total_tokens: response.total_tokens,
-    finish_reason: response.finish_reason,
-    user_feedback: response.user_feedback,
-    quality_score: response.quality_score,
-    created_at: response.created_at,
-    updated_at: response.updated_at,
-    metadata: response.metadata,
-  };
-};
-
-// Helper to convert ConversationResponse to Conversation
-const toConversation = (response: ConversationResponse): Conversation => {
-  return {
-    ...response,
-    messages: [],
-  };
-};
-
 export const useChatStore = create<ChatStore>()(
   persist(
     (set, get) => ({
@@ -80,24 +48,15 @@ export const useChatStore = create<ChatStore>()(
       // ======================================================================
       get currentConversation() {
         const { conversations, currentConversationId } = get();
-        const current = conversations.find((c) => c.conversation_id === currentConversationId) || null;
-        console.log("[Store] currentConversation getter:", {
-          currentConversationId,
-          totalConversations: conversations.length,
-          found: !!current,
-          messagesCount: current?.messages?.length || 0,
-        });
-        return current;
+        return (
+          conversations.find((c) => c.conversation_id === currentConversationId) ||
+          null
+        );
       },
 
       get messages() {
         const { currentConversation } = get();
-        const messages = currentConversation?.messages || [];
-        console.log("[Store] Getting messages:", {
-          conversationId: currentConversation?.conversation_id,
-          messageCount: messages.length,
-        });
-        return messages;
+        return currentConversation?.messages || [];
       },
 
       // ======================================================================
@@ -114,7 +73,7 @@ export const useChatStore = create<ChatStore>()(
           });
 
           set({
-            conversations: response.conversations.map(toConversation),
+            conversations: response.conversations,
             isLoading: false,
           });
         } catch (error) {
@@ -130,7 +89,7 @@ export const useChatStore = create<ChatStore>()(
         try {
           const { currentUserId, settings } = get();
 
-          const conversationResponse = await chatAPI.createConversation({
+          const conversation = await chatAPI.createConversation({
             user_id: currentUserId,
             title: title || "New Chat",
             model_name: settings.model_name,
@@ -139,11 +98,14 @@ export const useChatStore = create<ChatStore>()(
           });
 
           // Add to conversations list with empty messages
-          const newConversation = toConversation(conversationResponse);
+          const newConversation: Conversation = {
+            ...conversation,
+            messages: [],
+          };
 
           set((state) => ({
             conversations: [newConversation, ...state.conversations],
-            currentConversationId: conversationResponse.conversation_id,
+            currentConversationId: conversation.conversation_id,
             isLoading: false,
           }));
         } catch (error) {
@@ -154,13 +116,11 @@ export const useChatStore = create<ChatStore>()(
       },
 
       setCurrentConversation: (conversationId: string) => {
-        console.log("[Store] Setting current conversation:", conversationId);
         set({ currentConversationId: conversationId });
 
         // Load messages if not already loaded
         const { currentConversation } = get();
-        if (currentConversation && (!currentConversation.messages || currentConversation.messages.length === 0)) {
-          console.log("[Store] Loading messages for conversation...");
+        if (currentConversation && !currentConversation.messages) {
           get().loadMessages(conversationId);
         }
       },
@@ -236,8 +196,7 @@ export const useChatStore = create<ChatStore>()(
         set({ isLoading: true, error: null });
 
         try {
-          const messagesResponse = await chatAPI.getMessages(conversationId, { limit: 100 });
-          const messages = messagesResponse.map(toMessage);
+          const messages = await chatAPI.getMessages(conversationId, { limit: 100 });
 
           set((state) => ({
             conversations: state.conversations.map((c) =>
@@ -257,7 +216,6 @@ export const useChatStore = create<ChatStore>()(
 
         // Create conversation if none exists
         if (!currentConversationId) {
-          console.log("[Store] No conversation exists, creating one...");
           await get().createConversation();
           // Wait for conversation creation
           await new Promise((resolve) => setTimeout(resolve, 100));
@@ -265,12 +223,10 @@ export const useChatStore = create<ChatStore>()(
 
         const conversationId = get().currentConversationId;
         if (!conversationId) {
-          console.error("[Store] Failed to create conversation");
           set({ error: "No active conversation" });
           return;
         }
 
-        console.log("[Store] Sending message to conversation:", conversationId);
         set({ isLoading: true, error: null });
 
         try {
@@ -279,7 +235,6 @@ export const useChatStore = create<ChatStore>()(
           // Send based on chat mode
           switch (settings.mode) {
             case "rag":
-              console.log("[Store] Sending RAG message...");
               response = await chatAPI.sendRAGMessage(conversationId, {
                 content,
                 enable_rag: settings.rag_enabled,
@@ -289,7 +244,6 @@ export const useChatStore = create<ChatStore>()(
               break;
 
             case "similarity":
-              console.log("[Store] Sending similarity message...");
               response = await chatAPI.sendSimilarityMessage(conversationId, {
                 content,
                 top_k: settings.similarity_top_k,
@@ -301,31 +255,16 @@ export const useChatStore = create<ChatStore>()(
 
             case "standard":
             default:
-              console.log("[Store] Sending standard message...");
               response = await chatAPI.sendMessage(conversationId, { content });
               break;
           }
 
-          console.log("[Store] Got response:", {
-            userMessageId: response.user_message.message_id,
-            assistantMessageId: response.assistant_message.message_id,
-          });
+          // Add messages to store
+          const userMessage = response.user_message;
+          const assistantMessage = response.assistant_message;
 
-          // Convert to Message type
-          const userMessage = toMessage(response.user_message);
-          const assistantMessage = toMessage(response.assistant_message);
-
-          console.log("[Store] Adding messages to store...");
-
-          set((state) => {
-            const targetConversation = state.conversations.find(c => c.conversation_id === conversationId);
-
-            console.log("[Store] ===== BEFORE UPDATE =====");
-            console.log("[Store] Target conversation exists:", !!targetConversation);
-            console.log("[Store] Current messages count:", targetConversation?.messages?.length || 0);
-            console.log("[Store] All conversation IDs:", state.conversations.map(c => c.conversation_id));
-
-            const updatedConversations = state.conversations.map((c) =>
+          set((state) => ({
+            conversations: state.conversations.map((c) =>
               c.conversation_id === conversationId
                 ? {
                     ...c,
@@ -334,7 +273,6 @@ export const useChatStore = create<ChatStore>()(
                       userMessage,
                       assistantMessage,
                     ],
-                    message_count: (c.message_count || 0) + 2,
                     // Update title from first message
                     title:
                       c.message_count === 0
@@ -342,25 +280,10 @@ export const useChatStore = create<ChatStore>()(
                         : c.title,
                   }
                 : c
-            );
-
-            const updatedTarget = updatedConversations.find(c => c.conversation_id === conversationId);
-
-            console.log("[Store] ===== AFTER UPDATE =====");
-            console.log("[Store] Updated target exists:", !!updatedTarget);
-            console.log("[Store] New messages count:", updatedTarget?.messages?.length || 0);
-            console.log("[Store] Message IDs:", updatedTarget?.messages?.map(m => m.message_id.slice(0, 8)) || []);
-            console.log("[Store] Full updated conversation:", updatedTarget);
-
-            return {
-              conversations: updatedConversations,
-              isLoading: false,
-            };
-          });
-
-          console.log("[Store] Message sent successfully");
+            ),
+            isLoading: false,
+          }));
         } catch (error) {
-          console.error("[Store] Failed to send message:", error);
           const errorMessage =
             error instanceof Error ? error.message : "Failed to send message";
           set({ error: errorMessage, isLoading: false });
@@ -501,7 +424,7 @@ export const useChatStore = create<ChatStore>()(
                     ...c,
                     messages: c.messages?.map((m, idx) =>
                       idx === c.messages!.length - 1
-                        ? { ...m, status: "completed" as const }
+                        ? { ...m, status: "completed" }
                         : m
                     ),
                   }
@@ -526,12 +449,10 @@ export const useChatStore = create<ChatStore>()(
         set({ isLoading: true, error: null });
 
         try {
-          const newMessageResponse = await chatAPI.regenerateMessage(
+          const newMessage = await chatAPI.regenerateMessage(
             currentConversationId,
             messageId
           );
-
-          const newMessage = toMessage(newMessageResponse);
 
           set((state) => ({
             conversations: state.conversations.map((c) =>
@@ -560,11 +481,9 @@ export const useChatStore = create<ChatStore>()(
         set({ isLoading: true, error: null });
 
         try {
-          const updatedMessageResponse = await chatAPI.editMessage(messageId, newContent, {
+          const updatedMessage = await chatAPI.editMessage(messageId, newContent, {
             user_id: currentUserId,
           });
-
-          const updatedMessage = toMessage(updatedMessageResponse);
 
           set((state) => ({
             conversations: state.conversations.map((c) =>
@@ -592,13 +511,12 @@ export const useChatStore = create<ChatStore>()(
         comment?: string
       ) => {
         try {
-          const updatedMessageResponse = await chatAPI.addFeedback(
+          const updatedMessage = await chatAPI.addFeedback(
             messageId,
             feedback,
             comment
           );
 
-          const updatedMessage = toMessage(updatedMessageResponse);
           const { currentConversationId } = get();
           if (!currentConversationId) return;
 

@@ -1,27 +1,38 @@
 "use client";
 
-import { useState, useRef, KeyboardEvent } from "react";
 import { useChatStore } from "@/lib/stores/chat-store";
-import { ArrowUp, StopCircle } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { ArrowUp, Square } from "lucide-react";
+import { useState, useRef, useEffect, KeyboardEvent } from "react";
 
 export default function InputBox() {
+  const { sendMessage, sendStreamingMessage, isLoading, isStreaming, settings } =
+    useChatStore();
   const [input, setInput] = useState("");
-  const { sendMessage, isLoading } = useChatStore();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${Math.min(
+        textareaRef.current.scrollHeight,
+        200
+      )}px`;
+    }
+  }, [input]);
+
   const handleSubmit = async () => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || isStreaming) return;
 
     const message = input.trim();
     setInput("");
 
-    // Reset textarea height
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
+    // Use streaming or regular send based on settings
+    if (settings.stream) {
+      await sendStreamingMessage(message);
+    } else {
+      await sendMessage(message);
     }
-
-    await sendMessage(message);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -31,76 +42,63 @@ export default function InputBox() {
     }
   };
 
-  const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value);
-
-    // Auto-resize textarea
-    e.target.style.height = "auto";
-    e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
+  const handleStop = () => {
+    // TODO: Implement stop functionality
+    console.log("Stop generation");
   };
 
+  const canSend = input.trim() && !isLoading && !isStreaming;
+
   return (
-    <div className="border-t border-claude-border bg-claude-darker">
-      <div className="max-w-3xl mx-auto w-full px-6 py-6">
-        <div className="relative">
-          {/* Input Container */}
-          <div className={cn(
-            "relative rounded-2xl border transition-all duration-200",
-            "bg-claude-dark/60",
-            input.trim()
-              ? "border-claude-text-secondary shadow-lg shadow-black/20"
-              : "border-claude-border"
-          )}>
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={handleInput}
-              onKeyDown={handleKeyDown}
-              placeholder="Message NEOS..."
-              disabled={isLoading}
-              rows={1}
-              className={cn(
-                "w-full bg-transparent text-claude-text placeholder-claude-text-secondary/70",
-                "px-5 py-4 pr-14 resize-none outline-none",
-                "text-[15px] leading-relaxed",
-                "max-h-[200px] overflow-y-auto",
-                "disabled:opacity-50 disabled:cursor-not-allowed"
-              )}
-              style={{ minHeight: "52px" }}
-            />
+    <div className="border-t border-claude-border bg-claude-darker p-4">
+      <div className="max-w-3xl mx-auto">
+        <div className="relative flex items-end gap-3 bg-claude-dark border border-claude-border rounded-2xl p-3 shadow-lg">
+          {/* Textarea */}
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Message NEOS..."
+            disabled={isLoading || isStreaming}
+            className="flex-1 bg-transparent text-claude-text placeholder-claude-text-secondary resize-none outline-none min-h-[24px] max-h-[200px] disabled:opacity-50"
+            rows={1}
+          />
 
-            {/* Send/Stop Button */}
-            <div className="absolute right-3 bottom-3">
-              {isLoading ? (
-                <button
-                  onClick={() => {/* TODO: Implement stop */}}
-                  className="w-8 h-8 rounded-lg bg-claude-text-secondary/20 hover:bg-claude-text-secondary/30 flex items-center justify-center transition-colors"
-                  aria-label="Stop generating"
-                >
-                  <StopCircle size={18} className="text-claude-text" />
-                </button>
-              ) : (
-                <button
-                  onClick={handleSubmit}
-                  disabled={!input.trim()}
-                  className={cn(
-                    "w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-200",
-                    input.trim()
-                      ? "bg-claude-text text-claude-darker hover:bg-white"
-                      : "bg-claude-border/40 text-claude-text-secondary cursor-not-allowed"
-                  )}
-                  aria-label="Send message"
-                >
-                  <ArrowUp size={18} strokeWidth={2.5} />
-                </button>
-              )}
-            </div>
-          </div>
+          {/* Send/Stop Button */}
+          {isLoading || isStreaming ? (
+            <button
+              onClick={handleStop}
+              className="flex-shrink-0 p-2 rounded-lg bg-claude-light hover:bg-claude-border transition-colors"
+              title="Stop generation"
+            >
+              <Square size={18} className="text-claude-text" />
+            </button>
+          ) : (
+            <button
+              onClick={handleSubmit}
+              disabled={!canSend}
+              className={`
+                flex-shrink-0 p-2 rounded-lg transition-colors
+                ${
+                  canSend
+                    ? "bg-primary hover:bg-primary-hover text-white"
+                    : "bg-claude-light text-claude-text-secondary cursor-not-allowed"
+                }
+              `}
+              title="Send message"
+            >
+              <ArrowUp size={18} />
+            </button>
+          )}
+        </div>
 
-          {/* Helper Text */}
-          <div className="mt-3 text-xs text-center text-claude-text-secondary/80">
-            NEOS can make mistakes. Consider checking important information.
-          </div>
+        {/* Helper Text */}
+        <div className="mt-2 text-xs text-claude-text-secondary text-center">
+          NEOS can make mistakes. Consider checking important information.
+          {settings.stream && (
+            <span className="ml-2 text-green-400">● Streaming enabled</span>
+          )}
         </div>
       </div>
     </div>

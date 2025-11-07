@@ -26,7 +26,7 @@ Claude-inspired web interface for NEOS (Intelligent Search and Analysis Agent Wo
 ### Prerequisites
 
 - Node.js 18+ and npm/yarn/pnpm
-- NEOS backend running on http://localhost:8000 (see main README)
+- NEOS backend running on http://localhost:8518 (see main README)
 
 ### Installation
 
@@ -49,7 +49,7 @@ cp .env.local.template .env.local
 3. Update `.env.local` if your backend is running on a different URL:
 
 ```env
-BACKEND_URL=http://localhost:8000
+BACKEND_URL=http://localhost:8518
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 

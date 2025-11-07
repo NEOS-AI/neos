@@ -1,22 +1,21 @@
 "use client";
 
-import { useEffect, useCallback, useState } from "react";
-import { useChatStore } from "@/lib/stores/chat-store";
-import ErrorBoundary from "@/components/ErrorBoundary";
-import { PageLoading } from "./LoadingStates";
+import { useEffect } from "react";
+import { useChatStore } from "@/lib/stores/chat-store-new";
 import Header from "./Header";
-import Sidebar from "./Sidebar";
-import MessageList from "./MessageList";
-import InputBox from "./InputBox";
+import Sidebar from "./SidebarNew";
+import MessageList from "./MessageListNew";
+import InputBox from "./InputBoxNew";
 import ChatModeSelector from "./ChatModeSelector";
 import SettingsPanel from "./SettingsPanel";
 
-function ChatInterfaceContent() {
-  const { loadConversations, createConversation } = useChatStore();
-  const [isInitializing, setIsInitializing] = useState(true);
+export default function ChatInterface() {
+  const { currentConversation, loadConversations, createConversation } =
+    useChatStore();
 
-  const initialize = useCallback(async () => {
-    try {
+  useEffect(() => {
+    // Initialize: load conversations and create one if none exist
+    const initialize = async () => {
       await loadConversations();
 
       // Create initial conversation if none exist
@@ -24,20 +23,10 @@ function ChatInterfaceContent() {
       if (conversations.length === 0) {
         await createConversation();
       }
-    } catch (error) {
-      console.error("Failed to initialize chat:", error);
-    } finally {
-      setIsInitializing(false);
-    }
-  }, [loadConversations, createConversation]);
+    };
 
-  useEffect(() => {
     initialize();
-  }, [initialize]);
-
-  if (isInitializing) {
-    return <PageLoading />;
-  }
+  }, []);
 
   return (
     <div className="flex h-screen bg-claude-darker">
@@ -66,13 +55,5 @@ function ChatInterfaceContent() {
         <InputBox />
       </div>
     </div>
-  );
-}
-
-export default function ChatInterface() {
-  return (
-    <ErrorBoundary>
-      <ChatInterfaceContent />
-    </ErrorBoundary>
   );
 }
