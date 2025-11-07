@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.9.0 (2025-11-07)
+- [x] Implement the web UI (alpha version)
+- [x] Add chat API with message history support (beta release)
+
 ## v0.8.1 (2025-11-03)
 - [x] Refactor API handlers
   - [x] Move route definitions to dedicated handler modules
