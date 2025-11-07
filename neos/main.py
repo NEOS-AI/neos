@@ -20,6 +20,9 @@ from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.workflow.graph import multi_agent_workflow
 
 
+__VERSION__ = "0.9.0"
+
+
 # 로깅 설정
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
@@ -87,7 +90,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Multi-Agent AI System",
     description="""**멀티 에이전트 AI 기반 지능형 검색 및 분석 시스템**""",
-    version="0.8.1",
+    version=__VERSION__,
     lifespan=lifespan,
     docs_url="/docs" if IS_DEBUG else None,
     redoc_url="/redoc" if IS_DEBUG else None
@@ -183,7 +186,7 @@ async def root():
     """Root Endpoint - System Information"""
     return {
         "name": "Multi-Agent AI System",
-        "version": "1.0.0", 
+        "version": __VERSION__,
         "description": "LangGraph, CrewAI, FastAPI 기반 멀티 에이전트 AI 시스템",
         "status": "running",
         "endpoints": {
