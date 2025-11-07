@@ -136,7 +136,7 @@ class TestVisionRefactoring:
         from neos.workflow.pipelines.vision import ClaudeVision
 
         model = ClaudeVision()
-        assert model.model == "claude-3-5-sonnet-20241022"
+        assert model.model == "claude-sonnet-4-5-20250929"
 
 
 class TestVisionModuleStructure:

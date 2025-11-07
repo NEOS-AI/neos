@@ -18,8 +18,8 @@ class ClaudeVision(VisionModel):
 
     def __init__(self, api_key: Optional[str] = None):
         super().__init__(api_key or settings.ANTHROPIC_API_KEY)
-        # Claude 3.5 Sonnet - 가장 최신이며 Vision을 지원하는 모델
-        self.model = "claude-3-5-sonnet-20241022"
+        # Claude 4.5 Sonnet - 가장 최신이며 Vision을 지원하는 모델
+        self.model = "claude-sonnet-4-5-20250929"
 
     async def analyze_image(
         self,

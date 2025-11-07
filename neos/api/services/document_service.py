@@ -8,7 +8,7 @@ import logging
 from neos.database.connection import db_manager
 from neos.database.models import Document, DocumentChunk, KnowledgeGraph
 from neos.pipelines.document.document_processor import DocumentProcessor
-from neos.utils.embeddings import EmbeddingService
+from neos.utils.embeddings import embedding_manager
 
 logger = logging.getLogger(__name__)
 
@@ -198,8 +198,7 @@ class DocumentService:
             검색 결과 리스트
         """
         # 쿼리 임베딩 생성
-        embedding_service = EmbeddingService()
-        query_embedding = await embedding_service.embed(query)
+        query_embedding = await embedding_manager.get_embedding(query)
 
         # 벡터 유사도 검색 쿼리
         similarity_query = text(

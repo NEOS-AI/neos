@@ -33,7 +33,7 @@ class TestVisionModels:
     async def test_claude_vision_initialization(self):
         """Claude Vision 초기화 테스트"""
         vision = ClaudeVision(api_key="test_key")
-        assert vision.model == "claude-3-5-sonnet-20241022"
+        assert vision.model == "claude-sonnet-4-5-20250929"
         assert vision.api_key == "test_key"
         assert vision.is_available() is True
 

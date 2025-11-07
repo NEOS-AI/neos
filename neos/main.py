@@ -15,6 +15,8 @@ from neos.api.handlers.query_handlers import router
 from neos.api.handlers.analytics_handlers import router as web_search_analytics_router
 from neos.api.handlers.document_handlers import router as document_router
 from neos.api.handlers.multimodal_handlers import router as multimodal_router
+from neos.api.handlers.chat_handlers import router as chat_router
+from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.workflow.graph import multi_agent_workflow
 
 
@@ -171,12 +173,14 @@ app.include_router(router, prefix=settings.API_V1_PREFIX, tags=["Multi-Agent AI"
 app.include_router(web_search_analytics_router, prefix=f"{settings.API_V1_PREFIX}/analytics", tags=["Web Search Analytics"])
 app.include_router(document_router, prefix=f"{settings.API_V1_PREFIX}/documents", tags=["Document Management"])
 app.include_router(multimodal_router, prefix=f"{settings.API_V1_PREFIX}/multimodal", tags=["Multimodal Processing"])
+app.include_router(chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Chat & Conversations"])
+app.include_router(similarity_chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Similarity-based Chat"])
 
 
-# 루트 엔드포인트
+# Root Endpoint
 @app.get("/")
 async def root():
-    """루트 엔드포인트 - 시스템 정보"""
+    """Root Endpoint - System Information"""
     return {
         "name": "Multi-Agent AI System",
         "version": "1.0.0", 
@@ -189,7 +193,18 @@ async def root():
             "multimodal_query": f"{settings.API_V1_PREFIX}/multimodal/query",
             "image_analysis": f"{settings.API_V1_PREFIX}/multimodal/image/analyze",
             "trending": f"{settings.API_V1_PREFIX}/trending",
-            "websocket": f"{settings.API_V1_PREFIX}/ws/{{session_id}}"
+            "websocket": f"{settings.API_V1_PREFIX}/ws/{{session_id}}",
+            "chat": {
+                "conversations": f"{settings.API_V1_PREFIX}/chat/conversations",
+                "messages": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages",
+                "stream": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/stream",
+                "websocket": f"{settings.API_V1_PREFIX}/chat/ws/{{conversation_id}}",
+                "similarity": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity",
+                "similarity_stream": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/stream",
+                "similarity_cross_conversation": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/cross-conversation",
+                "similarity_high_confidence": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/high-confidence",
+                "similarity_config": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/similarity/config"
+            }
         },
         "features": [
             "🔍 지능형 멀티모달 검색",

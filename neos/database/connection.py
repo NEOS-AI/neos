@@ -97,7 +97,11 @@ class DatabaseManager:
 
             async with await self.get_session() as session:
                 result = await session.execute(text(converted_query), param_dict)
-                return result.fetchone()
+                # Commit the transaction if the query modifies data (e.g., calling stored procedures)
+                if query.strip().upper().startswith('SELECT') and 'create_' in query.lower():
+                    await session.commit()
+                row = result.fetchone()
+                return row
         except Exception as e:
             print(f"[ERROR] Database fetch_one error: {e}")
             raise
