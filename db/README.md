@@ -60,4 +60,7 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/add_workflow_tables.
 psql -U postgres -d neos --port 5432 --host localhost -f db/chat_system.sql
 psql -U postgres -d neos --port 5432 --host localhost -f db/chat_similarity_search.sql
 psql -U postgres -d neos --port 5432 --host localhost -f db/chat_cost_tracking.sql
+
+# add anonymous user for web interface
+psql -U postgres -d neos --port 5432 --host localhost -f db/add_anonymous_user.sql
 ```

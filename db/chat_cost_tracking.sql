@@ -387,15 +387,14 @@ INSERT INTO llm_model_pricing (
     -- OpenAI GPT-3.5
     ('openai', 'gpt-3.5-turbo', 0.50, 1.50, NULL, NULL, 16385, 4096, TRUE, FALSE),
 
-    -- Anthropic Claude 3.5 Sonnet
-    ('anthropic', 'claude-3-5-sonnet-20241022', 3.00, 15.00, 3.75, 0.30, 200000, 8192, TRUE, TRUE),
-    ('anthropic', 'claude-3-5-sonnet-20240620', 3.00, 15.00, 3.75, 0.30, 200000, 8192, TRUE, TRUE),
+    -- Anthropic Claude 4.5 Sonnet
+    ('anthropic', 'claude-sonnet-4-5-20250929', 3.00, 15.00, 3.75, 0.30, 200000, 8192, TRUE, TRUE),
 
-    -- Anthropic Claude 3 Opus
-    ('anthropic', 'claude-3-opus-20240229', 15.00, 75.00, 18.75, 1.50, 200000, 4096, TRUE, TRUE),
+    -- Anthropic Claude 4.1 Opus
+    ('anthropic', 'claude-opus-4-1-20250805', 15.00, 75.00, 18.75, 1.50, 200000, 4096, TRUE, TRUE),
 
-    -- Anthropic Claude 3 Haiku
-    ('anthropic', 'claude-3-haiku-20240307', 0.25, 1.25, 0.30, 0.03, 200000, 4096, TRUE, TRUE)
+    -- Anthropic Claude 4.5 Haiku
+    ('anthropic', 'claude-haiku-4-5-20251001', 0.25, 1.25, 0.30, 0.03, 200000, 4096, TRUE, TRUE)
 ON CONFLICT (provider, model_name, effective_from) DO NOTHING;
 
 -- ============================================================================
