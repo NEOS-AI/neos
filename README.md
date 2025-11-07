@@ -94,10 +94,10 @@ uvicorn neos.main:app --reload --host 0.0.0.0 --port 8000
 
 ```bash
 # Health check
-curl http://localhost:8000/api/v1/health
+curl http://localhost:8518/api/v1/health
 
 # Query test
-curl -X POST http://localhost:8000/api/v1/query \
+curl -X POST http://localhost:8518/api/v1/query \
   -H "Content-Type: application/json" \
   -d '{"query": "Analyze AI trends in 2024"}'
 ```
@@ -126,7 +126,7 @@ python -m neos.cli workflow deep-research "AI semiconductor market outlook"
 import requests
 
 response = requests.post(
-    "http://localhost:8000/api/v1/query",
+    "http://localhost:8518/api/v1/query",
     json={"query": "Compare ChatGPT and Claude"}
 )
 
@@ -189,8 +189,8 @@ For more details, see [System Architecture](./docs/ARCHITECTURE.md).
 
 After running the application, access interactive API documentation at:
 
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
+- **Swagger UI**: http://localhost:8518/docs
+- **ReDoc**: http://localhost:8518/redoc
 
 ## 🌟 Highlights
 
