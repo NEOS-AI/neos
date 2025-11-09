@@ -2,23 +2,16 @@
 
 import { useChatStore } from "@/lib/stores/chat-store";
 import { MessageSquare, Plus, Trash2, Archive } from "lucide-react";
-import { useEffect } from "react";
 
 export default function Sidebar() {
   const {
     conversations,
     currentConversationId,
-    loadConversations,
     createConversation,
     setCurrentConversation,
     deleteConversation,
     archiveConversation,
   } = useChatStore();
-
-  // Load conversations on mount
-  useEffect(() => {
-    loadConversations();
-  }, []);
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);

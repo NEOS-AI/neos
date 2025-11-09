@@ -19,10 +19,27 @@ function ChatInterfaceContent() {
     try {
       await loadConversations();
 
+      const { conversations, currentConversationId, setCurrentConversation } = useChatStore.getState();
+
       // Create initial conversation if none exist
-      const { conversations } = useChatStore.getState();
       if (conversations.length === 0) {
         await createConversation();
+      } else {
+        // If there are conversations but no current one is selected (or invalid),
+        // select the first one to ensure the UI shows messages
+        const currentExists = conversations.some(c => c.conversation_id === currentConversationId);
+        if (!currentConversationId || !currentExists) {
+          console.log("[ChatInterface] No valid conversation selected, selecting first one");
+          setCurrentConversation(conversations[0].conversation_id);
+        } else {
+          console.log("[ChatInterface] Current conversation is valid:", currentConversationId);
+          // Load messages for the current conversation if not loaded
+          const currentConv = conversations.find(c => c.conversation_id === currentConversationId);
+          if (currentConv && (!currentConv.messages || currentConv.messages.length === 0)) {
+            const { loadMessages } = useChatStore.getState();
+            await loadMessages(currentConversationId);
+          }
+        }
       }
     } catch (error) {
       console.error("Failed to initialize chat:", error);

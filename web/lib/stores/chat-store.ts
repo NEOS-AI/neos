@@ -654,6 +654,22 @@ export const useChatStore = create<ChatStore>()(
         currentUserId: state.currentUserId,
         settings: state.settings,
       }),
+      merge: (persistedState, currentState) => {
+        // Ensure all loaded conversations have messages initialized as empty arrays
+        const merged = {
+          ...currentState,
+          ...(persistedState as Partial<ChatStore>),
+        };
+
+        if (merged.conversations) {
+          merged.conversations = merged.conversations.map((c) => ({
+            ...c,
+            messages: c.messages || [], // Initialize messages as empty array if undefined
+          }));
+        }
+
+        return merged;
+      },
     }
   )
 );
