@@ -116,7 +116,7 @@ export default function Sidebar() {
       {/* Footer */}
       <div className="p-4 border-t border-claude-border">
         <div className="text-xs text-claude-text-secondary text-center">
-          NEOS v0.8.1
+          NEOS
         </div>
         <div className="text-xs text-claude-text-secondary text-center mt-1">
           {conversations.length} conversations

@@ -85,7 +85,7 @@ export default function Sidebar() {
             N
           </div>
           <div className="text-xs text-claude-text-secondary">
-            NEOS v0.8.1
+            NEOS
           </div>
         </div>
       </div>
