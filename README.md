@@ -87,7 +87,7 @@ For more details, see [db/README.md](./db/README.md).
 python3 -m neos.main
 
 # Or run uvicorn directly
-uvicorn neos.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn neos.main:app --reload --host 0.0.0.0 --port 8518
 ```
 
 ### 5. Test API
