@@ -12,7 +12,7 @@ import ChatModeSelector from "./ChatModeSelector";
 import SettingsPanel from "./SettingsPanel";
 
 function ChatInterfaceContent() {
-  const { loadConversations, createConversation } = useChatStore();
+  const { loadConversations } = useChatStore();
   const [isInitializing, setIsInitializing] = useState(true);
 
   const initialize = useCallback(async () => {
@@ -21,10 +21,8 @@ function ChatInterfaceContent() {
 
       const { conversations, currentConversationId, setCurrentConversation } = useChatStore.getState();
 
-      // Create initial conversation if none exist
-      if (conversations.length === 0) {
-        await createConversation();
-      } else {
+      // Don't auto-create conversations - let user start naturally by sending a message
+      if (conversations.length > 0) {
         // If there are conversations but no current one is selected (or invalid),
         // select the first one to ensure the UI shows messages
         const currentExists = conversations.some(c => c.conversation_id === currentConversationId);
@@ -46,7 +44,7 @@ function ChatInterfaceContent() {
     } finally {
       setIsInitializing(false);
     }
-  }, [loadConversations, createConversation]);
+  }, [loadConversations]);
 
   useEffect(() => {
     initialize();

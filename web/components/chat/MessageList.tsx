@@ -29,7 +29,19 @@ const examplePrompts = [
 ];
 
 export default function MessageList() {
-  const { messages, isLoading, isStreaming, sendMessage, settings, currentConversation } = useChatStore();
+  // Use selector to properly subscribe to store changes
+  const sendMessage = useChatStore((state) => state.sendMessage);
+  const settings = useChatStore((state) => state.settings);
+
+  // Compute currentConversation and messages directly from state for proper reactivity
+  const currentConversation = useChatStore((state) => {
+    const current = state.conversations.find(
+      (c) => c.conversation_id === state.currentConversationId
+    );
+    return current || null;
+  });
+
+  const messages = currentConversation?.messages || [];
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Debug logging
@@ -38,10 +50,8 @@ export default function MessageList() {
       messagesCount: messages.length,
       conversationId: currentConversation?.conversation_id,
       hasConversation: !!currentConversation,
-      isLoading,
-      isStreaming,
     });
-  }, [messages, currentConversation, isLoading, isStreaming]);
+  }, [messages, currentConversation]);
 
   useEffect(() => {
     console.log("[MessageList] Messages array changed:", {
@@ -65,8 +75,8 @@ export default function MessageList() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      {messages.length === 0 ? (
-        /* Empty State */
+      {!currentConversation || messages.length === 0 ? (
+        /* Empty State - No conversation or no messages */
         <div className="flex items-center justify-center h-full p-8">
           <div className="max-w-2xl text-center space-y-8">
             {/* Logo and Welcome */}
@@ -145,33 +155,6 @@ export default function MessageList() {
           {messages.map((message) => (
             <MessageBubble key={message.message_id} message={message} />
           ))}
-
-          {/* Loading Indicator */}
-          {(isLoading || isStreaming) && (
-            <div className="max-w-3xl mx-auto px-6 py-6">
-              <div className="flex gap-4 items-start">
-                <div className="w-7 h-7 rounded-md bg-gradient-to-br from-orange-400 to-amber-600 flex items-center justify-center text-white font-bold text-sm">
-                  N
-                </div>
-                <div className="flex-1 pt-0.5">
-                  <div className="text-sm font-semibold mb-2 text-claude-text">
-                    NEOS
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <div className="w-2 h-2 bg-claude-text-secondary rounded-full animate-pulse" />
-                    <div
-                      className="w-2 h-2 bg-claude-text-secondary rounded-full animate-pulse"
-                      style={{ animationDelay: "0.2s" }}
-                    />
-                    <div
-                      className="w-2 h-2 bg-claude-text-secondary rounded-full animate-pulse"
-                      style={{ animationDelay: "0.4s" }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
           {/* Scroll anchor */}
           <div ref={messagesEndRef} />

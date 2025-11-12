@@ -5,7 +5,13 @@ import { Menu, Sparkles } from "lucide-react";
 import { useState } from "react";
 
 export default function Header() {
-  const { currentConversation } = useChatStore();
+  // Use selector to properly subscribe to store changes
+  const currentConversation = useChatStore((state) => {
+    const current = state.conversations.find(
+      (c) => c.conversation_id === state.currentConversationId
+    );
+    return current || null;
+  });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   return (

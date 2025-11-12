@@ -113,8 +113,13 @@ export const useChatStore = create<ChatStore>()(
             include_archived: false,
           });
 
+          // Filter out deleted conversations (extra safety check)
+          const activeConversations = response.conversations
+            .filter((c) => c.status !== "deleted")
+            .map(toConversation);
+
           set({
-            conversations: response.conversations.map(toConversation),
+            conversations: activeConversations,
             isLoading: false,
           });
         } catch (error) {
@@ -253,25 +258,83 @@ export const useChatStore = create<ChatStore>()(
       },
 
       sendMessage: async (content: string) => {
-        const { currentConversationId, settings } = get();
+        const { settings } = get();
+        let conversationId = get().currentConversationId;
 
         // Create conversation if none exists
-        if (!currentConversationId) {
-          console.log("[Store] No conversation exists, creating one...");
-          await get().createConversation();
-          // Wait for conversation creation
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-
-        const conversationId = get().currentConversationId;
         if (!conversationId) {
-          console.error("[Store] Failed to create conversation");
-          set({ error: "No active conversation" });
-          return;
+          console.log("[Store] No conversation exists, creating one...");
+
+          // Check again after acquiring the state to prevent race conditions
+          const currentState = get();
+          if (!currentState.currentConversationId) {
+            await get().createConversation();
+            // Wait for conversation creation
+            await new Promise((resolve) => setTimeout(resolve, 100));
+
+            // Get the newly created conversation ID
+            conversationId = get().currentConversationId;
+
+            if (!conversationId) {
+              console.error("[Store] Failed to create conversation");
+              set({ error: "No active conversation" });
+              return;
+            }
+          } else {
+            // Another call already created a conversation
+            conversationId = currentState.currentConversationId;
+          }
         }
 
         console.log("[Store] Sending message to conversation:", conversationId);
-        set({ isLoading: true, error: null });
+
+        // Generate temporary IDs for optimistic update
+        const tempUserMessageId = `temp_user_${Date.now()}`;
+        const tempAssistantMessageId = `temp_assistant_${Date.now()}`;
+
+        // Create optimistic user message
+        const optimisticUserMessage: Message = {
+          message_id: tempUserMessageId,
+          conversation_id: conversationId,
+          role: "user",
+          content,
+          sequence_number: get().messages.length,
+          status: "completed",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        // Create placeholder assistant message (loading state)
+        const placeholderAssistantMessage: Message = {
+          message_id: tempAssistantMessageId,
+          conversation_id: conversationId,
+          role: "assistant",
+          content: "",
+          sequence_number: get().messages.length + 1,
+          status: "pending",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        // Add optimistic messages immediately
+        set((state) => ({
+          conversations: state.conversations.map((c) =>
+            c.conversation_id === conversationId
+              ? {
+                  ...c,
+                  messages: [
+                    ...(c.messages || []),
+                    optimisticUserMessage,
+                    placeholderAssistantMessage,
+                  ],
+                  // Update title from first message
+                  title: c.message_count === 0 ? content.slice(0, 50) : c.title,
+                }
+              : c
+          ),
+          isLoading: true,
+          error: null,
+        }));
 
         try {
           let response;
@@ -315,71 +378,71 @@ export const useChatStore = create<ChatStore>()(
           const userMessage = toMessage(response.user_message);
           const assistantMessage = toMessage(response.assistant_message);
 
-          console.log("[Store] Adding messages to store...");
+          console.log("[Store] Replacing optimistic messages with real ones...");
 
-          set((state) => {
-            const targetConversation = state.conversations.find(c => c.conversation_id === conversationId);
-
-            console.log("[Store] ===== BEFORE UPDATE =====");
-            console.log("[Store] Target conversation exists:", !!targetConversation);
-            console.log("[Store] Current messages count:", targetConversation?.messages?.length || 0);
-            console.log("[Store] All conversation IDs:", state.conversations.map(c => c.conversation_id));
-
-            const updatedConversations = state.conversations.map((c) =>
+          // Replace optimistic messages with real ones from server
+          set((state) => ({
+            conversations: state.conversations.map((c) =>
               c.conversation_id === conversationId
                 ? {
                     ...c,
-                    messages: [
-                      ...(c.messages || []),
-                      userMessage,
-                      assistantMessage,
-                    ],
+                    messages: (c.messages || []).map((m) => {
+                      if (m.message_id === tempUserMessageId) return userMessage;
+                      if (m.message_id === tempAssistantMessageId) return assistantMessage;
+                      return m;
+                    }),
                     message_count: (c.message_count || 0) + 2,
-                    // Update title from first message
-                    title:
-                      c.message_count === 0
-                        ? content.slice(0, 50)
-                        : c.title,
                   }
                 : c
-            );
-
-            const updatedTarget = updatedConversations.find(c => c.conversation_id === conversationId);
-
-            console.log("[Store] ===== AFTER UPDATE =====");
-            console.log("[Store] Updated target exists:", !!updatedTarget);
-            console.log("[Store] New messages count:", updatedTarget?.messages?.length || 0);
-            console.log("[Store] Message IDs:", updatedTarget?.messages?.map(m => m.message_id.slice(0, 8)) || []);
-            console.log("[Store] Full updated conversation:", updatedTarget);
-
-            return {
-              conversations: updatedConversations,
-              isLoading: false,
-            };
-          });
+            ),
+            isLoading: false,
+          }));
 
           console.log("[Store] Message sent successfully");
         } catch (error) {
           console.error("[Store] Failed to send message:", error);
-          const errorMessage =
-            error instanceof Error ? error.message : "Failed to send message";
-          set({ error: errorMessage, isLoading: false });
+
+          // Remove optimistic messages on error
+          set((state) => ({
+            conversations: state.conversations.map((c) =>
+              c.conversation_id === conversationId
+                ? {
+                    ...c,
+                    messages: (c.messages || []).filter(
+                      (m) => m.message_id !== tempUserMessageId && m.message_id !== tempAssistantMessageId
+                    ),
+                  }
+                : c
+            ),
+            error: error instanceof Error ? error.message : "Failed to send message",
+            isLoading: false,
+          }));
         }
       },
 
       sendStreamingMessage: async (content: string) => {
-        const { currentConversationId, settings } = get();
+        const { settings } = get();
+        let conversationId = get().currentConversationId;
 
         // Create conversation if none exists
-        if (!currentConversationId) {
-          await get().createConversation();
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-
-        const conversationId = get().currentConversationId;
         if (!conversationId) {
-          set({ error: "No active conversation" });
-          return;
+          console.log("[Store] No conversation exists, creating one for streaming...");
+
+          // Check again to prevent race conditions
+          const currentState = get();
+          if (!currentState.currentConversationId) {
+            await get().createConversation();
+            await new Promise((resolve) => setTimeout(resolve, 100));
+
+            conversationId = get().currentConversationId;
+
+            if (!conversationId) {
+              set({ error: "No active conversation" });
+              return;
+            }
+          } else {
+            conversationId = currentState.currentConversationId;
+          }
         }
 
         set({ isStreaming: true, isLoading: true, error: null });
@@ -646,29 +709,37 @@ export const useChatStore = create<ChatStore>()(
     {
       name: "neos-chat-storage",
       partialize: (state) => ({
-        conversations: state.conversations.map((c) => ({
-          ...c,
-          messages: undefined, // Don't persist messages
-        })),
+        conversations: state.conversations
+          // Filter out deleted and archived conversations from persistence
+          .filter((c) => c.status !== "deleted" && c.status !== "archived")
+          .map((c) => ({
+            ...c,
+            messages: undefined, // Don't persist messages
+          })),
         currentConversationId: state.currentConversationId,
         currentUserId: state.currentUserId,
         settings: state.settings,
       }),
       merge: (persistedState, currentState) => {
+        const persisted = persistedState as Partial<ChatStore>;
+
         // Ensure all loaded conversations have messages initialized as empty arrays
-        const merged = {
-          ...currentState,
-          ...(persistedState as Partial<ChatStore>),
-        };
-
-        if (merged.conversations) {
-          merged.conversations = merged.conversations.map((c) => ({
+        const loadedConversations = (persisted.conversations || [])
+          // Filter out deleted/archived conversations on load
+          .filter((c) => c.status !== "deleted" && c.status !== "archived")
+          .map((c) => ({
             ...c,
-            messages: c.messages || [], // Initialize messages as empty array if undefined
+            messages: [], // Always start with empty messages (will be loaded from server)
           }));
-        }
 
-        return merged;
+        return {
+          ...currentState,
+          // Only merge data fields, preserve getters and functions from currentState
+          conversations: loadedConversations,
+          currentConversationId: persisted.currentConversationId || null,
+          currentUserId: persisted.currentUserId || DEFAULT_USER_ID,
+          settings: persisted.settings || DEFAULT_SETTINGS,
+        };
       },
     }
   )

@@ -90,6 +90,12 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                   <span>Streaming</span>
                 </div>
               )}
+              {message.status === "pending" && (
+                <div className="flex items-center gap-1 px-2 py-0.5 bg-amber-500/20 text-amber-400 rounded text-xs">
+                  <span className="animate-pulse">●</span>
+                  <span>Thinking</span>
+                </div>
+              )}
             </div>
 
             {/* Content */}
@@ -97,6 +103,19 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
               {isUser ? (
                 <div className="whitespace-pre-wrap text-[15px] leading-relaxed">
                   {message.content}
+                </div>
+              ) : message.status === "pending" && !message.content ? (
+                // Show loading dots for pending assistant messages
+                <div className="flex items-center gap-1 py-2">
+                  <div className="w-2 h-2 bg-claude-text-secondary rounded-full animate-pulse" />
+                  <div
+                    className="w-2 h-2 bg-claude-text-secondary rounded-full animate-pulse"
+                    style={{ animationDelay: "0.2s" }}
+                  />
+                  <div
+                    className="w-2 h-2 bg-claude-text-secondary rounded-full animate-pulse"
+                    style={{ animationDelay: "0.4s" }}
+                  />
                 </div>
               ) : (
                 <ReactMarkdown
