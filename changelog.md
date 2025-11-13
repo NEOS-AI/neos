@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.10.0 (2025-11-14)
+- [x] Make the Deep Research API work with the web UI
+  - [x] Allow user to call the hyper deep research workflow from the web interface
+  - [x] Display progress and results in the web UI
+  - [x] Use the response streaming feature for real-time updates
+
 ## v0.9.0 (2025-11-07)
 - [x] Implement the web UI (alpha version)
 - [x] Add chat API with message history support (beta release)
