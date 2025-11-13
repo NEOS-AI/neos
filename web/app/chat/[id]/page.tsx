@@ -69,14 +69,14 @@ function ChatPageContent() {
   }
 
   return (
-    <div className="flex h-screen bg-claude-darker">
+    <div className="flex h-screen bg-bg-canvas">
       {/* Sidebar */}
       <Sidebar />
 
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header with Mode Selector and Settings */}
-        <div className="border-b border-claude-border bg-claude-dark flex-shrink-0">
+        <div className="border-b border-line-soft bg-bg-surface flex-shrink-0">
           <div className="flex items-center justify-between px-6 py-3">
             <Header />
             <div className="flex items-center gap-3">
