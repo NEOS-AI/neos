@@ -182,6 +182,9 @@ export interface ChatStore {
   error: string | null;
   settings: ChatSettings;
 
+  // Deep research EventSource tracking
+  activeEventSource: EventSource | null;
+
   // Getters
   currentConversation: Conversation | null;
   messages: Message[];
@@ -208,4 +211,5 @@ export interface ChatStore {
 
   // Utility Actions
   clearError: () => void;
+  cleanupEventSource: () => void;
 }

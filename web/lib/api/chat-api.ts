@@ -469,6 +469,8 @@ class ChatAPI {
     research_status: string;
     message: string;
     stream_url: string;
+    user_message_id: string;
+    assistant_message_id: string;
   }> {
     const response = await fetch(`${this.baseUrl}/deep-research/start`, {
       method: "POST",

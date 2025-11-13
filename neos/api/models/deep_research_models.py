@@ -111,6 +111,8 @@ class StartDeepResearchResponse(BaseModel):
     research_status: ResearchStatus = Field(..., description="Initial status")
     message: str = Field(..., description="Response message")
     stream_url: Optional[str] = Field(None, description="SSE stream URL for progress updates")
+    user_message_id: str = Field(..., description="ID of the created user message")
+    assistant_message_id: str = Field(..., description="ID of the created assistant message")
 
 
 # ============================================================================

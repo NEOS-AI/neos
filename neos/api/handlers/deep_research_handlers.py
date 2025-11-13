@@ -189,7 +189,8 @@ async def deep_research_stream_generator(
     session_id: str,
     research_topic: str,
     conversation_id: str,
-    initial_message_id: str
+    initial_message_id: str,
+    assistant_message_id: str
 ) -> AsyncGenerator[str, None]:
     """
     Generator for SSE streaming of deep research progress
@@ -475,26 +476,44 @@ async def deep_research_stream_generator(
             quality_score=0.85
         )
 
-        # Save assistant message with the report
-        report_summary = f"# Deep Research Report: {research_topic}\n\n"
-        report_summary += f"Research completed successfully with {completed_sections} sections, "
-        report_summary += f"{total_sources} sources, and {total_queries} queries executed.\n\n"
-        report_summary += f"Processing time: {processing_time_ms / 1000:.2f} seconds\n\n"
-        report_summary += "The full report is available in the deep research system."
+        # Update assistant message with final content
+        # Note: Frontend will receive the final content via SSE stream,
+        # but we also update the DB for persistence
+        final_content_summary = f"✅ Deep Research Complete: {research_topic}\n\n"
+        final_content_summary += f"**Results:**\n"
+        final_content_summary += f"- Sections: {completed_sections}\n"
+        final_content_summary += f"- Sources: {total_sources}\n"
+        final_content_summary += f"- Queries: {total_queries}\n"
+        final_content_summary += f"- Processing time: {processing_time_ms / 1000:.2f}s\n\n"
+        final_content_summary += "_Full report available in deep research system_"
 
-        await ChatService.add_message(
-            conversation_id=conversation_id,
-            role="assistant",
-            content=report_summary,
-            model_name="hyper-deep-research",
-            metadata={
+        try:
+            # Update message content and metadata in database
+            update_message_query = """
+                UPDATE messages
+                SET
+                    content = $1,
+                    status = 'completed',
+                    metadata = metadata || $2::jsonb,
+                    completed_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE message_id = $3
+            """
+            metadata_update = json.dumps({
                 "deep_research_report_id": report_id,
+                "research_status": "completed",
                 "total_sections": completed_sections,
                 "total_sources": total_sources,
                 "total_queries": total_queries,
-                "processing_time_ms": processing_time_ms
-            }
-        )
+                "processing_time_ms": processing_time_ms,
+                "quality_score": 0.85,
+                "is_placeholder": False
+            })
+            await db_manager.execute(update_message_query, final_content_summary, metadata_update, assistant_message_id)
+            logger.info(f"Updated assistant message {assistant_message_id} with final content")
+        except Exception as e:
+            logger.error(f"Failed to update assistant message: {e}")
+            # Non-critical error, continue
 
         # Send completed event
         completed_event = DeepResearchEvent(
@@ -544,25 +563,67 @@ async def start_deep_research(request: StartDeepResearchRequest):
 
     This endpoint initiates a deep research process and returns a report ID
     along with a stream URL for real-time progress updates.
+
+    Also creates the user message and placeholder assistant message in the database.
     """
     try:
-        # Generate report ID
+        # Generate IDs
         report_id = f"hyper_report_{uuid.uuid4().hex}"
+        user_message_id = f"msg_{uuid.uuid4().hex}"
+        assistant_message_id = f"msg_{uuid.uuid4().hex}"
 
         # Validate conversation exists
         conversation = await ChatService.get_conversation(request.conversation_id)
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
+        # Save user message to database
+        try:
+            await ChatService.add_message(
+                conversation_id=request.conversation_id,
+                role="user",
+                content=request.research_topic,
+                message_id=user_message_id,
+                metadata={"deep_research_initiated": True}
+            )
+            logger.info(f"Created user message: {user_message_id}")
+        except Exception as e:
+            logger.error(f"Failed to save user message: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to save user message: {str(e)}")
+
+        # Save placeholder assistant message
+        try:
+            await ChatService.add_message(
+                conversation_id=request.conversation_id,
+                role="assistant",
+                content="🔬 Initiating deep research...",
+                message_id=assistant_message_id,
+                model_name="hyper-deep-research",
+                metadata={
+                    "deep_research_report_id": report_id,
+                    "research_status": "pending",
+                    "is_placeholder": True
+                }
+            )
+            logger.info(f"Created assistant placeholder message: {assistant_message_id}")
+        except Exception as e:
+            logger.error(f"Failed to save assistant message: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to save assistant message: {str(e)}")
+
         # Create report in database
-        await save_deep_research_report(
-            report_id=report_id,
-            user_id=request.user_id,
-            session_id=request.session_id or f"session_{uuid.uuid4().hex[:8]}",
-            research_topic=request.research_topic,
-            conversation_id=request.conversation_id,
-            initial_message_id=request.initial_message_id
-        )
+        try:
+            await save_deep_research_report(
+                report_id=report_id,
+                user_id=request.user_id,
+                session_id=request.session_id or f"session_{uuid.uuid4().hex[:8]}",
+                research_topic=request.research_topic,
+                conversation_id=request.conversation_id,
+                initial_message_id=user_message_id
+            )
+            logger.info(f"Created deep research report: {report_id}")
+        except Exception as e:
+            logger.error(f"Failed to create research report: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to create research report: {str(e)}")
 
         logger.info(f"Started deep research: {report_id} for topic: {request.research_topic}")
 
@@ -572,13 +633,15 @@ async def start_deep_research(request: StartDeepResearchRequest):
             research_topic=request.research_topic,
             research_status=ResearchStatus.PENDING,
             message="Deep research initiated successfully",
-            stream_url=f"/api/v1/deep-research/{report_id}/stream"
+            stream_url=f"/api/v1/deep-research/{report_id}/stream",
+            user_message_id=user_message_id,
+            assistant_message_id=assistant_message_id
         )
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to start deep research: {e}")
+        logger.error(f"Failed to start deep research: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -595,6 +658,27 @@ async def stream_deep_research(report_id: str):
         if not report:
             raise HTTPException(status_code=404, detail="Research report not found")
 
+        # Find the assistant message associated with this report
+        # Query messages table for message with this report_id in metadata
+        find_assistant_message_query = """
+            SELECT message_id
+            FROM messages
+            WHERE conversation_id = $1
+              AND role = 'assistant'
+              AND metadata @> $2::jsonb
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
+        report_metadata = json.dumps({"deep_research_report_id": report_id})
+        result = await db_manager.fetch_one(find_assistant_message_query, report["conversation_id"], report_metadata)
+
+        if not result:
+            logger.error(f"Assistant message not found for report {report_id}")
+            raise HTTPException(status_code=500, detail="Assistant message not found for this research")
+
+        assistant_message_id = result[0]
+        logger.info(f"Found assistant message {assistant_message_id} for report {report_id}")
+
         # Create streaming response
         return StreamingResponse(
             deep_research_stream_generator(
@@ -603,7 +687,8 @@ async def stream_deep_research(report_id: str):
                 session_id=report["session_id"],
                 research_topic=report["research_topic"],
                 conversation_id=report["conversation_id"],
-                initial_message_id=report["initial_message_id"]
+                initial_message_id=report["initial_message_id"],
+                assistant_message_id=assistant_message_id
             ),
             media_type="text/event-stream",
             headers={
@@ -616,7 +701,7 @@ async def stream_deep_research(report_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to stream deep research: {e}")
+        logger.error(f"Failed to stream deep research: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -74,6 +74,7 @@ export const useChatStore = create<ChatStore>()(
       isStreaming: false,
       error: null,
       settings: DEFAULT_SETTINGS,
+      activeEventSource: null,
 
       // ======================================================================
       // Computed Getters
@@ -258,6 +259,9 @@ export const useChatStore = create<ChatStore>()(
       },
 
       sendMessage: async (content: string) => {
+        // Clean up any active EventSource before sending a new message
+        get().cleanupEventSource();
+
         const { settings } = get();
         let conversationId = get().currentConversationId;
 
@@ -343,35 +347,64 @@ export const useChatStore = create<ChatStore>()(
           switch (settings.mode) {
             case "deep_research":
               console.log("[Store] Starting deep research...");
-              // For deep research, we'll initiate the research and handle streaming separately
-              const deepResearchResponse = await chatAPI.startDeepResearch({
-                user_id: get().currentUserId,
-                conversation_id: conversationId,
-                initial_message_id: tempUserMessageId,
-                research_topic: content,
-                session_id: `session_${Date.now()}`,
-              });
 
-              // Update assistant message with status
+              // For deep research, backend creates both messages
+              // Remove optimistic messages first
               set((state) => ({
                 conversations: state.conversations.map((c) =>
                   c.conversation_id === conversationId
                     ? {
                         ...c,
-                        messages: (c.messages || []).map((m) =>
-                          m.message_id === tempAssistantMessageId
-                            ? {
-                                ...m,
-                                content: `🔬 Deep research initiated...\n\n**Topic:** ${content}\n\n**Status:** Analyzing and planning research...`,
-                                status: "streaming" as const,
-                                metadata: {
-                                  ...m.metadata,
-                                  deep_research_report_id: deepResearchResponse.report_id,
-                                  research_status: "in_progress",
-                                },
-                              }
-                            : m
+                        messages: (c.messages || []).filter(
+                          (m) => m.message_id !== tempUserMessageId && m.message_id !== tempAssistantMessageId
                         ),
+                      }
+                    : c
+                ),
+              }));
+
+              // Start deep research - backend will create messages
+              const deepResearchResponse = await chatAPI.startDeepResearch({
+                user_id: get().currentUserId,
+                conversation_id: conversationId,
+                initial_message_id: "", // Not used anymore, backend generates IDs
+                research_topic: content,
+                session_id: `session_${Date.now()}`,
+              });
+
+              // Add the real messages from backend
+              const realUserMessage: Message = {
+                message_id: deepResearchResponse.user_message_id,
+                conversation_id: conversationId,
+                role: "user",
+                content,
+                sequence_number: get().messages.length,
+                status: "completed",
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              };
+
+              const realAssistantMessage: Message = {
+                message_id: deepResearchResponse.assistant_message_id,
+                conversation_id: conversationId,
+                role: "assistant",
+                content: `🔬 Deep research initiated...\n\n**Topic:** ${content}\n\n**Status:** Analyzing and planning research...`,
+                sequence_number: get().messages.length + 1,
+                status: "streaming",
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+                metadata: {
+                  deep_research_report_id: deepResearchResponse.report_id,
+                  research_status: "in_progress",
+                },
+              };
+
+              set((state) => ({
+                conversations: state.conversations.map((c) =>
+                  c.conversation_id === conversationId
+                    ? {
+                        ...c,
+                        messages: [...(c.messages || []), realUserMessage, realAssistantMessage],
                       }
                     : c
                 ),
@@ -380,7 +413,11 @@ export const useChatStore = create<ChatStore>()(
 
               // Connect to SSE stream for updates
               const eventSource = chatAPI.connectDeepResearchStream(deepResearchResponse.report_id);
+              const assistantMsgId = deepResearchResponse.assistant_message_id;
               let streamContent = `🔬 **Deep Research Report: ${content}**\n\n`;
+
+              // Store EventSource reference for cleanup
+              set({ activeEventSource: eventSource });
 
               eventSource.onmessage = (event) => {
                 try {
@@ -414,14 +451,14 @@ export const useChatStore = create<ChatStore>()(
                       streamContent += `- Processing time: ${(data.data.processing_time_ms / 1000).toFixed(2)}s\n`;
                       eventSource.close();
 
-                      // Mark message as completed
+                      // Mark message as completed and clear EventSource
                       set((state) => ({
                         conversations: state.conversations.map((c) =>
                           c.conversation_id === conversationId
                             ? {
                                 ...c,
                                 messages: (c.messages || []).map((m) =>
-                                  m.message_id === tempAssistantMessageId
+                                  m.message_id === assistantMsgId
                                     ? {
                                         ...m,
                                         status: "completed" as const,
@@ -435,6 +472,7 @@ export const useChatStore = create<ChatStore>()(
                               }
                             : c
                         ),
+                        activeEventSource: null,
                       }));
                       return;
 
@@ -448,7 +486,7 @@ export const useChatStore = create<ChatStore>()(
                             ? {
                                 ...c,
                                 messages: (c.messages || []).map((m) =>
-                                  m.message_id === tempAssistantMessageId
+                                  m.message_id === assistantMsgId
                                     ? {
                                         ...m,
                                         status: "failed" as const,
@@ -462,6 +500,7 @@ export const useChatStore = create<ChatStore>()(
                               }
                             : c
                         ),
+                        activeEventSource: null,
                       }));
                       return;
                   }
@@ -473,7 +512,7 @@ export const useChatStore = create<ChatStore>()(
                         ? {
                             ...c,
                             messages: (c.messages || []).map((m) =>
-                              m.message_id === tempAssistantMessageId
+                              m.message_id === assistantMsgId
                                 ? { ...m, content: streamContent }
                                 : m
                             ),
@@ -496,7 +535,7 @@ export const useChatStore = create<ChatStore>()(
                       ? {
                           ...c,
                           messages: (c.messages || []).map((m) =>
-                            m.message_id === tempAssistantMessageId
+                            m.message_id === assistantMsgId
                               ? {
                                   ...m,
                                   status: "failed" as const,
@@ -507,6 +546,8 @@ export const useChatStore = create<ChatStore>()(
                         }
                       : c
                   ),
+                  activeEventSource: null,
+                  error: "Deep research connection lost",
                 }));
               };
 
@@ -876,6 +917,15 @@ export const useChatStore = create<ChatStore>()(
       // ======================================================================
       clearError: () => {
         set({ error: null });
+      },
+
+      cleanupEventSource: () => {
+        const { activeEventSource } = get();
+        if (activeEventSource) {
+          console.log("[Store] Cleaning up active EventSource");
+          activeEventSource.close();
+          set({ activeEventSource: null });
+        }
       },
     }),
     {
