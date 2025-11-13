@@ -493,7 +493,7 @@ async def deep_research_stream_generator(
                 SET
                     content = $1,
                     status = 'completed',
-                    metadata = metadata || $2::jsonb,
+                    metadata = metadata || CAST($2 AS jsonb),
                     completed_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE message_id = $3
@@ -664,7 +664,7 @@ async def stream_deep_research(report_id: str):
             FROM messages
             WHERE conversation_id = $1
               AND role = 'assistant'
-              AND metadata @> $2::jsonb
+              AND metadata @> CAST($2 AS jsonb)
             ORDER BY created_at DESC
             LIMIT 1
         """

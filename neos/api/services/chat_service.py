@@ -151,12 +151,12 @@ class ChatService:
             param_idx += 1
 
         if tags is not None:
-            updates.append(f"tags = ${param_idx}::jsonb")
+            updates.append(f"tags = CAST(${param_idx} AS jsonb)")
             params.append(json.dumps(tags))
             param_idx += 1
 
         if metadata is not None:
-            updates.append(f"metadata = ${param_idx}::jsonb")
+            updates.append(f"metadata = CAST(${param_idx} AS jsonb)")
             params.append(json.dumps(metadata))
             param_idx += 1
 
