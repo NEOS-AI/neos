@@ -1,3 +1,4 @@
+import re
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
@@ -65,12 +66,14 @@ class DatabaseManager:
         """
         try:
             # PostgreSQL의 $1, $2 형식을 :param1, :param2 형식으로 변환
+            # ::cast 구문을 보존하기 위해 regex 사용
             param_dict = {}
             converted_query = query
             for i, param in enumerate(params, 1):
                 placeholder = f"${i}"
                 param_name = f"param{i}"
-                converted_query = converted_query.replace(placeholder, f":{param_name}")
+                # $N을 :paramN으로 변경하되, $N:: 패턴은 :paramN::으로 변경
+                converted_query = re.sub(rf'\${i}\b', f":{param_name}", converted_query)
                 param_dict[param_name] = param
 
             async with await self.get_session() as session:
@@ -87,12 +90,14 @@ class DatabaseManager:
         """단일 row 조회"""
         try:
             # PostgreSQL의 $1, $2 형식을 :param1, :param2 형식으로 변환
+            # ::cast 구문을 보존하기 위해 regex 사용
             param_dict = {}
             converted_query = query
             for i, param in enumerate(params, 1):
                 placeholder = f"${i}"
                 param_name = f"param{i}"
-                converted_query = converted_query.replace(placeholder, f":{param_name}")
+                # $N을 :paramN으로 변경하되, $N:: 패턴은 :paramN::으로 변경
+                converted_query = re.sub(rf'\${i}\b', f":{param_name}", converted_query)
                 param_dict[param_name] = param
 
             async with await self.get_session() as session:
@@ -110,12 +115,14 @@ class DatabaseManager:
         """모든 row 조회"""
         try:
             # PostgreSQL의 $1, $2 형식을 :param1, :param2 형식으로 변환
+            # ::cast 구문을 보존하기 위해 regex 사용
             param_dict = {}
             converted_query = query
             for i, param in enumerate(params, 1):
                 placeholder = f"${i}"
                 param_name = f"param{i}"
-                converted_query = converted_query.replace(placeholder, f":{param_name}")
+                # $N을 :paramN으로 변경하되, $N:: 패턴은 :paramN::으로 변경
+                converted_query = re.sub(rf'\${i}\b', f":{param_name}", converted_query)
                 param_dict[param_name] = param
 
             async with await self.get_session() as session:
