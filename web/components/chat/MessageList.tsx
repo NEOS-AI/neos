@@ -74,10 +74,10 @@ export default function MessageList() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div className="h-full overflow-y-auto">
       {!currentConversation || messages.length === 0 ? (
         /* Empty State - No conversation or no messages */
-        <div className="flex items-center justify-center h-full p-8">
+        <div className="flex items-center justify-center min-h-full p-8">
           <div className="max-w-2xl text-center space-y-8">
             {/* Logo and Welcome */}
             <div className="space-y-4">

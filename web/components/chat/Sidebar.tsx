@@ -1,9 +1,13 @@
 "use client";
 
 import { useChatStore } from "@/lib/stores/chat-store";
-import { MessageSquare, Plus, Trash2, Archive } from "lucide-react";
+import { useRouter, usePathname } from "next/navigation";
+import { MessageSquare, Plus, Trash2, Archive, Home } from "lucide-react";
 
 export default function Sidebar() {
+  const router = useRouter();
+  const pathname = usePathname();
+
   const {
     conversations,
     currentConversationId,
@@ -28,12 +32,41 @@ export default function Sidebar() {
     return date.toLocaleDateString();
   };
 
+  const handleNewChat = async () => {
+    router.push('/');
+  };
+
+  const handleConversationClick = (conversationId: string) => {
+    // Navigate to the chat page
+    router.push(`/chat/${conversationId}`);
+  };
+
+  const handleDeleteConversation = async (conversationId: string) => {
+    if (!confirm("Are you sure you want to delete this conversation?")) {
+      return;
+    }
+
+    await deleteConversation(conversationId);
+
+    // If we deleted the current conversation, redirect to home
+    if (conversationId === currentConversationId) {
+      router.push('/');
+    }
+  };
+
   return (
     <div className="w-64 bg-claude-darker border-r border-claude-border flex flex-col h-full">
       {/* Header */}
-      <div className="p-4 border-b border-claude-border">
+      <div className="p-4 border-b border-claude-border space-y-2">
         <button
-          onClick={() => createConversation()}
+          onClick={() => router.push('/')}
+          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-claude-light hover:bg-claude-border text-claude-text rounded-lg transition-colors font-medium"
+        >
+          <Home size={18} />
+          <span>Home</span>
+        </button>
+        <button
+          onClick={handleNewChat}
           className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors font-medium"
         >
           <Plus size={18} />
@@ -56,12 +89,12 @@ export default function Sidebar() {
                   group relative flex items-center gap-3 p-3 rounded-lg cursor-pointer
                   transition-colors
                   ${
-                    currentConversationId === conversation.conversation_id
+                    pathname === `/chat/${conversation.conversation_id}`
                       ? "bg-claude-light"
                       : "hover:bg-claude-dark"
                   }
                 `}
-                onClick={() => setCurrentConversation(conversation.conversation_id)}
+                onClick={() => handleConversationClick(conversation.conversation_id)}
               >
                 <MessageSquare
                   size={16}
@@ -93,13 +126,7 @@ export default function Sidebar() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (
-                        confirm(
-                          "Are you sure you want to delete this conversation?"
-                        )
-                      ) {
-                        deleteConversation(conversation.conversation_id);
-                      }
+                      handleDeleteConversation(conversation.conversation_id);
                     }}
                     className="p-1 rounded hover:bg-red-500/20 transition-colors"
                     title="Delete"
