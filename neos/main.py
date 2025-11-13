@@ -21,7 +21,7 @@ from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.workflow.graph import multi_agent_workflow
 
 
-__VERSION__ = "0.9.0"
+__VERSION__ = "0.10.0"
 
 
 # 로깅 설정
