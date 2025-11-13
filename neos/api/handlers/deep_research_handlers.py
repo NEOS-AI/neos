@@ -41,6 +41,34 @@ router = APIRouter()
 # Helper Functions
 # ============================================================================
 
+def map_section_type_to_event_type(section_type: str) -> str:
+    """Map agent's internal section types to SSE event section types.
+
+    Agent uses detailed types like 'topic_analysis', 'methodology', etc.
+    SSE events use broader categories: 'planning', 'data_collection', 'analysis', 'report_generation'
+    """
+    mapping = {
+        # Planning phase
+        "topic_analysis": "planning",
+        "methodology": "planning",
+
+        # Data collection phase
+        "initial_collection": "data_collection",
+        "gap_analysis": "data_collection",
+
+        # Analysis phase
+        "deep_analysis": "analysis",
+        "validation": "analysis",
+        "critical_analysis": "analysis",
+
+        # Report generation phase
+        "final_report": "report_generation",
+    }
+
+    # Return mapped type or default to 'analysis' if unknown
+    return mapping.get(section_type, "analysis")
+
+
 async def save_deep_research_report(
     report_id: str,
     user_id: str,
@@ -216,7 +244,13 @@ async def deep_research_stream_generator(
         )
 
         # Initialize the HyperDeepResearch agent
-        agent = HyperDeepResearch()
+        logger.info(f"Initializing HyperDeepResearch agent for report {report_id}")
+        try:
+            agent = HyperDeepResearch()
+            logger.info("HyperDeepResearch agent initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize agent: {e}", exc_info=True)
+            raise
 
         # Start agent execution in background
         context = {
@@ -224,7 +258,9 @@ async def deep_research_stream_generator(
             "user_id": user_id,
             "session_id": session_id
         }
+        logger.info(f"Starting agent execution with context: {context}")
         agent_task = asyncio.create_task(agent.execute(research_topic, context))
+        logger.info(f"Agent task created: {agent_task}")
 
         # Track progress by polling DB for sections
         processed_section_ids = set()
@@ -232,7 +268,19 @@ async def deep_research_stream_generator(
         last_status = "in_progress"
 
         # Poll for progress while agent is running
+        poll_count = 0
         while not agent_task.done():
+            poll_count += 1
+
+            # Check if task failed
+            if agent_task.done():
+                try:
+                    agent_task.result()
+                except Exception as task_error:
+                    logger.error(f"Agent task failed: {task_error}", exc_info=True)
+                    raise
+
+            logger.debug(f"Poll #{poll_count}: Checking for new sections...")
             # Query for new sections from DB
             sections_query = """
                 SELECT
@@ -244,6 +292,7 @@ async def deep_research_stream_generator(
                 ORDER BY section_order
             """
             sections_result = await db_manager.fetch_all(sections_query, report_id)
+            logger.debug(f"Poll #{poll_count}: Found {len(sections_result) if sections_result else 0} total sections in DB")
 
             # Process new sections
             for section in sections_result:
@@ -258,6 +307,12 @@ async def deep_research_stream_generator(
                     section_status = section[5]
                     sources_count = section[6] or 0
 
+                    logger.info(f"New section found: {section_title} (order: {section_order}, type: {section_type})")
+
+                    # Map agent's section type to SSE event type
+                    event_section_type = map_section_type_to_event_type(section_type)
+                    logger.debug(f"Mapped section type '{section_type}' to event type '{event_section_type}'")
+
                     # Send section started event
                     section_start_event = DeepResearchEvent(
                         event=DeepResearchEventType.SECTION_STARTED,
@@ -265,7 +320,7 @@ async def deep_research_stream_generator(
                         data=SectionStartedEventData(
                             section_id=section_id,
                             section_title=section_title,
-                            section_type=section_type
+                            section_type=event_section_type
                         ).model_dump()
                     )
                     yield f"data: {section_start_event.model_dump_json()}\n\n"
@@ -293,7 +348,7 @@ async def deep_research_stream_generator(
                         data=SectionCompletedEventData(
                             section_id=section_id,
                             section_title=section_title,
-                            section_type=section_type,
+                            section_type=event_section_type,
                             section_content=section_content or "",
                             sources_count=sources_count
                         ).model_dump()
@@ -324,12 +379,15 @@ async def deep_research_stream_generator(
             # Wait before next poll
             await asyncio.sleep(2)
 
-        # Wait for agent to complete
+        # Agent task is done
+        logger.info(f"Agent task completed. Total polls: {poll_count}, Sections processed: {len(processed_section_ids)}")
+
+        # Wait for agent to complete and get result
         try:
             agent_result = await agent_task
-            logger.info(f"Agent completed with result: {agent_result.get('success', False)}")
+            logger.info(f"Agent completed successfully: {agent_result}")
         except Exception as e:
-            logger.error(f"Agent failed: {e}")
+            logger.error(f"Agent execution failed with exception: {e}", exc_info=True)
             raise
 
         # Get final report data
