@@ -367,10 +367,10 @@ async def deep_research_stream_generator(
                     data=ProgressUpdateEventData(
                         current_phase=ResearchPhase.ANALYSIS,  # Generic phase
                         completed_sections=len(processed_section_ids),
-                        total_sections=report.get("total_sections", 0),
-                        sources_collected=report.get("total_sources", 0),
-                        queries_executed=report.get("total_queries", 0),
-                        progress_percentage=min(95, (len(processed_section_ids) / max(1, report.get("total_sections", 1))) * 100),
+                        total_sections=report.get("total_sections") or 0,
+                        sources_collected=report.get("total_sources") or 0,
+                        queries_executed=report.get("total_queries") or 0,
+                        progress_percentage=min(95, (len(processed_section_ids) / max(1, report.get("total_sections") or 1)) * 100),
                         estimated_time_remaining_seconds=0
                     ).model_dump()
                 )
@@ -392,10 +392,10 @@ async def deep_research_stream_generator(
 
         # Get final report data
         final_report = await get_research_report(report_id)
-        completed_sections = final_report.get("total_sections", len(processed_section_ids))
-        total_sources = final_report.get("total_sources", 0)
-        total_queries = final_report.get("total_queries", 0)
-        processing_time_ms = final_report.get("processing_time_ms", int((datetime.now() - start_time).total_seconds() * 1000))
+        completed_sections = final_report.get("total_sections") or len(processed_section_ids)
+        total_sources = final_report.get("total_sources") or 0
+        total_queries = final_report.get("total_queries") or 0
+        processing_time_ms = final_report.get("processing_time_ms") or int((datetime.now() - start_time).total_seconds() * 1000)
 
         # Update database with final status
         await update_research_status(
