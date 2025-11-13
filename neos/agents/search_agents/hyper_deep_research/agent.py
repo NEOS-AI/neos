@@ -59,6 +59,7 @@ class HyperDeepResearchAgent(SearchAgent):
 
     def __init__(self):
         """Initialize the HyperDeepResearch agent."""
+        print("[DEBUG] HyperDeepResearchAgent.__init__ called")
         super().__init__(
             name="hyper_deep_research",
             search_type="hyper_deep_research",
@@ -67,6 +68,7 @@ class HyperDeepResearchAgent(SearchAgent):
             backstory="World-renowned research director combining academic rigor, "
                     "investigative journalism, and critical analysis depth."
         )
+        print("[DEBUG] Parent class initialized")
 
         # Research configuration
         self.config = {
@@ -93,15 +95,21 @@ class HyperDeepResearchAgent(SearchAgent):
         }
 
         # Initialize Tavily client
+        print("[DEBUG] Initializing Tavily client...")
         self._init_tavily_client()
+        print(f"[DEBUG] Tavily client initialized. API available: {self.api_available}")
 
         # Initialize sub-agents
+        print("[DEBUG] Initializing sub-agents...")
         self.planning_agent = PlanningAgent()
         self.multi_query_agent = MultiQuerySearchAgent()
         self.criticism_agent = CriticismFeedbackAgent()
+        print("[DEBUG] Sub-agents initialized")
 
         # Initialize repository
+        print("[DEBUG] Initializing repository...")
         self.repository = HyperResearchRepository()
+        print("[DEBUG] Repository initialized")
 
         # Research state
         self.current_report_id = None
@@ -143,12 +151,16 @@ class HyperDeepResearchAgent(SearchAgent):
         Returns:
             Search result dictionary with comprehensive research report
         """
-        print(f"[DEBUG] HyperDeepResearchAgent.execute: {query[:50]}...")
+        print(f"[DEBUG] HyperDeepResearchAgent.execute called with query: {query[:50]}...")
+        print(f"[DEBUG] Context: {context}")
+        print(f"[DEBUG] API available: {self.api_available}")
 
         if not self.validate_input(query, context):
+            print(f"[ERROR] Input validation failed for query: {query}")
             return {"success": False, "error": "Invalid input"}
 
         if not self.api_available:
+            print(f"[ERROR] Tavily API unavailable, cannot proceed with research")
             return self.format_output(
                 [], {"search_type": "hyper_deep_research", "warning": "API unavailable"}
             )
