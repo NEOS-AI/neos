@@ -218,247 +218,126 @@ async def deep_research_stream_generator(
         # Initialize the HyperDeepResearch agent
         agent = HyperDeepResearch()
 
-        # Track progress
-        total_queries = 0
-        total_sources = 0
-        completed_sections = 0
+        # Start agent execution in background
+        context = {
+            "report_id": report_id,
+            "user_id": user_id,
+            "session_id": session_id
+        }
+        agent_task = asyncio.create_task(agent.execute(research_topic, context))
+
+        # Track progress by polling DB for sections
+        processed_section_ids = set()
         start_time = datetime.now()
+        last_status = "in_progress"
 
-        # Phase 1: Topic Confirmation
-        phase_start = datetime.now()
-        phase_event = DeepResearchEvent(
-            event=DeepResearchEventType.PHASE_STARTED,
-            report_id=report_id,
-            data=PhaseStartedEventData(
-                phase=ResearchPhase.TOPIC_CONFIRMATION,
-                message="Confirming and analyzing research topic..."
-            ).model_dump()
-        )
-        yield f"data: {phase_event.model_dump_json()}\n\n"
+        # Poll for progress while agent is running
+        while not agent_task.done():
+            # Query for new sections from DB
+            sections_query = """
+                SELECT
+                    section_id, section_order, section_type,
+                    section_title, section_content, section_status,
+                    sources_count, created_at, completed_at
+                FROM hyper_research_sections
+                WHERE report_id = $1
+                ORDER BY section_order
+            """
+            sections_result = await db_manager.fetch_all(sections_query, report_id)
 
-        # Topic analysis (this would call the actual agent method)
-        # For now, we'll simulate the flow
-        await asyncio.sleep(0.5)  # Simulate processing
+            # Process new sections
+            for section in sections_result:
+                section_id = section[0]
+                if section_id not in processed_section_ids:
+                    processed_section_ids.add(section_id)
 
-        phase_complete = DeepResearchEvent(
-            event=DeepResearchEventType.PHASE_COMPLETED,
-            report_id=report_id,
-            data=PhaseCompletedEventData(
-                phase=ResearchPhase.TOPIC_CONFIRMATION,
-                message="Topic confirmed",
-                duration_ms=int((datetime.now() - phase_start).total_seconds() * 1000)
-            ).model_dump()
-        )
-        yield f"data: {phase_complete.model_dump_json()}\n\n"
+                    section_order = section[1]
+                    section_type = section[2]
+                    section_title = section[3]
+                    section_content = section[4]
+                    section_status = section[5]
+                    sources_count = section[6] or 0
 
-        # Phase 2: Planning
-        phase_start = datetime.now()
-        phase_event = DeepResearchEvent(
-            event=DeepResearchEventType.PHASE_STARTED,
-            report_id=report_id,
-            data=PhaseStartedEventData(
-                phase=ResearchPhase.PLANNING,
-                message="Creating comprehensive research plan..."
-            ).model_dump()
-        )
-        yield f"data: {phase_event.model_dump_json()}\n\n"
+                    # Send section started event
+                    section_start_event = DeepResearchEvent(
+                        event=DeepResearchEventType.SECTION_STARTED,
+                        report_id=report_id,
+                        data=SectionStartedEventData(
+                            section_id=section_id,
+                            section_title=section_title,
+                            section_type=section_type
+                        ).model_dump()
+                    )
+                    yield f"data: {section_start_event.model_dump_json()}\n\n"
 
-        await asyncio.sleep(1)  # Simulate processing
+                    # Stream section content in chunks if available
+                    if section_content:
+                        chunk_size = 200
+                        for i in range(0, len(section_content), chunk_size):
+                            chunk = section_content[i:i+chunk_size]
+                            content_event = DeepResearchEvent(
+                                event=DeepResearchEventType.SECTION_CONTENT,
+                                report_id=report_id,
+                                data=SectionContentEventData(
+                                    section_id=section_id,
+                                    content_chunk=chunk,
+                                    is_final=(i + chunk_size >= len(section_content))
+                                ).model_dump()
+                            )
+                            yield f"data: {content_event.model_dump_json()}\n\n"
 
-        phase_complete = DeepResearchEvent(
-            event=DeepResearchEventType.PHASE_COMPLETED,
-            report_id=report_id,
-            data=PhaseCompletedEventData(
-                phase=ResearchPhase.PLANNING,
-                message="Research plan created",
-                duration_ms=int((datetime.now() - phase_start).total_seconds() * 1000)
-            ).model_dump()
-        )
-        yield f"data: {phase_complete.model_dump_json()}\n\n"
+                    # Send section completed event
+                    section_complete_event = DeepResearchEvent(
+                        event=DeepResearchEventType.SECTION_COMPLETED,
+                        report_id=report_id,
+                        data=SectionCompletedEventData(
+                            section_id=section_id,
+                            section_title=section_title,
+                            section_type=section_type,
+                            section_content=section_content or "",
+                            sources_count=sources_count
+                        ).model_dump()
+                    )
+                    yield f"data: {section_complete_event.model_dump_json()}\n\n"
 
-        # Phase 3: Data Collection
-        phase_start = datetime.now()
-        phase_event = DeepResearchEvent(
-            event=DeepResearchEventType.PHASE_STARTED,
-            report_id=report_id,
-            data=PhaseStartedEventData(
-                phase=ResearchPhase.DATA_COLLECTION,
-                message="Collecting data from multiple sources..."
-            ).model_dump()
-        )
-        yield f"data: {phase_event.model_dump_json()}\n\n"
+            # Get updated report status
+            report = await get_research_report(report_id)
+            if report and report["research_status"] != last_status:
+                last_status = report["research_status"]
 
-        # Simulate multiple queries
-        for i in range(5):
-            query_event = DeepResearchEvent(
-                event=DeepResearchEventType.QUERY_EXECUTED,
-                report_id=report_id,
-                data=QueryExecutedEventData(
-                    query=f"Query {i+1} about {research_topic}",
-                    query_type="initial",
-                    results_count=10
-                ).model_dump()
-            )
-            yield f"data: {query_event.model_dump_json()}\n\n"
-            total_queries += 1
-            total_sources += 10
-
-            # Progress update
-            progress_event = DeepResearchEvent(
-                event=DeepResearchEventType.PROGRESS_UPDATE,
-                report_id=report_id,
-                data=ProgressUpdateEventData(
-                    current_phase=ResearchPhase.DATA_COLLECTION,
-                    completed_sections=completed_sections,
-                    total_sections=5,
-                    sources_collected=total_sources,
-                    queries_executed=total_queries,
-                    progress_percentage=20 + (i * 10),
-                    estimated_time_remaining_seconds=30 - (i * 5)
-                ).model_dump()
-            )
-            yield f"data: {progress_event.model_dump_json()}\n\n"
-
-            await asyncio.sleep(0.5)
-
-        phase_complete = DeepResearchEvent(
-            event=DeepResearchEventType.PHASE_COMPLETED,
-            report_id=report_id,
-            data=PhaseCompletedEventData(
-                phase=ResearchPhase.DATA_COLLECTION,
-                message=f"Data collection complete - {total_sources} sources collected",
-                duration_ms=int((datetime.now() - phase_start).total_seconds() * 1000)
-            ).model_dump()
-        )
-        yield f"data: {phase_complete.model_dump_json()}\n\n"
-
-        # Phase 4: Analysis
-        phase_start = datetime.now()
-        phase_event = DeepResearchEvent(
-            event=DeepResearchEventType.PHASE_STARTED,
-            report_id=report_id,
-            data=PhaseStartedEventData(
-                phase=ResearchPhase.ANALYSIS,
-                message="Analyzing collected data..."
-            ).model_dump()
-        )
-        yield f"data: {phase_event.model_dump_json()}\n\n"
-
-        await asyncio.sleep(1)
-
-        phase_complete = DeepResearchEvent(
-            event=DeepResearchEventType.PHASE_COMPLETED,
-            report_id=report_id,
-            data=PhaseCompletedEventData(
-                phase=ResearchPhase.ANALYSIS,
-                message="Analysis complete",
-                duration_ms=int((datetime.now() - phase_start).total_seconds() * 1000)
-            ).model_dump()
-        )
-        yield f"data: {phase_complete.model_dump_json()}\n\n"
-
-        # Phase 5: Report Generation
-        phase_start = datetime.now()
-        phase_event = DeepResearchEvent(
-            event=DeepResearchEventType.PHASE_STARTED,
-            report_id=report_id,
-            data=PhaseStartedEventData(
-                phase=ResearchPhase.REPORT_GENERATION,
-                message="Generating comprehensive report..."
-            ).model_dump()
-        )
-        yield f"data: {phase_event.model_dump_json()}\n\n"
-
-        # Simulate section generation
-        sections = [
-            "Executive Summary",
-            "Background and Context",
-            "Key Findings",
-            "Detailed Analysis",
-            "Conclusions and Recommendations"
-        ]
-
-        for idx, section_title in enumerate(sections):
-            section_id = f"section_{uuid.uuid4().hex[:8]}"
-
-            # Section started
-            section_start_event = DeepResearchEvent(
-                event=DeepResearchEventType.SECTION_STARTED,
-                report_id=report_id,
-                data=SectionStartedEventData(
-                    section_id=section_id,
-                    section_title=section_title,
-                    section_type="report_generation"
-                ).model_dump()
-            )
-            yield f"data: {section_start_event.model_dump_json()}\n\n"
-
-            # Stream section content in chunks
-            section_content = f"## {section_title}\n\nThis section provides detailed information about {research_topic}. "
-            section_content += "The analysis shows important insights based on the collected data from multiple sources. "
-            section_content += "Key points include comprehensive coverage of the topic with evidence-based conclusions.\n\n"
-
-            # Stream content in chunks (simulate streaming)
-            chunk_size = 50
-            for i in range(0, len(section_content), chunk_size):
-                chunk = section_content[i:i+chunk_size]
-                content_event = DeepResearchEvent(
-                    event=DeepResearchEventType.SECTION_CONTENT,
+                # Send progress update
+                progress_event = DeepResearchEvent(
+                    event=DeepResearchEventType.PROGRESS_UPDATE,
                     report_id=report_id,
-                    data=SectionContentEventData(
-                        section_id=section_id,
-                        content_chunk=chunk,
-                        is_final=(i + chunk_size >= len(section_content))
+                    data=ProgressUpdateEventData(
+                        current_phase=ResearchPhase.ANALYSIS,  # Generic phase
+                        completed_sections=len(processed_section_ids),
+                        total_sections=report.get("total_sections", 0),
+                        sources_collected=report.get("total_sources", 0),
+                        queries_executed=report.get("total_queries", 0),
+                        progress_percentage=min(95, (len(processed_section_ids) / max(1, report.get("total_sections", 1))) * 100),
+                        estimated_time_remaining_seconds=0
                     ).model_dump()
                 )
-                yield f"data: {content_event.model_dump_json()}\n\n"
-                await asyncio.sleep(0.1)
+                yield f"data: {progress_event.model_dump_json()}\n\n"
 
-            # Section completed
-            section_complete_event = DeepResearchEvent(
-                event=DeepResearchEventType.SECTION_COMPLETED,
-                report_id=report_id,
-                data=SectionCompletedEventData(
-                    section_id=section_id,
-                    section_title=section_title,
-                    section_type="report_generation",
-                    section_content=section_content,
-                    sources_count=total_sources
-                ).model_dump()
-            )
-            yield f"data: {section_complete_event.model_dump_json()}\n\n"
+            # Wait before next poll
+            await asyncio.sleep(2)
 
-            completed_sections += 1
+        # Wait for agent to complete
+        try:
+            agent_result = await agent_task
+            logger.info(f"Agent completed with result: {agent_result.get('success', False)}")
+        except Exception as e:
+            logger.error(f"Agent failed: {e}")
+            raise
 
-            # Progress update
-            progress_event = DeepResearchEvent(
-                event=DeepResearchEventType.PROGRESS_UPDATE,
-                report_id=report_id,
-                data=ProgressUpdateEventData(
-                    current_phase=ResearchPhase.REPORT_GENERATION,
-                    completed_sections=completed_sections,
-                    total_sections=len(sections),
-                    sources_collected=total_sources,
-                    queries_executed=total_queries,
-                    progress_percentage=70 + ((idx + 1) / len(sections) * 30),
-                    estimated_time_remaining_seconds=max(0, (len(sections) - idx - 1) * 2)
-                ).model_dump()
-            )
-            yield f"data: {progress_event.model_dump_json()}\n\n"
-
-        phase_complete = DeepResearchEvent(
-            event=DeepResearchEventType.PHASE_COMPLETED,
-            report_id=report_id,
-            data=PhaseCompletedEventData(
-                phase=ResearchPhase.REPORT_GENERATION,
-                message="Report generation complete",
-                duration_ms=int((datetime.now() - phase_start).total_seconds() * 1000)
-            ).model_dump()
-        )
-        yield f"data: {phase_complete.model_dump_json()}\n\n"
-
-        # Calculate final metrics
-        processing_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+        # Get final report data
+        final_report = await get_research_report(report_id)
+        completed_sections = final_report.get("total_sections", len(processed_section_ids))
+        total_sources = final_report.get("total_sources", 0)
+        total_queries = final_report.get("total_queries", 0)
+        processing_time_ms = final_report.get("processing_time_ms", int((datetime.now() - start_time).total_seconds() * 1000))
 
         # Update database with final status
         await update_research_status(

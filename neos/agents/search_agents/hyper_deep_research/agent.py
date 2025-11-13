@@ -157,6 +157,7 @@ class HyperDeepResearchAgent(SearchAgent):
             # Extract context parameters
             session_id = context.get("session_id", "") if context else ""
             user_id = context.get("user_id", "") if context else ""
+            report_id = context.get("report_id", None) if context else None
 
             # Detect query language
             language = LanguageDetector.detect(query)
@@ -169,7 +170,7 @@ class HyperDeepResearchAgent(SearchAgent):
 
             # Execute research process
             report_content = await self._run_research_process(
-                query, session_id, user_id, language
+                query, session_id, user_id, language, report_id
             )
 
             # Create search result
@@ -205,7 +206,8 @@ class HyperDeepResearchAgent(SearchAgent):
         query: str,
         session_id: str,
         user_id: str,
-        language: str
+        language: str,
+        report_id: str = None
     ) -> str:
         """Execute the complete research process.
 
@@ -214,6 +216,7 @@ class HyperDeepResearchAgent(SearchAgent):
             session_id: Session identifier
             user_id: User identifier
             language: Detected language code
+            report_id: Optional existing report ID to use (if None, creates new)
 
         Returns:
             Complete research report as markdown string
@@ -222,11 +225,20 @@ class HyperDeepResearchAgent(SearchAgent):
         print(f"[INFO] 🚀 Target: {self.config['target_total_sources']} sources minimum")
 
         # Initialize report
-        self.current_report_id = f"hyper_report_{uuid.uuid4()}"
+        if report_id:
+            self.current_report_id = report_id
+            print(f"[INFO] Using existing report ID: {report_id}")
+        else:
+            self.current_report_id = f"hyper_report_{uuid.uuid4()}"
+            print(f"[INFO] Created new report ID: {self.current_report_id}")
+
         await self.repository.ensure_tables_exist()
-        await self.repository.create_report(
-            self.current_report_id, user_id, session_id, query
-        )
+
+        # Only create report if we generated a new ID (external report already exists)
+        if not report_id:
+            await self.repository.create_report(
+                self.current_report_id, user_id, session_id, query
+            )
 
         # Phase 1: Topic Analysis
         print("\n[INFO] ===== Phase 1/8: Topic Analysis =====")
