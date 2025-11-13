@@ -63,4 +63,7 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/chat_cost_tracking.s
 
 # add anonymous user for web interface
 psql -U postgres -d neos --port 5432 --host localhost -f db/add_anonymous_user.sql
+
+# Migrate conversation to deep research workflow
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/001_add_conversation_to_deep_research.sql
 ```
