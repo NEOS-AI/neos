@@ -3,9 +3,21 @@
 @tailwind utilities;
 
 :root {
+  /* Legacy variables */
   --background: #0F0F0F;
   --foreground: #E5E5E5;
   --border: #2A2A2A;
+
+  /* Claude-style design tokens */
+  --color-bg-canvas: 11 13 15;        /* #0B0D0F */
+  --color-bg-surface: 17 19 23;       /* #111317 */
+  --color-text-primary: 230 231 233;  /* #E6E7E9 */
+  --color-text-secondary: 164 168 174; /* #A4A8AE */
+  --color-text-muted: 122 127 135;    /* #7A7F87 */
+  --color-line-soft: 26 29 35;        /* #1A1D23 */
+  --color-brand-accent: 255 122 69;   /* #FF7A45 */
+  --color-chip-bg: 15 18 23;          /* #0F1217 */
+  --color-chip-line: 29 33 40;        /* #1D2128 */
 }
 
 * {
