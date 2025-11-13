@@ -160,7 +160,7 @@ class HyperDeepResearchAgent(SearchAgent):
             return {"success": False, "error": "Invalid input"}
 
         if not self.api_available:
-            print(f"[ERROR] Tavily API unavailable, cannot proceed with research")
+            print("[ERROR] Tavily API unavailable, cannot proceed with research")
             return self.format_output(
                 [], {"search_type": "hyper_deep_research", "warning": "API unavailable"}
             )
