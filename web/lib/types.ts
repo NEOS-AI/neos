@@ -16,7 +16,7 @@ export type ConversationStatus = "active" | "archived" | "deleted";
 /**
  * Chat mode types
  */
-export type ChatMode = "standard" | "rag" | "similarity";
+export type ChatMode = "standard" | "rag" | "similarity" | "deep_research";
 
 /**
  * Message interface - Enhanced to match backend
@@ -122,6 +122,40 @@ export interface ChatSettings {
   similarity_threshold?: number;
   similarity_cross_conversation?: boolean;
   enable_auto_embedding?: boolean;
+
+  // Deep research settings
+  deep_research_enabled?: boolean;
+}
+
+/**
+ * Deep Research types
+ */
+export type ResearchStatus = "pending" | "in_progress" | "completed" | "failed";
+export type ResearchPhase =
+  | "topic_confirmation"
+  | "planning"
+  | "data_collection"
+  | "analysis"
+  | "report_generation";
+
+export interface DeepResearchReport {
+  report_id: string;
+  research_topic: string;
+  research_status: ResearchStatus;
+  created_at: string;
+  completed_at?: string;
+  total_sections: number;
+  total_sources: number;
+  total_queries: number;
+  quality_score?: number;
+  processing_time_ms?: number;
+}
+
+export interface DeepResearchEvent {
+  event: string;
+  report_id: string;
+  timestamp: string;
+  data: Record<string, any>;
 }
 
 /**

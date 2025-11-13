@@ -341,6 +341,178 @@ export const useChatStore = create<ChatStore>()(
 
           // Send based on chat mode
           switch (settings.mode) {
+            case "deep_research":
+              console.log("[Store] Starting deep research...");
+              // For deep research, we'll initiate the research and handle streaming separately
+              const deepResearchResponse = await chatAPI.startDeepResearch({
+                user_id: get().currentUserId,
+                conversation_id: conversationId,
+                initial_message_id: tempUserMessageId,
+                research_topic: content,
+                session_id: `session_${Date.now()}`,
+              });
+
+              // Update assistant message with status
+              set((state) => ({
+                conversations: state.conversations.map((c) =>
+                  c.conversation_id === conversationId
+                    ? {
+                        ...c,
+                        messages: (c.messages || []).map((m) =>
+                          m.message_id === tempAssistantMessageId
+                            ? {
+                                ...m,
+                                content: `🔬 Deep research initiated...\n\n**Topic:** ${content}\n\n**Status:** Analyzing and planning research...`,
+                                status: "streaming" as const,
+                                metadata: {
+                                  ...m.metadata,
+                                  deep_research_report_id: deepResearchResponse.report_id,
+                                  research_status: "in_progress",
+                                },
+                              }
+                            : m
+                        ),
+                      }
+                    : c
+                ),
+                isLoading: false,
+              }));
+
+              // Connect to SSE stream for updates
+              const eventSource = chatAPI.connectDeepResearchStream(deepResearchResponse.report_id);
+              let streamContent = `🔬 **Deep Research Report: ${content}**\n\n`;
+
+              eventSource.onmessage = (event) => {
+                try {
+                  const data = JSON.parse(event.data);
+
+                  switch (data.event) {
+                    case "phase_started":
+                      streamContent += `\n**Phase:** ${data.data.message}\n`;
+                      break;
+
+                    case "phase_completed":
+                      streamContent += `✓ ${data.data.message} (${data.data.duration_ms}ms)\n`;
+                      break;
+
+                    case "query_executed":
+                      streamContent += `📊 Query: "${data.data.query}" (${data.data.results_count} results)\n`;
+                      break;
+
+                    case "progress_update":
+                      streamContent += `\n**Progress:** ${data.data.progress_percentage.toFixed(1)}% - ${data.data.sources_collected} sources collected\n`;
+                      break;
+
+                    case "section_content":
+                      streamContent += data.data.content_chunk;
+                      break;
+
+                    case "completed":
+                      streamContent += `\n\n---\n\n✅ **Research Complete**\n`;
+                      streamContent += `- Total sections: ${data.data.total_sections}\n`;
+                      streamContent += `- Total sources: ${data.data.total_sources}\n`;
+                      streamContent += `- Processing time: ${(data.data.processing_time_ms / 1000).toFixed(2)}s\n`;
+                      eventSource.close();
+
+                      // Mark message as completed
+                      set((state) => ({
+                        conversations: state.conversations.map((c) =>
+                          c.conversation_id === conversationId
+                            ? {
+                                ...c,
+                                messages: (c.messages || []).map((m) =>
+                                  m.message_id === tempAssistantMessageId
+                                    ? {
+                                        ...m,
+                                        status: "completed" as const,
+                                        metadata: {
+                                          ...m.metadata,
+                                          research_status: "completed",
+                                        },
+                                      }
+                                    : m
+                                ),
+                              }
+                            : c
+                        ),
+                      }));
+                      return;
+
+                    case "failed":
+                      streamContent += `\n\n❌ **Research Failed**\n${data.data.error_message}\n`;
+                      eventSource.close();
+
+                      set((state) => ({
+                        conversations: state.conversations.map((c) =>
+                          c.conversation_id === conversationId
+                            ? {
+                                ...c,
+                                messages: (c.messages || []).map((m) =>
+                                  m.message_id === tempAssistantMessageId
+                                    ? {
+                                        ...m,
+                                        status: "failed" as const,
+                                        metadata: {
+                                          ...m.metadata,
+                                          research_status: "failed",
+                                        },
+                                      }
+                                    : m
+                                ),
+                              }
+                            : c
+                        ),
+                      }));
+                      return;
+                  }
+
+                  // Update message content
+                  set((state) => ({
+                    conversations: state.conversations.map((c) =>
+                      c.conversation_id === conversationId
+                        ? {
+                            ...c,
+                            messages: (c.messages || []).map((m) =>
+                              m.message_id === tempAssistantMessageId
+                                ? { ...m, content: streamContent }
+                                : m
+                            ),
+                          }
+                        : c
+                    ),
+                  }));
+                } catch (e) {
+                  console.error("[Store] Failed to parse SSE event:", e);
+                }
+              };
+
+              eventSource.onerror = (error) => {
+                console.error("[Store] SSE error:", error);
+                eventSource.close();
+
+                set((state) => ({
+                  conversations: state.conversations.map((c) =>
+                    c.conversation_id === conversationId
+                      ? {
+                          ...c,
+                          messages: (c.messages || []).map((m) =>
+                            m.message_id === tempAssistantMessageId
+                              ? {
+                                  ...m,
+                                  status: "failed" as const,
+                                  content: streamContent + "\n\n❌ Connection lost",
+                                }
+                              : m
+                          ),
+                        }
+                      : c
+                  ),
+                }));
+              };
+
+              // For deep research, we don't have a typical response, so skip the rest
+              return;
+
             case "rag":
               console.log("[Store] Sending RAG message...");
               response = await chatAPI.sendRAGMessage(conversationId, {

@@ -452,6 +452,72 @@ class ChatAPI {
   }
 
   // --------------------------------------------------------------------------
+  // Deep Research
+  // --------------------------------------------------------------------------
+
+  async startDeepResearch(request: {
+    user_id: string;
+    conversation_id: string;
+    initial_message_id: string;
+    research_topic: string;
+    session_id?: string;
+    metadata?: Record<string, any>;
+  }): Promise<{
+    success: boolean;
+    report_id: string;
+    research_topic: string;
+    research_status: string;
+    message: string;
+    stream_url: string;
+  }> {
+    const response = await fetch(`${this.baseUrl}/deep-research/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to start deep research: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async getDeepResearchReport(reportId: string): Promise<any> {
+    const response = await fetch(`${this.baseUrl}/deep-research/${reportId}`);
+
+    if (!response.ok) {
+      throw new Error(`Failed to get deep research report: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async listConversationDeepResearch(conversationId: string): Promise<{
+    conversation_id: string;
+    reports: any[];
+    total_count: number;
+  }> {
+    const response = await fetch(
+      `${this.baseUrl}/conversations/${conversationId}/deep-research`
+    );
+
+    if (!response.ok) {
+      throw new Error(`Failed to list deep research reports: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Connect to deep research SSE stream
+   * Returns an EventSource for receiving real-time updates
+   */
+  connectDeepResearchStream(reportId: string): EventSource {
+    return new EventSource(`${this.baseUrl}/deep-research/${reportId}/stream`);
+  }
+
+  // --------------------------------------------------------------------------
   // WebSocket Chat
   // --------------------------------------------------------------------------
 

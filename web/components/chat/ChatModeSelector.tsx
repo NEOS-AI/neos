@@ -1,7 +1,7 @@
 "use client";
 
 import { useChatStore } from "@/lib/stores/chat-store";
-import { Brain, Database, Sparkles } from "lucide-react";
+import { Brain, Database, Sparkles, SearchX } from "lucide-react";
 import type { ChatMode } from "@/lib/types";
 
 const chatModes: Array<{
@@ -27,6 +27,12 @@ const chatModes: Array<{
     name: "Similarity",
     description: "Context-aware responses using similar messages",
     icon: <Brain className="w-4 h-4" />,
+  },
+  {
+    id: "deep_research",
+    name: "Deep Research",
+    description: "Comprehensive multi-phase research with 100+ sources",
+    icon: <SearchX className="w-4 h-4" />,
   },
 ];
 
