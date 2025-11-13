@@ -216,10 +216,7 @@ async def deep_research_stream_generator(
         )
 
         # Initialize the HyperDeepResearch agent
-        agent = HyperDeepResearch(
-            user_id=user_id,
-            session_id=session_id
-        )
+        agent = HyperDeepResearch()
 
         # Track progress
         total_queries = 0
