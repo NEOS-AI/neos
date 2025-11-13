@@ -56,7 +56,6 @@ async def save_deep_research_report(
             conversation_id, initial_message_id,
             research_status, research_plan, created_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        RETURNING report_id
     """
 
     research_plan = {
@@ -69,7 +68,7 @@ async def save_deep_research_report(
         ]
     }
 
-    result = await db_manager.fetch_one(
+    await db_manager.execute(
         query,
         report_id,
         user_id,
@@ -82,7 +81,7 @@ async def save_deep_research_report(
         datetime.now()
     )
 
-    return result[0] if result else report_id
+    return report_id
 
 
 async def update_research_status(
