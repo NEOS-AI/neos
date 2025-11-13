@@ -16,6 +16,7 @@ from neos.api.handlers.analytics_handlers import router as web_search_analytics_
 from neos.api.handlers.document_handlers import router as document_router
 from neos.api.handlers.multimodal_handlers import router as multimodal_router
 from neos.api.handlers.chat_handlers import router as chat_router
+from neos.api.handlers.deep_research_handlers import router as deep_research_router
 from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.workflow.graph import multi_agent_workflow
 
@@ -177,6 +178,7 @@ app.include_router(web_search_analytics_router, prefix=f"{settings.API_V1_PREFIX
 app.include_router(document_router, prefix=f"{settings.API_V1_PREFIX}/documents", tags=["Document Management"])
 app.include_router(multimodal_router, prefix=f"{settings.API_V1_PREFIX}/multimodal", tags=["Multimodal Processing"])
 app.include_router(chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Chat & Conversations"])
+app.include_router(deep_research_router, prefix=settings.API_V1_PREFIX, tags=["Deep Research"])
 app.include_router(similarity_chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Similarity-based Chat"])
 
 
@@ -207,6 +209,12 @@ async def root():
                 "similarity_cross_conversation": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/cross-conversation",
                 "similarity_high_confidence": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/high-confidence",
                 "similarity_config": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/similarity/config"
+            },
+            "deep_research": {
+                "start": f"{settings.API_V1_PREFIX}/deep-research/start",
+                "stream": f"{settings.API_V1_PREFIX}/deep-research/{{report_id}}/stream",
+                "report": f"{settings.API_V1_PREFIX}/deep-research/{{report_id}}",
+                "conversation_reports": f"{settings.API_V1_PREFIX}/conversations/{{conversation_id}}/deep-research"
             }
         },
         "features": [
