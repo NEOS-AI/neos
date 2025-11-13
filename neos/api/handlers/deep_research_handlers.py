@@ -41,6 +41,34 @@ router = APIRouter()
 # Helper Functions
 # ============================================================================
 
+def map_section_type_to_event_type(section_type: str) -> str:
+    """Map agent's internal section types to SSE event section types.
+
+    Agent uses detailed types like 'topic_analysis', 'methodology', etc.
+    SSE events use broader categories: 'planning', 'data_collection', 'analysis', 'report_generation'
+    """
+    mapping = {
+        # Planning phase
+        "topic_analysis": "planning",
+        "methodology": "planning",
+
+        # Data collection phase
+        "initial_collection": "data_collection",
+        "gap_analysis": "data_collection",
+
+        # Analysis phase
+        "deep_analysis": "analysis",
+        "validation": "analysis",
+        "critical_analysis": "analysis",
+
+        # Report generation phase
+        "final_report": "report_generation",
+    }
+
+    # Return mapped type or default to 'analysis' if unknown
+    return mapping.get(section_type, "analysis")
+
+
 async def save_deep_research_report(
     report_id: str,
     user_id: str,
@@ -281,6 +309,10 @@ async def deep_research_stream_generator(
 
                     logger.info(f"New section found: {section_title} (order: {section_order}, type: {section_type})")
 
+                    # Map agent's section type to SSE event type
+                    event_section_type = map_section_type_to_event_type(section_type)
+                    logger.debug(f"Mapped section type '{section_type}' to event type '{event_section_type}'")
+
                     # Send section started event
                     section_start_event = DeepResearchEvent(
                         event=DeepResearchEventType.SECTION_STARTED,
@@ -288,7 +320,7 @@ async def deep_research_stream_generator(
                         data=SectionStartedEventData(
                             section_id=section_id,
                             section_title=section_title,
-                            section_type=section_type
+                            section_type=event_section_type
                         ).model_dump()
                     )
                     yield f"data: {section_start_event.model_dump_json()}\n\n"
@@ -316,7 +348,7 @@ async def deep_research_stream_generator(
                         data=SectionCompletedEventData(
                             section_id=section_id,
                             section_title=section_title,
-                            section_type=section_type,
+                            section_type=event_section_type,
                             section_content=section_content or "",
                             sources_count=sources_count
                         ).model_dump()
