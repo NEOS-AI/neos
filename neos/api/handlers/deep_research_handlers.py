@@ -31,7 +31,7 @@ from neos.database.connection import db_manager
 from neos.utils.logger import get_logger
 
 # Import the deep research agent
-from neos.agents.search_agents.hyper_deep_research.agent import HyperDeepResearch
+from neos.agents.search_agents.hyper_deep_research.agent import HyperDeepResearchAgent as HyperDeepResearch
 
 logger = get_logger(__name__)
 router = APIRouter()
