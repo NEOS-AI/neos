@@ -15,7 +15,7 @@ const DEFAULT_SETTINGS: ChatSettings = {
   mode: "standard",
   model_name: "claude-sonnet-4-5-20250929",
   temperature: 0.7,
-  stream: false,
+  stream: true, // Changed to true for streaming by default
 
   // RAG defaults
   rag_enabled: true,
@@ -263,20 +263,232 @@ export const useChatStore = create<ChatStore>()(
         get().cleanupEventSource();
 
         const { settings } = get();
+
+        // Handle deep research mode separately (always streaming)
+        if (settings.mode === "deep_research") {
+          return get().sendDeepResearchMessage(content);
+        }
+
+        // Strategy Pattern: Choose streaming or non-streaming based on settings
+        if (settings.stream) {
+          return get()._sendMessageWithStreaming(content);
+        } else {
+          return get()._sendMessageWithoutStreaming(content);
+        }
+      },
+
+      // Private method: Streaming strategy
+      _sendMessageWithStreaming: async (content: string) => {
+        const { settings } = get();
+        let conversationId = get().currentConversationId;
+
+        // Create conversation if none exists
+        if (!conversationId) {
+          console.log("[Store] No conversation exists, creating one for streaming...");
+
+          const currentState = get();
+          if (!currentState.currentConversationId) {
+            await get().createConversation();
+            await new Promise((resolve) => setTimeout(resolve, 100));
+
+            conversationId = get().currentConversationId;
+
+            if (!conversationId) {
+              set({ error: "No active conversation" });
+              return;
+            }
+          } else {
+            conversationId = currentState.currentConversationId;
+          }
+        }
+
+        set({ isStreaming: true, isLoading: true, error: null });
+
+        try {
+          // Add user message optimistically
+          const tempUserMessageId = `temp_user_${Date.now()}`;
+          const tempAssistantMessageId = `temp_assistant_${Date.now()}`;
+
+          const userMessage: Message = {
+            message_id: tempUserMessageId,
+            conversation_id: conversationId,
+            role: "user",
+            content,
+            sequence_number: get().messages.length,
+            status: "completed",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+
+          // Add placeholder assistant message
+          const assistantMessage: Message = {
+            message_id: tempAssistantMessageId,
+            conversation_id: conversationId,
+            role: "assistant",
+            content: "",
+            sequence_number: get().messages.length + 1,
+            status: "streaming",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+
+          set((state) => ({
+            conversations: state.conversations.map((c) =>
+              c.conversation_id === conversationId
+                ? {
+                    ...c,
+                    messages: [...(c.messages || []), userMessage, assistantMessage],
+                    // Update title from first message
+                    title: c.message_count === 0 ? content.slice(0, 50) : c.title,
+                  }
+                : c
+            ),
+          }));
+
+          // Get stream based on mode
+          let stream: ReadableStream;
+          switch (settings.mode) {
+            case "rag":
+              stream = await chatAPI.sendRAGMessageStream(conversationId, {
+                content,
+                enable_rag: settings.rag_enabled,
+                rag_top_k: settings.rag_top_k,
+                include_cross_conversation: settings.rag_cross_conversation,
+              });
+              break;
+
+            case "similarity":
+              stream = await chatAPI.sendSimilarityMessageStream(conversationId, {
+                content,
+                top_k: settings.similarity_top_k,
+                similarity_threshold: settings.similarity_threshold,
+                include_cross_conversation: settings.similarity_cross_conversation,
+                enable_auto_embedding: settings.enable_auto_embedding,
+              });
+              break;
+
+            case "standard":
+            default:
+              stream = await chatAPI.sendMessageStream(conversationId, { content });
+              break;
+          }
+
+          // Process stream
+          const reader = stream.getReader();
+          const decoder = new TextDecoder();
+          let accumulatedContent = "";
+          let realUserMessageId = tempUserMessageId;
+          let realAssistantMessageId = tempAssistantMessageId;
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split("\n");
+
+            for (const line of lines) {
+              if (line.startsWith("data: ")) {
+                const data = line.slice(6);
+                if (data === "[DONE]") continue;
+
+                try {
+                  const parsed = JSON.parse(data);
+
+                  // Handle different event types
+                  if (parsed.type === "start" && parsed.message_id) {
+                    // Update with real message IDs from backend
+                    realAssistantMessageId = parsed.message_id;
+                  } else if (parsed.type === "content" && parsed.content) {
+                    accumulatedContent += parsed.content;
+
+                    // Update assistant message content
+                    set((state) => ({
+                      conversations: state.conversations.map((c) =>
+                        c.conversation_id === conversationId
+                          ? {
+                              ...c,
+                              messages: c.messages?.map((m) =>
+                                m.message_id === tempAssistantMessageId || m.message_id === realAssistantMessageId
+                                  ? {
+                                      ...m,
+                                      message_id: realAssistantMessageId,
+                                      content: accumulatedContent,
+                                      status: "streaming" as const,
+                                    }
+                                  : m
+                              ),
+                            }
+                          : c
+                      ),
+                    }));
+                  } else if (parsed.type === "complete") {
+                    // Update message IDs with real ones from backend
+                    if (parsed.user_message_id) {
+                      realUserMessageId = parsed.user_message_id;
+                    }
+                    if (parsed.assistant_message_id) {
+                      realAssistantMessageId = parsed.assistant_message_id;
+                    }
+                  }
+                } catch (e) {
+                  // Ignore parse errors
+                  console.warn("[Store] Failed to parse streaming chunk:", e);
+                }
+              }
+            }
+          }
+
+          // Mark messages as completed with real IDs
+          set((state) => ({
+            conversations: state.conversations.map((c) =>
+              c.conversation_id === conversationId
+                ? {
+                    ...c,
+                    messages: c.messages?.map((m) => {
+                      if (m.message_id === tempUserMessageId) {
+                        return { ...m, message_id: realUserMessageId, status: "completed" as const };
+                      }
+                      if (m.message_id === tempAssistantMessageId || m.message_id === realAssistantMessageId) {
+                        return {
+                          ...m,
+                          message_id: realAssistantMessageId,
+                          status: "completed" as const,
+                        };
+                      }
+                      return m;
+                    }),
+                    message_count: (c.message_count || 0) + 2,
+                  }
+                : c
+            ),
+            isStreaming: false,
+            isLoading: false,
+          }));
+        } catch (error) {
+          console.error("[Store] Failed to send streaming message:", error);
+          const errorMessage =
+            error instanceof Error
+              ? error.message
+              : "Failed to send streaming message";
+          set({ error: errorMessage, isStreaming: false, isLoading: false });
+        }
+      },
+
+      // Private method: Non-streaming strategy
+      _sendMessageWithoutStreaming: async (content: string) => {
+        const { settings } = get();
         let conversationId = get().currentConversationId;
 
         // Create conversation if none exists
         if (!conversationId) {
           console.log("[Store] No conversation exists, creating one...");
 
-          // Check again after acquiring the state to prevent race conditions
           const currentState = get();
           if (!currentState.currentConversationId) {
             await get().createConversation();
-            // Wait for conversation creation
             await new Promise((resolve) => setTimeout(resolve, 100));
 
-            // Get the newly created conversation ID
             conversationId = get().currentConversationId;
 
             if (!conversationId) {
@@ -285,7 +497,6 @@ export const useChatStore = create<ChatStore>()(
               return;
             }
           } else {
-            // Another call already created a conversation
             conversationId = currentState.currentConversationId;
           }
         }
@@ -331,7 +542,6 @@ export const useChatStore = create<ChatStore>()(
                     optimisticUserMessage,
                     placeholderAssistantMessage,
                   ],
-                  // Update title from first message
                   title: c.message_count === 0 ? content.slice(0, 50) : c.title,
                 }
               : c
@@ -343,219 +553,10 @@ export const useChatStore = create<ChatStore>()(
         try {
           let response;
 
-          // Send based on chat mode
+          // Send based on chat mode (non-streaming endpoints)
           switch (settings.mode) {
-            case "deep_research":
-              console.log("[Store] Starting deep research...");
-
-              // For deep research, backend creates both messages
-              // Remove optimistic messages first
-              set((state) => ({
-                conversations: state.conversations.map((c) =>
-                  c.conversation_id === conversationId
-                    ? {
-                        ...c,
-                        messages: (c.messages || []).filter(
-                          (m) => m.message_id !== tempUserMessageId && m.message_id !== tempAssistantMessageId
-                        ),
-                      }
-                    : c
-                ),
-              }));
-
-              // Start deep research - backend will create messages
-              const deepResearchResponse = await chatAPI.startDeepResearch({
-                user_id: get().currentUserId,
-                conversation_id: conversationId,
-                initial_message_id: "", // Not used anymore, backend generates IDs
-                research_topic: content,
-                session_id: `session_${Date.now()}`,
-              });
-
-              // Add the real messages from backend
-              const realUserMessage: Message = {
-                message_id: deepResearchResponse.user_message_id,
-                conversation_id: conversationId,
-                role: "user",
-                content,
-                sequence_number: get().messages.length,
-                status: "completed",
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-              };
-
-              const realAssistantMessage: Message = {
-                message_id: deepResearchResponse.assistant_message_id,
-                conversation_id: conversationId,
-                role: "assistant",
-                content: `🔬 Deep research initiated...\n\n**Topic:** ${content}\n\n**Status:** Analyzing and planning research...`,
-                sequence_number: get().messages.length + 1,
-                status: "streaming",
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-                metadata: {
-                  deep_research_report_id: deepResearchResponse.report_id,
-                  research_status: "in_progress",
-                },
-              };
-
-              set((state) => ({
-                conversations: state.conversations.map((c) =>
-                  c.conversation_id === conversationId
-                    ? {
-                        ...c,
-                        messages: [...(c.messages || []), realUserMessage, realAssistantMessage],
-                      }
-                    : c
-                ),
-                isLoading: false,
-              }));
-
-              // Connect to SSE stream for updates
-              const eventSource = chatAPI.connectDeepResearchStream(deepResearchResponse.report_id);
-              const assistantMsgId = deepResearchResponse.assistant_message_id;
-              let streamContent = `🔬 **Deep Research Report: ${content}**\n\n`;
-
-              // Store EventSource reference for cleanup
-              set({ activeEventSource: eventSource });
-
-              eventSource.onmessage = (event) => {
-                try {
-                  const data = JSON.parse(event.data);
-
-                  switch (data.event) {
-                    case "phase_started":
-                      streamContent += `\n**Phase:** ${data.data.message}\n`;
-                      break;
-
-                    case "phase_completed":
-                      streamContent += `✓ ${data.data.message} (${data.data.duration_ms}ms)\n`;
-                      break;
-
-                    case "query_executed":
-                      streamContent += `📊 Query: "${data.data.query}" (${data.data.results_count} results)\n`;
-                      break;
-
-                    case "progress_update":
-                      streamContent += `\n**Progress:** ${data.data.progress_percentage.toFixed(1)}% - ${data.data.sources_collected} sources collected\n`;
-                      break;
-
-                    case "section_content":
-                      streamContent += data.data.content_chunk;
-                      break;
-
-                    case "completed":
-                      streamContent += `\n\n---\n\n✅ **Research Complete**\n`;
-                      streamContent += `- Total sections: ${data.data.total_sections}\n`;
-                      streamContent += `- Total sources: ${data.data.total_sources}\n`;
-                      streamContent += `- Processing time: ${(data.data.processing_time_ms / 1000).toFixed(2)}s\n`;
-                      eventSource.close();
-
-                      // Mark message as completed and clear EventSource
-                      set((state) => ({
-                        conversations: state.conversations.map((c) =>
-                          c.conversation_id === conversationId
-                            ? {
-                                ...c,
-                                messages: (c.messages || []).map((m) =>
-                                  m.message_id === assistantMsgId
-                                    ? {
-                                        ...m,
-                                        status: "completed" as const,
-                                        metadata: {
-                                          ...m.metadata,
-                                          research_status: "completed",
-                                        },
-                                      }
-                                    : m
-                                ),
-                              }
-                            : c
-                        ),
-                        activeEventSource: null,
-                      }));
-                      return;
-
-                    case "failed":
-                      streamContent += `\n\n❌ **Research Failed**\n${data.data.error_message}\n`;
-                      eventSource.close();
-
-                      set((state) => ({
-                        conversations: state.conversations.map((c) =>
-                          c.conversation_id === conversationId
-                            ? {
-                                ...c,
-                                messages: (c.messages || []).map((m) =>
-                                  m.message_id === assistantMsgId
-                                    ? {
-                                        ...m,
-                                        status: "failed" as const,
-                                        metadata: {
-                                          ...m.metadata,
-                                          research_status: "failed",
-                                        },
-                                      }
-                                    : m
-                                ),
-                              }
-                            : c
-                        ),
-                        activeEventSource: null,
-                      }));
-                      return;
-                  }
-
-                  // Update message content
-                  set((state) => ({
-                    conversations: state.conversations.map((c) =>
-                      c.conversation_id === conversationId
-                        ? {
-                            ...c,
-                            messages: (c.messages || []).map((m) =>
-                              m.message_id === assistantMsgId
-                                ? { ...m, content: streamContent }
-                                : m
-                            ),
-                          }
-                        : c
-                    ),
-                  }));
-                } catch (e) {
-                  console.error("[Store] Failed to parse SSE event:", e);
-                }
-              };
-
-              eventSource.onerror = (error) => {
-                console.error("[Store] SSE error:", error);
-                eventSource.close();
-
-                set((state) => ({
-                  conversations: state.conversations.map((c) =>
-                    c.conversation_id === conversationId
-                      ? {
-                          ...c,
-                          messages: (c.messages || []).map((m) =>
-                            m.message_id === assistantMsgId
-                              ? {
-                                  ...m,
-                                  status: "failed" as const,
-                                  content: streamContent + "\n\n❌ Connection lost",
-                                }
-                              : m
-                          ),
-                        }
-                      : c
-                  ),
-                  activeEventSource: null,
-                  error: "Deep research connection lost",
-                }));
-              };
-
-              // For deep research, we don't have a typical response, so skip the rest
-              return;
-
             case "rag":
-              console.log("[Store] Sending RAG message...");
+              console.log("[Store] Sending RAG message (non-streaming)...");
               response = await chatAPI.sendRAGMessage(conversationId, {
                 content,
                 enable_rag: settings.rag_enabled,
@@ -565,7 +566,7 @@ export const useChatStore = create<ChatStore>()(
               break;
 
             case "similarity":
-              console.log("[Store] Sending similarity message...");
+              console.log("[Store] Sending similarity message (non-streaming)...");
               response = await chatAPI.sendSimilarityMessage(conversationId, {
                 content,
                 top_k: settings.similarity_top_k,
@@ -577,7 +578,7 @@ export const useChatStore = create<ChatStore>()(
 
             case "standard":
             default:
-              console.log("[Store] Sending standard message...");
+              console.log("[Store] Sending standard message (non-streaming)...");
               response = await chatAPI.sendMessage(conversationId, { content });
               break;
           }
@@ -611,7 +612,7 @@ export const useChatStore = create<ChatStore>()(
             isLoading: false,
           }));
 
-          console.log("[Store] Message sent successfully");
+          console.log("[Store] Message sent successfully (non-streaming)");
         } catch (error) {
           console.error("[Store] Failed to send message:", error);
 
@@ -633,37 +634,37 @@ export const useChatStore = create<ChatStore>()(
         }
       },
 
-      sendStreamingMessage: async (content: string) => {
-        const { settings } = get();
+      // Handle deep research mode separately (always streaming)
+      sendDeepResearchMessage: async (content: string) => {
+        get().cleanupEventSource();
+
         let conversationId = get().currentConversationId;
 
-        // Create conversation if none exists
         if (!conversationId) {
-          console.log("[Store] No conversation exists, creating one for streaming...");
-
-          // Check again to prevent race conditions
-          const currentState = get();
-          if (!currentState.currentConversationId) {
-            await get().createConversation();
-            await new Promise((resolve) => setTimeout(resolve, 100));
-
-            conversationId = get().currentConversationId;
-
-            if (!conversationId) {
-              set({ error: "No active conversation" });
-              return;
-            }
-          } else {
-            conversationId = currentState.currentConversationId;
+          await get().createConversation();
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          conversationId = get().currentConversationId;
+          if (!conversationId) {
+            set({ error: "No active conversation" });
+            return;
           }
         }
 
-        set({ isStreaming: true, isLoading: true, error: null });
+        console.log("[Store] Starting deep research...");
 
         try {
-          // Add user message optimistically
-          const userMessage: Message = {
-            message_id: `temp_${Date.now()}`,
+          // Start deep research - backend will create messages
+          const deepResearchResponse = await chatAPI.startDeepResearch({
+            user_id: get().currentUserId,
+            conversation_id: conversationId,
+            initial_message_id: "",
+            research_topic: content,
+            session_id: `session_${Date.now()}`,
+          });
+
+          // Add the real messages from backend
+          const realUserMessage: Message = {
+            message_id: deepResearchResponse.user_message_id,
             conversation_id: conversationId,
             role: "user",
             content,
@@ -673,16 +674,19 @@ export const useChatStore = create<ChatStore>()(
             updated_at: new Date().toISOString(),
           };
 
-          // Add placeholder assistant message
-          const assistantMessage: Message = {
-            message_id: `temp_${Date.now() + 1}`,
+          const realAssistantMessage: Message = {
+            message_id: deepResearchResponse.assistant_message_id,
             conversation_id: conversationId,
             role: "assistant",
-            content: "",
+            content: `🔬 Deep research initiated...\n\n**Topic:** ${content}\n\n**Status:** Analyzing and planning research...`,
             sequence_number: get().messages.length + 1,
             status: "streaming",
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
+            metadata: {
+              deep_research_report_id: deepResearchResponse.report_id,
+              research_status: "in_progress",
+            },
           };
 
           set((state) => ({
@@ -690,108 +694,182 @@ export const useChatStore = create<ChatStore>()(
               c.conversation_id === conversationId
                 ? {
                     ...c,
-                    messages: [...(c.messages || []), userMessage, assistantMessage],
+                    messages: [...(c.messages || []), realUserMessage, realAssistantMessage],
+                    title: c.message_count === 0 ? content.slice(0, 50) : c.title,
                   }
                 : c
             ),
-          }));
-
-          // Get stream based on mode
-          let stream: ReadableStream;
-          switch (settings.mode) {
-            case "rag":
-              stream = await chatAPI.sendRAGMessageStream(conversationId, {
-                content,
-                enable_rag: settings.rag_enabled,
-                rag_top_k: settings.rag_top_k,
-                include_cross_conversation: settings.rag_cross_conversation,
-              });
-              break;
-
-            case "similarity":
-              stream = await chatAPI.sendSimilarityMessageStream(conversationId, {
-                content,
-                top_k: settings.similarity_top_k,
-                similarity_threshold: settings.similarity_threshold,
-                include_cross_conversation: settings.similarity_cross_conversation,
-                enable_auto_embedding: settings.enable_auto_embedding,
-              });
-              break;
-
-            case "standard":
-            default:
-              stream = await chatAPI.sendMessageStream(conversationId, { content });
-              break;
-          }
-
-          // Process stream
-          const reader = stream.getReader();
-          const decoder = new TextDecoder();
-          let accumulatedContent = "";
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split("\n");
-
-            for (const line of lines) {
-              if (line.startsWith("data: ")) {
-                const data = line.slice(6);
-                if (data === "[DONE]") continue;
-
-                try {
-                  const parsed = JSON.parse(data);
-                  if (parsed.content) {
-                    accumulatedContent += parsed.content;
-
-                    // Update assistant message
-                    set((state) => ({
-                      conversations: state.conversations.map((c) =>
-                        c.conversation_id === conversationId
-                          ? {
-                              ...c,
-                              messages: c.messages?.map((m, idx) =>
-                                idx === c.messages!.length - 1
-                                  ? { ...m, content: accumulatedContent }
-                                  : m
-                              ),
-                            }
-                          : c
-                      ),
-                    }));
-                  }
-                } catch (e) {
-                  // Ignore parse errors
-                }
-              }
-            }
-          }
-
-          // Mark message as completed
-          set((state) => ({
-            conversations: state.conversations.map((c) =>
-              c.conversation_id === conversationId
-                ? {
-                    ...c,
-                    messages: c.messages?.map((m, idx) =>
-                      idx === c.messages!.length - 1
-                        ? { ...m, status: "completed" as const }
-                        : m
-                    ),
-                  }
-                : c
-            ),
-            isStreaming: false,
             isLoading: false,
           }));
+
+          // Connect to SSE stream for updates
+          const eventSource = chatAPI.connectDeepResearchStream(deepResearchResponse.report_id);
+          const assistantMsgId = deepResearchResponse.assistant_message_id;
+          let streamContent = `🔬 **Deep Research Report: ${content}**\n\n`;
+
+          set({ activeEventSource: eventSource });
+
+          eventSource.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+
+              switch (data.event) {
+                case "phase_started":
+                  streamContent += `\n**Phase:** ${data.data.message}\n`;
+                  break;
+
+                case "phase_completed":
+                  streamContent += `✓ ${data.data.message} (${data.data.duration_ms}ms)\n`;
+                  break;
+
+                case "query_executed":
+                  streamContent += `📊 Query: "${data.data.query}" (${data.data.results_count} results)\n`;
+                  break;
+
+                case "progress_update":
+                  streamContent += `\n**Progress:** ${data.data.progress_percentage.toFixed(1)}% - ${data.data.sources_collected} sources collected\n`;
+                  break;
+
+                case "section_content":
+                  streamContent += data.data.content_chunk;
+                  break;
+
+                case "completed":
+                  streamContent += `\n\n---\n\n✅ **Research Complete**\n`;
+                  streamContent += `- Total sections: ${data.data.total_sections}\n`;
+                  streamContent += `- Total sources: ${data.data.total_sources}\n`;
+                  streamContent += `- Processing time: ${(data.data.processing_time_ms / 1000).toFixed(2)}s\n`;
+                  eventSource.close();
+
+                  set((state) => ({
+                    conversations: state.conversations.map((c) =>
+                      c.conversation_id === conversationId
+                        ? {
+                            ...c,
+                            messages: (c.messages || []).map((m) =>
+                              m.message_id === assistantMsgId
+                                ? {
+                                    ...m,
+                                    status: "completed" as const,
+                                    metadata: {
+                                      ...m.metadata,
+                                      research_status: "completed",
+                                    },
+                                  }
+                                : m
+                            ),
+                          }
+                        : c
+                    ),
+                    activeEventSource: null,
+                  }));
+                  return;
+
+                case "failed":
+                  streamContent += `\n\n❌ **Research Failed**\n${data.data.error_message}\n`;
+                  eventSource.close();
+
+                  set((state) => ({
+                    conversations: state.conversations.map((c) =>
+                      c.conversation_id === conversationId
+                        ? {
+                            ...c,
+                            messages: (c.messages || []).map((m) =>
+                              m.message_id === assistantMsgId
+                                ? {
+                                    ...m,
+                                    status: "failed" as const,
+                                    metadata: {
+                                      ...m.metadata,
+                                      research_status: "failed",
+                                    },
+                                  }
+                                : m
+                            ),
+                          }
+                        : c
+                    ),
+                    activeEventSource: null,
+                  }));
+                  return;
+              }
+
+              // Update message content
+              set((state) => ({
+                conversations: state.conversations.map((c) =>
+                  c.conversation_id === conversationId
+                    ? {
+                        ...c,
+                        messages: (c.messages || []).map((m) =>
+                          m.message_id === assistantMsgId
+                            ? { ...m, content: streamContent }
+                            : m
+                        ),
+                      }
+                    : c
+                ),
+              }));
+            } catch (e) {
+              console.error("[Store] Failed to parse SSE event:", e);
+            }
+          };
+
+          eventSource.onerror = (error) => {
+            console.error("[Store] SSE error:", error);
+            eventSource.close();
+
+            set((state) => ({
+              conversations: state.conversations.map((c) =>
+                c.conversation_id === conversationId
+                  ? {
+                      ...c,
+                      messages: (c.messages || []).map((m) =>
+                        m.message_id === assistantMsgId
+                          ? {
+                              ...m,
+                              status: "failed" as const,
+                              content: streamContent + "\n\n❌ Connection lost",
+                            }
+                          : m
+                      ),
+                    }
+                  : c
+              ),
+              activeEventSource: null,
+              error: "Deep research connection lost",
+            }));
+          };
         } catch (error) {
-          const errorMessage =
-            error instanceof Error
-              ? error.message
-              : "Failed to send streaming message";
-          set({ error: errorMessage, isStreaming: false, isLoading: false });
+          console.error("[Store] Failed to start deep research:", error);
+          set({
+            error: error instanceof Error ? error.message : "Failed to start deep research",
+            isLoading: false,
+          });
+        }
+      },
+
+      /**
+       * @deprecated Use sendMessage() instead. It now automatically handles streaming based on settings.
+       * This method is kept for backward compatibility and redirects to sendMessage().
+       */
+      sendStreamingMessage: async (content: string) => {
+        console.warn("[Store] sendStreamingMessage is deprecated. Use sendMessage() instead.");
+
+        // Temporarily enable streaming if not already enabled
+        const { settings } = get();
+        const wasStreamingEnabled = settings.stream;
+
+        if (!wasStreamingEnabled) {
+          get().updateSettings({ stream: true });
+        }
+
+        try {
+          await get().sendMessage(content);
+        } finally {
+          // Restore original setting
+          if (!wasStreamingEnabled) {
+            get().updateSettings({ stream: false });
+          }
         }
       },
 

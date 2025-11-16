@@ -5,8 +5,7 @@ import { ArrowUp, Square } from "lucide-react";
 import { useState, useRef, useEffect, KeyboardEvent } from "react";
 
 export default function InputBox() {
-  const { sendMessage, sendStreamingMessage, isLoading, isStreaming, settings } =
-    useChatStore();
+  const { sendMessage, isLoading, isStreaming, settings } = useChatStore();
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -27,12 +26,8 @@ export default function InputBox() {
     const message = input.trim();
     setInput("");
 
-    // Use streaming or regular send based on settings
-    if (settings.stream) {
-      await sendStreamingMessage(message);
-    } else {
-      await sendMessage(message);
-    }
+    // sendMessage() now automatically handles streaming based on settings
+    await sendMessage(message);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
