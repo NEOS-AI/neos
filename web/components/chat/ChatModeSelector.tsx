@@ -3,6 +3,7 @@
 import { useChatStore } from "@/lib/stores/chat-store";
 import { Brain, Database, Sparkles, SearchX } from "lucide-react";
 import type { ChatMode } from "@/lib/types";
+import SimilaritySettings from "./SimilaritySettings";
 
 const chatModes: Array<{
   id: ChatMode;
@@ -40,9 +41,9 @@ export default function ChatModeSelector() {
   const { settings, setChatMode } = useChatStore();
 
   return (
-    <div className="flex items-center gap-2 p-2 bg-claude-dark border border-claude-border rounded-lg">
+    <div className="flex items-center gap-3 p-2 bg-claude-dark border border-claude-border rounded-lg">
       <span className="text-xs text-claude-text-secondary px-2">Mode:</span>
-      <div className="flex gap-1">
+      <div className="flex gap-1 flex-1">
         {chatModes.map((mode) => (
           <button
             key={mode.id}
@@ -63,6 +64,9 @@ export default function ChatModeSelector() {
           </button>
         ))}
       </div>
+
+      {/* Similarity Settings - Only shows when similarity mode is active */}
+      <SimilaritySettings />
     </div>
   );
 }

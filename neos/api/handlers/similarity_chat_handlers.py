@@ -70,12 +70,17 @@ async def send_similarity_message(
         # 응답 생성
         metadata = result["processing_metadata"]
 
+        # 에러 메시지 수집
+        errors = []
+        if metadata.get("similarity_search_failed"):
+            errors.append(metadata.get("error_message", "유사도 검색에 실패했습니다."))
+
         return CreateSimilarityMessageResponse(
             success=True,
             user_message=MessageResponse(**result["user_message"]),
             assistant_message=MessageResponse(**result["assistant_message"]),
             conversation_id=conversation_id,
-            errors=[],
+            errors=errors,
             context_enhanced=metadata.get("context_enhanced", False),
             relevant_message_count=metadata.get("relevant_message_count", 0),
             similarity_scores=[
@@ -348,4 +353,84 @@ async def get_similarity_config(conversation_id: str):
         raise
     except Exception as e:
         logger.error(f"Failed to get similarity config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/conversations/{conversation_id}/similarity/analytics")
+async def get_similarity_analytics(conversation_id: str):
+    """
+    유사도 검색 사용 통계 및 분석
+
+    메시지의 similarity 메타데이터를 분석하여 통계 반환
+    """
+    try:
+        # 대화 존재 확인
+        conversation = await ChatService.get_conversation(conversation_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        # 대화의 모든 메시지 조회
+        from neos.api.services.chat_service import ChatService
+        messages = await ChatService.get_messages(conversation_id, limit=1000)
+
+        # Similarity search를 사용한 메시지 필터링
+        similarity_messages = [
+            msg for msg in messages
+            if msg.get("metadata", {}).get("context_enhanced")
+        ]
+
+        # 통계 계산
+        total_similarity_searches = len(similarity_messages)
+
+        if total_similarity_searches == 0:
+            return {
+                "conversation_id": conversation_id,
+                "total_similarity_searches": 0,
+                "average_relevant_messages": 0,
+                "average_similarity_score": 0,
+                "most_common_settings": None,
+                "usage_over_time": []
+            }
+
+        # 평균 관련 메시지 수
+        avg_relevant_messages = sum(
+            msg.get("metadata", {}).get("relevant_message_count", 0)
+            for msg in similarity_messages
+        ) / total_similarity_searches
+
+        # 평균 유사도 점수 계산
+        all_scores = []
+        for msg in similarity_messages:
+            scores = msg.get("metadata", {}).get("similarity_scores", [])
+            for score_obj in scores:
+                all_scores.append(score_obj.get("similarity_score", 0))
+
+        avg_similarity_score = sum(all_scores) / len(all_scores) if all_scores else 0
+
+        # 가장 많이 사용된 설정
+        settings_usage = {}
+        for msg in similarity_messages:
+            config = msg.get("metadata", {}).get("search_config", {})
+            config_key = f"k{config.get('top_k', 3)}_t{config.get('threshold', 0.7)}"
+            settings_usage[config_key] = settings_usage.get(config_key, 0) + 1
+
+        most_common_setting = max(settings_usage.items(), key=lambda x: x[1]) if settings_usage else None
+
+        return {
+            "conversation_id": conversation_id,
+            "total_similarity_searches": total_similarity_searches,
+            "average_relevant_messages": round(avg_relevant_messages, 2),
+            "average_similarity_score": round(avg_similarity_score, 3),
+            "most_common_settings": most_common_setting[0] if most_common_setting else None,
+            "cross_conversation_usage": sum(
+                1 for msg in similarity_messages
+                if msg.get("metadata", {}).get("search_config", {}).get("include_cross_conversation")
+            ),
+            "total_messages_analyzed": len(messages)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get similarity analytics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
