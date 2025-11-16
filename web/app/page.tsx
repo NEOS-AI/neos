@@ -7,6 +7,7 @@ import { PageLoading } from "@/components/chat/LoadingStates";
 import { Sparkles, Database, Brain, Code } from "lucide-react";
 
 // New Claude-style components
+import Sidebar from "@/components/home/Sidebar";
 import GreetingHero from "@/components/home/GreetingHero";
 import ChatComposer from "@/components/home/ChatComposer";
 import QuickActions from "@/components/home/QuickActions";
@@ -55,6 +56,7 @@ export default function Home() {
   const { loadConversations, conversations, createConversation } = useChatStore();
   const [isLoading, setIsLoading] = useState(true);
   const [selectedMode, setSelectedMode] = useState("standard");
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   useEffect(() => {
     const initialize = async () => {
@@ -117,34 +119,56 @@ export default function Home() {
 
   return (
     <div className="flex min-h-screen bg-bg-canvas">
+      {/* Skip to main content link for accessibility */}
+      <a
+        href="#main-content"
+        className="
+          sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4
+          z-[100] px-4 py-2 bg-brand-accent text-white rounded-xl
+          focus:outline-none focus:ring-2 focus:ring-brand-accent/50
+        "
+      >
+        Skip to main content
+      </a>
+
+      {/* Sidebar */}
+      <Sidebar
+        isMobileOpen={isSidebarOpen}
+        onMobileClose={() => setIsSidebarOpen(false)}
+      />
+
       {/* Main content area */}
-      <main className="flex-1 flex flex-col" role="main">
+      <main id="main-content" className="flex-1 flex flex-col" role="main">
         {/* Top Bar */}
         <TopBar
           showModeSelector={true}
           modes={modes}
           selectedMode={selectedMode}
           onModeChange={setSelectedMode}
+          onMenuClick={() => setIsSidebarOpen(true)}
         />
 
         {/* Main stage */}
         <div className="flex-1 overflow-y-auto">
-          <div className="max-w-4xl mx-auto px-6 py-12 space-y-12">
+          <div className="max-w-[860px] mx-auto px-6 py-16">
             {/* Greeting Hero */}
-            <div className="pt-8">
+            <div className="pt-12">
               <GreetingHero
                 greeting={`${getGreeting()}, let's get started`}
               />
             </div>
 
             {/* Chat Composer */}
-            <ChatComposer
-              onSend={handleSendMessage}
-              placeholder="What can I help you with?"
-            />
+            <div className="mt-10">
+              <ChatComposer
+                onSend={handleSendMessage}
+                placeholder="What can I help you with?"
+              />
+            </div>
 
             {/* Quick Actions */}
-            <QuickActions
+            <div className="mt-6">
+              <QuickActions
               actions={[
                 {
                   icon: Sparkles,
@@ -171,10 +195,11 @@ export default function Home() {
                   onClick: () => handleStartNewChat("Review my code"),
                 },
               ]}
-            />
+              />
+            </div>
 
             {/* Example Cards */}
-            <div className="space-y-6">
+            <div className="mt-16 space-y-6">
               <h2 className="text-xl font-semibold text-text-primary">
                 Try these examples
               </h2>
@@ -189,7 +214,7 @@ export default function Home() {
 
             {/* Recent Conversations (if any) */}
             {conversations.length > 0 && (
-              <div className="space-y-6 pt-8 border-t border-line-soft">
+              <div className="mt-16 space-y-6 pt-12 border-t border-line-soft">
                 <h2 className="text-xl font-semibold text-text-primary">
                   Recent conversations
                 </h2>
