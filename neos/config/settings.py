@@ -136,9 +136,18 @@ class Settings(BaseSettings):
     KG_EXTRACTION_MODEL: str = env_vars.get("KG_EXTRACTION_MODEL", "gpt-4-turbo-preview")
     KG_MIN_CONFIDENCE: float = float(env_vars.get("KG_MIN_CONFIDENCE", 0.7))
 
+    # Deep Research 설정
+    DEEP_RESEARCH_MAX_POLLING_DURATION: int = int(env_vars.get("DEEP_RESEARCH_MAX_POLLING_DURATION", 1800))  # 30분
+    DEEP_RESEARCH_POLL_INTERVAL: int = int(env_vars.get("DEEP_RESEARCH_POLL_INTERVAL", 2))  # 2초
+    DEEP_RESEARCH_DEFAULT_QUALITY_SCORE: float = float(env_vars.get("DEEP_RESEARCH_DEFAULT_QUALITY_SCORE", 0.85))
+    DEEP_RESEARCH_CHUNK_SIZE: int = int(env_vars.get("DEEP_RESEARCH_CHUNK_SIZE", 200))
+    DEEP_RESEARCH_MAX_SOURCES_IN_MEMORY: int = int(env_vars.get("DEEP_RESEARCH_MAX_SOURCES_IN_MEMORY", 50))
+    DEEP_RESEARCH_MAX_CONCURRENT_REQUESTS: int = int(env_vars.get("DEEP_RESEARCH_MAX_CONCURRENT_REQUESTS", 3))
+    DEEP_RESEARCH_MIN_REQUEST_INTERVAL: float = float(env_vars.get("DEEP_RESEARCH_MIN_REQUEST_INTERVAL", 0.5))
+
     # 환경 설정
     ENVIRONMENT: str = "development"  # development, staging, production
-    
+
     class Config:
         env_file = ".env"
         case_sensitive = True

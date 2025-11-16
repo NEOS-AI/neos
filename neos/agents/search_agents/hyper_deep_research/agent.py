@@ -111,18 +111,18 @@ class HyperDeepResearchAgent(SearchAgent):
         self.repository = HyperResearchRepository()
         print("[DEBUG] Repository initialized")
 
-        # Rate limiting for API calls
+        # Rate limiting for API calls (from settings)
         # Limit concurrent Tavily API requests to prevent 429 errors
-        self.tavily_rate_limiter = asyncio.Semaphore(3)  # Max 3 concurrent requests
-        self.min_request_interval = 0.5  # Minimum 0.5s between requests
+        self.tavily_rate_limiter = asyncio.Semaphore(settings.DEEP_RESEARCH_MAX_CONCURRENT_REQUESTS)
+        self.min_request_interval = settings.DEEP_RESEARCH_MIN_REQUEST_INTERVAL
         self.last_request_time = 0
 
         # Research state
         self.current_report_id = None
         self.sections_data = []
-        # Memory optimization: Keep only recent sources in memory
+        # Memory optimization: Keep only recent sources in memory (from settings)
         self.all_collected_sources = []
-        self.max_sources_in_memory = 50  # Limit memory usage
+        self.max_sources_in_memory = settings.DEEP_RESEARCH_MAX_SOURCES_IN_MEMORY
         self.research_metadata = {
             "total_queries_executed": 0,
             "total_sources_collected": 0,
