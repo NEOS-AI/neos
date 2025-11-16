@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from neos.workflow.graph import multi_agent_workflow
 from neos.database.connection import db_manager
 from neos.database.models import User, QueryHistory
+from neos.database.repositories.query_repository import QueryRepository
 from neos.utils.cache import cache_manager
 from neos.utils.embeddings import embedding_manager
 
@@ -308,109 +309,70 @@ class QueryService:
         report_id = f"hyper_report_{report_uuid}"
 
         # 보고서 메타데이터 조회
-        report_query = """
-        SELECT
-            report_id,
-            user_id,
-            session_id,
-            research_topic,
-            research_status,
-            created_at,
-            completed_at,
-            total_sections,
-            total_sources,
-            total_queries,
-            quality_score,
-            metadata
-        FROM hyper_research_reports
-        WHERE report_id = $1 AND deleted_at IS NULL
-        """
-
-        report = await db_manager.fetch_one(report_query, report_id)
+        report = await QueryRepository.get_hyper_research_report(report_id)
 
         if not report:
             return None
 
-        # 섹션 데이터 조회 (순서대로)
-        sections_query = """
-        SELECT
-            section_id,
-            section_order,
-            section_type,
-            section_title,
-            section_content,
-            section_summary,
-            sources_count,
-            created_at,
-            completed_at
-        FROM hyper_research_sections
-        WHERE report_id = $1
-        ORDER BY section_order ASC
-        """
-
-        sections = await db_manager.fetch_all(sections_query, report_id)
+        # 섹션 데이터 조회
+        sections = await QueryRepository.get_hyper_research_sections(report_id)
 
         # 마크다운 생성
         markdown_parts = []
 
         # 헤더
-        markdown_parts.append(f"# {report[3]}\n")  # research_topic
-        markdown_parts.append(f"**Status:** {report[4]}\n")  # research_status
-        markdown_parts.append(f"**Created:** {report[5]}\n")  # created_at
-        if report[6]:  # completed_at
-            markdown_parts.append(f"**Completed:** {report[6]}\n")
+        markdown_parts.append(f"# {report.research_topic}\n")
+        markdown_parts.append(f"**Status:** {report.research_status}\n")
+        markdown_parts.append(f"**Created:** {report.created_at}\n")
+        if report.completed_at:
+            markdown_parts.append(f"**Completed:** {report.completed_at}\n")
         markdown_parts.append("\n---\n")
 
         # 통계
         markdown_parts.append("\n## 📊 Research Statistics\n")
-        markdown_parts.append(f"- **Total Sections:** {report[7] or 0}\n")  # total_sections
-        markdown_parts.append(f"- **Total Sources:** {report[8] or 0}\n")  # total_sources
-        markdown_parts.append(f"- **Total Queries:** {report[9] or 0}\n")  # total_queries
-        if report[10]:  # quality_score
-            markdown_parts.append(f"- **Quality Score:** {report[10]:.2f}\n")
+        markdown_parts.append(f"- **Total Sections:** {report.total_sections}\n")
+        markdown_parts.append(f"- **Total Sources:** {report.total_sources}\n")
+        markdown_parts.append(f"- **Total Queries:** {report.total_queries}\n")
+        if report.quality_score:
+            markdown_parts.append(f"- **Quality Score:** {report.quality_score:.2f}\n")
 
         # 메타데이터에서 추가 정보
-        metadata = report[11] if report[11] else {}
-        if metadata:
-            if 'unique_domains' in metadata:
-                markdown_parts.append(f"- **Unique Domains:** {metadata['unique_domains']}\n")
-            if 'multi_query_searches' in metadata:
-                markdown_parts.append(f"- **Complex Searches:** {metadata['multi_query_searches']}\n")
-            if 'analysis_iterations' in metadata:
-                markdown_parts.append(f"- **Analysis Iterations:** {metadata['analysis_iterations']}\n")
+        if report.metadata:
+            if 'unique_domains' in report.metadata:
+                markdown_parts.append(f"- **Unique Domains:** {report.metadata['unique_domains']}\n")
+            if 'multi_query_searches' in report.metadata:
+                markdown_parts.append(f"- **Complex Searches:** {report.metadata['multi_query_searches']}\n")
+            if 'analysis_iterations' in report.metadata:
+                markdown_parts.append(f"- **Analysis Iterations:** {report.metadata['analysis_iterations']}\n")
 
         markdown_parts.append("\n---\n")
 
         # 섹션들
         for section in sections:
-            section_title = section[3]  # section_title
-            section_content = section[4]  # section_content
-            sources_count = section[6]  # sources_count
+            markdown_parts.append(f"\n## {section.section_title}\n")
 
-            markdown_parts.append(f"\n## {section_title}\n")
+            if section.section_content:
+                markdown_parts.append(f"\n{section.section_content}\n")
 
-            if section_content:
-                markdown_parts.append(f"\n{section_content}\n")
-
-            if sources_count and sources_count > 0:
-                markdown_parts.append(f"\n*Sources: {sources_count}*\n")
+            if section.sources_count and section.sources_count > 0:
+                markdown_parts.append(f"\n*Sources: {section.sources_count}*\n")
 
         markdown_content = "".join(markdown_parts)
 
         # 응답 메타데이터
         response_metadata = {
-            "user_id": report[1],
-            "session_id": report[2],
-            "research_topic": report[3],
-            "research_status": report[4],
-            "created_at": str(report[5]),
-            "completed_at": str(report[6]) if report[6] else None,
-            "total_sections": report[7] or 0,
-            "total_sources": report[8] or 0,
-            "total_queries": report[9] or 0,
-            "quality_score": report[10],
+            "user_id": report.user_id,
+            "session_id": report.session_id,
+            "research_topic": report.research_topic,
+            "research_status": report.research_status,
+            "created_at": str(report.created_at),
+            "completed_at": str(report.completed_at) if report.completed_at else None,
+            "total_sections": report.total_sections,
+            "total_sources": report.total_sources,
+            "total_queries": report.total_queries,
+            "quality_score": report.quality_score,
             "sections_count": len(sections),
-            "custom_metadata": metadata
+            "custom_metadata": report.metadata
         }
 
         return {
@@ -428,75 +390,31 @@ class QueryService:
         offset: int = 0
     ) -> Dict[str, Any]:
         """HyperDeepResearch 보고서 목록 조회"""
-        # WHERE 절 구성
-        where_clauses = ["deleted_at IS NULL"]
-        params = []
-        param_idx = 1
-
-        if user_id:
-            where_clauses.append(f"user_id = ${param_idx}")
-            params.append(user_id)
-            param_idx += 1
-
-        if status:
-            where_clauses.append(f"research_status = ${param_idx}")
-            params.append(status)
-            param_idx += 1
-
-        where_sql = " AND ".join(where_clauses)
-
         # 보고서 목록 조회
-        list_query = f"""
-        SELECT
-            report_id,
-            user_id,
-            research_topic,
-            research_status,
-            created_at,
-            completed_at,
-            total_sections,
-            total_sources,
-            total_queries,
-            quality_score
-        FROM hyper_research_reports
-        WHERE {where_sql}
-        ORDER BY created_at DESC
-        LIMIT ${param_idx} OFFSET ${param_idx + 1}
-        """
-
-        params.extend([limit, offset])
-        reports = await db_manager.fetch_all(list_query, *params)
-
-        # 전체 개수 조회
-        count_query = f"""
-        SELECT COUNT(*)
-        FROM hyper_research_reports
-        WHERE {where_sql}
-        """
-
-        # limit, offset 제외한 파라미터만 사용
-        count_params = params[:-2]
-        count_result = await db_manager.fetch_one(count_query, *count_params)
-        total_count = count_result[0] if count_result else 0
+        reports, total_count = await QueryRepository.list_hyper_research_reports(
+            user_id=user_id,
+            status=status,
+            limit=limit,
+            offset=offset
+        )
 
         # 응답 데이터 구성
         report_summaries = []
         for report in reports:
-            report_id = report[0]
             # UUID 추출 (hyper_report_{UUID} 형식)
-            report_uuid = report_id.replace("hyper_report_", "")
+            report_uuid = report.report_id.replace("hyper_report_", "")
 
             report_summaries.append({
-                "report_id": report_id,
+                "report_id": report.report_id,
                 "report_uuid": report_uuid,
-                "research_topic": report[2],
-                "research_status": report[3],
-                "created_at": str(report[4]),
-                "completed_at": str(report[5]) if report[5] else None,
-                "total_sections": report[6] or 0,
-                "total_sources": report[7] or 0,
-                "total_queries": report[8] or 0,
-                "quality_score": report[9]
+                "research_topic": report.research_topic,
+                "research_status": report.research_status,
+                "created_at": str(report.created_at),
+                "completed_at": str(report.completed_at) if report.completed_at else None,
+                "total_sections": report.total_sections,
+                "total_sources": report.total_sources,
+                "total_queries": report.total_queries,
+                "quality_score": report.quality_score
             })
 
         return {
