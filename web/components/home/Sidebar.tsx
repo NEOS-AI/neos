@@ -2,13 +2,25 @@
 
 import { useChatStore } from "@/lib/stores/chat-store";
 import { useRouter, usePathname } from "next/navigation";
-import { MessageSquare, Plus, Trash2, Home, Search } from "lucide-react";
-import { useState } from "react";
+import { MessageSquare, Plus, Trash2, Home, Search, X } from "lucide-react";
+import { useState, useEffect } from "react";
 
-export default function Sidebar() {
+interface SidebarProps {
+  isMobileOpen?: boolean;
+  onMobileClose?: () => void;
+}
+
+export default function Sidebar({ isMobileOpen = false, onMobileClose }: SidebarProps) {
   const router = useRouter();
   const pathname = usePathname();
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Close sidebar on route change (mobile)
+  useEffect(() => {
+    if (onMobileClose) {
+      onMobileClose();
+    }
+  }, [pathname]);
 
   const {
     conversations,
@@ -57,28 +69,63 @@ export default function Sidebar() {
   );
 
   return (
-    <nav
-      className="w-[280px] bg-bg-surface border-r border-line-soft flex flex-col h-full"
-      aria-label="Main navigation"
-    >
-      {/* Header */}
-      <div className="p-4 space-y-3 border-b border-line-soft">
-        {/* Logo & Home */}
-        <button
-          onClick={() => router.push('/')}
-          className="
-            w-full flex items-center gap-3 px-3 py-2
-            text-text-primary hover:text-brand-accent
-            transition-colors
-            group
-          "
-          aria-label="Go to home"
-        >
-          <div className="w-7 h-7 rounded-lg bg-brand-accent/10 flex items-center justify-center text-brand-accent font-bold text-sm">
-            N
+    <>
+      {/* Mobile overlay */}
+      {isMobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          onClick={onMobileClose}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Sidebar */}
+      <nav
+        className={`
+          w-[280px] bg-bg-surface border-r border-line-soft flex flex-col h-screen
+          sticky top-0 z-50
+          lg:translate-x-0
+          ${isMobileOpen ? "translate-x-0" : "-translate-x-full"}
+          lg:static fixed
+          transition-transform duration-300 ease-in-out
+        `}
+        aria-label="Main navigation"
+      >
+        {/* Header */}
+        <div className="p-4 space-y-3 border-b border-line-soft">
+          {/* Mobile close button & Logo */}
+          <div className="flex items-center justify-between">
+            <button
+              onClick={() => router.push('/')}
+              className="
+                flex items-center gap-3 px-3 py-2
+                text-text-primary hover:text-brand-accent
+                transition-colors
+                group flex-1
+              "
+              aria-label="Go to home"
+            >
+              <div className="w-7 h-7 rounded-lg bg-brand-accent/10 flex items-center justify-center text-brand-accent font-bold text-sm">
+                N
+              </div>
+              <span className="text-sm font-semibold">NEOS</span>
+            </button>
+
+            {/* Close button (mobile only) */}
+            {onMobileClose && (
+              <button
+                onClick={onMobileClose}
+                className="
+                  lg:hidden p-2 rounded-lg
+                  text-text-secondary hover:text-text-primary hover:bg-action-hover
+                  transition-colors
+                "
+                aria-label="Close sidebar"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
           </div>
-          <span className="text-sm font-semibold">NEOS</span>
-        </button>
 
         {/* New Chat Button */}
         <button
@@ -193,6 +240,7 @@ export default function Sidebar() {
           {conversations.length} {conversations.length === 1 ? "conversation" : "conversations"}
         </div>
       </div>
-    </nav>
+      </nav>
+    </>
   );
 }
