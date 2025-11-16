@@ -44,6 +44,9 @@ from .utils import (
     ComplexityAssessor,
     DeepDiveAnalyzer,
     SemanticClusterer,
+    CostOptimizer,
+    FactChecker,
+    BiasDetector,
 )
 
 
@@ -128,6 +131,9 @@ class HyperDeepResearchAgent(SearchAgent):
         self.complexity_assessor = ComplexityAssessor()
         self.deep_dive_analyzer = DeepDiveAnalyzer(max_depth=2, min_importance_score=8.0)
         self.semantic_clusterer = SemanticClusterer(similarity_threshold=0.75)
+        self.cost_optimizer = CostOptimizer(budget_limit=100.0, cache_ttl=3600)
+        self.fact_checker = FactChecker()
+        self.bias_detector = BiasDetector()
         print("[DEBUG] Enhanced utilities initialized")
 
         # Rate limiting for API calls (from settings)
@@ -396,6 +402,17 @@ class HyperDeepResearchAgent(SearchAgent):
             session_id, user_id, language
         )
 
+        # Phase 6.5: Fact Verification
+        print("\n[INFO] ===== Phase 6.5/8: Fact Verification & Claim Analysis =====")
+        fact_verification = await self._perform_fact_verification(
+            self.all_collected_sources, session_id, user_id, language
+        )
+        await self.repository.create_section(
+            self.current_report_id, "fact_verification", 6.5,
+            "Fact Verification & Contradiction Analysis",
+            fact_verification["report"], "completed"
+        )
+
         # Phase 7: Critical Analysis
         print("\n[INFO] ===== Phase 7/8: Critical Analysis =====")
         critical_analysis = await self._perform_critical_analysis(
@@ -404,6 +421,17 @@ class HyperDeepResearchAgent(SearchAgent):
         await self.repository.create_section(
             self.current_report_id, "critical_analysis", 7,
             "Critical Analysis & Perspectives", critical_analysis["full_analysis"], "completed"
+        )
+
+        # Phase 7.5: Bias Detection & Perspective Diversity
+        print("\n[INFO] ===== Phase 7.5/8: Bias & Perspective Analysis =====")
+        bias_analysis = await self._perform_bias_analysis(
+            self.all_collected_sources, session_id, user_id, language
+        )
+        await self.repository.create_section(
+            self.current_report_id, "bias_analysis", 7.5,
+            "Bias Detection & Perspective Diversity",
+            bias_analysis["report"], "completed"
         )
 
         # Phase 8: Final Report Synthesis
@@ -699,6 +727,109 @@ class HyperDeepResearchAgent(SearchAgent):
         except Exception as e:
             print(f"[ERROR] Cross-validation failed: {e}")
             return {"report": "Cross-validation pending", "sources_analyzed": 0}
+
+    async def _perform_fact_verification(
+        self,
+        sources: List[Dict[str, Any]],
+        session_id: str,
+        user_id: str,
+        language: str
+    ) -> Dict[str, Any]:
+        """Phase 6.5: Fact verification and contradiction detection."""
+        try:
+            print(f"[INFO] Verifying facts across {len(sources)} sources...")
+
+            # Create LLM for fact extraction
+            llm = create_tracked_llm(
+                llm=create_llm(temperature=0.1, max_tokens=2000),
+                session_id=session_id,
+                user_id=user_id,
+                workflow_step="hyper_deep_research",
+                agent_name=self.name,
+                tags=["fact_verification"]
+            )
+
+            # Use fact checker to verify sources
+            verification_results = await self.fact_checker.verify_sources(
+                sources=sources,
+                llm_callable=llm.ainvoke,
+                language=language
+            )
+
+            # Log statistics
+            stats = verification_results.get("stats", {})
+            print(f"[INFO] ✓ Extracted {stats.get('total_claims', 0)} claims")
+            print(f"[INFO] ✓ Found {stats.get('contradictions_found', 0)} contradictions")
+
+            return {
+                "report": verification_results.get("report", "Fact verification pending"),
+                "claims": verification_results.get("claims", []),
+                "contradictions": verification_results.get("contradictions", []),
+                "stats": stats
+            }
+
+        except Exception as e:
+            print(f"[ERROR] Fact verification failed: {e}")
+            logger.error(f"[FactVerification] Error: {e}", exc_info=True)
+            return {
+                "report": "Fact verification pending due to error",
+                "claims": [],
+                "contradictions": [],
+                "stats": {}
+            }
+
+    async def _perform_bias_analysis(
+        self,
+        sources: List[Dict[str, Any]],
+        session_id: str,
+        user_id: str,
+        language: str
+    ) -> Dict[str, Any]:
+        """Phase 7.5: Bias detection and perspective diversity analysis."""
+        try:
+            print(f"[INFO] Analyzing bias and perspectives across {len(sources)} sources...")
+
+            # Create LLM for bias analysis
+            llm = create_tracked_llm(
+                llm=create_llm(temperature=0.2, max_tokens=2000),
+                session_id=session_id,
+                user_id=user_id,
+                workflow_step="hyper_deep_research",
+                agent_name=self.name,
+                tags=["bias_detection"]
+            )
+
+            # Use bias detector to analyze sources
+            bias_results = await self.bias_detector.analyze_bias(
+                sources=sources,
+                llm_callable=llm.ainvoke,
+                language=language
+            )
+
+            # Log statistics
+            stats = bias_results.get("stats", {})
+            diversity_score = bias_results.get("diversity_score", 0)
+            print(f"[INFO] ✓ Diversity Score: {diversity_score:.1f}/100")
+            print(f"[INFO] ✓ Biases Detected: {stats.get('biases_detected', 0)}")
+            print(f"[INFO] ✓ High Severity: {stats.get('high_severity_biases', 0)}")
+
+            return {
+                "report": bias_results.get("report", "Bias analysis pending"),
+                "diversity_score": diversity_score,
+                "bias_indicators": bias_results.get("bias_indicators", []),
+                "diversity_analysis": bias_results.get("diversity_analysis", {}),
+                "stats": stats
+            }
+
+        except Exception as e:
+            print(f"[ERROR] Bias analysis failed: {e}")
+            logger.error(f"[BiasAnalysis] Error: {e}", exc_info=True)
+            return {
+                "report": "Bias analysis pending due to error",
+                "diversity_score": 0.0,
+                "bias_indicators": [],
+                "stats": {}
+            }
 
     async def _perform_critical_analysis(
         self,
@@ -1440,6 +1571,7 @@ class HyperDeepResearchAgent(SearchAgent):
         """Track LLM API call for cost monitoring.
 
         Uses TokenCounter for accurate token counting with tiktoken.
+        Integrates with CostOptimizer for caching and budget management.
         """
         # Use TokenCounter for accurate counting
         usage = self.token_counter.track_usage(
@@ -1468,9 +1600,27 @@ class HyperDeepResearchAgent(SearchAgent):
             self.research_metadata["llm_calls_by_phase"][phase].get("cost", 0.0) + estimated_cost
         )
 
+        # Cache response for future reuse
+        self.cost_optimizer.cache_response(
+            prompt=prompt,
+            response=response,
+            cost=estimated_cost,
+            metadata={"phase": phase, "tokens": total_tokens}
+        )
+
+        # Track cost and check budget
+        within_budget = self.cost_optimizer.track_cost(estimated_cost, phase)
+
+        if not within_budget:
+            print(
+                f"[WARNING] ⚠️ Budget exceeded! Phase: {phase}, "
+                f"Total: ${self.cost_optimizer.total_cost:.2f}"
+            )
+
         print(
             f"[DEBUG] LLM call tracked - Phase: {phase}, Tokens: {total_tokens}, "
-            f"Cost: ${estimated_cost:.4f}"
+            f"Cost: ${estimated_cost:.4f}, Budget: {self.cost_optimizer.total_cost:.2f}/"
+            f"{self.cost_optimizer.budget_limit:.2f}"
         )
 
     async def _store_sources_batch(self, sources: List[Dict[str, Any]]) -> None:
@@ -1613,3 +1763,22 @@ class HyperDeepResearchAgent(SearchAgent):
         deep_dive_stats = self.deep_dive_analyzer.get_stats()
         if deep_dive_stats["insights_explored"] > 0:
             print(f"[INFO] 🔬 Deep Dive Insights: {deep_dive_stats['insights_explored']}")
+
+        # Cost optimizer statistics
+        cost_stats = self.cost_optimizer.get_stats()
+        print(f"[INFO] 💰 Cache Hit Rate: {cost_stats.get('cache_hit_rate', 0):.1f}%")
+        print(f"[INFO] 💵 Cost Saved: ${cost_stats.get('total_cost_saved', 0):.2f}")
+        print(f"[INFO] 📊 Budget Usage: {cost_stats.get('budget_usage_pct', 0):.1f}%")
+
+        # Fact checker statistics
+        fact_stats = self.fact_checker.get_stats()
+        if fact_stats.get("total_claims", 0) > 0:
+            print(f"[INFO] ✅ Claims Verified: {fact_stats.get('total_claims', 0)}")
+            print(f"[INFO] ⚠️ Contradictions Found: {fact_stats.get('contradictions_found', 0)}")
+
+        # Bias detector statistics
+        bias_stats = self.bias_detector.get_stats()
+        if bias_stats.get("sources_analyzed", 0) > 0:
+            diversity_score = bias_stats.get("perspective_diversity_score", 0)
+            print(f"[INFO] 👁️ Perspective Diversity: {diversity_score:.1f}/100")
+            print(f"[INFO] 🎯 Biases Detected: {bias_stats.get('biases_detected', 0)}")

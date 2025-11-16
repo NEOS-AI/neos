@@ -8,6 +8,9 @@ from .retry_handler import RetryHandler, retry_async, CircuitBreaker
 from .complexity_assessor import ComplexityAssessor
 from .deep_dive_analyzer import DeepDiveAnalyzer
 from .semantic_clusterer import SemanticClusterer
+from .cost_optimizer import CostOptimizer
+from .fact_checker import FactChecker
+from .bias_detector import BiasDetector
 
 __all__ = [
     "LanguageDetector",
@@ -20,4 +23,7 @@ __all__ = [
     "ComplexityAssessor",
     "DeepDiveAnalyzer",
     "SemanticClusterer",
+    "CostOptimizer",
+    "FactChecker",
+    "BiasDetector",
 ]
