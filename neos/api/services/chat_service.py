@@ -201,7 +201,6 @@ class ChatService:
         if not message:
             return None
         return message_to_dict(message)
-        }
 
     @staticmethod
     async def get_conversation_messages(
@@ -354,53 +353,14 @@ class ChatService:
     @staticmethod
     async def get_template(template_id: str) -> Optional[Dict[str, Any]]:
         """템플릿 조회"""
-        query = """
-        SELECT
-            template_id,
-            name,
-            description,
-            category,
-            default_model,
-            default_system_prompt,
-            default_temperature,
-            default_settings,
-            initial_messages,
-            is_public,
-            is_active,
-            created_by,
-            usage_count,
-            created_at,
-            updated_at,
-            tags,
-            metadata
-        FROM conversation_templates
-        WHERE template_id = $1 AND is_active = TRUE
-        """
+        from neos.api.services.chat_service_helper import template_to_dict
 
-        row = await db_manager.fetch_one(query, template_id)
+        template = await ChatRepository.get_template(template_id)
 
-        if not row:
+        if not template:
             return None
 
-        return {
-            "template_id": row[0],
-            "name": row[1],
-            "description": row[2],
-            "category": row[3],
-            "default_model": row[4],
-            "default_system_prompt": row[5],
-            "default_temperature": float(row[6]) if row[6] is not None else 0.7,
-            "default_settings": row[7] if row[7] else {},
-            "initial_messages": row[8] if row[8] else [],
-            "is_public": row[9],
-            "is_active": row[10],
-            "created_by": row[11],
-            "usage_count": row[12],
-            "created_at": row[13],
-            "updated_at": row[14],
-            "tags": row[15] if row[15] else [],
-            "metadata": row[16] if row[16] else {}
-        }
+        return template_to_dict(template)
 
     @staticmethod
     async def list_templates(
@@ -411,85 +371,17 @@ class ChatService:
         offset: int = 0
     ) -> Dict[str, Any]:
         """템플릿 목록 조회"""
-        where_clauses = ["is_active = TRUE"]
-        params = []
-        param_idx = 1
+        from neos.api.services.chat_service_helper import templates_to_dict_list
 
-        if category:
-            where_clauses.append(f"category = ${param_idx}")
-            params.append(category)
-            param_idx += 1
-
-        if is_public is not None:
-            where_clauses.append(f"is_public = ${param_idx}")
-            params.append(is_public)
-            param_idx += 1
-
-        if created_by:
-            where_clauses.append(f"created_by = ${param_idx}")
-            params.append(created_by)
-            param_idx += 1
-
-        where_sql = " AND ".join(where_clauses)
-
-        # 목록 조회
-        list_query = f"""
-        SELECT
-            template_id,
-            name,
-            description,
-            category,
-            default_model,
-            default_system_prompt,
-            default_temperature,
-            default_settings,
-            initial_messages,
-            is_public,
-            is_active,
-            created_by,
-            usage_count,
-            created_at,
-            updated_at,
-            tags,
-            metadata
-        FROM conversation_templates
-        WHERE {where_sql}
-        ORDER BY usage_count DESC, created_at DESC
-        LIMIT ${param_idx} OFFSET ${param_idx + 1}
-        """
-
-        params.extend([limit, offset])
-        rows = await db_manager.fetch_all(list_query, *params)
-
-        # 전체 개수 조회
-        count_query = f"SELECT COUNT(*) FROM conversation_templates WHERE {where_sql}"
-        count_params = params[:-2]
-        count_result = await db_manager.fetch_one(count_query, *count_params)
-        total_count = count_result[0] if count_result else 0
-
-        templates = []
-        for row in rows:
-            templates.append({
-                "template_id": row[0],
-                "name": row[1],
-                "description": row[2],
-                "category": row[3],
-                "default_model": row[4],
-                "default_system_prompt": row[5],
-                "default_temperature": float(row[6]) if row[6] is not None else 0.7,
-                "default_settings": row[7] if row[7] else {},
-                "initial_messages": row[8] if row[8] else [],
-                "is_public": row[9],
-                "is_active": row[10],
-                "created_by": row[11],
-                "usage_count": row[12],
-                "created_at": row[13],
-                "updated_at": row[14],
-                "tags": row[15] if row[15] else [],
-                "metadata": row[16] if row[16] else {}
-            })
+        templates, total_count = await ChatRepository.list_templates(
+            category=category,
+            is_public=is_public,
+            created_by=created_by,
+            limit=limit,
+            offset=offset
+        )
 
         return {
-            "templates": templates,
+            "templates": templates_to_dict_list(templates),
             "total_count": total_count
         }
