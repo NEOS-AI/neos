@@ -111,6 +111,12 @@ class HyperDeepResearchAgent(SearchAgent):
         self.repository = HyperResearchRepository()
         print("[DEBUG] Repository initialized")
 
+        # Rate limiting for API calls
+        # Limit concurrent Tavily API requests to prevent 429 errors
+        self.tavily_rate_limiter = asyncio.Semaphore(3)  # Max 3 concurrent requests
+        self.min_request_interval = 0.5  # Minimum 0.5s between requests
+        self.last_request_time = 0
+
         # Research state
         self.current_report_id = None
         self.sections_data = []
@@ -125,7 +131,12 @@ class HyperDeepResearchAgent(SearchAgent):
             "critical_reviews_completed": 0,
             "multi_query_searches": 0,
             "criticism_feedbacks_generated": 0,
-            "additional_research_triggered": 0
+            "additional_research_triggered": 0,
+            "api_rate_limit_hits": 0,
+            # LLM cost tracking
+            "llm_calls": 0,
+            "estimated_total_tokens": 0,
+            "llm_calls_by_phase": {}
         }
 
     def _init_tavily_client(self) -> None:
@@ -384,13 +395,28 @@ class HyperDeepResearchAgent(SearchAgent):
             response = await llm.ainvoke([HumanMessage(content=prompt)])
             analysis_text = response.content.strip()
 
+            # Track LLM usage
+            self._track_llm_call("topic_analysis", prompt, analysis_text)
+
             return {
                 "full_analysis": analysis_text,
                 "research_questions": DataProcessor.extract_research_questions(analysis_text),
                 "original_query": query
             }
+        except (asyncio.TimeoutError, asyncio.CancelledError) as e:
+            print(f"[ERROR] Topic analysis timeout/cancelled: {e}")
+            raise
+        except (KeyError, AttributeError, ValueError) as e:
+            print(f"[ERROR] Topic analysis data processing error: {e}")
+            return {
+                "full_analysis": f"Topic: {query}\n\nAnalysis pending.",
+                "research_questions": [query],
+                "original_query": query
+            }
         except Exception as e:
-            print(f"[ERROR] Topic analysis failed: {e}")
+            print(f"[ERROR] Topic analysis unexpected error: {e}")
+            import traceback
+            print(f"[ERROR] Traceback: {traceback.format_exc()}")
             return {
                 "full_analysis": f"Topic: {query}\n\nAnalysis pending.",
                 "research_questions": [query],
@@ -421,12 +447,23 @@ class HyperDeepResearchAgent(SearchAgent):
             response = await llm.ainvoke([HumanMessage(content=prompt)])
             plan_text = response.content.strip()
 
+            # Track LLM usage
+            self._track_llm_call("research_planning", prompt, plan_text)
+
             return {
                 "full_plan": plan_text,
                 "search_strategies": DataProcessor.extract_search_strategies(plan_text)
             }
+        except (asyncio.TimeoutError, asyncio.CancelledError) as e:
+            print(f"[ERROR] Research planning timeout/cancelled: {e}")
+            raise
+        except KeyError as e:
+            print(f"[ERROR] Research planning missing key: {e}")
+            return {"full_plan": "Research plan pending", "search_strategies": []}
         except Exception as e:
-            print(f"[ERROR] Research planning failed: {e}")
+            print(f"[ERROR] Research planning unexpected error: {e}")
+            import traceback
+            print(f"[ERROR] Traceback: {traceback.format_exc()}")
             return {"full_plan": "Research plan pending", "search_strategies": []}
 
     async def _collect_initial_data(
@@ -824,33 +861,70 @@ class HyperDeepResearchAgent(SearchAgent):
         return processed
 
     async def _single_tavily_search(self, query: str) -> List[Dict[str, Any]]:
-        """Execute single Tavily search."""
+        """Execute single Tavily search with rate limiting.
+
+        Rate limiting prevents API 429 errors by:
+        - Limiting concurrent requests to 3
+        - Enforcing minimum 0.5s interval between requests
+        """
         try:
             if not self.api_available or not self.tavily_client:
                 return []
 
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    self.tavily_client.search,
-                    query=query,
-                    search_depth="advanced",
-                    max_results=self.config["results_per_query"],
-                    include_answer=True,
-                    include_raw_content=True
-                )
+            # Rate limiting: wait for semaphore slot
+            async with self.tavily_rate_limiter:
+                # Enforce minimum interval between requests
+                import time
+                current_time = time.time()
+                time_since_last = current_time - self.last_request_time
+                if time_since_last < self.min_request_interval:
+                    await asyncio.sleep(self.min_request_interval - time_since_last)
 
-                def get_result():
-                    try:
-                        return future.result(timeout=25)
-                    except concurrent.futures.TimeoutError:
-                        return None
+                self.last_request_time = time.time()
 
-                response = await asyncio.get_event_loop().run_in_executor(None, get_result)
-                return response.get("results", []) if response else []
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(
+                        self.tavily_client.search,
+                        query=query,
+                        search_depth="advanced",
+                        max_results=self.config["results_per_query"],
+                        include_answer=True,
+                        include_raw_content=True
+                    )
 
+                    def get_result():
+                        try:
+                            return future.result(timeout=25)
+                        except concurrent.futures.TimeoutError:
+                            print(f"[WARNING] Tavily search timeout for query: {query[:50]}...")
+                            return None
+
+                    response = await asyncio.get_event_loop().run_in_executor(None, get_result)
+
+                    # Check for rate limit response
+                    if response and isinstance(response, dict):
+                        if response.get("status_code") == 429:
+                            print(f"[WARNING] Rate limit hit for Tavily API")
+                            self.research_metadata["api_rate_limit_hits"] += 1
+                            await asyncio.sleep(2)  # Wait 2 seconds before retry
+                            return []
+
+                    return response.get("results", []) if response else []
+
+        except concurrent.futures.TimeoutError as e:
+            print(f"[WARNING] Tavily search timeout: {e}")
+            return []
+        except (ConnectionError, OSError) as e:
+            print(f"[ERROR] Tavily search network error: {e}")
+            return []
+        except (KeyError, AttributeError) as e:
+            print(f"[ERROR] Tavily search response parsing error: {e}")
+            return []
         except Exception as e:
-            print(f"[ERROR] Tavily search error: {e}")
+            print(f"[ERROR] Tavily search unexpected error: {e}")
+            import traceback
+            print(f"[ERROR] Traceback: {traceback.format_exc()}")
             return []
 
     async def _summarize_collected_data(
@@ -1264,9 +1338,40 @@ class HyperDeepResearchAgent(SearchAgent):
                 "critical_reviews": self.research_metadata["critical_reviews_completed"],
                 "multi_query_searches": self.research_metadata["multi_query_searches"],
                 "criticism_feedbacks_generated": self.research_metadata["criticism_feedbacks_generated"],
-                "additional_research_triggered": self.research_metadata["additional_research_triggered"]
+                "additional_research_triggered": self.research_metadata["additional_research_triggered"],
+                "api_rate_limit_hits": self.research_metadata["api_rate_limit_hits"],
+                # LLM cost tracking
+                "llm_calls": self.research_metadata["llm_calls"],
+                "estimated_total_tokens": self.research_metadata["estimated_total_tokens"],
+                "llm_calls_by_phase": self.research_metadata["llm_calls_by_phase"]
             }
         )
+
+    def _track_llm_call(self, phase: str, prompt: str, response: str) -> None:
+        """Track LLM API call for cost monitoring.
+
+        Estimates token usage based on text length (rough approximation)
+        Actual token usage may vary based on tokenizer
+        """
+        # Rough token estimation: ~4 characters per token on average
+        prompt_tokens = len(prompt) // 4
+        response_tokens = len(response) // 4
+        total_tokens = prompt_tokens + response_tokens
+
+        self.research_metadata["llm_calls"] += 1
+        self.research_metadata["estimated_total_tokens"] += total_tokens
+
+        # Track by phase
+        if phase not in self.research_metadata["llm_calls_by_phase"]:
+            self.research_metadata["llm_calls_by_phase"][phase] = {
+                "calls": 0,
+                "tokens": 0
+            }
+
+        self.research_metadata["llm_calls_by_phase"][phase]["calls"] += 1
+        self.research_metadata["llm_calls_by_phase"][phase]["tokens"] += total_tokens
+
+        print(f"[DEBUG] LLM call tracked - Phase: {phase}, Tokens: ~{total_tokens}")
 
     async def _store_sources_batch(self, sources: List[Dict[str, Any]]) -> None:
         """Store sources with memory optimization
@@ -1313,3 +1418,6 @@ class HyperDeepResearchAgent(SearchAgent):
         print(f"[INFO] 🌐 Domains: {len(self.research_metadata['unique_domains'])}")
         print(f"[INFO] 🔍 Feedbacks: {self.research_metadata['criticism_feedbacks_generated']}")
         print(f"[INFO] 🔄 Additional Research: {self.research_metadata['additional_research_triggered']}")
+        print(f"[INFO] ⚠️ API Rate Limit Hits: {self.research_metadata['api_rate_limit_hits']}")
+        print(f"[INFO] 💰 LLM Calls: {self.research_metadata['llm_calls']}")
+        print(f"[INFO] 📊 Estimated Tokens: ~{self.research_metadata['estimated_total_tokens']:,}")
