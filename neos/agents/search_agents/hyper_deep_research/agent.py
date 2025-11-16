@@ -35,7 +35,16 @@ from .prompts import (
     ValidationPrompts
 )
 from .repository import HyperResearchRepository
-from .utils import LanguageDetector, DataProcessor
+from .utils import (
+    LanguageDetector,
+    DataProcessor,
+    TokenCounter,
+    SourceQualityScorer,
+    RetryHandler,
+    ComplexityAssessor,
+    DeepDiveAnalyzer,
+    SemanticClusterer,
+)
 
 
 class HyperDeepResearchAgent(SearchAgent):
@@ -110,6 +119,16 @@ class HyperDeepResearchAgent(SearchAgent):
         print("[DEBUG] Initializing repository...")
         self.repository = HyperResearchRepository()
         print("[DEBUG] Repository initialized")
+
+        # Initialize enhanced utilities
+        print("[DEBUG] Initializing enhanced utilities...")
+        self.token_counter = TokenCounter()
+        self.quality_scorer = SourceQualityScorer()
+        self.retry_handler = RetryHandler(max_attempts=4, base_delay=2.0)
+        self.complexity_assessor = ComplexityAssessor()
+        self.deep_dive_analyzer = DeepDiveAnalyzer(max_depth=2, min_importance_score=8.0)
+        self.semantic_clusterer = SemanticClusterer(similarity_threshold=0.75)
+        print("[DEBUG] Enhanced utilities initialized")
 
         # Rate limiting for API calls (from settings)
         # Limit concurrent Tavily API requests to prevent 429 errors
@@ -277,6 +296,19 @@ class HyperDeepResearchAgent(SearchAgent):
             topic_analysis["full_analysis"], "completed"
         )
 
+        # Assess topic complexity for adaptive depth
+        print("\n[INFO] 🎯 Assessing topic complexity...")
+        complexity_assessment = await self.complexity_assessor.assess_complexity(
+            topic_analysis
+        )
+        print(
+            f"[INFO] Complexity: {complexity_assessment['complexity_level']} "
+            f"(score: {complexity_assessment['complexity_score']}, "
+            f"iterations: {complexity_assessment['recommended_iterations']})"
+        )
+        # Update config with adaptive iterations
+        self.config["analysis_iterations"] = complexity_assessment["recommended_iterations"]
+
         # Phase 2: Research Planning
         print("\n[INFO] ===== Phase 2/8: Research Planning =====")
         methodology = await self._plan_research(
@@ -316,6 +348,22 @@ class HyperDeepResearchAgent(SearchAgent):
             session_id, user_id, language
         )
 
+        # Phase 4.5: Recursive Deep Dive (NEW)
+        print("\n[INFO] ===== Phase 4.5/8: Recursive Deep Dive =====")
+        deep_dive_results = await self._perform_recursive_deep_dive(
+            deep_analysis["synthesis"], query, session_id, user_id, language
+        )
+        if deep_dive_results and deep_dive_results.get("explorations"):
+            deep_dive_synthesis = self.deep_dive_analyzer.synthesize_deep_dives(deep_dive_results)
+            await self.repository.create_section(
+                self.current_report_id, "recursive_deep_dive", 4.5,
+                "Recursive Deep Dive Explorations", deep_dive_synthesis, "completed"
+            )
+            print(
+                f"[INFO] 🔬 Deep dive complete: {deep_dive_results.get('insights_explored', 0)} "
+                f"insights explored in depth"
+            )
+
         # Phase 5: Gap Analysis
         print("\n[INFO] ===== Phase 5/8: Gap Analysis =====")
         gap_data = await self._analyze_gaps(
@@ -329,8 +377,12 @@ class HyperDeepResearchAgent(SearchAgent):
 
         # Phase 6: Cross-Validation
         print("\n[INFO] ===== Phase 6/8: Cross-Validation =====")
+
+        # Apply semantic clustering to all collected sources
+        clusters = await self._apply_semantic_clustering(self.all_collected_sources)
+
         validation = await self._cross_validate_sources(
-            self.all_collected_sources, session_id, user_id, language
+            self.all_collected_sources, session_id, user_id, language, clusters
         )
         await self.repository.create_section(
             self.current_report_id, "validation", 6,
@@ -495,8 +547,13 @@ class HyperDeepResearchAgent(SearchAgent):
         # Deduplicate and track sources
         unique_sources = DataProcessor.deduplicate_sources(all_results)
 
+        # Apply quality scoring
+        print(f"[INFO] 📊 Scoring {len(unique_sources)} sources for quality...")
+        scored_sources = self.quality_scorer.rank_sources(unique_sources)
+        print(f"[INFO] ✅ Quality scoring complete. High quality: {self.quality_scorer.stats['high_quality_count']}")
+
         # Memory optimization: Store sources in batches, keep only recent ones in memory
-        await self._store_sources_batch(unique_sources)
+        await self._store_sources_batch(scored_sources)
 
         # Track unique domains
         self.research_metadata["unique_domains"].update(
@@ -598,9 +655,10 @@ class HyperDeepResearchAgent(SearchAgent):
         sources: List[Dict[str, Any]],
         session_id: str,
         user_id: str,
-        language: str
+        language: str,
+        clusters: List[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Phase 6: Cross-validation and triangulation."""
+        """Phase 6: Cross-validation and triangulation with semantic clustering."""
         try:
             llm = create_tracked_llm(
                 llm=create_llm(temperature=0.2, max_tokens=3500),
@@ -620,14 +678,23 @@ class HyperDeepResearchAgent(SearchAgent):
                 for i, s in enumerate(sampled_sources)
             ])
 
+            # Include cluster information if available
+            cluster_info = ""
+            if clusters:
+                cluster_info = f"\n\nSemantic Clusters Identified: {len(clusters)}\n"
+                for i, cluster in enumerate(clusters[:5], 1):
+                    themes = ", ".join(cluster.get("themes", [])[:3])
+                    cluster_info += f"- Cluster {i}: {cluster.get('size', 0)} sources on {themes}\n"
+
             prompt = ValidationPrompts.get_cross_validation_prompt(
-                len(sampled_sources), sources_text, language
+                len(sampled_sources), sources_text + cluster_info, language
             )
             response = await llm.ainvoke([HumanMessage(content=prompt)])
 
             return {
                 "report": response.content.strip(),
-                "sources_analyzed": len(sampled_sources)
+                "sources_analyzed": len(sampled_sources),
+                "clusters_identified": len(clusters) if clusters else 0
             }
         except Exception as e:
             print(f"[ERROR] Cross-validation failed: {e}")
@@ -861,16 +928,38 @@ class HyperDeepResearchAgent(SearchAgent):
         return processed
 
     async def _single_tavily_search(self, query: str) -> List[Dict[str, Any]]:
-        """Execute single Tavily search with rate limiting.
+        """Execute single Tavily search with rate limiting and retry logic.
 
         Rate limiting prevents API 429 errors by:
         - Limiting concurrent requests to 3
         - Enforcing minimum 0.5s interval between requests
+        - Retry with exponential backoff on failures
         """
         try:
             if not self.api_available or not self.tavily_client:
                 return []
 
+            # Use retry handler for robust execution
+            return await self.retry_handler.execute_with_retry(
+                self._execute_tavily_search,
+                query,
+                retry_exceptions=(ConnectionError, TimeoutError, OSError)
+            )
+
+        except Exception as e:
+            print(f"[ERROR] Tavily search failed after retries: {e}")
+            return []
+
+    async def _execute_tavily_search(self, query: str) -> List[Dict[str, Any]]:
+        """Execute Tavily search (internal method for retry).
+
+        Args:
+            query: Search query
+
+        Returns:
+            List of search results
+        """
+        try:
             # Rate limiting: wait for semaphore slot
             async with self.tavily_rate_limiter:
                 # Enforce minimum interval between requests
@@ -1350,13 +1439,17 @@ class HyperDeepResearchAgent(SearchAgent):
     def _track_llm_call(self, phase: str, prompt: str, response: str) -> None:
         """Track LLM API call for cost monitoring.
 
-        Estimates token usage based on text length (rough approximation)
-        Actual token usage may vary based on tokenizer
+        Uses TokenCounter for accurate token counting with tiktoken.
         """
-        # Rough token estimation: ~4 characters per token on average
-        prompt_tokens = len(prompt) // 4
-        response_tokens = len(response) // 4
-        total_tokens = prompt_tokens + response_tokens
+        # Use TokenCounter for accurate counting
+        usage = self.token_counter.track_usage(
+            prompt, response, metadata={"phase": phase, "model": "gpt-4"}
+        )
+
+        prompt_tokens = usage["prompt_tokens"]
+        response_tokens = usage["completion_tokens"]
+        total_tokens = usage["total_tokens"]
+        estimated_cost = usage["estimated_cost"]
 
         self.research_metadata["llm_calls"] += 1
         self.research_metadata["estimated_total_tokens"] += total_tokens
@@ -1365,13 +1458,20 @@ class HyperDeepResearchAgent(SearchAgent):
         if phase not in self.research_metadata["llm_calls_by_phase"]:
             self.research_metadata["llm_calls_by_phase"][phase] = {
                 "calls": 0,
-                "tokens": 0
+                "tokens": 0,
+                "cost": 0.0
             }
 
         self.research_metadata["llm_calls_by_phase"][phase]["calls"] += 1
         self.research_metadata["llm_calls_by_phase"][phase]["tokens"] += total_tokens
+        self.research_metadata["llm_calls_by_phase"][phase]["cost"] = (
+            self.research_metadata["llm_calls_by_phase"][phase].get("cost", 0.0) + estimated_cost
+        )
 
-        print(f"[DEBUG] LLM call tracked - Phase: {phase}, Tokens: ~{total_tokens}")
+        print(
+            f"[DEBUG] LLM call tracked - Phase: {phase}, Tokens: {total_tokens}, "
+            f"Cost: ${estimated_cost:.4f}"
+        )
 
     async def _store_sources_batch(self, sources: List[Dict[str, Any]]) -> None:
         """Store sources with memory optimization
@@ -1407,6 +1507,87 @@ class HyperDeepResearchAgent(SearchAgent):
             # Return all available sources in memory
             return self.all_collected_sources.copy()
 
+    async def _perform_recursive_deep_dive(
+        self,
+        analysis_text: str,
+        original_query: str,
+        session_id: str,
+        user_id: str,
+        language: str,
+    ) -> Dict[str, Any]:
+        """Perform recursive deep dive on analysis insights.
+
+        Args:
+            analysis_text: Analysis text to extract insights from
+            original_query: Original research query
+            session_id: Session ID
+            user_id: User ID
+            language: Language code
+
+        Returns:
+            Deep dive results dictionary
+        """
+        try:
+            # Create LLM callable
+            llm = create_tracked_llm(
+                llm=create_llm(temperature=0.3, max_tokens=2500),
+                session_id=session_id,
+                user_id=user_id,
+                workflow_step="hyper_deep_research",
+                agent_name=self.name,
+                tags=["recursive_deep_dive"]
+            )
+
+            # Perform deep dive
+            results = await self.deep_dive_analyzer.perform_deep_dive(
+                analysis_text=analysis_text,
+                original_query=original_query,
+                search_function=self._single_tavily_search,
+                llm_callable=llm.ainvoke,
+                session_id=session_id,
+                user_id=user_id,
+                language=language,
+            )
+
+            return results
+
+        except Exception as e:
+            print(f"[ERROR] Recursive deep dive failed: {e}")
+            return {}
+
+    async def _apply_semantic_clustering(
+        self,
+        sources: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Apply semantic clustering to sources.
+
+        Args:
+            sources: List of sources to cluster
+
+        Returns:
+            List of clusters
+        """
+        try:
+            print(f"[INFO] 🔗 Clustering {len(sources)} sources semantically...")
+
+            clusters = await self.semantic_clusterer.cluster_sources(sources)
+
+            print(
+                f"[INFO] ✅ Created {len(clusters)} clusters "
+                f"(avg size: {self.semantic_clusterer.stats['avg_cluster_size']:.1f})"
+            )
+
+            # Identify gaps from clusters
+            gaps = self.semantic_clusterer.identify_knowledge_gaps(clusters)
+            if gaps:
+                print(f"[INFO] 📋 Identified {len(gaps)} knowledge gaps from clustering")
+
+            return clusters
+
+        except Exception as e:
+            print(f"[ERROR] Semantic clustering failed: {e}")
+            return []
+
     def _print_research_summary(self) -> None:
         """Print research process summary."""
         print("\n[INFO] ========== HyperDeepResearch Completed ==========")
@@ -1421,3 +1602,14 @@ class HyperDeepResearchAgent(SearchAgent):
         print(f"[INFO] ⚠️ API Rate Limit Hits: {self.research_metadata['api_rate_limit_hits']}")
         print(f"[INFO] 💰 LLM Calls: {self.research_metadata['llm_calls']}")
         print(f"[INFO] 📊 Estimated Tokens: ~{self.research_metadata['estimated_total_tokens']:,}")
+
+        # Print enhanced statistics
+        quality_stats = self.quality_scorer.get_stats()
+        print(f"[INFO] ⭐ High Quality Sources: {quality_stats.get('high_quality_percentage', 0):.1f}%")
+
+        retry_stats = self.retry_handler.get_stats()
+        print(f"[INFO] 🔁 Success Rate: {retry_stats.get('success_rate', 0):.1f}%")
+
+        deep_dive_stats = self.deep_dive_analyzer.get_stats()
+        if deep_dive_stats["insights_explored"] > 0:
+            print(f"[INFO] 🔬 Deep Dive Insights: {deep_dive_stats['insights_explored']}")
