@@ -7,10 +7,8 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 import logging
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from neos.database.connection import db_manager
+from neos.database.repositories.analytics_repository import AnalyticsRepository
 from neos.database.web_search_analytics_types import (
     PopularQuery,
     EngineStatistics,
@@ -69,18 +67,10 @@ class WebSearchAnalyticsService:
             period_days = self._period_to_days(period)
 
             async with await db_manager.get_session() as session:
-                result = await session.execute(
-                    text("""
-                        SELECT * FROM get_popular_queries(:engine_name, :period_days, :limit)
-                    """),
-                    {
-                        "engine_name": engine_name,
-                        "period_days": period_days,
-                        "limit": limit
-                    }
+                rows = await AnalyticsRepository.get_popular_queries(
+                    session, engine_name, period_days, limit
                 )
 
-                rows = result.fetchall()
                 queries = [
                     PopularQuery(
                         query_text=row.query_text,
@@ -123,14 +113,10 @@ class WebSearchAnalyticsService:
             period_days = self._period_to_days(period)
 
             async with await db_manager.get_session() as session:
-                result = await session.execute(
-                    text("""
-                        SELECT * FROM get_engine_statistics(:period_days)
-                    """),
-                    {"period_days": period_days}
+                rows = await AnalyticsRepository.get_engine_statistics(
+                    session, period_days
                 )
 
-                rows = result.fetchall()
                 statistics = [
                     EngineStatistics(
                         engine_name=row.engine_name,
@@ -177,18 +163,10 @@ class WebSearchAnalyticsService:
             period_days = self._period_to_days(period)
 
             async with await db_manager.get_session() as session:
-                result = await session.execute(
-                    text("""
-                        SELECT * FROM get_search_trends(:engine_name, :period_days, :interval)
-                    """),
-                    {
-                        "engine_name": engine_name,
-                        "period_days": period_days,
-                        "interval": interval.value
-                    }
+                rows = await AnalyticsRepository.get_search_trends(
+                    session, engine_name, period_days, interval.value
                 )
 
-                rows = result.fetchall()
                 trends = [
                     SearchTrend(
                         time_bucket=row.time_bucket,
@@ -227,20 +205,9 @@ class WebSearchAnalyticsService:
         """
         try:
             async with await db_manager.get_session() as session:
-                query = """
-                    SELECT * FROM daily_search_statistics
-                    WHERE 1=1
-                """
-                params = {"limit": limit}
-
-                if engine_name:
-                    query += " AND engine_name = :engine_name"
-                    params["engine_name"] = engine_name
-
-                query += " ORDER BY search_date DESC LIMIT :limit"
-
-                result = await session.execute(text(query), params)
-                rows = result.fetchall()
+                rows = await AnalyticsRepository.get_daily_statistics(
+                    session, engine_name, limit
+                )
 
                 return [
                     DailyStatistics(
@@ -278,20 +245,9 @@ class WebSearchAnalyticsService:
         """
         try:
             async with await db_manager.get_session() as session:
-                query = """
-                    SELECT * FROM weekly_search_statistics
-                    WHERE 1=1
-                """
-                params = {"limit": limit}
-
-                if engine_name:
-                    query += " AND engine_name = :engine_name"
-                    params["engine_name"] = engine_name
-
-                query += " ORDER BY week_start DESC LIMIT :limit"
-
-                result = await session.execute(text(query), params)
-                rows = result.fetchall()
+                rows = await AnalyticsRepository.get_weekly_statistics(
+                    session, engine_name, limit
+                )
 
                 return [
                     WeeklyStatistics(
@@ -328,20 +284,9 @@ class WebSearchAnalyticsService:
         """
         try:
             async with await db_manager.get_session() as session:
-                query = """
-                    SELECT * FROM monthly_search_statistics
-                    WHERE 1=1
-                """
-                params = {"limit": limit}
-
-                if engine_name:
-                    query += " AND engine_name = :engine_name"
-                    params["engine_name"] = engine_name
-
-                query += " ORDER BY month_start DESC LIMIT :limit"
-
-                result = await session.execute(text(query), params)
-                rows = result.fetchall()
+                rows = await AnalyticsRepository.get_monthly_statistics(
+                    session, engine_name, limit
+                )
 
                 return [
                     MonthlyStatistics(
@@ -378,20 +323,9 @@ class WebSearchAnalyticsService:
         """
         try:
             async with await db_manager.get_session() as session:
-                query = """
-                    SELECT * FROM search_quality_analysis
-                    WHERE 1=1
-                """
-                params = {"limit": limit}
-
-                if engine_name:
-                    query += " AND engine_name = :engine_name"
-                    params["engine_name"] = engine_name
-
-                query += " ORDER BY search_date DESC LIMIT :limit"
-
-                result = await session.execute(text(query), params)
-                rows = result.fetchall()
+                rows = await AnalyticsRepository.get_quality_analysis(
+                    session, engine_name, limit
+                )
 
                 return [
                     SearchQualityAnalysis(
@@ -429,17 +363,10 @@ class WebSearchAnalyticsService:
             period_days = self._period_to_days(period)
 
             async with await db_manager.get_session() as session:
-                result = await session.execute(
-                    text("""
-                        SELECT * FROM get_user_search_patterns(:user_id, :period_days)
-                    """),
-                    {
-                        "user_id": user_id,
-                        "period_days": period_days
-                    }
+                rows = await AnalyticsRepository.get_user_search_patterns(
+                    session, user_id, period_days
                 )
 
-                rows = result.fetchall()
                 return [
                     UserSearchPattern(
                         query_text=row.query_text,
@@ -473,51 +400,19 @@ class WebSearchAnalyticsService:
 
             async with await db_manager.get_session() as session:
                 # 전체 통계 조회
-                result = await session.execute(
-                    text("""
-                        SELECT
-                            COUNT(*) as total_queries,
-                            COUNT(DISTINCT engine_name) as total_engines,
-                            COUNT(DISTINCT user_id) as total_users,
-                            ROUND(AVG(quality_score)::numeric, 3) as avg_quality_score,
-                            ROUND(
-                                (COUNT(CASE WHEN status = 'completed' THEN 1 END)::numeric / COUNT(*)::numeric),
-                                3
-                            ) as success_rate
-                        FROM web_search_queries
-                        WHERE executed_at > NOW() - :period::interval
-                    """),
-                    {"period": f"{period_days} days"}
+                row = await AnalyticsRepository.get_total_statistics(
+                    session, period_days
                 )
-                row = result.fetchone()
 
                 # 가장 많이 사용된 엔진
-                result = await session.execute(
-                    text("""
-                        SELECT engine_name, COUNT(*) as cnt
-                        FROM web_search_queries
-                        WHERE executed_at > NOW() - :period::interval
-                        GROUP BY engine_name
-                        ORDER BY cnt DESC
-                        LIMIT 1
-                    """),
-                    {"period": f"{period_days} days"}
+                top_engine_row = await AnalyticsRepository.get_top_engine(
+                    session, period_days
                 )
-                top_engine_row = result.fetchone()
 
                 # 가장 많이 검색된 쿼리
-                result = await session.execute(
-                    text("""
-                        SELECT query_text, COUNT(*) as cnt
-                        FROM web_search_queries
-                        WHERE executed_at > NOW() - :period::interval
-                        GROUP BY query_text
-                        ORDER BY cnt DESC
-                        LIMIT 1
-                    """),
-                    {"period": f"{period_days} days"}
+                top_query_row = await AnalyticsRepository.get_top_query(
+                    session, period_days
                 )
-                top_query_row = result.fetchone()
 
                 return AnalyticsSummary(
                     period=period.value,
