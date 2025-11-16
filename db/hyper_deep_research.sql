@@ -35,8 +35,8 @@ CREATE TABLE IF NOT EXISTS hyper_research_reports (
     -- deleted_at 컬럼 추가 (soft delete 용)
     deleted_at TIMESTAMP
 
-    -- Note: Foreign key to users table removed to allow independent operation
-    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    -- Note: Foreign key to users table is optional - uncomment if users table exists
+    -- FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
 -- 보고서 섹션 테이블

@@ -51,7 +51,7 @@ class StartDeepResearchRequest(BaseModel):
     """Start deep research request"""
     user_id: str = Field(..., description="User ID")
     conversation_id: str = Field(..., description="Conversation ID")
-    initial_message_id: str = Field(..., description="Initial message ID that triggered research")
+    initial_message_id: Optional[str] = Field(None, description="Initial message ID that triggered research (deprecated, auto-generated)")
     research_topic: str = Field(..., min_length=1, description="Research topic")
     session_id: Optional[str] = Field(None, description="Session ID for tracking")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")

@@ -188,20 +188,33 @@ class HyperResearchRepository:
         Args:
             report_id: Report identifier
             status: New status
-            timestamp_field: Optional timestamp field to update
+            timestamp_field: Optional timestamp field to update (must be 'started_at' or 'completed_at')
             quality_score: Optional quality score
 
         Returns:
             True if successful, False otherwise
+
+        Security: Uses parameterized queries and whitelist to prevent SQL injection
         """
         try:
-            updates = [f"research_status = '{status}'"]
+            # Whitelist of allowed timestamp fields
+            ALLOWED_TIMESTAMP_FIELDS = {'started_at', 'completed_at'}
 
+            updates = ["research_status = $2"]
+            values = [report_id, status]
+            param_idx = 3
+
+            # Validate timestamp_field against whitelist
             if timestamp_field:
+                if timestamp_field not in ALLOWED_TIMESTAMP_FIELDS:
+                    print(f"[WARNING] Invalid timestamp field: {timestamp_field}")
+                    return False
                 updates.append(f"{timestamp_field} = CURRENT_TIMESTAMP")
 
             if quality_score is not None:
-                updates.append(f"quality_score = {quality_score}")
+                updates.append(f"quality_score = ${param_idx}")
+                values.append(quality_score)
+                param_idx += 1
 
             query = f"""
                 UPDATE hyper_research_reports
@@ -209,7 +222,7 @@ class HyperResearchRepository:
                 WHERE report_id = $1
             """
 
-            await db_manager.execute(query, report_id)
+            await db_manager.execute(query, *values)
             print(f"[DEBUG] Updated report status to: {status}")
             return True
 
