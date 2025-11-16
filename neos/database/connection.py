@@ -57,6 +57,36 @@ class DatabaseManager:
             print(f"Database health check error: {e}")
             return False
 
+    async def execute_in_transaction(self, query: str, *params):
+        """트랜잭션 내에서 쿼리 실행
+
+        Args:
+            query: SQL 쿼리 문자열 ($1, $2 형식의 플레이스홀더 사용)
+            *params: 순서대로 바인딩될 파라미터들
+
+        Returns:
+            실행 결과
+        """
+        session = await self.get_session()
+        try:
+            # PostgreSQL의 $1, $2 형식을 :param1, :param2 형식으로 변환
+            param_dict = {}
+            converted_query = query
+            for i, param in enumerate(params, 1):
+                param_name = f"param{i}"
+                converted_query = re.sub(rf'\${i}\b', f":{param_name}", converted_query)
+                param_dict[param_name] = param
+
+            result = await session.execute(text(converted_query), param_dict)
+            # Note: commit은 호출자가 session.commit()으로 직접 관리
+            return result
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            # 세션은 컨텍스트 매니저에서 관리되므로 여기서 닫지 않음
+            pass
+
     async def execute(self, query: str, *params):
         """쿼리 실행 (INSERT, UPDATE, DELETE)
 

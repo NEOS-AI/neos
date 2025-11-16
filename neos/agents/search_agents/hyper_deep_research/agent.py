@@ -114,7 +114,9 @@ class HyperDeepResearchAgent(SearchAgent):
         # Research state
         self.current_report_id = None
         self.sections_data = []
+        # Memory optimization: Keep only recent sources in memory
         self.all_collected_sources = []
+        self.max_sources_in_memory = 50  # Limit memory usage
         self.research_metadata = {
             "total_queries_executed": 0,
             "total_sources_collected": 0,
@@ -455,8 +457,9 @@ class HyperDeepResearchAgent(SearchAgent):
 
         # Deduplicate and track sources
         unique_sources = DataProcessor.deduplicate_sources(all_results)
-        self.all_collected_sources.extend(unique_sources)
-        self.research_metadata["total_sources_collected"] = len(self.all_collected_sources)
+
+        # Memory optimization: Store sources in batches, keep only recent ones in memory
+        await self._store_sources_batch(unique_sources)
 
         # Track unique domains
         self.research_metadata["unique_domains"].update(
@@ -538,8 +541,9 @@ class HyperDeepResearchAgent(SearchAgent):
 
         # Process and add unique sources
         unique_gap_sources = DataProcessor.deduplicate_sources(gap_results)
-        self.all_collected_sources.extend(unique_gap_sources)
-        self.research_metadata["total_sources_collected"] = len(self.all_collected_sources)
+
+        # Memory optimization: Store sources in batches
+        await self._store_sources_batch(unique_gap_sources)
 
         # Summarize gap investigation
         summary = await self._summarize_gap_investigation(
@@ -570,8 +574,9 @@ class HyperDeepResearchAgent(SearchAgent):
                 tags=["cross_validation"]
             )
 
-            # Sample sources
-            sampled_sources = sources[:30] if len(sources) > 30 else sources
+            # Sample sources - use recent sources from memory
+            all_sources = await self._get_all_sources_sample(limit=30)
+            sampled_sources = all_sources[:30] if len(all_sources) > 30 else all_sources
             sources_text = "\n\n".join([
                 f"Source {i+1} ({s.get('url', 'N/A')}):\n"
                 f"{s.get('title', '')}\n{s.get('content', '')[:300]}"
@@ -1130,8 +1135,9 @@ class HyperDeepResearchAgent(SearchAgent):
             flat_results = [item for sublist in results for item in sublist]
 
             unique_sources = DataProcessor.deduplicate_sources([flat_results])
-            self.all_collected_sources.extend(unique_sources)
-            self.research_metadata["total_sources_collected"] = len(self.all_collected_sources)
+
+            # Memory optimization: Store sources in batches
+            await self._store_sources_batch(unique_sources)
 
     async def _plan_report_structure(
         self,
@@ -1261,6 +1267,40 @@ class HyperDeepResearchAgent(SearchAgent):
                 "additional_research_triggered": self.research_metadata["additional_research_triggered"]
             }
         )
+
+    async def _store_sources_batch(self, sources: List[Dict[str, Any]]) -> None:
+        """Store sources with memory optimization
+
+        Keeps only recent sources in memory, stores all in DB for persistence
+        """
+        if not sources:
+            return
+
+        # Add to in-memory cache (keep only most recent)
+        self.all_collected_sources.extend(sources)
+        if len(self.all_collected_sources) > self.max_sources_in_memory:
+            # Keep only the most recent sources in memory
+            self.all_collected_sources = self.all_collected_sources[-self.max_sources_in_memory:]
+
+        # Update total count
+        self.research_metadata["total_sources_collected"] += len(sources)
+
+        # Sources are already stored in DB via record_data_collection
+        # This method just manages the in-memory cache
+        print(f"[DEBUG] Memory: {len(self.all_collected_sources)}/{self.max_sources_in_memory} sources, "
+              f"Total: {self.research_metadata['total_sources_collected']}")
+
+    async def _get_all_sources_sample(self, limit: int = 30) -> List[Dict[str, Any]]:
+        """Get sample of sources for analysis
+
+        Returns recent sources from memory for efficiency
+        """
+        if len(self.all_collected_sources) >= limit:
+            # Return recent sources from memory
+            return self.all_collected_sources[-limit:]
+        else:
+            # Return all available sources in memory
+            return self.all_collected_sources.copy()
 
     def _print_research_summary(self) -> None:
         """Print research process summary."""
