@@ -24,3 +24,11 @@ conf.yaml
 
 # Claude
 .claude/
+
+# Testing
+coverage/
+*.lcov
+.nyc_output/
+
+# Jest
+jest-cache/
