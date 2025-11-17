@@ -3,6 +3,7 @@
 import { useChatStore } from "@/lib/stores/chat-store";
 import { Settings, Info } from "lucide-react";
 import { useState } from "react";
+import { AI_SETTINGS } from "@/lib/constants";
 
 export default function SimilaritySettings() {
   const { settings, updateSettings } = useChatStore();
@@ -176,7 +177,7 @@ export default function SimilaritySettings() {
                   onClick={() =>
                     updateSettings({
                       similarity_top_k: 3,
-                      similarity_threshold: 0.7,
+                      similarity_threshold: AI_SETTINGS.SIMILARITY_THRESHOLD_LOW,
                       similarity_cross_conversation: false,
                     })
                   }
@@ -188,7 +189,7 @@ export default function SimilaritySettings() {
                   onClick={() =>
                     updateSettings({
                       similarity_top_k: 5,
-                      similarity_threshold: 0.75,
+                      similarity_threshold: AI_SETTINGS.SIMILARITY_THRESHOLD_MEDIUM,
                       similarity_cross_conversation: true,
                     })
                   }
@@ -200,7 +201,7 @@ export default function SimilaritySettings() {
                   onClick={() =>
                     updateSettings({
                       similarity_top_k: 3,
-                      similarity_threshold: 0.85,
+                      similarity_threshold: AI_SETTINGS.SIMILARITY_THRESHOLD_HIGH,
                       similarity_cross_conversation: false,
                     })
                   }

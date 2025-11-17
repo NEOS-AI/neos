@@ -185,6 +185,9 @@ export interface ChatStore {
   // Deep research EventSource tracking
   activeEventSource: EventSource | null;
 
+  // Abort controller for request cancellation
+  currentAbortController: AbortController | null;
+
   // Getters
   currentConversation: Conversation | null;
   messages: Message[];
@@ -208,8 +211,10 @@ export interface ChatStore {
   // Settings Actions
   updateSettings: (settings: Partial<ChatSettings>) => void;
   setChatMode: (mode: ChatMode) => void;
+  setUserId: (userId: string) => void;
 
   // Utility Actions
   clearError: () => void;
   cleanupEventSource: () => void;
+  stopGeneration: () => void;
 }

@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect, KeyboardEvent } from "react";
-import { Plus, Send } from "lucide-react";
+import { Plus, Send, AlertCircle } from "lucide-react";
+import { validateInput, INPUT_CONSTANTS } from "@/lib/input-validation";
 
 interface ChatComposerProps {
   onSend: (message: string) => void;
@@ -15,6 +16,7 @@ export default function ChatComposer({
   disabled = false
 }: ChatComposerProps) {
   const [message, setMessage] = useState("");
+  const [validationError, setValidationError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-resize textarea
@@ -22,16 +24,32 @@ export default function ChatComposer({
     const textarea = textareaRef.current;
     if (textarea) {
       textarea.style.height = "auto";
-      const newHeight = Math.min(textarea.scrollHeight, 160); // Max 4 lines (~40px per line)
+      const newHeight = Math.min(textarea.scrollHeight, INPUT_CONSTANTS.MAX_TEXTAREA_HEIGHT_PX);
       textarea.style.height = `${newHeight}px`;
     }
   }, [message]);
 
-  const handleSubmit = () => {
-    if (message.trim() && !disabled) {
-      onSend(message.trim());
-      setMessage("");
+  // Clear validation error when message changes
+  useEffect(() => {
+    if (validationError && message.trim()) {
+      setValidationError(null);
     }
+  }, [message, validationError]);
+
+  const handleSubmit = () => {
+    if (!message.trim() || disabled) return;
+
+    // Validate input
+    const validation = validateInput(message);
+    if (!validation.isValid) {
+      setValidationError(validation.error || "Invalid input");
+      return;
+    }
+
+    const sanitizedMessage = validation.sanitized!;
+    onSend(sanitizedMessage);
+    setMessage("");
+    setValidationError(null);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -41,8 +59,19 @@ export default function ChatComposer({
     }
   };
 
+  const characterCount = message.length;
+  const isNearLimit = characterCount > INPUT_CONSTANTS.MAX_MESSAGE_LENGTH * 0.9;
+
   return (
     <div className="w-full max-w-3xl mx-auto">
+      {/* Validation Error */}
+      {validationError && (
+        <div className="mb-3 p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center gap-2 text-sm text-red-400">
+          <AlertCircle size={16} className="flex-shrink-0" />
+          <span>{validationError}</span>
+        </div>
+      )}
+
       <div
         className="
           relative flex items-end gap-3
@@ -85,6 +114,8 @@ export default function ChatComposer({
             min-h-[40px] max-h-[160px]
           "
           aria-label="Message input"
+          aria-invalid={!!validationError}
+          aria-describedby={validationError ? "composer-error" : undefined}
         />
 
         {/* Send button */}
@@ -104,9 +135,16 @@ export default function ChatComposer({
         </button>
       </div>
 
-      {/* Hint text */}
-      <div className="mt-2 text-center text-text-muted text-xs">
-        Press <kbd className="px-1.5 py-0.5 rounded bg-chip-bg border border-chip-line">Cmd</kbd> + <kbd className="px-1.5 py-0.5 rounded bg-chip-bg border border-chip-line">Enter</kbd> to send
+      {/* Hint text and character count */}
+      <div className="mt-2 flex items-center justify-between text-text-muted text-xs">
+        <div className="text-center flex-1">
+          Press <kbd className="px-1.5 py-0.5 rounded bg-chip-bg border border-chip-line">Cmd</kbd> + <kbd className="px-1.5 py-0.5 rounded bg-chip-bg border border-chip-line">Enter</kbd> to send
+        </div>
+        {characterCount > 0 && (
+          <div className={`ml-3 ${isNearLimit ? "text-yellow-400" : ""}`}>
+            {characterCount.toLocaleString()} / {INPUT_CONSTANTS.MAX_MESSAGE_LENGTH.toLocaleString()}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -8,8 +8,19 @@ import type {
   ChatSettings,
   ChatMode,
 } from "@/lib/types";
+import { logError, classifyError, getUserFriendlyMessage, ErrorType } from "@/lib/error-logger";
+import { AI_SETTINGS, API } from "@/lib/constants";
+import { getCurrentUser } from "@/lib/auth";
 
 const DEFAULT_USER_ID = "anonymous";
+
+/**
+ * Get the current user ID from auth or fall back to anonymous
+ */
+function getCurrentUserId(): string {
+  const user = getCurrentUser();
+  return user?.id || DEFAULT_USER_ID;
+}
 
 const DEFAULT_SETTINGS: ChatSettings = {
   mode: "standard",
@@ -24,7 +35,7 @@ const DEFAULT_SETTINGS: ChatSettings = {
 
   // Similarity defaults
   similarity_top_k: 3,
-  similarity_threshold: 0.7,
+  similarity_threshold: AI_SETTINGS.SIMILARITY_THRESHOLD_LOW,
   similarity_cross_conversation: false,
   enable_auto_embedding: true,
 };
@@ -75,6 +86,7 @@ export const useChatStore = create<ChatStore>()(
       error: null,
       settings: DEFAULT_SETTINGS,
       activeEventSource: null,
+      currentAbortController: null,
 
       // ======================================================================
       // Computed Getters
@@ -110,7 +122,7 @@ export const useChatStore = create<ChatStore>()(
         try {
           const { currentUserId } = get();
           const response = await chatAPI.listConversations(currentUserId, {
-            limit: 100,
+            limit: API.MESSAGES_FETCH_LIMIT,
             include_archived: false,
           });
 
@@ -124,9 +136,10 @@ export const useChatStore = create<ChatStore>()(
             isLoading: false,
           });
         } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : "Failed to load conversations";
-          set({ error: errorMessage, isLoading: false });
+          logError(error, { context: "loadConversations", userId: get().currentUserId });
+          const errorType = classifyError(error);
+          const userMessage = getUserFriendlyMessage(errorType);
+          set({ error: userMessage, isLoading: false });
         }
       },
 
@@ -153,9 +166,10 @@ export const useChatStore = create<ChatStore>()(
             isLoading: false,
           }));
         } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : "Failed to create conversation";
-          set({ error: errorMessage, isLoading: false });
+          logError(error, { context: "createConversation", userId: get().currentUserId });
+          const errorType = classifyError(error);
+          const userMessage = getUserFriendlyMessage(errorType);
+          set({ error: userMessage, isLoading: false });
         }
       },
 
@@ -172,66 +186,89 @@ export const useChatStore = create<ChatStore>()(
       },
 
       updateConversationTitle: async (conversationId: string, title: string) => {
+        // Optimistically update title in UI
+        const previousState = get().conversations;
+
+        set((state) => ({
+          conversations: state.conversations.map((c) =>
+            c.conversation_id === conversationId ? { ...c, title } : c
+          ),
+        }));
+
         try {
           await chatAPI.updateConversation(conversationId, { title });
-
-          set((state) => ({
-            conversations: state.conversations.map((c) =>
-              c.conversation_id === conversationId ? { ...c, title } : c
-            ),
-          }));
+          console.log("[Store] Conversation title updated successfully");
         } catch (error) {
-          const errorMessage =
-            error instanceof Error
-              ? error.message
-              : "Failed to update conversation title";
-          set({ error: errorMessage });
+          // Rollback on error
+          console.error("[Store] Failed to update title, rolling back:", error);
+          logError(error, { context: "updateConversationTitle", conversationId, title });
+
+          set({
+            conversations: previousState,
+            error: "Failed to update conversation title. Please try again.",
+          });
         }
       },
 
       archiveConversation: async (conversationId: string) => {
+        // Optimistically archive conversation in UI
+        const previousState = get().conversations;
+
+        set((state) => ({
+          conversations: state.conversations.map((c) =>
+            c.conversation_id === conversationId
+              ? { ...c, status: "archived" as const }
+              : c
+          ),
+        }));
+
         try {
           await chatAPI.archiveConversation(conversationId);
-
-          set((state) => ({
-            conversations: state.conversations.map((c) =>
-              c.conversation_id === conversationId
-                ? { ...c, status: "archived" }
-                : c
-            ),
-          }));
+          console.log("[Store] Conversation archived successfully");
         } catch (error) {
-          const errorMessage =
-            error instanceof Error
-              ? error.message
-              : "Failed to archive conversation";
-          set({ error: errorMessage });
+          // Rollback on error
+          console.error("[Store] Failed to archive conversation, rolling back:", error);
+          logError(error, { context: "archiveConversation", conversationId });
+
+          set({
+            conversations: previousState,
+            error: "Failed to archive conversation. Please try again.",
+          });
         }
       },
 
       deleteConversation: async (conversationId: string) => {
+        // Optimistically remove conversation from UI
+        const previousState = get().conversations;
+        const previousCurrentId = get().currentConversationId;
+
+        set((state) => {
+          const remainingConversations = state.conversations.filter(
+            (c) => c.conversation_id !== conversationId
+          );
+
+          return {
+            conversations: remainingConversations,
+            currentConversationId:
+              state.currentConversationId === conversationId
+                ? remainingConversations[0]?.conversation_id || null
+                : state.currentConversationId,
+          };
+        });
+
         try {
           await chatAPI.deleteConversation(conversationId);
-
-          set((state) => {
-            const remainingConversations = state.conversations.filter(
-              (c) => c.conversation_id !== conversationId
-            );
-
-            return {
-              conversations: remainingConversations,
-              currentConversationId:
-                state.currentConversationId === conversationId
-                  ? remainingConversations[0]?.conversation_id || null
-                  : state.currentConversationId,
-            };
-          });
+          console.log("[Store] Conversation deleted successfully:", conversationId);
         } catch (error) {
-          const errorMessage =
-            error instanceof Error
-              ? error.message
-              : "Failed to delete conversation";
-          set({ error: errorMessage });
+          // Rollback on error
+          console.error("[Store] Failed to delete conversation, rolling back:", error);
+          logError(error, { context: "deleteConversation", conversationId });
+
+          set({
+            conversations: previousState,
+            currentConversationId: previousCurrentId,
+            error: "Failed to delete conversation. Please try again.",
+          });
         }
       },
 
@@ -242,7 +279,7 @@ export const useChatStore = create<ChatStore>()(
         set({ isLoading: true, error: null });
 
         try {
-          const messagesResponse = await chatAPI.getMessages(conversationId, { limit: 100 });
+          const messagesResponse = await chatAPI.getMessages(conversationId, { limit: API.MESSAGES_FETCH_LIMIT });
           const messages = messagesResponse.map(toMessage);
 
           set((state) => ({
@@ -252,15 +289,17 @@ export const useChatStore = create<ChatStore>()(
             isLoading: false,
           }));
         } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : "Failed to load messages";
-          set({ error: errorMessage, isLoading: false });
+          logError(error, { context: "loadMessages", conversationId });
+          const errorType = classifyError(error);
+          const userMessage = getUserFriendlyMessage(errorType);
+          set({ error: userMessage, isLoading: false });
         }
       },
 
       sendMessage: async (content: string) => {
-        // Clean up any active EventSource before sending a new message
+        // Clean up any active EventSource and AbortController before sending a new message
         get().cleanupEventSource();
+        get().stopGeneration(); // This will abort any ongoing request
 
         const { settings } = get();
 
@@ -302,7 +341,9 @@ export const useChatStore = create<ChatStore>()(
           }
         }
 
-        set({ isStreaming: true, isLoading: true, error: null });
+        // Create AbortController for this request
+        const abortController = new AbortController();
+        set({ isStreaming: true, isLoading: true, error: null, currentAbortController: abortController });
 
         try {
           // Add user message optimistically
@@ -354,7 +395,7 @@ export const useChatStore = create<ChatStore>()(
                 enable_rag: settings.rag_enabled,
                 rag_top_k: settings.rag_top_k,
                 include_cross_conversation: settings.rag_cross_conversation,
-              });
+              }, abortController.signal);
               break;
 
             case "similarity":
@@ -364,12 +405,12 @@ export const useChatStore = create<ChatStore>()(
                 similarity_threshold: settings.similarity_threshold,
                 include_cross_conversation: settings.similarity_cross_conversation,
                 enable_auto_embedding: settings.enable_auto_embedding,
-              });
+              }, abortController.signal);
               break;
 
             case "standard":
             default:
-              stream = await chatAPI.sendMessageStream(conversationId, { content });
+              stream = await chatAPI.sendMessageStream(conversationId, { content }, abortController.signal);
               break;
           }
 
@@ -469,14 +510,37 @@ export const useChatStore = create<ChatStore>()(
             ),
             isStreaming: false,
             isLoading: false,
+            currentAbortController: null,
           }));
         } catch (error) {
           console.error("[Store] Failed to send streaming message:", error);
-          const errorMessage =
-            error instanceof Error
-              ? error.message
-              : "Failed to send streaming message";
-          set({ error: errorMessage, isStreaming: false, isLoading: false });
+
+          // Log the error
+          logError(error, { context: "_sendMessageWithStreaming", conversationId });
+
+          // Classify error type
+          const errorType = classifyError(error);
+
+          // Handle abort error specially (don't show error to user)
+          if (errorType === ErrorType.ABORT_ERROR) {
+            console.log("[Store] Stream was cancelled by user");
+            set({
+              isStreaming: false,
+              isLoading: false,
+              currentAbortController: null,
+            });
+            return;
+          }
+
+          // Get user-friendly message for other errors
+          const userMessage = getUserFriendlyMessage(errorType);
+
+          set({
+            error: userMessage,
+            isStreaming: false,
+            isLoading: false,
+            currentAbortController: null,
+          });
         }
       },
 
@@ -1006,6 +1070,15 @@ export const useChatStore = create<ChatStore>()(
         }));
       },
 
+      /**
+       * Update the current user ID (called when authentication changes)
+       */
+      setUserId: (userId: string) => {
+        set({ currentUserId: userId });
+        // Reload conversations for the new user
+        get().loadConversations();
+      },
+
       // ======================================================================
       // Utility Actions
       // ======================================================================
@@ -1019,6 +1092,38 @@ export const useChatStore = create<ChatStore>()(
           console.log("[Store] Cleaning up active EventSource");
           activeEventSource.close();
           set({ activeEventSource: null });
+        }
+      },
+
+      stopGeneration: () => {
+        const { currentAbortController, isStreaming, activeEventSource } = get();
+
+        console.log("[Store] Stop generation requested", {
+          hasAbortController: !!currentAbortController,
+          isStreaming,
+          hasEventSource: !!activeEventSource,
+        });
+
+        // Abort ongoing fetch request
+        if (currentAbortController) {
+          console.log("[Store] Aborting current request");
+          currentAbortController.abort();
+          set({ currentAbortController: null });
+        }
+
+        // Close EventSource for deep research
+        if (activeEventSource) {
+          console.log("[Store] Closing EventSource");
+          activeEventSource.close();
+          set({ activeEventSource: null });
+        }
+
+        // Update state
+        if (isStreaming) {
+          set({
+            isStreaming: false,
+            isLoading: false,
+          });
         }
       },
     }),
