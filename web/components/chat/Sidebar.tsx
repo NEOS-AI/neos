@@ -4,6 +4,7 @@ import { useChatStore } from "@/lib/stores/chat-store";
 import { useRouter, usePathname } from "next/navigation";
 import { MessageSquare, Plus, Trash2, Home, Search } from "lucide-react";
 import { useState, useRef, useEffect, KeyboardEvent } from "react";
+import { formatTimestamp } from "@/lib/utils";
 
 export default function Sidebar() {
   const router = useRouter();
@@ -26,21 +27,6 @@ export default function Sidebar() {
   useEffect(() => {
     conversationRefs.current = conversationRefs.current.slice(0, filteredConversations.length);
   }, [filteredConversations.length]);
-
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-
-    if (minutes < 1) return "Just now";
-    if (minutes < 60) return `${minutes}m ago`;
-    if (hours < 24) return `${hours}h ago`;
-    if (days < 7) return `${days}d ago`;
-    return date.toLocaleDateString();
-  };
 
   const handleNewChat = async () => {
     router.push('/');
@@ -208,7 +194,7 @@ export default function Sidebar() {
                   `}
                   onClick={() => handleConversationClick(conversation.conversation_id)}
                   onKeyDown={(e) => handleKeyDown(e, index, conversation.conversation_id)}
-                  aria-label={`${conversation.title}, ${conversation.message_count} messages, ${formatDate(conversation.updated_at)}`}
+                  aria-label={`${conversation.title}, ${conversation.message_count} messages, ${formatTimestamp(conversation.updated_at)}`}
                   aria-current={isActive ? 'page' : undefined}
                 >
                   <MessageSquare
@@ -224,7 +210,7 @@ export default function Sidebar() {
                       {conversation.title}
                     </div>
                     <div className="text-xs text-text-muted mt-0.5">
-                      {formatDate(conversation.updated_at)} · {conversation.message_count}
+                      {formatTimestamp(conversation.updated_at)} · {conversation.message_count}
                     </div>
                   </div>
 

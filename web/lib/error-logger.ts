@@ -2,6 +2,8 @@
  * Error logging and monitoring utilities
  */
 
+import { API } from './constants';
+
 /**
  * Error type classifications
  */
@@ -156,9 +158,9 @@ export interface RetryConfig {
 }
 
 const DEFAULT_RETRY_CONFIG: RetryConfig = {
-  maxRetries: 3,
-  baseDelay: 1000, // 1 second
-  maxDelay: 10000, // 10 seconds
+  maxRetries: API.MAX_RETRIES,
+  baseDelay: API.RETRY_BASE_DELAY_MS,
+  maxDelay: API.RETRY_MAX_DELAY_MS,
   shouldRetry: (error: unknown) => {
     const errorType = classifyError(error);
     // Only retry network errors and server errors

@@ -9,8 +9,18 @@ import type {
   ChatMode,
 } from "@/lib/types";
 import { logError, classifyError, getUserFriendlyMessage, ErrorType } from "@/lib/error-logger";
+import { AI_SETTINGS, API } from "@/lib/constants";
+import { getCurrentUser } from "@/lib/auth";
 
 const DEFAULT_USER_ID = "anonymous";
+
+/**
+ * Get the current user ID from auth or fall back to anonymous
+ */
+function getCurrentUserId(): string {
+  const user = getCurrentUser();
+  return user?.id || DEFAULT_USER_ID;
+}
 
 const DEFAULT_SETTINGS: ChatSettings = {
   mode: "standard",
@@ -25,7 +35,7 @@ const DEFAULT_SETTINGS: ChatSettings = {
 
   // Similarity defaults
   similarity_top_k: 3,
-  similarity_threshold: 0.7,
+  similarity_threshold: AI_SETTINGS.SIMILARITY_THRESHOLD_LOW,
   similarity_cross_conversation: false,
   enable_auto_embedding: true,
 };
@@ -112,7 +122,7 @@ export const useChatStore = create<ChatStore>()(
         try {
           const { currentUserId } = get();
           const response = await chatAPI.listConversations(currentUserId, {
-            limit: 100,
+            limit: API.MESSAGES_FETCH_LIMIT,
             include_archived: false,
           });
 
@@ -269,7 +279,7 @@ export const useChatStore = create<ChatStore>()(
         set({ isLoading: true, error: null });
 
         try {
-          const messagesResponse = await chatAPI.getMessages(conversationId, { limit: 100 });
+          const messagesResponse = await chatAPI.getMessages(conversationId, { limit: API.MESSAGES_FETCH_LIMIT });
           const messages = messagesResponse.map(toMessage);
 
           set((state) => ({
@@ -1058,6 +1068,15 @@ export const useChatStore = create<ChatStore>()(
         set((state) => ({
           settings: { ...state.settings, mode },
         }));
+      },
+
+      /**
+       * Update the current user ID (called when authentication changes)
+       */
+      setUserId: (userId: string) => {
+        set({ currentUserId: userId });
+        // Reload conversations for the new user
+        get().loadConversations();
       },
 
       // ======================================================================

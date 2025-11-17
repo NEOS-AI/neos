@@ -5,6 +5,7 @@ import MessageBubble from "./MessageBubble";
 import { useEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Sparkles, Database, Brain, ArrowRight } from "lucide-react";
+import { PERFORMANCE, UI_DIMENSIONS } from "@/lib/constants";
 
 const examplePrompts = [
   {
@@ -29,9 +30,6 @@ const examplePrompts = [
   },
 ];
 
-// Virtualization threshold - only virtualize if messages exceed this count
-const VIRTUALIZATION_THRESHOLD = 50;
-
 export default function MessageList() {
   // Use selector to properly subscribe to store changes
   const sendMessage = useChatStore((state) => state.sendMessage);
@@ -50,14 +48,14 @@ export default function MessageList() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Only use virtualization for long message lists
-  const shouldVirtualize = messages.length > VIRTUALIZATION_THRESHOLD;
+  const shouldVirtualize = messages.length > PERFORMANCE.VIRTUALIZATION_THRESHOLD;
 
   // Setup virtualizer for long lists
   const virtualizer = useVirtualizer({
     count: messages.length,
     getScrollElement: () => scrollContainerRef.current,
-    estimateSize: () => 150, // Estimated message height
-    overscan: 5, // Render 5 extra items above and below viewport
+    estimateSize: () => UI_DIMENSIONS.MESSAGE_ESTIMATED_HEIGHT_PX,
+    overscan: PERFORMANCE.VIRTUALIZATION_OVERSCAN,
     enabled: shouldVirtualize,
   });
 

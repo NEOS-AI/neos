@@ -211,6 +211,7 @@ export interface ChatStore {
   // Settings Actions
   updateSettings: (settings: Partial<ChatSettings>) => void;
   setChatMode: (mode: ChatMode) => void;
+  setUserId: (userId: string) => void;
 
   // Utility Actions
   clearError: () => void;
