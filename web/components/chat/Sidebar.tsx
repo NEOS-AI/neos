@@ -3,18 +3,29 @@
 import { useChatStore } from "@/lib/stores/chat-store";
 import { useRouter, usePathname } from "next/navigation";
 import { MessageSquare, Plus, Trash2, Home, Search } from "lucide-react";
-import { useState } from "react";
+import { useState, useRef, useEffect, KeyboardEvent } from "react";
 
 export default function Sidebar() {
   const router = useRouter();
   const pathname = usePathname();
   const [searchQuery, setSearchQuery] = useState("");
+  const conversationRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const [focusedIndex, setFocusedIndex] = useState<number>(-1);
 
   const {
     conversations,
     currentConversationId,
     deleteConversation,
   } = useChatStore();
+
+  const filteredConversations = conversations.filter(conv =>
+    conv.title.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  // Update refs array when conversations change
+  useEffect(() => {
+    conversationRefs.current = conversationRefs.current.slice(0, filteredConversations.length);
+  }, [filteredConversations.length]);
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -52,9 +63,53 @@ export default function Sidebar() {
     }
   };
 
-  const filteredConversations = conversations.filter(conv =>
-    conv.title.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>, index: number, conversationId: string) => {
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        const nextIndex = Math.min(index + 1, filteredConversations.length - 1);
+        conversationRefs.current[nextIndex]?.focus();
+        setFocusedIndex(nextIndex);
+        break;
+
+      case 'ArrowUp':
+        e.preventDefault();
+        const prevIndex = Math.max(index - 1, 0);
+        conversationRefs.current[prevIndex]?.focus();
+        setFocusedIndex(prevIndex);
+        break;
+
+      case 'Home':
+        e.preventDefault();
+        conversationRefs.current[0]?.focus();
+        setFocusedIndex(0);
+        break;
+
+      case 'End':
+        e.preventDefault();
+        const lastIndex = filteredConversations.length - 1;
+        conversationRefs.current[lastIndex]?.focus();
+        setFocusedIndex(lastIndex);
+        break;
+
+      case 'Enter':
+      case ' ':
+        e.preventDefault();
+        handleConversationClick(conversationId);
+        break;
+
+      case 'Delete':
+      case 'Backspace':
+        e.preventDefault();
+        if (confirm("Delete this conversation?")) {
+          deleteConversation(conversationId);
+          if (conversationId === currentConversationId) {
+            router.push('/');
+          }
+        }
+        break;
+    }
+  };
 
   return (
     <nav
@@ -128,26 +183,33 @@ export default function Sidebar() {
         </div>
 
         {/* Conversation List */}
-        <div className="px-2 pb-2 space-y-1">
+        <div className="px-2 pb-2 space-y-1" role="list" aria-label="Conversations">
           {filteredConversations.length === 0 ? (
             <div className="px-4 py-8 text-center text-text-muted text-sm">
               {searchQuery ? "No conversations found" : "No conversations yet"}
             </div>
           ) : (
-            filteredConversations.map((conversation) => {
+            filteredConversations.map((conversation, index) => {
               const isActive = pathname === `/chat/${conversation.conversation_id}`;
               return (
                 <div
                   key={conversation.conversation_id}
+                  ref={(el) => (conversationRefs.current[index] = el)}
+                  role="listitem"
+                  tabIndex={isActive ? 0 : -1}
                   className={`
                     group relative flex items-center gap-3 px-3 py-2.5 rounded-xl
                     cursor-pointer transition-all duration-150
+                    focus:outline-none focus:ring-2 focus:ring-brand-accent/50
                     ${isActive
                       ? "bg-brand-accent/10 border-l-2 border-brand-accent"
                       : "hover:bg-action-hover border-l-2 border-transparent"
                     }
                   `}
                   onClick={() => handleConversationClick(conversation.conversation_id)}
+                  onKeyDown={(e) => handleKeyDown(e, index, conversation.conversation_id)}
+                  aria-label={`${conversation.title}, ${conversation.message_count} messages, ${formatDate(conversation.updated_at)}`}
+                  aria-current={isActive ? 'page' : undefined}
                 >
                   <MessageSquare
                     className={`flex-shrink-0 w-4 h-4 ${
