@@ -176,66 +176,89 @@ export const useChatStore = create<ChatStore>()(
       },
 
       updateConversationTitle: async (conversationId: string, title: string) => {
+        // Optimistically update title in UI
+        const previousState = get().conversations;
+
+        set((state) => ({
+          conversations: state.conversations.map((c) =>
+            c.conversation_id === conversationId ? { ...c, title } : c
+          ),
+        }));
+
         try {
           await chatAPI.updateConversation(conversationId, { title });
-
-          set((state) => ({
-            conversations: state.conversations.map((c) =>
-              c.conversation_id === conversationId ? { ...c, title } : c
-            ),
-          }));
+          console.log("[Store] Conversation title updated successfully");
         } catch (error) {
-          const errorMessage =
-            error instanceof Error
-              ? error.message
-              : "Failed to update conversation title";
-          set({ error: errorMessage });
+          // Rollback on error
+          console.error("[Store] Failed to update title, rolling back:", error);
+          logError(error, { context: "updateConversationTitle", conversationId, title });
+
+          set({
+            conversations: previousState,
+            error: "Failed to update conversation title. Please try again.",
+          });
         }
       },
 
       archiveConversation: async (conversationId: string) => {
+        // Optimistically archive conversation in UI
+        const previousState = get().conversations;
+
+        set((state) => ({
+          conversations: state.conversations.map((c) =>
+            c.conversation_id === conversationId
+              ? { ...c, status: "archived" as const }
+              : c
+          ),
+        }));
+
         try {
           await chatAPI.archiveConversation(conversationId);
-
-          set((state) => ({
-            conversations: state.conversations.map((c) =>
-              c.conversation_id === conversationId
-                ? { ...c, status: "archived" }
-                : c
-            ),
-          }));
+          console.log("[Store] Conversation archived successfully");
         } catch (error) {
-          const errorMessage =
-            error instanceof Error
-              ? error.message
-              : "Failed to archive conversation";
-          set({ error: errorMessage });
+          // Rollback on error
+          console.error("[Store] Failed to archive conversation, rolling back:", error);
+          logError(error, { context: "archiveConversation", conversationId });
+
+          set({
+            conversations: previousState,
+            error: "Failed to archive conversation. Please try again.",
+          });
         }
       },
 
       deleteConversation: async (conversationId: string) => {
+        // Optimistically remove conversation from UI
+        const previousState = get().conversations;
+        const previousCurrentId = get().currentConversationId;
+
+        set((state) => {
+          const remainingConversations = state.conversations.filter(
+            (c) => c.conversation_id !== conversationId
+          );
+
+          return {
+            conversations: remainingConversations,
+            currentConversationId:
+              state.currentConversationId === conversationId
+                ? remainingConversations[0]?.conversation_id || null
+                : state.currentConversationId,
+          };
+        });
+
         try {
           await chatAPI.deleteConversation(conversationId);
-
-          set((state) => {
-            const remainingConversations = state.conversations.filter(
-              (c) => c.conversation_id !== conversationId
-            );
-
-            return {
-              conversations: remainingConversations,
-              currentConversationId:
-                state.currentConversationId === conversationId
-                  ? remainingConversations[0]?.conversation_id || null
-                  : state.currentConversationId,
-            };
-          });
+          console.log("[Store] Conversation deleted successfully:", conversationId);
         } catch (error) {
-          const errorMessage =
-            error instanceof Error
-              ? error.message
-              : "Failed to delete conversation";
-          set({ error: errorMessage });
+          // Rollback on error
+          console.error("[Store] Failed to delete conversation, rolling back:", error);
+          logError(error, { context: "deleteConversation", conversationId });
+
+          set({
+            conversations: previousState,
+            currentConversationId: previousCurrentId,
+            error: "Failed to delete conversation. Please try again.",
+          });
         }
       },
 

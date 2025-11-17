@@ -3,6 +3,7 @@
 import { useChatStore } from "@/lib/stores/chat-store";
 import MessageBubble from "./MessageBubble";
 import { useEffect, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Sparkles, Database, Brain, ArrowRight } from "lucide-react";
 
 const examplePrompts = [
@@ -28,6 +29,9 @@ const examplePrompts = [
   },
 ];
 
+// Virtualization threshold - only virtualize if messages exceed this count
+const VIRTUALIZATION_THRESHOLD = 50;
+
 export default function MessageList() {
   // Use selector to properly subscribe to store changes
   const sendMessage = useChatStore((state) => state.sendMessage);
@@ -43,6 +47,19 @@ export default function MessageList() {
 
   const messages = currentConversation?.messages || [];
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Only use virtualization for long message lists
+  const shouldVirtualize = messages.length > VIRTUALIZATION_THRESHOLD;
+
+  // Setup virtualizer for long lists
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: () => 150, // Estimated message height
+    overscan: 5, // Render 5 extra items above and below viewport
+    enabled: shouldVirtualize,
+  });
 
   // Debug logging
   useEffect(() => {
@@ -74,7 +91,7 @@ export default function MessageList() {
   };
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div ref={scrollContainerRef} className="h-full overflow-y-auto">
       {!currentConversation || messages.length === 0 ? (
         /* Empty State - No conversation or no messages */
         <div className="flex items-center justify-center min-h-full p-8">
@@ -149,8 +166,34 @@ export default function MessageList() {
             </div>
           </div>
         </div>
+      ) : shouldVirtualize ? (
+        /* Virtualized Messages - for long conversations */
+        <div className="py-4" style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
+          {virtualizer.getVirtualItems().map((virtualItem) => {
+            const message = messages[virtualItem.index];
+            return (
+              <div
+                key={message.message_id}
+                data-index={virtualItem.index}
+                ref={virtualizer.measureElement}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  transform: `translateY(${virtualItem.start}px)`,
+                }}
+              >
+                <MessageBubble message={message} />
+              </div>
+            );
+          })}
+
+          {/* Scroll anchor */}
+          <div ref={messagesEndRef} style={{ position: 'absolute', bottom: 0 }} />
+        </div>
       ) : (
-        /* Messages */
+        /* Regular Messages - for short conversations */
         <div className="py-4">
           {messages.map((message) => (
             <MessageBubble key={message.message_id} message={message} />

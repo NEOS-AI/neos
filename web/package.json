@@ -13,6 +13,7 @@
     "test:coverage": "jest --coverage"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.10.8",
     "axios": "^1.13.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.454.0",
