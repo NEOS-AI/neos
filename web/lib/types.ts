@@ -185,6 +185,9 @@ export interface ChatStore {
   // Deep research EventSource tracking
   activeEventSource: EventSource | null;
 
+  // Abort controller for request cancellation
+  currentAbortController: AbortController | null;
+
   // Getters
   currentConversation: Conversation | null;
   messages: Message[];
@@ -212,4 +215,5 @@ export interface ChatStore {
   // Utility Actions
   clearError: () => void;
   cleanupEventSource: () => void;
+  stopGeneration: () => void;
 }

@@ -8,6 +8,7 @@ import type {
   ChatSettings,
   ChatMode,
 } from "@/lib/types";
+import { logError, classifyError, getUserFriendlyMessage, ErrorType } from "@/lib/error-logger";
 
 const DEFAULT_USER_ID = "anonymous";
 
@@ -75,6 +76,7 @@ export const useChatStore = create<ChatStore>()(
       error: null,
       settings: DEFAULT_SETTINGS,
       activeEventSource: null,
+      currentAbortController: null,
 
       // ======================================================================
       // Computed Getters
@@ -124,9 +126,10 @@ export const useChatStore = create<ChatStore>()(
             isLoading: false,
           });
         } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : "Failed to load conversations";
-          set({ error: errorMessage, isLoading: false });
+          logError(error, { context: "loadConversations", userId: get().currentUserId });
+          const errorType = classifyError(error);
+          const userMessage = getUserFriendlyMessage(errorType);
+          set({ error: userMessage, isLoading: false });
         }
       },
 
@@ -153,9 +156,10 @@ export const useChatStore = create<ChatStore>()(
             isLoading: false,
           }));
         } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : "Failed to create conversation";
-          set({ error: errorMessage, isLoading: false });
+          logError(error, { context: "createConversation", userId: get().currentUserId });
+          const errorType = classifyError(error);
+          const userMessage = getUserFriendlyMessage(errorType);
+          set({ error: userMessage, isLoading: false });
         }
       },
 
@@ -252,15 +256,17 @@ export const useChatStore = create<ChatStore>()(
             isLoading: false,
           }));
         } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : "Failed to load messages";
-          set({ error: errorMessage, isLoading: false });
+          logError(error, { context: "loadMessages", conversationId });
+          const errorType = classifyError(error);
+          const userMessage = getUserFriendlyMessage(errorType);
+          set({ error: userMessage, isLoading: false });
         }
       },
 
       sendMessage: async (content: string) => {
-        // Clean up any active EventSource before sending a new message
+        // Clean up any active EventSource and AbortController before sending a new message
         get().cleanupEventSource();
+        get().stopGeneration(); // This will abort any ongoing request
 
         const { settings } = get();
 
@@ -302,7 +308,9 @@ export const useChatStore = create<ChatStore>()(
           }
         }
 
-        set({ isStreaming: true, isLoading: true, error: null });
+        // Create AbortController for this request
+        const abortController = new AbortController();
+        set({ isStreaming: true, isLoading: true, error: null, currentAbortController: abortController });
 
         try {
           // Add user message optimistically
@@ -354,7 +362,7 @@ export const useChatStore = create<ChatStore>()(
                 enable_rag: settings.rag_enabled,
                 rag_top_k: settings.rag_top_k,
                 include_cross_conversation: settings.rag_cross_conversation,
-              });
+              }, abortController.signal);
               break;
 
             case "similarity":
@@ -364,12 +372,12 @@ export const useChatStore = create<ChatStore>()(
                 similarity_threshold: settings.similarity_threshold,
                 include_cross_conversation: settings.similarity_cross_conversation,
                 enable_auto_embedding: settings.enable_auto_embedding,
-              });
+              }, abortController.signal);
               break;
 
             case "standard":
             default:
-              stream = await chatAPI.sendMessageStream(conversationId, { content });
+              stream = await chatAPI.sendMessageStream(conversationId, { content }, abortController.signal);
               break;
           }
 
@@ -469,14 +477,37 @@ export const useChatStore = create<ChatStore>()(
             ),
             isStreaming: false,
             isLoading: false,
+            currentAbortController: null,
           }));
         } catch (error) {
           console.error("[Store] Failed to send streaming message:", error);
-          const errorMessage =
-            error instanceof Error
-              ? error.message
-              : "Failed to send streaming message";
-          set({ error: errorMessage, isStreaming: false, isLoading: false });
+
+          // Log the error
+          logError(error, { context: "_sendMessageWithStreaming", conversationId });
+
+          // Classify error type
+          const errorType = classifyError(error);
+
+          // Handle abort error specially (don't show error to user)
+          if (errorType === ErrorType.ABORT_ERROR) {
+            console.log("[Store] Stream was cancelled by user");
+            set({
+              isStreaming: false,
+              isLoading: false,
+              currentAbortController: null,
+            });
+            return;
+          }
+
+          // Get user-friendly message for other errors
+          const userMessage = getUserFriendlyMessage(errorType);
+
+          set({
+            error: userMessage,
+            isStreaming: false,
+            isLoading: false,
+            currentAbortController: null,
+          });
         }
       },
 
@@ -1019,6 +1050,38 @@ export const useChatStore = create<ChatStore>()(
           console.log("[Store] Cleaning up active EventSource");
           activeEventSource.close();
           set({ activeEventSource: null });
+        }
+      },
+
+      stopGeneration: () => {
+        const { currentAbortController, isStreaming, activeEventSource } = get();
+
+        console.log("[Store] Stop generation requested", {
+          hasAbortController: !!currentAbortController,
+          isStreaming,
+          hasEventSource: !!activeEventSource,
+        });
+
+        // Abort ongoing fetch request
+        if (currentAbortController) {
+          console.log("[Store] Aborting current request");
+          currentAbortController.abort();
+          set({ currentAbortController: null });
+        }
+
+        // Close EventSource for deep research
+        if (activeEventSource) {
+          console.log("[Store] Closing EventSource");
+          activeEventSource.close();
+          set({ activeEventSource: null });
+        }
+
+        // Update state
+        if (isStreaming) {
+          set({
+            isStreaming: false,
+            isLoading: false,
+          });
         }
       },
     }),

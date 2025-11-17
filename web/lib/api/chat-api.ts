@@ -255,7 +255,8 @@ class ChatAPI {
 
   async sendMessageStream(
     conversationId: string,
-    request: SendMessageRequest
+    request: SendMessageRequest,
+    signal?: AbortSignal
   ): Promise<ReadableStream> {
     const response = await fetch(
       `${this.baseUrl}/chat/conversations/${conversationId}/messages/stream`,
@@ -263,6 +264,7 @@ class ChatAPI {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
+        signal,
       }
     );
 
@@ -381,7 +383,8 @@ class ChatAPI {
 
   async sendRAGMessageStream(
     conversationId: string,
-    request: SendRAGMessageRequest
+    request: SendRAGMessageRequest,
+    signal?: AbortSignal
   ): Promise<ReadableStream> {
     const response = await fetch(
       `${this.baseUrl}/chat/conversations/${conversationId}/messages/rag/stream`,
@@ -389,6 +392,7 @@ class ChatAPI {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
+        signal,
       }
     );
 
@@ -429,7 +433,8 @@ class ChatAPI {
 
   async sendSimilarityMessageStream(
     conversationId: string,
-    request: SendSimilarityMessageRequest
+    request: SendSimilarityMessageRequest,
+    signal?: AbortSignal
   ): Promise<ReadableStream> {
     const response = await fetch(
       `${this.baseUrl}/chat/conversations/${conversationId}/messages/similarity/stream`,
@@ -437,6 +442,7 @@ class ChatAPI {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
+        signal,
       }
     );
 
