@@ -9,7 +9,13 @@ import Sidebar from "./Sidebar";
 import MessageList from "./MessageList";
 import InputBox from "./InputBox";
 import ChatModeSelector from "./ChatModeSelector";
-import SettingsPanel from "./SettingsPanel";
+import dynamic from "next/dynamic";
+
+// Dynamically import SettingsPanel for code splitting
+const SettingsPanel = dynamic(() => import("./SettingsPanel"), {
+  loading: () => <div className="text-xs text-claude-text-secondary">Loading settings...</div>,
+  ssr: false,
+});
 
 function ChatInterfaceContent() {
   const { loadConversations } = useChatStore();

@@ -3,8 +3,14 @@
 import { useChatStore } from "@/lib/stores/chat-store";
 import { Brain, Database, Sparkles, SearchX } from "lucide-react";
 import type { ChatMode } from "@/lib/types";
-import SimilaritySettings from "./SimilaritySettings";
 import { useRef, useEffect, KeyboardEvent } from "react";
+import dynamic from "next/dynamic";
+
+// Dynamically import SimilaritySettings for code splitting
+const SimilaritySettings = dynamic(() => import("./SimilaritySettings"), {
+  loading: () => <div className="text-xs text-claude-text-secondary animate-pulse">Loading...</div>,
+  ssr: false,
+});
 
 const chatModes: Array<{
   id: ChatMode;
