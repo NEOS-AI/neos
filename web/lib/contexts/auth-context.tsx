@@ -2,15 +2,21 @@
 
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
 import type { User } from '@/lib/auth';
-import { getSession, login as authLogin, logout as authLogout, register as authRegister } from '@/lib/auth';
+import {
+  getCurrentUser,
+  login as authLogin,
+  logout as authLogout,
+  register as authRegister,
+} from '@/lib/auth';
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  register: (username: string, email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, username?: string) => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -23,14 +29,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Initialize auth state from session
+  // 사용자 정보 새로고침
+  const refreshUser = useCallback(async () => {
+    try {
+      const currentUser = await getCurrentUser();
+      setUser(currentUser);
+    } catch (error) {
+      console.error('Failed to refresh user:', error);
+      setUser(null);
+    }
+  }, []);
+
+  // 초기화 시 사용자 정보 로드
   useEffect(() => {
-    const initAuth = () => {
+    const initAuth = async () => {
       try {
-        const session = getSession();
-        if (session) {
-          setUser(session.user);
-        }
+        const currentUser = await getCurrentUser();
+        setUser(currentUser);
       } catch (error) {
         console.error('Failed to initialize auth:', error);
       } finally {
@@ -41,15 +56,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     initAuth();
   }, []);
 
-  const login = useCallback(async (username: string, password: string) => {
-    try {
-      const user = await authLogin(username, password);
-      setUser(user);
-    } catch (error) {
-      console.error('Login failed:', error);
-      throw error;
-    }
-  }, []);
+  const login = useCallback(
+    async (email: string, password: string) => {
+      try {
+        const user = await authLogin(email, password);
+        setUser(user);
+      } catch (error) {
+        console.error('Login failed:', error);
+        throw error;
+      }
+    },
+    []
+  );
 
   const logout = useCallback(async () => {
     try {
@@ -57,19 +75,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
     } catch (error) {
       console.error('Logout failed:', error);
+      // 로그아웃은 에러가 나도 사용자를 로그아웃 상태로 만듦
+      setUser(null);
       throw error;
     }
   }, []);
 
-  const register = useCallback(async (username: string, email: string, password: string) => {
-    try {
-      const user = await authRegister(username, email, password);
-      setUser(user);
-    } catch (error) {
-      console.error('Registration failed:', error);
-      throw error;
-    }
-  }, []);
+  const register = useCallback(
+    async (email: string, password: string, username?: string) => {
+      try {
+        await authRegister(email, password, username);
+        // 회원가입 후 자동 로그인
+        await login(email, password);
+      } catch (error) {
+        console.error('Registration failed:', error);
+        throw error;
+      }
+    },
+    [login]
+  );
 
   const value: AuthContextType = {
     user,
@@ -78,6 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     login,
     logout,
     register,
+    refreshUser,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

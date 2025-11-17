@@ -1,24 +1,45 @@
-from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, Float, ForeignKey, ARRAY, Boolean # JSON,
-from sqlalchemy.dialects.postgresql import JSONB #, UUID,
+from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, Float, ForeignKey, ARRAY, Boolean, Index
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from pgvector.sqlalchemy import Vector
-# import uuid
+import uuid
 
 from .connection import Base
 
 
 class User(Base):
     __tablename__ = "users"
-    
+
     id = Column(Integer, primary_key=True)
-    user_id = Column(String(255), unique=True, nullable=False)
+    user_id = Column(String(255), unique=True, nullable=False, index=True)
+
+    # 인증 정보
+    email = Column(String(255), unique=True, nullable=True, index=True)  # nullable for backward compatibility
+    username = Column(String(255), unique=True, nullable=True, index=True)
+    password_hash = Column(String(255), nullable=True)  # bcrypt hash
+
+    # 계정 상태
+    is_active = Column(Boolean, default=True)
+    is_verified = Column(Boolean, default=False)
+    is_admin = Column(Boolean, default=False)
+
+    # 역할 및 권한
+    role = Column(String(50), default="user")  # user, admin, premium, etc.
+
+    # 타임스탬프
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_login = Column(TIMESTAMP, nullable=True)
+
+    # 사용자 설정
     preferences = Column(JSONB, default=dict)
-    
+
     # 관계
     query_histories = relationship("QueryHistory", back_populates="user")
     search_sessions = relationship("SearchSession", back_populates="user")
+    api_keys = relationship("APIKey", back_populates="user", cascade="all, delete-orphan")
+    refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
 
 class QueryHistory(Base):
     __tablename__ = "query_history"
@@ -212,3 +233,90 @@ class KnowledgeGraph(Base):
 
     # 관계
     document = relationship("Document", back_populates="knowledge_graph")
+
+
+# ============================================================================
+# Authentication & Authorization Models
+# ============================================================================
+
+class APIKey(Base):
+    """API 키 관리"""
+    __tablename__ = "api_keys"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String(255), ForeignKey("users.user_id"), nullable=False)
+
+    # 키 정보
+    name = Column(String(255), nullable=False)  # 사용자가 지정하는 키 이름 (예: "Production API", "Testing")
+    key_hash = Column(String(255), nullable=False, unique=True)  # SHA-256 해시
+    key_prefix = Column(String(20), nullable=False)  # 표시용 prefix (예: "neos_abc...")
+
+    # 권한 및 제한
+    scopes = Column(ARRAY(String), default=list)  # 권한 범위 (예: ["query:read", "chat:write"])
+    rate_limit = Column(Integer, default=100)  # 분당 요청 수
+    max_requests_per_day = Column(Integer, nullable=True)  # 일일 최대 요청 수 (None = 무제한)
+
+    # 사용 통계
+    total_requests = Column(Integer, default=0)
+    last_used_at = Column(TIMESTAMP, nullable=True)
+    last_used_ip = Column(String(45), nullable=True)  # IPv6 지원
+
+    # 상태 및 만료
+    is_active = Column(Boolean, default=True)
+    expires_at = Column(TIMESTAMP, nullable=True)  # None = 만료 없음
+
+    # 메타데이터
+    description = Column(Text, nullable=True)
+    metadata = Column(JSONB, default=dict)
+
+    # 타임스탬프
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # 관계
+    user = relationship("User", back_populates="api_keys")
+
+    # 인덱스
+    __table_args__ = (
+        Index("idx_api_keys_user_id", "user_id"),
+        Index("idx_api_keys_key_hash", "key_hash"),
+        Index("idx_api_keys_is_active", "is_active"),
+    )
+
+
+class RefreshToken(Base):
+    """리프레시 토큰 관리 (토큰 rotation 지원)"""
+    __tablename__ = "refresh_tokens"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String(255), ForeignKey("users.user_id"), nullable=False)
+
+    # 토큰 정보
+    token_hash = Column(String(255), nullable=False, unique=True)  # SHA-256 해시
+
+    # 세션 정보
+    session_id = Column(String(255), nullable=True)  # BFF 세션 ID (optional)
+    device_info = Column(String(500), nullable=True)  # User-Agent 정보
+    ip_address = Column(String(45), nullable=True)  # IPv6 지원
+
+    # 상태
+    is_revoked = Column(Boolean, default=False)
+    is_used = Column(Boolean, default=False)  # 1회용 토큰 (rotation)
+
+    # 만료
+    expires_at = Column(TIMESTAMP, nullable=False)
+
+    # 타임스탬프
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    used_at = Column(TIMESTAMP, nullable=True)
+    revoked_at = Column(TIMESTAMP, nullable=True)
+
+    # 관계
+    user = relationship("User", back_populates="refresh_tokens")
+
+    # 인덱스
+    __table_args__ = (
+        Index("idx_refresh_tokens_user_id", "user_id"),
+        Index("idx_refresh_tokens_token_hash", "token_hash"),
+        Index("idx_refresh_tokens_expires_at", "expires_at"),
+    )

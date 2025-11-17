@@ -45,4 +45,8 @@ dependencies = [
     "requests>=2.32.5",
     "boto3>=1.35.0",
     "playwright>=1.55.0",
+    "passlib[bcrypt]>=1.7.4",
+    "python-jose[cryptography]>=3.3.0",
+    "pyjwt>=2.10.1",
+    "alembic>=1.13.0",
 ]

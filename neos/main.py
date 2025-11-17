@@ -17,6 +17,7 @@ from neos.api.handlers.document_handlers import router as document_router
 from neos.api.handlers.multimodal_handlers import router as multimodal_router
 from neos.api.handlers.chat_handlers import router as chat_router
 from neos.api.handlers.deep_research_handlers import router as deep_research_router
+from neos.api.handlers.auth import router as auth_router
 from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.workflow.graph import multi_agent_workflow
 
@@ -173,6 +174,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 
 # API 라우터 등록
+app.include_router(auth_router, prefix=settings.API_V1_PREFIX, tags=["Authentication"])  # 인증 라우터 추가
 app.include_router(router, prefix=settings.API_V1_PREFIX, tags=["Multi-Agent AI"])
 app.include_router(web_search_analytics_router, prefix=f"{settings.API_V1_PREFIX}/analytics", tags=["Web Search Analytics"])
 app.include_router(document_router, prefix=f"{settings.API_V1_PREFIX}/documents", tags=["Document Management"])

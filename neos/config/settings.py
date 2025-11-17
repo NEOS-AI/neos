@@ -61,6 +61,36 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     DEBUG: bool = bool(env_vars.get("DEBUG", False))
 
+    # 인증 설정
+    JWT_SECRET_KEY: str = env_vars.get("JWT_SECRET_KEY", "your-secret-key-change-this-in-production")
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(env_vars.get("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 15))  # 15분
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = int(env_vars.get("JWT_REFRESH_TOKEN_EXPIRE_DAYS", 7))  # 7일
+
+    # 비밀번호 정책
+    PASSWORD_MIN_LENGTH: int = 8
+    PASSWORD_REQUIRE_UPPERCASE: bool = True
+    PASSWORD_REQUIRE_LOWERCASE: bool = True
+    PASSWORD_REQUIRE_DIGIT: bool = True
+    PASSWORD_REQUIRE_SPECIAL: bool = True
+
+    # API 키 설정
+    API_KEY_LENGTH: int = 32  # bytes
+    API_KEY_PREFIX: str = "neos_"
+
+    # 세션 설정
+    SESSION_COOKIE_NAME: str = "neos_session"
+    SESSION_EXPIRE_SECONDS: int = int(env_vars.get("SESSION_EXPIRE_SECONDS", 604800))  # 7일
+
+    # Rate Limiting 설정
+    RATE_LIMIT_LOGIN_ATTEMPTS: int = 5
+    RATE_LIMIT_LOGIN_WINDOW_SECONDS: int = 600  # 10분
+    RATE_LIMIT_API_CALLS_PER_MINUTE: int = 100
+
+    # CORS 설정
+    CORS_ALLOWED_ORIGINS: list = env_vars.get("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    CORS_ALLOW_CREDENTIALS: bool = True
+
     # 로그 설정
     LOG_LEVEL: str = env_vars.get("LOG_LEVEL", "INFO")
 
