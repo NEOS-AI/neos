@@ -23,23 +23,23 @@ export default function MessageMetadata({
   }
 
   return (
-    <div className="flex items-center gap-4 mt-3 text-xs text-claude-text-secondary">
+    <div className="flex items-center gap-3 mt-2 text-xs text-gray-500 dark:text-gray-400">
       {modelName && (
         <div className="flex items-center gap-1.5">
-          <span className="text-orange-500">●</span>
-          <span>{modelName.split("-").slice(0, 2).join(" ")}</span>
+          <span className="text-orange-500 dark:text-orange-400">●</span>
+          <span className="font-medium">{modelName.split("-").slice(0, 2).join(" ")}</span>
         </div>
       )}
 
       {totalTokens && (
         <div className="flex items-center gap-1.5">
-          <span>{totalTokens} tokens</span>
+          <span>{totalTokens.toLocaleString()} tokens</span>
         </div>
       )}
 
       {qualityScore && (
         <div className="flex items-center gap-1.5">
-          <CheckCircle2 size={12} />
+          <CheckCircle2 size={12} className="text-green-600 dark:text-green-400" />
           <span>{(qualityScore * 100).toFixed(0)}%</span>
         </div>
       )}

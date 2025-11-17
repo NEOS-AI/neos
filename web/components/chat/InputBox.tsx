@@ -75,17 +75,17 @@ export default function InputBox() {
   const isNearLimit = characterCount > INPUT_CONSTANTS.MAX_MESSAGE_LENGTH * 0.9;
 
   return (
-    <div className="border-t border-claude-border bg-claude-darker p-4">
-      <div className="max-w-3xl mx-auto">
+    <div className="sticky bottom-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 px-4 py-4 sm:px-6">
+      <div className="max-w-4xl mx-auto">
         {/* Validation Error */}
         {validationError && (
-          <div className="mb-3 p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center gap-2 text-sm text-red-400">
-            <AlertCircle size={16} className="flex-shrink-0" />
+          <div className="mb-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-xl flex items-center gap-3 text-sm text-red-700 dark:text-red-400 animate-fadeIn">
+            <AlertCircle size={18} className="flex-shrink-0" />
             <span>{validationError}</span>
           </div>
         )}
 
-        <div className="relative flex items-end gap-3 bg-claude-dark border border-claude-border rounded-2xl p-3 shadow-lg">
+        <div className="relative flex items-end gap-2 sm:gap-3 bg-white dark:bg-gray-800 border-2 border-gray-300 dark:border-gray-700 rounded-3xl p-3 shadow-lg hover:shadow-xl focus-within:border-blue-500 dark:focus-within:border-blue-400 transition-all duration-200">
           {/* Textarea */}
           <textarea
             ref={textareaRef}
@@ -97,7 +97,7 @@ export default function InputBox() {
             aria-label="Message input"
             aria-invalid={!!validationError}
             aria-describedby={validationError ? "input-error" : undefined}
-            className="flex-1 bg-transparent text-claude-text placeholder-claude-text-secondary resize-none outline-none min-h-[24px] max-h-[200px] disabled:opacity-50"
+            className="flex-1 bg-transparent text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 resize-none outline-none min-h-[24px] max-h-[200px] disabled:opacity-50 text-base leading-relaxed px-1"
             rows={1}
           />
 
@@ -105,42 +105,45 @@ export default function InputBox() {
           {isLoading || isStreaming ? (
             <button
               onClick={handleStop}
-              className="flex-shrink-0 p-2 rounded-lg bg-claude-light hover:bg-claude-border transition-colors"
+              className="flex-shrink-0 p-2.5 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-all duration-200 hover:scale-105 active:scale-95"
               title="Stop generation"
               aria-label="Stop message generation"
             >
-              <Square size={18} className="text-claude-text" />
+              <Square size={20} className="text-gray-700 dark:text-gray-300" />
             </button>
           ) : (
             <button
               onClick={handleSubmit}
               disabled={!canSend}
               className={`
-                flex-shrink-0 p-2 rounded-lg transition-colors
+                flex-shrink-0 p-2.5 rounded-full transition-all duration-200
                 ${
                   canSend
-                    ? "bg-primary hover:bg-primary-hover text-white"
-                    : "bg-claude-light text-claude-text-secondary cursor-not-allowed"
+                    ? "bg-gradient-to-br from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white shadow-md hover:shadow-lg hover:scale-105 active:scale-95"
+                    : "bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed"
                 }
               `}
               title="Send message"
               aria-label="Send message"
             >
-              <ArrowUp size={18} />
+              <ArrowUp size={20} className="font-bold" />
             </button>
           )}
         </div>
 
         {/* Helper Text */}
-        <div className="mt-2 flex items-center justify-between text-xs text-claude-text-secondary">
-          <div className="text-center flex-1">
-            NEOS can make mistakes. Consider checking important information.
+        <div className="mt-3 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 px-2">
+          <div className="flex items-center gap-3">
+            <span>NEOS can make mistakes. Consider checking important information.</span>
             {settings.stream && (
-              <span className="ml-2 text-green-400">● Streaming enabled</span>
+              <span className="flex items-center gap-1.5 text-green-600 dark:text-green-400">
+                <span className="w-1.5 h-1.5 bg-green-600 dark:bg-green-400 rounded-full animate-pulse" />
+                Streaming
+              </span>
             )}
           </div>
           {characterCount > 0 && (
-            <div className={`ml-3 ${isNearLimit ? "text-yellow-400" : ""}`}>
+            <div className={`ml-3 font-mono ${isNearLimit ? "text-yellow-600 dark:text-yellow-400 font-semibold" : ""}`}>
               {characterCount.toLocaleString()} / {INPUT_CONSTANTS.MAX_MESSAGE_LENGTH.toLocaleString()}
             </div>
           )}

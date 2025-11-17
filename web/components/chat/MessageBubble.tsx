@@ -18,8 +18,9 @@ interface MessageBubbleProps {
 
 /**
  * MessageBubble Component
- * Main container for displaying a chat message
- * Refactored into smaller, focused sub-components for better maintainability
+ * Modern chat UI with ChatGPT/Claude-style design
+ * User messages: right-aligned with gradient background
+ * AI messages: left-aligned with subtle background
  */
 export default function MessageBubble({ message }: MessageBubbleProps) {
   const { regenerateMessage, addFeedback } = useChatStore();
@@ -30,16 +31,26 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
     message.metadata?.context_enhanced || message.metadata?.similarity_scores;
 
   return (
-    <div className="group w-full hover:bg-claude-dark/30 transition-colors">
-      <div className="max-w-3xl mx-auto px-6 py-6">
-        <div className="flex gap-4 items-start">
+    <div
+      className={`
+        group w-full py-6 px-4 sm:px-6
+        transition-all duration-300 ease-out
+        ${isUser
+          ? 'bg-transparent'
+          : 'bg-gradient-to-b from-transparent via-gray-50/30 to-transparent dark:via-gray-800/20 hover:via-gray-50/50 dark:hover:via-gray-800/30'
+        }
+        animate-fadeIn
+      `}
+    >
+      <div className="max-w-4xl mx-auto">
+        <div className={`flex gap-3 sm:gap-4 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
           {/* Avatar */}
-          <div className="flex-shrink-0 mt-1">
+          <div className="flex-shrink-0">
             <MessageAvatar isUser={isUser} />
           </div>
 
-          {/* Message Content */}
-          <div className="flex-1 min-w-0 pt-0.5">
+          {/* Message Content Container */}
+          <div className={`flex-1 min-w-0 space-y-2 ${isUser ? 'flex flex-col items-end' : ''}`}>
             {/* Header with role and badges */}
             <MessageHeader
               isUser={isUser}
@@ -64,12 +75,19 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
             )}
 
             {/* Message Content */}
-            <div className="text-claude-text">
-              <MessageContent
-                content={message.content}
-                isUser={isUser}
-                isPending={message.status === "pending"}
-              />
+            <div className={isUser ? 'w-full flex justify-end' : 'w-full'}>
+              <div className={`
+                ${isUser
+                  ? 'bg-gradient-to-br from-blue-600 to-purple-600 text-white rounded-3xl rounded-tr-md px-4 py-3 max-w-[85%] shadow-md'
+                  : 'text-gray-900 dark:text-gray-100'
+                }
+              `}>
+                <MessageContent
+                  content={message.content}
+                  isUser={isUser}
+                  isPending={message.status === "pending"}
+                />
+              </div>
             </div>
 
             {/* Metadata (for assistant messages only) */}

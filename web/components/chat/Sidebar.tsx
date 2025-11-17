@@ -99,23 +99,23 @@ export default function Sidebar() {
 
   return (
     <nav
-      className="w-[280px] bg-bg-surface border-r border-line-soft flex flex-col h-full"
+      className="w-[280px] bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col h-full"
       aria-label="Main navigation"
     >
       {/* Header */}
-      <div className="p-4 space-y-3 border-b border-line-soft">
+      <div className="p-4 space-y-3 border-b border-gray-200 dark:border-gray-800">
         {/* Logo & Home */}
         <button
           onClick={() => router.push('/')}
           className="
             w-full flex items-center gap-3 px-3 py-2
-            text-text-primary hover:text-brand-accent
-            transition-colors
+            text-gray-900 dark:text-gray-100 hover:text-orange-600 dark:hover:text-orange-400
+            transition-all duration-200 hover:scale-105 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800
             group
           "
           aria-label="Go to home"
         >
-          <div className="w-7 h-7 rounded-lg bg-brand-accent/10 flex items-center justify-center text-brand-accent font-bold text-sm">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 via-amber-500 to-yellow-500 flex items-center justify-center text-white font-bold text-base shadow-md ring-2 ring-orange-500/20">
             N
           </div>
           <span className="text-sm font-semibold">NEOS</span>
@@ -126,12 +126,12 @@ export default function Sidebar() {
           onClick={handleNewChat}
           className="
             w-full flex items-center justify-center gap-2 px-4 py-2.5
-            bg-brand-accent/10 hover:bg-brand-accent/20
-            text-brand-accent rounded-2xl
+            bg-gradient-to-br from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700
+            text-white rounded-xl
             transition-all duration-200
             font-medium text-sm
-            hover:shadow-glow
-            focus:outline-none focus:ring-2 focus:ring-brand-accent/50
+            shadow-md hover:shadow-lg hover:scale-105 active:scale-95
+            focus:outline-none focus:ring-2 focus:ring-blue-500/50
           "
           aria-label="Start new chat"
         >
@@ -141,7 +141,7 @@ export default function Sidebar() {
 
         {/* Search */}
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
           <input
             type="text"
             placeholder="Search..."
@@ -149,9 +149,9 @@ export default function Sidebar() {
             onChange={(e) => setSearchQuery(e.target.value)}
             className="
               w-full pl-9 pr-3 py-2
-              bg-chip-bg border border-chip-line rounded-xl
-              text-text-primary placeholder:text-text-muted text-sm
-              focus:outline-none focus:ring-2 focus:ring-brand-accent/50 focus:border-brand-accent/50
+              bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl
+              text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 text-sm
+              focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500
               transition-all duration-200
             "
             aria-label="Search conversations"
@@ -163,7 +163,7 @@ export default function Sidebar() {
       <div className="flex-1 overflow-y-auto">
         {/* Section Header */}
         <div className="px-4 py-3">
-          <h2 className="text-label-s text-text-muted uppercase font-semibold">
+          <h2 className="text-xs text-gray-500 dark:text-gray-400 uppercase font-semibold tracking-wider">
             Conversations
           </h2>
         </div>
@@ -171,7 +171,7 @@ export default function Sidebar() {
         {/* Conversation List */}
         <div className="px-2 pb-2 space-y-1" role="list" aria-label="Conversations">
           {filteredConversations.length === 0 ? (
-            <div className="px-4 py-8 text-center text-text-muted text-sm">
+            <div className="px-4 py-8 text-center text-gray-500 dark:text-gray-400 text-sm">
               {searchQuery ? "No conversations found" : "No conversations yet"}
             </div>
           ) : (
@@ -184,12 +184,12 @@ export default function Sidebar() {
                   role="listitem"
                   tabIndex={isActive ? 0 : -1}
                   className={`
-                    group relative flex items-center gap-3 px-3 py-2.5 rounded-xl
-                    cursor-pointer transition-all duration-150
-                    focus:outline-none focus:ring-2 focus:ring-brand-accent/50
+                    group relative flex items-center gap-3 px-3 py-2.5 rounded-xl mx-1
+                    cursor-pointer transition-all duration-200
+                    focus:outline-none focus:ring-2 focus:ring-blue-500/50
                     ${isActive
-                      ? "bg-brand-accent/10 border-l-2 border-brand-accent"
-                      : "hover:bg-action-hover border-l-2 border-transparent"
+                      ? "bg-blue-50 dark:bg-blue-900/20 border-l-2 border-blue-600"
+                      : "hover:bg-gray-50 dark:hover:bg-gray-800 border-l-2 border-transparent hover:scale-[1.02]"
                     }
                   `}
                   onClick={() => handleConversationClick(conversation.conversation_id)}
@@ -199,17 +199,17 @@ export default function Sidebar() {
                 >
                   <MessageSquare
                     className={`flex-shrink-0 w-4 h-4 ${
-                      isActive ? "text-brand-accent" : "text-text-muted"
+                      isActive ? "text-blue-600 dark:text-blue-400" : "text-gray-400 dark:text-gray-500"
                     }`}
                   />
 
                   <div className="flex-1 min-w-0">
                     <div className={`text-sm truncate font-medium ${
-                      isActive ? "text-brand-accent" : "text-text-primary"
+                      isActive ? "text-blue-600 dark:text-blue-400" : "text-gray-900 dark:text-gray-100"
                     }`}>
                       {conversation.title}
                     </div>
-                    <div className="text-xs text-text-muted mt-0.5">
+                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                       {formatTimestamp(conversation.updated_at)} · {conversation.message_count}
                     </div>
                   </div>
@@ -220,13 +220,13 @@ export default function Sidebar() {
                     className="
                       opacity-0 group-hover:opacity-100
                       p-1.5 rounded-lg
-                      hover:bg-red-500/20 transition-all
+                      hover:bg-red-100 dark:hover:bg-red-900/30 transition-all duration-200 hover:scale-110
                       focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-500/50
                     "
                     title="Delete conversation"
                     aria-label="Delete conversation"
                   >
-                    <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                    <Trash2 className="w-3.5 h-3.5 text-red-600 dark:text-red-400" />
                   </button>
                 </div>
               );
@@ -236,8 +236,8 @@ export default function Sidebar() {
       </div>
 
       {/* Footer */}
-      <div className="p-4 border-t border-line-soft">
-        <div className="text-xs text-text-muted text-center">
+      <div className="p-4 border-t border-gray-200 dark:border-gray-800">
+        <div className="text-xs text-gray-500 dark:text-gray-400 text-center font-medium">
           {conversations.length} {conversations.length === 1 ? "conversation" : "conversations"}
         </div>
       </div>

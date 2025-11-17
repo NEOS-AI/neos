@@ -29,54 +29,54 @@ export default function MessageActions({
   };
 
   return (
-    <div className="flex items-center gap-2 mt-3 opacity-0 group-hover:opacity-100 transition-opacity">
+    <div className="flex items-center gap-1 mt-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
       <button
         onClick={handleCopy}
-        className="p-1.5 rounded hover:bg-claude-light transition-colors"
+        className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-all duration-200 hover:scale-105 active:scale-95"
         title="Copy message"
         aria-label="Copy message"
       >
         <Copy
-          size={14}
-          className={isCopied ? "text-green-400" : "text-claude-text-secondary"}
+          size={16}
+          className={isCopied ? "text-green-600 dark:text-green-400" : "text-gray-600 dark:text-gray-400"}
         />
       </button>
 
       <button
         onClick={() => onRegenerate(messageId)}
-        className="p-1.5 rounded hover:bg-claude-light transition-colors"
+        className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-all duration-200 hover:scale-105 active:scale-95"
         title="Regenerate response"
         aria-label="Regenerate response"
       >
-        <RotateCw size={14} className="text-claude-text-secondary" />
+        <RotateCw size={16} className="text-gray-600 dark:text-gray-400" />
       </button>
 
-      <div className="h-4 w-px bg-claude-border mx-1" />
+      <div className="h-5 w-px bg-gray-300 dark:bg-gray-700 mx-1" />
 
       <button
         onClick={() => onFeedback(messageId, "positive")}
-        className={`p-1.5 rounded hover:bg-claude-light transition-colors ${
+        className={`p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-all duration-200 hover:scale-105 active:scale-95 ${
           userFeedback === "positive"
-            ? "text-green-400"
-            : "text-claude-text-secondary"
+            ? "text-green-600 dark:text-green-400 bg-green-500/10"
+            : "text-gray-600 dark:text-gray-400"
         }`}
         title="Good response"
         aria-label="Good response"
       >
-        <ThumbsUp size={14} />
+        <ThumbsUp size={16} />
       </button>
 
       <button
         onClick={() => onFeedback(messageId, "negative")}
-        className={`p-1.5 rounded hover:bg-claude-light transition-colors ${
+        className={`p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-all duration-200 hover:scale-105 active:scale-95 ${
           userFeedback === "negative"
-            ? "text-red-400"
-            : "text-claude-text-secondary"
+            ? "text-red-600 dark:text-red-400 bg-red-500/10"
+            : "text-gray-600 dark:text-gray-400"
         }`}
         title="Bad response"
         aria-label="Bad response"
       >
-        <ThumbsDown size={14} />
+        <ThumbsDown size={16} />
       </button>
     </div>
   );
