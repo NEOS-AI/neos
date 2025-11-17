@@ -65,7 +65,8 @@ class SimilarityChatProcessor(BaseChatMessageProcessor):
                 query=user_content,
                 top_k=top_k,
                 include_cross_conversation=include_cross,
-                user_id=user_id
+                user_id=user_id,
+                similarity_threshold=self.similarity_threshold
             )
 
             # 유사도가 임계값 이상인 메시지만 필터링
@@ -94,7 +95,7 @@ class SimilarityChatProcessor(BaseChatMessageProcessor):
                     "similarity_scores": [
                         {
                             "message_id": msg["message_id"],
-                            "score": msg.get("similarity_score", 0),
+                            "similarity_score": msg.get("similarity_score", 0),
                             "search_type": msg.get("search_type", "conversation")
                         }
                         for msg in relevant_messages
@@ -109,14 +110,23 @@ class SimilarityChatProcessor(BaseChatMessageProcessor):
             }
 
         except Exception as e:
-            self.logger.error(f"Failed to prepare similarity context: {e}")
-            # 실패 시 일반 채팅으로 폴백
+            self.logger.error(f"Failed to prepare similarity context: {e}", exc_info=True)
+            # 실패 시 일반 채팅으로 폴백하되, 사용자에게 알림
             return {
                 "enhanced_system_prompt": conversation.get("system_prompt"),
                 "metadata": {
                     "chat_type": "similarity",
                     "context_enhanced": False,
-                    "error": str(e)
+                    "similarity_search_failed": True,
+                    "error_message": "유사도 검색에 실패했습니다. 일반 모드로 응답합니다.",
+                    "error_details": str(e),
+                    "relevant_message_count": 0,
+                    "similarity_scores": [],
+                    "search_config": {
+                        "top_k": kwargs.get("top_k", self.top_k),
+                        "threshold": self.similarity_threshold,
+                        "include_cross_conversation": kwargs.get("include_cross_conversation", self.include_cross_conversation)
+                    }
                 },
                 "context_messages": []
             }
@@ -176,11 +186,14 @@ class SimilarityChatProcessor(BaseChatMessageProcessor):
             return
 
         try:
+            # user_id 가져오기 (크로스 대화 검색을 위해 필요)
+            user_id = kwargs.get("user_id")
+
             # 사용자 메시지 임베딩 생성
-            await self._create_message_embedding(user_message)
+            await self._create_message_embedding(user_message, user_id)
 
             # 어시스턴트 메시지 임베딩 생성
-            await self._create_message_embedding(assistant_message)
+            await self._create_message_embedding(assistant_message, user_id)
 
             self.logger.debug(
                 f"Embeddings created for messages: {user_message['message_id']}, {assistant_message['message_id']}"
@@ -190,7 +203,7 @@ class SimilarityChatProcessor(BaseChatMessageProcessor):
             # 임베딩 생성 실패는 전체 프로세스를 중단시키지 않음
             self.logger.warning(f"Failed to create embeddings in post-process: {e}")
 
-    async def _create_message_embedding(self, message: Dict) -> None:
+    async def _create_message_embedding(self, message: Dict, user_id: Optional[str] = None) -> None:
         """메시지 임베딩 생성"""
         try:
             await message_embedding_service.create_message_embedding(
@@ -198,7 +211,7 @@ class SimilarityChatProcessor(BaseChatMessageProcessor):
                 conversation_id=message["conversation_id"],
                 content=message["content"],
                 role=message["role"],
-                user_id=None,  # 메시지 테이블에 user_id가 없으므로 None
+                user_id=user_id,  # 크로스 대화 검색을 위해 user_id 전달
                 sequence_number=message.get("sequence_number"),
                 metadata=message.get("metadata", {})
             )

@@ -379,6 +379,7 @@ export const useChatStore = create<ChatStore>()(
           let accumulatedContent = "";
           let realUserMessageId = tempUserMessageId;
           let realAssistantMessageId = tempAssistantMessageId;
+          let contextMetadata: any = null; // Store similarity/RAG context metadata
 
           while (true) {
             const { done, value } = await reader.read();
@@ -399,6 +400,9 @@ export const useChatStore = create<ChatStore>()(
                   if (parsed.type === "start" && parsed.message_id) {
                     // Update with real message IDs from backend
                     realAssistantMessageId = parsed.message_id;
+                  } else if (parsed.type === "context" && parsed.content) {
+                    // Store context metadata (similarity scores, RAG info, etc.)
+                    contextMetadata = parsed.content;
                   } else if (parsed.type === "content" && parsed.content) {
                     accumulatedContent += parsed.content;
 
@@ -439,7 +443,7 @@ export const useChatStore = create<ChatStore>()(
             }
           }
 
-          // Mark messages as completed with real IDs
+          // Mark messages as completed with real IDs and attach context metadata
           set((state) => ({
             conversations: state.conversations.map((c) =>
               c.conversation_id === conversationId
@@ -454,6 +458,7 @@ export const useChatStore = create<ChatStore>()(
                           ...m,
                           message_id: realAssistantMessageId,
                           status: "completed" as const,
+                          metadata: contextMetadata ? { ...m.metadata, ...contextMetadata } : m.metadata,
                         };
                       }
                       return m;
@@ -567,13 +572,24 @@ export const useChatStore = create<ChatStore>()(
 
             case "similarity":
               console.log("[Store] Sending similarity message (non-streaming)...");
-              response = await chatAPI.sendSimilarityMessage(conversationId, {
+              const similarityResponse = await chatAPI.sendSimilarityMessage(conversationId, {
                 content,
                 top_k: settings.similarity_top_k,
                 similarity_threshold: settings.similarity_threshold,
                 include_cross_conversation: settings.similarity_cross_conversation,
                 enable_auto_embedding: settings.enable_auto_embedding,
               });
+
+              // Attach similarity metadata to assistant message
+              if (!similarityResponse.assistant_message.metadata) {
+                similarityResponse.assistant_message.metadata = {};
+              }
+              similarityResponse.assistant_message.metadata.context_enhanced = similarityResponse.context_enhanced;
+              similarityResponse.assistant_message.metadata.relevant_message_count = similarityResponse.relevant_message_count;
+              similarityResponse.assistant_message.metadata.similarity_scores = similarityResponse.similarity_scores;
+              similarityResponse.assistant_message.metadata.search_config = similarityResponse.search_config;
+
+              response = similarityResponse;
               break;
 
             case "standard":

@@ -78,6 +78,7 @@ class SendSimilarityMessageRequest(BaseModel):
     similarity_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="유사도 임계값")
     include_cross_conversation: bool = Field(default=False, description="다른 대화에서도 검색")
     enable_auto_embedding: bool = Field(default=True, description="자동 임베딩 생성")
+    time_range_days: Optional[int] = Field(None, ge=1, le=365, description="검색 시간 범위 (일 단위, None=전체)")
 
 
 class RegenerateMessageRequest(BaseModel):
@@ -237,7 +238,7 @@ class CreateMessageResponse(BaseModel):
 class SimilarityMessageMetadata(BaseModel):
     """유사도 검색 메타데이터"""
     message_id: str
-    score: float
+    similarity_score: float
     search_type: str  # "conversation" or "cross_conversation"
 
 

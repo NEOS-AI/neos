@@ -19,6 +19,7 @@ import {
   ChevronUp,
 } from "lucide-react";
 import { useState } from "react";
+import SimilarityContextIndicator from "./SimilarityContextIndicator";
 
 interface MessageBubbleProps {
   message: Message;
@@ -97,6 +98,17 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                 </div>
               )}
             </div>
+
+            {/* Similarity Context Indicator (before content for assistant) */}
+            {!isUser && hasSimilarityContext && (
+              <SimilarityContextIndicator
+                contextEnhanced={message.metadata?.context_enhanced || false}
+                relevantMessageCount={message.metadata?.relevant_message_count || 0}
+                similarityScores={message.metadata?.similarity_scores}
+                searchConfig={message.metadata?.search_config}
+                errors={message.metadata?.similarity_search_failed ? [message.metadata?.error_message] : []}
+              />
+            )}
 
             {/* Content */}
             <div className="text-claude-text">
@@ -187,8 +199,8 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
               </div>
             )}
 
-            {/* RAG/Similarity Context Details */}
-            {!isUser && (hasRAGContext || hasSimilarityContext) && (
+            {/* RAG Context Details */}
+            {!isUser && hasRAGContext && !hasSimilarityContext && (
               <div className="mt-3">
                 <button
                   onClick={() => setShowDetails(!showDetails)}
@@ -200,62 +212,33 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
                     <ChevronDown size={14} />
                   )}
                   <span>
-                    {showDetails ? "Hide" : "Show"} context details
+                    {showDetails ? "Hide" : "Show"} RAG context details
                   </span>
                 </button>
 
-                {showDetails && (
+                {showDetails && message.metadata?.rag_context && (
                   <div className="mt-2 p-3 bg-claude-light border border-claude-border rounded-lg space-y-2">
-                    {/* RAG Context */}
-                    {hasRAGContext && message.metadata?.rag_context && (
-                      <div className="space-y-1">
-                        <div className="text-xs font-medium text-blue-400">
-                          RAG Context
+                    <div className="space-y-1">
+                      <div className="text-xs font-medium text-blue-400">
+                        RAG Context
+                      </div>
+                      <div className="text-xs text-claude-text-secondary space-y-1">
+                        <div>
+                          Retrieved:{" "}
+                          {message.metadata.rag_context.total_retrieved || 0}{" "}
+                          messages
                         </div>
-                        <div className="text-xs text-claude-text-secondary space-y-1">
+                        {message.metadata.rag_context.avg_similarity && (
                           <div>
-                            Retrieved:{" "}
-                            {message.metadata.rag_context.total_retrieved || 0}{" "}
-                            messages
+                            Avg Similarity:{" "}
+                            {(
+                              message.metadata.rag_context.avg_similarity * 100
+                            ).toFixed(1)}
+                            %
                           </div>
-                          {message.metadata.rag_context.avg_similarity && (
-                            <div>
-                              Avg Similarity:{" "}
-                              {(
-                                message.metadata.rag_context.avg_similarity * 100
-                              ).toFixed(1)}
-                              %
-                            </div>
-                          )}
-                        </div>
+                        )}
                       </div>
-                    )}
-
-                    {/* Similarity Context */}
-                    {hasSimilarityContext && message.metadata?.similarity_scores && (
-                      <div className="space-y-1">
-                        <div className="text-xs font-medium text-purple-400">
-                          Similar Messages ({message.metadata.relevant_message_count || 0})
-                        </div>
-                        <div className="space-y-1.5">
-                          {message.metadata.similarity_scores.slice(0, 3).map((score, idx) => (
-                            <div
-                              key={idx}
-                              className="text-xs text-claude-text-secondary p-2 bg-claude-dark rounded"
-                            >
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-purple-400">
-                                  Score: {(score.similarity_score * 100).toFixed(1)}%
-                                </span>
-                              </div>
-                              <div className="text-claude-text-secondary/80 line-clamp-2">
-                                {score.content_preview}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    </div>
                   </div>
                 )}
               </div>

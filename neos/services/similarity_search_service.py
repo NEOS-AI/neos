@@ -310,7 +310,8 @@ class SimilaritySearchService:
         query: str,
         top_k: int = 3,
         include_cross_conversation: bool = False,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        similarity_threshold: float = 0.75
     ) -> Dict[str, Any]:
         """
         RAG를 위한 컨텍스트 생성
@@ -321,6 +322,7 @@ class SimilaritySearchService:
             top_k: 가져올 유사 메시지 수
             include_cross_conversation: 다른 대화에서도 검색할지 여부
             user_id: 사용자 ID (cross_conversation 사용 시 필요)
+            similarity_threshold: 유사도 임계값 (크로스 대화 검색에 적용)
 
         Returns:
             {
@@ -345,7 +347,7 @@ class SimilaritySearchService:
                 user_id=user_id,
                 query=query,
                 limit=top_k,
-                similarity_threshold=0.8
+                similarity_threshold=similarity_threshold
             )
             # 중복 제거
             existing_ids = {msg["message_id"] for msg in relevant_messages}
