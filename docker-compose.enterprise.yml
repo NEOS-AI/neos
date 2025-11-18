@@ -1,0 +1,380 @@
+version: '3.8'
+
+# NEOS Enterprise Stack
+# Full production-ready deployment with monitoring, high availability, and observability
+#
+# Services:
+# - PostgreSQL (primary + replica for HA)
+# - Redis Cluster
+# - NEOS Backend API (3 replicas)
+# - NEOS Frontend
+# - Prometheus (metrics collection)
+# - Grafana (visualization)
+# - Loki (log aggregation)
+# - Jaeger (distributed tracing)
+# - RabbitMQ (message queue for Celery)
+#
+# Usage:
+#   docker-compose -f docker-compose.enterprise.yml up -d
+
+services:
+  # === Database Layer ===
+
+  postgres-primary:
+    image: pgvector/pgvector:pg16
+    container_name: neos-postgres-primary
+    environment:
+      POSTGRES_USER: neos_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ChangeThisPasswordInProduction}
+      POSTGRES_DB: neos_db
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres_primary_data:/var/lib/postgresql/data
+      - ./resources/postgres/schemas:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neos_user -d neos_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - neos-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+  # Redis Cluster for caching and session management
+  redis-master:
+    image: redis:7-alpine
+    container_name: neos-redis-master
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_master_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - neos-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+
+  # === Message Queue ===
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: neos-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: neos
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-ChangeThisPassword}
+      RABBITMQ_DEFAULT_VHOST: neos
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - neos-network
+
+  # === Application Services ===
+
+  neos-backend-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: neos-backend-1
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://neos_user:${POSTGRES_PASSWORD:-ChangeThisPasswordInProduction}@postgres-primary:5432/neos_db
+      - REDIS_URL=redis://redis-master:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - METRICS_ENABLED=true
+      - CELERY_BROKER_URL=amqp://neos:${RABBITMQ_PASSWORD:-ChangeThisPassword}@rabbitmq:5672/neos
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+      redis-master:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "8518:8518"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8518/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - neos-network
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+  neos-backend-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: neos-backend-2
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://neos_user:${POSTGRES_PASSWORD:-ChangeThisPasswordInProduction}@postgres-primary:5432/neos_db
+      - REDIS_URL=redis://redis-master:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - METRICS_ENABLED=true
+      - CELERY_BROKER_URL=amqp://neos:${RABBITMQ_PASSWORD:-ChangeThisPassword}@rabbitmq:5672/neos
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+      redis-master:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "8519:8518"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8518/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - neos-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+
+  neos-backend-3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: neos-backend-3
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://neos_user:${POSTGRES_PASSWORD:-ChangeThisPasswordInProduction}@postgres-primary:5432/neos_db
+      - REDIS_URL=redis://redis-master:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - METRICS_ENABLED=true
+      - CELERY_BROKER_URL=amqp://neos:${RABBITMQ_PASSWORD:-ChangeThisPassword}@rabbitmq:5672/neos
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+      redis-master:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "8520:8518"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8518/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - neos-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+
+  # Load Balancer (Nginx)
+  nginx:
+    image: nginx:alpine
+    container_name: neos-nginx
+    volumes:
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - neos-backend-1
+      - neos-backend-2
+      - neos-backend-3
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - neos-network
+
+  # === Monitoring Stack ===
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: neos-prometheus
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./config/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    networks:
+      - neos-network
+    depends_on:
+      - neos-backend-1
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: neos-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3001
+      - GF_INSTALL_PLUGINS=redis-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3001:3000"
+    networks:
+      - neos-network
+    depends_on:
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+
+  # Log Aggregation
+  loki:
+    image: grafana/loki:latest
+    container_name: neos-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./config/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    networks:
+      - neos-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+
+  # Distributed Tracing
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: neos-jaeger
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "5775:5775/udp"  # Accept zipkin.thrift over compact thrift protocol (deprecated)
+      - "6831:6831/udp"  # Accept jaeger.thrift over compact thrift protocol
+      - "6832:6832/udp"  # Accept jaeger.thrift over binary thrift protocol
+      - "5778:5778"      # Serve configs
+      - "16686:16686"    # Serve frontend
+      - "14268:14268"    # Accept jaeger.thrift directly from clients
+      - "14250:14250"    # Accept model.proto
+      - "9411:9411"      # Zipkin compatible endpoint
+      - "4317:4317"      # OTLP gRPC
+      - "4318:4318"      # OTLP HTTP
+    networks:
+      - neos-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+
+  # PostgreSQL Exporter for Prometheus
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: neos-postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://neos_user:${POSTGRES_PASSWORD:-ChangeThisPasswordInProduction}@postgres-primary:5432/neos_db?sslmode=disable"
+    ports:
+      - "9187:9187"
+    networks:
+      - neos-network
+    depends_on:
+      - postgres-primary
+
+  # Redis Exporter for Prometheus
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: neos-redis-exporter
+    environment:
+      REDIS_ADDR: "redis://redis-master:6379"
+    ports:
+      - "9121:9121"
+    networks:
+      - neos-network
+    depends_on:
+      - redis-master
+
+networks:
+  neos-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+
+volumes:
+  postgres_primary_data:
+    driver: local
+  redis_master_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  loki_data:
+    driver: local

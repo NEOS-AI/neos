@@ -1,0 +1,78 @@
+# Prometheus Configuration for NEOS Enterprise
+# Scrapes metrics from all services for monitoring and alerting
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'neos-production'
+    environment: 'production'
+
+# Alertmanager configuration (optional, add if using Alertmanager)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093
+
+# Load alert rules
+rule_files:
+  - "/etc/prometheus/alerts.yml"
+
+# Scrape configurations
+scrape_configs:
+  # === NEOS Backend Services ===
+  - job_name: 'neos-backend'
+    scrape_interval: 10s
+    static_configs:
+      - targets:
+          - 'neos-backend-1:8518'
+          - 'neos-backend-2:8518'
+          - 'neos-backend-3:8518'
+    metrics_path: '/metrics'
+    scheme: http
+
+  # === PostgreSQL Database ===
+  - job_name: 'postgres'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - 'postgres-exporter:9187'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'postgres-primary'
+
+  # === Redis Cache ===
+  - job_name: 'redis'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - 'redis-exporter:9121'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'redis-master'
+
+  # === RabbitMQ Message Queue ===
+  - job_name: 'rabbitmq'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - 'rabbitmq:15692'
+    metrics_path: '/metrics'
+
+  # === Prometheus Self-Monitoring ===
+  - job_name: 'prometheus'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - 'localhost:9090'
+
+  # === Grafana ===
+  - job_name: 'grafana'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - 'grafana:3000'
+    metrics_path: '/metrics'

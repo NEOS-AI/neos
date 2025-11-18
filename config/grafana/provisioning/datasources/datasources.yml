@@ -1,0 +1,51 @@
+# Grafana Datasource Configuration for NEOS Enterprise
+apiVersion: 1
+
+datasources:
+  # Prometheus datasource
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: "15s"
+      queryTimeout: "60s"
+
+  # Loki datasource for logs
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      maxLines: 1000
+
+  # Jaeger datasource for traces
+  - name: Jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    editable: false
+
+  # PostgreSQL datasource
+  - name: PostgreSQL
+    type: postgres
+    url: postgres-primary:5432
+    database: neos_db
+    user: neos_user
+    secureJsonData:
+      password: ${POSTGRES_PASSWORD}
+    jsonData:
+      sslmode: disable
+      maxOpenConns: 10
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+
+  # Redis datasource (requires redis-datasource plugin)
+  - name: Redis
+    type: redis-datasource
+    access: proxy
+    url: redis://redis-master:6379
+    editable: false
