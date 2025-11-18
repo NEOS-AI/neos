@@ -4,8 +4,7 @@
 import { NextRequest } from 'next/server';
 import { cookies } from 'next/headers';
 import { verifyCsrfToken, verifySignedCsrfToken } from './csrf';
-
-const CSRF_SECRET = process.env.JWT_SECRET_KEY || 'your-secret-key-change-this';
+import { JWT_SECRET_KEY } from './env';
 
 /**
  * CSRF 토큰 검증
@@ -38,7 +37,7 @@ export async function validateCsrfToken(request: NextRequest): Promise<boolean> 
       return verifySignedCsrfToken(
         csrfTokenFromHeader,
         sessionId,
-        CSRF_SECRET,
+        JWT_SECRET_KEY,
         3600000 // 1시간
       );
     } else {
