@@ -1,14 +1,31 @@
 /**
  * Redis 클라이언트 (세션 관리용)
+ * - 에러 처리 개선: Redis 연결 실패와 세션 없음을 구분
  */
 import Redis from 'ioredis';
+import { REDIS_URL } from './env';
+
+// Custom Errors
+export class RedisConnectionError extends Error {
+  constructor(message: string, public originalError?: any) {
+    super(message);
+    this.name = 'RedisConnectionError';
+  }
+}
+
+export class SessionNotFoundError extends Error {
+  constructor(sessionId: string) {
+    super(`Session not found: ${sessionId}`);
+    this.name = 'SessionNotFoundError';
+  }
+}
 
 // Redis 클라이언트 싱글톤
 let redisClient: Redis | null = null;
 
 export function getRedisClient(): Redis {
   if (!redisClient) {
-    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+    const redisUrl = REDIS_URL;
 
     redisClient = new Redis(redisUrl, {
       maxRetriesPerRequest: 3,
@@ -53,13 +70,20 @@ export async function getSession(sessionId: string): Promise<any | null> {
     const data = await client.get(`session:${sessionId}`);
 
     if (!data) {
+      // 세션이 없음 (정상적인 경우: 만료 또는 존재하지 않음)
       return null;
     }
 
     return JSON.parse(data);
-  } catch (error) {
-    console.error('Error getting session:', error);
-    return null;
+  } catch (error: any) {
+    // Redis 연결 오류 (비정상적인 경우)
+    console.error('Redis connection error while getting session:', error);
+
+    // Redis 연결 에러를 throw하여 상위에서 처리
+    throw new RedisConnectionError(
+      'Redis 서버에 연결할 수 없습니다.',
+      error
+    );
   }
 }
 

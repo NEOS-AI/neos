@@ -5,8 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { generateCsrfToken, createSignedCsrfToken } from '@/lib/csrf';
 import { getSession } from '@/lib/redis';
-
-const CSRF_SECRET = process.env.JWT_SECRET_KEY || 'your-secret-key-change-this';
+import { JWT_SECRET_KEY } from '@/lib/env';
 
 export async function GET(request: NextRequest) {
   try {
@@ -17,7 +16,7 @@ export async function GET(request: NextRequest) {
 
     if (sessionId) {
       // 세션이 있으면 서명된 토큰 생성
-      csrfToken = createSignedCsrfToken(sessionId, CSRF_SECRET);
+      csrfToken = createSignedCsrfToken(sessionId, JWT_SECRET_KEY);
     } else {
       // 세션이 없으면 단순 토큰 생성
       csrfToken = generateCsrfToken();

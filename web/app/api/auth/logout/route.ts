@@ -5,8 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { getSession, deleteSession } from '@/lib/redis';
 import { validateCsrfToken, csrfErrorResponse } from '@/lib/csrf-validation';
-
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8518';
+import { BACKEND_URL } from '@/lib/env';
 
 export async function POST(request: NextRequest) {
   // CSRF 토큰 검증

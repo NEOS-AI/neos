@@ -1,15 +1,27 @@
 /**
  * 로그인 API Route
+ * - CSRF 보호
+ * - Rate Limiting (15분에 5회)
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { nanoid } from 'nanoid';
 import { setSession } from '@/lib/redis';
 import { validateCsrfToken, csrfErrorResponse } from '@/lib/csrf-validation';
-
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8518';
+import { rateLimitMiddleware, RATE_LIMIT_CONFIGS } from '@/lib/rate-limit';
+import { BACKEND_URL } from '@/lib/env';
 
 export async function POST(request: NextRequest) {
+  // Rate Limiting 체크
+  const { result, errorResponse } = await rateLimitMiddleware(
+    request,
+    RATE_LIMIT_CONFIGS.auth
+  );
+
+  if (errorResponse) {
+    return errorResponse;
+  }
+
   // CSRF 토큰 검증
   const isCsrfValid = await validateCsrfToken(request);
   if (!isCsrfValid) {
