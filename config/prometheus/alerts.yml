@@ -1,0 +1,176 @@
+# Prometheus Alert Rules for NEOS Enterprise
+# Defines alerting conditions for critical system events
+
+groups:
+  - name: neos_api_alerts
+    interval: 30s
+    rules:
+      # High error rate
+      - alert: HighErrorRate
+        expr: |
+          (sum(rate(neos_http_requests_total{status=~"5.."}[5m])) by (instance)
+          / sum(rate(neos_http_requests_total[5m])) by (instance)) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate detected on {{ $labels.instance }}"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+
+      # High response time
+      - alert: HighResponseTime
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(neos_http_request_duration_seconds_bucket[5m])) by (le, endpoint)
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High response time for {{ $labels.endpoint }}"
+          description: "P95 response time is {{ $value }}s (threshold: 5s)"
+
+      # Service down
+      - alert: ServiceDown
+        expr: up{job="neos-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "NEOS backend service is down"
+          description: "{{ $labels.instance }} has been down for more than 1 minute"
+
+  - name: neos_workflow_alerts
+    interval: 30s
+    rules:
+      # High workflow failure rate
+      - alert: HighWorkflowFailureRate
+        expr: |
+          (sum(rate(neos_workflow_executions_total{status="error"}[5m])) by (workflow_type)
+          / sum(rate(neos_workflow_executions_total[5m])) by (workflow_type)) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High workflow failure rate for {{ $labels.workflow_type }}"
+          description: "Failure rate is {{ $value | humanizePercentage }} (threshold: 10%)"
+
+      # Low workflow quality scores
+      - alert: LowWorkflowQuality
+        expr: |
+          histogram_quantile(0.50,
+            sum(rate(neos_workflow_quality_score_bucket[10m])) by (le, workflow_type)
+          ) < 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low workflow quality scores for {{ $labels.workflow_type }}"
+          description: "Median quality score is {{ $value }} (threshold: 0.5)"
+
+  - name: neos_agent_alerts
+    interval: 30s
+    rules:
+      # High agent error rate
+      - alert: HighAgentErrorRate
+        expr: |
+          (sum(rate(neos_agent_executions_total{status="error"}[5m])) by (agent_type)
+          / sum(rate(neos_agent_executions_total[5m])) by (agent_type)) > 0.15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate for agent {{ $labels.agent_type }}"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 15%)"
+
+  - name: neos_llm_alerts
+    interval: 30s
+    rules:
+      # High LLM cost
+      - alert: HighLLMCost
+        expr: |
+          sum(rate(neos_llm_cost_usd[1h])) > 10
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "High LLM API costs detected"
+          description: "Hourly cost is ${{ $value }} (threshold: $10/hour)"
+
+      # LLM API errors
+      - alert: LLMAPIErrors
+        expr: |
+          (sum(rate(neos_llm_calls_total{status!="success"}[5m])) by (provider)
+          / sum(rate(neos_llm_calls_total[5m])) by (provider)) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate for LLM provider {{ $labels.provider }}"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+
+  - name: neos_database_alerts
+    interval: 30s
+    rules:
+      # Database connection pool exhaustion
+      - alert: DatabaseConnectionPoolExhaustion
+        expr: neos_db_connections_active / 30 > 0.9
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection pool nearly exhausted"
+          description: "Active connections: {{ $value | humanize }}/30 (90% threshold)"
+
+      # Slow database queries
+      - alert: SlowDatabaseQueries
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(neos_db_query_duration_seconds_bucket[5m])) by (le, operation)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow database queries detected for {{ $labels.operation }}"
+          description: "P95 query time is {{ $value }}s (threshold: 1s)"
+
+  - name: neos_cache_alerts
+    interval: 30s
+    rules:
+      # Low cache hit rate
+      - alert: LowCacheHitRate
+        expr: |
+          (sum(rate(neos_cache_hits_total[5m])) by (cache_type)
+          / (sum(rate(neos_cache_hits_total[5m])) by (cache_type)
+           + sum(rate(neos_cache_misses_total[5m])) by (cache_type))) < 0.7
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low cache hit rate for {{ $labels.cache_type }}"
+          description: "Hit rate is {{ $value | humanizePercentage }} (threshold: 70%)"
+
+  - name: neos_resource_alerts
+    interval: 30s
+    rules:
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: |
+          neos_memory_usage_bytes{type="rss"} / (4 * 1024 * 1024 * 1024) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is {{ $value | humanizePercentage }} of 4GB (threshold: 85%)"
+
+      # Too many active sessions
+      - alert: TooManyActiveSessions
+        expr: neos_active_sessions > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Too many active sessions"
+          description: "Active sessions: {{ $value }} (threshold: 1000)"

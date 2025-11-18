@@ -3,9 +3,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 import time
 import uuid
+import asyncio
 
 from neos.config.settings import settings
 from neos.database.connection import db_manager
@@ -20,6 +21,10 @@ from neos.api.handlers.deep_research_handlers import router as deep_research_rou
 from neos.api.handlers.auth import router as auth_router
 from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.workflow.graph import multi_agent_workflow
+
+# Enterprise features
+from neos.observability.metrics import get_metrics_collector
+from neos.workflow.checkpointer import cleanup_checkpointer
 
 
 __VERSION__ = "0.10.0"
@@ -38,9 +43,24 @@ IS_DEBUG = settings.DEBUG
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """애플리케이션 생명주기 관리"""
+    """
+    애플리케이션 생명주기 관리 (Enterprise Edition)
+
+    Startup:
+    - Database connection
+    - Redis cache
+    - Metrics collector
+    - Background tasks
+
+    Shutdown:
+    - Graceful connection cleanup
+    - Metrics export
+    - State persistence
+    """
     # 시작 시 실행
-    logger.info("🚀 Starting Multi-Agent AI System...")
+    logger.info("🚀 Starting Multi-Agent AI System (Enterprise Edition)...")
+
+    background_tasks = []
 
     try:
         # 데이터베이스 연결 초기화
@@ -53,6 +73,17 @@ async def lifespan(app: FastAPI):
         await cache_manager.initialize()
         logger.info("✅ Cache connection established")
 
+        # Metrics collector 초기화
+        logger.info("📈 Initializing enterprise metrics collector...")
+        metrics_collector = get_metrics_collector()
+
+        # Start system metrics collection in background
+        system_metrics_task = asyncio.create_task(
+            metrics_collector.collect_system_metrics()
+        )
+        background_tasks.append(system_metrics_task)
+        logger.info("✅ Metrics collector initialized")
+
         # 임베딩 매니저 테스트
         if TEST_EMBEDDING_ON_STARTUP:
             logger.info("🤖 Testing AI services...")
@@ -62,7 +93,8 @@ async def lifespan(app: FastAPI):
             else:
                 logger.warning("⚠️ OpenAI API connection issue")
 
-        logger.info("🎉 Multi-Agent AI System startup completed successfully!")
+        logger.info("🎉 Multi-Agent AI System (Enterprise Edition) startup completed successfully!")
+        logger.info("📊 Metrics endpoint available at: /metrics")
 
     except Exception as e:
         logger.error(f"❌ Startup failed: {e}")
@@ -74,6 +106,19 @@ async def lifespan(app: FastAPI):
     logger.info("🔄 Shutting down Multi-Agent AI System...")
 
     try:
+        # Cancel background tasks
+        for task in background_tasks:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        # PostgreSQL checkpointer cleanup
+        logger.info("💾 Cleaning up workflow state manager...")
+        await cleanup_checkpointer()
+        logger.info("✅ Workflow state manager closed")
+
         # 데이터베이스 연결 종료
         await db_manager.close()
         logger.info("📊 Database connection closed")
@@ -111,34 +156,82 @@ app.add_middleware(
 # GZip 압축 미들웨어
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-# 요청 로깅 미들웨어
+# 요청 로깅 및 메트릭 수집 미들웨어 (Enterprise Edition)
 @app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """요청 로깅 및 성능 모니터링"""
+async def log_and_track_requests(request: Request, call_next):
+    """
+    요청 로깅 및 Prometheus 메트릭 수집
+
+    Tracks:
+    - Request count by method/endpoint/status
+    - Request duration
+    - In-progress requests
+    """
     start_time = time.time()
     request_id = str(uuid.uuid4())[:8]
-    
+
+    # Get metrics collector
+    metrics_collector = get_metrics_collector()
+
+    # Extract endpoint for metrics
+    endpoint = request.url.path
+    method = request.method
+
+    # Track in-progress requests
+    metrics_collector.http_requests_in_progress.labels(
+        method=method,
+        endpoint=endpoint
+    ).inc()
+
     # 요청 로깅
-    logger.info(f"🔵 [{request_id}] {request.method} {request.url.path} - Start")
-    
+    logger.info(f"🔵 [{request_id}] {method} {endpoint} - Start")
+
     try:
         response = await call_next(request)
-        
+
         # 응답 시간 계산
         process_time = time.time() - start_time
         response.headers["X-Request-ID"] = request_id
         response.headers["X-Process-Time"] = str(round(process_time * 1000, 2))
-        
+
+        # Track metrics
+        status_code = str(response.status_code)
+
+        metrics_collector.http_requests_total.labels(
+            method=method,
+            endpoint=endpoint,
+            status=status_code
+        ).inc()
+
+        metrics_collector.http_request_duration_seconds.labels(
+            method=method,
+            endpoint=endpoint
+        ).observe(process_time)
+
         # 성공 로깅
-        logger.info(f"🟢 [{request_id}] {request.method} {request.url.path} - {response.status_code} - {process_time:.2f}s")
-        
+        logger.info(f"🟢 [{request_id}] {method} {endpoint} - {status_code} - {process_time:.2f}s")
+
         return response
-        
+
     except Exception as e:
-        # 에러 로깅
+        # 에러 로깅 및 메트릭
         process_time = time.time() - start_time
-        logger.error(f"🔴 [{request_id}] {request.method} {request.url.path} - Error: {str(e)} - {process_time:.2f}s")
+
+        metrics_collector.http_requests_total.labels(
+            method=method,
+            endpoint=endpoint,
+            status="500"
+        ).inc()
+
+        logger.error(f"🔴 [{request_id}] {method} {endpoint} - Error: {str(e)} - {process_time:.2f}s")
         raise e
+
+    finally:
+        # Decrement in-progress gauge
+        metrics_collector.http_requests_in_progress.labels(
+            method=method,
+            endpoint=endpoint
+        ).dec()
 
 # 전역 예외 처리기
 @app.exception_handler(Exception)
@@ -182,6 +275,52 @@ app.include_router(multimodal_router, prefix=f"{settings.API_V1_PREFIX}/multimod
 app.include_router(chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Chat & Conversations"])
 app.include_router(deep_research_router, prefix=settings.API_V1_PREFIX, tags=["Deep Research"])
 app.include_router(similarity_chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Similarity-based Chat"])
+
+
+# === Enterprise Monitoring Endpoints ===
+
+@app.get("/metrics")
+async def metrics_endpoint():
+    """
+    Prometheus metrics endpoint for enterprise monitoring.
+
+    Exposes:
+    - HTTP request metrics (rate, duration, errors)
+    - Workflow execution metrics
+    - Agent performance metrics
+    - LLM API call metrics
+    - Database and cache metrics
+    - System resource metrics
+
+    Configure Prometheus to scrape this endpoint:
+    ```yaml
+    scrape_configs:
+      - job_name: 'neos'
+        static_configs:
+          - targets: ['localhost:8518']
+    ```
+    """
+    metrics_collector = get_metrics_collector()
+    metrics_data = metrics_collector.export_metrics()
+
+    return Response(
+        content=metrics_data,
+        media_type=metrics_collector.get_content_type()
+    )
+
+
+@app.get(f"{settings.API_V1_PREFIX}/metrics/stats")
+async def metrics_stats():
+    """
+    Get human-readable metrics statistics.
+    Useful for debugging and quick health checks.
+    """
+    return {
+        "message": "Metrics available at /metrics endpoint",
+        "prometheus_format": "Use /metrics for Prometheus scraping",
+        "grafana_dashboards": "Import dashboards from /docs/grafana/",
+        "alert_rules": "See /docs/prometheus/alerts.yml"
+    }
 
 
 # Root Endpoint

@@ -2,7 +2,6 @@ from typing import Dict, Any
 from datetime import datetime
 import hashlib
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
 
 from neos.agents.search_agents import (
     KnowledgeSearchAgent,
@@ -32,10 +31,18 @@ from .state import AgentState, WorkflowConfig
 from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationOrchestrator
 from .processors import ResultProcessor, QualityValidator, ResponseGenerator
 from .utils import QueryClassifier
+from .checkpointer import get_checkpointer
 
 
 class MultiAgentWorkflow:
-    """리팩토링된 멀티 에이전트 워크플로우 관리 클래스"""
+    """
+    리팩토링된 멀티 에이전트 워크플로우 관리 클래스
+
+    Enterprise features:
+    - Distributed state management with PostgreSQL checkpointer
+    - Horizontal scalability
+    - Session persistence across restarts
+    """
 
     def __init__(self):
         self.config = WorkflowConfig()
@@ -50,8 +57,9 @@ class MultiAgentWorkflow:
         self.quality_validator = QualityValidator(self.config)
         self.response_generator = ResponseGenerator()
 
-        # 워크플로우 그래프 생성
-        self.graph = self._create_workflow_graph()
+        # 워크플로우 그래프 생성 (비동기로 초기화)
+        self.graph = None
+        self._graph_initialized = False
 
 
     def _initialize_agents(self) -> Dict[str, Any]:
@@ -83,9 +91,11 @@ class MultiAgentWorkflow:
         print(f"[DEBUG] Initialized {len(agents)} agents")
         return agents
 
-    def _create_workflow_graph(self) -> StateGraph:
-        """워크플로우 그래프 생성"""
-        print("[DEBUG] Creating workflow graph...")
+    async def _create_workflow_graph(self) -> StateGraph:
+        """
+        워크플로우 그래프 생성 (Enterprise Edition with PostgreSQL Checkpointer)
+        """
+        print("[DEBUG] Creating workflow graph with PostgreSQL checkpointer...")
 
         workflow = StateGraph(AgentState)
 
@@ -119,8 +129,17 @@ class MultiAgentWorkflow:
 
         workflow.add_edge("response_generator", END)
 
-        print("[DEBUG] Workflow graph created successfully")
-        return workflow.compile(checkpointer=MemorySaver())
+        # Get PostgreSQL checkpointer for distributed state management
+        checkpointer = await get_checkpointer()
+
+        print("[DEBUG] Workflow graph created with PostgreSQL checkpointer for horizontal scaling")
+        return workflow.compile(checkpointer=checkpointer)
+
+    async def _ensure_graph_initialized(self):
+        """Ensure graph is initialized before use."""
+        if not self._graph_initialized:
+            self.graph = await self._create_workflow_graph()
+            self._graph_initialized = True
 
     # 워크플로우 노드 메서드들
     async def _classify_query_node(self, state: AgentState) -> Dict[str, Any]:
@@ -156,7 +175,12 @@ class MultiAgentWorkflow:
         return self.quality_validator.should_regenerate(state)
 
     async def execute_workflow(self, user_input: Dict[str, Any]) -> Dict[str, Any]:
-        """워크플로우 실행"""
+        """
+        워크플로우 실행 (Enterprise Edition with distributed state)
+        """
+        # Ensure graph is initialized
+        await self._ensure_graph_initialized()
+
         query = user_input["query"]
         print(f"[DEBUG] Starting workflow execution for query: {query[:50]}...")
 
@@ -172,8 +196,8 @@ class MultiAgentWorkflow:
         initial_state = self._create_initial_state(user_input)
 
         try:
-            # 워크플로우 실행
-            print("[DEBUG] Executing workflow graph...")
+            # 워크플로우 실행 with PostgreSQL-backed persistence
+            print("[DEBUG] Executing workflow graph with distributed state management...")
             config = {"configurable": {"thread_id": user_input["session_id"]}}
             final_state = await self.graph.ainvoke(initial_state, config)
 
@@ -347,12 +371,16 @@ class MultiAgentWorkflow:
         }
 
     async def health_check(self) -> Dict[str, Any]:
-        """워크플로우 상태 확인"""
+        """
+        워크플로우 상태 확인 (Enterprise Edition)
+        Includes checkpointer health status
+        """
         health_status = {
             "workflow": "healthy",
             "components": {},
             "agents": len(self.agents),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
+            "state_management": "distributed"
         }
 
         # 컴포넌트 상태 확인
@@ -360,7 +388,22 @@ class MultiAgentWorkflow:
             health_status["components"]["query_classifier"] = "healthy"
             health_status["components"]["orchestrators"] = "healthy"
             health_status["components"]["processors"] = "healthy"
-            health_status["components"]["graph"] = "healthy"
+
+            # Check graph initialization
+            if self._graph_initialized:
+                health_status["components"]["graph"] = "healthy"
+            else:
+                health_status["components"]["graph"] = "initializing"
+
+            # Check PostgreSQL checkpointer
+            try:
+                checkpointer = await get_checkpointer()
+                stats = await checkpointer.get_stats()
+                health_status["components"]["checkpointer"] = "healthy"
+                health_status["checkpointer_stats"] = stats
+            except Exception as e:
+                health_status["components"]["checkpointer"] = f"error: {str(e)}"
+
         except Exception as e:
             health_status["workflow"] = f"error: {str(e)}"
 
