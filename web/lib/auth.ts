@@ -1,218 +1,133 @@
 /**
- * Basic authentication utilities
- * Provides simple session-based authentication using localStorage
- *
- * Note: This is a basic implementation for Week 1.
- * For production, integrate with a proper backend auth system (JWT, OAuth, etc.)
+ * Authentication utilities
+ * - 실제 BFF API를 호출하여 인증 처리
+ * - 쿠키 기반 세션 관리 (HTTP-only cookies)
+ * - CSRF 보호
  */
+import { fetchWithCsrf } from './fetch-with-csrf';
 
 export interface User {
-  id: string;
+  user_id: string;
+  email: string;
   username: string;
-  email?: string;
-  createdAt: string;
-}
-
-export interface AuthSession {
-  user: User;
-  token: string;
-  expiresAt: string;
-}
-
-const AUTH_STORAGE_KEY = 'neos_auth_session';
-const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-
-/**
- * Check if a session is expired
- */
-function isSessionExpired(session: AuthSession): boolean {
-  return new Date(session.expiresAt) < new Date();
+  role: string;
+  is_active: boolean;
+  is_verified: boolean;
+  created_at: string;
+  last_login?: string;
 }
 
 /**
- * Get current auth session from storage
+ * 로그인
  */
-export function getSession(): AuthSession | null {
-  if (typeof window === 'undefined') {
-    return null; // SSR safety
+export async function login(email: string, password: string): Promise<User> {
+  const response = await fetchWithCsrf('/api/auth/login', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ email, password }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || '로그인에 실패했습니다.');
   }
 
+  return data.user;
+}
+
+/**
+ * 회원가입
+ */
+export async function register(
+  email: string,
+  password: string,
+  username?: string
+): Promise<{ user_id: string; email: string; username: string }> {
+  const response = await fetchWithCsrf('/api/auth/register', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ email, password, username }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || '회원가입에 실패했습니다.');
+  }
+
+  return data.data;
+}
+
+/**
+ * 로그아웃
+ */
+export async function logout(): Promise<void> {
+  const response = await fetchWithCsrf('/api/auth/logout', {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    const data = await response.json();
+    throw new Error(data.error || '로그아웃에 실패했습니다.');
+  }
+}
+
+/**
+ * 현재 사용자 정보 가져오기
+ */
+export async function getCurrentUser(): Promise<User | null> {
   try {
-    const stored = localStorage.getItem(AUTH_STORAGE_KEY);
-    if (!stored) {
-      return null;
+    const response = await fetch('/api/auth/me', {
+      method: 'GET',
+    });
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        return null; // 인증되지 않음
+      }
+      throw new Error('사용자 정보를 가져올 수 없습니다.');
     }
 
-    const session: AuthSession = JSON.parse(stored);
-
-    // Check if session is expired
-    if (isSessionExpired(session)) {
-      clearSession();
-      return null;
-    }
-
-    return session;
+    const data = await response.json();
+    return data.user;
   } catch (error) {
-    console.error('Failed to get session:', error);
-    clearSession();
+    console.error('Get current user error:', error);
     return null;
   }
 }
 
 /**
- * Save auth session to storage
+ * 인증 여부 확인
  */
-export function saveSession(user: User, token: string): void {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  const expiresAt = new Date(Date.now() + SESSION_DURATION_MS).toISOString();
-
-  const session: AuthSession = {
-    user,
-    token,
-    expiresAt,
-  };
-
-  try {
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
-  } catch (error) {
-    console.error('Failed to save session:', error);
-  }
+export async function isAuthenticated(): Promise<boolean> {
+  const user = await getCurrentUser();
+  return user !== null;
 }
 
-/**
- * Clear auth session from storage
- */
+// 레거시 호환성을 위한 함수들 (기존 코드와의 호환성 유지)
+export function getSession(): null {
+  // 쿠키 기반 세션으로 변경되어 더 이상 localStorage 사용 안 함
+  console.warn('getSession is deprecated. Use getCurrentUser() instead.');
+  return null;
+}
+
+export function saveSession(): void {
+  // 쿠키 기반 세션으로 변경되어 더 이상 사용 안 함
+  console.warn('saveSession is deprecated. Session is managed via HTTP-only cookies.');
+}
+
 export function clearSession(): void {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  try {
-    localStorage.removeItem(AUTH_STORAGE_KEY);
-  } catch (error) {
-    console.error('Failed to clear session:', error);
-  }
+  // 쿠키 기반 세션으로 변경되어 더 이상 사용 안 함
+  console.warn('clearSession is deprecated. Use logout() instead.');
 }
 
-/**
- * Get current user from session
- */
-export function getCurrentUser(): User | null {
-  const session = getSession();
-  return session?.user || null;
-}
-
-/**
- * Check if user is authenticated
- */
-export function isAuthenticated(): boolean {
-  return getSession() !== null;
-}
-
-/**
- * Mock login function
- * In production, this would call a backend API
- *
- * @param username - Username or email
- * @param password - User password (not used in mock)
- */
-export async function login(username: string, password: string): Promise<User> {
-  // Simulate API delay
-  await new Promise(resolve => setTimeout(resolve, 500));
-
-  // Mock validation
-  if (!username || username.trim().length === 0) {
-    throw new Error('Username is required');
-  }
-
-  if (!password || password.length < 4) {
-    throw new Error('Password must be at least 4 characters');
-  }
-
-  // Create mock user
-  const user: User = {
-    id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-    username: username.trim(),
-    email: username.includes('@') ? username : undefined,
-    createdAt: new Date().toISOString(),
-  };
-
-  // Generate mock token
-  const token = `mock_token_${btoa(username)}_${Date.now()}`;
-
-  // Save session
-  saveSession(user, token);
-
-  return user;
-}
-
-/**
- * Logout user
- */
-export async function logout(): Promise<void> {
-  clearSession();
-
-  // In production, would call backend to invalidate token
-  await new Promise(resolve => setTimeout(resolve, 200));
-}
-
-/**
- * Register new user
- * Mock implementation for Week 1
- */
-export async function register(
-  username: string,
-  email: string,
-  password: string
-): Promise<User> {
-  // Simulate API delay
-  await new Promise(resolve => setTimeout(resolve, 800));
-
-  // Mock validation
-  if (!username || username.trim().length < 3) {
-    throw new Error('Username must be at least 3 characters');
-  }
-
-  if (!email || !email.includes('@')) {
-    throw new Error('Valid email is required');
-  }
-
-  if (!password || password.length < 6) {
-    throw new Error('Password must be at least 6 characters');
-  }
-
-  // Create mock user
-  const user: User = {
-    id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-    username: username.trim(),
-    email: email.trim(),
-    createdAt: new Date().toISOString(),
-  };
-
-  // Generate mock token
-  const token = `mock_token_${btoa(email)}_${Date.now()}`;
-
-  // Save session
-  saveSession(user, token);
-
-  return user;
-}
-
-/**
- * Get auth headers for API requests
- */
 export function getAuthHeaders(): Record<string, string> {
-  const session = getSession();
-
-  if (!session) {
-    return {};
-  }
-
-  return {
-    'Authorization': `Bearer ${session.token}`,
-    'X-User-Id': session.user.id,
-  };
+  // BFF 패턴으로 변경되어 클라이언트에서 직접 토큰 관리하지 않음
+  // 모든 요청은 /api 경로를 통해 BFF로 프록시됨
+  return {};
 }
