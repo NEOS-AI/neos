@@ -2,7 +2,9 @@
  * Authentication utilities
  * - 실제 BFF API를 호출하여 인증 처리
  * - 쿠키 기반 세션 관리 (HTTP-only cookies)
+ * - CSRF 보호
  */
+import { fetchWithCsrf } from './fetch-with-csrf';
 
 export interface User {
   user_id: string;
@@ -19,7 +21,7 @@ export interface User {
  * 로그인
  */
 export async function login(email: string, password: string): Promise<User> {
-  const response = await fetch('/api/auth/login', {
+  const response = await fetchWithCsrf('/api/auth/login', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -44,7 +46,7 @@ export async function register(
   password: string,
   username?: string
 ): Promise<{ user_id: string; email: string; username: string }> {
-  const response = await fetch('/api/auth/register', {
+  const response = await fetchWithCsrf('/api/auth/register', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -65,7 +67,7 @@ export async function register(
  * 로그아웃
  */
 export async function logout(): Promise<void> {
-  const response = await fetch('/api/auth/logout', {
+  const response = await fetchWithCsrf('/api/auth/logout', {
     method: 'POST',
   });
 

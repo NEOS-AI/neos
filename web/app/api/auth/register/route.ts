@@ -2,10 +2,17 @@
  * 회원가입 API Route
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { validateCsrfToken, csrfErrorResponse } from '@/lib/csrf-validation';
 
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8518';
 
 export async function POST(request: NextRequest) {
+  // CSRF 토큰 검증
+  const isCsrfValid = await validateCsrfToken(request);
+  if (!isCsrfValid) {
+    return csrfErrorResponse();
+  }
+
   try {
     const body = await request.json();
     const { email, password, username } = body;
