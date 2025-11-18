@@ -168,7 +168,7 @@ async def get_current_user_info(
 
     Requires: JWT Access Token 또는 API Key
     """
-    return UserResponse.from_orm(current_user)
+    return UserResponse.model_validate(current_user)
 
 
 # ============================================================================

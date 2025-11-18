@@ -1,5 +1,6 @@
-from typing import Optional
+from typing import Optional, List
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 import os
 import dotenv
 
@@ -88,8 +89,15 @@ class Settings(BaseSettings):
     RATE_LIMIT_API_CALLS_PER_MINUTE: int = 100
 
     # CORS 설정
-    CORS_ALLOWED_ORIGINS: list = env_vars.get("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    CORS_ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]
     CORS_ALLOW_CREDENTIALS: bool = True
+
+    @field_validator('CORS_ALLOWED_ORIGINS', mode='before')
+    @classmethod
+    def parse_cors_origins(cls, v):
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(',')]
+        return v
 
     # 로그 설정
     LOG_LEVEL: str = env_vars.get("LOG_LEVEL", "INFO")
