@@ -1,9 +1,13 @@
 import re
-from sqlalchemy import text
+import logging
+from sqlalchemy import text, event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import Pool
 
 from neos.config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -17,28 +21,91 @@ class DatabaseManager:
         
     async def initialize(self):
         """데이터베이스 연결 초기화"""
+        logger.info(
+            f"데이터베이스 연결 풀 초기화: "
+            f"pool_size={settings.DATABASE_POOL_SIZE}, "
+            f"max_overflow={settings.DATABASE_MAX_OVERFLOW}, "
+            f"pool_timeout={settings.DATABASE_POOL_TIMEOUT}s, "
+            f"pool_recycle={settings.DATABASE_POOL_RECYCLE}s"
+        )
+
         self.engine = create_async_engine(
             settings.DATABASE_URL,
             pool_size=settings.DATABASE_POOL_SIZE,
             max_overflow=settings.DATABASE_MAX_OVERFLOW,
+            pool_timeout=settings.DATABASE_POOL_TIMEOUT,
+            pool_recycle=settings.DATABASE_POOL_RECYCLE,
             echo=settings.DEBUG,
-            pool_pre_ping=True,
+            pool_pre_ping=True,  # 연결 재사용 전 상태 확인
+            # 준비된 구문 캐싱 활성화 (PostgreSQL)
+            connect_args={
+                "server_settings": {
+                    "application_name": "neos_multi_agent",
+                    "jit": "off"  # JIT 컴파일 비활성화로 짧은 쿼리 성능 향상
+                }
+            }
         )
-        
+
+        # 연결 풀 이벤트 리스너 추가
+        self._setup_pool_listeners()
+
         self.session_factory = async_sessionmaker(
             self.engine,
             class_=AsyncSession,
             expire_on_commit=False
         )
-        
+
         # 테이블 생성
-        async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        try:
+            async with self.engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("데이터베이스 테이블 초기화 완료")
+        except Exception as e:
+            logger.error(f"데이터베이스 초기화 실패: {e}")
+            raise
+
+    def _setup_pool_listeners(self):
+        """연결 풀 이벤트 리스너 설정"""
+        @event.listens_for(Pool, "connect")
+        def receive_connect(dbapi_conn, connection_record):
+            logger.debug("새 데이터베이스 연결 생성")
+
+        @event.listens_for(Pool, "checkout")
+        def receive_checkout(dbapi_conn, connection_record, connection_proxy):
+            logger.debug("연결 풀에서 연결 체크아웃")
+
+        @event.listens_for(Pool, "checkin")
+        def receive_checkin(dbapi_conn, connection_record):
+            logger.debug("연결 풀로 연결 반환")
+
+    def get_pool_status(self) -> dict:
+        """
+        연결 풀 상태 조회
+
+        Returns:
+            dict: 풀 상태 정보
+        """
+        if not self.engine:
+            return {"status": "not_initialized"}
+
+        pool = self.engine.pool
+        return {
+            "size": pool.size(),
+            "checked_in": pool.checkedin(),
+            "checked_out": pool.checkedout(),
+            "overflow": pool.overflow(),
+            "max_overflow": settings.DATABASE_MAX_OVERFLOW,
+            "pool_size": settings.DATABASE_POOL_SIZE,
+            "total_connections": pool.size() + pool.overflow(),
+            "available_connections": pool.checkedin(),
+        }
 
     async def close(self):
         """데이터베이스 연결 종료"""
         if self.engine:
+            logger.info("데이터베이스 연결 종료 중...")
             await self.engine.dispose()
+            logger.info("데이터베이스 연결 종료 완료")
 
     async def get_session(self) -> AsyncSession:
         """세션 생성"""
@@ -52,9 +119,10 @@ class DatabaseManager:
         try:
             async with await self.get_session() as session:
                 await session.execute(text("SELECT 1"))
+                logger.debug("데이터베이스 헬스 체크 성공")
                 return True
         except Exception as e:
-            print(f"Database health check error: {e}")
+            logger.error(f"데이터베이스 헬스 체크 실패: {e}")
             return False
 
     async def execute_in_transaction(self, query: str, *params):
@@ -111,9 +179,9 @@ class DatabaseManager:
                 await session.commit()
                 return result
         except Exception as e:
-            print(f"[ERROR] Database execute error: {e}")
-            print(f"[ERROR] Query: {query}")
-            print(f"[ERROR] Params: {params}")
+            logger.error(f"데이터베이스 실행 에러: {e}")
+            logger.error(f"쿼리: {query}")
+            logger.error(f"파라미터: {params}")
             raise
 
     async def fetch_one(self, query: str, *params):
@@ -138,7 +206,8 @@ class DatabaseManager:
                 row = result.fetchone()
                 return row
         except Exception as e:
-            print(f"[ERROR] Database fetch_one error: {e}")
+            logger.error(f"데이터베이스 fetch_one 에러: {e}")
+            logger.error(f"쿼리: {query}")
             raise
 
     async def fetch_all(self, query: str, *params):
@@ -159,7 +228,8 @@ class DatabaseManager:
                 result = await session.execute(text(converted_query), param_dict)
                 return result.fetchall()
         except Exception as e:
-            print(f"[ERROR] Database fetch_all error: {e}")
+            logger.error(f"데이터베이스 fetch_all 에러: {e}")
+            logger.error(f"쿼리: {query}")
             raise
 
 

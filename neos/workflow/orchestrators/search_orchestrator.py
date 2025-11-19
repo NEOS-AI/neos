@@ -3,11 +3,15 @@
 from typing import Dict, Any, List
 from datetime import datetime
 import asyncio
+import logging
 
 from neos.utils.cache import cache_manager
+from neos.utils.circuit_breaker import AgentCircuitBreaker
 from neos.tools.tool_selector import ToolContext
 
 from ..state import AgentState
+
+logger = logging.getLogger(__name__)
 
 
 class SearchOrchestrator:
@@ -20,13 +24,13 @@ class SearchOrchestrator:
 
     async def orchestrate(self, state: AgentState) -> Dict[str, Any]:
         """검색 에이전트들 오케스트레이션 (MCP 통합)"""
-        print("[DEBUG] Starting search orchestration with MCP integration...")
+        logger.info("검색 오케스트레이션 시작 (MCP 통합)")
         required_agents = state["required_agents"]
         search_agents = [agent for agent in required_agents if agent in self.config.SEARCH_AGENTS]
-        print(f"[DEBUG] Search agents to execute: {search_agents}")
+        logger.info(f"실행할 검색 에이전트: {search_agents}")
 
         if not search_agents:
-            print("[DEBUG] No search agents required, skipping...")
+            logger.debug("검색 에이전트가 필요하지 않음, 건너뜀")
             state["execution_steps"].append({
                 "step": "search_orchestration",
                 "result": "skipped - no search agents required",
@@ -36,7 +40,7 @@ class SearchOrchestrator:
 
         # MCP 도구 선택기 초기화 (필요시)
         if not self.tool_selector.initialized:
-            print("[DEBUG] Initializing tool selector...")
+            logger.debug("도구 선택기 초기화 중...")
             await self.tool_selector.initialize()
 
         # 캐시 확인
@@ -244,26 +248,70 @@ class SearchOrchestrator:
         search_agents: List[str],
         state: AgentState
     ) -> List:
-        """기본 에이전트 결과 처리"""
+        """
+        기본 에이전트 결과 처리 (개선된 에러 처리)
+
+        에러가 발생한 경우에도 적절하게 로깅하고 상태를 업데이트하며,
+        Circuit Breaker 상태를 확인합니다.
+        """
         agent_index = index - (1 if any("search" in agent for agent in search_agents) else 0)
 
         if agent_index < len(search_agents):
             agent_name = search_agents[agent_index]
-            print(f"[DEBUG] Processing result {index+1} from agent {agent_name}")
+            logger.debug(f"에이전트 결과 처리 중: {agent_name} (index={index+1})")
 
         if isinstance(result, Exception):
             if agent_index < len(search_agents):
-                print(f"[ERROR] Search agent {search_agents[agent_index]} failed: {str(result)}")
-                state["errors"].append(f"Search agent {search_agents[agent_index]} failed: {str(result)}")
+                agent_name = search_agents[agent_index]
+                error_msg = f"Search agent {agent_name} failed: {str(result)}"
+
+                logger.error(error_msg, exc_info=True)
+
+                # 에러를 state에 추가 (기존 동작 유지)
+                state["errors"].append(error_msg)
+
+                # Circuit Breaker 상태 확인
+                breaker_states = AgentCircuitBreaker.get_all_states()
+                if agent_name in breaker_states:
+                    breaker_state = breaker_states[agent_name]
+                    if breaker_state != "closed":
+                        logger.warning(
+                            f"⚠️ Circuit Breaker 상태: {agent_name} = {breaker_state}"
+                        )
+                        state["errors"].append(
+                            f"Circuit breaker for {agent_name} is {breaker_state}"
+                        )
+
+            # 에러 시에도 빈 배열 반환 (graceful degradation)
             return []
+
         elif result.get("success"):
             agent_results = result.get("result", [])
             if agent_index < len(search_agents):
-                print(f"[DEBUG] Agent {search_agents[agent_index]} returned {len(agent_results)} results")
+                agent_name = search_agents[agent_index]
+                logger.info(f"에이전트 {agent_name} 성공: {len(agent_results)}개 결과 반환")
             return agent_results
+
         else:
+            # 성공하지 않은 결과
             if agent_index < len(search_agents):
-                print(f"[WARNING] Agent {search_agents[agent_index]} returned unsuccessful result: {result}")
+                agent_name = search_agents[agent_index]
+                error_detail = result.get("error", "Unknown error")
+
+                # Circuit breaker로 인한 graceful degradation인지 확인
+                if result.get("degraded"):
+                    logger.warning(
+                        f"⚠️ 에이전트 {agent_name} Circuit Breaker로 인해 비활성화됨: {error_detail}"
+                    )
+                else:
+                    logger.warning(
+                        f"에이전트 {agent_name} 비성공 결과: {error_detail}"
+                    )
+
+                state["errors"].append(
+                    f"Agent {agent_name} unsuccessful: {error_detail}"
+                )
+
             return []
 
     def _deduplicate_results(self, agent_results: List, seen_content: set) -> List:
