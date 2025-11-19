@@ -12,15 +12,21 @@ env_vars = os.environ
 class Settings(BaseSettings):
     # 데이터베이스 설정
     DATABASE_URL: str = env_vars.get("DATABASE_URL", "postgresql+asyncpg://user:password@localhost/ai_system")
-    DATABASE_POOL_SIZE: int = int(env_vars.get("DATABASE_POOL_SIZE", 10))
-    DATABASE_MAX_OVERFLOW: int = 20
-    
+    DATABASE_POOL_SIZE: int = int(env_vars.get("DATABASE_POOL_SIZE", 40))
+    DATABASE_MAX_OVERFLOW: int = int(env_vars.get("DATABASE_MAX_OVERFLOW", 80))
+    DATABASE_POOL_TIMEOUT: int = int(env_vars.get("DATABASE_POOL_TIMEOUT", 30))
+    DATABASE_POOL_RECYCLE: int = int(env_vars.get("DATABASE_POOL_RECYCLE", 1800))  # 30분
+
     # Redis 설정
     REDIS_URL: str = env_vars.get("REDIS_URL", "redis://localhost:6379")
     REDIS_TTL: int = int(env_vars.get("REDIS_TTL", 3600))  # 1시간
+    REDIS_POOL_SIZE: int = int(env_vars.get("REDIS_POOL_SIZE", 50))
+    REDIS_MIN_IDLE_CONNECTIONS: int = int(env_vars.get("REDIS_MIN_IDLE_CONNECTIONS", 10))
 
     # 캐시 설정
-    WORKFLOW_RESPONSE_CACHE_TTL: int = int(env_vars.get("WORKFLOW_RESPONSE_CACHE_TTL", 86400))  # 24시간
+    WORKFLOW_RESPONSE_CACHE_TTL: int = int(env_vars.get("WORKFLOW_RESPONSE_CACHE_TTL", 7200))  # 2시간 (개선됨: 24시간 → 2시간)
+    SEMANTIC_CACHE_ENABLED: bool = bool(env_vars.get("SEMANTIC_CACHE_ENABLED", False))
+    SEMANTIC_CACHE_THRESHOLD: float = float(env_vars.get("SEMANTIC_CACHE_THRESHOLD", 0.95))
 
     # AI 서비스 API 키
     OPENAI_API_KEY: str = env_vars.get("OPENAI_API_KEY", "")
@@ -58,6 +64,10 @@ class Settings(BaseSettings):
     MAX_ITERATIONS: int = int(env_vars.get("MAX_ITERATIONS", 10))
     AGENT_TIMEOUT: int = int(env_vars.get("AGENT_TIMEOUT", 300))  # 5분
 
+    # 동시성 설정
+    MAX_CONCURRENT_WORKFLOWS: int = int(env_vars.get("MAX_CONCURRENT_WORKFLOWS", 100))
+    MAX_CONCURRENT_AGENTS_PER_WORKFLOW: int = int(env_vars.get("MAX_CONCURRENT_AGENTS_PER_WORKFLOW", 10))
+
     # API 설정
     API_V1_PREFIX: str = "/api/v1"
     DEBUG: bool = bool(env_vars.get("DEBUG", False))
@@ -87,6 +97,12 @@ class Settings(BaseSettings):
     RATE_LIMIT_LOGIN_ATTEMPTS: int = 5
     RATE_LIMIT_LOGIN_WINDOW_SECONDS: int = 600  # 10분
     RATE_LIMIT_API_CALLS_PER_MINUTE: int = 100
+
+    # Circuit Breaker 설정
+    CIRCUIT_BREAKER_ENABLED: bool = bool(env_vars.get("CIRCUIT_BREAKER_ENABLED", True))
+    CIRCUIT_BREAKER_FAIL_THRESHOLD: int = int(env_vars.get("CIRCUIT_BREAKER_FAIL_THRESHOLD", 5))  # 연속 실패 횟수
+    CIRCUIT_BREAKER_RECOVERY_TIMEOUT: int = int(env_vars.get("CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60))  # 복구 시도 간격 (초)
+    CIRCUIT_BREAKER_EXPECTED_EXCEPTION: bool = True  # 예외 발생 시 실패로 간주
 
     # CORS 설정
     CORS_ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]

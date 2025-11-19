@@ -1,11 +1,15 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+import asyncio
+import logging
 from crewai import Agent, Task, Crew
 # from langchain_openai import ChatOpenAI
 from langchain_core.language_models.base import BaseLanguageModel
 
 from neos.config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 class BaseAgent(ABC):
@@ -53,25 +57,38 @@ class BaseAgent(ABC):
         )
     
     async def run_crew(self, tasks: List[Task]) -> Dict[str, Any]:
-        """Crew 실행"""
+        """
+        Crew 실행 (비동기 래퍼)
+
+        CrewAI의 kickoff()는 동기 함수이므로 asyncio.to_thread()를 사용하여
+        별도 스레드에서 실행하여 이벤트 루프를 블로킹하지 않습니다.
+        """
         try:
+            start_time = datetime.utcnow()
+
             crew = Crew(
                 agents=[self.agent],
                 tasks=tasks,
                 verbose=settings.DEBUG,
                 process="sequential"
             )
-            
-            result = crew.kickoff()
-            
+
+            # 동기 crew.kickoff()를 별도 스레드에서 실행
+            logger.debug(f"{self.name} - Crew 실행 시작")
+            result = await asyncio.to_thread(crew.kickoff)
+            logger.debug(f"{self.name} - Crew 실행 완료")
+
+            execution_time = (datetime.utcnow() - start_time).total_seconds()
+
             return {
                 "success": True,
                 "result": result,
                 "agent": self.name,
-                "execution_time": None
+                "execution_time": execution_time
             }
-            
+
         except Exception as e:
+            logger.error(f"{self.name} - Crew 실행 에러: {e}")
             return {
                 "success": False,
                 "error": str(e),

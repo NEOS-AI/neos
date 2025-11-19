@@ -54,4 +54,5 @@ dependencies = [
     "psutil>=6.1.0",
     "celery>=5.4.0",
     "kombu>=5.4.0",
+    "pybreaker>=1.2.0",
 ]
