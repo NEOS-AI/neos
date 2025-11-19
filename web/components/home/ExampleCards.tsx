@@ -34,30 +34,35 @@ export default function ExampleCards({ cards, columns = 2 }: ExampleCardsProps) 
             className="
               group
               flex items-start gap-4 p-6
-              bg-bg-surface border border-line-soft rounded-2xl
+              bg-gradient-to-br from-white to-gray-50/50 dark:from-bg-surface dark:to-gray-900/50
+              border-2 border-line-soft rounded-3xl
               text-left
-              transition-all duration-200
-              hover:border-brand-accent/30 hover:bg-action-hover hover:shadow-soft
-              hover:scale-[1.02]
+              transition-all duration-300
+              hover:border-brand-accent/50 hover:shadow-lg hover:shadow-brand-accent/10
+              hover:scale-[1.03] hover:-translate-y-1
               focus:outline-none focus:ring-2 focus:ring-brand-accent/50
-              active:scale-100
+              active:scale-100 active:translate-y-0
+              animate-fade-in-up
             "
+            style={{ animationDelay: `${idx * 100}ms` }}
             aria-label={card.title}
           >
             {/* Icon */}
             <div
               className={`
                 flex-shrink-0 p-3 rounded-xl
-                ${card.color || "bg-brand-accent/10"}
-                shadow-sm
+                ${card.color || "bg-gradient-to-br from-orange-400/20 via-amber-500/20 to-amber-600/20"}
+                shadow-md
+                transition-all duration-300
+                group-hover:scale-110 group-hover:shadow-lg
               `}
             >
-              <Icon className={`w-5 h-5 ${card.color ? "text-white" : "text-brand-accent"}`} />
+              <Icon className={`w-6 h-6 ${card.color ? "text-white" : "text-brand-accent"}`} />
             </div>
 
             {/* Content */}
             <div className="flex-1 min-w-0 space-y-2">
-              <h3 className="text-lg font-semibold text-text-primary">
+              <h3 className="text-lg font-bold text-text-primary group-hover:text-brand-accent transition-colors">
                 {card.title}
               </h3>
               <p className="text-sm text-text-secondary leading-relaxed">
@@ -70,8 +75,8 @@ export default function ExampleCards({ cards, columns = 2 }: ExampleCardsProps) 
               className="
                 flex-shrink-0 w-5 h-5 mt-1
                 text-text-muted
-                transition-all duration-200
-                group-hover:text-brand-accent group-hover:translate-x-1
+                transition-all duration-300
+                group-hover:text-brand-accent group-hover:translate-x-2
               "
             />
           </button>
