@@ -48,12 +48,12 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
       aria-label={`${isUser ? 'Your message' : 'Assistant message'}${message.status === 'streaming' ? ', streaming' : ''}`}
       className={`
         group w-full py-6 px-4 sm:px-6
-        transition-all duration-300 ease-out
+        transition-all duration-500 ease-out
         ${isUser
           ? 'bg-transparent'
-          : 'bg-gradient-to-b from-transparent via-gray-50/30 to-transparent dark:via-gray-800/20 hover:via-gray-50/50 dark:hover:via-gray-800/30'
+          : 'bg-gradient-to-b from-transparent via-gray-50/40 to-transparent dark:via-gray-800/30 hover:via-gray-100/60 dark:hover:via-gray-700/40'
         }
-        animate-fadeIn
+        animate-fade-in-up
       `}
     >
       <div className="max-w-4xl mx-auto">
@@ -91,8 +91,9 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
             {/* Message Content */}
             <div className={isUser ? 'w-full flex justify-end' : 'w-full'}>
               <div className={`
+                transition-all duration-300
                 ${isUser
-                  ? 'bg-gradient-to-br from-blue-600 to-purple-600 text-white rounded-3xl rounded-tr-md px-4 py-3 max-w-[85%] shadow-md'
+                  ? 'bg-gradient-to-br from-blue-600 via-blue-500 to-purple-600 text-white rounded-3xl rounded-tr-md px-5 py-3.5 max-w-[85%] shadow-lg hover:shadow-xl hover:scale-[1.02] transform'
                   : 'text-gray-900 dark:text-gray-100'
                 }
               `}>

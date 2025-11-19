@@ -106,43 +106,43 @@ export default function MessageList() {
     >
       {!currentConversation || messages.length === 0 ? (
         /* Empty State - No conversation or no messages */
-        <div className="flex items-center justify-center min-h-full p-8">
+        <div className="flex items-center justify-center min-h-full p-8 animate-fade-in">
           <div className="max-w-2xl text-center space-y-8">
             {/* Logo and Welcome */}
-            <div className="space-y-4">
-              <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-orange-400 to-amber-600 text-white text-3xl font-bold shadow-lg">
+            <div className="space-y-4 animate-scale-in">
+              <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-orange-400 via-amber-500 to-amber-600 text-white text-4xl font-bold shadow-2xl shadow-orange-500/30 hover:shadow-orange-500/50 transition-all duration-300 hover:scale-110 animate-bounce-subtle">
                 N
               </div>
-              <h1 className="text-3xl font-bold text-claude-text">
+              <h1 className="text-4xl font-bold text-claude-text bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 dark:from-gray-100 dark:via-gray-200 dark:to-gray-100 bg-clip-text text-transparent">
                 Welcome to NEOS
               </h1>
-              <p className="text-claude-text-secondary text-lg">
+              <p className="text-claude-text-secondary text-lg font-medium">
                 Your intelligent search and analysis agent
               </p>
             </div>
 
             {/* Current Mode Info */}
-            <div className="inline-flex items-center gap-2 px-4 py-2 bg-claude-dark border border-claude-border rounded-lg">
+            <div className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-gray-900/5 to-gray-800/10 dark:from-gray-100/10 dark:to-gray-200/5 border border-gray-200 dark:border-claude-border rounded-2xl backdrop-blur-sm shadow-md hover:shadow-lg transition-all duration-300 hover:scale-105 animate-fade-in-up">
               {settings.mode === "rag" && (
                 <>
-                  <Database className="w-4 h-4 text-blue-400" />
-                  <span className="text-sm text-claude-text">
+                  <Database className="w-5 h-5 text-blue-500 dark:text-blue-400" />
+                  <span className="text-sm font-medium text-gray-800 dark:text-claude-text">
                     RAG Mode - Context-aware responses
                   </span>
                 </>
               )}
               {settings.mode === "similarity" && (
                 <>
-                  <Brain className="w-4 h-4 text-purple-400" />
-                  <span className="text-sm text-claude-text">
+                  <Brain className="w-5 h-5 text-purple-500 dark:text-purple-400" />
+                  <span className="text-sm font-medium text-gray-800 dark:text-claude-text">
                     Similarity Mode - Intelligent context retrieval
                   </span>
                 </>
               )}
               {settings.mode === "standard" && (
                 <>
-                  <Sparkles className="w-4 h-4 text-orange-400" />
-                  <span className="text-sm text-claude-text">
+                  <Sparkles className="w-5 h-5 text-orange-500 dark:text-orange-400" />
+                  <span className="text-sm font-medium text-gray-800 dark:text-claude-text">
                     Standard Mode - Direct conversation
                   </span>
                 </>
@@ -150,8 +150,8 @@ export default function MessageList() {
             </div>
 
             {/* Example Prompts */}
-            <div className="space-y-3">
-              <p className="text-sm text-claude-text-secondary">
+            <div className="space-y-4 animate-fade-in-up">
+              <p className="text-sm font-semibold text-gray-700 dark:text-claude-text-secondary">
                 Try one of these examples:
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -159,16 +159,17 @@ export default function MessageList() {
                   <button
                     key={idx}
                     onClick={() => handleExampleClick(example.prompt)}
-                    className="flex items-center gap-3 p-4 bg-claude-dark border border-claude-border rounded-xl hover:bg-claude-light hover:border-primary/50 transition-all text-left group"
+                    className="flex items-center gap-3 p-5 bg-gradient-to-br from-white to-gray-50/50 dark:from-claude-dark dark:to-claude-light/50 border-2 border-gray-200 dark:border-claude-border rounded-2xl hover:border-primary/50 dark:hover:border-primary/50 hover:shadow-lg hover:scale-[1.02] transition-all duration-300 text-left group"
+                    style={{ animationDelay: `${idx * 100}ms` }}
                   >
-                    <div className="flex-shrink-0 p-2 rounded-lg bg-claude-light group-hover:bg-primary/20 transition-colors">
+                    <div className="flex-shrink-0 p-2.5 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 dark:from-claude-light dark:to-claude-light/50 group-hover:from-primary/20 group-hover:to-primary/30 transition-all duration-300 group-hover:scale-110">
                       {example.icon}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-claude-text mb-1">
+                      <div className="text-sm font-semibold text-gray-900 dark:text-claude-text mb-1 group-hover:text-primary transition-colors">
                         {example.title}
                       </div>
-                      <div className="text-xs text-claude-text-secondary line-clamp-2">
+                      <div className="text-xs text-gray-600 dark:text-claude-text-secondary line-clamp-2">
                         {example.prompt}
                       </div>
                     </div>

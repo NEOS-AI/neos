@@ -33,13 +33,13 @@ export default function MessageContent({
     );
   }
 
-  // Pending assistant message - elegant loading dots
+  // Pending assistant message - elegant loading dots with gradient
   if (isPending && !content) {
     return (
-      <div className="flex items-center gap-1.5 py-4">
-        <div className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-        <div className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-        <div className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+      <div className="flex items-center gap-2 py-4">
+        <div className="w-2.5 h-2.5 bg-gradient-to-br from-blue-400 to-purple-500 rounded-full animate-bounce shadow-lg shadow-blue-400/50" style={{ animationDelay: '0ms' }} />
+        <div className="w-2.5 h-2.5 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full animate-bounce shadow-lg shadow-blue-500/50" style={{ animationDelay: '150ms' }} />
+        <div className="w-2.5 h-2.5 bg-gradient-to-br from-purple-500 to-blue-400 rounded-full animate-bounce shadow-lg shadow-purple-500/50" style={{ animationDelay: '300ms' }} />
       </div>
     );
   }
