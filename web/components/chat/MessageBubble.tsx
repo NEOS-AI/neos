@@ -1,16 +1,26 @@
 "use client";
 
+import { memo } from "react";
+import dynamic from "next/dynamic";
 import { Message } from "@/lib/types";
 import { useChatStore } from "@/lib/stores/chat-store";
-import SimilarityContextIndicator from "./SimilarityContextIndicator";
 import {
   MessageAvatar,
   MessageHeader,
   MessageContent,
   MessageMetadata,
-  MessageActions,
-  RAGContextDetails,
 } from "./message";
+
+// Dynamically import less frequently used components
+const SimilarityContextIndicator = dynamic(() => import("./SimilarityContextIndicator"), {
+  ssr: false,
+});
+const MessageActions = dynamic(() => import("./message/MessageActions"), {
+  ssr: false,
+});
+const RAGContextDetails = dynamic(() => import("./message/RAGContextDetails"), {
+  ssr: false,
+});
 
 interface MessageBubbleProps {
   message: Message;
@@ -21,8 +31,10 @@ interface MessageBubbleProps {
  * Modern chat UI with ChatGPT/Claude-style design
  * User messages: right-aligned with gradient background
  * AI messages: left-aligned with subtle background
+ *
+ * Performance: Memoized to prevent unnecessary re-renders in long conversations
  */
-export default function MessageBubble({ message }: MessageBubbleProps) {
+function MessageBubbleComponent({ message }: MessageBubbleProps) {
   const { regenerateMessage, addFeedback } = useChatStore();
 
   const isUser = message.role === "user";
@@ -32,6 +44,8 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
 
   return (
     <div
+      role="article"
+      aria-label={`${isUser ? 'Your message' : 'Assistant message'}${message.status === 'streaming' ? ', streaming' : ''}`}
       className={`
         group w-full py-6 px-4 sm:px-6
         transition-all duration-300 ease-out
@@ -121,3 +135,18 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
     </div>
   );
 }
+
+/**
+ * Memoized MessageBubble to prevent re-renders when message hasn't changed
+ * This significantly improves performance in long conversations (50+ messages)
+ */
+export default memo(MessageBubbleComponent, (prevProps, nextProps) => {
+  // Only re-render if message content, status, or metadata has changed
+  return (
+    prevProps.message.message_id === nextProps.message.message_id &&
+    prevProps.message.content === nextProps.message.content &&
+    prevProps.message.status === nextProps.message.status &&
+    prevProps.message.user_feedback === nextProps.message.user_feedback &&
+    JSON.stringify(prevProps.message.metadata) === JSON.stringify(nextProps.message.metadata)
+  );
+});

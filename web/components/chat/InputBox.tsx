@@ -4,6 +4,9 @@ import { useChatStore } from "@/lib/stores/chat-store";
 import { ArrowUp, Square, AlertCircle } from "lucide-react";
 import { useState, useRef, useEffect, KeyboardEvent } from "react";
 import { validateInput, createMessageRateLimiter, INPUT_CONSTANTS } from "@/lib/input-validation";
+import { createLogger } from "@/lib/logger";
+
+const logger = createLogger("InputBox");
 
 export default function InputBox() {
   const { sendMessage, isLoading, isStreaming, settings, stopGeneration } = useChatStore();
@@ -66,7 +69,7 @@ export default function InputBox() {
   };
 
   const handleStop = () => {
-    console.log("[InputBox] Stop button clicked");
+    logger.debug("Stop button clicked");
     stopGeneration();
   };
 

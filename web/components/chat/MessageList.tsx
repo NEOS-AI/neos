@@ -6,6 +6,9 @@ import { useEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Sparkles, Database, Brain, ArrowRight } from "lucide-react";
 import { PERFORMANCE, UI_DIMENSIONS } from "@/lib/constants";
+import { createLogger } from "@/lib/logger";
+
+const logger = createLogger("MessageList");
 
 const examplePrompts = [
   {
@@ -31,19 +34,24 @@ const examplePrompts = [
 ];
 
 export default function MessageList() {
-  // Use selector to properly subscribe to store changes
+  // Optimized selectors with shallow comparison
   const sendMessage = useChatStore((state) => state.sendMessage);
   const settings = useChatStore((state) => state.settings);
 
-  // Compute currentConversation and messages directly from state for proper reactivity
-  const currentConversation = useChatStore((state) => {
+  // Memoized selector to prevent unnecessary re-renders
+  // Only re-subscribe when currentConversationId or conversations array changes
+  const currentConversationId = useChatStore((state) => state.currentConversationId);
+  const messages = useChatStore((state) => {
     const current = state.conversations.find(
       (c) => c.conversation_id === state.currentConversationId
     );
-    return current || null;
+    return current?.messages || [];
   });
 
-  const messages = currentConversation?.messages || [];
+  // Get conversation for metadata only when needed
+  const currentConversation = useChatStore((state) =>
+    state.conversations.find(c => c.conversation_id === state.currentConversationId) || null
+  );
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -59,9 +67,9 @@ export default function MessageList() {
     enabled: shouldVirtualize,
   });
 
-  // Debug logging
+  // Debug logging (only in development)
   useEffect(() => {
-    console.log("[MessageList] Component rendered:", {
+    logger.debug("Component rendered", {
       messagesCount: messages.length,
       conversationId: currentConversation?.conversation_id,
       hasConversation: !!currentConversation,
@@ -69,12 +77,12 @@ export default function MessageList() {
   }, [messages, currentConversation]);
 
   useEffect(() => {
-    console.log("[MessageList] Messages array changed:", {
+    logger.debug("Messages array changed", {
       count: messages.length,
-      messages: messages.map(m => ({
+      messagesSummary: messages.map(m => ({
         id: m.message_id.slice(0, 8),
         role: m.role,
-        content: m.content.slice(0, 30)
+        contentPreview: m.content.slice(0, 30)
       }))
     });
   }, [messages]);
@@ -89,7 +97,13 @@ export default function MessageList() {
   };
 
   return (
-    <div ref={scrollContainerRef} className="h-full overflow-y-auto">
+    <div
+      ref={scrollContainerRef}
+      className="h-full overflow-y-auto"
+      role="log"
+      aria-live="polite"
+      aria-label="Chat messages"
+    >
       {!currentConversation || messages.length === 0 ? (
         /* Empty State - No conversation or no messages */
         <div className="flex items-center justify-center min-h-full p-8">
