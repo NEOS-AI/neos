@@ -283,6 +283,10 @@ class DistributedMultiAgentWorkflow:
         Returns:
             완료된 작업 리스트
         """
+        # Early return for empty task list
+        if not task_ids:
+            return []
+
         start_time = datetime.utcnow()
         completed = []
 
