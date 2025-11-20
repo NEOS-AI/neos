@@ -70,8 +70,16 @@ function maskSensitiveData(data: any): any {
 
 /**
  * 로그 출력
+ * 프로덕션 환경에서는 WARN과 ERROR만 출력
  */
 function log(level: LogLevel, message: string, context?: Record<string, any>): void {
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // 프로덕션에서는 DEBUG와 INFO 로그 무시
+  if (isProduction && (level === LogLevel.DEBUG || level === LogLevel.INFO)) {
+    return;
+  }
+
   const entry: LogEntry = {
     level,
     message,
@@ -81,8 +89,11 @@ function log(level: LogLevel, message: string, context?: Record<string, any>): v
   };
 
   // 프로덕션 환경에서는 구조화된 JSON 로그
-  if (process.env.NODE_ENV === 'production') {
-    console.log(JSON.stringify(entry));
+  if (isProduction) {
+    // WARN과 ERROR만 JSON으로 출력
+    if (level === LogLevel.WARN || level === LogLevel.ERROR) {
+      console.log(JSON.stringify(entry));
+    }
   } else {
     // 개발 환경에서는 읽기 쉬운 형식
     const prefix = `[${entry.timestamp}] [${level}]`;

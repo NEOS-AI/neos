@@ -99,11 +99,11 @@ export default function Sidebar() {
 
   return (
     <nav
-      className="w-[280px] bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col h-full"
+      className="w-[280px] bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col h-full animate-slide-in-left"
       aria-label="Main navigation"
     >
       {/* Header */}
-      <div className="p-4 space-y-3 border-b border-gray-200 dark:border-gray-800">
+      <div className="p-4 space-y-3 border-b border-gray-200 dark:border-gray-800 animate-fade-in-down">
         {/* Logo & Home */}
         <button
           onClick={() => router.push('/')}
@@ -111,11 +111,11 @@ export default function Sidebar() {
             w-full flex items-center gap-3 px-3 py-2
             text-gray-900 dark:text-gray-100 hover:text-orange-600 dark:hover:text-orange-400
             transition-all duration-200 hover:scale-105 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800
-            group
+            group animate-scale-in
           "
           aria-label="Go to home"
         >
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 via-amber-500 to-yellow-500 flex items-center justify-center text-white font-bold text-base shadow-md ring-2 ring-orange-500/20">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 via-amber-500 to-yellow-500 flex items-center justify-center text-white font-bold text-base shadow-md ring-2 ring-orange-500/20 group-hover:shadow-lg transition-all duration-300 group-hover:animate-pulse-subtle">
             N
           </div>
           <span className="text-sm font-semibold">NEOS</span>
@@ -128,11 +128,13 @@ export default function Sidebar() {
             w-full flex items-center justify-center gap-2 px-4 py-2.5
             bg-gradient-to-br from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700
             text-white rounded-xl
-            transition-all duration-200
+            transition-all duration-300
             font-medium text-sm
-            shadow-md hover:shadow-lg hover:scale-105 active:scale-95
+            shadow-md hover:shadow-xl hover:shadow-blue-500/30 hover:scale-105 active:scale-95
             focus:outline-none focus:ring-2 focus:ring-blue-500/50
+            animate-scale-in
           "
+          style={{ animationDelay: '100ms' }}
           aria-label="Start new chat"
         >
           <Plus className="w-4 h-4" />
@@ -140,8 +142,8 @@ export default function Sidebar() {
         </button>
 
         {/* Search */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
+        <div className="relative animate-scale-in" style={{ animationDelay: '200ms' }}>
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 transition-colors" />
           <input
             type="text"
             placeholder="Search..."
@@ -152,7 +154,7 @@ export default function Sidebar() {
               bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl
               text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 text-sm
               focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500
-              transition-all duration-200
+              transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600
             "
             aria-label="Search conversations"
           />
@@ -171,7 +173,7 @@ export default function Sidebar() {
         {/* Conversation List */}
         <div className="px-2 pb-2 space-y-1" role="list" aria-label="Conversations">
           {filteredConversations.length === 0 ? (
-            <div className="px-4 py-8 text-center text-gray-500 dark:text-gray-400 text-sm">
+            <div className="px-4 py-8 text-center text-gray-500 dark:text-gray-400 text-sm animate-fade-in">
               {searchQuery ? "No conversations found" : "No conversations yet"}
             </div>
           ) : (
@@ -187,24 +189,26 @@ export default function Sidebar() {
                     group relative flex items-center gap-3 px-3 py-2.5 rounded-xl mx-1
                     cursor-pointer transition-all duration-200
                     focus:outline-none focus:ring-2 focus:ring-blue-500/50
+                    animate-fade-in-up
                     ${isActive
-                      ? "bg-blue-50 dark:bg-blue-900/20 border-l-2 border-blue-600"
-                      : "hover:bg-gray-50 dark:hover:bg-gray-800 border-l-2 border-transparent hover:scale-[1.02]"
+                      ? "bg-gradient-to-r from-blue-50 to-blue-50/50 dark:from-blue-900/30 dark:to-blue-900/10 border-l-2 border-blue-600 shadow-sm"
+                      : "hover:bg-gray-50 dark:hover:bg-gray-800 border-l-2 border-transparent hover:scale-[1.02] hover:shadow-sm"
                     }
                   `}
+                  style={{ animationDelay: `${index * 30}ms` }}
                   onClick={() => handleConversationClick(conversation.conversation_id)}
                   onKeyDown={(e) => handleKeyDown(e, index, conversation.conversation_id)}
                   aria-label={`${conversation.title}, ${conversation.message_count} messages, ${formatTimestamp(conversation.updated_at)}`}
                   aria-current={isActive ? 'page' : undefined}
                 >
                   <MessageSquare
-                    className={`flex-shrink-0 w-4 h-4 ${
-                      isActive ? "text-blue-600 dark:text-blue-400" : "text-gray-400 dark:text-gray-500"
+                    className={`flex-shrink-0 w-4 h-4 transition-all duration-200 ${
+                      isActive ? "text-blue-600 dark:text-blue-400" : "text-gray-400 dark:text-gray-500 group-hover:text-gray-600 dark:group-hover:text-gray-300"
                     }`}
                   />
 
                   <div className="flex-1 min-w-0">
-                    <div className={`text-sm truncate font-medium ${
+                    <div className={`text-sm truncate font-medium transition-colors ${
                       isActive ? "text-blue-600 dark:text-blue-400" : "text-gray-900 dark:text-gray-100"
                     }`}>
                       {conversation.title}
@@ -226,7 +230,7 @@ export default function Sidebar() {
                     title="Delete conversation"
                     aria-label="Delete conversation"
                   >
-                    <Trash2 className="w-3.5 h-3.5 text-red-600 dark:text-red-400" />
+                    <Trash2 className="w-3.5 h-3.5 text-red-600 dark:text-red-400 transition-transform group-hover:rotate-12" />
                   </button>
                 </div>
               );
@@ -236,7 +240,7 @@ export default function Sidebar() {
       </div>
 
       {/* Footer */}
-      <div className="p-4 border-t border-gray-200 dark:border-gray-800">
+      <div className="p-4 border-t border-gray-200 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '300ms' }}>
         <div className="text-xs text-gray-500 dark:text-gray-400 text-center font-medium">
           {conversations.length} {conversations.length === 1 ? "conversation" : "conversations"}
         </div>

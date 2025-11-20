@@ -10,6 +10,9 @@ import MessageList from "./MessageList";
 import InputBox from "./InputBox";
 import ChatModeSelector from "./ChatModeSelector";
 import dynamic from "next/dynamic";
+import { createLogger } from "@/lib/logger";
+
+const logger = createLogger("ChatInterface");
 
 // Dynamically import SettingsPanel for code splitting
 const SettingsPanel = dynamic(() => import("./SettingsPanel"), {
@@ -33,10 +36,10 @@ function ChatInterfaceContent() {
         // select the first one to ensure the UI shows messages
         const currentExists = conversations.some(c => c.conversation_id === currentConversationId);
         if (!currentConversationId || !currentExists) {
-          console.log("[ChatInterface] No valid conversation selected, selecting first one");
+          logger.debug("No valid conversation selected, selecting first one");
           setCurrentConversation(conversations[0].conversation_id);
         } else {
-          console.log("[ChatInterface] Current conversation is valid:", currentConversationId);
+          logger.debug("Current conversation is valid", { currentConversationId });
           // Load messages for the current conversation if not loaded
           const currentConv = conversations.find(c => c.conversation_id === currentConversationId);
           if (currentConv && (!currentConv.messages || currentConv.messages.length === 0)) {
@@ -46,7 +49,7 @@ function ChatInterfaceContent() {
         }
       }
     } catch (error) {
-      console.error("Failed to initialize chat:", error);
+      logger.error("Failed to initialize chat", error);
     } finally {
       setIsInitializing(false);
     }

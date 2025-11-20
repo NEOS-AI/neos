@@ -4,20 +4,58 @@
 
 :root {
   /* Legacy variables */
-  --background: #0F0F0F;
-  --foreground: #E5E5E5;
-  --border: #2A2A2A;
+  --background: #FAFAFA;
+  --foreground: #1A1A1A;
+  --border: #E5E5E5;
 
-  /* Claude-style design tokens */
-  --color-bg-canvas: 11 13 15;        /* #0B0D0F */
-  --color-bg-surface: 17 19 23;       /* #111317 */
-  --color-text-primary: 230 231 233;  /* #E6E7E9 */
-  --color-text-secondary: 164 168 174; /* #A4A8AE */
-  --color-text-muted: 122 127 135;    /* #7A7F87 */
-  --color-line-soft: 26 29 35;        /* #1A1D23 */
-  --color-brand-accent: 255 122 69;   /* #FF7A45 */
-  --color-chip-bg: 15 18 23;          /* #0F1217 */
-  --color-chip-line: 29 33 40;        /* #1D2128 */
+  /* Claude-style design tokens - Light Mode */
+  --color-bg-canvas: 250 250 250;      /* #FAFAFA */
+  --color-bg-surface: 255 255 255;     /* #FFFFFF */
+  --color-text-primary: 26 26 26;      /* #1A1A1A */
+  --color-text-secondary: 82 82 91;    /* #52525B */
+  --color-text-muted: 161 161 170;     /* #A1A1AA */
+  --color-line-soft: 228 228 231;      /* #E4E4E7 */
+  --color-brand-accent: 255 122 69;    /* #FF7A45 */
+  --color-chip-bg: 248 248 250;        /* #F8F8FA */
+  --color-chip-line: 228 228 231;      /* #E4E4E7 */
+}
+
+/* Dark mode optimized colors */
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Legacy variables */
+    --background: #0A0A0A;
+    --foreground: #EDEDED;
+    --border: #1F1F1F;
+
+    /* Claude-style design tokens - Dark Mode */
+    --color-bg-canvas: 10 10 10;         /* #0A0A0A - Deeper black for better contrast */
+    --color-bg-surface: 18 18 18;        /* #121212 - Slightly lighter surface */
+    --color-text-primary: 237 237 237;   /* #EDEDED - Brighter for readability */
+    --color-text-secondary: 163 163 163; /* #A3A3A3 - Better mid-tone */
+    --color-text-muted: 115 115 115;     /* #737373 - Improved muted text */
+    --color-line-soft: 31 31 31;         /* #1F1F1F - Softer borders */
+    --color-brand-accent: 255 137 87;    /* #FF8957 - Slightly brighter orange for dark mode */
+    --color-chip-bg: 20 20 20;           /* #141414 - Better chip background */
+    --color-chip-line: 38 38 38;         /* #262626 - Improved chip borders */
+  }
+}
+
+/* Explicit dark mode class support for manual theme switching */
+.dark {
+  --background: #0A0A0A;
+  --foreground: #EDEDED;
+  --border: #1F1F1F;
+
+  --color-bg-canvas: 10 10 10;
+  --color-bg-surface: 18 18 18;
+  --color-text-primary: 237 237 237;
+  --color-text-secondary: 163 163 163;
+  --color-text-muted: 115 115 115;
+  --color-line-soft: 31 31 31;
+  --color-brand-accent: 255 137 87;
+  --color-chip-bg: 20 20 20;
+  --color-chip-line: 38 38 38;
 }
 
 * {
@@ -38,6 +76,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 a {
@@ -45,10 +84,10 @@ a {
   text-decoration: none;
 }
 
-/* Scrollbar styling */
+/* Scrollbar styling - Light Mode */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -56,12 +95,32 @@ a {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2A2A2A;
-  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+  transition: background 0.2s ease;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3A3A3A;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* Scrollbar styling - Dark Mode */
+@media (prefers-color-scheme: dark) {
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.25);
+  }
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
 }
 
 /* Markdown styling */
@@ -223,4 +282,83 @@ a {
 
 .transition-smooth-slow {
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Responsive animation adjustments */
+/* Reduce motion for users who prefer it */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Optimize animations for mobile devices */
+@media (max-width: 768px) {
+  /* Reduce animation delays on mobile for faster perceived load time */
+  .animate-fade-in-up,
+  .animate-fade-in-down,
+  .animate-scale-in,
+  .animate-slide-in-left,
+  .animate-slide-in-right {
+    animation-duration: 0.3s !important;
+  }
+
+  /* Disable complex hover animations on touch devices */
+  @media (hover: none) {
+    .hover\:scale-110,
+    .hover\:scale-105,
+    .hover\:scale-\[1\.02\],
+    .hover\:scale-\[1\.03\],
+    .group-hover\:scale-110 {
+      transform: none !important;
+    }
+
+    .hover\:-translate-y-1,
+    .hover\:translate-x-2 {
+      transform: none !important;
+    }
+  }
+}
+
+/* Performance optimization for animations */
+@media (max-width: 640px) {
+  /* Reduce stagger delays on very small screens */
+  [style*="animationDelay"] {
+    animation-delay: 0ms !important;
+  }
+}
+
+/* Ensure smooth performance on all devices */
+.animate-fade-in,
+.animate-fade-in-up,
+.animate-fade-in-down,
+.animate-slide-in-left,
+.animate-slide-in-right,
+.animate-scale-in {
+  will-change: opacity, transform;
+}
+
+/* Remove will-change after animation completes to free resources */
+.animate-fade-in,
+.animate-fade-in-up,
+.animate-fade-in-down,
+.animate-slide-in-left,
+.animate-slide-in-right,
+.animate-scale-in {
+  animation-fill-mode: forwards;
+}
+
+@supports (animation-fill-mode: forwards) {
+  .animate-fade-in,
+  .animate-fade-in-up,
+  .animate-fade-in-down,
+  .animate-slide-in-left,
+  .animate-slide-in-right,
+  .animate-scale-in {
+    animation-fill-mode: forwards;
+  }
 }
