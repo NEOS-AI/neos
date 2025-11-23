@@ -129,6 +129,8 @@ class ChatAPI {
   // --------------------------------------------------------------------------
 
   async createConversation(request: CreateConversationRequest): Promise<ConversationResponse> {
+    console.log('[ChatAPI] Creating conversation with request:', request);
+
     const response = await fetch(`${this.baseUrl}/chat/conversations`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -136,7 +138,14 @@ class ChatAPI {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to create conversation: ${response.statusText}`);
+      const errorBody = await response.text();
+      console.error('[ChatAPI] Create conversation failed:', {
+        status: response.status,
+        statusText: response.statusText,
+        body: errorBody,
+        request,
+      });
+      throw new Error(`Failed to create conversation: ${response.statusText} - ${errorBody}`);
     }
 
     return response.json();

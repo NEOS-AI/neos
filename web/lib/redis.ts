@@ -50,8 +50,15 @@ export function getRedisClient(): Redis {
 
 export async function connectRedis(): Promise<void> {
   const client = getRedisClient();
-  if (client.status !== 'ready') {
+  // Only connect if the client is disconnected or ended
+  if (client.status === 'wait' || client.status === 'end' || client.status === 'close') {
     await client.connect();
+  }
+  // If already connecting or ready, wait for it to be ready
+  if (client.status === 'connecting') {
+    await new Promise<void>((resolve) => {
+      client.once('ready', () => resolve());
+    });
   }
 }
 

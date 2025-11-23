@@ -20,7 +20,7 @@ export default function Sidebar() {
   } = useChatStore();
 
   const filteredConversations = conversations.filter(conv =>
-    conv.title.toLowerCase().includes(searchQuery.toLowerCase())
+    (conv.title || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   // Update refs array when conversations change
