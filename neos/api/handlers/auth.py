@@ -4,10 +4,9 @@
 - 토큰 갱신
 - API 키 관리
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Header, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta
-from typing import Optional
 
 from neos.database.connection import get_db
 from neos.api.services.auth_service import AuthService

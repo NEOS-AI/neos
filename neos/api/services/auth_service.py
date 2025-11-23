@@ -33,6 +33,7 @@ class AuthService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+
     async def register_user(
         self,
         email: str,
@@ -89,6 +90,7 @@ class AuthService:
         await self.db.refresh(new_user)
 
         return True, "회원가입이 완료되었습니다.", new_user
+
 
     async def login_user(
         self,
@@ -201,8 +203,8 @@ class AuthService:
                 and_(
                     RefreshToken.token_hash == token_hash,
                     RefreshToken.user_id == user_id,
-                    RefreshToken.is_revoked == False,
-                    RefreshToken.is_used == False,
+                    not RefreshToken.is_revoked,
+                    not RefreshToken.is_used,
                     RefreshToken.expires_at > datetime.utcnow()
                 )
             )
@@ -400,7 +402,7 @@ class AuthService:
             select(APIKey).where(
                 and_(
                     APIKey.key_hash == key_hash,
-                    APIKey.is_active == True
+                    APIKey.is_active
                 )
             )
         )

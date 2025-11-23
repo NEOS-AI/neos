@@ -7,14 +7,10 @@
 import hashlib
 import secrets
 import re
-from passlib.context import CryptContext
+import bcrypt
 from typing import Tuple
 
 from neos.config.settings import settings
-
-
-# bcrypt 컨텍스트 설정
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def hash_password(password: str) -> str:
@@ -27,7 +23,11 @@ def hash_password(password: str) -> str:
     Returns:
         해시된 비밀번호
     """
-    return pwd_context.hash(password)
+    # bcrypt는 72 bytes까지만 지원하므로 truncate
+    password_bytes = password.encode('utf-8')[:72]
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password_bytes, salt)
+    return hashed.decode('utf-8')
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -41,7 +41,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     Returns:
         일치 여부
     """
-    return pwd_context.verify(plain_password, hashed_password)
+    # bcrypt는 72 bytes까지만 지원하므로 truncate
+    password_bytes = plain_password.encode('utf-8')[:72]
+    hashed_bytes = hashed_password.encode('utf-8')
+    return bcrypt.checkpw(password_bytes, hashed_bytes)
 
 
 def validate_password_strength(password: str) -> Tuple[bool, str]:
@@ -54,11 +57,13 @@ def validate_password_strength(password: str) -> Tuple[bool, str]:
     Returns:
         (유효성 여부, 에러 메시지)
     """
+    password_bytes = len(password.encode('utf-8'))
     if len(password) < settings.PASSWORD_MIN_LENGTH:
         return False, f"비밀번호는 최소 {settings.PASSWORD_MIN_LENGTH}자 이상이어야 합니다."
 
     # bcrypt has a 72-byte maximum password length
-    if len(password.encode('utf-8')) > settings.PASSWORD_MAX_LENGTH:
+    if password_bytes > settings.PASSWORD_MAX_LENGTH:
+        print(f"[DEBUG] Password too long: {password_bytes} bytes > {settings.PASSWORD_MAX_LENGTH} bytes")
         return False, f"비밀번호는 최대 {settings.PASSWORD_MAX_LENGTH}바이트를 초과할 수 없습니다."
 
     if settings.PASSWORD_REQUIRE_UPPERCASE and not re.search(r'[A-Z]', password):
