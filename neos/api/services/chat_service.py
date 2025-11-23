@@ -28,6 +28,7 @@ class ChatService:
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        mode: str = "standard",
         template_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
@@ -40,7 +41,8 @@ class ChatService:
                 conversation_id=conversation_id,
                 model_name=model_name,
                 system_prompt=system_prompt,
-                template_id=template_id
+                template_id=template_id,
+                mode=mode
             )
 
             # 생성된 대화 조회
@@ -69,6 +71,7 @@ class ChatService:
             "system_prompt": conversation.system_prompt,
             "temperature": conversation.temperature,
             "max_tokens": conversation.max_tokens,
+            "mode": conversation.mode,
             "status": conversation.status,
             "is_pinned": conversation.is_pinned,
             "is_shared": conversation.is_shared,

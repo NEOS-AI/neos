@@ -24,6 +24,7 @@ class Conversation:
     system_prompt: Optional[str]
     temperature: float
     max_tokens: Optional[int]
+    mode: str
     status: str
     is_pinned: bool
     is_shared: bool
@@ -127,7 +128,8 @@ class ChatRepository:
         conversation_id: str,
         model_name: str,
         system_prompt: Optional[str],
-        template_id: Optional[str]
+        template_id: Optional[str],
+        mode: str = "standard"
     ) -> str:
         """새 대화 생성 (stored procedure 호출)
 
@@ -137,12 +139,13 @@ class ChatRepository:
             model_name: 모델 이름
             system_prompt: 시스템 프롬프트
             template_id: 템플릿 ID
+            mode: 대화 모드 (standard, rag, similarity, deep_research)
 
         Returns:
             생성된 대화 ID
         """
         query = """
-        SELECT create_conversation($1, $2, $3, $4, $5)
+        SELECT create_conversation($1, $2, $3, $4, $5, $6)
         """
 
         result = await db_manager.fetch_one(
@@ -151,7 +154,8 @@ class ChatRepository:
             conversation_id,
             model_name,
             system_prompt,
-            template_id
+            template_id,
+            mode
         )
         return result[0] if result else conversation_id
 
@@ -176,6 +180,7 @@ class ChatRepository:
             system_prompt,
             temperature,
             max_tokens,
+            mode,
             status,
             is_pinned,
             is_shared,
@@ -208,19 +213,20 @@ class ChatRepository:
             system_prompt=row[6],
             temperature=float(row[7]) if row[7] is not None else 0.7,
             max_tokens=row[8],
-            status=row[9],
-            is_pinned=row[10],
-            is_shared=row[11],
-            share_token=row[12],
-            message_count=row[13],
-            total_tokens_used=row[14],
-            total_cost=float(row[15]) if row[15] is not None else 0.0,
-            last_message_at=row[16],
-            last_accessed_at=row[17],
-            created_at=row[18],
-            updated_at=row[19],
-            tags=row[20] if row[20] else [],
-            metadata=row[21] if row[21] else {}
+            mode=row[9] if row[9] else "standard",
+            status=row[10],
+            is_pinned=row[11],
+            is_shared=row[12],
+            share_token=row[13],
+            message_count=row[14],
+            total_tokens_used=row[15],
+            total_cost=float(row[16]) if row[16] is not None else 0.0,
+            last_message_at=row[17],
+            last_accessed_at=row[18],
+            created_at=row[19],
+            updated_at=row[20],
+            tags=row[21] if row[21] else [],
+            metadata=row[22] if row[22] else {}
         )
 
     @staticmethod

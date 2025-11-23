@@ -143,7 +143,7 @@ export const useChatStore = create<ChatStore>()(
         }
       },
 
-      createConversation: async (title?: string, systemPrompt?: string) => {
+      createConversation: async (title?: string, systemPrompt?: string, mode?: string) => {
         set({ isLoading: true, error: null });
 
         try {
@@ -158,6 +158,7 @@ export const useChatStore = create<ChatStore>()(
             model_name: settings.model_name,
             system_prompt: systemPrompt,
             temperature: settings.temperature,
+            mode: mode as any || settings.mode,
           });
 
           // Add to conversations list with empty messages

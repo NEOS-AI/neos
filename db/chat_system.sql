@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     system_prompt TEXT, -- 대화에 적용되는 시스템 프롬프트
     temperature FLOAT DEFAULT 0.7,
     max_tokens INTEGER,
+    mode VARCHAR(50) DEFAULT 'standard', -- 'standard', 'rag', 'similarity', 'deep_research'
 
     -- 대화 상태
     status VARCHAR(50) DEFAULT 'active', -- 'active', 'archived', 'deleted'
@@ -507,7 +508,8 @@ CREATE OR REPLACE FUNCTION create_conversation(
     p_conversation_id VARCHAR(255),
     p_model_name VARCHAR(100) DEFAULT 'claude-opus-4-1-20250805',
     p_system_prompt TEXT DEFAULT NULL,
-    p_template_id VARCHAR(255) DEFAULT NULL
+    p_template_id VARCHAR(255) DEFAULT NULL,
+    p_mode VARCHAR(50) DEFAULT 'standard'
 ) RETURNS VARCHAR(255) AS $$
 DECLARE
     v_conversation_id VARCHAR(255);
@@ -534,6 +536,7 @@ BEGIN
         model_name,
         system_prompt,
         temperature,
+        mode,
         metadata
     ) VALUES (
         p_conversation_id,
@@ -541,6 +544,7 @@ BEGIN
         COALESCE(v_template_settings->>'model', p_model_name),
         COALESCE(v_template_settings->>'system_prompt', p_system_prompt),
         COALESCE((v_template_settings->>'temperature')::FLOAT, 0.7),
+        p_mode,
         CASE
             WHEN p_template_id IS NOT NULL
             THEN jsonb_build_object('template_id', p_template_id)
