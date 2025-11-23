@@ -149,8 +149,11 @@ export const useChatStore = create<ChatStore>()(
         try {
           const { currentUserId, settings } = get();
 
+          // Ensure we have a valid user ID
+          const userId = currentUserId || getCurrentUserId();
+
           const conversationResponse = await chatAPI.createConversation({
-            user_id: currentUserId,
+            user_id: userId,
             title: title || "New Chat",
             model_name: settings.model_name,
             system_prompt: systemPrompt,
@@ -733,11 +736,13 @@ export const useChatStore = create<ChatStore>()(
         console.log("[Store] Starting deep research...");
 
         try {
+          // Ensure we have a valid user ID
+          const userId = get().currentUserId || getCurrentUserId();
+
           // Start deep research - backend will create messages
           const deepResearchResponse = await chatAPI.startDeepResearch({
-            user_id: get().currentUserId,
+            user_id: userId,
             conversation_id: conversationId,
-            initial_message_id: "",
             research_topic: content,
             session_id: `session_${Date.now()}`,
           });
