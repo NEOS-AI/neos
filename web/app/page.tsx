@@ -11,37 +11,9 @@ import Sidebar from "@/components/home/Sidebar";
 import GreetingHero from "@/components/home/GreetingHero";
 import ChatComposer from "@/components/home/ChatComposer";
 import QuickActions from "@/components/home/QuickActions";
-import ExampleCards, { ExampleCard } from "@/components/home/ExampleCards";
 import TopBar from "@/components/home/TopBar";
 import { Mode } from "@/components/home/ModeSelector";
 
-// Example cards data
-const exampleCards: ExampleCard[] = [
-  {
-    icon: Sparkles,
-    title: "Deep Research",
-    description: "Comprehensive analysis with multi-source research and detailed insights",
-    prompt: "Research the latest developments in AI safety",
-  },
-  {
-    icon: Database,
-    title: "RAG Query",
-    description: "Search through your knowledge base and previous conversations",
-    prompt: "Find relevant information from my previous conversations",
-  },
-  {
-    icon: Brain,
-    title: "Data Analysis",
-    description: "Analyze trends, patterns, and visualize complex datasets",
-    prompt: "Analyze trends in renewable energy adoption",
-  },
-  {
-    icon: Code,
-    title: "Comparative Analysis",
-    description: "Compare different options, frameworks, or solutions side by side",
-    prompt: "Compare different machine learning frameworks",
-  },
-];
 
 // Modes for the mode selector
 const modes: Mode[] = [
@@ -95,14 +67,6 @@ export default function Home() {
 
   const handleSendMessage = (message: string) => {
     handleStartNewChat(message);
-  };
-
-  const handleExampleCardClick = (card: ExampleCard) => {
-    if (card.prompt) {
-      handleStartNewChat(card.prompt);
-    } else if (card.onClick) {
-      card.onClick();
-    }
   };
 
   // Get greeting based on time of day
@@ -167,6 +131,7 @@ export default function Home() {
             </div>
 
             {/* Quick Actions */}
+            {/* TODO */}
             <div className="mt-6">
               <QuickActions
               actions={[
@@ -195,20 +160,6 @@ export default function Home() {
                   onClick: () => handleStartNewChat("Review my code"),
                 },
               ]}
-              />
-            </div>
-
-            {/* Example Cards */}
-            <div className="mt-16 space-y-6">
-              <h2 className="text-xl font-semibold text-text-primary">
-                Try these examples
-              </h2>
-              <ExampleCards
-                cards={exampleCards.map(card => ({
-                  ...card,
-                  onClick: () => handleExampleCardClick(card)
-                }))}
-                columns={2}
               />
             </div>
 
