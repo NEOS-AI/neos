@@ -254,8 +254,8 @@ async def deep_research_stream_generator(
         # Track progress by polling DB for sections
         # Use timestamp-based tracking to prevent race conditions
         processed_section_ids = set()
-        last_processed_timestamp = start_time
         start_time = datetime.now()
+        last_processed_timestamp = start_time
         last_status = "in_progress"
 
         # Maximum polling duration (from settings)

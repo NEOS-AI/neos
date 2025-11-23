@@ -12,7 +12,7 @@ const API_V1_PREFIX = "/api/v1";
 export type MessageRole = "user" | "assistant" | "system" | "function" | "tool";
 export type MessageStatus = "pending" | "streaming" | "completed" | "failed" | "cancelled" | "edited";
 export type ConversationStatus = "active" | "archived" | "deleted";
-export type ChatMode = "standard" | "rag" | "similarity";
+export type ChatMode = "standard" | "rag" | "similarity" | "deep_research";
 
 export interface CreateConversationRequest {
   user_id: string;

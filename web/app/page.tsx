@@ -20,7 +20,7 @@ const modes: Mode[] = [
   { id: "standard", label: "Standard", description: "General conversation and Q&A" },
   { id: "rag", label: "RAG", description: "Search knowledge base" },
   { id: "similarity", label: "Similarity", description: "Find similar content" },
-  { id: "deep-research", label: "Deep Research", description: "Comprehensive research" },
+  { id: "deep_research", label: "Deep Research", description: "Comprehensive research" },
 ];
 
 export default function Home() {
