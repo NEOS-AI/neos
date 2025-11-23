@@ -15,7 +15,7 @@ export function useAuthSync() {
   useEffect(() => {
     if (isAuthenticated && user) {
       // User logged in - update chat store with user ID
-      setUserId(user.id);
+      setUserId(user.user_id);
     } else {
       // User logged out - revert to anonymous
       setUserId('anonymous');
