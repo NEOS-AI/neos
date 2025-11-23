@@ -6,17 +6,18 @@ import { LogIn, UserPlus, AlertCircle } from 'lucide-react';
 
 interface LoginFormProps {
   onSuccess?: () => void;
+  initialMode?: 'login' | 'register';
 }
 
-export default function LoginForm({ onSuccess }: LoginFormProps) {
+export default function LoginForm({ onSuccess, initialMode = 'login' }: LoginFormProps) {
   const { login, register } = useAuth();
-  const [isRegistering, setIsRegistering] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(initialMode === 'register');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Form fields
-  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
 
   const handleSubmit = async (e: FormEvent) => {
@@ -26,9 +27,9 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
 
     try {
       if (isRegistering) {
-        await register(username, email, password);
+        await register(email, password, username);
       } else {
-        await login(username, password);
+        await login(email, password);
       }
 
       // Call success callback
@@ -66,36 +67,36 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
         {/* Form */}
         <div className="bg-claude-dark border border-claude-border rounded-2xl p-6 shadow-xl">
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Username */}
+            {/* Email */}
             <div>
-              <label htmlFor="username" className="block text-sm font-medium text-claude-text mb-2">
-                Username
+              <label htmlFor="email" className="block text-sm font-medium text-claude-text mb-2">
+                Email
               </label>
               <input
-                id="username"
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 className="w-full px-4 py-2.5 bg-claude-darker border border-claude-border rounded-lg text-claude-text placeholder-claude-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-                placeholder="Enter your username"
+                placeholder="Enter your email"
                 required
                 disabled={isLoading}
               />
             </div>
 
-            {/* Email (Register only) */}
+            {/* Username (Register only) */}
             {isRegistering && (
               <div>
-                <label htmlFor="email" className="block text-sm font-medium text-claude-text mb-2">
-                  Email
+                <label htmlFor="username" className="block text-sm font-medium text-claude-text mb-2">
+                  Username
                 </label>
                 <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  id="username"
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
                   className="w-full px-4 py-2.5 bg-claude-darker border border-claude-border rounded-lg text-claude-text placeholder-claude-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-                  placeholder="Enter your email"
+                  placeholder="Enter your username"
                   required
                   disabled={isLoading}
                 />
@@ -113,10 +114,11 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full px-4 py-2.5 bg-claude-darker border border-claude-border rounded-lg text-claude-text placeholder-claude-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-                placeholder={isRegistering ? 'Create a password (min 6 characters)' : 'Enter your password'}
+                placeholder={isRegistering ? 'Create a password (8-72 characters)' : 'Enter your password'}
                 required
                 disabled={isLoading}
-                minLength={isRegistering ? 6 : 4}
+                minLength={isRegistering ? 8 : 4}
+                maxLength={72}
               />
             </div>
 

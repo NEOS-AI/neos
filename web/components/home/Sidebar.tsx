@@ -2,8 +2,9 @@
 
 import { useChatStore } from "@/lib/stores/chat-store";
 import { useRouter, usePathname } from "next/navigation";
-import { MessageSquare, Plus, Trash2, Home, Search, X } from "lucide-react";
+import { MessageSquare, Plus, Trash2, Home, Search, X, LogIn, UserPlus, User, LogOut } from "lucide-react";
 import { useState, useEffect } from "react";
+import { useAuth } from "@/lib/contexts/auth-context";
 
 interface SidebarProps {
   isMobileOpen?: boolean;
@@ -14,6 +15,7 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
   const router = useRouter();
   const pathname = usePathname();
   const [searchQuery, setSearchQuery] = useState("");
+  const { user, isAuthenticated, isLoading, logout } = useAuth();
 
   // Close sidebar on route change (mobile)
   useEffect(() => {
@@ -65,7 +67,7 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
   };
 
   const filteredConversations = conversations.filter(conv =>
-    conv.title.toLowerCase().includes(searchQuery.toLowerCase())
+    (conv.title || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (
@@ -239,11 +241,82 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
         </div>
       </div>
 
-      {/* Footer */}
+      {/* Footer - Auth Section */}
       <div className="p-4 border-t border-line-soft animate-fade-in-up" style={{ animationDelay: '300ms' }}>
-        <div className="text-xs text-text-muted text-center font-medium">
-          {conversations.length} {conversations.length === 1 ? "conversation" : "conversations"}
-        </div>
+        {!isLoading && !isAuthenticated ? (
+          /* Not logged in - Show Sign In / Sign Up buttons */
+          <div className="space-y-2">
+            <button
+              onClick={() => router.push('/login')}
+              className="
+                w-full flex items-center justify-center gap-2 px-4 py-2.5
+                bg-action-hover hover:bg-chip-bg
+                text-text-primary rounded-xl
+                transition-all duration-200
+                font-medium text-sm
+                hover:shadow-md hover:scale-105 active:scale-95
+                focus:outline-none focus:ring-2 focus:ring-brand-accent/50
+              "
+            >
+              <LogIn className="w-4 h-4" />
+              <span>Sign In</span>
+            </button>
+            <button
+              onClick={() => router.push('/register')}
+              className="
+                w-full flex items-center justify-center gap-2 px-4 py-2.5
+                bg-gradient-to-br from-orange-400/10 via-amber-500/10 to-amber-600/10
+                hover:from-orange-400/20 hover:via-amber-500/20 hover:to-amber-600/20
+                text-brand-accent rounded-xl
+                transition-all duration-200
+                font-medium text-sm
+                hover:shadow-md hover:scale-105 active:scale-95
+                focus:outline-none focus:ring-2 focus:ring-brand-accent/50
+              "
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>Sign Up</span>
+            </button>
+          </div>
+        ) : isAuthenticated && user ? (
+          /* Logged in - Show user profile */
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-action-hover">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-orange-400/20 via-amber-500/20 to-amber-600/20 flex items-center justify-center text-brand-accent font-semibold text-sm">
+                {user.username?.[0]?.toUpperCase() || user.email?.[0]?.toUpperCase() || 'U'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-text-primary truncate">
+                  {user.username || user.email?.split('@')[0]}
+                </div>
+                <div className="text-xs text-text-muted truncate">
+                  {user.email}
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={async () => {
+                try {
+                  await logout();
+                  router.push('/');
+                } catch (error) {
+                  console.error('Logout failed:', error);
+                }
+              }}
+              className="
+                w-full flex items-center justify-center gap-2 px-4 py-2
+                text-text-secondary hover:text-red-400 hover:bg-red-500/10
+                rounded-xl transition-all duration-200
+                text-sm font-medium
+                hover:scale-105 active:scale-95
+                focus:outline-none focus:ring-2 focus:ring-red-500/50
+              "
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Sign Out</span>
+            </button>
+          </div>
+        ) : null}
       </div>
       </nav>
     </>

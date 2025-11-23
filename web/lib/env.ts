@@ -14,20 +14,22 @@ function validateRequiredEnvVar(name: string, value: string | undefined): string
     );
   }
 
-  // 기본값 경고
-  const dangerousDefaults = [
-    'your-secret-key-change-this',
-    'change-this',
-    'secret',
-    'password',
-    'test'
-  ];
+  // 프로덕션 환경에서만 기본값 경고
+  if (process.env.NODE_ENV === 'production') {
+    const dangerousDefaults = [
+      'your-secret-key-change-this',
+      'change-this',
+      'secret',
+      'password',
+      'test'
+    ];
 
-  if (dangerousDefaults.some(d => value.toLowerCase().includes(d))) {
-    throw new Error(
-      `❌ 환경 변수 ${name}이(가) 안전하지 않은 기본값을 사용하고 있습니다. ` +
-      `프로덕션 환경에서는 안전한 값으로 변경하세요.`
-    );
+    if (dangerousDefaults.some(d => value.toLowerCase().includes(d))) {
+      throw new Error(
+        `❌ 환경 변수 ${name}이(가) 안전하지 않은 기본값을 사용하고 있습니다. ` +
+        `프로덕션 환경에서는 안전한 값으로 변경하세요.`
+      );
+    }
   }
 
   return value;
@@ -38,8 +40,8 @@ function validateRequiredEnvVar(name: string, value: string | undefined): string
  * - CSRF 토큰 서명에도 사용
  */
 export const JWT_SECRET_KEY = validateRequiredEnvVar(
-  'JWT_SECRET_KEY',
-  process.env.JWT_SECRET_KEY
+  'NEXT_JWT_SECRET_KEY',
+  process.env.NEXT_JWT_SECRET_KEY
 );
 
 /**
@@ -70,8 +72,8 @@ export function validateEnvironment(): void {
 
   // JWT Secret 검증
   try {
-    validateRequiredEnvVar('JWT_SECRET_KEY', process.env.JWT_SECRET_KEY);
-    console.log('✅ JWT_SECRET_KEY: 설정됨');
+    validateRequiredEnvVar('NEXT_JWT_SECRET_KEY', process.env.NEXT_JWT_SECRET_KEY);
+    console.log('✅ NEXT_JWT_SECRET_KEY: 설정됨');
   } catch (error) {
     console.error(error);
     throw error;

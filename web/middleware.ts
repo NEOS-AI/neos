@@ -50,13 +50,14 @@ function addSecurityHeaders(response: NextResponse): NextResponse {
 
   // Content-Security-Policy: XSS 및 데이터 인젝션 공격 방지
   // 참고: 실제 CSP는 앱의 요구사항에 맞게 조정 필요
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BACKEND_URL || 'http://localhost:8518';
   const cspHeader = `
     default-src 'self';
     script-src 'self' 'unsafe-eval' 'unsafe-inline';
     style-src 'self' 'unsafe-inline';
     img-src 'self' data: https:;
     font-src 'self' data:;
-    connect-src 'self';
+    connect-src 'self' ${backendUrl};
     frame-ancestors 'none';
   `.replace(/\s{2,}/g, ' ').trim();
 
