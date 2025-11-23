@@ -14,12 +14,13 @@ import asyncio
 import uuid
 from datetime import datetime
 from tavily import TavilyClient
+from langchain.schema import HumanMessage
+import logging
 
 from neos.config.settings import settings
 from neos.workflow.state import SearchResult
 from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import create_tracked_llm
-from langchain.schema import HumanMessage
 
 from ...base import SearchAgent
 from ...planning_agent import PlanningAgent
@@ -48,6 +49,9 @@ from .utils import (
     FactChecker,
     BiasDetector,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class HyperDeepResearchAgent(SearchAgent):
@@ -1125,7 +1129,7 @@ class HyperDeepResearchAgent(SearchAgent):
                     # Check for rate limit response
                     if response and isinstance(response, dict):
                         if response.get("status_code") == 429:
-                            print(f"[WARNING] Rate limit hit for Tavily API")
+                            print("[WARNING] Rate limit hit for Tavily API")
                             self.research_metadata["api_rate_limit_hits"] += 1
                             await asyncio.sleep(2)  # Wait 2 seconds before retry
                             return []
