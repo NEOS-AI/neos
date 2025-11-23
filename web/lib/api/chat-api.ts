@@ -473,8 +473,8 @@ class ChatAPI {
   async startDeepResearch(request: {
     user_id: string;
     conversation_id: string;
-    initial_message_id: string;
     research_topic: string;
+    initial_message_id?: string;
     session_id?: string;
     metadata?: Record<string, any>;
   }): Promise<{
@@ -494,7 +494,14 @@ class ChatAPI {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to start deep research: ${response.statusText}`);
+      const errorBody = await response.text();
+      console.error('[ChatAPI] Start deep research failed:', {
+        status: response.status,
+        statusText: response.statusText,
+        body: errorBody,
+        request,
+      });
+      throw new Error(`Failed to start deep research: ${response.statusText} - ${errorBody}`);
     }
 
     return response.json();
