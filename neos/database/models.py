@@ -267,7 +267,7 @@ class APIKey(Base):
 
     # 메타데이터
     description = Column(Text, nullable=True)
-    metadata = Column(JSONB, default=dict)
+    key_metadata = Column(JSONB, default=dict)
 
     # 타임스탬프
     created_at = Column(TIMESTAMP, default=datetime.utcnow)

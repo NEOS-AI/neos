@@ -294,7 +294,7 @@ Consider:
 
 Respond with ONLY a number from 1-10, no explanation.
 """
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
             response = await llm_callable([HumanMessage(content=prompt)])
 
             # Extract number from response

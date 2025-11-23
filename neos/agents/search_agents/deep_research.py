@@ -2,7 +2,7 @@
 
 from typing import Dict, Any, List, TYPE_CHECKING
 from tavily import TavilyClient
-from langchain.schema import HumanMessage
+from langchain_core.messages import HumanMessage
 from datetime import datetime
 
 from neos.config.settings import settings

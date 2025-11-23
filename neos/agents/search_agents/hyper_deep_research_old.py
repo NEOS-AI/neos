@@ -356,7 +356,7 @@ class HyperDeepResearchAgent(SearchAgent):
         """연구 주제를 다차원으로 분석"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             base_llm = create_llm(temperature=0.3, max_tokens=3000)
             llm = create_tracked_llm(
@@ -509,7 +509,7 @@ Write a very detailed and structured analysis in English.""",
         """고도화된 연구 계획 수립 - 방법론, 프레임워크, 다층 전략"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             base_llm = create_llm(temperature=0.3, max_tokens=4000)
             llm = create_tracked_llm(
@@ -730,7 +730,7 @@ Write a very detailed and actionable plan in English.""",
         """멀티 쿼리 변형 생성 (20개 이상)"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             base_llm = create_llm(temperature=0.6, max_tokens=2500)
             llm = create_tracked_llm(
@@ -1006,7 +1006,7 @@ Write only the queries without numbers or category labels.""",
         """교차 검증 및 삼각측량"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             base_llm = create_llm(temperature=0.2, max_tokens=3500)
             llm = create_tracked_llm(
@@ -1138,7 +1138,7 @@ Write a detailed cross-validation report.""",
         """비판적 사고 및 다관점 분석"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             base_llm = create_llm(temperature=0.4, max_tokens=4000)
             llm = create_tracked_llm(
@@ -1468,7 +1468,7 @@ Write a detailed cross-validation report.""",
         """대규모 데이터 요약"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             base_llm = create_llm(temperature=0.2, max_tokens=2500)
             llm = create_tracked_llm(
@@ -1508,7 +1508,7 @@ Write a detailed cross-validation report.""",
         """단일 분석 라운드"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             base_llm = create_llm(temperature=0.3, max_tokens=3000)
             llm = create_tracked_llm(
@@ -1556,7 +1556,7 @@ Write a detailed cross-validation report.""",
         """분석 라운드 종합"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             base_llm = create_llm(temperature=0.2, max_tokens=3000)
             llm = create_tracked_llm(
@@ -1592,7 +1592,7 @@ Write a detailed cross-validation report.""",
         """포괄적 갭 식별"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             base_llm = create_llm(temperature=0.3, max_tokens=2000)
             llm = create_tracked_llm(
@@ -1627,7 +1627,7 @@ Write a detailed cross-validation report.""",
         """갭 특화 쿼리 생성"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             base_llm = create_llm(temperature=0.4, max_tokens=800)
             llm = create_tracked_llm(
@@ -1658,7 +1658,7 @@ Write a detailed cross-validation report.""",
         """갭 조사 요약"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             base_llm = create_llm(temperature=0.2, max_tokens=2000)
             llm = create_tracked_llm(
@@ -1695,7 +1695,7 @@ Write a detailed cross-validation report.""",
         """최종 보고서 구조 계획"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             base_llm = create_llm(temperature=0.3, max_tokens=2000)
             llm = create_tracked_llm(
@@ -1745,7 +1745,7 @@ Write a detailed cross-validation report.""",
         """최종 섹션 생성"""
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             base_llm = create_llm(temperature=0.3, max_tokens=3500)
             llm = create_tracked_llm(

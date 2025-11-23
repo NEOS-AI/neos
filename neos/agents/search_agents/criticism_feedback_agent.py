@@ -53,7 +53,7 @@ class CriticismFeedbackAgent:
         """
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             base_llm = create_llm(temperature=0.4, max_tokens=2500)
             llm = create_tracked_llm(

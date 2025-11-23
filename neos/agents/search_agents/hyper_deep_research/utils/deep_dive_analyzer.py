@@ -210,7 +210,7 @@ Examples:
 
 Select only the 3-5 most important insights."""
 
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
             response = await llm_callable([HumanMessage(content=prompt)])
 
             # Parse insights from response
@@ -374,7 +374,7 @@ Insight to Explore: {insight_summary}
 Create specific search queries approaching from different angles (academic, practical, critical perspectives).
 One query per line."""
 
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
             response = await llm_callable([HumanMessage(content=prompt)])
 
             # Parse queries from response
@@ -453,7 +453,7 @@ Collected Sources ({sample_size} of {len(sources)}):
 
 Provide a deep analysis including key findings, patterns, and areas needing further exploration."""
 
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
             response = await llm_callable([HumanMessage(content=prompt)])
 
             return response.content.strip()

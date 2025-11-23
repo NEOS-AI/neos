@@ -2,7 +2,7 @@
 
 from typing import List
 from dataclasses import dataclass
-from langchain.schema import HumanMessage
+from langchain_core.messages import HumanMessage
 
 from neos.utils.llm_factory import create_llm
 

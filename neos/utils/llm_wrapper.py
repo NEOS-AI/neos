@@ -7,8 +7,8 @@ LangChain LLM을 래핑하여 모든 호출을 자동으로 추적합니다.
 import time
 import logging
 from typing import Dict, Any, List, Optional, Union
-from langchain.schema import BaseMessage
-from langchain.schema.language_model import BaseLanguageModel
+from langchain_core.messages import BaseMessage
+from langchain_core.language_models import BaseLanguageModel
 from langchain_core.outputs import LLMResult
 
 from neos.dataset.collector import create_llm_call_record

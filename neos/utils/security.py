@@ -57,6 +57,10 @@ def validate_password_strength(password: str) -> Tuple[bool, str]:
     if len(password) < settings.PASSWORD_MIN_LENGTH:
         return False, f"비밀번호는 최소 {settings.PASSWORD_MIN_LENGTH}자 이상이어야 합니다."
 
+    # bcrypt has a 72-byte maximum password length
+    if len(password.encode('utf-8')) > settings.PASSWORD_MAX_LENGTH:
+        return False, f"비밀번호는 최대 {settings.PASSWORD_MAX_LENGTH}바이트를 초과할 수 없습니다."
+
     if settings.PASSWORD_REQUIRE_UPPERCASE and not re.search(r'[A-Z]', password):
         return False, "비밀번호에 대문자가 최소 1개 포함되어야 합니다."
 

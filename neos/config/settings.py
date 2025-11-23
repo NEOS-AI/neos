@@ -80,6 +80,7 @@ class Settings(BaseSettings):
 
     # 비밀번호 정책
     PASSWORD_MIN_LENGTH: int = 8
+    PASSWORD_MAX_LENGTH: int = 72  # bcrypt maximum
     PASSWORD_REQUIRE_UPPERCASE: bool = True
     PASSWORD_REQUIRE_LOWERCASE: bool = True
     PASSWORD_REQUIRE_DIGIT: bool = True

@@ -14,7 +14,7 @@ import asyncio
 import uuid
 from datetime import datetime
 from tavily import TavilyClient
-from langchain.schema import HumanMessage
+from langchain_core.messages import HumanMessage
 import logging
 
 from neos.config.settings import settings

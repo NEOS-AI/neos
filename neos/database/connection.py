@@ -244,3 +244,7 @@ async def get_session():
         yield session
     finally:
         await session.close()
+
+
+# Alias for compatibility with FastAPI dependency injection
+get_db = get_session

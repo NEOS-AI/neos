@@ -241,7 +241,7 @@ Format each claim on one line with type:
 
 Extract up to 5 main claims only."""
 
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
             response = await llm_callable([HumanMessage(content=prompt)])
 
             # Parse claims from response
@@ -332,7 +332,7 @@ SEVERITY: [high/medium/low]
 
 If no contradictions, write "No contradictions found"."""
 
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
             response = await llm_callable([HumanMessage(content=prompt)])
 
             # Parse contradictions

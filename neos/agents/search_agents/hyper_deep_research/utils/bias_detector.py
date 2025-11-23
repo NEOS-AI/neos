@@ -253,7 +253,7 @@ DESCRIPTION: One-line description
 
 If no bias, write "No significant bias detected"."""
 
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
             response = await llm_callable([HumanMessage(content=prompt)])
 
             # Parse bias indicators
@@ -373,7 +373,7 @@ GAPS: List missing perspectives
 
 Keep it concise."""
 
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
             response = await llm_callable([HumanMessage(content=prompt)])
 
             # Parse response

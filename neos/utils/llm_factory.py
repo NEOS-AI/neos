@@ -2,7 +2,7 @@ from typing import Optional
 from abc import ABC, abstractmethod
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
-from langchain.schema.language_model import BaseLanguageModel
+from langchain_core.language_models import BaseLanguageModel
 import logging
 
 from neos.config.settings import settings

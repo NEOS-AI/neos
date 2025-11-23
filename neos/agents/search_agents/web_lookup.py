@@ -4,7 +4,7 @@ from typing import Dict, Any, List, TYPE_CHECKING, Optional
 import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
-from langchain.schema import HumanMessage
+from langchain_core.messages import HumanMessage
 
 from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import create_tracked_llm

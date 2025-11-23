@@ -7,8 +7,8 @@ Chat LLM Service
 
 from typing import Dict, Any, List, Optional, AsyncGenerator
 import time
-from langchain.schema import HumanMessage, AIMessage, SystemMessage
-from langchain.schema.language_model import BaseLanguageModel
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.language_models import BaseLanguageModel
 
 from neos.utils.llm_factory import create_llm
 from neos.utils.cost_calculator import cost_calculator
