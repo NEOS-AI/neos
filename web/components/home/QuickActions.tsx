@@ -78,7 +78,7 @@ export default function QuickActions({ actions = defaultActions }: QuickActionsP
             style={{ animationDelay: `${idx * 50}ms` }}
             aria-label={action.description || action.label}
           >
-            <div className="p-1 rounded-lg bg-gradient-to-br from-orange-400/10 to-amber-600/10 group-hover:from-orange-400/20 group-hover:to-amber-600/20 transition-colors">
+            <div className="p-1 rounded-lg bg-gradient-to-br from-blue-700/10 to-indigo-800/10 group-hover:from-blue-700/20 group-hover:to-indigo-800/20 transition-colors">
               <Icon className="w-4 h-4 text-text-secondary group-hover:text-brand-accent transition-colors" />
             </div>
             <span className="group-hover:text-brand-accent transition-colors">{action.label}</span>
