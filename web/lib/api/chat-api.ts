@@ -50,13 +50,16 @@ export interface SendRAGMessageRequest extends SendMessageRequest {
 export interface ConversationResponse {
   conversation_id: string;
   user_id: string;
-  title: string;
+  title: string | null;
+  summary?: string | null;
   model_name: string;
-  system_prompt?: string;
+  system_prompt?: string | null;
   mode?: string;
   status: ConversationStatus;
   created_at: string;
   updated_at: string;
+  last_message_at?: string | null;
+  last_accessed_at?: string | null;
   message_count: number;
   participant_count: number;
   total_tokens: number;

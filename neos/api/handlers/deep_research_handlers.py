@@ -226,11 +226,7 @@ async def deep_research_stream_generator(
         yield f"data: {started_event.model_dump_json()}\n\n"
 
         # Update status to in_progress
-        await update_research_status(
-            report_id,
-            "in_progress",
-            started_at=datetime.now()
-        )
+        await update_research_status(report_id, "in_progress", started_at=datetime.now())
 
         # Initialize the HyperDeepResearch agent
         logger.info(f"Initializing HyperDeepResearch agent for report {report_id}")
@@ -302,6 +298,7 @@ async def deep_research_stream_generator(
                 logger.debug(f"Poll #{poll_count}: Found {len(sections_result)} new sections since last poll")
 
             # Process new sections
+            has_new_sections = False
             for section in sections_result:
                 section_id = section[0]
 
@@ -309,6 +306,8 @@ async def deep_research_stream_generator(
                 if section_id in processed_section_ids:
                     logger.debug(f"Skipping already processed section: {section_id}")
                     continue
+
+                has_new_sections = True
 
                 # Mark as processed and update timestamp
                 processed_section_ids.add(section_id)
@@ -371,26 +370,28 @@ async def deep_research_stream_generator(
                     )
                     yield f"data: {section_complete_event.model_dump_json()}\n\n"
 
-            # Get updated report status
-            report = await get_research_report(report_id)
-            if report and report["research_status"] != last_status:
-                last_status = report["research_status"]
+            # Only query report status when there are new sections or periodically (every 10 polls)
+            # This reduces DB queries from N polls to ~N/10 polls
+            if has_new_sections or poll_count % 10 == 0:
+                report = await get_research_report(report_id)
+                if report and report["research_status"] != last_status:
+                    last_status = report["research_status"]
 
-                # Send progress update
-                progress_event = DeepResearchEvent(
-                    event=DeepResearchEventType.PROGRESS_UPDATE,
-                    report_id=report_id,
-                    data=ProgressUpdateEventData(
-                        current_phase=ResearchPhase.ANALYSIS,  # Generic phase
-                        completed_sections=len(processed_section_ids),
-                        total_sections=report.get("total_sections") or 0,
-                        sources_collected=report.get("total_sources") or 0,
-                        queries_executed=report.get("total_queries") or 0,
-                        progress_percentage=min(95, (len(processed_section_ids) / max(1, report.get("total_sections") or 1)) * 100),
-                        estimated_time_remaining_seconds=0
-                    ).model_dump()
-                )
-                yield f"data: {progress_event.model_dump_json()}\n\n"
+                    # Send progress update
+                    progress_event = DeepResearchEvent(
+                        event=DeepResearchEventType.PROGRESS_UPDATE,
+                        report_id=report_id,
+                        data=ProgressUpdateEventData(
+                            current_phase=ResearchPhase.ANALYSIS,  # Generic phase
+                            completed_sections=len(processed_section_ids),
+                            total_sections=report.get("total_sections") or 0,
+                            sources_collected=report.get("total_sources") or 0,
+                            queries_executed=report.get("total_queries") or 0,
+                            progress_percentage=min(95, (len(processed_section_ids) / max(1, report.get("total_sections") or 1)) * 100),
+                            estimated_time_remaining_seconds=0
+                        ).model_dump()
+                    )
+                    yield f"data: {progress_event.model_dump_json()}\n\n"
 
             # Wait before next poll
             await asyncio.sleep(POLL_INTERVAL_SECONDS)

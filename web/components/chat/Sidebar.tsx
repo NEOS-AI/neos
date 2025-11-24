@@ -20,7 +20,7 @@ export default function Sidebar() {
   } = useChatStore();
 
   const filteredConversations = conversations.filter(conv =>
-    (conv.title || '').toLowerCase().includes(searchQuery.toLowerCase())
+    (conv.title || 'New Chat').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   // Update refs array when conversations change
@@ -211,7 +211,7 @@ export default function Sidebar() {
                     <div className={`text-sm truncate font-medium transition-colors ${
                       isActive ? "text-blue-600 dark:text-blue-400" : "text-gray-900 dark:text-gray-100"
                     }`}>
-                      {conversation.title}
+                      {conversation.title || "New Chat"}
                     </div>
                     <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                       {formatTimestamp(conversation.updated_at)} · {conversation.message_count}

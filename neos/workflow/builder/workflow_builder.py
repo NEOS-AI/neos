@@ -2,7 +2,6 @@
 
 from typing import Dict, Any, List, Optional
 import logging
-from sqlalchemy import select
 
 from neos.database.connection import db_manager
 from neos.database.workflow_models import (

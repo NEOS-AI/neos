@@ -11,8 +11,14 @@ export function cn(...inputs: ClassValue[]) {
 /**
  * Format timestamp to readable format
  */
-export function formatTimestamp(timestamp: string | Date): string {
+export function formatTimestamp(timestamp: string | Date | null | undefined): string {
+  if (!timestamp) return "Never";
+
   const date = new Date(timestamp);
+
+  // Check if date is invalid
+  if (isNaN(date.getTime())) return "Invalid date";
+
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);

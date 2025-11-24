@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     DATABASE_POOL_SIZE: int = int(env_vars.get("DATABASE_POOL_SIZE", 40))
     DATABASE_MAX_OVERFLOW: int = int(env_vars.get("DATABASE_MAX_OVERFLOW", 80))
     DATABASE_POOL_TIMEOUT: int = int(env_vars.get("DATABASE_POOL_TIMEOUT", 30))
-    DATABASE_POOL_RECYCLE: int = int(env_vars.get("DATABASE_POOL_RECYCLE", 1800))  # 30분
+    DATABASE_POOL_RECYCLE: int = int(env_vars.get("DATABASE_POOL_RECYCLE", 2400))  # 40분
 
     # Redis 설정
     REDIS_URL: str = env_vars.get("REDIS_URL", "redis://localhost:6379")
@@ -192,8 +192,8 @@ class Settings(BaseSettings):
     KG_MIN_CONFIDENCE: float = float(env_vars.get("KG_MIN_CONFIDENCE", 0.7))
 
     # Deep Research 설정
-    DEEP_RESEARCH_MAX_POLLING_DURATION: int = int(env_vars.get("DEEP_RESEARCH_MAX_POLLING_DURATION", 1800))  # 30분
-    DEEP_RESEARCH_POLL_INTERVAL: int = int(env_vars.get("DEEP_RESEARCH_POLL_INTERVAL", 2))  # 2초
+    DEEP_RESEARCH_MAX_POLLING_DURATION: int = int(env_vars.get("DEEP_RESEARCH_MAX_POLLING_DURATION", 4800))  # 80분
+    DEEP_RESEARCH_POLL_INTERVAL: int = int(env_vars.get("DEEP_RESEARCH_POLL_INTERVAL", 10))  # 10초
     DEEP_RESEARCH_DEFAULT_QUALITY_SCORE: float = float(env_vars.get("DEEP_RESEARCH_DEFAULT_QUALITY_SCORE", 0.85))
     DEEP_RESEARCH_CHUNK_SIZE: int = int(env_vars.get("DEEP_RESEARCH_CHUNK_SIZE", 200))
     DEEP_RESEARCH_MAX_SOURCES_IN_MEMORY: int = int(env_vars.get("DEEP_RESEARCH_MAX_SOURCES_IN_MEMORY", 50))

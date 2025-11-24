@@ -30,8 +30,14 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
     deleteConversation,
   } = useChatStore();
 
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString: string | null | undefined) => {
+    if (!dateString) return "Never";
+
     const date = new Date(dateString);
+
+    // Check if date is invalid
+    if (isNaN(date.getTime())) return "Invalid date";
+
     const now = new Date();
     const diff = now.getTime() - date.getTime();
     const minutes = Math.floor(diff / 60000);
@@ -67,7 +73,7 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
   };
 
   const filteredConversations = conversations.filter(conv =>
-    (conv.title || '').toLowerCase().includes(searchQuery.toLowerCase())
+    (conv.title || 'New Chat').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (
@@ -213,7 +219,7 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
                     <div className={`text-sm truncate font-medium transition-colors ${
                       isActive ? "text-brand-accent" : "text-text-primary"
                     }`}>
-                      {conversation.title}
+                      {conversation.title || "New Chat"}
                     </div>
                     <div className="text-xs text-text-muted mt-0.5">
                       {formatDate(conversation.updated_at)} · {conversation.message_count}
