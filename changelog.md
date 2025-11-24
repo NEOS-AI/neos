@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.11.0 (2025-11-23)
+- [x] Update HyperDeepResearch
+- [x] Add support for production deployment
+- [x] Add security features for user authentication and data protection
+  - [x] CSRF protection
+  - [x] BFF-based architecture
+  - [x] Rate limiting for API endpoints
+
 ## v0.10.0 (2025-11-14)
 - [x] Make the Deep Research API work with the web UI
   - [x] Allow user to call the hyper deep research workflow from the web interface
