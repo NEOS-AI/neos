@@ -13,8 +13,8 @@ const config: Config = {
         foreground: "var(--foreground)",
         border: "var(--border)",
         primary: {
-          DEFAULT: "#1E40AF",
-          hover: "#1E3A8A",
+          DEFAULT: "#050d4d",
+          hover: "#030a3a",
         },
         // Claude-style design tokens
         bg: {
@@ -73,7 +73,7 @@ const config: Config = {
       boxShadow: {
         soft: "0 4px 16px rgba(0, 0, 0, 0.12)",
         "soft-lg": "0 8px 24px rgba(0, 0, 0, 0.15)",
-        glow: "0 0 20px rgba(30, 64, 175, 0.2)",
+        glow: "0 0 20px rgba(5, 13, 77, 0.2)",
       },
       spacing: {
         18: "4.5rem",
