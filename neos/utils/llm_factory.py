@@ -49,11 +49,11 @@ class OpenAIProvider(LLMProvider):
 
 class AnthropicProvider(LLMProvider):
     """Anthropic LLM Provider"""
-    
+
     def __init__(self):
         if not settings.ANTHROPIC_API_KEY:
             raise ValueError("ANTHROPIC_API_KEY is required for Anthropic provider")
-    
+
     def create_llm(self, **kwargs) -> ChatAnthropic:
         """Anthropic LLM 생성"""
         default_params = {
@@ -63,10 +63,23 @@ class AnthropicProvider(LLMProvider):
             "max_retries": 3,
             "timeout": 60
         }
+
+        # Thinking block 제어
+        # THINKING_BLOCKS_ENABLED가 False이거나 MAX_THINKING_LENGTH가 0이면 thinking 비활성화
+        if not settings.THINKING_BLOCKS_ENABLED or settings.MAX_THINKING_LENGTH == 0:
+            # thinking block을 완전히 제거하려면 max_thinking_length를 설정하지 않음
+            # (LangChain Anthropic은 이 파라미터를 직접 지원하지 않을 수 있음)
+            # 대신 model_kwargs로 전달
+            if "model_kwargs" not in kwargs:
+                kwargs["model_kwargs"] = {}
+            # Anthropic API의 thinking 제어는 extended_thinking 파라미터로 가능
+            # 참고: Anthropic API 문서 확인 필요
+            pass  # 현재는 설정만 준비
+
         default_params.update(kwargs)
-        
+
         return ChatAnthropic(**default_params)
-    
+
     def get_provider_name(self) -> str:
         return "anthropic"
 

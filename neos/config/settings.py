@@ -203,6 +203,42 @@ class Settings(BaseSettings):
     # 환경 설정
     ENVIRONMENT: str = "development"  # development, staging, production
 
+    # 컨텍스트 최적화 설정
+    # 1. Thinking Block 관리
+    THINKING_BLOCKS_ENABLED: bool = bool(env_vars.get("THINKING_BLOCKS_ENABLED", True))  # LLM thinking block 활성화
+    MAX_THINKING_LENGTH: int = int(env_vars.get("MAX_THINKING_LENGTH", 0))  # 0 = unlimited, >0 = limit in chars
+
+    # 2. 토큰 카운팅
+    USE_TIKTOKEN: bool = bool(env_vars.get("USE_TIKTOKEN", True))  # tiktoken 사용 여부
+    TOKEN_COUNTER_MODEL: str = env_vars.get("TOKEN_COUNTER_MODEL", "gpt-4")  # tiktoken 인코더 모델
+
+    # 3. 컨텍스트 오버플로우 감지
+    CONTEXT_OVERFLOW_DETECTION: bool = bool(env_vars.get("CONTEXT_OVERFLOW_DETECTION", True))  # 오버플로우 사전 감지
+    CONTEXT_WINDOW_THRESHOLD: float = float(env_vars.get("CONTEXT_WINDOW_THRESHOLD", 0.85))  # 경고 임계값 (85%)
+    MAX_CONTEXT_TOKENS: int = int(env_vars.get("MAX_CONTEXT_TOKENS", 200000))  # Claude Sonnet 4.5 기본값
+    CONTEXT_RESERVE_TOKENS: int = int(env_vars.get("CONTEXT_RESERVE_TOKENS", 4096))  # 응답용 예비 토큰
+
+    # 4. Tool Result 요약
+    TOOL_RESULT_SUMMARIZATION: bool = bool(env_vars.get("TOOL_RESULT_SUMMARIZATION", True))  # Tool result 요약 활성화
+    TOOL_RESULT_MAX_LENGTH: int = int(env_vars.get("TOOL_RESULT_MAX_LENGTH", 500))  # Tool result 최대 길이
+    TOOL_RESULT_SUMMARIZATION_MODEL: str = env_vars.get("TOOL_RESULT_SUMMARIZATION_MODEL", "gpt-4-turbo-preview")
+
+    # 5. 메시지 압축
+    MESSAGE_COMPRESSION_ENABLED: bool = bool(env_vars.get("MESSAGE_COMPRESSION_ENABLED", True))  # 메시지 압축 활성화
+    MESSAGE_COMPRESSION_THRESHOLD: int = int(env_vars.get("MESSAGE_COMPRESSION_THRESHOLD", 30))  # N턴 이상에서 압축
+    MESSAGE_COMPRESSION_RATIO: float = float(env_vars.get("MESSAGE_COMPRESSION_RATIO", 0.5))  # 압축 비율 (50%)
+    MESSAGE_HISTORY_MAX_TOKENS: int = int(env_vars.get("MESSAGE_HISTORY_MAX_TOKENS", 50000))  # 히스토리 최대 토큰
+
+    # 6. 의미론적 중복 제거
+    SEMANTIC_DEDUPLICATION: bool = bool(env_vars.get("SEMANTIC_DEDUPLICATION", True))  # 의미 기반 중복 제거
+    SEMANTIC_SIMILARITY_THRESHOLD: float = float(env_vars.get("SEMANTIC_SIMILARITY_THRESHOLD", 0.92))  # 유사도 임계값
+
+    # 7. 워크플로우 컨텍스트 예산
+    WORKFLOW_CONTEXT_BUDGET: bool = bool(env_vars.get("WORKFLOW_CONTEXT_BUDGET", True))  # 워크플로우별 예산 할당
+    DEFAULT_WORKFLOW_TOKEN_BUDGET: int = int(env_vars.get("DEFAULT_WORKFLOW_TOKEN_BUDGET", 100000))  # 기본 토큰 예산
+    DEEP_RESEARCH_TOKEN_BUDGET: int = int(env_vars.get("DEEP_RESEARCH_TOKEN_BUDGET", 150000))  # Deep Research 예산
+    CHAT_TOKEN_BUDGET: int = int(env_vars.get("CHAT_TOKEN_BUDGET", 80000))  # 일반 채팅 예산
+
     class Config:
         env_file = ".env"
         case_sensitive = True
