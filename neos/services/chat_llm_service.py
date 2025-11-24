@@ -13,6 +13,8 @@ from langchain_core.language_models import BaseLanguageModel
 from neos.utils.llm_factory import create_llm
 from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
+from neos.services.context_optimizer import context_optimizer
+from neos.config.settings import settings
 
 logger = get_logger(__name__)
 
@@ -106,6 +108,8 @@ class ChatLLMService:
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        workflow_type: str = "chat",
+        enable_context_optimization: bool = True,
     ) -> Dict[str, Any]:
         """
         채팅 응답 생성 (비스트리밍)
@@ -127,6 +131,23 @@ class ChatLLMService:
         start_time = time.time()
 
         try:
+            # 컨텍스트 최적화
+            optimized_messages = conversation_messages
+            optimization_stats = None
+
+            if enable_context_optimization and settings.CONTEXT_OVERFLOW_DETECTION:
+                optimized_messages, optimization_stats = await context_optimizer.check_and_optimize_context(
+                    conversation_messages,
+                    workflow_type=workflow_type
+                )
+
+                if optimization_stats and optimization_stats.get("optimizations_applied"):
+                    logger.info(
+                        f"[ChatLLM] Context optimized: {optimization_stats['original_tokens']} → "
+                        f"{optimization_stats['optimized_tokens']} tokens, "
+                        f"applied: {optimization_stats['optimizations_applied']}"
+                    )
+
             # LLM 생성
             llm_params = {"model": model, "temperature": temperature}
             if max_tokens:
@@ -135,7 +156,7 @@ class ChatLLMService:
             llm = create_llm(provider=provider, **llm_params)
 
             # 메시지 구성
-            messages = self._build_messages(conversation_messages, system_prompt)
+            messages = self._build_messages(optimized_messages, system_prompt)
 
             # LLM 호출
             response = await llm.ainvoke(messages)
@@ -167,7 +188,7 @@ class ChatLLMService:
                 f"{latency_ms}ms"
             )
 
-            return {
+            result = {
                 "content": content,
                 "model_name": model,
                 "provider": provider,
@@ -176,6 +197,12 @@ class ChatLLMService:
                 "latency_ms": latency_ms,
                 "finish_reason": finish_reason,
             }
+
+            # 최적화 통계 추가
+            if optimization_stats:
+                result["context_optimization"] = optimization_stats
+
+            return result
 
         except Exception as e:
             latency_ms = int((time.time() - start_time) * 1000)
@@ -191,6 +218,8 @@ class ChatLLMService:
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        workflow_type: str = "chat",
+        enable_context_optimization: bool = True,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         채팅 응답 스트리밍 생성
@@ -211,8 +240,24 @@ class ChatLLMService:
         full_content = ""
         usage_info = None
         finish_reason_value = None
+        optimization_stats = None
 
         try:
+            # 컨텍스트 최적화
+            optimized_messages = conversation_messages
+
+            if enable_context_optimization and settings.CONTEXT_OVERFLOW_DETECTION:
+                optimized_messages, optimization_stats = await context_optimizer.check_and_optimize_context(
+                    conversation_messages,
+                    workflow_type=workflow_type
+                )
+
+                if optimization_stats and optimization_stats.get("optimizations_applied"):
+                    logger.info(
+                        f"[ChatLLM Stream] Context optimized: {optimization_stats['original_tokens']} → "
+                        f"{optimization_stats['optimized_tokens']} tokens"
+                    )
+
             # LLM 생성
             llm_params = {"model": model, "temperature": temperature, "streaming": True}
             if max_tokens:
@@ -221,7 +266,7 @@ class ChatLLMService:
             llm = create_llm(provider=provider, **llm_params)
 
             # 메시지 구성
-            messages = self._build_messages(conversation_messages, system_prompt)
+            messages = self._build_messages(optimized_messages, system_prompt)
 
             # 시작 이벤트
             yield {"type": "start", "model": model, "provider": provider}
@@ -278,7 +323,7 @@ class ChatLLMService:
             )
 
             # 완료 이벤트
-            yield {
+            complete_event = {
                 "type": "complete",
                 "full_content": full_content,
                 "usage": usage_info,
@@ -286,6 +331,12 @@ class ChatLLMService:
                 "latency_ms": latency_ms,
                 "finish_reason": finish_reason_value,
             }
+
+            # 최적화 통계 추가
+            if optimization_stats:
+                complete_event["context_optimization"] = optimization_stats
+
+            yield complete_event
 
         except Exception as e:
             logger.error(f"Stream error: {e}")
