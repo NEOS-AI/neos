@@ -194,7 +194,7 @@ export interface ChatStore {
 
   // Conversation Actions
   loadConversations: () => Promise<void>;
-  createConversation: (title?: string, systemPrompt?: string) => Promise<void>;
+  createConversation: (title?: string, systemPrompt?: string, mode?: string) => Promise<void>;
   setCurrentConversation: (conversationId: string) => void;
   updateConversationTitle: (conversationId: string, title: string) => Promise<void>;
   archiveConversation: (conversationId: string) => Promise<void>;
