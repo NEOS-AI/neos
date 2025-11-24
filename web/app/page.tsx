@@ -46,7 +46,7 @@ export default function Home() {
 
   const handleStartNewChat = useCallback(async (prompt?: string) => {
     try {
-      await createConversation();
+      await createConversation(undefined, undefined, selectedMode);
 
       // Get the newly created conversation ID from the store
       const { currentConversationId } = useChatStore.getState();
@@ -63,7 +63,7 @@ export default function Home() {
     } catch (error) {
       console.error("Failed to create conversation:", error);
     }
-  }, [createConversation, router]);
+  }, [createConversation, router, selectedMode]);
 
   const handleSendMessage = (message: string) => {
     handleStartNewChat(message);

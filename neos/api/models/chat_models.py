@@ -33,6 +33,13 @@ class ConversationStatus(str, Enum):
     DELETED = "deleted"
 
 
+class ChatMode(str, Enum):
+    STANDARD = "standard"
+    RAG = "rag"
+    SIMILARITY = "similarity"
+    DEEP_RESEARCH = "deep_research"
+
+
 # ============================================================================
 # Request Models
 # ============================================================================
@@ -44,6 +51,7 @@ class CreateConversationRequest(BaseModel):
     system_prompt: Optional[str] = Field(None, description="시스템 프롬프트")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Temperature 설정")
     max_tokens: Optional[int] = Field(None, gt=0, description="최대 토큰 수")
+    mode: ChatMode = Field(default=ChatMode.STANDARD, description="대화 모드 (standard, rag, similarity, deep_research)")
     template_id: Optional[str] = Field(None, description="템플릿 ID (선택)")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="추가 메타데이터")
 
@@ -166,6 +174,7 @@ class ConversationResponse(BaseModel):
     system_prompt: Optional[str] = None
     temperature: float
     max_tokens: Optional[int] = None
+    mode: str = "standard"
 
     # 상태
     status: ConversationStatus

@@ -53,6 +53,7 @@ async def create_conversation(request: CreateConversationRequest):
             system_prompt=request.system_prompt,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
+            mode=request.mode.value if hasattr(request.mode, 'value') else request.mode,
             template_id=request.template_id,
             metadata=request.metadata
         )

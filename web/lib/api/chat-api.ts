@@ -21,6 +21,7 @@ export interface CreateConversationRequest {
   system_prompt?: string;
   temperature?: number;
   max_tokens?: number;
+  mode?: ChatMode;
   template_id?: string;
   metadata?: Record<string, any>;
 }
@@ -52,6 +53,7 @@ export interface ConversationResponse {
   title: string;
   model_name: string;
   system_prompt?: string;
+  mode?: string;
   status: ConversationStatus;
   created_at: string;
   updated_at: string;
