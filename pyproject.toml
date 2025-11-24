@@ -55,6 +55,7 @@ dependencies = [
     "celery>=5.4.0",
     "kombu>=5.4.0",
     "pybreaker>=1.2.0",
+    "tiktoken>=0.5.0",
 ]
 
 [tool.setuptools.packages.find]
