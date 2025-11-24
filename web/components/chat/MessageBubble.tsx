@@ -38,9 +38,10 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
   const { regenerateMessage, addFeedback } = useChatStore();
 
   const isUser = message.role === "user";
-  const hasRAGContext = message.metadata?.rag_enabled || message.metadata?.rag_context;
-  const hasSimilarityContext =
-    message.metadata?.context_enhanced || message.metadata?.similarity_scores;
+  const hasRAGContext = !!(message.metadata?.rag_enabled || message.metadata?.rag_context);
+  const hasSimilarityContext = !!(
+    message.metadata?.context_enhanced || message.metadata?.similarity_scores
+  );
 
   return (
     <div

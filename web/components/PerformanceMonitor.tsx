@@ -12,11 +12,6 @@ export default function PerformanceMonitor() {
   const [isOpen, setIsOpen] = useState(false);
   const [summary, setSummary] = useState<any[]>([]);
 
-  // Only show in development
-  if (process.env.NODE_ENV !== 'development') {
-    return null;
-  }
-
   useEffect(() => {
     if (!isOpen) return;
 
@@ -28,6 +23,11 @@ export default function PerformanceMonitor() {
 
     return () => clearInterval(interval);
   }, [isOpen]);
+
+  // Only show in development
+  if (process.env.NODE_ENV !== 'development') {
+    return null;
+  }
 
   if (!isOpen) {
     return (

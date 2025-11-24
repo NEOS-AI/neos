@@ -204,6 +204,9 @@ export interface ChatStore {
   loadMessages: (conversationId: string) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   sendStreamingMessage: (content: string) => Promise<void>;
+  sendDeepResearchMessage: (content: string) => Promise<void>;
+  _sendMessageWithStreaming: (content: string) => Promise<void>;
+  _sendMessageWithoutStreaming: (content: string) => Promise<void>;
   regenerateMessage: (messageId: string) => Promise<void>;
   editMessage: (messageId: string, newContent: string) => Promise<void>;
   addFeedback: (messageId: string, feedback: "positive" | "negative" | "neutral", comment?: string) => Promise<void>;

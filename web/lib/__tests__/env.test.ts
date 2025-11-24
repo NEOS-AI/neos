@@ -2,6 +2,8 @@
  * 환경 변수 검증 테스트
  */
 
+/* eslint-disable @typescript-eslint/no-require-imports */
+
 describe('Environment Variable Validation', () => {
   const originalEnv = process.env;
 

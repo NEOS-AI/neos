@@ -86,7 +86,7 @@ export default function SimilaritySettings() {
                   type="range"
                   min="0"
                   max="100"
-                  value={settings.similarity_threshold * 100}
+                  value={(settings.similarity_threshold ?? AI_SETTINGS.SIMILARITY_THRESHOLD_LOW) * 100}
                   onChange={(e) =>
                     updateSettings({
                       similarity_threshold: parseInt(e.target.value) / 100,
@@ -95,7 +95,7 @@ export default function SimilaritySettings() {
                   className="flex-1 h-2 bg-claude-light rounded-lg appearance-none cursor-pointer accent-primary"
                 />
                 <span className="text-sm font-semibold text-primary w-12 text-center">
-                  {settings.similarity_threshold.toFixed(2)}
+                  {(settings.similarity_threshold ?? AI_SETTINGS.SIMILARITY_THRESHOLD_LOW).toFixed(2)}
                 </span>
               </div>
               <div className="flex justify-between text-xs text-claude-text-tertiary mt-1">

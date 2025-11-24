@@ -94,7 +94,7 @@ export default function ChatModeSelector() {
         {chatModes.map((mode, index) => (
           <button
             key={mode.id}
-            ref={(el) => (buttonRefs.current[index] = el)}
+            ref={(el) => { buttonRefs.current[index] = el }}
             onClick={() => setChatMode(mode.id)}
             onKeyDown={(e) => handleKeyDown(e, index)}
             className={`

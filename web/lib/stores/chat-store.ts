@@ -10,16 +10,16 @@ import type {
 } from "@/lib/types";
 import { logError, classifyError, getUserFriendlyMessage, ErrorType } from "@/lib/error-logger";
 import { AI_SETTINGS, API } from "@/lib/constants";
-import { getCurrentUser } from "@/lib/auth";
 
 const DEFAULT_USER_ID = "anonymous";
 
 /**
  * Get the current user ID from auth or fall back to anonymous
+ * Note: Returns default user ID as a synchronous fallback.
+ * The actual user ID should be set through the store's currentUserId state.
  */
 function getCurrentUserId(): string {
-  const user = getCurrentUser();
-  return user?.id || DEFAULT_USER_ID;
+  return DEFAULT_USER_ID;
 }
 
 const DEFAULT_SETTINGS: ChatSettings = {

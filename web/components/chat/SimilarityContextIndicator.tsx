@@ -6,7 +6,7 @@ import { useState } from "react";
 interface SimilarityScore {
   message_id: string;
   similarity_score: number;
-  search_type: string;
+  search_type?: string;
 }
 
 interface SimilarityContextIndicatorProps {

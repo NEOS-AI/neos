@@ -182,7 +182,7 @@ export default function Sidebar() {
               return (
                 <div
                   key={conversation.conversation_id}
-                  ref={(el) => (conversationRefs.current[index] = el)}
+                  ref={(el) => { conversationRefs.current[index] = el }}
                   role="listitem"
                   tabIndex={isActive ? 0 : -1}
                   className={`
