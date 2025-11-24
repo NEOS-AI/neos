@@ -13,7 +13,7 @@ export default function GreetingHero({
 }: GreetingHeroProps) {
   return (
     <div className="flex items-start gap-4 animate-fade-in-up">
-      <div className="flex-shrink-0 w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-400/20 via-amber-500/20 to-amber-600/20 flex items-center justify-center shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-110 animate-pulse-subtle">
+      <div className="flex-shrink-0 w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-700/20 via-slate-800/20 to-indigo-800/20 flex items-center justify-center shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-110 animate-pulse-subtle">
         <Sparkles className="w-7 h-7 text-brand-accent" />
       </div>
       <div className="flex-1 pt-1">

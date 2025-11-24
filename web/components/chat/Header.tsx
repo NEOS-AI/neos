@@ -37,7 +37,7 @@ export default function Header() {
       <div className="flex items-center gap-3 flex-1">
         {/* Logo */}
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 via-amber-500 to-yellow-500 flex items-center justify-center text-white font-bold text-base shadow-md ring-2 ring-orange-500/20">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-700 via-slate-800 to-indigo-800 flex items-center justify-center text-white font-bold text-base shadow-md ring-2 ring-blue-700/20">
             N
           </div>
           <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">NEOS</h1>
@@ -55,9 +55,9 @@ export default function Header() {
       </div>
 
       {/* AI Badge */}
-      <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-orange-500/10 to-amber-500/10 border border-orange-500/20 rounded-full">
-        <Sparkles size={14} className="text-orange-500" />
-        <span className="text-xs font-medium text-orange-600 dark:text-orange-400">AI Powered</span>
+      <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-blue-700/10 to-indigo-800/10 border border-blue-700/20 rounded-full">
+        <Sparkles size={14} className="text-blue-700 dark:text-blue-500" />
+        <span className="text-xs font-medium text-blue-700 dark:text-blue-400">AI Powered</span>
       </div>
 
       {/* User Info & Auth */}
@@ -80,7 +80,7 @@ export default function Header() {
         ) : (
           <button
             onClick={() => router.push('/login')}
-            className="px-4 py-2 bg-gradient-to-br from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white text-sm font-medium rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 shadow-md"
+            className="px-4 py-2 bg-gradient-to-br from-blue-700/10 via-slate-800/10 to-indigo-800/10 hover:from-blue-700/20 hover:via-slate-800/20 hover:to-indigo-800/20 text-brand-accent text-sm font-medium rounded-lg transition-all duration-200 hover:scale-105 active:scale-95 shadow-md"
           >
             Sign In
           </button>

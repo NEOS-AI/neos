@@ -113,7 +113,7 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
               "
               aria-label="Go to home"
             >
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-orange-400/20 via-amber-500/20 to-amber-600/20 flex items-center justify-center text-brand-accent font-bold text-sm shadow-md group-hover:shadow-lg transition-all duration-300 group-hover:animate-pulse-subtle">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-700/20 via-slate-800/20 to-indigo-800/20 flex items-center justify-center text-brand-accent font-bold text-sm shadow-md group-hover:shadow-lg transition-all duration-300 group-hover:animate-pulse-subtle">
                 N
               </div>
               <span className="text-sm font-semibold">NEOS</span>
@@ -140,8 +140,8 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
           onClick={handleNewChat}
           className="
             w-full flex items-center justify-center gap-2 px-4 py-2.5
-            bg-gradient-to-br from-orange-400/10 via-amber-500/10 to-amber-600/10
-            hover:from-orange-400/20 hover:via-amber-500/20 hover:to-amber-600/20
+            bg-gradient-to-br from-blue-700/10 via-slate-800/10 to-indigo-800/10
+            hover:from-blue-700/20 hover:via-slate-800/20 hover:to-indigo-800/20
             text-brand-accent rounded-2xl
             transition-all duration-300
             font-medium text-sm
@@ -202,7 +202,7 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
                     cursor-pointer transition-all duration-200
                     animate-fade-in-up
                     ${isActive
-                      ? "bg-gradient-to-r from-orange-400/10 to-amber-600/10 border-l-2 border-brand-accent shadow-sm"
+                      ? "bg-gradient-to-r from-blue-700/10 to-indigo-800/10 border-l-2 border-brand-accent shadow-sm"
                       : "hover:bg-action-hover border-l-2 border-transparent hover:scale-[1.02] hover:shadow-sm"
                     }
                   `}
@@ -271,8 +271,8 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
               onClick={() => router.push('/register')}
               className="
                 w-full flex items-center justify-center gap-2 px-4 py-2.5
-                bg-gradient-to-br from-orange-400/10 via-amber-500/10 to-amber-600/10
-                hover:from-orange-400/20 hover:via-amber-500/20 hover:to-amber-600/20
+                bg-gradient-to-br from-blue-700/10 via-slate-800/10 to-indigo-800/10
+                hover:from-blue-700/20 hover:via-slate-800/20 hover:to-indigo-800/20
                 text-brand-accent rounded-xl
                 transition-all duration-200
                 font-medium text-sm
@@ -288,7 +288,7 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
           /* Logged in - Show user profile */
           <div className="space-y-3">
             <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-action-hover">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-orange-400/20 via-amber-500/20 to-amber-600/20 flex items-center justify-center text-brand-accent font-semibold text-sm">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-700/20 via-slate-800/20 to-indigo-800/20 flex items-center justify-center text-brand-accent font-semibold text-sm">
                 {user.username?.[0]?.toUpperCase() || user.email?.[0]?.toUpperCase() || 'U'}
               </div>
               <div className="flex-1 min-w-0">
