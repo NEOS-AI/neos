@@ -83,6 +83,7 @@ export interface Conversation {
   title: string;
   model_name: string;
   system_prompt?: string;
+  mode?: string; // Chat mode: standard, rag, similarity, deep_research
   status: ConversationStatus;
   created_at: string;
   updated_at: string;
