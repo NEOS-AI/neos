@@ -638,10 +638,10 @@ Summary:""",
 
             import asyncio
 
-            # 최종 분석에도 타임아웃 추가 (90초)
+            # 최종 분석에도 타임아웃 추가 (180초)
             response = await asyncio.wait_for(
                 llm.ainvoke([HumanMessage(content=prompt)]),
-                timeout=90
+                timeout=180
             )
             final_analysis = response.content.strip()
 
