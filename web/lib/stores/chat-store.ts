@@ -292,6 +292,9 @@ export const useChatStore = create<ChatStore>()(
             ),
             isLoading: false,
           }));
+
+          // Check for ongoing deep research and reconnect if needed
+          await get().checkAndReconnectDeepResearch(conversationId, messages);
         } catch (error) {
           logError(error, { context: "loadMessages", conversationId });
           const errorType = classifyError(error);
@@ -935,6 +938,202 @@ export const useChatStore = create<ChatStore>()(
             isLoading: false,
           });
         }
+      },
+
+      // Check for ongoing deep research and reconnect if needed
+      checkAndReconnectDeepResearch: async (conversationId: string, messages: Message[]) => {
+        // Don't reconnect if we already have an active EventSource
+        if (get().activeEventSource) {
+          console.log("[Store] EventSource already active, skipping reconnection");
+          return;
+        }
+
+        // Find the last assistant message with deep research metadata
+        const lastAssistantMessage = [...messages]
+          .reverse()
+          .find((m) => m.role === "assistant" && m.metadata?.deep_research_report_id);
+
+        if (!lastAssistantMessage) {
+          return; // No deep research in progress
+        }
+
+        const reportId = lastAssistantMessage.metadata?.deep_research_report_id;
+        const researchStatus = lastAssistantMessage.metadata?.research_status;
+
+        console.log("[Store] Found deep research message:", {
+          reportId,
+          researchStatus,
+          messageStatus: lastAssistantMessage.status,
+        });
+
+        // Only reconnect if the research is in progress or pending
+        if (researchStatus === "in_progress" || researchStatus === "pending") {
+          try {
+            // Check the actual status from the backend
+            const report = await chatAPI.getDeepResearchReport(reportId);
+            console.log("[Store] Deep research report status:", report.research_status);
+
+            if (report.research_status === "in_progress" || report.research_status === "pending") {
+              console.log("[Store] Reconnecting to deep research stream:", reportId);
+              await get().reconnectDeepResearch(
+                conversationId,
+                reportId,
+                lastAssistantMessage.message_id,
+                lastAssistantMessage.content
+              );
+            }
+          } catch (error) {
+            console.error("[Store] Failed to check deep research status:", error);
+            // Don't throw, just log the error
+          }
+        }
+      },
+
+      // Reconnect to an existing deep research stream
+      reconnectDeepResearch: async (
+        conversationId: string,
+        reportId: string,
+        assistantMsgId: string,
+        existingContent: string
+      ) => {
+        console.log("[Store] Reconnecting to deep research:", reportId);
+
+        // Connect to SSE stream for updates
+        const eventSource = chatAPI.connectDeepResearchStream(reportId);
+        let streamContent = existingContent || `🔬 **Deep Research Report**\n\n`;
+
+        set({ activeEventSource: eventSource });
+
+        eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+
+            switch (data.event) {
+              case "phase_started":
+                streamContent += `\n**Phase:** ${data.data.message}\n`;
+                break;
+
+              case "phase_completed":
+                streamContent += `✓ ${data.data.message} (${data.data.duration_ms}ms)\n`;
+                break;
+
+              case "query_executed":
+                streamContent += `📊 Query: "${data.data.query}" (${data.data.results_count} results)\n`;
+                break;
+
+              case "progress_update":
+                streamContent += `\n**Progress:** ${data.data.progress_percentage.toFixed(1)}% - ${data.data.sources_collected} sources collected\n`;
+                break;
+
+              case "section_content":
+                streamContent += data.data.content_chunk;
+                break;
+
+              case "completed":
+                streamContent += `\n\n---\n\n✅ **Research Complete**\n`;
+                streamContent += `- Total sections: ${data.data.total_sections}\n`;
+                streamContent += `- Total sources: ${data.data.total_sources}\n`;
+                streamContent += `- Processing time: ${(data.data.processing_time_ms / 1000).toFixed(2)}s\n`;
+                eventSource.close();
+
+                set((state) => ({
+                  conversations: state.conversations.map((c) =>
+                    c.conversation_id === conversationId
+                      ? {
+                          ...c,
+                          messages: (c.messages || []).map((m) =>
+                            m.message_id === assistantMsgId
+                              ? {
+                                  ...m,
+                                  status: "completed" as const,
+                                  metadata: {
+                                    ...m.metadata,
+                                    research_status: "completed",
+                                  },
+                                }
+                              : m
+                          ),
+                        }
+                      : c
+                  ),
+                  activeEventSource: null,
+                }));
+                return;
+
+              case "failed":
+                streamContent += `\n\n❌ **Research Failed**\n${data.data.error_message}\n`;
+                eventSource.close();
+
+                set((state) => ({
+                  conversations: state.conversations.map((c) =>
+                    c.conversation_id === conversationId
+                      ? {
+                          ...c,
+                          messages: (c.messages || []).map((m) =>
+                            m.message_id === assistantMsgId
+                              ? {
+                                  ...m,
+                                  status: "failed" as const,
+                                  metadata: {
+                                    ...m.metadata,
+                                    research_status: "failed",
+                                  },
+                                }
+                              : m
+                          ),
+                        }
+                      : c
+                  ),
+                  activeEventSource: null,
+                }));
+                return;
+            }
+
+            // Update message content
+            set((state) => ({
+              conversations: state.conversations.map((c) =>
+                c.conversation_id === conversationId
+                  ? {
+                      ...c,
+                      messages: (c.messages || []).map((m) =>
+                        m.message_id === assistantMsgId
+                          ? { ...m, content: streamContent }
+                          : m
+                      ),
+                    }
+                  : c
+              ),
+            }));
+          } catch (e) {
+            console.error("[Store] Failed to parse SSE event:", e);
+          }
+        };
+
+        eventSource.onerror = (error) => {
+          console.error("[Store] SSE reconnection error:", error);
+          eventSource.close();
+
+          set((state) => ({
+            conversations: state.conversations.map((c) =>
+              c.conversation_id === conversationId
+                ? {
+                    ...c,
+                    messages: (c.messages || []).map((m) =>
+                      m.message_id === assistantMsgId
+                        ? {
+                            ...m,
+                            status: "failed" as const,
+                            content: streamContent + "\n\n❌ Connection lost",
+                          }
+                        : m
+                    ),
+                  }
+                : c
+            ),
+            activeEventSource: null,
+            error: "Deep research connection lost",
+          }));
+        };
       },
 
       /**
