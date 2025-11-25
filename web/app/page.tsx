@@ -130,39 +130,6 @@ export default function Home() {
               />
             </div>
 
-            {/* Quick Actions */}
-            {/* TODO */}
-            <div className="mt-6">
-              <QuickActions
-              actions={[
-                {
-                  icon: Sparkles,
-                  label: "Deep Research",
-                  description: "Comprehensive analysis",
-                  onClick: () => handleStartNewChat("Start deep research"),
-                },
-                {
-                  icon: Database,
-                  label: "RAG Query",
-                  description: "Search knowledge base",
-                  onClick: () => handleStartNewChat("Search my knowledge base"),
-                },
-                {
-                  icon: Brain,
-                  label: "Data Analysis",
-                  description: "Analyze data",
-                  onClick: () => handleStartNewChat("Help me analyze data"),
-                },
-                {
-                  icon: Code,
-                  label: "Code Review",
-                  description: "Review code",
-                  onClick: () => handleStartNewChat("Review my code"),
-                },
-              ]}
-              />
-            </div>
-
             {/* Recent Conversations (if any) */}
             {conversations.length > 0 && (
               <div className="mt-16 space-y-6 pt-12 border-t border-line-soft">
