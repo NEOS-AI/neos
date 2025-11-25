@@ -29,10 +29,16 @@ class ResearchPhase(str, Enum):
 
 class SectionType(str, Enum):
     """Section types"""
-    PLANNING = "planning"
-    DATA_COLLECTION = "data_collection"
-    ANALYSIS = "analysis"
-    REPORT_GENERATION = "report_generation"
+    TOPIC_ANALYSIS = "topic_analysis"
+    METHODOLOGY = "methodology"
+    INITIAL_COLLECTION = "initial_collection"
+    DEEP_ANALYSIS = "deep_analysis"
+    RECURSIVE_DEEP_DIVE = "recursive_deep_dive"
+    GAP_ANALYSIS = "gap_analysis"
+    VALIDATION = "validation"
+    FACT_VERIFICATION = "fact_verification"
+    CRITICAL_ANALYSIS = "critical_analysis"
+    BIAS_ANALYSIS = "bias_analysis"
 
 
 class SectionStatus(str, Enum):
