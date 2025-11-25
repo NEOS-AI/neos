@@ -215,12 +215,12 @@ class Settings(BaseSettings):
     # 3. 컨텍스트 오버플로우 감지
     CONTEXT_OVERFLOW_DETECTION: bool = bool(env_vars.get("CONTEXT_OVERFLOW_DETECTION", True))  # 오버플로우 사전 감지
     CONTEXT_WINDOW_THRESHOLD: float = float(env_vars.get("CONTEXT_WINDOW_THRESHOLD", 0.85))  # 경고 임계값 (85%)
-    MAX_CONTEXT_TOKENS: int = int(env_vars.get("MAX_CONTEXT_TOKENS", 200000))  # Claude Sonnet 4.5 기본값
+    MAX_CONTEXT_TOKENS: int = int(env_vars.get("MAX_CONTEXT_TOKENS", 800000))  # Claude Sonnet 4.5 기본값
     CONTEXT_RESERVE_TOKENS: int = int(env_vars.get("CONTEXT_RESERVE_TOKENS", 4096))  # 응답용 예비 토큰
 
     # 4. Tool Result 요약
     TOOL_RESULT_SUMMARIZATION: bool = bool(env_vars.get("TOOL_RESULT_SUMMARIZATION", True))  # Tool result 요약 활성화
-    TOOL_RESULT_MAX_LENGTH: int = int(env_vars.get("TOOL_RESULT_MAX_LENGTH", 500))  # Tool result 최대 길이
+    TOOL_RESULT_MAX_LENGTH: int = int(env_vars.get("TOOL_RESULT_MAX_LENGTH", 4000))  # Tool result 최대 길이
     TOOL_RESULT_SUMMARIZATION_MODEL: str = env_vars.get("TOOL_RESULT_SUMMARIZATION_MODEL", "gpt-4-turbo-preview")
 
     # 5. 메시지 압축
