@@ -292,6 +292,17 @@ export const useChatStore = create<ChatStore>()(
             ),
             isLoading: false,
           }));
+
+          // Check for streaming deep research messages and reconnect
+          const streamingDeepResearchMessages = messages.filter(
+            (m) => m.status === "streaming" && m.metadata?.deep_research_report_id
+          );
+
+          for (const message of streamingDeepResearchMessages) {
+            const reportId = message.metadata.deep_research_report_id as string;
+            console.log(`[Store] Found streaming deep research message, reconnecting to report ${reportId}`);
+            await get().reconnectDeepResearchStream(conversationId, message.message_id, reportId);
+          }
         } catch (error) {
           logError(error, { context: "loadMessages", conversationId });
           const errorType = classifyError(error);
@@ -931,6 +942,264 @@ export const useChatStore = create<ChatStore>()(
             error: error instanceof Error ? error.message : "Failed to start deep research",
             isLoading: false,
           });
+        }
+      },
+
+      // Reconnect to a deep research stream after page reload
+      reconnectDeepResearchStream: async (conversationId: string, assistantMessageId: string, reportId: string) => {
+        try {
+          console.log(`[Store] Reconnecting to deep research stream for report ${reportId}`);
+
+          // Get the current report status
+          const report = await chatAPI.getDeepResearchReport(reportId);
+
+          if (!report) {
+            console.error(`[Store] Report ${reportId} not found`);
+            return;
+          }
+
+          console.log(`[Store] Report status: ${report.research_status}`);
+
+          // Handle based on report status
+          if (report.research_status === "completed") {
+            // Report is complete, reconstruct content from sections
+            let fullContent = `🔬 **Deep Research Report: ${report.research_topic}**\n\n`;
+
+            if (report.sections && report.sections.length > 0) {
+              for (const section of report.sections) {
+                if (section.section_title) {
+                  fullContent += `\n**${section.section_title}**\n`;
+                }
+                if (section.section_content) {
+                  fullContent += section.section_content + "\n";
+                }
+              }
+            }
+
+            fullContent += `\n\n---\n\n✅ **Research Complete**\n`;
+            fullContent += `- Total sections: ${report.total_sections || report.sections?.length || 0}\n`;
+            fullContent += `- Total sources: ${report.total_sources || 0}\n`;
+            fullContent += `- Processing time: ${((report.processing_time_ms || 0) / 1000).toFixed(2)}s\n`;
+
+            // Update message with completed status and full content
+            set((state) => ({
+              conversations: state.conversations.map((c) =>
+                c.conversation_id === conversationId
+                  ? {
+                      ...c,
+                      messages: (c.messages || []).map((m) =>
+                        m.message_id === assistantMessageId
+                          ? {
+                              ...m,
+                              status: "completed" as const,
+                              content: fullContent,
+                              metadata: {
+                                ...m.metadata,
+                                research_status: "completed",
+                              },
+                            }
+                          : m
+                      ),
+                    }
+                  : c
+              ),
+            }));
+          } else if (report.research_status === "in_progress" || report.research_status === "pending") {
+            // Report is still in progress, reconnect to SSE stream
+            console.log(`[Store] Reconnecting to SSE stream for in-progress report`);
+
+            // Build content from existing sections first
+            let streamContent = `🔬 **Deep Research Report: ${report.research_topic}**\n\n`;
+
+            if (report.sections && report.sections.length > 0) {
+              for (const section of report.sections) {
+                if (section.section_title) {
+                  streamContent += `\n**${section.section_title}**\n`;
+                }
+                if (section.section_content) {
+                  streamContent += section.section_content + "\n";
+                }
+              }
+            }
+
+            streamContent += `\n**Status:** Resuming research...\n`;
+
+            // Update message with existing content
+            set((state) => ({
+              conversations: state.conversations.map((c) =>
+                c.conversation_id === conversationId
+                  ? {
+                      ...c,
+                      messages: (c.messages || []).map((m) =>
+                        m.message_id === assistantMessageId
+                          ? { ...m, content: streamContent }
+                          : m
+                      ),
+                    }
+                  : c
+              ),
+            }));
+
+            // Connect to SSE stream for new updates
+            const eventSource = chatAPI.connectDeepResearchStream(reportId);
+            set({ activeEventSource: eventSource });
+
+            eventSource.onmessage = (event) => {
+              try {
+                const data = JSON.parse(event.data);
+
+                switch (data.event) {
+                  case "phase_started":
+                    streamContent += `\n**Phase:** ${data.data.message}\n`;
+                    break;
+
+                  case "phase_completed":
+                    streamContent += `✓ ${data.data.message} (${data.data.duration_ms}ms)\n`;
+                    break;
+
+                  case "query_executed":
+                    streamContent += `📊 Query: "${data.data.query}" (${data.data.results_count} results)\n`;
+                    break;
+
+                  case "progress_update":
+                    streamContent += `\n**Progress:** ${data.data.progress_percentage.toFixed(1)}% - ${data.data.sources_collected} sources collected\n`;
+                    break;
+
+                  case "section_content":
+                    streamContent += data.data.content_chunk;
+                    break;
+
+                  case "completed":
+                    streamContent += `\n\n---\n\n✅ **Research Complete**\n`;
+                    streamContent += `- Total sections: ${data.data.total_sections}\n`;
+                    streamContent += `- Total sources: ${data.data.total_sources}\n`;
+                    streamContent += `- Processing time: ${(data.data.processing_time_ms / 1000).toFixed(2)}s\n`;
+                    eventSource.close();
+
+                    set((state) => ({
+                      conversations: state.conversations.map((c) =>
+                        c.conversation_id === conversationId
+                          ? {
+                              ...c,
+                              messages: (c.messages || []).map((m) =>
+                                m.message_id === assistantMessageId
+                                  ? {
+                                      ...m,
+                                      status: "completed" as const,
+                                      metadata: {
+                                        ...m.metadata,
+                                        research_status: "completed",
+                                      },
+                                    }
+                                  : m
+                              ),
+                            }
+                          : c
+                      ),
+                      activeEventSource: null,
+                    }));
+                    return;
+
+                  case "failed":
+                    streamContent += `\n\n❌ **Research Failed**\n${data.data.error_message}\n`;
+                    eventSource.close();
+
+                    set((state) => ({
+                      conversations: state.conversations.map((c) =>
+                        c.conversation_id === conversationId
+                          ? {
+                              ...c,
+                              messages: (c.messages || []).map((m) =>
+                                m.message_id === assistantMessageId
+                                  ? {
+                                      ...m,
+                                      status: "failed" as const,
+                                      metadata: {
+                                        ...m.metadata,
+                                        research_status: "failed",
+                                      },
+                                    }
+                                  : m
+                              ),
+                            }
+                          : c
+                      ),
+                      activeEventSource: null,
+                    }));
+                    return;
+                }
+
+                // Update message content
+                set((state) => ({
+                  conversations: state.conversations.map((c) =>
+                    c.conversation_id === conversationId
+                      ? {
+                          ...c,
+                          messages: (c.messages || []).map((m) =>
+                            m.message_id === assistantMessageId
+                              ? { ...m, content: streamContent }
+                              : m
+                          ),
+                        }
+                      : c
+                  ),
+                }));
+              } catch (e) {
+                console.error("[Store] Failed to parse SSE event:", e);
+              }
+            };
+
+            eventSource.onerror = (error) => {
+              console.error("[Store] SSE reconnection error:", error);
+              eventSource.close();
+
+              set((state) => ({
+                conversations: state.conversations.map((c) =>
+                  c.conversation_id === conversationId
+                    ? {
+                        ...c,
+                        messages: (c.messages || []).map((m) =>
+                          m.message_id === assistantMessageId
+                            ? {
+                                ...m,
+                                status: "failed" as const,
+                                content: streamContent + "\n\n❌ Connection lost",
+                              }
+                            : m
+                        ),
+                      }
+                    : c
+                ),
+                activeEventSource: null,
+              }));
+            };
+          } else if (report.research_status === "failed") {
+            // Report failed, update message status
+            set((state) => ({
+              conversations: state.conversations.map((c) =>
+                c.conversation_id === conversationId
+                  ? {
+                      ...c,
+                      messages: (c.messages || []).map((m) =>
+                        m.message_id === assistantMessageId
+                          ? {
+                              ...m,
+                              status: "failed" as const,
+                              content: m.content + "\n\n❌ **Research Failed**",
+                              metadata: {
+                                ...m.metadata,
+                                research_status: "failed",
+                              },
+                            }
+                          : m
+                      ),
+                    }
+                  : c
+              ),
+            }));
+          }
+        } catch (error) {
+          console.error("[Store] Failed to reconnect to deep research stream:", error);
         }
       },
 
