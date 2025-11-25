@@ -18,7 +18,7 @@ export default function MessageAvatar({ isUser }: MessageAvatarProps) {
   }
 
   return (
-    <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 via-amber-500 to-yellow-500 flex items-center justify-center text-white font-bold text-base shadow-md ring-2 ring-orange-500/20 transition-transform hover:scale-105">
+    <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-700 via-slate-800 to-indigo-800 flex items-center justify-center text-white font-bold text-base shadow-md ring-2 ring-blue-700/20 transition-transform hover:scale-105">
       N
     </div>
   );

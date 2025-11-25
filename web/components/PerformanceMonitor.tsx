@@ -33,7 +33,7 @@ export default function PerformanceMonitor() {
     return (
       <button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-4 right-4 p-3 bg-orange-500 hover:bg-orange-600 text-white rounded-full shadow-lg transition-colors z-50"
+        className="fixed bottom-4 right-4 p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-lg transition-colors z-50"
         title="Open Performance Monitor"
         aria-label="Open Performance Monitor"
       >
@@ -47,7 +47,7 @@ export default function PerformanceMonitor() {
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-700">
         <div className="flex items-center gap-2">
-          <Activity className="w-5 h-5 text-orange-400" />
+          <Activity className="w-5 h-5 text-blue-400" />
           <h3 className="text-sm font-semibold text-white">Performance Monitor</h3>
         </div>
         <button
@@ -81,7 +81,7 @@ export default function PerformanceMonitor() {
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <div>
                     <span className="text-gray-400">Avg:</span>
-                    <span className="ml-1 text-orange-400 font-mono">
+                    <span className="ml-1 text-blue-400 font-mono">
                       {metric.avg.toFixed(2)}ms
                     </span>
                   </div>
