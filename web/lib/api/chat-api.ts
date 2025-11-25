@@ -136,6 +136,11 @@ class ChatAPI {
   async createConversation(request: CreateConversationRequest): Promise<ConversationResponse> {
     console.log('[ChatAPI] Creating conversation with request:', request);
 
+    const {mode} = request;
+    if (mode) {
+      //TODO
+    }
+
     const response = await fetch(`${this.baseUrl}/chat/conversations`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
