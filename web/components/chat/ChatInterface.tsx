@@ -21,7 +21,7 @@ const SettingsPanel = dynamic(() => import("./SettingsPanel"), {
 });
 
 function ChatInterfaceContent() {
-  const { loadConversations } = useChatStore();
+  const { loadConversations, cleanupEventSource } = useChatStore();
   const [isInitializing, setIsInitializing] = useState(true);
 
   const initialize = useCallback(async () => {
@@ -57,7 +57,13 @@ function ChatInterfaceContent() {
 
   useEffect(() => {
     initialize();
-  }, [initialize]);
+
+    // Cleanup on unmount: close any active EventSource connections
+    return () => {
+      logger.debug("ChatInterface unmounting, cleaning up EventSource");
+      cleanupEventSource();
+    };
+  }, [initialize, cleanupEventSource]);
 
   if (isInitializing) {
     return <PageLoading />;
