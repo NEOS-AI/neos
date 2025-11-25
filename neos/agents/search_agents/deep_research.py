@@ -298,7 +298,7 @@ Report Structure:
 
 
     async def _run_deep_research(self, query: str, session_id: str, user_id: str, context: Dict[str, Any]) -> str:
-        """4단계 심층 조사 프로세스"""
+        """N단계 심층 조사 프로세스 (동적 phase 수)"""
         print("[INFO] ==================== Deep Research Process Started ====================")
 
         # Get detected language
@@ -318,93 +318,56 @@ Report Structure:
 
         all_search_results = []
         all_summaries = []
+        total_queries = 0
 
-        # Phase 1: 초기 탐색 (광범위한 검색)
-        if research_plan and len(research_plan) > 0:
-            self.planning_agent.update_task_status(research_plan, 1, "in_progress")
+        # Execute each task in the research plan dynamically
+        for i, task in enumerate(research_plan, 1):
+            # Update task status to in_progress
+            self.planning_agent.update_task_status(research_plan, task.id, "in_progress")
             print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
 
-        print("[INFO] Phase 1/4: Initial Exploration - Broad search across multiple perspectives")
-        phase1_queries = await self._generate_initial_queries(query, session_id, user_id, detected_language)
-        phase1_results = await self._execute_parallel_searches(phase1_queries)
-        all_search_results.extend(phase1_results)
+            print(f"[INFO] Phase {i}/{len(research_plan)}: {task.description}")
 
-        phase1_summaries = await self._summarize_results_batch(phase1_queries, phase1_results, session_id, user_id, detected_language)
-        all_summaries.extend(phase1_summaries)
+            # Generate queries for this task
+            task_queries = await self._generate_task_queries(query, task.description, session_id, user_id, detected_language)
+            total_queries += len(task_queries)
 
-        # 체크포인트 저장
-        await self._save_checkpoint("phase1", {
-            "queries": phase1_queries,
-            "sources_count": sum(len(r) for r in phase1_results),
-            "summaries": phase1_summaries
-        })
+            # Execute searches
+            task_results = await self._execute_parallel_searches(task_queries)
+            all_search_results.extend(task_results)
 
-        # Mark Phase 1 complete
-        if research_plan and len(research_plan) > 0:
+            # Summarize results
+            task_summaries = await self._summarize_results_batch(task_queries, task_results, session_id, user_id, detected_language)
+            all_summaries.extend(task_summaries)
+
+            # Save checkpoint
+            await self._save_checkpoint(f"phase{i}", {
+                "task_id": task.id,
+                "task_description": task.description,
+                "queries": task_queries,
+                "sources_count": sum(len(r) for r in task_results),
+                "summaries": task_summaries
+            })
+
+            # Mark task as completed
+            sources_collected = sum(len(r) for r in task_results)
             self.planning_agent.update_task_status(
-                research_plan, 1, "completed",
-                result=f"Explored {len(phase1_queries)} queries, collected {sum(len(r) for r in phase1_results)} sources"
+                research_plan, task.id, "completed",
+                result=f"Explored {len(task_queries)} queries, collected {sources_collected} sources"
             )
             print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
 
-        # Phase 2: Gap 분석 및 심화 탐색
-        if research_plan and len(research_plan) > 1:
-            self.planning_agent.update_task_status(research_plan, 2, "in_progress")
-            print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
-
-        print("[INFO] Phase 2/4: Gap Analysis - Identifying and filling knowledge gaps")
-        gaps = await self._identify_gaps(query, all_summaries, session_id, user_id, detected_language)
-        phase2_queries = await self._generate_targeted_queries(gaps, session_id, user_id, detected_language)
-        phase2_results = await self._execute_parallel_searches(phase2_queries)
-        all_search_results.extend(phase2_results)
-
-        phase2_summaries = await self._summarize_results_batch(phase2_queries, phase2_results, session_id, user_id, detected_language)
-        all_summaries.extend(phase2_summaries)
-
-        # 체크포인트 저장
-        await self._save_checkpoint("phase2", {
-            "gaps": gaps,
-            "queries": phase2_queries,
-            "sources_count": sum(len(r) for r in phase2_results),
-            "summaries": phase2_summaries
-        })
-
-        # Mark Phase 2 complete
-        if research_plan and len(research_plan) > 1:
-            self.planning_agent.update_task_status(
-                research_plan, 2, "completed",
-                result=f"Filled {len(gaps)} gaps with {len(phase2_queries)} targeted queries"
-            )
-            print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
-
-        # Phase 3: 크로스 레퍼런스 및 검증
-        if research_plan and len(research_plan) > 2:
-            self.planning_agent.update_task_status(research_plan, 3, "in_progress")
-            print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
-
-        print("[INFO] Phase 3/4: Verification - Cross-referencing and fact-checking")
+        # Verification phase (after all tasks completed)
+        print(f"[INFO] Verification Phase: Cross-referencing and fact-checking")
         verification_insights = await self._cross_reference_sources(all_summaries, session_id, user_id, detected_language)
 
-        # 체크포인트 저장
-        await self._save_checkpoint("phase3", {
+        await self._save_checkpoint("verification", {
             "verification_insights": verification_insights,
             "total_sources": sum(len(r) for r in all_search_results)
         })
 
-        # Mark Phase 3 complete
-        if research_plan and len(research_plan) > 2:
-            self.planning_agent.update_task_status(
-                research_plan, 3, "completed",
-                result=f"Verified information from {sum(len(r) for r in all_search_results)} sources"
-            )
-            print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
-
-        # Phase 4: 종합 리포트 생성
-        if research_plan and len(research_plan) > 3:
-            self.planning_agent.update_task_status(research_plan, 4, "in_progress")
-            print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
-
-        print("[INFO] Phase 4/4: Report Generation - Synthesizing comprehensive report")
+        # Final report generation
+        print(f"[INFO] Final Phase: Report Generation - Synthesizing comprehensive report")
         final_report = await self._generate_comprehensive_report(
             query,
             all_summaries,
@@ -415,26 +378,114 @@ Report Structure:
             context
         )
 
-        # 체크포인트 저장
-        await self._save_checkpoint("phase4", {
+        await self._save_checkpoint("report", {
             "report_length": len(final_report),
-            "total_phases": 4
+            "total_phases": len(research_plan)
         })
 
-        # Mark Phase 4 complete
-        if research_plan and len(research_plan) > 3:
-            self.planning_agent.update_task_status(
-                research_plan, 4, "completed",
-                result=f"Generated comprehensive report ({len(final_report)} characters)"
-            )
-            print(f"[INFO] Final plan:\n{self.planning_agent.get_task_summary(research_plan)}")
-
         print("[INFO] ==================== Deep Research Completed ====================")
+        print(f"[INFO] Total Phases: {len(research_plan)}")
         print(f"[INFO] Total Sources: {sum(len(r) for r in all_search_results)}")
-        print(f"[INFO] Total Queries: {len(phase1_queries) + len(phase2_queries)}")
+        print(f"[INFO] Total Queries: {total_queries}")
         print(f"[INFO] Report Length: {len(final_report)} characters")
 
         return final_report
+
+
+    async def _generate_task_queries(self, original_query: str, task_description: str, session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
+        """특정 task에 대한 검색 쿼리 생성 (3-5개)"""
+        try:
+            base_llm = create_llm(temperature=0.4, max_tokens=1500)
+
+            llm = create_tracked_llm(
+                llm=base_llm,
+                session_id=session_id,
+                user_id=user_id,
+                workflow_step="deep_research",
+                agent_name=self.name,
+                tags=["task_query_generation", f"language:{detected_language}"]
+            )
+
+            # Language-specific prompts
+            prompts = {
+                "ko": f"""원래 질문: {original_query}
+작업(Task): {task_description}
+
+위 작업을 수행하기 위한 구체적인 검색 쿼리를 3-5개 **한국어로** 생성해주세요.
+
+요구사항:
+1. 작업 내용에 집중하여 쿼리를 생성하세요
+2. 각 쿼리는 서로 다른 측면이나 세부 사항을 다뤄야 합니다
+3. 구체적이고 검색 가능한 쿼리로 작성
+4. 각 쿼리는 한 줄로 작성
+
+검색 쿼리:""",
+
+                "en": f"""Original Question: {original_query}
+Task: {task_description}
+
+Generate 3-5 specific search queries **in English** to perform the above task.
+
+Requirements:
+1. Focus on the task content when generating queries
+2. Each query should cover different aspects or details
+3. Write specific and searchable queries
+4. Write each query on a single line
+
+Search Queries:""",
+
+                "ja": f"""元の質問: {original_query}
+タスク: {task_description}
+
+上記のタスクを実行するための具体的な検索クエリを3-5個**日本語で**生成してください。
+
+要件:
+1. タスク内容に焦点を当ててクエリを生成してください
+2. 各クエリは異なる側面や詳細をカバーする必要があります
+3. 具体的で検索可能なクエリを作成してください
+4. 各クエリは1行で記述してください
+
+検索クエリ:""",
+
+                "zh": f"""原始问题: {original_query}
+任务: {task_description}
+
+生成3-5个具体的搜索查询（**用中文**）以执行上述任务。
+
+要求:
+1. 生成查询时专注于任务内容
+2. 每个查询应涵盖不同的方面或细节
+3. 编写具体且可搜索的查询
+4. 每个查询写在一行
+
+搜索查询:"""
+            }
+
+            prompt = prompts.get(detected_language, prompts["en"])
+
+            response = await llm.ainvoke([HumanMessage(content=prompt)])
+            query_text = response.content.strip()
+
+            # 쿼리 파싱
+            queries = [q.strip() for q in query_text.split('\n') if q.strip() and not q.strip().startswith('#')]
+            queries = queries[:5]  # 최대 5개
+
+            # 최소 3개 보장
+            if len(queries) < 3:
+                queries.extend([
+                    f"{task_description} {original_query}",
+                    f"{original_query} {task_description}",
+                    f"detailed analysis {task_description}"
+                ])
+                queries = queries[:5]
+
+            print(f"[DEBUG] Generated {len(queries)} queries for task: {task_description[:50]}")
+            return queries
+
+        except Exception as e:
+            print(f"[ERROR] Failed to generate task queries: {e}")
+            # Fallback: combine task description with original query
+            return [f"{task_description} {original_query}"]
 
 
     async def _generate_initial_queries(self, original_query: str, session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
