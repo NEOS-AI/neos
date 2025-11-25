@@ -129,6 +129,7 @@ class DeepResearchEventType(str, Enum):
     SECTION_CONTENT = "section_content"
     QUERY_EXECUTED = "query_executed"
     PROGRESS_UPDATE = "progress_update"
+    HEARTBEAT = "heartbeat"
     ERROR = "error"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -199,6 +200,12 @@ class ProgressUpdateEventData(BaseModel):
     queries_executed: int = Field(..., description="Queries executed")
     progress_percentage: float = Field(..., description="Progress percentage (0-100)")
     estimated_time_remaining_seconds: Optional[int] = Field(None, description="Estimated time remaining")
+
+
+class HeartbeatEventData(BaseModel):
+    """Heartbeat event data to keep connection alive"""
+    status: str = Field(default="active", description="Research status")
+    uptime_seconds: int = Field(..., description="Uptime in seconds")
 
 
 class CompletedEventData(BaseModel):

@@ -22,6 +22,7 @@ from neos.api.models.deep_research_models import (
     SectionContentEventData,
     QueryExecutedEventData,
     ProgressUpdateEventData,
+    HeartbeatEventData,
     CompletedEventData,
     ErrorEventData,
     ResearchPhase,
@@ -392,6 +393,19 @@ async def deep_research_stream_generator(
                         ).model_dump()
                     )
                     yield f"data: {progress_event.model_dump_json()}\n\n"
+
+            # Send heartbeat every poll to keep connection alive
+            # This prevents proxies/firewalls from closing idle connections
+            uptime = int((datetime.now() - start_time).total_seconds())
+            heartbeat_event = DeepResearchEvent(
+                event=DeepResearchEventType.HEARTBEAT,
+                report_id=report_id,
+                data=HeartbeatEventData(
+                    status="active",
+                    uptime_seconds=uptime
+                ).model_dump()
+            )
+            yield f"data: {heartbeat_event.model_dump_json()}\n\n"
 
             # Wait before next poll
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
