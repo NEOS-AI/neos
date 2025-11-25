@@ -1,6 +1,6 @@
 """HyperDeepResearch Agent - 극도로 고도화된 딥리서치 시스템"""
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Union
 import asyncio
 import uuid
 from datetime import datetime
@@ -15,6 +15,32 @@ from ..base import SearchAgent
 from ..planning_agent import PlanningAgent
 from .multi_query_search import MultiQuerySearchAgent
 from .criticism_feedback_agent import CriticismFeedbackAgent
+
+
+def sanitize_for_postgres(data: Any) -> Any:
+    """Remove null characters that PostgreSQL cannot handle.
+
+    PostgreSQL TEXT and JSONB fields cannot store the null character (\u0000).
+    This function recursively removes null characters from strings in any data structure.
+
+    Args:
+        data: Data to sanitize (can be str, dict, list, or primitive types)
+
+    Returns:
+        Sanitized data with null characters removed from all strings
+    """
+    if isinstance(data, str):
+        # Remove null characters from string
+        return data.replace('\x00', '').replace('\u0000', '')
+    elif isinstance(data, dict):
+        # Recursively sanitize dictionary values
+        return {key: sanitize_for_postgres(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        # Recursively sanitize list items
+        return [sanitize_for_postgres(item) for item in data]
+    else:
+        # Return primitive types as-is
+        return data
 
 
 class HyperDeepResearchAgent(SearchAgent):
@@ -2009,9 +2035,12 @@ Write a detailed cross-validation report.""",
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             """
             import json
+            # Sanitize data to remove null characters
+            sanitized_query_text = sanitize_for_postgres(query_text)
+            sanitized_results = sanitize_for_postgres(results[:5])
             await db_manager.execute(
-                query, collection_id, self.current_report_id, query_text, query_type,
-                phase, len(results), json.dumps(results[:5])
+                query, collection_id, self.current_report_id, sanitized_query_text, query_type,
+                phase, len(results), json.dumps(sanitized_results)
             )
         except Exception as e:
             print(f"[ERROR] Failed to record data collection: {e}")
