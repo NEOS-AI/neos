@@ -9,7 +9,7 @@ NEOS의 멀티모달 파이프라인에 GPT-4o와 Claude Vision이 통합되어 
 | 모델 | 프로바이더 | 특징 |
 |-----|-----------|------|
 | **GPT-4o** | OpenAI | 뛰어난 OCR, 객체 인식, 빠른 응답 |
-| **Claude 3.5 Sonnet** | Anthropic | 높은 이해도, 상세한 설명, 맥락 파악 |
+| **Claude 4.5 Sonnet** | Anthropic | 높은 이해도, 상세한 설명, 맥락 파악 |
 
 ### 주요 기능
 
@@ -153,7 +153,7 @@ print(f"Confidence: {result['confidence']}")
 
 - **`auto`**: LLM_PROVIDER 설정에 따라 자동 선택
 - **`gpt4o`**: GPT-4o 사용 (OPENAI_API_KEY 필요)
-- **`claude`**: Claude 3.5 Sonnet 사용 (ANTHROPIC_API_KEY 필요)
+- **`claude`**: Claude 4.5 Sonnet 사용 (ANTHROPIC_API_KEY 필요)
 
 ### VISION_IMAGE_DETAIL 옵션 (GPT-4o)
 

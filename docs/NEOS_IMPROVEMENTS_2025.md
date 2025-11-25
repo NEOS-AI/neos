@@ -69,7 +69,7 @@ CIRCUIT_BREAKER_RECOVERY_TIMEOUT=60  # 복구 시도 간격 (초)
 - **pool_size**: 10 → **40** (400% 증가)
 - **max_overflow**: 20 → **80** (400% 증가)
 - **pool_timeout**: 신규 추가 (30초)
-- **pool_recycle**: 신규 추가 (1800초 = 30분)
+- **pool_recycle**: 신규 추가 (2400초 = 40분)
 - 연결 풀 이벤트 리스너 추가
 - 연결 풀 상태 모니터링 메소드 추가
 - 준비된 구문 캐싱 활성화 (PostgreSQL)
@@ -322,7 +322,7 @@ pip install pybreaker>=1.2.0
 DATABASE_POOL_SIZE=40
 DATABASE_MAX_OVERFLOW=80
 DATABASE_POOL_TIMEOUT=30
-DATABASE_POOL_RECYCLE=1800
+DATABASE_POOL_RECYCLE=2400
 
 # Redis 연결 풀
 REDIS_POOL_SIZE=50

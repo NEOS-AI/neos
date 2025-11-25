@@ -20,7 +20,7 @@ NEOS의 멀티모달 API는 이미지, 문서, 오디오 등 다양한 파일과
 ### 지원하는 Vision 모델
 
 - **GPT-4o Vision** (OpenAI)
-- **Claude 3.5 Sonnet Vision** (Anthropic)
+- **Claude 4.5 Sonnet Vision** (Anthropic)
 
 ### 주요 기능
 

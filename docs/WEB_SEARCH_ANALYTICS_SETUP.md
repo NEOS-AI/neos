@@ -67,7 +67,7 @@ app.include_router(analytics_router)
 
 ```bash
 # uvicorn 사용
-uvicorn neos.main:app --reload --port 8000
+uvicorn neos.main:app --reload --port 8518
 
 # 또는 프로젝트 방식대로
 python -m neos.main
@@ -78,43 +78,43 @@ python -m neos.main
 #### 인기 검색어 조회 (기본 - 7일)
 
 ```bash
-curl "http://localhost:8000/api/v1/analytics/web-search/popular-queries"
+curl "http://localhost:8518/api/v1/analytics/web-search/popular-queries"
 ```
 
 #### 특정 엔진의 30일간 인기 검색어
 
 ```bash
-curl "http://localhost:8000/api/v1/analytics/web-search/popular-queries?period=30d&engine_name=tavily&limit=20"
+curl "http://localhost:8518/api/v1/analytics/web-search/popular-queries?period=30d&engine_name=tavily&limit=20"
 ```
 
 #### 검색 엔진별 통계
 
 ```bash
-curl "http://localhost:8000/api/v1/analytics/web-search/engine-statistics?period=7d"
+curl "http://localhost:8518/api/v1/analytics/web-search/engine-statistics?period=7d"
 ```
 
 #### 일별 트렌드
 
 ```bash
-curl "http://localhost:8000/api/v1/analytics/web-search/trends?period=30d&interval=day"
+curl "http://localhost:8518/api/v1/analytics/web-search/trends?period=30d&interval=day"
 ```
 
 #### 시간별 트렌드 (특정 엔진)
 
 ```bash
-curl "http://localhost:8000/api/v1/analytics/web-search/trends?period=7d&interval=hour&engine_name=tavily"
+curl "http://localhost:8518/api/v1/analytics/web-search/trends?period=7d&interval=hour&engine_name=tavily"
 ```
 
 #### 분석 요약
 
 ```bash
-curl "http://localhost:8000/api/v1/analytics/web-search/summary?period=7d"
+curl "http://localhost:8518/api/v1/analytics/web-search/summary?period=7d"
 ```
 
 #### 종합 분석 (한 번에 모든 데이터)
 
 ```bash
-curl "http://localhost:8000/api/v1/analytics/web-search/comprehensive?period=7d"
+curl "http://localhost:8518/api/v1/analytics/web-search/comprehensive?period=7d"
 ```
 
 ## Python에서 직접 사용
@@ -441,13 +441,13 @@ schedule.every().monday.at("09:00").do(generate_weekly_report)
 서버 실행 후 다음 URL에서 자동 생성된 API 문서를 확인할 수 있습니다:
 
 ```
-http://localhost:8000/docs
+http://localhost:8518/docs
 ```
 
 또는 ReDoc:
 
 ```
-http://localhost:8000/redoc
+http://localhost:8518/redoc
 ```
 
 ## 참고 자료

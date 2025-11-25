@@ -53,10 +53,10 @@ GET /api/v1/analytics/web-search/popular-queries
 
 ```bash
 # 기본 조회
-curl -X GET "http://localhost:8000/api/v1/analytics/web-search/popular-queries"
+curl -X GET "http://localhost:8518/api/v1/analytics/web-search/popular-queries"
 
 # 특정 엔진의 30일간 인기 쿼리
-curl -X GET "http://localhost:8000/api/v1/analytics/web-search/popular-queries?period=30d&engine_name=tavily&limit=20"
+curl -X GET "http://localhost:8518/api/v1/analytics/web-search/popular-queries?period=30d&engine_name=tavily&limit=20"
 ```
 
 ---
@@ -101,7 +101,7 @@ GET /api/v1/analytics/web-search/engine-statistics
 #### cURL 예시
 
 ```bash
-curl -X GET "http://localhost:8000/api/v1/analytics/web-search/engine-statistics?period=30d"
+curl -X GET "http://localhost:8518/api/v1/analytics/web-search/engine-statistics?period=30d"
 ```
 
 ---
@@ -145,10 +145,10 @@ GET /api/v1/analytics/web-search/trends
 
 ```bash
 # 일별 트렌드
-curl -X GET "http://localhost:8000/api/v1/analytics/web-search/trends?period=30d&interval=day"
+curl -X GET "http://localhost:8518/api/v1/analytics/web-search/trends?period=30d&interval=day"
 
 # 시간별 트렌드 (특정 엔진)
-curl -X GET "http://localhost:8000/api/v1/analytics/web-search/trends?period=7d&interval=hour&engine_name=tavily"
+curl -X GET "http://localhost:8518/api/v1/analytics/web-search/trends?period=7d&interval=hour&engine_name=tavily"
 ```
 
 ---
@@ -203,13 +203,13 @@ GET /api/v1/analytics/web-search/monthly-statistics
 
 ```bash
 # 일일 통계
-curl -X GET "http://localhost:8000/api/v1/analytics/web-search/daily-statistics?limit=30"
+curl -X GET "http://localhost:8518/api/v1/analytics/web-search/daily-statistics?limit=30"
 
 # 주간 통계 (특정 엔진)
-curl -X GET "http://localhost:8000/api/v1/analytics/web-search/weekly-statistics?engine_name=tavily&limit=12"
+curl -X GET "http://localhost:8518/api/v1/analytics/web-search/weekly-statistics?engine_name=tavily&limit=12"
 
 # 월간 통계
-curl -X GET "http://localhost:8000/api/v1/analytics/web-search/monthly-statistics?limit=12"
+curl -X GET "http://localhost:8518/api/v1/analytics/web-search/monthly-statistics?limit=12"
 ```
 
 ---
@@ -286,7 +286,7 @@ GET /api/v1/analytics/web-search/user/{user_id}/patterns
 #### cURL 예시
 
 ```bash
-curl -X GET "http://localhost:8000/api/v1/analytics/web-search/user/user123/patterns?period=30d"
+curl -X GET "http://localhost:8518/api/v1/analytics/web-search/user/user123/patterns?period=30d"
 ```
 
 ---
@@ -401,7 +401,7 @@ GET /api/v1/analytics/web-search/health
 ```python
 import requests
 
-BASE_URL = "http://localhost:8000/api/v1/analytics/web-search"
+BASE_URL = "http://localhost:8518/api/v1/analytics/web-search"
 
 # 인기 검색어 조회
 response = requests.get(
@@ -435,7 +435,7 @@ trends = response.json()
 ## JavaScript/TypeScript 클라이언트 예시
 
 ```typescript
-const BASE_URL = "http://localhost:8000/api/v1/analytics/web-search";
+const BASE_URL = "http://localhost:8518/api/v1/analytics/web-search";
 
 // 인기 검색어 조회
 const popularQueries = await fetch(

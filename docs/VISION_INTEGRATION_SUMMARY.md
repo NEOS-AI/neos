@@ -22,7 +22,7 @@ GPT-4o와 Claude Vision이 NEOS 멀티모달 파이프라인에 성공적으로 
 Vision 모델 통합 핵심 파일:
 - **VisionModel**: 추상 베이스 클래스
 - **GPT4oVision**: OpenAI GPT-4o 통합
-- **ClaudeVision**: Anthropic Claude 3.5 Sonnet 통합
+- **ClaudeVision**: Anthropic Claude 4.5 Sonnet 통합
 - **VisionModelFactory**: 팩토리 패턴으로 자동 모델 선택
 - **VisionProvider**: Enum (GPT4O, CLAUDE, AUTO)
 
