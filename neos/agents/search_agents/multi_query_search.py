@@ -1,4 +1,6 @@
 """Multi-query search agent - generates multiple queries and synthesizes results"""
+import asyncio
+import concurrent.futures
 
 from typing import Dict, Any, List
 from tavily import TavilyClient
@@ -6,6 +8,7 @@ from langchain_core.messages import HumanMessage
 
 from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
+from neos.utils.llm_wrapper import create_tracked_llm
 from neos.workflow.state import SearchResult
 
 from ..base import SearchAgent
@@ -202,10 +205,17 @@ Comprehensive Analysis:""",
             print(f"[ERROR] Traceback: {traceback.format_exc()}")
             return {"success": False, "error": str(e), "agent": self.name}
 
-    async def _generate_task_queries(self, original_query: str, task_description: str, session_id: str = "", user_id: str = "", detected_language: str = "ko") -> List[str]:
+
+    async def _generate_task_queries(
+        self,
+        original_query: str,
+        task_description: str,
+        session_id: str = "",
+        user_id: str = "",
+        detected_language: str = "ko"
+    ) -> List[str]:
         """특정 task에 대한 검색 쿼리 생성 (2-3개)"""
         try:
-            from neos.utils.llm_wrapper import create_tracked_llm
             base_llm = create_llm(temperature=0.3, max_tokens=800)
 
             llm = create_tracked_llm(
@@ -301,7 +311,6 @@ Search Queries:""",
     async def _generate_search_queries(self, original_query: str, session_id: str = "", user_id: str = "", detected_language: str = "ko") -> List[str]:
         """LLM을 사용하여 검색 쿼리 후보 2-5개 생성"""
         try:
-            from neos.utils.llm_wrapper import create_tracked_llm
             base_llm = create_llm(temperature=0.3, max_tokens=1000)
 
             llm = create_tracked_llm(
@@ -393,8 +402,6 @@ Search Queries:""",
 
     async def _execute_parallel_searches(self, queries: List[str]) -> List[List[Dict[str, Any]]]:
         """여러 검색 쿼리를 병렬로 실행"""
-        import asyncio
-
         search_tasks = [self._single_tavily_search(q) for q in queries]
         results = await asyncio.gather(*search_tasks, return_exceptions=True)
 
@@ -414,9 +421,6 @@ Search Queries:""",
         try:
             if not self.api_available or not self.tavily_client:
                 return []
-
-            import asyncio
-            import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 try:
@@ -452,7 +456,6 @@ Search Queries:""",
 
     async def _summarize_results(self, queries: List[str], results: List[List[Dict[str, Any]]], session_id: str = "", user_id: str = "", detected_language: str = "ko") -> List[str]:
         """각 검색 결과를 LLM으로 요약 (병렬 처리)"""
-        import asyncio
 
         async def summarize_single_query(query: str, search_results: List[Dict[str, Any]]) -> str:
             """단일 쿼리 결과 요약"""
@@ -468,7 +471,6 @@ Search Queries:""",
                 return no_results_messages.get(detected_language, no_results_messages["en"])
 
             try:
-                from neos.utils.llm_wrapper import create_tracked_llm
                 base_llm = create_llm(temperature=0.1, max_tokens=1500)  # 토큰 수 줄임
 
                 llm = create_tracked_llm(
@@ -601,7 +603,6 @@ Summary:""",
     async def _synthesize_final_analysis(self, original_query: str, search_queries: List[str], summaries: List[str], session_id: str = "", user_id: str = "", context: Dict[str, Any] = None) -> str:
         """모든 요약을 종합하여 최종 분석 결과 생성"""
         try:
-            from neos.utils.llm_wrapper import create_tracked_llm
             base_llm = create_llm(temperature=0.2, max_tokens=4000)
 
             llm = create_tracked_llm(
@@ -636,8 +637,6 @@ Summary:""",
 
 {language_instruction}"""
 
-            import asyncio
-
             # 최종 분석에도 타임아웃 추가 (180초)
             response = await asyncio.wait_for(
                 llm.ainvoke([HumanMessage(content=prompt)]),
@@ -659,5 +658,3 @@ Summary:""",
 
             # Fallback: 요약들을 단순 결합
             return "\n\n".join([f"**{q}**\n{s}" for q, s in zip(search_queries, summaries)])
-
-
