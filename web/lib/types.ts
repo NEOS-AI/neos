@@ -192,6 +192,10 @@ export interface ChatStore {
   // Abort controller for request cancellation
   currentAbortController: AbortController | null;
 
+  // SSE reconnection tracking
+  sseReconnectAttempts: number;
+  sseReconnectTimeoutId: number | null;
+
   // Getters
   currentConversation: Conversation | null;
   messages: Message[];

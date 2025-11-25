@@ -87,6 +87,8 @@ export const useChatStore = create<ChatStore>()(
       settings: DEFAULT_SETTINGS,
       activeEventSource: null,
       currentAbortController: null,
+      sseReconnectAttempts: 0,
+      sseReconnectTimeoutId: null,
 
       // ======================================================================
       // Computed Getters
@@ -806,6 +808,12 @@ export const useChatStore = create<ChatStore>()(
               const data = JSON.parse(event.data);
 
               switch (data.event) {
+                case "heartbeat":
+                  // Heartbeat event - connection is alive, no UI update needed
+                  // Just log for debugging
+                  console.debug(`[Store] Heartbeat received (uptime: ${data.data.uptime_seconds}s)`);
+                  break;
+
                 case "phase_started":
                   streamContent += `\n**Phase:** ${data.data.message}\n`;
                   break;
@@ -910,26 +918,72 @@ export const useChatStore = create<ChatStore>()(
             console.error("[Store] SSE error:", error);
             eventSource.close();
 
-            set((state) => ({
-              conversations: state.conversations.map((c) =>
-                c.conversation_id === conversationId
-                  ? {
-                      ...c,
-                      messages: (c.messages || []).map((m) =>
-                        m.message_id === assistantMsgId
-                          ? {
-                              ...m,
-                              status: "failed" as const,
-                              content: streamContent + "\n\n❌ Connection lost",
-                            }
-                          : m
-                      ),
-                    }
-                  : c
-              ),
-              activeEventSource: null,
-              error: "Deep research connection lost",
-            }));
+            // Attempt automatic reconnection with exponential backoff
+            const MAX_RECONNECT_ATTEMPTS = 5;
+            const currentAttempts = get().sseReconnectAttempts;
+
+            if (currentAttempts < MAX_RECONNECT_ATTEMPTS) {
+              // Calculate backoff delay (2s, 4s, 8s, 16s, 32s)
+              const backoffDelay = Math.min(2000 * Math.pow(2, currentAttempts), 32000);
+
+              console.log(
+                `[Store] SSE connection lost. Attempting reconnection ${currentAttempts + 1}/${MAX_RECONNECT_ATTEMPTS} in ${backoffDelay}ms...`
+              );
+
+              // Update UI to show reconnecting status
+              set((state) => ({
+                conversations: state.conversations.map((c) =>
+                  c.conversation_id === conversationId
+                    ? {
+                        ...c,
+                        messages: (c.messages || []).map((m) =>
+                          m.message_id === assistantMsgId
+                            ? {
+                                ...m,
+                                content: streamContent + `\n\n🔄 Connection lost. Reconnecting (${currentAttempts + 1}/${MAX_RECONNECT_ATTEMPTS})...`,
+                              }
+                            : m
+                        ),
+                      }
+                    : c
+                ),
+                activeEventSource: null,
+                sseReconnectAttempts: currentAttempts + 1,
+              }));
+
+              // Schedule reconnection
+              const timeoutId = setTimeout(() => {
+                console.log(`[Store] Reconnecting to deep research stream (attempt ${currentAttempts + 1})...`);
+                get().reconnectDeepResearch(conversationId, deepResearchResponse.report_id, assistantMsgId, streamContent);
+              }, backoffDelay);
+
+              set({ sseReconnectTimeoutId: timeoutId as any });
+            } else {
+              // Max attempts reached, mark as failed
+              console.error("[Store] Max reconnection attempts reached. Marking as failed.");
+
+              set((state) => ({
+                conversations: state.conversations.map((c) =>
+                  c.conversation_id === conversationId
+                    ? {
+                        ...c,
+                        messages: (c.messages || []).map((m) =>
+                          m.message_id === assistantMsgId
+                            ? {
+                                ...m,
+                                status: "failed" as const,
+                                content: streamContent + "\n\n❌ Connection lost after multiple reconnection attempts",
+                              }
+                            : m
+                        ),
+                      }
+                    : c
+                ),
+                activeEventSource: null,
+                error: "Deep research connection lost",
+                sseReconnectAttempts: 0,
+              }));
+            }
           };
         } catch (error) {
           console.error("[Store] Failed to start deep research:", error);
@@ -1008,7 +1062,19 @@ export const useChatStore = create<ChatStore>()(
           try {
             const data = JSON.parse(event.data);
 
+            // Reset reconnection counter on successful message
+            if (get().sseReconnectAttempts > 0) {
+              console.log("[Store] SSE connection stable, resetting reconnection counter");
+              set({ sseReconnectAttempts: 0 });
+            }
+
             switch (data.event) {
+              case "heartbeat":
+                // Heartbeat event - connection is alive, no UI update needed
+                // Just log for debugging
+                console.debug(`[Store] Heartbeat received (uptime: ${data.data.uptime_seconds}s)`);
+                break;
+
               case "phase_started":
                 streamContent += `\n**Phase:** ${data.data.message}\n`;
                 break;
@@ -1113,26 +1179,72 @@ export const useChatStore = create<ChatStore>()(
           console.error("[Store] SSE reconnection error:", error);
           eventSource.close();
 
-          set((state) => ({
-            conversations: state.conversations.map((c) =>
-              c.conversation_id === conversationId
-                ? {
-                    ...c,
-                    messages: (c.messages || []).map((m) =>
-                      m.message_id === assistantMsgId
-                        ? {
-                            ...m,
-                            status: "failed" as const,
-                            content: streamContent + "\n\n❌ Connection lost",
-                          }
-                        : m
-                    ),
-                  }
-                : c
-            ),
-            activeEventSource: null,
-            error: "Deep research connection lost",
-          }));
+          // Attempt automatic reconnection with exponential backoff
+          const MAX_RECONNECT_ATTEMPTS = 5;
+          const currentAttempts = get().sseReconnectAttempts;
+
+          if (currentAttempts < MAX_RECONNECT_ATTEMPTS) {
+            // Calculate backoff delay (2s, 4s, 8s, 16s, 32s)
+            const backoffDelay = Math.min(2000 * Math.pow(2, currentAttempts), 32000);
+
+            console.log(
+              `[Store] SSE reconnection error. Attempting reconnection ${currentAttempts + 1}/${MAX_RECONNECT_ATTEMPTS} in ${backoffDelay}ms...`
+            );
+
+            // Update UI to show reconnecting status
+            set((state) => ({
+              conversations: state.conversations.map((c) =>
+                c.conversation_id === conversationId
+                  ? {
+                      ...c,
+                      messages: (c.messages || []).map((m) =>
+                        m.message_id === assistantMsgId
+                          ? {
+                              ...m,
+                              content: streamContent + `\n\n🔄 Connection lost. Reconnecting (${currentAttempts + 1}/${MAX_RECONNECT_ATTEMPTS})...`,
+                            }
+                          : m
+                      ),
+                    }
+                  : c
+              ),
+              activeEventSource: null,
+              sseReconnectAttempts: currentAttempts + 1,
+            }));
+
+            // Schedule reconnection
+            const timeoutId = setTimeout(() => {
+              console.log(`[Store] Retrying reconnection (attempt ${currentAttempts + 1})...`);
+              get().reconnectDeepResearch(conversationId, reportId, assistantMsgId, streamContent);
+            }, backoffDelay);
+
+            set({ sseReconnectTimeoutId: timeoutId as any });
+          } else {
+            // Max attempts reached, mark as failed
+            console.error("[Store] Max reconnection attempts reached. Marking as failed.");
+
+            set((state) => ({
+              conversations: state.conversations.map((c) =>
+                c.conversation_id === conversationId
+                  ? {
+                      ...c,
+                      messages: (c.messages || []).map((m) =>
+                        m.message_id === assistantMsgId
+                          ? {
+                              ...m,
+                              status: "failed" as const,
+                              content: streamContent + "\n\n❌ Connection lost after multiple reconnection attempts",
+                            }
+                          : m
+                      ),
+                    }
+                  : c
+              ),
+              activeEventSource: null,
+              error: "Deep research connection lost",
+              sseReconnectAttempts: 0,
+            }));
+          }
         };
       },
 
@@ -1295,11 +1407,16 @@ export const useChatStore = create<ChatStore>()(
       },
 
       cleanupEventSource: () => {
-        const { activeEventSource } = get();
+        const { activeEventSource, sseReconnectTimeoutId } = get();
         if (activeEventSource) {
           console.log("[Store] Cleaning up active EventSource");
           activeEventSource.close();
           set({ activeEventSource: null });
+        }
+        if (sseReconnectTimeoutId) {
+          console.log("[Store] Clearing SSE reconnection timeout");
+          clearTimeout(sseReconnectTimeoutId);
+          set({ sseReconnectTimeoutId: null, sseReconnectAttempts: 0 });
         }
       },
 
