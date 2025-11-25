@@ -6,8 +6,34 @@ from business logic, making the code more maintainable and testable.
 
 import json
 import uuid
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from neos.database.connection import db_manager
+
+
+def sanitize_for_postgres(data: Any) -> Any:
+    """Remove null characters that PostgreSQL cannot handle.
+
+    PostgreSQL TEXT and JSONB fields cannot store the null character (\u0000).
+    This function recursively removes null characters from strings in any data structure.
+
+    Args:
+        data: Data to sanitize (can be str, dict, list, or primitive types)
+
+    Returns:
+        Sanitized data with null characters removed from all strings
+    """
+    if isinstance(data, str):
+        # Remove null characters from string
+        return data.replace('\x00', '').replace('\u0000', '')
+    elif isinstance(data, dict):
+        # Recursively sanitize dictionary values
+        return {key: sanitize_for_postgres(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        # Recursively sanitize list items
+        return [sanitize_for_postgres(item) for item in data]
+    else:
+        # Return primitive types as-is
+        return data
 
 
 class HyperResearchRepository:
@@ -151,13 +177,15 @@ class HyperResearchRepository:
             True if successful, False otherwise
         """
         try:
-            plan_json = json.dumps(research_plan) if research_plan else json.dumps({
+            # Sanitize topic and research plan
+            sanitized_topic = sanitize_for_postgres(topic)
+            sanitized_plan = sanitize_for_postgres(research_plan) if research_plan else {
                 "phases": [
                     "topic_analysis", "methodology", "multi_query_collection",
                     "deep_analysis", "gap_analysis", "validation",
                     "critical_thinking", "synthesis"
                 ]
-            })
+            }
 
             query = """
                 INSERT INTO hyper_research_reports
@@ -166,7 +194,7 @@ class HyperResearchRepository:
             """
 
             await db_manager.execute(
-                query, report_id, user_id, session_id, topic, "pending", plan_json
+                query, report_id, user_id, session_id, sanitized_topic, "pending", json.dumps(sanitized_plan)
             )
 
             print(f"[DEBUG] Created report in DB: {report_id}")
@@ -251,6 +279,9 @@ class HyperResearchRepository:
             True if successful, False otherwise
         """
         try:
+            # Sanitize metadata
+            sanitized_metadata = sanitize_for_postgres(metadata)
+
             query = """
                 UPDATE hyper_research_reports
                 SET total_sections = $1,
@@ -265,7 +296,7 @@ class HyperResearchRepository:
                 total_sections,
                 total_sources,
                 total_queries,
-                json.dumps(metadata),
+                json.dumps(sanitized_metadata),
                 report_id
             )
 
@@ -304,6 +335,10 @@ class HyperResearchRepository:
         try:
             section_id = f"section_{uuid.uuid4()}"
 
+            # Sanitize text fields
+            sanitized_title = sanitize_for_postgres(title)
+            sanitized_content = sanitize_for_postgres(content)
+
             query = """
                 INSERT INTO hyper_research_sections
                 (section_id, report_id, section_order, section_type,
@@ -313,10 +348,10 @@ class HyperResearchRepository:
 
             await db_manager.execute(
                 query, section_id, report_id, section_order, section_type,
-                title, content, status, sources_count
+                sanitized_title, sanitized_content, status, sources_count
             )
 
-            print(f"[DEBUG] Created section in DB: {title}")
+            print(f"[DEBUG] Created section in DB: {sanitized_title}")
             return section_id
 
         except Exception as e:
@@ -350,6 +385,10 @@ class HyperResearchRepository:
         try:
             collection_id = f"collection_{uuid.uuid4()}"
 
+            # Sanitize data to remove null characters
+            sanitized_query_text = sanitize_for_postgres(query_text)
+            sanitized_results = sanitize_for_postgres(results[:5])
+
             query = """
                 INSERT INTO hyper_research_data_collection
                 (collection_id, report_id, section_id, query_text,
@@ -362,11 +401,11 @@ class HyperResearchRepository:
                 collection_id,
                 report_id,
                 section_id,
-                query_text,
+                sanitized_query_text,
                 query_type,
                 phase,
                 len(results),
-                json.dumps(results[:5])  # Store only first 5 for space
+                json.dumps(sanitized_results)  # Store only first 5 for space
             )
 
             return True
@@ -398,6 +437,10 @@ class HyperResearchRepository:
         try:
             feedback_id = f"feedback_{uuid.uuid4()}"
 
+            # Sanitize all feedback data
+            sanitized_section_title = sanitize_for_postgres(section_title)
+            sanitized_feedback = sanitize_for_postgres(feedback)
+
             query = """
                 INSERT INTO hyper_research_criticism_feedback
                 (feedback_id, report_id, section_type, section_title,
@@ -411,13 +454,13 @@ class HyperResearchRepository:
                 feedback_id,
                 report_id,
                 section_type,
-                section_title,
-                feedback.get("severity", "none"),
-                feedback.get("has_issues", False),
-                feedback.get("feedback", ""),
-                json.dumps(feedback.get("suggested_queries", [])),
-                json.dumps(feedback.get("missing_perspectives", [])),
-                feedback.get("redirect_suggestion", "")
+                sanitized_section_title,
+                sanitized_feedback.get("severity", "none"),
+                sanitized_feedback.get("has_issues", False),
+                sanitized_feedback.get("feedback", ""),
+                json.dumps(sanitized_feedback.get("suggested_queries", [])),
+                json.dumps(sanitized_feedback.get("missing_perspectives", [])),
+                sanitized_feedback.get("redirect_suggestion", "")
             )
 
             print(f"[DEBUG] Recorded criticism feedback: {feedback_id}")
