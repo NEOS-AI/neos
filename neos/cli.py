@@ -969,11 +969,22 @@ async def _test_deep_research(query: str, user_id: str, session_id: str, progres
         if agent_result.get("success") and agent_result.get("results"):
             search_result = agent_result["results"][0]
 
+            # Handle both dict and SearchResult objects
+            if isinstance(search_result, dict):
+                content = search_result.get("content", "")
+                metadata = search_result.get("metadata", {})
+                score = search_result.get("score", 0.95)
+            else:
+                # SearchResult object
+                content = getattr(search_result, 'content', '')
+                metadata = getattr(search_result, 'metadata', {})
+                score = getattr(search_result, 'score', 0.95)
+
             result = {
                 "success": True,
-                "response": search_result.get("content", ""),
-                "metadata": search_result.get("metadata", {}),
-                "quality_score": search_result.get("score", 0.95)
+                "response": content,
+                "metadata": metadata,
+                "quality_score": score
             }
         else:
             result = {

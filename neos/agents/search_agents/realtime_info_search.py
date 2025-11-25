@@ -1,6 +1,6 @@
 """Real-time information search agent"""
 
-from typing import Dict, Any, List, TYPE_CHECKING
+from typing import Dict, Any, List
 import asyncio
 import concurrent.futures
 from tavily import TavilyClient
@@ -9,11 +9,9 @@ from langchain_core.messages import HumanMessage
 from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import create_tracked_llm
+from neos.workflow.state import SearchResult
 
 from ..base import SearchAgent
-
-if TYPE_CHECKING:
-    from neos.workflow.state import SearchResult
 
 
 class RealtimeInfoSearchAgent(SearchAgent):
@@ -153,7 +151,15 @@ class RealtimeInfoSearchAgent(SearchAgent):
             print(f"[ERROR] Tavily search traceback: {traceback.format_exc()}")
             return []
 
-    async def _process_with_llm(self, query: str, tavily_results: List[Dict[str, Any]], session_id: str = "", user_id: str = "", detected_language: str = "ko") -> List["SearchResult"]:
+
+    async def _process_with_llm(
+        self,
+        query: str,
+        tavily_results: List[Dict[str, Any]],
+        session_id: str = "",
+        user_id: str = "",
+        detected_language: str = "ko"
+    ) -> List["SearchResult"]:
         """LLM을 사용하여 Tavily 검색 결과를 처리하고 citation이 포함된 응답 생성"""
         try:
             if not tavily_results:
@@ -187,8 +193,6 @@ class RealtimeInfoSearchAgent(SearchAgent):
 
             print(f"[DEBUG] LLM response length: {len(llm_response)} characters")
 
-            from neos.workflow.state import SearchResult
-
             # Create a single comprehensive SearchResult with LLM-processed content
             processed_result = SearchResult(
                 source="llm_processed_web",
@@ -201,9 +205,9 @@ class RealtimeInfoSearchAgent(SearchAgent):
                     "source_count": len(tavily_results),
                     "sources": [
                         {
-                            "title": result.get("title", ""),
-                            "url": result.get("url", ""),
-                            "domain": result.get("domain", "")
+                            "title": result.get("title", "") if isinstance(result, dict) else getattr(result, 'title', ''),
+                            "url": result.get("url", "") if isinstance(result, dict) else getattr(result, 'url', ''),
+                            "domain": result.get("domain", "") if isinstance(result, dict) else getattr(result, 'metadata', {}).get('domain', '') if hasattr(result, 'metadata') else ''
                         }
                         for result in tavily_results
                     ]
@@ -220,8 +224,6 @@ class RealtimeInfoSearchAgent(SearchAgent):
 
             # Fallback to original Tavily results if LLM processing fails
             print("[DEBUG] Falling back to original Tavily results")
-
-            from neos.workflow.state import SearchResult
 
             results = []
             for i, item in enumerate(tavily_results):
@@ -245,10 +247,18 @@ class RealtimeInfoSearchAgent(SearchAgent):
         context_parts = []
 
         for i, result in enumerate(tavily_results, 1):
-            title = result.get("title", "제목 없음")
-            content = result.get("content", "")
-            url = result.get("url", "")
-            domain = result.get("domain", "")
+            # Handle both dict and SearchResult objects
+            if isinstance(result, dict):
+                title = result.get("title", "제목 없음")
+                content = result.get("content", "")
+                url = result.get("url", "")
+                domain = result.get("domain", "")
+            else:
+                # Handle SearchResult dataclass
+                title = getattr(result, 'title', '제목 없음')
+                content = getattr(result, 'content', '')
+                url = getattr(result, 'url', '')
+                domain = getattr(result, 'metadata', {}).get('domain', '') if hasattr(result, 'metadata') else ''
 
             # Limit content length to prevent context overflow
             if len(content) > 1000:

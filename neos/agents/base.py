@@ -94,7 +94,7 @@ class BaseAgent(ABC):
                 "error": str(e),
                 "agent": self.name
             }
-    
+
     def validate_input(self, query: str, context: Dict[str, Any] = None) -> bool:
         """입력 검증"""
         if not query or not query.strip():
@@ -104,7 +104,7 @@ class BaseAgent(ABC):
             return False
             
         return True
-    
+
     def format_output(self, result: Any, metadata: Dict[str, Any] = None) -> Dict[str, Any]:
         """출력 형식 표준화"""
         return {
@@ -115,6 +115,7 @@ class BaseAgent(ABC):
             "timestamp": datetime.utcnow().isoformat(),
             "success": True
         }
+
 
 class SearchAgent(BaseAgent):
     """검색 에이전트 기본 클래스"""

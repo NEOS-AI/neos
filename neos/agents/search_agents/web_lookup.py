@@ -1,6 +1,6 @@
 """Web content lookup agent - fetches and analyzes specific URLs"""
 
-from typing import Dict, Any, List, TYPE_CHECKING, Optional
+from typing import Dict, Any, List, Optional
 import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
@@ -9,15 +9,14 @@ from langchain_core.messages import HumanMessage
 from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import create_tracked_llm
 from neos.utils.url_detector import extract_urls, is_valid_url
+from neos.workflow.state import SearchResult
 
 from ..base import SearchAgent
 
-if TYPE_CHECKING:
-    from neos.workflow.state import SearchResult
 
 # Playwright는 선택적 의존성
 try:
-    from playwright.async_api import async_playwright, Browser, Page
+    from playwright.async_api import async_playwright, Browser
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False

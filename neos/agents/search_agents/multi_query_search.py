@@ -1,17 +1,15 @@
 """Multi-query search agent - generates multiple queries and synthesizes results"""
 
-from typing import Dict, Any, List, TYPE_CHECKING
+from typing import Dict, Any, List
 from tavily import TavilyClient
 from langchain_core.messages import HumanMessage
 
 from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
+from neos.workflow.state import SearchResult
 
 from ..base import SearchAgent
 from ..planning_agent import PlanningAgent
-
-if TYPE_CHECKING:
-    from neos.workflow.state import SearchResult
 
 
 class MultiQuerySearchAgent(SearchAgent):
@@ -205,7 +203,6 @@ Comprehensive Analysis:""",
                 print(f"[DEBUG] Final plan:\n{self.planning_agent.get_task_summary(research_plan)}")
 
             # 결과 생성
-            from neos.workflow.state import SearchResult
             result = SearchResult(
                 source="multi_query_analysis",
                 title=f"복합 분석: {query}",
@@ -415,9 +412,16 @@ Search Queries:""",
                 # 검색 결과를 문맥으로 준비
                 context_parts = []
                 for i, result in enumerate(search_results[:3], 1):  # 상위 3개만
-                    title = result.get("title", "")
-                    content = result.get("content", "")[:400]  # 400자로 줄임
-                    url = result.get("url", "")
+                    # Handle both dict and SearchResult objects
+                    if isinstance(result, dict):
+                        title = result.get("title", "")
+                        content = result.get("content", "")[:400]  # 400자로 줄임
+                        url = result.get("url", "")
+                    else:
+                        # Handle SearchResult dataclass
+                        title = getattr(result, 'title', '')
+                        content = getattr(result, 'content', '')[:400]
+                        url = getattr(result, 'url', '')
 
                     context_parts.append(f"""
 Result {i}:

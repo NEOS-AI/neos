@@ -120,38 +120,39 @@ class LLMFactory:
             BaseLanguageModel: 생성된 LLM 인스턴스
         """
         provider_name = provider or settings.LLM_PROVIDER
-        
+
         if provider_name not in self._providers:
             raise ValueError(f"Unsupported LLM provider: {provider_name}")
-        
+
         try:
             provider_class = self._providers[provider_name]
             provider_instance = provider_class()
-            
+
             # 파라미터 오버라이드
             llm_params = {}
             if model:
                 llm_params["model"] = model
             if temperature is not None:
                 llm_params["temperature"] = temperature
-            
+
             llm_params.update(kwargs)
-            
+
             llm = provider_instance.create_llm(**llm_params)
-            
+
             logger.info(f"Created LLM: {provider_instance.get_provider_name()} - {llm_params.get('model', 'default')}")
             return llm
-            
+
         except Exception as e:
             logger.error(f"Failed to create LLM with provider {provider_name}: {e}")
-            
+
             # Fallback to OpenAI if available
             if provider_name != "openai" and settings.OPENAI_API_KEY:
                 logger.warning("Falling back to OpenAI provider")
                 fallback_provider = self._providers["openai"]()
                 return fallback_provider.create_llm(**kwargs)
-            
+
             raise e
+
 
     @classmethod
     def get_available_providers(cls) -> list[str]:

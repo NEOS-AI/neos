@@ -1,18 +1,19 @@
 """Deep research agent - conducts comprehensive multi-phase research"""
+import asyncio
+import concurrent.futures
 
-from typing import Dict, Any, List, TYPE_CHECKING
+from typing import Dict, Any, List
 from tavily import TavilyClient
 from langchain_core.messages import HumanMessage
 from datetime import datetime
 
 from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
+from neos.utils.llm_wrapper import create_tracked_llm
+from neos.workflow.state import SearchResult
 
 from ..base import SearchAgent
 from ..planning_agent import PlanningAgent
-
-if TYPE_CHECKING:
-    from neos.workflow.state import SearchResult
 
 
 class DeepResearchAgent(SearchAgent):
@@ -272,7 +273,6 @@ Report Structure:
             report = await self._run_deep_research(query, session_id, user_id, context)
 
             # SearchResult 형태로 반환
-            from neos.workflow.state import SearchResult
             result = SearchResult(
                 source="deep_research_report",
                 title=f"Deep Research: {query}",
@@ -436,10 +436,10 @@ Report Structure:
 
         return final_report
 
+
     async def _generate_initial_queries(self, original_query: str, session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """초기 광범위 검색 쿼리 생성 (8-10개)"""
         try:
-            from neos.utils.llm_wrapper import create_tracked_llm
             base_llm = create_llm(temperature=0.4, max_tokens=2000)
 
             llm = create_tracked_llm(
@@ -532,10 +532,10 @@ Search Queries:""",
             print(f"[ERROR] Failed to generate initial queries: {e}")
             return [original_query]
 
+
     async def _identify_gaps(self, original_query: str, summaries: List[str], session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """수집된 정보에서 부족한 부분 식별"""
         try:
-            from neos.utils.llm_wrapper import create_tracked_llm
             base_llm = create_llm(temperature=0.3, max_tokens=1500)
 
             llm = create_tracked_llm(
@@ -601,13 +601,13 @@ Write each gap on one line without numbering.""",
             print(f"[ERROR] Failed to identify gaps: {e}")
             return []
 
+
     async def _generate_targeted_queries(self, gaps: List[str], session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """Gap을 메우기 위한 targeted 검색 쿼리 생성"""
         if not gaps:
             return []
 
         try:
-            from neos.utils.llm_wrapper import create_tracked_llm
             base_llm = create_llm(temperature=0.3, max_tokens=1200)
 
             llm = create_tracked_llm(
@@ -651,7 +651,6 @@ Write each gap on one line without numbering.""",
     async def _cross_reference_sources(self, summaries: List[str], session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """소스 간 크로스 레퍼런스 및 일관성 확인"""
         try:
-            from neos.utils.llm_wrapper import create_tracked_llm
             base_llm = create_llm(temperature=0.2, max_tokens=2000)
 
             llm = create_tracked_llm(
@@ -665,14 +664,14 @@ Write each gap on one line without numbering.""",
 
             summaries_text = "\n\n".join([f"소스 {i+1}: {s[:250]}" for i, s in enumerate(summaries[:8])])
 
-            prompt = f"""다음 소스들을 분석하여:
+            prompt = f"""<source> 내의 내용을 바탕으로 다음 작업을 수행해주세요:
+1. 정보의 일관성과 상충 여부를 확인
+2. 여러 소스에서 확인된 핵심 사실 식별
+3. 신뢰도가 높은 정보와 검증이 필요한 정보를 구분
 
+<source>
 {summaries_text}
-
-다음을 확인해주세요:
-1. 일관된 정보와 상충하는 정보 식별
-2. 여러 소스에서 확인된 핵심 사실
-3. 신뢰도가 높은 정보와 검증이 필요한 정보 구분
+</source>
 
 각 인사이트는 한 문장으로 작성하고, 5-7개 정도 제공해주세요."""
 
@@ -699,9 +698,9 @@ Write each gap on one line without numbering.""",
     ) -> str:
         """종합 리포트 생성 (구조화된 마크다운)"""
         try:
-            from neos.utils.llm_wrapper import create_tracked_llm
             # Deep research는 매우 긴 리포트를 생성할 수 있으므로 최대 토큰을 크게 설정
-            base_llm = create_llm(temperature=0.3, max_tokens=16000)
+            # timeout도 10분으로 증가 (긴 리포트 생성에 필요)
+            base_llm = create_llm(temperature=0.3, max_tokens=16000, timeout=600.0)
 
             llm = create_tracked_llm(
                 llm=base_llm,
@@ -762,8 +761,6 @@ Write each gap on one line without numbering.""",
 
     async def _execute_parallel_searches(self, queries: List[str]) -> List[List[Dict[str, Any]]]:
         """병렬 검색 실행"""
-        import asyncio
-
         search_tasks = [self._single_tavily_search(q) for q in queries]
         results = await asyncio.gather(*search_tasks, return_exceptions=True)
 
@@ -778,14 +775,12 @@ Write each gap on one line without numbering.""",
 
         return processed_results
 
+
     async def _single_tavily_search(self, query: str) -> List[Dict[str, Any]]:
         """단일 검색 실행"""
         try:
             if not self.api_available or not self.tavily_client:
                 return []
-
-            import asyncio
-            import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 try:
@@ -800,16 +795,24 @@ Write each gap on one line without numbering.""",
 
                     def get_result_with_timeout():
                         try:
-                            return future.result(timeout=20)
+                            return future.result(timeout=60)
                         except concurrent.futures.TimeoutError:
                             return None
 
                     response = await asyncio.wait_for(
                         asyncio.get_event_loop().run_in_executor(None, get_result_with_timeout),
-                        timeout=25
+                        timeout=60
                     )
 
-                    return response.get("results", []) if response else []
+                    results = []
+                    if response is not None:
+                        if isinstance(response, dict):
+                            results = response.get("results", [])
+                        elif isinstance(response, list):
+                            results = response
+                        else:
+                            results = getattr(response, "results", [])
+                    return results
 
                 except Exception as e:
                     print(f"[ERROR] Search failed for '{query}': {e}")
@@ -819,16 +822,14 @@ Write each gap on one line without numbering.""",
             print(f"[ERROR] Tavily search error: {e}")
             return []
 
+
     async def _summarize_results_batch(self, queries: List[str], results: List[List[Dict[str, Any]]], session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """검색 결과 배치 요약"""
-        import asyncio
-
         async def summarize_single(query: str, search_results: List[Dict[str, Any]]) -> str:
             if not search_results:
                 return f"'{query}'에 대한 검색 결과 없음"
 
             try:
-                from neos.utils.llm_wrapper import create_tracked_llm
                 # Deep research 요약은 더 상세하게
                 base_llm = create_llm(temperature=0.1, max_tokens=2500)
 
@@ -843,9 +844,16 @@ Write each gap on one line without numbering.""",
 
                 context_parts = []
                 for i, result in enumerate(search_results[:5], 1):
-                    title = result.get("title", "")
-                    content = result.get("content", "")[:800]  # 더 많은 내용 포함
-                    url = result.get("url", "")
+                    # Handle both dict and SearchResult objects
+                    if isinstance(result, dict):
+                        title = result.get("title", "")
+                        content = result.get("content", "")[:800]  # 더 많은 내용 포함
+                        url = result.get("url", "")
+                    else:
+                        # Handle SearchResult dataclass
+                        title = getattr(result, 'title', '')
+                        content = getattr(result, 'content', '')[:800]
+                        url = getattr(result, 'url', '')
                     context_parts.append(f"출처 {i}: {title}\nURL: {url}\n내용: {content}")
 
                 context = "\n\n".join(context_parts)
@@ -884,6 +892,7 @@ Write each gap on one line without numbering.""",
         except asyncio.TimeoutError:
             print("[ERROR] Batch summarization timed out")
             return [f"'{q}' 요약 시간 초과" for q in queries]
+
 
     async def _save_checkpoint(self, phase: str, data: Dict[str, Any]) -> None:
         """체크포인트 저장"""

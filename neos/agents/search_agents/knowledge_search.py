@@ -1,14 +1,13 @@
 """Knowledge-based search agent"""
 
-from typing import Dict, Any, List, TYPE_CHECKING
+from typing import Dict, Any, List
 from sqlalchemy import text
 
 from neos.utils.cache import cache_manager
 from neos.database.connection import db_manager
-from ..base import SearchAgent
+from neos.workflow.state import SearchResult
 
-if TYPE_CHECKING:
-    from neos.workflow.state import SearchResult
+from ..base import SearchAgent
 
 
 class KnowledgeSearchAgent(SearchAgent):
@@ -42,8 +41,6 @@ class KnowledgeSearchAgent(SearchAgent):
             print("[DEBUG] Searching knowledge base...")
             similar_queries = await self._search_knowledge_base(query, context.get('query_embedding'))
             print(f"[DEBUG] Knowledge base returned {len(similar_queries)} items")
-
-            from neos.workflow.state import SearchResult
 
             results = []
             for item in similar_queries:

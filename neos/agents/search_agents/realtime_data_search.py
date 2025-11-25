@@ -1,18 +1,17 @@
 """Real-time data search agent"""
 
-from typing import Dict, Any, List, TYPE_CHECKING
+from typing import Dict, Any, List
 import asyncio
 import concurrent.futures
 import time
 from tavily import TavilyClient
 
 from neos.config.settings import settings
-from ..base import SearchAgent
 from neos.database.web_search_logger import get_search_logger
 from neos.database.web_search_types import SearchLogRequest, SearchLogComplete, SearchResultItem, SearchQueryStatus
+from neos.workflow.state import SearchResult
 
-if TYPE_CHECKING:
-    from neos.workflow.state import SearchResult
+from ..base import SearchAgent
 
 
 class RealtimeDataSearchAgent(SearchAgent):
@@ -81,8 +80,6 @@ class RealtimeDataSearchAgent(SearchAgent):
             print("[DEBUG] Starting data search...")
             # 데이터 중심 검색
             data_results = await self._search_data_sources(query)
-
-            from neos.workflow.state import SearchResult
 
             results = []
             log_results = []
@@ -202,11 +199,14 @@ class RealtimeDataSearchAgent(SearchAgent):
 
                     # 데이터 관련성 점수 조정
                     for result in results:
-                        content = result.get("content", "").lower()
-                        data_keywords = ["data", "statistics", "percent", "%", "number", "trend", "chart", "graph"]
-                        score_boost = sum(1 for keyword in data_keywords if keyword in content) * 0.1
-                        result["score"] = min(1.0, result.get("score", 0.5) + score_boost)
-                        result["data_type"] = self._classify_data_type(content)
+                        # Handle both dict and SearchResult objects
+                        if isinstance(result, dict):
+                            content = result.get("content", "").lower()
+                            data_keywords = ["data", "statistics", "percent", "%", "number", "trend", "chart", "graph"]
+                            score_boost = sum(1 for keyword in data_keywords if keyword in content) * 0.1
+                            result["score"] = min(1.0, result.get("score", 0.5) + score_boost)
+                            result["data_type"] = self._classify_data_type(content)
+                        # Note: SearchResult objects are immutable dataclasses, skip score adjustment
 
                     print(f"[DEBUG] Tavily data search API returned {len(results)} results")
                     return results
