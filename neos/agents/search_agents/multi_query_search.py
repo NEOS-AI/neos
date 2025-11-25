@@ -124,7 +124,7 @@ Comprehensive Analysis:""",
             # Extract detected_language from context
             detected_language = context.get("detected_language", "ko") if context else "ko"
 
-            # Step 0: Create research plan using planning agent
+            # Create research plan using planning agent
             print("[DEBUG] Creating research plan...")
             research_plan = await self.planning_agent.create_research_plan(
                 query=query,
@@ -136,71 +136,45 @@ Comprehensive Analysis:""",
             print(f"[DEBUG] Research plan created with {len(research_plan)} tasks")
             print(f"[DEBUG] Plan:\n{self.planning_agent.get_task_summary(research_plan)}")
 
-            # Step 1: LLM을 사용하여 검색 쿼리 후보 생성 (2-5개)
-            # Update plan: mark query generation as in progress
-            if research_plan:
-                self.planning_agent.update_task_status(research_plan, 1, "in_progress")
+            # Execute all tasks dynamically
+            all_search_queries = []
+            all_search_results = []
+            all_summaries = []
+
+            # Process each task in the research plan
+            for i, task in enumerate(research_plan, 1):
+                # Update task status to in_progress
+                self.planning_agent.update_task_status(research_plan, task.id, "in_progress")
                 print(f"[DEBUG] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
 
-            print("[DEBUG] Generating search query candidates...")
-            search_queries = await self._generate_search_queries(query, session_id, user_id, detected_language)
-            print(f"[DEBUG] Generated {len(search_queries)} search queries")
+                print(f"[DEBUG] Task {i}/{len(research_plan)}: {task.description}")
 
-            # Mark query generation as completed
-            if research_plan:
+                # Generate queries for this task
+                task_queries = await self._generate_task_queries(query, task.description, session_id, user_id, detected_language)
+                all_search_queries.extend(task_queries)
+                print(f"[DEBUG] Generated {len(task_queries)} queries for task {i}")
+
+                # Execute searches for this task
+                task_results = await self._execute_parallel_searches(task_queries)
+                all_search_results.extend(task_results)
+                print(f"[DEBUG] Collected {sum(len(r) for r in task_results)} results for task {i}")
+
+                # Summarize results for this task
+                task_summaries = await self._summarize_results(task_queries, task_results, session_id, user_id, detected_language)
+                all_summaries.extend(task_summaries)
+                print(f"[DEBUG] Generated {len(task_summaries)} summaries for task {i}")
+
+                # Mark task as completed
                 self.planning_agent.update_task_status(
-                    research_plan, 1, "completed",
-                    result=f"Generated {len(search_queries)} queries: {', '.join(search_queries[:3])}"
+                    research_plan, task.id, "completed",
+                    result=f"Generated {len(task_queries)} queries, collected {sum(len(r) for r in task_results)} results"
                 )
                 print(f"[DEBUG] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
 
-            # Step 2: 각 쿼리에 대해 병렬 검색 실행
-            if research_plan and len(research_plan) > 1:
-                self.planning_agent.update_task_status(research_plan, 2, "in_progress")
-                print(f"[DEBUG] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
-
-            print("[DEBUG] Executing parallel searches...")
-            search_results = await self._execute_parallel_searches(search_queries)
-            print(f"[DEBUG] Completed parallel searches, total results: {sum(len(r) for r in search_results)}")
-
-            if research_plan and len(research_plan) > 1:
-                self.planning_agent.update_task_status(
-                    research_plan, 2, "completed",
-                    result=f"Collected {sum(len(r) for r in search_results)} search results"
-                )
-                print(f"[DEBUG] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
-
-            # Step 3: 각 검색 결과를 LLM으로 요약
-            if research_plan and len(research_plan) > 2:
-                self.planning_agent.update_task_status(research_plan, 3, "in_progress")
-                print(f"[DEBUG] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
-
-            print("[DEBUG] Summarizing individual search results...")
-            summaries = await self._summarize_results(search_queries, search_results, session_id, user_id, detected_language)
-            print(f"[DEBUG] Generated {len(summaries)} summaries")
-
-            if research_plan and len(research_plan) > 2:
-                self.planning_agent.update_task_status(
-                    research_plan, 3, "completed",
-                    result=f"Generated {len(summaries)} summaries"
-                )
-                print(f"[DEBUG] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
-
-            # Step 4: 모든 요약을 종합하여 최종 분석 결과 생성
-            if research_plan and len(research_plan) > 3:
-                self.planning_agent.update_task_status(research_plan, 4, "in_progress")
-                print(f"[DEBUG] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
-
+            # Final synthesis after all tasks completed
             print("[DEBUG] Synthesizing final comprehensive analysis...")
-            final_analysis = await self._synthesize_final_analysis(query, search_queries, summaries, session_id, user_id, context)
+            final_analysis = await self._synthesize_final_analysis(query, all_search_queries, all_summaries, session_id, user_id, context)
             print("[DEBUG] Final analysis completed")
-
-            if research_plan and len(research_plan) > 3:
-                self.planning_agent.update_task_status(
-                    research_plan, 4, "completed",
-                    result=f"Completed final analysis ({len(final_analysis)} characters)"
-                )
-                print(f"[DEBUG] Final plan:\n{self.planning_agent.get_task_summary(research_plan)}")
 
             # 결과 생성
             result = SearchResult(
@@ -211,10 +185,11 @@ Comprehensive Analysis:""",
                 score=0.98,  # High score for comprehensive multi-query analysis
                 metadata={
                     "processing_type": "multi_query_synthesis",
-                    "query_count": len(search_queries),
-                    "search_queries": search_queries,
-                    "total_sources": sum(len(r) for r in search_results),
-                    "summaries": summaries
+                    "query_count": len(all_search_queries),
+                    "search_queries": all_search_queries,
+                    "total_sources": sum(len(r) for r in all_search_results),
+                    "summaries": all_summaries,
+                    "tasks_completed": len(research_plan)
                 }
             )
 
@@ -226,6 +201,102 @@ Comprehensive Analysis:""",
             import traceback
             print(f"[ERROR] Traceback: {traceback.format_exc()}")
             return {"success": False, "error": str(e), "agent": self.name}
+
+    async def _generate_task_queries(self, original_query: str, task_description: str, session_id: str = "", user_id: str = "", detected_language: str = "ko") -> List[str]:
+        """특정 task에 대한 검색 쿼리 생성 (2-3개)"""
+        try:
+            from neos.utils.llm_wrapper import create_tracked_llm
+            base_llm = create_llm(temperature=0.3, max_tokens=800)
+
+            llm = create_tracked_llm(
+                llm=base_llm,
+                session_id=session_id,
+                user_id=user_id,
+                workflow_step="multi_query_search",
+                agent_name=self.name,
+                tags=["task_query_generation", f"language:{detected_language}"]
+            )
+
+            # 언어별 프롬프트
+            prompts = {
+                "ko": f"""원래 질문: {original_query}
+작업(Task): {task_description}
+
+위 작업을 수행하기 위한 구체적인 검색 쿼리를 2-3개 **한국어로** 생성해주세요.
+
+요구사항:
+1. 작업 내용에 집중하여 쿼리를 생성하세요
+2. 각 쿼리는 서로 다른 측면을 다뤄야 합니다
+3. 구체적이고 검색 가능한 쿼리로 작성
+4. 각 쿼리는 한 줄로 작성
+
+검색 쿼리:""",
+
+                "en": f"""Original Question: {original_query}
+Task: {task_description}
+
+Generate 2-3 specific search queries **in English** to perform the above task.
+
+Requirements:
+1. Focus on the task content when generating queries
+2. Each query should cover different aspects
+3. Write specific and searchable queries
+4. Write each query on a single line
+
+Search Queries:""",
+
+                "ja": f"""元の質問: {original_query}
+タスク: {task_description}
+
+上記のタスクを実行するための具体的な検索クエリを2-3個**日本語で**生成してください。
+
+要件:
+1. タスク内容に焦点を当ててクエリを生成してください
+2. 各クエリは異なる側面をカバーする必要があります
+3. 具体的で検索可能なクエリを作成してください
+4. 各クエリは1行で記述してください
+
+検索クエリ:""",
+
+                "zh": f"""原始问题: {original_query}
+任务: {task_description}
+
+生成2-3个具体的搜索查询（**用中文**）以执行上述任务。
+
+要求:
+1. 生成查询时专注于任务内容
+2. 每个查询应涵盖不同的方面
+3. 编写具体且可搜索的查询
+4. 每个查询写在一行
+
+搜索查询:"""
+            }
+
+            prompt = prompts.get(detected_language, prompts["en"])
+
+            response = await llm.ainvoke([HumanMessage(content=prompt)])
+            query_text = response.content.strip()
+
+            # 쿼리 파싱
+            queries = [q.strip() for q in query_text.split('\n') if q.strip() and not q.strip().startswith('#')]
+            queries = queries[:3]  # 최대 3개
+
+            # 최소 2개 보장
+            if len(queries) < 2:
+                queries.extend([
+                    f"{task_description} {original_query}",
+                    f"{original_query} {task_description}"
+                ])
+                queries = queries[:3]
+
+            print(f"[DEBUG] Generated {len(queries)} queries for task: {task_description[:50]}")
+            return queries
+
+        except Exception as e:
+            print(f"[ERROR] Failed to generate task queries: {e}")
+            # Fallback: combine task description with original query
+            return [f"{task_description} {original_query}"]
+
 
     async def _generate_search_queries(self, original_query: str, session_id: str = "", user_id: str = "", detected_language: str = "ko") -> List[str]:
         """LLM을 사용하여 검색 쿼리 후보 2-5개 생성"""
