@@ -101,18 +101,18 @@ export default function Sidebar() {
 
   return (
     <nav
-      className="w-[280px] bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col h-full animate-slide-in-left"
+      className="w-[280px] bg-slate-50 dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 flex flex-col h-full animate-slide-in-left"
       aria-label="Main navigation"
     >
       {/* Header */}
-      <div className="p-4 space-y-3 border-b border-gray-200 dark:border-gray-800 animate-fade-in-down">
+      <div className="p-4 space-y-3 border-b border-slate-200 dark:border-slate-800 animate-fade-in-down">
         {/* Logo & Home */}
         <button
           onClick={() => router.push('/')}
           className="
             w-full flex items-center gap-3 px-3 py-2
-            text-gray-900 dark:text-gray-100 hover:text-orange-600 dark:hover:text-orange-400
-            transition-all duration-200 hover:scale-105 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800
+            text-slate-900 dark:text-slate-100 hover:text-blue-600 dark:hover:text-blue-400
+            transition-all duration-200 hover:scale-105 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-900
             group animate-scale-in
           "
           aria-label="Go to home"
@@ -154,10 +154,10 @@ export default function Sidebar() {
             onChange={(e) => setSearchQuery(e.target.value)}
             className="
               w-full pl-9 pr-3 py-2
-              bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl
-              text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 text-sm
+              bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl
+              text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 text-sm
               focus:outline-none focus:ring-2 focus:ring-brand-accent/50 focus:border-brand-accent/50
-              transition-all duration-200 hover:border-gray-300 dark:hover:border-gray-600
+              transition-all duration-200 hover:border-slate-400 dark:hover:border-slate-600
             "
             aria-label="Search conversations"
           />
@@ -195,7 +195,7 @@ export default function Sidebar() {
                     animate-fade-in-up
                     ${isActive
                       ? "bg-gradient-to-r from-blue-700/10 to-indigo-800/10 border-l-2 border-brand-accent shadow-sm"
-                      : "hover:bg-gray-50 dark:hover:bg-gray-800 border-l-2 border-transparent hover:scale-[1.02] hover:shadow-sm"
+                      : "hover:bg-slate-100 dark:hover:bg-slate-900 border-l-2 border-transparent hover:scale-[1.02] hover:shadow-sm"
                     }
                   `}
                   style={{ animationDelay: `${index * 30}ms` }}
@@ -243,7 +243,7 @@ export default function Sidebar() {
       </div>
 
       {/* Footer - Auth Section */}
-      <div className="p-4 border-t border-gray-200 dark:border-gray-800 animate-fade-in-up" style={{ animationDelay: '300ms' }}>
+      <div className="p-4 border-t border-slate-200 dark:border-slate-800 animate-fade-in-up" style={{ animationDelay: '300ms' }}>
         {!isLoading && !isAuthenticated ? (
           /* Not logged in - Show Sign In / Sign Up buttons */
           <div className="space-y-2">
@@ -282,7 +282,7 @@ export default function Sidebar() {
         ) : isAuthenticated && user ? (
           /* Logged in - Show user profile */
           <div className="space-y-3">
-            <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-gray-50 dark:bg-gray-800">
+            <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-900">
               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-700/20 via-slate-800/20 to-indigo-800/20 flex items-center justify-center text-brand-accent font-semibold text-sm">
                 {user.username?.[0]?.toUpperCase() || user.email?.[0]?.toUpperCase() || 'U'}
               </div>

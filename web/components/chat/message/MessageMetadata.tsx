@@ -26,7 +26,7 @@ export default function MessageMetadata({
     <div className="flex items-center gap-3 mt-2 text-xs text-gray-500 dark:text-gray-400">
       {modelName && (
         <div className="flex items-center gap-1.5">
-          <span className="text-orange-500 dark:text-orange-400">●</span>
+          <span className="text-blue-500 dark:text-blue-400">●</span>
           <span className="font-medium">{modelName.split("-").slice(0, 2).join(" ")}</span>
         </div>
       )}
