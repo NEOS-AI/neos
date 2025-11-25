@@ -27,7 +27,6 @@ from ...planning_agent import PlanningAgent
 from ..multi_query_search import MultiQuerySearchAgent
 from ..criticism_feedback_agent import CriticismFeedbackAgent
 
-# Import refactored modules
 from .prompts import (
     TopicAnalysisPrompts,
     ResearchPlanningPrompts,
