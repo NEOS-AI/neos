@@ -6,7 +6,7 @@ from business logic, making the code more maintainable and testable.
 
 import json
 import uuid
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional
 from neos.database.connection import db_manager
 
 
