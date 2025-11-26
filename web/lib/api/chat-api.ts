@@ -14,6 +14,120 @@ export type MessageStatus = "pending" | "streaming" | "completed" | "failed" | "
 export type ConversationStatus = "active" | "archived" | "deleted";
 export type ChatMode = "standard" | "rag" | "similarity" | "deep_research";
 
+// ============================================================================
+// Mode Configuration Strategy Pattern
+// ============================================================================
+
+/**
+ * Strategy interface for mode-specific conversation configuration
+ */
+interface ModeConfigStrategy {
+  readonly name: string;
+  buildMetadata(existingMetadata?: Record<string, any>): Record<string, any>;
+  getLogMessage(): string;
+}
+
+/**
+ * Standard mode configuration
+ */
+class StandardModeConfig implements ModeConfigStrategy {
+  readonly name = "standard";
+
+  buildMetadata(existingMetadata?: Record<string, any>): Record<string, any> {
+    return existingMetadata || {};
+  }
+
+  getLogMessage(): string {
+    return "[ChatAPI] Creating standard chat conversation";
+  }
+}
+
+/**
+ * Deep Research mode configuration
+ */
+class DeepResearchModeConfig implements ModeConfigStrategy {
+  readonly name = "deep_research";
+
+  buildMetadata(existingMetadata?: Record<string, any>): Record<string, any> {
+    return {
+      ...existingMetadata,
+      mode: "deep_research",
+      research_enabled: true,
+    };
+  }
+
+  getLogMessage(): string {
+    return "[ChatAPI] Creating deep research conversation";
+  }
+}
+
+/**
+ * Similarity mode configuration
+ */
+class SimilarityModeConfig implements ModeConfigStrategy {
+  readonly name = "similarity";
+
+  buildMetadata(existingMetadata?: Record<string, any>): Record<string, any> {
+    return {
+      ...existingMetadata,
+      mode: "similarity",
+      similarity_enabled: true,
+    };
+  }
+
+  getLogMessage(): string {
+    return "[ChatAPI] Creating similarity search conversation";
+  }
+}
+
+/**
+ * RAG mode configuration
+ */
+class RAGModeConfig implements ModeConfigStrategy {
+  readonly name = "rag";
+
+  buildMetadata(existingMetadata?: Record<string, any>): Record<string, any> {
+    return {
+      ...existingMetadata,
+      mode: "rag",
+      rag_enabled: true,
+    };
+  }
+
+  getLogMessage(): string {
+    return "[ChatAPI] Creating RAG conversation";
+  }
+}
+
+/**
+ * Factory for creating mode configuration strategies
+ * Implements Factory Pattern for better extensibility
+ */
+class ModeConfigFactory {
+  private static readonly strategies: Map<ChatMode, ModeConfigStrategy> = new Map([
+    ["standard", new StandardModeConfig()],
+    ["deep_research", new DeepResearchModeConfig()],
+    ["similarity", new SimilarityModeConfig()],
+    ["rag", new RAGModeConfig()],
+  ]);
+
+  static getStrategy(mode: ChatMode = "standard"): ModeConfigStrategy {
+    const strategy = this.strategies.get(mode);
+    if (!strategy) {
+      console.warn(`[ModeConfigFactory] Unknown mode: ${mode}, falling back to standard`);
+      return this.strategies.get("standard")!;
+    }
+    return strategy;
+  }
+
+  /**
+   * Register a new mode strategy (for extensibility)
+   */
+  static registerStrategy(mode: ChatMode, strategy: ModeConfigStrategy): void {
+    this.strategies.set(mode, strategy);
+  }
+}
+
 export interface CreateConversationRequest {
   user_id: string;
   title?: string;
@@ -133,32 +247,78 @@ class ChatAPI {
   // Conversation Management
   // --------------------------------------------------------------------------
 
+  /**
+   * Create a new conversation with mode-specific configuration
+   *
+   * Uses Strategy Pattern to handle different conversation modes:
+   * - Standard: Basic chat mode
+   * - RAG: Retrieval-Augmented Generation
+   * - Similarity: Similarity-based context retrieval
+   * - Deep Research: Advanced research with multi-step analysis
+   *
+   * @param request - Conversation creation parameters
+   * @returns Promise resolving to the created conversation
+   *
+   * @example
+   * ```typescript
+   * const conversation = await chatAPI.createConversation({
+   *   user_id: "user_123",
+   *   mode: "deep_research",
+   *   title: "AI Research"
+   * });
+   * ```
+   */
   async createConversation(request: CreateConversationRequest): Promise<ConversationResponse> {
     console.log('[ChatAPI] Creating conversation with request:', request);
 
-    const {mode} = request;
-    if (mode) {
-      //TODO
-    }
+    const mode = request.mode || "standard";
 
-    const response = await fetch(`${this.baseUrl}/chat/conversations`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-    });
+    // Strategy Pattern: Get the appropriate mode configuration
+    const modeStrategy = ModeConfigFactory.getStrategy(mode);
 
-    if (!response.ok) {
-      const errorBody = await response.text();
-      console.error('[ChatAPI] Create conversation failed:', {
-        status: response.status,
-        statusText: response.statusText,
-        body: errorBody,
-        request,
+    // Log mode-specific message
+    console.log(modeStrategy.getLogMessage());
+
+    // Build request body with mode-specific metadata
+    const requestBody = {
+      ...request,
+      metadata: modeStrategy.buildMetadata(request.metadata),
+    };
+
+    // All modes use the same endpoint
+    // Mode-specific routing happens at message send time
+    const endpoint = `${this.baseUrl}/chat/conversations`;
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
       });
-      throw new Error(`Failed to create conversation: ${response.statusText} - ${errorBody}`);
-    }
 
-    return response.json();
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error('[ChatAPI] Create conversation failed:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorBody,
+          request: requestBody,
+          mode: modeStrategy.name,
+        });
+        throw new Error(`Failed to create conversation: ${response.statusText} - ${errorBody}`);
+      }
+
+      const result = await response.json();
+      console.log(`[ChatAPI] Successfully created ${modeStrategy.name} conversation:`, result.conversation_id);
+
+      return result;
+    } catch (error) {
+      // Re-throw with additional context
+      if (error instanceof Error) {
+        throw new Error(`[${modeStrategy.name}] ${error.message}`);
+      }
+      throw error;
+    }
   }
 
   async getConversation(conversationId: string): Promise<ConversationResponse> {
