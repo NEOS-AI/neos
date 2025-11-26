@@ -136,15 +136,57 @@ class ChatAPI {
   async createConversation(request: CreateConversationRequest): Promise<ConversationResponse> {
     console.log('[ChatAPI] Creating conversation with request:', request);
 
-    const {mode} = request;
-    if (mode) {
-      //TODO
+    const { mode = "standard" } = request;
+
+    // Route to appropriate API based on mode
+    let endpoint = `${this.baseUrl}/chat/conversations`;
+    let requestBody = { ...request };
+
+    switch (mode) {
+      case "deep_research":
+        // Deep research uses the same conversation endpoint
+        // The actual research is initiated via startDeepResearch when sending messages
+        console.log('[ChatAPI] Creating deep research conversation');
+        requestBody.metadata = {
+          ...requestBody.metadata,
+          mode: "deep_research",
+          research_enabled: true,
+        };
+        break;
+
+      case "similarity":
+        // Similarity search uses the same conversation endpoint
+        // Messages will be routed to similarity endpoints when sending
+        console.log('[ChatAPI] Creating similarity search conversation');
+        requestBody.metadata = {
+          ...requestBody.metadata,
+          mode: "similarity",
+          similarity_enabled: true,
+        };
+        break;
+
+      case "rag":
+        // RAG uses the same conversation endpoint
+        // Messages will be routed to RAG endpoints when sending
+        console.log('[ChatAPI] Creating RAG conversation');
+        requestBody.metadata = {
+          ...requestBody.metadata,
+          mode: "rag",
+          rag_enabled: true,
+        };
+        break;
+
+      case "standard":
+      default:
+        // Standard chat mode
+        console.log('[ChatAPI] Creating standard chat conversation');
+        break;
     }
 
-    const response = await fetch(`${this.baseUrl}/chat/conversations`, {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
@@ -153,12 +195,16 @@ class ChatAPI {
         status: response.status,
         statusText: response.statusText,
         body: errorBody,
-        request,
+        request: requestBody,
+        mode,
       });
       throw new Error(`Failed to create conversation: ${response.statusText} - ${errorBody}`);
     }
 
-    return response.json();
+    const result = await response.json();
+    console.log(`[ChatAPI] Successfully created ${mode} conversation:`, result.conversation_id);
+
+    return result;
   }
 
   async getConversation(conversationId: string): Promise<ConversationResponse> {
