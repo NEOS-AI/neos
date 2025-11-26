@@ -104,7 +104,7 @@ class RAGModeConfig implements ModeConfigStrategy {
  * Implements Factory Pattern for better extensibility
  */
 class ModeConfigFactory {
-  private static readonly strategies: Map<ChatMode, ModeConfigStrategy> = new Map([
+  private static readonly strategies = new Map<ChatMode, ModeConfigStrategy>([
     ["standard", new StandardModeConfig()],
     ["deep_research", new DeepResearchModeConfig()],
     ["similarity", new SimilarityModeConfig()],
