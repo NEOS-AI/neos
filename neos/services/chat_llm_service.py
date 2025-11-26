@@ -167,18 +167,12 @@ class ChatLLMService:
             finish_reason = self._extract_finish_reason(response)
             latency_ms = int((time.time() - start_time) * 1000)
 
-            # 비용 계산 및 기록
-            cost_info = await cost_calculator.record_message_cost(
-                message_id=message_id,
-                conversation_id=conversation_id,
+            # 비용 계산 (기록은 호출자가 메시지 저장 후 수행)
+            cost_info = await cost_calculator.calculate_cost(
                 provider=provider,
                 model_name=model,
-                model_version=None,
                 prompt_tokens=usage["prompt_tokens"],
                 completion_tokens=usage["completion_tokens"],
-                total_tokens=usage["total_tokens"],
-                latency_ms=latency_ms,
-                finish_reason=finish_reason,
             )
 
             logger.info(
@@ -301,18 +295,12 @@ class ChatLLMService:
 
             latency_ms = int((time.time() - start_time) * 1000)
 
-            # 비용 계산 및 기록
-            cost_info = await cost_calculator.record_message_cost(
-                message_id=message_id,
-                conversation_id=conversation_id,
+            # 비용 계산 (기록은 호출자가 메시지 저장 후 수행)
+            cost_info = await cost_calculator.calculate_cost(
                 provider=provider,
                 model_name=model,
-                model_version=None,
                 prompt_tokens=usage_info["prompt_tokens"],
                 completion_tokens=usage_info["completion_tokens"],
-                total_tokens=usage_info["total_tokens"],
-                latency_ms=latency_ms,
-                finish_reason=finish_reason_value,
             )
 
             logger.info(
@@ -326,6 +314,8 @@ class ChatLLMService:
             complete_event = {
                 "type": "complete",
                 "full_content": full_content,
+                "model_name": model,
+                "provider": provider,
                 "usage": usage_info,
                 "cost": cost_info,
                 "latency_ms": latency_ms,

@@ -9,6 +9,7 @@ import uuid
 
 from neos.api.services.chat_service import ChatService
 from neos.services.chat_llm_service import chat_llm_service
+from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -101,6 +102,19 @@ class BaseChatMessageProcessor(ABC):
                 message_id=assistant_message_id,
                 llm_response=llm_response,
                 parent_message_id=user_message["message_id"]
+            )
+
+            # 7.5. 메시지 저장 후 비용 기록 (FK 제약 위반 방지)
+            await cost_calculator.record_cost_for_existing_message(
+                message_id=assistant_message_id,
+                conversation_id=conversation_id,
+                provider=llm_response.get("provider", "anthropic"),
+                model_name=llm_response["model_name"],
+                prompt_tokens=llm_response["usage"]["prompt_tokens"],
+                completion_tokens=llm_response["usage"]["completion_tokens"],
+                total_tokens=llm_response["usage"]["total_tokens"],
+                latency_ms=llm_response.get("latency_ms"),
+                finish_reason=llm_response.get("finish_reason")
             )
 
             # 8. 후처리 (임베딩 생성 등)
@@ -213,6 +227,7 @@ class BaseChatMessageProcessor(ABC):
             llm_response = {
                 "content": full_content,
                 "model_name": llm_metadata.get("model_name", conversation.get("model_name")),
+                "provider": llm_metadata.get("provider", "anthropic"),
                 "usage": llm_metadata.get("usage", {}),
                 "cost": llm_metadata.get("cost", {}),
                 "latency_ms": llm_metadata.get("latency_ms", 0),
@@ -224,6 +239,19 @@ class BaseChatMessageProcessor(ABC):
                 message_id=assistant_message_id,
                 llm_response=llm_response,
                 parent_message_id=user_message["message_id"]
+            )
+
+            # 7.5. 메시지 저장 후 비용 기록 (FK 제약 위반 방지)
+            await cost_calculator.record_cost_for_existing_message(
+                message_id=assistant_message_id,
+                conversation_id=conversation_id,
+                provider=llm_response["provider"],
+                model_name=llm_response["model_name"],
+                prompt_tokens=llm_response["usage"]["prompt_tokens"],
+                completion_tokens=llm_response["usage"]["completion_tokens"],
+                total_tokens=llm_response["usage"]["total_tokens"],
+                latency_ms=llm_response["latency_ms"],
+                finish_reason=llm_response["finish_reason"]
             )
 
             # 8. 후처리
