@@ -89,6 +89,10 @@ export const useChatStore = create<ChatStore>()(
       currentAbortController: null,
       sseReconnectAttempts: 0,
       sseReconnectTimeoutId: null,
+      lastHeartbeatTimestamp: null,
+      heartbeatTimeoutId: null,
+      broadcastChannel: null,
+      isOnline: typeof navigator !== "undefined" ? navigator.onLine : true,
 
       // ======================================================================
       // Computed Getters
@@ -803,15 +807,30 @@ export const useChatStore = create<ChatStore>()(
 
           set({ activeEventSource: eventSource });
 
+          // Start heartbeat monitoring
+          get().startHeartbeatMonitoring(deepResearchResponse.report_id, conversationId, assistantMsgId);
+
+          // Broadcast that we started deep research
+          const { broadcastChannel } = get();
+          if (broadcastChannel) {
+            broadcastChannel.postMessage({
+              type: "deep_research_started",
+              payload: {
+                reportId: deepResearchResponse.report_id,
+                conversationId,
+              },
+            });
+          }
+
           eventSource.onmessage = (event) => {
             try {
               const data = JSON.parse(event.data);
 
               switch (data.event) {
                 case "heartbeat":
-                  // Heartbeat event - connection is alive, no UI update needed
-                  // Just log for debugging
+                  // Heartbeat event - connection is alive, reset timeout monitoring
                   console.debug(`[Store] Heartbeat received (uptime: ${data.data.uptime_seconds}s)`);
+                  get().resetHeartbeat(deepResearchResponse.report_id, conversationId, assistantMsgId);
                   break;
 
                 case "phase_started":
@@ -832,6 +851,12 @@ export const useChatStore = create<ChatStore>()(
 
                 case "section_content":
                   streamContent += data.data.content_chunk;
+                  // Save partial results for crash recovery
+                  get().savePartialResults(deepResearchResponse.report_id, streamContent, {
+                    conversationId,
+                    assistantMsgId,
+                    status: "in_progress",
+                  });
                   break;
 
                 case "completed":
@@ -840,6 +865,21 @@ export const useChatStore = create<ChatStore>()(
                   streamContent += `- Total sources: ${data.data.total_sources}\n`;
                   streamContent += `- Processing time: ${(data.data.processing_time_ms / 1000).toFixed(2)}s\n`;
                   eventSource.close();
+
+                  // Clear partial results on completion
+                  get().clearPartialResults(deepResearchResponse.report_id);
+
+                  // Broadcast completion to other tabs
+                  const { broadcastChannel: bc } = get();
+                  if (bc) {
+                    bc.postMessage({
+                      type: "deep_research_completed",
+                      payload: {
+                        reportId: deepResearchResponse.report_id,
+                        conversationId,
+                      },
+                    });
+                  }
 
                   set((state) => ({
                     conversations: state.conversations.map((c) =>
@@ -868,6 +908,21 @@ export const useChatStore = create<ChatStore>()(
                 case "failed":
                   streamContent += `\n\n❌ **Research Failed**\n${data.data.error_message}\n`;
                   eventSource.close();
+
+                  // Clear partial results on failure
+                  get().clearPartialResults(deepResearchResponse.report_id);
+
+                  // Broadcast failure to other tabs
+                  const { broadcastChannel: bcFailed } = get();
+                  if (bcFailed) {
+                    bcFailed.postMessage({
+                      type: "deep_research_failed",
+                      payload: {
+                        reportId: deepResearchResponse.report_id,
+                        conversationId,
+                      },
+                    });
+                  }
 
                   set((state) => ({
                     conversations: state.conversations.map((c) =>
@@ -919,7 +974,8 @@ export const useChatStore = create<ChatStore>()(
             eventSource.close();
 
             // Attempt automatic reconnection with exponential backoff
-            const MAX_RECONNECT_ATTEMPTS = 5;
+            // Increased from 5 to 10 attempts to support long-running research
+            const MAX_RECONNECT_ATTEMPTS = 10;
             const currentAttempts = get().sseReconnectAttempts;
 
             if (currentAttempts < MAX_RECONNECT_ATTEMPTS) {
@@ -1052,11 +1108,21 @@ export const useChatStore = create<ChatStore>()(
       ) => {
         console.log("[Store] Reconnecting to deep research:", reportId);
 
+        // Try to load partial results from localStorage
+        const partialResults = get().loadPartialResults(reportId);
+        let streamContent = existingContent || partialResults?.content || `🔬 **Deep Research Report**\n\n`;
+
+        if (partialResults) {
+          console.log("[Store] Restored partial results from localStorage");
+        }
+
         // Connect to SSE stream for updates
         const eventSource = chatAPI.connectDeepResearchStream(reportId);
-        let streamContent = existingContent || `🔬 **Deep Research Report**\n\n`;
 
         set({ activeEventSource: eventSource });
+
+        // Start heartbeat monitoring
+        get().startHeartbeatMonitoring(reportId, conversationId, assistantMsgId);
 
         eventSource.onmessage = (event) => {
           try {
@@ -1070,9 +1136,9 @@ export const useChatStore = create<ChatStore>()(
 
             switch (data.event) {
               case "heartbeat":
-                // Heartbeat event - connection is alive, no UI update needed
-                // Just log for debugging
+                // Heartbeat event - connection is alive, reset timeout monitoring
                 console.debug(`[Store] Heartbeat received (uptime: ${data.data.uptime_seconds}s)`);
+                get().resetHeartbeat(reportId, conversationId, assistantMsgId);
                 break;
 
               case "phase_started":
@@ -1093,6 +1159,12 @@ export const useChatStore = create<ChatStore>()(
 
               case "section_content":
                 streamContent += data.data.content_chunk;
+                // Save partial results for crash recovery
+                get().savePartialResults(reportId, streamContent, {
+                  conversationId,
+                  assistantMsgId,
+                  status: "in_progress",
+                });
                 break;
 
               case "completed":
@@ -1101,6 +1173,21 @@ export const useChatStore = create<ChatStore>()(
                 streamContent += `- Total sources: ${data.data.total_sources}\n`;
                 streamContent += `- Processing time: ${(data.data.processing_time_ms / 1000).toFixed(2)}s\n`;
                 eventSource.close();
+
+                // Clear partial results on completion
+                get().clearPartialResults(reportId);
+
+                // Broadcast completion to other tabs
+                const { broadcastChannel: bcComplete } = get();
+                if (bcComplete) {
+                  bcComplete.postMessage({
+                    type: "deep_research_completed",
+                    payload: {
+                      reportId,
+                      conversationId,
+                    },
+                  });
+                }
 
                 set((state) => ({
                   conversations: state.conversations.map((c) =>
@@ -1129,6 +1216,21 @@ export const useChatStore = create<ChatStore>()(
               case "failed":
                 streamContent += `\n\n❌ **Research Failed**\n${data.data.error_message}\n`;
                 eventSource.close();
+
+                // Clear partial results on failure
+                get().clearPartialResults(reportId);
+
+                // Broadcast failure to other tabs
+                const { broadcastChannel: bcFail } = get();
+                if (bcFail) {
+                  bcFail.postMessage({
+                    type: "deep_research_failed",
+                    payload: {
+                      reportId,
+                      conversationId,
+                    },
+                  });
+                }
 
                 set((state) => ({
                   conversations: state.conversations.map((c) =>
@@ -1180,7 +1282,8 @@ export const useChatStore = create<ChatStore>()(
           eventSource.close();
 
           // Attempt automatic reconnection with exponential backoff
-          const MAX_RECONNECT_ATTEMPTS = 5;
+          // Increased from 5 to 10 attempts to support long-running research
+          const MAX_RECONNECT_ATTEMPTS = 10;
           const currentAttempts = get().sseReconnectAttempts;
 
           if (currentAttempts < MAX_RECONNECT_ATTEMPTS) {
@@ -1406,8 +1509,218 @@ export const useChatStore = create<ChatStore>()(
         set({ error: null });
       },
 
+      // ======================================================================
+      // Connection Management - New Features
+      // ======================================================================
+
+      /**
+       * Setup network online/offline listeners for automatic reconnection
+       */
+      setupNetworkListeners: () => {
+        if (typeof window === "undefined") return;
+
+        const handleOnline = () => {
+          console.log("[Store] Network connection restored");
+          set({ isOnline: true });
+
+          // Attempt to reconnect to any ongoing deep research
+          const { currentConversationId, currentConversation } = get();
+          if (currentConversationId && currentConversation?.messages) {
+            console.log("[Store] Attempting to reconnect after network restoration");
+            get().checkAndReconnectDeepResearch(currentConversationId, currentConversation.messages);
+          }
+        };
+
+        const handleOffline = () => {
+          console.log("[Store] Network connection lost");
+          set({ isOnline: false });
+        };
+
+        window.addEventListener("online", handleOnline);
+        window.addEventListener("offline", handleOffline);
+
+        console.log("[Store] Network listeners setup complete");
+
+        // Return cleanup function
+        return () => {
+          window.removeEventListener("online", handleOnline);
+          window.removeEventListener("offline", handleOffline);
+        };
+      },
+
+      /**
+       * Setup BroadcastChannel for multi-tab synchronization
+       */
+      setupBroadcastChannel: () => {
+        if (typeof window === "undefined" || !("BroadcastChannel" in window)) {
+          console.warn("[Store] BroadcastChannel not supported in this environment");
+          return;
+        }
+
+        // Close existing channel if any
+        const existingChannel = get().broadcastChannel;
+        if (existingChannel) {
+          existingChannel.close();
+        }
+
+        const channel = new BroadcastChannel("neos-deep-research");
+        set({ broadcastChannel: channel });
+
+        channel.onmessage = (event) => {
+          const { type, payload } = event.data;
+
+          switch (type) {
+            case "deep_research_started":
+              console.log("[Store] Another tab started deep research:", payload.reportId);
+              // Check if we should close our connection to avoid duplicates
+              const { activeEventSource } = get();
+              if (activeEventSource && payload.reportId) {
+                const currentMessages = get().currentConversation?.messages || [];
+                const currentReport = currentMessages.find(
+                  (m) => m.metadata?.deep_research_report_id === payload.reportId
+                );
+                if (currentReport) {
+                  console.log("[Store] Closing duplicate connection in this tab");
+                  activeEventSource.close();
+                  set({ activeEventSource: null });
+                }
+              }
+              break;
+
+            case "deep_research_completed":
+              console.log("[Store] Deep research completed in another tab:", payload.reportId);
+              // Reload messages to get the completed result
+              const { currentConversationId } = get();
+              if (currentConversationId && payload.conversationId === currentConversationId) {
+                get().loadMessages(currentConversationId);
+              }
+              break;
+
+            case "deep_research_failed":
+              console.log("[Store] Deep research failed in another tab:", payload.reportId);
+              break;
+
+            default:
+              console.debug("[Store] Unknown broadcast message type:", type);
+          }
+        };
+
+        console.log("[Store] BroadcastChannel setup complete");
+      },
+
+      /**
+       * Start heartbeat timeout monitoring
+       * Triggers reconnection if no heartbeat received within timeout period
+       */
+      startHeartbeatMonitoring: (reportId: string, conversationId: string, assistantMsgId: string) => {
+        const HEARTBEAT_TIMEOUT_MS = 30000; // 30 seconds
+
+        // Clear existing timeout
+        const existingTimeoutId = get().heartbeatTimeoutId;
+        if (existingTimeoutId) {
+          clearTimeout(existingTimeoutId);
+        }
+
+        // Set new timestamp
+        set({ lastHeartbeatTimestamp: Date.now() });
+
+        // Schedule timeout check
+        const timeoutId = setTimeout(() => {
+          const { lastHeartbeatTimestamp, activeEventSource } = get();
+          const timeSinceLastHeartbeat = Date.now() - (lastHeartbeatTimestamp || 0);
+
+          if (timeSinceLastHeartbeat > HEARTBEAT_TIMEOUT_MS && activeEventSource) {
+            console.warn(
+              `[Store] No heartbeat received for ${timeSinceLastHeartbeat}ms. Triggering reconnection...`
+            );
+
+            // Close stale connection
+            activeEventSource.close();
+            set({ activeEventSource: null });
+
+            // Get current content before reconnecting
+            const currentMessages = get().currentConversation?.messages || [];
+            const currentMessage = currentMessages.find((m) => m.message_id === assistantMsgId);
+            const currentContent = currentMessage?.content || "";
+
+            // Trigger reconnection
+            get().reconnectDeepResearch(conversationId, reportId, assistantMsgId, currentContent);
+          }
+        }, HEARTBEAT_TIMEOUT_MS) as any;
+
+        set({ heartbeatTimeoutId: timeoutId });
+      },
+
+      /**
+       * Reset heartbeat timestamp (called when heartbeat received)
+       */
+      resetHeartbeat: (reportId: string, conversationId: string, assistantMsgId: string) => {
+        set({ lastHeartbeatTimestamp: Date.now() });
+
+        // Restart monitoring
+        get().startHeartbeatMonitoring(reportId, conversationId, assistantMsgId);
+      },
+
+      /**
+       * Save partial research results to localStorage for crash recovery
+       */
+      savePartialResults: (reportId: string, content: string, metadata: any) => {
+        if (typeof window === "undefined") return;
+
+        try {
+          const partialData = {
+            reportId,
+            content,
+            metadata,
+            timestamp: Date.now(),
+          };
+
+          localStorage.setItem(`deep-research-partial-${reportId}`, JSON.stringify(partialData));
+          console.debug("[Store] Saved partial results for report:", reportId);
+        } catch (error) {
+          console.warn("[Store] Failed to save partial results:", error);
+        }
+      },
+
+      /**
+       * Load partial research results from localStorage
+       */
+      loadPartialResults: (reportId: string): { content: string; metadata: any } | null => {
+        if (typeof window === "undefined") return null;
+
+        try {
+          const stored = localStorage.getItem(`deep-research-partial-${reportId}`);
+          if (stored) {
+            const partialData = JSON.parse(stored);
+            console.log("[Store] Loaded partial results for report:", reportId);
+            return {
+              content: partialData.content || "",
+              metadata: partialData.metadata || {},
+            };
+          }
+        } catch (error) {
+          console.warn("[Store] Failed to load partial results:", error);
+        }
+
+        return null;
+      },
+
+      /**
+       * Clear partial research results from localStorage
+       */
+      clearPartialResults: (reportId: string) => {
+        if (typeof window === "undefined") return;
+
+        try {
+          localStorage.removeItem(`deep-research-partial-${reportId}`);
+          console.debug("[Store] Cleared partial results for report:", reportId);
+        } catch (error) {
+          console.warn("[Store] Failed to clear partial results:", error);
+        }
+      },
+
       cleanupEventSource: () => {
-        const { activeEventSource, sseReconnectTimeoutId } = get();
+        const { activeEventSource, sseReconnectTimeoutId, heartbeatTimeoutId } = get();
         if (activeEventSource) {
           console.log("[Store] Cleaning up active EventSource");
           activeEventSource.close();
@@ -1417,6 +1730,11 @@ export const useChatStore = create<ChatStore>()(
           console.log("[Store] Clearing SSE reconnection timeout");
           clearTimeout(sseReconnectTimeoutId);
           set({ sseReconnectTimeoutId: null, sseReconnectAttempts: 0 });
+        }
+        if (heartbeatTimeoutId) {
+          console.log("[Store] Clearing heartbeat timeout");
+          clearTimeout(heartbeatTimeoutId);
+          set({ heartbeatTimeoutId: null, lastHeartbeatTimestamp: null });
         }
       },
 

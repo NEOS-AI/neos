@@ -17,8 +17,34 @@ function ChatPageContent() {
   const router = useRouter();
   const chatId = params.id as string;
 
-  const { loadConversations, loadMessages, setCurrentConversation, currentConversationId } = useChatStore();
+  const {
+    loadConversations,
+    loadMessages,
+    setCurrentConversation,
+    currentConversationId,
+    setupNetworkListeners,
+    setupBroadcastChannel,
+  } = useChatStore();
   const [isInitializing, setIsInitializing] = useState(true);
+
+  // Setup network listeners and broadcast channel on mount
+  useEffect(() => {
+    // Setup network listeners for online/offline detection
+    const cleanupNetworkListeners = setupNetworkListeners();
+
+    // Setup BroadcastChannel for multi-tab synchronization
+    setupBroadcastChannel();
+
+    console.log("[ChatPage] Connection management features initialized");
+
+    // Cleanup on unmount
+    return () => {
+      if (cleanupNetworkListeners) {
+        cleanupNetworkListeners();
+      }
+      // BroadcastChannel will be closed when store is cleaned up
+    };
+  }, [setupNetworkListeners, setupBroadcastChannel]);
 
   const initialize = useCallback(async () => {
     try {

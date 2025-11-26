@@ -196,6 +196,16 @@ export interface ChatStore {
   sseReconnectAttempts: number;
   sseReconnectTimeoutId: number | null;
 
+  // Heartbeat timeout detection
+  lastHeartbeatTimestamp: number | null;
+  heartbeatTimeoutId: number | null;
+
+  // Multi-tab synchronization
+  broadcastChannel: BroadcastChannel | null;
+
+  // Network status
+  isOnline: boolean;
+
   // Getters
   currentConversation: Conversation | null;
   messages: Message[];
@@ -230,4 +240,13 @@ export interface ChatStore {
   clearError: () => void;
   cleanupEventSource: () => void;
   stopGeneration: () => void;
+
+  // Connection Management Actions
+  setupNetworkListeners: () => (() => void) | undefined;
+  setupBroadcastChannel: () => void;
+  startHeartbeatMonitoring: (reportId: string, conversationId: string, assistantMsgId: string) => void;
+  resetHeartbeat: (reportId: string, conversationId: string, assistantMsgId: string) => void;
+  savePartialResults: (reportId: string, content: string, metadata: any) => void;
+  loadPartialResults: (reportId: string) => { content: string; metadata: any } | null;
+  clearPartialResults: (reportId: string) => void;
 }
