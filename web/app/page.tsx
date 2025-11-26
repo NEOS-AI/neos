@@ -25,7 +25,7 @@ const modes: Mode[] = [
 
 export default function Home() {
   const router = useRouter();
-  const { loadConversations, conversations, createConversation } = useChatStore();
+  const { loadConversations, conversations, createConversation, updateSettings } = useChatStore();
   const [isLoading, setIsLoading] = useState(true);
   const [selectedMode, setSelectedMode] = useState("standard");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -47,6 +47,11 @@ export default function Home() {
   // Handle starting a new chat with the selected mode
   const handleStartNewChat = useCallback(async (prompt?: string) => {
     try {
+      // CRITICAL: Update settings mode BEFORE creating conversation
+      // This ensures sendMessage uses the correct mode
+      updateSettings({ mode: selectedMode as any });
+
+      // Create conversation with the selected mode
       await createConversation(undefined, undefined, selectedMode);
 
       // Get the newly created conversation ID from the store
@@ -64,7 +69,7 @@ export default function Home() {
     } catch (error) {
       console.error("Failed to create conversation:", error);
     }
-  }, [createConversation, router, selectedMode]);
+  }, [createConversation, router, selectedMode, updateSettings]);
 
   const handleSendMessage = (message: string) => {
     handleStartNewChat(message);
