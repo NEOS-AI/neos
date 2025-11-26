@@ -44,6 +44,7 @@ export default function Home() {
     initialize();
   }, [loadConversations]);
 
+  // Handle starting a new chat with the selected mode
   const handleStartNewChat = useCallback(async (prompt?: string) => {
     try {
       await createConversation(undefined, undefined, selectedMode);
