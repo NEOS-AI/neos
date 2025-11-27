@@ -47,6 +47,7 @@ from .utils import (
     CostOptimizer,
     FactChecker,
     BiasDetector,
+    ResearchEventLogger,
 )
 
 
@@ -166,6 +167,9 @@ class HyperDeepResearchAgent(SearchAgent):
             "estimated_total_tokens": 0,
             "llm_calls_by_phase": {}
         }
+
+        # Event logger for real-time progress tracking (initialized per research session)
+        self.event_logger = None
 
     def _init_tavily_client(self) -> None:
         """Initialize Tavily API client."""
@@ -293,17 +297,30 @@ class HyperDeepResearchAgent(SearchAgent):
                 self.current_report_id, user_id, session_id, query
             )
 
+        # Initialize event logger for real-time progress tracking
+        # Enable CLI output based on context (will be True for CLI mode, False for API)
+        enable_cli = session_id.startswith("cli_") if session_id else False
+        self.event_logger = ResearchEventLogger(
+            report_id=self.current_report_id,
+            enable_cli_output=enable_cli
+        )
+        print(f"[DEBUG] EventLogger initialized (CLI output: {enable_cli})")
+
         # Phase 1: Topic Analysis
         print("\n[INFO] ===== Phase 1/8: Topic Analysis =====")
+        await self.event_logger.log_phase_start(1, "Topic Analysis")
         await self.repository.update_report_status(
             self.current_report_id, "in_progress", "started_at"
         )
+        phase1_start = datetime.utcnow()
         topic_analysis = await self._analyze_topic(query, session_id, user_id, language)
         await self.repository.create_section(
             self.current_report_id, "topic_analysis", 1,
             "Multi-Dimensional Topic Analysis",
             topic_analysis["full_analysis"], "completed"
         )
+        phase1_duration = int((datetime.utcnow() - phase1_start).total_seconds() * 1000)
+        await self.event_logger.log_phase_complete(1, "Topic Analysis", phase1_duration)
 
         # Assess topic complexity for adaptive depth
         print("\n[INFO] 🎯 Assessing topic complexity...")
@@ -320,6 +337,8 @@ class HyperDeepResearchAgent(SearchAgent):
 
         # Phase 2: Research Planning
         print("\n[INFO] ===== Phase 2/8: Research Planning =====")
+        await self.event_logger.log_phase_start(2, "Research Planning")
+        phase2_start = datetime.utcnow()
         methodology = await self._plan_research(
             topic_analysis, session_id, user_id, language
         )
@@ -328,9 +347,13 @@ class HyperDeepResearchAgent(SearchAgent):
             "Research Methodology & Framework",
             methodology["full_plan"], "completed"
         )
+        phase2_duration = int((datetime.utcnow() - phase2_start).total_seconds() * 1000)
+        await self.event_logger.log_phase_complete(2, "Research Planning", phase2_duration)
 
         # Phase 3: Initial Data Collection
         print("\n[INFO] ===== Phase 3/8: Data Collection =====")
+        await self.event_logger.log_phase_start(3, "Data Collection")
+        phase3_start = datetime.utcnow()
         initial_data = await self._collect_initial_data(
             topic_analysis, methodology, session_id, user_id, language
         )
@@ -339,9 +362,13 @@ class HyperDeepResearchAgent(SearchAgent):
             "Initial Data Collection", initial_data["summary"], "completed",
             sources_count=initial_data["sources_count"]
         )
+        phase3_duration = int((datetime.utcnow() - phase3_start).total_seconds() * 1000)
+        await self.event_logger.log_phase_complete(3, "Data Collection", phase3_duration)
 
         # Phase 4: Iterative Deep Analysis
         print("\n[INFO] ===== Phase 4/8: Deep Analysis =====")
+        await self.event_logger.log_phase_start(4, "Deep Analysis")
+        phase4_start = datetime.utcnow()
         deep_analysis = await self._perform_deep_analysis(
             topic_analysis, initial_data, session_id, user_id, language
         )
@@ -349,6 +376,8 @@ class HyperDeepResearchAgent(SearchAgent):
             self.current_report_id, "deep_analysis", 4,
             "Iterative Deep Analysis", deep_analysis["synthesis"], "completed"
         )
+        phase4_duration = int((datetime.utcnow() - phase4_start).total_seconds() * 1000)
+        await self.event_logger.log_phase_complete(4, "Deep Analysis", phase4_duration)
 
         # Get criticism feedback
         await self._process_criticism_feedback(
@@ -375,6 +404,8 @@ class HyperDeepResearchAgent(SearchAgent):
 
         # Phase 5: Gap Analysis
         print("\n[INFO] ===== Phase 5/8: Gap Analysis =====")
+        await self.event_logger.log_phase_start(5, "Gap Analysis")
+        phase5_start = datetime.utcnow()
         gap_data = await self._analyze_gaps(
             topic_analysis, deep_analysis, session_id, user_id, language
         )
@@ -383,9 +414,13 @@ class HyperDeepResearchAgent(SearchAgent):
             "Gap Analysis & Additional Research", gap_data["summary"], "completed",
             sources_count=gap_data["sources_count"]
         )
+        phase5_duration = int((datetime.utcnow() - phase5_start).total_seconds() * 1000)
+        await self.event_logger.log_phase_complete(5, "Gap Analysis", phase5_duration)
 
         # Phase 6: Cross-Validation
         print("\n[INFO] ===== Phase 6/8: Cross-Validation =====")
+        await self.event_logger.log_phase_start(6, "Cross-Validation")
+        phase6_start = datetime.utcnow()
 
         # Apply semantic clustering to all collected sources
         clusters = await self._apply_semantic_clustering(self.all_collected_sources)
@@ -397,6 +432,8 @@ class HyperDeepResearchAgent(SearchAgent):
             self.current_report_id, "validation", 6,
             "Cross-Validation & Triangulation", validation["report"], "completed"
         )
+        phase6_duration = int((datetime.utcnow() - phase6_start).total_seconds() * 1000)
+        await self.event_logger.log_phase_complete(6, "Cross-Validation", phase6_duration)
 
         # Get criticism feedback
         await self._process_criticism_feedback(
@@ -418,6 +455,8 @@ class HyperDeepResearchAgent(SearchAgent):
 
         # Phase 7: Critical Analysis
         print("\n[INFO] ===== Phase 7/8: Critical Analysis =====")
+        await self.event_logger.log_phase_start(7, "Critical Analysis")
+        phase7_start = datetime.utcnow()
         critical_analysis = await self._perform_critical_analysis(
             topic_analysis, deep_analysis, validation, session_id, user_id, language
         )
@@ -425,6 +464,8 @@ class HyperDeepResearchAgent(SearchAgent):
             self.current_report_id, "critical_analysis", 7,
             "Critical Analysis & Perspectives", critical_analysis["full_analysis"], "completed"
         )
+        phase7_duration = int((datetime.utcnow() - phase7_start).total_seconds() * 1000)
+        await self.event_logger.log_phase_complete(7, "Critical Analysis", phase7_duration)
 
         # Phase 7.5: Bias Detection & Perspective Diversity
         print("\n[INFO] ===== Phase 7.5/8: Bias & Perspective Analysis =====")
@@ -439,10 +480,14 @@ class HyperDeepResearchAgent(SearchAgent):
 
         # Phase 8: Final Report Synthesis
         print("\n[INFO] ===== Phase 8/8: Report Synthesis =====")
+        await self.event_logger.log_phase_start(8, "Report Synthesis")
+        phase8_start = datetime.utcnow()
         final_report = await self._synthesize_final_report(
             topic_analysis, methodology, deep_analysis,
             validation, critical_analysis, session_id, user_id, language
         )
+        phase8_duration = int((datetime.utcnow() - phase8_start).total_seconds() * 1000)
+        await self.event_logger.log_phase_complete(8, "Report Synthesis", phase8_duration)
 
         # Finalize report
         await self.repository.update_report_status(
@@ -474,12 +519,26 @@ class HyperDeepResearchAgent(SearchAgent):
                 tags=["topic_analysis"]
             )
 
+            # Log LLM call start
+            await self.event_logger.log_llm_call(
+                "topic_analysis",
+                "Analyzing topic from multiple dimensions",
+                estimated_tokens=3000
+            )
+
             prompt = TopicAnalysisPrompts.get_prompt(query, language)
             response = await llm.ainvoke([HumanMessage(content=prompt)])
             analysis_text = response.content.strip()
 
             # Track LLM usage
             self._track_llm_call("topic_analysis", prompt, analysis_text)
+
+            # Log LLM completion
+            await self.event_logger.log_llm_complete(
+                "topic_analysis",
+                "Topic analysis completed",
+                actual_tokens=len(analysis_text)
+            )
 
             return {
                 "full_analysis": analysis_text,
@@ -559,16 +618,32 @@ class HyperDeepResearchAgent(SearchAgent):
     ) -> Dict[str, Any]:
         """Phase 3: Multi-query mass data collection."""
         # Generate query variations
+        await self.event_logger.log_status_message(
+            f"Generating {self.config['multi_query_expansion']} query variations...",
+            "info"
+        )
         query_variations = await self._generate_query_variations(
             topic_analysis, session_id, user_id, language
         )
+        await self.event_logger.log_status_message(
+            f"Generated {len(query_variations)} queries for search",
+            "success"
+        )
 
         # Execute complex searches
+        await self.event_logger.log_status_message(
+            "Executing complex multi-query searches...",
+            "info"
+        )
         complex_results = await self._execute_complex_searches(
             query_variations, topic_analysis, session_id, user_id, language
         )
 
         # Execute parallel batch searches
+        await self.event_logger.log_status_message(
+            f"Executing parallel search batches ({self.config['parallel_search_batches']} batches)...",
+            "info"
+        )
         all_results = await self._execute_parallel_searches(query_variations)
 
         # Add complex search results
@@ -580,8 +655,16 @@ class HyperDeepResearchAgent(SearchAgent):
 
         # Apply quality scoring
         print(f"[INFO] 📊 Scoring {len(unique_sources)} sources for quality...")
+        await self.event_logger.log_status_message(
+            f"Scoring {len(unique_sources)} sources for quality...",
+            "info"
+        )
         scored_sources = self.quality_scorer.rank_sources(unique_sources)
         print(f"[INFO] ✅ Quality scoring complete. High quality: {self.quality_scorer.stats['high_quality_count']}")
+        await self.event_logger.log_sources_collected(
+            len(scored_sources),
+            self.research_metadata["total_sources_collected"]
+        )
 
         # Memory optimization: Store sources in batches, keep only recent ones in memory
         await self._store_sources_batch(scored_sources)
@@ -1021,18 +1104,29 @@ class HyperDeepResearchAgent(SearchAgent):
         """Execute parallel batch searches."""
         batch_size = len(queries) // self.config["parallel_search_batches"]
         all_results = []
+        total_batches = self.config["parallel_search_batches"]
 
-        for batch_num in range(self.config["parallel_search_batches"]):
+        for batch_num in range(total_batches):
             start_idx = batch_num * batch_size
             end_idx = (start_idx + batch_size
-                      if batch_num < self.config["parallel_search_batches"] - 1
+                      if batch_num < total_batches - 1
                       else len(queries))
             batch_queries = queries[start_idx:end_idx]
 
             print(f"[INFO] 📦 Batch {batch_num + 1}: {len(batch_queries)} queries")
 
+            # Log batch execution start
+            await self.event_logger.log_progress(
+                batch_num + 1,
+                total_batches,
+                f"Executing search batch {batch_num + 1}/{total_batches}"
+            )
+
             batch_results = await self._search_batch_parallel(batch_queries)
             all_results.extend(batch_results)
+
+            # Count sources in this batch
+            batch_sources_count = sum(len(r) for r in batch_results)
 
             # Record in database
             for query, results in zip(batch_queries, batch_results):
@@ -1040,6 +1134,13 @@ class HyperDeepResearchAgent(SearchAgent):
                     self.current_report_id, query, "multi_query_initial", 3, results
                 )
                 self.research_metadata["total_queries_executed"] += 1
+
+            # Log batch completion with source count
+            await self.event_logger.log_sources_collected(
+                batch_sources_count,
+                self.research_metadata["total_sources_collected"],
+                batch_num + 1
+            )
 
         return all_results
 

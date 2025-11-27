@@ -11,6 +11,7 @@ from .semantic_clusterer import SemanticClusterer
 from .cost_optimizer import CostOptimizer
 from .fact_checker import FactChecker
 from .bias_detector import BiasDetector
+from .event_logger import ResearchEventLogger, DetailedEventType, EventCategory
 
 __all__ = [
     "LanguageDetector",
@@ -26,4 +27,7 @@ __all__ = [
     "CostOptimizer",
     "FactChecker",
     "BiasDetector",
+    "ResearchEventLogger",
+    "DetailedEventType",
+    "EventCategory",
 ]
