@@ -21,6 +21,9 @@ const MessageActions = dynamic(() => import("./message/MessageActions"), {
 const RAGContextDetails = dynamic(() => import("./message/RAGContextDetails"), {
   ssr: false,
 });
+const DeepResearchArtifact = dynamic(() => import("./DeepResearchArtifact").then(m => ({ default: m.DeepResearchArtifact })), {
+  ssr: false,
+});
 
 interface MessageBubbleProps {
   message: Message;
@@ -42,6 +45,9 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
   const hasSimilarityContext = !!(
     message.metadata?.context_enhanced || message.metadata?.similarity_scores
   );
+  const isDeepResearch = !!(message.metadata?.deep_research_report_id);
+  const researchArtifact = message.metadata?.research_artifact;
+  const showArtifact = isDeepResearch && researchArtifact && message.status === 'streaming';
 
   return (
     <div
@@ -87,6 +93,11 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
                     : []
                 }
               />
+            )}
+
+            {/* Deep Research Artifact (real-time progress) */}
+            {!isUser && showArtifact && (
+              <DeepResearchArtifact artifact={researchArtifact} />
             )}
 
             {/* Message Content */}
