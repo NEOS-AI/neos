@@ -58,12 +58,12 @@ export default function Home() {
       const { currentConversationId } = useChatStore.getState();
 
       if (currentConversationId) {
-        router.push(`/chat/${currentConversationId}`);
-
+        // If there's a prompt, pass it as a query parameter
+        // The chat page will send it after initialization is complete
         if (prompt) {
-          setTimeout(() => {
-            useChatStore.getState().sendMessage(prompt);
-          }, 100);
+          router.push(`/chat/${currentConversationId}?initialMessage=${encodeURIComponent(prompt)}`);
+        } else {
+          router.push(`/chat/${currentConversationId}`);
         }
       }
     } catch (error) {

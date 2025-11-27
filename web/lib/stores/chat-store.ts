@@ -333,7 +333,15 @@ export const useChatStore = create<ChatStore>()(
       _sendMessageWithStreaming: async (content: string) => {
         const { settings } = get();
         let conversationId = get().currentConversationId;
-        const currentConversation = get().currentConversation;
+        let currentConversation = get().currentConversation;
+
+        // If we have a conversationId but currentConversation is not loaded yet,
+        // wait a bit and try again (handles race condition with page initialization)
+        if (conversationId && !currentConversation) {
+          console.log("[Store] Waiting for conversation to load...");
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          currentConversation = get().currentConversation;
+        }
 
         // Create conversation if none exists or mode has changed
         if (!conversationId || (currentConversation && currentConversation.mode !== settings.mode)) {
@@ -561,7 +569,15 @@ export const useChatStore = create<ChatStore>()(
       _sendMessageWithoutStreaming: async (content: string) => {
         const { settings } = get();
         let conversationId = get().currentConversationId;
-        const currentConversation = get().currentConversation;
+        let currentConversation = get().currentConversation;
+
+        // If we have a conversationId but currentConversation is not loaded yet,
+        // wait a bit and try again (handles race condition with page initialization)
+        if (conversationId && !currentConversation) {
+          console.log("[Store] Waiting for conversation to load...");
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          currentConversation = get().currentConversation;
+        }
 
         // Create conversation if none exists or mode has changed
         if (!conversationId || (currentConversation && currentConversation.mode !== settings.mode)) {
@@ -732,11 +748,24 @@ export const useChatStore = create<ChatStore>()(
         get().cleanupEventSource();
 
         let conversationId = get().currentConversationId;
-        const currentConversation = get().currentConversation;
+        let currentConversation = get().currentConversation;
 
-        // Check if we need to create a new deep_research conversation
-        if (!conversationId || currentConversation?.mode !== "deep_research") {
-          console.log("[Store] Creating new deep_research conversation");
+        // If we have a conversationId but currentConversation is not loaded yet,
+        // wait a bit and try again (handles race condition with page initialization)
+        if (conversationId && !currentConversation) {
+          console.log("[Store] Waiting for conversation to load...");
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          currentConversation = get().currentConversation;
+        }
+
+        // Only create a new conversation if:
+        // 1. No conversation exists at all, OR
+        // 2. Current conversation exists and its mode is NOT deep_research
+        if (!conversationId || (currentConversation && currentConversation.mode !== "deep_research")) {
+          console.log("[Store] Creating new deep_research conversation", {
+            hasConversationId: !!conversationId,
+            currentMode: currentConversation?.mode,
+          });
           await get().createConversation(undefined, undefined, "deep_research");
           await new Promise((resolve) => setTimeout(resolve, 100));
           conversationId = get().currentConversationId;

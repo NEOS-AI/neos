@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useChatStore } from "@/lib/stores/chat-store";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { PageLoading } from "@/components/chat/LoadingStates";
@@ -15,7 +15,9 @@ import SettingsPanel from "@/components/chat/SettingsPanel";
 function ChatPageContent() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const chatId = params.id as string;
+  const initialMessage = searchParams.get('initialMessage');
 
   const {
     loadConversations,
@@ -24,6 +26,7 @@ function ChatPageContent() {
     currentConversationId,
     setupNetworkListeners,
     setupBroadcastChannel,
+    sendMessage,
   } = useChatStore();
   const [isInitializing, setIsInitializing] = useState(true);
 
@@ -70,13 +73,24 @@ function ChatPageContent() {
       await loadMessages(chatId);
 
       console.log(`[ChatPage] Initialized conversation: ${chatId}`);
+
+      // Send initial message if provided via query parameter
+      if (initialMessage) {
+        console.log(`[ChatPage] Sending initial message: ${initialMessage}`);
+        // Remove the query parameter from URL
+        router.replace(`/chat/${chatId}`, { scroll: false });
+        // Send the message after a small delay to ensure everything is ready
+        setTimeout(() => {
+          sendMessage(initialMessage);
+        }, 100);
+      }
     } catch (error) {
       console.error("[ChatPage] Failed to initialize:", error);
       router.push('/');
     } finally {
       setIsInitializing(false);
     }
-  }, [chatId, loadConversations, loadMessages, setCurrentConversation, router]);
+  }, [chatId, loadConversations, loadMessages, setCurrentConversation, router, initialMessage, sendMessage]);
 
   useEffect(() => {
     initialize();
