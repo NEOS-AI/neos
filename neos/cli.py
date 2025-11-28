@@ -50,7 +50,7 @@ console = Console()
 cli_state = {
     "verbose": False,
     "profile": False,
-    "session_id": str(uuid.uuid4()),
+    "session_id": f"cli_{uuid.uuid4()}",  # CLI mode detection via prefix
     "user_id": "cli_user"
 }
 
