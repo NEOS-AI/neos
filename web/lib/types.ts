@@ -19,6 +19,38 @@ export type ConversationStatus = "active" | "archived" | "deleted";
 export type ChatMode = "standard" | "rag" | "similarity" | "deep_research";
 
 /**
+ * Deep Research Artifact Types
+ */
+export interface TimelineEvent {
+  timestamp: Date;
+  activity: string;
+  eventType?: string;
+}
+
+export interface PhaseInfo {
+  phaseNumber: number;
+  phaseName: string;
+  status: "pending" | "in_progress" | "completed";
+  startedAt?: Date;
+  completedAt?: Date;
+  duration?: number;
+}
+
+export interface ResearchArtifact {
+  currentPhase: string;
+  phaseNumber: number;
+  phases: PhaseInfo[];
+  currentQuery: string;
+  searchProgress: number;
+  totalSources: number;
+  totalQueries: number;
+  currentActivity: string;
+  isThinking: boolean;
+  timeline: TimelineEvent[];
+  progressPercentage: number;
+}
+
+/**
  * Message interface - Enhanced to match backend
  */
 export interface Message {

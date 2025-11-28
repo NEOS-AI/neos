@@ -127,18 +127,46 @@ class StartDeepResearchResponse(BaseModel):
 
 class DeepResearchEventType(str, Enum):
     """Deep research SSE event types"""
+    # Lifecycle events
     STARTED = "started"
-    PHASE_STARTED = "phase_started"
-    PHASE_COMPLETED = "phase_completed"
-    SECTION_STARTED = "section_started"
-    SECTION_COMPLETED = "section_completed"
-    SECTION_CONTENT = "section_content"
-    QUERY_EXECUTED = "query_executed"
-    PROGRESS_UPDATE = "progress_update"
-    HEARTBEAT = "heartbeat"
-    ERROR = "error"
     COMPLETED = "completed"
     FAILED = "failed"
+
+    # Phase events
+    PHASE_STARTED = "phase_started"
+    PHASE_PROGRESS = "phase_progress"
+    PHASE_COMPLETED = "phase_completed"
+
+    # Section events
+    SECTION_STARTED = "section_started"
+    SECTION_CONTENT = "section_content"
+    SECTION_COMPLETED = "section_completed"
+
+    # Query/Search events
+    QUERY_GENERATED = "query_generated"
+    QUERY_EXECUTING = "query_executing"
+    QUERY_COMPLETED = "query_completed"
+    QUERY_EXECUTED = "query_executed"  # Legacy compatibility
+
+    # Source collection events
+    SOURCES_COLLECTED = "sources_collected"
+
+    # LLM events
+    LLM_CALL_STARTED = "llm_call_started"
+    LLM_CALL_COMPLETED = "llm_call_completed"
+
+    # Analysis events
+    ANALYSIS_ITERATION = "analysis_iteration"
+    GAP_IDENTIFIED = "gap_identified"
+    CRITICISM_FEEDBACK = "criticism_feedback"
+
+    # Progress tracking
+    PROGRESS_UPDATE = "progress_update"
+    STATUS_MESSAGE = "status_message"
+
+    # System events
+    HEARTBEAT = "heartbeat"
+    ERROR = "error"
 
 
 class DeepResearchEvent(BaseModel):
@@ -229,3 +257,84 @@ class ErrorEventData(BaseModel):
     error_message: str = Field(..., description="Error message")
     error_code: Optional[str] = Field(None, description="Error code")
     phase: Optional[ResearchPhase] = Field(None, description="Phase where error occurred")
+
+
+# ============================================================================
+# New Event Data Models (Phase 2 - Real-time Progress)
+# ============================================================================
+
+class PhaseProgressEventData(BaseModel):
+    """Phase progress event data"""
+    phase_number: int = Field(..., description="Phase number (1-8)")
+    phase_name: str = Field(..., description="Phase name")
+    progress_percentage: float = Field(..., description="Progress within phase (0-100)")
+    message: str = Field(..., description="Progress message")
+
+
+class QueryGeneratedEventData(BaseModel):
+    """Query generated event data"""
+    query: str = Field(..., description="Generated query")
+    query_count: int = Field(..., description="Total queries generated")
+    batch: Optional[int] = Field(None, description="Batch number")
+
+
+class QueryExecutingEventData(BaseModel):
+    """Query executing event data"""
+    query: str = Field(..., description="Query being executed")
+    batch: int = Field(..., description="Current batch number")
+    total_batches: int = Field(..., description="Total number of batches")
+
+
+class QueryCompletedEventData(BaseModel):
+    """Query completed event data"""
+    query: str = Field(..., description="Completed query")
+    results_count: int = Field(..., description="Number of results returned")
+    duration_ms: Optional[int] = Field(None, description="Query execution duration")
+
+
+class SourcesCollectedEventData(BaseModel):
+    """Sources collected event data"""
+    sources_count: int = Field(..., description="Number of sources in this batch")
+    total_sources: int = Field(..., description="Total sources collected so far")
+    batch: Optional[int] = Field(None, description="Batch number")
+
+
+class LLMCallStartedEventData(BaseModel):
+    """LLM call started event data"""
+    phase: str = Field(..., description="Research phase")
+    purpose: str = Field(..., description="Purpose of LLM call")
+    estimated_tokens: Optional[int] = Field(None, description="Estimated token count")
+
+
+class LLMCallCompletedEventData(BaseModel):
+    """LLM call completed event data"""
+    phase: str = Field(..., description="Research phase")
+    purpose: str = Field(..., description="Purpose of LLM call")
+    actual_tokens: Optional[int] = Field(None, description="Actual token count")
+    duration_ms: Optional[int] = Field(None, description="LLM call duration")
+
+
+class AnalysisIterationEventData(BaseModel):
+    """Analysis iteration event data"""
+    iteration: int = Field(..., description="Current iteration number")
+    total_iterations: int = Field(..., description="Total number of iterations")
+    focus: str = Field(..., description="Focus of this iteration")
+
+
+class GapIdentifiedEventData(BaseModel):
+    """Gap identified event data"""
+    gap: str = Field(..., description="Identified knowledge gap")
+    priority: str = Field(default="medium", description="Gap priority (low/medium/high)")
+
+
+class CriticismFeedbackEventData(BaseModel):
+    """Criticism feedback event data"""
+    section_type: str = Field(..., description="Section being critiqued")
+    feedback_summary: str = Field(..., description="Feedback summary")
+    improvements_needed: Optional[List[str]] = Field(None, description="List of improvements needed")
+
+
+class StatusMessageEventData(BaseModel):
+    """Status message event data"""
+    message: str = Field(..., description="Status message")
+    category: str = Field(default="info", description="Message category (info/success/warning/error)")
