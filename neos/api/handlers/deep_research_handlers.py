@@ -411,11 +411,18 @@ async def deep_research_stream_generator(
                         processed_event_ids.add(event_id)
                         last_event_sequence = max(last_event_sequence, sequence_number)
 
-                        # Parse event data
-                        try:
-                            event_data = json.loads(event_data_json) if event_data_json else {}
-                        except json.JSONDecodeError:
-                            logger.warning(f"Failed to parse event data for event {event_id}")
+                        # Parse event data - asyncpg returns JSONB as dict, but handle legacy string data
+                        if isinstance(event_data_json, dict):
+                            # Modern JSONB: already a dict
+                            event_data = event_data_json
+                        elif isinstance(event_data_json, str):
+                            # Legacy or malformed: parse as JSON string
+                            try:
+                                event_data = json.loads(event_data_json)
+                            except json.JSONDecodeError:
+                                logger.warning(f"Failed to parse event data for event {event_id}")
+                                event_data = {}
+                        else:
                             event_data = {}
 
                         # Create SSE event

@@ -28,13 +28,11 @@ CREATE TABLE IF NOT EXISTS hyper_research_events (
 CREATE INDEX IF NOT EXISTS idx_events_report_created
     ON hyper_research_events(report_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_events_report_sequence
-    ON hyper_research_events(report_id, sequence_number);
-
 CREATE INDEX IF NOT EXISTS idx_events_type
     ON hyper_research_events(report_id, event_type);
 
--- Add unique constraint on report_id + sequence_number to prevent duplicates
+-- Unique index on report_id + sequence_number for fast polling and duplicate prevention
+-- Note: UNIQUE INDEX serves both as constraint and index, so no separate index needed
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_report_seq_unique
     ON hyper_research_events(report_id, sequence_number);
 

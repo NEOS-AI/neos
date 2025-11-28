@@ -157,7 +157,7 @@ class ResearchEventLogger:
                 event_type.value,
                 event_category.value,
                 self.sequence_counter,
-                json.dumps(event_data)
+                event_data  # Pass dict directly for JSONB - asyncpg handles conversion
             )
             logger.debug(
                 f"[EventLogger] Logged event #{self.sequence_counter}: {event_type.value}"
