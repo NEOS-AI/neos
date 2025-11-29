@@ -1062,6 +1062,13 @@ class HyperDeepResearchAgent(SearchAgent):
         for idx, base_query in enumerate(priority_queries, 1):
             print(f"[INFO] 🔍 Complex search {idx}/{len(priority_queries)}")
 
+            # Log the query being executed
+            await self.event_logger.log_query_execution(
+                base_query,
+                idx,
+                len(priority_queries)
+            )
+
             try:
                 context = {
                     "session_id": session_id,
@@ -1121,6 +1128,14 @@ class HyperDeepResearchAgent(SearchAgent):
                 total_batches,
                 f"Executing search batch {batch_num + 1}/{total_batches}"
             )
+
+            # Log each query before execution
+            for query in batch_queries:
+                await self.event_logger.log_query_execution(
+                    query,
+                    batch_num + 1,
+                    total_batches
+                )
 
             batch_results = await self._search_batch_parallel(batch_queries)
             all_results.extend(batch_results)
