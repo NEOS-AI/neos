@@ -922,7 +922,7 @@ export const useChatStore = create<ChatStore>()(
                 case "phase_started":
                   const phaseNum = data.data.phase_number || 0;
                   const phaseName = data.data.phase_name || data.data.message || "Unknown Phase";
-                  streamContent += `\n## 🚀 Phase ${phaseNum}/8: ${phaseName}\n`;
+                  // streamContent += `\n## 🚀 Phase ${phaseNum}/8: ${phaseName}\n`;
 
                   // Update artifact
                   updateArtifact({
@@ -951,7 +951,7 @@ export const useChatStore = create<ChatStore>()(
                   const completedPhaseNum = data.data.phase_number || 0;
                   const completedPhaseName = data.data.phase_name || data.data.message || "Phase";
                   const duration = data.data.duration_ms || 0;
-                  streamContent += `✅ ${completedPhaseName} completed (${(duration / 1000).toFixed(1)}s)\n`;
+                  // streamContent += `✅ ${completedPhaseName} completed (${(duration / 1000).toFixed(1)}s)\n`;
 
                   // Update artifact
                   updateArtifact({
@@ -975,7 +975,7 @@ export const useChatStore = create<ChatStore>()(
                   const query = data.data.query || "";
                   const batch = data.data.batch || 0;
                   const totalBatches = data.data.total_batches || 1;
-                  streamContent += `🔍 Searching [${batch}/${totalBatches}]: "${query.substring(0, 60)}..."\n`;
+                  // streamContent += `🔍 Searching [${batch}/${totalBatches}]: "${query.substring(0, 60)}..."\n`;
 
                   updateArtifact({
                     currentQuery: query,
@@ -985,14 +985,18 @@ export const useChatStore = create<ChatStore>()(
                   break;
 
                 case "query_executed":
-                  streamContent += `📊 Query: "${data.data.query}" (${data.data.results_count} results)\n`;
+                  // streamContent += `📊 Query: "${data.data.query}" (${data.data.results_count} results)\n`;
+
+                  updateArtifact({
+                    totalQueries: researchArtifact.totalQueries + 1,
+                  });
                   break;
 
                 // ===== Source Collection Events =====
                 case "sources_collected":
                   const sourcesCount = data.data.sources_count || 0;
                   const totalSources = data.data.total_sources || 0;
-                  streamContent += `📚 Collected ${sourcesCount} sources (Total: ${totalSources})\n`;
+                  // streamContent += `📚 Collected ${sourcesCount} sources (Total: ${totalSources})\n`;
 
                   updateArtifact({
                     totalSources,
@@ -1010,7 +1014,7 @@ export const useChatStore = create<ChatStore>()(
                 // ===== LLM Events =====
                 case "llm_call_started":
                   const llmPurpose = data.data.purpose || "Analyzing";
-                  streamContent += `🤖 ${llmPurpose}...\n`;
+                  // streamContent += `🤖 ${llmPurpose}...\n`;
 
                   updateArtifact({
                     isThinking: true,
@@ -1029,7 +1033,7 @@ export const useChatStore = create<ChatStore>()(
                   const statusMsg = data.data.message || "";
                   const category = data.data.category || "info";
                   const icon = category === "success" ? "✅" : category === "warning" ? "⚠️" : "ℹ️";
-                  streamContent += `${icon} ${statusMsg}\n`;
+                  // streamContent += `${icon} ${statusMsg}\n`;
 
                   updateArtifact({
                     currentActivity: statusMsg,
@@ -1042,7 +1046,7 @@ export const useChatStore = create<ChatStore>()(
                   const sourcesCollected = data.data.sources_collected || 0;
                   const completed = data.data.completed || 0;
                   const total = data.data.total || 0;
-                  streamContent += `\n**Progress:** ${progressPct.toFixed(1)}% - ${sourcesCollected} sources collected\n`;
+                  // streamContent += `\n**Progress:** ${progressPct.toFixed(1)}% - ${sourcesCollected} sources collected\n`;
 
                   updateArtifact({
                     progressPercentage: progressPct,
@@ -1054,7 +1058,7 @@ export const useChatStore = create<ChatStore>()(
                 // ===== Gap Events =====
                 case "gap_identified":
                   const gap = data.data.gap || "";
-                  streamContent += `🎯 Gap identified: ${gap}\n`;
+                  // streamContent += `🎯 Gap identified: ${gap}\n`;
 
                   // Add to timeline
                   researchArtifact.timeline.push({
@@ -1069,12 +1073,17 @@ export const useChatStore = create<ChatStore>()(
                   const iteration = data.data.iteration || 0;
                   const totalIterations = data.data.total_iterations || 0;
                   const focus = data.data.focus || "";
-                  streamContent += `🔬 Analysis iteration ${iteration}/${totalIterations}: ${focus}\n`;
+                  // streamContent += `🔬 Analysis iteration ${iteration}/${totalIterations}: ${focus}\n`;
+
+                  updateArtifact({
+                    currentActivity: `Analysis iteration ${iteration}/${totalIterations}`,
+                  });
                   break;
 
                 // ===== Section Content =====
                 case "section_content":
-                  streamContent += data.data.content_chunk;
+                  // streamContent += data.data.content_chunk;
+
                   // Save partial results for crash recovery
                   get().savePartialResults(deepResearchResponse.report_id, streamContent, {
                     conversationId,
