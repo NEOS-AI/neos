@@ -748,6 +748,9 @@ export const useChatStore = create<ChatStore>()(
       sendDeepResearchMessage: async (content: string) => {
         get().cleanupEventSource();
 
+        // Set loading state immediately to prevent duplicate submissions
+        set({ isLoading: true });
+
         let conversationId = get().currentConversationId;
         let currentConversation = get().currentConversation;
 
@@ -827,6 +830,7 @@ export const useChatStore = create<ChatStore>()(
                   }
                 : c
             ),
+            isStreaming: true,
             isLoading: false,
           }));
 
@@ -1122,6 +1126,7 @@ export const useChatStore = create<ChatStore>()(
                         : c
                     ),
                     activeEventSource: null,
+                    isStreaming: false,
                   }));
                   return;
 
@@ -1165,6 +1170,7 @@ export const useChatStore = create<ChatStore>()(
                         : c
                     ),
                     activeEventSource: null,
+                    isStreaming: false,
                   }));
                   return;
               }
@@ -1258,6 +1264,7 @@ export const useChatStore = create<ChatStore>()(
                 activeEventSource: null,
                 error: "Deep research connection lost",
                 sseReconnectAttempts: 0,
+                isStreaming: false,
               }));
             }
           };
@@ -1266,6 +1273,7 @@ export const useChatStore = create<ChatStore>()(
           set({
             error: error instanceof Error ? error.message : "Failed to start deep research",
             isLoading: false,
+            isStreaming: false,
           });
         }
       },

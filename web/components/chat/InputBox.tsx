@@ -14,6 +14,7 @@ export default function InputBox() {
   const [validationError, setValidationError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const rateLimiterRef = useRef(createMessageRateLimiter());
+  const isSubmittingRef = useRef(false);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -36,6 +37,12 @@ export default function InputBox() {
   const handleSubmit = async () => {
     if (!input.trim() || isLoading || isStreaming) return;
 
+    // Prevent duplicate submissions
+    if (isSubmittingRef.current) {
+      logger.debug("Submission already in progress, ignoring duplicate call");
+      return;
+    }
+
     // Validate input
     const validation = validateInput(input);
     if (!validation.isValid) {
@@ -57,8 +64,18 @@ export default function InputBox() {
     setInput("");
     setValidationError(null);
 
-    // sendMessage() now automatically handles streaming based on settings
-    await sendMessage(message);
+    // Set submitting flag
+    isSubmittingRef.current = true;
+
+    try {
+      // sendMessage() now automatically handles streaming based on settings
+      await sendMessage(message);
+    } finally {
+      // Reset submitting flag after a delay to prevent rapid re-submission
+      setTimeout(() => {
+        isSubmittingRef.current = false;
+      }, 500);
+    }
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
