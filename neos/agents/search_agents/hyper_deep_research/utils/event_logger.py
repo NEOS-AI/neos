@@ -151,13 +151,17 @@ class ResearchEventLogger:
         """
 
         try:
+            # Serialize event_data to JSON string for JSONB column
+            # SQLAlchemy's text() with asyncpg requires explicit JSON serialization
+            event_data_json = json.dumps(event_data)
+
             await self.db_manager.execute(
                 query,
                 self.report_id,
                 event_type.value,
                 event_category.value,
                 self.sequence_counter,
-                event_data  # Pass dict directly for JSONB - asyncpg handles conversion
+                event_data_json
             )
             logger.debug(
                 f"[EventLogger] Logged event #{self.sequence_counter}: {event_type.value}"
