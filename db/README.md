@@ -66,4 +66,5 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/add_anonymous_user.s
 
 # Migrate conversation to deep research workflow
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/001_add_conversation_to_deep_research.sql
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/002_add_deep_research_events.sql
 ```
