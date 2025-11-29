@@ -1,9 +1,5 @@
 # NEOS 백엔드 구현 문서 (NEOS Backend Implementation)
 
-> **Version**: 0.11.0
-> **Last Updated**: 2025-11-29
-> **Framework**: FastAPI + LangGraph + CrewAI
-
 ## 목차 (Table of Contents)
 
 1. [기술 스택](#기술-스택-technology-stack)

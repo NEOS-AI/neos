@@ -1,9 +1,5 @@
 # NEOS 아키텍처 문서 (NEOS Architecture Documentation)
 
-> **Version**: 0.11.0
-> **Last Updated**: 2025-11-29
-> **Status**: Enterprise Edition
-
 ## 목차 (Table of Contents)
 
 1. [시스템 개요](#시스템-개요-system-overview)

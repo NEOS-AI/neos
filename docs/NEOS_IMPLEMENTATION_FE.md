@@ -1,9 +1,5 @@
 # NEOS 프론트엔드 구현 문서 (NEOS Frontend Implementation)
 
-> **Version**: 0.11.0
-> **Last Updated**: 2025-11-29
-> **Framework**: Next.js 14 + React 18 + TypeScript
-
 ## 목차 (Table of Contents)
 
 1. [기술 스택](#기술-스택-technology-stack)
