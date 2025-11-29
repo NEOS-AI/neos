@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useChatStore } from "@/lib/stores/chat-store";
 import ErrorBoundary from "@/components/ErrorBoundary";
@@ -29,6 +29,10 @@ function ChatPageContent() {
     sendMessage,
   } = useChatStore();
   const [isInitializing, setIsInitializing] = useState(true);
+
+  // Track if initial message has been processed to prevent duplicates
+  // (React Strict Mode causes useEffect to run twice in development)
+  const hasProcessedInitialMessageRef = useRef(false);
 
   // Setup network listeners and broadcast channel on mount
   useEffect(() => {
@@ -75,8 +79,11 @@ function ChatPageContent() {
       console.log(`[ChatPage] Initialized conversation: ${chatId}`);
 
       // Send initial message if provided via query parameter
-      if (initialMessage) {
+      // Use ref to prevent duplicate sends (e.g., from React Strict Mode double-mounting)
+      if (initialMessage && !hasProcessedInitialMessageRef.current) {
         console.log(`[ChatPage] Sending initial message: ${initialMessage}`);
+        // Mark as processed immediately to prevent duplicates
+        hasProcessedInitialMessageRef.current = true;
         // Remove the query parameter from URL
         router.replace(`/chat/${chatId}`, { scroll: false });
         // Send the message after a small delay to ensure everything is ready
