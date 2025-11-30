@@ -129,7 +129,7 @@ export const useChatStore = create<ChatStore>()(
         set({ isLoading: true, error: null });
 
         try {
-          const { currentUserId } = get();
+          const { currentUserId, currentConversationId } = get();
           const response = await chatAPI.listConversations(currentUserId, {
             limit: API.MESSAGES_FETCH_LIMIT,
             include_archived: false,
@@ -144,6 +144,18 @@ export const useChatStore = create<ChatStore>()(
             conversations: activeConversations,
             isLoading: false,
           });
+
+          // Sync settings mode with current conversation mode if one is loaded
+          if (currentConversationId) {
+            const currentConv = activeConversations.find((c) => c.conversation_id === currentConversationId);
+            if (currentConv && currentConv.mode) {
+              const conversationMode = currentConv.mode as ChatMode;
+              if (get().settings.mode !== conversationMode) {
+                console.log("[Store] Syncing settings mode after loading conversations:", conversationMode);
+                get().updateSettings({ mode: conversationMode });
+              }
+            }
+          }
         } catch (error) {
           logError(error, { context: "loadConversations", userId: get().currentUserId });
           const errorType = classifyError(error);
@@ -195,6 +207,15 @@ export const useChatStore = create<ChatStore>()(
         if (currentConversation && (!currentConversation.messages || currentConversation.messages.length === 0)) {
           console.log("[Store] Loading messages for conversation...");
           get().loadMessages(conversationId);
+        }
+
+        // Sync settings mode with conversation mode
+        if (currentConversation && currentConversation.mode) {
+          const conversationMode = currentConversation.mode as ChatMode;
+          if (get().settings.mode !== conversationMode) {
+            console.log("[Store] Syncing settings mode to conversation mode:", conversationMode);
+            get().updateSettings({ mode: conversationMode });
+          }
         }
       },
 
@@ -301,6 +322,16 @@ export const useChatStore = create<ChatStore>()(
             ),
             isLoading: false,
           }));
+
+          // Sync settings mode with conversation mode after loading
+          const conversation = get().conversations.find((c) => c.conversation_id === conversationId);
+          if (conversation && conversation.mode) {
+            const conversationMode = conversation.mode as ChatMode;
+            if (get().settings.mode !== conversationMode) {
+              console.log("[Store] Syncing settings mode after loading messages:", conversationMode);
+              get().updateSettings({ mode: conversationMode });
+            }
+          }
 
           // Check for ongoing deep research and reconnect if needed
           await get().checkAndReconnectDeepResearch(conversationId, messages);
@@ -1368,26 +1399,75 @@ export const useChatStore = create<ChatStore>()(
           messageStatus: lastAssistantMessage.status,
         });
 
-        // Only reconnect if the research is in progress or pending
-        if (researchStatus === "in_progress" || researchStatus === "pending") {
-          try {
-            // Check the actual status from the backend
-            const report = await chatAPI.getDeepResearchReport(reportId);
-            console.log("[Store] Deep research report status:", report.research_status);
+        try {
+          // Fetch the full report with sections from backend
+          const report = await chatAPI.getDeepResearchReport(reportId);
+          console.log("[Store] Deep research report status:", report.research_status, "sections:", report.sections?.length || 0);
 
-            if (report.research_status === "in_progress" || report.research_status === "pending") {
-              console.log("[Store] Reconnecting to deep research stream:", reportId);
-              await get().reconnectDeepResearch(
-                conversationId,
-                reportId,
-                lastAssistantMessage.message_id,
-                lastAssistantMessage.content
-              );
+          // If research is completed or failed, update the message status and content
+          if (report.research_status === "completed" || report.research_status === "failed") {
+            // Build content from completed sections
+            let restoredContent = `🔬 **Deep Research Report: ${report.research_topic}**\n\n`;
+
+            if (report.sections && report.sections.length > 0) {
+              for (const section of report.sections) {
+                if (section.section_content) {
+                  restoredContent += `${section.section_content}\n\n`;
+                }
+              }
             }
-          } catch (error) {
-            console.error("[Store] Failed to check deep research status:", error);
-            // Don't throw, just log the error
+
+            if (report.research_status === "completed") {
+              restoredContent += `\n\n---\n\n✅ **Research Complete**\n`;
+              restoredContent += `- Total sections: ${report.total_sections}\n`;
+              restoredContent += `- Total sources: ${report.total_sources}\n`;
+              if (report.processing_time_ms) {
+                restoredContent += `- Processing time: ${(report.processing_time_ms / 1000).toFixed(2)}s\n`;
+              }
+            }
+
+            // Update message with restored content and status
+            set((state) => ({
+              conversations: state.conversations.map((c) =>
+                c.conversation_id === conversationId
+                  ? {
+                      ...c,
+                      messages: (c.messages || []).map((m) =>
+                        m.message_id === lastAssistantMessage.message_id
+                          ? {
+                              ...m,
+                              content: restoredContent,
+                              status: report.research_status === "completed" ? "completed" : "failed",
+                              metadata: {
+                                ...m.metadata,
+                                research_status: report.research_status,
+                              },
+                            }
+                          : m
+                      ),
+                    }
+                  : c
+              ),
+            }));
+
+            console.log("[Store] Restored completed/failed research content");
+            return;
           }
+
+          // If research is still in progress, reconnect to stream
+          if (report.research_status === "in_progress" || report.research_status === "pending") {
+            console.log("[Store] Reconnecting to deep research stream:", reportId);
+            await get().reconnectDeepResearch(
+              conversationId,
+              reportId,
+              lastAssistantMessage.message_id,
+              lastAssistantMessage.content,
+              report
+            );
+          }
+        } catch (error) {
+          console.error("[Store] Failed to check deep research status:", error);
+          // Don't throw, just log the error
         }
       },
 
@@ -1396,32 +1476,47 @@ export const useChatStore = create<ChatStore>()(
         conversationId: string,
         reportId: string,
         assistantMsgId: string,
-        existingContent: string
+        existingContent: string,
+        report?: any
       ) => {
         console.log("[Store] Reconnecting to deep research:", reportId);
 
-        // Try to load partial results from localStorage
-        const partialResults = get().loadPartialResults(reportId);
-        let streamContent = existingContent || partialResults?.content || `🔬 **Deep Research Report**\n\n`;
+        // Build content from report sections if available
+        let streamContent = existingContent;
 
-        if (partialResults) {
-          console.log("[Store] Restored partial results from localStorage");
+        if (report && report.sections && report.sections.length > 0) {
+          streamContent = `🔬 **Deep Research Report: ${report.research_topic}**\n\n`;
+          for (const section of report.sections) {
+            if (section.section_content) {
+              streamContent += `${section.section_content}\n\n`;
+            }
+          }
+          console.log("[Store] Restored content from", report.sections.length, "sections");
+        } else {
+          // Try to load partial results from localStorage
+          const partialResults = get().loadPartialResults(reportId);
+          if (partialResults) {
+            streamContent = partialResults?.content || streamContent;
+            console.log("[Store] Restored partial results from localStorage");
+          }
         }
 
         // Initialize research artifact for real-time progress tracking
-        // Phases will be populated dynamically when we receive the first progress_update event
+        // If we have report data, use it to initialize the artifact
         const researchArtifact: ResearchArtifact = {
-          currentPhase: "Reconnecting...",
+          currentPhase: report ? "Resuming..." : "Reconnecting...",
           phaseNumber: 0,
           phases: [], // Will be populated dynamically based on total_phases from backend
           currentQuery: "",
           searchProgress: 0,
-          totalSources: 0,
-          totalQueries: 0,
-          currentActivity: "Reconnecting to research stream...",
+          totalSources: report?.total_sources || 0,
+          totalQueries: report?.total_queries || 0,
+          currentActivity: report ? "Resuming research stream..." : "Reconnecting to research stream...",
           isThinking: false,
           timeline: [],
-          progressPercentage: 0,
+          progressPercentage: report?.total_sections > 0
+            ? (report.sections?.filter((s: any) => s.section_status === 'completed').length / report.total_sections) * 100
+            : 0,
         };
 
         // Helper to create phases array dynamically

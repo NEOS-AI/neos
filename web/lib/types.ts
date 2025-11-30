@@ -256,7 +256,7 @@ export interface ChatStore {
   sendStreamingMessage: (content: string) => Promise<void>;
   sendDeepResearchMessage: (content: string) => Promise<void>;
   checkAndReconnectDeepResearch: (conversationId: string, messages: Message[]) => Promise<void>;
-  reconnectDeepResearch: (conversationId: string, reportId: string, assistantMsgId: string, existingContent: string) => Promise<void>;
+  reconnectDeepResearch: (conversationId: string, reportId: string, assistantMsgId: string, existingContent: string, report?: any) => Promise<void>;
   _sendMessageWithStreaming: (content: string) => Promise<void>;
   _sendMessageWithoutStreaming: (content: string) => Promise<void>;
   regenerateMessage: (messageId: string) => Promise<void>;
