@@ -8,11 +8,13 @@ import type {
   ChatSettings,
   ChatMode,
   ResearchArtifact,
+  PhaseInfo,
 } from "@/lib/types";
 import { logError, classifyError, getUserFriendlyMessage, ErrorType } from "@/lib/error-logger";
 import { AI_SETTINGS, API } from "@/lib/constants";
 
 const DEFAULT_USER_ID = "anonymous";
+
 
 /**
  * Get the current user ID from auth or fall back to anonymous
