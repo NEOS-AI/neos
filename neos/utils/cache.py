@@ -84,7 +84,8 @@ class CacheManager:
         except Exception as e:
             logger.error(f"Redis 풀 상태 조회 실패: {e}")
             return {"status": "error", "error": str(e)}
-    
+
+
     async def set(
         self, 
         key: str, 
@@ -111,7 +112,8 @@ class CacheManager:
         except Exception as e:
             logger.error(f"캐시 저장 에러: {key} - {e}")
             return False
-    
+
+
     async def get(
         self, 
         key: str, 
@@ -135,7 +137,8 @@ class CacheManager:
         except Exception as e:
             logger.error(f"캐시 조회 에러: {key} - {e}")
             return None
-    
+
+
     async def delete(self, key: str) -> bool:
         """캐시 삭제"""
         if not self.redis_client:
@@ -148,7 +151,8 @@ class CacheManager:
         except Exception as e:
             logger.error(f"캐시 삭제 에러: {key} - {e}")
             return False
-    
+
+
     async def exists(self, key: str) -> bool:
         """캐시 존재 여부 확인"""
         if not self.redis_client:
@@ -158,7 +162,8 @@ class CacheManager:
             return await self.redis_client.exists(key) > 0
         except Exception:
             return False
-    
+
+
     async def health_check(self) -> bool:
         """Redis 연결 상태 확인"""
         try:
@@ -168,10 +173,12 @@ class CacheManager:
             return True
         except Exception:
             return False
-    
+
+
     def make_key(self, prefix: str, *args) -> str:
         """캐시 키 생성"""
         return f"{prefix}:" + ":".join(str(arg) for arg in args)
+
 
     async def mget(self, keys: List[str], deserialize: str = "json") -> List[Optional[Any]]:
         """
@@ -209,6 +216,7 @@ class CacheManager:
         except Exception as e:
             logger.error(f"캐시 다중 조회 에러: {e}")
             return [None] * len(keys)
+
 
     async def mset(
         self,
@@ -250,6 +258,7 @@ class CacheManager:
         except Exception as e:
             logger.error(f"캐시 다중 저장 에러: {e}")
             return False
+
 
     async def delete_pattern(self, pattern: str) -> int:
         """
