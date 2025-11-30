@@ -840,19 +840,11 @@ export const useChatStore = create<ChatStore>()(
           let streamContent = `🔬 **Deep Research Report: ${content}**\n\n`;
 
           // Initialize research artifact for real-time progress tracking
+          // Phases will be populated dynamically when we receive events from backend
           const researchArtifact: ResearchArtifact = {
-            currentPhase: "Topic Analysis",
+            currentPhase: "Initializing",
             phaseNumber: 0,
-            phases: [
-              { phaseNumber: 1, phaseName: "Topic Analysis", status: "pending" },
-              { phaseNumber: 2, phaseName: "Research Planning", status: "pending" },
-              { phaseNumber: 3, phaseName: "Data Collection", status: "pending" },
-              { phaseNumber: 4, phaseName: "Deep Analysis", status: "pending" },
-              { phaseNumber: 5, phaseName: "Gap Analysis", status: "pending" },
-              { phaseNumber: 6, phaseName: "Cross-Validation", status: "pending" },
-              { phaseNumber: 7, phaseName: "Critical Analysis", status: "pending" },
-              { phaseNumber: 8, phaseName: "Report Synthesis", status: "pending" },
-            ],
+            phases: [], // Will be populated dynamically based on total_phases from backend
             currentQuery: "",
             searchProgress: 0,
             totalSources: 0,
@@ -861,6 +853,19 @@ export const useChatStore = create<ChatStore>()(
             isThinking: false,
             timeline: [],
             progressPercentage: 0,
+          };
+
+          // Helper to create phases array dynamically
+          const createPhasesArray = (totalPhases: number): PhaseInfo[] => {
+            const phases: PhaseInfo[] = [];
+            for (let i = 1; i <= totalPhases; i++) {
+              phases.push({
+                phaseNumber: i,
+                phaseName: `Phase ${i}`, // Will be updated when phase_started event is received
+                status: "pending",
+              });
+            }
+            return phases;
           };
 
           // Helper function to update artifact
@@ -922,7 +927,29 @@ export const useChatStore = create<ChatStore>()(
                 case "phase_started":
                   const phaseNum = data.data.phase_number || 0;
                   const phaseName = data.data.phase_name || data.data.message || "Unknown Phase";
-                  // streamContent += `\n## 🚀 Phase ${phaseNum}/8: ${phaseName}\n`;
+                  const totalPhasesFromEvent = data.data.total_phases;
+
+                  // Initialize phases array if we haven't yet and total_phases is provided
+                  if (totalPhasesFromEvent && researchArtifact.phases.length === 0) {
+                    researchArtifact.phases = createPhasesArray(totalPhasesFromEvent);
+                    console.log(`[Store] Initialized ${totalPhasesFromEvent} phases from phase_started event`);
+                  }
+
+                  // Ensure the phase exists in the array (expand if needed)
+                  if (phaseNum > researchArtifact.phases.length) {
+                    const currentLength = researchArtifact.phases.length;
+                    for (let i = currentLength + 1; i <= phaseNum; i++) {
+                      researchArtifact.phases.push({
+                        phaseNumber: i,
+                        phaseName: `Phase ${i}`,
+                        status: "pending",
+                      });
+                    }
+                  }
+
+                  // Calculate progress percentage based on actual total phases
+                  const totalPhases = researchArtifact.phases.length || phaseNum;
+                  const progressPercentage = totalPhases > 0 ? (phaseNum / totalPhases) * 100 : 0;
 
                   // Update artifact
                   updateArtifact({
@@ -931,12 +958,12 @@ export const useChatStore = create<ChatStore>()(
                     currentActivity: phaseName,
                     phases: researchArtifact.phases.map((p) =>
                       p.phaseNumber === phaseNum
-                        ? { ...p, status: "in_progress", startedAt: new Date() }
+                        ? { ...p, phaseName, status: "in_progress", startedAt: new Date() }
                         : p.phaseNumber < phaseNum
                         ? { ...p, status: "completed" }
                         : p
                     ),
-                    progressPercentage: (phaseNum / 8) * 100,
+                    progressPercentage,
                   });
 
                   // Add to timeline
@@ -1047,6 +1074,32 @@ export const useChatStore = create<ChatStore>()(
                   const completed = data.data.completed || 0;
                   const total = data.data.total || 0;
                   // streamContent += `\n**Progress:** ${progressPct.toFixed(1)}% - ${sourcesCollected} sources collected\n`;
+
+                  // Initialize phases array if we receive total_phases and haven't initialized yet
+                  if (data.data.total_phases && researchArtifact.phases.length === 0) {
+                    const totalPhases = data.data.total_phases;
+                    researchArtifact.phases = createPhasesArray(totalPhases);
+                    console.log(`[Store] Initialized ${totalPhases} phases dynamically from progress_update`);
+                  }
+
+                  // Update current phase info if provided
+                  if (data.data.current_phase_number && data.data.current_phase_name) {
+                    const currentPhaseNum = data.data.current_phase_number;
+                    const currentPhaseName = data.data.current_phase_name;
+
+                    // Update the phase name and status
+                    updateArtifact({
+                      currentPhase: currentPhaseName,
+                      phaseNumber: currentPhaseNum,
+                      phases: researchArtifact.phases.map((p) =>
+                        p.phaseNumber === currentPhaseNum
+                          ? { ...p, phaseName: currentPhaseName, status: "in_progress" }
+                          : p.phaseNumber < currentPhaseNum
+                          ? { ...p, status: "completed" }
+                          : p
+                      ),
+                    });
+                  }
 
                   updateArtifact({
                     progressPercentage: progressPct,
@@ -1354,19 +1407,11 @@ export const useChatStore = create<ChatStore>()(
         }
 
         // Initialize research artifact for real-time progress tracking
+        // Phases will be populated dynamically when we receive the first progress_update event
         const researchArtifact: ResearchArtifact = {
           currentPhase: "Reconnecting...",
           phaseNumber: 0,
-          phases: [
-            { phaseNumber: 1, phaseName: "Topic Analysis", status: "pending" },
-            { phaseNumber: 2, phaseName: "Research Planning", status: "pending" },
-            { phaseNumber: 3, phaseName: "Data Collection", status: "pending" },
-            { phaseNumber: 4, phaseName: "Deep Analysis", status: "pending" },
-            { phaseNumber: 5, phaseName: "Gap Analysis", status: "pending" },
-            { phaseNumber: 6, phaseName: "Cross-Validation", status: "pending" },
-            { phaseNumber: 7, phaseName: "Critical Analysis", status: "pending" },
-            { phaseNumber: 8, phaseName: "Report Synthesis", status: "pending" },
-          ],
+          phases: [], // Will be populated dynamically based on total_phases from backend
           currentQuery: "",
           searchProgress: 0,
           totalSources: 0,
@@ -1375,6 +1420,19 @@ export const useChatStore = create<ChatStore>()(
           isThinking: false,
           timeline: [],
           progressPercentage: 0,
+        };
+
+        // Helper to create phases array dynamically
+        const createPhasesArray = (totalPhases: number): PhaseInfo[] => {
+          const phases: PhaseInfo[] = [];
+          for (let i = 1; i <= totalPhases; i++) {
+            phases.push({
+              phaseNumber: i,
+              phaseName: `Phase ${i}`, // Will be updated when phase_started event is received
+              status: "pending",
+            });
+          }
+          return phases;
         };
 
         // Helper function to update artifact
@@ -1433,7 +1491,29 @@ export const useChatStore = create<ChatStore>()(
               case "phase_started":
                 const phaseNum = data.data.phase_number || 0;
                 const phaseName = data.data.phase_name || data.data.message || "Unknown Phase";
-                // streamContent += `\n## 🚀 Phase ${phaseNum}/8: ${phaseName}\n`;
+                const totalPhasesFromEvent = data.data.total_phases;
+
+                // Initialize phases array if we haven't yet and total_phases is provided
+                if (totalPhasesFromEvent && researchArtifact.phases.length === 0) {
+                  researchArtifact.phases = createPhasesArray(totalPhasesFromEvent);
+                  console.log(`[Store] Initialized ${totalPhasesFromEvent} phases from phase_started event`);
+                }
+
+                // Ensure the phase exists in the array (expand if needed)
+                if (phaseNum > researchArtifact.phases.length) {
+                  const currentLength = researchArtifact.phases.length;
+                  for (let i = currentLength + 1; i <= phaseNum; i++) {
+                    researchArtifact.phases.push({
+                      phaseNumber: i,
+                      phaseName: `Phase ${i}`,
+                      status: "pending",
+                    });
+                  }
+                }
+
+                // Calculate progress percentage based on actual total phases
+                const totalPhases = researchArtifact.phases.length || phaseNum;
+                const progressPercentage = totalPhases > 0 ? (phaseNum / totalPhases) * 100 : 0;
 
                 // Update artifact
                 updateArtifact({
@@ -1442,12 +1522,12 @@ export const useChatStore = create<ChatStore>()(
                   currentActivity: phaseName,
                   phases: researchArtifact.phases.map((p) =>
                     p.phaseNumber === phaseNum
-                      ? { ...p, status: "in_progress", startedAt: new Date() }
+                      ? { ...p, phaseName, status: "in_progress", startedAt: new Date() }
                       : p.phaseNumber < phaseNum
                       ? { ...p, status: "completed" }
                       : p
                   ),
-                  progressPercentage: (phaseNum / 8) * 100,
+                  progressPercentage,
                 });
 
                 // Add to timeline
@@ -1558,6 +1638,32 @@ export const useChatStore = create<ChatStore>()(
                 const completed = data.data.completed || 0;
                 const total = data.data.total || 0;
                 // streamContent += `\n**Progress:** ${progressPct.toFixed(1)}% - ${sourcesCollected} sources collected\n`;
+
+                // Initialize phases array if we receive total_phases and haven't initialized yet
+                if (data.data.total_phases && researchArtifact.phases.length === 0) {
+                  const totalPhases = data.data.total_phases;
+                  researchArtifact.phases = createPhasesArray(totalPhases);
+                  console.log(`[Store] Initialized ${totalPhases} phases dynamically`);
+                }
+
+                // Update current phase info if provided
+                if (data.data.current_phase_number && data.data.current_phase_name) {
+                  const currentPhaseNum = data.data.current_phase_number;
+                  const currentPhaseName = data.data.current_phase_name;
+
+                  // Update the phase name and status
+                  updateArtifact({
+                    currentPhase: currentPhaseName,
+                    phaseNumber: currentPhaseNum,
+                    phases: researchArtifact.phases.map((p) =>
+                      p.phaseNumber === currentPhaseNum
+                        ? { ...p, phaseName: currentPhaseName, status: "in_progress" }
+                        : p.phaseNumber < currentPhaseNum
+                        ? { ...p, status: "completed" }
+                        : p
+                    ),
+                  });
+                }
 
                 updateArtifact({
                   progressPercentage: progressPct,

@@ -235,7 +235,7 @@ async def deep_research_stream_generator(
         # This allows clients refreshing the page to immediately see progress
         current_report = await get_research_report(report_id)
         if current_report:
-            # Query latest events to determine current phase
+            # Query latest events to determine current phase and total phases
             latest_phase_query = """
                 SELECT event_data
                 FROM hyper_research_events
@@ -246,41 +246,62 @@ async def deep_research_stream_generator(
             """
             latest_phase_result = await db_manager.fetch_one(latest_phase_query, report_id)
 
+            # Query to find the maximum phase number (total phases)
+            max_phase_query = """
+                SELECT MAX(CAST(event_data->>'phase_number' AS INTEGER)) as max_phase
+                FROM hyper_research_events
+                WHERE report_id = $1
+                  AND event_type IN ('phase_started', 'phase_completed')
+                  AND event_data->>'phase_number' IS NOT NULL
+            """
+            max_phase_result = await db_manager.fetch_one(max_phase_query, report_id)
+
             current_phase_number = 0
             current_phase_name = "Initializing"
+            total_phases = max_phase_result[0] if max_phase_result and max_phase_result[0] else 8  # Default to 8
 
             if latest_phase_result:
                 phase_event_data = latest_phase_result[0]
                 if isinstance(phase_event_data, dict):
                     current_phase_number = phase_event_data.get("phase_number", 0)
                     current_phase_name = phase_event_data.get("phase_name", "Initializing")
+                    # If we have total_phases in event data, use it
+                    if "total_phases" in phase_event_data:
+                        total_phases = phase_event_data["total_phases"]
 
             # Send initial progress update with current state
+            initial_progress_data = ProgressUpdateEventData(
+                current_phase=ResearchPhase.ANALYSIS,  # Generic
+                completed_sections=0,
+                total_sections=current_report.get("total_sections") or 0,
+                sources_collected=current_report.get("total_sources") or 0,
+                queries_executed=current_report.get("total_queries") or 0,
+                progress_percentage=min(95, (current_phase_number / max(1, total_phases)) * 100) if current_phase_number > 0 else 0,
+                estimated_time_remaining_seconds=0,
+                message=f"Reconnecting - Current phase: {current_phase_name}"
+            ).model_dump()
+
+            # Add total_phases to the event data
+            initial_progress_data["total_phases"] = total_phases
+            initial_progress_data["current_phase_number"] = current_phase_number
+            initial_progress_data["current_phase_name"] = current_phase_name
+
             initial_progress = DeepResearchEvent(
                 event=DeepResearchEventType.PROGRESS_UPDATE,
                 report_id=report_id,
-                data=ProgressUpdateEventData(
-                    current_phase=ResearchPhase.ANALYSIS,  # Generic
-                    completed_sections=0,
-                    total_sections=current_report.get("total_sections") or 0,
-                    sources_collected=current_report.get("total_sources") or 0,
-                    queries_executed=current_report.get("total_queries") or 0,
-                    progress_percentage=min(95, (current_phase_number / 8.0) * 100) if current_phase_number > 0 else 0,
-                    estimated_time_remaining_seconds=0,
-                    message=f"Reconnecting - Current phase: {current_phase_name}"
-                ).model_dump()
+                data=initial_progress_data
             )
             yield f"data: {initial_progress.model_dump_json()}\n\n"
 
             # Replay recent phase events to restore UI state
-            # Get last 3 phase events to help client reconstruct phase status
+            # Get last 5 phase events to help client reconstruct phase status
             recent_phases_query = """
                 SELECT event_type, event_data, sequence_number
                 FROM hyper_research_events
                 WHERE report_id = $1
                   AND event_type IN ('phase_started', 'phase_completed')
                 ORDER BY sequence_number DESC
-                LIMIT 3
+                LIMIT 5
             """
             recent_phases = await db_manager.fetch_all(recent_phases_query, report_id)
 
