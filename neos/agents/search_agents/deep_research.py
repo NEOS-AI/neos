@@ -358,7 +358,7 @@ Report Structure:
             print(f"[INFO] Updated plan:\n{self.planning_agent.get_task_summary(research_plan)}")
 
         # Verification phase (after all tasks completed)
-        print(f"[INFO] Verification Phase: Cross-referencing and fact-checking")
+        print("[INFO] Verification Phase: Cross-referencing and fact-checking")
         verification_insights = await self._cross_reference_sources(all_summaries, session_id, user_id, detected_language)
 
         await self._save_checkpoint("verification", {
@@ -367,7 +367,7 @@ Report Structure:
         })
 
         # Final report generation
-        print(f"[INFO] Final Phase: Report Generation - Synthesizing comprehensive report")
+        print("[INFO] Final Phase: Report Generation - Synthesizing comprehensive report")
         final_report = await self._generate_comprehensive_report(
             query,
             all_summaries,

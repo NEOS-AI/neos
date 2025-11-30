@@ -22,7 +22,6 @@ from neos.api.handlers.auth import router as auth_router
 from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.workflow.graph import multi_agent_workflow
 
-# Enterprise features
 from neos.observability.metrics import get_metrics_collector
 from neos.workflow.checkpointer import cleanup_checkpointer
 
