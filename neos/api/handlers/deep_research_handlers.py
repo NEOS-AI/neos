@@ -226,8 +226,76 @@ async def deep_research_stream_generator(
         )
         yield f"data: {started_event.model_dump_json()}\n\n"
 
-        # Update status to in_progress
-        await update_research_status(report_id, "in_progress", started_at=datetime.now())
+        # Update status to in_progress if not already
+        report_before_start = await get_research_report(report_id)
+        if report_before_start and report_before_start.get("research_status") == "pending":
+            await update_research_status(report_id, "in_progress", started_at=datetime.now())
+
+        # Send current state for reconnection scenarios
+        # This allows clients refreshing the page to immediately see progress
+        current_report = await get_research_report(report_id)
+        if current_report:
+            # Query latest events to determine current phase
+            latest_phase_query = """
+                SELECT event_data
+                FROM hyper_research_events
+                WHERE report_id = $1
+                  AND event_type IN ('phase_started', 'phase_completed')
+                ORDER BY sequence_number DESC
+                LIMIT 1
+            """
+            latest_phase_result = await db_manager.fetch_one(latest_phase_query, report_id)
+
+            current_phase_number = 0
+            current_phase_name = "Initializing"
+
+            if latest_phase_result:
+                phase_event_data = latest_phase_result[0]
+                if isinstance(phase_event_data, dict):
+                    current_phase_number = phase_event_data.get("phase_number", 0)
+                    current_phase_name = phase_event_data.get("phase_name", "Initializing")
+
+            # Send initial progress update with current state
+            initial_progress = DeepResearchEvent(
+                event=DeepResearchEventType.PROGRESS_UPDATE,
+                report_id=report_id,
+                data=ProgressUpdateEventData(
+                    current_phase=ResearchPhase.ANALYSIS,  # Generic
+                    completed_sections=0,
+                    total_sections=current_report.get("total_sections") or 0,
+                    sources_collected=current_report.get("total_sources") or 0,
+                    queries_executed=current_report.get("total_queries") or 0,
+                    progress_percentage=min(95, (current_phase_number / 8.0) * 100) if current_phase_number > 0 else 0,
+                    estimated_time_remaining_seconds=0,
+                    message=f"Reconnecting - Current phase: {current_phase_name}"
+                ).model_dump()
+            )
+            yield f"data: {initial_progress.model_dump_json()}\n\n"
+
+            # Replay recent phase events to restore UI state
+            # Get last 3 phase events to help client reconstruct phase status
+            recent_phases_query = """
+                SELECT event_type, event_data, sequence_number
+                FROM hyper_research_events
+                WHERE report_id = $1
+                  AND event_type IN ('phase_started', 'phase_completed')
+                ORDER BY sequence_number DESC
+                LIMIT 3
+            """
+            recent_phases = await db_manager.fetch_all(recent_phases_query, report_id)
+
+            # Send them in chronological order (reverse the DESC result)
+            for phase_row in reversed(list(recent_phases)):
+                event_type_replay = phase_row[0]
+                event_data_replay = phase_row[1]
+
+                if isinstance(event_data_replay, dict):
+                    replay_event = DeepResearchEvent(
+                        event=event_type_replay,
+                        report_id=report_id,
+                        data=event_data_replay
+                    )
+                    yield f"data: {replay_event.model_dump_json()}\n\n"
 
         # Initialize the HyperDeepResearch agent
         logger.info(f"Initializing HyperDeepResearch agent for report {report_id}")
