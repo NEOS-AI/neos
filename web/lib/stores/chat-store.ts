@@ -840,19 +840,11 @@ export const useChatStore = create<ChatStore>()(
           let streamContent = `🔬 **Deep Research Report: ${content}**\n\n`;
 
           // Initialize research artifact for real-time progress tracking
+          // Phases will be populated dynamically when we receive events from backend
           const researchArtifact: ResearchArtifact = {
-            currentPhase: "Topic Analysis",
+            currentPhase: "Initializing",
             phaseNumber: 0,
-            phases: [
-              { phaseNumber: 1, phaseName: "Topic Analysis", status: "pending" },
-              { phaseNumber: 2, phaseName: "Research Planning", status: "pending" },
-              { phaseNumber: 3, phaseName: "Data Collection", status: "pending" },
-              { phaseNumber: 4, phaseName: "Deep Analysis", status: "pending" },
-              { phaseNumber: 5, phaseName: "Gap Analysis", status: "pending" },
-              { phaseNumber: 6, phaseName: "Cross-Validation", status: "pending" },
-              { phaseNumber: 7, phaseName: "Critical Analysis", status: "pending" },
-              { phaseNumber: 8, phaseName: "Report Synthesis", status: "pending" },
-            ],
+            phases: [], // Will be populated dynamically based on total_phases from backend
             currentQuery: "",
             searchProgress: 0,
             totalSources: 0,
@@ -861,6 +853,19 @@ export const useChatStore = create<ChatStore>()(
             isThinking: false,
             timeline: [],
             progressPercentage: 0,
+          };
+
+          // Helper to create phases array dynamically
+          const createPhasesArray = (totalPhases: number): PhaseInfo[] => {
+            const phases: PhaseInfo[] = [];
+            for (let i = 1; i <= totalPhases; i++) {
+              phases.push({
+                phaseNumber: i,
+                phaseName: `Phase ${i}`, // Will be updated when phase_started event is received
+                status: "pending",
+              });
+            }
+            return phases;
           };
 
           // Helper function to update artifact
@@ -922,7 +927,29 @@ export const useChatStore = create<ChatStore>()(
                 case "phase_started":
                   const phaseNum = data.data.phase_number || 0;
                   const phaseName = data.data.phase_name || data.data.message || "Unknown Phase";
-                  // streamContent += `\n## 🚀 Phase ${phaseNum}/8: ${phaseName}\n`;
+                  const totalPhasesFromEvent = data.data.total_phases;
+
+                  // Initialize phases array if we haven't yet and total_phases is provided
+                  if (totalPhasesFromEvent && researchArtifact.phases.length === 0) {
+                    researchArtifact.phases = createPhasesArray(totalPhasesFromEvent);
+                    console.log(`[Store] Initialized ${totalPhasesFromEvent} phases from phase_started event`);
+                  }
+
+                  // Ensure the phase exists in the array (expand if needed)
+                  if (phaseNum > researchArtifact.phases.length) {
+                    const currentLength = researchArtifact.phases.length;
+                    for (let i = currentLength + 1; i <= phaseNum; i++) {
+                      researchArtifact.phases.push({
+                        phaseNumber: i,
+                        phaseName: `Phase ${i}`,
+                        status: "pending",
+                      });
+                    }
+                  }
+
+                  // Calculate progress percentage based on actual total phases
+                  const totalPhases = researchArtifact.phases.length || phaseNum;
+                  const progressPercentage = totalPhases > 0 ? (phaseNum / totalPhases) * 100 : 0;
 
                   // Update artifact
                   updateArtifact({
@@ -931,12 +958,12 @@ export const useChatStore = create<ChatStore>()(
                     currentActivity: phaseName,
                     phases: researchArtifact.phases.map((p) =>
                       p.phaseNumber === phaseNum
-                        ? { ...p, status: "in_progress", startedAt: new Date() }
+                        ? { ...p, phaseName, status: "in_progress", startedAt: new Date() }
                         : p.phaseNumber < phaseNum
                         ? { ...p, status: "completed" }
                         : p
                     ),
-                    progressPercentage: (phaseNum / 8) * 100,
+                    progressPercentage,
                   });
 
                   // Add to timeline
@@ -1047,6 +1074,32 @@ export const useChatStore = create<ChatStore>()(
                   const completed = data.data.completed || 0;
                   const total = data.data.total || 0;
                   // streamContent += `\n**Progress:** ${progressPct.toFixed(1)}% - ${sourcesCollected} sources collected\n`;
+
+                  // Initialize phases array if we receive total_phases and haven't initialized yet
+                  if (data.data.total_phases && researchArtifact.phases.length === 0) {
+                    const totalPhases = data.data.total_phases;
+                    researchArtifact.phases = createPhasesArray(totalPhases);
+                    console.log(`[Store] Initialized ${totalPhases} phases dynamically from progress_update`);
+                  }
+
+                  // Update current phase info if provided
+                  if (data.data.current_phase_number && data.data.current_phase_name) {
+                    const currentPhaseNum = data.data.current_phase_number;
+                    const currentPhaseName = data.data.current_phase_name;
+
+                    // Update the phase name and status
+                    updateArtifact({
+                      currentPhase: currentPhaseName,
+                      phaseNumber: currentPhaseNum,
+                      phases: researchArtifact.phases.map((p) =>
+                        p.phaseNumber === currentPhaseNum
+                          ? { ...p, phaseName: currentPhaseName, status: "in_progress" }
+                          : p.phaseNumber < currentPhaseNum
+                          ? { ...p, status: "completed" }
+                          : p
+                      ),
+                    });
+                  }
 
                   updateArtifact({
                     progressPercentage: progressPct,
@@ -1353,10 +1406,66 @@ export const useChatStore = create<ChatStore>()(
           console.log("[Store] Restored partial results from localStorage");
         }
 
+        // Initialize research artifact for real-time progress tracking
+        // Phases will be populated dynamically when we receive the first progress_update event
+        const researchArtifact: ResearchArtifact = {
+          currentPhase: "Reconnecting...",
+          phaseNumber: 0,
+          phases: [], // Will be populated dynamically based on total_phases from backend
+          currentQuery: "",
+          searchProgress: 0,
+          totalSources: 0,
+          totalQueries: 0,
+          currentActivity: "Reconnecting to research stream...",
+          isThinking: false,
+          timeline: [],
+          progressPercentage: 0,
+        };
+
+        // Helper to create phases array dynamically
+        const createPhasesArray = (totalPhases: number): PhaseInfo[] => {
+          const phases: PhaseInfo[] = [];
+          for (let i = 1; i <= totalPhases; i++) {
+            phases.push({
+              phaseNumber: i,
+              phaseName: `Phase ${i}`, // Will be updated when phase_started event is received
+              status: "pending",
+            });
+          }
+          return phases;
+        };
+
+        // Helper function to update artifact
+        const updateArtifact = (updates: Partial<ResearchArtifact>) => {
+          Object.assign(researchArtifact, updates);
+
+          // Update message metadata with artifact
+          set((state) => ({
+            conversations: state.conversations.map((c) =>
+              c.conversation_id === conversationId
+                ? {
+                    ...c,
+                    messages: (c.messages || []).map((m) =>
+                      m.message_id === assistantMsgId
+                        ? {
+                            ...m,
+                            metadata: {
+                              ...m.metadata,
+                              research_artifact: researchArtifact,
+                            },
+                          }
+                        : m
+                    ),
+                  }
+                : c
+            ),
+          }));
+        };
+
         // Connect to SSE stream for updates
         const eventSource = chatAPI.connectDeepResearchStream(reportId);
 
-        set({ activeEventSource: eventSource });
+        set({ activeEventSource: eventSource, isStreaming: true });
 
         // Start heartbeat monitoring
         get().startHeartbeatMonitoring(reportId, conversationId, assistantMsgId);
@@ -1378,24 +1487,219 @@ export const useChatStore = create<ChatStore>()(
                 get().resetHeartbeat(reportId, conversationId, assistantMsgId);
                 break;
 
+              // ===== Phase Events =====
               case "phase_started":
-                streamContent += `\n**Phase:** ${data.data.message}\n`;
+                const phaseNum = data.data.phase_number || 0;
+                const phaseName = data.data.phase_name || data.data.message || "Unknown Phase";
+                const totalPhasesFromEvent = data.data.total_phases;
+
+                // Initialize phases array if we haven't yet and total_phases is provided
+                if (totalPhasesFromEvent && researchArtifact.phases.length === 0) {
+                  researchArtifact.phases = createPhasesArray(totalPhasesFromEvent);
+                  console.log(`[Store] Initialized ${totalPhasesFromEvent} phases from phase_started event`);
+                }
+
+                // Ensure the phase exists in the array (expand if needed)
+                if (phaseNum > researchArtifact.phases.length) {
+                  const currentLength = researchArtifact.phases.length;
+                  for (let i = currentLength + 1; i <= phaseNum; i++) {
+                    researchArtifact.phases.push({
+                      phaseNumber: i,
+                      phaseName: `Phase ${i}`,
+                      status: "pending",
+                    });
+                  }
+                }
+
+                // Calculate progress percentage based on actual total phases
+                const totalPhases = researchArtifact.phases.length || phaseNum;
+                const progressPercentage = totalPhases > 0 ? (phaseNum / totalPhases) * 100 : 0;
+
+                // Update artifact
+                updateArtifact({
+                  currentPhase: phaseName,
+                  phaseNumber: phaseNum,
+                  currentActivity: phaseName,
+                  phases: researchArtifact.phases.map((p) =>
+                    p.phaseNumber === phaseNum
+                      ? { ...p, phaseName, status: "in_progress", startedAt: new Date() }
+                      : p.phaseNumber < phaseNum
+                      ? { ...p, status: "completed" }
+                      : p
+                  ),
+                  progressPercentage,
+                });
+
+                // Add to timeline
+                researchArtifact.timeline.push({
+                  timestamp: new Date(),
+                  activity: `Started: ${phaseName}`,
+                  eventType: "phase_started",
+                });
                 break;
 
               case "phase_completed":
-                streamContent += `✓ ${data.data.message} (${data.data.duration_ms}ms)\n`;
+                const completedPhaseNum = data.data.phase_number || 0;
+                const completedPhaseName = data.data.phase_name || data.data.message || "Phase";
+                const duration = data.data.duration_ms || 0;
+                // streamContent += `✅ ${completedPhaseName} completed (${(duration / 1000).toFixed(1)}s)\n`;
+
+                // Update artifact
+                updateArtifact({
+                  phases: researchArtifact.phases.map((p) =>
+                    p.phaseNumber === completedPhaseNum
+                      ? { ...p, status: "completed", completedAt: new Date(), duration }
+                      : p
+                  ),
+                });
+
+                // Add to timeline
+                researchArtifact.timeline.push({
+                  timestamp: new Date(),
+                  activity: `Completed: ${completedPhaseName} (${(duration / 1000).toFixed(1)}s)`,
+                  eventType: "phase_completed",
+                });
+                break;
+
+              // ===== Query/Search Events =====
+              case "query_executing":
+                const query = data.data.query || "";
+                const batch = data.data.batch || 0;
+                const totalBatches = data.data.total_batches || 1;
+                // streamContent += `🔍 Searching [${batch}/${totalBatches}]: "${query.substring(0, 60)}..."\n`;
+
+                updateArtifact({
+                  currentQuery: query,
+                  searchProgress: (batch / totalBatches) * 100,
+                  currentActivity: `Searching batch ${batch}/${totalBatches}`,
+                });
                 break;
 
               case "query_executed":
-                streamContent += `📊 Query: "${data.data.query}" (${data.data.results_count} results)\n`;
+                // streamContent += `📊 Query: "${data.data.query}" (${data.data.results_count} results)\n`;
+
+                updateArtifact({
+                  totalQueries: researchArtifact.totalQueries + 1,
+                });
                 break;
 
+              // ===== Source Collection Events =====
+              case "sources_collected":
+                const sourcesCount = data.data.sources_count || 0;
+                const totalSources = data.data.total_sources || 0;
+                // streamContent += `📚 Collected ${sourcesCount} sources (Total: ${totalSources})\n`;
+
+                updateArtifact({
+                  totalSources,
+                  currentActivity: `Collected ${totalSources} sources`,
+                });
+
+                // Add to timeline
+                researchArtifact.timeline.push({
+                  timestamp: new Date(),
+                  activity: `Collected ${sourcesCount} sources`,
+                  eventType: "sources_collected",
+                });
+                break;
+
+              // ===== LLM Events =====
+              case "llm_call_started":
+                const llmPurpose = data.data.purpose || "Analyzing";
+                // streamContent += `🤖 ${llmPurpose}...\n`;
+
+                updateArtifact({
+                  isThinking: true,
+                  currentActivity: llmPurpose,
+                });
+                break;
+
+              case "llm_call_completed":
+                updateArtifact({
+                  isThinking: false,
+                });
+                break;
+
+              // ===== Status Messages =====
+              case "status_message":
+                const statusMsg = data.data.message || "";
+                const category = data.data.category || "info";
+                const icon = category === "success" ? "✅" : category === "warning" ? "⚠️" : "ℹ️";
+                // streamContent += `${icon} ${statusMsg}\n`;
+
+                updateArtifact({
+                  currentActivity: statusMsg,
+                });
+                break;
+
+              // ===== Progress Update =====
               case "progress_update":
-                streamContent += `\n**Progress:** ${data.data.progress_percentage.toFixed(1)}% - ${data.data.sources_collected} sources collected\n`;
+                const progressPct = data.data.progress_percentage || 0;
+                const sourcesCollected = data.data.sources_collected || 0;
+                const completed = data.data.completed || 0;
+                const total = data.data.total || 0;
+                // streamContent += `\n**Progress:** ${progressPct.toFixed(1)}% - ${sourcesCollected} sources collected\n`;
+
+                // Initialize phases array if we receive total_phases and haven't initialized yet
+                if (data.data.total_phases && researchArtifact.phases.length === 0) {
+                  const totalPhases = data.data.total_phases;
+                  researchArtifact.phases = createPhasesArray(totalPhases);
+                  console.log(`[Store] Initialized ${totalPhases} phases dynamically`);
+                }
+
+                // Update current phase info if provided
+                if (data.data.current_phase_number && data.data.current_phase_name) {
+                  const currentPhaseNum = data.data.current_phase_number;
+                  const currentPhaseName = data.data.current_phase_name;
+
+                  // Update the phase name and status
+                  updateArtifact({
+                    currentPhase: currentPhaseName,
+                    phaseNumber: currentPhaseNum,
+                    phases: researchArtifact.phases.map((p) =>
+                      p.phaseNumber === currentPhaseNum
+                        ? { ...p, phaseName: currentPhaseName, status: "in_progress" }
+                        : p.phaseNumber < currentPhaseNum
+                        ? { ...p, status: "completed" }
+                        : p
+                    ),
+                  });
+                }
+
+                updateArtifact({
+                  progressPercentage: progressPct,
+                  totalSources: sourcesCollected,
+                  currentActivity: data.data.message || `${completed}/${total} completed`,
+                });
                 break;
 
+              // ===== Gap Events =====
+              case "gap_identified":
+                const gap = data.data.gap || "";
+                // streamContent += `🎯 Gap identified: ${gap}\n`;
+
+                // Add to timeline
+                researchArtifact.timeline.push({
+                  timestamp: new Date(),
+                  activity: `Gap: ${gap}`,
+                  eventType: "gap_identified",
+                });
+                break;
+
+              // ===== Analysis Events =====
+              case "analysis_iteration":
+                const iteration = data.data.iteration || 0;
+                const totalIterations = data.data.total_iterations || 0;
+                const focus = data.data.focus || "";
+                // streamContent += `🔬 Analysis iteration ${iteration}/${totalIterations}: ${focus}\n`;
+
+                updateArtifact({
+                  currentActivity: `Analysis iteration ${iteration}/${totalIterations}`,
+                });
+                break;
+
+              // ===== Section Content =====
               case "section_content":
-                streamContent += data.data.content_chunk;
+                // streamContent += data.data.content_chunk;
                 // Save partial results for crash recovery
                 get().savePartialResults(reportId, streamContent, {
                   conversationId,
