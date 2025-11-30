@@ -47,7 +47,7 @@ class CacheManager:
         except Exception as e:
             logger.error(f"Redis 연결 실패: {e}")
             raise
-        
+
     async def close(self):
         """Redis 연결 풀 종료"""
         if self.redis_client:
@@ -58,7 +58,8 @@ class CacheManager:
             await self.connection_pool.disconnect()
             logger.info("Redis 연결 풀 종료 완료")
 
-    def get_pool_status(self) -> dict:
+
+    async def get_pool_status(self) -> dict:
         """
         Redis 연결 풀 상태 조회
 
@@ -70,6 +71,9 @@ class CacheManager:
 
         try:
             pool = self.connection_pool
+            # simple ping with connection pool
+            await pool.get_connection("PING")
+
             # Redis 연결 풀은 직접적인 상태 조회 메소드가 제한적
             return {
                 "max_connections": settings.REDIS_POOL_SIZE,
@@ -192,12 +196,12 @@ class CacheManager:
                 elif deserialize == "json":
                     try:
                         results.append(json.loads(value))
-                    except:
+                    except Exception:
                         results.append(None)
                 elif deserialize == "pickle":
                     try:
                         results.append(pickle.loads(value))
-                    except:
+                    except Exception:
                         results.append(None)
                 else:
                     results.append(value.decode("utf-8") if isinstance(value, bytes) else value)
