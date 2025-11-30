@@ -27,7 +27,7 @@ from neos.observability.metrics import get_metrics_collector
 from neos.workflow.checkpointer import cleanup_checkpointer
 
 
-__VERSION__ = "0.11.0"
+__VERSION__ = "0.12.0"
 
 
 # 로깅 설정
