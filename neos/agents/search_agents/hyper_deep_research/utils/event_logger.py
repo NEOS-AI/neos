@@ -137,38 +137,68 @@ class ResearchEventLogger:
         event_category: EventCategory,
         event_data: Dict[str, Any]
     ) -> None:
-        """Save event to database.
+        """Save event to database with retry on conflict.
 
         Args:
             event_type: Type of event
             event_category: Category of event
             event_data: Event-specific data
         """
-        query = """
-            INSERT INTO hyper_research_events
-            (report_id, event_type, event_category, sequence_number, event_data)
-            VALUES ($1, $2, $3, $4, $5)
-        """
+        # Retry up to 3 times on unique constraint violation
+        max_retries = 3
 
-        try:
-            # Serialize event_data to JSON string for JSONB column
-            # SQLAlchemy's text() with asyncpg requires explicit JSON serialization
-            event_data_json = json.dumps(event_data)
+        for attempt in range(max_retries):
+            try:
+                # Get next sequence number atomically
+                get_next_seq_query = """
+                    SELECT COALESCE(MAX(sequence_number), 0) + 1
+                    FROM hyper_research_events
+                    WHERE report_id = $1
+                """
 
-            await self.db_manager.execute(
-                query,
-                self.report_id,
-                event_type.value,
-                event_category.value,
-                self.sequence_counter,
-                event_data_json
-            )
-            logger.debug(
-                f"[EventLogger] Logged event #{self.sequence_counter}: {event_type.value}"
-            )
-        except Exception as e:
-            logger.error(f"[EventLogger] DB insert failed: {e}")
-            # Don't raise - we want to continue even if DB logging fails
+                result = await self.db_manager.fetch_one(get_next_seq_query, self.report_id)
+                next_seq = result[0] if result else 1
+
+                # Insert with the sequence number
+                insert_query = """
+                    INSERT INTO hyper_research_events
+                    (report_id, event_type, event_category, sequence_number, event_data)
+                    VALUES ($1, $2, $3, $4, $5)
+                """
+
+                # Serialize event_data to JSON string for JSONB column
+                event_data_json = json.dumps(event_data)
+
+                await self.db_manager.execute(
+                    insert_query,
+                    self.report_id,
+                    event_type.value,
+                    event_category.value,
+                    next_seq,
+                    event_data_json
+                )
+
+                logger.debug(
+                    f"[EventLogger] Logged event #{next_seq}: {event_type.value}"
+                )
+                return  # Success - exit function
+
+            except Exception as e:
+                error_str = str(e)
+                # Check if it's a unique constraint violation
+                if "UniqueViolationError" in error_str or "idx_events_report_seq_unique" in error_str:
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"[EventLogger] Sequence conflict on attempt {attempt + 1}, retrying..."
+                        )
+                        continue  # Retry
+                    else:
+                        logger.error(
+                            f"[EventLogger] Failed after {max_retries} attempts due to sequence conflicts"
+                        )
+                else:
+                    logger.error(f"[EventLogger] DB insert failed: {e}")
+                    break  # Don't retry on other errors
 
     def _print_to_cli(
         self,
