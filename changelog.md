@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.12.0 (2025-11-30)
+- [x] Add context saving strategy
+  - [x] context optimization for deep research
+  - [x] context optimization for multi-agent workflows
+- [x] Fix up hard-coded plan in DeepResearchAgent and HyperDeepResearchAgent (only run 4 steps out of N steps)
+- [x] Update the UI styles
+- [x] Add support for connection loss on DeepResearch refresh
+  - [x] Heartbeat timeout detection (30s)
+  - [x] Multi-tab synchronization via BroadcastChannel
+  - [x] Online/offline network detection
+  - [x] Extended reconnection timeout (5 → 10 attempts)
+  - [x] Partial results persistence to localStorage
+- [x] Fix deep research content restoration on page refresh
+  - [x] Restore completed sections from backend when page refreshes
+  - [x] Properly rebuild research artifacts from backend data
+  - [x] Display completed/failed research status with full content
+  - [x] Maintain progress information during reconnection
+- [x] Fix event sequence number collision in concurrent deep research operations
+  - [x] Implement retry mechanism for unique constraint violations
+  - [x] Fetch next sequence number from database instead of using instance counter
+  - [x] Prevent duplicate key errors during concurrent LLM calls
+- [x] Fix conversation mode persistence on page refresh
+  - [x] Sync settings.mode with conversation.mode when loading conversations
+  - [x] Sync settings.mode when switching between conversations
+  - [x] Prevent deep research conversations from showing as 'standard' mode after refresh
+
 ## v0.11.0 (2025-11-23)
 - [x] Update HyperDeepResearch
 - [x] Add support for production deployment
