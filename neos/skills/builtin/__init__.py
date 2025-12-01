@@ -14,6 +14,9 @@ from .bigquery import BigQuerySkill
 from .docx import DocxSkill
 from .pdf import PdfSkill
 from .research_assistant import ResearchAssistantSkill
+from .arxiv import ArxivSkill
+from .pubmed import PubmedSkill
+from .wikipedia import WikipediaSkill
 
 
 def get_builtin_skills() -> List[SkillInfo]:
@@ -83,6 +86,52 @@ def get_builtin_skills() -> List[SkillInfo]:
             version="1.0.0",
             skill_dir=skills_dir / "research_assistant",
         ),
+        SkillInfo(
+            name="arxiv",
+            skill_class=ArxivSkill,
+            skill_type=SkillType.RESEARCH,
+            description="ArXiv 학술 논문 검색 - 물리학, 수학, 컴퓨터 과학, AI/ML 등",
+            capabilities=[
+                "paper_search",
+                "academic_research",
+                "arxiv_query",
+                "metadata_extraction",
+                "research_support",
+            ],
+            version="1.0.0",
+            skill_dir=skills_dir / "arxiv",
+        ),
+        SkillInfo(
+            name="pubmed",
+            skill_class=PubmedSkill,
+            skill_type=SkillType.RESEARCH,
+            description="PubMed 의학/생물학 논문 검색 - 의학, 생명과학, 바이오메디컬 분야",
+            capabilities=[
+                "medical_research",
+                "biomedical_search",
+                "pubmed_query",
+                "paper_search",
+                "metadata_extraction",
+                "research_support",
+            ],
+            version="1.0.0",
+            skill_dir=skills_dir / "pubmed",
+        ),
+        SkillInfo(
+            name="wikipedia",
+            skill_class=WikipediaSkill,
+            skill_type=SkillType.RESEARCH,
+            description="Wikipedia 일반 지식 검색 - 개념 정의, 배경 정보, 일반 지식",
+            capabilities=[
+                "knowledge_search",
+                "concept_definition",
+                "background_research",
+                "general_information",
+                "research_support",
+            ],
+            version="1.0.0",
+            skill_dir=skills_dir / "wikipedia",
+        ),
     ]
 
     return builtin_skills
@@ -94,4 +143,7 @@ __all__ = [
     "DocxSkill",
     "PdfSkill",
     "ResearchAssistantSkill",
+    "ArxivSkill",
+    "PubmedSkill",
+    "WikipediaSkill",
 ]

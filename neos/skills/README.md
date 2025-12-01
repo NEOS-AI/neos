@@ -51,7 +51,13 @@ neos/skills/
 
 ## 내장 스킬
 
-### 1. BigQuery Skill
+NEOS는 총 7개의 내장 스킬을 제공합니다:
+- **문서 처리**: BigQuery, DOCX, PDF
+- **리서치**: Research Assistant, ArXiv, PubMed, Wikipedia
+
+### 문서 처리 스킬
+
+#### 1. BigQuery Skill
 BigQuery 데이터베이스 조회 및 분석
 
 ```python
@@ -64,7 +70,7 @@ result = await skill_manager.execute_skill(
 )
 ```
 
-### 2. DOCX Skill
+#### 2. DOCX Skill
 Microsoft Word 문서 처리
 
 ```python
@@ -89,7 +95,7 @@ result = await skill_manager.execute_skill(
 )
 ```
 
-### 3. PDF Skill
+#### 3. PDF Skill
 PDF 문서 처리
 
 ```python
@@ -104,8 +110,10 @@ result = await skill_manager.execute_skill(
 )
 ```
 
-### 4. Research Assistant Skill
-리서치 작업 보조
+### 리서치 스킬
+
+#### 4. Research Assistant Skill
+리서치 작업 보조 - 소스 분석, 요약, 참고문헌 정리
 
 ```python
 # 소스 분석
@@ -120,6 +128,100 @@ result = await skill_manager.execute_skill(
         }
     }
 )
+```
+
+#### 5. ArXiv Skill
+학술 논문 검색 - 물리학, 수학, 컴퓨터 과학, AI/ML
+
+```python
+# 논문 검색
+result = await skill_manager.execute_skill(
+    "arxiv",
+    {
+        "action": "search",
+        "query": "large language models transformer",
+        "max_results": 10
+    }
+)
+
+# ArXiv ID로 특정 논문 조회
+result = await skill_manager.execute_skill(
+    "arxiv",
+    {
+        "action": "get_by_id",
+        "query": "2301.12345"
+    }
+)
+```
+
+#### 6. PubMed Skill
+의학/생물학 논문 검색 - 의학, 생명과학, 바이오메디컬
+
+```python
+# 의학 논문 검색
+result = await skill_manager.execute_skill(
+    "pubmed",
+    {
+        "action": "search",
+        "query": "covid-19 vaccine efficacy",
+        "max_results": 10
+    }
+)
+
+# PMID로 특정 논문 조회
+result = await skill_manager.execute_skill(
+    "pubmed",
+    {
+        "action": "get_by_pmid",
+        "query": "12345678"
+    }
+)
+```
+
+#### 7. Wikipedia Skill
+일반 지식 및 배경 정보 검색
+
+```python
+# Wikipedia 문서 검색 (영어)
+result = await skill_manager.execute_skill(
+    "wikipedia",
+    {
+        "action": "search",
+        "query": "artificial intelligence",
+        "max_results": 3,
+        "lang": "en"
+    }
+)
+
+# Wikipedia 문서 검색 (한국어)
+result = await skill_manager.execute_skill(
+    "wikipedia",
+    {
+        "action": "search",
+        "query": "인공지능",
+        "lang": "ko"
+    }
+)
+```
+
+### 리서치 스킬 사용 가이드
+
+리서치를 수행할 때 각 스킬의 특성에 맞게 활용하세요:
+
+1. **초기 탐색 단계**
+   - **Wikipedia**: 주제에 대한 기본 개념과 배경 지식 습득
+   - 일반적인 정의, 역사, 관련 개념 파악
+
+2. **학술 리서치 단계**
+   - **ArXiv**: 물리학, 수학, CS, AI/ML 분야의 최신 연구 논문
+   - **PubMed**: 의학, 생명과학, 바이오메디컬 분야의 학술 문헌
+
+3. **종합 분석 단계**
+   - **Research Assistant**: 수집한 소스들의 품질 평가, 요약, 참고문헌 정리
+
+**추천 워크플로우**:
+```
+Wikipedia (개념 이해) → ArXiv/PubMed (학술 조사) → Research Assistant (분석 및 정리)
 ```
 
 ## Workflow 통합
