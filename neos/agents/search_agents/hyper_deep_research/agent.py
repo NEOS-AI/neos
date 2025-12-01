@@ -21,6 +21,7 @@ from neos.config.settings import settings
 from neos.workflow.state import SearchResult
 from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import create_tracked_llm
+from neos.skills.manager import skill_manager
 
 from ...base import SearchAgent
 from ...planning_agent import PlanningAgent
@@ -170,6 +171,12 @@ class HyperDeepResearchAgent(SearchAgent):
 
         # Event logger for real-time progress tracking (initialized per research session)
         self.event_logger = None
+
+        # Skills integration
+        print("[DEBUG] Initializing Skills...")
+        self.skill_manager = skill_manager
+        self.skills_enabled = False  # Will be enabled after skill initialization
+        print("[DEBUG] Skills initialized")
 
     def _init_tavily_client(self) -> None:
         """Initialize Tavily API client."""
@@ -1901,3 +1908,120 @@ class HyperDeepResearchAgent(SearchAgent):
             diversity_score = bias_stats.get("perspective_diversity_score", 0)
             print(f"[INFO] 👁️ Perspective Diversity: {diversity_score:.1f}/100")
             print(f"[INFO] 🎯 Biases Detected: {bias_stats.get('biases_detected', 0)}")
+
+    # ==================== Skills Integration Methods ====================
+
+    async def _init_skills(self) -> None:
+        """Initialize skills for research assistance."""
+        try:
+            # Initialize research assistant skill
+            if "research_assistant" in self.skill_manager.registry._skills:
+                await self.skill_manager.initialize_skill("research_assistant")
+                self.skills_enabled = True
+                print("[INFO] ✅ Research Assistant skill enabled")
+            else:
+                print("[WARNING] Research Assistant skill not found")
+        except Exception as e:
+            print(f"[WARNING] Failed to initialize skills: {e}")
+            self.skills_enabled = False
+
+    async def _analyze_source_with_skill(
+        self, content: str, options: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """Analyze source using Research Assistant skill.
+
+        Args:
+            content: Source content to analyze
+            options: Analysis options
+
+        Returns:
+            Analysis result
+        """
+        if not self.skills_enabled:
+            return {}
+
+        try:
+            result = await self.skill_manager.execute_skill(
+                "research_assistant",
+                {
+                    "action": "analyze_source",
+                    "content": content,
+                    "options": options or {"extract_key_points": True}
+                }
+            )
+
+            if result.success:
+                return result.data
+            else:
+                print(f"[WARNING] Skill analysis failed: {result.error}")
+                return {}
+
+        except Exception as e:
+            print(f"[WARNING] Error using skill for source analysis: {e}")
+            return {}
+
+    async def _summarize_with_skill(
+        self, content: str, max_length: int = 500
+    ) -> str:
+        """Summarize content using Research Assistant skill.
+
+        Args:
+            content: Content to summarize
+            max_length: Maximum summary length
+
+        Returns:
+            Summary text
+        """
+        if not self.skills_enabled:
+            return ""
+
+        try:
+            result = await self.skill_manager.execute_skill(
+                "research_assistant",
+                {
+                    "action": "summarize",
+                    "content": content,
+                    "options": {"max_length": max_length, "style": "academic"}
+                }
+            )
+
+            if result.success:
+                return result.data.get("summary", "")
+            else:
+                return ""
+
+        except Exception as e:
+            print(f"[WARNING] Error using skill for summarization: {e}")
+            return ""
+
+    async def _extract_references_with_skill(
+        self, content: str
+    ) -> Dict[str, Any]:
+        """Extract references using Research Assistant skill.
+
+        Args:
+            content: Content to extract references from
+
+        Returns:
+            References data (urls, dois, citations)
+        """
+        if not self.skills_enabled:
+            return {}
+
+        try:
+            result = await self.skill_manager.execute_skill(
+                "research_assistant",
+                {
+                    "action": "extract_references",
+                    "content": content
+                }
+            )
+
+            if result.success:
+                return result.data
+            else:
+                return {}
+
+        except Exception as e:
+            print(f"[WARNING] Error using skill for reference extraction: {e}")
+            return {}

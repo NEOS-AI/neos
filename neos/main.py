@@ -19,6 +19,7 @@ from neos.api.handlers.multimodal_handlers import router as multimodal_router
 from neos.api.handlers.chat_handlers import router as chat_router
 from neos.api.handlers.deep_research_handlers import router as deep_research_router
 from neos.api.handlers.auth import router as auth_router
+from neos.api.handlers.skills_handlers import router as skills_router
 from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.workflow.graph import multi_agent_workflow
 
@@ -92,8 +93,20 @@ async def lifespan(app: FastAPI):
             else:
                 logger.warning("⚠️ OpenAI API connection issue")
 
+        # Skills 초기화
+        logger.info("🎯 Initializing Skills system...")
+        from neos.skills.manager import skill_manager
+
+        # Register builtin skills
+        skill_manager.register_builtin_skills()
+        logger.info("✅ Builtin skills registered")
+
+        # Initialize skills (optional - can be done on-demand)
+        # await skill_manager.initialize_all()
+
         logger.info("🎉 Multi-Agent AI System (Enterprise Edition) startup completed successfully!")
         logger.info("📊 Metrics endpoint available at: /metrics")
+        logger.info("🎯 Skills API available at: /api/v1/skills")
 
     except Exception as e:
         logger.error(f"❌ Startup failed: {e}")
@@ -273,6 +286,7 @@ app.include_router(document_router, prefix=f"{settings.API_V1_PREFIX}/documents"
 app.include_router(multimodal_router, prefix=f"{settings.API_V1_PREFIX}/multimodal", tags=["Multimodal Processing"])
 app.include_router(chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Chat & Conversations"])
 app.include_router(deep_research_router, prefix=settings.API_V1_PREFIX, tags=["Deep Research"])
+app.include_router(skills_router, prefix=f"{settings.API_V1_PREFIX}/skills", tags=["Skills Management"])
 app.include_router(similarity_chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Similarity-based Chat"])
 
 

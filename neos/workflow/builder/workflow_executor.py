@@ -119,6 +119,11 @@ class WorkflowExecutor:
                     result = await self.node_executor.execute_agent(node, state)
                     return {"execution_steps": state["execution_steps"] + [result]}
 
+                elif node.node_type == "skill":
+                    # 스킬 노드 실행
+                    result = await self.node_executor.execute_skill(node, state)
+                    return {"execution_steps": state["execution_steps"] + [result]}
+
                 else:
                     logger.warning(f"Unknown node type: {node.node_type}")
                     return {}
