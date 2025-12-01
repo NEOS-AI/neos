@@ -27,6 +27,7 @@ from ...base import SearchAgent
 from ...planning_agent import PlanningAgent
 from ..multi_query_search import MultiQuerySearchAgent
 from ..criticism_feedback_agent import CriticismFeedbackAgent
+from ...skill_based_tool_selector import SkillBasedToolSelector
 
 from .prompts import (
     TopicAnalysisPrompts,
@@ -121,6 +122,7 @@ class HyperDeepResearchAgent(SearchAgent):
         self.planning_agent = PlanningAgent()
         self.multi_query_agent = MultiQuerySearchAgent()
         self.criticism_agent = CriticismFeedbackAgent()
+        self.skill_tool_selector = SkillBasedToolSelector()
         print("[DEBUG] Sub-agents initialized")
 
         # Initialize repository
@@ -153,6 +155,10 @@ class HyperDeepResearchAgent(SearchAgent):
         # Memory optimization: Keep only recent sources in memory (from settings)
         self.all_collected_sources = []
         self.max_sources_in_memory = settings.DEEP_RESEARCH_MAX_SOURCES_IN_MEMORY
+        # Skill and tool selection
+        self.selected_skills = []
+        self.selected_tools = []
+        self.selection_reasoning = ""
         self.research_metadata = {
             "total_queries_executed": 0,
             "total_sources_collected": 0,
@@ -312,6 +318,45 @@ class HyperDeepResearchAgent(SearchAgent):
             enable_cli_output=enable_cli
         )
         print(f"[DEBUG] EventLogger initialized (CLI output: {enable_cli})")
+
+        # Phase 0: Skill and Tool Selection
+        print("\n[INFO] ===== Phase 0: Skill and Tool Selection =====")
+        await self.event_logger.log_phase_start(0, "Skill and Tool Selection")
+        phase0_start = datetime.utcnow()
+        try:
+            selection_context = {
+                "intent": "hyper_deep_research",
+                "query_type": "research",
+                "complexity": "high",
+                "requires_analysis": True,
+                "requires_data_sources": True
+            }
+            selection = await self.skill_tool_selector.select_skills_and_tools(
+                query=query,
+                context=selection_context,
+                session_id=session_id,
+                user_id=user_id,
+                detected_language=language
+            )
+            self.selected_skills = selection.selected_skills
+            self.selected_tools = selection.selected_tools
+            self.selection_reasoning = selection.reasoning
+
+            print(f"[INFO] ✅ Selected {len(self.selected_skills)} skills: {self.selected_skills}")
+            print(f"[INFO] ✅ Selected {len(self.selected_tools)} tools: {self.selected_tools}")
+            print(f"[INFO] 📝 Reasoning: {self.selection_reasoning}")
+
+            # Store selection in metadata
+            self.research_metadata["selected_skills"] = self.selected_skills
+            self.research_metadata["selected_tools"] = self.selected_tools
+            self.research_metadata["selection_reasoning"] = self.selection_reasoning
+
+        except Exception as e:
+            print(f"[WARNING] Skill/tool selection failed: {e}")
+            print("[INFO] Continuing with default configuration...")
+
+        phase0_duration = int((datetime.utcnow() - phase0_start).total_seconds() * 1000)
+        await self.event_logger.log_phase_complete(0, "Skill and Tool Selection", phase0_duration)
 
         # Phase 1: Topic Analysis
         print("\n[INFO] ===== Phase 1/8: Topic Analysis =====")

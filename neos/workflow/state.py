@@ -49,7 +49,12 @@ class AgentState(TypedDict):
     # 쿼리 분류 결과
     query_classification: Optional[Dict[str, Any]]
     required_agents: List[str]
-    
+
+    # Skill and tool selection
+    selected_skills: Optional[List[str]]
+    selected_tools: Optional[List[str]]
+    selection_reasoning: Optional[str]
+
     # 각 에이전트 결과
     search_results: Annotated[List[SearchResult], operator.add]
     analysis_results: Annotated[List[AnalysisResult], operator.add]
