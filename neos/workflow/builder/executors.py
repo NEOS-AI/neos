@@ -8,6 +8,7 @@ from neos.workflow.state import AgentState
 from neos.tools.mcp_integration import mcp_manager
 from neos.workflow.agent_registry import agent_registry
 from neos.utils.language_detection import detect_language
+from neos.skills.manager import skill_manager
 from .nodes import WorkflowNode
 
 
@@ -197,6 +198,77 @@ class NodeExecutor:
                 "node": node.name,
                 "type": "agent",
                 "agent_name": agent_name,
+                "success": False,
+                "error": str(e),
+                "execution_time_ms": execution_time_ms
+            }
+
+    async def execute_skill(
+        self,
+        node: WorkflowNode,
+        state: AgentState
+    ) -> Dict[str, Any]:
+        """스킬 노드 실행"""
+        start_time = datetime.utcnow()
+
+        # 노드 설정에서 스킬 이름 가져오기
+        skill_name = node.config.get("skill_name", "")
+
+        if not skill_name:
+            return {
+                "node": node.name,
+                "type": "skill",
+                "success": False,
+                "error": "skill_name not specified in node config",
+                "execution_time_ms": 0
+            }
+
+        try:
+            # 스킬 실행을 위한 파라미터 준비
+            params = node.config.get("params", {})
+
+            # state에서 동적 파라미터 가져오기
+            if "query" in params and params["query"] == "${state.query}":
+                params["query"] = state.get("original_query", "")
+
+            if "content" in params and params["content"] == "${state.content}":
+                params["content"] = state.get("content", "")
+
+            # 스킬 실행
+            logger.info(f"Executing skill '{skill_name}' with params: {params}")
+            result = await skill_manager.execute_skill(skill_name, params)
+
+            # 실행 시간 계산
+            execution_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+
+            # 결과 처리
+            if result.success:
+                return {
+                    "node": node.name,
+                    "type": "skill",
+                    "skill_name": skill_name,
+                    "success": True,
+                    "data": result.data,
+                    "metadata": result.metadata,
+                    "execution_time_ms": execution_time_ms
+                }
+            else:
+                return {
+                    "node": node.name,
+                    "type": "skill",
+                    "skill_name": skill_name,
+                    "success": False,
+                    "error": result.error,
+                    "execution_time_ms": execution_time_ms
+                }
+
+        except Exception as e:
+            execution_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            logger.error(f"Error executing skill '{skill_name}': {e}")
+            return {
+                "node": node.name,
+                "type": "skill",
+                "skill_name": skill_name,
                 "success": False,
                 "error": str(e),
                 "execution_time_ms": execution_time_ms
