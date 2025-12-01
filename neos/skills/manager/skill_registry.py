@@ -93,14 +93,13 @@ class SkillRegistry:
         # 새 인스턴스 생성
         skill_info = self._skills[skill_name]
         try:
-            instance = skill_info.skill_class(
-                name=skill_info.name,
-                skill_type=skill_info.skill_type,
-                description=skill_info.description,
-                capabilities=skill_info.capabilities,
-                skill_dir=skill_info.skill_dir,
-                version=skill_info.version,
-            )
+            # Builtin skills have their own __init__, so just instantiate
+            instance = skill_info.skill_class()
+
+            # Update skill_dir if provided
+            if skill_info.skill_dir:
+                instance.skill_dir = skill_info.skill_dir
+
             self._instances[skill_name] = instance
             logger.info(f"Created skill instance: {skill_name}")
             return instance
