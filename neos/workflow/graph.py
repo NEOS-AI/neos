@@ -23,6 +23,7 @@ from neos.agents.generation_agents import (
     FileProcessingAgent,
     TaskCreationAgent
 )
+from neos.agents.skill_based_tool_selector import SkillBasedToolSelector
 from neos.utils.cache import cache_manager
 from neos.config.settings import settings
 from neos.tools.tool_selector import tool_selector
@@ -50,6 +51,7 @@ class MultiAgentWorkflow:
 
         # 컴포넌트 초기화
         self.query_classifier = QueryClassifier(self.config)
+        self.skill_tool_selector = SkillBasedToolSelector()
         self.search_orchestrator = SearchOrchestrator(self.agents, self.config, tool_selector)
         self.analysis_orchestrator = AnalysisOrchestrator(self.agents, self.config)
         self.generation_orchestrator = GenerationOrchestrator(self.agents, self.config)
@@ -101,6 +103,7 @@ class MultiAgentWorkflow:
 
         # 노드 추가
         workflow.add_node("query_classifier", self._classify_query_node)
+        workflow.add_node("skill_tool_selector", self._select_skills_tools_node)
         workflow.add_node("search_orchestrator", self._orchestrate_search_node)
         workflow.add_node("analysis_orchestrator", self._orchestrate_analysis_node)
         workflow.add_node("generation_orchestrator", self._orchestrate_generation_node)
@@ -111,7 +114,8 @@ class MultiAgentWorkflow:
         # 엣지 정의
         workflow.set_entry_point("query_classifier")
 
-        workflow.add_edge("query_classifier", "search_orchestrator")
+        workflow.add_edge("query_classifier", "skill_tool_selector")
+        workflow.add_edge("skill_tool_selector", "search_orchestrator")
         workflow.add_edge("search_orchestrator", "analysis_orchestrator")
         workflow.add_edge("analysis_orchestrator", "generation_orchestrator")
         workflow.add_edge("generation_orchestrator", "result_integrator")
@@ -145,6 +149,60 @@ class MultiAgentWorkflow:
     async def _classify_query_node(self, state: AgentState) -> Dict[str, Any]:
         """쿼리 분류 노드"""
         return await self.query_classifier.classify_query(state)
+
+    async def _select_skills_tools_node(self, state: AgentState) -> Dict[str, Any]:
+        """Skill and Tool selection 노드"""
+        print("[DEBUG] Executing skill/tool selection node")
+
+        try:
+            query = state.get("original_query", "")
+            session_id = state.get("session_id", "")
+            user_id = state.get("user_id", "")
+            detected_language = state.get("detected_language", "ko")
+
+            # Build context from query classification
+            query_classification = state.get("query_classification", {})
+            selection_context = {
+                "intent": state.get("query_intent", "unknown"),
+                "query_type": query_classification.get("query_type", "general"),
+                "complexity": query_classification.get("complexity", "medium"),
+                "required_agents": state.get("required_agents", []),
+                "requires_analysis": "data_analysis" in state.get("required_agents", []),
+                "requires_search": any(agent in state.get("required_agents", [])
+                                     for agent in ["knowledge_search", "realtime_info_search",
+                                                  "multi_query_search", "deep_research",
+                                                  "hyper_deep_research"])
+            }
+
+            # Call skill/tool selector
+            selection = await self.skill_tool_selector.select_skills_and_tools(
+                query=query,
+                context=selection_context,
+                session_id=session_id,
+                user_id=user_id,
+                detected_language=detected_language
+            )
+
+            print(f"[DEBUG] Selected {len(selection.selected_skills)} skills: {selection.selected_skills}")
+            print(f"[DEBUG] Selected {len(selection.selected_tools)} tools: {selection.selected_tools}")
+
+            # Return state updates
+            return {
+                "selected_skills": selection.selected_skills,
+                "selected_tools": selection.selected_tools,
+                "selection_reasoning": selection.reasoning
+            }
+
+        except Exception as e:
+            print(f"[ERROR] Skill/tool selection failed: {e}")
+            import traceback
+            print(f"[ERROR] Traceback: {traceback.format_exc()}")
+            # Return empty selections on error
+            return {
+                "selected_skills": [],
+                "selected_tools": [],
+                "selection_reasoning": f"Selection failed: {str(e)}"
+            }
 
     async def _orchestrate_search_node(self, state: AgentState) -> Dict[str, Any]:
         """검색 오케스트레이션 노드"""
