@@ -171,8 +171,7 @@ result = await agent.execute(
 
 ### Other
 - [Roadmap](./docs/ROADMAP.md)
-- [Changelog](./CHANGELOG.md)
-- [Contributing Guide](./CONTRIBUTING.md)
+- [Changelog](./changelog.md)
 
 ## 🛠️ Tech Stack
 
