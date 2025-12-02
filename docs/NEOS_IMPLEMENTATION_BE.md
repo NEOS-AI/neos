@@ -79,25 +79,31 @@ sentry-sdk = "^2.19.2"
 
 ```
 neos/
-├── neos/                          # 메인 패키지
+├── neos/                          # 메인 패키지 (~20,334 LOC)
 │   ├── __init__.py
 │   ├── main.py                    # FastAPI 엔트리 포인트
-│   ├── cli.py                     # CLI 도구 (94KB)
+│   ├── cli.py                     # CLI 도구
+│   ├── cli_workflow_builder.py    # Workflow 빌더 CLI
 │   │
-│   ├── agents/                    # 에이전트 구현
+│   ├── agents/                    # 에이전트 구현 (15+ agents)
 │   │   ├── __init__.py
 │   │   ├── base.py                # BaseAgent, SearchAgent, AnalysisAgent, GenerationAgent
 │   │   ├── autonomous_base.py     # AutonomousAgent (분산 환경)
 │   │   ├── planning_agent.py      # QueryPlanningAgent
+│   │   ├── criticism_feedback_agent.py  # 품질 검증 에이전트
 │   │   │
-│   │   ├── search_agents/         # 검색 에이전트
+│   │   ├── search_agents/         # 검색 에이전트 (8개)
 │   │   │   ├── knowledge_search.py
 │   │   │   ├── realtime_info_search.py
 │   │   │   ├── realtime_data_search.py
 │   │   │   ├── multi_query_search.py
 │   │   │   ├── web_lookup.py
 │   │   │   ├── deep_research.py
-│   │   │   └── hyper_deep_research.py
+│   │   │   └── hyper_deep_research/  # 모듈화된 HyperDeepResearch
+│   │   │       ├── agent.py
+│   │   │       ├── prompts/
+│   │   │       ├── utils/
+│   │   │       └── repository/
 │   │   │
 │   │   ├── analysis_agents.py     # DataAnalysisAgent, ComparativeAnalysisAgent, WebContentAnalysisAgent
 │   │   └── generation_agents.py   # ImageGenerationAgent, ApiCallAgent, FileProcessingAgent, TaskCreationAgent
@@ -105,9 +111,11 @@ neos/
 │   ├── workflow/                  # 워크플로우 오케스트레이션
 │   │   ├── __init__.py
 │   │   ├── state.py               # AgentState TypedDict
-│   │   ├── graph.py               # MultiAgentWorkflow (7 nodes)
-│   │   ├── distributed_graph.py   # DistributedMultiAgentWorkflow
-│   │   ├── checkpointer.py        # PostgreSQLCheckpointer
+│   │   ├── graph.py               # MultiAgentWorkflow (471 LOC)
+│   │   ├── distributed_graph.py   # DistributedMultiAgentWorkflow (242 LOC)
+│   │   ├── checkpointer.py        # PostgreSQLCheckpointer (414 LOC)
+│   │   ├── scheduler.py           # 워크플로우 스케줄링 (184 LOC)
+│   │   ├── multimodal_workflow.py # 멀티모달 워크플로우 (245 LOC)
 │   │   │
 │   │   ├── orchestrators/         # 오케스트레이터
 │   │   │   ├── search_orchestrator.py
@@ -121,26 +129,44 @@ neos/
 │   │   │
 │   │   ├── pipelines/             # 문서 처리 파이프라인
 │   │   │   ├── document_pipeline.py
-│   │   │   └── chunking_pipeline.py
+│   │   │   ├── multimodal_pipeline.py
+│   │   │   ├── pdf_parser.py
+│   │   │   ├── word_parser.py
+│   │   │   ├── excel_parser.py
+│   │   │   ├── csv_parser.py
+│   │   │   ├── image_pipeline.py
+│   │   │   ├── audio_pipeline.py
+│   │   │   └── unified_context.py
 │   │   │
 │   │   └── builder/               # 커스텀 워크플로우 빌더
-│   │       └── workflow_builder.py
+│   │       ├── workflow_builder.py
+│   │       ├── workflow_executor.py
+│   │       ├── workflow_manager.py
+│   │       ├── executors.py
+│   │       └── nodes.py
 │   │
 │   ├── api/                       # FastAPI 애플리케이션
 │   │   ├── __init__.py
-│   │   ├── app.py                 # FastAPI 앱 생성
+│   │   ├── routes.py              # 메인 라우트 등록
 │   │   │
 │   │   ├── handlers/              # 라우터 (10개)
-│   │   │   ├── query_handler.py   # 쿼리 처리
-│   │   │   ├── chat_handler.py    # 채팅
-│   │   │   ├── deep_research_handler.py  # 심층 연구
-│   │   │   ├── rag_chat_handler.py       # RAG 채팅
-│   │   │   ├── similarity_chat_handler.py # 유사도 채팅
-│   │   │   ├── document_handler.py       # 문서 관리
-│   │   │   ├── multimodal_handler.py     # 멀티모달
-│   │   │   ├── analytics_handler.py      # 분석
-│   │   │   ├── auth_handler.py           # 인증
-│   │   │   └── search_analytics_handler.py # 검색 분석
+│   │   │   ├── query_handlers.py  # 쿼리 처리
+│   │   │   ├── chat_handlers.py   # 채팅
+│   │   │   ├── deep_research_handlers.py  # 심층 연구
+│   │   │   ├── rag_chat_handlers.py       # RAG 채팅
+│   │   │   ├── similarity_chat_handlers.py # 유사도 채팅
+│   │   │   ├── document_handlers.py       # 문서 관리
+│   │   │   ├── multimodal_handlers.py     # 멀티모달
+│   │   │   ├── analytics_handlers.py      # 분석
+│   │   │   ├── skills_handlers.py         # Skills API (NEW)
+│   │   │   └── auth.py                    # 인증
+│   │   │
+│   │   ├── routes/                # 개별 라우트 정의
+│   │   │   ├── chat_routes.py
+│   │   │   ├── deep_research_routes.py
+│   │   │   ├── query_routes.py
+│   │   │   ├── multimodal_routes.py
+│   │   │   └── web_search_analytics_routes.py
 │   │   │
 │   │   ├── services/              # 비즈니스 로직
 │   │   │   ├── query_service.py
@@ -184,29 +210,68 @@ neos/
 │   │   ├── chat_llm_service.py    # LLM 서비스
 │   │   ├── rag_chat_llm_service.py
 │   │   ├── similarity_search_service.py
-│   │   ├── context_optimizer.py   # 컨텍스트 최적화
+│   │   ├── context_optimizer.py   # 컨텍스트 최적화 (NEW v0.12.0)
 │   │   └── message_embedding_service.py
+│   │
+│   ├── skills/                    # Skills 시스템 (NEW)
+│   │   ├── __init__.py
+│   │   ├── base.py                # BaseSkill 추상 클래스
+│   │   ├── manager.py             # SkillManager
+│   │   ├── registry.py            # SkillRegistry
+│   │   └── builtin/               # 내장 스킬 (7개)
+│   │       ├── bigquery_skill.py
+│   │       ├── docx_skill.py
+│   │       ├── pdf_skill.py
+│   │       ├── arxiv_skill.py
+│   │       ├── pubmed_skill.py
+│   │       ├── wikipedia_skill.py
+│   │       └── research_assistant_skill.py
 │   │
 │   ├── tools/                     # 도구 관리
 │   │   ├── __init__.py
-│   │   ├── tool_selector.py       # 도구 선택
-│   │   ├── mcp_integration.py     # Model Context Protocol
+│   │   ├── tool_selector.py       # 지능형 도구 선택
+│   │   ├── tool_selector_base.py  # 베이스 클래스
+│   │   ├── mcp_integration.py     # Model Context Protocol (26,812 bytes)
+│   │   ├── mcp_server_manager.py  # MCP 서버 관리
 │   │   └── tools/                 # 개별 도구
 │   │       ├── web_search.py
 │   │       ├── calculator.py
 │   │       └── weather.py
 │   │
+│   ├── observability/             # 모니터링 및 추적 (NEW)
+│   │   ├── core.py
+│   │   ├── collectors.py
+│   │   ├── metrics.py
+│   │   ├── integration.py
+│   │   ├── middleware.py
+│   │   ├── phoenix_client.py
+│   │   └── decorators.py
+│   │
+│   ├── pipelines/                 # Tool/MCP 통합
+│   ├── dataset/                   # 데이터셋 관리
+│   ├── storage/                   # 파일 저장소 추상화
+│   │
 │   ├── utils/                     # 유틸리티
 │   │   ├── llm_factory.py         # LLM 생성 팩토리
+│   │   ├── llm_wrapper.py         # 추적 가능한 LLM 래퍼
 │   │   ├── embeddings.py          # 임베딩 관리
-│   │   ├── cache.py               # 캐시 관리
+│   │   ├── cache.py               # Redis 캐시 관리
+│   │   ├── semantic_cache.py      # 시맨틱 캐싱
+│   │   ├── semantic_deduplicator.py  # 중복 제거
+│   │   ├── token_counter.py       # tiktoken 토큰 카운팅
 │   │   ├── circuit_breaker.py     # Circuit Breaker
-│   │   ├── rate_limiter.py        # Rate Limiter
-│   │   └── logger.py              # 구조화된 로깅
+│   │   ├── cost_calculator.py     # LLM 비용 계산
+│   │   ├── security.py            # 보안 유틸리티
+│   │   ├── jwt.py                 # JWT 처리
+│   │   ├── csrf.py                # CSRF 보호
+│   │   ├── message_queue.py       # 메시지 큐
+│   │   ├── search_fallback.py     # 검색 폴백 전략
+│   │   ├── language_detection.py  # 다국어 지원
+│   │   └── url_detector.py        # URL 추출
 │   │
 │   └── config/                    # 설정
 │       ├── __init__.py
-│       └── settings.py            # Pydantic Settings
+│       └── settings.py            # Pydantic Settings (13,169 bytes)
 │
 ├── tests/                         # 테스트
 │   ├── unit/
@@ -1637,6 +1702,8 @@ LOG_LEVEL=INFO
 
 ---
 
-**문서 버전**: 1.0
-**작성일**: 2025-11-29
-**다음 업데이트 예정**: 2026-01-29
+**문서 버전**: 1.1
+**최종 업데이트**: 2025-12-02
+**백엔드 버전**: 0.12.0
+**코드 라인 수**: ~20,334 LOC
+**다음 업데이트 예정**: 2026-02-02
