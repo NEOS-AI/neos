@@ -148,26 +148,13 @@ result = await agent.execute(
 
 ## 📚 Documentation
 
-### Getting Started
-- [Quick Start Guide](./docs/QUICKSTART.md)
-- [Installation Guide](./docs/INSTALLATION.md)
-- [Configuration](./docs/CONFIGURATION.md)
-
 ### User Guides
 - [CLI Guide](./docs/CLI_GUIDE.md)
-- [API Reference](./docs/API_REFERENCE.md)
-- [Usage Examples](./docs/USAGE_EXAMPLES.md)
+- [Playwright Setup](./docs/PLAYWRIGHT_SETUP.md)
 
 ### Agents
 - [WebLookUp Agent](./docs/WEB_LOOKUP_AGENT.md)
-- [Deep Research Agent](./docs/DEEP_RESEARCH_GUIDE.md)
 - [API Call Agent](./docs/API_INTEGRATIONS.md)
-
-### Developer Guides
-- [System Architecture](./docs/ARCHITECTURE.md)
-- [Playwright Setup](./docs/PLAYWRIGHT_SETUP.md)
-- [Dataset Collection](./docs/DATASET_USAGE.md)
-- [MCP Integration](./docs/MCP_INTEGRATION.md)
 
 ### Other
 - [Roadmap](./docs/ROADMAP.md)
