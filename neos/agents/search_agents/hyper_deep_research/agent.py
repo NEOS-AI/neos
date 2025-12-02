@@ -387,6 +387,20 @@ class HyperDeepResearchAgent(SearchAgent):
         # Update config with adaptive iterations
         self.config["analysis_iterations"] = complexity_assessment["recommended_iterations"]
 
+        # ===== Phase 1.5: Domain Detection & Required Skills (Phase 2 Integration) =====
+        print("\n[INFO] ===== Domain Detection & Required Skills =====")
+        self.selected_skills = await self._ensure_required_skills(
+            topic_analysis, self.selected_skills
+        )
+        print(f"[INFO] ✅ Final selected skills: {self.selected_skills}")
+
+        # Store updated skills in metadata
+        self.research_metadata["selected_skills"] = self.selected_skills
+
+        # ===== Phase 1.6: Skill Initialization (Phase 3 Integration) =====
+        print("\n[INFO] ===== Initializing Selected Skills =====")
+        await self._initialize_selected_skills()
+
         # Phase 2: Research Planning
         print("\n[INFO] ===== Phase 2/8: Research Planning =====")
         await self.event_logger.log_phase_start(2, "Research Planning")
@@ -701,6 +715,20 @@ class HyperDeepResearchAgent(SearchAgent):
         # Add complex search results
         if complex_results:
             all_results.append(complex_results)
+
+        # ===== Phase 1 Integration: Skill-Based Data Collection =====
+        # Collect data from selected research skills (ArXiv, PubMed, Wikipedia)
+        if self.selected_skills:
+            await self.event_logger.log_status_message(
+                f"Collecting data from {len(self.selected_skills)} selected skills...",
+                "info"
+            )
+            skill_results = await self._collect_data_from_skills(
+                query_variations, topic_analysis, session_id, user_id, language
+            )
+            if skill_results:
+                all_results.extend(skill_results)
+                print(f"[INFO] ✅ Added {len(skill_results)} skill-based sources to collection")
 
         # Deduplicate and track sources
         unique_sources = DataProcessor.deduplicate_sources(all_results)
@@ -1956,19 +1984,123 @@ class HyperDeepResearchAgent(SearchAgent):
 
     # ==================== Skills Integration Methods ====================
 
-    async def _init_skills(self) -> None:
-        """Initialize skills for research assistance."""
+    async def _initialize_selected_skills(self) -> None:
+        """Initialize all selected skills (Phase 3: Improved initialization).
+
+        This replaces the old _init_skills() method with dynamic initialization
+        based on skills selected in Phase 0.
+        """
         try:
-            # Initialize research assistant skill
-            if "research_assistant" in self.skill_manager.registry._skills:
-                await self.skill_manager.initialize_skill("research_assistant")
-                self.skills_enabled = True
-                print("[INFO] ✅ Research Assistant skill enabled")
-            else:
-                print("[WARNING] Research Assistant skill not found")
+            if not self.selected_skills:
+                print("[WARNING] No skills selected for initialization")
+                self.skills_enabled = False
+                return
+
+            print(f"[INFO] 🎯 Initializing {len(self.selected_skills)} selected skills...")
+
+            initialized_count = 0
+            for skill_name in self.selected_skills:
+                if skill_name in self.skill_manager.registry._skills:
+                    success = await self.skill_manager.initialize_skill(skill_name)
+                    if success:
+                        print(f"[INFO] ✅ {skill_name} skill initialized")
+                        initialized_count += 1
+                    else:
+                        print(f"[WARNING] ❌ {skill_name} skill initialization failed")
+                else:
+                    print(f"[WARNING] ❌ {skill_name} skill not found in registry")
+
+            self.skills_enabled = initialized_count > 0
+            print(f"[INFO] 📊 Initialized {initialized_count}/{len(self.selected_skills)} skills")
+
         except Exception as e:
             print(f"[WARNING] Failed to initialize skills: {e}")
             self.skills_enabled = False
+
+    async def _ensure_required_skills(
+        self,
+        topic_analysis: Dict[str, Any],
+        selected_skills: List[str]
+    ) -> List[str]:
+        """Ensure domain-specific required skills are included (Phase 2: Domain-based skill selection).
+
+        This method analyzes the research topic and automatically adds required skills
+        based on the domain:
+        - Science/Engineering/AI/ML → ArXiv (academic papers)
+        - Medical/Biomedical/Health → PubMed (medical literature)
+        - All topics → Wikipedia (background knowledge)
+
+        Args:
+            topic_analysis: Topic analysis result from Phase 1
+            selected_skills: Skills selected by SkillBasedToolSelector in Phase 0
+
+        Returns:
+            Updated skills list with required domain-specific skills
+        """
+        updated_skills = list(selected_skills)
+
+        # Extract topic information
+        topic_text = topic_analysis.get("full_analysis", "").lower()
+        key_aspects = topic_analysis.get("key_aspects", [])
+
+        # Combine all text for keyword matching
+        combined_text = topic_text + " " + " ".join(str(aspect).lower() for aspect in key_aspects)
+
+        # Domain detection keywords
+        science_engineering_keywords = [
+            "ai", "ml", "machine learning", "deep learning", "neural network",
+            "algorithm", "computer science", "physics", "mathematics", "math",
+            "engineering", "quantum", "robotics", "nlp", "computer vision",
+            "transformer", "llm", "language model", "artificial intelligence",
+            "software", "programming", "data science", "statistics",
+            "astronomy", "chemistry", "research", "theory", "model",
+            "optimization", "simulation", "computational"
+        ]
+
+        medical_bio_keywords = [
+            "medical", "medicine", "disease", "drug", "vaccine", "clinical",
+            "patient", "treatment", "therapy", "diagnosis", "hospital",
+            "biology", "biomedical", "gene", "protein", "cell", "cancer",
+            "virus", "bacteria", "immune", "health", "pharmaceutical",
+            "symptom", "syndrome", "infection", "epidemic", "pandemic",
+            "surgery", "healthcare", "doctor", "nurse", "anatomy",
+            "physiology", "pathology", "microbiology", "genetics"
+        ]
+
+        # Check domain matches
+        science_match = any(keyword in combined_text for keyword in science_engineering_keywords)
+        medical_match = any(keyword in combined_text for keyword in medical_bio_keywords)
+
+        # Add required skills based on domain
+        print("\n[INFO] 🔍 Analyzing topic domain for required skills...")
+
+        if science_match and "arxiv" not in updated_skills:
+            updated_skills.append("arxiv")
+            print("[INFO] 🎓 Science/Engineering/AI topic detected → Adding ArXiv skill")
+            print("[INFO]    ArXiv will search academic papers in physics, math, CS, AI/ML")
+
+        if medical_match and "pubmed" not in updated_skills:
+            updated_skills.append("pubmed")
+            print("[INFO] 🏥 Medical/Biomedical/Health topic detected → Adding PubMed skill")
+            print("[INFO]    PubMed will search medical literature and clinical studies")
+
+        # Always add Wikipedia for background knowledge (if not already present)
+        if "wikipedia" not in updated_skills:
+            updated_skills.append("wikipedia")
+            print("[INFO] 📚 Adding Wikipedia skill for background knowledge and context")
+
+        # Log domain detection results
+        if science_match or medical_match:
+            detected_domains = []
+            if science_match:
+                detected_domains.append("Science/Engineering/AI")
+            if medical_match:
+                detected_domains.append("Medical/Biomedical")
+            print(f"[INFO] 🎯 Detected domains: {', '.join(detected_domains)}")
+        else:
+            print("[INFO] 🌐 General topic detected (no specific domain)")
+
+        return updated_skills
 
     async def _analyze_source_with_skill(
         self, content: str, options: Dict[str, Any] = None
@@ -2070,3 +2202,244 @@ class HyperDeepResearchAgent(SearchAgent):
         except Exception as e:
             print(f"[WARNING] Error using skill for reference extraction: {e}")
             return {}
+
+    # ==================== Phase 1: Skill-Based Data Collection ====================
+
+    async def _collect_data_from_skills(
+        self,
+        query_variations: List[str],
+        topic_analysis: Dict[str, Any],
+        session_id: str,
+        user_id: str,
+        language: str
+    ) -> List[Dict[str, Any]]:
+        """Collect data using selected research skills (Phase 1: Skill utilization).
+
+        This method executes searches using the selected skills:
+        - ArXiv: Academic papers (science, engineering, AI/ML)
+        - PubMed: Medical literature (medicine, biomedical, health)
+        - Wikipedia: Background knowledge and context
+
+        Args:
+            query_variations: List of query variations to search
+            topic_analysis: Topic analysis from Phase 1
+            session_id: Session ID for tracking
+            user_id: User ID for tracking
+            language: Detected language
+
+        Returns:
+            List of search results from skills (SearchResult format)
+        """
+        if not self.skills_enabled or not self.selected_skills:
+            print("[INFO] 📭 No skills enabled, skipping skill-based data collection")
+            return []
+
+        skill_results = []
+        print(f"\n[INFO] 🎯 Collecting data from {len(self.selected_skills)} selected skills...")
+
+        # ArXiv skill usage
+        if "arxiv" in self.selected_skills:
+            print("[INFO] 📚 Searching ArXiv for academic papers...")
+            try:
+                arxiv_results = await self._search_with_arxiv(query_variations, topic_analysis)
+                skill_results.extend(arxiv_results)
+                print(f"[INFO] ✅ ArXiv: Found {len(arxiv_results)} papers")
+            except Exception as e:
+                print(f"[WARNING] ArXiv search failed: {e}")
+
+        # PubMed skill usage
+        if "pubmed" in self.selected_skills:
+            print("[INFO] 🏥 Searching PubMed for medical literature...")
+            try:
+                pubmed_results = await self._search_with_pubmed(query_variations, topic_analysis)
+                skill_results.extend(pubmed_results)
+                print(f"[INFO] ✅ PubMed: Found {len(pubmed_results)} papers")
+            except Exception as e:
+                print(f"[WARNING] PubMed search failed: {e}")
+
+        # Wikipedia skill usage
+        if "wikipedia" in self.selected_skills:
+            print("[INFO] 📖 Searching Wikipedia for background knowledge...")
+            try:
+                wikipedia_results = await self._search_with_wikipedia(query_variations, topic_analysis, language)
+                skill_results.extend(wikipedia_results)
+                print(f"[INFO] ✅ Wikipedia: Found {len(wikipedia_results)} articles")
+            except Exception as e:
+                print(f"[WARNING] Wikipedia search failed: {e}")
+
+        print(f"[INFO] 📊 Total skill-based sources collected: {len(skill_results)}")
+        return skill_results
+
+    async def _search_with_arxiv(
+        self,
+        queries: List[str],
+        topic_analysis: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Search ArXiv for academic papers.
+
+        Args:
+            queries: List of query variations
+            topic_analysis: Topic analysis for query optimization
+
+        Returns:
+            List of paper results in SearchResult format
+        """
+        results = []
+
+        # Limit queries to prevent overuse (top 5 most relevant)
+        selected_queries = queries[:5] if len(queries) > 5 else queries
+
+        for query in selected_queries:
+            try:
+                result = await self.skill_manager.execute_skill(
+                    "arxiv",
+                    {
+                        "action": "search",
+                        "query": query,
+                        "max_results": 5  # 5 papers per query
+                    }
+                )
+
+                if result.success:
+                    papers = result.data.get("papers", [])
+                    for paper in papers:
+                        # Convert to SearchResult format
+                        results.append({
+                            "title": paper.get("title", ""),
+                            "content": paper.get("full_summary", paper.get("summary", "")),
+                            "url": paper.get("entry_url", ""),
+                            "score": 0.95,  # High quality: academic papers
+                            "source": "arxiv",
+                            "metadata": {
+                                "arxiv_id": paper.get("arxiv_id", ""),
+                                "authors": paper.get("authors", ""),
+                                "published": paper.get("published", ""),
+                                "pdf_url": paper.get("pdf_url", "")
+                            }
+                        })
+
+                # Rate limiting
+                await asyncio.sleep(0.5)
+
+            except Exception as e:
+                print(f"[WARNING] ArXiv query '{query}' failed: {e}")
+                continue
+
+        return results
+
+    async def _search_with_pubmed(
+        self,
+        queries: List[str],
+        topic_analysis: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Search PubMed for medical literature.
+
+        Args:
+            queries: List of query variations
+            topic_analysis: Topic analysis for query optimization
+
+        Returns:
+            List of paper results in SearchResult format
+        """
+        results = []
+
+        # Limit queries to prevent overuse (top 5 most relevant)
+        selected_queries = queries[:5] if len(queries) > 5 else queries
+
+        for query in selected_queries:
+            try:
+                result = await self.skill_manager.execute_skill(
+                    "pubmed",
+                    {
+                        "action": "search",
+                        "query": query,
+                        "max_results": 5  # 5 papers per query
+                    }
+                )
+
+                if result.success:
+                    papers = result.data.get("papers", [])
+                    for paper in papers:
+                        # Convert to SearchResult format
+                        results.append({
+                            "title": paper.get("title", ""),
+                            "content": paper.get("full_summary", paper.get("summary", "")),
+                            "url": paper.get("pubmed_url", ""),
+                            "score": 0.95,  # High quality: medical papers
+                            "source": "pubmed",
+                            "metadata": {
+                                "pmid": paper.get("pmid", ""),
+                                "authors": paper.get("authors", ""),
+                                "published": paper.get("published", "")
+                            }
+                        })
+
+                # Rate limiting
+                await asyncio.sleep(0.5)
+
+            except Exception as e:
+                print(f"[WARNING] PubMed query '{query}' failed: {e}")
+                continue
+
+        return results
+
+    async def _search_with_wikipedia(
+        self,
+        queries: List[str],
+        topic_analysis: Dict[str, Any],
+        language: str
+    ) -> List[Dict[str, Any]]:
+        """Search Wikipedia for background knowledge.
+
+        Args:
+            queries: List of query variations
+            topic_analysis: Topic analysis for query optimization
+            language: Language code (en, ko, etc.)
+
+        Returns:
+            List of article results in SearchResult format
+        """
+        results = []
+
+        # Wikipedia language mapping
+        wiki_lang = "en" if language == "en" else "ko" if language == "ko" else "en"
+
+        # Limit queries (top 3 for background context)
+        selected_queries = queries[:3] if len(queries) > 3 else queries
+
+        for query in selected_queries:
+            try:
+                result = await self.skill_manager.execute_skill(
+                    "wikipedia",
+                    {
+                        "action": "search",
+                        "query": query,
+                        "max_results": 2,  # 2 articles per query
+                        "lang": wiki_lang
+                    }
+                )
+
+                if result.success:
+                    articles = result.data.get("articles", [])
+                    for article in articles:
+                        # Convert to SearchResult format
+                        results.append({
+                            "title": article.get("title", ""),
+                            "content": article.get("full_content", article.get("content", "")),
+                            "url": article.get("url", ""),
+                            "score": 0.85,  # Good quality: encyclopedic content
+                            "source": "wikipedia",
+                            "metadata": {
+                                "summary": article.get("summary", ""),
+                                "language": wiki_lang
+                            }
+                        })
+
+                # Rate limiting
+                await asyncio.sleep(0.5)
+
+            except Exception as e:
+                print(f"[WARNING] Wikipedia query '{query}' failed: {e}")
+                continue
+
+        return results
