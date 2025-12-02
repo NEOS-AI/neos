@@ -21,13 +21,16 @@
 
 ```json
 {
+  "version": "0.5.0",
   "framework": "Next.js 14.2.33",
   "runtime": "React 18.3.1",
   "language": "TypeScript 5.9.3",
   "styling": "Tailwind CSS 3.4.17",
-  "stateManagement": "Zustand 5.0.2",
-  "icons": "Lucide React 0.468.0",
-  "routing": "Next.js App Router"
+  "stateManagement": "Zustand 4.5.7",
+  "icons": "Lucide React 0.454.0",
+  "routing": "Next.js App Router",
+  "markdown": "react-markdown 9.1.0 + remark-gfm 4.0.1",
+  "virtualization": "@tanstack/react-virtual 3.10.8"
 }
 ```
 
@@ -36,22 +39,31 @@
 ```json
 {
   "dependencies": {
-    "next": "14.2.33",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "typescript": "5.9.3",
-    "zustand": "5.0.2",
-    "tailwindcss": "3.4.17",
-    "lucide-react": "0.468.0",
-    "react-markdown": "^9.0.0",
-    "axios": "^1.7.9",
-    "date-fns": "^4.1.0"
+    "next": "^14.2.33",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^4.5.7",
+    "react-markdown": "^9.1.0",
+    "remark-gfm": "^4.0.1",
+    "lucide-react": "^0.454.0",
+    "axios": "^1.13.1",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.6.0",
+    "nanoid": "^5.1.6",
+    "@tanstack/react-virtual": "^3.10.8",
+    "ioredis": "^5.4.2",
+    "iron-session": "^8.0.3"
   },
   "devDependencies": {
-    "@types/react": "18.3.18",
-    "@types/node": "20.17.10",
-    "eslint": "^8.57.1",
-    "prettier": "^3.4.2"
+    "@types/react": "^18",
+    "@types/node": "^20",
+    "typescript": "^5",
+    "eslint": "^8",
+    "tailwindcss": "^3.4.1",
+    "postcss": "^8",
+    "@testing-library/react": "^14.0.0",
+    "@testing-library/jest-dom": "^6.1.4",
+    "jest": "^29.7.0"
   }
 }
 ```
@@ -102,12 +114,13 @@ web/
 │   │   ├── SourceCard.tsx         # 소스 카드
 │   │   └── ResearchProgress.tsx   # 연구 진행 상황
 │   │
-│   ├── home/                      # 홈페이지 컴포넌트
-│   │   ├── ChatComposer.tsx       # 채팅 작성기
-│   │   ├── ModeSelector.tsx       # 모드 선택
-│   │   ├── QuickActions.tsx       # 빠른 작업
-│   │   ├── GreetingHero.tsx       # 환영 메시지
-│   │   └── Sidebar.tsx            # 홈 사이드바
+│   ├── home/                      # 홈페이지 컴포넌트 (6개)
+│   │   ├── Sidebar.tsx            # 홈 사이드바 (~350 LOC)
+│   │   ├── TopBar.tsx             # 상단 네비게이션 (~100 LOC)
+│   │   ├── ChatComposer.tsx       # 대형 메시지 입력 (~150 LOC)
+│   │   ├── ModeSelector.tsx       # 모드 선택 드롭다운 (~100 LOC)
+│   │   ├── GreetingHero.tsx       # Claude 스타일 환영 메시지 (~50 LOC)
+│   │   └── QuickActions.tsx       # 빠른 작업 버튼 (~100 LOC)
 │   │
 │   ├── auth/                      # 인증 컴포넌트
 │   │   ├── LoginForm.tsx          # 로그인 폼
@@ -115,7 +128,8 @@ web/
 │   │   └── AuthGuard.tsx          # 인증 가드
 │   │
 │   ├── common/                    # 공통 컴포넌트
-│   │   ├── ErrorBoundary.tsx      # 에러 경계
+│   │   ├── ErrorBoundary.tsx      # React 에러 처리
+│   │   ├── PerformanceMonitor.tsx # 런타임 성능 추적
 │   │   ├── LoadingSpinner.tsx     # 로딩 스피너
 │   │   ├── Button.tsx             # 버튼
 │   │   ├── Input.tsx              # 입력
@@ -128,23 +142,22 @@ web/
 │
 ├── lib/                           # 라이브러리 & 유틸리티
 │   ├── api/                       # API 클라이언트
-│   │   ├── chat-api.ts            # 채팅 API
-│   │   ├── auth-api.ts            # 인증 API
-│   │   ├── document-api.ts        # 문서 API
-│   │   ├── research-api.ts        # 연구 API
-│   │   └── websocket.ts           # WebSocket 클라이언트
+│   │   └── chat-api.ts            # 통합 Chat API (100+ methods, Strategy/Factory patterns)
 │   │
 │   ├── stores/                    # Zustand 스토어
-│   │   ├── chat-store.ts          # 채팅 상태 (79KB)
-│   │   ├── auth-store.ts          # 인증 상태
-│   │   └── ui-store.ts            # UI 상태
+│   │   └── chat-store.ts          # 통합 Chat Store (2,449 LOC, 40+ actions)
+│   │
+│   ├── contexts/                  # React Contexts
+│   │   └── auth-context.tsx       # 글로벌 Auth 컨텍스트
 │   │
 │   ├── hooks/                     # Custom Hooks
-│   │   ├── useChat.ts             # 채팅 훅
-│   │   ├── useWebSocket.ts        # WebSocket 훅
-│   │   ├── useSSE.ts              # SSE 훅
-│   │   ├── useAuth.ts             # 인증 훅
-│   │   └── useLocalStorage.ts     # 로컬 스토리지 훅
+│   │   ├── useAuthSync.ts         # Auth 상태 동기화
+│   │   └── use-*.ts               # 기타 커스텀 훅
+│   │
+│   ├── __tests__/                 # 단위 테스트
+│   │   ├── ChatInterface.test.tsx
+│   │   ├── InputBox.test.tsx
+│   │   └── MessageBubble.test.tsx
 │   │
 │   ├── types/                     # TypeScript 타입 정의
 │   │   ├── chat.ts                # 채팅 타입
@@ -152,21 +165,26 @@ web/
 │   │   ├── user.ts                # 사용자 타입
 │   │   └── api.ts                 # API 타입
 │   │
+│   ├── auth.ts                    # JWT + Refresh 토큰 시스템
+│   ├── fetchWithCsrf.ts           # CSRF 토큰 자동 관리
+│   ├── errorLogger.ts             # 구조화된 에러 로깅
+│   ├── inputValidation.ts         # 입력 검증 (1-32,000자)
+│   ├── sessionValidation.ts       # 서버 사이드 인증 검증
+│   ├── rateLimit.ts               # Sliding window rate limiter
 │   └── utils.ts                   # 유틸리티 함수
 │
+├── middleware.ts                  # Next.js 미들웨어 (보안 헤더, Auth 체크)
 ├── public/                        # 정적 자산
 │   ├── images/
 │   ├── icons/
 │   └── fonts/
 │
-├── styles/                        # 스타일 파일
-│   └── themes.css                 # 테마 정의
-│
-├── .env.local                     # 환경 변수
-├── next.config.js                 # Next.js 설정
+├── .env.local.template            # 환경 변수 템플릿
+├── next.config.js                 # Next.js 설정 (standalone build)
 ├── tailwind.config.ts             # Tailwind 설정
 ├── tsconfig.json                  # TypeScript 설정
-└── package.json                   # 프로젝트 메타데이터
+├── jest.config.js                 # Jest 테스트 설정
+└── package.json                   # 프로젝트 메타데이터 (v0.5.0)
 ```
 
 ---
@@ -1629,6 +1647,9 @@ module.exports = nextConfig;
 
 ---
 
-**문서 버전**: 1.0
-**작성일**: 2025-11-29
-**다음 업데이트 예정**: 2026-01-29
+**문서 버전**: 1.1
+**최종 업데이트**: 2025-12-02
+**프론트엔드 버전**: 0.5.0
+**Framework**: Next.js 14.2.33 + React 18.3.1
+**주요 개선**: Connection Resilience (5가지), Deep Research 재연결, 다중 탭 동기화
+**다음 업데이트 예정**: 2026-02-02

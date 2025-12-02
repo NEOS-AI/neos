@@ -19,22 +19,26 @@
 
 ### 핵심 특징
 
-- **Multi-Agent Collaboration**: 14개의 전문화된 에이전트가 협업
+- **Multi-Agent Collaboration**: 15개 이상의 전문화된 에이전트가 협업
 - **Graph-Based Workflow**: LangGraph 기반의 7단계 처리 파이프라인
 - **Distributed State Management**: PostgreSQL 기반 체크포인터로 분산 환경 지원
 - **Real-time Streaming**: WebSocket 및 SSE를 통한 실시간 진행 상황 전달
-- **Vector Search**: pgvector를 활용한 의미론적 검색
+- **Vector Search**: pgvector를 활용한 의미론적 검색 (1536 차원)
 - **Quality Assurance**: 자동 품질 검증 및 재생성 메커니즘
+- **Skills System**: 7개의 확장 가능한 내장 스킬 (문서 처리, 연구)
+- **Context Optimization**: 고급 토큰 관리 및 컨텍스트 최적화 (v0.12.0)
+- **Connection Resilience**: 자동 재연결 및 크래시 복구 기능
 
 ### 코드 규모
 
 | 구분 | 규모 |
 |------|------|
-| Backend (Python) | ~57,878 LOC |
-| Frontend (TypeScript) | 81 files |
+| Backend (Python) | ~20,334 LOC |
+| Frontend (TypeScript/Next.js) | v0.5.0 |
 | Database Models | 15+ SQLAlchemy models |
 | API Endpoints | 50+ endpoints (10 routers) |
-| Agents | 14 specialized agents |
+| Agents | 15+ specialized agents |
+| Skills | 7 built-in skills |
 
 ---
 
@@ -1101,7 +1105,7 @@ LOG_FORMAT = "json"
 ```toml
 [project]
 name = "neos"
-version = "0.11.0"
+version = "0.12.0"
 description = "Network of Expert Operating System - Enterprise Edition"
 
 [project.dependencies]
@@ -1144,35 +1148,71 @@ build-backend = "poetry.core.masonry.api"
 
 ## 최근 주요 개선 사항 (Recent Improvements)
 
-### 2024년 11월
+### 2025년 12월 (v0.12.0)
+
+1. **고급 컨텍스트 최적화**
+   - Thinking blocks 관리 (LLM 확장 추론)
+   - tiktoken 기반 토큰 카운팅
+   - 컨텍스트 윈도우 임계값 관리 (85%)
+   - 워크플로우별 토큰 예산 (기본 100K, Deep Research 150K, Chat 80K)
+   - 메시지 압축 (30+ 턴, 50% 압축률)
+   - 시맨틱 중복 제거 (92% 임계값)
+   - 도구 결과 요약 (4000자 제한)
+
+2. **Deep Research 안정성**
+   - 연결 손실 처리 (30초 하트비트 타임아웃)
+   - 다중 탭 동기화 (BroadcastChannel)
+   - 온라인/오프라인 네트워크 감지
+   - 확장된 재연결 시도 (10회)
+   - 부분 결과 localStorage 지속성
+   - 페이지 새로고침 시 컨텐츠 복원
+   - 이벤트 시퀀스 충돌 수정
+
+3. **Skills 시스템 도입**
+   - 7개 내장 스킬 (BigQuery, DOCX, PDF, ArXiv, PubMed, Wikipedia, Research Assistant)
+   - 스킬 레지스트리 및 매니저
+   - 확장 가능한 스킬 베이스 클래스
+   - 스킬 실행 API 엔드포인트
+
+4. **UI/UX 개선 (프론트엔드 v0.5.0)**
+   - Claude 스타일 환영 히어로
+   - 실시간 연구 진행 시각화
+   - 모드별 설정 패널
+   - 다중 탭 동기화
+   - 크래시 복구 기능
+
+5. **보안 강화**
+   - JWT + Refresh 토큰 시스템
+   - CSRF 보호
+   - 7개 보안 헤더 + CSP
+   - Rate limiting (API당 100 req/min)
+   - BFF 기반 보안 아키텍처
+
+6. **멀티모달 지원**
+   - GPT-4V, Claude Vision 통합
+   - 이미지 분석 에이전트
+   - Playwright 동적 렌더링
+   - 오디오 파이프라인 지원
+
+### 2024년 11월 (v0.11.0)
 
 1. **실시간 진행 상황 스트리밍**
    - SSE (Server-Sent Events) 지원
    - Deep Research 진행 상황 실시간 전달
    - 자동 재연결 및 하트비트
 
-2. **UI 리디자인**
-   - 다크 블루 테마 (#050d4d)
-   - 개선된 채팅 인터페이스
-   - 대화 생성 전 모드 선택 기능
-
-3. **데이터베이스 최적화**
+2. **데이터베이스 최적화**
    - JSONB 핸들링 개선
    - 중복 인덱스 제거
    - 쿼리 성능 향상
 
-4. **분산 상태 관리**
+3. **분산 상태 관리**
    - PostgreSQL 체크포인터 도입
    - 엔터프라이즈급 안정성 향상
 
-5. **동적 실행**
+4. **동적 실행**
    - Deep Research의 Dynamic N-phase execution
    - Multi-Query Search의 Dynamic N-task execution
-
-6. **연결 복원력**
-   - 자동 재시도 로직
-   - Circuit breaker 패턴
-   - Graceful degradation
 
 ---
 
@@ -1186,6 +1226,8 @@ build-backend = "poetry.core.masonry.api"
 
 ---
 
-**문서 버전**: 1.0
-**작성일**: 2025-11-29
-**다음 업데이트 예정**: 2026-01-29
+**문서 버전**: 1.1
+**최종 업데이트**: 2025-12-02
+**백엔드 버전**: 0.12.0
+**프론트엔드 버전**: 0.5.0
+**다음 업데이트 예정**: 2026-02-02
