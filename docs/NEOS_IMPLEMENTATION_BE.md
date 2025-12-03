@@ -12,6 +12,7 @@
 8. [캐싱 전략](#캐싱-전략-caching-strategy)
 9. [인증 및 보안](#인증-및-보안-authentication-and-security)
 10. [배포 및 모니터링](#배포-및-모니터링-deployment-and-monitoring)
+11. [⚠️ Breaking Changes (v0.12.0)](#-breaking-changes-v0120)
 
 ---
 
@@ -1672,38 +1673,95 @@ volumes:
   postgres_data:
 ```
 
-### 환경 변수 (.env)
-
-```env
-# Database
-DATABASE_URL=postgresql+asyncpg://neos:neos_password@localhost:5432/neos
-DATABASE_POOL_SIZE=40
-
-# Redis
-REDIS_URL=redis://localhost:6379/0
-REDIS_POOL_SIZE=50
-
-# LLM
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-LLM_MODEL=gpt-4-turbo-preview
-LLM_PROVIDER=anthropic
-
-# Search
-TAVILY_API_KEY=tvly-...
-
-# Security
-SECRET_KEY=your-secret-key-here
-JWT_ALGORITHM=HS256
-
-# Logging
-LOG_LEVEL=INFO
-```
-
 ---
 
-**문서 버전**: 1.1
-**최종 업데이트**: 2025-12-02
-**백엔드 버전**: 0.12.0
-**코드 라인 수**: ~20,334 LOC
-**다음 업데이트 예정**: 2026-02-02
+## ⚠️ Breaking Changes (v0.12.0)
+
+### Phase 1-4 개선 사항 (2025-12-03)
+
+#### Phase 1: 보안 강화 (Security Hardening)
+
+**1. JWT_SECRET_KEY 필수화**
+- ❌ **이전**: 빈 문자열 기본값 허용 (심각한 보안 취약점)
+- ✅ **현재**: 환경 변수 필수 설정, 없으면 애플리케이션 시작 불가
+- 📋 **마이그레이션**:
+```bash
+# JWT Secret Key 생성
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+
+# .env 파일에 추가
+JWT_SECRET_KEY=생성된_키_값
+```
+
+**2. API Key 해싱 알고리즘 변경**
+- ❌ **이전**: SHA-256 (빠르지만 브루트포스 공격에 취약)
+- ✅ **현재**: bcrypt (느리지만 안전, salt 자동 생성)
+- ⚠️ **중요**: **기존 API Key는 모두 무효화됩니다!**
+- 📋 **마이그레이션**: [배포 체크리스트 참조](/docs/checklist_20251203.md)
+
+**3. CORS 정책 강화**
+- ❌ **이전**: DEBUG 모드에서 `allow_origins=["*"]` 허용
+- ✅ **현재**: DEBUG 모드에서도 특정 localhost 도메인만 허용
+- 📋 **영향**: 프론트엔드가 허용 목록에 없으면 CORS 에러 발생
+
+**4. SQL 보안 경고 추가**
+- ✅ 모든 raw SQL 메서드에 보안 경고 추가 (ORM 사용 권장)
+- ✅ 쿼리 로깅 시 일부만 기록 (민감 정보 보호)
+
+#### Phase 2: 안정성 향상 (Stability Improvements)
+
+**1. 데이터베이스 연결 풀 최적화**
+- ❌ **이전**: `pool_size=40`, `max_overflow=10` (총 50개)
+- ✅ **현재**: `pool_size=20`, `max_overflow=30` (총 50개, 더 탄력적)
+- 📋 **근거**: PostgreSQL 기본 `max_connections=100`에 맞춰 조정
+- 📋 **영향**: 연결 풀 고갈 시 더 유연하게 대응
+
+**2. Session 누수 방지**
+- ✅ `execute_in_transaction()` 메서드에 context manager 적용
+- ✅ 자동 세션 정리로 메모리 누수 방지
+
+**3. Circuit Breaker 패턴 도입**
+
+- ✅ 외부 API 호출 실패 시 자동 차단
+- ✅ 에이전트별 독립적인 Circuit Breaker 관리
+- ✅ 시스템 안정성 향상 (장애 격리)
+- 📋 **설정**: `.env`에서 `CIRCUIT_BREAKER_ENABLED=true` 설정
+
+**4. 커스텀 예외 계층 구조**
+
+- ✅ `neos/utils/exceptions.py` 신규 생성
+- ✅ 4xx/5xx 예외를 명확하게 구분
+- ✅ HTTP 상태 코드 자동 매핑
+- ✅ 향상된 에러 로깅 및 디버깅
+
+#### Phase 3: 코드 품질 (Code Quality) - 부분 완료
+
+**1. 로깅 개선**
+- ✅ `workflow/graph.py`의 `print()` → `logger.debug()` 변환
+- 🔄 **진행 중**: 나머지 90+ 위치 변환 예정
+
+**2. 타입 힌팅 및 문서화**
+- 🔄 **예정**: 모든 함수에 완전한 타입 힌팅 추가
+
+#### Phase 4: 성능 최적화 (Performance) - 부분 완료
+
+**1. Semantic Cache 활성화**
+- ❌ **이전**: `SEMANTIC_CACHE_ENABLED=false` (기본 비활성화)
+- ✅ **현재**: `SEMANTIC_CACHE_ENABLED=true` (기본 활성화)
+- ✅ **임계값 조정**: `0.95 → 0.90` (더 많은 캐시 히트)
+- 📋 **효과**: LLM API 비용 절감, 응답 시간 단축
+
+**2. Redis 연결 풀 설정 추가**
+- ✅ `REDIS_POOL_SIZE=50` 설정 추가
+- ✅ `REDIS_MIN_IDLE_CONNECTIONS=10` 설정 추가
+
+**3. N+1 쿼리 최적화**
+- 🔄 **예정**: `auth_service.py`의 N+1 쿼리 수정 예정
+
+### 배포 시 필수 확인 사항
+
+1. ✅ **JWT_SECRET_KEY 생성 및 설정** (필수!)
+2. ✅ **API Key 재생성 계획 수립** ([체크리스트 참조](/docs/checklist_20251203.md))
+3. ✅ **PostgreSQL max_connections 확인** (권장: 200 이상)
+4. ✅ **CORS_ALLOWED_ORIGINS 업데이트** (프론트엔드 도메인)
+5. ✅ **모니터링 설정** (에러율, 응답 시간, Circuit Breaker 상태)
