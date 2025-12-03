@@ -17,6 +17,7 @@ from neos.utils.security import (
     validate_password_strength,
     generate_api_key,
     hash_api_key,
+    verify_api_key,
     hash_token
 )
 from neos.utils.jwt import (
@@ -388,7 +389,7 @@ class AuthService:
         api_key: str
     ) -> Tuple[bool, Optional[APIKey], Optional[User]]:
         """
-        API 키 검증
+        API 키 검증 (bcrypt 사용)
 
         Args:
             api_key: API 키
@@ -396,17 +397,27 @@ class AuthService:
         Returns:
             (유효 여부, APIKey 객체, User 객체)
         """
-        key_hash = hash_api_key(api_key)
+        # API 키 prefix로 후보 조회 (성능 최적화)
+        key_prefix = api_key[:12] + "..." if len(api_key) >= 12 else api_key
 
         result = await self.db.execute(
             select(APIKey).where(
                 and_(
-                    APIKey.key_hash == key_hash,
+                    APIKey.key_prefix == key_prefix,
                     APIKey.is_active
                 )
             )
         )
-        api_key_obj = result.scalar_one_or_none()
+        api_key_candidates = result.scalars().all()
+
+        # bcrypt로 검증 (느리므로 prefix로 먼저 필터링)
+        api_key_obj = None
+        from neos.utils.security import verify_api_key as verify_key_func
+
+        for candidate in api_key_candidates:
+            if verify_key_func(api_key, candidate.key_hash):
+                api_key_obj = candidate
+                break
 
         if not api_key_obj:
             return False, None, None

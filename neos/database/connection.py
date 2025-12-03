@@ -128,75 +128,112 @@ class DatabaseManager:
     async def execute_in_transaction(self, query: str, *params):
         """트랜잭션 내에서 쿼리 실행
 
+        ⚠️  보안 경고: 가능하면 이 메서드 대신 SQLAlchemy ORM을 사용하세요!
+
         Args:
-            query: SQL 쿼리 문자열 ($1, $2 형식의 플레이스홀더 사용)
+            query: SQL 쿼리 문자열
             *params: 순서대로 바인딩될 파라미터들
 
         Returns:
             실행 결과
-        """
-        session = await self.get_session()
-        try:
-            # PostgreSQL의 $1, $2 형식을 :param1, :param2 형식으로 변환
-            param_dict = {}
-            converted_query = query
-            for i, param in enumerate(params, 1):
-                param_name = f"param{i}"
-                converted_query = re.sub(rf'\${i}\b', f":{param_name}", converted_query)
-                param_dict[param_name] = param
 
-            result = await session.execute(text(converted_query), param_dict)
-            # Note: commit은 호출자가 session.commit()으로 직접 관리
-            return result
-        except Exception:
-            await session.rollback()
-            raise
-        finally:
-            # 세션은 컨텍스트 매니저에서 관리되므로 여기서 닫지 않음
-            pass
+        Note:
+            이 메서드는 자동으로 commit을 수행합니다.
+            세션은 자동으로 닫히므로 호출자는 세션을 관리하지 않아도 됩니다.
+        """
+        async with await self.get_session() as session:
+            try:
+                # 파라미터 변환
+                param_dict = {}
+                converted_query = query
+
+                if '$' in query and params:
+                    for i, param in enumerate(params, 1):
+                        param_name = f"param{i}"
+                        converted_query = re.sub(rf'\${i}\b', f":{param_name}", converted_query)
+                        param_dict[param_name] = param
+                else:
+                    for i, param in enumerate(params, 1):
+                        param_dict[f"param{i}"] = param
+
+                result = await session.execute(text(converted_query), param_dict)
+                await session.commit()
+                return result
+            except Exception as e:
+                await session.rollback()
+                logger.error(f"트랜잭션 실행 에러: {e}")
+                logger.error(f"쿼리: {query[:200]}...")
+                raise
+            # 컨텍스트 매니저가 자동으로 세션을 닫음
 
     async def execute(self, query: str, *params):
         """쿼리 실행 (INSERT, UPDATE, DELETE)
 
+        ⚠️  보안 경고: 가능하면 이 메서드 대신 SQLAlchemy ORM을 사용하세요!
+        이 메서드는 레거시 코드 호환성을 위해 유지됩니다.
+
         Args:
-            query: SQL 쿼리 문자열 ($1, $2 형식의 플레이스홀더 사용)
+            query: SQL 쿼리 문자열 (:param1, :param2 형식 권장)
             *params: 순서대로 바인딩될 파라미터들
+
+        Security:
+            - 절대 사용자 입력을 query 문자열에 직접 포함하지 마세요
+            - 모든 동적 값은 params로 전달하세요
         """
         try:
-            # PostgreSQL의 $1, $2 형식을 :param1, :param2 형식으로 변환
-            # ::cast 구문을 보존하기 위해 regex 사용
+            # 파라미터 딕셔너리 생성
             param_dict = {}
             converted_query = query
-            for i, param in enumerate(params, 1):
-                placeholder = f"${i}"
-                param_name = f"param{i}"
-                # $N을 :paramN으로 변경하되, $N:: 패턴은 :paramN::으로 변경
-                converted_query = re.sub(rf'\${i}\b', f":{param_name}", converted_query)
-                param_dict[param_name] = param
+
+            # $1, $2 형식 감지 및 변환 (레거시 지원)
+            if '$' in query and params:
+                for i, param in enumerate(params, 1):
+                    param_name = f"param{i}"
+                    # $N을 :paramN으로 안전하게 변경 (word boundary 사용)
+                    converted_query = re.sub(rf'\${i}\b', f":{param_name}", converted_query)
+                    param_dict[param_name] = param
+            else:
+                # :param1, :param2 형식인 경우
+                for i, param in enumerate(params, 1):
+                    param_dict[f"param{i}"] = param
 
             async with await self.get_session() as session:
+                # text()는 SQL injection을 방지하는 prepared statement 사용
                 result = await session.execute(text(converted_query), param_dict)
                 await session.commit()
                 return result
         except Exception as e:
             logger.error(f"데이터베이스 실행 에러: {e}")
-            logger.error(f"쿼리: {query}")
-            logger.error(f"파라미터: {params}")
+            logger.error(f"쿼리: {query[:200]}...")  # 쿼리 일부만 로깅 (보안)
+            logger.error(f"파라미터 개수: {len(params)}")
             raise
 
     async def fetch_one(self, query: str, *params):
-        """단일 row 조회"""
+        """단일 row 조회
+
+        ⚠️  보안 경고: 가능하면 이 메서드 대신 SQLAlchemy ORM을 사용하세요!
+
+        Args:
+            query: SQL 쿼리 문자열
+            *params: 파라미터들
+
+        Security:
+            - 사용자 입력을 query 문자열에 직접 포함하지 마세요
+            - 모든 동적 값은 params로 전달하세요
+        """
         try:
-            # PostgreSQL의 $1, $2 형식을 :param1, :param2 형식으로 변환
-            # ::cast 구문을 보존하기 위해 regex 사용
             param_dict = {}
             converted_query = query
-            for i, param in enumerate(params, 1):
-                placeholder = f"${i}"
-                param_name = f"param{i}"
-                # $N을 :paramN으로 변경하되, $N:: 패턴은 :paramN::으로 변경
-                converted_query = re.sub(rf'\${i}\b', f":{param_name}", converted_query)
-                param_dict[param_name] = param
+
+            # $1, $2 형식 감지 및 변환 (레거시 지원)
+            if '$' in query and params:
+                for i, param in enumerate(params, 1):
+                    param_name = f"param{i}"
+                    converted_query = re.sub(rf'\${i}\b', f":{param_name}", converted_query)
+                    param_dict[param_name] = param
+            else:
+                for i, param in enumerate(params, 1):
+                    param_dict[f"param{i}"] = param
 
             async with await self.get_session() as session:
                 result = await session.execute(text(converted_query), param_dict)
@@ -207,29 +244,42 @@ class DatabaseManager:
                 return row
         except Exception as e:
             logger.error(f"데이터베이스 fetch_one 에러: {e}")
-            logger.error(f"쿼리: {query}")
+            logger.error(f"쿼리: {query[:200]}...")  # 쿼리 일부만 로깅
             raise
 
     async def fetch_all(self, query: str, *params):
-        """모든 row 조회"""
+        """모든 row 조회
+
+        ⚠️  보안 경고: 가능하면 이 메서드 대신 SQLAlchemy ORM을 사용하세요!
+
+        Args:
+            query: SQL 쿼리 문자열
+            *params: 파라미터들
+
+        Security:
+            - 사용자 입력을 query 문자열에 직접 포함하지 마세요
+            - 모든 동적 값은 params로 전달하세요
+        """
         try:
-            # PostgreSQL의 $1, $2 형식을 :param1, :param2 형식으로 변환
-            # ::cast 구문을 보존하기 위해 regex 사용
             param_dict = {}
             converted_query = query
-            for i, param in enumerate(params, 1):
-                placeholder = f"${i}"
-                param_name = f"param{i}"
-                # $N을 :paramN으로 변경하되, $N:: 패턴은 :paramN::으로 변경
-                converted_query = re.sub(rf'\${i}\b', f":{param_name}", converted_query)
-                param_dict[param_name] = param
+
+            # $1, $2 형식 감지 및 변환 (레거시 지원)
+            if '$' in query and params:
+                for i, param in enumerate(params, 1):
+                    param_name = f"param{i}"
+                    converted_query = re.sub(rf'\${i}\b', f":{param_name}", converted_query)
+                    param_dict[param_name] = param
+            else:
+                for i, param in enumerate(params, 1):
+                    param_dict[f"param{i}"] = param
 
             async with await self.get_session() as session:
                 result = await session.execute(text(converted_query), param_dict)
                 return result.fetchall()
         except Exception as e:
             logger.error(f"데이터베이스 fetch_all 에러: {e}")
-            logger.error(f"쿼리: {query}")
+            logger.error(f"쿼리: {query[:200]}...")  # 쿼리 일부만 로깅
             raise
 
 

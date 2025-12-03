@@ -88,7 +88,7 @@ def generate_api_key() -> Tuple[str, str, str]:
     Returns:
         (전체 키, 해시, prefix) 튜플
         - 전체 키: 사용자에게 1회만 표시
-        - 해시: DB에 저장
+        - 해시: DB에 저장 (bcrypt)
         - prefix: UI에 표시용
     """
     # 랜덤 바이트 생성
@@ -100,8 +100,9 @@ def generate_api_key() -> Tuple[str, str, str]:
     # prefix 추가
     full_key = f"{settings.API_KEY_PREFIX}{key_hex}"
 
-    # 해시 생성 (SHA-256)
-    key_hash = hashlib.sha256(full_key.encode()).hexdigest()
+    # 해시 생성 (bcrypt로 변경 - 보안 강화)
+    # bcrypt는 자동으로 salt를 생성하고 느린 해싱을 사용하여 brute-force 공격 방지
+    key_hash = bcrypt.hashpw(full_key.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
     # prefix (표시용, 처음 12자)
     key_prefix = full_key[:12] + "..."
@@ -111,15 +112,37 @@ def generate_api_key() -> Tuple[str, str, str]:
 
 def hash_api_key(api_key: str) -> str:
     """
-    API 키를 SHA-256으로 해싱
+    API 키를 bcrypt로 해싱
+
+    Note: 이 함수는 새로운 해시 생성용이 아닌,
+    기존 해시와 비교를 위한 용도입니다.
+    실제 검증은 verify_api_key()를 사용하세요.
 
     Args:
         api_key: API 키
 
     Returns:
-        해시된 API 키
+        해시된 API 키 (bcrypt)
     """
-    return hashlib.sha256(api_key.encode()).hexdigest()
+    return bcrypt.hashpw(api_key.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+
+def verify_api_key(api_key: str, key_hash: str) -> bool:
+    """
+    API 키 검증 (bcrypt 사용)
+
+    Args:
+        api_key: 평문 API 키
+        key_hash: bcrypt로 해시된 키
+
+    Returns:
+        일치 여부
+    """
+    try:
+        return bcrypt.checkpw(api_key.encode('utf-8'), key_hash.encode('utf-8'))
+    except Exception:
+        # bcrypt 검증 실패 (잘못된 해시 형식 등)
+        return False
 
 
 def hash_token(token: str) -> str:
