@@ -118,7 +118,12 @@ python -m neos.cli workflow web-lookup https://spa-app.com --dynamic
 
 # Deep Research
 python -m neos.cli workflow deep-research "AI semiconductor market outlook"
+
+# HyperDeepResearch
+python -m neos.cli workflow hyper-deep-research "2025년 글로벌 AI 시장 전망"
 ```
+
+For more CLI examples, see [docs/CLI_GUIDE.md](./docs/CLI_GUIDE.md).
 
 ### API Calls
 
