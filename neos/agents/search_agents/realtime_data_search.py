@@ -10,6 +10,7 @@ from neos.config.settings import settings
 from neos.database.web_search_logger import get_search_logger
 from neos.database.web_search_types import SearchLogRequest, SearchLogComplete, SearchResultItem, SearchQueryStatus
 from neos.workflow.state import SearchResult
+from neos.utils.circuit_breaker import with_circuit_breaker
 
 from ..base import SearchAgent
 
@@ -45,7 +46,13 @@ class RealtimeDataSearchAgent(SearchAgent):
         else:
             print("[WARNING] TAVILY_API_KEY not set, RealtimeDataSearchAgent will return empty results")
 
+    @with_circuit_breaker("realtime_data_search")
     async def execute(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        실시간 데이터 검색 실행 (Circuit Breaker 보호)
+
+        외부 API 장애 시 자동으로 회로가 차단되어 시스템 안정성을 유지합니다.
+        """
         print(f"[DEBUG] RealtimeDataSearchAgent.execute called with query: {query[:50]}...")
 
         if not self.validate_input(query, context):

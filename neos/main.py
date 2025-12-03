@@ -157,12 +157,22 @@ app = FastAPI(
 
 
 # CORS 미들웨어 설정
+# 보안 강화: DEBUG 모드에서도 특정 origin만 허용
+allowed_origins = settings.CORS_ALLOWED_ORIGINS
+if IS_DEBUG:
+    # DEBUG 모드에서 추가 개발 origin 허용 (하지만 "*"는 사용하지 않음)
+    dev_origins = ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000"]
+    allowed_origins = list(set(allowed_origins + dev_origins))
+    logger.warning(f"🟡 DEBUG mode: CORS allowing origins: {allowed_origins}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if IS_DEBUG else settings.CORS_ALLOWED_ORIGINS,
+    allow_origins=allowed_origins,
     allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID", "X-Process-Time"],
+    max_age=600,  # CORS preflight 캐싱 (10분)
 )
 
 # GZip 압축 미들웨어
@@ -245,20 +255,39 @@ async def log_and_track_requests(request: Request, call_next):
             endpoint=endpoint
         ).dec()
 
-# 전역 예외 처리기
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """전역 예외 처리"""
+# 커스텀 예외 import
+from neos.utils.exceptions import (
+    NeosBaseException,
+    get_exception_status_code,
+    is_client_error,
+    is_server_error,
+    AuthenticationError,
+    AuthorizationError,
+    ResourceNotFoundError,
+    ValidationError,
+    ExternalServiceError,
+)
+
+# 커스텀 예외 처리기
+@app.exception_handler(NeosBaseException)
+async def neos_exception_handler(request: Request, exc: NeosBaseException):
+    """네오스 커스텀 예외 처리"""
     request_id = request.headers.get("X-Request-ID", "unknown")
-    
-    logger.error(f"🔴 Global exception [{request_id}]: {str(exc)}", exc_info=True)
-    
+    status_code = get_exception_status_code(exc)
+
+    # 로그 레벨 결정 (클라이언트 오류는 warning, 서버 오류는 error)
+    if is_client_error(exc):
+        logger.warning(f"🟡 Client error [{request_id}]: {exc.message}", extra={"details": exc.details})
+    else:
+        logger.error(f"🔴 Server error [{request_id}]: {exc.message}", exc_info=True, extra={"details": exc.details})
+
     return JSONResponse(
-        status_code=500,
+        status_code=status_code,
         content={
-            "error": "Internal server error",
+            "error": exc.message,
             "request_id": request_id,
-            "detail": str(exc) if IS_DEBUG else "An unexpected error occurred"
+            "details": exc.details if IS_DEBUG else {},
+            "type": exc.__class__.__name__
         }
     )
 
@@ -267,13 +296,33 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def http_exception_handler(request: Request, exc: HTTPException):
     """HTTP 예외 처리"""
     request_id = request.headers.get("X-Request-ID", "unknown")
-    
+
+    logger.warning(f"🟡 HTTP exception [{request_id}]: {exc.detail}")
+
     return JSONResponse(
         status_code=exc.status_code,
         content={
             "error": exc.detail,
             "request_id": request_id,
             "status_code": exc.status_code
+        }
+    )
+
+# 전역 예외 처리기 (fallback)
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """전역 예외 처리 (예상치 못한 예외용)"""
+    request_id = request.headers.get("X-Request-ID", "unknown")
+
+    logger.error(f"🔴 Unexpected exception [{request_id}]: {str(exc)}", exc_info=True)
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "request_id": request_id,
+            "detail": str(exc) if IS_DEBUG else "An unexpected error occurred",
+            "type": "UnexpectedError"
         }
     )
 

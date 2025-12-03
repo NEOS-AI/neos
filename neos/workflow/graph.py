@@ -1,7 +1,10 @@
 from typing import Dict, Any
 from datetime import datetime
 import hashlib
+import logging
 from langgraph.graph import StateGraph, END
+
+logger = logging.getLogger(__name__)
 
 from neos.agents.search_agents import (
     KnowledgeSearchAgent,
@@ -66,7 +69,7 @@ class MultiAgentWorkflow:
 
     def _initialize_agents(self) -> Dict[str, Any]:
         """에이전트 초기화"""
-        print("[DEBUG] Initializing agents...")
+        logger.debug("Initializing agents...")
 
         agents = {
             # 검색 에이전트들
@@ -90,14 +93,14 @@ class MultiAgentWorkflow:
             "task_creation": TaskCreationAgent()
         }
 
-        print(f"[DEBUG] Initialized {len(agents)} agents")
+        logger.debug(f"Initialized {len(agents)} agents")
         return agents
 
     async def _create_workflow_graph(self) -> StateGraph:
         """
         워크플로우 그래프 생성 (Enterprise Edition with PostgreSQL Checkpointer)
         """
-        print("[DEBUG] Creating workflow graph with PostgreSQL checkpointer...")
+        logger.debug("Creating workflow graph with PostgreSQL checkpointer...")
 
         workflow = StateGraph(AgentState)
 

@@ -12,10 +12,12 @@ env_vars = os.environ
 class Settings(BaseSettings):
     # 데이터베이스 설정
     DATABASE_URL: str = env_vars.get("DATABASE_URL", "postgresql+asyncpg://user:password@localhost/ai_system")
-    DATABASE_POOL_SIZE: int = int(env_vars.get("DATABASE_POOL_SIZE", 40))
-    DATABASE_MAX_OVERFLOW: int = int(env_vars.get("DATABASE_MAX_OVERFLOW", 80))
+    # 연결 풀 최적화: 총 50개 (20+30) 연결로 제한하여 DB 부하 방지
+    # PostgreSQL default max_connections = 100 고려
+    DATABASE_POOL_SIZE: int = int(env_vars.get("DATABASE_POOL_SIZE", 20))  # 개선: 40 → 20
+    DATABASE_MAX_OVERFLOW: int = int(env_vars.get("DATABASE_MAX_OVERFLOW", 30))  # 개선: 80 → 30
     DATABASE_POOL_TIMEOUT: int = int(env_vars.get("DATABASE_POOL_TIMEOUT", 30))
-    DATABASE_POOL_RECYCLE: int = int(env_vars.get("DATABASE_POOL_RECYCLE", 2400))  # 40분
+    DATABASE_POOL_RECYCLE: int = int(env_vars.get("DATABASE_POOL_RECYCLE", 1800))  # 30분 (개선: 40분 → 30분)
 
     # Redis 설정
     REDIS_URL: str = env_vars.get("REDIS_URL", "redis://localhost:6379")
@@ -24,9 +26,10 @@ class Settings(BaseSettings):
     REDIS_MIN_IDLE_CONNECTIONS: int = int(env_vars.get("REDIS_MIN_IDLE_CONNECTIONS", 10))
 
     # 캐시 설정
-    WORKFLOW_RESPONSE_CACHE_TTL: int = int(env_vars.get("WORKFLOW_RESPONSE_CACHE_TTL", 7200))  # 2시간 (개선됨: 24시간 → 2시간)
-    SEMANTIC_CACHE_ENABLED: bool = bool(env_vars.get("SEMANTIC_CACHE_ENABLED", False))
-    SEMANTIC_CACHE_THRESHOLD: float = float(env_vars.get("SEMANTIC_CACHE_THRESHOLD", 0.95))
+    WORKFLOW_RESPONSE_CACHE_TTL: int = int(env_vars.get("WORKFLOW_RESPONSE_CACHE_TTL", 7200))  # 2시간
+    # Semantic Cache: 유사한 쿼리에 대한 응답 재사용으로 성능 향상
+    SEMANTIC_CACHE_ENABLED: bool = bool(env_vars.get("SEMANTIC_CACHE_ENABLED", True))  # 개선: 기본값 활성화
+    SEMANTIC_CACHE_THRESHOLD: float = float(env_vars.get("SEMANTIC_CACHE_THRESHOLD", 0.90))  # 개선: 0.95 → 0.90 (더 많은 캐시 히트)
 
     # AI 서비스 API 키
     OPENAI_API_KEY: str = env_vars.get("OPENAI_API_KEY", "")
@@ -73,10 +76,19 @@ class Settings(BaseSettings):
     DEBUG: bool = bool(env_vars.get("DEBUG", False))
 
     # 인증 설정
-    JWT_SECRET_KEY: str = env_vars.get("JWT_SECRET_KEY", "your-secret-key-change-this-in-production")
+    JWT_SECRET_KEY: str = env_vars.get("JWT_SECRET_KEY")
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(env_vars.get("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 15))  # 15분
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = int(env_vars.get("JWT_REFRESH_TOKEN_EXPIRE_DAYS", 7))  # 7일
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # JWT Secret Key 필수 검증
+        if not self.JWT_SECRET_KEY:
+            raise ValueError(
+                "JWT_SECRET_KEY must be set in environment variables. "
+                "Generate a secure key with: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+            )
 
     # 비밀번호 정책
     PASSWORD_MIN_LENGTH: int = 8
