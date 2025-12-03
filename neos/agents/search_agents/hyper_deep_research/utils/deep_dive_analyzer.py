@@ -3,9 +3,9 @@
 Identifies important insights and recursively explores them in depth.
 """
 
-from typing import Dict, Any, List, Callable, Optional
-import asyncio
+from typing import Dict, Any, List, Callable
 import logging
+
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ class DeepDiveAnalyzer:
             "max_depth_reached": 0,
             "total_sources_collected": 0,
         }
+
 
     async def perform_deep_dive(
         self,
