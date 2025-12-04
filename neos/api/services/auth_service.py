@@ -8,7 +8,11 @@ from datetime import datetime, timedelta
 from typing import Optional, Tuple, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
+from sqlalchemy.orm import selectinload
 import uuid
+import asyncio
+import random
+import logging
 
 from neos.database.models import User, APIKey, RefreshToken
 from neos.utils.security import (
@@ -26,6 +30,10 @@ from neos.utils.jwt import (
     verify_token
 )
 from neos.config.settings import settings
+
+
+# 로거 설정
+logger = logging.getLogger(__name__)
 
 
 class AuthService:
@@ -198,9 +206,12 @@ class AuthService:
             return False, "유효하지 않은 Refresh Token입니다.", None
 
         # DB에서 Refresh Token 확인
+        # selectinload를 사용하여 User를 함께 로드 (N+1 쿼리 방지)
         token_hash = hash_token(refresh_token)
         result = await self.db.execute(
-            select(RefreshToken).where(
+            select(RefreshToken)
+            .options(selectinload(RefreshToken.user))
+            .where(
                 and_(
                     RefreshToken.token_hash == token_hash,
                     RefreshToken.user_id == user_id,
@@ -215,12 +226,8 @@ class AuthService:
         if not db_token:
             return False, "유효하지 않거나 만료된 Refresh Token입니다.", None
 
-        # 사용자 조회
-        result = await self.db.execute(
-            select(User).where(User.user_id == user_id)
-        )
-        user = result.scalar_one_or_none()
-
+        # 사용자 확인 (이미 eager loading으로 로드됨)
+        user = db_token.user
         if not user or not user.is_active:
             return False, "유효하지 않은 사용자입니다.", None
 
@@ -386,22 +393,32 @@ class AuthService:
 
     async def verify_api_key(
         self,
-        api_key: str
+        api_key: str,
+        client_ip: Optional[str] = None
     ) -> Tuple[bool, Optional[APIKey], Optional[User]]:
         """
-        API 키 검증 (bcrypt 사용)
+        API 키 검증 (bcrypt 사용) - 타이밍 공격 방어 적용
 
         Args:
             api_key: API 키
+            client_ip: 클라이언트 IP 주소 (로깅용)
 
         Returns:
             (유효 여부, APIKey 객체, User 객체)
+
+        Security:
+            - 고정 시간 비교: 모든 후보를 항상 검증하여 타이밍 공격 방지
+            - 랜덤 지연: 실패 시 랜덤 지연으로 타이밍 패턴 은폐
+            - 실패 로깅: 보안 모니터링을 위한 실패 시도 기록
         """
         # API 키 prefix로 후보 조회 (성능 최적화)
+        # selectinload를 사용하여 User를 함께 로드 (N+1 쿼리 방지)
         key_prefix = api_key[:12] + "..." if len(api_key) >= 12 else api_key
 
         result = await self.db.execute(
-            select(APIKey).where(
+            select(APIKey)
+            .options(selectinload(APIKey.user))
+            .where(
                 and_(
                     APIKey.key_prefix == key_prefix,
                     APIKey.is_active
@@ -410,25 +427,56 @@ class AuthService:
         )
         api_key_candidates = result.scalars().all()
 
+        # 타이밍 공격 방어: 모든 후보를 항상 검증 (조기 종료 금지)
         # bcrypt로 검증 (느리므로 prefix로 먼저 필터링)
         api_key_obj = None
         from neos.utils.security import verify_api_key as verify_key_func
 
+        # 모든 후보를 검증 (일치하는 것을 찾아도 계속 진행)
         for candidate in api_key_candidates:
             if verify_key_func(api_key, candidate.key_hash):
-                api_key_obj = candidate
-                break
+                # 첫 번째 일치하는 키만 저장 (중복 방지)
+                if api_key_obj is None:
+                    api_key_obj = candidate
+            # break 하지 않고 계속 검증 → 고정 시간 보장
 
+        # 검증 실패 시 처리
         if not api_key_obj:
+            # 타이밍 공격 방어: 랜덤 지연 추가 (50-150ms)
+            delay = random.uniform(0.05, 0.15)
+            await asyncio.sleep(delay)
+
+            # 실패한 API 키 검증 시도 로깅 (보안 모니터링)
+            logger.warning(
+                f"API key verification failed - "
+                f"prefix: {key_prefix}, "
+                f"client_ip: {client_ip or 'unknown'}, "
+                f"candidates_checked: {len(api_key_candidates)}"
+            )
+
             return False, None, None
 
         # 만료 확인
         if api_key_obj.expires_at and api_key_obj.expires_at < datetime.utcnow():
+            # 만료된 키 사용 시도 로깅
+            logger.warning(
+                f"Expired API key used - "
+                f"key_id: {api_key_obj.id}, "
+                f"user_id: {api_key_obj.user_id}, "
+                f"client_ip: {client_ip or 'unknown'}"
+            )
             return False, None, None
 
-        # 사용자 조회
-        user = await self.get_user_by_id(api_key_obj.user_id)
+        # 사용자 확인 (이미 eager loading으로 로드됨)
+        user = api_key_obj.user
         if not user or not user.is_active:
+            # 비활성 사용자의 API 키 사용 시도 로깅
+            logger.warning(
+                f"Inactive user API key used - "
+                f"key_id: {api_key_obj.id}, "
+                f"user_id: {api_key_obj.user_id}, "
+                f"client_ip: {client_ip or 'unknown'}"
+            )
             return False, None, None
 
         # 사용 통계 업데이트

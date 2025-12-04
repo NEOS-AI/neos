@@ -3,16 +3,23 @@ FastAPI 인증 의존성
 - JWT 토큰 검증
 - API 키 검증
 - 현재 사용자 가져오기
+- API 키 Scope 검증
 """
-from typing import Optional, Union
-from fastapi import Depends, HTTPException, Header, status
+from typing import Optional, Union, List
+from fastapi import Depends, HTTPException, Header, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
+import logging
 
 from neos.database.connection import get_db
 from neos.database.models import User, APIKey
 from neos.api.services.auth_service import AuthService
 from neos.utils.jwt import verify_token
+from neos.utils.rate_limiter import rate_limiter
+
+
+# 로거 설정
+logger = logging.getLogger(__name__)
 
 
 # HTTP Bearer 스키마
@@ -55,6 +62,7 @@ async def get_current_user_from_jwt(
 
 
 async def get_current_user_from_api_key(
+    request: Request,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
     db: AsyncSession = Depends(get_db)
 ) -> Optional[tuple[APIKey, User]]:
@@ -62,6 +70,7 @@ async def get_current_user_from_api_key(
     API 키로 현재 사용자 가져오기
 
     Args:
+        request: FastAPI Request 객체 (IP 주소 추출용)
         x_api_key: API 키 헤더
         db: 데이터베이스 세션
 
@@ -71,8 +80,14 @@ async def get_current_user_from_api_key(
     if not x_api_key:
         return None
 
+    # 클라이언트 IP 주소 추출
+    client_ip = request.client.host if request.client else None
+
     auth_service = AuthService(db)
-    is_valid, api_key_obj, user = await auth_service.verify_api_key(x_api_key)
+    is_valid, api_key_obj, user = await auth_service.verify_api_key(
+        x_api_key,
+        client_ip=client_ip
+    )
 
     if not is_valid or not api_key_obj or not user:
         return None
@@ -163,24 +178,34 @@ async def get_current_admin_user(
 
 
 async def require_api_key(
+    request: Request,
     x_api_key: str = Header(..., alias="X-API-Key"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    check_rate_limit: bool = True
 ) -> tuple[APIKey, User]:
     """
-    API 키 인증 필수 (JWT 허용 안 함)
+    API 키 인증 필수 (JWT 허용 안 함) + Rate Limiting
 
     Args:
+        request: FastAPI Request 객체 (IP 주소 추출용)
         x_api_key: API 키 헤더
         db: 데이터베이스 세션
+        check_rate_limit: Rate limiting 체크 여부 (기본값: True)
 
     Returns:
         (APIKey, User) 튜플
 
     Raises:
-        HTTPException: API 키가 유효하지 않은 경우
+        HTTPException: API 키가 유효하지 않거나 rate limit 초과 시
     """
+    # 클라이언트 IP 주소 추출
+    client_ip = request.client.host if request.client else None
+
     auth_service = AuthService(db)
-    is_valid, api_key_obj, user = await auth_service.verify_api_key(x_api_key)
+    is_valid, api_key_obj, user = await auth_service.verify_api_key(
+        x_api_key,
+        client_ip=client_ip
+    )
 
     if not is_valid or not api_key_obj or not user:
         raise HTTPException(
@@ -188,6 +213,36 @@ async def require_api_key(
             detail="유효하지 않은 API 키입니다.",
             headers={"WWW-Authenticate": "ApiKey"},
         )
+
+    # Rate Limiting 체크
+    if check_rate_limit:
+        allowed, metadata = await rate_limiter.check_api_key_rate_limit(
+            api_key_id=str(api_key_obj.id),
+            rate_limit_per_minute=api_key_obj.rate_limit,
+            max_requests_per_day=api_key_obj.max_requests_per_day
+        )
+
+        if not allowed:
+            # Rate limit 헤더 추가
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "error": "rate_limit_exceeded",
+                    "message": "API 키 요청 제한을 초과했습니다.",
+                    "limit": metadata["limit"],
+                    "current": metadata["current_requests"],
+                    "retry_after": metadata["retry_after"]
+                },
+                headers={
+                    "X-RateLimit-Limit": str(metadata["limit"]),
+                    "X-RateLimit-Remaining": str(metadata["remaining"]),
+                    "X-RateLimit-Reset": str(metadata["reset_at"]),
+                    "Retry-After": str(metadata["retry_after"])
+                }
+            )
+
+        # Rate limit 정보를 request.state에 저장 (로깅/모니터링용)
+        request.state.rate_limit_metadata = metadata
 
     return api_key_obj, user
 
@@ -214,3 +269,282 @@ async def get_optional_user(
         return user
 
     return None
+
+
+# ============================================================================
+# API 키 Scope 검증
+# ============================================================================
+
+class ScopeChecker:
+    """
+    API 키 Scope 검증 의존성 클래스
+
+    Usage:
+        @router.get("/data", dependencies=[Depends(ScopeChecker(["data:read"]))])
+        async def get_data():
+            return {"data": "..."}
+    """
+
+    def __init__(self, required_scopes: List[str]):
+        """
+        Args:
+            required_scopes: 필요한 권한 목록 (예: ["query:read", "chat:write"])
+        """
+        self.required_scopes = required_scopes
+
+    async def __call__(
+        self,
+        request: Request,
+        jwt_user: Optional[User] = Depends(get_current_user_from_jwt),
+        api_key_result: Optional[tuple] = Depends(get_current_user_from_api_key),
+    ):
+        """
+        Scope 검증 실행
+
+        - JWT 인증: 모든 scope 허용 (관리자 권한)
+        - API 키 인증: API 키의 scopes에 required_scopes가 모두 포함되어야 함
+
+        Raises:
+            HTTPException: 권한 부족 시
+        """
+        # JWT 인증 사용자는 모든 scope 허용 (사용자 본인이 직접 로그인)
+        if jwt_user:
+            logger.debug(
+                f"JWT user {jwt_user.user_id} granted access - "
+                f"required_scopes: {self.required_scopes}"
+            )
+            return
+
+        # API 키 인증
+        if api_key_result:
+            api_key_obj, user = api_key_result
+
+            # API 키의 scopes 확인
+            api_key_scopes = set(api_key_obj.scopes or [])
+            required_scopes_set = set(self.required_scopes)
+
+            # 필요한 모든 scope가 API 키에 포함되어 있는지 확인
+            if required_scopes_set.issubset(api_key_scopes):
+                logger.debug(
+                    f"API key {api_key_obj.id} granted access - "
+                    f"required: {self.required_scopes}, "
+                    f"available: {list(api_key_scopes)}"
+                )
+                return
+
+            # 권한 부족
+            missing_scopes = required_scopes_set - api_key_scopes
+
+            # 실패 로깅 (보안 모니터링)
+            logger.warning(
+                f"API key scope verification failed - "
+                f"key_id: {api_key_obj.id}, "
+                f"user_id: {user.user_id}, "
+                f"required_scopes: {self.required_scopes}, "
+                f"available_scopes: {list(api_key_scopes)}, "
+                f"missing_scopes: {list(missing_scopes)}, "
+                f"client_ip: {request.client.host if request.client else 'unknown'}"
+            )
+
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "insufficient_permissions",
+                    "message": "API 키에 필요한 권한이 없습니다.",
+                    "required_scopes": self.required_scopes,
+                    "missing_scopes": list(missing_scopes)
+                }
+            )
+
+        # 인증되지 않음
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="인증이 필요합니다.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+def require_scopes(scopes: List[str]):
+    """
+    API 키 Scope 검증 의존성 생성 헬퍼 함수
+
+    Args:
+        scopes: 필요한 권한 목록
+
+    Returns:
+        ScopeChecker 인스턴스
+
+    Usage:
+        @router.post("/documents", dependencies=[Depends(require_scopes(["document:write"]))])
+        async def upload_document():
+            return {"status": "uploaded"}
+    """
+    return ScopeChecker(scopes)
+
+
+async def get_api_key_with_scope(
+    required_scopes: List[str],
+    request: Request,
+    x_api_key: str = Header(..., alias="X-API-Key"),
+    db: AsyncSession = Depends(get_db)
+) -> tuple[APIKey, User]:
+    """
+    Scope 검증이 포함된 API 키 인증 (함수형 접근)
+
+    Args:
+        required_scopes: 필요한 권한 목록
+        request: FastAPI Request 객체
+        x_api_key: API 키 헤더
+        db: 데이터베이스 세션
+
+    Returns:
+        (APIKey, User) 튜플
+
+    Raises:
+        HTTPException: API 키가 유효하지 않거나 권한이 부족한 경우
+
+    Usage:
+        async def my_endpoint(
+            auth: tuple[APIKey, User] = Depends(
+                lambda req, key, db: get_api_key_with_scope(
+                    ["data:read"],
+                    req,
+                    key,
+                    db
+                )
+            )
+        ):
+            api_key, user = auth
+    """
+    # API 키 검증
+    api_key_obj, user = await require_api_key(request, x_api_key, db)
+
+    # Scope 검증
+    api_key_scopes = set(api_key_obj.scopes or [])
+    required_scopes_set = set(required_scopes)
+
+    if not required_scopes_set.issubset(api_key_scopes):
+        missing_scopes = required_scopes_set - api_key_scopes
+
+        logger.warning(
+            f"API key scope verification failed - "
+            f"key_id: {api_key_obj.id}, "
+            f"required: {required_scopes}, "
+            f"missing: {list(missing_scopes)}"
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "insufficient_permissions",
+                "message": "API 키에 필요한 권한이 없습니다.",
+                "required_scopes": required_scopes,
+                "missing_scopes": list(missing_scopes)
+            }
+        )
+
+    return api_key_obj, user
+
+
+# ============================================================================
+# Rate Limiting 미들웨어
+# ============================================================================
+
+async def check_ip_rate_limit(
+    request: Request,
+    max_requests_per_minute: int = 60
+):
+    """
+    IP 기반 Rate Limiting 의존성
+
+    Args:
+        request: FastAPI Request 객체
+        max_requests_per_minute: 분당 최대 요청 수 (기본값: 60)
+
+    Raises:
+        HTTPException: Rate limit 초과 시
+
+    Usage:
+        @router.get("/public", dependencies=[Depends(check_ip_rate_limit)])
+        async def public_endpoint():
+            return {"message": "OK"}
+    """
+    client_ip = request.client.host if request.client else "unknown"
+
+    allowed, metadata = await rate_limiter.check_ip_rate_limit(
+        ip_address=client_ip,
+        max_requests_per_minute=max_requests_per_minute
+    )
+
+    if not allowed:
+        logger.warning(
+            f"IP rate limit exceeded - "
+            f"ip: {client_ip}, "
+            f"requests: {metadata['current_requests']}/{metadata['limit']}"
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "error": "rate_limit_exceeded",
+                "message": "요청 제한을 초과했습니다. 잠시 후 다시 시도해주세요.",
+                "retry_after": metadata["retry_after"]
+            },
+            headers={
+                "X-RateLimit-Limit": str(metadata["limit"]),
+                "X-RateLimit-Remaining": str(metadata["remaining"]),
+                "X-RateLimit-Reset": str(metadata["reset_at"]),
+                "Retry-After": str(metadata["retry_after"])
+            }
+        )
+
+    # Rate limit 정보 저장
+    request.state.rate_limit_metadata = metadata
+
+
+class RateLimitChecker:
+    """
+    커스텀 Rate Limiting 의존성 클래스
+
+    Usage:
+        @router.post("/data", dependencies=[Depends(RateLimitChecker(100, 60))])
+        async def post_data():
+            return {"status": "ok"}
+    """
+
+    def __init__(self, max_requests: int, window_seconds: int):
+        """
+        Args:
+            max_requests: 최대 요청 수
+            window_seconds: 시간 윈도우 (초)
+        """
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+
+    async def __call__(self, request: Request):
+        """Rate limit 체크 실행"""
+        client_ip = request.client.host if request.client else "unknown"
+
+        allowed, metadata = await rate_limiter.check_rate_limit(
+            key=f"custom:{client_ip}",
+            max_requests=self.max_requests,
+            window_seconds=self.window_seconds
+        )
+
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "error": "rate_limit_exceeded",
+                    "message": "요청 제한을 초과했습니다.",
+                    "retry_after": metadata["retry_after"]
+                },
+                headers={
+                    "X-RateLimit-Limit": str(metadata["limit"]),
+                    "X-RateLimit-Remaining": str(metadata["remaining"]),
+                    "X-RateLimit-Reset": str(metadata["reset_at"]),
+                    "Retry-After": str(metadata["retry_after"])
+                }
+            )
+
+        request.state.rate_limit_metadata = metadata
