@@ -5,7 +5,7 @@ FastAPI 인증 의존성
 - 현재 사용자 가져오기
 """
 from typing import Optional, Union
-from fastapi import Depends, HTTPException, Header, status
+from fastapi import Depends, HTTPException, Header, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,6 +55,7 @@ async def get_current_user_from_jwt(
 
 
 async def get_current_user_from_api_key(
+    request: Request,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
     db: AsyncSession = Depends(get_db)
 ) -> Optional[tuple[APIKey, User]]:
@@ -62,6 +63,7 @@ async def get_current_user_from_api_key(
     API 키로 현재 사용자 가져오기
 
     Args:
+        request: FastAPI Request 객체 (IP 주소 추출용)
         x_api_key: API 키 헤더
         db: 데이터베이스 세션
 
@@ -71,8 +73,14 @@ async def get_current_user_from_api_key(
     if not x_api_key:
         return None
 
+    # 클라이언트 IP 주소 추출
+    client_ip = request.client.host if request.client else None
+
     auth_service = AuthService(db)
-    is_valid, api_key_obj, user = await auth_service.verify_api_key(x_api_key)
+    is_valid, api_key_obj, user = await auth_service.verify_api_key(
+        x_api_key,
+        client_ip=client_ip
+    )
 
     if not is_valid or not api_key_obj or not user:
         return None
@@ -163,6 +171,7 @@ async def get_current_admin_user(
 
 
 async def require_api_key(
+    request: Request,
     x_api_key: str = Header(..., alias="X-API-Key"),
     db: AsyncSession = Depends(get_db)
 ) -> tuple[APIKey, User]:
@@ -170,6 +179,7 @@ async def require_api_key(
     API 키 인증 필수 (JWT 허용 안 함)
 
     Args:
+        request: FastAPI Request 객체 (IP 주소 추출용)
         x_api_key: API 키 헤더
         db: 데이터베이스 세션
 
@@ -179,8 +189,14 @@ async def require_api_key(
     Raises:
         HTTPException: API 키가 유효하지 않은 경우
     """
+    # 클라이언트 IP 주소 추출
+    client_ip = request.client.host if request.client else None
+
     auth_service = AuthService(db)
-    is_valid, api_key_obj, user = await auth_service.verify_api_key(x_api_key)
+    is_valid, api_key_obj, user = await auth_service.verify_api_key(
+        x_api_key,
+        client_ip=client_ip
+    )
 
     if not is_valid or not api_key_obj or not user:
         raise HTTPException(
