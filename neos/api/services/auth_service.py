@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Tuple, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
+from sqlalchemy.orm import selectinload
 import uuid
 
 from neos.database.models import User, APIKey, RefreshToken
@@ -198,9 +199,12 @@ class AuthService:
             return False, "유효하지 않은 Refresh Token입니다.", None
 
         # DB에서 Refresh Token 확인
+        # selectinload를 사용하여 User를 함께 로드 (N+1 쿼리 방지)
         token_hash = hash_token(refresh_token)
         result = await self.db.execute(
-            select(RefreshToken).where(
+            select(RefreshToken)
+            .options(selectinload(RefreshToken.user))
+            .where(
                 and_(
                     RefreshToken.token_hash == token_hash,
                     RefreshToken.user_id == user_id,
@@ -215,12 +219,8 @@ class AuthService:
         if not db_token:
             return False, "유효하지 않거나 만료된 Refresh Token입니다.", None
 
-        # 사용자 조회
-        result = await self.db.execute(
-            select(User).where(User.user_id == user_id)
-        )
-        user = result.scalar_one_or_none()
-
+        # 사용자 확인 (이미 eager loading으로 로드됨)
+        user = db_token.user
         if not user or not user.is_active:
             return False, "유효하지 않은 사용자입니다.", None
 
@@ -398,10 +398,13 @@ class AuthService:
             (유효 여부, APIKey 객체, User 객체)
         """
         # API 키 prefix로 후보 조회 (성능 최적화)
+        # selectinload를 사용하여 User를 함께 로드 (N+1 쿼리 방지)
         key_prefix = api_key[:12] + "..." if len(api_key) >= 12 else api_key
 
         result = await self.db.execute(
-            select(APIKey).where(
+            select(APIKey)
+            .options(selectinload(APIKey.user))
+            .where(
                 and_(
                     APIKey.key_prefix == key_prefix,
                     APIKey.is_active
@@ -426,8 +429,8 @@ class AuthService:
         if api_key_obj.expires_at and api_key_obj.expires_at < datetime.utcnow():
             return False, None, None
 
-        # 사용자 조회
-        user = await self.get_user_by_id(api_key_obj.user_id)
+        # 사용자 확인 (이미 eager loading으로 로드됨)
+        user = api_key_obj.user
         if not user or not user.is_active:
             return False, None, None
 
