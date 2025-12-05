@@ -338,7 +338,8 @@ class TestAPIKeyManagement:
 async def client():
     """Test client fixture"""
     from neos.main import app
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    from httpx import ASGITransport
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
 

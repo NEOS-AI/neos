@@ -157,13 +157,17 @@ class TestTokenDecoding:
 
     def test_is_token_expired_actually_expired(self):
         """실제로 만료된 토큰"""
+        from unittest.mock import patch
         data = {"user_id": "test_user_123"}
-        # 과거 시간으로 만료
-        expires_delta = timedelta(seconds=-10)
-        token = create_access_token(data, expires_delta=expires_delta)
 
-        # 짧은 대기 후 확인
-        time.sleep(0.1)
+        # 과거 시간으로 mock
+        past_time = datetime.utcnow() - timedelta(days=1)
+        with patch('neos.utils.jwt.datetime') as mock_datetime:
+            mock_datetime.utcnow.return_value = past_time
+            mock_datetime.fromtimestamp = datetime.fromtimestamp
+            token = create_access_token(data, expires_delta=timedelta(minutes=15))
+
+        # 현재 시간에서 확인하면 만료되어야 함
         assert is_token_expired(token) is True
 
     def test_get_token_expiration(self):
@@ -190,13 +194,18 @@ class TestTokenExpiration:
 
     def test_expired_token_verification_fails(self):
         """만료된 토큰 검증 실패"""
+        from unittest.mock import patch
         data = {"user_id": "test_user_123"}
-        expires_delta = timedelta(seconds=-10)
-        token = create_access_token(data, expires_delta=expires_delta)
 
-        time.sleep(0.1)
+        # 과거 시간으로 토큰 생성
+        past_time = datetime.utcnow() - timedelta(days=1)
+        with patch('neos.utils.jwt.datetime') as mock_datetime:
+            mock_datetime.utcnow.return_value = past_time
+            mock_datetime.fromtimestamp = datetime.fromtimestamp
+            token = create_access_token(data, expires_delta=timedelta(minutes=15))
+
+        # 현재 시간에 검증하면 실패해야 함
         payload = verify_token(token, token_type="access")
-
         assert payload is None
 
     def test_token_expiration_time_correct(self):
