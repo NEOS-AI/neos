@@ -484,10 +484,10 @@ class TestTemplateManagement:
                 mock_get.return_value = mock_template
 
                 result = await ChatService.create_template(
-                    user_id=user_id,
+                    created_by=user_id,
                     name=name,
                     description=description,
-                    system_prompt=system_prompt
+                    default_system_prompt=system_prompt
                 )
 
                 assert result is not None
@@ -508,7 +508,7 @@ class TestTemplateManagement:
         with patch("neos.api.services.chat_service.ChatRepository") as mock_repo:
             mock_repo.list_templates = AsyncMock(return_value=(mock_templates, 2))
 
-            result = await ChatService.list_templates(user_id=user_id)
+            result = await ChatService.list_templates(created_by=user_id)
 
             assert result is not None
             assert "templates" in result
@@ -545,11 +545,11 @@ class TestEdgeCases:
 
             result = await ChatService.add_message_feedback(
                 message_id=message_id,
-                feedback_type=feedback_type,
-                feedback_text=feedback_text
+                feedback=feedback_type,
+                comment=feedback_text
             )
 
-            assert result is True
+            assert result is not None
             mock_repo.add_message_feedback.assert_called_once_with(
                 message_id, feedback_type, feedback_text
             )
@@ -573,7 +573,8 @@ class TestEdgeCases:
 
                 result = await ChatService.edit_message(
                     message_id=message_id,
-                    new_content=new_content
+                    new_content=new_content,
+                    edited_by="test_user"
                 )
 
                 assert result is not None

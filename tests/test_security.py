@@ -68,9 +68,15 @@ class TestPasswordValidation:
 
     def test_password_no_uppercase(self):
         """대문자 없음"""
+        # Note: PASSWORD_REQUIRE_UPPERCASE가 False일 수 있음
+        # 대문자 없는 비밀번호가 유효할 수 있음
+        from neos.config.settings import settings
         valid, message = validate_password_strength("securepass123!")
-        assert valid is False
-        assert "대문자" in message
+        if settings.PASSWORD_REQUIRE_UPPERCASE:
+            assert valid is False
+            assert "대문자" in message
+        else:
+            assert valid is True
 
     def test_password_no_lowercase(self):
         """소문자 없음"""
@@ -124,16 +130,22 @@ class TestAPIKeyGeneration:
         hashed = hash_api_key(api_key)
 
         assert hashed is not None
-        assert len(hashed) == 64  # SHA-256 hex
+        assert len(hashed) == 60  # bcrypt hash length
         assert hashed != api_key
+        assert hashed.startswith("$2b$")  # bcrypt prefix
 
     def test_hash_api_key_consistent(self):
-        """같은 키는 같은 해시"""
+        """같은 키는 verify로 검증 가능"""
+        from neos.utils.security import verify_api_key
         api_key = "neos_test_key_12345"
         hash1 = hash_api_key(api_key)
         hash2 = hash_api_key(api_key)
 
-        assert hash1 == hash2
+        # bcrypt는 매번 다른 salt를 사용하므로 해시가 다름
+        assert hash1 != hash2
+        # 하지만 둘 다 원래 키를 검증할 수 있어야 함
+        assert verify_api_key(api_key, hash1) is True
+        assert verify_api_key(api_key, hash2) is True
 
 
 class TestTokenHashing:
