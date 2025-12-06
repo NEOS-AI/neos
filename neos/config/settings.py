@@ -65,7 +65,35 @@ class Settings(BaseSettings):
 
     # 에이전트 설정
     MAX_ITERATIONS: int = int(env_vars.get("MAX_ITERATIONS", 10))
-    AGENT_TIMEOUT: int = int(env_vars.get("AGENT_TIMEOUT", 300))  # 5분
+    AGENT_TIMEOUT: int = int(env_vars.get("AGENT_TIMEOUT", 300))  # 5분 (기본값)
+
+    # 에이전트별 타임아웃 설정 (초 단위) - 성능 최적화
+    AGENT_TIMEOUTS: dict = {
+        # 검색 에이전트 - 빠른 응답 필요 (기존 600초 → 20초로 대폭 단축)
+        "knowledge_search": int(env_vars.get("TIMEOUT_KNOWLEDGE_SEARCH", 20)),
+        "realtime_info_search": int(env_vars.get("TIMEOUT_REALTIME_INFO_SEARCH", 20)),
+        "realtime_data_search": int(env_vars.get("TIMEOUT_REALTIME_DATA_SEARCH", 20)),
+        "multi_query_search": int(env_vars.get("TIMEOUT_MULTI_QUERY_SEARCH", 30)),
+        "web_lookup": int(env_vars.get("TIMEOUT_WEB_LOOKUP", 15)),
+
+        # 분석 에이전트 - 중간 수준 타임아웃
+        "data_analysis": int(env_vars.get("TIMEOUT_DATA_ANALYSIS", 60)),
+        "comparative_analysis": int(env_vars.get("TIMEOUT_COMPARATIVE_ANALYSIS", 60)),
+        "web_content_analysis": int(env_vars.get("TIMEOUT_WEB_CONTENT_ANALYSIS", 45)),
+
+        # 생성 에이전트 - 작업 유형별 차등
+        "image_generation": int(env_vars.get("TIMEOUT_IMAGE_GENERATION", 120)),
+        "api_call": int(env_vars.get("TIMEOUT_API_CALL", 30)),
+        "file_processing": int(env_vars.get("TIMEOUT_FILE_PROCESSING", 90)),
+        "task_creation": int(env_vars.get("TIMEOUT_TASK_CREATION", 30)),
+
+        # Deep Research 에이전트 - 장시간 작업 허용
+        "deep_research": int(env_vars.get("TIMEOUT_DEEP_RESEARCH", 300)),
+        "hyper_deep_research": int(env_vars.get("TIMEOUT_HYPER_DEEP_RESEARCH", 600)),
+    }
+
+    # 검색 오케스트레이션 타임아웃 (기존 600초 → 20초)
+    SEARCH_ORCHESTRATION_TIMEOUT: int = int(env_vars.get("SEARCH_ORCHESTRATION_TIMEOUT", 20))
 
     # 동시성 설정
     MAX_CONCURRENT_WORKFLOWS: int = int(env_vars.get("MAX_CONCURRENT_WORKFLOWS", 100))
