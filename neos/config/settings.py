@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Union
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
 import os
@@ -118,7 +118,7 @@ class Settings(BaseSettings):
     CIRCUIT_BREAKER_EXPECTED_EXCEPTION: bool = True  # 예외 발생 시 실패로 간주
 
     # CORS 설정
-    CORS_ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]
+    CORS_ALLOWED_ORIGINS: Union[str, List[str]] = ["http://localhost:3000"]
     CORS_ALLOW_CREDENTIALS: bool = True
 
     @field_validator('CORS_ALLOWED_ORIGINS', mode='before')
@@ -254,6 +254,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"  # Ignore extra environment variables not defined in the model
 
 
 # 전역 설정 인스턴스
