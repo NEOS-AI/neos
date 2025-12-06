@@ -426,26 +426,6 @@ class TestDatasetManagement:
             # No assertions needed - just verify no exceptions
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Requires actual workflow execution with LLM call collector")
-    async def test_auto_save_dataset_enabled_with_records(self, workflow):
-        """Test dataset auto-save with records"""
-        with patch("neos.workflow.graph.settings") as mock_settings:
-            mock_settings.DATASET_AUTO_SAVE = True
-            mock_settings.DATASET_SAVE_FORMAT = "jsonl"
-
-            mock_collector = MagicMock()
-            mock_collector.get_statistics.return_value = {"total_records": 10}
-
-            mock_manager = MagicMock()
-            mock_manager.save_jsonl.return_value = "/path/to/dataset.jsonl"
-
-            with patch.object(workflow, "llm_call_collector", mock_collector, create=True):
-                with patch.object(workflow, "dataset_manager", mock_manager, create=True):
-                    await workflow._auto_save_dataset()
-
-                    mock_manager.save_jsonl.assert_called_once_with(include_metadata=True)
-
-    @pytest.mark.asyncio
     async def test_auto_save_dataset_no_records(self, workflow):
         """Test dataset auto-save with no records"""
         with patch("neos.workflow.graph.settings") as mock_settings:

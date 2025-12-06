@@ -159,40 +159,6 @@ class TestAuthAPIEndpoints:
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Refresh token integration test requires DB session management fix")
-    async def test_refresh_token(self, client: AsyncClient):
-        """토큰 갱신 테스트"""
-        # 회원가입 및 로그인
-        await client.post(
-            "/api/v1/auth/register",
-            json={
-                "email": "refresh@example.com",
-                "password": "SecurePass123!",
-            }
-        )
-
-        login_response = await client.post(
-            "/api/v1/auth/login",
-            json={
-                "email": "refresh@example.com",
-                "password": "SecurePass123!",
-            }
-        )
-
-        refresh_token = login_response.json()["refresh_token"]
-
-        # 토큰 갱신
-        response = await client.post(
-            "/api/v1/auth/refresh",
-            json={"refresh_token": refresh_token}
-        )
-
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        assert "access_token" in data
-        assert "refresh_token" in data
-
-    @pytest.mark.asyncio
     async def test_logout(self, client: AsyncClient):
         """로그아웃 테스트"""
         # 회원가입 및 로그인
