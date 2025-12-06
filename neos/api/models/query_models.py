@@ -65,3 +65,65 @@ class HyperResearchReportsListResponse(BaseModel):
     success: bool
     reports: List[HyperResearchReportSummary]
     total_count: int
+
+
+# ============================================================================
+# Workflow Streaming Models
+# ============================================================================
+
+class WorkflowStreamEventType(str):
+    """워크플로우 스트리밍 이벤트 타입"""
+    STARTED = "started"
+    NODE_STARTED = "node_started"
+    NODE_COMPLETED = "node_completed"
+    AGENT_STARTED = "agent_started"
+    AGENT_PROGRESS = "agent_progress"
+    AGENT_COMPLETED = "agent_completed"
+    CONTENT_CHUNK = "content_chunk"
+    PROGRESS_UPDATE = "progress_update"
+    HEARTBEAT = "heartbeat"
+    ERROR = "error"
+    COMPLETED = "completed"
+
+
+class WorkflowStreamEvent(BaseModel):
+    """워크플로우 스트리밍 이벤트"""
+    event: str  # WorkflowStreamEventType 값
+    session_id: str
+    timestamp: str = Field(default_factory=lambda: __import__('datetime').datetime.utcnow().isoformat())
+    data: Dict[str, Any] = Field(default_factory=dict)
+
+    # 노드/에이전트 정보
+    node_name: Optional[str] = None
+    agent_name: Optional[str] = None
+
+    # 진행 상황
+    progress_percent: Optional[int] = None
+    current_step: Optional[str] = None
+    total_steps: Optional[int] = None
+
+    # 결과 데이터
+    content: Optional[str] = None
+    partial_response: Optional[str] = None
+    error: Optional[str] = None
+
+    # 메타데이터
+    execution_time_ms: Optional[int] = None
+    tokens_used: Optional[int] = None
+
+
+class WorkflowStreamRequest(BaseModel):
+    """워크플로우 스트리밍 요청"""
+    query: str = Field(..., min_length=1, max_length=10000, description="사용자 쿼리")
+    user_id: Optional[str] = Field(None, description="사용자 ID")
+    session_id: Optional[str] = Field(None, description="세션 ID")
+    preferences: Optional[Dict[str, Any]] = Field(default_factory=dict, description="사용자 설정")
+    stream_options: Optional[Dict[str, Any]] = Field(
+        default_factory=lambda: {
+            "include_heartbeat": True,
+            "heartbeat_interval_ms": 5000,
+            "include_agent_progress": True,
+            "include_partial_content": True
+        },
+        description="스트리밍 옵션"
+    )

@@ -1,10 +1,11 @@
 """검색 오케스트레이터 모듈"""
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 import asyncio
 import logging
 
+from neos.config.settings import settings
 from neos.utils.cache import cache_manager
 from neos.utils.circuit_breaker import AgentCircuitBreaker
 from neos.tools.tool_selector import ToolContext
@@ -125,13 +126,41 @@ class SearchOrchestrator:
             print(f"[WARNING] Failed to create MCP search task: {e}")
             return None
 
+    def _get_agent_timeout(self, agent_name: str) -> int:
+        """에이전트별 타임아웃 값 조회 (성능 최적화)"""
+        return settings.AGENT_TIMEOUTS.get(agent_name, settings.AGENT_TIMEOUT)
+
+    async def _execute_with_timeout(
+        self,
+        agent_name: str,
+        task: Any,
+        state: AgentState
+    ) -> Optional[Any]:
+        """개별 에이전트 타임아웃 적용하여 실행"""
+        timeout = self._get_agent_timeout(agent_name)
+        try:
+            result = await asyncio.wait_for(task, timeout=timeout)
+            logger.debug(f"에이전트 {agent_name} 완료 (타임아웃: {timeout}초)")
+            return result
+        except asyncio.TimeoutError:
+            error_msg = f"에이전트 {agent_name} 타임아웃 ({timeout}초 초과)"
+            logger.warning(error_msg)
+            state["errors"].append(error_msg)
+            return None
+        except Exception as e:
+            error_msg = f"에이전트 {agent_name} 실행 실패: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            state["errors"].append(error_msg)
+            return e
+
     async def _create_agent_tasks(self, state: AgentState, search_agents: List[str]) -> List:
-        """기본 에이전트 태스크 생성"""
+        """기본 에이전트 태스크 생성 (개별 타임아웃 적용)"""
         agent_tasks = []
 
         for agent_name in search_agents:
             try:
-                print(f"[DEBUG] Setting up task for agent: {agent_name}")
+                timeout = self._get_agent_timeout(agent_name)
+                print(f"[DEBUG] Setting up task for agent: {agent_name} (timeout: {timeout}s)")
                 agent = self.agents[agent_name]
                 context = {
                     "user_id": state["user_id"],
@@ -140,7 +169,12 @@ class SearchOrchestrator:
                     "query_intent": state.get("query_intent"),
                     "detected_language": state.get("detected_language")
                 }
-                task = agent.execute(state["original_query"], context)
+                # 개별 타임아웃이 적용된 래퍼 태스크 생성
+                task = self._execute_with_timeout(
+                    agent_name,
+                    agent.execute(state["original_query"], context),
+                    state
+                )
                 agent_tasks.append(task)
                 print(f"[DEBUG] Task created for agent: {agent_name}")
             except Exception as e:
@@ -156,14 +190,17 @@ class SearchOrchestrator:
         cache_key: str,
         state: AgentState
     ) -> Dict[str, Any]:
-        """검색 실행 및 결과 처리"""
-        print(f"[DEBUG] Executing {len(search_tasks)} search tasks...")
+        """검색 실행 및 결과 처리 (최적화된 타임아웃 적용)"""
+        orchestration_timeout = settings.SEARCH_ORCHESTRATION_TIMEOUT
+        print(f"[DEBUG] Executing {len(search_tasks)} search tasks (timeout: {orchestration_timeout}s)...")
 
         try:
-            print("[DEBUG] Starting asyncio.gather with 120s timeout...")
+            print(f"[DEBUG] Starting asyncio.gather with {orchestration_timeout}s timeout...")
+            # 개별 에이전트 타임아웃이 이미 적용되어 있으므로,
+            # 전체 오케스트레이션 타임아웃은 백업 안전장치 역할
             search_results = await asyncio.wait_for(
                 asyncio.gather(*search_tasks, return_exceptions=True),
-                timeout=600  # 10 minutes timeout for search
+                timeout=orchestration_timeout  # 설정값 사용 (기본 20초)
             )
             print(f"[DEBUG] Search execution completed, got {len(search_results)} results")
 
@@ -179,8 +216,9 @@ class SearchOrchestrator:
             self._record_execution_step(search_results, mcp_results_count, state)
 
         except asyncio.TimeoutError:
-            print("[ERROR] Search orchestration timed out after 10 minutes")
-            state["errors"].append("Search orchestration timed out after 10 minutes")
+            logger.warning(f"검색 오케스트레이션 타임아웃 ({orchestration_timeout}초)")
+            print(f"[ERROR] Search orchestration timed out after {orchestration_timeout} seconds")
+            state["errors"].append(f"Search orchestration timed out after {orchestration_timeout} seconds")
         except Exception as e:
             print(f"[ERROR] Search orchestration failed: {str(e)}")
             state["errors"].append(f"Search orchestration failed: {str(e)}")
