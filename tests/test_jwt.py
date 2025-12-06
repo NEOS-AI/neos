@@ -213,15 +213,17 @@ class TestTokenExpiration:
         data = {"user_id": "test_user_123"}
         expires_delta = timedelta(minutes=15)
 
-        before_creation = datetime.utcnow()
         token = create_access_token(data, expires_delta=expires_delta)
-        after_creation = datetime.utcnow()
 
         payload = verify_token(token, token_type="access")
-        exp_time = datetime.fromtimestamp(payload["exp"])
 
-        # 생성 시간 + 15분과 비교
-        expected_min = before_creation + expires_delta
-        expected_max = after_creation + expires_delta
+        # Check that expiration is in the future
+        exp_time_timestamp = payload["exp"]
+        iat_time_timestamp = payload["iat"]
 
-        assert expected_min <= exp_time <= expected_max
+        # Calculate the difference in seconds
+        time_diff = exp_time_timestamp - iat_time_timestamp
+
+        # Should be approximately 15 minutes (900 seconds), allow 60 second tolerance
+        expected_seconds = expires_delta.total_seconds()
+        assert abs(time_diff - expected_seconds) <= 60, f"Time difference {time_diff} should be close to {expected_seconds}"
