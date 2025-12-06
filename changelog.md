@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.13.0 (2025-12-06)
+- [x] Implement Skills module for extensibility
+- [x] Add skill-based tool selection to agents
+- [x] Add research and workflow skills to neos
+- [x] Analyze and improve Neos backend code
+  - [x] Security hardening by forcing JWT secret key in .env
+  - [x] Update CORS policy
+  - [x] API key hashing algorithm update to bcrypt
+  - [x] Optimize DB connection pooling
+  - [x] Use context manager for session handling to prevent leaks
+  - [x] Introduce circuit breaker pattern for external API calls
+  - [x] Enable the semantic cache by default
+  - [x] Add Redis connection pool settings
+- [x] Redis-based Rate Limiting
+- [x] API Key Scope Management
+- [x] Fix up N+1 issues in backend code
+- [x] Fix pytest test suite configuration errors
+  - [x] Fix CORS_ALLOWED_ORIGINS parsing error preventing test collection
+  - [x] Fix extra environment variables validation error
+  - [x] Fix event loop conflicts in async tests with database manager reset
+  - [x] Create centralized conftest.py with proper fixture management
+  - [x] Implement automatic test data cleanup between tests
+  - [x] Fix foreign key constraint violations in test cleanup
+  - [x] Test suite now operational: 273/287 tests passing (95.1%), 0 errors
+- [x] Timeout Optimization
+  - [x] Reduce search orchestration timeout from 600s to 20s (configurable)
+  - [x] Add per-agent timeout settings (AGENT_TIMEOUTS dict)
+  - [x] Implement individual agent timeout wrapping for graceful handling
+  - [x] Search agents: 15-30s, Analysis agents: 45-60s, Generation agents: 30-120s
+  - [x] Deep research agents retain longer timeouts (300-600s)
+- [x] Streaming Response Implementation
+  - [x] Add SSE-based /query/stream endpoint for real-time workflow updates
+  - [x] Add WebSocket endpoints (/ws/query/{session_id}, /ws/query/detailed/{session_id})
+  - [x]Implement WorkflowStreamCallback for event-based progress tracking
+  - [x] Support heartbeat, node progress, agent progress, and partial content events
+  - [x] Add WorkflowStreamEvent and WorkflowStreamRequest models
+
 ## v0.12.0 (2025-11-30)
 - [x] Add context saving strategy
   - [x] context optimization for deep research
