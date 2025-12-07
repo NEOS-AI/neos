@@ -65,25 +65,12 @@ class AnthropicProvider(LLMProvider):
         }
 
         # Thinking block 제어
-        # THINKING_BLOCKS_ENABLED가 False이거나 MAX_THINKING_LENGTH가 0이면 thinking 비활성화
-        if not settings.THINKING_BLOCKS_ENABLED or settings.MAX_THINKING_LENGTH == 0:
-            # TODO: Anthropic API의 실제 thinking 제어 파라미터 적용 필요
-            #
-            # Anthropic API 문서 확인 필요 항목:
-            # 1. thinking 파라미터 존재 여부
-            # 2. extended_thinking 파라미터 사용법
-            # 3. LangChain Anthropic의 지원 여부
-            #
-            # 예상 구현:
-            # if "model_kwargs" not in kwargs:
-            #     kwargs["model_kwargs"] = {}
-            # kwargs["model_kwargs"]["thinking"] = False  # 또는 유사한 파라미터
-            #
-            # 현재 상태: 설정 구조만 준비, 실제 thinking block 제어는 동작하지 않음
-            # 영향: 20-40% 토큰 절약 효과 미실현
-            logger.debug("[LLMFactory] Thinking block control requested but not implemented yet")
-            pass
-
+        if settings.THINKING_BLOCKS_ENABLED or settings.MAX_THINKING_LENGTH > 0:
+            thinking={
+                "type": "enabled",
+                "budget_tokens": settings.MAX_THINKING_LENGTH
+            }
+            default_params["thinking"] = thinking
         default_params.update(kwargs)
 
         return ChatAnthropic(**default_params)
