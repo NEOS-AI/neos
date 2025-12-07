@@ -31,6 +31,19 @@ class Settings(BaseSettings):
     SEMANTIC_CACHE_ENABLED: bool = bool(env_vars.get("SEMANTIC_CACHE_ENABLED", True))  # 개선: 기본값 활성화
     SEMANTIC_CACHE_THRESHOLD: float = float(env_vars.get("SEMANTIC_CACHE_THRESHOLD", 0.90))  # 개선: 0.95 → 0.90 (더 많은 캐시 히트)
 
+    # 스마트 캐시 설정 (pgvector 기반 의미론적 캐싱 + 동적 TTL)
+    SMART_CACHE_ENABLED: bool = bool(env_vars.get("SMART_CACHE_ENABLED", True))  # 스마트 캐시 활성화
+    SMART_CACHE_SIMILARITY_THRESHOLD: float = float(env_vars.get("SMART_CACHE_SIMILARITY_THRESHOLD", 0.85))  # 유사도 임계값
+    SMART_CACHE_MAX_ENTRIES: int = int(env_vars.get("SMART_CACHE_MAX_ENTRIES", 100000))  # 최대 캐시 엔트리 수
+    SMART_CACHE_STATISTICS_ENABLED: bool = bool(env_vars.get("SMART_CACHE_STATISTICS_ENABLED", True))  # 통계 수집 활성화
+
+    # 쿼리 유형별 동적 TTL 기본값 (초 단위, 환경변수로 오버라이드 가능)
+    SMART_CACHE_TTL_REALTIME: int = int(env_vars.get("SMART_CACHE_TTL_REALTIME", 900))  # 15분 - 실시간 정보
+    SMART_CACHE_TTL_FINANCIAL: int = int(env_vars.get("SMART_CACHE_TTL_FINANCIAL", 600))  # 10분 - 금융 데이터
+    SMART_CACHE_TTL_ANALYSIS: int = int(env_vars.get("SMART_CACHE_TTL_ANALYSIS", 604800))  # 7일 - 분석 결과
+    SMART_CACHE_TTL_RESEARCH: int = int(env_vars.get("SMART_CACHE_TTL_RESEARCH", 2592000))  # 30일 - 심층 연구
+    SMART_CACHE_TTL_GENERATION: int = int(env_vars.get("SMART_CACHE_TTL_GENERATION", 7776000))  # 90일 - 생성 콘텐츠
+
     # AI 서비스 API 키
     OPENAI_API_KEY: str = env_vars.get("OPENAI_API_KEY", "")
     ANTHROPIC_API_KEY: Optional[str] = env_vars.get("ANTHROPIC_API_KEY", None)
