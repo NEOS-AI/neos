@@ -320,3 +320,104 @@ class RefreshToken(Base):
         Index("idx_refresh_tokens_token_hash", "token_hash"),
         Index("idx_refresh_tokens_expires_at", "expires_at"),
     )
+
+
+# ============================================================================
+# Smart Cache Models (pgvector 기반)
+# ============================================================================
+
+class QueryCacheEntry(Base):
+    """
+    스마트 캐시 엔트리 - pgvector 기반 의미론적 캐싱
+
+    쿼리 유형별 동적 TTL과 의미 기반 유사 쿼리 캐싱을 지원합니다.
+    """
+    __tablename__ = "query_cache"
+
+    id = Column(Integer, primary_key=True)
+
+    # 쿼리 정보
+    query_text = Column(Text, nullable=False)
+    query_hash = Column(String(64), nullable=False, index=True)  # SHA-256 해시
+    query_vector = Column(Vector(1536))  # OpenAI embedding 차원
+
+    # 분류 정보 (동적 TTL 계산에 사용)
+    query_intent = Column(String(50), nullable=False, index=True)  # 쿼리 의도
+    complexity_score = Column(Float, default=0.0)  # 복잡도 점수 (0.0~1.0)
+
+    # 캐시된 응답
+    response_data = Column(JSONB, nullable=False)  # 캐시된 전체 응답
+    response_quality_score = Column(Float, default=0.0)  # 응답 품질 점수 (0.0~1.0)
+
+    # TTL 관리
+    ttl_seconds = Column(Integer, nullable=False)  # 계산된 TTL (초)
+    expires_at = Column(TIMESTAMP, nullable=False, index=True)  # 만료 시간
+
+    # 사용 통계
+    hit_count = Column(Integer, default=0)  # 캐시 히트 횟수
+    last_accessed_at = Column(TIMESTAMP, nullable=True)  # 마지막 접근 시간
+
+    # 멀티테넌시 (선택적)
+    user_id = Column(String(255), nullable=True, index=True)  # 사용자별 캐시
+    session_id = Column(String(255), nullable=True)  # 세션별 캐시
+
+    # 추가 메타데이터
+    cache_metadata = Column(JSONB, default=dict)  # 추가 메타데이터
+
+    # 타임스탬프
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # 인덱스
+    __table_args__ = (
+        Index("idx_query_cache_expires_at", "expires_at"),
+        Index("idx_query_cache_intent", "query_intent"),
+        Index("idx_query_cache_hash", "query_hash"),
+        Index("idx_query_cache_user_id", "user_id"),
+        # pgvector IVFFlat 인덱스는 마이그레이션 SQL에서 별도 생성
+    )
+
+
+class CacheStatistics(Base):
+    """
+    캐시 통계 - 캐시 성능 모니터링용
+
+    시간대별, 쿼리 유형별 캐시 히트율 및 성능 지표 추적
+    """
+    __tablename__ = "cache_statistics"
+
+    id = Column(Integer, primary_key=True)
+
+    # 시간 구간
+    time_bucket = Column(TIMESTAMP, nullable=False, index=True)  # 1시간 단위
+
+    # 쿼리 유형
+    query_intent = Column(String(50), nullable=False, index=True)
+
+    # 통계 데이터
+    total_requests = Column(Integer, default=0)  # 총 요청 수
+    cache_hits = Column(Integer, default=0)  # 캐시 히트 수
+    cache_misses = Column(Integer, default=0)  # 캐시 미스 수
+    semantic_hits = Column(Integer, default=0)  # 의미 기반 히트 수
+    exact_hits = Column(Integer, default=0)  # 정확 매칭 히트 수
+
+    # 성능 지표
+    avg_similarity_score = Column(Float, default=0.0)  # 평균 유사도 점수
+    avg_response_time_ms = Column(Integer, default=0)  # 평균 응답 시간
+    avg_ttl_remaining = Column(Integer, default=0)  # 평균 남은 TTL
+
+    # 저장 현황
+    total_cached_entries = Column(Integer, default=0)  # 총 캐시 엔트리 수
+    storage_size_bytes = Column(Integer, default=0)  # 저장 용량 (바이트)
+
+    # 타임스탬프
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # 인덱스
+    __table_args__ = (
+        Index("idx_cache_stats_time_bucket", "time_bucket"),
+        Index("idx_cache_stats_intent", "query_intent"),
+        # 복합 인덱스: 시간대 + 쿼리 유형
+        Index("idx_cache_stats_time_intent", "time_bucket", "query_intent"),
+    )

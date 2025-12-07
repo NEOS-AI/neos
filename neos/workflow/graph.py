@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime
 import hashlib
 import logging
@@ -28,6 +28,7 @@ from neos.agents.generation_agents import (
 )
 from neos.agents.skill_based_tool_selector import SkillBasedToolSelector
 from neos.utils.cache import cache_manager
+from neos.utils.smart_cache_manager import smart_cache_manager
 from neos.config.settings import settings
 from neos.tools.tool_selector import tool_selector
 
@@ -238,17 +239,26 @@ class MultiAgentWorkflow:
     async def execute_workflow(self, user_input: Dict[str, Any]) -> Dict[str, Any]:
         """
         워크플로우 실행 (Enterprise Edition with distributed state)
+
+        스마트 캐시 통합:
+        - pgvector 기반 의미론적 유사 쿼리 캐싱
+        - 쿼리 유형별 동적 TTL
         """
         # Ensure graph is initialized
         await self._ensure_graph_initialized()
 
         query = user_input["query"]
+        user_id = user_input.get("user_id")
         print(f"[DEBUG] Starting workflow execution for query: {query[:50]}...")
 
-        # 캐시 키 생성
-        cache_key = self._generate_cache_key(query)
+        # 1. 스마트 캐시 확인 (활성화된 경우)
+        if settings.SMART_CACHE_ENABLED:
+            smart_cache_result = await self._check_smart_cache(query, user_id)
+            if smart_cache_result:
+                return smart_cache_result
 
-        # 캐시된 응답 확인
+        # 2. 기존 Redis 캐시 확인 (폴백)
+        cache_key = self._generate_cache_key(query)
         cached_response = await self._check_cached_response(cache_key)
         if cached_response:
             return cached_response
@@ -267,6 +277,17 @@ class MultiAgentWorkflow:
 
             # 성공적인 결과 캐싱
             if result["success"] and result["response"]:
+                # 스마트 캐시에 저장 (활성화된 경우)
+                if settings.SMART_CACHE_ENABLED:
+                    await self._save_to_smart_cache(
+                        query=query,
+                        result=result,
+                        final_state=final_state,
+                        user_id=user_id,
+                        session_id=user_input.get("session_id")
+                    )
+
+                # 기존 Redis 캐시에도 저장 (폴백용)
                 await self._cache_workflow_result(cache_key, result)
 
             # 데이터셋 자동 저장 (LLM 호출이 있었을 경우)
@@ -278,6 +299,109 @@ class MultiAgentWorkflow:
         except Exception as e:
             print(f"[ERROR] Workflow execution failed: {str(e)}")
             return self._create_error_result(e, initial_state)
+
+    async def _check_smart_cache(
+        self,
+        query: str,
+        user_id: str = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        스마트 캐시에서 유사 쿼리 검색
+
+        pgvector를 사용하여 의미론적으로 유사한 캐시된 응답을 찾습니다.
+        """
+        try:
+            print("[DEBUG] Checking smart cache (pgvector semantic search)...")
+
+            cache_result = await smart_cache_manager.get_cached_response(
+                query=query,
+                user_id=user_id
+            )
+
+            if cache_result.hit:
+                response = cache_result.response
+                print(
+                    f"[DEBUG] Smart cache HIT: type={cache_result.hit_type}, "
+                    f"similarity={response.similarity_score:.3f}, "
+                    f"search_time={cache_result.search_time_ms}ms"
+                )
+
+                # 캐시된 응답 반환
+                result = response.response_data.copy()
+                result["cache_hit"] = True
+                result["smart_cache_hit"] = True
+                result["cache_hit_type"] = cache_result.hit_type
+                result["similarity_score"] = response.similarity_score
+                result["original_query"] = response.query_text
+                result["timestamp"] = datetime.utcnow().isoformat()
+
+                return result
+
+            print(
+                f"[DEBUG] Smart cache MISS: search_time={cache_result.search_time_ms}ms"
+            )
+            return None
+
+        except Exception as e:
+            print(f"[WARNING] Smart cache check failed: {e}")
+            return None
+
+    async def _save_to_smart_cache(
+        self,
+        query: str,
+        result: Dict[str, Any],
+        final_state: AgentState,
+        user_id: str = None,
+        session_id: str = None
+    ) -> None:
+        """
+        결과를 스마트 캐시에 저장
+
+        동적 TTL: 쿼리 의도, 복잡도, 품질 점수에 따라 자동 계산
+        """
+        try:
+            # 쿼리 임베딩 가져오기
+            query_embedding = final_state.get("query_embedding")
+            if not query_embedding:
+                print("[DEBUG] No query embedding available, skipping smart cache save")
+                return
+
+            # 쿼리 분류 정보 가져오기
+            classification = final_state.get("query_classification", {})
+            query_intent = final_state.get("query_intent", "information_seeking")
+            complexity_score = classification.get("complexity_score", 0.0)
+            quality_score = result.get("quality_score", 0.7)
+
+            # 캐시할 데이터 준비 (cache_hit 정보 제외)
+            cache_data = {k: v for k, v in result.items() if k != "cache_hit"}
+
+            # 스마트 캐시에 저장
+            success = await smart_cache_manager.set_cached_response(
+                query=query,
+                query_vector=query_embedding,
+                query_intent=query_intent,
+                complexity_score=complexity_score,
+                response_data=cache_data,
+                quality_score=quality_score,
+                user_id=user_id,
+                session_id=session_id,
+                metadata={
+                    "required_agents": final_state.get("required_agents", []),
+                    "execution_steps": final_state.get("execution_steps", []),
+                    "detected_language": final_state.get("detected_language")
+                }
+            )
+
+            if success:
+                print(
+                    f"[DEBUG] Smart cache saved: intent={query_intent}, "
+                    f"complexity={complexity_score:.2f}, quality={quality_score:.2f}"
+                )
+            else:
+                print("[WARNING] Failed to save to smart cache")
+
+        except Exception as e:
+            print(f"[WARNING] Smart cache save failed: {e}")
 
 
     def _generate_cache_key(self, query: str) -> str:
@@ -434,7 +558,7 @@ class MultiAgentWorkflow:
     async def health_check(self) -> Dict[str, Any]:
         """
         워크플로우 상태 확인 (Enterprise Edition)
-        Includes checkpointer health status
+        Includes checkpointer health status and smart cache statistics
         """
         health_status = {
             "workflow": "healthy",
@@ -464,6 +588,27 @@ class MultiAgentWorkflow:
                 health_status["checkpointer_stats"] = stats
             except Exception as e:
                 health_status["components"]["checkpointer"] = f"error: {str(e)}"
+
+            # Check Smart Cache status
+            if settings.SMART_CACHE_ENABLED:
+                try:
+                    cache_stats = await smart_cache_manager.get_cache_statistics(hours=24)
+                    health_status["components"]["smart_cache"] = "healthy"
+                    health_status["smart_cache_stats"] = {
+                        "enabled": True,
+                        "hit_rate_percent": cache_stats.get("hit_rate_percent", 0),
+                        "cache_entries": cache_stats.get("cache_entries", 0),
+                        "total_requests_24h": cache_stats.get("total_requests", 0),
+                        "semantic_hits_24h": cache_stats.get("semantic_hits", 0),
+                        "exact_hits_24h": cache_stats.get("exact_hits", 0),
+                        "similarity_threshold": cache_stats.get("similarity_threshold", 0.85)
+                    }
+                except Exception as e:
+                    health_status["components"]["smart_cache"] = f"error: {str(e)}"
+                    health_status["smart_cache_stats"] = {"enabled": True, "error": str(e)}
+            else:
+                health_status["components"]["smart_cache"] = "disabled"
+                health_status["smart_cache_stats"] = {"enabled": False}
 
         except Exception as e:
             health_status["workflow"] = f"error: {str(e)}"
