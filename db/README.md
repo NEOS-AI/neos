@@ -69,4 +69,7 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/001_add_c
 
 # Add deep research events table for real-time progress tracking
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/002_add_deep_research_events.sql
+
+# Add smart cache table
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/003_add_smart_cache_tables.sql
 ```
