@@ -73,3 +73,9 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/002_add_d
 # Add smart cache table
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/003_add_smart_cache_tables.sql
 ```
+
+### Migrate database schema for backoffice
+
+```bash
+psql -U postgres -d neos --port 5432 --host localhost -f backoffice/db/migrations/001_create_analytics_tables.sql
+```
