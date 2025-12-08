@@ -1,5 +1,5 @@
 /**
- * Next.js Middleware
+ * Next.js Proxy
  * - 기본 인증 체크 (쿠키 존재 여부)
  * - 보안 헤더 추가
  * - 상세 세션 검증은 각 API route 및 Server Component에서 수행
@@ -66,7 +66,7 @@ function addSecurityHeaders(response: NextResponse): NextResponse {
   return response;
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // API auth routes는 항상 허용
