@@ -56,8 +56,13 @@ export function getClientIp(request: NextRequest): string {
     return realIp;
   }
 
-  // 직접 연결된 IP
-  return request.ip || 'unknown';
+  // CF-Connecting-IP 헤더 확인 (Cloudflare)
+  const cfConnectingIp = request.headers.get('cf-connecting-ip');
+  if (cfConnectingIp) {
+    return cfConnectingIp;
+  }
+
+  return 'unknown';
 }
 
 /**
