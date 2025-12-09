@@ -1,6 +1,6 @@
 [project]
 name = "neos"
-version = "0.13.0"
+version = "0.14.0"
 description = "NEOS: Intelligent Search and Analysis Agent Workflow"
 readme = "README.md"
 requires-python = ">=3.12"
