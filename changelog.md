@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.14.0 (2025-12-09)
+
+- [x] Implement smart caching strategy for backend
+  - [x] Add QueryCacheEntry and CacheStatistics models for persistent caching
+  - [x] Implement SmartCacheManager with dynamic TTL calculation based on query intent, complexity, and response quality
+  - [x] Integrate smart cache into workflow execution with semantic similarity search
+  - [x] Add PostgreSQL migration for query_cache and cache_statistics tables with pgvector indexes
+  - [x] Support configurable TTL by query type
+  - [x] Track cache statistics including hit rates, semantic vs exact hits, and performance metrics
+- [x] Add support for `thinking` block for Anthropic APIs
+- [x] Build user behavior analytics backoffice system
+  - [x] Launched Analytics Backoffice application with full dashboard for conversation analysis
+  - [x] Added analysis run management: create, list, monitor, and delete analysis runs
+  - [x] Introduced interactive cluster hierarchy visualization with drill-down exploration
+  - [x] Added UMAP 2D visualization with dynamic color-by options (task type, language, cluster)
+  - [x] Implemented trending topics and facet distribution analysis
+  - [x] Added cluster search, comparison, and detailed statistics views
+  - [x] Integrated privacy protections: PII detection, masking, and k-anonymity filtering
+
 ## v0.13.0 (2025-12-06)
 - [x] Implement Skills module for extensibility
 - [x] Add skill-based tool selection to agents
