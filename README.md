@@ -43,7 +43,7 @@ A next-generation AI system built with LangGraph, CrewAI, and FastAPI. Multiple 
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/NEOS-AI/neos.git
 cd neos
 
 # Create and activate virtual environment
