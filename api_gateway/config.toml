@@ -1,0 +1,99 @@
+# API Gateway Configuration
+# 이 파일은 Pingora 기반 API 게이트웨이의 설정을 담당합니다.
+
+[server]
+# 게이트웨이 서버 설정
+listen_addr = "0.0.0.0"
+listen_port = 8080
+# 워커 스레드 수 (0 = CPU 코어 수 자동 감지)
+threads = 0
+# 작업 큐 용량
+work_stealing = true
+
+[upstream]
+# 백엔드 API 서버 설정
+host = "127.0.0.1"
+port = 8518
+# 헬스체크 설정
+health_check_interval_secs = 10
+# 타임아웃 설정 (초)
+connect_timeout_secs = 5
+read_timeout_secs = 60
+write_timeout_secs = 60
+# 연결 풀 설정
+pool_size = 100
+
+[jwt]
+# JWT 인증 설정
+# 중요: 프로덕션 환경에서는 환경변수 JWT_SECRET_KEY로 오버라이드하세요
+secret_key = "neos_is_a_multiagent_ai_platform_for_research_and_knowledge_work"
+# 지원하는 알고리즘
+algorithm = "HS256"
+# 토큰 유효성 검사 여부
+validate_exp = true
+# 토큰 만료 허용 오차 (초)
+leeway_secs = 60
+
+[api_key]
+# API 키 설정
+prefix = "neos_"
+# API 키 검증 시 bcrypt cost (기존 Python 백엔드와 일치해야 함)
+bcrypt_cost = 12
+
+[database]
+# PostgreSQL 데이터베이스 설정
+# 환경변수로 오버라이드 가능: DATABASE_URL
+host = "localhost"
+port = 5432
+database = "neos"
+username = "postgres"
+password = "postgres"
+# 연결 풀 설정
+pool_size = 10
+# SSL 모드: disable, prefer, require
+ssl_mode = "prefer"
+
+[auth]
+# 인증 관련 설정
+
+# 인증을 건너뛸 경로 (정규식 패턴)
+# 로그인, 회원가입, 헬스체크 등은 인증 없이 접근 가능
+public_paths = [
+    "^/api/v1/auth/login$",
+    "^/api/v1/auth/register$",
+    "^/api/v1/auth/refresh$",
+    "^/health$",
+    "^/health/ready$",
+    "^/health/live$",
+    "^/docs.*$",
+    "^/openapi.json$",
+    "^/redoc$",
+]
+
+# 헤더 이름 설정
+user_id_header = "X-User-ID"
+authorization_header = "Authorization"
+api_key_header = "X-API-Key"
+
+[rate_limit]
+# 레이트 리미팅 설정 (향후 구현)
+enabled = false
+default_rpm = 100  # 분당 요청 수
+burst_size = 20
+
+[logging]
+# 로깅 설정
+level = "info"
+# 로그 포맷: json, pretty
+format = "pretty"
+# 요청/응답 로깅
+log_requests = true
+log_responses = false
+
+[cors]
+# CORS 설정 (향후 구현)
+enabled = true
+allowed_origins = ["*"]
+allowed_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+allowed_headers = ["*"]
+max_age_secs = 86400
