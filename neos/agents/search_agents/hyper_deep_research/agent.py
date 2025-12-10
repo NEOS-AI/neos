@@ -1817,7 +1817,7 @@ class HyperDeepResearchAgent(SearchAgent):
             )
 
         print(
-            f"[DEBUG] LLM call tracked - Phase: {phase}, Tokens: {total_tokens}, "
+            f"[DEBUG] LLM call tracked - Phase: {phase}, Tokens: {total_tokens} (prompt_tokens={prompt_tokens}, response_tokens={response_tokens}), "
             f"Cost: ${estimated_cost:.4f}, Budget: {self.cost_optimizer.total_cost:.2f}/"
             f"{self.cost_optimizer.budget_limit:.2f}"
         )
