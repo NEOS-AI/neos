@@ -116,6 +116,15 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     DEBUG: bool = bool(env_vars.get("DEBUG", False))
 
+    # API 게이트웨이 설정
+    # 게이트웨이 모드가 활성화되면 X-User-ID 헤더를 신뢰합니다
+    API_GATEWAY_ENABLED: bool = env_vars.get("API_GATEWAY_ENABLED", "false").lower() in ("true", "1", "yes")
+    API_GATEWAY_USER_ID_HEADER: str = env_vars.get("API_GATEWAY_USER_ID_HEADER", "X-User-ID")
+    # 게이트웨이에서만 요청을 받도록 허용할 IP 목록 (비어있으면 모든 IP 허용)
+    API_GATEWAY_TRUSTED_IPS: List[str] = [
+        ip.strip() for ip in env_vars.get("API_GATEWAY_TRUSTED_IPS", "127.0.0.1,::1").split(",") if ip.strip()
+    ]
+
     # 인증 설정
     JWT_SECRET_KEY: str = env_vars.get("JWT_SECRET_KEY")
     JWT_ALGORITHM: str = "HS256"
