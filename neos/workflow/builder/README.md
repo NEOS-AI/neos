@@ -205,10 +205,6 @@ from neos.workflow.builder.executors import NodeExecutor
 # CLI 테스트
 uv run python -m neos.cli workflow-builder --help
 uv run python -m neos.cli workflow-builder agent list
-
-# 예제 실행
-uv run python examples/workflow_builder_example.py
-uv run python examples/workflow_builder_with_agents_example.py
 ```
 
 ## 📝 향후 확장
@@ -220,21 +216,3 @@ uv run python examples/workflow_builder_with_agents_example.py
 3. **커스텀 프로세서**: `executors.py`의 `execute_processor()` 확장
 4. **워크플로우 템플릿**: 새 파일 `templates.py` 추가
 5. **시각화 기능**: 새 파일 `visualizer.py` 추가
-
-## 🔍 변경사항
-
-### 기존 파일
-- ✅ `neos/workflow/builder.py` → `neos/workflow/builder_old.py` (백업)
-
-### 새로운 구조
-- ✅ `neos/workflow/builder/` (디렉토리)
-- ✅ 6개의 모듈 파일
-
-### 영향 없음
-- ✅ CLI (`neos/cli_workflow_builder.py`)
-- ✅ 예제 파일들 (`examples/*.py`)
-- ✅ Import 경로는 모두 동일
-
-## 🎉 완료
-
-워크플로우 빌더가 성공적으로 모듈화되었습니다!

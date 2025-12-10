@@ -218,67 +218,6 @@ RUSTFS_SECRET_KEY=your_secret_key
 
 ---
 
-## 테스트
-
-### 1. Python API 테스트
-
-```bash
-python examples/document_processing_example.py
-```
-
-예상 출력:
-```
-================================================================================
-문서 업로드 및 처리 예제
-================================================================================
-✅ 테스트 파일 생성: test_document.txt
-
-✅ 문서 처리 완료!
-   - Document ID: 1
-   - Filename: test_document.txt
-   - Status: completed
-   - Storage: file:///.../storage/documents/.../test_document.txt
-   - KG Extracted: True
-   - Embedding Processed: True
-```
-
-### 2. API 서버 실행
-
-```bash
-# 개발 모드로 서버 실행
-python neos/main.py
-
-# 또는 uvicorn 직접 실행
-uvicorn neos.main:app --reload --port 8518
-```
-
-### 3. REST API 테스트
-
-새 터미널에서:
-
-```bash
-# API 문서 확인
-open http://localhost:8518/docs
-
-# REST API 예제 실행
-python examples/document_api_example.py
-```
-
-### 4. 간단한 cURL 테스트
-
-```bash
-# Health check
-curl http://localhost:8518/api/v1/health
-
-# 문서 업로드
-echo "Test content" > test.txt
-curl -X POST "http://localhost:8518/api/v1/documents/upload" \
-  -F "file=@test.txt" \
-  -F "user_id=test_user"
-```
-
----
-
 ## 문제 해결
 
 ### 문제 1: pgvector 확장이 없음
@@ -393,8 +332,6 @@ USING ivfflat (embedding vector_cosine_ops);
 ## 참고 자료
 
 - [DOCUMENT_MANAGEMENT.md](./DOCUMENT_MANAGEMENT.md): 전체 문서
-- [examples/document_processing_example.py](../examples/document_processing_example.py): Python API 예제
-- [examples/document_api_example.py](../examples/document_api_example.py): REST API 예제
 - [pgvector GitHub](https://github.com/pgvector/pgvector): pgvector 문서
 
 ---

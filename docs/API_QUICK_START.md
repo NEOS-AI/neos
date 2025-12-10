@@ -32,12 +32,6 @@ STOCK_API_PROVIDER=yahoo
 uv sync
 ```
 
-### 3단계: 테스트 실행
-
-```bash
-python examples/api_agent_example.py
-```
-
 ## API 키 발급 방법
 
 ### OpenWeatherMap (날씨)

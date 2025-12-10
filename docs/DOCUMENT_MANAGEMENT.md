@@ -460,18 +460,3 @@ ALLOWED_FILE_EXTENSIONS=[".pdf", ".docx", ".txt", ".md"]
 -- 벡터 인덱스 생성
 CREATE INDEX ON document_chunks USING ivfflat (embedding vector_cosine_ops);
 ```
-
----
-
-## 예제 코드
-
-자세한 예제는 다음 파일을 참조하세요:
-
-- `examples/document_processing_example.py`: Python API 사용 예제
-- `examples/document_api_example.py`: REST API 사용 예제
-
----
-
-## 라이선스
-
-이 문서 관리 시스템은 NEOS 프로젝트의 일부입니다.

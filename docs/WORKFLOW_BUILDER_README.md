@@ -227,8 +227,6 @@ asyncio.run(run_workflow(1))
 
 ## 사용 예제
 
-전체 예제는 [examples/workflow_builder_example.py](../examples/workflow_builder_example.py)를 참고하세요.
-
 ### 예제 1: 웹 검색 워크플로우
 
 ```python
@@ -289,7 +287,6 @@ workflow_id = await builder.save(
 - **neos/tools/mcp_server_manager.py**: MCP 서버 관리
 - **neos/cli_workflow_builder.py**: CLI 인터페이스
 - **migrations/add_workflow_tables.sql**: 데이터베이스 마이그레이션
-- **examples/workflow_builder_example.py**: 사용 예제
 
 ## 문서
 

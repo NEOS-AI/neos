@@ -57,11 +57,7 @@ NEOS에 새로 추가된 문서 관리 기능에 대한 요약입니다.
 - `.env.template` (수정): 새 환경 변수 추가
 - `pyproject.toml` (수정): boto3 의존성 추가
 
-### 6. 예제 코드
-- `examples/document_processing_example.py`: Python API 사용 예제
-- `examples/document_api_example.py`: REST API 사용 예제
-
-### 7. 문서
+### 6. 문서
 - `docs/DOCUMENT_MANAGEMENT.md`: 전체 기능 문서
 - `docs/DOCUMENT_SETUP_GUIDE.md`: 설치 및 설정 가이드
 - `docs/DOCUMENT_FEATURE_SUMMARY.md`: 이 파일
@@ -320,12 +316,6 @@ pytest tests/test_knowledge_graph.py
 pytest tests/test_document_api.py
 ```
 
-### 예제 실행
-```bash
-python examples/document_processing_example.py
-python examples/document_api_example.py
-```
-
 ---
 
 ## 의존성
@@ -353,18 +343,13 @@ python examples/document_api_example.py
 - [storage_service.py](../neos/storage/storage_service.py): 스토리지 추상화
 - [knowledge_graph.py](../neos/pipelines/document/knowledge_graph.py): 지식 그래프 추출
 
-### 예제
-- [document_processing_example.py](../examples/document_processing_example.py): Python API
-- [document_api_example.py](../examples/document_api_example.py): REST API
-
 ---
 
 ## 다음 단계
 
 1. **설치 가이드 읽기**: [DOCUMENT_SETUP_GUIDE.md](./DOCUMENT_SETUP_GUIDE.md)
-2. **예제 실행**: `python examples/document_processing_example.py`
-3. **API 문서 확인**: `http://localhost:8518/docs`
-4. **프로덕션 배포**: 환경 변수, 보안, 모니터링 설정
+2. **API 문서 확인**: `http://localhost:8518/docs`
+3. **프로덕션 배포**: 환경 변수, 보안, 모니터링 설정
 
 ---
 

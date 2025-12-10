@@ -418,28 +418,6 @@ LLM_PROVIDER=openai  # "openai" or "anthropic"
 
 ---
 
-## 예제 코드
-
-전체 예제 코드는 다음 파일을 참조하세요:
-
-- **Python 예제**: `examples/multimodal_api_example.py`
-- **API 테스트**: `tests/test_multimodal_api.py`
-
-실행 방법:
-
-```bash
-# 서버 실행
-python -m neos.main
-
-# 예제 실행
-python examples/multimodal_api_example.py
-
-# 테스트 실행
-pytest tests/test_multimodal_api.py -v
-```
-
----
-
 ## 문제 해결
 
 ### Vision 분석이 작동하지 않을 때

@@ -143,10 +143,6 @@ neos/
 tests/
   test_pipelines.py            # 파이프라인 테스트
 
-examples/
-  test_multimodal_basic.py     # 기본 테스트 스크립트
-  demo_pipelines_standalone.py # 독립 실행 데모
-
 docs/
   MULTIMODAL_PIPELINES.md      # 상세 문서
   IMPLEMENTATION_SUMMARY.md    # 구현 요약 (본 문서)
@@ -281,23 +277,6 @@ registry.register(InputType.VIDEO, VideoPipeline())
 4. **자동 품질 평가**
    - 추출 품질 점수
    - 자동 재처리 트리거
-
-## 테스트
-
-테스트 파일이 작성되어 있으며, 다음과 같이 실행할 수 있습니다:
-
-```bash
-# pytest 사용
-pytest tests/test_pipelines.py -v
-
-# 기본 테스트 스크립트
-python examples/test_multimodal_basic.py
-
-# 독립 실행 데모
-python examples/demo_pipelines_standalone.py
-```
-
-**주의**: 현재 `langgraph` 의존성 문제로 인해 일부 테스트가 실패할 수 있습니다. 파이프라인 시스템 자체는 독립적으로 동작하도록 설계되었습니다.
 
 ## 설계 원칙
 
