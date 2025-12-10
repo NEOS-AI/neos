@@ -81,7 +81,6 @@ class HyperDeepResearchAgent(SearchAgent):
 
     def __init__(self):
         """Initialize the HyperDeepResearch agent."""
-        print("[DEBUG] HyperDeepResearchAgent.__init__ called")
         super().__init__(
             name="hyper_deep_research",
             search_type="hyper_deep_research",
@@ -90,32 +89,24 @@ class HyperDeepResearchAgent(SearchAgent):
             backstory="World-renowned research director combining academic rigor, "
                     "investigative journalism, and critical analysis depth."
         )
-        print("[DEBUG] Parent class initialized")
 
         # Research configuration
         self.research_config = ResearchConfig()
         self.config = self.research_config.to_dict()
 
         # Initialize Tavily client
-        print("[DEBUG] Initializing Tavily client...")
         self._init_tavily_client()
-        print(f"[DEBUG] Tavily client initialized. API available: {self.api_available}")
 
         # Initialize sub-agents
-        print("[DEBUG] Initializing sub-agents...")
         self.planning_agent = PlanningAgent()
         self.multi_query_agent = MultiQuerySearchAgent()
         self.criticism_agent = CriticismFeedbackAgent()
         self.skill_tool_selector = SkillBasedToolSelector()
-        print("[DEBUG] Sub-agents initialized")
 
         # Initialize repository
-        print("[DEBUG] Initializing repository...")
         self.repository = HyperResearchRepository()
-        print("[DEBUG] Repository initialized")
 
         # Initialize enhanced utilities
-        print("[DEBUG] Initializing enhanced utilities...")
         self.token_counter = TokenCounter()
         self.quality_scorer = SourceQualityScorer()
         self.retry_handler = RetryHandler(max_attempts=4, base_delay=2.0)
@@ -125,19 +116,16 @@ class HyperDeepResearchAgent(SearchAgent):
         self.cost_optimizer = CostOptimizer(budget_limit=100.0, cache_ttl=3600)
         self.fact_checker = FactChecker()
         self.bias_detector = BiasDetector()
-        print("[DEBUG] Enhanced utilities initialized")
 
         # Initialize modular components
-        print("[DEBUG] Initializing modular components...")
         self._init_modular_components()
-        print("[DEBUG] Modular components initialized")
 
         # Research state
         self.current_report_id = None
         self.sections_data = []
         self.all_collected_sources = []
         self.max_sources_in_memory = settings.DEEP_RESEARCH_MAX_SOURCES_IN_MEMORY
-        
+
         # Initialize metadata
         self.research_metadata = {
             "total_queries_executed": 0,
@@ -164,7 +152,6 @@ class HyperDeepResearchAgent(SearchAgent):
         print("[DEBUG] Initializing Skills...")
         self.skill_manager = skill_manager
         self.skills_enabled = False
-        print("[DEBUG] Skills initialized")
 
     def _init_tavily_client(self) -> None:
         """Initialize Tavily API client."""
@@ -190,12 +177,12 @@ class HyperDeepResearchAgent(SearchAgent):
             retry_handler=self.retry_handler,
             quality_scorer=self.quality_scorer,
         )
-        
+
         self.complex_search_executor = ComplexSearchExecutor(
             multi_query_agent=self.multi_query_agent,
             repository=self.repository,
         )
-        
+
         # Analysis components
         self.topic_analyzer = TopicAnalyzer(agent_name=self.name)
         self.research_planner = ResearchPlanner(agent_name=self.name)
@@ -206,13 +193,12 @@ class HyperDeepResearchAgent(SearchAgent):
         
         # Skills integration
         self.skills_integrator = SkillsIntegrator(skill_manager=skill_manager)
-        
+
         # Report generation
         self.report_generator = ReportGenerator(
             agent_name=self.name,
             repository=self.repository,
         )
-        
         self.criticism_processor = CriticismProcessor(
             criticism_agent=self.criticism_agent,
             repository=self.repository,
@@ -220,6 +206,7 @@ class HyperDeepResearchAgent(SearchAgent):
         )
         
         self.query_generator = QueryGenerator(agent_name=self.name)
+
 
     async def execute(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Execute HyperDeepResearch process.
@@ -391,12 +378,7 @@ class HyperDeepResearchAgent(SearchAgent):
         query: str,
     ) -> None:
         """Initialize report and event logger."""
-        if report_id:
-            self.current_report_id = report_id
-            print(f"[INFO] Using existing report ID: {report_id}")
-        else:
-            self.current_report_id = f"hyper_report_{uuid.uuid4()}"
-            print(f"[INFO] Created new report ID: {self.current_report_id}")
+        self.current_report_id = report_id if report_id else f"hyper_report_{uuid.uuid4()}"
 
         await self.repository.ensure_tables_exist()
 
@@ -411,7 +393,7 @@ class HyperDeepResearchAgent(SearchAgent):
             report_id=self.current_report_id,
             enable_cli_output=enable_cli
         )
-        print(f"[DEBUG] EventLogger initialized (CLI output: {enable_cli})")
+
 
     async def _execute_phase_0(
         self,
@@ -455,6 +437,7 @@ class HyperDeepResearchAgent(SearchAgent):
         duration = int((datetime.utcnow() - phase_start).total_seconds() * 1000)
         await self.event_logger.log_phase_complete(0, "Skill and Tool Selection", duration)
 
+
     async def _execute_phase_1(
         self,
         query: str,
@@ -487,6 +470,7 @@ class HyperDeepResearchAgent(SearchAgent):
 
         return topic_analysis
 
+
     async def _assess_complexity(self, topic_analysis: Dict[str, Any]) -> None:
         """Assess topic complexity and update config."""
         print("\n[INFO] 🎯 Assessing topic complexity...")
@@ -500,6 +484,7 @@ class HyperDeepResearchAgent(SearchAgent):
         )
         self.config["analysis_iterations"] = complexity_assessment["recommended_iterations"]
         self.deep_analyzer.config = self.config
+
 
     async def _ensure_and_initialize_skills(
         self,
@@ -518,6 +503,7 @@ class HyperDeepResearchAgent(SearchAgent):
 
         print("\n[INFO] ===== Initializing Selected Skills =====")
         self.skills_enabled = await self.skills_integrator.initialize_skills(updated_skills)
+
 
     async def _execute_phase_2(
         self,
@@ -621,14 +607,14 @@ class HyperDeepResearchAgent(SearchAgent):
 
         # Deduplicate and score sources
         unique_sources = DataProcessor.deduplicate_sources(all_results)
-        
+
         print(f"[INFO] 📊 Scoring {len(unique_sources)} sources for quality...")
         scored_sources = self.quality_scorer.rank_sources(unique_sources)
         print(f"[INFO] ✅ Quality scoring complete. High quality: {self.quality_scorer.stats['high_quality_count']}")
 
         # Store sources
         await self._store_sources_batch(scored_sources)
-        
+
         # Track domains
         self.research_metadata["unique_domains"].update(
             DataProcessor.extract_unique_domains(unique_sources)
@@ -653,6 +639,7 @@ class HyperDeepResearchAgent(SearchAgent):
             "sources_count": len(unique_sources),
             "queries_executed": len(query_variations),
         }
+
 
     async def _execute_phase_4(
         self,
@@ -697,6 +684,7 @@ class HyperDeepResearchAgent(SearchAgent):
         await self.event_logger.log_phase_complete(4, "Deep Analysis", duration)
 
         return deep_analysis
+
 
     async def _execute_phase_4_5(
         self,
@@ -747,6 +735,7 @@ class HyperDeepResearchAgent(SearchAgent):
 
         except Exception as e:
             print(f"[ERROR] Recursive deep dive failed: {e}")
+
 
     async def _execute_phase_5(
         self,
@@ -813,6 +802,7 @@ class HyperDeepResearchAgent(SearchAgent):
 
         return {"gaps": gaps, "summary": summary, "sources_count": len(unique_gap_sources)}
 
+
     async def _execute_phase_6(
         self,
         query: str,
@@ -857,6 +847,7 @@ class HyperDeepResearchAgent(SearchAgent):
         await self.event_logger.log_phase_complete(6, "Cross-Validation", duration)
 
         return validation
+
 
     async def _execute_phase_6_5(
         self,
@@ -1013,6 +1004,7 @@ class HyperDeepResearchAgent(SearchAgent):
             self.current_report_id, "completed", "completed_at", quality_score=0.95
         )
         await self._update_report_metadata()
+
 
     # ========== Helper Methods ==========
 
