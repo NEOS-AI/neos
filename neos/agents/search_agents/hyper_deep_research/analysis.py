@@ -15,6 +15,7 @@ import logging
 
 from langchain_core.messages import HumanMessage
 
+from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import create_tracked_llm, extract_text_from_response
 
@@ -102,10 +103,21 @@ class TopicAnalyzer:
             }
             
         except (asyncio.TimeoutError, asyncio.CancelledError) as e:
-            logger.error(f"Topic analysis timeout/cancelled: {e}")
+            logger.error(
+                f"Topic analysis timeout/cancelled after {settings.LLM_TIMEOUT}s: {e}. "
+                f"Consider increasing LLM_TIMEOUT environment variable."
+            )
             raise
         except Exception as e:
-            logger.error(f"Topic analysis error: {e}")
+            error_msg = str(e)
+            if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
+                logger.error(
+                    f"Topic analysis error (timeout): {e}. "
+                    f"Current timeout: {settings.LLM_TIMEOUT}s. "
+                    f"Consider increasing LLM_TIMEOUT environment variable."
+                )
+            else:
+                logger.error(f"Topic analysis error: {e}")
             return {
                 "full_analysis": f"Topic: {query}\n\nAnalysis pending.",
                 "research_questions": [query],
@@ -133,20 +145,25 @@ class ResearchPlanner:
         llm_tracker: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Create comprehensive research plan.
-        
+
         Args:
             topic_analysis: Topic analysis result
             session_id: Session identifier
             user_id: User identifier
             language: Language code
             llm_tracker: Optional LLM usage tracker callback
-            
+
         Returns:
             Research plan
         """
         try:
+            # Use longer timeout for research planning operations
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.3, max_tokens=4000),
+                llm=create_llm(
+                    temperature=0.3,
+                    max_tokens=4000,
+                    timeout=settings.LLM_TIMEOUT_RESEARCH_PLANNING
+                ),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",
@@ -167,12 +184,23 @@ class ResearchPlanner:
                 "full_plan": plan_text,
                 "search_strategies": DataProcessor.extract_search_strategies(plan_text)
             }
-            
+
         except (asyncio.TimeoutError, asyncio.CancelledError) as e:
-            logger.error(f"Research planning timeout/cancelled: {e}")
+            logger.error(
+                f"Research planning timeout/cancelled after {settings.LLM_TIMEOUT_RESEARCH_PLANNING}s: {e}. "
+                f"Consider increasing LLM_TIMEOUT_RESEARCH_PLANNING environment variable."
+            )
             raise
         except Exception as e:
-            logger.error(f"Research planning error: {e}")
+            error_msg = str(e)
+            if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
+                logger.error(
+                    f"Research planning error (timeout): {e}. "
+                    f"Current timeout: {settings.LLM_TIMEOUT_RESEARCH_PLANNING}s. "
+                    f"Consider increasing LLM_TIMEOUT_RESEARCH_PLANNING environment variable."
+                )
+            else:
+                logger.error(f"Research planning error: {e}")
             return {"full_plan": "Research plan pending", "search_strategies": []}
 
 

@@ -38,7 +38,7 @@ class CostCalculator:
                 "cache_creation": 3.75,
                 "cache_read": 0.30,
             },
-            "claude-opus-4-1-20250805": {
+            "claude-opus-4-5-20251101": {
                 "input": 15.00,
                 "output": 75.00,
                 "cache_creation": 18.75,

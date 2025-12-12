@@ -38,10 +38,10 @@ class OpenAIProvider(LLMProvider):
             "temperature": settings.LLM_TEMPERATURE,
             "api_key": settings.OPENAI_API_KEY,
             "max_retries": 3,
-            "request_timeout": 60
+            "request_timeout": settings.LLM_TIMEOUT
         }
         default_params.update(kwargs)
-        
+
         return ChatOpenAI(**default_params)
     
     def get_provider_name(self) -> str:
@@ -61,7 +61,7 @@ class AnthropicProvider(LLMProvider):
             "temperature": settings.LLM_TEMPERATURE,
             "api_key": settings.ANTHROPIC_API_KEY,
             "max_retries": 3,
-            "timeout": 60
+            "timeout": settings.LLM_TIMEOUT
         }
         default_params.update(kwargs)
 

@@ -390,8 +390,8 @@ INSERT INTO llm_model_pricing (
     -- Anthropic Claude 4.5 Sonnet
     ('anthropic', 'claude-sonnet-4-5-20250929', 3.00, 15.00, 3.75, 0.30, 200000, 8192, TRUE, TRUE),
 
-    -- Anthropic Claude 4.1 Opus
-    ('anthropic', 'claude-opus-4-1-20250805', 15.00, 75.00, 18.75, 1.50, 200000, 4096, TRUE, TRUE),
+    -- Anthropic Claude 4.5 Opus
+    ('anthropic', 'claude-opus-4-5-20251101', 15.00, 75.00, 18.75, 1.50, 200000, 4096, TRUE, TRUE),
 
     -- Anthropic Claude 4.5 Haiku
     ('anthropic', 'claude-haiku-4-5-20251001', 0.25, 1.25, 0.30, 0.03, 200000, 4096, TRUE, TRUE)

@@ -26,7 +26,7 @@ class TestConversationManagement:
     async def test_create_conversation_success(self):
         """Test successful conversation creation"""
         user_id = "user_123"
-        model_name = "claude-opus-4-1-20250805"
+        model_name = "claude-opus-4-5-20251101"
 
         mock_conversation = MagicMock()
         mock_conversation.conversation_id = "conv_123"

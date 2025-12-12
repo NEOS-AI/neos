@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = env_vars.get("LLM_PROVIDER", "anthropic")  # "openai" or "anthropic"
     LLM_MODEL: str = env_vars.get("LLM_MODEL", "gpt-4-turbo-preview")  # or "claude-3-sonnet-20240229"
     LLM_TEMPERATURE: float = float(env_vars.get("LLM_TEMPERATURE", 0.1))
+    LLM_TIMEOUT: int = int(env_vars.get("LLM_TIMEOUT", 120))  # Default API timeout in seconds
+    LLM_TIMEOUT_RESEARCH_PLANNING: int = int(env_vars.get("LLM_TIMEOUT_RESEARCH_PLANNING", 180))  # Longer timeout for complex research operations
 
     # 임베딩 설정
     EMBEDDING_MODEL: str = env_vars.get("EMBEDDING_MODEL", "text-embedding-3-small")

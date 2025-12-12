@@ -23,7 +23,7 @@ class ChatService:
     @staticmethod
     async def create_conversation(
         user_id: str,
-        model_name: str = "claude-opus-4-1-20250805",
+        model_name: str = "claude-opus-4-5-20251101",
         title: Optional[str] = None,
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
@@ -303,7 +303,7 @@ class ChatService:
         created_by: str,
         description: Optional[str] = None,
         category: Optional[str] = None,
-        default_model: str = "claude-opus-4-1-20250805",
+        default_model: str = "claude-opus-4-5-20251101",
         default_system_prompt: Optional[str] = None,
         default_temperature: float = 0.7,
         default_settings: Optional[Dict[str, Any]] = None,

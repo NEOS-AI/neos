@@ -115,7 +115,7 @@ class TestCostCalculator:
 
     def test_get_default_pricing_anthropic_claude_opus(self):
         """Test default pricing for Anthropic Claude Opus"""
-        pricing = CostCalculator._get_default_pricing("anthropic", "claude-opus-4-1-20250805")
+        pricing = CostCalculator._get_default_pricing("anthropic", "claude-opus-4-5-20251101")
 
         assert pricing is not None
         assert pricing["input"] == Decimal("15.00")

@@ -506,7 +506,7 @@ CREATE TRIGGER trigger_increment_template_usage
 CREATE OR REPLACE FUNCTION create_conversation(
     p_user_id VARCHAR(255),
     p_conversation_id VARCHAR(255),
-    p_model_name VARCHAR(100) DEFAULT 'claude-opus-4-1-20250805',
+    p_model_name VARCHAR(100) DEFAULT 'claude-opus-4-5-20251101',
     p_system_prompt TEXT DEFAULT NULL,
     p_template_id VARCHAR(255) DEFAULT NULL,
     p_mode VARCHAR(50) DEFAULT 'standard'
