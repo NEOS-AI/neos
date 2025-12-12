@@ -1,6 +1,6 @@
 [project]
 name = "neos"
-version = "0.14.0"
+version = "0.15.0"
 description = "NEOS: Intelligent Search and Analysis Agent Workflow"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -58,6 +58,7 @@ dependencies = [
     "tiktoken>=0.5.0",
     "arxiv>=2.1.0",
     "wikipedia>=1.4.0",
+    "xmltodict>=1.0.2",
 ]
 
 [tool.setuptools.packages.find]
