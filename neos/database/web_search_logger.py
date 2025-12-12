@@ -3,10 +3,9 @@
 비동기 검색 로그 저장 및 메시지 큐 통합
 """
 
-import asyncio
 import hashlib
 import uuid
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 from datetime import datetime
 from urllib.parse import urlparse
 import logging
@@ -24,7 +23,6 @@ from neos.database.web_search_models import (
 from neos.database.web_search_types import (
     SearchLogRequest,
     SearchLogComplete,
-    SearchResultItem,
     SearchQueryStatus
 )
 from neos.utils.message_queue import MessageQueueInterface, MessageQueueFactory
@@ -77,9 +75,10 @@ class WebSearchLogger:
         """검색 엔진 캐시 로드"""
         try:
             async with await db_manager.get_session() as session:
+                # get all active search engines
                 result = await session.execute(
                     select(SearchEngine.id, SearchEngine.engine_name)
-                    .where(SearchEngine.is_active == True)
+                    .where(SearchEngine.is_active)
                 )
                 engines = result.all()
                 self.engine_cache = {name: id for id, name in engines}
@@ -146,6 +145,7 @@ class WebSearchLogger:
             return parsed.netloc
         except Exception:
             return None
+
 
     async def log_search_start(
         self,
@@ -286,6 +286,7 @@ class WebSearchLogger:
         except Exception as e:
             logger.error(f"[WebSearchLogger] Failed to save search_complete: {e}")
 
+
     async def _handle_search_log_message(self, message: Dict[str, Any]) -> None:
         """메시지 큐 핸들러"""
         try:
@@ -304,6 +305,7 @@ class WebSearchLogger:
 
         except Exception as e:
             logger.error(f"[WebSearchLogger] Error handling message: {e}")
+
 
     async def close(self) -> None:
         """로거 종료"""

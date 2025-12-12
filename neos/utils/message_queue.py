@@ -1,7 +1,7 @@
 """메시지 큐 인터페이스 및 구현체"""
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Callable, Awaitable
+from typing import Any, Dict, Callable, Awaitable
 import asyncio
 import json
 from datetime import datetime
@@ -111,10 +111,11 @@ class InMemoryMessageQueue(MessageQueueInterface):
         if channel not in self.queues:
             self.queues[channel] = asyncio.Queue(maxsize=self.max_queue_size)
 
-        # 구독 태스크 생성
+        # create asyncio task for subscriber loop
         task = asyncio.create_task(self._subscriber_loop(channel, handler))
         self.subscribers[channel] = task
         logger.info(f"[InMemoryMessageQueue] Subscribed to {channel}")
+
 
     async def _subscriber_loop(
         self,
