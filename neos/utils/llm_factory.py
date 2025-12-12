@@ -70,8 +70,9 @@ class AnthropicProvider(LLMProvider):
             if settings.MAX_THINKING_LENGTH < 1024:
                 logger.warning("MAX_THINKING_LENGTH is set very low; increasing to 1024 tokens.")
                 settings.MAX_THINKING_LENGTH = 1024
-            if settings.LLM_TEMPERATURE != 1.0:
-                logger.warning("Thinking blocks work best with temperature=1.0; overriding temperature setting.")
+            # Check the actual temperature parameter being used, not the global settings
+            if default_params.get("temperature", 1.0) != 1.0:
+                logger.warning(f"Thinking blocks require temperature=1.0; overriding temperature={default_params.get('temperature')} → 1.0")
                 default_params["temperature"] = 1.0
                 settings.LLM_TEMPERATURE = 1.0
 
