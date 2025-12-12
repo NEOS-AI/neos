@@ -8,9 +8,9 @@ Chat LLM Service
 from typing import Dict, Any, List, Optional, AsyncGenerator
 import time
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langchain_core.language_models import BaseLanguageModel
 
 from neos.utils.llm_factory import create_llm
+from neos.utils.llm_wrapper import extract_text_from_response
 from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
 from neos.services.context_optimizer import context_optimizer
@@ -161,8 +161,8 @@ class ChatLLMService:
             # LLM 호출
             response = await llm.ainvoke(messages)
 
-            # 응답 처리
-            content = response.content if hasattr(response, "content") else str(response)
+            # 응답 처리 (handles thinking blocks properly)
+            content = extract_text_from_response(response)
             usage = self._extract_usage_from_response(response)
             finish_reason = self._extract_finish_reason(response)
             latency_ms = int((time.time() - start_time) * 1000)
@@ -268,11 +268,13 @@ class ChatLLMService:
             # 스트리밍 호출
             async for chunk in llm.astream(messages):
                 if hasattr(chunk, "content") and chunk.content:
-                    content_chunk = chunk.content
-                    full_content += content_chunk
+                    # Extract text properly (handles thinking blocks)
+                    content_chunk = extract_text_from_response(chunk)
+                    if content_chunk:  # Only process non-empty chunks
+                        full_content += content_chunk
 
-                    # 컨텐츠 이벤트
-                    yield {"type": "content", "content": content_chunk}
+                        # 컨텐츠 이벤트
+                        yield {"type": "content", "content": content_chunk}
 
                 # 마지막 청크에서 usage 정보 추출
                 if hasattr(chunk, "response_metadata"):
