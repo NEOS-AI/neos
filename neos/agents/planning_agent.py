@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from langchain_core.messages import HumanMessage
 
 from neos.utils.llm_factory import create_llm
+from neos.utils.llm_wrapper import extract_text_from_response
 
 
 @dataclass
@@ -76,7 +77,7 @@ class PlanningAgent:
 
             print(f"[DEBUG] Invoking LLM for planning (language={detected_language}, type={research_type})")
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            plan_text = response.content.strip()
+            plan_text = extract_text_from_response(response).strip()
 
             # Parse the plan into tasks
             tasks = self._parse_plan(plan_text)

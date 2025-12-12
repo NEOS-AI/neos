@@ -8,7 +8,7 @@ from langchain_core.messages import HumanMessage
 
 from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
-from neos.utils.llm_wrapper import create_tracked_llm
+from neos.utils.llm_wrapper import create_tracked_llm, extract_text_from_response
 from neos.workflow.state import SearchResult
 
 from ..base import SearchAgent
@@ -285,7 +285,7 @@ Search Queries:""",
             prompt = prompts.get(detected_language, prompts["en"])
 
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            query_text = response.content.strip()
+            query_text = extract_text_from_response(response).strip()
 
             # 쿼리 파싱
             queries = [q.strip() for q in query_text.split('\n') if q.strip() and not q.strip().startswith('#')]
@@ -380,7 +380,7 @@ Search Queries:""",
             prompt = prompts.get(detected_language, prompts["en"])
 
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            query_text = response.content.strip()
+            query_text = extract_text_from_response(response).strip()
 
             # 쿼리 파싱 (빈 줄 또는 줄바꿈으로 구분)
             queries = [q.strip() for q in query_text.split('\n') if q.strip() and not q.strip().startswith('#')]
@@ -547,7 +547,7 @@ Summary:""",
                 prompt = prompts.get(detected_language, prompts["en"])
 
                 response = await llm.ainvoke([HumanMessage(content=prompt)])
-                return response.content.strip()
+                return extract_text_from_response(response).strip()
 
             except Exception as e:
                 print(f"[ERROR] Failed to summarize results for '{query}': {e}")
@@ -642,7 +642,7 @@ Summary:""",
                 llm.ainvoke([HumanMessage(content=prompt)]),
                 timeout=180
             )
-            final_analysis = response.content.strip()
+            final_analysis = extract_text_from_response(response).strip()
 
             return final_analysis
 

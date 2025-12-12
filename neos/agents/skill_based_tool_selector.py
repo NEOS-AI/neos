@@ -140,7 +140,10 @@ class SkillBasedToolSelector:
             # Invoke LLM for selection
             logger.info(f"[{self.name}] Invoking LLM for skill/tool selection (language={detected_language})")
             response = await tracked_llm.ainvoke([HumanMessage(content=prompt)])
-            selection_text = response.content.strip()
+
+            # Extract text from response (handles both string and list content when thinking blocks are enabled)
+            from neos.utils.llm_wrapper import extract_text_from_response
+            selection_text = extract_text_from_response(response).strip()
 
             # Parse the selection
             selection = self._parse_selection(selection_text, available_skills, available_tools)
