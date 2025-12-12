@@ -298,3 +298,4 @@ async def get_session():
 
 # Alias for compatibility with FastAPI dependency injection
 get_db = get_session
+get_db_session = get_session

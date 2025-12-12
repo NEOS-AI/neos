@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database.connection import get_db_session
 from ..database.models import QueryCacheEntry, CacheStatistics
 from ..config.settings import settings
-from .embeddings import get_embeddings
+from .embeddings import embedding_manager
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +234,7 @@ class SmartCacheManager:
 
                 # 2. 의미론적 유사도 검색
                 if query_vector is None:
-                    embeddings = await get_embeddings([query])
+                    embeddings = await embedding_manager.get_embedding(query)
                     if not embeddings or len(embeddings) == 0:
                         logger.warning("쿼리 임베딩 생성 실패")
                         search_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
