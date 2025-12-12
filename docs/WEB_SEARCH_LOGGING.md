@@ -348,15 +348,6 @@ WEB_SEARCH_LOG_ASYNC=true
 WEB_SEARCH_LOG_QUEUE_TYPE=redis
 ```
 
-## 향후 개선 사항
-
-- [ ] Kafka 메시지 큐 지원
-- [ ] 실시간 대시보드
-- [ ] 검색 품질 자동 평가
-- [ ] A/B 테스트 지원
-- [ ] 검색 결과 중복 제거 고도화
-- [ ] 검색 엔진 자동 선택 및 라우팅
-
 ## 참고 자료
 
 - [PostgreSQL 공식 문서](https://www.postgresql.org/docs/)
