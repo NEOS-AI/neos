@@ -11,6 +11,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.outputs import LLMResult
 
+from neos.config.settings import settings
 from neos.dataset.collector import create_llm_call_record
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,8 @@ class TrackedLLM:
         # LLM 설정 추출
         self.provider = self._extract_provider()
         self.model = getattr(llm, "model_name", getattr(llm, "model", "unknown"))
-        self.temperature = getattr(llm, "temperature", 0.7)
+        self.temperature = settings.LLM_TEMPERATURE
+
 
     def _extract_provider(self) -> str:
         """LLM provider 추출"""

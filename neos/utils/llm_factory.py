@@ -63,15 +63,23 @@ class AnthropicProvider(LLMProvider):
             "max_retries": 3,
             "timeout": 60
         }
+        default_params.update(kwargs)
 
         # Thinking block 제어
         if settings.THINKING_BLOCKS_ENABLED or settings.MAX_THINKING_LENGTH > 0:
+            if settings.MAX_THINKING_LENGTH < 1024:
+                logger.warning("MAX_THINKING_LENGTH is set very low; increasing to 1024 tokens.")
+                settings.MAX_THINKING_LENGTH = 1024
+            if settings.LLM_TEMPERATURE != 1.0:
+                logger.warning("Thinking blocks work best with temperature=1.0; overriding temperature setting.")
+                default_params["temperature"] = 1.0
+                settings.LLM_TEMPERATURE = 1.0
+
             thinking={
                 "type": "enabled",
                 "budget_tokens": settings.MAX_THINKING_LENGTH
             }
             default_params["thinking"] = thinking
-        default_params.update(kwargs)
 
         return ChatAnthropic(**default_params)
 
