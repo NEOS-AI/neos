@@ -6,6 +6,7 @@ Identifies important insights and recursively explores them in depth.
 from typing import Dict, Any, List, Callable
 import logging
 
+from neos.utils.llm_wrapper import extract_text_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +217,7 @@ Select only the 3-5 most important insights."""
 
             # Parse insights from response
             insights = []
-            for line in response.content.strip().split('\n'):
+            for line in extract_text_from_response(response).strip().split('\n'):
                 line = line.strip()
                 if not line or len(line) < 10:
                     continue
@@ -381,7 +382,7 @@ One query per line."""
             # Parse queries from response
             queries = [
                 q.strip()
-                for q in response.content.strip().split('\n')
+                for q in extract_text_from_response(response).strip().split('\n')
                 if q.strip() and len(q.strip()) > 10
             ]
 
@@ -457,7 +458,7 @@ Provide a deep analysis including key findings, patterns, and areas needing furt
             from langchain_core.messages import HumanMessage
             response = await llm_callable([HumanMessage(content=prompt)])
 
-            return response.content.strip()
+            return extract_text_from_response(response).strip()
 
         except Exception as e:
             logger.error(f"[DeepDive] Data analysis error: {e}")

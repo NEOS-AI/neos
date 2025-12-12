@@ -2,6 +2,7 @@
 
 from typing import Dict, Any, List
 from neos.utils.llm_factory import create_llm
+from neos.utils.llm_wrapper import extract_text_from_response
 
 
 class CriticismFeedbackAgent:
@@ -197,7 +198,7 @@ REDIRECT_SUGGESTION:
             ])
 
             # 응답 파싱
-            result = self._parse_feedback_response(response.content.strip())
+            result = self._parse_feedback_response(extract_text_from_response(response).strip())
 
             return result
 

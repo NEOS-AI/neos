@@ -4,10 +4,12 @@ Identifies political, ideological, commercial, and other biases in sources.
 Ensures balanced coverage from multiple perspectives.
 """
 
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Callable
 import logging
 from collections import defaultdict
 import re
+
+from neos.utils.llm_wrapper import extract_text_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +260,7 @@ If no bias, write "No significant bias detected"."""
 
             # Parse bias indicators
             indicators = []
-            lines = response.content.strip().split('\n')
+            lines = extract_text_from_response(response).strip().split('\n')
             i = 0
 
             while i < len(lines):
@@ -385,7 +387,7 @@ Keep it concise."""
                 "gaps": [],
             }
 
-            for line in response.content.strip().split('\n'):
+            for line in extract_text_from_response(response).strip().split('\n'):
                 line = line.strip()
                 if line.startswith('POLITICAL_SPECTRUM:'):
                     analysis["political_spectrum"] = line.split(':', 1)[1].strip()
@@ -623,7 +625,7 @@ Bias & Perspective Diversity Analysis:
                     report += f"   - {bias.bias_type.upper()}: {bias.description}\n"
 
             # Add perspective analysis
-            report += f"\n👁️ Perspective Diversity:\n"
+            report += "\n👁️ Perspective Diversity:\n"
             report += f"   - Political Spectrum: {diversity_analysis.get('political_spectrum', 'N/A')}\n"
             report += f"   - Geographic Diversity: {diversity_analysis.get('geographic_diversity', 'N/A')}\n"
             report += f"   - Expert vs. Public: {diversity_analysis.get('expert_vs_public', 'N/A')}\n"
@@ -632,7 +634,7 @@ Bias & Perspective Diversity Analysis:
             # Add gaps
             gaps = diversity_analysis.get("gaps", [])
             if gaps:
-                report += f"\n🎯 Identified Gaps:\n"
+                report += "\n🎯 Identified Gaps:\n"
                 for gap in gaps[:5]:
                     if gap:
                         report += f"   - {gap}\n"

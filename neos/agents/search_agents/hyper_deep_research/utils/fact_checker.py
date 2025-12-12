@@ -8,6 +8,8 @@ import re
 import logging
 from collections import defaultdict
 
+from neos.utils.llm_wrapper import extract_text_from_response
+
 logger = logging.getLogger(__name__)
 
 
@@ -246,7 +248,7 @@ Extract up to 5 main claims only."""
 
             # Parse claims from response
             claims = []
-            for line in response.content.strip().split('\n'):
+            for line in extract_text_from_response(response).strip().split('\n'):
                 line = line.strip()
                 if not line:
                     continue
@@ -336,7 +338,7 @@ If no contradictions, write "No contradictions found"."""
             response = await llm_callable([HumanMessage(content=prompt)])
 
             # Parse contradictions
-            lines = response.content.strip().split('\n')
+            lines = extract_text_from_response(response).strip().split('\n')
             i = 0
             while i < len(lines):
                 line = lines[i].strip()

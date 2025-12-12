@@ -9,7 +9,7 @@ from datetime import datetime
 
 from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
-from neos.utils.llm_wrapper import create_tracked_llm
+from neos.utils.llm_wrapper import create_tracked_llm, extract_text_from_response
 from neos.workflow.state import SearchResult
 
 from ..base import SearchAgent
@@ -464,7 +464,7 @@ Search Queries:""",
             prompt = prompts.get(detected_language, prompts["en"])
 
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            query_text = response.content.strip()
+            query_text = extract_text_from_response(response).strip()
 
             # 쿼리 파싱
             queries = [q.strip() for q in query_text.split('\n') if q.strip() and not q.strip().startswith('#')]
@@ -556,7 +556,7 @@ Search Queries:""",
             prompt = prompts.get(detected_language, prompts["en"])
 
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            query_text = response.content.strip()
+            query_text = extract_text_from_response(response).strip()
 
             # 쿼리 파싱
             queries = [q.strip() for q in query_text.split('\n') if q.strip() and not q.strip().startswith('#')]
@@ -642,7 +642,7 @@ Write each gap on one line without numbering.""",
             prompt = prompts.get(detected_language, prompts["en"])
 
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            gaps_text = response.content.strip()
+            gaps_text = extract_text_from_response(response).strip()
 
             gaps = [g.strip() for g in gaps_text.split('\n') if g.strip()]
             print(f"[DEBUG] Identified {len(gaps)} knowledge gaps")
@@ -689,7 +689,7 @@ Write each gap on one line without numbering.""",
 각 쿼리는 한 줄로 작성하고, 구체적이고 검색 가능하게 만들어주세요."""
 
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            query_text = response.content.strip()
+            query_text = extract_text_from_response(response).strip()
 
             queries = [q.strip() for q in query_text.split('\n') if q.strip()]
             print(f"[DEBUG] Generated {len(queries)} targeted queries for gaps")
@@ -727,7 +727,7 @@ Write each gap on one line without numbering.""",
 각 인사이트는 한 문장으로 작성하고, 5-7개 정도 제공해주세요."""
 
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            insights_text = response.content.strip()
+            insights_text = extract_text_from_response(response).strip()
 
             insights = [i.strip() for i in insights_text.split('\n') if i.strip()]
             print(f"[DEBUG] Generated {len(insights)} verification insights")
@@ -788,7 +788,7 @@ Write each gap on one line without numbering.""",
 {language_instructions}"""
 
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            report = response.content.strip()
+            report = extract_text_from_response(response).strip()
 
             print(f"[DEBUG] Generated comprehensive report: {len(report)} characters")
             return report
@@ -917,7 +917,7 @@ Write each gap on one line without numbering.""",
 가능한 한 많은 정보를 포함하되, 핵심을 벗어나지 마세요."""
 
                 response = await llm.ainvoke([HumanMessage(content=prompt)])
-                return response.content.strip()
+                return extract_text_from_response(response).strip()
 
             except Exception as e:
                 print(f"[ERROR] Failed to summarize for '{query}': {e}")

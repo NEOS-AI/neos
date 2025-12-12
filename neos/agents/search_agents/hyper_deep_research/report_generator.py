@@ -14,7 +14,7 @@ import logging
 from langchain_core.messages import HumanMessage
 
 from neos.utils.llm_factory import create_llm
-from neos.utils.llm_wrapper import create_tracked_llm
+from neos.utils.llm_wrapper import create_tracked_llm, extract_text_from_response
 
 from .prompts import ValidationPrompts, QueryGenerationPrompts
 
@@ -73,7 +73,7 @@ class ReportGenerator:
             response = await llm.ainvoke([HumanMessage(content=prompt)])
 
             sections = []
-            for line in response.content.strip().split('\n'):
+            for line in extract_text_from_response(response).strip().split('\n'):
                 if '|' in line:
                     parts = [p.strip() for p in line.split('|')]
                     if len(parts) >= 2:
@@ -138,7 +138,7 @@ class ReportGenerator:
                 language
             )
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            return response.content.strip()
+            return extract_text_from_response(response).strip()
 
         except Exception as e:
             logger.error(f"Section generation failed: {e}")
@@ -423,7 +423,7 @@ class QueryGenerator:
             prompt = QueryGenerationPrompts.get_gap_query_prompt(gap, language)
             response = await llm.ainvoke([HumanMessage(content=prompt)])
             queries = [
-                q.strip() for q in response.content.strip().split('\n')
+                q.strip() for q in extract_text_from_response(response).strip().split('\n')
                 if q.strip() and len(q.strip()) > 5
             ]
             return queries[:5]

@@ -16,7 +16,7 @@ import logging
 from langchain_core.messages import HumanMessage
 
 from neos.utils.llm_factory import create_llm
-from neos.utils.llm_wrapper import create_tracked_llm
+from neos.utils.llm_wrapper import create_tracked_llm, extract_text_from_response
 
 from .prompts import (
     TopicAnalysisPrompts,
@@ -82,7 +82,7 @@ class TopicAnalyzer:
 
             prompt = TopicAnalysisPrompts.get_prompt(query, language)
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            analysis_text = response.content.strip()
+            analysis_text = extract_text_from_response(response).strip()
 
             # Track LLM usage
             if llm_tracker:
@@ -158,7 +158,7 @@ class ResearchPlanner:
                 topic_analysis['full_analysis'], language
             )
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            plan_text = response.content.strip()
+            plan_text = extract_text_from_response(response).strip()
 
             if llm_tracker:
                 llm_tracker("research_planning", prompt, plan_text)
@@ -272,7 +272,7 @@ class DeepAnalyzer:
             )
             response = await llm.ainvoke([HumanMessage(content=prompt)])
 
-            return {"round": round_num, "insights": response.content.strip()}
+            return {"round": round_num, "insights": extract_text_from_response(response).strip()}
 
         except Exception as e:
             logger.error(f"Analysis round {round_num} failed: {e}")
@@ -305,7 +305,7 @@ class DeepAnalyzer:
                 len(rounds), rounds_text, language
             )
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            return response.content.strip()
+            return extract_text_from_response(response).strip()
 
         except Exception as e:
             logger.error(f"Synthesis failed: {e}")
@@ -355,7 +355,7 @@ class GapAnalyzer:
             )
             response = await llm.ainvoke([HumanMessage(content=prompt)])
             gaps = [
-                g.strip() for g in response.content.strip().split('\n')
+                g.strip() for g in extract_text_from_response(response).strip().split('\n')
                 if g.strip() and len(g.strip()) > 10
             ]
             return gaps[:15]
@@ -391,7 +391,7 @@ class GapAnalyzer:
                 gaps, len(sources), sources_sample, language
             )
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            return response.content.strip()
+            return extract_text_from_response(response).strip()
 
         except Exception as e:
             logger.error(f"Gap summary failed: {e}")
@@ -451,7 +451,7 @@ class ValidationAnalyzer:
             response = await llm.ainvoke([HumanMessage(content=prompt)])
 
             return {
-                "report": response.content.strip(),
+                "report": extract_text_from_response(response).strip(),
                 "sources_analyzed": len(sampled_sources),
                 "clusters_identified": len(clusters) if clusters else 0
             }
@@ -494,7 +494,7 @@ class ValidationAnalyzer:
                     metadata_tracker.get("critical_reviews_completed", 0) + 1
                 )
 
-            return {"full_analysis": response.content.strip()}
+            return {"full_analysis": extract_text_from_response(response).strip()}
             
         except Exception as e:
             logger.error(f"Critical analysis failed: {e}")
@@ -540,7 +540,7 @@ class DataSummarizer:
                 len(sources), sources_sample, language
             )
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            return response.content.strip()
+            return extract_text_from_response(response).strip()
 
         except Exception as e:
             logger.error(f"Data summarization failed: {e}")

@@ -17,7 +17,7 @@ from langchain_core.messages import HumanMessage
 
 from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
-from neos.utils.llm_wrapper import create_tracked_llm
+from neos.utils.llm_wrapper import create_tracked_llm, extract_text_from_response
 
 from .prompts import QueryGenerationPrompts
 from .utils import RetryHandler
@@ -114,7 +114,7 @@ class DataCollector:
             )
             response = await llm.ainvoke([HumanMessage(content=prompt)])
             queries = [
-                q.strip() for q in response.content.strip().split('\n')
+                q.strip() for q in extract_text_from_response(response).strip().split('\n')
                 if q.strip() and len(q.strip()) > 5
             ]
 

@@ -8,7 +8,7 @@ import trafilatura
 
 from neos.workflow.state import AnalysisResult
 from neos.utils.llm_factory import create_llm
-from neos.utils.llm_wrapper import create_tracked_llm
+from neos.utils.llm_wrapper import create_tracked_llm, extract_text_from_response
 from langchain_core.messages import HumanMessage
 
 from .base import AnalysisAgent
@@ -167,7 +167,7 @@ class DataAnalysisAgent(AnalysisAgent):
 각 인사이트는 한 문장으로 작성하고, 번호 없이 작성해주세요."""
 
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            insights_text = response.content.strip()
+            insights_text = extract_text_from_response(response).strip()
 
             # 인사이트를 줄 단위로 분리 (빈 줄 제거)
             insights = [line.strip() for line in insights_text.split('\n') if line.strip() and not line.strip().startswith('#')]
@@ -664,7 +664,7 @@ class WebLookupAgent(AnalysisAgent):
 각 인사이트는 한 문장으로 작성하고, 번호 없이 작성해주세요."""
 
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            summary_text = response.content.strip()
+            summary_text = extract_text_from_response(response).strip()
 
             # 인사이트를 줄 단위로 분리
             summary_insights = [line.strip() for line in summary_text.split('\n') if line.strip() and not line.strip().startswith('#')]
