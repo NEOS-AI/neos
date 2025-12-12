@@ -64,8 +64,8 @@ export default function SettingsPanel() {
                     <option value="claude-sonnet-4-5-20250929">
                       Claude 4.5 Sonnet
                     </option>
-                    <option value="claude-opus-4-1-20250805">
-                      Claude 4.1 Opus
+                    <option value="claude-opus-4-5-20251101">
+                      Claude 4.5 Opus
                     </option>
                     <option value="claude-haiku-4-5-20251001">
                       Claude 4.5 Haiku

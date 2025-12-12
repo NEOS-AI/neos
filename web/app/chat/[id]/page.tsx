@@ -5,12 +5,12 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useChatStore } from "@/lib/stores/chat-store";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { PageLoading } from "@/components/chat/LoadingStates";
-import Header from "@/components/chat/Header";
 import Sidebar from "@/components/chat/Sidebar";
 import MessageList from "@/components/chat/MessageList";
 import InputBox from "@/components/chat/InputBox";
 import ChatModeSelector from "@/components/chat/ChatModeSelector";
 import SettingsPanel from "@/components/chat/SettingsPanel";
+
 
 function ChatPageContent() {
   const params = useParams();
@@ -125,7 +125,6 @@ function ChatPageContent() {
         {/* Header with Mode Selector and Settings */}
         <div className="border-b border-line-soft bg-bg-surface flex-shrink-0">
           <div className="flex items-center justify-between px-6 py-3">
-            <Header />
             <div className="flex items-center gap-3">
               <ChatModeSelector />
               <SettingsPanel />
