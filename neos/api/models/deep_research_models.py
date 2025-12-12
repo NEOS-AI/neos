@@ -39,6 +39,7 @@ class SectionType(str, Enum):
     FACT_VERIFICATION = "fact_verification"
     CRITICAL_ANALYSIS = "critical_analysis"
     BIAS_ANALYSIS = "bias_analysis"
+    FINAL_REPORT = "final_report"
 
 
 class SectionStatus(str, Enum):
