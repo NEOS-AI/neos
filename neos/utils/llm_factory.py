@@ -82,6 +82,15 @@ class AnthropicProvider(LLMProvider):
             }
             default_params["thinking"] = thinking
 
+            # max_tokens must be greater than thinking.budget_tokens
+            # Set it to budget_tokens + sufficient output tokens (default: 4096)
+            if "max_tokens" not in default_params:
+                default_params["max_tokens"] = settings.MAX_THINKING_LENGTH + 4096
+                logger.info(f"Set max_tokens={default_params['max_tokens']} (thinking.budget_tokens={settings.MAX_THINKING_LENGTH} + output=4096)")
+            elif default_params["max_tokens"] <= settings.MAX_THINKING_LENGTH:
+                logger.warning(f"max_tokens ({default_params['max_tokens']}) must be greater than thinking.budget_tokens ({settings.MAX_THINKING_LENGTH}); adjusting to {settings.MAX_THINKING_LENGTH + 4096}")
+                default_params["max_tokens"] = settings.MAX_THINKING_LENGTH + 4096
+
         return ChatAnthropic(**default_params)
 
     def get_provider_name(self) -> str:

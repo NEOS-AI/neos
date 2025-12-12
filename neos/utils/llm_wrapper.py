@@ -334,3 +334,44 @@ def create_tracked_llm(
         tags=tags,
         custom_metadata=custom_metadata
     )
+
+
+def extract_text_from_response(response: Any) -> str:
+    """
+    LLM 응답에서 텍스트 추출 (thinking blocks 포함 처리)
+
+    When thinking blocks are enabled, response.content is a list of content blocks.
+    This function extracts only the text blocks, ignoring thinking blocks.
+
+    Args:
+        response: LLM response object (AIMessage or similar)
+
+    Returns:
+        str: 추출된 텍스트
+
+    사용 예:
+        from neos.utils.llm_wrapper import extract_text_from_response
+
+        response = await llm.ainvoke(messages)
+        text = extract_text_from_response(response)
+    """
+    if isinstance(response, str):
+        return response
+
+    content = getattr(response, 'content', response)
+
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        # Extract text blocks from content list (ignore thinking blocks)
+        text_parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    text_parts.append(block.get("text", ""))
+            elif hasattr(block, "type") and block.type == "text":
+                text_parts.append(getattr(block, "text", ""))
+        return "".join(text_parts)
+
+    return str(content)
