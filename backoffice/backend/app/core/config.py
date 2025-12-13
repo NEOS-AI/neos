@@ -1,9 +1,23 @@
 """Application configuration settings."""
 
+import os
+import sys
 from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Get the base directory (backoffice/backend)
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+ENV_FILE = BASE_DIR / ".env"
+
+# Print debug info at module load time (only if DEBUG=True in environment)
+DEBUG_CONFIG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
+if DEBUG_CONFIG and not any('pytest' in arg for arg in sys.argv):
+    print(f"[Config] BASE_DIR: {BASE_DIR}")
+    print(f"[Config] ENV_FILE: {ENV_FILE}")
+    print(f"[Config] ENV_FILE exists: {ENV_FILE.exists()}")
 
 
 class Settings(BaseSettings):
@@ -24,7 +38,7 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
 
     # Database (shared with main neos)
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/neos"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:password@localhost:5432/neos"
     DATABASE_POOL_SIZE: int = 10
     DATABASE_MAX_OVERFLOW: int = 20
 
@@ -58,15 +72,26 @@ class Settings(BaseSettings):
     BATCH_SIZE: int = 100
     MAX_CONVERSATIONS_PER_RUN: int = 10000
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
 
 @lru_cache()
 def get_settings() -> Settings:
     """Get cached settings instance."""
-    return Settings()
+    _settings = Settings()
+
+    # Print loaded settings for debugging
+    if not any('pytest' in arg for arg in sys.argv):
+        print(f"[Config] Settings loaded successfully")
+        print(f"[Config] DATABASE_URL: {_settings.DATABASE_URL}")
+        print(f"[Config] Using .env file: {ENV_FILE.exists()}")
+
+    return _settings
 
 
 settings = get_settings()
