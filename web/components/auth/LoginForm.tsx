@@ -171,13 +171,6 @@ export default function LoginForm({ onSuccess, initialMode = 'login' }: LoginFor
               )}
             </button>
           </div>
-
-          {/* Demo Note */}
-          <div className="mt-6 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-            <p className="text-xs text-blue-300 text-center">
-              <strong>Demo Mode:</strong> This is a mock authentication system. Any credentials will work for testing.
-            </p>
-          </div>
         </div>
       </div>
     </div>
