@@ -88,10 +88,28 @@ services:
       - LOG_LEVEL=INFO
       - METRICS_ENABLED=true
       - CELERY_BROKER_URL=redis://redis-master:6379/2
+      # Storage configuration (RustFS for on-premise)
+      - STORAGE_PROVIDER=${STORAGE_PROVIDER:-rustfs}
+      - RUSTFS_ENDPOINT_URL=http://rustfs:9000
+      - RUSTFS_BUCKET_NAME=${RUSTFS_BUCKET_NAME:-neos-documents}
+      - RUSTFS_ACCESS_KEY=${RUSTFS_ACCESS_KEY:-minioadmin}
+      - RUSTFS_SECRET_KEY=${RUSTFS_SECRET_KEY:-minioadmin}
+      # S3 configuration (if using AWS S3)
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-neos-documents}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      # Local storage fallback
+      - LOCAL_STORAGE_PATH=/app/storage/documents
+    volumes:
+      - neos_storage:/app/storage
     depends_on:
       postgres-primary:
         condition: service_healthy
       redis-master:
+        condition: service_healthy
+      rustfs:
         condition: service_healthy
     ports:
       - "8518:8518"
