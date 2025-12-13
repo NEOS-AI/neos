@@ -4,21 +4,21 @@ from typing import Dict
 
 
 class ResearchPlanningPrompts:
-    """Prompts for advanced research methodology planning."""
+   """Prompts for advanced research methodology planning."""
 
-    @staticmethod
-    def get_prompt(topic_analysis_text: str, language: str = "en") -> str:
-        """Get research planning prompt in the specified language.
+   @staticmethod
+   def get_prompt(topic_analysis_text: str, language: str = "en") -> str:
+      """Get research planning prompt in the specified language.
 
-        Args:
-            topic_analysis_text: Previous topic analysis result
-            language: Target language code ('en', 'ko', 'ja')
+      Args:
+         topic_analysis_text: Previous topic analysis result
+         language: Target language code ('en', 'ko', 'ja')
 
-        Returns:
-            Formatted prompt string
-        """
-        prompts: Dict[str, str] = {
-            "ko": f"""다음 주제 분석을 바탕으로 포괄적인 연구 계획을 수립해주세요:
+      Returns:
+         Formatted prompt string
+      """
+      prompts: Dict[str, str] = {
+         "ko": f"""다음 주제 분석을 바탕으로 포괄적인 연구 계획을 수립해주세요:
 
 주제 분석:
 {topic_analysis_text[:1500]}
@@ -119,7 +119,7 @@ Write a very detailed and actionable plan in English.""",
 4. **データ収集計画**
    - 1次データタイプ: 統計、事例、専門家意見
    - 2次データタイプ: 学術論文、産業レポート、ニュース
-   - 検索キーワード戦略（20個以上）
+   - 検索キーワード戦略(20個以上)
    - ソース多様化戦略
 
 5. **品質管理戦略**
@@ -128,6 +128,6 @@ Write a very detailed and actionable plan in English.""",
    - バイアス防止戦略
 
 非常に詳細で実行可能な計画を日本語で作成してください。"""
-        }
+      }
 
-        return prompts.get(language, prompts["en"])
+      return prompts.get(language, prompts["en"])

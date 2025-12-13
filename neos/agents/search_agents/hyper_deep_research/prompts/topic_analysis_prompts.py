@@ -4,21 +4,21 @@ from typing import Dict
 
 
 class TopicAnalysisPrompts:
-    """Prompts for multi-dimensional topic analysis."""
+   """Prompts for multi-dimensional topic analysis."""
 
-    @staticmethod
-    def get_prompt(query: str, language: str = "en") -> str:
-        """Get topic analysis prompt in the specified language.
+   @staticmethod
+   def get_prompt(query: str, language: str = "en") -> str:
+      """Get topic analysis prompt in the specified language.
 
-        Args:
-            query: Research topic/query
-            language: Target language code ('en', 'ko', 'ja')
+      Args:
+         query: Research topic/query
+         language: Target language code ('en', 'ko', 'ja')
 
-        Returns:
-            Formatted prompt string
-        """
-        prompts: Dict[str, str] = {
-            "ko": f"""다음 연구 주제를 다차원으로 깊이 있게 분석해주세요:
+      Returns:
+         Formatted prompt string
+      """
+      prompts: Dict[str, str] = {
+         "ko": f"""다음 연구 주제를 다차원으로 깊이 있게 분석해주세요:
 
 주제: {query}
 
@@ -131,6 +131,6 @@ Write a very detailed and structured analysis in English.""",
    - ケーススタディが必要な領域
 
 非常に詳細で構造化された分析を日本語で作成してください。"""
-        }
+      }
 
-        return prompts.get(language, prompts["en"])
+      return prompts.get(language, prompts["en"])
