@@ -19,6 +19,12 @@ docker pull valkey/valkey
 docker run --name neos-valkey -p 6379:6379 -d valkey/valkey
 ```
 
+Running rustfs:
+```bash
+# Using latest version
+docker run --name neos-rustfs -d -p 9000:9000 -p 9001:9001 rustfs/rustfs:latest
+```
+
 ## Connecting to the database
 
 ```bash
