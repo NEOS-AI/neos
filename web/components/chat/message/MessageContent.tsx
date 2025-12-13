@@ -118,12 +118,13 @@ export default function MessageContent({
   };
 
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      className="prose prose-slate dark:prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-gray-900 prose-pre:text-gray-100"
-      components={markdownComponents}
-    >
-      {content || "..."}
-    </ReactMarkdown>
+    <div className="prose prose-slate dark:prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-gray-900 prose-pre:text-gray-100">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={markdownComponents}
+      >
+        {content || "..."}
+      </ReactMarkdown>
+    </div>
   );
 }
