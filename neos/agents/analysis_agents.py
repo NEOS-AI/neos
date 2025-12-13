@@ -141,7 +141,7 @@ class DataAnalysisAgent(AnalysisAgent):
             ])
 
             # LLM 생성 및 추적
-            base_llm = create_llm(temperature=0.3, max_tokens=800)
+            base_llm = create_llm(temperature=0.3, max_tokens=8000)
             llm = create_tracked_llm(
                 llm=base_llm,
                 session_id=session_id,
@@ -645,7 +645,7 @@ class WebLookupAgent(AnalysisAgent):
             truncated_text = text[:3000] + ("..." if len(text) > 3000 else "")
 
             # LLM 생성 및 추적
-            base_llm = create_llm(temperature=0.3, max_tokens=500)
+            base_llm = create_llm(temperature=0.3, max_tokens=8000)
             llm = create_tracked_llm(
                 llm=base_llm,
                 session_id=session_id,

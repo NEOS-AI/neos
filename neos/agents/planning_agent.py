@@ -41,7 +41,7 @@ class PlanningAgent:
 
         try:
             from neos.utils.llm_wrapper import create_tracked_llm
-            base_llm = create_llm(temperature=0.3, max_tokens=2000)
+            base_llm = create_llm(temperature=0.3, max_tokens=8000)
 
             # Prepare custom metadata for tracking
             planning_metadata = {

@@ -169,7 +169,7 @@ class RealtimeInfoSearchAgent(SearchAgent):
             print(f"[DEBUG] Processing {len(tavily_results)} Tavily results with LLM...")
 
             # Create LLM instance with higher max_tokens for comprehensive responses
-            base_llm = create_llm(temperature=0.1, max_tokens=4000)  # Low temperature for factual accuracy, higher token limit
+            base_llm = create_llm(temperature=0.1, max_tokens=8000)  # Low temperature for factual accuracy, higher token limit
 
             # Wrap LLM with tracking for dataset collection
             llm = create_tracked_llm(

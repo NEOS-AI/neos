@@ -1,6 +1,6 @@
 """Skill-based Tool Selector - LLM-powered intelligent selection of skills and tools"""
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from dataclasses import dataclass
 import json
 import logging
@@ -100,7 +100,7 @@ class SkillBasedToolSelector:
             available_tools = self._get_available_tools()
 
             # Create tracked LLM for dataset collection
-            base_llm = create_llm(temperature=0.2, max_tokens=3000)
+            base_llm = create_llm(temperature=0.2, max_tokens=8000)
 
             selection_metadata = {
                 "query": query,

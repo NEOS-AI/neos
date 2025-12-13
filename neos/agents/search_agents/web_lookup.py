@@ -405,7 +405,7 @@ class WebLookUpAgent(SearchAgent):
             print(f"[DEBUG] Processing {len(contents)} web contents with LLM...")
 
             # LLM 인스턴스 생성
-            base_llm = create_llm(temperature=0.1, max_tokens=4000)
+            base_llm = create_llm(temperature=0.1, max_tokens=8000)
 
             # 추적 래퍼 적용
             llm = create_tracked_llm(

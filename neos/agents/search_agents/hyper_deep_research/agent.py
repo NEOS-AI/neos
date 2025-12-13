@@ -702,7 +702,7 @@ class HyperDeepResearchAgent(SearchAgent):
             from neos.utils.llm_wrapper import create_tracked_llm
 
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.3, max_tokens=2500),
+                llm=create_llm(temperature=0.3, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",
@@ -865,7 +865,7 @@ class HyperDeepResearchAgent(SearchAgent):
             print(f"[INFO] Verifying facts across {len(self.all_collected_sources)} sources...")
 
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.1, max_tokens=2000),
+                llm=create_llm(temperature=0.1, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",
@@ -940,7 +940,7 @@ class HyperDeepResearchAgent(SearchAgent):
             print(f"[INFO] Analyzing bias across {len(self.all_collected_sources)} sources...")
 
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.2, max_tokens=2000),
+                llm=create_llm(temperature=0.2, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",

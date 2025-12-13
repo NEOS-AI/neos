@@ -395,7 +395,7 @@ Report Structure:
     async def _generate_task_queries(self, original_query: str, task_description: str, session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """특정 task에 대한 검색 쿼리 생성 (3-5개)"""
         try:
-            base_llm = create_llm(temperature=0.4, max_tokens=1500)
+            base_llm = create_llm(temperature=0.4, max_tokens=8000)
 
             llm = create_tracked_llm(
                 llm=base_llm,
@@ -491,7 +491,7 @@ Search Queries:""",
     async def _generate_initial_queries(self, original_query: str, session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """초기 광범위 검색 쿼리 생성 (8-10개)"""
         try:
-            base_llm = create_llm(temperature=0.4, max_tokens=2000)
+            base_llm = create_llm(temperature=0.4, max_tokens=8000)
 
             llm = create_tracked_llm(
                 llm=base_llm,
@@ -587,7 +587,7 @@ Search Queries:""",
     async def _identify_gaps(self, original_query: str, summaries: List[str], session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """수집된 정보에서 부족한 부분 식별"""
         try:
-            base_llm = create_llm(temperature=0.3, max_tokens=1500)
+            base_llm = create_llm(temperature=0.3, max_tokens=8000)
 
             llm = create_tracked_llm(
                 llm=base_llm,
@@ -659,7 +659,7 @@ Write each gap on one line without numbering.""",
             return []
 
         try:
-            base_llm = create_llm(temperature=0.3, max_tokens=1200)
+            base_llm = create_llm(temperature=0.3, max_tokens=8000)
 
             llm = create_tracked_llm(
                 llm=base_llm,
@@ -702,7 +702,7 @@ Write each gap on one line without numbering.""",
     async def _cross_reference_sources(self, summaries: List[str], session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """소스 간 크로스 레퍼런스 및 일관성 확인"""
         try:
-            base_llm = create_llm(temperature=0.2, max_tokens=2000)
+            base_llm = create_llm(temperature=0.2, max_tokens=8000)
 
             llm = create_tracked_llm(
                 llm=base_llm,

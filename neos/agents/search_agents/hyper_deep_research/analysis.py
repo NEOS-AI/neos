@@ -66,7 +66,7 @@ class TopicAnalyzer:
         """
         try:
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.3, max_tokens=3000),
+                llm=create_llm(temperature=0.3, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",
@@ -161,7 +161,7 @@ class ResearchPlanner:
             llm = create_tracked_llm(
                 llm=create_llm(
                     temperature=0.3,
-                    max_tokens=4000,
+                    max_tokens=8000,
                     timeout=settings.LLM_TIMEOUT_RESEARCH_PLANNING
                 ),
                 session_id=session_id,
@@ -286,7 +286,7 @@ class DeepAnalyzer:
         """Execute single analysis round."""
         try:
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.3, max_tokens=3000),
+                llm=create_llm(temperature=0.3, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",
@@ -316,7 +316,7 @@ class DeepAnalyzer:
         """Synthesize all analysis rounds."""
         try:
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.2, max_tokens=3000),
+                llm=create_llm(temperature=0.2, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",
@@ -368,7 +368,7 @@ class GapAnalyzer:
         """Identify knowledge gaps."""
         try:
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.3, max_tokens=2000),
+                llm=create_llm(temperature=0.3, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",
@@ -403,7 +403,7 @@ class GapAnalyzer:
         """Summarize gap investigation."""
         try:
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.2, max_tokens=2000),
+                llm=create_llm(temperature=0.2, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",
@@ -448,7 +448,7 @@ class ValidationAnalyzer:
         """Cross-validate sources with triangulation."""
         try:
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.2, max_tokens=3500),
+                llm=create_llm(temperature=0.2, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",
@@ -501,7 +501,7 @@ class ValidationAnalyzer:
         """Perform critical thinking and multi-perspective analysis."""
         try:
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.4, max_tokens=4000),
+                llm=create_llm(temperature=0.4, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",
@@ -550,7 +550,7 @@ class DataSummarizer:
         """Summarize collected data."""
         try:
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.2, max_tokens=2500),
+                llm=create_llm(temperature=0.2, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",
@@ -560,7 +560,7 @@ class DataSummarizer:
 
             sample = sources[:20]
             sources_sample = "\n\n".join([
-                f"- {s.get('title', '')}: {s.get('content', '')[:200]}"
+                f"- {s.get('title', '')}: {s.get('content', '')[:300]}"
                 for s in sample
             ])
 

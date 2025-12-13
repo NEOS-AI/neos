@@ -59,7 +59,7 @@ class ReportGenerator:
         """
         try:
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.3, max_tokens=2000),
+                llm=create_llm(temperature=0.3, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",
@@ -119,7 +119,7 @@ class ReportGenerator:
         """
         try:
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.3, max_tokens=3500),
+                llm=create_llm(temperature=0.3, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",
@@ -412,7 +412,7 @@ class QueryGenerator:
         """
         try:
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.4, max_tokens=800),
+                llm=create_llm(temperature=0.4, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",

@@ -99,7 +99,7 @@ class DataCollector:
         """
         try:
             llm = create_tracked_llm(
-                llm=create_llm(temperature=0.6, max_tokens=2500),
+                llm=create_llm(temperature=0.6, max_tokens=8000),
                 session_id=session_id,
                 user_id=user_id,
                 workflow_step="hyper_deep_research",

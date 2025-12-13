@@ -216,7 +216,7 @@ Comprehensive Analysis:""",
     ) -> List[str]:
         """특정 task에 대한 검색 쿼리 생성 (2-3개)"""
         try:
-            base_llm = create_llm(temperature=0.3, max_tokens=800)
+            base_llm = create_llm(temperature=0.3, max_tokens=8000)
 
             llm = create_tracked_llm(
                 llm=base_llm,
@@ -311,7 +311,7 @@ Search Queries:""",
     async def _generate_search_queries(self, original_query: str, session_id: str = "", user_id: str = "", detected_language: str = "ko") -> List[str]:
         """LLM을 사용하여 검색 쿼리 후보 2-5개 생성"""
         try:
-            base_llm = create_llm(temperature=0.3, max_tokens=1000)
+            base_llm = create_llm(temperature=0.3, max_tokens=8000)
 
             llm = create_tracked_llm(
                 llm=base_llm,
@@ -471,7 +471,7 @@ Search Queries:""",
                 return no_results_messages.get(detected_language, no_results_messages["en"])
 
             try:
-                base_llm = create_llm(temperature=0.1, max_tokens=1500)  # 토큰 수 줄임
+                base_llm = create_llm(temperature=0.1, max_tokens=8000)  # 토큰 수 줄임
 
                 llm = create_tracked_llm(
                     llm=base_llm,
@@ -603,7 +603,7 @@ Summary:""",
     async def _synthesize_final_analysis(self, original_query: str, search_queries: List[str], summaries: List[str], session_id: str = "", user_id: str = "", context: Dict[str, Any] = None) -> str:
         """모든 요약을 종합하여 최종 분석 결과 생성"""
         try:
-            base_llm = create_llm(temperature=0.2, max_tokens=4000)
+            base_llm = create_llm(temperature=0.2, max_tokens=8000)
 
             llm = create_tracked_llm(
                 llm=base_llm,
