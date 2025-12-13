@@ -12,7 +12,6 @@ version: '3.8'
 # - Grafana (visualization)
 # - Loki (log aggregation)
 # - Jaeger (distributed tracing)
-# - RabbitMQ (message queue for Celery)
 #
 # Usage:
 #   docker-compose -f docker-compose.enterprise.yml up -d
@@ -71,28 +70,6 @@ services:
           cpus: '1'
           memory: 2G
 
-  # === Message Queue ===
-
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    container_name: neos-rabbitmq
-    environment:
-      RABBITMQ_DEFAULT_USER: neos
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-ChangeThisPassword}
-      RABBITMQ_DEFAULT_VHOST: neos
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    ports:
-      - "5672:5672"   # AMQP
-      - "15672:15672" # Management UI
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - neos-network
-
   # === Application Services ===
 
   neos-backend-1:
@@ -110,13 +87,11 @@ services:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
       - METRICS_ENABLED=true
-      - CELERY_BROKER_URL=amqp://neos:${RABBITMQ_PASSWORD:-ChangeThisPassword}@rabbitmq:5672/neos
+      - CELERY_BROKER_URL=redis://redis-master:6379/2
     depends_on:
       postgres-primary:
         condition: service_healthy
       redis-master:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
     ports:
       - "8518:8518"
@@ -153,13 +128,11 @@ services:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
       - METRICS_ENABLED=true
-      - CELERY_BROKER_URL=amqp://neos:${RABBITMQ_PASSWORD:-ChangeThisPassword}@rabbitmq:5672/neos
+      - CELERY_BROKER_URL=redis://redis-master:6379/2
     depends_on:
       postgres-primary:
         condition: service_healthy
       redis-master:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
     ports:
       - "8519:8518"
@@ -192,13 +165,11 @@ services:
       - ENVIRONMENT=production
       - LOG_LEVEL=INFO
       - METRICS_ENABLED=true
-      - CELERY_BROKER_URL=amqp://neos:${RABBITMQ_PASSWORD:-ChangeThisPassword}@rabbitmq:5672/neos
+      - CELERY_BROKER_URL=redis://redis-master:6379/2
     depends_on:
       postgres-primary:
         condition: service_healthy
       redis-master:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
     ports:
       - "8520:8518"
@@ -369,8 +340,6 @@ volumes:
   postgres_primary_data:
     driver: local
   redis_master_data:
-    driver: local
-  rabbitmq_data:
     driver: local
   prometheus_data:
     driver: local
