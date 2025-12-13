@@ -1,10 +1,9 @@
 """Skills Manager for initializing and managing skills"""
 
 from typing import Dict, Any, List, Optional
-from pathlib import Path
 import logging
 
-from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base import SkillResult, SkillType
 from neos.skills.manager.skill_registry import SkillRegistry, SkillInfo
 
 

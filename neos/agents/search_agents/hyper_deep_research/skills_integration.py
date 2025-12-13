@@ -11,6 +11,8 @@ from typing import Dict, Any, List, Optional
 import asyncio
 import logging
 
+from neos.skills.manager.skill_manager import SkillManager
+
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +41,8 @@ MEDICAL_BIO_KEYWORDS = [
 
 class SkillsIntegrator:
     """Handles skills integration for research data collection."""
-    
-    def __init__(self, skill_manager: Any):
+
+    def __init__(self, skill_manager: SkillManager):
         """Initialize skills integrator.
         
         Args:
@@ -58,13 +60,13 @@ class SkillsIntegrator:
             "wikipedia_searches": 0,
             "wikipedia_results": 0,
         }
-    
+
     async def initialize_skills(self, selected_skills: List[str]) -> bool:
         """Initialize selected skills.
-        
+
         Args:
             selected_skills: List of skill names to initialize
-            
+
         Returns:
             True if at least one skill was initialized
         """
@@ -72,6 +74,11 @@ class SkillsIntegrator:
             print("[WARNING] No skills selected for initialization")
             self.skills_enabled = False
             return False
+
+        # Ensure builtin skills are registered
+        if not self.skill_manager.registry._skills:
+            print("[INFO] 📝 Registry is empty, registering builtin skills...")
+            self.skill_manager.register_builtin_skills()
 
         print(f"[INFO] 🎯 Initializing {len(selected_skills)} selected skills...")
 
@@ -90,9 +97,10 @@ class SkillsIntegrator:
         self.skills_enabled = initialized_count > 0
         self.selected_skills = selected_skills
         print(f"[INFO] 📊 Initialized {initialized_count}/{len(selected_skills)} skills")
-        
+
         return self.skills_enabled
-    
+
+
     def ensure_required_skills(
         self,
         topic_analysis: Dict[str, Any],
@@ -208,7 +216,7 @@ class SkillsIntegrator:
 
         print(f"[INFO] 📊 Total skill-based sources collected: {len(skill_results)}")
         return skill_results
-    
+
     async def _search_with_arxiv(
         self,
         queries: List[str],
@@ -255,7 +263,7 @@ class SkillsIntegrator:
                 continue
 
         return results
-    
+
     async def _search_with_pubmed(
         self,
         queries: List[str],
@@ -301,7 +309,7 @@ class SkillsIntegrator:
                 continue
 
         return results
-    
+
     async def _search_with_wikipedia(
         self,
         queries: List[str],
@@ -349,7 +357,8 @@ class SkillsIntegrator:
                 continue
 
         return results
-    
+
+
     async def analyze_source_with_skill(
         self,
         content: str,
@@ -378,7 +387,8 @@ class SkillsIntegrator:
         except Exception as e:
             logger.warning(f"Error using skill for source analysis: {e}")
             return {}
-    
+
+
     async def summarize_with_skill(
         self,
         content: str,
@@ -397,7 +407,6 @@ class SkillsIntegrator:
                     "options": {"max_length": max_length, "style": "academic"}
                 }
             )
-
             if result.success:
                 return result.data.get("summary", "")
             return ""
@@ -405,7 +414,8 @@ class SkillsIntegrator:
         except Exception as e:
             logger.warning(f"Error using skill for summarization: {e}")
             return ""
-    
+
+
     async def extract_references_with_skill(
         self,
         content: str,
@@ -430,7 +440,8 @@ class SkillsIntegrator:
         except Exception as e:
             logger.warning(f"Error using skill for reference extraction: {e}")
             return {}
-    
+
+
     def get_stats(self) -> Dict[str, Any]:
         """Get skills integration statistics."""
         return self.stats.copy()
