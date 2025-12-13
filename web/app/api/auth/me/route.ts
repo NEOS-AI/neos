@@ -3,7 +3,8 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { getSession, setSession } from '@/lib/redis';
+import { deleteSession } from '@/lib/redis';
+import { getValidAccessToken } from '@/lib/session-helper';
 import { BACKEND_URL } from '@/lib/env';
 
 export async function GET(request: NextRequest) {
@@ -18,14 +19,15 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Redis에서 세션 가져오기
-    const session = await getSession(sessionId);
+    // 유효한 Access Token 가져오기 (자동 갱신 포함)
+    const tokenResult = await getValidAccessToken(sessionId);
 
-    if (!session || !session.accessToken) {
-      // 세션이 만료되었거나 유효하지 않음
+    if (!tokenResult) {
+      // 세션이 만료되었거나 갱신 실패
       cookieStore.delete('neos_session');
+      await deleteSession(sessionId);
       return NextResponse.json(
-        { error: '세션이 만료되었습니다.' },
+        { error: '인증이 만료되었습니다. 다시 로그인해주세요.' },
         { status: 401 }
       );
     }
@@ -34,80 +36,11 @@ export async function GET(request: NextRequest) {
     const response = await fetch(`${BACKEND_URL}/api/v1/auth/me`, {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${session.accessToken}`,
+        Authorization: `Bearer ${tokenResult.accessToken}`,
       },
     });
 
     if (!response.ok) {
-      // Access Token이 만료된 경우 갱신 시도
-      if (response.status === 401 && session.refreshToken) {
-        try {
-          // 백엔드 토큰 갱신 API 호출
-          const refreshResponse = await fetch(`${BACKEND_URL}/api/v1/auth/refresh`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ refresh_token: session.refreshToken }),
-          });
-
-          if (!refreshResponse.ok) {
-            // Refresh Token도 만료된 경우
-            cookieStore.delete('neos_session');
-            return NextResponse.json(
-              { error: '인증이 만료되었습니다. 다시 로그인해주세요.' },
-              { status: 401 }
-            );
-          }
-
-          const refreshData = await refreshResponse.json();
-          const { access_token, refresh_token, user } = refreshData;
-
-          // Redis 세션 업데이트
-          await setSession(
-            sessionId,
-            {
-              accessToken: access_token,
-              refreshToken: refresh_token,
-              user,
-              createdAt: session.createdAt,
-              lastRefreshed: new Date().toISOString(),
-            },
-            604800 // 7일
-          );
-
-          // 갱신된 토큰으로 다시 사용자 정보 조회
-          const retryResponse = await fetch(`${BACKEND_URL}/api/v1/auth/me`, {
-            method: 'GET',
-            headers: {
-              Authorization: `Bearer ${access_token}`,
-            },
-          });
-
-          if (!retryResponse.ok) {
-            return NextResponse.json(
-              { error: '사용자 정보를 가져올 수 없습니다.' },
-              { status: retryResponse.status }
-            );
-          }
-
-          const retryUser = await retryResponse.json();
-
-          return NextResponse.json({
-            success: true,
-            user: retryUser,
-            tokenRefreshed: true,
-          });
-        } catch (refreshError) {
-          console.error('Token refresh error:', refreshError);
-          cookieStore.delete('neos_session');
-          return NextResponse.json(
-            { error: '인증이 만료되었습니다. 다시 로그인해주세요.' },
-            { status: 401 }
-          );
-        }
-      }
-
       return NextResponse.json(
         { error: '사용자 정보를 가져올 수 없습니다.' },
         { status: response.status }
@@ -119,6 +52,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       user,
+      tokenRefreshed: tokenResult.wasRefreshed,
     });
   } catch (error: any) {
     console.error('Get user error:', error);

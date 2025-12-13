@@ -4,7 +4,6 @@ import { useEffect, useCallback, useState } from "react";
 import { useChatStore } from "@/lib/stores/chat-store";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { PageLoading } from "./LoadingStates";
-import Header from "./Header";
 import Sidebar from "./Sidebar";
 import MessageList from "./MessageList";
 import InputBox from "./InputBox";
@@ -79,7 +78,7 @@ function ChatInterfaceContent() {
         {/* Header with Mode Selector and Settings */}
         <div className="border-b border-claude-border bg-claude-dark">
           <div className="flex items-center justify-between px-6 py-3">
-            <Header />
+            <div className="text-sm font-medium text-claude-text-primary">Neos</div>
             <div className="flex items-center gap-3">
               <ChatModeSelector />
               <SettingsPanel />

@@ -56,6 +56,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     initAuth();
   }, []);
 
+  // 주기적 토큰 갱신 (사용자 활성 시에만)
+  useEffect(() => {
+    if (!user) return;
+
+    let lastActivityTime = Date.now();
+
+    // 사용자 활동 감지
+    const activityEvents = ['mousedown', 'keydown', 'scroll', 'touchstart'];
+    const updateActivity = () => {
+      lastActivityTime = Date.now();
+    };
+
+    activityEvents.forEach((event) => {
+      window.addEventListener(event, updateActivity, { passive: true });
+    });
+
+    // 12분마다 토큰 갱신 (Access Token 15분 만료 고려)
+    const refreshInterval = setInterval(
+      async () => {
+        const inactiveTime = Date.now() - lastActivityTime;
+
+        // 5분 이상 비활성이면 갱신하지 않음
+        if (inactiveTime > 5 * 60 * 1000) {
+          console.log('[Auth] User inactive, skipping token refresh');
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/auth/refresh', { method: 'POST' });
+          if (response.ok) {
+            console.log('[Auth] Token refreshed proactively');
+          } else {
+            console.error('[Auth] Token refresh failed:', response.status);
+          }
+        } catch (error) {
+          console.error('[Auth] Failed to refresh token:', error);
+        }
+      },
+      12 * 60 * 1000
+    ); // 12분
+
+    return () => {
+      clearInterval(refreshInterval);
+      activityEvents.forEach((event) => {
+        window.removeEventListener(event, updateActivity);
+      });
+    };
+  }, [user]);
+
   const login = useCallback(
     async (email: string, password: string) => {
       try {
