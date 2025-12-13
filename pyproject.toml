@@ -10,7 +10,7 @@ dependencies = [
     "arize-phoenix>=5.5.0",
     "asyncpg>=0.30.0",
     "crewai>=0.175.0",
-    "fastapi>=0.116.1",
+    "fastapi>=0.118.0",
     "greenlet>=3.2.4",
     "httpx>=0.28.1",
     "langchain>=0.3.27",
@@ -59,8 +59,14 @@ dependencies = [
     "arxiv>=2.1.0",
     "wikipedia>=1.4.0",
     "xmltodict>=1.0.2",
+    "pymupdf>=1.26.7",
 ]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["neos*"]
+
+[tool.uv.workspace]
+members = [
+    "backoffice/backend",
+]
