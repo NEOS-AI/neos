@@ -76,6 +76,7 @@ const toConversation = (response: ConversationResponse): Conversation => {
 };
 
 export const useChatStore = create<ChatStore>()(
+  // @ts-expect-error - zustand persist middleware type definition issue
   persist(
     (set, get) => ({
       // ======================================================================
@@ -160,6 +161,8 @@ export const useChatStore = create<ChatStore>()(
           logError(error, { context: "loadConversations", userId: get().currentUserId });
           const errorType = classifyError(error);
           const userMessage = getUserFriendlyMessage(errorType);
+          // Don't clear conversations on error - keep cached data
+          console.warn("[Store] Failed to load conversations, keeping cached data");
           set({ error: userMessage, isLoading: false });
         }
       },

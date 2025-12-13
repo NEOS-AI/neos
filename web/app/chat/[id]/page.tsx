@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useChatStore } from "@/lib/stores/chat-store";
+import { useAuth } from "@/lib/contexts/auth-context";
+import { chatAPI } from "@/lib/api/chat-api";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { PageLoading } from "@/components/chat/LoadingStates";
 import Sidebar from "@/components/chat/Sidebar";
@@ -18,6 +20,7 @@ function ChatPageContent() {
   const searchParams = useSearchParams();
   const chatId = params.id as string;
   const initialMessage = searchParams.get('initialMessage');
+  const { isLoading: isAuthLoading } = useAuth();
 
   const {
     loadConversations,
@@ -55,19 +58,45 @@ function ChatPageContent() {
 
   const initialize = useCallback(async () => {
     try {
+      // Wait for auth to finish loading before initializing
+      if (isAuthLoading) {
+        console.log("[ChatPage] Waiting for auth to finish loading...");
+        return;
+      }
+
       // Load conversations first
       await loadConversations();
 
-      const { conversations } = useChatStore.getState();
+      let { conversations } = useChatStore.getState();
 
-      // Check if the requested conversation exists
-      const conversation = conversations.find(c => c.conversation_id === chatId);
+      // Check if the requested conversation exists in loaded conversations
+      let conversation = conversations.find(c => c.conversation_id === chatId);
 
+      // If not found in the list, try to load it directly from the server
       if (!conversation) {
-        console.error(`[ChatPage] Conversation ${chatId} not found`);
-        // Redirect to home page if conversation doesn't exist
-        router.push('/');
-        return;
+        console.log(`[ChatPage] Conversation ${chatId} not found in list, trying direct load...`);
+
+        try {
+          // Try to fetch the conversation directly
+          const conversationResponse = await chatAPI.getConversation(chatId);
+
+          // Add it to the store
+          useChatStore.setState((state) => ({
+            conversations: [
+              { ...conversationResponse, messages: [] },
+              ...state.conversations,
+            ],
+          }));
+
+          conversation = { ...conversationResponse, messages: [] };
+          console.log(`[ChatPage] Successfully loaded conversation ${chatId} directly`);
+        } catch (directLoadError) {
+          console.error(`[ChatPage] Failed to load conversation ${chatId} directly:`, directLoadError);
+          // Conversation truly doesn't exist, redirect to home
+          console.error(`[ChatPage] Conversation ${chatId} not found`);
+          router.push('/');
+          return;
+        }
       }
 
       // Set current conversation
@@ -97,7 +126,7 @@ function ChatPageContent() {
     } finally {
       setIsInitializing(false);
     }
-  }, [chatId, loadConversations, loadMessages, setCurrentConversation, router, initialMessage, sendMessage]);
+  }, [chatId, isAuthLoading, loadConversations, loadMessages, setCurrentConversation, router, initialMessage, sendMessage]);
 
   useEffect(() => {
     initialize();
