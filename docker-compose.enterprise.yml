@@ -329,6 +329,58 @@ services:
     depends_on:
       - redis-master
 
+  # === Storage Layer (On-Premise) ===
+
+  # RustFS - S3-compatible object storage (MinIO alternative in Rust)
+  rustfs:
+    image: minio/minio:latest  # Using MinIO as rustfs placeholder until rustfs becomes production-ready
+    container_name: neos-rustfs
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${RUSTFS_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${RUSTFS_SECRET_KEY:-minioadmin}
+      MINIO_REGION: us-east-1
+    volumes:
+      - rustfs_data:/data
+    ports:
+      - "9000:9000"  # S3 API
+      - "9001:9001"  # Web Console
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - neos-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  # RustFS Initialization - Creates default bucket
+  rustfs-init:
+    image: minio/mc:latest
+    container_name: neos-rustfs-init
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      until /usr/bin/mc config host add rustfs http://rustfs:9000 ${RUSTFS_ACCESS_KEY:-minioadmin} ${RUSTFS_SECRET_KEY:-minioadmin}; do
+        echo 'Waiting for rustfs to be ready...';
+        sleep 2;
+      done;
+      /usr/bin/mc mb --ignore-existing rustfs/${RUSTFS_BUCKET_NAME:-neos-documents};
+      /usr/bin/mc anonymous set download rustfs/${RUSTFS_BUCKET_NAME:-neos-documents};
+      echo 'RustFS initialization complete';
+      "
+    networks:
+      - neos-network
+
 networks:
   neos-network:
     driver: bridge
@@ -346,4 +398,6 @@ volumes:
   grafana_data:
     driver: local
   loki_data:
+    driver: local
+  rustfs_data:
     driver: local
