@@ -5,6 +5,7 @@ GPT-4o Vision 모델 구현
 from typing import Dict, Any, Optional
 
 from neos.config.settings import settings
+
 from .vision_base import VisionModel, detect_image_media_type
 
 

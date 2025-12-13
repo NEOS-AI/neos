@@ -16,7 +16,7 @@ from .document_pipeline import DocumentPipeline
 from .audio_pipeline import AudioPipeline
 from .multimodal_pipeline import MultiModalPipeline
 from .unified_context import UnifiedContextLayer
-from .vision_models import (
+from .vision import (
     VisionModel,
     VisionProvider,
     GPT4oVision,

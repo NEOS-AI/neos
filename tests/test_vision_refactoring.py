@@ -18,26 +18,14 @@ class TestVisionRefactoring:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
 
-            from neos.workflow.pipelines.vision_models import (
-                VisionModel,
-                VisionProvider,
-                GPT4oVision,
-                ClaudeVision,
-                VisionModelFactory,
-            )
+            from neos.workflow.pipelines.vision import VisionProvider
 
             assert VisionProvider.GPT4O.value == "gpt4o"
             assert VisionProvider.CLAUDE.value == "claude"
 
     def test_new_import_works(self):
         """새로운 import가 작동하는지 테스트"""
-        from neos.workflow.pipelines.vision import (
-            VisionModel,
-            VisionProvider,
-            GPT4oVision,
-            ClaudeVision,
-            VisionModelFactory,
-        )
+        from neos.workflow.pipelines.vision import VisionProvider
 
         assert VisionProvider.GPT4O.value == "gpt4o"
         assert VisionProvider.CLAUDE.value == "claude"

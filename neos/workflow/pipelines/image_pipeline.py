@@ -18,7 +18,7 @@ from .base import (
     ProcessingStage,
     FileInput
 )
-from .vision_models import VisionModelFactory, VisionProvider
+from .vision import VisionModelFactory, VisionProvider
 
 
 class ImagePipeline(BasePipeline):
