@@ -607,7 +607,7 @@ async def deep_research_stream_generator(
         # Note: Frontend will receive the final content via SSE stream,
         # but we also update the DB for persistence
         final_content_summary = f"✅ Deep Research Complete: {research_topic}\n\n"
-        final_content_summary += f"**Results:**\n"
+        final_content_summary += "**Results:**\n"
         final_content_summary += f"- Sections: {completed_sections}\n"
         final_content_summary += f"- Sources: {total_sources}\n"
         final_content_summary += f"- Queries: {total_queries}\n"
