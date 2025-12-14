@@ -78,6 +78,10 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/002_add_d
 
 # Add smart cache table
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/003_add_smart_cache_tables.sql
+
+# Add migrations for Google OAuth2 and enterprise users
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/004_add_auth_tables.sql
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/005_add_oauth_and_enterprise.sql
 ```
 
 ### Migrate database schema for backoffice
