@@ -4,8 +4,6 @@ import hashlib
 import logging
 from langgraph.graph import StateGraph, END
 
-logger = logging.getLogger(__name__)
-
 from neos.agents.search_agents import (
     KnowledgeSearchAgent,
     RealtimeInfoSearchAgent,
@@ -37,6 +35,9 @@ from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationO
 from .processors import ResultProcessor, QualityValidator, ResponseGenerator
 from .utils import QueryClassifier
 from .checkpointer import get_checkpointer
+
+
+logger = logging.getLogger(__name__)
 
 
 class MultiAgentWorkflow:
