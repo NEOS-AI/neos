@@ -4,8 +4,9 @@
 PDF, DOCX, PPT, XLS 등 다양한 문서 파일을 처리합니다.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 from pathlib import Path
+import base64
 
 from .base import (
     BasePipeline,
@@ -20,6 +21,7 @@ from .word_parser import WordParser
 from .excel_parser import ExcelParser
 from .csv_parser import CSVParser
 from .ppt_parser import PPTParser
+from .vision.vision_factory import VisionModelFactory, VisionProvider
 
 
 class DocumentPipeline(BasePipeline):
@@ -53,6 +55,7 @@ class DocumentPipeline(BasePipeline):
         self.excel_parser = ExcelParser()
         self.csv_parser = CSVParser()
         self.ppt_parser = PPTParser()
+        self.vision_enabled = True  # Vision 분석 활성화 여부
 
     async def validate(self, context: PipelineContext) -> bool:
         """문서 입력 검증"""
@@ -159,7 +162,11 @@ class DocumentPipeline(BasePipeline):
             insights.append("Contains tables - structured data extraction available")
 
         if result.metadata.get("has_images"):
-            insights.append("Contains images - vision model analysis recommended")
+            vision_analysis = result.extracted_data.get("vision_analysis", [])
+            if vision_analysis:
+                insights.append(f"Contains {len(vision_analysis)} analyzed image(s) - Vision analysis completed")
+            else:
+                insights.append("Contains images - Vision model analysis available")
 
         result.insights = insights
 
@@ -211,6 +218,12 @@ class DocumentPipeline(BasePipeline):
                 file_path=file.file_path
             )
 
+            # 이미지가 있으면 Vision 모델로 분석
+            vision_results = []
+            images = result.get("images", [])
+            if images:
+                vision_results = await self._analyze_images_with_vision(images, context)
+
             # 결과 반환
             return {
                 "text": result.get("text", ""),
@@ -219,10 +232,13 @@ class DocumentPipeline(BasePipeline):
                 "has_tables": result.get("has_tables", False),
                 "metadata": result.get("metadata", {}),
                 "pages": result.get("pages", []),
+                "tables": result.get("tables", []),
+                "images": images,
+                "vision_analysis": vision_results,
                 "char_count": result.get("char_count", 0),
                 "word_count": result.get("word_count", 0),
                 "is_encrypted": result.get("is_encrypted", False),
-                "extraction_method": "PyPDF2",
+                "extraction_method": result.get("extraction_method", "PyPDF2"),
             }
 
         except Exception as e:
@@ -259,6 +275,12 @@ class DocumentPipeline(BasePipeline):
                 file_path=file.file_path
             )
 
+            # 이미지가 있으면 Vision 모델로 분석
+            vision_results = []
+            images = result.get("images", [])
+            if images:
+                vision_results = await self._analyze_images_with_vision(images, context)
+
             # 결과 반환
             return {
                 "text": result.get("text", ""),
@@ -269,6 +291,8 @@ class DocumentPipeline(BasePipeline):
                 "has_tables": result.get("has_tables", False),
                 "table_count": result.get("table_count", 0),
                 "tables": result.get("tables", []),
+                "images": images,
+                "vision_analysis": vision_results,
                 "metadata": result.get("metadata", {}),
                 "styles": result.get("styles", {}),
                 "extraction_method": "python-docx",
@@ -357,11 +381,19 @@ class DocumentPipeline(BasePipeline):
                 file_path=file.file_path
             )
 
+            # 이미지가 있으면 Vision 모델로 분석
+            vision_results = []
+            images = result.get("images", [])
+            if images:
+                vision_results = await self._analyze_images_with_vision(images, context)
+
             # 결과 반환
             return {
                 "text": result.get("text", ""),
                 "slide_count": result.get("slide_count", 0),
                 "slides": result.get("slides", []),
+                "images": images,
+                "vision_analysis": vision_results,
                 "has_images": result.get("has_images", False),
                 "has_tables": result.get("has_tables", False),
                 "has_notes": result.get("has_notes", False),
@@ -474,3 +506,75 @@ class DocumentPipeline(BasePipeline):
             return "medium"
         else:
             return "low"
+
+    async def _analyze_images_with_vision(
+        self,
+        images: List[Dict[str, Any]],
+        context: PipelineContext,
+        max_images: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Vision 모델을 사용하여 이미지 분석
+
+        Args:
+            images: 이미지 데이터 리스트 (image_bytes 포함)
+            context: 파이프라인 컨텍스트
+            max_images: 최대 분석할 이미지 수
+
+        Returns:
+            Vision 분석 결과 리스트
+        """
+        if not self.vision_enabled or not images:
+            return []
+
+        vision_results = []
+
+        try:
+            # Vision 모델 생성
+            vision_model = VisionModelFactory.create(VisionProvider.AUTO)
+
+            # 최대 이미지 수 제한
+            images_to_analyze = images[:max_images]
+
+            for img_data in images_to_analyze:
+                try:
+                    # 이미지 바이트를 base64로 인코딩
+                    image_bytes = img_data.get("image_bytes")
+                    if not image_bytes:
+                        continue
+
+                    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+
+                    # Vision 모델로 이미지 분석
+                    prompt = f"이 이미지를 분석하고 설명해주세요. 문서: {context.query}"
+
+                    analysis = await vision_model.analyze_image(
+                        image_data=image_base64,
+                        prompt=prompt,
+                        max_tokens=500,
+                        filename=f"image.{img_data.get('ext', 'jpg')}",
+                        mime_type=img_data.get('content_type', 'image/jpeg')
+                    )
+
+                    # 결과에 원본 이미지 정보 추가
+                    result = {
+                        "image_index": img_data.get("image_index", 0),
+                        "page_number": img_data.get("page_number"),
+                        "slide_number": img_data.get("slide_number"),
+                        "size": img_data.get("size"),
+                        "ext": img_data.get("ext"),
+                        "vision_analysis": analysis,
+                    }
+                    vision_results.append(result)
+
+                except Exception as e:
+                    # 개별 이미지 분석 실패는 건너뜀
+                    print(f"[Vision Analysis] Failed to analyze image: {str(e)}")
+                    continue
+
+        except Exception as e:
+            # Vision 모델 초기화 실패 등
+            print(f"[Vision Analysis] Vision model not available: {str(e)}")
+            return []
+
+        return vision_results

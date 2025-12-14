@@ -77,11 +77,22 @@ class PPTParser:
             # 메타데이터 추출
             metadata = self._extract_metadata(presentation)
 
+            # 전체 이미지 목록 생성
+            all_images = []
+            for slide in slides_data:
+                if "images" in slide and slide["images"]:
+                    for img in slide["images"]:
+                        img_with_slide = img.copy()
+                        img_with_slide["slide_number"] = slide.get("slide_number", 0)
+                        all_images.append(img_with_slide)
+
             result = {
                 "text": text,
                 "slide_count": len(presentation.slides),
                 "slides": slides_data,
-                "has_images": any(s.get("image_count", 0) > 0 for s in slides_data),
+                "images": all_images,
+                "image_count": len(all_images),
+                "has_images": len(all_images) > 0,
                 "has_tables": any(s.get("table_count", 0) > 0 for s in slides_data),
                 "has_notes": any(s.get("has_notes", False) for s in slides_data),
                 "metadata": metadata,
@@ -119,6 +130,7 @@ class PPTParser:
                         "image_count": 0,
                         "table_count": 0,
                         "has_notes": False,
+                        "images": [],  # 이미지 데이터 추가
                     }
 
                     # 슬라이드 shape 개수
@@ -153,9 +165,13 @@ class PPTParser:
                                         if table_text:
                                             slide_info["content"].append(f"[Table]\n{table_text}")
 
-                                # 이미지 감지
+                                # 이미지 감지 및 추출
                                 if hasattr(shape, "shape_type") and shape.shape_type == 13:  # MSO_SHAPE_TYPE.PICTURE
                                     slide_info["image_count"] += 1
+                                    # 이미지 바이너리 추출
+                                    image_data = self._extract_image_from_shape(shape, slide_info["image_count"] - 1)
+                                    if image_data:
+                                        slide_info["images"].append(image_data)
                             except Exception:
                                 # 개별 shape 처리 실패는 무시
                                 continue
@@ -190,6 +206,25 @@ class PPTParser:
             slides_data.append({"error": f"Slides extraction failed: {str(e)}"})
 
         return slides_data
+
+    def _extract_image_from_shape(self, shape, image_index: int) -> Dict[str, Any]:
+        """PPT shape에서 이미지 바이너리 추출"""
+        try:
+            if hasattr(shape, "image"):
+                image = shape.image
+                image_bytes = image.blob
+
+                return {
+                    "image_index": image_index,
+                    "content_type": image.content_type,
+                    "ext": image.ext,
+                    "size": len(image_bytes),
+                    "image_bytes": image_bytes,
+                }
+        except Exception:
+            pass
+
+        return None
 
     def _extract_table_text(self, table) -> str:
         """표에서 텍스트 추출"""

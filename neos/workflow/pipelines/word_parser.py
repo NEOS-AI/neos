@@ -73,6 +73,9 @@ class WordParser:
             # 테이블 추출
             tables = self._extract_tables(doc)
 
+            # 이미지 추출
+            images = self._extract_images_docx(doc)
+
             # 메타데이터 추출
             metadata = self._extract_metadata(doc)
 
@@ -86,7 +89,9 @@ class WordParser:
                 "word_count": len(text_result["text"].split()),
                 "tables": tables,
                 "table_count": len(tables),
-                "has_images": text_result.get("has_images", False),
+                "images": images,
+                "image_count": len(images),
+                "has_images": len(images) > 0,
                 "has_tables": len(tables) > 0,
                 "metadata": metadata,
                 "styles": styles_info,
@@ -132,6 +137,55 @@ class WordParser:
                 "paragraph_count": 0,
                 "has_images": False,
             }
+
+    def _extract_images_docx(self, doc) -> List[Dict[str, Any]]:
+        """Word 문서에서 이미지 바이너리 추출"""
+        images_data = []
+
+        try:
+            # 문서의 part에서 이미지 추출
+            image_parts = [
+                part for part in doc.part.package.parts.values()
+                if part.content_type.startswith('image/')
+            ]
+
+            for img_index, image_part in enumerate(image_parts):
+                try:
+                    # 이미지 바이너리 데이터
+                    image_bytes = image_part.blob
+
+                    # 이미지 정보 추출
+                    image_dict = {
+                        "image_index": img_index,
+                        "content_type": image_part.content_type,
+                        "ext": self._get_extension_from_content_type(image_part.content_type),
+                        "size": len(image_bytes),
+                        "image_bytes": image_bytes,
+                    }
+                    images_data.append(image_dict)
+
+                except Exception:
+                    # 개별 이미지 추출 실패는 건너뜀
+                    continue
+
+        except Exception:
+            # 이미지 추출 실패는 에러로 처리하지 않음
+            pass
+
+        return images_data
+
+    def _get_extension_from_content_type(self, content_type: str) -> str:
+        """Content-Type에서 파일 확장자 추출"""
+        type_map = {
+            "image/jpeg": "jpg",
+            "image/png": "png",
+            "image/gif": "gif",
+            "image/bmp": "bmp",
+            "image/tiff": "tiff",
+            "image/webp": "webp",
+            "image/svg+xml": "svg",
+        }
+        return type_map.get(content_type, "bin")
 
     def _extract_tables(self, doc) -> List[Dict[str, Any]]:
         """Word 문서에서 테이블 추출"""
