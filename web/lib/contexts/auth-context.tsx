@@ -7,6 +7,7 @@ import {
   login as authLogin,
   logout as authLogout,
   register as authRegister,
+  loginWithGoogle as authLoginWithGoogle,
 } from '@/lib/auth';
 
 interface AuthContextType {
@@ -16,6 +17,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   register: (email: string, password: string, username?: string) => Promise<void>;
+  loginWithGoogle: (googleCredential: string) => Promise<void>;
   refreshUser: () => Promise<void>;
 }
 
@@ -144,6 +146,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [login]
   );
 
+  const loginWithGoogle = useCallback(async (googleCredential: string) => {
+    try {
+      const user = await authLoginWithGoogle(googleCredential);
+      setUser(user);
+    } catch (error) {
+      console.error('Google login failed:', error);
+      throw error;
+    }
+  }, []);
+
   const value: AuthContextType = {
     user,
     isLoading,
@@ -151,6 +163,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     login,
     logout,
     register,
+    loginWithGoogle,
     refreshUser,
   };
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { ReactNode } from 'react';
+import { GoogleOAuthProvider } from '@react-oauth/google';
 import { AuthProvider } from '@/lib/contexts/auth-context';
 import { useAuthSync } from '@/lib/hooks/useAuthSync';
 import dynamic from 'next/dynamic';
@@ -23,11 +24,15 @@ function AuthSync() {
  * Wraps all client-side context providers
  */
 export function Providers({ children }: { children: ReactNode }) {
+  const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID;
+
   return (
-    <AuthProvider>
-      <AuthSync />
-      {children}
-      <PerformanceMonitor />
-    </AuthProvider>
+    <GoogleOAuthProvider clientId={googleClientId || ''}>
+      <AuthProvider>
+        <AuthSync />
+        {children}
+        <PerformanceMonitor />
+      </AuthProvider>
+    </GoogleOAuthProvider>
   );
 }

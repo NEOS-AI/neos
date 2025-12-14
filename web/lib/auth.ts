@@ -131,3 +131,24 @@ export function getAuthHeaders(): Record<string, string> {
   // 모든 요청은 /api 경로를 통해 BFF로 프록시됨
   return {};
 }
+
+/**
+ * Google OAuth 로그인
+ */
+export async function loginWithGoogle(googleToken: string): Promise<User> {
+  const response = await fetchWithCsrf('/api/auth/google', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ google_token: googleToken }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || 'Google 로그인에 실패했습니다.');
+  }
+
+  return data.user;
+}

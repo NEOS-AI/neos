@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, FormEvent } from 'react';
+import { GoogleLogin } from '@react-oauth/google';
 import { useAuth } from '@/lib/contexts/auth-context';
 import { LogIn, UserPlus, AlertCircle } from 'lucide-react';
 
@@ -10,7 +11,7 @@ interface LoginFormProps {
 }
 
 export default function LoginForm({ onSuccess, initialMode = 'login' }: LoginFormProps) {
-  const { login, register } = useAuth();
+  const { login, register, loginWithGoogle } = useAuth();
   const [isRegistering, setIsRegistering] = useState(initialMode === 'register');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +47,19 @@ export default function LoginForm({ onSuccess, initialMode = 'login' }: LoginFor
     setError(null);
   };
 
+  const handleGoogleSuccess = async (credentialResponse: any) => {
+    try {
+      setError(null);
+      setIsLoading(true);
+      await loginWithGoogle(credentialResponse.credential);
+      onSuccess?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Google 로그인에 실패했습니다.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-claude-darker p-4">
       <div className="w-full max-w-md">
@@ -66,6 +80,29 @@ export default function LoginForm({ onSuccess, initialMode = 'login' }: LoginFor
 
         {/* Form */}
         <div className="bg-claude-dark border border-claude-border rounded-2xl p-6 shadow-xl">
+          {/* Google Login Button */}
+          <div className="mb-4">
+            <GoogleLogin
+              onSuccess={handleGoogleSuccess}
+              onError={() => setError('Google 로그인에 실패했습니다.')}
+              useOneTap={false}
+              theme="filled_black"
+              size="large"
+              text={isRegistering ? 'signup_with' : 'signin_with'}
+              width="100%"
+            />
+          </div>
+
+          {/* Divider */}
+          <div className="relative my-6">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-claude-border"></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-claude-dark text-claude-text-secondary">또는</span>
+            </div>
+          </div>
+
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* Email */}
             <div>
