@@ -278,7 +278,7 @@ class MultiAgentWorkflow:
                 return smart_cache_result
 
         # 2. 기존 Redis 캐시 확인 (폴백)
-        cache_key = self._generate_cache_key(query)
+        cache_key = self._generate_cache_key(query, user_id)
         cached_response = await self._check_cached_response(cache_key)
         if cached_response:
             await event_handler.on_workflow_complete(cached_response)
@@ -471,10 +471,26 @@ class MultiAgentWorkflow:
             print(f"[WARNING] Smart cache save failed: {e}")
 
 
-    def _generate_cache_key(self, query: str) -> str:
-        """캐시 키 생성"""
+    def _generate_cache_key(self, query: str, user_id: Optional[str] = None) -> str:
+        """
+        캐시 키 생성
+
+        Args:
+            query: 쿼리 텍스트
+            user_id: 사용자 ID (선택적, USER_SPECIFIC_CACHE가 활성화된 경우 사용)
+
+        Returns:
+            생성된 캐시 키
+        """
         query_normalized = query.strip().lower()
-        query_hash = hashlib.md5(query_normalized.encode('utf-8')).hexdigest()
+
+        # 사용자별 캐시 분리 옵션 (개인화된 응답이 필요한 경우)
+        if user_id and settings.USER_SPECIFIC_CACHE:
+            cache_input = f"<USER_ID>{user_id}</USER_ID>{query_normalized}"
+        else:
+            cache_input = query_normalized
+
+        query_hash = hashlib.md5(cache_input.encode('utf-8')).hexdigest()
         return cache_manager.make_key("workflow_response", query_hash)
 
 

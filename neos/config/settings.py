@@ -27,6 +27,7 @@ class Settings(BaseSettings):
 
     # 캐시 설정
     WORKFLOW_RESPONSE_CACHE_TTL: int = int(env_vars.get("WORKFLOW_RESPONSE_CACHE_TTL", 7200))  # 2시간
+    USER_SPECIFIC_CACHE: bool = bool(env_vars.get("USER_SPECIFIC_CACHE", False))  # 사용자별 캐시 분리 (개인화된 응답 시 활성화)
     # Semantic Cache: 유사한 쿼리에 대한 응답 재사용으로 성능 향상
     SEMANTIC_CACHE_ENABLED: bool = bool(env_vars.get("SEMANTIC_CACHE_ENABLED", True))  # 개선: 기본값 활성화
     SEMANTIC_CACHE_THRESHOLD: float = float(env_vars.get("SEMANTIC_CACHE_THRESHOLD", 0.90))  # 개선: 0.95 → 0.90 (더 많은 캐시 히트)
@@ -113,6 +114,10 @@ class Settings(BaseSettings):
     # 동시성 설정
     MAX_CONCURRENT_WORKFLOWS: int = int(env_vars.get("MAX_CONCURRENT_WORKFLOWS", 100))
     MAX_CONCURRENT_AGENTS_PER_WORKFLOW: int = int(env_vars.get("MAX_CONCURRENT_AGENTS_PER_WORKFLOW", 10))
+
+    # 스트리밍 설정
+    STREAM_EVENT_TIMEOUT: float = float(env_vars.get("STREAM_EVENT_TIMEOUT", 2.0))  # SSE 이벤트 큐 대기 타임아웃 (초)
+    STREAM_HEARTBEAT_INTERVAL: int = int(env_vars.get("STREAM_HEARTBEAT_INTERVAL", 30))  # SSE heartbeat 간격 (초)
 
     # API 설정
     API_V1_PREFIX: str = "/api/v1"

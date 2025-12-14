@@ -20,11 +20,45 @@ from neos.api.models.unified_models import (
     DocumentInfo,
     ProcessingMode
 )
-from neos.api.services.unified_processor import UnifiedProcessingService
+from neos.api.services.unified_processor import (
+    UnifiedProcessingService,
+    DocumentValidationError,
+    DocumentProcessingError,
+    WorkflowExecutionError
+)
 from neos.utils.logger import get_logger
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1/unified", tags=["Unified Processing"])
+
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+async def _convert_uploaded_files_to_documents(
+    files: List[UploadFile]
+) -> List[DocumentInfo]:
+    """
+    Convert uploaded files to DocumentInfo objects.
+
+    Args:
+        files: List of uploaded files from FastAPI
+
+    Returns:
+        List of DocumentInfo objects with file content
+    """
+    documents = []
+    for file in files:
+        content = await file.read()
+        doc_info = DocumentInfo(
+            filename=file.filename,
+            mime_type=file.content_type,
+            file_size=len(content),
+            file_content=content
+        )
+        documents.append(doc_info)
+    return documents
 
 
 # ============================================================================
@@ -77,10 +111,17 @@ async def process_unified(request: UnifiedProcessingRequest):
             errors=result.get("errors", [])
         )
 
-    except ValueError as e:
+    except DocumentValidationError as e:
+        logger.warning(f"Document validation failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except DocumentProcessingError as e:
+        logger.error(f"Document processing failed: {e}")
+        raise HTTPException(status_code=422, detail=str(e))
+    except WorkflowExecutionError as e:
+        logger.error(f"Workflow execution failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        logger.error(f"Processing error: {e}")
+        logger.error(f"Unexpected processing error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -198,17 +239,7 @@ async def process_with_file_upload(
     """
     try:
         # 파일을 DocumentInfo로 변환
-        documents = []
-        for file in files:
-            content = await file.read()
-
-            doc_info = DocumentInfo(
-                filename=file.filename,
-                mime_type=file.content_type,
-                file_size=len(content),
-                file_content=content
-            )
-            documents.append(doc_info)
+        documents = await _convert_uploaded_files_to_documents(files)
 
         # UnifiedProcessingRequest 생성
         request = UnifiedProcessingRequest(
@@ -236,10 +267,17 @@ async def process_with_file_upload(
             }
         )
 
-    except ValueError as e:
+    except DocumentValidationError as e:
+        logger.warning(f"Document validation failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except DocumentProcessingError as e:
+        logger.error(f"Document processing failed: {e}")
+        raise HTTPException(status_code=422, detail=str(e))
+    except WorkflowExecutionError as e:
+        logger.error(f"Workflow execution failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        logger.error(f"File upload processing error: {e}")
+        logger.error(f"Unexpected file upload processing error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -264,17 +302,7 @@ async def process_with_file_upload_stream(
     """
     try:
         # 파일을 DocumentInfo로 변환
-        documents = []
-        for file in files:
-            content = await file.read()
-
-            doc_info = DocumentInfo(
-                filename=file.filename,
-                mime_type=file.content_type,
-                file_size=len(content),
-                file_content=content
-            )
-            documents.append(doc_info)
+        documents = await _convert_uploaded_files_to_documents(files)
 
         # UnifiedProcessingRequest 생성
         request = UnifiedProcessingRequest(

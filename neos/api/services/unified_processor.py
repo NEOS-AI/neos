@@ -22,8 +22,33 @@ from neos.workflow.pipelines.document_pipeline import DocumentPipeline
 from neos.workflow.pipelines.base import PipelineContext, FileInput
 from neos.workflow.events import WorkflowEventHandler
 from neos.utils.logger import get_logger
+from neos.config.settings import settings
 
 logger = get_logger(__name__)
+
+
+# ============================================================================
+# Custom Exceptions
+# ============================================================================
+
+class UnifiedProcessingError(Exception):
+    """Base exception for unified processing errors"""
+    pass
+
+
+class DocumentValidationError(UnifiedProcessingError):
+    """Raised when document validation fails"""
+    pass
+
+
+class DocumentProcessingError(UnifiedProcessingError):
+    """Raised when document processing fails"""
+    pass
+
+
+class WorkflowExecutionError(UnifiedProcessingError):
+    """Raised when workflow execution fails"""
+    pass
 
 
 # ============================================================================
@@ -184,6 +209,16 @@ class TextOnlyStrategy(ProcessingStrategy):
         """텍스트 쿼리 처리"""
         user_id = request.user_id or f"user_{uuid.uuid4().hex[:8]}"
 
+        logger.info(
+            "Starting text-only processing",
+            extra={
+                "session_id": session_id,
+                "user_id": user_id,
+                "query_length": len(request.query),
+                "processing_mode": "text_only"
+            }
+        )
+
         # 시작 이벤트
         await self.emit_event(UnifiedStreamEvent(
             event="started",
@@ -215,18 +250,19 @@ class TextOnlyStrategy(ProcessingStrategy):
         end_time = datetime.utcnow()
         execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
 
-        # 완료 이벤트 (워크플로우에서 이미 발행했지만, 최종 확인용)
-        await self.emit_event(UnifiedStreamEvent(
-            event="completed",
-            session_id=session_id,
-            phase="workflow_execution",
-            progress_percent=100,
-            data={
-                "response": result.get("response"),
-                "quality_score": result.get("quality_score", 0.0)
-            },
-            execution_time_ms=execution_time_ms
-        ))
+        logger.info(
+            "Text-only processing completed",
+            extra={
+                "session_id": session_id,
+                "user_id": user_id,
+                "execution_time_ms": execution_time_ms,
+                "quality_score": result.get("quality_score", 0.0),
+                "success": result.get("success", True)
+            }
+        )
+
+        # Note: Completion event is emitted by UnifiedEventHandler.on_workflow_complete
+        # to avoid duplication
 
         return {
             "success": result.get("success", True),
@@ -250,6 +286,7 @@ class DocumentProcessingStrategy(ProcessingStrategy):
         super().__init__(event_queue)
         self.document_pipeline = DocumentPipeline()
 
+
     async def process(
         self,
         request: UnifiedProcessingRequest,
@@ -257,6 +294,18 @@ class DocumentProcessingStrategy(ProcessingStrategy):
     ) -> Dict[str, Any]:
         """문서 처리 + 워크플로우 실행"""
         user_id = request.user_id or f"user_{uuid.uuid4().hex[:8]}"
+
+        logger.info(
+            "Starting document processing",
+            extra={
+                "session_id": session_id,
+                "user_id": user_id,
+                "document_count": len(request.documents),
+                "query_length": len(request.query),
+                "enable_vision": request.enable_vision,
+                "processing_mode": "document_with_workflow"
+            }
+        )
 
         # 1단계: 문서 검증
         await self.emit_event(UnifiedStreamEvent(
@@ -269,25 +318,22 @@ class DocumentProcessingStrategy(ProcessingStrategy):
 
         validation_result = await self._validate_documents(request.documents)
         if not validation_result["valid"]:
-            raise ValueError(f"문서 검증 실패: {validation_result['error']}")
+            raise DocumentValidationError(f"문서 검증 실패: {validation_result['error']}")
 
-        # 2단계: 문서 처리
+        # 2단계: 문서 처리 (병렬 처리로 성능 향상)
         await self.emit_event(UnifiedStreamEvent(
             event="document_processing",
             session_id=session_id,
             phase="document_extraction",
             progress_percent=10,
-            content="문서 추출 중..."
+            content=f"{len(request.documents)}개 문서 추출 중..."
         ))
 
-        documents_results = []
-        for doc_info in request.documents:
-            doc_result = await self._process_single_document(
-                doc_info,
-                request,
-                session_id
-            )
-            documents_results.append(doc_result)
+        # 병렬 처리로 여러 문서를 동시에 처리
+        documents_results = await asyncio.gather(*[
+            self._process_single_document(doc_info, request, session_id)
+            for doc_info in request.documents
+        ])
 
         # 3단계: 문서 정보를 쿼리에 통합
         await self.emit_event(UnifiedStreamEvent(
@@ -335,19 +381,20 @@ class DocumentProcessingStrategy(ProcessingStrategy):
         end_time = datetime.utcnow()
         execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
 
-        # 완료 이벤트
-        await self.emit_event(UnifiedStreamEvent(
-            event="completed",
-            session_id=session_id,
-            phase="workflow_execution",
-            progress_percent=100,
-            data={
-                "response": result.get("response"),
+        logger.info(
+            "Document processing completed",
+            extra={
+                "session_id": session_id,
+                "user_id": user_id,
+                "documents_processed": len(documents_results),
+                "execution_time_ms": execution_time_ms,
                 "quality_score": result.get("quality_score", 0.0),
-                "documents_processed": len(documents_results)
-            },
-            execution_time_ms=execution_time_ms
-        ))
+                "success": result.get("success", True)
+            }
+        )
+
+        # Note: Completion event is emitted by UnifiedEventHandler.on_workflow_complete
+        # to avoid duplication
 
         return {
             "success": result.get("success", True),
@@ -359,8 +406,9 @@ class DocumentProcessingStrategy(ProcessingStrategy):
             "errors": result.get("errors", [])
         }
 
+
     async def _validate_documents(self, documents: List[DocumentInfo]) -> Dict[str, Any]:
-        """문서 검증"""
+        """Validate documents before processing"""
         if not documents or len(documents) == 0:
             return {"valid": False, "error": "문서가 제공되지 않았습니다"}
 
@@ -384,13 +432,14 @@ class DocumentProcessingStrategy(ProcessingStrategy):
 
         return {"valid": True}
 
+
     async def _process_single_document(
         self,
         doc_info: DocumentInfo,
         request: UnifiedProcessingRequest,
         session_id: str
     ) -> DocumentProcessingResult:
-        """단일 문서 처리"""
+        """Process a single document via DocumentPipeline"""
         # FileInput 생성
         file_input = FileInput(
             filename=doc_info.filename,
@@ -413,7 +462,7 @@ class DocumentProcessingStrategy(ProcessingStrategy):
         result = await self.document_pipeline.extract(context)
 
         if not result.success:
-            raise Exception(f"문서 처리 실패: {result.error}")
+            raise DocumentProcessingError(f"문서 처리 실패: {result.error}")
 
         # DocumentProcessingResult로 변환
         extracted_data = result.extracted_data
@@ -434,15 +483,36 @@ class DocumentProcessingStrategy(ProcessingStrategy):
             extraction_method=extracted_data.get("extraction_method", "unknown")
         )
 
+
     def _build_enhanced_query(
         self,
         original_query: str,
         documents_results: List[DocumentProcessingResult]
     ) -> str:
-        """문서 정보가 통합된 쿼리 생성"""
+        """
+        문서 정보가 통합된 쿼리 생성
+
+        전체 텍스트 길이 제한을 적용하여 너무 긴 쿼리 방지
+        """
+        MAX_TOTAL_CHARS = 100000  # 전체 문서 텍스트 최대 제한
+        MAX_PER_DOC = 10000      # 문서당 텍스트 제한
+        MAX_VISION_ITEMS = 3    # 문서당 최대 Vision 분석 결과 수
+
         # 문서 정보 요약
         doc_summaries = []
+        total_chars_used = 0
+
         for i, doc in enumerate(documents_results, 1):
+            # 남은 용량 확인
+            if total_chars_used >= MAX_TOTAL_CHARS:
+                doc_summaries.append(f"\n## 문서 {i}+ 이후: (텍스트 길이 제한으로 생략됨)")
+                break
+
+            # 이 문서에 할당할 수 있는 최대 문자 수
+            remaining_chars = min(MAX_PER_DOC, MAX_TOTAL_CHARS - total_chars_used)
+            text_snippet = doc.text[:remaining_chars]
+            total_chars_used += len(text_snippet)
+
             summary = f"""
 ## 문서 {i}
 - 형식: {doc.document_type}
@@ -452,12 +522,12 @@ class DocumentProcessingStrategy(ProcessingStrategy):
 - 표 포함: {doc.table_count}개
 
 ### 추출된 텍스트:
-{doc.text[:1000]}{'...' if len(doc.text) > 1000 else ''}
+{text_snippet}{'...' if len(doc.text) > remaining_chars else ''}
 """
             # Vision 분석 결과 추가
             if doc.vision_analysis:
                 summary += f"\n### Vision 분석 결과 ({len(doc.vision_analysis)}개 이미지):\n"
-                for img_analysis in doc.vision_analysis[:3]:  # 최대 3개
+                for img_analysis in doc.vision_analysis[:MAX_VISION_ITEMS]:
                     vision = img_analysis.get("vision_analysis", {})
                     summary += f"- {vision.get('description', 'N/A')}\n"
 
@@ -550,8 +620,11 @@ class UnifiedProcessingService:
             completed = False
             while not completed:
                 try:
-                    # 이벤트 대기
-                    event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
+                    # 이벤트 대기 (타임아웃은 설정에서 가져옴)
+                    event = await asyncio.wait_for(
+                        event_queue.get(),
+                        timeout=settings.STREAM_EVENT_TIMEOUT
+                    )
                     yield event
 
                     if event.event in ["completed", "error"]:
