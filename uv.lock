@@ -1259,6 +1259,19 @@ wheels = [
 ]
 
 [[package]]
+name = "google-auth-oauthlib"
+version = "1.2.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-auth" },
+    { name = "requests-oauthlib" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/86/a6/c6336a6ceb682709a4aa39e2e6b5754a458075ca92359512b6cbfcb25ae3/google_auth_oauthlib-1.2.3.tar.gz", hash = "sha256:eb09e450d3cc789ecbc2b3529cb94a713673fd5f7a22c718ad91cf75aedc2ea4", size = 21265, upload-time = "2025-10-30T21:28:19.105Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/38/07/a54c100da461ffc5968457823fcc665a48fb4b875c68bcfecbfe24a10dbe/google_auth_oauthlib-1.2.3-py3-none-any.whl", hash = "sha256:7c0940e037677f25e71999607493640d071212e7f3c15aa0febea4c47a5a0680", size = 19184, upload-time = "2025-10-30T21:28:17.88Z" },
+]
+
+[[package]]
 name = "googleapis-common-protos"
 version = "1.70.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2431,6 +2444,8 @@ dependencies = [
     { name = "celery" },
     { name = "crewai" },
     { name = "fastapi" },
+    { name = "google-auth" },
+    { name = "google-auth-oauthlib" },
     { name = "greenlet" },
     { name = "httpx" },
     { name = "kombu" },
@@ -2490,6 +2505,8 @@ requires-dist = [
     { name = "celery", specifier = ">=5.4.0" },
     { name = "crewai", specifier = ">=0.175.0" },
     { name = "fastapi", specifier = ">=0.118.0" },
+    { name = "google-auth", specifier = ">=2.35.0" },
+    { name = "google-auth-oauthlib", specifier = ">=1.2.0" },
     { name = "greenlet", specifier = ">=3.2.4" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "kombu", specifier = ">=5.4.0" },
