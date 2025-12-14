@@ -21,6 +21,7 @@ from neos.api.handlers.deep_research_handlers import router as deep_research_rou
 from neos.api.handlers.auth import router as auth_router
 from neos.api.handlers.skills_handlers import router as skills_router
 from neos.api.handlers.workflow_stream_handlers import router as workflow_stream_router
+from neos.api.handlers.unified_handlers import router as unified_router
 from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.workflow.graph import multi_agent_workflow
 from neos.utils.exceptions import NeosBaseException, get_exception_status_code, is_client_error
@@ -326,6 +327,7 @@ app.include_router(chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["
 app.include_router(deep_research_router, prefix=settings.API_V1_PREFIX, tags=["Deep Research"])
 app.include_router(skills_router, prefix=f"{settings.API_V1_PREFIX}/skills", tags=["Skills Management"])
 app.include_router(workflow_stream_router, prefix=settings.API_V1_PREFIX, tags=["Workflow Streaming"])
+app.include_router(unified_router, tags=["Unified Processing"])  # 통합 API (문서 + 워크플로우)
 app.include_router(similarity_chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Similarity-based Chat"])
 
 
