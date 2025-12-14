@@ -20,9 +20,128 @@ from neos.api.models.unified_models import (
 from neos.workflow.graph import multi_agent_workflow
 from neos.workflow.pipelines.document_pipeline import DocumentPipeline
 from neos.workflow.pipelines.base import PipelineContext, FileInput
+from neos.workflow.events import WorkflowEventHandler
 from neos.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+# ============================================================================
+# Unified Event Handler: Convert workflow events to stream events
+# ============================================================================
+
+class UnifiedEventHandler(WorkflowEventHandler):
+    """
+    Workflow event handler for the unified API.
+
+    Converts each step of the workflow into a UnifiedStreamEvent
+    and sends it to the event queue.
+    """
+
+    def __init__(self, session_id: str, event_queue: asyncio.Queue):
+        self.session_id = session_id
+        self.event_queue = event_queue
+        self.start_time = datetime.utcnow()
+
+    async def on_workflow_start(self, workflow_input: Dict[str, Any]):
+        """Workflow start event handler"""
+        event = UnifiedStreamEvent(
+            event="workflow_started",
+            session_id=self.session_id,
+            phase="workflow_execution",
+            progress_percent=0,
+            content="Workflow started...",
+            data={"query": workflow_input.get("query", "")[:100]}
+        )
+        await self.event_queue.put(event)
+
+    async def on_node_start(self, node_name: str, step: int, total_steps: int):
+        """Node start event handler"""
+        progress = int((step / total_steps) * 100)
+
+        # User-friendly messages
+        node_messages = {
+            "query_classifier": "Analyzing query...",
+            "skill_tool_selector": "Selecting appropriate tools...",
+            "search_orchestrator": "Searching for information...",
+            "analysis_orchestrator": "Analyzing data...",
+            "generation_orchestrator": "Generating content...",
+            "result_integrator": "Integrating results...",
+            "quality_validator": "Validating quality...",
+            "response_generator": "Generating final response..."
+        }
+
+        event = UnifiedStreamEvent(
+            event="node_started",
+            session_id=self.session_id,
+            phase="workflow_execution",
+            node_name=node_name,
+            progress_percent=progress,
+            content=node_messages.get(node_name, f"{node_name} is running..."),
+            data={"step": step, "total_steps": total_steps}
+        )
+        await self.event_queue.put(event)
+
+
+    async def on_node_progress(
+        self, node_name: str, message: str, progress: int = 0
+    ):
+        """Node progress event handler"""
+        event = UnifiedStreamEvent(
+            event="node_progress",
+            session_id=self.session_id,
+            phase="workflow_execution",
+            node_name=node_name,
+            content=message,
+            data={"sub_progress": progress}
+        )
+        await self.event_queue.put(event)
+
+
+    async def on_node_complete(self, node_name: str, result: Dict[str, Any]):
+        """Node complete event handler"""
+        event = UnifiedStreamEvent(
+            event="node_completed",
+            session_id=self.session_id,
+            phase="workflow_execution",
+            node_name=node_name,
+            data=result
+        )
+        await self.event_queue.put(event)
+
+
+    async def on_workflow_complete(self, result: Dict[str, Any]):
+        """Workflow complete event handler"""
+        elapsed_ms = int((datetime.utcnow() - self.start_time).total_seconds() * 1000)
+
+        event = UnifiedStreamEvent(
+            event="workflow_completed",
+            session_id=self.session_id,
+            phase="workflow_execution",
+            progress_percent=100,
+            content="Workflow completed!",
+            data={
+                "response": result.get("response"),
+                "quality_score": result.get("quality_score", 0.0),
+                "cache_hit": result.get("cache_hit", False)
+            },
+            execution_time_ms=elapsed_ms
+        )
+        await self.event_queue.put(event)
+
+
+    async def on_workflow_error(
+        self, error: Exception, node_name: Optional[str] = None
+    ):
+        """Workflow error event handler"""
+        event = UnifiedStreamEvent(
+            event="error",
+            session_id=self.session_id,
+            phase="workflow_execution",
+            node_name=node_name,
+            error=str(error)
+        )
+        await self.event_queue.put(event)
 
 
 # ============================================================================
@@ -30,7 +149,7 @@ logger = get_logger(__name__)
 # ============================================================================
 
 class ProcessingStrategy(ABC):
-    """처리 전략 기본 클래스"""
+    """Processing Strategy base class"""
 
     def __init__(self, event_queue: Optional[asyncio.Queue] = None):
         self.event_queue = event_queue
@@ -52,9 +171,9 @@ class ProcessingStrategy(ABC):
 
 class TextOnlyStrategy(ProcessingStrategy):
     """
-    텍스트 쿼리만 처리하는 전략
+    Text-only query processing strategy
 
-    문서 없이 사용자 쿼리를 바로 워크플로우로 전달
+    Directly passes user queries to the workflow without documents
     """
 
     async def process(
@@ -73,20 +192,30 @@ class TextOnlyStrategy(ProcessingStrategy):
             data={"query": request.query[:100]}
         ))
 
-        # 워크플로우 실행
+        # 워크플로우 실행 (이벤트 핸들러 inject)
         workflow_input = {
             "user_id": user_id,
             "session_id": session_id,
             "query": request.query
         }
 
-        start_time = datetime.utcnow()
-        result = await multi_agent_workflow.execute_workflow(workflow_input)
-        end_time = datetime.utcnow()
+        # UnifiedEventHandler 생성 (워크플로우 이벤트를 스트림 이벤트로 변환)
+        workflow_event_handler = None
+        if self.event_queue:
+            workflow_event_handler = UnifiedEventHandler(session_id, self.event_queue)
 
+        start_time = datetime.utcnow()
+
+        # Dependency Injection: event_handler를 워크플로우에 주입
+        result = await multi_agent_workflow.execute_workflow(
+            workflow_input,
+            event_handler=workflow_event_handler
+        )
+
+        end_time = datetime.utcnow()
         execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
 
-        # 완료 이벤트
+        # 완료 이벤트 (워크플로우에서 이미 발행했지만, 최종 확인용)
         await self.emit_event(UnifiedStreamEvent(
             event="completed",
             session_id=session_id,
@@ -111,9 +240,10 @@ class TextOnlyStrategy(ProcessingStrategy):
 
 class DocumentProcessingStrategy(ProcessingStrategy):
     """
-    문서 처리 + 워크플로우 전략
+    Document processing + workflow strategy
 
-    문서 파이프라인으로 정보를 추출한 후 워크플로우 실행
+    Extract document information via DocumentPipeline,
+    then execute the workflow with enhanced context.
     """
 
     def __init__(self, event_queue: Optional[asyncio.Queue] = None):
@@ -189,10 +319,20 @@ class DocumentProcessingStrategy(ProcessingStrategy):
             }
         }
 
-        start_time = datetime.utcnow()
-        result = await multi_agent_workflow.execute_workflow(workflow_input)
-        end_time = datetime.utcnow()
+        # UnifiedEventHandler 생성 (워크플로우 이벤트를 스트림 이벤트로 변환)
+        workflow_event_handler = None
+        if self.event_queue:
+            workflow_event_handler = UnifiedEventHandler(session_id, self.event_queue)
 
+        start_time = datetime.utcnow()
+
+        # Dependency Injection: event_handler를 워크플로우에 주입
+        result = await multi_agent_workflow.execute_workflow(
+            workflow_input,
+            event_handler=workflow_event_handler
+        )
+
+        end_time = datetime.utcnow()
         execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
 
         # 완료 이벤트

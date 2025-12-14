@@ -35,6 +35,7 @@ from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationO
 from .processors import ResultProcessor, QualityValidator, ResponseGenerator
 from .utils import QueryClassifier
 from .checkpointer import get_checkpointer
+from .events import WorkflowEventHandler, NullEventHandler
 
 
 logger = logging.getLogger(__name__)
@@ -237,14 +238,27 @@ class MultiAgentWorkflow:
         """재생성 여부 결정"""
         return self.quality_validator.should_regenerate(state)
 
-    async def execute_workflow(self, user_input: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute_workflow(
+        self,
+        user_input: Dict[str, Any],
+        event_handler: Optional[WorkflowEventHandler] = None
+    ) -> Dict[str, Any]:
         """
         워크플로우 실행 (Enterprise Edition with distributed state)
 
         스마트 캐시 통합:
         - pgvector 기반 의미론적 유사 쿼리 캐싱
         - 쿼리 유형별 동적 TTL
+
+        Args:
+            user_input: 워크플로우 입력 데이터
+            event_handler: 이벤트 핸들러 (Dependency Injection)
+                          None이면 NullEventHandler 사용 (성능 오버헤드 없음)
         """
+        # Null Object Pattern: event_handler가 없으면 기본 핸들러 사용
+        if event_handler is None:
+            event_handler = NullEventHandler()
+
         # Ensure graph is initialized
         await self._ensure_graph_initialized()
 
@@ -252,26 +266,71 @@ class MultiAgentWorkflow:
         user_id = user_input.get("user_id")
         print(f"[DEBUG] Starting workflow execution for query: {query[:50]}...")
 
+        # 워크플로우 시작 이벤트
+        await event_handler.on_workflow_start(user_input)
+
         # 1. 스마트 캐시 확인 (활성화된 경우)
         if settings.SMART_CACHE_ENABLED:
             smart_cache_result = await self._check_smart_cache(query, user_id)
             if smart_cache_result:
+                # 캐시 히트 시에도 완료 이벤트 발행
+                await event_handler.on_workflow_complete(smart_cache_result)
                 return smart_cache_result
 
         # 2. 기존 Redis 캐시 확인 (폴백)
         cache_key = self._generate_cache_key(query)
         cached_response = await self._check_cached_response(cache_key)
         if cached_response:
+            await event_handler.on_workflow_complete(cached_response)
             return cached_response
 
-        # 초기 상태 생성
+        # 초기 상태 생성 (event_handler를 상태에 포함)
         initial_state = self._create_initial_state(user_input)
+        initial_state["_event_handler"] = event_handler
 
         try:
             # 워크플로우 실행 with PostgreSQL-backed persistence
             print("[DEBUG] Executing workflow graph with distributed state management...")
             config = {"configurable": {"thread_id": user_input["session_id"]}}
-            final_state = await self.graph.ainvoke(initial_state, config)
+
+            # 노드별 진행 상황 추적을 위해 astream 사용
+            workflow_nodes = [
+                "query_classifier",
+                "skill_tool_selector",
+                "search_orchestrator",
+                "analysis_orchestrator",
+                "generation_orchestrator",
+                "result_integrator",
+                "quality_validator",
+                "response_generator"
+            ]
+
+            current_step = 0
+            total_steps = len(workflow_nodes)
+            final_state = None
+
+            # 스트리밍으로 워크플로우 실행하며 이벤트 emit
+            async for chunk in self.graph.astream(initial_state, config):
+                # chunk는 {node_name: state} 형식
+                for node_name, state in chunk.items():
+                    if node_name in workflow_nodes:
+                        current_step += 1
+
+                        # 노드 시작 이벤트
+                        await event_handler.on_node_start(
+                            node_name,
+                            current_step,
+                            total_steps
+                        )
+
+                        # 노드 완료 이벤트 (state에서 필요한 정보 추출)
+                        node_result = {
+                            "node": node_name,
+                            "step": current_step
+                        }
+                        await event_handler.on_node_complete(node_name, node_result)
+
+                    final_state = state  # 마지막 상태 저장
 
             # 결과 생성
             result = self._create_workflow_result(final_state)
@@ -294,11 +353,18 @@ class MultiAgentWorkflow:
             # 데이터셋 자동 저장 (LLM 호출이 있었을 경우)
             await self._auto_save_dataset()
 
+            # 워크플로우 완료 이벤트
+            await event_handler.on_workflow_complete(result)
+
             print("[DEBUG] Workflow execution completed successfully")
             return result
 
         except Exception as e:
             print(f"[ERROR] Workflow execution failed: {str(e)}")
+
+            # 에러 이벤트
+            await event_handler.on_workflow_error(e)
+
             return self._create_error_result(e, initial_state)
 
     async def _check_smart_cache(
