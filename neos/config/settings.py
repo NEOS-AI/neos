@@ -138,6 +138,9 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(env_vars.get("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 15))  # 15분
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = int(env_vars.get("JWT_REFRESH_TOKEN_EXPIRE_DAYS", 7))  # 7일
 
+    # Google OAuth 설정
+    GOOGLE_OAUTH_CLIENT_ID: str = env_vars.get("GOOGLE_OAUTH_CLIENT_ID", "")
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # JWT Secret Key 필수 검증

@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 from neos.database.connection import get_db
 from neos.api.services.auth_service import AuthService
+from neos.api.services.oauth_service import OAuthService
 from neos.api.models.auth_models import (
     RegisterRequest,
     LoginRequest,
@@ -20,7 +21,12 @@ from neos.api.models.auth_models import (
     MessageResponse,
     CreateAPIKeyRequest,
     APIKeyResponse,
-    APIKeyListResponse
+    APIKeyListResponse,
+    GoogleLoginRequest,
+    GoogleLinkRequest,
+    OAuthUnlinkRequest,
+    OAuthAccountResponse,
+    OAuthAccountsListResponse
 )
 from neos.api.dependencies.auth import (
     get_current_user,
@@ -266,3 +272,135 @@ async def revoke_api_key(
         )
 
     return MessageResponse(success=success, message=message)
+
+
+# ============================================================================
+# OAuth 로그인
+# ============================================================================
+
+@router.post("/oauth/google", response_model=TokenResponse)
+async def google_oauth_login(
+    request: GoogleLoginRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Google OAuth 로그인
+
+    - **google_token**: Google ID Token (from Google Sign-In)
+
+    Flow:
+    1. Google Token 검증
+    2. 연결된 계정이 있으면 로그인
+    3. 없으면 신규 사용자 생성 (자동 가입)
+
+    Returns:
+    - **access_token**: JWT Access Token
+    - **refresh_token**: JWT Refresh Token
+    - **user**: 사용자 정보
+    """
+    oauth_service = OAuthService(db)
+
+    # 디바이스 정보 및 IP 주소 수집
+    device_info = http_request.headers.get("user-agent", "")
+    ip_address = http_request.client.host if http_request.client else None
+
+    success, message, tokens = await oauth_service.login_or_register_with_google(
+        google_token=request.google_token,
+        device_info=device_info,
+        ip_address=ip_address
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=message,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return TokenResponse(**tokens)
+
+
+@router.post("/oauth/google/link", response_model=MessageResponse)
+async def link_google_account(
+    request: GoogleLinkRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Google 계정 연결
+
+    현재 로그인한 사용자에게 Google 계정을 연결합니다.
+
+    - **google_token**: Google ID Token
+
+    Requires: JWT Access Token
+    """
+    oauth_service = OAuthService(db)
+
+    success, message = await oauth_service.link_google_account(
+        user_id=current_user.user_id,
+        google_token=request.google_token
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=message
+        )
+
+    return MessageResponse(success=success, message=message)
+
+
+@router.delete("/oauth/{provider}/unlink", response_model=MessageResponse)
+async def unlink_oauth_account(
+    provider: str,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    OAuth 계정 연결 해제
+
+    - **provider**: OAuth Provider (google, github, etc.)
+
+    Requires: JWT Access Token
+    """
+    oauth_service = OAuthService(db)
+
+    success, message = await oauth_service.unlink_oauth_account(
+        user_id=current_user.user_id,
+        provider=provider
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=message
+        )
+
+    return MessageResponse(success=success, message=message)
+
+
+@router.get("/oauth/accounts", response_model=OAuthAccountsListResponse)
+async def list_oauth_accounts(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    연결된 OAuth 계정 목록 조회
+
+    Requires: JWT Access Token
+    """
+    from sqlalchemy import select
+    from neos.database.models import UserOAuthAccount
+
+    result = await db.execute(
+        select(UserOAuthAccount).where(
+            UserOAuthAccount.user_id == current_user.user_id
+        )
+    )
+    oauth_accounts = result.scalars().all()
+
+    return OAuthAccountsListResponse(
+        oauth_accounts=[OAuthAccountResponse.model_validate(account) for account in oauth_accounts]
+    )

@@ -96,3 +96,38 @@ class APIKeyResponse(BaseModel):
 class APIKeyListResponse(BaseModel):
     """API 키 목록 응답"""
     api_keys: List[APIKeyResponse]
+
+
+# ============================================================================
+# OAuth 관련 모델
+# ============================================================================
+
+class GoogleLoginRequest(BaseModel):
+    """Google OAuth 로그인 요청"""
+    google_token: str = Field(..., description="Google ID Token from Google Sign-In")
+
+
+class GoogleLinkRequest(BaseModel):
+    """Google 계정 연결 요청"""
+    google_token: str = Field(..., description="Google ID Token from Google Sign-In")
+
+
+class OAuthUnlinkRequest(BaseModel):
+    """OAuth 계정 연결 해제 요청"""
+    provider: str = Field(default="google", description="OAuth Provider (google, github, etc.)")
+
+
+class OAuthAccountResponse(BaseModel):
+    """OAuth 계정 정보 응답"""
+    provider: str
+    provider_account_email: Optional[str] = None
+    linked_at: datetime
+    last_used_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class OAuthAccountsListResponse(BaseModel):
+    """연결된 OAuth 계정 목록 응답"""
+    oauth_accounts: List[OAuthAccountResponse]

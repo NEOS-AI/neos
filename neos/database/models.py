@@ -27,6 +27,29 @@ class User(Base):
     # 역할 및 권한
     role = Column(String(50), default="user")  # user, admin, premium, etc.
 
+    # OAuth 지원
+    google_id = Column(String(255), unique=True, nullable=True, index=True)
+    profile_picture_url = Column(String(1000), nullable=True)
+
+    # 이메일 검증
+    email_verified_at = Column(TIMESTAMP, nullable=True)
+
+    # 조직 관계 (엔터프라이즈)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=True)
+
+    # 개인 구독 (Organization 없는 경우)
+    subscription_tier = Column(String(50), default="free")  # free, pro, enterprise
+    subscription_status = Column(String(50), default="active")
+    subscription_start_date = Column(TIMESTAMP, nullable=True)
+    subscription_end_date = Column(TIMESTAMP, nullable=True)
+
+    # 개인 사용량 (Organization 없는 경우)
+    usage_quota = Column(JSONB, default=dict)  # {"queries_per_day": 100}
+    usage_current = Column(JSONB, default=dict)  # {"queries_today": 5}
+
+    # 결제 정보
+    billing_customer_id = Column(String(255), nullable=True)  # Stripe Customer ID
+
     # 타임스탬프
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
     updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -40,6 +63,8 @@ class User(Base):
     search_sessions = relationship("SearchSession", back_populates="user")
     api_keys = relationship("APIKey", back_populates="user", cascade="all, delete-orphan")
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
+    oauth_accounts = relationship("UserOAuthAccount", back_populates="user", cascade="all, delete-orphan")
+    organization = relationship("Organization", back_populates="members")
 
 class QueryHistory(Base):
     __tablename__ = "query_history"
@@ -319,6 +344,99 @@ class RefreshToken(Base):
         Index("idx_refresh_tokens_user_id", "user_id"),
         Index("idx_refresh_tokens_token_hash", "token_hash"),
         Index("idx_refresh_tokens_expires_at", "expires_at"),
+    )
+
+
+class UserOAuthAccount(Base):
+    """OAuth Provider와 사용자 계정 연결"""
+    __tablename__ = "user_oauth_accounts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String(255), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+
+    # OAuth Provider 정보
+    provider = Column(String(50), nullable=False)  # 'google', 'github', 'microsoft'
+    provider_account_id = Column(String(255), nullable=False)  # Google sub
+    provider_account_email = Column(String(255), nullable=True)
+
+    # 프로필 정보 스냅샷
+    profile_data = Column(JSONB, default=dict)  # {name, picture, email, locale}
+
+    # 연결 정보
+    linked_at = Column(TIMESTAMP, default=datetime.utcnow)
+    last_used_at = Column(TIMESTAMP, nullable=True)
+
+    # 관계
+    user = relationship("User", back_populates="oauth_accounts")
+
+    # 제약조건 및 인덱스
+    __table_args__ = (
+        Index("idx_oauth_user_id", "user_id"),
+        Index("idx_oauth_provider", "provider", "provider_account_id"),
+    )
+
+
+class Organization(Base):
+    """회사/조직 (엔터프라이즈 기능)"""
+    __tablename__ = "organizations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    # 조직 정보
+    name = Column(String(255), nullable=False)
+    domain = Column(String(255), unique=True, nullable=False, index=True)  # company.com
+    logo_url = Column(String(1000), nullable=True)
+
+    # 구독 정보 (조직 레벨)
+    subscription_tier = Column(String(50), default="enterprise")
+    subscription_status = Column(String(50), default="active")
+    subscription_start_date = Column(TIMESTAMP, nullable=True)
+    subscription_end_date = Column(TIMESTAMP, nullable=True)
+
+    # 사용량 풀링 (조직 전체)
+    usage_quota = Column(JSONB, default=dict)  # {"queries_per_month": 10000}
+    usage_current = Column(JSONB, default=dict)  # {"queries_this_month": 523}
+
+    # 결제 정보
+    billing_customer_id = Column(String(255), nullable=True)
+    billing_email = Column(String(255), nullable=True)
+
+    # 설정
+    auto_join_enabled = Column(Boolean, default=False)  # 도메인 이메일 자동 가입
+    require_approval = Column(Boolean, default=True)  # 관리자 승인 필요
+
+    # 타임스탬프
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # 관계
+    members = relationship("User", back_populates="organization")
+    admins = relationship("OrganizationAdmin", back_populates="organization", cascade="all, delete-orphan")
+
+    # 인덱스
+    __table_args__ = (
+        Index("idx_organizations_domain", "domain"),
+    )
+
+
+class OrganizationAdmin(Base):
+    """조직 관리자"""
+    __tablename__ = "organization_admins"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"))
+    user_id = Column(String(255), ForeignKey("users.user_id", ondelete="CASCADE"))
+
+    role = Column(String(50), default="admin")  # admin, owner
+    granted_at = Column(TIMESTAMP, default=datetime.utcnow)
+
+    # 관계
+    organization = relationship("Organization", back_populates="admins")
+
+    # 제약조건
+    __table_args__ = (
+        Index("idx_org_admins_organization_id", "organization_id"),
+        Index("idx_org_admins_user_id", "user_id"),
     )
 
 
