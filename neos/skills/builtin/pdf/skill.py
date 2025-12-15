@@ -1,8 +1,7 @@
 """PDF Skill implementation"""
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 import logging
-from pathlib import Path
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
 
@@ -34,12 +33,12 @@ class PdfSkill(BaseSkill):
         """PDF 라이브러리 초기화"""
         try:
             # PyPDF2 임포트 시도
-            import PyPDF2
+            import PyPDF2  # noqa: F401
             self.pypdf2_available = True
 
             # reportlab 임포트 시도
             try:
-                from reportlab.pdfgen import canvas
+                from reportlab.pdfgen import canvas  # noqa: F401
                 self.reportlab_available = True
             except ImportError:
                 logger.warning(
