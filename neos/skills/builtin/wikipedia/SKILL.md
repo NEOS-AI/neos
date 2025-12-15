@@ -1,3 +1,19 @@
+---
+name: wikipedia
+type: research
+version: 1.0.0
+description: Wikipedia 일반 지식 검색 - 개념 정의, 배경 정보, 일반 지식
+capabilities:
+  - knowledge_search
+  - concept_definition
+  - background_research
+  - general_information
+  - research_support
+dependencies:
+  - wikipedia>=1.4.0
+  - langchain-community>=0.0.1
+---
+
 # Wikipedia Skill
 
 ## Description

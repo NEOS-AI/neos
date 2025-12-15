@@ -1,6 +1,7 @@
 """Skills Manager for initializing and managing skills"""
 
 from typing import Dict, Any, List, Optional
+from pathlib import Path
 import logging
 
 from neos.skills.base import SkillResult, SkillType
@@ -24,26 +25,78 @@ class SkillManager:
         self.registry = skill_registry or SkillRegistry()
         self._initialized_skills: Dict[str, bool] = {}
 
-    def register_builtin_skills(self) -> None:
+    def register_builtin_skills(self, use_auto_discovery: bool = False) -> None:
         """내장 스킬 등록
 
-        builtin/ 디렉토리의 스킬들을 자동으로 등록합니다.
+        Args:
+            use_auto_discovery: True이면 자동 발견 사용, False이면 기존 방식 (하위 호환성)
         """
-        try:
-            # 동적으로 builtin 스킬들을 import하고 등록
-            from neos.skills.builtin import get_builtin_skills
+        if use_auto_discovery:
+            # 새로운 자동 발견 방식
+            self.auto_discover_builtin_skills()
+        else:
+            # 기존 수동 등록 방식 (하위 호환성)
+            try:
+                from neos.skills.builtin import get_builtin_skills
 
-            builtin_skills = get_builtin_skills()
-            for skill_info in builtin_skills:
-                self.registry.register_skill(skill_info)
+                builtin_skills = get_builtin_skills()
+                for skill_info in builtin_skills:
+                    self.registry.register_skill(skill_info)
 
-            logger.info(
-                f"Registered {len(builtin_skills)} builtin skills"
-            )
-        except ImportError as e:
-            logger.warning(f"Failed to import builtin skills: {e}")
-        except Exception as e:
-            logger.error(f"Error registering builtin skills: {e}")
+                logger.info(
+                    f"Registered {len(builtin_skills)} builtin skills (manual mode)"
+                )
+            except ImportError as e:
+                logger.warning(f"Failed to import builtin skills: {e}")
+            except Exception as e:
+                logger.error(f"Error registering builtin skills: {e}")
+
+    def auto_discover_builtin_skills(self, check_deps: bool = True) -> None:
+        """내장 스킬 자동 발견 및 등록
+
+        Args:
+            check_deps: 의존성 체크 수행 여부
+        """
+        from neos.skills.manager.auto_discovery import discover_skills
+
+        builtin_dir = Path(__file__).parent.parent / "builtin"
+
+        logger.info(f"Auto-discovering builtin skills from: {builtin_dir}")
+        discovered_skills = discover_skills(builtin_dir, check_deps=check_deps)
+
+        for skill_info in discovered_skills:
+            self.registry.register_skill(skill_info)
+
+        logger.info(
+            f"Auto-discovered and registered {len(discovered_skills)} builtin skills"
+        )
+
+    def auto_discover_custom_skills(
+        self,
+        custom_dir: Path,
+        check_deps: bool = True
+    ) -> None:
+        """커스텀 스킬 자동 발견 및 등록
+
+        Args:
+            custom_dir: 커스텀 스킬 디렉토리 경로
+            check_deps: 의존성 체크 수행 여부
+        """
+        from neos.skills.manager.auto_discovery import discover_skills
+
+        if not custom_dir.exists():
+            logger.warning(f"Custom skills directory not found: {custom_dir}")
+            return
+
+        logger.info(f"Auto-discovering custom skills from: {custom_dir}")
+        discovered_skills = discover_skills(custom_dir, check_deps=check_deps)
+
+        for skill_info in discovered_skills:
+            self.registry.register_skill(skill_info)
+
+        logger.info(
+            f"Auto-discovered and registered {len(discovered_skills)} custom skills"
+        )
 
     async def initialize_all(self) -> Dict[str, bool]:
         """모든 스킬 초기화

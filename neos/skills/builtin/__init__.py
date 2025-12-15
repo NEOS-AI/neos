@@ -9,7 +9,6 @@ from typing import List
 from neos.skills.manager.skill_registry import SkillInfo
 from neos.skills.base import SkillType
 
-# Import builtin skills
 from .bigquery import BigQuerySkill
 from .docx import DocxSkill
 from .pdf import PdfSkill

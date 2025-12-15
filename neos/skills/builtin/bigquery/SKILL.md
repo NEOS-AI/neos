@@ -1,3 +1,17 @@
+---
+name: bigquery
+type: database
+version: 1.0.0
+description: BigQuery 데이터베이스 조회 및 분석
+capabilities:
+  - sql_query
+  - data_retrieval
+  - data_analysis
+  - bigquery
+dependencies:
+  - google-cloud-bigquery>=3.0.0
+---
+
 # BigQuery Skill
 
 ## Description

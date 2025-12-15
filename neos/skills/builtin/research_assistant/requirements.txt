@@ -1,0 +1,2 @@
+# Research Assistant Skill Dependencies
+# LangChain 의존성은 메인 프로젝트에 이미 포함되어 있음

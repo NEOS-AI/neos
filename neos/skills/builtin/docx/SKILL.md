@@ -1,3 +1,17 @@
+---
+name: docx
+type: document
+version: 1.0.0
+description: Microsoft Word 문서 읽기, 생성, 편집
+capabilities:
+  - document_reading
+  - document_creation
+  - document_editing
+  - text_extraction
+dependencies:
+  - python-docx>=1.1.0
+---
+
 # DOCX Skill
 
 ## Description

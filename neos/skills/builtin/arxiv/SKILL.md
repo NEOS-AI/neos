@@ -1,3 +1,19 @@
+---
+name: arxiv
+type: research
+version: 1.0.0
+description: ArXiv 학술 논문 검색 - 물리학, 수학, 컴퓨터 과학, AI/ML 등
+capabilities:
+  - paper_search
+  - academic_research
+  - arxiv_query
+  - metadata_extraction
+  - research_support
+dependencies:
+  - arxiv>=2.1.0
+  - langchain-community>=0.0.1
+---
+
 # ArXiv Skill
 
 ## Description

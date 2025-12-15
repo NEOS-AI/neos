@@ -1,3 +1,18 @@
+---
+name: pdf
+type: document
+version: 1.0.0
+description: PDF 문서 읽기, 텍스트 추출, 생성
+capabilities:
+  - document_reading
+  - text_extraction
+  - pdf_parsing
+  - document_creation
+dependencies:
+  - PyPDF2>=3.0.0
+  - reportlab>=3.6.0
+---
+
 # PDF Skill
 
 ## Description
