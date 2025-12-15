@@ -1,4 +1,26 @@
-"""Workflow Streaming API handlers - SSE & WebSocket 기반 실시간 스트리밍"""
+"""
+Workflow Streaming API handlers - SSE & WebSocket 기반 실시간 스트리밍
+
+이벤트 로깅 아키텍처 (DI 패턴):
+---------------------------------
+이 모듈은 Dependency Injection 패턴을 사용하여 워크플로우 이벤트를 실시간으로 스트리밍합니다.
+
+1. WorkflowStreamCallback (WorkflowEventHandler 구현):
+   - 워크플로우 이벤트를 수신하여 스트림 큐에 추가
+   - 선택적으로 DB에 영구 저장 (enable_db_logging=True)
+   - Observer 패턴을 통해 워크플로우와 느슨한 결합 유지
+
+2. Dependency Injection:
+   - multi_agent_workflow.execute_workflow(event_handler=callback)
+   - 워크플로우가 각 단계에서 자동으로 이벤트 발생
+   - 핸들러가 이벤트를 받아 스트림 & DB 저장 처리
+
+3. 스트리밍 방식:
+   - SSE: 단방향, 자동 재연결, HTTP 기반
+   - WebSocket: 양방향, 낮은 지연시간, 실시간 통신
+
+이 설계는 unified_handlers.py의 패턴을 따릅니다.
+"""
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -15,22 +37,76 @@ from neos.api.models.query_models import (
 )
 from neos.api.services.query_service import QueryService
 from neos.workflow.graph import multi_agent_workflow
+from neos.workflow.events import WorkflowEventHandler
 from neos.config.settings import settings
 from neos.utils.logger import get_logger
+from neos.database.connection import db_manager
 
 logger = get_logger(__name__)
 router = APIRouter()
 
 
-class WorkflowStreamCallback:
-    """워크플로우 실행 중 스트리밍 이벤트를 수집하는 콜백"""
+class WorkflowStreamCallback(WorkflowEventHandler):
+    """
+    워크플로우 실행 중 스트리밍 이벤트를 수집하는 콜백
 
-    def __init__(self, session_id: str, event_queue: asyncio.Queue):
+    WorkflowEventHandler 인터페이스를 구현하여 DI 패턴 지원
+    이벤트를 스트림 큐에 추가하고 선택적으로 DB에 저장
+    """
+
+    def __init__(
+        self,
+        session_id: str,
+        event_queue: asyncio.Queue,
+        enable_db_logging: bool = False,
+        user_id: Optional[str] = None
+    ):
         self.session_id = session_id
         self.event_queue = event_queue
         self.start_time = datetime.utcnow()
         self.current_node = None
         self.progress = 0
+        self.enable_db_logging = enable_db_logging
+        self.user_id = user_id
+        self.sequence_counter = 0
+
+    async def _log_to_db(
+        self,
+        event_type: str,
+        event_category: str,
+        event_data: Dict[str, Any]
+    ) -> None:
+        """이벤트를 DB에 저장 (선택적)"""
+        if not self.enable_db_logging:
+            return
+
+        try:
+            self.sequence_counter += 1
+
+            # workflow_events 테이블에 저장
+            insert_query = """
+                INSERT INTO workflow_events
+                (session_id, user_id, event_type, event_category, sequence_number, event_data, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+            """
+
+            await db_manager.execute(
+                insert_query,
+                self.session_id,
+                self.user_id or "anonymous",
+                event_type,
+                event_category,
+                self.sequence_counter,
+                json.dumps(event_data)
+            )
+
+            logger.debug(
+                f"[WorkflowEventLogger] Logged event #{self.sequence_counter}: {event_type}"
+            )
+
+        except Exception as e:
+            logger.error(f"[WorkflowEventLogger] Failed to log to DB: {e}")
+            # Non-critical error - continue without DB logging
 
     def _create_event(
         self,
@@ -58,27 +134,139 @@ class WorkflowStreamCallback:
             execution_time_ms=elapsed_ms
         )
 
-    async def on_node_start(self, node_name: str, step_number: int, total_steps: int):
+    # ============================================================================
+    # WorkflowEventHandler 인터페이스 구현
+    # ============================================================================
+
+    async def on_workflow_start(self, workflow_input: Dict[str, Any]):
+        """워크플로우 시작 이벤트"""
+        event = self._create_event(
+            event_type=WorkflowStreamEventType.STARTED,
+            data={"query": workflow_input.get("query", "")[:100]}
+        )
+        await self.event_queue.put(event)
+
+        # DB 로깅
+        await self._log_to_db(
+            event_type="workflow_started",
+            event_category="workflow",
+            event_data={
+                "query": workflow_input.get("query", "")[:200],
+                "user_id": workflow_input.get("user_id"),
+                "session_id": workflow_input.get("session_id")
+            }
+        )
+
+    async def on_node_start(self, node_name: str, step: int, total_steps: int):
         """노드 시작 이벤트"""
         self.current_node = node_name
-        self.progress = int((step_number / total_steps) * 100)
+        self.progress = int((step / total_steps) * 100)
 
         event = self._create_event(
             event_type=WorkflowStreamEventType.NODE_STARTED,
             node_name=node_name,
-            data={"step": step_number, "total_steps": total_steps},
+            data={"step": step, "total_steps": total_steps},
             progress_percent=self.progress
         )
         await self.event_queue.put(event)
 
-    async def on_node_complete(self, node_name: str, result_summary: Dict[str, Any]):
+        # DB 로깅
+        await self._log_to_db(
+            event_type="node_started",
+            event_category="workflow",
+            event_data={
+                "node_name": node_name,
+                "step": step,
+                "total_steps": total_steps,
+                "progress_percent": self.progress
+            }
+        )
+
+    async def on_node_progress(self, node_name: str, message: str, progress: int = 0):
+        """노드 진행 상황 이벤트"""
+        event = self._create_event(
+            event_type=WorkflowStreamEventType.AGENT_PROGRESS,
+            node_name=node_name,
+            content=message,
+            data={"sub_progress": progress}
+        )
+        await self.event_queue.put(event)
+
+        # DB 로깅
+        await self._log_to_db(
+            event_type="node_progress",
+            event_category="workflow",
+            event_data={
+                "node_name": node_name,
+                "message": message,
+                "sub_progress": progress
+            }
+        )
+
+    async def on_node_complete(self, node_name: str, result: Dict[str, Any]):
         """노드 완료 이벤트"""
         event = self._create_event(
             event_type=WorkflowStreamEventType.NODE_COMPLETED,
             node_name=node_name,
-            data=result_summary
+            data=result
         )
         await self.event_queue.put(event)
+
+        # DB 로깅
+        await self._log_to_db(
+            event_type="node_completed",
+            event_category="workflow",
+            event_data={
+                "node_name": node_name,
+                "result_summary": str(result)[:500]  # 결과 요약만 저장
+            }
+        )
+
+    async def on_workflow_complete(self, result: Dict[str, Any]):
+        """워크플로우 완료 이벤트"""
+        self.progress = 100
+        event = self._create_event(
+            event_type=WorkflowStreamEventType.COMPLETED,
+            data=result,
+            progress_percent=100
+        )
+        await self.event_queue.put(event)
+
+        # DB 로깅
+        await self._log_to_db(
+            event_type="workflow_completed",
+            event_category="workflow",
+            event_data={
+                "response": str(result.get("response", ""))[:500],
+                "quality_score": result.get("quality_score", 0.0),
+                "execution_time_ms": result.get("execution_time_ms"),
+                "cache_hit": result.get("cache_hit", False)
+            }
+        )
+
+    async def on_workflow_error(self, error: Exception, node_name: Optional[str] = None):
+        """워크플로우 에러 이벤트"""
+        event = self._create_event(
+            event_type=WorkflowStreamEventType.ERROR,
+            node_name=node_name,
+            error=str(error)
+        )
+        await self.event_queue.put(event)
+
+        # DB 로깅
+        await self._log_to_db(
+            event_type="workflow_error",
+            event_category="error",
+            event_data={
+                "node_name": node_name,
+                "error_message": str(error),
+                "error_type": type(error).__name__
+            }
+        )
+
+    # ============================================================================
+    # 기존 호환성 메서드들 (레거시 코드 지원)
+    # ============================================================================
 
     async def on_agent_start(self, agent_name: str):
         """에이전트 시작 이벤트"""
@@ -142,82 +330,34 @@ async def execute_workflow_with_streaming(
     callback: WorkflowStreamCallback,
     bypass_cache: bool = False
 ) -> Dict[str, Any]:
-    """스트리밍 콜백과 함께 워크플로우 실행"""
+    """
+    스트리밍 콜백과 함께 워크플로우 실행
 
-    # 시작 이벤트
-    start_event = callback._create_event(
-        event_type=WorkflowStreamEventType.STARTED,
-        data={"query": query[:100] + "..." if len(query) > 100 else query}
-    )
-    await callback.event_queue.put(start_event)
-
-    workflow_nodes = [
-        ("query_classifier", "쿼리 분석 중..."),
-        ("skill_tool_selector", "도구 선택 중..."),
-        ("search_orchestrator", "검색 수행 중..."),
-        ("analysis_orchestrator", "분석 수행 중..."),
-        ("generation_orchestrator", "생성 수행 중..."),
-        ("result_integrator", "결과 통합 중..."),
-        ("quality_validator", "품질 검증 중..."),
-        ("response_generator", "응답 생성 중...")
-    ]
+    Dependency Injection 패턴을 사용하여 WorkflowEventHandler를 주입
+    """
 
     try:
-        # 캐시 확인
-        if not bypass_cache:
-            cached_response = await multi_agent_workflow._check_cached_response(
-                multi_agent_workflow._generate_cache_key(query)
-            )
-            if cached_response:
-                await callback.on_complete({
-                    "response": cached_response.get("response"),
-                    "cache_hit": True,
-                    "quality_score": cached_response.get("quality_score", 0.0)
-                })
-                return cached_response
-
-        # 워크플로우 실행
+        # 워크플로우 입력 생성
         workflow_input = {
             "user_id": user_id,
             "session_id": session_id,
             "query": query
         }
 
-        # 그래프 초기화 확인
-        await multi_agent_workflow._ensure_graph_initialized()
-
-        # 초기 상태 생성
-        initial_state = multi_agent_workflow._create_initial_state(workflow_input)
-
-        # 노드별 진행 상황 시뮬레이션과 함께 워크플로우 실행
-        for i, (node_name, description) in enumerate(workflow_nodes, 1):
-            await callback.on_node_start(node_name, i, len(workflow_nodes))
-            await callback.on_agent_progress(node_name, description, 50)
-
-            # 짧은 지연으로 스트리밍 효과 제공
-            await asyncio.sleep(0.1)
-
-        # 실제 워크플로우 실행
-        config = {"configurable": {"thread_id": session_id}}
-        final_state = await multi_agent_workflow.graph.ainvoke(initial_state, config)
-
-        # 결과 생성
-        result = multi_agent_workflow._create_workflow_result(final_state)
-
-        # 완료 이벤트
-        await callback.on_complete({
-            "response": result.get("response"),
-            "quality_score": result.get("quality_score", 0.0),
-            "execution_time_ms": result.get("execution_time_ms"),
-            "cache_hit": False
-        })
+        # Dependency Injection: WorkflowStreamCallback을 event_handler로 주입
+        # 워크플로우 내부에서 발생하는 모든 이벤트가 자동으로 callback으로 전달됨
+        result = await multi_agent_workflow.execute_workflow(
+            workflow_input,
+            event_handler=callback,  # DI: 이벤트 핸들러 주입
+            bypass_cache=bypass_cache
+        )
 
         return result
 
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Workflow streaming error: {error_msg}")
-        await callback.on_error(error_msg)
+        await callback.on_workflow_error(e)
         raise
 
 
@@ -253,7 +393,14 @@ async def stream_query(request: WorkflowStreamRequest):
 
     async def generate_stream() -> AsyncGenerator[str, None]:
         event_queue: asyncio.Queue = asyncio.Queue()
-        callback = WorkflowStreamCallback(session_id, event_queue)
+        # DB 로깅 활성화 옵션 추가 (선택적)
+        enable_db_logging = stream_options.get("enable_db_logging", True)
+        callback = WorkflowStreamCallback(
+            session_id=session_id,
+            event_queue=event_queue,
+            enable_db_logging=enable_db_logging,
+            user_id=user_id
+        )
 
         # 하트비트 태스크
         heartbeat_task = None
@@ -364,7 +511,13 @@ async def websocket_query_stream(websocket: WebSocket, session_id: str):
     logger.info(f"WebSocket connected: session_id={session_id}")
 
     event_queue: asyncio.Queue = asyncio.Queue()
-    callback = WorkflowStreamCallback(session_id, event_queue)
+    # WebSocket에서도 DB 로깅 활성화 (기본값: True)
+    callback = WorkflowStreamCallback(
+        session_id=session_id,
+        event_queue=event_queue,
+        enable_db_logging=True,
+        user_id=None  # 클라이언트 메시지에서 받아올 예정
+    )
     active_task: Optional[asyncio.Task] = None
 
     try:
@@ -401,9 +554,14 @@ async def websocket_query_stream(websocket: WebSocket, session_id: str):
                 if active_task and not active_task.done():
                     active_task.cancel()
 
-                # 새 콜백 생성
+                # 새 콜백 생성 (user_id 업데이트)
                 event_queue = asyncio.Queue()
-                callback = WorkflowStreamCallback(session_id, event_queue)
+                callback = WorkflowStreamCallback(
+                    session_id=session_id,
+                    event_queue=event_queue,
+                    enable_db_logging=True,
+                    user_id=user_id
+                )
 
                 # 워크플로우 실행
                 async def run_workflow():

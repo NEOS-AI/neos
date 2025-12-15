@@ -1,5 +1,3 @@
-"""Deep Research API handlers - FastAPI routes for deep research functionality"""
-
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import AsyncGenerator
@@ -414,7 +412,7 @@ async def deep_research_stream_generator(
                     section_status = section[5]
                     sources_count = section[6] or 0
 
-                    logger.info(f"New section found: {section_title} (order: {section_order}, type: {section_type})")
+                    logger.info(f"New section found: {section_title} (order: {section_order}, type: {section_type}, status: {section_status})")
 
                     # Map agent's section type to SSE event type
                     event_section_type = map_section_type_to_event_type(section_type)
@@ -494,7 +492,7 @@ async def deep_research_stream_generator(
 
                         # Double-check to prevent duplicates
                         if event_id in processed_event_ids:
-                            logger.debug(f"Skipping already processed event: {event_id}")
+                            logger.debug(f"Skipping already processed event: {event_id} (seq: {sequence_number}, type: {event_type}, category: {event_category})")
                             continue
 
                         processed_event_ids.add(event_id)
