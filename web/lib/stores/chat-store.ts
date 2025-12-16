@@ -76,7 +76,6 @@ const toConversation = (response: ConversationResponse): Conversation => {
 };
 
 export const useChatStore = create<ChatStore>()(
-  // @ts-expect-error - zustand persist middleware type definition issue
   persist(
     (set, get) => ({
       // ======================================================================
