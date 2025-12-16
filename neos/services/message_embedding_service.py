@@ -19,8 +19,10 @@ class MessageEmbeddingService:
     """메시지 임베딩 서비스"""
 
     def __init__(self):
-        self.embedding_model = "text-embedding-3-small"
-        self.dimension = 1536
+        # Embedding manager로부터 provider 정보 가져오기
+        self.embedding_provider = embedding_manager.provider_name
+        self.embedding_model = embedding_manager.model
+        self.dimension = embedding_manager.dimension
 
     async def create_message_embedding(
         self,
@@ -53,15 +55,18 @@ class MessageEmbeddingService:
                 conversation_id,
                 embedding,
                 embedding_model,
+                embedding_provider,
                 content,
                 role,
                 sequence_number,
                 user_id,
                 metadata
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT (message_id)
             DO UPDATE SET
                 embedding = EXCLUDED.embedding,
+                embedding_provider = EXCLUDED.embedding_provider,
+                embedding_model = EXCLUDED.embedding_model,
                 content = EXCLUDED.content,
                 updated_at = CURRENT_TIMESTAMP
             """
@@ -72,6 +77,7 @@ class MessageEmbeddingService:
                 conversation_id,
                 embedding,
                 self.embedding_model,
+                self.embedding_provider,
                 content,
                 role,
                 sequence_number,

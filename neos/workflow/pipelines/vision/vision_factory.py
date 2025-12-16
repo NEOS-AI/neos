@@ -9,6 +9,7 @@ from neos.config.settings import settings
 from .vision_base import VisionModel, VisionProvider
 from .vision_gpt4o import GPT4oVision
 from .vision_claude import ClaudeVision
+from .vision_gemini import GeminiVision
 
 
 class VisionModelFactory:
@@ -43,12 +44,16 @@ class VisionModelFactory:
                 provider = VisionProvider.GPT4O
             elif llm_provider == "anthropic":
                 provider = VisionProvider.CLAUDE
+            elif llm_provider == "gemini":
+                provider = VisionProvider.GEMINI
             else:
                 # 기본값: 사용 가능한 첫 번째 모델
                 if settings.OPENAI_API_KEY:
                     provider = VisionProvider.GPT4O
                 elif settings.ANTHROPIC_API_KEY:
                     provider = VisionProvider.CLAUDE
+                elif settings.GOOGLE_API_KEY:
+                    provider = VisionProvider.GEMINI
                 else:
                     raise ValueError("No Vision model API key configured")
 
@@ -59,12 +64,30 @@ class VisionModelFactory:
                 # OpenAI 실패 시 Claude로 fallback
                 print("[VisionModelFactory] GPT4o not available, trying Claude...")
                 model = ClaudeVision()
+                if not model.is_available():
+                    # Claude도 실패 시 Gemini로 fallback
+                    print("[VisionModelFactory] Claude not available, trying Gemini...")
+                    model = GeminiVision()
         elif provider == VisionProvider.CLAUDE:
             model = ClaudeVision()
             if not model.is_available():
                 # Claude 실패 시 GPT4o로 fallback
                 print("[VisionModelFactory] Claude not available, trying GPT4o...")
                 model = GPT4oVision()
+                if not model.is_available():
+                    # GPT4o도 실패 시 Gemini로 fallback
+                    print("[VisionModelFactory] GPT4o not available, trying Gemini...")
+                    model = GeminiVision()
+        elif provider == VisionProvider.GEMINI:
+            model = GeminiVision()
+            if not model.is_available():
+                # Gemini 실패 시 GPT4o로 fallback
+                print("[VisionModelFactory] Gemini not available, trying GPT4o...")
+                model = GPT4oVision()
+                if not model.is_available():
+                    # GPT4o도 실패 시 Claude로 fallback
+                    print("[VisionModelFactory] GPT4o not available, trying Claude...")
+                    model = ClaudeVision()
         else:
             raise ValueError(f"Unknown provider: {provider}")
 

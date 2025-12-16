@@ -14,6 +14,7 @@ class VisionProvider(Enum):
     """Vision 모델 프로바이더"""
     GPT4O = "gpt4o"
     CLAUDE = "claude"
+    GEMINI = "gemini"
     AUTO = "auto"  # 자동 선택 (설정 기반)
 
 

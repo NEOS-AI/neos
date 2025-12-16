@@ -1,0 +1,70 @@
+# VLM (Vision Language Model) 모델 설정
+# 이 파일에서 사용할 모델 ID를 중앙에서 관리합니다.
+
+vision_models:
+  gpt4o:
+    model_id: "gpt-4o"
+    provider: "openai"
+    description: "OpenAI GPT-4o Vision"
+    max_tokens: 4096
+    supports_video: false
+
+  claude:
+    model_id: "claude-sonnet-4-5-20250929"
+    provider: "anthropic"
+    description: "Anthropic Claude Sonnet 4.5"
+    max_tokens: 8192
+    supports_video: false
+
+  gemini:
+    model_id: "gemini-1.5-pro-latest"
+    provider: "google"
+    description: "Google Gemini 1.5 Pro"
+    max_tokens: 8192
+    supports_video: true
+
+# LLM 모델 설정 (텍스트 전용)
+llm_models:
+  gpt4:
+    model_id: "gpt-4-turbo-preview"
+    provider: "openai"
+    description: "OpenAI GPT-4 Turbo"
+    max_tokens: 4096
+
+  claude_opus:
+    model_id: "claude-opus-4-5-20251101"
+    provider: "anthropic"
+    description: "Anthropic Claude Opus 4.5"
+    max_tokens: 8192
+
+  claude_sonnet:
+    model_id: "claude-sonnet-4-5-20250929"
+    provider: "anthropic"
+    description: "Anthropic Claude Sonnet 4.5"
+    max_tokens: 8192
+
+  claude_haiku:
+    model_id: "claude-haiku-4-5-20251001"
+    provider: "anthropic"
+    description: "Anthropic Claude Haiku 4.5"
+    max_tokens: 8192
+
+# Embedding 모델 설정
+embedding_models:
+  openai_small:
+    model_id: "text-embedding-3-small"
+    provider: "openai"
+    description: "OpenAI Embedding Small"
+    dimension: 1536
+
+  openai_large:
+    model_id: "text-embedding-3-large"
+    provider: "openai"
+    description: "OpenAI Embedding Large"
+    dimension: 3072
+
+# 기본 모델 설정 (환경 변수로 오버라이드 가능)
+defaults:
+  vision: "gpt4o"
+  llm: "claude_sonnet"
+  embedding: "openai_small"

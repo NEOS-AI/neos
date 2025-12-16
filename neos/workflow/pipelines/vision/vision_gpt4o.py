@@ -5,6 +5,7 @@ GPT-4o Vision 모델 구현
 from typing import Dict, Any, Optional
 
 from neos.config.settings import settings
+from neos.config.model_config import get_vision_model_id
 
 from .vision_base import VisionModel, detect_image_media_type
 
@@ -18,7 +19,8 @@ class GPT4oVision(VisionModel):
 
     def __init__(self, api_key: Optional[str] = None):
         super().__init__(api_key or settings.OPENAI_API_KEY)
-        self.model = "gpt-4o"  # GPT-4o 모델
+        # 설정 파일에서 모델 ID 로드 (하드코딩 제거)
+        self.model = get_vision_model_id('gpt4o')
 
     async def analyze_image(
         self,

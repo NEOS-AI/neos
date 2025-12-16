@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     # AI 서비스 API 키
     OPENAI_API_KEY: str = env_vars.get("OPENAI_API_KEY", "")
     ANTHROPIC_API_KEY: Optional[str] = env_vars.get("ANTHROPIC_API_KEY", None)
+    GOOGLE_API_KEY: Optional[str] = env_vars.get("GOOGLE_API_KEY", None)
     TAVILY_API_KEY: str = env_vars.get("TAVILY_API_KEY", "")
 
     # 외부 API 키 설정
@@ -70,6 +71,7 @@ class Settings(BaseSettings):
     LLM_TIMEOUT_RESEARCH_PLANNING: int = int(env_vars.get("LLM_TIMEOUT_RESEARCH_PLANNING", 180))  # Longer timeout for complex research operations
 
     # 임베딩 설정
+    EMBEDDING_PROVIDER: str = env_vars.get("EMBEDDING_PROVIDER", "openai")
     EMBEDDING_MODEL: str = env_vars.get("EMBEDDING_MODEL", "text-embedding-3-small")
     EMBEDDING_DIMENSION: int = int(env_vars.get("EMBEDDING_DIMENSION", 1536))
 

@@ -5,6 +5,7 @@ Claude Vision 모델 구현
 from typing import Dict, Any, Optional
 
 from neos.config.settings import settings
+from neos.config.model_config import get_vision_model_id
 
 from .vision_base import VisionModel, detect_image_media_type
 
@@ -13,13 +14,13 @@ class ClaudeVision(VisionModel):
     """
     Claude Vision 모델
 
-    Anthropic의 Claude 3를 사용한 이미지 분석
+    Anthropic의 Claude를 사용한 이미지 분석
     """
 
     def __init__(self, api_key: Optional[str] = None):
         super().__init__(api_key or settings.ANTHROPIC_API_KEY)
-        # Claude 4.5 Sonnet - 가장 최신이며 Vision을 지원하는 모델
-        self.model = "claude-sonnet-4-5-20250929"
+        # 설정 파일에서 모델 ID 로드 (하드코딩 제거)
+        self.model = get_vision_model_id('claude')
 
     async def analyze_image(
         self,
