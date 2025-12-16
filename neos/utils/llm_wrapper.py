@@ -64,6 +64,8 @@ class TrackedLLM:
             return "openai"
         elif "anthropic" in llm_class or "claude" in llm_class:
             return "anthropic"
+        elif "google" in llm_class or "gemini" in llm_class:
+            return "gemini"
         else:
             return "unknown"
 
@@ -117,6 +119,15 @@ class TrackedLLM:
                     "completion_tokens": usage.get('completion_tokens', 0),
                     "total_tokens": usage.get('total_tokens', 0)
                 }
+
+        # Gemini 형식 (usage_metadata)
+        if hasattr(response, 'usage_metadata'):
+            usage = response.usage_metadata
+            return {
+                "prompt_tokens": getattr(usage, 'prompt_token_count', 0),
+                "completion_tokens": getattr(usage, 'candidates_token_count', 0),
+                "total_tokens": getattr(usage, 'total_token_count', 0)
+            }
 
         return None
 

@@ -2,6 +2,7 @@ from typing import Optional
 from abc import ABC, abstractmethod
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.language_models import BaseLanguageModel
 import logging
 
@@ -96,12 +97,36 @@ class AnthropicProvider(LLMProvider):
     def get_provider_name(self) -> str:
         return "anthropic"
 
+class GeminiProvider(LLMProvider):
+    """Google Gemini LLM Provider"""
+
+    def __init__(self):
+        if not settings.GOOGLE_API_KEY:
+            raise ValueError("GOOGLE_API_KEY is required for Gemini provider")
+
+    def create_llm(self, **kwargs) -> ChatGoogleGenerativeAI:
+        """Gemini LLM 생성"""
+        default_params = {
+            "model": settings.LLM_MODEL,
+            "temperature": settings.LLM_TEMPERATURE,
+            "google_api_key": settings.GOOGLE_API_KEY,
+            "max_retries": 3,
+            "timeout": settings.LLM_TIMEOUT
+        }
+        default_params.update(kwargs)
+
+        return ChatGoogleGenerativeAI(**default_params)
+
+    def get_provider_name(self) -> str:
+        return "gemini"
+
 class LLMFactory:
     """LLM Factory 클래스 - Dependency Injection을 위한 팩토리"""
     
     _providers = {
         "openai": OpenAIProvider,
-        "anthropic": AnthropicProvider
+        "anthropic": AnthropicProvider,
+        "gemini": GeminiProvider
     }
     
     @classmethod
@@ -163,13 +188,16 @@ class LLMFactory:
     def get_available_providers(cls) -> list[str]:
         """사용 가능한 provider 목록 반환"""
         available = []
-        
+
         if settings.OPENAI_API_KEY:
             available.append("openai")
-        
+
         if settings.ANTHROPIC_API_KEY:
             available.append("anthropic")
-        
+
+        if settings.GOOGLE_API_KEY:
+            available.append("gemini")
+
         return available
     
     @classmethod
@@ -204,6 +232,10 @@ def create_anthropic_llm(**kwargs) -> ChatAnthropic:
     """Anthropic LLM 강제 생성"""
     return llm_factory.create_llm(provider="anthropic", **kwargs)
 
+def create_gemini_llm(**kwargs) -> ChatGoogleGenerativeAI:
+    """Gemini LLM 강제 생성"""
+    return llm_factory.create_llm(provider="gemini", **kwargs)
+
 def get_recommended_models(provider: str) -> dict[str, str]:
     """Provider별 추천 모델"""
     recommendations = {
@@ -216,7 +248,12 @@ def get_recommended_models(provider: str) -> dict[str, str]:
             "fast": "claude-haiku-4-5-20251001",
             "balanced": "claude-sonnet-4-5-20250929",
             "powerful": "claude-sonnet-4-5-20250929"
+        },
+        "gemini": {
+            "fast": "gemini-2.0-flash-exp",
+            "balanced": "gemini-1.5-pro-latest",
+            "powerful": "gemini-1.5-pro-latest"
         }
     }
-    
+
     return recommendations.get(provider, {})
