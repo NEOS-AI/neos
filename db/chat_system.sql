@@ -758,3 +758,111 @@ COMMENT ON TABLE conversation_participants IS '대화방 참여자 및 권한 �
 COMMENT ON TABLE conversation_branches IS '대화 분기 관리 (alternative responses)';
 COMMENT ON TABLE chat_analytics IS '대화별 사용 통계 및 분석';
 COMMENT ON TABLE conversation_templates IS '재사용 가능한 대화 템플릿';
+
+-- ============================================================================
+-- 9. Vote 테이블 (메시지 투표)
+-- ============================================================================
+-- 웹 프론트엔드에서 메시지에 대한 사용자 피드백을 추적
+CREATE TABLE IF NOT EXISTS "Vote_v2" (
+    chat_id VARCHAR(255) NOT NULL,
+    message_id VARCHAR(255) NOT NULL,
+    is_upvoted BOOLEAN NOT NULL,
+
+    PRIMARY KEY (chat_id, message_id),
+    FOREIGN KEY (chat_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    FOREIGN KEY (message_id) REFERENCES messages(message_id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_vote_v2_chat_id ON "Vote_v2"(chat_id);
+CREATE INDEX idx_vote_v2_message_id ON "Vote_v2"(message_id);
+
+COMMENT ON TABLE "Vote_v2" IS '메시지에 대한 사용자 피드백 (upvote/downvote)';
+
+-- ============================================================================
+-- 10. Document 테이블 (Artifacts - 코드, 문서, 스프레드시트 등)
+-- ============================================================================
+-- 웹 프론트엔드의 Artifact 시스템에서 생성되는 문서들
+CREATE TABLE IF NOT EXISTS "Document" (
+    id UUID NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    title TEXT NOT NULL,
+    content TEXT,
+    kind VARCHAR(20) NOT NULL DEFAULT 'text',
+    user_id VARCHAR(255) NOT NULL,
+
+    PRIMARY KEY (id, created_at),
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+
+    -- kind 값 제한
+    CONSTRAINT check_document_kind CHECK (kind IN ('text', 'code', 'image', 'sheet'))
+);
+
+CREATE INDEX idx_document_user_id ON "Document"(user_id);
+CREATE INDEX idx_document_id ON "Document"(id);
+CREATE INDEX idx_document_created_at ON "Document"(created_at DESC);
+
+COMMENT ON TABLE "Document" IS 'Artifact 문서 (버전 관리 지원 - id와 created_at로 버전 구분)';
+
+-- ============================================================================
+-- 11. Suggestion 테이블 (문서 제안/편집 제안)
+-- ============================================================================
+-- Document에 대한 AI 생성 편집 제안
+CREATE TABLE IF NOT EXISTS "Suggestion" (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_id UUID NOT NULL,
+    document_created_at TIMESTAMP NOT NULL,
+    original_text TEXT NOT NULL,
+    suggested_text TEXT NOT NULL,
+    description TEXT,
+    is_resolved BOOLEAN NOT NULL DEFAULT FALSE,
+    user_id VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (document_id, document_created_at)
+        REFERENCES "Document"(id, created_at) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_suggestion_document ON "Suggestion"(document_id, document_created_at);
+CREATE INDEX idx_suggestion_user ON "Suggestion"(user_id);
+CREATE INDEX idx_suggestion_resolved ON "Suggestion"(is_resolved) WHERE is_resolved = FALSE;
+
+COMMENT ON TABLE "Suggestion" IS '문서에 대한 AI 생성 편집 제안';
+
+-- ============================================================================
+-- 12. messages 테이블에 parts 컬럼 추가 (Vercel AI SDK 호환)
+-- ============================================================================
+-- Vercel AI SDK의 parts 구조를 지원하기 위한 컬럼 추가
+-- parts는 content의 구조화된 버전으로, tool-call, tool-result 등을 포함
+ALTER TABLE messages
+ADD COLUMN IF NOT EXISTS parts JSONB;
+
+COMMENT ON COLUMN messages.parts IS 'Vercel AI SDK parts 구조 (content의 구조화된 버전)';
+
+-- parts 구조 예시:
+-- [
+--   {"type": "text", "text": "Hello"},
+--   {"type": "tool-call", "toolCallId": "...", "toolName": "...", "args": {...}},
+--   {"type": "tool-result", "toolCallId": "...", "toolName": "...", "result": {...}}
+-- ]
+
+-- ============================================================================
+-- 13. users 테이블에 NextAuth 호환 필드 추가
+-- ============================================================================
+-- NextAuth에서 사용하는 name, image 필드 추가 (이미 있으면 스킵)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'users' AND column_name = 'name'
+    ) THEN
+        ALTER TABLE users ADD COLUMN name VARCHAR(255);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'users' AND column_name = 'image'
+    ) THEN
+        ALTER TABLE users ADD COLUMN image VARCHAR(1000);
+    END IF;
+END $$;
