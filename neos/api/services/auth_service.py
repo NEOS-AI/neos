@@ -546,3 +546,89 @@ class AuthService:
         await self.db.commit()
 
         return True, "API 키가 무효화되었습니다."
+
+    async def create_guest_user(
+        self,
+        device_info: Optional[str] = None,
+        ip_address: Optional[str] = None
+    ) -> Tuple[bool, str, Optional[dict]]:
+        """
+        Guest 사용자 생성 및 토큰 발급
+
+        Guest 사용자는:
+        - 임시 이메일(guest_XXXXX@guest.local)로 생성
+        - 비밀번호 없음 (password_hash = None)
+        - role = 'guest'
+        - 제한된 기능 및 사용량 제한 적용
+
+        Args:
+            device_info: 디바이스 정보 (User-Agent)
+            ip_address: IP 주소
+
+        Returns:
+            (성공 여부, 메시지, 토큰 정보)
+        """
+        # Guest user_id와 임시 이메일 생성
+        guest_id = f"guest_{uuid.uuid4().hex[:16]}"
+        guest_email = f"guest_{uuid.uuid4().hex[:12]}@guest.local"
+
+        # Guest 사용자 생성
+        guest_user = User(
+            user_id=guest_id,
+            email=guest_email,
+            username=f"Guest_{uuid.uuid4().hex[:8]}",
+            password_hash=None,  # Guest는 비밀번호 없음
+            is_active=True,
+            is_verified=False,
+            role="guest"
+        )
+
+        self.db.add(guest_user)
+        await self.db.commit()
+        await self.db.refresh(guest_user)
+
+        # Access Token 생성
+        access_token = create_access_token(
+            data={
+                "user_id": guest_user.user_id,
+                "email": guest_user.email,
+                "role": "guest"
+            }
+        )
+
+        # Refresh Token 생성
+        refresh_token = create_refresh_token(
+            data={"user_id": guest_user.user_id}
+        )
+
+        # Refresh Token DB에 저장
+        refresh_token_hash = hash_token(refresh_token)
+        expires_at = datetime.utcnow() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+
+        new_refresh_token = RefreshToken(
+            user_id=guest_user.user_id,
+            token_hash=refresh_token_hash,
+            device_info=device_info,
+            ip_address=ip_address,
+            expires_at=expires_at
+        )
+
+        self.db.add(new_refresh_token)
+
+        # 마지막 로그인 시간 업데이트
+        guest_user.last_login = datetime.utcnow()
+
+        await self.db.commit()
+
+        return True, "Guest 사용자 생성 성공", {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "expires_in": settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "user": {
+                "user_id": guest_user.user_id,
+                "email": guest_user.email,
+                "username": guest_user.username,
+                "role": "guest"
+            }
+        }

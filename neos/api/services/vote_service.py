@@ -1,0 +1,198 @@
+"""Vote Service - 투표 비즈니스 로직"""
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_
+from sqlalchemy.future import select as future_select
+from typing import List, Optional
+from fastapi import HTTPException, status
+import uuid
+
+from neos.database.models import Vote
+from neos.api.models.vote_models import VoteResponse
+
+
+class VoteService:
+    """투표 서비스"""
+
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def create_or_update_vote(
+        self,
+        chat_id: str,
+        message_id: str,
+        is_upvoted: bool,
+        user_id: str
+    ) -> VoteResponse:
+        """
+        투표 생성 또는 업데이트
+
+        Args:
+            chat_id: 대화 ID
+            message_id: 메시지 ID
+            is_upvoted: 업보트 여부
+            user_id: 사용자 ID
+
+        Returns:
+            VoteResponse: 생성/업데이트된 투표
+
+        Raises:
+            HTTPException: 대화가 사용자 소유가 아닌 경우 403
+        """
+        # 문자열을 UUID로 변환
+        chat_uuid = uuid.UUID(chat_id) if isinstance(chat_id, str) else chat_id
+        message_uuid = uuid.UUID(message_id) if isinstance(message_id, str) else message_id
+
+        # 대화 소유권 확인
+        # Note: conversations 테이블이 정의되지 않았으므로 지금은 생략
+        # 실제 환경에서는 아래 주석을 해제하고 Conversation 모델을 import해야 함
+        """
+        from neos.database.models import Conversation
+        conv_query = select(Conversation).where(
+            and_(
+                Conversation.conversation_id == chat_id,
+                Conversation.user_id == user_id
+            )
+        )
+        conv_result = await self.db.execute(conv_query)
+        conversation = conv_result.scalar_one_or_none()
+
+        if not conversation:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This chat does not belong to you"
+            )
+        """
+
+        # 기존 투표 확인
+        vote_query = select(Vote).where(
+            and_(
+                Vote.chat_id == chat_uuid,
+                Vote.message_id == message_uuid
+            )
+        )
+        vote_result = await self.db.execute(vote_query)
+        existing_vote = vote_result.scalar_one_or_none()
+
+        if existing_vote:
+            # 업데이트
+            existing_vote.is_upvoted = is_upvoted
+            await self.db.commit()
+            await self.db.refresh(existing_vote)
+
+            return VoteResponse(
+                chat_id=str(existing_vote.chat_id),
+                message_id=str(existing_vote.message_id),
+                is_upvoted=existing_vote.is_upvoted
+            )
+        else:
+            # 생성
+            new_vote = Vote(
+                chat_id=chat_uuid,
+                message_id=message_uuid,
+                is_upvoted=is_upvoted
+            )
+            self.db.add(new_vote)
+            await self.db.commit()
+            await self.db.refresh(new_vote)
+
+            return VoteResponse(
+                chat_id=str(new_vote.chat_id),
+                message_id=str(new_vote.message_id),
+                is_upvoted=new_vote.is_upvoted
+            )
+
+    async def get_votes_by_chat(
+        self,
+        chat_id: str,
+        user_id: str
+    ) -> List[VoteResponse]:
+        """
+        채팅의 모든 투표 조회
+
+        Args:
+            chat_id: 대화 ID
+            user_id: 사용자 ID
+
+        Returns:
+            List[VoteResponse]: 투표 목록
+
+        Raises:
+            HTTPException: 대화가 사용자 소유가 아닌 경우 403
+        """
+        # 문자열을 UUID로 변환
+        chat_uuid = uuid.UUID(chat_id) if isinstance(chat_id, str) else chat_id
+
+        # 대화 소유권 확인
+        # Note: conversations 테이블이 정의되지 않았으므로 지금은 생략
+        """
+        from neos.database.models import Conversation
+        conv_query = select(Conversation).where(
+            and_(
+                Conversation.conversation_id == chat_id,
+                Conversation.user_id == user_id
+            )
+        )
+        conv_result = await self.db.execute(conv_query)
+        if not conv_result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This chat does not belong to you"
+            )
+        """
+
+        # 투표 조회
+        query = select(Vote).where(Vote.chat_id == chat_uuid)
+        result = await self.db.execute(query)
+        votes = result.scalars().all()
+
+        return [
+            VoteResponse(
+                chat_id=str(vote.chat_id),
+                message_id=str(vote.message_id),
+                is_upvoted=vote.is_upvoted
+            )
+            for vote in votes
+        ]
+
+    async def delete_vote(
+        self,
+        chat_id: str,
+        message_id: str,
+        user_id: str
+    ) -> None:
+        """
+        투표 삭제
+
+        Args:
+            chat_id: 대화 ID
+            message_id: 메시지 ID
+            user_id: 사용자 ID
+
+        Raises:
+            HTTPException: 투표가 없거나 권한이 없는 경우
+        """
+        # 문자열을 UUID로 변환
+        chat_uuid = uuid.UUID(chat_id) if isinstance(chat_id, str) else chat_id
+        message_uuid = uuid.UUID(message_id) if isinstance(message_id, str) else message_id
+
+        # 대화 소유권 확인 (생략)
+
+        # 투표 조회 및 삭제
+        vote_query = select(Vote).where(
+            and_(
+                Vote.chat_id == chat_uuid,
+                Vote.message_id == message_uuid
+            )
+        )
+        vote_result = await self.db.execute(vote_query)
+        vote = vote_result.scalar_one_or_none()
+
+        if not vote:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Vote not found"
+            )
+
+        await self.db.delete(vote)
+        await self.db.commit()

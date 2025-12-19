@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, Float, ForeignKey, ARRAY, Boolean, Index
+from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, Float, ForeignKey, ARRAY, Boolean, Index, ForeignKeyConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -539,3 +539,78 @@ class CacheStatistics(Base):
         # 복합 인덱스: 시간대 + 쿼리 유형
         Index("idx_cache_stats_time_intent", "time_bucket", "query_intent"),
     )
+
+
+# ============================================================================
+# Web Frontend Models (Vote, Artifact Document, Suggestion)
+# ============================================================================
+
+class Vote(Base):
+    """
+    메시지 투표 - 웹 프론트엔드 피드백 시스템
+
+    사용자가 AI 응답에 대해 upvote 또는 downvote를 할 수 있습니다.
+    """
+    __tablename__ = "Vote_v2"
+
+    # 프론트엔드 DB는 camelCase를 사용하므로 매핑 필요
+    chat_id = Column("chatId", UUID(as_uuid=True), primary_key=True, nullable=False)
+    message_id = Column("messageId", UUID(as_uuid=True), primary_key=True, nullable=False)
+    is_upvoted = Column("isUpvoted", Boolean, nullable=False)
+
+    # 관계 설정은 Conversation, Message 모델이 있어야 가능
+    # conversation = relationship("Conversation")
+    # message = relationship("Message")
+
+
+class ArtifactDocument(Base):
+    """
+    Artifact 문서 - 웹 프론트엔드에서 생성되는 코드, 문서, 스프레드시트 등
+
+    id와 created_at의 복합 primary key로 버전 관리를 지원합니다.
+    """
+    __tablename__ = "Document"
+
+    # 프론트엔드 DB는 camelCase를 사용하므로 매핑 필요
+    id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
+    created_at = Column("createdAt", TIMESTAMP, primary_key=True, nullable=False, default=datetime.utcnow)
+    title = Column(Text, nullable=False)
+    content = Column(Text, nullable=True)
+    kind = Column(String(20), nullable=False, default="text")  # text, code, image, sheet
+    user_id = Column("userId", UUID(as_uuid=True), nullable=False)  # ForeignKey 제거 (프론트엔드 DB와 백엔드 User 모델이 다름)
+
+    # 관계 설정은 프론트엔드 DB 구조와 맞지 않아 비활성화
+    # user = relationship("User")
+    # suggestions = relationship("Suggestion", back_populates="document", cascade="all, delete-orphan")
+
+
+class Suggestion(Base):
+    """
+    문서 편집 제안 - AI가 생성한 문서 개선 제안
+
+    Document와 연결되어 original_text를 suggested_text로 바꾸는 제안을 저장합니다.
+    """
+    __tablename__ = "Suggestion"
+
+    # 프론트엔드 DB는 camelCase를 사용하므로 매핑 필요
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, nullable=False)
+    document_id = Column("documentId", UUID(as_uuid=True), nullable=False)
+    document_created_at = Column("documentCreatedAt", TIMESTAMP, nullable=False)
+    original_text = Column("originalText", Text, nullable=False)
+    suggested_text = Column("suggestedText", Text, nullable=False)
+    description = Column(Text, nullable=True)
+    is_resolved = Column("isResolved", Boolean, nullable=False, default=False)
+    user_id = Column("userId", UUID(as_uuid=True), nullable=False)  # ForeignKey 제거 (프론트엔드 DB와 백엔드 User 모델이 다름)
+    created_at = Column("createdAt", TIMESTAMP, nullable=False, default=datetime.utcnow)
+
+    # 복합 외래키는 유지 (Document 테이블 참조)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['documentId', 'documentCreatedAt'],
+            ['Document.id', 'Document.createdAt']
+        ),
+    )
+
+    # 관계 설정은 프론트엔드 DB 구조와 맞지 않아 비활성화
+    # user = relationship("User")
+    # document = relationship("ArtifactDocument", back_populates="suggestions")

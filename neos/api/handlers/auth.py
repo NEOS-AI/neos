@@ -115,6 +115,42 @@ async def login(
     return TokenResponse(**tokens)
 
 
+@router.post("/guest", response_model=TokenResponse)
+async def guest_login(
+    http_request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Guest 사용자 생성 및 로그인
+
+    임시 guest 사용자를 생성하고 토큰을 발급합니다.
+    Guest 사용자는 제한된 기능 및 사용량 제한이 적용됩니다.
+
+    Returns:
+    - **access_token**: JWT Access Token
+    - **refresh_token**: JWT Refresh Token
+    - **user**: Guest 사용자 정보 (role: "guest")
+    """
+    auth_service = AuthService(db)
+
+    # 디바이스 정보 및 IP 주소 수집
+    device_info = http_request.headers.get("user-agent", "")
+    ip_address = http_request.client.host if http_request.client else None
+
+    success, message, tokens = await auth_service.create_guest_user(
+        device_info=device_info,
+        ip_address=ip_address
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=message,
+        )
+
+    return TokenResponse(**tokens)
+
+
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
     request: RefreshTokenRequest,
