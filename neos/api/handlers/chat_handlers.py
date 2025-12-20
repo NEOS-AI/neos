@@ -442,7 +442,7 @@ async def regenerate_message(message_id: str, request: RegenerateMessageRequest)
 
 @router.post("/conversations/{conversation_id}/messages/stream")
 async def stream_message(conversation_id: str, request: SendMessageRequest):
-    """스트리밍 메시지 전송"""
+    """스트리밍 메시지 전송 (아티팩트 지원)"""
 
     async def generate_stream() -> AsyncGenerator[str, None]:
         try:
@@ -469,18 +469,32 @@ async def stream_message(conversation_id: str, request: SendMessageRequest):
             # 메시지 ID 생성
             assistant_message_id = str(uuid.uuid4())
 
-            # 실제 LLM 스트리밍
+            # 아티팩트 프롬프트 및 도구 준비
+            from neos.tools.artifact_tools import get_artifact_tools
+            from neos.tools.artifact_tool_handler import execute_artifact_tool
+            from neos.config.settings import settings as app_settings
+
+            # 시스템 프롬프트에 아티팩트 프롬프트 추가 (활성화된 경우)
+            system_prompt = conversation.get("system_prompt", "")
+            tools = []
+
+            if app_settings.ARTIFACTS_ENABLED:
+                system_prompt = f"{system_prompt}\n\n{app_settings.ARTIFACTS_SYSTEM_PROMPT}"
+                tools = get_artifact_tools()
+
+            # 실제 LLM 스트리밍 (tool calling 지원)
             full_content = ""
             usage_info = None
             cost_info = None
             latency_ms = None
 
-            async for chunk in chat_llm_service.generate_response_stream(
+            async for chunk in chat_llm_service.generate_response_stream_with_tools(
                 conversation_id=conversation_id,
                 message_id=assistant_message_id,
                 conversation_messages=history_messages + [{"role": "user", "content": request.content}],
+                tools=tools,
                 model_name=conversation.get("model_name"),
-                system_prompt=conversation.get("system_prompt"),
+                system_prompt=system_prompt,
                 temperature=conversation.get("temperature", 0.7),
                 max_tokens=conversation.get("max_tokens")
             ):
@@ -496,6 +510,92 @@ async def stream_message(conversation_id: str, request: SendMessageRequest):
                         conversation_id=conversation_id
                     )
                     yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+                elif chunk["type"] == "tool_use":
+                    # Tool 호출 감지 - 아티팩트 도구 실행
+                    tool_name = chunk.get("tool_name")
+                    tool_input = chunk.get("tool_input")
+
+                    logger.info(f"Tool called: {tool_name} with input: {tool_input}")
+
+                    # DB 세션 가져오기
+                    async with await db_manager.get_session() as db_session:
+                        # 프론트엔드 user UUID 가져오기
+                        frontend_user_id = "unknown"
+                        try:
+                            # 메타데이터에서 chat_id 추출
+                            chat_id = user_message.get("metadata", {}).get("chat_id")
+                            if chat_id:
+                                # 프론트엔드 Chat 테이블에서 userId 조회
+                                from sqlalchemy import text
+                                result = await db_session.execute(
+                                    text('SELECT "userId" FROM "Chat" WHERE id = :chat_id'),
+                                    {"chat_id": chat_id}
+                                )
+                                row = result.fetchone()
+                                if row:
+                                    frontend_user_id = str(row[0])
+                                    logger.info(f"Found frontend user_id: {frontend_user_id} for chat_id: {chat_id}")
+                                else:
+                                    logger.warning(f"Chat not found for chat_id: {chat_id}")
+                            else:
+                                logger.warning("No chat_id in metadata, using fallback user_id")
+                        except Exception as e:
+                            logger.error(f"Failed to get frontend user_id: {e}")
+
+                        # 아티팩트 도구 실행 및 스트리밍
+                        async for tool_event in execute_artifact_tool(
+                            tool_name=tool_name,
+                            tool_input=tool_input,
+                            user_id=frontend_user_id,
+                            db_session=db_session,
+                            conversation_id=conversation_id
+                        ):
+                            event_type = tool_event.get("type")
+
+                            if event_type == "artifact_meta":
+                                # 아티팩트 메타데이터 전송
+                                stream_chunk = ChatStreamChunk(
+                                    type="artifact_meta",
+                                    conversation_id=conversation_id,
+                                    artifact_id=tool_event.get("artifact_id"),
+                                    artifact_title=tool_event.get("artifact_title"),
+                                    artifact_kind=tool_event.get("artifact_kind")
+                                )
+                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+
+                            elif event_type == "artifact_delta":
+                                # 아티팩트 콘텐츠 델타 전송
+                                stream_chunk = ChatStreamChunk(
+                                    type="artifact_delta",
+                                    content=tool_event.get("content"),
+                                    conversation_id=conversation_id
+                                )
+                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+
+                            elif event_type == "artifact_finish":
+                                # 아티팩트 완료 신호
+                                stream_chunk = ChatStreamChunk(
+                                    type="artifact_finish",
+                                    conversation_id=conversation_id,
+                                    artifact_id=tool_event.get("artifact_id")
+                                )
+                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+
+                            elif event_type == "tool_result":
+                                # Tool 실행 결과를 채팅 메시지에 추가
+                                result_content = tool_event.get("content", "")
+                                full_content += f"\n\n{result_content}"
+
+                            elif event_type == "error":
+                                # Tool 실행 에러
+                                logger.error(f"Tool execution error: {tool_event.get('error')}")
+                                error_chunk = ChatStreamChunk(
+                                    type="error",
+                                    error=tool_event.get("error"),
+                                    conversation_id=conversation_id
+                                )
+                                yield f"data: {json.dumps(error_chunk.dict())}\n\n"
+
                 elif chunk["type"] == "complete":
                     # 완료
                     usage_info = chunk["usage"]

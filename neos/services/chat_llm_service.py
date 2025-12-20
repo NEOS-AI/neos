@@ -335,5 +335,163 @@ class ChatLLMService:
             yield {"type": "error", "error": str(e)}
 
 
+    async def generate_response_stream_with_tools(
+        self,
+        conversation_id: str,
+        message_id: str,
+        conversation_messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        model_name: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Tool calling을 지원하는 채팅 응답 스트리밍 생성
+
+        Anthropic SDK를 직접 사용합니다 (LangChain의 tool use 제약 회피)
+
+        Args:
+            conversation_id: 대화 ID
+            message_id: 메시지 ID
+            conversation_messages: 대화 메시지 목록
+            tools: Anthropic tool 정의 목록
+            model_name: 모델 이름
+            system_prompt: 시스템 프롬프트
+            temperature: Temperature
+            max_tokens: 최대 토큰
+
+        Yields:
+            {
+                "type": "start" | "content" | "tool_use" | "complete" | "error",
+                "content": str (type=content인 경우),
+                "tool_name": str (type=tool_use인 경우),
+                "tool_input": dict (type=tool_use인 경우),
+                "usage": {...} (type=complete인 경우),
+                "cost": {...} (type=complete인 경우),
+            }
+        """
+        import anthropic
+
+        model = model_name or self.default_model
+        start_time = time.time()
+        full_content = ""
+        usage_info = None
+
+        try:
+            # Anthropic 클라이언트 초기화
+            client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+            # 메시지 형식 변환 (LangChain 형식에서 Anthropic 형식으로)
+            anthropic_messages = []
+            for msg in conversation_messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+
+                if role in ["user", "assistant"]:
+                    anthropic_messages.append({
+                        "role": role,
+                        "content": content
+                    })
+
+            # 시작 이벤트
+            yield {"type": "start", "model": model, "provider": "anthropic"}
+
+            # Anthropic SDK로 스트리밍 (tool calling 지원)
+            async with client.messages.stream(
+                model=model,
+                messages=anthropic_messages,
+                tools=tools if tools else None,
+                system=system_prompt or "",
+                temperature=temperature,
+                max_tokens=max_tokens or 4096,
+            ) as stream:
+                # 스트리밍 이벤트 처리
+                async for event in stream:
+                    # 텍스트 컨텐츠 델타
+                    if hasattr(event, 'type') and event.type == "content_block_delta":
+                        if hasattr(event, 'delta') and hasattr(event.delta, 'type'):
+                            if event.delta.type == "text_delta":
+                                text = event.delta.text
+                                full_content += text
+                                yield {"type": "content", "content": text}
+
+                    # Tool use 블록 시작
+                    elif hasattr(event, 'type') and event.type == "content_block_start":
+                        if hasattr(event, 'content_block') and hasattr(event.content_block, 'type'):
+                            if event.content_block.type == "tool_use":
+                                # Tool 호출 감지
+                                tool_name = event.content_block.name
+                                tool_id = event.content_block.id
+                                # tool_input은 아직 받지 못함 (델타로 전송됨)
+
+                    # Tool input 델타 (JSON 형식으로 점진적으로 받음)
+                    elif hasattr(event, 'type') and event.type == "content_block_delta":
+                        if hasattr(event, 'delta') and hasattr(event.delta, 'type'):
+                            if event.delta.type == "input_json_delta":
+                                # Tool input 델타는 나중에 최종 메시지에서 합쳐짐
+                                pass
+
+                    # Content block 완료
+                    elif hasattr(event, 'type') and event.type == "content_block_stop":
+                        # 이 시점에서 tool use가 완료되면 최종 메시지에서 확인
+                        pass
+
+                # 최종 메시지 가져오기
+                final_message = await stream.get_final_message()
+
+                # Usage 정보 추출
+                usage_info = {
+                    "prompt_tokens": final_message.usage.input_tokens,
+                    "completion_tokens": final_message.usage.output_tokens,
+                    "total_tokens": final_message.usage.input_tokens + final_message.usage.output_tokens
+                }
+
+                # Tool use 확인
+                for content_block in final_message.content:
+                    if content_block.type == "tool_use":
+                        yield {
+                            "type": "tool_use",
+                            "tool_name": content_block.name,
+                            "tool_input": content_block.input,
+                            "tool_id": content_block.id
+                        }
+                    elif content_block.type == "text":
+                        # 텍스트 컨텐츠 (이미 스트리밍됨)
+                        pass
+
+            latency_ms = int((time.time() - start_time) * 1000)
+
+            # 비용 계산
+            cost_info = await cost_calculator.calculate_cost(
+                provider="anthropic",
+                model_name=model,
+                prompt_tokens=usage_info["prompt_tokens"],
+                completion_tokens=usage_info["completion_tokens"],
+            )
+
+            logger.info(
+                f"Tool-enabled stream completed: {len(full_content)} chars, "
+                f"{usage_info['total_tokens']} tokens, "
+                f"${cost_info['total_cost']:.6f}, "
+                f"{latency_ms}ms"
+            )
+
+            # 완료 이벤트
+            yield {
+                "type": "complete",
+                "full_content": full_content,
+                "model_name": model,
+                "provider": "anthropic",
+                "usage": usage_info,
+                "cost": cost_info,
+                "latency_ms": latency_ms,
+            }
+
+        except Exception as e:
+            logger.error(f"Tool-enabled stream error: {e}")
+            yield {"type": "error", "error": str(e)}
+
+
 # 전역 인스턴스
 chat_llm_service = ChatLLMService()
