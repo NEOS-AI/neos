@@ -4,7 +4,6 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, WebSocket, WebSoc
 from fastapi.responses import StreamingResponse
 from typing import Optional, AsyncGenerator, List
 import json
-import asyncio
 import uuid
 
 from neos.api.models.chat_models import (
@@ -860,8 +859,8 @@ async def websocket_chat(websocket: WebSocket, conversation_id: str):
                     "error": f"Unknown message type: {message_type}"
                 })
 
-    except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected: conversation_id={conversation_id}")
+    except WebSocketDisconnect as wde:
+        logger.info(f"WebSocket disconnected: conversation_id={conversation_id} ({wde.code})")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         try:
@@ -869,10 +868,10 @@ async def websocket_chat(websocket: WebSocket, conversation_id: str):
                 "type": "error",
                 "error": str(e)
             })
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Error sending error message: {e}")
     finally:
         try:
             await websocket.close()
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Error closing websocket: {e}")
