@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.16.0 (2025-12-18)
+* Add Google Gemini support for LLM, Vision, and Embeddings
+  * Implement GeminiProvider for chat/text generation using langchain-google-genai
+  * Add GeminiVision for image analysis with vision-capable models
+  * Create embedding provider abstraction layer supporting multiple providers
+  * Add GeminiEmbeddingProvider with configurable dimensions (128-3072)
+  * Configure Gemini embeddings to use 1536 dimensions for OpenAI compatibility
+  * Add embedding provider metadata to database (provider, model columns)
+  * Create database migration 006 for multi-provider embedding support
+  * Update all services to track embedding provider information
+  * Add fallback mechanisms for LLM, Vision, and Embedding providers
+  * Support seamless switching between OpenAI, Anthropic, and Gemini
+* Fix up skill selection management
+* Update the session management in web component and BFF for auto token refresh
+* Add RustFS (S3-compatible) on-premise storage support
+  * Integrate MinIO-based rustfs service in docker-compose.enterprise.yml
+  * Add rustfs storage provider configuration with S3-compatible API
+  * Create rustfs-init service for automatic bucket creation
+  * Add comprehensive storage provider abstraction (S3, RustFS, Local)
+  * Update backend services with rustfs environment variables
+  * Add storage volume management for persistent data
+* Enhance multimodal document processing pipeline
+  * Complete integration of storage service with document processor
+  * Implement full document lifecycle: upload, process, chunk, embed, index
+  * Add knowledge graph extraction support for uploaded documents
+  * Enable semantic search across document chunks with pgvector
+  * Support multiple storage backends (s3, rustfs, local) with easy switching
+* Add integration testing
+  * Create test_document_upload.py script for end-to-end testing
+  * Add storage provider connection tests
+  * Add document processing pipeline tests
+  * Add semantic search validation tests
+* Add support for Google OAuth2 authentication
+  * Implement Google OAuth2 login flow in backend
+  * Create database schema for OAuth2 users and tokens
+  * Add configuration settings for Google OAuth2 client ID
+  * Update user management to support OAuth2 users
+* Enhance the Skill system
+  * Add YAML-based skill configuration support
+  * Update skill loader to parse SKILL.yaml files
+  * Improve skill metadata management with YAML
+  * Refactor builtin skills to use YAML configuration
+  * Update skill documentation with YAML examples
+* Renewal the FE
+
 ## v0.15.0 (2025-12-12)
 * Add API Gateway support
   * Introduce API Gateway mode in Neos backend
