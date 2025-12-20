@@ -87,3 +87,25 @@ export const modelsByProvider = chatModels.reduce(
   },
   {} as Record<string, ChatModel[]>
 );
+
+// Map Vercel AI Gateway model IDs to backend model names
+export function mapToBackendModelName(vercelModelId: string): string {
+  const modelMap: Record<string, string> = {
+    // Anthropic
+    "anthropic/claude-haiku-4.5": "claude-haiku-4-5-20250929",
+    "anthropic/claude-sonnet-4.5": "claude-sonnet-4-5-20250929",
+    "anthropic/claude-opus-4.5": "claude-opus-4-5-20251101",
+    "anthropic/claude-3.7-sonnet-thinking": "claude-sonnet-4-5-20250929", // Use sonnet as fallback
+    // OpenAI - remove provider prefix
+    "openai/gpt-4.1-mini": "gpt-4o-mini",
+    "openai/gpt-5.2": "gpt-4o",
+    // Google - remove provider prefix
+    "google/gemini-2.5-flash-lite": "gemini-2.0-flash",
+    "google/gemini-3-pro-preview": "gemini-1.5-pro",
+    // xAI - remove provider prefix
+    "xai/grok-4.1-fast-non-reasoning": "grok-beta",
+    "xai/grok-code-fast-1-thinking": "grok-beta",
+  };
+
+  return modelMap[vercelModelId] || vercelModelId;
+}

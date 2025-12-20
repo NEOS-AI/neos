@@ -1,4 +1,4 @@
-import { gateway } from "@ai-sdk/gateway";
+import { createGateway } from "@ai-sdk/gateway";
 import {
   customProvider,
   extractReasoningMiddleware,
@@ -7,6 +7,10 @@ import {
 import { isTestEnvironment } from "../constants";
 
 const THINKING_SUFFIX_REGEX = /-thinking$/;
+
+const gateway = createGateway({
+  apiKey: process.env.AI_GATEWAY_API_KEY,
+});
 
 export const myProvider = isTestEnvironment
   ? (() => {

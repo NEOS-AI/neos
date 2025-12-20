@@ -14,6 +14,7 @@ declare module "next-auth" {
     user: {
       id: string;
       type: UserType;
+      backendUserId?: string;
     } & DefaultSession["user"];
     backendAccessToken?: string;
     backendRefreshToken?: string;
@@ -24,6 +25,7 @@ declare module "next-auth" {
     id?: string;
     email?: string | null;
     type: UserType;
+    backendUserId?: string;
     backendAccessToken?: string;
     backendRefreshToken?: string;
   }
@@ -33,6 +35,7 @@ declare module "next-auth/jwt" {
   interface JWT extends DefaultJWT {
     id: string;
     type: UserType;
+    backendUserId?: string;
     backendAccessToken?: string;
     backendRefreshToken?: string;
   }
@@ -85,6 +88,7 @@ export const {
             name: data.user.username || data.user.name || data.user.email,
             image: data.user.profile_picture_url || data.user.image,
             type: "regular" as UserType,
+            backendUserId: data.user.user_id,
             backendAccessToken: data.access_token,
             backendRefreshToken: data.refresh_token,
           };
@@ -135,6 +139,7 @@ export const {
             email: data.user.email,
             name: data.user.username,
             type: "guest" as UserType,
+            backendUserId: data.user.user_id, // 백엔드 user_id 저장
             backendAccessToken: data.access_token,
             backendRefreshToken: data.refresh_token,
           };
@@ -176,6 +181,7 @@ export const {
           user.backendAccessToken = data.access_token;
           user.backendRefreshToken = data.refresh_token;
           user.id = data.user.user_id;
+          user.backendUserId = data.user.user_id;
           user.type = "regular";
         } catch (error) {
           console.error("Google OAuth error:", error);
@@ -189,6 +195,7 @@ export const {
       if (user) {
         token.id = user.id as string;
         token.type = user.type;
+        token.backendUserId = user.backendUserId;
         token.backendAccessToken = user.backendAccessToken;
         token.backendRefreshToken = user.backendRefreshToken;
       }
@@ -204,6 +211,7 @@ export const {
       if (session.user) {
         session.user.id = token.id;
         session.user.type = token.type;
+        session.user.backendUserId = token.backendUserId;
         session.backendAccessToken = token.backendAccessToken;
         session.backendRefreshToken = token.backendRefreshToken;
       }

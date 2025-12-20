@@ -1,68 +1,24 @@
-import { geolocation } from "@vercel/functions";
-import {
-  convertToModelMessages,
-  createUIMessageStream,
-  JsonToSseTransformStream,
-  smoothStream,
-  stepCountIs,
-  streamText,
-} from "ai";
-import { after } from "next/server";
-import {
-  createResumableStreamContext,
-  type ResumableStreamContext,
-} from "resumable-stream";
 import { auth, type UserType } from "@/app/(auth)/auth";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import type { ChatModel } from "@/lib/ai/models";
-import { type RequestHints, systemPrompt } from "@/lib/ai/prompts";
-import { getLanguageModel } from "@/lib/ai/providers";
-import { createDocument } from "@/lib/ai/tools/create-document";
-import { getWeather } from "@/lib/ai/tools/get-weather";
-import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
-import { updateDocument } from "@/lib/ai/tools/update-document";
-import { isProductionEnvironment } from "@/lib/constants";
+import { mapToBackendModelName } from "@/lib/ai/models";
+import { callBackendAPI } from "@/lib/backend-api";
 import {
   createStreamId,
   deleteChatById,
   getChatById,
   getMessageCountByUserId,
-  getMessagesByChatId,
   saveChat,
-  saveMessages,
   updateChatTitleById,
 } from "@/lib/db/queries";
-import type { DBMessage } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
-import { convertToUIMessages, generateUUID } from "@/lib/utils";
-import { generateTitleFromUserMessage } from "../../actions";
+import { generateUUID } from "@/lib/utils";
+// import { generateTitleFromUserMessage } from "../../actions"; // TODO: Re-enable when backend supports title generation
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
 export const maxDuration = 60;
-
-let globalStreamContext: ResumableStreamContext | null = null;
-
-export function getStreamContext() {
-  if (!globalStreamContext) {
-    try {
-      globalStreamContext = createResumableStreamContext({
-        waitUntil: after,
-      });
-    } catch (error: any) {
-      if (error.message.includes("REDIS_URL")) {
-        console.log(
-          " > Resumable streams are disabled due to missing REDIS_URL"
-        );
-      } else {
-        console.error(error);
-      }
-    }
-  }
-
-  return globalStreamContext;
-}
 
 export async function POST(request: Request) {
   let requestBody: PostRequestBody;
@@ -105,15 +61,14 @@ export async function POST(request: Request) {
     }
 
     const chat = await getChatById({ id });
-    let messagesFromDb: DBMessage[] = [];
     let titlePromise: Promise<string> | null = null;
+    let conversationId: string | null = null;
 
     if (chat) {
       if (chat.userId !== session.user.id) {
         return new ChatSDKError("forbidden:chat").toResponse();
       }
-      // Only fetch messages if chat already exists
-      messagesFromDb = await getMessagesByChatId({ id });
+      conversationId = id;
     } else {
       // Save chat immediately with placeholder title
       await saveChat({
@@ -123,141 +78,180 @@ export async function POST(request: Request) {
         visibility: selectedVisibilityType,
       });
 
-      // Start title generation in parallel (don't await)
-      titlePromise = generateTitleFromUserMessage({ message });
+      // TODO: Start title generation in parallel (currently disabled - uses Vercel AI Gateway)
+      // titlePromise = generateTitleFromUserMessage({ message });
+
+      // Create conversation in backend
+      try {
+        const createConversationResponse = await callBackendAPI(
+          "/api/v1/chat/conversations",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              user_id: session.user.backendUserId || session.user.id,
+              title: "New chat",
+              model_name: mapToBackendModelName(selectedChatModel),
+              mode: "standard",
+              temperature: 0.7,
+            }),
+          }
+        );
+
+        if (!createConversationResponse.ok) {
+          throw new Error("Failed to create conversation in backend");
+        }
+
+        const conversationData = await createConversationResponse.json();
+        conversationId = conversationData.conversation_id || id;
+      } catch (error) {
+        console.error("Failed to create backend conversation:", error);
+        // Use the local chat ID as fallback
+        conversationId = id;
+      }
     }
 
-    const uiMessages = [...convertToUIMessages(messagesFromDb), message];
-
-    const { longitude, latitude, city, country } = geolocation(request);
-
-    const requestHints: RequestHints = {
-      longitude,
-      latitude,
-      city,
-      country,
-    };
-
-    await saveMessages({
-      messages: [
-        {
-          chatId: id,
-          id: message.id,
-          role: "user",
-          parts: message.parts,
-          attachments: [],
-          createdAt: new Date(),
-        },
-      ],
-    });
+    // Handle title generation in parallel
+    if (titlePromise) {
+      titlePromise.then((title: string) => {
+        updateChatTitleById({ chatId: id, title });
+      });
+    }
 
     const streamId = generateUUID();
     await createStreamId({ streamId, chatId: id });
 
-    const stream = createUIMessageStream({
-      execute: ({ writer: dataStream }) => {
-        // Handle title generation in parallel
-        if (titlePromise) {
-          titlePromise.then((title) => {
-            updateChatTitleById({ chatId: id, title });
-            dataStream.write({ type: "data-chat-title", data: title });
-          });
-        }
+    // Extract message content
+    const messageContent = message.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
 
-        const isReasoningModel =
-          selectedChatModel.includes("reasoning") ||
-          selectedChatModel.includes("thinking");
+    // Call backend streaming API
+    const backendStreamResponse = await callBackendAPI(
+      `/api/v1/chat/conversations/${conversationId}/messages/stream`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          content: messageContent,
+          role: "user",
+          metadata: {
+            chat_id: id,
+            model: selectedChatModel,
+            visibility: selectedVisibilityType,
+          },
+        }),
+      }
+    );
 
-        const result = streamText({
-          model: getLanguageModel(selectedChatModel),
-          system: systemPrompt({ selectedChatModel, requestHints }),
-          messages: convertToModelMessages(uiMessages),
-          stopWhen: stepCountIs(5),
-          experimental_activeTools: isReasoningModel
-            ? []
-            : [
-                "getWeather",
-                "createDocument",
-                "updateDocument",
-                "requestSuggestions",
-              ],
-          experimental_transform: isReasoningModel
-            ? undefined
-            : smoothStream({ chunking: "word" }),
-          providerOptions: isReasoningModel
-            ? {
-                anthropic: {
-                  thinking: { type: "enabled", budgetTokens: 10_000 },
-                },
+    if (!backendStreamResponse.ok) {
+      const errorText = await backendStreamResponse.text();
+      console.error("Backend streaming error:", errorText);
+      return new ChatSDKError("offline:chat").toResponse();
+    }
+
+    // Transform backend SSE to Vercel AI SDK format with line buffering
+    let buffer = "";
+    const transformedStream = backendStreamResponse.body!
+      .pipeThrough(new TextDecoderStream())
+      .pipeThrough(
+        new TransformStream<string, string>({
+          async transform(chunk: string, controller: TransformStreamDefaultController<string>) {
+            // Append chunk to buffer
+            buffer += chunk;
+            const lines = buffer.split("\n");
+
+            // Keep the last incomplete line in the buffer
+            buffer = lines.pop() || "";
+
+            for (const line of lines) {
+              if (!line.trim() || !line.startsWith("data: ")) continue;
+
+              try {
+                const jsonData = JSON.parse(line.substring(6));
+
+                // Transform backend SSE format to Vercel AI SDK format
+                if (jsonData.type === "start") {
+                  // Start event - send message ID as metadata
+                  controller.enqueue(
+                    `2:${JSON.stringify([
+                      {
+                        type: "message_start",
+                        data: { id: jsonData.message_id },
+                      },
+                    ])}\n`
+                  );
+                } else if (jsonData.type === "content") {
+                  // Content event - send as text delta
+                  if (jsonData.content) {
+                    controller.enqueue(`0:${JSON.stringify(jsonData.content)}\n`);
+                  }
+                } else if (jsonData.type === "complete") {
+                  // Complete event - send finish reason and metadata
+                  const finishData: Record<string, any> = {
+                    finishReason: "stop",
+                  };
+
+                  if (jsonData.metadata) {
+                    finishData.usage = {
+                      promptTokens: jsonData.metadata.prompt_tokens || 0,
+                      completionTokens: jsonData.metadata.completion_tokens || 0,
+                      totalTokens: jsonData.metadata.total_tokens || 0,
+                    };
+                  }
+
+                  controller.enqueue(`d:${JSON.stringify(finishData)}\n`);
+                } else if (jsonData.type === "error") {
+                  // Error event
+                  controller.enqueue(
+                    `3:${JSON.stringify({ error: jsonData.error })}\n`
+                  );
+                }
+              } catch (e) {
+                console.error("Failed to parse SSE chunk:", line, e);
               }
-            : undefined,
-          tools: {
-            getWeather,
-            createDocument: createDocument({ session, dataStream }),
-            updateDocument: updateDocument({ session, dataStream }),
-            requestSuggestions: requestSuggestions({
-              session,
-              dataStream,
-            }),
+            }
           },
-          experimental_telemetry: {
-            isEnabled: isProductionEnvironment,
-            functionId: "stream-text",
+          flush(controller: TransformStreamDefaultController<string>) {
+            // Process any remaining data in buffer
+            if (buffer.trim() && buffer.startsWith("data: ")) {
+              try {
+                const jsonData = JSON.parse(buffer.substring(6));
+                if (jsonData.type === "complete") {
+                  const finishData: Record<string, any> = {
+                    finishReason: "stop",
+                  };
+                  if (jsonData.metadata) {
+                    finishData.usage = {
+                      promptTokens: jsonData.metadata.prompt_tokens || 0,
+                      completionTokens: jsonData.metadata.completion_tokens || 0,
+                      totalTokens: jsonData.metadata.total_tokens || 0,
+                    };
+                  }
+                  controller.enqueue(`d:${JSON.stringify(finishData)}\n`);
+                }
+              } catch (e) {
+                console.error("Failed to parse remaining buffer:", buffer, e);
+              }
+            }
           },
-        });
+        })
+      )
+      .pipeThrough(new TextEncoderStream());
 
-        result.consumeStream();
-
-        dataStream.merge(
-          result.toUIMessageStream({
-            sendReasoning: true,
-          })
-        );
-      },
-      generateId: generateUUID,
-      onFinish: async ({ messages }) => {
-        await saveMessages({
-          messages: messages.map((currentMessage) => ({
-            id: currentMessage.id,
-            role: currentMessage.role,
-            parts: currentMessage.parts,
-            createdAt: new Date(),
-            attachments: [],
-            chatId: id,
-          })),
-        });
-      },
-      onError: () => {
-        return "Oops, an error occurred!";
+    return new Response(transformedStream, {
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+        "X-Vercel-AI-Data-Stream": "v1",
       },
     });
-
-    // const streamContext = getStreamContext();
-
-    // if (streamContext) {
-    //   return new Response(
-    //     await streamContext.resumableStream(streamId, () =>
-    //       stream.pipeThrough(new JsonToSseTransformStream())
-    //     )
-    //   );
-    // }
-
-    return new Response(stream.pipeThrough(new JsonToSseTransformStream()));
   } catch (error) {
     const vercelId = request.headers.get("x-vercel-id");
 
     if (error instanceof ChatSDKError) {
       return error.toResponse();
-    }
-
-    // Check for Vercel AI Gateway credit card error
-    if (
-      error instanceof Error &&
-      error.message?.includes(
-        "AI Gateway requires a valid credit card on file to service requests"
-      )
-    ) {
-      return new ChatSDKError("bad_request:activate_gateway").toResponse();
     }
 
     console.error("Unhandled error in chat API:", error, { vercelId });
