@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
-import { guestRegex, isDevelopmentEnvironment } from "./lib/constants";
+import { isDevelopmentEnvironment } from "./lib/constants";
+
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -31,9 +32,9 @@ export async function proxy(request: NextRequest) {
     );
   }
 
-  const isGuest = guestRegex.test(token?.email ?? "");
-
-  if (token && !isGuest && ["/login", "/register"].includes(pathname)) {
+  // Only redirect regular users away from login/register pages
+  // Guest users should be able to access these pages to create/login to real accounts
+  if (token?.type === "regular" && ["/login", "/register"].includes(pathname)) {
     return NextResponse.redirect(new URL("/", request.url));
   }
 

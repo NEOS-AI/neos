@@ -7,6 +7,7 @@ import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import { generateUUID } from "@/lib/utils";
 import { auth } from "../(auth)/auth";
 
+
 export default function Page() {
   return (
     <Suspense fallback={<div className="flex h-dvh" />}>
