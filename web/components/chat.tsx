@@ -1,7 +1,6 @@
 "use client";
 
-import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
+import { useChatStream } from "@/hooks/use-chat-stream";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
@@ -85,26 +84,11 @@ export function Chat({
     stop,
     regenerate,
     resumeStream,
-  } = useChat<ChatMessage>({
+  } = useChatStream({
     id,
-    messages: initialMessages,
-    experimental_throttle: 100,
-    generateId: generateUUID,
-    transport: new DefaultChatTransport({
-      api: "/api/chat",
-      fetch: fetchWithErrorHandlers,
-      prepareSendMessagesRequest(request) {
-        return {
-          body: {
-            id: request.id,
-            message: request.messages.at(-1),
-            selectedChatModel: currentModelIdRef.current,
-            selectedVisibilityType: visibilityType,
-            ...request.body,
-          },
-        };
-      },
-    }),
+    initialMessages,
+    selectedChatModel: currentModelIdRef.current,
+    selectedVisibilityType: visibilityType,
     onData: (dataPart) => {
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));
     },
@@ -124,6 +108,11 @@ export function Chat({
             description: error.message,
           });
         }
+      } else {
+        toast({
+          type: "error",
+          description: error.message,
+        });
       }
     },
   });

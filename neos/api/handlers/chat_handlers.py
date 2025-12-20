@@ -226,7 +226,6 @@ async def send_message(
             )
 
             # 메시지 ID 생성
-            import uuid
             assistant_message_id = str(uuid.uuid4())
 
             # LLM 응답 생성
@@ -468,7 +467,6 @@ async def stream_message(conversation_id: str, request: SendMessageRequest):
             )
 
             # 메시지 ID 생성
-            import uuid
             assistant_message_id = str(uuid.uuid4())
 
             # 실제 LLM 스트리밍

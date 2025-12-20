@@ -110,12 +110,12 @@ export async function POST(request: Request) {
       }
     }
 
-    // Handle title generation in parallel
-    if (titlePromise) {
-      titlePromise.then((title: string) => {
-        updateChatTitleById({ chatId: id, title });
-      });
-    }
+    // TODO: Handle title generation in parallel (currently disabled)
+    // if (titlePromise) {
+    //   titlePromise.then((title: string) => {
+    //     updateChatTitleById({ chatId: id, title });
+    //   });
+    // }
 
     const streamId = generateUUID();
     await createStreamId({ streamId, chatId: id });
@@ -149,102 +149,14 @@ export async function POST(request: Request) {
       return new ChatSDKError("offline:chat").toResponse();
     }
 
-    // Transform backend SSE to Vercel AI SDK format with line buffering
-    let buffer = "";
-    const transformedStream = backendStreamResponse.body!
-      .pipeThrough(new TextDecoderStream())
-      .pipeThrough(
-        new TransformStream<string, string>({
-          async transform(chunk: string, controller: TransformStreamDefaultController<string>) {
-            // Append chunk to buffer
-            buffer += chunk;
-            const lines = buffer.split("\n");
-
-            // Keep the last incomplete line in the buffer
-            buffer = lines.pop() || "";
-
-            for (const line of lines) {
-              if (!line.trim() || !line.startsWith("data: ")) continue;
-
-              try {
-                const jsonData = JSON.parse(line.substring(6));
-
-                // Transform backend SSE format to Vercel AI SDK format
-                if (jsonData.type === "start") {
-                  // Start event - send message ID as metadata
-                  controller.enqueue(
-                    `2:${JSON.stringify([
-                      {
-                        type: "message_start",
-                        data: { id: jsonData.message_id },
-                      },
-                    ])}\n`
-                  );
-                } else if (jsonData.type === "content") {
-                  // Content event - send as text delta
-                  if (jsonData.content) {
-                    controller.enqueue(`0:${JSON.stringify(jsonData.content)}\n`);
-                  }
-                } else if (jsonData.type === "complete") {
-                  // Complete event - send finish reason and metadata
-                  const finishData: Record<string, any> = {
-                    finishReason: "stop",
-                  };
-
-                  if (jsonData.metadata) {
-                    finishData.usage = {
-                      promptTokens: jsonData.metadata.prompt_tokens || 0,
-                      completionTokens: jsonData.metadata.completion_tokens || 0,
-                      totalTokens: jsonData.metadata.total_tokens || 0,
-                    };
-                  }
-
-                  controller.enqueue(`d:${JSON.stringify(finishData)}\n`);
-                } else if (jsonData.type === "error") {
-                  // Error event
-                  controller.enqueue(
-                    `3:${JSON.stringify({ error: jsonData.error })}\n`
-                  );
-                }
-              } catch (e) {
-                console.error("Failed to parse SSE chunk:", line, e);
-              }
-            }
-          },
-          flush(controller: TransformStreamDefaultController<string>) {
-            // Process any remaining data in buffer
-            if (buffer.trim() && buffer.startsWith("data: ")) {
-              try {
-                const jsonData = JSON.parse(buffer.substring(6));
-                if (jsonData.type === "complete") {
-                  const finishData: Record<string, any> = {
-                    finishReason: "stop",
-                  };
-                  if (jsonData.metadata) {
-                    finishData.usage = {
-                      promptTokens: jsonData.metadata.prompt_tokens || 0,
-                      completionTokens: jsonData.metadata.completion_tokens || 0,
-                      totalTokens: jsonData.metadata.total_tokens || 0,
-                    };
-                  }
-                  controller.enqueue(`d:${JSON.stringify(finishData)}\n`);
-                }
-              } catch (e) {
-                console.error("Failed to parse remaining buffer:", buffer, e);
-              }
-            }
-          },
-        })
-      )
-      .pipeThrough(new TextEncoderStream());
-
-    return new Response(transformedStream, {
+    // Proxy backend SSE directly (no transformation)
+    // This preserves the JSON structure and event-stream format
+    return new Response(backendStreamResponse.body, {
       headers: {
-        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
         "X-Accel-Buffering": "no",
-        "X-Vercel-AI-Data-Stream": "v1",
       },
     });
   } catch (error) {
