@@ -130,9 +130,7 @@ class Settings(BaseSettings):
     API_GATEWAY_ENABLED: bool = env_vars.get("API_GATEWAY_ENABLED", "false").lower() in ("true", "1", "yes")
     API_GATEWAY_USER_ID_HEADER: str = env_vars.get("API_GATEWAY_USER_ID_HEADER", "X-User-ID")
     # 게이트웨이에서만 요청을 받도록 허용할 IP 목록 (비어있으면 모든 IP 허용)
-    API_GATEWAY_TRUSTED_IPS: List[str] = [
-        ip.strip() for ip in env_vars.get("API_GATEWAY_TRUSTED_IPS", "127.0.0.1,::1").split(",") if ip.strip()
-    ]
+    API_GATEWAY_TRUSTED_IPS: Union[str, List[str]] = "127.0.0.1,::1"
 
     # 인증 설정
     JWT_SECRET_KEY: str = env_vars.get("JWT_SECRET_KEY")
@@ -188,6 +186,13 @@ class Settings(BaseSettings):
     def parse_cors_origins(cls, v):
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(',')]
+        return v
+
+    @field_validator('API_GATEWAY_TRUSTED_IPS', mode='before')
+    @classmethod
+    def parse_trusted_ips(cls, v):
+        if isinstance(v, str):
+            return [ip.strip() for ip in v.split(',') if ip.strip()]
         return v
 
     # 로그 설정

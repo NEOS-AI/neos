@@ -1,73 +1,116 @@
-import { type ClassValue, clsx } from "clsx";
-import { twMerge } from "tailwind-merge";
+import type {
+  CoreAssistantMessage,
+  CoreToolMessage,
+  UIMessage,
+  UIMessagePart,
+} from 'ai';
+import { type ClassValue, clsx } from 'clsx';
+import { formatISO } from 'date-fns';
+import { twMerge } from 'tailwind-merge';
+import type { DBMessage, Document } from '@/lib/db/schema';
+import { ChatSDKError, type ErrorCode } from './errors';
+import type { ChatMessage, ChatTools, CustomUIDataTypes } from './types';
 
-/**
- * Merge Tailwind CSS classes with proper precedence
- */
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-/**
- * Format timestamp to readable format
- */
-export function formatTimestamp(timestamp: string | Date | null | undefined): string {
-  if (!timestamp) return "Never";
+export const fetcher = async (url: string) => {
+  const response = await fetch(url);
 
-  const date = new Date(timestamp);
+  if (!response.ok) {
+    const { code, cause } = await response.json();
+    throw new ChatSDKError(code as ErrorCode, cause);
+  }
 
-  // Check if date is invalid
-  if (isNaN(date.getTime())) return "Invalid date";
+  return response.json();
+};
 
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
+export async function fetchWithErrorHandlers(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) {
+  try {
+    const response = await fetch(input, init);
 
-  if (diffMins < 1) return "Just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays}d ago`;
-
-  return date.toLocaleDateString();
-}
-
-/**
- * Truncate text to specified length
- */
-export function truncate(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  return text.slice(0, maxLength) + "...";
-}
-
-/**
- * Debounce function
- */
-export function debounce<T extends (...args: any[]) => any>(
-  func: T,
-  wait: number
-): (...args: Parameters<T>) => void {
-  let timeout: NodeJS.Timeout | null = null;
-
-  return function executedFunction(...args: Parameters<T>) {
-    const later = () => {
-      timeout = null;
-      func(...args);
-    };
-
-    if (timeout) {
-      clearTimeout(timeout);
+    if (!response.ok) {
+      const { code, cause } = await response.json();
+      throw new ChatSDKError(code as ErrorCode, cause);
     }
-    timeout = setTimeout(later, wait);
-  };
+
+    return response;
+  } catch (error: unknown) {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      throw new ChatSDKError('offline:chat');
+    }
+
+    throw error;
+  }
 }
 
-/**
- * Generate a unique ID
- */
-export function generateId(): string {
-  return `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+export function getLocalStorage(key: string) {
+  if (typeof window !== 'undefined') {
+    return JSON.parse(localStorage.getItem(key) || '[]');
+  }
+  return [];
+}
+
+export function generateUUID(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+type ResponseMessageWithoutId = CoreToolMessage | CoreAssistantMessage;
+type ResponseMessage = ResponseMessageWithoutId & { id: string };
+
+export function getMostRecentUserMessage(messages: UIMessage[]) {
+  const userMessages = messages.filter((message) => message.role === 'user');
+  return userMessages.at(-1);
+}
+
+export function getDocumentTimestampByIndex(
+  documents: Document[],
+  index: number,
+) {
+  if (!documents) { return new Date(); }
+  if (index > documents.length) { return new Date(); }
+
+  return documents[index].createdAt;
+}
+
+export function getTrailingMessageId({
+  messages,
+}: {
+  messages: ResponseMessage[];
+}): string | null {
+  const trailingMessage = messages.at(-1);
+
+  if (!trailingMessage) { return null; }
+
+  return trailingMessage.id;
+}
+
+export function sanitizeText(text: string) {
+  return text.replace('<has_function_call>', '');
+}
+
+export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
+  return messages.map((message) => ({
+    id: message.id,
+    role: message.role as 'user' | 'assistant' | 'system',
+    parts: message.parts as UIMessagePart<CustomUIDataTypes, ChatTools>[],
+    metadata: {
+      createdAt: formatISO(message.createdAt),
+    },
+  }));
+}
+
+export function getTextFromMessage(message: ChatMessage | UIMessage): string {
+  return message.parts
+    .filter((part) => part.type === 'text')
+    .map((part) => (part as { type: 'text'; text: string}).text)
+    .join('');
 }

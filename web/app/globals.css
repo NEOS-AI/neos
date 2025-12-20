@@ -1,93 +1,276 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@import "katex/dist/katex.min.css";
 
+/* include utility classes in streamdown */
+@source '../node_modules/streamdown/dist/index.js';
+
+/* custom variant for setting dark mode programmatically */
+@custom-variant dark (&:is(.dark, .dark *));
+
+/* include plugins */
+@plugin "tailwindcss-animate";
+@plugin "@tailwindcss/typography";
+
+/* define design tokens (light mode) */
 :root {
-  /* Legacy variables */
-  --background: #FAFAFA;
-  --foreground: #1A1A1A;
-  --border: #E5E5E5;
-
-  /* Claude-style design tokens - Light Mode */
-  --color-bg-canvas: 250 250 250;      /* #FAFAFA */
-  --color-bg-surface: 255 255 255;     /* #FFFFFF */
-  --color-text-primary: 26 26 26;      /* #1A1A1A */
-  --color-text-secondary: 82 82 91;    /* #52525B */
-  --color-text-muted: 161 161 170;     /* #A1A1AA */
-  --color-line-soft: 228 228 231;      /* #E4E4E7 */
-  --color-brand-accent: 5 13 77;       /* #050d4d - Deep Navy Blue */
-  --color-chip-bg: 248 248 250;        /* #F8F8FA */
-  --color-chip-line: 228 228 231;      /* #E4E4E7 */
+  --background: hsl(0 0% 100%);
+  --foreground: hsl(240 10% 3.9%);
+  --card: hsl(0 0% 100%);
+  --card-foreground: hsl(240 10% 3.9%);
+  --popover: hsl(0 0% 100%);
+  --popover-foreground: hsl(240 10% 3.9%);
+  --primary: hsl(240 5.9% 10%);
+  --primary-foreground: hsl(0 0% 98%);
+  --secondary: hsl(240 4.8% 95.9%);
+  --secondary-foreground: hsl(240 5.9% 10%);
+  --muted: hsl(240 4.8% 95.9%);
+  --muted-foreground: hsl(240 3.8% 46.1%);
+  --accent: hsl(240 4.8% 95.9%);
+  --accent-foreground: hsl(240 5.9% 10%);
+  --destructive: hsl(0 84.2% 60.2%);
+  --destructive-foreground: hsl(0 0% 98%);
+  --border: hsl(240 5.9% 90%);
+  --input: hsl(240 5.9% 90%);
+  --ring: hsl(240 10% 3.9%);
+  --chart-1: hsl(12 76% 61%);
+  --chart-2: hsl(173 58% 39%);
+  --chart-3: hsl(197 37% 24%);
+  --chart-4: hsl(43 74% 66%);
+  --chart-5: hsl(27 87% 67%);
+  --sidebar-background: hsl(0 0% 98%);
+  --sidebar-foreground: hsl(240 5.3% 26.1%);
+  --sidebar-primary: hsl(240 5.9% 10%);
+  --sidebar-primary-foreground: hsl(0 0% 98%);
+  --sidebar-accent: hsl(240 4.8% 95.9%);
+  --sidebar-accent-foreground: hsl(240 5.9% 10%);
+  --sidebar-border: hsl(220 13% 91%);
+  --sidebar-ring: hsl(217.2 91.2% 59.8%);
+  /* border radius unit */
+  --radius: 0.5rem;
+  --sidebar: hsl(0 0% 98%);
 }
 
-/* Dark mode optimized colors */
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* Legacy variables */
-    --background: #0A0A0A;
-    --foreground: #EDEDED;
-    --border: #1F1F1F;
+/* define design tokens (dark mode) */
+.dark {
+  --background: hsl(240 10% 3.9%);
+  --foreground: hsl(0 0% 98%);
+  --card: hsl(240 10% 3.9%);
+  --card-foreground: hsl(0 0% 98%);
+  --popover: hsl(240 10% 3.9%);
+  --popover-foreground: hsl(0 0% 98%);
+  --primary: hsl(0 0% 98%);
+  --primary-foreground: hsl(240 5.9% 10%);
+  --secondary: hsl(240 3.7% 15.9%);
+  --secondary-foreground: hsl(0 0% 98%);
+  --muted: hsl(240 3.7% 15.9%);
+  --muted-foreground: hsl(240 5% 64.9%);
+  --accent: hsl(240 3.7% 15.9%);
+  --accent-foreground: hsl(0 0% 98%);
+  --destructive: hsl(0 62.8% 30.6%);
+  --destructive-foreground: hsl(0 0% 98%);
+  --border: hsl(240 3.7% 15.9%);
+  --input: hsl(240 3.7% 15.9%);
+  --ring: hsl(240 4.9% 83.9%);
+  --chart-1: hsl(220 70% 50%);
+  --chart-2: hsl(160 60% 45%);
+  --chart-3: hsl(30 80% 55%);
+  --chart-4: hsl(280 65% 60%);
+  --chart-5: hsl(340 75% 55%);
+  --sidebar-background: hsl(240 5.9% 10%);
+  --sidebar-foreground: hsl(240 4.8% 95.9%);
+  --sidebar-primary: hsl(224.3 76.3% 48%);
+  --sidebar-primary-foreground: hsl(0 0% 100%);
+  --sidebar-accent: hsl(240 3.7% 15.9%);
+  --sidebar-accent-foreground: hsl(240 4.8% 95.9%);
+  --sidebar-border: hsl(240 3.7% 15.9%);
+  --sidebar-ring: hsl(217.2 91.2% 59.8%);
+  --sidebar: hsl(240 5.9% 10%);
+}
 
-    /* Claude-style design tokens - Dark Mode */
-    --color-bg-canvas: 10 10 10;         /* #0A0A0A - Deeper black for better contrast */
-    --color-bg-surface: 18 18 18;        /* #121212 - Slightly lighter surface */
-    --color-text-primary: 237 237 237;   /* #EDEDED - Brighter for readability */
-    --color-text-secondary: 163 163 163; /* #A3A3A3 - Better mid-tone */
-    --color-text-muted: 115 115 115;     /* #737373 - Improved muted text */
-    --color-line-soft: 31 31 31;         /* #1F1F1F - Softer borders */
-    --color-brand-accent: 96 165 250;    /* #60A5FA - Brighter blue for dark mode */
-    --color-chip-bg: 20 20 20;           /* #141414 - Better chip background */
-    --color-chip-line: 38 38 38;         /* #262626 - Improved chip borders */
+/* define theme */
+@theme {
+  --font-sans: var(--font-geist);
+  --font-mono: var(--font-geist-mono);
+
+  --breakpoint-toast-mobile: 600px;
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar-background);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
   }
 }
 
-/* Explicit dark mode class support for manual theme switching */
-.dark {
-  --background: #0A0A0A;
-  --foreground: #EDEDED;
-  --border: #1F1F1F;
-
-  --color-bg-canvas: 10 10 10;
-  --color-bg-surface: 18 18 18;
-  --color-text-primary: 237 237 237;
-  --color-text-secondary: 163 163 163;
-  --color-text-muted: 115 115 115;
-  --color-line-soft: 31 31 31;
-  --color-brand-accent: 96 165 250;
-  --color-chip-bg: 20 20 20;
-  --color-chip-line: 38 38 38;
+@utility text-balance {
+  text-wrap: balance;
 }
 
-* {
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
+@utility -webkit-overflow-scrolling-touch {
+  -webkit-overflow-scrolling: touch;
 }
 
-html,
-body {
-  max-width: 100vw;
-  overflow-x: hidden;
+@utility touch-pan-y {
+  touch-action: pan-y;
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  transition: background-color 0.3s ease, color 0.3s ease;
+@utility overscroll-behavior-contain {
+  overscroll-behavior: contain;
 }
 
-a {
-  color: inherit;
-  text-decoration: none;
+@layer utilities {
+  :root {
+    --foreground-rgb: 0, 0, 0;
+    --background-start-rgb: 214, 219, 220;
+    --background-end-rgb: 255, 255, 255;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --foreground-rgb: 255, 255, 255;
+      --background-start-rgb: 0, 0, 0;
+      --background-end-rgb: 0, 0, 0;
+    }
+  }
 }
 
-/* Scrollbar styling - Light Mode */
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    overflow-x: hidden;
+    position: relative;
+  }
+
+  html {
+    overflow-x: hidden;
+  }
+}
+
+.skeleton {
+  * {
+    pointer-events: none !important;
+  }
+
+  *[class^="text-"] {
+    color: transparent;
+    @apply rounded-md bg-foreground/20 select-none animate-pulse;
+  }
+
+  .skeleton-bg {
+    @apply bg-foreground/10;
+  }
+
+  .skeleton-div {
+    @apply bg-foreground/20 animate-pulse;
+  }
+}
+
+.ProseMirror {
+  outline: none;
+}
+
+.cm-editor,
+.cm-gutters {
+  @apply bg-background! dark:bg-zinc-800! outline-hidden! selection:bg-zinc-900!;
+}
+
+.ͼo.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground,
+.ͼo.cm-selectionBackground,
+.ͼo.cm-content::selection {
+  @apply bg-zinc-200! dark:bg-zinc-900!;
+}
+
+.cm-activeLine,
+.cm-activeLineGutter {
+  @apply bg-transparent!;
+}
+
+.cm-activeLine {
+  @apply rounded-r-sm!;
+}
+
+.cm-lineNumbers {
+  @apply min-w-7;
+}
+
+.cm-foldGutter {
+  @apply min-w-3;
+}
+
+.cm-lineNumbers .cm-activeLineGutter {
+  @apply rounded-l-sm!;
+}
+
+.suggestion-highlight {
+  @apply bg-blue-200 hover:bg-blue-300 dark:hover:bg-blue-400/50 dark:text-blue-50 dark:bg-blue-500/40;
+}
+
+/* minimal scrollbar styling */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -95,270 +278,41 @@ a {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 4px;
+  background: var(--border);
+  border-radius: 3px;
   transition: background 0.2s ease;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.25);
+  background: --alpha(var(--muted-foreground) / 0.5);
 }
 
-/* Scrollbar styling - Dark Mode */
-@media (prefers-color-scheme: dark) {
-  ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.15);
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* firefox scrollbar styling */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+@theme inline {
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
   }
-
-  ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.25);
-  }
-}
-
-.dark ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-}
-
-.dark ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
-}
-
-/* Markdown styling */
-.markdown-content {
-  @apply text-claude-text leading-relaxed;
-}
-
-.markdown-content h1,
-.markdown-content h2,
-.markdown-content h3,
-.markdown-content h4,
-.markdown-content h5,
-.markdown-content h6 {
-  @apply font-semibold mb-4 mt-6;
-}
-
-.markdown-content h1 {
-  @apply text-2xl;
-}
-
-.markdown-content h2 {
-  @apply text-xl;
-}
-
-.markdown-content h3 {
-  @apply text-lg;
-}
-
-.markdown-content p {
-  @apply mb-4;
-}
-
-.markdown-content ul,
-.markdown-content ol {
-  @apply mb-4 ml-6;
-}
-
-.markdown-content ul {
-  @apply list-disc;
-}
-
-.markdown-content ol {
-  @apply list-decimal;
-}
-
-.markdown-content li {
-  @apply mb-2;
-}
-
-.markdown-content code {
-  @apply bg-claude-light px-1.5 py-0.5 rounded text-sm font-mono;
-}
-
-.markdown-content pre {
-  @apply bg-claude-light p-4 rounded-lg mb-4 overflow-x-auto;
-}
-
-.markdown-content pre code {
-  @apply bg-transparent p-0;
-}
-
-.markdown-content blockquote {
-  @apply border-l-4 border-claude-border pl-4 italic my-4;
-}
-
-.markdown-content a {
-  @apply text-primary hover:text-primary-hover underline;
-}
-
-.markdown-content table {
-  @apply w-full mb-4 border-collapse;
-}
-
-.markdown-content th,
-.markdown-content td {
-  @apply border border-claude-border px-4 py-2;
-}
-
-.markdown-content th {
-  @apply bg-claude-light font-semibold;
-}
-
-.markdown-content hr {
-  @apply my-6 border-claude-border;
-}
-
-/* Animation for typing indicator */
-@keyframes pulse {
-  0%, 100% {
-    opacity: 0.4;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-.typing-dot {
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-.typing-dot:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.typing-dot:nth-child(3) {
-  animation-delay: 0.4s;
-}
-
-/* Modern Chat UI Animations */
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes slideInFromRight {
-  from {
-    opacity: 0;
-    transform: translateX(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes slideInFromLeft {
-  from {
-    opacity: 0;
-    transform: translateX(-20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-.animate-fadeIn {
-  animation: fadeIn 0.3s ease-out forwards;
-}
-
-.animate-slideInFromRight {
-  animation: slideInFromRight 0.3s ease-out forwards;
-}
-
-.animate-slideInFromLeft {
-  animation: slideInFromLeft 0.3s ease-out forwards;
-}
-
-/* Smooth transitions for interactive elements */
-.transition-smooth {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.transition-smooth-slow {
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* Responsive animation adjustments */
-/* Reduce motion for users who prefer it */
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
-
-/* Optimize animations for mobile devices */
-@media (max-width: 768px) {
-  /* Reduce animation delays on mobile for faster perceived load time */
-  .animate-fade-in-up,
-  .animate-fade-in-down,
-  .animate-scale-in,
-  .animate-slide-in-left,
-  .animate-slide-in-right {
-    animation-duration: 0.3s !important;
-  }
-
-  /* Disable complex hover animations on touch devices */
-  @media (hover: none) {
-    .hover\:scale-110,
-    .hover\:scale-105,
-    .hover\:scale-\[1\.02\],
-    .hover\:scale-\[1\.03\],
-    .group-hover\:scale-110 {
-      transform: none !important;
-    }
-
-    .hover\:-translate-y-1,
-    .hover\:translate-x-2 {
-      transform: none !important;
-    }
-  }
-}
-
-/* Performance optimization for animations */
-@media (max-width: 640px) {
-  /* Reduce stagger delays on very small screens */
-  [style*="animationDelay"] {
-    animation-delay: 0ms !important;
-  }
-}
-
-/* Ensure smooth performance on all devices */
-.animate-fade-in,
-.animate-fade-in-up,
-.animate-fade-in-down,
-.animate-slide-in-left,
-.animate-slide-in-right,
-.animate-scale-in {
-  will-change: opacity, transform;
-}
-
-/* Remove will-change after animation completes to free resources */
-.animate-fade-in,
-.animate-fade-in-up,
-.animate-fade-in-down,
-.animate-slide-in-left,
-.animate-slide-in-right,
-.animate-scale-in {
-  animation-fill-mode: forwards;
-}
-
-@supports (animation-fill-mode: forwards) {
-  .animate-fade-in,
-  .animate-fade-in-up,
-  .animate-fade-in-down,
-  .animate-slide-in-left,
-  .animate-slide-in-right,
-  .animate-scale-in {
-    animation-fill-mode: forwards;
+  body {
+    @apply bg-background text-foreground;
   }
 }
