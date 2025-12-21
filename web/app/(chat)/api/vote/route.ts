@@ -32,7 +32,7 @@ export async function GET(request: Request) {
     return Response.json(votes, { status: 200 });
   } catch (error) {
     console.error("Vote GET error:", error);
-    return new ChatSDKError("internal_error:vote").toResponse();
+    return new ChatSDKError("offline:vote").toResponse();
   }
 }
 
@@ -77,6 +77,6 @@ export async function PATCH(request: Request) {
     return Response.json(vote, { status: 200 });
   } catch (error) {
     console.error("Vote PATCH error:", error);
-    return new ChatSDKError("internal_error:vote").toResponse();
+    return new ChatSDKError("offline:vote").toResponse();
   }
 }

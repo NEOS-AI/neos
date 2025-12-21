@@ -64,7 +64,7 @@ export interface ArtifactMetaEvent {
   type: "artifact_meta";
   artifact_id: string;
   artifact_title: string;
-  artifact_kind: "text" | "code" | "sheet";
+  artifact_kind: "text" | "code" | "sheet" | "image";
   conversation_id: string;
 }
 

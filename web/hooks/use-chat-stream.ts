@@ -73,7 +73,7 @@ export function useChatStream({
       let buffer = "";
 
       // 현재 아티팩트 kind 추적 (artifact_meta에서 설정됨)
-      let currentArtifactKind: "text" | "code" | "sheet" | null = null;
+      let currentArtifactKind: "text" | "code" | "sheet" | "image" | null = null;
 
       // 어시스턴트 메시지 초기화
       const assistantMessage: ChatMessage = {
@@ -176,7 +176,9 @@ export function useChatStream({
 
                 // 어시스턴트 메시지의 metadata에 아티팩트 정보 저장
                 assistantMessage.metadata = {
-                  ...assistantMessage.metadata,
+                  createdAt:
+                    assistantMessage.metadata?.createdAt ||
+                    new Date().toISOString(),
                   artifact: {
                     id: eventData.artifact_id,
                     title: eventData.artifact_title,

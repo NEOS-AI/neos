@@ -4,13 +4,15 @@ import { FileCodeIcon, FileTextIcon, TableIcon } from "lucide-react";
 import { useArtifact } from "@/hooks/use-artifact";
 import { cn } from "@/lib/utils";
 
+
 interface ArtifactBlockProps {
   artifact: {
     id: string;
     title: string;
-    kind: "text" | "code" | "sheet";
+    kind: "text" | "code" | "sheet" | "image";
   };
 }
+
 
 export function ArtifactBlock({ artifact }: ArtifactBlockProps) {
   const { setArtifact } = useArtifact();
