@@ -1,6 +1,6 @@
 """Chat API handlers - thin layer for FastAPI routes"""
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import StreamingResponse
 from typing import Optional, AsyncGenerator, List
 import json
@@ -31,6 +31,8 @@ from neos.api.services.chat_service import ChatService
 from neos.services.chat_llm_service import chat_llm_service
 from neos.utils.cost_calculator import cost_calculator
 from neos.database.connection import db_manager
+from neos.database.models import User
+from neos.api.dependencies.auth import get_current_user
 from neos.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -441,7 +443,11 @@ async def regenerate_message(message_id: str, request: RegenerateMessageRequest)
 # ============================================================================
 
 @router.post("/conversations/{conversation_id}/messages/stream")
-async def stream_message(conversation_id: str, request: SendMessageRequest):
+async def stream_message(
+    conversation_id: str,
+    request: SendMessageRequest,
+    current_user: User = Depends(get_current_user)
+):
     """스트리밍 메시지 전송 (아티팩트 지원)"""
 
     async def generate_stream() -> AsyncGenerator[str, None]:
@@ -519,34 +525,15 @@ async def stream_message(conversation_id: str, request: SendMessageRequest):
 
                     # DB 세션 가져오기
                     async with await db_manager.get_session() as db_session:
-                        # 프론트엔드 user UUID 가져오기
-                        frontend_user_id = "unknown"
-                        try:
-                            # 메타데이터에서 chat_id 추출
-                            chat_id = user_message.get("metadata", {}).get("chat_id")
-                            if chat_id:
-                                # 프론트엔드 Chat 테이블에서 userId 조회
-                                from sqlalchemy import text
-                                result = await db_session.execute(
-                                    text('SELECT "userId" FROM "Chat" WHERE id = :chat_id'),
-                                    {"chat_id": chat_id}
-                                )
-                                row = result.fetchone()
-                                if row:
-                                    frontend_user_id = str(row[0])
-                                    logger.info(f"Found frontend user_id: {frontend_user_id} for chat_id: {chat_id}")
-                                else:
-                                    logger.warning(f"Chat not found for chat_id: {chat_id}")
-                            else:
-                                logger.warning("No chat_id in metadata, using fallback user_id")
-                        except Exception as e:
-                            logger.error(f"Failed to get frontend user_id: {e}")
+                        # 백엔드 user_id 사용 (인증된 사용자)
+                        user_id = current_user.user_id
+                        logger.info(f"Using backend user_id: {user_id} for artifact creation")
 
                         # 아티팩트 도구 실행 및 스트리밍
                         async for tool_event in execute_artifact_tool(
                             tool_name=tool_name,
                             tool_input=tool_input,
-                            user_id=frontend_user_id,
+                            user_id=user_id,
                             db_session=db_session,
                             conversation_id=conversation_id
                         ):
