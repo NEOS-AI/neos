@@ -112,9 +112,8 @@ export const document = pgTable(
     kind: varchar("kind", { enum: ["text", "code", "image", "sheet"] })
       .notNull()
       .default("text"),
-    userId: uuid("userId")
-      .notNull()
-      .references(() => user.id),
+    userId: varchar("userId", { length: 255 })
+      .notNull(),
   },
   (table) => {
     return {
@@ -135,9 +134,8 @@ export const suggestion = pgTable(
     suggestedText: text("suggestedText").notNull(),
     description: text("description"),
     isResolved: boolean("isResolved").notNull().default(false),
-    userId: uuid("userId")
-      .notNull()
-      .references(() => user.id),
+    userId: varchar("userId", { length: 255 })
+      .notNull(),
     createdAt: timestamp("createdAt").notNull(),
   },
   (table) => ({
