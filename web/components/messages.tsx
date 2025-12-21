@@ -9,6 +9,7 @@ import { useDataStream } from "./data-stream-provider";
 import { Greeting } from "./greeting";
 import { PreviewMessage, ThinkingMessage } from "./message";
 
+
 type MessagesProps = {
   chatId: string;
   status: UseChatHelpers<ChatMessage>["status"];
@@ -20,6 +21,7 @@ type MessagesProps = {
   isArtifactVisible: boolean;
   selectedModelId: string;
 };
+
 
 function PureMessages({
   chatId,

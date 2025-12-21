@@ -174,6 +174,23 @@ export function useChatStream({
                 // 현재 아티팩트 kind 저장
                 currentArtifactKind = eventData.artifact_kind;
 
+                // 어시스턴트 메시지의 metadata에 아티팩트 정보 저장
+                assistantMessage.metadata = {
+                  ...assistantMessage.metadata,
+                  artifact: {
+                    id: eventData.artifact_id,
+                    title: eventData.artifact_title,
+                    kind: eventData.artifact_kind,
+                  },
+                };
+
+                // 메시지 업데이트
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  newMessages[newMessages.length - 1] = { ...assistantMessage };
+                  return newMessages;
+                });
+
                 if (onData) {
                   // artifact_id를 data-id로 변환
                   onData({ type: "data-id", data: eventData.artifact_id });

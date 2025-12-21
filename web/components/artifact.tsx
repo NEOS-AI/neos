@@ -429,15 +429,17 @@ function PureArtifact({
                     <div className="text-muted-foreground text-sm">
                       Saving changes...
                     </div>
-                  ) : document ? (
+                  ) : document && document.createdAt ? (
                     <div className="text-muted-foreground text-sm">
-                      {`Updated ${formatDistance(
-                        new Date(document.createdAt),
-                        new Date(),
-                        {
-                          addSuffix: true,
-                        }
-                      )}`}
+                      {(() => {
+                        const createdDate = new Date(document.createdAt);
+                        const isValidDate = !isNaN(createdDate.getTime());
+                        return isValidDate
+                          ? `Updated ${formatDistance(createdDate, new Date(), {
+                              addSuffix: true,
+                            })}`
+                          : "Recently updated";
+                      })()}
                     </div>
                   ) : (
                     <div className="mt-2 h-3 w-32 animate-pulse rounded-md bg-muted-foreground/20" />
