@@ -9,6 +9,7 @@ import { SubmitButton } from "@/components/submit-button";
 import { toast } from "@/components/toast";
 import { type RegisterActionState, register } from "../actions";
 
+
 export default function Page() {
   const router = useRouter();
 
@@ -22,7 +23,19 @@ export default function Page() {
     }
   );
 
-  const { update: updateSession } = useSession();
+  const { data: session, status, update: updateSession } = useSession();
+
+  // Check if regular user is already logged in
+  // biome-ignore lint/correctness/useExhaustiveDependencies: router is a stable ref
+  useEffect(() => {
+    if (status === "loading") return;
+
+    if (session?.user?.type === "regular") {
+      // If regular user is already logged in, redirect to home
+      router.push("/");
+    }
+    // Note: Guest users can access registration page - their session will be replaced upon successful registration
+  }, [session, status]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: router and updateSession are stable refs
   useEffect(() => {

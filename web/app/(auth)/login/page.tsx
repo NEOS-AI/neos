@@ -10,7 +10,10 @@ import { SubmitButton } from "@/components/submit-button";
 import { toast } from "@/components/toast";
 import { type LoginActionState, login } from "../actions";
 
+
 export default function Page() {
+  console.log("=== Login Page Component Rendered ===");
+
   const router = useRouter();
 
   const [email, setEmail] = useState("");
@@ -22,11 +25,26 @@ export default function Page() {
       status: "idle",
     }
   );
+  console.log("Login action state:", state);
 
-  const { update: updateSession } = useSession();
+  const { data: session, status, update: updateSession } = useSession();
+  console.log("Session in login page:", session, "Status:", status);
+
+  // Check if regular user is already logged in
+  // biome-ignore lint/correctness/useExhaustiveDependencies: router is a stable ref
+  useEffect(() => {
+    if (status === "loading") return;
+
+    if (session?.user?.type === "regular") {
+      // If regular user is already logged in, redirect to home
+      router.push("/");
+    }
+    // Note: Guest users can access login page - their session will be replaced upon successful login
+  }, [session, status]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: router and updateSession are stable refs
   useEffect(() => {
+    console.log("Login action state changed:", state);
     if (state.status === "failed") {
       toast({
         type: "error",

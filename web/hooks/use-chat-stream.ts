@@ -11,6 +11,9 @@ import {
   isStreamCompleteEvent,
   isStreamErrorEvent,
   isStreamStartEvent,
+  isArtifactMetaEvent,
+  isArtifactDeltaEvent,
+  isArtifactFinishEvent,
 } from "@/lib/stream-types";
 import { generateUUID } from "@/lib/utils";
 import type { VisibilityType } from "@/components/visibility-selector";
@@ -68,6 +71,9 @@ export function useChatStream({
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+
+      // 현재 아티팩트 kind 추적 (artifact_meta에서 설정됨)
+      let currentArtifactKind: "text" | "code" | "sheet" | null = null;
 
       // 어시스턴트 메시지 초기화
       const assistantMessage: ChatMessage = {
@@ -161,6 +167,51 @@ export function useChatStream({
                 setStatus("error");
                 if (onError) {
                   onError(error);
+                }
+              }
+              // 아티팩트 메타데이터 이벤트
+              else if (isArtifactMetaEvent(eventData)) {
+                // 현재 아티팩트 kind 저장
+                currentArtifactKind = eventData.artifact_kind;
+
+                // 어시스턴트 메시지의 metadata에 아티팩트 정보 저장
+                assistantMessage.metadata = {
+                  ...assistantMessage.metadata,
+                  artifact: {
+                    id: eventData.artifact_id,
+                    title: eventData.artifact_title,
+                    kind: eventData.artifact_kind,
+                  },
+                };
+
+                // 메시지 업데이트
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  newMessages[newMessages.length - 1] = { ...assistantMessage };
+                  return newMessages;
+                });
+
+                if (onData) {
+                  // artifact_id를 data-id로 변환
+                  onData({ type: "data-id", data: eventData.artifact_id });
+                  // artifact_title을 data-title로 변환
+                  onData({ type: "data-title", data: eventData.artifact_title });
+                  // artifact_kind를 data-kind로 변환
+                  onData({ type: "data-kind", data: eventData.artifact_kind });
+                }
+              }
+              // 아티팩트 델타 이벤트
+              else if (isArtifactDeltaEvent(eventData)) {
+                if (onData && currentArtifactKind) {
+                  // 현재 아티팩트 kind에 따라 적절한 delta 타입으로 변환
+                  const deltaType = `data-${currentArtifactKind}Delta` as const;
+                  onData({ type: deltaType, data: eventData.content });
+                }
+              }
+              // 아티팩트 완료 이벤트
+              else if (isArtifactFinishEvent(eventData)) {
+                if (onData) {
+                  onData({ type: "data-finish", data: null });
                 }
               }
             } catch (parseError) {

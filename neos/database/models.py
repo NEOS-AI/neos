@@ -577,7 +577,7 @@ class ArtifactDocument(Base):
     title = Column(Text, nullable=False)
     content = Column(Text, nullable=True)
     kind = Column(String(20), nullable=False, default="text")  # text, code, image, sheet
-    user_id = Column("userId", UUID(as_uuid=True), nullable=False)  # ForeignKey 제거 (프론트엔드 DB와 백엔드 User 모델이 다름)
+    user_id = Column("userId", String(255), nullable=False)  # 백엔드 User.user_id (String)와 일치하도록 변경
 
     # 관계 설정은 프론트엔드 DB 구조와 맞지 않아 비활성화
     # user = relationship("User")
@@ -600,7 +600,7 @@ class Suggestion(Base):
     suggested_text = Column("suggestedText", Text, nullable=False)
     description = Column(Text, nullable=True)
     is_resolved = Column("isResolved", Boolean, nullable=False, default=False)
-    user_id = Column("userId", UUID(as_uuid=True), nullable=False)  # ForeignKey 제거 (프론트엔드 DB와 백엔드 User 모델이 다름)
+    user_id = Column("userId", String(255), nullable=False)  # 백엔드 User.user_id (String)와 일치하도록 변경
     created_at = Column("createdAt", TIMESTAMP, nullable=False, default=datetime.utcnow)
 
     # 복합 외래키는 유지 (Document 테이블 참조)

@@ -22,17 +22,28 @@ export function DataStreamHandler() {
     const newDeltas = dataStream.slice();
     setDataStream([]);
 
+    // 현재 아티팩트 kind를 추적 (delta에서 업데이트됨)
+    let currentKind = artifact.kind;
+
     for (const delta of newDeltas) {
       // Handle chat title updates
       if (delta.type === "data-chat-title") {
         mutate(unstable_serialize(getChatHistoryPaginationKey));
         continue;
       }
+
+      // data-kind 이벤트에서 kind 추출
+      if (delta.type === "data-kind") {
+        currentKind = delta.data;
+      }
+
+      // 현재 kind에 맞는 아티팩트 정의 찾기
       const artifactDefinition = artifactDefinitions.find(
         (currentArtifactDefinition) =>
-          currentArtifactDefinition.kind === artifact.kind
+          currentArtifactDefinition.kind === currentKind
       );
 
+      // onStreamPart 먼저 호출 (델타 이벤트 처리용)
       if (artifactDefinition?.onStreamPart) {
         artifactDefinition.onStreamPart({
           streamPart: delta,
@@ -41,6 +52,7 @@ export function DataStreamHandler() {
         });
       }
 
+      // artifact 상태 업데이트
       setArtifact((draftArtifact) => {
         if (!draftArtifact) {
           return { ...initialArtifactData, status: "streaming" };
@@ -62,9 +74,12 @@ export function DataStreamHandler() {
             };
 
           case "data-kind":
+            // 아티팩트 kind가 설정되면 자동으로 열기
             return {
               ...draftArtifact,
               kind: delta.data,
+              content: "", // 콘텐츠 초기화
+              isVisible: true, // 아티팩트 표시
               status: "streaming",
             };
 
@@ -86,7 +101,7 @@ export function DataStreamHandler() {
         }
       });
     }
-  }, [dataStream, setArtifact, setMetadata, artifact, setDataStream, mutate]);
+  }, [dataStream, setArtifact, setMetadata, artifact.kind, setDataStream, mutate]);
 
   return null;
 }

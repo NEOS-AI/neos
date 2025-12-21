@@ -82,13 +82,30 @@ export const {
           const data = await response.json();
           // data = { access_token, refresh_token, user: { user_id, email, username, ... } }
 
+          // 로컬 DB에서 사용자 찾기 또는 생성
+          let localUserId: string;
+          try {
+            const existingUsers = await getUser(data.user.email);
+            if (existingUsers.length > 0) {
+              localUserId = existingUsers[0].id;
+            } else {
+              // 로컬 DB에 사용자 생성 (UUID 자동 생성)
+              const [newUser] = await createGuestUser(undefined, data.user.email);
+              localUserId = newUser.id;
+            }
+          } catch (error) {
+            console.warn("Failed to create/find local user:", error);
+            // 임시 UUID 생성
+            localUserId = crypto.randomUUID();
+          }
+
           return {
-            id: data.user.user_id,
+            id: localUserId, // 로컬 DB UUID 사용
             email: data.user.email,
             name: data.user.username || data.user.name || data.user.email,
             image: data.user.profile_picture_url || data.user.image,
             type: "regular" as UserType,
-            backendUserId: data.user.user_id,
+            backendUserId: data.user.user_id, // 백엔드 user_id 저장
             backendAccessToken: data.access_token,
             backendRefreshToken: data.refresh_token,
           };
@@ -177,11 +194,29 @@ export const {
           }
 
           const data = await response.json();
+
+          // 로컬 DB에서 사용자 찾기 또는 생성
+          let localUserId: string;
+          try {
+            const existingUsers = await getUser(data.user.email);
+            if (existingUsers.length > 0) {
+              localUserId = existingUsers[0].id;
+            } else {
+              // 로컬 DB에 사용자 생성 (UUID 자동 생성)
+              const [newUser] = await createGuestUser(undefined, data.user.email);
+              localUserId = newUser.id;
+            }
+          } catch (error) {
+            console.warn("Failed to create/find local user for Google OAuth:", error);
+            // 임시 UUID 생성
+            localUserId = crypto.randomUUID();
+          }
+
           // 백엔드 토큰을 user 객체에 저장 (JWT callback에서 사용)
           user.backendAccessToken = data.access_token;
           user.backendRefreshToken = data.refresh_token;
-          user.id = data.user.user_id;
-          user.backendUserId = data.user.user_id;
+          user.id = localUserId; // 로컬 DB UUID 사용
+          user.backendUserId = data.user.user_id; // 백엔드 user_id 저장
           user.type = "regular";
         } catch (error) {
           console.error("Google OAuth error:", error);

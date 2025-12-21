@@ -37,8 +37,19 @@ import { generateHashedPassword } from "./utils";
 // use the Drizzle adapter for Auth.js / NextAuth
 // https://authjs.dev/reference/adapter/drizzle
 
+// Validate POSTGRES_URL exists
+if (!process.env.POSTGRES_URL) {
+  throw new Error(
+    "POSTGRES_URL environment variable is not set. Please check your .env file."
+  );
+}
+
 // biome-ignore lint: Forbidden non-null assertion.
-const client = postgres(process.env.POSTGRES_URL!);
+const client = postgres(process.env.POSTGRES_URL!, {
+  max: 10, // Maximum number of connections in the pool
+  idle_timeout: 20, // Close idle connections after 20 seconds
+  connect_timeout: 10, // Connection timeout in seconds
+});
 const db = drizzle(client);
 
 export async function getUser(email: string): Promise<User[]> {
@@ -225,7 +236,8 @@ export async function getChatsByUserId({
       chats: hasMore ? filteredChats.slice(0, limit) : filteredChats,
       hasMore,
     };
-  } catch (_error) {
+  } catch (error) {
+    console.error("Failed to get chats by user id:", error);
     throw new ChatSDKError(
       "bad_request:database",
       "Failed to get chats by user id"
@@ -546,7 +558,8 @@ export async function getMessageCountByUserId({
       .execute();
 
     return stats?.count ?? 0;
-  } catch (_error) {
+  } catch (error) {
+    console.error("Failed to get message count by user id:", error);
     throw new ChatSDKError(
       "bad_request:database",
       "Failed to get message count by user id"

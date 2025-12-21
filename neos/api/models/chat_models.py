@@ -227,13 +227,18 @@ class ConversationListResponse(BaseModel):
 
 class ChatStreamChunk(BaseModel):
     """스트리밍 응답 청크"""
-    type: str  # 'start', 'content', 'tool_call', 'complete', 'error'
+    type: str  # 'start', 'content', 'tool_call', 'complete', 'error', 'artifact_meta', 'artifact_delta', 'artifact_finish'
     content: Optional[str] = None
     message_id: Optional[str] = None
     conversation_id: Optional[str] = None
     tool_call: Optional[ToolCall] = None
     error: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    # 아티팩트 관련 필드
+    artifact_id: Optional[str] = None
+    artifact_title: Optional[str] = None
+    artifact_kind: Optional[str] = None  # 'text', 'code', 'sheet'
 
 
 class CreateMessageResponse(BaseModel):

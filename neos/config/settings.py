@@ -4,6 +4,7 @@ from pydantic import field_validator
 import os
 import dotenv
 
+from neos.prompts.artifact import SYSTEM_PROMPT_FOR_ARTIFACT
 
 dotenv.load_dotenv()
 env_vars = os.environ
@@ -281,6 +282,21 @@ class Settings(BaseSettings):
 
     # 환경 설정
     ENVIRONMENT: str = "development"  # development, staging, production
+
+    # ============================================================================
+    # Artifact (문서 생성) 설정
+    # ============================================================================
+
+    # 아티팩트 기능 활성화
+    ARTIFACTS_ENABLED: bool = bool(env_vars.get("ARTIFACTS_ENABLED", True))
+
+    # 아티팩트 LLM 모델 설정
+    ARTIFACT_LLM_MODEL: str = env_vars.get("ARTIFACT_LLM_MODEL", "claude-haiku-4-5-20251001")
+    ARTIFACT_LLM_TEMPERATURE: float = float(env_vars.get("ARTIFACT_LLM_TEMPERATURE", 0.7))
+    ARTIFACT_LLM_MAX_TOKENS: int = int(env_vars.get("ARTIFACT_LLM_MAX_TOKENS", 4096))
+
+    # 아티팩트 프롬프트
+    ARTIFACTS_SYSTEM_PROMPT: str = SYSTEM_PROMPT_FOR_ARTIFACT
 
     # 컨텍스트 최적화 설정
     # 1. Thinking Block 관리

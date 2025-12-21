@@ -5,6 +5,7 @@ import { memo, useState } from "react";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
+import { ArtifactBlock } from "./artifact-block";
 import { useDataStream } from "./data-stream-provider";
 import { DocumentToolResult } from "./document";
 import { DocumentPreview } from "./document-preview";
@@ -266,6 +267,17 @@ const PurePreviewMessage = ({
             return null;
           })}
 
+          {/* 아티팩트 블록 표시 (어시스턴트 메시지이고 artifact 메타데이터가 있는 경우) */}
+          {message.role === "assistant" && message.metadata?.artifact && (
+            <ArtifactBlock
+              artifact={{
+                id: message.metadata.artifact.id,
+                title: message.metadata.artifact.title,
+                kind: message.metadata.artifact.kind,
+              }}
+            />
+          )}
+
           {!isReadonly && (
             <MessageActions
               chatId={chatId}
@@ -295,6 +307,9 @@ export const PreviewMessage = memo(
       return false;
     }
     if (!equal(prevProps.message.parts, nextProps.message.parts)) {
+      return false;
+    }
+    if (!equal(prevProps.message.metadata, nextProps.message.metadata)) {
       return false;
     }
     if (!equal(prevProps.vote, nextProps.vote)) {

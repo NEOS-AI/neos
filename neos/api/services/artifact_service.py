@@ -79,8 +79,9 @@ class ArtifactService:
             title=new_document.title,
             content=new_document.content,
             kind=new_document.kind,
-            user_id=new_document.user_id
+            user_id=str(new_document.user_id)
         )
+
 
     async def get_document_versions(
         self,
@@ -128,7 +129,7 @@ class ArtifactService:
                 title=doc.title,
                 content=doc.content,
                 kind=doc.kind,
-                user_id=doc.user_id
+                user_id=str(doc.user_id)
             )
             for doc in documents
         ]
@@ -279,7 +280,7 @@ class ArtifactService:
                 suggested_text=suggestion.suggested_text,
                 description=suggestion.description,
                 is_resolved=suggestion.is_resolved,
-                user_id=suggestion.user_id,
+                user_id=str(suggestion.user_id),
                 created_at=suggestion.created_at
             )
             for suggestion in created_suggestions
@@ -339,7 +340,7 @@ class ArtifactService:
                 suggested_text=suggestion.suggested_text,
                 description=suggestion.description,
                 is_resolved=suggestion.is_resolved,
-                user_id=suggestion.user_id,
+                user_id=str(suggestion.user_id),
                 created_at=suggestion.created_at
             )
             for suggestion in suggestions
@@ -399,6 +400,6 @@ class ArtifactService:
             suggested_text=suggestion.suggested_text,
             description=suggestion.description,
             is_resolved=suggestion.is_resolved,
-            user_id=suggestion.user_id,
+            user_id=str(suggestion.user_id),
             created_at=suggestion.created_at
         )

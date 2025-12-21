@@ -1,6 +1,6 @@
 """Chat API handlers - thin layer for FastAPI routes"""
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import StreamingResponse
 from typing import Optional, AsyncGenerator, List
 import json
@@ -31,6 +31,8 @@ from neos.api.services.chat_service import ChatService
 from neos.services.chat_llm_service import chat_llm_service
 from neos.utils.cost_calculator import cost_calculator
 from neos.database.connection import db_manager
+from neos.database.models import User
+from neos.api.dependencies.auth import get_current_user
 from neos.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -441,8 +443,12 @@ async def regenerate_message(message_id: str, request: RegenerateMessageRequest)
 # ============================================================================
 
 @router.post("/conversations/{conversation_id}/messages/stream")
-async def stream_message(conversation_id: str, request: SendMessageRequest):
-    """스트리밍 메시지 전송"""
+async def stream_message(
+    conversation_id: str,
+    request: SendMessageRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """스트리밍 메시지 전송 (아티팩트 지원)"""
 
     async def generate_stream() -> AsyncGenerator[str, None]:
         try:
@@ -469,18 +475,32 @@ async def stream_message(conversation_id: str, request: SendMessageRequest):
             # 메시지 ID 생성
             assistant_message_id = str(uuid.uuid4())
 
-            # 실제 LLM 스트리밍
+            # 아티팩트 프롬프트 및 도구 준비
+            from neos.tools.artifact_tools import get_artifact_tools
+            from neos.tools.artifact_tool_handler import execute_artifact_tool
+            from neos.config.settings import settings as app_settings
+
+            # 시스템 프롬프트에 아티팩트 프롬프트 추가 (활성화된 경우)
+            system_prompt = conversation.get("system_prompt", "")
+            tools = []
+
+            if app_settings.ARTIFACTS_ENABLED:
+                system_prompt = f"{system_prompt}\n\n{app_settings.ARTIFACTS_SYSTEM_PROMPT}"
+                tools = get_artifact_tools()
+
+            # 실제 LLM 스트리밍 (tool calling 지원)
             full_content = ""
             usage_info = None
             cost_info = None
             latency_ms = None
 
-            async for chunk in chat_llm_service.generate_response_stream(
+            async for chunk in chat_llm_service.generate_response_stream_with_tools(
                 conversation_id=conversation_id,
                 message_id=assistant_message_id,
                 conversation_messages=history_messages + [{"role": "user", "content": request.content}],
+                tools=tools,
                 model_name=conversation.get("model_name"),
-                system_prompt=conversation.get("system_prompt"),
+                system_prompt=system_prompt,
                 temperature=conversation.get("temperature", 0.7),
                 max_tokens=conversation.get("max_tokens")
             ):
@@ -496,6 +516,73 @@ async def stream_message(conversation_id: str, request: SendMessageRequest):
                         conversation_id=conversation_id
                     )
                     yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+                elif chunk["type"] == "tool_use":
+                    # Tool 호출 감지 - 아티팩트 도구 실행
+                    tool_name = chunk.get("tool_name")
+                    tool_input = chunk.get("tool_input")
+
+                    logger.info(f"Tool called: {tool_name} with input: {tool_input}")
+
+                    # DB 세션 가져오기
+                    async with await db_manager.get_session() as db_session:
+                        # 백엔드 user_id 사용 (인증된 사용자)
+                        user_id = current_user.user_id
+                        logger.info(f"Using backend user_id: {user_id} for artifact creation")
+
+                        # 아티팩트 도구 실행 및 스트리밍
+                        async for tool_event in execute_artifact_tool(
+                            tool_name=tool_name,
+                            tool_input=tool_input,
+                            user_id=user_id,
+                            db_session=db_session,
+                            conversation_id=conversation_id
+                        ):
+                            event_type = tool_event.get("type")
+
+                            if event_type == "artifact_meta":
+                                # 아티팩트 메타데이터 전송
+                                stream_chunk = ChatStreamChunk(
+                                    type="artifact_meta",
+                                    conversation_id=conversation_id,
+                                    artifact_id=tool_event.get("artifact_id"),
+                                    artifact_title=tool_event.get("artifact_title"),
+                                    artifact_kind=tool_event.get("artifact_kind")
+                                )
+                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+
+                            elif event_type == "artifact_delta":
+                                # 아티팩트 콘텐츠 델타 전송
+                                stream_chunk = ChatStreamChunk(
+                                    type="artifact_delta",
+                                    content=tool_event.get("content"),
+                                    conversation_id=conversation_id
+                                )
+                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+
+                            elif event_type == "artifact_finish":
+                                # 아티팩트 완료 신호
+                                stream_chunk = ChatStreamChunk(
+                                    type="artifact_finish",
+                                    conversation_id=conversation_id,
+                                    artifact_id=tool_event.get("artifact_id")
+                                )
+                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+
+                            elif event_type == "tool_result":
+                                # Tool 실행 결과를 채팅 메시지에 추가
+                                result_content = tool_event.get("content", "")
+                                full_content += f"\n\n{result_content}"
+
+                            elif event_type == "error":
+                                # Tool 실행 에러
+                                logger.error(f"Tool execution error: {tool_event.get('error')}")
+                                error_chunk = ChatStreamChunk(
+                                    type="error",
+                                    error=tool_event.get("error"),
+                                    conversation_id=conversation_id
+                                )
+                                yield f"data: {json.dumps(error_chunk.dict())}\n\n"
+
                 elif chunk["type"] == "complete":
                     # 완료
                     usage_info = chunk["usage"]
