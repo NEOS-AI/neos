@@ -1,16 +1,13 @@
 "use server";
 
-import { generateText, type UIMessage } from "ai";
 import { cookies } from "next/headers";
 import type { VisibilityType } from "@/components/visibility-selector";
-import { titlePrompt } from "@/lib/ai/prompts";
-import { getTitleModel } from "@/lib/ai/providers";
 import {
   deleteMessagesByChatIdAfterTimestamp,
   getMessageById,
   updateChatVisibilityById,
 } from "@/lib/db/queries";
-import { getTextFromMessage } from "@/lib/utils";
+import { callBackendAPI } from "@/lib/backend-api";
 
 export async function saveChatModelAsCookie(model: string) {
   const cookieStore = await cookies();
@@ -18,17 +15,34 @@ export async function saveChatModelAsCookie(model: string) {
 }
 
 export async function generateTitleFromUserMessage({
-  message,
+  conversationId,
+  userMessage,
 }: {
-  message: UIMessage;
+  conversationId: string;
+  userMessage: string;
 }) {
-  const { text: title } = await generateText({
-    model: getTitleModel(),
-    system: titlePrompt,
-    prompt: getTextFromMessage(message),
-  });
+  try {
+    const response = await callBackendAPI(
+      `/api/v1/chat/conversations/${conversationId}/generate-title`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          user_message: userMessage,
+        }),
+      }
+    );
 
-  return title;
+    if (!response.ok) {
+      console.error("Failed to generate title from backend");
+      return "New chat";
+    }
+
+    const data = await response.json();
+    return data.title || "New chat";
+  } catch (error) {
+    console.error("Error generating title:", error);
+    return "New chat";
+  }
 }
 
 export async function deleteTrailingMessages({ id }: { id: string }) {

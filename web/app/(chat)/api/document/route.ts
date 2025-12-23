@@ -3,6 +3,7 @@ import type { ArtifactKind } from "@/components/artifact";
 import { callBackendAPI } from "@/lib/backend-api";
 import { ChatSDKError } from "@/lib/errors";
 
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
@@ -33,7 +34,7 @@ export async function GET(request: Request) {
     return Response.json(documents, { status: 200 });
   } catch (error) {
     console.error("Document GET error:", error);
-    return new ChatSDKError("internal_error:document").toResponse();
+    return new ChatSDKError("offline:document").toResponse();
   }
 }
 
@@ -82,7 +83,7 @@ export async function POST(request: Request) {
     return Response.json(document, { status: 200 });
   } catch (error) {
     console.error("Document POST error:", error);
-    return new ChatSDKError("internal_error:document").toResponse();
+    return new ChatSDKError("offline:document").toResponse();
   }
 }
 
@@ -122,6 +123,6 @@ export async function DELETE(request: Request) {
     return new Response(null, { status: 204 });
   } catch (error) {
     console.error("Document DELETE error:", error);
-    return new ChatSDKError("internal_error:document").toResponse();
+    return new ChatSDKError("offline:document").toResponse();
   }
 }

@@ -52,6 +52,43 @@ const OUTPUT_HANDLERS = {
   `,
 };
 
+async function loadPyodideScript(): Promise<void> {
+  // Check if Pyodide is already loaded
+  // @ts-expect-error - loadPyodide is not defined in types
+  if (typeof globalThis.loadPyodide !== "undefined") {
+    return;
+  }
+
+  // Check if script is already in the document
+  if (document.querySelector('script[src*="pyodide.js"]')) {
+    // Wait for the script to load
+    return new Promise((resolve, reject) => {
+      const checkInterval = setInterval(() => {
+        // @ts-expect-error - loadPyodide is not defined in types
+        if (typeof globalThis.loadPyodide !== "undefined") {
+          clearInterval(checkInterval);
+          resolve();
+        }
+      }, 100);
+
+      setTimeout(() => {
+        clearInterval(checkInterval);
+        reject(new Error("Pyodide script failed to load"));
+      }, 30000);
+    });
+  }
+
+  // Dynamically load the script
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js";
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Failed to load Pyodide script"));
+    document.head.appendChild(script);
+  });
+}
+
 function detectRequiredHandlers(code: string): string[] {
   const handlers: string[] = ["basic"];
 
@@ -133,6 +170,9 @@ export const codeArtifact = new Artifact<"code", Metadata>({
         }));
 
         try {
+          // Dynamically load Pyodide script if not already loaded
+          await loadPyodideScript();
+
           // @ts-expect-error - loadPyodide is not defined
           const currentPyodideInstance = await globalThis.loadPyodide({
             indexURL: "https://cdn.jsdelivr.net/pyodide/v0.23.4/full/",

@@ -106,11 +106,13 @@ def verify_token(token: str, token_type: str = "access") -> Optional[Dict[str, A
 
         # 토큰 타입 검증
         if payload.get("type") != token_type:
+            print(f"잘못된 토큰 타입: 예상 {token_type}, 실제 {payload.get('type')}")
             return None
 
         return payload
 
-    except InvalidTokenError:
+    except InvalidTokenError as e:
+        print(f"토큰 검증 실패: {e}")
         return None
 
 

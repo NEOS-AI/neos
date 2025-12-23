@@ -15,7 +15,7 @@ import {
 import { ChatSDKError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
-// import { generateTitleFromUserMessage } from "../../actions"; // TODO: Re-enable when backend supports title generation
+import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
 export const maxDuration = 60;
@@ -64,6 +64,12 @@ export async function POST(request: Request) {
     let titlePromise: Promise<string> | null = null;
     let conversationId: string | null = null;
 
+    // Extract message content early for title generation
+    const messageContent = message.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+
     if (chat) {
       if (chat.userId !== session.user.id) {
         return new ChatSDKError("forbidden:chat").toResponse();
@@ -77,9 +83,6 @@ export async function POST(request: Request) {
         title: "New chat",
         visibility: selectedVisibilityType,
       });
-
-      // TODO: Start title generation in parallel (currently disabled - uses Vercel AI Gateway)
-      // titlePromise = generateTitleFromUserMessage({ message });
 
       // Create conversation in backend
       try {
@@ -103,6 +106,14 @@ export async function POST(request: Request) {
 
         const conversationData = await createConversationResponse.json();
         conversationId = conversationData.conversation_id || id;
+
+        // Start title generation in parallel (non-blocking)
+        if (conversationId) {
+          titlePromise = generateTitleFromUserMessage({
+            conversationId,
+            userMessage: messageContent,
+          });
+        }
       } catch (error) {
         console.error("Failed to create backend conversation:", error);
         // Use the local chat ID as fallback
@@ -110,21 +121,18 @@ export async function POST(request: Request) {
       }
     }
 
-    // TODO: Handle title generation in parallel (currently disabled)
-    // if (titlePromise) {
-    //   titlePromise.then((title: string) => {
-    //     updateChatTitleById({ chatId: id, title });
-    //   });
-    // }
+    // Handle title generation in parallel
+    if (titlePromise) {
+      titlePromise.then((title: string) => {
+        console.log("Generated title:", title);
+        updateChatTitleById({ chatId: id, title });
+      }).catch((error) => {
+        console.error("Failed to update title:", error);
+      });
+    }
 
     const streamId = generateUUID();
     await createStreamId({ streamId, chatId: id });
-
-    // Extract message content
-    const messageContent = message.parts
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n");
 
     // Call backend streaming API
     const backendStreamResponse = await callBackendAPI(

@@ -388,3 +388,54 @@ class ChatService:
             "templates": templates_to_dict_list(templates),
             "total_count": total_count
         }
+
+    # ============================================================================
+    # Title Generation
+    # ============================================================================
+
+    @staticmethod
+    async def generate_title(conversation_id: str, user_message: str) -> str:
+        """사용자 메시지를 기반으로 제목 생성
+
+        Args:
+            conversation_id: 대화 ID
+            user_message: 제목 생성에 사용할 사용자 메시지
+
+        Returns:
+            생성된 제목 문자열
+        """
+        from neos.services.chat_llm_service import chat_llm_service
+
+        if not user_message or not user_message.strip():
+            return "New chat"
+
+        # LLM을 사용하여 제목 생성
+        title_prompt = f"""Based on the following user message, generate a short, concise title (maximum 6 words) that captures the essence of the conversation.
+Only return the title, nothing else.
+
+User message: {user_message}"""
+
+        try:
+            response = await chat_llm_service.generate_response(
+                conversation_id=conversation_id,
+                message_id=str(uuid.uuid4()),  # 임시 message_id
+                conversation_messages=[{"role": "user", "content": title_prompt}],
+                model_name="claude-sonnet-4-5-20250929",
+                temperature=0.7,
+                max_tokens=50,
+                workflow_type="title_generation",
+                enable_context_optimization=False
+            )
+
+            title = response.get("content", "New chat").strip()
+
+            # 제목이 너무 길면 잘라내기
+            if len(title) > 100:
+                title = title[:97] + "..."
+
+            return title
+
+        except Exception as e:
+            logger.error(f"Failed to generate title: {e}")
+            # 에러 발생 시 첫 번째 메시지의 일부를 제목으로 사용
+            return user_message[:50] + ("..." if len(user_message) > 50 else "")

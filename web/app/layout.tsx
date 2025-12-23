@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "sonner";
 import { ThemeProvider } from "@/components/theme-provider";
+import { AuthMonitor } from "@/components/auth-monitor";
 
 import "./globals.css";
 import { SessionProvider } from "next-auth/react";
@@ -78,7 +79,13 @@ export default function RootLayout({
           enableSystem
         >
           <Toaster position="top-center" />
-          <SessionProvider>{children}</SessionProvider>
+          <SessionProvider
+            refetchInterval={5 * 60} // 5분마다 세션 갱신
+            refetchOnWindowFocus={true} // 창 포커스 시 갱신
+          >
+            <AuthMonitor />
+            {children}
+          </SessionProvider>
         </ThemeProvider>
       </body>
     </html>

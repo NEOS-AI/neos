@@ -85,10 +85,11 @@ def get_settings() -> Settings:
     """Get cached settings instance."""
     _settings = Settings()
 
-    # Print loaded settings for debugging
-    if not any('pytest' in arg for arg in sys.argv):
-        print(f"[Config] Settings loaded successfully")
+    # Print loaded settings for debugging (only if DEBUG=True)
+    if _settings.DEBUG and not any('pytest' in arg for arg in sys.argv):
+        print("[Config] Settings loaded successfully")
         print(f"[Config] DATABASE_URL: {_settings.DATABASE_URL}")
+        print(f"[Config] REDIS_URL: {_settings.REDIS_URL}")
         print(f"[Config] Using .env file: {ENV_FILE.exists()}")
 
     return _settings
