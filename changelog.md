@@ -1,6 +1,32 @@
 # Changelog
 
-## v0.16.0 (2025-12-18)
+## v0.17.0 (2025-12-23)
+* Fix up entitlements for regular users
+* Implement automatic token refresh and auto-logout for web authentication
+  * Add JWT access token expiration tracking (15-minute validity)
+  * Implement automatic token refresh 5 minutes before expiration
+  * Add SessionProvider auto-refresh (5-minute interval, on window focus)
+  * Create useAuthMonitor hook for client-side session monitoring
+  * Add AuthMonitor component for global authentication state tracking
+  * Implement auto-logout when refresh token expires
+  * Enhance auth.ts with refreshAccessToken function
+  * Add session error propagation for expired tokens
+* Migrate Artifacts functionality from Next.js to Python backend
+  * Create ArtifactLLMService for AI-powered artifact generation (text, code, sheet)
+  * Add Anthropic tool use API integration for createDocument and updateDocument
+  * Implement streaming artifact generation with real-time content updates
+  * Extend ChatStreamChunk model with artifact-specific fields (artifact_id, artifact_title, artifact_kind)
+  * Add ChatLLMService.generate_response_stream_with_tools() for tool calling support
+  * Integrate artifact streaming into chat handler with SSE event types (artifact_meta, artifact_delta, artifact_finish)
+  * Add artifact configuration settings (ARTIFACTS_ENABLED, ARTIFACT_LLM_MODEL, ARTIFACTS_SYSTEM_PROMPT)
+  * Implement artifact tool definitions and handlers for document creation/updates
+  * Support version history for artifacts with composite primary key (id, created_at)
+  * Enable seamless artifact generation during chat conversations
+  * Default to Claude Haiku for cost-efficient artifact generation with configurable model selection
+* Add JWT token refresh communication between BFF and backend services
+* Add title generation based on user message content
+
+## v0.16.0 (2025-12-20)
 * Add Google Gemini support for LLM, Vision, and Embeddings
   * Implement GeminiProvider for chat/text generation using langchain-google-genai
   * Add GeminiVision for image analysis with vision-capable models
