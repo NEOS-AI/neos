@@ -9,6 +9,48 @@ import { authConfig } from "./auth.config";
 
 export type UserType = "guest" | "regular";
 
+/**
+ * Access Token 갱신 함수
+ * @param token JWT 토큰
+ * @returns 갱신된 토큰 또는 에러가 포함된 토큰
+ */
+async function refreshAccessToken(token: any) {
+  const backendUrl = process.env.BACKEND_URL || "http://localhost:8518";
+
+  try {
+    if (!token.backendRefreshToken) {
+      throw new Error("No refresh token available");
+    }
+
+    const response = await fetch(`${backendUrl}/api/v1/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: token.backendRefreshToken }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Token refresh failed: ${response.status}`);
+    }
+
+    const refreshedTokens = await response.json();
+
+    return {
+      ...token,
+      backendAccessToken: refreshedTokens.access_token,
+      backendRefreshToken: refreshedTokens.refresh_token ?? token.backendRefreshToken,
+      accessTokenExpires: Date.now() + 15 * 60 * 1000, // 15분 후 만료
+      error: undefined,
+    };
+  } catch (error) {
+    console.error("Error refreshing access token:", error);
+
+    return {
+      ...token,
+      error: "RefreshTokenExpired",
+    };
+  }
+}
+
 declare module "next-auth" {
   interface Session extends DefaultSession {
     user: {
@@ -18,6 +60,7 @@ declare module "next-auth" {
     } & DefaultSession["user"];
     backendAccessToken?: string;
     backendRefreshToken?: string;
+    error?: string;
   }
 
   // biome-ignore lint/nursery/useConsistentTypeDefinitions: "Required"
@@ -38,6 +81,8 @@ declare module "next-auth/jwt" {
     backendUserId?: string;
     backendAccessToken?: string;
     backendRefreshToken?: string;
+    accessTokenExpires?: number;
+    error?: string;
   }
 }
 
@@ -226,18 +271,34 @@ export const {
 
       return true;
     },
-    jwt({ token, user, trigger, session }) {
+    async jwt({ token, user, trigger, session }) {
+      // 초기 로그인 시
       if (user) {
         token.id = user.id as string;
         token.type = user.type;
         token.backendUserId = user.backendUserId;
         token.backendAccessToken = user.backendAccessToken;
         token.backendRefreshToken = user.backendRefreshToken;
+        token.accessTokenExpires = Date.now() + 15 * 60 * 1000; // 15분 후 만료
+        token.error = undefined;
       }
 
       // 클라이언트에서 update() 호출 시 (예: 토큰 갱신)
       if (trigger === "update" && session?.backendAccessToken) {
         token.backendAccessToken = session.backendAccessToken;
+        token.accessTokenExpires = Date.now() + 15 * 60 * 1000;
+      }
+
+      // 토큰 만료 체크 및 자동 갱신
+      if (token.accessTokenExpires && token.backendRefreshToken) {
+        // 만료 5분 전이면 아직 유효함
+        if (Date.now() < token.accessTokenExpires - 5 * 60 * 1000) {
+          return token;
+        }
+
+        // 만료 임박 또는 만료됨 - 갱신 시도
+        console.log("Token expiring soon, refreshing...");
+        return await refreshAccessToken(token);
       }
 
       return token;
@@ -250,6 +311,9 @@ export const {
         session.backendAccessToken = token.backendAccessToken;
         session.backendRefreshToken = token.backendRefreshToken;
       }
+
+      // 토큰 갱신 에러를 세션에 전달
+      session.error = token.error;
 
       return session;
     },
