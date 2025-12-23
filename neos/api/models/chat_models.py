@@ -106,6 +106,10 @@ class MessageFeedbackRequest(BaseModel):
     comment: Optional[str] = Field(None, description="피드백 코멘트")
 
 
+class GenerateTitleRequest(BaseModel):
+    user_message: str = Field(..., min_length=1, description="제목 생성에 사용할 사용자 메시지")
+
+
 # ============================================================================
 # Response Models
 # ============================================================================

@@ -13,6 +13,7 @@ from neos.api.models.chat_models import (
     RegenerateMessageRequest,
     EditMessageRequest,
     MessageFeedbackRequest,
+    GenerateTitleRequest,
     ConversationResponse,
     ConversationWithMessagesResponse,
     ConversationListResponse,
@@ -190,6 +191,39 @@ async def list_user_conversations(
         )
     except Exception as e:
         logger.error(f"Failed to list conversations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/conversations/{conversation_id}/generate-title")
+async def generate_conversation_title(conversation_id: str, request: GenerateTitleRequest):
+    """대화 제목 자동 생성"""
+    try:
+        # 대화 존재 확인
+        conversation = await ChatService.get_conversation(conversation_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        # 제목 생성 (사용자 메시지 전달)
+        title = await ChatService.generate_title(
+            conversation_id=conversation_id,
+            user_message=request.user_message
+        )
+
+        # 제목 업데이트
+        await ChatService.update_conversation(
+            conversation_id=conversation_id,
+            title=title
+        )
+
+        return {
+            "success": True,
+            "title": title,
+            "conversation_id": conversation_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to generate title: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
