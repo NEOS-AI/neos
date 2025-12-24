@@ -74,6 +74,7 @@ class ChatService:
             "is_pinned": conversation.is_pinned,
             "is_shared": conversation.is_shared,
             "share_token": conversation.share_token,
+            "visibility": conversation.visibility,
             "message_count": conversation.message_count,
             "total_tokens_used": conversation.total_tokens_used,
             "total_cost": conversation.total_cost,
