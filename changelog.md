@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.17.1 (2025-12-24)
+* Fix artifact generation streaming issue
+* Ensure proper handling of artifact streaming events
+* Correctly propagate artifact metadata and content during chat responses
+* Migrate the history API and chat message list to use backend conversation ID
+  * Update chat message retrieval to fetch messages using backendConversationId
+  * Modify chat history API to support backend conversation ID mapping
+  * Ensure seamless integration between frontend chat and backend conversation tracking
+
 ## v0.17.0 (2025-12-23)
 * Fix up entitlements for regular users
 * Implement automatic token refresh and auto-logout for web authentication

@@ -108,6 +108,49 @@ export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
   }));
 }
 
+export function convertBackendMessagesToUI(
+  backendMessages: any[]
+): ChatMessage[] {
+  return backendMessages.map((msg) => {
+    const metadata: any = {
+      createdAt: msg.created_at,
+      sequenceNumber: msg.sequence_number,
+      modelName: msg.model_name,
+      totalTokens: msg.total_tokens,
+    };
+
+    // 백엔드 metadata에서 artifact 정보 추출 및 변환
+    if (msg.metadata && msg.metadata.artifact) {
+      metadata.artifact = {
+        id: msg.metadata.artifact.id,
+        title: msg.metadata.artifact.title,
+        kind: msg.metadata.artifact.kind,
+      };
+    }
+
+    // 나머지 metadata 필드도 포함
+    if (msg.metadata) {
+      Object.keys(msg.metadata).forEach((key) => {
+        if (key !== 'artifact' && !metadata[key]) {
+          metadata[key] = msg.metadata[key];
+        }
+      });
+    }
+
+    return {
+      id: msg.message_id,
+      role: msg.role as 'user' | 'assistant' | 'system',
+      parts: [
+        {
+          type: 'text' as const,
+          text: msg.content,
+        },
+      ] as UIMessagePart<CustomUIDataTypes, ChatTools>[],
+      metadata,
+    };
+  });
+}
+
 export function getTextFromMessage(message: ChatMessage | UIMessage): string {
   return message.parts
     .filter((part) => part.type === 'text')

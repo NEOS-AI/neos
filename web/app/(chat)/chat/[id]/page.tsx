@@ -6,8 +6,10 @@ import { auth } from "@/app/(auth)/auth";
 import { Chat } from "@/components/chat";
 import { DataStreamHandler } from "@/components/data-stream-handler";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { callBackendAPI } from "@/lib/backend-api";
 import { getChatById, getMessagesByChatId } from "@/lib/db/queries";
-import { convertToUIMessages } from "@/lib/utils";
+import type { ChatMessage } from "@/lib/types";
+import { convertBackendMessagesToUI, convertToUIMessages } from "@/lib/utils";
 
 
 export default function Page(props: { params: Promise<{ id: string }> }) {
@@ -42,11 +44,36 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
     }
   }
 
-  const messagesFromDb = await getMessagesByChatId({
-    id,
-  });
+  // Load message history: prefer backend API, fallback to frontend DB
+  let uiMessages: ChatMessage[] = [];
 
-  const uiMessages = convertToUIMessages(messagesFromDb);
+  if (chat.backendConversationId) {
+    try {
+      // Fetch messages from backend API
+      const backendMessagesResponse = await callBackendAPI(
+        `/api/v1/chat/conversations/${chat.backendConversationId}/messages?limit=100`
+      );
+
+      if (backendMessagesResponse.ok) {
+        const backendMessages = await backendMessagesResponse.json();
+        uiMessages = convertBackendMessagesToUI(backendMessages);
+      } else {
+        // Backend fetch failed, use frontend DB
+        console.warn("Failed to fetch backend messages, using frontend DB");
+        const messagesFromDb = await getMessagesByChatId({ id });
+        uiMessages = convertToUIMessages(messagesFromDb);
+      }
+    } catch (error) {
+      // Error occurred, use frontend DB
+      console.error("Error fetching backend messages:", error);
+      const messagesFromDb = await getMessagesByChatId({ id });
+      uiMessages = convertToUIMessages(messagesFromDb);
+    }
+  } else {
+    // No backendConversationId (legacy chat), use frontend DB
+    const messagesFromDb = await getMessagesByChatId({ id });
+    uiMessages = convertToUIMessages(messagesFromDb);
+  }
 
   const cookieStore = await cookies();
   const chatModelFromCookie = cookieStore.get("chat-model");

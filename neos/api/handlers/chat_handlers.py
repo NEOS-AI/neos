@@ -86,7 +86,7 @@ async def get_conversation_with_messages(
     limit: int = 100,
     before_sequence: Optional[int] = None
 ):
-    """대화와 메시지 함께 조회"""
+    """대화와 메시지 함께 조회 (주어진 conversation_id에 해당하는 대화 및 메시지 목록 반환)"""
     try:
         conversation = await ChatService.get_conversation(conversation_id)
         if not conversation:
@@ -527,6 +527,7 @@ async def stream_message(
             usage_info = None
             cost_info = None
             latency_ms = None
+            artifact_info = None  # artifact 정보 추적
 
             async for chunk in chat_llm_service.generate_response_stream_with_tools(
                 conversation_id=conversation_id,
@@ -574,7 +575,12 @@ async def stream_message(
                             event_type = tool_event.get("type")
 
                             if event_type == "artifact_meta":
-                                # 아티팩트 메타데이터 전송
+                                # 아티팩트 메타데이터 전송 및 추적
+                                artifact_info = {
+                                    "id": tool_event.get("artifact_id"),
+                                    "title": tool_event.get("artifact_title"),
+                                    "kind": tool_event.get("artifact_kind")
+                                }
                                 stream_chunk = ChatStreamChunk(
                                     type="artifact_meta",
                                     conversation_id=conversation_id,
@@ -604,8 +610,10 @@ async def stream_message(
 
                             elif event_type == "tool_result":
                                 # Tool 실행 결과를 채팅 메시지에 추가
-                                result_content = tool_event.get("content", "")
-                                full_content += f"\n\n{result_content}"
+                                # (단, artifact tool인 경우는 제외 - artifact 블록으로 표시됨)
+                                if not artifact_info:
+                                    result_content = tool_event.get("content", "")
+                                    full_content += f"\n\n{result_content}"
 
                             elif event_type == "error":
                                 # Tool 실행 에러
@@ -632,7 +640,16 @@ async def stream_message(
                     yield f"data: {json.dumps(error_chunk.dict())}\n\n"
                     return
 
-            # 어시스턴트 메시지 저장
+            # 어시스턴트 메시지 저장 (artifact 정보 포함)
+            message_metadata = {
+                "cost_usd": float(cost_info["total_cost"]) if cost_info else 0.0,
+                "latency_ms": latency_ms
+            }
+
+            # artifact 정보가 있으면 metadata에 포함
+            if artifact_info:
+                message_metadata["artifact"] = artifact_info
+
             assistant_message = await ChatService.add_message(
                 conversation_id=conversation_id,
                 role="assistant",
@@ -642,10 +659,7 @@ async def stream_message(
                 total_tokens=usage_info["total_tokens"] if usage_info else 0,
                 prompt_tokens=usage_info["prompt_tokens"] if usage_info else 0,
                 completion_tokens=usage_info["completion_tokens"] if usage_info else 0,
-                metadata={
-                    "cost_usd": float(cost_info["total_cost"]) if cost_info else 0.0,
-                    "latency_ms": latency_ms
-                }
+                metadata=message_metadata
             )
 
             # 메시지 저장 후 비용 기록 (FK 제약 위반 방지)

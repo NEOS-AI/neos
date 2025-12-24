@@ -258,6 +258,26 @@ export async function getChatById({ id }: { id: string }) {
   }
 }
 
+export async function updateChatBackendConversationId({
+  chatId,
+  backendConversationId,
+}: {
+  chatId: string;
+  backendConversationId: string;
+}) {
+  try {
+    return await db
+      .update(chat)
+      .set({ backendConversationId })
+      .where(eq(chat.id, chatId));
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to update chat backend conversation ID"
+    );
+  }
+}
+
 export async function saveMessages({ messages }: { messages: DBMessage[] }) {
   try {
     return await db.insert(message).values(messages);

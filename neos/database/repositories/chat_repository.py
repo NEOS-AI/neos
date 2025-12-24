@@ -29,6 +29,7 @@ class Conversation:
     is_pinned: bool
     is_shared: bool
     share_token: Optional[str]
+    visibility: str  # 추가: 'public' 또는 'private'
     message_count: int
     total_tokens_used: int
     total_cost: float
@@ -185,6 +186,7 @@ class ChatRepository:
             is_pinned,
             is_shared,
             share_token,
+            visibility,
             message_count,
             total_tokens_used,
             total_cost,
@@ -218,15 +220,16 @@ class ChatRepository:
             is_pinned=row[11],
             is_shared=row[12],
             share_token=row[13],
-            message_count=row[14],
-            total_tokens_used=row[15],
-            total_cost=float(row[16]) if row[16] is not None else 0.0,
-            last_message_at=row[17],
-            last_accessed_at=row[18],
-            created_at=row[19],
-            updated_at=row[20],
-            tags=row[21] if row[21] else [],
-            metadata=row[22] if row[22] else {}
+            visibility=row[14] if row[14] else "private",
+            message_count=row[15],
+            total_tokens_used=row[16],
+            total_cost=float(row[17]) if row[17] is not None else 0.0,
+            last_message_at=row[18],
+            last_accessed_at=row[19],
+            created_at=row[20],
+            updated_at=row[21],
+            tags=row[22] if row[22] else [],
+            metadata=row[23] if row[23] else {}
         )
 
     @staticmethod

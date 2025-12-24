@@ -64,6 +64,13 @@
       "when": 1734710000000,
       "tag": "0008_rename_text_to_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1766581113687,
+      "tag": "0009_military_exodus",
+      "breakpoints": true
     }
   ]
 }

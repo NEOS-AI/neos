@@ -1,10 +1,8 @@
 """Chat service layer - handles chat business logic"""
 
 from typing import Dict, Any, List, Optional
-from datetime import datetime
 import uuid
 import json
-import asyncpg
 
 from neos.database.connection import db_manager
 from neos.database.repositories.chat_repository import ChatRepository
@@ -76,6 +74,7 @@ class ChatService:
             "is_pinned": conversation.is_pinned,
             "is_shared": conversation.is_shared,
             "share_token": conversation.share_token,
+            "visibility": conversation.visibility,
             "message_count": conversation.message_count,
             "total_tokens_used": conversation.total_tokens_used,
             "total_cost": conversation.total_cost,

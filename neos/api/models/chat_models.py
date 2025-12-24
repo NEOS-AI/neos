@@ -53,6 +53,7 @@ class CreateConversationRequest(BaseModel):
     max_tokens: Optional[int] = Field(None, gt=0, description="최대 토큰 수")
     mode: ChatMode = Field(default=ChatMode.STANDARD, description="대화 모드 (standard, rag, similarity, deep_research)")
     template_id: Optional[str] = Field(None, description="템플릿 ID (선택)")
+    visibility: str = Field(default="private", description="공개 여부 (public, private)")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="추가 메타데이터")
 
 
