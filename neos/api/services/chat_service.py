@@ -1,10 +1,8 @@
 """Chat service layer - handles chat business logic"""
 
 from typing import Dict, Any, List, Optional
-from datetime import datetime
 import uuid
 import json
-import asyncpg
 
 from neos.database.connection import db_manager
 from neos.database.repositories.chat_repository import ChatRepository

@@ -199,10 +199,12 @@ class AuthService:
         # Refresh Token 검증
         payload = verify_token(refresh_token, token_type="refresh")
         if not payload:
+            print("Invalid refresh token payload")
             return False, "유효하지 않은 Refresh Token입니다.", None
 
         user_id = payload.get("user_id")
         if not user_id:
+            print("No user_id in refresh token payload")
             return False, "유효하지 않은 Refresh Token입니다.", None
 
         # DB에서 Refresh Token 확인
@@ -224,6 +226,7 @@ class AuthService:
         db_token = result.scalar_one_or_none()
 
         if not db_token:
+            print("No valid refresh token found in DB")
             return False, "유효하지 않거나 만료된 Refresh Token입니다.", None
 
         # 사용자 확인 (이미 eager loading으로 로드됨)
@@ -268,7 +271,8 @@ class AuthService:
             "access_token": new_access_token,
             "refresh_token": new_refresh_token,
             "token_type": "bearer",
-            "expires_in": settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
+            "expires_in": settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "refresh_token_expires_in": settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
         }
 
     async def logout_user(

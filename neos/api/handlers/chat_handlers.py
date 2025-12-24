@@ -86,7 +86,7 @@ async def get_conversation_with_messages(
     limit: int = 100,
     before_sequence: Optional[int] = None
 ):
-    """대화와 메시지 함께 조회"""
+    """대화와 메시지 함께 조회 (주어진 conversation_id에 해당하는 대화 및 메시지 목록 반환)"""
     try:
         conversation = await ChatService.get_conversation(conversation_id)
         if not conversation:
