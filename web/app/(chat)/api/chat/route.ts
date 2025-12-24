@@ -10,6 +10,7 @@ import {
   getChatById,
   getMessageCountByUserId,
   saveChat,
+  updateChatBackendConversationId,
   updateChatTitleById,
 } from "@/lib/db/queries";
 import { ChatSDKError } from "@/lib/errors";
@@ -74,9 +75,10 @@ export async function POST(request: Request) {
       if (chat.userId !== session.user.id) {
         return new ChatSDKError("forbidden:chat").toResponse();
       }
-      conversationId = id;
+      // Use existing backendConversationId or fallback to chat id
+      conversationId = chat.backendConversationId || id;
     } else {
-      // Save chat immediately with placeholder title
+      // 1. Save chat immediately with placeholder title
       await saveChat({
         id,
         userId: session.user.id,
@@ -84,7 +86,7 @@ export async function POST(request: Request) {
         visibility: selectedVisibilityType,
       });
 
-      // Create conversation in backend
+      // 2. Create conversation in backend (synchronous wait)
       try {
         const createConversationResponse = await callBackendAPI(
           "/api/v1/chat/conversations",
@@ -96,6 +98,7 @@ export async function POST(request: Request) {
               model_name: mapToBackendModelName(selectedChatModel),
               mode: "standard",
               temperature: 0.7,
+              visibility: selectedVisibilityType, // ⭐ Add visibility field
             }),
           }
         );
@@ -105,9 +108,19 @@ export async function POST(request: Request) {
         }
 
         const conversationData = await createConversationResponse.json();
-        conversationId = conversationData.conversation_id || id;
+        conversationId = conversationData.conversation_id;
 
-        // Start title generation in parallel (non-blocking)
+        if (!conversationId) {
+          throw new Error("Backend did not return conversation_id");
+        }
+
+        // 3. Save backendConversationId to Chat table (synchronous wait)
+        await updateChatBackendConversationId({
+          chatId: id,
+          backendConversationId: conversationId,
+        });
+
+        // 4. Start title generation in parallel (non-blocking)
         if (conversationId) {
           titlePromise = generateTitleFromUserMessage({
             conversationId,
@@ -115,9 +128,10 @@ export async function POST(request: Request) {
           });
         }
       } catch (error) {
+        // Rollback: Delete chat if backend conversation creation fails
+        await deleteChatById({ id });
         console.error("Failed to create backend conversation:", error);
-        // Use the local chat ID as fallback
-        conversationId = id;
+        return new ChatSDKError("offline:chat", "Failed to create conversation in backend").toResponse();
       }
     }
 
