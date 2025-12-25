@@ -877,8 +877,10 @@ Write each gap on one line without numbering.""",
     async def _summarize_results_batch(self, queries: List[str], results: List[List[Dict[str, Any]]], session_id: str, user_id: str, detected_language: str = "ko") -> List[str]:
         """검색 결과 배치 요약"""
         async def summarize_single(query: str, search_results: List[Dict[str, Any]]) -> str:
+            # Phase 1 개선: 검색 결과가 없을 때 빈 문자열 반환
             if not search_results:
-                return f"'{query}'에 대한 검색 결과 없음"
+                print(f"[DEBUG] No results for query '{query}', returning empty string")
+                return ""
 
             try:
                 # Deep research 요약은 더 상세하게
@@ -921,7 +923,8 @@ Write each gap on one line without numbering.""",
 
             except Exception as e:
                 print(f"[ERROR] Failed to summarize for '{query}': {e}")
-                return f"'{query}' 요약 실패"
+                # Phase 1 개선: 에러 발생 시 빈 문자열 반환
+                return ""
 
         summary_tasks = [summarize_single(q, r) for q, r in zip(queries, results)]
 
@@ -931,18 +934,24 @@ Write each gap on one line without numbering.""",
                 timeout=120
             )
 
+            # Phase 1 개선: Exception 및 빈 문자열 필터링
             processed = []
             for i, s in enumerate(summaries):
                 if isinstance(s, Exception):
-                    processed.append(f"요약 실패: {queries[i]}")
-                else:
+                    print(f"[ERROR] Summary task {i+1} failed: {s}")
+                    # 에러 메시지 대신 건너뜀
+                    continue
+                elif s and s.strip():  # 빈 문자열이 아닌 경우만 추가
                     processed.append(s)
+                else:
+                    print(f"[DEBUG] Skipping empty summary for query '{queries[i]}'")
 
             return processed
 
         except asyncio.TimeoutError:
             print("[ERROR] Batch summarization timed out")
-            return [f"'{q}' 요약 시간 초과" for q in queries]
+            # Phase 1 개선: 타임아웃 시에도 빈 리스트 반환
+            return []
 
 
     async def _save_checkpoint(self, phase: str, data: Dict[str, Any]) -> None:

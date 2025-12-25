@@ -4,6 +4,7 @@ from sqlalchemy import text, event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import Pool
+from contextlib import asynccontextmanager
 
 from neos.config.settings import settings
 
@@ -42,8 +43,11 @@ class DatabaseManager:
                 "server_settings": {
                     "application_name": "neos_multi_agent",
                     "jit": "off"  # JIT 컴파일 비활성화로 짧은 쿼리 성능 향상
-                }
-            }
+                },
+                "timeout": 10  # 연결 타임아웃 설정
+            },
+            # 이벤트 루프 에러 방지 - graceful degradation
+            pool_reset_on_return="rollback"  # 연결 반환 시 롤백만 수행
         )
 
         # 연결 풀 이벤트 리스너 추가
@@ -295,6 +299,15 @@ async def get_session():
     finally:
         await session.close()
 
+
+@asynccontextmanager
+async def get_session_ctx():
+    """세션 생성 컨텍스트 매니저 헬퍼 함수"""
+    session = await db_manager.get_session()
+    try:
+        yield session
+    finally:
+        await session.close()
 
 # Alias for compatibility with FastAPI dependency injection
 get_db = get_session

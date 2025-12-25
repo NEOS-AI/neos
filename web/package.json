@@ -1,6 +1,6 @@
 {
   "name": "neos-web",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "private": true,
   "scripts": {
     "dev": "next dev --turbo",
@@ -64,6 +64,7 @@
     "geist": "^1.5.1",
     "katex": "^0.16.27",
     "lucide-react": "^0.446.0",
+    "markdown-it": "^14.1.0",
     "motion": "^12.23.26",
     "nanoid": "^5.1.6",
     "next": "16.0.10",

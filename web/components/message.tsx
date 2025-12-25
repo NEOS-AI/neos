@@ -9,6 +9,7 @@ import { ArtifactBlock } from "./artifact-block";
 import { useDataStream } from "./data-stream-provider";
 import { DocumentToolResult } from "./document";
 import { DocumentPreview } from "./document-preview";
+import { ErrorBoundary } from "./error-boundary";
 import { MessageContent } from "./elements/message";
 import { Response } from "./elements/response";
 import {
@@ -102,6 +103,33 @@ const PurePreviewMessage = ({
               ))}
             </div>
           )}
+
+          {/* Workflow Agents (rendered as Tools) */}
+          {message.role === "assistant" &&
+            message.metadata?.workflow_agents &&
+            message.metadata.workflow_agents.map((agent, index) => (
+              <Tool
+                defaultOpen={false}
+                key={`workflow-agent-${message.id}-${agent.node_name}-${index}`}
+              >
+                <ToolHeader
+                  state={agent.status as "input-available" | "output-available"}
+                  type={`workflow-${agent.agent_name}` as any}
+                />
+                <ToolContent>
+                  {agent.status === "input-available" && (
+                    <div className="text-sm text-muted-foreground">
+                      Processing: {agent.agent_name}
+                    </div>
+                  )}
+                  {agent.status === "output-available" && (
+                    <div className="text-sm text-green-600">
+                      ✓ {agent.agent_name} completed
+                    </div>
+                  )}
+                </ToolContent>
+              </Tool>
+            ))}
 
           {message.parts?.map((part, index) => {
             const { type } = part;
@@ -294,7 +322,7 @@ const PurePreviewMessage = ({
   );
 };
 
-export const PreviewMessage = memo(
+const MemoizedPreviewMessage = memo(
   PurePreviewMessage,
   (prevProps, nextProps) => {
     if (prevProps.isLoading !== nextProps.isLoading) {
@@ -318,6 +346,13 @@ export const PreviewMessage = memo(
 
     return false;
   }
+);
+
+// Wrap with ErrorBoundary to prevent page crashes
+export const PreviewMessage = (props: Parameters<typeof MemoizedPreviewMessage>[0]) => (
+  <ErrorBoundary>
+    <MemoizedPreviewMessage {...props} />
+  </ErrorBoundary>
 );
 
 export const ThinkingMessage = () => {

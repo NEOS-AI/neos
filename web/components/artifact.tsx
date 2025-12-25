@@ -16,7 +16,7 @@ import { codeArtifact } from "@/artifacts/code/client";
 import { imageArtifact } from "@/artifacts/image/client";
 import { sheetArtifact } from "@/artifacts/sheet/client";
 import { textArtifact } from "@/artifacts/text/client";
-import { useArtifact } from "@/hooks/use-artifact";
+import { useArtifact, useArtifacts } from "@/hooks/use-artifact";
 import type { Document, Vote } from "@/lib/db/schema";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { fetcher } from "@/lib/utils";
@@ -28,6 +28,7 @@ import { Toolbar } from "./toolbar";
 import { useSidebar } from "./ui/sidebar";
 import { VersionFooter } from "./version-footer";
 import type { VisibilityType } from "./visibility-selector";
+import { cn } from "@/lib/utils";
 
 export const artifactDefinitions = [
   textArtifact,
@@ -85,7 +86,11 @@ function PureArtifact({
   selectedVisibilityType: VisibilityType;
   selectedModelId: string;
 }) {
+  // Use the original useArtifact hook for backward compatibility with metadata
   const { artifact, setArtifact, metadata, setMetadata } = useArtifact();
+
+  // Also get artifacts list for tabs
+  const { artifacts, activeArtifactIndex, selectArtifact } = useArtifacts();
 
   const {
     data: documents,
@@ -109,6 +114,11 @@ function PureArtifact({
       const mostRecentDocument = documents.at(-1);
 
       if (mostRecentDocument) {
+        console.log("[Artifact] Updating content from documents", {
+          documentContentLength: mostRecentDocument.content?.length,
+          currentArtifactContentLength: artifact.content?.length,
+          documentId: artifact.documentId,
+        });
         setDocument(mostRecentDocument);
         setCurrentVersionIndex(documents.length - 1);
         setArtifact((currentArtifact) => ({
@@ -117,7 +127,7 @@ function PureArtifact({
         }));
       }
     }
-  }, [documents, setArtifact]);
+  }, [documents, setArtifact, artifact.content, artifact.documentId]);
 
   useEffect(() => {
     mutateDocuments();
@@ -418,12 +428,36 @@ function PureArtifact({
                   }
             }
           >
-            <div className="flex flex-row items-start justify-between p-2">
-              <div className="flex flex-row items-start gap-4">
-                <ArtifactCloseButton />
+            <div className="flex flex-col">
+              {/* Artifact Tabs */}
+              {artifacts.length > 1 && (
+                <div className="flex flex-row gap-1 overflow-x-auto border-b px-2 pt-2">
+                  {artifacts.map((art, index) => (
+                    <button
+                      key={`${art.documentId}-${index}`}
+                      onClick={() => selectArtifact(index)}
+                      className={cn(
+                        "flex items-center gap-2 rounded-t-md px-3 py-1.5 text-sm transition-colors",
+                        index === activeArtifactIndex
+                          ? "bg-background font-medium text-foreground"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                      )}
+                    >
+                      <span className="truncate max-w-[120px]">{art.title || "Untitled"}</span>
+                      {art.status === "streaming" && (
+                        <div className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-                <div className="flex flex-col">
-                  <div className="font-medium">{artifact.title}</div>
+              <div className="flex flex-row items-start justify-between p-2">
+                <div className="flex flex-row items-start gap-4">
+                  <ArtifactCloseButton />
+
+                  <div className="flex flex-col">
+                    <div className="font-medium">{artifact.title}</div>
 
                   {isContentDirty ? (
                     <div className="text-muted-foreground text-sm">
@@ -457,19 +491,20 @@ function PureArtifact({
                 setMetadata={setMetadata}
               />
             </div>
+            </div>
 
             <div className="h-full max-w-full! items-center overflow-y-scroll bg-background dark:bg-muted">
               <artifactDefinition.content
                 content={
-                  isCurrentVersion
-                    ? artifact.content
-                    : getDocumentContentById(currentVersionIndex)
+                  documents && documents.length > 0 && currentVersionIndex >= 0
+                    ? getDocumentContentById(currentVersionIndex)
+                    : artifact.content
                 }
                 currentVersionIndex={currentVersionIndex}
                 getDocumentContentById={getDocumentContentById}
                 isCurrentVersion={isCurrentVersion}
                 isInline={false}
-                isLoading={isDocumentsFetching && !artifact.content}
+                isLoading={isDocumentsFetching && !artifact.content && !documents}
                 metadata={metadata}
                 mode={mode}
                 onSaveContent={saveContent}

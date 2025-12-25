@@ -18,6 +18,15 @@ export const messageMetadataSchema = z.object({
       kind: z.custom<ArtifactKind>(),
     })
     .optional(),
+  workflow_agents: z
+    .array(
+      z.object({
+        agent_name: z.string(),
+        node_name: z.string(),
+        status: z.string(),
+      })
+    )
+    .optional(),
 });
 
 export type MessageMetadata = z.infer<typeof messageMetadataSchema>;

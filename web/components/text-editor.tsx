@@ -42,7 +42,22 @@ function PureEditor({
   const editorRef = useRef<EditorView | null>(null);
 
   useEffect(() => {
-    if (containerRef.current && !editorRef.current) {
+    console.log("[Editor] useEffect running", {
+      hasContainer: !!containerRef.current,
+      hasExistingEditor: !!editorRef.current,
+      contentLength: content?.length || 0,
+    });
+
+    if (containerRef.current) {
+      // Destroy existing editor if it exists
+      if (editorRef.current) {
+        console.log("[Editor] Destroying existing editor");
+        editorRef.current.destroy();
+        editorRef.current = null;
+      }
+
+      // Create new editor with current content
+      console.log("[Editor] Creating new editor with content length:", content?.length || 0);
       const state = EditorState.create({
         doc: buildDocumentFromContent(content),
         plugins: [
@@ -64,6 +79,7 @@ function PureEditor({
       editorRef.current = new EditorView(containerRef.current, {
         state,
       });
+      console.log("[Editor] Editor created successfully");
     }
 
     return () => {
@@ -72,7 +88,7 @@ function PureEditor({
         editorRef.current = null;
       }
     };
-    // NOTE: we only want to run this effect once
+    // Recreate editor when content changes significantly (e.g., when documents load)
     // eslint-disable-next-line
   }, [content]);
 

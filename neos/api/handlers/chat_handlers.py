@@ -5,6 +5,7 @@ from fastapi.responses import StreamingResponse
 from typing import Optional, AsyncGenerator, List
 import json
 import uuid
+import asyncio
 
 from neos.api.models.chat_models import (
     CreateConversationRequest,
@@ -35,9 +36,39 @@ from neos.database.connection import db_manager
 from neos.database.models import User
 from neos.api.dependencies.auth import get_current_user
 from neos.utils.logger import get_logger
+from neos.workflow.graph import multi_agent_workflow
+from neos.api.handlers.workflow_stream_handlers import WorkflowStreamCallback
+from neos.config.settings import settings as app_settings
 
 logger = get_logger(__name__)
 router = APIRouter()
+
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+def map_node_to_agent(node_name: str) -> str:
+    """
+    워크플로우 노드명을 사용자 친화적인 에이전트명으로 매핑
+
+    Args:
+        node_name: 워크플로우 노드 이름
+
+    Returns:
+        사용자 친화적인 에이전트 이름
+    """
+    node_to_agent = {
+        "query_classifier": "query_analysis",
+        "skill_tool_selector": "tool_selection",
+        "search_orchestrator": "knowledge_search",
+        "analysis_orchestrator": "data_analysis",
+        "generation_orchestrator": "content_generation",
+        "result_integrator": "result_integration",
+        "quality_validator": "quality_check",
+        "response_generator": "response_generation"
+    }
+    return node_to_agent.get(node_name, node_name)
 
 
 # ============================================================================
@@ -509,20 +540,140 @@ async def stream_message(
             # 메시지 ID 생성
             assistant_message_id = str(uuid.uuid4())
 
+            # ============================================================
+            # 워크플로우 실행 (활성화된 경우)
+            # ============================================================
+            workflow_result = None
+            workflow_agents = []  # 워크플로우 에이전트 추적 (메타데이터용)
+
+            if app_settings.ENABLE_WORKFLOW_IN_CHAT:
+                try:
+                    # 이벤트 큐 생성
+                    event_queue = asyncio.Queue(maxsize=100)
+
+                    # 워크플로우 콜백 생성
+                    workflow_callback = WorkflowStreamCallback(
+                        session_id=conversation_id,
+                        event_queue=event_queue,
+                        enable_db_logging=False,  # 채팅에서는 DB 로깅 비활성화
+                        user_id=current_user.user_id
+                    )
+
+                    # 워크플로우 비동기 실행 (채팅은 stateless이므로 checkpointer 비활성화)
+                    workflow_task = asyncio.create_task(
+                        multi_agent_workflow.execute_workflow(
+                            user_input={
+                                "user_id": current_user.user_id,
+                                "session_id": conversation_id,
+                                "query": request.content
+                            },
+                            event_handler=workflow_callback,
+                            use_checkpointer=False  # 채팅 API는 단일 요청이므로 state persistence 불필요
+                        )
+                    )
+
+                    # 이벤트 루프: 워크플로우 이벤트를 SSE로 전송
+                    while True:
+                        try:
+                            # 짧은 타임아웃으로 이벤트 대기
+                            event = await asyncio.wait_for(event_queue.get(), timeout=0.5)
+
+                            # 노드 시작 이벤트
+                            if event.event == "node_started":
+                                agent_name = map_node_to_agent(event.node_name)
+                                workflow_agents.append({
+                                    "agent_name": agent_name,
+                                    "node_name": event.node_name,
+                                    "status": "input-available"
+                                })
+
+                                stream_chunk = ChatStreamChunk(
+                                    type="workflow_node_start",
+                                    conversation_id=conversation_id,
+                                    node_name=event.node_name,
+                                    agent_name=agent_name,
+                                    progress_percent=event.progress_percent,
+                                    workflow_step=event.data.get("step"),
+                                    total_steps=event.data.get("total_steps")
+                                )
+                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+
+                            # 노드 완료 이벤트
+                            elif event.event == "node_completed":
+                                agent_name = map_node_to_agent(event.node_name)
+                                # 에이전트 상태 업데이트
+                                for agent in workflow_agents:
+                                    if agent["node_name"] == event.node_name:
+                                        agent["status"] = "output-available"
+
+                                stream_chunk = ChatStreamChunk(
+                                    type="workflow_node_complete",
+                                    conversation_id=conversation_id,
+                                    node_name=event.node_name,
+                                    agent_name=agent_name
+                                )
+                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+
+                            # 진행 상황 이벤트
+                            elif event.event == "agent_progress":
+                                stream_chunk = ChatStreamChunk(
+                                    type="workflow_progress",
+                                    conversation_id=conversation_id,
+                                    progress_percent=event.progress_percent,
+                                    metadata={"message": event.content}
+                                )
+                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+
+                            # 워크플로우 완료 이벤트
+                            elif event.event == "completed":
+                                # 워크플로우 결과 가져오기
+                                workflow_result = await workflow_task
+                                break
+
+                        except asyncio.TimeoutError:
+                            # 타임아웃 시 워크플로우 완료 여부 확인
+                            if workflow_task.done():
+                                workflow_result = await workflow_task
+                                break
+
+                except Exception as e:
+                    import traceback
+                    error_details = traceback.format_exc()
+                    logger.error(f"Workflow execution failed: {str(e)}")
+                    logger.error(f"Traceback:\n{error_details}")
+                    logger.warning("Falling back to direct LLM.")
+                    # 워크플로우 실패 시에도 계속 진행 (폴백)
+                    workflow_result = None
+
+            # ============================================================
             # 아티팩트 프롬프트 및 도구 준비
+            # ============================================================
             from neos.tools.artifact_tools import get_artifact_tools
             from neos.tools.artifact_tool_handler import execute_artifact_tool
-            from neos.config.settings import settings as app_settings
 
-            # 시스템 프롬프트에 아티팩트 프롬프트 추가 (활성화된 경우)
+            # 시스템 프롬프트 구성
             system_prompt = conversation.get("system_prompt", "")
             tools = []
+
+            # 워크플로우 결과를 시스템 프롬프트에 추가
+            if workflow_result and workflow_result.get("response"):
+                workflow_context = f"""
+# Workflow Results
+The multi-agent workflow has gathered the following information to help answer the user's question:
+
+{workflow_result['response'][:5000]}
+
+Use this information to provide a comprehensive and accurate answer. If needed, you can create artifacts using the available tools.
+"""
+                system_prompt = f"{system_prompt}\n\n{workflow_context}"
 
             if app_settings.ARTIFACTS_ENABLED:
                 system_prompt = f"{system_prompt}\n\n{app_settings.ARTIFACTS_SYSTEM_PROMPT}"
                 tools = get_artifact_tools()
 
+            # ============================================================
             # 실제 LLM 스트리밍 (tool calling 지원)
+            # ============================================================
             full_content = ""
             usage_info = None
             cost_info = None
@@ -649,6 +800,10 @@ async def stream_message(
             # artifact 정보가 있으면 metadata에 포함
             if artifact_info:
                 message_metadata["artifact"] = artifact_info
+
+            # 워크플로우 에이전트 정보가 있으면 metadata에 포함
+            if workflow_agents:
+                message_metadata["workflow_agents"] = workflow_agents
 
             assistant_message = await ChatService.add_message(
                 conversation_id=conversation_id,

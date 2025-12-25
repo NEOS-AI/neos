@@ -64,10 +64,16 @@ export const textArtifact = new Artifact<"text", TextArtifactMetadata>({
     isLoading,
     metadata,
   }) => {
-    if (isLoading) {
+    // Show loading skeleton when:
+    // 1. Documents are being fetched (isLoading = true)
+    // 2. OR streaming has just started but no content yet
+    // 3. OR content is empty (waiting for data)
+    console.log(`isLoading: ${isLoading}, status: ${status}, content length: ${content?.length}, content: ${content}`);
+    if (isLoading || (status === "streaming" && !content) || !content) {
       return <DocumentSkeleton artifactKind="text" />;
     }
 
+    console.log(`mode: ${mode}`);
     if (mode === "diff") {
       const oldContent = getDocumentContentById(currentVersionIndex - 1);
       const newContent = getDocumentContentById(currentVersionIndex);

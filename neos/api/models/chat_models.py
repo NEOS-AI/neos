@@ -50,7 +50,7 @@ class CreateConversationRequest(BaseModel):
     model_name: str = Field(default="claude-opus-4-5-20251101", description="사용할 모델")
     system_prompt: Optional[str] = Field(None, description="시스템 프롬프트")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Temperature 설정")
-    max_tokens: Optional[int] = Field(None, gt=0, description="최대 토큰 수")
+    max_tokens: Optional[int] = Field(default=200000, gt=0, description="최대 토큰 수")
     mode: ChatMode = Field(default=ChatMode.STANDARD, description="대화 모드 (standard, rag, similarity, deep_research)")
     template_id: Optional[str] = Field(None, description="템플릿 ID (선택)")
     visibility: str = Field(default="private", description="공개 여부 (public, private)")
@@ -232,7 +232,9 @@ class ConversationListResponse(BaseModel):
 
 class ChatStreamChunk(BaseModel):
     """스트리밍 응답 청크"""
-    type: str  # 'start', 'content', 'tool_call', 'complete', 'error', 'artifact_meta', 'artifact_delta', 'artifact_finish'
+    type: str  # 'start', 'content', 'tool_call', 'complete', 'error',
+               # 'artifact_meta', 'artifact_delta', 'artifact_finish',
+               # 'workflow_node_start', 'workflow_node_complete', 'workflow_progress'
     content: Optional[str] = None
     message_id: Optional[str] = None
     conversation_id: Optional[str] = None
@@ -244,6 +246,13 @@ class ChatStreamChunk(BaseModel):
     artifact_id: Optional[str] = None
     artifact_title: Optional[str] = None
     artifact_kind: Optional[str] = None  # 'text', 'code', 'sheet'
+
+    # 워크플로우 관련 필드
+    node_name: Optional[str] = None  # 워크플로우 노드 이름
+    agent_name: Optional[str] = None  # 에이전트 이름 (사용자 친화적)
+    progress_percent: Optional[int] = None  # 진행률 (0-100)
+    workflow_step: Optional[int] = None  # 현재 스텝
+    total_steps: Optional[int] = None  # 전체 스텝 수
 
 
 class CreateMessageResponse(BaseModel):

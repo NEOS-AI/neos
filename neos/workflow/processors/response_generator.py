@@ -3,7 +3,11 @@
 from typing import Dict, Any, List
 from datetime import datetime
 from urllib.parse import urlparse
+from langchain_core.messages import HumanMessage
 
+from neos.utils.llm_factory import create_llm
+from neos.utils.llm_wrapper import create_tracked_llm, extract_text_from_response
+from neos.config.settings import settings
 from ..state import AgentState
 
 
@@ -43,9 +47,29 @@ class ResponseGenerator:
             if generation_summary:
                 response_parts.append(generation_summary)
 
-        # 최종 응답 구성 (언어 정보 전달)
+        # Phase 3: 조건부 LLM 기반 최종 정제
         detected_language = state.get("detected_language", "ko")
-        final_response = self._construct_final_response(response_parts, detected_language)
+
+        # 부분 성공 케이스이거나 에러가 있는 경우 LLM 정제 적용
+        # 안전한 None 처리: search_metadata가 None일 수 있음 (타임아웃 등)
+        search_metadata = state.get("search_metadata") or {}
+        should_refine = (
+            search_metadata.get("partial_success", False) or  # 부분 성공
+            len(state.get("errors", [])) > 0  # 에러 발생
+        )
+
+        if should_refine and response_parts and settings.ENABLE_RESPONSE_REFINEMENT:
+            print("[DEBUG] Applying LLM-based response refinement (partial success or errors detected)")
+            final_response = await self._refine_response_with_llm(
+                query=state["original_query"],
+                response_parts=response_parts,
+                language=detected_language,
+                session_id=state.get("session_id", ""),
+                user_id=state.get("user_id", "")
+            )
+        else:
+            # LLM 정제 없이 기본 구성
+            final_response = self._construct_final_response(response_parts, detected_language)
 
         # 실행 시간 계산
         execution_time = int((datetime.utcnow() - state["execution_start"]).total_seconds() * 1000)
@@ -55,7 +79,9 @@ class ResponseGenerator:
         state["execution_time_ms"] = execution_time
         state["response_metadata"] = self._create_response_metadata(state)
 
+        print("[DEBUG] generation result: ", state["generation_results"])
         print(f"[DEBUG] Response generation completed. Length: {len(final_response)} characters")
+        print(final_response)
 
         state["execution_steps"].append({
             "step": "response_generation",
@@ -229,6 +255,140 @@ class ResponseGenerator:
         from ..utils.content_processor import ContentProcessor
         processor = ContentProcessor()
         return processor.format_citation(url)
+
+    async def _refine_response_with_llm(
+        self,
+        query: str,
+        response_parts: List[str],
+        language: str,
+        session_id: str = "",
+        user_id: str = ""
+    ) -> str:
+        """Phase 3: LLM으로 응답 정제 - 에러 메시지 제거 및 일관성 개선
+
+        부분 성공 케이스에서 호출되어 다음을 수행:
+        1. 에러 메시지 패턴 제거
+        2. 중복 정보 정리
+        3. 일관성 있는 구조로 재구성
+        4. 읽기 쉽게 개선
+
+        Args:
+            query: 사용자 쿼리
+            response_parts: 응답 파트 리스트
+            language: 응답 언어
+            session_id: 세션 ID
+            user_id: 사용자 ID
+
+        Returns:
+            정제된 최종 응답
+        """
+        combined = "\n\n".join(response_parts)
+
+        prompt = self._get_refinement_prompt(query, combined, language)
+
+        # LLM 호출
+        base_llm = create_llm(temperature=0.3, max_tokens=4000)
+
+        llm = create_tracked_llm(
+            llm=base_llm,
+            session_id=session_id,
+            user_id=user_id,
+            workflow_step="response_refinement",
+            agent_name="response_generator",
+            tags=["response_refinement", f"language:{language}"],
+            custom_metadata={
+                "query": query,
+                "purpose": "refine_final_response"
+            }
+        )
+
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        refined = extract_text_from_response(response).strip()
+
+        print(f"[DEBUG] Response refined by LLM. Original length: {len(combined)}, Refined length: {len(refined)}")
+        return refined
+
+    def _get_refinement_prompt(self, query: str, combined_response: str, language: str) -> str:
+        """응답 정제 프롬프트 생성"""
+        prompts = {
+            "ko": f"""다음은 사용자 질문에 대한 검색 결과를 기반으로 생성된 응답입니다.
+
+사용자 질문: {query}
+
+생성된 응답:
+{combined_response}
+
+위 응답을 다음 기준에 따라 정제해주세요:
+
+1. **에러 메시지 제거**: "검색 결과 없음", "요약 실패", "No results found" 등의 모든 에러 메시지 제거
+2. **중복 제거**: 반복되는 정보는 한 번만 언급
+3. **일관성 개선**: 논리적 흐름으로 재구성
+4. **가독성 향상**: 마크다운 형식으로 깔끔하게 정리
+5. **완전성 유지**: 유용한 정보는 모두 보존
+
+**중요**: 에러 메시지나 기술적 오류 내용은 절대 포함하지 마세요. 실제 유용한 정보만 남겨주세요.
+
+정제된 응답:""",
+
+            "en": f"""Here is a response generated based on search results for the user's question.
+
+User Question: {query}
+
+Generated Response:
+{combined_response}
+
+Please refine the response according to these criteria:
+
+1. **Remove Error Messages**: Remove all error messages like "No results found", "Failed to", etc.
+2. **Remove Duplicates**: Mention repeated information only once
+3. **Improve Consistency**: Restructure with logical flow
+4. **Enhance Readability**: Format cleanly in markdown
+5. **Maintain Completeness**: Preserve all useful information
+
+**Important**: Never include error messages or technical errors. Keep only actually useful information.
+
+Refined Response:""",
+
+            "ja": f"""以下は、ユーザーの質問に対する検索結果に基づいて生成された回答です。
+
+ユーザーの質問: {query}
+
+生成された回答:
+{combined_response}
+
+以下の基準に従って回答を精製してください:
+
+1. **エラーメッセージの削除**: 「結果が見つかりません」「失敗しました」などのすべてのエラーメッセージを削除
+2. **重複の削除**: 繰り返される情報は一度だけ言及
+3. **一貫性の改善**: 論理的な流れで再構成
+4. **可読性の向上**: マークダウン形式できれいに整理
+5. **完全性の維持**: 有用な情報はすべて保持
+
+**重要**: エラーメッセージや技術的エラーは絶対に含めないでください。実際に有用な情報のみを残してください。
+
+精製された回答:""",
+
+            "zh": f"""以下是根据用户问题的搜索结果生成的回答。
+
+用户问题: {query}
+
+生成的回答:
+{combined_response}
+
+请根据以下标准精炼回答:
+
+1. **删除错误消息**: 删除所有"未找到结果"、"失败"等错误消息
+2. **删除重复**: 重复的信息只提及一次
+3. **改善一致性**: 以逻辑流程重组
+4. **提高可读性**: 以markdown格式整洁地整理
+5. **保持完整性**: 保留所有有用信息
+
+**重要**: 绝不要包含错误消息或技术错误。只保留真正有用的信息。
+
+精炼后的回答:"""
+        }
+
+        return prompts.get(language, prompts["en"])
 
     def get_response_stats(self, state: AgentState) -> Dict[str, Any]:
         """응답 생성 통계"""

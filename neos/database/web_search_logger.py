@@ -72,8 +72,20 @@ class WebSearchLogger:
         logger.info("[WebSearchLogger] Initialized")
 
     async def _load_engine_cache(self) -> None:
-        """검색 엔진 캐시 로드"""
+        """검색 엔진 캐시 로드
+
+        Thread-safe: 다른 이벤트 루프에서 호출될 경우 안전하게 건너뜀
+        """
         try:
+            # 이벤트 루프 충돌 체크 - thread pool에서 호출 시 건너뜀
+            import asyncio
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                # 이벤트 루프가 없는 경우 - 건너뜀
+                logger.debug("[WebSearchLogger] No running event loop, skipping engine cache load")
+                return
+
             async with await db_manager.get_session() as session:
                 # get all active search engines
                 result = await session.execute(
@@ -83,8 +95,12 @@ class WebSearchLogger:
                 engines = result.all()
                 self.engine_cache = {name: id for id, name in engines}
                 logger.info(f"[WebSearchLogger] Loaded {len(self.engine_cache)} engines to cache")
+        except RuntimeError as e:
+            # 이벤트 루프 관련 에러 - thread pool에서 호출되었을 가능성
+            logger.debug(f"[WebSearchLogger] Skipping engine cache load due to event loop issue: {e}")
         except Exception as e:
-            logger.error(f"[WebSearchLogger] Failed to load engine cache: {e}")
+            # 기타 에러 - 로그만 남기고 계속 진행
+            logger.warning(f"[WebSearchLogger] Failed to load engine cache: {e}")
 
     async def _get_or_create_engine(
         self,

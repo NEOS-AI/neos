@@ -59,7 +59,11 @@ class AgentState(TypedDict):
     search_results: Annotated[List[SearchResult], operator.add]
     analysis_results: Annotated[List[AnalysisResult], operator.add]
     generation_results: Annotated[List[GenerationResult], operator.add]
-    
+
+    # Phase 2: 검색 결과 종합 (LLM 기반)
+    search_synthesis: Optional[str]  # LLM이 생성한 검색 결과 종합 요약
+    search_metadata: Optional[Dict[str, Any]]  # 검색 메타데이터 (성공/실패 정보 등)
+
     # 통합 및 검증
     integrated_results: Optional[Dict[str, Any]]
     quality_score: Optional[float]

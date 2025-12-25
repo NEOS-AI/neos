@@ -146,6 +146,9 @@ importers:
       lucide-react:
         specifier: ^0.446.0
         version: 0.446.0(react@19.0.1)
+      markdown-it:
+        specifier: ^14.1.0
+        version: 14.1.0
       motion:
         specifier: ^12.23.26
         version: 12.23.26(react-dom@19.0.1(react@19.0.1))(react@19.0.1)

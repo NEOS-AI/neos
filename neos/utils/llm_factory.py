@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict
 from abc import ABC, abstractmethod
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
@@ -67,7 +67,10 @@ class AnthropicProvider(LLMProvider):
         default_params.update(kwargs)
 
         # Thinking block 제어
-        if settings.THINKING_BLOCKS_ENABLED or settings.MAX_THINKING_LENGTH > 0:
+        # 추가 최적화: disable_thinking 파라미터로 조건부 비활성화 지원
+        disable_thinking = default_params.pop("disable_thinking", False)
+
+        if (settings.THINKING_BLOCKS_ENABLED or settings.MAX_THINKING_LENGTH > 0) and not disable_thinking:
             if settings.MAX_THINKING_LENGTH < 1024:
                 logger.warning("MAX_THINKING_LENGTH is set very low; increasing to 1024 tokens.")
                 settings.MAX_THINKING_LENGTH = 1024
@@ -122,54 +125,98 @@ class GeminiProvider(LLMProvider):
 
 class LLMFactory:
     """LLM Factory 클래스 - Dependency Injection을 위한 팩토리"""
-    
+
     _providers = {
         "openai": OpenAIProvider,
         "anthropic": AnthropicProvider,
         "gemini": GeminiProvider
     }
-    
+
+    # LLM 인스턴스 캐시 (이벤트 루프 충돌 방지)
+    _llm_cache: Dict[str, BaseLanguageModel] = {}
+
+    @classmethod
+    def _get_cache_key(
+        cls,
+        provider: str,
+        model: str,
+        temperature: float,
+        **kwargs
+    ) -> str:
+        """캐시 키 생성"""
+        # disable_thinking 같은 파라미터는 캐시 키에 포함
+        disable_thinking = kwargs.get("disable_thinking", False)
+        max_tokens = kwargs.get("max_tokens", 0)
+        return f"{provider}:{model}:{temperature}:{disable_thinking}:{max_tokens}"
+
     @classmethod
     def create_llm(
-        self, 
-        provider: Optional[str] = None, 
+        cls,
+        provider: Optional[str] = None,
         model: Optional[str] = None,
         temperature: Optional[float] = None,
+        use_cache: bool = True,
         **kwargs
     ) -> BaseLanguageModel:
         """
-        설정된 provider에 따라 LLM 인스턴스 생성
-        
+        설정된 provider에 따라 LLM 인스턴스 생성 (캐싱 지원)
+
         Args:
             provider: LLM provider ("openai" or "anthropic")
             model: 모델 이름 (provider별 기본값 사용 시 None)
             temperature: 온도 설정 (기본값 사용 시 None)
+            use_cache: 캐시된 인스턴스 재사용 여부 (기본값: True)
             **kwargs: 추가 LLM 파라미터
-        
+
         Returns:
             BaseLanguageModel: 생성된 LLM 인스턴스
         """
         provider_name = provider or settings.LLM_PROVIDER
 
-        if provider_name not in self._providers:
+        if provider_name not in cls._providers:
             raise ValueError(f"Unsupported LLM provider: {provider_name}")
 
         try:
-            provider_class = self._providers[provider_name]
+            provider_class = cls._providers[provider_name]
             provider_instance = provider_class()
 
             # 파라미터 오버라이드
             llm_params = {}
             if model:
                 llm_params["model"] = model
+            else:
+                llm_params["model"] = settings.LLM_MODEL
+
             if temperature is not None:
                 llm_params["temperature"] = temperature
+            else:
+                llm_params["temperature"] = settings.LLM_TEMPERATURE
 
             llm_params.update(kwargs)
 
+            # 캐시 확인 (use_cache=True인 경우)
+            if use_cache:
+                cache_key = cls._get_cache_key(
+                    provider_name,
+                    llm_params["model"],
+                    llm_params["temperature"],
+                    **kwargs
+                )
+
+                if cache_key in cls._llm_cache:
+                    logger.debug(f"Using cached LLM: {cache_key}")
+                    return cls._llm_cache[cache_key]
+
+            # 새 인스턴스 생성
             llm = provider_instance.create_llm(**llm_params)
 
             logger.info(f"Created LLM: {provider_instance.get_provider_name()} - {llm_params.get('model', 'default')}")
+
+            # 캐시에 저장
+            if use_cache:
+                cls._llm_cache[cache_key] = llm
+                logger.debug(f"Cached LLM: {cache_key}")
+
             return llm
 
         except Exception as e:
@@ -178,10 +225,16 @@ class LLMFactory:
             # Fallback to OpenAI if available
             if provider_name != "openai" and settings.OPENAI_API_KEY:
                 logger.warning("Falling back to OpenAI provider")
-                fallback_provider = self._providers["openai"]()
+                fallback_provider = cls._providers["openai"]()
                 return fallback_provider.create_llm(**kwargs)
 
             raise e
+
+    @classmethod
+    def clear_cache(cls):
+        """LLM 캐시 클리어"""
+        cls._llm_cache.clear()
+        logger.info("LLM cache cleared")
 
 
     @classmethod
