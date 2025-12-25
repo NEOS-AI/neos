@@ -15,7 +15,6 @@ Features:
 
 from typing import Any, Dict, Optional, List, Tuple, AsyncIterator
 from datetime import datetime
-import json
 import asyncio
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -24,7 +23,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver, Checkpoint, Checkpoin
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, AsyncEngine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import (
-    Column, String, Text, DateTime, Integer, select, delete,
+    Column, String, DateTime, Integer, select, delete,
     MetaData, Table, and_, desc
 )
 from sqlalchemy.dialects.postgresql import JSONB
