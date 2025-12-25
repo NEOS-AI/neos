@@ -127,11 +127,25 @@ export const codeArtifact = new Artifact<"code", Metadata>({
       }));
     }
   },
-  content: ({ metadata, setMetadata, ...props }) => {
+  content: ({ metadata, setMetadata, status, content, isLoading, ...props }) => {
+    // Show loading skeleton when:
+    // 1. Documents are being fetched (isLoading = true)
+    // 2. OR streaming has just started but no content yet
+    if (isLoading || (status === "streaming" && !content)) {
+      return (
+        <div className="flex w-full flex-col gap-4 p-4">
+          <div className="h-12 w-1/2 animate-pulse rounded-lg bg-muted-foreground/20" />
+          <div className="h-5 w-full animate-pulse rounded-lg bg-muted-foreground/20" />
+          <div className="h-5 w-full animate-pulse rounded-lg bg-muted-foreground/20" />
+          <div className="h-5 w-2/3 animate-pulse rounded-lg bg-muted-foreground/20" />
+        </div>
+      );
+    }
+
     return (
       <>
         <div className="px-1">
-          <CodeEditor {...props} />
+          <CodeEditor {...props} status={status} content={content} />
         </div>
 
         {metadata?.outputs && (

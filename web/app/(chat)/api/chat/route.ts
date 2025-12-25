@@ -171,8 +171,8 @@ export async function POST(request: Request) {
       return new ChatSDKError("offline:chat").toResponse();
     }
 
-    // Proxy backend SSE directly (no transformation)
-    // This preserves the JSON structure and event-stream format
+    // Proxy backend SSE directly without TransformStream to avoid backpressure issues
+    // The browser will automatically cancel the stream when the client disconnects
     return new Response(backendStreamResponse.body, {
       headers: {
         "Content-Type": "text/event-stream",

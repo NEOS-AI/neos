@@ -64,10 +64,16 @@ export const textArtifact = new Artifact<"text", TextArtifactMetadata>({
     isLoading,
     metadata,
   }) => {
-    if (isLoading) {
+    // Show loading skeleton when:
+    // 1. Documents are being fetched (isLoading = true)
+    // 2. OR streaming has just started but no content yet
+    // 3. OR content is empty (waiting for data)
+    console.log(`isLoading: ${isLoading}, status: ${status}, content length: ${content?.length}, content: ${content}`);
+    if (isLoading || (status === "streaming" && !content) || !content) {
       return <DocumentSkeleton artifactKind="text" />;
     }
 
+    console.log(`mode: ${mode}`);
     if (mode === "diff") {
       const oldContent = getDocumentContentById(currentVersionIndex - 1);
       const newContent = getDocumentContentById(currentVersionIndex);
@@ -77,6 +83,16 @@ export const textArtifact = new Artifact<"text", TextArtifactMetadata>({
 
     return (
       <div className="flex flex-row px-4 py-8 md:p-20">
+        {/* Debug: Show content length */}
+        <div style={{ position: 'absolute', top: 10, left: 10, background: 'red', color: 'white', padding: '5px', zIndex: 9999 }}>
+          Content length: {content?.length || 0}
+        </div>
+
+        {/* Debug: Show raw content */}
+        <div style={{ position: 'absolute', top: 50, left: 10, background: 'blue', color: 'white', padding: '5px', zIndex: 9999, maxWidth: '300px', fontSize: '10px' }}>
+          Raw content preview: {content?.substring(0, 200)}...
+        </div>
+
         <Editor
           content={content}
           currentVersionIndex={currentVersionIndex}
