@@ -1,6 +1,6 @@
 """Chat API handlers - thin layer for FastAPI routes"""
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import StreamingResponse
 from typing import Optional, AsyncGenerator, List
 import json
