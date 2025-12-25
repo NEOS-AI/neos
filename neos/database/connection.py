@@ -4,6 +4,7 @@ from sqlalchemy import text, event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import Pool
+from contextlib import asynccontextmanager
 
 from neos.config.settings import settings
 
@@ -295,6 +296,15 @@ async def get_session():
     finally:
         await session.close()
 
+
+@asynccontextmanager
+async def get_session_ctx():
+    """세션 생성 컨텍스트 매니저 헬퍼 함수"""
+    session = await db_manager.get_session()
+    try:
+        yield session
+    finally:
+        await session.close()
 
 # Alias for compatibility with FastAPI dependency injection
 get_db = get_session

@@ -68,6 +68,7 @@ class MultiAgentWorkflow:
         # 워크플로우 그래프 생성 (비동기로 초기화)
         self.graph = None
         self._graph_initialized = False
+        self._graph_uses_checkpointer = False
 
 
     def _initialize_agents(self) -> Dict[str, Any]:
@@ -81,7 +82,6 @@ class MultiAgentWorkflow:
             "realtime_data_search": RealtimeDataSearchAgent(),
             "multi_query_search": MultiQuerySearchAgent(),
             "deep_research": DeepResearchAgent(),
-            "hyper_deep_research": HyperDeepResearchAgent(),
             "web_lookup": WebLookUpAgent(),
 
             # 분석 에이전트들
@@ -99,11 +99,16 @@ class MultiAgentWorkflow:
         logger.debug(f"Initialized {len(agents)} agents")
         return agents
 
-    async def _create_workflow_graph(self) -> StateGraph:
+
+    async def _create_workflow_graph(self, use_checkpointer: bool = True) -> StateGraph:
         """
         워크플로우 그래프 생성 (Enterprise Edition with PostgreSQL Checkpointer)
+
+        Args:
+            use_checkpointer: Whether to use PostgreSQL checkpointer for state persistence
+                            Set to False for single-request workflows (like chat API)
         """
-        logger.debug("Creating workflow graph with PostgreSQL checkpointer...")
+        logger.debug(f"Creating workflow graph (checkpointer={'enabled' if use_checkpointer else 'disabled'})...")
 
         workflow = StateGraph(AgentState)
 
@@ -139,19 +144,29 @@ class MultiAgentWorkflow:
 
         workflow.add_edge("response_generator", END)
 
-        # Get PostgreSQL checkpointer for distributed state management
-        checkpointer = await get_checkpointer()
+        # Conditionally use checkpointer
+        if use_checkpointer:
+            checkpointer = await get_checkpointer()
+            print("[DEBUG] Workflow graph created with PostgreSQL checkpointer for horizontal scaling")
+            return workflow.compile(checkpointer=checkpointer)
+        else:
+            print("[DEBUG] Workflow graph created without checkpointer (stateless mode)")
+            return workflow.compile()
 
-        print("[DEBUG] Workflow graph created with PostgreSQL checkpointer for horizontal scaling")
-        return workflow.compile(checkpointer=checkpointer)
 
-    async def _ensure_graph_initialized(self):
-        """Ensure graph is initialized before use."""
+    async def _ensure_graph_initialized(self, use_checkpointer: bool = True):
+        """
+        Ensure graph is initialized before use.
+
+        Args:
+            use_checkpointer: Whether to use checkpointer for state persistence
+        """
         if not self._graph_initialized:
-            self.graph = await self._create_workflow_graph()
+            self.graph = await self._create_workflow_graph(use_checkpointer=use_checkpointer)
             self._graph_initialized = True
+            self._graph_uses_checkpointer = use_checkpointer
 
-    # 워크플로우 노드 메서드들
+
     async def _classify_query_node(self, state: AgentState) -> Dict[str, Any]:
         """쿼리 분류 노드"""
         return await self.query_classifier.classify_query(state)
@@ -174,10 +189,13 @@ class MultiAgentWorkflow:
                 "complexity": query_classification.get("complexity", "medium"),
                 "required_agents": state.get("required_agents", []),
                 "requires_analysis": "data_analysis" in state.get("required_agents", []),
-                "requires_search": any(agent in state.get("required_agents", [])
-                                     for agent in ["knowledge_search", "realtime_info_search",
-                                                  "multi_query_search", "deep_research",
-                                                  "hyper_deep_research"])
+                "requires_search": any(
+                    agent in state.get("required_agents", [])
+                    for agent in [
+                        "knowledge_search", "realtime_info_search",
+                        "multi_query_search", "deep_research"
+                    ]
+                )
             }
 
             # Call skill/tool selector
@@ -238,10 +256,12 @@ class MultiAgentWorkflow:
         """재생성 여부 결정"""
         return self.quality_validator.should_regenerate(state)
 
+
     async def execute_workflow(
         self,
         user_input: Dict[str, Any],
-        event_handler: Optional[WorkflowEventHandler] = None
+        event_handler: Optional[WorkflowEventHandler] = None,
+        use_checkpointer: bool = True
     ) -> Dict[str, Any]:
         """
         워크플로우 실행 (Enterprise Edition with distributed state)
@@ -254,13 +274,15 @@ class MultiAgentWorkflow:
             user_input: 워크플로우 입력 데이터
             event_handler: 이벤트 핸들러 (Dependency Injection)
                           None이면 NullEventHandler 사용 (성능 오버헤드 없음)
+            use_checkpointer: Whether to use PostgreSQL checkpointer for state persistence
+                            Set to False for single-request workflows (like chat API)
         """
         # Null Object Pattern: event_handler가 없으면 기본 핸들러 사용
         if event_handler is None:
             event_handler = NullEventHandler()
 
         # Ensure graph is initialized
-        await self._ensure_graph_initialized()
+        await self._ensure_graph_initialized(use_checkpointer=use_checkpointer)
 
         query = user_input["query"]
         user_id = user_input.get("user_id")
@@ -289,9 +311,18 @@ class MultiAgentWorkflow:
         initial_state["_event_handler"] = event_handler
 
         try:
-            # 워크플로우 실행 with PostgreSQL-backed persistence
-            print("[DEBUG] Executing workflow graph with distributed state management...")
-            config = {"configurable": {"thread_id": user_input["session_id"]}}
+            # 워크플로우 실행
+            if use_checkpointer:
+                print("[DEBUG] Executing workflow graph with distributed state management...")
+                config = {
+                    "configurable": {"thread_id": user_input["session_id"]},
+                    "recursion_limit": 50  # 재시도를 위한 recursion limit 증가
+                }
+            else:
+                print("[DEBUG] Executing workflow graph in stateless mode...")
+                config = {
+                    "recursion_limit": 50  # 재시도를 위한 recursion limit 증가
+                }
 
             # 노드별 진행 상황 추적을 위해 astream 사용
             workflow_nodes = [
@@ -318,9 +349,7 @@ class MultiAgentWorkflow:
 
                         # 노드 시작 이벤트
                         await event_handler.on_node_start(
-                            node_name,
-                            current_step,
-                            total_steps
+                            node_name, current_step, total_steps
                         )
 
                         # 노드 완료 이벤트 (state에서 필요한 정보 추출)
@@ -330,7 +359,8 @@ class MultiAgentWorkflow:
                         }
                         await event_handler.on_node_complete(node_name, node_result)
 
-                    final_state = state  # 마지막 상태 저장
+                    # 마지막 상태 저장
+                    final_state = state
 
             # 결과 생성
             result = self._create_workflow_result(final_state)
@@ -360,6 +390,8 @@ class MultiAgentWorkflow:
             return result
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"[ERROR] Workflow execution failed: {str(e)}")
 
             # 에러 이벤트

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from sqlalchemy import select, update, delete, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database.connection import get_db_session
+from ..database.connection import get_session_ctx
 from ..database.models import QueryCacheEntry, CacheStatistics
 from ..config.settings import settings
 from .embeddings import embedding_manager
@@ -208,7 +208,7 @@ class SmartCacheManager:
         start_time = datetime.utcnow()
 
         try:
-            async with get_db_session() as session:
+            async with get_session_ctx() as session:
                 # 1. 정확한 해시 매칭 시도
                 query_hash = self._generate_query_hash(query)
                 exact_result = await self._find_exact_match(
@@ -337,7 +337,7 @@ class SmartCacheManager:
             expires_at = datetime.utcnow() + timedelta(seconds=ttl)
             query_hash = self._generate_query_hash(query)
 
-            async with get_db_session() as session:
+            async with get_session_ctx() as session:
                 # 기존 캐시 확인 (중복 방지)
                 existing = await session.execute(
                     select(QueryCacheEntry).where(
@@ -631,7 +631,7 @@ class SmartCacheManager:
     async def cleanup_expired(self) -> int:
         """만료된 캐시 엔트리 정리"""
         try:
-            async with get_db_session() as session:
+            async with get_session_ctx() as session:
                 result = await session.execute(
                     delete(QueryCacheEntry).where(
                         QueryCacheEntry.expires_at <= datetime.utcnow()
@@ -653,7 +653,7 @@ class SmartCacheManager:
     ) -> Dict[str, Any]:
         """캐시 통계 조회"""
         try:
-            async with get_db_session() as session:
+            async with get_session_ctx() as session:
                 min_time = datetime.utcnow() - timedelta(hours=hours)
 
                 query = select(CacheStatistics).where(
@@ -699,7 +699,7 @@ class SmartCacheManager:
     async def invalidate_by_intent(self, query_intent: str) -> int:
         """특정 의도의 캐시 무효화"""
         try:
-            async with get_db_session() as session:
+            async with get_session_ctx() as session:
                 result = await session.execute(
                     delete(QueryCacheEntry).where(
                         QueryCacheEntry.query_intent == query_intent
@@ -714,10 +714,11 @@ class SmartCacheManager:
             logger.error(f"캐시 무효화 에러: {e}")
             return 0
 
+
     async def invalidate_by_user(self, user_id: str) -> int:
         """특정 사용자의 캐시 무효화"""
         try:
-            async with get_db_session() as session:
+            async with get_session_ctx() as session:
                 result = await session.execute(
                     delete(QueryCacheEntry).where(
                         QueryCacheEntry.user_id == user_id
@@ -732,10 +733,11 @@ class SmartCacheManager:
             logger.error(f"캐시 무효화 에러: {e}")
             return 0
 
+
     async def clear_all(self) -> int:
         """모든 캐시 삭제"""
         try:
-            async with get_db_session() as session:
+            async with get_session_ctx() as session:
                 result = await session.execute(delete(QueryCacheEntry))
                 await session.commit()
 

@@ -88,7 +88,7 @@ async def example_query_document(document_id: int):
         )
         document = result.scalar_one()
 
-        print(f"\n📄 문서 정보:")
+        print("\n📄 문서 정보:")
         print(f"   - ID: {document.id}")
         print(f"   - 파일명: {document.filename}")
         print(f"   - 크기: {document.file_size} bytes" if document.file_size else "   - 크기: N/A")

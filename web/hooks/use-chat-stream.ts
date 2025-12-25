@@ -3,7 +3,7 @@
  * Vercel AI SDK의 useChat을 대체하여 백엔드 SSE를 직접 처리
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "@/lib/types";
 import type { StreamEvent } from "@/lib/stream-types";
 import {
@@ -14,6 +14,9 @@ import {
   isArtifactMetaEvent,
   isArtifactDeltaEvent,
   isArtifactFinishEvent,
+  isWorkflowNodeStartEvent,
+  isWorkflowNodeCompleteEvent,
+  isWorkflowProgressEvent,
 } from "@/lib/stream-types";
 import { generateUUID } from "@/lib/utils";
 import type { VisibilityType } from "@/components/visibility-selector";
@@ -57,7 +60,24 @@ export function useChatStream({
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [status, setStatus] = useState<ChatStatus>("ready");
   const abortControllerRef = useRef<AbortController | null>(null);
+  const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
   const currentAssistantMessageRef = useRef<ChatMessage | null>(null);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      // Cancel reader if exists
+      if (readerRef.current) {
+        readerRef.current.cancel().catch(() => {});
+        readerRef.current = null;
+      }
+      // Abort controller if exists
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+    };
+  }, []);
 
   /**
    * SSE 스트림 처리
@@ -69,6 +89,7 @@ export function useChatStream({
       }
 
       const reader = response.body.getReader();
+      readerRef.current = reader; // Store reader for cleanup
       const decoder = new TextDecoder();
       let buffer = "";
 
@@ -216,6 +237,84 @@ export function useChatStream({
                   onData({ type: "data-finish", data: null });
                 }
               }
+              // 워크플로우 노드 시작 이벤트
+              else if (isWorkflowNodeStartEvent(eventData)) {
+                // 메시지 metadata에 워크플로우 에이전트 정보 추가/업데이트
+                if (!assistantMessage.metadata) {
+                  assistantMessage.metadata = { createdAt: new Date().toISOString() };
+                }
+                if (!assistantMessage.metadata.workflow_agents) {
+                  assistantMessage.metadata.workflow_agents = [];
+                }
+
+                // 에이전트 추가
+                assistantMessage.metadata.workflow_agents.push({
+                  agent_name: eventData.agent_name,
+                  node_name: eventData.node_name,
+                  status: "input-available",
+                });
+
+                // 메시지 업데이트
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  newMessages[newMessages.length - 1] = { ...assistantMessage };
+                  return newMessages;
+                });
+
+                // Tool 시작 이벤트로 변환
+                if (onData) {
+                  onData({
+                    type: "tool-start",
+                    data: {
+                      tool_name: eventData.agent_name,
+                      status: "input-available",
+                      progress: eventData.progress_percent,
+                    },
+                  });
+                }
+              }
+              // 워크플로우 노드 완료 이벤트
+              else if (isWorkflowNodeCompleteEvent(eventData)) {
+                // 에이전트 상태 업데이트
+                if (assistantMessage.metadata?.workflow_agents) {
+                  const agent = assistantMessage.metadata.workflow_agents.find(
+                    (a: any) => a.node_name === eventData.node_name
+                  );
+                  if (agent) {
+                    agent.status = "output-available";
+                  }
+                }
+
+                // 메시지 업데이트
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  newMessages[newMessages.length - 1] = { ...assistantMessage };
+                  return newMessages;
+                });
+
+                // Tool 완료 이벤트로 변환
+                if (onData) {
+                  onData({
+                    type: "tool-complete",
+                    data: {
+                      tool_name: eventData.agent_name,
+                      status: "output-available",
+                    },
+                  });
+                }
+              }
+              // 워크플로우 진행 상황 이벤트
+              else if (isWorkflowProgressEvent(eventData)) {
+                if (onData) {
+                  onData({
+                    type: "workflow-progress",
+                    data: {
+                      progress: eventData.progress_percent,
+                      message: eventData.message,
+                    },
+                  });
+                }
+              }
             } catch (parseError) {
               console.error("Failed to parse SSE event:", line, parseError);
             }
@@ -228,6 +327,15 @@ export function useChatStream({
           onError(error);
         }
       } finally {
+        // Cancel reader to prevent ECONNRESET errors
+        if (readerRef.current) {
+          try {
+            await readerRef.current.cancel();
+          } catch (cancelError) {
+            // Ignore cancel errors
+          }
+          readerRef.current = null;
+        }
         currentAssistantMessageRef.current = null;
       }
     },

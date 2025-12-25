@@ -28,6 +28,12 @@ class QualityValidator:
         state["quality_score"] = overall_score
         state["quality_feedback"] = self._generate_quality_feedback(quality_metrics)
 
+        # retry_count 관리: 품질이 낮으면 증가
+        retry_count = state.get("retry_count", 0)
+        if overall_score < self.config.MIN_QUALITY_SCORE and retry_count < self.config.MAX_RETRIES:
+            state["retry_count"] = retry_count + 1
+            print(f"[DEBUG] Quality score {overall_score:.2f} < {self.config.MIN_QUALITY_SCORE}, retry {state['retry_count']}/{self.config.MAX_RETRIES}")
+
         print(f"[DEBUG] Quality validation completed. Overall score: {overall_score:.2f}")
         print(f"[DEBUG] Quality metrics: {quality_metrics}")
 
@@ -156,7 +162,7 @@ class QualityValidator:
         return " ".join(feedback_parts)
 
     def should_regenerate(self, state: AgentState) -> str:
-        """재생성 여부 결정"""
+        """재생성 여부 결정 (state를 수정하지 않음 - validate_quality에서 처리)"""
         quality_score = state.get("quality_score", 0.0)
         retry_count = state.get("retry_count", 0)
 
@@ -167,11 +173,10 @@ class QualityValidator:
 
         # 품질 점수 확인
         if quality_score < self.config.MIN_QUALITY_SCORE:
-            print(f"[DEBUG] Quality score {quality_score} < {self.config.MIN_QUALITY_SCORE}, retry {retry_count + 1}/{self.config.MAX_RETRIES}")
-            state["retry_count"] = retry_count + 1
+            print(f"[DEBUG] Quality score {quality_score:.2f} < {self.config.MIN_QUALITY_SCORE}, regenerating...")
             return "regenerate"
         else:
-            print(f"[DEBUG] Quality score {quality_score} >= {self.config.MIN_QUALITY_SCORE}, proceeding")
+            print(f"[DEBUG] Quality score {quality_score:.2f} >= {self.config.MIN_QUALITY_SCORE}, proceeding")
             return "proceed"
 
     def get_quality_report(self, state: AgentState) -> Dict[str, Any]:

@@ -298,6 +298,16 @@ class Settings(BaseSettings):
     # 아티팩트 프롬프트
     ARTIFACTS_SYSTEM_PROMPT: str = SYSTEM_PROMPT_FOR_ARTIFACT
 
+    # ============================================================================
+    # Chat (채팅) 설정
+    # ============================================================================
+
+    # 채팅 기본 max_tokens 설정 (200K)
+    CHAT_DEFAULT_MAX_TOKENS: int = int(env_vars.get("CHAT_DEFAULT_MAX_TOKENS", 200000))
+
+    # 워크플로우 통합 활성화 (채팅에서 워크플로우 사용)
+    ENABLE_WORKFLOW_IN_CHAT: bool = bool(env_vars.get("ENABLE_WORKFLOW_IN_CHAT", True))
+
     # 컨텍스트 최적화 설정
     # 1. Thinking Block 관리
     THINKING_BLOCKS_ENABLED: bool = bool(env_vars.get("THINKING_BLOCKS_ENABLED", True))  # LLM thinking block 활성화

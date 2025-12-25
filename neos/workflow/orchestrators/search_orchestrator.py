@@ -358,15 +358,27 @@ class SearchOrchestrator:
 
         for search_result in agent_results:
             # Create a content hash for deduplication
-            title = getattr(search_result, 'title', '').strip().lower()
-            content = getattr(search_result, 'content', '')[:200].strip().lower()
+            title_raw = getattr(search_result, 'title', '')
+            content_raw = getattr(search_result, 'content', '')
+
+            # 방어적 처리: list나 다른 타입을 문자열로 변환
+            if isinstance(title_raw, list):
+                title = ' '.join(str(t) for t in title_raw).strip().lower()
+            else:
+                title = str(title_raw).strip().lower() if title_raw else ''
+
+            if isinstance(content_raw, list):
+                content = ' '.join(str(c) for c in content_raw)[:200].strip().lower()
+            else:
+                content = str(content_raw)[:200].strip().lower() if content_raw else ''
+
             content_hash = hash(title + content)
 
             if content_hash not in seen_content and title and content:
                 seen_content.add(content_hash)
                 unique_results.append(search_result)
             else:
-                print(f"[DEBUG] Skipping duplicate result: {title[:50]}...")
+                print(f"[DEBUG] Skipping duplicate result: {title[:50] if title else 'no title'}...")
 
         print(f"[DEBUG] After deduplication: {len(unique_results)} unique results from {len(agent_results)} total")
         return unique_results

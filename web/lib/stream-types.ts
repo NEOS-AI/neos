@@ -12,7 +12,10 @@ export type StreamEvent =
   | StreamErrorEvent
   | ArtifactMetaEvent
   | ArtifactDeltaEvent
-  | ArtifactFinishEvent;
+  | ArtifactFinishEvent
+  | WorkflowNodeStartEvent
+  | WorkflowNodeCompleteEvent
+  | WorkflowProgressEvent;
 
 /**
  * 스트리밍 시작 이벤트
@@ -87,6 +90,39 @@ export interface ArtifactFinishEvent {
 }
 
 /**
+ * 워크플로우 노드 시작 이벤트
+ */
+export interface WorkflowNodeStartEvent {
+  type: "workflow_node_start";
+  node_name: string;
+  agent_name: string;
+  progress_percent?: number;
+  workflow_step?: number;
+  total_steps?: number;
+  conversation_id: string;
+}
+
+/**
+ * 워크플로우 노드 완료 이벤트
+ */
+export interface WorkflowNodeCompleteEvent {
+  type: "workflow_node_complete";
+  node_name: string;
+  agent_name: string;
+  conversation_id: string;
+}
+
+/**
+ * 워크플로우 진행 상황 이벤트
+ */
+export interface WorkflowProgressEvent {
+  type: "workflow_progress";
+  progress_percent: number;
+  message?: string;
+  conversation_id: string;
+}
+
+/**
  * 타입 가드: 시작 이벤트 확인
  */
 export function isStreamStartEvent(event: StreamEvent): event is StreamStartEvent {
@@ -133,4 +169,25 @@ export function isArtifactDeltaEvent(event: StreamEvent): event is ArtifactDelta
  */
 export function isArtifactFinishEvent(event: StreamEvent): event is ArtifactFinishEvent {
   return event.type === "artifact_finish";
+}
+
+/**
+ * 타입 가드: 워크플로우 노드 시작 이벤트 확인
+ */
+export function isWorkflowNodeStartEvent(event: StreamEvent): event is WorkflowNodeStartEvent {
+  return event.type === "workflow_node_start";
+}
+
+/**
+ * 타입 가드: 워크플로우 노드 완료 이벤트 확인
+ */
+export function isWorkflowNodeCompleteEvent(event: StreamEvent): event is WorkflowNodeCompleteEvent {
+  return event.type === "workflow_node_complete";
+}
+
+/**
+ * 타입 가드: 워크플로우 진행 상황 이벤트 확인
+ */
+export function isWorkflowProgressEvent(event: StreamEvent): event is WorkflowProgressEvent {
+  return event.type === "workflow_progress";
 }

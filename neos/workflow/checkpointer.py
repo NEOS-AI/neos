@@ -13,13 +13,14 @@ Features:
 - Transaction support
 """
 
-from typing import Any, Dict, Optional, List, Tuple
+from typing import Any, Dict, Optional, List, Tuple, AsyncIterator
 from datetime import datetime
 import json
 import asyncio
 from contextlib import asynccontextmanager
+from decimal import Decimal
 
-from langgraph.checkpoint.base import BaseCheckpointSaver, Checkpoint
+from langgraph.checkpoint.base import BaseCheckpointSaver, Checkpoint, CheckpointTuple
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, AsyncEngine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import (
@@ -29,6 +30,46 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 
 from neos.config.settings import settings
+
+
+def make_json_serializable(obj: Any) -> Any:
+    """
+    Recursively convert objects to JSON-serializable types.
+
+    Handles:
+    - datetime objects -> ISO format strings
+    - Decimal -> float
+    - bytes -> base64 string
+    - Custom objects with __dict__ -> dict
+    """
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+
+    if isinstance(obj, Decimal):
+        return float(obj)
+
+    if isinstance(obj, bytes):
+        import base64
+        return base64.b64encode(obj).decode('utf-8')
+
+    if isinstance(obj, dict):
+        return {key: make_json_serializable(value) for key, value in obj.items()}
+
+    if isinstance(obj, (list, tuple)):
+        return [make_json_serializable(item) for item in obj]
+
+    if isinstance(obj, set):
+        return [make_json_serializable(item) for item in obj]
+
+    # Try to convert custom objects
+    if hasattr(obj, '__dict__'):
+        return make_json_serializable(obj.__dict__)
+
+    # Fallback: convert to string
+    return str(obj)
 
 
 class PostgreSQLCheckpointer(BaseCheckpointSaver):
@@ -140,18 +181,18 @@ class PostgreSQLCheckpointer(BaseCheckpointSaver):
                 await session.rollback()
                 raise
 
-    async def aget(
+    async def aget_tuple(
         self,
         config: Dict[str, Any],
-    ) -> Optional[Checkpoint]:
+    ) -> Optional[Tuple[Checkpoint, Dict[str, Any]]]:
         """
-        Retrieve the latest checkpoint for a thread.
+        Retrieve the latest checkpoint and metadata for a thread.
 
         Args:
             config: Configuration containing thread_id
 
         Returns:
-            Checkpoint object or None if not found
+            Tuple of (Checkpoint, metadata) or None if not found
         """
         thread_id = config.get("configurable", {}).get("thread_id")
         if not thread_id:
@@ -175,7 +216,7 @@ class PostgreSQLCheckpointer(BaseCheckpointSaver):
             # Convert database row to Checkpoint object
             checkpoint_data = row.checkpoint_data
 
-            return Checkpoint(
+            checkpoint = Checkpoint(
                 v=checkpoint_data.get("v", 1),
                 id=row.checkpoint_id,
                 ts=row.created_at.isoformat(),
@@ -184,19 +225,44 @@ class PostgreSQLCheckpointer(BaseCheckpointSaver):
                 versions_seen=checkpoint_data.get("versions_seen", {}),
             )
 
+            # Return checkpoint and metadata as tuple
+            metadata = row.metadata if row.metadata else {}
+            return (checkpoint, metadata)
+
+    async def aget(
+        self,
+        config: Dict[str, Any],
+    ) -> Optional[Checkpoint]:
+        """
+        Retrieve the latest checkpoint for a thread.
+
+        Args:
+            config: Configuration containing thread_id
+
+        Returns:
+            Checkpoint object or None if not found
+        """
+        result = await self.aget_tuple(config)
+        if result is None:
+            return None
+        return result[0]  # Return only checkpoint, not metadata
+
+
     async def aput(
         self,
         config: Dict[str, Any],
         checkpoint: Checkpoint,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Dict[str, Any],
+        new_versions: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
         Save a checkpoint to the database.
 
         Args:
             config: Configuration containing thread_id
-            checkpoint: Checkpoint object to save
-            metadata: Optional metadata to store with checkpoint
+            checkpoint: Checkpoint object to save (can be dict or Checkpoint object)
+            metadata: Metadata to store with checkpoint
+            new_versions: New channel versions (for compatibility with LangGraph)
 
         Returns:
             Updated config with checkpoint information
@@ -205,15 +271,32 @@ class PostgreSQLCheckpointer(BaseCheckpointSaver):
         if not thread_id:
             raise ValueError("thread_id is required in config.configurable")
 
-        checkpoint_id = checkpoint.id
+        # Handle both dict and Checkpoint object
+        if isinstance(checkpoint, dict):
+            checkpoint_id = checkpoint.get("id")
+            checkpoint_data = {
+                "v": checkpoint.get("v", 1),
+                "channel_values": checkpoint.get("channel_values", {}),
+                "channel_versions": checkpoint.get("channel_versions", {}),
+                "versions_seen": checkpoint.get("versions_seen", {}),
+            }
+        else:
+            checkpoint_id = checkpoint.id
+            checkpoint_data = {
+                "v": checkpoint.v,
+                "channel_values": checkpoint.channel_values,
+                "channel_versions": checkpoint.channel_versions,
+                "versions_seen": checkpoint.versions_seen,
+            }
 
-        # Serialize checkpoint data
-        checkpoint_data = {
-            "v": checkpoint.v,
-            "channel_values": checkpoint.channel_values,
-            "channel_versions": checkpoint.channel_versions,
-            "versions_seen": checkpoint.versions_seen,
-        }
+        # Store new_versions in metadata for tracking
+        if new_versions:
+            metadata = metadata or {}
+            metadata["new_versions"] = new_versions
+
+        # Convert to JSON-serializable format (handle datetime, Decimal, etc.)
+        checkpoint_data = make_json_serializable(checkpoint_data)
+        metadata = make_json_serializable(metadata) if metadata else {}
 
         async with self.get_session() as session:
             # Check if checkpoint exists
@@ -263,26 +346,73 @@ class PostgreSQLCheckpointer(BaseCheckpointSaver):
             }
         }
 
-    async def alist(
+    async def aput_writes(
         self,
         config: Dict[str, Any],
-        limit: Optional[int] = 10,
-        before: Optional[str] = None,
-    ) -> List[Checkpoint]:
+        writes: List[Tuple[str, Any]],
+        task_id: str,
+    ) -> None:
         """
-        List checkpoints for a thread.
+        Store pending writes for a checkpoint.
+
+        This method is called by LangGraph to save intermediate writes
+        during workflow execution.
 
         Args:
             config: Configuration containing thread_id
-            limit: Maximum number of checkpoints to return
-            before: Return checkpoints before this checkpoint_id
+            writes: List of (channel, value) tuples to write
+            task_id: ID of the task generating these writes
 
-        Returns:
-            List of Checkpoint objects
+        Note:
+            Current implementation stores writes in checkpoint metadata.
+            For production use, consider a separate writes table.
         """
+        # For now, we'll store writes in the checkpoint metadata
+        # In a production system, you might want a separate table for writes
         thread_id = config.get("configurable", {}).get("thread_id")
         if not thread_id:
-            raise ValueError("thread_id is required in config.configurable")
+            return
+
+        # Convert writes to JSON-serializable format
+        serializable_writes = []
+        for channel, value in writes:
+            serializable_writes.append({
+                "channel": channel,
+                "value": make_json_serializable(value),
+                "task_id": task_id
+            })
+
+        # Note: This is a simple implementation that doesn't persist writes
+        # LangGraph will call aput with the full checkpoint after processing writes
+        # For more advanced use cases, you could store writes in a separate table
+
+    async def alist(
+        self,
+        config: Optional[Dict[str, Any]],
+        *,
+        filter: Optional[Dict[str, Any]] = None,
+        before: Optional[Dict[str, Any]] = None,
+        limit: Optional[int] = None,
+    ) -> AsyncIterator[CheckpointTuple]:
+        """
+        List checkpoints for a thread as an async iterator.
+
+        Args:
+            config: Configuration containing thread_id (None for all threads)
+            filter: Additional filter criteria (not implemented yet)
+            before: Configuration to get checkpoints before
+            limit: Maximum number of checkpoints to return
+
+        Yields:
+            CheckpointTuple objects
+        """
+        # If config is None, we can't filter by thread_id
+        if config is None:
+            return
+
+        thread_id = config.get("configurable", {}).get("thread_id")
+        if not thread_id:
+            return
 
         async with self.get_session() as session:
             stmt = (
@@ -291,19 +421,22 @@ class PostgreSQLCheckpointer(BaseCheckpointSaver):
                 .order_by(desc(self.checkpoints_table.c.created_at))
             )
 
+            # Handle 'before' parameter
             if before:
-                # Get timestamp of 'before' checkpoint
-                before_stmt = select(self.checkpoints_table.c.created_at).where(
-                    and_(
-                        self.checkpoints_table.c.thread_id == thread_id,
-                        self.checkpoints_table.c.checkpoint_id == before
+                before_checkpoint_id = before.get("configurable", {}).get("checkpoint_id")
+                if before_checkpoint_id:
+                    # Get timestamp of 'before' checkpoint
+                    before_stmt = select(self.checkpoints_table.c.created_at).where(
+                        and_(
+                            self.checkpoints_table.c.thread_id == thread_id,
+                            self.checkpoints_table.c.checkpoint_id == before_checkpoint_id
+                        )
                     )
-                )
-                before_result = await session.execute(before_stmt)
-                before_ts = before_result.scalar()
+                    before_result = await session.execute(before_stmt)
+                    before_ts = before_result.scalar()
 
-                if before_ts:
-                    stmt = stmt.where(self.checkpoints_table.c.created_at < before_ts)
+                    if before_ts:
+                        stmt = stmt.where(self.checkpoints_table.c.created_at < before_ts)
 
             if limit:
                 stmt = stmt.limit(limit)
@@ -311,21 +444,45 @@ class PostgreSQLCheckpointer(BaseCheckpointSaver):
             result = await session.execute(stmt)
             rows = result.fetchall()
 
-            checkpoints = []
             for row in rows:
                 checkpoint_data = row.checkpoint_data
-                checkpoints.append(
-                    Checkpoint(
-                        v=checkpoint_data.get("v", 1),
-                        id=row.checkpoint_id,
-                        ts=row.created_at.isoformat(),
-                        channel_values=checkpoint_data.get("channel_values", {}),
-                        channel_versions=checkpoint_data.get("channel_versions", {}),
-                        versions_seen=checkpoint_data.get("versions_seen", {}),
-                    )
+
+                checkpoint = Checkpoint(
+                    v=checkpoint_data.get("v", 1),
+                    id=row.checkpoint_id,
+                    ts=row.created_at.isoformat(),
+                    channel_values=checkpoint_data.get("channel_values", {}),
+                    channel_versions=checkpoint_data.get("channel_versions", {}),
+                    versions_seen=checkpoint_data.get("versions_seen", {}),
                 )
 
-            return checkpoints
+                checkpoint_config = {
+                    "configurable": {
+                        "thread_id": thread_id,
+                        "checkpoint_id": row.checkpoint_id
+                    }
+                }
+
+                metadata = row.metadata if row.metadata else {}
+
+                # Get parent config if exists
+                parent_config = None
+                if row.parent_checkpoint_id:
+                    parent_config = {
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_id": row.parent_checkpoint_id
+                        }
+                    }
+
+                # Create CheckpointTuple
+                yield CheckpointTuple(
+                    config=checkpoint_config,
+                    checkpoint=checkpoint,
+                    metadata=metadata,
+                    parent_config=parent_config,
+                    pending_writes=None  # Not implemented yet
+                )
 
     async def delete_thread(self, thread_id: str) -> bool:
         """

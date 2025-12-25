@@ -55,7 +55,9 @@ class ResponseGenerator:
         state["execution_time_ms"] = execution_time
         state["response_metadata"] = self._create_response_metadata(state)
 
+        print("[DEBUG] generation result: ", state["generation_results"])
         print(f"[DEBUG] Response generation completed. Length: {len(final_response)} characters")
+        print(final_response)
 
         state["execution_steps"].append({
             "step": "response_generation",
