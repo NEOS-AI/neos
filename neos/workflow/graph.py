@@ -10,7 +10,6 @@ from neos.agents.search_agents import (
     RealtimeDataSearchAgent,
     MultiQuerySearchAgent,
     DeepResearchAgent,
-    HyperDeepResearchAgent,
     WebLookUpAgent
 )
 from neos.agents.analysis_agents import (
