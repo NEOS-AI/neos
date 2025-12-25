@@ -317,6 +317,10 @@ class Settings(BaseSettings):
     THINKING_BLOCKS_ENABLED: bool = bool(env_vars.get("THINKING_BLOCKS_ENABLED", True))  # LLM thinking block 활성화
     MAX_THINKING_LENGTH: int = int(env_vars.get("MAX_THINKING_LENGTH", 0))  # 0 = unlimited, >0 = limit in chars
 
+    # 추가 최적화: 워크플로우 단계별 Thinking blocks 비활성화
+    # 검색 에이전트는 빠른 응답이 중요하므로 thinking blocks 비활성화
+    DISABLE_THINKING_FOR_SEARCH: bool = bool(env_vars.get("DISABLE_THINKING_FOR_SEARCH", True))  # 검색 에이전트에서 thinking 비활성화
+
     # 2. 토큰 카운팅
     USE_TIKTOKEN: bool = bool(env_vars.get("USE_TIKTOKEN", True))  # tiktoken 사용 여부
     TOKEN_COUNTER_MODEL: str = env_vars.get("TOKEN_COUNTER_MODEL", "gpt-4")  # tiktoken 인코더 모델

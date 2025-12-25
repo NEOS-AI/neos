@@ -9,7 +9,6 @@ from neos.agents.search_agents import (
     RealtimeInfoSearchAgent,
     RealtimeDataSearchAgent,
     MultiQuerySearchAgent,
-    DeepResearchAgent,
     WebLookUpAgent
 )
 from neos.agents.analysis_agents import (
@@ -80,7 +79,6 @@ class MultiAgentWorkflow:
             "realtime_info_search": RealtimeInfoSearchAgent(),
             "realtime_data_search": RealtimeDataSearchAgent(),
             "multi_query_search": MultiQuerySearchAgent(),
-            "deep_research": DeepResearchAgent(),
             "web_lookup": WebLookUpAgent(),
 
             # 분석 에이전트들
@@ -191,8 +189,7 @@ class MultiAgentWorkflow:
                 "requires_search": any(
                     agent in state.get("required_agents", [])
                     for agent in [
-                        "knowledge_search", "realtime_info_search",
-                        "multi_query_search", "deep_research"
+                        "knowledge_search", "realtime_info_search", "multi_query_search",
                     ]
                 )
             }

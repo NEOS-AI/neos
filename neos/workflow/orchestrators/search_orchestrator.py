@@ -58,11 +58,17 @@ class SearchOrchestrator:
         )
 
     def _generate_cache_key(self, state: AgentState, search_agents: List[str]) -> str:
-        """캐시 키 생성"""
+        """캐시 키 생성
+
+        추가 최적화: 언어별 캐싱 지원
+        - 동일 쿼리라도 언어가 다르면 다른 결과 반환
+        """
+        detected_language = state.get("detected_language", "ko")
         return cache_manager.make_key(
             "search_results",
             hash(state["original_query"]),
-            "-".join(sorted(search_agents))
+            "-".join(sorted(search_agents)),
+            detected_language  # 언어별로 다른 캐시 사용
         )
 
     async def _check_cache(self, cache_key: str, state: AgentState) -> bool:
@@ -428,10 +434,14 @@ class SearchOrchestrator:
         return unique_results
 
     async def _cache_results(self, cache_key: str, valid_results: List) -> None:
-        """결과 캐싱"""
+        """결과 캐싱
+
+        추가 최적화: 캐시 TTL 증가 (30분 → 1시간)
+        - 검색 결과는 자주 변하지 않으므로 더 긴 캐싱 유지
+        """
         if valid_results:
-            print(f"[DEBUG] Caching {len(valid_results)} valid search results")
-            await cache_manager.set(cache_key, valid_results, ttl=1800, serialize="pickle")
+            print(f"[DEBUG] Caching {len(valid_results)} valid search results (TTL: 1 hour)")
+            await cache_manager.set(cache_key, valid_results, ttl=3600, serialize="pickle")  # 30분 → 1시간
 
     def _record_execution_step(
         self,

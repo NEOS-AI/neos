@@ -169,8 +169,12 @@ class RealtimeInfoSearchAgent(SearchAgent):
             print(f"[DEBUG] Processing {len(tavily_results)} Tavily results with LLM...")
 
             # 중기 조치: max_tokens 최적화 (8000 → 2000) - 응답 시간 단축
-            # Tavily 결과 5개 처리에는 2000 토큰이면 충분
-            base_llm = create_llm(temperature=0.1, max_tokens=2000)
+            # 추가 최적화: thinking blocks 비활성화 - 검색 에이전트는 빠른 응답 필요
+            base_llm = create_llm(
+                temperature=0.1,
+                max_tokens=2000,
+                disable_thinking=settings.DISABLE_THINKING_FOR_SEARCH
+            )
 
             # Wrap LLM with tracking for dataset collection
             llm = create_tracked_llm(
@@ -286,86 +290,58 @@ class RealtimeInfoSearchAgent(SearchAgent):
         return "\n".join(context_parts)
 
     def _create_analysis_prompt(self, query: str, search_context: str, detected_language: str = "ko") -> str:
-        """LLM 분석을 위한 프롬프트 생성"""
+        """LLM 분석을 위한 프롬프트 생성
+
+        추가 최적화: 프롬프트 간소화 (7개 → 3개 요구사항)
+        - 토큰 수 감소 및 LLM 처리 속도 향상
+        """
         # 언어별 프롬프트 템플릿
         language_instructions = {
-            "ko": """
-사용자 질문: {query}
+            "ko": """사용자 질문: {query}
 
-다음은 웹 검색을 통해 수집된 정보들입니다:
-
+검색 결과:
 {search_context}
 
-위 검색 결과들을 바탕으로 사용자의 질문에 대해 종합적이고 정확한 답변을 **한국어로** 작성해주세요.
-
-요구사항:
-1. 각 정보의 출처를 명확히 인용하세요 (예: "출처: 도메인명")
-2. 상충되는 정보가 있다면 이를 명시하고 설명하세요
-3. 정확한 수치나 날짜가 있다면 그대로 인용하세요
-4. 추측이나 확인되지 않은 정보는 추가하지 마세요
-5. **한국어로 작성하되**, 전문적이고 객관적인 톤을 유지하세요
-6. **중요**: 답변을 완전히 작성하세요. 문장이나 문단 중간에 끊지 마세요.
-7. 각 주제별로 상세한 분석을 제공하세요.
+위 정보를 바탕으로 사용자 질문에 **한국어로** 답변하세요.
+- 출처 명시 (예: 출처: 도메인)
+- 정확한 수치/날짜 인용
+- 객관적이고 완전한 답변 작성
 
 답변:""",
 
-            "en": """
-User Question: {query}
+            "en": """User Question: {query}
 
-The following information was collected through web search:
-
+Search Results:
 {search_context}
 
-Based on the above search results, please write a comprehensive and accurate answer to the user's question **in English**.
-
-Requirements:
-1. Clearly cite the source of each piece of information (e.g., "Source: domain name")
-2. If there is conflicting information, explicitly mention and explain it
-3. If there are accurate figures or dates, quote them as is
-4. Do not add speculation or unverified information
-5. **Write in English** while maintaining a professional and objective tone
-6. **Important**: Complete your answer fully. Do not stop in the middle of sentences or paragraphs.
-7. Provide detailed analysis for each topic.
+Answer the user's question **in English** based on the above information.
+- Cite sources (e.g., Source: domain)
+- Quote accurate figures/dates
+- Provide objective and complete answer
 
 Answer:""",
 
-            "ja": """
-ユーザーの質問: {query}
+            "ja": """ユーザーの質問: {query}
 
-以下は、ウェブ検索を通じて収集された情報です:
-
+検索結果:
 {search_context}
 
-上記の検索結果に基づいて、ユーザーの質問に対する包括的で正確な回答を**日本語で**作成してください。
-
-要件:
-1. 各情報の出典を明確に引用してください（例：「出典：ドメイン名」）
-2. 矛盾する情報がある場合は、それを明示して説明してください
-3. 正確な数値や日付がある場合は、そのまま引用してください
-4. 推測や未確認の情報は追加しないでください
-5. **日本語で作成し**、プロフェッショナルで客観的なトーンを維持してください
-6. **重要**: 回答を完全に作成してください。文章や段落の途中で止めないでください。
-7. 各トピックについて詳細な分析を提供してください。
+上記の情報に基づき、ユーザーの質問に**日本語で**回答してください。
+- 出典を明示（例：出典：ドメイン）
+- 正確な数値/日付を引用
+- 客観的で完全な回答を作成
 
 回答:""",
 
-            "zh": """
-用户问题: {query}
+            "zh": """用户问题: {query}
 
-以下是通过网络搜索收集的信息:
-
+搜索结果:
 {search_context}
 
-基于上述搜索结果，请用**中文**撰写对用户问题的全面准确的回答。
-
-要求:
-1. 明确引用每条信息的来源（例如："来源：域名"）
-2. 如有矛盾信息，请明确说明并解释
-3. 如有准确的数字或日期，请原样引用
-4. 不要添加推测或未经验证的信息
-5. **用中文撰写**，保持专业客观的语气
-6. **重要**: 完整撰写答案。不要在句子或段落中途停止。
-7. 为每个主题提供详细分析。
+基于上述信息，用**中文**回答用户问题。
+- 标明来源（例：来源：域名）
+- 引用准确数字/日期
+- 提供客观完整的回答
 
 回答:"""
         }
