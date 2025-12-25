@@ -43,8 +43,11 @@ class DatabaseManager:
                 "server_settings": {
                     "application_name": "neos_multi_agent",
                     "jit": "off"  # JIT 컴파일 비활성화로 짧은 쿼리 성능 향상
-                }
-            }
+                },
+                "timeout": 10  # 연결 타임아웃 설정
+            },
+            # 이벤트 루프 에러 방지 - graceful degradation
+            pool_reset_on_return="rollback"  # 연결 반환 시 롤백만 수행
         )
 
         # 연결 풀 이벤트 리스너 추가
