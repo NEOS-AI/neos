@@ -265,11 +265,7 @@ async def generate_conversation_title(conversation_id: str, request: GenerateTit
 # ============================================================================
 
 @router.post("/conversations/{conversation_id}/messages", response_model=CreateMessageResponse)
-async def send_message(
-    conversation_id: str,
-    request: SendMessageRequest,
-    background_tasks: BackgroundTasks
-):
+async def send_message(conversation_id: str, request: SendMessageRequest):
     """메시지 전송 및 AI 응답 생성"""
     try:
         # 사용자 메시지 저장
