@@ -83,16 +83,6 @@ export const textArtifact = new Artifact<"text", TextArtifactMetadata>({
 
     return (
       <div className="flex flex-row px-4 py-8 md:p-20">
-        {/* Debug: Show content length */}
-        <div style={{ position: 'absolute', top: 10, left: 10, background: 'red', color: 'white', padding: '5px', zIndex: 9999 }}>
-          Content length: {content?.length || 0}
-        </div>
-
-        {/* Debug: Show raw content */}
-        <div style={{ position: 'absolute', top: 50, left: 10, background: 'blue', color: 'white', padding: '5px', zIndex: 9999, maxWidth: '300px', fontSize: '10px' }}>
-          Raw content preview: {content?.substring(0, 200)}...
-        </div>
-
         <Editor
           content={content}
           currentVersionIndex={currentVersionIndex}

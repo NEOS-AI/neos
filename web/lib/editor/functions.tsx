@@ -32,6 +32,7 @@ function getMarkdownParser() {
         ordered_list: { block: "ordered_list", getAttrs: (tok: any) => ({ order: +(tok.attrGet("start") || 1) }) },
         heading: { block: "heading", getAttrs: (tok: any) => ({ level: +tok.tag.slice(1) }) },
         code_block: { block: "code_block" },
+        fence: { block: "code_block" },  // Fenced code blocks (```)
         hr: { node: "horizontal_rule" },
 
         // Inline nodes
@@ -60,8 +61,14 @@ export const buildDocumentFromContent = (content: string) => {
   console.log("[buildDocumentFromContent] Parsing markdown, length:", content.length);
 
   try {
+    // Pre-process content to convert tables to code blocks for better display
+    const processedContent = content.replace(
+      /\n\|(.+)\|\n\|[-:\| ]+\|\n(\|.+\|\n?)+/g,
+      (match) => '\n```\n' + match.trim() + '\n```\n'
+    );
+
     const parser = getMarkdownParser();
-    const doc = parser.parse(content);
+    const doc = parser.parse(processedContent);
     console.log("[buildDocumentFromContent] Parsed document:", {
       nodeSize: doc?.nodeSize,
       childCount: doc?.childCount,
