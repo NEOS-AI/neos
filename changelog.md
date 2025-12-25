@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.18.0 (2025-12-26)
+* Make chat stream API to use agent workflow
+* Enhance the search orchestrator and it's agents
+* Fix asyncio event loop conflict in workflow execution
+  * Add LLM instance caching to prevent event loop capture issues
+  * Implement singleton pattern for LLM instances (same provider + model + temperature)
+  * Resolve "Task got Future attached to a different loop" errors during concurrent requests
+  * Improve performance and memory usage by reusing LLM HTTP clients
+  * Add `use_cache` parameter to `create_llm()` for explicit cache control
+* Add markdown-it parser for document rendering in web UI
+  * Replace previous markdown parser with `markdown-it` for better compatibility
+  * Update editor functions to use `markdown-it` for parsing and rendering
+  * Improve handling of complex markdown features (tables, code blocks, etc.)
+  * Ensure consistent document display across different artifact types
+
 ## v0.17.1 (2025-12-24)
 * Fix artifact generation streaming issue
 * Ensure proper handling of artifact streaming events
