@@ -88,11 +88,11 @@ class Settings(BaseSettings):
 
     # 에이전트별 타임아웃 설정 (초 단위) - 성능 최적화
     AGENT_TIMEOUTS: dict = {
-        # 검색 에이전트 - 빠른 응답 필요 (기존 600초 → 20초로 대폭 단축)
+        # 검색 에이전트 - 빠른 응답 필요 (단기 조치: LLM 처리 시간 고려하여 조정)
         "knowledge_search": int(env_vars.get("TIMEOUT_KNOWLEDGE_SEARCH", 20)),
-        "realtime_info_search": int(env_vars.get("TIMEOUT_REALTIME_INFO_SEARCH", 20)),
-        "realtime_data_search": int(env_vars.get("TIMEOUT_REALTIME_DATA_SEARCH", 20)),
-        "multi_query_search": int(env_vars.get("TIMEOUT_MULTI_QUERY_SEARCH", 30)),
+        "realtime_info_search": int(env_vars.get("TIMEOUT_REALTIME_INFO_SEARCH", 30)),  # 20→30초 (LLM 처리 포함)
+        "realtime_data_search": int(env_vars.get("TIMEOUT_REALTIME_DATA_SEARCH", 30)),  # 20→30초 (LLM 처리 포함)
+        "multi_query_search": int(env_vars.get("TIMEOUT_MULTI_QUERY_SEARCH", 35)),  # 30→35초 (다중 쿼리 처리)
         "web_lookup": int(env_vars.get("TIMEOUT_WEB_LOOKUP", 15)),
 
         # 분석 에이전트 - 중간 수준 타임아웃
@@ -111,8 +111,9 @@ class Settings(BaseSettings):
         "hyper_deep_research": int(env_vars.get("TIMEOUT_HYPER_DEEP_RESEARCH", 600)),
     }
 
-    # 검색 오케스트레이션 타임아웃 (기존 600초 → 20초)
-    SEARCH_ORCHESTRATION_TIMEOUT: int = int(env_vars.get("SEARCH_ORCHESTRATION_TIMEOUT", 20))
+    # 검색 오케스트레이션 타임아웃 (즉시 조치: 20초 → 40초로 증가)
+    # LLM 처리 시간을 고려하여 충분한 여유 확보
+    SEARCH_ORCHESTRATION_TIMEOUT: int = int(env_vars.get("SEARCH_ORCHESTRATION_TIMEOUT", 40))
 
     # 동시성 설정
     MAX_CONCURRENT_WORKFLOWS: int = int(env_vars.get("MAX_CONCURRENT_WORKFLOWS", 100))
@@ -307,6 +308,9 @@ class Settings(BaseSettings):
 
     # 워크플로우 통합 활성화 (채팅에서 워크플로우 사용)
     ENABLE_WORKFLOW_IN_CHAT: bool = bool(env_vars.get("ENABLE_WORKFLOW_IN_CHAT", True))
+
+    # Phase 3: 응답 정제 기능 활성화 (부분 성공 시 LLM으로 응답 정제)
+    ENABLE_RESPONSE_REFINEMENT: bool = bool(env_vars.get("ENABLE_RESPONSE_REFINEMENT", True))
 
     # 컨텍스트 최적화 설정
     # 1. Thinking Block 관리

@@ -553,6 +553,8 @@ class MultiAgentWorkflow:
             search_results=[],
             analysis_results=[],
             generation_results=[],
+            search_synthesis=None,  # Phase 2: LLM 검색 결과 종합
+            search_metadata=None,  # Phase 2: 검색 메타데이터
             integrated_results=None,
             quality_score=None,
             quality_feedback=None,

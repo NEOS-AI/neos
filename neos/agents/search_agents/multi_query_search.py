@@ -459,16 +459,11 @@ Search Queries:""",
 
         async def summarize_single_query(query: str, search_results: List[Dict[str, Any]]) -> str:
             """단일 쿼리 결과 요약"""
-            # 언어별 fallback 메시지
-            no_results_messages = {
-                "ko": f"검색 쿼리 '{query}'에 대한 결과를 찾지 못했습니다.",
-                "en": f"No results found for search query '{query}'.",
-                "ja": f"検索クエリ '{query}' の結果が見つかりませんでした。",
-                "zh": f"未找到搜索查询 '{query}' 的结果。"
-            }
-
+            # Phase 1 개선: 검색 결과가 없을 때 빈 문자열 반환 (에러 메시지 대신)
+            # 이렇게 하면 다른 성공한 검색 결과만 최종 응답에 포함됨
             if not search_results:
-                return no_results_messages.get(detected_language, no_results_messages["en"])
+                print(f"[DEBUG] No results for query '{query}', returning empty string to exclude from final response")
+                return ""  # 빈 문자열 반환 - 최종 응답에서 제외됨
 
             try:
                 base_llm = create_llm(temperature=0.1, max_tokens=8000)  # 토큰 수 줄임
@@ -551,13 +546,8 @@ Summary:""",
 
             except Exception as e:
                 print(f"[ERROR] Failed to summarize results for '{query}': {e}")
-                error_messages = {
-                    "ko": f"검색 쿼리 '{query}'에 대한 요약 생성 실패",
-                    "en": f"Failed to generate summary for search query '{query}'",
-                    "ja": f"検索クエリ '{query}' の要約生成に失敗しました",
-                    "zh": f"生成搜索查询 '{query}' 的摘要失败"
-                }
-                return error_messages.get(detected_language, error_messages["en"])
+                # Phase 1 개선: 에러 발생 시에도 빈 문자열 반환
+                return ""
 
         # 모든 요약을 병렬로 처리
         print(f"[DEBUG] Starting parallel summarization for {len(queries)} queries...")
@@ -569,28 +559,18 @@ Summary:""",
                 timeout=60  # 60초 타임아웃
             )
 
-            # Exception 처리
-            error_messages = {
-                "ko": "요약 생성 실패",
-                "en": "Failed to generate summary",
-                "ja": "要約生成に失敗しました",
-                "zh": "生成摘要失败"
-            }
-            timeout_messages = {
-                "ko": "요약 생성 시간 초과",
-                "en": "Summary generation timed out",
-                "ja": "要約生成がタイムアウトしました",
-                "zh": "摘要生成超时"
-            }
-
+            # Phase 1 개선: Exception 및 빈 문자열 필터링
             processed_summaries = []
             for i, summary in enumerate(summaries):
                 if isinstance(summary, Exception):
                     print(f"[ERROR] Summary task {i+1} failed: {summary}")
-                    error_msg = error_messages.get(detected_language, error_messages["en"])
-                    processed_summaries.append(f"{error_msg}: '{queries[i]}'")
-                else:
+                    # 에러 메시지 대신 건너뜀 (빈 문자열 추가하지 않음)
+                    continue
+                elif summary and summary.strip():  # 빈 문자열이 아닌 경우만 추가
                     processed_summaries.append(summary)
+                else:
+                    print(f"[DEBUG] Skipping empty summary for query '{queries[i]}'")
+
 
             print(f"[DEBUG] Parallel summarization completed: {len(processed_summaries)} summaries")
             return processed_summaries

@@ -9,6 +9,7 @@ from neos.config.settings import settings
 from neos.utils.cache import cache_manager
 from neos.utils.circuit_breaker import AgentCircuitBreaker
 from neos.tools.tool_selector import ToolContext
+from neos.workflow.processors.search_result_synthesizer import SearchResultSynthesizer
 
 from ..state import AgentState
 
@@ -209,8 +210,35 @@ class SearchOrchestrator:
                 search_results, search_agents, state
             )
 
-            # 캐싱
-            await self._cache_results(cache_key, valid_results)
+            # Phase 2: LLM 기반 검색 결과 종합 및 필터링
+            synthesizer = SearchResultSynthesizer()
+            synthesis_result = await synthesizer.synthesize_search_results(
+                query=state["original_query"],
+                search_results=state["search_results"],
+                agent_errors=state["errors"],
+                detected_language=state.get("detected_language", "ko"),
+                session_id=state.get("session_id", ""),
+                user_id=state.get("user_id", "")
+            )
+
+            # 정제된 결과로 교체 (에러 메시지가 필터링된 깨끗한 결과)
+            state["search_results"] = synthesis_result["results"]
+
+            # 종합 메타데이터 저장
+            state["search_synthesis"] = synthesis_result.get("synthesis")  # LLM 종합 요약
+            state["search_metadata"] = {
+                "sources_checked": synthesis_result["sources_checked"],
+                "sources_succeeded": synthesis_result["sources_succeeded"],
+                "partial_success": synthesis_result.get("partial_success", False),
+                "synthesis_performed": synthesis_result.get("synthesis_performed", False)
+            }
+
+            print(f"[DEBUG] Search synthesis completed: {synthesis_result['sources_succeeded']}/{synthesis_result['sources_checked']} sources succeeded")
+            if synthesis_result.get("partial_success"):
+                print(f"[DEBUG] Partial success detected - some search agents failed but continuing with available results")
+
+            # 캐싱 (정제된 결과만 캐시)
+            await self._cache_results(cache_key, synthesis_result["results"])
 
             # 실행 단계 기록
             self._record_execution_step(search_results, mcp_results_count, state)
@@ -219,9 +247,25 @@ class SearchOrchestrator:
             logger.warning(f"검색 오케스트레이션 타임아웃 ({orchestration_timeout}초)")
             print(f"[ERROR] Search orchestration timed out after {orchestration_timeout} seconds")
             state["errors"].append(f"Search orchestration timed out after {orchestration_timeout} seconds")
+            # 타임아웃 시에도 메타데이터 초기화 (downstream 안전성)
+            if state.get("search_metadata") is None:
+                state["search_metadata"] = {
+                    "sources_checked": len(search_agents),
+                    "sources_succeeded": 0,
+                    "partial_success": False,
+                    "synthesis_performed": False
+                }
         except Exception as e:
             print(f"[ERROR] Search orchestration failed: {str(e)}")
             state["errors"].append(f"Search orchestration failed: {str(e)}")
+            # 예외 시에도 메타데이터 초기화 (downstream 안전성)
+            if state.get("search_metadata") is None:
+                state["search_metadata"] = {
+                    "sources_checked": len(search_agents),
+                    "sources_succeeded": 0,
+                    "partial_success": False,
+                    "synthesis_performed": False
+                }
 
         return state
 

@@ -168,8 +168,9 @@ class RealtimeInfoSearchAgent(SearchAgent):
 
             print(f"[DEBUG] Processing {len(tavily_results)} Tavily results with LLM...")
 
-            # Create LLM instance with higher max_tokens for comprehensive responses
-            base_llm = create_llm(temperature=0.1, max_tokens=8000)  # Low temperature for factual accuracy, higher token limit
+            # 중기 조치: max_tokens 최적화 (8000 → 2000) - 응답 시간 단축
+            # Tavily 결과 5개 처리에는 2000 토큰이면 충분
+            base_llm = create_llm(temperature=0.1, max_tokens=2000)
 
             # Wrap LLM with tracking for dataset collection
             llm = create_tracked_llm(
@@ -188,10 +189,18 @@ class RealtimeInfoSearchAgent(SearchAgent):
             prompt = self._create_analysis_prompt(query, search_context, detected_language)
 
             print("[DEBUG] Sending request to LLM for result processing...")
-            response = await llm.ainvoke([HumanMessage(content=prompt)])
-            llm_response = response.content
-
-            print(f"[DEBUG] LLM response length: {len(llm_response)} characters")
+            # 단기 조치: LLM 호출에 타임아웃 추가 (15초)
+            try:
+                response = await asyncio.wait_for(
+                    llm.ainvoke([HumanMessage(content=prompt)]),
+                    timeout=15.0  # 15초 타임아웃
+                )
+                llm_response = response.content
+                print(f"[DEBUG] LLM response length: {len(llm_response)} characters")
+            except asyncio.TimeoutError:
+                print("[WARNING] LLM processing timed out after 15 seconds, returning raw results")
+                # 타임아웃 시 raw 결과 반환 (빈 배열 대신)
+                return self._create_raw_results(tavily_results)
 
             # Create a single comprehensive SearchResult with LLM-processed content
             processed_result = SearchResult(
@@ -222,25 +231,28 @@ class RealtimeInfoSearchAgent(SearchAgent):
             import traceback
             print(f"[ERROR] LLM processing traceback: {traceback.format_exc()}")
 
-            # Fallback to original Tavily results if LLM processing fails
+            # Fallback to raw results
             print("[DEBUG] Falling back to original Tavily results")
+            return self._create_raw_results(tavily_results)
 
-            results = []
-            for i, item in enumerate(tavily_results):
-                result = SearchResult(
-                    source="web",
-                    title=item.get("title", ""),
-                    content=item.get("content", ""),
-                    url=item.get("url", ""),
-                    score=item.get("score", 0.0),
-                    metadata={
-                        "published_date": item.get("published_date"),
-                        "domain": item.get("domain"),
-                        "fallback": True
-                    }
-                )
-                results.append(result)
-            return results
+    def _create_raw_results(self, tavily_results: List[Dict[str, Any]]) -> List["SearchResult"]:
+        """LLM 처리 없이 raw Tavily 결과를 SearchResult로 변환"""
+        results = []
+        for item in tavily_results:
+            result = SearchResult(
+                source="web",
+                title=item.get("title", ""),
+                content=item.get("content", ""),
+                url=item.get("url", ""),
+                score=item.get("score", 0.0),
+                metadata={
+                    "published_date": item.get("published_date"),
+                    "domain": item.get("domain"),
+                    "fallback": True
+                }
+            )
+            results.append(result)
+        return results
 
     def _prepare_search_context(self, tavily_results: List[Dict[str, Any]]) -> str:
         """Tavily 검색 결과를 LLM이 처리할 수 있는 형태로 준비"""
