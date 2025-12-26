@@ -33,8 +33,6 @@ class WikipediaSkill(BaseSkill):
     async def initialize(self) -> bool:
         """Wikipedia API 래퍼 초기화"""
         try:
-            from langchain_community.utilities import WikipediaAPIWrapper
-
             self.wikipedia_wrapper = WikipediaAPIWrapper()
             self.is_available = True
             logger.info("Wikipedia skill initialized successfully")
@@ -152,8 +150,6 @@ class WikipediaSkill(BaseSkill):
             )
 
         try:
-            from langchain_community.utilities import WikipediaAPIWrapper
-
             # 페이지 검색 (단일 결과)
             wikipedia_wrapper = WikipediaAPIWrapper(
                 top_k_results=1,
