@@ -1,6 +1,6 @@
 """PubMed Skill implementation"""
 
-from typing import Dict, Any, List
+from typing import Dict, Any
 import logging
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType

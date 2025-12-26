@@ -9,7 +9,6 @@ from typing import List
 from neos.skills.manager.skill_registry import SkillInfo
 from neos.skills.base import SkillType
 
-from .bigquery import BigQuerySkill
 from .docx import DocxSkill
 from .pdf import PdfSkill
 from .arxiv import ArxivSkill
@@ -32,21 +31,6 @@ def get_builtin_skills() -> List[SkillInfo]:
     skills_dir = Path(__file__).parent
 
     builtin_skills = [
-        SkillInfo(
-            name="bigquery",
-            skill_class=BigQuerySkill,
-            skill_type=SkillType.DATABASE,
-            description="BigQuery 데이터베이스 조회 및 분석",
-            capabilities=[
-                "sql_query",
-                "data_retrieval",
-                "data_analysis",
-                "bigquery",
-            ],
-            version="1.0.0",
-            skill_dir=skills_dir / "bigquery",
-            allowed_tools="Read",
-        ),
         SkillInfo(
             name="docx",
             skill_class=DocxSkill,
@@ -149,7 +133,6 @@ def get_builtin_skills() -> List[SkillInfo]:
 
 __all__ = [
     "get_builtin_skills",
-    "BigQuerySkill",
     "DocxSkill",
     "PdfSkill",
     "ResearchAssistantSkill",
