@@ -35,6 +35,7 @@ class BaseSkill(ABC):
         capabilities: Optional[List[str]] = None,
         skill_dir: Optional[Path] = None,
         version: str = "1.0.0",
+        allowed_tools: Optional[str] = None,
     ):
         """
         Args:
@@ -44,6 +45,7 @@ class BaseSkill(ABC):
             capabilities: 스킬 기능 목록
             skill_dir: 스킬 디렉토리 경로
             version: 스킬 버전
+            allowed_tools: 스킬이 필요로 하는 도구 목록
         """
         self.name = name
         self.skill_type = skill_type
@@ -52,6 +54,7 @@ class BaseSkill(ABC):
         self.is_available = False
         self.skill_dir = skill_dir
         self.version = version
+        self.allowed_tools = allowed_tools
 
     @abstractmethod
     async def initialize(self) -> bool:
@@ -114,6 +117,7 @@ class BaseSkill(ABC):
             "is_available": self.is_available,
             "version": self.version,
             "skill_dir": str(self.skill_dir) if self.skill_dir else None,
+            "allowed_tools": self.allowed_tools,
         }
 
     def load_skill_file(self, filename: str) -> Optional[str]:
@@ -147,6 +151,60 @@ class BaseSkill(ABC):
             SKILL.md 파일 내용
         """
         return self.load_skill_file("SKILL.md")
+
+    def get_skill_body(self) -> Optional[str]:
+        """Get SKILL.md body (markdown content after frontmatter)
+
+        Returns:
+            SKILL.md body content
+        """
+        if not self.skill_dir:
+            return None
+
+        skill_md = self.skill_dir / "SKILL.md"
+        if not skill_md.exists():
+            return None
+
+        try:
+            content = skill_md.read_text(encoding='utf-8')
+            # Import here to avoid circular dependency
+            from .metadata_parser import extract_frontmatter
+            _, body = extract_frontmatter(content)
+            return body
+        except Exception as e:
+            logger.error(f"Failed to extract skill body from {skill_md}: {e}")
+            return None
+
+    def to_context(
+        self,
+        include_body: bool = True,
+        max_tokens: int = 2000
+    ) -> str:
+        """Convert skill to LLM context (XML format)
+
+        Args:
+            include_body: Include SKILL.md documentation body
+            max_tokens: Maximum tokens for body (approximate)
+
+        Returns:
+            XML formatted skill context
+        """
+        try:
+            from .prompt_generator import generate_skill_context
+
+            return generate_skill_context(
+                skill_name=self.name,
+                description=self.description,
+                skill_body=self.get_skill_body() if include_body else None,
+                allowed_tools=self.allowed_tools,
+                capabilities=self.capabilities,
+                include_body=include_body,
+                max_tokens=max_tokens,
+            )
+        except ImportError:
+            # Fallback if prompt_generator not available yet
+            logger.warning("prompt_generator not available, returning basic context")
+            return f"<skill><name>{self.name}</name><description>{self.description}</description></skill>"
 
     def __repr__(self) -> str:
         return (

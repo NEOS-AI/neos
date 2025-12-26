@@ -23,6 +23,7 @@ class SkillInfo:
         capabilities: 스킬 기능 목록
         version: 스킬 버전
         skill_dir: 스킬 디렉토리 경로
+        allowed_tools: 스킬이 필요로 하는 도구 목록 (선택적)
     """
 
     name: str
@@ -32,6 +33,7 @@ class SkillInfo:
     capabilities: List[str]
     version: str = "1.0.0"
     skill_dir: Optional[Path] = None
+    allowed_tools: Optional[str] = None
 
 
 class SkillRegistry:
@@ -99,6 +101,10 @@ class SkillRegistry:
             # Update skill_dir if provided
             if skill_info.skill_dir:
                 instance.skill_dir = skill_info.skill_dir
+
+            # Update allowed_tools from SkillInfo
+            if skill_info.allowed_tools:
+                instance.allowed_tools = skill_info.allowed_tools
 
             self._instances[skill_name] = instance
             logger.info(f"Created skill instance: {skill_name}")

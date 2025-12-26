@@ -12,6 +12,7 @@ capabilities:
   - research_support
 dependencies:
   - langchain-community>=0.0.1
+allowed_tools: "WebFetch"
 ---
 
 # PubMed Skill

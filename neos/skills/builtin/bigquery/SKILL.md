@@ -10,6 +10,7 @@ capabilities:
   - bigquery
 dependencies:
   - google-cloud-bigquery>=3.0.0
+allowed_tools: "Read"
 ---
 
 # BigQuery Skill

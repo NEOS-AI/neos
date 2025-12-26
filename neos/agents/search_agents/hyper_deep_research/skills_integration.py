@@ -370,7 +370,7 @@ class SkillsIntegrator:
 
         try:
             result = await self.skill_manager.execute_skill(
-                "research_assistant",
+                "research-assistant",
                 {
                     "action": "analyze_source",
                     "content": content,
@@ -400,7 +400,7 @@ class SkillsIntegrator:
 
         try:
             result = await self.skill_manager.execute_skill(
-                "research_assistant",
+                "research-assistant",
                 {
                     "action": "summarize",
                     "content": content,
@@ -426,7 +426,7 @@ class SkillsIntegrator:
 
         try:
             result = await self.skill_manager.execute_skill(
-                "research_assistant",
+                "research-assistant",
                 {
                     "action": "extract_references",
                     "content": content

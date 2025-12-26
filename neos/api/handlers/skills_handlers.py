@@ -41,6 +41,7 @@ class SkillInfoResponse(BaseModel):
     capabilities: List[str]
     version: str
     is_available: bool
+    allowed_tools: Optional[str] = None
 
 
 class SkillExecutionResponse(BaseModel):
@@ -260,6 +261,81 @@ async def initialize_all_skills():
 
     except Exception as e:
         logger.error(f"Error initializing all skills: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@router.get("/skills/prompt")
+async def get_skills_prompt(
+    skill_names: Optional[str] = None,
+    include_body: bool = True,
+    skill_type: Optional[str] = None,
+):
+    """Generate XML prompt for skills
+
+    Args:
+        skill_names: Comma-separated skill names (None = all)
+        include_body: Include SKILL.md documentation body
+        skill_type: Filter by skill type
+
+    Returns:
+        XML formatted skills prompt
+    """
+    try:
+        names = skill_names.split(',') if skill_names else None
+        stype = SkillType(skill_type) if skill_type else None
+
+        prompt = skill_manager.generate_skills_prompt(
+            skill_names=names,
+            include_body=include_body,
+            skill_type=stype,
+        )
+
+        return {"prompt": prompt}
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid skill_type: {skill_type}"
+        )
+    except Exception as e:
+        logger.error(f"Error generating skills prompt: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@router.post("/skills/validate")
+async def validate_skill_metadata(
+    metadata: Dict[str, Any],
+    skill_dir_name: Optional[str] = None,
+):
+    """Validate skill metadata without loading skill
+
+    Args:
+        metadata: Skill metadata dictionary (frontmatter)
+        skill_dir_name: Optional directory name for validation
+
+    Returns:
+        Validation result with errors if any
+    """
+    try:
+        from neos.skills.base.validator import validate_metadata
+        from pathlib import Path
+
+        skill_dir = Path(skill_dir_name) if skill_dir_name else None
+        errors = validate_metadata(metadata, skill_dir)
+
+        return {
+            "valid": len(errors) == 0,
+            "errors": errors,
+        }
+
+    except Exception as e:
+        logger.error(f"Error validating metadata: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
