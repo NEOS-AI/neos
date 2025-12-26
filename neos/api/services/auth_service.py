@@ -205,8 +205,8 @@ class AuthService:
                 and_(
                     RefreshToken.token_hash == token_hash,
                     RefreshToken.user_id == user_id,
-                    not RefreshToken.is_revoked,
-                    not RefreshToken.is_used,
+                    ~RefreshToken.is_revoked,
+                    ~RefreshToken.is_used,
                     RefreshToken.expires_at > datetime.utcnow()
                 )
             )
