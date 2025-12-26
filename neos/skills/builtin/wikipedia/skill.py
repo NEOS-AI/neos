@@ -2,6 +2,7 @@
 
 from typing import Dict, Any
 import logging
+from langchain_community.utilities import WikipediaAPIWrapper
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
 
@@ -96,8 +97,6 @@ class WikipediaSkill(BaseSkill):
             )
 
         try:
-            from langchain_community.utilities import WikipediaAPIWrapper
-
             # 래퍼 생성
             wikipedia_wrapper = WikipediaAPIWrapper(
                 top_k_results=max_results,
