@@ -88,6 +88,9 @@ python3 -m neos.main
 
 # Or run uvicorn directly
 uvicorn neos.main:app --reload --host 0.0.0.0 --port 8518
+
+# Also, you could use Granian for better performance
+uv run granian --port 8518 --host 0.0.0.0 neos/main:app
 ```
 
 ### 5. Test API
