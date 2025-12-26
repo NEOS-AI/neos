@@ -65,6 +65,7 @@ dependencies = [
     "xmltodict>=1.0.2",
     "pymupdf>=1.26.7",
     "pyyaml>=6.0",
+    "granian[pname,uvloop]>=2.6.0",
 ]
 
 [tool.setuptools.packages.find]
