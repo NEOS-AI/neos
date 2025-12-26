@@ -19,8 +19,11 @@ async function refreshAccessToken(token: any) {
 
   try {
     if (!token.backendRefreshToken) {
+      console.error("[Auth] No refresh token available in token object");
       throw new Error("No refresh token available");
     }
+
+    console.log("[Auth] Attempting to refresh access token...");
 
     const response = await fetch(`${backendUrl}/api/v1/auth/refresh`, {
       method: "POST",
@@ -29,10 +32,19 @@ async function refreshAccessToken(token: any) {
     });
 
     if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[Auth] Token refresh failed: ${response.status}`, errorText);
       throw new Error(`Token refresh failed: ${response.status}`);
     }
 
     const refreshedTokens = await response.json();
+
+    if (!refreshedTokens.access_token) {
+      console.error("[Auth] No access_token in refresh response:", refreshedTokens);
+      throw new Error("Invalid refresh response: missing access_token");
+    }
+
+    console.log("[Auth] Token refreshed successfully");
 
     return {
       ...token,
@@ -42,7 +54,7 @@ async function refreshAccessToken(token: any) {
       error: undefined,
     };
   } catch (error) {
-    console.error("Error refreshing access token:", error);
+    console.error("[Auth] Error refreshing access token:", error);
 
     return {
       ...token,
@@ -274,6 +286,7 @@ export const {
     async jwt({ token, user, trigger, session }) {
       // 초기 로그인 시
       if (user) {
+        console.log("[Auth JWT] Initial login - setting up token");
         token.id = user.id as string;
         token.type = user.type;
         token.backendUserId = user.backendUserId;
@@ -285,19 +298,24 @@ export const {
 
       // 클라이언트에서 update() 호출 시 (예: 토큰 갱신)
       if (trigger === "update" && session?.backendAccessToken) {
+        console.log("[Auth JWT] Manual token update triggered");
         token.backendAccessToken = session.backendAccessToken;
         token.accessTokenExpires = Date.now() + 15 * 60 * 1000;
       }
 
       // 토큰 만료 체크 및 자동 갱신
       if (token.accessTokenExpires && token.backendRefreshToken) {
+        const timeUntilExpiry = token.accessTokenExpires - Date.now();
+        const minutesUntilExpiry = Math.floor(timeUntilExpiry / 60000);
+
         // 만료 5분 전이면 아직 유효함
-        if (Date.now() < token.accessTokenExpires - 5 * 60 * 1000) {
+        if (timeUntilExpiry > 5 * 60 * 1000) {
+          // console.log(`[Auth JWT] Token still valid (${minutesUntilExpiry} minutes remaining)`);
           return token;
         }
 
         // 만료 임박 또는 만료됨 - 갱신 시도
-        console.log("Token expiring soon, refreshing...");
+        console.log(`[Auth JWT] Token expiring soon (${minutesUntilExpiry} minutes), refreshing...`);
         return await refreshAccessToken(token);
       }
 

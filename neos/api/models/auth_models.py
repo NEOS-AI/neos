@@ -104,12 +104,20 @@ class APIKeyListResponse(BaseModel):
 
 class GoogleLoginRequest(BaseModel):
     """Google OAuth 로그인 요청"""
-    google_token: str = Field(..., description="Google ID Token from Google Sign-In")
+    google_token: str = Field(
+        ...,
+        description="Google ID Token from Google Sign-In",
+        validation_alias="id_token"  # NextAuth에서 id_token으로 보내므로 호환성 지원
+    )
 
 
 class GoogleLinkRequest(BaseModel):
     """Google 계정 연결 요청"""
-    google_token: str = Field(..., description="Google ID Token from Google Sign-In")
+    google_token: str = Field(
+        ...,
+        description="Google ID Token from Google Sign-In",
+        validation_alias="id_token"  # NextAuth에서 id_token으로 보내므로 호환성 지원
+    )
 
 
 class OAuthUnlinkRequest(BaseModel):
