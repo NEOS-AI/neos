@@ -24,9 +24,28 @@ class SearchOrchestrator:
         self.config = config
         self.tool_selector = tool_selector
 
+        # Iterative Web Explorer 초기화
+        self.iterative_explorer = None
+        self._init_iterative_explorer()
+
+    def _init_iterative_explorer(self):
+        """Iterative Web Explorer 초기화"""
+        try:
+            from neos.agents.search_agents import IterativeWebExplorerAgent
+            self.iterative_explorer = IterativeWebExplorerAgent()
+            logger.info("IterativeWebExplorer initialized successfully")
+        except Exception as e:
+            logger.warning(f"Failed to initialize IterativeWebExplorer: {e}")
+            self.iterative_explorer = None
+
     async def orchestrate(self, state: AgentState) -> Dict[str, Any]:
-        """검색 에이전트들 오케스트레이션 (MCP 통합)"""
-        logger.info("검색 오케스트레이션 시작 (MCP 통합)")
+        """검색 에이전트들 오케스트레이션 (MCP 통합 + Iterative Mode)
+
+        두 가지 모드:
+        1. Standard Mode: 기존 방식 (병렬 검색 에이전트 실행)
+        2. Iterative Mode: 반복적 웹 탐색 (품질 기반 탐색)
+        """
+        logger.info("검색 오케스트레이션 시작")
         required_agents = state["required_agents"]
         search_agents = [agent for agent in required_agents if agent in self.config.SEARCH_AGENTS]
         logger.info(f"실행할 검색 에이전트: {search_agents}")
@@ -45,6 +64,140 @@ class SearchOrchestrator:
             logger.debug("도구 선택기 초기화 중...")
             await self.tool_selector.initialize()
 
+        # 모드 선택: Iterative vs Standard
+        use_iterative = self._should_use_iterative_mode(state)
+
+        if use_iterative:
+            logger.info("🔄 Using ITERATIVE search mode")
+            return await self._orchestrate_iterative(state, search_agents)
+        else:
+            logger.info("📊 Using STANDARD search mode")
+            return await self._orchestrate_standard(state, search_agents)
+
+    def _should_use_iterative_mode(self, state: AgentState) -> bool:
+        """반복적 탐색 모드 사용 여부 결정
+
+        다음 조건에서 iterative mode 사용:
+        1. 사용자가 명시적으로 요청 (state.use_iterative_search)
+        2. 쿼리 복잡도가 높음 (multi-hop 질문, 비교 분석 등)
+        3. Query intent가 research 또는 deep_analysis
+        4. Iterative explorer가 초기화되어 있음
+        """
+        # 1. Iterative explorer 사용 가능 여부 확인
+        if not self.iterative_explorer:
+            return False
+
+        # 2. 사용자 명시적 선호도
+        user_preference = state.get("use_iterative_search")
+        if user_preference is not None:
+            return user_preference
+
+        # 3. Query intent 기반 판단
+        query_intent = state.get("query_intent", {})
+        # query_intent가 dict가 아닌 경우 처리 (None, str 등)
+        if not isinstance(query_intent, dict):
+            query_intent = {}
+        intent_type = query_intent.get("intent", "")
+
+        # Research/Deep analysis intent면 iterative mode 사용
+        if intent_type in ["research", "deep_analysis", "comparison", "comprehensive"]:
+            logger.info(f"Iterative mode enabled for intent: {intent_type}")
+            return True
+
+        # 4. 쿼리 복잡도 기반 판단
+        query = state.get("original_query", "")
+        complexity_keywords = [
+            "비교", "분석", "조사", "연구", "compare", "analyze", "investigate",
+            "research", "comprehensive", "thorough", "detailed", "in-depth",
+            "차이", "장단점", "pros and cons", "differences"
+        ]
+
+        if any(keyword in query.lower() for keyword in complexity_keywords):
+            logger.info("Iterative mode enabled due to query complexity")
+            return True
+
+        # 기본값: Standard mode
+        return False
+
+    async def _orchestrate_iterative(
+        self,
+        state: AgentState,
+        search_agents: List[str]
+    ) -> Dict[str, Any]:
+        """반복적 웹 탐색 실행
+
+        IterativeWebExplorerAgent를 사용하여 품질 기반 반복 탐색
+        """
+        logger.info("Starting iterative web exploration")
+
+        # Context 구성
+        context = {
+            "user_id": state["user_id"],
+            "session_id": state["session_id"],
+            "query_embedding": state.get("query_embedding"),
+            "query_intent": state.get("query_intent"),
+            "detected_language": state.get("detected_language", "ko"),
+            # 설정 오버라이드 (필요시)
+            "max_depth": settings.ITERATIVE_EXPLORER_MAX_DEPTH,
+            "max_pages": settings.ITERATIVE_EXPLORER_MAX_PAGES,
+            "quality_threshold": settings.ITERATIVE_EXPLORER_MIN_QUALITY
+        }
+
+        try:
+            # Iterative explorer 실행
+            result = await self.iterative_explorer.execute(
+                state["original_query"],
+                context
+            )
+
+            if result.get("success"):
+                # 결과 추가
+                exploration_results = result.get("result", [])
+                state["search_results"].extend(exploration_results)
+
+                # 메타데이터 업데이트
+                metadata = result.get("metadata", {})
+                state["exploration_depth_reached"] = metadata.get("depth_reached", 0)
+                state["exploration_pages_visited"] = metadata.get("pages_visited", 0)
+
+                # 실행 단계 기록
+                state["execution_steps"].append({
+                    "step": "iterative_search",
+                    "result": f"completed - {len(exploration_results)} sources, "
+                             f"depth {metadata.get('depth_reached', 0)}, "
+                             f"quality {metadata.get('final_quality_score', 0):.2f}",
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+
+                logger.info(f"Iterative exploration completed: {len(exploration_results)} sources")
+            else:
+                error_msg = result.get("error", "Unknown error")
+                logger.error(f"Iterative exploration failed: {error_msg}")
+                state["errors"].append(f"Iterative search failed: {error_msg}")
+
+                # Fallback to standard mode
+                logger.info("Falling back to standard search mode")
+                return await self._orchestrate_standard(state, search_agents)
+
+        except Exception as e:
+            logger.error(f"Iterative exploration exception: {e}", exc_info=True)
+            state["errors"].append(f"Iterative search exception: {str(e)}")
+
+            # Fallback to standard mode
+            logger.info("Falling back to standard search mode")
+            return await self._orchestrate_standard(state, search_agents)
+
+        return state
+
+    async def _orchestrate_standard(
+        self,
+        state: AgentState,
+        search_agents: List[str]
+    ) -> Dict[str, Any]:
+        """표준 검색 오케스트레이션 (기존 방식)
+
+        병렬로 여러 검색 에이전트를 실행하고 결과를 통합
+        """
         # 캐시 확인
         search_cache_key = self._generate_cache_key(state, search_agents)
         cached_results = await self._check_cache(search_cache_key, state)

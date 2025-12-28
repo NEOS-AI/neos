@@ -10,6 +10,7 @@ from neos.tools.tools import (
     FileProcessingMCPTool,
     GitMCPTool,
     WebSearchMCPTool,
+    LinkFollowerMCPTool,
 )
 
 
@@ -40,6 +41,7 @@ class MCPManager:
             FileProcessingMCPTool(),
             DatabaseMCPTool(),
             GitMCPTool(),
+            LinkFollowerMCPTool(),
         ]
 
         for tool in default_tools:

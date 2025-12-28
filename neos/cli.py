@@ -1099,12 +1099,12 @@ async def _test_hyper_deep_research(query: str, user_id: str, session_id: str, p
         try:
             agent_result = await asyncio.wait_for(
                 hyper_agent.execute(query, context),
-                timeout=7200  # 120 minutes timeout for hyper deep research
+                timeout=14400  # 240 minutes timeout for hyper deep research
             )
         except asyncio.TimeoutError:
             return {
                 "success": False,
-                "error": "HyperDeepResearch timed out after 120 minutes",
+                "error": "HyperDeepResearch timed out after 240 minutes",
                 "query": query,
                 "timestamp": datetime.now().isoformat()
             }

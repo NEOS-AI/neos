@@ -109,7 +109,18 @@ class Settings(BaseSettings):
         # Deep Research 에이전트 - 장시간 작업 허용
         "deep_research": int(env_vars.get("TIMEOUT_DEEP_RESEARCH", 300)),
         "hyper_deep_research": int(env_vars.get("TIMEOUT_HYPER_DEEP_RESEARCH", 600)),
+
+        # Iterative Web Explorer - 반복적 탐색 작업
+        "iterative_web_explorer": int(env_vars.get("TIMEOUT_ITERATIVE_WEB_EXPLORER", 180)),
     }
+
+    # Iterative Web Explorer 설정
+    ITERATIVE_EXPLORER_MAX_DEPTH: int = int(env_vars.get("ITERATIVE_EXPLORER_MAX_DEPTH", 5))
+    ITERATIVE_EXPLORER_MAX_PAGES: int = int(env_vars.get("ITERATIVE_EXPLORER_MAX_PAGES", 20))
+    ITERATIVE_EXPLORER_MIN_QUALITY: float = float(env_vars.get("ITERATIVE_EXPLORER_MIN_QUALITY", 0.75))
+    ITERATIVE_EXPLORER_CONCURRENT_FETCHES: int = int(env_vars.get("ITERATIVE_EXPLORER_CONCURRENT_FETCHES", 3))
+    ITERATIVE_EXPLORER_TIMEOUT: int = int(env_vars.get("ITERATIVE_EXPLORER_TIMEOUT", 180))  # 3분
+    ITERATIVE_EXPLORER_TAVILY_TIMEOUT: int = int(env_vars.get("ITERATIVE_EXPLORER_TAVILY_TIMEOUT", 30))  # Tavily API 타임아웃 30초
 
     # 검색 오케스트레이션 타임아웃 (즉시 조치: 20초 → 40초로 증가)
     # LLM 처리 시간을 고려하여 충분한 여유 확보

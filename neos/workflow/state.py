@@ -68,11 +68,17 @@ class AgentState(TypedDict):
     integrated_results: Optional[Dict[str, Any]]
     quality_score: Optional[float]
     quality_feedback: Optional[str]
-    
+
+    # 반복적 탐색 상태 (Iterative Web Explorer)
+    use_iterative_search: Optional[bool]  # 사용자 선호
+    exploration_depth_reached: Optional[int]  # 도달 깊이
+    exploration_pages_visited: Optional[int]  # 방문 페이지 수
+    quality_evolution: Optional[List[float]]  # 반복별 품질 점수
+
     # 최종 응답
     final_response: Optional[str]
     response_metadata: Optional[Dict[str, Any]]
-    
+
     # 메타데이터
     execution_start: datetime
     execution_steps: List[Dict[str, Any]]

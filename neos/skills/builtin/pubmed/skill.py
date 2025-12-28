@@ -106,15 +106,25 @@ class PubmedSkill(BaseSkill):
             # 결과 파싱
             papers = []
             for doc in docs:
+                # doc이 dict인지 Document 객체인지 확인
+                if isinstance(doc, dict):
+                    # dict 타입인 경우
+                    metadata = doc.get("metadata", {})
+                    page_content = doc.get("page_content", "")
+                else:
+                    # Document 객체인 경우
+                    metadata = getattr(doc, "metadata", {})
+                    page_content = getattr(doc, "page_content", "")
+
                 # PubMed 메타데이터 파싱
                 paper_info = {
-                    "title": doc.metadata.get("Title", ""),
-                    "authors": doc.metadata.get("Authors", ""),
-                    "published": doc.metadata.get("Published", ""),
-                    "pmid": doc.metadata.get("uid", ""),
-                    "summary": doc.page_content[:500] + "..." if len(doc.page_content) > 500 else doc.page_content,
-                    "full_summary": doc.page_content,
-                    "pubmed_url": f"https://pubmed.ncbi.nlm.nih.gov/{doc.metadata.get('uid', '')}/" if doc.metadata.get('uid') else "",
+                    "title": metadata.get("Title", ""),
+                    "authors": metadata.get("Authors", ""),
+                    "published": metadata.get("Published", ""),
+                    "pmid": metadata.get("uid", ""),
+                    "summary": page_content[:500] + "..." if len(page_content) > 500 else page_content,
+                    "full_summary": page_content,
+                    "pubmed_url": f"https://pubmed.ncbi.nlm.nih.gov/{metadata.get('uid', '')}/" if metadata.get('uid') else "",
                 }
                 papers.append(paper_info)
 
@@ -162,13 +172,22 @@ class PubmedSkill(BaseSkill):
                 )
 
             doc = docs[0]
+
+            # doc이 dict인지 Document 객체인지 확인
+            if isinstance(doc, dict):
+                metadata = doc.get("metadata", {})
+                page_content = doc.get("page_content", "")
+            else:
+                metadata = getattr(doc, "metadata", {})
+                page_content = getattr(doc, "page_content", "")
+
             paper_info = {
-                "title": doc.metadata.get("Title", ""),
-                "authors": doc.metadata.get("Authors", ""),
-                "published": doc.metadata.get("Published", ""),
-                "pmid": doc.metadata.get("uid", ""),
-                "summary": doc.page_content,
-                "pubmed_url": f"https://pubmed.ncbi.nlm.nih.gov/{doc.metadata.get('uid', '')}/" if doc.metadata.get('uid') else "",
+                "title": metadata.get("Title", ""),
+                "authors": metadata.get("Authors", ""),
+                "published": metadata.get("Published", ""),
+                "pmid": metadata.get("uid", ""),
+                "summary": page_content,
+                "pubmed_url": f"https://pubmed.ncbi.nlm.nih.gov/{metadata.get('uid', '')}/" if metadata.get('uid') else "",
             }
 
             return SkillResult.success_result(
