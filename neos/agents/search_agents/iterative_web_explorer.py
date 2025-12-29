@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Set, Optional, TYPE_CHECKING
 from dataclasses import dataclass, field
 from datetime import datetime
 from urllib.parse import urlparse, urljoin
+from collections import defaultdict
 import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
@@ -88,7 +89,11 @@ class IterativeWebExplorerAgent(SearchAgent):
         self.min_quality = settings.ITERATIVE_EXPLORER_MIN_QUALITY
         self.max_concurrent = settings.ITERATIVE_EXPLORER_CONCURRENT_FETCHES
 
-        # HTTP 클라이언트 (세션별로 생성)
+        # 도구 초기화 (lazy loading)
+        self.link_follower = None
+        self.web_lookup_agent = None
+
+        # HTTP 클라이언트 (세션별로 생성, fallback용)
         self.session = None
 
         # 품질 평가기 (세션별로 생성)
@@ -96,9 +101,60 @@ class IterativeWebExplorerAgent(SearchAgent):
 
         # STEP 5: Domain-level rate limiting
         self.domain_last_request_time: Dict[str, float] = {}
+        self.domain_locks: defaultdict = defaultdict(asyncio.Lock)  # Domain별 Lock (자동 생성)
         self.min_request_interval = 1.0  # 같은 도메인에 최소 1초 간격
 
         logger.info(f"[{self.name}] Initialized with max_depth={self.max_depth}, max_pages={self.max_pages}")
+
+    async def _initialize_tools(self):
+        """도구 초기화 (LinkFollower, WebLookup)
+
+        Returns:
+            bool: 초기화 성공 여부
+        """
+        try:
+            # LinkFollowerMCPTool 초기화
+            from neos.tools.tools import LinkFollowerMCPTool
+            self.link_follower = LinkFollowerMCPTool()
+            await self.link_follower.initialize()
+            logger.info(f"[{self.name}] LinkFollowerMCPTool initialized")
+        except Exception as e:
+            logger.warning(f"[{self.name}] LinkFollower init failed: {e}")
+            self.link_follower = None
+
+        try:
+            # WebLookUpAgent 초기화
+            from neos.agents.search_agents.web_lookup import WebLookUpAgent
+            self.web_lookup_agent = WebLookUpAgent()
+            logger.info(f"[{self.name}] WebLookUpAgent initialized")
+        except Exception as e:
+            logger.warning(f"[{self.name}] WebLookUpAgent init failed: {e}")
+            self.web_lookup_agent = None
+
+        # 최소한 하나라도 성공하면 True
+        return self.link_follower is not None or self.web_lookup_agent is not None
+
+    def _cleanup_old_rate_limit_entries(self):
+        """오래된 rate limit 항목 정리 (메모리 누수 방지)
+
+        1시간 이상 사용되지 않은 도메인 정보 삭제
+        """
+        current_time = time.time()
+        ttl = 3600  # 1시간
+
+        # 딕셔너리 복사본에서 반복하여 동시 수정 문제 방지
+        old_domains = [
+            domain for domain, last_time in list(self.domain_last_request_time.items())
+            if current_time - last_time > ttl
+        ]
+
+        for domain in old_domains:
+            # 안전하게 삭제 (KeyError 방지)
+            self.domain_last_request_time.pop(domain, None)
+            self.domain_locks.pop(domain, None)
+
+        if old_domains:
+            logger.debug(f"[{self.name}] Cleaned up {len(old_domains)} old rate limit entries")
 
     async def execute(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """메인 실행 루프
@@ -114,6 +170,15 @@ class IterativeWebExplorerAgent(SearchAgent):
             return {"success": False, "error": "Invalid input", "agent": self.name}
 
         logger.info(f"[{self.name}] Starting iterative exploration for: {query[:100]}")
+
+        # 오래된 rate limit 항목 정리
+        self._cleanup_old_rate_limit_entries()
+
+        # 도구 초기화 (처음 실행 시)
+        if not self.link_follower and not self.web_lookup_agent:
+            initialized = await self._initialize_tools()
+            if not initialized:
+                logger.warning(f"[{self.name}] Tools not available, using fallback methods")
 
         # 컨텍스트에서 메타정보 추출
         session_id = context.get("session_id", "") if context else ""
@@ -166,9 +231,10 @@ class IterativeWebExplorerAgent(SearchAgent):
             logger.info(f"[{self.name}] Initial search: {len(initial_results)} results, {len(state.domain_diversity)} domains")
 
             # 2. 반복적 탐색 루프
+            max_iterations = settings.ITERATIVE_EXPLORER_MAX_ITERATIONS
             while (state.current_depth < max_depth and
                    state.pages_visited < max_pages and
-                   state.iteration_count < 10):  # 최대 반복 제한
+                   state.iteration_count < max_iterations):  # 최대 반복 제한
 
                 state.iteration_count += 1
                 logger.info(f"[{self.name}] Iteration {state.iteration_count}: depth={state.current_depth}, pages={state.pages_visited}")
@@ -197,13 +263,14 @@ class IterativeWebExplorerAgent(SearchAgent):
                     break
 
                 # 페이지 제한에 가까우면 종료
-                if state.pages_visited >= max_pages * 0.9:
+                if state.pages_visited >= max_pages * settings.ITERATIVE_EXPLORER_PAGE_LIMIT_THRESHOLD:
                     logger.info(f"[{self.name}] Approaching page limit ({state.pages_visited}/{max_pages})")
                     break
 
                 # 링크 추출 및 우선순위화
+                recent_window = settings.ITERATIVE_EXPLORER_RECENT_RESULTS_WINDOW
                 new_links = await self._extract_and_prioritize_links(
-                    state.collected_sources[-5:],  # 최근 5개 결과에서만 추출
+                    state.collected_sources[-recent_window:],  # 최근 N개 결과에서만 추출
                     query,
                     state
                 )
@@ -299,7 +366,7 @@ class IterativeWebExplorerAgent(SearchAgent):
                     asyncio.to_thread(
                         client.search,
                         query=query,
-                        max_results=10,
+                        max_results=settings.ITERATIVE_EXPLORER_INITIAL_SEARCH_RESULTS,
                         search_depth="advanced"
                     ),
                     timeout=settings.ITERATIVE_EXPLORER_TAVILY_TIMEOUT
@@ -338,49 +405,101 @@ class IterativeWebExplorerAgent(SearchAgent):
     ) -> List[LinkCandidate]:
         """결과에서 링크 추출 및 우선순위화
 
-        간단한 휴리스틱 기반 링크 추출
-        (추후 Link Following Tool과 통합)
+        LinkFollowerMCPTool을 사용한 실제 구현
         """
+        if not self.link_follower:
+            logger.warning(f"[{self.name}] LinkFollower not available, using fallback")
+            return await self._extract_links_fallback(results, query, state)
+
         candidates = []
 
         for result in results:
             if not result.content or not result.url:
                 continue
 
-            # 간단한 링크 추출 (실제로는 Link Following Tool 사용 예정)
-            # 여기서는 프로토타입이므로 도메인 기반으로 관련 페이지 추측
-            source_domain = urlparse(result.url).netloc
+            try:
+                # LinkFollowerMCPTool 사용하여 실제 링크 추출
+                link_result = await self.link_follower.execute({
+                    "source_url": result.url,
+                    "max_links": settings.LINK_FOLLOWER_MAX_LINKS,
+                    "min_relevance": settings.LINK_FOLLOWER_MIN_RELEVANCE,
+                    "query_context": query,
+                    "same_domain_only": False
+                })
 
-            # 같은 도메인의 하위 페이지를 후보로 추가 (시뮬레이션)
-            # 실제 구현에서는 HTML 파싱하여 실제 링크 추출
-            potential_paths = ["/about", "/resources", "/documentation", "/blog"]
-
-            for path in potential_paths:
-                candidate_url = f"https://{source_domain}{path}"
-
-                # 이미 방문한 URL은 스킵
-                if candidate_url in state.visited_urls:
+                if not link_result.success:
+                    logger.warning(f"[{self.name}] Link extraction failed for {result.url}: {link_result.error}")
                     continue
 
-                # 같은 도메인이 많으면 다양성을 위해 점수 낮춤
-                domain_count = sum(1 for r in state.collected_sources
-                                  if r.url and urlparse(r.url).netloc == source_domain)
-                diversity_penalty = min(domain_count * 0.1, 0.5)
+                # 추출된 링크를 LinkCandidate로 변환
+                for link_data in link_result.data.get("links", []):
+                    link_url = link_data["url"]
 
-                candidate = LinkCandidate(
-                    url=candidate_url,
-                    source_url=result.url,
-                    anchor_text=path,
-                    context=result.title,
-                    relevance_score=0.7 - diversity_penalty,  # 기본 점수
-                    depth=state.current_depth + 1
-                )
-                candidates.append(candidate)
+                    # 이미 방문한 URL은 스킵
+                    if link_url in state.visited_urls:
+                        continue
+
+                    # 다양성 페널티 계산
+                    link_domain = urlparse(link_url).netloc
+                    domain_count = sum(1 for r in state.collected_sources
+                                      if r.url and urlparse(r.url).netloc == link_domain)
+                    diversity_penalty = min(domain_count * 0.1, 0.5)
+
+                    candidate = LinkCandidate(
+                        url=link_url,
+                        source_url=result.url,
+                        anchor_text=link_data.get("anchor_text", ""),
+                        context=link_data.get("context", ""),
+                        relevance_score=link_data.get("relevance_score", 0.5) - diversity_penalty,
+                        depth=state.current_depth + 1
+                    )
+                    candidates.append(candidate)
+
+            except Exception as e:
+                logger.error(f"[{self.name}] Error extracting links from {result.url}: {e}")
+                continue
 
         # 관련성 점수로 정렬
         candidates.sort(key=lambda x: x.relevance_score, reverse=True)
 
         return candidates[:20]  # 상위 20개만
+
+    async def _extract_links_fallback(
+        self,
+        results: List[SearchResult],
+        query: str,
+        state: ExplorationState
+    ) -> List[LinkCandidate]:
+        """링크 추출 폴백 (LinkFollower 사용 불가 시)
+
+        간단한 휴리스틱 기반 추측
+        """
+        candidates = []
+
+        for result in results:
+            if not result.url:
+                continue
+
+            source_domain = urlparse(result.url).netloc
+            potential_paths = ["/about", "/resources", "/documentation", "/blog"]
+
+            for path in potential_paths:
+                candidate_url = f"https://{source_domain}{path}"
+
+                if candidate_url in state.visited_urls:
+                    continue
+
+                candidate = LinkCandidate(
+                    url=candidate_url,
+                    source_url=result.url,
+                    anchor_text=path,
+                    context=result.title or "",
+                    relevance_score=0.5,
+                    depth=state.current_depth + 1
+                )
+                candidates.append(candidate)
+
+        return candidates[:10]
 
     async def _fetch_and_process_links(
         self,
@@ -400,23 +519,28 @@ class IterativeWebExplorerAgent(SearchAgent):
         async def fetch_with_limit(link: LinkCandidate):
             async with semaphore:
                 try:
-                    # STEP 5: Domain-level rate limiting
+                    # STEP 5: Domain-level rate limiting with Lock
                     domain = urlparse(link.url).netloc
                     if domain:
-                        # 마지막 요청 이후 충분한 시간이 지났는지 확인
-                        last_request = self.domain_last_request_time.get(domain, 0)
-                        elapsed = time.time() - last_request
+                        # 도메인별 Lock 가져오기 (defaultdict로 자동 생성)
+                        domain_lock = self.domain_locks[domain]
 
-                        if elapsed < self.min_request_interval:
-                            # 대기 시간 계산
-                            wait_time = self.min_request_interval - elapsed
-                            logger.debug(f"[{self.name}] Rate limiting {domain}: waiting {wait_time:.2f}s")
-                            await asyncio.sleep(wait_time)
+                        # Lock으로 보호하여 race condition 방지
+                        async with domain_lock:
+                            # 마지막 요청 시간 확인
+                            last_request = self.domain_last_request_time.get(domain, 0)
+                            elapsed = time.time() - last_request
 
-                        # 요청 시간 기록
-                        self.domain_last_request_time[domain] = time.time()
+                            if elapsed < self.min_request_interval:
+                                # 대기 시간 계산
+                                wait_time = self.min_request_interval - elapsed
+                                logger.debug(f"[{self.name}] Rate limiting {domain}: waiting {wait_time:.2f}s")
+                                await asyncio.sleep(wait_time)
 
-                    # 실제 페이지 fetch
+                            # 요청 시간 기록 (Lock 안에서)
+                            self.domain_last_request_time[domain] = time.time()
+
+                    # Lock 해제 후 실제 페이지 fetch
                     return await asyncio.wait_for(
                         self._fetch_single_link(link),
                         timeout=15  # 페이지당 15초
@@ -443,29 +567,119 @@ class IterativeWebExplorerAgent(SearchAgent):
     async def _fetch_single_link(self, link: LinkCandidate) -> Optional[SearchResult]:
         """단일 링크 페칭
 
-        프로토타입: 실제 HTTP 요청 없이 시뮬레이션
-        (추후 WebLookUpAgent 통합)
+        WebLookUpAgent를 사용한 실제 구현
         """
-        # 프로토타입에서는 시뮬레이션
-        # 실제 구현 시 WebLookUpAgent 또는 aiohttp 사용
+        if not self.web_lookup_agent:
+            logger.warning(f"[{self.name}] WebLookUpAgent not available, using fallback")
+            return await self._fetch_link_fallback(link)
 
-        logger.debug(f"[{self.name}] Fetching (simulated): {link.url}")
+        try:
+            logger.debug(f"[{self.name}] Fetching: {link.url}")
 
-        # 시뮬레이션: 간단한 SearchResult 생성
-        result = SearchResult(
-            source="iterative_link_following",
-            title=f"Content from {link.anchor_text}",
-            content=f"Simulated content from {link.url}. Context: {link.context}",
-            url=link.url,
-            score=link.relevance_score,
-            metadata={
-                "search_type": "link_following",
-                "depth": link.depth,
-                "source_url": link.source_url
+            # WebLookUpAgent 사용하여 실제 페이지 콘텐츠 가져오기
+            context = {
+                "max_content_length": 2000,  # 콘텐츠 길이 제한
+                "extract_metadata": True
             }
-        )
 
-        return result
+            fetch_result = await self.web_lookup_agent.execute(link.url, context)
+
+            if not fetch_result.get("success"):
+                logger.warning(f"[{self.name}] Failed to fetch {link.url}: {fetch_result.get('error')}")
+                return None
+
+            # WebLookUpAgent는 format_output을 사용하므로 result 키에 SearchResult 리스트가 있음
+            page_results = fetch_result.get("result", [])
+            if not page_results or len(page_results) == 0:
+                logger.warning(f"[{self.name}] No results from WebLookUpAgent for {link.url}")
+                return None
+
+            # 첫 번째 결과 사용
+            page_data = page_results[0]
+
+            # 타입 검증
+            if not isinstance(page_data, (SearchResult, dict)):
+                logger.error(f"[{self.name}] Unexpected result type from WebLookUpAgent: {type(page_data)}")
+                return None
+
+            # SearchResult로 변환 (이미 SearchResult 객체일 수 있음)
+            if isinstance(page_data, SearchResult):
+                # 메타데이터 업데이트
+                page_data.metadata.update({
+                    "search_type": "link_following",
+                    "depth": link.depth,
+                    "source_url": link.source_url,
+                    "anchor_text": link.anchor_text,
+                    "context": link.context
+                })
+                return page_data
+            else:
+                # dict인 경우 SearchResult 생성
+                result = SearchResult(
+                    source="iterative_link_following",
+                    title=page_data.get("title", link.anchor_text),
+                    content=page_data.get("content", ""),
+                    url=link.url,
+                    score=link.relevance_score,
+                    metadata={
+                        "search_type": "link_following",
+                        "depth": link.depth,
+                        "source_url": link.source_url,
+                        "anchor_text": link.anchor_text,
+                        "context": link.context
+                    }
+                )
+                return result
+
+        except Exception as e:
+            logger.error(f"[{self.name}] Error fetching {link.url}: {e}")
+            return None
+
+    async def _fetch_link_fallback(self, link: LinkCandidate) -> Optional[SearchResult]:
+        """링크 페칭 폴백 (WebLookUpAgent 사용 불가 시)
+
+        기본적인 aiohttp 사용
+        """
+        try:
+            import aiohttp
+            from bs4 import BeautifulSoup
+
+            if not self.session:
+                timeout = aiohttp.ClientTimeout(total=30)
+                self.session = aiohttp.ClientSession(timeout=timeout)
+
+            async with self.session.get(link.url) as response:
+                if response.status != 200:
+                    return None
+
+                html = await response.text()
+
+                # 간단한 HTML 파싱
+                soup = BeautifulSoup(html, 'html.parser')
+
+                title = soup.find('title')
+                title_text = title.get_text() if title else link.anchor_text
+
+                # 본문 추출 (간단하게)
+                paragraphs = soup.find_all('p')
+                content = ' '.join([p.get_text() for p in paragraphs[:5]])
+
+                return SearchResult(
+                    source="iterative_link_following_fallback",
+                    title=title_text,
+                    content=content[:2000],
+                    url=link.url,
+                    score=link.relevance_score,
+                    metadata={
+                        "search_type": "link_following",
+                        "depth": link.depth,
+                        "source_url": link.source_url
+                    }
+                )
+
+        except Exception as e:
+            logger.error(f"[{self.name}] Fallback fetch failed for {link.url}: {e}")
+            return None
 
     # _evaluate_quality_simple 메서드는 SearchQualityEvaluator로 대체되었습니다.
     # 품질 평가는 이제 quality_evaluator.evaluate_quality()를 통해 수행됩니다.
@@ -548,11 +762,11 @@ class IterativeWebExplorerAgent(SearchAgent):
                 f"d{max_depth}_p{max_pages}_q{int(quality_threshold * 100)}"
             )
 
-            # 캐싱 (TTL: 1시간)
+            # 캐싱 (TTL: 설정값 사용)
             await cache_manager.set(
                 cache_key,
                 result,
-                ttl=3600,  # 1 hour
+                ttl=settings.ITERATIVE_EXPLORER_CACHE_TTL,
                 serialize="pickle"
             )
 

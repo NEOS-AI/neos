@@ -19,6 +19,7 @@ from neos.workflow.state import SearchResult
 from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import create_tracked_llm
 from neos.utils.cache import cache_manager
+from neos.config.settings import settings
 from langchain_core.messages import HumanMessage
 from langchain_core.language_models.base import BaseLanguageModel
 
@@ -97,10 +98,10 @@ class SearchQualityEvaluator:
         self.session_id = session_id
         self.user_id = user_id
 
-        # 가중치
-        self.completeness_weight = 0.4
-        self.credibility_weight = 0.3
-        self.diversity_weight = 0.3
+        # 가중치 (설정값 사용)
+        self.completeness_weight = settings.QUALITY_EVALUATOR_COMPLETENESS_WEIGHT
+        self.credibility_weight = settings.QUALITY_EVALUATOR_CREDIBILITY_WEIGHT
+        self.diversity_weight = settings.QUALITY_EVALUATOR_DIVERSITY_WEIGHT
 
         logger.info("[QualityEvaluator] Initialized")
 
@@ -139,7 +140,8 @@ class SearchQualityEvaluator:
         diversity_result = await self._evaluate_diversity(results)
 
         # 조기 종료: 명백히 불충분한 경우 LLM 호출 스킵
-        if credibility_result.score < 0.3 or diversity_result.score < 0.3:
+        early_threshold = settings.QUALITY_EVALUATOR_EARLY_TERMINATION_THRESHOLD
+        if credibility_result.score < early_threshold or diversity_result.score < early_threshold:
             logger.info(f"[QualityEvaluator] Early termination - low quality (credibility={credibility_result.score:.2f}, diversity={diversity_result.score:.2f})")
 
             overall = (
@@ -230,12 +232,12 @@ class SearchQualityEvaluator:
         # LLM 평가 (캐시 미스)
         completeness = await self._evaluate_completeness(query, results, context)
 
-        # 캐싱 (30분)
+        # 캐싱 (설정값 사용)
         from dataclasses import asdict
         await cache_manager.set(
             cache_key,
             asdict(completeness),
-            ttl=1800,
+            ttl=settings.ITERATIVE_EXPLORER_COMPLETENESS_CACHE_TTL,
             serialize="json"
         )
 
@@ -448,8 +450,9 @@ Respond with ONLY the JSON, no additional text."""
         # 평균 신뢰도
         avg_credibility = sum(credibility_scores) / len(credibility_scores) if credibility_scores else 0.0
 
-        # 높은 신뢰도 소스 수 (0.7 이상)
-        high_cred_count = sum(1 for s in credibility_scores if s > 0.7)
+        # 높은 신뢰도 소스 수 (설정값 사용)
+        high_cred_threshold = settings.QUALITY_EVALUATOR_HIGH_CREDIBILITY_THRESHOLD
+        high_cred_count = sum(1 for s in credibility_scores if s > high_cred_threshold)
 
         return CredibilityResult(
             score=avg_credibility,
@@ -499,9 +502,10 @@ Respond with ONLY the JSON, no additional text."""
             max_domain_count = max(domain_counts.values())
             dominance_ratio = max_domain_count / total_results
 
-            # 50% 이상이 하나의 도메인에서 온 경우 페널티
-            if dominance_ratio > 0.5:
-                penalty = (dominance_ratio - 0.5) * 0.4  # 최대 0.2 페널티
+            # 설정값 이상이 하나의 도메인에서 온 경우 페널티
+            dominance_threshold = settings.QUALITY_EVALUATOR_DOMINANCE_THRESHOLD
+            if dominance_ratio > dominance_threshold:
+                penalty = (dominance_ratio - dominance_threshold) * 0.4  # 최대 0.2 페널티
                 diversity_score = max(diversity_score - penalty, 0.0)
 
         return DiversityResult(

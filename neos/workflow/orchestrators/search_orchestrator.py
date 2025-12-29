@@ -1,15 +1,15 @@
 """검색 오케스트레이터 모듈"""
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from datetime import datetime
-import asyncio
 import logging
 
 from neos.config.settings import settings
-from neos.utils.cache import cache_manager
-from neos.utils.circuit_breaker import AgentCircuitBreaker
-from neos.tools.tool_selector import ToolContext
-from neos.workflow.processors.search_result_synthesizer import SearchResultSynthesizer
+from neos.workflow.orchestrators.search_strategies import (
+    SearchStrategy,
+    IterativeSearchStrategy,
+    StandardSearchStrategy
+)
 
 from ..state import AgentState
 
@@ -17,41 +17,37 @@ logger = logging.getLogger(__name__)
 
 
 class SearchOrchestrator:
-    """검색 에이전트들 오케스트레이션"""
+    """검색 오케스트레이터 (Strategy 패턴)
+
+    다양한 검색 전략을 관리하고 적절한 전략을 선택하여 실행
+    """
 
     def __init__(self, agents: Dict[str, Any], config, tool_selector):
         self.agents = agents
         self.config = config
         self.tool_selector = tool_selector
 
-        # Iterative Web Explorer 초기화
-        self.iterative_explorer = None
-        self._init_iterative_explorer()
+        # 사용 가능한 전략들 등록
+        self.strategies: List[SearchStrategy] = [
+            IterativeSearchStrategy(),
+            StandardSearchStrategy()  # 항상 마지막 (폴백)
+        ]
 
-    def _init_iterative_explorer(self):
-        """Iterative Web Explorer 초기화"""
-        try:
-            from neos.agents.search_agents import IterativeWebExplorerAgent
-            self.iterative_explorer = IterativeWebExplorerAgent()
-            logger.info("IterativeWebExplorer initialized successfully")
-        except Exception as e:
-            logger.warning(f"Failed to initialize IterativeWebExplorer: {e}")
-            self.iterative_explorer = None
+        logger.info(f"SearchOrchestrator initialized with {len(self.strategies)} strategies")
 
     async def orchestrate(self, state: AgentState) -> Dict[str, Any]:
-        """검색 에이전트들 오케스트레이션 (MCP 통합 + Iterative Mode)
+        """검색 오케스트레이션
 
-        두 가지 모드:
-        1. Standard Mode: 기존 방식 (병렬 검색 에이전트 실행)
-        2. Iterative Mode: 반복적 웹 탐색 (품질 기반 탐색)
+        적절한 전략을 선택하여 실행하고, 실패 시 다음 전략으로 폴백
         """
         logger.info("검색 오케스트레이션 시작")
+
         required_agents = state["required_agents"]
         search_agents = [agent for agent in required_agents if agent in self.config.SEARCH_AGENTS]
         logger.info(f"실행할 검색 에이전트: {search_agents}")
 
         if not search_agents:
-            logger.debug("검색 에이전트가 필요하지 않음, 건너뜀")
+            logger.warning("실행할 검색 에이전트가 없습니다")
             state["execution_steps"].append({
                 "step": "search_orchestration",
                 "result": "skipped - no search agents required",
@@ -59,557 +55,66 @@ class SearchOrchestrator:
             })
             return state
 
-        # MCP 도구 선택기 초기화 (필요시)
-        if not self.tool_selector.initialized:
+        # 도구 선택기 초기화
+        if not self.tool_selector.is_initialized:
             logger.debug("도구 선택기 초기화 중...")
             await self.tool_selector.initialize()
 
-        # 모드 선택: Iterative vs Standard
-        use_iterative = self._should_use_iterative_mode(state)
+        # 적용 가능한 전략 선택
+        selected_strategy = None
+        for strategy in self.strategies:
+            if strategy.is_applicable(state):
+                selected_strategy = strategy
+                logger.info(f"🎯 Selected strategy: {strategy.name}")
+                break
 
-        if use_iterative:
-            logger.info("🔄 Using ITERATIVE search mode")
-            return await self._orchestrate_iterative(state, search_agents)
-        else:
-            logger.info("📊 Using STANDARD search mode")
-            return await self._orchestrate_standard(state, search_agents)
-
-    def _should_use_iterative_mode(self, state: AgentState) -> bool:
-        """반복적 탐색 모드 사용 여부 결정
-
-        다음 조건에서 iterative mode 사용:
-        1. 사용자가 명시적으로 요청 (state.use_iterative_search)
-        2. 쿼리 복잡도가 높음 (multi-hop 질문, 비교 분석 등)
-        3. Query intent가 research 또는 deep_analysis
-        4. Iterative explorer가 초기화되어 있음
-        """
-        # 1. Iterative explorer 사용 가능 여부 확인
-        if not self.iterative_explorer:
-            return False
-
-        # 2. 사용자 명시적 선호도
-        user_preference = state.get("use_iterative_search")
-        if user_preference is not None:
-            return user_preference
-
-        # 3. Query intent 기반 판단
-        query_intent = state.get("query_intent", {})
-        # query_intent가 dict가 아닌 경우 처리 (None, str 등)
-        if not isinstance(query_intent, dict):
-            query_intent = {}
-        intent_type = query_intent.get("intent", "")
-
-        # Research/Deep analysis intent면 iterative mode 사용
-        if intent_type in ["research", "deep_analysis", "comparison", "comprehensive"]:
-            logger.info(f"Iterative mode enabled for intent: {intent_type}")
-            return True
-
-        # 4. 쿼리 복잡도 기반 판단
-        query = state.get("original_query", "")
-        complexity_keywords = [
-            "비교", "분석", "조사", "연구", "compare", "analyze", "investigate",
-            "research", "comprehensive", "thorough", "detailed", "in-depth",
-            "차이", "장단점", "pros and cons", "differences"
-        ]
-
-        if any(keyword in query.lower() for keyword in complexity_keywords):
-            logger.info("Iterative mode enabled due to query complexity")
-            return True
-
-        # 기본값: Standard mode
-        return False
-
-    async def _orchestrate_iterative(
-        self,
-        state: AgentState,
-        search_agents: List[str]
-    ) -> Dict[str, Any]:
-        """반복적 웹 탐색 실행
-
-        IterativeWebExplorerAgent를 사용하여 품질 기반 반복 탐색
-        """
-        logger.info("Starting iterative web exploration")
-
-        # Context 구성
-        context = {
-            "user_id": state["user_id"],
-            "session_id": state["session_id"],
-            "query_embedding": state.get("query_embedding"),
-            "query_intent": state.get("query_intent"),
-            "detected_language": state.get("detected_language", "ko"),
-            # 설정 오버라이드 (필요시)
-            "max_depth": settings.ITERATIVE_EXPLORER_MAX_DEPTH,
-            "max_pages": settings.ITERATIVE_EXPLORER_MAX_PAGES,
-            "quality_threshold": settings.ITERATIVE_EXPLORER_MIN_QUALITY
-        }
-
-        try:
-            # Iterative explorer 실행
-            result = await self.iterative_explorer.execute(
-                state["original_query"],
-                context
-            )
-
-            if result.get("success"):
-                # 결과 추가
-                exploration_results = result.get("result", [])
-                state["search_results"].extend(exploration_results)
-
-                # 메타데이터 업데이트
-                metadata = result.get("metadata", {})
-                state["exploration_depth_reached"] = metadata.get("depth_reached", 0)
-                state["exploration_pages_visited"] = metadata.get("pages_visited", 0)
-
-                # 실행 단계 기록
-                state["execution_steps"].append({
-                    "step": "iterative_search",
-                    "result": f"completed - {len(exploration_results)} sources, "
-                             f"depth {metadata.get('depth_reached', 0)}, "
-                             f"quality {metadata.get('final_quality_score', 0):.2f}",
-                    "timestamp": datetime.utcnow().isoformat()
-                })
-
-                logger.info(f"Iterative exploration completed: {len(exploration_results)} sources")
-            else:
-                error_msg = result.get("error", "Unknown error")
-                logger.error(f"Iterative exploration failed: {error_msg}")
-                state["errors"].append(f"Iterative search failed: {error_msg}")
-
-                # Fallback to standard mode
-                logger.info("Falling back to standard search mode")
-                return await self._orchestrate_standard(state, search_agents)
-
-        except Exception as e:
-            logger.error(f"Iterative exploration exception: {e}", exc_info=True)
-            state["errors"].append(f"Iterative search exception: {str(e)}")
-
-            # Fallback to standard mode
-            logger.info("Falling back to standard search mode")
-            return await self._orchestrate_standard(state, search_agents)
-
-        return state
-
-    async def _orchestrate_standard(
-        self,
-        state: AgentState,
-        search_agents: List[str]
-    ) -> Dict[str, Any]:
-        """표준 검색 오케스트레이션 (기존 방식)
-
-        병렬로 여러 검색 에이전트를 실행하고 결과를 통합
-        """
-        # 캐시 확인
-        search_cache_key = self._generate_cache_key(state, search_agents)
-        cached_results = await self._check_cache(search_cache_key, state)
-        if cached_results:
+        if not selected_strategy:
+            logger.error("No applicable strategy found!")
             return state
 
-        # 검색 실행
-        search_tasks = await self._create_search_tasks(state, search_agents)
-        return await self._execute_and_process_results(
-            search_tasks, search_agents, search_cache_key, state
+        # 전략 실행 (자동 폴백)
+        return await self._execute_with_fallback(
+            selected_strategy,
+            state,
+            search_agents
         )
 
-    def _generate_cache_key(self, state: AgentState, search_agents: List[str]) -> str:
-        """캐시 키 생성
+    async def _execute_with_fallback(
+        self,
+        strategy: SearchStrategy,
+        state: AgentState,
+        search_agents: List[str]
+    ) -> AgentState:
+        """전략 실행 with 자동 폴백
 
-        추가 최적화: 언어별 캐싱 지원
-        - 동일 쿼리라도 언어가 다르면 다른 결과 반환
+        선택된 전략 실행 실패 시 StandardSearchStrategy로 폴백
         """
-        detected_language = state.get("detected_language", "ko")
-        return cache_manager.make_key(
-            "search_results",
-            hash(state["original_query"]),
-            "-".join(sorted(search_agents)),
-            detected_language  # 언어별로 다른 캐시 사용
-        )
-
-    async def _check_cache(self, cache_key: str, state: AgentState) -> bool:
-        """캐시된 결과 확인"""
-        cached_search_results = await cache_manager.get(cache_key, deserialize="pickle")
-        if cached_search_results:
-            state["search_results"].extend(cached_search_results)
-            state["execution_steps"].append({
-                "step": "search_orchestration",
-                "result": f"completed (cached) - {len(cached_search_results)} results",
-                "timestamp": datetime.utcnow().isoformat()
-            })
-            return True
-        return False
-
-    async def _create_search_tasks(self, state: AgentState, search_agents: List[str]) -> List:
-        """검색 태스크 생성"""
-        print("[DEBUG] Creating search tasks with MCP integration...")
-        search_tasks = []
-
-        # 도구 컨텍스트 생성
-        tool_context = ToolContext(
-            query=state["original_query"],
-            user_id=state["user_id"],
-            session_id=state["session_id"],
-            intent=state.get("query_intent"),
-            urgency="normal",
-            quality_requirement="standard",
-            mcp_preference=True,
-            fallback_allowed=True
-        )
-
-        # MCP 웹 검색 도구 실행 시도
-        if any("search" in agent for agent in search_agents):
-            mcp_task = await self._create_mcp_search_task(state, tool_context)
-            if mcp_task:
-                search_tasks.append(mcp_task)
-
-        # 기본 에이전트 태스크 생성
-        agent_tasks = await self._create_agent_tasks(state, search_agents)
-        search_tasks.extend(agent_tasks)
-
-        return search_tasks
-
-    async def _create_mcp_search_task(self, state: AgentState, tool_context: ToolContext):
-        """MCP 검색 태스크 생성"""
         try:
-            print("[DEBUG] Attempting MCP web search...")
-            mcp_search_params = {
-                "query": state["original_query"],
-                "max_results": 10
-            }
+            # 선택된 전략 실행
+            state = await strategy.execute(state, search_agents, self.agents, self.tool_selector)
+            return state
 
-            mcp_task = self.tool_selector.select_and_execute_tool(
-                "web_search",
-                mcp_search_params,
-                tool_context
-            )
-            print("[DEBUG] MCP search task created")
-            return mcp_task
         except Exception as e:
-            print(f"[WARNING] Failed to create MCP search task: {e}")
-            return None
+            logger.error(f"Strategy '{strategy.name}' failed: {e}")
 
-    def _get_agent_timeout(self, agent_name: str) -> int:
-        """에이전트별 타임아웃 값 조회 (성능 최적화)"""
-        return settings.AGENT_TIMEOUTS.get(agent_name, settings.AGENT_TIMEOUT)
+            # Standard strategy가 아닌 경우만 폴백
+            if not isinstance(strategy, StandardSearchStrategy):
+                logger.info("Falling back to StandardSearchStrategy")
 
-    async def _execute_with_timeout(
-        self,
-        agent_name: str,
-        task: Any,
-        state: AgentState
-    ) -> Optional[Any]:
-        """개별 에이전트 타임아웃 적용하여 실행"""
-        timeout = self._get_agent_timeout(agent_name)
-        try:
-            result = await asyncio.wait_for(task, timeout=timeout)
-            logger.debug(f"에이전트 {agent_name} 완료 (타임아웃: {timeout}초)")
-            return result
-        except asyncio.TimeoutError:
-            error_msg = f"에이전트 {agent_name} 타임아웃 ({timeout}초 초과)"
-            logger.warning(error_msg)
-            state["errors"].append(error_msg)
-            return None
-        except Exception as e:
-            error_msg = f"에이전트 {agent_name} 실행 실패: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            state["errors"].append(error_msg)
-            return e
-
-    async def _create_agent_tasks(self, state: AgentState, search_agents: List[str]) -> List:
-        """기본 에이전트 태스크 생성 (개별 타임아웃 적용)"""
-        agent_tasks = []
-
-        for agent_name in search_agents:
-            try:
-                timeout = self._get_agent_timeout(agent_name)
-                print(f"[DEBUG] Setting up task for agent: {agent_name} (timeout: {timeout}s)")
-                agent = self.agents[agent_name]
-                context = {
-                    "user_id": state["user_id"],
-                    "session_id": state["session_id"],
-                    "query_embedding": state.get("query_embedding"),
-                    "query_intent": state.get("query_intent"),
-                    "detected_language": state.get("detected_language")
-                }
-                # 개별 타임아웃이 적용된 래퍼 태스크 생성
-                task = self._execute_with_timeout(
-                    agent_name,
-                    agent.execute(state["original_query"], context),
-                    state
-                )
-                agent_tasks.append(task)
-                print(f"[DEBUG] Task created for agent: {agent_name}")
-            except Exception as e:
-                print(f"[ERROR] Failed to create task for agent {agent_name}: {e}")
-                state["errors"].append(f"Failed to create task for agent {agent_name}: {str(e)}")
-
-        return agent_tasks
-
-    async def _execute_and_process_results(
-        self,
-        search_tasks: List,
-        search_agents: List[str],
-        cache_key: str,
-        state: AgentState
-    ) -> Dict[str, Any]:
-        """검색 실행 및 결과 처리 (최적화된 타임아웃 적용)"""
-        orchestration_timeout = settings.SEARCH_ORCHESTRATION_TIMEOUT
-        print(f"[DEBUG] Executing {len(search_tasks)} search tasks (timeout: {orchestration_timeout}s)...")
-
-        try:
-            print(f"[DEBUG] Starting asyncio.gather with {orchestration_timeout}s timeout...")
-            # 개별 에이전트 타임아웃이 이미 적용되어 있으므로,
-            # 전체 오케스트레이션 타임아웃은 백업 안전장치 역할
-            search_results = await asyncio.wait_for(
-                asyncio.gather(*search_tasks, return_exceptions=True),
-                timeout=orchestration_timeout  # 설정값 사용 (기본 20초)
-            )
-            print(f"[DEBUG] Search execution completed, got {len(search_results)} results")
-
-            # 결과 처리
-            valid_results, mcp_results_count = await self._process_search_results(
-                search_results, search_agents, state
-            )
-
-            # Phase 2: LLM 기반 검색 결과 종합 및 필터링
-            synthesizer = SearchResultSynthesizer()
-            synthesis_result = await synthesizer.synthesize_search_results(
-                query=state["original_query"],
-                search_results=state["search_results"],
-                agent_errors=state["errors"],
-                detected_language=state.get("detected_language", "ko"),
-                session_id=state.get("session_id", ""),
-                user_id=state.get("user_id", "")
-            )
-
-            # 정제된 결과로 교체 (에러 메시지가 필터링된 깨끗한 결과)
-            state["search_results"] = synthesis_result["results"]
-
-            # 종합 메타데이터 저장
-            state["search_synthesis"] = synthesis_result.get("synthesis")  # LLM 종합 요약
-            state["search_metadata"] = {
-                "sources_checked": synthesis_result["sources_checked"],
-                "sources_succeeded": synthesis_result["sources_succeeded"],
-                "partial_success": synthesis_result.get("partial_success", False),
-                "synthesis_performed": synthesis_result.get("synthesis_performed", False)
-            }
-
-            print(f"[DEBUG] Search synthesis completed: {synthesis_result['sources_succeeded']}/{synthesis_result['sources_checked']} sources succeeded")
-            if synthesis_result.get("partial_success"):
-                print(f"[DEBUG] Partial success detected - some search agents failed but continuing with available results")
-
-            # 캐싱 (정제된 결과만 캐시)
-            await self._cache_results(cache_key, synthesis_result["results"])
-
-            # 실행 단계 기록
-            self._record_execution_step(search_results, mcp_results_count, state)
-
-        except asyncio.TimeoutError:
-            logger.warning(f"검색 오케스트레이션 타임아웃 ({orchestration_timeout}초)")
-            print(f"[ERROR] Search orchestration timed out after {orchestration_timeout} seconds")
-            state["errors"].append(f"Search orchestration timed out after {orchestration_timeout} seconds")
-            # 타임아웃 시에도 메타데이터 초기화 (downstream 안전성)
-            if state.get("search_metadata") is None:
-                state["search_metadata"] = {
-                    "sources_checked": len(search_agents),
-                    "sources_succeeded": 0,
-                    "partial_success": False,
-                    "synthesis_performed": False
-                }
-        except Exception as e:
-            print(f"[ERROR] Search orchestration failed: {str(e)}")
-            state["errors"].append(f"Search orchestration failed: {str(e)}")
-            # 예외 시에도 메타데이터 초기화 (downstream 안전성)
-            if state.get("search_metadata") is None:
-                state["search_metadata"] = {
-                    "sources_checked": len(search_agents),
-                    "sources_succeeded": 0,
-                    "partial_success": False,
-                    "synthesis_performed": False
-                }
-
-        return state
-
-    async def _process_search_results(
-        self,
-        search_results: List,
-        search_agents: List[str],
-        state: AgentState
-    ) -> tuple[List, int]:
-        """검색 결과 처리 및 중복 제거"""
-        valid_results = []
-        seen_content = set()
-        mcp_results_count = 0
-
-        for i, result in enumerate(search_results):
-            # MCP 결과인지 확인
-            is_mcp_result = isinstance(result, tuple) and len(result) == 2
-
-            if is_mcp_result:
-                agent_results, mcp_count = self._process_mcp_result(result, state)
-                mcp_results_count += mcp_count
-            else:
-                agent_results = self._process_agent_result(
-                    result, i, search_agents, state
+                # Standard strategy 찾기
+                standard_strategy = next(
+                    (s for s in self.strategies if isinstance(s, StandardSearchStrategy)),
+                    None
                 )
 
-            if agent_results:
-                unique_results = self._deduplicate_results(
-                    agent_results, seen_content
-                )
-                state["search_results"].extend(unique_results)
-                valid_results.extend(unique_results)
-
-        return valid_results, mcp_results_count
-
-    def _process_mcp_result(self, result: tuple, state: AgentState) -> tuple[List, int]:
-        """MCP 결과 처리"""
-        mcp_result, selected_tool = result
-        print(f"[DEBUG] Processing MCP result from tool: {selected_tool}")
-
-        if mcp_result.success:
-            # MCP 결과를 기존 형식으로 변환
-            mcp_data = mcp_result.data
-            if isinstance(mcp_data, list):
-                agent_results = mcp_data
-            elif isinstance(mcp_data, dict) and "results" in mcp_data:
-                agent_results = mcp_data["results"]
+                if standard_strategy:
+                    try:
+                        state = await standard_strategy.execute(state, search_agents, self.agents, self.tool_selector)
+                        return state
+                    except Exception as fallback_error:
+                        logger.error(f"Fallback strategy also failed: {fallback_error}")
+                        state["errors"].append(f"All strategies failed: {str(fallback_error)}")
             else:
-                agent_results = []
+                state["errors"].append(f"Standard strategy failed: {str(e)}")
 
-            print(f"[DEBUG] MCP tool {selected_tool} returned {len(agent_results)} results")
-            return agent_results, len(agent_results)
-        else:
-            print(f"[ERROR] MCP tool failed: {mcp_result.error}")
-            state["errors"].append(f"MCP tool failed: {mcp_result.error}")
-            return [], 0
-
-    def _process_agent_result(
-        self,
-        result: Any,
-        index: int,
-        search_agents: List[str],
-        state: AgentState
-    ) -> List:
-        """
-        기본 에이전트 결과 처리 (개선된 에러 처리)
-
-        에러가 발생한 경우에도 적절하게 로깅하고 상태를 업데이트하며,
-        Circuit Breaker 상태를 확인합니다.
-        """
-        agent_index = index - (1 if any("search" in agent for agent in search_agents) else 0)
-
-        if agent_index < len(search_agents):
-            agent_name = search_agents[agent_index]
-            logger.debug(f"에이전트 결과 처리 중: {agent_name} (index={index+1})")
-
-        if isinstance(result, Exception):
-            if agent_index < len(search_agents):
-                agent_name = search_agents[agent_index]
-                error_msg = f"Search agent {agent_name} failed: {str(result)}"
-
-                logger.error(error_msg, exc_info=True)
-
-                # 에러를 state에 추가 (기존 동작 유지)
-                state["errors"].append(error_msg)
-
-                # Circuit Breaker 상태 확인
-                breaker_states = AgentCircuitBreaker.get_all_states()
-                if agent_name in breaker_states:
-                    breaker_state = breaker_states[agent_name]
-                    if breaker_state != "closed":
-                        logger.warning(
-                            f"⚠️ Circuit Breaker 상태: {agent_name} = {breaker_state}"
-                        )
-                        state["errors"].append(
-                            f"Circuit breaker for {agent_name} is {breaker_state}"
-                        )
-
-            # 에러 시에도 빈 배열 반환 (graceful degradation)
-            return []
-
-        elif result.get("success"):
-            agent_results = result.get("result", [])
-            if agent_index < len(search_agents):
-                agent_name = search_agents[agent_index]
-                logger.info(f"에이전트 {agent_name} 성공: {len(agent_results)}개 결과 반환")
-            return agent_results
-
-        else:
-            # 성공하지 않은 결과
-            if agent_index < len(search_agents):
-                agent_name = search_agents[agent_index]
-                error_detail = result.get("error", "Unknown error")
-
-                # Circuit breaker로 인한 graceful degradation인지 확인
-                if result.get("degraded"):
-                    logger.warning(
-                        f"⚠️ 에이전트 {agent_name} Circuit Breaker로 인해 비활성화됨: {error_detail}"
-                    )
-                else:
-                    logger.warning(
-                        f"에이전트 {agent_name} 비성공 결과: {error_detail}"
-                    )
-
-                state["errors"].append(
-                    f"Agent {agent_name} unsuccessful: {error_detail}"
-                )
-
-            return []
-
-    def _deduplicate_results(self, agent_results: List, seen_content: set) -> List:
-        """결과 중복 제거"""
-        unique_results = []
-
-        for search_result in agent_results:
-            # Create a content hash for deduplication
-            title_raw = getattr(search_result, 'title', '')
-            content_raw = getattr(search_result, 'content', '')
-
-            # 방어적 처리: list나 다른 타입을 문자열로 변환
-            if isinstance(title_raw, list):
-                title = ' '.join(str(t) for t in title_raw).strip().lower()
-            else:
-                title = str(title_raw).strip().lower() if title_raw else ''
-
-            if isinstance(content_raw, list):
-                content = ' '.join(str(c) for c in content_raw)[:200].strip().lower()
-            else:
-                content = str(content_raw)[:200].strip().lower() if content_raw else ''
-
-            content_hash = hash(title + content)
-
-            if content_hash not in seen_content and title and content:
-                seen_content.add(content_hash)
-                unique_results.append(search_result)
-            else:
-                print(f"[DEBUG] Skipping duplicate result: {title[:50] if title else 'no title'}...")
-
-        print(f"[DEBUG] After deduplication: {len(unique_results)} unique results from {len(agent_results)} total")
-        return unique_results
-
-    async def _cache_results(self, cache_key: str, valid_results: List) -> None:
-        """결과 캐싱
-
-        추가 최적화: 캐시 TTL 증가 (30분 → 1시간)
-        - 검색 결과는 자주 변하지 않으므로 더 긴 캐싱 유지
-        """
-        if valid_results:
-            print(f"[DEBUG] Caching {len(valid_results)} valid search results (TTL: 1 hour)")
-            await cache_manager.set(cache_key, valid_results, ttl=3600, serialize="pickle")  # 30분 → 1시간
-
-    def _record_execution_step(
-        self,
-        search_results: List,
-        mcp_results_count: int,
-        state: AgentState
-    ) -> None:
-        """실행 단계 기록"""
-        total_results = len(state["search_results"])
-        successful_agents = len([r for r in search_results if not isinstance(r, Exception)])
-
-        print(f"[DEBUG] Search orchestration completed with {total_results} total results (including {mcp_results_count} MCP results)")
-
-        state["execution_steps"].append({
-            "step": "search_orchestration",
-            "result": f"completed - {successful_agents} agents/tools succeeded, MCP results: {mcp_results_count}",
-            "timestamp": datetime.utcnow().isoformat()
-        })
+            return state
