@@ -7,6 +7,7 @@ import logging
 from neos.config.settings import settings
 from neos.workflow.orchestrators.search_strategies import (
     SearchStrategy,
+    MultiHopSearchStrategy,
     IterativeSearchStrategy,
     StandardSearchStrategy
 )
@@ -28,10 +29,11 @@ class SearchOrchestrator:
         self.config = config
         self.tool_selector = tool_selector
 
-        # 사용 가능한 전략들 등록
+        # 사용 가능한 전략들 등록 (우선순위 순서)
         self.strategies: List[SearchStrategy] = [
-            IterativeSearchStrategy(),
-            StandardSearchStrategy()  # 항상 마지막 (폴백)
+            MultiHopSearchStrategy(),     # 1순위: 복잡한 추론 질문
+            IterativeSearchStrategy(),    # 2순위: 심층 연구 질문
+            StandardSearchStrategy()      # 3순위: 일반 질문 (항상 적용 가능, 폴백)
         ]
 
         # LLM 객체 재사용 (리소스 누수 방지 및 성능 향상)
