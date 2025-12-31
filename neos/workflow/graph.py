@@ -674,6 +674,7 @@ class MultiAgentWorkflow:
         else:
             print("[DEBUG] No LLM calls recorded, skipping dataset save")
 
+
     # 유틸리티 메서드들
     def get_workflow_stats(self) -> Dict[str, Any]:
         """워크플로우 통계 정보"""
@@ -756,6 +757,52 @@ class MultiAgentWorkflow:
             health_status["workflow"] = f"error: {str(e)}"
 
         return health_status
+
+
+    async def cleanup(self):
+        """
+        워크플로우 리소스 정리
+
+        LLM 객체들의 aiohttp 세션을 명시적으로 정리하여
+        "Unclosed client session" 경고를 방지합니다.
+
+        CLI 또는 테스트 환경에서 워크플로우 실행 후 호출해야 합니다.
+        """
+        logger.info("[MultiAgentWorkflow] Cleaning up resources...")
+
+        try:
+            # ConversationContextProcessor LLM 정리
+            if hasattr(self.conversation_context_processor, '_llm') and self.conversation_context_processor._llm:
+                try:
+                    # Langchain LLM의 aiohttp 세션 정리 시도
+                    if hasattr(self.conversation_context_processor._llm, 'async_client'):
+                        await self.conversation_context_processor._llm.async_client.aclose()
+                    logger.debug("[Cleanup] ConversationContextProcessor LLM cleaned")
+                except Exception as e:
+                    logger.debug(f"[Cleanup] ConversationContextProcessor LLM cleanup: {e}")
+
+            # SearchOrchestrator LLM 정리
+            if hasattr(self.search_orchestrator, '_llm') and self.search_orchestrator._llm:
+                try:
+                    if hasattr(self.search_orchestrator._llm, 'async_client'):
+                        await self.search_orchestrator._llm.async_client.aclose()
+                    logger.debug("[Cleanup] SearchOrchestrator LLM cleaned")
+                except Exception as e:
+                    logger.debug(f"[Cleanup] SearchOrchestrator LLM cleanup: {e}")
+
+            # ResponseGenerator LLM 정리
+            if hasattr(self.response_generator, '_llm') and self.response_generator._llm:
+                try:
+                    if hasattr(self.response_generator._llm, 'async_client'):
+                        await self.response_generator._llm.async_client.aclose()
+                    logger.debug("[Cleanup] ResponseGenerator LLM cleaned")
+                except Exception as e:
+                    logger.debug(f"[Cleanup] ResponseGenerator LLM cleanup: {e}")
+
+            logger.info("[MultiAgentWorkflow] ✅ Cleanup completed")
+
+        except Exception as e:
+            logger.warning(f"[MultiAgentWorkflow] Cleanup error (non-critical): {e}")
 
 
 # 전역 워크플로우 인스턴스 (리팩토링된 버전)
