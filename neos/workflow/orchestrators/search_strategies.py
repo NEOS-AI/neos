@@ -94,13 +94,20 @@ class IterativeSearchStrategy(SearchStrategy):
 
         # 쿼리 복잡도 기반 판단
         query = state.get("original_query", "")
+
+        # 방어적 처리: query가 리스트인 경우 문자열로 변환
+        if isinstance(query, list):
+            query = ' '.join(str(q) for q in query)
+        elif not isinstance(query, str):
+            query = str(query) if query else ""
+
         complexity_keywords = [
             "비교", "분석", "조사", "연구", "compare", "analyze",
             "investigate", "research", "comprehensive", "thorough",
             "detailed", "in-depth", "차이", "장단점", "pros and cons"
         ]
 
-        if any(keyword in query.lower() for keyword in complexity_keywords):
+        if query and any(keyword in query.lower() for keyword in complexity_keywords):
             return True
 
         return False

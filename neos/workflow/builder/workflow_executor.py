@@ -155,6 +155,11 @@ class WorkflowExecutor:
             query_intent=None,
             query_embedding=None,
             detected_language=None,
+            # 채팅 히스토리 관련 (하위 호환성 유지 - Optional)
+            chat_history=user_input.get("chat_history"),
+            conversation_context=None,  # Context Processor가 채울 예정
+            enable_history_context=user_input.get("enable_history_context", False),
+            history_metadata=None,
             query_classification=None,
             required_agents=[],
             search_results=[],

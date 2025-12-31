@@ -2,7 +2,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import hashlib
 import logging
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, START, END
 
 from neos.agents.search_agents import (
     KnowledgeSearchAgent,
@@ -30,7 +30,7 @@ from neos.tools.tool_selector import tool_selector
 
 from .state import AgentState, WorkflowConfig
 from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationOrchestrator
-from .processors import ResultProcessor, QualityValidator, ResponseGenerator
+from .processors import ResultProcessor, QualityValidator, ResponseGenerator, ConversationContextProcessor
 from .utils import QueryClassifier
 from .checkpointer import get_checkpointer
 from .events import WorkflowEventHandler, NullEventHandler
@@ -54,6 +54,7 @@ class MultiAgentWorkflow:
         self.agents = self._initialize_agents()
 
         # 컴포넌트 초기화
+        self.conversation_context_processor = ConversationContextProcessor()
         self.query_classifier = QueryClassifier(self.config)
         self.skill_tool_selector = SkillBasedToolSelector()
         self.search_orchestrator = SearchOrchestrator(self.agents, self.config, tool_selector)
@@ -110,6 +111,7 @@ class MultiAgentWorkflow:
         workflow = StateGraph(AgentState)
 
         # 노드 추가
+        workflow.add_node("conversation_context_processor", self._process_conversation_context_node)
         workflow.add_node("query_classifier", self._classify_query_node)
         workflow.add_node("skill_tool_selector", self._select_skills_tools_node)
         workflow.add_node("search_orchestrator", self._orchestrate_search_node)
@@ -120,8 +122,17 @@ class MultiAgentWorkflow:
         workflow.add_node("response_generator", self._generate_response_node)
 
         # 엣지 정의
-        workflow.set_entry_point("query_classifier")
+        # 조건부 진입점: 히스토리가 있으면 context processor를 거치고, 없으면 바로 query_classifier로
+        workflow.add_conditional_edges(
+            START,
+            self._should_process_context,
+            {
+                "process_context": "conversation_context_processor",
+                "skip_context": "query_classifier"
+            }
+        )
 
+        workflow.add_edge("conversation_context_processor", "query_classifier")
         workflow.add_edge("query_classifier", "skill_tool_selector")
         workflow.add_edge("skill_tool_selector", "search_orchestrator")
         workflow.add_edge("search_orchestrator", "analysis_orchestrator")
@@ -224,6 +235,10 @@ class MultiAgentWorkflow:
                 "selection_reasoning": f"Selection failed: {str(e)}"
             }
 
+    async def _process_conversation_context_node(self, state: AgentState) -> Dict[str, Any]:
+        """대화 컨텍스트 처리 노드"""
+        return await self.conversation_context_processor.process(state)
+
     async def _orchestrate_search_node(self, state: AgentState) -> Dict[str, Any]:
         """검색 오케스트레이션 노드"""
         return await self.search_orchestrator.orchestrate(state)
@@ -247,6 +262,20 @@ class MultiAgentWorkflow:
     async def _generate_response_node(self, state: AgentState) -> Dict[str, Any]:
         """응답 생성 노드"""
         return await self.response_generator.generate_response(state)
+
+    def _should_process_context(self, state: AgentState) -> str:
+        """
+        대화 컨텍스트 처리 여부 결정
+
+        히스토리가 있고 활성화되어 있으면 context processor를 거치고,
+        없으면 바로 query_classifier로 이동
+        """
+        has_history = bool(state.get("chat_history"))
+        context_enabled = state.get("enable_history_context", False)
+
+        if has_history and context_enabled:
+            return "process_context"
+        return "skip_context"
 
     def _should_regenerate(self, state: AgentState) -> str:
         """재생성 여부 결정"""

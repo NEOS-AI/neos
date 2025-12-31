@@ -36,9 +36,14 @@ class QueryClassifier:
         }
 
     async def classify_query(self, state: AgentState) -> Dict[str, Any]:
-        """쿼리 분류 및 의도 파악"""
+        """쿼리 분류 및 의도 파악 (대화 컨텍스트 활용)"""
         query = state["original_query"]
         print(f"[DEBUG] Starting query classification for: {query[:50]}...")
+
+        # 대화 컨텍스트 확인
+        conversation_context = state.get("conversation_context", "")
+        if conversation_context:
+            print(f"[DEBUG] Using conversation context (length: {len(conversation_context)} chars)")
 
         try:
             # 언어 감지
@@ -53,8 +58,8 @@ class QueryClassifier:
             complexity_score = self._analyze_query_complexity(query)
             print(f"[DEBUG] Query complexity score: {complexity_score}")
 
-            # 쿼리 의도 분류
-            intent = await self._classify_intent(query, complexity_score)
+            # 쿼리 의도 분류 (컨텍스트 포함)
+            intent = await self._classify_intent(query, complexity_score, conversation_context)
             state["query_intent"] = intent
             print(f"[DEBUG] Intent classified as: {intent}")
 
@@ -131,15 +136,36 @@ class QueryClassifier:
 
         return final_score
 
-    async def _classify_intent(self, query: str, complexity_score: float = 0.0) -> str:
-        """쿼리 의도 분류"""
+    async def _classify_intent(
+        self,
+        query: str,
+        complexity_score: float = 0.0,
+        conversation_context: str = ""
+    ) -> str:
+        """
+        쿼리 의도 분류 (대화 컨텍스트 활용)
+
+        대화 컨텍스트가 있는 경우, 쿼리를 더 정확하게 이해할 수 있습니다:
+        - "그것의 가격은?" → 컨텍스트: "iPhone 15" → 가격 정보 검색
+        - "비교해줘" → 컨텍스트: "GPT-4, Claude" → 비교 분석
+        """
         query_lower = query.lower()
         print("[DEBUG] Classifying query intent...")
+
+        # 컨텍스트가 있으면 쿼리와 결합하여 더 풍부한 분석
+        if conversation_context:
+            # TODO: 향후 LLM을 사용하여 컨텍스트 기반으로 쿼리 확장 가능
+            # 현재는 단순히 키워드 매칭에 컨텍스트도 포함
+            combined_text = f"{query} {conversation_context}"
+            combined_lower = combined_text.lower()
+            print(f"[DEBUG] Using combined text for intent classification (query + context)")
+        else:
+            combined_lower = query_lower
 
         # 키워드 매칭 점수 계산
         intent_scores = {}
         for intent, keywords in self.intent_keywords.items():
-            score = sum(1 for keyword in keywords if keyword in query_lower)
+            score = sum(1 for keyword in keywords if keyword in combined_lower)
             if score > 0:
                 intent_scores[intent] = score
 

@@ -3,9 +3,11 @@
 from .result_processor import ResultProcessor
 from .quality_validator import QualityValidator
 from .response_generator import ResponseGenerator
+from .conversation_context_processor import ConversationContextProcessor
 
 __all__ = [
     "ResultProcessor",
     "QualityValidator",
-    "ResponseGenerator"
+    "ResponseGenerator",
+    "ConversationContextProcessor"
 ]

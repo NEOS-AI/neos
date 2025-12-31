@@ -372,6 +372,12 @@ class Settings(BaseSettings):
     # Phase 3: 응답 정제 기능 활성화 (부분 성공 시 LLM으로 응답 정제)
     ENABLE_RESPONSE_REFINEMENT: bool = bool(env_vars.get("ENABLE_RESPONSE_REFINEMENT", True))
 
+    # 채팅 히스토리 워크플로우 통합 설정
+    CHAT_HISTORY_ENABLED: bool = bool(env_vars.get("CHAT_HISTORY_ENABLED", True))  # 전역 활성화/비활성화
+    MAX_HISTORY_MESSAGES: int = int(env_vars.get("MAX_HISTORY_MESSAGES", 20))  # 워크플로우에 전달할 최대 히스토리 메시지 수
+    HISTORY_CONTEXT_MAX_TOKENS: int = int(env_vars.get("HISTORY_CONTEXT_MAX_TOKENS", 2000))  # 컨텍스트 요약 최대 토큰
+    HISTORY_USAGE_LEVEL: str = env_vars.get("HISTORY_USAGE_LEVEL", "full")  # "full", "summary_only", "disabled"
+
     # 컨텍스트 최적화 설정
     # 1. Thinking Block 관리
     THINKING_BLOCKS_ENABLED: bool = bool(env_vars.get("THINKING_BLOCKS_ENABLED", True))  # LLM thinking block 활성화

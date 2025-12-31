@@ -557,13 +557,29 @@ async def stream_message(
                         user_id=current_user.user_id
                     )
 
+                    # 대화 히스토리 포맷 변환
+                    formatted_history = []
+                    if app_settings.CHAT_HISTORY_ENABLED and history_messages:
+                        formatted_history = [
+                            {
+                                "role": msg["role"],
+                                "content": msg["content"],
+                                "timestamp": msg.get("created_at")
+                            }
+                            for msg in history_messages[:app_settings.MAX_HISTORY_MESSAGES]
+                        ]
+                        logger.info(f"[ChatHandler] Passing {len(formatted_history)} history messages to workflow")
+
                     # 워크플로우 비동기 실행 (채팅은 stateless이므로 checkpointer 비활성화)
                     workflow_task = asyncio.create_task(
                         multi_agent_workflow.execute_workflow(
                             user_input={
                                 "user_id": current_user.user_id,
                                 "session_id": conversation_id,
-                                "query": request.content
+                                "query": request.content,
+                                # 채팅 히스토리 추가
+                                "chat_history": formatted_history,
+                                "enable_history_context": True  # 기본 활성화
                             },
                             event_handler=workflow_callback,
                             use_checkpointer=False  # 채팅 API는 단일 요청이므로 state persistence 불필요

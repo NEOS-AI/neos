@@ -46,6 +46,12 @@ class AgentState(TypedDict):
     query_embedding: Optional[List[float]]
     detected_language: Optional[str]  # 감지된 사용자 질문 언어
 
+    # 채팅 히스토리 관련
+    chat_history: Optional[List[Dict[str, Any]]]  # 대화 히스토리
+    conversation_context: Optional[str]  # LLM이 생성한 대화 맥락 요약
+    enable_history_context: Optional[bool]  # 히스토리 활용 여부
+    history_metadata: Optional[Dict[str, Any]]  # 히스토리 메타데이터
+
     # 쿼리 분류 결과
     query_classification: Optional[Dict[str, Any]]
     required_agents: List[str]
