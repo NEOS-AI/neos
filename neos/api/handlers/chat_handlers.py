@@ -1,6 +1,6 @@
 """Chat API handlers - thin layer for FastAPI routes"""
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import StreamingResponse
 from typing import Optional, AsyncGenerator, List
 import json
@@ -29,16 +29,18 @@ from neos.api.models.chat_models import (
     TemplateListResponse,
     ChatStreamChunk
 )
+from neos.api.dependencies.auth import get_current_user
 from neos.api.services.chat_service import ChatService
-from neos.services.chat_llm_service import chat_llm_service
-from neos.utils.cost_calculator import cost_calculator
+from neos.api.handlers.workflow_stream_handlers import WorkflowStreamCallback
 from neos.database.connection import db_manager
 from neos.database.models import User
-from neos.api.dependencies.auth import get_current_user
+from neos.services.chat_llm_service import chat_llm_service
+from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
 from neos.workflow.graph import multi_agent_workflow
-from neos.api.handlers.workflow_stream_handlers import WorkflowStreamCallback
 from neos.config.settings import settings as app_settings
+from neos.tools.artifact_tools import get_artifact_tools
+from neos.tools.artifact_tool_handler import execute_artifact_tool
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -263,11 +265,7 @@ async def generate_conversation_title(conversation_id: str, request: GenerateTit
 # ============================================================================
 
 @router.post("/conversations/{conversation_id}/messages", response_model=CreateMessageResponse)
-async def send_message(
-    conversation_id: str,
-    request: SendMessageRequest,
-    background_tasks: BackgroundTasks
-):
+async def send_message(conversation_id: str, request: SendMessageRequest):
     """메시지 전송 및 AI 응답 생성"""
     try:
         # 사용자 메시지 저장
@@ -559,13 +557,29 @@ async def stream_message(
                         user_id=current_user.user_id
                     )
 
+                    # 대화 히스토리 포맷 변환
+                    formatted_history = []
+                    if app_settings.CHAT_HISTORY_ENABLED and history_messages:
+                        formatted_history = [
+                            {
+                                "role": msg["role"],
+                                "content": msg["content"],
+                                "timestamp": msg.get("created_at")
+                            }
+                            for msg in history_messages[:app_settings.MAX_HISTORY_MESSAGES]
+                        ]
+                        logger.info(f"[ChatHandler] Passing {len(formatted_history)} history messages to workflow")
+
                     # 워크플로우 비동기 실행 (채팅은 stateless이므로 checkpointer 비활성화)
                     workflow_task = asyncio.create_task(
                         multi_agent_workflow.execute_workflow(
                             user_input={
                                 "user_id": current_user.user_id,
                                 "session_id": conversation_id,
-                                "query": request.content
+                                "query": request.content,
+                                # 채팅 히스토리 추가
+                                "chat_history": formatted_history,
+                                "enable_history_context": True  # 기본 활성화
                             },
                             event_handler=workflow_callback,
                             use_checkpointer=False  # 채팅 API는 단일 요청이므로 state persistence 불필요
@@ -644,12 +658,6 @@ async def stream_message(
                     logger.warning("Falling back to direct LLM.")
                     # 워크플로우 실패 시에도 계속 진행 (폴백)
                     workflow_result = None
-
-            # ============================================================
-            # 아티팩트 프롬프트 및 도구 준비
-            # ============================================================
-            from neos.tools.artifact_tools import get_artifact_tools
-            from neos.tools.artifact_tool_handler import execute_artifact_tool
 
             # 시스템 프롬프트 구성
             system_prompt = conversation.get("system_prompt", "")

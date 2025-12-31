@@ -433,10 +433,16 @@ Respond in exactly this JSON format:
         lines = []
         for skill in skills:
             capabilities = ", ".join(skill.get("capabilities", []))
-            lines.append(
+            skill_info = (
                 f"- **{skill['name']}** ({skill['type']}): {skill['description']}\n"
                 f"  Capabilities: {capabilities}"
             )
+
+            # Add allowed_tools if available
+            if skill.get("allowed_tools"):
+                skill_info += f"\n  Required Tools: {skill['allowed_tools']}"
+
+            lines.append(skill_info)
         return "\n".join(lines)
 
     def _format_tools_list(self, tools: List[Dict[str, Any]]) -> str:

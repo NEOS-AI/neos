@@ -12,6 +12,7 @@ capabilities:
 dependencies:
   - wikipedia>=1.4.0
   - langchain-community>=0.0.1
+allowed_tools: "WebFetch"
 ---
 
 # Wikipedia Skill

@@ -146,24 +146,12 @@ class AuthService:
             }
         )
 
-        # Refresh Token 생성
-        refresh_token = create_refresh_token(
-            data={"user_id": user.user_id}
-        )
-
-        # Refresh Token DB에 저장
-        refresh_token_hash = hash_token(refresh_token)
-        expires_at = datetime.utcnow() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
-
-        new_refresh_token = RefreshToken(
+        # Refresh Token 생성 및 저장
+        refresh_token = await self._create_and_store_refresh_token(
             user_id=user.user_id,
-            token_hash=refresh_token_hash,
             device_info=device_info,
-            ip_address=ip_address,
-            expires_at=expires_at
+            ip_address=ip_address
         )
-
-        self.db.add(new_refresh_token)
 
         # 마지막 로그인 시간 업데이트
         user.last_login = datetime.utcnow()
@@ -217,8 +205,8 @@ class AuthService:
                 and_(
                     RefreshToken.token_hash == token_hash,
                     RefreshToken.user_id == user_id,
-                    not RefreshToken.is_revoked,
-                    not RefreshToken.is_used,
+                    ~RefreshToken.is_revoked,
+                    ~RefreshToken.is_used,
                     RefreshToken.expires_at > datetime.utcnow()
                 )
             )
@@ -301,6 +289,45 @@ class AuthService:
             await self.db.commit()
 
         return True, "로그아웃 성공"
+
+    async def _create_and_store_refresh_token(
+        self,
+        user_id: str,
+        device_info: Optional[str] = None,
+        ip_address: Optional[str] = None
+    ) -> str:
+        """
+        Refresh Token 생성 및 저장
+
+        Args:
+            user_id: 사용자 ID
+            device_info: 디바이스 정보 (User-Agent)
+            ip_address: IP 주소
+
+        Returns:
+            생성된 Refresh Token (JWT)
+        """
+        # Refresh Token 생성
+        refresh_token = create_refresh_token(
+            data={"user_id": user_id}
+        )
+
+        # Refresh Token DB에 저장
+        refresh_token_hash = hash_token(refresh_token)
+        expires_at = datetime.utcnow() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+
+        new_refresh_token = RefreshToken(
+            user_id=user_id,
+            token_hash=refresh_token_hash,
+            device_info=device_info,
+            ip_address=ip_address,
+            expires_at=expires_at
+        )
+
+        self.db.add(new_refresh_token)
+        # Note: commit은 호출하는 메서드에서 수행
+
+        return refresh_token
 
     async def get_user_by_id(self, user_id: str) -> Optional[User]:
         """
@@ -600,24 +627,12 @@ class AuthService:
             }
         )
 
-        # Refresh Token 생성
-        refresh_token = create_refresh_token(
-            data={"user_id": guest_user.user_id}
-        )
-
-        # Refresh Token DB에 저장
-        refresh_token_hash = hash_token(refresh_token)
-        expires_at = datetime.utcnow() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
-
-        new_refresh_token = RefreshToken(
+        # Refresh Token 생성 및 저장
+        refresh_token = await self._create_and_store_refresh_token(
             user_id=guest_user.user_id,
-            token_hash=refresh_token_hash,
             device_info=device_info,
-            ip_address=ip_address,
-            expires_at=expires_at
+            ip_address=ip_address
         )
-
-        self.db.add(new_refresh_token)
 
         # 마지막 로그인 시간 업데이트
         guest_user.last_login = datetime.utcnow()

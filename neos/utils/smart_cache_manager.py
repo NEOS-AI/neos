@@ -244,7 +244,7 @@ class SmartCacheManager:
                             hit_type="miss",
                             search_time_ms=search_time
                         )
-                    query_vector = embeddings[0]
+                    query_vector = embeddings
 
                 semantic_result = await self._find_similar_query(
                     session, query_vector, query_intent, user_id, max_age_seconds
@@ -450,7 +450,32 @@ class SmartCacheManager:
         vector_str = f"[{','.join(map(str, query_vector))}]"
 
         # Raw SQL for pgvector similarity search
-        sql = text("""
+        # Note: NULL 파라미터의 타입 추론 문제를 피하기 위해 동적 WHERE 절 구성
+        where_conditions = ["expires_at > :now"]
+        params = {
+            "query_vector": vector_str,
+            "now": now,
+            "threshold": self.similarity_threshold
+        }
+
+        if query_intent is not None:
+            where_conditions.append("query_intent = :intent")
+            params["intent"] = query_intent
+
+        if user_id is not None:
+            where_conditions.append("(user_id = :user_id OR user_id IS NULL)")
+            params["user_id"] = user_id
+
+        if max_age_seconds is not None:
+            min_created = now - timedelta(seconds=max_age_seconds)
+            where_conditions.append("created_at >= :min_created")
+            params["min_created"] = min_created
+
+        where_conditions.append("1 - (query_vector <=> CAST(:query_vector AS vector)) >= :threshold")
+
+        where_clause = " AND ".join(where_conditions)
+
+        sql = text(f"""
             SELECT
                 id,
                 query_text,
@@ -460,32 +485,14 @@ class SmartCacheManager:
                 complexity_score,
                 expires_at,
                 hit_count,
-                1 - (query_vector <=> :query_vector::vector) as similarity
+                1 - (query_vector <=> CAST(:query_vector AS vector)) as similarity
             FROM query_cache
-            WHERE expires_at > :now
-                AND (:intent IS NULL OR query_intent = :intent)
-                AND (:user_id IS NULL OR user_id = :user_id OR user_id IS NULL)
-                AND (:min_created IS NULL OR created_at >= :min_created)
-                AND 1 - (query_vector <=> :query_vector::vector) >= :threshold
-            ORDER BY query_vector <=> :query_vector::vector
+            WHERE {where_clause}
+            ORDER BY query_vector <=> CAST(:query_vector AS vector)
             LIMIT 1
         """)
 
-        min_created = None
-        if max_age_seconds:
-            min_created = now - timedelta(seconds=max_age_seconds)
-
-        result = await session.execute(
-            sql,
-            {
-                "query_vector": vector_str,
-                "now": now,
-                "intent": query_intent,
-                "user_id": user_id,
-                "min_created": min_created,
-                "threshold": self.similarity_threshold
-            }
-        )
+        result = await session.execute(sql, params)
 
         row = result.fetchone()
 

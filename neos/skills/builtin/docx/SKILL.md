@@ -10,6 +10,7 @@ capabilities:
   - text_extraction
 dependencies:
   - python-docx>=1.1.0
+allowed_tools: "Read, Write"
 ---
 
 # DOCX Skill

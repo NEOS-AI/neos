@@ -46,6 +46,12 @@ class AgentState(TypedDict):
     query_embedding: Optional[List[float]]
     detected_language: Optional[str]  # 감지된 사용자 질문 언어
 
+    # 채팅 히스토리 관련
+    chat_history: Optional[List[Dict[str, Any]]]  # 대화 히스토리
+    conversation_context: Optional[str]  # LLM이 생성한 대화 맥락 요약
+    enable_history_context: Optional[bool]  # 히스토리 활용 여부
+    history_metadata: Optional[Dict[str, Any]]  # 히스토리 메타데이터
+
     # 쿼리 분류 결과
     query_classification: Optional[Dict[str, Any]]
     required_agents: List[str]
@@ -68,11 +74,17 @@ class AgentState(TypedDict):
     integrated_results: Optional[Dict[str, Any]]
     quality_score: Optional[float]
     quality_feedback: Optional[str]
-    
+
+    # 반복적 탐색 상태 (Iterative Web Explorer)
+    use_iterative_search: Optional[bool]  # 사용자 선호
+    exploration_depth_reached: Optional[int]  # 도달 깊이
+    exploration_pages_visited: Optional[int]  # 방문 페이지 수
+    quality_evolution: Optional[List[float]]  # 반복별 품질 점수
+
     # 최종 응답
     final_response: Optional[str]
     response_metadata: Optional[Dict[str, Any]]
-    
+
     # 메타데이터
     execution_start: datetime
     execution_steps: List[Dict[str, Any]]

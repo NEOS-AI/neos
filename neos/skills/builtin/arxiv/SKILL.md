@@ -12,6 +12,7 @@ capabilities:
 dependencies:
   - arxiv>=2.1.0
   - langchain-community>=0.0.1
+allowed_tools: "WebFetch"
 ---
 
 # ArXiv Skill

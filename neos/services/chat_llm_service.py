@@ -424,6 +424,7 @@ class ChatLLMService:
                                 tool_name = event.content_block.name
                                 tool_id = event.content_block.id
                                 # tool_input은 아직 받지 못함 (델타로 전송됨)
+                                print(f"[DEBUG] Tool use started: {tool_name} (ID: {tool_id})")
 
                     # Tool input 델타 (JSON 형식으로 점진적으로 받음)
                     elif hasattr(event, 'type') and event.type == "content_block_delta":

@@ -11,6 +11,7 @@ capabilities:
 dependencies:
   - PyPDF2>=3.0.0
   - reportlab>=3.6.0
+allowed_tools: "Read, Write"
 ---
 
 # PDF Skill

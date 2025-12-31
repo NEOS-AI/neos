@@ -109,7 +109,50 @@ class Settings(BaseSettings):
         # Deep Research 에이전트 - 장시간 작업 허용
         "deep_research": int(env_vars.get("TIMEOUT_DEEP_RESEARCH", 300)),
         "hyper_deep_research": int(env_vars.get("TIMEOUT_HYPER_DEEP_RESEARCH", 600)),
+
+        # Iterative Web Explorer - 반복적 탐색 작업
+        "iterative_web_explorer": int(env_vars.get("TIMEOUT_ITERATIVE_WEB_EXPLORER", 180)),
     }
+
+    # Iterative Web Explorer 설정
+    # 탐색 파라미터
+    ITERATIVE_EXPLORER_MAX_DEPTH: int = int(env_vars.get("ITERATIVE_EXPLORER_MAX_DEPTH", 5))
+    ITERATIVE_EXPLORER_MAX_PAGES: int = int(env_vars.get("ITERATIVE_EXPLORER_MAX_PAGES", 20))
+    ITERATIVE_EXPLORER_MAX_ITERATIONS: int = int(env_vars.get("ITERATIVE_EXPLORER_MAX_ITERATIONS", 10))
+    ITERATIVE_EXPLORER_MIN_QUALITY: float = float(env_vars.get("ITERATIVE_EXPLORER_MIN_QUALITY", 0.75))
+    ITERATIVE_EXPLORER_CONCURRENT_FETCHES: int = int(env_vars.get("ITERATIVE_EXPLORER_CONCURRENT_FETCHES", 3))
+
+    # 타임아웃
+    ITERATIVE_EXPLORER_TIMEOUT: int = int(env_vars.get("ITERATIVE_EXPLORER_TIMEOUT", 180))  # 3분
+    ITERATIVE_EXPLORER_TAVILY_TIMEOUT: int = int(env_vars.get("ITERATIVE_EXPLORER_TAVILY_TIMEOUT", 30))  # Tavily API 타임아웃 30초
+
+    # 캐시 TTL
+    ITERATIVE_EXPLORER_CACHE_TTL: int = int(env_vars.get("ITERATIVE_EXPLORER_CACHE_TTL", 3600))  # 1시간
+    ITERATIVE_EXPLORER_COMPLETENESS_CACHE_TTL: int = int(env_vars.get("ITERATIVE_EXPLORER_COMPLETENESS_CACHE_TTL", 1800))  # 30분
+
+    # 링크 추출 설정
+    ITERATIVE_EXPLORER_INITIAL_SEARCH_RESULTS: int = int(env_vars.get("ITERATIVE_EXPLORER_INITIAL_SEARCH_RESULTS", 10))
+    ITERATIVE_EXPLORER_RECENT_RESULTS_WINDOW: int = int(env_vars.get("ITERATIVE_EXPLORER_RECENT_RESULTS_WINDOW", 5))
+    ITERATIVE_EXPLORER_PAGE_LIMIT_THRESHOLD: float = float(env_vars.get("ITERATIVE_EXPLORER_PAGE_LIMIT_THRESHOLD", 0.9))
+
+    # LinkFollower 설정
+    LINK_FOLLOWER_MAX_LINKS: int = int(env_vars.get("LINK_FOLLOWER_MAX_LINKS", 10))
+    LINK_FOLLOWER_MIN_RELEVANCE: float = float(env_vars.get("LINK_FOLLOWER_MIN_RELEVANCE", 0.5))
+
+    # Quality Evaluator 설정
+    # 가중치 (합이 1.0이어야 함)
+    QUALITY_EVALUATOR_COMPLETENESS_WEIGHT: float = float(env_vars.get("QUALITY_EVALUATOR_COMPLETENESS_WEIGHT", 0.4))
+    QUALITY_EVALUATOR_CREDIBILITY_WEIGHT: float = float(env_vars.get("QUALITY_EVALUATOR_CREDIBILITY_WEIGHT", 0.3))
+    QUALITY_EVALUATOR_DIVERSITY_WEIGHT: float = float(env_vars.get("QUALITY_EVALUATOR_DIVERSITY_WEIGHT", 0.3))
+
+    # 조기 종료 임계값
+    QUALITY_EVALUATOR_EARLY_TERMINATION_THRESHOLD: float = float(env_vars.get("QUALITY_EVALUATOR_EARLY_TERMINATION_THRESHOLD", 0.3))
+
+    # 신뢰도 평가
+    QUALITY_EVALUATOR_HIGH_CREDIBILITY_THRESHOLD: float = float(env_vars.get("QUALITY_EVALUATOR_HIGH_CREDIBILITY_THRESHOLD", 0.7))
+
+    # 다양성 평가
+    QUALITY_EVALUATOR_DOMINANCE_THRESHOLD: float = float(env_vars.get("QUALITY_EVALUATOR_DOMINANCE_THRESHOLD", 0.5))
 
     # 검색 오케스트레이션 타임아웃 (즉시 조치: 20초 → 40초로 증가)
     # LLM 처리 시간을 고려하여 충분한 여유 확보
@@ -150,6 +193,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "JWT_SECRET_KEY must be set in environment variables. "
                 "Generate a secure key with: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+            )
+
+        # Quality Evaluator 가중치 합 검증
+        weight_sum = (
+            self.QUALITY_EVALUATOR_COMPLETENESS_WEIGHT +
+            self.QUALITY_EVALUATOR_CREDIBILITY_WEIGHT +
+            self.QUALITY_EVALUATOR_DIVERSITY_WEIGHT
+        )
+        if abs(weight_sum - 1.0) > 0.01:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"Quality evaluator weights sum to {weight_sum:.3f}, not 1.0. "
+                f"This may affect quality scoring accuracy. "
+                f"(completeness={self.QUALITY_EVALUATOR_COMPLETENESS_WEIGHT}, "
+                f"credibility={self.QUALITY_EVALUATOR_CREDIBILITY_WEIGHT}, "
+                f"diversity={self.QUALITY_EVALUATOR_DIVERSITY_WEIGHT})"
             )
 
     # 비밀번호 정책
@@ -311,6 +371,12 @@ class Settings(BaseSettings):
 
     # Phase 3: 응답 정제 기능 활성화 (부분 성공 시 LLM으로 응답 정제)
     ENABLE_RESPONSE_REFINEMENT: bool = bool(env_vars.get("ENABLE_RESPONSE_REFINEMENT", True))
+
+    # 채팅 히스토리 워크플로우 통합 설정
+    CHAT_HISTORY_ENABLED: bool = bool(env_vars.get("CHAT_HISTORY_ENABLED", True))  # 전역 활성화/비활성화
+    MAX_HISTORY_MESSAGES: int = int(env_vars.get("MAX_HISTORY_MESSAGES", 20))  # 워크플로우에 전달할 최대 히스토리 메시지 수
+    HISTORY_CONTEXT_MAX_TOKENS: int = int(env_vars.get("HISTORY_CONTEXT_MAX_TOKENS", 2000))  # 컨텍스트 요약 최대 토큰
+    HISTORY_USAGE_LEVEL: str = env_vars.get("HISTORY_USAGE_LEVEL", "full")  # "full", "summary_only", "disabled"
 
     # 컨텍스트 최적화 설정
     # 1. Thinking Block 관리

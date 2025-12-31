@@ -1,7 +1,8 @@
 """Wikipedia Skill implementation"""
 
-from typing import Dict, Any, List
+from typing import Dict, Any
 import logging
+from langchain_community.utilities import WikipediaAPIWrapper
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
 
@@ -32,8 +33,6 @@ class WikipediaSkill(BaseSkill):
     async def initialize(self) -> bool:
         """Wikipedia API 래퍼 초기화"""
         try:
-            from langchain_community.utilities import WikipediaAPIWrapper
-
             self.wikipedia_wrapper = WikipediaAPIWrapper()
             self.is_available = True
             logger.info("Wikipedia skill initialized successfully")
@@ -96,8 +95,6 @@ class WikipediaSkill(BaseSkill):
             )
 
         try:
-            from langchain_community.utilities import WikipediaAPIWrapper
-
             # 래퍼 생성
             wikipedia_wrapper = WikipediaAPIWrapper(
                 top_k_results=max_results,
@@ -153,8 +150,6 @@ class WikipediaSkill(BaseSkill):
             )
 
         try:
-            from langchain_community.utilities import WikipediaAPIWrapper
-
             # 페이지 검색 (단일 결과)
             wikipedia_wrapper = WikipediaAPIWrapper(
                 top_k_results=1,

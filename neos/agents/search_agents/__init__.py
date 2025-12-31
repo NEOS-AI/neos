@@ -7,6 +7,7 @@ from .multi_query_search import MultiQuerySearchAgent
 from .deep_research import DeepResearchAgent
 from .hyper_deep_research import HyperDeepResearchAgent
 from .web_lookup import WebLookUpAgent
+from .iterative_web_explorer import IterativeWebExplorerAgent
 
 __all__ = [
     "KnowledgeSearchAgent",
@@ -16,4 +17,5 @@ __all__ = [
     "DeepResearchAgent",
     "HyperDeepResearchAgent",
     "WebLookUpAgent",
+    "IterativeWebExplorerAgent",
 ]

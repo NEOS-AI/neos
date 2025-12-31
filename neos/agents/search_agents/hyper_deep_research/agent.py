@@ -16,6 +16,8 @@ from datetime import datetime
 from tavily import TavilyClient
 import logging
 
+# Lazy import to avoid circular dependency
+# from neos.agents.search_agents import IterativeWebExplorerAgent
 from neos.config.settings import settings
 from neos.workflow.state import SearchResult
 from neos.skills.manager import skill_manager
@@ -634,12 +636,146 @@ class HyperDeepResearchAgent(SearchAgent):
         duration = int((datetime.utcnow() - phase_start).total_seconds() * 1000)
         await self.event_logger.log_phase_complete(3, "Data Collection", duration)
 
+        # Phase 3.5: Iterative Web Exploration (if initial results insufficient)
+        await self._execute_phase_3_5_iterative_exploration(
+            topic_analysis, unique_sources, session_id, user_id, language
+        )
+
         return {
             "summary": summary,
             "sources_count": len(unique_sources),
             "queries_executed": len(query_variations),
         }
 
+    async def _execute_phase_3_5_iterative_exploration(
+        self,
+        topic_analysis: Dict[str, Any],
+        initial_sources: List[Dict[str, Any]],
+        session_id: str,
+        user_id: str,
+        language: str,
+    ) -> None:
+        """Phase 3.5: Iterative Web Exploration (optional enhancement)
+
+        초기 데이터 수집 결과가 불충분한 경우 iterative exploration 실행
+
+        Args:
+            topic_analysis: 주제 분석 결과
+            initial_sources: 초기 수집된 소스들
+            session_id: 세션 ID
+            user_id: 사용자 ID
+            language: 감지된 언어
+        """
+        try:
+            # Iterative explorer 초기화 (lazy import)
+            from neos.agents.search_agents import IterativeWebExplorerAgent
+
+            iterative_explorer = IterativeWebExplorerAgent()
+
+            # 목표 소스 수 확인
+            target_sources = self.config.get("target_total_sources", 100)
+            current_sources = self.research_metadata["total_sources_collected"]
+
+            # 초기 수집 결과가 목표의 50% 미만이면 iterative exploration 실행
+            if current_sources < target_sources * 0.5:
+                print("\n[INFO] ===== Phase 3.5: Iterative Web Exploration =====")
+                print(f"[INFO] Initial sources ({current_sources}) below target ({target_sources})")
+                print("[INFO] Initiating iterative web exploration for deeper coverage...")
+
+                await self.event_logger.log_status_message(
+                    f"Initial sources insufficient ({current_sources}/{target_sources}). "
+                    "Starting iterative exploration...",
+                    "info"
+                )
+
+                # Conservative settings for HyperDeepResearch
+                # (더 보수적인 설정: depth=3, pages=15, threshold=0.70)
+                context = {
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "detected_language": language,
+                    "max_depth": 3,  # Conservative depth
+                    "max_pages": 15,  # Conservative page limit
+                    "quality_threshold": 0.70,  # Lower threshold (easier to meet)
+                }
+
+                # 주제에서 핵심 쿼리 추출
+                main_query = topic_analysis.get("main_topic", "")
+                if not main_query:
+                    # Fallback to sub-topics
+                    sub_topics = topic_analysis.get("sub_topics", [])
+                    if sub_topics:
+                        main_query = sub_topics[0]
+
+                if main_query:
+                    # Iterative exploration 실행
+                    result = await iterative_explorer.execute(main_query, context)
+
+                    if result.get("success"):
+                        iterative_sources = result.get("result", [])
+                        metadata = result.get("metadata", {})
+
+                        print(f"[INFO] ✅ Iterative exploration completed: {len(iterative_sources)} additional sources")
+                        print(f"[INFO] Depth reached: {metadata.get('depth_reached', 0)}, "
+                              f"Pages visited: {metadata.get('pages_visited', 0)}, "
+                              f"Quality: {metadata.get('final_quality_score', 0):.2f}")
+
+                        # 소스 변환 (SearchResult -> Dict)
+                        converted_sources = []
+                        for source in iterative_sources:
+                            if hasattr(source, '__dict__'):
+                                # SearchResult 객체를 dict로 변환
+                                source_dict = {
+                                    "title": getattr(source, 'title', ''),
+                                    "url": getattr(source, 'url', ''),
+                                    "content": getattr(source, 'content', ''),
+                                    "score": getattr(source, 'score', 0.5),
+                                    "source": getattr(source, 'source', 'iterative_exploration'),
+                                    "metadata": getattr(source, 'metadata', {}),
+                                }
+                                converted_sources.append(source_dict)
+                            else:
+                                converted_sources.append(source)
+
+                        # 소스 저장
+                        await self._store_sources_batch(converted_sources)
+
+                        # 도메인 다양성 추적
+                        self.research_metadata["unique_domains"].update(
+                            DataProcessor.extract_unique_domains(converted_sources)
+                        )
+
+                        await self.event_logger.log_status_message(
+                            f"Iterative exploration added {len(converted_sources)} sources",
+                            "success"
+                        )
+
+                        # Repository에 섹션 기록
+                        await self.repository.create_section(
+                            self.current_report_id,
+                            "iterative_exploration",
+                            3.5,
+                            "Iterative Web Exploration",
+                            f"Explored {metadata.get('pages_visited', 0)} pages across "
+                            f"{metadata.get('depth_reached', 0)} depth levels, "
+                            f"achieving quality score of {metadata.get('final_quality_score', 0):.2f}",
+                            "completed",
+                            sources_count=len(converted_sources)
+                        )
+                    else:
+                        error_msg = result.get("error", "Unknown error")
+                        print(f"[WARNING] Iterative exploration failed: {error_msg}")
+                else:
+                    print("[WARNING] No query available for iterative exploration")
+
+            else:
+                print(f"[INFO] Initial sources ({current_sources}) sufficient. Skipping iterative exploration.")
+
+        except ImportError:
+            print("[WARNING] IterativeWebExplorerAgent not available")
+        except Exception as e:
+            print(f"[WARNING] Iterative exploration failed: {e}")
+            # Don't fail the entire process, just continue without iterative exploration
 
     async def _execute_phase_4(
         self,

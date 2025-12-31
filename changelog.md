@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.19.0 (2025-12-31)
+* Migrate the Anthropic Claude Skills for flexible scaling of agent workflow
+* Add Granian for better latency
+* Add "Login with Gmail" button to web UI
+* Fix up session refreshing logic
+* Implement Iterative Web Exploration workflow for human-like web searching
+  * Add IterativeWebExplorerAgent for progressive link exploration with quality-based termination
+  * Implement LinkFollowerMCPTool for intelligent link extraction and relevance scoring
+  * Add SearchQualityEvaluator with LLM-based completeness analysis and heuristic credibility/diversity scoring
+  * Integrate dual-mode search orchestration (iterative vs standard) with automatic mode selection
+  * Extend HyperDeepResearchAgent with Phase 3.5 iterative exploration for deeper coverage
+  * Add performance optimizations: result caching (1-hour TTL), domain-level rate limiting
+  * Support configurable exploration parameters (max depth: 5, max pages: 20, quality threshold: 0.75)
+* Refine Iterative Web Exploration with production-ready improvements (2025-12-28)
+  * **Configuration Management**: Centralize all hardcoded values to settings.py for flexible tuning
+    * Add 11 new configuration parameters (max iterations, cache TTLs, quality evaluator weights, etc.)
+    * Enable environment variable overrides for all exploration parameters
+    * Replace hardcoded thresholds in IterativeWebExplorerAgent and SearchQualityEvaluator
+  * **Concurrency Safety**: Fix race conditions in domain rate limiting
+    * Implement asyncio.Lock per domain to prevent simultaneous requests to same host
+    * Add automatic cleanup of stale rate limit entries (1-hour TTL) to prevent memory leaks
+    * Ensure thread-safe domain request time tracking
+  * **Real Web Integration**: Replace prototype simulation with actual web scraping
+    * Integrate LinkFollowerMCPTool for real HTML parsing and link extraction
+    * Integrate WebLookUpAgent for actual page content fetching
+    * Implement graceful fallback mechanisms (aiohttp + BeautifulSoup) when tools unavailable
+    * Add proper error handling and retry logic for web requests
+  * **Architectural Improvements**: Apply Strategy pattern to SearchOrchestrator
+    * Create search_strategies.py with pluggable search strategy implementations
+    * Implement IterativeSearchStrategy and StandardSearchStrategy as separate classes
+    * Simplify SearchOrchestrator from 616 lines to 120 lines (80% reduction)
+    * Enable easy addition of new search modes (e.g., HybridSearchStrategy) without modifying orchestrator
+    * Add automatic fallback from failed strategies to standard search
+  * **Code Quality Improvements**: Post-review refinements (2025-12-29)
+    * Fix domain_locks creation race condition using defaultdict(asyncio.Lock)
+    * Improve WebLookUpAgent result handling safety (IndexError prevention, type validation)
+    * Enhance cleanup method concurrency safety with list() copies and pop() for safe deletion
+    * Move LinkFollower magic numbers to settings (LINK_FOLLOWER_MAX_LINKS, LINK_FOLLOWER_MIN_RELEVANCE)
+    * Add quality evaluator weight validation on settings initialization
+
 ## v0.18.0 (2025-12-26)
 * Make chat stream API to use agent workflow
 * Enhance the search orchestrator and it's agents

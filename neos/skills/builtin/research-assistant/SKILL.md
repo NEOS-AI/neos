@@ -1,5 +1,5 @@
 ---
-name: research_assistant
+name: research-assistant
 type: research
 version: 1.0.0
 description: 리서치 작업 보조 - 소스 분석, 요약, 참고문헌 정리
@@ -10,6 +10,7 @@ capabilities:
   - insight_generation
   - research_support
 dependencies: []
+allowed_tools: "Read"
 ---
 
 # Research Assistant Skill

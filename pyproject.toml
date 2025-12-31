@@ -1,6 +1,6 @@
 [project]
 name = "neos"
-version = "0.18.0"
+version = "0.19.0"
 description = "NEOS: Intelligent Search and Analysis Agent Workflow"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -65,6 +65,7 @@ dependencies = [
     "xmltodict>=1.0.2",
     "pymupdf>=1.26.7",
     "pyyaml>=6.0",
+    "granian[pname,uvloop]>=2.6.0",
 ]
 
 [tool.setuptools.packages.find]

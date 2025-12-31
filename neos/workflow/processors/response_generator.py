@@ -15,7 +15,21 @@ class ResponseGenerator:
     """최종 응답 생성"""
 
     def __init__(self):
-        pass
+        # LLM 객체 재사용 (리소스 누수 방지 및 성능 향상)
+        self._llm = None
+
+    def _get_llm(self, temperature: float = 0.3, max_tokens: int = 4000):
+        """
+        LLM 객체를 재사용하거나 생성
+
+        리소스 효율성을 위해 동일한 LLM 객체를 재사용합니다.
+        """
+        if self._llm is None:
+            self._llm = create_llm(
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+        return self._llm
 
     async def generate_response(self, state: AgentState) -> Dict[str, Any]:
         """최종 응답 생성"""
@@ -286,8 +300,8 @@ class ResponseGenerator:
 
         prompt = self._get_refinement_prompt(query, combined, language)
 
-        # LLM 호출
-        base_llm = create_llm(temperature=0.3, max_tokens=4000)
+        # LLM 호출 (재사용 가능한 LLM 객체)
+        base_llm = self._get_llm(temperature=0.3, max_tokens=4000)
 
         llm = create_tracked_llm(
             llm=base_llm,

@@ -244,6 +244,7 @@ class SkillManager:
                 "capabilities": info.capabilities,
                 "version": info.version,
                 "is_available": self._initialized_skills.get(info.name, False),
+                "allowed_tools": info.allowed_tools,
             }
             for info in skill_infos
         ]
@@ -292,6 +293,58 @@ class SkillManager:
         except Exception as e:
             logger.error(f"Error registering custom skill: {e}")
             return False
+
+    def generate_skills_prompt(
+        self,
+        skill_names: Optional[List[str]] = None,
+        include_body: bool = True,
+        skill_type: Optional[SkillType] = None,
+    ) -> str:
+        """Generate XML prompt for skills.
+
+        Args:
+            skill_names: Specific skills to include (None = all available)
+            include_body: Include SKILL.md documentation body
+            skill_type: Filter by skill type
+
+        Returns:
+            XML formatted skills prompt (<available_skills>...</available_skills>)
+        """
+        from neos.skills.base.prompt_generator import generate_skills_prompt
+
+        # Get skill list
+        if skill_names:
+            skills = [self.registry.get_skill(n) for n in skill_names]
+            skills = [s for s in skills if s is not None]
+        else:
+            skill_infos = self.registry.list_skills(skill_type)
+            skills = [self.registry.get_skill(info.name) for info in skill_infos]
+
+        # Convert to context
+        skills_data = []
+        for skill in skills:
+            if not skill:
+                continue
+
+            # Include all skills (even if not initialized) for prompt generation
+            # Prompt generation is informational and doesn't require initialization
+            skills_data.append({
+                "name": skill.name,
+                "description": skill.description,
+                "skill_body": skill.get_skill_body() if include_body else None,
+                "allowed_tools": skill.allowed_tools,
+                "capabilities": skill.capabilities,
+            })
+
+        return generate_skills_prompt(skills_data, include_body=include_body)
+
+    def get_available_skills_context(self) -> str:
+        """Convenience method: all available skills with body.
+
+        Returns:
+            XML formatted prompt with all available skills
+        """
+        return self.generate_skills_prompt(include_body=True)
 
 
 # 전역 스킬 매니저 인스턴스

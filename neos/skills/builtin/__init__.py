@@ -9,13 +9,16 @@ from typing import List
 from neos.skills.manager.skill_registry import SkillInfo
 from neos.skills.base import SkillType
 
-from .bigquery import BigQuerySkill
 from .docx import DocxSkill
 from .pdf import PdfSkill
-from .research_assistant import ResearchAssistantSkill
 from .arxiv import ArxivSkill
 from .pubmed import PubmedSkill
 from .wikipedia import WikipediaSkill
+
+# Use hyphenated import for research-assistant
+import importlib
+research_assistant_module = importlib.import_module(".research-assistant", package="neos.skills.builtin")
+ResearchAssistantSkill = research_assistant_module.ResearchAssistantSkill
 
 
 def get_builtin_skills() -> List[SkillInfo]:
@@ -29,20 +32,6 @@ def get_builtin_skills() -> List[SkillInfo]:
 
     builtin_skills = [
         SkillInfo(
-            name="bigquery",
-            skill_class=BigQuerySkill,
-            skill_type=SkillType.DATABASE,
-            description="BigQuery 데이터베이스 조회 및 분석",
-            capabilities=[
-                "sql_query",
-                "data_retrieval",
-                "data_analysis",
-                "bigquery",
-            ],
-            version="1.0.0",
-            skill_dir=skills_dir / "bigquery",
-        ),
-        SkillInfo(
             name="docx",
             skill_class=DocxSkill,
             skill_type=SkillType.DOCUMENT,
@@ -55,6 +44,7 @@ def get_builtin_skills() -> List[SkillInfo]:
             ],
             version="1.0.0",
             skill_dir=skills_dir / "docx",
+            allowed_tools="Read, Write",
         ),
         SkillInfo(
             name="pdf",
@@ -69,9 +59,10 @@ def get_builtin_skills() -> List[SkillInfo]:
             ],
             version="1.0.0",
             skill_dir=skills_dir / "pdf",
+            allowed_tools="Read, Write",
         ),
         SkillInfo(
-            name="research_assistant",
+            name="research-assistant",
             skill_class=ResearchAssistantSkill,
             skill_type=SkillType.RESEARCH,
             description="리서치 작업 보조 - 소스 분석, 요약, 참고문헌 정리",
@@ -83,7 +74,8 @@ def get_builtin_skills() -> List[SkillInfo]:
                 "research_support",
             ],
             version="1.0.0",
-            skill_dir=skills_dir / "research_assistant",
+            skill_dir=skills_dir / "research-assistant",
+            allowed_tools="Read",
         ),
         SkillInfo(
             name="arxiv",
@@ -99,6 +91,7 @@ def get_builtin_skills() -> List[SkillInfo]:
             ],
             version="1.0.0",
             skill_dir=skills_dir / "arxiv",
+            allowed_tools="WebFetch",
         ),
         SkillInfo(
             name="pubmed",
@@ -115,6 +108,7 @@ def get_builtin_skills() -> List[SkillInfo]:
             ],
             version="1.0.0",
             skill_dir=skills_dir / "pubmed",
+            allowed_tools="WebFetch",
         ),
         SkillInfo(
             name="wikipedia",
@@ -130,6 +124,7 @@ def get_builtin_skills() -> List[SkillInfo]:
             ],
             version="1.0.0",
             skill_dir=skills_dir / "wikipedia",
+            allowed_tools="WebFetch",
         ),
     ]
 
@@ -138,7 +133,6 @@ def get_builtin_skills() -> List[SkillInfo]:
 
 __all__ = [
     "get_builtin_skills",
-    "BigQuerySkill",
     "DocxSkill",
     "PdfSkill",
     "ResearchAssistantSkill",

@@ -635,6 +635,13 @@ async def _test_full_workflow(query: str, user_id: str, session_id: str, progres
                 "query": query,
                 "timestamp": datetime.now().isoformat()
             }
+        finally:
+            # 워크플로우 실행 후 리소스 정리 (aiohttp 세션 닫기)
+            try:
+                await multi_agent_workflow.cleanup()
+            except Exception as cleanup_error:
+                if cli_state["verbose"]:
+                    console.print(f"[dim]Cleanup warning: {cleanup_error}[/dim]")
 
         if cli_state["verbose"]:
             console.print(f"[dim]Workflow completed with result keys: {list(result.keys()) if result else 'None'}[/dim]")
@@ -652,6 +659,13 @@ async def _test_full_workflow(query: str, user_id: str, session_id: str, progres
         if cli_state["verbose"]:
             console.print(f"[red]Workflow exception: {e}[/red]")
             console.print(f"[dim]Traceback: {traceback.format_exc()}[/dim]")
+
+        # 예외 발생 시에도 정리
+        try:
+            await multi_agent_workflow.cleanup()
+        except Exception:
+            pass
+
         return {
             "success": False,
             "error": str(e),
@@ -1099,12 +1113,12 @@ async def _test_hyper_deep_research(query: str, user_id: str, session_id: str, p
         try:
             agent_result = await asyncio.wait_for(
                 hyper_agent.execute(query, context),
-                timeout=7200  # 120 minutes timeout for hyper deep research
+                timeout=14400  # 240 minutes timeout for hyper deep research
             )
         except asyncio.TimeoutError:
             return {
                 "success": False,
-                "error": "HyperDeepResearch timed out after 120 minutes",
+                "error": "HyperDeepResearch timed out after 240 minutes",
                 "query": query,
                 "timestamp": datetime.now().isoformat()
             }

@@ -414,7 +414,11 @@ class OAuthService:
         """JWT 토큰 생성 (AuthService 위임)"""
         # Access Token 생성
         access_token = create_access_token(
-            data={"sub": user.user_id, "email": user.email}
+            data={
+                "user_id": user.user_id,
+                "email": user.email,
+                "role": user.role
+            }
         )
 
         # Refresh Token 생성 및 저장
