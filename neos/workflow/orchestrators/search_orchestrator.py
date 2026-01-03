@@ -88,7 +88,7 @@ class SearchOrchestrator:
             state["execution_steps"].append({
                 "step": "search_orchestration",
                 "result": "skipped - no search agents required",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             })
             return state
 

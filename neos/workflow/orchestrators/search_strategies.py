@@ -152,7 +152,7 @@ class IterativeSearchStrategy(SearchStrategy):
                 state["execution_steps"].append({
                     "step": "iterative_search",
                     "result": f"completed - {len(exploration_results)} sources",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 })
 
                 logger.info(f"[IterativeStrategy] Completed: {len(exploration_results)} sources")
@@ -224,7 +224,7 @@ class StandardSearchStrategy(SearchStrategy):
             state["execution_steps"].append({
                 "step": "search_orchestration",
                 "result": f"completed (cached) - {len(cached_search_results)} results",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             })
             return True
         return False
@@ -568,6 +568,7 @@ class MultiHopSearchStrategy(SearchStrategy):
         """MultiHopSearchAgent 초기화"""
         try:
             from neos.agents.search_agents.multi_hop_search import MultiHopSearchAgent
+
             self.multi_hop_agent = MultiHopSearchAgent()
             logger.info("[MultiHopStrategy] MultiHopSearchAgent initialized")
         except Exception as e:
@@ -707,7 +708,7 @@ class MultiHopSearchStrategy(SearchStrategy):
                     "step": "multi_hop_search",
                     "result": f"completed - {metadata.get('hop_count', 0)} hops, "
                              f"confidence: {metadata.get('total_confidence', 0):.2f}",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 })
 
                 logger.info(
