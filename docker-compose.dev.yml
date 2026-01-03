@@ -1,0 +1,141 @@
+version: '3.8'
+
+services:
+  # Jaeger - 분산 추적 백엔드
+  # UI: http://localhost:16686
+  # OTLP HTTP endpoint: http://localhost:4318/v1/traces
+  jaeger:
+    image: jaegertracing/all-in-one:1.52
+    container_name: neos-jaeger
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4318:4318"    # OTLP HTTP Collector
+      - "14268:14268"  # Jaeger Thrift HTTP (legacy)
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - LOG_LEVEL=info
+    networks:
+      - neos-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:14269/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis - 캐싱 및 메시지 브로커
+  # Celery와 LLM 캐싱에서 사용
+  redis:
+    image: redis:7-alpine
+    container_name: neos-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    networks:
+      - neos-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL - 메인 데이터베이스
+  # pgvector 확장 포함 (semantic cache)
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: neos-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=neos
+      - POSTGRES_PASSWORD=neos_password
+      - POSTGRES_DB=neos_db
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro  # Auto-run migrations on init
+    networks:
+      - neos-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neos"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Celery Worker - 분산 태스크 실행
+  # (Phase 3 - Item 4에서 활성화)
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: neos-celery-worker
+    command: celery -A neos.workflow.celery_app worker --loglevel=info --concurrency=4
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://neos:neos_password@postgres:5432/neos_db
+      - OTEL_ENABLED=true
+      - OTEL_EXPORTER_JAEGER_ENDPOINT=http://jaeger:4318/v1/traces
+      - OTEL_SERVICE_NAME=neos-celery-worker
+    depends_on:
+      - redis
+      - postgres
+      - jaeger
+    networks:
+      - neos-network
+    restart: unless-stopped
+    profiles:
+      - celery  # 기본적으로 비활성화, --profile celery로 활성화
+
+  # Celery Beat - 스케줄러
+  # (주기적 태스크 실행용, 필요 시 활성화)
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: neos-celery-beat
+    command: celery -A neos.workflow.celery_app beat --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://neos:neos_password@postgres:5432/neos_db
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - neos-network
+    restart: unless-stopped
+    profiles:
+      - celery
+
+  # Flower - Celery 모니터링 UI
+  # UI: http://localhost:5555
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: neos-flower
+    command: celery -A neos.workflow.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - celery-worker
+    networks:
+      - neos-network
+    restart: unless-stopped
+    profiles:
+      - celery
+
+networks:
+  neos-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+    driver: local
+  postgres-data:
+    driver: local
