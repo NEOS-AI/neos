@@ -36,24 +36,21 @@ class SearchOrchestrator:
             StandardSearchStrategy()      # 3순위: 일반 질문 (항상 적용 가능, 폴백)
         ]
 
-        # LLM 객체 재사용 (리소스 누수 방지 및 성능 향상)
-        self._llm = None
-
         logger.info(f"SearchOrchestrator initialized with {len(self.strategies)} strategies")
 
     def _get_llm(self, temperature: float = 0.2, max_tokens: int = 200):
         """
-        LLM 객체를 재사용하거나 생성
+        LLM 인스턴스를 가져옵니다.
 
-        리소스 효율성을 위해 동일한 LLM 객체를 재사용합니다.
+        LLMFactory의 다중 키 캐싱을 활용하여 (model, temperature, max_tokens) 조합별로
+        인스턴스를 재사용합니다. 이를 통해 다양한 파라미터 조합에 대한 캐싱이 가능합니다.
         """
-        if self._llm is None:
-            self._llm = create_llm(
-                model=settings.LLM_MODEL,
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
-        return self._llm
+        return create_llm(
+            model=settings.LLM_MODEL,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            use_cache=True  # LLMFactory 캐시 활용
+        )
 
     async def orchestrate(self, state: AgentState) -> Dict[str, Any]:
         """검색 오케스트레이션 (대화 컨텍스트 활용)

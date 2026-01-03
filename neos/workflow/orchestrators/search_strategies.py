@@ -548,8 +548,8 @@ class StandardSearchStrategy(SearchStrategy):
 
         state["execution_steps"].append({
             "step": "search_orchestration",
-            "result": f"completed - {successful_agents} agents/tools succeeded",
-            "timestamp": datetime.utcnow().isoformat()
+            "result": f"completed - {successful_agents} agents & {total_results} tools succeeded",
+            "timestamp": datetime.now().isoformat()
         })
 
 
@@ -610,6 +610,7 @@ class MultiHopSearchStrategy(SearchStrategy):
         elif not isinstance(query, str):
             query = str(query)
 
+        #TODO 하드코딩된 키워드 대신 LLM 기반 분석 도입 검토
         # 멀티홉 검색 트리거 키워드
         multi_hop_keywords = [
             # 한국어
