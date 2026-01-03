@@ -158,6 +158,30 @@ class Settings(BaseSettings):
     # LLM 처리 시간을 고려하여 충분한 여유 확보
     SEARCH_ORCHESTRATION_TIMEOUT: int = int(env_vars.get("SEARCH_ORCHESTRATION_TIMEOUT", 40))
 
+    # =========================================================================
+    # Workflow 품질 및 재시도 설정 (중앙 집중화된 설정)
+    # =========================================================================
+    # Quality Validation
+    WORKFLOW_MIN_QUALITY_SCORE: float = float(env_vars.get("WORKFLOW_MIN_QUALITY_SCORE", 0.4))  # 품질 임계값 (낮게 설정하여 무한 루프 방지)
+    WORKFLOW_MAX_RETRIES: int = int(env_vars.get("WORKFLOW_MAX_RETRIES", 2))  # 최대 재시도 횟수
+
+    # Workflow Execution Limits
+    WORKFLOW_MAX_ITERATIONS: int = int(env_vars.get("WORKFLOW_MAX_ITERATIONS", 10))  # 워크플로우 최대 반복 횟수
+    WORKFLOW_TIMEOUT_SECONDS: int = int(env_vars.get("WORKFLOW_TIMEOUT_SECONDS", 300))  # 워크플로우 전체 타임아웃 (5분)
+
+    # State Persistence Optimization
+    WORKFLOW_CRITICAL_NODES: List[str] = [
+        "query_classifier",
+        "search_orchestrator",
+        "analysis_orchestrator",
+        "quality_validator",
+        "response_generator"
+    ]  # 상태 저장이 필수인 중요 노드 (성능 최적화: 모든 노드가 아닌 체크포인트만 저장)
+
+    # Cache Configuration
+    WORKFLOW_CACHE_ENABLED: bool = bool(env_vars.get("WORKFLOW_CACHE_ENABLED", True))  # 워크플로우 결과 캐싱
+    WORKFLOW_CACHE_TTL: int = int(env_vars.get("WORKFLOW_CACHE_TTL", 3600))  # 캐시 TTL (1시간)
+
     # 동시성 설정
     MAX_CONCURRENT_WORKFLOWS: int = int(env_vars.get("MAX_CONCURRENT_WORKFLOWS", 100))
     MAX_CONCURRENT_AGENTS_PER_WORKFLOW: int = int(env_vars.get("MAX_CONCURRENT_AGENTS_PER_WORKFLOW", 10))
@@ -417,6 +441,59 @@ class Settings(BaseSettings):
     DEFAULT_WORKFLOW_TOKEN_BUDGET: int = int(env_vars.get("DEFAULT_WORKFLOW_TOKEN_BUDGET", 100000))  # 기본 토큰 예산
     DEEP_RESEARCH_TOKEN_BUDGET: int = int(env_vars.get("DEEP_RESEARCH_TOKEN_BUDGET", 150000))  # Deep Research 예산
     CHAT_TOKEN_BUDGET: int = int(env_vars.get("CHAT_TOKEN_BUDGET", 80000))  # 일반 채팅 예산
+
+    # =========================================================================
+    # OpenTelemetry 및 분산 추적 설정 (Phase 3)
+    # =========================================================================
+    # OpenTelemetry 활성화
+    OTEL_ENABLED: bool = bool(env_vars.get("OTEL_ENABLED", False))  # 기본값: 비활성화 (프로덕션에서 활성화)
+
+    # Jaeger 설정
+    OTEL_EXPORTER_JAEGER_ENDPOINT: str = env_vars.get(
+        "OTEL_EXPORTER_JAEGER_ENDPOINT",
+        "http://localhost:4318/v1/traces"  # Jaeger OTLP HTTP endpoint
+    )
+
+    # 서비스 정보
+    OTEL_SERVICE_NAME: str = env_vars.get("OTEL_SERVICE_NAME", "neos-workflow")
+    OTEL_SERVICE_VERSION: str = env_vars.get("OTEL_SERVICE_VERSION", "0.19.0")
+    OTEL_DEPLOYMENT_ENVIRONMENT: str = env_vars.get("OTEL_DEPLOYMENT_ENVIRONMENT", "development")
+
+    # Sampling 설정 (트래픽 부하 조절)
+    OTEL_TRACES_SAMPLER: str = env_vars.get("OTEL_TRACES_SAMPLER", "always_on")  # always_on, always_off, traceidratio
+    OTEL_TRACES_SAMPLER_ARG: float = float(env_vars.get("OTEL_TRACES_SAMPLER_ARG", 1.0))  # traceidratio용 (0.0-1.0)
+
+    # 배치 처리 설정 (성능 최적화)
+    OTEL_BSP_MAX_QUEUE_SIZE: int = int(env_vars.get("OTEL_BSP_MAX_QUEUE_SIZE", 2048))  # Batch Span Processor 큐 크기
+    OTEL_BSP_SCHEDULE_DELAY: int = int(env_vars.get("OTEL_BSP_SCHEDULE_DELAY", 5000))  # 배치 전송 지연 (ms)
+    OTEL_BSP_MAX_EXPORT_BATCH_SIZE: int = int(env_vars.get("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", 512))  # 배치 크기
+
+    # =========================================================================
+    # Celery 분산 실행 설정 (Phase 3)
+    # =========================================================================
+    CELERY_ENABLED: bool = bool(env_vars.get("CELERY_ENABLED", False))  # Celery 분산 실행 활성화
+    CELERY_BROKER_URL: str = env_vars.get("CELERY_BROKER_URL", "redis://localhost:6379/1")  # Celery 브로커 (Redis)
+    CELERY_RESULT_BACKEND: str = env_vars.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")  # 결과 저장소
+    CELERY_TASK_SERIALIZER: str = env_vars.get("CELERY_TASK_SERIALIZER", "json")  # 태스크 직렬화 방식
+    CELERY_RESULT_SERIALIZER: str = env_vars.get("CELERY_RESULT_SERIALIZER", "json")  # 결과 직렬화 방식
+    CELERY_ACCEPT_CONTENT: List[str] = ["json"]  # 허용 컨텐츠 타입
+    CELERY_TIMEZONE: str = env_vars.get("CELERY_TIMEZONE", "UTC")  # 타임존
+    CELERY_WORKER_PREFETCH_MULTIPLIER: int = int(env_vars.get("CELERY_WORKER_PREFETCH_MULTIPLIER", 4))  # 워커 prefetch
+    CELERY_TASK_ACKS_LATE: bool = bool(env_vars.get("CELERY_TASK_ACKS_LATE", True))  # Late ack (장애 복구)
+
+    # =========================================================================
+    # Hybrid Checkpointer 설정 (Phase 3)
+    # =========================================================================
+    CHECKPOINTER_TYPE: str = env_vars.get("CHECKPOINTER_TYPE", "postgres")  # postgres, hybrid
+    CHECKPOINTER_BLOB_THRESHOLD: int = int(env_vars.get("CHECKPOINTER_BLOB_THRESHOLD", 1048576))  # 1MB (blob 저장 임계값)
+
+    # S3 호환 스토리지 설정
+    CHECKPOINTER_S3_BACKEND: str = env_vars.get("CHECKPOINTER_S3_BACKEND", "s3")  # s3, rustfs, minio
+    CHECKPOINTER_S3_BUCKET: str = env_vars.get("CHECKPOINTER_S3_BUCKET", "neos-checkpoints")
+    CHECKPOINTER_S3_REGION: str = env_vars.get("CHECKPOINTER_S3_REGION", "us-east-1")
+    CHECKPOINTER_S3_ENDPOINT_URL: Optional[str] = env_vars.get("CHECKPOINTER_S3_ENDPOINT_URL")  # rustfs/minio용
+    CHECKPOINTER_S3_ACCESS_KEY: Optional[str] = env_vars.get("CHECKPOINTER_S3_ACCESS_KEY")
+    CHECKPOINTER_S3_SECRET_KEY: Optional[str] = env_vars.get("CHECKPOINTER_S3_SECRET_KEY")
 
     class Config:
         env_file = ".env"

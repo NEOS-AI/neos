@@ -1,7 +1,11 @@
-from typing import TypedDict, List, Dict, Any, Optional, Annotated
+from typing import TypedDict, List, Dict, Any, Optional, Annotated, Union
 from dataclasses import dataclass
 from datetime import datetime
 import operator
+
+from neos.config.settings import settings
+from neos.workflow.errors import WorkflowError
+from neos.workflow.metrics import PerformanceMetrics
 
 
 @dataclass
@@ -85,24 +89,33 @@ class AgentState(TypedDict):
     final_response: Optional[str]
     response_metadata: Optional[Dict[str, Any]]
 
-    # 메타데이터
+    # 메타데이터 및 에러 처리
     execution_start: datetime
     execution_steps: List[Dict[str, Any]]
-    errors: Annotated[List[str], operator.add]
+    errors: Annotated[List[str], operator.add]  # Legacy string errors (deprecated)
+    structured_errors: Annotated[List[WorkflowError], operator.add]  # Structured errors with metadata
     retry_count: int
     
-    # 성능 지표
+    # 성능 지표 (Legacy - deprecated, use performance_metrics instead)
     execution_time_ms: Optional[int]
     tokens_used: Optional[int]
     api_calls_made: Optional[int]
 
+    # 상세 성능 메트릭 (새로운 구조화된 메트릭 시스템)
+    performance_metrics: Optional[PerformanceMetrics]
+
 
 class WorkflowConfig:
-    """워크플로우 설정"""
-    MAX_ITERATIONS = 10
-    TIMEOUT_SECONDS = 300
-    MIN_QUALITY_SCORE = 0.4  # Lower threshold to prevent infinite loops
-    MAX_RETRIES = 2  # Maximum number of retries for quality improvement
+    """워크플로우 설정
+
+    중앙 집중화된 설정을 settings에서 가져와 사용합니다.
+    환경 변수를 통해 동적으로 조정 가능합니다.
+    """
+    # 워크플로우 실행 제한 (settings에서 가져옴)
+    MAX_ITERATIONS = settings.WORKFLOW_MAX_ITERATIONS
+    TIMEOUT_SECONDS = settings.WORKFLOW_TIMEOUT_SECONDS
+    MIN_QUALITY_SCORE = settings.WORKFLOW_MIN_QUALITY_SCORE
+    MAX_RETRIES = settings.WORKFLOW_MAX_RETRIES
     
     # 에이전트 타입
     SEARCH_AGENTS = [

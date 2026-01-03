@@ -15,21 +15,20 @@ class ResponseGenerator:
     """최종 응답 생성"""
 
     def __init__(self):
-        # LLM 객체 재사용 (리소스 누수 방지 및 성능 향상)
-        self._llm = None
+        pass
 
     def _get_llm(self, temperature: float = 0.3, max_tokens: int = 4000):
         """
-        LLM 객체를 재사용하거나 생성
+        LLM 인스턴스를 가져옵니다.
 
-        리소스 효율성을 위해 동일한 LLM 객체를 재사용합니다.
+        LLMFactory의 다중 키 캐싱을 활용하여 (model, temperature, max_tokens) 조합별로
+        인스턴스를 재사용합니다.
         """
-        if self._llm is None:
-            self._llm = create_llm(
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
-        return self._llm
+        return create_llm(
+            temperature=temperature,
+            max_tokens=max_tokens,
+            use_cache=True  # LLMFactory 캐시 활용
+        )
 
     async def generate_response(self, state: AgentState) -> Dict[str, Any]:
         """최종 응답 생성"""

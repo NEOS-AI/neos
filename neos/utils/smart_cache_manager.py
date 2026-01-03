@@ -442,8 +442,18 @@ class SmartCacheManager:
         user_id: str = None,
         max_age_seconds: int = None
     ) -> Optional[CachedResponse]:
-        """pgvector를 사용한 유사 쿼리 검색"""
+        """pgvector를 사용한 유사 쿼리 검색
+
+        HNSW 인덱스 성능 최적화:
+        - ef_search = 40: 균형잡힌 정확도와 속도 (기본값)
+        - ef_search를 높이면 정확도 향상, 속도 저하
+        - ef_search를 낮추면 속도 향상, 정확도 저하
+        """
         now = datetime.utcnow()
+
+        # HNSW 인덱스 런타임 파라미터 설정
+        # ef_search: 검색 시 탐색할 후보 수 (기본값: 40)
+        await session.execute(text("SET LOCAL hnsw.ef_search = 40"))
 
         # pgvector 코사인 거리 연산자 사용
         # 1 - distance = similarity

@@ -12,6 +12,7 @@ from neos.config.settings import settings
 from neos.database.connection import db_manager
 from neos.utils.cache import cache_manager
 from neos.utils.embeddings import embedding_manager
+from neos.workflow.stream_manager import stream_manager
 from neos.api.handlers.query_handlers import router
 from neos.api.handlers.analytics_handlers import router as web_search_analytics_router
 from neos.api.handlers.document_handlers import router as document_router
@@ -29,6 +30,7 @@ from neos.workflow.graph import multi_agent_workflow
 from neos.utils.exceptions import NeosBaseException, get_exception_status_code, is_client_error
 from neos.observability.metrics import get_metrics_collector
 from neos.workflow.checkpointer import cleanup_checkpointer
+from neos.workflow.telemetry import setup_telemetry, instrument_app, instrument_sqlalchemy_engine
 
 
 __VERSION__ = "0.19.0"
@@ -67,15 +69,33 @@ async def lifespan(app: FastAPI):
     background_tasks = []
 
     try:
+        # OpenTelemetry 초기화 (Phase 3)
+        logger.info("🔍 Initializing OpenTelemetry distributed tracing...")
+        setup_telemetry(settings)
+        if settings.OTEL_ENABLED:
+            logger.info(f"✅ OpenTelemetry enabled: {settings.OTEL_SERVICE_NAME}")
+        else:
+            logger.info("ℹ️ OpenTelemetry disabled (set OTEL_ENABLED=true to enable)")
+
         # 데이터베이스 연결 초기화
         logger.info("📊 Initializing database connection...")
         await db_manager.initialize()
         logger.info("✅ Database connection established")
 
+        # SQLAlchemy 엔진에 계측 적용
+        if settings.OTEL_ENABLED and hasattr(db_manager, 'engine'):
+            instrument_sqlalchemy_engine(db_manager.engine)
+            logger.info("✅ SQLAlchemy instrumentation enabled")
+
         # Redis 캐시 연결 초기화
         logger.info("🔄 Initializing cache connection...")
         await cache_manager.initialize()
         logger.info("✅ Cache connection established")
+
+        # StreamManager 시작 (Phase 3 - SSE 재연결 지원)
+        logger.info("📡 Starting SSE Stream Manager...")
+        await stream_manager.start()
+        logger.info("✅ Stream Manager started")
 
         # Metrics collector 초기화
         logger.info("📈 Initializing enterprise metrics collector...")
@@ -130,6 +150,11 @@ async def lifespan(app: FastAPI):
             except asyncio.CancelledError:
                 pass
 
+        # StreamManager 정리
+        logger.info("📡 Stopping SSE Stream Manager...")
+        await stream_manager.stop()
+        logger.info("✅ Stream Manager stopped")
+
         # PostgreSQL checkpointer cleanup
         logger.info("💾 Cleaning up workflow state manager...")
         await cleanup_checkpointer()
@@ -159,6 +184,8 @@ app = FastAPI(
     redoc_url="/redoc" if IS_DEBUG else None
 )
 
+# OpenTelemetry FastAPI 자동 계측 적용 (Phase 3)
+instrument_app(app)
 
 # CORS 미들웨어 설정
 # 보안 강화: DEBUG 모드에서도 특정 origin만 허용

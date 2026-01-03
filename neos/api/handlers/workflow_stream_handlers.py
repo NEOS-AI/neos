@@ -22,7 +22,7 @@ Workflow Streaming API handlers - SSE & WebSocket 기반 실시간 스트리밍
 이 설계는 unified_handlers.py의 패턴을 따릅니다.
 """
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import StreamingResponse
 from typing import AsyncGenerator, Dict, Any, Optional, Callable
 from datetime import datetime
@@ -38,6 +38,7 @@ from neos.api.models.query_models import (
 from neos.api.services.query_service import QueryService
 from neos.workflow.graph import multi_agent_workflow
 from neos.workflow.events import WorkflowEventHandler
+from neos.workflow.stream_manager import stream_manager
 from neos.config.settings import settings
 from neos.utils.logger import get_logger
 from neos.database.connection import db_manager
@@ -366,12 +367,17 @@ async def execute_workflow_with_streaming(
 # ============================================================================
 
 @router.post("/query/stream")
-async def stream_query(request: WorkflowStreamRequest):
+async def stream_query(body: WorkflowStreamRequest, request: Request):
     """
-    SSE 기반 워크플로우 스트리밍 엔드포인트
+    SSE 기반 워크플로우 스트리밍 엔드포인트 (Phase 3 개선)
 
     실시간으로 워크플로우 진행 상황과 결과를 스트리밍합니다.
     TTFB(Time To First Byte) 80% 단축 효과.
+
+    Phase 3 개선사항:
+    - Last-Event-ID 기반 재연결 지원
+    - 이벤트 버퍼링 및 재전송
+    - 연결 상태 관리
 
     이벤트 타입:
     - started: 워크플로우 시작
@@ -387,13 +393,27 @@ async def stream_query(request: WorkflowStreamRequest):
     - completed: 워크플로우 완료
     """
 
-    session_id = request.session_id or str(uuid.uuid4())
-    user_id = request.user_id or f"anonymous_{uuid.uuid4().hex[:8]}"
-    stream_options = request.stream_options or {}
+    session_id = body.session_id or str(uuid.uuid4())
+    user_id = body.user_id or f"anonymous_{uuid.uuid4().hex[:8]}"
+    stream_options = body.stream_options or {}
+
+    # Last-Event-ID 헤더 확인 (재연결 지원)
+    last_event_id = request.headers.get("Last-Event-ID")
 
     async def generate_stream() -> AsyncGenerator[str, None]:
+        # StreamManager에서 세션 생성 (Phase 3)
+        session = stream_manager.create_session(session_id, user_id)
+
+        # 재연결 시 Last-Event-ID 이후 이벤트 재전송
+        if last_event_id:
+            logger.info(f"Reconnection detected for session {session_id}, last_event_id: {last_event_id}")
+            missed_events = stream_manager.get_events_since(session_id, last_event_id)
+            for event in missed_events:
+                yield event.to_sse_format()
+            logger.info(f"Resent {len(missed_events)} missed events")
+
+        # 기존 콜백 생성
         event_queue: asyncio.Queue = asyncio.Queue()
-        # DB 로깅 활성화 옵션 추가 (선택적)
         enable_db_logging = stream_options.get("enable_db_logging", True)
         callback = WorkflowStreamCallback(
             session_id=session_id,

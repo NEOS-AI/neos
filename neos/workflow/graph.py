@@ -34,6 +34,7 @@ from .processors import ResultProcessor, QualityValidator, ResponseGenerator, Co
 from .utils import QueryClassifier
 from .checkpointer import get_checkpointer
 from .events import WorkflowEventHandler, NullEventHandler
+from .telemetry import trace_workflow_node, add_span_event, set_span_attributes
 
 
 logger = logging.getLogger(__name__)
@@ -302,127 +303,172 @@ class MultiAgentWorkflow:
             use_checkpointer: Whether to use PostgreSQL checkpointer for state persistence
                             Set to False for single-request workflows (like chat API)
         """
-        # Null Object Pattern: event_handler가 없으면 기본 핸들러 사용
-        if event_handler is None:
-            event_handler = NullEventHandler()
-
-        # Ensure graph is initialized
-        await self._ensure_graph_initialized(use_checkpointer=use_checkpointer)
-
+        # OpenTelemetry: 전체 워크플로우 실행 추적 (Phase 3)
+        workflow_id = user_input.get("session_id", "unknown")
         query = user_input["query"]
-        user_id = user_input.get("user_id")
-        print(f"[DEBUG] Starting workflow execution for query: {query[:50]}...")
 
-        # 워크플로우 시작 이벤트
-        await event_handler.on_workflow_start(user_input)
+        with trace_workflow_node(
+            "workflow_execution",
+            workflow_id=workflow_id,
+            query_length=len(query),
+            use_checkpointer=use_checkpointer
+        ) as span:
+            # Null Object Pattern: event_handler가 없으면 기본 핸들러 사용
+            if event_handler is None:
+                event_handler = NullEventHandler()
 
-        # 1. 스마트 캐시 확인 (활성화된 경우)
-        if settings.SMART_CACHE_ENABLED:
-            smart_cache_result = await self._check_smart_cache(query, user_id)
-            if smart_cache_result:
-                # 캐시 히트 시에도 완료 이벤트 발행
-                await event_handler.on_workflow_complete(smart_cache_result)
-                return smart_cache_result
+            # Ensure graph is initialized
+            await self._ensure_graph_initialized(use_checkpointer=use_checkpointer)
 
-        # 2. 기존 Redis 캐시 확인 (폴백)
-        cache_key = self._generate_cache_key(query, user_id)
-        cached_response = await self._check_cached_response(cache_key)
-        if cached_response:
-            await event_handler.on_workflow_complete(cached_response)
-            return cached_response
+            user_id = user_input.get("user_id")
+            print(f"[DEBUG] Starting workflow execution for query: {query[:50]}...")
 
-        # 초기 상태 생성 (event_handler를 상태에 포함)
-        initial_state = self._create_initial_state(user_input)
-        initial_state["_event_handler"] = event_handler
+            # 워크플로우 시작 이벤트
+            await event_handler.on_workflow_start(user_input)
 
-        try:
-            # 워크플로우 실행
-            if use_checkpointer:
-                print("[DEBUG] Executing workflow graph with distributed state management...")
-                config = {
-                    "configurable": {"thread_id": user_input["session_id"]},
-                    "recursion_limit": 50  # 재시도를 위한 recursion limit 증가
-                }
-            else:
-                print("[DEBUG] Executing workflow graph in stateless mode...")
-                config = {
-                    "recursion_limit": 50  # 재시도를 위한 recursion limit 증가
-                }
+            # Tracing: 워크플로우 시작 이벤트 기록
+            add_span_event(span, "workflow_started", {"query_preview": query[:100]})
 
-            # 노드별 진행 상황 추적을 위해 astream 사용
-            workflow_nodes = [
-                "query_classifier",
-                "skill_tool_selector",
-                "search_orchestrator",
-                "analysis_orchestrator",
-                "generation_orchestrator",
-                "result_integrator",
-                "quality_validator",
-                "response_generator"
-            ]
+            # 1. 스마트 캐시 확인 (활성화된 경우)
+            if settings.SMART_CACHE_ENABLED:
+                add_span_event(span, "checking_smart_cache")
+                smart_cache_result = await self._check_smart_cache(query, user_id)
+                if smart_cache_result:
+                    # 캐시 히트 시에도 완료 이벤트 발행
+                    add_span_event(span, "smart_cache_hit")
+                    set_span_attributes(span, {"cache.hit": True, "cache.type": "smart_cache"})
+                    await event_handler.on_workflow_complete(smart_cache_result)
+                    return smart_cache_result
+                add_span_event(span, "smart_cache_miss")
 
-            current_step = 0
-            total_steps = len(workflow_nodes)
-            final_state = None
+            # 2. 기존 Redis 캐시 확인 (폴백)
+            add_span_event(span, "checking_redis_cache")
+            cache_key = self._generate_cache_key(query, user_id)
+            cached_response = await self._check_cached_response(cache_key)
+            if cached_response:
+                add_span_event(span, "redis_cache_hit")
+                set_span_attributes(span, {"cache.hit": True, "cache.type": "redis"})
+                await event_handler.on_workflow_complete(cached_response)
+                return cached_response
+            add_span_event(span, "redis_cache_miss")
+            set_span_attributes(span, {"cache.hit": False})
 
-            # 스트리밍으로 워크플로우 실행하며 이벤트 emit
-            async for chunk in self.graph.astream(initial_state, config):
-                # chunk는 {node_name: state} 형식
-                for node_name, state in chunk.items():
-                    if node_name in workflow_nodes:
-                        current_step += 1
+            # 초기 상태 생성 (event_handler를 상태에 포함)
+            initial_state = self._create_initial_state(user_input)
+            initial_state["_event_handler"] = event_handler
 
-                        # 노드 시작 이벤트
-                        await event_handler.on_node_start(
-                            node_name, current_step, total_steps
+            try:
+                # 워크플로우 실행
+                add_span_event(span, "starting_graph_execution")
+                if use_checkpointer:
+                    print("[DEBUG] Executing workflow graph with distributed state management...")
+                    config = {
+                        "configurable": {"thread_id": user_input["session_id"]},
+                        "recursion_limit": 50  # 재시도를 위한 recursion limit 증가
+                    }
+                else:
+                    print("[DEBUG] Executing workflow graph in stateless mode...")
+                    config = {
+                        "recursion_limit": 50  # 재시도를 위한 recursion limit 증가
+                    }
+
+                # 노드별 진행 상황 추적을 위해 astream 사용
+                workflow_nodes = [
+                    "query_classifier",
+                    "skill_tool_selector",
+                    "search_orchestrator",
+                    "analysis_orchestrator",
+                    "generation_orchestrator",
+                    "result_integrator",
+                    "quality_validator",
+                    "response_generator"
+                ]
+
+                current_step = 0
+                total_steps = len(workflow_nodes)
+                final_state = None
+
+                # 스트리밍으로 워크플로우 실행하며 이벤트 emit
+                async for chunk in self.graph.astream(initial_state, config):
+                    # chunk는 {node_name: state} 형식
+                    for node_name, state in chunk.items():
+                        if node_name in workflow_nodes:
+                            current_step += 1
+
+                            # Tracing: 노드 실행 이벤트
+                            add_span_event(span, f"node_{node_name}_start", {
+                                "step": current_step,
+                                "total_steps": total_steps
+                            })
+
+                            # 노드 시작 이벤트
+                            await event_handler.on_node_start(
+                                node_name, current_step, total_steps
+                            )
+
+                            # 노드 완료 이벤트 (state에서 필요한 정보 추출)
+                            node_result = {
+                                "node": node_name,
+                                "step": current_step
+                            }
+                            await event_handler.on_node_complete(node_name, node_result)
+
+                            # Tracing: 노드 완료 이벤트
+                            add_span_event(span, f"node_{node_name}_complete")
+
+                        # 마지막 상태 저장
+                        final_state = state
+
+                # 결과 생성
+                add_span_event(span, "generating_result")
+                result = self._create_workflow_result(final_state)
+
+                # 성공적인 결과 캐싱
+                if result["success"] and result["response"]:
+                    # 스마트 캐시에 저장 (활성화된 경우)
+                    if settings.SMART_CACHE_ENABLED:
+                        add_span_event(span, "saving_to_smart_cache")
+                        await self._save_to_smart_cache(
+                            query=query,
+                            result=result,
+                            final_state=final_state,
+                            user_id=user_id,
+                            session_id=user_input.get("session_id")
                         )
 
-                        # 노드 완료 이벤트 (state에서 필요한 정보 추출)
-                        node_result = {
-                            "node": node_name,
-                            "step": current_step
-                        }
-                        await event_handler.on_node_complete(node_name, node_result)
+                    # 기존 Redis 캐시에도 저장 (폴백용)
+                    add_span_event(span, "saving_to_redis_cache")
+                    await self._cache_workflow_result(cache_key, result)
 
-                    # 마지막 상태 저장
-                    final_state = state
+                # 데이터셋 자동 저장 (LLM 호출이 있었을 경우)
+                await self._auto_save_dataset()
 
-            # 결과 생성
-            result = self._create_workflow_result(final_state)
+                # 워크플로우 완료 이벤트
+                await event_handler.on_workflow_complete(result)
 
-            # 성공적인 결과 캐싱
-            if result["success"] and result["response"]:
-                # 스마트 캐시에 저장 (활성화된 경우)
-                if settings.SMART_CACHE_ENABLED:
-                    await self._save_to_smart_cache(
-                        query=query,
-                        result=result,
-                        final_state=final_state,
-                        user_id=user_id,
-                        session_id=user_input.get("session_id")
-                    )
+                # Tracing: 성공 완료
+                add_span_event(span, "workflow_completed", {"success": result["success"]})
+                set_span_attributes(span, {
+                    "workflow.success": result["success"],
+                    "workflow.nodes_executed": current_step
+                })
 
-                # 기존 Redis 캐시에도 저장 (폴백용)
-                await self._cache_workflow_result(cache_key, result)
+                print("[DEBUG] Workflow execution completed successfully")
+                return result
 
-            # 데이터셋 자동 저장 (LLM 호출이 있었을 경우)
-            await self._auto_save_dataset()
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print(f"[ERROR] Workflow execution failed: {str(e)}")
 
-            # 워크플로우 완료 이벤트
-            await event_handler.on_workflow_complete(result)
+                # Tracing: 에러 기록
+                add_span_event(span, "workflow_error", {"error": str(e)})
+                set_span_attributes(span, {"workflow.error": True, "error.message": str(e)})
 
-            print("[DEBUG] Workflow execution completed successfully")
-            return result
+                # 에러 이벤트
+                await event_handler.on_workflow_error(e)
 
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            print(f"[ERROR] Workflow execution failed: {str(e)}")
-
-            # 에러 이벤트
-            await event_handler.on_workflow_error(e)
-
-            return self._create_error_result(e, initial_state)
+                return self._create_error_result(e, initial_state)
 
     async def _check_smart_cache(
         self,
