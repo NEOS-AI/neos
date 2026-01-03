@@ -16,6 +16,7 @@ class QueryClassifier:
     def __init__(self, config):
         self.config = config
         self.intent_keywords = {
+            "simple_conversation": ["안녕", "hello", "hi", "hey", "감사", "thank", "고마워", "bye", "잘가", "좋은", "good"],
             "comparison": ["비교", "compare", "차이", "difference", "vs", "대비"],
             "data_analysis": ["분석", "analyze", "통계", "statistics", "데이터", "data", "트렌드", "trend"],
             "generation": ["생성", "만들어", "create", "generate", "작성", "write"],
@@ -187,6 +188,13 @@ class QueryClassifier:
     def _determine_required_agents(self, query: str, intent: str, complexity_score: float = 0.0) -> List[str]:
         """필요한 에이전트 결정 (복잡도 고려)"""
         agents = []
+
+        # 0-0. 간단한 대화인 경우 에이전트 불필요 (최우선)
+        if intent == "simple_conversation":
+            # 짧은 쿼리이고 복잡도가 낮으면 도구 없이 직접 응답
+            if len(query) <= 50 and complexity_score < 0.3:
+                print("[DEBUG] Simple conversation detected, no agents required")
+                return []
 
         # 0-1. URL이 포함된 경우 WebLookUpAgent 사용 (최우선)
         if has_urls(query):
