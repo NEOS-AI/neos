@@ -25,6 +25,14 @@ Running rustfs:
 docker run --name neos-rustfs -d -p 9000:9000 -p 9001:9001 rustfs/rustfs:latest
 ```
 
+Running jaeger for OpenTelemetry tracing:
+```bash
+docker run -d --name neos-jaeger -p 16686:16686 \
+    -e LOG_LEVEL=info \
+    -e COLLECTOR_OTLP_ENABLED=true \
+    jaegertracing/all-in-one:latest
+```
+
 ## Connecting to the database
 
 ```bash
