@@ -111,7 +111,10 @@ curl -X POST http://localhost:8518/api/v1/query \
 
 ```bash
 # General query
-python -m neos.cli workflow test "Analyze AI trends in 2025"
+python -m neos.cli workflow test "Analyze AI trends in 2026"
+
+# Stock price prediction
+python -m neos.cli workflow test "nvidia stock price prediction for Q1 2026"
 
 # URL content analysis
 python -m neos.cli workflow web-lookup https://www.example.com
