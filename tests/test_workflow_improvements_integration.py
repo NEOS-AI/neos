@@ -605,7 +605,7 @@ class TestErrorRecoveryFlow:
 
         # Finalize metrics
         elapsed = time.time() - start_time
-        metrics.end_time = datetime.utcnow()
+        metrics.end_time = datetime.now()
 
         # Assertions
         assert metrics.llm_call_count == 1

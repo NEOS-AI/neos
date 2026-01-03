@@ -173,7 +173,7 @@ class TestWorkflowExecution:
             "errors": [],
             "execution_steps": ["classify", "search", "analyze", "generate"],
             "retry_count": 0,
-            "execution_start": datetime.utcnow()
+            "execution_start": datetime.now()
         }
         mock_graph.ainvoke = AsyncMock(return_value=final_state)
         workflow.graph = mock_graph
@@ -392,7 +392,7 @@ class TestStateManagement:
         error = Exception("Test error")
         initial_state = {
             "user_id": "user_123",
-            "execution_start": datetime.utcnow() - timedelta(milliseconds=500)
+            "execution_start": datetime.now() - timedelta(milliseconds=500)
         }
 
         result = workflow._create_error_result(error, initial_state)

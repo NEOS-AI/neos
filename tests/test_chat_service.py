@@ -36,7 +36,7 @@ class TestConversationManagement:
         mock_conversation.status = "active"
         mock_conversation.message_count = 0
         mock_conversation.total_tokens_used = 0
-        mock_conversation.created_at = datetime.utcnow()
+        mock_conversation.created_at = datetime.now()
 
         with patch("neos.api.services.chat_service.ChatRepository") as mock_repo:
             mock_repo.create_conversation = AsyncMock()
@@ -90,10 +90,10 @@ class TestConversationManagement:
         mock_conversation.is_shared = False
         mock_conversation.tags = ["test", "demo"]
         mock_conversation.metadata = {"source": "api"}
-        mock_conversation.created_at = datetime.utcnow()
-        mock_conversation.updated_at = datetime.utcnow()
-        mock_conversation.last_message_at = datetime.utcnow()
-        mock_conversation.last_accessed_at = datetime.utcnow()
+        mock_conversation.created_at = datetime.now()
+        mock_conversation.updated_at = datetime.now()
+        mock_conversation.last_message_at = datetime.now()
+        mock_conversation.last_accessed_at = datetime.now()
         mock_conversation.model_version = None
         mock_conversation.system_prompt = None
         mock_conversation.temperature = 0.7
@@ -135,8 +135,8 @@ class TestConversationManagement:
         mock_conversation.tags = ["updated", "test"]
         mock_conversation.user_id = "user_123"
         mock_conversation.status = "active"
-        mock_conversation.created_at = datetime.utcnow()
-        mock_conversation.updated_at = datetime.utcnow()
+        mock_conversation.created_at = datetime.now()
+        mock_conversation.updated_at = datetime.now()
 
         # Add all required attributes for dict conversion
         for attr in ["summary", "model_name", "model_version", "system_prompt",
@@ -312,7 +312,7 @@ class TestMessageManagement:
         mock_message.conversation_id = conversation_id
         mock_message.role = role
         mock_message.content = content
-        mock_message.created_at = datetime.utcnow()
+        mock_message.created_at = datetime.now()
 
         with patch("neos.api.services.chat_service.ChatRepository") as mock_repo:
             mock_repo.add_message = AsyncMock()
@@ -417,8 +417,8 @@ class TestConversationAnalytics:
             "total_tokens": 5000,
             "total_cost": 0.25,
             "avg_response_time": 1.5,
-            "first_message_at": datetime.utcnow(),
-            "last_message_at": datetime.utcnow()
+            "first_message_at": datetime.now(),
+            "last_message_at": datetime.now()
         }
 
         # Mock the entire method to avoid internal helper function calls

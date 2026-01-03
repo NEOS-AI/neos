@@ -161,7 +161,7 @@ class TestTokenDecoding:
         data = {"user_id": "test_user_123"}
 
         # 과거 시간으로 mock
-        past_time = datetime.utcnow() - timedelta(days=1)
+        past_time = datetime.now() - timedelta(days=1)
         with patch('neos.utils.jwt.datetime') as mock_datetime:
             mock_datetime.utcnow.return_value = past_time
             mock_datetime.fromtimestamp = datetime.fromtimestamp
@@ -179,7 +179,7 @@ class TestTokenDecoding:
 
         assert exp_time is not None
         assert isinstance(exp_time, datetime)
-        assert exp_time > datetime.utcnow()
+        assert exp_time > datetime.now()
 
     def test_get_token_expiration_invalid(self):
         """유효하지 않은 토큰의 만료 시간"""
@@ -198,7 +198,7 @@ class TestTokenExpiration:
         data = {"user_id": "test_user_123"}
 
         # 과거 시간으로 토큰 생성
-        past_time = datetime.utcnow() - timedelta(days=1)
+        past_time = datetime.now() - timedelta(days=1)
         with patch('neos.utils.jwt.datetime') as mock_datetime:
             mock_datetime.utcnow.return_value = past_time
             mock_datetime.fromtimestamp = datetime.fromtimestamp

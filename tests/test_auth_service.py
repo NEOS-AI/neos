@@ -327,7 +327,7 @@ class TestAuthServiceTokenRefresh:
                     token_hash="old_hash",
                     is_revoked=False,
                     is_used=False,
-                    expires_at=datetime.utcnow() + timedelta(days=7),
+                    expires_at=datetime.now() + timedelta(days=7),
                     device_info="Mozilla/5.0",
                     ip_address="192.168.1.1"
                 )
@@ -399,7 +399,7 @@ class TestAuthServiceTokenRefresh:
                     token_hash="token_hash",
                     is_revoked=False,
                     is_used=False,
-                    expires_at=datetime.utcnow() - timedelta(days=1)  # Expired
+                    expires_at=datetime.now() - timedelta(days=1)  # Expired
                 )
 
                 mock_result = MagicMock()
@@ -655,7 +655,7 @@ class TestAuthServiceAPIKey:
                 user_id="user_123",
                 key_hash="$2b$12$abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOP",
                 is_active=True,
-                expires_at=datetime.utcnow() + timedelta(days=30),
+                expires_at=datetime.now() + timedelta(days=30),
                 total_requests=10
             )
 
@@ -713,7 +713,7 @@ class TestAuthServiceAPIKey:
                 user_id="user_123",
                 key_hash="key_hash",
                 is_active=True,
-                expires_at=datetime.utcnow() - timedelta(days=1)  # Expired
+                expires_at=datetime.now() - timedelta(days=1)  # Expired
             )
 
             mock_result = MagicMock()
@@ -740,7 +740,7 @@ class TestAuthServiceAPIKey:
                 rate_limit=100,
                 is_active=True,
                 total_requests=50,
-                created_at=datetime.utcnow()
+                created_at=datetime.now()
             ),
             APIKey(
                 id=uuid.uuid4(),
@@ -750,7 +750,7 @@ class TestAuthServiceAPIKey:
                 rate_limit=200,
                 is_active=False,
                 total_requests=150,
-                created_at=datetime.utcnow()
+                created_at=datetime.now()
             )
         ]
 
