@@ -15,11 +15,18 @@ logger = logging.getLogger(__name__)
 class BaseAgent(ABC):
     """기본 에이전트 클래스"""
 
-    def __init__(self, name: str, llm: BaseLanguageModel, role: str, goal: str, backstory: str):
+    def __init__(
+        self,
+        name: str,
+        llm: BaseLanguageModel,
+        role: str | None = None,
+        goal: str | None = None,
+        backstory: str | None = None
+    ):
         self.name = name
-        self.role = role
-        self.goal = goal
-        self.backstory = backstory
+        self.role = role or name
+        self.goal = goal or f"Perform tasks as the {name} agent."
+        self.backstory = backstory or f"You are {name}, an AI agent designed to assist with various tasks."
         self.llm = llm
         self.agent = self._create_agent()
 
@@ -35,7 +42,7 @@ class BaseAgent(ABC):
             allow_delegation=False,
             max_execution_time=settings.AGENT_TIMEOUT
         )
-    
+
     @abstractmethod
     async def execute(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """에이전트 실행 (하위 클래스에서 구현)"""
@@ -129,7 +136,7 @@ class SearchAgent(BaseAgent):
     ):
         self.search_type = search_type
         super().__init__(name=name, llm=llm, **kwargs)
-    
+
     async def search(self, query: str, **kwargs) -> List[Dict[str, Any]]:
         """검색 실행 (하위 클래스에서 구현)"""
         raise NotImplementedError("Subclasses must implement the search method.")
