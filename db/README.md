@@ -83,11 +83,14 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/003_add_s
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/004_add_auth_tables.sql
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/005_add_oauth_and_enterprise.sql
 
+# Add migrations for changing index type
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/006_upgrade_to_hnsw.sql
+
 # Add migrations for Google Gemini API support
-psql -U postgres -d neos -h localhost -f db/migrations/006_add_embedding_provider_metadata.sql
+psql -U postgres -d neos -h localhost -f db/migrations/007_add_embedding_provider_metadata.sql
 
 # Add visibility column to conversations
-psql -U postgres -d neos -h localhost -f db/migrations/007_add_visibility_to_conversations.sql
+psql -U postgres -d neos -h localhost -f db/migrations/008_add_visibility_to_conversations.sql
 ```
 
 ### Migrate database schema for backoffice
