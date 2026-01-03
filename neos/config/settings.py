@@ -12,7 +12,7 @@ env_vars = os.environ
 
 class Settings(BaseSettings):
     # 데이터베이스 설정
-    DATABASE_URL: str = env_vars.get("DATABASE_URL", "postgresql+asyncpg://user:password@localhost/ai_system")
+    DATABASE_URL: str = env_vars.get("DATABASE_URL", "postgresql+asyncpg://postgres:password@localhost/neos")
     # 연결 풀 최적화: 총 50개 (20+30) 연결로 제한하여 DB 부하 방지
     # PostgreSQL default max_connections = 100 고려
     DATABASE_POOL_SIZE: int = int(env_vars.get("DATABASE_POOL_SIZE", 20))  # 개선: 40 → 20
