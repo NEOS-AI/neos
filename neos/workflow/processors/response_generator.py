@@ -94,7 +94,6 @@ class ResponseGenerator:
 
         print("[DEBUG] generation result: ", state["generation_results"])
         print(f"[DEBUG] Response generation completed. Length: {len(final_response)} characters")
-        print(final_response)
 
         state["execution_steps"].append({
             "step": "response_generation",
