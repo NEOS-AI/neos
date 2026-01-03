@@ -135,7 +135,17 @@ class MultiAgentWorkflow:
 
         workflow.add_edge("conversation_context_processor", "query_classifier")
         workflow.add_edge("query_classifier", "skill_tool_selector")
-        workflow.add_edge("skill_tool_selector", "search_orchestrator")
+
+        # 조건부 분기: 도구/에이전트가 필요 없으면 orchestrator 건너뛰고 바로 응답 생성
+        workflow.add_conditional_edges(
+            "skill_tool_selector",
+            self._should_skip_orchestrators,
+            {
+                "skip_orchestrators": "response_generator",  # 간단한 대화 -> 바로 응답
+                "use_orchestrators": "search_orchestrator"   # 도구 필요 -> 정상 파이프라인
+            }
+        )
+
         workflow.add_edge("search_orchestrator", "analysis_orchestrator")
         workflow.add_edge("analysis_orchestrator", "generation_orchestrator")
         workflow.add_edge("generation_orchestrator", "result_integrator")
@@ -281,6 +291,29 @@ class MultiAgentWorkflow:
     def _should_regenerate(self, state: AgentState) -> str:
         """재생성 여부 결정"""
         return self.quality_validator.should_regenerate(state)
+
+    def _should_skip_orchestrators(self, state: AgentState) -> str:
+        """
+        Orchestrator들을 건너뛰고 바로 응답 생성할지 결정
+
+        조건:
+        1. required_agents가 비어있음 (간단한 대화 등)
+        2. selected_tools가 비어있음 (도구 사용 불필요)
+
+        Returns:
+            "skip_orchestrators": response_generator로 직접 이동
+            "use_orchestrators": search_orchestrator로 이동하여 정상 파이프라인 실행
+        """
+        required_agents = state.get("required_agents", [])
+        selected_tools = state.get("selected_tools", [])
+
+        # 에이전트와 도구 모두 필요 없으면 건너뛰기
+        if not required_agents and not selected_tools:
+            print("[DEBUG] No agents or tools required, skipping orchestrators")
+            return "skip_orchestrators"
+
+        print(f"[DEBUG] Using orchestrators (agents: {len(required_agents)}, tools: {len(selected_tools)})")
+        return "use_orchestrators"
 
 
     async def execute_workflow(
