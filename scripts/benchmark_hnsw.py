@@ -20,6 +20,10 @@ from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
+import sys
+
+sys.path.append('.')
+sys.path.append('..')
 
 from neos.config.settings import Settings
 
@@ -71,7 +75,21 @@ class HNSWBenchmark:
             rows = result.fetchall()
 
             # pgvector array to list 변환
-            return [(row[0], list(row[1])) for row in rows]
+            parsed_vectors = []
+            for row in rows:
+                vector = row[1]
+                # pgvector는 다양한 형태로 반환될 수 있음
+                if isinstance(vector, str):
+                    # 문자열 형태: '[1.0, 2.0, 3.0]'
+                    vector = [float(x) for x in vector.strip('[]').split(',')]
+                elif hasattr(vector, '__iter__'):
+                    # 이미 리스트/배열 형태
+                    vector = [float(x) for x in vector]
+                else:
+                    continue
+                parsed_vectors.append((row[0], vector))
+            
+            return parsed_vectors
 
     async def benchmark_query(
         self,
@@ -86,18 +104,27 @@ class HNSWBenchmark:
 
             start_time = time.perf_counter()
 
-            query = text("""
-                SELECT id, query_vector <=> :query_vector::vector AS distance
+            # 벡터를 PostgreSQL 배열 형식으로 변환 (공백 없이)
+            # NaN이나 Inf 값 체크 및 제거
+            clean_vector = []
+            for v in vector:
+                v = float(v)
+                if v != v or abs(v) == float('inf'):  # NaN or Inf
+                    clean_vector.append(0.0)
+                else:
+                    clean_vector.append(v)
+            vector_str = '[' + ','.join(f'{v:.8f}' for v in clean_vector) + ']'
+
+            # asyncpg의 파라미터 바인딩 문제로 인해 벡터는 직접 포맷팅
+            query = text(f"""
+                SELECT id, query_vector <=> '{vector_str}'::vector AS distance
                 FROM query_cache
                 WHERE query_vector IS NOT NULL
                 ORDER BY distance
                 LIMIT :top_k
             """)
 
-            result = await session.execute(query, {
-                "query_vector": str(vector),
-                "top_k": top_k
-            })
+            result = await session.execute(query, {"top_k": top_k})
 
             rows = result.fetchall()
             latency = (time.perf_counter() - start_time) * 1000  # ms로 변환
