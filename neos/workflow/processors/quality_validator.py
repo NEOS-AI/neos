@@ -40,7 +40,7 @@ class QualityValidator:
         state["execution_steps"].append({
             "step": "quality_validation",
             "result": f"completed - score: {overall_score:.2f}",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
 
         return state

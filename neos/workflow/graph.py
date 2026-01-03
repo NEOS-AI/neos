@@ -503,7 +503,7 @@ class MultiAgentWorkflow:
                 result["cache_hit_type"] = cache_result.hit_type
                 result["similarity_score"] = response.similarity_score
                 result["original_query"] = response.query_text
-                result["timestamp"] = datetime.utcnow().isoformat()
+                result["timestamp"] = datetime.now().isoformat()
 
                 return result
 
@@ -605,7 +605,7 @@ class MultiAgentWorkflow:
         if cached_response:
             print("[DEBUG] Found cached workflow response, returning cached result")
             cached_response["cache_hit"] = True
-            cached_response["timestamp"] = datetime.utcnow().isoformat()
+            cached_response["timestamp"] = datetime.now().isoformat()
             return cached_response
 
         print("[DEBUG] No cached response found, executing workflow")
@@ -632,7 +632,7 @@ class MultiAgentWorkflow:
             quality_feedback=None,
             final_response=None,
             response_metadata=None,
-            execution_start=datetime.utcnow(),
+            execution_start=datetime.now(),
             execution_steps=[],
             errors=[],
             retry_count=0,
@@ -662,7 +662,7 @@ class MultiAgentWorkflow:
             "error": str(error),
             "partial_state": initial_state,
             "cache_hit": False,
-            "execution_time_ms": int((datetime.utcnow() - initial_state["execution_start"]).total_seconds() * 1000)
+            "execution_time_ms": int((datetime.now() - initial_state["execution_start"]).total_seconds() * 1000)
         }
 
     async def _cache_workflow_result(self, cache_key: str, result: Dict[str, Any]) -> None:
@@ -753,7 +753,7 @@ class MultiAgentWorkflow:
             "workflow": "healthy",
             "components": {},
             "agents": len(self.agents),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "state_management": "distributed"
         }
 

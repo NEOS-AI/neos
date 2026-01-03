@@ -62,7 +62,7 @@ class ArtifactService:
         # 문서 생성
         new_document = ArtifactDocument(
             id=doc_uuid,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(),
             title=title,
             content=content,
             kind=kind,
@@ -259,7 +259,7 @@ class ArtifactService:
                 description=suggestion_data.description,
                 is_resolved=False,
                 user_id=user_id,
-                created_at=datetime.utcnow()
+                created_at=datetime.now()
             )
 
             self.db.add(new_suggestion)

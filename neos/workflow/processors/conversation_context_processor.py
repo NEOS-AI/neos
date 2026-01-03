@@ -98,7 +98,7 @@ class ConversationContextProcessor:
             # 메타데이터 생성
             history_metadata = {
                 "total_messages": len(chat_history),
-                "context_generated_at": datetime.utcnow().isoformat(),
+                "context_generated_at": datetime.now().isoformat(),
                 "context_length": len(conversation_context),
                 "main_topics": main_topics,
             }
@@ -112,7 +112,7 @@ class ConversationContextProcessor:
             execution_step = {
                 "step": "conversation_context_processing",
                 "result": "completed",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now().isoformat(),
                 "metadata": {
                     "messages_processed": len(chat_history),
                     "context_length": len(conversation_context)

@@ -51,7 +51,7 @@ class WorkflowError:
     category: ErrorCategory
     message: str
     node: str
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     recoverable: bool = True
     context: Dict[str, Any] = field(default_factory=dict)
     retry_count: int = 0

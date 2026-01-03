@@ -139,7 +139,7 @@ class LoggingEventHandler(WorkflowEventHandler):
         self.start_time = None
 
     async def on_workflow_start(self, workflow_input: Dict[str, Any]):
-        self.start_time = datetime.utcnow()
+        self.start_time = datetime.now()
         if self.logger:
             self.logger.info(f"Workflow started: {workflow_input.get('query', 'N/A')[:100]}")
 
@@ -157,7 +157,7 @@ class LoggingEventHandler(WorkflowEventHandler):
 
     async def on_workflow_complete(self, result: Dict[str, Any]):
         if self.logger and self.start_time:
-            elapsed = (datetime.utcnow() - self.start_time).total_seconds()
+            elapsed = (datetime.now() - self.start_time).total_seconds()
             self.logger.info(f"Workflow completed in {elapsed:.2f}s")
 
     async def on_workflow_error(self, error: Exception, node_name: Optional[str] = None):

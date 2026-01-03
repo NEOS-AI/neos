@@ -58,7 +58,7 @@ async def test_refactored_workflow():
             quality_feedback=None,
             final_response=None,
             response_metadata=None,
-            execution_start=datetime.utcnow(),
+            execution_start=datetime.now(),
             execution_steps=[],
             errors=[],
             retry_count=0,

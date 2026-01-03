@@ -58,7 +58,7 @@ class NodeExecutor:
             return {
                 "integrated_results": {
                     "steps": state.get("execution_steps", []),
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 }
             }
 
@@ -106,7 +106,7 @@ class NodeExecutor:
         state: AgentState
     ) -> Dict[str, Any]:
         """에이전트 노드 실행"""
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
 
         # 노드 설정에서 에이전트 이름 가져오기
         agent_name = node.config.get("agent_name", "")
@@ -155,7 +155,7 @@ class NodeExecutor:
             agent_result = await agent.execute(query, context)
 
             # 실행 시간 계산
-            execution_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            execution_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
             # 결과 처리
             if agent_result.get("success"):
@@ -192,7 +192,7 @@ class NodeExecutor:
                 }
 
         except Exception as e:
-            execution_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            execution_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
             logger.error(f"Error executing agent '{agent_name}': {e}")
             return {
                 "node": node.name,
@@ -209,7 +209,7 @@ class NodeExecutor:
         state: AgentState
     ) -> Dict[str, Any]:
         """스킬 노드 실행"""
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
 
         # 노드 설정에서 스킬 이름 가져오기
         skill_name = node.config.get("skill_name", "")
@@ -239,7 +239,7 @@ class NodeExecutor:
             result = await skill_manager.execute_skill(skill_name, params)
 
             # 실행 시간 계산
-            execution_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            execution_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
             # 결과 처리
             if result.success:
@@ -263,7 +263,7 @@ class NodeExecutor:
                 }
 
         except Exception as e:
-            execution_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            execution_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
             logger.error(f"Error executing skill '{skill_name}': {e}")
             return {
                 "node": node.name,

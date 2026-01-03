@@ -407,7 +407,7 @@ class HyperDeepResearchAgent(SearchAgent):
         """Phase 0: Skill and Tool Selection."""
         print("\n[INFO] ===== Phase 0: Skill and Tool Selection =====")
         await self.event_logger.log_phase_start(0, "Skill and Tool Selection")
-        phase_start = datetime.utcnow()
+        phase_start = datetime.now()
 
         try:
             selection_context = {
@@ -436,7 +436,7 @@ class HyperDeepResearchAgent(SearchAgent):
             print(f"[WARNING] Skill/tool selection failed: {e}")
             print("[INFO] Continuing with default configuration...")
 
-        duration = int((datetime.utcnow() - phase_start).total_seconds() * 1000)
+        duration = int((datetime.now() - phase_start).total_seconds() * 1000)
         await self.event_logger.log_phase_complete(0, "Skill and Tool Selection", duration)
 
 
@@ -453,7 +453,7 @@ class HyperDeepResearchAgent(SearchAgent):
         await self.repository.update_report_status(
             self.current_report_id, "in_progress", "started_at"
         )
-        phase_start = datetime.utcnow()
+        phase_start = datetime.now()
 
         topic_analysis = await self.topic_analyzer.analyze_topic(
             query, session_id, user_id, language,
@@ -467,7 +467,7 @@ class HyperDeepResearchAgent(SearchAgent):
             topic_analysis["full_analysis"], "completed"
         )
 
-        duration = int((datetime.utcnow() - phase_start).total_seconds() * 1000)
+        duration = int((datetime.now() - phase_start).total_seconds() * 1000)
         await self.event_logger.log_phase_complete(1, "Topic Analysis", duration)
 
         return topic_analysis
@@ -517,7 +517,7 @@ class HyperDeepResearchAgent(SearchAgent):
         """Phase 2: Research Planning."""
         print("\n[INFO] ===== Phase 2/8: Research Planning =====")
         await self.event_logger.log_phase_start(2, "Research Planning")
-        phase_start = datetime.utcnow()
+        phase_start = datetime.now()
 
         methodology = await self.research_planner.plan_research(
             topic_analysis, session_id, user_id, language,
@@ -530,7 +530,7 @@ class HyperDeepResearchAgent(SearchAgent):
             methodology["full_plan"], "completed"
         )
 
-        duration = int((datetime.utcnow() - phase_start).total_seconds() * 1000)
+        duration = int((datetime.now() - phase_start).total_seconds() * 1000)
         await self.event_logger.log_phase_complete(2, "Research Planning", duration)
 
         return methodology
@@ -546,7 +546,7 @@ class HyperDeepResearchAgent(SearchAgent):
         """Phase 3: Initial Data Collection."""
         print("\n[INFO] ===== Phase 3/8: Data Collection =====")
         await self.event_logger.log_phase_start(3, "Data Collection")
-        phase_start = datetime.utcnow()
+        phase_start = datetime.now()
 
         # Generate query variations
         await self.event_logger.log_status_message(
@@ -633,7 +633,7 @@ class HyperDeepResearchAgent(SearchAgent):
             sources_count=len(unique_sources)
         )
 
-        duration = int((datetime.utcnow() - phase_start).total_seconds() * 1000)
+        duration = int((datetime.now() - phase_start).total_seconds() * 1000)
         await self.event_logger.log_phase_complete(3, "Data Collection", duration)
 
         # Phase 3.5: Iterative Web Exploration (if initial results insufficient)
@@ -789,7 +789,7 @@ class HyperDeepResearchAgent(SearchAgent):
         """Phase 4: Iterative Deep Analysis."""
         print("\n[INFO] ===== Phase 4/8: Deep Analysis =====")
         await self.event_logger.log_phase_start(4, "Deep Analysis")
-        phase_start = datetime.utcnow()
+        phase_start = datetime.now()
 
         deep_analysis = await self.deep_analyzer.perform_deep_analysis(
             topic_analysis, initial_data, session_id, user_id, language,
@@ -816,7 +816,7 @@ class HyperDeepResearchAgent(SearchAgent):
             self.criticism_processor.stats["additional_research_triggered"]
         )
 
-        duration = int((datetime.utcnow() - phase_start).total_seconds() * 1000)
+        duration = int((datetime.now() - phase_start).total_seconds() * 1000)
         await self.event_logger.log_phase_complete(4, "Deep Analysis", duration)
 
         return deep_analysis
@@ -884,7 +884,7 @@ class HyperDeepResearchAgent(SearchAgent):
         """Phase 5: Gap Analysis."""
         print("\n[INFO] ===== Phase 5/8: Gap Analysis =====")
         await self.event_logger.log_phase_start(5, "Gap Analysis")
-        phase_start = datetime.utcnow()
+        phase_start = datetime.now()
 
         # Identify gaps
         gaps = await self.gap_analyzer.identify_knowledge_gaps(
@@ -933,7 +933,7 @@ class HyperDeepResearchAgent(SearchAgent):
             sources_count=len(unique_gap_sources)
         )
 
-        duration = int((datetime.utcnow() - phase_start).total_seconds() * 1000)
+        duration = int((datetime.now() - phase_start).total_seconds() * 1000)
         await self.event_logger.log_phase_complete(5, "Gap Analysis", duration)
 
         return {"gaps": gaps, "summary": summary, "sources_count": len(unique_gap_sources)}
@@ -950,7 +950,7 @@ class HyperDeepResearchAgent(SearchAgent):
         """Phase 6: Cross-Validation."""
         print("\n[INFO] ===== Phase 6/8: Cross-Validation =====")
         await self.event_logger.log_phase_start(6, "Cross-Validation")
-        phase_start = datetime.utcnow()
+        phase_start = datetime.now()
 
         # Apply semantic clustering
         print(f"[INFO] 🔗 Clustering {len(self.all_collected_sources)} sources semantically...")
@@ -979,7 +979,7 @@ class HyperDeepResearchAgent(SearchAgent):
             self.research_metadata["total_sources_collected"],
         )
 
-        duration = int((datetime.utcnow() - phase_start).total_seconds() * 1000)
+        duration = int((datetime.now() - phase_start).total_seconds() * 1000)
         await self.event_logger.log_phase_complete(6, "Cross-Validation", duration)
 
         return validation
@@ -1041,7 +1041,7 @@ class HyperDeepResearchAgent(SearchAgent):
         """Phase 7: Critical Analysis."""
         print("\n[INFO] ===== Phase 7/8: Critical Analysis =====")
         await self.event_logger.log_phase_start(7, "Critical Analysis")
-        phase_start = datetime.utcnow()
+        phase_start = datetime.now()
 
         critical_analysis = await self.validation_analyzer.perform_critical_analysis(
             topic_analysis, deep_analysis, validation,
@@ -1055,7 +1055,7 @@ class HyperDeepResearchAgent(SearchAgent):
             critical_analysis["full_analysis"], "completed"
         )
 
-        duration = int((datetime.utcnow() - phase_start).total_seconds() * 1000)
+        duration = int((datetime.now() - phase_start).total_seconds() * 1000)
         await self.event_logger.log_phase_complete(7, "Critical Analysis", duration)
 
         return critical_analysis
@@ -1119,7 +1119,7 @@ class HyperDeepResearchAgent(SearchAgent):
         """Phase 8: Final Report Synthesis."""
         print("\n[INFO] ===== Phase 8/8: Report Synthesis =====")
         await self.event_logger.log_phase_start(8, "Report Synthesis")
-        phase_start = datetime.utcnow()
+        phase_start = datetime.now()
 
         final_report = await self.report_generator.synthesize_final_report(
             topic_analysis, methodology, deep_analysis,
@@ -1129,7 +1129,7 @@ class HyperDeepResearchAgent(SearchAgent):
             self.research_metadata,
         )
 
-        duration = int((datetime.utcnow() - phase_start).total_seconds() * 1000)
+        duration = int((datetime.now() - phase_start).total_seconds() * 1000)
         await self.event_logger.log_phase_complete(8, "Report Synthesis", duration)
 
         return final_report

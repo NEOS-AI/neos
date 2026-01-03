@@ -65,7 +65,7 @@ class StreamSession:
 
     def is_expired(self, ttl_seconds: int = 300) -> bool:
         """세션 만료 여부 확인 (기본 5분)"""
-        return (datetime.utcnow() - self.last_activity).total_seconds() > ttl_seconds
+        return (datetime.now() - self.last_activity).total_seconds() > ttl_seconds
 
 
 class StreamManager:
@@ -135,7 +135,7 @@ class StreamManager:
         """새 스트림 세션 생성 또는 기존 세션 반환"""
         if session_id in self._sessions:
             session = self._sessions[session_id]
-            session.last_activity = datetime.utcnow()
+            session.last_activity = datetime.now()
             session.active_connections += 1
             logger.info(f"Reusing session {session_id}, connections: {session.active_connections}")
             return session
@@ -143,8 +143,8 @@ class StreamManager:
         session = StreamSession(
             session_id=session_id,
             user_id=user_id,
-            created_at=datetime.utcnow(),
-            last_activity=datetime.utcnow(),
+            created_at=datetime.now(),
+            last_activity=datetime.now(),
             event_buffer=deque(maxlen=self.buffer_size),
             queue=asyncio.Queue(),
             active_connections=1,
@@ -208,7 +208,7 @@ class StreamManager:
         # 큐에 추가 (실시간 스트리밍)
         try:
             await session.queue.put(stream_event)
-            session.last_activity = datetime.utcnow()
+            session.last_activity = datetime.now()
             return True
         except Exception as e:
             logger.error(f"Failed to add event to session {session_id}: {e}")
@@ -260,7 +260,7 @@ class StreamManager:
         session = self.get_session(session_id)
         if session:
             session.active_connections = max(0, session.active_connections - 1)
-            session.last_activity = datetime.utcnow()
+            session.last_activity = datetime.now()
             logger.info(f"Disconnected from session {session_id}, remaining connections: {session.active_connections}")
 
     def remove_session(self, session_id: str):
@@ -282,7 +282,7 @@ class StreamManager:
 
     async def _cleanup_expired_sessions(self):
         """만료된 세션 제거"""
-        now = datetime.utcnow()
+        now = datetime.now()
         expired_sessions = []
 
         for session_id, session in self._sessions.items():
@@ -317,7 +317,7 @@ class StreamManager:
                     "active_connections": s.active_connections,
                     "buffered_events": len(s.event_buffer),
                     "last_activity": s.last_activity.isoformat(),
-                    "age_seconds": (datetime.utcnow() - s.created_at).total_seconds()
+                    "age_seconds": (datetime.now() - s.created_at).total_seconds()
                 }
                 for s in self._sessions.values()
             ]

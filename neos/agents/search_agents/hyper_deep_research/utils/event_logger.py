@@ -313,7 +313,7 @@ class ResearchEventLogger:
                 "phase_number": phase_number,
                 "phase_name": phase_name,
                 "details": details,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
         )
 
@@ -340,7 +340,7 @@ class ResearchEventLogger:
                 "phase_number": phase_number,
                 "phase_name": phase_name,
                 "duration_ms": duration_ms,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
         )
 
@@ -367,7 +367,7 @@ class ResearchEventLogger:
                 "query": query,
                 "batch": batch_num,
                 "total_batches": total_batches,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
         )
 
@@ -394,7 +394,7 @@ class ResearchEventLogger:
                 "sources_count": sources_count,
                 "total_sources": total_sources,
                 "batch": batch_num,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
         )
 
@@ -421,7 +421,7 @@ class ResearchEventLogger:
                 "phase": phase,
                 "purpose": purpose,
                 "estimated_tokens": estimated_tokens,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
         )
 
@@ -448,7 +448,7 @@ class ResearchEventLogger:
                 "phase": phase,
                 "purpose": purpose,
                 "actual_tokens": actual_tokens,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
         )
 
@@ -478,7 +478,7 @@ class ResearchEventLogger:
                 "total": total,
                 "percentage": percentage,
                 "message": message,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
         )
 
@@ -502,7 +502,7 @@ class ResearchEventLogger:
             {
                 "message": message,
                 "category": category,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
         )
 
@@ -526,7 +526,7 @@ class ResearchEventLogger:
             {
                 "gap": gap,
                 "priority": priority,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
         )
 
@@ -553,6 +553,6 @@ class ResearchEventLogger:
                 "iteration": iteration,
                 "total_iterations": total_iterations,
                 "focus": focus,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
         )

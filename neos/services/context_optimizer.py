@@ -405,7 +405,7 @@ class ContextOptimizer:
             message_types[role] = message_types.get(role, 0) + 1
 
         return {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "workflow_type": workflow_type,
             "total_messages": len(messages),
             "message_types": message_types,

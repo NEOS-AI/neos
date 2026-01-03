@@ -198,7 +198,7 @@ class AutonomousAgent(BaseAgent):
         task_id = task_data.get("task_id", "unknown")
         logger.info(f"[{self.name}] Executing task: {task_id}")
 
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
         self.current_task = task_id
         self.status = AgentStatus.BUSY
 
@@ -222,7 +222,7 @@ class AutonomousAgent(BaseAgent):
             result = await self.execute_autonomous_task(task_data)
 
             # 성공 처리
-            execution_time = (datetime.utcnow() - start_time).total_seconds()
+            execution_time = (datetime.now() - start_time).total_seconds()
             self.tasks_completed += 1
             self.total_response_time += execution_time
 
@@ -408,7 +408,7 @@ class AutonomousAgent(BaseAgent):
 
                 # Heartbeat 이벤트 발행
                 await self.message_bus.publish(Event(
-                    event_id=f"heartbeat-{self.agent_id}-{datetime.utcnow().timestamp()}",
+                    event_id=f"heartbeat-{self.agent_id}-{datetime.now().timestamp()}",
                     event_type=EventType.AGENT_HEARTBEAT,
                     source=self.agent_id,
                     data={

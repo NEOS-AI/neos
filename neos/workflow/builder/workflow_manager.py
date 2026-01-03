@@ -86,7 +86,7 @@ class WorkflowManager:
                 return False
 
             workflow.status = status
-            workflow.updated_at = datetime.utcnow()
+            workflow.updated_at = datetime.now()
             await session.commit()
             return True
 

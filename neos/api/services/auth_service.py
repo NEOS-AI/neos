@@ -154,7 +154,7 @@ class AuthService:
         )
 
         # 마지막 로그인 시간 업데이트
-        user.last_login = datetime.utcnow()
+        user.last_login = datetime.now()
 
         await self.db.commit()
 
@@ -207,7 +207,7 @@ class AuthService:
                     RefreshToken.user_id == user_id,
                     ~RefreshToken.is_revoked,
                     ~RefreshToken.is_used,
-                    RefreshToken.expires_at > datetime.utcnow()
+                    RefreshToken.expires_at > datetime.now()
                 )
             )
         )
@@ -224,7 +224,7 @@ class AuthService:
 
         # 기존 Refresh Token을 사용됨으로 표시 (토큰 rotation)
         db_token.is_used = True
-        db_token.used_at = datetime.utcnow()
+        db_token.used_at = datetime.now()
 
         # 새 Access Token 생성
         new_access_token = create_access_token(
@@ -242,7 +242,7 @@ class AuthService:
 
         # 새 Refresh Token DB에 저장
         new_token_hash = hash_token(new_refresh_token)
-        expires_at = datetime.utcnow() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+        expires_at = datetime.now() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
 
         new_db_refresh_token = RefreshToken(
             user_id=user.user_id,
@@ -285,7 +285,7 @@ class AuthService:
 
         if db_token:
             db_token.is_revoked = True
-            db_token.revoked_at = datetime.utcnow()
+            db_token.revoked_at = datetime.now()
             await self.db.commit()
 
         return True, "로그아웃 성공"
@@ -314,7 +314,7 @@ class AuthService:
 
         # Refresh Token DB에 저장
         refresh_token_hash = hash_token(refresh_token)
-        expires_at = datetime.utcnow() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+        expires_at = datetime.now() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
 
         new_refresh_token = RefreshToken(
             user_id=user_id,
@@ -488,7 +488,7 @@ class AuthService:
             return False, None, None
 
         # 만료 확인
-        if api_key_obj.expires_at and api_key_obj.expires_at < datetime.utcnow():
+        if api_key_obj.expires_at and api_key_obj.expires_at < datetime.now():
             # 만료된 키 사용 시도 로깅
             logger.warning(
                 f"Expired API key used - "
@@ -512,7 +512,7 @@ class AuthService:
 
         # 사용 통계 업데이트
         api_key_obj.total_requests += 1
-        api_key_obj.last_used_at = datetime.utcnow()
+        api_key_obj.last_used_at = datetime.now()
 
         await self.db.commit()
 
@@ -635,7 +635,7 @@ class AuthService:
         )
 
         # 마지막 로그인 시간 업데이트
-        guest_user.last_login = datetime.utcnow()
+        guest_user.last_login = datetime.now()
 
         await self.db.commit()
 

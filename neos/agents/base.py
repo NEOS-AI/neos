@@ -71,7 +71,7 @@ class BaseAgent(ABC):
         별도 스레드에서 실행하여 이벤트 루프를 블로킹하지 않습니다.
         """
         try:
-            start_time = datetime.utcnow()
+            start_time = datetime.now()
 
             crew = Crew(
                 agents=[self.agent],
@@ -85,7 +85,7 @@ class BaseAgent(ABC):
             result = await asyncio.to_thread(crew.kickoff)
             logger.debug(f"{self.name} - Crew 실행 완료")
 
-            execution_time = (datetime.utcnow() - start_time).total_seconds()
+            execution_time = (datetime.now() - start_time).total_seconds()
 
             return {
                 "success": True,
@@ -119,7 +119,7 @@ class BaseAgent(ABC):
             "result": result,  # 하위 호환성
             "results": result if isinstance(result, list) else [result],  # CLI 호환성
             "metadata": metadata or {},
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "success": True
         }
 

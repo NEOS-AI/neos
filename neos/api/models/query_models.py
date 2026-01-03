@@ -90,7 +90,7 @@ class WorkflowStreamEvent(BaseModel):
     """워크플로우 스트리밍 이벤트"""
     event: str  # WorkflowStreamEventType 값
     session_id: str
-    timestamp: str = Field(default_factory=lambda: __import__('datetime').datetime.utcnow().isoformat())
+    timestamp: str = Field(default_factory=lambda: __import__('datetime').datetime.now().isoformat())
     data: Dict[str, Any] = Field(default_factory=dict)
 
     # 노드/에이전트 정보

@@ -286,7 +286,7 @@ async def _cleanup_old_checkpoints_async() -> Dict[str, int]:
     checkpointer = await get_checkpointer()
 
     # 7일 이상 된 체크포인트 삭제
-    cutoff_date = datetime.utcnow() - timedelta(days=7)
+    cutoff_date = datetime.now() - timedelta(days=7)
 
     # 구현은 checkpointer에 cleanup 메서드 추가 필요
     # deleted_count = await checkpointer.cleanup_old(cutoff_date)
@@ -325,5 +325,5 @@ async def _update_cache_statistics_async() -> Dict[str, Any]:
     return {
         "total_entries": stats.get("total_entries", 0),
         "hit_rate": stats.get("hit_rate", 0.0),
-        "updated_at": datetime.utcnow().isoformat()
+        "updated_at": datetime.now().isoformat()
     }

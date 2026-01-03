@@ -84,7 +84,7 @@ class QueryClassifier:
         state["execution_steps"].append({
             "step": "query_classification",
             "result": "completed",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
 
         return state
@@ -278,7 +278,7 @@ class QueryClassifier:
             "required_agents": required_agents,
             "confidence": confidence,
             "complexity_score": complexity_score,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "query_length": len(query),
             "agent_count": len(required_agents)
         }
@@ -289,7 +289,7 @@ class QueryClassifier:
             "intent": "information_seeking",
             "required_agents": ["knowledge_search", "realtime_info_search"],
             "confidence": 0.5,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "fallback": True
         }
 

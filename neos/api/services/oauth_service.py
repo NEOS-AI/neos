@@ -145,10 +145,10 @@ class OAuthService:
                     return False, "비활성화된 계정입니다. 고객센터에 문의해주세요.", None
 
                 # OAuth 계정 마지막 사용 시간 업데이트
-                oauth_account.last_used_at = datetime.utcnow()
+                oauth_account.last_used_at = datetime.now()
 
                 # 사용자 마지막 로그인 시간 업데이트
-                user.last_login = datetime.utcnow()
+                user.last_login = datetime.now()
 
                 # 프로필 사진 업데이트 (변경된 경우)
                 if user_info.get('picture') and user.profile_picture_url != user_info['picture']:
@@ -184,7 +184,7 @@ class OAuthService:
                 profile_picture_url=user_info.get('picture'),
                 is_active=True,
                 is_verified=user_info.get('email_verified', False),
-                email_verified_at=datetime.utcnow() if user_info.get('email_verified') else None,
+                email_verified_at=datetime.now() if user_info.get('email_verified') else None,
                 role="user",
                 subscription_tier="free",
                 subscription_status="active",
@@ -319,7 +319,7 @@ class OAuthService:
 
             # 이메일 검증 상태 업데이트
             if user_info.get('email_verified') and not user.email_verified_at:
-                user.email_verified_at = datetime.utcnow()
+                user.email_verified_at = datetime.now()
                 user.is_verified = True
 
             self.db.add(oauth_account)

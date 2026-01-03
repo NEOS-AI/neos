@@ -35,7 +35,7 @@ class ResultProcessor:
         state["execution_steps"].append({
             "step": "result_integration",
             "result": "completed",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
 
         return state

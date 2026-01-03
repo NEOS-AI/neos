@@ -173,7 +173,7 @@ class AgentSupervisor:
         self.supervised_agents[agent_id] = {
             "agent": agent,
             "restart_callback": restart_callback,
-            "supervised_since": datetime.utcnow()
+            "supervised_since": datetime.now()
         }
 
         if agent_id not in self.failure_history:
@@ -246,7 +246,7 @@ class AgentSupervisor:
         record = AgentFailureRecord(
             agent_id=agent_id,
             agent_name=agent_id,
-            failure_time=datetime.utcnow(),
+            failure_time=datetime.now(),
             error_message=str(error)
         )
 
@@ -280,7 +280,7 @@ class AgentSupervisor:
         # 최근 실패 횟수 확인
         recent_failures = [
             record for record in self.failure_history.get(agent_id, [])
-            if datetime.utcnow() - record.failure_time < timedelta(
+            if datetime.now() - record.failure_time < timedelta(
                 seconds=self.config.max_restart_period
             )
         ]

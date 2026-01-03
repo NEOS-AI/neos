@@ -328,7 +328,7 @@ class HybridCheckpointer(BaseCheckpointSaver):
         """
         # 체크포인트 내용으로 해시 생성
         content_hash = hashlib.sha256(str(checkpoint).encode()).hexdigest()[:16]
-        timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
 
         return f"checkpoints/{thread_id}/{timestamp}_{content_hash}.pickle"
 

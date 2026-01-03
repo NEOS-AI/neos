@@ -150,7 +150,7 @@ class SagaOrchestrator:
         logger.info(f"[SagaOrchestrator] Starting Saga {saga.saga_id}: {saga.name}")
 
         saga.status = SagaStatus.IN_PROGRESS
-        saga.started_at = datetime.utcnow()
+        saga.started_at = datetime.now()
         self.running_sagas[saga.saga_id] = saga
         self.stats["total_started"] += 1
 
@@ -186,7 +186,7 @@ class SagaOrchestrator:
 
             # 모든 단계 성공
             saga.status = SagaStatus.COMPLETED
-            saga.completed_at = datetime.utcnow()
+            saga.completed_at = datetime.now()
             self.stats["total_completed"] += 1
 
             logger.info(
@@ -241,7 +241,7 @@ class SagaOrchestrator:
         )
 
         step.status = StepStatus.IN_PROGRESS
-        step.started_at = datetime.utcnow()
+        step.started_at = datetime.now()
 
         # 단계 시작 이벤트
         await self.message_bus.publish(Event(
@@ -262,7 +262,7 @@ class SagaOrchestrator:
 
             step.status = StepStatus.COMPLETED
             step.result = result
-            step.completed_at = datetime.utcnow()
+            step.completed_at = datetime.now()
 
             logger.info(
                 f"[SagaOrchestrator] Step {step.name} completed "
@@ -288,7 +288,7 @@ class SagaOrchestrator:
         except Exception as e:
             step.status = StepStatus.FAILED
             step.error = str(e)
-            step.completed_at = datetime.utcnow()
+            step.completed_at = datetime.now()
 
             logger.error(
                 f"[SagaOrchestrator] Step {step.name} failed: {e}",

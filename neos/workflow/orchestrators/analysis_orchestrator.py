@@ -23,7 +23,7 @@ class AnalysisOrchestrator:
             state["execution_steps"].append({
                 "step": "analysis_orchestration",
                 "result": "skipped - no analysis agents required or no search results",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             })
             return state
 
@@ -122,5 +122,5 @@ class AnalysisOrchestrator:
         state["execution_steps"].append({
             "step": "analysis_orchestration",
             "result": f"completed - {successful_count} agents succeeded",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })

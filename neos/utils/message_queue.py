@@ -77,7 +77,7 @@ class InMemoryMessageQueue(MessageQueueInterface):
             # 메시지에 타임스탬프 추가
             message_with_meta = {
                 "data": message,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now().isoformat(),
                 "channel": channel
             }
 
@@ -217,7 +217,7 @@ class RedisPubSubMessageQueue(MessageQueueInterface):
 
             message_json = json.dumps({
                 "data": message,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             })
 
             await self.redis_client.publish(channel, message_json)

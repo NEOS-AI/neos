@@ -48,7 +48,7 @@ class AgentLocalState:
         for key, value in kwargs.items():
             if hasattr(self, key):
                 setattr(self, key, value)
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now()
 
     def to_dict(self) -> Dict[str, Any]:
         """딕셔너리로 변환"""
@@ -134,7 +134,7 @@ class HierarchicalStateManager:
 
         # 상태 업데이트 이벤트 발행
         await self.message_bus.publish(Event(
-            event_id=f"state-{datetime.utcnow().timestamp()}",
+            event_id=f"state-{datetime.now().timestamp()}",
             event_type=EventType.STATE_UPDATED,
             source="state_manager",
             data={
@@ -156,7 +156,7 @@ class HierarchicalStateManager:
 
             # 상태 업데이트 이벤트 발행
             await self.message_bus.publish(Event(
-                event_id=f"state-{datetime.utcnow().timestamp()}",
+                event_id=f"state-{datetime.now().timestamp()}",
                 event_type=EventType.STATE_UPDATED,
                 source="state_manager",
                 data={
@@ -206,7 +206,7 @@ class HierarchicalStateManager:
         if broadcast:
             # 상태 업데이트 이벤트 발행
             await self.message_bus.publish(Event(
-                event_id=f"state-{agent_id}-{datetime.utcnow().timestamp()}",
+                event_id=f"state-{agent_id}-{datetime.now().timestamp()}",
                 event_type=EventType.STATE_UPDATED,
                 source=agent_id,
                 data={
@@ -238,14 +238,14 @@ class HierarchicalStateManager:
         to_state.shared_data[storage_key] = {
             "data": data,
             "from": from_agent,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         }
 
         logger.info(f"[StateManager] State shared from {from_agent} to {to_agent}")
 
         # 상태 공유 이벤트 발행
         await self.message_bus.publish(Event(
-            event_id=f"share-{from_agent}-{to_agent}-{datetime.utcnow().timestamp()}",
+            event_id=f"share-{from_agent}-{to_agent}-{datetime.now().timestamp()}",
             event_type=EventType.STATE_SHARED,
             source=from_agent,
             data={
@@ -299,7 +299,7 @@ class HierarchicalStateManager:
         else:
             # 이벤트로만 발행 (구독자가 직접 처리)
             await self.message_bus.publish(Event(
-                event_id=f"broadcast-{from_agent}-{datetime.utcnow().timestamp()}",
+                event_id=f"broadcast-{from_agent}-{datetime.now().timestamp()}",
                 event_type=EventType.STATE_SHARED,
                 source=from_agent,
                 data={
@@ -322,7 +322,7 @@ class HierarchicalStateManager:
                 agent_id: state.to_dict()
                 for agent_id, state in self.local_states.items()
             },
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         }
 
         self.snapshots[snapshot_id] = snapshot

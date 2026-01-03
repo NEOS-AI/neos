@@ -333,7 +333,7 @@ class PostgreSQLCheckpointer(BaseCheckpointSaver):
                     parent_checkpoint_id=metadata.get("parent_checkpoint_id") if metadata else None,
                     checkpoint_data=checkpoint_data,
                     metadata=metadata or {},
-                    created_at=datetime.utcnow(),
+                    created_at=datetime.now(),
                     version=1
                 )
                 await session.execute(insert_stmt)
@@ -512,7 +512,7 @@ class PostgreSQLCheckpointer(BaseCheckpointSaver):
         """
         from datetime import timedelta
 
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        cutoff_date = datetime.now() - timedelta(days=days)
 
         async with self.get_session() as session:
             stmt = delete(self.checkpoints_table).where(

@@ -27,13 +27,13 @@ def create_access_token(
     to_encode = data.copy()
 
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now() + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
 
     to_encode.update({
         "exp": expire,
-        "iat": datetime.utcnow(),
+        "iat": datetime.now(),
         "type": "access"
     })
 
@@ -63,16 +63,16 @@ def create_refresh_token(
     to_encode = data.copy()
 
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+        expire = datetime.now() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
 
     # 추가 랜덤성을 위한 jti (JWT ID)
     jti = secrets.token_urlsafe(32)
 
     to_encode.update({
         "exp": expire,
-        "iat": datetime.utcnow(),
+        "iat": datetime.now(),
         "type": "refresh",
         "jti": jti
     })
@@ -154,7 +154,7 @@ def is_token_expired(token: str) -> bool:
     if not exp:
         return True
 
-    return datetime.utcnow().timestamp() > exp
+    return datetime.now().timestamp() > exp
 
 
 def get_token_expiration(token: str) -> Optional[datetime]:

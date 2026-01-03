@@ -131,9 +131,9 @@ class QueryService:
             "query": query
         }
 
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
         result = await multi_agent_workflow.execute_workflow(workflow_input)
-        end_time = datetime.utcnow()
+        end_time = datetime.now()
 
         execution_time = int((end_time - start_time).total_seconds() * 1000)
 
@@ -181,7 +181,7 @@ class QueryService:
 
         return {
             "status": overall_status,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "services": services
         }
 
@@ -274,7 +274,7 @@ class QueryService:
             total_count = total_queries.scalar()
 
             # 오늘의 쿼리 수
-            today = datetime.utcnow().date()
+            today = datetime.now().date()
             today_queries = await session.execute(
                 select(QueryHistory.id)
                 .where(QueryHistory.created_at >= today)
@@ -299,7 +299,7 @@ class QueryService:
                 "today_queries": today_count,
                 "avg_execution_time_ms": round(avg_time, 2),
                 "avg_quality_score": round(avg_quality_score, 3),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
 
     @staticmethod

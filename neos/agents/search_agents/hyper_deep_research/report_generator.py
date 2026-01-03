@@ -245,7 +245,7 @@ class ReportGenerator:
             f"# {topic}\n",
             "## HyperDeepResearch Comprehensive Report\n",
             f"\n**Report ID:** `{report_id}`\n",
-            f"**Generated:** {datetime.utcnow().isoformat()}\n",
+            f"**Generated:** {datetime.now().isoformat()}\n",
             "\n---\n",
             "\n## 📊 Research Statistics\n",
             f"- **Total Sources:** {metadata.get('total_sources_collected', 0)}\n",

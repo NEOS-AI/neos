@@ -85,7 +85,7 @@ class ResponseGenerator:
             final_response = self._construct_final_response(response_parts, detected_language)
 
         # 실행 시간 계산
-        execution_time = int((datetime.utcnow() - state["execution_start"]).total_seconds() * 1000)
+        execution_time = int((datetime.now() - state["execution_start"]).total_seconds() * 1000)
 
         # 상태 업데이트
         state["final_response"] = final_response
@@ -98,7 +98,7 @@ class ResponseGenerator:
         state["execution_steps"].append({
             "step": "response_generation",
             "result": "completed",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
 
         return state

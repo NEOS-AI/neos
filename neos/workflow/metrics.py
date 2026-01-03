@@ -208,7 +208,7 @@ class PerformanceMetrics:
 
     def finalize(self):
         """Finalize metrics at workflow completion"""
-        self.end_time = datetime.utcnow()
+        self.end_time = datetime.now()
         duration = (self.end_time - self.start_time).total_seconds()
         self.total_duration_ms = int(duration * 1000)
 

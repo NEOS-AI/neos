@@ -263,7 +263,7 @@ class CacheInvalidationManager:
             # 7일 이상 된 캐시 무효화
             result = await invalidator.invalidate_by_age(timedelta(days=7))
         """
-        cutoff_time = datetime.utcnow() - max_age
+        cutoff_time = datetime.now() - max_age
 
         # DB에서 오래된 캐시 조회
         async with db_manager.get_session() as session:

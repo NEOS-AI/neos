@@ -296,11 +296,11 @@ class DocumentProcessor:
 
         document.processing_status = "completed"
         document.kg_extracted = kg_extracted
-        document.kg_extraction_date = datetime.utcnow() if kg_extracted else None
+        document.kg_extraction_date = datetime.now() if kg_extracted else None
         document.embedding_processed = embedding_processed
-        document.embedding_date = datetime.utcnow() if embedding_processed else None
+        document.embedding_date = datetime.now() if embedding_processed else None
         document.fts_indexed = fts_indexed
-        document.fts_index_date = datetime.utcnow() if fts_indexed else None
+        document.fts_index_date = datetime.now() if fts_indexed else None
 
         await session.commit()
 

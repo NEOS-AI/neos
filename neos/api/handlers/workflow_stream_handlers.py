@@ -64,7 +64,7 @@ class WorkflowStreamCallback(WorkflowEventHandler):
     ):
         self.session_id = session_id
         self.event_queue = event_queue
-        self.start_time = datetime.utcnow()
+        self.start_time = datetime.now()
         self.current_node = None
         self.progress = 0
         self.enable_db_logging = enable_db_logging
@@ -120,12 +120,12 @@ class WorkflowStreamCallback(WorkflowEventHandler):
         progress_percent: Optional[int] = None
     ) -> WorkflowStreamEvent:
         """스트리밍 이벤트 생성"""
-        elapsed_ms = int((datetime.utcnow() - self.start_time).total_seconds() * 1000)
+        elapsed_ms = int((datetime.now() - self.start_time).total_seconds() * 1000)
 
         return WorkflowStreamEvent(
             event=event_type,
             session_id=self.session_id,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now().isoformat(),
             node_name=node_name or self.current_node,
             agent_name=agent_name,
             content=content,
@@ -545,7 +545,7 @@ async def websocket_query_stream(websocket: WebSocket, session_id: str):
         await websocket.send_json({
             "event": "connected",
             "session_id": session_id,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "message": "워크플로우 스트리밍 준비 완료"
         })
 
@@ -700,7 +700,7 @@ async def websocket_detailed_query_stream(websocket: WebSocket, session_id: str)
                     "event": "started",
                     "session_id": session_id,
                     "query": query[:100],
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 })
 
                 # 워크플로우 노드 목록
