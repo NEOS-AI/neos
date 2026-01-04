@@ -3,6 +3,7 @@
 from typing import Dict, Any, List
 from datetime import datetime
 
+from ..enums import WorkflowPathway
 from ..state import AgentState
 
 
@@ -169,15 +170,16 @@ class QualityValidator:
         # 최대 재시도 횟수 확인
         if retry_count >= self.config.MAX_RETRIES:
             print(f"[DEBUG] Max retries ({self.config.MAX_RETRIES}) reached, proceeding to response generation")
-            return "proceed"
+            return WorkflowPathway.PROCEED.value
 
         # 품질 점수 확인
         if quality_score < self.config.MIN_QUALITY_SCORE:
             print(f"[DEBUG] Quality score {quality_score:.2f} < {self.config.MIN_QUALITY_SCORE}, regenerating...")
-            return "regenerate"
+            return WorkflowPathway.REGENERATE.value
         else:
             print(f"[DEBUG] Quality score {quality_score:.2f} >= {self.config.MIN_QUALITY_SCORE}, proceeding")
-            return "proceed"
+            return WorkflowPathway.PROCEED.value
+
 
     def get_quality_report(self, state: AgentState) -> Dict[str, Any]:
         """상세 품질 보고서 생성"""

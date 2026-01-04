@@ -28,6 +28,7 @@ from neos.utils.smart_cache_manager import smart_cache_manager
 from neos.config.settings import settings
 from neos.tools.tool_selector import tool_selector
 
+from .enums import WorkflowNode, WorkflowPathway, IntentType
 from .state import AgentState, WorkflowConfig
 from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationOrchestrator
 from .processors import (
@@ -93,7 +94,7 @@ class MultiAgentWorkflow:
             "web_lookup": WebLookUpAgent(),
 
             # 분석 에이전트들
-            "data_analysis": DataAnalysisAgent(),
+            IntentType.DATA_ANALYSIS.value: DataAnalysisAgent(),
             "comparative_analysis": ComparativeAnalysisAgent(),
             "web_content_analysis": WebContentAnalysisAgent(),
 
@@ -121,75 +122,75 @@ class MultiAgentWorkflow:
         workflow = StateGraph(AgentState)
 
         # 노드 추가
-        workflow.add_node("refinement_checker", self._check_refinement_node)
-        workflow.add_node("query_refinement_agent", self._refine_query_node)
-        workflow.add_node("conversation_context_processor", self._process_conversation_context_node)
-        workflow.add_node("query_classifier", self._classify_query_node)
-        workflow.add_node("skill_tool_selector", self._select_skills_tools_node)
-        workflow.add_node("search_orchestrator", self._orchestrate_search_node)
-        workflow.add_node("analysis_orchestrator", self._orchestrate_analysis_node)
-        workflow.add_node("generation_orchestrator", self._orchestrate_generation_node)
-        workflow.add_node("result_integrator", self._integrate_results_node)
-        workflow.add_node("quality_validator", self._validate_quality_node)
-        workflow.add_node("response_generator", self._generate_response_node)
+        workflow.add_node(WorkflowNode.REFINEMENT_CHECKER.value, self._check_refinement_node)
+        workflow.add_node(WorkflowNode.QUERY_REFINEMENT.value, self._refine_query_node)
+        workflow.add_node(WorkflowNode.CONVERSATION_CTX_PROC.value, self._process_conversation_context_node)
+        workflow.add_node(WorkflowNode.QUERY_CLS.value, self._classify_query_node)
+        workflow.add_node(WorkflowNode.SKILL_TOOL_SELECTOR.value, self._select_skills_tools_node)
+        workflow.add_node(WorkflowNode.SEARCH_ORCHESTRATOR.value, self._orchestrate_search_node)
+        workflow.add_node(WorkflowNode.ANALYSIS_ORCHESTRATOR.value, self._orchestrate_analysis_node)
+        workflow.add_node(WorkflowNode.GENERATION_ORCHESTRATOR.value, self._orchestrate_generation_node)
+        workflow.add_node(WorkflowNode.RESULT_INTEGRATOR.value, self._integrate_results_node)
+        workflow.add_node(WorkflowNode.QUALITY_VALIDATOR.value, self._validate_quality_node)
+        workflow.add_node(WorkflowNode.RESP_GENERATOR.value, self._generate_response_node)
 
         # 엣지 정의
         # 1. START → refinement_checker (가장 먼저 쿼리 개선 필요 여부 체크)
-        workflow.add_edge(START, "refinement_checker")
+        workflow.add_edge(START, WorkflowNode.REFINEMENT_CHECKER.value)
 
         # 2. refinement_checker → 조건부 분기 (개선 필요 여부에 따라)
         workflow.add_conditional_edges(
-            "refinement_checker",
+            WorkflowNode.REFINEMENT_CHECKER.value,
             self._should_refine_query,
             {
-                "refine_query": "query_refinement_agent",
-                "skip_refinement": "conversation_context_processor"  # 또는 query_classifier
+                "refine_query": WorkflowNode.QUERY_REFINEMENT.value,
+                "skip_refinement": WorkflowNode.CONVERSATION_CTX_PROC.value  # 또는 query_classifier
             }
         )
 
         # 3. query_refinement_agent → conversation_context_processor (개선 후 정상 흐름)
-        workflow.add_edge("query_refinement_agent", "conversation_context_processor")
+        workflow.add_edge(WorkflowNode.QUERY_REFINEMENT.value, WorkflowNode.CONVERSATION_CTX_PROC.value)
 
         # 4. conversation_context_processor → 조건부 분기 (히스토리 활용 여부)
         workflow.add_conditional_edges(
-            "conversation_context_processor",
+            WorkflowNode.CONVERSATION_CTX_PROC.value,
             self._should_process_context,
             {
-                "process_context": "query_classifier",  # 히스토리 처리 완료 → 분류
-                "skip_context": "query_classifier"      # 히스토리 없음 → 바로 분류
+                "process_context": WorkflowNode.QUERY_CLS.value,  # 히스토리 처리 완료 → 분류
+                "skip_context": WorkflowNode.QUERY_CLS.value      # 히스토리 없음 → 바로 분류
             }
         )
 
         # 주의: conversation_context_processor 자체는 항상 실행되지만,
         # 내부에서 히스토리가 없으면 스킵하는 로직이 있음
-        workflow.add_edge("query_classifier", "skill_tool_selector")
+        workflow.add_edge(WorkflowNode.QUERY_CLS.value, WorkflowNode.SKILL_TOOL_SELECTOR.value)
 
         # 조건부 분기: 도구/에이전트가 필요 없으면 orchestrator 건너뛰고 바로 응답 생성
         workflow.add_conditional_edges(
-            "skill_tool_selector",
+            WorkflowNode.SKILL_TOOL_SELECTOR.value,
             self._should_skip_orchestrators,
             {
-                "skip_orchestrators": "response_generator",  # 간단한 대화 -> 바로 응답
-                "use_orchestrators": "search_orchestrator"   # 도구 필요 -> 정상 파이프라인
+                WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,  # 간단한 대화 -> 바로 응답
+                WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.SEARCH_ORCHESTRATOR.value   # 도구 필요 -> 정상 파이프라인
             }
         )
 
-        workflow.add_edge("search_orchestrator", "analysis_orchestrator")
-        workflow.add_edge("analysis_orchestrator", "generation_orchestrator")
-        workflow.add_edge("generation_orchestrator", "result_integrator")
-        workflow.add_edge("result_integrator", "quality_validator")
+        workflow.add_edge(WorkflowNode.SEARCH_ORCHESTRATOR.value, WorkflowNode.ANALYSIS_ORCHESTRATOR.value)
+        workflow.add_edge(WorkflowNode.ANALYSIS_ORCHESTRATOR.value, WorkflowNode.GENERATION_ORCHESTRATOR.value)
+        workflow.add_edge(WorkflowNode.GENERATION_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
+        workflow.add_edge(WorkflowNode.RESULT_INTEGRATOR.value, WorkflowNode.QUALITY_VALIDATOR.value)
 
         # 조건부 엣지 (품질 검증 결과에 따라)
         workflow.add_conditional_edges(
-            "quality_validator",
+            WorkflowNode.QUALITY_VALIDATOR.value,
             self._should_regenerate,
             {
-                "regenerate": "search_orchestrator",  # 품질이 낮으면 다시 검색
-                "proceed": "response_generator"       # 품질이 좋으면 응답 생성
+                WorkflowPathway.REGENERATE.value: WorkflowNode.SEARCH_ORCHESTRATOR.value,  # 품질이 낮으면 다시 검색
+                WorkflowPathway.PROCEED.value: WorkflowNode.RESP_GENERATOR.value       # 품질이 좋으면 응답 생성
             }
         )
 
-        workflow.add_edge("response_generator", END)
+        workflow.add_edge(WorkflowNode.RESP_GENERATOR.value, END)
 
         # Conditionally use checkpointer
         if use_checkpointer:
@@ -255,7 +256,7 @@ class MultiAgentWorkflow:
                 "query_type": query_classification.get("query_type", "general"),
                 "complexity": query_classification.get("complexity", "medium"),
                 "required_agents": state.get("required_agents", []),
-                "requires_analysis": "data_analysis" in state.get("required_agents", []),
+                "requires_analysis": IntentType.DATA_ANALYSIS.value in state.get("required_agents", []),
                 "requires_search": any(
                     agent in state.get("required_agents", [])
                     for agent in [
@@ -363,8 +364,8 @@ class MultiAgentWorkflow:
         3. 안전장치: 특정 조건에서는 항상 orchestrator 사용
 
         Returns:
-            "skip_orchestrators": response_generator로 직접 이동
-            "use_orchestrators": search_orchestrator로 이동하여 정상 파이프라인 실행
+            `skip_orchestrators`: response_generator로 직접 이동
+            `use_orchestrators`: search_orchestrator로 이동하여 정상 파이프라인 실행
         """
         required_agents = state.get("required_agents", [])
         selected_tools = state.get("selected_tools", [])
@@ -380,7 +381,7 @@ class MultiAgentWorkflow:
         # ================================================================
         if required_agents or selected_tools:
             print(f"[DEBUG] Using orchestrators (agents: {len(required_agents)}, tools: {len(selected_tools)})")
-            return "use_orchestrators"
+            return WorkflowPathway.USE_ORCHESTRATORS.value
 
         # ================================================================
         # 2단계: 에이전트/도구가 없어도 orchestrator가 필요한 경우
@@ -388,32 +389,32 @@ class MultiAgentWorkflow:
 
         # 2-1. 특정 의도는 항상 검색 필요
         always_search_intents = [
-            "realtime_info",        # 실시간 정보는 항상 검색
-            "financial_analysis",   # 금융 분석은 데이터 필요
-            "data_analysis",        # 데이터 분석은 외부 데이터 필요
-            "comparison",           # 비교는 여러 소스 필요
-            "deep_research",        # 심층 조사는 당연히 검색
-            "complex_analysis"      # 복잡한 분석은 검색 필요
+            IntentType.REALTIME_INFO.value,        # 실시간 정보는 항상 검색
+            IntentType.FINANCIAL_ANALYSIS.value,   # 금융 분석은 데이터 필요
+            IntentType.DATA_ANALYSIS.value,        # 데이터 분석은 외부 데이터 필요
+            IntentType.COMPARISON.value,           # 비교는 여러 소스 필요
+            IntentType.DEEP_RESEARCH.value,        # 심층 조사는 당연히 검색
+            IntentType.COMPLEX_ANALYSIS.value      # 복잡한 분석은 검색 필요
         ]
 
         if query_intent in always_search_intents:
             print(f"[DEBUG] Intent '{query_intent}' requires orchestrators")
-            return "use_orchestrators"
+            return WorkflowPathway.USE_ORCHESTRATORS.value
 
         # 2-2. 복잡도가 높으면 항상 검색
         if complexity_score >= 0.5:
             print(f"[DEBUG] High complexity ({complexity_score:.2f}) requires orchestrators")
-            return "use_orchestrators"
+            return WorkflowPathway.USE_ORCHESTRATORS.value
 
         # 2-3. 질문 형태이면 검색 필요 (사실 확인이 필요한 경우)
         if self._is_question_query(query):
             print("[DEBUG] Question format detected, using orchestrators")
-            return "use_orchestrators"
+            return WorkflowPathway.USE_ORCHESTRATORS.value
 
         # 2-4. 특정 키워드가 있으면 검색 필요
         if self._requires_search_keywords(query):
             print("[DEBUG] Search keywords detected, using orchestrators")
-            return "use_orchestrators"
+            return WorkflowPathway.USE_ORCHESTRATORS.value
 
         # TODO: 추가 비즈니스 로직을 여기에 구현하세요
         # 예시:
@@ -424,19 +425,19 @@ class MultiAgentWorkflow:
         # - 사용자 프로필 기반 판단
         #   user_preferences = state.get("user_preferences", {})
         #   if user_preferences.get("always_search", False):
-        #       return "use_orchestrators"
+        #       return WorkflowPathway.USE_ORCHESTRATORS.value
         #
         # - 시간대 기반 판단
         #   from datetime import datetime
         #   current_hour = datetime.now().hour
         #   if 9 <= current_hour <= 18:  # 업무 시간에는 더 정확한 정보 제공
-        #       return "use_orchestrators"
+        #       return WorkflowPathway.USE_ORCHESTRATORS.value
 
         # ================================================================
         # 3단계: 모든 조건을 통과하면 orchestrator 건너뛰기
         # ================================================================
         print("[DEBUG] No agents, tools, or special conditions - skipping orchestrators")
-        return "skip_orchestrators"
+        return WorkflowPathway.SKIP_ORCHESTRATORS.value
 
     def _is_question_query(self, query: str) -> bool:
         """
@@ -604,14 +605,10 @@ class MultiAgentWorkflow:
 
                 # 노드별 진행 상황 추적을 위해 astream 사용
                 workflow_nodes = [
-                    "query_classifier",
-                    "skill_tool_selector",
-                    "search_orchestrator",
-                    "analysis_orchestrator",
-                    "generation_orchestrator",
-                    "result_integrator",
-                    "quality_validator",
-                    "response_generator"
+                    WorkflowNode.QUERY_CLS.value, WorkflowNode.SKILL_TOOL_SELECTOR.value,
+                    WorkflowNode.SEARCH_ORCHESTRATOR.value, WorkflowNode.ANALYSIS_ORCHESTRATOR.value,
+                    WorkflowNode.GENERATION_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value,
+                    WorkflowNode.QUALITY_VALIDATOR.value, WorkflowNode.RESP_GENERATOR.value
                 ]
 
                 current_step = 0
@@ -960,13 +957,13 @@ class MultiAgentWorkflow:
             "analysis_agents": len([a for a in self.agents.keys() if "analysis" in a]),
             "generation_agents": len([a for a in self.agents.keys() if "generation" in a]),
             "components_initialized": {
-                "query_classifier": bool(self.query_classifier),
-                "search_orchestrator": bool(self.search_orchestrator),
-                "analysis_orchestrator": bool(self.analysis_orchestrator),
-                "generation_orchestrator": bool(self.generation_orchestrator),
-                "result_processor": bool(self.result_processor),
-                "quality_validator": bool(self.quality_validator),
-                "response_generator": bool(self.response_generator)
+                WorkflowNode.QUERY_CLS.value: bool(self.query_classifier),
+                WorkflowNode.SEARCH_ORCHESTRATOR.value: bool(self.search_orchestrator),
+                WorkflowNode.ANALYSIS_ORCHESTRATOR.value: bool(self.analysis_orchestrator),
+                WorkflowNode.GENERATION_ORCHESTRATOR.value: bool(self.generation_orchestrator),
+                WorkflowNode.RESULT_INTEGRATOR.value: bool(self.result_processor),
+                WorkflowNode.QUALITY_VALIDATOR.value: bool(self.quality_validator),
+                WorkflowNode.RESP_GENERATOR.value: bool(self.response_generator)
             },
             "config": {
                 "max_retries": self.config.MAX_RETRIES,
@@ -989,7 +986,7 @@ class MultiAgentWorkflow:
 
         # 컴포넌트 상태 확인
         try:
-            health_status["components"]["query_classifier"] = "healthy"
+            health_status["components"][WorkflowNode.QUERY_CLS.value] = "healthy"
             health_status["components"]["orchestrators"] = "healthy"
             health_status["components"]["processors"] = "healthy"
 
