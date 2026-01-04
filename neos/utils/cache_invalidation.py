@@ -148,10 +148,7 @@ class CacheInvalidationManager:
 
         # 태그 정보 삭제
         async with db_manager.get_session() as session:
-            delete_query = text("""
-                DELETE FROM cache_tags
-                WHERE tag = :tag
-            """)
+            delete_query = text("""DELETE FROM cache_tags WHERE tag = :tag""")
             await session.execute(delete_query, {"tag": tag})
             await session.commit()
 
