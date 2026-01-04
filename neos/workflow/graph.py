@@ -30,7 +30,14 @@ from neos.tools.tool_selector import tool_selector
 
 from .state import AgentState, WorkflowConfig
 from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationOrchestrator
-from .processors import ResultProcessor, QualityValidator, ResponseGenerator, ConversationContextProcessor
+from .processors import (
+    ResultProcessor,
+    QualityValidator,
+    ResponseGenerator,
+    ConversationContextProcessor,
+    RefinementChecker,
+    QueryRefinementAgent
+)
 from .utils import QueryClassifier
 from .checkpointer import get_checkpointer
 from .events import WorkflowEventHandler, NullEventHandler
@@ -55,6 +62,8 @@ class MultiAgentWorkflow:
         self.agents = self._initialize_agents()
 
         # 컴포넌트 초기화
+        self.refinement_checker = RefinementChecker()
+        self.query_refinement_agent = QueryRefinementAgent()
         self.conversation_context_processor = ConversationContextProcessor()
         self.query_classifier = QueryClassifier(self.config)
         self.skill_tool_selector = SkillBasedToolSelector()
@@ -112,6 +121,8 @@ class MultiAgentWorkflow:
         workflow = StateGraph(AgentState)
 
         # 노드 추가
+        workflow.add_node("refinement_checker", self._check_refinement_node)
+        workflow.add_node("query_refinement_agent", self._refine_query_node)
         workflow.add_node("conversation_context_processor", self._process_conversation_context_node)
         workflow.add_node("query_classifier", self._classify_query_node)
         workflow.add_node("skill_tool_selector", self._select_skills_tools_node)
@@ -123,17 +134,34 @@ class MultiAgentWorkflow:
         workflow.add_node("response_generator", self._generate_response_node)
 
         # 엣지 정의
-        # 조건부 진입점: 히스토리가 있으면 context processor를 거치고, 없으면 바로 query_classifier로
+        # 1. START → refinement_checker (가장 먼저 쿼리 개선 필요 여부 체크)
+        workflow.add_edge(START, "refinement_checker")
+
+        # 2. refinement_checker → 조건부 분기 (개선 필요 여부에 따라)
         workflow.add_conditional_edges(
-            START,
-            self._should_process_context,
+            "refinement_checker",
+            self._should_refine_query,
             {
-                "process_context": "conversation_context_processor",
-                "skip_context": "query_classifier"
+                "refine_query": "query_refinement_agent",
+                "skip_refinement": "conversation_context_processor"  # 또는 query_classifier
             }
         )
 
-        workflow.add_edge("conversation_context_processor", "query_classifier")
+        # 3. query_refinement_agent → conversation_context_processor (개선 후 정상 흐름)
+        workflow.add_edge("query_refinement_agent", "conversation_context_processor")
+
+        # 4. conversation_context_processor → 조건부 분기 (히스토리 활용 여부)
+        workflow.add_conditional_edges(
+            "conversation_context_processor",
+            self._should_process_context,
+            {
+                "process_context": "query_classifier",  # 히스토리 처리 완료 → 분류
+                "skip_context": "query_classifier"      # 히스토리 없음 → 바로 분류
+            }
+        )
+
+        # 주의: conversation_context_processor 자체는 항상 실행되지만,
+        # 내부에서 히스토리가 없으면 스킵하는 로직이 있음
         workflow.add_edge("query_classifier", "skill_tool_selector")
 
         # 조건부 분기: 도구/에이전트가 필요 없으면 orchestrator 건너뛰고 바로 응답 생성
@@ -186,9 +214,29 @@ class MultiAgentWorkflow:
             self._graph_uses_checkpointer = use_checkpointer
 
 
+    async def _check_refinement_node(self, state: AgentState) -> Dict[str, Any]:
+        """쿼리 개선 필요 여부 체크 노드"""
+        return await self.refinement_checker.check(state)
+
+    async def _refine_query_node(self, state: AgentState) -> Dict[str, Any]:
+        """쿼리 개선 노드"""
+        return await self.query_refinement_agent.refine(state)
+
     async def _classify_query_node(self, state: AgentState) -> Dict[str, Any]:
         """쿼리 분류 노드"""
-        return await self.query_classifier.classify_query(state)
+        # refined_query가 있으면 그것을 사용, 없으면 original_query 사용
+        query_to_classify = state.get("refined_query", state["original_query"])
+
+        # 분류 시 refined_query를 사용하도록 임시로 변경
+        original_backup = state["original_query"]
+        state["original_query"] = query_to_classify
+
+        result = await self.query_classifier.classify_query(state)
+
+        # original_query 복원 (메타데이터 유지)
+        state["original_query"] = original_backup
+
+        return result
 
     async def _select_skills_tools_node(self, state: AgentState) -> Dict[str, Any]:
         """Skill and Tool selection 노드"""
@@ -274,19 +322,32 @@ class MultiAgentWorkflow:
         """응답 생성 노드"""
         return await self.response_generator.generate_response(state)
 
+    def _should_refine_query(self, state: AgentState) -> str:
+        """
+        쿼리 개선 필요 여부 결정
+
+        RefinementChecker가 개선이 필요하다고 판단하면 query_refinement_agent로,
+        필요 없으면 conversation_context_processor로 이동
+        """
+        needs_refinement = state.get("needs_refinement", False)
+
+        if needs_refinement:
+            print(f"[DEBUG] Query refinement needed: {state.get('refinement_reasons', [])}")
+            return "refine_query"
+
+        print("[DEBUG] Query refinement not needed, skipping")
+        return "skip_refinement"
+
     def _should_process_context(self, state: AgentState) -> str:
         """
         대화 컨텍스트 처리 여부 결정
 
-        히스토리가 있고 활성화되어 있으면 context processor를 거치고,
-        없으면 바로 query_classifier로 이동
+        이 함수는 이제 conversation_context_processor 내부에서 처리되므로
+        항상 query_classifier로 이동
         """
-        has_history = bool(state.get("chat_history"))
-        context_enabled = state.get("enable_history_context", False)
-
-        if has_history and context_enabled:
-            return "process_context"
-        return "skip_context"
+        # conversation_context_processor는 이미 실행됨
+        # 내부에서 히스토리 여부를 확인하고 처리
+        return "process_context"
 
     def _should_regenerate(self, state: AgentState) -> str:
         """재생성 여부 결정"""
@@ -296,9 +357,10 @@ class MultiAgentWorkflow:
         """
         Orchestrator들을 건너뛰고 바로 응답 생성할지 결정
 
-        조건:
-        1. required_agents가 비어있음 (간단한 대화 등)
-        2. selected_tools가 비어있음 (도구 사용 불필요)
+        개선된 로직:
+        1. 기본 조건: required_agents와 selected_tools가 비어있음
+        2. 추가 검증: 의도, 복잡도, 쿼리 내용 분석
+        3. 안전장치: 특정 조건에서는 항상 orchestrator 사용
 
         Returns:
             "skip_orchestrators": response_generator로 직접 이동
@@ -306,14 +368,149 @@ class MultiAgentWorkflow:
         """
         required_agents = state.get("required_agents", [])
         selected_tools = state.get("selected_tools", [])
+        query_intent = state.get("query_intent", "")
+        query_classification = state.get("query_classification", {})
+        complexity_score = query_classification.get("complexity_score", 0.0)
 
-        # 에이전트와 도구 모두 필요 없으면 건너뛰기
-        if not required_agents and not selected_tools:
-            print("[DEBUG] No agents or tools required, skipping orchestrators")
-            return "skip_orchestrators"
+        # 사용할 쿼리 결정 (refined_query가 있으면 그것을 사용)
+        query = state.get("refined_query", state.get("original_query", ""))
 
-        print(f"[DEBUG] Using orchestrators (agents: {len(required_agents)}, tools: {len(selected_tools)})")
-        return "use_orchestrators"
+        # ================================================================
+        # 1단계: 에이전트/도구가 있으면 무조건 orchestrator 사용
+        # ================================================================
+        if required_agents or selected_tools:
+            print(f"[DEBUG] Using orchestrators (agents: {len(required_agents)}, tools: {len(selected_tools)})")
+            return "use_orchestrators"
+
+        # ================================================================
+        # 2단계: 에이전트/도구가 없어도 orchestrator가 필요한 경우
+        # ================================================================
+
+        # 2-1. 특정 의도는 항상 검색 필요
+        always_search_intents = [
+            "realtime_info",        # 실시간 정보는 항상 검색
+            "financial_analysis",   # 금융 분석은 데이터 필요
+            "data_analysis",        # 데이터 분석은 외부 데이터 필요
+            "comparison",           # 비교는 여러 소스 필요
+            "deep_research",        # 심층 조사는 당연히 검색
+            "complex_analysis"      # 복잡한 분석은 검색 필요
+        ]
+
+        if query_intent in always_search_intents:
+            print(f"[DEBUG] Intent '{query_intent}' requires orchestrators")
+            return "use_orchestrators"
+
+        # 2-2. 복잡도가 높으면 항상 검색
+        if complexity_score >= 0.5:
+            print(f"[DEBUG] High complexity ({complexity_score:.2f}) requires orchestrators")
+            return "use_orchestrators"
+
+        # 2-3. 질문 형태이면 검색 필요 (사실 확인이 필요한 경우)
+        if self._is_question_query(query):
+            print("[DEBUG] Question format detected, using orchestrators")
+            return "use_orchestrators"
+
+        # 2-4. 특정 키워드가 있으면 검색 필요
+        if self._requires_search_keywords(query):
+            print("[DEBUG] Search keywords detected, using orchestrators")
+            return "use_orchestrators"
+
+        # TODO: 추가 비즈니스 로직을 여기에 구현하세요
+        # 예시:
+        # - 대화 컨텍스트 기반 판단
+        #   if state.get("conversation_context"):
+        #       # 이전 대화가 복잡했다면 현재도 검색 필요할 수 있음
+        #
+        # - 사용자 프로필 기반 판단
+        #   user_preferences = state.get("user_preferences", {})
+        #   if user_preferences.get("always_search", False):
+        #       return "use_orchestrators"
+        #
+        # - 시간대 기반 판단
+        #   from datetime import datetime
+        #   current_hour = datetime.now().hour
+        #   if 9 <= current_hour <= 18:  # 업무 시간에는 더 정확한 정보 제공
+        #       return "use_orchestrators"
+
+        # ================================================================
+        # 3단계: 모든 조건을 통과하면 orchestrator 건너뛰기
+        # ================================================================
+        print("[DEBUG] No agents, tools, or special conditions - skipping orchestrators")
+        return "skip_orchestrators"
+
+    def _is_question_query(self, query: str) -> bool:
+        """
+        질문 형태인지 판단
+
+        TODO: 비즈니스 로직을 개선하세요
+
+        현재 구현:
+        - "?" 포함 여부
+        - 의문사 포함 여부 (어디, 언제, 누가, 무엇, 왜, 어떻게)
+        """
+        if not query:
+            return False
+
+        # 물음표가 있으면 질문
+        if "?" in query or "？" in query:
+            return True
+
+        # 의문사가 있으면 질문
+        question_words_ko = ["어디", "언제", "누가", "누구", "무엇", "뭐", "왜", "어떻게", "어느"]
+        question_words_en = ["where", "when", "who", "what", "why", "how", "which"]
+
+        query_lower = query.lower()
+        for word in question_words_ko + question_words_en:
+            if word in query_lower:
+                return True
+
+        return False
+
+    def _requires_search_keywords(self, query: str) -> bool:
+        """
+        검색이 필요한 키워드가 있는지 판단
+
+        TODO: 도메인에 맞는 키워드를 추가하세요
+
+        현재 구현:
+        - 실시간/최신 정보 키워드
+        - 비교/분석 키워드
+        - 수치/데이터 키워드
+        """
+        if not query:
+            return False
+
+        # 실시간/최신 정보 키워드
+        realtime_keywords = [
+            "최신", "현재", "지금", "오늘", "실시간",
+            "current", "latest", "now", "today", "real-time"
+        ]
+
+        # 비교/분석 키워드
+        analysis_keywords = [
+            "비교", "분석", "대비", "차이", "검토", "평가",
+            "compare", "analysis", "versus", "vs", "difference", "review"
+        ]
+
+        # 수치/데이터 키워드
+        data_keywords = [
+            "얼마", "몇", "수치", "데이터", "통계", "가격", "주가", "환율",
+            "how much", "how many", "price", "rate", "statistics", "data"
+        ]
+
+        # TODO: 도메인 특화 키워드를 추가하세요
+        # 예시:
+        # domain_keywords = ["재무제표", "실적", "공시", "뉴스"]
+
+        query_lower = query.lower()
+
+        # 키워드 체크
+        all_keywords = realtime_keywords + analysis_keywords + data_keywords
+        for keyword in all_keywords:
+            if keyword in query_lower:
+                return True
+
+        return False
 
 
     async def execute_workflow(
