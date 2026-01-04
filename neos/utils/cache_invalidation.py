@@ -11,7 +11,7 @@
 
 import re
 import logging
-from typing import List, Dict, Any, Optional, Set, Pattern
+from typing import List, Dict, Any, Set, Pattern
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from collections import defaultdict
@@ -103,6 +103,7 @@ class CacheInvalidationManager:
 
         logger.debug(f"Added tag '{tag}' to cache key '{cache_key}'")
 
+
     async def invalidate_by_tag(
         self,
         tag: str,
@@ -124,11 +125,7 @@ class CacheInvalidationManager:
         """
         # DB에서 태그를 가진 캐시 키 조회
         async with db_manager.get_session() as session:
-            query = text("""
-                SELECT DISTINCT cache_key
-                FROM cache_tags
-                WHERE tag = :tag
-            """)
+            query = text("""SELECT DISTINCT cache_key FROM cache_tags WHERE tag = :tag;""")
 
             result = await session.execute(query, {"tag": tag})
             cache_keys = [row[0] for row in result.fetchall()]
@@ -413,10 +410,7 @@ class CacheInvalidationManager:
 
         async with db_manager.get_session() as session:
             for cache_key in cache_keys:
-                query = text("""
-                    DELETE FROM query_cache
-                    WHERE query_hash = :cache_key
-                """)
+                query = text("""DELETE FROM query_cache WHERE query_hash = :cache_key;""")
 
                 result = await session.execute(query, {"cache_key": cache_key})
                 deleted_count += result.rowcount
