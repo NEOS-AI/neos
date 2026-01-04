@@ -1014,6 +1014,14 @@ async def _test_deep_research(query: str, user_id: str, session_id: str, progres
         result["session_id"] = session_id
         result["timestamp"] = datetime.now().isoformat()
 
+        # 데이터셋 수집 종료 및 저장
+        try:
+            from neos.dataset import dataset_manager
+
+            dataset_manager.export_by_session(session_id)
+        except Exception as e:
+            print(f"[WARNING] Failed to save HyperDeepResearch dataset: {e}")
+
         return result
 
     except Exception as e:
@@ -1431,6 +1439,14 @@ async def _test_web_lookup(query: str, urls: tuple, dynamic: bool, user_id: str,
         result["user_id"] = user_id
         result["session_id"] = session_id
         result["timestamp"] = datetime.now().isoformat()
+
+        # 데이터셋 수집 종료 및 저장
+        try:
+            from neos.dataset import dataset_manager
+
+            dataset_manager.export_by_session(session_id)
+        except Exception as e:
+            print(f"[WARNING] Failed to save HyperDeepResearch dataset: {e}")
 
         return result
 
