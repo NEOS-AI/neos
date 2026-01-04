@@ -1158,3 +1158,279 @@ This section is part of a professional research report. It must meet the followi
       }
 
       return prompts.get(language, prompts["en"])
+
+
+   @staticmethod
+   def get_final_section_with_citations_prompt(
+      section_title: str,
+      section_purpose: str,
+      topic: str,
+      deep_analysis: str,
+      validation: str,
+      critical_analysis: str,
+      total_sources: int,
+      source_list: str,  # ★ NEW: Available sources for citation
+      language: str = "en"
+   ) -> str:
+      """Get prompt for generating final report sections with inline citations.
+
+      ★ Learning Point ─────────────────
+      This enhanced prompt includes:
+      1. Source list with citation numbers
+      2. Explicit citation instructions
+      3. Examples of inline citations
+      4. Verification requirements
+
+      The LLM will learn to:
+      - Cite sources for every claim
+      - Use numbered references
+      - Choose appropriate sources
+      ─────────────────────────────────
+
+      Args:
+         section_title: Section title
+         section_purpose: Section purpose
+         topic: Research topic
+         deep_analysis: Deep analysis summary
+         validation: Validation summary
+         critical_analysis: Critical analysis summary
+         total_sources: Total number of sources
+         source_list: Formatted list of available sources with citation numbers
+         language: Target language code
+
+      Returns:
+         Formatted prompt string with citation instructions
+      """
+      prompts: Dict[str, str] = {
+         "ko": f"""다음 섹션을 **전문 보고서 수준**으로 작성하되, **모든 주장에 출처를 명시**해주세요:
+
+섹션: {section_title}
+목적: {section_purpose}
+
+주제: {topic}
+
+참고 자료:
+- 심층 분석: {deep_analysis[:2000]}
+- 검증 결과: {validation[:2000]}
+- 비판적 분석: {critical_analysis[:2000]}
+
+---
+
+## 📚 이용 가능한 출처 (인용 가능)
+
+{source_list}
+
+---
+
+**✨ CITATION 작성 지침 (매우 중요):**
+
+총 {total_sources}개의 신뢰할 수 있는 소스를 기반으로 한 연구입니다.
+
+**1. Inline Citation 규칙**
+   - 모든 사실적 주장, 데이터, 통계 뒤에 [번호] 형식으로 출처 표시
+   - 여러 소스를 인용할 때: [1,2,3] 형식 사용
+   - 중요한 주장은 여러 소스로 뒷받침: [1,3,5]
+
+**2. Citation 예시**
+
+   ✅ 좋은 예시:
+   "양자 컴퓨터는 중첩(superposition) [1,3]과 얽힘(entanglement) [2,4,7]을
+   활용하여 특정 문제에서 지수적 속도 향상을 달성합니다 [1,5,6].
+   2023년 기준 약 1,000큐비트 수준의 양자 컴퓨터가 상용화되었으며 [8],
+   이는 2020년 대비 500% 증가한 수치입니다 [9]."
+
+   ❌ 나쁜 예시 (citation 없음):
+   "양자 컴퓨터는 중첩과 얽힘을 활용합니다. 최근 많이 발전했습니다."
+
+**3. Citation 위치**
+   - 문장 끝, 마침표 앞에 위치
+   - 복잡한 문장의 경우 각 절(clause) 뒤에 개별 citation
+   - 수치 데이터 직후에 반드시 citation
+
+**4. 소스 선택 기준**
+   - ⭐ 표시된 고품질 소스 우선 활용
+   - 학술 소스(.edu, arxiv, nature 등) 우선
+   - 동일한 주장은 2-3개 독립적 소스로 검증
+
+**5. Citation 검증**
+   - 사용한 모든 citation 번호가 위의 소스 목록에 존재하는지 확인
+   - 존재하지 않는 번호는 절대 사용 금지
+   - 각 소스의 내용과 주장이 일치하는지 확인
+
+---
+
+**작성 지침:**
+
+이 섹션은 전문 연구 보고서의 일부입니다. 다음 기준을 충족해야 합니다:
+
+1. **구조와 깊이**
+   - 최소 800-1200단어 분량으로 작성
+   - 명확한 서론, 본론, 결론 구조
+   - 각 주요 포인트마다 구체적인 설명과 예시 제공
+   - 하위 섹션으로 체계적으로 구성 (###, #### 사용)
+
+2. **내용의 전문성 + Citation**
+   - 구체적인 데이터, 통계, 수치 포함 **→ 반드시 citation [번호] 추가**
+   - 실제 사례와 예시를 상세히 기술 **→ citation [번호] 추가**
+   - 전문 용어 사용 시 명확한 설명 추가
+   - 다양한 관점과 의견 제시 **→ 각 관점마다 citation [번호]**
+   - 인용 가능한 핵심 정보 강조
+
+3. **분석의 깊이**
+   - 단순 나열이 아닌 심층적인 분석과 해석
+   - 원인과 결과, 상관관계 설명 **→ 근거 citation [번호]**
+   - 트렌드와 패턴 파악 **→ 데이터 citation [번호]**
+   - 시사점과 의미 도출
+   - 구체적인 근거와 논리적 전개
+
+4. **보고서 스타일**
+   - 객관적이고 전문적인 어조
+   - 명확하고 설득력 있는 문장
+   - 적절한 마크다운 서식 사용
+   - 목록, 표, 강조 등으로 가독성 향상
+   - 중요한 발견사항은 **굵게** 또는 > 인용문으로 강조
+
+5. **Citation 밀도**
+   - 평균 2-3문장마다 1개 이상의 citation
+   - 핵심 주장은 여러 소스로 뒷받침 [1,2,3]
+   - 섹션당 최소 15-25개 이상의 citation 사용
+
+**예시 구조 (Citation 포함):**
+
+### {section_title}
+
+#### 개요
+이 섹션에서는 {section_purpose}를 다룹니다 [1]. 최근 연구에 따르면 [2,3,5],
+해당 분야는 연평균 25% 성장하고 있으며 [7], 2025년까지 시장 규모가
+$500B에 달할 것으로 예상됩니다 [9,12].
+
+#### 주요 발견사항
+
+##### 발견사항 1: [제목]
+구체적인 데이터 분석 결과 [1,4,6], 다음과 같은 트렌드가 확인되었습니다:
+- 트렌드 A: 45% 증가 [3,8]
+- 트렌드 B: 30% 감소 [5,11]
+- 트렌드 C: 신규 등장 [9,13,15]
+
+이러한 변화는 시장 구조의 근본적 변화를 시사합니다 [2,7,10]...
+
+**중요:** 모든 주장, 데이터, 통계에 반드시 citation을 포함하세요.
+Citation이 없는 주장은 신뢰도가 낮게 평가됩니다.""",
+
+         "en": f"""Write the following section at **professional report quality** with **inline citations for every claim**:
+
+Section: {section_title}
+Purpose: {section_purpose}
+
+Topic: {topic}
+
+Reference Materials:
+- Deep Analysis: {deep_analysis[:2000]}
+- Validation Results: {validation[:2000]}
+- Critical Analysis: {critical_analysis[:2000]}
+
+---
+
+## 📚 Available Sources for Citation
+
+{source_list}
+
+---
+
+**✨ CITATION Writing Guidelines (CRITICAL):**
+
+This research is based on {total_sources} credible sources.
+
+**1. Inline Citation Rules**
+   - Add [number] after every factual claim, data, or statistic
+   - For multiple sources: use [1,2,3] format
+   - Important claims should be supported by multiple sources: [1,3,5]
+
+**2. Citation Examples**
+
+   ✅ Good Example:
+   "Quantum computers leverage superposition [1,3] and entanglement [2,4,7]
+   to achieve exponential speedup in specific problem domains [1,5,6].
+   As of 2023, approximately 1,000-qubit quantum computers have been commercialized [8],
+   representing a 500% increase from 2020 [9]."
+
+   ❌ Bad Example (no citations):
+   "Quantum computers use superposition and entanglement. They have developed significantly recently."
+
+**3. Citation Placement**
+   - At the end of sentences, before the period
+   - For complex sentences, after each clause
+   - Immediately after numerical data
+
+**4. Source Selection Criteria**
+   - Prioritize sources marked with ⭐ (high quality)
+   - Prefer academic sources (.edu, arxiv, nature, etc.)
+   - Verify same claims with 2-3 independent sources
+
+**5. Citation Verification**
+   - Ensure all citation numbers exist in the source list above
+   - Never use non-existent numbers
+   - Verify source content matches your claims
+
+---
+
+**Writing Guidelines:**
+
+This section is part of a professional research report. It must meet the following criteria:
+
+1. **Structure and Depth**
+   - Write at least 800-1200 words
+   - Clear introduction, body, and conclusion structure
+   - Provide specific explanations and examples for each major point
+   - Organize systematically with subsections (using ###, ####)
+
+2. **Professional Content + Citations**
+   - Include specific data, statistics, and figures **→ Add citation [number]**
+   - Describe real cases and examples in detail **→ Add citation [number]**
+   - Add clear explanations when using technical terms
+   - Present diverse perspectives and opinions **→ Citation [number] for each**
+   - Emphasize key citable information
+
+3. **Analytical Depth**
+   - Deep analysis and interpretation, not just listing
+   - Explain causes and effects, correlations **→ Evidence citation [number]**
+   - Identify trends and patterns **→ Data citation [number]**
+   - Derive implications and meanings
+   - Develop with concrete evidence and logic
+
+4. **Report Style**
+   - Objective and professional tone
+   - Clear and persuasive sentences
+   - Use appropriate markdown formatting
+   - Improve readability with lists, tables, emphasis
+   - Highlight important findings with **bold** or > blockquotes
+
+5. **Citation Density**
+   - Average 1+ citation per 2-3 sentences
+   - Support key claims with multiple sources [1,2,3]
+   - Use minimum 15-25 citations per section
+
+**Example Structure (with Citations):**
+
+### {section_title}
+
+#### Overview
+This section examines {section_purpose} [1]. Recent studies show [2,3,5]
+that the field is growing at 25% annually [7], with market size expected
+to reach $500B by 2025 [9,12].
+
+#### Key Findings
+
+##### Finding 1: [Title]
+Data analysis reveals [1,4,6] the following trends:
+- Trend A: 45% increase [3,8]
+- Trend B: 30% decrease [5,11]
+- Trend C: newly emerged [9,13,15]
+
+These changes suggest fundamental shifts in market structure [2,7,10]...
+
+**Important:** Include citations for all claims, data, and statistics.
+Claims without citations are considered low credibility."""
+      }
+
+      return prompts.get(language, prompts["en"])
