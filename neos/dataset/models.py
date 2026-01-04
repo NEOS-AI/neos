@@ -15,7 +15,7 @@ class LLMCallRecord:
 
     # 식별 정보
     call_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
     # 워크플로우 컨텍스트
     session_id: str = ""
@@ -109,7 +109,7 @@ class DatasetMetadata:
     """데이터셋 메타데이터"""
 
     dataset_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     name: str = "neos_llm_dataset"
     description: str = ""
 

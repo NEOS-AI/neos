@@ -215,7 +215,7 @@ class WebSearchLogger:
                     trace_id=request.trace_id,
                     parent_query_id=request.parent_query_id,
                     status=SearchQueryStatus.PENDING,
-                    executed_at=datetime.utcnow()
+                    executed_at=datetime.now()
                 )
 
                 session.add(query)
@@ -282,8 +282,8 @@ class WebSearchLogger:
                         content_hash=self.generate_content_hash(result_item.content or ""),
                         published_date=datetime.fromisoformat(result_item.published_date) if result_item.published_date else None,
                         metadata=result_item.metadata,
-                        captured_at=datetime.utcnow(),
-                        first_seen_at=datetime.utcnow()
+                        captured_at=datetime.now(),
+                        first_seen_at=datetime.now()
                     )
                     session.add(result)
 

@@ -83,7 +83,7 @@ class AgentMetadata:
     @property
     def is_healthy(self) -> bool:
         """헬스 체크 - 60초 내 heartbeat 있어야 함"""
-        return (datetime.utcnow() - self.last_heartbeat).total_seconds() < 60
+        return (datetime.now() - self.last_heartbeat).total_seconds() < 60
 
     def to_dict(self) -> Dict[str, Any]:
         """딕셔너리로 변환"""
@@ -341,7 +341,7 @@ class DistributedAgentRegistry:
         """Heartbeat 이벤트 처리"""
         agent_id = event.data.get("agent_id")
         if agent_id and agent_id in self.agents:
-            self.agents[agent_id].last_heartbeat = datetime.utcnow()
+            self.agents[agent_id].last_heartbeat = datetime.now()
             logger.debug(f"[AgentRegistry] Heartbeat received from {agent_id}")
 
     async def _handle_agent_failure(self, event: Event):

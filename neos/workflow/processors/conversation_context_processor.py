@@ -26,22 +26,20 @@ class ConversationContextProcessor:
     def __init__(self):
         self.max_tokens = settings.HISTORY_CONTEXT_MAX_TOKENS
         self.usage_level = settings.HISTORY_USAGE_LEVEL
-        # LLM 객체 재사용 (리소스 누수 방지 및 성능 향상)
-        self._llm = None
 
     def _get_llm(self, temperature: float = 0.3, max_tokens: int = None):
         """
-        LLM 객체를 재사용하거나 생성
+        LLM 인스턴스를 가져옵니다.
 
-        리소스 효율성을 위해 동일한 LLM 객체를 재사용합니다.
+        LLMFactory의 다중 키 캐싱을 활용하여 (model, temperature, max_tokens) 조합별로
+        인스턴스를 재사용합니다.
         """
-        if self._llm is None:
-            self._llm = create_llm(
-                model=settings.LLM_MODEL,
-                temperature=temperature,
-                max_tokens=max_tokens or self.max_tokens
-            )
-        return self._llm
+        return create_llm(
+            model=settings.LLM_MODEL,
+            temperature=temperature,
+            max_tokens=max_tokens or self.max_tokens,
+            use_cache=True  # LLMFactory 캐시 활용
+        )
 
     async def process(self, state: AgentState) -> Dict[str, Any]:
         """
@@ -100,7 +98,7 @@ class ConversationContextProcessor:
             # 메타데이터 생성
             history_metadata = {
                 "total_messages": len(chat_history),
-                "context_generated_at": datetime.utcnow().isoformat(),
+                "context_generated_at": datetime.now().isoformat(),
                 "context_length": len(conversation_context),
                 "main_topics": main_topics,
             }
@@ -114,7 +112,7 @@ class ConversationContextProcessor:
             execution_step = {
                 "step": "conversation_context_processing",
                 "result": "completed",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now().isoformat(),
                 "metadata": {
                     "messages_processed": len(chat_history),
                     "context_length": len(conversation_context)

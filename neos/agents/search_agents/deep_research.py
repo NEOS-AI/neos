@@ -958,7 +958,7 @@ Write each gap on one line without numbering.""",
         """체크포인트 저장"""
         checkpoint = {
             "phase": phase,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "data": data
         }
 

@@ -257,7 +257,7 @@ class MCPServerManager:
                 if is_active is not None:
                     server.is_active = is_active
 
-                server.updated_at = datetime.utcnow()
+                server.updated_at = datetime.now()
                 await session.commit()
 
                 logger.info(f"Updated MCP server: {server.name} (ID: {server_id})")
@@ -327,7 +327,7 @@ class MCPServerManager:
                     return None
 
                 server.is_active = not server.is_active
-                server.updated_at = datetime.utcnow()
+                server.updated_at = datetime.now()
                 await session.commit()
 
                 logger.info(

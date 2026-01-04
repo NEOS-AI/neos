@@ -91,7 +91,7 @@ class UnifiedStreamEvent(BaseModel):
     """통합 스트리밍 이벤트"""
     event: str  # started, document_processing, node_started, completed 등
     session_id: str
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
 
     # 진행 상황
     phase: Optional[str] = None  # "document_extraction", "workflow_execution"

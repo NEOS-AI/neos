@@ -287,12 +287,12 @@ class DistributedMultiAgentWorkflow:
         if not task_ids:
             return []
 
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
         completed = []
 
         while len(completed) < len(task_ids):
             # 타임아웃 체크
-            if (datetime.utcnow() - start_time).total_seconds() > timeout:
+            if (datetime.now() - start_time).total_seconds() > timeout:
                 logger.warning(
                     f"[DistributedWorkflow] Task waiting timed out "
                     f"({len(completed)}/{len(task_ids)} completed)"
@@ -333,7 +333,7 @@ class DistributedMultiAgentWorkflow:
             quality_feedback=None,
             final_response=None,
             response_metadata=None,
-            execution_start=datetime.utcnow(),
+            execution_start=datetime.now(),
             execution_steps=[],
             errors=[],
             retry_count=0,
@@ -365,7 +365,7 @@ class DistributedMultiAgentWorkflow:
             "partial_state": initial_state,
             "cache_hit": False,
             "execution_time_ms": int(
-                (datetime.utcnow() - initial_state["execution_start"]).total_seconds() * 1000
+                (datetime.now() - initial_state["execution_start"]).total_seconds() * 1000
             ),
             "distributed": True
         }
@@ -400,7 +400,7 @@ class DistributedMultiAgentWorkflow:
                 "supervisor": "healthy" if self.supervisor and self.supervisor.is_running else "unhealthy",
             },
             "autonomous_agents": len(self.autonomous_agents),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "mode": "distributed"
         }
 

@@ -205,7 +205,7 @@ class SmartCacheManager:
         Returns:
             CacheResult: 캐시 조회 결과
         """
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
 
         try:
             async with get_session_ctx() as session:
@@ -216,7 +216,7 @@ class SmartCacheManager:
                 )
 
                 if exact_result:
-                    search_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+                    search_time = int((datetime.now() - start_time).total_seconds() * 1000)
                     await self._update_hit_statistics(session, exact_result.cache_id)
 
                     if self.enable_statistics:
@@ -237,7 +237,7 @@ class SmartCacheManager:
                     embeddings = await embedding_manager.get_embedding(query)
                     if not embeddings or len(embeddings) == 0:
                         logger.warning("쿼리 임베딩 생성 실패")
-                        search_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+                        search_time = int((datetime.now() - start_time).total_seconds() * 1000)
                         return CacheResult(
                             hit=False,
                             response=None,
@@ -250,7 +250,7 @@ class SmartCacheManager:
                     session, query_vector, query_intent, user_id, max_age_seconds
                 )
 
-                search_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+                search_time = int((datetime.now() - start_time).total_seconds() * 1000)
 
                 if semantic_result:
                     await self._update_hit_statistics(session, semantic_result.cache_id)
@@ -284,7 +284,7 @@ class SmartCacheManager:
 
         except Exception as e:
             logger.error(f"캐시 조회 에러: {e}")
-            search_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            search_time = int((datetime.now() - start_time).total_seconds() * 1000)
             return CacheResult(
                 hit=False,
                 response=None,
@@ -334,7 +334,7 @@ class SmartCacheManager:
                     quality_score=quality_score
                 )
 
-            expires_at = datetime.utcnow() + timedelta(seconds=ttl)
+            expires_at = datetime.now() + timedelta(seconds=ttl)
             query_hash = self._generate_query_hash(query)
 
             async with get_session_ctx() as session:
@@ -353,7 +353,7 @@ class SmartCacheManager:
                     existing_entry.response_quality_score = quality_score
                     existing_entry.ttl_seconds = ttl
                     existing_entry.expires_at = expires_at
-                    existing_entry.updated_at = datetime.utcnow()
+                    existing_entry.updated_at = datetime.now()
                     if metadata:
                         existing_entry.cache_metadata = metadata
                     logger.debug(f"캐시 엔트리 업데이트: id={existing_entry.id}")
@@ -376,6 +376,7 @@ class SmartCacheManager:
                     session.add(new_entry)
                     logger.debug(f"새 캐시 엔트리 생성: hash={query_hash[:16]}...")
 
+                print("[DEBUG] Committing cache entry to database")
                 await session.commit()
 
                 # 캐시 크기 관리
@@ -399,7 +400,7 @@ class SmartCacheManager:
         max_age_seconds: int = None
     ) -> Optional[CachedResponse]:
         """정확한 해시 매칭으로 캐시 찾기"""
-        now = datetime.utcnow()
+        now = datetime.now()
 
         query = select(QueryCacheEntry).where(
             QueryCacheEntry.query_hash == query_hash,
@@ -442,8 +443,23 @@ class SmartCacheManager:
         user_id: str = None,
         max_age_seconds: int = None
     ) -> Optional[CachedResponse]:
-        """pgvector를 사용한 유사 쿼리 검색"""
-        now = datetime.utcnow()
+        """pgvector를 사용한 유사 쿼리 검색
+
+        HNSW 인덱스 성능 최적화:
+        - ef_search = 40: 균형잡힌 정확도와 속도 (기본값)
+        - ef_search를 높이면 정확도 향상, 속도 저하
+        - ef_search를 낮추면 속도 향상, 정확도 저하
+        """
+        now = datetime.now()
+
+        # HNSW 인덱스 런타임 파라미터 설정 (선택적)
+        # ef_search: 검색 시 탐색할 후보 수 (기본값: 40)
+        # asyncpg 연결 풀 문제를 피하기 위해 try-except로 감싸기
+        try:
+            await session.execute(text("SET LOCAL hnsw.ef_search = 40"))
+        except Exception as e:
+            # 설정 실패 시 무시 (기본값 사용)
+            logger.debug(f"Failed to set HNSW ef_search parameter: {e}")
 
         # pgvector 코사인 거리 연산자 사용
         # 1 - distance = similarity
@@ -522,7 +538,7 @@ class SmartCacheManager:
             .where(QueryCacheEntry.id == cache_id)
             .values(
                 hit_count=QueryCacheEntry.hit_count + 1,
-                last_accessed_at=datetime.utcnow()
+                last_accessed_at=datetime.now()
             )
         )
         await session.commit()
@@ -641,7 +657,7 @@ class SmartCacheManager:
             async with get_session_ctx() as session:
                 result = await session.execute(
                     delete(QueryCacheEntry).where(
-                        QueryCacheEntry.expires_at <= datetime.utcnow()
+                        QueryCacheEntry.expires_at <= datetime.now()
                     )
                 )
                 await session.commit()
@@ -661,7 +677,7 @@ class SmartCacheManager:
         """캐시 통계 조회"""
         try:
             async with get_session_ctx() as session:
-                min_time = datetime.utcnow() - timedelta(hours=hours)
+                min_time = datetime.now() - timedelta(hours=hours)
 
                 query = select(CacheStatistics).where(
                     CacheStatistics.time_bucket >= min_time
@@ -762,7 +778,7 @@ class SmartCacheManager:
 
     def _get_time_bucket(self) -> datetime:
         """현재 시간 버킷 (1시간 단위)"""
-        now = datetime.utcnow()
+        now = datetime.now()
         return now.replace(minute=0, second=0, microsecond=0)
 
 

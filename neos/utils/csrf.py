@@ -36,7 +36,7 @@ def create_csrf_token_with_signature(session_id: str) -> str:
     token = secrets.token_urlsafe(32)
 
     # 현재 시간 (토큰 만료 방지)
-    timestamp = str(int(datetime.utcnow().timestamp()))
+    timestamp = str(int(datetime.now().timestamp()))
 
     # 서명할 데이터: token:session_id:timestamp
     message = f"{token}:{session_id}:{timestamp}"
@@ -78,7 +78,7 @@ def verify_csrf_token(
 
         # 타임스탬프 검증
         token_time = int(timestamp)
-        current_time = int(datetime.utcnow().timestamp())
+        current_time = int(datetime.now().timestamp())
 
         if current_time - token_time > max_age_seconds:
             return False  # 토큰 만료

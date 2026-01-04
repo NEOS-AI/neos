@@ -147,11 +147,9 @@ class ContentProcessor:
             # www. 접두사 제거
             if domain.startswith('www.'):
                 domain = domain[4:]
-
-            return f"\n   *출처: {domain}* ([링크]({url}))"
-
+            return f"\n   *{domain}* ([link]({url}))"
         except Exception:
-            return f"\n   *출처: [링크]({url})*"
+            return f"\n   *[link]({url})*"
 
     def calculate_similarity(self, text1: str, text2: str) -> float:
         """두 텍스트 간 유사도 계산 (Jaccard 유사도)"""

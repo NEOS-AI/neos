@@ -98,7 +98,7 @@ class WorkflowScheduler:
     async def _cleanup_task(self):
         """정리 작업 실행"""
         try:
-            start_time = datetime.utcnow()
+            start_time = datetime.now()
             logger.info("=" * 50)
             logger.info("체크포인트 자동 정리 작업 시작")
             logger.info(f"실행 시각: {start_time.isoformat()}")
@@ -128,7 +128,7 @@ class WorkflowScheduler:
             )
 
             # 실행 시간 계산
-            execution_time = (datetime.utcnow() - start_time).total_seconds()
+            execution_time = (datetime.now() - start_time).total_seconds()
 
             logger.info(
                 f"✅ 체크포인트 정리 완료: "

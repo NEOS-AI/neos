@@ -152,7 +152,7 @@ class IterativeSearchStrategy(SearchStrategy):
                 state["execution_steps"].append({
                     "step": "iterative_search",
                     "result": f"completed - {len(exploration_results)} sources",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 })
 
                 logger.info(f"[IterativeStrategy] Completed: {len(exploration_results)} sources")
@@ -224,7 +224,7 @@ class StandardSearchStrategy(SearchStrategy):
             state["execution_steps"].append({
                 "step": "search_orchestration",
                 "result": f"completed (cached) - {len(cached_search_results)} results",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             })
             return True
         return False
@@ -548,6 +548,182 @@ class StandardSearchStrategy(SearchStrategy):
 
         state["execution_steps"].append({
             "step": "search_orchestration",
-            "result": f"completed - {successful_agents} agents/tools succeeded",
-            "timestamp": datetime.utcnow().isoformat()
+            "result": f"completed - {successful_agents} agents & {total_results} tools succeeded",
+            "timestamp": datetime.now().isoformat()
         })
+
+
+class MultiHopSearchStrategy(SearchStrategy):
+    """멀티홉 검색 전략
+
+    복잡한 질문을 서브질문으로 분해하고 순차적 추론을 통해 답변 생성
+    """
+
+    def __init__(self):
+        super().__init__("multi_hop_search")
+        self.multi_hop_agent = None
+        self._init_agent()
+
+    def _init_agent(self):
+        """MultiHopSearchAgent 초기화"""
+        try:
+            from neos.agents.search_agents.multi_hop_search import MultiHopSearchAgent
+
+            self.multi_hop_agent = MultiHopSearchAgent()
+            logger.info("[MultiHopStrategy] MultiHopSearchAgent initialized")
+        except Exception as e:
+            logger.warning(f"[MultiHopStrategy] Agent init failed: {e}")
+
+    def is_applicable(self, state: AgentState) -> bool:
+        """멀티홉 검색 적용 가능 여부 판단
+
+        적용 조건:
+        1. MultiHopSearchAgent 사용 가능
+        2. 사용자 명시적 선호
+        3. 복합 관계 키워드 포함 ("~의 ~", "~가 만든 ~" 등)
+        4. 복잡한 추론이 필요한 질문
+        """
+        # Agent 사용 가능 여부
+        if not self.multi_hop_agent:
+            return False
+
+        # 사용자 명시적 선호
+        user_preference = state.get("use_multi_hop_search")
+        if user_preference is not None:
+            return user_preference
+
+        # Query intent 기반 판단
+        query_intent = state.get("query_intent", {})
+        if not isinstance(query_intent, dict):
+            query_intent = {}
+        intent_type = query_intent.get("intent", "")
+
+        # 복합 추론이 필요한 intent
+        if intent_type in ["complex_reasoning", "multi_step", "relational"]:
+            return True
+
+        # 쿼리 복잡도 기반 판단
+        query = state.get("original_query", "")
+
+        # 방어적 처리: query가 리스트인 경우 문자열로 변환
+        if isinstance(query, list):
+            query = ' '.join(str(q) for q in query)
+        elif not isinstance(query, str):
+            query = str(query)
+
+        #TODO 하드코딩된 키워드 대신 LLM 기반 분석 도입 검토
+        # 멀티홉 검색 트리거 키워드
+        multi_hop_keywords = [
+            # 한국어
+            "의 ",  # "X의 Y"
+            "가 만든",
+            "이 만든",
+            "가 창업한",
+            "이 창업한",
+            "의 창립자",
+            "의 설립자",
+            "의 CEO",
+            "의 대표",
+            "의 모교",
+            "의 출신",
+            "이전에",
+            "다음에",
+            "했던",
+            "누가",
+            "어디서",
+            "언제",
+
+            # 영어
+            "who created",
+            "who founded",
+            "founder of",
+            "CEO of",
+            "creator of",
+            "inventor of",
+            "location of",
+            "where is",
+            "when did",
+            "what is the",
+            "'s founder",
+            "'s CEO",
+            "'s location",
+            "made by",
+            "created by",
+            "founded by",
+        ]
+
+        # 키워드 매칭 (대소문자 무시)
+        query_lower = query.lower()
+        if any(keyword.lower() in query_lower for keyword in multi_hop_keywords):
+            logger.info("[MultiHopStrategy] Multi-hop keyword detected in query")
+            return True
+
+        # 질문 구조 분석: 여러 개의 조건/관계가 포함된 경우
+        # 예: "A를 B한 C의 D는?" - 여러 관계가 연쇄됨
+        relationship_markers = ["의", "가", "이", "을", "를", "에서", "'s", "of", "by", "in"]
+        relationship_count = sum(1 for marker in relationship_markers if marker in query_lower)
+
+        if relationship_count >= 3:  # 3개 이상의 관계 마커
+            logger.info(f"[MultiHopStrategy] Complex relationship structure detected ({relationship_count} markers)")
+            return True
+
+        return False
+
+    async def execute(
+        self,
+        state: AgentState,
+        search_agents: List[str],
+        agents: Dict[str, Any],
+        tool_selector: Any
+    ) -> AgentState:
+        """멀티홉 검색 실행"""
+        logger.info("[MultiHopStrategy] Starting multi-hop search")
+
+        try:
+            # 컨텍스트 구성
+            context = {
+                "session_id": state.get("session_id", ""),
+                "user_id": state.get("user_id", ""),
+                "detected_language": state.get("detected_language", "ko"),
+                "query_intent": state.get("query_intent"),
+            }
+
+            # MultiHopSearchAgent 실행
+            result = await self.multi_hop_agent.execute(
+                state["original_query"],
+                context
+            )
+
+            if result.get("success"):
+                # 검색 결과 추가
+                multi_hop_results = result.get("result", [])
+                state["search_results"].extend(multi_hop_results)
+
+                # 메타데이터 저장
+                metadata = result.get("metadata", {})
+                state["multi_hop_metadata"] = metadata
+
+                # 실행 단계 기록
+                state["execution_steps"].append({
+                    "step": "multi_hop_search",
+                    "result": f"completed - {metadata.get('hop_count', 0)} hops, "
+                             f"confidence: {metadata.get('total_confidence', 0):.2f}",
+                    "timestamp": datetime.now().isoformat()
+                })
+
+                logger.info(
+                    f"[MultiHopStrategy] Completed: {len(multi_hop_results)} results, "
+                    f"{metadata.get('hop_count', 0)} hops"
+                )
+            else:
+                error_msg = result.get("error", "Unknown error")
+                logger.error(f"[MultiHopStrategy] Failed: {error_msg}")
+                state["errors"].append(f"Multi-hop search failed: {error_msg}")
+                raise Exception(error_msg)
+
+        except Exception as e:
+            logger.error(f"[MultiHopStrategy] Exception: {e}", exc_info=True)
+            state["errors"].append(f"Multi-hop search exception: {str(e)}")
+            raise
+
+        return state

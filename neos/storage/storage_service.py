@@ -409,7 +409,7 @@ class StorageService:
         Returns:
             스토리지 키 (예: documents/user123/2024/01/hash_filename.pdf)
         """
-        now = datetime.utcnow()
+        now = datetime.now()
         year = now.strftime("%Y")
         month = now.strftime("%m")
 

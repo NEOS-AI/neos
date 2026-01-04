@@ -17,27 +17,32 @@ from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import create_tracked_llm, extract_text_from_response
 
 from .prompts import ValidationPrompts, QueryGenerationPrompts
+from .utils import CitationTracker
 
 
 logger = logging.getLogger(__name__)
 
 
 class ReportGenerator:
-    """Handles final report generation."""
-    
+    """Handles final report generation with citation tracking."""
+
     def __init__(
         self,
         agent_name: str = "hyper_deep_research",
         repository: Optional[Any] = None,
     ):
         """Initialize report generator.
-        
+
         Args:
             agent_name: Name of the agent for tracking
             repository: Optional repository for data storage
         """
         self.agent_name = agent_name
         self.repository = repository
+
+        # ★ NEW: Citation tracking system
+        self.citation_tracker = CitationTracker()
+        logger.info("Citation tracking system initialized")
     
     async def plan_report_structure(
         self,
@@ -101,8 +106,8 @@ class ReportGenerator:
         language: str,
         total_sources: int,
     ) -> str:
-        """Generate a final report section.
-        
+        """Generate a final report section with inline citations.
+
         Args:
             section_info: Section information (title, purpose)
             topic_analysis: Topic analysis result
@@ -113,9 +118,9 @@ class ReportGenerator:
             user_id: User identifier
             language: Language code
             total_sources: Total number of sources collected
-            
+
         Returns:
-            Section content
+            Section content with inline citations
         """
         try:
             llm = create_tracked_llm(
@@ -124,10 +129,16 @@ class ReportGenerator:
                 user_id=user_id,
                 workflow_step="hyper_deep_research",
                 agent_name=self.agent_name,
-                tags=["final_section_generation"]
+                tags=["final_section_generation_with_citations"]
             )
 
-            prompt = ValidationPrompts.get_final_section_prompt(
+            # ★ NEW: Get source list for citation
+            source_list = self.citation_tracker.get_source_list_for_prompt(
+                max_sources=100  # Include top 100 sources in prompt
+            )
+
+            # ★ NEW: Use citation-aware prompt
+            prompt = ValidationPrompts.get_final_section_with_citations_prompt(
                 section_info['title'],
                 section_info.get('purpose', ''),
                 topic_analysis['original_query'],
@@ -135,10 +146,27 @@ class ReportGenerator:
                 validation['report'],
                 critical_analysis['full_analysis'],
                 total_sources,
+                source_list,  # ★ NEW parameter
                 language
             )
+
+            logger.info(
+                f"Generating section '{section_info['title']}' with "
+                f"{self.citation_tracker.stats['total_sources']} registered sources"
+            )
+
             response = await llm.ainvoke([HumanMessage(content=prompt)])
-            return extract_text_from_response(response).strip()
+            section_content = extract_text_from_response(response).strip()
+
+            # ★ NEW: Validate citations in generated content
+            validation_result = self.citation_tracker.validate_citations(section_content)
+            if not validation_result['valid']:
+                logger.warning(
+                    f"Section '{section_info['title']}' contains invalid citations: "
+                    f"{validation_result['invalid_citations']}"
+                )
+
+            return section_content
 
         except Exception as e:
             logger.error(f"Section generation failed: {e}")
@@ -156,9 +184,10 @@ class ReportGenerator:
         language: str,
         report_id: str,
         metadata: Dict[str, Any],
+        all_sources: List[Dict[str, Any]] = None,  # ★ NEW: 소스 목록
     ) -> str:
-        """Synthesize comprehensive final report.
-        
+        """Synthesize comprehensive final report with citations.
+
         Args:
             topic_analysis: Topic analysis result
             methodology: Research methodology
@@ -170,16 +199,23 @@ class ReportGenerator:
             language: Language code
             report_id: Report identifier
             metadata: Research metadata
-            
+            all_sources: All collected sources for citation ★ NEW
+
         Returns:
-            Complete report as markdown string
+            Complete report as markdown string with citations and references
         """
+        # ★ NEW: Register sources for citation tracking
+        if all_sources:
+            registered_count = self.citation_tracker.register_sources(all_sources)
+            logger.info(f"Registered {registered_count} sources for citation tracking")
+            print(f"[INFO] 📚 Citation tracking: {registered_count} sources registered")
+
         # Plan report structure
         report_structure = await self.plan_report_structure(
             topic_analysis, session_id, user_id, language
         )
 
-        # Generate sections
+        # Generate sections with citations
         final_sections = []
         section_order = 8
 
@@ -191,6 +227,14 @@ class ReportGenerator:
                 section_info, topic_analysis, deep_analysis,
                 validation, critical_analysis, session_id, user_id, language,
                 metadata.get("total_sources_collected", 0)
+            )
+
+            # ★ NEW: Parse and track citations from generated section
+            citation_contexts = self.citation_tracker.parse_citations_from_text(
+                section_content, section_title
+            )
+            logger.info(
+                f"Section '{section_title}': Found {len(citation_contexts)} citation contexts"
             )
 
             # Store in repository if available
@@ -210,7 +254,13 @@ class ReportGenerator:
 
             section_order += 1
 
-        # Assemble report
+        # ★ NEW: Get citation statistics
+        citation_stats = self.citation_tracker.get_citation_statistics()
+        logger.info(f"Citation statistics: {citation_stats}")
+        print(f"[INFO] 📊 Total citations: {citation_stats['total_citations']}")
+        print(f"[INFO] 📚 Cited sources: {citation_stats['cited_sources']}/{citation_stats['total_sources']}")
+
+        # Assemble report with reference list
         return self.assemble_report(
             topic_analysis["original_query"],
             final_sections,
@@ -225,27 +275,30 @@ class ReportGenerator:
         report_id: str,
         metadata: Dict[str, Any],
     ) -> str:
-        """Assemble final report from sections.
-        
+        """Assemble final report from sections with reference list.
+
         Args:
             topic: Research topic
             sections: List of report sections
             report_id: Report identifier
             metadata: Research metadata
-            
+
         Returns:
-            Assembled report as markdown string
+            Assembled report as markdown string with citations
         """
         unique_domains = metadata.get("unique_domains", set())
         unique_domains_count = (
             len(unique_domains) if isinstance(unique_domains, set) else unique_domains
         )
-        
+
+        # ★ NEW: Get citation statistics
+        citation_stats = self.citation_tracker.get_citation_statistics()
+
         parts = [
             f"# {topic}\n",
             "## HyperDeepResearch Comprehensive Report\n",
             f"\n**Report ID:** `{report_id}`\n",
-            f"**Generated:** {datetime.utcnow().isoformat()}\n",
+            f"**Generated:** {datetime.now().isoformat()}\n",
             "\n---\n",
             "\n## 📊 Research Statistics\n",
             f"- **Total Sources:** {metadata.get('total_sources_collected', 0)}\n",
@@ -256,12 +309,41 @@ class ReportGenerator:
             f"- **Critical Reviews:** {metadata.get('critical_reviews_completed', 0)}\n",
             f"- **Criticism Feedbacks:** {metadata.get('criticism_feedbacks_generated', 0)}\n",
             f"- **Additional Research Triggered:** {metadata.get('additional_research_triggered', 0)}\n",
-            "\n---\n"
         ]
 
+        # ★ NEW: Add citation statistics
+        if citation_stats["total_citations"] > 0:
+            parts.extend([
+                f"- **Total Citations:** {citation_stats['total_citations']}\n",
+                f"- **Cited Sources:** {citation_stats['cited_sources']}\n",
+                f"- **Citation Coverage:** {(citation_stats['cited_sources'] / citation_stats['total_sources'] * 100):.1f}%\n",
+            ])
+
+        parts.append("\n---\n")
+
+        # Add sections
         for section in sections:
             parts.append(f"\n## {section['title']}\n")
             parts.append(f"\n{section['content']}\n")
+
+        # ★ NEW: Add reference list
+        reference_list = self.citation_tracker.generate_reference_list(
+            style="numbered",
+            only_cited=True  # 인용된 소스만 포함
+        )
+
+        if reference_list:
+            parts.append("\n---\n")
+            parts.append(f"\n{reference_list}\n")
+
+        # ★ NEW: Add most cited sources section
+        if citation_stats.get("most_cited_sources"):
+            parts.append("\n### 🔝 Most Cited Sources\n")
+            for i, source in enumerate(citation_stats["most_cited_sources"][:5], 1):
+                parts.append(
+                    f"{i}. [{source['number']}] {source['title']} "
+                    f"(cited {source['cited_count']}x)\n"
+                )
 
         parts.append("\n---\n")
         parts.append(f"\n**Report ID: `{report_id}`**\n")

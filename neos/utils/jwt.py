@@ -2,6 +2,7 @@
 JWT 토큰 생성 및 검증 유틸리티
 """
 import secrets
+import time
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import jwt
@@ -26,14 +27,16 @@ def create_access_token(
     """
     to_encode = data.copy()
 
+    now = int(time.time())
+
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = now + int(expires_delta.total_seconds())
     else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = now + (settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60)
 
     to_encode.update({
         "exp": expire,
-        "iat": datetime.utcnow(),
+        "iat": now,
         "type": "access"
     })
 
@@ -62,17 +65,19 @@ def create_refresh_token(
     """
     to_encode = data.copy()
 
+    now = int(time.time())
+
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = now + int(expires_delta.total_seconds())
     else:
-        expire = datetime.utcnow() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+        expire = now + (settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60)
 
     # 추가 랜덤성을 위한 jti (JWT ID)
     jti = secrets.token_urlsafe(32)
 
     to_encode.update({
         "exp": expire,
-        "iat": datetime.utcnow(),
+        "iat": now,
         "type": "refresh",
         "jti": jti
     })
@@ -154,7 +159,7 @@ def is_token_expired(token: str) -> bool:
     if not exp:
         return True
 
-    return datetime.utcnow().timestamp() > exp
+    return datetime.now().timestamp() > exp
 
 
 def get_token_expiration(token: str) -> Optional[datetime]:

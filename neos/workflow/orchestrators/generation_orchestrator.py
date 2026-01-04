@@ -23,7 +23,7 @@ class GenerationOrchestrator:
             state["execution_steps"].append({
                 "step": "generation_orchestration",
                 "result": "skipped - no generation agents required",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             })
             return state
 
@@ -123,5 +123,5 @@ class GenerationOrchestrator:
         state["execution_steps"].append({
             "step": "generation_orchestration",
             "result": f"completed - {successful_count} agents succeeded",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })

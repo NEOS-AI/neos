@@ -66,7 +66,7 @@ class UnifiedEventHandler(WorkflowEventHandler):
     def __init__(self, session_id: str, event_queue: asyncio.Queue):
         self.session_id = session_id
         self.event_queue = event_queue
-        self.start_time = datetime.utcnow()
+        self.start_time = datetime.now()
 
     async def on_workflow_start(self, workflow_input: Dict[str, Any]):
         """Workflow start event handler"""
@@ -137,7 +137,7 @@ class UnifiedEventHandler(WorkflowEventHandler):
 
     async def on_workflow_complete(self, result: Dict[str, Any]):
         """Workflow complete event handler"""
-        elapsed_ms = int((datetime.utcnow() - self.start_time).total_seconds() * 1000)
+        elapsed_ms = int((datetime.now() - self.start_time).total_seconds() * 1000)
 
         event = UnifiedStreamEvent(
             event="workflow_completed",
@@ -239,7 +239,7 @@ class TextOnlyStrategy(ProcessingStrategy):
         if self.event_queue:
             workflow_event_handler = UnifiedEventHandler(session_id, self.event_queue)
 
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
 
         # Dependency Injection: event_handler를 워크플로우에 주입
         result = await multi_agent_workflow.execute_workflow(
@@ -247,7 +247,7 @@ class TextOnlyStrategy(ProcessingStrategy):
             event_handler=workflow_event_handler
         )
 
-        end_time = datetime.utcnow()
+        end_time = datetime.now()
         execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
 
         logger.info(
@@ -370,7 +370,7 @@ class DocumentProcessingStrategy(ProcessingStrategy):
         if self.event_queue:
             workflow_event_handler = UnifiedEventHandler(session_id, self.event_queue)
 
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
 
         # Dependency Injection: event_handler를 워크플로우에 주입
         result = await multi_agent_workflow.execute_workflow(
@@ -378,7 +378,7 @@ class DocumentProcessingStrategy(ProcessingStrategy):
             event_handler=workflow_event_handler
         )
 
-        end_time = datetime.utcnow()
+        end_time = datetime.now()
         execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
 
         logger.info(

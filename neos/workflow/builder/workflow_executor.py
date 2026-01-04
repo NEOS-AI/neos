@@ -141,7 +141,7 @@ class WorkflowExecutor:
         user_input: Dict[str, Any]
     ) -> Dict[str, Any]:
         """워크플로우 실행"""
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
 
         # 그래프 빌드 (아직 안 되어있으면)
         if not self.graph:
@@ -185,7 +185,7 @@ class WorkflowExecutor:
             final_state = await self.graph.ainvoke(initial_state, config)
 
             # 실행 시간 계산
-            execution_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            execution_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
             # 실행 기록 저장
             await self._save_execution(
@@ -210,7 +210,7 @@ class WorkflowExecutor:
 
         except Exception as e:
             logger.error(f"Workflow execution failed: {e}")
-            execution_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            execution_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
             # 실패 기록 저장
             await self._save_execution(
@@ -248,7 +248,7 @@ class WorkflowExecutor:
                 error_message=error_message,
                 execution_time_ms=execution_time_ms,
                 execution_steps=final_state.get("execution_steps", []),
-                completed_at=datetime.utcnow()
+                completed_at=datetime.now()
             )
             session.add(execution)
             await session.commit()
@@ -263,5 +263,5 @@ class WorkflowExecutor:
 
             if workflow:
                 workflow.execution_count += 1
-                workflow.last_executed_at = datetime.utcnow()
+                workflow.last_executed_at = datetime.now()
                 await session.commit()

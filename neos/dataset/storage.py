@@ -55,7 +55,7 @@ class DatasetManager:
 
         # 파일명 생성
         if filename is None:
-            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"neos_llm_calls_{timestamp}.jsonl"
 
         filepath = self.base_path / filename
@@ -71,7 +71,7 @@ class DatasetManager:
         if include_metadata:
             metadata = DatasetMetadata(
                 name=filename.replace('.jsonl', ''),
-                description=f"NEOS LLM calls dataset exported at {datetime.utcnow().isoformat()}"
+                description=f"NEOS LLM calls dataset exported at {datetime.now().isoformat()}"
             )
             metadata.update_statistics(records)
 
@@ -108,7 +108,7 @@ class DatasetManager:
             return ""
 
         if filename is None:
-            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"neos_llm_calls_{timestamp}.json"
 
         filepath = self.base_path / filename
@@ -116,7 +116,7 @@ class DatasetManager:
         # 메타데이터 생성
         metadata = DatasetMetadata(
             name=filename.replace('.json', ''),
-            description=f"NEOS LLM calls dataset exported at {datetime.utcnow().isoformat()}"
+            description=f"NEOS LLM calls dataset exported at {datetime.now().isoformat()}"
         )
         metadata.update_statistics(records)
 
@@ -158,7 +158,7 @@ class DatasetManager:
             return ""
 
         if filename is None:
-            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"neos_training_{format_type}_{timestamp}.jsonl"
 
         filepath = self.base_path / filename
@@ -203,7 +203,7 @@ class DatasetManager:
             return ""
 
         if filename is None:
-            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"neos_llm_calls_{timestamp}.csv"
 
         filepath = self.base_path / filename
@@ -316,7 +316,7 @@ class DatasetManager:
             logger.warning(f"No records found for session: {session_id}")
             return ""
 
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"session_{session_id}_{timestamp}.{format}"
 
         if format == "jsonl":
@@ -350,7 +350,7 @@ class DatasetManager:
             logger.warning(f"No records found for agent: {agent_name}")
             return ""
 
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"agent_{agent_name}_{timestamp}.{format}"
 
         if format == "jsonl":
@@ -384,7 +384,7 @@ class DatasetManager:
             logger.warning(f"No records found for workflow step: {workflow_step}")
             return ""
 
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"step_{workflow_step}_{timestamp}.{format}"
 
         if format == "jsonl":

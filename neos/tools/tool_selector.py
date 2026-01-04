@@ -332,7 +332,7 @@ class ToolSelector:
             "mcp_manager": "unknown",
             "available_mcp_tools": 0,
             "tool_strategies": len(self.tool_strategies),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         }
 
         try:

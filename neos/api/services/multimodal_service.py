@@ -119,7 +119,7 @@ class MultimodalService:
         # MultiModalWorkflow 초기화 및 실행
         workflow = MultiModalWorkflow()
 
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
 
         result = await workflow.process(
             query=query,
@@ -129,7 +129,7 @@ class MultimodalService:
             language=language
         )
 
-        end_time = datetime.utcnow()
+        end_time = datetime.now()
         processing_time = (end_time - start_time).total_seconds() * 1000
 
         if not result.get("success", False):
@@ -216,7 +216,7 @@ class MultimodalService:
         # MultiModalWorkflow로 처리 (이미지만)
         workflow = MultiModalWorkflow()
 
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
 
         # 쿼리가 없으면 기본 분석 요청
         analysis_query = query or "이 이미지를 자세히 분석해주세요."
@@ -225,11 +225,11 @@ class MultimodalService:
             query=analysis_query,
             files=[file_dict],
             user_id=user_id,
-            session_id=str(datetime.utcnow().timestamp()),
+            session_id=str(datetime.now().timestamp()),
             language=language
         )
 
-        end_time = datetime.utcnow()
+        end_time = datetime.now()
         processing_time = (end_time - start_time).total_seconds() * 1000
 
         if not result.get("success", False):

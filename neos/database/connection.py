@@ -44,10 +44,14 @@ class DatabaseManager:
                     "application_name": "neos_multi_agent",
                     "jit": "off"  # JIT 컴파일 비활성화로 짧은 쿼리 성능 향상
                 },
-                "timeout": 10  # 연결 타임아웃 설정
+                "timeout": 10,  # 연결 타임아웃 설정
+                # asyncpg 이벤트 루프 문제 해결
+                "statement_cache_size": 0,  # prepared statement 캐시 비활성화 (안정성 우선)
             },
             # 이벤트 루프 에러 방지 - graceful degradation
-            pool_reset_on_return="rollback"  # 연결 반환 시 롤백만 수행
+            pool_reset_on_return="rollback",  # 연결 반환 시 롤백만 수행
+            # asyncpg는 각 연결이 자체 이벤트 루프를 가지므로, 재사용 시 주의 필요
+            poolclass=None,  # 기본 QueuePool 사용 (AsyncAdaptedQueuePool)
         )
 
         # 연결 풀 이벤트 리스너 추가
@@ -108,8 +112,14 @@ class DatabaseManager:
         """데이터베이스 연결 종료"""
         if self.engine:
             logger.info("데이터베이스 연결 종료 중...")
-            await self.engine.dispose()
-            logger.info("데이터베이스 연결 종료 완료")
+            try:
+                # asyncpg 연결 풀을 안전하게 종료
+                # close=False로 설정하여 graceful shutdown
+                await self.engine.dispose(close=False)
+                logger.info("데이터베이스 연결 종료 완료")
+            except Exception as e:
+                # 종료 중 에러는 로그만 남기고 계속 진행
+                logger.warning(f"데이터베이스 연결 종료 중 경고: {e}")
 
     async def get_session(self) -> AsyncSession:
         """세션 생성"""

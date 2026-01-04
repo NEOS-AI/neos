@@ -238,7 +238,7 @@ async def create_api_key(
 
     expires_at = None
     if request.expires_days:
-        expires_at = datetime.utcnow() + timedelta(days=request.expires_days)
+        expires_at = datetime.now() + timedelta(days=request.expires_days)
 
     success, message, api_key_data = await auth_service.create_api_key(
         user_id=current_user.user_id,

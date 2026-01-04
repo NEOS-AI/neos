@@ -7,6 +7,7 @@ from neos.utils.embeddings import embedding_manager
 from neos.utils.language_detection import detect_language
 from neos.utils.url_detector import has_urls, extract_urls
 
+from ..enums import IntentType, ComplexityIndicator
 from ..state import AgentState
 
 
@@ -16,24 +17,26 @@ class QueryClassifier:
     def __init__(self, config):
         self.config = config
         self.intent_keywords = {
-            "comparison": ["비교", "compare", "차이", "difference", "vs", "대비"],
-            "data_analysis": ["분석", "analyze", "통계", "statistics", "데이터", "data", "트렌드", "trend"],
-            "generation": ["생성", "만들어", "create", "generate", "작성", "write"],
-            "realtime_info": ["최신", "현재", "실시간", "current", "latest", "now", "today"],
-            "task_execution": ["작업", "계획", "task", "plan", "실행", "execute", "수행"],
-            "financial_analysis": ["주식", "stock", "투자", "investment", "전망", "outlook", "재무", "finance"],
-            "technical_analysis": ["기술", "technology", "개발", "development", "프로그래밍", "programming"],
-            "complex_analysis": ["심층", "종합", "포괄적", "전반적", "심도있는", "detailed", "comprehensive", "in-depth"],
-            "deep_research": ["deep research", "심층 조사", "철저히", "깊이있게", "전문적인 분석", "리포트", "보고서", "detailed report", "연구"]
+            IntentType.SIMPLE.value: ["안녕", "hello", "hi", "hey", "감사", "thank", "고마워", "bye", "잘가", "좋은", "good"],
+            IntentType.COMPARISON.value: ["비교", "compare", "차이", "difference", "vs", "대비"],
+            IntentType.DATA_ANALYSIS.value: ["분석", "analyze", "통계", "statistics", "데이터", "data", "트렌드", "trend"],
+            IntentType.GENERATION.value: ["생성", "만들어", "create", "generate", "작성", "write"],
+            IntentType.REALTIME_INFO.value: ["최신", "현재", "실시간", "current", "latest", "now", "today"],
+            IntentType.TASK_EXECUTION.value: ["작업", "계획", "task", "plan", "실행", "execute", "수행"],
+            IntentType.FINANCIAL_ANALYSIS.value: ["주식", "stock", "투자", "investment", "전망", "outlook", "재무", "finance"],
+            IntentType.TECHNICAL_ANALYSIS.value: ["기술", "technology", "개발", "development", "프로그래밍", "programming"],
+            IntentType.COMPLEX_ANALYSIS.value: ["심층", "종합", "포괄적", "전반적", "심도있는", "detailed", "comprehensive", "in-depth"],
+            IntentType.DEEP_RESEARCH.value: ["deep research", "심층 조사", "철저히", "깊이있게", "전문적인 분석", "리포트", "보고서", "detailed report", "연구"]
         }
 
         # 복잡한 쿼리 판별을 위한 키워드
         self.complexity_indicators = {
-            "multiple_subjects": ["와", "과", "그리고", "and", ","],  # 여러 주제
-            "depth_required": ["심층", "상세", "자세히", "깊이있는", "깊이있게", "detailed", "in-depth", "comprehensive", "철저히", "전문적"],
-            "comparison_multiple": ["비교", "compare", "차이", "vs"],  # 비교 분석
-            "multi_aspect": ["관점", "측면", "aspect", "perspective", "각도"],
+            ComplexityIndicator.MULTI_SUBJ.value: ["와", "과", "그리고", "and", ","],  # 여러 주제
+            ComplexityIndicator.DEPTH_REQ.value: ["심층", "상세", "자세히", "깊이있는", "깊이있게", "detailed", "in-depth", "comprehensive", "철저히", "전문적"],
+            ComplexityIndicator.COMPARISON_MULTI.value: ["비교", "compare", "차이", "vs"],  # 비교 분석
+            ComplexityIndicator.MULTI_ASPECT.value: ["관점", "측면", "aspect", "perspective", "각도"],
         }
+
 
     async def classify_query(self, state: AgentState) -> Dict[str, Any]:
         """쿼리 분류 및 의도 파악 (대화 컨텍스트 활용)"""
@@ -84,7 +87,7 @@ class QueryClassifier:
         state["execution_steps"].append({
             "step": "query_classification",
             "result": "completed",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
 
         return state
@@ -111,22 +114,22 @@ class QueryClassifier:
         complexity_score += length_score
 
         # 2. 여러 주제 포함 여부
-        multiple_subjects_count = sum(1 for keyword in self.complexity_indicators["multiple_subjects"] if keyword in query_lower)
+        multiple_subjects_count = sum(1 for keyword in self.complexity_indicators[ComplexityIndicator.MULTI_SUBJ.value] if keyword in query_lower)
         if multiple_subjects_count >= 2:  # 2개 이상의 연결어
             complexity_score += 0.25
 
         # 3. 심층 분석 요구 키워드
-        depth_keywords_count = sum(1 for keyword in self.complexity_indicators["depth_required"] if keyword in query_lower)
+        depth_keywords_count = sum(1 for keyword in self.complexity_indicators[ComplexityIndicator.DEPTH_REQ.value] if keyword in query_lower)
         if depth_keywords_count > 0:
             complexity_score += 0.2
 
         # 4. 비교 분석 키워드
-        comparison_count = sum(1 for keyword in self.complexity_indicators["comparison_multiple"] if keyword in query_lower)
+        comparison_count = sum(1 for keyword in self.complexity_indicators[ComplexityIndicator.COMPARISON_MULTI.value] if keyword in query_lower)
         if comparison_count > 0 and multiple_subjects_count >= 1:  # 비교 + 여러 주제
             complexity_score += 0.15
 
         # 5. 다각도 분석 요구
-        multi_aspect_count = sum(1 for keyword in self.complexity_indicators["multi_aspect"] if keyword in query_lower)
+        multi_aspect_count = sum(1 for keyword in self.complexity_indicators[ComplexityIndicator.MULTI_ASPECT.value] if keyword in query_lower)
         if multi_aspect_count > 0:
             complexity_score += 0.1
 
@@ -158,7 +161,7 @@ class QueryClassifier:
             # 현재는 단순히 키워드 매칭에 컨텍스트도 포함
             combined_text = f"{query} {conversation_context}"
             combined_lower = combined_text.lower()
-            print(f"[DEBUG] Using combined text for intent classification (query + context)")
+            print("[DEBUG] Using combined text for intent classification (query + context)")
         else:
             combined_lower = query_lower
 
@@ -171,9 +174,9 @@ class QueryClassifier:
 
         # 복잡도가 높으면 complex_analysis 의도 우선 고려
         if complexity_score >= 0.6:
-            if "complex_analysis" in intent_scores or any(intent in intent_scores for intent in ["financial_analysis", "comparison", "data_analysis"]):
+            if IntentType.COMPLEX_ANALYSIS.value in intent_scores or any(intent in intent_scores for intent in [IntentType.FINANCIAL_ANALYSIS.value, IntentType.COMPARISON.value, IntentType.DATA_ANALYSIS.value]):
                 print(f"[DEBUG] High complexity ({complexity_score:.2f}) detected, considering complex_analysis")
-                intent_scores["complex_analysis"] = intent_scores.get("complex_analysis", 0) + 2  # 가중치 부여
+                intent_scores[IntentType.COMPLEX_ANALYSIS.value] = intent_scores.get(IntentType.COMPLEX_ANALYSIS.value, 0) + 2  # 가중치 부여
 
         # 가장 높은 점수의 의도 반환
         if intent_scores:
@@ -188,6 +191,13 @@ class QueryClassifier:
         """필요한 에이전트 결정 (복잡도 고려)"""
         agents = []
 
+        # 0-0. 간단한 대화인 경우 에이전트 불필요 (최우선)
+        if intent == IntentType.SIMPLE.value:
+            # 짧은 쿼리이고 복잡도가 낮으면 도구 없이 직접 응답
+            if len(query) <= 50 and complexity_score < 0.3:
+                print("[DEBUG] Simple conversation detected, no agents required")
+                return []
+
         # 0-1. URL이 포함된 경우 WebLookUpAgent 사용 (최우선)
         if has_urls(query):
             urls = extract_urls(query)
@@ -200,15 +210,15 @@ class QueryClassifier:
         query_lower = query.lower()
 
         # Deep Research 명시적 요청 또는 매우 높은 복잡도
-        if intent == "deep_research" or complexity_score >= 0.75:
+        if intent == IntentType.DEEP_RESEARCH.value or complexity_score >= 0.75:
             print(f"[DEBUG] Deep research activated (intent: {intent}, complexity: {complexity_score:.2f})")
-            agents.append("deep_research")
+            agents.append(IntentType.DEEP_RESEARCH.value)
             return agents
 
         # 복잡한 분석 + 높은 복잡도 조합
-        if intent == "complex_analysis" and complexity_score >= 0.65:
+        if intent == IntentType.COMPLEX_ANALYSIS.value and complexity_score >= 0.65:
             print(f"[DEBUG] Deep research activated for complex analysis (complexity: {complexity_score:.2f})")
-            agents.append("deep_research")
+            agents.append(IntentType.DEEP_RESEARCH.value)
             return agents
 
         # 1. 복잡도가 높으면 (>= 0.5) 복합검색 에이전트 사용
@@ -226,7 +236,7 @@ class QueryClassifier:
             return agents
 
         # 3. complex_analysis 의도면 복합검색 사용
-        if intent == "complex_analysis":
+        if intent == IntentType.COMPLEX_ANALYSIS.value:
             print("[DEBUG] Complex analysis intent detected, using multi_query_search agent")
             agents = ["multi_query_search"]
             return agents
@@ -236,17 +246,17 @@ class QueryClassifier:
         agents.append("knowledge_search")
 
         # 의도에 따른 에이전트 추가
-        if intent == "realtime_info":
+        if intent == IntentType.REALTIME_INFO.value:
             agents.extend(["realtime_info_search", "realtime_data_search"])
-        elif intent == "data_analysis":
-            agents.extend(["data_analysis", "realtime_data_search"])
-        elif intent == "comparison":
+        elif intent == IntentType.DATA_ANALYSIS.value:
+            agents.extend([IntentType.DATA_ANALYSIS.value, "realtime_data_search"])
+        elif intent == IntentType.COMPARISON.value:
             agents.extend(["comparative_analysis", "realtime_info_search"])
-        elif intent == "financial_analysis":
-            agents.extend(["realtime_data_search", "data_analysis", "comparative_analysis"])
-        elif intent == "technical_analysis":
-            agents.extend(["realtime_info_search", "data_analysis"])
-        elif intent == "generation":
+        elif intent == IntentType.FINANCIAL_ANALYSIS.value:
+            agents.extend(["realtime_data_search", IntentType.DATA_ANALYSIS.value, "comparative_analysis"])
+        elif intent == IntentType.TECHNICAL_ANALYSIS.value:
+            agents.extend(["realtime_info_search", IntentType.DATA_ANALYSIS.value])
+        elif intent == IntentType.GENERATION.value:
             agents.extend(self._determine_generation_agents(query))
         else:
             # 기본적인 정보 탐색
@@ -278,7 +288,7 @@ class QueryClassifier:
             "required_agents": required_agents,
             "confidence": confidence,
             "complexity_score": complexity_score,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "query_length": len(query),
             "agent_count": len(required_agents)
         }
@@ -289,7 +299,7 @@ class QueryClassifier:
             "intent": "information_seeking",
             "required_agents": ["knowledge_search", "realtime_info_search"],
             "confidence": 0.5,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "fallback": True
         }
 

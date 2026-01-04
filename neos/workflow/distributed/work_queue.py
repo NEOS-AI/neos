@@ -333,7 +333,7 @@ class DistributedWorkQueue:
 
         # 작업 시작
         task.status = TaskStatus.IN_PROGRESS
-        task.started_at = datetime.utcnow()
+        task.started_at = datetime.now()
         self.running_tasks[task.task_id] = task
 
         # 작업 시작 이벤트
@@ -376,7 +376,7 @@ class DistributedWorkQueue:
         if task_id and task_id in self.running_tasks:
             task = self.running_tasks[task_id]
             task.status = TaskStatus.COMPLETED
-            task.completed_at = datetime.utcnow()
+            task.completed_at = datetime.now()
             task.result = event.data.get("result")
 
             # 실행 중 목록에서 제거

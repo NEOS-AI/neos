@@ -181,7 +181,7 @@ class AnalysisService:
         try:
             # Update status
             run.status = AnalysisStatus.RUNNING
-            run.started_at = datetime.utcnow()
+            run.started_at = datetime.now()
             run.current_stage = "fetching_conversations"
             await self.db.flush()
 
@@ -196,7 +196,7 @@ class AnalysisService:
 
             if not conversations:
                 run.status = AnalysisStatus.COMPLETED
-                run.completed_at = datetime.utcnow()
+                run.completed_at = datetime.now()
                 run.current_stage = "completed"
                 await self.db.flush()
                 return run
@@ -311,7 +311,7 @@ class AnalysisService:
 
             run.total_clusters = cluster_result.num_clusters
             run.status = AnalysisStatus.COMPLETED
-            run.completed_at = datetime.utcnow()
+            run.completed_at = datetime.now()
             run.current_stage = "completed"
             run.progress_percentage = 100.0
             await self.db.flush()

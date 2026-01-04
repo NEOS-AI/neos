@@ -68,7 +68,7 @@ class TestPostgreSQLCheckpointer:
         # Mock database response
         mock_row = MagicMock()
         mock_row.checkpoint_id = "checkpoint_1"
-        mock_row.created_at = datetime.utcnow()
+        mock_row.created_at = datetime.now()
         mock_row.checkpoint_data = {
             "v": 1,
             "channel_values": {"state": "test_state"},
@@ -131,7 +131,7 @@ class TestPostgreSQLCheckpointer:
         mock_rows = [
             MagicMock(
                 checkpoint_id=f"checkpoint_{i}",
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(),
                 checkpoint_data={
                     "v": 1,
                     "channel_values": {"state": f"state_{i}"},
