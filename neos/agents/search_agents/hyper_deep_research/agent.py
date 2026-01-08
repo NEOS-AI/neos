@@ -25,6 +25,8 @@ from neos.skills.manager import skill_manager
 from ...base import SearchAgent
 from ...planning_agent import PlanningAgent
 from ..multi_query_search import MultiQuerySearchAgent
+from ..multi_hop_search import MultiHopSearchAgent
+from ..iterative_web_explorer import IterativeWebExplorerAgent
 from ..criticism_feedback_agent import CriticismFeedbackAgent
 from ...skill_based_tool_selector import SkillBasedToolSelector
 
@@ -43,10 +45,13 @@ from .utils import (
     FactChecker,
     BiasDetector,
     ResearchEventLogger,
+    QuestionTypeClassifier,
+    QuestionType,
 )
 
 # Import modular components
 from .data_collection import DataCollector, ComplexSearchExecutor
+from .hybrid_data_collector import HybridDataCollector
 from .analysis import (
     TopicAnalyzer,
     ResearchPlanner,
@@ -185,6 +190,30 @@ class HyperDeepResearchAgent(SearchAgent):
             repository=self.repository,
         )
 
+        # Initialize sub-agents for hybrid collection
+        try:
+            self.multi_hop_agent = MultiHopSearchAgent()
+            logger.info("MultiHopSearchAgent initialized successfully")
+        except Exception as e:
+            logger.warning(f"Failed to initialize MultiHopSearchAgent: {e}")
+            self.multi_hop_agent = None
+
+        try:
+            self.iterative_explorer_agent = IterativeWebExplorerAgent()
+            logger.info("IterativeWebExplorerAgent initialized successfully")
+        except Exception as e:
+            logger.warning(f"Failed to initialize IterativeWebExplorerAgent: {e}")
+            self.iterative_explorer_agent = None
+
+        # Hybrid data collector with intelligent strategy selection
+        self.hybrid_data_collector = HybridDataCollector(
+            tavily_client=self.tavily_client,
+            config=self.config,
+            multi_hop_agent=self.multi_hop_agent,
+            iterative_explorer_agent=self.iterative_explorer_agent,
+            data_collector=self.data_collector,
+        )
+
         # Analysis components
         self.topic_analyzer = TopicAnalyzer(agent_name=self.name)
         self.research_planner = ResearchPlanner(agent_name=self.name)
@@ -192,7 +221,7 @@ class HyperDeepResearchAgent(SearchAgent):
         self.gap_analyzer = GapAnalyzer(agent_name=self.name)
         self.validation_analyzer = ValidationAnalyzer(agent_name=self.name)
         self.data_summarizer = DataSummarizer(agent_name=self.name)
-        
+
         # Skills integration
         self.skills_integrator = SkillsIntegrator(skill_manager=skill_manager)
 
@@ -561,13 +590,76 @@ class HyperDeepResearchAgent(SearchAgent):
             "success"
         )
 
-        # Execute complex searches
+        # ★ NEW: Classify queries and use hybrid collection for relational queries
+        hybrid_results = []
+        relational_queries = []
+        standard_queries = []
+
+        if self.config.get("enable_hybrid_collection", True):
+            await self.event_logger.log_status_message(
+                "Classifying queries for optimal search strategy...",
+                "info"
+            )
+
+            # Classify all queries
+            classifier = QuestionTypeClassifier()
+            for query in query_variations[:10]:  # Limit to first 10 for hybrid (cost control)
+                classification = classifier.classify(query)
+
+                if classification.question_type == QuestionType.RELATIONAL:
+                    relational_queries.append(query)
+                else:
+                    standard_queries.append(query)
+
+            # Add remaining queries to standard
+            if len(query_variations) > 10:
+                standard_queries.extend(query_variations[10:])
+
+            # Execute hybrid collection for relational queries
+            if relational_queries:
+                await self.event_logger.log_status_message(
+                    f"Executing hybrid search for {len(relational_queries)} relational queries...",
+                    "info"
+                )
+
+                collection_results = await self.hybrid_data_collector.collect_batch(
+                    relational_queries,
+                    context={
+                        "user_id": user_id,
+                        "session_id": session_id,
+                        "language": language,
+                    },
+                    max_concurrent=2,  # Conservative parallelism
+                )
+
+                # Extract sources from hybrid results
+                for result in collection_results:
+                    if result.sources:
+                        hybrid_results.extend(result.sources)
+
+                        # Store hop-level citations if available
+                        if result.hop_citations:
+                            self.research_metadata.setdefault("hop_citations", []).extend(
+                                result.hop_citations
+                            )
+
+                print(f"[INFO] ✅ Hybrid collection: {len(hybrid_results)} sources from "
+                      f"{len(relational_queries)} relational queries")
+
+                # Track strategy usage
+                self.research_metadata["hybrid_collection_stats"] = (
+                    self.hybrid_data_collector.get_statistics()
+                )
+        else:
+            standard_queries = query_variations
+
+        # Execute complex searches (on standard queries)
         await self.event_logger.log_status_message(
             "Executing complex multi-query searches...",
             "info"
         )
         complex_results = await self.complex_search_executor.execute_complex_searches(
-            query_variations, topic_analysis, session_id, user_id, language,
+            standard_queries, topic_analysis, session_id, user_id, language,
             event_logger=self.event_logger,
             report_id=self.current_report_id,
         )
@@ -575,13 +667,13 @@ class HyperDeepResearchAgent(SearchAgent):
             self.complex_search_executor.stats["complex_searches"]
         )
 
-        # Execute parallel batch searches
+        # Execute parallel batch searches (on standard queries)
         await self.event_logger.log_status_message(
             f"Executing parallel search batches ({self.config['parallel_search_batches']} batches)...",
             "info"
         )
         all_results = await self.data_collector.execute_parallel_searches(
-            query_variations,
+            standard_queries,
             event_logger=self.event_logger,
             repository=self.repository,
             report_id=self.current_report_id,
@@ -589,6 +681,10 @@ class HyperDeepResearchAgent(SearchAgent):
         self.research_metadata["total_queries_executed"] = (
             self.data_collector.stats["total_queries"]
         )
+
+        # Add hybrid results
+        if hybrid_results:
+            all_results.extend(hybrid_results)
 
         # Add complex search results
         if complex_results:
@@ -906,12 +1002,39 @@ class HyperDeepResearchAgent(SearchAgent):
             gap_queries = await self.query_generator.generate_gap_queries(
                 gap, session_id, user_id, language
             )
-            results = await self.data_collector._search_batch_parallel(gap_queries)
-            gap_results.extend(results)
 
-            for query, result in zip(gap_queries, results):
+            # ★ NEW: Use hybrid collection for gap queries if enabled
+            if self.config.get("enable_hybrid_collection", True) and len(gap_queries) > 0:
+                # Classify first query to determine strategy
+                classifier = QuestionTypeClassifier()
+                classification = classifier.classify(gap_queries[0])
+
+                if classification.question_type == QuestionType.RELATIONAL:
+                    # Use hybrid collection for relational gap queries
+                    collection_result = await self.hybrid_data_collector.collect(
+                        gap_queries[0],
+                        context={
+                            "user_id": user_id,
+                            "session_id": session_id,
+                            "language": language,
+                        },
+                    )
+                    if collection_result.sources:
+                        gap_results.extend(collection_result.sources)
+                        print(f"[INFO] ✅ Gap filled with {len(collection_result.sources)} sources "
+                              f"using {collection_result.strategy_used} strategy")
+                else:
+                    # Use standard search for non-relational gaps
+                    results = await self.data_collector._search_batch_parallel(gap_queries)
+                    gap_results.extend(results)
+            else:
+                # Fallback to standard search
+                results = await self.data_collector._search_batch_parallel(gap_queries)
+                gap_results.extend(results)
+
+            for query in gap_queries:
                 await self.repository.record_data_collection(
-                    self.current_report_id, query, "gap_filling", 5, result
+                    self.current_report_id, query, "gap_filling", 5, {}
                 )
                 self.research_metadata["total_queries_executed"] += 1
 

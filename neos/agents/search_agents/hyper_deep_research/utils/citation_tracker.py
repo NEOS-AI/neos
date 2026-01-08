@@ -830,3 +830,163 @@ class CitationTracker:
             'suggestions': suggestions,
             'summary': summary
         }
+
+    # ========================================================================
+    # ★ NEW: Hop-Level Citation Tracking (MultiHopSearch Integration)
+    # ========================================================================
+
+    def register_hop_citations(
+        self,
+        hop_citations: List[Dict[str, Any]],
+        query: str
+    ) -> Dict[str, Any]:
+        """
+        MultiHopSearch의 hop-level citations 등록
+
+        Args:
+            hop_citations: Hop citation 리스트
+                [
+                    {
+                        "hop_number": 1,
+                        "question": "Who founded OpenAI?",
+                        "answer": "Sam Altman, Elon Musk, ...",
+                        "source_count": 3,
+                        "source_urls": [...]
+                    },
+                    ...
+                ]
+            query: 원본 질문
+
+        Returns:
+            등록 결과 및 통계
+
+        ★ Learning Point ─────────────────
+        Hop-Level Citation Tracking:
+
+        MultiHopSearch의 장점:
+        1. Chain-of-thought 추론 과정 기록
+        2. 각 hop마다 사용된 소스 추적
+        3. 중간 추론 단계의 검증 가능
+
+        Use Case:
+        - "Who founded the company that created ChatGPT?"
+          Hop 1: ChatGPT → OpenAI
+          Hop 2: OpenAI → Sam Altman, ...
+
+        각 hop의 소스를 별도로 citation 가능
+        ─────────────────────────────────
+        """
+        hop_citation_map = {}
+        total_hop_sources = 0
+
+        for hop_data in hop_citations:
+            hop_number = hop_data.get("hop_number", 0)
+            source_urls = hop_data.get("source_urls", [])
+
+            # Register sources from this hop
+            hop_source_numbers = []
+            for url in source_urls:
+                # Check if source already registered
+                if url in self._url_to_source:
+                    source = self._url_to_source[url]
+                    hop_source_numbers.append(source.citation_number)
+                else:
+                    # Source not registered yet (shouldn't happen normally)
+                    logger.warning(f"Hop source not found in registry: {url}")
+
+            hop_citation_map[hop_number] = {
+                "question": hop_data.get("question", ""),
+                "answer": hop_data.get("answer", ""),
+                "source_numbers": hop_source_numbers,
+                "source_count": len(hop_source_numbers),
+            }
+            total_hop_sources += len(hop_source_numbers)
+
+        return {
+            "query": query,
+            "total_hops": len(hop_citations),
+            "total_hop_sources": total_hop_sources,
+            "hop_citation_map": hop_citation_map,
+        }
+
+    def format_hop_citations_for_report(
+        self,
+        hop_citation_map: Dict[int, Dict[str, Any]],
+        query: str
+    ) -> str:
+        """
+        Hop citations를 보고서 형식으로 포맷
+
+        Args:
+            hop_citation_map: register_hop_citations의 결과
+            query: 원본 질문
+
+        Returns:
+            포맷된 hop citation 문자열 (마크다운)
+
+        Example Output:
+            ### Chain-of-Thought Reasoning: "Who founded the company that created ChatGPT?"
+
+            **Hop 1**: "What company created ChatGPT?"
+            - Answer: OpenAI [1, 2, 3]
+            - Sources: 3
+
+            **Hop 2**: "Who founded OpenAI?"
+            - Answer: Sam Altman, Elon Musk, Greg Brockman [4, 5]
+            - Sources: 2
+        """
+        if not hop_citation_map:
+            return ""
+
+        lines = [
+            f"### Chain-of-Thought Reasoning: \"{query}\"",
+            ""
+        ]
+
+        for hop_number in sorted(hop_citation_map.keys()):
+            hop_data = hop_citation_map[hop_number]
+
+            # Format source numbers as citation
+            source_numbers = hop_data.get("source_numbers", [])
+            citation_str = f"[{', '.join(map(str, source_numbers))}]" if source_numbers else ""
+
+            lines.append(f"**Hop {hop_number}**: \"{hop_data.get('question', 'N/A')}\"")
+            lines.append(f"- Answer: {hop_data.get('answer', 'N/A')} {citation_str}")
+            lines.append(f"- Sources: {hop_data.get('source_count', 0)}")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def get_hop_level_statistics(
+        self,
+        hop_citations_list: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        여러 hop citations의 통계 생성
+
+        Args:
+            hop_citations_list: register_hop_citations 결과 리스트
+
+        Returns:
+            통계 정보
+        """
+        if not hop_citations_list:
+            return {
+                "total_queries": 0,
+                "total_hops": 0,
+                "total_hop_sources": 0,
+                "avg_hops_per_query": 0.0,
+                "avg_sources_per_hop": 0.0,
+            }
+
+        total_queries = len(hop_citations_list)
+        total_hops = sum(hc.get("total_hops", 0) for hc in hop_citations_list)
+        total_hop_sources = sum(hc.get("total_hop_sources", 0) for hc in hop_citations_list)
+
+        return {
+            "total_queries": total_queries,
+            "total_hops": total_hops,
+            "total_hop_sources": total_hop_sources,
+            "avg_hops_per_query": total_hops / total_queries if total_queries > 0 else 0.0,
+            "avg_sources_per_hop": total_hop_sources / total_hops if total_hops > 0 else 0.0,
+        }

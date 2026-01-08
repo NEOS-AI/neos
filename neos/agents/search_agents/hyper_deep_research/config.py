@@ -18,7 +18,11 @@ class ResearchConfig:
     # Multi-query settings
     multi_query_expansion: int = 20  # Query variations per query
     parallel_search_batches: int = 5  # Number of parallel search batches
-    
+
+    # ★ NEW: Hybrid collection settings
+    enable_hybrid_collection: bool = True  # Use intelligent strategy selection
+    max_hybrid_queries: int = 10  # Max queries for hybrid collection (cost control)
+
     # Research intensity
     max_queries_per_phase: int = 30  # Maximum queries per phase
     results_per_query: int = 10  # Results per query
@@ -41,6 +45,8 @@ class ResearchConfig:
         return {
             "multi_query_expansion": self.multi_query_expansion,
             "parallel_search_batches": self.parallel_search_batches,
+            "enable_hybrid_collection": self.enable_hybrid_collection,
+            "max_hybrid_queries": self.max_hybrid_queries,
             "max_queries_per_phase": self.max_queries_per_phase,
             "results_per_query": self.results_per_query,
             "min_total_sources": self.min_total_sources,
