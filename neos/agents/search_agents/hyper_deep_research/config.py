@@ -39,6 +39,15 @@ class ResearchConfig:
     min_sources_per_section: int = 5  # Minimum sources per section
     timeout_per_phase: int = 900  # Phase timeout (15 minutes)
     quality_threshold: float = 0.9  # Quality threshold
+
+    # ★ NEW: Iterative refinement settings (Ralph Loop-inspired)
+    enable_iterative_refinement: bool = True  # Enable iterative report improvement
+    max_iterations_per_section: int = 3  # Max refinement iterations per section
+    section_quality_threshold: float = 0.8  # Quality threshold for section refinement
+    enable_abstract_refinement: bool = True  # Refine abstract after section improvements
+    enable_consistency_alignment: bool = True  # Align sections with abstract
+    auto_citation_recommendation: bool = True  # Auto-recommend citations during refinement
+    max_concurrent_refinements: int = 4  # Max concurrent section refinements (parallel processing)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
@@ -58,6 +67,14 @@ class ResearchConfig:
             "min_sources_per_section": self.min_sources_per_section,
             "timeout_per_phase": self.timeout_per_phase,
             "quality_threshold": self.quality_threshold,
+            # Iterative refinement
+            "enable_iterative_refinement": self.enable_iterative_refinement,
+            "max_iterations_per_section": self.max_iterations_per_section,
+            "section_quality_threshold": self.section_quality_threshold,
+            "enable_abstract_refinement": self.enable_abstract_refinement,
+            "enable_consistency_alignment": self.enable_consistency_alignment,
+            "auto_citation_recommendation": self.auto_citation_recommendation,
+            "max_concurrent_refinements": self.max_concurrent_refinements,
         }
     
     @classmethod
@@ -89,6 +106,13 @@ class ResearchMetadata:
     selected_skills: list = field(default_factory=list)
     selected_tools: list = field(default_factory=list)
     selection_reasoning: str = ""
+
+    # ★ NEW: Iterative refinement tracking
+    total_section_iterations: int = 0  # Total iterations across all sections
+    sections_refined: int = 0  # Number of sections that underwent refinement
+    abstract_refinement_performed: bool = False  # Was abstract refined?
+    sections_realigned: int = 0  # Number of sections realigned with abstract
+    average_section_quality: float = 0.0  # Average final quality score
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert metadata to dictionary."""
@@ -108,6 +132,12 @@ class ResearchMetadata:
             "selected_skills": self.selected_skills,
             "selected_tools": self.selected_tools,
             "selection_reasoning": self.selection_reasoning,
+            # Iterative refinement
+            "total_section_iterations": self.total_section_iterations,
+            "sections_refined": self.sections_refined,
+            "abstract_refinement_performed": self.abstract_refinement_performed,
+            "sections_realigned": self.sections_realigned,
+            "average_section_quality": self.average_section_quality,
         }
     
     def reset(self) -> None:
@@ -127,6 +157,12 @@ class ResearchMetadata:
         self.selected_skills = []
         self.selected_tools = []
         self.selection_reasoning = ""
+        # Iterative refinement
+        self.total_section_iterations = 0
+        self.sections_refined = 0
+        self.abstract_refinement_performed = False
+        self.sections_realigned = 0
+        self.average_section_quality = 0.0
 
 
 # Default configuration instance
