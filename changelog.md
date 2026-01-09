@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.20.0 (2026-01-08)
+* Implement Multi-Hop Search for complex relational queries
+  * **Chain-of-Thought Reasoning**: Break down complex questions into sequential sub-questions with dependency tracking
+  * **4-Phase Pipeline**: Query decomposition → Reasoning chain execution → Answer extraction → Result integration
+  * **QueryDecomposer**: LLM-based complexity assessment and question breakdown with DAG validation
+  * **ReasoningChainExecutor**: Execute sub-questions in dependency order with answer injection using `{qN.answer}` syntax
+  * **AnswerExtractor**: Multi-source answer extraction with confidence scoring (0.0-1.0)
+  * **ResultIntegrator**: Synthesize hop results into natural final answers with reasoning traces
+  * **Advanced Features**: Parallel execution for independent hops, intermediate result caching (1-hour TTL), retry logic with exponential backoff
+  * **MultiHopSearchStrategy**: Auto-detect applicability based on relational keywords (Korean/English support)
+  * **Seamless Integration**: First-priority search strategy with graceful fallback to standard search
+  * **Configurable Parameters**: max_hops (5), min_confidence (0.7), parallel execution, alternative paths
+  * **Example Use Cases**: "Where is the alma mater of the person who developed the iPhone?" → 3-hop reasoning chain
+* Add distributed tracing (jaeger) support for backend services
+* Integrate OpenTelemetry SDK for automatic tracing
+* Add `should_skip_orchestrators` flag to bypass workflow orchestrators
+* Add Query Refinement Strategy
+* Add Citation Tracking and Recommendation
+  * CitationTracker for extracting and classifying citations from web content
+  * CitationRecommender for suggesting high-quality citations based on content analysis
+  * Integration with HyperDeepResearchAgent for enhanced research quality
+  * Support claim type classification (statistical, factual, opinion, general)
+  * Add multi-factor scoring, quality factors, and type matching matrix
+* Enhance HyperDeepResearchAgent with citation support
+  * Extract citations during research steps
+  * Recommend citations for key claims in the final report
+  * Include citation details (title, URL, snippet, type, quality score)
+  * Update database schema for citation storage
+  * Improve research report credibility and traceability
+
 ## v0.19.0 (2025-12-31)
 * Migrate the Anthropic Claude Skills for flexible scaling of agent workflow
 * Add Granian for better latency

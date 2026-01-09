@@ -15,6 +15,7 @@ from .event_logger import ResearchEventLogger, DetailedEventType, EventCategory
 from .citation_tracker import CitationTracker, Source, CitationContext
 from .academic_identifier_extractor import AcademicIdentifierExtractor, AcademicIdentifiers
 from .citation_recommender import CitationRecommender, CitationQualityScorer, CitationRecommendation
+from .question_type_classifier import QuestionTypeClassifier, QuestionType, QuestionClassification
 
 __all__ = [
     "LanguageDetector",
@@ -41,4 +42,7 @@ __all__ = [
     "CitationRecommender",
     "CitationQualityScorer",
     "CitationRecommendation",
+    "QuestionTypeClassifier",
+    "QuestionType",
+    "QuestionClassification",
 ]
