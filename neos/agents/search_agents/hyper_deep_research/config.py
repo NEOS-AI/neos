@@ -5,7 +5,7 @@ HyperDeepResearch agent.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 @dataclass
@@ -57,6 +57,21 @@ class ResearchConfig:
     adaptive_thresholds_enabled: bool = False  # Enable section-specific quality thresholds
     adaptive_threshold_config: Optional['AdaptiveThresholdConfig'] = None  # Adaptive threshold configuration
 
+    # ★ NEW: Learning from Feedback (C - Learning System)
+    enable_learning_feedback: bool = True  # Enable learning from improvement effectiveness
+    learning_storage_path: Optional[str] = None  # Path to store learning data (default: .neos/learning_data/)
+    min_samples_for_learning: int = 5  # Minimum samples before using learned priorities
+
+    # ★ NEW: Smart Content Chunking (D - Content Chunking)
+    enable_smart_chunking: bool = True  # Enable smart content chunking for long sections
+    chunk_size: int = 4000  # Maximum characters per chunk
+    chunk_overlap: int = 200  # Overlap between chunks for context continuity
+    min_chunk_size: int = 500  # Minimum chunk size to avoid tiny fragments
+
+    # ★ NEW: Conditional Refinement (E - Skip Good Sections)
+    enable_conditional_refinement: bool = True  # Skip refinement for already-good sections
+    skip_threshold_multiplier: float = 0.95  # Skip if quality >= threshold × multiplier (95%)
+
     def __post_init__(self):
         """Initialize adaptive threshold config if enabled."""
         if self.adaptive_thresholds_enabled and self.adaptive_threshold_config is None:
@@ -93,6 +108,18 @@ class ResearchConfig:
             "export_metrics_json": self.export_metrics_json,
             # Adaptive thresholds
             "adaptive_thresholds_enabled": self.adaptive_thresholds_enabled,
+            # Learning from Feedback
+            "enable_learning_feedback": self.enable_learning_feedback,
+            "learning_storage_path": self.learning_storage_path,
+            "min_samples_for_learning": self.min_samples_for_learning,
+            # Smart Content Chunking
+            "enable_smart_chunking": self.enable_smart_chunking,
+            "chunk_size": self.chunk_size,
+            "chunk_overlap": self.chunk_overlap,
+            "min_chunk_size": self.min_chunk_size,
+            # Conditional Refinement
+            "enable_conditional_refinement": self.enable_conditional_refinement,
+            "skip_threshold_multiplier": self.skip_threshold_multiplier,
         }
     
     @classmethod

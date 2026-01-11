@@ -37,6 +37,12 @@ from neos.utils.llm_wrapper import create_tracked_llm, extract_text_from_respons
 
 from .utils import CitationTracker, CitationRecommender
 from .metrics_collector import QualityMetricsCollector
+from .learning_feedback import ImprovementTracker
+from .content_chunker import (
+    SmartContentChunker,
+    should_chunk_content,
+    aggregate_chunk_qualities,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -264,6 +270,9 @@ class SectionIterator:
         quality_threshold: float = 0.8,
         metrics_collector: Optional[QualityMetricsCollector] = None,
         adaptive_threshold_config: Optional['AdaptiveThresholdConfig'] = None,  # ★ NEW (B)
+        improvement_tracker: Optional[ImprovementTracker] = None,  # ★ NEW (C): Learning from Feedback
+        conditional_refinement_enabled: bool = True,  # ★ NEW (E): Conditional Refinement
+        skip_threshold_multiplier: float = 0.95,  # ★ NEW (E): Skip if quality >= threshold * multiplier
     ):
         """Initialize section iterator.
 
@@ -274,6 +283,9 @@ class SectionIterator:
             quality_threshold: Default quality score to aim for (0-1)
             metrics_collector: Optional metrics collector for tracking
             adaptive_threshold_config: Optional adaptive threshold configuration
+            improvement_tracker: Optional learning system for improvement prioritization
+            conditional_refinement_enabled: Skip refinement for already-good sections
+            skip_threshold_multiplier: Quality multiplier for skip decision (0.95 = 95% of threshold)
         """
         self.agent_name = agent_name
         self.citation_tracker = citation_tracker or CitationTracker()
@@ -282,6 +294,10 @@ class SectionIterator:
         self.default_quality_threshold = quality_threshold  # ★ RENAMED
         self.metrics_collector = metrics_collector
         self.adaptive_config = adaptive_threshold_config  # ★ NEW (B)
+        self.improvement_tracker = improvement_tracker  # ★ NEW (C): Learning from Feedback
+        self.content_chunker = SmartContentChunker()  # ★ NEW (D): Smart Content Chunking
+        self.conditional_refinement_enabled = conditional_refinement_enabled  # ★ NEW (E)
+        self.skip_threshold_multiplier = skip_threshold_multiplier  # ★ NEW (E)
 
     async def refine_section_iteratively(
         self,
@@ -322,6 +338,40 @@ class SectionIterator:
             logger.info(f"Using adaptive threshold for '{section_title}': {quality_threshold}")
         else:
             quality_threshold = self.default_quality_threshold
+
+        # ★ NEW (E): Conditional Refinement - Quick quality check
+        # Skip refinement if content is already high quality
+        conditional_skip_enabled = getattr(self, 'conditional_refinement_enabled', True)
+        if conditional_skip_enabled:
+            quick_quality = await self._quick_quality_check(
+                initial_content, section_title, session_id, user_id, language
+            )
+
+            # Skip threshold is slightly lower than target (95% of threshold)
+            skip_threshold_multiplier = getattr(self, 'skip_threshold_multiplier', 0.95)
+            skip_threshold = quality_threshold * skip_threshold_multiplier
+
+            if quick_quality >= skip_threshold:
+                logger.info(
+                    f"  🎯 Section already meets quality threshold "
+                    f"(quick check: {quick_quality:.2f} >= {skip_threshold:.2f}), "
+                    f"skipping refinement"
+                )
+
+                # Evaluate full quality for accurate reporting
+                full_quality = await self.evaluate_section_quality(
+                    initial_content, section_title, session_id, user_id, language
+                )
+
+                return {
+                    "final_content": initial_content,
+                    "iterations_performed": 0,  # No refinement needed
+                    "quality_history": [],
+                    "final_quality": full_quality,
+                    "section_title": section_title,
+                    "skipped": True,  # Flag to indicate this was skipped
+                    "skip_reason": f"Initial quality ({quick_quality:.2f}) already meets threshold"
+                }
 
         current_content = initial_content
         quality_history: List[IterationHistory] = []
@@ -378,7 +428,16 @@ class SectionIterator:
 
             # Step 3: Identify improvements needed
             improvements = quality.get_improvement_suggestions()
-            logger.info(f"    Improvements needed: {improvements}")
+
+            # ★ NEW (C): Prioritize improvements using learning system
+            if self.improvement_tracker:
+                improvements = self.improvement_tracker.prioritize_improvements(
+                    improvements=improvements,
+                    fallback_order=improvements  # Use original order as fallback
+                )
+                logger.info(f"    Improvements needed (prioritized): {improvements}")
+            else:
+                logger.info(f"    Improvements needed: {improvements}")
 
             # Step 4: Get citation recommendations (automatic enhancement)
             citation_suggestions = {}
@@ -431,8 +490,13 @@ class SectionIterator:
                     improvements_made=improvements,
                 )
 
-            # Update current content
+            # Update current content for next iteration
+            previous_quality = quality.overall_score()
             current_content = improved_content
+
+            # ★ NEW (C): Record improvement effectiveness in learning system
+            # We'll evaluate the next iteration's quality to measure improvement effectiveness
+            # This is deferred to the next iteration to avoid extra LLM call
 
         # Final quality evaluation
         final_quality = await self.evaluate_section_quality(
@@ -445,6 +509,34 @@ class SectionIterator:
             f"  Initial quality: {quality_history[0].quality.overall_score():.2f}\n"
             f"  Final quality: {final_quality.overall_score():.2f}"
         )
+
+        # ★ NEW (C): Record improvement effectiveness in learning system
+        if self.improvement_tracker and len(quality_history) >= 2:
+            # Analyze quality progression to learn improvement effectiveness
+            for i in range(len(quality_history) - 1):
+                current_iter = quality_history[i]
+                next_iter = quality_history[i + 1]
+
+                quality_before = current_iter.quality.overall_score()
+                quality_after = next_iter.quality.overall_score()
+
+                # Record each improvement that was applied
+                for improvement_type in current_iter.improvements_made:
+                    # Skip meta-messages
+                    if "Quality threshold met" in improvement_type:
+                        continue
+
+                    self.improvement_tracker.record_improvement(
+                        improvement_type=improvement_type,
+                        section_id=section_id,
+                        iteration_number=current_iter.iteration_number,
+                        quality_before=quality_before,
+                        quality_after=quality_after,
+                    )
+
+            logger.debug(
+                f"Recorded {len(quality_history) - 1} improvement applications to learning system"
+            )
 
         return {
             "final_content": current_content,
@@ -465,6 +557,8 @@ class SectionIterator:
         """Evaluate section quality across multiple dimensions.
 
         This uses both automated metrics and LLM-based evaluation.
+        For long content (>4000 chars), automatically chunks at paragraph
+        boundaries and aggregates evaluation results.
 
         Args:
             content: Section content to evaluate
@@ -476,6 +570,17 @@ class SectionIterator:
         Returns:
             SectionQuality object with all metrics
         """
+        # ★ NEW (D): Check if content needs chunking
+        if should_chunk_content(content, threshold=4000):
+            logger.info(
+                f"Content length ({len(content)} chars) exceeds threshold, "
+                f"using smart chunking for evaluation"
+            )
+            return await self._evaluate_chunked_content(
+                content, section_title, session_id, user_id, language
+            )
+
+        # Standard evaluation for short content
         # Automated metrics: Citation analysis
         citation_validation = self.citation_tracker.validate_citations(content)
         citation_contexts = self.citation_tracker.parse_citations_from_text(
@@ -517,6 +622,120 @@ class SectionIterator:
             total_citations=citation_validation.get("total_citations", 0),
             section_length=len(content),
         )
+
+    async def _evaluate_chunked_content(
+        self,
+        content: str,
+        section_title: str,
+        session_id: str,
+        user_id: str,
+        language: str,
+    ) -> SectionQuality:
+        """Evaluate long content by chunking at paragraph boundaries.
+
+        Args:
+            content: Long section content
+            section_title: Section title
+            session_id: Session ID
+            user_id: User ID
+            language: Language code
+
+        Returns:
+            Aggregated SectionQuality
+        """
+        # Chunk the content
+        chunks = self.content_chunker.chunk_content(content)
+        logger.info(f"Evaluating {len(chunks)} chunks separately")
+
+        # Evaluate each chunk
+        chunk_qualities = []
+        for chunk in chunks:
+            # Evaluate this chunk using standard evaluation
+            # (We recursively call evaluate_section_quality, but the chunk
+            # is now short enough to not trigger chunking again)
+            chunk_quality = await self.evaluate_section_quality(
+                content=chunk.content,
+                section_title=f"{section_title} (chunk {chunk.chunk_index + 1}/{len(chunks)})",
+                session_id=session_id,
+                user_id=user_id,
+                language=language,
+            )
+            chunk_qualities.append((chunk, chunk_quality))
+
+        # Aggregate chunk qualities
+        aggregated_quality = aggregate_chunk_qualities(chunk_qualities)
+
+        logger.info(
+            f"Chunked evaluation complete: {len(chunks)} chunks → "
+            f"aggregated quality={aggregated_quality.overall_score():.2f}"
+        )
+
+        return aggregated_quality
+
+    async def _quick_quality_check(
+        self,
+        content: str,
+        section_title: str,
+        session_id: str,
+        user_id: str,
+        language: str,
+    ) -> float:
+        """Quick quality check to determine if refinement can be skipped.
+
+        This is a lightweight evaluation that only checks critical metrics:
+        - Citation coverage (automated)
+        - Basic coherence (heuristic-based)
+
+        Args:
+            content: Section content
+            section_title: Section title
+            session_id: Session ID
+            user_id: User ID
+            language: Language code
+
+        Returns:
+            Estimated quality score (0-1)
+        """
+        # Automated citation check (fast)
+        citation_contexts = self.citation_tracker.parse_citations_from_text(
+            content, section_title
+        )
+        total_claims = max(len(citation_contexts), 1)
+        cited_claims = len([c for c in citation_contexts if c.source_numbers])
+        citation_coverage = cited_claims / total_claims if total_claims > 0 else 0.0
+
+        # Heuristic coherence check (no LLM call needed)
+        # Check for basic markers of coherence:
+        # - Multiple paragraphs (structure)
+        # - Reasonable length
+        # - No extremely short paragraphs (incomplete thoughts)
+        paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
+
+        coherence_heuristic = 0.7  # Default neutral score
+
+        if len(paragraphs) >= 2:
+            coherence_heuristic += 0.1  # Multiple paragraphs = good structure
+
+        if len(content) >= 500:
+            coherence_heuristic += 0.1  # Sufficient length
+
+        # Check for very short paragraphs (< 50 chars)
+        short_paragraphs = [p for p in paragraphs if len(p) < 50]
+        if len(short_paragraphs) / max(len(paragraphs), 1) > 0.5:
+            coherence_heuristic -= 0.2  # Too many short paragraphs = fragmented
+
+        coherence_heuristic = max(0.0, min(1.0, coherence_heuristic))  # Clamp to [0, 1]
+
+        # Simplified quality score (citation 50%, coherence 50%)
+        # This is more conservative than full evaluation to avoid false positives
+        quick_score = (citation_coverage * 0.5 + coherence_heuristic * 0.5)
+
+        logger.debug(
+            f"Quick quality check: {quick_score:.2f} "
+            f"(citations: {citation_coverage:.2f}, coherence: {coherence_heuristic:.2f})"
+        )
+
+        return quick_score
 
     async def _evaluate_with_llm(
         self,
@@ -1324,7 +1543,23 @@ class IterativeReportRefiner:
                 adaptive_config = AdaptiveThresholdConfig(enabled=True)
             logger.info("Adaptive thresholds enabled")
 
+        # ★ NEW (C): Initialize learning system (improvement tracker)
+        from .learning_feedback import create_improvement_tracker
+        self.learning_enabled = self.config.get("enable_learning_feedback", True)
+        self.improvement_tracker: Optional[ImprovementTracker] = None
+        if self.learning_enabled:
+            storage_path = self.config.get("learning_storage_path")
+            self.improvement_tracker = create_improvement_tracker(
+                enable_learning=True,
+                storage_path=storage_path,
+            )
+            logger.info(f"Learning from Feedback enabled (storage={storage_path or 'default'})")
+
         # Initialize components
+        # ★ NEW (E): Conditional refinement settings
+        conditional_enabled = self.config.get("enable_conditional_refinement", True)
+        skip_multiplier = self.config.get("skip_threshold_multiplier", 0.95)
+
         self.section_iterator = SectionIterator(
             agent_name=agent_name,
             citation_tracker=self.citation_tracker,
@@ -1332,6 +1567,9 @@ class IterativeReportRefiner:
             quality_threshold=self.quality_threshold,
             metrics_collector=self.metrics_collector,
             adaptive_threshold_config=adaptive_config,  # ★ NEW (B)
+            improvement_tracker=self.improvement_tracker,  # ★ NEW (C): Learning from Feedback
+            conditional_refinement_enabled=conditional_enabled,  # ★ NEW (E)
+            skip_threshold_multiplier=skip_multiplier,  # ★ NEW (E)
         )
 
         self.abstract_generator = AbstractGenerator(agent_name=agent_name)
