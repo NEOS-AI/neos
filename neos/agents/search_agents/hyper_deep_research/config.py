@@ -48,7 +48,20 @@ class ResearchConfig:
     enable_consistency_alignment: bool = True  # Align sections with abstract
     auto_citation_recommendation: bool = True  # Auto-recommend citations during refinement
     max_concurrent_refinements: int = 4  # Max concurrent section refinements (parallel processing)
-    
+
+    # ★ NEW: Quality metrics collection (A - Quality Metrics Dashboard)
+    collect_metrics: bool = True  # Enable quality metrics collection and dashboard
+    export_metrics_json: bool = False  # Export metrics to JSON file after refinement
+
+    # ★ NEW: Adaptive thresholds (B - Adaptive Thresholds)
+    adaptive_thresholds_enabled: bool = False  # Enable section-specific quality thresholds
+    adaptive_threshold_config: Optional['AdaptiveThresholdConfig'] = None  # Adaptive threshold configuration
+
+    def __post_init__(self):
+        """Initialize adaptive threshold config if enabled."""
+        if self.adaptive_thresholds_enabled and self.adaptive_threshold_config is None:
+            self.adaptive_threshold_config = AdaptiveThresholdConfig(enabled=True)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
         return {
@@ -75,6 +88,11 @@ class ResearchConfig:
             "enable_consistency_alignment": self.enable_consistency_alignment,
             "auto_citation_recommendation": self.auto_citation_recommendation,
             "max_concurrent_refinements": self.max_concurrent_refinements,
+            # Quality metrics
+            "collect_metrics": self.collect_metrics,
+            "export_metrics_json": self.export_metrics_json,
+            # Adaptive thresholds
+            "adaptive_thresholds_enabled": self.adaptive_thresholds_enabled,
         }
     
     @classmethod
@@ -163,6 +181,88 @@ class ResearchMetadata:
         self.abstract_refinement_performed = False
         self.sections_realigned = 0
         self.average_section_quality = 0.0
+
+
+# ============================================================================
+# Adaptive Threshold Configuration (B - Adaptive Thresholds)
+# ============================================================================
+
+@dataclass
+class AdaptiveThresholdConfig:
+    """Adaptive threshold configuration for section-specific quality standards.
+
+    Different sections have different importance levels and should have
+    different quality thresholds:
+    - Abstract/Introduction/Conclusion: Higher (0.85-0.90) - Most critical
+    - Results/Discussion: Medium (0.80) - Important but factual
+    - Methodology/References: Lower (0.70-0.75) - Technical details
+
+    This optimizes both quality and cost/performance.
+    """
+
+    enabled: bool = False  # Feature flag
+
+    # Section type → threshold mapping
+    thresholds: Dict[str, float] = field(default_factory=lambda: {
+        "introduction": 0.85,      # Higher: Very important first impression
+        "abstract": 0.90,          # Highest: Most critical summary
+        "executive_summary": 0.90, # Highest: Executive-level overview
+        "methodology": 0.75,       # Lower: Technical implementation details
+        "results": 0.80,           # Medium: Important but largely factual
+        "discussion": 0.80,        # Medium: Analysis and interpretation
+        "conclusion": 0.85,        # Higher: Critical final summary
+        "references": 0.70,        # Lower: Mostly formatting and completeness
+        "appendix": 0.70,          # Lower: Supporting material
+        "default": 0.75,           # Fallback for unclassified sections
+    })
+
+    def get_threshold(self, section_title: str) -> float:
+        """Get quality threshold for a section based on its title.
+
+        Args:
+            section_title: Section title to classify
+
+        Returns:
+            Quality threshold (0.0-1.0)
+        """
+        section_type = self._classify_section(section_title)
+        threshold = self.thresholds.get(section_type, 0.75)
+        return threshold
+
+    def _classify_section(self, title: str) -> str:
+        """Classify section by analyzing title keywords.
+
+        Supports both Korean and English keywords for international usage.
+
+        Args:
+            title: Section title
+
+        Returns:
+            Section type string (e.g., "introduction", "methodology")
+        """
+        title_lower = title.lower()
+
+        # Keyword matching (Korean + English)
+        if any(kw in title_lower for kw in ["introduction", "intro", "서론", "도입"]):
+            return "introduction"
+        elif any(kw in title_lower for kw in ["abstract", "요약", "개요", "초록"]):
+            return "abstract"
+        elif any(kw in title_lower for kw in ["executive", "경영진", "임원", "요약"]):
+            return "executive_summary"
+        elif any(kw in title_lower for kw in ["method", "methodology", "방법", "연구방법", "방법론"]):
+            return "methodology"
+        elif any(kw in title_lower for kw in ["result", "finding", "결과", "발견", "연구결과"]):
+            return "results"
+        elif any(kw in title_lower for kw in ["discussion", "analysis", "토론", "분석", "논의", "고찰"]):
+            return "discussion"
+        elif any(kw in title_lower for kw in ["conclusion", "결론", "맺음", "결어"]):
+            return "conclusion"
+        elif any(kw in title_lower for kw in ["reference", "참고", "출처", "참고문헌"]):
+            return "references"
+        elif any(kw in title_lower for kw in ["appendix", "부록", "첨부"]):
+            return "appendix"
+        else:
+            return "default"
 
 
 # Default configuration instance

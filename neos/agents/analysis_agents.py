@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, TYPE_CHECKING
 import pandas as pd
 import re
 import numpy as np
@@ -6,7 +6,10 @@ from dataclasses import asdict
 import httpx
 import trafilatura
 
-from neos.workflow.state import AnalysisResult
+# ★ Lazy loading to avoid circular imports
+if TYPE_CHECKING:
+    from neos.workflow.state import AnalysisResult
+
 from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import create_tracked_llm, extract_text_from_response
 from langchain_core.messages import HumanMessage
@@ -84,8 +87,11 @@ class DataAnalysisAgent(AnalysisAgent):
 
         return extracted_data
     
-    async def _perform_data_analysis(self, data: Dict[str, Any], query: str, session_id: str = "", user_id: str = "") -> AnalysisResult:
+    async def _perform_data_analysis(self, data: Dict[str, Any], query: str, session_id: str = "", user_id: str = ""):
         """데이터 분석 수행 (LLM 기반 심층 분석 포함)"""
+        # Lazy import to avoid circular dependency
+        from neos.workflow.state import AnalysisResult
+
         insights = []
         confidence = 0.0
 
@@ -284,11 +290,14 @@ class ComparativeAnalysisAgent(AnalysisAgent):
         except Exception as e:
             return {"success": False, "error": str(e), "agent": self.name}
     
-    async def _perform_comparative_analysis(self, search_results: List, query: str) -> AnalysisResult:
+    async def _perform_comparative_analysis(self, search_results: List, query: str):
         """비교 분석 수행"""
+        # Lazy import to avoid circular dependency
+        from neos.workflow.state import AnalysisResult
+
         insights = []
         confidence = 0.0
-        
+
         if len(search_results) < 2:
             return AnalysisResult(
                 analysis_type="comparative_analysis",
@@ -488,6 +497,9 @@ class WebLookupAgent(AnalysisAgent):
 
     async def execute(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """URL에서 웹 페이지 콘텐츠를 추출합니다."""
+        # Lazy import to avoid circular dependency
+        from neos.workflow.state import AnalysisResult
+
         if not self.validate_input(query, context):
             return {"success": False, "error": "Invalid input"}
 

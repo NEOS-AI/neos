@@ -4,24 +4,9 @@ import hashlib
 import logging
 from langgraph.graph import StateGraph, START, END
 
-from neos.agents.search_agents import (
-    KnowledgeSearchAgent,
-    RealtimeInfoSearchAgent,
-    RealtimeDataSearchAgent,
-    MultiQuerySearchAgent,
-    WebLookUpAgent
-)
-from neos.agents.analysis_agents import (
-    DataAnalysisAgent,
-    ComparativeAnalysisAgent,
-    WebLookupAgent as WebContentAnalysisAgent
-)
-from neos.agents.generation_agents import (
-    ImageGenerationAgent,
-    ApiCallAgent,
-    FileProcessingAgent,
-    TaskCreationAgent
-)
+# ★ Lazy loading agents to avoid circular imports
+# Agents are imported inside _initialize_agents() method
+
 from neos.agents.skill_based_tool_selector import SkillBasedToolSelector
 from neos.utils.cache import cache_manager
 from neos.utils.smart_cache_manager import smart_cache_manager
@@ -83,6 +68,26 @@ class MultiAgentWorkflow:
 
     def _initialize_agents(self) -> Dict[str, Any]:
         """에이전트 초기화"""
+        # Lazy import agents to avoid circular imports
+        from neos.agents.search_agents import (
+            KnowledgeSearchAgent,
+            RealtimeInfoSearchAgent,
+            RealtimeDataSearchAgent,
+            MultiQuerySearchAgent,
+            WebLookUpAgent
+        )
+        from neos.agents.analysis_agents import (
+            DataAnalysisAgent,
+            ComparativeAnalysisAgent,
+            WebLookupAgent as WebContentAnalysisAgent
+        )
+        from neos.agents.generation_agents import (
+            ImageGenerationAgent,
+            ApiCallAgent,
+            FileProcessingAgent,
+            TaskCreationAgent
+        )
+
         logger.debug("Initializing agents...")
 
         agents = {

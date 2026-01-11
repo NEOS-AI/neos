@@ -36,6 +36,7 @@ from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import create_tracked_llm, extract_text_from_response
 
 from .utils import CitationTracker, CitationRecommender
+from .metrics_collector import QualityMetricsCollector
 
 
 logger = logging.getLogger(__name__)
@@ -261,6 +262,8 @@ class SectionIterator:
         citation_tracker: Optional[CitationTracker] = None,
         max_iterations: int = 3,
         quality_threshold: float = 0.8,
+        metrics_collector: Optional[QualityMetricsCollector] = None,
+        adaptive_threshold_config: Optional['AdaptiveThresholdConfig'] = None,  # ★ NEW (B)
     ):
         """Initialize section iterator.
 
@@ -268,13 +271,17 @@ class SectionIterator:
             agent_name: Agent name for LLM tracking
             citation_tracker: Citation tracking system
             max_iterations: Maximum improvement iterations per section
-            quality_threshold: Quality score to aim for (0-1)
+            quality_threshold: Default quality score to aim for (0-1)
+            metrics_collector: Optional metrics collector for tracking
+            adaptive_threshold_config: Optional adaptive threshold configuration
         """
         self.agent_name = agent_name
         self.citation_tracker = citation_tracker or CitationTracker()
         self.citation_recommender = CitationRecommender()
         self.max_iterations = max_iterations
-        self.quality_threshold = quality_threshold
+        self.default_quality_threshold = quality_threshold  # ★ RENAMED
+        self.metrics_collector = metrics_collector
+        self.adaptive_config = adaptive_threshold_config  # ★ NEW (B)
 
     async def refine_section_iteratively(
         self,
@@ -306,11 +313,24 @@ class SectionIterator:
         """
         logger.info(f"Starting iterative refinement for section: {section_title}")
 
+        # ★ NEW: Generate section ID for metrics tracking
+        section_id = section_title.lower().replace(" ", "_")[:50]
+
+        # ★ NEW (B): Get adaptive threshold for this section
+        if self.adaptive_config and self.adaptive_config.enabled:
+            quality_threshold = self.adaptive_config.get_threshold(section_title)
+            logger.info(f"Using adaptive threshold for '{section_title}': {quality_threshold}")
+        else:
+            quality_threshold = self.default_quality_threshold
+
         current_content = initial_content
         quality_history: List[IterationHistory] = []
 
         for iteration in range(1, self.max_iterations + 1):
             logger.info(f"  Iteration {iteration}/{self.max_iterations}")
+
+            # ★ NEW: Start timing this iteration
+            iteration_start_time = datetime.now()
 
             # Step 1: Evaluate quality
             quality = await self.evaluate_section_quality(
@@ -336,6 +356,24 @@ class SectionIterator:
                         improvements_made=["Quality threshold met - no changes needed"],
                     )
                 )
+
+                # ★ NEW: Record metrics for this iteration
+                if self.metrics_collector:
+                    duration_ms = int((datetime.now() - iteration_start_time).total_seconds() * 1000)
+                    self.metrics_collector.record_iteration(
+                        section_id=section_id,
+                        section_title=section_title,
+                        iteration_number=iteration,
+                        quality_score=quality.overall_score(),
+                        citation_coverage=quality.citation_coverage,
+                        coherence=quality.coherence_score,
+                        completeness=quality.completeness,
+                        clarity=quality.clarity_score,
+                        duration_ms=duration_ms,
+                        llm_calls=1,
+                        improvements_made=["Quality threshold met - no changes needed"],
+                    )
+
                 break
 
             # Step 3: Identify improvements needed
@@ -375,6 +413,23 @@ class SectionIterator:
                     improvements_made=improvements,
                 )
             )
+
+            # ★ NEW: Record metrics for this iteration
+            if self.metrics_collector:
+                duration_ms = int((datetime.now() - iteration_start_time).total_seconds() * 1000)
+                self.metrics_collector.record_iteration(
+                    section_id=section_id,
+                    section_title=section_title,
+                    iteration_number=iteration,
+                    quality_score=quality.overall_score(),
+                    citation_coverage=quality.citation_coverage,
+                    coherence=quality.coherence_score,
+                    completeness=quality.completeness,
+                    clarity=quality.clarity_score,
+                    duration_ms=duration_ms,
+                    llm_calls=2,  # evaluate + rewrite
+                    improvements_made=improvements,
+                )
 
             # Update current content
             current_content = improved_content
@@ -1248,12 +1303,35 @@ class IterativeReportRefiner:
         self.max_iterations = self.config.get("max_iterations_per_section", 3)
         self.quality_threshold = self.config.get("section_quality_threshold", 0.8)
 
+        # ★ NEW: Initialize metrics collector first (needed by components)
+        self.metrics_enabled = self.config.get("collect_metrics", True)
+        self.metrics_collector: Optional[QualityMetricsCollector] = None
+        if self.metrics_enabled:
+            report_id = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            self.metrics_collector = QualityMetricsCollector(
+                report_id=report_id,
+                enabled=True,
+            )
+            logger.info(f"Metrics collection enabled (report_id={report_id})")
+
+        # ★ NEW (B): Load adaptive threshold config
+        from .config import AdaptiveThresholdConfig
+        adaptive_config = None
+        if self.config.get("adaptive_thresholds_enabled"):
+            adaptive_config = self.config.get("adaptive_threshold_config")
+            if adaptive_config is None:
+                # Create default config if not provided
+                adaptive_config = AdaptiveThresholdConfig(enabled=True)
+            logger.info("Adaptive thresholds enabled")
+
         # Initialize components
         self.section_iterator = SectionIterator(
             agent_name=agent_name,
             citation_tracker=self.citation_tracker,
             max_iterations=self.max_iterations,
             quality_threshold=self.quality_threshold,
+            metrics_collector=self.metrics_collector,
+            adaptive_threshold_config=adaptive_config,  # ★ NEW (B)
         )
 
         self.abstract_generator = AbstractGenerator(agent_name=agent_name)
@@ -1306,6 +1384,10 @@ class IterativeReportRefiner:
         logger.info("=" * 80)
 
         start_time = datetime.now()
+
+        # ★ NEW: Start metrics collection
+        if self.metrics_collector:
+            self.metrics_collector.start_collection()
 
         # ==================================================
         # Phase 1: Refine Each Section Iteratively (Parallel)
@@ -1447,8 +1529,25 @@ class IterativeReportRefiner:
             "timestamp": end_time.isoformat(),
         }
 
+        # ★ NEW: Generate and display metrics report
+        metrics_report = None
+        if self.metrics_collector:
+            self.metrics_collector.end_collection()
+            metrics_report = self.metrics_collector.generate_report()
+
+            # Display dashboard to console
+            logger.info("\n")
+            self.metrics_collector.display_dashboard()
+
+            # Optional: Export to JSON
+            if self.config.get("export_metrics_json"):
+                export_path = f"metrics_{metrics_report.report_id}.json"
+                self.metrics_collector.export_to_json(export_path)
+                logger.info(f"Metrics exported to: {export_path}")
+
         return {
             "final_abstract": final_abstract,
             "final_sections": aligned_sections,
             "refinement_metadata": refinement_metadata,
+            "metrics": metrics_report.to_dict() if metrics_report else None,  # ★ NEW
         }
