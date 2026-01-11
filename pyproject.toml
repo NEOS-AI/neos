@@ -69,6 +69,7 @@ dependencies = [
     "opentelemetry-instrumentation-sqlalchemy>=0.58b0",
     "opentelemetry-instrumentation-redis>=0.58b0",
     "opentelemetry-instrumentation-httpx>=0.58b0",
+    "graphviz>=0.21",
 ]
 
 [tool.setuptools.packages.find]
