@@ -72,6 +72,9 @@ class ResearchConfig:
     enable_conditional_refinement: bool = True  # Skip refinement for already-good sections
     skip_threshold_multiplier: float = 0.95  # Skip if quality >= threshold × multiplier (95%)
 
+    # ★ NEW: Custom Quality Metric Weights (F - Custom Weights)
+    quality_metric_weights: Optional[Dict[str, float]] = None  # Custom weights for quality metrics
+
     def __post_init__(self):
         """Initialize adaptive threshold config if enabled."""
         if self.adaptive_thresholds_enabled and self.adaptive_threshold_config is None:
@@ -120,12 +123,62 @@ class ResearchConfig:
             # Conditional Refinement
             "enable_conditional_refinement": self.enable_conditional_refinement,
             "skip_threshold_multiplier": self.skip_threshold_multiplier,
+            # Custom Quality Weights
+            "quality_metric_weights": self.quality_metric_weights,
         }
     
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "ResearchConfig":
         """Create configuration from dictionary."""
         return cls(**{k: v for k, v in config_dict.items() if hasattr(cls, k)})
+
+    def get_normalized_quality_weights(self) -> Dict[str, float]:
+        """Get normalized quality metric weights.
+
+        If custom weights are provided, validates and normalizes them to sum to 1.0.
+        If not provided, returns default weights.
+
+        Returns:
+            Dictionary with normalized weights (sum = 1.0)
+
+        Raises:
+            ValueError: If weights are invalid (negative or zero sum)
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        if self.quality_metric_weights is None:
+            # Default weights (from original implementation)
+            return {
+                "citation_coverage": 0.30,
+                "citation_quality": 0.25,
+                "coherence": 0.20,
+                "completeness": 0.15,
+                "clarity": 0.10,
+            }
+
+        # Validate all weights are non-negative
+        for metric, weight in self.quality_metric_weights.items():
+            if weight < 0:
+                raise ValueError(
+                    f"Quality metric weight for '{metric}' must be non-negative, got {weight}"
+                )
+
+        # Calculate sum for normalization
+        total = sum(self.quality_metric_weights.values())
+        if total == 0:
+            raise ValueError("Sum of quality metric weights cannot be zero")
+
+        # Normalize weights to sum to 1.0
+        normalized = {k: v / total for k, v in self.quality_metric_weights.items()}
+
+        # Log if normalization was needed (sum not already 1.0)
+        if abs(total - 1.0) > 0.001:
+            logger.info(
+                f"Quality metric weights normalized from sum={total:.3f} to 1.0: {normalized}"
+            )
+
+        return normalized
 
 
 @dataclass

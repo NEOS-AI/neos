@@ -5,6 +5,7 @@ from .research_planning_prompts import ResearchPlanningPrompts
 from .query_generation_prompts import QueryGenerationPrompts
 from .analysis_prompts import AnalysisPrompts
 from .validation_prompts import ValidationPrompts
+from .evaluation_prompts import EvaluationPrompts
 
 __all__ = [
     "TopicAnalysisPrompts",
@@ -12,4 +13,5 @@ __all__ = [
     "QueryGenerationPrompts",
     "AnalysisPrompts",
     "ValidationPrompts",
+    "EvaluationPrompts",
 ]

@@ -172,6 +172,120 @@ class TestSectionQuality:
         suggestions = quality.get_improvement_suggestions()
         assert len(suggestions) >= 3  # Multiple improvements needed
 
+    # ============================================================================
+    # Custom Quality Weights Tests (NEW - P3 Enhancement)
+    # ============================================================================
+
+    def test_overall_score_with_custom_weights(self):
+        """Test overall score calculation with custom weights."""
+        # Equal weights for all metrics
+        custom_weights = {
+            "citation_coverage": 0.2,
+            "citation_quality": 0.2,
+            "coherence": 0.2,
+            "completeness": 0.2,
+            "clarity": 0.2,
+        }
+
+        quality = SectionQuality(
+            citation_coverage=0.8,
+            citation_quality=0.7,
+            coherence_score=0.9,
+            completeness=0.6,
+            clarity_score=0.85,
+            custom_weights=custom_weights,
+        )
+
+        # With equal weights: (0.8 + 0.7 + 0.9 + 0.6 + 0.85) * 0.2 = 0.77
+        expected = (0.8 + 0.7 + 0.9 + 0.6 + 0.85) * 0.2
+        assert abs(quality.overall_score() - expected) < 0.001
+
+    def test_overall_score_emphasize_citations(self):
+        """Test custom weights emphasizing citations (academic papers)."""
+        # Academic paper weights: emphasize citations
+        custom_weights = {
+            "citation_coverage": 0.4,
+            "citation_quality": 0.3,
+            "coherence": 0.15,
+            "completeness": 0.10,
+            "clarity": 0.05,
+        }
+
+        quality = SectionQuality(
+            citation_coverage=0.9,
+            citation_quality=0.85,
+            coherence_score=0.7,
+            completeness=0.7,
+            clarity_score=0.7,
+            custom_weights=custom_weights,
+        )
+
+        # Weighted: 0.9*0.4 + 0.85*0.3 + 0.7*0.15 + 0.7*0.1 + 0.7*0.05
+        expected = 0.9 * 0.4 + 0.85 * 0.3 + 0.7 * 0.15 + 0.7 * 0.1 + 0.7 * 0.05
+        assert abs(quality.overall_score() - expected) < 0.001
+
+    def test_overall_score_emphasize_clarity(self):
+        """Test custom weights emphasizing clarity (blog posts)."""
+        # Blog post weights: emphasize clarity and coherence
+        custom_weights = {
+            "citation_coverage": 0.15,
+            "citation_quality": 0.15,
+            "coherence": 0.25,
+            "completeness": 0.20,
+            "clarity": 0.25,
+        }
+
+        quality = SectionQuality(
+            citation_coverage=0.6,
+            citation_quality=0.6,
+            coherence_score=0.9,
+            completeness=0.8,
+            clarity_score=0.95,
+            custom_weights=custom_weights,
+        )
+
+        # Weighted: 0.6*0.15 + 0.6*0.15 + 0.9*0.25 + 0.8*0.2 + 0.95*0.25
+        expected = 0.6 * 0.15 + 0.6 * 0.15 + 0.9 * 0.25 + 0.8 * 0.2 + 0.95 * 0.25
+        assert abs(quality.overall_score() - expected) < 0.001
+
+    def test_overall_score_default_weights_when_none(self):
+        """Test that default weights are used when custom_weights is None."""
+        quality = SectionQuality(
+            citation_coverage=0.8,
+            citation_quality=0.7,
+            coherence_score=0.9,
+            completeness=0.8,
+            clarity_score=0.85,
+            custom_weights=None,  # Explicitly None
+        )
+
+        # Should use default weights: 0.8*0.3 + 0.7*0.25 + 0.9*0.2 + 0.8*0.15 + 0.85*0.1
+        expected = 0.8 * 0.3 + 0.7 * 0.25 + 0.9 * 0.2 + 0.8 * 0.15 + 0.85 * 0.1
+        assert abs(quality.overall_score() - expected) < 0.001
+
+    def test_custom_weights_with_missing_keys(self):
+        """Test custom weights with missing keys (should use defaults)."""
+        # Partial custom weights (missing some keys)
+        custom_weights = {
+            "citation_coverage": 0.5,
+            "citation_quality": 0.3,
+            # Missing: coherence, completeness, clarity
+        }
+
+        quality = SectionQuality(
+            citation_coverage=0.8,
+            citation_quality=0.7,
+            coherence_score=0.9,
+            completeness=0.8,
+            clarity_score=0.85,
+            custom_weights=custom_weights,
+        )
+
+        # Should use custom for provided, defaults for missing
+        # 0.8*0.5 + 0.7*0.3 + 0.9*0.2 + 0.8*0.15 + 0.85*0.1
+        expected = 0.8 * 0.5 + 0.7 * 0.3 + 0.9 * 0.2 + 0.8 * 0.15 + 0.85 * 0.1
+        assert abs(quality.overall_score() - expected) < 0.001
+
 
 # ============================================================================
 # SectionIterator Tests
@@ -641,6 +755,126 @@ class TestIterativeReportRefinerBasic:
         assert refiner.max_iterations == 5
         assert refiner.quality_threshold == 0.9
         assert refiner.config.get("max_concurrent_refinements") == 8
+
+
+# ============================================================================
+# ResearchConfig Tests (NEW - P3 Enhancement)
+# ============================================================================
+
+class TestResearchConfigWeights:
+    """Test ResearchConfig quality weights normalization and validation."""
+
+    def test_get_normalized_weights_with_none(self):
+        """Test that default weights are returned when quality_metric_weights is None."""
+        from neos.agents.search_agents.hyper_deep_research.config import ResearchConfig
+
+        config = ResearchConfig(quality_metric_weights=None)
+        weights = config.get_normalized_quality_weights()
+
+        # Should return default weights
+        assert weights["citation_coverage"] == 0.30
+        assert weights["citation_quality"] == 0.25
+        assert weights["coherence"] == 0.20
+        assert weights["completeness"] == 0.15
+        assert weights["clarity"] == 0.10
+
+        # Should sum to 1.0
+        assert abs(sum(weights.values()) - 1.0) < 0.001
+
+    def test_get_normalized_weights_already_normalized(self):
+        """Test weights that already sum to 1.0."""
+        from neos.agents.search_agents.hyper_deep_research.config import ResearchConfig
+
+        custom_weights = {
+            "citation_coverage": 0.3,
+            "citation_quality": 0.3,
+            "coherence": 0.2,
+            "completeness": 0.1,
+            "clarity": 0.1,
+        }
+
+        config = ResearchConfig(quality_metric_weights=custom_weights)
+        weights = config.get_normalized_quality_weights()
+
+        # Should return unchanged (already sum to 1.0)
+        assert weights["citation_coverage"] == 0.3
+        assert weights["citation_quality"] == 0.3
+        assert abs(sum(weights.values()) - 1.0) < 0.001
+
+    def test_get_normalized_weights_needs_normalization(self):
+        """Test weights that need normalization (sum != 1.0)."""
+        from neos.agents.search_agents.hyper_deep_research.config import ResearchConfig
+
+        # Weights sum to 10 (not 1.0)
+        custom_weights = {
+            "citation_coverage": 4,
+            "citation_quality": 3,
+            "coherence": 2,
+            "completeness": 1,
+            "clarity": 0,
+        }
+
+        config = ResearchConfig(quality_metric_weights=custom_weights)
+        weights = config.get_normalized_quality_weights()
+
+        # Should be normalized to sum to 1.0
+        assert abs(weights["citation_coverage"] - 0.4) < 0.001  # 4/10
+        assert abs(weights["citation_quality"] - 0.3) < 0.001   # 3/10
+        assert abs(weights["coherence"] - 0.2) < 0.001          # 2/10
+        assert abs(weights["completeness"] - 0.1) < 0.001       # 1/10
+        assert abs(weights["clarity"] - 0.0) < 0.001            # 0/10
+        assert abs(sum(weights.values()) - 1.0) < 0.001
+
+    def test_get_normalized_weights_invalid_negative(self):
+        """Test that negative weights raise ValueError."""
+        from neos.agents.search_agents.hyper_deep_research.config import ResearchConfig
+
+        custom_weights = {
+            "citation_coverage": -0.1,  # Negative!
+            "citation_quality": 0.3,
+            "coherence": 0.2,
+            "completeness": 0.1,
+            "clarity": 0.1,
+        }
+
+        config = ResearchConfig(quality_metric_weights=custom_weights)
+
+        with pytest.raises(ValueError, match="non-negative"):
+            config.get_normalized_quality_weights()
+
+    def test_get_normalized_weights_invalid_zero_sum(self):
+        """Test that weights summing to zero raise ValueError."""
+        from neos.agents.search_agents.hyper_deep_research.config import ResearchConfig
+
+        custom_weights = {
+            "citation_coverage": 0.0,
+            "citation_quality": 0.0,
+            "coherence": 0.0,
+            "completeness": 0.0,
+            "clarity": 0.0,
+        }
+
+        config = ResearchConfig(quality_metric_weights=custom_weights)
+
+        with pytest.raises(ValueError, match="cannot be zero"):
+            config.get_normalized_quality_weights()
+
+    def test_get_normalized_weights_partial_keys(self):
+        """Test normalization with partial keys (only some metrics)."""
+        from neos.agents.search_agents.hyper_deep_research.config import ResearchConfig
+
+        # Only provide 2 metrics
+        custom_weights = {
+            "citation_coverage": 3,
+            "citation_quality": 2,
+        }
+
+        config = ResearchConfig(quality_metric_weights=custom_weights)
+        weights = config.get_normalized_quality_weights()
+
+        # Should normalize provided keys
+        assert abs(weights["citation_coverage"] - 0.6) < 0.001  # 3/5
+        assert abs(weights["citation_quality"] - 0.4) < 0.001   # 2/5
 
 
 if __name__ == "__main__":

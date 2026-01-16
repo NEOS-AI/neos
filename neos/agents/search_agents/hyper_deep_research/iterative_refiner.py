@@ -38,6 +38,7 @@ from neos.utils.llm_wrapper import create_tracked_llm, extract_text_from_respons
 from .utils import CitationTracker, CitationRecommender
 from .metrics_collector import QualityMetricsCollector
 from .learning_feedback import ImprovementTracker
+from .prompts import EvaluationPrompts
 from .content_chunker import (
     SmartContentChunker,
     should_chunk_content,
@@ -144,10 +145,13 @@ class SectionQuality:
     total_citations: int = 0
     section_length: int = 0
 
+    # ★ NEW: Custom weights for overall_score calculation (F - Custom Weights)
+    custom_weights: Optional[Dict[str, float]] = field(default=None, repr=False)
+
     def overall_score(self) -> float:
         """Calculate weighted overall quality score.
 
-        Weights:
+        Default Weights (if custom_weights not provided):
         - Citation coverage: 30% (critical for academic quality)
         - Citation quality: 25% (source reliability)
         - Coherence: 20% (logical flow)
@@ -157,12 +161,24 @@ class SectionQuality:
         Returns:
             Overall quality score (0-1)
         """
+        # ★ NEW: Use custom weights if provided, otherwise use defaults
+        if self.custom_weights:
+            weights = self.custom_weights
+        else:
+            weights = {
+                "citation_coverage": 0.30,
+                "citation_quality": 0.25,
+                "coherence": 0.20,
+                "completeness": 0.15,
+                "clarity": 0.10,
+            }
+
         return (
-            self.citation_coverage * 0.30 +
-            self.citation_quality * 0.25 +
-            self.coherence_score * 0.20 +
-            self.completeness * 0.15 +
-            self.clarity_score * 0.10
+            self.citation_coverage * weights.get("citation_coverage", 0.30) +
+            self.citation_quality * weights.get("citation_quality", 0.25) +
+            self.coherence_score * weights.get("coherence", 0.20) +
+            self.completeness * weights.get("completeness", 0.15) +
+            self.clarity_score * weights.get("clarity", 0.10)
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -273,6 +289,7 @@ class SectionIterator:
         improvement_tracker: Optional[ImprovementTracker] = None,  # ★ NEW (C): Learning from Feedback
         conditional_refinement_enabled: bool = True,  # ★ NEW (E): Conditional Refinement
         skip_threshold_multiplier: float = 0.95,  # ★ NEW (E): Skip if quality >= threshold * multiplier
+        quality_weights: Optional[Dict[str, float]] = None,  # ★ NEW (F): Custom quality weights
     ):
         """Initialize section iterator.
 
@@ -286,6 +303,7 @@ class SectionIterator:
             improvement_tracker: Optional learning system for improvement prioritization
             conditional_refinement_enabled: Skip refinement for already-good sections
             skip_threshold_multiplier: Quality multiplier for skip decision (0.95 = 95% of threshold)
+            quality_weights: Optional custom weights for quality metrics (will be normalized)
         """
         self.agent_name = agent_name
         self.citation_tracker = citation_tracker or CitationTracker()
@@ -298,6 +316,7 @@ class SectionIterator:
         self.content_chunker = SmartContentChunker()  # ★ NEW (D): Smart Content Chunking
         self.conditional_refinement_enabled = conditional_refinement_enabled  # ★ NEW (E)
         self.skip_threshold_multiplier = skip_threshold_multiplier  # ★ NEW (E)
+        self.quality_weights = quality_weights  # ★ NEW (F): Store custom quality weights
 
     async def refine_section_iteratively(
         self,
@@ -621,6 +640,7 @@ class SectionIterator:
             cited_claims=cited_claims,
             total_citations=citation_validation.get("total_citations", 0),
             section_length=len(content),
+            custom_weights=self.quality_weights,  # ★ NEW (F): Pass custom weights
         )
 
     async def _evaluate_chunked_content(
@@ -767,53 +787,12 @@ class SectionIterator:
                 tags=["section_quality_evaluation"],
             )
 
-            prompt = f"""Evaluate this section's quality on three dimensions. Rate each from 0.0 to 1.0.
-
-Section Title: {section_title}
-
-Content:
-{content[:4000]}
-
-─── Evaluation Criteria ───
-
-**Coherence (0.0-1.0)**: Logical flow and connection between ideas
-- 0.9-1.0: Seamless transitions, clear argumentation, all ideas connect naturally
-- 0.7-0.8: Good flow with minor gaps, most transitions are smooth
-- 0.5-0.6: Some disconnected ideas, transitions need improvement
-- 0.0-0.4: Fragmented, lacks logical structure
-
-**Completeness (0.0-1.0)**: How well it addresses the section's purpose
-- 0.9-1.0: Thoroughly addresses all aspects with sufficient depth
-- 0.7-0.8: Covers main points adequately, minor gaps acceptable
-- 0.5-0.6: Missing important aspects or lacks depth
-- 0.0-0.4: Severely incomplete, critical gaps
-
-**Clarity (0.0-1.0)**: Writing quality and readability
-- 0.9-1.0: Crystal clear, concise, accessible to target audience
-- 0.7-0.8: Mostly clear with minor ambiguities
-- 0.5-0.6: Some confusing parts, readability issues
-- 0.0-0.4: Unclear, convoluted, hard to understand
-
-─── Examples ───
-
-Low quality section (0.5):
-"AI is important. Many companies use it. It can do things."
-→ coherence: 0.4 (disconnected statements)
-→ completeness: 0.3 (lacks depth and details)
-→ clarity: 0.7 (simple but too vague)
-
-High quality section (0.9):
-"Artificial intelligence has transformed modern business operations through three key mechanisms: automated decision-making, predictive analytics, and natural language processing. Recent studies indicate that 78% of Fortune 500 companies have integrated AI into at least one core business function, with customer service and supply chain optimization leading adoption rates."
-→ coherence: 0.95 (clear flow, logical structure)
-→ completeness: 0.90 (detailed, addresses key points)
-→ clarity: 0.90 (clear, specific, well-written)
-
-─── Your Evaluation ───
-
-Provide scores in this exact format (e.g., 0.85):
-coherence: X.XX
-completeness: X.XX
-clarity: X.XX"""
+            # ★ NEW (G): Use language-specific prompt from evaluation_prompts module
+            prompt = EvaluationPrompts.get_quality_evaluation_prompt(
+                section_title=section_title,
+                content=content,
+                language=language,
+            )
 
             response = await llm.ainvoke([HumanMessage(content=prompt)])
             result_text = extract_text_from_response(response).strip()
@@ -1560,6 +1539,14 @@ class IterativeReportRefiner:
         conditional_enabled = self.config.get("enable_conditional_refinement", True)
         skip_multiplier = self.config.get("skip_threshold_multiplier", 0.95)
 
+        # ★ NEW (F): Extract and normalize quality weights from config
+        quality_weights = None
+        if self.config.get("quality_metric_weights"):
+            from .config import ResearchConfig
+            temp_config = ResearchConfig(quality_metric_weights=self.config["quality_metric_weights"])
+            quality_weights = temp_config.get_normalized_quality_weights()
+            logger.info(f"Using custom quality weights: {quality_weights}")
+
         self.section_iterator = SectionIterator(
             agent_name=agent_name,
             citation_tracker=self.citation_tracker,
@@ -1570,6 +1557,7 @@ class IterativeReportRefiner:
             improvement_tracker=self.improvement_tracker,  # ★ NEW (C): Learning from Feedback
             conditional_refinement_enabled=conditional_enabled,  # ★ NEW (E)
             skip_threshold_multiplier=skip_multiplier,  # ★ NEW (E)
+            quality_weights=quality_weights,  # ★ NEW (F): Pass custom quality weights
         )
 
         self.abstract_generator = AbstractGenerator(agent_name=agent_name)

@@ -401,6 +401,9 @@ def aggregate_chunk_qualities(
         total_cited += quality.cited_claims
         total_citations += quality.total_citations
 
+    # ★ NEW (F): Preserve custom_weights from first chunk (all chunks should have same weights)
+    first_chunk_weights = chunk_qualities[0][1].custom_weights if chunk_qualities else None
+
     return SectionQuality(
         citation_coverage=weighted_citation_coverage,
         citation_quality=weighted_citation_quality,
@@ -411,6 +414,7 @@ def aggregate_chunk_qualities(
         cited_claims=total_cited,
         total_citations=total_citations,
         section_length=total_length,
+        custom_weights=first_chunk_weights,  # ★ NEW (F): Pass through custom weights
     )
 
 
