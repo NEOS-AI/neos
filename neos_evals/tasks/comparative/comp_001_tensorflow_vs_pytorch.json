@@ -1,0 +1,49 @@
+{
+  "task_id": "comp_001",
+  "name": "TensorFlow vs PyTorch Comparison",
+  "query": "Compare TensorFlow and PyTorch for deep learning development: ease of use, performance, deployment, and ecosystem",
+  "description": "Comprehensive comparison of two major deep learning frameworks. Tests ability to provide balanced, evidence-based analysis.",
+  "expected_sections": [
+    "Introduction",
+    "TensorFlow Overview",
+    "PyTorch Overview",
+    "Ease of Use and Learning Curve",
+    "Development Experience",
+    "Performance Benchmarks",
+    "Deployment and Production",
+    "Ecosystem and Community",
+    "Research vs Production Use Cases",
+    "Recent Developments",
+    "Recommendations by Use Case",
+    "Conclusion"
+  ],
+  "required_topics": [
+    "dynamic vs static graphs",
+    "TensorFlow 2.x improvements",
+    "PyTorch Lightning",
+    "TensorBoard",
+    "model deployment",
+    "mobile deployment",
+    "community adoption",
+    "research popularity"
+  ],
+  "min_sources": 80,
+  "quality_threshold": 0.85,
+  "graders": [
+    "citation_accuracy",
+    "source_diversity",
+    "structure_completeness",
+    "topic_coverage",
+    "quality_assessment"
+  ],
+  "pass_threshold": 0.85,
+  "difficulty": "medium",
+  "category": "comparative",
+  "estimated_runtime": 700,
+  "tags": [
+    "deep-learning",
+    "frameworks",
+    "comparison",
+    "technical"
+  ]
+}

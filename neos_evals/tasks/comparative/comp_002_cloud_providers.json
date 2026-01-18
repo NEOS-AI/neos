@@ -1,0 +1,49 @@
+{
+  "task_id": "comp_002",
+  "name": "AWS vs Azure vs GCP Cloud Comparison",
+  "query": "Compare AWS, Microsoft Azure, and Google Cloud Platform for enterprise cloud computing needs",
+  "description": "Three-way comparison of major cloud providers. Tests ability to analyze multiple alternatives fairly with detailed feature comparisons.",
+  "expected_sections": [
+    "Introduction",
+    "AWS Overview and Market Position",
+    "Azure Overview and Microsoft Integration",
+    "GCP Overview and Google's Advantages",
+    "Compute Services Comparison",
+    "Storage and Database Services",
+    "Networking Capabilities",
+    "AI and Machine Learning Services",
+    "Pricing Models and Cost Analysis",
+    "Security and Compliance",
+    "Developer Experience and Tools",
+    "Use Case Recommendations",
+    "Conclusion"
+  ],
+  "required_topics": [
+    "EC2 vs VMs vs Compute Engine",
+    "S3 vs Blob Storage vs Cloud Storage",
+    "pricing comparison",
+    "regional availability",
+    "vendor lock-in",
+    "hybrid cloud support",
+    "managed services"
+  ],
+  "min_sources": 90,
+  "quality_threshold": 0.85,
+  "graders": [
+    "citation_accuracy",
+    "source_diversity",
+    "structure_completeness",
+    "topic_coverage",
+    "quality_assessment"
+  ],
+  "pass_threshold": 0.85,
+  "difficulty": "medium",
+  "category": "comparative",
+  "estimated_runtime": 750,
+  "tags": [
+    "cloud-computing",
+    "infrastructure",
+    "enterprise",
+    "comparison"
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "task_id": "reg_003",
+  "name": "Historical Overview Query",
+  "query": "Provide an overview of the history of the internet",
+  "description": "Regression test for historical overview queries. Tests chronological organization and factual accuracy.",
+  "expected_sections": [
+    "Introduction",
+    "Early Development (1960s-1970s)",
+    "ARPANET",
+    "TCP/IP Protocol",
+    "World Wide Web (1990s)",
+    "Dot-com Era",
+    "Modern Internet",
+    "Conclusion"
+  ],
+  "required_topics": [
+    "ARPANET",
+    "TCP/IP",
+    "World Wide Web",
+    "Tim Berners-Lee"
+  ],
+  "min_sources": 45,
+  "quality_threshold": 0.8,
+  "graders": [
+    "citation_accuracy",
+    "source_diversity",
+    "structure_completeness",
+    "quality_assessment"
+  ],
+  "pass_threshold": 0.83,
+  "difficulty": "easy",
+  "category": "regression",
+  "estimated_runtime": 550,
+  "tags": [
+    "regression",
+    "baseline",
+    "historical",
+    "internet"
+  ]
+}
