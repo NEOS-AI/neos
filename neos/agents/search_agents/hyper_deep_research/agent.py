@@ -62,6 +62,7 @@ from .analysis import (
 )
 from .skills_integration import SkillsIntegrator
 from .report_generator import ReportGenerator, CriticismProcessor, QueryGenerator
+from .iterative_refiner import IterativeReportRefiner
 
 
 logger = logging.getLogger(__name__)
@@ -235,8 +236,20 @@ class HyperDeepResearchAgent(SearchAgent):
             repository=self.repository,
             data_collector=self.data_collector,
         )
-        
+
         self.query_generator = QueryGenerator(agent_name=self.name)
+
+        # ★ NEW: Iterative report refiner (Ralph Loop-inspired)
+        self.iterative_refiner = IterativeReportRefiner(
+            agent_name=self.name,
+            citation_tracker=self.report_generator.citation_tracker,
+            config=self.config,
+        )
+        logger.info(
+            f"IterativeReportRefiner initialized: "
+            f"max_iterations={self.config.get('max_iterations_per_section', 3)}, "
+            f"quality_threshold={self.config.get('section_quality_threshold', 0.8)}"
+        )
 
 
     async def execute(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -1239,23 +1252,247 @@ class HyperDeepResearchAgent(SearchAgent):
         user_id: str,
         language: str,
     ) -> str:
-        """Phase 8: Final Report Synthesis."""
+        """Phase 8: Final Report Synthesis with Optional Iterative Refinement."""
         print("\n[INFO] ===== Phase 8/8: Report Synthesis =====")
         await self.event_logger.log_phase_start(8, "Report Synthesis")
         phase_start = datetime.now()
 
-        final_report = await self.report_generator.synthesize_final_report(
-            topic_analysis, methodology, deep_analysis,
-            validation, critical_analysis,
-            session_id, user_id, language,
-            self.current_report_id,
-            self.research_metadata,
-        )
+        # ★ NEW: Check if iterative refinement is enabled
+        if self.config.get("enable_iterative_refinement", True):
+            print("[INFO] 🔄 Iterative refinement enabled - Ralph Loop-inspired improvement")
+            final_report = await self._synthesize_with_iterative_refinement(
+                topic_analysis, methodology, deep_analysis,
+                validation, critical_analysis, session_id, user_id, language
+            )
+        else:
+            print("[INFO] 📝 Standard report generation (no iterative refinement)")
+            final_report = await self.report_generator.synthesize_final_report(
+                topic_analysis, methodology, deep_analysis,
+                validation, critical_analysis,
+                session_id, user_id, language,
+                self.current_report_id,
+                self.research_metadata,
+                all_sources=self.all_collected_sources,
+            )
 
         duration = int((datetime.now() - phase_start).total_seconds() * 1000)
         await self.event_logger.log_phase_complete(8, "Report Synthesis", duration)
 
         return final_report
+
+    async def _synthesize_with_iterative_refinement(
+        self,
+        topic_analysis: Dict[str, Any],
+        methodology: Dict[str, Any],
+        deep_analysis: Dict[str, Any],
+        validation: Dict[str, Any],
+        critical_analysis: Dict[str, Any],
+        session_id: str,
+        user_id: str,
+        language: str,
+    ) -> str:
+        """Synthesize report with iterative refinement (Ralph Loop-inspired).
+
+        Process:
+        1. Register sources for citation tracking
+        2. Generate initial section structure
+        3. Generate initial sections
+        4. Apply iterative refinement to improve quality
+        5. Assemble final report with references
+
+        Args:
+            topic_analysis: Topic analysis result
+            methodology: Research methodology
+            deep_analysis: Deep analysis result
+            validation: Validation result
+            critical_analysis: Critical analysis result
+            session_id: Session ID
+            user_id: User ID
+            language: Language code
+
+        Returns:
+            Final report with refined sections and citations
+        """
+        # Step 1: Register sources for citation tracking
+        if self.all_collected_sources:
+            registered_count = self.report_generator.citation_tracker.register_sources(
+                self.all_collected_sources
+            )
+            logger.info(f"Registered {registered_count} sources for citation tracking")
+            print(f"[INFO] 📚 Citation tracking: {registered_count} sources registered")
+
+        # Step 2: Plan report structure
+        print("[INFO] 📋 Planning report structure...")
+        report_structure = await self.report_generator.plan_report_structure(
+            topic_analysis, session_id, user_id, language
+        )
+
+        # Step 3: Generate initial sections
+        print(f"[INFO] 📝 Generating {len(report_structure['sections'])} initial sections...")
+        initial_sections = []
+
+        for idx, section_info in enumerate(report_structure["sections"], 1):
+            section_title = section_info["title"]
+            section_purpose = section_info.get("purpose", "")
+
+            print(f"[INFO]   Section {idx}/{len(report_structure['sections'])}: {section_title}")
+
+            # Generate initial section content
+            section_content = await self.report_generator.generate_section(
+                section_info, topic_analysis, deep_analysis,
+                validation, critical_analysis, session_id, user_id, language,
+                self.research_metadata.get("total_sources_collected", 0)
+            )
+
+            initial_sections.append({
+                "title": section_title,
+                "purpose": section_purpose,
+                "content": section_content,
+            })
+
+        # Step 4: Apply iterative refinement
+        print("\n[INFO] 🔄 Starting iterative refinement process...")
+        print(f"[INFO]   Max iterations per section: {self.config.get('max_iterations_per_section', 3)}")
+        print(f"[INFO]   Quality threshold: {self.config.get('section_quality_threshold', 0.8)}")
+
+        research_context = {
+            "topic_analysis": topic_analysis,
+            "deep_analysis": deep_analysis,
+            "validation": validation,
+            "critical_analysis": critical_analysis,
+        }
+
+        refinement_result = await self.iterative_refiner.generate_coherent_report(
+            sections_data=initial_sections,
+            query=topic_analysis["original_query"],
+            context=research_context,
+            session_id=session_id,
+            user_id=user_id,
+            language=language,
+        )
+
+        # Extract refined data
+        final_abstract = refinement_result["final_abstract"]
+        refined_sections = refinement_result["final_sections"]
+        refinement_metadata = refinement_result["refinement_metadata"]
+
+        # Update research metadata
+        self.research_metadata["total_section_iterations"] = refinement_metadata["total_iterations"]
+        self.research_metadata["sections_refined"] = refinement_metadata["total_sections"]
+        self.research_metadata["abstract_refinement_performed"] = refinement_metadata["abstract_refined"]
+        self.research_metadata["sections_realigned"] = refinement_metadata["sections_aligned"]
+        self.research_metadata["average_section_quality"] = refinement_metadata["average_final_quality"]
+
+        print("\n[INFO] ✅ Iterative refinement complete:")
+        print(f"[INFO]   Total iterations: {refinement_metadata['total_iterations']}")
+        print(f"[INFO]   Sections refined: {refinement_metadata['total_sections']}")
+        print(f"[INFO]   Abstract refined: {refinement_metadata['abstract_refined']}")
+        print(f"[INFO]   Sections realigned: {refinement_metadata['sections_aligned']}")
+        print(f"[INFO]   Average quality: {refinement_metadata['average_final_quality']:.2f}")
+
+        # Step 5: Store sections in repository
+        section_order = 8
+        final_sections_for_assembly = []
+
+        for section_data in refined_sections:
+            section_title = section_data["section_title"]
+            section_content = section_data["final_content"]
+
+            # Store in repository
+            if self.repository:
+                section_id = await self.repository.create_section(
+                    self.current_report_id,
+                    "final_report",
+                    section_order,
+                    section_title,
+                    section_content,
+                    "completed"
+                )
+            else:
+                section_id = f"section_{section_order}"
+
+            final_sections_for_assembly.append({
+                "section_id": section_id,
+                "title": section_title,
+                "content": section_content,
+            })
+
+            section_order += 1
+
+        # Step 6: Get citation statistics
+        citation_stats = self.report_generator.citation_tracker.get_citation_statistics()
+        logger.info(f"Citation statistics: {citation_stats}")
+        print("[INFO] 📊 Citation stats:")
+        print(f"[INFO]   Total citations: {citation_stats['total_citations']}")
+        print(f"[INFO]   Cited sources: {citation_stats['cited_sources']}/{citation_stats['total_sources']}")
+
+        # Step 7: Assemble final report with abstract and references
+        print("[INFO] 📦 Assembling final report...")
+        final_report = self._assemble_refined_report(
+            abstract=final_abstract,
+            sections=final_sections_for_assembly,
+            topic=topic_analysis["original_query"],
+            metadata=self.research_metadata,
+        )
+
+        return final_report
+
+    def _assemble_refined_report(
+        self,
+        abstract: str,
+        sections: List[Dict[str, Any]],
+        topic: str,
+        metadata: Dict[str, Any],
+    ) -> str:
+        """Assemble final report with abstract, sections, and references.
+
+        Args:
+            abstract: Refined abstract
+            sections: List of refined sections
+            topic: Research topic
+            metadata: Research metadata
+
+        Returns:
+            Complete markdown report
+        """
+        report_parts = []
+
+        # Title
+        report_parts.append(f"# {topic}")
+        report_parts.append("\n---\n")
+
+        # Abstract
+        report_parts.append("## Abstract\n")
+        report_parts.append(abstract)
+        report_parts.append("\n---\n")
+
+        # Sections
+        for section in sections:
+            report_parts.append(f"\n## {section['title']}\n")
+            report_parts.append(section['content'])
+            report_parts.append("\n")
+
+        report_parts.append("\n---\n")
+
+        # References (from citation tracker)
+        reference_list = self.report_generator.citation_tracker.generate_reference_list(
+            style="numbered",
+            only_cited=True
+        )
+        report_parts.append(reference_list)
+        report_parts.append("\n")
+
+        # Metadata footer
+        report_parts.append("\n---\n")
+        report_parts.append("## Research Metadata\n\n")
+        report_parts.append(f"- **Total Sources**: {metadata.get('total_sources_collected', 0)}\n")
+        report_parts.append(f"- **Total Queries**: {metadata.get('total_queries_executed', 0)}\n")
+        report_parts.append(f"- **Unique Domains**: {len(metadata.get('unique_domains', set()))}\n")
+        report_parts.append(f"- **Section Iterations**: {metadata.get('total_section_iterations', 0)}\n")
+        report_parts.append(f"- **Average Quality**: {metadata.get('average_section_quality', 0):.2f}\n")
+        report_parts.append(f"- **Research Date**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+
+        return "".join(report_parts)
 
     async def _finalize_report(self) -> None:
         """Finalize report in database."""

@@ -31,6 +31,14 @@ from .analysis import (
 )
 from .skills_integration import SkillsIntegrator
 from .report_generator import ReportGenerator, CriticismProcessor, QueryGenerator
+from .iterative_refiner import (
+    IterativeReportRefiner,
+    SectionIterator,
+    AbstractGenerator,
+    ConsistencyAligner,
+    SectionQuality,
+    IterationHistory,
+)
 
 
 __all__ = [
@@ -55,4 +63,11 @@ __all__ = [
     "ReportGenerator",
     "CriticismProcessor",
     "QueryGenerator",
+    # Iterative refinement (Ralph Loop-inspired)
+    "IterativeReportRefiner",
+    "SectionIterator",
+    "AbstractGenerator",
+    "ConsistencyAligner",
+    "SectionQuality",
+    "IterationHistory",
 ]

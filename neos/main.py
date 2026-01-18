@@ -33,7 +33,7 @@ from neos.workflow.checkpointer import cleanup_checkpointer
 from neos.workflow.telemetry import setup_telemetry, instrument_app, instrument_sqlalchemy_engine
 
 
-__VERSION__ = "0.20.0"
+__VERSION__ = "0.21.0"
 
 
 # 로깅 설정
