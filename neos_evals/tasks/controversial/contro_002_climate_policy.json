@@ -1,0 +1,51 @@
+{
+  "task_id": "contro_002",
+  "name": "Climate Change Mitigation Strategies Debate",
+  "query": "Analyze different approaches to climate change mitigation: carbon pricing, regulation, technology investment, and market-based solutions",
+  "description": "Policy debate requiring analysis of different philosophical and practical approaches. Tests balanced presentation of trade-offs.",
+  "expected_sections": [
+    "Introduction",
+    "Scientific Consensus on Climate Change",
+    "Carbon Pricing Mechanisms",
+    "Regulatory Approaches",
+    "Technology and Innovation Investment",
+    "Market-Based Solutions",
+    "Economic Impact Arguments",
+    "Equity and Justice Considerations",
+    "International Cooperation Challenges",
+    "Private Sector Perspectives",
+    "Effectiveness Evidence",
+    "Policy Recommendations by Context",
+    "Conclusion"
+  ],
+  "required_topics": [
+    "carbon tax",
+    "cap and trade",
+    "renewable energy mandates",
+    "technology subsidies",
+    "economic trade-offs",
+    "developing nations",
+    "fossil fuel transition",
+    "multiple approaches"
+  ],
+  "min_sources": 95,
+  "quality_threshold": 0.87,
+  "graders": [
+    "citation_accuracy",
+    "source_diversity",
+    "structure_completeness",
+    "topic_coverage",
+    "quality_assessment"
+  ],
+  "pass_threshold": 0.85,
+  "difficulty": "hard",
+  "category": "controversial",
+  "estimated_runtime": 850,
+  "tags": [
+    "climate",
+    "policy",
+    "environment",
+    "controversial",
+    "multi-perspective"
+  ]
+}

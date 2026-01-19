@@ -1,0 +1,38 @@
+{
+  "task_id": "reg_002",
+  "name": "Basic Technology Comparison",
+  "query": "Compare React and Vue.js",
+  "description": "Regression test for simple comparison queries. Should maintain consistent quality and structure.",
+  "expected_sections": [
+    "Introduction",
+    "React Overview",
+    "Vue.js Overview",
+    "Key Differences",
+    "Use Cases",
+    "Conclusion"
+  ],
+  "required_topics": [
+    "React",
+    "Vue.js",
+    "component-based",
+    "virtual DOM"
+  ],
+  "min_sources": 50,
+  "quality_threshold": 0.8,
+  "graders": [
+    "citation_accuracy",
+    "source_diversity",
+    "structure_completeness",
+    "quality_assessment"
+  ],
+  "pass_threshold": 0.83,
+  "difficulty": "easy",
+  "category": "regression",
+  "estimated_runtime": 550,
+  "tags": [
+    "regression",
+    "baseline",
+    "comparison",
+    "frontend"
+  ]
+}

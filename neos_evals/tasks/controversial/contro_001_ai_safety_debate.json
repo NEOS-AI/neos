@@ -1,0 +1,50 @@
+{
+  "task_id": "contro_001",
+  "name": "AI Safety and Existential Risk Debate",
+  "query": "Analyze the debate around AI safety and existential risk: arguments for concern, counterarguments, and current approaches to mitigation",
+  "description": "Controversial topic requiring balanced coverage of multiple perspectives. Tests ability to present opposing views fairly without bias.",
+  "expected_sections": [
+    "Introduction",
+    "Arguments for AI Safety Concerns",
+    "Technical Challenges and Failure Modes",
+    "Arguments Against Overstated Risks",
+    "Historical Context of Technology Concerns",
+    "Current AI Capabilities and Limitations",
+    "Alignment Research Approaches",
+    "Governance and Policy Proposals",
+    "Industry Perspectives",
+    "Academic Research Community Views",
+    "Uncertainty and Unknown Unknowns",
+    "Conclusion"
+  ],
+  "required_topics": [
+    "alignment problem",
+    "instrumental convergence",
+    "value alignment",
+    "AGI timelines",
+    "skeptical perspectives",
+    "proactive governance",
+    "technical safety research",
+    "multi-stakeholder views"
+  ],
+  "min_sources": 100,
+  "quality_threshold": 0.88,
+  "graders": [
+    "citation_accuracy",
+    "source_diversity",
+    "structure_completeness",
+    "topic_coverage",
+    "quality_assessment"
+  ],
+  "pass_threshold": 0.85,
+  "difficulty": "hard",
+  "category": "controversial",
+  "estimated_runtime": 900,
+  "tags": [
+    "AI",
+    "ethics",
+    "safety",
+    "controversial",
+    "multi-perspective"
+  ]
+}
