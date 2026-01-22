@@ -69,7 +69,7 @@ cp .env.example .env
 # - TAVILY_API_KEY: Tavily search API key
 ```
 
-### 3. Start Database
+### 3. Start Database, and Dependency Services
 
 Run PostgreSQL and Redis with Docker:
 
