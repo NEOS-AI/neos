@@ -5,6 +5,7 @@ from .file_processing import FileProcessingMCPTool
 from .database import DatabaseMCPTool
 from .git import GitMCPTool
 from .link_follower import LinkFollowerMCPTool
+from .youtube import YouTubeMCPTool
 
 __all__ = [
     "WebSearchMCPTool",
@@ -12,4 +13,5 @@ __all__ = [
     "DatabaseMCPTool",
     "GitMCPTool",
     "LinkFollowerMCPTool",
+    "YouTubeMCPTool",
 ]

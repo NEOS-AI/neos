@@ -11,7 +11,8 @@ from neos.agents.search_agents import (
     RealtimeDataSearchAgent,
     MultiQuerySearchAgent,
     DeepResearchAgent,
-    HyperDeepResearchAgent
+    HyperDeepResearchAgent,
+    YouTubeSearchAgent
 )
 from neos.agents.analysis_agents import (
     DataAnalysisAgent,
@@ -93,6 +94,13 @@ class AgentRegistry:
                 category="search",
                 description="초심층 조사 (30-60분 소요)",
                 capabilities=["hyper_deep_research", "exhaustive_analysis", "critical_thinking"]
+            ),
+            AgentInfo(
+                name="youtube_search",
+                agent_class=YouTubeSearchAgent,
+                category="search",
+                description="YouTube 비디오 검색 및 트랜스크립트 분석",
+                capabilities=["video_search", "transcript_analysis", "content_discovery"]
             ),
         ]
 
