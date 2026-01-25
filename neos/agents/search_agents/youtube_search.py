@@ -1,11 +1,14 @@
 """YouTube video search and analysis agent"""
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
+from collections import defaultdict
 import asyncio
 import logging
+import math
 from langchain_core.messages import HumanMessage
+from langchain_openai import OpenAIEmbeddings
 
 from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
@@ -35,6 +38,8 @@ class PlaylistOrderStrategy(Enum):
     POPULARITY = "popularity"  # 인기도 순
     DURATION = "duration"  # 길이 순
     OPTIMAL_LEARNING = "optimal_learning"  # 학습 최적화
+    TOPIC_CLUSTERED = "topic_clustered"  # 토픽별 클러스터링
+    PREREQUISITE_CHAIN = "prerequisite_chain"  # 선수 학습 순서
 
 
 @dataclass
@@ -83,6 +88,8 @@ class PlaylistAnalysisConfig:
     USER CONTRIBUTION POINT: 플레이리스트 분석의 깊이와 초점을 조정할 수 있습니다.
     """
     detect_duplicates: bool = True  # 중복 비디오 감지
+    use_semantic_similarity: bool = False  # 임베딩 기반 의미론적 중복 감지 (API 호출 필요)
+    semantic_similarity_threshold: float = 0.85  # 의미론적 유사도 임계값 (0.0-1.0)
     suggest_order: PlaylistOrderStrategy = PlaylistOrderStrategy.OPTIMAL_LEARNING
     analyze_progression: bool = True  # 학습 진행 분석
     identify_gaps: bool = True  # 지식 갭 식별
@@ -843,16 +850,35 @@ Format your response in clear sections with headers."""
             # 중복 감지 (설정된 경우)
             duplicate_info = None
             if config.detect_duplicates:
-                duplicate_info = self._detect_duplicate_videos(videos)
+                if config.use_semantic_similarity:
+                    # 임베딩 기반 의미론적 중복 감지 (비동기)
+                    duplicate_info = await self._detect_duplicate_videos_semantic(
+                        videos,
+                        threshold=config.semantic_similarity_threshold
+                    )
+                else:
+                    # 빠른 제목 기반 중복 감지
+                    duplicate_info = self._detect_duplicate_videos(videos)
+
                 logger.info(
                     f"Duplicate detection: {duplicate_info['duplicate_count']} exact, "
                     f"{duplicate_info['similar_count']} similar"
+                    + (f", {duplicate_info.get('semantic_count', 0)} semantic" if config.use_semantic_similarity else "")
                 )
 
             # 최적 순서 계산 (설정된 경우)
             ordered_videos = videos
             if config.suggest_order != PlaylistOrderStrategy.ORIGINAL:
-                ordered_videos = self._calculate_optimal_order(videos, config.suggest_order)
+                if config.suggest_order in (PlaylistOrderStrategy.TOPIC_CLUSTERED, PlaylistOrderStrategy.PREREQUISITE_CHAIN):
+                    # 토픽/선수학습 기반 정렬은 LLM 분석 필요
+                    ordered_videos = await self._calculate_advanced_order(
+                        videos,
+                        config.suggest_order,
+                        session_id,
+                        user_id
+                    )
+                else:
+                    ordered_videos = self._calculate_optimal_order(videos, config.suggest_order)
                 logger.info(f"Reordered videos using strategy: {config.suggest_order.value}")
             else:
                 ordered_videos = videos.copy()
@@ -999,6 +1025,221 @@ Format your response with clear sections."""
             "duplicate_count": len(duplicates),
             "similar_count": len(similar_groups)
         }
+
+    async def _detect_duplicate_videos_semantic(
+        self,
+        videos: List[Dict[str, Any]],
+        threshold: float = 0.85
+    ) -> Dict[str, Any]:
+        """임베딩을 사용한 의미론적 중복 비디오 감지
+
+        제목뿐만 아니라 개념적으로 유사한 비디오를 찾습니다.
+
+        Args:
+            videos: 비디오 목록
+            threshold: 유사도 임계값 (0.0-1.0)
+
+        Returns:
+            중복 감지 결과 (기본 + 의미론적 중복)
+        """
+        # 먼저 기본 중복 감지 수행
+        base_result = self._detect_duplicate_videos(videos)
+
+        # 임베딩 모델 초기화
+        try:
+            embeddings = OpenAIEmbeddings(
+                model=settings.EMBEDDING_MODEL,
+                openai_api_key=settings.OPENAI_API_KEY
+            )
+        except Exception as e:
+            logger.warning(f"Failed to initialize embeddings, skipping semantic detection: {e}")
+            return base_result
+
+        # 비디오 텍스트 준비 (제목 + 설명 일부)
+        video_texts = []
+        for video in videos:
+            title = video.get("title", "")
+            description = video.get("description", "")[:200]  # 설명의 처음 200자
+            video_texts.append(f"{title}. {description}")
+
+        try:
+            # 임베딩 생성
+            logger.info(f"Generating embeddings for {len(video_texts)} videos...")
+            video_embeddings = await asyncio.to_thread(
+                embeddings.embed_documents, video_texts
+            )
+
+            # 코사인 유사도 계산
+            semantic_duplicates = []
+            already_found = set()
+
+            # 이미 찾은 중복/유사 쌍 추가
+            for dup in base_result["exact_duplicates"]:
+                already_found.add((dup["video1_index"], dup["video2_index"]))
+            for sim in base_result["similar_videos"]:
+                already_found.add((sim["video1_index"], sim["video2_index"]))
+
+            for i in range(len(videos)):
+                for j in range(i + 1, len(videos)):
+                    if (i, j) in already_found:
+                        continue
+
+                    # 코사인 유사도 계산
+                    similarity = self._cosine_similarity(
+                        video_embeddings[i],
+                        video_embeddings[j]
+                    )
+
+                    if similarity >= threshold:
+                        semantic_duplicates.append({
+                            "video1_index": i,
+                            "video2_index": j,
+                            "video1_title": videos[i]["title"],
+                            "video2_title": videos[j]["title"],
+                            "semantic_similarity": round(similarity, 3),
+                            "detection_type": "semantic"
+                        })
+
+            # 결과 병합
+            base_result["semantic_duplicates"] = semantic_duplicates
+            base_result["semantic_count"] = len(semantic_duplicates)
+
+            logger.info(f"Semantic detection found {len(semantic_duplicates)} additional similar videos")
+
+            return base_result
+
+        except Exception as e:
+            logger.error(f"Error in semantic duplicate detection: {e}")
+            return base_result
+
+    def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+        """두 벡터의 코사인 유사도 계산
+
+        Args:
+            vec1: 첫 번째 벡터
+            vec2: 두 번째 벡터
+
+        Returns:
+            코사인 유사도 (0.0-1.0)
+        """
+        dot_product = sum(a * b for a, b in zip(vec1, vec2))
+        norm1 = math.sqrt(sum(a * a for a in vec1))
+        norm2 = math.sqrt(sum(b * b for b in vec2))
+
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+
+        return dot_product / (norm1 * norm2)
+
+    async def _calculate_advanced_order(
+        self,
+        videos: List[Dict[str, Any]],
+        strategy: PlaylistOrderStrategy,
+        session_id: str,
+        user_id: str
+    ) -> List[Dict[str, Any]]:
+        """LLM 기반 고급 정렬 (토픽 클러스터링, 선수학습 체인)
+
+        USER CONTRIBUTION POINT: 고급 정렬 로직을 커스터마이즈할 수 있습니다.
+
+        Args:
+            videos: 비디오 목록
+            strategy: 정렬 전략
+            session_id: 세션 ID
+            user_id: 사용자 ID
+
+        Returns:
+            정렬된 비디오 목록
+        """
+        if len(videos) <= 2:
+            # 2개 이하면 그냥 반환
+            return videos.copy()
+
+        # LLM을 사용하여 분석
+        llm = create_tracked_llm(
+            session_id=session_id,
+            user_id=user_id,
+            task_type="youtube_playlist_ordering"
+        )
+
+        # 비디오 목록 준비
+        video_list = []
+        for i, video in enumerate(videos[:20]):  # 최대 20개만 분석
+            video_list.append(f"{i}. {video['title']} ({video.get('duration_formatted', 'unknown')})")
+
+        video_list_str = "\n".join(video_list)
+
+        if strategy == PlaylistOrderStrategy.TOPIC_CLUSTERED:
+            prompt = f"""Analyze these YouTube videos and group them by topic/theme.
+
+Videos:
+{video_list_str}
+
+Return the optimal viewing order where videos about the same topic are grouped together.
+Format: Return ONLY a comma-separated list of video indices in the recommended order.
+Example: 0,3,5,1,2,4
+
+Consider:
+1. Group related topics together
+2. Within each group, order from overview to detail
+3. Put foundational topics before advanced ones
+
+Return ONLY the comma-separated indices, nothing else."""
+
+        elif strategy == PlaylistOrderStrategy.PREREQUISITE_CHAIN:
+            prompt = f"""Analyze these YouTube videos and determine the prerequisite learning order.
+
+Videos:
+{video_list_str}
+
+Determine which videos should be watched before others based on:
+1. Concept dependencies (basics before advanced)
+2. Skill building (fundamentals before applications)
+3. Knowledge prerequisites
+
+Return ONLY a comma-separated list of video indices in the recommended order.
+Example: 0,3,5,1,2,4
+
+The first videos should be foundational, later ones should build on earlier concepts.
+Return ONLY the comma-separated indices, nothing else."""
+
+        else:
+            return self._calculate_optimal_order(videos, strategy)
+
+        try:
+            response = await llm.ainvoke([HumanMessage(content=prompt)])
+            order_str = response.content.strip()
+
+            # 인덱스 파싱
+            indices = []
+            for part in order_str.split(","):
+                try:
+                    idx = int(part.strip())
+                    if 0 <= idx < len(videos) and idx not in indices:
+                        indices.append(idx)
+                except ValueError:
+                    continue
+
+            # 누락된 인덱스 추가
+            for i in range(len(videos)):
+                if i not in indices:
+                    indices.append(i)
+
+            # 정렬된 비디오 목록 생성
+            sorted_videos = []
+            for new_order, original_idx in enumerate(indices):
+                video = videos[original_idx].copy()
+                video["original_index"] = original_idx
+                video["suggested_order"] = new_order + 1
+                sorted_videos.append(video)
+
+            logger.info(f"Advanced ordering with {strategy.value}: generated order for {len(sorted_videos)} videos")
+            return sorted_videos
+
+        except Exception as e:
+            logger.error(f"Error in advanced ordering: {e}")
+            # 폴백: 기본 정렬
+            return self._calculate_optimal_order(videos, PlaylistOrderStrategy.OPTIMAL_LEARNING)
 
     def _calculate_optimal_order(
         self,
