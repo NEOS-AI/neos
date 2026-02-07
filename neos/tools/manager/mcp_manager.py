@@ -11,6 +11,7 @@ from neos.tools.tools import (
     GitMCPTool,
     WebSearchMCPTool,
     LinkFollowerMCPTool,
+    YouTubeMCPTool,
 )
 
 
@@ -42,6 +43,7 @@ class MCPManager:
             DatabaseMCPTool(),
             GitMCPTool(),
             LinkFollowerMCPTool(),
+            YouTubeMCPTool(),
         ]
 
         for tool in default_tools:

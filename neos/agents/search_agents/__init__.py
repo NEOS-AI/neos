@@ -8,6 +8,7 @@ from .deep_research import DeepResearchAgent
 from .hyper_deep_research import HyperDeepResearchAgent
 from .web_lookup import WebLookUpAgent
 from .iterative_web_explorer import IterativeWebExplorerAgent
+from .youtube_search import YouTubeSearchAgent
 
 __all__ = [
     "KnowledgeSearchAgent",
@@ -18,4 +19,5 @@ __all__ = [
     "HyperDeepResearchAgent",
     "WebLookUpAgent",
     "IterativeWebExplorerAgent",
+    "YouTubeSearchAgent",
 ]

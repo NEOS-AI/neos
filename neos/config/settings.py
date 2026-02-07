@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: Optional[str] = env_vars.get("ANTHROPIC_API_KEY", None)
     GOOGLE_API_KEY: Optional[str] = env_vars.get("GOOGLE_API_KEY", None)
     TAVILY_API_KEY: str = env_vars.get("TAVILY_API_KEY", "")
+    YOUTUBE_API_KEY: Optional[str] = env_vars.get("YOUTUBE_API_KEY", None)
 
     # 외부 API 키 설정
     # Weather API
@@ -63,6 +64,13 @@ class Settings(BaseSettings):
     STOCK_API_PROVIDER: str = env_vars.get("STOCK_API_PROVIDER", "yahoo")  # "yahoo" or "financialdatasets"
     FINANCIALDATASETS_API_KEY: str = env_vars.get("FINANCIALDATASETS_API_KEY", "")
     ALPHA_VANTAGE_API_KEY: str = env_vars.get("ALPHA_VANTAGE_API_KEY", "")  # Optional backup for financial statements
+
+    # YouTube Integration Settings
+    YOUTUBE_MAX_RESULTS: int = int(env_vars.get("YOUTUBE_MAX_RESULTS", 10))  # Max video search results
+    YOUTUBE_TRANSCRIPT_LANGUAGES: List[str] = env_vars.get("YOUTUBE_TRANSCRIPT_LANGUAGES", "en,ko").split(",")  # Preferred transcript languages
+    YOUTUBE_MIN_RELEVANCE_SCORE: float = float(env_vars.get("YOUTUBE_MIN_RELEVANCE_SCORE", 0.5))  # Minimum relevance score threshold
+    YOUTUBE_ENABLE_AUTO_CAPTIONS: bool = bool(env_vars.get("YOUTUBE_ENABLE_AUTO_CAPTIONS", True))  # Use auto-generated captions as fallback
+    YOUTUBE_MAX_TRANSCRIPT_LENGTH: int = int(env_vars.get("YOUTUBE_MAX_TRANSCRIPT_LENGTH", 50000))  # Max transcript chars for analysis
 
     # LLM 설정
     LLM_PROVIDER: str = env_vars.get("LLM_PROVIDER", "anthropic")  # "openai" or "anthropic"
@@ -112,6 +120,9 @@ class Settings(BaseSettings):
 
         # Iterative Web Explorer - 반복적 탐색 작업
         "iterative_web_explorer": int(env_vars.get("TIMEOUT_ITERATIVE_WEB_EXPLORER", 180)),
+
+        # YouTube 에이전트 - 검색 및 트랜스크립트 분석
+        "youtube_search": int(env_vars.get("TIMEOUT_YOUTUBE_SEARCH", 45)),  # Allow time for transcript fetching
     }
 
     # Iterative Web Explorer 설정
