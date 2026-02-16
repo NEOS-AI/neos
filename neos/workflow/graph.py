@@ -74,7 +74,8 @@ class MultiAgentWorkflow:
             RealtimeInfoSearchAgent,
             RealtimeDataSearchAgent,
             MultiQuerySearchAgent,
-            WebLookUpAgent
+            WebLookUpAgent,
+            YouTubeSearchAgent
         )
         from neos.agents.analysis_agents import (
             DataAnalysisAgent,
@@ -97,6 +98,7 @@ class MultiAgentWorkflow:
             "realtime_data_search": RealtimeDataSearchAgent(),
             "multi_query_search": MultiQuerySearchAgent(),
             "web_lookup": WebLookUpAgent(),
+            "youtube_search": YouTubeSearchAgent(),
 
             # 분석 에이전트들
             IntentType.DATA_ANALYSIS.value: DataAnalysisAgent(),

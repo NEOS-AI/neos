@@ -43,6 +43,7 @@ class IntentType(Enum):
     COMPLEX_ANALYSIS = "complex_analysis"
 
     DEEP_RESEARCH = "deep_research"
+    YOUTUBE_SEARCH = "youtube_search"
 
 
 class ComplexityIndicator(Enum):
