@@ -21,7 +21,7 @@ serde_json = "1.0"
 toml = "0.8"
 
 # JWT 인증
-jsonwebtoken = "9.3"
+jsonwebtoken = "10.3"
 
 # 데이터베이스
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-uuid-1", "with-chrono-0_4"] }
