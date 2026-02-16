@@ -26,7 +26,8 @@ class QueryClassifier:
             IntentType.FINANCIAL_ANALYSIS.value: ["주식", "stock", "투자", "investment", "전망", "outlook", "재무", "finance"],
             IntentType.TECHNICAL_ANALYSIS.value: ["기술", "technology", "개발", "development", "프로그래밍", "programming"],
             IntentType.COMPLEX_ANALYSIS.value: ["심층", "종합", "포괄적", "전반적", "심도있는", "detailed", "comprehensive", "in-depth"],
-            IntentType.DEEP_RESEARCH.value: ["deep research", "심층 조사", "철저히", "깊이있게", "전문적인 분석", "리포트", "보고서", "detailed report", "연구"]
+            IntentType.DEEP_RESEARCH.value: ["deep research", "심층 조사", "철저히", "깊이있게", "전문적인 분석", "리포트", "보고서", "detailed report", "연구"],
+            IntentType.YOUTUBE_SEARCH.value: ["youtube", "유튜브", "video", "비디오", "영상", "tutorial", "튜토리얼", "watch", "시청"]
         }
 
         # 복잡한 쿼리 판별을 위한 키워드
@@ -198,10 +199,15 @@ class QueryClassifier:
                 print("[DEBUG] Simple conversation detected, no agents required")
                 return []
 
-        # 0-1. URL이 포함된 경우 WebLookUpAgent 사용 (최우선)
+        # 0-1. URL이 포함된 경우 적절한 에이전트 선택 (최우선)
         if has_urls(query):
             urls = extract_urls(query)
             print(f"[DEBUG] URLs detected in query: {urls}")
+            # YouTube URL인 경우 youtube_search agent 사용
+            if any("youtube.com" in url or "youtu.be" in url for url in urls):
+                print("[DEBUG] YouTube URL detected, using youtube_search agent")
+                agents.append("youtube_search")
+                return agents
             print("[DEBUG] Using web_lookup agent for URL content extraction")
             agents.append("web_lookup")
             return agents
@@ -258,6 +264,8 @@ class QueryClassifier:
             agents.extend(["realtime_info_search", IntentType.DATA_ANALYSIS.value])
         elif intent == IntentType.GENERATION.value:
             agents.extend(self._determine_generation_agents(query))
+        elif intent == IntentType.YOUTUBE_SEARCH.value:
+            agents.append("youtube_search")
         else:
             # 기본적인 정보 탐색
             agents.append("realtime_info_search")

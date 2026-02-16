@@ -3,7 +3,6 @@
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import StreamingResponse
 from typing import Optional, AsyncGenerator, List
-import json
 import uuid
 import asyncio
 
@@ -27,7 +26,6 @@ from neos.api.models.chat_models import (
     CreateTemplateRequest,
     ConversationTemplate,
     TemplateListResponse,
-    ChatStreamChunk
 )
 from neos.api.dependencies.auth import get_current_user
 from neos.api.services.chat_service import ChatService
@@ -41,6 +39,35 @@ from neos.workflow.graph import multi_agent_workflow
 from neos.config.settings import settings as app_settings
 from neos.tools.artifact_tools import get_artifact_tools
 from neos.tools.artifact_tool_handler import execute_artifact_tool
+
+# OpenResponses imports
+from neos.api.adapters.stream_adapter import (
+    StreamAdapterState,
+    format_sse_event,
+    format_done_token,
+    create_stream_generator,
+    create_text_delta_event,
+    create_function_call_event,
+    create_completed_event,
+    create_reasoning_start_events,
+    create_reasoning_delta_event,
+    create_reasoning_done_events,
+)
+from neos.api.models.open_responses import (
+    OutputItemDoneEvent,
+    NeosArtifactMetaEvent,
+    NeosArtifactDeltaEvent,
+    NeosArtifactFinishEvent,
+    NeosWorkflowProgressEvent,
+    ResponseFailedEvent,
+    ResponseObject,
+    ResponseStatus,
+    ErrorInfo,
+    ItemStatus,
+)
+
+# OpenResponses version header
+OPEN_RESPONSES_VERSION = "2024-01-01"
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -525,8 +552,15 @@ async def stream_message(
                 metadata=request.metadata
             )
 
-            # 시작 이벤트
-            yield f"data: {json.dumps(ChatStreamChunk(type='start', message_id=user_message['message_id'], conversation_id=conversation_id).dict())}\n\n"
+            # 메시지 ID 생성 (여기서 미리 생성)
+            assistant_message_id = str(uuid.uuid4())
+
+            # OpenResponses: 스트림 상태 및 시작 이벤트 생성
+            stream_state, start_event = create_stream_generator(
+                response_id=conversation_id,
+                message_id=assistant_message_id
+            )
+            yield format_sse_event(start_event)
 
             # 대화 정보 및 히스토리 가져오기
             conversation = await ChatService.get_conversation(conversation_id)
@@ -534,9 +568,6 @@ async def stream_message(
                 conversation_id=conversation_id,
                 limit=20
             )
-
-            # 메시지 ID 생성
-            assistant_message_id = str(uuid.uuid4())
 
             # ============================================================
             # 워크플로우 실행 (활성화된 경우)
@@ -592,7 +623,7 @@ async def stream_message(
                             # 짧은 타임아웃으로 이벤트 대기
                             event = await asyncio.wait_for(event_queue.get(), timeout=0.5)
 
-                            # 노드 시작 이벤트
+                            # OpenResponses: 노드 시작 → function_call 아이템 추가
                             if event.event == "node_started":
                                 agent_name = map_node_to_agent(event.node_name)
                                 workflow_agents.append({
@@ -601,18 +632,12 @@ async def stream_message(
                                     "status": "input-available"
                                 })
 
-                                stream_chunk = ChatStreamChunk(
-                                    type="workflow_node_start",
-                                    conversation_id=conversation_id,
-                                    node_name=event.node_name,
-                                    agent_name=agent_name,
-                                    progress_percent=event.progress_percent,
-                                    workflow_step=event.data.get("step"),
-                                    total_steps=event.data.get("total_steps")
+                                fc_event = create_function_call_event(
+                                    stream_state, event.node_name, agent_name
                                 )
-                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+                                yield format_sse_event(fc_event)
 
-                            # 노드 완료 이벤트
+                            # OpenResponses: 노드 완료 → function_call 아이템 완료
                             elif event.event == "node_completed":
                                 agent_name = map_node_to_agent(event.node_name)
                                 # 에이전트 상태 업데이트
@@ -620,23 +645,23 @@ async def stream_message(
                                     if agent["node_name"] == event.node_name:
                                         agent["status"] = "output-available"
 
-                                stream_chunk = ChatStreamChunk(
-                                    type="workflow_node_complete",
-                                    conversation_id=conversation_id,
-                                    node_name=event.node_name,
-                                    agent_name=agent_name
-                                )
-                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+                                # function_call 완료 이벤트
+                                if event.node_name in stream_state.function_calls:
+                                    fc = stream_state.function_calls[event.node_name]
+                                    fc.status = ItemStatus.COMPLETED
+                                    done_event = OutputItemDoneEvent(
+                                        output_index=stream_state.output_index,
+                                        item=fc
+                                    )
+                                    yield format_sse_event(done_event)
 
-                            # 진행 상황 이벤트
+                            # OpenResponses: 진행 상황 → neos:workflow_progress (확장)
                             elif event.event == "agent_progress":
-                                stream_chunk = ChatStreamChunk(
-                                    type="workflow_progress",
-                                    conversation_id=conversation_id,
+                                progress_event = NeosWorkflowProgressEvent(
                                     progress_percent=event.progress_percent,
-                                    metadata={"message": event.content}
+                                    message=event.content if event.content else None
                                 )
-                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+                                yield format_sse_event(progress_event)
 
                             # 워크플로우 완료 이벤트
                             elif event.event == "completed":
@@ -701,16 +726,32 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
                 if chunk["type"] == "start":
                     # 스트리밍 시작
                     pass
+                elif chunk["type"] == "reasoning_start":
+                    # OpenResponses: reasoning 아이템 시작
+                    for event in create_reasoning_start_events(stream_state):
+                        yield format_sse_event(event)
+                elif chunk["type"] == "reasoning":
+                    # OpenResponses: reasoning 델타 이벤트 (thinking block)
+                    # reasoning_start가 없으면 자동으로 시작
+                    if not stream_state.reasoning_item:
+                        for event in create_reasoning_start_events(stream_state):
+                            yield format_sse_event(event)
+                    delta_event = create_reasoning_delta_event(stream_state, chunk["content"])
+                    yield format_sse_event(delta_event)
                 elif chunk["type"] == "content":
-                    # 컨텐츠 스트리밍
+                    # 텍스트 시작 전에 진행 중인 reasoning이 있으면 완료 처리
+                    if stream_state.reasoning_item and stream_state.reasoning_item.status.value == "in_progress":
+                        for event in create_reasoning_done_events(stream_state):
+                            yield format_sse_event(event)
+                    # OpenResponses: 텍스트 델타 이벤트
                     full_content += chunk["content"]
-                    stream_chunk = ChatStreamChunk(
-                        type="content",
-                        content=chunk["content"],
-                        conversation_id=conversation_id
-                    )
-                    yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+                    delta_event = create_text_delta_event(stream_state, chunk["content"])
+                    yield format_sse_event(delta_event)
                 elif chunk["type"] == "tool_use":
+                    # 진행 중인 reasoning이 있으면 완료 처리
+                    if stream_state.reasoning_item and stream_state.reasoning_item.status.value == "in_progress":
+                        for event in create_reasoning_done_events(stream_state):
+                            yield format_sse_event(event)
                     # Tool 호출 감지 - 아티팩트 도구 실행
                     tool_name = chunk.get("tool_name")
                     tool_input = chunk.get("tool_input")
@@ -734,38 +775,32 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
                             event_type = tool_event.get("type")
 
                             if event_type == "artifact_meta":
-                                # 아티팩트 메타데이터 전송 및 추적
+                                # OpenResponses: neos:artifact_meta (확장 이벤트)
                                 artifact_info = {
                                     "id": tool_event.get("artifact_id"),
                                     "title": tool_event.get("artifact_title"),
                                     "kind": tool_event.get("artifact_kind")
                                 }
-                                stream_chunk = ChatStreamChunk(
-                                    type="artifact_meta",
-                                    conversation_id=conversation_id,
-                                    artifact_id=tool_event.get("artifact_id"),
-                                    artifact_title=tool_event.get("artifact_title"),
-                                    artifact_kind=tool_event.get("artifact_kind")
+                                meta_event = NeosArtifactMetaEvent(
+                                    artifact_id=tool_event.get("artifact_id", ""),
+                                    artifact_title=tool_event.get("artifact_title", ""),
+                                    artifact_kind=tool_event.get("artifact_kind", "text")
                                 )
-                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+                                yield format_sse_event(meta_event)
 
                             elif event_type == "artifact_delta":
-                                # 아티팩트 콘텐츠 델타 전송
-                                stream_chunk = ChatStreamChunk(
-                                    type="artifact_delta",
-                                    content=tool_event.get("content"),
-                                    conversation_id=conversation_id
+                                # OpenResponses: neos:artifact_delta (확장 이벤트)
+                                delta_event = NeosArtifactDeltaEvent(
+                                    content=tool_event.get("content", "")
                                 )
-                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+                                yield format_sse_event(delta_event)
 
                             elif event_type == "artifact_finish":
-                                # 아티팩트 완료 신호
-                                stream_chunk = ChatStreamChunk(
-                                    type="artifact_finish",
-                                    conversation_id=conversation_id,
+                                # OpenResponses: neos:artifact_finish (확장 이벤트)
+                                finish_event = NeosArtifactFinishEvent(
                                     artifact_id=tool_event.get("artifact_id")
                                 )
-                                yield f"data: {json.dumps(stream_chunk.dict())}\n\n"
+                                yield format_sse_event(finish_event)
 
                             elif event_type == "tool_result":
                                 # Tool 실행 결과를 채팅 메시지에 추가
@@ -775,28 +810,35 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
                                     full_content += f"\n\n{result_content}"
 
                             elif event_type == "error":
-                                # Tool 실행 에러
+                                # OpenResponses: response.failed 이벤트
                                 logger.error(f"Tool execution error: {tool_event.get('error')}")
-                                error_chunk = ChatStreamChunk(
-                                    type="error",
-                                    error=tool_event.get("error"),
-                                    conversation_id=conversation_id
+                                stream_state.response.status = ResponseStatus.FAILED
+                                stream_state.response.error = ErrorInfo(
+                                    type="server_error",
+                                    message=tool_event.get("error", "Tool execution failed")
                                 )
-                                yield f"data: {json.dumps(error_chunk.dict())}\n\n"
+                                failed_event = ResponseFailedEvent(response=stream_state.response)
+                                yield format_sse_event(failed_event)
 
                 elif chunk["type"] == "complete":
+                    # 진행 중인 reasoning이 있으면 완료 처리
+                    if stream_state.reasoning_item and stream_state.reasoning_item.status.value == "in_progress":
+                        for event in create_reasoning_done_events(stream_state):
+                            yield format_sse_event(event)
                     # 완료
                     usage_info = chunk["usage"]
                     cost_info = chunk["cost"]
                     latency_ms = chunk["latency_ms"]
                 elif chunk["type"] == "error":
-                    # 에러
-                    error_chunk = ChatStreamChunk(
-                        type="error",
-                        error=chunk["error"],
-                        conversation_id=conversation_id
+                    # OpenResponses: response.failed 이벤트
+                    stream_state.response.status = ResponseStatus.FAILED
+                    stream_state.response.error = ErrorInfo(
+                        type="server_error",
+                        message=chunk.get("error", "Unknown error")
                     )
-                    yield f"data: {json.dumps(error_chunk.dict())}\n\n"
+                    failed_event = ResponseFailedEvent(response=stream_state.response)
+                    yield format_sse_event(failed_event)
+                    yield format_done_token()
                     return
 
             # 어시스턴트 메시지 저장 (artifact 정보 포함)
@@ -840,26 +882,31 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
                     finish_reason="end_turn"
                 )
 
-            # 완료 이벤트
-            complete_chunk = ChatStreamChunk(
-                type="complete",
-                message_id=assistant_message["message_id"],
-                conversation_id=conversation_id,
-                metadata={
-                    "total_tokens": usage_info["total_tokens"] if usage_info else 0,
-                    "cost_usd": float(cost_info["total_cost"]) if cost_info else 0.0
+            # OpenResponses: response.completed 이벤트
+            completed_event = create_completed_event(
+                stream_state,
+                usage={
+                    "prompt_tokens": usage_info["prompt_tokens"] if usage_info else 0,
+                    "completion_tokens": usage_info["completion_tokens"] if usage_info else 0
                 }
             )
-            yield f"data: {json.dumps(complete_chunk.dict())}\n\n"
+            yield format_sse_event(completed_event)
+
+            # OpenResponses: [DONE] 토큰으로 스트림 종료
+            yield format_done_token()
 
         except Exception as e:
             logger.error(f"Streaming error: {e}")
-            error_chunk = ChatStreamChunk(
-                type="error",
-                error=str(e),
-                conversation_id=conversation_id
-            )
-            yield f"data: {json.dumps(error_chunk.dict())}\n\n"
+            # OpenResponses: response.failed 이벤트
+            if stream_state.response:
+                stream_state.response.status = ResponseStatus.FAILED
+                stream_state.response.error = ErrorInfo(
+                    type="server_error",
+                    message=str(e)
+                )
+                failed_event = ResponseFailedEvent(response=stream_state.response)
+                yield format_sse_event(failed_event)
+            yield format_done_token()
 
     return StreamingResponse(
         generate_stream(),
@@ -867,7 +914,8 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
+            "X-Accel-Buffering": "no",
+            "X-OpenResponses-Version": OPEN_RESPONSES_VERSION
         }
     )
 

@@ -124,7 +124,8 @@ class WorkflowConfig:
         "realtime_data_search",
         "multi_query_search",
         "deep_research",
-        "web_lookup"
+        "web_lookup",
+        "youtube_search"
     ]
     
     ANALYSIS_AGENTS = [
@@ -142,9 +143,10 @@ class WorkflowConfig:
     # 쿼리 의도 분류
     QUERY_INTENTS = [
         "information_seeking",
-        "data_analysis", 
+        "data_analysis",
         "comparison",
         "generation",
         "task_execution",
-        "multi_step_reasoning"
+        "multi_step_reasoning",
+        "youtube_search"
     ]

@@ -8,6 +8,12 @@ import { artifactDefinitions } from "./artifact";
 import { useDataStream } from "./data-stream-provider";
 import { getChatHistoryPaginationKey } from "./sidebar-history";
 
+/**
+ * DataStreamHandler - Processes streaming data events for artifacts
+ *
+ * Supports both legacy event types (data-id, data-kind, etc.) and
+ * OpenResponses neos: prefixed extension events.
+ */
 export function DataStreamHandler() {
   const { dataStream, setDataStream } = useDataStream();
   const { mutate } = useSWRConfig();
@@ -31,6 +37,10 @@ export function DataStreamHandler() {
         mutate(unstable_serialize(getChatHistoryPaginationKey));
         continue;
       }
+
+      // Note: OpenResponses neos: prefixed events are handled in use-chat-stream.ts
+      // and converted to legacy format before reaching this handler.
+      // See use-chat-stream.ts lines 330-363 for neos: event processing.
 
       // data-kind 이벤트에서 kind 추출
       if (delta.type === "data-kind") {

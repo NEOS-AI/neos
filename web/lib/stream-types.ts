@@ -1,9 +1,85 @@
 /**
  * 백엔드 SSE 스트림 이벤트 타입 정의
+ *
+ * This file provides both legacy event types and OpenResponses-compliant types.
+ * Use OpenResponses types for new code; legacy types are for backward compatibility.
+ *
+ * @see https://www.openresponses.org/specification
  */
 
+// Re-export OpenResponses types for unified access
+export type {
+  // Core types
+  ItemStatus,
+  ResponseStatus,
+  // Output items
+  OutputItem,
+  MessageItem,
+  FunctionCallItem,
+  ReasoningItem,
+  // Content parts
+  OutputTextPart,
+  InputTextPart,
+  InputFilePart,
+  InputPart,
+  // Response object
+  OpenResponsesResponse,
+  ResponseUsage,
+  ResponseError,
+  // Streaming events
+  OpenResponsesEvent,
+  StandardStreamEvent,
+  NeosExtensionEvent,
+  ResponseInProgressEvent,
+  ResponseCompletedEvent,
+  ResponseFailedEvent,
+  OutputItemAddedEvent,
+  OutputItemDoneEvent,
+  ContentPartAddedEvent,
+  ContentPartDoneEvent,
+  OutputTextDeltaEvent,
+  OutputTextDoneEvent,
+  FunctionCallArgumentsDeltaEvent,
+  FunctionCallArgumentsDoneEvent,
+  // Neos extensions
+  NeosArtifactMetaEvent,
+  NeosArtifactDeltaEvent,
+  NeosArtifactFinishEvent,
+  NeosWorkflowProgressEvent,
+  // Error types
+  OpenResponsesErrorType,
+  OpenResponsesErrorResponse,
+} from "./open-responses-types";
+
+// Re-export OpenResponses type guards
+export {
+  isResponseInProgressEvent,
+  isResponseCompletedEvent,
+  isResponseFailedEvent,
+  isOutputItemAddedEvent,
+  isOutputItemDoneEvent,
+  isOutputTextDeltaEvent,
+  isOutputTextDoneEvent,
+  isContentPartAddedEvent,
+  isContentPartDoneEvent,
+  isFunctionCallArgumentsDeltaEvent,
+  isFunctionCallArgumentsDoneEvent,
+  isNeosArtifactMetaEvent,
+  isNeosArtifactDeltaEvent,
+  isNeosArtifactFinishEvent,
+  isNeosWorkflowProgressEvent,
+  isMessageItem,
+  isFunctionCallItem,
+  isReasoningItem,
+} from "./open-responses-types";
+
+// ============================================================================
+// Legacy Event Types (Deprecated - use OpenResponses types for new code)
+// ============================================================================
+
 /**
- * 스트림 이벤트 기본 타입
+ * @deprecated Use OpenResponsesEvent instead
+ * Legacy stream event union type
  */
 export type StreamEvent =
   | StreamStartEvent
@@ -18,6 +94,7 @@ export type StreamEvent =
   | WorkflowProgressEvent;
 
 /**
+ * @deprecated Use ResponseInProgressEvent instead
  * 스트리밍 시작 이벤트
  */
 export interface StreamStartEvent {
@@ -27,6 +104,7 @@ export interface StreamStartEvent {
 }
 
 /**
+ * @deprecated Use OutputTextDeltaEvent instead
  * 컨텐츠 델타 이벤트
  * content 필드에는 새로운 텍스트 청크만 포함 (누적 아님)
  */
@@ -37,6 +115,7 @@ export interface StreamContentEvent {
 }
 
 /**
+ * @deprecated Use ResponseCompletedEvent instead
  * 스트리밍 완료 이벤트
  */
 export interface StreamCompleteEvent {
@@ -52,6 +131,7 @@ export interface StreamCompleteEvent {
 }
 
 /**
+ * @deprecated Use ResponseFailedEvent instead
  * 에러 이벤트
  */
 export interface StreamErrorEvent {
@@ -61,6 +141,7 @@ export interface StreamErrorEvent {
 }
 
 /**
+ * @deprecated Use NeosArtifactMetaEvent instead
  * 아티팩트 메타데이터 이벤트
  */
 export interface ArtifactMetaEvent {
@@ -72,6 +153,7 @@ export interface ArtifactMetaEvent {
 }
 
 /**
+ * @deprecated Use NeosArtifactDeltaEvent instead
  * 아티팩트 콘텐츠 델타 이벤트
  */
 export interface ArtifactDeltaEvent {
@@ -81,6 +163,7 @@ export interface ArtifactDeltaEvent {
 }
 
 /**
+ * @deprecated Use NeosArtifactFinishEvent instead
  * 아티팩트 완료 이벤트
  */
 export interface ArtifactFinishEvent {
@@ -90,6 +173,7 @@ export interface ArtifactFinishEvent {
 }
 
 /**
+ * @deprecated Use OutputItemAddedEvent with FunctionCallItem instead
  * 워크플로우 노드 시작 이벤트
  */
 export interface WorkflowNodeStartEvent {
@@ -103,6 +187,7 @@ export interface WorkflowNodeStartEvent {
 }
 
 /**
+ * @deprecated Use OutputItemDoneEvent with FunctionCallItem instead
  * 워크플로우 노드 완료 이벤트
  */
 export interface WorkflowNodeCompleteEvent {
@@ -113,6 +198,7 @@ export interface WorkflowNodeCompleteEvent {
 }
 
 /**
+ * @deprecated Use NeosWorkflowProgressEvent instead
  * 워크플로우 진행 상황 이벤트
  */
 export interface WorkflowProgressEvent {
@@ -122,7 +208,12 @@ export interface WorkflowProgressEvent {
   conversation_id: string;
 }
 
+// ============================================================================
+// Legacy Type Guards (Deprecated - use OpenResponses type guards for new code)
+// ============================================================================
+
 /**
+ * @deprecated Use isResponseInProgressEvent instead
  * 타입 가드: 시작 이벤트 확인
  */
 export function isStreamStartEvent(event: StreamEvent): event is StreamStartEvent {
@@ -130,6 +221,7 @@ export function isStreamStartEvent(event: StreamEvent): event is StreamStartEven
 }
 
 /**
+ * @deprecated Use isOutputTextDeltaEvent instead
  * 타입 가드: 컨텐츠 이벤트 확인
  */
 export function isStreamContentEvent(event: StreamEvent): event is StreamContentEvent {
@@ -137,6 +229,7 @@ export function isStreamContentEvent(event: StreamEvent): event is StreamContent
 }
 
 /**
+ * @deprecated Use isResponseCompletedEvent instead
  * 타입 가드: 완료 이벤트 확인
  */
 export function isStreamCompleteEvent(event: StreamEvent): event is StreamCompleteEvent {
@@ -144,6 +237,7 @@ export function isStreamCompleteEvent(event: StreamEvent): event is StreamComple
 }
 
 /**
+ * @deprecated Use isResponseFailedEvent instead
  * 타입 가드: 에러 이벤트 확인
  */
 export function isStreamErrorEvent(event: StreamEvent): event is StreamErrorEvent {
@@ -151,6 +245,7 @@ export function isStreamErrorEvent(event: StreamEvent): event is StreamErrorEven
 }
 
 /**
+ * @deprecated Use isNeosArtifactMetaEvent instead
  * 타입 가드: 아티팩트 메타 이벤트 확인
  */
 export function isArtifactMetaEvent(event: StreamEvent): event is ArtifactMetaEvent {
@@ -158,6 +253,7 @@ export function isArtifactMetaEvent(event: StreamEvent): event is ArtifactMetaEv
 }
 
 /**
+ * @deprecated Use isNeosArtifactDeltaEvent instead
  * 타입 가드: 아티팩트 델타 이벤트 확인
  */
 export function isArtifactDeltaEvent(event: StreamEvent): event is ArtifactDeltaEvent {
@@ -165,6 +261,7 @@ export function isArtifactDeltaEvent(event: StreamEvent): event is ArtifactDelta
 }
 
 /**
+ * @deprecated Use isNeosArtifactFinishEvent instead
  * 타입 가드: 아티팩트 완료 이벤트 확인
  */
 export function isArtifactFinishEvent(event: StreamEvent): event is ArtifactFinishEvent {
@@ -172,6 +269,7 @@ export function isArtifactFinishEvent(event: StreamEvent): event is ArtifactFini
 }
 
 /**
+ * @deprecated Use isOutputItemAddedEvent with isFunctionCallItem instead
  * 타입 가드: 워크플로우 노드 시작 이벤트 확인
  */
 export function isWorkflowNodeStartEvent(event: StreamEvent): event is WorkflowNodeStartEvent {
@@ -179,6 +277,7 @@ export function isWorkflowNodeStartEvent(event: StreamEvent): event is WorkflowN
 }
 
 /**
+ * @deprecated Use isOutputItemDoneEvent with isFunctionCallItem instead
  * 타입 가드: 워크플로우 노드 완료 이벤트 확인
  */
 export function isWorkflowNodeCompleteEvent(event: StreamEvent): event is WorkflowNodeCompleteEvent {
@@ -186,6 +285,7 @@ export function isWorkflowNodeCompleteEvent(event: StreamEvent): event is Workfl
 }
 
 /**
+ * @deprecated Use isNeosWorkflowProgressEvent instead
  * 타입 가드: 워크플로우 진행 상황 이벤트 확인
  */
 export function isWorkflowProgressEvent(event: StreamEvent): event is WorkflowProgressEvent {

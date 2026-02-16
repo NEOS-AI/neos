@@ -1,23 +1,32 @@
 /**
  * SSE 기반 커스텀 채팅 스트리밍 훅
  * Vercel AI SDK의 useChat을 대체하여 백엔드 SSE를 직접 처리
+ *
+ * Supports both legacy Neos events and OpenResponses specification events.
+ * @see https://www.openresponses.org/specification
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "@/lib/types";
-import type { StreamEvent } from "@/lib/stream-types";
+import type { OpenResponsesEvent, MessageItem } from "@/lib/stream-types";
 import {
-  isStreamContentEvent,
-  isStreamCompleteEvent,
-  isStreamErrorEvent,
-  isStreamStartEvent,
-  isArtifactMetaEvent,
-  isArtifactDeltaEvent,
-  isArtifactFinishEvent,
-  isWorkflowNodeStartEvent,
-  isWorkflowNodeCompleteEvent,
-  isWorkflowProgressEvent,
+  // OpenResponses type guards
+  isResponseInProgressEvent,
+  isResponseCompletedEvent,
+  isResponseFailedEvent,
+  isOutputItemAddedEvent,
+  isOutputItemDoneEvent,
+  isOutputTextDeltaEvent,
+  isNeosArtifactMetaEvent,
+  isNeosArtifactDeltaEvent,
+  isNeosArtifactFinishEvent,
+  isNeosWorkflowProgressEvent,
+  isFunctionCallItem,
 } from "@/lib/stream-types";
+import {
+  createStreamProcessor,
+  detectEventFormat,
+} from "@/lib/adapters/stream-adapter";
 import { generateUUID } from "@/lib/utils";
 import type { VisibilityType } from "@/components/visibility-selector";
 import type { ChatModel } from "@/lib/ai/models";
@@ -80,7 +89,8 @@ export function useChatStream({
   }, []);
 
   /**
-   * SSE 스트림 처리
+   * SSE 스트림 처리 (OpenResponses 스펙 준수)
+   * Supports both legacy events and OpenResponses events via adapter
    */
   const processStream = useCallback(
     async (response: Response) => {
@@ -89,12 +99,15 @@ export function useChatStream({
       }
 
       const reader = response.body.getReader();
-      readerRef.current = reader; // Store reader for cleanup
+      readerRef.current = reader;
       const decoder = new TextDecoder();
       let buffer = "";
 
-      // 현재 아티팩트 kind 추적 (artifact_meta에서 설정됨)
+      // 현재 아티팩트 kind 추적
       let currentArtifactKind: "text" | "code" | "sheet" | "image" | null = null;
+
+      // Stream processor for event format detection and adaptation
+      const streamProcessor = createStreamProcessor("legacy");
 
       // 어시스턴트 메시지 초기화
       const assistantMessage: ChatMessage = {
@@ -103,13 +116,21 @@ export function useChatStream({
         parts: [{ type: "text", text: "" }],
         metadata: {
           createdAt: new Date().toISOString(),
+          responseStatus: "in_progress" as const,
         },
       };
 
       currentAssistantMessageRef.current = assistantMessage;
-
-      // 메시지 목록에 추가 (빈 메시지로 시작)
       setMessages((prev) => [...prev, assistantMessage]);
+
+      // Helper to update message state
+      const updateMessage = () => {
+        setMessages((prev) => {
+          const newMessages = [...prev];
+          newMessages[newMessages.length - 1] = { ...assistantMessage };
+          return newMessages;
+        });
+      };
 
       try {
         while (true) {
@@ -121,198 +142,238 @@ export function useChatStream({
           buffer = lines.pop() || "";
 
           for (const line of lines) {
+            // Handle [DONE] token (OpenResponses spec)
+            if (line === "data: [DONE]") {
+              setStatus("ready");
+              if (onFinish) onFinish();
+              continue;
+            }
+
+            // Skip event: lines (OpenResponses spec - type is in data payload)
+            if (line.startsWith("event: ")) {
+              continue;
+            }
+
+            // Skip empty lines or non-data lines
             if (!line.trim() || !line.startsWith("data: ")) continue;
 
             try {
-              const eventData: StreamEvent = JSON.parse(line.substring(6));
+              const rawEvent = JSON.parse(line.substring(6));
 
-              // 시작 이벤트
-              if (isStreamStartEvent(eventData)) {
-                // 메시지 ID 업데이트
-                assistantMessage.id = eventData.message_id;
-                if (onData) {
-                  onData({ type: "message_start", data: { id: eventData.message_id } });
-                }
-              }
-              // 컨텐츠 델타 이벤트
-              else if (isStreamContentEvent(eventData)) {
-                // 델타만 추가 (누적 아님!)
-                const textPart = assistantMessage.parts[0];
-                if (textPart.type === "text") {
-                  textPart.text += eventData.content;
-                }
+              // Detect event format and process accordingly
+              const format = detectEventFormat(rawEvent);
 
-                // 메시지 업데이트
-                setMessages((prev) => {
-                  const newMessages = [...prev];
-                  newMessages[newMessages.length - 1] = { ...assistantMessage };
-                  return newMessages;
-                });
+              // Convert legacy events to OpenResponses format
+              const events: OpenResponsesEvent[] =
+                format === "legacy"
+                  ? streamProcessor.process(rawEvent)
+                  : [rawEvent as OpenResponsesEvent];
 
-                if (onData) {
-                  onData({ type: "text_delta", delta: eventData.content });
-                }
-              }
-              // 완료 이벤트
-              else if (isStreamCompleteEvent(eventData)) {
-                // 메시지 ID 최종 확인
-                assistantMessage.id = eventData.message_id;
-
-                // 최종 메시지 업데이트
-                setMessages((prev) => {
-                  const newMessages = [...prev];
-                  newMessages[newMessages.length - 1] = { ...assistantMessage };
-                  return newMessages;
-                });
-
-                if (onData) {
-                  onData({
-                    type: "finish",
-                    finishReason: "stop",
-                    usage: {
-                      promptTokens: eventData.metadata.prompt_tokens || 0,
-                      completionTokens: eventData.metadata.completion_tokens || 0,
-                      totalTokens: eventData.metadata.total_tokens || 0,
-                    },
-                  });
-                }
-
-                setStatus("ready");
-                if (onFinish) {
-                  onFinish();
-                }
-              }
-              // 에러 이벤트
-              else if (isStreamErrorEvent(eventData)) {
-                const error = new Error(eventData.error);
-                setStatus("error");
-                if (onError) {
-                  onError(error);
-                }
-              }
-              // 아티팩트 메타데이터 이벤트
-              else if (isArtifactMetaEvent(eventData)) {
-                // 현재 아티팩트 kind 저장
-                currentArtifactKind = eventData.artifact_kind;
-
-                // 어시스턴트 메시지의 metadata에 아티팩트 정보 저장
-                assistantMessage.metadata = {
-                  createdAt:
-                    assistantMessage.metadata?.createdAt ||
-                    new Date().toISOString(),
-                  artifact: {
-                    id: eventData.artifact_id,
-                    title: eventData.artifact_title,
-                    kind: eventData.artifact_kind,
-                  },
-                };
-
-                // 메시지 업데이트
-                setMessages((prev) => {
-                  const newMessages = [...prev];
-                  newMessages[newMessages.length - 1] = { ...assistantMessage };
-                  return newMessages;
-                });
-
-                if (onData) {
-                  // artifact_id를 data-id로 변환
-                  onData({ type: "data-id", data: eventData.artifact_id });
-                  // artifact_title을 data-title로 변환
-                  onData({ type: "data-title", data: eventData.artifact_title });
-                  // artifact_kind를 data-kind로 변환
-                  onData({ type: "data-kind", data: eventData.artifact_kind });
-                }
-              }
-              // 아티팩트 델타 이벤트
-              else if (isArtifactDeltaEvent(eventData)) {
-                if (onData && currentArtifactKind) {
-                  // 현재 아티팩트 kind에 따라 적절한 delta 타입으로 변환
-                  const deltaType = `data-${currentArtifactKind}Delta` as const;
-                  onData({ type: deltaType, data: eventData.content });
-                }
-              }
-              // 아티팩트 완료 이벤트
-              else if (isArtifactFinishEvent(eventData)) {
-                if (onData) {
-                  onData({ type: "data-finish", data: null });
-                }
-              }
-              // 워크플로우 노드 시작 이벤트
-              else if (isWorkflowNodeStartEvent(eventData)) {
-                // 메시지 metadata에 워크플로우 에이전트 정보 추가/업데이트
-                if (!assistantMessage.metadata) {
-                  assistantMessage.metadata = { createdAt: new Date().toISOString() };
-                }
-                if (!assistantMessage.metadata.workflow_agents) {
-                  assistantMessage.metadata.workflow_agents = [];
-                }
-
-                // 에이전트 추가
-                assistantMessage.metadata.workflow_agents.push({
-                  agent_name: eventData.agent_name,
-                  node_name: eventData.node_name,
-                  status: "input-available",
-                });
-
-                // 메시지 업데이트
-                setMessages((prev) => {
-                  const newMessages = [...prev];
-                  newMessages[newMessages.length - 1] = { ...assistantMessage };
-                  return newMessages;
-                });
-
-                // Tool 시작 이벤트로 변환
-                if (onData) {
-                  onData({
-                    type: "tool-start",
-                    data: {
-                      tool_name: eventData.agent_name,
-                      status: "input-available",
-                      progress: eventData.progress_percent,
-                    },
-                  });
-                }
-              }
-              // 워크플로우 노드 완료 이벤트
-              else if (isWorkflowNodeCompleteEvent(eventData)) {
-                // 에이전트 상태 업데이트
-                if (assistantMessage.metadata?.workflow_agents) {
-                  const agent = assistantMessage.metadata.workflow_agents.find(
-                    (a: any) => a.node_name === eventData.node_name
-                  );
-                  if (agent) {
-                    agent.status = "output-available";
+              // Process each OpenResponses event
+              for (const eventData of events) {
+                // response.in_progress - 응답 시작
+                if (isResponseInProgressEvent(eventData)) {
+                  assistantMessage.id = eventData.response.output[0]?.id || assistantMessage.id;
+                  assistantMessage.metadata = {
+                    createdAt: assistantMessage.metadata?.createdAt || new Date().toISOString(),
+                    ...assistantMessage.metadata,
+                    responseStatus: "in_progress",
+                    responseId: eventData.response.id,
+                  };
+                  updateMessage();
+                  if (onData) {
+                    onData({ type: "message_start", data: { id: assistantMessage.id } });
                   }
                 }
 
-                // 메시지 업데이트
-                setMessages((prev) => {
-                  const newMessages = [...prev];
-                  newMessages[newMessages.length - 1] = { ...assistantMessage };
-                  return newMessages;
-                });
-
-                // Tool 완료 이벤트로 변환
-                if (onData) {
-                  onData({
-                    type: "tool-complete",
-                    data: {
-                      tool_name: eventData.agent_name,
-                      status: "output-available",
-                    },
-                  });
+                // response.output_text.delta - 텍스트 증분
+                else if (isOutputTextDeltaEvent(eventData)) {
+                  const textPart = assistantMessage.parts[0];
+                  if (textPart.type === "text") {
+                    textPart.text += eventData.delta;
+                  }
+                  updateMessage();
+                  if (onData) {
+                    onData({ type: "text_delta", delta: eventData.delta });
+                  }
                 }
-              }
-              // 워크플로우 진행 상황 이벤트
-              else if (isWorkflowProgressEvent(eventData)) {
-                if (onData) {
-                  onData({
-                    type: "workflow-progress",
-                    data: {
-                      progress: eventData.progress_percent,
-                      message: eventData.message,
+
+                // response.output_item.added - 새 아이템 추가
+                else if (isOutputItemAddedEvent(eventData)) {
+                  const item = eventData.item;
+
+                  // function_call 아이템인 경우 워크플로우 UI 업데이트
+                  if (isFunctionCallItem(item)) {
+                    if (!assistantMessage.metadata) {
+                      assistantMessage.metadata = { createdAt: new Date().toISOString() };
+                    }
+                    if (!assistantMessage.metadata.function_calls) {
+                      assistantMessage.metadata.function_calls = [];
+                    }
+
+                    assistantMessage.metadata.function_calls.push({
+                      id: item.id,
+                      call_id: item.call_id,
+                      name: item.name,
+                      arguments: item.arguments,
+                      status: item.status,
+                    });
+
+                    // Legacy compatibility: also update workflow_agents
+                    if (!assistantMessage.metadata.workflow_agents) {
+                      assistantMessage.metadata.workflow_agents = [];
+                    }
+                    assistantMessage.metadata.workflow_agents.push({
+                      agent_name: item.name,
+                      node_name: item.call_id,
+                      status: item.status === "in_progress" ? "input-available" : "output-available",
+                    });
+
+                    updateMessage();
+
+                    if (onData) {
+                      onData({
+                        type: "tool-start",
+                        data: {
+                          tool_name: item.name,
+                          call_id: item.call_id,
+                          status: item.status,
+                        },
+                      });
+                    }
+                  }
+                }
+
+                // response.output_item.done - 아이템 완료
+                else if (isOutputItemDoneEvent(eventData)) {
+                  const item = eventData.item;
+
+                  if (isFunctionCallItem(item)) {
+                    // Update function_call status
+                    const fc = assistantMessage.metadata?.function_calls?.find(
+                      (f: any) => f.id === item.id
+                    );
+                    if (fc) fc.status = "completed";
+
+                    // Update legacy workflow_agents
+                    const agent = assistantMessage.metadata?.workflow_agents?.find(
+                      (a: any) => a.node_name === item.call_id
+                    );
+                    if (agent) agent.status = "output-available";
+
+                    updateMessage();
+
+                    if (onData) {
+                      onData({
+                        type: "tool-complete",
+                        data: {
+                          tool_name: item.name,
+                          call_id: item.call_id,
+                          status: "completed",
+                        },
+                      });
+                    }
+                  }
+                }
+
+                // response.completed - 전체 완료
+                else if (isResponseCompletedEvent(eventData)) {
+                  const messageItem = eventData.response.output.find(
+                    (item): item is MessageItem => item.type === "message"
+                  );
+                  if (messageItem) {
+                    assistantMessage.id = messageItem.id;
+                  }
+
+                  assistantMessage.metadata = {
+                    createdAt: assistantMessage.metadata?.createdAt || new Date().toISOString(),
+                    ...assistantMessage.metadata,
+                    responseStatus: "completed",
+                  };
+
+                  updateMessage();
+
+                  if (onData) {
+                    onData({
+                      type: "finish",
+                      finishReason: "stop",
+                      usage: {
+                        promptTokens: eventData.response.usage?.input_tokens || 0,
+                        completionTokens: eventData.response.usage?.output_tokens || 0,
+                        totalTokens:
+                          (eventData.response.usage?.input_tokens || 0) +
+                          (eventData.response.usage?.output_tokens || 0),
+                      },
+                    });
+                  }
+
+                  setStatus("ready");
+                  if (onFinish) onFinish();
+                }
+
+                // response.failed - 에러
+                else if (isResponseFailedEvent(eventData)) {
+                  assistantMessage.metadata = {
+                    createdAt: assistantMessage.metadata?.createdAt || new Date().toISOString(),
+                    ...assistantMessage.metadata,
+                    responseStatus: "failed",
+                  };
+                  updateMessage();
+
+                  setStatus("error");
+                  if (onError) {
+                    onError(new Error(eventData.response.error?.message || "Response failed"));
+                  }
+                }
+
+                // neos:artifact_meta - 아티팩트 메타데이터
+                else if (isNeosArtifactMetaEvent(eventData)) {
+                  currentArtifactKind = eventData.artifact_kind;
+
+                  assistantMessage.metadata = {
+                    createdAt: assistantMessage.metadata?.createdAt || new Date().toISOString(),
+                    ...assistantMessage.metadata,
+                    artifact: {
+                      id: eventData.artifact_id,
+                      title: eventData.artifact_title,
+                      kind: eventData.artifact_kind,
                     },
-                  });
+                  };
+                  updateMessage();
+
+                  if (onData) {
+                    onData({ type: "data-id", data: eventData.artifact_id });
+                    onData({ type: "data-title", data: eventData.artifact_title });
+                    onData({ type: "data-kind", data: eventData.artifact_kind });
+                  }
+                }
+
+                // neos:artifact_delta - 아티팩트 콘텐츠 델타
+                else if (isNeosArtifactDeltaEvent(eventData)) {
+                  if (onData && currentArtifactKind) {
+                    const deltaType = `data-${currentArtifactKind}Delta` as const;
+                    onData({ type: deltaType, data: eventData.content });
+                  }
+                }
+
+                // neos:artifact_finish - 아티팩트 완료
+                else if (isNeosArtifactFinishEvent(eventData)) {
+                  if (onData) {
+                    onData({ type: "data-finish", data: null });
+                  }
+                }
+
+                // neos:workflow_progress - 워크플로우 진행 상황
+                else if (isNeosWorkflowProgressEvent(eventData)) {
+                  if (onData) {
+                    onData({
+                      type: "workflow-progress",
+                      data: {
+                        progress: eventData.progress_percent,
+                        message: eventData.message,
+                      },
+                    });
+                  }
                 }
               }
             } catch (parseError) {
@@ -327,11 +388,10 @@ export function useChatStream({
           onError(error);
         }
       } finally {
-        // Cancel reader to prevent ECONNRESET errors
         if (readerRef.current) {
           try {
             await readerRef.current.cancel();
-          } catch (cancelError) {
+          } catch {
             // Ignore cancel errors
           }
           readerRef.current = null;

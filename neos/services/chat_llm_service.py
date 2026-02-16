@@ -268,13 +268,37 @@ class ChatLLMService:
             # 스트리밍 호출
             async for chunk in llm.astream(messages):
                 if hasattr(chunk, "content") and chunk.content:
-                    # Extract text properly (handles thinking blocks)
-                    content_chunk = extract_text_from_response(chunk)
-                    if content_chunk:  # Only process non-empty chunks
-                        full_content += content_chunk
+                    content = chunk.content
 
-                        # 컨텐츠 이벤트
-                        yield {"type": "content", "content": content_chunk}
+                    # Handle thinking blocks (content is a list when extended thinking is enabled)
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict):
+                                if block.get("type") == "thinking":
+                                    thinking_text = block.get("thinking", "")
+                                    if thinking_text:
+                                        yield {"type": "reasoning", "content": thinking_text}
+                                elif block.get("type") == "text":
+                                    text = block.get("text", "")
+                                    if text:
+                                        full_content += text
+                                        yield {"type": "content", "content": text}
+                            elif hasattr(block, "type"):
+                                if block.type == "thinking":
+                                    thinking_text = getattr(block, "thinking", "")
+                                    if thinking_text:
+                                        yield {"type": "reasoning", "content": thinking_text}
+                                elif block.type == "text":
+                                    text = getattr(block, "text", "")
+                                    if text:
+                                        full_content += text
+                                        yield {"type": "content", "content": text}
+                    else:
+                        # Simple string content (no thinking blocks)
+                        content_chunk = extract_text_from_response(chunk)
+                        if content_chunk:
+                            full_content += content_chunk
+                            yield {"type": "content", "content": content_chunk}
 
                 # 마지막 청크에서 usage 정보 추출
                 if hasattr(chunk, "response_metadata"):
@@ -408,34 +432,40 @@ class ChatLLMService:
             ) as stream:
                 # 스트리밍 이벤트 처리
                 async for event in stream:
-                    # 텍스트 컨텐츠 델타
-                    if hasattr(event, 'type') and event.type == "content_block_delta":
-                        if hasattr(event, 'delta') and hasattr(event.delta, 'type'):
-                            if event.delta.type == "text_delta":
-                                text = event.delta.text
-                                full_content += text
-                                yield {"type": "content", "content": text}
+                    if not hasattr(event, 'type'):
+                        continue
 
-                    # Tool use 블록 시작
-                    elif hasattr(event, 'type') and event.type == "content_block_start":
+                    # Content block 시작
+                    if event.type == "content_block_start":
                         if hasattr(event, 'content_block') and hasattr(event.content_block, 'type'):
-                            if event.content_block.type == "tool_use":
+                            if event.content_block.type == "thinking":
+                                # Thinking 블록 시작
+                                yield {"type": "reasoning_start"}
+                            elif event.content_block.type == "tool_use":
                                 # Tool 호출 감지
                                 tool_name = event.content_block.name
                                 tool_id = event.content_block.id
-                                # tool_input은 아직 받지 못함 (델타로 전송됨)
-                                print(f"[DEBUG] Tool use started: {tool_name} (ID: {tool_id})")
+                                logger.debug(f"Tool use started: {tool_name} (ID: {tool_id})")
 
-                    # Tool input 델타 (JSON 형식으로 점진적으로 받음)
-                    elif hasattr(event, 'type') and event.type == "content_block_delta":
+                    # Content block 델타
+                    elif event.type == "content_block_delta":
                         if hasattr(event, 'delta') and hasattr(event.delta, 'type'):
-                            if event.delta.type == "input_json_delta":
+                            if event.delta.type == "thinking_delta":
+                                # Thinking 블록 델타 → reasoning 이벤트
+                                thinking_text = getattr(event.delta, 'thinking', '')
+                                if thinking_text:
+                                    yield {"type": "reasoning", "content": thinking_text}
+                            elif event.delta.type == "text_delta":
+                                # 텍스트 컨텐츠 델타
+                                text = event.delta.text
+                                full_content += text
+                                yield {"type": "content", "content": text}
+                            elif event.delta.type == "input_json_delta":
                                 # Tool input 델타는 나중에 최종 메시지에서 합쳐짐
                                 pass
 
                     # Content block 완료
-                    elif hasattr(event, 'type') and event.type == "content_block_stop":
-                        # 이 시점에서 tool use가 완료되면 최종 메시지에서 확인
+                    elif event.type == "content_block_stop":
                         pass
 
                 # 최종 메시지 가져오기

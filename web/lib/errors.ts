@@ -1,3 +1,5 @@
+import type { OpenResponsesErrorType, OpenResponsesErrorResponse } from "./open-responses-types";
+
 export type ErrorType =
   | "bad_request"
   | "unauthorized"
@@ -35,6 +37,18 @@ export const visibilityBySurface: Record<Surface, ErrorVisibility> = {
   activate_gateway: "response",
 };
 
+/**
+ * Map internal error types to OpenResponses error types
+ */
+const errorTypeToOpenResponses: Record<ErrorType, OpenResponsesErrorType> = {
+  bad_request: "invalid_request",
+  unauthorized: "invalid_request",
+  forbidden: "invalid_request",
+  not_found: "not_found",
+  rate_limit: "too_many_requests",
+  offline: "server_error",
+};
+
 export class ChatSDKError extends Error {
   type: ErrorType;
   surface: Surface;
@@ -52,7 +66,59 @@ export class ChatSDKError extends Error {
     this.statusCode = getStatusCodeByType(this.type);
   }
 
-  toResponse() {
+  /**
+   * Convert to OpenResponses error format
+   */
+  toOpenResponsesError(): OpenResponsesErrorResponse {
+    return {
+      error: {
+        type: errorTypeToOpenResponses[this.type] || "server_error",
+        message: this.message,
+        param: null,
+        code: `${this.type}:${this.surface}`,
+      },
+    };
+  }
+
+  /**
+   * Create Response with OpenResponses error format
+   */
+  toResponse(): Response {
+    const code: ErrorCode = `${this.type}:${this.surface}`;
+    const visibility = visibilityBySurface[this.surface];
+
+    const { message, cause, statusCode } = this;
+
+    if (visibility === "log") {
+      console.error({
+        code,
+        message,
+        cause,
+      });
+
+      // Return OpenResponses formatted error for logged errors
+      return Response.json(
+        {
+          error: {
+            type: "server_error" as OpenResponsesErrorType,
+            message: "Something went wrong. Please try again later.",
+            param: null,
+            code: "",
+          },
+        },
+        { status: statusCode }
+      );
+    }
+
+    // Return OpenResponses formatted error
+    return Response.json(this.toOpenResponsesError(), { status: statusCode });
+  }
+
+  /**
+   * @deprecated Use toResponse() instead - now returns OpenResponses format
+   * Create Response with legacy error format (for backward compatibility)
+   */
+  toLegacyResponse(): Response {
     const code: ErrorCode = `${this.type}:${this.surface}`;
     const visibility = visibilityBySurface[this.surface];
 
