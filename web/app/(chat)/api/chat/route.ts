@@ -1,7 +1,5 @@
 import { auth, type UserType } from "@/app/(auth)/auth";
-import type { VisibilityType } from "@/components/visibility-selector";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
-import type { ChatModel } from "@/lib/ai/models";
 import { mapToBackendModelName } from "@/lib/ai/models";
 import { callBackendAPI } from "@/lib/backend-api";
 import {
@@ -14,7 +12,6 @@ import {
   updateChatTitleById,
 } from "@/lib/db/queries";
 import { ChatSDKError } from "@/lib/errors";
-import type { ChatMessage } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
@@ -32,17 +29,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const {
-      id,
-      message,
-      selectedChatModel,
-      selectedVisibilityType,
-    }: {
-      id: string;
-      message: ChatMessage;
-      selectedChatModel: ChatModel["id"];
-      selectedVisibilityType: VisibilityType;
-    } = requestBody;
+    const { id, message, selectedChatModel, selectedVisibilityType } = requestBody;
 
     const session = await auth();
 
@@ -171,14 +158,30 @@ export async function POST(request: Request) {
       return new ChatSDKError("offline:chat").toResponse();
     }
 
-    // Proxy backend SSE directly without TransformStream to avoid backpressure issues
-    // The browser will automatically cancel the stream when the client disconnects
-    return new Response(backendStreamResponse.body, {
+    // Transform stream to add OpenResponses [DONE] token at the end
+    const transformStream = new TransformStream({
+      async transform(chunk, controller) {
+        controller.enqueue(chunk);
+      },
+      async flush(controller) {
+        // Add [DONE] token at stream end (OpenResponses spec)
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      },
+    });
+
+    // Pipe backend SSE through transform stream
+    const responseStream = backendStreamResponse.body?.pipeThrough(transformStream);
+
+    return new Response(responseStream, {
       headers: {
+        // OpenResponses spec: text/event-stream content type
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
         "X-Accel-Buffering": "no",
+        // OpenResponses version header for client detection
+        "X-OpenResponses-Version": "2024-01-01",
       },
     });
   } catch (error) {

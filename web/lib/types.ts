@@ -6,18 +6,56 @@ import type { getWeather } from "./ai/tools/get-weather";
 import type { requestSuggestions } from "./ai/tools/request-suggestions";
 import type { updateDocument } from "./ai/tools/update-document";
 import type { Suggestion } from "./db/schema";
+import type { ItemStatus } from "./open-responses-types";
 
 export type DataPart = { type: "append-message"; message: string };
 
+/**
+ * OpenResponses-compliant function call status
+ */
+export const functionCallStatusSchema = z.enum([
+  "in_progress",
+  "completed",
+  "incomplete",
+  "failed",
+]);
+
+/**
+ * Function call item schema (OpenResponses spec)
+ */
+export const functionCallItemSchema = z.object({
+  id: z.string(),
+  call_id: z.string(),
+  name: z.string(),
+  arguments: z.string().optional(),
+  status: functionCallStatusSchema,
+});
+
+export type FunctionCallItemData = z.infer<typeof functionCallItemSchema>;
+
+/**
+ * Message metadata schema with OpenResponses fields
+ */
 export const messageMetadataSchema = z.object({
   createdAt: z.string(),
+  // OpenResponses: response-level status
+  responseStatus: z
+    .enum(["in_progress", "completed", "incomplete", "failed"])
+    .optional(),
+  // OpenResponses: response ID
+  responseId: z.string().optional(),
+  // Artifact information
   artifact: z
     .object({
       id: z.string(),
       title: z.string(),
       kind: z.custom<ArtifactKind>(),
+      status: z.enum(["in_progress", "completed"]).optional(),
     })
     .optional(),
+  // OpenResponses: function_call items
+  function_calls: z.array(functionCallItemSchema).optional(),
+  // Legacy: workflow_agents (deprecated, use function_calls)
   workflow_agents: z
     .array(
       z.object({
