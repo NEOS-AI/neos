@@ -230,3 +230,79 @@ class TestYouTubeSearchAgentExecute:
         result = await agent.execute("Python tutorial", context)
         # Should return a result (possibly empty) without crashing
         assert result is not None
+
+
+@pytest.mark.unit
+class TestYouTubeSearchAgentAutoDisable:
+    """Test agent auto-disable behavior"""
+
+    def test_agent_api_key_flag_without_key(self):
+        """Agent detects missing API key at init"""
+        from unittest.mock import patch
+        with patch("neos.agents.search_agents.youtube_search.settings") as mock_settings:
+            mock_settings.YOUTUBE_API_KEY = None
+            from neos.agents.search_agents.youtube_search import YouTubeSearchAgent
+            agent = YouTubeSearchAgent()
+            assert agent._api_key_configured is False
+
+    def test_agent_api_key_flag_with_key(self):
+        """Agent detects configured API key at init"""
+        from unittest.mock import patch
+        with patch("neos.agents.search_agents.youtube_search.settings") as mock_settings:
+            mock_settings.YOUTUBE_API_KEY = "test_key_123"
+            from neos.agents.search_agents.youtube_search import YouTubeSearchAgent
+            agent = YouTubeSearchAgent()
+            assert agent._api_key_configured is True
+
+    @pytest.mark.asyncio
+    async def test_init_failure_increments_counter(self):
+        """Each init failure increments the failure counter"""
+        from unittest.mock import patch, MagicMock
+        from neos.agents.search_agents.youtube_search import YouTubeSearchAgent
+        agent = YouTubeSearchAgent()
+
+        with patch("neos.agents.search_agents.youtube_search.mcp_manager") as mock_mgr:
+            mock_mgr.get_available_tools.side_effect = Exception("Connection failed")
+            await agent._initialize_tool()
+            assert agent._init_failure_count == 1
+            await agent._initialize_tool()
+            assert agent._init_failure_count == 2
+
+    @pytest.mark.asyncio
+    async def test_init_failure_auto_disables_after_max_failures(self):
+        """Agent becomes permanently disabled after max init failures"""
+        from unittest.mock import patch
+        from neos.agents.search_agents.youtube_search import YouTubeSearchAgent
+        agent = YouTubeSearchAgent()
+        agent._max_init_failures = 2  # Lower threshold for test
+
+        with patch("neos.agents.search_agents.youtube_search.mcp_manager") as mock_mgr:
+            mock_mgr.get_available_tools.side_effect = Exception("Connection failed")
+            await agent._initialize_tool()
+            assert agent._permanently_disabled is False
+            await agent._initialize_tool()
+            assert agent._permanently_disabled is True
+
+    @pytest.mark.asyncio
+    async def test_permanently_disabled_skips_init(self):
+        """Permanently disabled agent skips initialization entirely"""
+        from unittest.mock import patch
+        from neos.agents.search_agents.youtube_search import YouTubeSearchAgent
+        agent = YouTubeSearchAgent()
+        agent._permanently_disabled = True
+
+        with patch("neos.agents.search_agents.youtube_search.mcp_manager") as mock_mgr:
+            await agent._initialize_tool()
+            mock_mgr.get_available_tools.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_permanently_disabled_execute_returns_warning(self):
+        """Permanently disabled agent returns warning result on execute"""
+        from neos.agents.search_agents.youtube_search import YouTubeSearchAgent
+        agent = YouTubeSearchAgent()
+        agent._permanently_disabled = True
+
+        context = {"session_id": "test", "user_id": "user1"}
+        result = await agent.execute("Python tutorial", context)
+        assert result is not None
+        assert "disabled" in str(result).lower() or "warning" in str(result).lower()

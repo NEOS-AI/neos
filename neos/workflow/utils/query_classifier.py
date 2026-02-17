@@ -3,12 +3,17 @@
 from typing import Dict, Any, List
 from datetime import datetime
 
+import logging
+
+from neos.config.settings import settings
 from neos.utils.embeddings import embedding_manager
 from neos.utils.language_detection import detect_language
 from neos.utils.url_detector import has_urls, extract_urls
 
 from ..enums import IntentType, ComplexityIndicator
 from ..state import AgentState
+
+logger = logging.getLogger(__name__)
 
 
 class QueryClassifier:
@@ -203,11 +208,17 @@ class QueryClassifier:
         if has_urls(query):
             urls = extract_urls(query)
             print(f"[DEBUG] URLs detected in query: {urls}")
-            # YouTube URL인 경우 youtube_search agent 사용
+            # YouTube URL인 경우 youtube_search agent 사용 (API key 설정 시에만)
             if any("youtube.com" in url or "youtu.be" in url for url in urls):
-                print("[DEBUG] YouTube URL detected, using youtube_search agent")
-                agents.append("youtube_search")
-                return agents
+                if settings.YOUTUBE_API_KEY:
+                    print("[DEBUG] YouTube URL detected, using youtube_search agent")
+                    agents.append("youtube_search")
+                    return agents
+                else:
+                    logger.warning("YouTube URL detected but API key not configured, falling back to web_lookup")
+                    print("[DEBUG] YouTube URL detected but no API key, falling back to web_lookup")
+                    agents.append("web_lookup")
+                    return agents
             print("[DEBUG] Using web_lookup agent for URL content extraction")
             agents.append("web_lookup")
             return agents
@@ -265,7 +276,11 @@ class QueryClassifier:
         elif intent == IntentType.GENERATION.value:
             agents.extend(self._determine_generation_agents(query))
         elif intent == IntentType.YOUTUBE_SEARCH.value:
-            agents.append("youtube_search")
+            if settings.YOUTUBE_API_KEY:
+                agents.append("youtube_search")
+            else:
+                logger.warning("YouTube intent detected but API key not configured, falling back to realtime_info_search")
+                agents.append("realtime_info_search")
         else:
             # 기본적인 정보 탐색
             agents.append("realtime_info_search")

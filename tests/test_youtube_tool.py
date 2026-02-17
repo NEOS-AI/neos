@@ -13,6 +13,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
 
+from googleapiclient.errors import HttpError
+
 from neos.tools.tools.youtube import YouTubeMCPTool
 
 
@@ -245,3 +247,69 @@ class TestYouTubeMCPToolPlaylist:
         assert callable(tool._get_playlist_info)
         assert callable(tool._get_playlist_videos)
         assert callable(tool._compare_videos)
+
+
+@pytest.mark.unit
+class TestYouTubeMCPToolAutoDisable:
+    """Test automatic disabling on API errors"""
+
+    @pytest.fixture
+    def tool(self):
+        with patch("neos.tools.tools.youtube.build"):
+            t = YouTubeMCPTool()
+            t.is_available = True
+            return t
+
+    @pytest.mark.asyncio
+    async def test_tool_auto_disables_on_invalid_key(self, tool):
+        """401 HttpError disables the tool and sets _disabled_reason"""
+        mock_resp = MagicMock()
+        mock_resp.status = 401
+        http_error = HttpError(resp=mock_resp, content=b"Unauthorized")
+
+        tool._search_videos = AsyncMock(side_effect=http_error)
+
+        result = await tool.execute({"operation": "search_videos", "query": "test"})
+        assert result.success is False
+        assert tool.is_available is False
+        assert tool._disabled_reason == "API key invalid"
+
+    @pytest.mark.asyncio
+    async def test_tool_auto_disables_on_quota_exceeded(self, tool):
+        """403 HttpError disables the tool with quota exceeded reason"""
+        mock_resp = MagicMock()
+        mock_resp.status = 403
+        http_error = HttpError(resp=mock_resp, content=b"Forbidden")
+
+        tool._search_videos = AsyncMock(side_effect=http_error)
+
+        result = await tool.execute({"operation": "search_videos", "query": "test"})
+        assert result.success is False
+        assert tool.is_available is False
+        assert tool._disabled_reason == "API quota exceeded"
+
+    @pytest.mark.asyncio
+    async def test_disabled_tool_returns_error_immediately(self, tool):
+        """Disabled tool returns error without attempting API call"""
+        tool._disabled_reason = "API key invalid"
+        tool._search_videos = AsyncMock()
+
+        result = await tool.execute({"operation": "search_videos", "query": "test"})
+        assert result.success is False
+        assert "YouTube tool disabled" in result.error
+        # _search_videos should NOT have been called
+        tool._search_videos.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_auth_http_error_does_not_disable(self, tool):
+        """Non-401/403 HttpError does not auto-disable the tool"""
+        mock_resp = MagicMock()
+        mock_resp.status = 500
+        http_error = HttpError(resp=mock_resp, content=b"Server Error")
+
+        tool._search_videos = AsyncMock(side_effect=http_error)
+
+        result = await tool.execute({"operation": "search_videos", "query": "test"})
+        assert result.success is False
+        assert tool.is_available is True  # NOT disabled
+        assert tool._disabled_reason is None
