@@ -493,6 +493,47 @@ class Settings(BaseSettings):
     CELERY_TASK_ACKS_LATE: bool = bool(env_vars.get("CELERY_TASK_ACKS_LATE", True))  # Late ack (장애 복구)
 
     # =========================================================================
+    # Citation System 설정 (Phase 1)
+    # =========================================================================
+    CITATIONS_ENABLED: bool = bool(env_vars.get("CITATIONS_ENABLED", True))
+    CITATION_DEFAULT_STYLE: str = env_vars.get("CITATION_DEFAULT_STYLE", "numbered")
+    # Supported styles: "numbered", "apa", "mla", "chicago", "vancouver"
+
+    # =========================================================================
+    # Fact-Check Pipeline 설정 (Phase 1)
+    # =========================================================================
+    FACT_CHECK_ENABLED: bool = bool(env_vars.get("FACT_CHECK_ENABLED", True))
+    FACT_CHECK_COMPLEXITY_THRESHOLD: float = float(env_vars.get("FACT_CHECK_COMPLEXITY_THRESHOLD", 0.4))
+    # complexity_score가 이 임계값 이상인 쿼리에만 fact-check 적용
+
+    # =========================================================================
+    # Source Fallback Chain 설정 (Phase 1)
+    # =========================================================================
+    SEARCH_FALLBACK_ENABLED: bool = bool(env_vars.get("SEARCH_FALLBACK_ENABLED", True))
+    DUCKDUCKGO_MAX_RESULTS: int = int(env_vars.get("DUCKDUCKGO_MAX_RESULTS", 10))
+
+    # =========================================================================
+    # New Search Source Skills 설정 (Phase 1)
+    # =========================================================================
+    SEMANTIC_SCHOLAR_API_KEY: Optional[str] = env_vars.get("SEMANTIC_SCHOLAR_API_KEY", None)
+    NEWS_API_KEY: Optional[str] = env_vars.get("NEWS_API_KEY", None)
+
+    # =========================================================================
+    # Hybrid Search (BM25 + Dense Vector) 설정 (Phase 1)
+    # =========================================================================
+    HYBRID_SEARCH_ALPHA: float = float(env_vars.get("HYBRID_SEARCH_ALPHA", 0.5))
+    # 0 = pure keyword (BM25), 1 = pure semantic (vector), 0.5 = balanced
+    HYBRID_SEARCH_CANDIDATE_COUNT: int = int(env_vars.get("HYBRID_SEARCH_CANDIDATE_COUNT", 50))
+
+    # =========================================================================
+    # Cross-Encoder Re-Ranking 설정 (Phase 1)
+    # =========================================================================
+    RERANKER_ENABLED: bool = bool(env_vars.get("RERANKER_ENABLED", True))
+    COHERE_API_KEY: Optional[str] = env_vars.get("COHERE_API_KEY", None)
+    RERANKER_TOP_N: int = int(env_vars.get("RERANKER_TOP_N", 10))
+    RERANKER_MODEL: str = env_vars.get("RERANKER_MODEL", "rerank-english-v3.0")
+
+    # =========================================================================
     # Hybrid Checkpointer 설정 (Phase 3)
     # =========================================================================
     CHECKPOINTER_TYPE: str = env_vars.get("CHECKPOINTER_TYPE", "postgres")  # postgres, hybrid

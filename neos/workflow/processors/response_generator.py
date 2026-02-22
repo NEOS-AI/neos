@@ -84,6 +84,10 @@ class ResponseGenerator:
             # LLM 정제 없이 기본 구성
             final_response = self._construct_final_response(response_parts, detected_language)
 
+        # Citation 적용
+        if final_response and state["search_results"] and settings.CITATIONS_ENABLED:
+            final_response = self._apply_citations(final_response, state)
+
         # 실행 시간 계산
         execution_time = int((datetime.now() - state["execution_start"]).total_seconds() * 1000)
 
@@ -401,6 +405,45 @@ Refined Response:""",
         }
 
         return prompts.get(language, prompts["en"])
+
+    def _apply_citations(self, final_response: str, state: AgentState) -> str:
+        """검색 결과에 대한 citation reference list를 응답에 추가합니다."""
+        try:
+            from neos.utils.citations import UniversalCitationTracker
+
+            style = state.get("citation_style") or settings.CITATION_DEFAULT_STYLE
+            tracker = UniversalCitationTracker(style=style)
+
+            # SearchResult 객체에서 소스 정보 추출
+            sources = []
+            for result in state["search_results"]:
+                url = getattr(result, "url", "") or ""
+                title = getattr(result, "title", "") or ""
+                if url and title:
+                    sources.append({
+                        "url": url,
+                        "title": title,
+                        "content": getattr(result, "content", "") or "",
+                        "author": getattr(result, "author", None),
+                        "published_date": getattr(result, "published_date", None),
+                        "score": getattr(result, "score", 0.0),
+                    })
+
+            if not sources:
+                return final_response
+
+            tracker.register_sources(sources)
+
+            if tracker.has_sources:
+                only_cited = state.get("citation_only_cited", True)
+                references = tracker.generate_reference_list(only_cited=only_cited)
+                if references:
+                    final_response = final_response + "\n\n---\n" + references
+
+        except Exception as e:
+            print(f"[DEBUG] Citation application failed: {e}")
+
+        return final_response
 
     def get_response_stats(self, state: AgentState) -> Dict[str, Any]:
         """응답 생성 통계"""

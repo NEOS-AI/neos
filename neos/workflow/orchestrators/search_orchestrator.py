@@ -97,6 +97,9 @@ class SearchOrchestrator:
             logger.debug("도구 선택기 초기화 중...")
             await self.tool_selector.initialize()
 
+        # knowledge_hybrid 검색으로 캐시된 유사 결과를 보강 컨텍스트로 활용
+        await self._augment_with_cache_hybrid(state)
+
         # 적용 가능한 전략 선택
         selected_strategy = None
         for strategy in self.strategies:
@@ -155,6 +158,50 @@ class SearchOrchestrator:
                 state["errors"].append(f"Standard strategy failed: {str(e)}")
 
             return state
+
+    async def _augment_with_cache_hybrid(self, state: AgentState) -> None:
+        """knowledge_hybrid (cache_hybrid) 전략으로 캐시된 유사 결과를 보강합니다.
+
+        query_cache 테이블에 이전에 동일/유사한 쿼리의 결과가 있으면
+        검색 결과에 추가하여 응답 품질을 높입니다.
+
+        이 메서드는 검색 에이전트 실행 전에 호출되어,
+        캐시된 결과가 있으면 검색 결과를 보강합니다.
+        """
+        query_embedding = state.get("query_embedding")
+        if not query_embedding:
+            logger.debug("[SearchOrchestrator] cache_hybrid skipped: query_embedding not available")
+            return
+
+        try:
+            from neos.services.similarity_search_service import similarity_search_service
+
+            cached_results = await similarity_search_service.search(
+                query=state["original_query"],
+                strategy="cache_hybrid",
+                top_n=settings.HYBRID_SEARCH_CANDIDATE_COUNT,
+                limit=3,
+            )
+
+            if cached_results:
+                logger.info(
+                    f"[SearchOrchestrator] cache_hybrid found {len(cached_results)} "
+                    f"cached results (top RRF: {cached_results[0].get('rrf_score', 0):.3f})"
+                )
+                # 캐시 결과를 search_results에 보강
+                for cr in cached_results:
+                    response_data = cr.get("response_data", {})
+                    if isinstance(response_data, dict) and response_data.get("response"):
+                        state["search_results"].append({
+                            "source": "cache_hybrid",
+                            "content": str(response_data.get("response", ""))[:500],
+                            "query": cr.get("query_text", ""),
+                            "rrf_score": cr.get("rrf_score", 0),
+                        })
+
+        except Exception as e:
+            # cache_hybrid 실패는 검색을 차단하지 않음
+            logger.debug(f"[SearchOrchestrator] cache_hybrid augmentation skipped: {e}")
 
     async def _enhance_query_with_context(
         self,

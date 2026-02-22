@@ -36,6 +36,10 @@ def _get_async_breaker(name: str):
             config=AsyncCBConfig(
                 failure_threshold=settings.CIRCUIT_BREAKER_FAIL_THRESHOLD,
                 timeout_seconds=float(settings.CIRCUIT_BREAKER_RECOVERY_TIMEOUT),
+                # TimeoutError는 "느린 API"이지 "죽은 API"가 아니므로
+                # circuit breaker 실패 카운트에서 제외한다.
+                # 이렇게 하면 일시적 지연으로 인한 circuit open을 방지할 수 있다.
+                excluded_exceptions=(asyncio.TimeoutError,),
             )
         )
         logger.info(

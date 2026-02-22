@@ -22,7 +22,8 @@ from .processors import (
     ResponseGenerator,
     ConversationContextProcessor,
     RefinementChecker,
-    QueryRefinementAgent
+    QueryRefinementAgent,
+    FactCheckProcessor,
 )
 from .utils import QueryClassifier
 from .checkpointer import get_checkpointer
@@ -57,6 +58,7 @@ class MultiAgentWorkflow:
         self.analysis_orchestrator = AnalysisOrchestrator(self.agents, self.config)
         self.generation_orchestrator = GenerationOrchestrator(self.agents, self.config)
         self.result_processor = ResultProcessor()
+        self.fact_check_processor = FactCheckProcessor()
         self.quality_validator = QualityValidator(self.config)
         self.response_generator = ResponseGenerator()
 
@@ -138,6 +140,7 @@ class MultiAgentWorkflow:
         workflow.add_node(WorkflowNode.ANALYSIS_ORCHESTRATOR.value, self._orchestrate_analysis_node)
         workflow.add_node(WorkflowNode.GENERATION_ORCHESTRATOR.value, self._orchestrate_generation_node)
         workflow.add_node(WorkflowNode.RESULT_INTEGRATOR.value, self._integrate_results_node)
+        workflow.add_node(WorkflowNode.FACT_CHECK.value, self._fact_check_node)
         workflow.add_node(WorkflowNode.QUALITY_VALIDATOR.value, self._validate_quality_node)
         workflow.add_node(WorkflowNode.RESP_GENERATOR.value, self._generate_response_node)
 
@@ -185,7 +188,8 @@ class MultiAgentWorkflow:
         workflow.add_edge(WorkflowNode.SEARCH_ORCHESTRATOR.value, WorkflowNode.ANALYSIS_ORCHESTRATOR.value)
         workflow.add_edge(WorkflowNode.ANALYSIS_ORCHESTRATOR.value, WorkflowNode.GENERATION_ORCHESTRATOR.value)
         workflow.add_edge(WorkflowNode.GENERATION_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
-        workflow.add_edge(WorkflowNode.RESULT_INTEGRATOR.value, WorkflowNode.QUALITY_VALIDATOR.value)
+        workflow.add_edge(WorkflowNode.RESULT_INTEGRATOR.value, WorkflowNode.FACT_CHECK.value)
+        workflow.add_edge(WorkflowNode.FACT_CHECK.value, WorkflowNode.QUALITY_VALIDATOR.value)
 
         # 조건부 엣지 (품질 검증 결과에 따라)
         workflow.add_conditional_edges(
@@ -321,6 +325,10 @@ class MultiAgentWorkflow:
     async def _integrate_results_node(self, state: AgentState) -> Dict[str, Any]:
         """결과 통합 노드"""
         return await self.result_processor.integrate_results(state)
+
+    async def _fact_check_node(self, state: AgentState) -> Dict[str, Any]:
+        """Fact-check 노드 (조건부 실행)"""
+        return await self.fact_check_processor.check_facts(state)
 
     async def _validate_quality_node(self, state: AgentState) -> Dict[str, Any]:
         """품질 검증 노드"""
@@ -595,6 +603,9 @@ class MultiAgentWorkflow:
             initial_state = self._create_initial_state(user_input)
             initial_state["_event_handler"] = event_handler
 
+            # 독립 research_sessions 테이블에 세션 기록 (M-6 해결)
+            await self._record_session_start(user_input)
+
             try:
                 # 워크플로우 실행
                 add_span_event(span, "starting_graph_execution")
@@ -615,7 +626,8 @@ class MultiAgentWorkflow:
                     WorkflowNode.QUERY_CLS.value, WorkflowNode.SKILL_TOOL_SELECTOR.value,
                     WorkflowNode.SEARCH_ORCHESTRATOR.value, WorkflowNode.ANALYSIS_ORCHESTRATOR.value,
                     WorkflowNode.GENERATION_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value,
-                    WorkflowNode.QUALITY_VALIDATOR.value, WorkflowNode.RESP_GENERATOR.value
+                    WorkflowNode.FACT_CHECK.value, WorkflowNode.QUALITY_VALIDATOR.value,
+                    WorkflowNode.RESP_GENERATOR.value
                 ]
 
                 current_step = 0
@@ -635,9 +647,28 @@ class MultiAgentWorkflow:
                                 "total_steps": total_steps
                             })
 
-                            # 노드 시작 이벤트
+                            # 이전 노드의 실행 시간 기록 (동적 ETA용)
+                            from .events import (
+                                get_node_label, estimate_remaining_time,
+                                record_node_start, record_node_end,
+                            )
+                            wf_id = user_input.get("session_id", "")
+                            if current_step > 1:
+                                # 이전 노드 완료 기록
+                                prev_idx = workflow_nodes.index(node_name) - 1
+                                if prev_idx >= 0:
+                                    record_node_end(workflow_nodes[prev_idx], wf_id)
+
+                            # 현재 노드 시작 기록
+                            record_node_start(node_name, wf_id)
+
+                            # 노드 시작 이벤트 (structured progress)
                             await event_handler.on_node_start(
-                                node_name, current_step, total_steps
+                                node_name,
+                                current_step,
+                                total_steps,
+                                step_name=get_node_label(node_name),
+                                estimated_remaining_s=estimate_remaining_time(node_name),
                             )
 
                             # 노드 완료 이벤트 (state에서 필요한 정보 추출)
@@ -652,6 +683,11 @@ class MultiAgentWorkflow:
 
                         # 마지막 상태 저장
                         final_state = state
+
+                # 마지막 노드의 실행 시간 기록
+                if workflow_nodes:
+                    from .events import record_node_end
+                    record_node_end(workflow_nodes[-1], user_input.get("session_id", ""))
 
                 # 결과 생성
                 add_span_event(span, "generating_result")
@@ -687,6 +723,11 @@ class MultiAgentWorkflow:
                     "workflow.nodes_executed": current_step
                 })
 
+                # 세션 상태를 completed로 업데이트
+                await self._record_session_complete(
+                    user_input, result, final_state
+                )
+
                 print("[DEBUG] Workflow execution completed successfully")
                 return result
 
@@ -701,6 +742,9 @@ class MultiAgentWorkflow:
 
                 # 에러 이벤트
                 await event_handler.on_workflow_error(e)
+
+                # 세션 상태를 failed로 업데이트
+                await self._record_session_failed(user_input, e)
 
                 return self._create_error_result(e, initial_state)
 
@@ -899,6 +943,68 @@ class MultiAgentWorkflow:
             "execution_time_ms": int((datetime.now() - initial_state["execution_start"]).total_seconds() * 1000)
         }
 
+    async def _record_session_start(self, user_input: Dict[str, Any]) -> None:
+        """워크플로우 시작 시 research_sessions 테이블에 세션 기록"""
+        try:
+            from neos.api.services.research_session_service import research_session_service
+        except ImportError as e:
+            logger.error(f"[Workflow] Cannot import research_session_service: {e}")
+            return
+
+        try:
+            await research_session_service.create_session(
+                thread_id=user_input.get("session_id", ""),
+                user_id=user_input.get("user_id", ""),
+                original_query=user_input.get("query", ""),
+            )
+        except Exception as e:
+            # 세션 기록 실패는 워크플로우 실행을 차단하지 않음
+            logger.warning(f"[Workflow] Failed to record session start: {e}")
+
+    async def _record_session_complete(
+        self, user_input: Dict[str, Any], result: Dict[str, Any],
+        final_state: AgentState
+    ) -> None:
+        """워크플로우 완료 시 세션 상태 업데이트"""
+        try:
+            from neos.api.services.research_session_service import research_session_service
+        except ImportError as e:
+            logger.error(f"[Workflow] Cannot import research_session_service: {e}")
+            return
+
+        try:
+            await research_session_service.update_session_status(
+                thread_id=user_input.get("session_id", ""),
+                status="completed",
+                metadata_updates={
+                    "quality_score": result.get("quality_score"),
+                    "search_results_count": len(final_state.get("search_results", [])),
+                    "execution_time_ms": result.get("execution_time_ms"),
+                    "errors": final_state.get("errors", []),
+                },
+            )
+        except Exception as e:
+            logger.warning(f"[Workflow] Failed to record session completion: {e}")
+
+    async def _record_session_failed(
+        self, user_input: Dict[str, Any], error: Exception
+    ) -> None:
+        """워크플로우 실패 시 세션 상태 업데이트"""
+        try:
+            from neos.api.services.research_session_service import research_session_service
+        except ImportError as e:
+            logger.error(f"[Workflow] Cannot import research_session_service: {e}")
+            return
+
+        try:
+            await research_session_service.update_session_status(
+                thread_id=user_input.get("session_id", ""),
+                status="failed",
+                metadata_updates={"error": str(error)},
+            )
+        except Exception as e:
+            logger.warning(f"[Workflow] Failed to record session failure: {e}")
+
     async def _cache_workflow_result(self, cache_key: str, result: Dict[str, Any]) -> None:
         """워크플로우 결과 캐싱"""
         print(f"[DEBUG] Caching workflow response for {settings.WORKFLOW_RESPONSE_CACHE_TTL} seconds")
@@ -969,6 +1075,7 @@ class MultiAgentWorkflow:
                 WorkflowNode.ANALYSIS_ORCHESTRATOR.value: bool(self.analysis_orchestrator),
                 WorkflowNode.GENERATION_ORCHESTRATOR.value: bool(self.generation_orchestrator),
                 WorkflowNode.RESULT_INTEGRATOR.value: bool(self.result_processor),
+                WorkflowNode.FACT_CHECK.value: bool(self.fact_check_processor),
                 WorkflowNode.QUALITY_VALIDATOR.value: bool(self.quality_validator),
                 WorkflowNode.RESP_GENERATOR.value: bool(self.response_generator)
             },

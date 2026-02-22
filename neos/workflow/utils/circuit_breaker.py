@@ -44,12 +44,16 @@ class CircuitBreakerConfig:
         timeout_seconds: Time to wait before trying HALF_OPEN (default: 60)
         half_open_max_calls: Max concurrent calls in HALF_OPEN state (default: 1)
         expected_exception: Exception type to consider as failure (default: Exception)
+        excluded_exceptions: Tuple of exception types to NOT count as failures.
+            These exceptions will still propagate but won't trigger the circuit breaker.
+            Useful for separating "slow API" (TimeoutError) from "dead API" (ConnectionError).
     """
     failure_threshold: int = 5
     success_threshold: int = 2
     timeout_seconds: float = 60.0
     half_open_max_calls: int = 1
     expected_exception: type = Exception
+    excluded_exceptions: tuple = ()
 
 
 @dataclass
@@ -162,6 +166,15 @@ class CircuitBreaker:
             return result
 
         except self.config.expected_exception as e:
+            # excluded_exceptions에 해당하면 CB 실패로 카운트하지 않고 전파만 한다.
+            # "느린 API" (TimeoutError)와 "죽은 API" (ConnectionError)를 구분하기 위함.
+            if self.config.excluded_exceptions and isinstance(e, self.config.excluded_exceptions):
+                logger.info(
+                    f"[CircuitBreaker] {self.name} excluded exception (not counted as failure): "
+                    f"{type(e).__name__}: {e}"
+                )
+                raise
+
             await self._on_failure(e)
             raise
 

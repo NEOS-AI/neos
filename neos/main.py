@@ -25,6 +25,7 @@ from neos.api.handlers.workflow_stream_handlers import router as workflow_stream
 from neos.api.handlers.unified_handlers import router as unified_router
 from neos.api.handlers.vote_handlers import router as vote_router
 from neos.api.handlers.artifact_handlers import router as artifact_router
+from neos.api.handlers.research_session_handlers import router as research_session_router
 from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.workflow.graph import multi_agent_workflow
 from neos.utils.exceptions import NeosBaseException, get_exception_status_code, is_client_error
@@ -360,6 +361,7 @@ app.include_router(unified_router, tags=["Unified Processing"])  # 통합 API (�
 app.include_router(similarity_chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Similarity-based Chat"])
 app.include_router(vote_router, prefix=settings.API_V1_PREFIX, tags=["Votes & Feedback"])  # Vote API
 app.include_router(artifact_router, prefix=settings.API_V1_PREFIX, tags=["Artifacts & Documents"])  # Artifact API
+app.include_router(research_session_router, tags=["Research Sessions"])  # Research Session API (prefix already set in router)
 
 
 # === Enterprise Monitoring Endpoints ===

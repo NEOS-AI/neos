@@ -18,6 +18,7 @@ class WorkflowNode(Enum):
 
     # result processors
     RESULT_INTEGRATOR = "result_integrator"
+    FACT_CHECK = "fact_check"
     QUALITY_VALIDATOR = "quality_validator"
     RESP_GENERATOR = "response_generator"
 
