@@ -206,6 +206,10 @@ class DocumentChunk(Base):
     # 임베딩
     embedding = Column(Vector(1536))  # OpenAI embedding
 
+    # Parent-child 청킹
+    parent_chunk_id = Column(Integer, ForeignKey("document_chunks.id"), nullable=True)
+    chunking_strategy = Column(String(20), default="sentence")  # fixed, sentence, semantic, parent_child
+
     # 청크 메타데이터
     chunk_type = Column(String(50))  # 'paragraph', 'heading', 'list', 'table', 'code'
     heading_hierarchy = Column(ARRAY(String))  # 상위 헤딩 정보
