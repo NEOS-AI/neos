@@ -1,4 +1,4 @@
-"""Vote API Handlers"""
+"""Vote & Feedback API Handlers"""
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,7 +7,10 @@ from typing import List
 from neos.database.connection import get_db
 from neos.api.dependencies.auth import get_current_user
 from neos.database.models import User
-from neos.api.models.vote_models import VoteRequest, VoteResponse
+from neos.api.models.vote_models import (
+    VoteRequest, VoteResponse,
+    FeedbackRequest, FeedbackResponse, FeedbackAggregation,
+)
 from neos.api.services.vote_service import VoteService
 
 
@@ -72,3 +75,44 @@ async def delete_vote(
     service = VoteService(db)
     await service.delete_vote(chat_id, message_id, current_user.user_id)
     return None
+
+
+# ── Phase 2.11: Feedback Endpoints ──────────────────────────────────
+
+@router.post("/feedback", response_model=FeedbackResponse, status_code=status.HTTP_201_CREATED)
+async def submit_feedback(
+    feedback: FeedbackRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    피드백 제출 (투표 + 텍스트 피드백)
+
+    - **is_upvoted**: thumbs up/down
+    - **feedback_text**: 선택적 텍스트 피드백 (최대 2000자)
+    - **feedback_category**: source_quality, incorrect_info, prompt_issue, missing_info, other
+    """
+    service = VoteService(db)
+    return await service.submit_feedback(
+        chat_id=feedback.chat_id,
+        message_id=feedback.message_id,
+        is_upvoted=feedback.is_upvoted,
+        feedback_text=feedback.feedback_text,
+        feedback_category=feedback.feedback_category,
+        user_id=current_user.user_id,
+    )
+
+
+@router.get("/feedback/aggregation", response_model=FeedbackAggregation)
+async def get_feedback_aggregation(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    피드백 집계 조회
+
+    Returns:
+        전체 피드백 통계 (총 투표, 업보트율, 카테고리별 분포)
+    """
+    service = VoteService(db)
+    return await service.get_feedback_aggregation()

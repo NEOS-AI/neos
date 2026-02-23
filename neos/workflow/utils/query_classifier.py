@@ -1,6 +1,14 @@
-"""쿼리 분류 및 의도 파악 유틸리티"""
+"""쿼리 분류 및 의도 파악 유틸리티
 
-from typing import Dict, Any, List
+Phase 2.3: LLM 기반 분류 추가
+- 기존 keyword 매칭에 LLM structured output 분류 추가
+- LLM 실패 시 기존 keyword 기반으로 자동 fallback
+- Circuit breaker 패턴으로 연속 실패 시 LLM 호출 중단
+"""
+
+import json
+import time
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 import logging
@@ -14,6 +22,35 @@ from ..enums import IntentType, ComplexityIndicator
 from ..state import AgentState
 
 logger = logging.getLogger(__name__)
+
+# LLM 분류용 프롬프트 (valid intent types 포함)
+_VALID_INTENTS = [it.value for it in IntentType]
+
+_LLM_CLASSIFICATION_PROMPT = """You are a query classification system. Analyze the user query and return a JSON object with the following fields:
+
+- intent: one of {valid_intents}
+- complexity: float 0.0-1.0 (how complex the query is)
+- sub_topics: list of 1-5 specific sub-topics the query addresses
+- required_capabilities: list of capabilities needed (e.g., "web_search", "data_analysis", "comparison", "realtime_data", "academic_search", "financial_data")
+- confidence: float 0.0-1.0 (how confident you are in this classification)
+
+Rules:
+- "simple_conversation" for greetings, thanks, small talk
+- "deep_research" for queries needing multi-source investigation, reports
+- "comparison" for comparing two or more things
+- "realtime_info" for current/latest/trending information
+- "financial_analysis" for stocks, investments, finance
+- "technical_analysis" for technology, programming, development
+- "complex_analysis" for comprehensive multi-aspect analysis
+- "data_analysis" for statistics, trends, data
+- "youtube_search" for video/youtube related queries
+- "generation" for creating content, images, files
+- "task_execution" for planning, executing tasks
+
+User query: {query}
+{context_section}
+
+Return ONLY a valid JSON object, no other text."""
 
 
 class QueryClassifier:
@@ -45,7 +82,11 @@ class QueryClassifier:
 
 
     async def classify_query(self, state: AgentState) -> Dict[str, Any]:
-        """쿼리 분류 및 의도 파악 (대화 컨텍스트 활용)"""
+        """쿼리 분류 및 의도 파악 (LLM 우선, keyword fallback)
+
+        Phase 2.3: LLM 기반 분류를 먼저 시도하고, 실패 시 keyword 기반으로 fallback.
+        LLM 분류는 sub_topics, required_capabilities 등 풍부한 structured output을 제공합니다.
+        """
         query = state["original_query"]
         print(f"[DEBUG] Starting query classification for: {query[:50]}...")
 
@@ -63,27 +104,52 @@ class QueryClassifier:
             # 쿼리 임베딩 생성
             await self._generate_embedding(state, query)
 
-            # 쿼리 복잡도 분석
-            complexity_score = self._analyze_query_complexity(query)
-            print(f"[DEBUG] Query complexity score: {complexity_score}")
+            # Phase 2.3: LLM 기반 분류 시도
+            llm_result = None
+            use_llm = getattr(settings, "QUERY_CLASSIFIER_USE_LLM", False)
+            if use_llm and self._llm_circuit_ok():
+                llm_result = await self._classify_with_llm(query, conversation_context)
 
-            # 쿼리 의도 분류 (컨텍스트 포함)
-            intent = await self._classify_intent(query, complexity_score, conversation_context)
-            state["query_intent"] = intent
-            print(f"[DEBUG] Intent classified as: {intent}")
+            if llm_result:
+                # LLM 분류 성공
+                intent = llm_result["intent"]
+                complexity_score = llm_result["complexity"]
+                state["query_intent"] = intent
+                print(f"[DEBUG] LLM classification: intent={intent}, complexity={complexity_score}")
 
-            # 필요한 에이전트들 결정 (복잡도 고려)
-            required_agents = self._determine_required_agents(query, intent, complexity_score)
-            state["required_agents"] = required_agents
-            print(f"[DEBUG] Required agents: {required_agents}")
+                required_agents = self._determine_required_agents(query, intent, complexity_score)
+                state["required_agents"] = required_agents
 
-            # 분류 결과 저장 (복잡도 포함)
-            classification_result = self._create_classification_result(intent, required_agents, query, complexity_score)
-            state["query_classification"] = classification_result
+                classification_result = self._create_classification_result(
+                    intent, required_agents, query, complexity_score
+                )
+                # LLM에서 제공하는 추가 정보 포함
+                classification_result["sub_topics"] = llm_result.get("sub_topics", [])
+                classification_result["required_capabilities"] = llm_result.get("required_capabilities", [])
+                classification_result["classification_method"] = "llm"
+                state["query_classification"] = classification_result
+            else:
+                # Keyword 기반 fallback
+                complexity_score = self._analyze_query_complexity(query)
+                print(f"[DEBUG] Query complexity score: {complexity_score}")
+
+                intent = await self._classify_intent(query, complexity_score, conversation_context)
+                state["query_intent"] = intent
+                print(f"[DEBUG] Intent classified as: {intent}")
+
+                required_agents = self._determine_required_agents(query, intent, complexity_score)
+                state["required_agents"] = required_agents
+
+                classification_result = self._create_classification_result(
+                    intent, required_agents, query, complexity_score
+                )
+                classification_result["classification_method"] = "keyword"
+                state["query_classification"] = classification_result
+
+            print(f"[DEBUG] Required agents: {state['required_agents']}")
 
         except Exception as e:
             print(f"[ERROR] Query classification failed: {e}")
-            # 기본값 설정
             state["query_intent"] = "information_seeking"
             state["required_agents"] = ["knowledge_search", "realtime_info_search"]
             state["query_classification"] = self._create_fallback_classification()
@@ -97,6 +163,117 @@ class QueryClassifier:
         })
 
         return state
+
+    # ── Phase 2.3: LLM Classification ──────────────────────────────────
+
+    def _llm_circuit_ok(self) -> bool:
+        """LLM circuit breaker 상태 확인 (간단한 시간 기반)"""
+        if not hasattr(self, "_llm_fail_count"):
+            self._llm_fail_count = 0
+            self._llm_last_fail = 0.0
+        # 5회 연속 실패 시 60초 동안 LLM 호출 차단
+        if self._llm_fail_count >= 5:
+            if time.time() - self._llm_last_fail < 60:
+                return False
+            # 60초 후 half-open: 다시 시도
+            self._llm_fail_count = 0
+        return True
+
+    async def _classify_with_llm(
+        self, query: str, conversation_context: str = ""
+    ) -> Optional[Dict[str, Any]]:
+        """LLM을 사용한 structured query classification
+
+        Fast/cheap 모델 (Haiku or GPT-4o-mini)을 사용합니다.
+        Returns None on failure (caller falls back to keyword method).
+        """
+        try:
+            from neos.utils.llm_factory import create_llm
+
+            model = getattr(settings, "QUERY_CLASSIFIER_LLM_MODEL", "claude-haiku-4-5-20251001")
+            timeout = getattr(settings, "QUERY_CLASSIFIER_LLM_TIMEOUT", 10)
+
+            # 모델명으로 provider 결정
+            if "claude" in model or "haiku" in model:
+                provider = "anthropic"
+            elif "gemini" in model:
+                provider = "gemini"
+            else:
+                provider = "openai"
+
+            llm = create_llm(
+                provider=provider,
+                model=model,
+                temperature=0.0,
+                max_tokens=500,
+                request_timeout=timeout,
+            )
+
+            context_section = ""
+            if conversation_context:
+                context_section = f"\nConversation context: {conversation_context[:300]}"
+
+            prompt = _LLM_CLASSIFICATION_PROMPT.format(
+                valid_intents=", ".join(_VALID_INTENTS),
+                query=query,
+                context_section=context_section,
+            )
+
+            start = time.time()
+            response = await llm.ainvoke(prompt)
+            elapsed = time.time() - start
+            print(f"[DEBUG] LLM classification completed in {elapsed:.2f}s")
+
+            # 응답 파싱
+            content = response.content if hasattr(response, "content") else str(response)
+            result = self._parse_llm_classification(content)
+
+            if result:
+                # 성공 시 fail count 리셋
+                self._llm_fail_count = 0
+                return result
+            else:
+                self._llm_fail_count = getattr(self, "_llm_fail_count", 0) + 1
+                self._llm_last_fail = time.time()
+                return None
+
+        except Exception as e:
+            logger.warning(f"LLM query classification failed: {e}")
+            self._llm_fail_count = getattr(self, "_llm_fail_count", 0) + 1
+            self._llm_last_fail = time.time()
+            return None
+
+    def _parse_llm_classification(self, content: str) -> Optional[Dict[str, Any]]:
+        """LLM 응답에서 JSON 추출 및 검증"""
+        try:
+            # JSON 블록 추출 (```json ... ``` 또는 직접 JSON)
+            text = content.strip()
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0].strip()
+
+            result = json.loads(text)
+
+            # 필수 필드 검증
+            intent = result.get("intent", "")
+            if intent not in _VALID_INTENTS:
+                logger.warning(f"LLM returned invalid intent: {intent}")
+                return None
+
+            complexity = float(result.get("complexity", 0.5))
+            complexity = max(0.0, min(1.0, complexity))
+
+            return {
+                "intent": intent,
+                "complexity": complexity,
+                "sub_topics": result.get("sub_topics", [])[:5],
+                "required_capabilities": result.get("required_capabilities", []),
+                "confidence": float(result.get("confidence", 0.7)),
+            }
+        except (json.JSONDecodeError, ValueError, KeyError) as e:
+            logger.warning(f"Failed to parse LLM classification response: {e}")
+            return None
 
     def _detect_language(self, query: str) -> str:
         """사용자 쿼리의 주 언어 감지"""

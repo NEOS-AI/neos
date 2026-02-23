@@ -57,6 +57,19 @@ class BranchInfo(BaseModel):
     created_at: Optional[str] = None
 
 
+class ContinueResearchRequest(BaseModel):
+    """Phase 2.2: 후속 연구 요청"""
+    session_id: str
+    query: str
+
+
+class ContinueResearchResponse(BaseModel):
+    """Phase 2.2: 후속 연구 응답"""
+    new_session_id: str
+    parent_session_id: str
+    status: str = "started"
+
+
 # ============================================================================
 # Endpoints
 # ============================================================================
@@ -129,3 +142,43 @@ async def list_branches(
         user_id=current_user.user_id,
     )
     return branches
+
+
+# ── Phase 2.2: Continue Research ─────────────────────────────────────
+
+@router.post("/continue", status_code=201, response_model=ContinueResearchResponse)
+async def continue_research(
+    req: ContinueResearchRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """기존 연구 세션을 이어서 후속 연구를 시작합니다.
+
+    이전 세션의 accumulated_knowledge를 로드하여
+    이미 탐색한 주제는 건너뛰고 남은 질문에 집중합니다.
+    """
+    import uuid
+
+    # 이전 세션 존재 확인
+    parent = await research_session_service.get_session(
+        session_id=req.session_id,
+        user_id=current_user.user_id,
+    )
+    if not parent:
+        raise HTTPException(status_code=404, detail="Parent session not found")
+
+    # 새 세션 생성 (branching 활용)
+    try:
+        new_session_id = await research_session_service.branch_session(
+            parent_session_id=req.session_id,
+            branch_query=req.query,
+            user_id=current_user.user_id,
+            title=f"Continuation: {req.query[:50]}",
+        )
+
+        return ContinueResearchResponse(
+            new_session_id=new_session_id,
+            parent_session_id=req.session_id,
+            status="started",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

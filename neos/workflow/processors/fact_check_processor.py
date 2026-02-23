@@ -114,6 +114,12 @@ class FactCheckProcessor:
                 f"{result['stats']['contradictions_found']} contradictions"
             )
 
+            # Phase 3.2: 증거 그래프에 영구 저장
+            if getattr(settings, "EVIDENCE_GRAPH_ENABLED", False):
+                await self._persist_to_evidence_graph(
+                    result, state.get("user_id", ""), state.get("session_id", "")
+                )
+
             return {
                 "fact_check_result": result,
                 "fact_check_skipped": False,
@@ -130,3 +136,51 @@ class FactCheckProcessor:
                 "fact_check_result": None,
                 "fact_check_skipped": True,
             }
+
+    async def _persist_to_evidence_graph(
+        self, result: Dict[str, Any], user_id: str, session_id: str
+    ) -> None:
+        """Phase 3.2: fact-check 결과를 evidence graph에 영구 저장"""
+        try:
+            from neos.services.evidence_graph_service import evidence_graph_service
+
+            claim_id_map = {}  # claim_text -> claim_id
+
+            # 주장 저장
+            for claim in result.get("claims", []):
+                claim_id = await evidence_graph_service.persist_claim(
+                    claim_text=claim.get("text", ""),
+                    claim_type=claim.get("claim_type", "fact"),
+                    confidence=claim.get("confidence", 0.5),
+                    verification_status=claim.get("verification_status", "unverified"),
+                    user_id=user_id,
+                    session_id=session_id,
+                    source_url=claim.get("source_url"),
+                    source_title=claim.get("source_title"),
+                )
+                if claim_id:
+                    claim_id_map[claim.get("text", "")] = claim_id
+
+            # 모순 저장
+            for contradiction in result.get("contradictions", []):
+                c1_text = contradiction.get("claim1_text", "")
+                c2_text = contradiction.get("claim2_text", "")
+                c1_id = claim_id_map.get(c1_text)
+                c2_id = claim_id_map.get(c2_text)
+
+                if c1_id and c2_id:
+                    await evidence_graph_service.persist_contradiction(
+                        claim_id_1=c1_id,
+                        claim_id_2=c2_id,
+                        contradiction_type=contradiction.get("type", "factual"),
+                        severity=contradiction.get("severity", "medium"),
+                        explanation=contradiction.get("description", ""),
+                    )
+
+            logger.info(
+                f"[EvidenceGraph] 저장 완료: claims={len(claim_id_map)}, "
+                f"contradictions={len(result.get('contradictions', []))}"
+            )
+
+        except Exception as e:
+            logger.warning(f"[EvidenceGraph] 저장 실패 (무시): {e}")

@@ -558,6 +558,10 @@ class Vote(Base):
     message_id = Column("messageId", UUID(as_uuid=True), primary_key=True, nullable=False)
     is_upvoted = Column("isUpvoted", Boolean, nullable=False)
 
+    # Phase 2.11: Feedback columns (migration 013)
+    feedback_text = Column("feedback_text", Text, nullable=True)
+    feedback_category = Column("feedback_category", String(50), nullable=True)
+
     # 관계 설정은 Conversation, Message 모델이 있어야 가능
     # conversation = relationship("Conversation")
     # message = relationship("Message")

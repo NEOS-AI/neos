@@ -49,6 +49,7 @@ app.conf.update(
         'neos.workflow.celery_tasks.execute_analysis_agent': {'queue': 'analysis'},
         'neos.workflow.celery_tasks.execute_generation_agent': {'queue': 'generation'},
         'neos.workflow.celery_tasks.execute_agent_generic': {'queue': 'default'},
+        'neos.workflow.celery_tasks.execute_workflow_async': {'queue': 'search'},  # Phase 3.5
     },
 
     # 큐 정의 (우선순위 지원)

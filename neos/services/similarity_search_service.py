@@ -275,6 +275,13 @@ class SimilaritySearchService:
         }
         self.default_strategy = "conversation"
 
+        # Phase 3.1: KG-Augmented Search (lazy init — DB 테이블 필요)
+        try:
+            from neos.services.kg_search_strategy import KGAugmentedSearchStrategy
+            self.strategies["kg_augmented"] = KGAugmentedSearchStrategy()
+        except Exception:
+            pass  # KG 테이블이 없어도 서비스 시작에 영향 없음
+
     async def search(
         self,
         query: str,

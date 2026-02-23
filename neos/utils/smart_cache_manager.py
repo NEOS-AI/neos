@@ -80,6 +80,34 @@ class DynamicTTLCalculator:
         "task_execution": 3600,         # 1시간
     }
 
+    # 쿼리 의도별 유사도 임계값 (None = 캐시 비활성)
+    SIMILARITY_THRESHOLD_BY_INTENT = {
+        # 사실 기반 — 정확한 매칭 필요
+        "factual": 0.92,
+        "information_seeking": 0.90,
+
+        # 연구/분석 — 약간 유연
+        "deep_research": 0.88,
+        "complex_analysis": 0.88,
+        "technical_analysis": 0.85,
+
+        # 비교/의견 — 유사 질문이면 충분
+        "comparison": 0.80,
+        "opinion": 0.80,
+
+        # 데이터/금융 — 숫자 데이터는 유연하게
+        "data_analysis": 0.70,
+        "financial_analysis": 0.70,
+
+        # 생성 — 중간
+        "generation": 0.85,
+        "task_execution": 0.85,
+
+        # 실시간 — 캐시 비활성 (항상 최신 데이터 필요)
+        "realtime_info": None,
+        "realtime_data": None,
+    }
+
     # 쿼리 의도별 최대 TTL (초 단위)
     MAX_TTL_BY_INTENT = {
         "realtime_info": 3600,          # 1시간
@@ -145,6 +173,24 @@ class DynamicTTLCalculator:
         return final_ttl
 
     @classmethod
+    def get_similarity_threshold(
+        cls, query_intent: str, default_threshold: float = 0.85
+    ) -> Optional[float]:
+        """
+        Intent별 캐시 유사도 임계값 반환
+
+        Args:
+            query_intent: 쿼리 의도
+            default_threshold: 매핑 없는 intent에 대한 기본값
+
+        Returns:
+            Optional[float]: 임계값 (None이면 캐시 비활성)
+        """
+        if query_intent in cls.SIMILARITY_THRESHOLD_BY_INTENT:
+            return cls.SIMILARITY_THRESHOLD_BY_INTENT[query_intent]
+        return default_threshold
+
+    @classmethod
     def get_ttl_info(cls, query_intent: str) -> Dict[str, int]:
         """특정 의도의 TTL 정보 반환"""
         return {
@@ -207,6 +253,20 @@ class SmartCacheManager:
         """
         start_time = datetime.now()
 
+        # Intent별 캐시 유사도 임계값 확인 (None이면 캐시 비활성)
+        intent_threshold = DynamicTTLCalculator.get_similarity_threshold(
+            query_intent or "unknown", self.similarity_threshold
+        )
+        if intent_threshold is None:
+            logger.debug(f"캐시 비활성: intent={query_intent} (realtime)")
+            search_time = int((datetime.now() - start_time).total_seconds() * 1000)
+            return CacheResult(
+                hit=False,
+                response=None,
+                hit_type="miss",
+                search_time_ms=search_time
+            )
+
         try:
             async with get_session_ctx() as session:
                 # 1. 정확한 해시 매칭 시도
@@ -247,7 +307,8 @@ class SmartCacheManager:
                     query_vector = embeddings
 
                 semantic_result = await self._find_similar_query(
-                    session, query_vector, query_intent, user_id, max_age_seconds
+                    session, query_vector, query_intent, user_id,
+                    max_age_seconds, similarity_threshold=intent_threshold
                 )
 
                 search_time = int((datetime.now() - start_time).total_seconds() * 1000)
@@ -441,7 +502,8 @@ class SmartCacheManager:
         query_vector: List[float],
         query_intent: str = None,
         user_id: str = None,
-        max_age_seconds: int = None
+        max_age_seconds: int = None,
+        similarity_threshold: float = None
     ) -> Optional[CachedResponse]:
         """pgvector를 사용한 유사 쿼리 검색
 
@@ -451,6 +513,7 @@ class SmartCacheManager:
         - ef_search를 낮추면 속도 향상, 정확도 저하
         """
         now = datetime.now()
+        effective_threshold = similarity_threshold or self.similarity_threshold
 
         # HNSW 인덱스 런타임 파라미터 설정 (선택적)
         # ef_search: 검색 시 탐색할 후보 수 (기본값: 40)
@@ -471,7 +534,7 @@ class SmartCacheManager:
         params = {
             "query_vector": vector_str,
             "now": now,
-            "threshold": self.similarity_threshold
+            "threshold": effective_threshold
         }
 
         if query_intent is not None:

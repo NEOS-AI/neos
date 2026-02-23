@@ -88,6 +88,23 @@ class ResponseGenerator:
         if final_response and state["search_results"] and settings.CITATIONS_ENABLED:
             final_response = self._apply_citations(final_response, state)
 
+        # Phase 2.10: Executive Summary 생성
+        executive_summary = None
+        if final_response and getattr(settings, "EXECUTIVE_SUMMARY_ENABLED", False):
+            try:
+                from ..utils.executive_summary import executive_summary_generator
+                executive_summary = await executive_summary_generator.generate(
+                    response=final_response,
+                    query=state["original_query"],
+                    language=detected_language,
+                )
+                if executive_summary:
+                    state["executive_summary"] = executive_summary
+                    final_response = f"> **TL;DR:** {executive_summary}\n\n---\n\n{final_response}"
+                    print(f"[DEBUG] Executive summary prepended ({len(executive_summary)} chars)")
+            except Exception as e:
+                print(f"[DEBUG] Executive summary generation skipped: {e}")
+
         # 실행 시간 계산
         execution_time = int((datetime.now() - state["execution_start"]).total_seconds() * 1000)
 

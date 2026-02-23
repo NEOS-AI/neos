@@ -7,6 +7,10 @@ from .conversation_context_processor import ConversationContextProcessor
 from .refinement_checker import RefinementChecker
 from .query_refinement_agent import QueryRefinementAgent
 from .fact_check_processor import FactCheckProcessor
+from .research_continuation import ResearchContinuationProcessor
+from .self_reflection import SelfReflectionProcessor
+from .hypothesis_manager import HypothesisManager
+from .replanner import ResearchReplanner
 
 __all__ = [
     "ResultProcessor",
@@ -16,4 +20,8 @@ __all__ = [
     "RefinementChecker",
     "QueryRefinementAgent",
     "FactCheckProcessor",
+    "ResearchContinuationProcessor",
+    "SelfReflectionProcessor",
+    "HypothesisManager",
+    "ResearchReplanner",
 ]

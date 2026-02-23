@@ -89,6 +89,36 @@ class AgentState(TypedDict):
     exploration_pages_visited: Optional[int]  # 방문 페이지 수
     quality_evolution: Optional[List[float]]  # 반복별 품질 점수
 
+    # Phase 2: 메모리 컨텍스트 (3계층 메모리 시스템)
+    memory_context: Optional[Dict[str, Any]]
+
+    # Phase 2.2: Multi-Round Research Sessions
+    is_continuation: Optional[bool]
+    research_session_id: Optional[str]
+    accumulated_knowledge: Optional[Dict[str, Any]]
+    explored_subtopics: Optional[List[str]]
+    remaining_questions: Optional[List[str]]
+
+    # Phase 2.6: Self-Reflection
+    reflection_result: Optional[Dict[str, Any]]
+
+    # Phase 2.4: Adaptive Replanning
+    research_plan: Optional[List[Dict[str, Any]]]
+    replan_count: Optional[int]
+    answered_questions: Optional[List[str]]
+
+    # Phase 2.5: Hypothesis-Driven Research
+    hypotheses: Optional[List[Dict[str, Any]]]
+    hypothesis_results: Optional[Dict[str, Any]]
+
+    # Phase 2.7: Cost-Aware Routing
+    cost_budget: Optional[float]
+    cumulative_cost: Optional[float]
+    cost_tracking: Optional[Dict[str, float]]
+
+    # Phase 2.10: Executive Summary
+    executive_summary: Optional[str]
+
     # 최종 응답
     final_response: Optional[str]
     response_metadata: Optional[Dict[str, Any]]

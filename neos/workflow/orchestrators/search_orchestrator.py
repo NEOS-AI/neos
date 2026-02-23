@@ -14,6 +14,7 @@ from neos.workflow.orchestrators.search_strategies import (
 from neos.utils.llm_factory import create_llm
 
 from ..state import AgentState
+from ..utils.cost_router import cost_router
 
 logger = logging.getLogger(__name__)
 
@@ -112,12 +113,47 @@ class SearchOrchestrator:
             logger.error("No applicable strategy found!")
             return state
 
+        # Phase 2.7: 비용 인식 라우팅 — 예산 부족 시 저렴한 전략으로 다운그레이드
+        remaining_budget = cost_router.get_remaining_budget(state)
+        if remaining_budget is not None:
+            original_name = selected_strategy.name
+            downgraded_name = cost_router.select_strategy(
+                preferred=original_name,
+                remaining_budget=remaining_budget,
+            )
+            if downgraded_name != original_name:
+                for s in self.strategies:
+                    if s.name == downgraded_name:
+                        selected_strategy = s
+                        logger.info(
+                            f"[CostRouter] Downgraded: {original_name} → {downgraded_name} "
+                            f"(budget: ${remaining_budget:.2f})"
+                        )
+                        break
+
         # 전략 실행 (자동 폴백)
-        return await self._execute_with_fallback(
+        result_state = await self._execute_with_fallback(
             selected_strategy,
             state,
             search_agents
         )
+
+        # Phase 3.1: 검색 결과에서 KG 자동 구축 (비동기, non-blocking)
+        if getattr(settings, "KG_POPULATION_ENABLED", False):
+            import asyncio
+            search_results = result_state.get("search_results", [])
+            if search_results:
+                try:
+                    from neos.services.kg_population_service import kg_population_service
+                    asyncio.create_task(
+                        kg_population_service.populate_from_search_results(
+                            search_results, session_id=state.get("session_id", "")
+                        )
+                    )
+                except Exception as e:
+                    logger.debug(f"[KGPopulation] 시작 실패 (무시): {e}")
+
+        return result_state
 
     async def _execute_with_fallback(
         self,
@@ -132,6 +168,11 @@ class SearchOrchestrator:
         try:
             # 선택된 전략 실행
             state = await strategy.execute(state, search_agents, self.agents, self.tool_selector)
+
+            # Phase 2.7: 실행 비용 추적
+            estimated_cost = cost_router.estimate_cost(strategy.name)
+            cost_router.track_cost(state, f"search_{strategy.name}", estimated_cost)
+
             return state
 
         except Exception as e:
