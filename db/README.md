@@ -99,6 +99,27 @@ psql -U postgres -d neos -h localhost -f db/migrations/007_add_embedding_provide
 
 # Add visibility column to conversations
 psql -U postgres -d neos -h localhost -f db/migrations/008_add_visibility_to_conversations.sql
+
+# Add support for hybrid search
+psql -U postgres -d neos -h localhost -f db/migrations/009_add_knowledge_hybrid_search.sql
+
+# Add support for research sessions
+psql -U postgres -d neos -h localhost -f db/migrations/010_add_research_session_branches.sql
+psql -U postgres -d neos -h localhost -f db/migrations/011_add_research_sessions.sql
+
+# Add 3-tier memory architecture tables
+psql -U postgres -d neos -h localhost -f db/migrations/012_add_memory_tables.sql
+
+# Add feedback system
+psql -U postgres -d neos -h localhost -f db/migrations/013_add_feedback_system.sql
+
+# Add parent chunk support for better context retrieval
+psql -U postgres -d neos -h localhost -f db/migrations/014_add_parent_chunk_support.sql
+
+# Add knowledge graph support
+psql -U postgres -d neos -h localhost -f db/migrations/015_add_knowledge_graph.sql
+psql -U postgres -d neos -h localhost -f db/migrations/016_add_evidence_graph.sql
+psql -U postgres -d neos -h localhost -f db/migrations/017_add_refinement_tables.sql
 ```
 
 ### Migrate database schema for backoffice
