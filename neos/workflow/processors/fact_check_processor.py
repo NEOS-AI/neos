@@ -114,6 +114,10 @@ class FactCheckProcessor:
                 f"{result['stats']['contradictions_found']} contradictions"
             )
 
+            # Phase 4.1: 탐지된 모순에 대해 LLM judge 자동 해결
+            if result.get("contradictions") and checker.contradictions:
+                await self._resolve_contradictions(result, checker)
+
             # Phase 3.2: 증거 그래프에 영구 저장
             if getattr(settings, "EVIDENCE_GRAPH_ENABLED", False):
                 await self._persist_to_evidence_graph(
@@ -136,6 +140,41 @@ class FactCheckProcessor:
                 "fact_check_result": None,
                 "fact_check_skipped": True,
             }
+
+    async def _resolve_contradictions(
+        self, result: Dict[str, Any], checker
+    ) -> None:
+        """Phase 4.1: 모순 자동 해결 — LLM judge 호출"""
+        try:
+            from neos.services.contradiction_resolver import ContradictionResolver
+
+            resolver = ContradictionResolver()
+            resolved_contradictions = await resolver.resolve_batch(
+                checker.contradictions
+            )
+
+            # result dict에 해결 정보 반영
+            resolution_summaries = []
+            for c in resolved_contradictions:
+                summary = resolver.format_resolution_summary(c)
+                if summary:
+                    resolution_summaries.append(summary)
+
+            if resolution_summaries:
+                result["contradiction_resolutions"] = resolution_summaries
+                logger.info(
+                    f"[FactCheck] Resolved {len(resolution_summaries)} contradictions"
+                )
+
+            # result["contradictions"] dict에도 resolution 정보 추가
+            for i, c in enumerate(resolved_contradictions):
+                if i < len(result.get("contradictions", [])):
+                    result["contradictions"][i]["resolution_status"] = c.resolution_status
+                    result["contradictions"][i]["resolution_reasoning"] = c.resolution_reasoning
+                    result["contradictions"][i]["resolution_confidence"] = c.resolution_confidence
+
+        except Exception as e:
+            logger.warning(f"[FactCheck] Contradiction resolution failed (ignored): {e}")
 
     async def _persist_to_evidence_graph(
         self, result: Dict[str, Any], user_id: str, session_id: str
@@ -161,7 +200,7 @@ class FactCheckProcessor:
                 if claim_id:
                     claim_id_map[claim.get("text", "")] = claim_id
 
-            # 모순 저장
+            # 모순 저장 (Phase 4.1: resolution 정보 포함)
             for contradiction in result.get("contradictions", []):
                 c1_text = contradiction.get("claim1_text", "")
                 c2_text = contradiction.get("claim2_text", "")
@@ -169,12 +208,19 @@ class FactCheckProcessor:
                 c2_id = claim_id_map.get(c2_text)
 
                 if c1_id and c2_id:
+                    resolution_status = contradiction.get(
+                        "resolution_status", "unresolved"
+                    )
                     await evidence_graph_service.persist_contradiction(
                         claim_id_1=c1_id,
                         claim_id_2=c2_id,
                         contradiction_type=contradiction.get("type", "factual"),
                         severity=contradiction.get("severity", "medium"),
                         explanation=contradiction.get("description", ""),
+                        resolution_status=resolution_status,
+                        resolution_reasoning=contradiction.get("resolution_reasoning"),
+                        resolution_confidence=contradiction.get("resolution_confidence", 0.0),
+                        resolved_by="llm_judge" if resolution_status == "resolved" else None,
                     )
 
             logger.info(

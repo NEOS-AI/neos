@@ -119,6 +119,10 @@ class AgentState(TypedDict):
     # Phase 2.10: Executive Summary
     executive_summary: Optional[str]
 
+    # Phase 4.7: Research Templates
+    template_id: Optional[str]
+    template_config: Optional[Dict[str, Any]]
+
     # 최종 응답
     final_response: Optional[str]
     response_metadata: Optional[Dict[str, Any]]

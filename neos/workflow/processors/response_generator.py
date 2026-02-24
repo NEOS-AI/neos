@@ -88,6 +88,16 @@ class ResponseGenerator:
         if final_response and state["search_results"] and settings.CITATIONS_ENABLED:
             final_response = self._apply_citations(final_response, state)
 
+        # Phase 4.1: 해결된 모순 정보를 응답에 포함
+        if final_response:
+            fact_check = state.get("fact_check_result") or {}
+            resolutions = fact_check.get("contradiction_resolutions", [])
+            if resolutions:
+                resolution_block = "\n\n---\n\n**소스 간 모순 분석:**\n\n"
+                for r in resolutions:
+                    resolution_block += f"{r}\n\n"
+                final_response = final_response + resolution_block
+
         # Phase 2.10: Executive Summary 생성
         executive_summary = None
         if final_response and getattr(settings, "EXECUTIVE_SUMMARY_ENABLED", False):

@@ -739,6 +739,9 @@ class MultiAgentWorkflow:
             # Phase 2.1: 메모리 컨텍스트 로드
             await self._load_memory_context(initial_state, user_input)
 
+            # Phase 4.7: 연구 템플릿 자동 선택 및 적용
+            await self._apply_research_template(initial_state, query)
+
             # 독립 research_sessions 테이블에 세션 기록 (M-6 해결)
             await self._record_session_start(user_input)
 
@@ -1060,7 +1063,10 @@ class MultiAgentWorkflow:
             retry_count=0,
             execution_time_ms=None,
             tokens_used=None,
-            api_calls_made=None
+            api_calls_made=None,
+            # Phase 4.7: Research Templates
+            template_id=None,
+            template_config=None,
         )
 
     def _create_workflow_result(self, final_state: AgentState) -> Dict[str, Any]:
@@ -1076,6 +1082,10 @@ class MultiAgentWorkflow:
             "execution_steps": len(final_state["execution_steps"]),
             "retry_count": final_state.get("retry_count", 0),
         }
+
+        # Phase 4.7: 템플릿 정보 포함
+        if final_state.get("template_id"):
+            result["template_id"] = final_state["template_id"]
 
         # Phase 2.7: 비용 정보 포함
         if final_state.get("cumulative_cost") is not None:
@@ -1111,6 +1121,50 @@ class MultiAgentWorkflow:
             state["memory_context"] = context
         except Exception as e:
             logger.debug(f"[Workflow] Memory context load skipped: {e}")
+
+    async def _apply_research_template(
+        self, state: AgentState, query: str
+    ) -> None:
+        """Phase 4.7: 연구 템플릿 자동 선택 및 적용
+
+        쿼리에 맞는 템플릿을 LLM으로 선택하고,
+        research_guidance를 쿼리 앞에 prepend하여 연구 방향을 설정한다.
+        """
+        try:
+            from neos.templates.template_selector import TemplateSelector
+
+            selector = TemplateSelector()
+            result = await selector.select(query)
+
+            if result is None:
+                return
+
+            template = result["template"]
+            params = result["params"]
+
+            # 상태에 템플릿 정보 저장
+            state["template_id"] = template.template_id
+            state["template_config"] = {
+                "workflow_overrides": template.workflow_overrides,
+                "required_agents": template.required_agents,
+                "recommended_skills": template.recommended_skills,
+                "output_format": template.output_format,
+                "params": params,
+            }
+
+            # research_guidance를 원본 쿼리에 prepend
+            if template.research_guidance:
+                state["original_query"] = (
+                    f"[연구 지침]\n{template.research_guidance}\n\n"
+                    f"[사용자 질문]\n{query}"
+                )
+
+            logger.info(
+                f"[Workflow] Research template applied: {template.name} "
+                f"(id={template.template_id})"
+            )
+        except Exception as e:
+            logger.debug(f"[Workflow] Template selection skipped: {e}")
 
     async def _save_episode_memory(
         self, user_input: Dict[str, Any], result: Dict[str, Any],

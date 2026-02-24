@@ -85,8 +85,13 @@ class EvidenceGraphService:
         contradiction_type: str,
         severity: str,
         explanation: str,
+        resolution_status: str = "unresolved",
+        resolution_reasoning: Optional[str] = None,
+        resolution_confidence: float = 0.0,
+        winner_claim_id: Optional[int] = None,
+        resolved_by: Optional[str] = None,
     ) -> None:
-        """모순을 DB에 저장"""
+        """모순을 DB에 저장 (Phase 4.1: resolution 정보 포함)"""
         try:
             # claim_id_1 < claim_id_2 보장
             c1, c2 = sorted([claim_id_1, claim_id_2])
@@ -94,12 +99,23 @@ class EvidenceGraphService:
             async with pool.acquire() as conn:
                 await conn.execute("""
                     INSERT INTO evidence_contradictions (
-                        claim_id_1, claim_id_2, contradiction_type, severity, explanation
-                    ) VALUES ($1, $2, $3, $4, $5)
+                        claim_id_1, claim_id_2, contradiction_type, severity, explanation,
+                        resolution_status, resolution_reasoning, resolution_confidence,
+                        winner_claim_id, resolved_by, resolved_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                              CASE WHEN $6 = 'resolved' THEN NOW() ELSE NULL END)
                     ON CONFLICT (claim_id_1, claim_id_2) DO UPDATE SET
                         severity = EXCLUDED.severity,
-                        explanation = EXCLUDED.explanation
-                """, c1, c2, contradiction_type, severity, explanation)
+                        explanation = EXCLUDED.explanation,
+                        resolution_status = EXCLUDED.resolution_status,
+                        resolution_reasoning = EXCLUDED.resolution_reasoning,
+                        resolution_confidence = EXCLUDED.resolution_confidence,
+                        winner_claim_id = EXCLUDED.winner_claim_id,
+                        resolved_by = EXCLUDED.resolved_by,
+                        resolved_at = EXCLUDED.resolved_at
+                """, c1, c2, contradiction_type, severity, explanation,
+                    resolution_status, resolution_reasoning, resolution_confidence,
+                    winner_claim_id, resolved_by)
         except Exception as e:
             logger.error(f"[EvidenceGraph] 모순 저장 실패: {e}")
 

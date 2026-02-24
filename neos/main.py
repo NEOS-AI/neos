@@ -29,6 +29,7 @@ from neos.api.handlers.research_session_handlers import router as research_sessi
 from neos.api.handlers.async_research_handlers import router as async_research_router
 from neos.api.handlers.export_handlers import router as export_router
 from neos.api.handlers.refinement_handlers import router as refinement_router
+from neos.api.handlers.template_handlers import router as template_router
 from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.workflow.graph import multi_agent_workflow
 from neos.utils.exceptions import NeosBaseException, get_exception_status_code, is_client_error
@@ -368,6 +369,7 @@ app.include_router(research_session_router, tags=["Research Sessions"])  # Resea
 app.include_router(async_research_router, tags=["Async Research"])  # Phase 3.5: Celery-based async research
 app.include_router(export_router, tags=["Report Export"])  # Phase 3.4: Structured report export
 app.include_router(refinement_router, tags=["Research Refinement"])  # Phase 3.8: Interactive refinement
+app.include_router(template_router, tags=["Research Templates"])  # Phase 4.7: Research templates
 
 
 # === Enterprise Monitoring Endpoints ===
