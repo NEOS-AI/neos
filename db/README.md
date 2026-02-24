@@ -120,6 +120,9 @@ psql -U postgres -d neos -h localhost -f db/migrations/014_add_parent_chunk_supp
 psql -U postgres -d neos -h localhost -f db/migrations/015_add_knowledge_graph.sql
 psql -U postgres -d neos -h localhost -f db/migrations/016_add_evidence_graph.sql
 psql -U postgres -d neos -h localhost -f db/migrations/017_add_refinement_tables.sql
+
+# Active Contradiction Resolution
+psql -U postgres -d neos -h localhost -f db/migrations/018_add_contradiction_resolution.sql
 ```
 
 ### Migrate database schema for backoffice
