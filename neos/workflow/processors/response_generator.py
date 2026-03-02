@@ -1,5 +1,6 @@
 """응답 생성 모듈"""
 
+import logging
 from typing import Dict, Any, List
 from datetime import datetime
 from urllib.parse import urlparse
@@ -9,6 +10,8 @@ from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import create_tracked_llm, extract_text_from_response
 from neos.config.settings import settings
 from ..state import AgentState
+
+logger = logging.getLogger(__name__)
 
 
 class ResponseGenerator:
@@ -32,30 +35,30 @@ class ResponseGenerator:
 
     async def generate_response(self, state: AgentState) -> Dict[str, Any]:
         """최종 응답 생성"""
-        print("[DEBUG] Starting response generation...")
+        logger.debug("[ResponseGenerator] Starting response generation...")
 
         # 모든 결과를 종합하여 응답 생성
         response_parts = []
 
         # 검색 결과 요약
         if state["search_results"] and len(state["search_results"]) > 0:
-            print(f"[DEBUG] Generating search summary from {len(state['search_results'])} results")
+            logger.debug(f"[ResponseGenerator] Generating search summary from {len(state['search_results'])} results")
             search_summary = self._create_search_summary(state["search_results"])
             if search_summary and "검색된 고유한 결과가 없습니다" not in search_summary:
                 response_parts.append(search_summary)
             else:
-                print("[DEBUG] No unique search results found, skipping search summary")
+                logger.debug("[ResponseGenerator] No unique search results found, skipping search summary")
 
         # 분석 결과 요약
         if state["analysis_results"] and len(state["analysis_results"]) > 0:
-            print(f"[DEBUG] Generating analysis summary from {len(state['analysis_results'])} results")
+            logger.debug(f"[ResponseGenerator] Generating analysis summary from {len(state['analysis_results'])} results")
             analysis_summary = self._create_analysis_summary(state["analysis_results"])
             if analysis_summary:
                 response_parts.append(analysis_summary)
 
         # 생성 결과 요약
         if state["generation_results"] and len(state["generation_results"]) > 0:
-            print(f"[DEBUG] Generating generation summary from {len(state['generation_results'])} results")
+            logger.debug(f"[ResponseGenerator] Generating generation summary from {len(state['generation_results'])} results")
             generation_summary = self._create_generation_summary(state["generation_results"])
             if generation_summary:
                 response_parts.append(generation_summary)
@@ -72,7 +75,7 @@ class ResponseGenerator:
         )
 
         if should_refine and response_parts and settings.ENABLE_RESPONSE_REFINEMENT:
-            print("[DEBUG] Applying LLM-based response refinement (partial success or errors detected)")
+            logger.debug("[ResponseGenerator] Applying LLM-based response refinement (partial success or errors detected)")
             final_response = await self._refine_response_with_llm(
                 query=state["original_query"],
                 response_parts=response_parts,
@@ -93,7 +96,14 @@ class ResponseGenerator:
             fact_check = state.get("fact_check_result") or {}
             resolutions = fact_check.get("contradiction_resolutions", [])
             if resolutions:
-                resolution_block = "\n\n---\n\n**소스 간 모순 분석:**\n\n"
+                headers = {
+                    "ko": "**소스 간 모순 분석:**",
+                    "en": "**Contradiction Analysis Across Sources:**",
+                    "ja": "**ソース間の矛盾分析:**",
+                    "zh": "**来源间矛盾分析:**",
+                }
+                header = headers.get(detected_language, headers["en"])
+                resolution_block = f"\n\n---\n\n{header}\n\n"
                 for r in resolutions:
                     resolution_block += f"{r}\n\n"
                 final_response = final_response + resolution_block
@@ -111,9 +121,9 @@ class ResponseGenerator:
                 if executive_summary:
                     state["executive_summary"] = executive_summary
                     final_response = f"> **TL;DR:** {executive_summary}\n\n---\n\n{final_response}"
-                    print(f"[DEBUG] Executive summary prepended ({len(executive_summary)} chars)")
+                    logger.debug(f"[ResponseGenerator] Executive summary prepended ({len(executive_summary)} chars)")
             except Exception as e:
-                print(f"[DEBUG] Executive summary generation skipped: {e}")
+                logger.debug(f"[ResponseGenerator] Executive summary generation skipped: {e}")
 
         # 실행 시간 계산
         execution_time = int((datetime.now() - state["execution_start"]).total_seconds() * 1000)
@@ -123,8 +133,8 @@ class ResponseGenerator:
         state["execution_time_ms"] = execution_time
         state["response_metadata"] = self._create_response_metadata(state)
 
-        print("[DEBUG] generation result: ", state["generation_results"])
-        print(f"[DEBUG] Response generation completed. Length: {len(final_response)} characters")
+        logger.debug("[ResponseGenerator] generation result: ", state["generation_results"])
+        logger.debug(f"[ResponseGenerator] Response generation completed. Length: {len(final_response)} characters")
 
         state["execution_steps"].append({
             "step": "response_generation",
@@ -241,7 +251,7 @@ class ResponseGenerator:
         if not results:
             return ""
 
-        print(f"[DEBUG] Creating analysis summary from {len(results)} results: ", results)
+        logger.debug(f"[ResponseGenerator] Creating analysis summary from {len(results)} results")
         summary_lines = ["## 분석 결과"]
         found_insights = False
 
@@ -348,7 +358,7 @@ class ResponseGenerator:
         response = await llm.ainvoke([HumanMessage(content=prompt)])
         refined = extract_text_from_response(response).strip()
 
-        print(f"[DEBUG] Response refined by LLM. Original length: {len(combined)}, Refined length: {len(refined)}")
+        logger.debug(f"[ResponseGenerator] Response refined by LLM. Original: {len(combined)}, Refined: {len(refined)}")
         return refined
 
     def _get_refinement_prompt(self, query: str, combined_response: str, language: str) -> str:
@@ -468,7 +478,7 @@ Refined Response:""",
                     final_response = final_response + "\n\n---\n" + references
 
         except Exception as e:
-            print(f"[DEBUG] Citation application failed: {e}")
+            logger.debug(f"[ResponseGenerator] Citation application failed: {e}")
 
         return final_response
 

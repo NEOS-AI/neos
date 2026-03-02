@@ -186,12 +186,13 @@ class FactCheckProcessor:
             claim_id_map = {}  # claim_text -> claim_id
 
             # 주장 저장
+            # _claim_to_dict() 반환 키: text, source_url, source_title, type, confidence
             for claim in result.get("claims", []):
                 claim_id = await evidence_graph_service.persist_claim(
                     claim_text=claim.get("text", ""),
-                    claim_type=claim.get("claim_type", "fact"),
+                    claim_type=claim.get("type", "fact"),
                     confidence=claim.get("confidence", 0.5),
-                    verification_status=claim.get("verification_status", "unverified"),
+                    verification_status="unverified",
                     user_id=user_id,
                     session_id=session_id,
                     source_url=claim.get("source_url"),
@@ -201,9 +202,10 @@ class FactCheckProcessor:
                     claim_id_map[claim.get("text", "")] = claim_id
 
             # 모순 저장 (Phase 4.1: resolution 정보 포함)
+            # _contradiction_to_dict() 반환: claim1/claim2가 중첩 dict
             for contradiction in result.get("contradictions", []):
-                c1_text = contradiction.get("claim1_text", "")
-                c2_text = contradiction.get("claim2_text", "")
+                c1_text = contradiction.get("claim1", {}).get("text", "")
+                c2_text = contradiction.get("claim2", {}).get("text", "")
                 c1_id = claim_id_map.get(c1_text)
                 c2_id = claim_id_map.get(c2_text)
 
@@ -216,7 +218,7 @@ class FactCheckProcessor:
                         claim_id_2=c2_id,
                         contradiction_type=contradiction.get("type", "factual"),
                         severity=contradiction.get("severity", "medium"),
-                        explanation=contradiction.get("description", ""),
+                        explanation=contradiction.get("type", ""),
                         resolution_status=resolution_status,
                         resolution_reasoning=contradiction.get("resolution_reasoning"),
                         resolution_confidence=contradiction.get("resolution_confidence", 0.0),

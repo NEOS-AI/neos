@@ -186,18 +186,28 @@ class ContradictionResolver:
         return resolved
 
     def format_resolution_summary(
-        self, contradiction: Contradiction
+        self, contradiction: Contradiction, language: str = "ko"
     ) -> Optional[str]:
         """해결된 모순을 사용자 친화적 텍스트로 포맷"""
         if contradiction.resolution_status == "unresolved":
             return None
 
+        labels = {
+            "ko": {"inconclusive": "모순 발견 (미해결)", "verdict": "판정: 결론을 내리기 어려움",
+                    "resolved": "모순 해결", "confidence": "확신도",
+                    "accepted": "채택", "rejected": "기각", "source": "출처", "reason": "근거"},
+            "en": {"inconclusive": "Contradiction Found (Unresolved)", "verdict": "Verdict: Inconclusive",
+                    "resolved": "Contradiction Resolved", "confidence": "Confidence",
+                    "accepted": "Accepted", "rejected": "Rejected", "source": "Source", "reason": "Reasoning"},
+        }
+        l = labels.get(language, labels["en"])
+
         if contradiction.resolution_status == "inconclusive":
             return (
-                f"**모순 발견 (미해결)**: "
+                f"**{l['inconclusive']}**: "
                 f'"{contradiction.claim1.text[:80]}..." vs '
                 f'"{contradiction.claim2.text[:80]}..."\n'
-                f"  판정: 결론을 내리기 어려움 — {contradiction.resolution_reasoning}"
+                f"  {l['verdict']} — {contradiction.resolution_reasoning}"
             )
 
         winner = contradiction.winner_claim
@@ -207,10 +217,10 @@ class ContradictionResolver:
             else contradiction.claim1
         )
         return (
-            f"**모순 해결** (확신도: {contradiction.resolution_confidence:.0%}):\n"
-            f'  채택: "{winner.text[:100]}..." '
-            f"(출처: {winner.source_title})\n"
-            f'  기각: "{loser.text[:100]}..." '
-            f"(출처: {loser.source_title})\n"
-            f"  근거: {contradiction.resolution_reasoning}"
+            f"**{l['resolved']}** ({l['confidence']}: {contradiction.resolution_confidence:.0%}):\n"
+            f'  {l["accepted"]}: "{winner.text[:100]}..." '
+            f"({l['source']}: {winner.source_title})\n"
+            f'  {l["rejected"]}: "{loser.text[:100]}..." '
+            f"({l['source']}: {loser.source_title})\n"
+            f"  {l['reason']}: {contradiction.resolution_reasoning}"
         )

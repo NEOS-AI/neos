@@ -6,7 +6,9 @@ Chat LLM Service
 """
 
 from typing import Dict, Any, List, Optional, AsyncGenerator
+import json
 import time
+import anthropic
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from neos.utils.llm_factory import create_llm
@@ -15,6 +17,7 @@ from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
 from neos.services.context_optimizer import context_optimizer
 from neos.config.settings import settings
+from neos.tools.tool_search.search_tools_handler import SEARCH_TOOLS_TOOL
 
 logger = get_logger(__name__)
 
@@ -395,8 +398,6 @@ class ChatLLMService:
                 "cost": {...} (type=complete인 경우),
             }
         """
-        import anthropic
-
         model = model_name or self.default_model
         start_time = time.time()
         full_content = ""
@@ -521,6 +522,234 @@ class ChatLLMService:
 
         except Exception as e:
             logger.error(f"Tool-enabled stream error: {e}")
+            yield {"type": "error", "error": str(e)}
+
+
+    async def generate_response_stream_with_tool_search(
+        self,
+        conversation_id: str,
+        message_id: str,
+        conversation_messages: List[Dict[str, Any]],
+        core_tools: List[Dict[str, Any]],
+        search_handler: Any,
+        tool_executor: Optional[Any] = None,
+        model_name: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        max_tool_rounds: int = 3,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Advanced Tool Search 패턴의 멀티턴 도구 호출 루프 스트리밍
+
+        코어 도구 + search_tools만 초기 제공하고, search_tools 호출 시
+        하이브리드 검색으로 도구를 발견하여 동적으로 추가한다.
+
+        Args:
+            conversation_id: 대화 ID
+            message_id: 메시지 ID
+            conversation_messages: 대화 메시지 목록
+            core_tools: 코어 도구 정의 목록 (Anthropic format)
+            search_handler: SearchToolsHandler 인스턴스
+            tool_executor: 일반 도구 실행 콜백 (name, input) -> result dict
+            model_name: 모델 이름
+            system_prompt: 시스템 프롬프트
+            temperature: Temperature
+            max_tokens: 최대 토큰
+            max_tool_rounds: 멀티턴 최대 라운드 수
+
+        Yields:
+            기존 generate_response_stream_with_tools()와 동일한 이벤트 형식
+        """
+        model = model_name or self.default_model
+        start_time = time.time()
+        full_content = ""
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+        try:
+            client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+            # 1. 초기 도구 세트: 코어 도구 + search_tools
+            active_tools_dicts = list(core_tools)
+            active_tools_dicts.append(SEARCH_TOOLS_TOOL)
+
+            # 메시지 변환
+            anthropic_messages = []
+            for msg in conversation_messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role in ["user", "assistant"]:
+                    anthropic_messages.append({"role": role, "content": content})
+
+            yield {"type": "start", "model": model, "provider": "anthropic"}
+
+            round_count = 0
+
+            while round_count < max_tool_rounds:
+                round_count += 1
+
+                # 2. Claude API 호출
+                async with client.messages.stream(
+                    model=model,
+                    messages=anthropic_messages,
+                    tools=active_tools_dicts,
+                    system=system_prompt or "",
+                    temperature=temperature,
+                    max_tokens=max_tokens or 4096,
+                ) as stream:
+                    async for event in stream:
+                        if not hasattr(event, 'type'):
+                            continue
+
+                        if event.type == "content_block_start":
+                            if hasattr(event, 'content_block') and hasattr(event.content_block, 'type'):
+                                if event.content_block.type == "thinking":
+                                    yield {"type": "reasoning_start"}
+                                elif event.content_block.type == "tool_use":
+                                    logger.debug(
+                                        f"Tool use started: {event.content_block.name} "
+                                        f"(round {round_count})"
+                                    )
+
+                        elif event.type == "content_block_delta":
+                            if hasattr(event, 'delta') and hasattr(event.delta, 'type'):
+                                if event.delta.type == "thinking_delta":
+                                    thinking_text = getattr(event.delta, 'thinking', '')
+                                    if thinking_text:
+                                        yield {"type": "reasoning", "content": thinking_text}
+                                elif event.delta.type == "text_delta":
+                                    text = event.delta.text
+                                    full_content += text
+                                    yield {"type": "content", "content": text}
+
+                    # 최종 메시지 가져오기
+                    final_message = await stream.get_final_message()
+
+                # Usage 누적
+                total_usage["prompt_tokens"] += final_message.usage.input_tokens
+                total_usage["completion_tokens"] += final_message.usage.output_tokens
+                total_usage["total_tokens"] = (
+                    total_usage["prompt_tokens"] + total_usage["completion_tokens"]
+                )
+
+                # 3. tool_use 블록 확인
+                tool_uses = [
+                    b for b in final_message.content if b.type == "tool_use"
+                ]
+
+                if not tool_uses:
+                    break  # 도구 호출 없음 → 완료
+
+                # 4. 각 tool_use 처리
+                tool_results = []
+                for tool_use in tool_uses:
+                    if tool_use.name == "search_tools":
+                        # search_tools 호출 → 하이브리드 검색
+                        search_result = await search_handler.handle(tool_use.input)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use.id,
+                            "content": json.dumps(search_result, ensure_ascii=False),
+                        })
+
+                        # 검색된 도구를 active_tools에 추가
+                        existing_names = {t["name"] for t in active_tools_dicts}
+                        for found_tool in search_result.get("found_tools", []):
+                            if found_tool["name"] not in existing_names:
+                                active_tools_dicts.append({
+                                    "name": found_tool["name"],
+                                    "description": found_tool["description"],
+                                    "input_schema": found_tool["input_schema"],
+                                })
+                                existing_names.add(found_tool["name"])
+
+                        logger.info(
+                            f"search_tools round {round_count}: "
+                            f"found {len(search_result.get('found_tools', []))} tools, "
+                            f"active tools now: {len(active_tools_dicts)}"
+                        )
+                    else:
+                        # 일반 도구 호출
+                        yield {
+                            "type": "tool_use",
+                            "tool_name": tool_use.name,
+                            "tool_input": tool_use.input,
+                            "tool_id": tool_use.id,
+                        }
+
+                        if tool_executor:
+                            result = await tool_executor(tool_use.name, tool_use.input)
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": tool_use.id,
+                                "content": json.dumps(result, ensure_ascii=False),
+                            })
+                        else:
+                            # tool_executor 없음: 빈 결과라도 채워 Anthropic API 오류 방지.
+                            # assistant content의 모든 tool_use에는 tool_result가 있어야 한다.
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": tool_use.id,
+                                "content": json.dumps(
+                                    {"error": "tool_executor not provided"}, ensure_ascii=False
+                                ),
+                            })
+
+                if not tool_results:
+                    break
+
+                # 5. assistant 응답 + tool_results를 messages에 추가
+                def _serialize_content_block(b) -> dict:
+                    if hasattr(b, 'model_dump'):
+                        return b.model_dump()
+                    block: dict = {"type": b.type}
+                    if b.type == "text":
+                        block["text"] = b.text
+                    elif b.type == "tool_use":
+                        block.update({"id": b.id, "name": b.name, "input": b.input})
+                    elif b.type == "thinking":
+                        block["thinking"] = getattr(b, "thinking", "")
+                    return block
+
+                anthropic_messages.append({
+                    "role": "assistant",
+                    "content": [_serialize_content_block(b) for b in final_message.content],
+                })
+                anthropic_messages.append({
+                    "role": "user",
+                    "content": tool_results,
+                })
+
+            latency_ms = int((time.time() - start_time) * 1000)
+
+            # 비용 계산
+            cost_info = await cost_calculator.calculate_cost(
+                provider="anthropic",
+                model_name=model,
+                prompt_tokens=total_usage["prompt_tokens"],
+                completion_tokens=total_usage["completion_tokens"],
+            )
+
+            logger.info(
+                f"Tool search stream completed: {len(full_content)} chars, "
+                f"{total_usage['total_tokens']} tokens, "
+                f"${cost_info['total_cost']:.6f}, "
+                f"{latency_ms}ms, {round_count} rounds"
+            )
+
+            yield {
+                "type": "complete",
+                "full_content": full_content,
+                "model_name": model,
+                "provider": "anthropic",
+                "usage": total_usage,
+                "cost": cost_info,
+                "latency_ms": latency_ms,
+                "tool_search_rounds": round_count,
+            }
+
+        except Exception as e:
+            logger.error(f"Tool search stream error: {e}")
             yield {"type": "error", "error": str(e)}
 
 

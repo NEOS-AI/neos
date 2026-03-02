@@ -335,7 +335,50 @@ class MultiAgentWorkflow:
         # original_query 복원 (메타데이터 유지)
         state["original_query"] = original_backup
 
+        # Phase 4.7: Research Template 자동 선택
+        # 사용자가 template_id를 이미 지정하지 않았고, API에서 전달하지 않은 경우에만 자동 선택
+        if not state.get("template_id"):
+            await self._try_select_template(state, query_to_classify, result)
+
         return result
+
+    async def _try_select_template(
+        self, state: AgentState, query: str, classification_result: Dict[str, Any]
+    ) -> None:
+        """Phase 4.7: 쿼리에 맞는 연구 템플릿을 자동 선택하여 state에 반영"""
+        try:
+            from neos.templates.template_selector import TemplateSelector
+
+            selector = TemplateSelector()
+            intent = classification_result.get("query_intent")
+            match = await selector.select(query=query, intent=intent)
+
+            if match:
+                template = match["template"]
+                state["template_id"] = template.template_id
+                state["template_config"] = {
+                    "workflow_overrides": template.workflow_overrides,
+                    "required_agents": template.required_agents,
+                    "recommended_skills": template.recommended_skills,
+                    "research_guidance": template.research_guidance,
+                    "output_format": template.output_format,
+                    "params": match.get("params", {}),
+                    "confidence": match.get("confidence", 0.0),
+                }
+
+                # 템플릿의 required_agents를 기존 에이전트 목록에 merge
+                existing_agents = state.get("required_agents") or []
+                for agent in template.required_agents:
+                    if agent not in existing_agents:
+                        existing_agents.append(agent)
+                state["required_agents"] = existing_agents
+
+                logger.info(
+                    f"[TemplateSelector] Applied template '{template.name}' "
+                    f"(confidence={match['confidence']:.2f})"
+                )
+        except Exception as e:
+            logger.debug(f"[TemplateSelector] Template selection skipped: {e}")
 
     async def _select_skills_tools_node(self, state: AgentState) -> Dict[str, Any]:
         """Skill and Tool selection 노드"""

@@ -44,6 +44,27 @@ class MCPTool(ABC):
         self.capabilities = capabilities or []
         self.is_available = False
 
+    def get_input_schema(self) -> Dict[str, Any]:
+        """Anthropic tool input_schema 형식의 파라미터 스키마 반환.
+
+        서브클래스에서 오버라이드하여 정확한 스키마를 제공할 수 있다.
+        """
+        return {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Main input or search query",
+                },
+                "action": {
+                    "type": "string",
+                    "description": "Action to perform",
+                },
+            },
+            "required": ["query"],
+        }
+
+
     @abstractmethod
     async def initialize(self) -> bool:
         """도구 초기화

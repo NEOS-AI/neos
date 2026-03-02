@@ -38,11 +38,11 @@ class EvidenceGraphService:
                     INSERT INTO evidence_claims (
                         claim_text, claim_type, confidence, verification_status,
                         embedding, user_id, session_id
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ) VALUES ($1, $2, $3, $4, $5::vector, $6, $7)
                     RETURNING claim_id
                 """,
                     claim_text, claim_type, confidence, verification_status,
-                    str(embedding) if embedding else None, user_id, session_id,
+                    embedding, user_id, session_id,
                 )
                 claim_id = row["claim_id"]
 
@@ -144,7 +144,7 @@ class EvidenceGraphService:
                       AND 1 - (embedding <=> $1::vector) > $3
                     ORDER BY similarity DESC
                     LIMIT $4
-                """, str(embedding), user_id, similarity_threshold, limit)
+                """, embedding, user_id, similarity_threshold, limit)
 
                 results = []
                 for row in rows:

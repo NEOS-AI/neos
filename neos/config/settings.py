@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: str = env_vars.get("TAVILY_API_KEY", "")
     YOUTUBE_API_KEY: Optional[str] = env_vars.get("YOUTUBE_API_KEY", None)
 
+    # 경량/빠른 LLM 모델 (TemplateSelector, ContradictionResolver 등)
+    FAST_LLM_MODEL: str = env_vars.get("FAST_LLM_MODEL", "claude-haiku-4-5-20251001")
+
     # Phase 3.2: Evidence Graph 설정
     EVIDENCE_GRAPH_ENABLED: bool = bool(env_vars.get("EVIDENCE_GRAPH_ENABLED", False))
 
@@ -570,6 +573,17 @@ class Settings(BaseSettings):
     # =========================================================================
     SEMANTIC_SCHOLAR_API_KEY: Optional[str] = env_vars.get("SEMANTIC_SCHOLAR_API_KEY", None)
     NEWS_API_KEY: Optional[str] = env_vars.get("NEWS_API_KEY", None)
+
+    # =========================================================================
+    # Advanced Tool Search 설정
+    # 주의: TOOL_SEARCH_ENABLED=true는 ARTIFACTS_ENABLED=true 일 때만 동작합니다.
+    # =========================================================================
+    TOOL_SEARCH_ENABLED: bool = env_vars.get("TOOL_SEARCH_ENABLED", "false").lower() in ("true", "1", "yes")
+    TOOL_SEARCH_TOP_K: int = int(env_vars.get("TOOL_SEARCH_TOP_K", 5))
+    # TOOL_SEARCH_ALPHA: HybridSearchEngine은 RRF 방식 사용, alpha 파라미터 미적용 (제거됨)
+    TOOL_SEARCH_MAX_ROUNDS: int = int(env_vars.get("TOOL_SEARCH_MAX_ROUNDS", 3))
+    TOOL_SEARCH_RRF_K: int = int(env_vars.get("TOOL_SEARCH_RRF_K", 60))
+    # TOOL_SEARCH_CACHE_TTL: 검색 결과 캐싱 미구현, 설정 제거됨
 
     # =========================================================================
     # Hybrid Search (BM25 + Dense Vector) 설정 (Phase 1)
