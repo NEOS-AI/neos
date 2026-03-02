@@ -123,6 +123,9 @@ psql -U postgres -d neos -h localhost -f db/migrations/017_add_refinement_tables
 
 # Active Contradiction Resolution
 psql -U postgres -d neos -h localhost -f db/migrations/018_add_contradiction_resolution.sql
+
+# Add Tool Registry tables
+psql -U postgres -d neos -h localhost -f db/migrations/019_add_tool_registry.sql
 ```
 
 ### Migrate database schema for backoffice
