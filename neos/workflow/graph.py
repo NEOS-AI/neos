@@ -22,7 +22,12 @@ from .processors import (
     ResponseGenerator,
     ConversationContextProcessor,
     RefinementChecker,
-    QueryRefinementAgent
+    QueryRefinementAgent,
+    FactCheckProcessor,
+    ResearchContinuationProcessor,
+    SelfReflectionProcessor,
+    HypothesisManager,
+    ResearchReplanner,
 )
 from .utils import QueryClassifier
 from .checkpointer import get_checkpointer
@@ -57,8 +62,15 @@ class MultiAgentWorkflow:
         self.analysis_orchestrator = AnalysisOrchestrator(self.agents, self.config)
         self.generation_orchestrator = GenerationOrchestrator(self.agents, self.config)
         self.result_processor = ResultProcessor()
+        self.fact_check_processor = FactCheckProcessor()
         self.quality_validator = QualityValidator(self.config)
         self.response_generator = ResponseGenerator()
+
+        # Phase 2 processors
+        self.research_continuation_processor = ResearchContinuationProcessor()
+        self.self_reflection_processor = SelfReflectionProcessor()
+        self.hypothesis_manager = HypothesisManager()  # Phase 2.5
+        self.research_replanner = ResearchReplanner()  # Phase 2.4
 
         # 워크플로우 그래프 생성 (비동기로 초기화)
         self.graph = None
@@ -131,32 +143,42 @@ class MultiAgentWorkflow:
         # 노드 추가
         workflow.add_node(WorkflowNode.REFINEMENT_CHECKER.value, self._check_refinement_node)
         workflow.add_node(WorkflowNode.QUERY_REFINEMENT.value, self._refine_query_node)
+        workflow.add_node(WorkflowNode.RESEARCH_CONTINUATION.value, self._research_continuation_node)  # Phase 2.2
         workflow.add_node(WorkflowNode.CONVERSATION_CTX_PROC.value, self._process_conversation_context_node)
         workflow.add_node(WorkflowNode.QUERY_CLS.value, self._classify_query_node)
         workflow.add_node(WorkflowNode.SKILL_TOOL_SELECTOR.value, self._select_skills_tools_node)
+        workflow.add_node(WorkflowNode.HYPOTHESIS_GENERATION.value, self._hypothesis_generation_node)  # Phase 2.5
         workflow.add_node(WorkflowNode.SEARCH_ORCHESTRATOR.value, self._orchestrate_search_node)
+        workflow.add_node(WorkflowNode.HYPOTHESIS_EVALUATION.value, self._hypothesis_evaluation_node)  # Phase 2.5
+        workflow.add_node(WorkflowNode.REPLANNER.value, self._replanner_node)  # Phase 2.4
         workflow.add_node(WorkflowNode.ANALYSIS_ORCHESTRATOR.value, self._orchestrate_analysis_node)
         workflow.add_node(WorkflowNode.GENERATION_ORCHESTRATOR.value, self._orchestrate_generation_node)
         workflow.add_node(WorkflowNode.RESULT_INTEGRATOR.value, self._integrate_results_node)
+        workflow.add_node(WorkflowNode.FACT_CHECK.value, self._fact_check_node)
         workflow.add_node(WorkflowNode.QUALITY_VALIDATOR.value, self._validate_quality_node)
+        workflow.add_node(WorkflowNode.SELF_REFLECTION.value, self._self_reflection_node)  # Phase 2.6
         workflow.add_node(WorkflowNode.RESP_GENERATOR.value, self._generate_response_node)
 
         # 엣지 정의
         # 1. START → refinement_checker (가장 먼저 쿼리 개선 필요 여부 체크)
         workflow.add_edge(START, WorkflowNode.REFINEMENT_CHECKER.value)
 
-        # 2. refinement_checker → 조건부 분기 (개선 필요 여부에 따라)
+        # 2. refinement_checker → 조건부 분기 (개선 필요 여부 + continuation 체크)
         workflow.add_conditional_edges(
             WorkflowNode.REFINEMENT_CHECKER.value,
-            self._should_refine_query,
+            self._should_refine_or_continue,
             {
                 "refine_query": WorkflowNode.QUERY_REFINEMENT.value,
-                "skip_refinement": WorkflowNode.CONVERSATION_CTX_PROC.value  # 또는 query_classifier
+                "continue_research": WorkflowNode.RESEARCH_CONTINUATION.value,  # Phase 2.2
+                "skip_refinement": WorkflowNode.CONVERSATION_CTX_PROC.value,
             }
         )
 
         # 3. query_refinement_agent → conversation_context_processor (개선 후 정상 흐름)
         workflow.add_edge(WorkflowNode.QUERY_REFINEMENT.value, WorkflowNode.CONVERSATION_CTX_PROC.value)
+
+        # 3b. research_continuation → conversation_context_processor (Phase 2.2)
+        workflow.add_edge(WorkflowNode.RESEARCH_CONTINUATION.value, WorkflowNode.CONVERSATION_CTX_PROC.value)
 
         # 4. conversation_context_processor → 조건부 분기 (히스토리 활용 여부)
         workflow.add_conditional_edges(
@@ -178,24 +200,49 @@ class MultiAgentWorkflow:
             self._should_skip_orchestrators,
             {
                 WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,  # 간단한 대화 -> 바로 응답
-                WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.SEARCH_ORCHESTRATOR.value   # 도구 필요 -> 정상 파이프라인
+                WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value  # Phase 2.5: 가설 생성 → 검색
             }
         )
 
-        workflow.add_edge(WorkflowNode.SEARCH_ORCHESTRATOR.value, WorkflowNode.ANALYSIS_ORCHESTRATOR.value)
+        # Phase 2.5: HYPOTHESIS_GENERATION → SEARCH → HYPOTHESIS_EVALUATION → ANALYSIS
+        workflow.add_edge(WorkflowNode.HYPOTHESIS_GENERATION.value, WorkflowNode.SEARCH_ORCHESTRATOR.value)
+        workflow.add_edge(WorkflowNode.SEARCH_ORCHESTRATOR.value, WorkflowNode.HYPOTHESIS_EVALUATION.value)
+        # Phase 2.4: HYPOTHESIS_EVALUATION → 조건부 replanning
+        workflow.add_conditional_edges(
+            WorkflowNode.HYPOTHESIS_EVALUATION.value,
+            self._should_replan,
+            {
+                "replan": WorkflowNode.REPLANNER.value,
+                "skip_replan": WorkflowNode.ANALYSIS_ORCHESTRATOR.value,
+            }
+        )
+
+        # Phase 2.4: REPLANNER → 추가 검색 필요 시 loop back, 아니면 진행
+        workflow.add_conditional_edges(
+            WorkflowNode.REPLANNER.value,
+            self._should_continue_research,
+            {
+                "continue_search": WorkflowNode.HYPOTHESIS_GENERATION.value,  # loop back
+                "proceed": WorkflowNode.ANALYSIS_ORCHESTRATOR.value,
+            }
+        )
         workflow.add_edge(WorkflowNode.ANALYSIS_ORCHESTRATOR.value, WorkflowNode.GENERATION_ORCHESTRATOR.value)
         workflow.add_edge(WorkflowNode.GENERATION_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
-        workflow.add_edge(WorkflowNode.RESULT_INTEGRATOR.value, WorkflowNode.QUALITY_VALIDATOR.value)
+        workflow.add_edge(WorkflowNode.RESULT_INTEGRATOR.value, WorkflowNode.FACT_CHECK.value)
+        workflow.add_edge(WorkflowNode.FACT_CHECK.value, WorkflowNode.QUALITY_VALIDATOR.value)
 
         # 조건부 엣지 (품질 검증 결과에 따라)
         workflow.add_conditional_edges(
             WorkflowNode.QUALITY_VALIDATOR.value,
             self._should_regenerate,
             {
-                WorkflowPathway.REGENERATE.value: WorkflowNode.SEARCH_ORCHESTRATOR.value,  # 품질이 낮으면 다시 검색
-                WorkflowPathway.PROCEED.value: WorkflowNode.RESP_GENERATOR.value       # 품질이 좋으면 응답 생성
+                WorkflowPathway.REGENERATE.value: WorkflowNode.HYPOTHESIS_GENERATION.value,  # 품질이 낮으면 가설 생성부터 다시
+                WorkflowPathway.PROCEED.value: WorkflowNode.SELF_REFLECTION.value  # Phase 2.6: 품질 OK → self-reflection
             }
         )
+
+        # Phase 2.6: self_reflection → response_generator
+        workflow.add_edge(WorkflowNode.SELF_REFLECTION.value, WorkflowNode.RESP_GENERATOR.value)
 
         workflow.add_edge(WorkflowNode.RESP_GENERATOR.value, END)
 
@@ -230,6 +277,50 @@ class MultiAgentWorkflow:
         """쿼리 개선 노드"""
         return await self.query_refinement_agent.refine(state)
 
+    async def _research_continuation_node(self, state: AgentState) -> Dict[str, Any]:
+        """Phase 2.2: 후속 연구 컨텍스트 로드 노드"""
+        return await self.research_continuation_processor.process(state)
+
+    async def _self_reflection_node(self, state: AgentState) -> Dict[str, Any]:
+        """Phase 2.6: Self-reflection 노드"""
+        return await self.self_reflection_processor.reflect(state)
+
+    async def _hypothesis_generation_node(self, state: AgentState) -> Dict[str, Any]:
+        """Phase 2.5: 검색 전 경쟁 가설 생성 (DEEP_RESEARCH/COMPLEX_ANALYSIS + high complexity만)"""
+        intent = state.get("query_intent", "")
+        classification = state.get("query_classification") or {}
+        complexity = classification.get("complexity_score", 0.0)
+
+        if intent not in (IntentType.DEEP_RESEARCH.value, IntentType.COMPLEX_ANALYSIS.value):
+            return state
+        if complexity < 0.6:
+            return state
+
+        hypotheses = await self.hypothesis_manager.generate_hypotheses(
+            query=state.get("original_query", ""),
+            classification=classification,
+        )
+        logger.info(f"[Hypothesis] Generated {len(hypotheses)} hypotheses")
+        return {"hypotheses": hypotheses}
+
+    async def _hypothesis_evaluation_node(self, state: AgentState) -> Dict[str, Any]:
+        """Phase 2.5: 검색 후 가설 평가 및 종합"""
+        hypotheses = state.get("hypotheses", [])
+        if not hypotheses:
+            return state
+
+        search_results = state.get("search_results", [])
+        evaluation = await self.hypothesis_manager.evaluate_hypotheses(
+            hypotheses=hypotheses,
+            search_results=search_results,
+        )
+        logger.info(f"[Hypothesis] Evaluation complete: strongest={evaluation.get('strongest')}")
+        return {"hypothesis_results": evaluation}
+
+    async def _replanner_node(self, state: AgentState) -> Dict[str, Any]:
+        """Phase 2.4: 중간 결과 기반 적응형 연구 재계획"""
+        return await self.research_replanner.evaluate_and_replan(state)
+
     async def _classify_query_node(self, state: AgentState) -> Dict[str, Any]:
         """쿼리 분류 노드"""
         # refined_query가 있으면 그것을 사용, 없으면 original_query 사용
@@ -244,7 +335,50 @@ class MultiAgentWorkflow:
         # original_query 복원 (메타데이터 유지)
         state["original_query"] = original_backup
 
+        # Phase 4.7: Research Template 자동 선택
+        # 사용자가 template_id를 이미 지정하지 않았고, API에서 전달하지 않은 경우에만 자동 선택
+        if not state.get("template_id"):
+            await self._try_select_template(state, query_to_classify, result)
+
         return result
+
+    async def _try_select_template(
+        self, state: AgentState, query: str, classification_result: Dict[str, Any]
+    ) -> None:
+        """Phase 4.7: 쿼리에 맞는 연구 템플릿을 자동 선택하여 state에 반영"""
+        try:
+            from neos.templates.template_selector import TemplateSelector
+
+            selector = TemplateSelector()
+            intent = classification_result.get("query_intent")
+            match = await selector.select(query=query, intent=intent)
+
+            if match:
+                template = match["template"]
+                state["template_id"] = template.template_id
+                state["template_config"] = {
+                    "workflow_overrides": template.workflow_overrides,
+                    "required_agents": template.required_agents,
+                    "recommended_skills": template.recommended_skills,
+                    "research_guidance": template.research_guidance,
+                    "output_format": template.output_format,
+                    "params": match.get("params", {}),
+                    "confidence": match.get("confidence", 0.0),
+                }
+
+                # 템플릿의 required_agents를 기존 에이전트 목록에 merge
+                existing_agents = state.get("required_agents") or []
+                for agent in template.required_agents:
+                    if agent not in existing_agents:
+                        existing_agents.append(agent)
+                state["required_agents"] = existing_agents
+
+                logger.info(
+                    f"[TemplateSelector] Applied template '{template.name}' "
+                    f"(confidence={match['confidence']:.2f})"
+                )
+        except Exception as e:
+            logger.debug(f"[TemplateSelector] Template selection skipped: {e}")
 
     async def _select_skills_tools_node(self, state: AgentState) -> Dict[str, Any]:
         """Skill and Tool selection 노드"""
@@ -322,6 +456,10 @@ class MultiAgentWorkflow:
         """결과 통합 노드"""
         return await self.result_processor.integrate_results(state)
 
+    async def _fact_check_node(self, state: AgentState) -> Dict[str, Any]:
+        """Fact-check 노드 (조건부 실행)"""
+        return await self.fact_check_processor.check_facts(state)
+
     async def _validate_quality_node(self, state: AgentState) -> Dict[str, Any]:
         """품질 검증 노드"""
         return await self.quality_validator.validate_quality(state)
@@ -346,6 +484,25 @@ class MultiAgentWorkflow:
         print("[DEBUG] Query refinement not needed, skipping")
         return "skip_refinement"
 
+    def _should_refine_or_continue(self, state: AgentState) -> str:
+        """Phase 2.2: 쿼리 개선 / 후속 연구 / 일반 진행 결정
+
+        is_continuation=True이면 research_continuation 노드로 라우팅.
+        """
+        # 후속 연구 체크 (최우선)
+        if state.get("is_continuation"):
+            print("[DEBUG] Research continuation detected, routing to continuation node")
+            return "continue_research"
+
+        # 기존 refinement 로직
+        needs_refinement = state.get("needs_refinement", False)
+        if needs_refinement:
+            print(f"[DEBUG] Query refinement needed: {state.get('refinement_reasons', [])}")
+            return "refine_query"
+
+        print("[DEBUG] Normal flow, skipping refinement")
+        return "skip_refinement"
+
     def _should_process_context(self, state: AgentState) -> str:
         """
         대화 컨텍스트 처리 여부 결정
@@ -356,6 +513,33 @@ class MultiAgentWorkflow:
         # conversation_context_processor는 이미 실행됨
         # 내부에서 히스토리 여부를 확인하고 처리
         return "process_context"
+
+    def _should_replan(self, state: AgentState) -> str:
+        """Phase 2.4: replanning 필요 여부 결정
+
+        조건: sub_topics 존재 + 검색 결과 < 10 + replan_count < 2
+        """
+        classification = state.get("query_classification") or {}
+        sub_topics = classification.get("sub_topics", [])
+        search_results = state.get("search_results", [])
+        replan_count = state.get("replan_count", 0)
+
+        if sub_topics and len(search_results) < 10 and replan_count < 2:
+            logger.info(
+                f"[Replanner] Triggered (results={len(search_results)}, "
+                f"replan #{replan_count + 1})"
+            )
+            return "replan"
+
+        return "skip_replan"
+
+    def _should_continue_research(self, state: AgentState) -> str:
+        """Phase 2.4: replanning 후 추가 검색 필요 여부 결정"""
+        remaining = state.get("remaining_questions", [])
+        if remaining:
+            logger.info(f"[Replanner] {len(remaining)} gaps found, looping to search")
+            return "continue_search"
+        return "proceed"
 
     def _should_regenerate(self, state: AgentState) -> str:
         """재생성 여부 결정"""
@@ -595,6 +779,15 @@ class MultiAgentWorkflow:
             initial_state = self._create_initial_state(user_input)
             initial_state["_event_handler"] = event_handler
 
+            # Phase 2.1: 메모리 컨텍스트 로드
+            await self._load_memory_context(initial_state, user_input)
+
+            # Phase 4.7: 연구 템플릿 자동 선택 및 적용
+            await self._apply_research_template(initial_state, query)
+
+            # 독립 research_sessions 테이블에 세션 기록 (M-6 해결)
+            await self._record_session_start(user_input)
+
             try:
                 # 워크플로우 실행
                 add_span_event(span, "starting_graph_execution")
@@ -613,9 +806,14 @@ class MultiAgentWorkflow:
                 # 노드별 진행 상황 추적을 위해 astream 사용
                 workflow_nodes = [
                     WorkflowNode.QUERY_CLS.value, WorkflowNode.SKILL_TOOL_SELECTOR.value,
-                    WorkflowNode.SEARCH_ORCHESTRATOR.value, WorkflowNode.ANALYSIS_ORCHESTRATOR.value,
+                    WorkflowNode.HYPOTHESIS_GENERATION.value,  # Phase 2.5
+                    WorkflowNode.SEARCH_ORCHESTRATOR.value,
+                    WorkflowNode.HYPOTHESIS_EVALUATION.value,  # Phase 2.5
+                    WorkflowNode.REPLANNER.value,  # Phase 2.4
+                    WorkflowNode.ANALYSIS_ORCHESTRATOR.value,
                     WorkflowNode.GENERATION_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value,
-                    WorkflowNode.QUALITY_VALIDATOR.value, WorkflowNode.RESP_GENERATOR.value
+                    WorkflowNode.FACT_CHECK.value, WorkflowNode.QUALITY_VALIDATOR.value,
+                    WorkflowNode.RESP_GENERATOR.value
                 ]
 
                 current_step = 0
@@ -635,9 +833,28 @@ class MultiAgentWorkflow:
                                 "total_steps": total_steps
                             })
 
-                            # 노드 시작 이벤트
+                            # 이전 노드의 실행 시간 기록 (동적 ETA용)
+                            from .events import (
+                                get_node_label, estimate_remaining_time,
+                                record_node_start, record_node_end,
+                            )
+                            wf_id = user_input.get("session_id", "")
+                            if current_step > 1:
+                                # 이전 노드 완료 기록
+                                prev_idx = workflow_nodes.index(node_name) - 1
+                                if prev_idx >= 0:
+                                    record_node_end(workflow_nodes[prev_idx], wf_id)
+
+                            # 현재 노드 시작 기록
+                            record_node_start(node_name, wf_id)
+
+                            # 노드 시작 이벤트 (structured progress)
                             await event_handler.on_node_start(
-                                node_name, current_step, total_steps
+                                node_name,
+                                current_step,
+                                total_steps,
+                                step_name=get_node_label(node_name),
+                                estimated_remaining_s=estimate_remaining_time(node_name),
                             )
 
                             # 노드 완료 이벤트 (state에서 필요한 정보 추출)
@@ -652,6 +869,11 @@ class MultiAgentWorkflow:
 
                         # 마지막 상태 저장
                         final_state = state
+
+                # 마지막 노드의 실행 시간 기록
+                if workflow_nodes:
+                    from .events import record_node_end
+                    record_node_end(workflow_nodes[-1], user_input.get("session_id", ""))
 
                 # 결과 생성
                 add_span_event(span, "generating_result")
@@ -687,6 +909,14 @@ class MultiAgentWorkflow:
                     "workflow.nodes_executed": current_step
                 })
 
+                # Phase 2.1: 에피소드 메모리 저장
+                await self._save_episode_memory(user_input, result, final_state)
+
+                # 세션 상태를 completed로 업데이트
+                await self._record_session_complete(
+                    user_input, result, final_state
+                )
+
                 print("[DEBUG] Workflow execution completed successfully")
                 return result
 
@@ -701,6 +931,9 @@ class MultiAgentWorkflow:
 
                 # 에러 이벤트
                 await event_handler.on_workflow_error(e)
+
+                # 세션 상태를 failed로 업데이트
+                await self._record_session_failed(user_input, e)
 
                 return self._create_error_result(e, initial_state)
 
@@ -859,6 +1092,7 @@ class MultiAgentWorkflow:
             search_results=[],
             analysis_results=[],
             generation_results=[],
+            memory_context=None,  # Phase 2.1: 3계층 메모리 컨텍스트
             search_synthesis=None,  # Phase 2: LLM 검색 결과 종합
             search_metadata=None,  # Phase 2: 검색 메타데이터
             integrated_results=None,
@@ -872,12 +1106,15 @@ class MultiAgentWorkflow:
             retry_count=0,
             execution_time_ms=None,
             tokens_used=None,
-            api_calls_made=None
+            api_calls_made=None,
+            # Phase 4.7: Research Templates
+            template_id=None,
+            template_config=None,
         )
 
     def _create_workflow_result(self, final_state: AgentState) -> Dict[str, Any]:
         """워크플로우 결과 생성"""
-        return {
+        result = {
             "success": True,
             "response": final_state["final_response"],
             "metadata": final_state["response_metadata"],
@@ -886,8 +1123,22 @@ class MultiAgentWorkflow:
             "errors": final_state["errors"],
             "cache_hit": False,
             "execution_steps": len(final_state["execution_steps"]),
-            "retry_count": final_state.get("retry_count", 0)
+            "retry_count": final_state.get("retry_count", 0),
         }
+
+        # Phase 4.7: 템플릿 정보 포함
+        if final_state.get("template_id"):
+            result["template_id"] = final_state["template_id"]
+
+        # Phase 2.7: 비용 정보 포함
+        if final_state.get("cumulative_cost") is not None:
+            result["cost_info"] = {
+                "cumulative_cost": final_state["cumulative_cost"],
+                "budget": final_state.get("cost_budget"),
+                "cost_breakdown": final_state.get("cost_tracking", {}),
+            }
+
+        return result
 
     def _create_error_result(self, error: Exception, initial_state: AgentState) -> Dict[str, Any]:
         """오류 결과 생성"""
@@ -898,6 +1149,157 @@ class MultiAgentWorkflow:
             "cache_hit": False,
             "execution_time_ms": int((datetime.now() - initial_state["execution_start"]).total_seconds() * 1000)
         }
+
+    async def _load_memory_context(
+        self, state: AgentState, user_input: Dict[str, Any]
+    ) -> None:
+        """Phase 2.1: 3계층 메모리에서 컨텍스트 로드"""
+        try:
+            from neos.memory.manager import memory_manager
+            context = await memory_manager.build_context(
+                user_id=user_input.get("user_id", ""),
+                query=user_input.get("query", ""),
+                session_id=user_input.get("session_id"),
+            )
+            state["memory_context"] = context
+        except Exception as e:
+            logger.debug(f"[Workflow] Memory context load skipped: {e}")
+
+    async def _apply_research_template(
+        self, state: AgentState, query: str
+    ) -> None:
+        """Phase 4.7: 연구 템플릿 자동 선택 및 적용
+
+        쿼리에 맞는 템플릿을 LLM으로 선택하고,
+        research_guidance를 쿼리 앞에 prepend하여 연구 방향을 설정한다.
+        """
+        try:
+            from neos.templates.template_selector import TemplateSelector
+
+            selector = TemplateSelector()
+            result = await selector.select(query)
+
+            if result is None:
+                return
+
+            template = result["template"]
+            params = result["params"]
+
+            # 상태에 템플릿 정보 저장
+            state["template_id"] = template.template_id
+            state["template_config"] = {
+                "workflow_overrides": template.workflow_overrides,
+                "required_agents": template.required_agents,
+                "recommended_skills": template.recommended_skills,
+                "output_format": template.output_format,
+                "params": params,
+            }
+
+            # research_guidance를 원본 쿼리에 prepend
+            if template.research_guidance:
+                state["original_query"] = (
+                    f"[연구 지침]\n{template.research_guidance}\n\n"
+                    f"[사용자 질문]\n{query}"
+                )
+
+            logger.info(
+                f"[Workflow] Research template applied: {template.name} "
+                f"(id={template.template_id})"
+            )
+        except Exception as e:
+            logger.debug(f"[Workflow] Template selection skipped: {e}")
+
+    async def _save_episode_memory(
+        self, user_input: Dict[str, Any], result: Dict[str, Any],
+        final_state: AgentState
+    ) -> None:
+        """Phase 2.1: 워크플로우 완료 시 에피소드 메모리 저장"""
+        if not result.get("success"):
+            return
+        try:
+            from neos.memory.manager import memory_manager
+            sources = []
+            for sr in (final_state.get("search_results") or []):
+                sources.append({"source": sr.source, "title": sr.title, "url": sr.url})
+
+            key_findings = result.get("response", "")[:500]  # 핵심 발견 요약 (앞 500자)
+
+            await memory_manager.save_episode(
+                user_id=user_input.get("user_id", ""),
+                session_id=user_input.get("session_id", ""),
+                query=user_input.get("query", ""),
+                key_findings=key_findings,
+                sources_used=sources[:10],  # 상위 10개 소스만
+                quality_score=result.get("quality_score", 0.0),
+                metadata={
+                    "execution_time_ms": result.get("execution_time_ms"),
+                    "intent": final_state.get("query_intent"),
+                },
+            )
+        except Exception as e:
+            logger.debug(f"[Workflow] Episode memory save skipped: {e}")
+
+    async def _record_session_start(self, user_input: Dict[str, Any]) -> None:
+        """워크플로우 시작 시 research_sessions 테이블에 세션 기록"""
+        try:
+            from neos.api.services.research_session_service import research_session_service
+        except ImportError as e:
+            logger.error(f"[Workflow] Cannot import research_session_service: {e}")
+            return
+
+        try:
+            await research_session_service.create_session(
+                thread_id=user_input.get("session_id", ""),
+                user_id=user_input.get("user_id", ""),
+                original_query=user_input.get("query", ""),
+            )
+        except Exception as e:
+            # 세션 기록 실패는 워크플로우 실행을 차단하지 않음
+            logger.warning(f"[Workflow] Failed to record session start: {e}")
+
+    async def _record_session_complete(
+        self, user_input: Dict[str, Any], result: Dict[str, Any],
+        final_state: AgentState
+    ) -> None:
+        """워크플로우 완료 시 세션 상태 업데이트"""
+        try:
+            from neos.api.services.research_session_service import research_session_service
+        except ImportError as e:
+            logger.error(f"[Workflow] Cannot import research_session_service: {e}")
+            return
+
+        try:
+            await research_session_service.update_session_status(
+                thread_id=user_input.get("session_id", ""),
+                status="completed",
+                metadata_updates={
+                    "quality_score": result.get("quality_score"),
+                    "search_results_count": len(final_state.get("search_results", [])),
+                    "execution_time_ms": result.get("execution_time_ms"),
+                    "errors": final_state.get("errors", []),
+                },
+            )
+        except Exception as e:
+            logger.warning(f"[Workflow] Failed to record session completion: {e}")
+
+    async def _record_session_failed(
+        self, user_input: Dict[str, Any], error: Exception
+    ) -> None:
+        """워크플로우 실패 시 세션 상태 업데이트"""
+        try:
+            from neos.api.services.research_session_service import research_session_service
+        except ImportError as e:
+            logger.error(f"[Workflow] Cannot import research_session_service: {e}")
+            return
+
+        try:
+            await research_session_service.update_session_status(
+                thread_id=user_input.get("session_id", ""),
+                status="failed",
+                metadata_updates={"error": str(error)},
+            )
+        except Exception as e:
+            logger.warning(f"[Workflow] Failed to record session failure: {e}")
 
     async def _cache_workflow_result(self, cache_key: str, result: Dict[str, Any]) -> None:
         """워크플로우 결과 캐싱"""
@@ -969,6 +1371,7 @@ class MultiAgentWorkflow:
                 WorkflowNode.ANALYSIS_ORCHESTRATOR.value: bool(self.analysis_orchestrator),
                 WorkflowNode.GENERATION_ORCHESTRATOR.value: bool(self.generation_orchestrator),
                 WorkflowNode.RESULT_INTEGRATOR.value: bool(self.result_processor),
+                WorkflowNode.FACT_CHECK.value: bool(self.fact_check_processor),
                 WorkflowNode.QUALITY_VALIDATOR.value: bool(self.quality_validator),
                 WorkflowNode.RESP_GENERATOR.value: bool(self.response_generator)
             },

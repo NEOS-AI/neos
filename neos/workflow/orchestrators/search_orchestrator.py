@@ -14,6 +14,7 @@ from neos.workflow.orchestrators.search_strategies import (
 from neos.utils.llm_factory import create_llm
 
 from ..state import AgentState
+from ..utils.cost_router import cost_router
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,9 @@ class SearchOrchestrator:
             logger.debug("도구 선택기 초기화 중...")
             await self.tool_selector.initialize()
 
+        # knowledge_hybrid 검색으로 캐시된 유사 결과를 보강 컨텍스트로 활용
+        await self._augment_with_cache_hybrid(state)
+
         # 적용 가능한 전략 선택
         selected_strategy = None
         for strategy in self.strategies:
@@ -109,12 +113,47 @@ class SearchOrchestrator:
             logger.error("No applicable strategy found!")
             return state
 
+        # Phase 2.7: 비용 인식 라우팅 — 예산 부족 시 저렴한 전략으로 다운그레이드
+        remaining_budget = cost_router.get_remaining_budget(state)
+        if remaining_budget is not None:
+            original_name = selected_strategy.name
+            downgraded_name = cost_router.select_strategy(
+                preferred=original_name,
+                remaining_budget=remaining_budget,
+            )
+            if downgraded_name != original_name:
+                for s in self.strategies:
+                    if s.name == downgraded_name:
+                        selected_strategy = s
+                        logger.info(
+                            f"[CostRouter] Downgraded: {original_name} → {downgraded_name} "
+                            f"(budget: ${remaining_budget:.2f})"
+                        )
+                        break
+
         # 전략 실행 (자동 폴백)
-        return await self._execute_with_fallback(
+        result_state = await self._execute_with_fallback(
             selected_strategy,
             state,
             search_agents
         )
+
+        # Phase 3.1: 검색 결과에서 KG 자동 구축 (비동기, non-blocking)
+        if getattr(settings, "KG_POPULATION_ENABLED", False):
+            import asyncio
+            search_results = result_state.get("search_results", [])
+            if search_results:
+                try:
+                    from neos.services.kg_population_service import kg_population_service
+                    asyncio.create_task(
+                        kg_population_service.populate_from_search_results(
+                            search_results, session_id=state.get("session_id", "")
+                        )
+                    )
+                except Exception as e:
+                    logger.debug(f"[KGPopulation] 시작 실패 (무시): {e}")
+
+        return result_state
 
     async def _execute_with_fallback(
         self,
@@ -129,6 +168,11 @@ class SearchOrchestrator:
         try:
             # 선택된 전략 실행
             state = await strategy.execute(state, search_agents, self.agents, self.tool_selector)
+
+            # Phase 2.7: 실행 비용 추적
+            estimated_cost = cost_router.estimate_cost(strategy.name)
+            cost_router.track_cost(state, f"search_{strategy.name}", estimated_cost)
+
             return state
 
         except Exception as e:
@@ -155,6 +199,50 @@ class SearchOrchestrator:
                 state["errors"].append(f"Standard strategy failed: {str(e)}")
 
             return state
+
+    async def _augment_with_cache_hybrid(self, state: AgentState) -> None:
+        """knowledge_hybrid (cache_hybrid) 전략으로 캐시된 유사 결과를 보강합니다.
+
+        query_cache 테이블에 이전에 동일/유사한 쿼리의 결과가 있으면
+        검색 결과에 추가하여 응답 품질을 높입니다.
+
+        이 메서드는 검색 에이전트 실행 전에 호출되어,
+        캐시된 결과가 있으면 검색 결과를 보강합니다.
+        """
+        query_embedding = state.get("query_embedding")
+        if not query_embedding:
+            logger.debug("[SearchOrchestrator] cache_hybrid skipped: query_embedding not available")
+            return
+
+        try:
+            from neos.services.similarity_search_service import similarity_search_service
+
+            cached_results = await similarity_search_service.search(
+                query=state["original_query"],
+                strategy="cache_hybrid",
+                top_n=settings.HYBRID_SEARCH_CANDIDATE_COUNT,
+                limit=3,
+            )
+
+            if cached_results:
+                logger.info(
+                    f"[SearchOrchestrator] cache_hybrid found {len(cached_results)} "
+                    f"cached results (top RRF: {cached_results[0].get('rrf_score', 0):.3f})"
+                )
+                # 캐시 결과를 search_results에 보강
+                for cr in cached_results:
+                    response_data = cr.get("response_data", {})
+                    if isinstance(response_data, dict) and response_data.get("response"):
+                        state["search_results"].append({
+                            "source": "cache_hybrid",
+                            "content": str(response_data.get("response", ""))[:500],
+                            "query": cr.get("query_text", ""),
+                            "rrf_score": cr.get("rrf_score", 0),
+                        })
+
+        except Exception as e:
+            # cache_hybrid 실패는 검색을 차단하지 않음
+            logger.debug(f"[SearchOrchestrator] cache_hybrid augmentation skipped: {e}")
 
     async def _enhance_query_with_context(
         self,

@@ -53,6 +53,26 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: str = env_vars.get("TAVILY_API_KEY", "")
     YOUTUBE_API_KEY: Optional[str] = env_vars.get("YOUTUBE_API_KEY", None)
 
+    # 경량/빠른 LLM 모델 (TemplateSelector, ContradictionResolver 등)
+    FAST_LLM_MODEL: str = env_vars.get("FAST_LLM_MODEL", "claude-haiku-4-5-20251001")
+
+    # Phase 3.2: Evidence Graph 설정
+    EVIDENCE_GRAPH_ENABLED: bool = bool(env_vars.get("EVIDENCE_GRAPH_ENABLED", False))
+
+    # Phase 3.1: Knowledge Graph 설정
+    KG_POPULATION_ENABLED: bool = bool(env_vars.get("KG_POPULATION_ENABLED", False))
+    KG_MAX_TRAVERSAL_DEPTH: int = int(env_vars.get("KG_MAX_TRAVERSAL_DEPTH", 2))
+    KG_SEARCH_WEIGHT: float = float(env_vars.get("KG_SEARCH_WEIGHT", 0.3))
+
+    # Phase 3 검색 소스 API 키
+    GITHUB_API_TOKEN: Optional[str] = env_vars.get("GITHUB_API_TOKEN", None)
+    REDDIT_CLIENT_ID: Optional[str] = env_vars.get("REDDIT_CLIENT_ID", None)
+    REDDIT_CLIENT_SECRET: Optional[str] = env_vars.get("REDDIT_CLIENT_SECRET", None)
+    REDDIT_USER_AGENT: str = env_vars.get("REDDIT_USER_AGENT", "NEOS-Research-Engine/1.0")
+    SERPAPI_API_KEY: Optional[str] = env_vars.get("SERPAPI_API_KEY", None)
+    SEC_EDGAR_USER_AGENT: str = env_vars.get("SEC_EDGAR_USER_AGENT", "NEOS-Research contact@neos.ai")
+    OPENALEX_EMAIL: str = env_vars.get("OPENALEX_EMAIL", "")
+
     # 외부 API 키 설정
     # Weather API
     OPENWEATHER_API_KEY: str = env_vars.get("OPENWEATHER_API_KEY", "")
@@ -361,6 +381,8 @@ class Settings(BaseSettings):
     # 문서 청킹 설정
     CHUNK_SIZE: int = int(env_vars.get("CHUNK_SIZE", 1000))  # 문자 수
     CHUNK_OVERLAP: int = int(env_vars.get("CHUNK_OVERLAP", 200))  # 문자 수
+    DEFAULT_CHUNKING_STRATEGY: str = env_vars.get("DEFAULT_CHUNKING_STRATEGY", "sentence")
+    SEMANTIC_CHUNK_THRESHOLD: float = float(env_vars.get("SEMANTIC_CHUNK_THRESHOLD", 0.75))
 
     # 지식 그래프 추출 설정
     KG_EXTRACTION_ENABLED: bool = bool(env_vars.get("KG_EXTRACTION_ENABLED", True))
@@ -491,6 +513,92 @@ class Settings(BaseSettings):
     CELERY_TIMEZONE: str = env_vars.get("CELERY_TIMEZONE", "UTC")  # 타임존
     CELERY_WORKER_PREFETCH_MULTIPLIER: int = int(env_vars.get("CELERY_WORKER_PREFETCH_MULTIPLIER", 4))  # 워커 prefetch
     CELERY_TASK_ACKS_LATE: bool = bool(env_vars.get("CELERY_TASK_ACKS_LATE", True))  # Late ack (장애 복구)
+
+    # =========================================================================
+    # Memory System 설정 (Phase 2.1)
+    # =========================================================================
+    MEMORY_SHORT_TERM_TTL: int = int(env_vars.get("MEMORY_SHORT_TERM_TTL", 3600))  # 1시간
+    MEMORY_LONG_TERM_ENABLED: bool = env_vars.get("MEMORY_LONG_TERM_ENABLED", "true").lower() in ("true", "1", "yes")
+    MEMORY_EPISODIC_ENABLED: bool = env_vars.get("MEMORY_EPISODIC_ENABLED", "true").lower() in ("true", "1", "yes")
+    MEMORY_MAX_CONTEXT_ITEMS: int = int(env_vars.get("MEMORY_MAX_CONTEXT_ITEMS", 10))
+
+    # =========================================================================
+    # LLM Query Classification 설정 (Phase 2.3)
+    # =========================================================================
+    QUERY_CLASSIFIER_USE_LLM: bool = env_vars.get("QUERY_CLASSIFIER_USE_LLM", "false").lower() in ("true", "1", "yes")
+    QUERY_CLASSIFIER_LLM_MODEL: str = env_vars.get("QUERY_CLASSIFIER_LLM_MODEL", "claude-haiku-4-5-20251001")
+    QUERY_CLASSIFIER_LLM_TIMEOUT: int = int(env_vars.get("QUERY_CLASSIFIER_LLM_TIMEOUT", 10))
+
+    # =========================================================================
+    # Executive Summary 설정 (Phase 2.10)
+    # =========================================================================
+    EXECUTIVE_SUMMARY_ENABLED: bool = env_vars.get("EXECUTIVE_SUMMARY_ENABLED", "true").lower() in ("true", "1", "yes")
+    EXECUTIVE_SUMMARY_MIN_WORDS: int = int(env_vars.get("EXECUTIVE_SUMMARY_MIN_WORDS", 500))
+    EXECUTIVE_SUMMARY_MAX_SENTENCES: int = int(env_vars.get("EXECUTIVE_SUMMARY_MAX_SENTENCES", 3))
+
+    # =========================================================================
+    # RAG Query Expansion 설정 (Phase 2.9)
+    # =========================================================================
+    QUERY_EXPANSION_ENABLED: bool = env_vars.get("QUERY_EXPANSION_ENABLED", "false").lower() in ("true", "1", "yes")
+    QUERY_EXPANSION_VARIATIONS: int = int(env_vars.get("QUERY_EXPANSION_VARIATIONS", 3))
+
+    # =========================================================================
+    # Cost-Aware Routing 설정 (Phase 2.7)
+    # =========================================================================
+    COST_AWARE_ROUTING_ENABLED: bool = env_vars.get("COST_AWARE_ROUTING_ENABLED", "false").lower() in ("true", "1", "yes")
+    DEFAULT_COST_BUDGET: float = float(env_vars.get("DEFAULT_COST_BUDGET", 5.0))  # USD per request
+
+    # =========================================================================
+    # Citation System 설정 (Phase 1)
+    # =========================================================================
+    CITATIONS_ENABLED: bool = bool(env_vars.get("CITATIONS_ENABLED", True))
+    CITATION_DEFAULT_STYLE: str = env_vars.get("CITATION_DEFAULT_STYLE", "numbered")
+    # Supported styles: "numbered", "apa", "mla", "chicago", "vancouver"
+
+    # =========================================================================
+    # Fact-Check Pipeline 설정 (Phase 1)
+    # =========================================================================
+    FACT_CHECK_ENABLED: bool = bool(env_vars.get("FACT_CHECK_ENABLED", True))
+    FACT_CHECK_COMPLEXITY_THRESHOLD: float = float(env_vars.get("FACT_CHECK_COMPLEXITY_THRESHOLD", 0.4))
+    # complexity_score가 이 임계값 이상인 쿼리에만 fact-check 적용
+
+    # =========================================================================
+    # Source Fallback Chain 설정 (Phase 1)
+    # =========================================================================
+    SEARCH_FALLBACK_ENABLED: bool = bool(env_vars.get("SEARCH_FALLBACK_ENABLED", True))
+    DUCKDUCKGO_MAX_RESULTS: int = int(env_vars.get("DUCKDUCKGO_MAX_RESULTS", 10))
+
+    # =========================================================================
+    # New Search Source Skills 설정 (Phase 1)
+    # =========================================================================
+    SEMANTIC_SCHOLAR_API_KEY: Optional[str] = env_vars.get("SEMANTIC_SCHOLAR_API_KEY", None)
+    NEWS_API_KEY: Optional[str] = env_vars.get("NEWS_API_KEY", None)
+
+    # =========================================================================
+    # Advanced Tool Search 설정
+    # 주의: TOOL_SEARCH_ENABLED=true는 ARTIFACTS_ENABLED=true 일 때만 동작합니다.
+    # =========================================================================
+    TOOL_SEARCH_ENABLED: bool = env_vars.get("TOOL_SEARCH_ENABLED", "false").lower() in ("true", "1", "yes")
+    TOOL_SEARCH_TOP_K: int = int(env_vars.get("TOOL_SEARCH_TOP_K", 5))
+    # TOOL_SEARCH_ALPHA: HybridSearchEngine은 RRF 방식 사용, alpha 파라미터 미적용 (제거됨)
+    TOOL_SEARCH_MAX_ROUNDS: int = int(env_vars.get("TOOL_SEARCH_MAX_ROUNDS", 3))
+    TOOL_SEARCH_RRF_K: int = int(env_vars.get("TOOL_SEARCH_RRF_K", 60))
+    # TOOL_SEARCH_CACHE_TTL: 검색 결과 캐싱 미구현, 설정 제거됨
+
+    # =========================================================================
+    # Hybrid Search (BM25 + Dense Vector) 설정 (Phase 1)
+    # =========================================================================
+    HYBRID_SEARCH_ALPHA: float = float(env_vars.get("HYBRID_SEARCH_ALPHA", 0.5))
+    # 0 = pure keyword (BM25), 1 = pure semantic (vector), 0.5 = balanced
+    HYBRID_SEARCH_CANDIDATE_COUNT: int = int(env_vars.get("HYBRID_SEARCH_CANDIDATE_COUNT", 50))
+
+    # =========================================================================
+    # Cross-Encoder Re-Ranking 설정 (Phase 1)
+    # =========================================================================
+    RERANKER_ENABLED: bool = bool(env_vars.get("RERANKER_ENABLED", True))
+    COHERE_API_KEY: Optional[str] = env_vars.get("COHERE_API_KEY", None)
+    RERANKER_TOP_N: int = int(env_vars.get("RERANKER_TOP_N", 10))
+    RERANKER_MODEL: str = env_vars.get("RERANKER_MODEL", "rerank-english-v3.0")
 
     # =========================================================================
     # Hybrid Checkpointer 설정 (Phase 3)

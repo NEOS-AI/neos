@@ -260,6 +260,122 @@ async def _execute_agent_generic_async(
 
 
 # ============================================================================
+# Phase 3.5: 전체 워크플로우 비동기 실행
+# ============================================================================
+
+@app.task(bind=True, max_retries=1, soft_time_limit=600, time_limit=660)
+def execute_workflow_async(
+    self,
+    query: str,
+    user_id: str,
+    conversation_id: str,
+    session_id: Optional[str] = None,
+    language: str = "auto",
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    전체 워크플로우를 Celery task로 비동기 실행
+
+    deep_research, hyper_deep_research 등 무거운 intent에 사용.
+    즉시 job_id를 반환하고, StreamManager를 통해 SSE 진행 이벤트 발행.
+    """
+    task_id = self.request.id
+    logger.info(
+        f"[Celery] Starting async workflow: task={task_id}, "
+        f"session={session_id}, query={query[:50]}..."
+    )
+
+    try:
+        result = run_async(_execute_workflow_full_async(
+            query=query,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            session_id=session_id or conversation_id,
+            language=language,
+            celery_task_id=task_id,
+            **kwargs,
+        ))
+
+        logger.info(f"[Celery] Workflow completed: task={task_id}")
+        return result
+
+    except Exception as e:
+        logger.error(f"[Celery] Workflow failed: task={task_id}, error={e}", exc_info=True)
+
+        # Publish failure event via StreamManager
+        try:
+            run_async(_publish_workflow_event(
+                session_id or conversation_id,
+                "workflow_failed",
+                {"error": str(e), "task_id": task_id},
+            ))
+        except Exception:
+            pass
+
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=e, countdown=60)
+        return {"status": "failed", "error": str(e), "task_id": task_id}
+
+
+async def _execute_workflow_full_async(
+    query: str,
+    user_id: str,
+    conversation_id: str,
+    session_id: str,
+    language: str,
+    celery_task_id: str,
+    **kwargs,
+) -> Dict[str, Any]:
+    """전체 워크플로우 비동기 실행 (Celery worker 내)"""
+    from neos.workflow.graph import multi_agent_workflow
+    from neos.workflow.stream_manager import stream_manager
+
+    # SSE 이벤트로 워크플로우 시작 알림
+    await stream_manager.add_event(
+        session_id=session_id,
+        event="workflow_started",
+        data={"task_id": celery_task_id, "query": query[:100]},
+    )
+
+    # 워크플로우 실행
+    result = await multi_agent_workflow.execute_workflow(
+        user_input={
+            "user_id": user_id,
+            "session_id": session_id,
+            "conversation_id": conversation_id,
+            "query": query,
+            "language": language,
+            **kwargs,
+        },
+        use_checkpointer=True,
+    )
+
+    # SSE 이벤트로 완료 알림
+    await stream_manager.add_event(
+        session_id=session_id,
+        event="workflow_completed",
+        data={
+            "task_id": celery_task_id,
+            "status": "completed",
+        },
+    )
+
+    return {
+        "status": "completed",
+        "task_id": celery_task_id,
+        "result": result,
+    }
+
+
+async def _publish_workflow_event(
+    session_id: str, event: str, data: Dict[str, Any]
+) -> None:
+    """StreamManager를 통해 워크플로우 이벤트 발행"""
+    from neos.workflow.stream_manager import stream_manager
+    await stream_manager.add_event(session_id=session_id, event=event, data=data)
+
+
+# ============================================================================
 # 유지보수 태스크
 # ============================================================================
 

@@ -1,5 +1,82 @@
 # Changelog
 
+## v0.22.0 (2026-03-02)
+* **YouTube Agent Workflow Integration**
+  * Connect YouTubeSearchAgent to the end-to-end workflow pipeline for automatic query routing
+  * **Intent Classification**: Add `YOUTUBE_SEARCH` intent type to `IntentType` enum (`neos/workflow/enums.py`)
+  * **Query Classifier**: Register YouTube keywords (`youtube`, `유튜브`, `video`, `비디오`, `영상`, `tutorial`, `튜토리얼`, `watch`, `시청`) for automatic intent detection (`neos/workflow/utils/query_classifier.py`)
+  * **YouTube URL Routing**: YouTube URLs (`youtube.com`, `youtu.be`) now route to `youtube_search` agent instead of `web_lookup`, enabling transcript-based analysis
+  * **Workflow Graph Registration**: Add `YouTubeSearchAgent` to `_initialize_agents()` in `neos/workflow/graph.py` — previously registered only in `agent_registry.py` (metadata) but missing from the actual execution graph
+  * **SearchOrchestrator Gate**: Add `youtube_search` to `SEARCH_AGENTS` and `QUERY_INTENTS` lists in `WorkflowConfig` (`neos/workflow/state.py`)
+  * **Test Coverage**: 53 new tests across 3 test files
+    * `tests/test_youtube_tool.py` (18 tests) — Tool operation dispatching, search/transcript validation, error handling, initialization
+    * `tests/test_youtube_agent.py` (22 tests) — Agent init, `ComparisonConfig`/`PlaylistAnalysisConfig` dataclasses, `ComparisonFocus` (5 options), `PlaylistOrderStrategy` (7 strategies)
+    * `tests/test_youtube_workflow_integration.py` (13 tests) — Intent classification, YouTube URL routing, `SEARCH_AGENTS` membership, graph agent registration
+* **Implement OpenResponses Specification for Chat API**
+  * Adopt the [OpenResponses](https://www.openresponses.org/specification) standard for LLM API interoperability
+  * **Item-Based Response Architecture**: Replace custom SSE events with structured `OutputItem` types (`message`, `function_call`, `reasoning`)
+  * **Standardized Streaming Events**: Migrate from custom event names to spec-compliant event types
+    * `start` → `response.in_progress`
+    * `content` → `response.output_text.delta`
+    * `complete` → `response.completed`
+    * `error` → `response.failed`
+    * `workflow_node_start/complete` → `response.output_item.added/done` (as `function_call`)
+  * **Provider Extension Events**: Custom Neos events use `neos:` provider prefix per spec
+    * `artifact_meta/delta/finish` → `neos:artifact_meta`, `neos:artifact_delta`, `neos:artifact_finish`
+    * `workflow_progress` → `neos:workflow_progress`
+  * **Stream Termination**: Add `[DONE]` token and `X-OpenResponses-Version` header
+  * **Backend Implementation**:
+    * New module: `neos/api/models/open_responses.py` - Pydantic models for all OpenResponses types
+    * New module: `neos/api/adapters/stream_adapter.py` - Bidirectional event conversion with state tracking
+    * Updated `chat_handlers.py` - SSE stream generation using OpenResponses events
+  * **Frontend Implementation**:
+    * New module: `web/lib/open-responses-types.ts` - Full TypeScript type definitions with type guards
+    * New module: `web/lib/adapters/stream-adapter.ts` - Legacy-to-OpenResponses event adapter with version detection
+    * Updated `use-chat-stream.ts` - OpenResponses event parsing with `[DONE]` handling
+    * Updated `data-stream-handler.tsx` - Remove unreachable `neos:` event handling (handled in stream hook)
+  * **Input/Output Content Standardization**:
+    * Input: `text` → `input_text`, `file` → `input_file` with backward-compatible schema
+    * Output: `content` → `output_text`
+    * Conversion utilities in `schema.ts` for legacy/OpenResponses format interop
+  * **Error Response Standardization**:
+    * Wrap errors in `{ error: { type, message, param, code } }` format
+    * Map internal error types to OpenResponses types (`bad_request` → `invalid_request`, etc.)
+    * Maintain `toLegacyResponse()` for backward compatibility
+  * **Tool Definition Standardization**:
+    * New module: `web/lib/ai/tools/utils.ts` - Convert Vercel AI SDK tools to OpenResponses format
+    * Zod-to-JSON Schema conversion via `zod-to-json-schema` package
+    * `toOpenResponsesTool()`, `toOpenResponsesTools()`, `validateOpenResponsesTool()` utilities
+  * **Reasoning Item Support (Extended Thinking)**:
+    * New streaming events: `response.reasoning.delta`, `response.reasoning.done`
+    * Backend: Detect Anthropic thinking blocks in both LangChain and SDK streaming paths
+    * Automatic reasoning lifecycle management (start → delta → done) with proper cleanup on `content`, `tool_use`, and `complete` transitions
+    * `ReasoningItem` output type with `content`, `encrypted_content`, `summary` fields
+  * **Backward Compatibility**:
+    * Version-based routing via `X-OpenResponses-Version` header
+    * Adapter layers for gradual migration
+    * Legacy input schemas accepted alongside OpenResponses formats
+* **Persistent Evidence Graph**
+  * `EvidenceGraphService` — persist claims, sources, and contradictions to DB with cross-session evidence retrieval
+  * DB migration: `016_add_evidence_graph.sql` (evidence_claims, evidence_sources, evidence_chains, evidence_contradictions tables)
+  * `FactCheckProcessor` workflow node automatically persists fact-check results to evidence graph
+  * Bugfix: embedding serialization — replace `str(embedding)` with direct list pass + `::vector` cast for pgvector compatibility
+  * Bugfix: dict key mismatch between `_claim_to_dict()` output and `_persist_to_evidence_graph()` access (`claim_type` → `type`, nested dict access for contradictions)
+* **Active Contradiction Resolution**
+  * `ContradictionResolver` — LLM judge evaluates source reliability, recency, and specificity to resolve contradictions
+  * DB migration: `018_add_contradiction_resolution.sql` (adds 6 columns: resolution_status, resolution_reasoning, winner_claim_id, etc.)
+  * Auto-resolve only medium+ severity contradictions via JSON structured output
+  * Include contradiction resolution results in final response with multi-language headers (ko/en/ja/zh)
+* **Research Templates**
+  * 5 pre-built templates: Market Analysis, Literature Review, Competitive Analysis, Technology Trend, Investment Research
+  * `TemplateSelector` — auto-match optimal template via LLM structured output (confidence threshold 0.7)
+  * REST API: `GET /api/v1/research/templates`, `GET /api/v1/research/templates/{id}` — list and detail endpoints
+  * Workflow integration: auto-select during query classification, merge `required_agents` into state
+* **Config & DX Improvements**
+  * Add `FAST_LLM_MODEL` setting (default: `claude-haiku-4-5-20251001`)
+  * Add 7 Phase 3-4 settings to `.env.template` (FACT_CHECK_ENABLED, EVIDENCE_GRAPH_ENABLED, etc.)
+  * Replace `print("[DEBUG]...")` with `logger.debug()` in `response_generator.py`
+* Add support for `Advanced Tool Search` tool.
+
 ## v0.21.0 (2026-01-18)
 * **Implement Ralph Loop-Inspired Iterative Refinement for HyperDeepResearch**
   * **Self-Referential Improvement**: AI iteratively evaluates and refines its own outputs until quality threshold is met

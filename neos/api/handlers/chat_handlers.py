@@ -72,6 +72,40 @@ OPEN_RESPONSES_VERSION = "2024-01-01"
 logger = get_logger(__name__)
 router = APIRouter()
 
+# ============================================================================
+# Advanced Tool Search 싱글톤 (Critical 1.1 / Medium 2.4)
+# EmbeddingManager / ToolRegistryStore / SearchToolsHandler는 요청마다 생성하지 않고
+# 모듈 레벨에서 한 번만 초기화한다. core_tools도 최초 1회만 DB에서 로드한다.
+# ============================================================================
+_search_handler = None  # SearchToolsHandler 싱글톤
+_registry_store = None  # ToolRegistryStore 싱글톤
+_core_tools_cache = None  # List[Dict] — 서버 재시작 전까지 고정
+
+
+def _get_search_handler():
+    global _search_handler, _registry_store
+    if _search_handler is None:
+        from neos.utils.embeddings import EmbeddingManager
+        from neos.tools.tool_search.tool_registry_store import ToolRegistryStore
+        from neos.tools.tool_search.search_tools_handler import SearchToolsHandler
+
+        _embedding_mgr = EmbeddingManager()
+        _registry_store = ToolRegistryStore(embedding_manager=_embedding_mgr)
+        _search_handler = SearchToolsHandler(
+            registry_store=_registry_store,
+            top_k=app_settings.TOOL_SEARCH_TOP_K,
+        )
+    return _search_handler
+
+
+async def _get_core_tools_cached() -> list:
+    global _core_tools_cache, _registry_store
+    if _core_tools_cache is None:
+        _get_search_handler()  # _registry_store 초기화 보장
+        core_tools = await _registry_store.get_core_tools()
+        _core_tools_cache = [t.to_anthropic_tool() for t in core_tools]
+    return _core_tools_cache
+
 
 # ============================================================================
 # Helper Functions
@@ -713,16 +747,36 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
             latency_ms = None
             artifact_info = None  # artifact 정보 추적
 
-            async for chunk in chat_llm_service.generate_response_stream_with_tools(
-                conversation_id=conversation_id,
-                message_id=assistant_message_id,
-                conversation_messages=history_messages + [{"role": "user", "content": request.content}],
-                tools=tools,
-                model_name=conversation.get("model_name"),
-                system_prompt=system_prompt,
-                temperature=conversation.get("temperature", 0.7),
-                max_tokens=conversation.get("max_tokens")
-            ):
+            # Advanced Tool Search 또는 기존 방식 분기
+            # TOOL_SEARCH_ENABLED는 ARTIFACTS_ENABLED=true 일 때만 동작합니다.
+            if app_settings.TOOL_SEARCH_ENABLED and app_settings.ARTIFACTS_ENABLED:
+                core_tools_dicts = await _get_core_tools_cached()
+
+                llm_stream = chat_llm_service.generate_response_stream_with_tool_search(
+                    conversation_id=conversation_id,
+                    message_id=assistant_message_id,
+                    conversation_messages=history_messages + [{"role": "user", "content": request.content}],
+                    core_tools=core_tools_dicts,
+                    search_handler=_get_search_handler(),
+                    model_name=conversation.get("model_name"),
+                    system_prompt=system_prompt,
+                    temperature=conversation.get("temperature", 0.7),
+                    max_tokens=conversation.get("max_tokens"),
+                    max_tool_rounds=app_settings.TOOL_SEARCH_MAX_ROUNDS,
+                )
+            else:
+                llm_stream = chat_llm_service.generate_response_stream_with_tools(
+                    conversation_id=conversation_id,
+                    message_id=assistant_message_id,
+                    conversation_messages=history_messages + [{"role": "user", "content": request.content}],
+                    tools=tools,
+                    model_name=conversation.get("model_name"),
+                    system_prompt=system_prompt,
+                    temperature=conversation.get("temperature", 0.7),
+                    max_tokens=conversation.get("max_tokens"),
+                )
+
+            async for chunk in llm_stream:
                 if chunk["type"] == "start":
                     # 스트리밍 시작
                     pass

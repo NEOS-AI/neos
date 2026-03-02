@@ -4,9 +4,160 @@
 Observer Pattern을 사용하여 워크플로우 실행 중 이벤트를 처리합니다.
 """
 
+import logging
+import statistics
+import time
 from abc import ABC, abstractmethod
+from collections import defaultdict, deque
 from typing import Dict, Any, Optional
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# 노드별 메타데이터 (SSE 진행 상황 이벤트용)
+# ============================================================================
+
+NODE_LABELS: Dict[str, str] = {
+    "refinement_checker": "Checking query clarity",
+    "query_refinement_agent": "Refining query",
+    "conversation_context_processor": "Processing conversation context",
+    "query_classifier": "Classifying intent",
+    "skill_tool_selector": "Selecting tools and skills",
+    "search_orchestrator": "Searching sources",
+    "analysis_orchestrator": "Analyzing results",
+    "generation_orchestrator": "Generating content",
+    "result_integrator": "Integrating results",
+    "fact_check": "Verifying facts",
+    "quality_validator": "Validating quality",
+    "response_generator": "Generating response",
+}
+
+# 노드별 예상 소요 시간 (초) — 초기 정적 값 (히스토리가 없을 때 fallback)
+_STATIC_DURATIONS: Dict[str, float] = {
+    "refinement_checker": 1.0,
+    "query_refinement_agent": 3.0,
+    "conversation_context_processor": 2.0,
+    "query_classifier": 2.0,
+    "skill_tool_selector": 1.5,
+    "search_orchestrator": 15.0,
+    "analysis_orchestrator": 8.0,
+    "generation_orchestrator": 5.0,
+    "result_integrator": 3.0,
+    "fact_check": 6.0,
+    "quality_validator": 2.0,
+    "response_generator": 4.0,
+}
+
+# 하위 호환성을 위해 기존 이름 유지
+NODE_ESTIMATED_DURATIONS = _STATIC_DURATIONS
+
+# 워크플로우에서 추적하는 노드 순서 (ETA 계산에 사용)
+WORKFLOW_NODE_ORDER = list(_STATIC_DURATIONS.keys())
+
+
+# ============================================================================
+# 동적 ETA: in-memory 실행 시간 추적 (L-3 해결)
+# ============================================================================
+
+# 노드별 최근 실행 시간 히스토리 (프로세스 수명 동안 유지)
+_HISTORY_MAX_SIZE = 50
+_node_duration_history: Dict[str, deque] = defaultdict(
+    lambda: deque(maxlen=_HISTORY_MAX_SIZE)
+)
+# 현재 실행 중인 노드의 시작 시간
+_node_start_times: Dict[str, float] = {}
+# 동적 ETA 사용을 위한 최소 히스토리 수
+_MIN_HISTORY_FOR_DYNAMIC = 3
+
+
+def record_node_start(node_name: str, workflow_id: str = "") -> None:
+    """노드 실행 시작 시간을 기록합니다.
+
+    Args:
+        node_name: 노드 이름
+        workflow_id: 워크플로우(세션) ID. 동시 실행 시 타이밍 격리를 위해 사용.
+    """
+    key = f"{workflow_id}:{node_name}" if workflow_id else node_name
+    _node_start_times[key] = time.monotonic()
+
+
+def record_node_end(node_name: str, workflow_id: str = "") -> Optional[float]:
+    """노드 실행 완료를 기록하고 소요 시간을 반환합니다.
+
+    Args:
+        node_name: 노드 이름
+        workflow_id: 워크플로우(세션) ID. record_node_start와 동일한 값 사용.
+
+    Returns:
+        소요 시간(초), 시작 시간이 없으면 None
+    """
+    key = f"{workflow_id}:{node_name}" if workflow_id else node_name
+    start = _node_start_times.pop(key, None)
+    if start is None:
+        return None
+
+    duration = time.monotonic() - start
+    _node_duration_history[node_name].append(duration)
+    logger.debug(
+        f"[ETA] Node {node_name} took {duration:.2f}s "
+        f"(history size: {len(_node_duration_history[node_name])})"
+    )
+    return duration
+
+
+def get_estimated_duration(node_name: str) -> float:
+    """노드의 예상 소요 시간을 반환합니다.
+
+    히스토리가 충분하면 중앙값(median)을 사용하고,
+    그렇지 않으면 정적 기본값으로 fallback합니다.
+    """
+    history = _node_duration_history.get(node_name)
+    if history and len(history) >= _MIN_HISTORY_FOR_DYNAMIC:
+        return statistics.median(history)
+    return _STATIC_DURATIONS.get(node_name, 3.0)
+
+
+def get_node_label(node_name: str) -> str:
+    """노드 이름에 대한 사람이 읽을 수 있는 레이블을 반환합니다."""
+    return NODE_LABELS.get(node_name, node_name.replace("_", " ").title())
+
+
+def estimate_remaining_time(current_node: str) -> float:
+    """현재 노드 이후 남은 예상 시간(초)을 계산합니다.
+
+    히스토리가 있는 노드는 동적 값을, 없는 노드는 정적 값을 사용합니다.
+    """
+    try:
+        idx = WORKFLOW_NODE_ORDER.index(current_node)
+        remaining = WORKFLOW_NODE_ORDER[idx + 1:]
+        return sum(get_estimated_duration(n) for n in remaining)
+    except ValueError:
+        return 0.0
+
+
+def get_duration_stats() -> Dict[str, Any]:
+    """ETA 추적 통계를 반환합니다 (디버깅/모니터링용)."""
+    stats = {}
+    for node_name in WORKFLOW_NODE_ORDER:
+        history = _node_duration_history.get(node_name)
+        if history and len(history) > 0:
+            hist_list = list(history)
+            stats[node_name] = {
+                "static": _STATIC_DURATIONS.get(node_name, 3.0),
+                "dynamic": statistics.median(hist_list),
+                "min": min(hist_list),
+                "max": max(hist_list),
+                "samples": len(hist_list),
+                "using": "dynamic" if len(hist_list) >= _MIN_HISTORY_FOR_DYNAMIC else "static",
+            }
+        else:
+            stats[node_name] = {
+                "static": _STATIC_DURATIONS.get(node_name, 3.0),
+                "samples": 0,
+                "using": "static",
+            }
+    return stats
 
 
 # ============================================================================
@@ -27,7 +178,14 @@ class WorkflowEventHandler(ABC):
         pass
 
     @abstractmethod
-    async def on_node_start(self, node_name: str, step: int, total_steps: int):
+    async def on_node_start(
+        self,
+        node_name: str,
+        step: int,
+        total_steps: int,
+        step_name: Optional[str] = None,
+        estimated_remaining_s: Optional[float] = None,
+    ):
         """노드 시작"""
         pass
 
@@ -67,7 +225,14 @@ class NullEventHandler(WorkflowEventHandler):
     async def on_workflow_start(self, workflow_input: Dict[str, Any]):
         pass
 
-    async def on_node_start(self, node_name: str, step: int, total_steps: int):
+    async def on_node_start(
+        self,
+        node_name: str,
+        step: int,
+        total_steps: int,
+        step_name: Optional[str] = None,
+        estimated_remaining_s: Optional[float] = None,
+    ):
         pass
 
     async def on_node_progress(self, node_name: str, message: str, progress: int = 0):
@@ -102,9 +267,16 @@ class CompositeEventHandler(WorkflowEventHandler):
         for handler in self.handlers:
             await handler.on_workflow_start(workflow_input)
 
-    async def on_node_start(self, node_name: str, step: int, total_steps: int):
+    async def on_node_start(
+        self,
+        node_name: str,
+        step: int,
+        total_steps: int,
+        step_name: Optional[str] = None,
+        estimated_remaining_s: Optional[float] = None,
+    ):
         for handler in self.handlers:
-            await handler.on_node_start(node_name, step, total_steps)
+            await handler.on_node_start(node_name, step, total_steps, step_name, estimated_remaining_s)
 
     async def on_node_progress(self, node_name: str, message: str, progress: int = 0):
         for handler in self.handlers:
@@ -143,9 +315,17 @@ class LoggingEventHandler(WorkflowEventHandler):
         if self.logger:
             self.logger.info(f"Workflow started: {workflow_input.get('query', 'N/A')[:100]}")
 
-    async def on_node_start(self, node_name: str, step: int, total_steps: int):
+    async def on_node_start(
+        self,
+        node_name: str,
+        step: int,
+        total_steps: int,
+        step_name: Optional[str] = None,
+        estimated_remaining_s: Optional[float] = None,
+    ):
         if self.logger:
-            self.logger.info(f"Node started: {node_name} (step {step}/{total_steps})")
+            label = step_name or node_name
+            self.logger.info(f"Node started: {label} (step {step}/{total_steps})")
 
     async def on_node_progress(self, node_name: str, message: str, progress: int = 0):
         if self.logger:

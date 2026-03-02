@@ -288,13 +288,20 @@ class StandardSearchStrategy(SearchStrategy):
             logger.warning(f"[StandardStrategy] Failed to create MCP search task: {e}")
             return None
 
+    # 에이전트 이름 → fallback chain 타입 매핑
+    _AGENT_FALLBACK_CHAINS: Dict[str, str] = {
+        "realtime_info_search": "web",
+        "multi_query_search": "web",
+        "knowledge_search": "reference",
+    }
+
     async def _create_agent_tasks(
         self,
         state: AgentState,
         search_agents: List[str],
         agents: Dict[str, Any]
     ) -> List:
-        """기본 에이전트 태스크 생성"""
+        """기본 에이전트 태스크 생성 (Source Fallback Chain 통합)"""
         agent_tasks = []
 
         for agent_name in search_agents:
@@ -308,19 +315,129 @@ class StandardSearchStrategy(SearchStrategy):
                     "query_intent": state.get("query_intent"),
                     "detected_language": state.get("detected_language")
                 }
-                # 개별 타임아웃이 적용된 래퍼 태스크 생성
-                task = self._execute_with_timeout(
-                    agent_name,
-                    agent.execute(state["original_query"], context),
-                    state,
-                    timeout
-                )
+
+                # Fallback chain이 정의된 에이전트는 fallback chain을 통해 실행
+                chain_type = self._AGENT_FALLBACK_CHAINS.get(agent_name)
+                if chain_type and settings.SEARCH_FALLBACK_ENABLED:
+                    task = self._execute_with_fallback(
+                        agent_name, agent, state, context, timeout, chain_type
+                    )
+                else:
+                    # 기존 방식: 개별 타임아웃이 적용된 래퍼 태스크 생성
+                    task = self._execute_with_timeout(
+                        agent_name,
+                        agent.execute(state["original_query"], context),
+                        state,
+                        timeout
+                    )
                 agent_tasks.append(task)
             except Exception as e:
                 logger.error(f"[StandardStrategy] Failed to create task for agent {agent_name}: {e}")
                 state["errors"].append(f"Failed to create task for agent {agent_name}: {str(e)}")
 
         return agent_tasks
+
+    async def _execute_with_fallback(
+        self,
+        agent_name: str,
+        primary_agent: Any,
+        state: AgentState,
+        context: Dict[str, Any],
+        timeout: int,
+        chain_type: str,
+    ) -> Any:
+        """Source Fallback Chain을 사용하여 에이전트를 실행합니다.
+
+        primary 에이전트 실패 시 fallback chain의 다른 소스로 자동 전환합니다.
+        """
+        try:
+            from neos.agents.search_agents.source_fallback_chain import (
+                SourceFallbackChain, FallbackResult,
+            )
+
+            chain = SourceFallbackChain(chain_type=chain_type)
+            query = state["original_query"]
+
+            # primary 에이전트를 SourceCallable 형태로 어댑팅
+            source_callables = {
+                chain.chain[0].value: self._agent_to_callable(primary_agent),
+            }
+
+            # DuckDuckGo fallback 추가 (web/news chain인 경우)
+            if chain_type in ("web", "news"):
+                ddg_callable = self._create_duckduckgo_callable()
+                if ddg_callable:
+                    source_callables["duckduckgo"] = ddg_callable
+
+            result: FallbackResult = await asyncio.wait_for(
+                chain.execute(query, source_callables, context),
+                timeout=timeout,
+            )
+
+            if result.fallback_triggered:
+                logger.info(
+                    f"[StandardStrategy] Fallback triggered for {agent_name}: "
+                    f"{result.sources_tried} → used {result.source_used}"
+                )
+
+            if result.success:
+                return {
+                    "results": result.data,
+                    "source": result.source_used,
+                    "fallback_triggered": result.fallback_triggered,
+                    "agent": agent_name,
+                }
+            else:
+                error_msg = f"Agent {agent_name} fallback chain exhausted: {result.error}"
+                logger.warning(error_msg)
+                state["errors"].append(error_msg)
+                return None
+
+        except asyncio.TimeoutError:
+            error_msg = f"Agent {agent_name} (with fallback) timed out ({timeout}s)"
+            logger.warning(error_msg)
+            state["errors"].append(error_msg)
+            return None
+        except Exception as e:
+            error_msg = f"Agent {agent_name} (with fallback) failed: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            state["errors"].append(error_msg)
+            return None
+
+    @staticmethod
+    def _agent_to_callable(agent: Any):
+        """SearchAgent를 SourceCallable 인터페이스에 맞게 어댑팅합니다."""
+        async def callable_fn(query: str, context: Dict[str, Any]) -> Any:
+            return await agent.execute(query, context)
+        return callable_fn
+
+    @staticmethod
+    def _create_duckduckgo_callable():
+        """DuckDuckGo 검색 callable을 생성합니다.
+
+        Returns:
+            DuckDuckGo callable 또는 None (라이브러리 미설치 시)
+        """
+        try:
+            from duckduckgo_search import AsyncDDGS
+        except ImportError:
+            logger.info("[StandardStrategy] duckduckgo_search not installed, DuckDuckGo fallback unavailable")
+            return None
+
+        async def ddg_search(query: str, context: Dict[str, Any]) -> Any:
+            max_results = settings.DUCKDUCKGO_MAX_RESULTS
+            async with AsyncDDGS() as ddgs:
+                results = await ddgs.atext(query, max_results=max_results)
+                return [
+                    {
+                        "title": r.get("title", ""),
+                        "url": r.get("href", ""),
+                        "content": r.get("body", ""),
+                        "source": "duckduckgo",
+                    }
+                    for r in results
+                ]
+        return ddg_search
 
     async def _execute_with_timeout(
         self,
@@ -329,9 +446,23 @@ class StandardSearchStrategy(SearchStrategy):
         state: AgentState,
         timeout: int
     ) -> Any:
-        """개별 에이전트 타임아웃 적용하여 실행"""
+        """개별 에이전트에 circuit breaker + 타임아웃 적용하여 실행.
+
+        Circuit breaker가 open 상태이면 즉시 skip하여
+        불필요한 대기를 방지합니다.
+        """
         try:
-            result = await asyncio.wait_for(task, timeout=timeout)
+            # Per-agent circuit breaker 적용
+            from neos.utils.circuit_breaker import _get_async_breaker
+            breaker = _get_async_breaker(agent_name)
+
+            async def _timed_task():
+                """timeout을 CB 안쪽에 배치하여, TimeoutError가 CB의
+                excluded_exceptions로 처리되도록 한다.
+                이렇게 하면 "느린 API"와 "죽은 API"를 구분할 수 있다."""
+                return await asyncio.wait_for(task, timeout=timeout)
+
+            result = await breaker.call(_timed_task)
             logger.debug(f"[StandardStrategy] Agent {agent_name} completed (timeout: {timeout}s)")
             return result
         except asyncio.TimeoutError:
@@ -340,6 +471,7 @@ class StandardSearchStrategy(SearchStrategy):
             state["errors"].append(error_msg)
             return None
         except Exception as e:
+            # Circuit breaker open 또는 에이전트 에러
             error_msg = f"Agent {agent_name} failed: {str(e)}"
             logger.error(error_msg, exc_info=True)
             state["errors"].append(error_msg)

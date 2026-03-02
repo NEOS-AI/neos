@@ -80,32 +80,38 @@ class TestQueryClassifierYouTube:
 
     def test_determine_agents_youtube_intent(self, classifier):
         """YouTube intent selects youtube_search agent"""
-        agents = classifier._determine_required_agents(
-            query="유튜브에서 파이썬 강좌 찾기",
-            intent=IntentType.YOUTUBE_SEARCH.value,
-            complexity_score=0.2,
-        )
-        assert "youtube_search" in agents
+        with patch("neos.workflow.utils.query_classifier.settings") as mock_settings:
+            mock_settings.YOUTUBE_API_KEY = "test_key"
+            agents = classifier._determine_required_agents(
+                query="유튜브에서 파이썬 강좌 찾기",
+                intent=IntentType.YOUTUBE_SEARCH.value,
+                complexity_score=0.2,
+            )
+            assert "youtube_search" in agents
 
     def test_youtube_url_routes_to_youtube_agent(self, classifier):
         """YouTube URL routes to youtube_search instead of web_lookup"""
-        agents = classifier._determine_required_agents(
-            query="이 영상 요약해줘 https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            intent="information_seeking",
-            complexity_score=0.1,
-        )
-        assert "youtube_search" in agents
-        assert "web_lookup" not in agents
+        with patch("neos.workflow.utils.query_classifier.settings") as mock_settings:
+            mock_settings.YOUTUBE_API_KEY = "test_key"
+            agents = classifier._determine_required_agents(
+                query="이 영상 요약해줘 https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                intent="information_seeking",
+                complexity_score=0.1,
+            )
+            assert "youtube_search" in agents
+            assert "web_lookup" not in agents
 
     def test_youtu_be_url_routes_to_youtube_agent(self, classifier):
         """Short YouTube URL (youtu.be) routes to youtube_search"""
-        agents = classifier._determine_required_agents(
-            query="https://youtu.be/dQw4w9WgXcQ 이 비디오 분석해줘",
-            intent="information_seeking",
-            complexity_score=0.1,
-        )
-        assert "youtube_search" in agents
-        assert "web_lookup" not in agents
+        with patch("neos.workflow.utils.query_classifier.settings") as mock_settings:
+            mock_settings.YOUTUBE_API_KEY = "test_key"
+            agents = classifier._determine_required_agents(
+                query="https://youtu.be/dQw4w9WgXcQ 이 비디오 분석해줘",
+                intent="information_seeking",
+                complexity_score=0.1,
+            )
+            assert "youtube_search" in agents
+            assert "web_lookup" not in agents
 
     def test_non_youtube_url_routes_to_web_lookup(self, classifier):
         """Non-YouTube URL still routes to web_lookup"""
@@ -116,6 +122,66 @@ class TestQueryClassifierYouTube:
         )
         assert "web_lookup" in agents
         assert "youtube_search" not in agents
+
+
+@pytest.mark.unit
+class TestQueryClassifierYouTubeFallback:
+    """Test YouTube fallback routing when API key is not configured"""
+
+    @pytest.fixture
+    def classifier_no_api_key(self):
+        """Create a QueryClassifier with YOUTUBE_API_KEY unset"""
+        from neos.workflow.utils.query_classifier import QueryClassifier
+        config = WorkflowConfig()
+        return QueryClassifier(config)
+
+    def test_youtube_url_fallback_without_api_key(self, classifier_no_api_key):
+        """YouTube URL falls back to web_lookup when API key is not configured"""
+        with patch("neos.workflow.utils.query_classifier.settings") as mock_settings:
+            mock_settings.YOUTUBE_API_KEY = None
+            agents = classifier_no_api_key._determine_required_agents(
+                query="이 영상 요약해줘 https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                intent="information_seeking",
+                complexity_score=0.1,
+            )
+            assert "web_lookup" in agents
+            assert "youtube_search" not in agents
+
+    def test_youtu_be_url_fallback_without_api_key(self, classifier_no_api_key):
+        """Short YouTube URL falls back to web_lookup when API key is not configured"""
+        with patch("neos.workflow.utils.query_classifier.settings") as mock_settings:
+            mock_settings.YOUTUBE_API_KEY = None
+            agents = classifier_no_api_key._determine_required_agents(
+                query="https://youtu.be/dQw4w9WgXcQ 이 비디오 분석해줘",
+                intent="information_seeking",
+                complexity_score=0.1,
+            )
+            assert "web_lookup" in agents
+            assert "youtube_search" not in agents
+
+    def test_youtube_intent_fallback_without_api_key(self, classifier_no_api_key):
+        """YouTube intent falls back to realtime_info_search when API key is not configured"""
+        with patch("neos.workflow.utils.query_classifier.settings") as mock_settings:
+            mock_settings.YOUTUBE_API_KEY = None
+            agents = classifier_no_api_key._determine_required_agents(
+                query="유튜브에서 파이썬 강좌 찾기",
+                intent=IntentType.YOUTUBE_SEARCH.value,
+                complexity_score=0.2,
+            )
+            assert "realtime_info_search" in agents
+            assert "youtube_search" not in agents
+
+    def test_youtube_url_routes_normally_with_api_key(self, classifier_no_api_key):
+        """YouTube URL routes to youtube_search when API key is configured"""
+        with patch("neos.workflow.utils.query_classifier.settings") as mock_settings:
+            mock_settings.YOUTUBE_API_KEY = "test_key_123"
+            agents = classifier_no_api_key._determine_required_agents(
+                query="이 영상 요약해줘 https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                intent="information_seeking",
+                complexity_score=0.1,
+            )
+            assert "youtube_search" in agents
+            assert "web_lookup" not in agents
 
 
 @pytest.mark.unit

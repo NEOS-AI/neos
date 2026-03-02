@@ -1,6 +1,6 @@
 [project]
 name = "neos"
-version = "0.21.0"
+version = "0.22.0"
 description = "NEOS: Intelligent Search and Analysis Agent Workflow"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -73,6 +73,11 @@ dependencies = [
     "youtube-transcript-api>=0.6.2",
     "google-api-python-client>=2.108.0",
     "isodate>=0.6.1",
+]
+
+[project.optional-dependencies]
+reranker = [
+    "cohere>=5.0.0",
 ]
 
 [tool.setuptools.packages.find]

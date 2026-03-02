@@ -158,15 +158,27 @@ class WorkflowStreamCallback(WorkflowEventHandler):
             }
         )
 
-    async def on_node_start(self, node_name: str, step: int, total_steps: int):
-        """노드 시작 이벤트"""
+    async def on_node_start(
+        self,
+        node_name: str,
+        step: int,
+        total_steps: int,
+        step_name: Optional[str] = None,
+        estimated_remaining_s: Optional[float] = None,
+    ):
+        """노드 시작 이벤트 (structured progress 포함)"""
         self.current_node = node_name
         self.progress = int((step / total_steps) * 100)
 
         event = self._create_event(
             event_type=WorkflowStreamEventType.NODE_STARTED,
             node_name=node_name,
-            data={"step": step, "total_steps": total_steps},
+            data={
+                "step": step,
+                "total_steps": total_steps,
+                "step_name": step_name or node_name.replace("_", " ").title(),
+                "estimated_remaining_s": round(estimated_remaining_s, 1) if estimated_remaining_s is not None else None,
+            },
             progress_percent=self.progress
         )
         await self.event_queue.put(event)
@@ -179,6 +191,8 @@ class WorkflowStreamCallback(WorkflowEventHandler):
                 "node_name": node_name,
                 "step": step,
                 "total_steps": total_steps,
+                "step_name": step_name,
+                "estimated_remaining_s": estimated_remaining_s,
                 "progress_percent": self.progress
             }
         )

@@ -25,6 +25,11 @@ from neos.api.handlers.workflow_stream_handlers import router as workflow_stream
 from neos.api.handlers.unified_handlers import router as unified_router
 from neos.api.handlers.vote_handlers import router as vote_router
 from neos.api.handlers.artifact_handlers import router as artifact_router
+from neos.api.handlers.research_session_handlers import router as research_session_router
+from neos.api.handlers.async_research_handlers import router as async_research_router
+from neos.api.handlers.export_handlers import router as export_router
+from neos.api.handlers.refinement_handlers import router as refinement_router
+from neos.api.handlers.template_handlers import router as template_router
 from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.workflow.graph import multi_agent_workflow
 from neos.utils.exceptions import NeosBaseException, get_exception_status_code, is_client_error
@@ -33,7 +38,7 @@ from neos.workflow.checkpointer import cleanup_checkpointer
 from neos.workflow.telemetry import setup_telemetry, instrument_app, instrument_sqlalchemy_engine
 
 
-__VERSION__ = "0.21.0"
+__VERSION__ = "0.22.0"
 
 
 # 로깅 설정
@@ -360,6 +365,11 @@ app.include_router(unified_router, tags=["Unified Processing"])  # 통합 API (�
 app.include_router(similarity_chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Similarity-based Chat"])
 app.include_router(vote_router, prefix=settings.API_V1_PREFIX, tags=["Votes & Feedback"])  # Vote API
 app.include_router(artifact_router, prefix=settings.API_V1_PREFIX, tags=["Artifacts & Documents"])  # Artifact API
+app.include_router(research_session_router, tags=["Research Sessions"])  # Research Session API (prefix already set in router)
+app.include_router(async_research_router, tags=["Async Research"])  # Phase 3.5: Celery-based async research
+app.include_router(export_router, tags=["Report Export"])  # Phase 3.4: Structured report export
+app.include_router(refinement_router, tags=["Research Refinement"])  # Phase 3.8: Interactive refinement
+app.include_router(template_router, tags=["Research Templates"])  # Phase 4.7: Research templates
 
 
 # === Enterprise Monitoring Endpoints ===

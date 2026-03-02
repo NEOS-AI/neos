@@ -66,6 +66,12 @@ class Contradiction:
         self.contradiction_type = contradiction_type
         self.severity = severity
 
+        # Phase 4.1: Active Contradiction Resolution
+        self.resolution_status = "unresolved"  # unresolved, resolved, inconclusive
+        self.resolution_reasoning = ""
+        self.resolution_confidence = 0.0
+        self.winner_claim = None  # claim1 or claim2 (if resolved)
+
 
 class FactChecker:
     """Fact checker for cross-validating information across sources."""

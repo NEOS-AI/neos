@@ -49,6 +49,7 @@ class YouTubeMCPTool(MCPTool):
             ],
         )
         self.youtube_client = None
+        self._disabled_reason: Optional[str] = None
 
     async def initialize(self) -> bool:
         """YouTube 클라이언트 초기화
@@ -99,6 +100,13 @@ class YouTubeMCPTool(MCPTool):
         """
         start_time = datetime.now()
 
+        # 비활성화 상태 체크 (API 에러로 자동 비활성화된 경우)
+        if self._disabled_reason:
+            return MCPToolResult.from_error(
+                error=f"YouTube tool disabled: {self._disabled_reason}",
+                tool_name=self.name,
+            )
+
         try:
             operation = params.get("operation", "")
             if not operation:
@@ -140,6 +148,29 @@ class YouTubeMCPTool(MCPTool):
                 tool_name=self.name,
                 execution_time_ms=execution_time,
                 metadata={"operation": operation},
+            )
+
+        except HttpError as e:
+            execution_time = int(
+                (datetime.now() - start_time).total_seconds() * 1000
+            )
+            # API key 무효 또는 quota 초과 시 자동 비활성화
+            if e.resp.status in (401, 403):
+                self.is_available = False
+                self._disabled_reason = (
+                    "API key invalid" if e.resp.status == 401
+                    else "API quota exceeded"
+                )
+                logger.error(
+                    f"YouTube tool auto-disabled: {self._disabled_reason} "
+                    f"(HTTP {e.resp.status})"
+                )
+            else:
+                logger.error(f"YouTube API error: {e}", exc_info=True)
+            return MCPToolResult.from_error(
+                error=str(e),
+                tool_name=self.name,
+                execution_time_ms=execution_time,
             )
 
         except Exception as e:

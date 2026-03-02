@@ -2,6 +2,10 @@
 Circuit Breaker 패턴 구현
 
 에이전트 실패 시 자동으로 회로를 차단하여 시스템 안정성을 향상시킵니다.
+
+동기 함수: pybreaker 라이브러리 사용
+비동기 함수: neos.workflow.utils.circuit_breaker의 async-native CircuitBreaker 사용
+(pybreaker는 sync-only이므로, async 함수에서는 asyncio.run() 중첩 문제가 발생합니다)
 """
 import asyncio
 import logging
@@ -11,6 +15,39 @@ import pybreaker
 from ..config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# async 함수용 circuit breaker 저장소
+# (neos.workflow.utils.circuit_breaker의 AsyncCircuitBreaker 인스턴스)
+_async_breakers: Dict[str, Any] = {}
+
+
+def _get_async_breaker(name: str):
+    """async 함수용 circuit breaker 인스턴스를 가져오거나 생성합니다.
+
+    순환 import 방지를 위해 lazy import를 사용합니다.
+    """
+    if name not in _async_breakers:
+        from ..workflow.utils.circuit_breaker import (
+            CircuitBreaker as AsyncCircuitBreaker,
+            CircuitBreakerConfig as AsyncCBConfig,
+        )
+        _async_breakers[name] = AsyncCircuitBreaker(
+            name=f"agent_{name}",
+            config=AsyncCBConfig(
+                failure_threshold=settings.CIRCUIT_BREAKER_FAIL_THRESHOLD,
+                timeout_seconds=float(settings.CIRCUIT_BREAKER_RECOVERY_TIMEOUT),
+                # TimeoutError는 "느린 API"이지 "죽은 API"가 아니므로
+                # circuit breaker 실패 카운트에서 제외한다.
+                # 이렇게 하면 일시적 지연으로 인한 circuit open을 방지할 수 있다.
+                excluded_exceptions=(asyncio.TimeoutError,),
+            )
+        )
+        logger.info(
+            f"Async Circuit Breaker 생성: {name} "
+            f"(failure_threshold={settings.CIRCUIT_BREAKER_FAIL_THRESHOLD}, "
+            f"timeout={settings.CIRCUIT_BREAKER_RECOVERY_TIMEOUT}s)"
+        )
+    return _async_breakers[name]
 
 
 class AgentCircuitBreaker:
@@ -57,10 +94,14 @@ class AgentCircuitBreaker:
         Returns:
             Dict[str, str]: {agent_name: state} 형태의 딕셔너리
         """
-        return {
+        states = {
             name: breaker.current_state
             for name, breaker in cls._breakers.items()
         }
+        # async-native circuit breaker 상태도 포함
+        for name, breaker in _async_breakers.items():
+            states[name] = breaker.state.value
+        return states
 
     @classmethod
     def reset_breaker(cls, agent_name: str) -> bool:
@@ -138,28 +179,22 @@ def with_circuit_breaker(agent_name: Optional[str] = None):
                 if not settings.CIRCUIT_BREAKER_ENABLED:
                     return await func(*args, **kwargs)
 
-                breaker = AgentCircuitBreaker.get_breaker(breaker_name)
+                breaker = _get_async_breaker(breaker_name)
 
                 try:
-                    # Circuit Breaker로 보호된 실행
-                    result = await asyncio.get_event_loop().run_in_executor(
-                        None,
-                        breaker.call,
-                        lambda: asyncio.run(func(*args, **kwargs))
-                    )
-                    return result
-                except pybreaker.CircuitBreakerError:
-                    logger.error(
-                        f"⚠️ Circuit Breaker OPEN: {breaker_name} - "
-                        f"에이전트가 일시적으로 비활성화되었습니다."
-                    )
-                    # Graceful degradation: 빈 결과 반환
-                    return {
-                        "success": False,
-                        "error": f"Circuit breaker open for {breaker_name}",
-                        "degraded": True
-                    }
+                    return await breaker.call(func, *args, **kwargs)
                 except Exception as e:
+                    from ..workflow.utils.circuit_breaker import CircuitBreakerError as AsyncCBError
+                    if isinstance(e, AsyncCBError):
+                        logger.error(
+                            f"⚠️ Circuit Breaker OPEN: {breaker_name} - "
+                            f"에이전트가 일시적으로 비활성화되었습니다."
+                        )
+                        return {
+                            "success": False,
+                            "error": f"Circuit breaker open for {breaker_name}",
+                            "degraded": True
+                        }
                     logger.error(f"Circuit Breaker 예외: {breaker_name} - {e}")
                     raise
 
@@ -217,32 +252,40 @@ async def execute_with_circuit_breaker(
             return await func(*args, **kwargs)
         return func(*args, **kwargs)
 
-    breaker = AgentCircuitBreaker.get_breaker(agent_name)
-
-    try:
-        if asyncio.iscoroutinefunction(func):
-            # 비동기 함수 실행
-            result = await asyncio.get_event_loop().run_in_executor(
-                None,
-                breaker.call,
-                lambda: asyncio.run(func(*args, **kwargs))
+    if asyncio.iscoroutinefunction(func):
+        # 비동기 함수: async-native circuit breaker 사용
+        breaker = _get_async_breaker(agent_name)
+        try:
+            return await breaker.call(func, *args, **kwargs)
+        except Exception as e:
+            from ..workflow.utils.circuit_breaker import CircuitBreakerError as AsyncCBError
+            if isinstance(e, AsyncCBError):
+                logger.error(
+                    f"⚠️ Circuit Breaker OPEN: {agent_name} - "
+                    f"에이전트가 일시적으로 비활성화되었습니다."
+                )
+                return {
+                    "success": False,
+                    "error": f"Circuit breaker open for {agent_name}",
+                    "degraded": True
+                }
+            logger.error(f"Circuit Breaker 예외: {agent_name} - {e}")
+            raise
+    else:
+        # 동기 함수: pybreaker 사용
+        breaker = AgentCircuitBreaker.get_breaker(agent_name)
+        try:
+            return breaker.call(func, *args, **kwargs)
+        except pybreaker.CircuitBreakerError:
+            logger.error(
+                f"⚠️ Circuit Breaker OPEN: {agent_name} - "
+                f"에이전트가 일시적으로 비활성화되었습니다."
             )
-        else:
-            # 동기 함수 실행
-            result = breaker.call(func, *args, **kwargs)
-
-        return result
-
-    except pybreaker.CircuitBreakerError:
-        logger.error(
-            f"⚠️ Circuit Breaker OPEN: {agent_name} - "
-            f"에이전트가 일시적으로 비활성화되었습니다."
-        )
-        return {
-            "success": False,
-            "error": f"Circuit breaker open for {agent_name}",
-            "degraded": True
-        }
-    except Exception as e:
-        logger.error(f"Circuit Breaker 예외: {agent_name} - {e}")
-        raise
+            return {
+                "success": False,
+                "error": f"Circuit breaker open for {agent_name}",
+                "degraded": True
+            }
+        except Exception as e:
+            logger.error(f"Circuit Breaker 예외: {agent_name} - {e}")
+            raise

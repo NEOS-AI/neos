@@ -360,6 +360,11 @@ class CitationTracker:
             "citations_per_section": {},
         }
 
+    @property
+    def source_count(self) -> int:
+        """등록된 소스 개수를 반환합니다."""
+        return len(self._sources)
+
     # ========================================================================
     # Source Registration
     # ========================================================================

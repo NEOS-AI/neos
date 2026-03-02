@@ -13,6 +13,7 @@ from langchain_openai import OpenAIEmbeddings
 from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import create_tracked_llm
+from neos.utils.circuit_breaker import with_circuit_breaker
 from neos.workflow.state import SearchResult
 from neos.tools.manager import mcp_manager
 
@@ -135,9 +136,23 @@ class YouTubeSearchAgent(SearchAgent):
         )
         self.youtube_tool = None
         self.tool_available = False
+        self._init_failure_count = 0
+        self._max_init_failures = 3
+        self._permanently_disabled = False
+        self._api_key_configured = bool(
+            settings.YOUTUBE_API_KEY and settings.YOUTUBE_API_KEY.strip()
+        )
+        if not self._api_key_configured:
+            logger.warning(
+                "YOUTUBE_API_KEY not configured. "
+                "YouTubeSearchAgent will operate in transcript-only mode."
+            )
 
+    @with_circuit_breaker("youtube_search")
     async def execute(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """YouTube 검색 및 분석 실행
+        """YouTube 검색 및 분석 실행 (Circuit Breaker 보호)
+
+        외부 API 장애 시 자동으로 회로가 차단되어 시스템 안정성을 유지합니다.
 
         Args:
             query: 검색 쿼리
@@ -147,6 +162,18 @@ class YouTubeSearchAgent(SearchAgent):
             검색 결과 딕셔너리
         """
         logger.info(f"YouTubeSearchAgent executing query: {query[:50]}...")
+
+        # 영구 비활성화 상태 체크
+        if self._permanently_disabled:
+            logger.warning("YouTubeSearchAgent permanently disabled due to repeated init failures")
+            return self.format_output(
+                [],
+                {
+                    "search_type": "video",
+                    "warning": "YouTube agent disabled due to repeated initialization failures",
+                    "disabled": True,
+                }
+            )
 
         if not self.validate_input(query, context):
             logger.error("YouTubeSearchAgent: Invalid input")
@@ -245,7 +272,14 @@ class YouTubeSearchAgent(SearchAgent):
             }
 
     async def _initialize_tool(self):
-        """YouTube 도구 초기화"""
+        """YouTube 도구 초기화
+
+        연속 실패 시 자동으로 영구 비활성화하여 불필요한 재시도를 방지합니다.
+        """
+        # 이미 영구 비활성화된 경우 스킵
+        if self._permanently_disabled:
+            return
+
         try:
             # MCPManager에서 YouTube 도구 가져오기
             youtube_tools = mcp_manager.get_available_tools(tool_type=None)
@@ -256,14 +290,25 @@ class YouTubeSearchAgent(SearchAgent):
 
             if self.youtube_tool and self.youtube_tool.is_available:
                 self.tool_available = True
+                self._init_failure_count = 0  # 성공 시 카운터 리셋
                 logger.info("YouTube tool initialized successfully")
             else:
                 logger.warning("YouTube tool not found or not available")
                 self.tool_available = False
+                self._init_failure_count += 1
 
         except Exception as e:
             logger.error(f"Failed to initialize YouTube tool: {e}")
             self.tool_available = False
+            self._init_failure_count += 1
+
+        # 연속 실패 시 영구 비활성화
+        if self._init_failure_count >= self._max_init_failures:
+            self._permanently_disabled = True
+            logger.error(
+                f"YouTubeSearchAgent permanently disabled after "
+                f"{self._init_failure_count} consecutive init failures"
+            )
 
     async def _search_videos(
         self,

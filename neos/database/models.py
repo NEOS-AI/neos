@@ -206,6 +206,10 @@ class DocumentChunk(Base):
     # 임베딩
     embedding = Column(Vector(1536))  # OpenAI embedding
 
+    # Parent-child 청킹
+    parent_chunk_id = Column(Integer, ForeignKey("document_chunks.id"), nullable=True)
+    chunking_strategy = Column(String(20), default="sentence")  # fixed, sentence, semantic, parent_child
+
     # 청크 메타데이터
     chunk_type = Column(String(50))  # 'paragraph', 'heading', 'list', 'table', 'code'
     heading_hierarchy = Column(ARRAY(String))  # 상위 헤딩 정보
@@ -558,6 +562,10 @@ class Vote(Base):
     message_id = Column("messageId", UUID(as_uuid=True), primary_key=True, nullable=False)
     is_upvoted = Column("isUpvoted", Boolean, nullable=False)
 
+    # Phase 2.11: Feedback columns (migration 013)
+    feedback_text = Column("feedback_text", Text, nullable=True)
+    feedback_category = Column("feedback_category", String(50), nullable=True)
+
     # 관계 설정은 Conversation, Message 모델이 있어야 가능
     # conversation = relationship("Conversation")
     # message = relationship("Message")
@@ -614,3 +622,29 @@ class Suggestion(Base):
     # 관계 설정은 프론트엔드 DB 구조와 맞지 않아 비활성화
     # user = relationship("User")
     # document = relationship("ArtifactDocument", back_populates="suggestions")
+
+
+class ToolRegistry(Base):
+    """도구 레지스트리 - Advanced Tool Search를 위한 도구 메타데이터 저장소"""
+    __tablename__ = "tool_registry"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), unique=True, nullable=False)
+    display_name = Column(String(255))
+    description = Column(Text, nullable=False)
+    schema = Column(JSONB)                              # Anthropic tool input_schema
+    category = Column(String(100))                      # search, analysis, document, data, general
+    tags = Column(ARRAY(Text))                          # 검색 보조 태그
+    source_type = Column(String(50), nullable=False)    # skill, mcp_tool, artifact_tool, custom
+    defer_loading = Column(Boolean, default=True)       # False=코어 도구, True=검색 대상
+    is_active = Column(Boolean, default=True)
+
+    # 검색 인덱스
+    embedding = Column(Vector(1536))                    # 도구 설명 임베딩 (pgvector)
+    # search_vector는 DB에서 GENERATED ALWAYS AS ... STORED로 자동 생성 (읽기 전용)
+
+    # 메타데이터
+    usage_count = Column(Integer, default=0)
+    last_used_at = Column(TIMESTAMP(timezone=True))
+    created_at = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)

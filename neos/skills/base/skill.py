@@ -56,6 +56,32 @@ class BaseSkill(ABC):
         self.version = version
         self.allowed_tools = allowed_tools
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        """Anthropic tool input_schema 형식의 파라미터 스키마 반환.
+
+        서브클래스에서 오버라이드하여 정확한 스키마를 제공할 수 있다.
+        기본 구현은 대부분의 검색/분석 스킬에 공통된 범용 스키마를 반환한다.
+        """
+        return {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query or main input for the skill",
+                },
+                "action": {
+                    "type": "string",
+                    "description": "Action to perform (e.g., 'search', 'analyze'). Defaults to 'search'.",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return",
+                },
+            },
+            "required": ["query"],
+        }
+
     @abstractmethod
     async def initialize(self) -> bool:
         """스킬 초기화

@@ -1,18 +1,21 @@
-"""Vote Service - 투표 비즈니스 로직"""
+"""Vote & Feedback Service - 투표 및 피드백 비즈니스 로직"""
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func, text
 from sqlalchemy.future import select as future_select
-from typing import List, Optional
+from typing import Dict, List, Optional
 from fastapi import HTTPException, status
+import logging
 import uuid
 
 from neos.database.models import Vote
-from neos.api.models.vote_models import VoteResponse
+from neos.api.models.vote_models import VoteResponse, FeedbackResponse, FeedbackAggregation
+
+logger = logging.getLogger(__name__)
 
 
 class VoteService:
-    """투표 서비스"""
+    """투표 및 피드백 서비스"""
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -196,3 +199,113 @@ class VoteService:
 
         await self.db.delete(vote)
         await self.db.commit()
+
+    # ── Phase 2.11: Feedback Methods ─────────────────────────────────
+
+    async def submit_feedback(
+        self,
+        chat_id: str,
+        message_id: str,
+        is_upvoted: bool,
+        feedback_text: Optional[str],
+        feedback_category: Optional[str],
+        user_id: str,
+    ) -> FeedbackResponse:
+        """피드백 제출 (투표 + 텍스트 피드백)
+
+        기존 votes 테이블에 feedback_text, feedback_category 컬럼 활용.
+        DB migration 013 적용 후 동작합니다.
+        """
+        chat_uuid = uuid.UUID(chat_id) if isinstance(chat_id, str) else chat_id
+        message_uuid = uuid.UUID(message_id) if isinstance(message_id, str) else message_id
+
+        # 기존 투표 확인
+        vote_query = select(Vote).where(
+            and_(Vote.chat_id == chat_uuid, Vote.message_id == message_uuid)
+        )
+        vote_result = await self.db.execute(vote_query)
+        existing_vote = vote_result.scalar_one_or_none()
+
+        if existing_vote:
+            existing_vote.is_upvoted = is_upvoted
+            # feedback 필드가 모델에 존재하면 업데이트 (migration 후)
+            if hasattr(existing_vote, "feedback_text"):
+                existing_vote.feedback_text = feedback_text
+            if hasattr(existing_vote, "feedback_category"):
+                existing_vote.feedback_category = feedback_category
+            await self.db.commit()
+            await self.db.refresh(existing_vote)
+        else:
+            kwargs = {
+                "chat_id": chat_uuid,
+                "message_id": message_uuid,
+                "is_upvoted": is_upvoted,
+            }
+            # feedback 필드가 모델에 존재하면 추가
+            if hasattr(Vote, "feedback_text"):
+                kwargs["feedback_text"] = feedback_text
+            if hasattr(Vote, "feedback_category"):
+                kwargs["feedback_category"] = feedback_category
+
+            existing_vote = Vote(**kwargs)
+            self.db.add(existing_vote)
+            await self.db.commit()
+            await self.db.refresh(existing_vote)
+
+        return FeedbackResponse(
+            chat_id=str(existing_vote.chat_id),
+            message_id=str(existing_vote.message_id),
+            is_upvoted=existing_vote.is_upvoted,
+            feedback_text=getattr(existing_vote, "feedback_text", feedback_text),
+            feedback_category=getattr(existing_vote, "feedback_category", feedback_category),
+        )
+
+    async def get_feedback_aggregation(self) -> FeedbackAggregation:
+        """전체 피드백 집계"""
+        try:
+            # 총 투표 수, 업보트, 다운보트
+            total_query = select(func.count(Vote.chat_id))
+            total_result = await self.db.execute(total_query)
+            total_votes = total_result.scalar() or 0
+
+            upvote_query = select(func.count(Vote.chat_id)).where(Vote.is_upvoted == True)
+            upvote_result = await self.db.execute(upvote_query)
+            upvotes = upvote_result.scalar() or 0
+
+            downvotes = total_votes - upvotes
+
+            # 피드백 텍스트가 있는 투표 수 (migration 후)
+            feedback_count = 0
+            category_counts: Dict[str, int] = {}
+
+            if hasattr(Vote, "feedback_text"):
+                fb_query = select(func.count(Vote.chat_id)).where(
+                    Vote.feedback_text.isnot(None)
+                )
+                fb_result = await self.db.execute(fb_query)
+                feedback_count = fb_result.scalar() or 0
+
+            if hasattr(Vote, "feedback_category"):
+                cat_query = select(
+                    Vote.feedback_category, func.count(Vote.chat_id)
+                ).where(
+                    Vote.feedback_category.isnot(None)
+                ).group_by(Vote.feedback_category)
+                cat_result = await self.db.execute(cat_query)
+                for row in cat_result.fetchall():
+                    if row[0]:
+                        category_counts[row[0]] = row[1]
+
+            upvote_rate = (upvotes / total_votes * 100) if total_votes > 0 else 0.0
+
+            return FeedbackAggregation(
+                total_votes=total_votes,
+                upvotes=upvotes,
+                downvotes=downvotes,
+                feedback_count=feedback_count,
+                category_counts=category_counts,
+                upvote_rate=round(upvote_rate, 1),
+            )
+        except Exception as e:
+            logger.warning(f"Feedback aggregation failed: {e}")
+            return FeedbackAggregation()

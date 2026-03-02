@@ -16,8 +16,16 @@ class WorkflowNode(Enum):
     ANALYSIS_ORCHESTRATOR = "analysis_orchestrator"
     GENERATION_ORCHESTRATOR = "generation_orchestrator"
 
+    # Phase 2 nodes
+    RESEARCH_CONTINUATION = "research_continuation"  # 2.2
+    HYPOTHESIS_GENERATION = "hypothesis_generation"  # 2.5 - before search
+    HYPOTHESIS_EVALUATION = "hypothesis_evaluation"  # 2.5 - after search
+    REPLANNER = "replanner"  # 2.4 - adaptive replanning
+    SELF_REFLECTION = "self_reflection"  # 2.6
+
     # result processors
     RESULT_INTEGRATOR = "result_integrator"
+    FACT_CHECK = "fact_check"
     QUALITY_VALIDATOR = "quality_validator"
     RESP_GENERATOR = "response_generator"
 
