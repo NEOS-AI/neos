@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.22.0 (2026-02-28)
+## v0.22.0 (2026-03-02)
 * **YouTube Agent Workflow Integration**
   * Connect YouTubeSearchAgent to the end-to-end workflow pipeline for automatic query routing
   * **Intent Classification**: Add `YOUTUBE_SEARCH` intent type to `IntentType` enum (`neos/workflow/enums.py`)
