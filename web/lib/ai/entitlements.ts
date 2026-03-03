@@ -20,6 +20,23 @@ export const entitlementsByUserType: Record<UserType, Entitlements> = {
   },
 
   /*
-   * TODO: For users with an account and a paid membership
+   * For users with a premium subscription
    */
+  premium: {
+    maxMessagesPerDay: 1000,
+  },
+
+  /*
+   * For enterprise users
+   */
+  enterprise: {
+    maxMessagesPerDay: 5000,
+  },
+
+  /*
+   * For admin users
+   */
+  admin: {
+    maxMessagesPerDay: Number.POSITIVE_INFINITY,
+  },
 };
