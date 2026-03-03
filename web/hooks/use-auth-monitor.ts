@@ -33,7 +33,7 @@ export function useAuthMonitor() {
     if (!session) return;
 
     // Refresh Token이 만료되어 갱신 실패한 경우
-    if (session.error === "RefreshTokenExpired") {
+    if (session.error === "RefreshAccessTokenError") {
       console.warn("Refresh token expired. Logging out...");
       hasLoggedOut.current = true;
 

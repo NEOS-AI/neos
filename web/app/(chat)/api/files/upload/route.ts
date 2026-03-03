@@ -38,6 +38,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  if (!session.backendAccessToken) {
+    return NextResponse.json(
+      { error: "Authentication token is missing. Please sign in again." },
+      { status: 401 }
+    );
+  }
+
   if (request.body === null) {
     return new Response("Request body is empty", { status: 400 });
   }
@@ -61,8 +68,13 @@ export async function POST(request: Request) {
     }
 
     const filename = (formData.get("file") as File).name;
-    const userId =
-      session.user.backendUserId || session.user.id;
+    const userId = session.user.backendUserId;
+    if (!userId) {
+      return NextResponse.json(
+        { error: "Backend user ID not available" },
+        { status: 400 }
+      );
+    }
 
     // 백엔드로 multipart 전송 (Content-Type은 fetch가 자동으로 boundary 포함하여 설정)
     const backendUrl = process.env.BACKEND_URL || "http://localhost:8518";
@@ -108,7 +120,7 @@ export async function POST(request: Request) {
       console.error("[Upload] Failed to fetch document info after upload");
       return NextResponse.json(
         { error: "Failed to retrieve uploaded file info" },
-        { status: 500 }
+        { status: docResponse.status }
       );
     }
 
@@ -116,10 +128,11 @@ export async function POST(request: Request) {
     // docData.storage_url — S3/RustFS에 저장된 파일 URL
 
     return NextResponse.json({
-      url: docData.storage_url,
+      url: docData.storage_url || null,
       name: uploadData.filename || filename,
       contentType: file.type,
       documentId: uploadData.document_id,
+      processingStatus: uploadData.status,
     });
   } catch (_error) {
     console.error("[Upload] Unexpected error:", _error);

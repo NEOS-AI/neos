@@ -73,7 +73,7 @@ async function refreshAccessToken(token: any) {
 
     return {
       ...token,
-      error: "RefreshTokenExpired",
+      error: "RefreshAccessTokenError",
     };
   }
 }
@@ -175,9 +175,8 @@ export const {
               localUserId = newUser.id;
             }
           } catch (error) {
-            console.warn("Failed to create/find local user:", error);
-            // 임시 UUID 생성
-            localUserId = crypto.randomUUID();
+            console.error("Failed to create/find local user:", error);
+            return null;
           }
 
           return {
@@ -291,9 +290,8 @@ export const {
               localUserId = newUser.id;
             }
           } catch (error) {
-            console.warn("Failed to create/find local user for Google OAuth:", error);
-            // 임시 UUID 생성
-            localUserId = crypto.randomUUID();
+            console.error("Failed to create/find local user for Google OAuth:", error);
+            return false;
           }
 
           // 백엔드 토큰을 user 객체에 저장 (JWT callback에서 사용)

@@ -24,7 +24,7 @@ export const chatModels: ChatModel[] = [
   },
   {
     id: "anthropic/claude-opus-4.5",
-    name: "Claude Opus 4.5",
+    name: "Claude Opus 4.6",
     provider: "anthropic",
     description: "Most capable Anthropic model",
   },
@@ -50,7 +50,7 @@ export const chatModels: ChatModel[] = [
   },
   {
     id: "google/gemini-3-pro-preview",
-    name: "Gemini 3 Pro",
+    name: "Gemini 1.5 Pro",
     provider: "google",
     description: "Most capable Google model",
   },
@@ -101,7 +101,7 @@ export function mapToBackendModelName(vercelModelId: string): string {
     "openai/gpt-4.1": "gpt-4o",
     // Google - remove provider prefix
     "google/gemini-2.5-flash-lite": "gemini-2.0-flash",
-    "google/gemini-3-pro-preview": "gemini-1.5-pro",
+    "google/gemini-3-pro-preview": "gemini-1.5-pro-latest",
     // xAI - remove provider prefix
     "xai/grok-4.1-fast-non-reasoning": "grok-beta",
     "xai/grok-code-fast-1-thinking": "grok-beta",
