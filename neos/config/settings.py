@@ -614,6 +614,17 @@ class Settings(BaseSettings):
     CHECKPOINTER_S3_ACCESS_KEY: Optional[str] = env_vars.get("CHECKPOINTER_S3_ACCESS_KEY")
     CHECKPOINTER_S3_SECRET_KEY: Optional[str] = env_vars.get("CHECKPOINTER_S3_SECRET_KEY")
 
+    # =========================================================================
+    # Recursive Agent 설정 (ROMA - Recursive Open Meta-Agent)
+    # =========================================================================
+    RECURSIVE_AGENT_ENABLED: bool = bool(env_vars.get("RECURSIVE_AGENT_ENABLED", False))
+    RECURSIVE_MAX_DEPTH: int = int(env_vars.get("RECURSIVE_MAX_DEPTH", 3))
+    RECURSIVE_MAX_TASKS_PER_LEVEL: int = int(env_vars.get("RECURSIVE_MAX_TASKS_PER_LEVEL", 4))
+    RECURSIVE_COMPLEXITY_THRESHOLD: float = float(env_vars.get("RECURSIVE_COMPLEXITY_THRESHOLD", 0.8))
+    RECURSIVE_ATOMIZER_MODEL: str = env_vars.get("RECURSIVE_ATOMIZER_MODEL", "claude-haiku-4-5-20251001")
+    RECURSIVE_PLANNER_MODEL: str = env_vars.get("RECURSIVE_PLANNER_MODEL", "claude-opus-4-6")
+    RECURSIVE_BUDGET_CAP: float = float(env_vars.get("RECURSIVE_BUDGET_CAP", 0.5))  # USD
+
     class Config:
         env_file = ".env"
         case_sensitive = True

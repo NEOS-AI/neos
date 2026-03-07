@@ -23,6 +23,9 @@ class WorkflowNode(Enum):
     REPLANNER = "replanner"  # 2.4 - adaptive replanning
     SELF_REFLECTION = "self_reflection"  # 2.6
 
+    # ROMA: Recursive Open Meta-Agent
+    RECURSIVE_ORCHESTRATOR = "recursive_orchestrator"
+
     # result processors
     RESULT_INTEGRATOR = "result_integrator"
     FACT_CHECK = "fact_check"
@@ -52,6 +55,7 @@ class IntentType(Enum):
 
     DEEP_RESEARCH = "deep_research"
     YOUTUBE_SEARCH = "youtube_search"
+    RECURSIVE_RESEARCH = "recursive_research"  # ROMA 재귀 연구
 
 
 class ComplexityIndicator(Enum):

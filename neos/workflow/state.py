@@ -123,6 +123,15 @@ class AgentState(TypedDict):
     template_id: Optional[str]
     template_config: Optional[Dict[str, Any]]
 
+    # ROMA: Recursive Open Meta-Agent
+    recursive_task_tree: Optional[Dict[str, Any]]       # 전체 태스크 트리 (직렬화된 RecursiveTaskNode)
+    recursive_current_depth: Optional[int]              # 현재 재귀 깊이
+    recursive_max_depth: Optional[int]                  # 최대 재귀 깊이
+    recursive_task_stack: Optional[List[Dict]]          # 실행 중인 태스크 스택
+    recursive_completed_tasks: Optional[List[Dict]]     # 완료된 태스크 목록
+    recursive_mode: Optional[bool]                      # 재귀 모드 활성화 여부
+    recursive_budget_remaining: Optional[float]         # 가용 비용 (USD)
+
     # 최종 응답
     final_response: Optional[str]
     response_metadata: Optional[Dict[str, Any]]

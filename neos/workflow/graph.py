@@ -72,6 +72,13 @@ class MultiAgentWorkflow:
         self.hypothesis_manager = HypothesisManager()  # Phase 2.5
         self.research_replanner = ResearchReplanner()  # Phase 2.4
 
+        # ROMA: Recursive Agent (피처 플래그로 격리)
+        self.recursive_orchestrator = None
+        if settings.RECURSIVE_AGENT_ENABLED:
+            from neos.workflow.recursive.orchestrator import RecursiveOrchestrator
+            self.recursive_orchestrator = RecursiveOrchestrator(agents=self.agents)
+            logger.info("[MultiAgentWorkflow] RecursiveOrchestrator initialized (ROMA enabled)")
+
         # 워크플로우 그래프 생성 (비동기로 초기화)
         self.graph = None
         self._graph_initialized = False
@@ -159,6 +166,10 @@ class MultiAgentWorkflow:
         workflow.add_node(WorkflowNode.SELF_REFLECTION.value, self._self_reflection_node)  # Phase 2.6
         workflow.add_node(WorkflowNode.RESP_GENERATOR.value, self._generate_response_node)
 
+        # ROMA: Recursive Orchestrator 노드 (피처 플래그로 격리)
+        if settings.RECURSIVE_AGENT_ENABLED:
+            workflow.add_node(WorkflowNode.RECURSIVE_ORCHESTRATOR.value, self._recursive_orchestrator_node)
+
         # 엣지 정의
         # 1. START → refinement_checker (가장 먼저 쿼리 개선 필요 여부 체크)
         workflow.add_edge(START, WorkflowNode.REFINEMENT_CHECKER.value)
@@ -195,14 +206,28 @@ class MultiAgentWorkflow:
         workflow.add_edge(WorkflowNode.QUERY_CLS.value, WorkflowNode.SKILL_TOOL_SELECTOR.value)
 
         # 조건부 분기: 도구/에이전트가 필요 없으면 orchestrator 건너뛰고 바로 응답 생성
-        workflow.add_conditional_edges(
-            WorkflowNode.SKILL_TOOL_SELECTOR.value,
-            self._should_skip_orchestrators,
-            {
-                WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,  # 간단한 대화 -> 바로 응답
-                WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value  # Phase 2.5: 가설 생성 → 검색
-            }
-        )
+        # ROMA 활성화 시 재귀 에이전트 경로 추가
+        if settings.RECURSIVE_AGENT_ENABLED:
+            workflow.add_conditional_edges(
+                WorkflowNode.SKILL_TOOL_SELECTOR.value,
+                self._should_use_recursive_agent,
+                {
+                    WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
+                    WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
+                    "recursive": WorkflowNode.RECURSIVE_ORCHESTRATOR.value,  # ROMA 재귀 경로
+                }
+            )
+            # RECURSIVE_ORCHESTRATOR → RESULT_INTEGRATOR (결과 통합 후 정상 파이프라인 합류)
+            workflow.add_edge(WorkflowNode.RECURSIVE_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
+        else:
+            workflow.add_conditional_edges(
+                WorkflowNode.SKILL_TOOL_SELECTOR.value,
+                self._should_skip_orchestrators,
+                {
+                    WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,  # 간단한 대화 -> 바로 응답
+                    WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value  # Phase 2.5: 가설 생성 → 검색
+                }
+            )
 
         # Phase 2.5: HYPOTHESIS_GENERATION → SEARCH → HYPOTHESIS_EVALUATION → ANALYSIS
         workflow.add_edge(WorkflowNode.HYPOTHESIS_GENERATION.value, WorkflowNode.SEARCH_ORCHESTRATOR.value)
@@ -467,6 +492,41 @@ class MultiAgentWorkflow:
     async def _generate_response_node(self, state: AgentState) -> Dict[str, Any]:
         """응답 생성 노드"""
         return await self.response_generator.generate_response(state)
+
+    async def _recursive_orchestrator_node(self, state: AgentState) -> Dict[str, Any]:
+        """ROMA: 재귀 오케스트레이터 노드"""
+        if self.recursive_orchestrator is None:
+            logger.error("[RecursiveOrchestratorNode] RecursiveOrchestrator is not initialized")
+            return {"final_response": "재귀 에이전트가 초기화되지 않았습니다."}
+        return await self.recursive_orchestrator.execute(state)
+
+    def _should_use_recursive_agent(self, state: AgentState) -> str:
+        """ROMA: 재귀 에이전트 사용 여부 판단 라우팅 함수.
+
+        Returns:
+            "recursive": RECURSIVE_ORCHESTRATOR로 라우팅
+            WorkflowPathway.USE_ORCHESTRATORS.value: 기존 오케스트레이터 경로
+            WorkflowPathway.SKIP_ORCHESTRATORS.value: 바로 응답 생성
+        """
+        classification = state.get("query_classification") or {}
+        complexity = classification.get("complexity_score", 0.0)
+        intent = state.get("query_intent", "")
+
+        # RECURSIVE_RESEARCH intent이면 항상 재귀 경로
+        if intent == IntentType.RECURSIVE_RESEARCH.value:
+            logger.info("[ROMA] Routing to recursive agent: intent=recursive_research")
+            return "recursive"
+
+        # 복잡도 임계값 + 심층/복합 분석 의도
+        roma_intents = (IntentType.DEEP_RESEARCH.value, IntentType.COMPLEX_ANALYSIS.value)
+        if complexity >= settings.RECURSIVE_COMPLEXITY_THRESHOLD and intent in roma_intents:
+            logger.info(
+                f"[ROMA] Routing to recursive agent: intent={intent}, complexity={complexity:.2f}"
+            )
+            return "recursive"
+
+        # 기존 라우팅 로직에 위임
+        return self._should_skip_orchestrators(state)
 
     def _should_refine_query(self, state: AgentState) -> str:
         """
