@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 from neos.config.settings import settings
 from neos.utils.llm_factory import LLMFactory
 
-from .models import RecursiveTaskNode
+from .models import RecursiveTaskNode, TaskStatus, extract_llm_cost
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,11 @@ class RecursiveAggregator:
         Returns:
             통합된 결과 문자열
         """
-        completed_children = [n for n in child_nodes if n.result]
+        # R-13: FAILED 상태 노드는 통합 대상에서 제외 (실패 메시지가 품질을 저하시킴)
+        completed_children = [
+            n for n in child_nodes
+            if n.result and n.status == TaskStatus.COMPLETED
+        ]
         if not completed_children:
             logger.warning(f"[Aggregator] No completed children for: {parent_task.description[:50]}")
             return f"하위 태스크 결과 없음: {parent_task.description}"
@@ -91,23 +95,36 @@ class RecursiveAggregator:
         subtask_results = self._format_subtask_results(completed_children)
         original_query = context.get("original_query", parent_task.description)
 
+        cost_acc = context.get("_cost_accumulator")
+        total_agg_cost = 0.0
+
         # 모순 감지 (선택적 - 결과가 3개 이상일 때)
         contradictions = []
         if len(completed_children) >= 3:
-            contradictions = await self._detect_contradictions(subtask_results)
+            contradictions, detect_cost = await self._detect_contradictions(subtask_results)
+            # R-01: 모순 감지 비용 누적
+            parent_task.cost += detect_cost
+            total_agg_cost += detect_cost
+            if cost_acc is not None:
+                cost_acc[0] += detect_cost
 
         # 통합 프롬프트 실행
-        result = await self._call_llm_aggregate(
+        result, agg_cost = await self._call_llm_aggregate(
             parent_description=parent_task.description,
             original_query=original_query,
             subtask_results=subtask_results,
             contradictions=contradictions,
         )
+        # R-01: 통합 비용 누적
+        parent_task.cost += agg_cost
+        total_agg_cost += agg_cost
+        if cost_acc is not None:
+            cost_acc[0] += agg_cost
 
         logger.info(
             f"[Aggregator] Aggregated {len(completed_children)} children "
             f"for '{parent_task.description[:40]}' "
-            f"(contradictions={len(contradictions)})"
+            f"(contradictions={len(contradictions)}, cost=${total_agg_cost:.6f})"
         )
         return result
 
@@ -125,8 +142,8 @@ class RecursiveAggregator:
         original_query: str,
         subtask_results: str,
         contradictions: List[Dict[str, Any]],
-    ) -> str:
-        """LLM을 호출하여 결과 통합."""
+    ) -> tuple[str, float]:
+        """LLM을 호출하여 결과 통합. (결과 텍스트, 호출 비용 USD) 반환."""
         contradiction_note = ""
         if contradictions:
             contradiction_note = "\n\nNote: The following contradictions were detected:\n"
@@ -148,15 +165,19 @@ class RecursiveAggregator:
                 max_tokens=3000,
             )
             response = await llm.ainvoke(prompt)
+            # R-01: 비용 파싱
+            cost = extract_llm_cost(response, self._model, provider)
             content = response.content if hasattr(response, "content") else str(response)
-            return content.strip()
+            return content.strip(), cost
         except Exception as e:
             logger.error(f"[Aggregator] LLM call failed: {e}")
             # 실패 시 자식 결과를 단순 연결
-            return self._fallback_join(subtask_results)
+            return self._fallback_join(subtask_results), 0.0
 
-    async def _detect_contradictions(self, results_text: str) -> List[Dict[str, Any]]:
-        """결과 간 모순 탐지 (선택적 - Haiku 사용)."""
+    async def _detect_contradictions(
+        self, results_text: str
+    ) -> tuple[List[Dict[str, Any]], float]:
+        """결과 간 모순 탐지 (선택적 - Haiku 사용). (모순 목록, 호출 비용 USD) 반환."""
         prompt = _CONTRADICTION_PROMPT.format(results=results_text[:2000])
 
         try:
@@ -168,6 +189,8 @@ class RecursiveAggregator:
                 max_tokens=500,
             )
             response = await llm.ainvoke(prompt)
+            # R-01: 비용 파싱
+            cost = extract_llm_cost(response, self._model, provider)
             content = response.content if hasattr(response, "content") else str(response)
 
             text = content.strip()
@@ -177,12 +200,11 @@ class RecursiveAggregator:
                 text = text.split("```")[1].split("```")[0].strip()
 
             parsed = json.loads(text)
-            if parsed.get("has_contradictions"):
-                return parsed.get("contradictions", [])
-            return []
+            contradictions = parsed.get("contradictions", []) if parsed.get("has_contradictions") else []
+            return contradictions, cost
         except Exception as e:
             logger.debug(f"[Aggregator] Contradiction detection failed: {e}")
-            return []
+            return [], 0.0
 
     def _fallback_join(self, subtask_results: str) -> str:
         """LLM 실패 시 단순 연결 fallback."""

@@ -8,12 +8,12 @@ non-atomic 태스크를 2-N개의 하위 태스크로 분해합니다.
 import json
 import logging
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from neos.config.settings import settings
 from neos.utils.llm_factory import LLMFactory
 
-from .models import RecursiveTaskNode, TaskAtomicity, TaskStatus
+from .models import RecursiveTaskNode, TaskAtomicity, TaskStatus, extract_llm_cost
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +72,12 @@ class RecursivePlanner:
     - depth>0: RECURSIVE_ATOMIZER_MODEL (Haiku, 비용 절감)
     """
 
-    def __init__(self):
+    def __init__(self, max_tasks_per_level: Optional[int] = None):
         self._max_depth = settings.RECURSIVE_MAX_DEPTH
-        self._max_tasks_per_level = settings.RECURSIVE_MAX_TASKS_PER_LEVEL
+        self._max_tasks_per_level = (
+            max_tasks_per_level if max_tasks_per_level is not None
+            else settings.RECURSIVE_MAX_TASKS_PER_LEVEL
+        )
 
     def _select_model(self, depth: int) -> str:
         """깊이에 따라 LLM 모델 선택."""
@@ -108,14 +111,21 @@ class RecursivePlanner:
         )
 
         model = self._select_model(task.depth)
-        subtask_dicts = await self._call_llm(prompt, model, task.description)
+        subtask_dicts, cost = await self._call_llm(prompt, model, task.description)
+
+        # R-01: 비용 누적
+        task.cost += cost
+        cost_acc = context.get("_cost_accumulator")
+        if cost_acc is not None:
+            cost_acc[0] += cost
 
         if not subtask_dicts:
             # LLM 실패 시 태스크를 2개로 단순 분할
             logger.warning(f"[Planner] LLM failed, using fallback split for: {task.description[:50]}")
             subtask_dicts = self._fallback_split(task.description)
 
-        return self._build_subtask_nodes(task, subtask_dicts)
+        # R-06: max_subtasks를 전달하여 hard limit 강제 적용
+        return self._build_subtask_nodes(task, subtask_dicts, max_subtasks)
 
     async def replan(
         self,
@@ -146,7 +156,13 @@ class RecursivePlanner:
         )
 
         model = self._select_model(task.depth)
-        subtask_dicts = await self._call_llm(prompt, model, task.description)
+        subtask_dicts, cost = await self._call_llm(prompt, model, task.description)
+
+        # R-01: 비용 누적 (replan도 부모 task에 비용 합산)
+        task.cost += cost
+        cost_acc = context.get("_cost_accumulator")
+        if cost_acc is not None:
+            cost_acc[0] += cost
 
         if not subtask_dicts:
             return []
@@ -158,8 +174,8 @@ class RecursivePlanner:
         prompt: str,
         model: str,
         task_description: str,
-    ) -> List[Dict[str, Any]]:
-        """LLM 호출 및 JSON 파싱."""
+    ) -> tuple[List[Dict[str, Any]], float]:
+        """LLM 호출 및 JSON 파싱. (subtask 목록, 호출 비용 USD) 반환."""
         try:
             provider = "anthropic" if "claude" in model.lower() else settings.LLM_PROVIDER
             llm = LLMFactory.create_llm(
@@ -169,11 +185,13 @@ class RecursivePlanner:
                 max_tokens=1500,
             )
             response = await llm.ainvoke(prompt)
+            # R-01: 비용 파싱
+            cost = extract_llm_cost(response, model, provider)
             content = response.content if hasattr(response, "content") else str(response)
-            return self._parse_response(content)
+            return self._parse_response(content), cost
         except Exception as e:
             logger.warning(f"[Planner] LLM call failed: {e} | task={task_description[:50]}")
-            return []
+            return [], 0.0
 
     def _parse_response(self, content: str) -> List[Dict[str, Any]]:
         """LLM 응답에서 subtasks 추출."""
@@ -197,8 +215,16 @@ class RecursivePlanner:
         self,
         parent: RecursiveTaskNode,
         subtask_dicts: List[Dict[str, Any]],
+        max_subtasks: int | None = None,
     ) -> List[RecursiveTaskNode]:
-        """subtask dict 목록 → RecursiveTaskNode 목록."""
+        """subtask dict 목록 → RecursiveTaskNode 목록.
+
+        R-06: max_subtasks가 지정된 경우 초과 항목을 잘라냄으로써 설정값을 hard limit으로 강제.
+        """
+        # R-06: LLM이 max_subtasks를 초과해서 반환해도 실제 강제 적용
+        if max_subtasks is not None:
+            subtask_dicts = subtask_dicts[:max_subtasks]
+
         nodes: List[RecursiveTaskNode] = []
         for item in subtask_dicts:
             description = item.get("description", "").strip()

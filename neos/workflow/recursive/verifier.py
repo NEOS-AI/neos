@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 from neos.config.settings import settings
 from neos.utils.llm_factory import LLMFactory
 
-from .models import RecursiveTaskNode
+from .models import RecursiveTaskNode, extract_llm_cost
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class RecursiveVerifier:
     """충족도 검증기.
 
     통합 결과가 원래 태스크를 충족하는지 검증합니다.
-    - threshold: WORKFLOW_MIN_QUALITY_SCORE 또는 0.75 중 더 높은 값
+    - threshold: WORKFLOW_MIN_QUALITY_SCORE 또는 0.65 중 더 높은 값 (R-08: 코드와 일치)
     - 검증 실패 시 gaps 목록을 반환하여 재계획에 활용
     """
 
@@ -89,11 +89,17 @@ class RecursiveVerifier:
             }
 
         try:
-            return await self._call_llm(
+            result, cost = await self._call_llm(
                 task_description=original_task.description,
                 original_query=original_query,
                 aggregated_result=aggregated_result,
             )
+            # R-01: 비용 누적
+            original_task.cost += cost
+            cost_acc = context.get("_cost_accumulator")
+            if cost_acc is not None:
+                cost_acc[0] += cost
+            return result
         except Exception as e:
             logger.warning(f"[Verifier] LLM call failed, using heuristic: {e}")
             return self._heuristic_verify(aggregated_result)
@@ -103,8 +109,8 @@ class RecursiveVerifier:
         task_description: str,
         original_query: str,
         aggregated_result: str,
-    ) -> Dict[str, Any]:
-        """LLM을 호출하여 충족도 검증."""
+    ) -> tuple[Dict[str, Any], float]:
+        """LLM을 호출하여 충족도 검증. (검증 결과, 호출 비용 USD) 반환."""
         prompt = _VERIFY_PROMPT.format(
             task_description=task_description,
             original_query=original_query,
@@ -121,8 +127,10 @@ class RecursiveVerifier:
         )
 
         response = await llm.ainvoke(prompt)
+        # R-01: 비용 파싱
+        cost = extract_llm_cost(response, self._model, provider)
         content = response.content if hasattr(response, "content") else str(response)
-        return self._parse_response(content)
+        return self._parse_response(content), cost
 
     def _parse_response(self, content: str) -> Dict[str, Any]:
         """LLM 응답 파싱."""

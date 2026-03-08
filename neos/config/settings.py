@@ -617,13 +617,23 @@ class Settings(BaseSettings):
     # =========================================================================
     # Recursive Agent 설정 (ROMA - Recursive Open Meta-Agent)
     # =========================================================================
-    RECURSIVE_AGENT_ENABLED: bool = bool(env_vars.get("RECURSIVE_AGENT_ENABLED", False))
+    RECURSIVE_AGENT_ENABLED: bool = env_vars.get("RECURSIVE_AGENT_ENABLED", "").lower() in ("1", "true", "yes")
     RECURSIVE_MAX_DEPTH: int = int(env_vars.get("RECURSIVE_MAX_DEPTH", 3))
     RECURSIVE_MAX_TASKS_PER_LEVEL: int = int(env_vars.get("RECURSIVE_MAX_TASKS_PER_LEVEL", 4))
     RECURSIVE_COMPLEXITY_THRESHOLD: float = float(env_vars.get("RECURSIVE_COMPLEXITY_THRESHOLD", 0.8))
     RECURSIVE_ATOMIZER_MODEL: str = env_vars.get("RECURSIVE_ATOMIZER_MODEL", "claude-haiku-4-5-20251001")
     RECURSIVE_PLANNER_MODEL: str = env_vars.get("RECURSIVE_PLANNER_MODEL", "claude-opus-4-6")
     RECURSIVE_BUDGET_CAP: float = float(env_vars.get("RECURSIVE_BUDGET_CAP", 0.5))  # USD
+
+    # =========================================================================
+    # HyperDeep Recursive Agent 설정 (ROMA + HyperDeepResearch 통합)
+    # leaf 노드 실행을 HyperDeepResearchAgent로 교체하여 구조적 분해 + 심층 리서치 결합
+    # =========================================================================
+    HYPER_DEEP_AGENT_ENABLED: bool = env_vars.get("HYPER_DEEP_AGENT_ENABLED", "").lower() in ("1", "true", "yes")
+    HYPER_DEEP_MAX_DEPTH: int = int(env_vars.get("HYPER_DEEP_MAX_DEPTH", 1))                  # leaf가 무거우므로 얕은 분해
+    HYPER_DEEP_MAX_TASKS_PER_LEVEL: int = int(env_vars.get("HYPER_DEEP_MAX_TASKS_PER_LEVEL", 3))
+    HYPER_DEEP_COMPLEXITY_THRESHOLD: float = float(env_vars.get("HYPER_DEEP_COMPLEXITY_THRESHOLD", 0.85))
+    HYPER_DEEP_BUDGET_CAP: float = float(env_vars.get("HYPER_DEEP_BUDGET_CAP", 5.0))          # ROMA(0.5)보다 10× 높음
 
     class Config:
         env_file = ".env"

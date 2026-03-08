@@ -79,6 +79,25 @@ class MultiAgentWorkflow:
             self.recursive_orchestrator = RecursiveOrchestrator(agents=self.agents)
             logger.info("[MultiAgentWorkflow] RecursiveOrchestrator initialized (ROMA enabled)")
 
+        # HyperDeep Recursive: ROMA + HyperDeepResearchAgent 통합 (피처 플래그로 격리)
+        self.hyper_deep_orchestrator = None
+        if settings.HYPER_DEEP_AGENT_ENABLED:
+            from neos.workflow.recursive.orchestrator import RecursiveOrchestrator
+            from neos.workflow.hyper_deep.executor import HyperDeepExecutor
+            _hd_executor = HyperDeepExecutor()
+            self.hyper_deep_orchestrator = RecursiveOrchestrator(
+                agents=self.agents,
+                executor=_hd_executor,
+                max_depth=settings.HYPER_DEEP_MAX_DEPTH,
+                budget_cap=settings.HYPER_DEEP_BUDGET_CAP,
+                max_tasks_per_level=settings.HYPER_DEEP_MAX_TASKS_PER_LEVEL,
+            )
+            logger.info(
+                "[MultiAgentWorkflow] HyperDeepOrchestrator initialized "
+                f"(max_depth={settings.HYPER_DEEP_MAX_DEPTH}, "
+                f"tasks_per_level={settings.HYPER_DEEP_MAX_TASKS_PER_LEVEL})"
+            )
+
         # 워크플로우 그래프 생성 (비동기로 초기화)
         self.graph = None
         self._graph_initialized = False
@@ -170,6 +189,10 @@ class MultiAgentWorkflow:
         if settings.RECURSIVE_AGENT_ENABLED:
             workflow.add_node(WorkflowNode.RECURSIVE_ORCHESTRATOR.value, self._recursive_orchestrator_node)
 
+        # HyperDeep Recursive Orchestrator 노드 (피처 플래그로 격리)
+        if settings.HYPER_DEEP_AGENT_ENABLED:
+            workflow.add_node(WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value, self._hyper_deep_orchestrator_node)
+
         # 엣지 정의
         # 1. START → refinement_checker (가장 먼저 쿼리 개선 필요 여부 체크)
         workflow.add_edge(START, WorkflowNode.REFINEMENT_CHECKER.value)
@@ -206,19 +229,28 @@ class MultiAgentWorkflow:
         workflow.add_edge(WorkflowNode.QUERY_CLS.value, WorkflowNode.SKILL_TOOL_SELECTOR.value)
 
         # 조건부 분기: 도구/에이전트가 필요 없으면 orchestrator 건너뛰고 바로 응답 생성
-        # ROMA 활성화 시 재귀 에이전트 경로 추가
-        if settings.RECURSIVE_AGENT_ENABLED:
+        # ROMA 또는 HyperDeep 활성화 시 재귀 에이전트 경로 추가
+        if settings.RECURSIVE_AGENT_ENABLED or settings.HYPER_DEEP_AGENT_ENABLED:
+            _routing_map = {
+                WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
+                WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
+            }
+            if settings.RECURSIVE_AGENT_ENABLED:
+                _routing_map["recursive"] = WorkflowNode.RECURSIVE_ORCHESTRATOR.value
+            if settings.HYPER_DEEP_AGENT_ENABLED:
+                _routing_map["hyper_deep"] = WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value
+
             workflow.add_conditional_edges(
                 WorkflowNode.SKILL_TOOL_SELECTOR.value,
                 self._should_use_recursive_agent,
-                {
-                    WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
-                    WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
-                    "recursive": WorkflowNode.RECURSIVE_ORCHESTRATOR.value,  # ROMA 재귀 경로
-                }
+                _routing_map,
             )
-            # RECURSIVE_ORCHESTRATOR → RESULT_INTEGRATOR (결과 통합 후 정상 파이프라인 합류)
-            workflow.add_edge(WorkflowNode.RECURSIVE_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
+            if settings.RECURSIVE_AGENT_ENABLED:
+                # RECURSIVE_ORCHESTRATOR → RESULT_INTEGRATOR (결과 통합 후 정상 파이프라인 합류)
+                workflow.add_edge(WorkflowNode.RECURSIVE_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
+            if settings.HYPER_DEEP_AGENT_ENABLED:
+                # HYPER_DEEP_ORCHESTRATOR → RESULT_INTEGRATOR (결과 통합 후 정상 파이프라인 합류)
+                workflow.add_edge(WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
         else:
             workflow.add_conditional_edges(
                 WorkflowNode.SKILL_TOOL_SELECTOR.value,
@@ -500,10 +532,27 @@ class MultiAgentWorkflow:
             return {"final_response": "재귀 에이전트가 초기화되지 않았습니다."}
         return await self.recursive_orchestrator.execute(state)
 
+    async def _hyper_deep_orchestrator_node(self, state: AgentState) -> Dict[str, Any]:
+        """HyperDeep Recursive: ROMA + HyperDeepResearchAgent 오케스트레이터 노드"""
+        if self.hyper_deep_orchestrator is None:
+            logger.error("[HyperDeepOrchestratorNode] HyperDeepOrchestrator is not initialized")
+            return {"final_response": "HyperDeep 재귀 에이전트가 초기화되지 않았습니다."}
+        logger.info(
+            f"[HyperDeepOrchestratorNode] Starting for: "
+            f"{state.get('original_query', '')[:60]}"
+        )
+        return await self.hyper_deep_orchestrator.execute(state)
+
     def _should_use_recursive_agent(self, state: AgentState) -> str:
-        """ROMA: 재귀 에이전트 사용 여부 판단 라우팅 함수.
+        """ROMA / HyperDeep: 재귀 에이전트 사용 여부 판단 라우팅 함수.
+
+        우선순위:
+        1. HYPER_DEEP_AGENT_ENABLED → hyper_deep_research intent 또는 높은 복잡도
+        2. RECURSIVE_AGENT_ENABLED → recursive_research intent 또는 높은 복잡도
+        3. 기존 로직 (use_orchestrators / skip_orchestrators)
 
         Returns:
+            "hyper_deep": HYPER_DEEP_ORCHESTRATOR로 라우팅
             "recursive": RECURSIVE_ORCHESTRATOR로 라우팅
             WorkflowPathway.USE_ORCHESTRATORS.value: 기존 오케스트레이터 경로
             WorkflowPathway.SKIP_ORCHESTRATORS.value: 바로 응답 생성
@@ -512,12 +561,25 @@ class MultiAgentWorkflow:
         complexity = classification.get("complexity_score", 0.0)
         intent = state.get("query_intent", "")
 
-        # RECURSIVE_RESEARCH intent이면 항상 재귀 경로
+        # 1순위: HyperDeep — 더 강력한 에이전트이므로 먼저 체크
+        if settings.HYPER_DEEP_AGENT_ENABLED:
+            if intent == IntentType.HYPER_DEEP_RESEARCH.value:
+                logger.info("[HyperDeep] Routing to hyper_deep_orchestrator: intent=hyper_deep_research")
+                return "hyper_deep"
+
+            hyper_deep_intents = (IntentType.DEEP_RESEARCH.value, IntentType.COMPLEX_ANALYSIS.value)
+            if complexity >= settings.HYPER_DEEP_COMPLEXITY_THRESHOLD and intent in hyper_deep_intents:
+                logger.info(
+                    f"[HyperDeep] Routing to hyper_deep_orchestrator: "
+                    f"intent={intent}, complexity={complexity:.2f}"
+                )
+                return "hyper_deep"
+
+        # 2순위: ROMA 재귀 에이전트
         if intent == IntentType.RECURSIVE_RESEARCH.value:
             logger.info("[ROMA] Routing to recursive agent: intent=recursive_research")
             return "recursive"
 
-        # 복잡도 임계값 + 심층/복합 분석 의도
         roma_intents = (IntentType.DEEP_RESEARCH.value, IntentType.COMPLEX_ANALYSIS.value)
         if complexity >= settings.RECURSIVE_COMPLEXITY_THRESHOLD and intent in roma_intents:
             logger.info(

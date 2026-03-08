@@ -26,6 +26,9 @@ class WorkflowNode(Enum):
     # ROMA: Recursive Open Meta-Agent
     RECURSIVE_ORCHESTRATOR = "recursive_orchestrator"
 
+    # HyperDeep Recursive: ROMA + HyperDeepResearchAgent 통합
+    HYPER_DEEP_ORCHESTRATOR = "hyper_deep_orchestrator"
+
     # result processors
     RESULT_INTEGRATOR = "result_integrator"
     FACT_CHECK = "fact_check"
@@ -56,6 +59,7 @@ class IntentType(Enum):
     DEEP_RESEARCH = "deep_research"
     YOUTUBE_SEARCH = "youtube_search"
     RECURSIVE_RESEARCH = "recursive_research"  # ROMA 재귀 연구
+    HYPER_DEEP_RESEARCH = "hyper_deep_research"  # ROMA + HyperDeepResearch 통합
 
 
 class ComplexityIndicator(Enum):

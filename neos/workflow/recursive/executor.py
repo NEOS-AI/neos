@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 from neos.config.settings import settings
 from neos.utils.llm_factory import LLMFactory
 
-from .models import RecursiveTaskNode, TaskStatus
+from .models import RecursiveTaskNode, TaskStatus, extract_llm_cost
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ class RecursiveExecutor:
             task.execution_time_ms = int((time.time() - start) * 1000)
             logger.info(
                 f"[Executor] Completed depth={task.depth}: {task.description[:50]} "
-                f"({task.execution_time_ms}ms)"
+                f"({task.execution_time_ms}ms, cost=${task.cost:.6f})"
             )
             return result
 
@@ -87,9 +87,11 @@ class RecursiveExecutor:
         """
         original_query = context.get("original_query", "")
         prior_results = context.get("prior_results", {})
+        # R-11: 태스크 설명 맵 (orchestrator에서 관리)
+        prior_task_descriptions = context.get("prior_task_descriptions", {})
 
         # 완료된 형제 태스크 결과를 컨텍스트로 제공
-        prior_context = self._build_prior_context(prior_results)
+        prior_context = self._build_prior_context(prior_results, prior_task_descriptions)
 
         # search_results가 있으면 활용
         search_context = context.get("search_synthesis", "")
@@ -111,15 +113,31 @@ class RecursiveExecutor:
         )
 
         response = await llm.ainvoke(prompt)
+        # R-01: 비용 추적
+        cost = extract_llm_cost(response, self._model, provider)
+        task.cost += cost
+        cost_acc = context.get("_cost_accumulator")
+        if cost_acc is not None:
+            cost_acc[0] += cost
         result = response.content if hasattr(response, "content") else str(response)
         return result.strip()
 
-    def _build_prior_context(self, prior_results: Dict[str, str]) -> str:
-        """완료된 하위 태스크 결과를 컨텍스트 문자열로 조합."""
+    def _build_prior_context(
+        self,
+        prior_results: Dict[str, str],
+        prior_task_descriptions: Dict[str, str] | None = None,
+    ) -> str:
+        """완료된 하위 태스크 결과를 컨텍스트 문자열로 조합.
+
+        R-11: prior_task_descriptions가 있으면 태스크 설명을 함께 표시하여
+        LLM이 각 결과의 출처(어떤 하위 태스크의 결과인지)를 파악할 수 있게 함.
+        """
         if not prior_results:
             return ""
         parts = []
+        desc_map = prior_task_descriptions or {}
         for task_id, result in prior_results.items():
             if result:
-                parts.append(f"- {result[:300]}")
+                label = desc_map.get(task_id, task_id[:8])
+                parts.append(f"- [{label}] {result[:300]}")
         return "\n".join(parts[:3])  # 최대 3개 이전 결과만 포함

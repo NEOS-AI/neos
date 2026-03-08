@@ -13,7 +13,7 @@ from typing import Any, Dict, List
 from neos.config.settings import settings
 from neos.utils.llm_factory import LLMFactory
 
-from .models import RecursiveTaskNode, TaskAtomicity
+from .models import RecursiveTaskNode, TaskAtomicity, extract_llm_cost
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,14 @@ class RecursiveAtomizer:
         response = await llm.ainvoke(prompt)
         elapsed = time.time() - start
 
+        # R-01: 비용 추적 - LLM 응답 usage 파싱 후 task.cost 갱신
+        provider = "anthropic" if "claude" in self._model.lower() else settings.LLM_PROVIDER
+        cost = extract_llm_cost(response, self._model, provider)
+        task.cost += cost
+        cost_acc = context.get("_cost_accumulator")
+        if cost_acc is not None:
+            cost_acc[0] += cost
+
         content = response.content if hasattr(response, "content") else str(response)
         parsed = self._parse_response(content)
 
@@ -128,15 +136,13 @@ class RecursiveAtomizer:
 
         logger.debug(
             f"[Atomizer] depth={task.depth} atomic={atomic} confidence={confidence:.2f} "
-            f"elapsed={elapsed:.2f}s | {task.description[:50]}"
+            f"elapsed={elapsed:.2f}s cost=${cost:.6f} | {task.description[:50]}"
         )
         logger.debug(f"[Atomizer] reasoning: {reasoning}")
 
-        # 신뢰도 < 0.5이면 보수적으로 DECOMPOSABLE
-        if not atomic and confidence < 0.5:
+        # R-12: confidence < 0.5이면 무조건 DECOMPOSABLE (중복 조건 제거)
+        if confidence < 0.5:
             return TaskAtomicity.DECOMPOSABLE
-        if atomic and confidence < 0.5:
-            return TaskAtomicity.DECOMPOSABLE  # 불확실 시 분해 우선
 
         return TaskAtomicity.ATOMIC if atomic else TaskAtomicity.DECOMPOSABLE
 

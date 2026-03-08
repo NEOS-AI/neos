@@ -48,7 +48,9 @@ class RecursiveTaskNode:
 
     def description_hash(self) -> str:
         """순환 참조 감지를 위한 태스크 설명 해시."""
-        return hashlib.md5(self.description.strip().lower().encode()).hexdigest()
+        return hashlib.md5(
+            self.description.strip().lower().encode(), usedforsecurity=False
+        ).hexdigest()
 
     def to_dict(self) -> Dict[str, Any]:
         """JSON 직렬화 (PostgreSQL 체크포인터 호환)."""
@@ -90,3 +92,27 @@ class RecursiveTaskNode:
 
     def is_leaf(self) -> bool:
         return len(self.children) == 0
+
+
+def extract_llm_cost(response: Any, model: str, provider: str = "anthropic") -> float:
+    """LLM 응답에서 토큰 사용량을 파싱하여 USD 비용을 계산합니다.
+
+    usage_metadata가 없거나 가격 정보가 없으면 0.0을 반환합니다.
+    모든 ROMA 컴포넌트에서 공통으로 사용하는 비용 추출 유틸리티입니다.
+    """
+    usage = getattr(response, "usage_metadata", None) or {}
+    input_tokens: int = usage.get("input_tokens", 0)
+    output_tokens: int = usage.get("output_tokens", 0)
+    if input_tokens == 0 and output_tokens == 0:
+        return 0.0
+    try:
+        from neos.utils.cost_calculator import CostCalculator
+        pricing = CostCalculator._get_default_pricing(provider, model)
+        if not pricing:
+            return 0.0
+        return (
+            input_tokens * float(pricing["input"])
+            + output_tokens * float(pricing["output"])
+        ) / 1_000_000
+    except Exception:
+        return 0.0
