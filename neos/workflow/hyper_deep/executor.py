@@ -123,12 +123,15 @@ class HyperDeepExecutor:
             agent = self._get_agent()
             self._reset_agent_state(agent)
 
+            # _stream_callback을 agent에 전달하여 Phase 이벤트가 SSE로 브릿지되도록 함
+            agent_context = {
+                "session_id": context.get("session_id", ""),
+                "user_id": context.get("user_id", ""),
+                "_stream_callback": context.get("_stream_callback"),
+            }
             output = await agent.execute(
                 query=task.description,
-                context={
-                    "session_id": context.get("session_id", ""),
-                    "user_id": context.get("user_id", ""),
-                },
+                context=agent_context,
             )
 
             content = _extract_content(output)

@@ -132,7 +132,18 @@ class RecursiveAggregator:
         """자식 태스크 결과를 포맷팅."""
         parts = []
         for i, child in enumerate(children, 1):
-            result_preview = (child.result or "결과 없음")[:800]
+            raw_result = child.result or "결과 없음"
+            # ResponseObject dict (HyperDeepExecutor 미래 반환 대비) 텍스트 추출
+            if isinstance(raw_result, dict):
+                try:
+                    output = raw_result.get("output", [])
+                    if output and output[0].get("type") == "message":
+                        content = output[0].get("content", [])
+                        if content:
+                            raw_result = content[0].get("text", str(raw_result))
+                except (IndexError, AttributeError, KeyError):
+                    raw_result = str(raw_result)
+            result_preview = str(raw_result)[:800]
             parts.append(f"Sub-task {i}: {child.description}\nResult: {result_preview}")
         return "\n\n".join(parts)
 

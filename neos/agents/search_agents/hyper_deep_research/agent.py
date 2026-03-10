@@ -281,6 +281,8 @@ class HyperDeepResearchAgent(SearchAgent):
             session_id = context.get("session_id", "") if context else ""
             user_id = context.get("user_id", "") if context else ""
             report_id = context.get("report_id", None) if context else None
+            # OpenResponses 브릿지: WorkflowStreamCallback 추출
+            stream_callback = context.get("_stream_callback") if context else None
 
             # Detect query language
             language = LanguageDetector.detect(query)
@@ -293,7 +295,8 @@ class HyperDeepResearchAgent(SearchAgent):
 
             # Execute research process
             report_content = await self._run_research_process(
-                query, session_id, user_id, language, report_id
+                query, session_id, user_id, language, report_id,
+                stream_callback=stream_callback,
             )
 
             # Create search result
@@ -316,7 +319,15 @@ class HyperDeepResearchAgent(SearchAgent):
             )
 
             print("[DEBUG] HyperDeepResearch execution completed successfully")
-            return self.format_output([result], {"search_type": "hyper_deep_research"})
+            # usage 토큰 정보 반영 (갭 2.3)
+            output_metadata = {
+                "search_type": "hyper_deep_research",
+                "usage": {
+                    "input_tokens": 0,
+                    "output_tokens": self.research_metadata.get("estimated_total_tokens", 0),
+                },
+            }
+            return self.format_output([result], output_metadata)
 
         except Exception as e:
             print(f"[ERROR] HyperDeepResearch execution failed: {e}")
@@ -330,7 +341,8 @@ class HyperDeepResearchAgent(SearchAgent):
         session_id: str,
         user_id: str,
         language: str,
-        report_id: str = None
+        report_id: str = None,
+        stream_callback=None,
     ) -> str:
         """Execute the complete research process.
 
@@ -340,6 +352,7 @@ class HyperDeepResearchAgent(SearchAgent):
             user_id: User identifier
             language: Detected language code
             report_id: Optional existing report ID to use
+            stream_callback: Optional WorkflowStreamCallback for OpenResponses SSE bridging
 
         Returns:
             Complete research report as markdown string
@@ -348,7 +361,7 @@ class HyperDeepResearchAgent(SearchAgent):
         print(f"[INFO] 🚀 Target: {self.config['target_total_sources']} sources minimum")
 
         # Initialize report
-        await self._initialize_report(report_id, user_id, session_id, query)
+        await self._initialize_report(report_id, user_id, session_id, query, stream_callback=stream_callback)
 
         # Phase 0: Skill and Tool Selection
         await self._execute_phase_0(query, session_id, user_id, language)
@@ -420,6 +433,7 @@ class HyperDeepResearchAgent(SearchAgent):
         user_id: str,
         session_id: str,
         query: str,
+        stream_callback=None,
     ) -> None:
         """Initialize report and event logger."""
         self.current_report_id = report_id if report_id else f"hyper_report_{uuid.uuid4()}"
@@ -431,11 +445,12 @@ class HyperDeepResearchAgent(SearchAgent):
                 self.current_report_id, user_id, session_id, query
             )
 
-        # Initialize event logger
+        # Initialize event logger (stream_callback 주입으로 OpenResponses SSE 브릿지 활성화)
         enable_cli = session_id.startswith("cli_") if session_id else False
         self.event_logger = ResearchEventLogger(
             report_id=self.current_report_id,
-            enable_cli_output=enable_cli
+            enable_cli_output=enable_cli,
+            stream_callback=stream_callback,
         )
 
 

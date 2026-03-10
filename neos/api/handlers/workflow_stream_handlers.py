@@ -280,6 +280,50 @@ class WorkflowStreamCallback(WorkflowEventHandler):
         )
 
     # ============================================================================
+    # HDR (HyperDeep Research) Phase 이벤트 메서드들 — OpenResponses 브릿지
+    # ============================================================================
+
+    async def on_hdr_phase_start(self, phase_number: int, phase_name: str) -> None:
+        """HDR Phase 시작 이벤트 — stream_adapter에서 FunctionCallItem(in_progress)로 변환됨."""
+        safe_name = phase_name.lower().replace(" ", "_").replace("/", "_")
+        event = self._create_event(
+            event_type="hyper_deep_phase_start",
+            node_name=f"hyper_deep:phase_{safe_name}",
+            data={
+                "phase_number": phase_number,
+                "phase_name": phase_name,
+            },
+        )
+        await self.event_queue.put(event)
+
+    async def on_hdr_phase_complete(
+        self,
+        phase_number: int,
+        phase_name: str,
+        duration_ms: Optional[int] = None,
+    ) -> None:
+        """HDR Phase 완료 이벤트 — stream_adapter에서 FunctionCallItem(completed)로 변환됨."""
+        safe_name = phase_name.lower().replace(" ", "_").replace("/", "_")
+        event = self._create_event(
+            event_type="hyper_deep_phase_complete",
+            node_name=f"hyper_deep:phase_{safe_name}",
+            data={
+                "phase_number": phase_number,
+                "phase_name": phase_name,
+                "duration_ms": duration_ms,
+            },
+        )
+        await self.event_queue.put(event)
+
+    async def on_hdr_usage(self, estimated_tokens: int) -> None:
+        """HDR 토큰 사용량 이벤트 — stream_adapter에서 ResponseObject.usage에 반영됨."""
+        event = self._create_event(
+            event_type="hyper_deep_usage",
+            data={"estimated_total_tokens": estimated_tokens},
+        )
+        await self.event_queue.put(event)
+
+    # ============================================================================
     # 기존 호환성 메서드들 (레거시 코드 지원)
     # ============================================================================
 

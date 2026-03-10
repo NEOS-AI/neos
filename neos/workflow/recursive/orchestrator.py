@@ -310,6 +310,8 @@ class RecursiveOrchestrator:
             # R-01: mutable list로 생성 — shallow copy({**context, ...}) 시에도 참조가 공유되어
             # 재귀 레벨 전체에 걸쳐 누적 비용을 실시간으로 추적할 수 있음
             "_cost_accumulator": [0.0],
+            # OpenResponses 브릿지: HDR Phase 이벤트를 SSE로 전달하기 위한 콜백
+            "_stream_callback": state.get("_event_handler"),
         }
 
     def _collect_completed_tasks(self, node: RecursiveTaskNode) -> List[Dict[str, Any]]:
