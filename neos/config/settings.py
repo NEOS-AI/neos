@@ -635,6 +635,19 @@ class Settings(BaseSettings):
     HYPER_DEEP_COMPLEXITY_THRESHOLD: float = float(env_vars.get("HYPER_DEEP_COMPLEXITY_THRESHOLD", 0.85))
     HYPER_DEEP_BUDGET_CAP: float = float(env_vars.get("HYPER_DEEP_BUDGET_CAP", 5.0))          # ROMA(0.5)보다 10× 높음
 
+    # =========================================================================
+    # Contextual Retrieval 설정
+    # Anthropic Contextual Retrieval 기법: 각 청크에 전체 문서 컨텍스트를
+    # 반영한 1-2문장을 자동 생성하여 임베딩 품질 향상 (검색 실패율 최대 -67%)
+    # =========================================================================
+    CONTEXTUAL_RETRIEVAL_ENABLED: bool = env_vars.get("CONTEXTUAL_RETRIEVAL_ENABLED", "").lower() in ("1", "true", "yes")
+    CONTEXTUAL_MODEL: str = env_vars.get("CONTEXTUAL_MODEL", "claude-haiku-4-5-20251001")
+    CONTEXTUAL_MAX_TOKENS: int = int(env_vars.get("CONTEXTUAL_MAX_TOKENS", "200"))
+    CONTEXTUAL_MAX_CONCURRENT: int = int(env_vars.get("CONTEXTUAL_MAX_CONCURRENT", "3"))
+    CONTEXTUAL_MAX_CHUNKS_PER_DOC: int = int(env_vars.get("CONTEXTUAL_MAX_CHUNKS_PER_DOC", "200"))
+    CONTEXTUAL_BUDGET_CAP_USD: float = float(env_vars.get("CONTEXTUAL_BUDGET_CAP_USD", "0.10"))
+    CONTEXTUAL_EMBED_SOURCE: str = env_vars.get("CONTEXTUAL_EMBED_SOURCE", "contextual")
+
     class Config:
         env_file = ".env"
         case_sensitive = True

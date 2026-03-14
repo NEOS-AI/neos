@@ -196,6 +196,7 @@ class DocumentChunk(Base):
     # 청크 정보
     chunk_index = Column(Integer, nullable=False)  # 문서 내 청크 순서
     chunk_text = Column(Text, nullable=False)
+    contextual_text = Column(Text, nullable=True)   # Contextual Retrieval: context_snippet + "\n\n" + chunk_text
     chunk_size = Column(Integer)  # 문자 수
 
     # 위치 정보

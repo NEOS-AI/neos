@@ -589,4 +589,30 @@ def get_metrics_collector() -> EnterpriseMetricsCollector:
 metrics = get_metrics_collector()
 track_request = metrics.track_request
 track_workflow = metrics.track_workflow
+
+# ============================================================================
+# Contextual Retrieval Metrics (모듈 레벨 — contextual_retrieval.py에서 import 가능)
+# ============================================================================
+
+contextual_retrieval_chunks_total = Counter(
+    "contextual_retrieval_chunks_total",
+    "Contextual Retrieval로 처리된 청크 수",
+    ["status"],  # success, failed, fallback
+)
+
+contextual_retrieval_cache_hits_total = Counter(
+    "contextual_retrieval_cache_hits_total",
+    "Anthropic Prompt Cache 히트 횟수",
+)
+
+contextual_retrieval_cost_usd_total = Counter(
+    "contextual_retrieval_cost_usd_total",
+    "Contextual Retrieval API 호출 총 비용 (USD)",
+)
+
+contextual_retrieval_duration_seconds = Histogram(
+    "contextual_retrieval_duration_seconds",
+    "문서 전체 청크의 컨텍스트 생성 소요 시간 (초)",
+    buckets=[5, 10, 30, 60, 120, 300],
+)
 track_agent = metrics.track_agent

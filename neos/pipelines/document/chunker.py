@@ -37,6 +37,9 @@ class DocumentChunk:
     chunk_type: str = "paragraph"
     heading_hierarchy: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None
+    # Contextual Retrieval 필드
+    contextual_text: Optional[str] = None   # context_snippet + "\n\n" + chunk_text (임베딩 대상)
+    context_snippet: Optional[str] = None   # 생성된 컨텍스트 설명 (저장/디버깅용)
 
 
 class DocumentChunker:
