@@ -25,6 +25,7 @@
 ## 1. 개요
 
 **Contextual Retrieval**은 Anthropic이 발표한 RAG(Retrieval-Augmented Generation) 개선 기법이다. 문서를 청크로 분할할 때 각 청크가 전체 문서의 어떤 위치·맥락에 있는지를 LLM이 1~2문장으로 자동 생성하여 청크 앞에 붙인 뒤 임베딩한다.
+참조: https://platform.claude.com/cookbook/capabilities-contextual-embeddings-guide
 
 ```
 [기존]  chunk_text                              → 임베딩
