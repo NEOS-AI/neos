@@ -55,7 +55,12 @@ def build_execution_levels(subtasks: List["RecursiveTaskNode"]) -> List[List[int
 
         deps_raw = subtasks[idx].metadata.get("depends_on", [])
         # LLM이 ["0", "1"] 형태의 문자열로 반환할 수 있으므로 int 변환
-        deps = [int(d) for d in deps_raw]
+        # 범위 외 인덱스 또는 자기 자신에 대한 의존성은 무시 (LLM 오출력 방어)
+        deps = [
+            int(d)
+            for d in deps_raw
+            if 0 <= int(d) < n and int(d) != idx
+        ]
 
         if not deps:
             levels[idx] = 0

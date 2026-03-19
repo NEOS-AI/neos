@@ -94,7 +94,7 @@ class RestrictedPythonExecutor:
                 "error": "RestrictedPython not installed (optional dependency)",
             }
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             result = await asyncio.wait_for(
                 loop.run_in_executor(None, self._run_restricted, code, input_data or {}),

@@ -8,6 +8,7 @@ RAY_ENABLED=true → depends_on DAG를 파싱하여 독립 태스크를 Ray Acto
 핵심 변경 사항:
 - ATOMIC 태스크: self._executor 대신 HyperDeepWorkerActor로 실행
 - DECOMPOSABLE: for-loop 대신 build_execution_levels() → 레벨별 병렬 실행
+- Atomizer/Planner/Aggregator/Verifier: Named Actor 래퍼로 교체 (메모리 공유)
 - _cost_accumulator: Ray 프로세스 경계 불가이므로 Worker 결과 수신 후 메인 프로세스에서 업데이트
 - _stream_callback: Ray 직렬화 불가이므로 Worker에 전달하지 않음 (Phase 4 StreamBridgeActor로 보완 예정)
 """
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Dict, List, Optional, Set
 
 from neos.config.settings import settings
@@ -25,12 +27,113 @@ from .orchestrator import RecursiveOrchestrator
 
 logger = logging.getLogger(__name__)
 
+# Ray pickle 직렬화 불가 항목 — Named Actor에 전달하는 context에서 제외
+_NON_SERIALIZABLE_KEYS = frozenset(["_stream_callback", "_cost_accumulator"])
+
+
+def _safe_context(context: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in context.items() if k not in _NON_SERIALIZABLE_KEYS}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Named Actor 어댑터: Named Actor의 dict 기반 인터페이스를 로컬 인스턴스와
+# 동일한 객체 기반 인터페이스로 래핑한다.
+# ──────────────────────────────────────────────────────────────────────────────
+
+class _NamedAtomizerAdapter:
+    """RayAtomizerActor를 RecursiveAtomizer와 동일한 인터페이스로 래핑."""
+
+    def __init__(self, actor_handle: Any) -> None:
+        self._actor = actor_handle
+
+    async def assess(self, task: RecursiveTaskNode, context: Dict[str, Any]) -> TaskAtomicity:
+        result_str: str = await asyncio.wrap_future(
+            self._actor.assess.remote(task.to_dict(), _safe_context(context)).future()
+        )
+        return TaskAtomicity(result_str)
+
+
+class _NamedPlannerAdapter:
+    """RayPlannerActor를 RecursivePlanner와 동일한 인터페이스로 래핑."""
+
+    def __init__(self, actor_handle: Any) -> None:
+        self._actor = actor_handle
+
+    async def decompose(
+        self, task: RecursiveTaskNode, context: Dict[str, Any]
+    ) -> List[RecursiveTaskNode]:
+        subtask_dicts: List[Dict[str, Any]] = await asyncio.wrap_future(
+            self._actor.decompose.remote(task.to_dict(), _safe_context(context)).future()
+        )
+        return [RecursiveTaskNode.from_dict(d) for d in subtask_dicts]
+
+    async def replan(
+        self,
+        task: RecursiveTaskNode,
+        previous_result: str,
+        gaps: List[str],
+        context: Dict[str, Any],
+    ) -> List[RecursiveTaskNode]:
+        subtask_dicts: List[Dict[str, Any]] = await asyncio.wrap_future(
+            self._actor.replan.remote(
+                task.to_dict(), previous_result, gaps, _safe_context(context)
+            ).future()
+        )
+        return [RecursiveTaskNode.from_dict(d) for d in subtask_dicts]
+
+
+class _NamedAggregatorAdapter:
+    """RayAggregatorActor를 RecursiveAggregator와 동일한 인터페이스로 래핑."""
+
+    def __init__(self, actor_handle: Any) -> None:
+        self._actor = actor_handle
+
+    async def aggregate(
+        self,
+        parent: RecursiveTaskNode,
+        children: List[RecursiveTaskNode],
+        context: Dict[str, Any],
+    ) -> str:
+        result_str, _ = await asyncio.wrap_future(
+            self._actor.aggregate.remote(
+                parent.to_dict(),
+                [c.to_dict() for c in children],
+                _safe_context(context),
+            ).future()
+        )
+        return result_str
+
+
+class _NamedVerifierAdapter:
+    """RayVerifierActor를 RecursiveVerifier와 동일한 인터페이스로 래핑."""
+
+    def __init__(self, actor_handle: Any) -> None:
+        self._actor = actor_handle
+
+    async def verify(
+        self,
+        task: RecursiveTaskNode,
+        aggregated_result: str,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return await asyncio.wrap_future(
+            self._actor.verify.remote(
+                task.to_dict(), aggregated_result, _safe_context(context)
+            ).future()
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+
 
 class DistributedRecursiveOrchestrator(RecursiveOrchestrator):
     """Ray 병렬 실행을 지원하는 RecursiveOrchestrator 확장.
 
     RAY_ENABLED=false일 때는 부모 클래스와 완전히 동일하게 동작한다.
-    RAY_ENABLED=true일 때 독립 sibling 태스크를 레벨별 병렬 실행한다.
+    RAY_ENABLED=true일 때:
+    - Atomizer/Planner/Aggregator/Verifier → Named Actor 어댑터로 교체 (메모리 공유)
+    - 독립 sibling 태스크 → 레벨별 병렬 실행
+    - 재계획(replan) 태스크도 DAG 레벨별 병렬 실행
 
     사용 예:
         orchestrator = DistributedRecursiveOrchestrator(
@@ -85,6 +188,10 @@ class DistributedRecursiveOrchestrator(RecursiveOrchestrator):
 
                 from neos.workflow.ray_actors.executor_pool import RayExecutorPool
                 self._ray_pool = RayExecutorPool(pool_size=self._pool_size)
+
+                # Named Actor 어댑터 연결 (main.py에서 create_all_named_actors() 선행 필요)
+                self._connect_named_actors(ray)
+
                 logger.info(
                     f"[DistributedRecursiveOrchestrator] Ray enabled, pool_size={self._pool_size}"
                 )
@@ -94,6 +201,45 @@ class DistributedRecursiveOrchestrator(RecursiveOrchestrator):
                 )
                 self._ray_enabled = False
                 self._ray_pool = None
+
+    def _connect_named_actors(self, ray: Any) -> None:
+        """Named Actor 핸들을 가져와 로컬 인스턴스를 어댑터로 교체.
+
+        main.py lifespan에서 create_all_named_actors()가 먼저 호출되어야 한다.
+        Named Actor를 찾지 못하면 warning 후 로컬 인스턴스를 유지한다.
+        """
+        from neos.workflow.ray_actors.stateless_actors import (
+            ATOMIZER_KEY,
+            PLANNER_KEY,
+            AGGREGATOR_KEY,
+            VERIFIER_KEY,
+        )
+
+        connected: List[str] = []
+        failed: List[str] = []
+
+        for key, adapter_cls, attr_name in [
+            (ATOMIZER_KEY, _NamedAtomizerAdapter, "_atomizer"),
+            (PLANNER_KEY, _NamedPlannerAdapter, "_planner"),
+            (AGGREGATOR_KEY, _NamedAggregatorAdapter, "_aggregator"),
+            (VERIFIER_KEY, _NamedVerifierAdapter, "_verifier"),
+        ]:
+            try:
+                handle = ray.get_actor(key)
+                setattr(self, attr_name, adapter_cls(handle))
+                connected.append(key)
+            except ValueError:
+                failed.append(key)
+
+        if connected:
+            logger.info(
+                f"[DistributedRecursiveOrchestrator] Named Actor adapters connected: {connected}"
+            )
+        if failed:
+            logger.warning(
+                f"[DistributedRecursiveOrchestrator] Named Actors not found (로컬 인스턴스 유지): {failed}. "
+                f"main.py lifespan에서 create_all_named_actors()가 먼저 호출되어야 합니다."
+            )
 
     async def warmup(self) -> None:
         """Worker Actor 준비 완료 대기. 첫 요청 전 호출 권장."""
@@ -179,7 +325,7 @@ class DistributedRecursiveOrchestrator(RecursiveOrchestrator):
         for level_indices in execution_levels:
             level_tasks = [subtasks[i] for i in level_indices]
 
-            # 현재 prior_results를 child_context에 반영
+            # 현재 prior_results를 child_context에 반영 (가변 dict 재참조)
             level_context: Dict[str, Any] = {
                 **child_context,
                 "prior_results": prior_results,
@@ -207,12 +353,6 @@ class DistributedRecursiveOrchestrator(RecursiveOrchestrator):
                     completed_descs = context.get("completed_task_descriptions")
                     if completed_descs is not None:
                         completed_descs.append(t.description[:100])
-
-            child_context = {
-                **child_context,
-                "prior_results": prior_results,
-                "prior_task_descriptions": prior_task_descriptions,
-            }
 
         # ── 7. 결과 통합 ──
         aggregated = await self._aggregator.aggregate(task, subtasks, context)
@@ -245,11 +385,66 @@ class DistributedRecursiveOrchestrator(RecursiveOrchestrator):
         task.status = TaskStatus.COMPLETED
         return aggregated
 
+    async def _replan_and_solve(
+        self,
+        task: RecursiveTaskNode,
+        aggregated: str,
+        gaps: List[str],
+        context: Dict[str, Any],
+        seen_hashes: Set[str],
+    ) -> Optional[str]:
+        """갭을 채우기 위한 재계획 실행 (병렬화 버전).
+
+        부모 클래스의 순차 for-loop 대신 build_execution_levels()를 적용하여
+        독립적인 재계획 subtask들을 병렬 실행한다.
+        """
+        replan_tasks = await self._planner.replan(
+            task=task,
+            previous_result=aggregated,
+            gaps=gaps,
+            context=context,
+        )
+
+        if not replan_tasks:
+            logger.info("[DistributedOrchestrator] Replan produced no tasks, keeping original result")
+            return None
+
+        from neos.workflow.ray_actors.dag_utils import build_execution_levels
+
+        execution_levels = build_execution_levels(replan_tasks)
+        replan_results: Dict[str, str] = {}
+
+        for level_indices in execution_levels:
+            level_tasks = [replan_tasks[i] for i in level_indices]
+
+            if len(level_tasks) == 1:
+                t = level_tasks[0]
+                result = await self._recursive_solve(t, context, seen_hashes, replan_count=1)
+                t.result = result
+                replan_results[t.task_id] = result
+            else:
+                level_results = await self._execute_level_parallel(
+                    level_tasks, context, seen_hashes
+                )
+                for t, res in zip(level_tasks, level_results):
+                    t.result = res
+                    replan_results[t.task_id] = res
+
+        all_children = list(task.children) + replan_tasks
+        final_result = await self._aggregator.aggregate(task, all_children, context)
+        return final_result
+
     async def _execute_via_ray(self, task: RecursiveTaskNode, context: Dict[str, Any]) -> str:
         """단일 ATOMIC 태스크를 Ray Worker Actor로 실행."""
+        from neos.observability.metrics import get_metrics_collector
+
         ray_context = self._build_ray_context(context)
+        start = time.monotonic()
+
         future = self._ray_pool.submit(task.to_dict(), ray_context)
         result_dict: Dict[str, Any] = await asyncio.wrap_future(future.future())
+
+        elapsed = time.monotonic() - start
 
         # 비용 업데이트는 메인 프로세스에서만 (Ray 프로세스 경계 불가)
         cost = result_dict.get("cost", 0.0)
@@ -257,6 +452,15 @@ class DistributedRecursiveOrchestrator(RecursiveOrchestrator):
         cost_acc = context.get("_cost_accumulator")
         if cost_acc is not None:
             cost_acc[0] += cost
+
+        # 메트릭 기록 (메인 프로세스에서만)
+        try:
+            metrics = get_metrics_collector()
+            metrics.ray_task_duration_seconds.labels(
+                task_type="hdr", level=str(task.depth)
+            ).observe(elapsed)
+        except Exception:
+            pass
 
         content = result_dict.get("result", "")
         task.result = content
@@ -280,7 +484,10 @@ class DistributedRecursiveOrchestrator(RecursiveOrchestrator):
         Returns:
             각 태스크의 결과 문자열 리스트 (입력 순서와 동일)
         """
+        from neos.observability.metrics import get_metrics_collector
+
         ray_context = self._build_ray_context(context)
+        start = time.monotonic()
 
         futures = [
             self._ray_pool.submit(task.to_dict(), ray_context)
@@ -290,6 +497,8 @@ class DistributedRecursiveOrchestrator(RecursiveOrchestrator):
         result_dicts: List[Dict[str, Any]] = await asyncio.gather(*[
             asyncio.wrap_future(f.future()) for f in futures
         ])
+
+        elapsed = time.monotonic() - start
 
         results: List[str] = []
         total_cost = 0.0
@@ -311,6 +520,32 @@ class DistributedRecursiveOrchestrator(RecursiveOrchestrator):
         cost_acc = context.get("_cost_accumulator")
         if cost_acc is not None:
             cost_acc[0] += total_cost
+
+        # 메트릭 기록
+        try:
+            metrics = get_metrics_collector()
+            n = len(tasks)
+            pool_size = self._pool_size
+
+            metrics.ray_level_tasks_parallel.observe(n)
+
+            # 활용률: 현재 레벨에서 사용한 Worker / 전체 Pool 크기
+            utilization = min(n / pool_size, 1.0) if pool_size > 0 else 0.0
+            metrics.ray_pool_utilization.labels(pool_name="hyper_deep").set(utilization)
+
+            # 속도 향상 비율: 순차 실행 예상 시간 / 실제 병렬 실행 시간
+            # 각 태스크가 동일하게 elapsed 시간이 걸렸다고 가정
+            if elapsed > 0 and n > 1:
+                estimated_sequential = elapsed * n
+                speedup = estimated_sequential / elapsed
+                metrics.ray_parallel_speedup_ratio.set(speedup)
+
+            for task in tasks:
+                metrics.ray_task_duration_seconds.labels(
+                    task_type="hdr", level=str(task.depth)
+                ).observe(elapsed)
+        except Exception:
+            pass
 
         return results
 

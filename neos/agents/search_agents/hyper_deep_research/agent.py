@@ -161,6 +161,35 @@ class HyperDeepResearchAgent(SearchAgent):
         self.skill_manager = skill_manager
         self.skills_enabled = False
 
+    def reset(self) -> None:
+        """각 태스크 실행 전 연구 상태 초기화.
+
+        HyperDeepWorkerActor가 Actor 재사용 시 이전 실행의 잔류 상태를
+        안전하게 제거하기 위해 호출한다. __init__에서 설정하는 모든
+        research state를 원래 상태로 되돌린다.
+        """
+        self.current_report_id = None
+        self.sections_data = []
+        self.all_collected_sources = []
+        self.research_metadata = {
+            "total_queries_executed": 0,
+            "total_sources_collected": 0,
+            "unique_domains": set(),
+            "analysis_iterations_completed": 0,
+            "critical_reviews_completed": 0,
+            "multi_query_searches": 0,
+            "criticism_feedbacks_generated": 0,
+            "additional_research_triggered": 0,
+            "api_rate_limit_hits": 0,
+            "llm_calls": 0,
+            "estimated_total_tokens": 0,
+            "llm_calls_by_phase": {},
+            "selected_skills": [],
+            "selected_tools": [],
+            "selection_reasoning": "",
+        }
+        self.event_logger = None
+
     def _init_tavily_client(self) -> None:
         """Initialize Tavily API client."""
         self.tavily_client = None

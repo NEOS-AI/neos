@@ -17,7 +17,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,6 @@ class SandboxedCodeExecutor:
         code: str,
         input_data: Optional[Dict[str, Any]] = None,
         timeout_sec: Optional[int] = None,
-        allowed_imports: Optional[List[str]] = None,  # 미래 확장용
     ) -> CodeExecutionResult:
         """코드를 sandbox에서 실행.
 
@@ -90,7 +89,6 @@ class SandboxedCodeExecutor:
             code: 실행할 Python 코드. result 또는 output 변수에 결과 할당.
             input_data: 코드에서 접근 가능한 변수 dict.
             timeout_sec: 실행 타임아웃. None이면 settings.SANDBOX_TIMEOUT_SEC 사용.
-            allowed_imports: 미래 확장 예약 (현재 미사용).
 
         Returns:
             CodeExecutionResult

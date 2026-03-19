@@ -42,29 +42,10 @@ class HyperDeepWorkerActor:
     def _reset_agent_state(self) -> None:
         """각 태스크 실행 전 agent 내부 상태 초기화.
 
-        HyperDeepExecutor._reset_agent_state()와 동일한 로직.
-        Actor 재사용 시 이전 실행의 report_id, sections, sources가 남지 않도록.
+        HyperDeepResearchAgent.reset()에 위임하여 agent 내부 상태 목록과
+        동기화 문제를 방지한다. agent에 새 필드가 추가되어도 자동으로 반영됨.
         """
-        self._agent.current_report_id = None
-        self._agent.sections_data = []
-        self._agent.all_collected_sources = []
-        self._agent.research_metadata = {
-            "total_queries_executed": 0,
-            "total_sources_collected": 0,
-            "unique_domains": set(),
-            "analysis_iterations_completed": 0,
-            "critical_reviews_completed": 0,
-            "multi_query_searches": 0,
-            "criticism_feedbacks_generated": 0,
-            "additional_research_triggered": 0,
-            "api_rate_limit_hits": 0,
-            "llm_calls": 0,
-            "estimated_total_tokens": 0,
-            "llm_calls_by_phase": {},
-            "selected_skills": [],
-            "selected_tools": [],
-            "selection_reasoning": "",
-        }
+        self._agent.reset()
 
     async def execute(self, task_dict: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """atomic subtask를 HyperDeepResearchAgent로 실행.
@@ -199,7 +180,8 @@ class RayExecutorPool:
         results = await asyncio.gather(*[
             asyncio.wrap_future(f.future()) for f in futures
         ])
-        assert all(results), "일부 Worker Actor warmup 실패"
+        if not all(results):
+            raise RuntimeError("일부 Worker Actor warmup 실패")
         logger.info(f"[RayExecutorPool] All {self._pool_size} workers ready")
 
     def submit(self, task_dict: Dict[str, Any], context: Dict[str, Any]) -> ray.ObjectRef:
@@ -227,16 +209,14 @@ class RayExecutorPool:
             각 태스크의 실행 결과 dict 리스트 (입력 순서와 동일)
         """
         futures = [
-            self._actors[i % self._pool_size].execute.remote(task, context)
+            self._actors[(self._next_idx + i) % self._pool_size].execute.remote(task, context)
             for i, task in enumerate(tasks)
         ]
+        self._next_idx = (self._next_idx + len(tasks)) % self._pool_size
         return await asyncio.gather(*[
             asyncio.wrap_future(f.future()) for f in futures
         ])
 
-    def __del__(self):
-        for actor in self._actors:
-            try:
-                ray.kill(actor, no_restart=True)
-            except Exception:
-                pass
+    # Ray는 클러스터 종료 시 Actor를 자동으로 정리한다.
+    # __del__에서 ray.kill()을 호출하면 인터프리터 종료 시 Ray가 이미
+    # shutdown된 상태일 수 있어 불필요한 예외가 발생할 수 있으므로 생략.

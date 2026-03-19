@@ -150,6 +150,18 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"⚠️ Ray initialization failed, falling back to sequential: {e}")
 
+            # Worker Actor 준비 완료 대기 (콜드 스타트 타임아웃 방지)
+            try:
+                from neos.workflow.recursive.distributed_orchestrator import (
+                    DistributedRecursiveOrchestrator,
+                )
+                orchestrator = getattr(multi_agent_workflow, "hyper_deep_orchestrator", None)
+                if isinstance(orchestrator, DistributedRecursiveOrchestrator):
+                    await orchestrator.warmup()
+                    logger.info("✅ HyperDeep Worker Actors warmed up")
+            except Exception as e:
+                logger.warning(f"⚠️ Worker Actor warmup failed: {e}")
+
         # Skills 초기화
         logger.info("🎯 Initializing Skills system...")
         from neos.skills.manager import skill_manager
