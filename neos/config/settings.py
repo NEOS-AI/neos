@@ -636,6 +636,26 @@ class Settings(BaseSettings):
     HYPER_DEEP_BUDGET_CAP: float = float(env_vars.get("HYPER_DEEP_BUDGET_CAP", 5.0))          # ROMA(0.5)보다 10× 높음
 
     # =========================================================================
+    # Ray 분산 처리 설정 (Phase 1+)
+    # RAY_ENABLED=true 시 독립 sibling subtask를 병렬 실행 (최대 2.7× 속도 향상)
+    # =========================================================================
+    RAY_ENABLED: bool = env_vars.get("RAY_ENABLED", "").lower() in ("1", "true", "yes")
+    RAY_ADDRESS: str = env_vars.get("RAY_ADDRESS", "auto")
+    RAY_NUM_CPUS: Optional[float] = (
+        float(env_vars["RAY_NUM_CPUS"]) if env_vars.get("RAY_NUM_CPUS") else None
+    )
+    RAY_OBJECT_STORE_MEMORY: int = int(env_vars.get("RAY_OBJECT_STORE_MEMORY", 2_000_000_000))
+
+    # =========================================================================
+    # Sandbox 코드 실행 설정 (Phase 3 — 향후 LLM 생성 코드 실행용)
+    # 현재 HDR는 임의 코드를 실행하지 않으므로 기본값 false
+    # 활성화 시: uv add --optional sandbox RestrictedPython 필요
+    # =========================================================================
+    SANDBOX_ENABLED: bool = env_vars.get("SANDBOX_ENABLED", "").lower() in ("1", "true", "yes")
+    SANDBOX_TYPE: str = env_vars.get("SANDBOX_TYPE", "restricted")  # restricted | docker | pyodide
+    SANDBOX_TIMEOUT_SEC: int = int(env_vars.get("SANDBOX_TIMEOUT_SEC", 30))
+
+    # =========================================================================
     # Contextual Retrieval 설정
     # Anthropic Contextual Retrieval 기법: 각 청크에 전체 문서 컨텍스트를
     # 반영한 1-2문장을 자동 생성하여 임베딩 품질 향상 (검색 실패율 최대 -67%)

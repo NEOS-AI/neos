@@ -122,6 +122,34 @@ async def lifespan(app: FastAPI):
             else:
                 logger.warning("⚠️ OpenAI API connection issue")
 
+        # Ray 분산 처리 초기화 (RAY_ENABLED=true 시에만)
+        if getattr(settings, "RAY_ENABLED", False):
+            logger.info("⚡ Initializing Ray distributed processing...")
+            try:
+                import ray
+                if not ray.is_initialized():
+                    ray.init(
+                        address=getattr(settings, "RAY_ADDRESS", "auto"),
+                        ignore_reinit_error=True,
+                        object_store_memory=getattr(settings, "RAY_OBJECT_STORE_MEMORY", 2_000_000_000),
+                    )
+                logger.info(f"✅ Ray initialized: {ray.cluster_resources()}")
+
+                # Phase 2: Stateless Named Actors 생성 (Atomizer, Planner, Aggregator, Verifier)
+                from neos.workflow.ray_actors.stateless_actors import create_all_named_actors
+                create_all_named_actors(
+                    max_tasks_per_level=getattr(settings, "HYPER_DEEP_MAX_TASKS_PER_LEVEL", 3)
+                )
+                logger.info("✅ Ray Named Actors created (stateless actors)")
+
+                # Phase 2: CostAccumulatorActor Named Actor 생성
+                from neos.workflow.ray_actors.cost_accumulator import get_or_create_cost_accumulator
+                get_or_create_cost_accumulator()
+                logger.info("✅ CostAccumulatorActor ready")
+
+            except Exception as e:
+                logger.warning(f"⚠️ Ray initialization failed, falling back to sequential: {e}")
+
         # Skills 초기화
         logger.info("🎯 Initializing Skills system...")
         from neos.skills.manager import skill_manager
@@ -172,6 +200,16 @@ async def lifespan(app: FastAPI):
         # Redis 캐시 연결 종료
         await cache_manager.close()
         logger.info("🔄 Cache connection closed")
+
+        # Ray 분산 처리 종료
+        if getattr(settings, "RAY_ENABLED", False):
+            try:
+                import ray
+                if ray.is_initialized():
+                    ray.shutdown()
+                    logger.info("⚡ Ray shutdown completed")
+            except Exception as e:
+                logger.warning(f"⚠️ Ray shutdown error: {e}")
 
         logger.info("✅ Shutdown completed successfully")
 

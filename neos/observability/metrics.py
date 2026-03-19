@@ -273,6 +273,43 @@ class EnterpriseMetricsCollector:
             registry=self.registry
         )
 
+        # === Ray 분산 처리 메트릭 (Phase 4) ===
+
+        self.ray_pool_utilization = Gauge(
+            'neos_ray_executor_pool_utilization',
+            'Ray executor pool utilization ratio (active workers / total)',
+            ['pool_name'],
+            registry=self.registry
+        )
+
+        self.ray_task_duration_seconds = Histogram(
+            'neos_ray_task_duration_seconds',
+            'Ray distributed task execution duration in seconds',
+            ['task_type', 'level'],
+            buckets=(1, 5, 10, 30, 60, 120, 300, 600),
+            registry=self.registry
+        )
+
+        self.ray_parallel_speedup_ratio = Gauge(
+            'neos_ray_parallel_speedup_ratio',
+            'Estimated speedup ratio vs sequential execution (parallel_time / sequential_time)',
+            registry=self.registry
+        )
+
+        self.ray_actor_restarts_total = Counter(
+            'neos_ray_actor_restarts_total',
+            'Total Ray Actor restarts (fault recovery indicator)',
+            ['actor_type'],
+            registry=self.registry
+        )
+
+        self.ray_level_tasks_parallel = Histogram(
+            'neos_ray_level_tasks_parallel',
+            'Number of tasks executed in parallel per level',
+            buckets=(1, 2, 3, 4, 5, 6, 8, 10),
+            registry=self.registry
+        )
+
         # Internal tracking
         self._request_start_times = {}
 

@@ -82,21 +82,42 @@ class MultiAgentWorkflow:
         # HyperDeep Recursive: ROMA + HyperDeepResearchAgent 통합 (피처 플래그로 격리)
         self.hyper_deep_orchestrator = None
         if settings.HYPER_DEEP_AGENT_ENABLED:
-            from neos.workflow.recursive.orchestrator import RecursiveOrchestrator
-            from neos.workflow.hyper_deep.executor import HyperDeepExecutor
-            _hd_executor = HyperDeepExecutor()
-            self.hyper_deep_orchestrator = RecursiveOrchestrator(
-                agents=self.agents,
-                executor=_hd_executor,
-                max_depth=settings.HYPER_DEEP_MAX_DEPTH,
-                budget_cap=settings.HYPER_DEEP_BUDGET_CAP,
-                max_tasks_per_level=settings.HYPER_DEEP_MAX_TASKS_PER_LEVEL,
-            )
-            logger.info(
-                "[MultiAgentWorkflow] HyperDeepOrchestrator initialized "
-                f"(max_depth={settings.HYPER_DEEP_MAX_DEPTH}, "
-                f"tasks_per_level={settings.HYPER_DEEP_MAX_TASKS_PER_LEVEL})"
-            )
+            if getattr(settings, "RAY_ENABLED", False):
+                # Ray 분산 실행 경로: HyperDeepExecutor 싱글톤 불필요
+                # (HyperDeepWorkerActor가 독립 프로세스에서 HyperDeepResearchAgent 직접 보유)
+                from neos.workflow.recursive.distributed_orchestrator import (
+                    DistributedRecursiveOrchestrator,
+                )
+                self.hyper_deep_orchestrator = DistributedRecursiveOrchestrator(
+                    agents=self.agents,
+                    max_depth=settings.HYPER_DEEP_MAX_DEPTH,
+                    budget_cap=settings.HYPER_DEEP_BUDGET_CAP,
+                    max_tasks_per_level=settings.HYPER_DEEP_MAX_TASKS_PER_LEVEL,
+                    ray_enabled=True,
+                    ray_pool_size=settings.HYPER_DEEP_MAX_TASKS_PER_LEVEL,
+                )
+                logger.info(
+                    "[MultiAgentWorkflow] HyperDeepOrchestrator initialized with Ray "
+                    f"(max_depth={settings.HYPER_DEEP_MAX_DEPTH}, "
+                    f"pool_size={settings.HYPER_DEEP_MAX_TASKS_PER_LEVEL})"
+                )
+            else:
+                # 기존 순차 실행 경로
+                from neos.workflow.recursive.orchestrator import RecursiveOrchestrator
+                from neos.workflow.hyper_deep.executor import HyperDeepExecutor
+                _hd_executor = HyperDeepExecutor()
+                self.hyper_deep_orchestrator = RecursiveOrchestrator(
+                    agents=self.agents,
+                    executor=_hd_executor,
+                    max_depth=settings.HYPER_DEEP_MAX_DEPTH,
+                    budget_cap=settings.HYPER_DEEP_BUDGET_CAP,
+                    max_tasks_per_level=settings.HYPER_DEEP_MAX_TASKS_PER_LEVEL,
+                )
+                logger.info(
+                    "[MultiAgentWorkflow] HyperDeepOrchestrator initialized "
+                    f"(max_depth={settings.HYPER_DEEP_MAX_DEPTH}, "
+                    f"tasks_per_level={settings.HYPER_DEEP_MAX_TASKS_PER_LEVEL})"
+                )
 
         # 워크플로우 그래프 생성 (비동기로 초기화)
         self.graph = None
