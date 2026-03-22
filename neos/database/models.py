@@ -80,7 +80,11 @@ class QueryHistory(Base):
     execution_time_ms = Column(Integer)
     tools_used = Column(ARRAY(String))
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    
+
+    # Phase 1 (OpenClaw Multi-Channel Adapter): 요청 채널 출처 추적
+    channel_source = Column(String(50), default="api")           # "api" | "telegram" | "discord" | "slack"
+    external_channel_id = Column(String(500), nullable=True)     # 외부 채널 ID (Telegram chat_id 등)
+
     # 관계
     user = relationship("User", back_populates="query_histories")
     source_relations = relationship("RelatedQuery", foreign_keys="[RelatedQuery.source_query_id]")
@@ -649,3 +653,66 @@ class ToolRegistry(Base):
     last_used_at = Column(TIMESTAMP(timezone=True))
     created_at = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
     updated_at = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+
+
+# ============================================================================
+# Phase 2: Execution Approval System (OpenClaw Exec Approval)
+# ============================================================================
+
+class ToolApprovalAllowlist(Base):
+    """사용자별 스킬 자동 승인 allowlist
+
+    allowlist에 등록된 스킬은 EXECUTION_APPROVAL 인터럽트 없이 자동 실행된다.
+    사용자가 'add_to_allowlist=true'로 승인하면 이 테이블에 기록된다.
+    """
+    __tablename__ = "tool_approval_allowlist"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(255), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    skill_name = Column(String(100), nullable=False)    # "api_call", "file_processing" 등
+    auto_approved = Column(Boolean, default=True)       # True=자동 승인, False=항상 확인
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+
+    # 관계
+    user = relationship("User")
+
+
+# ============================================================================
+# Scheduled Task Models (Phase 4 — OpenClaw Cron 스케줄 스킬)
+# ============================================================================
+
+class ScheduledTask(Base):
+    """사용자가 등록한 반복 실행 태스크.
+
+    사용자가 자연어로 등록하면 cron_expression으로 변환 후 저장된다.
+    Celery Beat 폴러(poll_and_run_scheduled_tasks)가 매 1분마다 next_run_at을
+    확인하여 만기된 태스크를 워크플로우에 제출한다.
+    """
+    __tablename__ = "scheduled_tasks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String(255), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+
+    # 태스크 정보
+    title = Column(String(500), nullable=False)           # 사용자가 입력한 원본 요청
+    query = Column(Text, nullable=False)                  # 워크플로우에 전달할 쿼리
+    cron_expression = Column(String(100), nullable=False)  # "0 9 * * *"
+    timezone = Column(String(100), default="UTC")
+
+    # 채널 라우팅 (결과 전송 대상)
+    channel_type = Column(String(50), default="api")      # "api" | "telegram" | "discord"
+    channel_id = Column(String(500), nullable=True)       # 외부 채널 ID (텔레그램 chat_id 등)
+
+    # 상태 관리
+    is_active = Column(Boolean, default=True)
+    last_run_at = Column(TIMESTAMP, nullable=True)
+    next_run_at = Column(TIMESTAMP, nullable=False)       # 다음 실행 예정 시각
+    run_count = Column(Integer, default=0)                # 총 실행 횟수
+    last_error = Column(Text, nullable=True)              # 마지막 실패 오류 메시지
+
+    # 타임스탬프
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # 관계
+    user = relationship("User")

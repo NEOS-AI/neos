@@ -84,6 +84,9 @@ class WorkflowStreamEventType(str):
     HEARTBEAT = "heartbeat"
     ERROR = "error"
     COMPLETED = "completed"
+    # Phase 2 (OpenClaw Execution Approval): 사용자 승인 요청 이벤트
+    # 클라이언트는 이 이벤트를 받으면 POST /api/v1/approval/respond를 호출해야 한다.
+    APPROVAL_REQUEST = "approval_request"
 
 
 class WorkflowStreamEvent(BaseModel):
