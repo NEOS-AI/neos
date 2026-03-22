@@ -279,6 +279,14 @@ class WorkflowStreamCallback(WorkflowEventHandler):
             }
         )
 
+    async def on_approval_request(self, pending_approvals: list, session_id: str) -> None:
+        """interrupt_before=EXECUTION_APPROVAL 발동 시 클라이언트로 승인 요청 이벤트 발행."""
+        event = self._create_event(
+            event_type=WorkflowStreamEventType.APPROVAL_REQUEST,
+            data={"pending_approvals": pending_approvals},
+        )
+        await self.event_queue.put(event)
+
     # ============================================================================
     # HDR (HyperDeep Research) Phase 이벤트 메서드들 — OpenResponses 브릿지
     # ============================================================================

@@ -209,6 +209,18 @@ class WorkflowEventHandler(ABC):
         """워크플로우 에러"""
         pass
 
+    @abstractmethod
+    async def on_approval_request(
+        self,
+        pending_approvals: list,
+        session_id: str,
+    ) -> None:
+        """interrupt_before=EXECUTION_APPROVAL 발동 시 승인 요청 이벤트.
+
+        클라이언트는 이 이벤트를 받으면 POST /api/v1/approval/respond를 호출해야 한다.
+        """
+        pass
+
 
 # ============================================================================
 # Null Object Pattern: 기본 핸들러 (아무 동작도 하지 않음)
@@ -245,6 +257,9 @@ class NullEventHandler(WorkflowEventHandler):
         pass
 
     async def on_workflow_error(self, error: Exception, node_name: Optional[str] = None):
+        pass
+
+    async def on_approval_request(self, pending_approvals: list, session_id: str) -> None:
         pass
 
 
@@ -293,6 +308,10 @@ class CompositeEventHandler(WorkflowEventHandler):
     async def on_workflow_error(self, error: Exception, node_name: Optional[str] = None):
         for handler in self.handlers:
             await handler.on_workflow_error(error, node_name)
+
+    async def on_approval_request(self, pending_approvals: list, session_id: str) -> None:
+        for handler in self.handlers:
+            await handler.on_approval_request(pending_approvals, session_id)
 
 
 # ============================================================================

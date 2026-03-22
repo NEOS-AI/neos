@@ -69,6 +69,13 @@ class MultiAgentWorkflow:
         # Phase 2 processors
         self.research_continuation_processor = ResearchContinuationProcessor()
         self.self_reflection_processor = SelfReflectionProcessor()
+
+        # Phase 2 (OpenClaw Execution Approval)
+        self.approval_processor = None
+        if settings.EXECUTION_APPROVAL_ENABLED:
+            from neos.workflow.processors.approval_processor import ApprovalProcessor
+            self.approval_processor = ApprovalProcessor()
+            logger.info("[MultiAgentWorkflow] ApprovalProcessor initialized (EXECUTION_APPROVAL_ENABLED)")
         self.hypothesis_manager = HypothesisManager()  # Phase 2.5
         self.research_replanner = ResearchReplanner()  # Phase 2.4
 
@@ -214,6 +221,11 @@ class MultiAgentWorkflow:
         if settings.HYPER_DEEP_AGENT_ENABLED:
             workflow.add_node(WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value, self._hyper_deep_orchestrator_node)
 
+        # Phase 2 (OpenClaw Execution Approval): 민감 스킬 사용자 승인 노드
+        # interrupt_before=[EXECUTION_APPROVAL]로 중단 → resume 후 이 노드 실행
+        if settings.EXECUTION_APPROVAL_ENABLED:
+            workflow.add_node(WorkflowNode.EXECUTION_APPROVAL.value, self._execution_approval_node)
+
         # 엣지 정의
         # 1. START → refinement_checker (가장 먼저 쿼리 개선 필요 여부 체크)
         workflow.add_edge(START, WorkflowNode.REFINEMENT_CHECKER.value)
@@ -251,7 +263,7 @@ class MultiAgentWorkflow:
 
         # 조건부 분기: 도구/에이전트가 필요 없으면 orchestrator 건너뛰고 바로 응답 생성
         # ROMA 또는 HyperDeep 활성화 시 재귀 에이전트 경로 추가
-        if settings.RECURSIVE_AGENT_ENABLED or settings.HYPER_DEEP_AGENT_ENABLED:
+        if settings.RECURSIVE_AGENT_ENABLED or settings.HYPER_DEEP_AGENT_ENABLED or settings.EXECUTION_APPROVAL_ENABLED:
             _routing_map = {
                 WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
                 WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
@@ -260,6 +272,9 @@ class MultiAgentWorkflow:
                 _routing_map["recursive"] = WorkflowNode.RECURSIVE_ORCHESTRATOR.value
             if settings.HYPER_DEEP_AGENT_ENABLED:
                 _routing_map["hyper_deep"] = WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value
+            # Phase 2: 승인 대기 경로 (최우선 — _should_use_recursive_agent에서 먼저 체크)
+            if settings.EXECUTION_APPROVAL_ENABLED:
+                _routing_map["needs_approval"] = WorkflowNode.EXECUTION_APPROVAL.value
 
             workflow.add_conditional_edges(
                 WorkflowNode.SKILL_TOOL_SELECTOR.value,
@@ -280,6 +295,18 @@ class MultiAgentWorkflow:
                     WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,  # 간단한 대화 -> 바로 응답
                     WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value  # Phase 2.5: 가설 생성 → 검색
                 }
+            )
+
+        # Phase 2 (OpenClaw Execution Approval): EXECUTION_APPROVAL → 분기
+        # approved → 오케스트레이터 경로, rejected → 응답 생성으로 바로 이동
+        if settings.EXECUTION_APPROVAL_ENABLED:
+            workflow.add_conditional_edges(
+                WorkflowNode.EXECUTION_APPROVAL.value,
+                self._should_continue_after_approval,
+                {
+                    "approved": WorkflowNode.HYPOTHESIS_GENERATION.value,
+                    "rejected": WorkflowNode.RESP_GENERATOR.value,
+                },
             )
 
         # Phase 2.5: HYPOTHESIS_GENERATION → SEARCH → HYPOTHESIS_EVALUATION → ANALYSIS
@@ -327,10 +354,17 @@ class MultiAgentWorkflow:
         # Conditionally use checkpointer
         if use_checkpointer:
             checkpointer = await get_checkpointer()
-            print("[DEBUG] Workflow graph created with PostgreSQL checkpointer for horizontal scaling")
-            return workflow.compile(checkpointer=checkpointer)
+            logger.debug("[WorkflowGraph] Created with PostgreSQL checkpointer for horizontal scaling")
+            # Phase 2 (OpenClaw Execution Approval): interrupt_before는 checkpointer 경로에만 적용
+            # stateless 경로(use_checkpointer=False)에서는 interrupt가 동작하지 않으므로 제외
+            interrupt_nodes = (
+                [WorkflowNode.EXECUTION_APPROVAL.value]
+                if settings.EXECUTION_APPROVAL_ENABLED
+                else []
+            )
+            return workflow.compile(checkpointer=checkpointer, interrupt_before=interrupt_nodes)
         else:
-            print("[DEBUG] Workflow graph created without checkpointer (stateless mode)")
+            logger.debug("[WorkflowGraph] Created without checkpointer (stateless mode)")
             return workflow.compile()
 
 
@@ -460,7 +494,7 @@ class MultiAgentWorkflow:
 
     async def _select_skills_tools_node(self, state: AgentState) -> Dict[str, Any]:
         """Skill and Tool selection 노드"""
-        print("[DEBUG] Executing skill/tool selection node")
+        logger.debug("[SkillToolSelector] Executing skill/tool selection")
 
         try:
             query = state.get("original_query", "")
@@ -493,20 +527,55 @@ class MultiAgentWorkflow:
                 detected_language=detected_language
             )
 
-            print(f"[DEBUG] Selected {len(selection.selected_skills)} skills: {selection.selected_skills}")
-            print(f"[DEBUG] Selected {len(selection.selected_tools)} tools: {selection.selected_tools}")
+            logger.debug(f"[SkillToolSelector] Selected {len(selection.selected_skills)} skills: {selection.selected_skills}")
+            logger.debug(f"[SkillToolSelector] Selected {len(selection.selected_tools)} tools: {selection.selected_tools}")
 
-            # Return state updates
-            return {
+            base_result = {
                 "selected_skills": selection.selected_skills,
                 "selected_tools": selection.selected_tools,
-                "selection_reasoning": selection.reasoning
+                "selection_reasoning": selection.reasoning,
             }
 
+            # Phase 2 (OpenClaw Execution Approval): 민감 스킬 allowlist 체크
+            # checkpointed 경로에서만 유효 — stateless 경로에서는 interrupt_before가 동작하지 않으므로
+            # approval 로직을 수행하면 approval_decision=None 상태로 EXECUTION_APPROVAL 노드가 즉시
+            # 실행되어 "승인 처리 중 예기치 않은 상태" 오류 메시지로 워크플로우가 종료된다.
+            if settings.EXECUTION_APPROVAL_ENABLED and self._graph_uses_checkpointer:
+                approval_skills = [
+                    s for s in selection.selected_skills
+                    if s in settings.APPROVAL_REQUIRED_SKILLS
+                ]
+                if approval_skills:
+                    # DB allowlist 조회 — allowlist에 있으면 자동 승인
+                    is_allowlisted = await self._check_approval_allowlist(user_id, approval_skills)
+                    if not is_allowlisted:
+                        import uuid as _uuid
+                        from datetime import datetime as _dt
+                        pending = [
+                            {
+                                "request_id": str(_uuid.uuid4()),
+                                "skill_name": s,
+                                "params": {},
+                                "timeout_seconds": settings.APPROVAL_TIMEOUT_SECONDS,
+                                "requested_at": _dt.utcnow().isoformat(),
+                            }
+                            for s in approval_skills
+                        ]
+                        logger.info(
+                            f"[ApprovalCheck] Skills require approval: {approval_skills} "
+                            f"for user={user_id}. Setting pending_approvals."
+                        )
+                        return {
+                            **base_result,
+                            "pending_approvals": pending,
+                            "approval_decision": None,
+                        }
+
+            return base_result
+
         except Exception as e:
-            print(f"[ERROR] Skill/tool selection failed: {e}")
             import traceback
-            print(f"[ERROR] Traceback: {traceback.format_exc()}")
+            logger.error(f"[SkillToolSelector] Selection failed: {e}\n{traceback.format_exc()}")
             # Return empty selections on error
             return {
                 "selected_skills": [],
@@ -517,6 +586,58 @@ class MultiAgentWorkflow:
     async def _process_conversation_context_node(self, state: AgentState) -> Dict[str, Any]:
         """대화 컨텍스트 처리 노드"""
         return await self.conversation_context_processor.process(state)
+
+    async def _execution_approval_node(self, state: AgentState) -> Dict[str, Any]:
+        """Phase 2 (OpenClaw Execution Approval): 실행 승인 노드
+
+        interrupt_before에 의해 중단된 후 resume 시 실행된다.
+        state["approval_decision"]에 사용자 결정("approved"|"rejected")이 담겨 있다.
+        """
+        if self.approval_processor is None:
+            logger.error("[ExecutionApprovalNode] ApprovalProcessor is not initialized")
+            return {"pending_approvals": [], "approval_decision": None}
+        return await self.approval_processor.process(state)
+
+    def _should_continue_after_approval(self, state: AgentState) -> str:
+        """EXECUTION_APPROVAL 노드 이후 라우팅 함수.
+
+        approval_processor가 설정한 approval_outcome 전용 필드를 사용한다.
+        이전 세션의 final_response 잔류값에 의한 오라우팅을 방지한다.
+
+        Returns:
+            "approved": 오케스트레이터 경로 (HYPOTHESIS_GENERATION)
+            "rejected": 응답 생성 (RESP_GENERATOR)
+        """
+        return state.get("approval_outcome", "rejected")
+
+    async def _check_approval_allowlist(self, user_id: str, skill_names: list) -> bool:
+        """DB에서 user_id의 skill_names 전체가 allowlist에 있는지 확인한다.
+
+        Args:
+            user_id: 사용자 ID
+            skill_names: 확인할 스킬 이름 목록
+
+        Returns:
+            True: 모든 스킬이 allowlist에 있어 자동 승인 가능
+            False: 하나라도 없으면 사용자 승인 필요
+        """
+        if not skill_names:
+            return True
+        try:
+            from neos.database.connection import db_manager
+            placeholders = ", ".join(f"${i+2}" for i in range(len(skill_names)))
+            sql = f"""
+                SELECT COUNT(*) AS count FROM tool_approval_allowlist
+                WHERE user_id = $1
+                  AND skill_name IN ({placeholders})
+                  AND auto_approved = TRUE
+            """
+            row = await db_manager.fetch_one(sql, user_id, *skill_names)
+            count = int(row["count"]) if row else 0
+            return count >= len(skill_names)
+        except Exception as e:
+            logger.debug(f"[ApprovalCheck] Allowlist DB query failed: {e} — requiring approval")
+            return False
 
     async def _orchestrate_search_node(self, state: AgentState) -> Dict[str, Any]:
         """검색 오케스트레이션 노드"""
@@ -578,6 +699,13 @@ class MultiAgentWorkflow:
             WorkflowPathway.USE_ORCHESTRATORS.value: 기존 오케스트레이터 경로
             WorkflowPathway.SKIP_ORCHESTRATORS.value: 바로 응답 생성
         """
+        # 0순위: Phase 2 (OpenClaw Execution Approval) — 승인 대기 중이면 즉시 라우팅
+        # pending_approvals가 있고 approval_decision이 None이면 interrupt_before 발동
+        if settings.EXECUTION_APPROVAL_ENABLED:
+            if state.get("pending_approvals") and state.get("approval_decision") is None:
+                logger.info("[ApprovalRouting] pending_approvals detected → needs_approval")
+                return "needs_approval"
+
         classification = state.get("query_classification") or {}
         complexity = classification.get("complexity_score", 0.0)
         intent = state.get("query_intent", "")
@@ -886,7 +1014,7 @@ class MultiAgentWorkflow:
             await self._ensure_graph_initialized(use_checkpointer=use_checkpointer)
 
             user_id = user_input.get("user_id")
-            print(f"[DEBUG] Starting workflow execution for query: {query[:50]}...")
+            logger.debug(f"[ExecuteWorkflow] Starting for query: {query[:50]}...")
 
             # 워크플로우 시작 이벤트
             await event_handler.on_workflow_start(user_input)
@@ -935,13 +1063,13 @@ class MultiAgentWorkflow:
                 # 워크플로우 실행
                 add_span_event(span, "starting_graph_execution")
                 if use_checkpointer:
-                    print("[DEBUG] Executing workflow graph with distributed state management...")
+                    logger.debug("[ExecuteWorkflow] Executing with checkpointer (distributed state management)")
                     config = {
                         "configurable": {"thread_id": user_input["session_id"]},
                         "recursion_limit": 50  # 재시도를 위한 recursion limit 증가
                     }
                 else:
-                    print("[DEBUG] Executing workflow graph in stateless mode...")
+                    logger.debug("[ExecuteWorkflow] Executing in stateless mode")
                     config = {
                         "recursion_limit": 50  # 재시도를 위한 recursion limit 증가
                     }
@@ -1060,13 +1188,31 @@ class MultiAgentWorkflow:
                     user_input, result, final_state
                 )
 
-                print("[DEBUG] Workflow execution completed successfully")
+                logger.debug("[ExecuteWorkflow] Completed successfully")
                 return result
 
             except Exception as e:
+                # GraphInterrupt: interrupt_before=EXECUTION_APPROVAL 발동
+                # Generic Exception catch 이전에 처리해야 SSE approval_request 이벤트가 발행됨
+                try:
+                    from langgraph.errors import GraphInterrupt
+                    if isinstance(e, GraphInterrupt):
+                        add_span_event(span, "workflow_interrupted_for_approval")
+                        current_graph_state = await self.graph.aget_state(config)
+                        pending = current_graph_state.values.get("pending_approvals", [])
+                        session_id = user_input.get("session_id", "")
+                        await event_handler.on_approval_request(pending, session_id)
+                        logger.info(
+                            f"[ExecuteWorkflow] GraphInterrupt: approval_request sent "
+                            f"for session={session_id}, pending={len(pending)}"
+                        )
+                        return {"success": True, "interrupted": True, "response": None}
+                except ImportError:
+                    pass  # langgraph.errors 미설치 시 일반 에러로 처리
+
                 import traceback
                 traceback.print_exc()
-                print(f"[ERROR] Workflow execution failed: {str(e)}")
+                logger.error(f"[ExecuteWorkflow] Workflow execution failed: {str(e)}")
 
                 # Tracing: 에러 기록
                 add_span_event(span, "workflow_error", {"error": str(e)})

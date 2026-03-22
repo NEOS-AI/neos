@@ -123,6 +123,19 @@ class AgentState(TypedDict):
     template_id: Optional[str]
     template_config: Optional[Dict[str, Any]]
 
+    # Phase 2: Execution Approval (OpenClaw Exec Approval System)
+    # pending_approvals: 승인 대기 중인 스킬 목록 [{request_id, skill_name, params, timeout_seconds}]
+    # approval_decision: "approved" | "rejected" | None (interrupt 해제 후 채워짐)
+    # ⚠️ operator.add 사용 안 함 — 누적이 아닌 교체형 필드
+    pending_approvals: Optional[List[Dict[str, Any]]]
+    approval_decision: Optional[str]
+    approval_outcome: Optional[str]  # "approved" | "rejected" — _should_continue_after_approval 라우팅 전용
+
+    # Phase 3: Context Assembly Engine (OpenClaw 컨텍스트 엔진 분리)
+    assembled_context: Optional[Dict[str, Any]]          # ContextAssemblyEngine.trimmed 결과
+    channel_type: Optional[str]                          # 요청 채널 "api"|"telegram"|"discord"|"slack"
+    channel_id: Optional[str]                            # 외부 채널 식별자 (Telegram chat_id 등)
+
     # ROMA: Recursive Open Meta-Agent
     recursive_task_tree: Optional[Dict[str, Any]]       # 전체 태스크 트리 (직렬화된 RecursiveTaskNode)
     recursive_current_depth: Optional[int]              # 현재 재귀 깊이

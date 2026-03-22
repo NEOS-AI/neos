@@ -124,6 +124,11 @@ app.conf.beat_schedule = {
         'task': 'neos.workflow.celery_tasks.update_cache_statistics',
         'schedule': 600.0,  # 10분
     },
+    # Phase 4: Cron 스케줄 폴러 — DB에서 만기 태스크를 매 1분마다 조회·실행
+    'poll-scheduled-tasks': {
+        'task': 'neos.tasks.poll_scheduled_tasks',
+        'schedule': 60.0,  # 1분
+    },
 }
 
 
