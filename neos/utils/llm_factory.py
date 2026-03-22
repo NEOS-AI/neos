@@ -1,139 +1,61 @@
-from typing import Optional, Dict
-from abc import ABC, abstractmethod
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.language_models import BaseLanguageModel
+"""LLMFactory — 프로바이더 레지스트리 기반 LLM 팩토리
+
+Phase 5 (OpenClaw ModelProvider 플러그인)
+
+각 프로바이더 구현은 neos/providers/ 패키지로 분리되어 있다.
+LLMFactory는 레지스트리 딕셔너리를 통해 프로바이더에 위임한다.
+
+새 프로바이더 등록:
+    from neos.providers.my_provider import MyProvider
+    LLMFactory.register_provider("my_provider", MyProvider)
+"""
+
 import logging
+from typing import Dict, List, Optional, Type
+
+from langchain_core.language_models import BaseLanguageModel
 
 from neos.config.settings import settings
-
+from neos.providers.base import ModelProviderBase
+from neos.providers.anthropic import AnthropicProvider
+from neos.providers.openai import OpenAIProvider
+from neos.providers.gemini import GeminiProvider
+from neos.providers.ollama import OllamaProvider
 
 logger = logging.getLogger(__name__)
 
 
-class LLMProvider(ABC):
-    """LLM Provider 추상 클래스"""
-    
-    @abstractmethod
-    def create_llm(self, **kwargs) -> BaseLanguageModel:
-        """LLM 인스턴스 생성"""
-        pass
-    
-    @abstractmethod
-    def get_provider_name(self) -> str:
-        """Provider 이름 반환"""
-        pass
+# 하위 호환성을 위해 기존 코드가 llm_factory에서 직접 임포트하던 클래스 재노출
+LLMProvider = ModelProviderBase
 
-class OpenAIProvider(LLMProvider):
-    """OpenAI LLM Provider"""
-    
-    def __init__(self):
-        if not settings.OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY is required for OpenAI provider")
-    
-    def create_llm(self, **kwargs) -> ChatOpenAI:
-        """OpenAI LLM 생성"""
-        default_params = {
-            "model": settings.LLM_MODEL,
-            "temperature": settings.LLM_TEMPERATURE,
-            "api_key": settings.OPENAI_API_KEY,
-            "max_retries": 3,
-            "request_timeout": settings.LLM_TIMEOUT
-        }
-        default_params.update(kwargs)
-
-        return ChatOpenAI(**default_params)
-    
-    def get_provider_name(self) -> str:
-        return "openai"
-
-class AnthropicProvider(LLMProvider):
-    """Anthropic LLM Provider"""
-
-    def __init__(self):
-        if not settings.ANTHROPIC_API_KEY:
-            raise ValueError("ANTHROPIC_API_KEY is required for Anthropic provider")
-
-    def create_llm(self, **kwargs) -> ChatAnthropic:
-        """Anthropic LLM 생성"""
-        default_params = {
-            "model": settings.LLM_MODEL,
-            "temperature": settings.LLM_TEMPERATURE,
-            "api_key": settings.ANTHROPIC_API_KEY,
-            "max_retries": 3,
-            "timeout": settings.LLM_TIMEOUT
-        }
-        default_params.update(kwargs)
-
-        # Thinking block 제어
-        # 추가 최적화: disable_thinking 파라미터로 조건부 비활성화 지원
-        disable_thinking = default_params.pop("disable_thinking", False)
-
-        if (settings.THINKING_BLOCKS_ENABLED or settings.MAX_THINKING_LENGTH > 0) and not disable_thinking:
-            if settings.MAX_THINKING_LENGTH < 1024:
-                logger.warning("MAX_THINKING_LENGTH is set very low; increasing to 1024 tokens.")
-                settings.MAX_THINKING_LENGTH = 1024
-            # Check the actual temperature parameter being used, not the global settings
-            if default_params.get("temperature", 1.0) != 1.0:
-                logger.warning(f"Thinking blocks require temperature=1.0; overriding temperature={default_params.get('temperature')} → 1.0")
-                default_params["temperature"] = 1.0
-                settings.LLM_TEMPERATURE = 1.0
-
-            thinking={
-                "type": "enabled",
-                "budget_tokens": settings.MAX_THINKING_LENGTH
-            }
-            default_params["thinking"] = thinking
-
-            # max_tokens must be greater than thinking.budget_tokens
-            # Set it to budget_tokens + sufficient output tokens (default: 4096)
-            if "max_tokens" not in default_params:
-                default_params["max_tokens"] = settings.MAX_THINKING_LENGTH + 4096
-                logger.info(f"Set max_tokens={default_params['max_tokens']} (thinking.budget_tokens={settings.MAX_THINKING_LENGTH} + output=4096)")
-            elif default_params["max_tokens"] <= settings.MAX_THINKING_LENGTH:
-                logger.warning(f"max_tokens ({default_params['max_tokens']}) must be greater than thinking.budget_tokens ({settings.MAX_THINKING_LENGTH}); adjusting to {settings.MAX_THINKING_LENGTH + 4096}")
-                default_params["max_tokens"] = settings.MAX_THINKING_LENGTH + 4096
-
-        return ChatAnthropic(**default_params)
-
-    def get_provider_name(self) -> str:
-        return "anthropic"
-
-class GeminiProvider(LLMProvider):
-    """Google Gemini LLM Provider"""
-
-    def __init__(self):
-        if not settings.GOOGLE_API_KEY:
-            raise ValueError("GOOGLE_API_KEY is required for Gemini provider")
-
-    def create_llm(self, **kwargs) -> ChatGoogleGenerativeAI:
-        """Gemini LLM 생성"""
-        default_params = {
-            "model": settings.LLM_MODEL,
-            "temperature": settings.LLM_TEMPERATURE,
-            "google_api_key": settings.GOOGLE_API_KEY,
-            "max_retries": 3,
-            "timeout": settings.LLM_TIMEOUT
-        }
-        default_params.update(kwargs)
-
-        return ChatGoogleGenerativeAI(**default_params)
-
-    def get_provider_name(self) -> str:
-        return "gemini"
 
 class LLMFactory:
-    """LLM Factory 클래스 - Dependency Injection을 위한 팩토리"""
+    """프로바이더 레지스트리 기반 LLM 팩토리.
 
-    _providers = {
-        "openai": OpenAIProvider,
+    프로바이더는 _providers 딕셔너리에 등록되며, create_llm() 호출 시
+    해당 프로바이더의 create_llm()에 위임한다.
+    """
+
+    _providers: Dict[str, Type[ModelProviderBase]] = {
         "anthropic": AnthropicProvider,
-        "gemini": GeminiProvider
+        "openai": OpenAIProvider,
+        "gemini": GeminiProvider,
+        "ollama": OllamaProvider,
     }
 
-    # LLM 인스턴스 캐시 (이벤트 루프 충돌 방지)
+    # LLM 인스턴스 캐시
     _llm_cache: Dict[str, BaseLanguageModel] = {}
+
+    @classmethod
+    def register_provider(cls, name: str, provider_class: Type[ModelProviderBase]) -> None:
+        """런타임에 새 프로바이더를 등록한다.
+
+        Args:
+            name: 프로바이더 키 (예: "my_provider")
+            provider_class: ModelProviderBase 구현 클래스
+        """
+        cls._providers[name] = provider_class
+        logger.info("Registered LLM provider: %s", name)
 
     @classmethod
     def _get_cache_key(
@@ -141,10 +63,8 @@ class LLMFactory:
         provider: str,
         model: str,
         temperature: float,
-        **kwargs
+        **kwargs,
     ) -> str:
-        """캐시 키 생성"""
-        # disable_thinking 같은 파라미터는 캐시 키에 포함
         disable_thinking = kwargs.get("disable_thinking", False)
         max_tokens = kwargs.get("max_tokens", 0)
         return f"{provider}:{model}:{temperature}:{disable_thinking}:{max_tokens}"
@@ -156,157 +76,165 @@ class LLMFactory:
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         use_cache: bool = True,
-        **kwargs
+        **kwargs,
     ) -> BaseLanguageModel:
-        """
-        설정된 provider에 따라 LLM 인스턴스 생성 (캐싱 지원)
+        """설정된 프로바이더에 따라 LLM 인스턴스를 생성한다 (캐싱 지원).
 
         Args:
-            provider: LLM provider ("openai" or "anthropic")
-            model: 모델 이름 (provider별 기본값 사용 시 None)
-            temperature: 온도 설정 (기본값 사용 시 None)
-            use_cache: 캐시된 인스턴스 재사용 여부 (기본값: True)
-            **kwargs: 추가 LLM 파라미터
+            provider: 프로바이더 키 ("anthropic", "openai", "gemini", "ollama")
+            model: 모델 식별자 (None이면 settings.LLM_MODEL 사용)
+            temperature: 온도 (None이면 settings.LLM_TEMPERATURE 사용)
+            use_cache: 캐시 재사용 여부
+            **kwargs: 프로바이더별 추가 파라미터
 
         Returns:
-            BaseLanguageModel: 생성된 LLM 인스턴스
+            BaseLanguageModel 인스턴스
         """
         provider_name = provider or settings.LLM_PROVIDER
 
         if provider_name not in cls._providers:
             raise ValueError(f"Unsupported LLM provider: {provider_name}")
 
+        resolved_model = model or settings.LLM_MODEL
+        resolved_temperature = temperature if temperature is not None else settings.LLM_TEMPERATURE
+        resolved_max_tokens = kwargs.pop("max_tokens", 0)
+
+        if use_cache:
+            cache_key = cls._get_cache_key(
+                provider_name,
+                resolved_model,
+                resolved_temperature,
+                max_tokens=resolved_max_tokens,
+                **kwargs,
+            )
+            if cache_key in cls._llm_cache:
+                logger.debug("Using cached LLM: %s", cache_key)
+                return cls._llm_cache[cache_key]
+
         try:
-            provider_class = cls._providers[provider_name]
-            provider_instance = provider_class()
+            provider_instance = cls._providers[provider_name]()
+            llm = provider_instance.create_llm(
+                model=resolved_model,
+                temperature=resolved_temperature,
+                max_tokens=resolved_max_tokens,
+                **kwargs,
+            )
+            logger.info(
+                "Created LLM: %s - %s",
+                provider_instance.get_provider_name(),
+                resolved_model,
+            )
 
-            # 파라미터 오버라이드
-            llm_params = {}
-            if model:
-                llm_params["model"] = model
-            else:
-                llm_params["model"] = settings.LLM_MODEL
-
-            if temperature is not None:
-                llm_params["temperature"] = temperature
-            else:
-                llm_params["temperature"] = settings.LLM_TEMPERATURE
-
-            llm_params.update(kwargs)
-
-            # 캐시 확인 (use_cache=True인 경우)
-            if use_cache:
-                cache_key = cls._get_cache_key(
-                    provider_name,
-                    llm_params["model"],
-                    llm_params["temperature"],
-                    **kwargs
-                )
-
-                if cache_key in cls._llm_cache:
-                    logger.debug(f"Using cached LLM: {cache_key}")
-                    return cls._llm_cache[cache_key]
-
-            # 새 인스턴스 생성
-            llm = provider_instance.create_llm(**llm_params)
-
-            logger.info(f"Created LLM: {provider_instance.get_provider_name()} - {llm_params.get('model', 'default')}")
-
-            # 캐시에 저장
             if use_cache:
                 cls._llm_cache[cache_key] = llm
-                logger.debug(f"Cached LLM: {cache_key}")
+                logger.debug("Cached LLM: %s", cache_key)
 
             return llm
 
-        except Exception as e:
-            logger.error(f"Failed to create LLM with provider {provider_name}: {e}")
+        except Exception as exc:
+            logger.error("Failed to create LLM with provider %s: %s", provider_name, exc)
 
-            # Fallback to OpenAI if available
+            # 폴백: OpenAI가 사용 가능하면 전환
             if provider_name != "openai" and settings.OPENAI_API_KEY:
                 logger.warning("Falling back to OpenAI provider")
-                fallback_provider = cls._providers["openai"]()
-                return fallback_provider.create_llm(**kwargs)
-
-            raise e
+                fallback = OpenAIProvider()
+                return fallback.create_llm(
+                    model=settings.LLM_MODEL,
+                    temperature=resolved_temperature,
+                    max_tokens=resolved_max_tokens,
+                    **kwargs,
+                )
+            raise
 
     @classmethod
-    def clear_cache(cls):
-        """LLM 캐시 클리어"""
+    def clear_cache(cls) -> None:
+        """LLM 인스턴스 캐시를 비운다."""
         cls._llm_cache.clear()
         logger.info("LLM cache cleared")
 
-
     @classmethod
-    def get_available_providers(cls) -> list[str]:
-        """사용 가능한 provider 목록 반환"""
+    def get_available_providers(cls) -> List[str]:
+        """현재 API 키 설정이 완료된 프로바이더 목록을 반환한다."""
         available = []
-
-        if settings.OPENAI_API_KEY:
-            available.append("openai")
-
-        if settings.ANTHROPIC_API_KEY:
-            available.append("anthropic")
-
-        if settings.GOOGLE_API_KEY:
-            available.append("gemini")
-
+        for name, provider_class in cls._providers.items():
+            try:
+                instance = provider_class()
+                if instance.validate_config():
+                    available.append(name)
+            except (ValueError, ImportError):
+                pass
         return available
-    
+
     @classmethod
     def validate_provider_config(cls, provider: str) -> bool:
-        """Provider 설정 유효성 검사"""
-        try:
-            if provider not in cls._providers:
-                return False
-            
-            provider_class = cls._providers[provider]
-            provider_class()  # API 키 검증을 위한 인스턴스 생성 시도
-            return True
-            
-        except ValueError:
+        """특정 프로바이더 설정 유효성을 검사한다."""
+        if provider not in cls._providers:
             return False
+        try:
+            instance = cls._providers[provider]()
+            return instance.validate_config()
+        except (ValueError, ImportError):
+            return False
+
+    @classmethod
+    def list_provider_models(cls, provider: str) -> List[str]:
+        """특정 프로바이더의 지원 모델 목록을 반환한다."""
+        if provider not in cls._providers:
+            return []
+        try:
+            return cls._providers[provider]().list_models()
+        except (ValueError, ImportError):
+            return []
 
 
 # 전역 LLM Factory 인스턴스
 llm_factory = LLMFactory()
 
 
-# 편의 함수들
+# 편의 함수 (하위 호환성 유지)
 def create_llm(**kwargs) -> BaseLanguageModel:
-    """기본 LLM 생성"""
     return llm_factory.create_llm(**kwargs)
 
-def create_openai_llm(**kwargs) -> ChatOpenAI:
-    """OpenAI LLM 강제 생성"""
+
+def create_openai_llm(**kwargs) -> BaseLanguageModel:
     return llm_factory.create_llm(provider="openai", **kwargs)
 
-def create_anthropic_llm(**kwargs) -> ChatAnthropic:
-    """Anthropic LLM 강제 생성"""
+
+def create_anthropic_llm(**kwargs) -> BaseLanguageModel:
     return llm_factory.create_llm(provider="anthropic", **kwargs)
 
-def create_gemini_llm(**kwargs) -> ChatGoogleGenerativeAI:
-    """Gemini LLM 강제 생성"""
+
+def create_gemini_llm(**kwargs) -> BaseLanguageModel:
     return llm_factory.create_llm(provider="gemini", **kwargs)
 
+
+def create_ollama_llm(**kwargs) -> BaseLanguageModel:
+    """Ollama 로컬 LLM 생성 (langchain-ollama 설치 필요)."""
+    return llm_factory.create_llm(provider="ollama", **kwargs)
+
+
 def get_recommended_models(provider: str) -> dict[str, str]:
-    """Provider별 추천 모델"""
+    """Provider별 추천 모델 (fast / balanced / powerful)."""
     recommendations = {
         "openai": {
             "fast": "gpt-5-mini-2025-08-07",
             "balanced": "gpt-5-2025-08-07",
-            "powerful": "gpt-5-2025-08-07"
+            "powerful": "gpt-5-2025-08-07",
         },
         "anthropic": {
             "fast": "claude-haiku-4-5-20251001",
             "balanced": "claude-sonnet-4-5-20250929",
-            "powerful": "claude-sonnet-4-5-20250929"
+            "powerful": "claude-sonnet-4-6",
         },
         "gemini": {
             "fast": "gemini-2.0-flash-exp",
             "balanced": "gemini-1.5-pro-latest",
-            "powerful": "gemini-1.5-pro-latest"
-        }
+            "powerful": "gemini-1.5-pro-latest",
+        },
+        "ollama": {
+            "fast": "llama3.1:8b",
+            "balanced": "llama3.1:8b",
+            "powerful": "llama3.1:70b",
+        },
     }
-
     return recommendations.get(provider, {})
