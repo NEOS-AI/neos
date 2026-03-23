@@ -3,6 +3,7 @@
 Phase 5 (OpenClaw ModelProvider 플러그인)
 """
 
+import logging
 from typing import Any, List
 
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -10,6 +11,8 @@ from langchain_core.language_models import BaseLanguageModel
 
 from neos.config.settings import settings
 from .base import ModelProviderBase
+
+logger = logging.getLogger(__name__)
 
 
 class GeminiProvider(ModelProviderBase):

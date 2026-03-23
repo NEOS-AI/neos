@@ -65,9 +65,9 @@ class LLMFactory:
         temperature: float,
         **kwargs,
     ) -> str:
-        disable_thinking = kwargs.get("disable_thinking", False)
-        max_tokens = kwargs.get("max_tokens", 0)
-        return f"{provider}:{model}:{temperature}:{disable_thinking}:{max_tokens}"
+        # 모든 kwargs를 키에 포함 — streaming 등 옵션이 다른 인스턴스를 구분
+        extras = sorted((k, str(v)) for k, v in kwargs.items())
+        return f"{provider}:{model}:{temperature}:{extras}"
 
     @classmethod
     def create_llm(
@@ -132,11 +132,23 @@ class LLMFactory:
             return llm
 
         except Exception as exc:
-            logger.error("Failed to create LLM with provider %s: %s", provider_name, exc)
+            logger.error(
+                "Failed to create LLM with provider %s: %s",
+                provider_name,
+                exc,
+                exc_info=True,
+            )
+
+            # Ollama는 명시적 로컬 서비스 — 미설치/미실행 시 fallback 없이 즉시 실패
+            if provider_name == "ollama":
+                raise
 
             # 폴백: OpenAI가 사용 가능하면 전환
             if provider_name != "openai" and settings.OPENAI_API_KEY:
-                logger.warning("Falling back to OpenAI provider")
+                logger.error(
+                    "FALLING BACK to OpenAI from %s — check provider configuration",
+                    provider_name,
+                )
                 fallback = OpenAIProvider()
                 return fallback.create_llm(
                     model=settings.LLM_MODEL,

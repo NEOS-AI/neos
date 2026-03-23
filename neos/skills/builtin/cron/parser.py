@@ -117,16 +117,25 @@ def _parse_daily_time_ko(match: re.Match, text: str, tz: str) -> Optional[Parsed
     )
 
 
+def _normalize_weekday(raw: str) -> str:
+    """요일 문자열 정규화: "월요일" → "월", "tuesday" → "tuesday".
+
+    rstrip("일") 방식의 취약성을 제거하고 명시적 접미사 제거로 대체한다.
+    "일요일" → "일요" → "일" (rstrip 방식은 "일" 단독 입력 시 빈 문자열 반환)
+    """
+    for suffix in ("요일", "요"):
+        if raw.endswith(suffix):
+            return raw[: -len(suffix)]
+    return raw
+
+
 def _parse_weekly_time_ko(match: re.Match, text: str, tz: str) -> Optional[ParsedSchedule]:
-    weekday_str = match.group(1).rstrip("일")  # "월요일" → "월요"
-    # 접미사 처리
-    for key, val in _WEEKDAY_MAP.items():
-        if key in weekday_str or weekday_str in key:
-            weekday = val
-            weekday_label = key
-            break
-    else:
+    raw = match.group(1).lower()
+    key = _normalize_weekday(raw)
+    weekday = _WEEKDAY_MAP.get(key) or _WEEKDAY_MAP.get(raw)
+    if not weekday:
         return None
+    weekday_label = key
 
     hour = int(match.group(2))
     if "오후" in text and hour < 12:

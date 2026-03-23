@@ -33,6 +33,9 @@ class WorkflowNode(Enum):
     # HyperDeep Recursive: ROMA + HyperDeepResearchAgent 통합
     HYPER_DEEP_ORCHESTRATOR = "hyper_deep_orchestrator"
 
+    # Phase 4 (OpenClaw Cron): 자연어 스케줄 등록 노드
+    TASK_SCHEDULING_NODE = "task_scheduling_node"
+
     # result processors
     RESULT_INTEGRATOR = "result_integrator"
     FACT_CHECK = "fact_check"

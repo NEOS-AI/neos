@@ -92,6 +92,12 @@ def init_worker(**kwargs):
     # 데이터베이스 연결은 각 태스크에서 on-demand로 생성
     # (프로세스별 커넥션 풀 관리를 위해)
 
+    # fork 후 부모 프로세스의 LLM 커넥션 풀을 상속하면 race condition 발생 가능
+    # (httpx.AsyncClient 소켓 파일 디스크립터 공유 위험) — 캐시를 비워 새 커넥션 생성 강제
+    from neos.utils.llm_factory import LLMFactory
+    LLMFactory.clear_cache()
+    logger.info("LLM cache cleared after fork")
+
     logger.info("Celery worker ready")
 
 

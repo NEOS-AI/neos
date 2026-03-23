@@ -23,6 +23,18 @@ from ..state import AgentState
 
 logger = logging.getLogger(__name__)
 
+# CR-P6-06: TASK_SCHEDULING AND 조건 — 오탐 방지용 집합 및 헬퍼
+_SCHEDULING_TEMPORAL = {"매일", "매주", "매시간", "매월", "주기적으로", "every", "recurring"}
+_SCHEDULING_ACTION = {"등록", "설정", "알림", "remind", "예약", "cron", "schedule", "등록해줘", "설정해줘"}
+
+
+def _is_scheduling_intent(query: str) -> bool:
+    """시간 표현 AND 등록 동작이 모두 있을 때만 스케줄 인텐트로 분류."""
+    has_temporal = any(t in query for t in _SCHEDULING_TEMPORAL)
+    has_action = any(a in query for a in _SCHEDULING_ACTION)
+    return has_temporal and has_action
+
+
 # LLM 분류용 프롬프트 (valid intent types 포함)
 _VALID_INTENTS = [it.value for it in IntentType]
 
@@ -69,7 +81,13 @@ class QueryClassifier:
             IntentType.TECHNICAL_ANALYSIS.value: ["기술", "technology", "개발", "development", "프로그래밍", "programming"],
             IntentType.COMPLEX_ANALYSIS.value: ["심층", "종합", "포괄적", "전반적", "심도있는", "detailed", "comprehensive", "in-depth"],
             IntentType.DEEP_RESEARCH.value: ["deep research", "심층 조사", "철저히", "깊이있게", "전문적인 분석", "리포트", "보고서", "detailed report", "연구"],
-            IntentType.YOUTUBE_SEARCH.value: ["youtube", "유튜브", "video", "비디오", "영상", "tutorial", "튜토리얼", "watch", "시청"]
+            IntentType.YOUTUBE_SEARCH.value: ["youtube", "유튜브", "video", "비디오", "영상", "tutorial", "튜토리얼", "watch", "시청"],
+            # CR-P6-06: "매" 단독 접두사 제거 — "매출", "매각" 등 오탐 방지
+            # AND 조건 검증은 _classify_intent()의 _is_scheduling_intent() 호출로 처리
+            IntentType.TASK_SCHEDULING.value: [
+                "매일", "매주", "매시간", "매월", "주기적으로", "recurring", "every",
+                "cron", "schedule", "remind",
+            ],
         }
 
         # 복잡한 쿼리 판별을 위한 키워드
@@ -361,6 +379,11 @@ class QueryClassifier:
                 print(f"[DEBUG] High complexity ({complexity_score:.2f}) detected, considering complex_analysis")
                 intent_scores[IntentType.COMPLEX_ANALYSIS.value] = intent_scores.get(IntentType.COMPLEX_ANALYSIS.value, 0) + 2  # 가중치 부여
 
+        # CR-P6-06: TASK_SCHEDULING은 시간 표현 AND 등록 동작이 모두 있을 때만 인정
+        if IntentType.TASK_SCHEDULING.value in intent_scores:
+            if not _is_scheduling_intent(combined_lower):
+                del intent_scores[IntentType.TASK_SCHEDULING.value]
+
         # 가장 높은 점수의 의도 반환
         if intent_scores:
             best_intent = max(intent_scores, key=intent_scores.get)
@@ -373,6 +396,10 @@ class QueryClassifier:
     def _determine_required_agents(self, query: str, intent: str, complexity_score: float = 0.0) -> List[str]:
         """필요한 에이전트 결정 (복잡도 고려)"""
         agents = []
+
+        # 0-0. 스케줄 등록 요청 (최우선 — 워크플로우에서 CronSkill로 직행)
+        if intent == IntentType.TASK_SCHEDULING.value:
+            return []  # graph.py에서 TASK_SCHEDULING 분기가 처리
 
         # 0-0. 간단한 대화인 경우 에이전트 불필요 (최우선)
         if intent == IntentType.SIMPLE.value:

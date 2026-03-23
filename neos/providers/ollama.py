@@ -42,19 +42,34 @@ class OllamaProvider(ModelProviderBase):
     def get_provider_name(self) -> str:
         return "ollama"
 
-    def list_models(self) -> List[str]:
-        """Ollama에서 실행 가능한 인기 오픈소스 모델 목록.
+    _DEFAULT_MODELS = [
+        "llama3.1:8b",
+        "llama3.1:70b",
+        "mistral:7b",
+        "gemma2:9b",
+        "qwen2.5:7b",
+        "deepseek-r1:8b",
+    ]
 
-        실제 설치된 모델은 `ollama list` 명령으로 확인.
+    def list_models(self) -> List[str]:
+        """실제 Ollama 서버에 설치된 모델 목록 조회.
+
+        서버에 연결할 수 없거나 API 호출이 실패하면 기본 추천 목록을 반환한다.
         """
-        return [
-            "llama3.1:8b",
-            "llama3.1:70b",
-            "mistral:7b",
-            "gemma2:9b",
-            "qwen2.5:7b",
-            "deepseek-r1:8b",
-        ]
+        try:
+            import httpx
+
+            resp = httpx.get(
+                f"{settings.OLLAMA_BASE_URL}/api/tags",
+                timeout=3.0,
+            )
+            resp.raise_for_status()
+            models = [m["name"] for m in resp.json().get("models", [])]
+            if models:
+                return models
+        except Exception:
+            logger.debug("Ollama API unreachable, returning default model list")
+        return self._DEFAULT_MODELS
 
     def validate_config(self) -> bool:
         return bool(settings.OLLAMA_BASE_URL)

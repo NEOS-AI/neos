@@ -11,6 +11,7 @@ class ExportFormat(str, Enum):
     MARKDOWN = "markdown"
     HTML = "html"
     PDF = "pdf"
+    CANVAS = "canvas"
 
 
 @dataclass

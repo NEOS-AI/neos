@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, Float, ForeignKey, ARRAY, Boolean, Index, ForeignKeyConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from pgvector.sqlalchemy import Vector
 import uuid
 
@@ -51,8 +51,8 @@ class User(Base):
     billing_customer_id = Column(String(255), nullable=True)  # Stripe Customer ID
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     last_login = Column(TIMESTAMP, nullable=True)
 
     # 사용자 설정
@@ -79,7 +79,7 @@ class QueryHistory(Base):
     response_quality_score = Column(Float, default=0.0)
     execution_time_ms = Column(Integer)
     tools_used = Column(ARRAY(String))
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # Phase 1 (OpenClaw Multi-Channel Adapter): 요청 채널 출처 추적
     channel_source = Column(String(50), default="api")           # "api" | "telegram" | "discord" | "slack"
@@ -99,7 +99,7 @@ class RelatedQuery(Base):
     related_query_id = Column(Integer, ForeignKey("query_history.id"))
     similarity_score = Column(Float)
     relation_type = Column(String(50))  # 'semantic', 'sequential', 'collaborative'
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 class TrendingQuery(Base):
     __tablename__ = "trending_queries"
@@ -108,7 +108,7 @@ class TrendingQuery(Base):
     query_text = Column(Text, nullable=False)
     query_vector = Column(Vector(1536))
     search_count = Column(Integer, default=1)
-    last_searched = Column(TIMESTAMP, default=datetime.utcnow)
+    last_searched = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     time_period = Column(String(20))  # 'hourly', 'daily', 'weekly'
     category = Column(String(100))
 
@@ -123,7 +123,7 @@ class SearchSession(Base):
     session_intent = Column(String(100))
     total_queries = Column(Integer, default=0)
     session_duration_ms = Column(Integer)
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     ended_at = Column(TIMESTAMP)
 
     # 관계
@@ -181,8 +181,8 @@ class Document(Base):
     extra_metadata = Column(JSONB, default=dict)
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 관계
     user = relationship("User")
@@ -226,7 +226,7 @@ class DocumentChunk(Base):
     extra_metadata = Column(JSONB, default=dict)
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 관계
     document = relationship("Document", back_populates="chunks")
@@ -262,8 +262,8 @@ class KnowledgeGraph(Base):
     importance_score = Column(Float, default=0.0)
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 관계
     document = relationship("Document", back_populates="knowledge_graph")
@@ -304,8 +304,8 @@ class APIKey(Base):
     key_metadata = Column(JSONB, default=dict)
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 관계
     user = relationship("User", back_populates="api_keys")
@@ -341,7 +341,7 @@ class RefreshToken(Base):
     expires_at = Column(TIMESTAMP, nullable=False)
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     used_at = Column(TIMESTAMP, nullable=True)
     revoked_at = Column(TIMESTAMP, nullable=True)
 
@@ -372,7 +372,7 @@ class UserOAuthAccount(Base):
     profile_data = Column(JSONB, default=dict)  # {name, picture, email, locale}
 
     # 연결 정보
-    linked_at = Column(TIMESTAMP, default=datetime.utcnow)
+    linked_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     last_used_at = Column(TIMESTAMP, nullable=True)
 
     # 관계
@@ -415,8 +415,8 @@ class Organization(Base):
     require_approval = Column(Boolean, default=True)  # 관리자 승인 필요
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 관계
     members = relationship("User", back_populates="organization")
@@ -437,7 +437,7 @@ class OrganizationAdmin(Base):
     user_id = Column(String(255), ForeignKey("users.user_id", ondelete="CASCADE"))
 
     role = Column(String(50), default="admin")  # admin, owner
-    granted_at = Column(TIMESTAMP, default=datetime.utcnow)
+    granted_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 관계
     organization = relationship("Organization", back_populates="admins")
@@ -492,8 +492,8 @@ class QueryCacheEntry(Base):
     cache_metadata = Column(JSONB, default=dict)  # 추가 메타데이터
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 인덱스
     __table_args__ = (
@@ -538,8 +538,8 @@ class CacheStatistics(Base):
     storage_size_bytes = Column(Integer, default=0)  # 저장 용량 (바이트)
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 인덱스
     __table_args__ = (
@@ -586,7 +586,7 @@ class ArtifactDocument(Base):
 
     # 프론트엔드 DB는 camelCase를 사용하므로 매핑 필요
     id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
-    created_at = Column("createdAt", TIMESTAMP, primary_key=True, nullable=False, default=datetime.utcnow)
+    created_at = Column("createdAt", TIMESTAMP, primary_key=True, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     title = Column(Text, nullable=False)
     content = Column(Text, nullable=True)
     kind = Column(String(20), nullable=False, default="text")  # text, code, image, sheet
@@ -614,7 +614,7 @@ class Suggestion(Base):
     description = Column(Text, nullable=True)
     is_resolved = Column("isResolved", Boolean, nullable=False, default=False)
     user_id = Column("userId", String(255), nullable=False)  # 백엔드 User.user_id (String)와 일치하도록 변경
-    created_at = Column("createdAt", TIMESTAMP, nullable=False, default=datetime.utcnow)
+    created_at = Column("createdAt", TIMESTAMP, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 복합 외래키는 유지 (Document 테이블 참조)
     __table_args__ = (
@@ -651,8 +651,8 @@ class ToolRegistry(Base):
     # 메타데이터
     usage_count = Column(Integer, default=0)
     last_used_at = Column(TIMESTAMP(timezone=True))
-    created_at = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+    created_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 
 # ============================================================================
@@ -671,7 +671,7 @@ class ToolApprovalAllowlist(Base):
     user_id = Column(String(255), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
     skill_name = Column(String(100), nullable=False)    # "api_call", "file_processing" 등
     auto_approved = Column(Boolean, default=True)       # True=자동 승인, False=항상 확인
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 관계
     user = relationship("User")
@@ -711,8 +711,8 @@ class ScheduledTask(Base):
     last_error = Column(Text, nullable=True)              # 마지막 실패 오류 메시지
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 관계
     user = relationship("User")

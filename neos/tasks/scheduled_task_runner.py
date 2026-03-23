@@ -31,56 +31,60 @@ def poll_and_run_scheduled_tasks(self):
     """매 1분마다 실행 — next_run_at이 만료된 활성 태스크를 워크플로우에 제출.
 
     Celery Beat beat_schedule에 crontab(minute="*")으로 등록한다.
-    동기 SQLAlchemy 세션을 사용하는 이유: Celery 워커는 asyncio 이벤트 루프가 없음.
     """
-    from neos.database.connection import SessionLocal  # 동기 세션
+    try:
+        asyncio.run(_poll_async())
+    except Exception as exc:
+        logger.error("poll_and_run_scheduled_tasks failed: %s", exc, exc_info=True)
+        raise self.retry(exc=exc)
+
+
+async def _poll_async():
+    """비동기 폴러: next_run_at이 만료된 태스크를 조회하고 워크플로우 태스크 제출."""
+    from neos.database.connection import get_session_ctx
     from neos.database.models import ScheduledTask
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)  # DB는 naive UTC 저장
 
-    try:
-        with SessionLocal() as db:
-            stmt = (
-                select(ScheduledTask)
-                .where(
-                    ScheduledTask.is_active == True,
-                    ScheduledTask.next_run_at <= now,
-                )
-                .with_for_update(skip_locked=True)  # 다중 워커 중복 실행 방지
+    async with get_session_ctx() as db:
+        stmt = (
+            select(ScheduledTask)
+            .where(
+                ScheduledTask.is_active == True,
+                ScheduledTask.next_run_at <= now,
             )
-            tasks = db.scalars(stmt).all()
+            .with_for_update(skip_locked=True)  # 다중 워커 중복 실행 방지
+        )
+        result = await db.execute(stmt)
+        tasks = result.scalars().all()
 
-            dispatched = 0
-            for task in tasks:
-                try:
-                    # 워크플로우 비동기 태스크 제출
-                    run_workflow_task.delay(str(task.id))
+        dispatched = 0
+        for task in tasks:
+            try:
+                # 워크플로우 비동기 태스크 제출
+                run_workflow_task.delay(str(task.id))
 
-                    # 다음 실행 시각 계산
-                    cron = croniter(task.cron_expression, now)
-                    task.next_run_at = cron.get_next(datetime)
-                    task.last_run_at = now
-                    task.run_count = (task.run_count or 0) + 1
-                    task.last_error = None
-                    dispatched += 1
+                # 다음 실행 시각 계산
+                cron = croniter(task.cron_expression, now)
+                task.next_run_at = cron.get_next(datetime)
+                task.last_run_at = now
+                task.run_count = (task.run_count or 0) + 1
+                task.last_error = None
+                dispatched += 1
 
-                except Exception as exc:
-                    logger.error(
-                        "Failed to dispatch scheduled task %s: %s",
-                        task.id,
-                        exc,
-                        exc_info=True,
-                    )
-                    task.last_error = str(exc)[:500]
+            except Exception as exc:
+                logger.error(
+                    "Failed to dispatch scheduled task %s: %s",
+                    task.id,
+                    exc,
+                    exc_info=True,
+                )
+                task.last_error = str(exc)[:500]
 
-            db.commit()
+        await db.commit()
 
-        if dispatched:
-            logger.info("Dispatched %d scheduled task(s)", dispatched)
-
-    except Exception as exc:
-        logger.error("poll_and_run_scheduled_tasks failed: %s", exc, exc_info=True)
-        raise self.retry(exc=exc)
+    if dispatched:
+        logger.info("Dispatched %d scheduled task(s)", dispatched)
 
 
 @shared_task(
@@ -96,63 +100,73 @@ def run_workflow_task(self, task_id: str):
 
     채널 어댑터가 활성화된 경우 결과를 해당 채널로 전송한다.
     """
-    from neos.database.connection import SessionLocal
-    from neos.database.models import ScheduledTask
-
     try:
-        with SessionLocal() as db:
-            task = db.get(ScheduledTask, uuid.UUID(task_id))
-            if not task or not task.is_active:
-                logger.warning("Scheduled task %s not found or inactive, skipping", task_id)
-                return
-
-            query = task.query
-            user_id = task.user_id
-            channel_type = task.channel_type
-            channel_id = task.channel_id
-
-        logger.info(
-            "Running scheduled task %s for user %s: %s",
-            task_id,
-            user_id,
-            query[:80],
-        )
-
-        # 비동기 워크플로우 실행을 동기 Celery 태스크 내에서 호출
-        result = asyncio.run(_run_workflow(query, user_id))
-
-        # 채널 어댑터 결과 전송 (채널이 활성화된 경우)
-        if channel_type != "api" and channel_id:
-            asyncio.run(_send_to_channel(channel_type, channel_id, result))
-
+        asyncio.run(_run_workflow_task_async(task_id))
     except Exception as exc:
         logger.error("run_workflow_task %s failed: %s", task_id, exc, exc_info=True)
         # DB에 오류 기록
         try:
-            with SessionLocal() as db:
-                task = db.get(ScheduledTask, uuid.UUID(task_id))
-                if task:
-                    task.last_error = str(exc)[:500]
-                    db.commit()
+            asyncio.run(_record_task_error(task_id, str(exc)[:500]))
         except Exception:
             pass
         raise self.retry(exc=exc)
 
 
+async def _run_workflow_task_async(task_id: str) -> None:
+    """태스크 조회, 워크플로우 실행, 채널 전송을 모두 비동기로 처리."""
+    from neos.database.connection import get_session_ctx
+    from neos.database.models import ScheduledTask
+
+    async with get_session_ctx() as db:
+        task = await db.get(ScheduledTask, uuid.UUID(task_id))
+        if not task or not task.is_active:
+            logger.warning("Scheduled task %s not found or inactive, skipping", task_id)
+            return
+
+        query = task.query
+        user_id = task.user_id
+        channel_type = task.channel_type
+        channel_id = task.channel_id
+
+    logger.info(
+        "Running scheduled task %s for user %s: %s",
+        task_id,
+        user_id,
+        query[:80],
+    )
+
+    result = await _run_workflow(query, str(user_id))
+
+    # 채널 어댑터 결과 전송 (채널이 활성화된 경우)
+    if channel_type != "api" and channel_id:
+        await _send_to_channel(channel_type, channel_id, result)
+
+
+async def _record_task_error(task_id: str, error_msg: str) -> None:
+    """워크플로우 실패 시 DB에 오류 메시지를 기록."""
+    from neos.database.connection import get_session_ctx
+    from neos.database.models import ScheduledTask
+
+    async with get_session_ctx() as db:
+        task = await db.get(ScheduledTask, uuid.UUID(task_id))
+        if task:
+            task.last_error = error_msg
+            await db.commit()
+
+
 async def _run_workflow(query: str, user_id: str) -> str:
     """NEOS 워크플로우를 직접 호출하여 응답 반환."""
-    from neos.workflow.graph import build_workflow
+    from neos.workflow.graph import multi_agent_workflow
 
-    workflow = build_workflow()
     state = {
-        "original_query": query,
+        "query": query,            # execute_workflow가 기대하는 필수 키
         "user_id": user_id,
         "session_id": f"scheduled_{uuid.uuid4().hex[:8]}",
         "channel_source": "scheduler",
     }
 
     try:
-        result_state = await workflow.ainvoke(state)
+        result_state = await multi_agent_workflow.execute_workflow(state)
         return result_state.get("final_response", "")
     except Exception as exc:
         logger.error("Workflow execution failed for scheduled task: %s", exc)

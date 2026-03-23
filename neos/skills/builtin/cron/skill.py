@@ -186,7 +186,7 @@ async def _save_scheduled_task(
     from neos.database.connection import get_async_session
     from neos.database.models import ScheduledTask
 
-    now = datetime.now(tz=None)  # naive UTC
+    now = datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC — 폴러와 타임존 통일
     cron = croniter(cron_expression, now)
     next_run_at = cron.get_next(datetime)
 

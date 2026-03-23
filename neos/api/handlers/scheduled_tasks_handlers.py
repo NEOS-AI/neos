@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -66,6 +66,7 @@ class ScheduledTaskResponse(BaseModel):
     next_run_at: datetime
     run_count: int
     last_error: Optional[str]
+    schedule_description: Optional[str] = None  # 파싱된 자연어 설명 ("매일 오전 9시" 등)
     created_at: datetime
     updated_at: datetime
 
@@ -115,8 +116,8 @@ async def create_scheduled_task(
         cron_expr = parsed.cron_expression
         description = parsed.description
 
-    # 다음 실행 시각 계산
-    now = datetime.utcnow()
+    # 다음 실행 시각 계산 (naive UTC — 폴러와 타임존 통일)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     next_run_at = croniter(cron_expr, now).get_next(datetime)
 
     async with get_async_session() as session:
@@ -211,8 +212,8 @@ async def update_scheduled_task(
                     detail=f"유효하지 않은 cron 표현식: {payload.cron_expression}",
                 )
             task.cron_expression = payload.cron_expression
-            # 다음 실행 시각 재계산
-            now = datetime.utcnow()
+            # 다음 실행 시각 재계산 (naive UTC)
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             task.next_run_at = croniter(payload.cron_expression, now).get_next(datetime)
 
         await session.commit()
@@ -281,6 +282,7 @@ def _to_response(task: ScheduledTask, description: str = "") -> ScheduledTaskRes
         next_run_at=task.next_run_at,
         run_count=task.run_count or 0,
         last_error=task.last_error,
+        schedule_description=description or None,
         created_at=task.created_at,
         updated_at=task.updated_at,
     )

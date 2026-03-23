@@ -37,6 +37,16 @@ from .telemetry import trace_workflow_node, add_span_event, set_span_attributes
 
 logger = logging.getLogger(__name__)
 
+# CR-P6-11: 우선순위 라우팅 단일 테이블 — 향후 CANVAS_RENDERING 등 추가 시 여기만 수정
+_PRIORITY_ROUTING_MAP: dict[str, str] = {
+    IntentType.TASK_SCHEDULING.value: "task_scheduling",
+}
+
+
+def _get_priority_routing(state: AgentState) -> str | None:
+    """최우선 라우팅 경로 반환. 해당 없으면 None."""
+    return _PRIORITY_ROUTING_MAP.get(state.get("query_intent", ""))
+
 
 class MultiAgentWorkflow:
     """
@@ -226,6 +236,9 @@ class MultiAgentWorkflow:
         if settings.EXECUTION_APPROVAL_ENABLED:
             workflow.add_node(WorkflowNode.EXECUTION_APPROVAL.value, self._execution_approval_node)
 
+        # Phase 4 (OpenClaw Cron): 자연어 스케줄 등록 노드
+        workflow.add_node(WorkflowNode.TASK_SCHEDULING_NODE.value, self._handle_task_scheduling_node)
+
         # 엣지 정의
         # 1. START → refinement_checker (가장 먼저 쿼리 개선 필요 여부 체크)
         workflow.add_edge(START, WorkflowNode.REFINEMENT_CHECKER.value)
@@ -275,6 +288,8 @@ class MultiAgentWorkflow:
             # Phase 2: 승인 대기 경로 (최우선 — _should_use_recursive_agent에서 먼저 체크)
             if settings.EXECUTION_APPROVAL_ENABLED:
                 _routing_map["needs_approval"] = WorkflowNode.EXECUTION_APPROVAL.value
+            # Phase 4: 스케줄 등록 경로
+            _routing_map["task_scheduling"] = WorkflowNode.TASK_SCHEDULING_NODE.value
 
             workflow.add_conditional_edges(
                 WorkflowNode.SKILL_TOOL_SELECTOR.value,
@@ -293,9 +308,13 @@ class MultiAgentWorkflow:
                 self._should_skip_orchestrators,
                 {
                     WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,  # 간단한 대화 -> 바로 응답
-                    WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value  # Phase 2.5: 가설 생성 → 검색
+                    WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,  # Phase 2.5: 가설 생성 → 검색
+                    "task_scheduling": WorkflowNode.TASK_SCHEDULING_NODE.value,  # Phase 4: 스케줄 등록
                 }
             )
+
+        # Phase 4 (OpenClaw Cron): TASK_SCHEDULING_NODE → 바로 응답 생성
+        workflow.add_edge(WorkflowNode.TASK_SCHEDULING_NODE.value, WorkflowNode.RESP_GENERATOR.value)
 
         # Phase 2 (OpenClaw Execution Approval): EXECUTION_APPROVAL → 분기
         # approved → 오케스트레이터 경로, rejected → 응답 생성으로 바로 이동
@@ -598,6 +617,39 @@ class MultiAgentWorkflow:
             return {"pending_approvals": [], "approval_decision": None}
         return await self.approval_processor.process(state)
 
+    async def _handle_task_scheduling_node(self, state: AgentState) -> Dict[str, Any]:
+        """Phase 4 (OpenClaw Cron): 자연어 스케줄 등록 노드.
+
+        IntentType.TASK_SCHEDULING으로 분류된 쿼리를 CronSkill로 위임한다.
+        결과(final_response)를 설정하면 RESP_GENERATOR가 그대로 반환한다.
+        """
+        from neos.skills.builtin.cron.skill import CronSkill
+
+        query = state.get("original_query", "")
+        user_id = state.get("user_id", "")
+        channel_type = state.get("channel_type", "api") or "api"
+        channel_id = state.get("channel_id")
+
+        logger.info("[TaskScheduling] Handling schedule registration: query=%s", query[:80])
+
+        try:
+            cron_skill = CronSkill()
+            result = await cron_skill.execute(
+                query=query,
+                user_id=user_id,
+                channel_type=channel_type,
+                channel_id=channel_id,
+            )
+            if result.success:
+                final_response = result.data.get("message", "스케줄이 등록되었습니다.")
+            else:
+                final_response = f"스케줄 등록에 실패했습니다: {result.error}"
+        except Exception as exc:
+            logger.error("[TaskScheduling] CronSkill execution failed: %s", exc, exc_info=True)
+            final_response = "스케줄 등록 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+
+        return {"final_response": final_response}
+
     def _should_continue_after_approval(self, state: AgentState) -> str:
         """EXECUTION_APPROVAL 노드 이후 라우팅 함수.
 
@@ -699,6 +751,12 @@ class MultiAgentWorkflow:
             WorkflowPathway.USE_ORCHESTRATORS.value: 기존 오케스트레이터 경로
             WorkflowPathway.SKIP_ORCHESTRATORS.value: 바로 응답 생성
         """
+        # 0순위: 최우선 라우팅 (CR-P6-11: _PRIORITY_ROUTING_MAP 단일 지점 관리)
+        priority = _get_priority_routing(state)
+        if priority:
+            logger.info("[PriorityRouting] intent=%s → %s", state.get("query_intent"), priority)
+            return priority
+
         # 0순위: Phase 2 (OpenClaw Execution Approval) — 승인 대기 중이면 즉시 라우팅
         # pending_approvals가 있고 approval_decision이 None이면 interrupt_before 발동
         if settings.EXECUTION_APPROVAL_ENABLED:
@@ -834,6 +892,11 @@ class MultiAgentWorkflow:
         query_intent = state.get("query_intent", "")
         query_classification = state.get("query_classification", {})
         complexity_score = query_classification.get("complexity_score", 0.0)
+
+        # 최우선 라우팅 (CR-P6-11: _PRIORITY_ROUTING_MAP 단일 지점 관리)
+        priority = _get_priority_routing(state)
+        if priority:
+            return priority
 
         # 사용할 쿼리 결정 (refined_query가 있으면 그것을 사용)
         query = state.get("refined_query", state.get("original_query", ""))
