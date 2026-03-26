@@ -111,6 +111,10 @@ class UIFrameGenerator:
             logger.warning("[UIFrameGenerator] Pydantic validation failed: %s", e)
             validated = UIFrame(**self._fallback_frame(query, session_id))
 
+        # timeout_seconds를 설정값으로 동기화 (LLM은 이 필드를 생성하지 않음)
+        # DB expires_at과 클라이언트 표시값 일치를 보장한다.
+        validated.timeout_seconds = settings.A2UI_FRAME_TIMEOUT
+
         validated_dict = validated.model_dump()
 
         # UIFrameSession DB 저장 (submit 시 원본 쿼리 복원용)
