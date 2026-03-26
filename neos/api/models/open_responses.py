@@ -9,7 +9,7 @@ enabling interoperability between different AI providers.
 """
 
 from typing import Optional, List, Dict, Any, Literal, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from enum import Enum
 import time
 
@@ -300,6 +300,19 @@ class NeosUIFrameEvent(BaseModel):
     """
     type: Literal["neos:ui_frame"] = "neos:ui_frame"
     ui_frame: Dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_ui_frame_schema(self) -> "NeosUIFrameEvent":
+        """ui_frame 데이터가 UIFrame 스키마를 만족하는지 런타임 검증.
+
+        순환 임포트를 피하기 위해 지연 임포트를 사용한다.
+        """
+        from neos.api.models.ui_components import UIFrame  # noqa: PLC0415
+        try:
+            UIFrame.model_validate(self.ui_frame)
+        except Exception as e:
+            raise ValueError(f"ui_frame schema validation failed: {e}") from e
+        return self
 
 
 # ============================================================================
