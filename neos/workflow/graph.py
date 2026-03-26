@@ -318,17 +318,20 @@ class MultiAgentWorkflow:
                 workflow.add_node(WorkflowNode.UI_FRAME_GENERATOR.value, self._ui_frame_generator_node)
                 workflow.add_edge(WorkflowNode.UI_FRAME_GENERATOR.value, END)
         else:
+            # A2UI_ENABLED에 따라 라우팅 맵과 노드 등록을 동시에 조건부 처리
+            # (노드 미등록 상태에서 라우팅 맵에 키만 있으면 LangGraph 경고 발생)
+            _else_routing = {
+                WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
+                WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
+                "task_scheduling": WorkflowNode.TASK_SCHEDULING_NODE.value,
+            }
+            if settings.A2UI_ENABLED:
+                _else_routing["ui_frame"] = WorkflowNode.UI_FRAME_GENERATOR.value
             workflow.add_conditional_edges(
                 WorkflowNode.SKILL_TOOL_SELECTOR.value,
                 self._should_skip_orchestrators,
-                {
-                    WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,  # 간단한 대화 -> 바로 응답
-                    WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,  # Phase 2.5: 가설 생성 → 검색
-                    "task_scheduling": WorkflowNode.TASK_SCHEDULING_NODE.value,  # Phase 4: 스케줄 등록
-                    "ui_frame": WorkflowNode.UI_FRAME_GENERATOR.value,  # Phase 8: A2UI 단락 경로
-                }
+                _else_routing,
             )
-            # Phase 8: else 브랜치에서도 A2UI 노드 등록
             if settings.A2UI_ENABLED:
                 workflow.add_node(WorkflowNode.UI_FRAME_GENERATOR.value, self._ui_frame_generator_node)
                 workflow.add_edge(WorkflowNode.UI_FRAME_GENERATOR.value, END)
