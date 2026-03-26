@@ -45,6 +45,7 @@ export function UIFrameForm({ uiFrame, onSubmitted }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resultText, setResultText] = useState<string | null>(null);
 
   const setValue = (id: string, value: unknown) => {
     setValues((prev) => ({ ...prev, [id]: value }));
@@ -78,7 +79,7 @@ export function UIFrameForm({ uiFrame, onSubmitted }: Props) {
     setSubmitting(true);
 
     try {
-      await submitUIFrameClient(
+      const response = await submitUIFrameClient(
         uiFrame.frame_id,
         uiFrame.session_id ?? "",
         values as Record<string, unknown>,
@@ -86,6 +87,38 @@ export function UIFrameForm({ uiFrame, onSubmitted }: Props) {
       );
       setSubmitted(true);
       onSubmitted?.();
+
+      // SSE 스트림 읽어 최종 워크플로우 응답 추출
+      const reader = response.body?.getReader();
+      if (reader) {
+        const decoder = new TextDecoder();
+        let buffer = "";
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+            for (const line of lines) {
+              if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
+              try {
+                const parsed = JSON.parse(line.slice(6));
+                if (
+                  parsed.event === "workflow_complete" &&
+                  parsed.data?.final_response
+                ) {
+                  setResultText(parsed.data.final_response);
+                }
+              } catch {
+                // SSE 파싱 오류 — 무시하고 계속
+              }
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "제출 중 오류가 발생했습니다.");
     } finally {
@@ -95,9 +128,16 @@ export function UIFrameForm({ uiFrame, onSubmitted }: Props) {
 
   if (submitted) {
     return (
-      <p className="text-sm text-muted-foreground">
-        제출이 완료되었습니다. 잠시 후 응답을 확인하세요.
-      </p>
+      <div className="space-y-2">
+        <p className="text-sm text-muted-foreground">제출이 완료되었습니다.</p>
+        {resultText ? (
+          <p className="text-sm">{resultText}</p>
+        ) : (
+          <p className="text-xs text-muted-foreground animate-pulse">
+            응답을 기다리는 중...
+          </p>
+        )}
+      </div>
     );
   }
 
