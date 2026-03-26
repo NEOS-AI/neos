@@ -287,6 +287,18 @@ class WorkflowStreamCallback(WorkflowEventHandler):
         )
         await self.event_queue.put(event)
 
+    async def on_ui_frame(self, ui_frame: dict) -> None:
+        """Phase 8 (A2UI): UIFrameGenerator 노드에서 UIFrame 생성 시 SSE 이벤트 발행.
+
+        클라이언트는 "ui_frame" 이벤트 수신 시 UIFrameRenderer로 폼을 렌더링하고,
+        사용자 제출 후 POST /api/v1/ui/submit을 호출해야 한다.
+        """
+        event = self._create_event(
+            event_type=WorkflowStreamEventType.UI_FRAME,
+            data={"ui_frame": ui_frame},
+        )
+        await self.event_queue.put(event)
+
     # ============================================================================
     # HDR (HyperDeep Research) Phase 이벤트 메서드들 — OpenResponses 브릿지
     # ============================================================================

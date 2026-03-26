@@ -291,6 +291,15 @@ export function adaptLegacyEvent(
       break;
     }
 
+    case "ui_frame": {
+      // Phase 8 (A2UI): Convert legacy ui_frame to neos:ui_frame
+      events.push({
+        type: "neos:ui_frame",
+        ui_frame: (event as any).data?.ui_frame || (event as any).ui_frame || {},
+      });
+      break;
+    }
+
     default:
       // Unknown event type - pass through as-is (for forward compatibility)
       console.warn("Unknown legacy event type:", (event as any).type);
@@ -366,6 +375,7 @@ export function detectEventFormat(
     "workflow_node_start",
     "workflow_node_complete",
     "workflow_progress",
+    "ui_frame",  // Phase 8 (A2UI)
   ];
 
   if (legacyTypes.includes(eventType)) {

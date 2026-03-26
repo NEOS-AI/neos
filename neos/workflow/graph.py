@@ -86,6 +86,13 @@ class MultiAgentWorkflow:
             from neos.workflow.processors.approval_processor import ApprovalProcessor
             self.approval_processor = ApprovalProcessor()
             logger.info("[MultiAgentWorkflow] ApprovalProcessor initialized (EXECUTION_APPROVAL_ENABLED)")
+
+        # Phase 8 (OpenClaw A2UI): UIFrameGenerator (피처 플래그로 격리)
+        self.ui_frame_generator = None
+        if settings.A2UI_ENABLED:
+            from neos.workflow.processors.ui_frame_generator import UIFrameGenerator
+            self.ui_frame_generator = UIFrameGenerator()
+            logger.info("[MultiAgentWorkflow] UIFrameGenerator initialized (A2UI_ENABLED)")
         self.hypothesis_manager = HypothesisManager()  # Phase 2.5
         self.research_replanner = ResearchReplanner()  # Phase 2.4
 
@@ -275,8 +282,9 @@ class MultiAgentWorkflow:
         workflow.add_edge(WorkflowNode.QUERY_CLS.value, WorkflowNode.SKILL_TOOL_SELECTOR.value)
 
         # 조건부 분기: 도구/에이전트가 필요 없으면 orchestrator 건너뛰고 바로 응답 생성
-        # ROMA 또는 HyperDeep 활성화 시 재귀 에이전트 경로 추가
-        if settings.RECURSIVE_AGENT_ENABLED or settings.HYPER_DEEP_AGENT_ENABLED or settings.EXECUTION_APPROVAL_ENABLED:
+        # ROMA / HyperDeep / Approval / A2UI 활성화 시 확장 경로 추가
+        if (settings.RECURSIVE_AGENT_ENABLED or settings.HYPER_DEEP_AGENT_ENABLED
+                or settings.EXECUTION_APPROVAL_ENABLED or settings.A2UI_ENABLED):
             _routing_map = {
                 WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
                 WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
@@ -290,6 +298,9 @@ class MultiAgentWorkflow:
                 _routing_map["needs_approval"] = WorkflowNode.EXECUTION_APPROVAL.value
             # Phase 4: 스케줄 등록 경로
             _routing_map["task_scheduling"] = WorkflowNode.TASK_SCHEDULING_NODE.value
+            # Phase 8: A2UI — UI 폼 생성 단락 경로
+            if settings.A2UI_ENABLED:
+                _routing_map["ui_frame"] = WorkflowNode.UI_FRAME_GENERATOR.value
 
             workflow.add_conditional_edges(
                 WorkflowNode.SKILL_TOOL_SELECTOR.value,
@@ -302,6 +313,10 @@ class MultiAgentWorkflow:
             if settings.HYPER_DEEP_AGENT_ENABLED:
                 # HYPER_DEEP_ORCHESTRATOR → RESULT_INTEGRATOR (결과 통합 후 정상 파이프라인 합류)
                 workflow.add_edge(WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
+            # Phase 8: UI_FRAME_GENERATOR 노드 등록 + END 단락 경로
+            if settings.A2UI_ENABLED:
+                workflow.add_node(WorkflowNode.UI_FRAME_GENERATOR.value, self._ui_frame_generator_node)
+                workflow.add_edge(WorkflowNode.UI_FRAME_GENERATOR.value, END)
         else:
             workflow.add_conditional_edges(
                 WorkflowNode.SKILL_TOOL_SELECTOR.value,
@@ -310,8 +325,13 @@ class MultiAgentWorkflow:
                     WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,  # 간단한 대화 -> 바로 응답
                     WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,  # Phase 2.5: 가설 생성 → 검색
                     "task_scheduling": WorkflowNode.TASK_SCHEDULING_NODE.value,  # Phase 4: 스케줄 등록
+                    "ui_frame": WorkflowNode.UI_FRAME_GENERATOR.value,  # Phase 8: A2UI 단락 경로
                 }
             )
+            # Phase 8: else 브랜치에서도 A2UI 노드 등록
+            if settings.A2UI_ENABLED:
+                workflow.add_node(WorkflowNode.UI_FRAME_GENERATOR.value, self._ui_frame_generator_node)
+                workflow.add_edge(WorkflowNode.UI_FRAME_GENERATOR.value, END)
 
         # Phase 4 (OpenClaw Cron): TASK_SCHEDULING_NODE → 바로 응답 생성
         workflow.add_edge(WorkflowNode.TASK_SCHEDULING_NODE.value, WorkflowNode.RESP_GENERATOR.value)
@@ -617,6 +637,17 @@ class MultiAgentWorkflow:
             return {"pending_approvals": [], "approval_decision": None}
         return await self.approval_processor.process(state)
 
+    async def _ui_frame_generator_node(self, state: AgentState) -> Dict[str, Any]:
+        """Phase 8 (OpenClaw A2UI): UIFrame 생성 노드 래퍼.
+
+        QueryClassifier가 needs_ui=True로 표시한 쿼리에 대해 동적 UI 컴포넌트를 생성한다.
+        UI_FRAME_GENERATOR → END 단락 경로 (research 파이프라인 우회).
+        """
+        if self.ui_frame_generator is None:
+            logger.error("[UIFrameGeneratorNode] UIFrameGenerator is not initialized")
+            return {"needs_ui": False}
+        return await self.ui_frame_generator.generate(state)
+
     async def _handle_task_scheduling_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 4 (OpenClaw Cron): 자연어 스케줄 등록 노드.
 
@@ -751,13 +782,19 @@ class MultiAgentWorkflow:
             WorkflowPathway.USE_ORCHESTRATORS.value: 기존 오케스트레이터 경로
             WorkflowPathway.SKIP_ORCHESTRATORS.value: 바로 응답 생성
         """
-        # 0순위: 최우선 라우팅 (CR-P6-11: _PRIORITY_ROUTING_MAP 단일 지점 관리)
+        # 0-A순위: Phase 8 (A2UI) — needs_ui 플래그 최우선 체크 (flag 기반, _PRIORITY_ROUTING_MAP 이전)
+        if settings.A2UI_ENABLED:
+            if state.get("needs_ui") and not state.get("ui_submission"):
+                logger.info("[A2UI] needs_ui=True, no ui_submission → ui_frame_generator")
+                return "ui_frame"
+
+        # 0-B순위: 최우선 라우팅 (CR-P6-11: _PRIORITY_ROUTING_MAP 단일 지점 관리)
         priority = _get_priority_routing(state)
         if priority:
             logger.info("[PriorityRouting] intent=%s → %s", state.get("query_intent"), priority)
             return priority
 
-        # 0순위: Phase 2 (OpenClaw Execution Approval) — 승인 대기 중이면 즉시 라우팅
+        # 0-C순위: Phase 2 (OpenClaw Execution Approval) — 승인 대기 중이면 즉시 라우팅
         # pending_approvals가 있고 approval_decision이 None이면 interrupt_before 발동
         if settings.EXECUTION_APPROVAL_ENABLED:
             if state.get("pending_approvals") and state.get("approval_decision") is None:
@@ -1462,6 +1499,10 @@ class MultiAgentWorkflow:
             # Phase 4.7: Research Templates
             template_id=None,
             template_config=None,
+            # Phase 8: A2UI (Agent-to-User Interface)
+            needs_ui=user_input.get("needs_ui"),
+            ui_frame=None,
+            ui_submission=user_input.get("ui_submission"),
         )
 
     def _create_workflow_result(self, final_state: AgentState) -> Dict[str, Any]:

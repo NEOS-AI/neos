@@ -32,6 +32,7 @@ from neos.api.handlers.refinement_handlers import router as refinement_router
 from neos.api.handlers.template_handlers import router as template_router
 from neos.api.handlers.approval_handlers import router as approval_router  # Phase 2: Execution Approval
 from neos.api.handlers.scheduled_tasks_handlers import router as scheduled_tasks_router  # Phase 4: Cron 스케줄
+from neos.api.handlers.ui_submit_handlers import router as ui_submit_router  # Phase 8: A2UI
 from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.workflow.graph import multi_agent_workflow
 from neos.utils.exceptions import NeosBaseException, get_exception_status_code, is_client_error
@@ -475,6 +476,7 @@ app.include_router(refinement_router, tags=["Research Refinement"])  # Phase 3.8
 app.include_router(template_router, tags=["Research Templates"])  # Phase 4.7: Research templates
 app.include_router(approval_router, prefix=settings.API_V1_PREFIX, tags=["Execution Approval"])  # Phase 2: OpenClaw Exec Approval
 app.include_router(scheduled_tasks_router, prefix=settings.API_V1_PREFIX, tags=["Scheduled Tasks"])  # Phase 4: OpenClaw Cron
+app.include_router(ui_submit_router, prefix=settings.API_V1_PREFIX, tags=["A2UI"])  # Phase 8: OpenClaw A2UI
 
 
 # === Enterprise Monitoring Endpoints ===

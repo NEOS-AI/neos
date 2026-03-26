@@ -291,6 +291,17 @@ class NeosWorkflowProgressEvent(BaseModel):
     message: Optional[str] = None
 
 
+class NeosUIFrameEvent(BaseModel):
+    """
+    Event: neos:ui_frame — Phase 8 (A2UI) UIFrame 컴포넌트 페이로드
+
+    Neos 확장 이벤트. UIFrameGenerator가 생성한 컴포넌트 목록을
+    클라이언트에 전달하기 위해 사용.
+    """
+    type: Literal["neos:ui_frame"] = "neos:ui_frame"
+    ui_frame: Dict[str, Any]
+
+
 # ============================================================================
 # Union Types
 # ============================================================================
@@ -316,6 +327,7 @@ NeosExtensionEvent = Union[
     NeosArtifactDeltaEvent,
     NeosArtifactFinishEvent,
     NeosWorkflowProgressEvent,
+    NeosUIFrameEvent,          # Phase 8 (A2UI)
 ]
 
 OpenResponsesEvent = Union[StandardStreamEvent, NeosExtensionEvent]

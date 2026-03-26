@@ -59,6 +59,7 @@ from neos.api.models.open_responses import (
     NeosArtifactDeltaEvent,
     NeosArtifactFinishEvent,
     NeosWorkflowProgressEvent,
+    NeosUIFrameEvent,
     ResponseFailedEvent,
     ResponseObject,
     ResponseStatus,
@@ -696,6 +697,13 @@ async def stream_message(
                                     message=event.content if event.content else None
                                 )
                                 yield format_sse_event(progress_event)
+
+                            # Phase 8 (A2UI): UIFrame → neos:ui_frame (확장)
+                            elif event.event == "ui_frame":
+                                ui_frame_event = NeosUIFrameEvent(
+                                    ui_frame=event.data.get("ui_frame", {})
+                                )
+                                yield format_sse_event(ui_frame_event)
 
                             # 워크플로우 완료 이벤트
                             elif event.event == "completed":

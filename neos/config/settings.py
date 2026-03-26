@@ -729,6 +729,15 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = env_vars.get("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_DEFAULT_MODEL: str = env_vars.get("OLLAMA_DEFAULT_MODEL", "llama3.1:8b")
 
+    # =========================================================================
+    # A2UI 설정 (Phase 8 — OpenClaw Agent-to-User Interface)
+    # 에이전트가 쿼리 의도에 따라 동적 UI 컴포넌트(폼·카드·차트)를 생성한다.
+    # =========================================================================
+    A2UI_ENABLED: bool = env_vars.get("A2UI_ENABLED", "").lower() in ("1", "true", "yes")
+    A2UI_LLM_MODEL: str = env_vars.get("A2UI_LLM_MODEL", "claude-haiku-4-5-20251001")
+    A2UI_MAX_COMPONENTS: int = int(env_vars.get("A2UI_MAX_COMPONENTS", "10"))
+    A2UI_FRAME_TIMEOUT: int = int(env_vars.get("A2UI_FRAME_TIMEOUT", "300"))
+
     class Config:
         env_file = ".env"
         case_sensitive = True

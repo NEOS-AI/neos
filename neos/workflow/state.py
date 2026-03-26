@@ -131,6 +131,15 @@ class AgentState(TypedDict):
     approval_decision: Optional[str]
     approval_outcome: Optional[str]  # "approved" | "rejected" — _should_continue_after_approval 라우팅 전용
 
+    # Phase 8: A2UI (Agent-to-User Interface)
+    # needs_ui:      QueryClassifier가 True로 설정 → UI_FRAME_GENERATOR 단락 경로 진입
+    # ui_frame:      UIFrameGenerator 출력 (UIFrame.dict() 직렬화)
+    # ui_submission: 사용자 폼 제출값 (POST /api/v1/ui/submit에서 채워짐)
+    # ⚠️ operator.add 사용 안 함 — 누적이 아닌 교체형 필드
+    needs_ui: Optional[bool]
+    ui_frame: Optional[Dict[str, Any]]
+    ui_submission: Optional[Dict[str, Any]]
+
     # Phase 3: Context Assembly Engine (OpenClaw 컨텍스트 엔진 분리)
     assembled_context: Optional[Dict[str, Any]]          # ContextAssemblyEngine.trimmed 결과
     channel_type: Optional[str]                          # 요청 채널 "api"|"telegram"|"discord"|"slack"

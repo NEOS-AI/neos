@@ -35,6 +35,7 @@ from neos.api.models.open_responses import (
     NeosArtifactDeltaEvent,
     NeosArtifactFinishEvent,
     NeosWorkflowProgressEvent,
+    NeosUIFrameEvent,
     # Types
     OpenResponsesEvent,
     create_response,
@@ -241,6 +242,17 @@ def adapt_legacy_event(
         events.append(NeosArtifactFinishEvent(
             artifact_id=legacy_event.get("artifact_id")
         ))
+
+    # ================================================================
+    # ui_frame -> neos:ui_frame (Phase 8 A2UI extension)
+    # ================================================================
+    elif event_type == "ui_frame":
+        ui_frame_data = (
+            legacy_event.get("data", {}).get("ui_frame")
+            or legacy_event.get("ui_frame")
+            or {}
+        )
+        events.append(NeosUIFrameEvent(ui_frame=ui_frame_data))
 
     # ================================================================
     # complete -> response.completed

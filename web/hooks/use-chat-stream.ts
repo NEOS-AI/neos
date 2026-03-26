@@ -21,6 +21,7 @@ import {
   isNeosArtifactDeltaEvent,
   isNeosArtifactFinishEvent,
   isNeosWorkflowProgressEvent,
+  isNeosUIFrameEvent,
   isFunctionCallItem,
 } from "@/lib/stream-types";
 import {
@@ -373,6 +374,19 @@ export function useChatStream({
                         message: eventData.message,
                       },
                     });
+                  }
+                }
+
+                // neos:ui_frame - Phase 8 (A2UI) UIFrame 렌더링
+                else if (isNeosUIFrameEvent(eventData)) {
+                  assistantMessage.metadata = {
+                    createdAt: assistantMessage.metadata?.createdAt || new Date().toISOString(),
+                    ...assistantMessage.metadata,
+                    ui_frame: eventData.ui_frame,
+                  };
+                  updateMessage();
+                  if (onData) {
+                    onData({ type: "ui-frame", data: eventData.ui_frame });
                   }
                 }
               }

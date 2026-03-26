@@ -36,6 +36,9 @@ class WorkflowNode(Enum):
     # Phase 4 (OpenClaw Cron): 자연어 스케줄 등록 노드
     TASK_SCHEDULING_NODE = "task_scheduling_node"
 
+    # Phase 8 (OpenClaw A2UI): 동적 UI 컴포넌트 생성 노드
+    UI_FRAME_GENERATOR = "ui_frame_generator"
+
     # result processors
     RESULT_INTEGRATOR = "result_integrator"
     FACT_CHECK = "fact_check"

@@ -716,3 +716,28 @@ class ScheduledTask(Base):
 
     # 관계
     user = relationship("User")
+
+
+# ============================================================================
+# Phase 8 (OpenClaw A2UI): UI Frame Session
+# ============================================================================
+
+class UIFrameSession(Base):
+    """Phase 8 (OpenClaw A2UI): UIFrame 세션 저장.
+
+    UIFrameGenerator가 생성한 frame_id → (original_query, conversation_id) 매핑.
+    POST /api/v1/ui/submit 수신 시 원본 쿼리를 복원하여 새 워크플로우를 재실행한다.
+
+    ⚠️ expires_at 기준으로 만료된 레코드는 주기적으로 정리할 것.
+    """
+    __tablename__ = "ui_frame_sessions"
+
+    id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    frame_id        = Column(UUID(as_uuid=True), unique=True, nullable=False)
+    session_id      = Column(String(255), nullable=False)
+    user_id         = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    conversation_id = Column(UUID(as_uuid=True), nullable=True)
+    original_query  = Column(Text, nullable=False)
+    frame_data      = Column(JSONB, default=dict)
+    expires_at      = Column(TIMESTAMP, nullable=False)
+    created_at      = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
