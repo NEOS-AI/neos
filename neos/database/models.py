@@ -740,4 +740,5 @@ class UIFrameSession(Base):
     original_query  = Column(Text, nullable=False)
     frame_data      = Column(JSONB, default=dict)
     expires_at      = Column(TIMESTAMP, nullable=False)
+    submitted_at    = Column(TIMESTAMP, nullable=True, default=None)  # 중복 제출 방어용
     created_at      = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))

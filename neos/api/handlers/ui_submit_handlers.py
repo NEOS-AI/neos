@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import select, update as sa_update
 
 from neos.api.dependencies.auth import get_current_user
 from neos.api.models.ui_components import UISubmitRequest
@@ -72,6 +72,25 @@ async def submit_ui_frame(
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="UIFrame이 만료되었습니다. 다시 요청해주세요.",
+        )
+
+    # 중복 제출 방어 — submitted_at을 원자적으로 설정 (미제출 레코드만 업데이트)
+    async with get_db_session() as db:
+        update_result = await db.execute(
+            sa_update(UIFrameSession)
+            .where(
+                UIFrameSession.frame_id == uuid.UUID(body.frame_id),
+                UIFrameSession.submitted_at.is_(None),  # 아직 제출되지 않은 경우만
+            )
+            .values(submitted_at=now)
+            .returning(UIFrameSession.frame_id)
+        )
+        await db.commit()
+
+    if update_result.rowcount == 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 제출된 UIFrame입니다.",
         )
 
     # 새 워크플로우 invoke
