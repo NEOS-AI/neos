@@ -186,3 +186,43 @@ async def _send_to_channel(channel_type: str, channel_id: str, content: str) -> 
             channel_id,
             exc,
         )
+
+
+# ── Phase 8 (A2UI): 만료된 UIFrameSession 정리 ──────────────────────────────
+
+
+@shared_task(
+    name="neos.tasks.cleanup_expired_ui_frames",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+)
+def cleanup_expired_ui_frames(self):
+    """1시간마다 실행 — 만료된 UIFrameSession 레코드를 삭제한다.
+
+    Celery Beat beat_schedule에 crontab(minute=0)으로 등록한다.
+    """
+    try:
+        asyncio.run(_cleanup_ui_frames_async())
+    except Exception as exc:
+        logger.error("cleanup_expired_ui_frames failed: %s", exc, exc_info=True)
+        raise self.retry(exc=exc)
+
+
+async def _cleanup_ui_frames_async() -> None:
+    """만료된 ui_frame_sessions 레코드를 DB에서 삭제."""
+    from neos.database.connection import get_session_ctx
+    from neos.database.models import UIFrameSession
+    from sqlalchemy import delete as sa_delete
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    async with get_session_ctx() as db:
+        result = await db.execute(
+            sa_delete(UIFrameSession).where(UIFrameSession.expires_at < now)
+        )
+        await db.commit()
+        logger.info(
+            "[CleanupUIFrames] Deleted %d expired UIFrameSession records",
+            result.rowcount,
+        )

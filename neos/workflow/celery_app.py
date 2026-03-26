@@ -135,6 +135,11 @@ app.conf.beat_schedule = {
         'task': 'neos.tasks.poll_scheduled_tasks',
         'schedule': 60.0,  # 1분
     },
+    # Phase 8 (A2UI): 만료된 UIFrameSession 레코드 정리 — 매시간 정각
+    'cleanup-expired-ui-frames': {
+        'task': 'neos.tasks.cleanup_expired_ui_frames',
+        'schedule': 3600.0,  # 1시간
+    },
 }
 
 
