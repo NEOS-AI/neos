@@ -105,10 +105,10 @@ export function UIFrameForm({ uiFrame, onSubmitted }: Props) {
               try {
                 const parsed = JSON.parse(line.slice(6));
                 if (
-                  parsed.event === "workflow_complete" &&
-                  parsed.data?.final_response
+                  parsed.event === "completed" &&
+                  parsed.data?.response
                 ) {
-                  setResultText(parsed.data.final_response);
+                  setResultText(parsed.data.response);
                 }
               } catch {
                 // SSE 파싱 오류 — 무시하고 계속
