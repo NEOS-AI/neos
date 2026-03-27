@@ -126,6 +126,7 @@ async def submit_ui_frame(
 async def _event_generator(workflow_input: dict, session_id: str, user_id: str):
     """워크플로우 실행 결과를 SSE 스트림으로 방출한다."""
     from neos.api.handlers.workflow_stream_handlers import WorkflowStreamCallback
+    from neos.api.models.query_models import WorkflowStreamEventType
 
     event_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
     callback = WorkflowStreamCallback(
@@ -141,14 +142,26 @@ async def _event_generator(workflow_input: dict, session_id: str, user_id: str):
             use_checkpointer=False,
         )
     )
-    while True:
-        try:
-            event = await asyncio.wait_for(event_queue.get(), timeout=0.5)
-            yield f"data: {event.model_dump_json()}\n\n"
-        except asyncio.TimeoutError:
-            if workflow_task.done():
+    try:
+        while True:
+            try:
+                event = await asyncio.wait_for(event_queue.get(), timeout=0.5)
+                yield f"data: {event.model_dump_json()}\n\n"
+            except asyncio.TimeoutError:
+                if workflow_task.done():
+                    if workflow_task.exception():
+                        err = str(workflow_task.exception())
+                        logger.error("[UISubmit] Workflow failed: %s", err)
+                        error_event = callback._create_event(
+                            event_type=WorkflowStreamEventType.ERROR,
+                            error=err,
+                        )
+                        yield f"data: {error_event.model_dump_json()}\n\n"
+                    break
+            except Exception as exc:
+                logger.error("[UISubmit] SSE stream error: %s", exc)
                 break
-        except Exception as exc:
-            logger.error("[UISubmit] SSE stream error: %s", exc)
-            break
+    finally:
+        if not workflow_task.done():
+            workflow_task.cancel()
     yield "data: [DONE]\n\n"
