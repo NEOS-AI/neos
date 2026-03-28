@@ -1,5 +1,6 @@
 from typing import Dict, Any, Optional
 from datetime import datetime
+import asyncio
 import hashlib
 import logging
 from langgraph.graph import StateGraph, START, END
@@ -606,6 +607,13 @@ class MultiAgentWorkflow:
                         logger.info(
                             f"[ApprovalCheck] Skills require approval: {approval_skills} "
                             f"for user={user_id}. Setting pending_approvals."
+                        )
+                        asyncio.create_task(
+                            _register_pending_approvals_db(
+                                pending,
+                                user_id,
+                                session_id,
+                            )
                         )
                         return {
                             **base_result,
@@ -1888,6 +1896,38 @@ class MultiAgentWorkflow:
 
         except Exception as e:
             logger.warning(f"[MultiAgentWorkflow] Cleanup error (non-critical): {e}")
+
+
+async def _register_pending_approvals_db(
+    pending: list,
+    user_id: str,
+    session_id: str,
+) -> None:
+    """pending_approvals 추적 테이블에 승인 요청을 등록한다."""
+    from datetime import timedelta
+    from neos.database.connection import db_manager
+    from neos.utils.time_utils import utc_now_naive
+
+    now = utc_now_naive()
+    for item in pending:
+        expires_at = now + timedelta(seconds=settings.APPROVAL_TIMEOUT_SECONDS)
+        try:
+            await db_manager.execute(
+                """
+                INSERT INTO pending_approvals
+                    (session_id, request_id, user_id, skill_name, requested_at, expires_at)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (request_id) DO NOTHING
+                """,
+                session_id,
+                item.get("request_id", ""),
+                user_id,
+                item.get("skill_name", ""),
+                now,
+                expires_at,
+            )
+        except Exception as exc:
+            logger.debug("pending_approvals 등록 실패 (non-critical): %s", exc)
 
 
 # 전역 워크플로우 인스턴스 (리팩토링된 버전)

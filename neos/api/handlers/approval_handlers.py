@@ -133,6 +133,9 @@ async def respond_to_approval(
             detail=f"상태 업데이트 실패: {str(e)}",
         )
 
+    # [H3b] pending_approvals 테이블에 resolved=True 기록 (타임아웃 자동 거부 방지)
+    await _mark_approval_resolved(body.request_id)
+
     # [C5, H4] 백그라운드 태스크로 그래프 재개 — stream_manager로 결과 push
     # 클라이언트는 GET /api/v1/approval/stream/{session_id}로 재구독하여 결과를 받는다.
     async def _resume():
@@ -222,6 +225,19 @@ async def stream_resume_result(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+async def _mark_approval_resolved(request_id: str) -> None:
+    """pending_approvals 테이블에서 request_id를 resolved=True로 표시한다."""
+    try:
+        from neos.database.connection import db_manager
+        await db_manager.execute(
+            "UPDATE pending_approvals SET resolved = TRUE WHERE request_id = $1",
+            request_id,
+        )
+        logger.debug(f"[ApprovalHandler] pending_approval marked resolved: {request_id}")
+    except Exception as e:
+        logger.warning(f"[ApprovalHandler] Failed to mark approval resolved (non-critical): {e}")
 
 
 async def _add_to_allowlist(user_id: str, skill_name: str) -> None:

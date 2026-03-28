@@ -140,6 +140,11 @@ app.conf.beat_schedule = {
         'task': 'neos.tasks.cleanup_expired_ui_frames',
         'schedule': 3600.0,  # 1시간
     },
+    # Task 6 (Approval): 만료된 pending_approvals 자동 거부 — 5분마다
+    'expire-pending-approvals': {
+        'task': 'neos.tasks.expire_pending_approvals',
+        'schedule': 300.0,  # 5분
+    },
 }
 
 

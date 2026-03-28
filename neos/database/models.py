@@ -719,6 +719,29 @@ class ScheduledTask(Base):
 
 
 # ============================================================================
+# Execution Approval Timeout Tracking (APPROVAL_TIMEOUT_SECONDS 강제)
+# ============================================================================
+
+class PendingApproval(Base):
+    """Execution Approval 타임아웃 추적.
+
+    SKILL_TOOL_SELECTOR가 pending_approvals 생성 시 INSERT.
+    approval_handlers.respond_to_approval() 호출 시 resolved=True.
+    expire_pending_approvals Celery 태스크가 만료된 항목을 자동 거부.
+    """
+    __tablename__ = "pending_approvals"
+
+    id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id   = Column(String(255), nullable=False, index=True)
+    request_id   = Column(String(255), nullable=False, unique=True)
+    user_id      = Column(String(255), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    skill_name   = Column(String(100), nullable=False)
+    requested_at = Column(TIMESTAMP, nullable=False)
+    expires_at   = Column(TIMESTAMP, nullable=False)
+    resolved     = Column(Boolean, nullable=False, default=False)
+
+
+# ============================================================================
 # Phase 8 (OpenClaw A2UI): UI Frame Session
 # ============================================================================
 

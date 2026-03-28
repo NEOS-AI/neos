@@ -190,6 +190,128 @@ async def _send_to_channel(channel_type: str, channel_id: str, content: str) -> 
         )
 
 
+# ── Task 6 (Approval): 만료된 PendingApproval 자동 거부 ─────────────────────
+
+
+@shared_task(
+    name="neos.tasks.expire_pending_approvals",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+)
+def expire_pending_approvals(self):
+    """5분마다 실행 — expires_at이 지난 미결 승인 요청을 자동 거부한다.
+
+    Celery Beat beat_schedule에 300초 주기로 등록한다.
+    resolved=FALSE이고 expires_at < NOW() 인 항목을 조회하여
+    워크플로우 상태에 approval_decision='rejected'를 삽입하고
+    pending_approvals.resolved=TRUE로 표시한다.
+    """
+    try:
+        asyncio.run(_expire_pending_approvals_async())
+    except Exception as exc:
+        logger.error("expire_pending_approvals failed: %s", exc, exc_info=True)
+        raise self.retry(exc=exc)
+
+
+async def _expire_pending_approvals_async() -> None:
+    """만료된 pending_approvals 항목을 조회하여 자동 거부 처리한다."""
+    from neos.database.connection import get_session_ctx, db_manager
+    from neos.database.models import PendingApproval
+    from sqlalchemy import update as sa_update
+
+    now = utc_now_naive()
+
+    async with get_session_ctx() as db:
+        stmt = (
+            select(PendingApproval)
+            .where(
+                PendingApproval.resolved == False,
+                PendingApproval.expires_at < now,
+            )
+            .with_for_update(skip_locked=True)
+        )
+        result = await db.execute(stmt)
+        expired = result.scalars().all()
+
+        if not expired:
+            return
+
+        expired_ids = []
+        for item in expired:
+            expired_ids.append(item.id)
+            item.resolved = True  # 먼저 resolved 표시 (중복 처리 방지)
+
+        await db.commit()
+
+    # resolved 표시 후 워크플로우 상태 업데이트 (graph 의존성은 커밋 후 처리)
+    rejected_count = 0
+    for item in expired:
+        try:
+            await _inject_timeout_rejection(
+                session_id=item.session_id,
+                request_id=item.request_id,
+            )
+            rejected_count += 1
+        except Exception as exc:
+            logger.warning(
+                "Failed to inject timeout rejection for request_id=%s: %s",
+                item.request_id,
+                exc,
+            )
+
+    logger.info(
+        "[ExpirePendingApprovals] Auto-rejected %d expired approval(s)",
+        rejected_count,
+    )
+
+
+async def _inject_timeout_rejection(session_id: str, request_id: str) -> None:
+    """만료된 승인 요청에 대해 워크플로우 상태에 rejection을 주입한다."""
+    try:
+        from neos.workflow.graph import multi_agent_workflow
+
+        if (
+            not multi_agent_workflow._graph_initialized
+            or not multi_agent_workflow._graph_uses_checkpointer
+        ):
+            logger.debug(
+                "[ExpirePendingApprovals] Graph not in checkpointer mode, skipping injection "
+                "for session=%s",
+                session_id,
+            )
+            return
+
+        graph = multi_agent_workflow.graph
+        config = {"configurable": {"thread_id": session_id}}
+
+        current_state = await graph.aget_state(config)
+        if current_state is None:
+            return
+
+        pending = current_state.values.get("pending_approvals") or []
+        # 이미 다른 결정이 내려졌으면 스킵
+        if current_state.values.get("approval_decision") is not None:
+            return
+        # 해당 request_id가 아직 pending 상태인지 확인
+        if not any(p.get("request_id") == request_id for p in pending):
+            return
+
+        await graph.aupdate_state(
+            config=config,
+            values={"approval_decision": "rejected"},
+        )
+        logger.info(
+            "[ExpirePendingApprovals] Injected timeout rejection: session=%s request_id=%s",
+            session_id,
+            request_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[ExpirePendingApprovals] _inject_timeout_rejection failed (non-critical): %s", exc
+        )
+
+
 # ── Phase 8 (A2UI): 만료된 UIFrameSession 정리 ──────────────────────────────
 
 
