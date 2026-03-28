@@ -12,7 +12,7 @@ Phase 4 (OpenClaw Cron 스케줄 스킬)
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from celery import shared_task
 from croniter import croniter

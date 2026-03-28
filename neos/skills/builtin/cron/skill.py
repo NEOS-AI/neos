@@ -8,7 +8,7 @@ IntentType.TASK_SCHEDULING으로 분류된 쿼리를 받아
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from neos.skills.base.skill import BaseSkill
