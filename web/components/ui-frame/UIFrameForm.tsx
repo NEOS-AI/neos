@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import type { UIFramePayload, UIFrameComponent } from "@/lib/open-responses-types";
 import { submitUIFrameClient } from "@/lib/backend-api";
+import { readSseStream } from "@/lib/sse-stream";
 import { TextField } from "./components/TextField";
 import { DatePicker } from "./components/DatePicker";
 import { TimePicker } from "./components/TimePicker";
@@ -89,35 +90,9 @@ export function UIFrameForm({ uiFrame, onSubmitted }: Props) {
       onSubmitted?.();
 
       // SSE 스트림 읽어 최종 워크플로우 응답 추출
-      const reader = response.body?.getReader();
-      if (reader) {
-        const decoder = new TextDecoder();
-        let buffer = "";
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() ?? "";
-            for (const line of lines) {
-              if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
-              try {
-                const parsed = JSON.parse(line.slice(6));
-                if (
-                  parsed.event === "completed" &&
-                  parsed.data?.response
-                ) {
-                  setResultText(parsed.data.response);
-                }
-              } catch {
-                // SSE 파싱 오류 — 무시하고 계속
-              }
-            }
-          }
-        } finally {
-          reader.releaseLock();
-        }
+      if (response.body) {
+        const text = await readSseStream(response.body);
+        if (text) setResultText(text);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "제출 중 오류가 발생했습니다.");
