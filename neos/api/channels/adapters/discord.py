@@ -96,19 +96,19 @@ class DiscordAdapter(ChannelAdapterBase):
 
     async def stop(self) -> None:
         """Discord 봇을 종료한다."""
-        if self._client:
-            try:
-                await self._client.close()
-                logger.info("[DiscordAdapter] Discord bot closed.")
-            except Exception as e:
-                logger.warning("[DiscordAdapter] Stop error (non-critical): %s", e)
-
         if self._bot_task and not self._bot_task.done():
             self._bot_task.cancel()
             try:
                 await self._bot_task
             except asyncio.CancelledError:
                 pass
+
+        if self._client:
+            try:
+                await self._client.close()
+                logger.info("[DiscordAdapter] Discord bot closed.")
+            except Exception as e:
+                logger.warning("[DiscordAdapter] Stop error (non-critical): %s", e)
 
     async def receive_message(self, raw: Any) -> ChannelMessage:
         """discord.Message를 ChannelMessage로 변환한다."""
@@ -125,9 +125,9 @@ class DiscordAdapter(ChannelAdapterBase):
             channel_id=channel_id,
             raw_data=raw,
             metadata={
-                "discord_user_id": raw.author.id,
+                "discord_user_id": str(raw.author.id),
                 "discord_username": str(raw.author),
-                "discord_guild_id": raw.guild.id if raw.guild else None,
+                "discord_guild_id": str(raw.guild.id) if raw.guild else None,
             },
         )
 
@@ -178,7 +178,7 @@ class DiscordAdapter(ChannelAdapterBase):
             )
             async with message.channel.typing():
                 response = await self._gateway.dispatch(channel_message)
-            await self.send_response(channel_message.channel_id, response)
+                await self.send_response(channel_message.channel_id, response)
         except Exception as e:
             logger.error("[DiscordAdapter] _handle_message error: %s", e)
             try:
