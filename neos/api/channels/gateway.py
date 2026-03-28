@@ -28,7 +28,7 @@ class ChannelGateway:
 
     - 채널별 독립 circuit_breaker 유지
     - multi_agent_workflow.execute_workflow() 직접 호출 (HTTP 우회)
-    - 실행 결과를 QueryHistory에 channel_source 기록
+    - channel_source를 초기 state에 포함하여 워크플로우 시작 시점에 올바르게 기록
     """
 
     def __init__(self, workflow: "MultiAgentWorkflow") -> None:
@@ -106,6 +106,8 @@ class ChannelGateway:
             # Phase 3 state 필드: 채널 정보 전달
             "channel_type": message.channel_type,
             "channel_id": message.channel_id,
+            # channel_source를 초기 state에 직접 포함하여 INSERT 시점에 올바르게 기록
+            "channel_source": message.channel_type,
             # 채널 요청은 히스토리 컨텍스트 활성화 (세션 기반 대화 지원)
             "enable_history_context": True,
             "execution_start": datetime.utcnow(),
@@ -125,46 +127,8 @@ class ChannelGateway:
             use_checkpointer=True,
         )
 
-        # 채널 소스 기록 (QueryHistory)
-        await self._record_channel_source(
-            user_id=message.user_id,
-            channel_type=message.channel_type,
-            channel_id=message.channel_id,
-            query=message.text,
-        )
-
         final_response = result.get("final_response") or ""
         if not final_response:
             final_response = "응답을 생성하지 못했습니다. 다시 시도해주세요."
 
         return final_response
-
-    async def _record_channel_source(
-        self,
-        user_id: str,
-        channel_type: str,
-        channel_id: str,
-        query: str,
-    ) -> None:
-        """
-        QueryHistory에 channel_source / external_channel_id를 기록한다.
-        실패해도 워크플로우 응답에는 영향을 주지 않는다.
-        """
-        try:
-            from neos.database.connection import db_manager
-            # PostgreSQL은 UPDATE에서 LIMIT을 직접 지원하지 않으므로 ctid 서브쿼리 사용
-            sql = """
-                UPDATE query_history
-                SET channel_source = $1, external_channel_id = $2
-                WHERE ctid IN (
-                    SELECT ctid FROM query_history
-                    WHERE user_id = $3
-                      AND original_query = $4
-                      AND created_at >= NOW() - INTERVAL '5 seconds'
-                      AND channel_source = 'api'
-                    LIMIT 1
-                )
-            """
-            await db_manager.execute(sql, channel_type, channel_id, user_id, query)
-        except Exception as e:
-            logger.debug(f"[ChannelGateway] channel_source 기록 실패 (non-critical): {e}")

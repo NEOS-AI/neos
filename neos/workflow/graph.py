@@ -1506,6 +1506,8 @@ class MultiAgentWorkflow:
             needs_ui=user_input.get("needs_ui"),
             ui_frame=None,
             ui_submission=user_input.get("ui_submission"),
+            # Phase 3: 채널 소스 (query_history.channel_source 초기 기록용)
+            channel_source=user_input.get("channel_source", "api"),
         )
 
     def _create_workflow_result(self, final_state: AgentState) -> Dict[str, Any]:
