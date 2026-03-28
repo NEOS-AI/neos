@@ -151,7 +151,8 @@ class QueryService:
             "metadata": result["metadata"],
             "execution_time_ms": result["execution_time_ms"],
             "quality_score": result["quality_score"],
-            "errors": result["errors"]
+            "errors": result["errors"],
+            "channel_source": result.get("channel_source", "api")
         }
 
         # 성공한 응답 캐싱 (1시간)
