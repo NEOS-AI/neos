@@ -18,6 +18,8 @@ from celery import shared_task
 from croniter import croniter
 from sqlalchemy import select
 
+from neos.utils.time_utils import utc_now_naive
+
 logger = logging.getLogger(__name__)
 
 
@@ -44,7 +46,7 @@ async def _poll_async():
     from neos.database.connection import get_session_ctx
     from neos.database.models import ScheduledTask
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)  # DB는 naive UTC 저장
+    now = utc_now_naive()  # DB는 naive UTC 저장
 
     async with get_session_ctx() as db:
         stmt = (
@@ -215,7 +217,7 @@ async def _cleanup_ui_frames_async() -> None:
     from neos.database.models import UIFrameSession
     from sqlalchemy import delete as sa_delete
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utc_now_naive()
 
     async with get_session_ctx() as db:
         result = await db.execute(

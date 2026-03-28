@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 from neos.skills.base.skill import BaseSkill
 from neos.skills.base.result import SkillResult
 from neos.skills.base.types import SkillType
+from neos.utils.time_utils import utc_now_naive
 from .parser import parse_schedule, validate_cron_expression, ParsedSchedule
 
 logger = logging.getLogger(__name__)
@@ -186,7 +187,7 @@ async def _save_scheduled_task(
     from neos.database.connection import get_async_session
     from neos.database.models import ScheduledTask
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC — 폴러와 타임존 통일
+    now = utc_now_naive()  # naive UTC — 폴러와 타임존 통일
     cron = croniter(cron_expression, now)
     next_run_at = cron.get_next(datetime)
 
