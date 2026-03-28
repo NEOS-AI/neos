@@ -55,7 +55,8 @@ async def process_query(
             session_id=session_id,
             original_query=request.query,
             result=result,
-            execution_time_ms=result["execution_time_ms"]
+            execution_time_ms=result["execution_time_ms"],
+            channel_source=result.get("channel_source", "api")
         )
 
         return response

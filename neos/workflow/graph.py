@@ -1508,6 +1508,8 @@ class MultiAgentWorkflow:
             ui_submission=user_input.get("ui_submission"),
             # Phase 3: 채널 소스 (query_history.channel_source 초기 기록용)
             channel_source=user_input.get("channel_source", "api"),
+            channel_type=user_input.get("channel_type"),
+            channel_id=user_input.get("channel_id"),
         )
 
     def _create_workflow_result(self, final_state: AgentState) -> Dict[str, Any]:
@@ -1522,6 +1524,8 @@ class MultiAgentWorkflow:
             "cache_hit": False,
             "execution_steps": len(final_state["execution_steps"]),
             "retry_count": final_state.get("retry_count", 0),
+            # Phase 3: 채널 소스 — query_history 저장 시 활용
+            "channel_source": final_state.get("channel_source", "api"),
         }
 
         # Phase 4.7: 템플릿 정보 포함
