@@ -735,6 +735,7 @@ class Settings(BaseSettings):
     # =========================================================================
     A2UI_ENABLED: bool = env_vars.get("A2UI_ENABLED", "").lower() in ("1", "true", "yes")
     A2UI_LLM_MODEL: str = env_vars.get("A2UI_LLM_MODEL", "claude-haiku-4-5-20251001")
+    A2UI_LLM_PROVIDER: str = env_vars.get("A2UI_LLM_PROVIDER", "anthropic")
     A2UI_MAX_COMPONENTS: int = int(env_vars.get("A2UI_MAX_COMPONENTS", "10"))
     A2UI_FRAME_TIMEOUT: int = int(env_vars.get("A2UI_FRAME_TIMEOUT", "300"))
 

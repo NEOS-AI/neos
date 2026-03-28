@@ -156,7 +156,7 @@ class UIFrameGenerator:
     ) -> Dict[str, Any]:
         """Claude tool_use로 UIFrame JSON 구조화 출력."""
         llm = create_llm(
-            provider="anthropic",
+            provider=settings.A2UI_LLM_PROVIDER,
             model=settings.A2UI_LLM_MODEL,
             temperature=0.0,
             max_tokens=800,  # UI는 간결해야 함
