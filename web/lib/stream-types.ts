@@ -49,6 +49,10 @@ export type {
   NeosUIFrameEvent,
   UIFramePayload,
   UIFrameComponent,
+  NeosInlineVizEvent,
+  InlineVisualization,
+  MermaidVizData,
+  ChartVizData,
   // Error types
   OpenResponsesErrorType,
   OpenResponsesErrorResponse,
@@ -72,6 +76,7 @@ export {
   isNeosArtifactFinishEvent,
   isNeosWorkflowProgressEvent,
   isNeosUIFrameEvent,
+  isNeosInlineVizEvent,
   isMessageItem,
   isFunctionCallItem,
   isReasoningItem,
