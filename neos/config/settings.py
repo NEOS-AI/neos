@@ -721,6 +721,9 @@ class Settings(BaseSettings):
     CRON_ENABLED: bool = env_vars.get("CRON_ENABLED", "true").lower() in ("1", "true", "yes")
     CRON_DEFAULT_TIMEZONE: str = env_vars.get("CRON_DEFAULT_TIMEZONE", "UTC")
     CRON_MAX_TASKS_PER_USER: int = int(env_vars.get("CRON_MAX_TASKS_PER_USER", "20"))
+    # 규칙 기반 파서가 실패할 때 Haiku LLM으로 자연어 → cron 변환을 재시도한다.
+    CRON_LLM_FALLBACK_ENABLED: bool = env_vars.get("CRON_LLM_FALLBACK_ENABLED", "true").lower() in ("1", "true", "yes")
+    CRON_LLM_MODEL: str = env_vars.get("CRON_LLM_MODEL", "claude-haiku-4-5-20251001")
 
     # =========================================================================
     # Model Provider 확장 설정 (Phase 5 — OpenClaw ModelProvider 플러그인)

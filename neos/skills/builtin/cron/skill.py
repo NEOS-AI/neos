@@ -107,7 +107,7 @@ class CronSkill(BaseSkill):
                 timezone=tz,
             )
         else:
-            schedule = parse_schedule(query, default_timezone=tz)
+            schedule = await parse_schedule(query, default_timezone=tz)
             if not schedule:
                 return SkillResult(
                     success=False,
