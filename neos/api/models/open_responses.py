@@ -315,6 +315,19 @@ class NeosUIFrameEvent(BaseModel):
         return self
 
 
+class NeosInlineVizEvent(BaseModel):
+    """
+    Event: neos:inline_viz — 인라인 시각화 이벤트
+
+    renderDiagram(Mermaid) 또는 renderChart(Recharts) 도구 결과를
+    클라이언트에 전달하기 위한 Neos 확장 이벤트.
+    """
+    type: Literal["neos:inline_viz"] = "neos:inline_viz"
+    viz_id: str
+    viz_type: Literal["mermaid", "chart"]
+    data: Dict[str, Any]
+
+
 # ============================================================================
 # Union Types
 # ============================================================================
@@ -341,6 +354,7 @@ NeosExtensionEvent = Union[
     NeosArtifactFinishEvent,
     NeosWorkflowProgressEvent,
     NeosUIFrameEvent,          # Phase 8 (A2UI)
+    NeosInlineVizEvent,        # Inline Visualization (renderDiagram/renderChart)
 ]
 
 OpenResponsesEvent = Union[StandardStreamEvent, NeosExtensionEvent]
