@@ -1,5 +1,6 @@
 from typing import Dict, Any, Optional
 from datetime import datetime
+import asyncio
 import hashlib
 import logging
 from langgraph.graph import StateGraph, START, END
@@ -37,6 +38,16 @@ from .telemetry import trace_workflow_node, add_span_event, set_span_attributes
 
 logger = logging.getLogger(__name__)
 
+# CR-P6-11: 우선순위 라우팅 단일 테이블 — 향후 CANVAS_RENDERING 등 추가 시 여기만 수정
+_PRIORITY_ROUTING_MAP: dict[str, str] = {
+    IntentType.TASK_SCHEDULING.value: "task_scheduling",
+}
+
+
+def _get_priority_routing(state: AgentState) -> str | None:
+    """최우선 라우팅 경로 반환. 해당 없으면 None."""
+    return _PRIORITY_ROUTING_MAP.get(state.get("query_intent", ""))
+
 
 class MultiAgentWorkflow:
     """
@@ -69,8 +80,69 @@ class MultiAgentWorkflow:
         # Phase 2 processors
         self.research_continuation_processor = ResearchContinuationProcessor()
         self.self_reflection_processor = SelfReflectionProcessor()
+
+        # Phase 2 (OpenClaw Execution Approval)
+        self.approval_processor = None
+        if settings.EXECUTION_APPROVAL_ENABLED:
+            from neos.workflow.processors.approval_processor import ApprovalProcessor
+            self.approval_processor = ApprovalProcessor()
+            logger.info("[MultiAgentWorkflow] ApprovalProcessor initialized (EXECUTION_APPROVAL_ENABLED)")
+
+        # Phase 8 (OpenClaw A2UI): UIFrameGenerator (피처 플래그로 격리)
+        self.ui_frame_generator = None
+        if settings.A2UI_ENABLED:
+            from neos.workflow.processors.ui_frame_generator import UIFrameGenerator
+            self.ui_frame_generator = UIFrameGenerator()
+            logger.info("[MultiAgentWorkflow] UIFrameGenerator initialized (A2UI_ENABLED)")
         self.hypothesis_manager = HypothesisManager()  # Phase 2.5
         self.research_replanner = ResearchReplanner()  # Phase 2.4
+
+        # ROMA: Recursive Agent (피처 플래그로 격리)
+        self.recursive_orchestrator = None
+        if settings.RECURSIVE_AGENT_ENABLED:
+            from neos.workflow.recursive.orchestrator import RecursiveOrchestrator
+            self.recursive_orchestrator = RecursiveOrchestrator(agents=self.agents)
+            logger.info("[MultiAgentWorkflow] RecursiveOrchestrator initialized (ROMA enabled)")
+
+        # HyperDeep Recursive: ROMA + HyperDeepResearchAgent 통합 (피처 플래그로 격리)
+        self.hyper_deep_orchestrator = None
+        if settings.HYPER_DEEP_AGENT_ENABLED:
+            if getattr(settings, "RAY_ENABLED", False):
+                # Ray 분산 실행 경로: HyperDeepExecutor 싱글톤 불필요
+                # (HyperDeepWorkerActor가 독립 프로세스에서 HyperDeepResearchAgent 직접 보유)
+                from neos.workflow.recursive.distributed_orchestrator import (
+                    DistributedRecursiveOrchestrator,
+                )
+                self.hyper_deep_orchestrator = DistributedRecursiveOrchestrator(
+                    agents=self.agents,
+                    max_depth=settings.HYPER_DEEP_MAX_DEPTH,
+                    budget_cap=settings.HYPER_DEEP_BUDGET_CAP,
+                    max_tasks_per_level=settings.HYPER_DEEP_MAX_TASKS_PER_LEVEL,
+                    ray_enabled=True,
+                    ray_pool_size=settings.HYPER_DEEP_MAX_TASKS_PER_LEVEL,
+                )
+                logger.info(
+                    "[MultiAgentWorkflow] HyperDeepOrchestrator initialized with Ray "
+                    f"(max_depth={settings.HYPER_DEEP_MAX_DEPTH}, "
+                    f"pool_size={settings.HYPER_DEEP_MAX_TASKS_PER_LEVEL})"
+                )
+            else:
+                # 기존 순차 실행 경로
+                from neos.workflow.recursive.orchestrator import RecursiveOrchestrator
+                from neos.workflow.hyper_deep.executor import HyperDeepExecutor
+                _hd_executor = HyperDeepExecutor()
+                self.hyper_deep_orchestrator = RecursiveOrchestrator(
+                    agents=self.agents,
+                    executor=_hd_executor,
+                    max_depth=settings.HYPER_DEEP_MAX_DEPTH,
+                    budget_cap=settings.HYPER_DEEP_BUDGET_CAP,
+                    max_tasks_per_level=settings.HYPER_DEEP_MAX_TASKS_PER_LEVEL,
+                )
+                logger.info(
+                    "[MultiAgentWorkflow] HyperDeepOrchestrator initialized "
+                    f"(max_depth={settings.HYPER_DEEP_MAX_DEPTH}, "
+                    f"tasks_per_level={settings.HYPER_DEEP_MAX_TASKS_PER_LEVEL})"
+                )
 
         # 워크플로우 그래프 생성 (비동기로 초기화)
         self.graph = None
@@ -159,6 +231,22 @@ class MultiAgentWorkflow:
         workflow.add_node(WorkflowNode.SELF_REFLECTION.value, self._self_reflection_node)  # Phase 2.6
         workflow.add_node(WorkflowNode.RESP_GENERATOR.value, self._generate_response_node)
 
+        # ROMA: Recursive Orchestrator 노드 (피처 플래그로 격리)
+        if settings.RECURSIVE_AGENT_ENABLED:
+            workflow.add_node(WorkflowNode.RECURSIVE_ORCHESTRATOR.value, self._recursive_orchestrator_node)
+
+        # HyperDeep Recursive Orchestrator 노드 (피처 플래그로 격리)
+        if settings.HYPER_DEEP_AGENT_ENABLED:
+            workflow.add_node(WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value, self._hyper_deep_orchestrator_node)
+
+        # Phase 2 (OpenClaw Execution Approval): 민감 스킬 사용자 승인 노드
+        # interrupt_before=[EXECUTION_APPROVAL]로 중단 → resume 후 이 노드 실행
+        if settings.EXECUTION_APPROVAL_ENABLED:
+            workflow.add_node(WorkflowNode.EXECUTION_APPROVAL.value, self._execution_approval_node)
+
+        # Phase 4 (OpenClaw Cron): 자연어 스케줄 등록 노드
+        workflow.add_node(WorkflowNode.TASK_SCHEDULING_NODE.value, self._handle_task_scheduling_node)
+
         # 엣지 정의
         # 1. START → refinement_checker (가장 먼저 쿼리 개선 필요 여부 체크)
         workflow.add_edge(START, WorkflowNode.REFINEMENT_CHECKER.value)
@@ -195,14 +283,74 @@ class MultiAgentWorkflow:
         workflow.add_edge(WorkflowNode.QUERY_CLS.value, WorkflowNode.SKILL_TOOL_SELECTOR.value)
 
         # 조건부 분기: 도구/에이전트가 필요 없으면 orchestrator 건너뛰고 바로 응답 생성
-        workflow.add_conditional_edges(
-            WorkflowNode.SKILL_TOOL_SELECTOR.value,
-            self._should_skip_orchestrators,
-            {
-                WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,  # 간단한 대화 -> 바로 응답
-                WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value  # Phase 2.5: 가설 생성 → 검색
+        # ROMA / HyperDeep / Approval / A2UI 활성화 시 확장 경로 추가
+        if (settings.RECURSIVE_AGENT_ENABLED or settings.HYPER_DEEP_AGENT_ENABLED
+                or settings.EXECUTION_APPROVAL_ENABLED or settings.A2UI_ENABLED):
+            _routing_map = {
+                WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
+                WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
             }
-        )
+            if settings.RECURSIVE_AGENT_ENABLED:
+                _routing_map["recursive"] = WorkflowNode.RECURSIVE_ORCHESTRATOR.value
+            if settings.HYPER_DEEP_AGENT_ENABLED:
+                _routing_map["hyper_deep"] = WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value
+            # Phase 2: 승인 대기 경로 (최우선 — _should_use_recursive_agent에서 먼저 체크)
+            if settings.EXECUTION_APPROVAL_ENABLED:
+                _routing_map["needs_approval"] = WorkflowNode.EXECUTION_APPROVAL.value
+            # Phase 4: 스케줄 등록 경로
+            _routing_map["task_scheduling"] = WorkflowNode.TASK_SCHEDULING_NODE.value
+            # Phase 8: A2UI — UI 폼 생성 단락 경로
+            if settings.A2UI_ENABLED:
+                _routing_map["ui_frame"] = WorkflowNode.UI_FRAME_GENERATOR.value
+
+            workflow.add_conditional_edges(
+                WorkflowNode.SKILL_TOOL_SELECTOR.value,
+                self._should_use_recursive_agent,
+                _routing_map,
+            )
+            if settings.RECURSIVE_AGENT_ENABLED:
+                # RECURSIVE_ORCHESTRATOR → RESULT_INTEGRATOR (결과 통합 후 정상 파이프라인 합류)
+                workflow.add_edge(WorkflowNode.RECURSIVE_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
+            if settings.HYPER_DEEP_AGENT_ENABLED:
+                # HYPER_DEEP_ORCHESTRATOR → RESULT_INTEGRATOR (결과 통합 후 정상 파이프라인 합류)
+                workflow.add_edge(WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
+            # Phase 8: UI_FRAME_GENERATOR 노드 등록 + END 단락 경로
+            if settings.A2UI_ENABLED:
+                workflow.add_node(WorkflowNode.UI_FRAME_GENERATOR.value, self._ui_frame_generator_node)
+                workflow.add_edge(WorkflowNode.UI_FRAME_GENERATOR.value, END)
+        else:
+            # A2UI_ENABLED에 따라 라우팅 맵과 노드 등록을 동시에 조건부 처리
+            # (노드 미등록 상태에서 라우팅 맵에 키만 있으면 LangGraph 경고 발생)
+            _else_routing = {
+                WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
+                WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
+                "task_scheduling": WorkflowNode.TASK_SCHEDULING_NODE.value,
+            }
+            if settings.A2UI_ENABLED:
+                _else_routing["ui_frame"] = WorkflowNode.UI_FRAME_GENERATOR.value
+            workflow.add_conditional_edges(
+                WorkflowNode.SKILL_TOOL_SELECTOR.value,
+                self._should_skip_orchestrators,
+                _else_routing,
+            )
+            if settings.A2UI_ENABLED:
+                workflow.add_node(WorkflowNode.UI_FRAME_GENERATOR.value, self._ui_frame_generator_node)
+                workflow.add_edge(WorkflowNode.UI_FRAME_GENERATOR.value, END)
+
+        # Phase 4 (OpenClaw Cron): TASK_SCHEDULING_NODE → 바로 응답 생성
+        workflow.add_edge(WorkflowNode.TASK_SCHEDULING_NODE.value, WorkflowNode.RESP_GENERATOR.value)
+
+        # Phase 2 (OpenClaw Execution Approval): EXECUTION_APPROVAL → 분기
+        # approved → 오케스트레이터 경로, rejected → 응답 생성으로 바로 이동
+        if settings.EXECUTION_APPROVAL_ENABLED:
+            workflow.add_conditional_edges(
+                WorkflowNode.EXECUTION_APPROVAL.value,
+                self._should_continue_after_approval,
+                {
+                    "approved": WorkflowNode.HYPOTHESIS_GENERATION.value,
+                    "rejected": WorkflowNode.RESP_GENERATOR.value,
+                },
+            )
 
         # Phase 2.5: HYPOTHESIS_GENERATION → SEARCH → HYPOTHESIS_EVALUATION → ANALYSIS
         workflow.add_edge(WorkflowNode.HYPOTHESIS_GENERATION.value, WorkflowNode.SEARCH_ORCHESTRATOR.value)
@@ -249,10 +397,17 @@ class MultiAgentWorkflow:
         # Conditionally use checkpointer
         if use_checkpointer:
             checkpointer = await get_checkpointer()
-            print("[DEBUG] Workflow graph created with PostgreSQL checkpointer for horizontal scaling")
-            return workflow.compile(checkpointer=checkpointer)
+            logger.debug("[WorkflowGraph] Created with PostgreSQL checkpointer for horizontal scaling")
+            # Phase 2 (OpenClaw Execution Approval): interrupt_before는 checkpointer 경로에만 적용
+            # stateless 경로(use_checkpointer=False)에서는 interrupt가 동작하지 않으므로 제외
+            interrupt_nodes = (
+                [WorkflowNode.EXECUTION_APPROVAL.value]
+                if settings.EXECUTION_APPROVAL_ENABLED
+                else []
+            )
+            return workflow.compile(checkpointer=checkpointer, interrupt_before=interrupt_nodes)
         else:
-            print("[DEBUG] Workflow graph created without checkpointer (stateless mode)")
+            logger.debug("[WorkflowGraph] Created without checkpointer (stateless mode)")
             return workflow.compile()
 
 
@@ -382,7 +537,7 @@ class MultiAgentWorkflow:
 
     async def _select_skills_tools_node(self, state: AgentState) -> Dict[str, Any]:
         """Skill and Tool selection 노드"""
-        print("[DEBUG] Executing skill/tool selection node")
+        logger.debug("[SkillToolSelector] Executing skill/tool selection")
 
         try:
             query = state.get("original_query", "")
@@ -415,20 +570,62 @@ class MultiAgentWorkflow:
                 detected_language=detected_language
             )
 
-            print(f"[DEBUG] Selected {len(selection.selected_skills)} skills: {selection.selected_skills}")
-            print(f"[DEBUG] Selected {len(selection.selected_tools)} tools: {selection.selected_tools}")
+            logger.debug(f"[SkillToolSelector] Selected {len(selection.selected_skills)} skills: {selection.selected_skills}")
+            logger.debug(f"[SkillToolSelector] Selected {len(selection.selected_tools)} tools: {selection.selected_tools}")
 
-            # Return state updates
-            return {
+            base_result = {
                 "selected_skills": selection.selected_skills,
                 "selected_tools": selection.selected_tools,
-                "selection_reasoning": selection.reasoning
+                "selection_reasoning": selection.reasoning,
             }
 
+            # Phase 2 (OpenClaw Execution Approval): 민감 스킬 allowlist 체크
+            # checkpointed 경로에서만 유효 — stateless 경로에서는 interrupt_before가 동작하지 않으므로
+            # approval 로직을 수행하면 approval_decision=None 상태로 EXECUTION_APPROVAL 노드가 즉시
+            # 실행되어 "승인 처리 중 예기치 않은 상태" 오류 메시지로 워크플로우가 종료된다.
+            if settings.EXECUTION_APPROVAL_ENABLED and self._graph_uses_checkpointer:
+                approval_skills = [
+                    s for s in selection.selected_skills
+                    if s in settings.APPROVAL_REQUIRED_SKILLS
+                ]
+                if approval_skills:
+                    # DB allowlist 조회 — allowlist에 있으면 자동 승인
+                    is_allowlisted = await self._check_approval_allowlist(user_id, approval_skills)
+                    if not is_allowlisted:
+                        import uuid as _uuid
+                        from datetime import datetime as _dt
+                        pending = [
+                            {
+                                "request_id": str(_uuid.uuid4()),
+                                "skill_name": s,
+                                "params": {},
+                                "timeout_seconds": settings.APPROVAL_TIMEOUT_SECONDS,
+                                "requested_at": _dt.utcnow().isoformat(),
+                            }
+                            for s in approval_skills
+                        ]
+                        logger.info(
+                            f"[ApprovalCheck] Skills require approval: {approval_skills} "
+                            f"for user={user_id}. Setting pending_approvals."
+                        )
+                        asyncio.create_task(
+                            _register_pending_approvals_db(
+                                pending,
+                                user_id,
+                                session_id,
+                            )
+                        )
+                        return {
+                            **base_result,
+                            "pending_approvals": pending,
+                            "approval_decision": None,
+                        }
+
+            return base_result
+
         except Exception as e:
-            print(f"[ERROR] Skill/tool selection failed: {e}")
             import traceback
-            print(f"[ERROR] Traceback: {traceback.format_exc()}")
+            logger.error(f"[SkillToolSelector] Selection failed: {e}\n{traceback.format_exc()}")
             # Return empty selections on error
             return {
                 "selected_skills": [],
@@ -439,6 +636,102 @@ class MultiAgentWorkflow:
     async def _process_conversation_context_node(self, state: AgentState) -> Dict[str, Any]:
         """대화 컨텍스트 처리 노드"""
         return await self.conversation_context_processor.process(state)
+
+    async def _execution_approval_node(self, state: AgentState) -> Dict[str, Any]:
+        """Phase 2 (OpenClaw Execution Approval): 실행 승인 노드
+
+        interrupt_before에 의해 중단된 후 resume 시 실행된다.
+        state["approval_decision"]에 사용자 결정("approved"|"rejected")이 담겨 있다.
+        """
+        if self.approval_processor is None:
+            logger.error("[ExecutionApprovalNode] ApprovalProcessor is not initialized")
+            return {"pending_approvals": [], "approval_decision": None}
+        return await self.approval_processor.process(state)
+
+    async def _ui_frame_generator_node(self, state: AgentState) -> Dict[str, Any]:
+        """Phase 8 (OpenClaw A2UI): UIFrame 생성 노드 래퍼.
+
+        QueryClassifier가 needs_ui=True로 표시한 쿼리에 대해 동적 UI 컴포넌트를 생성한다.
+        UI_FRAME_GENERATOR → END 단락 경로 (research 파이프라인 우회).
+        """
+        if self.ui_frame_generator is None:
+            logger.error("[UIFrameGeneratorNode] UIFrameGenerator is not initialized")
+            return {"needs_ui": False}
+        return await self.ui_frame_generator.generate(state)
+
+    async def _handle_task_scheduling_node(self, state: AgentState) -> Dict[str, Any]:
+        """Phase 4 (OpenClaw Cron): 자연어 스케줄 등록 노드.
+
+        IntentType.TASK_SCHEDULING으로 분류된 쿼리를 CronSkill로 위임한다.
+        결과(final_response)를 설정하면 RESP_GENERATOR가 그대로 반환한다.
+        """
+        from neos.skills.builtin.cron.skill import CronSkill
+
+        query = state.get("original_query", "")
+        user_id = state.get("user_id", "")
+        channel_type = state.get("channel_type", "api") or "api"
+        channel_id = state.get("channel_id")
+
+        logger.info("[TaskScheduling] Handling schedule registration: query=%s", query[:80])
+
+        try:
+            cron_skill = CronSkill()
+            result = await cron_skill.execute(
+                query=query,
+                user_id=user_id,
+                channel_type=channel_type,
+                channel_id=channel_id,
+            )
+            if result.success:
+                final_response = result.data.get("message", "스케줄이 등록되었습니다.")
+            else:
+                final_response = f"스케줄 등록에 실패했습니다: {result.error}"
+        except Exception as exc:
+            logger.error("[TaskScheduling] CronSkill execution failed: %s", exc, exc_info=True)
+            final_response = "스케줄 등록 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+
+        return {"final_response": final_response}
+
+    def _should_continue_after_approval(self, state: AgentState) -> str:
+        """EXECUTION_APPROVAL 노드 이후 라우팅 함수.
+
+        approval_processor가 설정한 approval_outcome 전용 필드를 사용한다.
+        이전 세션의 final_response 잔류값에 의한 오라우팅을 방지한다.
+
+        Returns:
+            "approved": 오케스트레이터 경로 (HYPOTHESIS_GENERATION)
+            "rejected": 응답 생성 (RESP_GENERATOR)
+        """
+        return state.get("approval_outcome", "rejected")
+
+    async def _check_approval_allowlist(self, user_id: str, skill_names: list) -> bool:
+        """DB에서 user_id의 skill_names 전체가 allowlist에 있는지 확인한다.
+
+        Args:
+            user_id: 사용자 ID
+            skill_names: 확인할 스킬 이름 목록
+
+        Returns:
+            True: 모든 스킬이 allowlist에 있어 자동 승인 가능
+            False: 하나라도 없으면 사용자 승인 필요
+        """
+        if not skill_names:
+            return True
+        try:
+            from neos.database.connection import db_manager
+            placeholders = ", ".join(f"${i+2}" for i in range(len(skill_names)))
+            sql = f"""
+                SELECT COUNT(*) AS count FROM tool_approval_allowlist
+                WHERE user_id = $1
+                  AND skill_name IN ({placeholders})
+                  AND auto_approved = TRUE
+            """
+            row = await db_manager.fetch_one(sql, user_id, *skill_names)
+            count = int(row["count"]) if row else 0
+            return count >= len(skill_names)
+        except Exception as e:
+            logger.debug(f"[ApprovalCheck] Allowlist DB query failed: {e} — requiring approval")
+            return False
 
     async def _orchestrate_search_node(self, state: AgentState) -> Dict[str, Any]:
         """검색 오케스트레이션 노드"""
@@ -467,6 +760,90 @@ class MultiAgentWorkflow:
     async def _generate_response_node(self, state: AgentState) -> Dict[str, Any]:
         """응답 생성 노드"""
         return await self.response_generator.generate_response(state)
+
+    async def _recursive_orchestrator_node(self, state: AgentState) -> Dict[str, Any]:
+        """ROMA: 재귀 오케스트레이터 노드"""
+        if self.recursive_orchestrator is None:
+            logger.error("[RecursiveOrchestratorNode] RecursiveOrchestrator is not initialized")
+            return {"final_response": "재귀 에이전트가 초기화되지 않았습니다."}
+        return await self.recursive_orchestrator.execute(state)
+
+    async def _hyper_deep_orchestrator_node(self, state: AgentState) -> Dict[str, Any]:
+        """HyperDeep Recursive: ROMA + HyperDeepResearchAgent 오케스트레이터 노드"""
+        if self.hyper_deep_orchestrator is None:
+            logger.error("[HyperDeepOrchestratorNode] HyperDeepOrchestrator is not initialized")
+            return {"final_response": "HyperDeep 재귀 에이전트가 초기화되지 않았습니다."}
+        logger.info(
+            f"[HyperDeepOrchestratorNode] Starting for: "
+            f"{state.get('original_query', '')[:60]}"
+        )
+        return await self.hyper_deep_orchestrator.execute(state)
+
+    def _should_use_recursive_agent(self, state: AgentState) -> str:
+        """ROMA / HyperDeep: 재귀 에이전트 사용 여부 판단 라우팅 함수.
+
+        우선순위:
+        1. HYPER_DEEP_AGENT_ENABLED → hyper_deep_research intent 또는 높은 복잡도
+        2. RECURSIVE_AGENT_ENABLED → recursive_research intent 또는 높은 복잡도
+        3. 기존 로직 (use_orchestrators / skip_orchestrators)
+
+        Returns:
+            "hyper_deep": HYPER_DEEP_ORCHESTRATOR로 라우팅
+            "recursive": RECURSIVE_ORCHESTRATOR로 라우팅
+            WorkflowPathway.USE_ORCHESTRATORS.value: 기존 오케스트레이터 경로
+            WorkflowPathway.SKIP_ORCHESTRATORS.value: 바로 응답 생성
+        """
+        # 0-A순위: Phase 8 (A2UI) — needs_ui 플래그 최우선 체크 (flag 기반, _PRIORITY_ROUTING_MAP 이전)
+        if settings.A2UI_ENABLED:
+            if state.get("needs_ui") and not state.get("ui_submission"):
+                logger.info("[A2UI] needs_ui=True, no ui_submission → ui_frame_generator")
+                return "ui_frame"
+
+        # 0-B순위: 최우선 라우팅 (CR-P6-11: _PRIORITY_ROUTING_MAP 단일 지점 관리)
+        priority = _get_priority_routing(state)
+        if priority:
+            logger.info("[PriorityRouting] intent=%s → %s", state.get("query_intent"), priority)
+            return priority
+
+        # 0-C순위: Phase 2 (OpenClaw Execution Approval) — 승인 대기 중이면 즉시 라우팅
+        # pending_approvals가 있고 approval_decision이 None이면 interrupt_before 발동
+        if settings.EXECUTION_APPROVAL_ENABLED:
+            if state.get("pending_approvals") and state.get("approval_decision") is None:
+                logger.info("[ApprovalRouting] pending_approvals detected → needs_approval")
+                return "needs_approval"
+
+        classification = state.get("query_classification") or {}
+        complexity = classification.get("complexity_score", 0.0)
+        intent = state.get("query_intent", "")
+
+        # 1순위: HyperDeep — 더 강력한 에이전트이므로 먼저 체크
+        if settings.HYPER_DEEP_AGENT_ENABLED:
+            if intent == IntentType.HYPER_DEEP_RESEARCH.value:
+                logger.info("[HyperDeep] Routing to hyper_deep_orchestrator: intent=hyper_deep_research")
+                return "hyper_deep"
+
+            hyper_deep_intents = (IntentType.DEEP_RESEARCH.value, IntentType.COMPLEX_ANALYSIS.value)
+            if complexity >= settings.HYPER_DEEP_COMPLEXITY_THRESHOLD and intent in hyper_deep_intents:
+                logger.info(
+                    f"[HyperDeep] Routing to hyper_deep_orchestrator: "
+                    f"intent={intent}, complexity={complexity:.2f}"
+                )
+                return "hyper_deep"
+
+        # 2순위: ROMA 재귀 에이전트
+        if intent == IntentType.RECURSIVE_RESEARCH.value:
+            logger.info("[ROMA] Routing to recursive agent: intent=recursive_research")
+            return "recursive"
+
+        roma_intents = (IntentType.DEEP_RESEARCH.value, IntentType.COMPLEX_ANALYSIS.value)
+        if complexity >= settings.RECURSIVE_COMPLEXITY_THRESHOLD and intent in roma_intents:
+            logger.info(
+                f"[ROMA] Routing to recursive agent: intent={intent}, complexity={complexity:.2f}"
+            )
+            return "recursive"
+
+        # 기존 라우팅 로직에 위임
+        return self._should_skip_orchestrators(state)
 
     def _should_refine_query(self, state: AgentState) -> str:
         """
@@ -563,6 +940,11 @@ class MultiAgentWorkflow:
         query_intent = state.get("query_intent", "")
         query_classification = state.get("query_classification", {})
         complexity_score = query_classification.get("complexity_score", 0.0)
+
+        # 최우선 라우팅 (CR-P6-11: _PRIORITY_ROUTING_MAP 단일 지점 관리)
+        priority = _get_priority_routing(state)
+        if priority:
+            return priority
 
         # 사용할 쿼리 결정 (refined_query가 있으면 그것을 사용)
         query = state.get("refined_query", state.get("original_query", ""))
@@ -743,7 +1125,7 @@ class MultiAgentWorkflow:
             await self._ensure_graph_initialized(use_checkpointer=use_checkpointer)
 
             user_id = user_input.get("user_id")
-            print(f"[DEBUG] Starting workflow execution for query: {query[:50]}...")
+            logger.debug(f"[ExecuteWorkflow] Starting for query: {query[:50]}...")
 
             # 워크플로우 시작 이벤트
             await event_handler.on_workflow_start(user_input)
@@ -792,13 +1174,13 @@ class MultiAgentWorkflow:
                 # 워크플로우 실행
                 add_span_event(span, "starting_graph_execution")
                 if use_checkpointer:
-                    print("[DEBUG] Executing workflow graph with distributed state management...")
+                    logger.debug("[ExecuteWorkflow] Executing with checkpointer (distributed state management)")
                     config = {
                         "configurable": {"thread_id": user_input["session_id"]},
                         "recursion_limit": 50  # 재시도를 위한 recursion limit 증가
                     }
                 else:
-                    print("[DEBUG] Executing workflow graph in stateless mode...")
+                    logger.debug("[ExecuteWorkflow] Executing in stateless mode")
                     config = {
                         "recursion_limit": 50  # 재시도를 위한 recursion limit 증가
                     }
@@ -917,13 +1299,31 @@ class MultiAgentWorkflow:
                     user_input, result, final_state
                 )
 
-                print("[DEBUG] Workflow execution completed successfully")
+                logger.debug("[ExecuteWorkflow] Completed successfully")
                 return result
 
             except Exception as e:
+                # GraphInterrupt: interrupt_before=EXECUTION_APPROVAL 발동
+                # Generic Exception catch 이전에 처리해야 SSE approval_request 이벤트가 발행됨
+                try:
+                    from langgraph.errors import GraphInterrupt
+                    if isinstance(e, GraphInterrupt):
+                        add_span_event(span, "workflow_interrupted_for_approval")
+                        current_graph_state = await self.graph.aget_state(config)
+                        pending = current_graph_state.values.get("pending_approvals", [])
+                        session_id = user_input.get("session_id", "")
+                        await event_handler.on_approval_request(pending, session_id)
+                        logger.info(
+                            f"[ExecuteWorkflow] GraphInterrupt: approval_request sent "
+                            f"for session={session_id}, pending={len(pending)}"
+                        )
+                        return {"success": True, "interrupted": True, "response": None}
+                except ImportError:
+                    pass  # langgraph.errors 미설치 시 일반 에러로 처리
+
                 import traceback
                 traceback.print_exc()
-                print(f"[ERROR] Workflow execution failed: {str(e)}")
+                logger.error(f"[ExecuteWorkflow] Workflow execution failed: {str(e)}")
 
                 # Tracing: 에러 기록
                 add_span_event(span, "workflow_error", {"error": str(e)})
@@ -1110,6 +1510,14 @@ class MultiAgentWorkflow:
             # Phase 4.7: Research Templates
             template_id=None,
             template_config=None,
+            # Phase 8: A2UI (Agent-to-User Interface)
+            needs_ui=user_input.get("needs_ui"),
+            ui_frame=None,
+            ui_submission=user_input.get("ui_submission"),
+            # Phase 3: 채널 소스 (query_history.channel_source 초기 기록용)
+            channel_source=user_input.get("channel_source", "api"),
+            channel_type=user_input.get("channel_type"),
+            channel_id=user_input.get("channel_id"),
         )
 
     def _create_workflow_result(self, final_state: AgentState) -> Dict[str, Any]:
@@ -1124,6 +1532,8 @@ class MultiAgentWorkflow:
             "cache_hit": False,
             "execution_steps": len(final_state["execution_steps"]),
             "retry_count": final_state.get("retry_count", 0),
+            # Phase 3: 채널 소스 — query_history 저장 시 활용
+            "channel_source": final_state.get("channel_source", "api"),
         }
 
         # Phase 4.7: 템플릿 정보 포함
@@ -1486,6 +1896,38 @@ class MultiAgentWorkflow:
 
         except Exception as e:
             logger.warning(f"[MultiAgentWorkflow] Cleanup error (non-critical): {e}")
+
+
+async def _register_pending_approvals_db(
+    pending: list,
+    user_id: str,
+    session_id: str,
+) -> None:
+    """pending_approvals 추적 테이블에 승인 요청을 등록한다."""
+    from datetime import timedelta
+    from neos.database.connection import db_manager
+    from neos.utils.time_utils import utc_now_naive
+
+    now = utc_now_naive()
+    for item in pending:
+        expires_at = now + timedelta(seconds=settings.APPROVAL_TIMEOUT_SECONDS)
+        try:
+            await db_manager.execute(
+                """
+                INSERT INTO pending_approvals
+                    (session_id, request_id, user_id, skill_name, requested_at, expires_at)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (request_id) DO NOTHING
+                """,
+                session_id,
+                item.get("request_id", ""),
+                user_id,
+                item.get("skill_name", ""),
+                now,
+                expires_at,
+            )
+        except Exception as exc:
+            logger.debug("pending_approvals 등록 실패 (non-critical): %s", exc)
 
 
 # 전역 워크플로우 인스턴스 (리팩토링된 버전)

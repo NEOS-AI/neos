@@ -37,7 +37,7 @@ async def export_research_report(
     except ValueError:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported format: {format}. Use markdown, html, or pdf",
+            detail=f"Unsupported format: {format}. Use markdown, html, pdf, or canvas",
         )
 
     try:

@@ -1,5 +1,5 @@
 // Curated list of top models from Vercel AI Gateway
-export const DEFAULT_CHAT_MODEL = "google/gemini-2.5-flash-lite";
+export const DEFAULT_CHAT_MODEL = "anthropic/claude-sonnet-4.5";
 
 export type ChatModel = {
   id: string;
@@ -24,7 +24,7 @@ export const chatModels: ChatModel[] = [
   },
   {
     id: "anthropic/claude-opus-4.5",
-    name: "Claude Opus 4.5",
+    name: "Claude Opus 4.6",
     provider: "anthropic",
     description: "Most capable Anthropic model",
   },
@@ -36,8 +36,8 @@ export const chatModels: ChatModel[] = [
     description: "Fast and cost-effective for simple tasks",
   },
   {
-    id: "openai/gpt-5.2",
-    name: "GPT-5.2",
+    id: "openai/gpt-4.1",
+    name: "GPT-4.1",
     provider: "openai",
     description: "Most capable OpenAI model",
   },
@@ -50,7 +50,7 @@ export const chatModels: ChatModel[] = [
   },
   {
     id: "google/gemini-3-pro-preview",
-    name: "Gemini 3 Pro",
+    name: "Gemini 1.5 Pro",
     provider: "google",
     description: "Most capable Google model",
   },
@@ -94,14 +94,14 @@ export function mapToBackendModelName(vercelModelId: string): string {
     // Anthropic
     "anthropic/claude-haiku-4.5": "claude-haiku-4-5-20250929",
     "anthropic/claude-sonnet-4.5": "claude-sonnet-4-5-20250929",
-    "anthropic/claude-opus-4.5": "claude-opus-4-5-20251101",
+    "anthropic/claude-opus-4.5": "claude-opus-4-6",
     "anthropic/claude-3.7-sonnet-thinking": "claude-sonnet-4-5-20250929", // Use sonnet as fallback
     // OpenAI - remove provider prefix
     "openai/gpt-4.1-mini": "gpt-4o-mini",
-    "openai/gpt-5.2": "gpt-4o",
+    "openai/gpt-4.1": "gpt-4o",
     // Google - remove provider prefix
     "google/gemini-2.5-flash-lite": "gemini-2.0-flash",
-    "google/gemini-3-pro-preview": "gemini-1.5-pro",
+    "google/gemini-3-pro-preview": "gemini-1.5-pro-latest",
     // xAI - remove provider prefix
     "xai/grok-4.1-fast-non-reasoning": "grok-beta",
     "xai/grok-code-fast-1-thinking": "grok-beta",

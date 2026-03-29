@@ -279,6 +279,70 @@ class WorkflowStreamCallback(WorkflowEventHandler):
             }
         )
 
+    async def on_approval_request(self, pending_approvals: list, session_id: str) -> None:
+        """interrupt_before=EXECUTION_APPROVAL 발동 시 클라이언트로 승인 요청 이벤트 발행."""
+        event = self._create_event(
+            event_type=WorkflowStreamEventType.APPROVAL_REQUEST,
+            data={"pending_approvals": pending_approvals},
+        )
+        await self.event_queue.put(event)
+
+    async def on_ui_frame(self, ui_frame: dict) -> None:
+        """Phase 8 (A2UI): UIFrameGenerator 노드에서 UIFrame 생성 시 SSE 이벤트 발행.
+
+        클라이언트는 "ui_frame" 이벤트 수신 시 UIFrameRenderer로 폼을 렌더링하고,
+        사용자 제출 후 POST /api/v1/ui/submit을 호출해야 한다.
+        """
+        event = self._create_event(
+            event_type=WorkflowStreamEventType.UI_FRAME,
+            data={"ui_frame": ui_frame},
+        )
+        await self.event_queue.put(event)
+
+    # ============================================================================
+    # HDR (HyperDeep Research) Phase 이벤트 메서드들 — OpenResponses 브릿지
+    # ============================================================================
+
+    async def on_hdr_phase_start(self, phase_number: int, phase_name: str) -> None:
+        """HDR Phase 시작 이벤트 — stream_adapter에서 FunctionCallItem(in_progress)로 변환됨."""
+        safe_name = phase_name.lower().replace(" ", "_").replace("/", "_")
+        event = self._create_event(
+            event_type="hyper_deep_phase_start",
+            node_name=f"hyper_deep:phase_{safe_name}",
+            data={
+                "phase_number": phase_number,
+                "phase_name": phase_name,
+            },
+        )
+        await self.event_queue.put(event)
+
+    async def on_hdr_phase_complete(
+        self,
+        phase_number: int,
+        phase_name: str,
+        duration_ms: Optional[int] = None,
+    ) -> None:
+        """HDR Phase 완료 이벤트 — stream_adapter에서 FunctionCallItem(completed)로 변환됨."""
+        safe_name = phase_name.lower().replace(" ", "_").replace("/", "_")
+        event = self._create_event(
+            event_type="hyper_deep_phase_complete",
+            node_name=f"hyper_deep:phase_{safe_name}",
+            data={
+                "phase_number": phase_number,
+                "phase_name": phase_name,
+                "duration_ms": duration_ms,
+            },
+        )
+        await self.event_queue.put(event)
+
+    async def on_hdr_usage(self, estimated_tokens: int) -> None:
+        """HDR 토큰 사용량 이벤트 — stream_adapter에서 ResponseObject.usage에 반영됨."""
+        event = self._create_event(
+            event_type="hyper_deep_usage",
+            data={"estimated_total_tokens": estimated_tokens},
+        )
+        await self.event_queue.put(event)
+
     # ============================================================================
     # 기존 호환성 메서드들 (레거시 코드 지원)
     # ============================================================================

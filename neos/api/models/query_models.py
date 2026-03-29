@@ -84,6 +84,14 @@ class WorkflowStreamEventType(str):
     HEARTBEAT = "heartbeat"
     ERROR = "error"
     COMPLETED = "completed"
+    # Phase 2 (OpenClaw Execution Approval): 사용자 승인 요청 이벤트
+    # 클라이언트는 이 이벤트를 받으면 POST /api/v1/approval/respond를 호출해야 한다.
+    APPROVAL_REQUEST = "approval_request"
+    # Phase 8 (OpenClaw A2UI): UIFrame 이벤트
+    # 클라이언트는 이 이벤트를 받으면 UIFrameRenderer로 폼을 렌더링하고,
+    # 사용자 제출 후 POST /api/v1/ui/submit을 호출해야 한다.
+    UI_FRAME = "ui_frame"
+    UI_FRAME_UPDATE = "ui_frame_update"  # 향후 점진적 업데이트
 
 
 class WorkflowStreamEvent(BaseModel):

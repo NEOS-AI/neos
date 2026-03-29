@@ -12,6 +12,7 @@ from neos.exporters import (
     MarkdownExporter,
     HTMLExporter,
     PDFExporter,
+    CanvasExporter,
     ExportFormat,
     ResearchReport,
 )
@@ -28,6 +29,7 @@ class ExportService:
             ExportFormat.MARKDOWN: MarkdownExporter(),
             ExportFormat.HTML: HTMLExporter(),
             ExportFormat.PDF: PDFExporter(),
+            ExportFormat.CANVAS: CanvasExporter(),
         }
 
     async def export_research_session(
@@ -48,6 +50,12 @@ class ExportService:
             raise ValueError(f"Unsupported format: {format}")
 
         return await exporter.export(report, **options)
+
+    async def get_research_report(
+        self, session_id: str, user_id: str
+    ) -> Optional[ResearchReport]:
+        """공개 인터페이스 — 연구 세션 데이터를 ResearchReport로 반환 (CR-P6-05)."""
+        return await self._build_report(session_id, user_id)
 
     async def _build_report(
         self, session_id: str, user_id: str

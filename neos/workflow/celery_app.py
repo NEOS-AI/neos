@@ -92,6 +92,12 @@ def init_worker(**kwargs):
     # 데이터베이스 연결은 각 태스크에서 on-demand로 생성
     # (프로세스별 커넥션 풀 관리를 위해)
 
+    # fork 후 부모 프로세스의 LLM 커넥션 풀을 상속하면 race condition 발생 가능
+    # (httpx.AsyncClient 소켓 파일 디스크립터 공유 위험) — 캐시를 비워 새 커넥션 생성 강제
+    from neos.utils.llm_factory import LLMFactory
+    LLMFactory.clear_cache()
+    logger.info("LLM cache cleared after fork")
+
     logger.info("Celery worker ready")
 
 
@@ -123,6 +129,21 @@ app.conf.beat_schedule = {
     'update-cache-stats': {
         'task': 'neos.workflow.celery_tasks.update_cache_statistics',
         'schedule': 600.0,  # 10분
+    },
+    # Phase 4: Cron 스케줄 폴러 — DB에서 만기 태스크를 매 1분마다 조회·실행
+    'poll-scheduled-tasks': {
+        'task': 'neos.tasks.poll_scheduled_tasks',
+        'schedule': 60.0,  # 1분
+    },
+    # Phase 8 (A2UI): 만료된 UIFrameSession 레코드 정리 — 매시간 정각
+    'cleanup-expired-ui-frames': {
+        'task': 'neos.tasks.cleanup_expired_ui_frames',
+        'schedule': 3600.0,  # 1시간
+    },
+    # Task 6 (Approval): 만료된 pending_approvals 자동 거부 — 5분마다
+    'expire-pending-approvals': {
+        'task': 'neos.tasks.expire_pending_approvals',
+        'schedule': 300.0,  # 5분
     },
 }
 

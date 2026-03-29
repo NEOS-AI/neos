@@ -126,6 +126,9 @@ psql -U postgres -d neos -h localhost -f db/migrations/018_add_contradiction_res
 
 # Add Tool Registry tables
 psql -U postgres -d neos -h localhost -f db/migrations/019_add_tool_registry.sql
+
+# Add contextual retrieval tables
+psql -U postgres -d neos -h localhost -f db/migrations/020_add_contextual_retrieval.sql
 ```
 
 ### Migrate database schema for backoffice

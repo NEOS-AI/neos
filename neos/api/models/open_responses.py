@@ -9,7 +9,7 @@ enabling interoperability between different AI providers.
 """
 
 from typing import Optional, List, Dict, Any, Literal, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from enum import Enum
 import time
 
@@ -291,6 +291,30 @@ class NeosWorkflowProgressEvent(BaseModel):
     message: Optional[str] = None
 
 
+class NeosUIFrameEvent(BaseModel):
+    """
+    Event: neos:ui_frame — Phase 8 (A2UI) UIFrame 컴포넌트 페이로드
+
+    Neos 확장 이벤트. UIFrameGenerator가 생성한 컴포넌트 목록을
+    클라이언트에 전달하기 위해 사용.
+    """
+    type: Literal["neos:ui_frame"] = "neos:ui_frame"
+    ui_frame: Dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_ui_frame_schema(self) -> "NeosUIFrameEvent":
+        """ui_frame 데이터가 UIFrame 스키마를 만족하는지 런타임 검증.
+
+        순환 임포트를 피하기 위해 지연 임포트를 사용한다.
+        """
+        from neos.api.models.ui_components import UIFrame  # noqa: PLC0415
+        try:
+            UIFrame.model_validate(self.ui_frame)
+        except Exception as e:
+            raise ValueError(f"ui_frame schema validation failed: {e}") from e
+        return self
+
+
 # ============================================================================
 # Union Types
 # ============================================================================
@@ -316,6 +340,7 @@ NeosExtensionEvent = Union[
     NeosArtifactDeltaEvent,
     NeosArtifactFinishEvent,
     NeosWorkflowProgressEvent,
+    NeosUIFrameEvent,          # Phase 8 (A2UI)
 ]
 
 OpenResponsesEvent = Union[StandardStreamEvent, NeosExtensionEvent]

@@ -1,4 +1,10 @@
-"""대화 히스토리 컨텍스트 처리 모듈"""
+"""대화 히스토리 컨텍스트 처리 모듈
+
+Phase 3 (OpenClaw Context Engine 분리) 리팩터:
+- ContextAssemblyEngine이 메모리 토큰 예산·채널 포맷팅을 담당한다.
+- 이 클래스는 대화 요약(LLM) + 주제 추출을 담당하는 얇은 오케스트레이터로 유지된다.
+- assembled_context (새 필드), conversation_context (하위 호환 유지) 모두 반환한다.
+"""
 
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -9,9 +15,9 @@ import asyncio
 from ..state import AgentState
 from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
+from neos.memory.context_assembly import ContextAssemblyEngine
 
 logger = logging.getLogger(__name__)
-
 
 class ConversationContextProcessor:
     """
@@ -21,9 +27,14 @@ class ConversationContextProcessor:
     1. 대화 흐름 분석: 히스토리에서 주요 주제와 맥락 파악
     2. 참조 해결: "그것", "이전에", "아까" 등의 대명사/참조 해결
     3. 컨텍스트 생성: 다른 노드들이 활용할 요약 컨텍스트 생성
+
+    Args:
+        context_engine: ContextAssemblyEngine 인스턴스. 단위 테스트에서 mock으로 교체 가능.
+                        None이면 기본 인스턴스를 생성한다.
     """
 
-    def __init__(self):
+    def __init__(self, context_engine: Optional[ContextAssemblyEngine] = None):
+        self._context_engine = context_engine or ContextAssemblyEngine()
         self.max_tokens = settings.HISTORY_CONTEXT_MAX_TOKENS
         self.usage_level = settings.HISTORY_USAGE_LEVEL
 
@@ -44,6 +55,11 @@ class ConversationContextProcessor:
     async def process(self, state: AgentState) -> Dict[str, Any]:
         """
         대화 히스토리를 분석하여 conversation_context 생성
+
+        Phase 3 변경사항:
+        - memory_context(3계층 메모리)가 있으면 ContextAssemblyEngine에 위임하여
+          토큰 예산·채널 포맷팅을 적용한 assembled_context를 생성한다.
+        - conversation_context(하위 호환)와 assembled_context 모두 반환한다.
 
         Args:
             state: 현재 워크플로우 상태
@@ -95,12 +111,52 @@ class ConversationContextProcessor:
             if isinstance(results[1], Exception):
                 logger.warning(f"[ConversationContextProcessor] Topic extraction failed: {results[1]}, using empty list")
 
+            # Phase 3: ContextAssemblyEngine으로 메모리 컨텍스트 조립
+            # memory_context가 있으면 토큰 예산·채널 포맷팅을 적용한다.
+            assembled_context_dict: Optional[Dict[str, Any]] = None
+            memory_context = state.get("memory_context")
+            if memory_context and memory_context.get("has_context"):
+                try:
+                    channel_type = state.get("channel_type") or "api"
+                    recursive_results = None
+                    # ROMA 결과가 있으면 episodic에 병합
+                    if state.get("recursive_task_tree"):
+                        recursive_results = {
+                            "final_response": state.get("final_response", ""),
+                            "summary": str(state.get("recursive_task_tree", "")),
+                        }
+
+                    assembled = await self._context_engine.assemble(
+                        user_id=state.get("user_id", ""),
+                        query=state.get("original_query", ""),
+                        memory_context=memory_context,
+                        channel_type=channel_type,
+                        max_tokens=settings.CONTEXT_MAX_TOKENS,
+                        recursive_results=recursive_results,
+                    )
+                    assembled_context_dict = assembled.trimmed
+
+                    # 채널용으로 포맷된 메모리 컨텍스트를 conversation_context에 추가
+                    if assembled.formatted:
+                        conversation_context = (
+                            f"{conversation_context}\n\n[메모리 컨텍스트]\n{assembled.formatted}"
+                            if conversation_context
+                            else assembled.formatted
+                        )
+                    logger.info(
+                        f"[ConversationContextProcessor] Memory context assembled: "
+                        f"token_estimate={assembled.token_estimate}, channel={channel_type}"
+                    )
+                except Exception as e:
+                    logger.warning(f"[ConversationContextProcessor] ContextAssemblyEngine failed: {e}")
+
             # 메타데이터 생성
             history_metadata = {
                 "total_messages": len(chat_history),
                 "context_generated_at": datetime.now().isoformat(),
                 "context_length": len(conversation_context),
                 "main_topics": main_topics,
+                "assembled_context_available": assembled_context_dict is not None,
             }
 
             logger.info(
@@ -115,15 +171,20 @@ class ConversationContextProcessor:
                 "timestamp": datetime.now().isoformat(),
                 "metadata": {
                     "messages_processed": len(chat_history),
-                    "context_length": len(conversation_context)
+                    "context_length": len(conversation_context),
+                    "assembled_context": assembled_context_dict is not None,
                 }
             }
 
-            return {
+            update: Dict[str, Any] = {
                 "conversation_context": conversation_context,
                 "history_metadata": history_metadata,
-                "execution_steps": state["execution_steps"] + [execution_step]
+                "execution_steps": state["execution_steps"] + [execution_step],
             }
+            if assembled_context_dict is not None:
+                update["assembled_context"] = assembled_context_dict
+
+            return update
 
         except Exception as e:
             logger.error(f"[ConversationContextProcessor] Error processing context: {e}")

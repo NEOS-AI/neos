@@ -6,6 +6,7 @@ import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
 import { ArtifactBlock } from "./artifact-block";
+import { UIFrameRenderer } from "./ui-frame/UIFrameRenderer";
 import { useDataStream } from "./data-stream-provider";
 import { DocumentToolResult } from "./document";
 import { DocumentPreview } from "./document-preview";
@@ -304,6 +305,11 @@ const PurePreviewMessage = ({
                 kind: message.metadata.artifact.kind,
               }}
             />
+          )}
+
+          {/* Phase 8 (A2UI): UIFrame 렌더링 */}
+          {message.role === "assistant" && message.metadata?.ui_frame && (
+            <UIFrameRenderer uiFrame={message.metadata.ui_frame} />
           )}
 
           {!isReadonly && (

@@ -23,6 +23,32 @@ from ..state import AgentState
 
 logger = logging.getLogger(__name__)
 
+# CR-P6-06: TASK_SCHEDULING AND 조건 — 오탐 방지용 집합 및 헬퍼
+_SCHEDULING_TEMPORAL = {"매일", "매주", "매시간", "매월", "주기적으로", "every", "recurring"}
+_SCHEDULING_ACTION = {"등록", "설정", "알림", "remind", "예약", "cron", "schedule", "등록해줘", "설정해줘"}
+
+
+def _is_scheduling_intent(query: str) -> bool:
+    """시간 표현 AND 등록 동작이 모두 있을 때만 스케줄 인텐트로 분류."""
+    has_temporal = any(t in query for t in _SCHEDULING_TEMPORAL)
+    has_action = any(a in query for a in _SCHEDULING_ACTION)
+    return has_temporal and has_action
+
+
+# Phase 8: A2UI needs_ui 감지 — AND 조건 (task_execution/generation 계열 + UI 패턴 키워드)
+_UI_COLLECTION_KEYWORDS = {
+    # 예약
+    "예약", "예약해줘", "reservation", "reserve", "book", "booking",
+    # 폼 입력
+    "폼", "form", "입력해줘", "작성해줘", "fill in",
+    # 설정
+    "설정해줘", "configure", "configuration",
+    # 비교 선택
+    "선택해줘", "골라줘", "choose for me",
+}
+_UI_REQUIRED_INTENTS = {IntentType.TASK_EXECUTION.value, IntentType.GENERATION.value}
+
+
 # LLM 분류용 프롬프트 (valid intent types 포함)
 _VALID_INTENTS = [it.value for it in IntentType]
 
@@ -33,6 +59,7 @@ _LLM_CLASSIFICATION_PROMPT = """You are a query classification system. Analyze t
 - sub_topics: list of 1-5 specific sub-topics the query addresses
 - required_capabilities: list of capabilities needed (e.g., "web_search", "data_analysis", "comparison", "realtime_data", "academic_search", "financial_data")
 - confidence: float 0.0-1.0 (how confident you are in this classification)
+- needs_ui: boolean (True only if the query requires collecting multiple structured inputs from the user via a form before the task can be executed)
 
 Rules:
 - "simple_conversation" for greetings, thanks, small talk
@@ -46,6 +73,8 @@ Rules:
 - "youtube_search" for video/youtube related queries
 - "generation" for creating content, images, files
 - "task_execution" for planning, executing tasks
+- Set needs_ui=true for: reservations, bookings, form-filling, multi-field configuration wizards
+- Set needs_ui=false for: informational queries, analysis, simple commands, single-step tasks
 
 User query: {query}
 {context_section}
@@ -69,7 +98,13 @@ class QueryClassifier:
             IntentType.TECHNICAL_ANALYSIS.value: ["기술", "technology", "개발", "development", "프로그래밍", "programming"],
             IntentType.COMPLEX_ANALYSIS.value: ["심층", "종합", "포괄적", "전반적", "심도있는", "detailed", "comprehensive", "in-depth"],
             IntentType.DEEP_RESEARCH.value: ["deep research", "심층 조사", "철저히", "깊이있게", "전문적인 분석", "리포트", "보고서", "detailed report", "연구"],
-            IntentType.YOUTUBE_SEARCH.value: ["youtube", "유튜브", "video", "비디오", "영상", "tutorial", "튜토리얼", "watch", "시청"]
+            IntentType.YOUTUBE_SEARCH.value: ["youtube", "유튜브", "video", "비디오", "영상", "tutorial", "튜토리얼", "watch", "시청"],
+            # CR-P6-06: "매" 단독 접두사 제거 — "매출", "매각" 등 오탐 방지
+            # AND 조건 검증은 _classify_intent()의 _is_scheduling_intent() 호출로 처리
+            IntentType.TASK_SCHEDULING.value: [
+                "매일", "매주", "매시간", "매월", "주기적으로", "recurring", "every",
+                "cron", "schedule", "remind",
+            ],
         }
 
         # 복잡한 쿼리 판별을 위한 키워드
@@ -88,18 +123,21 @@ class QueryClassifier:
         LLM 분류는 sub_topics, required_capabilities 등 풍부한 structured output을 제공합니다.
         """
         query = state["original_query"]
-        print(f"[DEBUG] Starting query classification for: {query[:50]}...")
+        logger.debug("[QueryClassifier] Starting classification for: %s...", query[:50])
 
         # 대화 컨텍스트 확인
         conversation_context = state.get("conversation_context", "")
         if conversation_context:
-            print(f"[DEBUG] Using conversation context (length: {len(conversation_context)} chars)")
+            logger.debug(
+                "[QueryClassifier] Using conversation context (length: %d chars)",
+                len(conversation_context),
+            )
 
         try:
             # 언어 감지
             detected_language = self._detect_language(query)
             state["detected_language"] = detected_language
-            print(f"[DEBUG] Detected language: {detected_language}")
+            logger.debug("[QueryClassifier] Detected language: %s", detected_language)
 
             # 쿼리 임베딩 생성
             await self._generate_embedding(state, query)
@@ -115,7 +153,11 @@ class QueryClassifier:
                 intent = llm_result["intent"]
                 complexity_score = llm_result["complexity"]
                 state["query_intent"] = intent
-                print(f"[DEBUG] LLM classification: intent={intent}, complexity={complexity_score}")
+                logger.debug(
+                    "[QueryClassifier] LLM classification: intent=%s, complexity=%s",
+                    intent,
+                    complexity_score,
+                )
 
                 required_agents = self._determine_required_agents(query, intent, complexity_score)
                 state["required_agents"] = required_agents
@@ -128,14 +170,21 @@ class QueryClassifier:
                 classification_result["required_capabilities"] = llm_result.get("required_capabilities", [])
                 classification_result["classification_method"] = "llm"
                 state["query_classification"] = classification_result
+
+                # Phase 8 (A2UI): LLM needs_ui 우선 적용 — keyword 방식보다 정확
+                if getattr(settings, "A2UI_ENABLED", False):
+                    state["needs_ui"] = llm_result.get("needs_ui", False)
+                    logger.debug("[QueryClassifier] LLM needs_ui=%s", state["needs_ui"])
+                else:
+                    state["needs_ui"] = False
             else:
                 # Keyword 기반 fallback
                 complexity_score = self._analyze_query_complexity(query)
-                print(f"[DEBUG] Query complexity score: {complexity_score}")
+                logger.debug("[QueryClassifier] Query complexity score: %s", complexity_score)
 
                 intent = await self._classify_intent(query, complexity_score, conversation_context)
                 state["query_intent"] = intent
-                print(f"[DEBUG] Intent classified as: {intent}")
+                logger.debug("[QueryClassifier] Intent classified as: %s", intent)
 
                 required_agents = self._determine_required_agents(query, intent, complexity_score)
                 state["required_agents"] = required_agents
@@ -146,14 +195,18 @@ class QueryClassifier:
                 classification_result["classification_method"] = "keyword"
                 state["query_classification"] = classification_result
 
-            print(f"[DEBUG] Required agents: {state['required_agents']}")
+            logger.debug("[QueryClassifier] Required agents: %s", state["required_agents"])
 
         except Exception as e:
-            print(f"[ERROR] Query classification failed: {e}")
+            logger.error("[QueryClassifier] Query classification failed: %s", e)
             state["query_intent"] = "information_seeking"
             state["required_agents"] = ["knowledge_search", "realtime_info_search"]
             state["query_classification"] = self._create_fallback_classification()
             raise
+
+        # Phase 8: A2UI needs_ui 플래그 설정 — LLM 경로는 위에서 이미 설정됨, keyword fallback용
+        if state.get("needs_ui") is None:
+            state["needs_ui"] = self._needs_ui(query, state.get("query_intent", ""))
 
         # 실행 단계 기록
         state["execution_steps"].append({
@@ -163,6 +216,21 @@ class QueryClassifier:
         })
 
         return state
+
+    # ── Phase 8: A2UI needs_ui 감지 ─────────────────────────────────────
+
+    def _needs_ui(self, query: str, intent: str) -> bool:
+        """UI 수집이 필요한 쿼리 판별.
+
+        AND 조건:
+        1. task_execution/generation 계열 intent
+        2. UI 수집 키워드 존재
+        """
+        if not getattr(settings, "A2UI_ENABLED", False):
+            return False
+        if intent not in _UI_REQUIRED_INTENTS:
+            return False
+        return any(kw in query for kw in _UI_COLLECTION_KEYWORDS)
 
     # ── Phase 2.3: LLM Classification ──────────────────────────────────
 
@@ -270,6 +338,7 @@ class QueryClassifier:
                 "sub_topics": result.get("sub_topics", [])[:5],
                 "required_capabilities": result.get("required_capabilities", []),
                 "confidence": float(result.get("confidence", 0.7)),
+                "needs_ui": bool(result.get("needs_ui", False)),  # Phase 8 (A2UI)
             }
         except (json.JSONDecodeError, ValueError, KeyError) as e:
             logger.warning(f"Failed to parse LLM classification response: {e}")
@@ -361,6 +430,11 @@ class QueryClassifier:
                 print(f"[DEBUG] High complexity ({complexity_score:.2f}) detected, considering complex_analysis")
                 intent_scores[IntentType.COMPLEX_ANALYSIS.value] = intent_scores.get(IntentType.COMPLEX_ANALYSIS.value, 0) + 2  # 가중치 부여
 
+        # CR-P6-06: TASK_SCHEDULING은 시간 표현 AND 등록 동작이 모두 있을 때만 인정
+        if IntentType.TASK_SCHEDULING.value in intent_scores:
+            if not _is_scheduling_intent(combined_lower):
+                del intent_scores[IntentType.TASK_SCHEDULING.value]
+
         # 가장 높은 점수의 의도 반환
         if intent_scores:
             best_intent = max(intent_scores, key=intent_scores.get)
@@ -373,6 +447,10 @@ class QueryClassifier:
     def _determine_required_agents(self, query: str, intent: str, complexity_score: float = 0.0) -> List[str]:
         """필요한 에이전트 결정 (복잡도 고려)"""
         agents = []
+
+        # 0-0. 스케줄 등록 요청 (최우선 — 워크플로우에서 CronSkill로 직행)
+        if intent == IntentType.TASK_SCHEDULING.value:
+            return []  # graph.py에서 TASK_SCHEDULING 분기가 처리
 
         # 0-0. 간단한 대화인 경우 에이전트 불필요 (최우선)
         if intent == IntentType.SIMPLE.value:

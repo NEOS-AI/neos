@@ -68,7 +68,8 @@ class ResearchEventLogger:
         self,
         report_id: str,
         enable_cli_output: bool = False,
-        cli_callback: Optional[Callable[[str], None]] = None
+        cli_callback: Optional[Callable[[str], None]] = None,
+        stream_callback: Optional[Any] = None,
     ):
         """Initialize event logger.
 
@@ -76,10 +77,12 @@ class ResearchEventLogger:
             report_id: Research report ID
             enable_cli_output: Whether to print events to CLI
             cli_callback: Optional callback function for CLI output
+            stream_callback: Optional WorkflowStreamCallback for OpenResponses SSE bridging
         """
         self.report_id = report_id
         self.enable_cli_output = enable_cli_output
         self.cli_callback = cli_callback
+        self.stream_callback = stream_callback
         self.sequence_counter = 0
         self.db_manager = None
 
@@ -125,11 +128,39 @@ class ResearchEventLogger:
             if self.enable_cli_output:
                 self._print_to_cli(event_type, event_data)
 
+            # OpenResponses 브릿지: Phase 이벤트를 WorkflowStreamCallback으로 전달
+            if self.stream_callback is not None:
+                await self._bridge_to_stream(event_type, event_data)
+
             return True
 
         except Exception as e:
             logger.error(f"[EventLogger] Failed to log event: {e}")
             return False
+
+    async def _bridge_to_stream(
+        self,
+        event_type: DetailedEventType,
+        event_data: Dict[str, Any],
+    ) -> None:
+        """HDR Phase 이벤트를 WorkflowStreamCallback으로 브릿지.
+
+        스트리밍 실패가 연구 파이프라인을 중단시키지 않도록 예외를 흡수합니다.
+        """
+        try:
+            if event_type == DetailedEventType.PHASE_STARTED:
+                await self.stream_callback.on_hdr_phase_start(
+                    phase_number=event_data.get("phase_number", 0),
+                    phase_name=event_data.get("phase_name", ""),
+                )
+            elif event_type == DetailedEventType.PHASE_COMPLETED:
+                await self.stream_callback.on_hdr_phase_complete(
+                    phase_number=event_data.get("phase_number", 0),
+                    phase_name=event_data.get("phase_name", ""),
+                    duration_ms=event_data.get("duration_ms"),
+                )
+        except Exception as e:
+            logger.debug(f"[EventLogger] Stream bridge failed (non-critical): {e}")
 
     async def _log_to_db(
         self,

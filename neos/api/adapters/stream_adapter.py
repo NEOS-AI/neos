@@ -35,6 +35,7 @@ from neos.api.models.open_responses import (
     NeosArtifactDeltaEvent,
     NeosArtifactFinishEvent,
     NeosWorkflowProgressEvent,
+    NeosUIFrameEvent,
     # Types
     OpenResponsesEvent,
     create_response,
@@ -165,6 +166,58 @@ def adapt_legacy_event(
         ))
 
     # ================================================================
+    # hyper_deep_phase_start -> response.output_item.added (function_call, in_progress)
+    # ================================================================
+    elif event_type == "hyper_deep_phase_start":
+        node_name = legacy_event.get("node_name", "")
+        phase_name = legacy_event.get("data", {}).get("phase_name", "")
+
+        fc_id = f"fc_hdr_{node_name}_{int(time.time() * 1000)}"
+        function_call = FunctionCallItem(
+            id=fc_id,
+            call_id=node_name,
+            name=node_name,
+            arguments=json.dumps({"phase": phase_name}, ensure_ascii=False),
+            status=ItemStatus.IN_PROGRESS,
+        )
+
+        state.function_calls[node_name] = function_call
+        state.output_index += 1
+
+        events.append(OutputItemAddedEvent(
+            output_index=state.output_index,
+            item=function_call,
+        ))
+
+    # ================================================================
+    # hyper_deep_phase_complete -> response.output_item.done (function_call, completed)
+    # ================================================================
+    elif event_type == "hyper_deep_phase_complete":
+        node_name = legacy_event.get("node_name", "")
+
+        if node_name in state.function_calls:
+            function_call = state.function_calls[node_name]
+            function_call.status = ItemStatus.COMPLETED
+
+            events.append(OutputItemDoneEvent(
+                output_index=state.output_index,
+                item=function_call,
+            ))
+
+    # ================================================================
+    # hyper_deep_usage -> ResponseObject.usage 업데이트
+    # ================================================================
+    elif event_type == "hyper_deep_usage":
+        estimated_tokens = legacy_event.get("data", {}).get("estimated_total_tokens", 0)
+        if state.response and estimated_tokens:
+            current_output = state.response.usage.output_tokens if state.response.usage else 0
+            state.response.usage = UsageInfo(
+                input_tokens=0,
+                output_tokens=current_output + estimated_tokens,
+            )
+        # 이벤트를 별도로 emit하지 않음 — complete 이벤트 시 usage가 response에 포함됨
+
+    # ================================================================
     # artifact_meta -> neos:artifact_meta (extension)
     # ================================================================
     elif event_type == "artifact_meta":
@@ -189,6 +242,17 @@ def adapt_legacy_event(
         events.append(NeosArtifactFinishEvent(
             artifact_id=legacy_event.get("artifact_id")
         ))
+
+    # ================================================================
+    # ui_frame -> neos:ui_frame (Phase 8 A2UI extension)
+    # ================================================================
+    elif event_type == "ui_frame":
+        ui_frame_data = (
+            legacy_event.get("data", {}).get("ui_frame")
+            or legacy_event.get("ui_frame")
+            or {}
+        )
+        events.append(NeosUIFrameEvent(ui_frame=ui_frame_data))
 
     # ================================================================
     # complete -> response.completed

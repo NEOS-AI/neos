@@ -7,7 +7,22 @@ import { DUMMY_PASSWORD } from "@/lib/constants";
 import { createGuestUser, getUser } from "@/lib/db/queries";
 import { authConfig } from "./auth.config";
 
-export type UserType = "guest" | "regular";
+export type UserType = "guest" | "regular" | "premium" | "enterprise" | "admin";
+
+/**
+ * 백엔드 role 값을 FE UserType으로 매핑
+ * BE roles: guest, user, premium, enterprise, admin
+ */
+function mapBackendRole(beRole: string): UserType {
+  const roleMap: Record<string, UserType> = {
+    guest: "guest",
+    user: "regular",
+    premium: "premium",
+    enterprise: "enterprise",
+    admin: "admin",
+  };
+  return roleMap[beRole] ?? "regular";
+}
 
 /**
  * Access Token 갱신 함수
@@ -58,7 +73,7 @@ async function refreshAccessToken(token: any) {
 
     return {
       ...token,
-      error: "RefreshTokenExpired",
+      error: "RefreshAccessTokenError",
     };
   }
 }
@@ -69,6 +84,9 @@ declare module "next-auth" {
       id: string;
       type: UserType;
       backendUserId?: string;
+      backendRole?: string;
+      subscriptionTier?: string;
+      usageQuota?: number;
     } & DefaultSession["user"];
     backendAccessToken?: string;
     backendRefreshToken?: string;
@@ -81,6 +99,9 @@ declare module "next-auth" {
     email?: string | null;
     type: UserType;
     backendUserId?: string;
+    backendRole?: string;
+    subscriptionTier?: string;
+    usageQuota?: number;
     backendAccessToken?: string;
     backendRefreshToken?: string;
   }
@@ -91,6 +112,9 @@ declare module "next-auth/jwt" {
     id: string;
     type: UserType;
     backendUserId?: string;
+    backendRole?: string;
+    subscriptionTier?: string;
+    usageQuota?: number;
     backendAccessToken?: string;
     backendRefreshToken?: string;
     accessTokenExpires?: number;
@@ -151,9 +175,8 @@ export const {
               localUserId = newUser.id;
             }
           } catch (error) {
-            console.warn("Failed to create/find local user:", error);
-            // 임시 UUID 생성
-            localUserId = crypto.randomUUID();
+            console.error("Failed to create/find local user:", error);
+            return null;
           }
 
           return {
@@ -161,8 +184,11 @@ export const {
             email: data.user.email,
             name: data.user.username || data.user.name || data.user.email,
             image: data.user.profile_picture_url || data.user.image,
-            type: "regular" as UserType,
+            type: mapBackendRole(data.user.role ?? "user"),
             backendUserId: data.user.user_id, // 백엔드 user_id 저장
+            backendRole: data.user.role,
+            subscriptionTier: data.user.subscription_tier,
+            usageQuota: data.user.usage_quota,
             backendAccessToken: data.access_token,
             backendRefreshToken: data.refresh_token,
           };
@@ -264,9 +290,8 @@ export const {
               localUserId = newUser.id;
             }
           } catch (error) {
-            console.warn("Failed to create/find local user for Google OAuth:", error);
-            // 임시 UUID 생성
-            localUserId = crypto.randomUUID();
+            console.error("Failed to create/find local user for Google OAuth:", error);
+            return false;
           }
 
           // 백엔드 토큰을 user 객체에 저장 (JWT callback에서 사용)
@@ -274,7 +299,10 @@ export const {
           user.backendRefreshToken = data.refresh_token;
           user.id = localUserId; // 로컬 DB UUID 사용
           user.backendUserId = data.user.user_id; // 백엔드 user_id 저장
-          user.type = "regular";
+          user.type = mapBackendRole(data.user.role ?? "user");
+          user.backendRole = data.user.role;
+          user.subscriptionTier = data.user.subscription_tier;
+          user.usageQuota = data.user.usage_quota;
         } catch (error) {
           console.error("Google OAuth error:", error);
           return false;
@@ -290,6 +318,9 @@ export const {
         token.id = user.id as string;
         token.type = user.type;
         token.backendUserId = user.backendUserId;
+        token.backendRole = user.backendRole;
+        token.subscriptionTier = user.subscriptionTier;
+        token.usageQuota = user.usageQuota;
         token.backendAccessToken = user.backendAccessToken;
         token.backendRefreshToken = user.backendRefreshToken;
         token.accessTokenExpires = Date.now() + 15 * 60 * 1000; // 15분 후 만료
@@ -326,6 +357,9 @@ export const {
         session.user.id = token.id;
         session.user.type = token.type;
         session.user.backendUserId = token.backendUserId;
+        session.user.backendRole = token.backendRole;
+        session.user.subscriptionTier = token.subscriptionTier;
+        session.user.usageQuota = token.usageQuota;
         session.backendAccessToken = token.backendAccessToken;
         session.backendRefreshToken = token.backendRefreshToken;
       }

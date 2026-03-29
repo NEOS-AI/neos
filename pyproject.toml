@@ -73,11 +73,24 @@ dependencies = [
     "youtube-transcript-api>=0.6.2",
     "google-api-python-client>=2.108.0",
     "isodate>=0.6.1",
+    "ray[default]>=2.8.0",
+    "croniter>=2.0.0",
 ]
 
 [project.optional-dependencies]
 reranker = [
     "cohere>=5.0.0",
+]
+sandbox = [
+    "RestrictedPython>=7.4",
+]
+channels = [
+    "python-telegram-bot>=21.0",
+    "discord.py>=2.3.0",
+    "slack-bolt>=1.18.0",
+]
+ollama = [
+    "langchain-ollama>=0.2.0",
 ]
 
 [tool.setuptools.packages.find]

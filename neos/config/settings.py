@@ -614,6 +614,134 @@ class Settings(BaseSettings):
     CHECKPOINTER_S3_ACCESS_KEY: Optional[str] = env_vars.get("CHECKPOINTER_S3_ACCESS_KEY")
     CHECKPOINTER_S3_SECRET_KEY: Optional[str] = env_vars.get("CHECKPOINTER_S3_SECRET_KEY")
 
+    # =========================================================================
+    # Recursive Agent 설정 (ROMA - Recursive Open Meta-Agent)
+    # =========================================================================
+    RECURSIVE_AGENT_ENABLED: bool = env_vars.get("RECURSIVE_AGENT_ENABLED", "").lower() in ("1", "true", "yes")
+    RECURSIVE_MAX_DEPTH: int = int(env_vars.get("RECURSIVE_MAX_DEPTH", 3))
+    RECURSIVE_MAX_TASKS_PER_LEVEL: int = int(env_vars.get("RECURSIVE_MAX_TASKS_PER_LEVEL", 4))
+    RECURSIVE_COMPLEXITY_THRESHOLD: float = float(env_vars.get("RECURSIVE_COMPLEXITY_THRESHOLD", 0.8))
+    RECURSIVE_ATOMIZER_MODEL: str = env_vars.get("RECURSIVE_ATOMIZER_MODEL", "claude-haiku-4-5-20251001")
+    RECURSIVE_PLANNER_MODEL: str = env_vars.get("RECURSIVE_PLANNER_MODEL", "claude-opus-4-6")
+    RECURSIVE_BUDGET_CAP: float = float(env_vars.get("RECURSIVE_BUDGET_CAP", 0.5))  # USD
+
+    # =========================================================================
+    # HyperDeep Recursive Agent 설정 (ROMA + HyperDeepResearch 통합)
+    # leaf 노드 실행을 HyperDeepResearchAgent로 교체하여 구조적 분해 + 심층 리서치 결합
+    # =========================================================================
+    HYPER_DEEP_AGENT_ENABLED: bool = env_vars.get("HYPER_DEEP_AGENT_ENABLED", "").lower() in ("1", "true", "yes")
+    HYPER_DEEP_MAX_DEPTH: int = int(env_vars.get("HYPER_DEEP_MAX_DEPTH", 1))                  # leaf가 무거우므로 얕은 분해
+    HYPER_DEEP_MAX_TASKS_PER_LEVEL: int = int(env_vars.get("HYPER_DEEP_MAX_TASKS_PER_LEVEL", 3))
+    HYPER_DEEP_COMPLEXITY_THRESHOLD: float = float(env_vars.get("HYPER_DEEP_COMPLEXITY_THRESHOLD", 0.85))
+    HYPER_DEEP_BUDGET_CAP: float = float(env_vars.get("HYPER_DEEP_BUDGET_CAP", 5.0))          # ROMA(0.5)보다 10× 높음
+
+    # =========================================================================
+    # Ray 분산 처리 설정 (Phase 1+)
+    # RAY_ENABLED=true 시 독립 sibling subtask를 병렬 실행 (최대 2.7× 속도 향상)
+    # =========================================================================
+    RAY_ENABLED: bool = env_vars.get("RAY_ENABLED", "").lower() in ("1", "true", "yes")
+    RAY_ADDRESS: str = env_vars.get("RAY_ADDRESS", "auto")
+    RAY_NUM_CPUS: Optional[float] = (
+        float(env_vars["RAY_NUM_CPUS"]) if env_vars.get("RAY_NUM_CPUS") else None
+    )
+    RAY_OBJECT_STORE_MEMORY: int = int(env_vars.get("RAY_OBJECT_STORE_MEMORY", 2_000_000_000))
+
+    # =========================================================================
+    # Sandbox 코드 실행 설정 (Phase 3 — 향후 LLM 생성 코드 실행용)
+    # 현재 HDR는 임의 코드를 실행하지 않으므로 기본값 false
+    # 활성화 시: uv add --optional sandbox RestrictedPython 필요
+    # =========================================================================
+    SANDBOX_ENABLED: bool = env_vars.get("SANDBOX_ENABLED", "").lower() in ("1", "true", "yes")
+    SANDBOX_TYPE: str = env_vars.get("SANDBOX_TYPE", "restricted")  # restricted | docker | pyodide
+    SANDBOX_TIMEOUT_SEC: int = int(env_vars.get("SANDBOX_TIMEOUT_SEC", 30))
+
+    # =========================================================================
+    # Contextual Retrieval 설정
+    # Anthropic Contextual Retrieval 기법: 각 청크에 전체 문서 컨텍스트를
+    # 반영한 1-2문장을 자동 생성하여 임베딩 품질 향상 (검색 실패율 최대 -67%)
+    # =========================================================================
+    CONTEXTUAL_RETRIEVAL_ENABLED: bool = env_vars.get("CONTEXTUAL_RETRIEVAL_ENABLED", "").lower() in ("1", "true", "yes")
+    CONTEXTUAL_MODEL: str = env_vars.get("CONTEXTUAL_MODEL", "claude-haiku-4-5-20251001")
+    CONTEXTUAL_MAX_TOKENS: int = int(env_vars.get("CONTEXTUAL_MAX_TOKENS", "200"))
+    CONTEXTUAL_MAX_CONCURRENT: int = int(env_vars.get("CONTEXTUAL_MAX_CONCURRENT", "3"))
+    CONTEXTUAL_MAX_CHUNKS_PER_DOC: int = int(env_vars.get("CONTEXTUAL_MAX_CHUNKS_PER_DOC", "200"))
+    CONTEXTUAL_BUDGET_CAP_USD: float = float(env_vars.get("CONTEXTUAL_BUDGET_CAP_USD", "0.10"))
+    CONTEXTUAL_EMBED_SOURCE: str = env_vars.get("CONTEXTUAL_EMBED_SOURCE", "contextual")
+
+    # =========================================================================
+    # Execution Approval 설정 (Phase 2 — OpenClaw Exec Approval System)
+    # 민감 스킬 실행 전 사용자 승인을 요청한다.
+    # checkpointed 워크플로우 경로에만 적용 (LangGraph interrupt_before 사용).
+    # chat_handlers.py의 stateless 경로는 적용 대상에서 제외된다.
+    # =========================================================================
+    EXECUTION_APPROVAL_ENABLED: bool = env_vars.get("EXECUTION_APPROVAL_ENABLED", "").lower() in ("1", "true", "yes")
+    # 승인이 필요한 스킬 목록 (쉼표 구분 환경변수 또는 기본값)
+    APPROVAL_REQUIRED_SKILLS: List[str] = [
+        s.strip() for s in
+        env_vars.get("APPROVAL_REQUIRED_SKILLS", "api_call,file_processing,task_creation,code_execution").split(",")
+        if s.strip()
+    ]
+    APPROVAL_TIMEOUT_SECONDS: int = int(env_vars.get("APPROVAL_TIMEOUT_SECONDS", "60"))
+
+    # =========================================================================
+    # Channel Adapter 설정 (Phase 1 — OpenClaw Multi-Channel Adapter Layer)
+    # 외부 메신저에서 NEOS 워크플로우를 트리거할 수 있게 한다.
+    # 각 채널은 독립적인 피처 플래그로 활성화/비활성화한다.
+    # =========================================================================
+    CHANNEL_TELEGRAM_ENABLED: bool = env_vars.get("CHANNEL_TELEGRAM_ENABLED", "").lower() in ("1", "true", "yes")
+    CHANNEL_TELEGRAM_BOT_TOKEN: str = env_vars.get("CHANNEL_TELEGRAM_BOT_TOKEN", "")
+
+    CHANNEL_DISCORD_ENABLED: bool = env_vars.get("CHANNEL_DISCORD_ENABLED", "").lower() in ("1", "true", "yes")
+    CHANNEL_DISCORD_BOT_TOKEN: str = env_vars.get("CHANNEL_DISCORD_BOT_TOKEN", "")
+
+    CHANNEL_SLACK_ENABLED: bool = env_vars.get("CHANNEL_SLACK_ENABLED", "").lower() in ("1", "true", "yes")
+    CHANNEL_SLACK_BOT_TOKEN: str = env_vars.get("CHANNEL_SLACK_BOT_TOKEN", "")
+    CHANNEL_SLACK_APP_TOKEN: str = env_vars.get("CHANNEL_SLACK_APP_TOKEN", "")  # Socket Mode용
+
+    # 채널 봇 서비스 계정 user_id (채널 사용자 → NEOS 계정 매핑 기본값)
+    # ⚠️ CRITICAL: 반드시 users 테이블의 유효한 UUID로 설정해야 한다.
+    # 기본값 "channel_bot"은 FK 위반을 야기하므로 빈 문자열로 변경.
+    # 장기적으로 channel_user_mapping 테이블 도입 필요.
+    CHANNEL_BOT_USER_ID: str = env_vars.get("CHANNEL_BOT_USER_ID", "")
+
+    # =========================================================================
+    # Context Assembly Engine 설정 (Phase 3 — OpenClaw 컨텍스트 엔진 분리)
+    # 메모리 컨텍스트 토큰 예산을 관리하고 채널별 포맷팅을 담당한다.
+    # 우선순위: short_term(Redis) > long_term(pgvector) > episodic(PostgreSQL)
+    # =========================================================================
+    CONTEXT_MAX_TOKENS: int = int(env_vars.get("CONTEXT_MAX_TOKENS", "8000"))
+    CONTEXT_SHORT_TERM_RATIO: float = float(env_vars.get("CONTEXT_SHORT_TERM_RATIO", "0.50"))
+    CONTEXT_LONG_TERM_RATIO: float = float(env_vars.get("CONTEXT_LONG_TERM_RATIO", "0.30"))
+    CONTEXT_EPISODIC_RATIO: float = float(env_vars.get("CONTEXT_EPISODIC_RATIO", "0.20"))
+
+    # =========================================================================
+    # Cron 스케줄 스킬 설정 (Phase 4 — OpenClaw Cron Tool)
+    # Celery Beat DB 폴러 방식으로 동적 스케줄 등록/삭제를 지원한다.
+    # =========================================================================
+    CRON_ENABLED: bool = env_vars.get("CRON_ENABLED", "true").lower() in ("1", "true", "yes")
+    CRON_DEFAULT_TIMEZONE: str = env_vars.get("CRON_DEFAULT_TIMEZONE", "UTC")
+    CRON_MAX_TASKS_PER_USER: int = int(env_vars.get("CRON_MAX_TASKS_PER_USER", "20"))
+    # 규칙 기반 파서가 실패할 때 Haiku LLM으로 자연어 → cron 변환을 재시도한다.
+    CRON_LLM_FALLBACK_ENABLED: bool = env_vars.get("CRON_LLM_FALLBACK_ENABLED", "true").lower() in ("1", "true", "yes")
+    CRON_LLM_MODEL: str = env_vars.get("CRON_LLM_MODEL", "claude-haiku-4-5-20251001")
+
+    # =========================================================================
+    # Model Provider 확장 설정 (Phase 5 — OpenClaw ModelProvider 플러그인)
+    # neos/providers/ 디렉터리의 플러그인 방식 프로바이더 확장을 지원한다.
+    # =========================================================================
+    OLLAMA_BASE_URL: str = env_vars.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    OLLAMA_DEFAULT_MODEL: str = env_vars.get("OLLAMA_DEFAULT_MODEL", "llama3.1:8b")
+
+    # =========================================================================
+    # A2UI 설정 (Phase 8 — OpenClaw Agent-to-User Interface)
+    # 에이전트가 쿼리 의도에 따라 동적 UI 컴포넌트(폼·카드·차트)를 생성한다.
+    # =========================================================================
+    A2UI_ENABLED: bool = env_vars.get("A2UI_ENABLED", "").lower() in ("1", "true", "yes")
+    A2UI_LLM_MODEL: str = env_vars.get("A2UI_LLM_MODEL", "claude-haiku-4-5-20251001")
+    A2UI_LLM_PROVIDER: str = env_vars.get("A2UI_LLM_PROVIDER", "anthropic")
+    A2UI_MAX_COMPONENTS: int = int(env_vars.get("A2UI_MAX_COMPONENTS", "10"))
+    A2UI_FRAME_TIMEOUT: int = int(env_vars.get("A2UI_FRAME_TIMEOUT", "300"))
+
     class Config:
         env_file = ".env"
         case_sensitive = True

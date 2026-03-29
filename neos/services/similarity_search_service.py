@@ -253,6 +253,116 @@ class KnowledgeHybridSearchStrategy(BaseSimilaritySearchStrategy):
 
 
 # ============================================================================
+# DocumentChunkContextualSearchStrategy
+# Contextual BM25 + Vector + RRF 하이브리드 검색 (Phase 2)
+# ============================================================================
+
+# Contextual Hybrid Search SQL (Vector + BM25 + Reciprocal Rank Fusion)
+_CONTEXTUAL_HYBRID_SEARCH_SQL = """
+WITH vector_results AS (
+    SELECT
+        dc.id,
+        dc.chunk_text,
+        dc.contextual_text,
+        dc.document_id,
+        dc.chunk_index,
+        ROW_NUMBER() OVER (ORDER BY dc.embedding <=> $1::vector) AS vector_rank
+    FROM document_chunks dc
+    WHERE dc.document_id = ANY($3::INTEGER[])
+      AND dc.embedding IS NOT NULL
+    ORDER BY dc.embedding <=> $1::vector
+    LIMIT 50
+),
+bm25_results AS (
+    SELECT
+        dc.id,
+        dc.chunk_text,
+        dc.contextual_text,
+        dc.document_id,
+        dc.chunk_index,
+        ROW_NUMBER() OVER (
+            ORDER BY ts_rank_cd(
+                dc.contextual_search_vector,
+                websearch_to_tsquery('english', $2)
+            ) DESC
+        ) AS bm25_rank
+    FROM document_chunks dc
+    WHERE dc.document_id = ANY($3::INTEGER[])
+      AND dc.contextual_search_vector @@ websearch_to_tsquery('english', $2)
+    LIMIT 50
+),
+combined AS (
+    SELECT
+        COALESCE(v.id, b.id) AS id,
+        COALESCE(v.chunk_text, b.chunk_text) AS chunk_text,
+        COALESCE(v.contextual_text, b.contextual_text) AS contextual_text,
+        COALESCE(v.document_id, b.document_id) AS document_id,
+        COALESCE(v.chunk_index, b.chunk_index) AS chunk_index,
+        COALESCE(1.0 / (60 + v.vector_rank), 0) AS vector_rrf,
+        COALESCE(1.0 / (60 + b.bm25_rank), 0) AS bm25_rrf
+    FROM vector_results v
+    FULL OUTER JOIN bm25_results b ON v.id = b.id
+)
+SELECT
+    id, chunk_text, contextual_text, document_id, chunk_index,
+    vector_rrf + bm25_rrf AS combined_score
+FROM combined
+ORDER BY combined_score DESC
+LIMIT $4
+"""
+
+
+class DocumentChunkContextualSearchStrategy(BaseSimilaritySearchStrategy):
+    """
+    document_chunks 대상 Contextual Hybrid Search (BM25 + Vector + RRF)
+
+    contextual_search_vector(BM25)와 embedding(Vector)을 RRF로 결합.
+    contextual_text가 없는 청크는 chunk_text 기반 tsvector로 검색.
+    Migration 020 적용 후 사용 가능.
+    """
+
+    async def search(
+        self,
+        query: str,
+        query_embedding: List[float],
+        document_ids: List[int],
+        top_k: int = 10,
+        **kwargs,
+    ) -> List[Dict[str, Any]]:
+        """
+        Args:
+            query: 검색 쿼리 텍스트
+            query_embedding: 쿼리 임베딩 벡터 (1536차원)
+            document_ids: 검색 대상 문서 ID (사용자 권한 필터링 필수)
+            top_k: 반환할 최대 결과 수
+        """
+        if not document_ids:
+            return []
+
+        rows = await db_manager.fetch_all(
+            _CONTEXTUAL_HYBRID_SEARCH_SQL,
+            query_embedding,
+            query,
+            document_ids,
+            top_k,
+        )
+
+        results = []
+        for row in rows:
+            results.append({
+                "chunk_id": row[0],
+                "chunk_text": row[1],
+                "contextual_text": row[2],
+                "document_id": row[3],
+                "chunk_index": row[4],
+                "combined_score": float(row[5]),
+                "search_type": "contextual_hybrid_rrf",
+            })
+
+        return results
+
+
+# ============================================================================
 # Main Service - Context (Strategy Pattern)
 # ============================================================================
 
@@ -272,6 +382,7 @@ class SimilaritySearchService:
             "hybrid": HybridSearchStrategy(),
             "knowledge_hybrid": _knowledge_hybrid,
             "cache_hybrid": _knowledge_hybrid,  # 별칭: query_cache 대상임을 명확히
+            "document_chunk_contextual": DocumentChunkContextualSearchStrategy(),  # Phase 2: Contextual Hybrid BM25+Vector
         }
         self.default_strategy = "conversation"
 

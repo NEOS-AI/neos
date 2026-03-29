@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, Float, ForeignKey, ARRAY, Boolean, Index, ForeignKeyConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from pgvector.sqlalchemy import Vector
 import uuid
 
@@ -51,8 +51,8 @@ class User(Base):
     billing_customer_id = Column(String(255), nullable=True)  # Stripe Customer ID
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     last_login = Column(TIMESTAMP, nullable=True)
 
     # 사용자 설정
@@ -79,8 +79,12 @@ class QueryHistory(Base):
     response_quality_score = Column(Float, default=0.0)
     execution_time_ms = Column(Integer)
     tools_used = Column(ARRAY(String))
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+
+    # Phase 1 (OpenClaw Multi-Channel Adapter): 요청 채널 출처 추적
+    channel_source = Column(String(50), default="api")           # "api" | "telegram" | "discord" | "slack"
+    external_channel_id = Column(String(500), nullable=True)     # 외부 채널 ID (Telegram chat_id 등)
+
     # 관계
     user = relationship("User", back_populates="query_histories")
     source_relations = relationship("RelatedQuery", foreign_keys="[RelatedQuery.source_query_id]")
@@ -95,7 +99,7 @@ class RelatedQuery(Base):
     related_query_id = Column(Integer, ForeignKey("query_history.id"))
     similarity_score = Column(Float)
     relation_type = Column(String(50))  # 'semantic', 'sequential', 'collaborative'
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 class TrendingQuery(Base):
     __tablename__ = "trending_queries"
@@ -104,7 +108,7 @@ class TrendingQuery(Base):
     query_text = Column(Text, nullable=False)
     query_vector = Column(Vector(1536))
     search_count = Column(Integer, default=1)
-    last_searched = Column(TIMESTAMP, default=datetime.utcnow)
+    last_searched = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     time_period = Column(String(20))  # 'hourly', 'daily', 'weekly'
     category = Column(String(100))
 
@@ -119,7 +123,7 @@ class SearchSession(Base):
     session_intent = Column(String(100))
     total_queries = Column(Integer, default=0)
     session_duration_ms = Column(Integer)
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     ended_at = Column(TIMESTAMP)
 
     # 관계
@@ -177,8 +181,8 @@ class Document(Base):
     extra_metadata = Column(JSONB, default=dict)
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 관계
     user = relationship("User")
@@ -196,6 +200,7 @@ class DocumentChunk(Base):
     # 청크 정보
     chunk_index = Column(Integer, nullable=False)  # 문서 내 청크 순서
     chunk_text = Column(Text, nullable=False)
+    contextual_text = Column(Text, nullable=True)   # Contextual Retrieval: context_snippet + "\n\n" + chunk_text
     chunk_size = Column(Integer)  # 문자 수
 
     # 위치 정보
@@ -221,7 +226,7 @@ class DocumentChunk(Base):
     extra_metadata = Column(JSONB, default=dict)
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 관계
     document = relationship("Document", back_populates="chunks")
@@ -257,8 +262,8 @@ class KnowledgeGraph(Base):
     importance_score = Column(Float, default=0.0)
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 관계
     document = relationship("Document", back_populates="knowledge_graph")
@@ -299,8 +304,8 @@ class APIKey(Base):
     key_metadata = Column(JSONB, default=dict)
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 관계
     user = relationship("User", back_populates="api_keys")
@@ -336,7 +341,7 @@ class RefreshToken(Base):
     expires_at = Column(TIMESTAMP, nullable=False)
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     used_at = Column(TIMESTAMP, nullable=True)
     revoked_at = Column(TIMESTAMP, nullable=True)
 
@@ -367,7 +372,7 @@ class UserOAuthAccount(Base):
     profile_data = Column(JSONB, default=dict)  # {name, picture, email, locale}
 
     # 연결 정보
-    linked_at = Column(TIMESTAMP, default=datetime.utcnow)
+    linked_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     last_used_at = Column(TIMESTAMP, nullable=True)
 
     # 관계
@@ -410,8 +415,8 @@ class Organization(Base):
     require_approval = Column(Boolean, default=True)  # 관리자 승인 필요
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 관계
     members = relationship("User", back_populates="organization")
@@ -432,7 +437,7 @@ class OrganizationAdmin(Base):
     user_id = Column(String(255), ForeignKey("users.user_id", ondelete="CASCADE"))
 
     role = Column(String(50), default="admin")  # admin, owner
-    granted_at = Column(TIMESTAMP, default=datetime.utcnow)
+    granted_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 관계
     organization = relationship("Organization", back_populates="admins")
@@ -487,8 +492,8 @@ class QueryCacheEntry(Base):
     cache_metadata = Column(JSONB, default=dict)  # 추가 메타데이터
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 인덱스
     __table_args__ = (
@@ -533,8 +538,8 @@ class CacheStatistics(Base):
     storage_size_bytes = Column(Integer, default=0)  # 저장 용량 (바이트)
 
     # 타임스탬프
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 인덱스
     __table_args__ = (
@@ -581,7 +586,7 @@ class ArtifactDocument(Base):
 
     # 프론트엔드 DB는 camelCase를 사용하므로 매핑 필요
     id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
-    created_at = Column("createdAt", TIMESTAMP, primary_key=True, nullable=False, default=datetime.utcnow)
+    created_at = Column("createdAt", TIMESTAMP, primary_key=True, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     title = Column(Text, nullable=False)
     content = Column(Text, nullable=True)
     kind = Column(String(20), nullable=False, default="text")  # text, code, image, sheet
@@ -609,7 +614,7 @@ class Suggestion(Base):
     description = Column(Text, nullable=True)
     is_resolved = Column("isResolved", Boolean, nullable=False, default=False)
     user_id = Column("userId", String(255), nullable=False)  # 백엔드 User.user_id (String)와 일치하도록 변경
-    created_at = Column("createdAt", TIMESTAMP, nullable=False, default=datetime.utcnow)
+    created_at = Column("createdAt", TIMESTAMP, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 복합 외래키는 유지 (Document 테이블 참조)
     __table_args__ = (
@@ -646,5 +651,117 @@ class ToolRegistry(Base):
     # 메타데이터
     usage_count = Column(Integer, default=0)
     last_used_at = Column(TIMESTAMP(timezone=True))
-    created_at = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+    created_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+
+
+# ============================================================================
+# Phase 2: Execution Approval System (OpenClaw Exec Approval)
+# ============================================================================
+
+class ToolApprovalAllowlist(Base):
+    """사용자별 스킬 자동 승인 allowlist
+
+    allowlist에 등록된 스킬은 EXECUTION_APPROVAL 인터럽트 없이 자동 실행된다.
+    사용자가 'add_to_allowlist=true'로 승인하면 이 테이블에 기록된다.
+    """
+    __tablename__ = "tool_approval_allowlist"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(255), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    skill_name = Column(String(100), nullable=False)    # "api_call", "file_processing" 등
+    auto_approved = Column(Boolean, default=True)       # True=자동 승인, False=항상 확인
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+
+    # 관계
+    user = relationship("User")
+
+
+# ============================================================================
+# Scheduled Task Models (Phase 4 — OpenClaw Cron 스케줄 스킬)
+# ============================================================================
+
+class ScheduledTask(Base):
+    """사용자가 등록한 반복 실행 태스크.
+
+    사용자가 자연어로 등록하면 cron_expression으로 변환 후 저장된다.
+    Celery Beat 폴러(poll_and_run_scheduled_tasks)가 매 1분마다 next_run_at을
+    확인하여 만기된 태스크를 워크플로우에 제출한다.
+    """
+    __tablename__ = "scheduled_tasks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String(255), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+
+    # 태스크 정보
+    title = Column(String(500), nullable=False)           # 사용자가 입력한 원본 요청
+    query = Column(Text, nullable=False)                  # 워크플로우에 전달할 쿼리
+    cron_expression = Column(String(100), nullable=False)  # "0 9 * * *"
+    timezone = Column(String(100), default="UTC")
+
+    # 채널 라우팅 (결과 전송 대상)
+    channel_type = Column(String(50), default="api")      # "api" | "telegram" | "discord"
+    channel_id = Column(String(500), nullable=True)       # 외부 채널 ID (텔레그램 chat_id 등)
+
+    # 상태 관리
+    is_active = Column(Boolean, default=True)
+    last_run_at = Column(TIMESTAMP, nullable=True)
+    next_run_at = Column(TIMESTAMP, nullable=False)       # 다음 실행 예정 시각
+    run_count = Column(Integer, default=0)                # 총 실행 횟수
+    last_error = Column(Text, nullable=True)              # 마지막 실패 오류 메시지
+
+    # 타임스탬프
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+
+    # 관계
+    user = relationship("User")
+
+
+# ============================================================================
+# Execution Approval Timeout Tracking (APPROVAL_TIMEOUT_SECONDS 강제)
+# ============================================================================
+
+class PendingApproval(Base):
+    """Execution Approval 타임아웃 추적.
+
+    SKILL_TOOL_SELECTOR가 pending_approvals 생성 시 INSERT.
+    approval_handlers.respond_to_approval() 호출 시 resolved=True.
+    expire_pending_approvals Celery 태스크가 만료된 항목을 자동 거부.
+    """
+    __tablename__ = "pending_approvals"
+
+    id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id   = Column(String(255), nullable=False, index=True)
+    request_id   = Column(String(255), nullable=False, unique=True)
+    user_id      = Column(String(255), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    skill_name   = Column(String(100), nullable=False)
+    requested_at = Column(TIMESTAMP, nullable=False)
+    expires_at   = Column(TIMESTAMP, nullable=False)
+    resolved     = Column(Boolean, nullable=False, default=False)
+
+
+# ============================================================================
+# Phase 8 (OpenClaw A2UI): UI Frame Session
+# ============================================================================
+
+class UIFrameSession(Base):
+    """Phase 8 (OpenClaw A2UI): UIFrame 세션 저장.
+
+    UIFrameGenerator가 생성한 frame_id → (original_query, conversation_id) 매핑.
+    POST /api/v1/ui/submit 수신 시 원본 쿼리를 복원하여 새 워크플로우를 재실행한다.
+
+    ⚠️ expires_at 기준으로 만료된 레코드는 주기적으로 정리할 것.
+    """
+    __tablename__ = "ui_frame_sessions"
+
+    id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    frame_id        = Column(UUID(as_uuid=True), unique=True, nullable=False)
+    session_id      = Column(String(255), nullable=False)
+    user_id         = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    conversation_id = Column(UUID(as_uuid=True), nullable=True)
+    original_query  = Column(Text, nullable=False)
+    frame_data      = Column(JSONB, default=dict)
+    expires_at      = Column(TIMESTAMP, nullable=False)
+    submitted_at    = Column(TIMESTAMP, nullable=True, default=None)  # 중복 제출 방어용
+    created_at      = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))

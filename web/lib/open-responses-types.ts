@@ -310,6 +310,62 @@ export interface NeosWorkflowProgressEvent {
 }
 
 // ============================================================================
+// Neos A2UI (Phase 8) Types
+// ============================================================================
+
+/**
+ * UIFrame component definition
+ */
+export interface UIFrameComponent {
+  id: string;
+  type:
+    | "text_field"
+    | "date_picker"
+    | "time_picker"
+    | "select"
+    | "multi_select"
+    | "slider"
+    | "checkbox"
+    | "file_upload"
+    | "card"
+    | "chart"
+    | "table"
+    | "progress"
+    | "divider"
+    | "button"
+    | "form";
+  label?: string;
+  placeholder?: string;
+  required?: boolean;
+  options?: Array<{ label: string; value: string } | string>;
+  min?: number;
+  max?: number;
+  step?: number;
+  default_value?: unknown;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * UIFrame payload from the backend
+ */
+export interface UIFramePayload {
+  frame_id: string;
+  intent: string;
+  components: UIFrameComponent[];
+  session_id?: string;
+  conversation_id?: string;
+  timeout_seconds?: number;
+}
+
+/**
+ * Neos A2UI UIFrame event — Phase 8
+ */
+export interface NeosUIFrameEvent {
+  type: "neos:ui_frame";
+  ui_frame: UIFramePayload;
+}
+
+// ============================================================================
 // Union of All Events
 // ============================================================================
 
@@ -341,7 +397,8 @@ export type NeosExtensionEvent =
   | NeosArtifactMetaEvent
   | NeosArtifactDeltaEvent
   | NeosArtifactFinishEvent
-  | NeosWorkflowProgressEvent;
+  | NeosWorkflowProgressEvent
+  | NeosUIFrameEvent;
 
 /**
  * All OpenResponses events (standard + neos extensions)
@@ -465,6 +522,12 @@ export function isNeosWorkflowProgressEvent(
   event: OpenResponsesEvent
 ): event is NeosWorkflowProgressEvent {
   return event.type === "neos:workflow_progress";
+}
+
+export function isNeosUIFrameEvent(
+  event: OpenResponsesEvent
+): event is NeosUIFrameEvent {
+  return event.type === "neos:ui_frame";
 }
 
 // Output item type guards

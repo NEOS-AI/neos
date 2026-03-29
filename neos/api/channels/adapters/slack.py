@@ -1,0 +1,188 @@
+"""Slack 채널 어댑터 (Phase 1 — OpenClaw Channel Adapter)
+
+slack-bolt>=1.18.0 (AsyncApp + AsyncSocketModeHandler) 사용.
+Socket Mode를 사용하므로 추가 HTTP 포트가 불필요하다.
+
+필요 환경변수:
+    CHANNEL_SLACK_ENABLED=true
+    CHANNEL_SLACK_BOT_TOKEN    - xoxb- 접두사 Bot Token
+    CHANNEL_SLACK_APP_TOKEN    - xapp- 접두사 App-Level Token (Socket Mode용)
+
+Slack App 설정:
+    Settings > Socket Mode 활성화
+    Event Subscriptions > Bot Events: message.channels, message.im 추가
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import TYPE_CHECKING, Any, Optional
+
+from ..base import ChannelAdapterBase, ChannelMessage
+
+if TYPE_CHECKING:
+    from ..gateway import ChannelGateway
+
+logger = logging.getLogger(__name__)
+
+_SLACK_MAX_CHARS = 3000  # Slack 단일 메시지 안전 길이 (공식 4000자 제한)
+
+
+class SlackAdapter(ChannelAdapterBase):
+    """Slack Bot 어댑터 (Socket Mode).
+
+    AsyncApp + AsyncSocketModeHandler로 uvicorn 루프에서 실행.
+    @app.message() 핸들러를 통해 메시지 수신.
+    """
+
+    channel_type = "slack"
+
+    def __init__(self, token: str, gateway: "ChannelGateway") -> None:
+        self._bot_token = token           # xoxb- 토큰
+        self._gateway = gateway
+        self._app: Optional[Any] = None  # AsyncApp
+        self._handler: Optional[Any] = None  # AsyncSocketModeHandler
+        self._handler_task: Optional[asyncio.Task] = None
+
+    async def start(self) -> None:
+        """Slack Socket Mode 핸들러를 시작한다."""
+        try:
+            from slack_bolt.async_app import AsyncApp
+            from slack_bolt.adapter.socket_mode.async_handler import (
+                AsyncSocketModeHandler,
+            )
+        except ImportError:
+            logger.error(
+                "[SlackAdapter] slack-bolt 미설치. "
+                "pip install 'slack-bolt>=1.18.0' 를 실행하세요."
+            )
+            return
+
+        from neos.config.settings import settings
+
+        if not self._bot_token:
+            logger.warning(
+                "[SlackAdapter] CHANNEL_SLACK_BOT_TOKEN이 설정되지 않았습니다. "
+                "시작 건너뜀."
+            )
+            return
+
+        app_token = settings.CHANNEL_SLACK_APP_TOKEN
+        if not app_token:
+            logger.warning(
+                "[SlackAdapter] CHANNEL_SLACK_APP_TOKEN이 설정되지 않았습니다. "
+                "Socket Mode를 사용하려면 xapp- 토큰이 필요합니다. 시작 건너뜀."
+            )
+            return
+
+        try:
+            self._app = AsyncApp(token=self._bot_token)
+
+            # 메시지 핸들러 등록 (bot 메시지 자동 제외)
+            @self._app.message()
+            async def handle_message(message: dict, say: Any, client: Any) -> None:
+                await self._handle_message(message, say, client)
+
+            self._handler = AsyncSocketModeHandler(self._app, app_token)
+            self._handler_task = asyncio.create_task(
+                self._handler.start_async(),
+                name="slack_socket_mode",
+            )
+
+            def _on_handler_done(task: asyncio.Task) -> None:
+                if task.cancelled():
+                    return
+                exc = task.exception()
+                if exc:
+                    logger.error(
+                        "[SlackAdapter] Socket mode handler failed: %s", exc
+                    )
+
+            self._handler_task.add_done_callback(_on_handler_done)
+            logger.info("[SlackAdapter] Slack Socket Mode handler started.")
+        except Exception as e:
+            logger.error("[SlackAdapter] Start failed: %s", e)
+
+    async def stop(self) -> None:
+        """Slack Socket Mode 핸들러를 종료한다."""
+        if self._handler_task and not self._handler_task.done():
+            self._handler_task.cancel()
+            try:
+                await self._handler_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._handler:
+            try:
+                await self._handler.close_async()
+                logger.info("[SlackAdapter] Slack handler closed.")
+            except Exception as e:
+                logger.warning("[SlackAdapter] Stop error (non-critical): %s", e)
+
+    async def receive_message(self, raw: Any) -> ChannelMessage:
+        """Slack message 이벤트 딕셔너리를 ChannelMessage로 변환한다."""
+        from neos.config.settings import settings
+
+        channel_id = str(raw.get("channel", ""))
+        text = (raw.get("text") or "").strip()
+        slack_user_id = str(raw.get("user", ""))
+
+        return ChannelMessage(
+            user_id=settings.CHANNEL_BOT_USER_ID,
+            session_id=f"slack_{channel_id}",
+            text=text,
+            channel_type=self.channel_type,
+            channel_id=channel_id,
+            raw_data=raw,
+            metadata={
+                "slack_user_id": slack_user_id,
+                "slack_message_ts": raw.get("ts", ""),
+            },
+        )
+
+    async def send_response(self, channel_id: str, content: str) -> None:
+        """Slack channel_id로 응답을 전송한다. 3000자 제한 준수."""
+        if not self._app:
+            logger.warning("[SlackAdapter] send_response called before start()")
+            return
+        if not content:
+            return
+
+        chunks = [
+            content[i : i + _SLACK_MAX_CHARS]
+            for i in range(0, len(content), _SLACK_MAX_CHARS)
+        ]
+        for chunk in chunks:
+            try:
+                await self._app.client.chat_postMessage(
+                    channel=channel_id,
+                    text=chunk,
+                )
+            except Exception as e:
+                logger.error(
+                    "[SlackAdapter] chat_postMessage failed to %s: %s", channel_id, e
+                )
+
+    async def _handle_message(self, message: dict, say: Any, client: Any) -> None:
+        """@app.message() 핸들러."""
+        # bot_id가 있는 메시지 = 봇이 보낸 메시지 — 무시
+        if message.get("bot_id"):
+            return
+        if not message.get("text"):
+            return
+
+        try:
+            channel_message = await self.receive_message(message)
+            logger.info(
+                "[SlackAdapter] Received: channel_id=%s text=%r",
+                channel_message.channel_id,
+                channel_message.text[:50],
+            )
+            response = await self._gateway.dispatch(channel_message)
+            await self.send_response(channel_message.channel_id, response)
+        except Exception as e:
+            logger.error("[SlackAdapter] _handle_message error: %s", e)
+            try:
+                await say("죄송합니다. 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
+            except Exception:
+                pass

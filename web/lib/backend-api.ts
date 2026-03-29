@@ -161,3 +161,36 @@ export async function callBackendAPIWithKey(
 
   return response;
 }
+
+/**
+ * Phase 8 (A2UI): UI 폼 제출 — 서버사이드 Route Handler를 거쳐 백엔드로 전달
+ *
+ * POST /api/v1/ui/submit 은 인증 토큰이 필요하므로,
+ * Next.js Route Handler (/api/ui-submit) 경유 방식을 사용한다.
+ * 클라이언트 컴포넌트에서 직접 호출 가능.
+ */
+export async function submitUIFrameClient(
+  frameId: string,
+  sessionId: string,
+  values: Record<string, unknown>,
+  conversationId?: string
+): Promise<Response> {
+  const response = await fetch("/api/ui-submit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      frame_id: frameId,
+      session_id: sessionId,
+      values,
+      conversation_id: conversationId,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || err.message || `UI submit failed (${response.status})`);
+  }
+
+  // 호출자가 SSE 스트림을 직접 읽음
+  return response;
+}

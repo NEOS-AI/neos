@@ -53,7 +53,8 @@ class QueryService:
         search_results: List[Any],
         execution_time_ms: int,
         quality_score: float,
-        tools_used: List[str]
+        tools_used: List[str],
+        channel_source: str = "api"
     ) -> int:
         """쿼리 히스토리 저장"""
         async with await db_manager.get_session() as session:
@@ -65,7 +66,8 @@ class QueryService:
                 search_results=search_results,
                 response_quality_score=quality_score,
                 execution_time_ms=execution_time_ms,
-                tools_used=tools_used
+                tools_used=tools_used,
+                channel_source=channel_source
             )
 
             session.add(query_history)
@@ -80,7 +82,8 @@ class QueryService:
         session_id: str,
         original_query: str,
         result: Dict[str, Any],
-        execution_time_ms: int
+        execution_time_ms: int,
+        channel_source: str = "api"
     ):
         """백그라운드에서 쿼리 히스토리 저장"""
         try:
@@ -102,7 +105,8 @@ class QueryService:
                 search_results=result.get("metadata", {}),
                 execution_time_ms=execution_time_ms,
                 quality_score=result.get("quality_score", 0.0),
-                tools_used=tools_used
+                tools_used=tools_used,
+                channel_source=channel_source
             )
 
         except Exception as e:
@@ -147,7 +151,8 @@ class QueryService:
             "metadata": result["metadata"],
             "execution_time_ms": result["execution_time_ms"],
             "quality_score": result["quality_score"],
-            "errors": result["errors"]
+            "errors": result["errors"],
+            "channel_source": result.get("channel_source", "api")
         }
 
         # 성공한 응답 캐싱 (1시간)

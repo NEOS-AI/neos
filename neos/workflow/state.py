@@ -123,6 +123,38 @@ class AgentState(TypedDict):
     template_id: Optional[str]
     template_config: Optional[Dict[str, Any]]
 
+    # Phase 2: Execution Approval (OpenClaw Exec Approval System)
+    # pending_approvals: 승인 대기 중인 스킬 목록 [{request_id, skill_name, params, timeout_seconds}]
+    # approval_decision: "approved" | "rejected" | None (interrupt 해제 후 채워짐)
+    # ⚠️ operator.add 사용 안 함 — 누적이 아닌 교체형 필드
+    pending_approvals: Optional[List[Dict[str, Any]]]
+    approval_decision: Optional[str]
+    approval_outcome: Optional[str]  # "approved" | "rejected" — _should_continue_after_approval 라우팅 전용
+
+    # Phase 8: A2UI (Agent-to-User Interface)
+    # needs_ui:      QueryClassifier가 True로 설정 → UI_FRAME_GENERATOR 단락 경로 진입
+    # ui_frame:      UIFrameGenerator 출력 (UIFrame.dict() 직렬화)
+    # ui_submission: 사용자 폼 제출값 (POST /api/v1/ui/submit에서 채워짐)
+    # ⚠️ operator.add 사용 안 함 — 누적이 아닌 교체형 필드
+    needs_ui: Optional[bool]
+    ui_frame: Optional[Dict[str, Any]]
+    ui_submission: Optional[Dict[str, Any]]
+
+    # Phase 3: Context Assembly Engine (OpenClaw 컨텍스트 엔진 분리)
+    assembled_context: Optional[Dict[str, Any]]          # ContextAssemblyEngine.trimmed 결과
+    channel_type: Optional[str]                          # 요청 채널 "api"|"telegram"|"discord"|"slack"
+    channel_id: Optional[str]                            # 외부 채널 식별자 (Telegram chat_id 등)
+    channel_source: Optional[str]                        # query_history.channel_source: "api"|"telegram"|"discord"|"slack"
+
+    # ROMA: Recursive Open Meta-Agent
+    recursive_task_tree: Optional[Dict[str, Any]]       # 전체 태스크 트리 (직렬화된 RecursiveTaskNode)
+    recursive_current_depth: Optional[int]              # 현재 재귀 깊이
+    recursive_max_depth: Optional[int]                  # 최대 재귀 깊이
+    recursive_task_stack: Optional[List[Dict]]          # 실행 중인 태스크 스택
+    recursive_completed_tasks: Optional[List[Dict]]     # 완료된 태스크 목록
+    recursive_mode: Optional[bool]                      # 재귀 모드 활성화 여부
+    recursive_budget_remaining: Optional[float]         # 가용 비용 (USD)
+
     # 최종 응답
     final_response: Optional[str]
     response_metadata: Optional[Dict[str, Any]]

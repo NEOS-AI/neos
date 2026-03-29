@@ -30,6 +30,9 @@ from neos.api.handlers.async_research_handlers import router as async_research_r
 from neos.api.handlers.export_handlers import router as export_router
 from neos.api.handlers.refinement_handlers import router as refinement_router
 from neos.api.handlers.template_handlers import router as template_router
+from neos.api.handlers.approval_handlers import router as approval_router  # Phase 2: Execution Approval
+from neos.api.handlers.scheduled_tasks_handlers import router as scheduled_tasks_router  # Phase 4: Cron 스케줄
+from neos.api.handlers.ui_submit_handlers import router as ui_submit_router  # Phase 8: A2UI
 from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.workflow.graph import multi_agent_workflow
 from neos.utils.exceptions import NeosBaseException, get_exception_status_code, is_client_error
@@ -72,6 +75,7 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Starting Multi-Agent AI System (Enterprise Edition)...")
 
     background_tasks = []
+    _channel_adapters = []  # Phase 1: 채널 어댑터 인스턴스 (shutdown용)
 
     try:
         # OpenTelemetry 초기화 (Phase 3)
@@ -122,6 +126,46 @@ async def lifespan(app: FastAPI):
             else:
                 logger.warning("⚠️ OpenAI API connection issue")
 
+        # Ray 분산 처리 초기화 (RAY_ENABLED=true 시에만)
+        if getattr(settings, "RAY_ENABLED", False):
+            logger.info("⚡ Initializing Ray distributed processing...")
+            try:
+                import ray
+                if not ray.is_initialized():
+                    ray.init(
+                        address=getattr(settings, "RAY_ADDRESS", "auto"),
+                        ignore_reinit_error=True,
+                        object_store_memory=getattr(settings, "RAY_OBJECT_STORE_MEMORY", 2_000_000_000),
+                    )
+                logger.info(f"✅ Ray initialized: {ray.cluster_resources()}")
+
+                # Phase 2: Stateless Named Actors 생성 (Atomizer, Planner, Aggregator, Verifier)
+                from neos.workflow.ray_actors.stateless_actors import create_all_named_actors
+                create_all_named_actors(
+                    max_tasks_per_level=getattr(settings, "HYPER_DEEP_MAX_TASKS_PER_LEVEL", 3)
+                )
+                logger.info("✅ Ray Named Actors created (stateless actors)")
+
+                # Phase 2: CostAccumulatorActor Named Actor 생성
+                from neos.workflow.ray_actors.cost_accumulator import get_or_create_cost_accumulator
+                get_or_create_cost_accumulator()
+                logger.info("✅ CostAccumulatorActor ready")
+
+            except Exception as e:
+                logger.warning(f"⚠️ Ray initialization failed, falling back to sequential: {e}")
+
+            # Worker Actor 준비 완료 대기 (콜드 스타트 타임아웃 방지)
+            try:
+                from neos.workflow.recursive.distributed_orchestrator import (
+                    DistributedRecursiveOrchestrator,
+                )
+                orchestrator = getattr(multi_agent_workflow, "hyper_deep_orchestrator", None)
+                if isinstance(orchestrator, DistributedRecursiveOrchestrator):
+                    await orchestrator.warmup()
+                    logger.info("✅ HyperDeep Worker Actors warmed up")
+            except Exception as e:
+                logger.warning(f"⚠️ Worker Actor warmup failed: {e}")
+
         # Skills 초기화
         logger.info("🎯 Initializing Skills system...")
         from neos.skills.manager import skill_manager
@@ -132,6 +176,46 @@ async def lifespan(app: FastAPI):
 
         # Initialize skills (optional - can be done on-demand)
         # await skill_manager.initialize_all()
+
+        # ── Phase 1: 멀티채널 어댑터 초기화 (OpenClaw Channel Adapter Layer) ──
+        _channel_adapters = []
+        if any([
+            settings.CHANNEL_TELEGRAM_ENABLED,
+            settings.CHANNEL_DISCORD_ENABLED,
+            settings.CHANNEL_SLACK_ENABLED,
+        ]):
+            logger.info("📲 Initializing Channel Adapters...")
+            from neos.api.channels.gateway import ChannelGateway
+            _channel_gateway = ChannelGateway(multi_agent_workflow)
+
+            if settings.CHANNEL_TELEGRAM_ENABLED:
+                try:
+                    from neos.api.channels.adapters.telegram import TelegramAdapter
+                    _telegram = TelegramAdapter(
+                        token=settings.CHANNEL_TELEGRAM_BOT_TOKEN,
+                        gateway=_channel_gateway,
+                    )
+                    asyncio.create_task(_telegram.start(), name="telegram_adapter")
+                    _channel_adapters.append(_telegram)
+                    logger.info("✅ Telegram adapter started")
+                except Exception as e:
+                    logger.warning(f"⚠️ Telegram adapter start failed: {e}")
+
+            if settings.CHANNEL_DISCORD_ENABLED:
+                # Discord 어댑터는 아직 미구현(stub) 상태입니다.
+                # _channel_adapters에 추가하지 않아 실제 동작하는 것처럼 오해하는 것을 방지합니다.
+                logger.warning(
+                    "⚠️ CHANNEL_DISCORD_ENABLED=true이지만 Discord 어댑터는 미구현 상태입니다. "
+                    "discord.py 의존성 설치 후 구현이 완료되면 활성화하세요."
+                )
+
+            if settings.CHANNEL_SLACK_ENABLED:
+                # Slack 어댑터는 아직 미구현(stub) 상태입니다.
+                # _channel_adapters에 추가하지 않아 실제 동작하는 것처럼 오해하는 것을 방지합니다.
+                logger.warning(
+                    "⚠️ CHANNEL_SLACK_ENABLED=true이지만 Slack 어댑터는 미구현 상태입니다. "
+                    "slack-bolt 의존성 설치 후 구현이 완료되면 활성화하세요."
+                )
 
         logger.info("🎉 Multi-Agent AI System (Enterprise Edition) startup completed successfully!")
         logger.info("📊 Metrics endpoint available at: /metrics")
@@ -172,6 +256,26 @@ async def lifespan(app: FastAPI):
         # Redis 캐시 연결 종료
         await cache_manager.close()
         logger.info("🔄 Cache connection closed")
+
+        # Phase 1: 채널 어댑터 종료
+        if _channel_adapters:
+            logger.info("📲 Stopping Channel Adapters...")
+            for adapter in _channel_adapters:
+                try:
+                    await asyncio.wait_for(adapter.stop(), timeout=5.0)
+                except (asyncio.TimeoutError, Exception) as e:
+                    logger.warning(f"⚠️ Channel adapter stop error (non-critical): {e}")
+            logger.info("✅ Channel Adapters stopped")
+
+        # Ray 분산 처리 종료
+        if getattr(settings, "RAY_ENABLED", False):
+            try:
+                import ray
+                if ray.is_initialized():
+                    ray.shutdown()
+                    logger.info("⚡ Ray shutdown completed")
+            except Exception as e:
+                logger.warning(f"⚠️ Ray shutdown error: {e}")
 
         logger.info("✅ Shutdown completed successfully")
 
@@ -370,6 +474,9 @@ app.include_router(async_research_router, tags=["Async Research"])  # Phase 3.5:
 app.include_router(export_router, tags=["Report Export"])  # Phase 3.4: Structured report export
 app.include_router(refinement_router, tags=["Research Refinement"])  # Phase 3.8: Interactive refinement
 app.include_router(template_router, tags=["Research Templates"])  # Phase 4.7: Research templates
+app.include_router(approval_router, prefix=settings.API_V1_PREFIX, tags=["Execution Approval"])  # Phase 2: OpenClaw Exec Approval
+app.include_router(scheduled_tasks_router, prefix=settings.API_V1_PREFIX, tags=["Scheduled Tasks"])  # Phase 4: OpenClaw Cron
+app.include_router(ui_submit_router, prefix=settings.API_V1_PREFIX, tags=["A2UI"])  # Phase 8: OpenClaw A2UI
 
 
 # === Enterprise Monitoring Endpoints ===

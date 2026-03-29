@@ -46,6 +46,9 @@ export type {
   NeosArtifactDeltaEvent,
   NeosArtifactFinishEvent,
   NeosWorkflowProgressEvent,
+  NeosUIFrameEvent,
+  UIFramePayload,
+  UIFrameComponent,
   // Error types
   OpenResponsesErrorType,
   OpenResponsesErrorResponse,
@@ -68,6 +71,7 @@ export {
   isNeosArtifactDeltaEvent,
   isNeosArtifactFinishEvent,
   isNeosWorkflowProgressEvent,
+  isNeosUIFrameEvent,
   isMessageItem,
   isFunctionCallItem,
   isReasoningItem,

@@ -8,6 +8,7 @@ from .base import BaseExporter, ExportFormat, ResearchReport
 from .markdown_exporter import MarkdownExporter
 from .html_exporter import HTMLExporter
 from .pdf_exporter import PDFExporter
+from .canvas_exporter import CanvasExporter
 
 __all__ = [
     "BaseExporter",
@@ -16,4 +17,5 @@ __all__ = [
     "MarkdownExporter",
     "HTMLExporter",
     "PDFExporter",
+    "CanvasExporter",
 ]

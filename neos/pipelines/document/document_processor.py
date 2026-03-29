@@ -26,6 +26,7 @@ class DocumentProcessor:
         self,
         storage_provider: Optional[str] = None,
         enable_kg_extraction: bool = None,
+        enable_contextual_retrieval: bool = None,
     ):
         """
         DocumentProcessor 초기화
@@ -33,12 +34,18 @@ class DocumentProcessor:
         Args:
             storage_provider: 스토리지 프로바이더 ('s3', 'rustfs', 'local')
             enable_kg_extraction: 지식 그래프 추출 활성화 여부
+            enable_contextual_retrieval: Contextual Retrieval 활성화 여부
         """
         self.storage_provider = storage_provider or settings.STORAGE_PROVIDER
         self.enable_kg_extraction = (
             enable_kg_extraction
             if enable_kg_extraction is not None
             else settings.KG_EXTRACTION_ENABLED
+        )
+        self.enable_contextual_retrieval = (
+            enable_contextual_retrieval
+            if enable_contextual_retrieval is not None
+            else settings.CONTEXTUAL_RETRIEVAL_ENABLED
         )
 
         # 서비스 초기화
@@ -51,9 +58,22 @@ class DocumentProcessor:
         else:
             self.kg_extractor = None
 
+        if self.enable_contextual_retrieval:
+            from neos.pipelines.document.contextual_retrieval import ContextualRetrieval
+            self.contextual_retrieval = ContextualRetrieval(
+                model=settings.CONTEXTUAL_MODEL,
+                max_context_tokens=settings.CONTEXTUAL_MAX_TOKENS,
+                max_concurrent=settings.CONTEXTUAL_MAX_CONCURRENT,
+                max_chunks_per_doc=settings.CONTEXTUAL_MAX_CHUNKS_PER_DOC,
+                budget_cap_usd=settings.CONTEXTUAL_BUDGET_CAP_USD,
+            )
+        else:
+            self.contextual_retrieval = None
+
         logger.info(
             f"DocumentProcessor initialized: storage={self.storage_provider}, "
-            f"kg_extraction={self.enable_kg_extraction}"
+            f"kg_extraction={self.enable_kg_extraction}, "
+            f"contextual_retrieval={self.enable_contextual_retrieval}"
         )
 
     async def process_document(
@@ -139,8 +159,25 @@ class DocumentProcessor:
             chunks = self.chunker.chunk_text(text_content, metadata=metadata)
             logger.info(f"Created {len(chunks)} chunks")
 
-            # 9. 임베딩 생성 (병렬)
-            chunk_texts = [chunk.chunk_text for chunk in chunks]
+            # 8.5. Contextual Retrieval (옵션)
+            if self.enable_contextual_retrieval and self.contextual_retrieval and chunks:
+                logger.info(f"Contextual Retrieval 시작: {len(chunks)}개 청크")
+                contextual_chunks = await self.contextual_retrieval.generate_contexts(
+                    full_document=text_content,
+                    chunks=chunks,
+                )
+                for chunk, ctx_chunk in zip(chunks, contextual_chunks):
+                    chunk.contextual_text = ctx_chunk.contextual_text
+                    chunk.context_snippet = ctx_chunk.context_snippet
+
+            # 9. 임베딩 생성 (병렬) — contextual 모드 시 contextual_text 우선 사용
+            if self.enable_contextual_retrieval:
+                chunk_texts = [
+                    chunk.contextual_text if chunk.contextual_text else chunk.chunk_text
+                    for chunk in chunks
+                ]
+            else:
+                chunk_texts = [chunk.chunk_text for chunk in chunks]
             embeddings = await self.embedding_service.embed_batch(chunk_texts)
 
             # 10. 청크 DB 저장
@@ -343,6 +380,7 @@ class DocumentProcessor:
                 document_id=document_id,
                 chunk_index=chunk.chunk_index,
                 chunk_text=chunk.chunk_text,
+                contextual_text=getattr(chunk, "contextual_text", None),
                 chunk_size=chunk.chunk_size,
                 page_number=chunk.page_number,
                 start_offset=chunk.start_offset,
@@ -350,7 +388,11 @@ class DocumentProcessor:
                 chunk_type=chunk.chunk_type,
                 heading_hierarchy=chunk.heading_hierarchy,
                 embedding=embedding,
-                extra_metadata=chunk.metadata or {},
+                extra_metadata={
+                    **(chunk.metadata or {}),
+                    "contextual_retrieval_applied": getattr(chunk, "contextual_text", None) is not None,
+                    "context_snippet": getattr(chunk, "context_snippet", None),
+                },
             )
             session.add(db_chunk)
 

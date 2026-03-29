@@ -68,10 +68,16 @@ class CohereReranker:
         model = model or getattr(settings, "RERANKER_MODEL", "rerank-english-v3.0")
 
         try:
-            # 문서 텍스트 추출
+            # 문서 텍스트 추출 — contextual_text 우선 사용 (Contextual Retrieval 지원)
             texts = []
             for d in documents:
-                text = d.get("content") or d.get("query_text") or d.get("title") or ""
+                text = (
+                    d.get("contextual_text")
+                    or d.get("content")
+                    or d.get("query_text")
+                    or d.get("title")
+                    or ""
+                )
                 texts.append(text[:4096])  # Cohere max input per document
 
             if not texts:

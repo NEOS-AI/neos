@@ -6,7 +6,7 @@ import type { getWeather } from "./ai/tools/get-weather";
 import type { requestSuggestions } from "./ai/tools/request-suggestions";
 import type { updateDocument } from "./ai/tools/update-document";
 import type { Suggestion } from "./db/schema";
-import type { ItemStatus } from "./open-responses-types";
+import type { ItemStatus, UIFramePayload } from "./open-responses-types";
 
 export type DataPart = { type: "append-message"; message: string };
 
@@ -65,6 +65,8 @@ export const messageMetadataSchema = z.object({
       })
     )
     .optional(),
+  // Phase 8 (A2UI): UIFrame payload for form rendering
+  ui_frame: z.custom<UIFramePayload>().optional(),
 });
 
 export type MessageMetadata = z.infer<typeof messageMetadataSchema>;
