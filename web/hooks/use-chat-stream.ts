@@ -22,6 +22,7 @@ import {
   isNeosArtifactFinishEvent,
   isNeosWorkflowProgressEvent,
   isNeosUIFrameEvent,
+  isNeosInlineVizEvent,
   isFunctionCallItem,
 } from "@/lib/stream-types";
 import {
@@ -388,6 +389,24 @@ export function useChatStream({
                   if (onData) {
                     onData({ type: "ui-frame", data: eventData.ui_frame });
                   }
+                }
+
+                // neos:inline_viz — renderDiagram / renderChart 인라인 시각화
+                else if (isNeosInlineVizEvent(eventData)) {
+                  const vizEntry = {
+                    id: eventData.viz_id,
+                    viz_type: eventData.viz_type,
+                    data: eventData.data as unknown as Record<string, unknown>,
+                  };
+                  assistantMessage.metadata = {
+                    createdAt: assistantMessage.metadata?.createdAt || new Date().toISOString(),
+                    ...assistantMessage.metadata,
+                    inline_visualizations: [
+                      ...(assistantMessage.metadata?.inline_visualizations ?? []),
+                      vizEntry,
+                    ],
+                  };
+                  updateMessage();
                 }
               }
             } catch (parseError) {
