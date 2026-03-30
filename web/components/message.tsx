@@ -7,6 +7,8 @@ import type { ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
 import { ArtifactBlock } from "./artifact-block";
 import { UIFrameRenderer } from "./ui-frame/UIFrameRenderer";
+import { MermaidDiagram } from "./mermaid-diagram";
+import { DataChart } from "./data-chart";
 import { useDataStream } from "./data-stream-provider";
 import { DocumentToolResult } from "./document";
 import { DocumentPreview } from "./document-preview";
@@ -311,6 +313,44 @@ const PurePreviewMessage = ({
           {message.role === "assistant" && message.metadata?.ui_frame && (
             <UIFrameRenderer uiFrame={message.metadata.ui_frame} />
           )}
+
+          {/* Inline Visualization — renderDiagram / renderChart 결과 */}
+          {message.role === "assistant" &&
+            message.metadata?.inline_visualizations &&
+            message.metadata.inline_visualizations.length > 0 && (
+              <div className="mt-2 flex flex-col gap-3">
+                {message.metadata.inline_visualizations.map((viz) => {
+                  if (viz.viz_type === "mermaid") {
+                    const d = viz.data as {
+                      title?: string;
+                      mermaidCode: string;
+                      description?: string;
+                    };
+                    return (
+                      <MermaidDiagram
+                        key={viz.id}
+                        code={d.mermaidCode}
+                        title={d.title}
+                        description={d.description}
+                      />
+                    );
+                  }
+                  const d = viz.data as {
+                    title?: string;
+                    type: "bar" | "line" | "pie";
+                    data: Array<{ label: string; value: number }>;
+                  };
+                  return (
+                    <DataChart
+                      key={viz.id}
+                      type={d.type}
+                      data={d.data}
+                      title={d.title}
+                    />
+                  );
+                })}
+              </div>
+            )}
 
           {!isReadonly && (
             <MessageActions
