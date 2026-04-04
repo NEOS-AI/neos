@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import StreamingResponse
-from typing import Optional, AsyncGenerator, List
+from typing import Optional, AsyncGenerator, List, Union
 import uuid
 import asyncio
 
@@ -64,6 +64,8 @@ from neos.api.models.open_responses import (
     NeosUIFrameEvent,
     NeosInlineVizEvent,
     NeosInlineVizErrorEvent,
+    MermaidVizData,
+    ChartVizData,
     ResponseFailedEvent,
     ResponseObject,
     ResponseStatus,
@@ -840,17 +842,32 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
                             event_type = tool_event.get("type")
 
                             if event_type == "inline_viz":
-                                viz_entry = {
-                                    "id": tool_event["viz_id"],
-                                    "viz_type": tool_event["viz_type"],
-                                    "data": tool_event["data"],
-                                }
-                                inline_viz_list.append(viz_entry)
+                                viz_type = tool_event["viz_type"]
+                                raw_data = tool_event["data"]
+
+                                # data 페이로드를 Pydantic 모델로 검증
+                                if viz_type == "mermaid":
+                                    validated_data: Union[MermaidVizData, ChartVizData] = MermaidVizData(**raw_data)
+                                else:
+                                    validated_data = ChartVizData(
+                                        title=raw_data["title"],
+                                        type=raw_data["type"],
+                                        data=raw_data["data"],
+                                    )
+
                                 inline_viz_event = NeosInlineVizEvent(
                                     viz_id=tool_event["viz_id"],
-                                    viz_type=tool_event["viz_type"],
-                                    data=tool_event["data"],
+                                    viz_type=viz_type,
+                                    data=validated_data,
                                 )
+                                # model_dump()으로 viz_entry 생성하여 필드 불일치 방지
+                                event_dict = inline_viz_event.model_dump()
+                                viz_entry = {
+                                    "id": event_dict["viz_id"],
+                                    "viz_type": event_dict["viz_type"],
+                                    "data": event_dict["data"],
+                                }
+                                inline_viz_list.append(viz_entry)
                                 yield format_sse_event(inline_viz_event)
 
                             elif event_type == "error":

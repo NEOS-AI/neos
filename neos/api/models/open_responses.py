@@ -315,6 +315,28 @@ class NeosUIFrameEvent(BaseModel):
         return self
 
 
+# ── Inline Visualization Data Models ──────────────────────────────────────────
+
+class MermaidVizData(BaseModel):
+    """renderDiagram 도구의 data 페이로드"""
+    title: str
+    mermaidCode: str
+    description: Optional[str] = None
+
+
+class ChartDataPoint(BaseModel):
+    """renderChart 차트 데이터 포인트"""
+    label: str
+    value: float
+
+
+class ChartVizData(BaseModel):
+    """renderChart 도구의 data 페이로드"""
+    title: str
+    type: Literal["bar", "line", "pie"]
+    data: list[ChartDataPoint]
+
+
 class NeosInlineVizEvent(BaseModel):
     """
     Event: neos:inline_viz — 인라인 시각화 이벤트
@@ -325,7 +347,7 @@ class NeosInlineVizEvent(BaseModel):
     type: Literal["neos:inline_viz"] = "neos:inline_viz"
     viz_id: str
     viz_type: Literal["mermaid", "chart"]
-    data: Dict[str, Any]
+    data: Union[MermaidVizData, ChartVizData]
 
 
 class NeosInlineVizErrorEvent(BaseModel):
