@@ -745,6 +745,8 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
 """
                 system_prompt = f"{system_prompt}\n\n{workflow_context}"
 
+            tools: list = []
+
             if app_settings.ARTIFACTS_ENABLED:
                 system_prompt = f"{system_prompt}\n\n{app_settings.ARTIFACTS_SYSTEM_PROMPT}"
                 tools = get_artifact_tools()
