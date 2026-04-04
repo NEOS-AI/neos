@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 // 모듈 레벨 싱글톤 플래그 — mermaid.initialize()는 한 번만 호출해야 함
 let mermaidInitialized = false;
@@ -12,7 +12,6 @@ interface MermaidDiagramProps {
 }
 
 export function MermaidDiagram({ code, title, description }: MermaidDiagramProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
   const [svgContent, setSvgContent] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
 
@@ -27,7 +26,7 @@ export function MermaidDiagram({ code, title, description }: MermaidDiagramProps
           mermaid.initialize({
             startOnLoad: false,
             theme: "neutral",
-            securityLevel: "loose",
+            securityLevel: "strict",
             fontFamily: "inherit",
           });
           mermaidInitialized = true;
@@ -71,7 +70,6 @@ export function MermaidDiagram({ code, title, description }: MermaidDiagramProps
       )}
       {svgContent ? (
         <div
-          ref={containerRef}
           // biome-ignore lint/security/noDangerouslySetInnerHtml: mermaid SVG output is sanitized
           dangerouslySetInnerHTML={{ __html: svgContent }}
           className="flex justify-center"

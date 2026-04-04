@@ -321,31 +321,21 @@ const PurePreviewMessage = ({
               <div className="mt-2 flex flex-col gap-3">
                 {message.metadata.inline_visualizations.map((viz) => {
                   if (viz.viz_type === "mermaid") {
-                    const d = viz.data as {
-                      title?: string;
-                      mermaidCode: string;
-                      description?: string;
-                    };
                     return (
                       <MermaidDiagram
                         key={viz.id}
-                        code={d.mermaidCode}
-                        title={d.title}
-                        description={d.description}
+                        code={viz.data.mermaidCode}
+                        title={viz.data.title}
+                        description={viz.data.description}
                       />
                     );
                   }
-                  const d = viz.data as {
-                    title?: string;
-                    type: "bar" | "line" | "pie";
-                    data: Array<{ label: string; value: number }>;
-                  };
                   return (
                     <DataChart
                       key={viz.id}
-                      type={d.type}
-                      data={d.data}
-                      title={d.title}
+                      type={viz.data.type}
+                      data={viz.data.data}
+                      title={viz.data.title}
                     />
                   );
                 })}

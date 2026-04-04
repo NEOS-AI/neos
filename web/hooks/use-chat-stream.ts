@@ -24,6 +24,8 @@ import {
   isNeosUIFrameEvent,
   isNeosInlineVizEvent,
   isFunctionCallItem,
+  type MermaidVizData,
+  type ChartVizData,
 } from "@/lib/stream-types";
 import {
   createStreamProcessor,
@@ -393,13 +395,12 @@ export function useChatStream({
 
                 // neos:inline_viz — renderDiagram / renderChart 인라인 시각화
                 else if (isNeosInlineVizEvent(eventData)) {
-                  const vizEntry = {
-                    id: eventData.viz_id,
-                    viz_type: eventData.viz_type,
-                    data: eventData.data as unknown as Record<string, unknown>,
-                  };
+                  const vizEntry =
+                    eventData.viz_type === "mermaid"
+                      ? { id: eventData.viz_id, viz_type: "mermaid" as const, data: eventData.data as MermaidVizData }
+                      : { id: eventData.viz_id, viz_type: "chart" as const, data: eventData.data as ChartVizData };
                   assistantMessage.metadata = {
-                    createdAt: assistantMessage.metadata?.createdAt || new Date().toISOString(),
+                    createdAt: new Date().toISOString(),
                     ...assistantMessage.metadata,
                     inline_visualizations: [
                       ...(assistantMessage.metadata?.inline_visualizations ?? []),

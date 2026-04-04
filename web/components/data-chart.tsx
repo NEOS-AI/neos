@@ -36,6 +36,14 @@ function toRechartsData(data: DataPoint[]) {
 }
 
 export function DataChart({ type, data, title }: DataChartProps) {
+  if (!data || data.length === 0) {
+    return (
+      <div className="my-2 rounded-lg border bg-card p-3 text-center">
+        <p className="text-xs text-muted-foreground">No data available</p>
+      </div>
+    );
+  }
+
   const chartData = toRechartsData(data);
 
   return (

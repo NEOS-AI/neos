@@ -69,11 +69,26 @@ export const messageMetadataSchema = z.object({
   ui_frame: z.custom<UIFramePayload>().optional(),
   // Inline Visualization: renderDiagram / renderChart 결과 (복수 지원)
   inline_visualizations: z.array(
-    z.object({
-      id: z.string(),
-      viz_type: z.enum(["mermaid", "chart"]),
-      data: z.record(z.unknown()),
-    })
+    z.discriminatedUnion("viz_type", [
+      z.object({
+        id: z.string(),
+        viz_type: z.literal("mermaid"),
+        data: z.object({
+          title: z.string(),
+          mermaidCode: z.string(),
+          description: z.string().optional(),
+        }),
+      }),
+      z.object({
+        id: z.string(),
+        viz_type: z.literal("chart"),
+        data: z.object({
+          title: z.string(),
+          type: z.enum(["bar", "line", "pie"]),
+          data: z.array(z.object({ label: z.string(), value: z.number() })),
+        }),
+      }),
+    ])
   ).optional(),
 });
 
