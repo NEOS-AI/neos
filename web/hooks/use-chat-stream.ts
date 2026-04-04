@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "@/lib/types";
+import { messageMetadataSchema } from "@/lib/types";
 import type { OpenResponsesEvent, MessageItem } from "@/lib/stream-types";
 import {
   // OpenResponses type guards
@@ -25,8 +26,6 @@ import {
   isNeosInlineVizEvent,
   isNeosInlineVizErrorEvent,
   isFunctionCallItem,
-  type MermaidVizData,
-  type ChartVizData,
 } from "@/lib/stream-types";
 import {
   createStreamProcessor,
@@ -36,6 +35,9 @@ import { generateUUID } from "@/lib/utils";
 import type { VisibilityType } from "@/components/visibility-selector";
 import type { ChatModel } from "@/lib/ai/models";
 import type { ChatStatus } from "ai";
+
+// messageMetadataSchema에서 개별 inline_viz 항목 스키마 추출 (SSE 검증 재사용)
+const inlineVizEntrySchema = messageMetadataSchema.shape.inline_visualizations.unwrap().element;
 
 export interface ChatRequestOptions {
   // Vercel AI SDK와 호환되는 옵션
@@ -396,19 +398,28 @@ export function useChatStream({
 
                 // neos:inline_viz — renderDiagram / renderChart 인라인 시각화
                 else if (isNeosInlineVizEvent(eventData)) {
-                  const vizEntry =
-                    eventData.viz_type === "mermaid"
-                      ? { id: eventData.viz_id, viz_type: "mermaid" as const, data: eventData.data as MermaidVizData }
-                      : { id: eventData.viz_id, viz_type: "chart" as const, data: eventData.data as ChartVizData };
-                  assistantMessage.metadata = {
-                    createdAt: new Date().toISOString(),
-                    ...assistantMessage.metadata,
-                    inline_visualizations: [
-                      ...(assistantMessage.metadata?.inline_visualizations ?? []),
-                      vizEntry,
-                    ],
+                  const rawEntry = {
+                    id: eventData.viz_id,
+                    viz_type: eventData.viz_type,
+                    data: eventData.data,
                   };
-                  updateMessage();
+                  const parseResult = inlineVizEntrySchema.safeParse(rawEntry);
+                  if (!parseResult.success) {
+                    console.error(
+                      "[InlineViz] SSE 이벤트 데이터 검증 실패:",
+                      parseResult.error.flatten()
+                    );
+                  } else {
+                    assistantMessage.metadata = {
+                      ...assistantMessage.metadata,
+                      createdAt: assistantMessage.metadata?.createdAt ?? new Date().toISOString(),
+                      inline_visualizations: [
+                        ...(assistantMessage.metadata?.inline_visualizations ?? []),
+                        parseResult.data,
+                      ],
+                    };
+                    updateMessage();
+                  }
                 }
 
                 // neos:inline_viz_error — 시각화 도구 에러 (non-fatal)
