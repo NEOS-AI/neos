@@ -57,7 +57,14 @@ export function DataChart({ type, data, title }: DataChartProps) {
             <XAxis dataKey="name" tick={{ fontSize: 11 }} />
             <YAxis tick={{ fontSize: 11 }} />
             <Tooltip />
-            <Bar dataKey="value" fill={CHART_COLORS[0]} radius={[3, 3, 0, 0]} />
+            <Bar dataKey="value" radius={[3, 3, 0, 0]}>
+              {chartData.map((_, index) => (
+                <Cell
+                  key={`bar-cell-${index}`}
+                  fill={CHART_COLORS[index % CHART_COLORS.length]}
+                />
+              ))}
+            </Bar>
           </BarChart>
         ) : type === "line" ? (
           <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
