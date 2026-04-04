@@ -880,6 +880,15 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
                                 yield format_sse_event(error_event)
                                 # 시각화 실패는 치명적이지 않으므로 스트림 중단하지 않음
 
+                    # ── INLINE_VIS_ENABLED=false 상태에서 inline vis 도구 호출 방어 ──
+                    elif is_inline_vis_tool(tool_name):
+                        # LLM이 이전 세션 system prompt 캐시 등으로 renderDiagram/renderChart를
+                        # 호출할 수 있음. 아티팩트 핸들러로 넘어가면 잘못된 DB 레코드 생성 가능.
+                        logger.warning(
+                            f"[InlineVis] {tool_name} called but INLINE_VIS_ENABLED=false. "
+                            "Skipping to prevent artifact handler misbehavior."
+                        )
+
                     # ── 기존 아티팩트 도구 분기 ──────────────────────────────
                     else:
                         # DB 세션 가져오기
