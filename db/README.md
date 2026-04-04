@@ -129,6 +129,24 @@ psql -U postgres -d neos -h localhost -f db/migrations/019_add_tool_registry.sql
 
 # Add contextual retrieval tables
 psql -U postgres -d neos -h localhost -f db/migrations/020_add_contextual_retrieval.sql
+
+# Add channel source columns to query_history
+psql -U postgres -d neos -h localhost -f db/migrations/021_add_channel_source.sql
+
+# Add tool approval allowlist table
+psql -U postgres -d neos -h localhost -f db/migrations/022_add_tool_approval_allowlist.sql
+
+# Add scheduled_tasks table
+psql -U postgres -d neos -h localhost -f db/migrations/023_add_scheduled_tasks.sql
+
+# UI 폼 세션 저장 테이블
+# UIFrameGenerator가 생성한 frame_id → (original_query, conversation_id) 매핑
+# POST /api/v1/ui/submit 수신 시 원본 쿼리 복원에 사용
+psql -U postgres -d neos -h localhost -f db/migrations/024_add_ui_frame_sessions.sql
+psql -U postgres -d neos -h localhost -f db/migrations/025_add_submitted_at.sql
+
+# Execution Approval 타임아웃 추적 테이블 추가
+psql -U postgres -d neos -h localhost -f db/migrations/026_add_pending_approvals.sql
 ```
 
 ### Migrate database schema for backoffice
