@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 
-// 모듈 레벨 싱글톤 플래그 — mermaid.initialize()는 한 번만 호출해야 함
+// 모듈 레벨 싱글톤 — initialize()는 테마 변경 시에만 재호출
 let mermaidInitialized = false;
+let mermaidInitializedTheme: "dark" | "neutral" | null = null;
 
 interface MermaidDiagramProps {
   code: string;
@@ -22,14 +23,18 @@ export function MermaidDiagram({ code, title, description }: MermaidDiagramProps
       try {
         const mermaid = (await import("mermaid")).default;
 
-        if (!mermaidInitialized) {
+        const isDark = document.documentElement.classList.contains("dark");
+        const currentTheme: "dark" | "neutral" = isDark ? "dark" : "neutral";
+
+        if (!mermaidInitialized || mermaidInitializedTheme !== currentTheme) {
           mermaid.initialize({
             startOnLoad: false,
-            theme: "neutral",
+            theme: currentTheme,
             securityLevel: "strict",
             fontFamily: "inherit",
           });
           mermaidInitialized = true;
+          mermaidInitializedTheme = currentTheme;
         }
 
         const id = `mermaid-${Math.random().toString(36).slice(2)}`;
