@@ -380,7 +380,7 @@ const MemoizedPreviewMessage = memo(
       return false;
     }
 
-    return false;
+    return true; // props가 모두 같으면 재렌더링 불필요
   }
 );
 
