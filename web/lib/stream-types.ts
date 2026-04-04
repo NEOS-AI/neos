@@ -77,6 +77,7 @@ export {
   isNeosWorkflowProgressEvent,
   isNeosUIFrameEvent,
   isNeosInlineVizEvent,
+  isNeosInlineVizErrorEvent,
   isMessageItem,
   isFunctionCallItem,
   isReasoningItem,

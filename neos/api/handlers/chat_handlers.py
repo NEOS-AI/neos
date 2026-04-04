@@ -63,6 +63,7 @@ from neos.api.models.open_responses import (
     NeosWorkflowProgressEvent,
     NeosUIFrameEvent,
     NeosInlineVizEvent,
+    NeosInlineVizErrorEvent,
     ResponseFailedEvent,
     ResponseObject,
     ResponseStatus,
@@ -853,7 +854,13 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
                                 yield format_sse_event(inline_viz_event)
 
                             elif event_type == "error":
-                                logger.error(f"[InlineVis] Tool error: {tool_event.get('error')}")
+                                err_msg = tool_event.get("error", "Unknown inline visualization error")
+                                logger.error(f"[InlineVis] Tool error ({tool_name}): {err_msg}")
+                                error_event = NeosInlineVizErrorEvent(
+                                    tool_name=tool_name,
+                                    error=err_msg,
+                                )
+                                yield format_sse_event(error_event)
                                 # 시각화 실패는 치명적이지 않으므로 스트림 중단하지 않음
 
                     # ── 기존 아티팩트 도구 분기 ──────────────────────────────

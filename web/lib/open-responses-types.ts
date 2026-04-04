@@ -394,6 +394,12 @@ export interface NeosInlineVizEvent {
   data: MermaidVizData | ChartVizData;
 }
 
+export interface NeosInlineVizErrorEvent {
+  type: "neos:inline_viz_error";
+  tool_name: string;
+  error: string;
+}
+
 // ============================================================================
 // Union of All Events
 // ============================================================================
@@ -428,7 +434,8 @@ export type NeosExtensionEvent =
   | NeosArtifactFinishEvent
   | NeosWorkflowProgressEvent
   | NeosUIFrameEvent
-  | NeosInlineVizEvent;
+  | NeosInlineVizEvent
+  | NeosInlineVizErrorEvent;
 
 /**
  * All OpenResponses events (standard + neos extensions)
@@ -564,6 +571,12 @@ export function isNeosInlineVizEvent(
   event: OpenResponsesEvent
 ): event is NeosInlineVizEvent {
   return event.type === "neos:inline_viz";
+}
+
+export function isNeosInlineVizErrorEvent(
+  event: OpenResponsesEvent
+): event is NeosInlineVizErrorEvent {
+  return event.type === "neos:inline_viz_error";
 }
 
 // Output item type guards

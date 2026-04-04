@@ -23,6 +23,7 @@ import {
   isNeosWorkflowProgressEvent,
   isNeosUIFrameEvent,
   isNeosInlineVizEvent,
+  isNeosInlineVizErrorEvent,
   isFunctionCallItem,
   type MermaidVizData,
   type ChartVizData,
@@ -408,6 +409,13 @@ export function useChatStream({
                     ],
                   };
                   updateMessage();
+                }
+
+                // neos:inline_viz_error — 시각화 도구 에러 (non-fatal)
+                else if (isNeosInlineVizErrorEvent(eventData)) {
+                  console.warn(
+                    `[InlineViz] ${eventData.tool_name} 렌더링 실패: ${eventData.error}`
+                  );
                 }
               }
             } catch (parseError) {

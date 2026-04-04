@@ -328,6 +328,18 @@ class NeosInlineVizEvent(BaseModel):
     data: Dict[str, Any]
 
 
+class NeosInlineVizErrorEvent(BaseModel):
+    """
+    Event: neos:inline_viz_error — 인라인 시각화 도구 에러 이벤트 (non-fatal)
+
+    시각화 도구 실행 실패 시 스트림을 종료하지 않고 클라이언트에 에러를 전달.
+    ResponseFailedEvent(스트림 종료)와 달리 채팅 응답은 계속 진행된다.
+    """
+    type: Literal["neos:inline_viz_error"] = "neos:inline_viz_error"
+    tool_name: str
+    error: str
+
+
 # ============================================================================
 # Union Types
 # ============================================================================
@@ -353,8 +365,9 @@ NeosExtensionEvent = Union[
     NeosArtifactDeltaEvent,
     NeosArtifactFinishEvent,
     NeosWorkflowProgressEvent,
-    NeosUIFrameEvent,          # Phase 8 (A2UI)
-    NeosInlineVizEvent,        # Inline Visualization (renderDiagram/renderChart)
+    NeosUIFrameEvent,            # Phase 8 (A2UI)
+    NeosInlineVizEvent,          # Inline Visualization (renderDiagram/renderChart)
+    NeosInlineVizErrorEvent,     # Inline Visualization 에러 (non-fatal)
 ]
 
 OpenResponsesEvent = Union[StandardStreamEvent, NeosExtensionEvent]
