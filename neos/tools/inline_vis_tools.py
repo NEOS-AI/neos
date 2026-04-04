@@ -33,7 +33,7 @@ RENDER_DIAGRAM_TOOL: Dict[str, Any] = {
                 "description": "One-sentence description of what the diagram shows."
             }
         },
-        "required": ["title", "mermaidCode", "description"]
+        "required": ["title", "mermaidCode"]  # description은 optional (FE schema와 정렬)
     }
 }
 
