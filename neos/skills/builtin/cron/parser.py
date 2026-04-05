@@ -159,12 +159,17 @@ Rules:
         raw_text = response.content if hasattr(response, "content") else str(response)
 
         # JSON 추출 (LLM이 마크다운 코드블록으로 감쌀 경우 대비)
-        json_match = re.search(r'\{[^{}]+\}', raw_text, re.DOTALL)
+        # greedy `.*` 로 가장 바깥쪽 { } 를 매칭하여 중첩 객체도 처리
+        json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
         if not json_match:
             logger.warning("LLM cron parse: no JSON found in response for '%s'", natural_language[:50])
             return None
 
-        data = json.loads(json_match.group())
+        try:
+            data = json.loads(json_match.group())
+        except json.JSONDecodeError:
+            logger.warning("LLM cron parse: malformed JSON for '%s'", natural_language[:50])
+            return None
         cron_expr = data.get("cron_expression", "").strip()
         description = data.get("description", natural_language[:80]).strip()
         confidence = float(data.get("confidence", 0.5))

@@ -366,6 +366,41 @@ export interface NeosUIFrameEvent {
 }
 
 // ============================================================================
+// Neos Inline Visualization Types (renderDiagram / renderChart)
+// ============================================================================
+
+export interface MermaidVizData {
+  title: string;
+  mermaidCode: string;
+  description: string;
+}
+
+export interface ChartVizData {
+  title: string;
+  type: "bar" | "line" | "pie";
+  data: Array<{ label: string; value: number }>;
+}
+
+export interface InlineVisualization {
+  id: string;
+  viz_type: "mermaid" | "chart";
+  data: MermaidVizData | ChartVizData;
+}
+
+export interface NeosInlineVizEvent {
+  type: "neos:inline_viz";
+  viz_id: string;
+  viz_type: "mermaid" | "chart";
+  data: MermaidVizData | ChartVizData;
+}
+
+export interface NeosInlineVizErrorEvent {
+  type: "neos:inline_viz_error";
+  tool_name: string;
+  error: string;
+}
+
+// ============================================================================
 // Union of All Events
 // ============================================================================
 
@@ -398,7 +433,9 @@ export type NeosExtensionEvent =
   | NeosArtifactDeltaEvent
   | NeosArtifactFinishEvent
   | NeosWorkflowProgressEvent
-  | NeosUIFrameEvent;
+  | NeosUIFrameEvent
+  | NeosInlineVizEvent
+  | NeosInlineVizErrorEvent;
 
 /**
  * All OpenResponses events (standard + neos extensions)
@@ -528,6 +565,18 @@ export function isNeosUIFrameEvent(
   event: OpenResponsesEvent
 ): event is NeosUIFrameEvent {
   return event.type === "neos:ui_frame";
+}
+
+export function isNeosInlineVizEvent(
+  event: OpenResponsesEvent
+): event is NeosInlineVizEvent {
+  return event.type === "neos:inline_viz";
+}
+
+export function isNeosInlineVizErrorEvent(
+  event: OpenResponsesEvent
+): event is NeosInlineVizErrorEvent {
+  return event.type === "neos:inline_viz_error";
 }
 
 // Output item type guards

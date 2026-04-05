@@ -6,7 +6,7 @@ import type { getWeather } from "./ai/tools/get-weather";
 import type { requestSuggestions } from "./ai/tools/request-suggestions";
 import type { updateDocument } from "./ai/tools/update-document";
 import type { Suggestion } from "./db/schema";
-import type { ItemStatus, UIFramePayload } from "./open-responses-types";
+import type { ItemStatus, UIFramePayload, InlineVisualization } from "./open-responses-types";
 
 export type DataPart = { type: "append-message"; message: string };
 
@@ -67,6 +67,29 @@ export const messageMetadataSchema = z.object({
     .optional(),
   // Phase 8 (A2UI): UIFrame payload for form rendering
   ui_frame: z.custom<UIFramePayload>().optional(),
+  // Inline Visualization: renderDiagram / renderChart 결과 (복수 지원)
+  inline_visualizations: z.array(
+    z.discriminatedUnion("viz_type", [
+      z.object({
+        id: z.string(),
+        viz_type: z.literal("mermaid"),
+        data: z.object({
+          title: z.string(),
+          mermaidCode: z.string(),
+          description: z.string().optional(),
+        }),
+      }),
+      z.object({
+        id: z.string(),
+        viz_type: z.literal("chart"),
+        data: z.object({
+          title: z.string(),
+          type: z.enum(["bar", "line", "pie"]),
+          data: z.array(z.object({ label: z.string(), value: z.number() })),
+        }),
+      }),
+    ])
+  ).optional(),
 });
 
 export type MessageMetadata = z.infer<typeof messageMetadataSchema>;

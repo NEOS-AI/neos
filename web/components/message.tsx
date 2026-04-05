@@ -7,6 +7,8 @@ import type { ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
 import { ArtifactBlock } from "./artifact-block";
 import { UIFrameRenderer } from "./ui-frame/UIFrameRenderer";
+import { MermaidDiagram } from "./mermaid-diagram";
+import { DataChart } from "./data-chart";
 import { useDataStream } from "./data-stream-provider";
 import { DocumentToolResult } from "./document";
 import { DocumentPreview } from "./document-preview";
@@ -312,6 +314,34 @@ const PurePreviewMessage = ({
             <UIFrameRenderer uiFrame={message.metadata.ui_frame} />
           )}
 
+          {/* Inline Visualization — renderDiagram / renderChart 결과 */}
+          {message.role === "assistant" &&
+            message.metadata?.inline_visualizations &&
+            message.metadata.inline_visualizations.length > 0 && (
+              <div className="mt-2 flex flex-col gap-3">
+                {message.metadata.inline_visualizations.map((viz) => {
+                  if (viz.viz_type === "mermaid") {
+                    return (
+                      <MermaidDiagram
+                        key={viz.id}
+                        code={viz.data.mermaidCode}
+                        title={viz.data.title}
+                        description={viz.data.description}
+                      />
+                    );
+                  }
+                  return (
+                    <DataChart
+                      key={viz.id}
+                      type={viz.data.type}
+                      data={viz.data.data}
+                      title={viz.data.title}
+                    />
+                  );
+                })}
+              </div>
+            )}
+
           {!isReadonly && (
             <MessageActions
               chatId={chatId}
@@ -350,7 +380,7 @@ const MemoizedPreviewMessage = memo(
       return false;
     }
 
-    return false;
+    return true; // props가 모두 같으면 재렌더링 불필요
   }
 );
 

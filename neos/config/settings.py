@@ -742,6 +742,22 @@ class Settings(BaseSettings):
     A2UI_MAX_COMPONENTS: int = int(env_vars.get("A2UI_MAX_COMPONENTS", "10"))
     A2UI_FRAME_TIMEOUT: int = int(env_vars.get("A2UI_FRAME_TIMEOUT", "300"))
 
+    # =========================================================================
+    # Inline Visualization (renderDiagram / renderChart 인라인 시각화)
+    # =========================================================================
+    INLINE_VIS_ENABLED: bool = env_vars.get("INLINE_VIS_ENABLED", "true").lower() in ("1", "true", "yes")
+    INLINE_VIS_SYSTEM_PROMPT: str = """
+## Inline Visualization Tools
+You have access to visualization tools. Use them to enhance explanations:
+- `renderDiagram`: For processes (flowchart), system structures, sequences, or causal relationships
+- `renderChart`: For comparisons (bar), trends over time (line), or proportions (pie)
+
+Rules:
+- Call visualization tools BETWEEN text paragraphs, not all at the end
+- Use Mermaid syntax: wrap node text with special chars in quotes (e.g., A["Node text"] --> B)
+- One response can contain multiple tool calls
+"""
+
     class Config:
         env_file = ".env"
         case_sensitive = True

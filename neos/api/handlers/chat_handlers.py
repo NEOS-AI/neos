@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import StreamingResponse
-from typing import Optional, AsyncGenerator, List
+from typing import Optional, AsyncGenerator, List, Union
 import uuid
 import asyncio
 
@@ -39,6 +39,8 @@ from neos.workflow.graph import multi_agent_workflow
 from neos.config.settings import settings as app_settings
 from neos.tools.artifact_tools import get_artifact_tools
 from neos.tools.artifact_tool_handler import execute_artifact_tool
+from neos.tools.inline_vis_tools import get_inline_vis_tools, is_inline_vis_tool
+from neos.tools.inline_vis_tool_handler import execute_inline_vis_tool as execute_inline_vis_tool_fn
 
 # OpenResponses imports
 from neos.api.adapters.stream_adapter import (
@@ -60,6 +62,10 @@ from neos.api.models.open_responses import (
     NeosArtifactFinishEvent,
     NeosWorkflowProgressEvent,
     NeosUIFrameEvent,
+    NeosInlineVizEvent,
+    NeosInlineVizErrorEvent,
+    MermaidVizData,
+    ChartVizData,
     ResponseFailedEvent,
     ResponseObject,
     ResponseStatus,
@@ -742,9 +748,15 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
 """
                 system_prompt = f"{system_prompt}\n\n{workflow_context}"
 
+            tools: list = []
+
             if app_settings.ARTIFACTS_ENABLED:
                 system_prompt = f"{system_prompt}\n\n{app_settings.ARTIFACTS_SYSTEM_PROMPT}"
                 tools = get_artifact_tools()
+
+            if app_settings.INLINE_VIS_ENABLED:
+                tools = tools + get_inline_vis_tools()
+                system_prompt = f"{system_prompt}\n\n{app_settings.INLINE_VIS_SYSTEM_PROMPT}"
 
             # ============================================================
             # 실제 LLM 스트리밍 (tool calling 지원)
@@ -754,6 +766,7 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
             cost_info = None
             latency_ms = None
             artifact_info = None  # artifact 정보 추적
+            inline_viz_list: list = []  # 인라인 시각화 목록 추적
 
             # Advanced Tool Search 또는 기존 방식 분기
             # TOOL_SEARCH_ENABLED는 ARTIFACTS_ENABLED=true 일 때만 동작합니다.
@@ -820,67 +833,125 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
 
                     logger.info(f"Tool called: {tool_name} with input: {tool_input}")
 
-                    # DB 세션 가져오기
-                    async with await db_manager.get_session() as db_session:
-                        # 백엔드 user_id 사용 (인증된 사용자)
-                        user_id = current_user.user_id
-                        logger.info(f"Using backend user_id: {user_id} for artifact creation")
-
-                        # 아티팩트 도구 실행 및 스트리밍
-                        async for tool_event in execute_artifact_tool(
+                    # ── 인라인 시각화 도구 분기 (DB 세션 불필요) ─────────────
+                    if app_settings.INLINE_VIS_ENABLED and is_inline_vis_tool(tool_name):
+                        async for tool_event in execute_inline_vis_tool_fn(
                             tool_name=tool_name,
                             tool_input=tool_input,
-                            user_id=user_id,
-                            db_session=db_session,
-                            conversation_id=conversation_id
                         ):
                             event_type = tool_event.get("type")
 
-                            if event_type == "artifact_meta":
-                                # OpenResponses: neos:artifact_meta (확장 이벤트)
-                                artifact_info = {
-                                    "id": tool_event.get("artifact_id"),
-                                    "title": tool_event.get("artifact_title"),
-                                    "kind": tool_event.get("artifact_kind")
+                            if event_type == "inline_viz":
+                                viz_type = tool_event["viz_type"]
+                                raw_data = tool_event["data"]
+
+                                # data 페이로드를 Pydantic 모델로 검증
+                                if viz_type == "mermaid":
+                                    validated_data: Union[MermaidVizData, ChartVizData] = MermaidVizData(**raw_data)
+                                else:
+                                    validated_data = ChartVizData(
+                                        title=raw_data["title"],
+                                        type=raw_data["type"],
+                                        data=raw_data["data"],
+                                    )
+
+                                inline_viz_event = NeosInlineVizEvent(
+                                    viz_id=tool_event["viz_id"],
+                                    viz_type=viz_type,
+                                    data=validated_data,
+                                )
+                                # model_dump()으로 viz_entry 생성하여 필드 불일치 방지
+                                event_dict = inline_viz_event.model_dump()
+                                viz_entry = {
+                                    "id": event_dict["viz_id"],
+                                    "viz_type": event_dict["viz_type"],
+                                    "data": event_dict["data"],
                                 }
-                                meta_event = NeosArtifactMetaEvent(
-                                    artifact_id=tool_event.get("artifact_id", ""),
-                                    artifact_title=tool_event.get("artifact_title", ""),
-                                    artifact_kind=tool_event.get("artifact_kind", "text")
-                                )
-                                yield format_sse_event(meta_event)
-
-                            elif event_type == "artifact_delta":
-                                # OpenResponses: neos:artifact_delta (확장 이벤트)
-                                delta_event = NeosArtifactDeltaEvent(
-                                    content=tool_event.get("content", "")
-                                )
-                                yield format_sse_event(delta_event)
-
-                            elif event_type == "artifact_finish":
-                                # OpenResponses: neos:artifact_finish (확장 이벤트)
-                                finish_event = NeosArtifactFinishEvent(
-                                    artifact_id=tool_event.get("artifact_id")
-                                )
-                                yield format_sse_event(finish_event)
-
-                            elif event_type == "tool_result":
-                                # Tool 실행 결과를 채팅 메시지에 추가
-                                # (단, artifact tool인 경우는 제외 - artifact 블록으로 표시됨)
-                                if not artifact_info:
-                                    result_content = tool_event.get("content", "")
-                                    full_content += f"\n\n{result_content}"
+                                inline_viz_list.append(viz_entry)
+                                yield format_sse_event(inline_viz_event)
 
                             elif event_type == "error":
-                                # OpenResponses: response.failed 이벤트
-                                logger.error(f"Tool execution error: {tool_event.get('error')}")
-                                stream_state.response.status = ResponseStatus.FAILED
-                                stream_state.response.error = ErrorInfo(
-                                    type="server_error",
-                                    message=tool_event.get("error", "Tool execution failed")
+                                err_msg = tool_event.get("error", "Unknown inline visualization error")
+                                logger.error(f"[InlineVis] Tool error ({tool_name}): {err_msg}")
+                                error_event = NeosInlineVizErrorEvent(
+                                    tool_name=tool_name,
+                                    error=err_msg,
                                 )
-                                failed_event = ResponseFailedEvent(response=stream_state.response)
-                                yield format_sse_event(failed_event)
+                                yield format_sse_event(error_event)
+                                # 시각화 실패는 치명적이지 않으므로 스트림 중단하지 않음
+
+                    # ── INLINE_VIS_ENABLED=false 상태에서 inline vis 도구 호출 방어 ──
+                    elif is_inline_vis_tool(tool_name):
+                        # LLM이 이전 세션 system prompt 캐시 등으로 renderDiagram/renderChart를
+                        # 호출할 수 있음. 아티팩트 핸들러로 넘어가면 잘못된 DB 레코드 생성 가능.
+                        logger.warning(
+                            f"[InlineVis] {tool_name} called but INLINE_VIS_ENABLED=false. "
+                            "Skipping to prevent artifact handler misbehavior."
+                        )
+
+                    # ── 기존 아티팩트 도구 분기 ──────────────────────────────
+                    else:
+                        # DB 세션 가져오기
+                        async with await db_manager.get_session() as db_session:
+                            # 백엔드 user_id 사용 (인증된 사용자)
+                            user_id = current_user.user_id
+                            logger.info(f"Using backend user_id: {user_id} for artifact creation")
+
+                            # 아티팩트 도구 실행 및 스트리밍
+                            async for tool_event in execute_artifact_tool(
+                                tool_name=tool_name,
+                                tool_input=tool_input,
+                                user_id=user_id,
+                                db_session=db_session,
+                                conversation_id=conversation_id
+                            ):
+                                event_type = tool_event.get("type")
+
+                                if event_type == "artifact_meta":
+                                    # OpenResponses: neos:artifact_meta (확장 이벤트)
+                                    artifact_info = {
+                                        "id": tool_event.get("artifact_id"),
+                                        "title": tool_event.get("artifact_title"),
+                                        "kind": tool_event.get("artifact_kind")
+                                    }
+                                    meta_event = NeosArtifactMetaEvent(
+                                        artifact_id=tool_event.get("artifact_id", ""),
+                                        artifact_title=tool_event.get("artifact_title", ""),
+                                        artifact_kind=tool_event.get("artifact_kind", "text")
+                                    )
+                                    yield format_sse_event(meta_event)
+
+                                elif event_type == "artifact_delta":
+                                    # OpenResponses: neos:artifact_delta (확장 이벤트)
+                                    delta_event = NeosArtifactDeltaEvent(
+                                        content=tool_event.get("content", "")
+                                    )
+                                    yield format_sse_event(delta_event)
+
+                                elif event_type == "artifact_finish":
+                                    # OpenResponses: neos:artifact_finish (확장 이벤트)
+                                    finish_event = NeosArtifactFinishEvent(
+                                        artifact_id=tool_event.get("artifact_id")
+                                    )
+                                    yield format_sse_event(finish_event)
+
+                                elif event_type == "tool_result":
+                                    # Tool 실행 결과를 채팅 메시지에 추가
+                                    # (단, artifact tool인 경우는 제외 - artifact 블록으로 표시됨)
+                                    if not artifact_info:
+                                        result_content = tool_event.get("content", "")
+                                        full_content += f"\n\n{result_content}"
+
+                                elif event_type == "error":
+                                    # OpenResponses: response.failed 이벤트
+                                    logger.error(f"Tool execution error: {tool_event.get('error')}")
+                                    stream_state.response.status = ResponseStatus.FAILED
+                                    stream_state.response.error = ErrorInfo(
+                                        type="server_error",
+                                        message=tool_event.get("error", "Tool execution failed")
+                                    )
+                                    failed_event = ResponseFailedEvent(response=stream_state.response)
+                                    yield format_sse_event(failed_event)
 
                 elif chunk["type"] == "complete":
                     # 진행 중인 reasoning이 있으면 완료 처리
@@ -912,6 +983,10 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
             # artifact 정보가 있으면 metadata에 포함
             if artifact_info:
                 message_metadata["artifact"] = artifact_info
+
+            # 인라인 시각화 정보가 있으면 metadata에 포함
+            if inline_viz_list:
+                message_metadata["inline_visualizations"] = inline_viz_list
 
             # 워크플로우 에이전트 정보가 있으면 metadata에 포함
             if workflow_agents:
