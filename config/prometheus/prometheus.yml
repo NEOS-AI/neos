@@ -76,3 +76,18 @@ scrape_configs:
       - targets:
           - 'grafana:3000'
     metrics_path: '/metrics'
+
+  # === Ray 분산 처리 (Phase 4) ===
+  # Ray Dashboard Prometheus 메트릭 엔드포인트
+  # ray.init(_metrics_export_port=8080) 또는 ray start --metrics-export-port=8080 설정 필요
+  # RAY_ENABLED=false 환경에서는 이 scrape 설정은 무해하게 실패함
+  - job_name: 'ray-head'
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - 'localhost:8080'  # Ray Head Node metrics export port
+    metrics_path: '/metrics'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'ray-head'
