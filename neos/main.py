@@ -202,20 +202,30 @@ async def lifespan(app: FastAPI):
                     logger.warning(f"⚠️ Telegram adapter start failed: {e}")
 
             if settings.CHANNEL_DISCORD_ENABLED:
-                # Discord 어댑터는 아직 미구현(stub) 상태입니다.
-                # _channel_adapters에 추가하지 않아 실제 동작하는 것처럼 오해하는 것을 방지합니다.
-                logger.warning(
-                    "⚠️ CHANNEL_DISCORD_ENABLED=true이지만 Discord 어댑터는 미구현 상태입니다. "
-                    "discord.py 의존성 설치 후 구현이 완료되면 활성화하세요."
-                )
+                try:
+                    from neos.api.channels.adapters.discord import DiscordAdapter
+                    _discord = DiscordAdapter(
+                        token=settings.CHANNEL_DISCORD_BOT_TOKEN,
+                        gateway=_channel_gateway,
+                    )
+                    asyncio.create_task(_discord.start(), name="discord_adapter")
+                    _channel_adapters.append(_discord)
+                    logger.info("✅ Discord adapter started")
+                except Exception as e:
+                    logger.warning(f"⚠️ Discord adapter start failed: {e}")
 
             if settings.CHANNEL_SLACK_ENABLED:
-                # Slack 어댑터는 아직 미구현(stub) 상태입니다.
-                # _channel_adapters에 추가하지 않아 실제 동작하는 것처럼 오해하는 것을 방지합니다.
-                logger.warning(
-                    "⚠️ CHANNEL_SLACK_ENABLED=true이지만 Slack 어댑터는 미구현 상태입니다. "
-                    "slack-bolt 의존성 설치 후 구현이 완료되면 활성화하세요."
-                )
+                try:
+                    from neos.api.channels.adapters.slack import SlackAdapter
+                    _slack = SlackAdapter(
+                        token=settings.CHANNEL_SLACK_BOT_TOKEN,
+                        gateway=_channel_gateway,
+                    )
+                    asyncio.create_task(_slack.start(), name="slack_adapter")
+                    _channel_adapters.append(_slack)
+                    logger.info("✅ Slack adapter started")
+                except Exception as e:
+                    logger.warning(f"⚠️ Slack adapter start failed: {e}")
 
         logger.info("🎉 Multi-Agent AI System (Enterprise Edition) startup completed successfully!")
         logger.info("📊 Metrics endpoint available at: /metrics")
