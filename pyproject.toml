@@ -99,6 +99,5 @@ include = ["neos*"]
 
 [tool.uv.workspace]
 members = [
-    "backoffice/backend",
     "neos_evals",
 ]
