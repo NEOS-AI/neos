@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.23.0
+* Remove the outdated backoffice
+* Add support for Advanced Tool Search tool.
+* Add support for Recursive Agent (ROMA) to both workflow and hyper deep research agent
+* Add support for OpenResponses specification in HyperDeepResearchAgent.
+* Add contextual retrieval feature
+* Add support for multi-channel adapter layer
+* Add execution approval system for agent workflows
+* Add cron scheduling for agent workflows
+* Add model provider plugin system (OpenClaw)
+* Add A2UI integration for agent workflow visualization in web UI
+
 ## v0.22.0 (2026-03-02)
 * **YouTube Agent Workflow Integration**
   * Connect YouTubeSearchAgent to the end-to-end workflow pipeline for automatic query routing
