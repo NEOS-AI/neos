@@ -758,7 +758,7 @@ class UIFrameSession(Base):
     id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     frame_id        = Column(UUID(as_uuid=True), unique=True, nullable=False)
     session_id      = Column(String(255), nullable=False)
-    user_id         = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    user_id         = Column(String(255), ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
     conversation_id = Column(UUID(as_uuid=True), nullable=True)
     original_query  = Column(Text, nullable=False)
     frame_data      = Column(JSONB, default=dict)
