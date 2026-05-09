@@ -100,8 +100,8 @@ OpenClaw의 subprocess 기반 Agent Runtime을 LangGraph `StateGraph`로 대체�
 |------|------|
 | `neos/api/channels/base.py` | `ChannelAdapterBase` ABC + `ChannelMessage` 데이터클래스 |
 | `neos/api/channels/adapters/telegram.py` | Telegram Bot API 어댑터 (완전 구현) |
-| `neos/api/channels/adapters/discord.py` | Discord 어댑터 (스텁 — 추후 구현 예정) |
-| `neos/api/channels/adapters/slack.py` | Slack 어댑터 (스텁 — 추후 구현 예정) |
+| `neos/api/channels/adapters/discord.py` | Discord 어댑터 (완전 구현) |
+| `neos/api/channels/adapters/slack.py` | Slack 어댑터 (완전 구현, Socket Mode) |
 | `neos/api/channels/gateway.py` | `ChannelGateway` — 채널 라우팅 + Circuit Breaker |
 | `db/migrations/021_add_channel_source.sql` | `query_history`에 `channel_source`, `external_channel_id` 컬럼 추가 |
 
@@ -153,6 +153,22 @@ class ChannelAdapterBase(ABC):
 - 타이핑 인디케이터(`send_action("typing")`)로 UX 개선
 - 폴링 태스크 종료 콜백으로 예기치 않은 오류 로깅
 
+#### DiscordAdapter 구현 특징
+
+- `discord.py>=2.3.0` 사용 (ImportError 발생 시 경고 후 graceful skip)
+- `Intents.message_content = True` 필요 — Discord Developer Portal에서 활성화 필수
+- `asyncio.create_task(client.start(token))`으로 uvicorn 루프 공유
+- 2000자(Discord 단일 메시지 최대) 초과 응답은 자동 분할 전송
+- `channel.typing()` 컨텍스트 매니저로 입력 중 표시
+
+#### SlackAdapter 구현 특징
+
+- `slack-bolt>=1.18.0` (AsyncApp + AsyncSocketModeHandler) 사용 (ImportError 발생 시 경고 후 graceful skip)
+- Socket Mode 사용 — 추가 HTTP 포트 불필요, `xapp-` 접두사 App-Level Token 필요
+- `asyncio.create_task(handler.start_async())`으로 uvicorn 루프 공유
+- 3000자(안전 한도, 공식 4000자) 초과 응답은 자동 분할 전송
+- `client.chat_postMessage()` 경유 응답, `say()` 미사용
+
 #### DB 변경 (021)
 
 ```sql
@@ -165,8 +181,20 @@ CREATE INDEX IF NOT EXISTS idx_qh_channel_source ON query_history(channel_source
 #### 채널 활성화 설정
 
 ```bash
+# Telegram
 CHANNEL_TELEGRAM_ENABLED=true
 CHANNEL_TELEGRAM_BOT_TOKEN=<your_bot_token>
+
+# Discord (discord.py>=2.3.0 필요, Developer Portal > Message Content Intent 활성화 필요)
+CHANNEL_DISCORD_ENABLED=true
+CHANNEL_DISCORD_BOT_TOKEN=<your_discord_bot_token>
+
+# Slack (slack-bolt>=1.18.0 필요, Socket Mode + App-Level Token 필요)
+CHANNEL_SLACK_ENABLED=true
+CHANNEL_SLACK_BOT_TOKEN=<xoxb-your-bot-token>
+CHANNEL_SLACK_APP_TOKEN=<xapp-your-app-token>
+
+# 공통 (채널 요청을 NEOS 사용자 계정에 매핑)
 CHANNEL_BOT_USER_ID=<neos_service_account_user_id>
 ```
 
@@ -670,9 +698,9 @@ psql $DATABASE_URL -f db/migrations/024_add_ui_frame_sessions.sql
 |------|--------|-------|------|
 | `CHANNEL_TELEGRAM_ENABLED` | `false` | 1 | Telegram 채널 활성화 |
 | `CHANNEL_TELEGRAM_BOT_TOKEN` | — | 1 | Telegram Bot API 토큰 |
-| `CHANNEL_DISCORD_ENABLED` | `false` | 1 | Discord 채널 활성화 (스텁) |
+| `CHANNEL_DISCORD_ENABLED` | `false` | 1 | Discord 채널 활성화 |
 | `CHANNEL_DISCORD_BOT_TOKEN` | — | 1 | Discord Bot 토큰 |
-| `CHANNEL_SLACK_ENABLED` | `false` | 1 | Slack 채널 활성화 (스텁) |
+| `CHANNEL_SLACK_ENABLED` | `false` | 1 | Slack 채널 활성화 (Socket Mode) |
 | `CHANNEL_SLACK_BOT_TOKEN` | — | 1 | Slack Bot 토큰 |
 | `CHANNEL_SLACK_APP_TOKEN` | — | 1 | Slack App 소켓 모드 토큰 |
 | `CHANNEL_BOT_USER_ID` | — | 1 | 채널 요청 매핑용 서비스 계정 ID |
@@ -693,8 +721,10 @@ psql $DATABASE_URL -f db/migrations/024_add_ui_frame_sessions.sql
 ### 권장 활성화 순서 (프로덕션)
 
 ```bash
-# 1단계: 채널 어댑터 (Telegram만 완전 구현)
+# 1단계: 채널 어댑터 (Telegram / Discord / Slack 모두 구현 완료)
 CHANNEL_TELEGRAM_ENABLED=true
+# CHANNEL_DISCORD_ENABLED=true   # discord.py>=2.3.0 설치 후 활성화
+# CHANNEL_SLACK_ENABLED=true     # slack-bolt>=1.18.0 설치 후 활성화
 
 # 2단계: 실행 승인 (보안 강화)
 EXECUTION_APPROVAL_ENABLED=true
