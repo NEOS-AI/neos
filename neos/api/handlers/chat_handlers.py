@@ -33,6 +33,7 @@ from neos.api.handlers.workflow_stream_handlers import WorkflowStreamCallback
 from neos.database.connection import db_manager
 from neos.database.models import User
 from neos.services.chat_llm_service import chat_llm_service
+from neos.api.services.chat_stream_pipeline import ChatStreamPipeline
 from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
 from neos.workflow.graph import multi_agent_workflow
@@ -44,7 +45,6 @@ from neos.tools.inline_vis_tool_handler import execute_inline_vis_tool as execut
 
 # OpenResponses imports
 from neos.api.adapters.stream_adapter import (
-    StreamAdapterState,
     format_sse_event,
     format_done_token,
     create_stream_generator,
@@ -67,7 +67,6 @@ from neos.api.models.open_responses import (
     MermaidVizData,
     ChartVizData,
     ResponseFailedEvent,
-    ResponseObject,
     ResponseStatus,
     ErrorInfo,
     ItemStatus,
@@ -573,6 +572,20 @@ async def regenerate_message(message_id: str, request: RegenerateMessageRequest)
 # Streaming Endpoint
 # ============================================================================
 
+def _get_chat_stream_pipeline() -> ChatStreamPipeline:
+    _chat_stream_pipeline = ChatStreamPipeline(
+        chat_llm_service=chat_llm_service,
+        cost_calculator=cost_calculator,
+        get_core_tools_fn=_get_core_tools_cached,
+        get_search_handler_fn=_get_search_handler,
+        chat_service_cls=ChatService,
+        multi_agent_workflow=multi_agent_workflow,
+        workflow_callback_cls=WorkflowStreamCallback,
+        map_node_to_agent_fn=map_node_to_agent,
+    )
+    return _chat_stream_pipeline
+
+
 @router.post("/conversations/{conversation_id}/messages/stream")
 async def stream_message(
     conversation_id: str,
@@ -580,6 +593,28 @@ async def stream_message(
     current_user: User = Depends(get_current_user)
 ):
     """스트리밍 메시지 전송 (아티팩트 지원)"""
+    pipeline = _get_chat_stream_pipeline()
+
+    return StreamingResponse(
+        pipeline.run(conversation_id, request, current_user),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-OpenResponses-Version": OPEN_RESPONSES_VERSION,
+        },
+    )
+
+
+# @deprecated(reason="점진적 리팩토링 완료 후 제거 예정 (대체: /stream)")
+@router.post("/conversations/{conversation_id}/messages/stream_legacy")
+async def stream_message_legacy(
+    conversation_id: str,
+    request: SendMessageRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """[Legacy] 리팩토링 전 stream_message 구현 — 점진적 전환용."""
 
     async def generate_stream() -> AsyncGenerator[str, None]:
         try:
@@ -1052,8 +1087,8 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
-            "X-OpenResponses-Version": OPEN_RESPONSES_VERSION
-        }
+            "X-OpenResponses-Version": OPEN_RESPONSES_VERSION,
+        },
     )
 
 
