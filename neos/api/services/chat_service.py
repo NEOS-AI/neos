@@ -1,6 +1,7 @@
 """Chat service layer - handles chat business logic"""
 
 from typing import Dict, Any, List, Optional
+from datetime import datetime
 import uuid
 import json
 
@@ -21,6 +22,7 @@ class ChatService:
     @staticmethod
     async def create_conversation(
         user_id: str,
+        conversation_id: Optional[str] = None,
         model_name: str = "claude-opus-4-5-20251101",
         title: Optional[str] = None,
         system_prompt: Optional[str] = None,
@@ -28,10 +30,11 @@ class ChatService:
         max_tokens: Optional[int] = None,
         mode: str = "standard",
         template_id: Optional[str] = None,
+        visibility: str = "private",
         metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """새 대화 생성"""
-        conversation_id = str(uuid.uuid4())
+        conversation_id = conversation_id or str(uuid.uuid4())
 
         try:
             await ChatRepository.create_conversation(
@@ -40,8 +43,25 @@ class ChatService:
                 model_name=model_name,
                 system_prompt=system_prompt,
                 template_id=template_id,
-                mode=mode
+                mode=mode,
+                visibility=visibility
             )
+
+            post_create_updates: Dict[str, Any] = {}
+            if title is not None:
+                post_create_updates["title"] = title
+            if temperature is not None:
+                post_create_updates["temperature"] = temperature
+            if max_tokens is not None:
+                post_create_updates["max_tokens"] = max_tokens
+            if metadata is not None:
+                post_create_updates["metadata"] = metadata
+
+            if post_create_updates:
+                await ChatRepository.update_conversation(
+                    conversation_id,
+                    post_create_updates
+                )
 
             # 생성된 대화 조회
             return await ChatService.get_conversation(conversation_id)
@@ -94,7 +114,8 @@ class ChatService:
         temperature: Optional[float] = None,
         is_pinned: Optional[bool] = None,
         tags: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        visibility: Optional[str] = None,
     ) -> Dict[str, Any]:
         """대화 업데이트"""
         updates = {}
@@ -111,6 +132,8 @@ class ChatService:
             updates["tags"] = tags
         if metadata is not None:
             updates["metadata"] = metadata
+        if visibility is not None:
+            updates["visibility"] = visibility
 
         if not updates:
             return await ChatService.get_conversation(conversation_id)
@@ -267,6 +290,24 @@ class ChatService:
         """메시지 삭제"""
         await ChatRepository.delete_message(message_id)
         return True
+
+    @staticmethod
+    async def delete_user_conversations(user_id: str) -> int:
+        """사용자의 모든 대화 soft-delete"""
+        return await ChatRepository.delete_user_conversations(user_id)
+
+    @staticmethod
+    async def delete_messages_after_timestamp(
+        conversation_id: str,
+        timestamp: datetime
+    ) -> None:
+        """특정 시점 이후 메시지 삭제"""
+        await ChatRepository.delete_messages_after_timestamp(conversation_id, timestamp)
+
+    @staticmethod
+    async def get_user_message_count(user_id: str, hours: int = 24) -> int:
+        """최근 N시간 내 사용자 메시지 수"""
+        return await ChatRepository.get_user_message_count(user_id, hours)
 
     # ============================================================================
     # Analytics

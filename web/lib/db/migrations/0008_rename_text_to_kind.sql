@@ -1,1 +1,0 @@
-ALTER TABLE "Document" RENAME COLUMN "text" TO "kind";

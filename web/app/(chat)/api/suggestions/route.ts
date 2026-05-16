@@ -1,5 +1,6 @@
 import { auth } from "@/app/(auth)/auth";
-import { getSuggestionsByDocumentId } from "@/lib/db/queries";
+import { adaptBESuggestion } from "@/lib/adapters/artifact-adapters";
+import { callBackendAPI } from "@/lib/backend-api";
 import { ChatSDKError } from "@/lib/errors";
 
 export async function GET(request: Request) {
@@ -19,17 +20,26 @@ export async function GET(request: Request) {
     return new ChatSDKError("unauthorized:suggestions").toResponse();
   }
 
-  const suggestions = await getSuggestionsByDocumentId({
-    documentId,
-  });
+  const res = await callBackendAPI(
+    `/api/v1/documents/${documentId}/suggestions`
+  );
 
-  const [suggestion] = suggestions;
-
-  if (!suggestion) {
+  if (!res.ok) {
     return Response.json([], { status: 200 });
   }
 
-  if (suggestion.userId !== session.user.id) {
+  const raw: unknown[] = await res.json();
+
+  if (!raw.length) {
+    return Response.json([], { status: 200 });
+  }
+
+  const suggestions = (raw as Parameters<typeof adaptBESuggestion>[0][]).map(
+    adaptBESuggestion
+  );
+
+  const [first] = suggestions;
+  if (first.userId !== session.user.id) {
     return new ChatSDKError("forbidden:api").toResponse();
   }
 

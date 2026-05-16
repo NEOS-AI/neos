@@ -2,7 +2,8 @@ import { tool, type UIMessageStreamWriter } from "ai";
 import type { Session } from "next-auth";
 import { z } from "zod";
 import { documentHandlersByArtifactKind } from "@/lib/artifacts/server";
-import { getDocumentById } from "@/lib/db/queries";
+import { adaptBEDocument } from "@/lib/adapters/artifact-adapters";
+import { callBackendAPI } from "@/lib/backend-api";
 import type { ChatMessage } from "@/lib/types";
 
 type UpdateDocumentProps = {
@@ -20,7 +21,8 @@ export const updateDocument = ({ session, dataStream }: UpdateDocumentProps) =>
         .describe("The description of changes that need to be made"),
     }),
     execute: async ({ id, description }) => {
-      const document = await getDocumentById({ id });
+      const res = await callBackendAPI(`/api/v1/documents/${id}/latest`);
+      const document = res.ok ? adaptBEDocument(await res.json()) : null;
 
       if (!document) {
         return {

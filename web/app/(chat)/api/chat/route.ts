@@ -1,18 +1,9 @@
 import { auth, type UserType } from "@/app/(auth)/auth";
+import { adaptBEConversation } from "@/lib/adapters/chat-adapters";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import { mapToBackendModelName } from "@/lib/ai/models";
 import { callBackendAPI } from "@/lib/backend-api";
-import {
-  createStreamId,
-  deleteChatById,
-  getChatById,
-  getMessageCountByUserId,
-  saveChat,
-  updateChatBackendConversationId,
-  updateChatTitleById,
-} from "@/lib/db/queries";
 import { ChatSDKError } from "@/lib/errors";
-import { generateUUID } from "@/lib/utils";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
@@ -38,104 +29,80 @@ export async function POST(request: Request) {
     }
 
     const userType: UserType = session.user.type;
+    const backendUserId = session.user.backendUserId || session.user.id;
 
-    const messageCount = await getMessageCountByUserId({
-      id: session.user.id,
-      differenceInHours: 24,
-    });
-
-    if (messageCount > entitlementsByUserType[userType].maxMessagesPerDay) {
-      return new ChatSDKError("rate_limit:chat").toResponse();
+    // Rate limit: 24시간 메시지 수 확인
+    const countRes = await callBackendAPI(
+      `/api/v1/chat/users/${backendUserId}/message-count?hours=24`
+    );
+    if (countRes.ok) {
+      const { count } = await countRes.json();
+      if (count > entitlementsByUserType[userType].maxMessagesPerDay) {
+        return new ChatSDKError("rate_limit:chat").toResponse();
+      }
     }
 
-    const chat = await getChatById({ id });
-    let titlePromise: Promise<string> | null = null;
-    let conversationId: string | null = null;
-
-    // Extract message content early for title generation
     const messageContent = message.parts
       .filter((part) => part.type === "text")
       .map((part) => part.text)
       .join("\n");
 
-    if (chat) {
-      if (chat.userId !== session.user.id) {
+    // 기존 conversation 조회 (id = FE chat UUID = backendConversationId)
+    let conversationId: string | null = null;
+    const existingRes = await callBackendAPI(`/api/v1/chat/conversations/${id}`);
+
+    if (existingRes.ok) {
+      const existingConv = await existingRes.json();
+      if (existingConv.user_id !== backendUserId) {
         return new ChatSDKError("forbidden:chat").toResponse();
       }
-      // Use existing backendConversationId or fallback to chat id
-      conversationId = chat.backendConversationId || id;
+      conversationId = id;
     } else {
-      // 1. Save chat immediately with placeholder title
-      await saveChat({
-        id,
-        userId: session.user.id,
-        title: "New chat",
-        visibility: selectedVisibilityType,
-      });
-
-      // 2. Create conversation in backend (synchronous wait)
+      // 신규 conversation 생성
       try {
-        const createConversationResponse = await callBackendAPI(
-          "/api/v1/chat/conversations",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              user_id: session.user.backendUserId || session.user.id,
-              title: "New chat",
-              model_name: mapToBackendModelName(selectedChatModel),
-              mode: "standard",
-              temperature: 0.7,
-              visibility: selectedVisibilityType, // ⭐ Add visibility field
-            }),
-          }
-        );
+        const createRes = await callBackendAPI("/api/v1/chat/conversations", {
+          method: "POST",
+          body: JSON.stringify({
+            user_id: backendUserId,
+            conversation_id: id,
+            title: "New chat",
+            model_name: mapToBackendModelName(selectedChatModel),
+            mode: "standard",
+            temperature: 0.7,
+            visibility: selectedVisibilityType,
+            // FE chat UUID를 conversation_id로 사용해 두 시스템 ID 일치
+            metadata: { fe_chat_id: id },
+          }),
+        });
 
-        if (!createConversationResponse.ok) {
+        if (!createRes.ok) {
           throw new Error("Failed to create conversation in backend");
         }
 
-        const conversationData = await createConversationResponse.json();
-        conversationId = conversationData.conversation_id;
+        const convData = await createRes.json();
+        conversationId = convData.conversation_id;
 
         if (!conversationId) {
           throw new Error("Backend did not return conversation_id");
         }
 
-        // 3. Save backendConversationId to Chat table (synchronous wait)
-        await updateChatBackendConversationId({
-          chatId: id,
-          backendConversationId: conversationId,
-        });
-
-        // 4. Start title generation in parallel (non-blocking)
-        if (conversationId) {
-          titlePromise = generateTitleFromUserMessage({
-            conversationId,
-            userMessage: messageContent,
+        // 비동기 타이틀 생성 (non-blocking)
+        generateTitleFromUserMessage({
+          conversationId,
+          userMessage: messageContent,
+        }).then((title) => {
+          callBackendAPI(`/api/v1/chat/conversations/${conversationId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ title }),
           });
-        }
+        }).catch(() => {});
       } catch (error) {
-        // Rollback: Delete chat if backend conversation creation fails
-        await deleteChatById({ id });
         console.error("Failed to create backend conversation:", error);
         return new ChatSDKError("offline:chat", "Failed to create conversation in backend").toResponse();
       }
     }
 
-    // Handle title generation in parallel
-    if (titlePromise) {
-      titlePromise.then((title: string) => {
-        console.log("Generated title:", title);
-        updateChatTitleById({ chatId: id, title });
-      }).catch((error) => {
-        console.error("Failed to update title:", error);
-      });
-    }
-
-    const streamId = generateUUID();
-    await createStreamId({ streamId, chatId: id });
-
-    // Call backend streaming API
+    // Backend 스트리밍 호출
     const backendStreamResponse = await callBackendAPI(
       `/api/v1/chat/conversations/${conversationId}/messages/stream`,
       {
@@ -144,7 +111,7 @@ export async function POST(request: Request) {
           content: messageContent,
           role: "user",
           metadata: {
-            chat_id: id,
+            fe_chat_id: id,
             model: selectedChatModel,
             visibility: selectedVisibilityType,
           },
@@ -153,35 +120,31 @@ export async function POST(request: Request) {
     );
 
     if (!backendStreamResponse.ok) {
-      const errorText = await backendStreamResponse.text();
-      console.error("Backend streaming error:", errorText);
+      console.error("Backend streaming error:", await backendStreamResponse.text());
       return new ChatSDKError("offline:chat").toResponse();
     }
 
-    // Transform stream to add OpenResponses [DONE] token at the end
     const transformStream = new TransformStream({
       async transform(chunk, controller) {
         controller.enqueue(chunk);
       },
       async flush(controller) {
-        // Add [DONE] token at stream end (OpenResponses spec)
         const encoder = new TextEncoder();
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       },
     });
 
-    // Pipe backend SSE through transform stream
     const responseStream = backendStreamResponse.body?.pipeThrough(transformStream);
 
     return new Response(responseStream, {
       headers: {
-        // OpenResponses spec: text/event-stream content type
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
         "X-Accel-Buffering": "no",
-        // OpenResponses version header for client detection
         "X-OpenResponses-Version": "2024-01-01",
+        // FE가 conversation_id를 알 수 있도록 헤더로 전달
+        "X-Conversation-Id": conversationId ?? "",
       },
     });
   } catch (error) {
@@ -210,13 +173,26 @@ export async function DELETE(request: Request) {
     return new ChatSDKError("unauthorized:chat").toResponse();
   }
 
-  const chat = await getChatById({ id });
+  const backendUserId = session.user.backendUserId || session.user.id;
 
-  if (chat?.userId !== session.user.id) {
+  // 소유권 확인
+  const convRes = await callBackendAPI(`/api/v1/chat/conversations/${id}`);
+  if (!convRes.ok) {
+    return new ChatSDKError("not_found:chat").toResponse();
+  }
+
+  const conv = await convRes.json();
+  if (conv.user_id !== backendUserId) {
     return new ChatSDKError("forbidden:chat").toResponse();
   }
 
-  const deletedChat = await deleteChatById({ id });
+  const deleteRes = await callBackendAPI(`/api/v1/chat/conversations/${id}`, {
+    method: "DELETE",
+  });
 
-  return Response.json(deletedChat, { status: 200 });
+  if (!deleteRes.ok) {
+    return new ChatSDKError("bad_request:database").toResponse();
+  }
+
+  return Response.json(adaptBEConversation(conv), { status: 200 });
 }

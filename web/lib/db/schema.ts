@@ -1,169 +1,79 @@
-import type { InferSelectModel } from "drizzle-orm";
-import {
-  boolean,
-  foreignKey,
-  json,
-  pgTable,
-  primaryKey,
-  text,
-  timestamp,
-  uuid,
-  varchar,
-} from "drizzle-orm/pg-core";
+/**
+ * DB 타입 정의 (Drizzle 제거 후 순수 TypeScript 인터페이스)
+ *
+ * 이 파일은 Drizzle ORM 없이 동일한 타입 형태를 유지합니다.
+ * 임포트 경로를 변경하지 않아도 됩니다.
+ */
 
-export const user = pgTable("User", {
-  id: uuid("id").primaryKey().notNull().defaultRandom(),
-  email: varchar("email", { length: 64 }).notNull(),
-  password: varchar("password", { length: 64 }),
-});
+export type User = {
+  id: string;
+  email: string;
+  password: string | null;
+};
 
-export type User = InferSelectModel<typeof user>;
+export type Chat = {
+  id: string;
+  createdAt: Date;
+  title: string;
+  userId: string;
+  visibility: "public" | "private";
+  backendConversationId: string | null;
+};
 
-export const chat = pgTable("Chat", {
-  id: uuid("id").primaryKey().notNull().defaultRandom(),
-  createdAt: timestamp("createdAt").notNull(),
-  title: text("title").notNull(),
-  userId: uuid("userId")
-    .notNull()
-    .references(() => user.id),
-  visibility: varchar("visibility", { enum: ["public", "private"] })
-    .notNull()
-    .default("private"),
-  backendConversationId: varchar("backendConversationId", { length: 255 }),
-});
+/** @deprecated Message_v2로 대체됨 */
+export type MessageDeprecated = {
+  id: string;
+  chatId: string;
+  role: string;
+  content: unknown;
+  createdAt: Date;
+};
 
-export type Chat = InferSelectModel<typeof chat>;
+export type DBMessage = {
+  id: string;
+  chatId: string;
+  role: string;
+  parts: unknown;
+  attachments: unknown;
+  createdAt: Date;
+};
 
-// DEPRECATED: The following schema is deprecated and will be removed in the future.
-// Read the migration guide at https://chat-sdk.dev/docs/migration-guides/message-parts
-export const messageDeprecated = pgTable("Message", {
-  id: uuid("id").primaryKey().notNull().defaultRandom(),
-  chatId: uuid("chatId")
-    .notNull()
-    .references(() => chat.id),
-  role: varchar("role").notNull(),
-  content: json("content").notNull(),
-  createdAt: timestamp("createdAt").notNull(),
-});
+/** @deprecated Vote_v2로 대체됨 */
+export type VoteDeprecated = {
+  chatId: string;
+  messageId: string;
+  isUpvoted: boolean;
+};
 
-export type MessageDeprecated = InferSelectModel<typeof messageDeprecated>;
+export type Vote = {
+  chatId: string;
+  messageId: string;
+  isUpvoted: boolean;
+};
 
-export const message = pgTable("Message_v2", {
-  id: uuid("id").primaryKey().notNull().defaultRandom(),
-  chatId: uuid("chatId")
-    .notNull()
-    .references(() => chat.id),
-  role: varchar("role").notNull(),
-  parts: json("parts").notNull(),
-  attachments: json("attachments").notNull(),
-  createdAt: timestamp("createdAt").notNull(),
-});
+export type Document = {
+  id: string;
+  createdAt: Date;
+  title: string;
+  content: string | null;
+  kind: "text" | "code" | "image" | "sheet";
+  userId: string;
+};
 
-export type DBMessage = InferSelectModel<typeof message>;
+export type Suggestion = {
+  id: string;
+  documentId: string;
+  documentCreatedAt: Date;
+  originalText: string;
+  suggestedText: string;
+  description: string | null;
+  isResolved: boolean;
+  userId: string;
+  createdAt: Date;
+};
 
-// DEPRECATED: The following schema is deprecated and will be removed in the future.
-// Read the migration guide at https://chat-sdk.dev/docs/migration-guides/message-parts
-export const voteDeprecated = pgTable(
-  "Vote",
-  {
-    chatId: uuid("chatId")
-      .notNull()
-      .references(() => chat.id),
-    messageId: uuid("messageId")
-      .notNull()
-      .references(() => messageDeprecated.id),
-    isUpvoted: boolean("isUpvoted").notNull(),
-  },
-  (table) => {
-    return {
-      pk: primaryKey({ columns: [table.chatId, table.messageId] }),
-    };
-  }
-);
-
-export type VoteDeprecated = InferSelectModel<typeof voteDeprecated>;
-
-export const vote = pgTable(
-  "Vote_v2",
-  {
-    chatId: uuid("chatId")
-      .notNull()
-      .references(() => chat.id),
-    messageId: uuid("messageId")
-      .notNull()
-      .references(() => message.id),
-    isUpvoted: boolean("isUpvoted").notNull(),
-  },
-  (table) => {
-    return {
-      pk: primaryKey({ columns: [table.chatId, table.messageId] }),
-    };
-  }
-);
-
-export type Vote = InferSelectModel<typeof vote>;
-
-export const document = pgTable(
-  "Document",
-  {
-    id: uuid("id").notNull().defaultRandom(),
-    createdAt: timestamp("createdAt").notNull(),
-    title: text("title").notNull(),
-    content: text("content"),
-    kind: varchar("kind", { enum: ["text", "code", "image", "sheet"] })
-      .notNull()
-      .default("text"),
-    userId: varchar("userId", { length: 255 })
-      .notNull(),
-  },
-  (table) => {
-    return {
-      pk: primaryKey({ columns: [table.id, table.createdAt] }),
-    };
-  }
-);
-
-export type Document = InferSelectModel<typeof document>;
-
-export const suggestion = pgTable(
-  "Suggestion",
-  {
-    id: uuid("id").notNull().defaultRandom(),
-    documentId: uuid("documentId").notNull(),
-    documentCreatedAt: timestamp("documentCreatedAt").notNull(),
-    originalText: text("originalText").notNull(),
-    suggestedText: text("suggestedText").notNull(),
-    description: text("description"),
-    isResolved: boolean("isResolved").notNull().default(false),
-    userId: varchar("userId", { length: 255 })
-      .notNull(),
-    createdAt: timestamp("createdAt").notNull(),
-  },
-  (table) => ({
-    pk: primaryKey({ columns: [table.id] }),
-    documentRef: foreignKey({
-      columns: [table.documentId, table.documentCreatedAt],
-      foreignColumns: [document.id, document.createdAt],
-    }),
-  })
-);
-
-export type Suggestion = InferSelectModel<typeof suggestion>;
-
-export const stream = pgTable(
-  "Stream",
-  {
-    id: uuid("id").notNull().defaultRandom(),
-    chatId: uuid("chatId").notNull(),
-    createdAt: timestamp("createdAt").notNull(),
-  },
-  (table) => ({
-    pk: primaryKey({ columns: [table.id] }),
-    chatRef: foreignKey({
-      columns: [table.chatId],
-      foreignColumns: [chat.id],
-    }),
-  })
-);
-
-export type Stream = InferSelectModel<typeof stream>;
+export type Stream = {
+  id: string;
+  chatId: string;
+  createdAt: Date;
+};

@@ -1,7 +1,8 @@
 import { streamObject, tool, type UIMessageStreamWriter } from "ai";
 import type { Session } from "next-auth";
 import { z } from "zod";
-import { getDocumentById, saveSuggestions } from "@/lib/db/queries";
+import { adaptBEDocument } from "@/lib/adapters/artifact-adapters";
+import { callBackendAPI } from "@/lib/backend-api";
 import type { Suggestion } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
@@ -24,7 +25,8 @@ export const requestSuggestions = ({
         .describe("The ID of the document to request edits"),
     }),
     execute: async ({ documentId }) => {
-      const document = await getDocumentById({ id: documentId });
+      const res = await callBackendAPI(`/api/v1/documents/${documentId}/latest`);
+      const document = res.ok ? adaptBEDocument(await res.json()) : null;
 
       if (!document || !document.content) {
         return {
@@ -71,15 +73,17 @@ export const requestSuggestions = ({
       }
 
       if (session.user?.id) {
-        const userId = session.user.id;
-
-        await saveSuggestions({
-          suggestions: suggestions.map((suggestion) => ({
-            ...suggestion,
-            userId,
-            createdAt: new Date(),
-            documentCreatedAt: document.createdAt,
-          })),
+        await callBackendAPI("/api/v1/documents/suggestions", {
+          method: "POST",
+          body: JSON.stringify(
+            suggestions.map((s) => ({
+              document_id: documentId,
+              document_created_at: document.createdAt.toISOString(),
+              original_text: s.originalText,
+              suggested_text: s.suggestedText,
+              description: s.description ?? null,
+            }))
+          ),
         });
       }
 
