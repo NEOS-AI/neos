@@ -83,10 +83,10 @@ class KnowledgeSearchAgent(SearchAgent):
                 #TODO pg_search 등 paradedb 기능 도입!
                 sql = text("""
                     SELECT original_query, search_results, response_quality_score,
-                           query_vector <=> :query_vector as distance
+                           query_vector::halfvec(3072) <=> :query_vector::halfvec(3072) as distance
                     FROM query_history
                     WHERE query_vector IS NOT NULL
-                    ORDER BY query_vector <=> :query_vector
+                    ORDER BY query_vector::halfvec(3072) <=> :query_vector::halfvec(3072)
                     LIMIT 5
                 """)
 

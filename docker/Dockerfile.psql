@@ -6,21 +6,23 @@ USER root
 
 # 필요한 종속성 설치
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    build-essential \
-    git \
-    curl \
-    make \
-    gcc \
-    jq \
-    ca-certificates \
-    libssl-dev \
-    pkg-config \
-    postgresql-server-dev-17 \
-    libopenblas-dev \
-    libclang-dev \
-    clang \
-    llvm-dev
+    apt-get install -y --no-install-recommends -o Acquire::Retries=5 \
+      build-essential \
+      git \
+      curl \
+      make \
+      gcc \
+      jq \
+      ca-certificates \
+      libssl-dev \
+      pkg-config \
+      postgresql-server-dev-17 \
+      postgresql-17-pgvector \
+      libopenblas-dev \
+      libclang-dev \
+      clang \
+      llvm-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 
 # Rust 설치

@@ -266,11 +266,11 @@ WITH vector_results AS (
         dc.contextual_text,
         dc.document_id,
         dc.chunk_index,
-        ROW_NUMBER() OVER (ORDER BY dc.embedding <=> $1::vector) AS vector_rank
+        ROW_NUMBER() OVER (ORDER BY dc.embedding::halfvec(3072) <=> $1::halfvec(3072)) AS vector_rank
     FROM document_chunks dc
     WHERE dc.document_id = ANY($3::INTEGER[])
       AND dc.embedding IS NOT NULL
-    ORDER BY dc.embedding <=> $1::vector
+    ORDER BY dc.embedding::halfvec(3072) <=> $1::halfvec(3072)
     LIMIT 50
 ),
 bm25_results AS (

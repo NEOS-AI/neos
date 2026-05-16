@@ -103,7 +103,7 @@ async def create_scheduled_task(
         cron_expr = payload.cron_expression
         description = f"커스텀 스케줄: {cron_expr}"
     else:
-        parsed = parse_schedule(payload.query, default_timezone=payload.timezone)
+        parsed = await parse_schedule(payload.query, default_timezone=payload.timezone)
         if not parsed:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

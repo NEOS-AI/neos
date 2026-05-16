@@ -42,6 +42,18 @@ class EmbeddingProvider(ABC):
         """Provider 이름 반환"""
         pass
 
+    async def get_image_embedding(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> Optional[List[float]]:
+        """이미지 임베딩 생성 (멀티모달 지원 provider만 구현)"""
+        raise NotImplementedError(f"{self.get_provider_name()} does not support image embedding")
+
+    async def get_video_embedding(self, video_bytes: bytes, mime_type: str = "video/mp4") -> Optional[List[float]]:
+        """영상 임베딩 생성 (멀티모달 지원 provider만 구현)"""
+        raise NotImplementedError(f"{self.get_provider_name()} does not support video embedding")
+
+    def supports_multimodal(self) -> bool:
+        """멀티모달 임베딩 지원 여부"""
+        return False
+
 
 class OpenAIEmbeddingProvider(EmbeddingProvider):
     """OpenAI 임베딩 Provider"""
@@ -54,7 +66,6 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         self.client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
         self.model = model
 
-        # 모델별 차원 매핑
         self.dimension_map = {
             "text-embedding-3-small": 1536,
             "text-embedding-3-large": 3072,
@@ -95,80 +106,95 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
 
 
 class GeminiEmbeddingProvider(EmbeddingProvider):
-    """Google Gemini 임베딩 Provider"""
+    """Google Gemini Embedding 2 Provider — google-genai SDK, native async"""
 
-    def __init__(self, model: str = "gemini-embedding-001", dimension: int = 1536):
+    SUPPORTED_MODELS = {
+        "gemini-embedding-2-flash": {"max_dim": 3072, "multimodal": True,  "task_type": False},
+        "gemini-embedding-2":       {"max_dim": 3072, "multimodal": True,  "task_type": False},
+        "gemini-embedding-001":     {"max_dim": 3072, "multimodal": False, "task_type": True},
+    }
+
+    def __init__(self, model: str = "gemini-embedding-2-flash", dimension: int = 3072):
         if not settings.GOOGLE_API_KEY:
             raise ValueError("GOOGLE_API_KEY is required for Gemini embeddings")
+        if not (1 <= dimension <= 3072):
+            raise ValueError(f"Invalid embedding dimension: {dimension} (must be 1–3072)")
 
-        import google.generativeai as genai
-        genai.configure(api_key=settings.GOOGLE_API_KEY)
+        from google import genai
+        from google.genai import types as genai_types
 
+        self._client = genai.Client(api_key=settings.GOOGLE_API_KEY)
+        self._types = genai_types
         self.model = model
-        self.dimension = dimension  # Gemini는 유연한 차원 지원 (128-3072)
-        self.genai = genai
+        self.dimension = dimension
+        self._supports_task_type = self.SUPPORTED_MODELS.get(model, {}).get("task_type", False)
+
+    def _make_config(self, task_type: str):
+        """모델 버전에 따라 EmbedContentConfig 생성. Embedding 2 계열은 task_type 미지원."""
+        kwargs = {"output_dimensionality": self.dimension}
+        if self._supports_task_type:
+            kwargs["task_type"] = task_type
+        return self._types.EmbedContentConfig(**kwargs)
 
     async def get_embedding(self, text: str) -> Optional[List[float]]:
         try:
-            # Gemini SDK는 동기식이므로 executor로 래핑
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: self.genai.embed_content(
-                    model=self.model,
-                    content=text,
-                    task_type="retrieval_document",
-                    output_dimensionality=self.dimension
-                )
+            response = await self._client.aio.models.embed_content(
+                model=self.model,
+                contents=text,
+                config=self._make_config(settings.GEMINI_EMBEDDING_TASK_TYPE),
             )
-            return result['embedding']
+            return response.embeddings[0].values
         except Exception as e:
             logger.error(f"Gemini embedding error: {e}")
             return None
 
     async def get_embeddings_batch(self, texts: List[str]) -> List[Optional[List[float]]]:
-        """
-        Gemini batch embedding
-
-        Note: Gemini API는 batch 호출을 지원합니다.
-        """
         try:
-            # Batch API 호출
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: self.genai.embed_content(
-                    model=self.model,
-                    content=texts,
-                    task_type="retrieval_document",
-                    output_dimensionality=self.dimension
-                )
+            response = await self._client.aio.models.embed_content(
+                model=self.model,
+                contents=texts,
+                config=self._make_config(settings.GEMINI_EMBEDDING_TASK_TYPE),
             )
-
-            # 결과가 단일 임베딩인 경우와 리스트인 경우 처리
-            if isinstance(result.get('embedding'), list) and len(result['embedding']) > 0:
-                # 첫 번째 요소가 숫자인지 확인 (단일 임베딩)
-                if isinstance(result['embedding'][0], (int, float)):
-                    # 단일 텍스트에 대한 임베딩
-                    return [result['embedding']]
-                else:
-                    # 여러 텍스트에 대한 임베딩
-                    return result['embedding']
-
-            return [None] * len(texts)
-
+            return [e.values for e in response.embeddings]
         except Exception as e:
             logger.error(f"Gemini batch embedding error: {e}")
-            # 오류 시 개별 처리로 폴백
             logger.info("Falling back to individual embedding requests")
             results = []
             for text in texts:
                 embedding = await self.get_embedding(text)
                 results.append(embedding)
-                # Rate limiting을 위한 작은 지연
                 if len(results) < len(texts):
-                    await asyncio.sleep(0.05)  # 50ms
+                    await asyncio.sleep(0.05)
             return results
+
+    async def get_image_embedding(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> Optional[List[float]]:
+        try:
+            image_part = self._types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+            response = await self._client.aio.models.embed_content(
+                model=self.model,
+                contents=image_part,
+                config=self._make_config(settings.GEMINI_EMBEDDING_IMAGE_TASK_TYPE),
+            )
+            return response.embeddings[0].values
+        except Exception as e:
+            logger.error(f"Gemini image embedding error: {e}")
+            return None
+
+    async def get_video_embedding(self, video_bytes: bytes, mime_type: str = "video/mp4") -> Optional[List[float]]:
+        try:
+            video_part = self._types.Part.from_bytes(data=video_bytes, mime_type=mime_type)
+            response = await self._client.aio.models.embed_content(
+                model=self.model,
+                contents=video_part,
+                config=self._make_config(settings.GEMINI_EMBEDDING_VIDEO_TASK_TYPE),
+            )
+            return response.embeddings[0].values
+        except Exception as e:
+            logger.error(f"Gemini video embedding error: {e}")
+            return None
+
+    def supports_multimodal(self) -> bool:
+        return self.SUPPORTED_MODELS.get(self.model, {}).get("multimodal", False)
 
     def get_dimension(self) -> int:
         return self.dimension
@@ -208,14 +234,13 @@ class EmbeddingProviderFactory:
         """
         provider_name = provider or settings.EMBEDDING_PROVIDER
         model_name = model or settings.EMBEDDING_MODEL
-        embedding_dimension = dimension or settings.EMBEDDING_DIMENSION
+        embedding_dimension = dimension if dimension is not None else settings.EMBEDDING_DIMENSION
 
         if provider_name not in cls._providers:
             raise ValueError(f"Unsupported embedding provider: {provider_name}")
 
         provider_class = cls._providers[provider_name]
 
-        # Provider별로 다른 파라미터 전달
         if provider_name == "gemini":
             return provider_class(model=model_name, dimension=embedding_dimension)
         else:

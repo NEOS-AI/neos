@@ -231,7 +231,7 @@ class UIFrameGenerator:
                 session_record = UIFrameSession(
                     frame_id=uuid.UUID(frame_id),
                     session_id=session_id,
-                    user_id=uuid.UUID(user_id) if user_id else None,
+                    user_id=user_id,
                     conversation_id=uuid.UUID(conversation_id) if conversation_id else None,
                     original_query=original_query,
                     frame_data=frame_data,

@@ -209,7 +209,7 @@ class DocumentService:
                 d.filename as document_name,
                 dc.chunk_text,
                 dc.page_number,
-                1 - (dc.embedding <=> :query_embedding::vector) as similarity
+                1 - (dc.embedding::halfvec(3072) <=> :query_embedding::halfvec(3072)) as similarity
             FROM document_chunks dc
             JOIN documents d ON dc.document_id = d.id
             WHERE d.embedding_processed = true
@@ -225,7 +225,7 @@ class DocumentService:
         similarity_query = text(
             str(similarity_query)
             + """
-            ORDER BY dc.embedding <=> :query_embedding::vector
+            ORDER BY dc.embedding::halfvec(3072) <=> :query_embedding::halfvec(3072)
             LIMIT :top_k
         """
         )

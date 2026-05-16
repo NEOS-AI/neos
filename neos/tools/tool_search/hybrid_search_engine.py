@@ -20,13 +20,13 @@ logger = logging.getLogger(__name__)
 HYBRID_SEARCH_SQL = """
 WITH vector_results AS (
     SELECT id, name, display_name, description, schema, category, tags, source_type,
-           1 - (embedding <=> :query_embedding::vector) AS vector_score,
-           ROW_NUMBER() OVER (ORDER BY embedding <=> :query_embedding::vector) AS vector_rank
+           1 - (embedding::halfvec(3072) <=> :query_embedding::halfvec(3072)) AS vector_score,
+           ROW_NUMBER() OVER (ORDER BY embedding::halfvec(3072) <=> :query_embedding::halfvec(3072)) AS vector_rank
     FROM tool_registry
     WHERE is_active = TRUE AND defer_loading = TRUE
       AND embedding IS NOT NULL
       AND (:category IS NULL OR category = :category)
-    ORDER BY embedding <=> :query_embedding::vector
+    ORDER BY embedding::halfvec(3072) <=> :query_embedding::halfvec(3072)
     LIMIT 20
 ),
 bm25_results AS (
@@ -74,13 +74,13 @@ LIMIT :top_k;
 # 벡터 전용 검색 SQL (BM25 폴백 불가 시)
 VECTOR_ONLY_SQL = """
 SELECT name, display_name, description, schema, category, tags, source_type,
-       1 - (embedding <=> :query_embedding::vector) AS combined_score,
+       1 - (embedding::halfvec(3072) <=> :query_embedding::halfvec(3072)) AS combined_score,
        'vector' AS match_source
 FROM tool_registry
 WHERE is_active = TRUE AND defer_loading = TRUE
   AND embedding IS NOT NULL
   AND (:category IS NULL OR category = :category)
-ORDER BY embedding <=> :query_embedding::vector
+ORDER BY embedding::halfvec(3072) <=> :query_embedding::halfvec(3072)
 LIMIT :top_k;
 """
 
