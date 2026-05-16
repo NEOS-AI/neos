@@ -562,18 +562,13 @@ class Vote(Base):
     """
     __tablename__ = "Vote_v2"
 
-    # 프론트엔드 DB는 camelCase를 사용하므로 매핑 필요
-    chat_id = Column("chatId", UUID(as_uuid=True), primary_key=True, nullable=False)
-    message_id = Column("messageId", UUID(as_uuid=True), primary_key=True, nullable=False)
-    is_upvoted = Column("isUpvoted", Boolean, nullable=False)
+    chat_id = Column(String(255), primary_key=True, nullable=False)
+    message_id = Column(String(255), primary_key=True, nullable=False)
+    is_upvoted = Column(Boolean, nullable=False)
 
     # Phase 2.11: Feedback columns (migration 013)
-    feedback_text = Column("feedback_text", Text, nullable=True)
-    feedback_category = Column("feedback_category", String(50), nullable=True)
-
-    # 관계 설정은 Conversation, Message 모델이 있어야 가능
-    # conversation = relationship("Conversation")
-    # message = relationship("Message")
+    feedback_text = Column(Text, nullable=True)
+    feedback_category = Column(String(50), nullable=True)
 
 
 class ArtifactDocument(Base):
@@ -584,17 +579,12 @@ class ArtifactDocument(Base):
     """
     __tablename__ = "Document"
 
-    # 프론트엔드 DB는 camelCase를 사용하므로 매핑 필요
     id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
-    created_at = Column("createdAt", TIMESTAMP, primary_key=True, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    created_at = Column(TIMESTAMP, primary_key=True, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     title = Column(Text, nullable=False)
     content = Column(Text, nullable=True)
     kind = Column(String(20), nullable=False, default="text")  # text, code, image, sheet
-    user_id = Column("userId", String(255), nullable=False)  # 백엔드 User.user_id (String)와 일치하도록 변경
-
-    # 관계 설정은 프론트엔드 DB 구조와 맞지 않아 비활성화
-    # user = relationship("User")
-    # suggestions = relationship("Suggestion", back_populates="document", cascade="all, delete-orphan")
+    user_id = Column(String(255), nullable=False)
 
 
 class Suggestion(Base):
@@ -605,28 +595,23 @@ class Suggestion(Base):
     """
     __tablename__ = "Suggestion"
 
-    # 프론트엔드 DB는 camelCase를 사용하므로 매핑 필요
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, nullable=False)
-    document_id = Column("documentId", UUID(as_uuid=True), nullable=False)
-    document_created_at = Column("documentCreatedAt", TIMESTAMP, nullable=False)
-    original_text = Column("originalText", Text, nullable=False)
-    suggested_text = Column("suggestedText", Text, nullable=False)
+    document_id = Column(UUID(as_uuid=True), nullable=False)
+    document_created_at = Column(TIMESTAMP, nullable=False)
+    original_text = Column(Text, nullable=False)
+    suggested_text = Column(Text, nullable=False)
     description = Column(Text, nullable=True)
-    is_resolved = Column("isResolved", Boolean, nullable=False, default=False)
-    user_id = Column("userId", String(255), nullable=False)  # 백엔드 User.user_id (String)와 일치하도록 변경
-    created_at = Column("createdAt", TIMESTAMP, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    is_resolved = Column(Boolean, nullable=False, default=False)
+    user_id = Column(String(255), nullable=False)
+    created_at = Column(TIMESTAMP, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
-    # 복합 외래키는 유지 (Document 테이블 참조)
+    # 복합 외래키 (Document 테이블 참조)
     __table_args__ = (
         ForeignKeyConstraint(
-            ['documentId', 'documentCreatedAt'],
-            ['Document.id', 'Document.createdAt']
+            ['document_id', 'document_created_at'],
+            ['Document.id', 'Document.created_at']
         ),
     )
-
-    # 관계 설정은 프론트엔드 DB 구조와 맞지 않아 비활성화
-    # user = relationship("User")
-    # document = relationship("ArtifactDocument", back_populates="suggestions")
 
 
 class ToolRegistry(Base):

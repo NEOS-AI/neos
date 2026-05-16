@@ -1,8 +1,9 @@
 """Chat API handlers - thin layer for FastAPI routes"""
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends, Query
 from fastapi.responses import StreamingResponse
 from typing import Optional, AsyncGenerator, List, Union
+from datetime import datetime
 import uuid
 import asyncio
 
@@ -150,6 +151,7 @@ async def create_conversation(request: CreateConversationRequest):
     try:
         conversation = await ChatService.create_conversation(
             user_id=request.user_id,
+            conversation_id=request.conversation_id,
             model_name=request.model_name,
             title=request.title,
             system_prompt=request.system_prompt,
@@ -157,6 +159,7 @@ async def create_conversation(request: CreateConversationRequest):
             max_tokens=request.max_tokens,
             mode=request.mode.value if hasattr(request.mode, 'value') else request.mode,
             template_id=request.template_id,
+            visibility=request.visibility,
             metadata=request.metadata
         )
         return ConversationResponse(**conversation)
@@ -230,7 +233,8 @@ async def update_conversation(conversation_id: str, request: UpdateConversationR
             temperature=request.temperature,
             is_pinned=request.is_pinned,
             tags=request.tags,
-            metadata=request.metadata
+            metadata=request.metadata,
+            visibility=request.visibility,
         )
         return ConversationResponse(**conversation)
     except Exception as e:
@@ -291,6 +295,45 @@ async def list_user_conversations(
         )
     except Exception as e:
         logger.error(f"Failed to list conversations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/users/{user_id}/conversations", response_model=SuccessResponse)
+async def delete_all_user_conversations(user_id: str):
+    """사용자의 모든 대화 삭제"""
+    try:
+        count = await ChatService.delete_user_conversations(user_id)
+        return SuccessResponse(success=True, message=f"Deleted {count} conversations")
+    except Exception as e:
+        logger.error(f"Failed to delete user conversations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/conversations/{conversation_id}/messages/after", response_model=SuccessResponse)
+async def delete_messages_after_timestamp(
+    conversation_id: str,
+    timestamp: datetime = Query(..., description="이 시점 이후 메시지 삭제 (ISO 8601)"),
+):
+    """특정 시점 이후 메시지 삭제 (편집 기능용)"""
+    try:
+        await ChatService.delete_messages_after_timestamp(conversation_id, timestamp)
+        return SuccessResponse(success=True, message="Messages deleted")
+    except Exception as e:
+        logger.error(f"Failed to delete messages after timestamp: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/users/{user_id}/message-count")
+async def get_user_message_count(
+    user_id: str,
+    hours: int = Query(24, ge=1, le=168, description="집계 기간(시간)"),
+):
+    """최근 N시간 내 사용자 메시지 수 (rate limit 확인용)"""
+    try:
+        count = await ChatService.get_user_message_count(user_id, hours)
+        return {"user_id": user_id, "hours": hours, "count": count}
+    except Exception as e:
+        logger.error(f"Failed to get user message count: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

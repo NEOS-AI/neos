@@ -46,6 +46,7 @@ class ChatMode(str, Enum):
 
 class CreateConversationRequest(BaseModel):
     user_id: str = Field(..., description="사용자 ID")
+    conversation_id: Optional[str] = Field(None, description="Conversation ID (FE chat UUID)")
     title: Optional[str] = Field(None, max_length=500, description="대화 제목")
     model_name: str = Field(default="claude-opus-4-5-20251101", description="사용할 모델")
     system_prompt: Optional[str] = Field(None, description="시스템 프롬프트")
@@ -64,6 +65,7 @@ class UpdateConversationRequest(BaseModel):
     is_pinned: Optional[bool] = Field(None, description="고정 여부")
     tags: Optional[List[str]] = Field(None, description="태그 목록")
     metadata: Optional[Dict[str, Any]] = Field(None, description="메타데이터")
+    visibility: Optional[str] = Field(None, pattern="^(public|private)$", description="공개 여부 (public, private)")
 
 
 class SendMessageRequest(BaseModel):
@@ -186,6 +188,7 @@ class ConversationResponse(BaseModel):
     is_pinned: bool = False
     is_shared: bool = False
     share_token: Optional[str] = None
+    visibility: str = "private"
 
     # 통계
     message_count: int = 0
@@ -216,6 +219,7 @@ class ConversationSummary(BaseModel):
     title: Optional[str] = None
     model_name: str
     status: ConversationStatus
+    visibility: str = "private"
     is_pinned: bool = False
     message_count: int = 0
     last_message_at: Optional[datetime] = None

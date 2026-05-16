@@ -1,22 +1,13 @@
 import type { NextRequest } from "next/server";
 import { auth } from "@/app/(auth)/auth";
-import { deleteAllChatsByUserId, getChatsByUserId } from "@/lib/db/queries";
+import { adaptBEConversationList } from "@/lib/adapters/chat-adapters";
+import { callBackendAPI } from "@/lib/backend-api";
 import { ChatSDKError } from "@/lib/errors";
-
 
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
 
   const limit = Number.parseInt(searchParams.get("limit") || "10", 10);
-  const startingAfter = searchParams.get("starting_after");
-  const endingBefore = searchParams.get("ending_before");
-
-  if (startingAfter && endingBefore) {
-    return new ChatSDKError(
-      "bad_request:api",
-      "Only one of starting_after or ending_before can be provided."
-    ).toResponse();
-  }
 
   const session = await auth();
 
@@ -24,14 +15,17 @@ export async function GET(request: NextRequest) {
     return new ChatSDKError("unauthorized:chat").toResponse();
   }
 
-  const chats = await getChatsByUserId({
-    id: session.user.id,
-    limit,
-    startingAfter,
-    endingBefore,
-  });
+  const userId = session.user.backendUserId || session.user.id;
+  const res = await callBackendAPI(
+    `/api/v1/chat/users/${userId}/conversations?limit=${limit}&offset=0`
+  );
 
-  return Response.json(chats);
+  if (!res.ok) {
+    return new ChatSDKError("bad_request:database").toResponse();
+  }
+
+  const raw = await res.json();
+  return Response.json(adaptBEConversationList(raw));
 }
 
 export async function DELETE() {
@@ -41,7 +35,16 @@ export async function DELETE() {
     return new ChatSDKError("unauthorized:chat").toResponse();
   }
 
-  const result = await deleteAllChatsByUserId({ userId: session.user.id });
+  const userId = session.user.backendUserId || session.user.id;
+  const res = await callBackendAPI(
+    `/api/v1/chat/users/${userId}/conversations`,
+    { method: "DELETE" }
+  );
 
+  if (!res.ok) {
+    return new ChatSDKError("bad_request:database").toResponse();
+  }
+
+  const result = await res.json();
   return Response.json(result, { status: 200 });
 }

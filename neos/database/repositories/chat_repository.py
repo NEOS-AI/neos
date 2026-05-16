@@ -130,7 +130,8 @@ class ChatRepository:
         model_name: str,
         system_prompt: Optional[str],
         template_id: Optional[str],
-        mode: str = "standard"
+        mode: str = "standard",
+        visibility: str = "private"
     ) -> str:
         """새 대화 생성 (stored procedure 호출)
 
@@ -141,6 +142,7 @@ class ChatRepository:
             system_prompt: 시스템 프롬프트
             template_id: 템플릿 ID
             mode: 대화 모드 (standard, rag, similarity, deep_research)
+            visibility: 공개 여부 (public, private)
 
         Returns:
             생성된 대화 ID
@@ -158,7 +160,16 @@ class ChatRepository:
             template_id,
             mode
         )
-        return result[0] if result else conversation_id
+        created_id = result[0] if result else conversation_id
+
+        if visibility != "private":
+            await db_manager.execute(
+                "UPDATE conversations SET visibility = $1 WHERE conversation_id = $2",
+                visibility,
+                created_id
+            )
+
+        return created_id
 
     @staticmethod
     async def get_conversation(conversation_id: str) -> Optional[Conversation]:
@@ -348,6 +359,7 @@ class ChatRepository:
             title,
             model_name,
             status,
+            visibility,
             is_pinned,
             message_count,
             last_message_at,
@@ -393,12 +405,13 @@ class ChatRepository:
                 "title": row[2],
                 "model_name": row[3],
                 "status": row[4],
-                "is_pinned": row[5],
-                "message_count": row[6],
-                "last_message_at": row[7],
-                "created_at": row[8],
-                "first_message_preview": row[9][:100] if row[9] else None,
-                "last_message_preview": row[10][:100] if row[10] else None
+                "visibility": row[5] if row[5] else "private",
+                "is_pinned": row[6],
+                "message_count": row[7],
+                "last_message_at": row[8],
+                "created_at": row[9],
+                "first_message_preview": row[10][:100] if row[10] else None,
+                "last_message_preview": row[11][:100] if row[11] else None
             }
             for row in rows
         ]
@@ -748,6 +761,48 @@ class ChatRepository:
         """
 
         await db_manager.execute(query, message_id)
+
+    @staticmethod
+    async def delete_user_conversations(user_id: str, soft_delete: bool = True) -> int:
+        """사용자의 모든 대화 삭제"""
+        if soft_delete:
+            query = """
+            UPDATE conversations
+            SET deleted_at = CURRENT_TIMESTAMP, status = 'deleted'
+            WHERE user_id = $1 AND status != 'deleted'
+            """
+        else:
+            query = """
+            DELETE FROM conversations WHERE user_id = $1
+            """
+        result = await db_manager.execute(query, user_id)
+        return result.rowcount if result else 0
+
+    @staticmethod
+    async def delete_messages_after_timestamp(
+        conversation_id: str,
+        timestamp: datetime
+    ) -> None:
+        """특정 시점 이후 메시지 삭제"""
+        query = """
+        DELETE FROM messages
+        WHERE conversation_id = $1 AND created_at >= $2
+        """
+        await db_manager.execute(query, conversation_id, timestamp)
+
+    @staticmethod
+    async def get_user_message_count(user_id: str, hours: int = 24) -> int:
+        """최근 N시간 내 사용자 메시지 수"""
+        query = """
+        SELECT COUNT(*) AS cnt
+        FROM messages m
+        JOIN conversations c ON m.conversation_id = c.conversation_id
+        WHERE c.user_id = $1
+          AND m.role = 'user'
+          AND m.created_at >= NOW() - ($2 * INTERVAL '1 hour')
+        """
+        row = await db_manager.fetch_one(query, user_id, hours)
+        return row[0] if row else 0
 
     # ==================== Analytics ====================
 

@@ -767,14 +767,16 @@ CREATE TABLE IF NOT EXISTS "Vote_v2" (
     chat_id VARCHAR(255) NOT NULL,
     message_id VARCHAR(255) NOT NULL,
     is_upvoted BOOLEAN NOT NULL,
+    feedback_text TEXT,
+    feedback_category VARCHAR(50),
 
     PRIMARY KEY (chat_id, message_id),
     FOREIGN KEY (chat_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     FOREIGN KEY (message_id) REFERENCES messages(message_id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_vote_v2_chat_id ON "Vote_v2"(chat_id);
-CREATE INDEX idx_vote_v2_message_id ON "Vote_v2"(message_id);
+CREATE INDEX IF NOT EXISTS idx_vote_v2_chat_id ON "Vote_v2"(chat_id);
+CREATE INDEX IF NOT EXISTS idx_vote_v2_message_id ON "Vote_v2"(message_id);
 
 COMMENT ON TABLE "Vote_v2" IS '메시지에 대한 사용자 피드백 (upvote/downvote)';
 
@@ -797,11 +799,11 @@ CREATE TABLE IF NOT EXISTS "Document" (
     CONSTRAINT check_document_kind CHECK (kind IN ('text', 'code', 'image', 'sheet'))
 );
 
-CREATE INDEX idx_document_user_id ON "Document"(user_id);
-CREATE INDEX idx_document_id ON "Document"(id);
-CREATE INDEX idx_document_created_at ON "Document"(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_document_user_id ON "Document"(user_id);
+CREATE INDEX IF NOT EXISTS idx_document_id ON "Document"(id);
+CREATE INDEX IF NOT EXISTS idx_document_created_at ON "Document"(created_at DESC);
 
-COMMENT ON TABLE "Document" IS 'Artifact 문서 (버전 관리 지원 - id와 created_at로 버전 구분)';
+COMMENT ON TABLE "Document" IS 'Artifact 문서 (버전 관리 지원 - id와 created_at으로 버전 구분)';
 
 -- ============================================================================
 -- 11. Suggestion 테이블 (문서 제안/편집 제안)
@@ -823,9 +825,9 @@ CREATE TABLE IF NOT EXISTS "Suggestion" (
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_suggestion_document ON "Suggestion"(document_id, document_created_at);
-CREATE INDEX idx_suggestion_user ON "Suggestion"(user_id);
-CREATE INDEX idx_suggestion_resolved ON "Suggestion"(is_resolved) WHERE is_resolved = FALSE;
+CREATE INDEX IF NOT EXISTS idx_suggestion_document ON "Suggestion"(document_id, document_created_at);
+CREATE INDEX IF NOT EXISTS idx_suggestion_user ON "Suggestion"(user_id);
+CREATE INDEX IF NOT EXISTS idx_suggestion_resolved ON "Suggestion"(is_resolved) WHERE is_resolved = FALSE;
 
 COMMENT ON TABLE "Suggestion" IS '문서에 대한 AI 생성 편집 제안';
 

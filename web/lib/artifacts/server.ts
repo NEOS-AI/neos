@@ -4,7 +4,7 @@ import { codeDocumentHandler } from "@/artifacts/code/server";
 import { sheetDocumentHandler } from "@/artifacts/sheet/server";
 import { textDocumentHandler } from "@/artifacts/text/server";
 import type { ArtifactKind } from "@/components/artifact";
-import { saveDocument } from "../db/queries";
+import { callBackendAPI } from "../backend-api";
 import type { Document } from "../db/schema";
 import type { ChatMessage } from "../types";
 
@@ -52,12 +52,14 @@ export function createDocumentHandler<T extends ArtifactKind>(config: {
       });
 
       if (args.session?.user?.id) {
-        await saveDocument({
-          id: args.id,
-          title: args.title,
-          content: draftContent,
-          kind: config.kind,
-          userId: args.session.user.id,
+        await callBackendAPI("/api/v1/documents", {
+          method: "POST",
+          body: JSON.stringify({
+            id: args.id,
+            title: args.title,
+            content: draftContent,
+            kind: config.kind,
+          }),
         });
       }
 
@@ -72,12 +74,14 @@ export function createDocumentHandler<T extends ArtifactKind>(config: {
       });
 
       if (args.session?.user?.id) {
-        await saveDocument({
-          id: args.document.id,
-          title: args.document.title,
-          content: draftContent,
-          kind: config.kind,
-          userId: args.session.user.id,
+        await callBackendAPI("/api/v1/documents", {
+          method: "POST",
+          body: JSON.stringify({
+            id: args.document.id,
+            title: args.document.title,
+            content: draftContent,
+            kind: config.kind,
+          }),
         });
       }
 
