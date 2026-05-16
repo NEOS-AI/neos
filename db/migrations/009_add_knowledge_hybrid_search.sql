@@ -49,7 +49,7 @@ vector_results AS (
         qc.query_text,
         qc.response_data,
         ROW_NUMBER() OVER (
-            ORDER BY qc.query_vector <=> p_query_vector ASC
+            ORDER BY qc.query_vector::halfvec(3072) <=> p_query_vector::halfvec(3072) ASC
         )::INTEGER AS vector_rank
     FROM query_cache qc
     WHERE qc.query_vector IS NOT NULL

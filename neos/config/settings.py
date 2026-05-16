@@ -100,9 +100,15 @@ class Settings(BaseSettings):
     LLM_TIMEOUT_RESEARCH_PLANNING: int = int(env_vars.get("LLM_TIMEOUT_RESEARCH_PLANNING", 180))  # Longer timeout for complex research operations
 
     # 임베딩 설정
-    EMBEDDING_PROVIDER: str = env_vars.get("EMBEDDING_PROVIDER", "openai")
-    EMBEDDING_MODEL: str = env_vars.get("EMBEDDING_MODEL", "text-embedding-3-small")
-    EMBEDDING_DIMENSION: int = int(env_vars.get("EMBEDDING_DIMENSION", 1536))
+    EMBEDDING_PROVIDER: str = env_vars.get("EMBEDDING_PROVIDER", "gemini")
+    EMBEDDING_MODEL: str = env_vars.get("EMBEDDING_MODEL", "gemini-embedding-2-flash")
+    EMBEDDING_DIMENSION: int = int(env_vars.get("EMBEDDING_DIMENSION", 3072))
+    GEMINI_EMBEDDING_TASK_TYPE: str = env_vars.get("GEMINI_EMBEDDING_TASK_TYPE", "retrieval_document")
+    GEMINI_EMBEDDING_IMAGE_TASK_TYPE: str = env_vars.get("GEMINI_EMBEDDING_IMAGE_TASK_TYPE", "retrieval_document")
+    GEMINI_EMBEDDING_VIDEO_TASK_TYPE: str = env_vars.get("GEMINI_EMBEDDING_VIDEO_TASK_TYPE", "retrieval_document")
+    EMBEDDING_DATASET_ENABLED: bool = env_vars.get("EMBEDDING_DATASET_ENABLED", "false").lower() == "true"
+    EMBEDDING_DATASET_SAMPLE_RATE: float = float(env_vars.get("EMBEDDING_DATASET_SAMPLE_RATE", 0.1))
+    EMBEDDING_DATASET_DIR: str = env_vars.get("EMBEDDING_DATASET_DIR", "datasets/embeddings")
 
     # Vision 모델 설정
     VISION_PROVIDER: str = env_vars.get("VISION_PROVIDER", "auto")  # "gpt4o", "claude", "auto"

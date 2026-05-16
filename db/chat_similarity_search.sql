@@ -10,8 +10,8 @@ CREATE TABLE IF NOT EXISTS message_embeddings (
     conversation_id VARCHAR(255) NOT NULL,
 
     -- 임베딩 벡터
-    embedding vector(1536), -- OpenAI text-embedding-3-small/large
-    embedding_model VARCHAR(100) DEFAULT 'text-embedding-3-small',
+    embedding vector(3072), -- Gemini Embedding 2 Flash
+    embedding_model VARCHAR(100) DEFAULT 'gemini-embedding-2-flash',
 
     -- 메시지 메타데이터 (비정규화 - 빠른 검색을 위해)
     content TEXT NOT NULL,
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS conversation_embeddings (
     conversation_id VARCHAR(255) UNIQUE NOT NULL,
 
     -- 대화 요약 임베딩
-    summary_embedding vector(1536),
+    summary_embedding vector(3072),
     summary_text TEXT,
 
     -- 통계
@@ -147,7 +147,7 @@ $$ LANGUAGE plpgsql;
 
 -- 유사 메시지 검색 함수
 CREATE OR REPLACE FUNCTION find_similar_messages(
-    p_embedding vector(1536),
+    p_embedding vector(3072),
     p_user_id VARCHAR(255) DEFAULT NULL,
     p_conversation_id VARCHAR(255) DEFAULT NULL,
     p_limit INTEGER DEFAULT 10,
@@ -168,13 +168,13 @@ BEGIN
         me.conversation_id,
         me.content,
         me.role,
-        1 - (me.embedding <=> p_embedding) as similarity_score,
+        1 - (me.embedding::halfvec(3072) <=> p_embedding::halfvec(3072)) as similarity_score,
         me.created_at
     FROM message_embeddings me
     WHERE (p_user_id IS NULL OR me.user_id = p_user_id)
       AND (p_conversation_id IS NULL OR me.conversation_id = p_conversation_id)
-      AND (1 - (me.embedding <=> p_embedding)) >= p_similarity_threshold
-    ORDER BY me.embedding <=> p_embedding
+      AND (1 - (me.embedding::halfvec(3072) <=> p_embedding::halfvec(3072))) >= p_similarity_threshold
+    ORDER BY me.embedding::halfvec(3072) <=> p_embedding::halfvec(3072)
     LIMIT p_limit;
 END;
 $$ LANGUAGE plpgsql;
@@ -183,7 +183,7 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION find_similar_messages_in_conversation(
     p_conversation_id VARCHAR(255),
     p_query_text TEXT,
-    p_query_embedding vector(1536),
+    p_query_embedding vector(3072),
     p_limit INTEGER DEFAULT 5,
     p_exclude_message_id VARCHAR(255) DEFAULT NULL
 )
@@ -201,11 +201,11 @@ BEGIN
         me.content,
         me.role,
         me.sequence_number,
-        1 - (me.embedding <=> p_query_embedding) as similarity_score
+        1 - (me.embedding::halfvec(3072) <=> p_query_embedding::halfvec(3072)) as similarity_score
     FROM message_embeddings me
     WHERE me.conversation_id = p_conversation_id
       AND (p_exclude_message_id IS NULL OR me.message_id != p_exclude_message_id)
-    ORDER BY me.embedding <=> p_query_embedding
+    ORDER BY me.embedding::halfvec(3072) <=> p_query_embedding::halfvec(3072)
     LIMIT p_limit;
 END;
 $$ LANGUAGE plpgsql;
@@ -213,7 +213,7 @@ $$ LANGUAGE plpgsql;
 -- 사용자의 모든 대화에서 유사 메시지 검색
 CREATE OR REPLACE FUNCTION find_similar_messages_across_conversations(
     p_user_id VARCHAR(255),
-    p_query_embedding vector(1536),
+    p_query_embedding vector(3072),
     p_limit INTEGER DEFAULT 10,
     p_similarity_threshold FLOAT DEFAULT 0.75
 )
@@ -234,14 +234,14 @@ BEGIN
         c.title,
         me.content,
         me.role,
-        1 - (me.embedding <=> p_query_embedding) as similarity_score,
+        1 - (me.embedding::halfvec(3072) <=> p_query_embedding::halfvec(3072)) as similarity_score,
         me.created_at
     FROM message_embeddings me
     JOIN conversations c ON me.conversation_id = c.conversation_id
     WHERE me.user_id = p_user_id
       AND c.deleted_at IS NULL
-      AND (1 - (me.embedding <=> p_query_embedding)) >= p_similarity_threshold
-    ORDER BY me.embedding <=> p_query_embedding
+      AND (1 - (me.embedding::halfvec(3072) <=> p_query_embedding::halfvec(3072))) >= p_similarity_threshold
+    ORDER BY me.embedding::halfvec(3072) <=> p_query_embedding::halfvec(3072)
     LIMIT p_limit;
 END;
 $$ LANGUAGE plpgsql;
@@ -250,7 +250,7 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION hybrid_search_messages(
     p_user_id VARCHAR(255),
     p_text_query TEXT,
-    p_vector_query vector(1536),
+    p_vector_query vector(3072),
     p_limit INTEGER DEFAULT 10,
     p_text_weight FLOAT DEFAULT 0.3,
     p_vector_weight FLOAT DEFAULT 0.7
@@ -273,17 +273,17 @@ BEGIN
         me.content,
         me.role,
         ts_rank(to_tsvector('english', me.content), plainto_tsquery('english', p_text_query)) as text_score,
-        (1 - (me.embedding <=> p_vector_query)) as vector_score,
+        (1 - (me.embedding::halfvec(3072) <=> p_vector_query::halfvec(3072))) as vector_score,
         (
             p_text_weight * ts_rank(to_tsvector('english', me.content), plainto_tsquery('english', p_text_query)) +
-            p_vector_weight * (1 - (me.embedding <=> p_vector_query))
+            p_vector_weight * (1 - (me.embedding::halfvec(3072) <=> p_vector_query::halfvec(3072)))
         ) as combined_score,
         me.created_at
     FROM message_embeddings me
     WHERE me.user_id = p_user_id
       AND (
           to_tsvector('english', me.content) @@ plainto_tsquery('english', p_text_query)
-          OR (1 - (me.embedding <=> p_vector_query)) >= 0.5
+          OR (1 - (me.embedding::halfvec(3072) <=> p_vector_query::halfvec(3072))) >= 0.5
       )
     ORDER BY combined_score DESC
     LIMIT p_limit;

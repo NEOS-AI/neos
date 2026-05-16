@@ -6,7 +6,7 @@
 cd ..
 
 # 이미지 빌드
-docker build -t neos-paradedb -f docker/Dockerfile.psql .
+docker build --network=host -t neos-paradedb -f docker/Dockerfile.psql .
 
 # 컨테이너 실행
 docker run --name neos-paradedb -e POSTGRES_PASSWORD=password -p 5432:5432 -d neos-paradedb
@@ -94,6 +94,13 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/005_add_o
 # Add migrations for changing index type
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/006_upgrade_to_hnsw.sql
 
+# Add document_chunk table
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/028_create_document_chunks.sql
+
+# Add documents table
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/029_create_documents.sql
+
+
 # Add migrations for Google Gemini API support
 psql -U postgres -d neos -h localhost -f db/migrations/007_add_embedding_provider_metadata.sql
 
@@ -147,10 +154,7 @@ psql -U postgres -d neos -h localhost -f db/migrations/025_add_submitted_at.sql
 
 # Execution Approval 타임아웃 추적 테이블 추가
 psql -U postgres -d neos -h localhost -f db/migrations/026_add_pending_approvals.sql
-```
 
-### Migrate database schema for backoffice
-
-```bash
-psql -U postgres -d neos --port 5432 --host localhost -f backoffice/db/migrations/001_create_analytics_tables.sql
+# Add gemini embedding dimension support
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/027_gemini_embedding_dimension.sql
 ```

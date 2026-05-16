@@ -4,7 +4,7 @@ import re
 import asyncio
 import time
 from sqlalchemy import text
-from database.connection import db_manager
+from neos.database.connection import db_manager
 import logging
 
 
@@ -34,7 +34,7 @@ class SearchFallbackDetailed:
         벡터 유사도만 사용한 순수 검색
         
         Args:
-            query_embedding: 1536차원 벡터 임베딩
+            query_embedding: 3072차원 벡터 임베딩
             limit: 최대 결과 수
             similarity_threshold: 유사도 임계값 (0.0~1.0)
         
@@ -66,10 +66,10 @@ class SearchFallbackDetailed:
                         created_at,
                         
                         -- 코사인 거리 계산 (0~2 범위, 0이 가장 유사)
-                        query_vector <=> :query_vector as distance,
+                        query_vector::halfvec(3072) <=> :query_vector::halfvec(3072) as distance,
                         
-                        -- 유사도로 변환 (0~1 범위, 1이 가장 유사)
-                        1 - (query_vector <=> :query_vector) as similarity,
+                        -- 유사도로 변환 (0~1 범위 보장, 1이 가장 유사)
+                        GREATEST(0, 1 - (query_vector::halfvec(3072) <=> :query_vector::halfvec(3072))) as similarity,
                         
                         -- 벡터 차원 확인 (디버그용)
                         array_length(query_vector, 1) as vector_dimension
@@ -80,13 +80,13 @@ class SearchFallbackDetailed:
                         query_vector IS NOT NULL
                         
                         -- 임계값 이상의 유사도만 (성능 최적화)
-                        AND 1 - (query_vector <=> :query_vector) > :threshold
+                        AND 1 - (query_vector::halfvec(3072) <=> :query_vector::halfvec(3072)) > :threshold
                         
                         -- 최근 데이터 우선 (선택적)
                         AND created_at > NOW() - INTERVAL '1 year'
                     
                     -- 가장 유사한 것부터 정렬 (거리 오름차순 = 유사도 내림차순)
-                    ORDER BY query_vector <=> :query_vector ASC
+                    ORDER BY query_vector::halfvec(3072) <=> :query_vector::halfvec(3072) ASC
                     
                     -- 결과 수 제한
                     LIMIT :limit
@@ -94,7 +94,7 @@ class SearchFallbackDetailed:
                 
                 # 파라미터 바인딩
                 params = {
-                    "query_vector": str(query_embedding),  # PostgreSQL 배열 형식으로 변환
+                    "query_vector": f"[{','.join(str(x) for x in query_embedding)}]",
                     "threshold": similarity_threshold,
                     "limit": limit
                 }
@@ -179,28 +179,21 @@ class SearchFallbackDetailed:
                 # OR 조건으로 결합
                 where_clause = " OR ".join(where_conditions)
                 
+                params["fetch_limit"] = limit * 2
+
                 # 3단계: SQL 실행
                 sql = text(f"""
-                    SELECT 
+                    SELECT
                         original_query,
                         search_results,
                         response_quality_score,
-                        created_at,
-                        
-                        -- 매칭된 키워드 수 계산 (점수 산정용)
-                        {self._generate_keyword_match_count_sql(keywords)} as matched_count
-                        
+                        created_at
                     FROM query_history
-                    WHERE 
-                        -- 키워드 매칭 조건
+                    WHERE
                         ({where_clause})
-                        
-                        -- 최근 데이터 우선
                         AND created_at > NOW() - INTERVAL '2 years'
-                    
-                    -- 최신순 정렬 (관련성이 비슷할 때 최신 우선)
                     ORDER BY created_at DESC
-                    LIMIT :limit * 2  -- 유사도 계산 후 재정렬을 위해 더 많이 가져오기
+                    LIMIT :fetch_limit
                 """)
                 
                 result = await session.execute(sql, params)
@@ -304,13 +297,6 @@ class SearchFallbackDetailed:
                 seen_lower.add(keyword.lower())
         
         return unique_keywords
-    
-    def _generate_keyword_match_count_sql(self, keywords: List[str]) -> str:
-        """키워드 매칭 수를 계산하는 SQL 생성"""
-        conditions = []
-        for keyword in keywords[:5]:  # 최대 5개
-            conditions.append(f"CASE WHEN LOWER(original_query) LIKE LOWER('%{keyword}%') THEN 1 ELSE 0 END")
-        return f"({' + '.join(conditions)})"
     
     def _calculate_keyword_similarity_advanced(
         self, 

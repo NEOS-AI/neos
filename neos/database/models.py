@@ -73,7 +73,7 @@ class QueryHistory(Base):
     user_id = Column(String(255), ForeignKey("users.user_id"))
     original_query = Column(Text, nullable=False)
     processed_query = Column(Text)
-    query_vector = Column(Vector(1536))  # OpenAI embedding 차원
+    query_vector = Column(Vector(3072))  # Gemini Embedding 2 차원
     query_intent = Column(String(100))
     search_results = Column(JSONB)
     response_quality_score = Column(Float, default=0.0)
@@ -106,7 +106,7 @@ class TrendingQuery(Base):
     
     id = Column(Integer, primary_key=True)
     query_text = Column(Text, nullable=False)
-    query_vector = Column(Vector(1536))
+    query_vector = Column(Vector(3072))
     search_count = Column(Integer, default=1)
     last_searched = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     time_period = Column(String(20))  # 'hourly', 'daily', 'weekly'
@@ -209,7 +209,7 @@ class DocumentChunk(Base):
     end_offset = Column(Integer)
 
     # 임베딩
-    embedding = Column(Vector(1536))  # OpenAI embedding
+    embedding = Column(Vector(3072))  # Gemini Embedding 2
 
     # Parent-child 청킹
     parent_chunk_id = Column(Integer, ForeignKey("document_chunks.id"), nullable=True)
@@ -246,7 +246,7 @@ class KnowledgeGraph(Base):
     entity_description = Column(Text)
 
     # 임베딩
-    entity_embedding = Column(Vector(1536))
+    entity_embedding = Column(Vector(3072))
 
     # 관계 정보 (JSON 배열로 저장)
     relations = Column(JSONB, default=list)  # [{"target_entity_id": "...", "relation_type": "...", "confidence": 0.9}]
@@ -466,7 +466,7 @@ class QueryCacheEntry(Base):
     # 쿼리 정보
     query_text = Column(Text, nullable=False)
     query_hash = Column(String(64), nullable=False, index=True)  # SHA-256 해시
-    query_vector = Column(Vector(1536))  # OpenAI embedding 차원
+    query_vector = Column(Vector(3072))  # Gemini Embedding 2 차원
 
     # 분류 정보 (동적 TTL 계산에 사용)
     query_intent = Column(String(50), nullable=False, index=True)  # 쿼리 의도
@@ -645,7 +645,7 @@ class ToolRegistry(Base):
     is_active = Column(Boolean, default=True)
 
     # 검색 인덱스
-    embedding = Column(Vector(1536))                    # 도구 설명 임베딩 (pgvector)
+    embedding = Column(Vector(3072))                    # 도구 설명 임베딩 (pgvector)
     # search_vector는 DB에서 GENERATED ALWAYS AS ... STORED로 자동 생성 (읽기 전용)
 
     # 메타데이터

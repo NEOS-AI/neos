@@ -86,12 +86,12 @@ class LongTermMemory(MemoryStore):
             rows = await self.db.fetch_all(
                 """
                 SELECT key, content, metadata,
-                       1 - (embedding <=> :param1::vector) as similarity,
+                       1 - (embedding::halfvec(3072) <=> :param1::halfvec(3072)) as similarity,
                        created_at
                 FROM long_term_memories
                 WHERE user_id = :param2
                   AND embedding IS NOT NULL
-                ORDER BY embedding <=> :param3::vector
+                ORDER BY embedding::halfvec(3072) <=> :param3::halfvec(3072)
                 LIMIT :param4
                 """,
                 embedding_str, user_id, embedding_str, limit

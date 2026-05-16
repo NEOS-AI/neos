@@ -138,10 +138,10 @@ class EvidenceGraphService:
                     SELECT
                         claim_id, claim_text, claim_type, confidence,
                         verification_status, session_id,
-                        1 - (embedding <=> $1::vector) AS similarity
+                        1 - (embedding::halfvec(3072) <=> $1::halfvec(3072)) AS similarity
                     FROM evidence_claims
                     WHERE user_id = $2
-                      AND 1 - (embedding <=> $1::vector) > $3
+                      AND 1 - (embedding::halfvec(3072) <=> $1::halfvec(3072)) > $3
                     ORDER BY similarity DESC
                     LIMIT $4
                 """, embedding, user_id, similarity_threshold, limit)

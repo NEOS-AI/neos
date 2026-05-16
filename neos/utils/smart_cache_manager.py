@@ -550,7 +550,7 @@ class SmartCacheManager:
             where_conditions.append("created_at >= :min_created")
             params["min_created"] = min_created
 
-        where_conditions.append("1 - (query_vector <=> CAST(:query_vector AS vector)) >= :threshold")
+        where_conditions.append("1 - (query_vector::halfvec(3072) <=> :query_vector::halfvec(3072)) >= :threshold")
 
         where_clause = " AND ".join(where_conditions)
 
@@ -564,10 +564,10 @@ class SmartCacheManager:
                 complexity_score,
                 expires_at,
                 hit_count,
-                1 - (query_vector <=> CAST(:query_vector AS vector)) as similarity
+                1 - (query_vector::halfvec(3072) <=> :query_vector::halfvec(3072)) as similarity
             FROM query_cache
             WHERE {where_clause}
-            ORDER BY query_vector <=> CAST(:query_vector AS vector)
+            ORDER BY query_vector::halfvec(3072) <=> :query_vector::halfvec(3072)
             LIMIT 1
         """)
 

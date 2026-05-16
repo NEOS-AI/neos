@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS query_cache (
     -- 쿼리 정보
     query_text TEXT NOT NULL,
     query_hash VARCHAR(64) NOT NULL,
-    query_vector vector(1536),  -- OpenAI embedding 차원
+    query_vector vector(3072),  -- Gemini Embedding 2 차원
 
     -- 분류 정보 (동적 TTL 계산에 사용)
     query_intent VARCHAR(50) NOT NULL,
@@ -54,13 +54,10 @@ CREATE INDEX IF NOT EXISTS idx_query_cache_hash ON query_cache(query_hash);
 CREATE INDEX IF NOT EXISTS idx_query_cache_user_id ON query_cache(user_id);
 CREATE INDEX IF NOT EXISTS idx_query_cache_created_at ON query_cache(created_at);
 
--- pgvector IVFFlat 인덱스 (빠른 유사도 검색을 위해)
--- 참고: IVFFlat은 데이터가 충분할 때 (1000개 이상) 효율적
--- lists 파라미터는 sqrt(n)을 권장 (n = 예상 행 수)
+-- halfvec 캐스팅 HNSW (pgvector 0.7.0+): vector(3072) 저장, halfvec(3072) 인덱싱
 CREATE INDEX IF NOT EXISTS idx_query_cache_vector
-    ON query_cache
-    USING ivfflat (query_vector vector_cosine_ops)
-    WITH (lists = 100);
+  ON query_cache USING hnsw ((query_vector::halfvec(3072)) halfvec_cosine_ops)
+  WITH (m=16, ef_construction=64);
 
 -- ============================================================================
 -- 2. cache_statistics 테이블 - 캐시 통계
@@ -111,7 +108,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_cache_stats_unique
 
 -- 유사 쿼리 검색 함수
 CREATE OR REPLACE FUNCTION find_similar_cached_queries(
-    p_query_vector vector(1536),
+    p_query_vector vector(3072),
     p_similarity_threshold FLOAT DEFAULT 0.85,
     p_intent VARCHAR DEFAULT NULL,
     p_user_id VARCHAR DEFAULT NULL,
@@ -133,15 +130,15 @@ BEGIN
         qc.query_text,
         qc.query_intent,
         qc.response_data,
-        (1 - (qc.query_vector <=> p_query_vector))::FLOAT as similarity_score,
+        (1 - (qc.query_vector::halfvec(3072) <=> p_query_vector::halfvec(3072)))::FLOAT as similarity_score,
         qc.expires_at,
         qc.hit_count
     FROM query_cache qc
     WHERE qc.expires_at > NOW()
         AND (p_intent IS NULL OR qc.query_intent = p_intent)
         AND (p_user_id IS NULL OR qc.user_id = p_user_id OR qc.user_id IS NULL)
-        AND (1 - (qc.query_vector <=> p_query_vector)) >= p_similarity_threshold
-    ORDER BY qc.query_vector <=> p_query_vector
+        AND (1 - (qc.query_vector::halfvec(3072) <=> p_query_vector::halfvec(3072))) >= p_similarity_threshold
+    ORDER BY qc.query_vector::halfvec(3072) <=> p_query_vector::halfvec(3072)
     LIMIT p_limit_results;
 END;
 $$ LANGUAGE plpgsql;
@@ -239,7 +236,7 @@ $$ LANGUAGE plpgsql;
 COMMENT ON TABLE query_cache IS '스마트 캐시 엔트리 - pgvector 기반 의미론적 캐싱과 동적 TTL 지원';
 COMMENT ON TABLE cache_statistics IS '캐시 성능 통계 - 시간대별 히트율 및 성능 지표 추적';
 
-COMMENT ON COLUMN query_cache.query_vector IS 'OpenAI text-embedding-3-small (1536 차원) 임베딩 벡터';
+COMMENT ON COLUMN query_cache.query_vector IS 'Gemini Embedding 2 Flash (3072 차원) 임베딩 벡터';
 COMMENT ON COLUMN query_cache.ttl_seconds IS '쿼리 의도, 복잡도, 품질에 따라 동적으로 계산된 TTL';
 COMMENT ON COLUMN query_cache.expires_at IS 'created_at + ttl_seconds로 계산된 만료 시간';
 
