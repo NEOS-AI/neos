@@ -157,4 +157,7 @@ psql -U postgres -d neos -h localhost -f db/migrations/026_add_pending_approvals
 
 # Add gemini embedding dimension support
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/027_gemini_embedding_dimension.sql
+
+# Add support for agent control slider
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/030_add_autonomy_preferences.sql
 ```
