@@ -134,3 +134,35 @@ export type Attachment = {
   url: string;
   contentType: string;
 };
+
+export type AutonomyLevel = 0 | 1 | 2;
+
+export type AutonomyIcon = "lock" | "sparkles" | "cpu";
+
+export interface AutonomyConfig {
+  level: AutonomyLevel;
+  label: string;
+  description: string;
+  icon: AutonomyIcon;
+}
+
+export const AUTONOMY_CONFIGS: AutonomyConfig[] = [
+  {
+    level: 0,
+    label: "Manual",
+    description: "Ask before agent actions",
+    icon: "lock",
+  },
+  {
+    level: 1,
+    label: "Assisted",
+    description: "Ask for sensitive actions",
+    icon: "sparkles",
+  },
+  {
+    level: 2,
+    label: "Autonomous",
+    description: "Run agent actions without prompts",
+    icon: "cpu",
+  },
+];

@@ -174,6 +174,9 @@ class AgentState(TypedDict):
     # 상세 성능 메트릭 (새로운 구조화된 메트릭 시스템)
     performance_metrics: Optional[PerformanceMetrics]
 
+    # Agent Autonomy Control: 0=manual, 1=assisted, 2=autonomous.
+    autonomy_level: Optional[int]
+
 
 class WorkflowConfig:
     """워크플로우 설정

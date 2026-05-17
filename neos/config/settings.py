@@ -304,6 +304,17 @@ class Settings(BaseSettings):
     CORS_ALLOWED_ORIGINS: Union[str, List[str]] = ["http://localhost:3000"]
     CORS_ALLOW_CREDENTIALS: bool = True
 
+    @field_validator('DEBUG', mode='before')
+    @classmethod
+    def parse_debug_mode(cls, v):
+        if isinstance(v, str):
+            normalized = v.strip().lower()
+            if normalized in ("release", "prod", "production", "false", "0", "no", "off"):
+                return False
+            if normalized in ("debug", "dev", "development", "true", "1", "yes", "on"):
+                return True
+        return v
+
     @field_validator('CORS_ALLOWED_ORIGINS', mode='before')
     @classmethod
     def parse_cors_origins(cls, v):
@@ -688,6 +699,12 @@ class Settings(BaseSettings):
         if s.strip()
     ]
     APPROVAL_TIMEOUT_SECONDS: int = int(env_vars.get("APPROVAL_TIMEOUT_SECONDS", "60"))
+
+    # =========================================================================
+    # Agent Autonomy Control
+    # Per-request autonomy_level fallback: 0=manual, 1=assisted, 2=autonomous.
+    # =========================================================================
+    DEFAULT_AUTONOMY_LEVEL: int = int(env_vars.get("DEFAULT_AUTONOMY_LEVEL", "1"))
 
     # =========================================================================
     # Channel Adapter 설정 (Phase 1 — OpenClaw Multi-Channel Adapter Layer)

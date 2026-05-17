@@ -5,7 +5,6 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from neos.workflow.graph import multi_agent_workflow
 from neos.database.connection import db_manager
 from neos.database.models import User, QueryHistory
 from neos.database.repositories.query_repository import QueryRepository
@@ -117,7 +116,8 @@ class QueryService:
         user_id: str,
         session_id: str,
         query: str,
-        bypass_cache: bool = False
+        bypass_cache: bool = False,
+        preferences: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """워크플로우 실행"""
         # 캐시 키 생성
@@ -128,15 +128,16 @@ class QueryService:
         if cached_response and not bypass_cache:
             return cached_response
 
-        # 워크플로우 실행
-        workflow_input = {
-            "user_id": user_id,
-            "session_id": session_id,
-            "query": query
-        }
+        from neos.api.services.workflow_service import WorkflowService
 
         start_time = datetime.now()
-        result = await multi_agent_workflow.execute_workflow(workflow_input)
+        result = await WorkflowService.execute(
+            user_id=user_id,
+            session_id=session_id,
+            query=query,
+            preferences=preferences,
+            use_checkpointer=True,
+        )
         end_time = datetime.now()
 
         execution_time = int((end_time - start_time).total_seconds() * 1000)

@@ -33,6 +33,7 @@ from .processors import (
 from .utils import QueryClassifier
 from .checkpointer import get_checkpointer
 from .events import WorkflowEventHandler, NullEventHandler
+from .routing import OrchestratorRouter, QualityRouter
 from .telemetry import trace_workflow_node, add_span_event, set_span_attributes
 
 
@@ -148,6 +149,8 @@ class MultiAgentWorkflow:
         self.graph = None
         self._graph_initialized = False
         self._graph_uses_checkpointer = False
+        self._orchestrator_router = OrchestratorRouter()
+        self._quality_router = QualityRouter()
 
 
     def _initialize_agents(self) -> Dict[str, Any]:
@@ -558,7 +561,8 @@ class MultiAgentWorkflow:
                     for agent in [
                         "knowledge_search", "realtime_info_search", "multi_query_search",
                     ]
-                )
+                ),
+                "autonomy_level": state.get("autonomy_level"),
             }
 
             # Call skill/tool selector
@@ -584,9 +588,14 @@ class MultiAgentWorkflow:
             # approval 로직을 수행하면 approval_decision=None 상태로 EXECUTION_APPROVAL 노드가 즉시
             # 실행되어 "승인 처리 중 예기치 않은 상태" 오류 메시지로 워크플로우가 종료된다.
             if settings.EXECUTION_APPROVAL_ENABLED and self._graph_uses_checkpointer:
+                from neos.workflow.autonomy.middleware import get_policy_from_state
+
+                approval_required_skills = (
+                    get_policy_from_state(state).get_approval_required_skills()
+                )
                 approval_skills = [
                     s for s in selection.selected_skills
-                    if s in settings.APPROVAL_REQUIRED_SKILLS
+                    if s in approval_required_skills
                 ]
                 if approval_skills:
                     # DB allowlist 조회 — allowlist에 있으면 자동 승인
@@ -793,57 +802,7 @@ class MultiAgentWorkflow:
             WorkflowPathway.USE_ORCHESTRATORS.value: 기존 오케스트레이터 경로
             WorkflowPathway.SKIP_ORCHESTRATORS.value: 바로 응답 생성
         """
-        # 0-A순위: Phase 8 (A2UI) — needs_ui 플래그 최우선 체크 (flag 기반, _PRIORITY_ROUTING_MAP 이전)
-        if settings.A2UI_ENABLED:
-            if state.get("needs_ui") and not state.get("ui_submission"):
-                logger.info("[A2UI] needs_ui=True, no ui_submission → ui_frame_generator")
-                return "ui_frame"
-
-        # 0-B순위: 최우선 라우팅 (CR-P6-11: _PRIORITY_ROUTING_MAP 단일 지점 관리)
-        priority = _get_priority_routing(state)
-        if priority:
-            logger.info("[PriorityRouting] intent=%s → %s", state.get("query_intent"), priority)
-            return priority
-
-        # 0-C순위: Phase 2 (OpenClaw Execution Approval) — 승인 대기 중이면 즉시 라우팅
-        # pending_approvals가 있고 approval_decision이 None이면 interrupt_before 발동
-        if settings.EXECUTION_APPROVAL_ENABLED:
-            if state.get("pending_approvals") and state.get("approval_decision") is None:
-                logger.info("[ApprovalRouting] pending_approvals detected → needs_approval")
-                return "needs_approval"
-
-        classification = state.get("query_classification") or {}
-        complexity = classification.get("complexity_score", 0.0)
-        intent = state.get("query_intent", "")
-
-        # 1순위: HyperDeep — 더 강력한 에이전트이므로 먼저 체크
-        if settings.HYPER_DEEP_AGENT_ENABLED:
-            if intent == IntentType.HYPER_DEEP_RESEARCH.value:
-                logger.info("[HyperDeep] Routing to hyper_deep_orchestrator: intent=hyper_deep_research")
-                return "hyper_deep"
-
-            hyper_deep_intents = (IntentType.DEEP_RESEARCH.value, IntentType.COMPLEX_ANALYSIS.value)
-            if complexity >= settings.HYPER_DEEP_COMPLEXITY_THRESHOLD and intent in hyper_deep_intents:
-                logger.info(
-                    f"[HyperDeep] Routing to hyper_deep_orchestrator: "
-                    f"intent={intent}, complexity={complexity:.2f}"
-                )
-                return "hyper_deep"
-
-        # 2순위: ROMA 재귀 에이전트
-        if intent == IntentType.RECURSIVE_RESEARCH.value:
-            logger.info("[ROMA] Routing to recursive agent: intent=recursive_research")
-            return "recursive"
-
-        roma_intents = (IntentType.DEEP_RESEARCH.value, IntentType.COMPLEX_ANALYSIS.value)
-        if complexity >= settings.RECURSIVE_COMPLEXITY_THRESHOLD and intent in roma_intents:
-            logger.info(
-                f"[ROMA] Routing to recursive agent: intent={intent}, complexity={complexity:.2f}"
-            )
-            return "recursive"
-
-        # 기존 라우팅 로직에 위임
-        return self._should_skip_orchestrators(state)
+        return self._orchestrator_router.route(state)
 
     def _should_refine_query(self, state: AgentState) -> str:
         """
@@ -866,19 +825,7 @@ class MultiAgentWorkflow:
 
         is_continuation=True이면 research_continuation 노드로 라우팅.
         """
-        # 후속 연구 체크 (최우선)
-        if state.get("is_continuation"):
-            print("[DEBUG] Research continuation detected, routing to continuation node")
-            return "continue_research"
-
-        # 기존 refinement 로직
-        needs_refinement = state.get("needs_refinement", False)
-        if needs_refinement:
-            print(f"[DEBUG] Query refinement needed: {state.get('refinement_reasons', [])}")
-            return "refine_query"
-
-        print("[DEBUG] Normal flow, skipping refinement")
-        return "skip_refinement"
+        return self._quality_router.should_refine_or_continue(state)
 
     def _should_process_context(self, state: AgentState) -> str:
         """
@@ -889,38 +836,22 @@ class MultiAgentWorkflow:
         """
         # conversation_context_processor는 이미 실행됨
         # 내부에서 히스토리 여부를 확인하고 처리
-        return "process_context"
+        return self._quality_router.should_process_context(state)
 
     def _should_replan(self, state: AgentState) -> str:
         """Phase 2.4: replanning 필요 여부 결정
 
         조건: sub_topics 존재 + 검색 결과 < 10 + replan_count < 2
         """
-        classification = state.get("query_classification") or {}
-        sub_topics = classification.get("sub_topics", [])
-        search_results = state.get("search_results", [])
-        replan_count = state.get("replan_count", 0)
-
-        if sub_topics and len(search_results) < 10 and replan_count < 2:
-            logger.info(
-                f"[Replanner] Triggered (results={len(search_results)}, "
-                f"replan #{replan_count + 1})"
-            )
-            return "replan"
-
-        return "skip_replan"
+        return self._quality_router.should_replan(state)
 
     def _should_continue_research(self, state: AgentState) -> str:
         """Phase 2.4: replanning 후 추가 검색 필요 여부 결정"""
-        remaining = state.get("remaining_questions", [])
-        if remaining:
-            logger.info(f"[Replanner] {len(remaining)} gaps found, looping to search")
-            return "continue_search"
-        return "proceed"
+        return self._quality_router.should_continue_research(state)
 
     def _should_regenerate(self, state: AgentState) -> str:
         """재생성 여부 결정"""
-        return self.quality_validator.should_regenerate(state)
+        return self._quality_router.should_regenerate(state, self.quality_validator)
 
     def _should_skip_orchestrators(self, state: AgentState) -> str:
         """
@@ -935,82 +866,7 @@ class MultiAgentWorkflow:
             `skip_orchestrators`: response_generator로 직접 이동
             `use_orchestrators`: search_orchestrator로 이동하여 정상 파이프라인 실행
         """
-        required_agents = state.get("required_agents", [])
-        selected_tools = state.get("selected_tools", [])
-        query_intent = state.get("query_intent", "")
-        query_classification = state.get("query_classification", {})
-        complexity_score = query_classification.get("complexity_score", 0.0)
-
-        # 최우선 라우팅 (CR-P6-11: _PRIORITY_ROUTING_MAP 단일 지점 관리)
-        priority = _get_priority_routing(state)
-        if priority:
-            return priority
-
-        # 사용할 쿼리 결정 (refined_query가 있으면 그것을 사용)
-        query = state.get("refined_query", state.get("original_query", ""))
-
-        # ================================================================
-        # 1단계: 에이전트/도구가 있으면 무조건 orchestrator 사용
-        # ================================================================
-        if required_agents or selected_tools:
-            print(f"[DEBUG] Using orchestrators (agents: {len(required_agents)}, tools: {len(selected_tools)})")
-            return WorkflowPathway.USE_ORCHESTRATORS.value
-
-        # ================================================================
-        # 2단계: 에이전트/도구가 없어도 orchestrator가 필요한 경우
-        # ================================================================
-
-        # 2-1. 특정 의도는 항상 검색 필요
-        always_search_intents = [
-            IntentType.REALTIME_INFO.value,        # 실시간 정보는 항상 검색
-            IntentType.FINANCIAL_ANALYSIS.value,   # 금융 분석은 데이터 필요
-            IntentType.DATA_ANALYSIS.value,        # 데이터 분석은 외부 데이터 필요
-            IntentType.COMPARISON.value,           # 비교는 여러 소스 필요
-            IntentType.DEEP_RESEARCH.value,        # 심층 조사는 당연히 검색
-            IntentType.COMPLEX_ANALYSIS.value      # 복잡한 분석은 검색 필요
-        ]
-
-        if query_intent in always_search_intents:
-            print(f"[DEBUG] Intent '{query_intent}' requires orchestrators")
-            return WorkflowPathway.USE_ORCHESTRATORS.value
-
-        # 2-2. 복잡도가 높으면 항상 검색
-        if complexity_score >= 0.5:
-            print(f"[DEBUG] High complexity ({complexity_score:.2f}) requires orchestrators")
-            return WorkflowPathway.USE_ORCHESTRATORS.value
-
-        # 2-3. 질문 형태이면 검색 필요 (사실 확인이 필요한 경우)
-        if self._is_question_query(query):
-            print("[DEBUG] Question format detected, using orchestrators")
-            return WorkflowPathway.USE_ORCHESTRATORS.value
-
-        # 2-4. 특정 키워드가 있으면 검색 필요
-        if self._requires_search_keywords(query):
-            print("[DEBUG] Search keywords detected, using orchestrators")
-            return WorkflowPathway.USE_ORCHESTRATORS.value
-
-        # TODO: 추가 비즈니스 로직을 여기에 구현하세요
-        # 예시:
-        # - 대화 컨텍스트 기반 판단
-        #   if state.get("conversation_context"):
-        #       # 이전 대화가 복잡했다면 현재도 검색 필요할 수 있음
-        #
-        # - 사용자 프로필 기반 판단
-        #   user_preferences = state.get("user_preferences", {})
-        #   if user_preferences.get("always_search", False):
-        #       return WorkflowPathway.USE_ORCHESTRATORS.value
-        #
-        # - 시간대 기반 판단
-        #   from datetime import datetime
-        #   current_hour = datetime.now().hour
-        #   if 9 <= current_hour <= 18:  # 업무 시간에는 더 정확한 정보 제공
-        #       return WorkflowPathway.USE_ORCHESTRATORS.value
-
-        # ================================================================
-        # 3단계: 모든 조건을 통과하면 orchestrator 건너뛰기
-        # ================================================================
-        print("[DEBUG] No agents, tools, or special conditions - skipping orchestrators")
-        return WorkflowPathway.SKIP_ORCHESTRATORS.value
+        return self._orchestrator_router.base_route(state)
 
     def _is_question_query(self, query: str) -> bool:
         """
@@ -1022,23 +878,7 @@ class MultiAgentWorkflow:
         - "?" 포함 여부
         - 의문사 포함 여부 (어디, 언제, 누가, 무엇, 왜, 어떻게)
         """
-        if not query:
-            return False
-
-        # 물음표가 있으면 질문
-        if "?" in query or "？" in query:
-            return True
-
-        # 의문사가 있으면 질문
-        question_words_ko = ["어디", "언제", "누가", "누구", "무엇", "뭐", "왜", "어떻게", "어느"]
-        question_words_en = ["where", "when", "who", "what", "why", "how", "which"]
-
-        query_lower = query.lower()
-        for word in question_words_ko + question_words_en:
-            if word in query_lower:
-                return True
-
-        return False
+        return self._orchestrator_router.is_question_query(query)
 
     def _requires_search_keywords(self, query: str) -> bool:
         """
@@ -1051,40 +891,7 @@ class MultiAgentWorkflow:
         - 비교/분석 키워드
         - 수치/데이터 키워드
         """
-        if not query:
-            return False
-
-        # 실시간/최신 정보 키워드
-        realtime_keywords = [
-            "최신", "현재", "지금", "오늘", "실시간",
-            "current", "latest", "now", "today", "real-time"
-        ]
-
-        # 비교/분석 키워드
-        analysis_keywords = [
-            "비교", "분석", "대비", "차이", "검토", "평가",
-            "compare", "analysis", "versus", "vs", "difference", "review"
-        ]
-
-        # 수치/데이터 키워드
-        data_keywords = [
-            "얼마", "몇", "수치", "데이터", "통계", "가격", "주가", "환율",
-            "how much", "how many", "price", "rate", "statistics", "data"
-        ]
-
-        # TODO: 도메인 특화 키워드를 추가하세요
-        # 예시:
-        # domain_keywords = ["재무제표", "실적", "공시", "뉴스"]
-
-        query_lower = query.lower()
-
-        # 키워드 체크
-        all_keywords = realtime_keywords + analysis_keywords + data_keywords
-        for keyword in all_keywords:
-            if keyword in query_lower:
-                return True
-
-        return False
+        return self._orchestrator_router.requires_search_keywords(query)
 
 
     async def execute_workflow(
@@ -1518,6 +1325,12 @@ class MultiAgentWorkflow:
             channel_source=user_input.get("channel_source", "api"),
             channel_type=user_input.get("channel_type"),
             channel_id=user_input.get("channel_id"),
+            # Agent Autonomy Control
+            autonomy_level=(
+                user_input.get("autonomy_level")
+                if user_input.get("autonomy_level") is not None
+                else settings.DEFAULT_AUTONOMY_LEVEL
+            ),
         )
 
     def _create_workflow_result(self, final_state: AgentState) -> Dict[str, Any]:

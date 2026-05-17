@@ -36,7 +36,7 @@ from neos.api.models.query_models import (
     WorkflowStreamEventType
 )
 from neos.api.services.query_service import QueryService
-from neos.workflow.graph import multi_agent_workflow
+from neos.api.services.workflow_service import WorkflowService
 from neos.workflow.events import WorkflowEventHandler
 from neos.workflow.stream_manager import stream_manager
 from neos.config.settings import settings
@@ -407,7 +407,8 @@ async def execute_workflow_with_streaming(
     session_id: str,
     query: str,
     callback: WorkflowStreamCallback,
-    bypass_cache: bool = False
+    bypass_cache: bool = False,
+    autonomy_level: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     스트리밍 콜백과 함께 워크플로우 실행
@@ -416,19 +417,18 @@ async def execute_workflow_with_streaming(
     """
 
     try:
-        # 워크플로우 입력 생성
-        workflow_input = {
-            "user_id": user_id,
-            "session_id": session_id,
-            "query": query
-        }
-
         # Dependency Injection: WorkflowStreamCallback을 event_handler로 주입
         # 워크플로우 내부에서 발생하는 모든 이벤트가 자동으로 callback으로 전달됨
-        result = await multi_agent_workflow.execute_workflow(
-            workflow_input,
-            event_handler=callback,  # DI: 이벤트 핸들러 주입
-            bypass_cache=bypass_cache
+        result = await WorkflowService.execute(
+            user_id=user_id,
+            session_id=session_id,
+            query=query,
+            preferences={
+                "bypass_cache": bypass_cache,
+                "autonomy_level": autonomy_level,
+            },
+            event_handler=callback,
+            use_checkpointer=True,
         )
 
         return result
@@ -520,9 +520,10 @@ async def stream_query(body: WorkflowStreamRequest, request: Request):
             execute_workflow_with_streaming(
                 user_id=user_id,
                 session_id=session_id,
-                query=request.query,
+                query=body.query,
                 callback=callback,
-                bypass_cache=request.preferences.get("bypass_cache", False)
+                bypass_cache=request.preferences.get("bypass_cache", False),
+                autonomy_level=body.autonomy_level,
             )
         )
 
@@ -669,7 +670,8 @@ async def websocket_query_stream(websocket: WebSocket, session_id: str):
                             session_id=session_id,
                             query=query,
                             callback=callback,
-                            bypass_cache=preferences.get("bypass_cache", False)
+                            bypass_cache=preferences.get("bypass_cache", False),
+                            autonomy_level=preferences.get("autonomy_level"),
                         )
                     except Exception as e:
                         await callback.on_error(str(e))
@@ -822,7 +824,8 @@ async def websocket_detailed_query_stream(websocket: WebSocket, session_id: str)
                         user_id=user_id,
                         session_id=session_id,
                         query=query,
-                        bypass_cache=data.get("preferences", {}).get("bypass_cache", False)
+                        bypass_cache=data.get("preferences", {}).get("bypass_cache", False),
+                        preferences=data.get("preferences", {}),
                     )
 
                     # 완료

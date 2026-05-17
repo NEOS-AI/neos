@@ -101,7 +101,8 @@ export type StreamEvent =
   | ArtifactFinishEvent
   | WorkflowNodeStartEvent
   | WorkflowNodeCompleteEvent
-  | WorkflowProgressEvent;
+  | WorkflowProgressEvent
+  | UIFrameEvent;
 
 /**
  * @deprecated Use ResponseInProgressEvent instead
@@ -216,6 +217,19 @@ export interface WorkflowProgressEvent {
   progress_percent: number;
   message?: string;
   conversation_id: string;
+}
+
+/**
+ * @deprecated Use NeosUIFrameEvent instead
+ * A2UI UI frame event.
+ */
+export interface UIFrameEvent {
+  type: "ui_frame";
+  ui_frame?: Record<string, unknown>;
+  data?: {
+    ui_frame?: Record<string, unknown>;
+  };
+  conversation_id?: string;
 }
 
 // ============================================================================

@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatMessage } from "@/lib/types";
+import type { AutonomyLevel, ChatMessage } from "@/lib/types";
 import { messageMetadataSchema } from "@/lib/types";
 import type { OpenResponsesEvent, MessageItem } from "@/lib/stream-types";
 import {
@@ -49,6 +49,7 @@ export interface UseChatStreamOptions {
   initialMessages: ChatMessage[];
   selectedChatModel: ChatModel["id"];
   selectedVisibilityType: VisibilityType;
+  autonomyLevel?: AutonomyLevel;
   onFinish?: () => void;
   onError?: (error: Error) => void;
   onData?: (data: any) => void;
@@ -69,6 +70,7 @@ export function useChatStream({
   initialMessages,
   selectedChatModel,
   selectedVisibilityType,
+  autonomyLevel,
   onFinish,
   onError,
   onData,
@@ -495,6 +497,7 @@ export function useChatStream({
             message: chatMessage,
             selectedChatModel,
             selectedVisibilityType,
+            autonomy_level: autonomyLevel,
           }),
           signal: abortController.signal,
         });
@@ -521,7 +524,7 @@ export function useChatStream({
         abortControllerRef.current = null;
       }
     },
-    [id, selectedChatModel, selectedVisibilityType, processStream, onError]
+    [id, selectedChatModel, selectedVisibilityType, autonomyLevel, processStream, onError]
   );
 
   /**

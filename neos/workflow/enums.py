@@ -78,3 +78,11 @@ class ComplexityIndicator(Enum):
     DEPTH_REQ = "depth_required"
     COMPARISON_MULTI = "comparison_multiple"
     MULTI_ASPECT = "multi_aspect"
+
+
+class AutonomyLevel(int, Enum):
+    """Agent autonomy level for per-request workflow control."""
+
+    MANUAL = 0
+    ASSISTED = 1
+    AUTONOMOUS = 2

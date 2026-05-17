@@ -42,7 +42,11 @@ async def process_query(
             user_id=user_id,
             session_id=session_id,
             query=request.query,
-            bypass_cache=request.preferences.get("bypass_cache", False)
+            bypass_cache=request.preferences.get("bypass_cache", False),
+            preferences={
+                **(request.preferences or {}),
+                "autonomy_level": request.autonomy_level,
+            },
         )
 
         # 응답 객체 생성
@@ -158,7 +162,8 @@ async def websocket_endpoint(websocket, session_id: str):
                     workflow_input = {
                         "user_id": user_id,
                         "session_id": session_id,
-                        "query": query
+                        "query": query,
+                        "autonomy_level": data.get("autonomy_level"),
                     }
 
                     # 진행 상황 업데이트

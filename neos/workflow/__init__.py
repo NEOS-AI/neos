@@ -1,10 +1,10 @@
-from .graph import MultiAgentWorkflow, multi_agent_workflow
+"""Workflow package public exports.
+
+Heavy graph dependencies are loaded lazily so lightweight submodules such as
+`neos.workflow.enums` can be imported without initializing agents and tools.
+"""
+
 from .state import AgentState, WorkflowConfig
-
-from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationOrchestrator
-from .processors import ResultProcessor, QualityValidator, ResponseGenerator
-from .utils import QueryClassifier, ContentProcessor
-
 
 __all__ = [
     "MultiAgentWorkflow",
@@ -18,5 +18,47 @@ __all__ = [
     "QualityValidator",
     "ResponseGenerator",
     "QueryClassifier",
-    "ContentProcessor"
+    "ContentProcessor",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"MultiAgentWorkflow", "multi_agent_workflow"}:
+        from .graph import MultiAgentWorkflow, multi_agent_workflow
+
+        return {
+            "MultiAgentWorkflow": MultiAgentWorkflow,
+            "multi_agent_workflow": multi_agent_workflow,
+        }[name]
+
+    if name in {"SearchOrchestrator", "AnalysisOrchestrator", "GenerationOrchestrator"}:
+        from .orchestrators import (
+            AnalysisOrchestrator,
+            GenerationOrchestrator,
+            SearchOrchestrator,
+        )
+
+        return {
+            "SearchOrchestrator": SearchOrchestrator,
+            "AnalysisOrchestrator": AnalysisOrchestrator,
+            "GenerationOrchestrator": GenerationOrchestrator,
+        }[name]
+
+    if name in {"ResultProcessor", "QualityValidator", "ResponseGenerator"}:
+        from .processors import QualityValidator, ResponseGenerator, ResultProcessor
+
+        return {
+            "ResultProcessor": ResultProcessor,
+            "QualityValidator": QualityValidator,
+            "ResponseGenerator": ResponseGenerator,
+        }[name]
+
+    if name in {"QueryClassifier", "ContentProcessor"}:
+        from .utils import ContentProcessor, QueryClassifier
+
+        return {
+            "QueryClassifier": QueryClassifier,
+            "ContentProcessor": ContentProcessor,
+        }[name]
+
+    raise AttributeError(f"module 'neos.workflow' has no attribute {name!r}")

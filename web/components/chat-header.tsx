@@ -6,7 +6,9 @@ import { memo } from "react";
 import { useWindowSize } from "usehooks-ts";
 import { SidebarToggle } from "@/components/sidebar-toggle";
 import { Button } from "@/components/ui/button";
-import { PlusIcon, VercelIcon } from "./icons";
+import type { AutonomyLevel } from "@/lib/types";
+import { AgentAutonomySelector } from "./agent-autonomy-selector";
+import { PlusIcon } from "./icons";
 import { useSidebar } from "./ui/sidebar";
 import { VisibilitySelector, type VisibilityType } from "./visibility-selector";
 
@@ -14,10 +16,14 @@ function PureChatHeader({
   chatId,
   selectedVisibilityType,
   isReadonly,
+  autonomyLevel,
+  onAutonomyChange,
 }: {
   chatId: string;
   selectedVisibilityType: VisibilityType;
   isReadonly: boolean;
+  autonomyLevel?: AutonomyLevel;
+  onAutonomyChange?: (level: AutonomyLevel) => void;
 }) {
   const router = useRouter();
   const { open } = useSidebar();
@@ -43,11 +49,20 @@ function PureChatHeader({
       )}
 
       {!isReadonly && (
-        <VisibilitySelector
-          chatId={chatId}
-          className="order-1 md:order-2"
-          selectedVisibilityType={selectedVisibilityType}
-        />
+        <>
+          <VisibilitySelector
+            chatId={chatId}
+            className="order-1 md:order-2"
+            selectedVisibilityType={selectedVisibilityType}
+          />
+          {autonomyLevel !== undefined && onAutonomyChange && (
+            <AgentAutonomySelector
+              autonomyLevel={autonomyLevel}
+              className="order-1 md:order-3"
+              onAutonomyChange={onAutonomyChange}
+            />
+          )}
+        </>
       )}
     </header>
   );
@@ -57,6 +72,8 @@ export const ChatHeader = memo(PureChatHeader, (prevProps, nextProps) => {
   return (
     prevProps.chatId === nextProps.chatId &&
     prevProps.selectedVisibilityType === nextProps.selectedVisibilityType &&
-    prevProps.isReadonly === nextProps.isReadonly
+    prevProps.isReadonly === nextProps.isReadonly &&
+    prevProps.autonomyLevel === nextProps.autonomyLevel &&
+    prevProps.onAutonomyChange === nextProps.onAutonomyChange
   );
 });

@@ -122,6 +122,7 @@ class ChatStreamPipeline:
                     history_messages=history_messages,
                     stream_state=stream_state,
                     wf_ctx=wf_ctx,
+                    autonomy_level=request.metadata.get("autonomy_level"),
                 ):
                     yield event
 
@@ -246,6 +247,7 @@ class ChatStreamPipeline:
         history_messages: List[Dict],
         stream_state: StreamAdapterState,
         wf_ctx: _WorkflowCtx,
+        autonomy_level: Optional[int] = None,
     ) -> AsyncGenerator[str, None]:
         """워크플로우를 실행하고 SSE 이벤트를 yield한다. 결과는 wf_ctx에 저장한다."""
         try:
@@ -279,6 +281,7 @@ class ChatStreamPipeline:
                         "query": user_content,
                         "chat_history": formatted_history,
                         "enable_history_context": True,
+                        "autonomy_level": autonomy_level,
                     },
                     event_handler=workflow_callback,
                     use_checkpointer=False,

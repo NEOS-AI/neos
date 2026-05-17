@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useArtifactSelector } from "@/hooks/use-artifact";
 import { useAutoResume } from "@/hooks/use-auto-resume";
+import { useAgentAutonomy } from "@/hooks/use-agent-autonomy";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
@@ -72,6 +73,7 @@ export function Chat({
   const [showCreditCardAlert, setShowCreditCardAlert] = useState(false);
   const [currentModelId, setCurrentModelId] = useState(initialChatModel);
   const currentModelIdRef = useRef(currentModelId);
+  const { autonomyLevel, setAutonomyLevel } = useAgentAutonomy();
 
   useEffect(() => {
     currentModelIdRef.current = currentModelId;
@@ -90,6 +92,7 @@ export function Chat({
     initialMessages,
     selectedChatModel: currentModelIdRef.current,
     selectedVisibilityType: visibilityType,
+    autonomyLevel,
     onData: (dataPart) => {
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));
     },
@@ -155,7 +158,9 @@ export function Chat({
       <div className="overscroll-behavior-contain flex h-dvh min-w-0 touch-pan-y flex-col bg-background">
         <ChatHeader
           chatId={id}
+          autonomyLevel={autonomyLevel}
           isReadonly={isReadonly}
+          onAutonomyChange={setAutonomyLevel}
           selectedVisibilityType={initialVisibilityType}
         />
 
