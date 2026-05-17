@@ -3,6 +3,7 @@ import type { UseChatHelpers } from "@ai-sdk/react";
 import equal from "fast-deep-equal";
 import { memo, useState } from "react";
 import type { Vote } from "@/lib/db/schema";
+import type { ApprovalRequest } from "@/lib/open-responses-types";
 import type { ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
 import { ArtifactBlock } from "./artifact-block";
@@ -22,11 +23,12 @@ import {
   ToolInput,
   ToolOutput,
 } from "./elements/tool";
-import { SparklesIcon } from "./icons";
+import { CheckCircleFillIcon, SparklesIcon, StopIcon } from "./icons";
 import { MessageActions } from "./message-actions";
 import { MessageEditor } from "./message-editor";
 import { MessageReasoning } from "./message-reasoning";
 import { PreviewAttachment } from "./preview-attachment";
+import { Button } from "./ui/button";
 import { Weather } from "./weather";
 
 const PurePreviewMessage = ({
@@ -49,12 +51,145 @@ const PurePreviewMessage = ({
   requiresScrollPadding: boolean;
 }) => {
   const [mode, setMode] = useState<"view" | "edit">("view");
+  const [approvalStatuses, setApprovalStatuses] = useState<Record<string, string>>({});
 
   const attachmentsFromMessage = message.parts.filter(
     (part) => part.type === "file"
   );
 
   useDataStream();
+
+  const updateApprovalMessage = ({
+    text,
+    responseStatus,
+    clearApprovals = false,
+  }: {
+    text?: string;
+    responseStatus?: "completed" | "failed" | "incomplete";
+    clearApprovals?: boolean;
+  }) => {
+    setMessages((prev) =>
+      prev.map((item) => {
+        if (item.id !== message.id) return item;
+
+        let textApplied = text === undefined;
+        const parts = item.parts.map((part: any) => {
+          if (!textApplied && part.type === "text") {
+            textApplied = true;
+            return { ...part, text };
+          }
+          return part;
+        });
+        if (!textApplied && text !== undefined) {
+          parts.push({ type: "text", text } as any);
+        }
+
+        return {
+          ...item,
+          parts,
+          metadata: {
+            createdAt: item.metadata?.createdAt ?? new Date().toISOString(),
+            ...item.metadata,
+            ...(responseStatus ? { responseStatus } : {}),
+            ...(clearApprovals ? { approval_requests: [] } : {}),
+          },
+        };
+      })
+    );
+  };
+
+  const readApprovalResumeStream = async (sessionId: string) => {
+    const response = await fetch(
+      `/api/approval/stream/${encodeURIComponent(sessionId)}`
+    );
+    if (!response.ok) {
+      throw new Error("Failed to resume approval stream");
+    }
+    if (!response.body) return;
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let eventName = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (line.startsWith("event: ")) {
+          eventName = line.slice("event: ".length).trim();
+          continue;
+        }
+        if (!line.startsWith("data: ")) continue;
+
+        const payloadText = line.slice("data: ".length).trim();
+        const payload = JSON.parse(payloadText);
+        if (eventName === "completed") {
+          const responseText =
+            payload.response || payload.data?.response || "";
+          updateApprovalMessage({
+            text: responseText,
+            responseStatus: "completed",
+            clearApprovals: true,
+          });
+          return;
+        }
+        if (eventName === "error") {
+          throw new Error(payload.message || "Approval resume failed");
+        }
+      }
+    }
+  };
+
+  const respondToApproval = async (
+    approval: ApprovalRequest,
+    decision: "approved" | "rejected"
+  ) => {
+    const sessionId = message.metadata?.approval_session_id ?? chatId;
+    setApprovalStatuses((prev) => ({
+      ...prev,
+      [approval.request_id]: "submitting",
+    }));
+
+    try {
+      const response = await fetch("/api/approval/respond", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          request_id: approval.request_id,
+          decision,
+          skill_name: approval.skill_name,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error("Approval response failed");
+      }
+
+      setApprovalStatuses((prev) => ({
+        ...prev,
+        [approval.request_id]: decision,
+      }));
+      await readApprovalResumeStream(sessionId);
+      setApprovalStatuses((prev) => ({
+        ...prev,
+        [approval.request_id]: "completed",
+      }));
+    } catch (error) {
+      setApprovalStatuses((prev) => ({
+        ...prev,
+        [approval.request_id]: "error",
+      }));
+      updateApprovalMessage({
+        responseStatus: "failed",
+      });
+    }
+  };
 
   return (
     <div
@@ -130,6 +265,59 @@ const PurePreviewMessage = ({
                       ✓ {agent.agent_name} completed
                     </div>
                   )}
+                </ToolContent>
+              </Tool>
+            ))}
+
+          {message.role === "assistant" &&
+            message.metadata?.approval_requests &&
+            message.metadata.approval_requests.map((approval, index) => (
+              <Tool
+                defaultOpen={true}
+                key={`approval-${message.id}-${approval.request_id}-${index}`}
+              >
+                <ToolHeader
+                  state={"approval-requested" as any}
+                  title={`Approval required: ${approval.skill_name}`}
+                  type={`workflow-${approval.skill_name}` as any}
+                />
+                <ToolContent>
+                  <div className="space-y-2 p-4 text-sm">
+                    <div className="text-muted-foreground">
+                      This workflow is paused until the requested action is approved.
+                    </div>
+                    {approval.params && (
+                      <pre className="overflow-x-auto rounded-md bg-muted/50 p-3 text-xs">
+                        {JSON.stringify(approval.params, null, 2)}
+                      </pre>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        disabled={approvalStatuses[approval.request_id] === "submitting"}
+                        onClick={() => respondToApproval(approval, "approved")}
+                        size="sm"
+                        type="button"
+                      >
+                        <CheckCircleFillIcon size={14} />
+                        Approve
+                      </Button>
+                      <Button
+                        disabled={approvalStatuses[approval.request_id] === "submitting"}
+                        onClick={() => respondToApproval(approval, "rejected")}
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
+                        <StopIcon size={14} />
+                        Reject
+                      </Button>
+                      {approvalStatuses[approval.request_id] === "error" && (
+                        <span className="self-center text-destructive text-xs">
+                          Approval response failed
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </ToolContent>
               </Tool>
             ))}

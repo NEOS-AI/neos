@@ -27,6 +27,7 @@ from neos.api.adapters.stream_adapter import (
 from neos.api.models.open_responses import (
     ErrorInfo,
     ItemStatus,
+    NeosApprovalRequestEvent,
     NeosUIFrameEvent,
     NeosWorkflowProgressEvent,
     OutputItemDoneEvent,
@@ -48,6 +49,7 @@ class _WorkflowCtx:
 
     result: Optional[Dict[str, Any]] = None
     agents: List[Dict[str, Any]] = field(default_factory=list)
+    approval_requests: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class ChatStreamPipeline:
@@ -125,6 +127,24 @@ class ChatStreamPipeline:
                     autonomy_level=request.metadata.get("autonomy_level"),
                 ):
                     yield event
+                if wf_ctx.result and wf_ctx.result.get("interrupted"):
+                    await self._ChatService.add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content="",
+                        message_id=assistant_message_id,
+                        model_name=conversation.get("model_name"),
+                        total_tokens=0,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        metadata={
+                            "responseStatus": "incomplete",
+                            "approval_requests": wf_ctx.approval_requests,
+                            "approval_session_id": conversation_id,
+                        },
+                    )
+                    yield format_done_token()
+                    return
 
             # ── Step 5: 시스템 프롬프트 + 도구 목록 구성 ─────────────
             system_prompt, tools = (
@@ -284,7 +304,7 @@ class ChatStreamPipeline:
                         "autonomy_level": autonomy_level,
                     },
                     event_handler=workflow_callback,
-                    use_checkpointer=False,
+                    use_checkpointer=True,
                 )
             )
 
@@ -325,6 +345,16 @@ class ChatStreamPipeline:
                         yield format_sse_event(NeosUIFrameEvent(
                             ui_frame=event.data.get("ui_frame", {})
                         ))
+
+                    elif event.event == "approval_request":
+                        pending_approvals = event.data.get("pending_approvals", [])
+                        wf_ctx.approval_requests = pending_approvals
+                        yield format_sse_event(NeosApprovalRequestEvent(
+                            session_id=conversation_id,
+                            pending_approvals=pending_approvals,
+                        ))
+                        wf_ctx.result = await workflow_task
+                        break
 
                     elif event.event == "completed":
                         wf_ctx.result = await workflow_task

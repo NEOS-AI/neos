@@ -6,7 +6,7 @@ export async function GET() {
     const data = await callBackendAPIWithJSON("/api/v1/autonomy/preference");
     return NextResponse.json(data);
   } catch {
-    return NextResponse.json({ autonomy_level: 1 });
+    return NextResponse.json({ autonomy_level: null, source: "fallback" });
   }
 }
 

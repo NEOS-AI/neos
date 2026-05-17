@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import Iterable, List
 
 from neos.config.settings import settings
 from neos.workflow.enums import AutonomyLevel
 
-_MANUAL_EXTRA_SKILLS: List[str] = [
-    "knowledge_search",
-    "realtime_info_search",
-    "realtime_data_search",
-    "multi_query_search",
-    "web_lookup",
-    "youtube_search",
-    "deep_research",
-]
+
+def _dedupe(items: Iterable[str]) -> List[str]:
+    seen: set[str] = set()
+    result: List[str] = []
+    for item in items:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
 
 
 class AutonomyPolicy:
@@ -36,11 +37,46 @@ class AutonomyPolicy:
         if self._level == AutonomyLevel.ASSISTED:
             return configured
 
-        extra = [skill for skill in _MANUAL_EXTRA_SKILLS if skill not in configured]
+        from neos.workflow.state import WorkflowConfig
+
+        manual_skills = (
+            WorkflowConfig.SEARCH_AGENTS
+            + WorkflowConfig.ANALYSIS_AGENTS
+            + WorkflowConfig.GENERATION_AGENTS
+        )
+        extra = [skill for skill in manual_skills if skill not in configured]
         return configured + extra
 
     def requires_approval(self, skill_name: str) -> bool:
         return skill_name in self.get_approval_required_skills()
+
+    def get_approval_required_actions(
+        self,
+        *,
+        required_agents: Iterable[str] | None = None,
+        selected_skills: Iterable[str] | None = None,
+        selected_tools: Iterable[str] | None = None,
+    ) -> List[str]:
+        """Return planned workflow actions that require approval."""
+        if self._level == AutonomyLevel.AUTONOMOUS:
+            return []
+
+        planned_actions = _dedupe(
+            [
+                *(required_agents or []),
+                *(selected_skills or []),
+                *(selected_tools or []),
+            ]
+        )
+        if self._level == AutonomyLevel.MANUAL:
+            return planned_actions
+
+        approval_required = set(self.get_approval_required_skills())
+        return [
+            action
+            for action in planned_actions
+            if action in approval_required
+        ]
 
     def allows_recursive_research(self) -> bool:
         return self._level != AutonomyLevel.MANUAL

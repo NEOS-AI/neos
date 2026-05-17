@@ -14,7 +14,7 @@ from neos.utils.smart_cache_manager import smart_cache_manager
 from neos.config.settings import settings
 from neos.tools.tool_selector import tool_selector
 
-from .enums import WorkflowNode, WorkflowPathway, IntentType
+from .enums import WorkflowNode, WorkflowPathway, IntentType, AutonomyLevel
 from .state import AgentState, WorkflowConfig
 from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationOrchestrator
 from .processors import (
@@ -43,6 +43,16 @@ logger = logging.getLogger(__name__)
 _PRIORITY_ROUTING_MAP: dict[str, str] = {
     IntentType.TASK_SCHEDULING.value: "task_scheduling",
 }
+
+
+def _resolve_autonomy_level(raw_level: Any) -> int:
+    if raw_level is None:
+        raw_level = settings.DEFAULT_AUTONOMY_LEVEL
+
+    try:
+        return AutonomyLevel(int(raw_level)).value
+    except (TypeError, ValueError):
+        return AutonomyLevel.ASSISTED.value
 
 
 def _get_priority_routing(state: AgentState) -> str | None:
@@ -147,6 +157,7 @@ class MultiAgentWorkflow:
 
         # 워크플로우 그래프 생성 (비동기로 초기화)
         self.graph = None
+        self._graphs_by_checkpointer: dict[bool, Any] = {}
         self._graph_initialized = False
         self._graph_uses_checkpointer = False
         self._orchestrator_router = OrchestratorRouter()
@@ -421,10 +432,14 @@ class MultiAgentWorkflow:
         Args:
             use_checkpointer: Whether to use checkpointer for state persistence
         """
-        if not self._graph_initialized:
-            self.graph = await self._create_workflow_graph(use_checkpointer=use_checkpointer)
-            self._graph_initialized = True
-            self._graph_uses_checkpointer = use_checkpointer
+        if use_checkpointer not in self._graphs_by_checkpointer:
+            self._graphs_by_checkpointer[use_checkpointer] = (
+                await self._create_workflow_graph(use_checkpointer=use_checkpointer)
+            )
+
+        self.graph = self._graphs_by_checkpointer[use_checkpointer]
+        self._graph_initialized = True
+        self._graph_uses_checkpointer = use_checkpointer
 
 
     async def _check_refinement_node(self, state: AgentState) -> Dict[str, Any]:
@@ -591,12 +606,13 @@ class MultiAgentWorkflow:
                 from neos.workflow.autonomy.middleware import get_policy_from_state
 
                 approval_required_skills = (
-                    get_policy_from_state(state).get_approval_required_skills()
+                    get_policy_from_state(state).get_approval_required_actions(
+                        required_agents=state.get("required_agents", []),
+                        selected_skills=selection.selected_skills,
+                        selected_tools=selection.selected_tools,
+                    )
                 )
-                approval_skills = [
-                    s for s in selection.selected_skills
-                    if s in approval_required_skills
-                ]
+                approval_skills = approval_required_skills
                 if approval_skills:
                     # DB allowlist 조회 — allowlist에 있으면 자동 승인
                     is_allowlisted = await self._check_approval_allowlist(user_id, approval_skills)
@@ -939,11 +955,25 @@ class MultiAgentWorkflow:
 
             # Tracing: 워크플로우 시작 이벤트 기록
             add_span_event(span, "workflow_started", {"query_preview": query[:100]})
+            autonomy_level = _resolve_autonomy_level(user_input.get("autonomy_level"))
+            bypass_cache = bool(user_input.get("bypass_cache", False))
+            cache_key = self._generate_cache_key(
+                query,
+                user_id,
+                autonomy_level=autonomy_level,
+            )
 
             # 1. 스마트 캐시 확인 (활성화된 경우)
-            if settings.SMART_CACHE_ENABLED:
+            if bypass_cache:
+                add_span_event(span, "cache_bypassed")
+                set_span_attributes(span, {"cache.bypassed": True})
+            elif settings.SMART_CACHE_ENABLED:
                 add_span_event(span, "checking_smart_cache")
-                smart_cache_result = await self._check_smart_cache(query, user_id)
+                smart_cache_result = await self._check_smart_cache(
+                    query,
+                    user_id,
+                    autonomy_level=autonomy_level,
+                )
                 if smart_cache_result:
                     # 캐시 히트 시에도 완료 이벤트 발행
                     add_span_event(span, "smart_cache_hit")
@@ -953,15 +983,15 @@ class MultiAgentWorkflow:
                 add_span_event(span, "smart_cache_miss")
 
             # 2. 기존 Redis 캐시 확인 (폴백)
-            add_span_event(span, "checking_redis_cache")
-            cache_key = self._generate_cache_key(query, user_id)
-            cached_response = await self._check_cached_response(cache_key)
-            if cached_response:
-                add_span_event(span, "redis_cache_hit")
-                set_span_attributes(span, {"cache.hit": True, "cache.type": "redis"})
-                await event_handler.on_workflow_complete(cached_response)
-                return cached_response
-            add_span_event(span, "redis_cache_miss")
+            if not bypass_cache:
+                add_span_event(span, "checking_redis_cache")
+                cached_response = await self._check_cached_response(cache_key)
+                if cached_response:
+                    add_span_event(span, "redis_cache_hit")
+                    set_span_attributes(span, {"cache.hit": True, "cache.type": "redis"})
+                    await event_handler.on_workflow_complete(cached_response)
+                    return cached_response
+                add_span_event(span, "redis_cache_miss")
             set_span_attributes(span, {"cache.hit": False})
 
             # 초기 상태 생성 (event_handler를 상태에 포함)
@@ -1124,7 +1154,16 @@ class MultiAgentWorkflow:
                             f"[ExecuteWorkflow] GraphInterrupt: approval_request sent "
                             f"for session={session_id}, pending={len(pending)}"
                         )
-                        return {"success": True, "interrupted": True, "response": None}
+                        return {
+                            "success": True,
+                            "interrupted": True,
+                            "response": None,
+                            "pending_approvals": pending,
+                            "execution_time_ms": int(
+                                (datetime.now() - initial_state["execution_start"]).total_seconds() * 1000
+                            ),
+                            "errors": [],
+                        }
                 except ImportError:
                     pass  # langgraph.errors 미설치 시 일반 에러로 처리
 
@@ -1147,7 +1186,8 @@ class MultiAgentWorkflow:
     async def _check_smart_cache(
         self,
         query: str,
-        user_id: str = None
+        user_id: str = None,
+        autonomy_level: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         스마트 캐시에서 유사 쿼리 검색
@@ -1159,7 +1199,10 @@ class MultiAgentWorkflow:
 
             cache_result = await smart_cache_manager.get_cached_response(
                 query=query,
-                user_id=user_id
+                user_id=user_id,
+                metadata_filter={
+                    "autonomy_level": _resolve_autonomy_level(autonomy_level)
+                },
             )
 
             if cache_result.hit:
@@ -1232,7 +1275,10 @@ class MultiAgentWorkflow:
                 metadata={
                     "required_agents": final_state.get("required_agents", []),
                     "execution_steps": final_state.get("execution_steps", []),
-                    "detected_language": final_state.get("detected_language")
+                    "detected_language": final_state.get("detected_language"),
+                    "autonomy_level": _resolve_autonomy_level(
+                        final_state.get("autonomy_level")
+                    ),
                 }
             )
 
@@ -1248,7 +1294,12 @@ class MultiAgentWorkflow:
             print(f"[WARNING] Smart cache save failed: {e}")
 
 
-    def _generate_cache_key(self, query: str, user_id: Optional[str] = None) -> str:
+    def _generate_cache_key(
+        self,
+        query: str,
+        user_id: Optional[str] = None,
+        autonomy_level: Optional[int] = None,
+    ) -> str:
         """
         캐시 키 생성
 
@@ -1260,12 +1311,13 @@ class MultiAgentWorkflow:
             생성된 캐시 키
         """
         query_normalized = query.strip().lower()
+        cache_scope = f"<AUTONOMY>{_resolve_autonomy_level(autonomy_level)}</AUTONOMY>"
 
         # 사용자별 캐시 분리 옵션 (개인화된 응답이 필요한 경우)
         if user_id and settings.USER_SPECIFIC_CACHE:
-            cache_input = f"<USER_ID>{user_id}</USER_ID>{query_normalized}"
+            cache_input = f"<USER_ID>{user_id}</USER_ID>{cache_scope}{query_normalized}"
         else:
-            cache_input = query_normalized
+            cache_input = f"{cache_scope}{query_normalized}"
 
         query_hash = hashlib.md5(cache_input.encode('utf-8')).hexdigest()
         return cache_manager.make_key("workflow_response", query_hash)
@@ -1327,9 +1379,7 @@ class MultiAgentWorkflow:
             channel_id=user_input.get("channel_id"),
             # Agent Autonomy Control
             autonomy_level=(
-                user_input.get("autonomy_level")
-                if user_input.get("autonomy_level") is not None
-                else settings.DEFAULT_AUTONOMY_LEVEL
+                _resolve_autonomy_level(user_input.get("autonomy_level"))
             ),
         )
 

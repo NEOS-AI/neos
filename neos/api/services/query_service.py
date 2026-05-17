@@ -16,6 +16,16 @@ class QueryService:
     """Service layer for query processing"""
 
     @staticmethod
+    def _generate_cache_key(user_id: str, query: str, autonomy_level: int) -> str:
+        query_normalized = query.strip().lower()
+        return cache_manager.make_key(
+            "query_cache",
+            user_id,
+            query_normalized,
+            f"autonomy:{autonomy_level}",
+        )
+
+    @staticmethod
     async def get_or_create_user(user_id: str) -> User:
         """사용자 조회 또는 생성"""
         async with await db_manager.get_session() as session:
@@ -120,23 +130,33 @@ class QueryService:
         preferences: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """워크플로우 실행"""
+        from neos.api.services.workflow_service import WorkflowService
+
+        autonomy_level = WorkflowService.resolve_autonomy_level(preferences)
+
         # 캐시 키 생성
-        cache_key = cache_manager.make_key("query_cache", user_id, query)
+        cache_key = QueryService._generate_cache_key(
+            user_id=user_id,
+            query=query,
+            autonomy_level=autonomy_level,
+        )
 
         # 캐시에서 확인
         cached_response = await cache_manager.get(cache_key)
         if cached_response and not bypass_cache:
             return cached_response
 
-        from neos.api.services.workflow_service import WorkflowService
-
         start_time = datetime.now()
         result = await WorkflowService.execute(
             user_id=user_id,
             session_id=session_id,
             query=query,
-            preferences=preferences,
+            preferences={
+                **(preferences or {}),
+                "autonomy_level": autonomy_level,
+            },
             use_checkpointer=True,
+            bypass_cache=bypass_cache,
         )
         end_time = datetime.now()
 
@@ -144,6 +164,20 @@ class QueryService:
 
         if not result["success"]:
             raise Exception(result.get("error", "Unknown error"))
+
+        if result.get("interrupted"):
+            return {
+                "success": True,
+                "interrupted": True,
+                "response": None,
+                "session_id": session_id,
+                "metadata": result.get("metadata", {}),
+                "execution_time_ms": result.get("execution_time_ms", execution_time),
+                "quality_score": result.get("quality_score", 0.0),
+                "errors": result.get("errors", []),
+                "pending_approvals": result.get("pending_approvals", []),
+                "channel_source": result.get("channel_source", "api"),
+            }
 
         response_data = {
             "success": True,

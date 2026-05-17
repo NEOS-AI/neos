@@ -22,6 +22,7 @@ import {
   isNeosArtifactDeltaEvent,
   isNeosArtifactFinishEvent,
   isNeosWorkflowProgressEvent,
+  isNeosApprovalRequestEvent,
   isNeosUIFrameEvent,
   isNeosInlineVizEvent,
   isNeosInlineVizErrorEvent,
@@ -380,6 +381,27 @@ export function useChatStream({
                       data: {
                         progress: eventData.progress_percent,
                         message: eventData.message,
+                      },
+                    });
+                  }
+                }
+
+                // neos:approval_request - workflow paused for user approval
+                else if (isNeosApprovalRequestEvent(eventData)) {
+                  assistantMessage.metadata = {
+                    createdAt: assistantMessage.metadata?.createdAt || new Date().toISOString(),
+                    ...assistantMessage.metadata,
+                    responseStatus: "incomplete",
+                    approval_requests: eventData.pending_approvals,
+                    approval_session_id: eventData.session_id,
+                  };
+                  updateMessage();
+                  if (onData) {
+                    onData({
+                      type: "approval-request",
+                      data: {
+                        sessionId: eventData.session_id,
+                        pendingApprovals: eventData.pending_approvals,
                       },
                     });
                   }

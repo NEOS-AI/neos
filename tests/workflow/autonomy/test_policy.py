@@ -36,6 +36,9 @@ def test_manual_includes_search_skills_without_duplicates():
     assert result.count("knowledge_search") == 1
     assert "api_call" in result
     assert "realtime_info_search" in result
+    assert "data_analysis" in result
+    assert "comparative_analysis" in result
+    assert "image_generation" in result
 
 
 def test_manual_disables_recursive_research_and_replanning():

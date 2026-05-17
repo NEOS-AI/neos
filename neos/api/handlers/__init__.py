@@ -1,9 +1,17 @@
-"""API handlers package - thin layer for FastAPI routes"""
+"""API handlers package - thin layer for FastAPI routes.
 
-from neos.api.handlers.query_handlers import router as query_router
-from neos.api.handlers.document_handlers import router as document_router
-from neos.api.handlers.multimodal_handlers import router as multimodal_router
-from neos.api.handlers.analytics_handlers import router as analytics_router
+Routers are loaded lazily so importing one handler module does not import
+unrelated optional dependencies.
+"""
+
+from importlib import import_module
+
+_ROUTER_EXPORTS = {
+    "query_router": "neos.api.handlers.query_handlers",
+    "document_router": "neos.api.handlers.document_handlers",
+    "multimodal_router": "neos.api.handlers.multimodal_handlers",
+    "analytics_router": "neos.api.handlers.analytics_handlers",
+}
 
 __all__ = [
     "query_router",
@@ -11,3 +19,13 @@ __all__ = [
     "multimodal_router",
     "analytics_router",
 ]
+
+
+def __getattr__(name: str):
+    if name not in _ROUTER_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module = import_module(_ROUTER_EXPORTS[name])
+    router = module.router
+    globals()[name] = router
+    return router

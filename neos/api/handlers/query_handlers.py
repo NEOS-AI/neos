@@ -1,6 +1,7 @@
 """Query API handlers - thin layer for FastAPI routes"""
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi.responses import JSONResponse
 from typing import List, Optional
 import uuid
 
@@ -37,17 +38,21 @@ async def process_query(
         # 사용자 생성/조회
         await QueryService.get_or_create_user(user_id)
 
+        preferences = dict(request.preferences or {})
+        if request.autonomy_level is not None:
+            preferences["autonomy_level"] = request.autonomy_level
+
         # 워크플로우 실행
         result = await QueryService.process_query_workflow(
             user_id=user_id,
             session_id=session_id,
             query=request.query,
-            bypass_cache=request.preferences.get("bypass_cache", False),
-            preferences={
-                **(request.preferences or {}),
-                "autonomy_level": request.autonomy_level,
-            },
+            bypass_cache=preferences.get("bypass_cache", False),
+            preferences=preferences,
         )
+
+        if result.get("interrupted"):
+            return JSONResponse(status_code=202, content=result)
 
         # 응답 객체 생성
         response = QueryResponse(**result)

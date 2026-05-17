@@ -10,6 +10,15 @@ dotenv.load_dotenv()
 env_vars = os.environ
 
 
+def _parse_default_autonomy_level(raw_value: str) -> int:
+    try:
+        level = int(raw_value)
+    except (TypeError, ValueError):
+        return 1
+
+    return level if level in (0, 1, 2) else 1
+
+
 class Settings(BaseSettings):
     # 데이터베이스 설정
     DATABASE_URL: str = env_vars.get("DATABASE_URL", "postgresql+asyncpg://postgres:password@localhost/neos")
@@ -704,7 +713,9 @@ class Settings(BaseSettings):
     # Agent Autonomy Control
     # Per-request autonomy_level fallback: 0=manual, 1=assisted, 2=autonomous.
     # =========================================================================
-    DEFAULT_AUTONOMY_LEVEL: int = int(env_vars.get("DEFAULT_AUTONOMY_LEVEL", "1"))
+    DEFAULT_AUTONOMY_LEVEL: int = _parse_default_autonomy_level(
+        env_vars.get("DEFAULT_AUTONOMY_LEVEL", "1")
+    )
 
     # =========================================================================
     # Channel Adapter 설정 (Phase 1 — OpenClaw Multi-Channel Adapter Layer)

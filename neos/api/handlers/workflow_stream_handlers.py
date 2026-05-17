@@ -429,6 +429,7 @@ async def execute_workflow_with_streaming(
             },
             event_handler=callback,
             use_checkpointer=True,
+            bypass_cache=bypass_cache,
         )
 
         return result
@@ -474,6 +475,12 @@ async def stream_query(body: WorkflowStreamRequest, request: Request):
     session_id = body.session_id or str(uuid.uuid4())
     user_id = body.user_id or f"anonymous_{uuid.uuid4().hex[:8]}"
     stream_options = body.stream_options or {}
+    preferences = body.preferences or {}
+    autonomy_level = (
+        body.autonomy_level
+        if body.autonomy_level is not None
+        else preferences.get("autonomy_level")
+    )
 
     # Last-Event-ID 헤더 확인 (재연결 지원)
     last_event_id = request.headers.get("Last-Event-ID")
@@ -515,19 +522,21 @@ async def stream_query(body: WorkflowStreamRequest, request: Request):
 
             heartbeat_task = asyncio.create_task(send_heartbeat())
 
-        # 워크플로우 실행 태스크
-        workflow_task = asyncio.create_task(
-            execute_workflow_with_streaming(
-                user_id=user_id,
-                session_id=session_id,
-                query=body.query,
-                callback=callback,
-                bypass_cache=request.preferences.get("bypass_cache", False),
-                autonomy_level=body.autonomy_level,
-            )
-        )
+        workflow_task = None
 
         try:
+            # 워크플로우 실행 태스크
+            workflow_task = asyncio.create_task(
+                execute_workflow_with_streaming(
+                    user_id=user_id,
+                    session_id=session_id,
+                    query=body.query,
+                    callback=callback,
+                    bypass_cache=preferences.get("bypass_cache", False),
+                    autonomy_level=autonomy_level,
+                )
+            )
+
             completed = False
             while not completed:
                 try:
@@ -559,6 +568,13 @@ async def stream_query(body: WorkflowStreamRequest, request: Request):
             yield f"data: {json.dumps(error_event.dict(), ensure_ascii=False)}\n\n"
 
         finally:
+            if workflow_task and not workflow_task.done():
+                workflow_task.cancel()
+                try:
+                    await workflow_task
+                except asyncio.CancelledError:
+                    pass
+
             if heartbeat_task:
                 heartbeat_task.cancel()
                 try:

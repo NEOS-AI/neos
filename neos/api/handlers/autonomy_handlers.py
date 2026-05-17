@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from neos.api.dependencies.auth import get_current_user
-from neos.config.settings import settings
+from neos.api.services.workflow_service import WorkflowService
 from neos.database.connection import db_manager
 from neos.database.models import User
 
@@ -34,9 +34,7 @@ async def get_autonomy_preference(
     current_user: User = Depends(get_current_user),
 ) -> AutonomyPreferenceResponse:
     prefs = current_user.preferences or {}
-    level = int(prefs.get("autonomy_level", settings.DEFAULT_AUTONOMY_LEVEL))
-    if level not in (0, 1, 2):
-        level = settings.DEFAULT_AUTONOMY_LEVEL
+    level = WorkflowService.resolve_autonomy_level(prefs)
 
     return AutonomyPreferenceResponse(
         user_id=current_user.user_id,

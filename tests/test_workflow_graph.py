@@ -11,14 +11,61 @@ CORE ENGINE CRITICAL - Tests cover:
 - Enterprise features (distributed state, PostgreSQL checkpointer)
 """
 
+import os
+import sys
+import types
+from contextlib import contextmanager
+
+os.environ["DEBUG"] = "false"
+os.environ.setdefault("GOOGLE_API_KEY", "test-key")
+
+youtube_module = types.ModuleType("youtube_transcript_api")
+youtube_module.YouTubeTranscriptApi = object
+youtube_errors_module = types.ModuleType("youtube_transcript_api._errors")
+youtube_errors_module.TranscriptsDisabled = Exception
+youtube_errors_module.NoTranscriptFound = Exception
+youtube_errors_module.VideoUnavailable = Exception
+sys.modules.setdefault("youtube_transcript_api", youtube_module)
+sys.modules.setdefault("youtube_transcript_api._errors", youtube_errors_module)
+
+googleapi_module = types.ModuleType("googleapiclient")
+googleapi_discovery_module = types.ModuleType("googleapiclient.discovery")
+googleapi_discovery_module.build = lambda *args, **kwargs: object()
+googleapi_errors_module = types.ModuleType("googleapiclient.errors")
+googleapi_errors_module.HttpError = Exception
+sys.modules.setdefault("googleapiclient", googleapi_module)
+sys.modules.setdefault("googleapiclient.discovery", googleapi_discovery_module)
+sys.modules.setdefault("googleapiclient.errors", googleapi_errors_module)
+
+isodate_module = types.ModuleType("isodate")
+isodate_module.parse_duration = lambda value: value
+sys.modules.setdefault("isodate", isodate_module)
+
+
+@contextmanager
+def _noop_trace(*args, **kwargs):
+    yield object()
+
+
+telemetry_module = types.ModuleType("neos.workflow.telemetry")
+telemetry_module.trace_workflow_node = _noop_trace
+telemetry_module.add_span_event = lambda *args, **kwargs: None
+telemetry_module.set_span_attributes = lambda *args, **kwargs: None
+sys.modules.setdefault("neos.workflow.telemetry", telemetry_module)
+
 import pytest
 from datetime import datetime, timedelta
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from typing import Dict, Any
 import hashlib
 
+from neos.agents.skill_based_tool_selector import SkillToolSelection
 from neos.workflow.graph import MultiAgentWorkflow, multi_agent_workflow
 from neos.workflow.state import AgentState, WorkflowConfig
+import neos.workflow.graph as workflow_graph_module
+
+if not hasattr(workflow_graph_module, "KnowledgeSearchAgent"):
+    workflow_graph_module.KnowledgeSearchAgent = object
 
 
 @pytest.mark.unit
@@ -143,6 +190,29 @@ class TestWorkflowGraphCreation:
                 # Should be the same graph instance
                 assert first_graph is second_graph
 
+    @pytest.mark.asyncio
+    async def test_ensure_graph_initializes_checkpointer_modes_separately(self, workflow, monkeypatch):
+        """Stateless and checkpointer graphs must not share one global cache."""
+        created_modes = []
+
+        async def fake_create_workflow_graph(use_checkpointer=True):
+            created_modes.append(use_checkpointer)
+            return object()
+
+        monkeypatch.setattr(
+            workflow,
+            "_create_workflow_graph",
+            fake_create_workflow_graph,
+        )
+
+        await workflow._ensure_graph_initialized(use_checkpointer=False)
+        stateless_graph = workflow.graph
+        await workflow._ensure_graph_initialized(use_checkpointer=True)
+
+        assert created_modes == [False, True]
+        assert workflow.graph is not stateless_graph
+        assert workflow._graph_uses_checkpointer is True
+
 
 @pytest.mark.unit
 class TestWorkflowExecution:
@@ -264,15 +334,156 @@ class TestCacheManagement:
         with patch("neos.workflow.graph.cache_manager") as mock_cache_manager:
             mock_cache_manager.make_key = lambda prefix, key: f"{prefix}:{key}"
 
-            key1 = workflow._generate_cache_key(query1)
-            key2 = workflow._generate_cache_key(query2)
-            key3 = workflow._generate_cache_key(query3)
-            key4 = workflow._generate_cache_key(query4)
+            key1 = workflow._generate_cache_key(query1, autonomy_level=1)
+            key2 = workflow._generate_cache_key(query2, autonomy_level=1)
+            key3 = workflow._generate_cache_key(query3, autonomy_level=1)
+            key4 = workflow._generate_cache_key(query4, autonomy_level=1)
+            manual_key = workflow._generate_cache_key(query1, autonomy_level=0)
+            autonomous_key = workflow._generate_cache_key(query1, autonomy_level=2)
 
             # Same queries should generate same keys
             assert key1 == key2 == key3
             # Different queries should generate different keys
             assert key1 != key4
+            # Same query under different approval policies must not share cache
+            assert key1 != manual_key
+            assert key1 != autonomous_key
+
+    @pytest.mark.asyncio
+    async def test_smart_cache_lookup_is_scoped_by_autonomy_level(self, workflow):
+        """Smart cache lookup filters by autonomy level metadata."""
+        with patch("neos.workflow.graph.smart_cache_manager") as mock_cache:
+            mock_cache.get_cached_response = AsyncMock()
+            mock_cache.get_cached_response.return_value.hit = False
+            mock_cache.get_cached_response.return_value.search_time_ms = 1
+
+            result = await workflow._check_smart_cache(
+                "What is the weather today?",
+                user_id="user_123",
+                autonomy_level=0,
+            )
+
+            assert result is None
+            mock_cache.get_cached_response.assert_awaited_once_with(
+                query="What is the weather today?",
+                user_id="user_123",
+                metadata_filter={"autonomy_level": 0},
+            )
+
+    @pytest.mark.asyncio
+    async def test_smart_cache_save_stores_autonomy_level_metadata(self, workflow):
+        """Smart cache entries include autonomy level metadata."""
+        final_state = {
+            "query_embedding": [0.1, 0.2],
+            "query_classification": {"complexity_score": 0.5},
+            "query_intent": "information_seeking",
+            "required_agents": ["knowledge_search"],
+            "execution_steps": ["skill_tool_selector"],
+            "detected_language": "en",
+            "autonomy_level": 2,
+        }
+
+        with patch("neos.workflow.graph.smart_cache_manager") as mock_cache:
+            mock_cache.set_cached_response = AsyncMock(return_value=True)
+
+            await workflow._save_to_smart_cache(
+                query="What is the weather today?",
+                result={"success": True, "response": "ok", "quality_score": 0.8},
+                final_state=final_state,
+                user_id="user_123",
+                session_id="session_456",
+            )
+
+            metadata = mock_cache.set_cached_response.await_args.kwargs["metadata"]
+            assert metadata["autonomy_level"] == 2
+
+    @pytest.mark.asyncio
+    async def test_manual_approval_uses_required_agents_even_without_selected_skills(self, workflow, monkeypatch):
+        """Manual autonomy gates workflow agents selected by query classification."""
+        workflow._graph_uses_checkpointer = True
+        workflow.skill_tool_selector.select_skills_and_tools = AsyncMock(
+            return_value=SkillToolSelection(
+                selected_skills=[],
+                selected_tools=[],
+                reasoning="required agent came from classifier",
+                priority_order=[],
+            )
+        )
+        workflow._check_approval_allowlist = AsyncMock(return_value=False)
+        monkeypatch.setattr(
+            workflow_graph_module,
+            "_register_pending_approvals_db",
+            AsyncMock(),
+        )
+
+        state = {
+            "original_query": "latest AI news",
+            "session_id": "session_123",
+            "user_id": "user_123",
+            "detected_language": "en",
+            "query_intent": "realtime_info",
+            "query_classification": {"query_type": "general", "complexity": "medium"},
+            "required_agents": ["realtime_info_search"],
+            "autonomy_level": 0,
+        }
+
+        with patch("neos.workflow.graph.settings") as mock_settings:
+            mock_settings.EXECUTION_APPROVAL_ENABLED = True
+            mock_settings.APPROVAL_REQUIRED_SKILLS = []
+            mock_settings.APPROVAL_TIMEOUT_SECONDS = 300
+
+            result = await workflow._select_skills_tools_node(state)
+
+        assert result["pending_approvals"][0]["skill_name"] == "realtime_info_search"
+
+    @pytest.mark.asyncio
+    async def test_execute_workflow_bypass_cache_skips_cache_reads(self, workflow, monkeypatch):
+        """bypass_cache=True forces a fresh workflow execution."""
+        final_state = {
+            "final_response": "fresh response",
+            "response_metadata": {},
+            "execution_time_ms": 10,
+            "quality_score": 0.9,
+            "errors": [],
+            "execution_steps": ["response_generator"],
+            "retry_count": 0,
+            "execution_start": datetime.now(),
+            "channel_source": "api",
+        }
+
+        class FakeGraph:
+            async def astream(self, initial_state, config):
+                yield {"response_generator": final_state}
+
+        smart_cache = AsyncMock(return_value={"success": True, "response": "smart cached"})
+        redis_cache = AsyncMock(return_value={"success": True, "response": "redis cached"})
+        monkeypatch.setattr(workflow_graph_module.settings, "SMART_CACHE_ENABLED", True)
+        monkeypatch.setattr(workflow, "_ensure_graph_initialized", AsyncMock())
+        monkeypatch.setattr(workflow, "_check_smart_cache", smart_cache)
+        monkeypatch.setattr(workflow, "_check_cached_response", redis_cache)
+        monkeypatch.setattr(workflow, "_load_memory_context", AsyncMock())
+        monkeypatch.setattr(workflow, "_apply_research_template", AsyncMock())
+        monkeypatch.setattr(workflow, "_record_session_start", AsyncMock())
+        monkeypatch.setattr(workflow, "_save_to_smart_cache", AsyncMock())
+        monkeypatch.setattr(workflow, "_cache_workflow_result", AsyncMock())
+        monkeypatch.setattr(workflow, "_auto_save_dataset", AsyncMock())
+        monkeypatch.setattr(workflow, "_save_episode_memory", AsyncMock())
+        monkeypatch.setattr(workflow, "_record_session_complete", AsyncMock())
+        workflow.graph = FakeGraph()
+
+        result = await workflow.execute_workflow(
+            {
+                "query": "What is the weather today?",
+                "user_id": "user_123",
+                "session_id": "session_123",
+                "bypass_cache": True,
+            },
+            use_checkpointer=False,
+        )
+
+        assert result["response"] == "fresh response"
+        smart_cache.assert_not_awaited()
+        redis_cache.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_check_cached_response_hit(self, workflow):
