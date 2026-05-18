@@ -8,7 +8,7 @@ dependencies = [
     "aioredis>=2.0.1",
     "anthropic==0.102.0",
     "arize-phoenix>=5.5.0",
-    "asyncpg>=0.30.0",
+    "asyncpg>=0.31.0",
     "crewai>=0.175.0",
     "fastapi>=0.118.0",
     "greenlet>=3.2.4",
