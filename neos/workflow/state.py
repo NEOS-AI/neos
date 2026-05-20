@@ -177,6 +177,18 @@ class AgentState(TypedDict):
     # Agent Autonomy Control: 0=manual, 1=assisted, 2=autonomous.
     autonomy_level: Optional[int]
 
+    # Mission Runtime
+    use_mission_runtime: Optional[bool]
+    mission_id: Optional[str]
+    mission: Optional[Dict[str, Any]]
+    mission_plan: Optional[Dict[str, Any]]
+    validation_contract: Optional[Dict[str, Any]]
+    mission_status: Optional[str]
+    mission_events: Optional[List[Dict[str, Any]]]
+    mission_task_results: Optional[List[Dict[str, Any]]]
+    validator_runs: Optional[List[Dict[str, Any]]]
+    validation_summary: Optional[Dict[str, Any]]
+
 
 class WorkflowConfig:
     """워크플로우 설정

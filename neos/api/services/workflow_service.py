@@ -55,6 +55,7 @@ class WorkflowService:
             "query": query,
             "autonomy_level": autonomy_level,
             "bypass_cache": effective_bypass_cache,
+            "preferences": preferences or {},
         }
 
         logger.info(

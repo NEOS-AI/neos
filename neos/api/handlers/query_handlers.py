@@ -169,6 +169,7 @@ async def websocket_endpoint(websocket, session_id: str):
                         "session_id": session_id,
                         "query": query,
                         "autonomy_level": data.get("autonomy_level"),
+                        "preferences": data.get("preferences", {}),
                     }
 
                     # 진행 상황 업데이트

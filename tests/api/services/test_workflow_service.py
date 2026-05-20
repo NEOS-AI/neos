@@ -59,3 +59,37 @@ async def test_execute_passes_bypass_cache_to_workflow(monkeypatch):
     )
 
     assert captured["bypass_cache"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_passes_mission_preferences_to_workflow(monkeypatch):
+    captured = {}
+
+    async def fake_execute_workflow(user_input, **kwargs):
+        captured.update(user_input)
+        return {"success": True, "response": "ok"}
+
+    fake_graph_module = types.SimpleNamespace(
+        multi_agent_workflow=types.SimpleNamespace(
+            execute_workflow=fake_execute_workflow,
+        )
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "neos.workflow.graph",
+        fake_graph_module,
+    )
+
+    await WorkflowService.execute(
+        user_id="user_123",
+        session_id="session_123",
+        query="hello",
+        preferences={
+            "autonomy_level": 1,
+            "use_mission_runtime": True,
+            "mission_detail_level": "standard",
+        },
+    )
+
+    assert captured["preferences"]["use_mission_runtime"] is True
+    assert captured["preferences"]["mission_detail_level"] == "standard"

@@ -55,6 +55,37 @@ def _resolve_autonomy_level(raw_level: Any) -> int:
         return AutonomyLevel.ASSISTED.value
 
 
+def _coerce_quality_score(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _should_bypass_cache_for_mission(
+    user_input: Dict[str, Any],
+    autonomy_level: int,
+) -> bool:
+    from neos.workflow.mission.routing import has_mission_request_hint
+
+    preferences = user_input.get("preferences") or {}
+    if preferences.get("use_mission_runtime"):
+        return True
+    if has_mission_request_hint(user_input):
+        return True
+    return autonomy_level == AutonomyLevel.MANUAL.value
+
+
+def _mission_validation_passed(result: Dict[str, Any]) -> bool:
+    metadata = result.get("metadata") or {}
+    if not metadata.get("mission_id"):
+        return True
+    validation_summary = metadata.get("validation_summary") or {}
+    return validation_summary.get("passed") is True
+
+
 def _get_priority_routing(state: AgentState) -> str | None:
     """최우선 라우팅 경로 반환. 해당 없으면 None."""
     return _PRIORITY_ROUTING_MAP.get(state.get("query_intent", ""))
@@ -87,6 +118,25 @@ class MultiAgentWorkflow:
         self.fact_check_processor = FactCheckProcessor()
         self.quality_validator = QualityValidator(self.config)
         self.response_generator = ResponseGenerator()
+
+        from .mission.executor import MissionExecutor
+        from .mission.integrator import MissionIntegrator
+        from .mission.planner import MissionPlanner
+        from .mission.validators import MissionValidator
+
+        self.mission_planner = MissionPlanner()
+        self.mission_executor = MissionExecutor(
+            search_orchestrator=self.search_orchestrator,
+            analysis_orchestrator=self.analysis_orchestrator,
+            generation_orchestrator=self.generation_orchestrator,
+            recursive_orchestrator=lambda: self.recursive_orchestrator,
+            hyper_deep_orchestrator=lambda: self.hyper_deep_orchestrator,
+        )
+        self.mission_validator = MissionValidator(
+            fact_check_processor=self.fact_check_processor,
+            quality_validator=self.quality_validator,
+        )
+        self.mission_integrator = MissionIntegrator()
 
         # Phase 2 processors
         self.research_continuation_processor = ResearchContinuationProcessor()
@@ -243,6 +293,11 @@ class MultiAgentWorkflow:
         workflow.add_node(WorkflowNode.FACT_CHECK.value, self._fact_check_node)
         workflow.add_node(WorkflowNode.QUALITY_VALIDATOR.value, self._validate_quality_node)
         workflow.add_node(WorkflowNode.SELF_REFLECTION.value, self._self_reflection_node)  # Phase 2.6
+        workflow.add_node(WorkflowNode.MISSION_PLANNER.value, self._mission_planner_node)
+        workflow.add_node(WorkflowNode.MISSION_APPROVAL.value, self._mission_approval_node)
+        workflow.add_node(WorkflowNode.MISSION_EXECUTOR.value, self._mission_executor_node)
+        workflow.add_node(WorkflowNode.MISSION_VALIDATOR.value, self._mission_validator_node)
+        workflow.add_node(WorkflowNode.MISSION_INTEGRATOR.value, self._mission_integrator_node)
         workflow.add_node(WorkflowNode.RESP_GENERATOR.value, self._generate_response_node)
 
         # ROMA: Recursive Orchestrator 노드 (피처 플래그로 격리)
@@ -303,6 +358,7 @@ class MultiAgentWorkflow:
             _routing_map = {
                 WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
                 WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
+                "mission": WorkflowNode.MISSION_PLANNER.value,
             }
             if settings.RECURSIVE_AGENT_ENABLED:
                 _routing_map["recursive"] = WorkflowNode.RECURSIVE_ORCHESTRATOR.value
@@ -319,7 +375,7 @@ class MultiAgentWorkflow:
 
             workflow.add_conditional_edges(
                 WorkflowNode.SKILL_TOOL_SELECTOR.value,
-                self._should_use_recursive_agent,
+                self._route_after_skill_tool_selector,
                 _routing_map,
             )
             if settings.RECURSIVE_AGENT_ENABLED:
@@ -338,13 +394,14 @@ class MultiAgentWorkflow:
             _else_routing = {
                 WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
                 WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
+                "mission": WorkflowNode.MISSION_PLANNER.value,
                 "task_scheduling": WorkflowNode.TASK_SCHEDULING_NODE.value,
             }
             if settings.A2UI_ENABLED:
                 _else_routing["ui_frame"] = WorkflowNode.UI_FRAME_GENERATOR.value
             workflow.add_conditional_edges(
                 WorkflowNode.SKILL_TOOL_SELECTOR.value,
-                self._should_skip_orchestrators,
+                self._route_after_skill_tool_selector,
                 _else_routing,
             )
             if settings.A2UI_ENABLED:
@@ -353,6 +410,28 @@ class MultiAgentWorkflow:
 
         # Phase 4 (OpenClaw Cron): TASK_SCHEDULING_NODE → 바로 응답 생성
         workflow.add_edge(WorkflowNode.TASK_SCHEDULING_NODE.value, WorkflowNode.RESP_GENERATOR.value)
+
+        # Mission Runtime: plan -> optional approval -> serial executor -> validators -> response
+        workflow.add_conditional_edges(
+            WorkflowNode.MISSION_PLANNER.value,
+            self._should_continue_after_mission_planner,
+            {
+                "approval_unavailable": WorkflowNode.RESP_GENERATOR.value,
+                "needs_approval": WorkflowNode.MISSION_APPROVAL.value,
+                "execute": WorkflowNode.MISSION_EXECUTOR.value,
+            },
+        )
+        workflow.add_conditional_edges(
+            WorkflowNode.MISSION_APPROVAL.value,
+            self._should_continue_after_approval,
+            {
+                "approved": WorkflowNode.MISSION_EXECUTOR.value,
+                "rejected": WorkflowNode.RESP_GENERATOR.value,
+            },
+        )
+        workflow.add_edge(WorkflowNode.MISSION_EXECUTOR.value, WorkflowNode.MISSION_VALIDATOR.value)
+        workflow.add_edge(WorkflowNode.MISSION_VALIDATOR.value, WorkflowNode.MISSION_INTEGRATOR.value)
+        workflow.add_edge(WorkflowNode.MISSION_INTEGRATOR.value, WorkflowNode.RESP_GENERATOR.value)
 
         # Phase 2 (OpenClaw Execution Approval): EXECUTION_APPROVAL → 분기
         # approved → 오케스트레이터 경로, rejected → 응답 생성으로 바로 이동
@@ -415,7 +494,10 @@ class MultiAgentWorkflow:
             # Phase 2 (OpenClaw Execution Approval): interrupt_before는 checkpointer 경로에만 적용
             # stateless 경로(use_checkpointer=False)에서는 interrupt가 동작하지 않으므로 제외
             interrupt_nodes = (
-                [WorkflowNode.EXECUTION_APPROVAL.value]
+                [
+                    WorkflowNode.EXECUTION_APPROVAL.value,
+                    WorkflowNode.MISSION_APPROVAL.value,
+                ]
                 if settings.EXECUTION_APPROVAL_ENABLED
                 else []
             )
@@ -598,6 +680,12 @@ class MultiAgentWorkflow:
                 "selection_reasoning": selection.reasoning,
             }
 
+            from neos.workflow.mission.routing import should_use_mission_runtime
+
+            candidate_state = {**state, **base_result}
+            if should_use_mission_runtime(candidate_state):
+                return base_result
+
             # Phase 2 (OpenClaw Execution Approval): 민감 스킬 allowlist 체크
             # checkpointed 경로에서만 유효 — stateless 경로에서는 interrupt_before가 동작하지 않으므로
             # approval 로직을 수행하면 approval_decision=None 상태로 EXECUTION_APPROVAL 노드가 즉시
@@ -672,6 +760,54 @@ class MultiAgentWorkflow:
             logger.error("[ExecutionApprovalNode] ApprovalProcessor is not initialized")
             return {"pending_approvals": [], "approval_decision": None}
         return await self.approval_processor.process(state)
+
+    async def _mission_planner_node(self, state: AgentState) -> Dict[str, Any]:
+        """Mission Runtime: MissionPlan과 ValidationContract 생성."""
+        result = await self.mission_planner.plan(state)
+        if result.get("pending_approvals") and not self._mission_approval_available():
+            result.update(
+                {
+                    "pending_approvals": [],
+                    "approval_decision": None,
+                    "approval_outcome": "rejected",
+                    "mission_status": "approval_unavailable",
+                    "final_response": (
+                        "Manual mission 승인을 처리할 수 없습니다. "
+                        "EXECUTION_APPROVAL_ENABLED와 checkpointer가 활성화되어야 합니다."
+                    ),
+                }
+            )
+        return result
+
+    def _mission_approval_available(self) -> bool:
+        return bool(
+            settings.EXECUTION_APPROVAL_ENABLED
+            and self._graph_uses_checkpointer
+            and self.approval_processor is not None
+        )
+
+    async def _mission_approval_node(self, state: AgentState) -> Dict[str, Any]:
+        """Mission Runtime: 실행 전 mission-level 승인 처리."""
+        if self.approval_processor is None:
+            logger.error("[MissionApprovalNode] ApprovalProcessor is not initialized")
+            return {
+                "pending_approvals": [],
+                "approval_decision": None,
+                "approval_outcome": "rejected",
+            }
+        return await self.approval_processor.process(state)
+
+    async def _mission_executor_node(self, state: AgentState) -> Dict[str, Any]:
+        """Mission Runtime: 기존 orchestrator를 task wrapper로 순차 실행."""
+        return await self.mission_executor.execute(state)
+
+    async def _mission_validator_node(self, state: AgentState) -> Dict[str, Any]:
+        """Mission Runtime: ValidationContract 기반 검증."""
+        return await self.mission_validator.validate(state)
+
+    async def _mission_integrator_node(self, state: AgentState) -> Dict[str, Any]:
+        """Mission Runtime: mission 결과 메타데이터 통합."""
+        return await self.mission_integrator.integrate(state)
 
     async def _ui_frame_generator_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 8 (OpenClaw A2UI): UIFrame 생성 노드 래퍼.
@@ -820,6 +956,35 @@ class MultiAgentWorkflow:
         """
         return self._orchestrator_router.route(state)
 
+    def _route_after_skill_tool_selector(self, state: AgentState) -> str:
+        """SkillToolSelector 이후 mission/runtime/legacy 경로를 결정한다."""
+        legacy_route = self._orchestrator_router.route(state)
+        if legacy_route in {"needs_approval", "task_scheduling", "ui_frame"}:
+            return legacy_route
+
+        mission_route = self._should_use_mission_runtime(state)
+        if mission_route == "mission":
+            return mission_route
+        return legacy_route
+
+    def _should_use_mission_runtime(self, state: AgentState) -> str:
+        """Mission Runtime 후보면 mission branch로 보낸다."""
+        from neos.workflow.mission import routing as mission_routing
+
+        return (
+            "mission"
+            if mission_routing.should_use_mission_runtime(state)
+            else "legacy"
+        )
+
+    def _should_continue_after_mission_planner(self, state: AgentState) -> str:
+        """MissionPlanner 이후 승인 필요 여부를 판단한다."""
+        if state.get("mission_status") == "approval_unavailable":
+            return "approval_unavailable"
+        if state.get("pending_approvals") and state.get("approval_decision") is None:
+            return "needs_approval"
+        return "execute"
+
     def _should_refine_query(self, state: AgentState) -> str:
         """
         쿼리 개선 필요 여부 결정
@@ -956,7 +1121,9 @@ class MultiAgentWorkflow:
             # Tracing: 워크플로우 시작 이벤트 기록
             add_span_event(span, "workflow_started", {"query_preview": query[:100]})
             autonomy_level = _resolve_autonomy_level(user_input.get("autonomy_level"))
-            bypass_cache = bool(user_input.get("bypass_cache", False))
+            bypass_cache = bool(user_input.get("bypass_cache", False)) or (
+                _should_bypass_cache_for_mission(user_input, autonomy_level)
+            )
             cache_key = self._generate_cache_key(
                 query,
                 user_id,
@@ -1032,6 +1199,11 @@ class MultiAgentWorkflow:
                     WorkflowNode.ANALYSIS_ORCHESTRATOR.value,
                     WorkflowNode.GENERATION_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value,
                     WorkflowNode.FACT_CHECK.value, WorkflowNode.QUALITY_VALIDATOR.value,
+                    WorkflowNode.MISSION_PLANNER.value,
+                    WorkflowNode.MISSION_APPROVAL.value,
+                    WorkflowNode.MISSION_EXECUTOR.value,
+                    WorkflowNode.MISSION_VALIDATOR.value,
+                    WorkflowNode.MISSION_INTEGRATOR.value,
                     WorkflowNode.RESP_GENERATOR.value
                 ]
 
@@ -1099,7 +1271,11 @@ class MultiAgentWorkflow:
                 result = self._create_workflow_result(final_state)
 
                 # 성공적인 결과 캐싱
-                if result["success"] and result["response"]:
+                if (
+                    result["success"]
+                    and result["response"]
+                    and _mission_validation_passed(result)
+                ):
                     # 스마트 캐시에 저장 (활성화된 경우)
                     if settings.SMART_CACHE_ENABLED:
                         add_span_event(span, "saving_to_smart_cache")
@@ -1114,6 +1290,8 @@ class MultiAgentWorkflow:
                     # 기존 Redis 캐시에도 저장 (폴백용)
                     add_span_event(span, "saving_to_redis_cache")
                     await self._cache_workflow_result(cache_key, result)
+                elif result["success"] and result["response"]:
+                    add_span_event(span, "cache_skipped_mission_validation")
 
                 # 데이터셋 자동 저장 (LLM 호출이 있었을 경우)
                 await self._auto_save_dataset()
@@ -1257,7 +1435,7 @@ class MultiAgentWorkflow:
             classification = final_state.get("query_classification", {})
             query_intent = final_state.get("query_intent", "information_seeking")
             complexity_score = classification.get("complexity_score", 0.0)
-            quality_score = result.get("quality_score", 0.7)
+            quality_score = _coerce_quality_score(result.get("quality_score"), 0.7)
 
             # 캐시할 데이터 준비 (cache_hit 정보 제외)
             cache_data = {k: v for k, v in result.items() if k != "cache_hit"}
@@ -1381,6 +1559,19 @@ class MultiAgentWorkflow:
             autonomy_level=(
                 _resolve_autonomy_level(user_input.get("autonomy_level"))
             ),
+            # Mission Runtime
+            use_mission_runtime=bool(
+                (user_input.get("preferences") or {}).get("use_mission_runtime", False)
+            ),
+            mission_id=None,
+            mission=None,
+            mission_plan=None,
+            validation_contract=None,
+            mission_status=None,
+            mission_events=[],
+            mission_task_results=[],
+            validator_runs=[],
+            validation_summary=None,
         )
 
     def _create_workflow_result(self, final_state: AgentState) -> Dict[str, Any]:
@@ -1390,7 +1581,7 @@ class MultiAgentWorkflow:
             "response": final_state["final_response"],
             "metadata": final_state["response_metadata"],
             "execution_time_ms": final_state["execution_time_ms"],
-            "quality_score": final_state.get("quality_score", 0.0),
+            "quality_score": _coerce_quality_score(final_state.get("quality_score")),
             "errors": final_state["errors"],
             "cache_hit": False,
             "execution_steps": len(final_state["execution_steps"]),

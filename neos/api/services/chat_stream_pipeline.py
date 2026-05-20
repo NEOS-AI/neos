@@ -89,6 +89,7 @@ class ChatStreamPipeline:
         stream_state: Optional[StreamAdapterState] = None
 
         try:
+            request_metadata = request.metadata or {}
             # ── Step 1: 사용자 메시지 저장 ─────────────────────────────
             await self._ChatService.add_message(
                 conversation_id=conversation_id,
@@ -124,7 +125,8 @@ class ChatStreamPipeline:
                     history_messages=history_messages,
                     stream_state=stream_state,
                     wf_ctx=wf_ctx,
-                    autonomy_level=request.metadata.get("autonomy_level"),
+                    autonomy_level=request_metadata.get("autonomy_level"),
+                    workflow_preferences=request_metadata,
                 ):
                     yield event
                 if wf_ctx.result and wf_ctx.result.get("interrupted"):
@@ -201,6 +203,16 @@ class ChatStreamPipeline:
                 message_metadata["inline_visualizations"] = acc.inline_viz_list
             if wf_ctx.agents:
                 message_metadata["workflow_agents"] = wf_ctx.agents
+            workflow_metadata = (wf_ctx.result or {}).get("metadata") or {}
+            if workflow_metadata.get("mission_id"):
+                message_metadata["mission"] = {
+                    "mission_id": workflow_metadata.get("mission_id"),
+                    "mission_status": workflow_metadata.get("mission_status"),
+                    "validation_summary": workflow_metadata.get("validation_summary"),
+                    "mission_plan_summary": workflow_metadata.get(
+                        "mission_plan_summary"
+                    ),
+                }
 
             await self._ChatService.add_message(
                 conversation_id=conversation_id,
@@ -268,6 +280,7 @@ class ChatStreamPipeline:
         stream_state: StreamAdapterState,
         wf_ctx: _WorkflowCtx,
         autonomy_level: Optional[int] = None,
+        workflow_preferences: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
         """워크플로우를 실행하고 SSE 이벤트를 yield한다. 결과는 wf_ctx에 저장한다."""
         try:
@@ -302,6 +315,7 @@ class ChatStreamPipeline:
                         "chat_history": formatted_history,
                         "enable_history_context": True,
                         "autonomy_level": autonomy_level,
+                        "preferences": workflow_preferences or {},
                     },
                     event_handler=workflow_callback,
                     use_checkpointer=True,

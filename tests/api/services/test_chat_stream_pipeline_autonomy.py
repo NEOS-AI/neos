@@ -55,9 +55,11 @@ class _FakeWorkflowCallback:
 class _FakeWorkflow:
     def __init__(self):
         self.use_checkpointer = None
+        self.user_input = None
 
     async def execute_workflow(self, user_input, event_handler, use_checkpointer):
         self.use_checkpointer = use_checkpointer
+        self.user_input = user_input
         await event_handler.on_approval_request(
             [
                 {
@@ -135,6 +137,45 @@ async def test_chat_workflow_uses_checkpointer_and_streams_approval_request():
     assert payloads[0]["type"] == "neos:approval_request"
     assert payloads[0]["pending_approvals"][0]["request_id"] == "approval-1"
     assert wf_ctx.result["interrupted"] is True
+
+
+@pytest.mark.asyncio
+async def test_chat_workflow_passes_mission_preferences():
+    workflow = _FakeWorkflow()
+    pipeline = ChatStreamPipeline(
+        chat_llm_service=object(),
+        cost_calculator=object(),
+        get_core_tools_fn=lambda: None,
+        get_search_handler_fn=lambda: None,
+        chat_service_cls=object(),
+        multi_agent_workflow=workflow,
+        workflow_callback_cls=_FakeWorkflowCallback,
+        map_node_to_agent_fn=lambda node: node,
+    )
+    stream_state, _ = create_stream_generator(
+        response_id="conversation_123",
+        message_id="message_123",
+    )
+    wf_ctx = _WorkflowCtx()
+
+    [
+        chunk
+        async for chunk in pipeline._run_workflow(
+            conversation_id="conversation_123",
+            user_content="compare products",
+            current_user=SimpleNamespace(user_id="user_123"),
+            history_messages=[],
+            stream_state=stream_state,
+            wf_ctx=wf_ctx,
+            autonomy_level=1,
+            workflow_preferences={
+                "autonomy_level": 1,
+                "use_mission_runtime": True,
+            },
+        )
+    ]
+
+    assert workflow.user_input["preferences"]["use_mission_runtime"] is True
 
 
 @pytest.mark.asyncio

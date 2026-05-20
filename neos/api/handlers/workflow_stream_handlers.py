@@ -409,6 +409,7 @@ async def execute_workflow_with_streaming(
     callback: WorkflowStreamCallback,
     bypass_cache: bool = False,
     autonomy_level: Optional[int] = None,
+    workflow_preferences: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     스트리밍 콜백과 함께 워크플로우 실행
@@ -424,6 +425,7 @@ async def execute_workflow_with_streaming(
             session_id=session_id,
             query=query,
             preferences={
+                **(workflow_preferences or {}),
                 "bypass_cache": bypass_cache,
                 "autonomy_level": autonomy_level,
             },
@@ -534,6 +536,7 @@ async def stream_query(body: WorkflowStreamRequest, request: Request):
                     callback=callback,
                     bypass_cache=preferences.get("bypass_cache", False),
                     autonomy_level=autonomy_level,
+                    workflow_preferences=preferences,
                 )
             )
 

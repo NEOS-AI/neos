@@ -69,3 +69,120 @@ async def test_process_query_workflow_returns_interrupted_result(monkeypatch):
     assert result["session_id"] == "session_123"
     assert result["pending_approvals"][0]["skill_name"] == "realtime_info_search"
     cache_set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_query_workflow_bypasses_cache_for_mission_preference(monkeypatch):
+    cache_get = AsyncMock(return_value={"success": True, "response": "cached"})
+    cache_set = AsyncMock()
+    monkeypatch.setattr(
+        "neos.api.services.query_service.cache_manager.get",
+        cache_get,
+    )
+    monkeypatch.setattr(
+        "neos.api.services.query_service.cache_manager.set",
+        cache_set,
+    )
+
+    async def fake_execute(**kwargs):
+        return {
+            "success": True,
+            "response": "fresh",
+            "metadata": {"mission_id": "mission-1"},
+            "execution_time_ms": 10,
+            "quality_score": 0.9,
+            "errors": [],
+        }
+
+    monkeypatch.setattr(
+        "neos.api.services.workflow_service.WorkflowService.execute",
+        fake_execute,
+    )
+
+    result = await QueryService.process_query_workflow(
+        user_id="user_123",
+        session_id="session_123",
+        query="Compare AI browsers",
+        preferences={"autonomy_level": 1, "use_mission_runtime": True},
+    )
+
+    assert result["response"] == "fresh"
+    cache_get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_query_workflow_bypasses_cache_for_auto_mission_hint(monkeypatch):
+    cache_get = AsyncMock(return_value={"success": True, "response": "cached"})
+    cache_set = AsyncMock()
+    monkeypatch.setattr(
+        "neos.api.services.query_service.cache_manager.get",
+        cache_get,
+    )
+    monkeypatch.setattr(
+        "neos.api.services.query_service.cache_manager.set",
+        cache_set,
+    )
+
+    async def fake_execute(**kwargs):
+        return {
+            "success": True,
+            "response": "fresh",
+            "metadata": {"mission_id": "mission-1", "validation_summary": {"passed": True}},
+            "execution_time_ms": 10,
+            "quality_score": 0.9,
+            "errors": [],
+        }
+
+    monkeypatch.setattr(
+        "neos.api.services.workflow_service.WorkflowService.execute",
+        fake_execute,
+    )
+
+    result = await QueryService.process_query_workflow(
+        user_id="user_123",
+        session_id="session_123",
+        query="Compare and analyze AI browsers with multi-source validation",
+        preferences={"autonomy_level": 1},
+    )
+
+    assert result["response"] == "fresh"
+    cache_get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_query_workflow_normalizes_none_quality_score(monkeypatch):
+    cache_get = AsyncMock(return_value=None)
+    cache_set = AsyncMock()
+    monkeypatch.setattr(
+        "neos.api.services.query_service.cache_manager.get",
+        cache_get,
+    )
+    monkeypatch.setattr(
+        "neos.api.services.query_service.cache_manager.set",
+        cache_set,
+    )
+
+    async def fake_execute(**kwargs):
+        return {
+            "success": True,
+            "response": "fresh",
+            "metadata": {},
+            "execution_time_ms": 10,
+            "quality_score": None,
+            "errors": [],
+        }
+
+    monkeypatch.setattr(
+        "neos.api.services.workflow_service.WorkflowService.execute",
+        fake_execute,
+    )
+
+    result = await QueryService.process_query_workflow(
+        user_id="user_123",
+        session_id="session_123",
+        query="What is the weather today?",
+        preferences={"autonomy_level": 1},
+    )
+
+    assert result["quality_score"] == 0.0
+    cache_set.assert_not_awaited()

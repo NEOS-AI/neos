@@ -10,6 +10,16 @@ from neos.database.models import User, QueryHistory
 from neos.database.repositories.query_repository import QueryRepository
 from neos.utils.cache import cache_manager
 from neos.utils.embeddings import embedding_manager
+from neos.workflow.enums import AutonomyLevel
+
+
+def _coerce_quality_score(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class QueryService:
@@ -133,6 +143,15 @@ class QueryService:
         from neos.api.services.workflow_service import WorkflowService
 
         autonomy_level = WorkflowService.resolve_autonomy_level(preferences)
+        from neos.workflow.mission.routing import has_mission_request_hint
+
+        mission_cache_bypass = bool(
+            (preferences or {}).get("use_mission_runtime")
+            or has_mission_request_hint(
+                {"query": query, "preferences": preferences or {}}
+            )
+        ) or autonomy_level == AutonomyLevel.MANUAL.value
+        effective_bypass_cache = bool(bypass_cache or mission_cache_bypass)
 
         # 캐시 키 생성
         cache_key = QueryService._generate_cache_key(
@@ -142,9 +161,10 @@ class QueryService:
         )
 
         # 캐시에서 확인
-        cached_response = await cache_manager.get(cache_key)
-        if cached_response and not bypass_cache:
-            return cached_response
+        if not effective_bypass_cache:
+            cached_response = await cache_manager.get(cache_key)
+            if cached_response:
+                return cached_response
 
         start_time = datetime.now()
         result = await WorkflowService.execute(
@@ -156,7 +176,7 @@ class QueryService:
                 "autonomy_level": autonomy_level,
             },
             use_checkpointer=True,
-            bypass_cache=bypass_cache,
+            bypass_cache=effective_bypass_cache,
         )
         end_time = datetime.now()
 
@@ -179,19 +199,25 @@ class QueryService:
                 "channel_source": result.get("channel_source", "api"),
             }
 
+        quality_score = _coerce_quality_score(result.get("quality_score"))
         response_data = {
             "success": True,
             "response": result["response"],
             "session_id": session_id,
             "metadata": result["metadata"],
             "execution_time_ms": result["execution_time_ms"],
-            "quality_score": result["quality_score"],
+            "quality_score": quality_score,
             "errors": result["errors"],
             "channel_source": result.get("channel_source", "api")
         }
 
         # 성공한 응답 캐싱 (1시간)
-        if result["quality_score"] > 0.7:
+        metadata = result.get("metadata") or {}
+        validation_summary = metadata.get("validation_summary") or {}
+        should_cache_mission_result = not metadata.get("mission_id") or (
+            validation_summary.get("passed") is True
+        )
+        if quality_score > 0.7 and should_cache_mission_result:
             await cache_manager.set(cache_key, response_data, ttl=3600)
 
         return response_data

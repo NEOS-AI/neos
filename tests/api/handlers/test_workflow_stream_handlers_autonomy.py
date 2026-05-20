@@ -42,7 +42,7 @@ async def test_stream_query_uses_body_preferences_for_bypass_cache(monkeypatch):
             query="hello",
             user_id="user_123",
             session_id="session_123",
-            preferences={"bypass_cache": True},
+            preferences={"bypass_cache": True, "use_mission_runtime": True},
             autonomy_level=2,
             stream_options={
                 "include_heartbeat": False,
@@ -61,4 +61,5 @@ async def test_stream_query_uses_body_preferences_for_bypass_cache(monkeypatch):
 
     assert captured["bypass_cache"] is True
     assert captured["autonomy_level"] == 2
+    assert captured["workflow_preferences"]["use_mission_runtime"] is True
     assert payloads[-1]["event"] == "completed"
