@@ -160,4 +160,7 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/027_gemin
 
 # Add support for agent control slider
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/030_add_autonomy_preferences.sql
+
+# Add Mission Runtime audit tables
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/031_add_mission_runtime_tables.sql
 ```
