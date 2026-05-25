@@ -15,6 +15,7 @@
 - 스펙과 구현 계획은 작성 및 커밋된 이력이 있다.
 - 코드 리뷰에서 지적된 누락 사항을 반영해 실제 `web/` 소스에 blue-black theme 변경을 적용했다.
 - 검증은 auth/backend에 덜 의존하도록 source-level regression test와 build/lint 확인을 함께 사용한다.
+- 2026-05-25 추가 코드 리뷰 기준으로, 현재 구현은 **dark token은 `.dark` scope에 있고 blue-black background utility는 전역 적용**되는 상태다. light/system-light 모드에서는 텍스트 token과 blue-black 배경이 충돌할 수 있으므로 후속 수정이 필요하다.
 
 ## 디자인 목표
 
@@ -85,6 +86,15 @@
 
 이 값들은 회색 UI를 단순히 어둡게 만드는 대신, 검정에 가까운 바탕 위에 낮은 채도의 파란색 레이어를 쌓는 방식이다.
 
+주의할 점:
+
+- 위 token 값은 `.dark` scope 안에서만 활성화된다.
+- 반면 현재 구현된 `neos-blueblack-workspace`, `neos-blueblack-empty`, `neos-blueblack-panel` utility는 `.dark` scope 밖의 `@layer utilities`에 정의되어 있어 light theme에서도 적용된다.
+- `ThemeProvider`는 `defaultTheme="system"`이고 사이드바 사용자 메뉴에서 light/dark 전환이 가능하므로, system-light 또는 수동 light 모드에서 blue-black 배경 위에 light token 텍스트가 놓일 수 있다.
+- 후속 수정 방향은 두 가지 중 하나로 결정해야 한다.
+  - blue-black redesign을 dark mode 전용으로 유지한다면 utility 적용을 `.dark` scope 또는 `dark:` variant로 제한한다.
+  - 채팅 workspace를 항상 blue-black으로 강제한다면 chat shell 상위에 dark scope를 명시해 텍스트, popover, sidebar, browser theme color가 같은 token 세트를 쓰게 한다.
+
 ## 배경 유틸리티
 
 전역 CSS에는 세 가지 유틸리티를 추가했다.
@@ -100,14 +110,17 @@
 - `neos-blueblack-workspace`
   - 전체 채팅 shell에 적용한다.
   - near-black base와 넓은 blue radial gradient를 가진다.
+  - 현재 구현에서는 dark mode 전용 variant가 아니라 전역 class라 light mode에서도 같은 배경을 칠한다.
 
 - `neos-blueblack-empty`
   - 메시지가 없는 초기 화면에 적용한다.
   - 중앙 greeting 뒤쪽의 블루 블룸을 더 분명하게 만든다.
+  - 현재 구현에서는 `messages.length === 0` 조건에만 묶여 있고 theme 조건에는 묶여 있지 않다.
 
 - `neos-blueblack-panel`
   - composer 같은 입력 패널에 적용한다.
   - dark blue-black fill, soft blue border, subtle shadow를 제공한다.
+  - 현재 구현에서는 composer panel이 light mode에서도 dark blue-black 표면으로 유지된다.
 
 이렇게 나누면 빈 화면의 장식성과 대화 화면의 가독성을 따로 조절할 수 있다.
 
@@ -139,6 +152,12 @@
 안녕하세요.
 무엇을 도와드릴까요?
 ```
+
+현재 구현상 언어 관련 주의점:
+
+- greeting copy는 한국어로 바뀌었지만 `web/app/layout.tsx`의 루트 `lang` 값은 아직 `"en"`이다.
+- `web/components/suggested-actions.tsx`의 추천 질문은 영어 copy를 유지한다.
+- 전체 제품 언어를 한국어로 전환하는 작업은 이번 배경 개선 범위에 포함되지 않았다. 접근성/번역 정확도를 더 엄격히 맞추려면 greeting 영역에 `lang="ko"`를 지정하거나, 앱의 locale/copy 정책을 별도 작업으로 정리해야 한다.
 
 ### 3. Composer
 
@@ -300,6 +319,8 @@
 | 01 | light mode의 브라우저 chrome 색은 기존 흰색을 유지한다. 이번 작업은 dark UI 개선이므로 light theme는 범위 밖이다. |
 | 02 | mobile browser 주소창과 PWA chrome이 새 near-black background와 어울리도록 dark theme color를 교체한다. |
 
+현재 구현에서 light theme는 여전히 흰색 browser chrome을 사용한다. 그러나 blue-black workspace utility는 light mode에서도 적용될 수 있으므로, light mode를 지원 상태로 유지하려면 browser chrome과 화면 배경 정책을 함께 다시 맞춰야 한다.
+
 ### 4. `web/components/chat.tsx` workspace shell
 
 ```tsx
@@ -315,6 +336,8 @@
 | 02 | 새 workspace utility를 가장 앞에 둔다. 뒤의 layout utility들은 기존 height, touch, flex behavior를 보존한다. |
 | 03 | Playwright regression test가 배경 shell 존재를 확인할 수 있게 하는 안정적인 selector다. |
 | 04 | chat shell 시작이다. 내부의 header, message area, composer dock은 이 배경 위에 배치된다. |
+
+주의: `bg-background`는 background-color이고 `neos-blueblack-workspace`는 background shorthand다. 컴파일된 CSS 순서상 현재 빌드에서는 `neos-blueblack-workspace`가 뒤에서 적용되어 gradient가 보이지만, 이 계약은 source-level test가 직접 검증하지 않는다. 시각 QA 또는 computed style 기반 테스트를 추가하면 더 안전하다.
 
 composer dock은 다음처럼 투명하게 둔다.
 
@@ -596,8 +619,28 @@ pnpm --dir web build
 | `pnpm --dir web exec biome check app/globals.css app/layout.tsx components/chat.tsx components/messages.tsx components/greeting.tsx components/multimodal-input.tsx components/chat-header.tsx components/app-sidebar.tsx tests/e2e/blueblack-theme.test.ts` | 통과 | 관련 파일 formatting/lint 확인 |
 | `pnpm --dir web build` | 통과 | 제한된 네트워크에서는 Google Fonts fetch 실패가 있었고, 네트워크 허용 후 통과 |
 | `git diff --check` | 통과 | whitespace error 없음 |
+| `pnpm --dir web exec playwright test tests/e2e/chat.test.ts --project=e2e` | 완료 검증 불가 | 로컬 백엔드 미기동으로 `/api/auth/guest`가 `ECONNREFUSED`를 반환해 중단 |
 
 수동 브라우저 확인은 시도했지만, 현재 로컬 환경에서는 `/login`과 `/` 접근이 `/api/auth/guest`로 이어지고 백엔드 연결이 거부되어 500으로 막혔다. 따라서 visual QA는 백엔드 dev server 또는 auth mock이 준비된 상태에서 별도로 수행해야 한다.
+
+## 코드 리뷰 후속 이슈
+
+2026-05-25 코드 리뷰에서 확인한 구현상 후속 이슈는 다음과 같다.
+
+1. **Light mode contrast 리스크**
+   - `neos-blueblack-workspace`와 `neos-blueblack-panel`은 전역 utility라 light mode에서도 dark 배경을 적용한다.
+   - dark foreground token은 `.dark`에서만 활성화되므로, light mode에서는 near-black foreground가 near-black/blue-black 배경 위에 놓일 수 있다.
+   - 간단한 대비 계산 기준으로 light foreground와 blue-black base 조합은 약 `1.02:1` 수준이라 본문 텍스트 가독성을 만족하지 못한다.
+   - 해결 전까지 blue-black redesign의 시각 QA는 dark mode 기준으로 해석해야 한다.
+
+2. **언어 메타데이터와 copy 혼합**
+   - greeting은 한국어지만 루트 `lang`은 `"en"`이고 suggested actions는 영어다.
+   - 접근성 품질을 높이려면 한국어 greeting에 `lang="ko"`를 지정하거나, 앱 전반의 copy/locale 정책을 별도로 정리해야 한다.
+
+3. **시각 회귀 테스트 공백**
+   - 현재 `blueblack-theme.test.ts`는 소스 문자열 계약을 검증한다.
+   - 실제 route rendering, computed style, mobile overflow, dark/light contrast는 아직 자동화되어 있지 않다.
+   - backend guest auth 또는 auth mock이 준비되면 Playwright에서 `data-testid="blueblack-workspace"`, `data-testid="prompt-composer"`, `data-testid="compact-model-selector"`의 실제 렌더링과 모바일 폭을 검증하는 테스트를 추가하는 것이 좋다.
 
 ## 수동 QA 체크리스트
 
