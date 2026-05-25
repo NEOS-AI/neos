@@ -191,7 +191,8 @@
     }
   }
 
-  .neos-blueblack-workspace {
+  .dark .neos-blueblack-workspace,
+  .dark.neos-blueblack-workspace {
     background:
       radial-gradient(
         ellipse 110% 72% at 56% 36%,
@@ -201,7 +202,8 @@
       ), linear-gradient(180deg, hsl(225 38% 3%) 0%, hsl(220 38% 2%) 100%);
   }
 
-  .neos-blueblack-empty {
+  .dark .neos-blueblack-empty,
+  .dark.neos-blueblack-empty {
     background: radial-gradient(
       ellipse 76% 50% at 50% 45%,
       hsl(224 84% 34% / 0.38),
@@ -210,7 +212,8 @@
     );
   }
 
-  .neos-blueblack-panel {
+  .dark .neos-blueblack-panel,
+  .dark.neos-blueblack-panel {
     background: hsl(222 42% 7% / 0.92);
     border-color: hsl(218 48% 24% / 0.72);
     box-shadow:

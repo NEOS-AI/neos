@@ -306,7 +306,7 @@ function PureMultimodalInput({
       />
 
       <PromptInput
-        className="neos-blueblack-panel rounded-[28px] border p-3 backdrop-blur-xl transition-all duration-200 focus-within:border-blue-300/45 focus-within:ring-1 focus-within:ring-blue-300/35 hover:border-blue-300/30"
+        className="neos-blueblack-panel rounded-[28px] border bg-background p-3 shadow-xs backdrop-blur-xl transition-all duration-200 focus-within:border-blue-300/45 focus-within:ring-1 focus-within:ring-blue-300/35 hover:border-blue-300/30"
         data-testid="prompt-composer"
         onSubmit={(event) => {
           event.preventDefault();

@@ -21,6 +21,9 @@ test.describe("Blue-black dark theme", () => {
     expect(globals).toContain(".neos-blueblack-workspace");
     expect(globals).toContain(".neos-blueblack-empty");
     expect(globals).toContain(".neos-blueblack-panel");
+    expect(globals).toContain(".dark .neos-blueblack-workspace");
+    expect(globals).toContain(".dark .neos-blueblack-empty");
+    expect(globals).toContain(".dark .neos-blueblack-panel");
     expect(globals).toContain("radial-gradient(");
     expect(globals).toContain("dark:bg-card!");
     expect(globals).not.toContain("dark:bg-zinc-800!");
@@ -36,6 +39,8 @@ test.describe("Blue-black dark theme", () => {
     expect(chat).toContain("bg-transparent px-2 pb-3");
 
     expect(input).toContain("neos-blueblack-panel");
+    expect(input).toContain("bg-background");
+    expect(input).toContain("shadow-xs");
     expect(input).toContain('data-testid="prompt-composer"');
     expect(input).toContain('data-testid="compact-model-selector"');
     expect(input).toContain("w-[156px]");
