@@ -36,3 +36,6 @@ jest-cache/
 # vscode
 .vscode/
 .VSCodeCounter/
+
+# superpowers
+.superpowers/
