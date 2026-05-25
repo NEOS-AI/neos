@@ -15,7 +15,7 @@
 - 스펙과 구현 계획은 작성 및 커밋된 이력이 있다.
 - 코드 리뷰에서 지적된 누락 사항을 반영해 실제 `web/` 소스에 blue-black theme 변경을 적용했다.
 - 검증은 auth/backend에 덜 의존하도록 source-level regression test와 build/lint 확인을 함께 사용한다.
-- 2026-05-25 추가 코드 리뷰 기준으로, 현재 구현은 **dark token은 `.dark` scope에 있고 blue-black background utility는 전역 적용**되는 상태다. light/system-light 모드에서는 텍스트 token과 blue-black 배경이 충돌할 수 있으므로 후속 수정이 필요하다.
+- 2026-05-25 코드 리뷰 후속 수정으로, blue-black utility를 `.dark` scope에 묶고 composer에는 light fallback 표면을 추가했다. 이제 light/system-light 모드에서는 기존 light token 표면을 유지하고, dark 모드에서만 blue-black workspace 효과가 활성화된다.
 
 ## 디자인 목표
 
@@ -89,11 +89,9 @@
 주의할 점:
 
 - 위 token 값은 `.dark` scope 안에서만 활성화된다.
-- 반면 현재 구현된 `neos-blueblack-workspace`, `neos-blueblack-empty`, `neos-blueblack-panel` utility는 `.dark` scope 밖의 `@layer utilities`에 정의되어 있어 light theme에서도 적용된다.
-- `ThemeProvider`는 `defaultTheme="system"`이고 사이드바 사용자 메뉴에서 light/dark 전환이 가능하므로, system-light 또는 수동 light 모드에서 blue-black 배경 위에 light token 텍스트가 놓일 수 있다.
-- 후속 수정 방향은 두 가지 중 하나로 결정해야 한다.
-  - blue-black redesign을 dark mode 전용으로 유지한다면 utility 적용을 `.dark` scope 또는 `dark:` variant로 제한한다.
-  - 채팅 workspace를 항상 blue-black으로 강제한다면 chat shell 상위에 dark scope를 명시해 텍스트, popover, sidebar, browser theme color가 같은 token 세트를 쓰게 한다.
+- `neos-blueblack-workspace`, `neos-blueblack-empty`, `neos-blueblack-panel` utility는 `.dark .neos-blueblack-*` selector로 제한된다.
+- `ThemeProvider`는 `defaultTheme="system"`이고 사이드바 사용자 메뉴에서 light/dark 전환이 가능하다. 따라서 light/system-light 모드에서는 blue-black 배경을 강제로 칠하지 않고 기존 light token과 browser chrome을 유지한다.
+- 채팅 workspace를 항상 blue-black으로 강제하는 방식은 portal 기반 popover/dialog와 browser theme color까지 함께 강제해야 하므로 이번 후속 수정에서는 선택하지 않았다.
 
 ## 배경 유틸리티
 
@@ -110,17 +108,17 @@
 - `neos-blueblack-workspace`
   - 전체 채팅 shell에 적용한다.
   - near-black base와 넓은 blue radial gradient를 가진다.
-  - 현재 구현에서는 dark mode 전용 variant가 아니라 전역 class라 light mode에서도 같은 배경을 칠한다.
+  - `.dark` scope 안에서만 실제 배경을 칠한다. light mode에서는 shell의 `bg-background` fallback이 적용된다.
 
 - `neos-blueblack-empty`
   - 메시지가 없는 초기 화면에 적용한다.
   - 중앙 greeting 뒤쪽의 블루 블룸을 더 분명하게 만든다.
-  - 현재 구현에서는 `messages.length === 0` 조건에만 묶여 있고 theme 조건에는 묶여 있지 않다.
+  - `messages.length === 0` 조건과 `.dark` scope가 함께 맞을 때만 강한 bloom이 보인다.
 
 - `neos-blueblack-panel`
   - composer 같은 입력 패널에 적용한다.
   - dark blue-black fill, soft blue border, subtle shadow를 제공한다.
-  - 현재 구현에서는 composer panel이 light mode에서도 dark blue-black 표면으로 유지된다.
+  - `.dark` scope 안에서만 dark blue-black 표면을 적용한다. light mode에서는 composer의 `bg-background shadow-xs` fallback을 사용한다.
 
 이렇게 나누면 빈 화면의 장식성과 대화 화면의 가독성을 따로 조절할 수 있다.
 
@@ -260,52 +258,55 @@
 
 ```css
 01 @layer utilities {
-02   .neos-blueblack-workspace {
-03     background:
-04       radial-gradient(
-05         ellipse 110% 72% at 56% 36%,
-06         hsl(224 82% 29% / 0.2),
-07         hsl(224 70% 14% / 0.1) 42%,
-08         transparent 72%
-09       ),
-10       linear-gradient(180deg, hsl(225 38% 3%) 0%, hsl(220 38% 2%) 100%);
-11   }
-12
-13   .neos-blueblack-empty {
-14     background:
-15       radial-gradient(
-16         ellipse 76% 50% at 50% 45%,
-17         hsl(224 84% 34% / 0.38),
-18         hsl(225 58% 13% / 0.26) 42%,
-19         transparent 74%
-20       );
-21   }
-22
-23   .neos-blueblack-panel {
-24     background: hsl(222 42% 7% / 0.92);
-25     border-color: hsl(218 48% 24% / 0.72);
-26     box-shadow:
-27       0 18px 70px rgb(2 8 30 / 0.48),
-28       inset 0 1px 0 rgb(255 255 255 / 0.04);
-29   }
-30 }
+02   .dark .neos-blueblack-workspace,
+03   .dark.neos-blueblack-workspace {
+04     background:
+05       radial-gradient(
+06         ellipse 110% 72% at 56% 36%,
+07         hsl(224 82% 29% / 0.2),
+08         hsl(224 70% 14% / 0.1) 42%,
+09         transparent 72%
+10       ),
+11       linear-gradient(180deg, hsl(225 38% 3%) 0%, hsl(220 38% 2%) 100%);
+12   }
+13
+14   .dark .neos-blueblack-empty,
+15   .dark.neos-blueblack-empty {
+16     background:
+17       radial-gradient(
+18         ellipse 76% 50% at 50% 45%,
+19         hsl(224 84% 34% / 0.38),
+20         hsl(225 58% 13% / 0.26) 42%,
+21         transparent 74%
+22       );
+23   }
+24
+25   .dark .neos-blueblack-panel,
+26   .dark.neos-blueblack-panel {
+27     background: hsl(222 42% 7% / 0.92);
+28     border-color: hsl(218 48% 24% / 0.72);
+29     box-shadow:
+30       0 18px 70px rgb(2 8 30 / 0.48),
+31       inset 0 1px 0 rgb(255 255 255 / 0.04);
+32   }
+33 }
 ```
 
 | 라인 | 설명 |
 | --- | --- |
 | 01 | Tailwind v4의 utility layer에 커스텀 클래스를 등록한다. 컴포넌트 className에서 바로 사용할 수 있다. |
-| 02 | 전체 채팅 workspace용 class다. 라우트 전체가 아니라 chat shell에만 붙여 시각 효과 범위를 제한한다. |
-| 03-10 | workspace 배경을 두 레이어로 만든다. 위 radial gradient는 은은한 blue depth, 아래 linear gradient는 near-black base다. Biome formatting 후 실제 파일에서는 두 background layer가 같은 선언 안에서 이어진다. |
+| 02-03 | 전체 채팅 workspace용 class를 `.dark` scope로 제한한다. 라우트 전체가 아니라 chat shell에 class를 붙이되, 실제 효과는 dark mode에서만 활성화된다. |
+| 04-11 | workspace 배경을 두 레이어로 만든다. 위 radial gradient는 은은한 blue depth, 아래 linear gradient는 near-black base다. Biome formatting 후 실제 파일에서는 두 background layer가 같은 선언 안에서 이어진다. |
 | 05 | glow 중심을 정중앙보다 약간 오른쪽 위로 둔다. 레퍼런스 이미지처럼 중앙부가 살아 있지만 UI를 덮지 않게 한다. |
 | 06-08 | glow의 시작, 중간, 끝 투명도를 정의한다. active chat에서도 부담스럽지 않게 opacity를 낮춘다. |
 | 10 | 페이지의 실제 바닥색이다. 아래로 갈수록 더 검게 가라앉아 입력창 주변이 안정적으로 보인다. |
-| 13 | 빈 채팅 화면 전용 class다. 메시지가 없을 때만 더 강한 glow를 보여준다. |
-| 16-19 | greeting 뒤쪽에 집중되는 radial bloom이다. workspace보다 opacity를 높여 첫 화면의 인상을 만든다. |
-| 23 | composer, prompt panel처럼 떠 있는 표면에 쓰는 class다. |
-| 24 | 패널 배경이다. 완전 불투명이 아니라 약간 투명하게 두어 뒤 배경과 자연스럽게 섞인다. |
-| 25 | 패널 border다. 회색 선 대신 blue-gray 선으로 새 테마와 맞춘다. |
-| 26-28 | outer shadow와 inset highlight다. 패널이 검은 화면 위에 너무 납작하게 붙어 보이지 않게 한다. |
-| 30 | utility layer 종료다. |
+| 14-15 | 빈 채팅 화면 전용 class도 `.dark` scope로 제한한다. 메시지가 없고 dark mode일 때만 더 강한 glow를 보여준다. |
+| 17-22 | greeting 뒤쪽에 집중되는 radial bloom이다. workspace보다 opacity를 높여 첫 화면의 인상을 만든다. |
+| 25-26 | composer, prompt panel처럼 떠 있는 표면에 쓰는 class이며 `.dark` scope에서만 dark panel override를 적용한다. |
+| 27 | 패널 배경이다. 완전 불투명이 아니라 약간 투명하게 두어 뒤 배경과 자연스럽게 섞인다. |
+| 28 | 패널 border다. 회색 선 대신 blue-gray 선으로 새 테마와 맞춘다. |
+| 29-31 | outer shadow와 inset highlight다. 패널이 검은 화면 위에 너무 납작하게 붙어 보이지 않게 한다. |
+| 33 | utility layer 종료다. |
 
 ### 3. `web/app/layout.tsx` browser theme color
 
@@ -319,7 +320,7 @@
 | 01 | light mode의 브라우저 chrome 색은 기존 흰색을 유지한다. 이번 작업은 dark UI 개선이므로 light theme는 범위 밖이다. |
 | 02 | mobile browser 주소창과 PWA chrome이 새 near-black background와 어울리도록 dark theme color를 교체한다. |
 
-현재 구현에서 light theme는 여전히 흰색 browser chrome을 사용한다. 그러나 blue-black workspace utility는 light mode에서도 적용될 수 있으므로, light mode를 지원 상태로 유지하려면 browser chrome과 화면 배경 정책을 함께 다시 맞춰야 한다.
+현재 구현에서 light theme는 흰색 browser chrome을 유지하고, blue-black workspace utility도 `.dark` scope에서만 적용된다. 따라서 browser chrome과 화면 배경 정책은 같은 theme 상태를 따른다.
 
 ### 4. `web/components/chat.tsx` workspace shell
 
@@ -337,7 +338,7 @@
 | 03 | Playwright regression test가 배경 shell 존재를 확인할 수 있게 하는 안정적인 selector다. |
 | 04 | chat shell 시작이다. 내부의 header, message area, composer dock은 이 배경 위에 배치된다. |
 
-주의: `bg-background`는 background-color이고 `neos-blueblack-workspace`는 background shorthand다. 컴파일된 CSS 순서상 현재 빌드에서는 `neos-blueblack-workspace`가 뒤에서 적용되어 gradient가 보이지만, 이 계약은 source-level test가 직접 검증하지 않는다. 시각 QA 또는 computed style 기반 테스트를 추가하면 더 안전하다.
+주의: `bg-background`는 light/system-light fallback이고, `.dark .neos-blueblack-workspace`가 dark mode에서 더 높은 specificity로 gradient background를 적용한다. source-level test는 이 selector 계약을 검증하지만, 실제 computed style 기반 시각 QA를 추가하면 더 안전하다.
 
 composer dock은 다음처럼 투명하게 둔다.
 
@@ -526,11 +527,14 @@ compact model selector는 모바일 composer에서 넘치지 않도록 다음 �
 21     expect(globals).toContain(".neos-blueblack-workspace");
 22     expect(globals).toContain(".neos-blueblack-empty");
 23     expect(globals).toContain(".neos-blueblack-panel");
-24     expect(globals).toContain("radial-gradient(");
-25     expect(globals).toContain("dark:bg-card!");
-26     expect(globals).not.toContain("dark:bg-zinc-800!");
-27   });
-28 });
+24     expect(globals).toContain(".dark .neos-blueblack-workspace");
+25     expect(globals).toContain(".dark .neos-blueblack-empty");
+26     expect(globals).toContain(".dark .neos-blueblack-panel");
+27     expect(globals).toContain("radial-gradient(");
+28     expect(globals).toContain("dark:bg-card!");
+29     expect(globals).not.toContain("dark:bg-zinc-800!");
+30   });
+31 });
 ```
 
 | 라인 | 설명 |
@@ -538,8 +542,8 @@ compact model selector는 모바일 composer에서 넘치지 않도록 다음 �
 | 01-04 | Playwright runner 안에서 Node file read를 사용한다. 실제 route 접근이 auth/backend에 묶여 있어, 이 테스트는 소스 계약을 빠르게 검증하는 방식으로 둔다. |
 | 06-08 | blue-black theme 관련 test suite와 첫 번째 test다. `globals.css`를 직접 읽어 token과 utility 존재를 확인한다. |
 | 10-19 | 승인된 dark token 값이 유지되는지 확인한다. |
-| 21-26 | workspace/empty/panel utility, radial gradient, CodeMirror `dark:bg-card` 전환, `dark:bg-zinc-800` 제거를 검증한다. |
-| 27-28 | 첫 번째 source-level contract test를 닫는다. |
+| 21-29 | workspace/empty/panel utility가 존재하고 `.dark` scope에 묶여 있는지, radial gradient, CodeMirror `dark:bg-card` 전환, `dark:bg-zinc-800` 제거를 검증한다. |
+| 30-31 | 첫 번째 source-level contract test를 닫는다. |
 
 UI hook 연결 검증은 같은 파일에 다음 test로 둔다.
 
@@ -554,23 +558,25 @@ UI hook 연결 검증은 같은 파일에 다음 test로 둔다.
 08   expect(chat).toContain("bg-transparent px-2 pb-3");
 09
 10   expect(input).toContain("neos-blueblack-panel");
-11   expect(input).toContain('data-testid="prompt-composer"');
-12   expect(input).toContain('data-testid="compact-model-selector"');
-13   expect(input).toContain("w-[156px]");
-14   expect(input).toContain("sm:w-[200px]");
-15
-16   expect(sidebar).toContain("border-sidebar-border/70");
-17   expect(sidebar).toContain("NEOS");
-18 });
+11   expect(input).toContain("bg-background");
+12   expect(input).toContain("shadow-xs");
+13   expect(input).toContain('data-testid="prompt-composer"');
+14   expect(input).toContain('data-testid="compact-model-selector"');
+15   expect(input).toContain("w-[156px]");
+16   expect(input).toContain("sm:w-[200px]");
+17
+18   expect(sidebar).toContain("border-sidebar-border/70");
+19   expect(sidebar).toContain("NEOS");
+20 });
 ```
 
 | 라인 | 설명 |
 | --- | --- |
 | 01-04 | 관련 컴포넌트 소스를 읽는다. route rendering 대신 source-level hook 존재를 확인한다. |
 | 06-08 | chat shell에 workspace class/test id가 붙고 composer dock이 transparent인지 확인한다. |
-| 10-14 | composer panel, prompt composer hook, compact model selector hook과 모바일/desktop width token을 확인한다. |
-| 16-17 | sidebar border token과 `NEOS` 브랜드 라벨을 확인한다. |
-| 18 | test 종료다. |
+| 10-16 | composer panel, light fallback, prompt composer hook, compact model selector hook과 모바일/desktop width token을 확인한다. |
+| 18-19 | sidebar border token과 `NEOS` 브랜드 라벨을 확인한다. |
+| 20 | test 종료다. |
 
 ## 테스트 및 검증 계획
 
@@ -585,9 +591,10 @@ web/tests/e2e/blueblack-theme.test.ts
 검증 항목:
 
 - dark theme CSS token이 승인된 값으로 정의되어 있는지
-- `neos-blueblack-workspace`, `neos-blueblack-empty`, `neos-blueblack-panel` utility가 존재하는지
+- `neos-blueblack-workspace`, `neos-blueblack-empty`, `neos-blueblack-panel` utility가 존재하고 `.dark` scope로 제한되는지
 - CodeMirror dark surface가 `dark:bg-card`를 사용하고 `dark:bg-zinc-800`에 묶여 있지 않은지
 - chat shell과 composer에 `data-testid="blueblack-workspace"`, `data-testid="prompt-composer"`가 연결되어 있는지
+- composer가 light mode fallback을 위해 `bg-background shadow-xs`를 유지하는지
 - compact model selector가 `w-[156px] sm:w-[200px]` 계약을 유지하는지
 - 사이드바 border token과 `NEOS` 라벨이 소스에 유지되는지
 
@@ -625,13 +632,12 @@ pnpm --dir web build
 
 ## 코드 리뷰 후속 이슈
 
-2026-05-25 코드 리뷰에서 확인한 구현상 후속 이슈는 다음과 같다.
+2026-05-25 코드 리뷰에서 확인한 구현상 후속 이슈와 처리 상태는 다음과 같다.
 
-1. **Light mode contrast 리스크**
-   - `neos-blueblack-workspace`와 `neos-blueblack-panel`은 전역 utility라 light mode에서도 dark 배경을 적용한다.
-   - dark foreground token은 `.dark`에서만 활성화되므로, light mode에서는 near-black foreground가 near-black/blue-black 배경 위에 놓일 수 있다.
-   - 간단한 대비 계산 기준으로 light foreground와 blue-black base 조합은 약 `1.02:1` 수준이라 본문 텍스트 가독성을 만족하지 못한다.
-   - 해결 전까지 blue-black redesign의 시각 QA는 dark mode 기준으로 해석해야 한다.
+1. **Light mode contrast 리스크: 해결**
+   - 원인: `neos-blueblack-workspace`와 `neos-blueblack-panel`이 전역 utility라 light mode에서도 dark 배경을 적용했다.
+   - 조치: blue-black utility를 `.dark .neos-blueblack-*` selector로 제한하고, composer에 `bg-background shadow-xs` fallback을 추가했다.
+   - 결과: light/system-light 모드는 기존 light token 표면을 유지하고, dark mode에서만 blue-black redesign이 적용된다.
 
 2. **언어 메타데이터와 copy 혼합**
    - greeting은 한국어지만 루트 `lang`은 `"en"`이고 suggested actions는 영어다.
@@ -639,7 +645,8 @@ pnpm --dir web build
 
 3. **시각 회귀 테스트 공백**
    - 현재 `blueblack-theme.test.ts`는 소스 문자열 계약을 검증한다.
-   - 실제 route rendering, computed style, mobile overflow, dark/light contrast는 아직 자동화되어 있지 않다.
+   - source-level test는 `.dark` scoped utility와 composer light fallback 계약을 검증한다.
+   - 실제 route rendering, computed style, mobile overflow는 아직 자동화되어 있지 않다.
    - backend guest auth 또는 auth mock이 준비되면 Playwright에서 `data-testid="blueblack-workspace"`, `data-testid="prompt-composer"`, `data-testid="compact-model-selector"`의 실제 렌더링과 모바일 폭을 검증하는 테스트를 추가하는 것이 좋다.
 
 ## 수동 QA 체크리스트
