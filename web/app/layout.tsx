@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "sonner";
-import { ThemeProvider } from "@/components/theme-provider";
 import { AuthMonitor } from "@/components/auth-monitor";
+import { ThemeProvider } from "@/components/theme-provider";
 
 import "./globals.css";
 import { SessionProvider } from "next-auth/react";
@@ -29,7 +29,7 @@ const geistMono = Geist_Mono({
 });
 
 const LIGHT_THEME_COLOR = "hsl(0 0% 100%)";
-const DARK_THEME_COLOR = "hsl(240deg 10% 3.92%)";
+const DARK_THEME_COLOR = "hsl(225 38% 3%)";
 const THEME_COLOR_SCRIPT = `\
 (function() {
   var html = document.documentElement;

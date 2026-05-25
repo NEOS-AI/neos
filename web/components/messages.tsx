@@ -5,10 +5,10 @@ import { memo } from "react";
 import { useMessages } from "@/hooks/use-messages";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { useDataStream } from "./data-stream-provider";
 import { Greeting } from "./greeting";
 import { PreviewMessage, ThinkingMessage } from "./message";
-
 
 type MessagesProps = {
   chatId: string;
@@ -21,7 +21,6 @@ type MessagesProps = {
   isArtifactVisible: boolean;
   selectedModelId: string;
 };
-
 
 function PureMessages({
   chatId,
@@ -46,7 +45,12 @@ function PureMessages({
   useDataStream();
 
   return (
-    <div className="relative flex-1">
+    <div
+      className={cn(
+        "relative flex-1 overflow-hidden",
+        messages.length === 0 && "neos-blueblack-empty"
+      )}
+    >
       <div
         className="absolute inset-0 touch-pan-y overflow-y-auto"
         ref={messagesContainerRef}
@@ -87,7 +91,7 @@ function PureMessages({
 
       <button
         aria-label="Scroll to bottom"
-        className={`-translate-x-1/2 absolute bottom-4 left-1/2 z-10 rounded-full border bg-background p-2 shadow-lg transition-all hover:bg-muted ${
+        className={`-translate-x-1/2 absolute bottom-4 left-1/2 z-10 rounded-full border border-blue-300/20 bg-card/90 p-2 text-foreground shadow-[0_10px_35px_rgba(2,8,30,0.4)] backdrop-blur-xl transition-all hover:bg-accent hover:text-accent-foreground ${
           isAtBottom
             ? "pointer-events-none scale-0 opacity-0"
             : "pointer-events-auto scale-100 opacity-100"
