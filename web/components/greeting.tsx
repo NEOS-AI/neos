@@ -5,6 +5,7 @@ export const Greeting = () => {
     <div
       className="mx-auto mt-4 flex size-full max-w-3xl flex-col justify-center px-4 text-center md:mt-16 md:px-8"
       key="overview"
+      lang="ko"
     >
       <motion.div
         animate={{ opacity: 1, y: 0 }}

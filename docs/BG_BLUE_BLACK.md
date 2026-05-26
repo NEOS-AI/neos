@@ -1,7 +1,7 @@
 # Blue-Black Frontend Background Redesign
 
 작성일: 2026-05-24
-구현 갱신일: 2026-05-25
+구현 갱신일: 2026-05-26
 
 ## 개요
 
@@ -15,7 +15,8 @@
 - 스펙과 구현 계획은 작성 및 커밋된 이력이 있다.
 - 코드 리뷰에서 지적된 누락 사항을 반영해 실제 `web/` 소스에 blue-black theme 변경을 적용했다.
 - 검증은 auth/backend에 덜 의존하도록 source-level regression test와 build/lint 확인을 함께 사용한다.
-- 2026-05-25 코드 리뷰 후속 수정으로, blue-black utility를 `.dark` scope에 묶고 composer에는 light fallback 표면을 추가했다. 이제 light/system-light 모드에서는 기존 light token 표면을 유지하고, dark 모드에서만 blue-black workspace 효과가 활성화된다.
+- 2026-05-25 코드 리뷰 후속 수정으로, blue-black utility를 `.dark` scope에 묶고 composer에는 light fallback 표면을 추가했다.
+- 2026-05-26 코드 리뷰 후속 수정으로, composer/header/scroll button의 blue accent border, ring, glow도 `dark:` scope로 제한하고 greeting 영역에 `lang="ko"`를 추가했다. 이제 light/system-light 모드에서는 기존 light token 표면과 장식 강도를 유지하고, dark 모드에서만 blue-black workspace 효과와 blue accent가 활성화된다.
 
 ## 디자인 목표
 
@@ -90,6 +91,7 @@
 
 - 위 token 값은 `.dark` scope 안에서만 활성화된다.
 - `neos-blueblack-workspace`, `neos-blueblack-empty`, `neos-blueblack-panel` utility는 `.dark .neos-blueblack-*` selector로 제한된다.
+- composer focus ring, send button glow, header blue border, scroll-to-bottom blue border/shadow 같은 장식 accent도 `dark:` variant로 제한된다.
 - `ThemeProvider`는 `defaultTheme="system"`이고 사이드바 사용자 메뉴에서 light/dark 전환이 가능하다. 따라서 light/system-light 모드에서는 blue-black 배경을 강제로 칠하지 않고 기존 light token과 browser chrome을 유지한다.
 - 채팅 workspace를 항상 blue-black으로 강제하는 방식은 portal 기반 popover/dialog와 browser theme color까지 함께 강제해야 하므로 이번 후속 수정에서는 선택하지 않았다.
 
@@ -155,7 +157,7 @@
 
 - greeting copy는 한국어로 바뀌었지만 `web/app/layout.tsx`의 루트 `lang` 값은 아직 `"en"`이다.
 - `web/components/suggested-actions.tsx`의 추천 질문은 영어 copy를 유지한다.
-- 전체 제품 언어를 한국어로 전환하는 작업은 이번 배경 개선 범위에 포함되지 않았다. 접근성/번역 정확도를 더 엄격히 맞추려면 greeting 영역에 `lang="ko"`를 지정하거나, 앱의 locale/copy 정책을 별도 작업으로 정리해야 한다.
+- 전체 제품 언어를 한국어로 전환하는 작업은 이번 배경 개선 범위에 포함되지 않았다. 현재 greeting 영역에는 `lang="ko"`를 지정해 루트 `lang="en"` 아래에서도 한국어 문구의 접근성 힌트를 보완한다.
 
 ### 3. Composer
 
@@ -164,8 +166,8 @@
 의도:
 
 - composer가 화면 하단에서 검푸른 표면으로 떠 있는 것처럼 보이게 한다.
-- focus 상태에서는 blue ring과 border가 선명하게 나타난다.
-- 전송 버튼은 `primary` blue affordance를 사용한다.
+- dark mode focus 상태에서는 blue ring과 border가 선명하게 나타난다.
+- 전송 버튼은 `primary` blue affordance를 사용하고, dark mode에서만 blue glow를 더한다.
 - compact model selector는 모바일에서 너무 넓지 않도록 `w-[156px] sm:w-[200px]` 형태로 조정한다.
 
 ### 4. Header
@@ -175,7 +177,7 @@
 의도:
 
 - 배경의 검푸른 분위기를 유지하면서도 컨트롤 가독성을 확보한다.
-- 상단 경계선은 낮은 opacity의 blue border로 처리한다.
+- 상단 경계선은 dark mode에서 낮은 opacity의 blue border로 처리한다.
 
 ### 5. Sidebar
 
@@ -372,7 +374,7 @@ composer dock은 다음처럼 투명하게 둔다.
 scroll-to-bottom 버튼은 다음 기준으로 바꾼다.
 
 ```tsx
-01 className={`-translate-x-1/2 absolute bottom-4 left-1/2 z-10 rounded-full border border-blue-300/20 bg-card/90 p-2 text-foreground shadow-[0_10px_35px_rgba(2,8,30,0.4)] backdrop-blur-xl transition-all hover:bg-accent hover:text-accent-foreground ${
+01 className={`-translate-x-1/2 absolute bottom-4 left-1/2 z-10 rounded-full border bg-card/90 p-2 text-foreground backdrop-blur-xl transition-all hover:bg-accent hover:text-accent-foreground dark:border-blue-300/20 dark:shadow-[0_10px_35px_rgba(2,8,30,0.4)] ${
 02   isAtBottom
 03     ? "pointer-events-none scale-0 opacity-0"
 04     : "pointer-events-auto scale-100 opacity-100"
@@ -381,7 +383,7 @@ scroll-to-bottom 버튼은 다음 기준으로 바꾼다.
 
 | 라인 | 설명 |
 | --- | --- |
-| 01 | 버튼 표면을 `bg-background`에서 `bg-card/90`로 바꿔 blue-black panel처럼 보이게 한다. border, shadow, blur도 같은 맥락이다. |
+| 01 | 버튼 표면을 `bg-background`에서 `bg-card/90`로 바꿔 token 기반 panel처럼 보이게 한다. blue border와 heavy shadow는 `dark:`로 제한해 light mode의 장식 강도를 유지한다. |
 | 02-05 | 기존 show/hide behavior는 유지한다. 시각 스타일만 바꾸고 scroll 동작은 건드리지 않는다. |
 
 ### 6. `web/components/greeting.tsx` empty greeting
@@ -390,34 +392,35 @@ scroll-to-bottom 버튼은 다음 기준으로 바꾼다.
 01 <div
 02   className="mx-auto mt-4 flex size-full max-w-3xl flex-col justify-center px-4 text-center md:mt-16 md:px-8"
 03   key="overview"
-04 >
-05   <motion.div
-06     className="font-light text-2xl text-foreground/90 md:text-3xl"
-07   >
-08     안녕하세요.
-09   </motion.div>
-10   <motion.div
-11     className="mt-2 text-2xl text-muted-foreground md:text-3xl"
-12   >
-13     무엇을 도와드릴까요?
-14   </motion.div>
-15 </div>
+04   lang="ko"
+05 >
+06   <motion.div
+07     className="font-light text-2xl text-foreground/90 md:text-3xl"
+08   >
+09     안녕하세요.
+10   </motion.div>
+11   <motion.div
+12     className="mt-2 text-2xl text-muted-foreground md:text-3xl"
+13   >
+14     무엇을 도와드릴까요?
+15   </motion.div>
+16 </div>
 ```
 
 | 라인 | 설명 |
 | --- | --- |
-| 01-04 | greeting container다. `text-center`를 추가해 레퍼런스 이미지처럼 중앙 질문형 화면을 만든다. |
-| 05-09 | 첫 줄 greeting이다. `font-light`와 `text-foreground/90`로 과하게 굵지 않은 차분한 인상을 만든다. |
-| 08 | 한국어 사용 맥락에 맞춰 첫 인사를 짧게 둔다. |
-| 10-14 | 두 번째 줄 질문이다. muted color를 사용해 첫 줄보다 한 단계 낮은 위계를 만든다. |
-| 13 | 레퍼런스 이미지의 핵심 문장 구조를 NEOS 톤에 맞춰 가져온다. |
-| 15 | greeting container 종료다. |
+| 01-05 | greeting container다. `text-center`를 추가해 레퍼런스 이미지처럼 중앙 질문형 화면을 만들고, 한국어 copy 영역에 `lang="ko"`를 지정한다. |
+| 06-10 | 첫 줄 greeting이다. `font-light`와 `text-foreground/90`로 과하게 굵지 않은 차분한 인상을 만든다. |
+| 09 | 한국어 사용 맥락에 맞춰 첫 인사를 짧게 둔다. |
+| 11-15 | 두 번째 줄 질문이다. muted color를 사용해 첫 줄보다 한 단계 낮은 위계를 만든다. |
+| 14 | 레퍼런스 이미지의 핵심 문장 구조를 NEOS 톤에 맞춰 가져온다. |
+| 16 | greeting container 종료다. |
 
 ### 7. `web/components/multimodal-input.tsx` composer panel
 
 ```tsx
 01 <PromptInput
-02   className="neos-blueblack-panel rounded-[28px] border p-3 backdrop-blur-xl transition-all duration-200 focus-within:border-blue-300/45 focus-within:ring-1 focus-within:ring-blue-300/35 hover:border-blue-300/30"
+02   className="neos-blueblack-panel rounded-[28px] border bg-background p-3 shadow-xs backdrop-blur-xl transition-all duration-200 dark:hover:border-blue-300/30 dark:focus-within:border-blue-300/45 dark:focus-within:ring-1 dark:focus-within:ring-blue-300/35"
 03   data-testid="prompt-composer"
 04   onSubmit={(event) => {
 05     event.preventDefault();
@@ -433,7 +436,7 @@ scroll-to-bottom 버튼은 다음 기준으로 바꾼다.
 | 라인 | 설명 |
 | --- | --- |
 | 01 | 기존 `PromptInput` 컴포넌트는 유지한다. form submit behavior를 재작성하지 않는다. |
-| 02 | blue-black panel utility와 rounded pill 스타일을 적용한다. focus-within은 textarea focus 시 composer 전체가 반응하게 만든다. |
+| 02 | blue-black panel utility와 rounded pill 스타일을 적용한다. `bg-background shadow-xs`는 light fallback이고, blue focus/hover accent는 `dark:` scope에서만 composer 전체에 반응한다. |
 | 03 | Playwright test가 composer를 안정적으로 찾을 수 있게 하는 test id다. |
 | 04-11 | 기존 submit logic이다. status guard와 toast, submitForm 호출은 그대로 유지한다. |
 | 12 | PromptInput 시작 태그 종료다. |
@@ -446,14 +449,14 @@ textarea와 버튼류는 다음 방향이다.
 03 />
 04
 05 <PromptInputSubmit
-06   className="size-8 rounded-full bg-primary text-primary-foreground shadow-[0_0_24px_rgba(59,130,246,0.28)] transition-colors duration-200 hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none"
+06   className="size-8 rounded-full bg-primary text-primary-foreground transition-colors duration-200 hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none dark:shadow-[0_0_24px_rgba(59,130,246,0.28)]"
 07 />
 ```
 
 | 라인 | 설명 |
 | --- | --- |
 | 01-03 | textarea는 transparent로 유지하되 `text-foreground`를 명시해 새 token 위에서 글자색이 안정적으로 보이게 한다. |
-| 05-07 | send button은 `primary` token 기반 blue affordance를 명확히 드러낸다. disabled 상태에서는 glow를 제거해 클릭 불가 상태가 보이게 한다. |
+| 05-07 | send button은 `primary` token 기반 affordance를 명확히 드러낸다. blue glow는 dark mode에서만 더하고, disabled 상태에서는 glow를 제거해 클릭 불가 상태가 보이게 한다. |
 
 compact model selector는 모바일 composer에서 넘치지 않도록 다음 폭을 사용한다.
 
@@ -474,12 +477,12 @@ compact model selector는 모바일 composer에서 넘치지 않도록 다음 �
 ### 8. `web/components/chat-header.tsx` translucent header
 
 ```tsx
-01 <header className="sticky top-0 z-20 flex items-center gap-2 border-blue-300/10 border-b bg-background/65 px-2 py-1.5 backdrop-blur-xl md:px-2">
+01 <header className="sticky top-0 z-20 flex items-center gap-2 border-b bg-background/65 px-2 py-1.5 backdrop-blur-xl md:px-2 dark:border-blue-300/10">
 ```
 
 | 라인 | 설명 |
 | --- | --- |
-| 01 | header를 완전 불투명 배경에서 translucent layer로 바꾼다. `z-20`은 scroll 영역 위에 안정적으로 놓기 위한 값이고, `backdrop-blur-xl`은 배경과 컨트롤 사이의 시각적 분리를 만든다. |
+| 01 | header를 완전 불투명 배경에서 translucent layer로 바꾼다. `z-20`은 scroll 영역 위에 안정적으로 놓기 위한 값이고, `backdrop-blur-xl`은 배경과 컨트롤 사이의 시각적 분리를 만든다. blue border는 `dark:`로 제한해 light mode에서는 기본 border token을 따른다. |
 
 ### 9. `web/components/app-sidebar.tsx` sidebar brand
 
@@ -552,31 +555,69 @@ UI hook 연결 검증은 같은 파일에 다음 test로 둔다.
 02   const chat = await readSource("components/chat.tsx");
 03   const input = await readSource("components/multimodal-input.tsx");
 04   const sidebar = await readSource("components/app-sidebar.tsx");
-05
-06   expect(chat).toContain("neos-blueblack-workspace");
-07   expect(chat).toContain('data-testid="blueblack-workspace"');
-08   expect(chat).toContain("bg-transparent px-2 pb-3");
-09
-10   expect(input).toContain("neos-blueblack-panel");
-11   expect(input).toContain("bg-background");
-12   expect(input).toContain("shadow-xs");
-13   expect(input).toContain('data-testid="prompt-composer"');
-14   expect(input).toContain('data-testid="compact-model-selector"');
-15   expect(input).toContain("w-[156px]");
-16   expect(input).toContain("sm:w-[200px]");
-17
-18   expect(sidebar).toContain("border-sidebar-border/70");
-19   expect(sidebar).toContain("NEOS");
-20 });
+05   const messages = await readSource("components/messages.tsx");
+06   const header = await readSource("components/chat-header.tsx");
+07   const greeting = await readSource("components/greeting.tsx");
+08
+09   expect(chat).toContain("neos-blueblack-workspace");
+10   expect(chat).toContain('data-testid="blueblack-workspace"');
+11   expect(chat).toContain("bg-transparent px-2 pb-3");
+12
+13   expect(input).toContain("neos-blueblack-panel");
+14   expect(input).toContain("bg-background");
+15   expect(input).toContain("shadow-xs");
+16   expect(input).toContain('data-testid="prompt-composer"');
+17   expect(input).toContain('data-testid="compact-model-selector"');
+18   expect(input).toContain("w-[156px]");
+19   expect(input).toContain("sm:w-[200px]");
+20
+21   expect(sidebar).toContain("border-sidebar-border/70");
+22   expect(sidebar).toContain("NEOS");
+23   expect(messages).toContain("dark:border-blue-300/20");
+24   expect(messages).toContain("dark:shadow-[0_10px_35px_rgba(2,8,30,0.4)]");
+25   expect(header).toContain("dark:border-blue-300/10");
+26   expect(greeting).toContain('lang="ko"');
+27 });
 ```
 
 | 라인 | 설명 |
 | --- | --- |
-| 01-04 | 관련 컴포넌트 소스를 읽는다. route rendering 대신 source-level hook 존재를 확인한다. |
-| 06-08 | chat shell에 workspace class/test id가 붙고 composer dock이 transparent인지 확인한다. |
-| 10-16 | composer panel, light fallback, prompt composer hook, compact model selector hook과 모바일/desktop width token을 확인한다. |
-| 18-19 | sidebar border token과 `NEOS` 브랜드 라벨을 확인한다. |
-| 20 | test 종료다. |
+| 01-07 | 관련 컴포넌트 소스를 읽는다. route rendering 대신 source-level hook 존재를 확인한다. |
+| 09-11 | chat shell에 workspace class/test id가 붙고 composer dock이 transparent인지 확인한다. |
+| 13-19 | composer panel, light fallback, prompt composer hook, compact model selector hook과 모바일/desktop width token을 확인한다. |
+| 21-26 | sidebar border token, `NEOS` 브랜드 라벨, dark-scoped scroll/header accent, greeting `lang="ko"`를 확인한다. |
+| 27 | test 종료다. |
+
+dark-only accent 회귀 검증은 같은 파일에 다음 test로 둔다.
+
+```ts
+01 test("keeps blue-black accent styling scoped to dark mode", async () => {
+02   const input = await readSource("components/multimodal-input.tsx");
+03
+04   for (const className of [
+05     "dark:focus-within:border-blue-300/45",
+06     "dark:focus-within:ring-blue-300/35",
+07     "dark:hover:border-blue-300/30",
+08     "dark:shadow-[0_0_24px_rgba(59,130,246,0.28)]",
+09   ]) {
+10     expect(input).toContain(className);
+11   }
+12
+13   expect(input).not.toContain(" focus-within:border-blue-300/45");
+14   expect(input).not.toContain(" focus-within:ring-blue-300/35");
+15   expect(input).not.toContain(" hover:border-blue-300/30");
+16   expect(input).not.toContain(
+17     " text-primary-foreground shadow-[0_0_24px_rgba(59,130,246,0.28)]"
+18   );
+19 });
+```
+
+| 라인 | 설명 |
+| --- | --- |
+| 01-02 | composer 소스를 읽어 blue-black accent class 계약을 검증한다. |
+| 04-11 | focus border, focus ring, hover border, send glow가 모두 `dark:` scope로 유지되는지 확인한다. |
+| 13-18 | 동일한 blue accent가 unscoped class로 되돌아가지 않았는지 확인한다. |
+| 19 | test 종료다. |
 
 ## 테스트 및 검증 계획
 
@@ -595,6 +636,8 @@ web/tests/e2e/blueblack-theme.test.ts
 - CodeMirror dark surface가 `dark:bg-card`를 사용하고 `dark:bg-zinc-800`에 묶여 있지 않은지
 - chat shell과 composer에 `data-testid="blueblack-workspace"`, `data-testid="prompt-composer"`가 연결되어 있는지
 - composer가 light mode fallback을 위해 `bg-background shadow-xs`를 유지하는지
+- composer/header/scroll button의 blue accent class가 `dark:` scope에 묶여 있는지
+- greeting 영역에 `lang="ko"`가 지정되어 있는지
 - compact model selector가 `w-[156px] sm:w-[200px]` 계약을 유지하는지
 - 사이드바 border token과 `NEOS` 라벨이 소스에 유지되는지
 
@@ -622,7 +665,7 @@ pnpm --dir web build
 
 | 명령 | 결과 | 비고 |
 | --- | --- | --- |
-| `pnpm --dir web exec playwright test tests/e2e/blueblack-theme.test.ts --project=e2e` | 통과, 2 passed | source-level contract test |
+| `pnpm --dir web exec playwright test tests/e2e/blueblack-theme.test.ts --project=e2e` | 통과, 3 passed | source-level contract test |
 | `pnpm --dir web exec biome check app/globals.css app/layout.tsx components/chat.tsx components/messages.tsx components/greeting.tsx components/multimodal-input.tsx components/chat-header.tsx components/app-sidebar.tsx tests/e2e/blueblack-theme.test.ts` | 통과 | 관련 파일 formatting/lint 확인 |
 | `pnpm --dir web build` | 통과 | 제한된 네트워크에서는 Google Fonts fetch 실패가 있었고, 네트워크 허용 후 통과 |
 | `git diff --check` | 통과 | whitespace error 없음 |
@@ -632,20 +675,22 @@ pnpm --dir web build
 
 ## 코드 리뷰 후속 이슈
 
-2026-05-25 코드 리뷰에서 확인한 구현상 후속 이슈와 처리 상태는 다음과 같다.
+2026-05-25 및 2026-05-26 코드 리뷰에서 확인한 구현상 후속 이슈와 처리 상태는 다음과 같다.
 
 1. **Light mode contrast 리스크: 해결**
    - 원인: `neos-blueblack-workspace`와 `neos-blueblack-panel`이 전역 utility라 light mode에서도 dark 배경을 적용했다.
-   - 조치: blue-black utility를 `.dark .neos-blueblack-*` selector로 제한하고, composer에 `bg-background shadow-xs` fallback을 추가했다.
-   - 결과: light/system-light 모드는 기존 light token 표면을 유지하고, dark mode에서만 blue-black redesign이 적용된다.
+   - 추가 원인: composer focus ring, send glow, header border, scroll button border/shadow가 unscoped blue accent로 남아 light mode에도 새어 나갈 수 있었다.
+   - 조치: blue-black utility를 `.dark .neos-blueblack-*` selector로 제한하고, composer에 `bg-background shadow-xs` fallback을 추가했다. 후속으로 blue accent border/ring/shadow class를 `dark:` variant로 제한했다.
+   - 결과: light/system-light 모드는 기존 light token 표면과 장식 강도를 유지하고, dark mode에서만 blue-black redesign과 blue accent가 적용된다.
 
-2. **언어 메타데이터와 copy 혼합**
+2. **언어 메타데이터와 copy 혼합: 부분 해결**
    - greeting은 한국어지만 루트 `lang`은 `"en"`이고 suggested actions는 영어다.
-   - 접근성 품질을 높이려면 한국어 greeting에 `lang="ko"`를 지정하거나, 앱 전반의 copy/locale 정책을 별도로 정리해야 한다.
+   - 조치: 전체 제품 locale은 바꾸지 않고, greeting container에 `lang="ko"`를 지정했다.
+   - 남은 범위: suggested actions와 앱 전반 copy/locale 정책은 별도 작업으로 정리해야 한다.
 
 3. **시각 회귀 테스트 공백**
    - 현재 `blueblack-theme.test.ts`는 소스 문자열 계약을 검증한다.
-   - source-level test는 `.dark` scoped utility와 composer light fallback 계약을 검증한다.
+   - source-level test는 `.dark` scoped utility, composer light fallback, dark-only blue accent, greeting language marker 계약을 검증한다.
    - 실제 route rendering, computed style, mobile overflow는 아직 자동화되어 있지 않다.
    - backend guest auth 또는 auth mock이 준비되면 Playwright에서 `data-testid="blueblack-workspace"`, `data-testid="prompt-composer"`, `data-testid="compact-model-selector"`의 실제 렌더링과 모바일 폭을 검증하는 테스트를 추가하는 것이 좋다.
 

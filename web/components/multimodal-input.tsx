@@ -306,7 +306,7 @@ function PureMultimodalInput({
       />
 
       <PromptInput
-        className="neos-blueblack-panel rounded-[28px] border bg-background p-3 shadow-xs backdrop-blur-xl transition-all duration-200 focus-within:border-blue-300/45 focus-within:ring-1 focus-within:ring-blue-300/35 hover:border-blue-300/30"
+        className="neos-blueblack-panel rounded-[28px] border bg-background p-3 shadow-xs backdrop-blur-xl transition-all duration-200 dark:hover:border-blue-300/30 dark:focus-within:border-blue-300/45 dark:focus-within:ring-1 dark:focus-within:ring-blue-300/35"
         data-testid="prompt-composer"
         onSubmit={(event) => {
           event.preventDefault();
@@ -382,7 +382,7 @@ function PureMultimodalInput({
             <StopButton setMessages={setMessages} stop={stop} />
           ) : (
             <PromptInputSubmit
-              className="size-8 rounded-full bg-primary text-primary-foreground shadow-[0_0_24px_rgba(59,130,246,0.28)] transition-colors duration-200 hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none"
+              className="size-8 rounded-full bg-primary text-primary-foreground transition-colors duration-200 hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none dark:shadow-[0_0_24px_rgba(59,130,246,0.28)]"
               data-testid="send-button"
               disabled={!input.trim() || uploadQueue.length > 0}
               status={status}

@@ -33,6 +33,9 @@ test.describe("Blue-black dark theme", () => {
     const chat = await readSource("components/chat.tsx");
     const input = await readSource("components/multimodal-input.tsx");
     const sidebar = await readSource("components/app-sidebar.tsx");
+    const messages = await readSource("components/messages.tsx");
+    const header = await readSource("components/chat-header.tsx");
+    const greeting = await readSource("components/greeting.tsx");
 
     expect(chat).toContain("neos-blueblack-workspace");
     expect(chat).toContain('data-testid="blueblack-workspace"');
@@ -48,5 +51,29 @@ test.describe("Blue-black dark theme", () => {
 
     expect(sidebar).toContain("border-sidebar-border/70");
     expect(sidebar).toContain("NEOS");
+    expect(messages).toContain("dark:border-blue-300/20");
+    expect(messages).toContain("dark:shadow-[0_10px_35px_rgba(2,8,30,0.4)]");
+    expect(header).toContain("dark:border-blue-300/10");
+    expect(greeting).toContain('lang="ko"');
+  });
+
+  test("keeps blue-black accent styling scoped to dark mode", async () => {
+    const input = await readSource("components/multimodal-input.tsx");
+
+    for (const className of [
+      "dark:focus-within:border-blue-300/45",
+      "dark:focus-within:ring-blue-300/35",
+      "dark:hover:border-blue-300/30",
+      "dark:shadow-[0_0_24px_rgba(59,130,246,0.28)]",
+    ]) {
+      expect(input).toContain(className);
+    }
+
+    expect(input).not.toContain(" focus-within:border-blue-300/45");
+    expect(input).not.toContain(" focus-within:ring-blue-300/35");
+    expect(input).not.toContain(" hover:border-blue-300/30");
+    expect(input).not.toContain(
+      " text-primary-foreground shadow-[0_0_24px_rgba(59,130,246,0.28)]"
+    );
   });
 });

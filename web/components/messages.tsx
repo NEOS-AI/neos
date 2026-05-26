@@ -91,7 +91,7 @@ function PureMessages({
 
       <button
         aria-label="Scroll to bottom"
-        className={`-translate-x-1/2 absolute bottom-4 left-1/2 z-10 rounded-full border border-blue-300/20 bg-card/90 p-2 text-foreground shadow-[0_10px_35px_rgba(2,8,30,0.4)] backdrop-blur-xl transition-all hover:bg-accent hover:text-accent-foreground ${
+        className={`-translate-x-1/2 absolute bottom-4 left-1/2 z-10 rounded-full border bg-card/90 p-2 text-foreground backdrop-blur-xl transition-all hover:bg-accent hover:text-accent-foreground dark:border-blue-300/20 dark:shadow-[0_10px_35px_rgba(2,8,30,0.4)] ${
           isAtBottom
             ? "pointer-events-none scale-0 opacity-0"
             : "pointer-events-auto scale-100 opacity-100"
