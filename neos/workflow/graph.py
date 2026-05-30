@@ -14,8 +14,9 @@ from neos.utils.smart_cache_manager import smart_cache_manager
 from neos.config.settings import settings
 from neos.tools.tool_selector import tool_selector
 
-from .enums import WorkflowNode, WorkflowPathway, IntentType
+from .enums import WorkflowNode, WorkflowPathway, IntentType, AutonomyLevel
 from .state import AgentState, WorkflowConfig
+from .harness.cache_policy import should_cache_harness_result
 from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationOrchestrator
 from .processors import (
     ResultProcessor,
@@ -25,6 +26,7 @@ from .processors import (
     RefinementChecker,
     QueryRefinementAgent,
     FactCheckProcessor,
+    ResearchHarnessProcessor,
     ResearchContinuationProcessor,
     SelfReflectionProcessor,
     HypothesisManager,
@@ -33,15 +35,79 @@ from .processors import (
 from .utils import QueryClassifier
 from .checkpointer import get_checkpointer
 from .events import WorkflowEventHandler, NullEventHandler
+from .routing import OrchestratorRouter, QualityRouter
 from .telemetry import trace_workflow_node, add_span_event, set_span_attributes
 
 
 logger = logging.getLogger(__name__)
 
+_HARNESS_GATE_BLOCKING_VERDICTS = {"fail", "needs_repair"}
+
 # CR-P6-11: 우선순위 라우팅 단일 테이블 — 향후 CANVAS_RENDERING 등 추가 시 여기만 수정
 _PRIORITY_ROUTING_MAP: dict[str, str] = {
     IntentType.TASK_SCHEDULING.value: "task_scheduling",
 }
+
+
+def _resolve_autonomy_level(raw_level: Any) -> int:
+    if raw_level is None:
+        raw_level = settings.DEFAULT_AUTONOMY_LEVEL
+
+    try:
+        return AutonomyLevel(int(raw_level)).value
+    except (TypeError, ValueError):
+        return AutonomyLevel.ASSISTED.value
+
+
+def _coerce_quality_score(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_gate_harness_blocked(final_state: Dict[str, Any] | None) -> bool:
+    if not final_state:
+        return False
+    return (
+        str(final_state.get("harness_mode") or "").lower() == "gate"
+        and str(final_state.get("harness_verdict") or "").lower()
+        in _HARNESS_GATE_BLOCKING_VERDICTS
+    )
+
+
+def _harness_blocked_message(final_state: Dict[str, Any]) -> str:
+    failed = final_state.get("harness_failed_checks") or []
+    failed_text = ", ".join(str(item) for item in failed) if failed else "unknown"
+    return (
+        "검증 중 일부 핵심 조건을 만족하지 못해 최종 보고서로 확정하지 않았습니다.\n"
+        f"부족한 항목: {failed_text}\n"
+        "가능한 다음 작업: 추가 검색 또는 수리 후 재검증"
+    )
+
+
+def _should_bypass_cache_for_mission(
+    user_input: Dict[str, Any],
+    autonomy_level: int,
+) -> bool:
+    from neos.workflow.mission.routing import has_mission_request_hint
+
+    preferences = user_input.get("preferences") or {}
+    if preferences.get("use_mission_runtime"):
+        return True
+    if has_mission_request_hint(user_input):
+        return True
+    return autonomy_level == AutonomyLevel.MANUAL.value
+
+
+def _mission_validation_passed(result: Dict[str, Any]) -> bool:
+    metadata = result.get("metadata") or {}
+    if not metadata.get("mission_id"):
+        return True
+    validation_summary = metadata.get("validation_summary") or {}
+    return validation_summary.get("passed") is True
 
 
 def _get_priority_routing(state: AgentState) -> str | None:
@@ -75,7 +141,27 @@ class MultiAgentWorkflow:
         self.result_processor = ResultProcessor()
         self.fact_check_processor = FactCheckProcessor()
         self.quality_validator = QualityValidator(self.config)
+        self.research_harness_processor = ResearchHarnessProcessor()
         self.response_generator = ResponseGenerator()
+
+        from .mission.executor import MissionExecutor
+        from .mission.integrator import MissionIntegrator
+        from .mission.planner import MissionPlanner
+        from .mission.validators import MissionValidator
+
+        self.mission_planner = MissionPlanner()
+        self.mission_executor = MissionExecutor(
+            search_orchestrator=self.search_orchestrator,
+            analysis_orchestrator=self.analysis_orchestrator,
+            generation_orchestrator=self.generation_orchestrator,
+            recursive_orchestrator=lambda: self.recursive_orchestrator,
+            hyper_deep_orchestrator=lambda: self.hyper_deep_orchestrator,
+        )
+        self.mission_validator = MissionValidator(
+            fact_check_processor=self.fact_check_processor,
+            quality_validator=self.quality_validator,
+        )
+        self.mission_integrator = MissionIntegrator()
 
         # Phase 2 processors
         self.research_continuation_processor = ResearchContinuationProcessor()
@@ -146,8 +232,11 @@ class MultiAgentWorkflow:
 
         # 워크플로우 그래프 생성 (비동기로 초기화)
         self.graph = None
+        self._graphs_by_checkpointer: dict[bool, Any] = {}
         self._graph_initialized = False
         self._graph_uses_checkpointer = False
+        self._orchestrator_router = OrchestratorRouter()
+        self._quality_router = QualityRouter()
 
 
     def _initialize_agents(self) -> Dict[str, Any]:
@@ -228,7 +317,13 @@ class MultiAgentWorkflow:
         workflow.add_node(WorkflowNode.RESULT_INTEGRATOR.value, self._integrate_results_node)
         workflow.add_node(WorkflowNode.FACT_CHECK.value, self._fact_check_node)
         workflow.add_node(WorkflowNode.QUALITY_VALIDATOR.value, self._validate_quality_node)
+        workflow.add_node(WorkflowNode.RESEARCH_HARNESS.value, self._research_harness_node)
         workflow.add_node(WorkflowNode.SELF_REFLECTION.value, self._self_reflection_node)  # Phase 2.6
+        workflow.add_node(WorkflowNode.MISSION_PLANNER.value, self._mission_planner_node)
+        workflow.add_node(WorkflowNode.MISSION_APPROVAL.value, self._mission_approval_node)
+        workflow.add_node(WorkflowNode.MISSION_EXECUTOR.value, self._mission_executor_node)
+        workflow.add_node(WorkflowNode.MISSION_VALIDATOR.value, self._mission_validator_node)
+        workflow.add_node(WorkflowNode.MISSION_INTEGRATOR.value, self._mission_integrator_node)
         workflow.add_node(WorkflowNode.RESP_GENERATOR.value, self._generate_response_node)
 
         # ROMA: Recursive Orchestrator 노드 (피처 플래그로 격리)
@@ -289,6 +384,7 @@ class MultiAgentWorkflow:
             _routing_map = {
                 WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
                 WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
+                "mission": WorkflowNode.MISSION_PLANNER.value,
             }
             if settings.RECURSIVE_AGENT_ENABLED:
                 _routing_map["recursive"] = WorkflowNode.RECURSIVE_ORCHESTRATOR.value
@@ -305,7 +401,7 @@ class MultiAgentWorkflow:
 
             workflow.add_conditional_edges(
                 WorkflowNode.SKILL_TOOL_SELECTOR.value,
-                self._should_use_recursive_agent,
+                self._route_after_skill_tool_selector,
                 _routing_map,
             )
             if settings.RECURSIVE_AGENT_ENABLED:
@@ -324,13 +420,14 @@ class MultiAgentWorkflow:
             _else_routing = {
                 WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
                 WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
+                "mission": WorkflowNode.MISSION_PLANNER.value,
                 "task_scheduling": WorkflowNode.TASK_SCHEDULING_NODE.value,
             }
             if settings.A2UI_ENABLED:
                 _else_routing["ui_frame"] = WorkflowNode.UI_FRAME_GENERATOR.value
             workflow.add_conditional_edges(
                 WorkflowNode.SKILL_TOOL_SELECTOR.value,
-                self._should_skip_orchestrators,
+                self._route_after_skill_tool_selector,
                 _else_routing,
             )
             if settings.A2UI_ENABLED:
@@ -339,6 +436,28 @@ class MultiAgentWorkflow:
 
         # Phase 4 (OpenClaw Cron): TASK_SCHEDULING_NODE → 바로 응답 생성
         workflow.add_edge(WorkflowNode.TASK_SCHEDULING_NODE.value, WorkflowNode.RESP_GENERATOR.value)
+
+        # Mission Runtime: plan -> optional approval -> serial executor -> validators -> response
+        workflow.add_conditional_edges(
+            WorkflowNode.MISSION_PLANNER.value,
+            self._should_continue_after_mission_planner,
+            {
+                "approval_unavailable": WorkflowNode.RESP_GENERATOR.value,
+                "needs_approval": WorkflowNode.MISSION_APPROVAL.value,
+                "execute": WorkflowNode.MISSION_EXECUTOR.value,
+            },
+        )
+        workflow.add_conditional_edges(
+            WorkflowNode.MISSION_APPROVAL.value,
+            self._should_continue_after_approval,
+            {
+                "approved": WorkflowNode.MISSION_EXECUTOR.value,
+                "rejected": WorkflowNode.RESP_GENERATOR.value,
+            },
+        )
+        workflow.add_edge(WorkflowNode.MISSION_EXECUTOR.value, WorkflowNode.MISSION_VALIDATOR.value)
+        workflow.add_edge(WorkflowNode.MISSION_VALIDATOR.value, WorkflowNode.MISSION_INTEGRATOR.value)
+        workflow.add_edge(WorkflowNode.MISSION_INTEGRATOR.value, WorkflowNode.RESP_GENERATOR.value)
 
         # Phase 2 (OpenClaw Execution Approval): EXECUTION_APPROVAL → 분기
         # approved → 오케스트레이터 경로, rejected → 응답 생성으로 바로 이동
@@ -385,14 +504,15 @@ class MultiAgentWorkflow:
             self._should_regenerate,
             {
                 WorkflowPathway.REGENERATE.value: WorkflowNode.HYPOTHESIS_GENERATION.value,  # 품질이 낮으면 가설 생성부터 다시
-                WorkflowPathway.PROCEED.value: WorkflowNode.SELF_REFLECTION.value  # Phase 2.6: 품질 OK → self-reflection
+                WorkflowPathway.PROCEED.value: WorkflowNode.SELF_REFLECTION.value,
             }
         )
 
         # Phase 2.6: self_reflection → response_generator
         workflow.add_edge(WorkflowNode.SELF_REFLECTION.value, WorkflowNode.RESP_GENERATOR.value)
 
-        workflow.add_edge(WorkflowNode.RESP_GENERATOR.value, END)
+        workflow.add_edge(WorkflowNode.RESP_GENERATOR.value, WorkflowNode.RESEARCH_HARNESS.value)
+        workflow.add_edge(WorkflowNode.RESEARCH_HARNESS.value, END)
 
         # Conditionally use checkpointer
         if use_checkpointer:
@@ -401,7 +521,10 @@ class MultiAgentWorkflow:
             # Phase 2 (OpenClaw Execution Approval): interrupt_before는 checkpointer 경로에만 적용
             # stateless 경로(use_checkpointer=False)에서는 interrupt가 동작하지 않으므로 제외
             interrupt_nodes = (
-                [WorkflowNode.EXECUTION_APPROVAL.value]
+                [
+                    WorkflowNode.EXECUTION_APPROVAL.value,
+                    WorkflowNode.MISSION_APPROVAL.value,
+                ]
                 if settings.EXECUTION_APPROVAL_ENABLED
                 else []
             )
@@ -418,10 +541,14 @@ class MultiAgentWorkflow:
         Args:
             use_checkpointer: Whether to use checkpointer for state persistence
         """
-        if not self._graph_initialized:
-            self.graph = await self._create_workflow_graph(use_checkpointer=use_checkpointer)
-            self._graph_initialized = True
-            self._graph_uses_checkpointer = use_checkpointer
+        if use_checkpointer not in self._graphs_by_checkpointer:
+            self._graphs_by_checkpointer[use_checkpointer] = (
+                await self._create_workflow_graph(use_checkpointer=use_checkpointer)
+            )
+
+        self.graph = self._graphs_by_checkpointer[use_checkpointer]
+        self._graph_initialized = True
+        self._graph_uses_checkpointer = use_checkpointer
 
 
     async def _check_refinement_node(self, state: AgentState) -> Dict[str, Any]:
@@ -558,7 +685,8 @@ class MultiAgentWorkflow:
                     for agent in [
                         "knowledge_search", "realtime_info_search", "multi_query_search",
                     ]
-                )
+                ),
+                "autonomy_level": state.get("autonomy_level"),
             }
 
             # Call skill/tool selector
@@ -579,15 +707,27 @@ class MultiAgentWorkflow:
                 "selection_reasoning": selection.reasoning,
             }
 
+            from neos.workflow.mission.routing import should_use_mission_runtime
+
+            candidate_state = {**state, **base_result}
+            if should_use_mission_runtime(candidate_state):
+                return base_result
+
             # Phase 2 (OpenClaw Execution Approval): 민감 스킬 allowlist 체크
             # checkpointed 경로에서만 유효 — stateless 경로에서는 interrupt_before가 동작하지 않으므로
             # approval 로직을 수행하면 approval_decision=None 상태로 EXECUTION_APPROVAL 노드가 즉시
             # 실행되어 "승인 처리 중 예기치 않은 상태" 오류 메시지로 워크플로우가 종료된다.
             if settings.EXECUTION_APPROVAL_ENABLED and self._graph_uses_checkpointer:
-                approval_skills = [
-                    s for s in selection.selected_skills
-                    if s in settings.APPROVAL_REQUIRED_SKILLS
-                ]
+                from neos.workflow.autonomy.middleware import get_policy_from_state
+
+                approval_required_skills = (
+                    get_policy_from_state(state).get_approval_required_actions(
+                        required_agents=state.get("required_agents", []),
+                        selected_skills=selection.selected_skills,
+                        selected_tools=selection.selected_tools,
+                    )
+                )
+                approval_skills = approval_required_skills
                 if approval_skills:
                     # DB allowlist 조회 — allowlist에 있으면 자동 승인
                     is_allowlisted = await self._check_approval_allowlist(user_id, approval_skills)
@@ -647,6 +787,54 @@ class MultiAgentWorkflow:
             logger.error("[ExecutionApprovalNode] ApprovalProcessor is not initialized")
             return {"pending_approvals": [], "approval_decision": None}
         return await self.approval_processor.process(state)
+
+    async def _mission_planner_node(self, state: AgentState) -> Dict[str, Any]:
+        """Mission Runtime: MissionPlan과 ValidationContract 생성."""
+        result = await self.mission_planner.plan(state)
+        if result.get("pending_approvals") and not self._mission_approval_available():
+            result.update(
+                {
+                    "pending_approvals": [],
+                    "approval_decision": None,
+                    "approval_outcome": "rejected",
+                    "mission_status": "approval_unavailable",
+                    "final_response": (
+                        "Manual mission 승인을 처리할 수 없습니다. "
+                        "EXECUTION_APPROVAL_ENABLED와 checkpointer가 활성화되어야 합니다."
+                    ),
+                }
+            )
+        return result
+
+    def _mission_approval_available(self) -> bool:
+        return bool(
+            settings.EXECUTION_APPROVAL_ENABLED
+            and self._graph_uses_checkpointer
+            and self.approval_processor is not None
+        )
+
+    async def _mission_approval_node(self, state: AgentState) -> Dict[str, Any]:
+        """Mission Runtime: 실행 전 mission-level 승인 처리."""
+        if self.approval_processor is None:
+            logger.error("[MissionApprovalNode] ApprovalProcessor is not initialized")
+            return {
+                "pending_approvals": [],
+                "approval_decision": None,
+                "approval_outcome": "rejected",
+            }
+        return await self.approval_processor.process(state)
+
+    async def _mission_executor_node(self, state: AgentState) -> Dict[str, Any]:
+        """Mission Runtime: 기존 orchestrator를 task wrapper로 순차 실행."""
+        return await self.mission_executor.execute(state)
+
+    async def _mission_validator_node(self, state: AgentState) -> Dict[str, Any]:
+        """Mission Runtime: ValidationContract 기반 검증."""
+        return await self.mission_validator.validate(state)
+
+    async def _mission_integrator_node(self, state: AgentState) -> Dict[str, Any]:
+        """Mission Runtime: mission 결과 메타데이터 통합."""
+        return await self.mission_integrator.integrate(state)
 
     async def _ui_frame_generator_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 8 (OpenClaw A2UI): UIFrame 생성 노드 래퍼.
@@ -757,6 +945,11 @@ class MultiAgentWorkflow:
         """품질 검증 노드"""
         return await self.quality_validator.validate_quality(state)
 
+    async def _research_harness_node(self, state: AgentState) -> Dict[str, Any]:
+        """Research harness validation node."""
+        updates = await self.research_harness_processor.process(state)
+        return {**state, **updates}
+
     async def _generate_response_node(self, state: AgentState) -> Dict[str, Any]:
         """응답 생성 노드"""
         return await self.response_generator.generate_response(state)
@@ -793,57 +986,36 @@ class MultiAgentWorkflow:
             WorkflowPathway.USE_ORCHESTRATORS.value: 기존 오케스트레이터 경로
             WorkflowPathway.SKIP_ORCHESTRATORS.value: 바로 응답 생성
         """
-        # 0-A순위: Phase 8 (A2UI) — needs_ui 플래그 최우선 체크 (flag 기반, _PRIORITY_ROUTING_MAP 이전)
-        if settings.A2UI_ENABLED:
-            if state.get("needs_ui") and not state.get("ui_submission"):
-                logger.info("[A2UI] needs_ui=True, no ui_submission → ui_frame_generator")
-                return "ui_frame"
+        return self._orchestrator_router.route(state)
 
-        # 0-B순위: 최우선 라우팅 (CR-P6-11: _PRIORITY_ROUTING_MAP 단일 지점 관리)
-        priority = _get_priority_routing(state)
-        if priority:
-            logger.info("[PriorityRouting] intent=%s → %s", state.get("query_intent"), priority)
-            return priority
+    def _route_after_skill_tool_selector(self, state: AgentState) -> str:
+        """SkillToolSelector 이후 mission/runtime/legacy 경로를 결정한다."""
+        legacy_route = self._orchestrator_router.route(state)
+        if legacy_route in {"needs_approval", "task_scheduling", "ui_frame"}:
+            return legacy_route
 
-        # 0-C순위: Phase 2 (OpenClaw Execution Approval) — 승인 대기 중이면 즉시 라우팅
-        # pending_approvals가 있고 approval_decision이 None이면 interrupt_before 발동
-        if settings.EXECUTION_APPROVAL_ENABLED:
-            if state.get("pending_approvals") and state.get("approval_decision") is None:
-                logger.info("[ApprovalRouting] pending_approvals detected → needs_approval")
-                return "needs_approval"
+        mission_route = self._should_use_mission_runtime(state)
+        if mission_route == "mission":
+            return mission_route
+        return legacy_route
 
-        classification = state.get("query_classification") or {}
-        complexity = classification.get("complexity_score", 0.0)
-        intent = state.get("query_intent", "")
+    def _should_use_mission_runtime(self, state: AgentState) -> str:
+        """Mission Runtime 후보면 mission branch로 보낸다."""
+        from neos.workflow.mission import routing as mission_routing
 
-        # 1순위: HyperDeep — 더 강력한 에이전트이므로 먼저 체크
-        if settings.HYPER_DEEP_AGENT_ENABLED:
-            if intent == IntentType.HYPER_DEEP_RESEARCH.value:
-                logger.info("[HyperDeep] Routing to hyper_deep_orchestrator: intent=hyper_deep_research")
-                return "hyper_deep"
+        return (
+            "mission"
+            if mission_routing.should_use_mission_runtime(state)
+            else "legacy"
+        )
 
-            hyper_deep_intents = (IntentType.DEEP_RESEARCH.value, IntentType.COMPLEX_ANALYSIS.value)
-            if complexity >= settings.HYPER_DEEP_COMPLEXITY_THRESHOLD and intent in hyper_deep_intents:
-                logger.info(
-                    f"[HyperDeep] Routing to hyper_deep_orchestrator: "
-                    f"intent={intent}, complexity={complexity:.2f}"
-                )
-                return "hyper_deep"
-
-        # 2순위: ROMA 재귀 에이전트
-        if intent == IntentType.RECURSIVE_RESEARCH.value:
-            logger.info("[ROMA] Routing to recursive agent: intent=recursive_research")
-            return "recursive"
-
-        roma_intents = (IntentType.DEEP_RESEARCH.value, IntentType.COMPLEX_ANALYSIS.value)
-        if complexity >= settings.RECURSIVE_COMPLEXITY_THRESHOLD and intent in roma_intents:
-            logger.info(
-                f"[ROMA] Routing to recursive agent: intent={intent}, complexity={complexity:.2f}"
-            )
-            return "recursive"
-
-        # 기존 라우팅 로직에 위임
-        return self._should_skip_orchestrators(state)
+    def _should_continue_after_mission_planner(self, state: AgentState) -> str:
+        """MissionPlanner 이후 승인 필요 여부를 판단한다."""
+        if state.get("mission_status") == "approval_unavailable":
+            return "approval_unavailable"
+        if state.get("pending_approvals") and state.get("approval_decision") is None:
+            return "needs_approval"
+        return "execute"
 
     def _should_refine_query(self, state: AgentState) -> str:
         """
@@ -866,19 +1038,7 @@ class MultiAgentWorkflow:
 
         is_continuation=True이면 research_continuation 노드로 라우팅.
         """
-        # 후속 연구 체크 (최우선)
-        if state.get("is_continuation"):
-            print("[DEBUG] Research continuation detected, routing to continuation node")
-            return "continue_research"
-
-        # 기존 refinement 로직
-        needs_refinement = state.get("needs_refinement", False)
-        if needs_refinement:
-            print(f"[DEBUG] Query refinement needed: {state.get('refinement_reasons', [])}")
-            return "refine_query"
-
-        print("[DEBUG] Normal flow, skipping refinement")
-        return "skip_refinement"
+        return self._quality_router.should_refine_or_continue(state)
 
     def _should_process_context(self, state: AgentState) -> str:
         """
@@ -889,38 +1049,22 @@ class MultiAgentWorkflow:
         """
         # conversation_context_processor는 이미 실행됨
         # 내부에서 히스토리 여부를 확인하고 처리
-        return "process_context"
+        return self._quality_router.should_process_context(state)
 
     def _should_replan(self, state: AgentState) -> str:
         """Phase 2.4: replanning 필요 여부 결정
 
         조건: sub_topics 존재 + 검색 결과 < 10 + replan_count < 2
         """
-        classification = state.get("query_classification") or {}
-        sub_topics = classification.get("sub_topics", [])
-        search_results = state.get("search_results", [])
-        replan_count = state.get("replan_count", 0)
-
-        if sub_topics and len(search_results) < 10 and replan_count < 2:
-            logger.info(
-                f"[Replanner] Triggered (results={len(search_results)}, "
-                f"replan #{replan_count + 1})"
-            )
-            return "replan"
-
-        return "skip_replan"
+        return self._quality_router.should_replan(state)
 
     def _should_continue_research(self, state: AgentState) -> str:
         """Phase 2.4: replanning 후 추가 검색 필요 여부 결정"""
-        remaining = state.get("remaining_questions", [])
-        if remaining:
-            logger.info(f"[Replanner] {len(remaining)} gaps found, looping to search")
-            return "continue_search"
-        return "proceed"
+        return self._quality_router.should_continue_research(state)
 
     def _should_regenerate(self, state: AgentState) -> str:
         """재생성 여부 결정"""
-        return self.quality_validator.should_regenerate(state)
+        return self._quality_router.should_regenerate(state, self.quality_validator)
 
     def _should_skip_orchestrators(self, state: AgentState) -> str:
         """
@@ -935,82 +1079,7 @@ class MultiAgentWorkflow:
             `skip_orchestrators`: response_generator로 직접 이동
             `use_orchestrators`: search_orchestrator로 이동하여 정상 파이프라인 실행
         """
-        required_agents = state.get("required_agents", [])
-        selected_tools = state.get("selected_tools", [])
-        query_intent = state.get("query_intent", "")
-        query_classification = state.get("query_classification", {})
-        complexity_score = query_classification.get("complexity_score", 0.0)
-
-        # 최우선 라우팅 (CR-P6-11: _PRIORITY_ROUTING_MAP 단일 지점 관리)
-        priority = _get_priority_routing(state)
-        if priority:
-            return priority
-
-        # 사용할 쿼리 결정 (refined_query가 있으면 그것을 사용)
-        query = state.get("refined_query", state.get("original_query", ""))
-
-        # ================================================================
-        # 1단계: 에이전트/도구가 있으면 무조건 orchestrator 사용
-        # ================================================================
-        if required_agents or selected_tools:
-            print(f"[DEBUG] Using orchestrators (agents: {len(required_agents)}, tools: {len(selected_tools)})")
-            return WorkflowPathway.USE_ORCHESTRATORS.value
-
-        # ================================================================
-        # 2단계: 에이전트/도구가 없어도 orchestrator가 필요한 경우
-        # ================================================================
-
-        # 2-1. 특정 의도는 항상 검색 필요
-        always_search_intents = [
-            IntentType.REALTIME_INFO.value,        # 실시간 정보는 항상 검색
-            IntentType.FINANCIAL_ANALYSIS.value,   # 금융 분석은 데이터 필요
-            IntentType.DATA_ANALYSIS.value,        # 데이터 분석은 외부 데이터 필요
-            IntentType.COMPARISON.value,           # 비교는 여러 소스 필요
-            IntentType.DEEP_RESEARCH.value,        # 심층 조사는 당연히 검색
-            IntentType.COMPLEX_ANALYSIS.value      # 복잡한 분석은 검색 필요
-        ]
-
-        if query_intent in always_search_intents:
-            print(f"[DEBUG] Intent '{query_intent}' requires orchestrators")
-            return WorkflowPathway.USE_ORCHESTRATORS.value
-
-        # 2-2. 복잡도가 높으면 항상 검색
-        if complexity_score >= 0.5:
-            print(f"[DEBUG] High complexity ({complexity_score:.2f}) requires orchestrators")
-            return WorkflowPathway.USE_ORCHESTRATORS.value
-
-        # 2-3. 질문 형태이면 검색 필요 (사실 확인이 필요한 경우)
-        if self._is_question_query(query):
-            print("[DEBUG] Question format detected, using orchestrators")
-            return WorkflowPathway.USE_ORCHESTRATORS.value
-
-        # 2-4. 특정 키워드가 있으면 검색 필요
-        if self._requires_search_keywords(query):
-            print("[DEBUG] Search keywords detected, using orchestrators")
-            return WorkflowPathway.USE_ORCHESTRATORS.value
-
-        # TODO: 추가 비즈니스 로직을 여기에 구현하세요
-        # 예시:
-        # - 대화 컨텍스트 기반 판단
-        #   if state.get("conversation_context"):
-        #       # 이전 대화가 복잡했다면 현재도 검색 필요할 수 있음
-        #
-        # - 사용자 프로필 기반 판단
-        #   user_preferences = state.get("user_preferences", {})
-        #   if user_preferences.get("always_search", False):
-        #       return WorkflowPathway.USE_ORCHESTRATORS.value
-        #
-        # - 시간대 기반 판단
-        #   from datetime import datetime
-        #   current_hour = datetime.now().hour
-        #   if 9 <= current_hour <= 18:  # 업무 시간에는 더 정확한 정보 제공
-        #       return WorkflowPathway.USE_ORCHESTRATORS.value
-
-        # ================================================================
-        # 3단계: 모든 조건을 통과하면 orchestrator 건너뛰기
-        # ================================================================
-        print("[DEBUG] No agents, tools, or special conditions - skipping orchestrators")
-        return WorkflowPathway.SKIP_ORCHESTRATORS.value
+        return self._orchestrator_router.base_route(state)
 
     def _is_question_query(self, query: str) -> bool:
         """
@@ -1022,23 +1091,7 @@ class MultiAgentWorkflow:
         - "?" 포함 여부
         - 의문사 포함 여부 (어디, 언제, 누가, 무엇, 왜, 어떻게)
         """
-        if not query:
-            return False
-
-        # 물음표가 있으면 질문
-        if "?" in query or "？" in query:
-            return True
-
-        # 의문사가 있으면 질문
-        question_words_ko = ["어디", "언제", "누가", "누구", "무엇", "뭐", "왜", "어떻게", "어느"]
-        question_words_en = ["where", "when", "who", "what", "why", "how", "which"]
-
-        query_lower = query.lower()
-        for word in question_words_ko + question_words_en:
-            if word in query_lower:
-                return True
-
-        return False
+        return self._orchestrator_router.is_question_query(query)
 
     def _requires_search_keywords(self, query: str) -> bool:
         """
@@ -1051,40 +1104,7 @@ class MultiAgentWorkflow:
         - 비교/분석 키워드
         - 수치/데이터 키워드
         """
-        if not query:
-            return False
-
-        # 실시간/최신 정보 키워드
-        realtime_keywords = [
-            "최신", "현재", "지금", "오늘", "실시간",
-            "current", "latest", "now", "today", "real-time"
-        ]
-
-        # 비교/분석 키워드
-        analysis_keywords = [
-            "비교", "분석", "대비", "차이", "검토", "평가",
-            "compare", "analysis", "versus", "vs", "difference", "review"
-        ]
-
-        # 수치/데이터 키워드
-        data_keywords = [
-            "얼마", "몇", "수치", "데이터", "통계", "가격", "주가", "환율",
-            "how much", "how many", "price", "rate", "statistics", "data"
-        ]
-
-        # TODO: 도메인 특화 키워드를 추가하세요
-        # 예시:
-        # domain_keywords = ["재무제표", "실적", "공시", "뉴스"]
-
-        query_lower = query.lower()
-
-        # 키워드 체크
-        all_keywords = realtime_keywords + analysis_keywords + data_keywords
-        for keyword in all_keywords:
-            if keyword in query_lower:
-                return True
-
-        return False
+        return self._orchestrator_router.requires_search_keywords(query)
 
 
     async def execute_workflow(
@@ -1132,11 +1152,27 @@ class MultiAgentWorkflow:
 
             # Tracing: 워크플로우 시작 이벤트 기록
             add_span_event(span, "workflow_started", {"query_preview": query[:100]})
+            autonomy_level = _resolve_autonomy_level(user_input.get("autonomy_level"))
+            bypass_cache = bool(user_input.get("bypass_cache", False)) or (
+                _should_bypass_cache_for_mission(user_input, autonomy_level)
+            )
+            cache_key = self._generate_cache_key(
+                query,
+                user_id,
+                autonomy_level=autonomy_level,
+            )
 
             # 1. 스마트 캐시 확인 (활성화된 경우)
-            if settings.SMART_CACHE_ENABLED:
+            if bypass_cache:
+                add_span_event(span, "cache_bypassed")
+                set_span_attributes(span, {"cache.bypassed": True})
+            elif settings.SMART_CACHE_ENABLED:
                 add_span_event(span, "checking_smart_cache")
-                smart_cache_result = await self._check_smart_cache(query, user_id)
+                smart_cache_result = await self._check_smart_cache(
+                    query,
+                    user_id,
+                    autonomy_level=autonomy_level,
+                )
                 if smart_cache_result:
                     # 캐시 히트 시에도 완료 이벤트 발행
                     add_span_event(span, "smart_cache_hit")
@@ -1146,15 +1182,15 @@ class MultiAgentWorkflow:
                 add_span_event(span, "smart_cache_miss")
 
             # 2. 기존 Redis 캐시 확인 (폴백)
-            add_span_event(span, "checking_redis_cache")
-            cache_key = self._generate_cache_key(query, user_id)
-            cached_response = await self._check_cached_response(cache_key)
-            if cached_response:
-                add_span_event(span, "redis_cache_hit")
-                set_span_attributes(span, {"cache.hit": True, "cache.type": "redis"})
-                await event_handler.on_workflow_complete(cached_response)
-                return cached_response
-            add_span_event(span, "redis_cache_miss")
+            if not bypass_cache:
+                add_span_event(span, "checking_redis_cache")
+                cached_response = await self._check_cached_response(cache_key)
+                if cached_response:
+                    add_span_event(span, "redis_cache_hit")
+                    set_span_attributes(span, {"cache.hit": True, "cache.type": "redis"})
+                    await event_handler.on_workflow_complete(cached_response)
+                    return cached_response
+                add_span_event(span, "redis_cache_miss")
             set_span_attributes(span, {"cache.hit": False})
 
             # 초기 상태 생성 (event_handler를 상태에 포함)
@@ -1195,7 +1231,13 @@ class MultiAgentWorkflow:
                     WorkflowNode.ANALYSIS_ORCHESTRATOR.value,
                     WorkflowNode.GENERATION_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value,
                     WorkflowNode.FACT_CHECK.value, WorkflowNode.QUALITY_VALIDATOR.value,
-                    WorkflowNode.RESP_GENERATOR.value
+                    WorkflowNode.MISSION_PLANNER.value,
+                    WorkflowNode.MISSION_APPROVAL.value,
+                    WorkflowNode.MISSION_EXECUTOR.value,
+                    WorkflowNode.MISSION_VALIDATOR.value,
+                    WorkflowNode.MISSION_INTEGRATOR.value,
+                    WorkflowNode.RESP_GENERATOR.value,
+                    WorkflowNode.RESEARCH_HARNESS.value,
                 ]
 
                 current_step = 0
@@ -1262,7 +1304,15 @@ class MultiAgentWorkflow:
                 result = self._create_workflow_result(final_state)
 
                 # 성공적인 결과 캐싱
-                if result["success"] and result["response"]:
+                if (
+                    result["success"]
+                    and result["response"]
+                    and _mission_validation_passed(result)
+                    and should_cache_harness_result(
+                        result,
+                        cache_policy=settings.RESEARCH_HARNESS_CACHE_POLICY,
+                    )
+                ):
                     # 스마트 캐시에 저장 (활성화된 경우)
                     if settings.SMART_CACHE_ENABLED:
                         add_span_event(span, "saving_to_smart_cache")
@@ -1277,6 +1327,8 @@ class MultiAgentWorkflow:
                     # 기존 Redis 캐시에도 저장 (폴백용)
                     add_span_event(span, "saving_to_redis_cache")
                     await self._cache_workflow_result(cache_key, result)
+                elif result["success"] and result["response"]:
+                    add_span_event(span, "cache_skipped_validation_policy")
 
                 # 데이터셋 자동 저장 (LLM 호출이 있었을 경우)
                 await self._auto_save_dataset()
@@ -1294,10 +1346,15 @@ class MultiAgentWorkflow:
                 # Phase 2.1: 에피소드 메모리 저장
                 await self._save_episode_memory(user_input, result, final_state)
 
-                # 세션 상태를 completed로 업데이트
-                await self._record_session_complete(
-                    user_input, result, final_state
-                )
+                if result.get("success"):
+                    # 세션 상태를 completed로 업데이트
+                    await self._record_session_complete(
+                        user_input, result, final_state
+                    )
+                elif _is_gate_harness_blocked(final_state):
+                    await self._record_session_harness_blocked(
+                        user_input, result, final_state
+                    )
 
                 logger.debug("[ExecuteWorkflow] Completed successfully")
                 return result
@@ -1317,7 +1374,16 @@ class MultiAgentWorkflow:
                             f"[ExecuteWorkflow] GraphInterrupt: approval_request sent "
                             f"for session={session_id}, pending={len(pending)}"
                         )
-                        return {"success": True, "interrupted": True, "response": None}
+                        return {
+                            "success": True,
+                            "interrupted": True,
+                            "response": None,
+                            "pending_approvals": pending,
+                            "execution_time_ms": int(
+                                (datetime.now() - initial_state["execution_start"]).total_seconds() * 1000
+                            ),
+                            "errors": [],
+                        }
                 except ImportError:
                     pass  # langgraph.errors 미설치 시 일반 에러로 처리
 
@@ -1340,7 +1406,8 @@ class MultiAgentWorkflow:
     async def _check_smart_cache(
         self,
         query: str,
-        user_id: str = None
+        user_id: str = None,
+        autonomy_level: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         스마트 캐시에서 유사 쿼리 검색
@@ -1352,7 +1419,10 @@ class MultiAgentWorkflow:
 
             cache_result = await smart_cache_manager.get_cached_response(
                 query=query,
-                user_id=user_id
+                user_id=user_id,
+                metadata_filter={
+                    "autonomy_level": _resolve_autonomy_level(autonomy_level)
+                },
             )
 
             if cache_result.hit:
@@ -1407,7 +1477,7 @@ class MultiAgentWorkflow:
             classification = final_state.get("query_classification", {})
             query_intent = final_state.get("query_intent", "information_seeking")
             complexity_score = classification.get("complexity_score", 0.0)
-            quality_score = result.get("quality_score", 0.7)
+            quality_score = _coerce_quality_score(result.get("quality_score"), 0.7)
 
             # 캐시할 데이터 준비 (cache_hit 정보 제외)
             cache_data = {k: v for k, v in result.items() if k != "cache_hit"}
@@ -1425,7 +1495,10 @@ class MultiAgentWorkflow:
                 metadata={
                     "required_agents": final_state.get("required_agents", []),
                     "execution_steps": final_state.get("execution_steps", []),
-                    "detected_language": final_state.get("detected_language")
+                    "detected_language": final_state.get("detected_language"),
+                    "autonomy_level": _resolve_autonomy_level(
+                        final_state.get("autonomy_level")
+                    ),
                 }
             )
 
@@ -1441,7 +1514,12 @@ class MultiAgentWorkflow:
             print(f"[WARNING] Smart cache save failed: {e}")
 
 
-    def _generate_cache_key(self, query: str, user_id: Optional[str] = None) -> str:
+    def _generate_cache_key(
+        self,
+        query: str,
+        user_id: Optional[str] = None,
+        autonomy_level: Optional[int] = None,
+    ) -> str:
         """
         캐시 키 생성
 
@@ -1453,12 +1531,13 @@ class MultiAgentWorkflow:
             생성된 캐시 키
         """
         query_normalized = query.strip().lower()
+        cache_scope = f"<AUTONOMY>{_resolve_autonomy_level(autonomy_level)}</AUTONOMY>"
 
         # 사용자별 캐시 분리 옵션 (개인화된 응답이 필요한 경우)
         if user_id and settings.USER_SPECIFIC_CACHE:
-            cache_input = f"<USER_ID>{user_id}</USER_ID>{query_normalized}"
+            cache_input = f"<USER_ID>{user_id}</USER_ID>{cache_scope}{query_normalized}"
         else:
-            cache_input = query_normalized
+            cache_input = f"{cache_scope}{query_normalized}"
 
         query_hash = hashlib.md5(cache_input.encode('utf-8')).hexdigest()
         return cache_manager.make_key("workflow_response", query_hash)
@@ -1498,6 +1577,15 @@ class MultiAgentWorkflow:
             integrated_results=None,
             quality_score=None,
             quality_feedback=None,
+            harness_mode=None,
+            harness_contract={},
+            harness_runs=[],
+            harness_verdict=None,
+            harness_score=None,
+            harness_failed_checks=[],
+            harness_repair_plan=None,
+            harness_repair_attempts=0,
+            harness_metadata={},
             final_response=None,
             response_metadata=None,
             execution_start=datetime.now(),
@@ -1518,16 +1606,51 @@ class MultiAgentWorkflow:
             channel_source=user_input.get("channel_source", "api"),
             channel_type=user_input.get("channel_type"),
             channel_id=user_input.get("channel_id"),
+            # Agent Autonomy Control
+            autonomy_level=(
+                _resolve_autonomy_level(user_input.get("autonomy_level"))
+            ),
+            # Mission Runtime
+            use_mission_runtime=bool(
+                (user_input.get("preferences") or {}).get("use_mission_runtime", False)
+            ),
+            mission_id=None,
+            mission=None,
+            mission_plan=None,
+            validation_contract=None,
+            mission_status=None,
+            mission_events=[],
+            mission_task_results=[],
+            validator_runs=[],
+            validation_summary=None,
         )
 
     def _create_workflow_result(self, final_state: AgentState) -> Dict[str, Any]:
         """워크플로우 결과 생성"""
+        if _is_gate_harness_blocked(final_state):
+            errors = list(final_state.get("errors") or [])
+            if "research_harness_gate_failed" not in errors:
+                errors.append("research_harness_gate_failed")
+            return {
+                "success": False,
+                "response": _harness_blocked_message(final_state),
+                "blocked_response": final_state.get("final_response"),
+                "metadata": final_state.get("response_metadata") or {},
+                "execution_time_ms": final_state["execution_time_ms"],
+                "quality_score": _coerce_quality_score(final_state.get("quality_score")),
+                "errors": errors,
+                "cache_hit": False,
+                "execution_steps": len(final_state["execution_steps"]),
+                "retry_count": final_state.get("retry_count", 0),
+                "channel_source": final_state.get("channel_source", "api"),
+            }
+
         result = {
             "success": True,
             "response": final_state["final_response"],
             "metadata": final_state["response_metadata"],
             "execution_time_ms": final_state["execution_time_ms"],
-            "quality_score": final_state.get("quality_score", 0.0),
+            "quality_score": _coerce_quality_score(final_state.get("quality_score")),
             "errors": final_state["errors"],
             "cache_hit": False,
             "execution_steps": len(final_state["execution_steps"]),
@@ -1679,18 +1802,49 @@ class MultiAgentWorkflow:
             return
 
         try:
+            metadata_updates = {
+                "quality_score": result.get("quality_score"),
+                "search_results_count": len(final_state.get("search_results", [])),
+                "execution_time_ms": result.get("execution_time_ms"),
+                "errors": final_state.get("errors", []),
+            }
+            harness_metadata = (result.get("metadata") or {}).get("harness")
+            if harness_metadata:
+                metadata_updates["harness"] = harness_metadata
             await research_session_service.update_session_status(
                 thread_id=user_input.get("session_id", ""),
                 status="completed",
-                metadata_updates={
-                    "quality_score": result.get("quality_score"),
-                    "search_results_count": len(final_state.get("search_results", [])),
-                    "execution_time_ms": result.get("execution_time_ms"),
-                    "errors": final_state.get("errors", []),
-                },
+                metadata_updates=metadata_updates,
             )
         except Exception as e:
             logger.warning(f"[Workflow] Failed to record session completion: {e}")
+
+    async def _record_session_harness_blocked(
+        self, user_input: Dict[str, Any], result: Dict[str, Any],
+        final_state: AgentState
+    ) -> None:
+        """워크플로우가 gate harness에서 차단되었을 때 세션 상태 업데이트"""
+        try:
+            from neos.api.services.research_session_service import research_session_service
+        except ImportError as e:
+            logger.error(f"[Workflow] Cannot import research_session_service: {e}")
+            return
+
+        try:
+            await research_session_service.update_session_status(
+                thread_id=user_input.get("session_id", ""),
+                status="failed",
+                metadata_updates={
+                    "reason": "research_harness_gate_failed",
+                    "quality_score": result.get("quality_score"),
+                    "search_results_count": len(final_state.get("search_results", [])),
+                    "execution_time_ms": result.get("execution_time_ms"),
+                    "errors": result.get("errors", []),
+                    "harness": (result.get("metadata") or {}).get("harness", {}),
+                },
+            )
+        except Exception as e:
+            logger.warning(f"[Workflow] Failed to record harness-blocked session: {e}")
 
     async def _record_session_failed(
         self, user_input: Dict[str, Any], error: Exception
@@ -1713,6 +1867,13 @@ class MultiAgentWorkflow:
 
     async def _cache_workflow_result(self, cache_key: str, result: Dict[str, Any]) -> None:
         """워크플로우 결과 캐싱"""
+        if not should_cache_harness_result(
+            result,
+            cache_policy=settings.RESEARCH_HARNESS_CACHE_POLICY,
+        ):
+            print("[DEBUG] Workflow response cache skipped by harness policy")
+            return
+
         print(f"[DEBUG] Caching workflow response for {settings.WORKFLOW_RESPONSE_CACHE_TTL} seconds")
 
         # 캐시할 때는 cache_hit 정보 제외

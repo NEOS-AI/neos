@@ -60,7 +60,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
 
   return (
     <>
-      <Sidebar className="group-data-[side=left]:border-r-0">
+      <Sidebar className="group-data-[side=left]:border-sidebar-border/70 group-data-[side=left]:border-r">
         <SidebarHeader>
           <SidebarMenu>
             <div className="flex flex-row items-center justify-between">
@@ -71,8 +71,8 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                   setOpenMobile(false);
                 }}
               >
-                <span className="cursor-pointer rounded-md px-2 font-semibold text-lg hover:bg-muted">
-                  Chatbot
+                <span className="cursor-pointer rounded-md px-2 font-semibold text-lg text-sidebar-foreground tracking-normal hover:bg-sidebar-accent hover:text-sidebar-accent-foreground">
+                  NEOS
                 </span>
               </Link>
               <div className="flex flex-row gap-1">
@@ -80,7 +80,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
-                        className="h-8 p-1 md:h-fit md:p-2"
+                        className="h-8 p-1 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:h-fit md:p-2"
                         onClick={() => setShowDeleteAllDialog(true)}
                         type="button"
                         variant="ghost"
@@ -96,7 +96,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
-                      className="h-8 p-1 md:h-fit md:p-2"
+                      className="h-8 p-1 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:h-fit md:p-2"
                       onClick={() => {
                         setOpenMobile(false);
                         router.push("/");

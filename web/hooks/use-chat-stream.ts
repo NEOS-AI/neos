@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatMessage } from "@/lib/types";
+import type { AutonomyLevel, ChatMessage } from "@/lib/types";
 import { messageMetadataSchema } from "@/lib/types";
 import type { OpenResponsesEvent, MessageItem } from "@/lib/stream-types";
 import {
@@ -22,6 +22,7 @@ import {
   isNeosArtifactDeltaEvent,
   isNeosArtifactFinishEvent,
   isNeosWorkflowProgressEvent,
+  isNeosApprovalRequestEvent,
   isNeosUIFrameEvent,
   isNeosInlineVizEvent,
   isNeosInlineVizErrorEvent,
@@ -49,6 +50,7 @@ export interface UseChatStreamOptions {
   initialMessages: ChatMessage[];
   selectedChatModel: ChatModel["id"];
   selectedVisibilityType: VisibilityType;
+  autonomyLevel?: AutonomyLevel;
   onFinish?: () => void;
   onError?: (error: Error) => void;
   onData?: (data: any) => void;
@@ -69,6 +71,7 @@ export function useChatStream({
   initialMessages,
   selectedChatModel,
   selectedVisibilityType,
+  autonomyLevel,
   onFinish,
   onError,
   onData,
@@ -383,6 +386,27 @@ export function useChatStream({
                   }
                 }
 
+                // neos:approval_request - workflow paused for user approval
+                else if (isNeosApprovalRequestEvent(eventData)) {
+                  assistantMessage.metadata = {
+                    createdAt: assistantMessage.metadata?.createdAt || new Date().toISOString(),
+                    ...assistantMessage.metadata,
+                    responseStatus: "incomplete",
+                    approval_requests: eventData.pending_approvals,
+                    approval_session_id: eventData.session_id,
+                  };
+                  updateMessage();
+                  if (onData) {
+                    onData({
+                      type: "approval-request",
+                      data: {
+                        sessionId: eventData.session_id,
+                        pendingApprovals: eventData.pending_approvals,
+                      },
+                    });
+                  }
+                }
+
                 // neos:ui_frame - Phase 8 (A2UI) UIFrame 렌더링
                 else if (isNeosUIFrameEvent(eventData)) {
                   assistantMessage.metadata = {
@@ -495,6 +519,7 @@ export function useChatStream({
             message: chatMessage,
             selectedChatModel,
             selectedVisibilityType,
+            autonomy_level: autonomyLevel,
           }),
           signal: abortController.signal,
         });
@@ -521,7 +546,7 @@ export function useChatStream({
         abortControllerRef.current = null;
       }
     },
-    [id, selectedChatModel, selectedVisibilityType, processStream, onError]
+    [id, selectedChatModel, selectedVisibilityType, autonomyLevel, processStream, onError]
   );
 
   /**

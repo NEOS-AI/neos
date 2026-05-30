@@ -1,6 +1,5 @@
 "use client";
 
-import { useChatStream } from "@/hooks/use-chat-stream";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
@@ -16,13 +15,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useAgentAutonomy } from "@/hooks/use-agent-autonomy";
 import { useArtifactSelector } from "@/hooks/use-artifact";
 import { useAutoResume } from "@/hooks/use-auto-resume";
+import { useChatStream } from "@/hooks/use-chat-stream";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
 import type { Attachment, ChatMessage } from "@/lib/types";
-import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
+import { fetcher } from "@/lib/utils";
 import { Artifact } from "./artifact";
 import { useDataStream } from "./data-stream-provider";
 import { Messages } from "./messages";
@@ -30,7 +31,6 @@ import { MultimodalInput } from "./multimodal-input";
 import { getChatHistoryPaginationKey } from "./sidebar-history";
 import { toast } from "./toast";
 import type { VisibilityType } from "./visibility-selector";
-
 
 export function Chat({
   id,
@@ -72,6 +72,7 @@ export function Chat({
   const [showCreditCardAlert, setShowCreditCardAlert] = useState(false);
   const [currentModelId, setCurrentModelId] = useState(initialChatModel);
   const currentModelIdRef = useRef(currentModelId);
+  const { autonomyLevel, setAutonomyLevel } = useAgentAutonomy();
 
   useEffect(() => {
     currentModelIdRef.current = currentModelId;
@@ -90,6 +91,7 @@ export function Chat({
     initialMessages,
     selectedChatModel: currentModelIdRef.current,
     selectedVisibilityType: visibilityType,
+    autonomyLevel,
     onData: (dataPart) => {
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));
     },
@@ -152,10 +154,15 @@ export function Chat({
 
   return (
     <>
-      <div className="overscroll-behavior-contain flex h-dvh min-w-0 touch-pan-y flex-col bg-background">
+      <div
+        className="neos-blueblack-workspace overscroll-behavior-contain flex h-dvh min-w-0 touch-pan-y flex-col bg-background"
+        data-testid="blueblack-workspace"
+      >
         <ChatHeader
+          autonomyLevel={autonomyLevel}
           chatId={id}
           isReadonly={isReadonly}
+          onAutonomyChange={setAutonomyLevel}
           selectedVisibilityType={initialVisibilityType}
         />
 
@@ -171,7 +178,7 @@ export function Chat({
           votes={votes}
         />
 
-        <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl gap-2 border-t-0 bg-background px-2 pb-3 md:px-4 md:pb-4">
+        <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl gap-2 border-t-0 bg-transparent px-2 pb-3 md:px-4 md:pb-4">
           {!isReadonly && (
             <MultimodalInput
               attachments={attachments}

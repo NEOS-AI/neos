@@ -20,7 +20,13 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { id, message, selectedChatModel, selectedVisibilityType } = requestBody;
+    const {
+      id,
+      message,
+      selectedChatModel,
+      selectedVisibilityType,
+      autonomy_level: autonomyLevel,
+    } = requestBody;
 
     const session = await auth();
 
@@ -114,6 +120,7 @@ export async function POST(request: Request) {
             fe_chat_id: id,
             model: selectedChatModel,
             visibility: selectedVisibilityType,
+            autonomy_level: autonomyLevel,
           },
         }),
       }

@@ -5,16 +5,35 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from neos.workflow.graph import multi_agent_workflow
 from neos.database.connection import db_manager
 from neos.database.models import User, QueryHistory
 from neos.database.repositories.query_repository import QueryRepository
 from neos.utils.cache import cache_manager
 from neos.utils.embeddings import embedding_manager
+from neos.workflow.enums import AutonomyLevel
+
+
+def _coerce_quality_score(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class QueryService:
     """Service layer for query processing"""
+
+    @staticmethod
+    def _generate_cache_key(user_id: str, query: str, autonomy_level: int) -> str:
+        query_normalized = query.strip().lower()
+        return cache_manager.make_key(
+            "query_cache",
+            user_id,
+            query_normalized,
+            f"autonomy:{autonomy_level}",
+        )
 
     @staticmethod
     async def get_or_create_user(user_id: str) -> User:
@@ -117,26 +136,48 @@ class QueryService:
         user_id: str,
         session_id: str,
         query: str,
-        bypass_cache: bool = False
+        bypass_cache: bool = False,
+        preferences: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """워크플로우 실행"""
+        from neos.api.services.workflow_service import WorkflowService
+
+        autonomy_level = WorkflowService.resolve_autonomy_level(preferences)
+        from neos.workflow.mission.routing import has_mission_request_hint
+
+        mission_cache_bypass = bool(
+            (preferences or {}).get("use_mission_runtime")
+            or has_mission_request_hint(
+                {"query": query, "preferences": preferences or {}}
+            )
+        ) or autonomy_level == AutonomyLevel.MANUAL.value
+        effective_bypass_cache = bool(bypass_cache or mission_cache_bypass)
+
         # 캐시 키 생성
-        cache_key = cache_manager.make_key("query_cache", user_id, query)
+        cache_key = QueryService._generate_cache_key(
+            user_id=user_id,
+            query=query,
+            autonomy_level=autonomy_level,
+        )
 
         # 캐시에서 확인
-        cached_response = await cache_manager.get(cache_key)
-        if cached_response and not bypass_cache:
-            return cached_response
-
-        # 워크플로우 실행
-        workflow_input = {
-            "user_id": user_id,
-            "session_id": session_id,
-            "query": query
-        }
+        if not effective_bypass_cache:
+            cached_response = await cache_manager.get(cache_key)
+            if cached_response:
+                return cached_response
 
         start_time = datetime.now()
-        result = await multi_agent_workflow.execute_workflow(workflow_input)
+        result = await WorkflowService.execute(
+            user_id=user_id,
+            session_id=session_id,
+            query=query,
+            preferences={
+                **(preferences or {}),
+                "autonomy_level": autonomy_level,
+            },
+            use_checkpointer=True,
+            bypass_cache=effective_bypass_cache,
+        )
         end_time = datetime.now()
 
         execution_time = int((end_time - start_time).total_seconds() * 1000)
@@ -144,19 +185,39 @@ class QueryService:
         if not result["success"]:
             raise Exception(result.get("error", "Unknown error"))
 
+        if result.get("interrupted"):
+            return {
+                "success": True,
+                "interrupted": True,
+                "response": None,
+                "session_id": session_id,
+                "metadata": result.get("metadata", {}),
+                "execution_time_ms": result.get("execution_time_ms", execution_time),
+                "quality_score": result.get("quality_score", 0.0),
+                "errors": result.get("errors", []),
+                "pending_approvals": result.get("pending_approvals", []),
+                "channel_source": result.get("channel_source", "api"),
+            }
+
+        quality_score = _coerce_quality_score(result.get("quality_score"))
         response_data = {
             "success": True,
             "response": result["response"],
             "session_id": session_id,
             "metadata": result["metadata"],
             "execution_time_ms": result["execution_time_ms"],
-            "quality_score": result["quality_score"],
+            "quality_score": quality_score,
             "errors": result["errors"],
             "channel_source": result.get("channel_source", "api")
         }
 
         # 성공한 응답 캐싱 (1시간)
-        if result["quality_score"] > 0.7:
+        metadata = result.get("metadata") or {}
+        validation_summary = metadata.get("validation_summary") or {}
+        should_cache_mission_result = not metadata.get("mission_id") or (
+            validation_summary.get("passed") is True
+        )
+        if quality_score > 0.7 and should_cache_mission_result:
             await cache_manager.set(cache_key, response_data, ttl=3600)
 
         return response_data

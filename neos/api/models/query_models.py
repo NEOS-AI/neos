@@ -9,6 +9,12 @@ class QueryRequest(BaseModel):
     user_id: Optional[str] = Field(None, description="사용자 ID")
     session_id: Optional[str] = Field(None, description="세션 ID")
     preferences: Optional[Dict[str, Any]] = Field(default_factory=dict, description="사용자 설정")
+    autonomy_level: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=2,
+        description="에이전트 자율성 레벨: 0=수동, 1=요청, 2=자율",
+    )
 
 
 class QueryResponse(BaseModel):
@@ -126,6 +132,12 @@ class WorkflowStreamRequest(BaseModel):
     user_id: Optional[str] = Field(None, description="사용자 ID")
     session_id: Optional[str] = Field(None, description="세션 ID")
     preferences: Optional[Dict[str, Any]] = Field(default_factory=dict, description="사용자 설정")
+    autonomy_level: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=2,
+        description="에이전트 자율성 레벨: 0=수동, 1=요청, 2=자율",
+    )
     stream_options: Optional[Dict[str, Any]] = Field(
         default_factory=lambda: {
             "include_heartbeat": True,

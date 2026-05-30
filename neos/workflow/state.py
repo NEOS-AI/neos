@@ -83,6 +83,17 @@ class AgentState(TypedDict):
     fact_check_result: Optional[Dict[str, Any]]
     fact_check_skipped: Optional[bool]
 
+    # Research Harness
+    harness_mode: Optional[str]
+    harness_contract: Dict[str, Any]
+    harness_runs: List[Dict[str, Any]]
+    harness_verdict: Optional[str]
+    harness_score: Optional[float]
+    harness_failed_checks: List[str]
+    harness_repair_plan: Optional[Dict[str, Any]]
+    harness_repair_attempts: int
+    harness_metadata: Dict[str, Any]
+
     # 반복적 탐색 상태 (Iterative Web Explorer)
     use_iterative_search: Optional[bool]  # 사용자 선호
     exploration_depth_reached: Optional[int]  # 도달 깊이
@@ -173,6 +184,21 @@ class AgentState(TypedDict):
 
     # 상세 성능 메트릭 (새로운 구조화된 메트릭 시스템)
     performance_metrics: Optional[PerformanceMetrics]
+
+    # Agent Autonomy Control: 0=manual, 1=assisted, 2=autonomous.
+    autonomy_level: Optional[int]
+
+    # Mission Runtime
+    use_mission_runtime: Optional[bool]
+    mission_id: Optional[str]
+    mission: Optional[Dict[str, Any]]
+    mission_plan: Optional[Dict[str, Any]]
+    validation_contract: Optional[Dict[str, Any]]
+    mission_status: Optional[str]
+    mission_events: Optional[List[Dict[str, Any]]]
+    mission_task_results: Optional[List[Dict[str, Any]]]
+    validator_runs: Optional[List[Dict[str, Any]]]
+    validation_summary: Optional[Dict[str, Any]]
 
 
 class WorkflowConfig:

@@ -33,6 +33,13 @@ class WorkflowNode(Enum):
     # HyperDeep Recursive: ROMA + HyperDeepResearchAgent 통합
     HYPER_DEEP_ORCHESTRATOR = "hyper_deep_orchestrator"
 
+    # Mission Runtime
+    MISSION_PLANNER = "mission_planner"
+    MISSION_APPROVAL = "mission_approval"
+    MISSION_EXECUTOR = "mission_executor"
+    MISSION_VALIDATOR = "mission_validator"
+    MISSION_INTEGRATOR = "mission_integrator"
+
     # Phase 4 (OpenClaw Cron): 자연어 스케줄 등록 노드
     TASK_SCHEDULING_NODE = "task_scheduling_node"
 
@@ -43,6 +50,7 @@ class WorkflowNode(Enum):
     RESULT_INTEGRATOR = "result_integrator"
     FACT_CHECK = "fact_check"
     QUALITY_VALIDATOR = "quality_validator"
+    RESEARCH_HARNESS = "research_harness"
     RESP_GENERATOR = "response_generator"
 
 
@@ -78,3 +86,11 @@ class ComplexityIndicator(Enum):
     DEPTH_REQ = "depth_required"
     COMPARISON_MULTI = "comparison_multiple"
     MULTI_ASPECT = "multi_aspect"
+
+
+class AutonomyLevel(int, Enum):
+    """Agent autonomy level for per-request workflow control."""
+
+    MANUAL = 0
+    ASSISTED = 1
+    AUTONOMOUS = 2

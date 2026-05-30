@@ -11,14 +11,61 @@ CORE ENGINE CRITICAL - Tests cover:
 - Enterprise features (distributed state, PostgreSQL checkpointer)
 """
 
+import os
+import sys
+import types
+from contextlib import contextmanager
+
+os.environ["DEBUG"] = "false"
+os.environ.setdefault("GOOGLE_API_KEY", "test-key")
+
+youtube_module = types.ModuleType("youtube_transcript_api")
+youtube_module.YouTubeTranscriptApi = object
+youtube_errors_module = types.ModuleType("youtube_transcript_api._errors")
+youtube_errors_module.TranscriptsDisabled = Exception
+youtube_errors_module.NoTranscriptFound = Exception
+youtube_errors_module.VideoUnavailable = Exception
+sys.modules.setdefault("youtube_transcript_api", youtube_module)
+sys.modules.setdefault("youtube_transcript_api._errors", youtube_errors_module)
+
+googleapi_module = types.ModuleType("googleapiclient")
+googleapi_discovery_module = types.ModuleType("googleapiclient.discovery")
+googleapi_discovery_module.build = lambda *args, **kwargs: object()
+googleapi_errors_module = types.ModuleType("googleapiclient.errors")
+googleapi_errors_module.HttpError = Exception
+sys.modules.setdefault("googleapiclient", googleapi_module)
+sys.modules.setdefault("googleapiclient.discovery", googleapi_discovery_module)
+sys.modules.setdefault("googleapiclient.errors", googleapi_errors_module)
+
+isodate_module = types.ModuleType("isodate")
+isodate_module.parse_duration = lambda value: value
+sys.modules.setdefault("isodate", isodate_module)
+
+
+@contextmanager
+def _noop_trace(*args, **kwargs):
+    yield object()
+
+
+telemetry_module = types.ModuleType("neos.workflow.telemetry")
+telemetry_module.trace_workflow_node = _noop_trace
+telemetry_module.add_span_event = lambda *args, **kwargs: None
+telemetry_module.set_span_attributes = lambda *args, **kwargs: None
+sys.modules.setdefault("neos.workflow.telemetry", telemetry_module)
+
 import pytest
 from datetime import datetime, timedelta
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from typing import Dict, Any
 import hashlib
 
+from neos.agents.skill_based_tool_selector import SkillToolSelection
 from neos.workflow.graph import MultiAgentWorkflow, multi_agent_workflow
 from neos.workflow.state import AgentState, WorkflowConfig
+import neos.workflow.graph as workflow_graph_module
+
+if not hasattr(workflow_graph_module, "KnowledgeSearchAgent"):
+    workflow_graph_module.KnowledgeSearchAgent = object
 
 
 @pytest.mark.unit
@@ -106,12 +153,13 @@ class TestWorkflowGraphCreation:
                 assert mock_graph_instance.add_node.call_count >= 7  # At least 7 nodes
 
                 # Verify edges were set
-                assert mock_graph_instance.set_entry_point.called
+                assert mock_graph_instance.add_edge.call_args_list[0].args[0] == workflow_graph_module.START
                 assert mock_graph_instance.add_edge.call_count >= 5
                 assert mock_graph_instance.add_conditional_edges.called
 
                 # Verify checkpointer was used
-                mock_graph_instance.compile.assert_called_once_with(checkpointer=mock_checkpointer)
+                mock_graph_instance.compile.assert_called_once()
+                assert mock_graph_instance.compile.call_args.kwargs["checkpointer"] is mock_checkpointer
 
     @pytest.mark.asyncio
     async def test_ensure_graph_initialized(self, workflow):
@@ -142,6 +190,82 @@ class TestWorkflowGraphCreation:
 
                 # Should be the same graph instance
                 assert first_graph is second_graph
+
+    @pytest.mark.asyncio
+    async def test_ensure_graph_initializes_checkpointer_modes_separately(self, workflow, monkeypatch):
+        """Stateless and checkpointer graphs must not share one global cache."""
+        created_modes = []
+
+        async def fake_create_workflow_graph(use_checkpointer=True):
+            created_modes.append(use_checkpointer)
+            return object()
+
+        monkeypatch.setattr(
+            workflow,
+            "_create_workflow_graph",
+            fake_create_workflow_graph,
+        )
+
+        await workflow._ensure_graph_initialized(use_checkpointer=False)
+        stateless_graph = workflow.graph
+        await workflow._ensure_graph_initialized(use_checkpointer=True)
+
+        assert created_modes == [False, True]
+        assert workflow.graph is not stateless_graph
+        assert workflow._graph_uses_checkpointer is True
+
+    @pytest.mark.asyncio
+    async def test_mission_candidate_routes_to_mission_planner(self, workflow, monkeypatch):
+        """Mission-eligible state routes into the mission runtime branch."""
+        monkeypatch.setattr(
+            "neos.workflow.mission.routing.should_use_mission_runtime",
+            lambda state: True,
+        )
+
+        state = {
+            "pending_approvals": None,
+            "approval_decision": None,
+            "query_intent": "complex_analysis",
+            "query_classification": {"complexity_score": 0.8},
+            "required_agents": ["realtime_info_search", "comparative_analysis"],
+            "autonomy_level": 1,
+            "use_mission_runtime": False,
+        }
+
+        assert workflow._should_use_mission_runtime(state) == "mission"
+
+    @pytest.mark.asyncio
+    async def test_manual_mission_reports_configuration_error_when_approval_unavailable(
+        self, workflow, monkeypatch
+    ):
+        """Manual mission approval must not fail closed as a silent rejection."""
+        monkeypatch.setattr(
+            workflow_graph_module.settings,
+            "EXECUTION_APPROVAL_ENABLED",
+            False,
+        )
+        workflow._graph_uses_checkpointer = True
+        state = {
+            "session_id": "session-1",
+            "user_id": "user-1",
+            "original_query": "latest AI news",
+            "query_intent": "realtime_info",
+            "query_classification": {"complexity_score": 0.3},
+            "required_agents": ["realtime_info_search"],
+            "selected_skills": [],
+            "selected_tools": [],
+            "autonomy_level": 0,
+        }
+
+        result = await workflow._mission_planner_node(state)
+
+        assert result["mission_status"] == "approval_unavailable"
+        assert result["pending_approvals"] == []
+        assert "승인" in result["final_response"]
+        assert (
+            workflow._should_continue_after_mission_planner({**state, **result})
+            == "approval_unavailable"
+        )
 
 
 @pytest.mark.unit
@@ -264,15 +388,295 @@ class TestCacheManagement:
         with patch("neos.workflow.graph.cache_manager") as mock_cache_manager:
             mock_cache_manager.make_key = lambda prefix, key: f"{prefix}:{key}"
 
-            key1 = workflow._generate_cache_key(query1)
-            key2 = workflow._generate_cache_key(query2)
-            key3 = workflow._generate_cache_key(query3)
-            key4 = workflow._generate_cache_key(query4)
+            key1 = workflow._generate_cache_key(query1, autonomy_level=1)
+            key2 = workflow._generate_cache_key(query2, autonomy_level=1)
+            key3 = workflow._generate_cache_key(query3, autonomy_level=1)
+            key4 = workflow._generate_cache_key(query4, autonomy_level=1)
+            manual_key = workflow._generate_cache_key(query1, autonomy_level=0)
+            autonomous_key = workflow._generate_cache_key(query1, autonomy_level=2)
 
             # Same queries should generate same keys
             assert key1 == key2 == key3
             # Different queries should generate different keys
             assert key1 != key4
+            # Same query under different approval policies must not share cache
+            assert key1 != manual_key
+            assert key1 != autonomous_key
+
+    @pytest.mark.asyncio
+    async def test_smart_cache_lookup_is_scoped_by_autonomy_level(self, workflow):
+        """Smart cache lookup filters by autonomy level metadata."""
+        with patch("neos.workflow.graph.smart_cache_manager") as mock_cache:
+            mock_cache.get_cached_response = AsyncMock()
+            mock_cache.get_cached_response.return_value.hit = False
+            mock_cache.get_cached_response.return_value.search_time_ms = 1
+
+            result = await workflow._check_smart_cache(
+                "What is the weather today?",
+                user_id="user_123",
+                autonomy_level=0,
+            )
+
+            assert result is None
+            mock_cache.get_cached_response.assert_awaited_once_with(
+                query="What is the weather today?",
+                user_id="user_123",
+                metadata_filter={"autonomy_level": 0},
+            )
+
+    @pytest.mark.asyncio
+    async def test_smart_cache_save_stores_autonomy_level_metadata(self, workflow):
+        """Smart cache entries include autonomy level metadata."""
+        final_state = {
+            "query_embedding": [0.1, 0.2],
+            "query_classification": {"complexity_score": 0.5},
+            "query_intent": "information_seeking",
+            "required_agents": ["knowledge_search"],
+            "execution_steps": ["skill_tool_selector"],
+            "detected_language": "en",
+            "autonomy_level": 2,
+        }
+
+        with patch("neos.workflow.graph.smart_cache_manager") as mock_cache:
+            mock_cache.set_cached_response = AsyncMock(return_value=True)
+
+            await workflow._save_to_smart_cache(
+                query="What is the weather today?",
+                result={"success": True, "response": "ok", "quality_score": 0.8},
+                final_state=final_state,
+                user_id="user_123",
+                session_id="session_456",
+            )
+
+            metadata = mock_cache.set_cached_response.await_args.kwargs["metadata"]
+            assert metadata["autonomy_level"] == 2
+
+    @pytest.mark.asyncio
+    async def test_manual_mission_candidate_skips_duplicate_legacy_approval(self, workflow, monkeypatch):
+        """Manual mission candidates defer approval to the mission planner."""
+        workflow._graph_uses_checkpointer = True
+        workflow.skill_tool_selector.select_skills_and_tools = AsyncMock(
+            return_value=SkillToolSelection(
+                selected_skills=[],
+                selected_tools=[],
+                reasoning="required agent came from classifier",
+                priority_order=[],
+            )
+        )
+        workflow._check_approval_allowlist = AsyncMock(return_value=False)
+        monkeypatch.setattr(
+            workflow_graph_module,
+            "_register_pending_approvals_db",
+            AsyncMock(),
+        )
+
+        state = {
+            "original_query": "latest AI news",
+            "session_id": "session_123",
+            "user_id": "user_123",
+            "detected_language": "en",
+            "query_intent": "realtime_info",
+            "query_classification": {"query_type": "general", "complexity": "medium"},
+            "required_agents": ["realtime_info_search"],
+            "autonomy_level": 0,
+        }
+
+        with patch("neos.workflow.graph.settings") as mock_settings:
+            mock_settings.EXECUTION_APPROVAL_ENABLED = True
+            mock_settings.APPROVAL_REQUIRED_SKILLS = []
+            mock_settings.APPROVAL_TIMEOUT_SECONDS = 300
+
+            result = await workflow._select_skills_tools_node(state)
+
+        assert "pending_approvals" not in result
+        assert result["selected_skills"] == []
+
+    @pytest.mark.asyncio
+    async def test_execute_workflow_bypass_cache_skips_cache_reads(self, workflow, monkeypatch):
+        """bypass_cache=True forces a fresh workflow execution."""
+        final_state = {
+            "final_response": "fresh response",
+            "response_metadata": {},
+            "execution_time_ms": 10,
+            "quality_score": 0.9,
+            "errors": [],
+            "execution_steps": ["response_generator"],
+            "retry_count": 0,
+            "execution_start": datetime.now(),
+            "channel_source": "api",
+        }
+
+        class FakeGraph:
+            async def astream(self, initial_state, config):
+                yield {"response_generator": final_state}
+
+        smart_cache = AsyncMock(return_value={"success": True, "response": "smart cached"})
+        redis_cache = AsyncMock(return_value={"success": True, "response": "redis cached"})
+        monkeypatch.setattr(workflow_graph_module.settings, "SMART_CACHE_ENABLED", True)
+        monkeypatch.setattr(workflow, "_ensure_graph_initialized", AsyncMock())
+        monkeypatch.setattr(workflow, "_check_smart_cache", smart_cache)
+        monkeypatch.setattr(workflow, "_check_cached_response", redis_cache)
+        monkeypatch.setattr(workflow, "_load_memory_context", AsyncMock())
+        monkeypatch.setattr(workflow, "_apply_research_template", AsyncMock())
+        monkeypatch.setattr(workflow, "_record_session_start", AsyncMock())
+        monkeypatch.setattr(workflow, "_save_to_smart_cache", AsyncMock())
+        monkeypatch.setattr(workflow, "_cache_workflow_result", AsyncMock())
+        monkeypatch.setattr(workflow, "_auto_save_dataset", AsyncMock())
+        monkeypatch.setattr(workflow, "_save_episode_memory", AsyncMock())
+        monkeypatch.setattr(workflow, "_record_session_complete", AsyncMock())
+        workflow.graph = FakeGraph()
+
+        result = await workflow.execute_workflow(
+            {
+                "query": "What is the weather today?",
+                "user_id": "user_123",
+                "session_id": "session_123",
+                "bypass_cache": True,
+            },
+            use_checkpointer=False,
+        )
+
+        assert result["response"] == "fresh response"
+        smart_cache.assert_not_awaited()
+        redis_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mission_request_bypasses_pre_plan_cache(self, workflow, monkeypatch):
+        """Explicit mission runtime requests must not reuse pre-plan cached responses."""
+        class FakeGraph:
+            async def astream(self, initial_state, config):
+                yield {
+                    "response_generator": {
+                        **initial_state,
+                        "final_response": "fresh",
+                        "response_metadata": {},
+                        "execution_time_ms": 1,
+                        "quality_score": 0.9,
+                    }
+                }
+
+        smart_cache = AsyncMock(return_value={"success": True, "response": "smart cached"})
+        redis_cache = AsyncMock(return_value={"success": True, "response": "redis cached"})
+        monkeypatch.setattr(workflow_graph_module.settings, "SMART_CACHE_ENABLED", True)
+        monkeypatch.setattr(workflow, "_ensure_graph_initialized", AsyncMock())
+        monkeypatch.setattr(workflow, "_check_smart_cache", smart_cache)
+        monkeypatch.setattr(workflow, "_check_cached_response", redis_cache)
+        monkeypatch.setattr(workflow, "_load_memory_context", AsyncMock())
+        monkeypatch.setattr(workflow, "_apply_research_template", AsyncMock())
+        monkeypatch.setattr(workflow, "_record_session_start", AsyncMock())
+        monkeypatch.setattr(workflow, "_save_to_smart_cache", AsyncMock())
+        monkeypatch.setattr(workflow, "_cache_workflow_result", AsyncMock())
+        monkeypatch.setattr(workflow, "_auto_save_dataset", AsyncMock())
+        monkeypatch.setattr(workflow, "_save_episode_memory", AsyncMock())
+        monkeypatch.setattr(workflow, "_record_session_complete", AsyncMock())
+        workflow.graph = FakeGraph()
+
+        result = await workflow.execute_workflow(
+            {
+                "query": "Compare multiple AI products",
+                "user_id": "user_1",
+                "session_id": "session_1",
+                "preferences": {"use_mission_runtime": True},
+            },
+            use_checkpointer=False,
+        )
+
+        assert result["response"] == "fresh"
+        smart_cache.assert_not_awaited()
+        redis_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_auto_mission_candidate_bypasses_pre_plan_cache(self, workflow, monkeypatch):
+        """Mission-looking requests bypass cache even before classifier output exists."""
+        class FakeGraph:
+            async def astream(self, initial_state, config):
+                yield {
+                    "response_generator": {
+                        **initial_state,
+                        "final_response": "fresh auto mission response",
+                        "response_metadata": {},
+                        "execution_time_ms": 1,
+                        "quality_score": 0.9,
+                    }
+                }
+
+        smart_cache = AsyncMock(return_value={"success": True, "response": "smart cached"})
+        redis_cache = AsyncMock(return_value={"success": True, "response": "redis cached"})
+        monkeypatch.setattr(workflow_graph_module.settings, "SMART_CACHE_ENABLED", True)
+        monkeypatch.setattr(workflow, "_ensure_graph_initialized", AsyncMock())
+        monkeypatch.setattr(workflow, "_check_smart_cache", smart_cache)
+        monkeypatch.setattr(workflow, "_check_cached_response", redis_cache)
+        monkeypatch.setattr(workflow, "_load_memory_context", AsyncMock())
+        monkeypatch.setattr(workflow, "_apply_research_template", AsyncMock())
+        monkeypatch.setattr(workflow, "_record_session_start", AsyncMock())
+        monkeypatch.setattr(workflow, "_save_to_smart_cache", AsyncMock())
+        monkeypatch.setattr(workflow, "_cache_workflow_result", AsyncMock())
+        monkeypatch.setattr(workflow, "_auto_save_dataset", AsyncMock())
+        monkeypatch.setattr(workflow, "_save_episode_memory", AsyncMock())
+        monkeypatch.setattr(workflow, "_record_session_complete", AsyncMock())
+        workflow.graph = FakeGraph()
+
+        result = await workflow.execute_workflow(
+            {
+                "query": "Compare and analyze AI browsers with multi-source validation",
+                "user_id": "user_1",
+                "session_id": "session_1",
+            },
+            use_checkpointer=False,
+        )
+
+        assert result["response"] == "fresh auto mission response"
+        smart_cache.assert_not_awaited()
+        redis_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_failed_validation_mission_is_not_saved_to_workflow_cache(
+        self, workflow, monkeypatch
+    ):
+        """Partial mission results should not be written to workflow-level cache."""
+        class FakeGraph:
+            async def astream(self, initial_state, config):
+                yield {
+                    "response_generator": {
+                        **initial_state,
+                        "final_response": "partial mission response",
+                        "response_metadata": {
+                            "mission_id": "mission-1",
+                            "validation_summary": {
+                                "passed": False,
+                                "failed_checks": ["min_quality_score unmet"],
+                            },
+                        },
+                        "execution_time_ms": 1,
+                        "quality_score": 0.9,
+                    }
+                }
+
+        cache_save = AsyncMock()
+        monkeypatch.setattr(workflow_graph_module.settings, "SMART_CACHE_ENABLED", False)
+        monkeypatch.setattr(workflow, "_ensure_graph_initialized", AsyncMock())
+        monkeypatch.setattr(workflow, "_check_cached_response", AsyncMock(return_value=None))
+        monkeypatch.setattr(workflow, "_load_memory_context", AsyncMock())
+        monkeypatch.setattr(workflow, "_apply_research_template", AsyncMock())
+        monkeypatch.setattr(workflow, "_record_session_start", AsyncMock())
+        monkeypatch.setattr(workflow, "_cache_workflow_result", cache_save)
+        monkeypatch.setattr(workflow, "_auto_save_dataset", AsyncMock())
+        monkeypatch.setattr(workflow, "_save_episode_memory", AsyncMock())
+        monkeypatch.setattr(workflow, "_record_session_complete", AsyncMock())
+        workflow.graph = FakeGraph()
+
+        result = await workflow.execute_workflow(
+            {
+                "query": "Compare AI browsers",
+                "user_id": "user_1",
+                "session_id": "session_1",
+                "preferences": {"use_mission_runtime": True},
+            },
+            use_checkpointer=False,
+        )
+
+        assert result["response"] == "partial mission response"
+        cache_save.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_check_cached_response_hit(self, workflow):
@@ -363,6 +767,25 @@ class TestStateManagement:
         assert state["retry_count"] == 0
         assert isinstance(state["execution_start"], datetime)
 
+    def test_create_initial_state_contains_mission_fields(self, workflow):
+        """Mission runtime state fields are initialized for each request."""
+        user_input = {
+            "query": "Compare AI browsers",
+            "user_id": "user_123",
+            "session_id": "session_456",
+            "preferences": {"use_mission_runtime": True},
+        }
+
+        state = workflow._create_initial_state(user_input)
+
+        assert state["use_mission_runtime"] is True
+        assert state["mission_id"] is None
+        assert state["mission"] is None
+        assert state["mission_plan"] is None
+        assert state["validation_contract"] is None
+        assert state["validator_runs"] == []
+        assert state["mission_events"] == []
+
     def test_create_workflow_result(self, workflow):
         """Test workflow result creation from final state"""
         final_state = {
@@ -386,6 +809,111 @@ class TestStateManagement:
         assert result["retry_count"] == 1
         # cache_hit may or may not be present
         assert result.get("cache_hit") is not None or "cache_hit" not in result
+
+    def test_create_workflow_result_normalizes_missing_quality_score(self, workflow):
+        """Workflow results expose a numeric quality score even if mission skipped legacy quality."""
+        final_state = {
+            "final_response": "Test response",
+            "response_metadata": {},
+            "execution_time_ms": 1500,
+            "quality_score": None,
+            "errors": [],
+            "execution_steps": ["step1"],
+            "retry_count": 0,
+        }
+
+        result = workflow._create_workflow_result(final_state)
+
+        assert result["quality_score"] == 0.0
+
+    @pytest.mark.no_db
+    def test_create_workflow_result_blocks_failed_gate_harness(self, workflow):
+        final_state = {
+            "final_response": "Unsupported final report",
+            "response_metadata": {
+                "harness": {
+                    "mode": "gate",
+                    "verdict": "fail",
+                    "score": 0.42,
+                    "failed_checks": ["freshness"],
+                }
+            },
+            "execution_time_ms": 1500,
+            "quality_score": 0.85,
+            "errors": [],
+            "execution_steps": ["response_generation", "research_harness"],
+            "retry_count": 0,
+            "harness_mode": "gate",
+            "harness_verdict": "fail",
+            "harness_failed_checks": ["freshness"],
+        }
+
+        result = workflow._create_workflow_result(final_state)
+
+        assert result["success"] is False
+        assert result["response"] != "Unsupported final report"
+        assert result["blocked_response"] == "Unsupported final report"
+        assert result["metadata"]["harness"]["verdict"] == "fail"
+        assert "research_harness_gate_failed" in result["errors"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.no_db
+    async def test_execute_workflow_failed_gate_does_not_record_session_complete(
+        self, workflow, monkeypatch
+    ):
+        final_state = {
+            "final_response": "Unsupported final report",
+            "response_metadata": {
+                "harness": {
+                    "mode": "gate",
+                    "verdict": "fail",
+                    "score": 0.42,
+                    "failed_checks": ["freshness"],
+                }
+            },
+            "execution_time_ms": 1,
+            "quality_score": 0.9,
+            "errors": [],
+            "execution_steps": ["response_generation", "research_harness"],
+            "retry_count": 0,
+            "execution_start": datetime.now(),
+            "channel_source": "api",
+            "harness_mode": "gate",
+            "harness_verdict": "fail",
+            "harness_failed_checks": ["freshness"],
+        }
+
+        class FakeGraph:
+            async def astream(self, initial_state, config):
+                yield {"research_harness": final_state}
+
+        record_complete = AsyncMock()
+        record_blocked = AsyncMock()
+        monkeypatch.setattr(workflow_graph_module.settings, "SMART_CACHE_ENABLED", False)
+        monkeypatch.setattr(workflow, "_ensure_graph_initialized", AsyncMock())
+        monkeypatch.setattr(workflow, "_check_cached_response", AsyncMock(return_value=None))
+        monkeypatch.setattr(workflow, "_load_memory_context", AsyncMock())
+        monkeypatch.setattr(workflow, "_apply_research_template", AsyncMock())
+        monkeypatch.setattr(workflow, "_record_session_start", AsyncMock())
+        monkeypatch.setattr(workflow, "_cache_workflow_result", AsyncMock())
+        monkeypatch.setattr(workflow, "_auto_save_dataset", AsyncMock())
+        monkeypatch.setattr(workflow, "_save_episode_memory", AsyncMock())
+        monkeypatch.setattr(workflow, "_record_session_complete", record_complete)
+        monkeypatch.setattr(workflow, "_record_session_harness_blocked", record_blocked)
+        workflow.graph = FakeGraph()
+
+        result = await workflow.execute_workflow(
+            {
+                "query": "latest high risk research",
+                "user_id": "user_1",
+                "session_id": "session_1",
+            },
+            use_checkpointer=False,
+        )
+
+        assert result["success"] is False
+        record_complete.assert_not_awaited()
+        record_blocked.assert_awaited_once()
 
     def test_create_error_result(self, workflow):
         """Test error result creation"""

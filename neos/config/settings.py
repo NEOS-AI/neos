@@ -10,6 +10,23 @@ dotenv.load_dotenv()
 env_vars = os.environ
 
 
+def _parse_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_default_autonomy_level(raw_value: str) -> int:
+    try:
+        level = int(raw_value)
+    except (TypeError, ValueError):
+        return 1
+
+    return level if level in (0, 1, 2) else 1
+
+
 class Settings(BaseSettings):
     # 데이터베이스 설정
     DATABASE_URL: str = env_vars.get("DATABASE_URL", "postgresql+asyncpg://postgres:password@localhost/neos")
@@ -219,6 +236,19 @@ class Settings(BaseSettings):
     WORKFLOW_CACHE_ENABLED: bool = bool(env_vars.get("WORKFLOW_CACHE_ENABLED", True))  # 워크플로우 결과 캐싱
     WORKFLOW_CACHE_TTL: int = int(env_vars.get("WORKFLOW_CACHE_TTL", 3600))  # 캐시 TTL (1시간)
 
+    # Research Harness
+    RESEARCH_HARNESS_ENABLED: bool = _parse_bool(env_vars.get("RESEARCH_HARNESS_ENABLED"), True)
+    RESEARCH_HARNESS_ALLOW_OFF: bool = _parse_bool(env_vars.get("RESEARCH_HARNESS_ALLOW_OFF"), False)
+    RESEARCH_HARNESS_DEFAULT_MODE: str = env_vars.get("RESEARCH_HARNESS_DEFAULT_MODE", "auto")
+    RESEARCH_HARNESS_GATE_THRESHOLD: float = float(env_vars.get("RESEARCH_HARNESS_GATE_THRESHOLD", "0.82"))
+    RESEARCH_HARNESS_ADVISORY_THRESHOLD: float = float(env_vars.get("RESEARCH_HARNESS_ADVISORY_THRESHOLD", "0.70"))
+    RESEARCH_HARNESS_HIGH_RISK_THRESHOLD: float = float(env_vars.get("RESEARCH_HARNESS_HIGH_RISK_THRESHOLD", "0.90"))
+    RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS: int = int(env_vars.get("RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS", "1"))
+    RESEARCH_HARNESS_HYPER_DEEP_REPAIR_ATTEMPTS: int = int(env_vars.get("RESEARCH_HARNESS_HYPER_DEEP_REPAIR_ATTEMPTS", "2"))
+    RESEARCH_HARNESS_MODEL_CHECKS_ENABLED: bool = _parse_bool(env_vars.get("RESEARCH_HARNESS_MODEL_CHECKS_ENABLED"), True)
+    RESEARCH_HARNESS_STORE_FULL_CHECK_DETAILS: bool = _parse_bool(env_vars.get("RESEARCH_HARNESS_STORE_FULL_CHECK_DETAILS"), False)
+    RESEARCH_HARNESS_CACHE_POLICY: str = env_vars.get("RESEARCH_HARNESS_CACHE_POLICY", "passed_only")
+
     # 동시성 설정
     MAX_CONCURRENT_WORKFLOWS: int = int(env_vars.get("MAX_CONCURRENT_WORKFLOWS", 100))
     MAX_CONCURRENT_AGENTS_PER_WORKFLOW: int = int(env_vars.get("MAX_CONCURRENT_AGENTS_PER_WORKFLOW", 10))
@@ -303,6 +333,17 @@ class Settings(BaseSettings):
     # CORS 설정
     CORS_ALLOWED_ORIGINS: Union[str, List[str]] = ["http://localhost:3000"]
     CORS_ALLOW_CREDENTIALS: bool = True
+
+    @field_validator('DEBUG', mode='before')
+    @classmethod
+    def parse_debug_mode(cls, v):
+        if isinstance(v, str):
+            normalized = v.strip().lower()
+            if normalized in ("release", "prod", "production", "false", "0", "no", "off"):
+                return False
+            if normalized in ("debug", "dev", "development", "true", "1", "yes", "on"):
+                return True
+        return v
 
     @field_validator('CORS_ALLOWED_ORIGINS', mode='before')
     @classmethod
@@ -688,6 +729,14 @@ class Settings(BaseSettings):
         if s.strip()
     ]
     APPROVAL_TIMEOUT_SECONDS: int = int(env_vars.get("APPROVAL_TIMEOUT_SECONDS", "60"))
+
+    # =========================================================================
+    # Agent Autonomy Control
+    # Per-request autonomy_level fallback: 0=manual, 1=assisted, 2=autonomous.
+    # =========================================================================
+    DEFAULT_AUTONOMY_LEVEL: int = _parse_default_autonomy_level(
+        env_vars.get("DEFAULT_AUTONOMY_LEVEL", "1")
+    )
 
     # =========================================================================
     # Channel Adapter 설정 (Phase 1 — OpenClaw Multi-Channel Adapter Layer)

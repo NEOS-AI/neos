@@ -7,6 +7,16 @@ from httpx import AsyncClient, ASGITransport
 from typing import AsyncGenerator
 
 
+def _skip_database_fixtures(request: pytest.FixtureRequest) -> bool:
+    nodeid = getattr(request.node, "nodeid", "")
+    return (
+        request.node.get_closest_marker("no_db") is not None
+        or "tests/workflow/harness/" in nodeid
+        or "tests/workflow/test_harness_" in nodeid
+        or "tests/workflow/processors/test_research_harness_processor.py" in nodeid
+    )
+
+
 @pytest.fixture(scope="function")
 def event_loop():
     """
@@ -20,10 +30,14 @@ def event_loop():
 
 
 @pytest.fixture(scope="function", autouse=True)
-async def cleanup_test_data(event_loop):
+async def cleanup_test_data(event_loop, request):
     """
     Clean test data before and after each test.
     """
+    if _skip_database_fixtures(request):
+        yield
+        return
+
     from neos.database.connection import db_manager
     from sqlalchemy import text
 
@@ -57,11 +71,15 @@ async def cleanup_test_data(event_loop):
 
 
 @pytest.fixture(scope="function", autouse=True)
-async def reset_db_manager(event_loop, cleanup_test_data):
+async def reset_db_manager(event_loop, cleanup_test_data, request):
     """
     Reset the database manager before and after each test to prevent event loop conflicts.
     This ensures each test gets a fresh database connection pool bound to the current event loop.
     """
+    if _skip_database_fixtures(request):
+        yield
+        return
+
     from neos.database.connection import db_manager
 
     # Dispose existing connections before test

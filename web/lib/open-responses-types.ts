@@ -309,6 +309,19 @@ export interface NeosWorkflowProgressEvent {
   conversation_id: string;
 }
 
+export interface ApprovalRequest {
+  request_id: string;
+  skill_name: string;
+  params?: Record<string, unknown>;
+  timeout_seconds?: number;
+}
+
+export interface NeosApprovalRequestEvent {
+  type: "neos:approval_request";
+  session_id: string;
+  pending_approvals: ApprovalRequest[];
+}
+
 // ============================================================================
 // Neos A2UI (Phase 8) Types
 // ============================================================================
@@ -433,6 +446,7 @@ export type NeosExtensionEvent =
   | NeosArtifactDeltaEvent
   | NeosArtifactFinishEvent
   | NeosWorkflowProgressEvent
+  | NeosApprovalRequestEvent
   | NeosUIFrameEvent
   | NeosInlineVizEvent
   | NeosInlineVizErrorEvent;
@@ -559,6 +573,12 @@ export function isNeosWorkflowProgressEvent(
   event: OpenResponsesEvent
 ): event is NeosWorkflowProgressEvent {
   return event.type === "neos:workflow_progress";
+}
+
+export function isNeosApprovalRequestEvent(
+  event: OpenResponsesEvent
+): event is NeosApprovalRequestEvent {
+  return event.type === "neos:approval_request";
 }
 
 export function isNeosUIFrameEvent(

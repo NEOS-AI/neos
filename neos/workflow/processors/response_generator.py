@@ -14,6 +14,15 @@ from ..state import AgentState
 logger = logging.getLogger(__name__)
 
 
+def _coerce_quality_score(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class ResponseGenerator:
     """최종 응답 생성"""
 
@@ -36,6 +45,9 @@ class ResponseGenerator:
     async def generate_response(self, state: AgentState) -> Dict[str, Any]:
         """최종 응답 생성"""
         logger.debug("[ResponseGenerator] Starting response generation...")
+
+        if state.get("final_response") is not None:
+            return self._preserve_existing_response(state)
 
         # 모든 결과를 종합하여 응답 생성
         response_parts = []
@@ -144,6 +156,19 @@ class ResponseGenerator:
 
         return state
 
+    def _preserve_existing_response(self, state: AgentState) -> Dict[str, Any]:
+        execution_time = int(
+            (datetime.now() - state["execution_start"]).total_seconds() * 1000
+        )
+        state["execution_time_ms"] = execution_time
+        state["response_metadata"] = self._create_response_metadata(state)
+        state["execution_steps"].append({
+            "step": "response_generation",
+            "result": "preserved_existing_response",
+            "timestamp": datetime.now().isoformat()
+        })
+        return state
+
     def _construct_final_response(self, response_parts: List[str], detected_language: str = "ko") -> str:
         """최종 응답 구성"""
         if response_parts:
@@ -160,14 +185,41 @@ class ResponseGenerator:
 
     def _create_response_metadata(self, state: AgentState) -> Dict[str, Any]:
         """응답 메타데이터 생성"""
+        mission_metadata = {}
+        if state.get("mission_id"):
+            mission_metadata = {
+                "mission_id": state.get("mission_id"),
+                "mission_status": state.get("mission_status"),
+                "mission_plan_summary": (state.get("mission_plan") or {}).get(
+                    "user_visible_summary"
+                ),
+                "validation_summary": state.get("validation_summary"),
+                "mission_task_results": state.get("mission_task_results", []),
+            }
+
+        harness_metadata = {}
+        if state.get("harness_verdict"):
+            harness_metadata = {
+                "harness": {
+                    "enabled": True,
+                    "mode": state.get("harness_mode"),
+                    "verdict": state.get("harness_verdict"),
+                    "score": state.get("harness_score"),
+                    "failed_checks": state.get("harness_failed_checks", []),
+                    "repair_attempts": state.get("harness_repair_attempts", 0),
+                }
+            }
+
         return {
             "total_sources": len(state["search_results"]),
             "analysis_count": len(state["analysis_results"]),
             "generation_count": len(state["generation_results"]),
-            "quality_score": state.get("quality_score", 0.0),
+            "quality_score": _coerce_quality_score(state.get("quality_score")),
             "execution_time_ms": state.get("execution_time_ms", 0),
             "total_errors": len(state["errors"]),
-            "processing_steps": len(state["execution_steps"])
+            "processing_steps": len(state["execution_steps"]),
+            **mission_metadata,
+            **harness_metadata,
         }
 
     def _create_search_summary(self, results: List[Any]) -> str:

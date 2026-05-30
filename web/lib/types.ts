@@ -6,7 +6,12 @@ import type { getWeather } from "./ai/tools/get-weather";
 import type { requestSuggestions } from "./ai/tools/request-suggestions";
 import type { updateDocument } from "./ai/tools/update-document";
 import type { Suggestion } from "./db/schema";
-import type { ItemStatus, UIFramePayload, InlineVisualization } from "./open-responses-types";
+import type {
+  ApprovalRequest,
+  ItemStatus,
+  UIFramePayload,
+  InlineVisualization,
+} from "./open-responses-types";
 
 export type DataPart = { type: "append-message"; message: string };
 
@@ -65,6 +70,9 @@ export const messageMetadataSchema = z.object({
       })
     )
     .optional(),
+  // Execution approval requests emitted by checkpointer-backed workflows.
+  approval_requests: z.custom<ApprovalRequest[]>().optional(),
+  approval_session_id: z.string().optional(),
   // Phase 8 (A2UI): UIFrame payload for form rendering
   ui_frame: z.custom<UIFramePayload>().optional(),
   // Inline Visualization: renderDiagram / renderChart 결과 (복수 지원)
@@ -134,3 +142,35 @@ export type Attachment = {
   url: string;
   contentType: string;
 };
+
+export type AutonomyLevel = 0 | 1 | 2;
+
+export type AutonomyIcon = "lock" | "sparkles" | "cpu";
+
+export interface AutonomyConfig {
+  level: AutonomyLevel;
+  label: string;
+  description: string;
+  icon: AutonomyIcon;
+}
+
+export const AUTONOMY_CONFIGS: AutonomyConfig[] = [
+  {
+    level: 0,
+    label: "Manual",
+    description: "Ask before agent actions",
+    icon: "lock",
+  },
+  {
+    level: 1,
+    label: "Assisted",
+    description: "Ask for sensitive actions",
+    icon: "sparkles",
+  },
+  {
+    level: 2,
+    label: "Autonomous",
+    description: "Run agent actions without prompts",
+    icon: "cpu",
+  },
+];

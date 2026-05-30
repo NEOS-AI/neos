@@ -291,6 +291,18 @@ class NeosWorkflowProgressEvent(BaseModel):
     message: Optional[str] = None
 
 
+class NeosApprovalRequestEvent(BaseModel):
+    """
+    Event: neos:approval_request - Workflow execution approval required.
+
+    Chat clients can render pending approvals and submit a decision through the
+    approval API to resume the interrupted checkpointer workflow.
+    """
+    type: Literal["neos:approval_request"] = "neos:approval_request"
+    session_id: str
+    pending_approvals: List[Dict[str, Any]]
+
+
 class NeosUIFrameEvent(BaseModel):
     """
     Event: neos:ui_frame — Phase 8 (A2UI) UIFrame 컴포넌트 페이로드

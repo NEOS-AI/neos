@@ -12,6 +12,7 @@ Features:
 
 import logging
 import hashlib
+import json
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 from dataclasses import dataclass
@@ -38,6 +39,7 @@ class CachedResponse:
     cache_id: int
     ttl_remaining: int
     hit_count: int
+    cache_metadata: Dict[str, Any] = None
 
 
 @dataclass
@@ -233,7 +235,8 @@ class SmartCacheManager:
         query_vector: List[float] = None,
         query_intent: str = None,
         user_id: str = None,
-        max_age_seconds: int = None
+        max_age_seconds: int = None,
+        metadata_filter: Dict[str, Any] = None,
     ) -> CacheResult:
         """
         캐시된 응답 조회
@@ -247,6 +250,7 @@ class SmartCacheManager:
             query_intent: 쿼리 의도 (필터링에 사용)
             user_id: 사용자 ID (멀티테넌시)
             max_age_seconds: 최대 캐시 수명 제한
+            metadata_filter: 캐시 메타데이터 필터. 모든 key/value가 일치해야 함.
 
         Returns:
             CacheResult: 캐시 조회 결과
@@ -272,7 +276,11 @@ class SmartCacheManager:
                 # 1. 정확한 해시 매칭 시도
                 query_hash = self._generate_query_hash(query)
                 exact_result = await self._find_exact_match(
-                    session, query_hash, user_id, max_age_seconds
+                    session,
+                    query_hash,
+                    user_id,
+                    max_age_seconds,
+                    metadata_filter=metadata_filter,
                 )
 
                 if exact_result:
@@ -308,7 +316,9 @@ class SmartCacheManager:
 
                 semantic_result = await self._find_similar_query(
                     session, query_vector, query_intent, user_id,
-                    max_age_seconds, similarity_threshold=intent_threshold
+                    max_age_seconds,
+                    similarity_threshold=intent_threshold,
+                    metadata_filter=metadata_filter,
                 )
 
                 search_time = int((datetime.now() - start_time).total_seconds() * 1000)
@@ -399,13 +409,22 @@ class SmartCacheManager:
             query_hash = self._generate_query_hash(query)
 
             async with get_session_ctx() as session:
-                # 기존 캐시 확인 (중복 방지)
-                existing = await session.execute(
-                    select(QueryCacheEntry).where(
-                        QueryCacheEntry.query_hash == query_hash,
-                        QueryCacheEntry.user_id == user_id if user_id else True
-                    )
+                metadata_scope = (
+                    {"autonomy_level": metadata["autonomy_level"]}
+                    if metadata and "autonomy_level" in metadata
+                    else None
                 )
+                existing_query = select(QueryCacheEntry).where(
+                    QueryCacheEntry.query_hash == query_hash,
+                    QueryCacheEntry.user_id == user_id if user_id else True
+                )
+                if metadata_scope:
+                    existing_query = existing_query.where(
+                        QueryCacheEntry.cache_metadata.contains(metadata_scope)
+                    )
+                existing_query = existing_query.limit(1)
+
+                existing = await session.execute(existing_query)
                 existing_entry = existing.scalar_one_or_none()
 
                 if existing_entry:
@@ -458,7 +477,8 @@ class SmartCacheManager:
         session: AsyncSession,
         query_hash: str,
         user_id: str = None,
-        max_age_seconds: int = None
+        max_age_seconds: int = None,
+        metadata_filter: Dict[str, Any] = None,
     ) -> Optional[CachedResponse]:
         """정확한 해시 매칭으로 캐시 찾기"""
         now = datetime.now()
@@ -478,7 +498,10 @@ class SmartCacheManager:
             min_created = now - timedelta(seconds=max_age_seconds)
             query = query.where(QueryCacheEntry.created_at >= min_created)
 
-        result = await session.execute(query)
+        if metadata_filter:
+            query = query.where(QueryCacheEntry.cache_metadata.contains(metadata_filter))
+
+        result = await session.execute(query.limit(1))
         entry = result.scalar_one_or_none()
 
         if entry:
@@ -491,7 +514,8 @@ class SmartCacheManager:
                 is_exact_match=True,
                 cache_id=entry.id,
                 ttl_remaining=ttl_remaining,
-                hit_count=entry.hit_count
+                hit_count=entry.hit_count,
+                cache_metadata=entry.cache_metadata or {},
             )
 
         return None
@@ -503,7 +527,8 @@ class SmartCacheManager:
         query_intent: str = None,
         user_id: str = None,
         max_age_seconds: int = None,
-        similarity_threshold: float = None
+        similarity_threshold: float = None,
+        metadata_filter: Dict[str, Any] = None,
     ) -> Optional[CachedResponse]:
         """pgvector를 사용한 유사 쿼리 검색
 
@@ -550,6 +575,10 @@ class SmartCacheManager:
             where_conditions.append("created_at >= :min_created")
             params["min_created"] = min_created
 
+        if metadata_filter:
+            where_conditions.append("cache_metadata @> CAST(:metadata_filter AS jsonb)")
+            params["metadata_filter"] = json.dumps(metadata_filter)
+
         where_conditions.append("1 - (query_vector::halfvec(3072) <=> :query_vector::halfvec(3072)) >= :threshold")
 
         where_clause = " AND ".join(where_conditions)
@@ -564,6 +593,7 @@ class SmartCacheManager:
                 complexity_score,
                 expires_at,
                 hit_count,
+                cache_metadata,
                 1 - (query_vector::halfvec(3072) <=> :query_vector::halfvec(3072)) as similarity
             FROM query_cache
             WHERE {where_clause}
@@ -585,7 +615,8 @@ class SmartCacheManager:
                 is_exact_match=False,
                 cache_id=row.id,
                 ttl_remaining=ttl_remaining,
-                hit_count=row.hit_count
+                hit_count=row.hit_count,
+                cache_metadata=row.cache_metadata or {},
             )
 
         return None

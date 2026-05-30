@@ -30,6 +30,11 @@ NODE_LABELS: Dict[str, str] = {
     "result_integrator": "Integrating results",
     "fact_check": "Verifying facts",
     "quality_validator": "Validating quality",
+    "mission_planner": "Planning mission",
+    "mission_approval": "Waiting for mission approval",
+    "mission_executor": "Executing mission",
+    "mission_validator": "Validating mission",
+    "mission_integrator": "Integrating mission results",
     "response_generator": "Generating response",
 }
 
@@ -46,6 +51,11 @@ _STATIC_DURATIONS: Dict[str, float] = {
     "result_integrator": 3.0,
     "fact_check": 6.0,
     "quality_validator": 2.0,
+    "mission_planner": 2.0,
+    "mission_approval": 1.0,
+    "mission_executor": 15.0,
+    "mission_validator": 3.0,
+    "mission_integrator": 1.0,
     "response_generator": 4.0,
 }
 
