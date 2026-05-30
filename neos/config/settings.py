@@ -10,6 +10,14 @@ dotenv.load_dotenv()
 env_vars = os.environ
 
 
+def _parse_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _parse_default_autonomy_level(raw_value: str) -> int:
     try:
         level = int(raw_value)
@@ -227,6 +235,19 @@ class Settings(BaseSettings):
     # Cache Configuration
     WORKFLOW_CACHE_ENABLED: bool = bool(env_vars.get("WORKFLOW_CACHE_ENABLED", True))  # 워크플로우 결과 캐싱
     WORKFLOW_CACHE_TTL: int = int(env_vars.get("WORKFLOW_CACHE_TTL", 3600))  # 캐시 TTL (1시간)
+
+    # Research Harness
+    RESEARCH_HARNESS_ENABLED: bool = _parse_bool(env_vars.get("RESEARCH_HARNESS_ENABLED"), True)
+    RESEARCH_HARNESS_ALLOW_OFF: bool = _parse_bool(env_vars.get("RESEARCH_HARNESS_ALLOW_OFF"), False)
+    RESEARCH_HARNESS_DEFAULT_MODE: str = env_vars.get("RESEARCH_HARNESS_DEFAULT_MODE", "auto")
+    RESEARCH_HARNESS_GATE_THRESHOLD: float = float(env_vars.get("RESEARCH_HARNESS_GATE_THRESHOLD", "0.82"))
+    RESEARCH_HARNESS_ADVISORY_THRESHOLD: float = float(env_vars.get("RESEARCH_HARNESS_ADVISORY_THRESHOLD", "0.70"))
+    RESEARCH_HARNESS_HIGH_RISK_THRESHOLD: float = float(env_vars.get("RESEARCH_HARNESS_HIGH_RISK_THRESHOLD", "0.90"))
+    RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS: int = int(env_vars.get("RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS", "1"))
+    RESEARCH_HARNESS_HYPER_DEEP_REPAIR_ATTEMPTS: int = int(env_vars.get("RESEARCH_HARNESS_HYPER_DEEP_REPAIR_ATTEMPTS", "2"))
+    RESEARCH_HARNESS_MODEL_CHECKS_ENABLED: bool = _parse_bool(env_vars.get("RESEARCH_HARNESS_MODEL_CHECKS_ENABLED"), True)
+    RESEARCH_HARNESS_STORE_FULL_CHECK_DETAILS: bool = _parse_bool(env_vars.get("RESEARCH_HARNESS_STORE_FULL_CHECK_DETAILS"), False)
+    RESEARCH_HARNESS_CACHE_POLICY: str = env_vars.get("RESEARCH_HARNESS_CACHE_POLICY", "passed_only")
 
     # 동시성 설정
     MAX_CONCURRENT_WORKFLOWS: int = int(env_vars.get("MAX_CONCURRENT_WORKFLOWS", 100))

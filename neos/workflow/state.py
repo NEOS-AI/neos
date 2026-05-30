@@ -83,6 +83,17 @@ class AgentState(TypedDict):
     fact_check_result: Optional[Dict[str, Any]]
     fact_check_skipped: Optional[bool]
 
+    # Research Harness
+    harness_mode: Optional[str]
+    harness_contract: Dict[str, Any]
+    harness_runs: List[Dict[str, Any]]
+    harness_verdict: Optional[str]
+    harness_score: Optional[float]
+    harness_failed_checks: List[str]
+    harness_repair_plan: Optional[Dict[str, Any]]
+    harness_repair_attempts: int
+    harness_metadata: Dict[str, Any]
+
     # 반복적 탐색 상태 (Iterative Web Explorer)
     use_iterative_search: Optional[bool]  # 사용자 선호
     exploration_depth_reached: Optional[int]  # 도달 깊이

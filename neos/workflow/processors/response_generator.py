@@ -197,6 +197,19 @@ class ResponseGenerator:
                 "mission_task_results": state.get("mission_task_results", []),
             }
 
+        harness_metadata = {}
+        if state.get("harness_verdict"):
+            harness_metadata = {
+                "harness": {
+                    "enabled": True,
+                    "mode": state.get("harness_mode"),
+                    "verdict": state.get("harness_verdict"),
+                    "score": state.get("harness_score"),
+                    "failed_checks": state.get("harness_failed_checks", []),
+                    "repair_attempts": state.get("harness_repair_attempts", 0),
+                }
+            }
+
         return {
             "total_sources": len(state["search_results"]),
             "analysis_count": len(state["analysis_results"]),
@@ -206,6 +219,7 @@ class ResponseGenerator:
             "total_errors": len(state["errors"]),
             "processing_steps": len(state["execution_steps"]),
             **mission_metadata,
+            **harness_metadata,
         }
 
     def _create_search_summary(self, results: List[Any]) -> str:

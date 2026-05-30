@@ -16,6 +16,7 @@ from neos.tools.tool_selector import tool_selector
 
 from .enums import WorkflowNode, WorkflowPathway, IntentType, AutonomyLevel
 from .state import AgentState, WorkflowConfig
+from .harness.cache_policy import should_cache_harness_result
 from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationOrchestrator
 from .processors import (
     ResultProcessor,
@@ -25,6 +26,7 @@ from .processors import (
     RefinementChecker,
     QueryRefinementAgent,
     FactCheckProcessor,
+    ResearchHarnessProcessor,
     ResearchContinuationProcessor,
     SelfReflectionProcessor,
     HypothesisManager,
@@ -117,6 +119,7 @@ class MultiAgentWorkflow:
         self.result_processor = ResultProcessor()
         self.fact_check_processor = FactCheckProcessor()
         self.quality_validator = QualityValidator(self.config)
+        self.research_harness_processor = ResearchHarnessProcessor()
         self.response_generator = ResponseGenerator()
 
         from .mission.executor import MissionExecutor
@@ -292,6 +295,7 @@ class MultiAgentWorkflow:
         workflow.add_node(WorkflowNode.RESULT_INTEGRATOR.value, self._integrate_results_node)
         workflow.add_node(WorkflowNode.FACT_CHECK.value, self._fact_check_node)
         workflow.add_node(WorkflowNode.QUALITY_VALIDATOR.value, self._validate_quality_node)
+        workflow.add_node(WorkflowNode.RESEARCH_HARNESS.value, self._research_harness_node)
         workflow.add_node(WorkflowNode.SELF_REFLECTION.value, self._self_reflection_node)  # Phase 2.6
         workflow.add_node(WorkflowNode.MISSION_PLANNER.value, self._mission_planner_node)
         workflow.add_node(WorkflowNode.MISSION_APPROVAL.value, self._mission_approval_node)
@@ -478,9 +482,11 @@ class MultiAgentWorkflow:
             self._should_regenerate,
             {
                 WorkflowPathway.REGENERATE.value: WorkflowNode.HYPOTHESIS_GENERATION.value,  # 품질이 낮으면 가설 생성부터 다시
-                WorkflowPathway.PROCEED.value: WorkflowNode.SELF_REFLECTION.value  # Phase 2.6: 품질 OK → self-reflection
+                WorkflowPathway.PROCEED.value: WorkflowNode.RESEARCH_HARNESS.value,
             }
         )
+
+        workflow.add_edge(WorkflowNode.RESEARCH_HARNESS.value, WorkflowNode.SELF_REFLECTION.value)
 
         # Phase 2.6: self_reflection → response_generator
         workflow.add_edge(WorkflowNode.SELF_REFLECTION.value, WorkflowNode.RESP_GENERATOR.value)
@@ -918,6 +924,10 @@ class MultiAgentWorkflow:
         """품질 검증 노드"""
         return await self.quality_validator.validate_quality(state)
 
+    async def _research_harness_node(self, state: AgentState) -> Dict[str, Any]:
+        """Research harness validation node."""
+        return await self.research_harness_processor.process(state)
+
     async def _generate_response_node(self, state: AgentState) -> Dict[str, Any]:
         """응답 생성 노드"""
         return await self.response_generator.generate_response(state)
@@ -1275,6 +1285,10 @@ class MultiAgentWorkflow:
                     result["success"]
                     and result["response"]
                     and _mission_validation_passed(result)
+                    and should_cache_harness_result(
+                        result,
+                        cache_policy=settings.RESEARCH_HARNESS_CACHE_POLICY,
+                    )
                 ):
                     # 스마트 캐시에 저장 (활성화된 경우)
                     if settings.SMART_CACHE_ENABLED:
@@ -1291,7 +1305,7 @@ class MultiAgentWorkflow:
                     add_span_event(span, "saving_to_redis_cache")
                     await self._cache_workflow_result(cache_key, result)
                 elif result["success"] and result["response"]:
-                    add_span_event(span, "cache_skipped_mission_validation")
+                    add_span_event(span, "cache_skipped_validation_policy")
 
                 # 데이터셋 자동 저장 (LLM 호출이 있었을 경우)
                 await self._auto_save_dataset()
@@ -1535,6 +1549,15 @@ class MultiAgentWorkflow:
             integrated_results=None,
             quality_score=None,
             quality_feedback=None,
+            harness_mode=None,
+            harness_contract={},
+            harness_runs=[],
+            harness_verdict=None,
+            harness_score=None,
+            harness_failed_checks=[],
+            harness_repair_plan=None,
+            harness_repair_attempts=0,
+            harness_metadata={},
             final_response=None,
             response_metadata=None,
             execution_start=datetime.now(),
@@ -1767,6 +1790,13 @@ class MultiAgentWorkflow:
 
     async def _cache_workflow_result(self, cache_key: str, result: Dict[str, Any]) -> None:
         """워크플로우 결과 캐싱"""
+        if not should_cache_harness_result(
+            result,
+            cache_policy=settings.RESEARCH_HARNESS_CACHE_POLICY,
+        ):
+            print("[DEBUG] Workflow response cache skipped by harness policy")
+            return
+
         print(f"[DEBUG] Caching workflow response for {settings.WORKFLOW_RESPONSE_CACHE_TTL} seconds")
 
         # 캐시할 때는 cache_hit 정보 제외
