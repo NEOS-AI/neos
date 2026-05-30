@@ -76,3 +76,17 @@ def test_explicit_off_is_respected_when_allowed():
 
     assert decision.mode == HarnessMode.OFF
 
+
+def test_global_disable_overrides_explicit_gate_request():
+    decision = decide_harness_policy(
+        intent="deep_research",
+        complexity_score=0.9,
+        metadata={"harness_mode": "gate"},
+        settings_overrides={
+            "RESEARCH_HARNESS_ENABLED": False,
+            "RESEARCH_HARNESS_DEFAULT_MODE": "auto",
+        },
+    )
+
+    assert decision.mode == HarnessMode.OFF
+    assert decision.reason == "disabled_by_settings"

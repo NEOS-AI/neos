@@ -77,6 +77,15 @@ def decide_harness_policy(
         _get_setting(settings_overrides, "RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS", 1)
     )
 
+    if not enabled:
+        return HarnessPolicyDecision(
+            HarnessMode.OFF,
+            HarnessRiskLevel.LOW,
+            "disabled_by_settings",
+            0.0,
+            0,
+        )
+
     explicit_mode = metadata.get("harness_mode")
     if explicit_mode:
         requested = _coerce_mode(explicit_mode, HarnessMode.AUTO)
@@ -98,15 +107,6 @@ def decide_harness_policy(
                 threshold,
                 attempts,
             )
-
-    if not enabled:
-        return HarnessPolicyDecision(
-            HarnessMode.OFF,
-            HarnessRiskLevel.LOW,
-            "disabled_by_settings",
-            0.0,
-            0,
-        )
 
     risk_level = _coerce_risk(metadata.get("risk_level"))
     freshness_required = _as_bool(metadata.get("freshness_required"), False)
@@ -169,4 +169,3 @@ def decide_harness_policy(
         advisory_threshold,
         0,
     )
-

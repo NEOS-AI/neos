@@ -137,11 +137,20 @@ class HarnessRunner:
         critical_failures = [
             check for check in checks if not check.passed and check.severity == "critical"
         ]
+        required_failures = [
+            check
+            for check in checks
+            if not check.passed and check.name in set(contract.required_checks or [])
+        ]
         repairable_failures = [
             check for check in checks if not check.passed and check.repairable
         ]
         attempts_remaining = repair_attempts < contract.max_repair_attempts
 
+        if contract.mode == HarnessMode.GATE and required_failures:
+            if any(check.repairable for check in required_failures) and attempts_remaining:
+                return HarnessVerdict.NEEDS_REPAIR
+            return HarnessVerdict.FAIL
         if critical_failures and repairable_failures and attempts_remaining:
             return HarnessVerdict.NEEDS_REPAIR
         if critical_failures:
@@ -160,4 +169,3 @@ class HarnessRunner:
 
     def _run_id(self) -> str:
         return f"harness-{uuid.uuid4()}"
-

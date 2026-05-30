@@ -41,6 +41,8 @@ from .telemetry import trace_workflow_node, add_span_event, set_span_attributes
 
 logger = logging.getLogger(__name__)
 
+_HARNESS_GATE_BLOCKING_VERDICTS = {"fail", "needs_repair"}
+
 # CR-P6-11: 우선순위 라우팅 단일 테이블 — 향후 CANVAS_RENDERING 등 추가 시 여기만 수정
 _PRIORITY_ROUTING_MAP: dict[str, str] = {
     IntentType.TASK_SCHEDULING.value: "task_scheduling",
@@ -64,6 +66,26 @@ def _coerce_quality_score(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _is_gate_harness_blocked(final_state: Dict[str, Any] | None) -> bool:
+    if not final_state:
+        return False
+    return (
+        str(final_state.get("harness_mode") or "").lower() == "gate"
+        and str(final_state.get("harness_verdict") or "").lower()
+        in _HARNESS_GATE_BLOCKING_VERDICTS
+    )
+
+
+def _harness_blocked_message(final_state: Dict[str, Any]) -> str:
+    failed = final_state.get("harness_failed_checks") or []
+    failed_text = ", ".join(str(item) for item in failed) if failed else "unknown"
+    return (
+        "검증 중 일부 핵심 조건을 만족하지 못해 최종 보고서로 확정하지 않았습니다.\n"
+        f"부족한 항목: {failed_text}\n"
+        "가능한 다음 작업: 추가 검색 또는 수리 후 재검증"
+    )
 
 
 def _should_bypass_cache_for_mission(
@@ -482,16 +504,15 @@ class MultiAgentWorkflow:
             self._should_regenerate,
             {
                 WorkflowPathway.REGENERATE.value: WorkflowNode.HYPOTHESIS_GENERATION.value,  # 품질이 낮으면 가설 생성부터 다시
-                WorkflowPathway.PROCEED.value: WorkflowNode.RESEARCH_HARNESS.value,
+                WorkflowPathway.PROCEED.value: WorkflowNode.SELF_REFLECTION.value,
             }
         )
-
-        workflow.add_edge(WorkflowNode.RESEARCH_HARNESS.value, WorkflowNode.SELF_REFLECTION.value)
 
         # Phase 2.6: self_reflection → response_generator
         workflow.add_edge(WorkflowNode.SELF_REFLECTION.value, WorkflowNode.RESP_GENERATOR.value)
 
-        workflow.add_edge(WorkflowNode.RESP_GENERATOR.value, END)
+        workflow.add_edge(WorkflowNode.RESP_GENERATOR.value, WorkflowNode.RESEARCH_HARNESS.value)
+        workflow.add_edge(WorkflowNode.RESEARCH_HARNESS.value, END)
 
         # Conditionally use checkpointer
         if use_checkpointer:
@@ -926,7 +947,8 @@ class MultiAgentWorkflow:
 
     async def _research_harness_node(self, state: AgentState) -> Dict[str, Any]:
         """Research harness validation node."""
-        return await self.research_harness_processor.process(state)
+        updates = await self.research_harness_processor.process(state)
+        return {**state, **updates}
 
     async def _generate_response_node(self, state: AgentState) -> Dict[str, Any]:
         """응답 생성 노드"""
@@ -1214,7 +1236,8 @@ class MultiAgentWorkflow:
                     WorkflowNode.MISSION_EXECUTOR.value,
                     WorkflowNode.MISSION_VALIDATOR.value,
                     WorkflowNode.MISSION_INTEGRATOR.value,
-                    WorkflowNode.RESP_GENERATOR.value
+                    WorkflowNode.RESP_GENERATOR.value,
+                    WorkflowNode.RESEARCH_HARNESS.value,
                 ]
 
                 current_step = 0
@@ -1323,10 +1346,15 @@ class MultiAgentWorkflow:
                 # Phase 2.1: 에피소드 메모리 저장
                 await self._save_episode_memory(user_input, result, final_state)
 
-                # 세션 상태를 completed로 업데이트
-                await self._record_session_complete(
-                    user_input, result, final_state
-                )
+                if result.get("success"):
+                    # 세션 상태를 completed로 업데이트
+                    await self._record_session_complete(
+                        user_input, result, final_state
+                    )
+                elif _is_gate_harness_blocked(final_state):
+                    await self._record_session_harness_blocked(
+                        user_input, result, final_state
+                    )
 
                 logger.debug("[ExecuteWorkflow] Completed successfully")
                 return result
@@ -1599,6 +1627,24 @@ class MultiAgentWorkflow:
 
     def _create_workflow_result(self, final_state: AgentState) -> Dict[str, Any]:
         """워크플로우 결과 생성"""
+        if _is_gate_harness_blocked(final_state):
+            errors = list(final_state.get("errors") or [])
+            if "research_harness_gate_failed" not in errors:
+                errors.append("research_harness_gate_failed")
+            return {
+                "success": False,
+                "response": _harness_blocked_message(final_state),
+                "blocked_response": final_state.get("final_response"),
+                "metadata": final_state.get("response_metadata") or {},
+                "execution_time_ms": final_state["execution_time_ms"],
+                "quality_score": _coerce_quality_score(final_state.get("quality_score")),
+                "errors": errors,
+                "cache_hit": False,
+                "execution_steps": len(final_state["execution_steps"]),
+                "retry_count": final_state.get("retry_count", 0),
+                "channel_source": final_state.get("channel_source", "api"),
+            }
+
         result = {
             "success": True,
             "response": final_state["final_response"],
@@ -1756,18 +1802,49 @@ class MultiAgentWorkflow:
             return
 
         try:
+            metadata_updates = {
+                "quality_score": result.get("quality_score"),
+                "search_results_count": len(final_state.get("search_results", [])),
+                "execution_time_ms": result.get("execution_time_ms"),
+                "errors": final_state.get("errors", []),
+            }
+            harness_metadata = (result.get("metadata") or {}).get("harness")
+            if harness_metadata:
+                metadata_updates["harness"] = harness_metadata
             await research_session_service.update_session_status(
                 thread_id=user_input.get("session_id", ""),
                 status="completed",
-                metadata_updates={
-                    "quality_score": result.get("quality_score"),
-                    "search_results_count": len(final_state.get("search_results", [])),
-                    "execution_time_ms": result.get("execution_time_ms"),
-                    "errors": final_state.get("errors", []),
-                },
+                metadata_updates=metadata_updates,
             )
         except Exception as e:
             logger.warning(f"[Workflow] Failed to record session completion: {e}")
+
+    async def _record_session_harness_blocked(
+        self, user_input: Dict[str, Any], result: Dict[str, Any],
+        final_state: AgentState
+    ) -> None:
+        """워크플로우가 gate harness에서 차단되었을 때 세션 상태 업데이트"""
+        try:
+            from neos.api.services.research_session_service import research_session_service
+        except ImportError as e:
+            logger.error(f"[Workflow] Cannot import research_session_service: {e}")
+            return
+
+        try:
+            await research_session_service.update_session_status(
+                thread_id=user_input.get("session_id", ""),
+                status="failed",
+                metadata_updates={
+                    "reason": "research_harness_gate_failed",
+                    "quality_score": result.get("quality_score"),
+                    "search_results_count": len(final_state.get("search_results", [])),
+                    "execution_time_ms": result.get("execution_time_ms"),
+                    "errors": result.get("errors", []),
+                    "harness": (result.get("metadata") or {}).get("harness", {}),
+                },
+            )
+        except Exception as e:
+            logger.warning(f"[Workflow] Failed to record harness-blocked session: {e}")
 
     async def _record_session_failed(
         self, user_input: Dict[str, Any], error: Exception

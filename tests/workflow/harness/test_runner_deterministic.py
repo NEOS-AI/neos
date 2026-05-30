@@ -102,3 +102,52 @@ def test_runner_fails_gate_when_score_below_threshold_after_attempts_exhausted()
 
     assert run.verdict == HarnessVerdict.FAIL
 
+
+def test_failed_required_warning_check_cannot_pass_gate_by_weighted_score():
+    runner = HarnessRunner(
+        checkers=[
+            StaticChecker(
+                check(
+                    "freshness",
+                    passed=False,
+                    score=0.99,
+                    severity="warning",
+                    repairable=False,
+                )
+            )
+        ]
+    )
+
+    run = runner.run(
+        report="latest answer [1]",
+        sources=[{"id": "1", "url": "https://a.com"}],
+        contract=gate_contract(required_checks=["freshness"]),
+        repair_attempts=1,
+    )
+
+    assert run.verdict == HarnessVerdict.FAIL
+
+
+def test_failed_required_repairable_check_requests_repair_when_attempts_remain():
+    runner = HarnessRunner(
+        checkers=[
+            StaticChecker(
+                check(
+                    "freshness",
+                    passed=False,
+                    score=0.99,
+                    severity="warning",
+                    repairable=True,
+                )
+            )
+        ]
+    )
+
+    run = runner.run(
+        report="latest answer [1]",
+        sources=[{"id": "1", "url": "https://a.com"}],
+        contract=gate_contract(required_checks=["freshness"], max_repair_attempts=1),
+        repair_attempts=0,
+    )
+
+    assert run.verdict == HarnessVerdict.NEEDS_REPAIR

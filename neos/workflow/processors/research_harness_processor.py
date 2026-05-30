@@ -37,6 +37,16 @@ class ResearchHarnessProcessor:
 
         runs = list(state.get("harness_runs") or [])
         runs.append(run.to_dict())
+        harness_summary = {
+            "enabled": run.mode.value != "off",
+            "mode": run.mode.value,
+            "verdict": run.verdict.value,
+            "score": float(run.score),
+            "failed_checks": run.failed_checks,
+            "repair_attempts": repair_attempts,
+            "threshold": contract.min_score,
+            "risk_level": contract.risk_level.value,
+        }
 
         updates = {
             "harness_mode": run.mode.value,
@@ -54,6 +64,10 @@ class ResearchHarnessProcessor:
                 "risk_level": contract.risk_level.value,
             },
         }
+        if state.get("response_metadata") is not None:
+            response_metadata = dict(state.get("response_metadata") or {})
+            response_metadata["harness"] = harness_summary
+            updates["response_metadata"] = response_metadata
 
         execution_steps = list(state.get("execution_steps") or [])
         execution_steps.append(
@@ -65,4 +79,3 @@ class ResearchHarnessProcessor:
         )
         updates["execution_steps"] = execution_steps
         return updates
-

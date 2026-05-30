@@ -826,6 +826,95 @@ class TestStateManagement:
 
         assert result["quality_score"] == 0.0
 
+    @pytest.mark.no_db
+    def test_create_workflow_result_blocks_failed_gate_harness(self, workflow):
+        final_state = {
+            "final_response": "Unsupported final report",
+            "response_metadata": {
+                "harness": {
+                    "mode": "gate",
+                    "verdict": "fail",
+                    "score": 0.42,
+                    "failed_checks": ["freshness"],
+                }
+            },
+            "execution_time_ms": 1500,
+            "quality_score": 0.85,
+            "errors": [],
+            "execution_steps": ["response_generation", "research_harness"],
+            "retry_count": 0,
+            "harness_mode": "gate",
+            "harness_verdict": "fail",
+            "harness_failed_checks": ["freshness"],
+        }
+
+        result = workflow._create_workflow_result(final_state)
+
+        assert result["success"] is False
+        assert result["response"] != "Unsupported final report"
+        assert result["blocked_response"] == "Unsupported final report"
+        assert result["metadata"]["harness"]["verdict"] == "fail"
+        assert "research_harness_gate_failed" in result["errors"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.no_db
+    async def test_execute_workflow_failed_gate_does_not_record_session_complete(
+        self, workflow, monkeypatch
+    ):
+        final_state = {
+            "final_response": "Unsupported final report",
+            "response_metadata": {
+                "harness": {
+                    "mode": "gate",
+                    "verdict": "fail",
+                    "score": 0.42,
+                    "failed_checks": ["freshness"],
+                }
+            },
+            "execution_time_ms": 1,
+            "quality_score": 0.9,
+            "errors": [],
+            "execution_steps": ["response_generation", "research_harness"],
+            "retry_count": 0,
+            "execution_start": datetime.now(),
+            "channel_source": "api",
+            "harness_mode": "gate",
+            "harness_verdict": "fail",
+            "harness_failed_checks": ["freshness"],
+        }
+
+        class FakeGraph:
+            async def astream(self, initial_state, config):
+                yield {"research_harness": final_state}
+
+        record_complete = AsyncMock()
+        record_blocked = AsyncMock()
+        monkeypatch.setattr(workflow_graph_module.settings, "SMART_CACHE_ENABLED", False)
+        monkeypatch.setattr(workflow, "_ensure_graph_initialized", AsyncMock())
+        monkeypatch.setattr(workflow, "_check_cached_response", AsyncMock(return_value=None))
+        monkeypatch.setattr(workflow, "_load_memory_context", AsyncMock())
+        monkeypatch.setattr(workflow, "_apply_research_template", AsyncMock())
+        monkeypatch.setattr(workflow, "_record_session_start", AsyncMock())
+        monkeypatch.setattr(workflow, "_cache_workflow_result", AsyncMock())
+        monkeypatch.setattr(workflow, "_auto_save_dataset", AsyncMock())
+        monkeypatch.setattr(workflow, "_save_episode_memory", AsyncMock())
+        monkeypatch.setattr(workflow, "_record_session_complete", record_complete)
+        monkeypatch.setattr(workflow, "_record_session_harness_blocked", record_blocked)
+        workflow.graph = FakeGraph()
+
+        result = await workflow.execute_workflow(
+            {
+                "query": "latest high risk research",
+                "user_id": "user_1",
+                "session_id": "session_1",
+            },
+            use_checkpointer=False,
+        )
+
+        assert result["success"] is False
+        record_complete.assert_not_awaited()
+        record_blocked.assert_awaited_once()
+
     def test_create_error_result(self, workflow):
         """Test error result creation"""
         error = Exception("Test error")

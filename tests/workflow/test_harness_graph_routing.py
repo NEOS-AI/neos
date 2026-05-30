@@ -65,7 +65,7 @@ class RecordingGraph:
 
 
 @pytest.mark.asyncio
-async def test_standard_workflow_routes_quality_success_through_research_harness(monkeypatch):
+async def test_standard_workflow_validates_generated_response_with_research_harness(monkeypatch):
     import neos.config.settings as settings_module
 
     settings_module.settings.GOOGLE_API_KEY = "test-key"
@@ -85,8 +85,16 @@ async def test_standard_workflow_routes_quality_success_through_research_harness
 
     assert WorkflowNode.RESEARCH_HARNESS.value in compiled.nodes
     assert (
+        WorkflowNode.RESP_GENERATOR.value,
         WorkflowNode.RESEARCH_HARNESS.value,
+    ) in compiled.edges
+    assert (
+        WorkflowNode.RESEARCH_HARNESS.value,
+        graph_module.END,
+    ) in compiled.edges
+    assert (
         WorkflowNode.SELF_REFLECTION.value,
+        WorkflowNode.RESP_GENERATOR.value,
     ) in compiled.edges
 
     quality_edges = [
@@ -97,5 +105,28 @@ async def test_standard_workflow_routes_quality_success_through_research_harness
     assert quality_edges
     assert (
         quality_edges[0][WorkflowPathway.PROCEED.value]
-        == WorkflowNode.RESEARCH_HARNESS.value
+        == WorkflowNode.SELF_REFLECTION.value
     )
+
+
+@pytest.mark.asyncio
+async def test_research_harness_node_preserves_generated_response_state():
+    import neos.workflow.graph as graph_module
+
+    class StubHarnessProcessor:
+        async def process(self, state):
+            return {"harness_mode": "gate", "harness_verdict": "pass"}
+
+    workflow = graph_module.MultiAgentWorkflow.__new__(graph_module.MultiAgentWorkflow)
+    workflow.research_harness_processor = StubHarnessProcessor()
+
+    result = await workflow._research_harness_node(
+        {
+            "final_response": "candidate final response",
+            "response_metadata": {"existing": True},
+        }
+    )
+
+    assert result["final_response"] == "candidate final response"
+    assert result["response_metadata"] == {"existing": True}
+    assert result["harness_verdict"] == "pass"

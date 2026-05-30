@@ -77,11 +77,12 @@ class FreshnessChecker:
                 stale_sources.append({"url": source.get("url"), "age_days": age_days})
 
         if not dated_sources:
+            severity = "critical" if contract.mode == HarnessMode.GATE else "warning"
             return HarnessCheckResult(
                 name=self.name,
                 passed=False,
                 score=0.5,
-                severity="warning",
+                severity=severity,
                 summary="Freshness is required, but no source dates were available.",
                 repairable=True,
                 metadata={"freshness_window_days": window_days},
@@ -107,4 +108,3 @@ class FreshnessChecker:
                 "freshness_window_days": window_days,
             },
         )
-

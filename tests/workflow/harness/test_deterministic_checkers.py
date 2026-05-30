@@ -92,6 +92,20 @@ def test_freshness_fails_old_known_source_date():
     assert result.severity == "critical"
 
 
+def test_freshness_required_gate_treats_missing_dates_as_critical():
+    result = FreshnessChecker().run(
+        report="latest result [1]",
+        sources=[{"id": "1", "url": "https://example.com"}],
+        contract=gate_contract(freshness_required=True, freshness_window_days=30),
+        context={"now": "2026-05-30T00:00:00"},
+    )
+
+    assert result.name == "freshness"
+    assert result.passed is False
+    assert result.severity == "critical"
+    assert result.repairable is True
+
+
 def test_metadata_integrity_fails_empty_report():
     result = MetadataIntegrityChecker().run(
         report="",
@@ -103,4 +117,3 @@ def test_metadata_integrity_fails_empty_report():
     assert result.name == "metadata_integrity"
     assert result.passed is False
     assert result.repairable is False
-
