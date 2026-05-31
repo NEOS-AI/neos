@@ -72,6 +72,10 @@ def build_harness_contract(
 
     validation_contract = state.get("validation_contract") or {}
     node_config = state.get("harness_config") or {}
+    from .adapters.mission import mission_contract_to_harness_config
+
+    mission_config = mission_contract_to_harness_config(validation_contract)
+    node_config = {**mission_config, **node_config}
     min_sources, required_sources = _required_sources(validation_contract)
     config_min_sources, config_required_sources = _required_sources(node_config)
 
@@ -120,4 +124,3 @@ def build_harness_contract(
             "complexity_score": _complexity_from_state(state),
         },
     )
-

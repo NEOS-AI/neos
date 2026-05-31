@@ -3,6 +3,7 @@
 from .citations import CitationCoverageChecker, CitationValidityChecker
 from .freshness import FreshnessChecker
 from .metadata import MetadataIntegrityChecker
+from .model_based import TopicCoverageChecker
 from .sources import SourceCountChecker, SourceDiversityChecker
 
 __all__ = [
@@ -12,5 +13,5 @@ __all__ = [
     "MetadataIntegrityChecker",
     "SourceCountChecker",
     "SourceDiversityChecker",
+    "TopicCoverageChecker",
 ]
-

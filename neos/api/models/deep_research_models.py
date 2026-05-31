@@ -169,6 +169,15 @@ class DeepResearchEventType(str, Enum):
     HEARTBEAT = "heartbeat"
     ERROR = "error"
 
+    # Harness validation events
+    HARNESS_STARTED = "harness_started"
+    HARNESS_CHECK_STARTED = "harness_check_started"
+    HARNESS_CHECK_COMPLETED = "harness_check_completed"
+    HARNESS_REPAIR_STARTED = "harness_repair_started"
+    HARNESS_REPAIR_COMPLETED = "harness_repair_completed"
+    HARNESS_COMPLETED = "harness_completed"
+    HARNESS_FAILED = "harness_failed"
+
 
 class DeepResearchEvent(BaseModel):
     """Deep research SSE event"""

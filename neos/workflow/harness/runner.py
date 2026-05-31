@@ -10,6 +10,7 @@ from .checkers import (
     MetadataIntegrityChecker,
     SourceCountChecker,
     SourceDiversityChecker,
+    TopicCoverageChecker,
 )
 from .models import (
     HarnessCheckResult,
@@ -102,8 +103,13 @@ class HarnessRunner:
     ) -> list[HarnessCheckResult]:
         selected = set(contract.required_checks or [])
         selected.update(contract.optional_checks or [])
+        checkers = list(self.checkers)
+        if selected and "topic_coverage" in selected and not any(
+            checker.name == "topic_coverage" for checker in checkers
+        ):
+            checkers.append(TopicCoverageChecker())
         results: list[HarnessCheckResult] = []
-        for checker in self.checkers:
+        for checker in checkers:
             if selected and checker.name not in selected:
                 continue
             results.append(

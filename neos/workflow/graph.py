@@ -27,6 +27,7 @@ from .processors import (
     QueryRefinementAgent,
     FactCheckProcessor,
     ResearchHarnessProcessor,
+    ResearchHarnessRepairProcessor,
     ResearchContinuationProcessor,
     SelfReflectionProcessor,
     HypothesisManager,
@@ -76,6 +77,19 @@ def _is_gate_harness_blocked(final_state: Dict[str, Any] | None) -> bool:
         and str(final_state.get("harness_verdict") or "").lower()
         in _HARNESS_GATE_BLOCKING_VERDICTS
     )
+
+
+def _should_route_to_harness_repair(final_state: Dict[str, Any] | None) -> str:
+    if not final_state:
+        return "end"
+    if str(final_state.get("harness_mode") or "").lower() != "gate":
+        return "end"
+    if str(final_state.get("harness_verdict") or "").lower() != "needs_repair":
+        return "end"
+    contract = final_state.get("harness_contract") or {}
+    attempts = int(final_state.get("harness_repair_attempts") or 0)
+    max_attempts = int(contract.get("max_repair_attempts") or 0)
+    return "repair" if attempts < max_attempts else "end"
 
 
 def _harness_blocked_message(final_state: Dict[str, Any]) -> str:
@@ -142,6 +156,7 @@ class MultiAgentWorkflow:
         self.fact_check_processor = FactCheckProcessor()
         self.quality_validator = QualityValidator(self.config)
         self.research_harness_processor = ResearchHarnessProcessor()
+        self.research_harness_repair_processor = ResearchHarnessRepairProcessor()
         self.response_generator = ResponseGenerator()
 
         from .mission.executor import MissionExecutor
@@ -318,6 +333,10 @@ class MultiAgentWorkflow:
         workflow.add_node(WorkflowNode.FACT_CHECK.value, self._fact_check_node)
         workflow.add_node(WorkflowNode.QUALITY_VALIDATOR.value, self._validate_quality_node)
         workflow.add_node(WorkflowNode.RESEARCH_HARNESS.value, self._research_harness_node)
+        workflow.add_node(
+            WorkflowNode.RESEARCH_HARNESS_REPAIR.value,
+            self._research_harness_repair_node,
+        )
         workflow.add_node(WorkflowNode.SELF_REFLECTION.value, self._self_reflection_node)  # Phase 2.6
         workflow.add_node(WorkflowNode.MISSION_PLANNER.value, self._mission_planner_node)
         workflow.add_node(WorkflowNode.MISSION_APPROVAL.value, self._mission_approval_node)
@@ -512,7 +531,18 @@ class MultiAgentWorkflow:
         workflow.add_edge(WorkflowNode.SELF_REFLECTION.value, WorkflowNode.RESP_GENERATOR.value)
 
         workflow.add_edge(WorkflowNode.RESP_GENERATOR.value, WorkflowNode.RESEARCH_HARNESS.value)
-        workflow.add_edge(WorkflowNode.RESEARCH_HARNESS.value, END)
+        workflow.add_conditional_edges(
+            WorkflowNode.RESEARCH_HARNESS.value,
+            _should_route_to_harness_repair,
+            {
+                "repair": WorkflowNode.RESEARCH_HARNESS_REPAIR.value,
+                "end": END,
+            },
+        )
+        workflow.add_edge(
+            WorkflowNode.RESEARCH_HARNESS_REPAIR.value,
+            WorkflowNode.RESEARCH_HARNESS.value,
+        )
 
         # Conditionally use checkpointer
         if use_checkpointer:
@@ -958,6 +988,28 @@ class MultiAgentWorkflow:
         updates = await self.research_harness_processor.process(state)
         return {**state, **updates}
 
+    async def _research_harness_repair_node(self, state: AgentState) -> Dict[str, Any]:
+        """Plan and execute bounded repair work before harness revalidation."""
+        updates = await self.research_harness_repair_processor.process(state)
+        repaired_state = {**state, **updates}
+
+        if not updates.get("harness_repair_plan"):
+            return repaired_state
+
+        plan = updates["harness_repair_plan"]
+        action_types = {action.get("action_type") for action in plan.get("actions", [])}
+
+        if action_types & {
+            "request_more_sources",
+            "search_independent_domains",
+            "date_constrained_freshness_search",
+        }:
+            repaired_state = await self.search_orchestrator.orchestrate(repaired_state)
+
+        repaired_state = await self.result_processor.integrate_results(repaired_state)
+        repaired_state = await self.response_generator.generate_response(repaired_state)
+        return repaired_state
+
     async def _generate_response_node(self, state: AgentState) -> Dict[str, Any]:
         """응답 생성 노드"""
         return await self.response_generator.generate_response(state)
@@ -1246,6 +1298,7 @@ class MultiAgentWorkflow:
                     WorkflowNode.MISSION_INTEGRATOR.value,
                     WorkflowNode.RESP_GENERATOR.value,
                     WorkflowNode.RESEARCH_HARNESS.value,
+                    WorkflowNode.RESEARCH_HARNESS_REPAIR.value,
                 ]
 
                 current_step = 0
@@ -1955,6 +2008,9 @@ class MultiAgentWorkflow:
                 WorkflowNode.QUALITY_VALIDATOR.value: bool(self.quality_validator),
                 WorkflowNode.RESP_GENERATOR.value: bool(self.response_generator),
                 WorkflowNode.RESEARCH_HARNESS.value: bool(self.research_harness_processor),
+                WorkflowNode.RESEARCH_HARNESS_REPAIR.value: bool(
+                    self.research_harness_repair_processor
+                ),
             },
             "config": {
                 "max_retries": self.config.MAX_RETRIES,
