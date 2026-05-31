@@ -14,7 +14,7 @@ CORE ENGINE CRITICAL - Tests cover:
 import os
 import sys
 import types
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 
 os.environ["DEBUG"] = "false"
 os.environ.setdefault("GOOGLE_API_KEY", "test-key")
@@ -67,6 +67,32 @@ import neos.workflow.graph as workflow_graph_module
 if not hasattr(workflow_graph_module, "KnowledgeSearchAgent"):
     workflow_graph_module.KnowledgeSearchAgent = object
 
+pytestmark = pytest.mark.no_db
+
+_AGENT_PATCH_TARGETS = (
+    "neos.agents.search_agents.KnowledgeSearchAgent",
+    "neos.agents.search_agents.RealtimeInfoSearchAgent",
+    "neos.agents.search_agents.RealtimeDataSearchAgent",
+    "neos.agents.search_agents.MultiQuerySearchAgent",
+    "neos.agents.search_agents.WebLookUpAgent",
+    "neos.agents.search_agents.YouTubeSearchAgent",
+    "neos.agents.analysis_agents.DataAnalysisAgent",
+    "neos.agents.analysis_agents.ComparativeAnalysisAgent",
+    "neos.agents.analysis_agents.WebLookupAgent",
+    "neos.agents.generation_agents.ImageGenerationAgent",
+    "neos.agents.generation_agents.ApiCallAgent",
+    "neos.agents.generation_agents.FileProcessingAgent",
+    "neos.agents.generation_agents.TaskCreationAgent",
+)
+
+
+@contextmanager
+def _mock_workflow_agents():
+    with ExitStack() as stack:
+        for target in _AGENT_PATCH_TARGETS:
+            stack.enter_context(patch(target))
+        yield
+
 
 @pytest.mark.unit
 class TestMultiAgentWorkflowInitialization:
@@ -74,7 +100,7 @@ class TestMultiAgentWorkflowInitialization:
 
     def test_workflow_initialization(self):
         """Test successful workflow initialization"""
-        with patch("neos.workflow.graph.KnowledgeSearchAgent") as mock_agent:
+        with _mock_workflow_agents():
             workflow = MultiAgentWorkflow()
 
             assert workflow.config is not None
@@ -92,28 +118,31 @@ class TestMultiAgentWorkflowInitialization:
 
     def test_initialize_agents(self):
         """Test agent initialization"""
-        with patch("neos.workflow.graph.KnowledgeSearchAgent"):
-            with patch("neos.workflow.graph.DataAnalysisAgent"):
-                with patch("neos.workflow.graph.ImageGenerationAgent"):
-                    workflow = MultiAgentWorkflow()
-                    agents = workflow.agents
+        with _mock_workflow_agents():
+            workflow = MultiAgentWorkflow()
+            agents = workflow.agents
 
-                    # Verify all agent types are initialized
-                    assert "knowledge_search" in agents
-                    assert "realtime_info_search" in agents
-                    assert "data_analysis" in agents
-                    assert "comparative_analysis" in agents
-                    assert "image_generation" in agents
-                    assert "api_call" in agents
-                    assert "file_processing" in agents
-                    assert "task_creation" in agents
+            expected_agents = {
+                "knowledge_search",
+                "realtime_info_search",
+                "realtime_data_search",
+                "multi_query_search",
+                "web_lookup",
+                "youtube_search",
+                "data_analysis",
+                "comparative_analysis",
+                "web_content_analysis",
+                "image_generation",
+                "api_call",
+                "file_processing",
+                "task_creation",
+            }
 
-                    # Verify count
-                    assert len(agents) == 14  # 7 search + 3 analysis + 4 generation
+            assert set(agents) == expected_agents
 
     def test_workflow_config_defaults(self):
         """Test workflow configuration defaults"""
-        with patch("neos.workflow.graph.KnowledgeSearchAgent"):
+        with _mock_workflow_agents():
             workflow = MultiAgentWorkflow()
             config = workflow.config
 
@@ -128,7 +157,7 @@ class TestWorkflowGraphCreation:
     @pytest.fixture
     def workflow(self):
         """Create workflow instance with mocked agents"""
-        with patch("neos.workflow.graph.KnowledgeSearchAgent"):
+        with _mock_workflow_agents():
             return MultiAgentWorkflow()
 
     @pytest.mark.asyncio
@@ -275,7 +304,7 @@ class TestWorkflowExecution:
     @pytest.fixture
     def workflow(self):
         """Create workflow instance with mocked components"""
-        with patch("neos.workflow.graph.KnowledgeSearchAgent"):
+        with _mock_workflow_agents():
             return MultiAgentWorkflow()
 
     @pytest.mark.asyncio
@@ -287,8 +316,6 @@ class TestWorkflowExecution:
             "session_id": "session_456"
         }
 
-        # Mock graph execution
-        mock_graph = AsyncMock()
         final_state = {
             "final_response": "The weather is sunny",
             "response_metadata": {"confidence": 0.95},
@@ -299,24 +326,37 @@ class TestWorkflowExecution:
             "retry_count": 0,
             "execution_start": datetime.now()
         }
-        mock_graph.ainvoke = AsyncMock(return_value=final_state)
-        workflow.graph = mock_graph
+
+        class FakeGraph:
+            async def astream(self, initial_state, config):
+                yield {"response_generator": final_state}
+
+        workflow.graph = FakeGraph()
         workflow._graph_initialized = True
+        workflow._graph_uses_checkpointer = False
 
         # Mock cache (no hit)
-        with patch.object(workflow, "_check_cached_response", return_value=None):
-            with patch.object(workflow, "_cache_workflow_result") as mock_cache:
-                with patch.object(workflow, "_auto_save_dataset"):
-                    result = await workflow.execute_workflow(user_input)
+        with (
+            patch.object(workflow_graph_module.settings, "SMART_CACHE_ENABLED", False),
+            patch.object(workflow, "_check_cached_response", return_value=None),
+            patch.object(workflow, "_load_memory_context", new=AsyncMock()),
+            patch.object(workflow, "_apply_research_template", new=AsyncMock()),
+            patch.object(workflow, "_record_session_start", new=AsyncMock()),
+            patch.object(workflow, "_save_episode_memory", new=AsyncMock()),
+            patch.object(workflow, "_record_session_complete", new=AsyncMock()),
+            patch.object(workflow, "_cache_workflow_result") as mock_cache,
+            patch.object(workflow, "_auto_save_dataset", new=AsyncMock()),
+        ):
+            result = await workflow.execute_workflow(user_input, use_checkpointer=False)
 
-                    assert result["success"] is True
-                    assert result["response"] == "The weather is sunny"
-                    assert result["quality_score"] == 0.9
-                    assert result["cache_hit"] is False
-                    assert result["execution_steps"] == 4
+            assert result["success"] is True
+            assert result["response"] == "The weather is sunny"
+            assert result["quality_score"] == 0.9
+            assert result["cache_hit"] is False
+            assert result["execution_steps"] == 4
 
-                    # Verify result was cached
-                    mock_cache.assert_called_once()
+            # Verify result was cached
+            mock_cache.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_execute_workflow_cache_hit(self, workflow):
@@ -335,12 +375,17 @@ class TestWorkflowExecution:
             "cache_hit": True  # Add cache_hit field to cached response
         }
 
-        with patch.object(workflow, "_check_cached_response", return_value=cached_response):
+        with (
+            patch.object(workflow_graph_module.settings, "SMART_CACHE_ENABLED", False),
+            patch.object(workflow, "_ensure_graph_initialized", new=AsyncMock()) as mock_ensure,
+            patch.object(workflow, "_check_cached_response", return_value=cached_response),
+        ):
             result = await workflow.execute_workflow(user_input)
 
             assert result["success"] is True
             assert result.get("cache_hit") is True  # Use .get() for safer access
             assert "Cached:" in result["response"]
+            mock_ensure.assert_not_awaited()
             # With cache hit, the workflow returns early, so graph may still be None or initialized
             # Just verify we got a cached response
 
@@ -353,14 +398,24 @@ class TestWorkflowExecution:
             "session_id": "session_456"
         }
 
-        # Mock graph to raise exception
-        mock_graph = AsyncMock()
-        mock_graph.ainvoke = AsyncMock(side_effect=Exception("Workflow execution failed"))
-        workflow.graph = mock_graph
-        workflow._graph_initialized = True
+        class FailingGraph:
+            async def astream(self, initial_state, config):
+                raise Exception("Workflow execution failed")
+                yield {}
 
-        with patch.object(workflow, "_check_cached_response", return_value=None):
-            result = await workflow.execute_workflow(user_input)
+        workflow.graph = FailingGraph()
+        workflow._graph_initialized = True
+        workflow._graph_uses_checkpointer = False
+
+        with (
+            patch.object(workflow_graph_module.settings, "SMART_CACHE_ENABLED", False),
+            patch.object(workflow, "_check_cached_response", return_value=None),
+            patch.object(workflow, "_load_memory_context", new=AsyncMock()),
+            patch.object(workflow, "_apply_research_template", new=AsyncMock()),
+            patch.object(workflow, "_record_session_start", new=AsyncMock()),
+            patch.object(workflow, "_record_session_failed", new=AsyncMock()),
+        ):
+            result = await workflow.execute_workflow(user_input, use_checkpointer=False)
 
             assert result["success"] is False
             assert "error" in result
@@ -375,7 +430,7 @@ class TestCacheManagement:
     @pytest.fixture
     def workflow(self):
         """Create workflow instance"""
-        with patch("neos.workflow.graph.KnowledgeSearchAgent"):
+        with _mock_workflow_agents():
             return MultiAgentWorkflow()
 
     def test_generate_cache_key(self, workflow):
@@ -745,7 +800,7 @@ class TestStateManagement:
     @pytest.fixture
     def workflow(self):
         """Create workflow instance"""
-        with patch("neos.workflow.graph.KnowledgeSearchAgent"):
+        with _mock_workflow_agents():
             return MultiAgentWorkflow()
 
     def test_create_initial_state(self, workflow):
@@ -940,7 +995,7 @@ class TestDatasetManagement:
     @pytest.fixture
     def workflow(self):
         """Create workflow instance"""
-        with patch("neos.workflow.graph.KnowledgeSearchAgent"):
+        with _mock_workflow_agents():
             return MultiAgentWorkflow()
 
     @pytest.mark.asyncio
@@ -974,7 +1029,7 @@ class TestWorkflowStats:
     @pytest.fixture
     def workflow(self):
         """Create workflow instance"""
-        with patch("neos.workflow.graph.KnowledgeSearchAgent"):
+        with _mock_workflow_agents():
             return MultiAgentWorkflow()
 
     def test_get_workflow_stats(self, workflow):
@@ -1012,7 +1067,7 @@ class TestHealthCheck:
     @pytest.fixture
     def workflow(self):
         """Create workflow instance"""
-        with patch("neos.workflow.graph.KnowledgeSearchAgent"):
+        with _mock_workflow_agents():
             return MultiAgentWorkflow()
 
     @pytest.mark.asyncio
@@ -1024,13 +1079,16 @@ class TestHealthCheck:
             "active_sessions": 5
         })
 
-        with patch("neos.workflow.graph.get_checkpointer", return_value=mock_checkpointer):
+        with (
+            patch("neos.workflow.graph.get_checkpointer", return_value=mock_checkpointer),
+            patch.object(workflow_graph_module.settings, "SMART_CACHE_ENABLED", False),
+        ):
             workflow._graph_initialized = True
 
             health = await workflow.health_check()
 
             assert health["workflow"] == "healthy"
-            assert health["agents"] == 14
+            assert health["agents"] == len(workflow.agents)
             assert health["state_management"] == "distributed"
             assert "timestamp" in health
             assert health["components"]["query_classifier"] == "healthy"
@@ -1045,7 +1103,10 @@ class TestHealthCheck:
         mock_checkpointer = AsyncMock()
         mock_checkpointer.get_stats = AsyncMock(return_value={})
 
-        with patch("neos.workflow.graph.get_checkpointer", return_value=mock_checkpointer):
+        with (
+            patch("neos.workflow.graph.get_checkpointer", return_value=mock_checkpointer),
+            patch.object(workflow_graph_module.settings, "SMART_CACHE_ENABLED", False),
+        ):
             workflow._graph_initialized = False
 
             health = await workflow.health_check()
@@ -1055,7 +1116,10 @@ class TestHealthCheck:
     @pytest.mark.asyncio
     async def test_health_check_checkpointer_error(self, workflow):
         """Test health check when checkpointer has errors"""
-        with patch("neos.workflow.graph.get_checkpointer", side_effect=Exception("DB connection failed")):
+        with (
+            patch("neos.workflow.graph.get_checkpointer", side_effect=Exception("DB connection failed")),
+            patch.object(workflow_graph_module.settings, "SMART_CACHE_ENABLED", False),
+        ):
             workflow._graph_initialized = True
 
             health = await workflow.health_check()
@@ -1070,6 +1134,6 @@ class TestGlobalInstance:
 
     def test_global_instance_exists(self):
         """Test that global multi_agent_workflow instance exists"""
-        with patch("neos.workflow.graph.KnowledgeSearchAgent"):
+        with _mock_workflow_agents():
             assert multi_agent_workflow is not None
             assert isinstance(multi_agent_workflow, MultiAgentWorkflow)
