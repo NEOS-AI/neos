@@ -541,6 +541,14 @@ class MultiAgentWorkflow:
         Args:
             use_checkpointer: Whether to use checkpointer for state persistence
         """
+        if (
+            self._graph_initialized
+            and self.graph is not None
+            and self._graph_uses_checkpointer == use_checkpointer
+        ):
+            self._graphs_by_checkpointer.setdefault(use_checkpointer, self.graph)
+            return
+
         if use_checkpointer not in self._graphs_by_checkpointer:
             self._graphs_by_checkpointer[use_checkpointer] = (
                 await self._create_workflow_graph(use_checkpointer=use_checkpointer)
@@ -1141,9 +1149,6 @@ class MultiAgentWorkflow:
             if event_handler is None:
                 event_handler = NullEventHandler()
 
-            # Ensure graph is initialized
-            await self._ensure_graph_initialized(use_checkpointer=use_checkpointer)
-
             user_id = user_input.get("user_id")
             logger.debug(f"[ExecuteWorkflow] Starting for query: {query[:50]}...")
 
@@ -1192,6 +1197,9 @@ class MultiAgentWorkflow:
                     return cached_response
                 add_span_event(span, "redis_cache_miss")
             set_span_attributes(span, {"cache.hit": False})
+
+            # Ensure graph is initialized only after cache paths miss.
+            await self._ensure_graph_initialized(use_checkpointer=use_checkpointer)
 
             # 초기 상태 생성 (event_handler를 상태에 포함)
             initial_state = self._create_initial_state(user_input)
@@ -1942,9 +1950,11 @@ class MultiAgentWorkflow:
                 WorkflowNode.ANALYSIS_ORCHESTRATOR.value: bool(self.analysis_orchestrator),
                 WorkflowNode.GENERATION_ORCHESTRATOR.value: bool(self.generation_orchestrator),
                 WorkflowNode.RESULT_INTEGRATOR.value: bool(self.result_processor),
+                "result_processor": bool(self.result_processor),
                 WorkflowNode.FACT_CHECK.value: bool(self.fact_check_processor),
                 WorkflowNode.QUALITY_VALIDATOR.value: bool(self.quality_validator),
-                WorkflowNode.RESP_GENERATOR.value: bool(self.response_generator)
+                WorkflowNode.RESP_GENERATOR.value: bool(self.response_generator),
+                WorkflowNode.RESEARCH_HARNESS.value: bool(self.research_harness_processor),
             },
             "config": {
                 "max_retries": self.config.MAX_RETRIES,
