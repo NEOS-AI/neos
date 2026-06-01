@@ -1,7 +1,7 @@
 # NEOS Research Harness Whitepaper
 
-**Status:** Runtime foundation implemented  
-**Last updated:** 2026-05-31  
+**Status:** Integrated runtime harness implemented
+**Last updated:** 2026-06-01
 **Related documents:** `docs/HARNESS_PLAN.md`, `docs/HARNESS_IMPLE.md`, `docs/HARNESS_CR.md`
 
 ---
@@ -30,7 +30,7 @@ mode and non-blocking `advisory` mode. This lets NEOS apply strict verification
 where failure is costly, while preserving responsiveness for ordinary low-risk
 requests.
 
-The first implemented batch establishes the runtime foundation:
+The first implemented batch established the runtime foundation:
 
 - shared harness data models
 - policy selection
@@ -44,11 +44,21 @@ The first implemented batch establishes the runtime foundation:
 - cache policy
 - focused regression tests
 
-The current implementation is intentionally not the full final harness. It does
-not yet include repair execution, direct deep-research API gating, Mission
-validator integration, custom workflow harness nodes, streaming harness events,
-dedicated DB tables, or offline grader bridging. It is nevertheless the core
-runtime contract on which those later capabilities can safely build.
+The current implementation extends that foundation into the main runtime
+surfaces:
+
+- bounded repair planning and standard workflow repair revalidation
+- direct Deep Research API gating before completion
+- Mission validation contract mapping and summary integration
+- custom workflow builder harness processor support
+- standard workflow and direct API harness events
+- offline `neos_evals` grader result bridging
+- optional deterministic topic coverage checking
+- dedicated persistence tables and repository behind a feature flag
+
+The remaining work is narrower: richer model-based factuality, bias/perspective,
+and performance-budget checks; direct API repair execution; and privacy-reviewed
+expansion of persisted evidence detail.
 
 ---
 
@@ -123,9 +133,10 @@ The harness starts with cheap deterministic checks:
 These checks are fast, local, and easy to test. They catch many failure modes
 without adding model cost or latency.
 
-Model-based checks are still important, especially for factuality, coverage,
-bias, and contradiction analysis, but the architecture keeps them as later
-extensions rather than the foundation.
+Model-based checks are still important, especially for factuality, bias, and
+contradiction analysis. The current implementation adds a cheap deterministic
+`topic_coverage` checker for configured coverage requirements, while heavier
+LLM-based checks remain optional future extensions.
 
 ### 3.2 Gate Only Where It Matters
 
@@ -165,11 +176,14 @@ returned to the user.
 
 A gate verdict is not metadata. A gate verdict is a runtime control decision.
 
-In the improved implementation:
+In the current implementation:
 
 - `gate + pass` can complete normally.
+- `gate + needs_repair` enters a bounded repair loop in the standard workflow
+  when repair attempts remain.
+- `gate + needs_repair` blocks normal completion when repair attempts are
+  exhausted or when the runtime path does not execute repair.
 - `gate + fail` returns a controlled failure result.
-- `gate + needs_repair` blocks normal completion until repair execution exists.
 - failed gate outputs are not cached.
 - failed gate outputs are not recorded as completed sessions.
 - the unverified candidate text is retained as `blocked_response` for
@@ -177,11 +191,11 @@ In the improved implementation:
 
 ### 3.5 Runtime and Offline Evaluation Should Share Shapes
 
-The long-term design connects runtime checks to offline `neos_evals` graders.
-The runtime should not depend on the heavy offline evaluation orchestrator, but
-both layers should speak compatible result shapes. This makes it possible to
-compare runtime harness behavior against regression suites and benchmark
-changes to prompts, models, or checkers.
+Runtime checks and offline `neos_evals` graders now share compatible result
+semantics through an adapter from `GraderResult` to `HarnessCheckResult`. The
+runtime still does not depend on the heavy offline evaluation orchestrator, but
+offline grader results can now drive harness verdict behavior in regression
+tests and analysis.
 
 ---
 
@@ -201,9 +215,14 @@ neos/workflow/harness/
   models.py
   policy.py
   contract_builder.py
+  events.py
+  repair.py
   runner.py
   cache_policy.py
   adapters/
+    deep_research_report.py
+    mission.py
+    neos_evals.py
     workflow_state.py
   checkers/
     base.py
@@ -211,6 +230,7 @@ neos/workflow/harness/
     sources.py
     freshness.py
     metadata.py
+    model_based.py
 ```
 
 High-level runtime flow:
@@ -242,6 +262,9 @@ The architecture deliberately separates five concerns:
 | Contract construction | `contract_builder.py` | Translate workflow state into a harness contract |
 | Artifact extraction | `adapters/workflow_state.py` | Extract report text, sources, and context |
 | Check orchestration | `runner.py` | Run checks, score, and decide verdict |
+| Repair planning | `repair.py` | Convert failed checks into targeted bounded repair actions |
+| Runtime events | `events.py` | Shared harness event payload vocabulary |
+| Runtime adapters | `adapters/*.py` | Translate workflow, direct API, Mission, and eval shapes |
 
 This split keeps the harness extensible. New checkers do not need to know how
 workflow routing works. Workflow routing does not need to know how citation
@@ -280,9 +303,10 @@ For example:
 - A general low-risk answer can run in `advisory` mode.
 - A `deep_research` request defaults to `gate`.
 - A freshness-sensitive query defaults to `gate`.
-- A Mission validation contract can eventually map required sources and
-  freshness requirements into the harness contract.
-- A custom workflow node can eventually specify its own `required_checks`.
+- A Mission validation contract maps required sources, freshness, citation,
+  factuality, and coverage requirements into the harness contract.
+- A custom workflow node can run the research harness processor using
+  `processor_type="research_harness"`.
 
 The current `build_harness_contract()` implementation draws from:
 
@@ -327,6 +351,7 @@ Default thresholds:
 | `RESEARCH_HARNESS_HIGH_RISK_THRESHOLD` | `0.90` | stricter high-risk gate threshold |
 | `RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS` | `1` | standard bounded repair budget |
 | `RESEARCH_HARNESS_HYPER_DEEP_REPAIR_ATTEMPTS` | `2` | planned HyperDeep/direct research repair budget |
+| `RESEARCH_HARNESS_PERSIST_RUNS` | `false` | persist harness runs/checks to dedicated tables |
 
 The same settings are now documented in `.env.template`, which matters for
 rollout and operational control.
@@ -410,6 +435,18 @@ It helps catch:
 - empty output masquerading as a report
 - workflow errors hidden behind a final response
 
+### 7.7 Topic Coverage
+
+`TopicCoverageChecker` is an optional deterministic checker for configured
+coverage requirements. It checks whether required topic strings appear in the
+candidate report and skips cleanly when no coverage requirements are provided.
+
+It helps catch:
+
+- missing required sections or topics
+- incomplete responses against Mission coverage contracts
+- cheap first-pass coverage regressions before heavier model checks run
+
 ---
 
 ## 8. Scoring and Verdict Semantics
@@ -425,6 +462,9 @@ weights are:
 | source count | `0.08` |
 | freshness | `0.07` |
 | metadata integrity | `0.02` |
+
+Selected custom or optional checks that are not in this table use the runner's
+default weight.
 
 The score is not the whole decision. Verdict logic also considers:
 
@@ -451,7 +491,7 @@ Verdict meanings:
 | --- | --- |
 | `pass` | Gate-mode artifact satisfied the contract |
 | `advisory_pass` | Advisory artifact is acceptable with non-blocking validation metadata |
-| `needs_repair` | Failure is repairable and repair budget remains, or gate cannot yet finalize |
+| `needs_repair` | Failure is repairable and budget remains; runtime must repair and revalidate or block |
 | `fail` | Artifact does not satisfy the contract |
 | `skipped` | Harness was explicitly off |
 
@@ -473,6 +513,16 @@ RESULT_INTEGRATOR
   -> END
 ```
 
+Current repairable gate path:
+
+```text
+RESPONSE_GENERATOR
+  -> RESEARCH_HARNESS
+  -> RESEARCH_HARNESS_REPAIR
+  -> RESEARCH_HARNESS
+  -> END
+```
+
 This ordering is intentional:
 
 - `FACT_CHECK` and `QUALITY_VALIDATOR` still run before the response is built.
@@ -480,6 +530,9 @@ This ordering is intentional:
   generation.
 - `RESPONSE_GENERATOR` creates the candidate final response.
 - `RESEARCH_HARNESS` validates the exact final response candidate.
+- `RESEARCH_HARNESS_REPAIR` creates a targeted repair plan, performs bounded
+  repair work for supported actions, regenerates the candidate response, and
+  returns to `RESEARCH_HARNESS` for revalidation.
 - normal finalization occurs only after the harness state has been merged.
 
 The graph wrapper for `_research_harness_node()` returns:
@@ -527,6 +580,12 @@ session status with harness metadata.
 
 This is the difference between a validation annotation and a runtime gate.
 
+The direct Deep Research API follows the same gate semantics at completion
+time. Before marking a report or assistant message completed, it validates the
+assembled final report with `DeepResearchHarnessService`. A blocked gate run
+marks the report failed and emits `harness_failed` instead of the normal
+completion event.
+
 ---
 
 ## 11. Response Metadata and Cache Policy
@@ -549,6 +608,11 @@ Harness metadata is exposed in final response metadata:
 ```
 
 The metadata is additive. It does not replace legacy `quality_score`.
+
+For repair planning, `ResearchHarnessProcessor` also stores compact per-check
+metadata in `harness_metadata.check_results`. This preserves failed items,
+severity, repairability, and checker metadata without requiring repair code to
+reconstruct check results from free-form summaries.
 
 Cache policy is centralized in `neos/workflow/harness/cache_policy.py`.
 
@@ -595,14 +659,27 @@ Implemented:
 
 - `HarnessMode`, `HarnessVerdict`, `HarnessRiskLevel`
 - `HarnessContract`, `HarnessCheckResult`, `HarnessRun`
+- `HarnessRepairAction`, `HarnessRepairPlan`
 - policy selection
 - contract building from workflow state
+- Mission validation contract mapping into harness config
 - deterministic checkers for sources, citations, freshness, metadata
+- optional deterministic topic coverage checker
 - weighted scoring
 - required-check blocking semantics
 - final-response validation in the standard workflow
+- bounded standard workflow repair planning and revalidation
 - gate failure result blocking
 - failed gate session status path
+- direct Deep Research API harness gating before completion
+- direct API harness SSE events
+- shared harness event payloads
+- Mission validation summary integration
+- custom workflow harness processor support
+- custom workflow gate blocking
+- offline `neos_evals` grader bridge
+- dedicated DB migration and repository for harness runs/checks
+- persistence feature flag
 - harness response metadata
 - cache policy
 - environment template documentation
@@ -611,19 +688,14 @@ Implemented:
 Not yet implemented:
 
 - model-based factuality checker
-- topic coverage checker
 - bias/perspective checker
 - performance budget checker
-- bounded repair execution
-- direct deep-research API gating
-- Mission validator upgrade
-- custom workflow builder harness node
-- streaming harness events
-- dedicated harness DB persistence tables
-- offline `neos_evals` grader bridge
+- direct Deep Research API repair execution
+- privacy-reviewed full evidence persistence controls
 
-This boundary is deliberate. The current implementation is a foundation, not a
-claim that all planned harness capabilities are complete.
+This boundary is deliberate. The current implementation covers the main verdict
+and integration semantics. The remaining work is primarily checker depth,
+direct-API repair, and operational hardening.
 
 ---
 
@@ -634,14 +706,32 @@ Focused harness verification currently passes:
 ```bash
 pytest tests/workflow/harness \
   tests/workflow/processors/test_research_harness_processor.py \
+  tests/workflow/processors/test_research_harness_repair_processor.py \
   tests/workflow/test_harness_graph_routing.py \
+  tests/workflow/test_harness_graph_repair.py \
   tests/workflow/test_harness_response_metadata.py -q
 ```
 
 Observed result:
 
 ```text
-30 passed
+58 passed
+```
+
+Mission, direct API, and custom workflow verification:
+
+```bash
+pytest tests/workflow/mission \
+  tests/api/test_deep_research_harness_service.py \
+  tests/workflow/builder/test_node_executor_harness.py \
+  tests/workflow/builder/test_workflow_executor_harness_state.py \
+  tests/workflow/builder/test_workflow_executor_harness_gate.py -q
+```
+
+Observed result:
+
+```text
+28 passed
 ```
 
 Compile check:
@@ -649,7 +739,12 @@ Compile check:
 ```bash
 python -m compileall neos/workflow/harness \
   neos/workflow/processors/research_harness_processor.py \
-  neos/workflow/graph.py
+  neos/workflow/processors/research_harness_repair_processor.py \
+  neos/workflow/graph.py \
+  neos/api/services/deep_research_harness_service.py \
+  neos/api/handlers/deep_research_handlers.py \
+  neos/workflow/mission \
+  neos/workflow/builder
 ```
 
 Observed result:
@@ -658,7 +753,7 @@ Observed result:
 compileall completed successfully
 ```
 
-Broader legacy graph suite:
+Baseline graph suite observed before this integration:
 
 ```bash
 pytest tests/test_workflow_graph.py -q
@@ -667,12 +762,12 @@ pytest tests/test_workflow_graph.py -q
 Observed result:
 
 ```text
-32 passed, 5 failed
+37 passed
 ```
 
-The two new gate-enforcement graph tests pass. The remaining failures are
-existing legacy/environment issues around lazy import expectations,
-DB/checkpointer access in the sandbox, and health/stat expectations.
+Some focused tests still emit DB initialization log noise in the sandbox
+(`Operation not permitted`) because shared fixtures touch database setup. Those
+logs did not fail the verification commands above.
 
 ---
 
@@ -691,20 +786,26 @@ RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS=1
 RESEARCH_HARNESS_HYPER_DEEP_REPAIR_ATTEMPTS=2
 RESEARCH_HARNESS_MODEL_CHECKS_ENABLED=true
 RESEARCH_HARNESS_STORE_FULL_CHECK_DETAILS=false
+RESEARCH_HARNESS_PERSIST_RUNS=false
 RESEARCH_HARNESS_CACHE_POLICY=passed_only
 ```
 
 Recommended rollout sequence:
 
-1. Enable harness in internal environments with `advisory` behavior observed.
-2. Keep `auto` mode and inspect distribution of advisory/gate decisions.
-3. Enable `gate` for standard deep-research-like workflows.
-4. Add direct deep-research API gating once report persistence behavior is
-   tested.
-5. Add Mission validation integration.
-6. Add streaming events so clients can explain harness progress in real time.
-7. Add repair execution and then reconsider `needs_repair` handling.
-8. Add DB tables only after payload shapes stabilize.
+1. Enable the integrated harness in internal environments and inspect
+   pass/fail/needs-repair distribution.
+2. Keep standard workflow repair budgets conservative
+   (`RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS=1`) while observing latency.
+3. Roll direct Deep Research gate behavior through staging and verify failed
+   reports are not marked completed.
+4. Enable Mission contract mapping for Mission-heavy workflows and compare
+   Mission validation summaries with harness verdicts.
+5. Expose harness events in clients so users can see validation and repair
+   progress.
+6. Apply migration `032_add_research_harness_tables.sql`, then enable
+   `RESEARCH_HARNESS_PERSIST_RUNS=true` after migration validation.
+7. Add heavier model-based checks behind feature flags after latency and cost
+   are measured.
 
 Operational metrics to track:
 
@@ -739,14 +840,17 @@ The harness improves safety in several concrete ways:
    - The candidate text is retained as `blocked_response`, but the primary
      response is a controlled failure message.
 
-6. **Deterministic first pass**
+6. **Bounded repair**
+   - Repair planning is attempt-limited and returns to harness validation before
+     finalization.
+
+7. **Deterministic first pass**
    - Many failures are caught without adding model nondeterminism or network
      dependency.
 
 These properties are still bounded by current implementation limits. For
 example, deterministic citation coverage does not equal claim-level factuality.
-That is why model-based factuality and offline eval bridging remain important
-future work.
+That is why model-based factuality and bias checks remain important future work.
 
 ---
 
@@ -754,8 +858,10 @@ future work.
 
 ### Phase A: Repair Planner and Bounded Repair Execution
 
-`needs_repair` currently blocks gate completion but does not execute repair
-actions. The next step is to turn repairable failures into targeted actions:
+Status: implemented for the standard workflow.
+
+`needs_repair` now routes to a repair processor when gate mode has attempts
+remaining. Repairable failures become targeted actions:
 
 - rebuild citation maps
 - request more sources
@@ -763,21 +869,24 @@ actions. The next step is to turn repairable failures into targeted actions:
 - date-constrained freshness search
 - regenerate affected sections with citations
 
-Repair must stay bounded and targeted. It should not recursively rerun the
-entire workflow without a narrowed target.
+Repair remains bounded and targeted. The standard workflow revalidates after
+repair before finalization. Direct Deep Research API repair execution remains a
+future extension.
 
 ### Phase B: Direct Deep-Research API Gating
 
-The direct deep-research API should use harness score and verdict rather than
-`DEEP_RESEARCH_DEFAULT_QUALITY_SCORE` when the harness is enabled.
+Status: implemented for completion gating.
 
-Gate pass should mark reports complete. Gate failure should mark reports failed
-or partial according to policy.
+The direct deep-research API now validates assembled report sections with the
+harness before completion. Gate pass uses the harness score for quality. Gate
+failure or unresolved `needs_repair` marks the report failed and emits harness
+failure events instead of normal completion.
 
 ### Phase C: Mission Validation Upgrade
 
-Mission already has a validation contract concept. The next integration should
-translate Mission contract fields into `HarnessContract` fields:
+Status: implemented for contract mapping and validation summaries.
+
+Mission validation contract fields now translate into harness config:
 
 - required sources
 - min quality score
@@ -786,9 +895,14 @@ translate Mission contract fields into `HarnessContract` fields:
 - factuality requirement
 - coverage requirement
 
+Mission validation summaries also include harness mode, verdict, score, and
+failed checks when harness state is present.
+
 ### Phase D: Streaming Events
 
-Clients should receive harness progress events:
+Status: implemented for standard workflow progress and direct Deep Research SSE.
+
+Clients can receive harness progress events:
 
 - harness started
 - check started
@@ -801,7 +915,9 @@ This matters because gate validation can be visible work, not invisible delay.
 
 ### Phase E: Offline Eval Bridge
 
-Offline graders should adapt into `HarnessCheckResult` so runtime and offline
+Status: implemented for `GraderResult` conversion.
+
+Offline graders adapt into `HarnessCheckResult` so runtime and offline
 evaluation share compatible result semantics.
 
 This also allows regression testing of:
@@ -814,14 +930,28 @@ This also allows regression testing of:
 
 ### Phase F: Dedicated Persistence
 
-The current implementation stores harness summaries in state and response
-metadata. Dedicated tables can come later:
+Status: migration and repository implemented behind a feature flag.
+
+The implementation still stores harness summaries in state and response
+metadata. Dedicated tables now exist for deployments that enable persistence:
 
 - `research_harness_runs`
 - `research_harness_check_results`
 
-The right time to add tables is after event payloads, check metadata, and repair
-records stabilize.
+Persistence remains off by default through `RESEARCH_HARNESS_PERSIST_RUNS=false`
+so operators can apply and verify the migration before writing runtime data.
+
+### Remaining Follow-Up Work
+
+The next roadmap items are:
+
+- Direct Deep Research API repair execution instead of immediate failure on
+  `needs_repair`.
+- Model-based factuality checker.
+- Bias/perspective checker.
+- Performance budget checker.
+- Privacy-reviewed controls for storing full evidence and source snippets.
+- Client UX for displaying harness and repair progress events.
 
 ---
 
@@ -830,7 +960,7 @@ records stabilize.
 | Risk | Why it matters | Mitigation |
 | --- | --- | --- |
 | False negative gate failures | Good reports may be blocked | advisory mode, transparent failed checks, bounded repair |
-| False positive passes | Bad reports may appear verified | add factuality, coverage, bias, offline eval bridge |
+| False positive passes | Bad reports may appear verified | add factuality and bias checks, use offline bridge for regression |
 | Latency increase | Users wait longer | deterministic-first checks, model checks only when needed |
 | Cache underuse | More cache skips in advisory fail/gate fail | track cache skip rate, tune thresholds |
 | Metadata drift | Runtime and eval schemas diverge | use shared harness result models |
@@ -872,13 +1002,27 @@ That invariant is the foundation for the remaining roadmap.
 | `neos/workflow/harness/contract_builder.py` | State-to-contract translation |
 | `neos/workflow/harness/runner.py` | Checker execution, scoring, verdicts |
 | `neos/workflow/harness/cache_policy.py` | Cache write policy |
+| `neos/workflow/harness/events.py` | Shared harness event payloads |
+| `neos/workflow/harness/repair.py` | Deterministic repair planner |
+| `neos/workflow/harness/adapters/deep_research_report.py` | Direct Deep Research report/source extraction |
+| `neos/workflow/harness/adapters/mission.py` | Mission contract to harness config mapping |
+| `neos/workflow/harness/adapters/neos_evals.py` | Offline grader result bridge |
 | `neos/workflow/harness/adapters/workflow_state.py` | Report/source/context extraction |
 | `neos/workflow/harness/checkers/citations.py` | Citation validity and coverage |
 | `neos/workflow/harness/checkers/sources.py` | Source count and diversity |
 | `neos/workflow/harness/checkers/freshness.py` | Source recency/freshness |
 | `neos/workflow/harness/checkers/metadata.py` | Metadata integrity |
+| `neos/workflow/harness/checkers/model_based.py` | Optional topic coverage checker |
 | `neos/workflow/processors/research_harness_processor.py` | LangGraph processor wrapper |
+| `neos/workflow/processors/research_harness_repair_processor.py` | Repair planning processor |
 | `neos/workflow/graph.py` | Workflow routing and gate finalization |
+| `neos/api/services/deep_research_harness_service.py` | Direct API harness service |
+| `neos/api/handlers/deep_research_handlers.py` | Direct API gate and SSE integration |
+| `neos/workflow/mission/validators.py` | Mission validation summary integration |
+| `neos/workflow/builder/executors.py` | Custom workflow harness processor branch |
+| `neos/workflow/builder/workflow_executor.py` | Custom workflow harness state/gate blocking |
+| `neos/database/repositories/harness_repository.py` | Harness persistence repository |
+| `db/migrations/032_add_research_harness_tables.sql` | Dedicated harness persistence tables |
 | `neos/workflow/processors/response_generator.py` | Response metadata shape |
 | `.env.template` | Harness rollout settings |
 
@@ -888,11 +1032,26 @@ That invariant is the foundation for the remaining roadmap.
 | --- | --- |
 | `tests/workflow/harness/test_policy.py` | Policy mode selection and global disable precedence |
 | `tests/workflow/harness/test_contract_builder.py` | Contract construction |
+| `tests/workflow/harness/test_mission_contract_adapter.py` | Mission contract adapter |
+| `tests/workflow/harness/test_deep_research_adapter.py` | Direct API report/source adapter |
 | `tests/workflow/harness/test_deterministic_checkers.py` | Citation/source/freshness/metadata checkers |
+| `tests/workflow/harness/test_model_based_checkers.py` | Topic coverage checker |
 | `tests/workflow/harness/test_runner_deterministic.py` | Pass, fail, needs-repair, required-check semantics |
+| `tests/workflow/harness/test_repair_planner.py` | Failed-check to repair-action mapping |
+| `tests/workflow/harness/test_events.py` | Shared harness event payloads |
+| `tests/workflow/harness/test_neos_evals_adapter.py` | Offline grader bridge |
+| `tests/workflow/harness/test_neos_evals_bridge_regression.py` | Offline grader results driving verdicts |
 | `tests/workflow/harness/test_cache_policy.py` | Cache write decisions |
 | `tests/workflow/processors/test_research_harness_processor.py` | State updates from processor |
+| `tests/workflow/processors/test_research_harness_repair_processor.py` | Repair processor state updates |
 | `tests/workflow/test_harness_graph_routing.py` | Final-response validation routing and state preservation |
+| `tests/workflow/test_harness_graph_repair.py` | Repair routing helper behavior |
 | `tests/workflow/test_harness_response_metadata.py` | Compact response metadata |
-| `tests/test_workflow_graph.py` | Gate failure result/session completion behavior |
-
+| `tests/api/test_deep_research_harness_service.py` | Direct Deep Research harness service and gate helper |
+| `tests/workflow/mission/test_validators.py` | Mission summary harness integration |
+| `tests/workflow/builder/test_node_executor_harness.py` | Custom workflow harness processor execution |
+| `tests/workflow/builder/test_workflow_executor_harness_state.py` | Custom workflow initial harness state |
+| `tests/workflow/builder/test_workflow_executor_harness_gate.py` | Custom workflow gate blocking |
+| `tests/database/repositories/test_harness_repository.py` | Harness repository writes |
+| `tests/db/test_research_harness_migration_sql.py` | Harness migration SQL structure |
+| `tests/test_workflow_graph.py` | Legacy graph baseline and gate failure behavior |
