@@ -125,6 +125,24 @@ class HarnessRepairPlanner:
                     },
                 )
             ]
+        if check.name == "factuality":
+            return [
+                HarnessRepairAction(
+                    action_type="regenerate_unsupported_claims",
+                    target_check=check.name,
+                    reason=check.summary,
+                    params={"failed_items": check.failed_items},
+                )
+            ]
+        if check.name == "bias_perspective":
+            return [
+                HarnessRepairAction(
+                    action_type="add_perspective_balancing_sources",
+                    target_check=check.name,
+                    reason=check.summary,
+                    params={"failed_items": check.failed_items},
+                )
+            ]
         return []
 
     def _budget_seconds(self, contract: HarnessContract) -> int:

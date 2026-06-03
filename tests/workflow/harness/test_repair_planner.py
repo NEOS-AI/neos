@@ -92,6 +92,36 @@ def test_planner_maps_freshness_to_date_constrained_search():
     assert plan.actions[0].params["freshness_window_days"] == 30
 
 
+def test_planner_maps_factuality_to_unsupported_claim_regeneration():
+    planner = HarnessRepairPlanner()
+    plan = planner.plan(
+        contract=gate_contract(),
+        failed_checks=[failed_check("factuality", severity="critical")],
+        attempt=1,
+        context={},
+    )
+
+    assert plan is not None
+    assert plan.actions[0].action_type == "regenerate_unsupported_claims"
+    assert plan.actions[0].params["failed_items"] == [{"reason": "factuality_reason"}]
+
+
+def test_planner_maps_bias_perspective_to_balancing_sources():
+    planner = HarnessRepairPlanner()
+    plan = planner.plan(
+        contract=gate_contract(),
+        failed_checks=[failed_check("bias_perspective", severity="critical")],
+        attempt=1,
+        context={},
+    )
+
+    assert plan is not None
+    assert plan.actions[0].action_type == "add_perspective_balancing_sources"
+    assert plan.actions[0].params["failed_items"] == [
+        {"reason": "bias_perspective_reason"}
+    ]
+
+
 def test_planner_returns_none_when_failures_are_not_repairable():
     planner = HarnessRepairPlanner()
     plan = planner.plan(

@@ -26,7 +26,9 @@ sys.modules.setdefault("isodate", isodate_module)
 
 from neos.api.handlers.deep_research_handlers import is_deep_research_harness_blocked
 from neos.api.services.deep_research_harness_service import DeepResearchHarnessService
-from neos.workflow.harness.models import HarnessVerdict
+from neos.workflow.harness.models import HarnessMode, HarnessRun, HarnessVerdict
+from neos.workflow.harness.events import HarnessEventType
+from datetime import datetime
 
 
 @pytest.mark.asyncio
@@ -49,18 +51,73 @@ async def test_service_returns_harness_run_for_report(monkeypatch):
     monkeypatch.setattr(service, "_fetch_sections", fake_sections)
     monkeypatch.setattr(service, "_fetch_collection_rows", fake_collection)
 
-    run = await service.validate_report(
+    validation = await service.validate_report(
         report_id="report-1",
         research_topic="AI market",
         metadata={},
     )
 
-    assert run.mode.value == "gate"
-    assert run.verdict in {
+    assert validation.run.mode.value == "gate"
+    assert validation.run.verdict in {
         HarnessVerdict.PASS,
         HarnessVerdict.NEEDS_REPAIR,
         HarnessVerdict.FAIL,
     }
+    assert validation.contract.mode.value == "gate"
+    assert validation.report == "## Report\n\nClaim [1]."
+    assert validation.sources[0]["url"] == "https://a.com"
+
+
+@pytest.mark.asyncio
+async def test_service_passes_harness_event_callback(monkeypatch):
+    class FakeRunner:
+        async def arun(self, **kwargs):
+            await kwargs["event_callback"](
+                HarnessEventType.CHECK_STARTED,
+                {"check": "source_count", "mode": "gate"},
+            )
+            now = datetime.now()
+            return HarnessRun(
+                run_id="run-1",
+                mode=HarnessMode.GATE,
+                verdict=HarnessVerdict.PASS,
+                score=1.0,
+                checks=[],
+                failed_checks=[],
+                repair_attempts=0,
+                started_at=now,
+                completed_at=now,
+            )
+
+    service = DeepResearchHarnessService(runner=FakeRunner())
+
+    async def fake_sections(report_id):
+        return []
+
+    async def fake_collection(report_id):
+        return []
+
+    events = []
+
+    async def collect_event(event_type, payload):
+        events.append((event_type, payload))
+
+    monkeypatch.setattr(service, "_fetch_sections", fake_sections)
+    monkeypatch.setattr(service, "_fetch_collection_rows", fake_collection)
+
+    await service.validate_report(
+        report_id="report-1",
+        research_topic="AI market",
+        metadata={},
+        event_callback=collect_event,
+    )
+
+    assert events == [
+        (
+            HarnessEventType.CHECK_STARTED,
+            {"check": "source_count", "mode": "gate"},
+        )
+    ]
 
 
 class _ValueObject:

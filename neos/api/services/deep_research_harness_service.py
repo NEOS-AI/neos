@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from neos.database.connection import db_manager
@@ -9,7 +10,16 @@ from neos.workflow.harness.adapters.deep_research_report import (
     extract_deep_research_sources,
 )
 from neos.workflow.harness.contract_builder import build_harness_contract
+from neos.workflow.harness.models import HarnessContract, HarnessRun
 from neos.workflow.harness.runner import HarnessRunner
+
+
+@dataclass
+class DeepResearchHarnessValidation:
+    run: HarnessRun
+    contract: HarnessContract
+    report: str
+    sources: list[dict[str, Any]]
 
 
 class DeepResearchHarnessService:
@@ -22,7 +32,8 @@ class DeepResearchHarnessService:
         report_id: str,
         research_topic: str,
         metadata: dict[str, Any] | None = None,
-    ):
+        event_callback: object | None = None,
+    ) -> DeepResearchHarnessValidation:
         sections = await self._fetch_sections(report_id)
         collection_rows = await self._fetch_collection_rows(report_id)
         report = combine_deep_research_sections(sections)
@@ -32,7 +43,7 @@ class DeepResearchHarnessService:
             metadata=metadata,
         )
         contract = build_harness_contract(state)
-        return self.runner.run(
+        run = await self.runner.arun(
             report=report,
             sources=sources,
             contract=contract,
@@ -40,7 +51,17 @@ class DeepResearchHarnessService:
                 "report_id": report_id,
                 "research_topic": research_topic,
                 "metadata": metadata or {},
+                "processing_time_ms": (metadata or {}).get("processing_time_ms"),
+                "total_queries": (metadata or {}).get("total_queries"),
+                "total_sources": (metadata or {}).get("total_sources"),
             },
+            event_callback=event_callback,
+        )
+        return DeepResearchHarnessValidation(
+            run=run,
+            contract=contract,
+            report=report,
+            sources=sources,
         )
 
     async def _fetch_sections(self, report_id: str) -> list[dict[str, Any]]:

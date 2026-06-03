@@ -7,6 +7,7 @@ from neos.workflow.harness.models import HarnessCheckResult
 
 CRITICAL_GRADERS = {
     "factual_accuracy",
+    "factuality",
     "metadata_validation",
 }
 
@@ -17,6 +18,8 @@ REPAIRABLE_GRADERS = {
     "topic_coverage",
     "quality_assessment",
     "factual_accuracy",
+    "factuality",
+    "bias_perspective",
 }
 
 

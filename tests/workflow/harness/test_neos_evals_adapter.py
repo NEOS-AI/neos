@@ -35,3 +35,33 @@ def test_failed_model_grader_is_repairable_warning_by_default():
 
     assert check.severity == "warning"
     assert check.repairable is True
+
+
+def test_factuality_grader_is_critical_and_repairable():
+    result = GraderResult(
+        grader_id="factuality",
+        score=0.3,
+        passed=False,
+        feedback="unsupported claims",
+        details={"failed_items": [{"claim": "unsupported"}]},
+    )
+
+    check = grader_result_to_harness_check(result)
+
+    assert check.severity == "critical"
+    assert check.repairable is True
+
+
+def test_bias_perspective_grader_is_repairable_warning():
+    result = GraderResult(
+        grader_id="bias_perspective",
+        score=0.45,
+        passed=False,
+        feedback="single perspective",
+        details={"failed_items": [{"issue": "single_perspective"}]},
+    )
+
+    check = grader_result_to_harness_check(result)
+
+    assert check.severity == "warning"
+    assert check.repairable is True

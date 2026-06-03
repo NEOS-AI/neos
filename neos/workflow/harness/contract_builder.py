@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from .models import HarnessContract
-from .policy import _as_bool, decide_harness_policy
+from .policy import _as_bool, decide_harness_policy, get_harness_profile_config
 
 
 def _complexity_from_state(state: dict[str, Any]) -> float:
@@ -28,7 +28,7 @@ def _metadata_from_state(state: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, dict):
             metadata.update(value)
 
-    for key in ("harness_mode", "risk_level", "freshness_required"):
+    for key in ("harness_mode", "risk_level", "freshness_required", "harness_profile"):
         if state.get(key) is not None:
             metadata[key] = state[key]
 
@@ -75,7 +75,8 @@ def build_harness_contract(
     from .adapters.mission import mission_contract_to_harness_config
 
     mission_config = mission_contract_to_harness_config(validation_contract)
-    node_config = {**mission_config, **node_config}
+    profile_config = get_harness_profile_config(metadata.get("harness_profile"))
+    node_config = {**profile_config, **mission_config, **node_config}
     min_sources, required_sources = _required_sources(validation_contract)
     config_min_sources, config_required_sources = _required_sources(node_config)
 

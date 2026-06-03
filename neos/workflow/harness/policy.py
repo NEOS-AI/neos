@@ -7,6 +7,46 @@ from neos.config.settings import settings
 from .models import HarnessMode, HarnessPolicyDecision, HarnessRiskLevel
 
 
+HARNESS_PROFILE_PRESETS: dict[str, dict[str, Any]] = {
+    "research_default": {
+        "mode": "gate",
+        "required_checks": ["source_count", "citation_validity", "citation_coverage"],
+        "optional_checks": ["performance_budget"],
+        "min_score": 0.82,
+    },
+    "freshness_sensitive": {
+        "mode": "gate",
+        "required_checks": ["source_count", "citation_validity", "citation_coverage", "freshness"],
+        "optional_checks": ["performance_budget"],
+        "min_score": 0.82,
+        "freshness_required": True,
+    },
+    "mission_strict": {
+        "mode": "gate",
+        "required_checks": ["source_count", "citation_validity", "citation_coverage", "factuality"],
+        "optional_checks": ["bias_perspective", "performance_budget"],
+        "min_score": 0.88,
+        "risk_level": "high",
+    },
+    "agent_advisory": {
+        "mode": "advisory",
+        "required_checks": ["source_count"],
+        "optional_checks": ["citation_coverage", "performance_budget"],
+        "min_score": 0.70,
+    },
+    "direct_deep_research": {
+        "mode": "gate",
+        "required_checks": ["source_count", "citation_validity", "citation_coverage"],
+        "optional_checks": ["factuality", "bias_perspective", "performance_budget"],
+        "min_score": 0.82,
+    },
+}
+
+
+def get_harness_profile_config(profile: Any) -> dict[str, Any]:
+    return dict(HARNESS_PROFILE_PRESETS.get(str(profile or ""), {}))
+
+
 def _as_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -107,6 +147,24 @@ def decide_harness_policy(
                 threshold,
                 attempts,
             )
+
+    profile_config = get_harness_profile_config(metadata.get("harness_profile"))
+    if profile_config:
+        requested = _coerce_mode(profile_config.get("mode"), default_mode)
+        threshold = float(
+            profile_config.get(
+                "min_score",
+                gate_threshold if requested == HarnessMode.GATE else advisory_threshold,
+            )
+        )
+        attempts = max_attempts if requested != HarnessMode.OFF else 0
+        return HarnessPolicyDecision(
+            requested,
+            _coerce_risk(profile_config.get("risk_level", metadata.get("risk_level"))),
+            f"profile:{metadata.get('harness_profile')}",
+            threshold,
+            attempts,
+        )
 
     risk_level = _coerce_risk(metadata.get("risk_level"))
     freshness_required = _as_bool(metadata.get("freshness_required"), False)

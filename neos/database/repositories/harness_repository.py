@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 
+from neos.config.settings import settings
 from neos.database.connection import db_manager
 from neos.workflow.harness.models import HarnessContract, HarnessRun
+from neos.workflow.harness.privacy import sanitize_check_result
 
 
 class HarnessRepository:
@@ -16,6 +18,9 @@ class HarnessRepository:
         report_id: str | None = None,
         user_id: str | None = None,
     ) -> None:
+        evidence_policy = settings.RESEARCH_HARNESS_EVIDENCE_STORAGE_POLICY
+        metadata = dict(run.metadata or {})
+        metadata["evidence_storage_policy"] = evidence_policy
         await db_manager.execute(
             """
             INSERT INTO research_harness_runs (
@@ -37,11 +42,12 @@ class HarnessRepository:
             run.repair_attempts,
             json.dumps(run.failed_checks),
             json.dumps(contract.to_dict()),
-            json.dumps(run.metadata),
+            json.dumps(metadata),
             run.started_at,
             run.completed_at,
         )
         for check in run.checks:
+            safe_check = sanitize_check_result(check, policy=evidence_policy)
             await db_manager.execute(
                 """
                 INSERT INTO research_harness_check_results (
@@ -50,15 +56,15 @@ class HarnessRepository:
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 """,
                 run.run_id,
-                check.name,
-                check.passed,
-                float(check.score),
-                check.severity,
-                check.summary,
-                json.dumps(check.evidence),
-                json.dumps(check.failed_items),
-                check.repairable,
-                json.dumps(check.metadata),
+                safe_check.name,
+                safe_check.passed,
+                float(safe_check.score),
+                safe_check.severity,
+                safe_check.summary,
+                json.dumps(safe_check.evidence),
+                json.dumps(safe_check.failed_items),
+                safe_check.repairable,
+                json.dumps(safe_check.metadata),
             )
 
 

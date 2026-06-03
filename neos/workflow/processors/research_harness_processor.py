@@ -43,12 +43,22 @@ class ResearchHarnessProcessor:
                 0,
             )
 
-        run = self.runner.run(
+        async def emit_check_event(event_type: HarnessEventType, payload: dict) -> None:
+            if event_handler is None:
+                return
+            await event_handler.on_node_progress(
+                "research_harness",
+                json.dumps(build_harness_event(event_type, data=payload)),
+                50,
+            )
+
+        run = await self.runner.arun(
             report=report,
             sources=sources,
             contract=contract,
             context=context,
             repair_attempts=repair_attempts,
+            event_callback=emit_check_event if event_handler is not None else None,
         )
 
         if settings.RESEARCH_HARNESS_PERSIST_RUNS:
@@ -62,23 +72,6 @@ class ResearchHarnessProcessor:
             )
 
         if event_handler is not None:
-            for check in run.checks:
-                await event_handler.on_node_progress(
-                    "research_harness",
-                    json.dumps(
-                        build_harness_event(
-                            HarnessEventType.CHECK_COMPLETED,
-                            run_id=run.run_id,
-                            data={
-                                "check": check.name,
-                                "passed": check.passed,
-                                "score": float(check.score),
-                                "severity": check.severity,
-                            },
-                        )
-                    ),
-                    50,
-                )
             await event_handler.on_node_progress(
                 "research_harness",
                 json.dumps(

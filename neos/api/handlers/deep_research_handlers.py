@@ -604,11 +604,29 @@ async def deep_research_stream_generator(
         )
         yield f"data: {harness_started.model_dump_json()}\n\n"
 
-        harness_run = await DeepResearchHarnessService().validate_report(
+        harness_events: list[DeepResearchEvent] = []
+
+        async def collect_harness_event(event_type, payload: dict) -> None:
+            harness_events.append(
+                DeepResearchEvent(
+                    event=DeepResearchEventType(event_type.value),
+                    report_id=report_id,
+                    data=payload,
+                )
+            )
+
+        validation = await DeepResearchHarnessService().validate_report(
             report_id=report_id,
             research_topic=research_topic,
-            metadata={"harness_mode": "gate"},
+            metadata={
+                "harness_mode": "gate",
+                "processing_time_ms": processing_time_ms,
+                "total_queries": total_queries,
+                "total_sources": total_sources,
+            },
+            event_callback=collect_harness_event,
         )
+        harness_run = validation.run
 
         harness_metadata = {
             "mode": harness_run.mode.value,
@@ -618,18 +636,66 @@ async def deep_research_stream_generator(
             "repair_attempts": harness_run.repair_attempts,
         }
 
-        for check in harness_run.checks:
-            check_event = DeepResearchEvent(
-                event=DeepResearchEventType.HARNESS_CHECK_COMPLETED,
-                report_id=report_id,
-                data={
-                    "check": check.name,
-                    "passed": check.passed,
-                    "score": float(check.score),
-                    "severity": check.severity,
-                },
-            )
-            yield f"data: {check_event.model_dump_json()}\n\n"
+        for harness_event in harness_events:
+            yield f"data: {harness_event.model_dump_json()}\n\n"
+
+        if is_deep_research_harness_blocked(harness_run):
+            if harness_run.mode.value == "gate" and harness_run.verdict.value == "needs_repair":
+                from neos.api.services.deep_research_repair_service import (
+                    DeepResearchRepairService,
+                )
+
+                repair_attempt = harness_run.repair_attempts + 1
+                repair_started = DeepResearchEvent(
+                    event=DeepResearchEventType.HARNESS_REPAIR_STARTED,
+                    report_id=report_id,
+                    data={"attempt": repair_attempt},
+                )
+                yield f"data: {repair_started.model_dump_json()}\n\n"
+
+                repair_result = await DeepResearchRepairService().repair(
+                    report_id=report_id,
+                    research_topic=research_topic,
+                    contract=validation.contract,
+                    failed_checks=[check for check in harness_run.checks if not check.passed],
+                    attempt=repair_attempt,
+                    context={
+                        "original_query": research_topic,
+                        "research_topic": research_topic,
+                        "processing_time_ms": processing_time_ms,
+                        "total_queries": total_queries,
+                        "total_sources": total_sources,
+                    },
+                )
+                repair_completed = DeepResearchEvent(
+                    event=DeepResearchEventType.HARNESS_REPAIR_COMPLETED,
+                    report_id=report_id,
+                    data=repair_result,
+                )
+                yield f"data: {repair_completed.model_dump_json()}\n\n"
+
+                harness_events = []
+                validation = await DeepResearchHarnessService().validate_report(
+                    report_id=report_id,
+                    research_topic=research_topic,
+                    metadata={
+                        "harness_mode": "gate",
+                        "processing_time_ms": processing_time_ms,
+                        "total_queries": total_queries,
+                        "total_sources": total_sources,
+                    },
+                    event_callback=collect_harness_event,
+                )
+                harness_run = validation.run
+                harness_metadata = {
+                    "mode": harness_run.mode.value,
+                    "verdict": harness_run.verdict.value,
+                    "score": float(harness_run.score),
+                    "failed_checks": harness_run.failed_checks,
+                    "repair_attempts": harness_run.repair_attempts,
+                }
+                for harness_event in harness_events:
+                    yield f"data: {harness_event.model_dump_json()}\n\n"
 
         if is_deep_research_harness_blocked(harness_run):
             await update_research_status(

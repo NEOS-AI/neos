@@ -74,6 +74,7 @@ async def test_research_harness_processor_emits_progress_events():
     await processor.process(state)
 
     assert any(item[0] == "research_harness" for item in handler.progress)
+    assert any("harness_check_started" in item[1] for item in handler.progress)
     assert any("harness_completed" in item[1] for item in handler.progress)
 
 

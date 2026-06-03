@@ -90,3 +90,34 @@ def test_global_disable_overrides_explicit_gate_request():
 
     assert decision.mode == HarnessMode.OFF
     assert decision.reason == "disabled_by_settings"
+
+
+def test_profile_can_select_gate_policy_defaults():
+    decision = decide_harness_policy(
+        intent="general_chat",
+        complexity_score=0.1,
+        metadata={"harness_profile": "mission_strict"},
+        settings_overrides={
+            "RESEARCH_HARNESS_ENABLED": True,
+            "RESEARCH_HARNESS_DEFAULT_MODE": "auto",
+        },
+    )
+
+    assert decision.mode == HarnessMode.GATE
+    assert decision.min_score == 0.88
+    assert decision.reason == "profile:mission_strict"
+
+
+def test_explicit_mode_takes_precedence_over_profile():
+    decision = decide_harness_policy(
+        intent="general_chat",
+        complexity_score=0.1,
+        metadata={"harness_profile": "mission_strict", "harness_mode": "advisory"},
+        settings_overrides={
+            "RESEARCH_HARNESS_ENABLED": True,
+            "RESEARCH_HARNESS_DEFAULT_MODE": "auto",
+        },
+    )
+
+    assert decision.mode == HarnessMode.ADVISORY
+    assert decision.reason == "explicit_mode"
