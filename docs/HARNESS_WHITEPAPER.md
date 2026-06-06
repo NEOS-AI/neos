@@ -1,7 +1,7 @@
 # NEOS Research Harness Whitepaper
 
-**Status:** Runtime harness advancement implemented
-**Last updated:** 2026-06-03
+**Status:** Runtime harness advancement and Direct repair MVP implemented
+**Last updated:** 2026-06-06
 **Related documents:** `docs/HARNESS_PLAN.md`, `docs/HARNESS_IMPLE.md`, `docs/HARNESS_CR.md`
 
 ---
@@ -50,6 +50,9 @@ across the main runtime surfaces:
 - bounded repair planning and standard workflow repair revalidation
 - direct Deep Research API gating, repair attempt orchestration, and
   revalidation before completion
+- production Direct Deep Research repair executor MVP with repository-backed
+  section/source mutation, source normalization, section regeneration, and
+  refreshed report totals before revalidation
 - Mission validation contract mapping and summary integration
 - custom workflow builder harness processor support
 - standard workflow and direct API harness events
@@ -65,9 +68,9 @@ across the main runtime surfaces:
   full modes
 
 The remaining work is now mostly operational: calibrating model-based checks
-with offline evals, wiring production-grade Direct Deep Research repair action
-executors, exposing repair progress cleanly in clients, and deciding where full
-evidence persistence is privacy-approved.
+with offline evals, hardening Direct Deep Research repair execution in staging,
+exposing repair progress cleanly in clients, and deciding where full evidence
+persistence is privacy-approved.
 
 ---
 
@@ -711,13 +714,38 @@ produced the verdict. When a gate run returns `needs_repair`, the handler emits
 `harness_repair_completed`, revalidates, and only then completes or fails the
 report.
 
-The repair service is deliberately bounded. It plans supported repair actions,
-but actual Direct Deep Research section/source mutation is delegated to an
-injectable action executor. If no executor is configured, actions are skipped
-with explicit metadata rather than performing unsafe implicit rewrites. A gate
-run that still returns `needs_repair` or `fail` after repair handling marks the
-report failed and emits `harness_failed` instead of the normal completion
-event.
+The repair service is deliberately bounded. It plans supported repair actions
+and delegates mutation to an action executor. The current default executor is
+`DirectDeepResearchRepairExecutor`, which uses a repository boundary to fetch
+sections and collection rows, normalize repair search results, record
+`query_type="harness_repair"` collection rows, update only targeted sections,
+append repair provenance to section/report metadata, refresh report totals, and
+then let the handler revalidate through `DeepResearchHarnessService`.
+
+The executor supports the currently planned action families:
+
+- `request_more_sources`
+- `search_independent_domains`
+- `date_constrained_freshness_search`
+- `rebuild_citation_map`
+- `regenerate_cited_sections`
+- `regenerate_unsupported_claims`
+- `add_perspective_balancing_sources`
+
+Search-style repairs use a pluggable search executor, with a Tavily-backed
+default when available. Regeneration repairs use
+`DeepResearchSectionRegenerator`, which rewrites one existing section using only
+provided sources and validates numeric citation marker shape before saving.
+When evidence is missing, search returns no unique sources, or regeneration
+cannot safely produce a cited section, the action is skipped or falls back with
+explicit metadata. A gate run that still returns `needs_repair` or `fail` after
+repair handling marks the report failed and emits `harness_failed` instead of
+the normal completion event.
+
+Operators can disable Direct repair mutation independently with
+`RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED=false`. In that mode the service
+preserves the older safe behavior: planned actions are skipped explicitly
+rather than mutating reports implicitly.
 
 ---
 
@@ -794,7 +822,7 @@ The subsequent harness advancement added the missing contract depth:
 | Model factuality | Implemented behind model-check feature flags |
 | Bias/perspective | Implemented behind model-check feature flags |
 | Performance budgets | Implemented as a deterministic checker |
-| Direct Deep Research repair loop | Implemented with bounded service and injectable executor |
+| Direct Deep Research repair loop | Implemented with bounded service, default executor MVP, injectable test executor, and revalidation |
 | Evidence persistence policy | Implemented with summary-only default and redaction support |
 | Harness profile presets | Implemented in policy and contract builder |
 | Offline eval calibration mapping | Extended for `factuality` and `bias_perspective` |
@@ -832,6 +860,15 @@ Implemented:
 - direct Deep Research API harness gating before completion
 - direct Deep Research validation envelope with run, contract, report, and sources
 - direct Deep Research repair-start/repair-completed loop with revalidation
+- Direct Deep Research repair repository for section, collection, report
+  metadata, and total-count mutation
+- Direct Deep Research repair source normalization and deduplication
+- Direct Deep Research section regenerator with source-constrained rewrite and
+  citation-marker fallback
+- Direct Deep Research repair executor MVP for all currently planned repair
+  action families
+- Direct repair mutation rollback flag
+  `RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED`
 - direct API harness SSE events including check-start/check-completed and repair events
 - shared harness event payloads
 - Mission validation summary integration
@@ -850,10 +887,9 @@ Implemented:
 
 Not yet implemented:
 
-- production Direct Deep Research action executors for every planned repair
-  action. The service can plan and orchestrate repair, but live mutation/search
-  execution is intentionally injectable and skipped when no executor is
-  configured.
+- production rollout hardening for the Direct Deep Research repair executor:
+  staging calibration, provider-specific search behavior review, latency and
+  retry policy review, and live-report mutation monitoring.
 - calibrated thresholds and false-positive review for model-based factuality
   and bias/perspective checks.
 - client UX for displaying harness and repair progress in detail.
@@ -861,8 +897,9 @@ Not yet implemented:
   outside controlled eval environments.
 
 This boundary is deliberate. The current implementation covers the main verdict,
-checker, repair orchestration, and persistence semantics. The remaining work is
-primarily production action execution, calibration, and operational hardening.
+checker, repair orchestration, Direct repair execution MVP, and persistence
+semantics. The remaining work is primarily calibration, client visibility, and
+operational hardening.
 
 ---
 
@@ -881,6 +918,11 @@ pytest tests/workflow/harness \
   tests/workflow/mission \
   tests/api/test_deep_research_harness_service.py \
   tests/api/test_deep_research_harness_repair.py \
+  tests/api/test_deep_research_repair_sources.py \
+  tests/api/test_deep_research_repair_repository.py \
+  tests/api/test_deep_research_section_regenerator.py \
+  tests/api/test_deep_research_repair_executor.py \
+  tests/api/test_deep_research_handler_harness_repair_flow.py \
   tests/workflow/builder/test_node_executor_harness.py \
   tests/workflow/builder/test_workflow_executor_harness_state.py \
   tests/workflow/builder/test_workflow_executor_harness_gate.py \
@@ -891,7 +933,7 @@ pytest tests/workflow/harness \
 Observed result:
 
 ```text
-118 passed
+138 passed
 ```
 
 Compile check:
@@ -901,8 +943,12 @@ python -m compileall neos/workflow/harness \
   neos/workflow/processors/research_harness_processor.py \
   neos/workflow/processors/research_harness_repair_processor.py \
   neos/workflow/graph.py \
+  neos/api/repositories \
   neos/api/services/deep_research_harness_service.py \
   neos/api/services/deep_research_repair_service.py \
+  neos/api/services/deep_research_repair_sources.py \
+  neos/api/services/deep_research_repair_executor.py \
+  neos/api/services/deep_research_section_regenerator.py \
   neos/api/handlers/deep_research_handlers.py \
   neos/workflow/mission \
   neos/workflow/builder
@@ -954,6 +1000,7 @@ RESEARCH_HARNESS_STORE_FULL_CHECK_DETAILS=false
 RESEARCH_HARNESS_PERSIST_RUNS=false
 RESEARCH_HARNESS_EVIDENCE_STORAGE_POLICY=summary_only
 RESEARCH_HARNESS_CACHE_POLICY=passed_only
+RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED=true
 ```
 
 Recommended rollout sequence:
@@ -962,9 +1009,11 @@ Recommended rollout sequence:
    pass/fail/needs-repair distribution.
 2. Keep standard workflow repair budgets conservative
    (`RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS=1`) while observing latency.
-3. Roll direct Deep Research gate and repair orchestration through staging.
-   Verify repair events are emitted, skipped executor actions are explicit, and
-   failed reports are not marked completed.
+3. Roll direct Deep Research gate and repair execution through staging with
+   `RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED=true`. Verify repair events are
+   emitted, executed/skipped action metadata is explicit, refreshed totals are
+   reflected in revalidation metadata, and failed reports are not marked
+   completed.
 4. Enable Mission contract mapping for Mission-heavy workflows and compare
    Mission validation summaries with harness verdicts.
 5. Expose harness events in clients so users can see validation and repair
@@ -974,7 +1023,10 @@ Recommended rollout sequence:
 7. Keep `RESEARCH_HARNESS_EVIDENCE_STORAGE_POLICY=summary_only` by default.
    Move to `redacted` only after reviewing stored rows for sensitive text
    leakage. Use `full` only in controlled internal eval environments.
-8. Enable model-based checks first as optional/advisory checks, track latency,
+8. If repair mutation needs a narrow rollback during staging, set
+   `RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED=false` while leaving harness gating
+   and validation enabled.
+9. Enable model-based checks first as optional/advisory checks, track latency,
    parse errors, and disagreement with offline evals, then promote factuality
    to required only for strict contracts with sufficient source evidence.
 
@@ -1031,7 +1083,10 @@ The harness improves safety in several concrete ways:
 
 10. **Safe Direct repair default**
     - Direct Deep Research repair orchestration is bounded and executor-driven.
-      Without an executor, planned actions are skipped explicitly rather than
+      The default executor records repair provenance, mutates only targeted
+      sections or repair collection rows, refreshes report totals, and always
+      returns to harness revalidation before completion. If Direct repair
+      mutation is disabled, planned actions are skipped explicitly rather than
       mutating reports implicitly.
 
 These properties are still bounded by current implementation limits. For
@@ -1045,8 +1100,9 @@ rollout remain important.
 
 ### Phase A: Repair Planner and Bounded Repair Execution
 
-Status: implemented for the standard workflow; orchestration implemented for
-Direct Deep Research with injectable action execution.
+Status: implemented for the standard workflow; implemented for Direct Deep
+Research with bounded orchestration, default action execution, injectable test
+execution, and post-repair revalidation.
 
 `needs_repair` now routes to a repair processor when gate mode has attempts
 remaining. Repairable failures become targeted actions:
@@ -1059,9 +1115,9 @@ remaining. Repairable failures become targeted actions:
 
 Repair remains bounded and targeted. The standard workflow revalidates after
 repair before finalization. Direct Deep Research now emits repair events,
-invokes a repair service, and revalidates before finalization. Production
-section/source mutation remains executor-driven and must be wired per supported
-action.
+invokes a repair service, executes supported repair actions through
+`DirectDeepResearchRepairExecutor`, refreshes report totals, and revalidates
+before finalization.
 
 ### Phase B: Direct Deep-Research API Gating
 
@@ -1073,6 +1129,10 @@ harness before completion. Gate pass uses the harness score for quality.
 Gate-mode `needs_repair` emits repair started/completed events and revalidates.
 Gate failure or unresolved `needs_repair` marks the report failed and emits
 harness failure events instead of normal completion.
+
+Repair execution can be disabled independently from validation with
+`RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED=false`, which preserves explicit
+skipped-action metadata while avoiding live section/source mutation.
 
 ### Phase C: Mission Validation Upgrade
 
@@ -1160,8 +1220,8 @@ count, token count, or repair attempts exceed policy.
 
 The next roadmap items are:
 
-- Wire production Direct Deep Research action executors for supported repair
-  actions.
+- Harden Direct Deep Research repair execution in staging, including search
+  provider behavior, latency, retries, and live mutation observability.
 - Calibrate model-based factuality and bias/perspective thresholds against
   offline eval fixtures.
 - Build client UX for displaying harness and repair progress events.
@@ -1183,7 +1243,7 @@ The next roadmap items are:
 | Cache underuse | More cache skips in advisory fail/gate fail | track cache skip rate, tune thresholds |
 | Metadata drift | Runtime and eval schemas diverge | use shared harness result models |
 | Repair loops become expensive | Cost and latency can grow | strict repair budget, targeted actions only |
-| Direct repair no-op confusion | Repair orchestration can skip actions when no executor is configured | explicit skipped action metadata and SSE repair completed payload |
+| Direct repair mutation risk | Repair execution can change report sections or source collections incorrectly | action-scoped executor, repository provenance, revalidation before completion, and `RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED` rollback |
 | Evidence leakage | Failed items can contain sensitive claims or snippets | summary-only default, redacted policy, full mode only after review |
 | Operators cannot disable safely | Incident mitigation becomes hard | authoritative global feature flag |
 
@@ -1241,6 +1301,10 @@ That invariant is the foundation for continued rollout and calibration.
 | `neos/workflow/graph.py` | Workflow routing and gate finalization |
 | `neos/api/services/deep_research_harness_service.py` | Direct API harness service |
 | `neos/api/services/deep_research_repair_service.py` | Direct API bounded repair orchestration |
+| `neos/api/services/deep_research_repair_executor.py` | Direct API repair action execution |
+| `neos/api/services/deep_research_repair_sources.py` | Direct repair source normalization and deduplication |
+| `neos/api/services/deep_research_section_regenerator.py` | Source-constrained section regeneration |
+| `neos/api/repositories/deep_research_repair_repository.py` | Direct repair report/section/collection mutation boundary |
 | `neos/api/handlers/deep_research_handlers.py` | Direct API gate and SSE integration |
 | `neos/workflow/mission/validators.py` | Mission validation summary integration |
 | `neos/workflow/builder/executors.py` | Custom workflow harness processor branch |
@@ -1277,6 +1341,11 @@ That invariant is the foundation for continued rollout and calibration.
 | `tests/workflow/test_harness_response_metadata.py` | Compact response metadata |
 | `tests/api/test_deep_research_harness_service.py` | Direct Deep Research harness service and gate helper |
 | `tests/api/test_deep_research_harness_repair.py` | Direct Deep Research repair service orchestration |
+| `tests/api/test_deep_research_repair_sources.py` | Direct repair source normalization |
+| `tests/api/test_deep_research_repair_repository.py` | Direct repair repository mutation boundary |
+| `tests/api/test_deep_research_section_regenerator.py` | Source-constrained section regeneration |
+| `tests/api/test_deep_research_repair_executor.py` | Direct repair executor action behavior |
+| `tests/api/test_deep_research_handler_harness_repair_flow.py` | Direct repair handler wiring and totals refresh |
 | `tests/workflow/mission/test_validators.py` | Mission summary harness integration |
 | `tests/workflow/builder/test_node_executor_harness.py` | Custom workflow harness processor execution |
 | `tests/workflow/builder/test_workflow_executor_harness_state.py` | Custom workflow initial harness state |
