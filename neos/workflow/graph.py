@@ -998,6 +998,11 @@ class MultiAgentWorkflow:
 
         plan = updates["harness_repair_plan"]
         action_types = {action.get("action_type") for action in plan.get("actions", [])}
+        repaired_state = {
+            **repaired_state,
+            "final_response": None,
+            "response_metadata": None,
+        }
 
         if action_types & {
             "request_more_sources",

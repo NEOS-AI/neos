@@ -3,6 +3,8 @@ import sys
 import types
 from contextlib import contextmanager
 
+import pytest
+
 os.environ["GOOGLE_API_KEY"] = "test-key"
 
 import neos.config.settings as settings_module
@@ -77,3 +79,70 @@ def test_routes_non_repair_verdict_to_end():
     }
 
     assert _should_route_to_harness_repair(state) == "end"
+
+
+class _StubSearchOrchestrator:
+    async def orchestrate(self, state):
+        state = dict(state)
+        state["search_results"] = [*state.get("search_results", []), object()]
+        return state
+
+
+class _StubResultProcessor:
+    async def integrate_results(self, state):
+        state = dict(state)
+        state["integrated_results"] = {
+            "total_sources": len(state.get("search_results", []))
+        }
+        return state
+
+
+class _StubResponseGenerator:
+    async def generate_response(self, state):
+        assert state.get("final_response") is None
+        state = dict(state)
+        state["final_response"] = "repaired candidate"
+        return state
+
+
+@pytest.mark.asyncio
+async def test_repair_node_clears_stale_final_response_before_regeneration():
+    from neos.workflow.graph import MultiAgentWorkflow
+
+    workflow = MultiAgentWorkflow()
+    workflow.search_orchestrator = _StubSearchOrchestrator()
+    workflow.result_processor = _StubResultProcessor()
+    workflow.response_generator = _StubResponseGenerator()
+
+    state = {
+        "final_response": "failed candidate",
+        "search_results": [],
+        "analysis_results": [],
+        "generation_results": [],
+        "execution_steps": [],
+        "harness_repair_attempts": 0,
+        "harness_contract": {
+            "mode": "gate",
+            "risk_level": "medium",
+            "min_score": 0.82,
+            "max_repair_attempts": 1,
+        },
+        "harness_metadata": {
+            "check_results": [
+                {
+                    "name": "source_count",
+                    "passed": False,
+                    "score": 0.0,
+                    "severity": "critical",
+                    "summary": "Need more sources",
+                    "repairable": True,
+                }
+            ]
+        },
+        "original_query": "test research topic",
+        "required_agents": [],
+    }
+
+    result = await workflow._research_harness_repair_node(state)
+
+    assert result["final_response"] == "repaired candidate"

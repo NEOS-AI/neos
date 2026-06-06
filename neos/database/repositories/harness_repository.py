@@ -21,6 +21,12 @@ class HarnessRepository:
         evidence_policy = settings.RESEARCH_HARNESS_EVIDENCE_STORAGE_POLICY
         metadata = dict(run.metadata or {})
         metadata["evidence_storage_policy"] = evidence_policy
+        metadata["retention_class"] = (
+            "operational_summary"
+            if evidence_policy == "summary_only"
+            else "sensitive_eval"
+        )
+        metadata["access_policy"] = "internal_harness_review"
         await db_manager.execute(
             """
             INSERT INTO research_harness_runs (

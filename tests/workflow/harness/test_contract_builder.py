@@ -108,3 +108,19 @@ def test_contract_builder_applies_harness_profile_presets():
     assert "factuality" in contract.required_checks
     assert "bias_perspective" in contract.optional_checks
     assert "performance_budget" in contract.optional_checks
+
+
+def test_contract_builder_applies_agent_factuality_audit_profile():
+    contract = build_harness_contract(
+        {
+            "query_intent": "general_chat",
+            "metadata": {"harness_profile": "agent_factuality_audit"},
+            "query_classification": {"complexity_score": 0.1},
+        }
+    )
+
+    assert contract.mode == HarnessMode.GATE
+    assert contract.risk_level.value == "high"
+    assert contract.min_score == 0.88
+    assert "factuality" in contract.required_checks
+    assert "performance_budget" in contract.optional_checks

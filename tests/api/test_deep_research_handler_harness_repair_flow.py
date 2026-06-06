@@ -1,5 +1,6 @@
 import sys
 import types
+from datetime import datetime
 
 import pytest
 
@@ -26,6 +27,13 @@ isodate_module.parse_duration = lambda value: value
 sys.modules.setdefault("isodate", isodate_module)
 
 from neos.api.handlers import deep_research_handlers
+from neos.workflow.harness.models import (
+    HarnessContract,
+    HarnessMode,
+    HarnessRiskLevel,
+    HarnessRun,
+    HarnessVerdict,
+)
 
 
 def test_build_deep_research_repair_service_uses_executor_when_enabled(monkeypatch):
@@ -74,3 +82,76 @@ async def test_refresh_deep_research_totals_after_repair_returns_repository_valu
 
     assert totals == {"total_sections": 3, "total_sources": 8, "total_queries": 5}
     assert repository.report_ids == ["report-1"]
+
+
+class FakeHarnessRepository:
+    def __init__(self):
+        self.saved = []
+
+    async def save_run(self, **kwargs):
+        self.saved.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_persist_deep_research_harness_run_records_repair_provenance(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        deep_research_handlers.settings,
+        "RESEARCH_HARNESS_PERSIST_RUNS",
+        True,
+        raising=False,
+    )
+    repository = FakeHarnessRepository()
+    contract = HarnessContract(
+        mode=HarnessMode.GATE,
+        risk_level=HarnessRiskLevel.HIGH,
+        min_score=0.82,
+    )
+    first_run = HarnessRun(
+        run_id="run-1",
+        mode=HarnessMode.GATE,
+        verdict=HarnessVerdict.NEEDS_REPAIR,
+        score=0.4,
+        checks=[],
+        failed_checks=["source_count"],
+        repair_attempts=0,
+        started_at=datetime.now(),
+    )
+    second_run = HarnessRun(
+        run_id="run-2",
+        mode=HarnessMode.GATE,
+        verdict=HarnessVerdict.PASS,
+        score=0.9,
+        checks=[],
+        failed_checks=[],
+        repair_attempts=1,
+        started_at=datetime.now(),
+    )
+
+    await deep_research_handlers.persist_deep_research_harness_run(
+        run=first_run,
+        contract=contract,
+        report_id="report-1",
+        user_id="user-1",
+        session_id="session-1",
+        repository=repository,
+    )
+    await deep_research_handlers.persist_deep_research_harness_run(
+        run=second_run,
+        contract=contract,
+        report_id="report-1",
+        user_id="user-1",
+        session_id="session-1",
+        repair_result={"executed_actions": [{"status": "executed"}]},
+        repair_attempt=1,
+        repository=repository,
+    )
+
+    assert len(repository.saved) == 2
+    assert repository.saved[0]["report_id"] == "report-1"
+    assert "repair_result" not in repository.saved[0]["run"].metadata
+    assert repository.saved[1]["run"].metadata["repair_result"] == {
+        "executed_actions": [{"status": "executed"}]
+    }
+    assert repository.saved[1]["run"].metadata["repair_attempt"] == 1

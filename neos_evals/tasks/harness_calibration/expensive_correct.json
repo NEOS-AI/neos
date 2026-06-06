@@ -1,0 +1,17 @@
+{
+  "task_id": "harness_calibration_expensive_correct",
+  "name": "Correct but over-budget report",
+  "query": "Calibration fixture for correct reports that exceed performance budget",
+  "expected_sections": ["Summary", "Evidence", "Limitations"],
+  "required_topics": ["runtime budget", "resource usage"],
+  "min_sources": 3,
+  "quality_threshold": 0.8,
+  "graders": ["citation_accuracy", "factual_accuracy"],
+  "pass_threshold": 0.8,
+  "difficulty": "medium",
+  "category": "harness_calibration",
+  "metadata": {
+    "expected_runtime_checks": ["performance_budget"],
+    "expected_failure": "performance_budget"
+  }
+}

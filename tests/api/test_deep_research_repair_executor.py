@@ -2,6 +2,7 @@ import pytest
 
 from neos.api.services.deep_research_repair_executor import (
     DirectDeepResearchRepairExecutor,
+    _select_sections,
 )
 from neos.workflow.harness.models import HarnessRepairAction
 
@@ -194,10 +195,117 @@ async def test_executor_skips_mutation_when_action_has_no_evidence():
         context={"attempt": 1},
     )
 
-    assert result == {
-        "status": "skipped",
-        "reason": "no_repair_sources_found",
-        "added_sources": 0,
-    }
+    assert result["status"] == "skipped"
+    assert result["reason"] == "no_repair_sources_found"
+    assert result["added_sources"] == 0
+    assert result["search_metadata"]["provider"] == "empty_searcher"
+    assert result["search_metadata"]["error_count"] == 0
     assert repository.collection_records == []
     assert repository.section_updates == []
+
+
+@pytest.mark.asyncio
+async def test_search_action_retries_once_and_returns_search_metadata(monkeypatch):
+    attempts = 0
+
+    async def flaky_searcher(query, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise TimeoutError("temporary search timeout")
+        return [
+            {
+                "title": "Recovered source",
+                "url": "https://recovered.example/story",
+                "content": "Evidence after retry",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "neos.api.services.deep_research_repair_executor.settings."
+        "RESEARCH_HARNESS_DIRECT_REPAIR_SEARCH_RETRIES",
+        1,
+    )
+    monkeypatch.setattr(
+        "neos.api.services.deep_research_repair_executor.settings."
+        "RESEARCH_HARNESS_DIRECT_REPAIR_SEARCH_TIMEOUT_SECONDS",
+        5,
+    )
+
+    repository = FakeRepository()
+    executor = DirectDeepResearchRepairExecutor(
+        repository=repository,
+        searcher=flaky_searcher,
+    )
+
+    result = await executor(
+        report_id="report-1",
+        action=HarnessRepairAction(
+            action_type="request_more_sources",
+            target_check="source_count",
+            reason="too few sources",
+            params={"query": "AI market"},
+        ),
+        context={"attempt": 1},
+    )
+
+    assert result["status"] == "executed"
+    assert result["added_sources"] == 1
+    assert result["search_metadata"]["attempts"] == 2
+    assert result["search_metadata"]["error_count"] == 1
+    assert result["search_metadata"]["timeout_seconds"] == 5
+
+
+def test_select_sections_uses_failed_item_section_hints():
+    repair_context = {
+        "sections": [
+            {
+                "section_id": "section-1",
+                "section_order": 1,
+                "section_type": "analysis",
+                "section_title": "Summary",
+                "sources": [{"id": "source-a"}],
+            },
+            {
+                "section_id": "section-2",
+                "section_order": 2,
+                "section_type": "analysis",
+                "section_title": "Methods and data",
+                "sources": [{"source_id": "source-b"}],
+            },
+            {
+                "section_id": "section-3",
+                "section_order": 3,
+                "section_type": "analysis",
+                "section_title": "Risks",
+                "sources": [{"id": "source-c"}],
+            },
+            {
+                "section_id": "appendix-1",
+                "section_order": 4,
+                "section_type": "appendix",
+                "section_title": "Appendix",
+                "sources": [],
+            },
+        ]
+    }
+
+    assert [
+        section["section_id"]
+        for section in _select_sections(repair_context, [{"section_id": "section-2"}])
+    ] == ["section-2"]
+    assert [
+        section["section_id"]
+        for section in _select_sections(repair_context, [{"title": "methods"}])
+    ] == ["section-2"]
+    assert [
+        section["section_id"]
+        for section in _select_sections(repair_context, [{"section_order": 3}])
+    ] == ["section-3"]
+    assert [
+        section["section_id"]
+        for section in _select_sections(repair_context, [{"citation_id": "source-b"}])
+    ] == ["section-2"]
+    assert [
+        section["section_id"] for section in _select_sections(repair_context, [])
+    ] == ["section-1", "section-2", "section-3"]

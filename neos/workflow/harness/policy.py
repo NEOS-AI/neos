@@ -40,6 +40,30 @@ HARNESS_PROFILE_PRESETS: dict[str, dict[str, Any]] = {
         "optional_checks": ["factuality", "bias_perspective", "performance_budget"],
         "min_score": 0.82,
     },
+    "agent_source_audit": {
+        "mode": "gate",
+        "required_checks": ["source_count", "source_diversity", "citation_validity"],
+        "optional_checks": ["performance_budget"],
+        "min_score": 0.82,
+    },
+    "agent_factuality_audit": {
+        "mode": "gate",
+        "required_checks": [
+            "source_count",
+            "citation_validity",
+            "citation_coverage",
+            "factuality",
+        ],
+        "optional_checks": ["performance_budget"],
+        "min_score": 0.88,
+        "risk_level": "high",
+    },
+    "agent_perspective_audit": {
+        "mode": "advisory",
+        "required_checks": ["source_count"],
+        "optional_checks": ["bias_perspective", "source_diversity"],
+        "min_score": 0.74,
+    },
 }
 
 

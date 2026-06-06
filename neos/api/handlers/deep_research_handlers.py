@@ -102,6 +102,46 @@ async def refresh_deep_research_totals_after_repair(
     return await repository.refresh_report_totals(report_id)
 
 
+async def persist_deep_research_harness_run(
+    *,
+    run,
+    contract,
+    report_id: str,
+    user_id: str,
+    session_id: str,
+    repair_result: dict | None = None,
+    repair_attempt: int | None = None,
+    repository=None,
+) -> None:
+    if not getattr(settings, "RESEARCH_HARNESS_PERSIST_RUNS", False):
+        return
+
+    if repair_result is not None or repair_attempt is not None:
+        run.metadata = dict(run.metadata or {})
+        if repair_result is not None:
+            run.metadata["repair_result"] = repair_result
+        if repair_attempt is not None:
+            run.metadata["repair_attempt"] = repair_attempt
+
+    if repository is None:
+        from neos.database.repositories.harness_repository import (
+            harness_repository as default_repository,
+        )
+
+        repository = default_repository
+
+    try:
+        await repository.save_run(
+            run=run,
+            contract=contract,
+            session_id=session_id,
+            report_id=report_id,
+            user_id=user_id,
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to persist deep research harness run: {exc}")
+
+
 async def save_deep_research_report(
     report_id: str,
     user_id: str,
@@ -657,6 +697,13 @@ async def deep_research_stream_generator(
             event_callback=collect_harness_event,
         )
         harness_run = validation.run
+        await persist_deep_research_harness_run(
+            run=harness_run,
+            contract=validation.contract,
+            report_id=report_id,
+            user_id=user_id,
+            session_id=session_id,
+        )
 
         harness_metadata = {
             "mode": harness_run.mode.value,
@@ -726,6 +773,15 @@ async def deep_research_stream_generator(
                     event_callback=collect_harness_event,
                 )
                 harness_run = validation.run
+                await persist_deep_research_harness_run(
+                    run=harness_run,
+                    contract=validation.contract,
+                    report_id=report_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    repair_result=repair_result,
+                    repair_attempt=repair_attempt,
+                )
                 harness_metadata = {
                     "mode": harness_run.mode.value,
                     "verdict": harness_run.verdict.value,

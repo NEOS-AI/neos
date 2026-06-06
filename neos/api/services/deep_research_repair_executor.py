@@ -95,13 +95,11 @@ class DirectDeepResearchRepairExecutor:
         if action.action_type == "search_independent_domains" and not avoid_domains:
             avoid_domains = set(dominant_domains_from_sources(_all_sources(repair_context)))
 
-        raw_results = await _maybe_await(
-            self.searcher(
-                query,
-                action_type=action.action_type,
-                avoid_domains=sorted(avoid_domains),
-                freshness_window_days=action.params.get("freshness_window_days"),
-            )
+        raw_results, search_metadata = await self._search_with_retry(
+            query,
+            action_type=action.action_type,
+            avoid_domains=sorted(avoid_domains),
+            freshness_window_days=action.params.get("freshness_window_days"),
         )
         normalized = [
             normalize_repair_source(raw, index=index, action_type=action.action_type)
@@ -116,9 +114,15 @@ class DirectDeepResearchRepairExecutor:
                 "status": "skipped",
                 "reason": "no_repair_sources_found",
                 "added_sources": 0,
+                "search_metadata": search_metadata,
             }
 
-        repair_event = _repair_event(action, context, added_sources=len(unique_sources))
+        repair_event = _repair_event(
+            action,
+            context,
+            added_sources=len(unique_sources),
+            search_metadata=search_metadata,
+        )
         await self.repository.record_repair_collection(
             report_id=report_id,
             query_text=query,
@@ -132,7 +136,47 @@ class DirectDeepResearchRepairExecutor:
             "status": "executed",
             "added_sources": len(unique_sources),
             "source_domains": dominant_domains_from_sources(unique_sources),
+            "search_metadata": search_metadata,
         }
+
+    async def _search_with_retry(
+        self,
+        query: str,
+        **kwargs: Any,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        timeout_seconds = settings.RESEARCH_HARNESS_DIRECT_REPAIR_SEARCH_TIMEOUT_SECONDS
+        max_retries = max(0, settings.RESEARCH_HARNESS_DIRECT_REPAIR_SEARCH_RETRIES)
+        provider = _search_provider_name(self.searcher)
+        errors: list[str] = []
+
+        for attempt in range(1, max_retries + 2):
+            try:
+                results = await asyncio.wait_for(
+                    _maybe_await(self.searcher(query, **kwargs)),
+                    timeout=timeout_seconds,
+                )
+                return (
+                    results if isinstance(results, list) else [],
+                    {
+                        "attempts": attempt,
+                        "provider": provider,
+                        "timeout_seconds": timeout_seconds,
+                        "error_count": len(errors),
+                    },
+                )
+            except Exception as exc:
+                errors.append(type(exc).__name__)
+
+        return (
+            [],
+            {
+                "attempts": max_retries + 1,
+                "provider": provider,
+                "timeout_seconds": timeout_seconds,
+                "error_count": len(errors),
+                "errors": errors,
+            },
+        )
 
     async def _rebuild_citation_map(
         self,
@@ -308,26 +352,76 @@ def _select_sections(
 ) -> list[dict[str, Any]]:
     sections = list(repair_context.get("sections") or [])
     if not failed_items:
-        return [
-            section
-            for section in sections
-            if str(section.get("section_type") or "").lower() not in {"appendix", "data_collection"}
-        ] or sections[:1]
-    hints = {
-        str(item.get("section") or item.get("section_title") or item.get("title") or "").lower()
-        for item in failed_items
-        if isinstance(item, dict)
-    }
-    hints = {hint for hint in hints if hint}
-    if not hints:
-        return sections[:1]
-    matched = []
+        return _default_repair_sections(sections)
+
+    section_ids: set[str] = set()
+    section_orders: set[int] = set()
+    citation_ids: set[str] = set()
+    hints: set[str] = set()
+    for item in failed_items:
+        if not isinstance(item, dict):
+            continue
+        section_id = item.get("section_id")
+        if section_id is not None:
+            section_ids.add(str(section_id))
+
+        section_order = item.get("section_order")
+        try:
+            if section_order is not None:
+                section_orders.add(int(section_order))
+        except (TypeError, ValueError):
+            pass
+
+        citation_id = item.get("citation_id")
+        if citation_id is not None:
+            citation_ids.add(str(citation_id))
+
+        hint = str(
+            item.get("section")
+            or item.get("section_title")
+            or item.get("title")
+            or ""
+        ).lower()
+        if hint:
+            hints.add(hint)
+
+    if not (section_ids or section_orders or citation_ids or hints):
+        return _default_repair_sections(sections)
+
+    matched: list[dict[str, Any]] = []
     for section in sections:
+        if str(section.get("section_id") or "") in section_ids:
+            matched.append(section)
+            continue
+        try:
+            section_order = int(section.get("section_order"))
+        except (TypeError, ValueError):
+            section_order = None
+        if section_order is not None and section_order in section_orders:
+            matched.append(section)
+            continue
+        source_ids = {
+            str(source.get("id") or source.get("source_id") or "")
+            for source in _section_sources(section)
+            if source.get("id") or source.get("source_id")
+        }
+        if citation_ids and source_ids & citation_ids:
+            matched.append(section)
+            continue
         title = str(section.get("section_title") or "").lower()
         section_type = str(section.get("section_type") or "").lower()
         if any(hint in title or hint in section_type for hint in hints):
             matched.append(section)
     return matched
+
+
+def _default_repair_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        section
+        for section in sections
+        if str(section.get("section_type") or "").lower()
+        not in {"appendix", "data_collection"}
+    ] or sections[:1]
 
 
 def _rewrite_invalid_numeric_citations(content: str, source_count: int) -> str:
@@ -346,6 +440,12 @@ def _rewrite_invalid_numeric_citations(content: str, source_count: int) -> str:
 def _first_section_id(repair_context: dict[str, Any]) -> str | None:
     sections = repair_context.get("sections") or []
     return sections[0].get("section_id") if sections else None
+
+
+def _search_provider_name(searcher: SearchExecutor) -> str:
+    if searcher is _default_tavily_search:
+        return "tavily"
+    return getattr(searcher, "__name__", searcher.__class__.__name__)
 
 
 def _repair_event(

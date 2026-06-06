@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from neos.workflow.harness.models import (
@@ -13,6 +14,15 @@ from neos.workflow.harness.repair import HarnessRepairPlanner
 
 
 ActionExecutor = Callable[..., Any]
+
+
+@dataclass
+class RepairActionResult:
+    status: str
+    reason: str | None = None
+    added_sources: int = 0
+    updated_sections: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class DeepResearchRepairService:
@@ -136,6 +146,18 @@ class DeepResearchRepairService:
         )
         if inspect.isawaitable(result):
             result = await result
+        return self._normalize_action_result(result)
+
+    @staticmethod
+    def _normalize_action_result(result: Any) -> dict[str, Any]:
+        if isinstance(result, RepairActionResult):
+            return {
+                "status": result.status,
+                "reason": result.reason,
+                "added_sources": result.added_sources,
+                "updated_sections": result.updated_sections,
+                **result.metadata,
+            }
         if isinstance(result, dict):
             return result
         return {"status": "executed"}

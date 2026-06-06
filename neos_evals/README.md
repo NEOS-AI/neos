@@ -4,16 +4,16 @@ Automated evaluation framework for the NEOS Hyper Deep Research Agent, based on 
 
 ## 📊 Status
 
-**Current Phase:** ✅ Phase 1 - Core Infrastructure (COMPLETE)
+**Current Phase:** Harness calibration bridge added; CLI trial execution still pending
 
 | Phase | Status | Description |
 |-------|--------|-------------|
 | Phase 1 | ✅ **COMPLETE** | Core evaluation engine, task management, trial execution |
-| Phase 2 | 🔜 Next | Code-based graders implementation |
-| Phase 3 | ⏳ Planned | Model-based graders implementation |
-| Phase 4 | ⏳ Planned | Task dataset creation (50 tasks) |
+| Phase 2 | ✅ **COMPLETE** | Code-based graders for citations, sources, structure, metadata, and performance |
+| Phase 3 | ✅ **COMPLETE** | Model-based graders for factual accuracy, topic coverage, and quality assessment |
+| Phase 4 | 🚧 In Progress | Task datasets, including harness calibration fixtures |
 | Phase 5 | ⏳ Planned | Metrics & analytics dashboard |
-| Phase 6 | ⏳ Planned | Integration & testing |
+| Phase 6 | 🚧 Partial | Runtime harness calibration script; `main.py run` execution remains pending |
 
 ## 🏗️ Architecture
 
@@ -57,7 +57,7 @@ Abstract base for all graders:
 #### 4. **TaskManager** - Task Loading/Storage
 Manages evaluation tasks:
 - Load tasks from JSON files
-- Organize by category (factual, comparative, controversial)
+- Organize by category (factual, comparative, controversial, regression, harness_calibration)
 - Validate task definitions
 - Create example tasks
 
@@ -111,7 +111,24 @@ python main.py list-tasks
 
 # List tasks by category
 python main.py list-tasks --category factual
+
+# Compare runtime harness verdicts with offline grader results
+python ../scripts/harness_calibration.py \
+  --input ../tmp/harness_candidates.jsonl \
+  --output ../tmp/harness_calibration_report.jsonl \
+  --profile mission_strict
 ```
+
+## 🧪 Harness Calibration Fixtures
+
+The `harness_calibration` task category contains focused fixtures for comparing runtime harness checks with offline graders:
+
+- `high_citation_wrong`: expected runtime failure `factuality`
+- `source_light`: expected runtime failure `source_count`
+- `single_perspective`: expected runtime failure `bias_perspective`
+- `expensive_correct`: expected runtime failure `performance_budget`
+
+Use these fixtures before promoting model-based `factuality` or `bias_perspective` checks from optional/advisory to required gate checks.
 
 ## 📝 Task Definition Example
 

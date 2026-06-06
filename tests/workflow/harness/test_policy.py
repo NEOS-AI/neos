@@ -1,5 +1,8 @@
 from neos.workflow.harness.models import HarnessMode, HarnessRiskLevel
-from neos.workflow.harness.policy import decide_harness_policy
+from neos.workflow.harness.policy import (
+    decide_harness_policy,
+    get_harness_profile_config,
+)
 
 
 def test_hyper_deep_defaults_to_gate():
@@ -121,3 +124,27 @@ def test_explicit_mode_takes_precedence_over_profile():
 
     assert decision.mode == HarnessMode.ADVISORY
     assert decision.reason == "explicit_mode"
+
+
+def test_agent_oriented_harness_profiles_are_available():
+    source_audit = get_harness_profile_config("agent_source_audit")
+    factuality_audit = get_harness_profile_config("agent_factuality_audit")
+    perspective_audit = get_harness_profile_config("agent_perspective_audit")
+
+    assert source_audit["mode"] == "gate"
+    assert source_audit["required_checks"] == [
+        "source_count",
+        "source_diversity",
+        "citation_validity",
+    ]
+    assert source_audit["min_score"] == 0.82
+
+    assert factuality_audit["mode"] == "gate"
+    assert "factuality" in factuality_audit["required_checks"]
+    assert factuality_audit["risk_level"] == "high"
+    assert factuality_audit["min_score"] == 0.88
+
+    assert perspective_audit["mode"] == "advisory"
+    assert perspective_audit["required_checks"] == ["source_count"]
+    assert "bias_perspective" in perspective_audit["optional_checks"]
+    assert perspective_audit["min_score"] == 0.74

@@ -87,6 +87,8 @@ async def test_harness_repository_summary_only_policy_stores_compact_details(mon
     assert json.loads(check_values[7]) == [{"count": 1}]
     run_metadata = json.loads(fake_db.calls[0][1][12])
     assert run_metadata["evidence_storage_policy"] == "summary_only"
+    assert run_metadata["retention_class"] == "operational_summary"
+    assert run_metadata["access_policy"] == "internal_harness_review"
 
 
 @pytest.mark.asyncio
@@ -127,6 +129,9 @@ async def test_harness_repository_full_policy_preserves_raw_evidence(monkeypatch
     failed_item = json.loads(fake_db.calls[1][1][7])[0]
     assert failed_item["claim"] == "Sensitive unsupported claim"
     assert failed_item["url"] == "https://example.com/private"
+    run_metadata = json.loads(fake_db.calls[0][1][12])
+    assert run_metadata["retention_class"] == "sensitive_eval"
+    assert run_metadata["access_policy"] == "internal_harness_review"
 
 
 def _contract():
