@@ -254,6 +254,7 @@ class Settings(BaseSettings):
     RESEARCH_HARNESS_PERSIST_RUNS: bool = _parse_bool(env_vars.get("RESEARCH_HARNESS_PERSIST_RUNS"), False)
     RESEARCH_HARNESS_EVIDENCE_STORAGE_POLICY: str = env_vars.get("RESEARCH_HARNESS_EVIDENCE_STORAGE_POLICY", "summary_only")
     RESEARCH_HARNESS_CACHE_POLICY: str = env_vars.get("RESEARCH_HARNESS_CACHE_POLICY", "passed_only")
+    RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED: bool = _parse_bool(env_vars.get("RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED"), True)
 
     # 동시성 설정
     MAX_CONCURRENT_WORKFLOWS: int = int(env_vars.get("MAX_CONCURRENT_WORKFLOWS", 100))

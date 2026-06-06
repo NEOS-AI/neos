@@ -73,6 +73,35 @@ def is_deep_research_harness_blocked(run) -> bool:
     return run.mode.value == "gate" and run.verdict.value in {"fail", "needs_repair"}
 
 
+def build_deep_research_repair_service():
+    from neos.api.services.deep_research_repair_service import DeepResearchRepairService
+
+    if not getattr(settings, "RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED", True):
+        return DeepResearchRepairService()
+
+    from neos.api.services.deep_research_repair_executor import (
+        DirectDeepResearchRepairExecutor,
+    )
+
+    return DeepResearchRepairService(
+        action_executor=DirectDeepResearchRepairExecutor(),
+    )
+
+
+async def refresh_deep_research_totals_after_repair(
+    report_id: str,
+    *,
+    repository=None,
+) -> dict[str, int]:
+    if repository is None:
+        from neos.api.repositories.deep_research_repair_repository import (
+            DeepResearchRepairRepository,
+        )
+
+        repository = DeepResearchRepairRepository()
+    return await repository.refresh_report_totals(report_id)
+
+
 async def save_deep_research_report(
     report_id: str,
     user_id: str,
@@ -592,6 +621,7 @@ async def deep_research_stream_generator(
         total_sources = final_report.get("total_sources") or 0
         total_queries = final_report.get("total_queries") or 0
         processing_time_ms = final_report.get("processing_time_ms") or int((datetime.now() - start_time).total_seconds() * 1000)
+        warnings = []
 
         from neos.api.services.deep_research_harness_service import (
             DeepResearchHarnessService,
@@ -641,10 +671,6 @@ async def deep_research_stream_generator(
 
         if is_deep_research_harness_blocked(harness_run):
             if harness_run.mode.value == "gate" and harness_run.verdict.value == "needs_repair":
-                from neos.api.services.deep_research_repair_service import (
-                    DeepResearchRepairService,
-                )
-
                 repair_attempt = harness_run.repair_attempts + 1
                 repair_started = DeepResearchEvent(
                     event=DeepResearchEventType.HARNESS_REPAIR_STARTED,
@@ -653,7 +679,7 @@ async def deep_research_stream_generator(
                 )
                 yield f"data: {repair_started.model_dump_json()}\n\n"
 
-                repair_result = await DeepResearchRepairService().repair(
+                repair_result = await build_deep_research_repair_service().repair(
                     report_id=report_id,
                     research_topic=research_topic,
                     contract=validation.contract,
@@ -667,6 +693,19 @@ async def deep_research_stream_generator(
                         "total_sources": total_sources,
                     },
                 )
+                try:
+                    refreshed_totals = await refresh_deep_research_totals_after_repair(report_id)
+                    completed_sections = refreshed_totals["total_sections"]
+                    total_sources = refreshed_totals["total_sources"]
+                    total_queries = refreshed_totals["total_queries"]
+                    repair_result = {
+                        **repair_result,
+                        "refreshed_totals": refreshed_totals,
+                    }
+                except Exception as exc:
+                    logger.warning(f"Failed to refresh repair totals: {exc}")
+                    warnings.append(f"Repair total refresh failed: {str(exc)}")
+
                 repair_completed = DeepResearchEvent(
                     event=DeepResearchEventType.HARNESS_REPAIR_COMPLETED,
                     report_id=report_id,
@@ -738,9 +777,6 @@ async def deep_research_stream_generator(
         final_content_summary += f"- Queries: {total_queries}\n"
         final_content_summary += f"- Processing time: {processing_time_ms / 1000:.2f}s\n\n"
         final_content_summary += "_Full report available in deep research system_"
-
-        # Track warnings for non-critical errors
-        warnings = []
 
         try:
             # Update message content and metadata in database
