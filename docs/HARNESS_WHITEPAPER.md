@@ -1220,15 +1220,16 @@ count, token count, or repair attempts exceed policy.
 
 The next roadmap items are:
 
-- Harden Direct Deep Research repair execution in staging, including search
+- Inspect Direct Deep Research repair execution in staging, including search
   provider behavior, latency, retries, and live mutation observability.
 - Calibrate model-based factuality and bias/perspective thresholds against
   offline eval fixtures.
 - Build client UX for displaying harness and repair progress events.
 - Review privacy policy before enabling redacted or full evidence storage in
   staging/production.
-- Expand calibration docs and fixtures for high-citation but factually wrong,
-  single-perspective, source-light, and expensive-but-correct reports.
+- Run the calibration fixtures for high-citation but factually wrong,
+  single-perspective, source-light, and expensive-but-correct reports and
+  record agreement decisions in `docs/HARNESS_EVAL_CALIBRATION.md`.
 
 ---
 
@@ -1314,6 +1315,7 @@ That invariant is the foundation for continued rollout and calibration.
 | `neos/workflow/processors/response_generator.py` | Response metadata shape |
 | `.env.template` | Harness rollout settings |
 | `docs/HARNESS_EVAL_CALIBRATION.md` | Runtime/offline model-check calibration note |
+| `docs/HARNESS_STAGING_ROLLOUT.md` | Staging enablement, rollback, and dashboard checklist |
 
 ## Appendix B: Regression Tests
 
