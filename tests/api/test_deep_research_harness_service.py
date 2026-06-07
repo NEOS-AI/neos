@@ -120,6 +120,48 @@ async def test_service_passes_harness_event_callback(monkeypatch):
     ]
 
 
+@pytest.mark.asyncio
+async def test_service_passes_repair_attempts_to_runner(monkeypatch):
+    captured = {}
+
+    class FakeRunner:
+        async def arun(self, **kwargs):
+            captured["repair_attempts"] = kwargs["repair_attempts"]
+            now = datetime.now()
+            return HarnessRun(
+                run_id="run-1",
+                mode=HarnessMode.GATE,
+                verdict=HarnessVerdict.FAIL,
+                score=0.4,
+                checks=[],
+                failed_checks=["source_count"],
+                repair_attempts=kwargs["repair_attempts"],
+                started_at=now,
+                completed_at=now,
+            )
+
+    service = DeepResearchHarnessService(runner=FakeRunner())
+
+    async def fake_sections(report_id):
+        return []
+
+    async def fake_collection(report_id):
+        return []
+
+    monkeypatch.setattr(service, "_fetch_sections", fake_sections)
+    monkeypatch.setattr(service, "_fetch_collection_rows", fake_collection)
+
+    validation = await service.validate_report(
+        report_id="report-1",
+        research_topic="AI market",
+        metadata={},
+        repair_attempts=1,
+    )
+
+    assert captured["repair_attempts"] == 1
+    assert validation.run.repair_attempts == 1
+
+
 class _ValueObject:
     def __init__(self, value):
         self.value = value

@@ -221,12 +221,11 @@ class DirectDeepResearchRepairExecutor:
     ) -> dict[str, Any]:
         failed_items = action.params.get("failed_items") or []
         new_sources: list[dict[str, Any]] = []
+        search_metadata: dict[str, Any] | None = None
         if action.action_type == "add_perspective_balancing_sources":
-            raw_results = await _maybe_await(
-                self.searcher(
-                    f"{context.get('research_topic') or context.get('original_query') or ''} counter perspective stakeholders",
-                    action_type=action.action_type,
-                )
+            raw_results, search_metadata = await self._search_with_retry(
+                f"{context.get('research_topic') or context.get('original_query') or ''} counter perspective stakeholders",
+                action_type=action.action_type,
             )
             new_sources = [
                 normalize_repair_source(raw, index=index, action_type=action.action_type)
@@ -240,7 +239,12 @@ class DirectDeepResearchRepairExecutor:
                     action_type=action.action_type,
                     results=new_sources,
                     section_id=_first_section_id(repair_context),
-                    metadata=_repair_event(action, context, added_sources=len(new_sources)),
+                    metadata=_repair_event(
+                        action,
+                        context,
+                        added_sources=len(new_sources),
+                        search_metadata=search_metadata,
+                    ),
                 )
 
         selected_sections = _select_sections(repair_context, failed_items)
@@ -289,6 +293,7 @@ class DirectDeepResearchRepairExecutor:
             "status": "executed",
             "updated_sections": updated_sections,
             "added_sources": len(new_sources),
+            **({"search_metadata": search_metadata} if search_metadata else {}),
         }
 
 
@@ -310,10 +315,7 @@ async def _default_tavily_search(query: str, **kwargs: Any) -> list[dict[str, An
             response = future.result(timeout=20)
         return response.get("results", []) if isinstance(response, dict) else []
 
-    try:
-        return await asyncio.wait_for(asyncio.to_thread(run_search), timeout=25)
-    except Exception:
-        return []
+    return await asyncio.wait_for(asyncio.to_thread(run_search), timeout=25)
 
 
 def _query_for_action(action: HarnessRepairAction, context: dict[str, Any]) -> str:

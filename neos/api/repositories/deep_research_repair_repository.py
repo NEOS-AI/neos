@@ -181,12 +181,19 @@ class DeepResearchRepairRepository:
             SELECT
                 COALESCE((SELECT COUNT(*) FROM hyper_research_sections WHERE report_id = $1), 0),
                 COALESCE((SELECT SUM(sources_count) FROM hyper_research_sections WHERE report_id = $1), 0),
-                COALESCE((SELECT COUNT(*) FROM hyper_research_data_collection WHERE report_id = $1), 0)
+                COALESCE((SELECT COUNT(*) FROM hyper_research_data_collection WHERE report_id = $1), 0),
+                COALESCE((
+                    SELECT SUM(results_count)
+                    FROM hyper_research_data_collection
+                    WHERE report_id = $1 AND query_type = 'harness_repair'
+                ), 0)
         """
         row = await self.db.fetch_one(totals_query, report_id)
+        section_sources = int(row[1] or 0) if row else 0
+        repair_collection_sources = int(row[3] or 0) if row and len(row) > 3 else 0
         totals = {
             "total_sections": int(row[0] or 0) if row else 0,
-            "total_sources": int(row[1] or 0) if row else 0,
+            "total_sources": section_sources + repair_collection_sources,
             "total_queries": int(row[2] or 0) if row else 0,
         }
         update_query = """

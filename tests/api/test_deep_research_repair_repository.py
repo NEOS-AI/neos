@@ -118,3 +118,15 @@ async def test_refresh_report_totals_recomputes_and_returns_handler_values():
     assert totals == {"total_sections": 2, "total_sources": 4, "total_queries": 3}
     _, params = db.execute_calls[0]
     assert params == ("report-1", 2, 4, 3)
+
+
+@pytest.mark.asyncio
+async def test_refresh_report_totals_counts_repair_collection_sources():
+    db = FakeDB()
+    db.fetch_one_results = [(2, 4, 3, 2)]
+
+    totals = await DeepResearchRepairRepository(db=db).refresh_report_totals("report-1")
+
+    assert totals == {"total_sections": 2, "total_sources": 6, "total_queries": 3}
+    _, params = db.execute_calls[0]
+    assert params == ("report-1", 2, 6, 3)

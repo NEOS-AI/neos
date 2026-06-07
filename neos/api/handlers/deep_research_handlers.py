@@ -76,7 +76,7 @@ def is_deep_research_harness_blocked(run) -> bool:
 def build_deep_research_repair_service():
     from neos.api.services.deep_research_repair_service import DeepResearchRepairService
 
-    if not getattr(settings, "RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED", True):
+    if not getattr(settings, "RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED", False):
         return DeepResearchRepairService()
 
     from neos.api.services.deep_research_repair_executor import (
@@ -771,6 +771,7 @@ async def deep_research_stream_generator(
                         "total_sources": total_sources,
                     },
                     event_callback=collect_harness_event,
+                    repair_attempts=repair_attempt,
                 )
                 harness_run = validation.run
                 await persist_deep_research_harness_run(

@@ -33,6 +33,7 @@ class DeepResearchHarnessService:
         research_topic: str,
         metadata: dict[str, Any] | None = None,
         event_callback: object | None = None,
+        repair_attempts: int = 0,
     ) -> DeepResearchHarnessValidation:
         sections = await self._fetch_sections(report_id)
         collection_rows = await self._fetch_collection_rows(report_id)
@@ -56,6 +57,7 @@ class DeepResearchHarnessService:
                 "total_sources": (metadata or {}).get("total_sources"),
             },
             event_callback=event_callback,
+            repair_attempts=repair_attempts,
         )
         return DeepResearchHarnessValidation(
             run=run,

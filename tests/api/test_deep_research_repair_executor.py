@@ -256,6 +256,61 @@ async def test_search_action_retries_once_and_returns_search_metadata(monkeypatc
     assert result["search_metadata"]["timeout_seconds"] == 5
 
 
+@pytest.mark.asyncio
+async def test_perspective_repair_uses_retry_metadata(monkeypatch):
+    attempts = 0
+
+    async def flaky_searcher(query, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise TimeoutError("temporary perspective search timeout")
+        return [
+            {
+                "title": "Counter perspective",
+                "url": "https://counter.example/story",
+                "content": "Evidence for a counter perspective",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "neos.api.services.deep_research_repair_executor.settings."
+        "RESEARCH_HARNESS_DIRECT_REPAIR_SEARCH_RETRIES",
+        1,
+    )
+    monkeypatch.setattr(
+        "neos.api.services.deep_research_repair_executor.settings."
+        "RESEARCH_HARNESS_DIRECT_REPAIR_SEARCH_TIMEOUT_SECONDS",
+        5,
+    )
+
+    repository = FakeRepository()
+    executor = DirectDeepResearchRepairExecutor(
+        repository=repository,
+        searcher=flaky_searcher,
+        regenerator=FakeRegenerator(),
+    )
+
+    result = await executor(
+        report_id="report-1",
+        action=HarnessRepairAction(
+            action_type="add_perspective_balancing_sources",
+            target_check="bias_perspective",
+            reason="single perspective",
+            params={"failed_items": [{"section": "Summary"}]},
+        ),
+        context={"research_topic": "AI market", "attempt": 1},
+    )
+
+    assert result["status"] == "executed"
+    assert result["added_sources"] == 1
+    assert result["search_metadata"]["attempts"] == 2
+    assert result["search_metadata"]["error_count"] == 1
+    assert repository.collection_records[0]["metadata"]["search_metadata"][
+        "attempts"
+    ] == 2
+
+
 def test_select_sections_uses_failed_item_section_hints():
     repair_context = {
         "sections": [

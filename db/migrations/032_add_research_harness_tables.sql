@@ -1,4 +1,8 @@
 -- Migration 032: Dedicated Research Harness persistence
+--
+-- Raw check evidence is controlled by RESEARCH_HARNESS_EVIDENCE_STORAGE_POLICY.
+-- The application default is summary-only storage; redacted or full evidence
+-- should only be enabled after an explicit review of runtime data sensitivity.
 
 CREATE TABLE IF NOT EXISTS research_harness_runs (
     id SERIAL PRIMARY KEY,
