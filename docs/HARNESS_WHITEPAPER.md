@@ -1000,7 +1000,7 @@ RESEARCH_HARNESS_STORE_FULL_CHECK_DETAILS=false
 RESEARCH_HARNESS_PERSIST_RUNS=false
 RESEARCH_HARNESS_EVIDENCE_STORAGE_POLICY=summary_only
 RESEARCH_HARNESS_CACHE_POLICY=passed_only
-RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED=true
+RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED=false
 ```
 
 Recommended rollout sequence:
@@ -1009,8 +1009,9 @@ Recommended rollout sequence:
    pass/fail/needs-repair distribution.
 2. Keep standard workflow repair budgets conservative
    (`RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS=1`) while observing latency.
-3. Roll direct Deep Research gate and repair execution through staging with
-   `RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED=true`. Verify repair events are
+3. Roll direct Deep Research gate validation through staging first. Turn on
+   repair mutation with `RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED=true` only after
+   repair events and report mutations are reviewed. Verify repair events are
    emitted, executed/skipped action metadata is explicit, refreshed totals are
    reflected in revalidation metadata, and failed reports are not marked
    completed.
@@ -1082,12 +1083,12 @@ The harness improves safety in several concrete ways:
      sensitive text fields and strips URLs to domains. Full mode is explicit.
 
 10. **Safe Direct repair default**
-    - Direct Deep Research repair orchestration is bounded and executor-driven.
-      The default executor records repair provenance, mutates only targeted
-      sections or repair collection rows, refreshes report totals, and always
-      returns to harness revalidation before completion. If Direct repair
-      mutation is disabled, planned actions are skipped explicitly rather than
-      mutating reports implicitly.
+    - Direct Deep Research repair mutation is disabled by default. When enabled,
+      repair orchestration is bounded and executor-driven: the default executor
+      records repair provenance, mutates only targeted sections or repair
+      collection rows, refreshes report totals, and always returns to harness
+      revalidation before completion. When mutation remains disabled, planned
+      actions are skipped explicitly rather than mutating reports implicitly.
 
 These properties are still bounded by current implementation limits. For
 example, model-based factuality is only as good as the sampled claims, source
