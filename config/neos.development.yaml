@@ -1,0 +1,13 @@
+environment: development
+api:
+  debug: false
+  cors:
+    allowed_origins:
+      - http://localhost:3000
+observability:
+  metrics_enabled: false
+telemetry:
+  otel:
+    enabled: false
+storage:
+  provider: local

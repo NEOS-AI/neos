@@ -1,0 +1,35 @@
+# Copy this file to config/neos.local.yaml for local non-secret runtime changes.
+# Keep API keys, passwords, tokens, and credential-bearing URLs in .env or a
+# NEOS_SECRETS_PATH dotenv file.
+environment: development
+api:
+  debug: false
+  cors:
+    allowed_origins:
+      - http://localhost:3000
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-5-20250929
+  temperature: 0.7
+  timeout: 180
+embedding:
+  provider: gemini
+  model: gemini-embedding-2-flash
+  dimension: 3072
+research_harness:
+  enabled: true
+  default_mode: auto
+  gate_threshold: 0.82
+  direct_repair:
+    enabled: false
+sources:
+  reddit_user_agent: NEOS-Research-Engine/1.0
+  sec_edgar_user_agent: NEOS-Research contact@example.com
+  openalex_email: ops@example.com
+storage:
+  provider: local
+  local:
+    path: storage/documents
+telemetry:
+  otel:
+    enabled: false
