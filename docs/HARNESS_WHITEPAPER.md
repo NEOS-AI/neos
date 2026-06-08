@@ -358,7 +358,7 @@ Policy selection happens in `decide_harness_policy()`.
 
 The current decision order is:
 
-1. If `RESEARCH_HARNESS_ENABLED=false`, return `off`.
+1. If `research_harness.enabled: false`, return `off`.
 2. If request metadata explicitly sets a harness mode, honor it when allowed.
 3. If metadata selects a known `harness_profile`, apply the profile mode,
    threshold, risk level, and repair budget.
@@ -803,7 +803,7 @@ issues.
 | Gate verdict did not block finalization | Fixed through result/session completion policy |
 | Harness validated intermediate text | Fixed by moving harness after response generation |
 | Freshness-required gate could pass with no source dates | Fixed by making missing dates critical in gate mode |
-| Global disable could be overridden by explicit request mode | Fixed by making `RESEARCH_HARNESS_ENABLED=false` authoritative |
+| Global disable could be overridden by explicit request mode | Fixed by making `research_harness.enabled: false` authoritative |
 | `required_checks` selected checks but did not make failures blocking | Fixed in runner verdict logic |
 | `.env.template` did not document settings | Fixed by adding research harness configuration |
 | Harness unit tests triggered DB setup noise | Reduced by skipping DB fixtures for harness-focused tests |
@@ -980,27 +980,31 @@ logs did not fail the verification commands above.
 
 ## 15. Operational Rollout
 
-The harness is controlled by environment settings:
+The harness is controlled by YAML settings:
 
-```text
-RESEARCH_HARNESS_ENABLED=true
-RESEARCH_HARNESS_ALLOW_OFF=false
-RESEARCH_HARNESS_DEFAULT_MODE=auto
-RESEARCH_HARNESS_GATE_THRESHOLD=0.82
-RESEARCH_HARNESS_ADVISORY_THRESHOLD=0.70
-RESEARCH_HARNESS_HIGH_RISK_THRESHOLD=0.90
-RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS=1
-RESEARCH_HARNESS_HYPER_DEEP_REPAIR_ATTEMPTS=2
-RESEARCH_HARNESS_MODEL_CHECKS_ENABLED=true
-RESEARCH_HARNESS_MODEL_CHECK_TIMEOUT_SECONDS=20
-RESEARCH_HARNESS_MODEL_CHECK_MAX_CLAIMS=8
-RESEARCH_HARNESS_MODEL_CHECK_PROVIDER=
-RESEARCH_HARNESS_MODEL_CHECK_MODEL=
-RESEARCH_HARNESS_STORE_FULL_CHECK_DETAILS=false
-RESEARCH_HARNESS_PERSIST_RUNS=false
-RESEARCH_HARNESS_EVIDENCE_STORAGE_POLICY=summary_only
-RESEARCH_HARNESS_CACHE_POLICY=passed_only
-RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED=false
+```yaml
+research_harness:
+  enabled: true
+  allow_off: false
+  default_mode: auto
+  gate_threshold: 0.82
+  advisory_threshold: 0.70
+  high_risk_threshold: 0.90
+  max_repair_attempts: 1
+  hyper_deep_repair_attempts: 2
+  model_checks:
+    enabled: true
+    timeout_seconds: 20
+    max_claims: 8
+    provider: ""
+    model: ""
+  persistence:
+    store_full_check_details: false
+    persist_runs: false
+    evidence_storage_policy: summary_only
+    cache_policy: passed_only
+  direct_repair:
+    enabled: false
 ```
 
 Recommended rollout sequence:
@@ -1008,9 +1012,9 @@ Recommended rollout sequence:
 1. Enable the integrated harness in internal environments and inspect
    pass/fail/needs-repair distribution.
 2. Keep standard workflow repair budgets conservative
-   (`RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS=1`) while observing latency.
+   (`research_harness.max_repair_attempts: 1`) while observing latency.
 3. Roll direct Deep Research gate validation through staging first. Turn on
-   repair mutation with `RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED=true` only after
+   repair mutation with `research_harness.direct_repair.enabled: true` only after
    repair events and report mutations are reviewed. Verify repair events are
    emitted, executed/skipped action metadata is explicit, refreshed totals are
    reflected in revalidation metadata, and failed reports are not marked
@@ -1020,8 +1024,8 @@ Recommended rollout sequence:
 5. Expose harness events in clients so users can see validation and repair
    progress.
 6. Apply migration `032_add_research_harness_tables.sql`, then enable
-   `RESEARCH_HARNESS_PERSIST_RUNS=true` after migration validation.
-7. Keep `RESEARCH_HARNESS_EVIDENCE_STORAGE_POLICY=summary_only` by default.
+   `research_harness.persistence.persist_runs: true` after migration validation.
+7. Keep `research_harness.persistence.evidence_storage_policy: summary_only` by default.
    Move to `redacted` only after reviewing stored rows for sensitive text
    leakage. Use `full` only in controlled internal eval environments.
 8. If repair mutation needs a narrow rollback during staging, set
