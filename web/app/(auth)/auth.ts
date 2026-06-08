@@ -3,6 +3,7 @@ import type { DefaultJWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import { DUMMY_PASSWORD } from "@/lib/constants";
+import { getBackendUrl, getGoogleOAuthConfig } from "@/lib/server-config";
 import { compare } from "bcrypt-ts";
 import { authConfig } from "./auth.config";
 
@@ -20,7 +21,7 @@ function mapBackendRole(beRole: string): UserType {
 }
 
 async function refreshAccessToken(token: any) {
-  const backendUrl = process.env.BACKEND_URL || "http://localhost:8518";
+  const backendUrl = getBackendUrl();
 
   try {
     if (!token.backendRefreshToken) throw new Error("No refresh token");
@@ -102,8 +103,8 @@ export const {
   ...authConfig,
   providers: [
     Google({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      clientId: getGoogleOAuthConfig().clientId!,
+      clientSecret: getGoogleOAuthConfig().clientSecret!,
       authorization: {
         params: { prompt: "consent", access_type: "offline", response_type: "code" },
       },
@@ -111,7 +112,7 @@ export const {
     Credentials({
       credentials: {},
       async authorize({ email, password }: any) {
-        const backendUrl = process.env.BACKEND_URL || "http://localhost:8518";
+        const backendUrl = getBackendUrl();
 
         try {
           const response = await fetch(`${backendUrl}/api/v1/auth/login`, {
@@ -151,7 +152,7 @@ export const {
       id: "guest",
       credentials: {},
       async authorize() {
-        const backendUrl = process.env.BACKEND_URL || "http://localhost:8518";
+        const backendUrl = getBackendUrl();
 
         try {
           const response = await fetch(`${backendUrl}/api/v1/auth/guest`, {
@@ -185,7 +186,7 @@ export const {
   callbacks: {
     async signIn({ user, account }) {
       if (account?.provider === "google") {
-        const backendUrl = process.env.BACKEND_URL || "http://localhost:8518";
+        const backendUrl = getBackendUrl();
 
         try {
           const response = await fetch(`${backendUrl}/api/v1/auth/oauth/google`, {

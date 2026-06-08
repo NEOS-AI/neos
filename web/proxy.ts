@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import { isDevelopmentEnvironment } from "./lib/constants";
+import { getAuthSecret } from "./lib/server-config";
 
 
 export async function proxy(request: NextRequest) {
@@ -20,7 +21,7 @@ export async function proxy(request: NextRequest) {
 
   const token = await getToken({
     req: request,
-    secret: process.env.AUTH_SECRET,
+    secret: getAuthSecret(),
     secureCookie: !isDevelopmentEnvironment,
   });
 

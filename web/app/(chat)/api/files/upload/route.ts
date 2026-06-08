@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { auth } from "@/app/(auth)/auth";
+import { getBackendUrl } from "@/lib/server-config";
 
 const SUPPORTED_MIME_TYPES = [
   // Images
@@ -77,7 +78,7 @@ export async function POST(request: Request) {
     }
 
     // 백엔드로 multipart 전송 (Content-Type은 fetch가 자동으로 boundary 포함하여 설정)
-    const backendUrl = process.env.BACKEND_URL || "http://localhost:8518";
+    const backendUrl = getBackendUrl();
     const uploadFormData = new FormData();
     uploadFormData.append("file", file, filename);
     uploadFormData.append("user_id", userId);

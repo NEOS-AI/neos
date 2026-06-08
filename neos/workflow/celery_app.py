@@ -12,10 +12,11 @@ from celery.signals import worker_process_init, worker_process_shutdown
 from kombu import Queue, Exchange
 import logging
 
-from neos.config.settings import settings
+from neos.config.settings import get_settings
 
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 # Celery 앱 생성
 app = Celery(

@@ -8,7 +8,7 @@ import time
 import uuid
 import asyncio
 
-from neos.config.settings import settings
+from neos.config.settings import get_settings
 from neos.database.connection import db_manager
 from neos.utils.cache import cache_manager
 from neos.utils.embeddings import embedding_manager
@@ -43,6 +43,9 @@ from neos.workflow.telemetry import setup_telemetry, instrument_app, instrument_
 
 
 __VERSION__ = "0.22.0"
+
+
+settings = get_settings()
 
 
 # 로깅 설정

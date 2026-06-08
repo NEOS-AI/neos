@@ -1,0 +1,754 @@
+from __future__ import annotations
+
+import logging
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
+
+
+def _split_csv(value: Any) -> Any:
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return value
+
+
+class StrictConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+
+class CorsConfig(StrictConfigModel):
+    allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    allow_credentials: bool = True
+
+    @field_validator("allowed_origins", mode="before")
+    @classmethod
+    def parse_allowed_origins(cls, value: Any) -> Any:
+        return _split_csv(value)
+
+
+class GatewayModeConfig(StrictConfigModel):
+    enabled: bool = False
+    user_id_header: str = "X-User-ID"
+    trusted_ips: list[str] = Field(default_factory=lambda: ["127.0.0.1", "::1"])
+
+    @field_validator("trusted_ips", mode="before")
+    @classmethod
+    def parse_trusted_ips(cls, value: Any) -> Any:
+        return _split_csv(value)
+
+
+class ApiConfig(StrictConfigModel):
+    v1_prefix: str = "/api/v1"
+    debug: bool = False
+    cors: CorsConfig = Field(default_factory=CorsConfig)
+    gateway: GatewayModeConfig = Field(default_factory=GatewayModeConfig)
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def parse_debug_aliases(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"release", "prod", "production"}:
+                return False
+            if normalized in {"debug", "dev", "development"}:
+                return True
+        return value
+
+
+class DatabaseConfig(StrictConfigModel):
+    url: str = Field(default="postgresql+asyncpg://postgres:password@localhost/neos", repr=False)
+    pool_size: int = 20
+    max_overflow: int = 30
+    pool_timeout: int = 30
+    pool_recycle: int = 1800
+
+
+class RedisConfig(StrictConfigModel):
+    url: str = Field(default="redis://localhost:6379", repr=False)
+    ttl: int = 3600
+    pool_size: int = 50
+    min_idle_connections: int = 10
+
+
+class CacheSemanticConfig(StrictConfigModel):
+    enabled: bool = True
+    threshold: float = 0.90
+
+
+class CacheConfig(StrictConfigModel):
+    workflow_response_ttl: int = 7200
+    user_specific: bool = False
+    semantic: CacheSemanticConfig = Field(default_factory=CacheSemanticConfig)
+
+
+class SmartCacheTtlConfig(StrictConfigModel):
+    realtime: int = 900
+    financial: int = 600
+    analysis: int = 604800
+    research: int = 2592000
+    generation: int = 7776000
+
+
+class SmartCacheConfig(StrictConfigModel):
+    enabled: bool = True
+    similarity_threshold: float = 0.85
+    max_entries: int = 100000
+    statistics_enabled: bool = True
+    ttl: SmartCacheTtlConfig = Field(default_factory=SmartCacheTtlConfig)
+
+
+class LLMConfig(StrictConfigModel):
+    provider: str = "anthropic"
+    model: str = "gpt-4-turbo-preview"
+    temperature: float = 0.1
+    timeout: int = 120
+    research_planning_timeout: int = 180
+    fast_model: str = "claude-haiku-4-5-20251001"
+
+
+class EmbeddingDatasetConfig(StrictConfigModel):
+    enabled: bool = False
+    sample_rate: float = 0.1
+    dir: str = "datasets/embeddings"
+
+
+class EmbeddingConfig(StrictConfigModel):
+    provider: str = "gemini"
+    model: str = "gemini-embedding-2-flash"
+    dimension: int = 3072
+    gemini_task_type: str = "retrieval_document"
+    gemini_image_task_type: str = "retrieval_document"
+    gemini_video_task_type: str = "retrieval_document"
+    dataset: EmbeddingDatasetConfig = Field(default_factory=EmbeddingDatasetConfig)
+
+
+class VisionConfig(StrictConfigModel):
+    provider: str = "auto"
+    enabled: bool = True
+    max_tokens: int = 1000
+    image_detail: str = "auto"
+
+
+class AgentConfig(StrictConfigModel):
+    max_iterations: int = 10
+    timeout: int = 300
+    timeouts: dict[str, int] = Field(
+        default_factory=lambda: {
+            "knowledge_search": 20,
+            "realtime_info_search": 30,
+            "realtime_data_search": 30,
+            "multi_query_search": 35,
+            "web_lookup": 15,
+            "data_analysis": 60,
+            "comparative_analysis": 60,
+            "web_content_analysis": 45,
+            "image_generation": 120,
+            "api_call": 30,
+            "file_processing": 90,
+            "task_creation": 30,
+            "deep_research": 300,
+            "hyper_deep_research": 600,
+            "iterative_web_explorer": 180,
+            "youtube_search": 45,
+        }
+    )
+    max_concurrent_workflows: int = 100
+    max_concurrent_agents_per_workflow: int = 10
+    stream_event_timeout: float = 2.0
+    stream_heartbeat_interval: int = 30
+
+
+class LinkFollowerConfig(StrictConfigModel):
+    max_links: int = 10
+    min_relevance: float = 0.5
+
+
+class IterativeExplorerConfig(StrictConfigModel):
+    max_depth: int = 5
+    max_pages: int = 20
+    max_iterations: int = 10
+    min_quality: float = 0.75
+    concurrent_fetches: int = 3
+    timeout: int = 180
+    tavily_timeout: int = 30
+    cache_ttl: int = 3600
+    completeness_cache_ttl: int = 1800
+    initial_search_results: int = 10
+    recent_results_window: int = 5
+    page_limit_threshold: float = 0.9
+    link_follower: LinkFollowerConfig = Field(default_factory=LinkFollowerConfig)
+
+
+class QualityEvaluatorConfig(StrictConfigModel):
+    completeness_weight: float = 0.4
+    credibility_weight: float = 0.3
+    diversity_weight: float = 0.3
+    early_termination_threshold: float = 0.3
+    high_credibility_threshold: float = 0.7
+    dominance_threshold: float = 0.5
+
+    @model_validator(mode="after")
+    def warn_when_weights_do_not_sum_to_one(self) -> "QualityEvaluatorConfig":
+        weight_sum = self.completeness_weight + self.credibility_weight + self.diversity_weight
+        if abs(weight_sum - 1.0) > 0.01:
+            logger.warning(
+                "Quality evaluator weights sum to %.3f, not 1.0. "
+                "This may affect quality scoring accuracy.",
+                weight_sum,
+            )
+        return self
+
+
+class WorkflowConfig(StrictConfigModel):
+    search_orchestration_timeout: int = 40
+    min_quality_score: float = 0.4
+    max_retries: int = 2
+    max_iterations: int = 10
+    timeout_seconds: int = 300
+    cache_enabled: bool = True
+    cache_ttl: int = 3600
+
+
+class ResearchHarnessModelChecksConfig(StrictConfigModel):
+    enabled: bool = True
+    timeout_seconds: float = 20
+    max_claims: int = 8
+    provider: str = ""
+    model: str = ""
+
+
+class ResearchHarnessPersistenceConfig(StrictConfigModel):
+    persist_runs: bool = False
+    store_full_check_details: bool = False
+    evidence_storage_policy: Literal["summary_only", "redacted", "full"] = "summary_only"
+    cache_policy: Literal["passed_only", "allow_advisory_fail"] = "passed_only"
+
+
+class ResearchHarnessDirectRepairConfig(StrictConfigModel):
+    enabled: bool = False
+    search_timeout_seconds: float = 25
+    search_retries: int = 1
+
+
+class ResearchHarnessConfig(StrictConfigModel):
+    enabled: bool = True
+    allow_off: bool = False
+    default_mode: Literal["auto", "advisory", "gate", "off"] = "auto"
+    gate_threshold: float = 0.82
+    advisory_threshold: float = 0.70
+    high_risk_threshold: float = 0.90
+    max_repair_attempts: int = 1
+    hyper_deep_repair_attempts: int = 2
+    model_checks: ResearchHarnessModelChecksConfig = Field(default_factory=ResearchHarnessModelChecksConfig)
+    persistence: ResearchHarnessPersistenceConfig = Field(default_factory=ResearchHarnessPersistenceConfig)
+    direct_repair: ResearchHarnessDirectRepairConfig = Field(default_factory=ResearchHarnessDirectRepairConfig)
+
+
+class SecretsConfig(StrictConfigModel):
+    openai_api_key: str | None = Field(default=None, repr=False)
+    anthropic_api_key: str | None = Field(default=None, repr=False)
+    google_api_key: str | None = Field(default=None, repr=False)
+    tavily_api_key: str | None = Field(default=None, repr=False)
+    youtube_api_key: str | None = Field(default=None, repr=False)
+    github_api_token: str | None = Field(default=None, repr=False)
+    reddit_client_id: str | None = Field(default=None, repr=False)
+    reddit_client_secret: str | None = Field(default=None, repr=False)
+    serpapi_api_key: str | None = Field(default=None, repr=False)
+    semantic_scholar_api_key: str | None = Field(default=None, repr=False)
+    news_api_key: str | None = Field(default=None, repr=False)
+    openweather_api_key: str | None = Field(default=None, repr=False)
+    exchangerate_api_key: str | None = Field(default=None, repr=False)
+    financialdatasets_api_key: str | None = Field(default=None, repr=False)
+    alpha_vantage_api_key: str | None = Field(default=None, repr=False)
+    cohere_api_key: str | None = Field(default=None, repr=False)
+    aws_access_key_id: str | None = Field(default=None, repr=False)
+    aws_secret_access_key: str | None = Field(default=None, repr=False)
+    rustfs_access_key: str | None = Field(default=None, repr=False)
+    rustfs_secret_key: str | None = Field(default=None, repr=False)
+    checkpointer_s3_access_key: str | None = Field(default=None, repr=False)
+    checkpointer_s3_secret_key: str | None = Field(default=None, repr=False)
+    channel_telegram_bot_token: str | None = Field(default=None, repr=False)
+    channel_discord_bot_token: str | None = Field(default=None, repr=False)
+    channel_slack_bot_token: str | None = Field(default=None, repr=False)
+    channel_slack_app_token: str | None = Field(default=None, repr=False)
+
+
+class SourceIntegrationsConfig(StrictConfigModel):
+    reddit_user_agent: str = "NEOS-Research-Engine/1.0"
+    sec_edgar_user_agent: str = "NEOS-Research contact@neos.ai"
+    openalex_email: str = ""
+    stock_api_provider: str = "yahoo"
+
+
+class YouTubeConfig(StrictConfigModel):
+    max_results: int = 10
+    transcript_languages: list[str] = Field(default_factory=lambda: ["en", "ko"])
+    min_relevance_score: float = 0.5
+    enable_auto_captions: bool = True
+    max_transcript_length: int = 50000
+
+    @field_validator("transcript_languages", mode="before")
+    @classmethod
+    def parse_transcript_languages(cls, value: Any) -> Any:
+        return _split_csv(value)
+
+
+class AuthConfig(StrictConfigModel):
+    jwt_secret_key: str | None = Field(default=None, repr=False)
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_days: int = 7
+    google_oauth_client_id: str | None = Field(default=None, repr=False)
+    google_oauth_client_secret: str | None = Field(default=None, repr=False)
+
+
+class SessionConfig(StrictConfigModel):
+    cookie_name: str = "neos_session"
+    expire_seconds: int = 604800
+
+
+class RateLimitConfig(StrictConfigModel):
+    login_attempts: int = 5
+    login_window_seconds: int = 600
+    api_calls_per_minute: int = 100
+
+
+class CircuitBreakerConfig(StrictConfigModel):
+    enabled: bool = True
+    fail_threshold: int = 5
+    recovery_timeout: int = 60
+    expected_exception: bool = True
+
+
+class PhoenixConfig(StrictConfigModel):
+    host: str = "localhost"
+    port: int = 6006
+    collector_endpoint: str | None = None
+    project_name: str = "neos-multi-agent"
+
+
+class ObservabilityConfig(StrictConfigModel):
+    enabled: bool = True
+    log_level: str = "INFO"
+    phoenix: PhoenixConfig = Field(default_factory=PhoenixConfig)
+    metrics_enabled: bool = True
+    trace_enabled: bool = True
+    max_traces: int = 1000
+    trace_retention_days: int = 30
+    track_llm_calls: bool = True
+    track_agent_performance: bool = True
+    track_workflow_metrics: bool = True
+
+
+class MCPConfig(StrictConfigModel):
+    enabled: bool = True
+    server_host: str = "localhost"
+    server_port: int = 8000
+    timeout: int = 30
+    retry_count: int = 3
+    fallback_enabled: bool = True
+    tool_selection_strategy: str = "mcp_fallback"
+    tool_quality_threshold: float = 0.7
+    tool_performance_priority: bool = False
+
+
+class DatasetConfig(StrictConfigModel):
+    auto_save: bool = True
+    save_format: str = "jsonl"
+    base_path: str = "datasets"
+
+
+class WebSearchLoggingConfig(StrictConfigModel):
+    async_enabled: bool = True
+    queue_type: str = "memory"
+
+
+class S3StorageConfig(StrictConfigModel):
+    bucket_name: str = "neos-documents"
+    endpoint_url: str | None = None
+    region: str = "us-east-1"
+
+
+class RustFSStorageConfig(StrictConfigModel):
+    bucket_name: str = "neos-documents"
+    endpoint_url: str | None = None
+
+
+class LocalStorageConfig(StrictConfigModel):
+    path: str = "storage/documents"
+
+
+class StorageConfig(StrictConfigModel):
+    provider: str = "local"
+    s3: S3StorageConfig = Field(default_factory=S3StorageConfig)
+    rustfs: RustFSStorageConfig = Field(default_factory=RustFSStorageConfig)
+    local: LocalStorageConfig = Field(default_factory=LocalStorageConfig)
+
+
+class CheckpointerS3Config(StrictConfigModel):
+    backend: str = "s3"
+    bucket: str = "neos-checkpoints"
+    region: str = "us-east-1"
+    endpoint_url: str | None = None
+
+
+class CheckpointerConfig(StrictConfigModel):
+    type: str = "postgres"
+    blob_threshold: int = 1048576
+    s3: CheckpointerS3Config = Field(default_factory=CheckpointerS3Config)
+
+
+class DocumentProcessingConfig(StrictConfigModel):
+    max_file_size: int = 52428800
+    chunk_size: int = 1000
+    chunk_overlap: int = 200
+    default_chunking_strategy: str = "sentence"
+    semantic_chunk_threshold: float = 0.75
+
+
+class KnowledgeGraphFeatureConfig(StrictConfigModel):
+    enabled: bool = False
+
+
+class KnowledgeGraphExtractionConfig(StrictConfigModel):
+    enabled: bool = True
+    model: str = "gpt-4-turbo-preview"
+
+
+class KnowledgeGraphConfig(StrictConfigModel):
+    evidence_graph: KnowledgeGraphFeatureConfig = Field(default_factory=KnowledgeGraphFeatureConfig)
+    population: KnowledgeGraphFeatureConfig = Field(default_factory=KnowledgeGraphFeatureConfig)
+    max_traversal_depth: int = 2
+    search_weight: float = 0.3
+    extraction: KnowledgeGraphExtractionConfig = Field(default_factory=KnowledgeGraphExtractionConfig)
+    min_confidence: float = 0.7
+
+
+class DeepResearchConfig(StrictConfigModel):
+    max_polling_duration: int = 4800
+    poll_interval: int = 10
+    default_quality_score: float = 0.85
+    chunk_size: int = 200
+    max_sources_in_memory: int = 50
+    max_concurrent_requests: int = 3
+    min_request_interval: float = 0.5
+    token_budget: int = 150000
+
+
+class ArtifactsConfig(StrictConfigModel):
+    enabled: bool = True
+    llm_model: str = "claude-haiku-4-5-20251001"
+    llm_temperature: float = 0.7
+    llm_max_tokens: int = 4096
+
+
+class ChatConfig(StrictConfigModel):
+    default_max_tokens: int = 200000
+    enable_workflow: bool = True
+    enable_response_refinement: bool = True
+    history_enabled: bool = True
+    max_history_messages: int = 20
+    history_context_max_tokens: int = 2000
+    history_usage_level: str = "full"
+    thinking_blocks_enabled: bool = True
+    max_thinking_length: int = 0
+    disable_thinking_for_search: bool = True
+    token_budget: int = 80000
+
+
+class ContextOptimizationConfig(StrictConfigModel):
+    use_tiktoken: bool = True
+    token_counter_model: str = "gpt-4"
+    overflow_detection: bool = True
+    window_threshold: float = 0.85
+    max_context_tokens: int = 800000
+    reserve_tokens: int = 4096
+    tool_result_summarization: bool = True
+    tool_result_max_length: int = 4000
+    tool_result_summarization_model: str = "gpt-4-turbo-preview"
+    message_compression_enabled: bool = True
+    message_compression_threshold: int = 30
+    message_compression_ratio: float = 0.5
+    message_history_max_tokens: int = 50000
+    semantic_deduplication: bool = True
+    semantic_similarity_threshold: float = 0.92
+    workflow_context_budget: bool = True
+    default_workflow_token_budget: int = 100000
+
+
+class OTelConfig(StrictConfigModel):
+    enabled: bool = False
+    exporter_jaeger_endpoint: str = "http://localhost:4318/v1/traces"
+    service_name: str = "neos-workflow"
+    service_version: str = "0.19.0"
+    deployment_environment: str = "development"
+    traces_sampler: str = "always_on"
+    traces_sampler_arg: float = 1.0
+    bsp_max_queue_size: int = 2048
+    bsp_schedule_delay: int = 5000
+    bsp_max_export_batch_size: int = 512
+
+
+class TelemetryConfig(StrictConfigModel):
+    otel: OTelConfig = Field(default_factory=OTelConfig)
+
+
+class CeleryConfig(StrictConfigModel):
+    enabled: bool = False
+    broker_url: str = Field(default="redis://localhost:6379/1", repr=False)
+    result_backend: str = Field(default="redis://localhost:6379/2", repr=False)
+    task_serializer: str = "json"
+    result_serializer: str = "json"
+    timezone: str = "UTC"
+    worker_prefetch_multiplier: int = 4
+    task_acks_late: bool = True
+
+
+class MemoryConfig(StrictConfigModel):
+    short_term_ttl: int = 3600
+    long_term_enabled: bool = True
+    episodic_enabled: bool = True
+    max_context_items: int = 10
+
+
+class QueryClassifierConfig(StrictConfigModel):
+    use_llm: bool = False
+    llm_model: str = "claude-haiku-4-5-20251001"
+    llm_timeout: int = 10
+
+
+class ExecutiveSummaryConfig(StrictConfigModel):
+    enabled: bool = True
+    min_words: int = 500
+    max_sentences: int = 3
+
+
+class QueryExpansionConfig(StrictConfigModel):
+    enabled: bool = False
+    variations: int = 3
+
+
+class CostAwareRoutingConfig(StrictConfigModel):
+    enabled: bool = False
+    default_budget: float = 5.0
+
+
+class CitationConfig(StrictConfigModel):
+    enabled: bool = True
+    default_style: str = "numbered"
+
+
+class FactCheckConfig(StrictConfigModel):
+    enabled: bool = True
+    complexity_threshold: float = 0.4
+
+
+class SearchFallbackConfig(StrictConfigModel):
+    enabled: bool = True
+    duckduckgo_max_results: int = 10
+
+
+class ToolSearchConfig(StrictConfigModel):
+    enabled: bool = False
+    top_k: int = 5
+    max_rounds: int = 3
+    rrf_k: int = 60
+
+
+class HybridSearchConfig(StrictConfigModel):
+    alpha: float = 0.5
+    candidate_count: int = 50
+
+
+class RerankerConfig(StrictConfigModel):
+    enabled: bool = True
+    top_n: int = 10
+    model: str = "rerank-english-v3.0"
+
+
+class RecursiveAgentConfig(StrictConfigModel):
+    enabled: bool = False
+    max_depth: int = 3
+    max_tasks_per_level: int = 4
+    complexity_threshold: float = 0.8
+    atomizer_model: str = "claude-haiku-4-5-20251001"
+    planner_model: str = "claude-opus-4-6"
+    budget_cap: float = 0.5
+
+
+class HyperDeepAgentConfig(StrictConfigModel):
+    enabled: bool = False
+    max_depth: int = 1
+    max_tasks_per_level: int = 3
+    complexity_threshold: float = 0.85
+    budget_cap: float = 5.0
+
+
+class RayConfig(StrictConfigModel):
+    enabled: bool = False
+    address: str = "auto"
+    num_cpus: float | None = None
+    object_store_memory: int = 2_000_000_000
+
+
+class SandboxConfig(StrictConfigModel):
+    enabled: bool = False
+    type: str = "restricted"
+    timeout_sec: int = 30
+
+
+class ContextualRetrievalConfig(StrictConfigModel):
+    enabled: bool = False
+    model: str = "claude-haiku-4-5-20251001"
+    max_tokens: int = 200
+    max_concurrent: int = 3
+    max_chunks_per_doc: int = 200
+    budget_cap_usd: float = 0.10
+    embed_source: str = "contextual"
+
+
+class ExecutionApprovalConfig(StrictConfigModel):
+    enabled: bool = False
+    required_skills: list[str] = Field(
+        default_factory=lambda: ["api_call", "file_processing", "task_creation", "code_execution"]
+    )
+    timeout_seconds: int = 60
+    default_autonomy_level: Literal[0, 1, 2] = 1
+
+    @field_validator("required_skills", mode="before")
+    @classmethod
+    def parse_required_skills(cls, value: Any) -> Any:
+        return _split_csv(value)
+
+
+class TelegramChannelConfig(StrictConfigModel):
+    enabled: bool = False
+
+
+class DiscordChannelConfig(StrictConfigModel):
+    enabled: bool = False
+
+
+class SlackChannelConfig(StrictConfigModel):
+    enabled: bool = False
+
+
+class ChannelConfig(StrictConfigModel):
+    telegram: TelegramChannelConfig = Field(default_factory=TelegramChannelConfig)
+    discord: DiscordChannelConfig = Field(default_factory=DiscordChannelConfig)
+    slack: SlackChannelConfig = Field(default_factory=SlackChannelConfig)
+    bot_user_id: str = ""
+
+
+class ContextAssemblyConfig(StrictConfigModel):
+    max_tokens: int = 8000
+    short_term_ratio: float = 0.50
+    long_term_ratio: float = 0.30
+    episodic_ratio: float = 0.20
+
+    @property
+    def ratio_sum(self) -> float:
+        return self.short_term_ratio + self.long_term_ratio + self.episodic_ratio
+
+
+class CronConfig(StrictConfigModel):
+    enabled: bool = True
+    default_timezone: str = "UTC"
+    max_tasks_per_user: int = 20
+    llm_fallback_enabled: bool = True
+    llm_model: str = "claude-haiku-4-5-20251001"
+
+
+class OllamaConfig(StrictConfigModel):
+    base_url: str = "http://localhost:11434"
+    default_model: str = "llama3.1:8b"
+
+
+class ModelProviderConfig(StrictConfigModel):
+    ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+
+
+class A2UIConfig(StrictConfigModel):
+    enabled: bool = False
+    llm_model: str = "claude-haiku-4-5-20251001"
+    llm_provider: str = "anthropic"
+    max_components: int = 10
+    frame_timeout: int = 300
+
+
+class InlineVisualizationConfig(StrictConfigModel):
+    enabled: bool = True
+
+
+class AppConfig(StrictConfigModel):
+    environment: Literal["development", "staging", "production"] = "development"
+    api: ApiConfig = Field(default_factory=ApiConfig)
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    redis: RedisConfig = Field(default_factory=RedisConfig)
+    cache: CacheConfig = Field(default_factory=CacheConfig)
+    smart_cache: SmartCacheConfig = Field(default_factory=SmartCacheConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    vision: VisionConfig = Field(default_factory=VisionConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
+    iterative_explorer: IterativeExplorerConfig = Field(default_factory=IterativeExplorerConfig)
+    quality_evaluator: QualityEvaluatorConfig = Field(default_factory=QualityEvaluatorConfig)
+    workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
+    research_harness: ResearchHarnessConfig = Field(default_factory=ResearchHarnessConfig)
+    secrets: SecretsConfig = Field(default_factory=SecretsConfig)
+    sources: SourceIntegrationsConfig = Field(default_factory=SourceIntegrationsConfig)
+    youtube: YouTubeConfig = Field(default_factory=YouTubeConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
+    session: SessionConfig = Field(default_factory=SessionConfig)
+    rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
+    circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
+    dataset: DatasetConfig = Field(default_factory=DatasetConfig)
+    web_search_logging: WebSearchLoggingConfig = Field(default_factory=WebSearchLoggingConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
+    checkpointer: CheckpointerConfig = Field(default_factory=CheckpointerConfig)
+    document_processing: DocumentProcessingConfig = Field(default_factory=DocumentProcessingConfig)
+    knowledge_graph: KnowledgeGraphConfig = Field(default_factory=KnowledgeGraphConfig)
+    deep_research: DeepResearchConfig = Field(default_factory=DeepResearchConfig)
+    artifacts: ArtifactsConfig = Field(default_factory=ArtifactsConfig)
+    chat: ChatConfig = Field(default_factory=ChatConfig)
+    context_optimization: ContextOptimizationConfig = Field(default_factory=ContextOptimizationConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    celery: CeleryConfig = Field(default_factory=CeleryConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    query_classifier: QueryClassifierConfig = Field(default_factory=QueryClassifierConfig)
+    executive_summary: ExecutiveSummaryConfig = Field(default_factory=ExecutiveSummaryConfig)
+    query_expansion: QueryExpansionConfig = Field(default_factory=QueryExpansionConfig)
+    cost_aware_routing: CostAwareRoutingConfig = Field(default_factory=CostAwareRoutingConfig)
+    citations: CitationConfig = Field(default_factory=CitationConfig)
+    fact_check: FactCheckConfig = Field(default_factory=FactCheckConfig)
+    search_fallback: SearchFallbackConfig = Field(default_factory=SearchFallbackConfig)
+    tool_search: ToolSearchConfig = Field(default_factory=ToolSearchConfig)
+    hybrid_search: HybridSearchConfig = Field(default_factory=HybridSearchConfig)
+    reranker: RerankerConfig = Field(default_factory=RerankerConfig)
+    recursive_agent: RecursiveAgentConfig = Field(default_factory=RecursiveAgentConfig)
+    hyper_deep_agent: HyperDeepAgentConfig = Field(default_factory=HyperDeepAgentConfig)
+    ray: RayConfig = Field(default_factory=RayConfig)
+    sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    contextual_retrieval: ContextualRetrievalConfig = Field(default_factory=ContextualRetrievalConfig)
+    execution_approval: ExecutionApprovalConfig = Field(default_factory=ExecutionApprovalConfig)
+    channels: ChannelConfig = Field(default_factory=ChannelConfig)
+    context_assembly: ContextAssemblyConfig = Field(default_factory=ContextAssemblyConfig)
+    cron: CronConfig = Field(default_factory=CronConfig)
+    model_providers: ModelProviderConfig = Field(default_factory=ModelProviderConfig)
+    a2ui: A2UIConfig = Field(default_factory=A2UIConfig)
+    inline_visualization: InlineVisualizationConfig = Field(default_factory=InlineVisualizationConfig)
+
+    @model_validator(mode="after")
+    def validate_context_assembly_ratios(self) -> "AppConfig":
+        ratio_sum = self.context_assembly.ratio_sum
+        if abs(ratio_sum - 1.0) <= 0.01:
+            return self
+
+        message = f"Context assembly ratios sum to {ratio_sum:.3f}, not 1.0."
+        if self.environment in {"staging", "production"}:
+            raise ValueError(message)
+        logger.warning(message)
+        return self
