@@ -48,4 +48,5 @@ def test_builds_gate_contract_state_for_deep_research():
 
     assert state["query_intent"] == "deep_research"
     assert state["harness_mode"] == "gate"
+    assert state["metadata"]["harness_profile"] == "direct_deep_research"
     assert state["metadata"]["freshness_required"] is True

@@ -140,6 +140,9 @@ def decide_harness_policy(
     max_attempts = int(
         _get_setting(settings_overrides, "RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS", 1)
     )
+    hyper_deep_attempts = int(
+        _get_setting(settings_overrides, "RESEARCH_HARNESS_HYPER_DEEP_REPAIR_ATTEMPTS", 2)
+    )
 
     if not enabled:
         return HarnessPolicyDecision(
@@ -201,7 +204,7 @@ def decide_harness_policy(
             risk_level,
             "research_intent",
             gate_threshold,
-            max_attempts,
+            hyper_deep_attempts,
         )
     if risk_level == HarnessRiskLevel.HIGH:
         return HarnessPolicyDecision(

@@ -46,6 +46,7 @@ def build_deep_research_contract_state(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     metadata = dict(metadata or {})
+    metadata.setdefault("harness_profile", "direct_deep_research")
     return {
         "original_query": research_topic,
         "query_intent": "deep_research",

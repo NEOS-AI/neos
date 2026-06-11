@@ -20,6 +20,24 @@ def test_hyper_deep_defaults_to_gate():
     assert decision.reason == "research_intent"
 
 
+def test_research_intents_use_hyper_deep_repair_budget():
+    for intent in ("deep_research", "hyper_deep_research"):
+        decision = decide_harness_policy(
+            intent=intent,
+            complexity_score=0.4,
+            metadata={},
+            settings_overrides={
+                "RESEARCH_HARNESS_ENABLED": True,
+                "RESEARCH_HARNESS_DEFAULT_MODE": "auto",
+                "RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS": 1,
+                "RESEARCH_HARNESS_HYPER_DEEP_REPAIR_ATTEMPTS": 2,
+            },
+        )
+
+        assert decision.mode == HarnessMode.GATE
+        assert decision.max_repair_attempts == 2
+
+
 def test_low_risk_general_chat_defaults_to_advisory():
     decision = decide_harness_policy(
         intent="general_chat",
