@@ -74,11 +74,14 @@ services:
     container_name: neos-celery-worker
     command: celery -A neos.workflow.celery_app worker --loglevel=info --concurrency=4
     environment:
+      - NEOS_ENV=development
+      - NEOS_CONFIG_PATH=/app/config/neos.development.yaml
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://neos:neos_password@postgres:5432/neos_db
-      - OTEL_ENABLED=true
-      - OTEL_EXPORTER_JAEGER_ENDPOINT=http://jaeger:4318/v1/traces
-      - OTEL_SERVICE_NAME=neos-celery-worker
+      - CELERY_BROKER_URL=redis://redis:6379/2
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - ./config:/app/config:ro
     depends_on:
       - redis
       - postgres
@@ -98,8 +101,14 @@ services:
     container_name: neos-celery-beat
     command: celery -A neos.workflow.celery_app beat --loglevel=info
     environment:
+      - NEOS_ENV=development
+      - NEOS_CONFIG_PATH=/app/config/neos.development.yaml
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://neos:neos_password@postgres:5432/neos_db
+      - CELERY_BROKER_URL=redis://redis:6379/2
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - ./config:/app/config:ro
     depends_on:
       - redis
       - postgres
@@ -120,7 +129,13 @@ services:
     ports:
       - "5555:5555"
     environment:
+      - NEOS_ENV=development
+      - NEOS_CONFIG_PATH=/app/config/neos.development.yaml
       - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/2
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - ./config:/app/config:ro
     depends_on:
       - redis
       - celery-worker
