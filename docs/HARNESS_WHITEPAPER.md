@@ -1,8 +1,8 @@
 # NEOS Research Harness Whitepaper
 
 **Status:** Runtime harness advancement and Direct repair MVP implemented
-**Last updated:** 2026-06-06
-**Related documents:** `docs/HARNESS_PLAN.md`, `docs/HARNESS_IMPLE.md`, `docs/HARNESS_CR.md`
+**Last updated:** 2026-06-10
+**Related documents:** `docs/HARNESS_IMPLE.md`, `docs/HARNESS_STAGING_ROLLOUT.md`, `docs/HARNESS_EVAL_CALIBRATION.md`, `docs/CONFIGURATION.md`
 
 ---
 
@@ -377,22 +377,27 @@ Default thresholds:
 
 | Setting | Default | Meaning |
 | --- | ---: | --- |
-| `RESEARCH_HARNESS_GATE_THRESHOLD` | `0.82` | minimum score for gate pass |
-| `RESEARCH_HARNESS_ADVISORY_THRESHOLD` | `0.70` | minimum score for advisory pass |
-| `RESEARCH_HARNESS_HIGH_RISK_THRESHOLD` | `0.90` | stricter high-risk gate threshold |
-| `RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS` | `1` | standard bounded repair budget |
-| `RESEARCH_HARNESS_HYPER_DEEP_REPAIR_ATTEMPTS` | `2` | HyperDeep/direct research repair budget |
-| `RESEARCH_HARNESS_PERSIST_RUNS` | `false` | persist harness runs/checks to dedicated tables |
-| `RESEARCH_HARNESS_MODEL_CHECKS_ENABLED` | `true` | enable model-based checkers when selected |
-| `RESEARCH_HARNESS_MODEL_CHECK_TIMEOUT_SECONDS` | `20` | per-check model judge timeout |
-| `RESEARCH_HARNESS_MODEL_CHECK_MAX_CLAIMS` | `8` | maximum sampled factual claims per factuality check |
-| `RESEARCH_HARNESS_MODEL_CHECK_PROVIDER` | empty | optional provider override for harness judge |
-| `RESEARCH_HARNESS_MODEL_CHECK_MODEL` | empty | optional model override for harness judge |
-| `RESEARCH_HARNESS_EVIDENCE_STORAGE_POLICY` | `summary_only` | persistence policy for evidence and failed items |
+| `research_harness.gate_threshold` | `0.82` | minimum score for gate pass |
+| `research_harness.advisory_threshold` | `0.70` | minimum score for advisory pass |
+| `research_harness.high_risk_threshold` | `0.90` | stricter high-risk gate threshold |
+| `research_harness.max_repair_attempts` | `1` | standard bounded repair budget |
+| `research_harness.hyper_deep_repair_attempts` | `2` | HyperDeep/direct research repair budget used by `deep_research` and `hyper_deep_research` intents |
+| `research_harness.persistence.persist_runs` | `false` | persist harness runs/checks to dedicated tables |
+| `research_harness.model_checks.enabled` | `true` | enable model-based checkers when selected |
+| `research_harness.model_checks.timeout_seconds` | `20` | per-check model judge timeout |
+| `research_harness.model_checks.max_claims` | `8` | maximum sampled factual claims per factuality check |
+| `research_harness.model_checks.provider` | empty | optional provider override for harness judge |
+| `research_harness.model_checks.model` | empty | optional model override for harness judge |
+| `research_harness.persistence.evidence_storage_policy` | `summary_only` | persistence policy for evidence and failed items |
+| `research_harness.direct_repair.search_timeout_seconds` | `25` | Direct repair search timeout |
+| `research_harness.direct_repair.search_retries` | `1` | Direct repair search retry budget |
 
-The same settings are now documented in `.env.template`, which matters for
-rollout and operational control. Explicit request mode still takes precedence
-over profiles, but global disable remains authoritative.
+The settings live in validated YAML under `config/neos*.yaml`, with legacy
+uppercase access still translated by `neos.config.settings` for compatibility.
+This matters for rollout and operational control because non-secret runtime
+behavior should move through YAML overlays, while secrets remain env-sourced.
+Explicit request mode still takes precedence over profiles, but global disable
+remains authoritative.
 
 ---
 
@@ -743,7 +748,7 @@ repair handling marks the report failed and emits `harness_failed` instead of
 the normal completion event.
 
 Operators can disable Direct repair mutation independently with
-`RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED=false`. In that mode the service
+`research_harness.direct_repair.enabled: false`. In that mode the service
 preserves the older safe behavior: planned actions are skipped explicitly
 rather than mutating reports implicitly.
 
@@ -805,7 +810,7 @@ issues.
 | Freshness-required gate could pass with no source dates | Fixed by making missing dates critical in gate mode |
 | Global disable could be overridden by explicit request mode | Fixed by making `research_harness.enabled: false` authoritative |
 | `required_checks` selected checks but did not make failures blocking | Fixed in runner verdict logic |
-| `.env.template` did not document settings | Fixed by adding research harness configuration |
+| Harness settings needed rollout documentation | Fixed through validated YAML defaults and `docs/HARNESS_STAGING_ROLLOUT.md` |
 | Harness unit tests triggered DB setup noise | Reduced by skipping DB fixtures for harness-focused tests |
 
 This review cycle sharpened the meaning of "gate." The first implementation
@@ -868,7 +873,7 @@ Implemented:
 - Direct Deep Research repair executor MVP for all currently planned repair
   action families
 - Direct repair mutation rollback flag
-  `RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED`
+  `research_harness.direct_repair.enabled`
 - direct API harness SSE events including check-start/check-completed and repair events
 - shared harness event payloads
 - Mission validation summary integration
@@ -1029,7 +1034,7 @@ Recommended rollout sequence:
    Move to `redacted` only after reviewing stored rows for sensitive text
    leakage. Use `full` only in controlled internal eval environments.
 8. If repair mutation needs a narrow rollback during staging, set
-   `RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED=false` while leaving harness gating
+   `research_harness.direct_repair.enabled: false` while leaving harness gating
    and validation enabled.
 9. Enable model-based checks first as optional/advisory checks, track latency,
    parse errors, and disagreement with offline evals, then promote factuality
@@ -1136,7 +1141,7 @@ Gate failure or unresolved `needs_repair` marks the report failed and emits
 harness failure events instead of normal completion.
 
 Repair execution can be disabled independently from validation with
-`RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED=false`, which preserves explicit
+`research_harness.direct_repair.enabled: false`, which preserves explicit
 skipped-action metadata while avoiding live section/source mutation.
 
 ### Phase C: Mission Validation Upgrade
@@ -1249,7 +1254,7 @@ The next roadmap items are:
 | Cache underuse | More cache skips in advisory fail/gate fail | track cache skip rate, tune thresholds |
 | Metadata drift | Runtime and eval schemas diverge | use shared harness result models |
 | Repair loops become expensive | Cost and latency can grow | strict repair budget, targeted actions only |
-| Direct repair mutation risk | Repair execution can change report sections or source collections incorrectly | action-scoped executor, repository provenance, revalidation before completion, and `RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED` rollback |
+| Direct repair mutation risk | Repair execution can change report sections or source collections incorrectly | action-scoped executor, repository provenance, revalidation before completion, and `research_harness.direct_repair.enabled` rollback |
 | Evidence leakage | Failed items can contain sensitive claims or snippets | summary-only default, redacted policy, full mode only after review |
 | Operators cannot disable safely | Incident mitigation becomes hard | authoritative global feature flag |
 
@@ -1318,7 +1323,9 @@ That invariant is the foundation for continued rollout and calibration.
 | `neos/database/repositories/harness_repository.py` | Harness persistence repository |
 | `db/migrations/032_add_research_harness_tables.sql` | Dedicated harness persistence tables |
 | `neos/workflow/processors/response_generator.py` | Response metadata shape |
-| `.env.template` | Harness rollout settings |
+| `config/neos.default.yaml` | Default harness runtime settings |
+| `config/neos.staging.yaml` | Staging harness persistence overlay |
+| `config/neos.production.yaml` | Production harness enablement overlay |
 | `docs/HARNESS_EVAL_CALIBRATION.md` | Runtime/offline model-check calibration note |
 | `docs/HARNESS_STAGING_ROLLOUT.md` | Staging enablement, rollback, and dashboard checklist |
 
