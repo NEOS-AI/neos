@@ -90,6 +90,15 @@ class ResearchHarnessProcessor:
 
         runs = list(state.get("harness_runs") or [])
         runs.append(run.to_dict())
+        thinking_trace = list(state.get("thinking_trace") or [])
+        for event in (run.metadata or {}).get("trace_events", []):
+            thinking_trace.append(
+                {
+                    "node_id": "research_harness",
+                    "run_id": run.run_id,
+                    **event,
+                }
+            )
         harness_summary = {
             "enabled": run.mode.value != "off",
             "mode": run.mode.value,
@@ -123,6 +132,7 @@ class ResearchHarnessProcessor:
             "harness_failed_checks": run.failed_checks,
             "harness_repair_plan": None,
             "harness_repair_attempts": repair_attempts,
+            "thinking_trace": thinking_trace,
             "harness_metadata": {
                 "run_id": run.run_id,
                 "check_count": len(run.checks),

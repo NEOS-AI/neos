@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from .contract_compiler import compile_harness_contract
 from .models import HarnessContract
 from .policy import _as_bool, decide_harness_policy, get_harness_profile_config
 
@@ -99,7 +100,7 @@ def build_harness_contract(
         False,
     )
 
-    return HarnessContract(
+    contract = HarnessContract(
         mode=decision.mode,
         risk_level=decision.risk_level,
         min_score=float(min_quality),
@@ -123,5 +124,7 @@ def build_harness_contract(
             "policy_reason": decision.reason,
             "intent": _intent_from_state(state),
             "complexity_score": _complexity_from_state(state),
+            "thinking_strategy": state.get("thinking_strategy"),
         },
     )
+    return compile_harness_contract(contract)

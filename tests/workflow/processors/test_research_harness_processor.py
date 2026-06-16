@@ -47,6 +47,9 @@ async def test_research_harness_processor_writes_harness_state():
     assert "checks" in new_state["harness_runs"][0]
     assert isinstance(new_state["harness_runs"][0]["checks"], list)
     assert "check_results" in new_state["harness_metadata"]
+    assert new_state["thinking_trace"][0]["node_id"] == "research_harness"
+    assert new_state["thinking_trace"][0]["event_type"] == "harness.run.completed"
+    assert new_state["thinking_trace"][0]["run_id"] == new_state["harness_metadata"]["run_id"]
 
 
 @pytest.mark.asyncio

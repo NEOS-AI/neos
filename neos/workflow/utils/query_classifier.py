@@ -20,6 +20,7 @@ from neos.utils.url_detector import has_urls, extract_urls
 
 from ..enums import IntentType, ComplexityIndicator
 from ..state import AgentState
+from ..thinking_strategy import build_thinking_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,18 @@ _UI_COLLECTION_KEYWORDS = {
     "선택해줘", "골라줘", "choose for me",
 }
 _UI_REQUIRED_INTENTS = {IntentType.TASK_EXECUTION.value, IntentType.GENERATION.value}
+
+_FRESHNESS_KEYWORDS = {
+    "latest",
+    "current",
+    "recent",
+    "now",
+    "today",
+    "최신",
+    "현재",
+    "최근",
+    "오늘",
+}
 
 
 # LLM 분류용 프롬프트 (valid intent types 포함)
@@ -169,6 +182,13 @@ class QueryClassifier:
                 classification_result["sub_topics"] = llm_result.get("sub_topics", [])
                 classification_result["required_capabilities"] = llm_result.get("required_capabilities", [])
                 classification_result["classification_method"] = "llm"
+                self._attach_thinking_strategy(
+                    state,
+                    classification_result,
+                    intent=intent,
+                    complexity_score=complexity_score,
+                    query=query,
+                )
                 state["query_classification"] = classification_result
 
                 # Phase 8 (A2UI): LLM needs_ui 우선 적용 — keyword 방식보다 정확
@@ -193,6 +213,13 @@ class QueryClassifier:
                     intent, required_agents, query, complexity_score
                 )
                 classification_result["classification_method"] = "keyword"
+                self._attach_thinking_strategy(
+                    state,
+                    classification_result,
+                    intent=intent,
+                    complexity_score=complexity_score,
+                    query=query,
+                )
                 state["query_classification"] = classification_result
 
             logger.debug("[QueryClassifier] Required agents: %s", state["required_agents"])
@@ -347,6 +374,28 @@ class QueryClassifier:
     def _detect_language(self, query: str) -> str:
         """사용자 쿼리의 주 언어 감지"""
         return detect_language(query)
+
+    def _attach_thinking_strategy(
+        self,
+        state: AgentState,
+        classification_result: Dict[str, Any],
+        *,
+        intent: str,
+        complexity_score: float,
+        query: str,
+    ) -> None:
+        strategy = build_thinking_strategy(
+            intent=intent,
+            complexity_score=complexity_score,
+            metadata={"freshness_required": self._freshness_required(query)},
+        )
+        strategy_state = strategy.to_state()
+        classification_result["thinking_strategy"] = strategy_state
+        state["thinking_strategy"] = strategy_state
+
+    def _freshness_required(self, query: str) -> bool:
+        query_lower = query.lower()
+        return any(keyword in query_lower for keyword in _FRESHNESS_KEYWORDS)
 
     async def _generate_embedding(self, state: AgentState, query: str) -> None:
         """쿼리 임베딩 생성"""

@@ -238,9 +238,18 @@ class HarnessRunner:
             checks=checks,
             repair_attempts=repair_attempts,
         )
+        run_id = self._run_id()
+        trace_events = [
+            {
+                "event_type": "harness.run.completed",
+                "score": float(score),
+                "verdict": verdict.value,
+                "failed_checks": failed_checks,
+            }
+        ]
 
         return HarnessRun(
-            run_id=self._run_id(),
+            run_id=run_id,
             mode=contract.mode,
             verdict=verdict,
             score=score,
@@ -249,6 +258,7 @@ class HarnessRunner:
             repair_attempts=repair_attempts,
             started_at=started_at,
             completed_at=datetime.now(),
+            metadata={"trace_events": trace_events},
         )
 
     def _checkers_by_name(self, checkers: list) -> dict[str, object]:
