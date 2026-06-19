@@ -214,6 +214,9 @@ class HyperResearchRepository:
     ) -> bool:
         """Update report status.
 
+        Accepted statuses include pending, in_progress, candidate_ready,
+        validating, completed, and failed.
+
         Args:
             report_id: Report identifier
             status: New status

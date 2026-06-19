@@ -14,6 +14,8 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
+from neos.config.settings import settings
+from neos.workflow.harness.contract_builder import build_harness_contract
 from neos.workflow.recursive.models import RecursiveTaskNode, TaskStatus
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,20 @@ def _extract_content(output: Dict[str, Any]) -> str:
     return str(first)
 
 
+def _extract_sources(output: Dict[str, Any]) -> list[dict[str, Any]]:
+    results = output.get("results", []) if output else []
+    if not results:
+        return []
+
+    first = results[0]
+    metadata = (
+        getattr(first, "metadata", None)
+        if hasattr(first, "metadata")
+        else first.get("metadata", {})
+    )
+    return list((metadata or {}).get("sources") or [])
+
+
 class HyperDeepExecutor:
     """ROMA leaf 노드 실행자 — HyperDeepResearchAgent를 호출합니다.
 
@@ -59,9 +75,10 @@ class HyperDeepExecutor:
         orchestrator = RecursiveOrchestrator(executor=executor, max_depth=1, ...)
     """
 
-    def __init__(self):
+    def __init__(self, harness_runner=None):
         # Lazy init: HyperDeepResearchAgent.__init__이 무거우므로 첫 실행 시 생성
         self._agent = None
+        self._harness_runner = harness_runner
 
     def _get_agent(self):
         """싱글톤 에이전트 인스턴스 반환."""
@@ -70,6 +87,13 @@ class HyperDeepExecutor:
             self._agent = HyperDeepResearchAgent()
             logger.info("[HyperDeepExecutor] HyperDeepResearchAgent initialized")
         return self._agent
+
+    def _get_harness_runner(self):
+        if self._harness_runner is None:
+            from neos.workflow.harness.runner import HarnessRunner
+
+            self._harness_runner = HarnessRunner()
+        return self._harness_runner
 
     def _reset_agent_state(self, agent) -> None:
         """각 subtask 실행 전 agent 내부 상태 초기화.
@@ -145,6 +169,42 @@ class HyperDeepExecutor:
                     f"[HyperDeep 실패: '{task.description[:40]}' 연구 결과를 가져올 수 없습니다. "
                     f"Tavily API 가용 여부를 확인하세요.]"
                 )
+
+            if getattr(settings, "HYPER_DEEP_TASK_LEVEL_HARNESS_ENABLED", True):
+                contract = build_harness_contract(
+                    {
+                        "query_intent": "hyper_deep_research",
+                        "original_query": task.description,
+                        "harness_profile": "direct_deep_research",
+                        "harness_mode": "gate",
+                    }
+                )
+                harness_run = await self._get_harness_runner().arun(
+                    report=content,
+                    sources=_extract_sources(output),
+                    contract=contract,
+                    context={
+                        "task_id": task.task_id,
+                        "original_query": task.description,
+                    },
+                )
+                task.harness_run_id = harness_run.run_id
+                task.metadata["harness"] = {
+                    "mode": harness_run.mode.value,
+                    "verdict": harness_run.verdict.value,
+                    "score": float(harness_run.score),
+                    "failed_checks": harness_run.failed_checks,
+                }
+                if (
+                    harness_run.mode.value == "gate"
+                    and harness_run.verdict.value in {"fail", "needs_repair"}
+                ):
+                    task.status = TaskStatus.FAILED
+                    task.metadata["error"] = "hyperdeep_task_harness_failed"
+                    return (
+                        "[HyperDeep 검증 실패] 생성된 연구 결과가 task-level harness "
+                        f"검증을 통과하지 못했습니다: {', '.join(harness_run.failed_checks)}"
+                    )
 
             task.status = TaskStatus.COMPLETED
             task.result = content

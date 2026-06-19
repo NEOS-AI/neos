@@ -42,6 +42,10 @@ class RecursiveTaskNode:
     status: TaskStatus = TaskStatus.PENDING
     result: Optional[str] = None             # 실행 결과
     children: List[RecursiveTaskNode] = field(default_factory=list)
+    depends_on: List[str] = field(default_factory=list)
+    artifact_ref: Optional[str] = None
+    attempts: int = 0
+    harness_run_id: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     cost: float = 0.0                        # 실행 비용 (USD)
     execution_time_ms: int = 0
@@ -63,6 +67,10 @@ class RecursiveTaskNode:
             "status": self.status.value,
             "result": self.result,
             "children": [c.to_dict() for c in self.children],
+            "depends_on": self.depends_on,
+            "artifact_ref": self.artifact_ref,
+            "attempts": self.attempts,
+            "harness_run_id": self.harness_run_id,
             "metadata": self.metadata,
             "cost": self.cost,
             "execution_time_ms": self.execution_time_ms,
@@ -79,6 +87,10 @@ class RecursiveTaskNode:
             atomicity=TaskAtomicity(data.get("atomicity", TaskAtomicity.UNKNOWN.value)),
             status=TaskStatus(data.get("status", TaskStatus.PENDING.value)),
             result=data.get("result"),
+            depends_on=data.get("depends_on", []),
+            artifact_ref=data.get("artifact_ref"),
+            attempts=data.get("attempts", 0),
+            harness_run_id=data.get("harness_run_id"),
             metadata=data.get("metadata", {}),
             cost=data.get("cost", 0.0),
             execution_time_ms=data.get("execution_time_ms", 0),

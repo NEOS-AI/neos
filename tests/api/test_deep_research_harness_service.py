@@ -26,6 +26,7 @@ sys.modules.setdefault("isodate", isodate_module)
 
 from neos.api.handlers.deep_research_handlers import is_deep_research_harness_blocked
 from neos.api.services.deep_research_harness_service import DeepResearchHarnessService
+from neos.workflow.harness.checkers import model_based
 from neos.workflow.harness.models import HarnessMode, HarnessRun, HarnessVerdict
 from neos.workflow.harness.events import HarnessEventType
 from datetime import datetime
@@ -33,6 +34,12 @@ from datetime import datetime
 
 @pytest.mark.asyncio
 async def test_service_returns_harness_run_for_report(monkeypatch):
+    monkeypatch.setattr(
+        model_based.settings,
+        "RESEARCH_HARNESS_MODEL_CHECKS_ENABLED",
+        False,
+        raising=False,
+    )
     service = DeepResearchHarnessService()
 
     async def fake_sections(report_id):

@@ -1,6 +1,7 @@
 import sys
 import types
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -47,6 +48,17 @@ def test_build_deep_research_repair_service_uses_executor_when_enabled(monkeypat
     service = deep_research_handlers.build_deep_research_repair_service()
 
     assert service.action_executor is not None
+
+
+def test_deep_research_handler_marks_validating_before_terminal_status():
+    source = Path("neos/api/handlers/deep_research_handlers.py").read_text()
+
+    validating_index = source.index('"validating"')
+    failed_index = source.index('"failed"', validating_index)
+    completed_index = source.index('"completed"', validating_index)
+
+    assert validating_index < failed_index
+    assert validating_index < completed_index
 
 
 def test_build_deep_research_repair_service_preserves_skip_path_when_disabled(monkeypatch):

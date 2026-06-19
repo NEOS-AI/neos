@@ -685,6 +685,15 @@ async def deep_research_stream_generator(
                 )
             )
 
+        await update_research_status(
+            report_id,
+            "validating",
+            total_sections=completed_sections,
+            total_sources=total_sources,
+            total_queries=total_queries,
+            processing_time_ms=processing_time_ms,
+        )
+
         validation = await DeepResearchHarnessService().validate_report(
             report_id=report_id,
             research_topic=research_topic,

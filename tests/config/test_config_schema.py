@@ -43,6 +43,15 @@ def test_schema_defaults_match_current_runtime_policy():
     assert config.research_harness.direct_repair.enabled is False
 
 
+def test_thinking_engine_config_defaults_are_conservative():
+    config = AppConfig()
+
+    assert config.thinking_engine.enabled is True
+    assert config.thinking_engine.persist_traces is False
+    assert config.thinking_engine.persist_task_dag is False
+    assert config.thinking_engine.task_level_harness is True
+
+
 @pytest.mark.parametrize("mode", ["auto", "advisory", "gate", "off"])
 def test_research_harness_default_mode_accepts_rollout_modes(mode):
     config = AppConfig.model_validate({"research_harness": {"default_mode": mode}})

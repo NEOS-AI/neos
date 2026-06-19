@@ -6,10 +6,12 @@ from contextlib import contextmanager
 import pytest
 
 os.environ["GOOGLE_API_KEY"] = "test-key"
+os.environ["OPENAI_API_KEY"] = "test-key"
 
 import neos.config.settings as settings_module
 
 settings_module.settings.GOOGLE_API_KEY = "test-key"
+settings_module.settings.OPENAI_API_KEY = "test-key"
 
 youtube_module = types.ModuleType("youtube_transcript_api")
 youtube_module.YouTubeTranscriptApi = object
@@ -43,7 +45,7 @@ telemetry_module = types.ModuleType("neos.workflow.telemetry")
 telemetry_module.trace_workflow_node = _noop_trace
 telemetry_module.add_span_event = lambda *args, **kwargs: None
 telemetry_module.set_span_attributes = lambda *args, **kwargs: None
-sys.modules.setdefault("neos.workflow.telemetry", telemetry_module)
+sys.modules["neos.workflow.telemetry"] = telemetry_module
 
 from neos.workflow.graph import _should_route_to_harness_repair
 
@@ -139,6 +141,7 @@ async def test_repair_node_clears_stale_final_response_before_regeneration():
                 }
             ]
         },
+        "thinking_trace": [{"event_type": "harness.run.completed"}],
         "original_query": "test research topic",
         "required_agents": [],
     }
@@ -146,3 +149,4 @@ async def test_repair_node_clears_stale_final_response_before_regeneration():
     result = await workflow._research_harness_repair_node(state)
 
     assert result["final_response"] == "repaired candidate"
+    assert result.get("thinking_trace") is not None

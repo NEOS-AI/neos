@@ -246,6 +246,14 @@ class ResearchHarnessConfig(StrictConfigModel):
     direct_repair: ResearchHarnessDirectRepairConfig = Field(default_factory=ResearchHarnessDirectRepairConfig)
 
 
+class ThinkingEngineConfig(StrictConfigModel):
+    enabled: bool = True
+    persist_traces: bool = False
+    persist_task_dag: bool = False
+    task_level_harness: bool = True
+    max_trace_text_length: int = 240
+
+
 class SecretsConfig(StrictConfigModel):
     openai_api_key: str | None = Field(default=None, repr=False)
     anthropic_api_key: str | None = Field(default=None, repr=False)
@@ -583,6 +591,7 @@ class HyperDeepAgentConfig(StrictConfigModel):
     max_tasks_per_level: int = 3
     complexity_threshold: float = 0.85
     budget_cap: float = 5.0
+    task_level_harness_enabled: bool = True
 
 
 class RayConfig(StrictConfigModel):
@@ -696,6 +705,7 @@ class AppConfig(StrictConfigModel):
     quality_evaluator: QualityEvaluatorConfig = Field(default_factory=QualityEvaluatorConfig)
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     research_harness: ResearchHarnessConfig = Field(default_factory=ResearchHarnessConfig)
+    thinking_engine: ThinkingEngineConfig = Field(default_factory=ThinkingEngineConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     sources: SourceIntegrationsConfig = Field(default_factory=SourceIntegrationsConfig)
     youtube: YouTubeConfig = Field(default_factory=YouTubeConfig)
