@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.23.0
+## v0.23.0 (2026-06-21)
 * Remove the outdated backoffice
 * Add support for Advanced Tool Search tool.
 * Add support for Recursive Agent (ROMA) to both workflow and hyper deep research agent
@@ -11,6 +11,14 @@
 * Add cron scheduling for agent workflows
 * Add model provider plugin system (OpenClaw)
 * Add A2UI integration for agent workflow visualization in web UI
+* Refactor the chat stream API with design pattern improvements
+* Add support for Google Gemini Embedding API with dynamic dimension handling
+* Add support for agent control slider to adjust agent autonomy levels in real-time
+* Add multi-agent orchestration improvements with dynamic agent selection and routing
+* Update the BG color to a more vibrant shade of blue (#0070f3) for better visual appeal
+* Add support for harness architecture
+* Refactor the configuration system with layered YAML files and environment variable overrides
+* Claude-like thinking engine for HyperDeepResearchAgent with reasoning item support
 
 ## v0.22.0 (2026-03-02)
 * **YouTube Agent Workflow Integration**

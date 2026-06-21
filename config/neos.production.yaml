@@ -1,0 +1,10 @@
+environment: production
+api:
+  debug: false
+research_harness:
+  enabled: true
+  allow_off: false
+observability:
+  metrics_enabled: true
+storage:
+  provider: rustfs

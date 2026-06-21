@@ -51,6 +51,7 @@ class WorkflowNode(Enum):
     FACT_CHECK = "fact_check"
     QUALITY_VALIDATOR = "quality_validator"
     RESEARCH_HARNESS = "research_harness"
+    RESEARCH_HARNESS_REPAIR = "research_harness_repair"
     RESP_GENERATOR = "response_generator"
 
 

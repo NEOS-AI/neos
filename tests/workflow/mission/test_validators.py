@@ -81,3 +81,23 @@ async def test_mission_validator_runs_quality_adapter_when_score_missing():
     assert result["quality_score"] == 0.91
     assert result["quality_feedback"] == "품질이 우수합니다."
     assert result["validation_summary"]["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_mission_validator_includes_harness_summary_when_present():
+    validator = MissionValidator(fact_check_processor=None, quality_validator=None)
+    state = {
+        "mission_id": "mission-1",
+        "validation_contract": {"required_sources": 1, "min_quality_score": 0.8},
+        "quality_score": 0.9,
+        "search_results": [{"url": "https://a.com"}],
+        "harness_verdict": "pass",
+        "harness_score": 0.91,
+        "harness_failed_checks": [],
+        "harness_mode": "gate",
+    }
+
+    updates = await validator.validate(state)
+
+    assert updates["validation_summary"]["harness"]["verdict"] == "pass"
+    assert updates["validation_summary"]["harness"]["score"] == 0.91

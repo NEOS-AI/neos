@@ -73,6 +73,22 @@ class MissionValidator:
             "failed_checks": failed_checks,
             "validator_count": len(runs),
         }
+        harness_summary = None
+        if state.get("harness_verdict"):
+            harness_summary = {
+                "mode": state.get("harness_mode"),
+                "verdict": state.get("harness_verdict"),
+                "score": float(state.get("harness_score") or 0.0),
+                "failed_checks": list(state.get("harness_failed_checks") or []),
+            }
+        if harness_summary:
+            summary["harness"] = harness_summary
+            if harness_summary["mode"] == "gate" and harness_summary["verdict"] in {
+                "fail",
+                "needs_repair",
+            }:
+                summary["passed"] = False
+                summary["failed_checks"].extend(harness_summary["failed_checks"])
         result = {
             "validator_runs": runs,
             "validation_summary": summary,

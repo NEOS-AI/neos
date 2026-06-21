@@ -106,6 +106,32 @@ class SourceDiversityChecker:
         context: dict | None = None,
     ) -> HarnessCheckResult:
         unique = _unique_sources(sources)
+        blocked_domains = {
+            domain.lower().removeprefix("www.")
+            for domain in contract.blocked_domains
+        }
+        source_domains = {
+            _domain(source.get("url"))
+            for source in unique
+            if _domain(source.get("url"))
+        }
+        blocked_hits = sorted(source_domains & blocked_domains)
+        if blocked_hits:
+            return HarnessCheckResult(
+                name=self.name,
+                passed=False,
+                score=0.0,
+                severity=(
+                    "critical"
+                    if contract.mode == HarnessMode.GATE
+                    else "warning"
+                ),
+                summary="Source set includes blocked domains.",
+                failed_items=[{"domain": domain} for domain in blocked_hits],
+                repairable=True,
+                metadata={"blocked_domains": blocked_hits},
+            )
+
         domains = [_domain(source.get("url")) for source in unique if _domain(source.get("url"))]
         if not domains:
             passed = not contract.required_sources and contract.mode != HarnessMode.GATE
@@ -145,4 +171,3 @@ class SourceDiversityChecker:
                 "threshold": contract.min_source_diversity,
             },
         )
-

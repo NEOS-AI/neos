@@ -910,8 +910,8 @@ class DistributedRecursiveOrchestrator(RecursiveOrchestrator):
     """
     Ray 기반 분산 실행을 지원하는 RecursiveOrchestrator 확장.
 
-    RAY_ENABLED=False 시 부모 클래스(순차 실행) 동작 유지.
-    RAY_ENABLED=True 시 sibling subtask를 DAG 의존성에 따라 병렬 실행.
+    ray.enabled: false 시 부모 클래스(순차 실행) 동작 유지.
+    ray.enabled: true 시 sibling subtask를 DAG 의존성에 따라 병렬 실행.
     """
 
     def __init__(

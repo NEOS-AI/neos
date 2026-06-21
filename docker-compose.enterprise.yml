@@ -16,6 +16,45 @@ version: '3.8'
 # Usage:
 #   docker-compose -f docker-compose.enterprise.yml up -d
 
+x-neos-config-env: &neos-config-env
+  NEOS_ENV: production
+  NEOS_CONFIG_PATH: /app/config/neos.production.yaml
+
+x-neos-secret-env: &neos-secret-env
+  DATABASE_URL: postgresql+asyncpg://neos_user:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres-primary:5432/neos_db
+  REDIS_URL: redis://redis-master:6379/0
+  CELERY_BROKER_URL: redis://redis-master:6379/2
+  CELERY_RESULT_BACKEND: redis://redis-master:6379/1
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+  TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+  YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+  GITHUB_API_TOKEN: ${GITHUB_API_TOKEN:-}
+  REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
+  REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
+  SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
+  SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
+  NEWS_API_KEY: ${NEWS_API_KEY:-}
+  OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:-}
+  EXCHANGERATE_API_KEY: ${EXCHANGERATE_API_KEY:-}
+  FINANCIALDATASETS_API_KEY: ${FINANCIALDATASETS_API_KEY:-}
+  ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY:-}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
+  RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
+  CHECKPOINTER_S3_ACCESS_KEY: ${CHECKPOINTER_S3_ACCESS_KEY:-}
+  CHECKPOINTER_S3_SECRET_KEY: ${CHECKPOINTER_S3_SECRET_KEY:-}
+
+x-neos-backend-env: &neos-backend-env
+  <<: [*neos-config-env, *neos-secret-env]
+
+x-neos-backend-volumes: &neos-backend-volumes
+  - ./config:/app/config:ro
+  - neos_storage:/app/storage
+
 services:
   # === Database Layer ===
 
@@ -77,33 +116,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: neos-backend-1
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://neos_user:${POSTGRES_PASSWORD:-ChangeThisPasswordInProduction}@postgres-primary:5432/neos_db
-      - REDIS_URL=redis://redis-master:6379/0
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - TAVILY_API_KEY=${TAVILY_API_KEY}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
-      - ENVIRONMENT=production
-      - LOG_LEVEL=INFO
-      - METRICS_ENABLED=true
-      - CELERY_BROKER_URL=redis://redis-master:6379/2
-      # Storage configuration (RustFS for on-premise)
-      - STORAGE_PROVIDER=${STORAGE_PROVIDER:-rustfs}
-      - RUSTFS_ENDPOINT_URL=http://rustfs:9000
-      - RUSTFS_BUCKET_NAME=${RUSTFS_BUCKET_NAME:-neos-documents}
-      - RUSTFS_ACCESS_KEY=${RUSTFS_ACCESS_KEY:-minioadmin}
-      - RUSTFS_SECRET_KEY=${RUSTFS_SECRET_KEY:-minioadmin}
-      # S3 configuration (if using AWS S3)
-      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-neos-documents}
-      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
-      - AWS_REGION=${AWS_REGION:-us-east-1}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      # Local storage fallback
-      - LOCAL_STORAGE_PATH=/app/storage/documents
-    volumes:
-      - neos_storage:/app/storage
+    environment: *neos-backend-env
+    volumes: *neos-backend-volumes
     depends_on:
       postgres-primary:
         condition: service_healthy
@@ -136,33 +150,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: neos-backend-2
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://neos_user:${POSTGRES_PASSWORD:-ChangeThisPasswordInProduction}@postgres-primary:5432/neos_db
-      - REDIS_URL=redis://redis-master:6379/0
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - TAVILY_API_KEY=${TAVILY_API_KEY}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
-      - ENVIRONMENT=production
-      - LOG_LEVEL=INFO
-      - METRICS_ENABLED=true
-      - CELERY_BROKER_URL=redis://redis-master:6379/2
-      # Storage configuration (RustFS for on-premise)
-      - STORAGE_PROVIDER=${STORAGE_PROVIDER:-rustfs}
-      - RUSTFS_ENDPOINT_URL=http://rustfs:9000
-      - RUSTFS_BUCKET_NAME=${RUSTFS_BUCKET_NAME:-neos-documents}
-      - RUSTFS_ACCESS_KEY=${RUSTFS_ACCESS_KEY:-minioadmin}
-      - RUSTFS_SECRET_KEY=${RUSTFS_SECRET_KEY:-minioadmin}
-      # S3 configuration (if using AWS S3)
-      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-neos-documents}
-      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
-      - AWS_REGION=${AWS_REGION:-us-east-1}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      # Local storage fallback
-      - LOCAL_STORAGE_PATH=/app/storage/documents
-    volumes:
-      - neos_storage:/app/storage
+    environment: *neos-backend-env
+    volumes: *neos-backend-volumes
     depends_on:
       postgres-primary:
         condition: service_healthy
@@ -191,33 +180,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: neos-backend-3
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://neos_user:${POSTGRES_PASSWORD:-ChangeThisPasswordInProduction}@postgres-primary:5432/neos_db
-      - REDIS_URL=redis://redis-master:6379/0
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - TAVILY_API_KEY=${TAVILY_API_KEY}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
-      - ENVIRONMENT=production
-      - LOG_LEVEL=INFO
-      - METRICS_ENABLED=true
-      - CELERY_BROKER_URL=redis://redis-master:6379/2
-      # Storage configuration (RustFS for on-premise)
-      - STORAGE_PROVIDER=${STORAGE_PROVIDER:-rustfs}
-      - RUSTFS_ENDPOINT_URL=http://rustfs:9000
-      - RUSTFS_BUCKET_NAME=${RUSTFS_BUCKET_NAME:-neos-documents}
-      - RUSTFS_ACCESS_KEY=${RUSTFS_ACCESS_KEY:-minioadmin}
-      - RUSTFS_SECRET_KEY=${RUSTFS_SECRET_KEY:-minioadmin}
-      # S3 configuration (if using AWS S3)
-      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-neos-documents}
-      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
-      - AWS_REGION=${AWS_REGION:-us-east-1}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      # Local storage fallback
-      - LOCAL_STORAGE_PATH=/app/storage/documents
-    volumes:
-      - neos_storage:/app/storage
+    environment: *neos-backend-env
+    volumes: *neos-backend-volumes
     depends_on:
       postgres-primary:
         condition: service_healthy

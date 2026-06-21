@@ -17,6 +17,15 @@ from .task import EvalTask
 logger = logging.getLogger(__name__)
 
 
+TASK_CATEGORIES = [
+    "factual",
+    "comparative",
+    "controversial",
+    "regression",
+    "harness_calibration",
+]
+
+
 class TaskManager:
     """Manager for evaluation tasks.
 
@@ -58,7 +67,7 @@ class TaskManager:
         self.tasks_dir.mkdir(parents=True, exist_ok=True)
 
         # Create category subdirectories
-        for category in ["factual", "comparative", "controversial", "regression"]:
+        for category in TASK_CATEGORIES:
             (self.tasks_dir / category).mkdir(exist_ok=True)
 
     def load_task(self, task_path: str) -> Optional[EvalTask]:
@@ -134,7 +143,7 @@ class TaskManager:
         """
         all_tasks = []
 
-        for category in ["factual", "comparative", "controversial", "regression"]:
+        for category in TASK_CATEGORIES:
             category_tasks = self.load_category(category)
             all_tasks.extend(category_tasks)
 

@@ -1,0 +1,476 @@
+environment: development
+
+api:
+  v1_prefix: /api/v1
+  debug: false
+  cors:
+    allowed_origins:
+      - http://localhost:3000
+    allow_credentials: true
+  gateway:
+    enabled: false
+    user_id_header: X-User-ID
+    trusted_ips:
+      - 127.0.0.1
+      - ::1
+
+database:
+  pool_size: 20
+  max_overflow: 30
+  pool_timeout: 30
+  pool_recycle: 1800
+
+redis:
+  ttl: 3600
+  pool_size: 50
+  min_idle_connections: 10
+
+cache:
+  workflow_response_ttl: 7200
+  user_specific: false
+  semantic:
+    enabled: true
+    threshold: 0.9
+
+smart_cache:
+  enabled: true
+  similarity_threshold: 0.85
+  max_entries: 100000
+  statistics_enabled: true
+  ttl:
+    realtime: 900
+    financial: 600
+    analysis: 604800
+    research: 2592000
+    generation: 7776000
+
+llm:
+  provider: anthropic
+  model: gpt-4-turbo-preview
+  temperature: 0.1
+  timeout: 120
+  research_planning_timeout: 180
+  fast_model: claude-haiku-4-5-20251001
+
+embedding:
+  provider: gemini
+  model: gemini-embedding-2-flash
+  dimension: 3072
+  gemini_task_type: retrieval_document
+  gemini_image_task_type: retrieval_document
+  gemini_video_task_type: retrieval_document
+  dataset:
+    enabled: false
+    sample_rate: 0.1
+    dir: datasets/embeddings
+
+vision:
+  provider: auto
+  enabled: true
+  max_tokens: 1000
+  image_detail: auto
+
+agent:
+  max_iterations: 10
+  timeout: 300
+  timeouts:
+    knowledge_search: 20
+    realtime_info_search: 30
+    realtime_data_search: 30
+    multi_query_search: 35
+    web_lookup: 15
+    data_analysis: 60
+    comparative_analysis: 60
+    web_content_analysis: 45
+    image_generation: 120
+    api_call: 30
+    file_processing: 90
+    task_creation: 30
+    deep_research: 300
+    hyper_deep_research: 600
+    iterative_web_explorer: 180
+    youtube_search: 45
+  max_concurrent_workflows: 100
+  max_concurrent_agents_per_workflow: 10
+  stream_event_timeout: 2.0
+  stream_heartbeat_interval: 30
+
+iterative_explorer:
+  max_depth: 5
+  max_pages: 20
+  max_iterations: 10
+  min_quality: 0.75
+  concurrent_fetches: 3
+  timeout: 180
+  tavily_timeout: 30
+  cache_ttl: 3600
+  completeness_cache_ttl: 1800
+  initial_search_results: 10
+  recent_results_window: 5
+  page_limit_threshold: 0.9
+  link_follower:
+    max_links: 10
+    min_relevance: 0.5
+
+quality_evaluator:
+  completeness_weight: 0.4
+  credibility_weight: 0.3
+  diversity_weight: 0.3
+  early_termination_threshold: 0.3
+  high_credibility_threshold: 0.7
+  dominance_threshold: 0.5
+
+workflow:
+  search_orchestration_timeout: 40
+  min_quality_score: 0.4
+  max_retries: 2
+  max_iterations: 10
+  timeout_seconds: 300
+  cache_enabled: true
+  cache_ttl: 3600
+
+research_harness:
+  enabled: true
+  allow_off: false
+  default_mode: auto
+  gate_threshold: 0.82
+  advisory_threshold: 0.7
+  high_risk_threshold: 0.9
+  max_repair_attempts: 1
+  hyper_deep_repair_attempts: 2
+  model_checks:
+    enabled: true
+    timeout_seconds: 20
+    max_claims: 8
+    provider: ""
+    model: ""
+  persistence:
+    persist_runs: false
+    store_full_check_details: false
+    evidence_storage_policy: summary_only
+    cache_policy: passed_only
+  direct_repair:
+    enabled: false
+    search_timeout_seconds: 25
+    search_retries: 1
+
+thinking_engine:
+  enabled: true
+  persist_traces: false
+  persist_task_dag: false
+  task_level_harness: true
+  max_trace_text_length: 240
+
+sources:
+  reddit_user_agent: NEOS-Research-Engine/1.0
+  sec_edgar_user_agent: NEOS-Research contact@neos.ai
+  openalex_email: ""
+  stock_api_provider: yahoo
+
+youtube:
+  max_results: 10
+  transcript_languages:
+    - en
+    - ko
+  min_relevance_score: 0.5
+  enable_auto_captions: true
+  max_transcript_length: 50000
+
+auth:
+  access_token_expire_minutes: 15
+  refresh_token_expire_days: 7
+
+session:
+  cookie_name: neos_session
+  expire_seconds: 604800
+
+rate_limit:
+  login_attempts: 5
+  login_window_seconds: 600
+  api_calls_per_minute: 100
+
+circuit_breaker:
+  enabled: true
+  fail_threshold: 5
+  recovery_timeout: 60
+  expected_exception: true
+
+observability:
+  enabled: true
+  log_level: INFO
+  phoenix:
+    host: localhost
+    port: 6006
+    collector_endpoint:
+    project_name: neos-multi-agent
+  metrics_enabled: true
+  trace_enabled: true
+  max_traces: 1000
+  trace_retention_days: 30
+  track_llm_calls: true
+  track_agent_performance: true
+  track_workflow_metrics: true
+
+mcp:
+  enabled: true
+  server_host: localhost
+  server_port: 8000
+  timeout: 30
+  retry_count: 3
+  fallback_enabled: true
+  tool_selection_strategy: mcp_fallback
+  tool_quality_threshold: 0.7
+  tool_performance_priority: false
+
+dataset:
+  auto_save: true
+  save_format: jsonl
+  base_path: datasets
+
+web_search_logging:
+  async_enabled: true
+  queue_type: memory
+
+storage:
+  provider: local
+  s3:
+    bucket_name: neos-documents
+    endpoint_url:
+    region: us-east-1
+  rustfs:
+    bucket_name: neos-documents
+    endpoint_url:
+  local:
+    path: storage/documents
+
+checkpointer:
+  type: postgres
+  blob_threshold: 1048576
+  s3:
+    backend: s3
+    bucket: neos-checkpoints
+    region: us-east-1
+    endpoint_url:
+
+document_processing:
+  max_file_size: 52428800
+  chunk_size: 1000
+  chunk_overlap: 200
+  default_chunking_strategy: sentence
+  semantic_chunk_threshold: 0.75
+
+knowledge_graph:
+  evidence_graph:
+    enabled: false
+  population:
+    enabled: false
+  max_traversal_depth: 2
+  search_weight: 0.3
+  extraction:
+    enabled: true
+    model: gpt-4-turbo-preview
+  min_confidence: 0.7
+
+deep_research:
+  max_polling_duration: 4800
+  poll_interval: 10
+  default_quality_score: 0.85
+  chunk_size: 200
+  max_sources_in_memory: 50
+  max_concurrent_requests: 3
+  min_request_interval: 0.5
+  token_budget: 150000
+
+artifacts:
+  enabled: true
+  llm_model: claude-haiku-4-5-20251001
+  llm_temperature: 0.7
+  llm_max_tokens: 4096
+
+chat:
+  default_max_tokens: 200000
+  enable_workflow: true
+  enable_response_refinement: true
+  history_enabled: true
+  max_history_messages: 20
+  history_context_max_tokens: 2000
+  history_usage_level: full
+  thinking_blocks_enabled: true
+  max_thinking_length: 0
+  disable_thinking_for_search: true
+  token_budget: 80000
+
+context_optimization:
+  use_tiktoken: true
+  token_counter_model: gpt-4
+  overflow_detection: true
+  window_threshold: 0.85
+  max_context_tokens: 800000
+  reserve_tokens: 4096
+  tool_result_summarization: true
+  tool_result_max_length: 4000
+  tool_result_summarization_model: gpt-4-turbo-preview
+  message_compression_enabled: true
+  message_compression_threshold: 30
+  message_compression_ratio: 0.5
+  message_history_max_tokens: 50000
+  semantic_deduplication: true
+  semantic_similarity_threshold: 0.92
+  workflow_context_budget: true
+  default_workflow_token_budget: 100000
+
+telemetry:
+  otel:
+    enabled: false
+    exporter_jaeger_endpoint: http://localhost:4318/v1/traces
+    service_name: neos-workflow
+    service_version: 0.19.0
+    deployment_environment: development
+    traces_sampler: always_on
+    traces_sampler_arg: 1.0
+    bsp_max_queue_size: 2048
+    bsp_schedule_delay: 5000
+    bsp_max_export_batch_size: 512
+
+celery:
+  enabled: false
+  task_serializer: json
+  result_serializer: json
+  timezone: UTC
+  worker_prefetch_multiplier: 4
+  task_acks_late: true
+
+memory:
+  short_term_ttl: 3600
+  long_term_enabled: true
+  episodic_enabled: true
+  max_context_items: 10
+
+query_classifier:
+  use_llm: false
+  llm_model: claude-haiku-4-5-20251001
+  llm_timeout: 10
+
+executive_summary:
+  enabled: true
+  min_words: 500
+  max_sentences: 3
+
+query_expansion:
+  enabled: false
+  variations: 3
+
+cost_aware_routing:
+  enabled: false
+  default_budget: 5.0
+
+citations:
+  enabled: true
+  default_style: numbered
+
+fact_check:
+  enabled: true
+  complexity_threshold: 0.4
+
+search_fallback:
+  enabled: true
+  duckduckgo_max_results: 10
+
+tool_search:
+  enabled: false
+  top_k: 5
+  max_rounds: 3
+  rrf_k: 60
+
+hybrid_search:
+  alpha: 0.5
+  candidate_count: 50
+
+reranker:
+  enabled: true
+  top_n: 10
+  model: rerank-english-v3.0
+
+recursive_agent:
+  enabled: false
+  max_depth: 3
+  max_tasks_per_level: 4
+  complexity_threshold: 0.8
+  atomizer_model: claude-haiku-4-5-20251001
+  planner_model: claude-opus-4-6
+  budget_cap: 0.5
+
+hyper_deep_agent:
+  enabled: false
+  max_depth: 1
+  max_tasks_per_level: 3
+  complexity_threshold: 0.85
+  budget_cap: 5.0
+  task_level_harness_enabled: true
+
+ray:
+  enabled: false
+  address: auto
+  num_cpus:
+  object_store_memory: 2000000000
+
+sandbox:
+  enabled: false
+  type: restricted
+  timeout_sec: 30
+
+contextual_retrieval:
+  enabled: false
+  model: claude-haiku-4-5-20251001
+  max_tokens: 200
+  max_concurrent: 3
+  max_chunks_per_doc: 200
+  budget_cap_usd: 0.1
+  embed_source: contextual
+
+execution_approval:
+  enabled: false
+  required_skills:
+    - api_call
+    - file_processing
+    - task_creation
+    - code_execution
+  timeout_seconds: 60
+  default_autonomy_level: 1
+
+channels:
+  telegram:
+    enabled: false
+  discord:
+    enabled: false
+  slack:
+    enabled: false
+  bot_user_id: ""
+
+context_assembly:
+  max_tokens: 8000
+  short_term_ratio: 0.5
+  long_term_ratio: 0.3
+  episodic_ratio: 0.2
+
+cron:
+  enabled: true
+  default_timezone: UTC
+  max_tasks_per_user: 20
+  llm_fallback_enabled: true
+  llm_model: claude-haiku-4-5-20251001
+
+model_providers:
+  ollama:
+    base_url: http://localhost:11434
+    default_model: llama3.1:8b
+
+a2ui:
+  enabled: false
+  llm_model: claude-haiku-4-5-20251001
+  llm_provider: anthropic
+  max_components: 10
+  frame_timeout: 300
+
+inline_visualization:
+  enabled: true

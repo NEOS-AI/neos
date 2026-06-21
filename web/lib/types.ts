@@ -38,6 +38,29 @@ export const functionCallItemSchema = z.object({
 
 export type FunctionCallItemData = z.infer<typeof functionCallItemSchema>;
 
+export const harnessMetadataSchema = z.object({
+  status: z.string(),
+  mode: z.string().optional(),
+  verdict: z.string().optional(),
+  score: z.number().optional(),
+  failed_checks: z.array(z.string()).optional(),
+  checks: z
+    .array(
+      z.object({
+        check: z.string(),
+        status: z.string().optional(),
+        passed: z.boolean().optional(),
+        score: z.number().optional(),
+        severity: z.string().optional(),
+      })
+    )
+    .optional(),
+  repair_attempts: z.number().optional(),
+  repair_actions: z.array(z.record(z.unknown())).optional(),
+});
+
+export type HarnessMetadata = z.infer<typeof harnessMetadataSchema>;
+
 /**
  * Message metadata schema with OpenResponses fields
  */
@@ -73,6 +96,8 @@ export const messageMetadataSchema = z.object({
   // Execution approval requests emitted by checkpointer-backed workflows.
   approval_requests: z.custom<ApprovalRequest[]>().optional(),
   approval_session_id: z.string().optional(),
+  // Runtime research harness validation and repair progress.
+  harness: harnessMetadataSchema.optional(),
   // Phase 8 (A2UI): UIFrame payload for form rendering
   ui_frame: z.custom<UIFramePayload>().optional(),
   // Inline Visualization: renderDiagram / renderChart 결과 (복수 지원)

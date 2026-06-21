@@ -55,6 +55,7 @@ from neos.api.adapters.stream_adapter import (
     create_reasoning_start_events,
     create_reasoning_delta_event,
     create_reasoning_done_events,
+    parse_harness_progress_event,
 )
 from neos.api.models.open_responses import (
     OutputItemDoneEvent,
@@ -781,6 +782,14 @@ async def stream_message_legacy(
                                     message=event.content if event.content else None
                                 )
                                 yield format_sse_event(progress_event)
+
+                            elif event.event == "node_progress":
+                                harness_event = parse_harness_progress_event(
+                                    node_name=event.node_name,
+                                    message=event.content,
+                                )
+                                if harness_event is not None:
+                                    yield format_sse_event(harness_event)
 
                             # Phase 8 (A2UI): UIFrame → neos:ui_frame (확장)
                             elif event.event == "ui_frame":

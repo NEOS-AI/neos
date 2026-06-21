@@ -60,6 +60,11 @@ class AgentState(TypedDict):
     query_classification: Optional[Dict[str, Any]]
     required_agents: List[str]
 
+    # Thinking Engine strategy
+    thinking_strategy: Optional[Dict[str, Any]]
+    thinking_trace: Optional[List[Dict[str, Any]]]
+    task_dag: Optional[Dict[str, Any]]
+
     # Skill and tool selection
     selected_skills: Optional[List[str]]
     selected_tools: Optional[List[str]]

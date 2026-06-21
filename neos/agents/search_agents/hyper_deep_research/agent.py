@@ -1426,6 +1426,12 @@ class HyperDeepResearchAgent(SearchAgent):
         self.research_metadata["abstract_refinement_performed"] = refinement_metadata["abstract_refined"]
         self.research_metadata["sections_realigned"] = refinement_metadata["sections_aligned"]
         self.research_metadata["average_section_quality"] = refinement_metadata["average_final_quality"]
+        from neos.workflow.harness.adapters.hyper_deep import hyper_deep_metadata_checks
+
+        self.research_metadata["harness_candidate_checks"] = [
+            check.to_dict()
+            for check in hyper_deep_metadata_checks(self.research_metadata)
+        ]
 
         print("\n[INFO] ✅ Iterative refinement complete:")
         print(f"[INFO]   Total iterations: {refinement_metadata['total_iterations']}")
@@ -1538,10 +1544,19 @@ class HyperDeepResearchAgent(SearchAgent):
 
         return "".join(report_parts)
 
-    async def _finalize_report(self) -> None:
-        """Finalize report in database."""
+    async def _finalize_report(self, *, verified: bool = False) -> None:
+        """Finalize report in database.
+
+        HyperDeep produces a candidate report. Runtime handlers mark it
+        completed only after the research harness gate passes.
+        """
+        status = "completed" if verified else "candidate_ready"
+        timestamp_field = "completed_at" if verified else None
         await self.repository.update_report_status(
-            self.current_report_id, "completed", "completed_at", quality_score=0.95
+            self.current_report_id,
+            status,
+            timestamp_field,
+            quality_score=0.95 if verified else None,
         )
         await self._update_report_metadata()
 

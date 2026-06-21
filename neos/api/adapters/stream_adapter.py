@@ -35,6 +35,7 @@ from neos.api.models.open_responses import (
     NeosArtifactDeltaEvent,
     NeosArtifactFinishEvent,
     NeosWorkflowProgressEvent,
+    NeosHarnessEvent,
     NeosUIFrameEvent,
     # Types
     OpenResponsesEvent,
@@ -159,6 +160,13 @@ def adapt_legacy_event(
     elif event_type == "workflow_progress":
         progress = legacy_event.get("progress_percent", 0)
         message = legacy_event.get("metadata", {}).get("message", "")
+        harness_event = parse_harness_progress_event(
+            node_name=legacy_event.get("node_name"),
+            message=message,
+        )
+        if harness_event is not None:
+            events.append(harness_event)
+            return events
 
         events.append(NeosWorkflowProgressEvent(
             progress_percent=progress,
@@ -303,6 +311,31 @@ def adapt_legacy_event(
         events.append(ResponseFailedEvent(response=state.response))
 
     return events
+
+
+def parse_harness_progress_event(
+    *,
+    node_name: str | None,
+    message: str | None,
+    report_id: str | None = None,
+) -> Optional[NeosHarnessEvent]:
+    if node_name not in {"research_harness", "research_harness_repair"}:
+        return None
+    if not message:
+        return None
+    try:
+        payload = json.loads(message)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or not payload.get("event"):
+        return None
+    return NeosHarnessEvent(
+        event=str(payload.get("event")),
+        run_id=payload.get("run_id"),
+        report_id=report_id,
+        timestamp=payload.get("timestamp"),
+        data=payload.get("data") if isinstance(payload.get("data"), dict) else {},
+    )
 
 
 def format_sse_event(event: OpenResponsesEvent) -> str:

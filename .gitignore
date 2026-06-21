@@ -15,6 +15,7 @@ wheels/
 
 # user conf
 conf.yaml
+config/neos.local.yaml
 
 .idea/
 .langgraph_api/

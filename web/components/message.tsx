@@ -24,6 +24,7 @@ import {
   ToolOutput,
 } from "./elements/tool";
 import { CheckCircleFillIcon, SparklesIcon, StopIcon } from "./icons";
+import { HarnessStatus } from "./harness-status";
 import { MessageActions } from "./message-actions";
 import { MessageEditor } from "./message-editor";
 import { MessageReasoning } from "./message-reasoning";
@@ -321,6 +322,10 @@ const PurePreviewMessage = ({
                 </ToolContent>
               </Tool>
             ))}
+
+          {message.role === "assistant" && message.metadata?.harness && (
+            <HarnessStatus harness={message.metadata.harness} />
+          )}
 
           {message.parts?.map((part, index) => {
             const { type } = part;

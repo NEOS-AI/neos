@@ -6,6 +6,7 @@
  */
 
 import { auth } from "@/app/(auth)/auth";
+import { getBackendUrl } from "@/lib/server-config";
 
 export class BackendAPIError extends Error {
   constructor(
@@ -40,7 +41,7 @@ export async function callBackendAPI(
     );
   }
 
-  const backendUrl = process.env.BACKEND_URL || "http://localhost:8518";
+  const backendUrl = getBackendUrl();
   const url = `${backendUrl}${endpoint}`;
 
   const response = await fetch(url, {
@@ -84,7 +85,7 @@ export async function callBackendAPI(
 async function refreshBackendToken(
   refreshToken: string
 ): Promise<string | null> {
-  const backendUrl = process.env.BACKEND_URL || "http://localhost:8518";
+  const backendUrl = getBackendUrl();
 
   try {
     const response = await fetch(`${backendUrl}/api/v1/auth/refresh`, {
@@ -147,7 +148,7 @@ export async function callBackendAPIWithKey(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<Response> {
-  const backendUrl = process.env.BACKEND_URL || "http://localhost:8518";
+  const backendUrl = getBackendUrl();
   const url = `${backendUrl}${endpoint}`;
 
   const response = await fetch(url, {

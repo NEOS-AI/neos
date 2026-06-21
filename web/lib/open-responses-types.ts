@@ -309,6 +309,42 @@ export interface NeosWorkflowProgressEvent {
   conversation_id: string;
 }
 
+export type HarnessVerdict =
+  | "pass"
+  | "advisory_pass"
+  | "needs_repair"
+  | "fail"
+  | "skipped";
+
+export interface HarnessCheckEventData {
+  check: string;
+  passed?: boolean;
+  score?: number;
+  severity?: "info" | "warning" | "critical" | string;
+}
+
+export interface HarnessSummary {
+  mode: "off" | "advisory" | "gate" | string;
+  verdict: HarnessVerdict;
+  score: number;
+  failed_checks: string[];
+  repair_attempts: number;
+}
+
+export interface NeosHarnessEvent {
+  type: "neos:harness";
+  event:
+    | "harness_started"
+    | "harness_check_started"
+    | "harness_check_completed"
+    | "harness_repair_started"
+    | "harness_repair_completed"
+    | "harness_completed"
+    | "harness_failed";
+  report_id?: string;
+  data: Record<string, unknown>;
+}
+
 export interface ApprovalRequest {
   request_id: string;
   skill_name: string;
@@ -446,6 +482,7 @@ export type NeosExtensionEvent =
   | NeosArtifactDeltaEvent
   | NeosArtifactFinishEvent
   | NeosWorkflowProgressEvent
+  | NeosHarnessEvent
   | NeosApprovalRequestEvent
   | NeosUIFrameEvent
   | NeosInlineVizEvent
@@ -573,6 +610,14 @@ export function isNeosWorkflowProgressEvent(
   event: OpenResponsesEvent
 ): event is NeosWorkflowProgressEvent {
   return event.type === "neos:workflow_progress";
+}
+
+export function isNeosHarnessEvent(event: unknown): event is NeosHarnessEvent {
+  return (
+    typeof event === "object" &&
+    event !== null &&
+    (event as { type?: unknown }).type === "neos:harness"
+  );
 }
 
 export function isNeosApprovalRequestEvent(

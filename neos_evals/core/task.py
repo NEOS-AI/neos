@@ -63,6 +63,7 @@ class EvalTask:
     description: Optional[str] = None
     reference_solution: Optional[str] = None
     tags: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     # Tracking
     created_at: datetime = field(default_factory=datetime.now)
@@ -86,6 +87,7 @@ class EvalTask:
             "description": self.description,
             "reference_solution": self.reference_solution,
             "tags": self.tags,
+            "metadata": self.metadata,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -130,8 +132,18 @@ class EvalTask:
         if self.difficulty not in ["easy", "medium", "hard"]:
             errors.append("difficulty must be 'easy', 'medium', or 'hard'")
 
-        if self.category not in ["factual", "comparative", "controversial", "regression"]:
-            errors.append("category must be one of: factual, comparative, controversial, regression")
+        valid_categories = [
+            "factual",
+            "comparative",
+            "controversial",
+            "regression",
+            "harness_calibration",
+        ]
+        if self.category not in valid_categories:
+            errors.append(
+                "category must be one of: "
+                + ", ".join(valid_categories)
+            )
 
         return errors
 

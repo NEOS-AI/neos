@@ -75,6 +75,13 @@ class NodeExecutor:
                 }
             }
 
+        elif processor_type == "research_harness":
+            from neos.workflow.processors.research_harness_processor import (
+                ResearchHarnessProcessor,
+            )
+
+            return await ResearchHarnessProcessor().process(state)
+
         return {}
 
     def _generate_response_from_steps(

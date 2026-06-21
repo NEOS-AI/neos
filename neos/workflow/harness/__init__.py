@@ -13,6 +13,7 @@ from .models import (
     HarnessVerdict,
 )
 from .policy import decide_harness_policy
+from .repair import HarnessRepairPlanner
 from .runner import HarnessRunner
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "HarnessMode",
     "HarnessPolicyDecision",
     "HarnessRepairAction",
+    "HarnessRepairPlanner",
     "HarnessRepairPlan",
     "HarnessRiskLevel",
     "HarnessRun",
@@ -29,4 +31,3 @@ __all__ = [
     "build_harness_contract",
     "decide_harness_policy",
 ]
-

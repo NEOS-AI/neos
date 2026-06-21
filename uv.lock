@@ -3132,7 +3132,7 @@ wheels = [
 
 [[package]]
 name = "neos"
-version = "0.22.0"
+version = "0.23.0"
 source = { virtual = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -3183,6 +3183,7 @@ dependencies = [
     { name = "psycopg2-binary" },
     { name = "pybreaker" },
     { name = "pydantic" },
+    { name = "pydantic-settings" },
     { name = "pyjwt" },
     { name = "pymupdf" },
     { name = "pypdf2" },
@@ -3277,6 +3278,7 @@ requires-dist = [
     { name = "psycopg2-binary", specifier = ">=2.9.10" },
     { name = "pybreaker", specifier = ">=1.2.0" },
     { name = "pydantic", specifier = ">=2.11.7" },
+    { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "pyjwt", specifier = ">=2.10.1" },
     { name = "pymupdf", specifier = ">=1.26.7" },
     { name = "pypdf2", specifier = ">=3.0.1" },

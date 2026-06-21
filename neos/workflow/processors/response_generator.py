@@ -88,6 +88,9 @@ class ResponseGenerator:
 
         if should_refine and response_parts and settings.ENABLE_RESPONSE_REFINEMENT:
             logger.debug("[ResponseGenerator] Applying LLM-based response refinement (partial success or errors detected)")
+            repair_instructions = self._format_harness_repair_instructions(state)
+            if repair_instructions:
+                response_parts = [*response_parts, repair_instructions]
             final_response = await self._refine_response_with_llm(
                 query=state["original_query"],
                 response_parts=response_parts,
@@ -168,6 +171,24 @@ class ResponseGenerator:
             "timestamp": datetime.now().isoformat()
         })
         return state
+
+    def _format_harness_repair_instructions(self, state: AgentState) -> str:
+        plan = state.get("harness_repair_plan") or {}
+        actions = plan.get("actions") or []
+        if not actions:
+            return ""
+
+        lines = ["Harness repair requirements:"]
+        for action in actions:
+            lines.append(
+                "- "
+                f"{action.get('action_type')} for {action.get('target_check')}: "
+                f"{action.get('reason', '')}"
+            )
+            failed_items = (action.get("params") or {}).get("failed_items") or []
+            if failed_items:
+                lines.append(f"  Failed items: {failed_items[:5]}")
+        return "\n".join(lines)
 
     def _construct_final_response(self, response_parts: List[str], detected_language: str = "ko") -> str:
         """최종 응답 구성"""

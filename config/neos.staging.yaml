@@ -1,0 +1,11 @@
+environment: staging
+api:
+  debug: false
+research_harness:
+  enabled: true
+  persistence:
+    persist_runs: true
+observability:
+  metrics_enabled: true
+storage:
+  provider: rustfs

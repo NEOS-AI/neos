@@ -79,6 +79,24 @@ class RecursiveVerifier:
         """
         original_query = context.get("original_query", original_task.description)
 
+        harness = (original_task.metadata or {}).get("harness") or {}
+        if harness.get("mode") == "gate":
+            verdict = str(harness.get("verdict") or "")
+            if verdict == "pass":
+                return {
+                    "satisfied": True,
+                    "score": float(harness.get("score") or 1.0),
+                    "gaps": [],
+                    "suggestion": "",
+                }
+            if verdict in {"fail", "needs_repair"}:
+                return {
+                    "satisfied": False,
+                    "score": float(harness.get("score") or 0.0),
+                    "gaps": list(harness.get("failed_checks") or []),
+                    "suggestion": "Repair the artifact until the harness gate passes.",
+                }
+
         # 결과가 너무 짧으면 즉시 실패
         if len(aggregated_result.strip()) < 50:
             return {

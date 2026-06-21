@@ -59,6 +59,9 @@ class MissionTask(BaseModel):
     risk_level: RiskLevel = RiskLevel.LOW
     status: MissionTaskStatus = MissionTaskStatus.PLANNED
     result_ref: Optional[str] = None
+    artifact_ref: Optional[str] = None
+    attempts: int = 0
+    harness_run_id: Optional[str] = None
     error: Optional[str] = None
 
     def to_state(self) -> Dict[str, Any]:

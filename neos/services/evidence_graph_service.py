@@ -167,6 +167,88 @@ class EvidenceGraphService:
             logger.error(f"[EvidenceGraph] 과거 증거 검색 실패: {e}")
             return []
 
+    async def supersede_claim(
+        self,
+        *,
+        old_claim_id: int,
+        new_claim_id: int,
+        reason: str,
+    ) -> None:
+        """Mark an older claim as no longer currently valid."""
+        try:
+            pool = await db_manager.get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE evidence_claims
+                    SET valid_to = NOW(),
+                        replaced_by_claim_id = $2,
+                        invalidation_reason = $3,
+                        updated_at = NOW()
+                    WHERE claim_id = $1
+                    """,
+                    old_claim_id,
+                    new_claim_id,
+                    reason,
+                )
+        except Exception as e:
+            logger.error(f"[EvidenceGraph] claim supersede failed: {e}")
+
+    async def find_current_relevant_evidence(
+        self,
+        query: str,
+        user_id: str,
+        similarity_threshold: float = 0.80,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Search only claims that are currently valid."""
+        try:
+            embedding = await embedding_manager.get_embedding(query)
+            if not embedding:
+                return []
+
+            pool = await db_manager.get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT
+                        claim_id, claim_text, claim_type, confidence,
+                        verification_status, session_id,
+                        1 - (embedding::halfvec(3072) <=> $1::halfvec(3072)) AS similarity
+                    FROM evidence_claims
+                    WHERE user_id = $2
+                      AND valid_to IS NULL
+                      AND 1 - (embedding::halfvec(3072) <=> $1::halfvec(3072)) > $3
+                    ORDER BY similarity DESC
+                    LIMIT $4
+                    """,
+                    embedding,
+                    user_id,
+                    similarity_threshold,
+                    limit,
+                )
+
+                results = []
+                for row in rows:
+                    evidence = await self._get_claim_evidence(conn, row["claim_id"])
+                    results.append(
+                        {
+                            "claim": {
+                                "id": row["claim_id"],
+                                "text": row["claim_text"],
+                                "type": row["claim_type"],
+                                "confidence": row["confidence"],
+                                "status": row["verification_status"],
+                                "similarity": float(row["similarity"]),
+                            },
+                            "evidence": evidence,
+                        }
+                    )
+                return results
+        except Exception as e:
+            logger.error(f"[EvidenceGraph] current evidence search failed: {e}")
+            return []
+
     async def _get_claim_evidence(self, conn, claim_id: int) -> Dict[str, Any]:
         """특정 claim의 증거 체인 조회"""
         rows = await conn.fetch("""

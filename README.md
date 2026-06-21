@@ -61,13 +61,19 @@ playwright install chromium
 ### 2. Configuration
 
 ```bash
-# Create .env file
-cp .env.example .env
+# Create secret env and local YAML overlay
+cp .env.template .env
+cp config/neos.example.yaml config/neos.local.yaml
 
-# Set required API keys
+# Set NEOS_CONFIG_PATH=config/neos.local.yaml in .env.
+# Put secrets in .env and non-secret runtime settings in YAML.
+#
+# Required API keys
 # - OPENAI_API_KEY: OpenAI API key
 # - TAVILY_API_KEY: Tavily search API key
 ```
+
+For details, see [docs/CONFIGURATION.md](./docs/CONFIGURATION.md).
 
 ### 3. Start Database, and Dependency Services
 

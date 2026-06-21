@@ -597,11 +597,12 @@ CREATE TABLE IF NOT EXISTS ui_frame_sessions (
 
 #### 설정
 
-```bash
-A2UI_ENABLED=true                             # 피처 플래그
-A2UI_LLM_MODEL=claude-haiku-4-5-20251001      # UIFrame 생성 모델
-A2UI_MAX_COMPONENTS=10                        # 최대 컴포넌트 수
-A2UI_FRAME_TIMEOUT=300                        # 세션 만료 시간(초)
+```yaml
+a2ui:
+  enabled: true
+  llm_model: claude-haiku-4-5-20251001
+  max_components: 10
+  frame_timeout: 300
 ```
 
 ---

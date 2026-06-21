@@ -183,6 +183,7 @@ class RecursiveOrchestrator:
             result = await self._executor.execute(task, context)
             task.status = TaskStatus.COMPLETED
             task.result = result
+            task.artifact_ref = f"recursive-task://{task.task_id}/result"
             return result
 
         # 5. DECOMPOSABLE → 분해 후 재귀 실행
@@ -224,6 +225,7 @@ class RecursiveOrchestrator:
         # 7. 결과 통합 (Aggregation)
         aggregated = await self._aggregator.aggregate(task, subtasks, context)
         task.result = aggregated
+        task.artifact_ref = f"recursive-task://{task.task_id}/aggregated"
 
         # 8. 검증 (Verification)
         verification = await self._verifier.verify(task, aggregated, context)

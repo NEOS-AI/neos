@@ -6,39 +6,150 @@
  * @see https://www.openresponses.org/specification
  */
 
+import type { ChatStatus } from "ai";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AutonomyLevel, ChatMessage } from "@/lib/types";
-import { messageMetadataSchema } from "@/lib/types";
-import type { OpenResponsesEvent, MessageItem } from "@/lib/stream-types";
-import {
-  // OpenResponses type guards
-  isResponseInProgressEvent,
-  isResponseCompletedEvent,
-  isResponseFailedEvent,
-  isOutputItemAddedEvent,
-  isOutputItemDoneEvent,
-  isOutputTextDeltaEvent,
-  isNeosArtifactMetaEvent,
-  isNeosArtifactDeltaEvent,
-  isNeosArtifactFinishEvent,
-  isNeosWorkflowProgressEvent,
-  isNeosApprovalRequestEvent,
-  isNeosUIFrameEvent,
-  isNeosInlineVizEvent,
-  isNeosInlineVizErrorEvent,
-  isFunctionCallItem,
-} from "@/lib/stream-types";
+import type { VisibilityType } from "@/components/visibility-selector";
 import {
   createStreamProcessor,
   detectEventFormat,
 } from "@/lib/adapters/stream-adapter";
-import { generateUUID } from "@/lib/utils";
-import type { VisibilityType } from "@/components/visibility-selector";
 import type { ChatModel } from "@/lib/ai/models";
-import type { ChatStatus } from "ai";
+import type { MessageItem, OpenResponsesEvent } from "@/lib/stream-types";
+import {
+  // OpenResponses type guards
+  isFunctionCallItem,
+  isNeosApprovalRequestEvent,
+  isNeosArtifactDeltaEvent,
+  isNeosArtifactFinishEvent,
+  isNeosArtifactMetaEvent,
+  isNeosHarnessEvent,
+  isNeosInlineVizErrorEvent,
+  isNeosInlineVizEvent,
+  isNeosUIFrameEvent,
+  isNeosWorkflowProgressEvent,
+  isOutputItemAddedEvent,
+  isOutputItemDoneEvent,
+  isOutputTextDeltaEvent,
+  isResponseCompletedEvent,
+  isResponseFailedEvent,
+  isResponseInProgressEvent,
+} from "@/lib/stream-types";
+import type { AutonomyLevel, ChatMessage, HarnessMetadata } from "@/lib/types";
+import { messageMetadataSchema } from "@/lib/types";
+import { generateUUID } from "@/lib/utils";
 
 // messageMetadataSchema에서 개별 inline_viz 항목 스키마 추출 (SSE 검증 재사용)
 const inlineVizEntrySchema = messageMetadataSchema.shape.inline_visualizations.unwrap().element;
+
+const asString = (value: unknown) =>
+  typeof value === "string" ? value : undefined;
+
+const asNumber = (value: unknown) =>
+  typeof value === "number" ? value : undefined;
+
+const asStringArray = (value: unknown) =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
+
+const terminalHarnessStatus = (verdict: string | undefined) => {
+  if (verdict === "pass" || verdict === "advisory_pass") {
+    return "passed";
+  }
+  return "failed";
+};
+
+const applyHarnessEvent = (
+  current: HarnessMetadata | undefined,
+  eventName: string,
+  data: Record<string, unknown>
+): HarnessMetadata => {
+  const harness: HarnessMetadata = {
+    status: current?.status ?? "validating",
+    failed_checks: current?.failed_checks ?? [],
+    checks: current?.checks ?? [],
+    repair_attempts: current?.repair_attempts ?? 0,
+    repair_actions: current?.repair_actions ?? [],
+    ...current,
+  };
+
+  if (eventName === "harness_started") {
+    return {
+      ...harness,
+      status: "validating",
+      mode: asString(data.mode) ?? harness.mode,
+    };
+  }
+
+  if (eventName === "harness_check_started") {
+    const check = asString(data.check);
+    if (!check) {
+      return harness;
+    }
+    return {
+      ...harness,
+      checks: [
+        ...(harness.checks ?? []).filter((item) => item.check !== check),
+        { check, status: "running" },
+      ],
+    };
+  }
+
+  if (eventName === "harness_check_completed") {
+    const check = asString(data.check);
+    if (!check) {
+      return harness;
+    }
+    return {
+      ...harness,
+      checks: [
+        ...(harness.checks ?? []).filter((item) => item.check !== check),
+        {
+          check,
+          status: "completed",
+          passed: typeof data.passed === "boolean" ? data.passed : undefined,
+          score: asNumber(data.score),
+          severity: asString(data.severity),
+        },
+      ],
+    };
+  }
+
+  if (eventName === "harness_repair_started") {
+    return {
+      ...harness,
+      status: "repairing",
+      repair_attempts:
+        asNumber(data.attempt) ?? (harness.repair_attempts ?? 0) + 1,
+    };
+  }
+
+  if (eventName === "harness_repair_completed") {
+    const actions = [
+      ...((data.executed_actions as Record<string, unknown>[] | undefined) ?? []),
+      ...((data.skipped_actions as Record<string, unknown>[] | undefined) ?? []),
+    ];
+    return {
+      ...harness,
+      status: "validating",
+      repair_actions: [...(harness.repair_actions ?? []), ...actions],
+    };
+  }
+
+  if (eventName === "harness_completed" || eventName === "harness_failed") {
+    const verdict = asString(data.verdict) ?? harness.verdict;
+    return {
+      ...harness,
+      status:
+        eventName === "harness_failed" ? "failed" : terminalHarnessStatus(verdict),
+      mode: asString(data.mode) ?? harness.mode,
+      verdict,
+      score: asNumber(data.score) ?? harness.score,
+      failed_checks: asStringArray(data.failed_checks) ?? harness.failed_checks,
+      repair_attempts: asNumber(data.repair_attempts) ?? harness.repair_attempts,
+    };
+  }
+
+  return harness;
+};
 
 export interface ChatRequestOptions {
   // Vercel AI SDK와 호환되는 옵션
@@ -382,6 +493,26 @@ export function useChatStream({
                         progress: eventData.progress_percent,
                         message: eventData.message,
                       },
+                    });
+                  }
+                }
+
+                // neos:harness - research harness validation and repair progress
+                else if (isNeosHarnessEvent(eventData)) {
+                  assistantMessage.metadata = {
+                    createdAt: assistantMessage.metadata?.createdAt || new Date().toISOString(),
+                    ...assistantMessage.metadata,
+                    harness: applyHarnessEvent(
+                      assistantMessage.metadata?.harness,
+                      eventData.event,
+                      eventData.data
+                    ),
+                  };
+                  updateMessage();
+                  if (onData) {
+                    onData({
+                      type: "harness-progress",
+                      data: assistantMessage.metadata.harness,
                     });
                   }
                 }

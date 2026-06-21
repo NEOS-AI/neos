@@ -1,6 +1,7 @@
 "use server";
 
 import { z } from "zod";
+import { getBackendUrl } from "@/lib/server-config";
 
 import { signIn } from "./auth";
 
@@ -61,7 +62,7 @@ export const register = async (
     });
 
     // 백엔드 API 호출
-    const backendUrl = process.env.BACKEND_URL || "http://localhost:8518";
+    const backendUrl = getBackendUrl();
 
     const response = await fetch(`${backendUrl}/api/v1/auth/register`, {
       method: "POST",

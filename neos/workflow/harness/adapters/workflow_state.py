@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse
 
 
 def _get_value(item: Any, key: str, default: Any = None) -> Any:
@@ -47,10 +48,16 @@ def extract_sources(state: dict[str, Any]) -> list[dict[str, Any]]:
             "score": _get_value(result, "score"),
             "metadata": metadata,
         }
+        source["source_type"] = source.get("source") or _get_value(result, "source_type") or "web"
+        if source.get("url"):
+            source["domain"] = urlparse(str(source["url"])).netloc
         if isinstance(metadata, dict):
             for key in ("published_at", "published_date", "date", "timestamp"):
                 if metadata.get(key) is not None:
-                    source[key] = metadata[key]
+                    source["published_at"] = metadata[key]
+                    break
+            if metadata.get("retrieved_at") is not None:
+                source["retrieved_at"] = metadata["retrieved_at"]
         sources.append(source)
     return sources
 
@@ -62,5 +69,8 @@ def extract_context(state: dict[str, Any]) -> dict[str, Any]:
         "quality_score": state.get("quality_score"),
         "quality_feedback": state.get("quality_feedback"),
         "execution_steps": state.get("execution_steps") or [],
+        "processing_time_ms": state.get("processing_time_ms"),
+        "token_usage": state.get("token_usage") or {},
+        "llm_call_count": state.get("llm_call_count"),
+        "harness_repair_attempts": state.get("harness_repair_attempts") or 0,
     }
-

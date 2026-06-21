@@ -1,0 +1,17 @@
+{
+  "task_id": "harness_calibration_single_perspective",
+  "name": "Single-perspective report",
+  "query": "Calibration fixture for one-sided stakeholder framing",
+  "expected_sections": ["Summary", "Evidence", "Limitations"],
+  "required_topics": ["stakeholder perspectives", "counterarguments"],
+  "min_sources": 3,
+  "quality_threshold": 0.8,
+  "graders": ["bias_perspective", "source_diversity"],
+  "pass_threshold": 0.8,
+  "difficulty": "medium",
+  "category": "harness_calibration",
+  "metadata": {
+    "expected_runtime_checks": ["bias_perspective", "source_diversity"],
+    "expected_failure": "bias_perspective"
+  }
+}

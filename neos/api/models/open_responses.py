@@ -291,6 +291,18 @@ class NeosWorkflowProgressEvent(BaseModel):
     message: Optional[str] = None
 
 
+class NeosHarnessEvent(BaseModel):
+    """
+    Event: neos:harness - Research harness validation and repair progress.
+    """
+    type: Literal["neos:harness"] = "neos:harness"
+    event: str
+    run_id: Optional[str] = None
+    report_id: Optional[str] = None
+    timestamp: Optional[str] = None
+    data: Dict[str, Any] = Field(default_factory=dict)
+
+
 class NeosApprovalRequestEvent(BaseModel):
     """
     Event: neos:approval_request - Workflow execution approval required.
@@ -399,6 +411,7 @@ NeosExtensionEvent = Union[
     NeosArtifactDeltaEvent,
     NeosArtifactFinishEvent,
     NeosWorkflowProgressEvent,
+    NeosHarnessEvent,
     NeosUIFrameEvent,            # Phase 8 (A2UI)
     NeosInlineVizEvent,          # Inline Visualization (renderDiagram/renderChart)
     NeosInlineVizErrorEvent,     # Inline Visualization 에러 (non-fatal)

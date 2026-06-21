@@ -69,6 +69,79 @@ def map_section_type_to_event_type(section_type: str) -> str:
     return mapping.get(section_type, "analysis")
 
 
+def is_deep_research_harness_blocked(run) -> bool:
+    return run.mode.value == "gate" and run.verdict.value in {"fail", "needs_repair"}
+
+
+def build_deep_research_repair_service():
+    from neos.api.services.deep_research_repair_service import DeepResearchRepairService
+
+    if not getattr(settings, "RESEARCH_HARNESS_DIRECT_REPAIR_ENABLED", False):
+        return DeepResearchRepairService()
+
+    from neos.api.services.deep_research_repair_executor import (
+        DirectDeepResearchRepairExecutor,
+    )
+
+    return DeepResearchRepairService(
+        action_executor=DirectDeepResearchRepairExecutor(),
+    )
+
+
+async def refresh_deep_research_totals_after_repair(
+    report_id: str,
+    *,
+    repository=None,
+) -> dict[str, int]:
+    if repository is None:
+        from neos.api.repositories.deep_research_repair_repository import (
+            DeepResearchRepairRepository,
+        )
+
+        repository = DeepResearchRepairRepository()
+    return await repository.refresh_report_totals(report_id)
+
+
+async def persist_deep_research_harness_run(
+    *,
+    run,
+    contract,
+    report_id: str,
+    user_id: str,
+    session_id: str,
+    repair_result: dict | None = None,
+    repair_attempt: int | None = None,
+    repository=None,
+) -> None:
+    if not getattr(settings, "RESEARCH_HARNESS_PERSIST_RUNS", False):
+        return
+
+    if repair_result is not None or repair_attempt is not None:
+        run.metadata = dict(run.metadata or {})
+        if repair_result is not None:
+            run.metadata["repair_result"] = repair_result
+        if repair_attempt is not None:
+            run.metadata["repair_attempt"] = repair_attempt
+
+    if repository is None:
+        from neos.database.repositories.harness_repository import (
+            harness_repository as default_repository,
+        )
+
+        repository = default_repository
+
+    try:
+        await repository.save_run(
+            run=run,
+            contract=contract,
+            session_id=session_id,
+            report_id=report_id,
+            user_id=user_id,
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to persist deep research harness run: {exc}")
+
+
 async def save_deep_research_report(
     report_id: str,
     user_id: str,
@@ -588,6 +661,165 @@ async def deep_research_stream_generator(
         total_sources = final_report.get("total_sources") or 0
         total_queries = final_report.get("total_queries") or 0
         processing_time_ms = final_report.get("processing_time_ms") or int((datetime.now() - start_time).total_seconds() * 1000)
+        warnings = []
+
+        from neos.api.services.deep_research_harness_service import (
+            DeepResearchHarnessService,
+        )
+
+        harness_started = DeepResearchEvent(
+            event=DeepResearchEventType.HARNESS_STARTED,
+            report_id=report_id,
+            data={"message": "Research harness validation started"},
+        )
+        yield f"data: {harness_started.model_dump_json()}\n\n"
+
+        harness_events: list[DeepResearchEvent] = []
+
+        async def collect_harness_event(event_type, payload: dict) -> None:
+            harness_events.append(
+                DeepResearchEvent(
+                    event=DeepResearchEventType(event_type.value),
+                    report_id=report_id,
+                    data=payload,
+                )
+            )
+
+        await update_research_status(
+            report_id,
+            "validating",
+            total_sections=completed_sections,
+            total_sources=total_sources,
+            total_queries=total_queries,
+            processing_time_ms=processing_time_ms,
+        )
+
+        validation = await DeepResearchHarnessService().validate_report(
+            report_id=report_id,
+            research_topic=research_topic,
+            metadata={
+                "harness_mode": "gate",
+                "processing_time_ms": processing_time_ms,
+                "total_queries": total_queries,
+                "total_sources": total_sources,
+            },
+            event_callback=collect_harness_event,
+        )
+        harness_run = validation.run
+        await persist_deep_research_harness_run(
+            run=harness_run,
+            contract=validation.contract,
+            report_id=report_id,
+            user_id=user_id,
+            session_id=session_id,
+        )
+
+        harness_metadata = {
+            "mode": harness_run.mode.value,
+            "verdict": harness_run.verdict.value,
+            "score": float(harness_run.score),
+            "failed_checks": harness_run.failed_checks,
+            "repair_attempts": harness_run.repair_attempts,
+        }
+
+        for harness_event in harness_events:
+            yield f"data: {harness_event.model_dump_json()}\n\n"
+
+        if is_deep_research_harness_blocked(harness_run):
+            if harness_run.mode.value == "gate" and harness_run.verdict.value == "needs_repair":
+                repair_attempt = harness_run.repair_attempts + 1
+                repair_started = DeepResearchEvent(
+                    event=DeepResearchEventType.HARNESS_REPAIR_STARTED,
+                    report_id=report_id,
+                    data={"attempt": repair_attempt},
+                )
+                yield f"data: {repair_started.model_dump_json()}\n\n"
+
+                repair_result = await build_deep_research_repair_service().repair(
+                    report_id=report_id,
+                    research_topic=research_topic,
+                    contract=validation.contract,
+                    failed_checks=[check for check in harness_run.checks if not check.passed],
+                    attempt=repair_attempt,
+                    context={
+                        "original_query": research_topic,
+                        "research_topic": research_topic,
+                        "processing_time_ms": processing_time_ms,
+                        "total_queries": total_queries,
+                        "total_sources": total_sources,
+                    },
+                )
+                try:
+                    refreshed_totals = await refresh_deep_research_totals_after_repair(report_id)
+                    completed_sections = refreshed_totals["total_sections"]
+                    total_sources = refreshed_totals["total_sources"]
+                    total_queries = refreshed_totals["total_queries"]
+                    repair_result = {
+                        **repair_result,
+                        "refreshed_totals": refreshed_totals,
+                    }
+                except Exception as exc:
+                    logger.warning(f"Failed to refresh repair totals: {exc}")
+                    warnings.append(f"Repair total refresh failed: {str(exc)}")
+
+                repair_completed = DeepResearchEvent(
+                    event=DeepResearchEventType.HARNESS_REPAIR_COMPLETED,
+                    report_id=report_id,
+                    data=repair_result,
+                )
+                yield f"data: {repair_completed.model_dump_json()}\n\n"
+
+                harness_events = []
+                validation = await DeepResearchHarnessService().validate_report(
+                    report_id=report_id,
+                    research_topic=research_topic,
+                    metadata={
+                        "harness_mode": "gate",
+                        "processing_time_ms": processing_time_ms,
+                        "total_queries": total_queries,
+                        "total_sources": total_sources,
+                    },
+                    event_callback=collect_harness_event,
+                    repair_attempts=repair_attempt,
+                )
+                harness_run = validation.run
+                await persist_deep_research_harness_run(
+                    run=harness_run,
+                    contract=validation.contract,
+                    report_id=report_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    repair_result=repair_result,
+                    repair_attempt=repair_attempt,
+                )
+                harness_metadata = {
+                    "mode": harness_run.mode.value,
+                    "verdict": harness_run.verdict.value,
+                    "score": float(harness_run.score),
+                    "failed_checks": harness_run.failed_checks,
+                    "repair_attempts": harness_run.repair_attempts,
+                }
+                for harness_event in harness_events:
+                    yield f"data: {harness_event.model_dump_json()}\n\n"
+
+        if is_deep_research_harness_blocked(harness_run):
+            await update_research_status(
+                report_id,
+                "failed",
+                completed_at=datetime.now(),
+                total_sections=completed_sections,
+                total_sources=total_sources,
+                total_queries=total_queries,
+                processing_time_ms=processing_time_ms,
+                quality_score=float(harness_run.score),
+            )
+            failed_event = DeepResearchEvent(
+                event=DeepResearchEventType.HARNESS_FAILED,
+                report_id=report_id,
+                data=harness_metadata,
+            )
+            yield f"data: {failed_event.model_dump_json()}\n\n"
+            return
 
         # Update database with final status
         await update_research_status(
@@ -598,7 +830,7 @@ async def deep_research_stream_generator(
             total_sources=total_sources,
             total_queries=total_queries,
             processing_time_ms=processing_time_ms,
-            quality_score=settings.DEEP_RESEARCH_DEFAULT_QUALITY_SCORE
+            quality_score=float(harness_run.score)
         )
 
         # Update assistant message with final content
@@ -611,9 +843,6 @@ async def deep_research_stream_generator(
         final_content_summary += f"- Queries: {total_queries}\n"
         final_content_summary += f"- Processing time: {processing_time_ms / 1000:.2f}s\n\n"
         final_content_summary += "_Full report available in deep research system_"
-
-        # Track warnings for non-critical errors
-        warnings = []
 
         try:
             # Update message content and metadata in database
@@ -634,8 +863,9 @@ async def deep_research_stream_generator(
                 "total_sources": total_sources,
                 "total_queries": total_queries,
                 "processing_time_ms": processing_time_ms,
-                "quality_score": settings.DEEP_RESEARCH_DEFAULT_QUALITY_SCORE,
-                "is_placeholder": False
+                "quality_score": float(harness_run.score),
+                "is_placeholder": False,
+                "harness": harness_metadata,
             })
             await db_manager.execute(update_message_query, final_content_summary, metadata_update, assistant_message_id)
             logger.info(f"Updated assistant message {assistant_message_id} with final content")
@@ -658,6 +888,13 @@ async def deep_research_stream_generator(
             except Exception as e:
                 logger.error(f"Failed to record warnings: {e}")
 
+        harness_completed = DeepResearchEvent(
+            event=DeepResearchEventType.HARNESS_COMPLETED,
+            report_id=report_id,
+            data=harness_metadata,
+        )
+        yield f"data: {harness_completed.model_dump_json()}\n\n"
+
         # Send completed event
         completed_event = DeepResearchEvent(
             event=DeepResearchEventType.COMPLETED,
@@ -667,7 +904,7 @@ async def deep_research_stream_generator(
                 total_sections=completed_sections,
                 total_sources=total_sources,
                 total_queries=total_queries,
-                quality_score=settings.DEEP_RESEARCH_DEFAULT_QUALITY_SCORE,
+                quality_score=float(harness_run.score),
                 processing_time_ms=processing_time_ms
             ).model_dump()
         )

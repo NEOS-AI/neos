@@ -21,6 +21,16 @@ from .executors import NodeExecutor
 logger = logging.getLogger(__name__)
 
 
+def _is_custom_workflow_harness_blocked(final_state: Dict[str, Any] | None) -> bool:
+    if not final_state:
+        return False
+    return (
+        str(final_state.get("harness_mode") or "").lower() == "gate"
+        and str(final_state.get("harness_verdict") or "").lower()
+        in {"fail", "needs_repair"}
+    )
+
+
 class WorkflowExecutor:
     """커스텀 워크플로우 실행기"""
 
@@ -148,36 +158,7 @@ class WorkflowExecutor:
             await self.build_graph()
 
         # 초기 상태 생성
-        initial_state = AgentState(
-            user_id=user_input["user_id"],
-            session_id=user_input["session_id"],
-            original_query=user_input["query"],
-            query_intent=None,
-            query_embedding=None,
-            detected_language=None,
-            # 채팅 히스토리 관련 (하위 호환성 유지 - Optional)
-            chat_history=user_input.get("chat_history"),
-            conversation_context=None,  # Context Processor가 채울 예정
-            enable_history_context=user_input.get("enable_history_context", False),
-            history_metadata=None,
-            query_classification=None,
-            required_agents=[],
-            search_results=[],
-            analysis_results=[],
-            generation_results=[],
-            integrated_results=None,
-            quality_score=None,
-            quality_feedback=None,
-            final_response=None,
-            response_metadata=None,
-            execution_start=start_time,
-            execution_steps=[],
-            errors=[],
-            retry_count=0,
-            execution_time_ms=None,
-            tokens_used=None,
-            api_calls_made=None
-        )
+        initial_state = self._create_initial_state(user_input)
 
         try:
             # 워크플로우 실행
@@ -197,6 +178,19 @@ class WorkflowExecutor:
 
             # 워크플로우 실행 횟수 업데이트
             await self._update_execution_count()
+
+            if _is_custom_workflow_harness_blocked(final_state):
+                return {
+                    "success": False,
+                    "response": "검증 중 일부 핵심 조건을 만족하지 못해 최종 결과로 확정하지 않았습니다.",
+                    "blocked_response": final_state.get("final_response", ""),
+                    "metadata": final_state.get("response_metadata", {}),
+                    "execution_time_ms": execution_time_ms,
+                    "workflow_id": self.workflow_id,
+                    "workflow_name": self.workflow_data.name,
+                    "errors": list(final_state.get("errors", []))
+                    + ["research_harness_gate_failed"],
+                }
 
             return {
                 "success": True,
@@ -227,6 +221,49 @@ class WorkflowExecutor:
                 "execution_time_ms": execution_time_ms,
                 "workflow_id": self.workflow_id
             }
+
+    def _create_initial_state(self, user_input: Dict[str, Any]) -> AgentState:
+        """Create the initial state for custom workflow execution."""
+        initial_state = AgentState(
+            user_id=user_input["user_id"],
+            session_id=user_input["session_id"],
+            original_query=user_input["query"],
+            query_intent=None,
+            query_embedding=None,
+            detected_language=None,
+            # 채팅 히스토리 관련 (하위 호환성 유지 - Optional)
+            chat_history=user_input.get("chat_history"),
+            conversation_context=None,  # Context Processor가 채울 예정
+            enable_history_context=user_input.get("enable_history_context", False),
+            history_metadata=None,
+            query_classification=None,
+            required_agents=[],
+            search_results=[],
+            analysis_results=[],
+            generation_results=[],
+            integrated_results=None,
+            quality_score=None,
+            quality_feedback=None,
+            harness_mode=None,
+            harness_contract={},
+            harness_runs=[],
+            harness_verdict=None,
+            harness_score=None,
+            harness_failed_checks=[],
+            harness_repair_plan=None,
+            harness_repair_attempts=0,
+            harness_metadata={},
+            final_response=None,
+            response_metadata=None,
+            execution_start=datetime.now(),
+            execution_steps=[],
+            errors=[],
+            retry_count=0,
+            execution_time_ms=None,
+            tokens_used=None,
+            api_calls_made=None
+        )
+        return initial_state
 
     async def _save_execution(
         self,

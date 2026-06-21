@@ -1,5 +1,8 @@
 from neos.workflow.harness.models import HarnessMode, HarnessRiskLevel
-from neos.workflow.harness.policy import decide_harness_policy
+from neos.workflow.harness.policy import (
+    decide_harness_policy,
+    get_harness_profile_config,
+)
 
 
 def test_hyper_deep_defaults_to_gate():
@@ -15,6 +18,24 @@ def test_hyper_deep_defaults_to_gate():
 
     assert decision.mode == HarnessMode.GATE
     assert decision.reason == "research_intent"
+
+
+def test_research_intents_use_hyper_deep_repair_budget():
+    for intent in ("deep_research", "hyper_deep_research"):
+        decision = decide_harness_policy(
+            intent=intent,
+            complexity_score=0.4,
+            metadata={},
+            settings_overrides={
+                "RESEARCH_HARNESS_ENABLED": True,
+                "RESEARCH_HARNESS_DEFAULT_MODE": "auto",
+                "RESEARCH_HARNESS_MAX_REPAIR_ATTEMPTS": 1,
+                "RESEARCH_HARNESS_HYPER_DEEP_REPAIR_ATTEMPTS": 2,
+            },
+        )
+
+        assert decision.mode == HarnessMode.GATE
+        assert decision.max_repair_attempts == 2
 
 
 def test_low_risk_general_chat_defaults_to_advisory():
@@ -90,3 +111,58 @@ def test_global_disable_overrides_explicit_gate_request():
 
     assert decision.mode == HarnessMode.OFF
     assert decision.reason == "disabled_by_settings"
+
+
+def test_profile_can_select_gate_policy_defaults():
+    decision = decide_harness_policy(
+        intent="general_chat",
+        complexity_score=0.1,
+        metadata={"harness_profile": "mission_strict"},
+        settings_overrides={
+            "RESEARCH_HARNESS_ENABLED": True,
+            "RESEARCH_HARNESS_DEFAULT_MODE": "auto",
+        },
+    )
+
+    assert decision.mode == HarnessMode.GATE
+    assert decision.min_score == 0.88
+    assert decision.reason == "profile:mission_strict"
+
+
+def test_explicit_mode_takes_precedence_over_profile():
+    decision = decide_harness_policy(
+        intent="general_chat",
+        complexity_score=0.1,
+        metadata={"harness_profile": "mission_strict", "harness_mode": "advisory"},
+        settings_overrides={
+            "RESEARCH_HARNESS_ENABLED": True,
+            "RESEARCH_HARNESS_DEFAULT_MODE": "auto",
+        },
+    )
+
+    assert decision.mode == HarnessMode.ADVISORY
+    assert decision.reason == "explicit_mode"
+
+
+def test_agent_oriented_harness_profiles_are_available():
+    source_audit = get_harness_profile_config("agent_source_audit")
+    factuality_audit = get_harness_profile_config("agent_factuality_audit")
+    perspective_audit = get_harness_profile_config("agent_perspective_audit")
+
+    assert source_audit["mode"] == "gate"
+    assert source_audit["required_checks"] == [
+        "source_count",
+        "source_diversity",
+        "citation_validity",
+    ]
+    assert source_audit["min_score"] == 0.82
+
+    assert factuality_audit["mode"] == "gate"
+    assert "factuality" in factuality_audit["required_checks"]
+    assert factuality_audit["risk_level"] == "high"
+    assert factuality_audit["min_score"] == 0.88
+
+    assert perspective_audit["mode"] == "advisory"
+    assert perspective_audit["required_checks"] == ["source_count"]
+    assert "bias_perspective" in perspective_audit["optional_checks"]
+    assert perspective_audit["min_score"] == 0.74

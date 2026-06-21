@@ -5,11 +5,12 @@ import {
   wrapLanguageModel,
 } from "ai";
 import { isTestEnvironment } from "../constants";
+import { getAiGatewayApiKey } from "../server-config";
 
 const THINKING_SUFFIX_REGEX = /-thinking$/;
 
 const gateway = createGateway({
-  apiKey: process.env.AI_GATEWAY_API_KEY,
+  apiKey: getAiGatewayApiKey(),
 });
 
 export const myProvider = isTestEnvironment
