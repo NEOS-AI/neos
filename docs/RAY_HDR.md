@@ -45,7 +45,7 @@ Ray 병렬 (완전 독립 기준):
 
 | 원칙 | 구현 |
 |------|------|
-| **Feature flag** | `RAY_ENABLED=false`(기본) → 기존 순차 실행과 완전 동일 |
+| **Feature flag** | `ray.enabled: false`(기본) → 기존 순차 실행과 완전 동일 |
 | **상속 기반** | `DistributedRecursiveOrchestrator extends RecursiveOrchestrator` |
 | **asyncio 브릿지** | `await asyncio.wrap_future(ref.future())` — `ray.get()` 직접 호출 금지 |
 | **직렬화 격리** | `_stream_callback`, `_cost_accumulator` context에서 반드시 제외 |
@@ -269,7 +269,7 @@ _recursive_solve():
 
 ```python
 async def _recursive_solve(self, task, context, seen_hashes, replan_count=0):
-    # RAY_ENABLED=False → 부모 클래스 완전 위임
+    # ray.enabled: false → 부모 클래스 완전 위임
     if not self._ray_enabled or self._ray_pool is None:
         return await super()._recursive_solve(task, context, seen_hashes, replan_count)
 
@@ -708,18 +708,20 @@ SANDBOX_TYPE: str          # "restricted" | "docker" | "pyodide" (기본 "restri
 SANDBOX_TIMEOUT_SEC: int   # 기본 30초
 ```
 
-### 환경변수 (`.env`)
+### YAML 설정 (`config/neos.local.yaml` 또는 deployment overlay)
 
-```bash
+```yaml
 # Phase 1: 핵심 병렬 실행
-RAY_ENABLED=true
-RAY_ADDRESS=auto
-RAY_OBJECT_STORE_MEMORY=2000000000
+ray:
+  enabled: true
+  address: auto
+  object_store_memory: 2000000000
 
 # Phase 3: Sandbox (선택적)
-SANDBOX_ENABLED=true
-SANDBOX_TYPE=restricted
-SANDBOX_TIMEOUT_SEC=30
+sandbox:
+  enabled: true
+  type: restricted
+  timeout_sec: 30
 ```
 
 ### 리소스 계산
@@ -780,11 +782,11 @@ assert build_execution_levels([make_task([0]), make_task([])]) == [[0, 1]]
 print("✅ dag_utils 단위 테스트 통과")
 ```
 
-### 단계 3: RAY_ENABLED=false 회귀 테스트
+### 단계 3: `ray.enabled: false` 회귀 테스트
 
 ```bash
-# .env에서 RAY_ENABLED를 설정하지 않거나 false로 유지
-HYPER_DEEP_AGENT_ENABLED=true RAY_ENABLED=false python -c "
+# config/neos.local.yaml에서 ray.enabled를 설정하지 않거나 false로 유지
+NEOS_CONFIG_PATH=config/neos.local.yaml python -c "
 from neos.workflow.graph import MultiAgentWorkflow
 wf = MultiAgentWorkflow()
 print(type(wf.hyper_deep_orchestrator).__name__)  # RecursiveOrchestrator
@@ -792,7 +794,7 @@ print('✅ 기존 순차 실행 경로 정상')
 "
 ```
 
-### 단계 4: RAY_ENABLED=true 통합 테스트
+### 단계 4: `ray.enabled: true` 통합 테스트
 
 ```bash
 # Ray Head Node 시작 (로컬)
@@ -800,7 +802,7 @@ ray start --head --metrics-export-port=8080
 
 # NEOS 서버 시작 (별도 터미널)
 # → main.py lifespan에서 ray.init → create_all_named_actors → warmup 순으로 자동 실행
-RAY_ENABLED=true HYPER_DEEP_AGENT_ENABLED=true python -m neos.main
+NEOS_CONFIG_PATH=config/neos.local.yaml python -m neos.main
 
 # Ray Dashboard 확인
 open http://localhost:8265
@@ -816,7 +818,7 @@ open http://localhost:8265
 ### 단계 5: Named Actor 어댑터 확인
 
 ```bash
-RAY_ENABLED=true HYPER_DEEP_AGENT_ENABLED=true python -c "
+NEOS_CONFIG_PATH=config/neos.local.yaml python -c "
 import ray
 ray.init(ignore_reinit_error=True)
 from neos.workflow.ray_actors.stateless_actors import create_all_named_actors
@@ -841,7 +843,7 @@ ray.shutdown()
 ```bash
 uv add --optional sandbox RestrictedPython
 
-SANDBOX_ENABLED=true python -c "
+NEOS_CONFIG_PATH=config/neos.local.yaml python -c "
 import asyncio
 from neos.workflow.ray_actors.sandboxed_executor import SandboxedCodeExecutor
 
@@ -869,7 +871,7 @@ asyncio.run(test())
 ### 9-A. SSE 스트리밍 손실 (Phase 1 known limitation)
 
 **문제:** `_stream_callback`이 Ray pickle 직렬화 불가 → Worker에 전달 불가.
-HDR Phase 이벤트(검색 진행 상황 SSE)가 `RAY_ENABLED=true` 시 전달되지 않음.
+HDR Phase 이벤트(검색 진행 상황 SSE)가 `ray.enabled: true` 시 전달되지 않음.
 
 **현재 상태:** Orchestrator 레벨의 시작/완료 이벤트만 SSE 전달 가능.
 

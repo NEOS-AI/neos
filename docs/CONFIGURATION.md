@@ -104,6 +104,25 @@ api:
       - http://localhost:3000
 ```
 
+### Thinking Engine
+
+`thinking_engine.enabled` controls the Claude-like contract orchestration layer.
+The default is enabled because it only strengthens existing harness behavior.
+
+`thinking_engine.persist_traces` stores compact execution trace events in
+`thinking_engine_traces`. The default is `false`; enable it first in internal
+staging because trace payloads can contain operational evidence.
+
+`thinking_engine.persist_task_dag` stores task DAG nodes in
+`thinking_engine_task_nodes`. The default is `false`; the in-memory state path
+remains active even when persistence is disabled.
+
+`thinking_engine.task_level_harness` enables harness validation for recursive
+and HyperDeep leaf artifacts. The default is `true`.
+
+`thinking_engine.max_trace_text_length` controls text compaction in trace
+payloads. The default is `240`.
+
 ## Staging and Production
 
 Select profile config with bootstrap env:

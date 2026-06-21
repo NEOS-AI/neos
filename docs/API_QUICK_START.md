@@ -9,21 +9,29 @@ ApiCallAgent에 날씨, 환율, 주식 API가 통합되었습니다.
 ```bash
 # .env 파일 생성
 cp .env.template .env
+cp config/neos.example.yaml config/neos.local.yaml
 
-# .env 파일 편집하여 API 키 추가
+# .env 파일에는 API 키와 NEOS_CONFIG_PATH만 추가
 nano .env
 ```
 
 필수 설정:
-```bash
+```dotenv
+NEOS_CONFIG_PATH=config/neos.local.yaml
+
 # 날씨 API (OpenWeatherMap)
 OPENWEATHER_API_KEY=your_key_here
 
 # 환율 API (선택사항 - 없으면 무료 API 사용)
 EXCHANGERATE_API_KEY=your_key_here
+```
 
-# 주식 API (Yahoo Finance는 키 불필요)
-STOCK_API_PROVIDER=yahoo
+비밀이 아닌 provider 선택은 `config/neos.local.yaml`에 설정합니다:
+
+```yaml
+sources:
+  # 주식 API (Yahoo Finance는 키 불필요)
+  stock_api_provider: yahoo
 ```
 
 ### 2단계: 의존성 설치
