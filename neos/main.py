@@ -42,7 +42,7 @@ from neos.workflow.checkpointer import cleanup_checkpointer
 from neos.workflow.telemetry import setup_telemetry, instrument_app, instrument_sqlalchemy_engine
 
 
-__VERSION__ = "0.22.0"
+__VERSION__ = "0.23.0"
 
 
 settings = get_settings()

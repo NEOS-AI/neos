@@ -3132,7 +3132,7 @@ wheels = [
 
 [[package]]
 name = "neos"
-version = "0.22.0"
+version = "0.23.0"
 source = { virtual = "." }
 dependencies = [
     { name = "aiofiles" },
