@@ -166,4 +166,8 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/031_add_m
 
 # Add research harness tables
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/032_add_research_harness_tables.sql
+
+# Features for thinking engine and reasoning items
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/033_add_thinking_engine_tables.sql
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/034_add_bitemporal_evidence_claims.sql
 ```
