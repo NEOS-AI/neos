@@ -3283,7 +3283,7 @@ requires-dist = [
     { name = "crewai", specifier = ">=0.175.0" },
     { name = "croniter", specifier = ">=2.0.0" },
     { name = "discord-py", marker = "extra == 'channels'", specifier = ">=2.3.0" },
-    { name = "fastapi", specifier = ">=0.136.1" },
+    { name = "fastapi", specifier = ">=0.138.0" },
     { name = "google-api-python-client", specifier = ">=2.108.0" },
     { name = "google-auth", specifier = ">=2.35.0" },
     { name = "google-auth-oauthlib", specifier = ">=1.2.0" },
