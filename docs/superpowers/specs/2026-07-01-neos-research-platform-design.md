@@ -87,9 +87,9 @@ Next.js 채팅 route의 `maxDuration`은 60초지만 HDR 문서는 30~60분 실�
 
 메시지 편집과 regenerate도 원래 메시지 수정·분기·새 실행의 의미가 분명하지 않다. UI 상태와 DB 이력이 다르게 보일 수 있다.
 
-#### 문서와 아티팩트 API 경로가 충돌한다
+#### 문서와 아티팩트 API namespace가 어긋난다
 
-`document_handlers.py`와 `artifact_handlers.py`가 모두 `/documents/{document_id}`를 사용한다. 문서 route가 먼저 등록되므로 UUID 아티팩트 요청이 정수 document route에서 검증 실패할 수 있다. 파일 자산은 `/assets`, 생성형 결과물은 `/artifacts`로 분리해야 한다.
+`document_handlers.py`와 `artifact_handlers.py`는 모두 router 내부에서 `/documents` namespace를 선언하지만 `main.py`가 두 router에 서로 다른 상위 prefix를 적용한다. 파일 문서 router는 app prefix와 router prefix가 겹쳐 실제 경로가 `/api/v1/documents/documents/...`가 되고, 프론트는 `/api/v1/documents/upload`와 `/api/v1/documents/{id}`를 호출한다. 아티팩트 route와도 같은 `documents` 명칭을 공유해 계약을 이해하기 어렵다. 파일 자산은 `/assets`, 생성형 결과물은 `/artifacts`로 분리하고 명시적인 호환 adapter를 둬야 한다.
 
 #### A2UI의 지원 범위가 문서와 다르다
 
@@ -595,7 +595,7 @@ API 오류는 RFC 9457 Problem Details 형식으로 통일한다.
 ### 단계 0: 신뢰성 기반
 
 - 모든 리소스 인증·소유권 검증
-- 문서와 아티팩트 route 분리
+- 중복된 문서 prefix를 제거하고 문서와 아티팩트 route 분리
 - 첨부 업로드·document ID·chat request 계약 수정
 - 실제 실행 모델과 UI 선택 일치
 - 히스토리 cursor pagination
