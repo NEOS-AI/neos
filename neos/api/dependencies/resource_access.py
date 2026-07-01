@@ -4,7 +4,6 @@ from fastapi import Depends, HTTPException, status
 
 from neos.api.dependencies.auth import get_current_active_user
 from neos.api.services.chat_service import ChatService
-from neos.api.services.document_service import DocumentService
 from neos.database.models import Document, User
 from neos.workflow.stream_manager import StreamSession
 
@@ -14,6 +13,12 @@ def _not_found() -> HTTPException:
         status_code=status.HTTP_404_NOT_FOUND,
         detail="Resource not found",
     )
+
+
+async def _get_document_by_id(document_id: int) -> Document | None:
+    from neos.api.services.document_service import DocumentService
+
+    return await DocumentService.get_document_by_id(document_id)
 
 
 async def get_owned_conversation(
@@ -57,7 +62,7 @@ async def get_owned_document(
     document_id: int,
     current_user: User = Depends(get_current_active_user),
 ) -> Document:
-    document = await DocumentService.get_document_by_id(document_id)
+    document = await _get_document_by_id(document_id)
     if not document or document.user_id != current_user.user_id:
         raise _not_found()
     return document
