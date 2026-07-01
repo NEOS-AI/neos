@@ -28,7 +28,12 @@ from neos.api.models.chat_models import (
     ConversationTemplate,
     TemplateListResponse,
 )
-from neos.api.dependencies.auth import get_current_user
+from neos.api.dependencies.auth import get_current_active_user, get_current_user
+from neos.api.dependencies.resource_access import (
+    get_owned_conversation,
+    get_readable_conversation,
+    require_same_user_id,
+)
 from neos.api.services.chat_service import ChatService
 from neos.api.handlers.workflow_stream_handlers import WorkflowStreamCallback
 from neos.database.connection import db_manager
@@ -147,11 +152,14 @@ def map_node_to_agent(node_name: str) -> str:
 # ============================================================================
 
 @router.post("/conversations", response_model=ConversationResponse)
-async def create_conversation(request: CreateConversationRequest):
+async def create_conversation(
+    request: CreateConversationRequest,
+    current_user: User = Depends(get_current_active_user),
+):
     """새 대화 생성"""
     try:
         conversation = await ChatService.create_conversation(
-            user_id=request.user_id,
+            user_id=current_user.user_id,
             conversation_id=request.conversation_id,
             model_name=request.model_name,
             title=request.title,
@@ -170,7 +178,10 @@ async def create_conversation(request: CreateConversationRequest):
 
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationResponse)
-async def get_conversation(conversation_id: str):
+async def get_conversation(
+    conversation_id: str,
+    _conversation: dict = Depends(get_readable_conversation),
+):
     """대화 조회"""
     try:
         conversation = await ChatService.get_conversation(conversation_id)
@@ -188,7 +199,8 @@ async def get_conversation(conversation_id: str):
 async def get_conversation_with_messages(
     conversation_id: str,
     limit: int = 100,
-    before_sequence: Optional[int] = None
+    before_sequence: Optional[int] = None,
+    _conversation: dict = Depends(get_readable_conversation),
 ):
     """대화와 메시지 함께 조회 (주어진 conversation_id에 해당하는 대화 및 메시지 목록 반환)"""
     try:
@@ -224,7 +236,11 @@ async def get_conversation_with_messages(
 
 
 @router.patch("/conversations/{conversation_id}", response_model=ConversationResponse)
-async def update_conversation(conversation_id: str, request: UpdateConversationRequest):
+async def update_conversation(
+    conversation_id: str,
+    request: UpdateConversationRequest,
+    _conversation: dict = Depends(get_owned_conversation),
+):
     """대화 업데이트"""
     try:
         conversation = await ChatService.update_conversation(
@@ -244,7 +260,11 @@ async def update_conversation(conversation_id: str, request: UpdateConversationR
 
 
 @router.delete("/conversations/{conversation_id}", response_model=SuccessResponse)
-async def delete_conversation(conversation_id: str, permanent: bool = False):
+async def delete_conversation(
+    conversation_id: str,
+    permanent: bool = False,
+    _conversation: dict = Depends(get_owned_conversation),
+):
     """대화 삭제"""
     try:
         success = await ChatService.delete_conversation(
@@ -261,7 +281,10 @@ async def delete_conversation(conversation_id: str, permanent: bool = False):
 
 
 @router.post("/conversations/{conversation_id}/archive", response_model=ConversationResponse)
-async def archive_conversation(conversation_id: str):
+async def archive_conversation(
+    conversation_id: str,
+    _conversation: dict = Depends(get_owned_conversation),
+):
     """대화 아카이브"""
     try:
         conversation = await ChatService.archive_conversation(conversation_id)
@@ -277,9 +300,11 @@ async def list_user_conversations(
     status: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    include_archived: bool = False
+    include_archived: bool = False,
+    current_user: User = Depends(get_current_active_user),
 ):
     """사용자의 대화 목록 조회"""
+    require_same_user_id(user_id, current_user)
     try:
         result = await ChatService.list_conversations(
             user_id=user_id,
@@ -300,8 +325,12 @@ async def list_user_conversations(
 
 
 @router.delete("/users/{user_id}/conversations", response_model=SuccessResponse)
-async def delete_all_user_conversations(user_id: str):
+async def delete_all_user_conversations(
+    user_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """사용자의 모든 대화 삭제"""
+    require_same_user_id(user_id, current_user)
     try:
         count = await ChatService.delete_user_conversations(user_id)
         return SuccessResponse(success=True, message=f"Deleted {count} conversations")
@@ -314,6 +343,7 @@ async def delete_all_user_conversations(user_id: str):
 async def delete_messages_after_timestamp(
     conversation_id: str,
     timestamp: datetime = Query(..., description="이 시점 이후 메시지 삭제 (ISO 8601)"),
+    _conversation: dict = Depends(get_owned_conversation),
 ):
     """특정 시점 이후 메시지 삭제 (편집 기능용)"""
     try:
@@ -328,8 +358,10 @@ async def delete_messages_after_timestamp(
 async def get_user_message_count(
     user_id: str,
     hours: int = Query(24, ge=1, le=168, description="집계 기간(시간)"),
+    current_user: User = Depends(get_current_active_user),
 ):
     """최근 N시간 내 사용자 메시지 수 (rate limit 확인용)"""
+    require_same_user_id(user_id, current_user)
     try:
         count = await ChatService.get_user_message_count(user_id, hours)
         return {"user_id": user_id, "hours": hours, "count": count}
@@ -339,7 +371,11 @@ async def get_user_message_count(
 
 
 @router.post("/conversations/{conversation_id}/generate-title")
-async def generate_conversation_title(conversation_id: str, request: GenerateTitleRequest):
+async def generate_conversation_title(
+    conversation_id: str,
+    request: GenerateTitleRequest,
+    _conversation: dict = Depends(get_owned_conversation),
+):
     """대화 제목 자동 생성"""
     try:
         # 대화 존재 확인
@@ -1164,8 +1200,12 @@ async def get_conversation_analytics(conversation_id: str, period: str = "sessio
 
 
 @router.get("/users/{user_id}/statistics", response_model=UserChatStatistics)
-async def get_user_statistics(user_id: str):
+async def get_user_statistics(
+    user_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """사용자 채팅 통계"""
+    require_same_user_id(user_id, current_user)
     try:
         stats = await ChatService.get_user_statistics(user_id)
         return UserChatStatistics(**stats)

@@ -40,6 +40,7 @@ class TestConversationManagement:
 
         with patch("neos.api.services.chat_service.ChatRepository") as mock_repo:
             mock_repo.create_conversation = AsyncMock()
+            mock_repo.update_conversation = AsyncMock()
             mock_repo.get_conversation = AsyncMock(return_value=mock_conversation)
 
             result = await ChatService.create_conversation(

@@ -45,7 +45,11 @@ class ChatMode(str, Enum):
 # ============================================================================
 
 class CreateConversationRequest(BaseModel):
-    user_id: str = Field(..., description="사용자 ID")
+    user_id: Optional[str] = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated compatibility field; authenticated identity is used",
+    )
     conversation_id: Optional[str] = Field(None, description="Conversation ID (FE chat UUID)")
     title: Optional[str] = Field(None, max_length=500, description="대화 제목")
     model_name: str = Field(default="claude-opus-4-5-20251101", description="사용할 모델")
