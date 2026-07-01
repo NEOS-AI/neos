@@ -1185,7 +1185,11 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
 # ============================================================================
 
 @router.get("/conversations/{conversation_id}/analytics", response_model=ConversationAnalytics)
-async def get_conversation_analytics(conversation_id: str, period: str = "session"):
+async def get_conversation_analytics(
+    conversation_id: str,
+    period: str = "session",
+    _conversation: dict = Depends(get_readable_conversation),
+):
     """대화 분석 데이터 조회"""
     try:
         analytics = await ChatService.get_conversation_analytics(conversation_id, period)
