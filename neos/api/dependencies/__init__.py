@@ -12,6 +12,14 @@ from .auth import (
     require_scopes,
     ScopeChecker,
 )
+from .resource_access import (
+    get_owned_conversation,
+    get_readable_conversation,
+    get_owned_message,
+    get_owned_document,
+    require_same_user_id,
+    require_stream_session_owner,
+)
 
 __all__ = [
     "get_current_user",
@@ -24,4 +32,10 @@ __all__ = [
     "require_api_key",
     "require_scopes",
     "ScopeChecker",
+    "get_owned_conversation",
+    "get_readable_conversation",
+    "get_owned_message",
+    "get_owned_document",
+    "require_same_user_id",
+    "require_stream_session_owner",
 ]
