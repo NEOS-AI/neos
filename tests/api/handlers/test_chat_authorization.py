@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from neos.api.dependencies.auth import get_current_active_user
 from neos.api.handlers import chat_handlers
-from neos.api.models.chat_models import CreateConversationRequest
+from neos.api.models.chat_models import CreateConversationRequest, EditMessageRequest
 from neos.database.connection import get_db
 
 
@@ -38,6 +38,19 @@ def _conversation() -> dict:
         "updated_at": "2026-07-01T00:00:00",
         "tags": [],
         "metadata": {},
+    }
+
+
+def _message() -> dict:
+    return {
+        "message_id": "m1",
+        "conversation_id": "c1",
+        "role": "user",
+        "content": "updated",
+        "sequence_number": 1,
+        "status": "edited",
+        "created_at": "2026-07-01T00:00:00",
+        "updated_at": "2026-07-01T00:00:00",
     }
 
 
@@ -71,6 +84,19 @@ def _analytics() -> dict:
 
 
 def _analytics_app(current_user=None) -> FastAPI:
+    app = FastAPI()
+    app.include_router(chat_handlers.router)
+
+    async def override_get_db():
+        yield None
+
+    app.dependency_overrides[get_db] = override_get_db
+    if current_user is not None:
+        app.dependency_overrides[get_current_active_user] = lambda: current_user
+    return app
+
+
+def _chat_app(current_user=None) -> FastAPI:
     app = FastAPI()
     app.include_router(chat_handlers.router)
 
@@ -121,6 +147,124 @@ def test_conversation_routes_declare_access_dependencies():
             for dependency in _route(path, method).dependant.dependencies
         }
         assert dependency_name in names
+
+
+def test_message_routes_declare_access_dependencies():
+    expected = {
+        ("/conversations/{conversation_id}/messages", "POST"): "get_owned_conversation",
+        ("/conversations/{conversation_id}/messages", "GET"): "get_readable_conversation",
+        ("/messages/{message_id}", "GET"): "get_owned_message",
+        ("/messages/{message_id}", "PATCH"): "get_owned_message",
+        ("/messages/{message_id}/feedback", "POST"): "get_owned_message",
+        ("/messages/{message_id}", "DELETE"): "get_owned_message",
+        ("/messages/{message_id}/regenerate", "POST"): "get_owned_message",
+        ("/conversations/{conversation_id}/messages/stream", "POST"): "get_owned_conversation",
+        ("/conversations/{conversation_id}/messages/stream_legacy", "POST"): "get_owned_conversation",
+    }
+
+    for (path, method), dependency_name in expected.items():
+        names = {
+            dependency.call.__name__
+            for dependency in _route(path, method).dependant.dependencies
+        }
+        assert dependency_name in names
+
+
+def test_send_message_rejects_unauthenticated_before_service(monkeypatch):
+    get_conversation = AsyncMock(return_value=_conversation())
+    add_message = AsyncMock()
+    monkeypatch.setattr(chat_handlers.ChatService, "get_conversation", get_conversation)
+    monkeypatch.setattr(chat_handlers.ChatService, "add_message", add_message)
+
+    with TestClient(_chat_app()) as client:
+        response = client.post(
+            "/conversations/c1/messages",
+            json={"content": "secret"},
+        )
+
+    assert response.status_code == 401
+    get_conversation.assert_not_awaited()
+    add_message.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "conversation",
+    [
+        {"conversation_id": "c1", "user_id": "other", "visibility": "public"},
+        None,
+    ],
+    ids=["non-owner-public", "missing"],
+)
+def test_send_message_hides_non_owner_and_missing_before_write(
+    monkeypatch,
+    conversation,
+):
+    get_conversation = AsyncMock(return_value=conversation)
+    add_message = AsyncMock()
+    monkeypatch.setattr(chat_handlers.ChatService, "get_conversation", get_conversation)
+    monkeypatch.setattr(chat_handlers.ChatService, "add_message", add_message)
+    current_user = SimpleNamespace(user_id="owner", is_active=True)
+
+    with TestClient(_chat_app(current_user)) as client:
+        response = client.post(
+            "/conversations/c1/messages",
+            json={"content": "secret"},
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Resource not found"}
+    add_message.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "conversation",
+    [
+        {"conversation_id": "c1", "user_id": "other", "visibility": "public"},
+        None,
+    ],
+    ids=["non-owner-public", "missing"],
+)
+def test_stream_message_hides_non_owner_and_missing_before_pipeline(
+    monkeypatch,
+    conversation,
+):
+    get_conversation = AsyncMock(return_value=conversation)
+    pipeline_factory = AsyncMock()
+    monkeypatch.setattr(chat_handlers.ChatService, "get_conversation", get_conversation)
+    monkeypatch.setattr(chat_handlers, "_get_chat_stream_pipeline", pipeline_factory)
+    current_user = SimpleNamespace(user_id="owner", is_active=True)
+
+    with TestClient(_chat_app(current_user)) as client:
+        response = client.post(
+            "/conversations/c1/messages/stream",
+            json={"content": "secret"},
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Resource not found"}
+    pipeline_factory.assert_not_called()
+
+
+def test_edit_message_request_accepts_omitted_deprecated_user_id():
+    request = EditMessageRequest(new_content="updated")
+
+    assert request.user_id is None
+
+
+@pytest.mark.asyncio
+async def test_edit_message_uses_authenticated_user(monkeypatch):
+    edited_message = AsyncMock(return_value=_message())
+    monkeypatch.setattr(chat_handlers.ChatService, "edit_message", edited_message)
+    request = EditMessageRequest(new_content="updated", user_id="attacker")
+
+    await chat_handlers.edit_message(
+        message_id="m1",
+        request=request,
+        current_user=SimpleNamespace(user_id="owner", is_active=True),
+        _message={"message_id": "m1", "conversation_id": "c1"},
+    )
+
+    assert edited_message.await_args.kwargs["edited_by"] == "owner"
 
 
 def test_conversation_analytics_rejects_unauthenticated_before_service(monkeypatch):

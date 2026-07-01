@@ -5,7 +5,12 @@ stream_message 핸들러의 전체 실행 흐름을 단계별로 조율한다.
 
 Usage:
     pipeline = ChatStreamPipeline(...)
-    async for sse_event in pipeline.run(conversation_id, request, current_user):
+    async for sse_event in pipeline.run(
+        conversation_id,
+        request,
+        current_user,
+        authorized_conversation=conversation,
+    ):
         yield sse_event
 """
 
@@ -83,10 +88,30 @@ class ChatStreamPipeline:
         conversation_id: str,
         request,   # SendMessageRequest
         current_user,  # User
+        *,
+        authorized_conversation: dict[str, Any],
     ) -> AsyncGenerator[str, None]:
         """stream_message 의 전체 실행 흐름 — Template Method."""
         acc = StreamAccumulator()
         stream_state: Optional[StreamAdapterState] = None
+
+        if (
+            authorized_conversation.get("conversation_id") != conversation_id
+            or authorized_conversation.get("user_id") != current_user.user_id
+        ):
+            logger.warning("Rejected chat stream owner mismatch")
+            state, _ = create_stream_generator(
+                response_id=conversation_id,
+                message_id=str(uuid.uuid4()),
+            )
+            state.response.status = ResponseStatus.FAILED
+            state.response.error = ErrorInfo(
+                type="not_found",
+                message="Resource not found",
+            )
+            yield format_sse_event(ResponseFailedEvent(response=state.response))
+            yield format_done_token()
+            return
 
         try:
             request_metadata = request.metadata or {}
@@ -109,7 +134,7 @@ class ChatStreamPipeline:
             yield format_sse_event(start_event)
 
             # ── Step 3: 대화 정보 및 히스토리 로드 ───────────────────
-            conversation = await self._ChatService.get_conversation(conversation_id)
+            conversation = authorized_conversation
             history_messages = await self._ChatService.get_conversation_messages(
                 conversation_id=conversation_id,
                 limit=20,

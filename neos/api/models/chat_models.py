@@ -105,7 +105,11 @@ class RegenerateMessageRequest(BaseModel):
 class EditMessageRequest(BaseModel):
     new_content: str = Field(..., min_length=1, description="새 메시지 내용")
     edit_reason: Optional[str] = Field(None, description="편집 이유")
-    user_id: str = Field(default="system", description="편집자 ID")
+    user_id: Optional[str] = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated compatibility field; authenticated identity is used",
+    )
 
 
 class MessageFeedbackRequest(BaseModel):

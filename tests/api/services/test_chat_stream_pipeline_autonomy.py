@@ -96,6 +96,44 @@ class _FakeChatService:
 
 
 @pytest.mark.asyncio
+async def test_chat_pipeline_rejects_conversation_owner_mismatch():
+    _FakeChatService.messages = []
+    pipeline = ChatStreamPipeline(
+        chat_llm_service=object(),
+        cost_calculator=object(),
+        get_core_tools_fn=lambda: None,
+        get_search_handler_fn=lambda: None,
+        chat_service_cls=_FakeChatService,
+        multi_agent_workflow=object(),
+        workflow_callback_cls=object(),
+        map_node_to_agent_fn=lambda node: node,
+    )
+    request = SimpleNamespace(
+        role=SimpleNamespace(value="user"),
+        content="secret",
+        attachments=[],
+        parent_message_id=None,
+        metadata={},
+    )
+
+    chunks = [
+        chunk
+        async for chunk in pipeline.run(
+            "conversation_123",
+            request,
+            SimpleNamespace(user_id="attacker"),
+            authorized_conversation={
+                "conversation_id": "conversation_123",
+                "user_id": "owner",
+            },
+        )
+    ]
+
+    assert _FakeChatService.messages == []
+    assert any("response.failed" in chunk for chunk in chunks)
+
+
+@pytest.mark.asyncio
 async def test_chat_workflow_uses_checkpointer_and_streams_approval_request():
     workflow = _FakeWorkflow()
     pipeline = ChatStreamPipeline(
@@ -211,6 +249,14 @@ async def test_chat_interrupted_workflow_persists_approval_placeholder(monkeypat
             conversation_id="conversation_123",
             request=request,
             current_user=SimpleNamespace(user_id="user_123"),
+            authorized_conversation={
+                "conversation_id": "conversation_123",
+                "user_id": "user_123",
+                "system_prompt": "",
+                "model_name": "gpt-4o-mini",
+                "temperature": 0.7,
+                "max_tokens": None,
+            },
         )
     ]
 
