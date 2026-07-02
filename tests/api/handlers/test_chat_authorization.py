@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -41,13 +41,19 @@ def _conversation() -> dict:
     }
 
 
-def _message() -> dict:
+def _message(
+    *,
+    conversation_id: str = "c1",
+    message_id: str = "m1",
+    parent_message_id: str | None = None,
+) -> dict:
     return {
-        "message_id": "m1",
-        "conversation_id": "c1",
+        "message_id": message_id,
+        "conversation_id": conversation_id,
         "role": "user",
         "content": "updated",
         "sequence_number": 1,
+        "parent_message_id": parent_message_id,
         "status": "edited",
         "created_at": "2026-07-01T00:00:00",
         "updated_at": "2026-07-01T00:00:00",
@@ -107,6 +113,104 @@ def _chat_app(current_user=None) -> FastAPI:
     if current_user is not None:
         app.dependency_overrides[get_current_active_user] = lambda: current_user
     return app
+
+
+class _FakeRoutePipeline:
+    def __init__(self):
+        self.calls = []
+
+    async def run(
+        self,
+        conversation_id,
+        request,
+        current_user,
+        *,
+        authorized_conversation,
+    ):
+        self.calls.append(
+            {
+                "conversation_id": conversation_id,
+                "parent_message_id": request.parent_message_id,
+                "user_id": current_user.user_id,
+                "authorized_conversation": authorized_conversation,
+            }
+        )
+        yield "data: [DONE]\n\n"
+
+
+async def _completed_llm_stream(**kwargs):
+    yield {"type": "content", "content": "allowed response"}
+    yield {
+        "type": "complete",
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 2,
+            "total_tokens": 3,
+        },
+        "cost": {"total_cost": 0},
+        "latency_ms": 1,
+    }
+
+
+def _configure_parent_route_services(
+    monkeypatch,
+    *,
+    parent_message,
+    parent_conversation,
+):
+    target_conversation = {
+        "conversation_id": "owned-c",
+        "user_id": "owner",
+        "visibility": "private",
+        "system_prompt": "",
+        "model_name": "gpt-4o-mini",
+        "temperature": 0.7,
+        "max_tokens": None,
+    }
+    conversations = {"owned-c": target_conversation}
+    if parent_conversation is not None:
+        conversations[parent_conversation["conversation_id"]] = parent_conversation
+
+    get_conversation = AsyncMock(
+        side_effect=lambda conversation_id: conversations.get(conversation_id)
+    )
+    get_message = AsyncMock(return_value=parent_message)
+    add_message = AsyncMock(
+        return_value=_message(
+            conversation_id="owned-c",
+            message_id="created-m",
+            parent_message_id=(parent_message or {}).get("message_id"),
+        )
+    )
+    get_conversation_messages = AsyncMock(return_value=[])
+    pipeline = _FakeRoutePipeline()
+    pipeline_factory = Mock(return_value=pipeline)
+
+    monkeypatch.setattr(chat_handlers.ChatService, "get_conversation", get_conversation)
+    monkeypatch.setattr(chat_handlers.ChatService, "get_message", get_message)
+    monkeypatch.setattr(chat_handlers.ChatService, "add_message", add_message)
+    monkeypatch.setattr(
+        chat_handlers.ChatService,
+        "get_conversation_messages",
+        get_conversation_messages,
+    )
+    monkeypatch.setattr(chat_handlers, "_get_chat_stream_pipeline", pipeline_factory)
+    monkeypatch.setattr(
+        chat_handlers.chat_llm_service,
+        "generate_response_stream_with_tools",
+        _completed_llm_stream,
+    )
+    monkeypatch.setattr(
+        chat_handlers.cost_calculator,
+        "record_cost_for_existing_message",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(chat_handlers.app_settings, "ENABLE_WORKFLOW_IN_CHAT", False)
+    monkeypatch.setattr(chat_handlers.app_settings, "ARTIFACTS_ENABLED", False)
+    monkeypatch.setattr(chat_handlers.app_settings, "INLINE_VIS_ENABLED", False)
+    monkeypatch.setattr(chat_handlers.app_settings, "TOOL_SEARCH_ENABLED", False)
+
+    return add_message, get_message, pipeline, pipeline_factory
 
 
 def test_create_conversation_request_accepts_omitted_deprecated_user_id():
@@ -243,6 +347,143 @@ def test_stream_message_hides_non_owner_and_missing_before_pipeline(
     assert response.status_code == 404
     assert response.json() == {"detail": "Resource not found"}
     pipeline_factory.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("route_suffix", "uses_pipeline"),
+    [
+        ("messages", False),
+        ("messages/stream", True),
+        ("messages/stream_legacy", False),
+    ],
+    ids=["ordinary", "current-stream", "legacy-stream"],
+)
+@pytest.mark.parametrize(
+    ("parent_message_id", "parent_message", "parent_conversation"),
+    [
+        (
+            "victim-m",
+            {"message_id": "victim-m", "conversation_id": "victim-c"},
+            {
+                "conversation_id": "victim-c",
+                "user_id": "victim",
+                "visibility": "private",
+            },
+        ),
+        (
+            "other-owned-m",
+            {"message_id": "other-owned-m", "conversation_id": "other-owned-c"},
+            {
+                "conversation_id": "other-owned-c",
+                "user_id": "owner",
+                "visibility": "private",
+            },
+        ),
+        ("missing-m", None, None),
+    ],
+    ids=["cross-owner", "same-owner-cross-conversation", "missing"],
+)
+def test_message_creation_routes_hide_invalid_parent_before_write(
+    monkeypatch,
+    route_suffix,
+    uses_pipeline,
+    parent_message_id,
+    parent_message,
+    parent_conversation,
+):
+    add_message, _, pipeline, pipeline_factory = _configure_parent_route_services(
+        monkeypatch,
+        parent_message=parent_message,
+        parent_conversation=parent_conversation,
+    )
+    current_user = SimpleNamespace(user_id="owner", is_active=True)
+
+    with TestClient(_chat_app(current_user)) as client:
+        response = client.post(
+            f"/conversations/owned-c/{route_suffix}",
+            json={
+                "content": "secret",
+                "role": "assistant",
+                "parent_message_id": parent_message_id,
+            },
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Resource not found"}
+    assert response.headers["content-type"].startswith("application/json")
+    assert "response.failed" not in response.text
+    add_message.assert_not_awaited()
+    assert pipeline.calls == []
+    if uses_pipeline:
+        pipeline_factory.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "route_suffix",
+    ["messages", "messages/stream", "messages/stream_legacy"],
+    ids=["ordinary", "current-stream", "legacy-stream"],
+)
+@pytest.mark.parametrize(
+    "parent_message_id",
+    ["same-conversation-m", None],
+    ids=["same-conversation", "no-parent"],
+)
+def test_message_creation_routes_preserve_valid_parent_success(
+    monkeypatch,
+    route_suffix,
+    parent_message_id,
+):
+    parent_message = (
+        {
+            "message_id": "same-conversation-m",
+            "conversation_id": "owned-c",
+        }
+        if parent_message_id
+        else None
+    )
+    parent_conversation = (
+        {
+            "conversation_id": "owned-c",
+            "user_id": "owner",
+            "visibility": "private",
+        }
+        if parent_message_id
+        else None
+    )
+    add_message, get_message, pipeline, pipeline_factory = (
+        _configure_parent_route_services(
+            monkeypatch,
+            parent_message=parent_message,
+            parent_conversation=parent_conversation,
+        )
+    )
+    current_user = SimpleNamespace(user_id="owner", is_active=True)
+
+    with TestClient(_chat_app(current_user)) as client:
+        response = client.post(
+            f"/conversations/owned-c/{route_suffix}",
+            json={
+                "content": "allowed",
+                "role": "assistant",
+                "parent_message_id": parent_message_id,
+            },
+        )
+
+    assert response.status_code == 200
+    if parent_message_id is None:
+        get_message.assert_not_awaited()
+    if route_suffix == "messages/stream":
+        pipeline_factory.assert_called_once_with()
+        assert pipeline.calls[0]["parent_message_id"] == parent_message_id
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert response.text == "data: [DONE]\n\n"
+    else:
+        assert add_message.await_args_list[0].kwargs["parent_message_id"] == parent_message_id
+        if route_suffix == "messages/stream_legacy":
+            assert response.headers["content-type"].startswith("text/event-stream")
+            assert "response.completed" in response.text
+            assert "response.failed" not in response.text
+            assert response.text.endswith("data: [DONE]\n\n")
 
 
 def test_edit_message_request_accepts_omitted_deprecated_user_id():

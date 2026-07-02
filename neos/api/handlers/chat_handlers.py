@@ -40,7 +40,10 @@ from neos.api.handlers.workflow_stream_handlers import WorkflowStreamCallback
 from neos.database.connection import db_manager
 from neos.database.models import User
 from neos.services.chat_llm_service import chat_llm_service
-from neos.api.services.chat_stream_pipeline import ChatStreamPipeline
+from neos.api.services.chat_stream_pipeline import (
+    ChatStreamPipeline,
+    resolve_authorized_parent_message,
+)
 from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
 from neos.workflow.graph import multi_agent_workflow
@@ -412,13 +415,34 @@ async def generate_conversation_title(
 # Message Endpoints
 # ============================================================================
 
+async def _require_authorized_parent_message(
+    parent_message_id: Optional[str],
+    authorized_conversation: dict,
+    current_user: User,
+) -> Optional[dict]:
+    parent_message = await resolve_authorized_parent_message(
+        ChatService,
+        parent_message_id,
+        authorized_conversation,
+        current_user,
+    )
+    if parent_message_id is not None and parent_message is None:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return parent_message
+
 @router.post("/conversations/{conversation_id}/messages", response_model=CreateMessageResponse)
 async def send_message(
     conversation_id: str,
     request: SendMessageRequest,
-    _conversation: dict = Depends(get_owned_conversation),
+    current_user: User = Depends(get_current_active_user),
+    authorized_conversation: dict = Depends(get_owned_conversation),
 ):
     """메시지 전송 및 AI 응답 생성"""
+    await _require_authorized_parent_message(
+        request.parent_message_id,
+        authorized_conversation,
+        current_user,
+    )
     try:
         # 사용자 메시지 저장
         user_message = await ChatService.add_message(
@@ -691,6 +715,11 @@ async def stream_message(
     authorized_conversation: dict = Depends(get_owned_conversation),
 ):
     """스트리밍 메시지 전송 (아티팩트 지원)"""
+    await _require_authorized_parent_message(
+        request.parent_message_id,
+        authorized_conversation,
+        current_user,
+    )
     pipeline = _get_chat_stream_pipeline()
 
     return StreamingResponse(
@@ -719,6 +748,12 @@ async def stream_message_legacy(
     authorized_conversation: dict = Depends(get_owned_conversation),
 ):
     """[Legacy] 리팩토링 전 stream_message 구현 — 점진적 전환용."""
+
+    await _require_authorized_parent_message(
+        request.parent_message_id,
+        authorized_conversation,
+        current_user,
+    )
 
     async def generate_stream() -> AsyncGenerator[str, None]:
         try:
