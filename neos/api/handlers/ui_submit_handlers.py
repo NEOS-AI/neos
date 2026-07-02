@@ -35,6 +35,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ui", tags=["A2UI"])
 
 
+async def _get_owned_frame_session(
+    frame_id: uuid.UUID,
+    user_id: str,
+) -> UIFrameSession | None:
+    async with get_db_session() as db:
+        result = await db.execute(
+            select(UIFrameSession).where(
+                UIFrameSession.frame_id == frame_id,
+                UIFrameSession.user_id == user_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+
 @router.post(
     "/submit",
     summary="UI 폼 제출",
@@ -52,18 +66,22 @@ async def submit_ui_frame(
     2. 만료 여부 확인
     3. needs_ui=False + ui_submission 포함 새 워크플로우 invoke
     """
-    async with get_db_session() as db:
-        result = await db.execute(
-            select(UIFrameSession).where(
-                UIFrameSession.frame_id == uuid.UUID(body.frame_id)
-            )
-        )
-        frame_session = result.scalar_one_or_none()
+    frame_uuid = uuid.UUID(body.frame_id)
+    frame_session = await _get_owned_frame_session(
+        frame_uuid,
+        current_user.user_id,
+    )
 
     if not frame_session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"UIFrame '{body.frame_id}'을 찾을 수 없습니다.",
+            detail="Resource not found",
+        )
+
+    if frame_session.session_id != body.session_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found",
         )
 
     # 만료 확인
@@ -79,7 +97,8 @@ async def submit_ui_frame(
         update_result = await db.execute(
             sa_update(UIFrameSession)
             .where(
-                UIFrameSession.frame_id == uuid.UUID(body.frame_id),
+                UIFrameSession.frame_id == frame_uuid,
+                UIFrameSession.user_id == current_user.user_id,
                 UIFrameSession.submitted_at.is_(None),  # 아직 제출되지 않은 경우만
             )
             .values(submitted_at=now)
