@@ -1,6 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import Depends, FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -35,6 +35,8 @@ from neos.api.handlers.autonomy_handlers import router as autonomy_router
 from neos.api.handlers.scheduled_tasks_handlers import router as scheduled_tasks_router  # Phase 4: Cron 스케줄
 from neos.api.handlers.ui_submit_handlers import router as ui_submit_router  # Phase 8: A2UI
 from neos.api.similarity_chat_routes import similarity_chat_router
+from neos.api.dependencies.auth import get_current_admin_user
+from neos.database.models import User
 from neos.workflow.graph import multi_agent_workflow
 from neos.utils.exceptions import NeosBaseException, get_exception_status_code, is_client_error
 from neos.observability.metrics import get_metrics_collector
@@ -497,7 +499,9 @@ app.include_router(ui_submit_router, prefix=settings.API_V1_PREFIX, tags=["A2UI"
 # === Enterprise Monitoring Endpoints ===
 
 @app.get("/metrics")
-async def metrics_endpoint():
+async def metrics_endpoint(
+    current_user: User = Depends(get_current_admin_user),
+):
     """
     Prometheus metrics endpoint for enterprise monitoring.
 
@@ -527,7 +531,9 @@ async def metrics_endpoint():
 
 
 @app.get(f"{settings.API_V1_PREFIX}/metrics/stats")
-async def metrics_stats():
+async def metrics_stats(
+    current_user: User = Depends(get_current_admin_user),
+):
     """
     Get human-readable metrics statistics.
     Useful for debugging and quick health checks.
@@ -544,58 +550,22 @@ async def metrics_stats():
 @app.get("/")
 async def root():
     """Root Endpoint - System Information"""
-    return {
+    response = {
         "name": "Multi-Agent AI System",
         "version": __VERSION__,
-        "description": "LangGraph, CrewAI, FastAPI 기반 멀티 에이전트 AI 시스템",
         "status": "running",
-        "endpoints": {
-            "docs": "/docs",
-            "health": f"{settings.API_V1_PREFIX}/health",
-            "query": f"{settings.API_V1_PREFIX}/query",
-            "multimodal_query": f"{settings.API_V1_PREFIX}/multimodal/query",
-            "image_analysis": f"{settings.API_V1_PREFIX}/multimodal/image/analyze",
-            "trending": f"{settings.API_V1_PREFIX}/trending",
-            "websocket": f"{settings.API_V1_PREFIX}/ws/{{session_id}}",
-            "chat": {
-                "conversations": f"{settings.API_V1_PREFIX}/chat/conversations",
-                "messages": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages",
-                "stream": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/stream",
-                "websocket": f"{settings.API_V1_PREFIX}/chat/ws/{{conversation_id}}",
-                "similarity": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity",
-                "similarity_stream": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/stream",
-                "similarity_cross_conversation": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/cross-conversation",
-                "similarity_high_confidence": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/high-confidence",
-                "similarity_config": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/similarity/config"
-            },
-            "deep_research": {
-                "start": f"{settings.API_V1_PREFIX}/deep-research/start",
-                "stream": f"{settings.API_V1_PREFIX}/deep-research/{{report_id}}/stream",
-                "report": f"{settings.API_V1_PREFIX}/deep-research/{{report_id}}",
-                "conversation_reports": f"{settings.API_V1_PREFIX}/conversations/{{conversation_id}}/deep-research"
-            },
-            "workflow_streaming": {
-                "sse_stream": f"{settings.API_V1_PREFIX}/query/stream",
-                "websocket": f"{settings.API_V1_PREFIX}/ws/query/{{session_id}}",
-                "websocket_detailed": f"{settings.API_V1_PREFIX}/ws/query/detailed/{{session_id}}"
-            }
-        },
-        "features": [
-            "🔍 지능형 멀티모달 검색",
-            "📊 고급 데이터 분석",
-            "🎨 AI 콘텐츠 생성",
-            "🚀 자동화된 워크플로우",
-            "⚡ 실시간 처리",
-            "📈 품질 모니터링",
-            "🔄 SSE/WebSocket 스트리밍 응답",
-            "⏱️ 최적화된 타임아웃 관리"
-        ]
+        "health": f"{settings.API_V1_PREFIX}/health",
     }
+    if IS_DEBUG:
+        response["docs"] = "/docs"
+    return response
 
 
 # 시스템 정보 엔드포인트
 @app.get("/info")
-async def system_info():
+async def system_info(
+    current_user: User = Depends(get_current_admin_user),
+):
     """시스템 정보 및 설정"""
     return {
         "system": {
