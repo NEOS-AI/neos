@@ -369,6 +369,21 @@ def test_production_app_exposes_only_allowed_public_http_routes():
     assert unexpected_public_routes == []
 
 
+def test_production_health_routes_remain_public():
+    _, production_app = _load_production_app()
+
+    authenticated_health_routes = sorted(
+        (route.path, method)
+        for route in _effective_http_routes(production_app)
+        for method in route.methods
+        if method == "GET"
+        and route.path.endswith("/health")
+        and _has_auth_dependency(route)
+    )
+
+    assert authenticated_health_routes == []
+
+
 def test_production_app_excludes_websocket_routes_when_debug_false():
     _, production_app = _load_production_app()
 

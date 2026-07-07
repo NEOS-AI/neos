@@ -62,15 +62,27 @@ TEST_EMBEDDING_ON_STARTUP = False  # 시작 시 임베딩 테스트 여부
 IS_DEBUG = settings.DEBUG
 
 
+def _router_with_routes(source_router: APIRouter, route_filter) -> APIRouter:
+    """Return a router containing only routes that match route_filter."""
+    filtered_router = APIRouter()
+    filtered_router.routes = [route for route in source_router.routes if route_filter(route)]
+    return filtered_router
+
+
 def _router_without_websockets(source_router: APIRouter) -> APIRouter:
     """Return a router containing only HTTP routes from source_router."""
-    filtered_router = APIRouter()
-    filtered_router.routes = [
-        route
-        for route in source_router.routes
-        if not isinstance(route, APIWebSocketRoute)
-    ]
-    return filtered_router
+    return _router_with_routes(
+        source_router,
+        lambda route: not isinstance(route, APIWebSocketRoute),
+    )
+
+
+def _is_health_http_route(route) -> bool:
+    """Health endpoints stay public under the HTTP authorization matrix."""
+    return (
+        not isinstance(route, APIWebSocketRoute)
+        and getattr(route, "path", "").endswith("/health")
+    )
 
 
 def _include_router_for_runtime(api_router: APIRouter, **kwargs) -> None:
@@ -500,7 +512,15 @@ async def global_exception_handler(request: Request, exc: Exception):
 _include_router_for_runtime(auth_router, prefix=settings.API_V1_PREFIX, tags=["Authentication"])  # 인증 라우터 추가
 _include_router_for_runtime(router, prefix=settings.API_V1_PREFIX, tags=["Multi-Agent AI"])
 _include_router_for_runtime(
-    web_search_analytics_router,
+    _router_with_routes(web_search_analytics_router, _is_health_http_route),
+    prefix=f"{settings.API_V1_PREFIX}/analytics",
+    tags=["Web Search Analytics"],
+)
+_include_router_for_runtime(
+    _router_with_routes(
+        web_search_analytics_router,
+        lambda route: not _is_health_http_route(route),
+    ),
     prefix=f"{settings.API_V1_PREFIX}/analytics",
     tags=["Web Search Analytics"],
     dependencies=[Depends(get_current_admin_user)],
