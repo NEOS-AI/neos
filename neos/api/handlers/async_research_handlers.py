@@ -79,7 +79,7 @@ async def start_async_research(
             detail="Async research is not available (CELERY_ENABLED=false)",
         )
 
-    session_id = request.session_id or request.conversation_id or str(uuid.uuid4())
+    session_id = str(uuid.uuid4())
     if request.conversation_id:
         await get_owned_conversation(request.conversation_id, current_user)
 

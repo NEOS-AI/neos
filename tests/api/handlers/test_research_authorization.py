@@ -226,6 +226,7 @@ def _install_fake_celery(monkeypatch, result):
 @pytest.mark.asyncio
 async def test_async_research_start_records_job_owner(monkeypatch):
     monkeypatch.setattr(async_research_handlers.settings, "CELERY_ENABLED", True)
+    monkeypatch.setattr(async_research_handlers.uuid, "uuid4", lambda: "server-session-1")
     apply_async = Mock(return_value=SimpleNamespace(id="job-1"))
     fake_tasks = SimpleNamespace(
         execute_workflow_async=SimpleNamespace(apply_async=apply_async)
@@ -235,17 +236,117 @@ async def test_async_research_start_records_job_owner(monkeypatch):
     monkeypatch.setattr(cache_manager, "set", cache_set)
 
     response = await async_research_handlers.start_async_research(
-        async_research_handlers.AsyncResearchRequest(query="private", session_id="s1"),
+        async_research_handlers.AsyncResearchRequest(query="private"),
         current_user=_user(),
     )
 
     assert response.job_id == "job-1"
+    assert response.session_id == "server-session-1"
     cache_set.assert_has_awaits(
         [
-            call("async_research_session_owner:s1", "owner", ttl=86400),
+            call("async_research_session_owner:server-session-1", "owner", ttl=86400),
             call("async_research_job_owner:job-1", "owner", ttl=86400),
         ]
     )
+
+
+@pytest.mark.asyncio
+async def test_async_research_start_ignores_supplied_session_id_for_workflow_conversation(
+    monkeypatch,
+):
+    monkeypatch.setattr(async_research_handlers.settings, "CELERY_ENABLED", True)
+    monkeypatch.setattr(async_research_handlers.uuid, "uuid4", lambda: "server-session-1")
+    apply_async = Mock(return_value=SimpleNamespace(id="job-1"))
+    fake_tasks = SimpleNamespace(
+        execute_workflow_async=SimpleNamespace(apply_async=apply_async)
+    )
+    monkeypatch.setitem(sys.modules, "neos.workflow.celery_tasks", fake_tasks)
+    cache_set = AsyncMock(return_value=True)
+    monkeypatch.setattr(cache_manager, "set", cache_set)
+
+    response = await async_research_handlers.start_async_research(
+        async_research_handlers.AsyncResearchRequest(
+            query="private",
+            session_id="foreign-conversation",
+        ),
+        current_user=_user(),
+    )
+
+    workflow_kwargs = apply_async.call_args.kwargs["kwargs"]
+    assert response.session_id == "server-session-1"
+    assert response.stream_url == "/api/v1/research/stream/server-session-1"
+    assert workflow_kwargs["session_id"] == "server-session-1"
+    assert workflow_kwargs["conversation_id"] == "server-session-1"
+    assert workflow_kwargs["conversation_id"] != "foreign-conversation"
+    cache_set.assert_any_await(
+        "async_research_session_owner:server-session-1",
+        "owner",
+        ttl=86400,
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_research_start_does_not_overwrite_supplied_foreign_session_owner_or_enable_first_claim(
+    monkeypatch,
+):
+    monkeypatch.setattr(async_research_handlers.settings, "CELERY_ENABLED", True)
+    monkeypatch.setattr(
+        async_research_handlers.uuid,
+        "uuid4",
+        lambda: "attacker-server-session",
+    )
+    apply_async = Mock(return_value=SimpleNamespace(id="job-2"))
+    fake_tasks = SimpleNamespace(
+        execute_workflow_async=SimpleNamespace(apply_async=apply_async)
+    )
+    monkeypatch.setitem(sys.modules, "neos.workflow.celery_tasks", fake_tasks)
+
+    owner_records = {"async_research_session_owner:shared-session": "victim"}
+
+    async def record_owner(key, value, ttl=None):
+        owner_records[key] = value
+        return True
+
+    cache_set = AsyncMock(side_effect=record_owner)
+    cache_get = AsyncMock(side_effect=lambda key: owner_records.get(key))
+    monkeypatch.setattr(cache_manager, "set", cache_set)
+    monkeypatch.setattr(cache_manager, "get", cache_get)
+
+    claim = Mock()
+    get_events = Mock()
+    fake_stream_manager = SimpleNamespace(
+        claim_session=claim,
+        get_events_since=get_events,
+    )
+    monkeypatch.setattr(
+        async_research_handlers,
+        "stream_manager",
+        fake_stream_manager,
+        raising=False,
+    )
+
+    response = await async_research_handlers.start_async_research(
+        async_research_handlers.AsyncResearchRequest(
+            query="private",
+            session_id="shared-session",
+        ),
+        current_user=_user("attacker"),
+    )
+
+    assert response.session_id == "attacker-server-session"
+    assert owner_records["async_research_session_owner:shared-session"] == "victim"
+
+    with pytest.raises(HTTPException) as exc:
+        await async_research_handlers.stream_research_progress(
+            "shared-session",
+            SimpleNamespace(is_disconnected=AsyncMock(return_value=True)),
+            current_user=_user("attacker"),
+        )
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Resource not found"
+    claim.assert_not_called()
+    get_events.assert_not_called()
 
 
 @pytest.mark.asyncio

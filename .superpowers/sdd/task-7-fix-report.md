@@ -123,3 +123,47 @@
 ### Known concerns
 
 - Test runs still emit existing database initialization warnings/errors under the restricted local sandbox (`Operation not permitted`) during fixture setup/teardown, but all impacted authorization suites pass.
+
+## Second re-review critical fix
+
+### Findings addressed
+
+1. **Async research start `session_id` fallback**
+   - `start_async_research` now always generates the async research stream/session ID server-side.
+   - Caller-supplied `session_id` remains accepted by the request model for response-schema/path compatibility, but it is ignored for the workflow `conversation_id` fallback, stream owner cache key, returned `session_id`, and returned `stream_url`.
+
+2. **Async research owner overwrite via duplicate supplied `session_id`**
+   - Because start requests no longer use caller-supplied `session_id`, a second caller cannot overwrite `async_research_session_owner:{known_session}` through the start route.
+   - Added regression coverage that a foreign caller starting with a known session ID receives a server-generated session, leaves the existing owner cache record unchanged, and still gets 404 before stream claim/buffer reads for the known session.
+
+### Files changed
+
+- `neos/api/handlers/async_research_handlers.py`
+- `tests/api/handlers/test_research_authorization.py`
+- `.superpowers/sdd/task-7-fix-report.md`
+
+### Verification
+
+- RED async supplied-session tests:
+  - `env GOOGLE_API_KEY=test-key JWT_SECRET_KEY=test-only-secret-key-for-tests DEBUG=false .venv/bin/pytest -q tests/api/handlers/test_research_authorization.py::test_async_research_start_records_job_owner tests/api/handlers/test_research_authorization.py::test_async_research_start_ignores_supplied_session_id_for_workflow_conversation tests/api/handlers/test_research_authorization.py::test_async_research_start_does_not_overwrite_supplied_foreign_session_owner_or_enable_first_claim`
+  - Result before implementation: **2 failed, 1 passed**. Failures confirmed supplied `session_id` was returned/used instead of a server-generated session.
+
+- GREEN targeted supplied-session tests:
+  - `env GOOGLE_API_KEY=test-key JWT_SECRET_KEY=test-only-secret-key-for-tests DEBUG=false .venv/bin/pytest -q tests/api/handlers/test_research_authorization.py::test_async_research_start_records_job_owner tests/api/handlers/test_research_authorization.py::test_async_research_start_ignores_supplied_session_id_for_workflow_conversation tests/api/handlers/test_research_authorization.py::test_async_research_start_does_not_overwrite_supplied_foreign_session_owner_or_enable_first_claim`
+  - Result: **3 passed, 1 warning**.
+
+- Research authorization suite:
+  - `env GOOGLE_API_KEY=test-key JWT_SECRET_KEY=test-only-secret-key-for-tests DEBUG=false .venv/bin/pytest -q tests/api/handlers/test_research_authorization.py`
+  - Result: **23 passed, 1 warning**.
+
+- Impacted Task 7 suites:
+  - `env GOOGLE_API_KEY=test-key JWT_SECRET_KEY=test-only-secret-key-for-tests DEBUG=false .venv/bin/pytest -q tests/api/handlers/test_query_authorization.py tests/api/handlers/test_alternate_query_authorization.py tests/api/handlers/test_research_authorization.py tests/api/handlers/test_similarity_chat_authorization.py tests/api/handlers/test_scheduled_tasks_session_context.py tests/workflow/test_stream_manager_authorization.py tests/api/handlers/test_query_handlers_autonomy.py`
+  - Result: **111 passed, 49 warnings**.
+
+- Whitespace:
+  - `git diff --check`
+  - Result before and after report update: exit **0**.
+
+### Known concerns
+
+- Test runs still emit existing database initialization warnings/errors under the restricted local sandbox (`Operation not permitted`) during fixture setup/teardown, but all impacted authorization suites pass.
