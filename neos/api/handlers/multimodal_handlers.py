@@ -191,7 +191,9 @@ async def analyze_image(
 
 
 @router.get("/supported-types", response_model=SupportedTypesResponse)
-async def get_supported_types():
+async def get_supported_types(
+    current_user: User = Depends(get_current_active_user),
+):
     """
     지원하는 파일 타입 목록 조회
 

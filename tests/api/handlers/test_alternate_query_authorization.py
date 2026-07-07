@@ -146,6 +146,21 @@ def test_multimodal_and_unified_routes_reject_unauthenticated_before_services(
     stream_started.assert_not_called()
 
 
+def test_multimodal_supported_types_rejects_unauthenticated_before_service(monkeypatch):
+    get_supported_types = AsyncMock(return_value={})
+    monkeypatch.setattr(
+        MultimodalService,
+        "get_supported_types",
+        get_supported_types,
+    )
+
+    with TestClient(_app()) as client:
+        response = client.get("/api/v1/multimodal/supported-types")
+
+    assert response.status_code == 401
+    get_supported_types.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_multimodal_query_ignores_spoofed_user(monkeypatch):
     get_user = AsyncMock()

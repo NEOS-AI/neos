@@ -1282,12 +1282,15 @@ async def get_user_statistics(
 # ============================================================================
 
 @router.post("/templates", response_model=ConversationTemplate)
-async def create_template(request: CreateTemplateRequest):
+async def create_template(
+    request: CreateTemplateRequest,
+    current_user: User = Depends(get_current_active_user),
+):
     """대화 템플릿 생성"""
     try:
         template = await ChatService.create_template(
             name=request.name,
-            created_by=request.created_by,
+            created_by=current_user.user_id,
             description=request.description,
             category=request.category,
             default_model=request.default_model,
@@ -1306,7 +1309,10 @@ async def create_template(request: CreateTemplateRequest):
 
 
 @router.get("/templates/{template_id}", response_model=ConversationTemplate)
-async def get_template(template_id: str):
+async def get_template(
+    template_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """템플릿 조회"""
     try:
         template = await ChatService.get_template(template_id)
@@ -1326,7 +1332,8 @@ async def list_templates(
     is_public: Optional[bool] = None,
     created_by: Optional[str] = None,
     limit: int = 50,
-    offset: int = 0
+    offset: int = 0,
+    current_user: User = Depends(get_current_active_user),
 ):
     """템플릿 목록 조회"""
     try:

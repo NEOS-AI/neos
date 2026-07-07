@@ -241,7 +241,7 @@ def test_production_query_workflow_routes_have_explicit_authorization_matrix():
             f"{API_PREFIX}/multimodal/image/analyze",
             "POST",
         ): "get_current_active_user",
-        (f"{API_PREFIX}/multimodal/supported-types", "GET"): None,
+        (f"{API_PREFIX}/multimodal/supported-types", "GET"): "get_current_active_user",
         (f"{API_PREFIX}/multimodal/health", "GET"): None,
         (f"{API_PREFIX}/unified/process", "POST"): "get_current_active_user",
         (

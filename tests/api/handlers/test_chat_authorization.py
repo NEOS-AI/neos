@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from neos.api.dependencies.auth import get_current_active_user
 from neos.api.handlers import chat_handlers
 from neos.api.models.chat_models import CreateConversationRequest, EditMessageRequest
+from neos.api.services.chat_service import ChatService
 from neos.database.connection import get_db
 
 
@@ -113,6 +114,98 @@ def _chat_app(current_user=None) -> FastAPI:
     if current_user is not None:
         app.dependency_overrides[get_current_active_user] = lambda: current_user
     return app
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "request_kwargs", "service_attr"),
+    [
+        (
+            "POST",
+            "/templates",
+            {
+                "json": {
+                    "name": "starter",
+                    "created_by": "attacker",
+                    "description": "template",
+                    "category": "general",
+                    "default_model": "claude-sonnet-4-5-20250929",
+                    "default_system_prompt": "hello",
+                    "default_temperature": 0.7,
+                    "default_settings": {},
+                    "initial_messages": [],
+                    "is_public": False,
+                    "tags": [],
+                    "metadata": {},
+                }
+            },
+            "create_template",
+        ),
+        ("GET", "/templates/t1", {}, "get_template"),
+        ("GET", "/templates", {}, "list_templates"),
+    ],
+)
+def test_template_routes_reject_unauthenticated_before_services(
+    monkeypatch,
+    method,
+    path,
+    request_kwargs,
+    service_attr,
+):
+    service = AsyncMock()
+    monkeypatch.setattr(ChatService, service_attr, service)
+
+    with TestClient(_chat_app()) as client:
+        response = client.request(method, path, **request_kwargs)
+
+    assert response.status_code == 401
+    service.assert_not_awaited()
+
+
+def test_create_template_uses_authenticated_identity(monkeypatch):
+    create_template = AsyncMock(
+        return_value={
+            "template_id": "t1",
+            "name": "starter",
+            "description": "template",
+            "category": "general",
+            "default_model": "claude-sonnet-4-5-20250929",
+            "default_system_prompt": "hello",
+            "default_temperature": 0.7,
+            "default_settings": {},
+            "initial_messages": [],
+            "is_public": False,
+            "is_active": True,
+            "created_by": "owner",
+            "usage_count": 0,
+            "created_at": "2026-07-01T00:00:00",
+            "updated_at": "2026-07-01T00:00:00",
+            "tags": [],
+            "metadata": {},
+        }
+    )
+    monkeypatch.setattr(ChatService, "create_template", create_template)
+
+    with TestClient(_chat_app(current_user=SimpleNamespace(user_id="owner", is_active=True))) as client:
+        response = client.post(
+            "/templates",
+            json={
+                "name": "starter",
+                "created_by": "attacker",
+                "description": "template",
+                "category": "general",
+                "default_model": "claude-sonnet-4-5-20250929",
+                "default_system_prompt": "hello",
+                "default_temperature": 0.7,
+                "default_settings": {},
+                "initial_messages": [],
+                "is_public": False,
+                "tags": [],
+                "metadata": {},
+            },
+        )
+
+    assert response.status_code == 200
+    assert create_template.await_args.kwargs["created_by"] == "owner"
 
 
 class _FakeRoutePipeline:
@@ -588,6 +681,9 @@ def test_conversation_analytics_allows_readable_conversation(
 
 def test_user_conversation_routes_require_an_active_user():
     expected = {
+        ("/templates", "POST"),
+        ("/templates", "GET"),
+        ("/templates/{template_id}", "GET"),
         ("/users/{user_id}/conversations", "GET"),
         ("/users/{user_id}/conversations", "DELETE"),
         ("/users/{user_id}/message-count", "GET"),
