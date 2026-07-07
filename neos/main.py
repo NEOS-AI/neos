@@ -499,12 +499,22 @@ async def global_exception_handler(request: Request, exc: Exception):
 # API 라우터 등록
 _include_router_for_runtime(auth_router, prefix=settings.API_V1_PREFIX, tags=["Authentication"])  # 인증 라우터 추가
 _include_router_for_runtime(router, prefix=settings.API_V1_PREFIX, tags=["Multi-Agent AI"])
-_include_router_for_runtime(web_search_analytics_router, prefix=f"{settings.API_V1_PREFIX}/analytics", tags=["Web Search Analytics"])
+_include_router_for_runtime(
+    web_search_analytics_router,
+    prefix=f"{settings.API_V1_PREFIX}/analytics",
+    tags=["Web Search Analytics"],
+    dependencies=[Depends(get_current_admin_user)],
+)
 _include_router_for_runtime(document_router, prefix=f"{settings.API_V1_PREFIX}/documents", tags=["Document Management"])
 _include_router_for_runtime(multimodal_router, prefix=f"{settings.API_V1_PREFIX}/multimodal", tags=["Multimodal Processing"])
 _include_router_for_runtime(chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Chat & Conversations"])
 _include_router_for_runtime(deep_research_router, prefix=settings.API_V1_PREFIX, tags=["Deep Research"])
-_include_router_for_runtime(skills_router, prefix=f"{settings.API_V1_PREFIX}/skills", tags=["Skills Management"])
+_include_router_for_runtime(
+    skills_router,
+    prefix=f"{settings.API_V1_PREFIX}/skills",
+    tags=["Skills Management"],
+    dependencies=[Depends(get_current_admin_user)],
+)
 _include_router_for_runtime(workflow_stream_router, prefix=settings.API_V1_PREFIX, tags=["Workflow Streaming"])
 _include_router_for_runtime(unified_router, tags=["Unified Processing"])  # 통합 API (문서 + 워크플로우)
 _include_router_for_runtime(similarity_chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Similarity-based Chat"])

@@ -98,6 +98,32 @@ def _dependency_names(route: APIRoute) -> set[str]:
     }
 
 
+def _has_auth_dependency(route: APIRoute) -> bool:
+    dependency_names = _dependency_names(route)
+    return any(
+        name in {
+            "get_current_user",
+            "get_current_active_user",
+            "get_current_admin_user",
+        }
+        or name.startswith("get_owned_")
+        or name.startswith("get_readable_")
+        for name in dependency_names
+    )
+
+
+def _is_allowed_public_http_route(path: str, method: str) -> bool:
+    if method != "GET":
+        return path.startswith(f"{API_PREFIX}/auth/")
+    return (
+        path == "/"
+        or path.startswith(f"{API_PREFIX}/auth/")
+        or path == f"{API_PREFIX}/trending"
+        or path == f"{API_PREFIX}/related/{{query_id}}"
+        or path.endswith("/health")
+    )
+
+
 def _websocket_paths(app: FastAPI) -> set[str]:
     paths = set()
     for registered_route in app.routes:
@@ -326,6 +352,21 @@ def test_production_query_workflow_routes_have_explicit_authorization_matrix():
             )
         else:
             assert dependency_name in dependencies
+
+
+def test_production_app_exposes_only_allowed_public_http_routes():
+    _, production_app = _load_production_app()
+
+    unexpected_public_routes = sorted(
+        (route.path, method)
+        for route in _effective_http_routes(production_app)
+        for method in route.methods
+        if method not in {"HEAD", "OPTIONS"}
+        and not _has_auth_dependency(route)
+        and not _is_allowed_public_http_route(route.path, method)
+    )
+
+    assert unexpected_public_routes == []
 
 
 def test_production_app_excludes_websocket_routes_when_debug_false():
