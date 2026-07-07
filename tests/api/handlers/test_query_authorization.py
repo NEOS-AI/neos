@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -25,17 +27,26 @@ RESOURCE_NOT_FOUND = {"detail": "Resource not found"}
 
 
 def _load_production_app():
-    # A legacy scheduled-task module imports this removed name while neos.main is
-    # loading. Task 7 does not exercise scheduled tasks, so bridge that unrelated
-    # baseline import defect locally while testing the real production app graph.
-    from neos.database import connection
-
-    if not hasattr(connection, "get_async_session"):
-        connection.get_async_session = connection.db_manager.get_session
-
     import neos.main as main_module
 
     return main_module, main_module.app
+
+
+def test_production_main_imports_in_clean_subprocess_without_test_bridge():
+    env = os.environ.copy()
+    env["GOOGLE_API_KEY"] = "test-key"
+    env["JWT_SECRET_KEY"] = "neos-test-only-secret-key-2026-07-04"
+    env["DEBUG"] = "false"
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import neos.main"],
+        capture_output=True,
+        env=env,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def _user(user_id: str = "owner", *, is_admin: bool = False):
@@ -66,7 +77,7 @@ def _effective_http_routes(app: FastAPI):
     for registered_route in app.routes:
         if hasattr(registered_route, "effective_route_contexts"):
             routes.extend(registered_route.effective_route_contexts())
-        elif isinstance(registered_route, APIRoute):
+        elif hasattr(registered_route, "dependant"):
             routes.append(registered_route)
     return routes
 
@@ -187,6 +198,114 @@ def test_all_query_http_routes_have_an_explicit_public_owner_or_admin_classifica
         if dependency_name is None:
             assert not dependencies.intersection(
                 {"get_current_active_user", "get_current_admin_user"}
+            )
+        else:
+            assert dependency_name in dependencies
+
+
+def test_production_query_workflow_routes_have_explicit_authorization_matrix():
+    _, production_app = _load_production_app()
+    expected = {
+        (f"{API_PREFIX}/query", "POST"): "get_current_active_user",
+        (f"{API_PREFIX}/health", "GET"): None,
+        (f"{API_PREFIX}/trending", "GET"): None,
+        (f"{API_PREFIX}/related/{{query_id}}", "GET"): None,
+        (f"{API_PREFIX}/history/{{user_id}}", "GET"): "get_current_active_user",
+        (f"{API_PREFIX}/cache/{{cache_key}}", "DELETE"): "get_current_admin_user",
+        (f"{API_PREFIX}/stats/system", "GET"): "get_current_admin_user",
+        (
+            f"{API_PREFIX}/hyper-research/{{report_uuid}}",
+            "GET",
+        ): "get_current_active_user",
+        (f"{API_PREFIX}/hyper-research", "GET"): "get_current_active_user",
+        (f"{API_PREFIX}/query/stream", "POST"): "get_current_active_user",
+        (f"{API_PREFIX}/multimodal/query", "POST"): "get_current_active_user",
+        (
+            f"{API_PREFIX}/multimodal/image/analyze",
+            "POST",
+        ): "get_current_active_user",
+        (f"{API_PREFIX}/multimodal/supported-types", "GET"): None,
+        (f"{API_PREFIX}/multimodal/health", "GET"): None,
+        (f"{API_PREFIX}/unified/process", "POST"): "get_current_active_user",
+        (
+            f"{API_PREFIX}/unified/process/stream",
+            "POST",
+        ): "get_current_active_user",
+        (
+            f"{API_PREFIX}/unified/process/upload",
+            "POST",
+        ): "get_current_active_user",
+        (
+            f"{API_PREFIX}/unified/process/upload/stream",
+            "POST",
+        ): "get_current_active_user",
+        (f"{API_PREFIX}/unified/health", "GET"): None,
+        (f"{API_PREFIX}/deep-research/start", "POST"): "get_current_active_user",
+        (
+            f"{API_PREFIX}/deep-research/{{report_id}}/stream",
+            "GET",
+        ): "get_owned_deep_research_report",
+        (
+            f"{API_PREFIX}/deep-research/{{report_id}}",
+            "GET",
+        ): "get_owned_deep_research_report",
+        (
+            f"{API_PREFIX}/conversations/{{conversation_id}}/deep-research",
+            "GET",
+        ): "get_owned_conversation",
+        (
+            f"{API_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity",
+            "POST",
+        ): "get_owned_conversation",
+        (
+            f"{API_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/stream",
+            "POST",
+        ): "get_owned_conversation",
+        (
+            f"{API_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/cross-conversation",
+            "POST",
+        ): "get_owned_conversation",
+        (
+            f"{API_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/high-confidence",
+            "POST",
+        ): "get_owned_conversation",
+        (
+            f"{API_PREFIX}/chat/conversations/{{conversation_id}}/similarity/config",
+            "GET",
+        ): "get_owned_conversation",
+        (
+            f"{API_PREFIX}/chat/conversations/{{conversation_id}}/similarity/analytics",
+            "GET",
+        ): "get_owned_conversation",
+        (f"{API_PREFIX}/research/async", "POST"): "get_current_active_user",
+        (
+            f"{API_PREFIX}/research/async/{{job_id}}/status",
+            "GET",
+        ): "get_current_active_user",
+        (
+            f"{API_PREFIX}/research/stream/{{session_id}}",
+            "GET",
+        ): "get_current_active_user",
+    }
+    actual = {
+        (route.path, method): _dependency_names(route)
+        for route in _effective_http_routes(production_app)
+        for method in route.methods
+        if method not in {"HEAD", "OPTIONS"} and (route.path, method) in expected
+    }
+
+    assert set(actual) == set(expected)
+    for route_key, dependency_name in expected.items():
+        dependencies = actual[route_key]
+        if dependency_name is None:
+            assert not dependencies.intersection(
+                {
+                    "get_current_active_user",
+                    "get_current_admin_user",
+                    "get_owned_conversation",
+                    "get_owned_deep_research_report",
+                    "get_readable_conversation",
+                }
             )
         else:
             assert dependency_name in dependencies
@@ -386,17 +505,13 @@ def test_hyper_research_list_uses_authenticated_identity(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_stream_query_rejects_cross_user_session_before_response(monkeypatch):
-    create_session = Mock()
+    claim_session = Mock(side_effect=PermissionError("foreign session"))
     execute = AsyncMock()
     monkeypatch.setattr(
         workflow_stream_handlers.stream_manager,
-        "get_session",
-        Mock(return_value=SimpleNamespace(user_id="user-b")),
-    )
-    monkeypatch.setattr(
-        workflow_stream_handlers.stream_manager,
-        "create_session",
-        create_session,
+        "claim_session",
+        claim_session,
+        raising=False,
     )
     monkeypatch.setattr(
         workflow_stream_handlers,
@@ -413,7 +528,7 @@ async def test_stream_query_rejects_cross_user_session_before_response(monkeypat
 
     assert exc.value.status_code == 404
     assert exc.value.detail == "Resource not found"
-    create_session.assert_not_called()
+    claim_session.assert_called_once_with("s1", "user-a")
     execute.assert_not_awaited()
 
 
@@ -434,16 +549,13 @@ async def test_stream_query_uses_authenticated_user_and_creates_only_new_session
             }
         )
 
-    create_session = Mock(return_value=SimpleNamespace(user_id="owner"))
+    claimed_session = SimpleNamespace(user_id="owner")
+    claim_session = Mock(return_value=claimed_session)
     monkeypatch.setattr(
         workflow_stream_handlers.stream_manager,
-        "get_session",
-        Mock(return_value=None),
-    )
-    monkeypatch.setattr(
-        workflow_stream_handlers.stream_manager,
-        "create_session",
-        create_session,
+        "claim_session",
+        claim_session,
+        raising=False,
     )
     monkeypatch.setattr(
         workflow_stream_handlers,
@@ -467,7 +579,7 @@ async def test_stream_query_uses_authenticated_user_and_creates_only_new_session
         if payloads[-1]["event"] == "completed":
             break
 
-    create_session.assert_called_once_with("s1", "owner")
+    claim_session.assert_called_once_with("s1", "owner")
     assert captured["user_id"] == "owner"
     assert "Access-Control-Allow-Origin" not in response.headers
 
@@ -524,6 +636,113 @@ def test_operational_routes_reject_non_admin(path):
         production_app.dependency_overrides = previous_overrides
 
     assert response.status_code == 403
+
+
+def _debug_app(main_module, current_user=None) -> FastAPI:
+    app = FastAPI()
+    app.add_api_route(
+        "/debug/test-workflow",
+        main_module.debug_test_workflow,
+        methods=["GET"],
+    )
+    app.add_api_route(
+        "/debug/cache-stats",
+        main_module.debug_cache_stats,
+        methods=["GET"],
+    )
+    app.dependency_overrides[get_current_active_user] = (
+        (lambda: current_user) if current_user is not None else _unauthenticated
+    )
+    return app
+
+
+@pytest.mark.parametrize("path", ["/debug/test-workflow", "/debug/cache-stats"])
+@pytest.mark.parametrize(
+    ("current_user", "expected_status"),
+    [(None, 401), (_user("member"), 403)],
+)
+def test_debug_operational_routes_deny_before_side_effects(
+    monkeypatch,
+    path,
+    current_user,
+    expected_status,
+):
+    main_module, _ = _load_production_app()
+    execute = AsyncMock()
+    redis_info = AsyncMock()
+    monkeypatch.setattr(main_module.multi_agent_workflow, "execute_workflow", execute)
+    monkeypatch.setattr(
+        main_module.cache_manager,
+        "redis_client",
+        SimpleNamespace(info=redis_info),
+    )
+
+    with TestClient(_debug_app(main_module, current_user)) as client:
+        response = client.get(path)
+
+    assert response.status_code == expected_status
+    execute.assert_not_awaited()
+    redis_info.assert_not_awaited()
+
+
+def test_debug_operational_routes_use_admin_identity(monkeypatch):
+    main_module, _ = _load_production_app()
+    execute = AsyncMock(return_value={"success": True})
+    redis_info = AsyncMock(return_value={"connected_clients": 1})
+    monkeypatch.setattr(main_module.multi_agent_workflow, "execute_workflow", execute)
+    monkeypatch.setattr(
+        main_module.cache_manager,
+        "redis_client",
+        SimpleNamespace(info=redis_info),
+    )
+
+    with TestClient(_debug_app(main_module, _user("admin-1", is_admin=True))) as client:
+        workflow_response = client.get("/debug/test-workflow")
+        cache_response = client.get("/debug/cache-stats")
+
+    assert workflow_response.status_code == 200
+    assert cache_response.status_code == 200
+    assert execute.await_args.args[0]["user_id"] == "admin-1"
+    redis_info.assert_awaited_once_with()
+
+
+def test_debug_true_production_graph_installs_admin_dependencies():
+    env = os.environ.copy()
+    env["GOOGLE_API_KEY"] = "test-key"
+    env["JWT_SECRET_KEY"] = "neos-test-only-secret-key-2026-07-04"
+    env["DEBUG"] = "true"
+    script = """
+import json
+from fastapi.routing import APIRoute
+from neos.main import app
+
+result = {}
+for route in app.routes:
+    routes = route.effective_route_contexts() if hasattr(route, "effective_route_contexts") else [route]
+    for effective in routes:
+        if isinstance(effective, APIRoute) and effective.path.startswith("/debug/"):
+            result[effective.path] = [
+                dependency.call.__name__
+                for dependency in effective.dependant.dependencies
+            ]
+print("DEBUG_ROUTES=" + json.dumps(result, sort_keys=True))
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        env=env,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    marker = next(
+        line for line in result.stdout.splitlines() if line.startswith("DEBUG_ROUTES=")
+    )
+    routes = json.loads(marker.removeprefix("DEBUG_ROUTES="))
+    assert set(routes) == {"/debug/test-workflow", "/debug/cache-stats"}
+    assert all("get_current_admin_user" in dependencies for dependencies in routes.values())
 
 
 def test_public_root_exposes_only_minimum_information(monkeypatch):

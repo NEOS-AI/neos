@@ -595,37 +595,53 @@ async def system_info(
         }
     }
 
+async def debug_test_workflow(
+    current_user: User = Depends(get_current_admin_user),
+):
+    """워크플로우 테스트 (디버그 전용)."""
+    test_input = {
+        "user_id": current_user.user_id,
+        "session_id": "debug_session",
+        "query": "안녕하세요, 테스트 쿼리입니다.",
+    }
+    return await multi_agent_workflow.execute_workflow(test_input)
+
+
+async def debug_cache_stats(
+    _current_user: User = Depends(get_current_admin_user),
+):
+    """캐시 통계 (디버그 전용)."""
+    try:
+        info = (
+            await cache_manager.redis_client.info()
+            if cache_manager.redis_client
+            else {}
+        )
+        return {
+            "cache_available": cache_manager.redis_client is not None,
+            "redis_info": {
+                "connected_clients": info.get("connected_clients", 0),
+                "used_memory_human": info.get("used_memory_human", "0B"),
+                "keyspace_hits": info.get("keyspace_hits", 0),
+                "keyspace_misses": info.get("keyspace_misses", 0),
+            },
+        }
+    except Exception as e:
+        return {"error": str(e), "cache_available": False}
+
+
 # 개발용 테스트 엔드포인트 (디버그 모드에서만)
 if IS_DEBUG:
-    @app.get("/debug/test-workflow")
-    async def test_workflow():
-        """워크플로우 테스트 (디버그 전용)"""
-        test_input = {
-            "user_id": "debug_user",
-            "session_id": "debug_session", 
-            "query": "안녕하세요, 테스트 쿼리입니다."
-        }
-        
-        result = await multi_agent_workflow.execute_workflow(test_input)
-        return result
-
-    @app.get("/debug/cache-stats")
-    async def cache_stats():
-        """캐시 통계 (디버그 전용)"""
-        try:
-            # Redis 정보 조회
-            info = await cache_manager.redis_client.info() if cache_manager.redis_client else {}
-            return {
-                "cache_available": cache_manager.redis_client is not None,
-                "redis_info": {
-                    "connected_clients": info.get("connected_clients", 0),
-                    "used_memory_human": info.get("used_memory_human", "0B"),
-                    "keyspace_hits": info.get("keyspace_hits", 0),
-                    "keyspace_misses": info.get("keyspace_misses", 0)
-                }
-            }
-        except Exception as e:
-            return {"error": str(e), "cache_available": False}
+    app.add_api_route(
+        "/debug/test-workflow",
+        debug_test_workflow,
+        methods=["GET"],
+    )
+    app.add_api_route(
+        "/debug/cache-stats",
+        debug_cache_stats,
+        methods=["GET"],
+    )
 
 
 if __name__ == "__main__":

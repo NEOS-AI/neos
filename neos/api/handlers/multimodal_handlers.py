@@ -1,6 +1,6 @@
 """Multimodal API handlers - thin layer for FastAPI routes"""
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from typing import List, Optional
 import uuid
 import logging
@@ -12,6 +12,8 @@ from neos.api.models.multimodal_models import (
 )
 from neos.api.services.multimodal_service import MultimodalService
 from neos.api.services.query_service import QueryService
+from neos.api.dependencies.auth import get_current_active_user
+from neos.database.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +25,14 @@ async def process_multimodal_query(
     background_tasks: BackgroundTasks,
     query: str = Form(..., description="사용자 쿼리"),
     files: List[UploadFile] = File(..., description="업로드할 파일들 (이미지, 문서, 오디오 등)"),
-    user_id: Optional[str] = Form(None, description="사용자 ID"),
+    user_id: Optional[str] = Form(
+        None,
+        description="Deprecated compatibility field; authenticated identity is used",
+        deprecated=True,
+    ),
     session_id: Optional[str] = Form(None, description="세션 ID"),
     language: Optional[str] = Form("ko", description="응답 언어 (ko/en)"),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     멀티모달 쿼리 처리 (이미지 + 텍스트)
@@ -60,7 +67,7 @@ async def process_multimodal_query(
     try:
         # 세션 ID 생성
         session_id = session_id or str(uuid.uuid4())
-        user_id = user_id or f"anonymous_{uuid.uuid4().hex[:8]}"
+        user_id = current_user.user_id
 
         # 사용자 생성/조회
         await QueryService.get_or_create_user(user_id)
@@ -112,8 +119,13 @@ async def process_multimodal_query(
 async def analyze_image(
     image: UploadFile = File(..., description="분석할 이미지 파일"),
     query: Optional[str] = Form(None, description="이미지에 대한 질문 (선택)"),
-    user_id: Optional[str] = Form(None, description="사용자 ID"),
+    user_id: Optional[str] = Form(
+        None,
+        description="Deprecated compatibility field; authenticated identity is used",
+        deprecated=True,
+    ),
     language: Optional[str] = Form("ko", description="응답 언어 (ko/en)"),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     이미지 단독 분석 (Vision 모델 전용)
@@ -137,7 +149,7 @@ async def analyze_image(
     ```
     """
     try:
-        user_id = user_id or f"anonymous_{uuid.uuid4().hex[:8]}"
+        user_id = current_user.user_id
 
         # 파일 타입 체크
         if not image.content_type or not image.content_type.startswith("image/"):

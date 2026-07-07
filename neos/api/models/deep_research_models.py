@@ -56,7 +56,11 @@ class SectionStatus(str, Enum):
 
 class StartDeepResearchRequest(BaseModel):
     """Start deep research request"""
-    user_id: str = Field(..., description="User ID")
+    user_id: Optional[str] = Field(
+        None,
+        description="Deprecated compatibility field; authenticated identity is used",
+        deprecated=True,
+    )
     conversation_id: str = Field(..., description="Conversation ID")
     initial_message_id: Optional[str] = Field(None, description="Initial message ID that triggered research (deprecated, auto-generated)")
     research_topic: str = Field(..., min_length=1, description="Research topic")
