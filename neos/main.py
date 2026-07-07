@@ -1,9 +1,10 @@
 import logging
 from contextlib import asynccontextmanager
-from fastapi import Depends, FastAPI, Request, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, Response
+from fastapi.routing import APIWebSocketRoute
 import time
 import uuid
 import asyncio
@@ -59,6 +60,30 @@ logger = logging.getLogger(__name__)
 
 TEST_EMBEDDING_ON_STARTUP = False  # 시작 시 임베딩 테스트 여부
 IS_DEBUG = settings.DEBUG
+
+
+def _router_without_websockets(source_router: APIRouter) -> APIRouter:
+    """Return a router containing only HTTP routes from source_router."""
+    filtered_router = APIRouter()
+    filtered_router.routes = [
+        route
+        for route in source_router.routes
+        if not isinstance(route, APIWebSocketRoute)
+    ]
+    return filtered_router
+
+
+def _include_router_for_runtime(api_router: APIRouter, **kwargs) -> None:
+    """Include WebSockets only outside production until WebSocket auth is implemented."""
+    if IS_DEBUG:
+        app.include_router(api_router, **kwargs)
+        return
+
+    if any(isinstance(route, APIWebSocketRoute) for route in api_router.routes):
+        app.include_router(_router_without_websockets(api_router), **kwargs)
+        return
+
+    app.include_router(api_router, **kwargs)
 
 
 @asynccontextmanager
@@ -472,28 +497,28 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # API 라우터 등록
-app.include_router(auth_router, prefix=settings.API_V1_PREFIX, tags=["Authentication"])  # 인증 라우터 추가
-app.include_router(router, prefix=settings.API_V1_PREFIX, tags=["Multi-Agent AI"])
-app.include_router(web_search_analytics_router, prefix=f"{settings.API_V1_PREFIX}/analytics", tags=["Web Search Analytics"])
-app.include_router(document_router, prefix=f"{settings.API_V1_PREFIX}/documents", tags=["Document Management"])
-app.include_router(multimodal_router, prefix=f"{settings.API_V1_PREFIX}/multimodal", tags=["Multimodal Processing"])
-app.include_router(chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Chat & Conversations"])
-app.include_router(deep_research_router, prefix=settings.API_V1_PREFIX, tags=["Deep Research"])
-app.include_router(skills_router, prefix=f"{settings.API_V1_PREFIX}/skills", tags=["Skills Management"])
-app.include_router(workflow_stream_router, prefix=settings.API_V1_PREFIX, tags=["Workflow Streaming"])
-app.include_router(unified_router, tags=["Unified Processing"])  # 통합 API (문서 + 워크플로우)
-app.include_router(similarity_chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Similarity-based Chat"])
-app.include_router(vote_router, prefix=settings.API_V1_PREFIX, tags=["Votes & Feedback"])  # Vote API
-app.include_router(artifact_router, prefix=settings.API_V1_PREFIX, tags=["Artifacts & Documents"])  # Artifact API
-app.include_router(research_session_router, tags=["Research Sessions"])  # Research Session API (prefix already set in router)
-app.include_router(async_research_router, tags=["Async Research"])  # Phase 3.5: Celery-based async research
-app.include_router(export_router, tags=["Report Export"])  # Phase 3.4: Structured report export
-app.include_router(refinement_router, tags=["Research Refinement"])  # Phase 3.8: Interactive refinement
-app.include_router(template_router, tags=["Research Templates"])  # Phase 4.7: Research templates
-app.include_router(approval_router, prefix=settings.API_V1_PREFIX, tags=["Execution Approval"])  # Phase 2: OpenClaw Exec Approval
-app.include_router(autonomy_router, prefix=settings.API_V1_PREFIX, tags=["Agent Autonomy"])
-app.include_router(scheduled_tasks_router, prefix=settings.API_V1_PREFIX, tags=["Scheduled Tasks"])  # Phase 4: OpenClaw Cron
-app.include_router(ui_submit_router, prefix=settings.API_V1_PREFIX, tags=["A2UI"])  # Phase 8: OpenClaw A2UI
+_include_router_for_runtime(auth_router, prefix=settings.API_V1_PREFIX, tags=["Authentication"])  # 인증 라우터 추가
+_include_router_for_runtime(router, prefix=settings.API_V1_PREFIX, tags=["Multi-Agent AI"])
+_include_router_for_runtime(web_search_analytics_router, prefix=f"{settings.API_V1_PREFIX}/analytics", tags=["Web Search Analytics"])
+_include_router_for_runtime(document_router, prefix=f"{settings.API_V1_PREFIX}/documents", tags=["Document Management"])
+_include_router_for_runtime(multimodal_router, prefix=f"{settings.API_V1_PREFIX}/multimodal", tags=["Multimodal Processing"])
+_include_router_for_runtime(chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Chat & Conversations"])
+_include_router_for_runtime(deep_research_router, prefix=settings.API_V1_PREFIX, tags=["Deep Research"])
+_include_router_for_runtime(skills_router, prefix=f"{settings.API_V1_PREFIX}/skills", tags=["Skills Management"])
+_include_router_for_runtime(workflow_stream_router, prefix=settings.API_V1_PREFIX, tags=["Workflow Streaming"])
+_include_router_for_runtime(unified_router, tags=["Unified Processing"])  # 통합 API (문서 + 워크플로우)
+_include_router_for_runtime(similarity_chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Similarity-based Chat"])
+_include_router_for_runtime(vote_router, prefix=settings.API_V1_PREFIX, tags=["Votes & Feedback"])  # Vote API
+_include_router_for_runtime(artifact_router, prefix=settings.API_V1_PREFIX, tags=["Artifacts & Documents"])  # Artifact API
+_include_router_for_runtime(research_session_router, tags=["Research Sessions"])  # Research Session API (prefix already set in router)
+_include_router_for_runtime(async_research_router, tags=["Async Research"])  # Phase 3.5: Celery-based async research
+_include_router_for_runtime(export_router, tags=["Report Export"])  # Phase 3.4: Structured report export
+_include_router_for_runtime(refinement_router, tags=["Research Refinement"])  # Phase 3.8: Interactive refinement
+_include_router_for_runtime(template_router, tags=["Research Templates"])  # Phase 4.7: Research templates
+_include_router_for_runtime(approval_router, prefix=settings.API_V1_PREFIX, tags=["Execution Approval"])  # Phase 2: OpenClaw Exec Approval
+_include_router_for_runtime(autonomy_router, prefix=settings.API_V1_PREFIX, tags=["Agent Autonomy"])
+_include_router_for_runtime(scheduled_tasks_router, prefix=settings.API_V1_PREFIX, tags=["Scheduled Tasks"])  # Phase 4: OpenClaw Cron
+_include_router_for_runtime(ui_submit_router, prefix=settings.API_V1_PREFIX, tags=["A2UI"])  # Phase 8: OpenClaw A2UI
 
 
 # === Enterprise Monitoring Endpoints ===

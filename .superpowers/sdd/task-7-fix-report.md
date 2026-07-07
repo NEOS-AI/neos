@@ -73,3 +73,53 @@
 - `neos.main` imports successfully once `GOOGLE_API_KEY` is set, which confirms the reviewed scheduled-task import failure is fixed.
 - With `GOOGLE_API_KEY` unset, `neos.main` still fails before route registration because embeddings are eagerly initialized and the configured Gemini provider requires the key. I left this as a concern rather than changing embedding-provider semantics because it is outside the Task 7 review findings and would alter application startup behavior for misconfigured embedding providers.
 - Test runs emit existing database initialization warnings/errors under the restricted local sandbox (`Operation not permitted`) during fixture setup/teardown, but the impacted authorization suites pass.
+
+## Re-review critical fix
+
+### Findings addressed
+
+1. **Async research start conversation ownership**
+   - `start_async_research` now validates a supplied `conversation_id` with `get_owned_conversation` before recording cache state or dispatching Celery work.
+   - Missing or foreign conversations return 404, and the workflow uses only `current_user.user_id`.
+
+2. **Async research SSE first-claim gap**
+   - Async research start now records `async_research_session_owner:{session_id}` with the same TTL as the job owner record.
+   - `stream_research_progress` checks that cached start-owner before `stream_manager.claim_session()` or buffer reads. Missing/foreign stream resources return 404.
+
+3. **Production WebSocket exposure**
+   - `neos.main` now includes router WebSocket routes only when `DEBUG=true`.
+   - In production (`DEBUG=false`), routers are included through an HTTP-only filtered router so unauthenticated query/workflow/chat WebSocket routes are not in the production route graph.
+
+### Files changed
+
+- `neos/api/handlers/async_research_handlers.py`
+- `neos/main.py`
+- `tests/api/handlers/test_query_authorization.py`
+- `tests/api/handlers/test_research_authorization.py`
+- `.superpowers/sdd/task-7-fix-report.md`
+
+### Verification
+
+- RED async/session tests:
+  - `env GOOGLE_API_KEY=test-key JWT_SECRET_KEY=test-only-secret-key-for-tests DEBUG=false .venv/bin/pytest -q tests/api/handlers/test_research_authorization.py::test_async_research_start_hides_missing_and_foreign_conversation_before_dispatch tests/api/handlers/test_research_authorization.py::test_async_stream_hides_missing_and_foreign_start_owner_before_claim tests/api/handlers/test_query_authorization.py::test_production_app_excludes_websocket_routes_when_debug_false`
+  - Result before implementation and before correcting the wrapped-router WebSocket helper: **4 failed, 1 passed**. Async research tests failed for the expected missing authorization checks; the first WebSocket assertion missed `_IncludedRouter.original_router`.
+
+- RED corrected production WebSocket test:
+  - `env GOOGLE_API_KEY=test-key JWT_SECRET_KEY=test-only-secret-key-for-tests DEBUG=false .venv/bin/pytest -q tests/api/handlers/test_query_authorization.py::test_production_app_excludes_websocket_routes_when_debug_false`
+  - Result before implementation after fixing the test helper: **1 failed**, showing `/api/v1/ws/{session_id}`, `/api/v1/ws/query/{session_id}`, `/api/v1/ws/query/detailed/{session_id}`, and `/api/v1/chat/ws/{conversation_id}` were still present.
+
+- GREEN targeted re-review tests:
+  - `env GOOGLE_API_KEY=test-key JWT_SECRET_KEY=test-only-secret-key-for-tests DEBUG=false .venv/bin/pytest -q tests/api/handlers/test_research_authorization.py::test_async_research_start_records_job_owner tests/api/handlers/test_research_authorization.py::test_async_research_start_hides_missing_and_foreign_conversation_before_dispatch tests/api/handlers/test_research_authorization.py::test_async_stream_hides_missing_and_foreign_start_owner_before_claim tests/api/handlers/test_research_authorization.py::test_async_stream_rejects_foreign_claim_before_response_or_buffer tests/api/handlers/test_query_authorization.py::test_production_app_excludes_websocket_routes_when_debug_false`
+  - Result: **7 passed, 49 warnings**.
+
+- Impacted Task 7 suites:
+  - `env GOOGLE_API_KEY=test-key JWT_SECRET_KEY=test-only-secret-key-for-tests DEBUG=false .venv/bin/pytest -q tests/api/handlers/test_query_authorization.py tests/api/handlers/test_alternate_query_authorization.py tests/api/handlers/test_research_authorization.py tests/api/handlers/test_similarity_chat_authorization.py tests/api/handlers/test_scheduled_tasks_session_context.py tests/workflow/test_stream_manager_authorization.py tests/api/handlers/test_query_handlers_autonomy.py`
+  - Result: **109 passed, 49 warnings**.
+
+- Whitespace:
+  - `git diff --check`
+  - Result: exit **0**.
+
+### Known concerns
+
+- Test runs still emit existing database initialization warnings/errors under the restricted local sandbox (`Operation not permitted`) during fixture setup/teardown, but all impacted authorization suites pass.

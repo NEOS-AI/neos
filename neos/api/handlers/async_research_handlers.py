@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from neos.api.dependencies.auth import get_current_active_user
+from neos.api.dependencies.resource_access import get_owned_conversation
 from neos.database.models import User
 from neos.config.settings import settings
 from neos.utils.cache import cache_manager
@@ -28,6 +29,10 @@ JOB_OWNER_TTL_SECONDS = 86400
 
 def _job_owner_cache_key(job_id: str) -> str:
     return cache_manager.make_key("async_research_job_owner", job_id)
+
+
+def _session_owner_cache_key(session_id: str) -> str:
+    return cache_manager.make_key("async_research_session_owner", session_id)
 
 
 # ============================================================================
@@ -75,8 +80,18 @@ async def start_async_research(
         )
 
     session_id = request.session_id or request.conversation_id or str(uuid.uuid4())
+    if request.conversation_id:
+        await get_owned_conversation(request.conversation_id, current_user)
 
     try:
+        session_owner_recorded = await cache_manager.set(
+            _session_owner_cache_key(session_id),
+            current_user.user_id,
+            ttl=JOB_OWNER_TTL_SECONDS,
+        )
+        if not session_owner_recorded:
+            raise RuntimeError("Failed to record async research session owner")
+
         from neos.workflow.celery_tasks import execute_workflow_async
 
         task = execute_workflow_async.apply_async(
@@ -158,6 +173,10 @@ async def stream_research_progress(
     워크플로우 노드 실행 이벤트를 실시간으로 스트리밍합니다.
     workflow_completed 또는 workflow_failed 이벤트 수신 시 스트림이 종료됩니다.
     """
+    owner_id = await cache_manager.get(_session_owner_cache_key(session_id))
+    if owner_id != current_user.user_id:
+        raise HTTPException(status_code=404, detail="Resource not found")
+
     try:
         stream_manager.claim_session(session_id, current_user.user_id)
     except PermissionError:

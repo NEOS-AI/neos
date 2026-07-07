@@ -2,7 +2,7 @@ import os
 import sys
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -240,11 +240,46 @@ async def test_async_research_start_records_job_owner(monkeypatch):
     )
 
     assert response.job_id == "job-1"
-    cache_set.assert_awaited_once_with(
-        "async_research_job_owner:job-1",
-        "owner",
-        ttl=86400,
+    cache_set.assert_has_awaits(
+        [
+            call("async_research_session_owner:s1", "owner", ttl=86400),
+            call("async_research_job_owner:job-1", "owner", ttl=86400),
+        ]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conversation", [None, _conversation("other")])
+async def test_async_research_start_hides_missing_and_foreign_conversation_before_dispatch(
+    monkeypatch,
+    conversation,
+):
+    monkeypatch.setattr(async_research_handlers.settings, "CELERY_ENABLED", True)
+    get_conversation = AsyncMock(return_value=conversation)
+    monkeypatch.setattr(ChatService, "get_conversation", get_conversation)
+    apply_async = Mock(return_value=SimpleNamespace(id="job-1"))
+    fake_tasks = SimpleNamespace(
+        execute_workflow_async=SimpleNamespace(apply_async=apply_async)
+    )
+    monkeypatch.setitem(sys.modules, "neos.workflow.celery_tasks", fake_tasks)
+    cache_set = AsyncMock(return_value=True)
+    monkeypatch.setattr(cache_manager, "set", cache_set)
+
+    with pytest.raises(HTTPException) as exc:
+        await async_research_handlers.start_async_research(
+            async_research_handlers.AsyncResearchRequest(
+                query="private",
+                conversation_id="c1",
+                session_id="s1",
+            ),
+            current_user=_user("owner"),
+        )
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Resource not found"
+    get_conversation.assert_awaited_once_with("c1")
+    apply_async.assert_not_called()
+    cache_set.assert_not_awaited()
 
 
 @pytest.mark.parametrize("job_owner", [None, "other"])
@@ -280,9 +315,45 @@ def test_async_job_owner_can_read_status(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("owner_id", [None, "other"])
+async def test_async_stream_hides_missing_and_foreign_start_owner_before_claim(
+    monkeypatch,
+    owner_id,
+):
+    cache_get = AsyncMock(return_value=owner_id)
+    monkeypatch.setattr(cache_manager, "get", cache_get)
+    claim = Mock()
+    get_events = Mock()
+    fake_stream_manager = SimpleNamespace(
+        claim_session=claim,
+        get_events_since=get_events,
+    )
+    monkeypatch.setattr(
+        async_research_handlers,
+        "stream_manager",
+        fake_stream_manager,
+        raising=False,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await async_research_handlers.stream_research_progress(
+            "s1",
+            SimpleNamespace(is_disconnected=AsyncMock(return_value=True)),
+            current_user=_user("owner"),
+        )
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Resource not found"
+    cache_get.assert_awaited_once_with("async_research_session_owner:s1")
+    claim.assert_not_called()
+    get_events.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_async_stream_rejects_foreign_claim_before_response_or_buffer(
     monkeypatch,
 ):
+    monkeypatch.setattr(cache_manager, "get", AsyncMock(return_value="owner"))
     claim = Mock(side_effect=PermissionError("foreign"))
     get_events = Mock()
     fake_stream_manager = SimpleNamespace(

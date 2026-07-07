@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, APIWebSocketRoute
 from fastapi.testclient import TestClient
 
 os.environ["DEBUG"] = "false"
@@ -96,6 +96,23 @@ def _dependency_names(route: APIRoute) -> set[str]:
         dependency.call.__name__
         for dependency in route.dependant.dependencies
     }
+
+
+def _websocket_paths(app: FastAPI) -> set[str]:
+    paths = set()
+    for registered_route in app.routes:
+        original_router = getattr(registered_route, "original_router", None)
+        if original_router is not None:
+            include_context = getattr(registered_route, "include_context", None)
+            prefix = getattr(include_context, "prefix", "") if include_context else ""
+            paths.update(
+                f"{prefix}{route.path}"
+                for route in original_router.routes
+                if isinstance(route, APIWebSocketRoute)
+            )
+        elif isinstance(registered_route, APIWebSocketRoute):
+            paths.add(registered_route.path)
+    return paths
 
 
 def _install_query_service_defaults(monkeypatch):
@@ -309,6 +326,12 @@ def test_production_query_workflow_routes_have_explicit_authorization_matrix():
             )
         else:
             assert dependency_name in dependencies
+
+
+def test_production_app_excludes_websocket_routes_when_debug_false():
+    _, production_app = _load_production_app()
+
+    assert _websocket_paths(production_app) == set()
 
 
 def test_query_compatibility_user_ids_are_optional_and_deprecated():
