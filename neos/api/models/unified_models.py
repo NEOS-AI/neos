@@ -31,7 +31,11 @@ class UnifiedProcessingRequest(BaseModel):
     """통합 처리 요청"""
     query: str = Field(..., description="사용자 질문")
     session_id: Optional[str] = Field(None, description="세션 ID")
-    user_id: Optional[str] = Field(None, description="사용자 ID")
+    user_id: Optional[str] = Field(
+        None,
+        description="Deprecated compatibility field; authenticated identity is used",
+        deprecated=True,
+    )
 
     # 문서 정보 (선택)
     documents: Optional[List[DocumentInfo]] = Field(None, description="처리할 문서 목록")

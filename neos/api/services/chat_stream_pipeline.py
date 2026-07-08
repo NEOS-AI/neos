@@ -5,7 +5,12 @@ stream_message 핸들러의 전체 실행 흐름을 단계별로 조율한다.
 
 Usage:
     pipeline = ChatStreamPipeline(...)
-    async for sse_event in pipeline.run(conversation_id, request, current_user):
+    async for sse_event in pipeline.run(
+        conversation_id,
+        request,
+        current_user,
+        authorized_conversation=conversation,
+    ):
         yield sse_event
 """
 
@@ -41,6 +46,39 @@ from neos.config.settings import settings as app_settings
 from neos.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+async def resolve_authorized_parent_message(
+    chat_service_cls,
+    parent_message_id: Optional[str],
+    authorized_conversation: dict[str, Any],
+    current_user,
+) -> Optional[dict[str, Any]]:
+    """Resolve a parent message only when it belongs to the authorized owner scope."""
+    if parent_message_id is None:
+        return None
+
+    parent_message = await chat_service_cls.get_message(parent_message_id)
+    if not parent_message or parent_message.get("message_id") != parent_message_id:
+        return None
+
+    parent_conversation_id = parent_message.get("conversation_id")
+    if not parent_conversation_id:
+        return None
+
+    parent_conversation = await chat_service_cls.get_conversation(
+        parent_conversation_id
+    )
+    if (
+        not parent_conversation
+        or parent_conversation.get("user_id") != current_user.user_id
+        or authorized_conversation.get("user_id") != current_user.user_id
+        or parent_conversation_id
+        != authorized_conversation.get("conversation_id")
+    ):
+        return None
+
+    return parent_message
 
 
 @dataclass
@@ -83,10 +121,54 @@ class ChatStreamPipeline:
         conversation_id: str,
         request,   # SendMessageRequest
         current_user,  # User
+        *,
+        authorized_conversation: dict[str, Any],
     ) -> AsyncGenerator[str, None]:
         """stream_message 의 전체 실행 흐름 — Template Method."""
         acc = StreamAccumulator()
         stream_state: Optional[StreamAdapterState] = None
+
+        if (
+            authorized_conversation.get("conversation_id") != conversation_id
+            or authorized_conversation.get("user_id") != current_user.user_id
+        ):
+            logger.warning("Rejected chat stream owner mismatch")
+            state, _ = create_stream_generator(
+                response_id=conversation_id,
+                message_id=str(uuid.uuid4()),
+            )
+            state.response.status = ResponseStatus.FAILED
+            state.response.error = ErrorInfo(
+                type="not_found",
+                message="Resource not found",
+            )
+            yield format_sse_event(ResponseFailedEvent(response=state.response))
+            yield format_done_token()
+            return
+
+        authorized_parent_message = await resolve_authorized_parent_message(
+            self._ChatService,
+            request.parent_message_id,
+            authorized_conversation,
+            current_user,
+        )
+        if (
+            request.parent_message_id is not None
+            and authorized_parent_message is None
+        ):
+            logger.warning("Rejected chat stream parent message mismatch")
+            state, _ = create_stream_generator(
+                response_id=conversation_id,
+                message_id=str(uuid.uuid4()),
+            )
+            state.response.status = ResponseStatus.FAILED
+            state.response.error = ErrorInfo(
+                type="not_found",
+                message="Resource not found",
+            )
+            yield format_sse_event(ResponseFailedEvent(response=state.response))
+            yield format_done_token()
+            return
 
         try:
             request_metadata = request.metadata or {}
@@ -109,7 +191,7 @@ class ChatStreamPipeline:
             yield format_sse_event(start_event)
 
             # ── Step 3: 대화 정보 및 히스토리 로드 ───────────────────
-            conversation = await self._ChatService.get_conversation(conversation_id)
+            conversation = authorized_conversation
             history_messages = await self._ChatService.get_conversation_messages(
                 conversation_id=conversation_id,
                 limit=20,

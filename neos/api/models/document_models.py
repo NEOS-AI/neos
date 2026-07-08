@@ -1,6 +1,6 @@
 """Document API Pydantic models"""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 
 
@@ -76,7 +76,7 @@ class DocumentSearchRequest(BaseModel):
 
     query: str
     top_k: int = 10
-    user_id: Optional[str] = None
+    user_id: Optional[str] = Field(default=None, deprecated=True)
 
 
 class DocumentSearchResult(BaseModel):

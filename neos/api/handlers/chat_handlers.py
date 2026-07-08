@@ -28,13 +28,22 @@ from neos.api.models.chat_models import (
     ConversationTemplate,
     TemplateListResponse,
 )
-from neos.api.dependencies.auth import get_current_user
+from neos.api.dependencies.auth import get_current_active_user
+from neos.api.dependencies.resource_access import (
+    get_owned_conversation,
+    get_owned_message,
+    get_readable_conversation,
+    require_same_user_id,
+)
 from neos.api.services.chat_service import ChatService
 from neos.api.handlers.workflow_stream_handlers import WorkflowStreamCallback
 from neos.database.connection import db_manager
 from neos.database.models import User
 from neos.services.chat_llm_service import chat_llm_service
-from neos.api.services.chat_stream_pipeline import ChatStreamPipeline
+from neos.api.services.chat_stream_pipeline import (
+    ChatStreamPipeline,
+    resolve_authorized_parent_message,
+)
 from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
 from neos.workflow.graph import multi_agent_workflow
@@ -147,11 +156,14 @@ def map_node_to_agent(node_name: str) -> str:
 # ============================================================================
 
 @router.post("/conversations", response_model=ConversationResponse)
-async def create_conversation(request: CreateConversationRequest):
+async def create_conversation(
+    request: CreateConversationRequest,
+    current_user: User = Depends(get_current_active_user),
+):
     """새 대화 생성"""
     try:
         conversation = await ChatService.create_conversation(
-            user_id=request.user_id,
+            user_id=current_user.user_id,
             conversation_id=request.conversation_id,
             model_name=request.model_name,
             title=request.title,
@@ -170,7 +182,10 @@ async def create_conversation(request: CreateConversationRequest):
 
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationResponse)
-async def get_conversation(conversation_id: str):
+async def get_conversation(
+    conversation_id: str,
+    _conversation: dict = Depends(get_readable_conversation),
+):
     """대화 조회"""
     try:
         conversation = await ChatService.get_conversation(conversation_id)
@@ -188,7 +203,8 @@ async def get_conversation(conversation_id: str):
 async def get_conversation_with_messages(
     conversation_id: str,
     limit: int = 100,
-    before_sequence: Optional[int] = None
+    before_sequence: Optional[int] = None,
+    _conversation: dict = Depends(get_readable_conversation),
 ):
     """대화와 메시지 함께 조회 (주어진 conversation_id에 해당하는 대화 및 메시지 목록 반환)"""
     try:
@@ -224,7 +240,11 @@ async def get_conversation_with_messages(
 
 
 @router.patch("/conversations/{conversation_id}", response_model=ConversationResponse)
-async def update_conversation(conversation_id: str, request: UpdateConversationRequest):
+async def update_conversation(
+    conversation_id: str,
+    request: UpdateConversationRequest,
+    _conversation: dict = Depends(get_owned_conversation),
+):
     """대화 업데이트"""
     try:
         conversation = await ChatService.update_conversation(
@@ -244,7 +264,11 @@ async def update_conversation(conversation_id: str, request: UpdateConversationR
 
 
 @router.delete("/conversations/{conversation_id}", response_model=SuccessResponse)
-async def delete_conversation(conversation_id: str, permanent: bool = False):
+async def delete_conversation(
+    conversation_id: str,
+    permanent: bool = False,
+    _conversation: dict = Depends(get_owned_conversation),
+):
     """대화 삭제"""
     try:
         success = await ChatService.delete_conversation(
@@ -261,7 +285,10 @@ async def delete_conversation(conversation_id: str, permanent: bool = False):
 
 
 @router.post("/conversations/{conversation_id}/archive", response_model=ConversationResponse)
-async def archive_conversation(conversation_id: str):
+async def archive_conversation(
+    conversation_id: str,
+    _conversation: dict = Depends(get_owned_conversation),
+):
     """대화 아카이브"""
     try:
         conversation = await ChatService.archive_conversation(conversation_id)
@@ -277,9 +304,11 @@ async def list_user_conversations(
     status: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    include_archived: bool = False
+    include_archived: bool = False,
+    current_user: User = Depends(get_current_active_user),
 ):
     """사용자의 대화 목록 조회"""
+    require_same_user_id(user_id, current_user)
     try:
         result = await ChatService.list_conversations(
             user_id=user_id,
@@ -300,8 +329,12 @@ async def list_user_conversations(
 
 
 @router.delete("/users/{user_id}/conversations", response_model=SuccessResponse)
-async def delete_all_user_conversations(user_id: str):
+async def delete_all_user_conversations(
+    user_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """사용자의 모든 대화 삭제"""
+    require_same_user_id(user_id, current_user)
     try:
         count = await ChatService.delete_user_conversations(user_id)
         return SuccessResponse(success=True, message=f"Deleted {count} conversations")
@@ -314,6 +347,7 @@ async def delete_all_user_conversations(user_id: str):
 async def delete_messages_after_timestamp(
     conversation_id: str,
     timestamp: datetime = Query(..., description="이 시점 이후 메시지 삭제 (ISO 8601)"),
+    _conversation: dict = Depends(get_owned_conversation),
 ):
     """특정 시점 이후 메시지 삭제 (편집 기능용)"""
     try:
@@ -328,8 +362,10 @@ async def delete_messages_after_timestamp(
 async def get_user_message_count(
     user_id: str,
     hours: int = Query(24, ge=1, le=168, description="집계 기간(시간)"),
+    current_user: User = Depends(get_current_active_user),
 ):
     """최근 N시간 내 사용자 메시지 수 (rate limit 확인용)"""
+    require_same_user_id(user_id, current_user)
     try:
         count = await ChatService.get_user_message_count(user_id, hours)
         return {"user_id": user_id, "hours": hours, "count": count}
@@ -339,7 +375,11 @@ async def get_user_message_count(
 
 
 @router.post("/conversations/{conversation_id}/generate-title")
-async def generate_conversation_title(conversation_id: str, request: GenerateTitleRequest):
+async def generate_conversation_title(
+    conversation_id: str,
+    request: GenerateTitleRequest,
+    _conversation: dict = Depends(get_owned_conversation),
+):
     """대화 제목 자동 생성"""
     try:
         # 대화 존재 확인
@@ -375,9 +415,34 @@ async def generate_conversation_title(conversation_id: str, request: GenerateTit
 # Message Endpoints
 # ============================================================================
 
+async def _require_authorized_parent_message(
+    parent_message_id: Optional[str],
+    authorized_conversation: dict,
+    current_user: User,
+) -> Optional[dict]:
+    parent_message = await resolve_authorized_parent_message(
+        ChatService,
+        parent_message_id,
+        authorized_conversation,
+        current_user,
+    )
+    if parent_message_id is not None and parent_message is None:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return parent_message
+
 @router.post("/conversations/{conversation_id}/messages", response_model=CreateMessageResponse)
-async def send_message(conversation_id: str, request: SendMessageRequest):
+async def send_message(
+    conversation_id: str,
+    request: SendMessageRequest,
+    current_user: User = Depends(get_current_active_user),
+    authorized_conversation: dict = Depends(get_owned_conversation),
+):
     """메시지 전송 및 AI 응답 생성"""
+    await _require_authorized_parent_message(
+        request.parent_message_id,
+        authorized_conversation,
+        current_user,
+    )
     try:
         # 사용자 메시지 저장
         user_message = await ChatService.add_message(
@@ -463,7 +528,8 @@ async def get_conversation_messages(
     conversation_id: str,
     limit: int = 100,
     before_sequence: Optional[int] = None,
-    after_sequence: Optional[int] = None
+    after_sequence: Optional[int] = None,
+    _conversation: dict = Depends(get_readable_conversation),
 ):
     """대화의 메시지 목록 조회"""
     try:
@@ -480,13 +546,13 @@ async def get_conversation_messages(
 
 
 @router.get("/messages/{message_id}", response_model=MessageResponse)
-async def get_message(message_id: str):
+async def get_message(
+    message_id: str,
+    authorized_message: dict = Depends(get_owned_message),
+):
     """메시지 조회"""
     try:
-        message = await ChatService.get_message(message_id)
-        if not message:
-            raise HTTPException(status_code=404, detail="Message not found")
-        return MessageResponse(**message)
+        return MessageResponse(**authorized_message)
     except HTTPException:
         raise
     except Exception as e:
@@ -495,13 +561,18 @@ async def get_message(message_id: str):
 
 
 @router.patch("/messages/{message_id}", response_model=MessageResponse)
-async def edit_message(message_id: str, request: EditMessageRequest):
+async def edit_message(
+    message_id: str,
+    request: EditMessageRequest,
+    current_user: User = Depends(get_current_active_user),
+    _message: dict = Depends(get_owned_message),
+):
     """메시지 편집"""
     try:
         message = await ChatService.edit_message(
             message_id=message_id,
             new_content=request.new_content,
-            edited_by=request.user_id,
+            edited_by=current_user.user_id,
             edit_reason=request.edit_reason
         )
         return MessageResponse(**message)
@@ -513,7 +584,11 @@ async def edit_message(message_id: str, request: EditMessageRequest):
 
 
 @router.post("/messages/{message_id}/feedback", response_model=MessageResponse)
-async def add_message_feedback(message_id: str, request: MessageFeedbackRequest):
+async def add_message_feedback(
+    message_id: str,
+    request: MessageFeedbackRequest,
+    _message: dict = Depends(get_owned_message),
+):
     """메시지에 피드백 추가"""
     try:
         message = await ChatService.add_message_feedback(
@@ -528,7 +603,10 @@ async def add_message_feedback(message_id: str, request: MessageFeedbackRequest)
 
 
 @router.delete("/messages/{message_id}", response_model=SuccessResponse)
-async def delete_message(message_id: str):
+async def delete_message(
+    message_id: str,
+    _message: dict = Depends(get_owned_message),
+):
     """메시지 삭제"""
     try:
         success = await ChatService.delete_message(message_id)
@@ -539,14 +617,13 @@ async def delete_message(message_id: str):
 
 
 @router.post("/messages/{message_id}/regenerate")
-async def regenerate_message(message_id: str, request: RegenerateMessageRequest):
+async def regenerate_message(
+    message_id: str,
+    request: RegenerateMessageRequest,
+    original_message: dict = Depends(get_owned_message),
+):
     """메시지 재생성 (alternative response)"""
     try:
-        # 원본 메시지 조회
-        original_message = await ChatService.get_message(message_id)
-        if not original_message:
-            raise HTTPException(status_code=404, detail="Message not found")
-
         # 대화 정보 및 히스토리 가져오기
         conversation = await ChatService.get_conversation(original_message["conversation_id"])
 
@@ -634,13 +711,24 @@ def _get_chat_stream_pipeline() -> ChatStreamPipeline:
 async def stream_message(
     conversation_id: str,
     request: SendMessageRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user),
+    authorized_conversation: dict = Depends(get_owned_conversation),
 ):
     """스트리밍 메시지 전송 (아티팩트 지원)"""
+    await _require_authorized_parent_message(
+        request.parent_message_id,
+        authorized_conversation,
+        current_user,
+    )
     pipeline = _get_chat_stream_pipeline()
 
     return StreamingResponse(
-        pipeline.run(conversation_id, request, current_user),
+        pipeline.run(
+            conversation_id,
+            request,
+            current_user,
+            authorized_conversation=authorized_conversation,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -656,9 +744,16 @@ async def stream_message(
 async def stream_message_legacy(
     conversation_id: str,
     request: SendMessageRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user),
+    authorized_conversation: dict = Depends(get_owned_conversation),
 ):
     """[Legacy] 리팩토링 전 stream_message 구현 — 점진적 전환용."""
+
+    await _require_authorized_parent_message(
+        request.parent_message_id,
+        authorized_conversation,
+        current_user,
+    )
 
     async def generate_stream() -> AsyncGenerator[str, None]:
         try:
@@ -683,7 +778,7 @@ async def stream_message_legacy(
             yield format_sse_event(start_event)
 
             # 대화 정보 및 히스토리 가져오기
-            conversation = await ChatService.get_conversation(conversation_id)
+            conversation = authorized_conversation
             history_messages = await ChatService.get_conversation_messages(
                 conversation_id=conversation_id,
                 limit=20
@@ -1149,7 +1244,11 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
 # ============================================================================
 
 @router.get("/conversations/{conversation_id}/analytics", response_model=ConversationAnalytics)
-async def get_conversation_analytics(conversation_id: str, period: str = "session"):
+async def get_conversation_analytics(
+    conversation_id: str,
+    period: str = "session",
+    _conversation: dict = Depends(get_readable_conversation),
+):
     """대화 분석 데이터 조회"""
     try:
         analytics = await ChatService.get_conversation_analytics(conversation_id, period)
@@ -1164,8 +1263,12 @@ async def get_conversation_analytics(conversation_id: str, period: str = "sessio
 
 
 @router.get("/users/{user_id}/statistics", response_model=UserChatStatistics)
-async def get_user_statistics(user_id: str):
+async def get_user_statistics(
+    user_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """사용자 채팅 통계"""
+    require_same_user_id(user_id, current_user)
     try:
         stats = await ChatService.get_user_statistics(user_id)
         return UserChatStatistics(**stats)
@@ -1179,12 +1282,15 @@ async def get_user_statistics(user_id: str):
 # ============================================================================
 
 @router.post("/templates", response_model=ConversationTemplate)
-async def create_template(request: CreateTemplateRequest):
+async def create_template(
+    request: CreateTemplateRequest,
+    current_user: User = Depends(get_current_active_user),
+):
     """대화 템플릿 생성"""
     try:
         template = await ChatService.create_template(
             name=request.name,
-            created_by=request.created_by,
+            created_by=current_user.user_id,
             description=request.description,
             category=request.category,
             default_model=request.default_model,
@@ -1203,7 +1309,10 @@ async def create_template(request: CreateTemplateRequest):
 
 
 @router.get("/templates/{template_id}", response_model=ConversationTemplate)
-async def get_template(template_id: str):
+async def get_template(
+    template_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """템플릿 조회"""
     try:
         template = await ChatService.get_template(template_id)
@@ -1223,7 +1332,8 @@ async def list_templates(
     is_public: Optional[bool] = None,
     created_by: Optional[str] = None,
     limit: int = 50,
-    offset: int = 0
+    offset: int = 0,
+    current_user: User = Depends(get_current_active_user),
 ):
     """템플릿 목록 조회"""
     try:

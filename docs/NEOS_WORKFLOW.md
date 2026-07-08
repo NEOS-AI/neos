@@ -802,6 +802,22 @@ Task scheduling은 cron skill 및 scheduling intent를 통해 예약 작업을 �
 
 ## 20. 운영상 주의점
 
+### 20.1 HTTP resource access matrix
+
+| Resource | Read | Mutate |
+| --- | --- | --- |
+| Private conversation | owner | owner |
+| Public conversation | authenticated user | owner |
+| Message | conversation owner; public list through conversation route only | conversation owner |
+| Document/chunk/KG/search | owner | owner |
+| Approval/resume stream | owner | owner |
+| UI frame | owner | owner, one submission |
+| Query/history/SSE | authenticated user/self | authenticated user/self |
+| Health/trending/related | public | none |
+| Metrics/info/cache/stats | admin | admin |
+
+Current WebSocket endpoints are not covered by this HTTP plan and must remain disabled at the deployment perimeter until the authenticated WebSocket plan is implemented.
+
 - Tool Search의 embedding 차원은 현재 코드상 3072이고 일부 migration 문서는 1536이다.
 - Tool Search 경로는 builder가 만든 tool list를 무시하므로 artifact/inline visualization tool 노출 여부를 별도로 확인해야 한다.
 - ChannelGateway의 최종 응답 키는 workflow result와 불일치 후보가 있다.

@@ -1,5 +1,6 @@
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -50,6 +51,7 @@ async def test_stream_query_uses_body_preferences_for_bypass_cache(monkeypatch):
             },
         ),
         _FakeRequest(),
+        current_user=SimpleNamespace(user_id="user_123", is_active=True),
     )
 
     payloads = []

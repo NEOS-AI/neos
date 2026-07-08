@@ -3,7 +3,7 @@ Similarity Chat API handlers - 유사도 검색 기반 채팅 API
 일반 채팅 API와 분리된 엔드포인트 제공
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import Optional
 import json
@@ -16,16 +16,37 @@ from neos.api.models.chat_models import (
     ChatStreamChunk
 )
 from neos.api.services.chat_service import ChatService
+from neos.api.dependencies.auth import get_current_active_user
+from neos.api.dependencies.resource_access import (
+    get_owned_conversation,
+)
+from neos.api.services.chat_stream_pipeline import resolve_authorized_parent_message
 from neos.api.services.similarity_chat_processor import (
     similarity_chat_processor,
     cross_conversation_similarity_processor,
     high_confidence_similarity_processor,
     SimilarityChatProcessor
 )
+from neos.database.models import User
 from neos.utils.logger import get_logger
 
 logger = get_logger(__name__)
 router = APIRouter()
+
+
+async def _validate_parent_message(
+    request: SendSimilarityMessageRequest,
+    authorized_conversation: dict,
+    current_user: User,
+) -> None:
+    parent = await resolve_authorized_parent_message(
+        ChatService,
+        request.parent_message_id,
+        authorized_conversation,
+        current_user,
+    )
+    if request.parent_message_id is not None and parent is None:
+        raise HTTPException(status_code=404, detail="Resource not found")
 
 
 # ============================================================================
@@ -36,7 +57,9 @@ router = APIRouter()
              response_model=CreateSimilarityMessageResponse)
 async def send_similarity_message(
     conversation_id: str,
-    request: SendSimilarityMessageRequest
+    request: SendSimilarityMessageRequest,
+    authorized_conversation: dict = Depends(get_owned_conversation),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     유사도 검색 기반 메시지 전송 (Non-streaming)
@@ -44,10 +67,7 @@ async def send_similarity_message(
     이전 대화에서 유사한 메시지를 검색하여 컨텍스트로 활용
     """
     try:
-        # 대화 존재 확인
-        conversation = await ChatService.get_conversation(conversation_id)
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+        await _validate_parent_message(request, authorized_conversation, current_user)
 
         # 프로세서 생성 (요청별 설정)
         processor = SimilarityChatProcessor(
@@ -61,7 +81,7 @@ async def send_similarity_message(
         result = await processor.process_message(
             conversation_id=conversation_id,
             user_content=request.content,
-            user_id=conversation.get("user_id"),
+            user_id=current_user.user_id,
             parent_message_id=request.parent_message_id,
             attachments=request.attachments,
             metadata=request.metadata
@@ -100,7 +120,9 @@ async def send_similarity_message(
 @router.post("/conversations/{conversation_id}/messages/similarity/stream")
 async def send_similarity_message_stream(
     conversation_id: str,
-    request: SendSimilarityMessageRequest
+    request: SendSimilarityMessageRequest,
+    authorized_conversation: dict = Depends(get_owned_conversation),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     유사도 검색 기반 메시지 전송 (Streaming)
@@ -108,10 +130,7 @@ async def send_similarity_message_stream(
     Server-Sent Events 방식으로 스트리밍 응답 제공
     """
     try:
-        # 대화 존재 확인
-        conversation = await ChatService.get_conversation(conversation_id)
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+        await _validate_parent_message(request, authorized_conversation, current_user)
 
         # 프로세서 생성
         processor = SimilarityChatProcessor(
@@ -127,7 +146,7 @@ async def send_similarity_message_stream(
                 async for chunk in processor.process_message_stream(
                     conversation_id=conversation_id,
                     user_content=request.content,
-                    user_id=conversation.get("user_id"),
+                    user_id=current_user.user_id,
                     parent_message_id=request.parent_message_id,
                     attachments=request.attachments,
                     metadata=request.metadata
@@ -170,7 +189,9 @@ async def send_similarity_message_stream(
              response_model=CreateSimilarityMessageResponse)
 async def send_cross_conversation_similarity_message(
     conversation_id: str,
-    request: SendSimilarityMessageRequest
+    request: SendSimilarityMessageRequest,
+    authorized_conversation: dict = Depends(get_owned_conversation),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     크로스 대화 유사도 검색 기반 메시지 전송
@@ -178,15 +199,13 @@ async def send_cross_conversation_similarity_message(
     현재 대화뿐만 아니라 사용자의 다른 모든 대화에서도 유사 메시지 검색
     """
     try:
-        conversation = await ChatService.get_conversation(conversation_id)
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+        await _validate_parent_message(request, authorized_conversation, current_user)
 
         # 크로스 대화 프로세서 사용
         result = await cross_conversation_similarity_processor.process_message(
             conversation_id=conversation_id,
             user_content=request.content,
-            user_id=conversation.get("user_id"),
+            user_id=current_user.user_id,
             parent_message_id=request.parent_message_id,
             attachments=request.attachments,
             metadata=request.metadata,
@@ -221,7 +240,9 @@ async def send_cross_conversation_similarity_message(
              response_model=CreateSimilarityMessageResponse)
 async def send_high_confidence_similarity_message(
     conversation_id: str,
-    request: SendSimilarityMessageRequest
+    request: SendSimilarityMessageRequest,
+    authorized_conversation: dict = Depends(get_owned_conversation),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     고신뢰도 유사도 검색 기반 메시지 전송
@@ -229,15 +250,13 @@ async def send_high_confidence_similarity_message(
     유사도 임계값 0.85 이상의 매우 유사한 메시지만 컨텍스트로 사용
     """
     try:
-        conversation = await ChatService.get_conversation(conversation_id)
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+        await _validate_parent_message(request, authorized_conversation, current_user)
 
         # 고신뢰도 프로세서 사용
         result = await high_confidence_similarity_processor.process_message(
             conversation_id=conversation_id,
             user_content=request.content,
-            user_id=conversation.get("user_id"),
+            user_id=current_user.user_id,
             parent_message_id=request.parent_message_id,
             attachments=request.attachments,
             metadata=request.metadata,
@@ -273,7 +292,11 @@ async def send_high_confidence_similarity_message(
 # ============================================================================
 
 @router.get("/conversations/{conversation_id}/similarity/config")
-async def get_similarity_config(conversation_id: str):
+async def get_similarity_config(
+    conversation_id: str,
+    authorized_conversation: dict = Depends(get_owned_conversation),
+    current_user: User = Depends(get_current_active_user),
+):
     """
     유사도 검색 설정 조회
 
@@ -282,11 +305,6 @@ async def get_similarity_config(conversation_id: str):
     try:
         from neos.services.message_embedding_service import message_embedding_service
 
-        # 대화 존재 확인
-        conversation = await ChatService.get_conversation(conversation_id)
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-
         # 임베딩 통계 조회
         embedding_count = await message_embedding_service.get_conversation_embeddings_count(
             conversation_id
@@ -294,9 +312,9 @@ async def get_similarity_config(conversation_id: str):
 
         # 사용자 전체 임베딩 통계
         user_stats = None
-        if conversation.get("user_id"):
+        if authorized_conversation.get("user_id") == current_user.user_id:
             user_stats = await message_embedding_service.get_user_embeddings_stats(
-                conversation.get("user_id")
+                current_user.user_id
             )
 
         # 권장 설정 계산
@@ -357,21 +375,21 @@ async def get_similarity_config(conversation_id: str):
 
 
 @router.get("/conversations/{conversation_id}/similarity/analytics")
-async def get_similarity_analytics(conversation_id: str):
+async def get_similarity_analytics(
+    conversation_id: str,
+    _authorized_conversation: dict = Depends(get_owned_conversation),
+):
     """
     유사도 검색 사용 통계 및 분석
 
     메시지의 similarity 메타데이터를 분석하여 통계 반환
     """
     try:
-        # 대화 존재 확인
-        conversation = await ChatService.get_conversation(conversation_id)
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-
         # 대화의 모든 메시지 조회
-        from neos.api.services.chat_service import ChatService
-        messages = await ChatService.get_messages(conversation_id, limit=1000)
+        messages = await ChatService.get_conversation_messages(
+            conversation_id,
+            limit=1000,
+        )
 
         # Similarity search를 사용한 메시지 필터링
         similarity_messages = [

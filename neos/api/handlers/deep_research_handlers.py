@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import AsyncGenerator
 import json
@@ -26,7 +26,10 @@ from neos.api.models.deep_research_models import (
     ResearchPhase,
 )
 from neos.api.services.chat_service import ChatService
+from neos.api.dependencies.auth import get_current_active_user
+from neos.api.dependencies.resource_access import get_owned_conversation
 from neos.database.connection import db_manager
+from neos.database.models import User
 from neos.utils.logger import get_logger
 from neos.config.settings import settings
 
@@ -265,6 +268,16 @@ async def get_research_report(report_id: str) -> dict:
         "started_at": result[15],
         "completed_at": result[16],
     }
+
+
+async def get_owned_deep_research_report(
+    report_id: str,
+    current_user: User = Depends(get_current_active_user),
+) -> dict:
+    report = await get_research_report(report_id)
+    if not report or report.get("user_id") != current_user.user_id:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return report
 
 
 # ============================================================================
@@ -1012,7 +1025,10 @@ async def _cleanup_failed_research(
 # ============================================================================
 
 @router.post("/deep-research/start", response_model=StartDeepResearchResponse)
-async def start_deep_research(request: StartDeepResearchRequest):
+async def start_deep_research(
+    request: StartDeepResearchRequest,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     Start a new deep research task
 
@@ -1023,6 +1039,8 @@ async def start_deep_research(request: StartDeepResearchRequest):
 
     Transaction safety: If any step fails, cleanup is performed to maintain data consistency.
     """
+    await get_owned_conversation(request.conversation_id, current_user)
+
     # Generate IDs upfront
     report_id = f"hyper_report_{uuid.uuid4().hex}"
     user_message_id = f"msg_{uuid.uuid4().hex}"
@@ -1034,11 +1052,6 @@ async def start_deep_research(request: StartDeepResearchRequest):
     created_report = False
 
     try:
-        # Validate conversation exists
-        conversation = await ChatService.get_conversation(request.conversation_id)
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-
         # Step 1: Save user message to database
         try:
             await ChatService.add_message(
@@ -1078,7 +1091,7 @@ async def start_deep_research(request: StartDeepResearchRequest):
         try:
             await save_deep_research_report(
                 report_id=report_id,
-                user_id=request.user_id,
+                user_id=current_user.user_id,
                 session_id=request.session_id or f"session_{uuid.uuid4().hex[:8]}",
                 research_topic=request.research_topic,
                 conversation_id=request.conversation_id,
@@ -1123,18 +1136,16 @@ async def start_deep_research(request: StartDeepResearchRequest):
 
 
 @router.get("/deep-research/{report_id}/stream")
-async def stream_deep_research(report_id: str):
+async def stream_deep_research(
+    report_id: str,
+    report: dict = Depends(get_owned_deep_research_report),
+):
     """
     Stream deep research progress via Server-Sent Events (SSE)
 
     This endpoint provides real-time updates on the research progress.
     """
     try:
-        # Get report to extract details
-        report = await get_research_report(report_id)
-        if not report:
-            raise HTTPException(status_code=404, detail="Research report not found")
-
         # Find the assistant message associated with this report
         # Query messages table for message with this report_id in metadata
         find_assistant_message_query = """
@@ -1183,17 +1194,16 @@ async def stream_deep_research(report_id: str):
 
 
 @router.get("/deep-research/{report_id}", response_model=ResearchReport)
-async def get_deep_research_report(report_id: str):
+async def get_deep_research_report(
+    report_id: str,
+    report: dict = Depends(get_owned_deep_research_report),
+):
     """
     Get a deep research report by ID
 
     Returns the full report with all sections and metadata.
     """
     try:
-        report = await get_research_report(report_id)
-        if not report:
-            raise HTTPException(status_code=404, detail="Research report not found")
-
         # Get sections
         sections_query = """
             SELECT
@@ -1234,7 +1244,10 @@ async def get_deep_research_report(report_id: str):
 
 
 @router.get("/conversations/{conversation_id}/deep-research")
-async def list_conversation_deep_research(conversation_id: str):
+async def list_conversation_deep_research(
+    conversation_id: str,
+    _conversation: dict = Depends(get_owned_conversation),
+):
     """
     List all deep research reports for a conversation
 

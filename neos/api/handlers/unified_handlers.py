@@ -7,7 +7,7 @@
 - Template Method: 스트리밍 로직
 """
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse, JSONResponse
 from typing import Optional, AsyncGenerator, List
 import json
@@ -26,6 +26,8 @@ from neos.api.services.unified_processor import (
     DocumentProcessingError,
     WorkflowExecutionError
 )
+from neos.api.dependencies.auth import get_current_active_user
+from neos.database.models import User
 from neos.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,6 +37,12 @@ router = APIRouter(prefix="/api/v1/unified", tags=["Unified Processing"])
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
+def _with_authenticated_user(
+    request: UnifiedProcessingRequest,
+    current_user: User,
+) -> UnifiedProcessingRequest:
+    return request.model_copy(update={"user_id": current_user.user_id})
 
 async def _convert_uploaded_files_to_documents(
     files: List[UploadFile]
@@ -66,7 +74,10 @@ async def _convert_uploaded_files_to_documents(
 # ============================================================================
 
 @router.post("/process", response_model=UnifiedProcessingResponse)
-async def process_unified(request: UnifiedProcessingRequest):
+async def process_unified(
+    request: UnifiedProcessingRequest,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     통합 처리 엔드포인트 (Non-Streaming)
 
@@ -98,6 +109,7 @@ async def process_unified(request: UnifiedProcessingRequest):
     - execution_time_ms: 실행 시간
     """
     try:
+        request = _with_authenticated_user(request, current_user)
         result = await UnifiedProcessingService.process(request)
 
         return UnifiedProcessingResponse(
@@ -130,7 +142,10 @@ async def process_unified(request: UnifiedProcessingRequest):
 # ============================================================================
 
 @router.post("/process/stream")
-async def process_unified_stream(request: UnifiedProcessingRequest):
+async def process_unified_stream(
+    request: UnifiedProcessingRequest,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     통합 처리 스트리밍 엔드포인트 (SSE)
 
@@ -165,6 +180,8 @@ async def process_unified_stream(request: UnifiedProcessingRequest):
     ```
     """
 
+    request = _with_authenticated_user(request, current_user)
+
     async def generate_stream() -> AsyncGenerator[str, None]:
         """SSE 스트림 생성"""
         try:
@@ -189,7 +206,6 @@ async def process_unified_stream(request: UnifiedProcessingRequest):
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
-            "Access-Control-Allow-Origin": "*"
         }
     )
 
@@ -206,7 +222,8 @@ async def process_with_file_upload(
     enable_vision: bool = Form(True, description="Vision 분석 활성화"),
     bypass_cache: bool = Form(False, description="캐시 우회"),
     session_id: Optional[str] = Form(None),
-    user_id: Optional[str] = Form(None)
+    user_id: Optional[str] = Form(None, deprecated=True),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     파일 업로드 방식의 통합 처리 엔드포인트
@@ -249,7 +266,7 @@ async def process_with_file_upload(
             enable_vision=enable_vision,
             bypass_cache=bypass_cache,
             session_id=session_id,
-            user_id=user_id
+            user_id=current_user.user_id,
         )
 
         # 처리 실행
@@ -293,7 +310,8 @@ async def process_with_file_upload_stream(
     enable_vision: bool = Form(True),
     bypass_cache: bool = Form(False),
     session_id: Optional[str] = Form(None),
-    user_id: Optional[str] = Form(None)
+    user_id: Optional[str] = Form(None, deprecated=True),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     파일 업로드 + 스트리밍 처리 엔드포인트
@@ -312,7 +330,7 @@ async def process_with_file_upload_stream(
             enable_vision=enable_vision,
             bypass_cache=bypass_cache,
             session_id=session_id,
-            user_id=user_id
+            user_id=current_user.user_id,
         )
 
         # 스트리밍 처리
@@ -338,7 +356,6 @@ async def process_with_file_upload_stream(
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
-                "Access-Control-Allow-Origin": "*"
             }
         )
 

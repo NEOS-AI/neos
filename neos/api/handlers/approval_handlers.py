@@ -24,6 +24,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from neos.api.dependencies.auth import get_current_user
+from neos.api.dependencies.resource_access import require_stream_session_owner
+from neos.database.connection import db_manager
 from neos.database.models import User
 from neos.workflow.graph import multi_agent_workflow
 from neos.workflow.stream_manager import stream_manager
@@ -55,6 +57,38 @@ class ApprovalResponseResult(BaseModel):
     decision: str
 
 
+async def _require_pending_approval_owner(
+    session_id: str,
+    request_id: str,
+    user_id: str,
+) -> dict:
+    row = await db_manager.fetch_one(
+        """
+        SELECT request_id, session_id, user_id, skill_name, resolved
+        FROM pending_approvals
+        WHERE session_id = $1
+          AND request_id = $2
+          AND user_id = $3
+          AND resolved = FALSE
+        """,
+        session_id,
+        request_id,
+        user_id,
+    )
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found",
+        )
+    return {
+        "request_id": row[0],
+        "session_id": row[1],
+        "user_id": row[2],
+        "skill_name": row[3],
+        "resolved": row[4],
+    }
+
+
 @router.post(
     "/respond",
     response_model=ApprovalResponseResult,
@@ -80,6 +114,12 @@ async def respond_to_approval(
     session_id = body.session_id
     decision = body.decision
 
+    pending_approval = await _require_pending_approval_owner(
+        session_id=session_id,
+        request_id=body.request_id,
+        user_id=current_user.user_id,
+    )
+
     # 그래프가 초기화되어 있어야 함
     if not multi_agent_workflow._graph_initialized or not multi_agent_workflow._graph_uses_checkpointer:
         raise HTTPException(
@@ -89,6 +129,10 @@ async def respond_to_approval(
 
     graph = multi_agent_workflow.graph
     config = {"configurable": {"thread_id": session_id}}
+
+    session = stream_manager.get_session(session_id)
+    if session:
+        require_stream_session_owner(session, current_user)
 
     # [H3] aupdate_state 이전: 현재 pending_approvals에서 request_id 유효성 검증
     try:
@@ -108,14 +152,24 @@ async def respond_to_approval(
             detail="유효하지 않은 request_id입니다. 해당 세션의 pending approval이 아닙니다.",
         )
 
+    matching = next((p for p in pending if p["request_id"] == body.request_id), None)
+    if not matching or matching.get("skill_name") != pending_approval["skill_name"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="skill_name이 해당 request_id의 스킬과 일치하지 않습니다.",
+        )
+
     # allowlist 추가 시 skill_name이 request_id의 스킬과 일치하는지 검증
     if body.add_to_allowlist and body.skill_name:
-        matching = next((p for p in pending if p["request_id"] == body.request_id), None)
-        if not matching or matching.get("skill_name") != body.skill_name:
+        if pending_approval["skill_name"] != body.skill_name:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="skill_name이 해당 request_id의 스킬과 일치하지 않습니다.",
             )
+
+    if not session:
+        session = stream_manager.create_session(session_id, current_user.user_id)
+        require_stream_session_owner(session, current_user)
 
     try:
         # 1. 상태 업데이트: approval_decision 설정
@@ -134,14 +188,11 @@ async def respond_to_approval(
         )
 
     # [H3b] pending_approvals 테이블에 resolved=True 기록 (타임아웃 자동 거부 방지)
-    await _mark_approval_resolved(body.request_id)
+    await _mark_approval_resolved(body.request_id, current_user.user_id)
 
     # [C5, H4] 백그라운드 태스크로 그래프 재개 — stream_manager로 결과 push
     # 클라이언트는 GET /api/v1/approval/stream/{session_id}로 재구독하여 결과를 받는다.
     async def _resume():
-        # stream_manager 세션 확보 (이미 있으면 재사용)
-        if not stream_manager.get_session(session_id):
-            stream_manager.create_session(session_id, current_user.user_id)
         try:
             final_state = None
             async for chunk in graph.astream(None, config=config):
@@ -202,12 +253,15 @@ async def stream_resume_result(
     _resume() 백그라운드 태스크가 stream_manager.add_event()로 push한 이벤트를
     세션 큐에서 읽어 클라이언트로 전달한다. 60초 타임아웃 후 자동 종료.
     """
-    async def generate() -> AsyncGenerator[str, None]:
-        session = stream_manager.get_session(session_id)
-        if not session:
-            yield f"data: {json.dumps({'event': 'error', 'message': '세션을 찾을 수 없습니다.'})}\n\n"
-            return
+    session = stream_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found",
+        )
+    require_stream_session_owner(session, current_user)
 
+    async def generate() -> AsyncGenerator[str, None]:
         try:
             while True:
                 event = await asyncio.wait_for(session.queue.get(), timeout=60.0)
@@ -227,13 +281,17 @@ async def stream_resume_result(
     )
 
 
-async def _mark_approval_resolved(request_id: str) -> None:
+async def _mark_approval_resolved(request_id: str, user_id: str) -> None:
     """pending_approvals 테이블에서 request_id를 resolved=True로 표시한다."""
     try:
-        from neos.database.connection import db_manager
         await db_manager.execute(
-            "UPDATE pending_approvals SET resolved = TRUE WHERE request_id = $1",
+            """
+            UPDATE pending_approvals
+            SET resolved = TRUE
+            WHERE request_id = $1 AND user_id = $2 AND resolved = FALSE
+            """,
             request_id,
+            user_id,
         )
         logger.debug(f"[ApprovalHandler] pending_approval marked resolved: {request_id}")
     except Exception as e:
@@ -243,7 +301,6 @@ async def _mark_approval_resolved(request_id: str) -> None:
 async def _add_to_allowlist(user_id: str, skill_name: str) -> None:
     """사용자의 스킬을 allowlist에 추가한다 (이미 있으면 업데이트)."""
     try:
-        from neos.database.connection import db_manager
         sql = """
             INSERT INTO tool_approval_allowlist (user_id, skill_name, auto_approved, created_at)
             VALUES ($1, $2, TRUE, NOW())

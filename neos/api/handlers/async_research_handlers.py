@@ -14,12 +14,25 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from neos.api.dependencies.auth import get_current_user
+from neos.api.dependencies.auth import get_current_active_user
+from neos.api.dependencies.resource_access import get_owned_conversation
 from neos.database.models import User
 from neos.config.settings import settings
+from neos.utils.cache import cache_manager
+from neos.workflow.stream_manager import stream_manager
 
 router = APIRouter(prefix="/api/v1/research", tags=["async-research"])
 logger = logging.getLogger(__name__)
+
+JOB_OWNER_TTL_SECONDS = 86400
+
+
+def _job_owner_cache_key(job_id: str) -> str:
+    return cache_manager.make_key("async_research_job_owner", job_id)
+
+
+def _session_owner_cache_key(session_id: str) -> str:
+    return cache_manager.make_key("async_research_session_owner", session_id)
 
 
 # ============================================================================
@@ -53,7 +66,7 @@ class JobStatusResponse(BaseModel):
 @router.post("/async", response_model=AsyncResearchResponse)
 async def start_async_research(
     request: AsyncResearchRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """비동기 연구 시작 — 즉시 job_id 반환, SSE로 진행 상황 스트리밍
 
@@ -66,9 +79,19 @@ async def start_async_research(
             detail="Async research is not available (CELERY_ENABLED=false)",
         )
 
-    session_id = request.session_id or request.conversation_id or str(uuid.uuid4())
+    session_id = str(uuid.uuid4())
+    if request.conversation_id:
+        await get_owned_conversation(request.conversation_id, current_user)
 
     try:
+        session_owner_recorded = await cache_manager.set(
+            _session_owner_cache_key(session_id),
+            current_user.user_id,
+            ttl=JOB_OWNER_TTL_SECONDS,
+        )
+        if not session_owner_recorded:
+            raise RuntimeError("Failed to record async research session owner")
+
         from neos.workflow.celery_tasks import execute_workflow_async
 
         task = execute_workflow_async.apply_async(
@@ -81,6 +104,13 @@ async def start_async_research(
             },
             queue="search",
         )
+        owner_recorded = await cache_manager.set(
+            _job_owner_cache_key(task.id),
+            current_user.user_id,
+            ttl=JOB_OWNER_TTL_SECONDS,
+        )
+        if not owner_recorded:
+            raise RuntimeError("Failed to record async research job owner")
 
         logger.info(
             f"Async research submitted: job_id={task.id}, "
@@ -102,11 +132,15 @@ async def start_async_research(
 @router.get("/async/{job_id}/status", response_model=JobStatusResponse)
 async def get_job_status(
     job_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """비동기 연구 작업 상태 조회"""
     if not getattr(settings, "CELERY_ENABLED", False):
         raise HTTPException(status_code=503, detail="Celery not enabled")
+
+    owner_id = await cache_manager.get(_job_owner_cache_key(job_id))
+    if owner_id != current_user.user_id:
+        raise HTTPException(status_code=404, detail="Resource not found")
 
     try:
         from neos.workflow.celery_app import app as celery_app
@@ -132,25 +166,29 @@ async def get_job_status(
 async def stream_research_progress(
     session_id: str,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """SSE 스트리밍으로 연구 진행 상황 수신
 
     워크플로우 노드 실행 이벤트를 실시간으로 스트리밍합니다.
     workflow_completed 또는 workflow_failed 이벤트 수신 시 스트림이 종료됩니다.
     """
-    from neos.workflow.stream_manager import stream_manager
+    owner_id = await cache_manager.get(_session_owner_cache_key(session_id))
+    if owner_id != current_user.user_id:
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+    try:
+        stream_manager.claim_session(session_id, current_user.user_id)
+    except PermissionError:
+        raise HTTPException(status_code=404, detail="Resource not found")
 
     async def event_generator():
-        # 세션 생성/연결
-        await stream_manager.create_session(session_id, current_user.user_id)
-
         try:
             while True:
                 if await request.is_disconnected():
                     break
 
-                events = await stream_manager.get_events_since(session_id)
+                events = stream_manager.get_events_since(session_id)
 
                 for event in events:
                     data = json.dumps(event.data) if isinstance(event.data, dict) else str(event.data)
@@ -168,7 +206,7 @@ async def stream_research_progress(
                 await asyncio.sleep(1.0)
 
         finally:
-            await stream_manager.disconnect(session_id)
+            stream_manager.disconnect(session_id)
 
     return StreamingResponse(
         event_generator(),

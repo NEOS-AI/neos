@@ -75,6 +75,8 @@ class _FakeWorkflow:
 
 class _FakeChatService:
     messages = []
+    parent_messages = {}
+    conversations = {}
 
     @classmethod
     async def add_message(cls, **kwargs):
@@ -82,8 +84,11 @@ class _FakeChatService:
 
     @classmethod
     async def get_conversation(cls, conversation_id):
+        if conversation_id in cls.conversations:
+            return cls.conversations[conversation_id]
         return {
             "conversation_id": conversation_id,
+            "user_id": "user_123",
             "system_prompt": "",
             "model_name": "gpt-4o-mini",
             "temperature": 0.7,
@@ -91,8 +96,131 @@ class _FakeChatService:
         }
 
     @classmethod
+    async def get_message(cls, message_id):
+        return cls.parent_messages.get(message_id)
+
+    @classmethod
     async def get_conversation_messages(cls, conversation_id, limit=20):
         return []
+
+
+@pytest.mark.asyncio
+async def test_chat_pipeline_rejects_conversation_owner_mismatch():
+    _FakeChatService.messages = []
+    pipeline = ChatStreamPipeline(
+        chat_llm_service=object(),
+        cost_calculator=object(),
+        get_core_tools_fn=lambda: None,
+        get_search_handler_fn=lambda: None,
+        chat_service_cls=_FakeChatService,
+        multi_agent_workflow=object(),
+        workflow_callback_cls=object(),
+        map_node_to_agent_fn=lambda node: node,
+    )
+    request = SimpleNamespace(
+        role=SimpleNamespace(value="user"),
+        content="secret",
+        attachments=[],
+        parent_message_id=None,
+        metadata={},
+    )
+
+    chunks = [
+        chunk
+        async for chunk in pipeline.run(
+            "conversation_123",
+            request,
+            SimpleNamespace(user_id="attacker"),
+            authorized_conversation={
+                "conversation_id": "conversation_123",
+                "user_id": "owner",
+            },
+        )
+    ]
+
+    assert _FakeChatService.messages == []
+    assert any("response.failed" in chunk for chunk in chunks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("parent_message_id", "parent_message", "parent_conversation"),
+    [
+        ("missing-m", None, None),
+        (
+            "victim-m",
+            {"message_id": "victim-m", "conversation_id": "victim-c"},
+            {"conversation_id": "victim-c", "user_id": "victim"},
+        ),
+        (
+            "other-owned-m",
+            {"message_id": "other-owned-m", "conversation_id": "other-owned-c"},
+            {"conversation_id": "other-owned-c", "user_id": "user_123"},
+        ),
+    ],
+    ids=["missing", "cross-owner", "same-owner-cross-conversation"],
+)
+async def test_chat_pipeline_rejects_invalid_parent_before_write(
+    parent_message_id,
+    parent_message,
+    parent_conversation,
+):
+    _FakeChatService.messages = []
+    _FakeChatService.parent_messages = (
+        {parent_message_id: parent_message} if parent_message else {}
+    )
+    _FakeChatService.conversations = (
+        {parent_conversation["conversation_id"]: parent_conversation}
+        if parent_conversation
+        else {}
+    )
+    pipeline = ChatStreamPipeline(
+        chat_llm_service=object(),
+        cost_calculator=object(),
+        get_core_tools_fn=lambda: None,
+        get_search_handler_fn=lambda: None,
+        chat_service_cls=_FakeChatService,
+        multi_agent_workflow=object(),
+        workflow_callback_cls=object(),
+        map_node_to_agent_fn=lambda node: node,
+    )
+    request = SimpleNamespace(
+        role=SimpleNamespace(value="user"),
+        content="secret",
+        attachments=[],
+        parent_message_id=parent_message_id,
+        metadata={},
+    )
+
+    chunks = [
+        chunk
+        async for chunk in pipeline.run(
+            "conversation_123",
+            request,
+            SimpleNamespace(user_id="user_123"),
+            authorized_conversation={
+                "conversation_id": "conversation_123",
+                "user_id": "user_123",
+            },
+        )
+    ]
+
+    payloads = [
+        json.loads(line.removeprefix("data: "))
+        for chunk in chunks
+        for line in chunk.splitlines()
+        if line.startswith("data: {")
+    ]
+    payload = payloads[0]
+    assert payload["type"] == "response.failed"
+    assert payload["response"]["error"] == {
+        "type": "not_found",
+        "message": "Resource not found",
+        "code": None,
+        "param": None,
+    }
+    assert chunks[-1] == "data: [DONE]\n\n"
+    assert _FakeChatService.messages == []
 
 
 @pytest.mark.asyncio
@@ -179,8 +307,27 @@ async def test_chat_workflow_passes_mission_preferences():
 
 
 @pytest.mark.asyncio
-async def test_chat_interrupted_workflow_persists_approval_placeholder(monkeypatch):
+@pytest.mark.parametrize(
+    "parent_message_id",
+    [None, "parent_123"],
+    ids=["no-parent", "same-conversation-parent"],
+)
+async def test_chat_interrupted_workflow_persists_approval_placeholder(
+    monkeypatch,
+    parent_message_id,
+):
     _FakeChatService.messages = []
+    _FakeChatService.parent_messages = (
+        {
+            "parent_123": {
+                "message_id": "parent_123",
+                "conversation_id": "conversation_123",
+            }
+        }
+        if parent_message_id
+        else {}
+    )
+    _FakeChatService.conversations = {}
     workflow = _FakeWorkflow()
     pipeline = ChatStreamPipeline(
         chat_llm_service=object(),
@@ -201,7 +348,7 @@ async def test_chat_interrupted_workflow_persists_approval_placeholder(monkeypat
         role=SimpleNamespace(value="user"),
         content="latest news",
         attachments=[],
-        parent_message_id=None,
+        parent_message_id=parent_message_id,
         metadata={"autonomy_level": 0},
     )
 
@@ -211,6 +358,14 @@ async def test_chat_interrupted_workflow_persists_approval_placeholder(monkeypat
             conversation_id="conversation_123",
             request=request,
             current_user=SimpleNamespace(user_id="user_123"),
+            authorized_conversation={
+                "conversation_id": "conversation_123",
+                "user_id": "user_123",
+                "system_prompt": "",
+                "model_name": "gpt-4o-mini",
+                "temperature": 0.7,
+                "max_tokens": None,
+            },
         )
     ]
 
@@ -222,4 +377,5 @@ async def test_chat_interrupted_workflow_persists_approval_placeholder(monkeypat
     assert assistant_messages[0]["content"] == ""
     assert assistant_messages[0]["metadata"]["responseStatus"] == "incomplete"
     assert assistant_messages[0]["metadata"]["approval_requests"][0]["request_id"] == "approval-1"
+    assert _FakeChatService.messages[0]["parent_message_id"] == parent_message_id
     assert chunks[-1] == "data: [DONE]\n\n"

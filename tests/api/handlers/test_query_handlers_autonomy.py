@@ -1,5 +1,6 @@
 import os
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi import BackgroundTasks
@@ -42,6 +43,7 @@ async def test_query_preferences_autonomy_level_preserved_when_top_level_omitted
     await process_query(
         QueryRequest(query="hello", preferences={"autonomy_level": 2}),
         BackgroundTasks(),
+        current_user=SimpleNamespace(user_id="user_123", is_active=True),
     )
 
     assert captured["preferences"]["autonomy_level"] == 2
@@ -78,6 +80,7 @@ async def test_query_preferences_accepts_null_preferences(monkeypatch):
     await process_query(
         QueryRequest(query="hello", preferences=None, autonomy_level=0),
         BackgroundTasks(),
+        current_user=SimpleNamespace(user_id="user_123", is_active=True),
     )
 
     assert captured["bypass_cache"] is False
@@ -116,6 +119,7 @@ async def test_query_interrupted_result_returns_accepted_response(monkeypatch):
     response = await process_query(
         QueryRequest(query="hello", preferences={"autonomy_level": 0}),
         BackgroundTasks(),
+        current_user=SimpleNamespace(user_id="user_123", is_active=True),
     )
 
     assert response.status_code == 202

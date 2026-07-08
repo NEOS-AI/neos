@@ -114,6 +114,30 @@ class DocumentService:
         return document
 
     @staticmethod
+    async def get_document_for_user(
+        document_id: int,
+        user_id: str,
+    ) -> Optional[Document]:
+        """Return a document only when it belongs to the authenticated user."""
+        async with db_manager.get_session() as session:
+            result = await session.execute(
+                select(Document).where(
+                    Document.id == document_id,
+                    Document.user_id == user_id,
+                )
+            )
+            return result.scalar_one_or_none()
+
+    @staticmethod
+    async def delete_document_for_user(document_id: int, user_id: str) -> bool:
+        """Delete a document only after an owner-scoped lookup succeeds."""
+        document = await DocumentService.get_document_for_user(document_id, user_id)
+        if not document:
+            return False
+        processor = DocumentProcessor()
+        return await processor.delete_document(document_id)
+
+    @staticmethod
     async def delete_document(document_id: int) -> bool:
         """
         문서 삭제

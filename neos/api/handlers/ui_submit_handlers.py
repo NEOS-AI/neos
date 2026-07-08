@@ -26,13 +26,27 @@ from sqlalchemy import select, update as sa_update
 
 from neos.api.dependencies.auth import get_current_user
 from neos.api.models.ui_components import UISubmitRequest
-from neos.database.connection import get_db_session
+from neos.database.connection import get_session_ctx
 from neos.database.models import UIFrameSession, User
 from neos.workflow.graph import multi_agent_workflow
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ui", tags=["A2UI"])
+
+
+async def _get_owned_frame_session(
+    frame_id: uuid.UUID,
+    user_id: str,
+) -> UIFrameSession | None:
+    async with get_session_ctx() as db:
+        result = await db.execute(
+            select(UIFrameSession).where(
+                UIFrameSession.frame_id == frame_id,
+                UIFrameSession.user_id == user_id,
+            )
+        )
+        return result.scalar_one_or_none()
 
 
 @router.post(
@@ -52,18 +66,22 @@ async def submit_ui_frame(
     2. 만료 여부 확인
     3. needs_ui=False + ui_submission 포함 새 워크플로우 invoke
     """
-    async with get_db_session() as db:
-        result = await db.execute(
-            select(UIFrameSession).where(
-                UIFrameSession.frame_id == uuid.UUID(body.frame_id)
-            )
-        )
-        frame_session = result.scalar_one_or_none()
+    frame_uuid = uuid.UUID(body.frame_id)
+    frame_session = await _get_owned_frame_session(
+        frame_uuid,
+        current_user.user_id,
+    )
 
     if not frame_session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"UIFrame '{body.frame_id}'을 찾을 수 없습니다.",
+            detail="Resource not found",
+        )
+
+    if frame_session.session_id != body.session_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found",
         )
 
     # 만료 확인
@@ -75,19 +93,42 @@ async def submit_ui_frame(
         )
 
     # 중복 제출 방어 — submitted_at을 원자적으로 설정 (미제출 레코드만 업데이트)
-    async with get_db_session() as db:
+    async with get_session_ctx() as db:
         update_result = await db.execute(
             sa_update(UIFrameSession)
             .where(
-                UIFrameSession.frame_id == uuid.UUID(body.frame_id),
+                UIFrameSession.frame_id == frame_uuid,
+                UIFrameSession.user_id == current_user.user_id,
+                UIFrameSession.session_id == body.session_id,
                 UIFrameSession.submitted_at.is_(None),  # 아직 제출되지 않은 경우만
             )
             .values(submitted_at=now)
-            .returning(UIFrameSession.frame_id)
+            .returning(
+                UIFrameSession.frame_id,
+                UIFrameSession.session_id,
+                UIFrameSession.original_query,
+                UIFrameSession.conversation_id,
+            )
         )
-        await db.commit()
+        updated_frame = update_result.mappings().one_or_none()
+        if updated_frame is not None:
+            await db.commit()
 
-    if update_result.rowcount == 0:
+    if updated_frame is None:
+        latest_frame = await _get_owned_frame_session(
+            frame_uuid,
+            current_user.user_id,
+        )
+        if latest_frame is None or latest_frame.session_id != body.session_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Resource not found",
+            )
+        if latest_frame.submitted_at is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Resource not found",
+            )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="이미 제출된 UIFrame입니다.",
@@ -97,24 +138,28 @@ async def submit_ui_frame(
     # needs_ui=False: 폼 완료 → 실행 처리 경로로 라우팅 (UI_FRAME_GENERATOR 재진입 방지)
     workflow_input = {
         "user_id": str(current_user.user_id),
-        "session_id": body.session_id,
-        "query": frame_session.original_query,
+        "session_id": updated_frame["session_id"],
+        "query": updated_frame["original_query"],
         "ui_submission": body.values,
         "needs_ui": False,
     }
-    if frame_session.conversation_id:
-        workflow_input["conversation_id"] = str(frame_session.conversation_id)
+    if updated_frame["conversation_id"]:
+        workflow_input["conversation_id"] = str(updated_frame["conversation_id"])
 
     logger.info(
         "[UISubmit] frame_id=%s, query=%s..., values_keys=%s",
         body.frame_id,
-        frame_session.original_query[:40],
+        updated_frame["original_query"][:40],
         list(body.values.keys()),
     )
 
     # 워크플로우 결과를 SSE 스트림으로 방출 (chat_handlers.py 패턴 재사용)
     return StreamingResponse(
-        _event_generator(workflow_input, body.session_id, str(current_user.user_id)),
+        _event_generator(
+            workflow_input,
+            updated_frame["session_id"],
+            str(current_user.user_id),
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

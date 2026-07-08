@@ -22,7 +22,7 @@ Workflow Streaming API handlers - SSE & WebSocket 기반 실시간 스트리밍
 이 설계는 unified_handlers.py의 패턴을 따릅니다.
 """
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Request
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import StreamingResponse
 from typing import AsyncGenerator, Dict, Any, Optional, Callable
 from datetime import datetime
@@ -37,6 +37,8 @@ from neos.api.models.query_models import (
 )
 from neos.api.services.query_service import QueryService
 from neos.api.services.workflow_service import WorkflowService
+from neos.api.dependencies.auth import get_current_active_user
+from neos.database.models import User
 from neos.workflow.events import WorkflowEventHandler
 from neos.workflow.stream_manager import stream_manager
 from neos.config.settings import settings
@@ -448,7 +450,11 @@ async def execute_workflow_with_streaming(
 # ============================================================================
 
 @router.post("/query/stream")
-async def stream_query(body: WorkflowStreamRequest, request: Request):
+async def stream_query(
+    body: WorkflowStreamRequest,
+    request: Request,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     SSE 기반 워크플로우 스트리밍 엔드포인트 (Phase 3 개선)
 
@@ -475,7 +481,11 @@ async def stream_query(body: WorkflowStreamRequest, request: Request):
     """
 
     session_id = body.session_id or str(uuid.uuid4())
-    user_id = body.user_id or f"anonymous_{uuid.uuid4().hex[:8]}"
+    user_id = current_user.user_id
+    try:
+        stream_manager.claim_session(session_id, user_id)
+    except PermissionError:
+        raise HTTPException(status_code=404, detail="Resource not found")
     stream_options = body.stream_options or {}
     preferences = body.preferences or {}
     autonomy_level = (
@@ -488,9 +498,6 @@ async def stream_query(body: WorkflowStreamRequest, request: Request):
     last_event_id = request.headers.get("Last-Event-ID")
 
     async def generate_stream() -> AsyncGenerator[str, None]:
-        # StreamManager에서 세션 생성 (Phase 3)
-        session = stream_manager.create_session(session_id, user_id)
-
         # 재연결 시 Last-Event-ID 이후 이벤트 재전송
         if last_event_id:
             logger.info(f"Reconnection detected for session {session_id}, last_event_id: {last_event_id}")
@@ -592,7 +599,6 @@ async def stream_query(body: WorkflowStreamRequest, request: Request):
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
-            "Access-Control-Allow-Origin": "*"
         }
     )
 
