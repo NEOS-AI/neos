@@ -218,6 +218,7 @@ LEGACY_PREFIX_PATHS = [
     ("CHECKPOINTER_", "checkpointer"),
     ("RECURSIVE_", "recursive_agent"),
     ("HYPER_DEEP_", "hyper_deep_agent"),
+    ("DEEP_ANALYSIS_", "deep_analysis"),
     ("RAY_", "ray"),
     ("SANDBOX_", "sandbox"),
     ("CONTEXTUAL_", "contextual_retrieval"),
