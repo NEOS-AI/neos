@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS deep_analysis_runs (
     status               VARCHAR(20)  NOT NULL DEFAULT 'running'
                          CHECK (status IN ('running', 'completed', 'failed')),
     user_id              VARCHAR(255) REFERENCES users(user_id) ON DELETE SET NULL,
-    conversation_id      VARCHAR(255) REFERENCES conversations(conversation_id) ON DELETE SET NULL,
+    conversation_id      VARCHAR(255),
     assistant_message_id VARCHAR(255),
     report_path          TEXT,
     created_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW(),

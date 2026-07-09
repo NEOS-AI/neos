@@ -60,3 +60,12 @@ def test_migration_backfills_constraints_after_orm_create_all():
 
     assert "ADD CONSTRAINT fk_da_runs_conversation" in sql
     assert "REFERENCES conversations(conversation_id)" in sql
+
+
+def test_conversation_fk_is_declared_once_for_fresh_databases():
+    sql = MIGRATION.read_text(encoding="utf-8")
+    create_runs = sql.split(
+        "CREATE TABLE IF NOT EXISTS deep_analysis_runs (", 1
+    )[1].split(");", 1)[0]
+
+    assert "REFERENCES conversations(conversation_id)" not in create_runs
