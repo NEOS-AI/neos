@@ -214,6 +214,7 @@ async def test_commit_pass_stores_blob_before_evidence_and_records_events():
             ),
             {"run_id": run_id},
         )
+        stored_blob = await ledger.get_blob(result.blobs[0].content_hash)
         event_kinds = (
             await session.execute(
                 text(
@@ -225,6 +226,7 @@ async def test_commit_pass_stores_blob_before_evidence_and_records_events():
         ).scalars().all()
 
         assert blob_count == 1
+        assert stored_blob.raw_text == result.blobs[0].raw_text
         assert "claim_verified" in event_kinds
         assert event_kinds[-1] == "pass_completed"
         await session.rollback()

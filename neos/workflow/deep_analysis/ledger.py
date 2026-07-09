@@ -388,6 +388,9 @@ class Ledger:
     async def get_claim(self, claim_id: str) -> DAClaim | None:
         return await self.db.get(DAClaim, (claim_id, self.run_id))
 
+    async def get_blob(self, content_hash: str) -> DABlob | None:
+        return await self.db.get(DABlob, (self.run_id, content_hash))
+
     async def verified_claims(
         self,
         question_id: str,
