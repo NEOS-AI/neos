@@ -321,7 +321,7 @@ class Ledger:
         for blob in result.blobs:
             await self._store_blob(blob)
 
-        verified_any = False
+        verified_count = 0
         for proposed_claim in result.claims:
             claim_id, evidence_rows = await self._upsert_claim(
                 question_id,
@@ -330,15 +330,14 @@ class Ledger:
             verdict = verdicts.get(claim_id) or verdicts.get(
                 proposed_claim.text
             )
-            verified_any = (
-                await self._record_verdict(
-                    question_id,
-                    claim_id,
-                    evidence_rows,
-                    verdict,
-                )
-                or verified_any
-            )
+            if await self._record_verdict(
+                question_id,
+                claim_id,
+                evidence_rows,
+                verdict,
+            ):
+                verified_count += 1
+        verified_any = verified_count > 0
 
         for dead_end in result.dead_ends:
             await self.log("dead_end", question_id, {"text": dead_end})
@@ -367,6 +366,7 @@ class Ledger:
             {
                 "status": result.status,
                 "new_claims": len(result.claims),
+                "verified": verified_count,
                 "tokens": result.tokens_spent,
             },
         )
@@ -461,3 +461,62 @@ class Ledger:
             raise KeyError(self.run_id)
         run.status = "failed"
         await self.db.flush()
+
+    async def gain_history(self, question_id: str, last_n: int = 3) -> list[int]:
+        result = await self.db.execute(
+            select(DAEvent.payload)
+            .where(
+                DAEvent.run_id == self.run_id,
+                DAEvent.qid == question_id,
+                DAEvent.kind == "pass_completed",
+            )
+            .order_by(DAEvent.seq.desc())
+            .limit(last_n)
+        )
+        counts: list[int] = []
+        for payload in result.scalars():
+            try:
+                counts.append(int(json.loads(payload).get("verified", 0)))
+            except (ValueError, TypeError):
+                counts.append(0)
+        return counts
+
+    async def verified_summaries(self, question_id: str) -> str:
+        pairs = await self.verified_claims(question_id)
+        if not pairs:
+            return "(없음)"
+        return "\n".join(f"- {claim.text}" for claim, _ in pairs)
+
+    async def unverified_and_deadends(self, question_id: str) -> list[str]:
+        out: list[str] = []
+        events = await self.db.execute(
+            select(DAEvent.payload).where(
+                DAEvent.run_id == self.run_id,
+                DAEvent.qid == question_id,
+                DAEvent.kind == "dead_end",
+            )
+        )
+        for payload in events.scalars():
+            try:
+                out.append(str(json.loads(payload).get("text", "")))
+            except (ValueError, TypeError):
+                continue
+        claims = await self.db.execute(
+            select(DAClaim.text).where(
+                DAClaim.run_id == self.run_id,
+                DAClaim.question_id == question_id,
+                DAClaim.status == "unverified",
+            )
+        )
+        out.extend(str(t) for t in claims.scalars())
+        return out
+
+    async def record_abandon(self, question_id: str) -> None:
+        await self._transition(question_id, "abandoned")
+        await self.log("abandoned", question_id, {})
+
+    async def remaining_budget(self, question_id: str) -> int:
+        question = await self.get_question(question_id)
+        if question is None:
+            raise KeyError(question_id)
+        return max(0, question.cap_tokens - question.spent_tokens)
