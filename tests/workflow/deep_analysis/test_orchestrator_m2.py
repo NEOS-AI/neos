@@ -29,9 +29,16 @@ async def test_ac_a_partial_claims_committed(monkeypatch):
                                 blobs=list(self._blobs), tokens_spent=10)
     async with await db_manager.get_session() as s:
         run_id = await create_run(s, "root?", "dev")
+        # 원래 5000 캡 + 10 토큰/라운드는 캡 소진까지 ~500라운드가 필요해 이 테스트만 ~82s가
+        # 걸렸다(AC-a는 partial 커밋 여부만 증명하면 되고, 캡 소진까지 도는 라운드 수는 무관).
+        # 15로 낮추면: 라운드1(breadth pass)에서 partial(10 토큰, blob 포함)이 커밋되어 이미
+        # AC를 만족시키고, 라운드2(confidence<0.3 및 spent>0 → DIG)에서 다시 10토큰 소비해
+        # 누적 20>=15가 되어 라운드3 진입 전 should_stop이 True로 정지한다. 즉 워커 호출은
+        # 정확히 2회(둘 다 monkeypatch된 wall_clock_cap=0.05s로 즉시 타임아웃)뿐이라 수백 라운드
+        # 스핀 없이 같은 AC(타임아웃→flush_partial→blob 커밋)를 훨씬 빠르게 증명한다.
         orch = Orchestrator(s, run_id, lambda: SlowPartial(), OkGrader(),
                             decompose_fn=lambda t: [{"text":"sub","value_est":0.8}],
-                            global_token_cap=5000)
+                            global_token_cap=15)
         await orch.run("root?")
         row = await s.execute(sql("SELECT COUNT(*) FROM deep_analysis_blobs WHERE run_id=:r"), {"r": run_id})
         assert row.scalar() >= 1   # partial blob 커밋됨

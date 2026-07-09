@@ -172,3 +172,21 @@ verified 클레임으로 해소되어야 한다고 요구한다. `[미검증]` �
 
 **영향:** orphan이 하나라도 있으면 보고서 완료 이벤트를 내보내지 않고 run이 failed로 전이한다.
 M4 ReportGrader가 추가되면 같은 오류 코드가 조립 재시도 처방으로 연결된다.
+
+---
+
+## D11. §6.3.2 서브질문 채택은 M3로 연기, M2는 로깅만
+
+**결정:** 워커의 `proposed_subquestions`는 M2에서 `subq_proposed` 이벤트로 로깅만 하고 채택(트리 삽입)하지 않는다.
+**근거:** M2 AC(partial/SPLIT/cap/global-cap)에 서브질문 채택은 없다. 채택은 LLM 심사(중복 제거 + value_est 부여, §6.3.2)를 요구하므로 에이전틱 채점이 도입되는 M3와 함께 구현하는 것이 응집적이다. SPLIT(오케스트레이터 권한 decompose)이 트리를 키우므로 M2 AC 충족에 서브질문 채택은 불필요.
+**이탈:** 원 설계 §6.3 메인 루프의 `_review_subquestions`를 M2에서 부분 구현(로깅)으로 축소.
+**영향:** M3에서 `subq_proposed` 이벤트를 소비해 채택 로직을 붙인다. 로깅이 이미 있으므로 관측 연속성 유지.
+
+---
+
+## D12. SPLIT decompose는 주입 가능 함수로 분리
+
+**결정:** `_do_split`의 자식 생성 decompose를 `self._split_decompose(text, verified_summaries, dead_ends)` 시임으로 분리한다(기본=`_default_split_decompose`, LLM 호출). FakeWorker 계약 테스트는 이 속성을 sync/async 스텁으로 오버라이드해 LLM 없이 SPLIT 경로를 검증한다. `_ensure_root`/`_do_split` 두 decompose 호출부는 `_maybe_await`로 감싸 sync/async 스텁을 모두 허용한다.
+**근거:** 원 설계 §10 "M2 AC 전부 FakeWorker로 재현". SPLIT은 LLM decompose를 호출하므로 주입점이 없으면 계약 테스트가 불가능. §6.3.1대로 decompose 입력에 verified 요약 + dead_ends를 포함한다.
+**이탈:** 없음(테스트 가능성 위한 구조적 분리 + §6.3.1 충실).
+**영향:** 프로덕션에서는 `_default_split_decompose`(LLM)가 쓰인다.
