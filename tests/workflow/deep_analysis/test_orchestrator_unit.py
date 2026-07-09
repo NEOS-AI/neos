@@ -22,6 +22,10 @@ class Question:
     depth: int
     status: str = "open"
     spent_tokens: int = 0
+    value_est: float = 1.0
+    confidence: float = 0.0
+    cap_tokens: int = 999_999
+    fail_streak: int = 0
 
 
 class FakeLedger:
@@ -50,7 +54,14 @@ class FakeLedger:
     ):
         question_id = f"{len(self.items) + 1:08x}"
         self.items.append(
-            Question(question_id, text, parent_id, depth)
+            Question(
+                question_id,
+                text,
+                parent_id,
+                depth,
+                value_est=value_est,
+                cap_tokens=cap_tokens,
+            )
         )
         return question_id
 
@@ -59,6 +70,12 @@ class FakeLedger:
 
     async def open_questions(self):
         return [item for item in self.items if item.status == "open"]
+
+    async def children(self, question_id):
+        return [item for item in self.items if item.parent_id == question_id]
+
+    async def gain_history(self, question_id, last_n=3):
+        return []
 
     async def total_spent(self):
         return sum(item.spent_tokens for item in self.items)

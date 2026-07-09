@@ -147,12 +147,9 @@ class Orchestrator:
 
             while True:
                 picks = await self.budgeter.select(self.ledger, k=1)
-                spent = await self.ledger.total_spent()
-                if self.budgeter.should_stop(
-                    spent,
-                    self.global_token_cap,
-                    picks,
-                ):
+                if await self.budgeter.should_stop(self.ledger):
+                    break
+                if not picks:
                     break
 
                 question, effort = picks[0]

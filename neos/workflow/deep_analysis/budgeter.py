@@ -66,18 +66,44 @@ class Budgeter:
             return Effort.DIG
         return Effort.SCOUT
 
-    async def select(self, ledger, k: int = 1):
-        questions = await ledger.open_questions()
-        return [
-            (question, Effort.SCOUT)
-            for question in questions[:k]
-        ]
+    async def select(self, ledger, k: int | None = None):
+        k = self.parallel_workers if k is None else k
+        self._round += 1
+        open_questions = await ledger.open_questions()
+        if not open_questions:
+            return []
 
-    def should_stop(
-        self,
-        spent: int,
-        cap: int,
-        picks: list,
-    ) -> bool:
-        return spent >= cap or not picks
+        # 첫 라운드: breadth pass (루트 직계 자식 전원 SCOUT, 30% 한도 내)
+        if self._round == 1:
+            spent = await ledger.total_spent()
+            if spent < self.breadth_pass_ratio * self.global_token_cap:
+                root = await ledger.root_question()
+                children = await ledger.children(root.id) if root else []
+                open_ids = {q.id for q in open_questions}
+                breadth = [q for q in children if q.id in open_ids]
+                if breadth:
+                    for q in breadth:
+                        self._last_selected[q.id] = self._round
+                    return [(q, Effort.SCOUT) for q in breadth]
+
+        scored = [(await self.score(ledger, q), q) for q in open_questions]
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        chosen = [q for _score, q in scored[:k]]
+        picks = []
+        for q in chosen:
+            self._last_selected[q.id] = self._round
+            picks.append((q, self.ladder(q)))
+        return picks
+
+    async def should_stop(self, ledger) -> bool:
+        spent = await ledger.total_spent()
+        if spent >= self.global_token_cap:
+            return True
+        open_questions = await ledger.open_questions()
+        if not open_questions:
+            return True
+        for q in open_questions:
+            if (await self.score(ledger, q)) >= self.score_floor:
+                return False
+        return True
 

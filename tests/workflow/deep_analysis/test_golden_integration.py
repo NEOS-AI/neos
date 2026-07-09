@@ -25,6 +25,10 @@ class MemoryQuestion:
     depth: int
     status: str = "open"
     spent_tokens: int = 0
+    value_est: float = 1.0
+    confidence: float = 0.0
+    cap_tokens: int = 999_999
+    fail_streak: int = 0
 
 
 class MemoryLedger:
@@ -68,6 +72,8 @@ class MemoryLedger:
             text,
             parent_id,
             depth,
+            value_est=value_est,
+            cap_tokens=cap_tokens,
         )
         return question_id
 
@@ -94,6 +100,9 @@ class MemoryLedger:
             question.spent_tokens
             for question in self.questions_by_id.values()
         )
+
+    async def gain_history(self, question_id, last_n=3):
+        return []
 
     async def _transition(self, question_id, status):
         self.questions_by_id[question_id].status = status
