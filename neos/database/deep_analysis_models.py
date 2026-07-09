@@ -45,11 +45,9 @@ class DARun(Base):
         ForeignKey("users.user_id", ondelete="SET NULL"),
         nullable=True,
     )
-    conversation_id = Column(
-        String(255),
-        ForeignKey("conversations.conversation_id", ondelete="SET NULL"),
-        nullable=True,
-    )
+    # conversations is managed by the legacy raw-SQL chat repository and is
+    # not present in Base.metadata. Migration 036 owns the database-level FK.
+    conversation_id = Column(String(255), nullable=True)
     assistant_message_id = Column(String(255), nullable=True)
     report_path = Column(Text, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
