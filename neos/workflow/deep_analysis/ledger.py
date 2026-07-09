@@ -189,6 +189,23 @@ class Ledger:
         )
         await self.db.flush()
 
+    async def commit_blobs(self, blobs: list[ProposedBlob]) -> None:
+        await self._lock()
+        for blob in blobs:
+            await self._store_blob(blob)
+
+    async def record_split(
+        self,
+        question_id: str,
+        child_ids: list[str],
+    ) -> None:
+        await self._transition(question_id, "split")
+        await self.log(
+            "split",
+            question_id,
+            {"children": child_ids},
+        )
+
     async def _upsert_claim(
         self,
         question_id: str,
