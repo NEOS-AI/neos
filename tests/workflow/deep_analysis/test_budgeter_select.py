@@ -3,6 +3,9 @@ from types import SimpleNamespace
 from neos.workflow.deep_analysis.budgeter import Budgeter
 from neos.workflow.deep_analysis.models import Effort
 
+pytestmark = pytest.mark.no_db
+
+
 def _q(qid, **kw):
     base = dict(id=qid, confidence=0.0, value_est=1.0, spent_tokens=0,
                 cap_tokens=2000, fail_streak=0, depth=1, status="open", parent_id="root")
