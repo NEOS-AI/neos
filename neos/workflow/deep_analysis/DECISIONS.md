@@ -1,0 +1,156 @@
+# DECISIONS — 심층 분석 하네스 (NEOS 이식)
+
+원 설계 [docs/DEEP_ANALYSIS_HARNESS_DESIGN.md](../../../docs/DEEP_ANALYSIS_HARNESS_DESIGN.md)와 충돌하거나
+그 문서가 명시적으로 위임한 판단을 기록한다. 원 설계 §655 지시("구현 중 이 문서와 충돌하는 판단이
+필요하면 §1의 5원칙으로 결정하고, 결정 내용을 코드 주석이 아니라 별도 DECISIONS.md에 기록") 및
+부록 A6의 "DECISIONS.md 1번 항목" 요구를 이행한다.
+
+각 결정은 **결정 / 근거 / 원 설계 대비 이탈 / 영향** 순으로 기술한다.
+
+---
+
+## D1. aging 상태는 인메모리 (원 설계 A6이 요구한 1번 항목)
+
+**결정:** 점수 함수 `aging(q)`의 "마지막 선택 라운드"는 DDL/스키마에 저장하지 않고 Budgeter의 인메모리
+상태(라운드 카운터 + `{qid: last_selected_round}` dict)로 구현.
+**근거:** 원 설계 A6. aging은 기아 방지용 소프트 신호라 크래시 리셋이 무해.
+**이탈:** 없음(원 설계가 명시 지시).
+**영향:** Budgeter는 상태를 가지므로 M2에서 인스턴스 수명을 run 단위로 관리. (M1은 Budgeter 스텁이라 무영향.)
+
+---
+
+## D2. SQLite → PostgreSQL 이식, 단일 작성자(P2)는 앱 레벨 + advisory lock
+
+**결정:** 원 설계의 "유일한 상태 저장소 SQLite(WAL, 파일 1개/run)"를 NEOS 공유 PostgreSQL로 이식.
+5개 테이블 + blobs를 `deep_analysis_` 접두어 + `run_id` 스코프의 async SQLAlchemy 모델로 구현.
+단일 작성자는 (a) 앱 레벨(Ledger만 DB 세션 보유, 워커는 순수 함수로 DB 미접근) + (b) `commit_pass`
+트랜잭션 진입 시 `SELECT pg_advisory_xact_lock(hashtextextended(run_id, 0))`로 이중 보장.
+**근거:** NEOS 네이티브 스택. Postgres는 WAL 파일 격리를 주지 않지만 advisory lock이 run별 단일
+작성자를 **DB 강제 불변식**으로 만들어, 인라인 asyncio → Celery 다중 프로세스 이전 시에도 관례가
+소리 없이 깨지지 않게 한다. 락 키는 `hashtext()`(int4 반환) 대신 `hashtextextended(run_id, 0)`
+(bigint 반환)을 쓴다 — int4는 32비트라 서로 다른 run_id가 같은 락 키로 해시되어 과잉 직렬화가
+발생할 수 있고, bigint 오버로드는 이 충돌을 공짜로 제거한다(정확성 문제는 아니나 무료 수정).
+**이탈:** 저장소 엔진 교체(§4 DDL의 `PRAGMA journal_mode=WAL` 등 SQLite 전용 구문 제외). 단일 작성자
+보장 수단이 파일시스템 격리 → 앱 규율 + advisory lock으로 변경.
+**영향:** 원 설계 §11.9("exactly-once용 추가 배관 금지 — hash upsert 멱등성으로 충분")는 유지. advisory
+lock은 exactly-once 배관이 아니라 동시 작성자 배제(P2 강제)이므로 §11.9 위반 아님.
+
+---
+
+## D3. claims UNIQUE는 `(run_id, hash)`로 스코프 (교차 오염 방지)
+
+**결정:** 원 설계의 전역 `claims.hash UNIQUE`를 `UNIQUE (run_id, hash)`로 좁힌다. run_id 필터 강제는
+체크리스트(사람 규율)가 아니라 **구조**로 만든다: `Ledger`는 생성자에서 `run_id`를 받고(`Ledger(session, run_id)`),
+모든 쿼리 메서드는 `run_id`를 **인자로 받지 않는다**. 인스턴스가 자기 run만 볼 수 있으므로 필터를
+잊는 것이 타입 수준에서 불가능하다. 이는 원 설계 P3("위험한 자유도는 스키마에서 제거")의 애플리케이션
+레이어 버전이며, 부수적으로 원 설계 §6.1의 run_id-free 메서드 시그니처(단일 실행 전제)와 더 정확히 일치한다.
+**근거:** 원 설계의 전역 hash UNIQUE는 **단일 실행 전제**였다(§6.1.3의 병렬 워커 교차 검증은 한 run 내부).
+run_id 멀티테넌시를 도입한 채 hash가 전역 유니크로 남으면, 서로 다른 run이 같은 사실을 발견할 때
+hash 충돌 → 증거 병합 + confidence 상향이 **run 경계를 넘어** 발생. 교차 검증 메커니즘이 교차 오염
+메커니즘으로 변질된다. run_id 포팅의 파생 효과 중 유일하게 "조용히 틀어지는" 지점.
+**이탈:** UNIQUE 제약 범위 확장(전역 → run 스코프).
+**영향:** §6.1.3의 upsert(evidence 병합 + `confidence = min(0.95, 기존+0.15)`)는 반드시 동일 run_id
+내에서만 발동. 다른 run의 동일 hash는 별개 클레임으로 공존. **동일 원칙을 blobs에도 적용(→ D4):
+모든 원장 데이터는 run 스코프.**
+
+---
+
+## D4. blobs — 파일시스템 → 테이블 (content-addressed)
+
+**결정:** 원 설계의 `blobs/{sha256[:16]}.txt` + `blobs/{hash}.meta.json` 사이드카를 단일 테이블
+`deep_analysis_blobs(run_id, content_hash, url, http_status, fetched_at, raw_text)`로 대체. `evidence.raw_ref`는
+blob의 content_hash를 담되 항상 자신의 run_id와 함께 조회. 3규칙: (a) **PK = `(run_id, content_hash)`**
+— content_hash = `sha256(raw_text)[:16]`, **run 스코프**(전역 아님). 같은 run 내에서 여러 워커가 같은
+페이지를 fetch하면 중복 저장 제거, run 간에는 별개 행으로 공존, (b) **핫 패스에서 이 테이블 JOIN 금지**
+— raw는 DeterministicGrader가 `(run_id, content_hash)`로 단건 조회할 때만 읽음(원 설계 §4 "excerpt만
+종합이 읽는 본문" 원칙을 테이블 세계에서 유지), (c) **보존 정책** — run 완료 + 보고서 검증 후 **해당
+run의** raw 삭제 가능(excerpt는 evidence에 남으므로 무손실).
+**근거:** nginx A-B 배포에서 파일시스템 blob 경로는 배포 간 정합성 문제를 만들지만 테이블은 없음.
+A2의 사이드카 메타(url/http_status/fetched_at)를 컬럼으로 접으면 더 깔끔.
+**PK를 전역 content_hash로 두면 안 되는 이유(초안 버그 수정):** 전역 PK는 두 run이 같은 페이지를
+fetch할 때 blob 행을 **공유**시킨다. 그 상태에서 (c)의 run별 보존 정책이 run A 완료 후 그 행을 지우면,
+같은 행을 참조하던 **진행 중인 run B의 `evidence.raw_ref`가 허공을 가리켜** run B의 대조가 전부 실패한다.
+테이블에 run_id가 있는데 PK가 전역이라는 것 자체가 소유권 모호의 신호다. 참조 카운팅으로 전역 공유를
+유지하는 대안은 §11.9가 금지한 종류의 배관을 자초하므로 채택하지 않는다. 대신 D3와 동일 방향으로 PK를
+run 스코프로 좁혀 "모든 원장 데이터는 run 스코프"라는 단일 원칙을 세운다(run 간 중복 저장은 감수 —
+절감 효과 미미).
+**이탈:** raw 저장 위치(파일 → 테이블), 사이드카 메타(파일 → 컬럼), PK 스코프(전역 content hash → `(run_id, content_hash)`).
+**영향:** A2의 핵심 불변식("커밋 경로에서 네트워크 I/O 금지, 채점기는 사이드카를 읽기만") 유지 —
+`http_status`를 컬럼에서 읽으므로 커밋 경로 HTTP 호출 없음.
+
+---
+
+## D5. 순수 LLM 콜러가 원 설계 llm.py를 대체 (LangChain 미사용)
+
+**결정:** NEOS 인프라(settings, cost_calculator, web_search)는 재사용하되, LLM 호출 경로는 LangChain
+`BaseLanguageModel`이 아닌 순수 `AsyncAnthropic`/`AsyncOpenAI` 콜러(`deep_analysis/llm.py`)로 구현.
+**근거:** 사용자 지시("reuse NEOS infra as possible, but want to use pure LLM caller rather than langchain").
+원 설계 §5의 "외부 프레임워크(LangChain 등) 사용 금지"와도 일치. 결정적으로 A5의 usage 기반 토큰
+집계는 raw API `usage` 필드를 요구하는데 LangChain은 이를 일관되게 노출하지 않음 — 예산 사다리 +
+gain_decay 전체가 이 숫자 위에 있으므로 순수 콜러가 기능적 필수.
+**이탈:** NEOS의 `LLMFactory`/`providers`(LangChain 래핑)를 LLM 콜에는 미사용. 모델 ID/API 키만 재사용.
+**영향:** A5 두 요건(방어적 JSON 파서 단일화 + usage 토큰 집계)은 `llm.py` 한 곳에 구현.
+
+---
+
+## D6. fetch.py 신설 (link_follower 재사용 대신)
+
+**결정:** 탐색(discovery)은 NEOS `web_search` 재사용, 검색(retrieval)은 신규 `fetch.py`.
+**근거:** NEOS `link_follower`는 링크 추출용이라 A2/A3가 요구하는 HTML→텍스트(NFC)→blob+메타를
+만족하지 못함. A3(대조 기준 텍스트 통일: 저장 원문 = 발췌 기준)를 지키려면 fetch 직후 변환을 1회
+수행하고 그 텍스트를 blob에 저장해야 함.
+**이탈:** 배관 소폭 중복(의도된 비용).
+**영향:** `normalize_for_hash()`와 `normalize_for_match()`를 A3대로 다른 함수로 분리 유지.
+
+---
+
+## D7. 실행 모델 — M1 인라인 SSE, Celery는 나중 (마이그레이션 리스크 2건 사전 기록)
+
+**결정:** M1 수직 슬라이스는 요청 태스크 내 인라인 asyncio 실행 + SSE 스트리밍(deep_research 패턴).
+긴 run의 Celery 이전은 상태가 events/ledger에 있으므로 나중에 non-breaking하게 가능.
+**근거:** dev 프로파일(작은 캡)에는 인라인이 맞고 기존 deep_research와 일관.
+**이탈:** 없음(원 설계는 실행 배포 모델 미규정).
+**영향 — "later"가 오면 깨질 핵심 리스크 2건 + 부수 1건(알려진 리스크):**
+1. **단일 작성자:** D2의 advisory lock으로 **선제 해결됨**.
+2. **A1 partial 시맨틱은 Celery로 이전되지 않음** — `asyncio.wait_for` 취소는 같은 프로세스 안이라
+   `flush_partial()`이 워커 인스턴스 버퍼에 닿지만, Celery 하드 타임아웃은 **프로세스를 죽여** 버퍼가
+   증발. 해법은 이전 시점에 결정(soft time limit 핸들러에서 flush, 또는 워커가 클레임을 스크래치
+   영역에 점진 체크포인트). **⚠ M2의 partial AC(타임아웃 워커 부분 클레임 커밋)는 Celery 환경에서
+   재검증 필요.**
+- **부수 리스크:** 인라인 SSE로 긴 run을 돌리면 nginx `proxy_read_timeout`에 걸릴 수 있음.
+   dev 프로파일 밖에서 실행하기 전 확인.
+
+---
+
+## D8. events append-only를 Postgres DB 강제 불변식으로 승격
+
+**결정:** 원 설계 §11.3("events 테이블 UPDATE/DELETE 금지")을 SQLite에서는 관례로만 유지했으나, 공유
+Postgres로 이식하면서 DB 강제로 승격한다. `deep_analysis_events`에 `BEFORE UPDATE OR DELETE` 트리거를
+걸어 `RAISE EXCEPTION`(예: `deep_analysis_events is append-only`)으로 거부한다. (대안: 애플리케이션 롤에
+대해 `REVOKE UPDATE, DELETE ON deep_analysis_events` — 롤 구성이 알려진 환경에서만. 이식성은 트리거가 우위.)
+**근거:** D2에서 advisory lock으로 P2를 DB 강제로 만든 것과 동일 논리. 관례에 의존하던 불변식을 저장소가
+강제하면 다중 프로세스(Celery) 이전 시에도 새지 않는다.
+**이탈:** 없음(원 설계 정신 강화). INSERT와 SELECT만 허용하는 것은 append-only 로그의 정의 그대로.
+**영향:** Alembic 마이그레이션에 트리거 생성 포함. 테스트에서 UPDATE/DELETE 시도가 예외를 던지는지 검증.
+
+---
+
+## D9. blob도 워커 제안으로 반환하고 Ledger가 저장
+
+**결정:** 워커에 `AsyncSession`을 주입하거나 워커 내부에서 `deep_analysis_blobs`를 쓰지 않는다.
+PostgreSQL 이식으로 파일 기반 `raw_ref`를 DB blob으로 바꾸면서 생긴 전달 공백은
+`ProposedBlob`과 `WorkerResult.blobs`를 공유 계약에 추가해 해소한다. 워커는 fetch 결과를
+content-addressed blob 제안으로 반환하고, 오케스트레이터가 채점 전에 Ledger를 통해 blob을
+커밋한다.
+
+**근거:** 원 설계 P1은 워커가 DB를 읽거나 쓰지 않는다고 명시하고, 승인 스펙 D2/§3.2는 워커가
+DB 세션을 절대 받지 않는다고 더 강하게 고정한다. 계획 초안의 “blob은 산출물이므로 워커가 DB에
+써도 된다”는 예외는 이 두 계약과 충돌하며, 향후 Celery 격리에서도 세션 수명과 단일 작성자
+보장을 흐린다. 제안 타입으로 반환하면 `(brief, effort) → WorkerResult` 계약과 P2를 모두 유지한다.
+
+**이탈:** 원 설계 §5의 `WorkerResult`에 `blobs: list[ProposedBlob]`를 추가한다. 이는 SQLite
+파일 경로였던 raw 산출물을 PostgreSQL 단일 작성자 경로로 운반하기 위한 이식 전용 확장이다.
+
+**영향:** blob INSERT와 evidence/claim 커밋은 모두 Ledger만 수행한다. DeterministicGrader는
+Ledger가 먼저 저장한 `(run_id, content_hash)` 행을 읽기만 하며 커밋 경로에서 네트워크 I/O를
+하지 않는다.
