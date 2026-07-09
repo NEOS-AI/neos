@@ -75,6 +75,14 @@ async def build_orchestrator(
         if profile == "dev"
         else config.global_token_cap
     )
+    parallel_workers = (
+        config.dev_profile.parallel_workers
+        if profile == "dev"
+        else config.parallel_workers
+    )
+    max_depth = (
+        config.dev_profile.max_depth if profile == "dev" else config.max_depth
+    )
     return Orchestrator(
         session,
         run_id,
@@ -86,5 +94,7 @@ async def build_orchestrator(
         llm_client=llm_client,
         cassette=cassette,
         global_token_cap=global_token_cap,
+        parallel_workers=parallel_workers,
+        max_depth=max_depth,
     )
 

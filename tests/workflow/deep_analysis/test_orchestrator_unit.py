@@ -188,8 +188,11 @@ async def test_orchestrator_rolls_back_failed_transaction_before_marking_run_fai
         async def fail_run(self):
             self.failed = True
 
-    class FailureWorker:
-        async def investigate(self, brief, effort, question_id):
+    class FailureGrader:
+        # A1: worker exceptions are absorbed into a "failed" result by
+        # _run_worker, so surface the mid-run error from the grader instead
+        # (still on run()'s critical, uncaught path).
+        async def grade(self, claim):
             raise RuntimeError("worker exploded")
 
     session = Session()
@@ -201,8 +204,8 @@ async def test_orchestrator_rolls_back_failed_transaction_before_marking_run_fai
     orchestrator = Orchestrator(
         session,
         "run00001",
-        worker_factory=FailureWorker,
-        grader=OrderingGrader(ledger),
+        worker_factory=FakeWorker,
+        grader=FailureGrader(),
         ledger=ledger,
         decompose_fn=no_decomposition,
         synthesizer=FakeSynthesizer(),
