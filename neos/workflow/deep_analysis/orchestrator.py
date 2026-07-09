@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 
 from neos.config.settings import settings
@@ -10,6 +11,7 @@ from .budgeter import Budgeter
 from .citation import CitationRenderer
 from .ledger import Ledger
 from .llm import call_json
+from .models import Assignment, Effort, WorkerResult
 from .prompt_loader import render
 from .synthesizer import Synthesizer
 
@@ -18,6 +20,10 @@ async def _maybe_await(value):
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+def _wall_clock_cap(effort: Effort) -> float:
+    return float(settings.config.deep_analysis.effort[effort.value].wall_clock_cap)
 
 
 class Orchestrator:
@@ -70,6 +76,28 @@ class Orchestrator:
     async def _checkpoint(self) -> None:
         if self.checkpoint is not None:
             await _maybe_await(self.checkpoint())
+
+    async def _run_worker(self, assignment: Assignment) -> WorkerResult:
+        worker = self.worker_factory()  # A1: fresh instance per assignment
+        try:
+            return await asyncio.wait_for(
+                worker.investigate(
+                    assignment.brief,
+                    assignment.effort,
+                    assignment.question_id,
+                ),
+                timeout=_wall_clock_cap(assignment.effort),
+            )
+        except asyncio.TimeoutError:
+            partial = worker.flush_partial(assignment.question_id)
+            partial.status = "partial"
+            return partial
+        except Exception as exc:  # noqa: BLE001 - A1: any other failure -> failed
+            return WorkerResult(
+                question_id=assignment.question_id,
+                status="failed",
+                fail_reason=str(exc),
+            )
 
     async def _decompose(self, root_text: str) -> list[dict]:
         config = settings.config.deep_analysis
