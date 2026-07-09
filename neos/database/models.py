@@ -750,3 +750,16 @@ class UIFrameSession(Base):
     expires_at      = Column(TIMESTAMP, nullable=False)
     submitted_at    = Column(TIMESTAMP, nullable=True, default=None)  # 중복 제출 방어용
     created_at      = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+
+
+# Keep the focused harness models visible through the legacy models module so
+# normal application startup registers every table on Base.metadata.
+from .deep_analysis_models import (  # noqa: E402,F401
+    DABlob,
+    DAClaim,
+    DAEvidence,
+    DAEvent,
+    DAFeedback,
+    DAQuestion,
+    DARun,
+)
