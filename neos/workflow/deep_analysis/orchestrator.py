@@ -222,6 +222,9 @@ class Orchestrator:
                 "run_id": self.run_id,
             }
         except Exception:
+            rollback = getattr(self.db, "rollback", None)
+            if rollback is not None:
+                await _maybe_await(rollback())
             await self.ledger.fail_run()
             await self._checkpoint()
             raise

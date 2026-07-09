@@ -152,3 +152,49 @@ async def test_orchestrator_stages_blobs_before_grading():
     assert ledger.items[0].status == "split"
     assert ledger.items[1].status == "resolved"
     assert ledger.completed
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_rolls_back_failed_transaction_before_marking_run_failed():
+    class Session:
+        def __init__(self):
+            self.rollbacks = 0
+
+        async def rollback(self):
+            self.rollbacks += 1
+
+    class FailureLedger(FakeLedger):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+
+        async def fail_run(self):
+            self.failed = True
+
+    class FailureWorker:
+        async def investigate(self, brief, effort, question_id):
+            raise RuntimeError("worker exploded")
+
+    session = Session()
+    ledger = FailureLedger()
+
+    async def no_decomposition(_root):
+        return []
+
+    orchestrator = Orchestrator(
+        session,
+        "run00001",
+        worker_factory=FailureWorker,
+        grader=OrderingGrader(ledger),
+        ledger=ledger,
+        decompose_fn=no_decomposition,
+        synthesizer=FakeSynthesizer(),
+        citation_renderer=FakeCitationRenderer(),
+        global_token_cap=100,
+    )
+
+    with pytest.raises(RuntimeError, match="worker exploded"):
+        await orchestrator.run("root")
+
+    assert session.rollbacks == 1
+    assert ledger.failed

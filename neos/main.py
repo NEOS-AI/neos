@@ -20,6 +20,7 @@ from neos.api.handlers.document_handlers import router as document_router
 from neos.api.handlers.multimodal_handlers import router as multimodal_router
 from neos.api.handlers.chat_handlers import router as chat_router
 from neos.api.handlers.deep_research_handlers import router as deep_research_router
+from neos.api.deep_analysis_routes import router as deep_analysis_router
 from neos.api.handlers.auth import router as auth_router
 from neos.api.handlers.skills_handlers import router as skills_router
 from neos.api.handlers.workflow_stream_handlers import router as workflow_stream_router
@@ -529,6 +530,7 @@ _include_router_for_runtime(document_router, prefix=f"{settings.API_V1_PREFIX}/d
 _include_router_for_runtime(multimodal_router, prefix=f"{settings.API_V1_PREFIX}/multimodal", tags=["Multimodal Processing"])
 _include_router_for_runtime(chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Chat & Conversations"])
 _include_router_for_runtime(deep_research_router, prefix=settings.API_V1_PREFIX, tags=["Deep Research"])
+_include_router_for_runtime(deep_analysis_router, prefix=settings.API_V1_PREFIX, tags=["Deep Analysis Harness"])
 _include_router_for_runtime(
     skills_router,
     prefix=f"{settings.API_V1_PREFIX}/skills",

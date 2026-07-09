@@ -154,3 +154,21 @@ DB 세션을 절대 받지 않는다고 더 강하게 고정한다. 계획 초�
 **영향:** blob INSERT와 evidence/claim 커밋은 모두 Ledger만 수행한다. DeterministicGrader는
 Ledger가 먼저 저장한 `(run_id, content_hash)` 행을 읽기만 하며 커밋 경로에서 네트워크 I/O를
 하지 않는다.
+
+---
+
+## D10. M1에서도 orphan 인용은 숨기지 않고 실패
+
+**결정:** `CitationRenderer`가 존재하지 않거나 verified가 아닌 `[C:id]`를 만나면
+`OrphanCitationError(code="E_ORPHAN_CITE")`를 발생시킨다. 계획 초안의 `[미검증]` 치환은
+채택하지 않는다.
+
+**근거:** 원 설계 §6.8은 orphan 인용을 명시적 실패 코드로 정의하고, M1 AC는 모든 인용이
+verified 클레임으로 해소되어야 한다고 요구한다. `[미검증]` 치환은 원시 마커만 제거해 AC를
+겉보기로 통과시키면서 실제 인용 무결성 실패를 보고서 안에 숨긴다.
+
+**이탈:** 구현 계획 Task 14의 M1 임시 완화(`[미검증]` 치환)에서 이탈하며, 정본인 원 설계로
+복귀한다.
+
+**영향:** orphan이 하나라도 있으면 보고서 완료 이벤트를 내보내지 않고 run이 failed로 전이한다.
+M4 ReportGrader가 추가되면 같은 오류 코드가 조립 재시도 처방으로 연결된다.

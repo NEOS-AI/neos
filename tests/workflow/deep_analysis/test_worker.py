@@ -69,6 +69,33 @@ class FakeLLM:
         return Response()
 
 
+class InventedSourceLLM(FakeLLM):
+    async def create(self, **kwargs):
+        self.prompts.append(kwargs["messages"][0]["content"])
+        response_text = (
+            '{"status":"completed","claims":[{"text":"Invented",'
+            '"confidence":5.0,"evidence":[{"source_url":'
+            '"https://invented.example","excerpt":"fabricated",'
+            '"raw_ref":"invented"}]}],"self_assessment":0.8,'
+            '"proposed_subquestions":[],"dead_ends":[]}'
+        )
+
+        class Usage:
+            input_tokens = 100
+            output_tokens = 50
+
+        class Block:
+            type = "text"
+            text = response_text
+
+        class Response:
+            content = [Block()]
+            usage = Usage()
+            model = kwargs["model"]
+
+        return Response()
+
+
 def test_worker_constructor_has_no_database_or_run_state():
     parameters = inspect.signature(Worker).parameters
 
@@ -121,3 +148,21 @@ async def test_flush_partial_returns_current_incremental_buffer():
     assert partial.claims == completed.claims
     assert partial.blobs == completed.blobs
     assert partial.tokens_spent == completed.tokens_spent
+
+
+@pytest.mark.asyncio
+async def test_worker_drops_unfetched_evidence_and_bounds_confidence():
+    worker = Worker(
+        FakeSearch(),
+        fetch_fn=FakeFetch(),
+        llm_client=InventedSourceLLM(),
+    )
+
+    result = await worker.investigate(
+        "Question\n{fetched_evidence}",
+        Effort.SCOUT,
+        "question",
+    )
+
+    assert result.claims[0].confidence == 1.0
+    assert result.claims[0].evidence == []

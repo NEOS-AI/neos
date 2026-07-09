@@ -53,3 +53,10 @@ def test_events_are_database_enforced_append_only():
     assert "deep_analysis_events_reject_mutation" in sql
     assert "BEFORE UPDATE OR DELETE ON deep_analysis_events" in sql
     assert "deep_analysis_events is append-only" in sql
+
+
+def test_migration_backfills_constraints_after_orm_create_all():
+    sql = MIGRATION.read_text(encoding="utf-8")
+
+    assert "ADD CONSTRAINT fk_da_runs_conversation" in sql
+    assert "REFERENCES conversations(conversation_id)" in sql

@@ -16,6 +16,24 @@ CREATE TABLE IF NOT EXISTS deep_analysis_runs (
     updated_at           TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
+-- Base.metadata.create_all() may have created the ORM table first. The legacy
+-- conversations table is not part of Base.metadata, so backfill its FK here.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'fk_da_runs_conversation'
+    ) THEN
+        ALTER TABLE deep_analysis_runs
+            ADD CONSTRAINT fk_da_runs_conversation
+            FOREIGN KEY (conversation_id)
+            REFERENCES conversations(conversation_id)
+            ON DELETE SET NULL;
+    END IF;
+END;
+$$;
+
 CREATE TABLE IF NOT EXISTS deep_analysis_questions (
     id           VARCHAR(8)  NOT NULL,
     run_id       VARCHAR(8)  NOT NULL REFERENCES deep_analysis_runs(id) ON DELETE CASCADE,

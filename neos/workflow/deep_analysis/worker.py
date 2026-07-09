@@ -127,19 +127,23 @@ class Worker:
             for raw_evidence in raw_claim.get("evidence", []):
                 source_url = str(raw_evidence.get("source_url", ""))
                 fetched = fetched_by_url.get(source_url)
+                if fetched is None:
+                    continue
                 evidence_items.append(
                     ProposedEvidence(
                         source_url=source_url,
                         excerpt=str(raw_evidence.get("excerpt", "")),
-                        raw_ref=(
-                            fetched.content_hash if fetched is not None else ""
-                        ),
+                        raw_ref=fetched.content_hash,
                     )
                 )
+            confidence = min(
+                1.0,
+                max(0.0, float(raw_claim.get("confidence", 0.0))),
+            )
             self._claims.append(
                 ProposedClaim(
                     text=str(raw_claim["text"]),
-                    confidence=float(raw_claim.get("confidence", 0.0)),
+                    confidence=confidence,
                     evidence=evidence_items,
                 )
             )
