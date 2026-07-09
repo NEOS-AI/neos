@@ -173,4 +173,7 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/034_add_b
 
 # Align API key metadata column with the current SQLAlchemy model
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/035_add_api_key_metadata_column.sql
+
+# Add deep analysis tables for advanced research workflows
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/036_add_deep_analysis_tables.sql
 ```
