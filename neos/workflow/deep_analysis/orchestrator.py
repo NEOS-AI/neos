@@ -8,10 +8,11 @@ import inspect
 from neos.config.settings import settings
 
 from .budgeter import Budgeter
-from .citation import CitationRenderer
+from .citation import CitationRenderer, OrphanCitationError
+from .conflict import resolve_conflicts
 from .ledger import Ledger
 from .llm import call_json
-from .models import Assignment, Effort, WorkerResult
+from .models import Assignment, Effort, NodeSummary, Verdict, WorkerResult
 from .prompt_loader import render
 from .synthesizer import Synthesizer
 
@@ -47,6 +48,7 @@ class Orchestrator:
         decompose_fn=None,
         synthesizer=None,
         citation_renderer=None,
+        report_grader=None,
         event_sink=None,
         checkpoint=None,
         llm_client=None,
@@ -71,6 +73,7 @@ class Orchestrator:
         self.citation_renderer = citation_renderer or CitationRenderer(
             self.ledger
         )
+        self.report_grader = report_grader
         self.event_sink = event_sink
         self.checkpoint = checkpoint
         self.llm_client = llm_client
@@ -95,6 +98,11 @@ class Orchestrator:
         # terminated (SPLIT if depth allows, else abandon) to break the
         # zero-token-partial and always-mismatch livelock classes.
         self._stall_counts: dict[str, int] = {}
+        # M4 §6.7: global conflict-reinvestigation counter (run scoped). At
+        # most `conflict_reinvestigation_cap` extra investigation rounds may be
+        # spent resolving equal-tier conflicts before the report is assembled
+        # with both-sides annotations only.
+        self._reinvestigation_count = 0
         self.budgeter = Budgeter(
             global_token_cap=self.global_token_cap,
             max_depth=self.max_depth,
@@ -400,6 +408,251 @@ class Orchestrator:
         # SPLIT if depth allows, else abandon (both handled by _do_split).
         await self._do_split(question)
 
+    async def _run_round(self) -> bool:
+        """Execute one SCOUT round: select → partition → split → workers →
+        commit. Returns ``False`` when there is nothing to select (caller must
+        stop), ``True`` otherwise. Factored out of ``run`` so ``_finalize``
+        can drive a single bounded conflict-reinvestigation round through the
+        exact same select/worker/commit path."""
+        picks = await self.budgeter.select(self.ledger)
+        if not picks:
+            return False
+        assignments, splits = await self._partition(picks)
+
+        for question in splits:
+            await self._do_split(question)
+        await self._checkpoint()
+
+        for assignment in assignments:
+            await self.ledger._transition(
+                assignment.question_id,
+                "investigating",
+            )
+        results = await asyncio.gather(
+            *[self._run_worker(a) for a in assignments]
+        )
+        # P2: 순차 커밋 (single-writer). gather는 순서를 보존하므로
+        # assignments[i] ↔ results[i]가 1:1 대응한다.
+        for assignment, result in zip(assignments, results):
+            question = await self.ledger.get_question(result.question_id)
+            # question_id 가드(M2 이월): 워커가 투입한 것과 다른
+            # question_id를 돌려주면(또는 존재하지 않는 질문이면) 커밋하지
+            # 않고, 실제 투입 질문을 investigating→open으로 복귀시켜
+            # 영구 investigating 잠김을 방지한다.
+            if (
+                question is None
+                or result.question_id != assignment.question_id
+            ):
+                await self._emit(
+                    "worker_result_mismatch",
+                    {
+                        "expected_qid": assignment.question_id,
+                        "got_qid": result.question_id,
+                    },
+                )
+                await self.ledger.log(
+                    "worker_result_mismatch",
+                    assignment.question_id,
+                    {"got_qid": result.question_id},
+                )
+                await self.ledger._transition(
+                    assignment.question_id,
+                    "open",
+                )
+                # D15: a mismatch-skipped assignment made no progress.
+                await self._register_progress(assignment.question_id, False)
+                continue
+            value_est = question.value_est
+            # D15 progress snapshot (before this pass mutates state).
+            spent_before = question.spent_tokens
+            verified_before = await self._verified_count(
+                assignment.question_id
+            )
+            feedback_before = await self._feedback_signal(
+                assignment.question_id
+            )
+            await self.ledger.commit_blobs(result.blobs)
+            verdicts = {}
+            for claim in result.claims:
+                verdicts[claim.text] = await self._grade(claim, value_est)
+            await self.ledger.commit_pass(
+                result.question_id,
+                result,
+                verdicts,
+            )
+            await self._regrade_pending(result.question_id, value_est)
+            # D15: assess progress and trip the stall valve if this
+            # question has made none for max_stall_rounds in a row.
+            made_progress = await self._made_progress(
+                assignment.question_id,
+                spent_before,
+                verified_before,
+                feedback_before,
+            )
+            await self._register_progress(
+                assignment.question_id, made_progress
+            )
+            for subq in result.proposed_subquestions:  # M3 연기: 로깅만
+                await self.ledger.log(
+                    "subq_proposed",
+                    result.question_id,
+                    {"text": subq},
+                )
+            await self._emit(
+                "pass_completed",
+                {
+                    "qid": result.question_id,
+                    "status": result.status,
+                    "claims": len(result.claims),
+                    "tokens": result.tokens_spent,
+                },
+            )
+        await self._checkpoint()
+        return True
+
+    async def _reduce_and_resolve(
+        self, root_id: str
+    ) -> tuple[dict[str, NodeSummary], list[str]]:
+        """Hierarchical reduce (AC-a) followed by per-node conflict resolution
+        (AC-b, §6.7). Returns the (possibly annotated) summaries plus the
+        deduplicated list of question ids whose high-value conflicts warrant
+        reinvestigation."""
+        config = settings.config.deep_analysis
+        summaries = await self.synthesizer.reduce_tree(root_id)
+        reinvestigate: list[str] = []
+        for qid, summary in list(summaries.items()):
+            resolved, needs = await resolve_conflicts(
+                self.ledger, summary, config.source_tiers
+            )
+            summaries[qid] = resolved
+            for candidate in needs:
+                if candidate not in reinvestigate:
+                    reinvestigate.append(candidate)
+        return summaries, reinvestigate
+
+    async def _child_summaries(
+        self, root_id: str, summaries: dict[str, NodeSummary]
+    ) -> list[NodeSummary]:
+        out: list[NodeSummary] = []
+        for child in await self.ledger.children(root_id):
+            if getattr(child, "status", None) == "abandoned":
+                continue
+            summary = summaries.get(child.id)
+            if summary is not None:
+                out.append(summary)
+        return out
+
+    async def _collect_caveats(
+        self, summaries: dict[str, NodeSummary]
+    ) -> list[str]:
+        """Caveats surfaced in the final report (§6.8): unverified claims /
+        dead ends per reduced node, abandoned questions, plus each node
+        summary's own caveats (which include tier-difference footnotes from
+        conflict resolution). Ledger accessors are read defensively so minimal
+        test doubles don't need to implement them."""
+        caveats: list[str] = []
+        unverified_fn = getattr(self.ledger, "unverified_and_deadends", None)
+        if unverified_fn is not None:
+            for qid in summaries:
+                for entry in await unverified_fn(qid):
+                    caveats.append(f"미확인: {entry}")
+        questions_fn = getattr(self.ledger, "questions", None)
+        if questions_fn is not None:
+            for question in await questions_fn():
+                if getattr(question, "status", None) == "abandoned":
+                    caveats.append(f"미조사: {question.text}")
+        for summary in summaries.values():
+            caveats.extend(summary.caveats)
+        return caveats
+
+    async def _finalize(self, root_id: str) -> str:
+        """Reduce the tree, resolve conflicts (with at most one bounded
+        reinvestigation round), then assemble → render → grade the report with
+        a bounded retry loop. Never exits empty-handed (§6.8): on cap
+        exhaustion a failure appendix is attached to the last draft."""
+        config = settings.config.deep_analysis
+        summaries, reinvestigate = await self._reduce_and_resolve(root_id)
+        await self._emit("synth_pass", {"qid": root_id})
+
+        reinvest_cap = config.conflict_reinvestigation_cap
+        if reinvestigate and self._reinvestigation_count < reinvest_cap:
+            self._reinvestigation_count += 1
+            target = reinvestigate[0]
+            await self.ledger.log(
+                "conflict_reinvestigation",
+                target,
+                {"qids": reinvestigate},
+            )
+            try:
+                await self.ledger._transition(target, "open")
+            except Exception:  # noqa: BLE001
+                # Reopening a terminal (resolved/split/abandoned) question is
+                # illegal; the extra round still runs for any other open work,
+                # then both-sides annotations stand.
+                pass
+            await self._run_round()
+            summaries, reinvestigate = await self._reduce_and_resolve(root_id)
+
+        root_summary = summaries.get(root_id)
+        if root_summary is None:
+            root_summary = NodeSummary(
+                question_id=root_id,
+                answer="",
+                key_claim_ids=[],
+                confidence=0.0,
+                caveats=[],
+            )
+        child_summaries = await self._child_summaries(root_id, summaries)
+        caveats = await self._collect_caveats(summaries)
+        await self._checkpoint()
+
+        cap = config.report_retry_cap
+        last: str | None = None
+        for attempt in range(cap + 1):
+            draft = await self.synthesizer.assemble(
+                root_summary, child_summaries, caveats
+            )
+            last = draft
+            try:
+                report = await self.citation_renderer.render(draft)
+            except OrphanCitationError:
+                await self.ledger.log(
+                    "report_graded",
+                    root_id,
+                    {
+                        "ok": False,
+                        "code": OrphanCitationError.code,
+                        "attempt": attempt,
+                    },
+                )
+                continue  # AC-c: orphan citation → re-assemble
+            verdict = (
+                await self.report_grader.grade(report, root_id)
+                if self.report_grader is not None
+                else Verdict(ok=True)
+            )
+            if verdict.ok:
+                await self.ledger.log(
+                    "report_graded",
+                    root_id,
+                    {"ok": True, "attempt": attempt},
+                )
+                await self.ledger.complete_run()
+                return report
+            await self.ledger.log(
+                "report_graded",
+                root_id,
+                {"ok": False, "code": verdict.code, "attempt": attempt},
+            )
+
+        # Cap exhausted — no empty-handed exit (§6.8): attach a failure
+        # appendix to the last draft (best-effort raw text).
+        report = (last or "") + (
+            "\n\n## 부록: 미해결 사유\n조립/채점 재시도 캡 소진."
+        )
+        await self.ledger.complete_run()
+        return report
+
     async def run(self, root_text: str) -> dict[str, str]:
         try:
             recovered = await self.ledger.recover()
@@ -410,120 +663,10 @@ class Orchestrator:
             root_id = await self._ensure_root(root_text)
 
             while not await self.budgeter.should_stop(self.ledger):
-                picks = await self.budgeter.select(self.ledger)
-                if not picks:
+                if not await self._run_round():
                     break
-                assignments, splits = await self._partition(picks)
 
-                for question in splits:
-                    await self._do_split(question)
-                await self._checkpoint()
-
-                for assignment in assignments:
-                    await self.ledger._transition(
-                        assignment.question_id,
-                        "investigating",
-                    )
-                results = await asyncio.gather(
-                    *[self._run_worker(a) for a in assignments]
-                )
-                # P2: 순차 커밋 (single-writer). gather는 순서를 보존하므로
-                # assignments[i] ↔ results[i]가 1:1 대응한다.
-                for assignment, result in zip(assignments, results):
-                    question = await self.ledger.get_question(
-                        result.question_id
-                    )
-                    # question_id 가드(M2 이월): 워커가 투입한 것과 다른
-                    # question_id를 돌려주면(또는 존재하지 않는 질문이면) 커밋하지
-                    # 않고, 실제 투입 질문을 investigating→open으로 복귀시켜
-                    # 영구 investigating 잠김을 방지한다.
-                    if (
-                        question is None
-                        or result.question_id != assignment.question_id
-                    ):
-                        await self._emit(
-                            "worker_result_mismatch",
-                            {
-                                "expected_qid": assignment.question_id,
-                                "got_qid": result.question_id,
-                            },
-                        )
-                        await self.ledger.log(
-                            "worker_result_mismatch",
-                            assignment.question_id,
-                            {"got_qid": result.question_id},
-                        )
-                        await self.ledger._transition(
-                            assignment.question_id,
-                            "open",
-                        )
-                        # D15: a mismatch-skipped assignment made no progress.
-                        await self._register_progress(
-                            assignment.question_id, False
-                        )
-                        continue
-                    value_est = question.value_est
-                    # D15 progress snapshot (before this pass mutates state).
-                    spent_before = question.spent_tokens
-                    verified_before = await self._verified_count(
-                        assignment.question_id
-                    )
-                    feedback_before = await self._feedback_signal(
-                        assignment.question_id
-                    )
-                    await self.ledger.commit_blobs(result.blobs)
-                    verdicts = {}
-                    for claim in result.claims:
-                        verdicts[claim.text] = await self._grade(
-                            claim, value_est
-                        )
-                    await self.ledger.commit_pass(
-                        result.question_id,
-                        result,
-                        verdicts,
-                    )
-                    await self._regrade_pending(
-                        result.question_id, value_est
-                    )
-                    # D15: assess progress and trip the stall valve if this
-                    # question has made none for max_stall_rounds in a row.
-                    made_progress = await self._made_progress(
-                        assignment.question_id,
-                        spent_before,
-                        verified_before,
-                        feedback_before,
-                    )
-                    await self._register_progress(
-                        assignment.question_id, made_progress
-                    )
-                    for subq in result.proposed_subquestions:  # M3 연기: 로깅만
-                        await self.ledger.log(
-                            "subq_proposed",
-                            result.question_id,
-                            {"text": subq},
-                        )
-                    await self._emit(
-                        "pass_completed",
-                        {
-                            "qid": result.question_id,
-                            "status": result.status,
-                            "claims": len(result.claims),
-                            "tokens": result.tokens_spent,
-                        },
-                    )
-                await self._checkpoint()
-
-            draft = await self.synthesizer.reduce(root_id)
-            await self._emit("synth_pass", {"qid": root_id})
-            await self._checkpoint()
-
-            report = await self.citation_renderer.render(draft)
-            await self.ledger.log(
-                "report_graded",
-                root_id,
-                {"ok": True},
-            )
-            await self.ledger.complete_run()
+            report = await self._finalize(root_id)
             await self._checkpoint()
             await self._emit(
                 "completed",

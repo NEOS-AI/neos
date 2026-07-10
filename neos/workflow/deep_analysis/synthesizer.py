@@ -89,6 +89,59 @@ class Synthesizer:
         )
         return response.text
 
+    async def assemble(
+        self,
+        root_summary: NodeSummary | None,
+        child_summaries: list[NodeSummary],
+        caveats: list[str],
+    ) -> str:
+        """Final compose (§6.8) over the root ``NodeSummary`` + direct-child
+        ``NodeSummary`` answers + collected caveats.
+
+        This is the M4 assembly seam driven by the orchestrator's
+        ``_finalize`` retry loop. ``reduce`` (single-layer, M1) is kept intact
+        as a backward-compatible path for callers/tests that still summarize
+        straight from the ledger; ``assemble`` instead composes from
+        already-reduced hierarchical ``NodeSummary`` objects.
+        """
+        root_answer = root_summary.answer if root_summary is not None else ""
+        child_blocks = [
+            f"- [{child.question_id}] {child.answer}"
+            for child in child_summaries
+        ]
+        has_content = bool(root_answer.strip()) or bool(child_blocks)
+        if caveats:
+            caveats_text = "\n".join(caveats)
+        elif has_content:
+            caveats_text = "(없음)"
+        else:
+            caveats_text = "검증된 클레임을 확보하지 못함"
+        prompt = render(
+            "final_compose",
+            root_summary=root_answer or "(요약 없음)",
+            child_summaries="\n".join(child_blocks) or "(검증된 발견 없음)",
+            caveats=caveats_text,
+        )
+        config = settings.config.deep_analysis
+        response = await self.llm_call(
+            config.models.synth,
+            prompt,
+            max_tokens=config.synthesis_max_tokens,
+            client=self.llm_client,
+            cassette=self.cassette,
+        )
+        qid = root_summary.question_id if root_summary is not None else ""
+        await self.ledger.log(
+            "synth_pass",
+            qid,
+            {
+                "input_tokens": response.input_tokens,
+                "output_tokens": response.output_tokens,
+                "child_count": len(child_summaries),
+            },
+        )
+        return response.text
+
     async def reduce_node(
         self, question, child_summaries: list[NodeSummary]
     ) -> NodeSummary:

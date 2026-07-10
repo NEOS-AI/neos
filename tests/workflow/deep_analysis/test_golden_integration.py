@@ -198,6 +198,15 @@ class ScriptedAnthropic:
             '"https://example.com/source","excerpt":"MoE routing lowers '
             'inference cost","raw_ref":"ignored"}]}],"self_assessment":0.8,'
             '"proposed_subquestions":[],"dead_ends":[]}',
+            # M4 hierarchical reduce: reduce_node(child) then reduce_node(root)
+            # each return a NodeSummary JSON object (json_call).
+            '{"question_id":"child","answer":"MoE routing lowers inference '
+            'cost [C:c1a1c1a1]","key_claim_ids":["c1a1c1a1"],'
+            '"confidence":0.7,"caveats":[],"conflicts":[]}',
+            '{"question_id":"root","answer":"MoE routing lowers inference '
+            'cost [C:c1a1c1a1]","key_claim_ids":["c1a1c1a1"],'
+            '"confidence":0.7,"caveats":[],"conflicts":[]}',
+            # assemble → final_compose (llm_call) returns the markdown report.
             "## 요약\nMoE routing lowers inference cost [C:c1a1c1a1]\n\n"
             "## 본문\nMoE routing lowers inference cost [C:c1a1c1a1]\n\n"
             "## 한계와 미확인 사항\n단일 출처\n\n## 출처",

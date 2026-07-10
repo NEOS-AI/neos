@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import pytest
 
 from neos.workflow.deep_analysis.models import (
+    NodeSummary,
     ProposedBlob,
     ProposedClaim,
     WorkerResult,
@@ -152,11 +153,19 @@ class OrderingGrader:
 
 
 class FakeSynthesizer:
+    _REPORT = (
+        "## 요약\n요약\n\n## 본문\n본문\n\n"
+        "## 한계와 미확인 사항\n없음\n\n## 출처"
+    )
+
     async def reduce(self, root_id):
-        return (
-            "## 요약\n요약\n\n## 본문\n본문\n\n"
-            "## 한계와 미확인 사항\n없음\n\n## 출처"
-        )
+        return self._REPORT
+
+    async def reduce_tree(self, root_id):
+        return {root_id: NodeSummary(root_id, "요약", [], 1.0, [])}
+
+    async def assemble(self, root_summary, child_summaries, caveats):
+        return self._REPORT
 
 
 class FakeCitationRenderer:

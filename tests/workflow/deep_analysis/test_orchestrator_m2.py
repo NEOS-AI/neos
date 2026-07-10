@@ -1,7 +1,7 @@
 import asyncio, pytest
 import neos.database.models  # noqa: F401 - register Base metadata
 from neos.workflow.deep_analysis.orchestrator import Orchestrator
-from neos.workflow.deep_analysis.models import WorkerResult, ProposedClaim, ProposedEvidence, ProposedBlob, Verdict
+from neos.workflow.deep_analysis.models import WorkerResult, ProposedClaim, ProposedEvidence, ProposedBlob, Verdict, NodeSummary
 from neos.workflow.deep_analysis.ledger import Ledger, create_run
 from neos.database.connection import db_manager
 from sqlalchemy import text as sql
@@ -9,11 +9,21 @@ from sqlalchemy import text as sql
 class OkGrader:
     async def grade(self, claim): return Verdict(ok=True)
 
+_STUB_REPORT = "## 요약\nstub\n\n## 본문\nstub\n\n## 한계와 미확인 사항\n없음\n\n## 출처"
+
+
 class FakeSynthesizer:
-    """Network-free stand-in for Synthesizer.reduce (M2 AC tests only exercise
-    the SCOUT loop, not real LLM synthesis)."""
+    """Network-free stand-in for the M4 finalize seam (reduce_tree/assemble)
+    plus the backward-compat reduce. M2 AC tests only exercise the SCOUT loop,
+    not real LLM synthesis."""
     async def reduce(self, root_id):
-        return "## 요약\nstub\n\n## 본문\nstub\n\n## 한계와 미확인 사항\n없음\n\n## 출처"
+        return _STUB_REPORT
+
+    async def reduce_tree(self, root_id):
+        return {root_id: NodeSummary(root_id, "stub", [], 1.0, [])}
+
+    async def assemble(self, root_summary, child_summaries, caveats):
+        return _STUB_REPORT
 
 def _ok_result(qid, text="a fact"):
     blob = ProposedBlob(content_hash="hh", source_url="http://x", http_status=200, raw_text="body")

@@ -66,6 +66,27 @@ class FakeComposer:
         )
 
 
+class FakeNodeSummary:
+    """Network-free reduce_node json_call: echoes the verified-claim marker
+    from the node_summary prompt into the NodeSummary.answer so the assembled
+    draft carries a resolvable citation."""
+
+    async def __call__(self, model, prompt, **kwargs):
+        match = re.search(r"\[C:([0-9a-f]{8})\]", prompt)
+        marker = match.group(0) if match else ""
+        claim_ids = [match.group(1)] if match else []
+        return (
+            {
+                "answer": f"A verified fact {marker}".strip(),
+                "key_claim_ids": claim_ids,
+                "confidence": 0.8,
+                "caveats": [],
+                "conflicts": [],
+            },
+            LLMResponse(text="", input_tokens=1, output_tokens=1, model=model),
+        )
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_commits_verified_claims_and_resolves_citations():
     async with await db_manager.get_session() as session:
@@ -87,7 +108,11 @@ async def test_orchestrator_commits_verified_claims_and_resolves_citations():
             worker_factory=FakeWorker,
             grader=grader,
             decompose_fn=decompose,
-            synthesizer=Synthesizer(ledger, llm_call=FakeComposer()),
+            synthesizer=Synthesizer(
+                ledger,
+                llm_call=FakeComposer(),
+                json_call=FakeNodeSummary(),
+            ),
             citation_renderer=CitationRenderer(ledger),
             event_sink=lambda kind, payload: events.append((kind, payload)),
             global_token_cap=1000,

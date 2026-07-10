@@ -17,6 +17,7 @@ from neos.database.connection import db_manager
 from neos.workflow.deep_analysis.ledger import Ledger, create_run
 from neos.workflow.deep_analysis.llm import LLMResponse
 from neos.workflow.deep_analysis.models import (
+    NodeSummary,
     ProposedBlob,
     ProposedClaim,
     ProposedEvidence,
@@ -53,15 +54,25 @@ class ScriptedAgentic:
         return self._verdicts[idx]
 
 
+_STUB_REPORT = (
+    "## 요약\nstub\n\n## 본문\nstub\n\n"
+    "## 한계와 미확인 사항\n없음\n\n## 출처"
+)
+
+
 class FakeSynth:
-    """Network-free stand-in for Synthesizer.reduce (returns a citation-free
-    report so CitationRenderer is a no-op)."""
+    """Network-free stand-in for the finalize seam (reduce_tree/assemble) plus
+    backward-compat reduce; returns a citation-free report so CitationRenderer
+    is a no-op."""
 
     async def reduce(self, root_id):
-        return (
-            "## 요약\nstub\n\n## 본문\nstub\n\n"
-            "## 한계와 미확인 사항\n없음\n\n## 출처"
-        )
+        return _STUB_REPORT
+
+    async def reduce_tree(self, root_id):
+        return {root_id: NodeSummary(root_id, "stub", [], 1.0, [])}
+
+    async def assemble(self, root_summary, child_summaries, caveats):
+        return _STUB_REPORT
 
 
 class CapturingLLMCall:
@@ -251,7 +262,26 @@ async def test_ac_c_retry_cap_unverified_appears_in_limits():
         run_id = await create_run(s, "root?", "dev")
         ledger = Ledger(s, run_id)
         capture = CapturingLLMCall()
-        synth = Synthesizer(ledger, llm_call=capture)
+
+        async def fake_node_summary(model, prompt, **kwargs):
+            # reduce_node → json_call: return an empty (citation-free)
+            # NodeSummary so reduce_tree never touches the network. The
+            # unverified caveat is collected by the orchestrator from the
+            # ledger, independent of this node answer.
+            return (
+                {
+                    "answer": "",
+                    "key_claim_ids": [],
+                    "confidence": 0.0,
+                    "caveats": [],
+                    "conflicts": [],
+                },
+                LLMResponse(text="", input_tokens=1, output_tokens=1,
+                            model=model),
+            )
+
+        synth = Synthesizer(ledger, llm_call=capture,
+                            json_call=fake_node_summary)
         orch = Orchestrator(
             s, run_id, lambda: AlwaysRejectedWorker(), OkDet(),
             agentic_grader=agentic, ledger=ledger, synthesizer=synth,

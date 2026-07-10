@@ -1,13 +1,22 @@
 import pytest
 import neos.database.models  # noqa: F401 - register Base metadata
 from neos.workflow.deep_analysis.orchestrator import Orchestrator
-from neos.workflow.deep_analysis.models import WorkerResult, ProposedClaim, ProposedEvidence, ProposedBlob, Verdict
+from neos.workflow.deep_analysis.models import WorkerResult, ProposedClaim, ProposedEvidence, ProposedBlob, Verdict, NodeSummary
 from neos.workflow.deep_analysis.ledger import create_run
 from neos.database.connection import db_manager
 from sqlalchemy import text as sql
 
 class OkGrader:
     async def grade(self, claim): return Verdict(ok=True)
+
+class FakeSynthesizer:
+    """Network-free finalize seam; this test only exercises the SPLIT ladder."""
+    _REPORT = "## 요약\nstub\n\n## 본문\nstub\n\n## 한계와 미확인 사항\n없음\n\n## 출처"
+    async def reduce(self, root_id): return self._REPORT
+    async def reduce_tree(self, root_id):
+        return {root_id: NodeSummary(root_id, "stub", [], 1.0, [])}
+    async def assemble(self, root_summary, child_summaries, caveats):
+        return self._REPORT
 
 @pytest.mark.asyncio
 async def test_ac_b_cap_exhausted_question_splits():
@@ -34,7 +43,8 @@ async def test_ac_b_cap_exhausted_question_splits():
         orch = Orchestrator(s, run_id, lambda: Spender(), OkGrader(),
                             decompose_fn=lambda t: [{"text":"s1","value_est":0.9},
                                                      {"text":"s2","value_est":0.9}],
-                            global_token_cap=200001, max_depth=3)
+                            global_token_cap=200001, max_depth=3,
+                            synthesizer=FakeSynthesizer())
         orch._split_decompose = (lambda text, *a: [{"text":"child","value_est":0.4}])
         await orch.run("root?")
         # 자식(depth1)이 cap 소진 후 SPLIT되어 손자(depth2) 생성

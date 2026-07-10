@@ -8,6 +8,7 @@ import neos.database.models  # noqa: F401 - register Base metadata
 from neos.database.connection import db_manager
 from neos.workflow.deep_analysis.ledger import Ledger, create_run
 from neos.workflow.deep_analysis.models import (
+    NodeSummary,
     ProposedBlob,
     ProposedClaim,
     ProposedEvidence,
@@ -15,6 +16,25 @@ from neos.workflow.deep_analysis.models import (
     WorkerResult,
 )
 from neos.workflow.deep_analysis.orchestrator import Orchestrator
+
+
+class FakeSynth:
+    """Network-free finalize seam; the M3 grading tests don't assert on the
+    report body, so a fixed citation-free stub is enough."""
+
+    _REPORT = (
+        "## 요약\nstub\n\n## 본문\nstub\n\n"
+        "## 한계와 미확인 사항\n없음\n\n## 출처"
+    )
+
+    async def reduce(self, root_id):
+        return self._REPORT
+
+    async def reduce_tree(self, root_id):
+        return {root_id: NodeSummary(root_id, "stub", [], 1.0, [])}
+
+    async def assemble(self, root_summary, child_summaries, caveats):
+        return self._REPORT
 
 
 # --- fakes ---------------------------------------------------------------
@@ -100,6 +120,7 @@ async def _build(session, run_id, worker_factory, det, agentic):
         grader=det,
         agentic_grader=agentic,
         decompose_fn=_decompose_one,
+        synthesizer=FakeSynth(),
         global_token_cap=5000,
     )
 

@@ -6,6 +6,7 @@ from neos.config.settings import settings
 
 from .graders.agentic import AgenticGrader
 from .graders.deterministic import DeterministicGrader
+from .graders.report import ReportGrader
 from .ledger import Ledger
 from .orchestrator import Orchestrator
 from .worker import Worker
@@ -67,6 +68,12 @@ async def build_orchestrator(
         llm_client=llm_client,
         cassette=cassette,
     )
+    report_grader = ReportGrader(
+        ledger,
+        judge_model=config.models.judge,
+        llm_client=llm_client,
+        cassette=cassette,
+    )
 
     def worker_factory():
         options = {
@@ -97,6 +104,7 @@ async def build_orchestrator(
         worker_factory,
         grader,
         agentic_grader=agentic_grader,
+        report_grader=report_grader,
         ledger=ledger,
         event_sink=event_sink,
         checkpoint=checkpoint,
