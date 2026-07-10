@@ -353,6 +353,10 @@ class MultiAgentWorkflow:
         if settings.HYPER_DEEP_AGENT_ENABLED:
             workflow.add_node(WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value, self._hyper_deep_orchestrator_node)
 
+        # Sub-project A: Deep Analysis Orchestrator 노드 (피처 플래그로 격리)
+        if settings.DEEP_ANALYSIS_ENABLED:
+            workflow.add_node(WorkflowNode.DEEP_ANALYSIS_ORCHESTRATOR.value, self._deep_analysis_orchestrator_node)
+
         # Phase 2 (OpenClaw Execution Approval): 민감 스킬 사용자 승인 노드
         # interrupt_before=[EXECUTION_APPROVAL]로 중단 → resume 후 이 노드 실행
         if settings.EXECUTION_APPROVAL_ENABLED:
@@ -399,6 +403,7 @@ class MultiAgentWorkflow:
         # 조건부 분기: 도구/에이전트가 필요 없으면 orchestrator 건너뛰고 바로 응답 생성
         # ROMA / HyperDeep / Approval / A2UI 활성화 시 확장 경로 추가
         if (settings.RECURSIVE_AGENT_ENABLED or settings.HYPER_DEEP_AGENT_ENABLED
+                or settings.DEEP_ANALYSIS_ENABLED
                 or settings.EXECUTION_APPROVAL_ENABLED or settings.A2UI_ENABLED):
             _routing_map = {
                 WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
@@ -409,6 +414,8 @@ class MultiAgentWorkflow:
                 _routing_map["recursive"] = WorkflowNode.RECURSIVE_ORCHESTRATOR.value
             if settings.HYPER_DEEP_AGENT_ENABLED:
                 _routing_map["hyper_deep"] = WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value
+            if settings.DEEP_ANALYSIS_ENABLED:
+                _routing_map["deep_analysis"] = WorkflowNode.DEEP_ANALYSIS_ORCHESTRATOR.value
             # Phase 2: 승인 대기 경로 (최우선 — _should_use_recursive_agent에서 먼저 체크)
             if settings.EXECUTION_APPROVAL_ENABLED:
                 _routing_map["needs_approval"] = WorkflowNode.EXECUTION_APPROVAL.value
@@ -429,6 +436,9 @@ class MultiAgentWorkflow:
             if settings.HYPER_DEEP_AGENT_ENABLED:
                 # HYPER_DEEP_ORCHESTRATOR → RESULT_INTEGRATOR (결과 통합 후 정상 파이프라인 합류)
                 workflow.add_edge(WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
+            if settings.DEEP_ANALYSIS_ENABLED:
+                # DEEP_ANALYSIS_ORCHESTRATOR → RESULT_INTEGRATOR (결과 통합 후 정상 파이프라인 합류)
+                workflow.add_edge(WorkflowNode.DEEP_ANALYSIS_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
             # Phase 8: UI_FRAME_GENERATOR 노드 등록 + END 단락 경로
             if settings.A2UI_ENABLED:
                 workflow.add_node(WorkflowNode.UI_FRAME_GENERATOR.value, self._ui_frame_generator_node)
@@ -1036,6 +1046,46 @@ class MultiAgentWorkflow:
             f"{state.get('original_query', '')[:60]}"
         )
         return await self.hyper_deep_orchestrator.execute(state)
+
+    async def _deep_analysis_orchestrator_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Sub-project A: 심층 분석 하네스 오케스트레이터 노드.
+
+        DEEP_ANALYSIS_ENABLED 플래그로 격리. 하네스를 실행하고 리포트를
+        chat state(final_response/deep_analysis_run_id)로 매핑한다.
+        """
+        from neos.workflow.deep_analysis.service import build_orchestrator
+        from neos.workflow.deep_analysis.ledger import create_run
+        from neos.database.connection import db_manager
+
+        query = state.get("refined_query") or state.get("original_query", "")
+        profile = "default"
+        try:
+            async with await db_manager.get_session() as session:
+                run_id = await create_run(session, query, profile)
+                await session.commit()
+
+                def sink(kind, payload):  # 노드 레벨 진행(현재는 no-op)
+                    pass
+
+                orch = await build_orchestrator(
+                    session, run_id, profile=profile, event_sink=sink
+                )
+                result = await orch.run(query)
+                await session.commit()
+            return {
+                "final_response": result["report_markdown"],
+                "deep_analysis_run_id": result["run_id"],
+                "execution_steps": state.get("execution_steps", [])
+                + [
+                    {
+                        "step": "deep_analysis_orchestrator",
+                        "result": f"run {result['run_id']}",
+                    }
+                ],
+            }
+        except Exception as exc:
+            logger.error(f"[DeepAnalysisOrchestratorNode] failed: {exc}")
+            return {"final_response": "심층 분석 하네스 실행에 실패했습니다."}
 
     def _should_use_recursive_agent(self, state: AgentState) -> str:
         """ROMA / HyperDeep: 재귀 에이전트 사용 여부 판단 라우팅 함수.
