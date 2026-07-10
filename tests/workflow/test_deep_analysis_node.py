@@ -62,3 +62,36 @@ async def test_deep_analysis_node_graceful_on_failure(monkeypatch):
     g = graph_mod.multi_agent_workflow
     out = await g._deep_analysis_orchestrator_node({"original_query": "x"})
     assert out["final_response"] == "심층 분석 하네스 실행에 실패했습니다."
+
+
+@pytest.mark.asyncio
+async def test_no_regression_deep_analysis_off_by_default_node_not_registered(monkeypatch):
+    """D18 무회귀 계약: DEEP_ANALYSIS_ENABLED가 기본값(False)일 때 그래프 빌드가
+    deep_analysis_orchestrator 노드를 아예 등록하지 않는다(recursive/hyper_deep과 동일한
+    조건부 등록 패턴을 그대로 따름 — neos/workflow/graph.py의 `if settings.DEEP_ANALYSIS_ENABLED:` 가드)."""
+    from neos.workflow import graph as graph_mod
+    from neos.workflow.enums import WorkflowNode
+
+    class RecordingGraph:
+        def __init__(self, state_type):
+            self.nodes = []
+
+        def add_node(self, name, handler):
+            self.nodes.append(name)
+
+        def add_edge(self, *a, **kw):
+            pass
+
+        def add_conditional_edges(self, *a, **kw):
+            pass
+
+        def compile(self, **kwargs):
+            return self
+
+    monkeypatch.setattr(graph_mod, "StateGraph", RecordingGraph)
+    monkeypatch.setattr(graph_mod.settings, "DEEP_ANALYSIS_ENABLED", False)
+
+    workflow = graph_mod.multi_agent_workflow
+    compiled = await workflow._create_workflow_graph(use_checkpointer=False)
+
+    assert WorkflowNode.DEEP_ANALYSIS_ORCHESTRATOR.value not in compiled.nodes

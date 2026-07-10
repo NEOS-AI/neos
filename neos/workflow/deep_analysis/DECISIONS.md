@@ -303,3 +303,47 @@ floor 위에 남아 계속 재선택). 안전밸브는 "질문이 실제로 원�
 순서에 의존하는 테스트는 깊이별 그룹 단위 검증으로 완화해야 한다. 결정적 순차 순회는
 `tests/workflow/deep_analysis/test_synthesizer_hier.py`(후위 순서 검증)와
 `test_orchestrator_m4_integration.py`(AC-a 루트 prompt_chars 불변)로 입증된다.
+
+---
+
+## D18. 챗 편입 — 하네스는 단일 workflow 노드로 완주, per-claim SSE는 전용 엔드포인트 유지
+
+**결정:** Sub-project A(챗 경로 → 하네스 전환)에서 `deep_analysis` 하네스를 LangGraph 챗
+워크플로우에 편입할 때, `recursive`/`hyper_deep` 오케스트레이터와 동일한 패턴을 따른다 —
+`DEEP_ANALYSIS_ENABLED` 플래그로 게이팅된 **단일 조건부 노드**(`_deep_analysis_orchestrator_node`)가
+`OrchestratorRouter.route()`에서 `"deep_analysis"`로 라우팅된 뒤 하네스 오케스트레이터를
+`orch.run(query)`로 **완주까지 실행**하고, `report_markdown`을 `final_response`로 매핑해
+`RESULT_INTEGRATOR`로 합류한다. 챗 클라이언트는 이 노드 하나의 시작/완료라는 **노드 레벨
+진행상황**만 관찰한다(`execution_steps`에 1개 항목 추가). 하네스 내부의 세밀한 claim-by-claim
+스트리밍(질문 선택 → 워커 실행 → 채점 → verified/rejected 이벤트)은 챗 그래프에 노출하지 않고,
+기존 전용 `/api/v1/deep-analysis` SSE 엔드포인트(M1 D7의 인라인 asyncio + SSE 경로)를 통해서만
+제공한다. 즉 같은 하네스 코어(`service.build_orchestrator`/`ledger.create_run`, M0–M4 불변)를
+**두 개의 서로 다른 소비 경로**로 노출한다: (a) 챗 워크플로우 노드 = 굵은 단위 진행 + 최종 리포트,
+(b) 전용 SSE 엔드포인트 = 세밀한 실시간 이벤트.
+
+**근거:** (1) **기존 배관 재사용** — 챗 워크플로우는 이미 노드 단위 진행 신호(`execution_steps`,
+`RESULT_INTEGRATOR` 이후의 대화 저장·fact-check·품질 검증)를 전제로 설계돼 있고, `recursive`/
+`hyper_deep`도 동일하게 "무거운 하위 작업 하나가 완주 후 결과만 상위로 반환"하는 모델을 이미
+증명했다(§ enums/graph.py 조건부 등록 패턴). claim 단위 이벤트를 챗 그래프 상태로 끌어올리려면
+`AgentState`에 새 스트리밍 채널을 추가하고 fact-check/conversation 저장 로직이 부분 상태를
+다뤄야 해서 표면적이 커진다. (2) **최소 침습** — 하네스 M0–M4 코드(오케스트레이터/이벤트 싱크
+계약)를 변경하지 않고 통합 계층(그래프 노드)만 추가하는 것이 이 서브프로젝트의 전역 제약이다.
+챗 노드에서 `event_sink`를 no-op으로 넘기고 전용 엔드포인트에서만 실제 SSE 싱크를 연결하면,
+동일한 `build_orchestrator` 계약을 두 경로가 그대로 공유해 하네스 코어를 건드릴 필요가 없다.
+(3) **점진적 대체** — 원 설계(§655)가 예정한 "LangGraph 워크플로우가 하네스로 점진 대체"라는
+방향에서, 이번 스텝은 챗 경로의 라우팅 대상만 교체하는 첫 이동이다. per-claim 스트리밍까지
+챗 그래프로 옮기는 것은 그 다음 단계(챗 SSE 프로토콜 자체를 하네스 이벤트 스키마로 통합)의
+범위이며, 지금 함께 하면 두 관심사(라우팅 편입 vs 스트리밍 프로토콜 재설계)가 한 커밋에
+묶여 무회귀 검증이 어려워진다.
+
+**이탈:** 없음(원 설계는 챗 통합 방식을 규정하지 않음 — 원 설계 §655는 "충돌 시 결정 후 기록"만
+지시). D7(M1 인라인 SSE)과 상충하지 않는다 — D7의 SSE 경로는 `/api/v1/deep-analysis` 엔드포인트에
+그대로 남고, 챗 노드는 그 경로를 우회해 오케스트레이터를 직접 호출하는 별도 소비자일 뿐이다.
+
+**영향:** `DEEP_ANALYSIS_ENABLED=false`(기본)일 때 챗 그래프는 `deep_analysis_orchestrator` 노드를
+등록조차 하지 않고 라우팅 맵에도 `"deep_analysis"` 키가 없다 — 무회귀는 노드 부재로 구조적으로
+보장된다(`tests/workflow/test_deep_analysis_node.py::test_no_regression_deep_analysis_off_by_default_node_not_registered`,
+`tests/workflow/routing/test_deep_analysis_routing.py::test_no_regression_deep_analysis_off_by_default`).
+플래그 활성 시에도 챗 응답은 리포트 완성 후 한 번에 오므로, per-claim 진행 UI가 필요한 소비자는
+계속 전용 SSE 엔드포인트를 사용해야 한다 — 챗 API 문서에 이 구분을 명시할 필요가 있다(후속 문서화
+과제, 이 결정의 범위 밖).
