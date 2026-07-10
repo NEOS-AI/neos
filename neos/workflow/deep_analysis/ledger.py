@@ -578,6 +578,25 @@ class Ledger:
     async def get_claim(self, claim_id: str) -> DAClaim | None:
         return await self.db.get(DAClaim, (claim_id, self.run_id))
 
+    async def claim_source_urls(self, claim_id: str) -> list[str]:
+        """Source URLs of a claim's evidence, run-scoped (dedup, ordered).
+
+        Used by conflict resolution (M4 §6.7) to compare the source-domain
+        tier of two conflicting claims without pulling in full evidence
+        rows.
+        """
+        result = await self.db.execute(
+            select(DAEvidence.source_url).where(
+                DAEvidence.run_id == self.run_id,
+                DAEvidence.claim_id == claim_id,
+            )
+        )
+        urls: list[str] = []
+        for url in result.scalars():
+            if url not in urls:
+                urls.append(url)
+        return urls
+
     async def get_blob(self, content_hash: str) -> DABlob | None:
         return await self.db.get(DABlob, (self.run_id, content_hash))
 
