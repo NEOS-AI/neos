@@ -95,6 +95,17 @@ class OrchestratorRouter:
         complexity = classification.get("complexity_score", 0.0)
         intent = state.get("query_intent", "")
 
+        if settings.DEEP_ANALYSIS_ENABLED and policy.allows_recursive_research():
+            if intent == IntentType.DEEP_ANALYSIS.value:
+                return "deep_analysis"
+
+            da_intents = (
+                IntentType.DEEP_RESEARCH.value,
+                IntentType.COMPLEX_ANALYSIS.value,
+            )
+            if complexity >= settings.DEEP_ANALYSIS_COMPLEXITY_THRESHOLD and intent in da_intents:
+                return "deep_analysis"
+
         if settings.HYPER_DEEP_AGENT_ENABLED and policy.allows_recursive_research():
             if intent == IntentType.HYPER_DEEP_RESEARCH.value:
                 return "hyper_deep"
