@@ -20,7 +20,7 @@ from neos.database.deep_analysis_models import (
     DARun,
 )
 
-from .models import ProposedBlob, ProposedClaim, Verdict, WorkerResult
+from .models import ProposedBlob, ProposedClaim, RepairResult, Verdict, WorkerResult
 from .text_norm import claim_hash
 
 
@@ -76,6 +76,7 @@ class Ledger:
         run_id: str,
         *,
         resolve_threshold: float | None = None,
+        claim_retry_cap: int | None = None,
     ) -> None:
         self.db = session
         self.run_id = run_id
@@ -83,6 +84,11 @@ class Ledger:
             settings.DEEP_ANALYSIS_RESOLVE_THRESHOLD
             if resolve_threshold is None
             else resolve_threshold
+        )
+        self.claim_retry_cap = (
+            settings.config.deep_analysis.claim_retry_cap
+            if claim_retry_cap is None
+            else claim_retry_cap
         )
 
     async def _lock(self) -> None:
@@ -252,6 +258,95 @@ class Ledger:
         await self.db.flush()
         return stored.id, evidence_rows
 
+    async def pending_feedback(self, question_id: str) -> list[DAFeedback]:
+        result = await self.db.execute(
+            select(DAFeedback).join(
+                DAClaim,
+                (DAFeedback.claim_id == DAClaim.id)
+                & (DAFeedback.run_id == DAClaim.run_id),
+            ).where(
+                DAFeedback.run_id == self.run_id,
+                DAClaim.question_id == question_id,
+                DAFeedback.resolved == 0,
+            ).order_by(DAFeedback.attempt.desc())
+        )
+        return list(result.scalars())
+
+    async def _max_attempt(self, claim_id: str) -> int:
+        value = await self.db.scalar(
+            select(func.coalesce(func.max(DAFeedback.attempt), 0)).where(
+                DAFeedback.run_id == self.run_id,
+                DAFeedback.claim_id == claim_id,
+            )
+        )
+        return int(value or 0)
+
+    async def _evidence_for_claim(self, claim_id: str) -> list[DAEvidence]:
+        result = await self.db.execute(
+            select(DAEvidence).where(
+                DAEvidence.run_id == self.run_id,
+                DAEvidence.claim_id == claim_id,
+            )
+        )
+        return list(result.scalars())
+
+    async def _apply_verdict(
+        self,
+        question_id: str,
+        claim: DAClaim,
+        evidence_rows: list[DAEvidence],
+        verdict: Verdict,
+    ) -> bool:
+        """Shared verdict-application logic used by both `_record_verdict`
+        (fresh claims during `commit_pass`) and `regrade_claim` (repaired
+        claims re-graded outside a pass). Retry-cap and label handling must
+        stay identical between the two call sites.
+        """
+        grade = "ok" if verdict.ok else verdict.code
+        for evidence in evidence_rows:
+            evidence.det_grade = grade
+        if verdict.label is not None:
+            for evidence in evidence_rows:
+                evidence.agent_grade = verdict.label
+
+        if verdict.ok:
+            claim.status = "verified"
+            await self.log(
+                "claim_verified",
+                question_id,
+                {"claim_id": claim.id, "label": verdict.label},
+            )
+            return True
+
+        # 재시도 캡(§6.1 rule4): 이번이 몇 번째 거절인가
+        prior = await self._max_attempt(claim.id)
+        if prior >= self.claim_retry_cap:
+            claim.status = "unverified"
+            await self.log(
+                "claim_unverified",
+                question_id,
+                {"claim_id": claim.id, "code": verdict.code},
+            )
+            return False
+
+        claim.status = "rejected"
+        self.db.add(
+            DAFeedback(
+                run_id=self.run_id,
+                claim_id=claim.id,
+                code=verdict.code,
+                detail=verdict.detail[:200],
+                salvage=verdict.salvage,
+                attempt=prior + 1,
+            )
+        )
+        await self.log(
+            "claim_rejected",
+            question_id,
+            {"claim_id": claim.id, "code": verdict.code, "attempt": prior + 1},
+        )
+        return False
+
     async def _record_verdict(
         self,
         question_id: str,
@@ -266,36 +361,87 @@ class Ledger:
         if claim is None:
             raise KeyError(claim_id)
 
-        grade = "ok" if verdict.ok else verdict.code
-        for evidence in evidence_rows:
-            evidence.det_grade = grade
+        return await self._apply_verdict(question_id, claim, evidence_rows, verdict)
 
-        if verdict.ok:
-            claim.status = "verified"
-            await self.log(
-                "claim_verified",
-                question_id,
-                {"claim_id": claim_id},
-            )
-            return True
+    async def regrade_claim(
+        self,
+        question_id: str,
+        claim_id: str,
+        verdict: Verdict,
+    ) -> bool:
+        """Re-grade an existing (repaired, `pending`) claim outside a pass.
 
-        claim.status = "rejected"
-        self.db.add(
-            DAFeedback(
-                run_id=self.run_id,
-                claim_id=claim_id,
-                code=verdict.code,
-                detail=verdict.detail[:200],
-                salvage=verdict.salvage,
-                attempt=1,
+        Reuses `_apply_verdict` so retry-cap + label handling stay identical
+        to the fresh-claim path in `_record_verdict`. No new evidence is
+        created here -- only existing evidence rows are updated.
+        """
+        claim = await self.get_claim(claim_id)
+        if claim is None or claim.question_id != question_id:
+            return False
+        await self._lock()
+        evidence_rows = await self._evidence_for_claim(claim_id)
+        result = await self._apply_verdict(question_id, claim, evidence_rows, verdict)
+        await self.db.flush()
+        return result
+
+    async def pending_claims(
+        self,
+        question_id: str,
+    ) -> list[tuple[DAClaim, list[DAEvidence]]]:
+        result = await self.db.execute(
+            select(DAClaim).where(
+                DAClaim.run_id == self.run_id,
+                DAClaim.question_id == question_id,
+                DAClaim.status == "pending",
             )
         )
-        await self.log(
-            "claim_rejected",
-            question_id,
-            {"claim_id": claim_id, "code": verdict.code},
+        output: list[tuple[DAClaim, list[DAEvidence]]] = []
+        for claim in result.scalars():
+            output.append((claim, await self._evidence_for_claim(claim.id)))
+        return output
+
+    async def _resolve_feedback(self, claim_id: str) -> None:
+        rows = await self.db.execute(
+            select(DAFeedback).where(
+                DAFeedback.run_id == self.run_id,
+                DAFeedback.claim_id == claim_id,
+                DAFeedback.resolved == 0,
+            )
         )
-        return False
+        for feedback in rows.scalars():
+            feedback.resolved = 1
+
+    async def _apply_repairs(
+        self,
+        question_id: str,
+        repairs: list[RepairResult],
+    ) -> None:
+        for repair in repairs:
+            claim = await self.get_claim(repair.claim_id)
+            if claim is None:
+                continue
+            if repair.action in ("fixed", "weakened"):
+                if repair.new_text:
+                    claim.text = repair.new_text
+                    claim.hash = claim_hash(repair.new_text)
+                claim.status = "pending"
+                for proposed in repair.new_evidence:
+                    self.db.add(
+                        DAEvidence(
+                            id=_hex_id(),
+                            run_id=self.run_id,
+                            claim_id=claim.id,
+                            source_url=proposed.source_url,
+                            excerpt=proposed.excerpt[
+                                : settings.config.deep_analysis.excerpt_max_chars
+                            ],
+                            raw_ref=proposed.raw_ref,
+                        )
+                    )
+            elif repair.action == "abandoned":
+                claim.status = "unverified"
+            await self._resolve_feedback(repair.claim_id)
+        await self.db.flush()
 
     async def commit_pass(
         self,
@@ -339,6 +485,8 @@ class Ledger:
                 verified_count += 1
         verified_any = verified_count > 0
 
+        await self._apply_repairs(question_id, result.repairs)
+
         for dead_end in result.dead_ends:
             await self.log("dead_end", question_id, {"text": dead_end})
 
@@ -356,6 +504,7 @@ class Ledger:
             and verified_any
             and question.confidence >= self.resolve_threshold
         ):
+            question.fail_streak = 0
             await self._transition(question_id, "resolved")
         else:
             await self._transition(question_id, "open")
