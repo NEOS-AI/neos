@@ -574,8 +574,25 @@ class Orchestrator:
         summaries, reinvestigate = await self._reduce_and_resolve(root_id)
         await self._emit("synth_pass", {"qid": root_id})
 
-        reinvest_cap = config.conflict_reinvestigation_cap
-        if reinvestigate and self._reinvestigation_count < reinvest_cap:
+        # M4 §6.7: at most ONE conflict-reinvestigation round per run. The gate
+        # is the EVENT LOG (not the in-memory counter, which resets on
+        # crash-recovery) so a resumed run cannot spend a second round. When it
+        # fires we reopen the owning question through the §6.7-sanctioned
+        # `reopen_for_reinvestigation` path -- the target is `resolved` at
+        # finalize time, so a plain `_transition(..., "open")` would raise
+        # IllegalTransition and (previously, swallowed) make the round a no-op.
+        has_event_fn = getattr(self.ledger, "has_event", None)
+        if has_event_fn is not None:
+            already_reinvestigated = await has_event_fn(
+                "conflict_reinvestigation"
+            )
+        else:
+            # Minimal ledger doubles fall back to the in-memory counter.
+            already_reinvestigated = (
+                self._reinvestigation_count
+                >= config.conflict_reinvestigation_cap
+            )
+        if reinvestigate and not already_reinvestigated:
             self._reinvestigation_count += 1
             target = reinvestigate[0]
             await self.ledger.log(
@@ -583,13 +600,7 @@ class Orchestrator:
                 target,
                 {"qids": reinvestigate},
             )
-            try:
-                await self.ledger._transition(target, "open")
-            except Exception:  # noqa: BLE001
-                # Reopening a terminal (resolved/split/abandoned) question is
-                # illegal; the extra round still runs for any other open work,
-                # then both-sides annotations stand.
-                pass
+            await self.ledger.reopen_for_reinvestigation(target)
             await self._run_round()
             summaries, reinvestigate = await self._reduce_and_resolve(root_id)
 

@@ -12,6 +12,11 @@ import pytest
 
 import neos.workflow.deep_analysis.orchestrator as orch_mod
 from neos.workflow.deep_analysis.citation import OrphanCitationError
+from neos.workflow.deep_analysis.ledger import (
+    IllegalTransition,
+    _LEGAL_TRANSITIONS,
+    _TERMINAL_STATUSES,
+)
 from neos.workflow.deep_analysis.models import NodeSummary, Verdict
 from neos.workflow.deep_analysis.orchestrator import Orchestrator
 
@@ -20,10 +25,21 @@ pytestmark = pytest.mark.no_db
 
 
 class FakeLedger:
-    def __init__(self):
+    """Minimal ledger double whose state machine mirrors the REAL one.
+
+    `_transition` enforces `_LEGAL_TRANSITIONS`/`_TERMINAL_STATUSES` and raises
+    `IllegalTransition` on illegal moves, so a `resolved -> open` reopen can no
+    longer silently no-op. `reopen_for_reinvestigation` is the §6.7 exception
+    (direct status set + `question_reopened` log), matching the real ledger.
+    """
+
+    def __init__(self, statuses=None):
         self.events = []
         self.completed = False
         self.transitions = []
+        self.reopened = []
+        # question_id -> status; default open when unseen.
+        self.statuses = dict(statuses or {})
 
     async def children(self, qid):
         return []
@@ -40,8 +56,29 @@ class FakeLedger:
     async def complete_run(self):
         self.completed = True
 
+    async def has_event(self, kind):
+        return any(k == kind for (k, _q, _p) in self.events)
+
     async def _transition(self, qid, to_status):
+        current = self.statuses.get(qid, "open")
+        if (
+            current in _TERMINAL_STATUSES
+            or (current, to_status) not in _LEGAL_TRANSITIONS
+        ):
+            raise IllegalTransition(f"{current} -> {to_status} (qid={qid})")
+        self.statuses[qid] = to_status
         self.transitions.append((qid, to_status))
+
+    async def reopen_for_reinvestigation(self, qid):
+        previous = self.statuses.get(qid, "open")
+        self.statuses[qid] = "open"
+        self.reopened.append(qid)
+        if previous != "open":
+            await self.log(
+                "question_reopened",
+                qid,
+                {"from": previous, "reason": "conflict_reinvestigation"},
+            )
 
 
 class FakeSynth:
@@ -180,8 +217,10 @@ async def test_missing_report_grader_defaults_to_ok():
 async def test_conflict_reinvestigation_is_globally_capped_at_one(monkeypatch):
     # A persistent equal-tier conflict must trigger AT MOST one extra
     # investigation round (global cap 1), then proceed with both-sides
-    # annotations only.
-    ledger = FakeLedger()
+    # annotations only. subq0001 starts `resolved` (terminal): the reopen must
+    # go through the §6.7 `reopen_for_reinvestigation` path, NOT a raw
+    # `_transition` (which would raise IllegalTransition here).
+    ledger = FakeLedger(statuses={"subq0001": "resolved"})
     synth = FakeSynth()
     orch = _orch(ledger, synth, FlakyRenderer(fail_times=0), grader=OkGrader())
 
@@ -205,8 +244,48 @@ async def test_conflict_reinvestigation_is_globally_capped_at_one(monkeypatch):
     reinvest = [e for e in ledger.events if e[0] == "conflict_reinvestigation"]
     assert len(reinvest) == 1
     assert reinvest[0][1] == "subq0001"
-    assert ("subq0001", "open") in ledger.transitions
+    # reopen actually happened through the sanctioned §6.7 path.
+    assert ledger.reopened == ["subq0001"]
+    assert ledger.statuses["subq0001"] == "open"
+    assert ("subq0001", "open") not in ledger.transitions  # not a raw _transition
+    reopened_events = [e for e in ledger.events if e[0] == "question_reopened"]
+    assert len(reopened_events) == 1 and reopened_events[0][1] == "subq0001"
     # reduce_tree ran twice: initial + post-reinvestigation re-reduce.
     assert synth.reduce_tree_calls == 2
     assert ledger.completed
     assert "DRAFT" in report
+
+
+@pytest.mark.asyncio
+async def test_reinvestigation_gate_is_event_based_and_durable(monkeypatch):
+    # Fix 2: the global cap is gated on the EVENT LOG, not the in-memory
+    # counter. A resumed run whose ledger already has a prior
+    # `conflict_reinvestigation` event must NOT reopen/reinvestigate again --
+    # even though the in-memory counter is 0 after "recovery".
+    ledger = FakeLedger(statuses={"subq0001": "resolved"})
+    # Simulate a prior run having already spent its reinvestigation.
+    await ledger.log("conflict_reinvestigation", "subq0001", {"qids": ["subq0001"]})
+    synth = FakeSynth()
+    orch = _orch(ledger, synth, FlakyRenderer(fail_times=0), grader=OkGrader())
+    assert orch._reinvestigation_count == 0  # fresh in-memory counter (resumed)
+
+    async def always_reinvestigate(_ledger, summary, _tiers):
+        return summary, ["subq0001"]
+
+    monkeypatch.setattr(orch_mod, "resolve_conflicts", always_reinvestigate)
+
+    rounds = {"n": 0}
+
+    async def fake_round():
+        rounds["n"] += 1
+        return True
+
+    orch._run_round = fake_round
+
+    await orch._finalize("root0001")
+
+    assert rounds["n"] == 0  # no extra round on the resumed run
+    assert ledger.reopened == []  # nothing reopened
+    reinvest = [e for e in ledger.events if e[0] == "conflict_reinvestigation"]
+    assert len(reinvest) == 1  # still exactly one, from the prior run
+    assert ledger.completed

@@ -116,6 +116,22 @@ class Ledger:
         )
         await self.db.flush()
 
+    async def has_event(self, kind: str) -> bool:
+        """True iff at least one event of ``kind`` exists for this run.
+
+        The orchestrator uses this to make the global conflict-reinvestigation
+        cap durable across crash-recovery: the in-memory counter resets on
+        resume, but the event log does not, so a resumed run cannot spend a
+        second reinvestigation round.
+        """
+        value = await self.db.scalar(
+            select(func.count(DAEvent.seq)).where(
+                DAEvent.run_id == self.run_id,
+                DAEvent.kind == kind,
+            )
+        )
+        return int(value or 0) > 0
+
     async def open_question(
         self,
         question_text: str,
@@ -176,6 +192,34 @@ class Ledger:
         for question_id in question_ids:
             await self._transition(question_id, "open")
         return len(question_ids)
+
+    async def reopen_for_reinvestigation(self, question_id: str) -> None:
+        """Move a question back to ``open`` for conflict reinvestigation.
+
+        §4.1 treats ``resolved`` (and ``split``/``abandoned``) as terminal, so
+        ``_transition`` forbids ``resolved -> open``. §6.7 mandates exactly one
+        sanctioned exception: when a high-value equal-tier conflict survives the
+        reduce, the owning (already ``resolved``) question must be reopened so
+        the budgeter can re-select and re-investigate it. This is the single,
+        named, run-scoped place that bypasses the legal-transition set on
+        purpose; it sets the status directly and logs ``question_reopened`` so
+        the exception is explicit and auditable.
+        """
+        question = await self.get_question(question_id)
+        if question is None:
+            raise KeyError(
+                f"question {question_id!r} not found in run {self.run_id!r}"
+            )
+        previous = question.status
+        if previous == "open":
+            return
+        question.status = "open"
+        await self.db.flush()
+        await self.log(
+            "question_reopened",
+            question_id,
+            {"from": previous, "reason": "conflict_reinvestigation"},
+        )
 
     async def _store_blob(self, blob: ProposedBlob) -> None:
         existing = await self.db.get(
