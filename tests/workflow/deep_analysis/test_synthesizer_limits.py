@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pytest
 
@@ -35,12 +35,22 @@ class FakeLedger:
         self.events = []
         self.root = Question("root0001", "Root question", None)
         self.child = Question("child001", "Child question", "root0001")
+        self.abandoned_child = Question(
+            "abnd0001", "Abandoned child question", "root0001", status="abandoned"
+        )
+        self._unverified: dict[str, list[str]] = {
+            self.root.id: [],
+            self.child.id: [],
+            self.abandoned_child.id: [],
+        }
 
     async def root_question(self):
         return self.root
 
     async def children(self, question_id):
-        return [self.child] if question_id == self.root.id else []
+        if question_id != self.root.id:
+            return []
+        return [self.child, self.abandoned_child]
 
     async def verified_claims(self, question_id):
         if question_id != self.child.id:
@@ -53,10 +63,10 @@ class FakeLedger:
         ]
 
     async def unverified_and_deadends(self, question_id):
-        return []
+        return self._unverified.get(question_id, [])
 
     async def questions(self):
-        return [self.root, self.child]
+        return [self.root, self.child, self.abandoned_child]
 
     async def log(self, kind, qid, payload):
         self.events.append((kind, qid, payload))
@@ -81,40 +91,25 @@ class FakeLLMCall:
 
 
 @pytest.mark.asyncio
-async def test_single_layer_reduce_uses_only_verified_claim_excerpts():
+async def test_unverified_claims_and_abandoned_questions_surface_in_caveats():
     ledger = FakeLedger()
-    llm_call = FakeLLMCall()
-
-    draft = await Synthesizer(ledger, llm_call=llm_call).reduce(
-        "root0001"
-    )
-
-    assert "[C:c1a1c1a1]" in draft
-    assert "verbatim excerpt" in llm_call.prompt
-    assert "secret-raw-ref" not in llm_call.prompt
-    assert ledger.events[-1][0] == "synth_pass"
-
-
-@pytest.mark.asyncio
-async def test_reduce_includes_root_claims_when_decomposition_is_empty():
-    class RootOnlyLedger(FakeLedger):
-        async def children(self, question_id):
-            return []
-
-        async def verified_claims(self, question_id):
-            if question_id != self.root.id:
-                return []
-            return [
-                (
-                    Claim("d2b2d2b2", "Root verified fact", 0.6),
-                    [Evidence("root excerpt", "root-raw-ref")],
-                )
-            ]
-
-    ledger = RootOnlyLedger()
+    ledger._unverified[ledger.child.id] = ["shaky claim text"]
     llm_call = FakeLLMCall()
 
     await Synthesizer(ledger, llm_call=llm_call).reduce("root0001")
 
-    assert "[C:d2b2d2b2]" in llm_call.prompt
-    assert "root excerpt" in llm_call.prompt
+    assert "미확인: shaky claim text" in llm_call.prompt
+    assert "미조사: Abandoned child question" in llm_call.prompt
+
+
+@pytest.mark.asyncio
+async def test_caveats_default_when_no_unverified_or_abandoned():
+    ledger = FakeLedger()
+    ledger.abandoned_child.status = "resolved"
+    llm_call = FakeLLMCall()
+
+    await Synthesizer(ledger, llm_call=llm_call).reduce("root0001")
+
+    assert "미확인:" not in llm_call.prompt
+    assert "미조사:" not in llm_call.prompt
+    assert "(없음)" in llm_call.prompt

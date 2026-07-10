@@ -9,6 +9,12 @@ from sqlalchemy import text as sql
 class OkGrader:
     async def grade(self, claim): return Verdict(ok=True)
 
+class FakeSynthesizer:
+    """Network-free stand-in for Synthesizer.reduce (M2 AC tests only exercise
+    the SCOUT loop, not real LLM synthesis)."""
+    async def reduce(self, root_id):
+        return "## 요약\nstub\n\n## 본문\nstub\n\n## 한계와 미확인 사항\n없음\n\n## 출처"
+
 def _ok_result(qid, text="a fact"):
     blob = ProposedBlob(content_hash="hh", source_url="http://x", http_status=200, raw_text="body")
     ev = ProposedEvidence(source_url="http://x", excerpt="body", raw_ref="hh")
@@ -38,7 +44,7 @@ async def test_ac_a_partial_claims_committed(monkeypatch):
         # 스핀 없이 같은 AC(타임아웃→flush_partial→blob 커밋)를 훨씬 빠르게 증명한다.
         orch = Orchestrator(s, run_id, lambda: SlowPartial(), OkGrader(),
                             decompose_fn=lambda t: [{"text":"sub","value_est":0.8}],
-                            global_token_cap=15)
+                            global_token_cap=15, synthesizer=FakeSynthesizer())
         await orch.run("root?")
         row = await s.execute(sql("SELECT COUNT(*) FROM deep_analysis_blobs WHERE run_id=:r"), {"r": run_id})
         assert row.scalar() >= 1   # partial blob 커밋됨
@@ -57,7 +63,7 @@ async def test_ac_c_fail_streak_forces_split():
         # decompose로 자식 1개(depth1) → 실패 반복 → fail_streak 2 → SPLIT(자식 depth2)
         orch = Orchestrator(s, run_id, lambda: Flaky(), OkGrader(),
                             decompose_fn=lambda t: [{"text":"sub","value_est":0.9}],
-                            global_token_cap=5000, max_depth=3)
+                            global_token_cap=5000, max_depth=3, synthesizer=FakeSynthesizer())
         # split이 일어나면 decompose가 다시 호출되어 자식 생성 → split 이벤트 존재
         async def split_decompose(text, *a): return [{"text":"child","value_est":0.5}]
         orch._split_decompose = split_decompose
@@ -76,7 +82,7 @@ async def test_ac_d_stops_at_global_cap():
         run_id = await create_run(s, "root?", "dev")
         orch = Orchestrator(s, run_id, lambda: Big(), OkGrader(),
                             decompose_fn=lambda t: [{"text":"s1","value_est":0.9},{"text":"s2","value_est":0.9}],
-                            global_token_cap=5000)
+                            global_token_cap=5000, synthesizer=FakeSynthesizer())
         await orch.run("root?")
         total = await Ledger(s, run_id).total_spent()
         assert total >= 4000     # 캡 근처에서 정지(무한 루프 아님)

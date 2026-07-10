@@ -166,6 +166,14 @@ class MemoryLedger:
             and claim.status == "verified"
         ]
 
+    async def unverified_and_deadends(self, question_id):
+        # Mirror real Ledger.unverified_and_deadends: this fake never commits
+        # unverified claims or dead_end events, so there is nothing to surface.
+        return []
+
+    async def questions(self):
+        return list(self.questions_by_id.values())
+
     async def get_claim(self, claim_id):
         return self.claims.get(claim_id)
 

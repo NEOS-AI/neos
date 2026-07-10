@@ -28,8 +28,10 @@ class Synthesizer:
             raise KeyError(f"root question not found: {root_id}")
 
         claim_blocks: list[str] = []
+        caveat_lines: list[str] = []
         children = await self.ledger.children(root_id)
-        for question in [root, *children]:
+        questions = [root, *children]
+        for question in questions:
             for claim, evidence_rows in await self.ledger.verified_claims(
                 question.id
             ):
@@ -43,12 +45,21 @@ class Synthesizer:
                     f"  confidence: {claim.confidence}\n"
                     f"  {evidence}"
                 )
+            for text in await self.ledger.unverified_and_deadends(
+                question.id
+            ):
+                caveat_lines.append(f"미확인: {text}")
 
-        caveats = (
-            "(없음)"
-            if claim_blocks
-            else "검증된 클레임을 확보하지 못함"
-        )
+        for question in await self.ledger.questions():
+            if question.status == "abandoned":
+                caveat_lines.append(f"미조사: {question.text}")
+
+        if caveat_lines:
+            caveats = "\n".join(caveat_lines)
+        elif claim_blocks:
+            caveats = "(없음)"
+        else:
+            caveats = "검증된 클레임을 확보하지 못함"
         prompt = render(
             "final_compose",
             root_summary=root.text,
