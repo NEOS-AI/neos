@@ -34,6 +34,36 @@ class FakeLedger:
         self.logged.append((a, k))
 
 
+class TreeFakeLedger(FakeLedger):
+    """FakeLedger + a fixed tree shape for reduce_tree tests.
+
+    tree: {qid: [child_qid, ...]} -- adjacency list.
+    statuses: {qid: status}; defaults to "resolved" if unset.
+    """
+
+    def __init__(self, verified, tree, statuses=None):
+        super().__init__(verified)
+        self._tree = tree
+        self._statuses = dict(statuses or {})
+
+    async def children(self, qid):
+        return [
+            SimpleNamespace(
+                id=cid, status=self._statuses.get(cid, "resolved")
+            )
+            for cid in self._tree.get(qid, [])
+        ]
+
+    async def get_question(self, qid):
+        if qid not in self._tree and qid not in self._statuses:
+            return None
+        return SimpleNamespace(
+            id=qid,
+            text=qid,
+            status=self._statuses.get(qid, "resolved"),
+        )
+
+
 def _claim(cid, text):
     return SimpleNamespace(id=cid, text=text, confidence=0.7)
 
@@ -182,3 +212,157 @@ async def test_reduce_node_parses_conflicts():
     assert len(summary.conflicts) == 1
     assert summary.conflicts[0].claim_a == "aaaaaaaa"
     assert summary.conflicts[0].nature == "수치 불일치"
+
+
+# --- M4 Task 2: reduce_tree (hierarchical post-order) -----------------
+
+
+def _payload(qid, answer):
+    return {
+        "question_id": qid,
+        "answer": answer,
+        "key_claim_ids": [],
+        "confidence": 0.7,
+        "caveats": [],
+        "conflicts": [],
+    }
+
+
+async def test_reduce_tree_reduces_leaves_before_parents_post_order():
+    """root -> child -> grandchild: all three get summarized bottom-up."""
+    tree = {"root": ["child"], "child": ["gc"], "gc": []}
+    verified = {
+        "gc": [(_claim("aaaaaaaa", "leaf claim"), [_ev("leaf excerpt")])],
+    }
+    led = TreeFakeLedger(verified, tree)
+    cj = CapturingJSON(
+        [
+            _payload("gc", "leaf ans [C:aaaaaaaa]"),
+            _payload("child", "child ans"),
+            _payload("root", "root ans"),
+        ]
+    )
+    synth = Synthesizer(led, json_call=cj)
+    summaries = await synth.reduce_tree("root")
+
+    assert set(summaries) == {"root", "child", "gc"}
+    # leaf reduced first (its prompt is captured before child's)
+    assert "leaf excerpt" in cj.prompts[0]
+    # child's prompt carries the leaf's *summary answer*, not raw claims
+    assert "leaf ans" in cj.prompts[1]
+    assert "leaf excerpt" not in cj.prompts[1]
+    # root's prompt carries the child's summary answer only
+    assert "child ans" in cj.prompts[2]
+    assert summaries["root"].answer == "root ans"
+
+
+async def test_reduce_tree_excludes_abandoned_children_from_parent_context():
+    tree = {"root": ["good", "bad"], "good": [], "bad": []}
+    statuses = {"bad": "abandoned"}
+    verified = {
+        "good": [(_claim("aaaaaaaa", "good claim"), [_ev("good excerpt")])],
+    }
+    led = TreeFakeLedger(verified, tree, statuses)
+    cj = CapturingJSON(
+        [
+            _payload("good", "good ans"),
+            _payload("root", "root ans"),
+        ]
+    )
+    synth = Synthesizer(led, json_call=cj)
+    summaries = await synth.reduce_tree("root")
+
+    assert "bad" not in summaries
+    assert "good" in summaries and "root" in summaries
+    # root prompt must not mention the abandoned sibling at all
+    root_prompt = cj.prompts[-1]
+    assert "bad" not in root_prompt
+
+
+async def test_reduce_tree_skips_summary_when_root_itself_abandoned():
+    """Children are still visited (post-order visits before the self-status
+    check), but the abandoned node itself gets no summary."""
+    tree = {"root": ["child"], "child": []}
+    statuses = {"root": "abandoned"}
+    verified = {
+        "child": [(_claim("aaaaaaaa", "c claim"), [_ev("c excerpt")])],
+    }
+    led = TreeFakeLedger(verified, tree, statuses)
+    cj = CapturingJSON([_payload("child", "child ans")])
+    synth = Synthesizer(led, json_call=cj)
+    summaries = await synth.reduce_tree("root")
+
+    assert "root" not in summaries
+    assert "child" in summaries
+
+
+async def test_grandparent_prompt_independent_of_grandchildren_count():
+    """AC-a: root's reduce_node prompt is bounded regardless of how many
+    grandchildren live under its single child, because root only ever
+    sees the child's fixed-shape NodeSummary.answer -- never grandchild
+    raw claims or excerpts.
+    """
+
+    async def run_tree(num_grandchildren):
+        grandchild_ids = [f"g{i}" for i in range(num_grandchildren)]
+        tree = {"root": ["child"], "child": grandchild_ids}
+        for gid in grandchild_ids:
+            tree[gid] = []
+
+        verified = {}
+        for i, gid in enumerate(grandchild_ids):
+            verified[gid] = [
+                (
+                    _claim(f"{i:08d}", f"grandchild claim content {i}"),
+                    [_ev(f"UNIQUE_GRANDCHILD_EXCERPT_{i}")],
+                )
+            ]
+
+        led = TreeFakeLedger(verified, tree)
+        payloads = [_payload(gid, f"g{i} summary") for i, gid in enumerate(grandchild_ids)]
+        # child's answer is a FIXED-length summary regardless of how many
+        # grandchildren fed into it -- this is what keeps root's context
+        # bounded.
+        payloads.append(_payload("child", "CHILD_FIXED_LENGTH_SUMMARY_TOKEN"))
+        payloads.append(_payload("root", "root ans"))
+
+        cj = CapturingJSON(payloads)
+        synth = Synthesizer(led, json_call=cj)
+        summaries = await synth.reduce_tree("root")
+        return led, cj, summaries
+
+    led_a, cj_a, summaries_a = await run_tree(1)
+    led_b, cj_b, summaries_b = await run_tree(5)
+
+    root_prompt_a = cj_a.prompts[-1]
+    root_prompt_b = cj_b.prompts[-1]
+
+    # Robust assertion: root's prompt never contains any grandchild-level
+    # content (raw excerpts or per-grandchild summary text), in either tree.
+    for i in range(5):
+        assert f"UNIQUE_GRANDCHILD_EXCERPT_{i}" not in root_prompt_a
+        assert f"UNIQUE_GRANDCHILD_EXCERPT_{i}" not in root_prompt_b
+        assert f"g{i} summary" not in root_prompt_a
+        assert f"g{i} summary" not in root_prompt_b
+
+    # Tight-band assertion: root prompt size does not grow with grandchild
+    # count -- it only depends on the child's constant-length answer, so
+    # the two prompts should be (near-)identical in length.
+    assert abs(len(root_prompt_a) - len(root_prompt_b)) <= 5
+
+    # Sanity: both trees actually completed full bottom-up reduction.
+    assert "root" in summaries_a and "child" in summaries_a and "g0" in summaries_a
+    assert "root" in summaries_b
+    assert all(f"g{i}" in summaries_b for i in range(5))
+
+    # Cross-check via the logged node_summary event's prompt_chars for the
+    # root node in each run (same signal the plan calls out).
+    def _root_prompt_chars(led):
+        for args, _kwargs in led.logged:
+            if args[0] == "node_summary" and args[1] == "root":
+                return args[2]["prompt_chars"]
+        raise AssertionError("no node_summary event logged for root")
+
+    chars_a = _root_prompt_chars(led_a)
+    chars_b = _root_prompt_chars(led_b)
+    assert abs(chars_a - chars_b) <= 5

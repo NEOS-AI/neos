@@ -153,3 +153,33 @@ class Synthesizer:
             caveats=list(data.get("caveats", [])),
             conflicts=conflicts,
         )
+
+    async def reduce_tree(self, root_id: str) -> dict[str, NodeSummary]:
+        """Post-order reduce over the question tree rooted at `root_id`.
+
+        Leaves are reduced first, then parents using only their direct
+        children's `NodeSummary` (never grandchild raw claims) -- this
+        keeps each node's LLM context bounded regardless of subtree size
+        (AC-a). `abandoned` questions are excluded entirely (no summary
+        is produced for them, nor are they passed to their parent).
+        """
+        summaries: dict[str, NodeSummary] = {}
+
+        async def visit(qid: str) -> None:
+            children = [
+                child
+                for child in await self.ledger.children(qid)
+                if child.status != "abandoned"
+            ]
+            child_summaries: list[NodeSummary] = []
+            for child in children:
+                await visit(child.id)
+                if child.id in summaries:
+                    child_summaries.append(summaries[child.id])
+            question = await self.ledger.get_question(qid)
+            if question is None or question.status == "abandoned":
+                return
+            summaries[qid] = await self.reduce_node(question, child_summaries)
+
+        await visit(root_id)
+        return summaries
