@@ -58,6 +58,17 @@ class MemoryLedger:
             None,
         )
 
+    async def get_question(self, question_id):
+        # Mirror real Ledger.get_question: return the row (with .value_est) or
+        # None so the orchestrator's question_id guard behaves identically.
+        return self.questions_by_id.get(question_id)
+
+    async def pending_claims(self, question_id):
+        # Mirror real Ledger.pending_claims: commit_pass here only ever marks
+        # claims verified/rejected (never `pending`), so there is nothing for
+        # post-commit _regrade_pending to re-grade.
+        return []
+
     async def open_question(
         self,
         text,

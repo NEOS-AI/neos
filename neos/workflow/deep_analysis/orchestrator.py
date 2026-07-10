@@ -34,6 +34,7 @@ class Orchestrator:
         worker_factory,
         grader,
         *,
+        agentic_grader=None,
         ledger=None,
         decompose_fn=None,
         synthesizer=None,
@@ -51,6 +52,7 @@ class Orchestrator:
         self.ledger = ledger or Ledger(session, run_id)
         self.worker_factory = worker_factory
         self.grader = grader
+        self.agentic_grader = agentic_grader
         self.decompose_fn = decompose_fn or self._decompose
         self.synthesizer = synthesizer or Synthesizer(
             self.ledger,
@@ -88,6 +90,34 @@ class Orchestrator:
     async def _checkpoint(self) -> None:
         if self.checkpoint is not None:
             await _maybe_await(self.checkpoint())
+
+    async def _grade(self, claim, value_est):
+        """Two-stage grading: deterministic tier first; only claims that pass
+        it (and only when an agentic grader is configured) proceed to the
+        agentic semantic tier. A deterministic failure short-circuits so the
+        expensive judge is never invoked on already-rejected claims."""
+        verdict = await self.grader.grade(claim)  # deterministic first
+        if not verdict.ok or self.agentic_grader is None:
+            return verdict
+        return await self.agentic_grader.grade(claim, value_est)  # agentic tier
+
+    async def _regrade_pending(self, question_id, value_est):
+        """Re-grade claims that repair processing pushed back to `pending`
+        (weakened/negated forms) so a successful repair converges to verified
+        immediately, and a still-failing one accrues toward the retry cap."""
+        from .models import ProposedClaim, ProposedEvidence
+
+        for claim, evidence in await self.ledger.pending_claims(question_id):
+            proposed = ProposedClaim(
+                text=claim.text,
+                confidence=claim.confidence,
+                evidence=[
+                    ProposedEvidence(e.source_url, e.excerpt, e.raw_ref)
+                    for e in evidence
+                ],
+            )
+            verdict = await self._grade(proposed, value_est)
+            await self.ledger.regrade_claim(question_id, claim.id, verdict)
 
     async def _run_worker(self, assignment: Assignment) -> WorkerResult:
         worker = self.worker_factory()  # A1: fresh instance per assignment
@@ -271,15 +301,51 @@ class Orchestrator:
                 results = await asyncio.gather(
                     *[self._run_worker(a) for a in assignments]
                 )
-                for result in results:  # P2: 순차 커밋 (single-writer)
+                # P2: 순차 커밋 (single-writer). gather는 순서를 보존하므로
+                # assignments[i] ↔ results[i]가 1:1 대응한다.
+                for assignment, result in zip(assignments, results):
+                    question = await self.ledger.get_question(
+                        result.question_id
+                    )
+                    # question_id 가드(M2 이월): 워커가 투입한 것과 다른
+                    # question_id를 돌려주면(또는 존재하지 않는 질문이면) 커밋하지
+                    # 않고, 실제 투입 질문을 investigating→open으로 복귀시켜
+                    # 영구 investigating 잠김을 방지한다.
+                    if (
+                        question is None
+                        or result.question_id != assignment.question_id
+                    ):
+                        await self._emit(
+                            "worker_result_mismatch",
+                            {
+                                "expected_qid": assignment.question_id,
+                                "got_qid": result.question_id,
+                            },
+                        )
+                        await self.ledger.log(
+                            "worker_result_mismatch",
+                            assignment.question_id,
+                            {"got_qid": result.question_id},
+                        )
+                        await self.ledger._transition(
+                            assignment.question_id,
+                            "open",
+                        )
+                        continue
+                    value_est = question.value_est
                     await self.ledger.commit_blobs(result.blobs)
                     verdicts = {}
                     for claim in result.claims:
-                        verdicts[claim.text] = await self.grader.grade(claim)
+                        verdicts[claim.text] = await self._grade(
+                            claim, value_est
+                        )
                     await self.ledger.commit_pass(
                         result.question_id,
                         result,
                         verdicts,
+                    )
+                    await self._regrade_pending(
+                        result.question_id, value_est
                     )
                     for subq in result.proposed_subquestions:  # M3 연기: 로깅만
                         await self.ledger.log(

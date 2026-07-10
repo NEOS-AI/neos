@@ -44,6 +44,21 @@ class FakeLedger:
             None,
         )
 
+    async def get_question(self, question_id):
+        # Mirror real Ledger.get_question: return the row or None. The
+        # orchestrator reads `.value_est` off this and uses None to trip the
+        # question_id guard.
+        return next(
+            (item for item in self.items if item.id == question_id),
+            None,
+        )
+
+    async def pending_claims(self, question_id):
+        # Mirror real Ledger.pending_claims: this fake never leaves a claim in
+        # `pending` (commit_pass resolves everything), so there is nothing to
+        # re-grade -> post-commit _regrade_pending is a no-op.
+        return []
+
     async def open_question(
         self,
         text,
