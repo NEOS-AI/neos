@@ -11,6 +11,8 @@ Tests cover:
 - Decimal precision
 """
 
+import json
+
 import pytest
 from decimal import Decimal
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
@@ -128,10 +130,30 @@ class TestCostCalculator:
         pricing = CostCalculator._get_default_pricing("anthropic", "claude-haiku-4-5-20251001")
 
         assert pricing is not None
-        assert pricing["input"] == Decimal("0.25")
-        assert pricing["output"] == Decimal("1.25")
-        assert pricing["cache_creation"] == Decimal("0.30")
-        assert pricing["cache_read"] == Decimal("0.03")
+        assert pricing["input"] == Decimal("1.00")
+        assert pricing["output"] == Decimal("5.00")
+        assert pricing["cache_creation"] == Decimal("1.25")
+        assert pricing["cache_read"] == Decimal("0.10")
+
+    def test_get_default_pricing_anthropic_claude_sonnet_4_6(self):
+        pricing = CostCalculator._get_default_pricing("anthropic", "claude-sonnet-4-6")
+
+        assert pricing == {
+            "input": Decimal("3.00"),
+            "output": Decimal("15.00"),
+            "cache_creation": Decimal("3.75"),
+            "cache_read": Decimal("0.30"),
+        }
+
+    def test_get_default_pricing_anthropic_claude_opus_4_8(self):
+        pricing = CostCalculator._get_default_pricing("anthropic", "claude-opus-4-8")
+
+        assert pricing == {
+            "input": Decimal("5.00"),
+            "output": Decimal("25.00"),
+            "cache_creation": Decimal("6.25"),
+            "cache_read": Decimal("0.50"),
+        }
 
     def test_get_default_pricing_unknown_provider(self):
         """Test default pricing for unknown provider"""
@@ -205,6 +227,21 @@ class TestCostCalculator:
         assert cost_info["cache_creation_cost"] == expected_cache_creation
         assert cost_info["cache_read_cost"] == expected_cache_read
         assert cost_info["total_cost"] == expected_total
+
+    @pytest.mark.asyncio
+    async def test_one_hour_cache_creation_uses_twice_input_price(self, mock_db_manager):
+        mock_db_manager.fetch_one = AsyncMock(return_value=None)
+
+        cost = await CostCalculator.calculate_cost(
+            provider="anthropic",
+            model_name="claude-sonnet-4-6",
+            prompt_tokens=0,
+            completion_tokens=0,
+            cache_creation_tokens=1_000_000,
+            cache_ttl="1h",
+        )
+
+        assert cost["cache_creation_cost"] == Decimal("6.00")
 
     @pytest.mark.asyncio
     async def test_calculate_cost_zero_tokens(self, mock_db_manager):
@@ -346,6 +383,33 @@ class TestCostCalculator:
         )
 
     @pytest.mark.asyncio
+    async def test_record_message_cost_adds_additional_cost_once(self, mock_db_manager):
+        mock_db_manager.fetch_one = AsyncMock(return_value=None)
+        mock_db_manager.execute = AsyncMock(return_value=None)
+        metadata = {"advisor": {"call_count": 1}}
+
+        cost_info = await CostCalculator.record_message_cost(
+            message_id="msg_advisor",
+            conversation_id="conv_advisor",
+            provider="anthropic",
+            model_name="claude-sonnet-4-6",
+            model_version=None,
+            prompt_tokens=1_000_000,
+            completion_tokens=0,
+            total_tokens=1_000_000,
+            additional_cost_usd=Decimal("2.00"),
+            metadata=metadata,
+        )
+
+        assert cost_info["input_cost"] == Decimal("3.00")
+        assert cost_info["additional_cost_usd"] == Decimal("2.00")
+        assert cost_info["total_cost"] == Decimal("5.00")
+        execute_args = mock_db_manager.execute.call_args.args
+        assert Decimal(str(execute_args[15])) == Decimal("5.00")
+        assert json.loads(execute_args[20])["additional_cost_usd"] == 2.0
+        assert metadata == {"advisor": {"call_count": 1}}
+
+    @pytest.mark.asyncio
     async def test_record_message_cost_foreign_key_violation(self, mock_db_manager):
         """Test graceful handling of foreign key violation"""
         mock_db_manager.fetch_one = AsyncMock(return_value=None)
@@ -411,6 +475,30 @@ class TestCostCalculator:
 
         assert cost_info is not None
         assert cost_info["total_cost"] > Decimal("0")
+
+    @pytest.mark.asyncio
+    async def test_record_existing_message_forwards_composite_billing(self, mock_db_manager):
+        mock_db_manager.fetch_one = AsyncMock(return_value=None)
+        mock_db_manager.execute = AsyncMock(return_value=None)
+
+        cost_info = await CostCalculator.record_cost_for_existing_message(
+            message_id="msg_existing",
+            conversation_id="conv_789",
+            provider="anthropic",
+            model_name="claude-sonnet-4-6",
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=1_000_000,
+            cache_creation_tokens=1_000_000,
+            cache_ttl="1h",
+            additional_cost_usd=Decimal("2.00"),
+            metadata={"advisor": {"call_count": 1}},
+        )
+
+        assert cost_info is not None
+        assert cost_info["cache_creation_cost"] == Decimal("6.00")
+        assert cost_info["additional_cost_usd"] == Decimal("2.00")
+        assert cost_info["total_cost"] == Decimal("8.00")
 
     # ==================== Conversation Cost Summary Tests ====================
 
