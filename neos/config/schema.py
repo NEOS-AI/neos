@@ -99,6 +99,26 @@ class SmartCacheConfig(StrictConfigModel):
     ttl: SmartCacheTtlConfig = Field(default_factory=SmartCacheTtlConfig)
 
 
+class PromptCachingConfig(StrictConfigModel):
+    enabled: bool = True
+    ttl: Literal["5m", "1h"] = "5m"
+
+
+class AdvisorPromptCachingConfig(PromptCachingConfig):
+    enabled: bool = False
+
+
+class AdvisorConfig(StrictConfigModel):
+    enabled: bool = False
+    model: str = "claude-opus-4-8"
+    max_uses: int = Field(default=2, ge=1)
+    max_tokens: int = Field(default=2048, ge=1024)
+    max_pause_turns: int = Field(default=3, ge=0)
+    prompt_caching: AdvisorPromptCachingConfig = Field(
+        default_factory=AdvisorPromptCachingConfig
+    )
+
+
 class LLMConfig(StrictConfigModel):
     provider: str = "anthropic"
     model: str = "gpt-4-turbo-preview"
@@ -106,6 +126,8 @@ class LLMConfig(StrictConfigModel):
     timeout: int = 120
     research_planning_timeout: int = 180
     fast_model: str = "claude-haiku-4-5-20251001"
+    prompt_caching: PromptCachingConfig = Field(default_factory=PromptCachingConfig)
+    advisor: AdvisorConfig = Field(default_factory=AdvisorConfig)
 
 
 class EmbeddingDatasetConfig(StrictConfigModel):

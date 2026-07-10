@@ -76,3 +76,16 @@ def test_settings_object_allows_monkeypatching(monkeypatch):
     monkeypatch.setattr(local_settings, "LLM_MODEL", "patched-model")
 
     assert local_settings.LLM_MODEL == "patched-model"
+
+
+def test_nested_anthropic_feature_settings_have_legacy_aliases():
+    local_settings = Settings(config=AppConfig())
+
+    assert local_settings.LLM_PROMPT_CACHING_ENABLED is True
+    assert local_settings.LLM_PROMPT_CACHING_TTL == "5m"
+    assert local_settings.LLM_ADVISOR_ENABLED is False
+    assert local_settings.LLM_ADVISOR_MODEL == "claude-opus-4-8"
+    assert local_settings.LLM_ADVISOR_MAX_USES == 2
+    assert local_settings.LLM_ADVISOR_MAX_TOKENS == 2048
+    assert local_settings.LLM_ADVISOR_MAX_PAUSE_TURNS == 3
+    assert local_settings.LLM_ADVISOR_PROMPT_CACHING_ENABLED is False

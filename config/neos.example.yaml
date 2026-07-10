@@ -12,6 +12,19 @@ llm:
   model: claude-sonnet-4-5-20250929
   temperature: 0.7
   timeout: 180
+  prompt_caching:
+    enabled: true
+    ttl: 5m
+
+  advisor:
+    enabled: false
+    model: claude-opus-4-8
+    max_uses: 2
+    max_tokens: 2048
+    max_pause_turns: 3
+    prompt_caching:
+      enabled: false
+      ttl: 5m
 embedding:
   provider: gemini
   model: gemini-embedding-2-flash
