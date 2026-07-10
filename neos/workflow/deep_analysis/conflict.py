@@ -43,12 +43,15 @@ def source_tier(url: str, source_tiers: dict) -> int:
     everything else defaults to tier 2. Entries may be a bare domain
     (matches the domain itself or any subdomain) or a dotted suffix like
     ``".gov"`` (matches any host ending in that suffix). The raw URL is
-    also checked as a fallback in case host extraction fails.
+    only used as a fallback when host extraction genuinely fails (empty
+    host), so a query/redirect param that happens to end in a tier-1
+    domain cannot spoof the result.
     """
     tier1 = (source_tiers or {}).get("tier1") or []
     host = _extract_host(url)
+    match_target = host or url
     for entry in tier1:
-        if _domain_suffix_match(host, entry) or _domain_suffix_match(url, entry):
+        if _domain_suffix_match(match_target, entry):
             return 1
     return 2
 

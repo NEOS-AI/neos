@@ -21,6 +21,14 @@ def test_source_tier_bare_domain_no_prefix_false_positive():
     assert source_tier("https://notarxiv.org/x", TIERS) == 2
 
 
+def test_source_tier_raw_url_fallback_not_spoofed_by_query_param():
+    # "https://evil.com/redirect?to=fake.arxiv.org" must not match tier1 via
+    # a naive raw-URL endswith check -- the raw-URL fallback should only
+    # apply when host extraction genuinely fails, not when the host (evil.com)
+    # is untrusted but the full URL string happens to end in a tier1 domain.
+    assert source_tier("https://evil.com/redirect?to=fake.arxiv.org", TIERS) == 2
+
+
 def test_source_tier_subdomain_matches_dotted_suffix():
     assert source_tier("https://sub.example.gov/p", TIERS) == 1
     assert source_tier("https://raw.githubusercontent.com", TIERS) == 2
