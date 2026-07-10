@@ -197,13 +197,40 @@ class Synthesizer:
                 "own_claims": len(pairs),
             },
         )
-        conflicts = [ConflictNote(**c) for c in data.get("conflicts", [])]
+        conflicts: list[ConflictNote] = []
+        for c in data.get("conflicts", []) or []:
+            try:
+                conflicts.append(
+                    ConflictNote(
+                        claim_a=c["claim_a"],
+                        claim_b=c["claim_b"],
+                        nature=c.get("nature", ""),
+                    )
+                )
+            except (KeyError, TypeError, AttributeError):
+                # malformed conflict entry (missing keys / wrong shape) --
+                # skip it rather than crashing the whole node's summary.
+                continue
+        try:
+            confidence = float(data.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        key_claim_ids_raw = data.get("key_claim_ids") or []
+        try:
+            key_claim_ids = list(key_claim_ids_raw)
+        except TypeError:
+            key_claim_ids = []
+        caveats_raw = data.get("caveats") or []
+        try:
+            caveats = list(caveats_raw)
+        except TypeError:
+            caveats = []
         return NodeSummary(
             question_id=question.id,
-            answer=str(data.get("answer", "")),
-            key_claim_ids=list(data.get("key_claim_ids", [])),
-            confidence=float(data.get("confidence", 0.0)),
-            caveats=list(data.get("caveats", [])),
+            answer=str(data.get("answer") or ""),
+            key_claim_ids=key_claim_ids,
+            confidence=confidence,
+            caveats=caveats,
             conflicts=conflicts,
         )
 
@@ -217,8 +244,14 @@ class Synthesizer:
         is produced for them, nor are they passed to their parent).
         """
         summaries: dict[str, NodeSummary] = {}
+        visited: set[str] = set()
 
         async def visit(qid: str) -> None:
+            if qid in visited:
+                # cycle / diamond re-encounter -- already reduced (or in
+                # progress); skip to avoid unbounded recursion.
+                return
+            visited.add(qid)
             children = [
                 child
                 for child in await self.ledger.children(qid)

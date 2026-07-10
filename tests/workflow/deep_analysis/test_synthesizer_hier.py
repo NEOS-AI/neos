@@ -366,3 +366,99 @@ async def test_grandparent_prompt_independent_of_grandchildren_count():
     chars_a = _root_prompt_chars(led_a)
     chars_b = _root_prompt_chars(led_b)
     assert abs(chars_a - chars_b) <= 5
+
+
+# --- M4 final review fix wave: malformed-JSON / cycle guards ----------
+
+
+async def test_reduce_node_null_confidence_degrades_gracefully():
+    """A well-formed JSON response with confidence: null must not crash
+    reduce_node -- float(None) would raise TypeError if unguarded."""
+    q = SimpleNamespace(id="n1", text="Q", status="open", value_est=0.8)
+    led = FakeLedger({"n1": [(_claim("aaaaaaaa", "own claim"), [_ev("own excerpt")])]})
+    cj = CapturingJSON(
+        [
+            {
+                "question_id": "n1",
+                "answer": "ans [C:aaaaaaaa]",
+                "key_claim_ids": ["aaaaaaaa"],
+                "confidence": None,
+                "caveats": [],
+                "conflicts": [],
+            }
+        ]
+    )
+    synth = Synthesizer(led, json_call=cj)
+    summary = await synth.reduce_node(q, [])
+    assert isinstance(summary, NodeSummary)
+    assert summary.confidence == 0.0
+    assert summary.answer == "ans [C:aaaaaaaa]"
+
+
+async def test_reduce_node_malformed_conflict_entry_is_skipped():
+    """A conflicts entry with an extra/unexpected key must not crash
+    reduce_node -- ConflictNote(**c) would raise TypeError if unguarded,
+    but explicit-kwarg construction tolerates it and still produces a
+    valid ConflictNote. A conflicts entry MISSING a required key (e.g.
+    claim_b) must be skipped rather than crashing the whole node."""
+    q = SimpleNamespace(id="n1", text="Q", status="open", value_est=0.8)
+    led = FakeLedger({"n1": [(_claim("aaaaaaaa", "own claim"), [_ev("own excerpt")])]})
+    cj = CapturingJSON(
+        [
+            {
+                "question_id": "n1",
+                "answer": "ans [C:aaaaaaaa]",
+                "key_claim_ids": ["aaaaaaaa"],
+                "confidence": 0.5,
+                "caveats": [],
+                "conflicts": [
+                    {
+                        "claim_a": "aaaaaaaa",
+                        "claim_b": "bbbbbbbb",
+                        "nature": "수치 불일치",
+                        "unexpected_extra_key": "boom",
+                    },
+                    {"claim_a": "cccccccc"},  # missing claim_b -- skipped
+                ],
+            }
+        ]
+    )
+    synth = Synthesizer(led, json_call=cj)
+    summary = await synth.reduce_node(q, [])
+    assert isinstance(summary, NodeSummary)
+    # extra-key entry tolerated and parsed; missing-key entry skipped --
+    # no exception raised either way.
+    assert len(summary.conflicts) == 1
+    assert summary.conflicts[0].claim_a == "aaaaaaaa"
+    assert summary.conflicts[0].claim_b == "bbbbbbbb"
+    assert summary.confidence == 0.5
+
+
+class BackEdgeTreeLedger(FakeLedger):
+    """A ledger whose `children` reports a back-edge: one node's child
+    points back to an ancestor, forming a cycle in the question tree."""
+
+    async def children(self, qid):
+        # root -> child -> root (cycle)
+        edges = {"root": ["child"], "child": ["root"]}
+        return [
+            SimpleNamespace(id=cid, status="resolved")
+            for cid in edges.get(qid, [])
+        ]
+
+    async def get_question(self, qid):
+        return SimpleNamespace(id=qid, text=qid, status="resolved")
+
+
+async def test_reduce_tree_terminates_on_back_edge_cycle():
+    """A cyclic question tree (child points back to an ancestor) must not
+    cause unbounded recursion / RecursionError."""
+    verified = {}
+    led = BackEdgeTreeLedger(verified)
+    # Post-order: "child" is fully reduced (its back-edge to "root" is
+    # skipped since "root" is already in `visited`) before "root" itself.
+    cj = CapturingJSON([_payload("child", "child ans"), _payload("root", "root ans")])
+    synth = Synthesizer(led, json_call=cj)
+    summaries = await synth.reduce_tree("root")
+    assert "root" in summaries
+    assert "child" in summaries
