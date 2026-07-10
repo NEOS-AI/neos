@@ -138,6 +138,11 @@ async def test_ac_a_overclaim_weakened_then_verified():
             agentic_grader=agentic, decompose_fn=_decompose_one,
             global_token_cap=5000, synthesizer=FakeSynth(),
         )
+
+        async def split_decompose(text, *_a):
+            return []
+
+        orch._split_decompose = split_decompose
         await asyncio.wait_for(orch.run("root?"), timeout=30)
 
         row = (await s.execute(sql(
@@ -200,6 +205,11 @@ async def test_ac_b_contradicted_negation_reenters_and_verifies():
             agentic_grader=agentic, decompose_fn=_decompose_one,
             global_token_cap=5000, synthesizer=FakeSynth(),
         )
+
+        async def split_decompose(text, *_a):
+            return []
+
+        orch._split_decompose = split_decompose
         await asyncio.wait_for(orch.run("root?"), timeout=30)
 
         rows = dict((await s.execute(sql(

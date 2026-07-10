@@ -44,6 +44,28 @@ async def test_retry_cap_marks_unverified_after_two_rejections():
         await s.rollback()
 
 @pytest.mark.asyncio
+async def test_retry_cap_resolves_pending_feedback():
+    async with await db_manager.get_session() as s:
+        run_id = await create_run(s, "root", "dev"); led = Ledger(s, run_id)
+        await _blob(s, run_id)
+        qid = await _investigating(led)
+        # attempt 1 reject
+        await led.commit_pass(qid, WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
+                              {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")})
+        # attempt 2 reject (same hash) -> feedback attempt 2
+        await led._transition(qid, "investigating")
+        await led.commit_pass(qid, WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
+                              {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")})
+        # attempt 3 reject -> retry cap(2) hit -> unverified, feedback must be resolved
+        await led._transition(qid, "investigating")
+        await led.commit_pass(qid, WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
+                              {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")})
+        row = await s.execute(sql("SELECT status FROM deep_analysis_claims WHERE run_id=:r"), {"r": run_id})
+        assert row.scalar() == "unverified"
+        assert await led.pending_feedback(qid) == []
+        await s.rollback()
+
+@pytest.mark.asyncio
 async def test_weaken_repair_replaces_text_and_resolves_feedback():
     async with await db_manager.get_session() as s:
         run_id = await create_run(s, "root", "dev"); led = Ledger(s, run_id)

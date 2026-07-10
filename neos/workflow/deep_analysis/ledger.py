@@ -340,10 +340,11 @@ class Ledger:
         prior = await self._max_attempt(claim.id)
         if prior >= self.claim_retry_cap:
             claim.status = "unverified"
+            await self._resolve_feedback(claim.id)
             await self.log(
                 "claim_unverified",
                 question_id,
-                {"claim_id": claim.id, "code": verdict.code},
+                {"claim_id": claim.id, "code": verdict.code, "label": verdict.label},
             )
             return False
 
@@ -361,7 +362,12 @@ class Ledger:
         await self.log(
             "claim_rejected",
             question_id,
-            {"claim_id": claim.id, "code": verdict.code, "attempt": prior + 1},
+            {
+                "claim_id": claim.id,
+                "code": verdict.code,
+                "attempt": prior + 1,
+                "label": verdict.label,
+            },
         )
         return False
 
