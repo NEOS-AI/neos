@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from neos.config.settings import settings
 
-from .llm import call_llm
+from .llm import call_json, call_llm
+from .models import ConflictNote, NodeSummary
 from .prompt_loader import render
 
 
@@ -14,11 +15,13 @@ class Synthesizer:
         ledger,
         *,
         llm_call=call_llm,
+        json_call=call_json,
         llm_client=None,
         cassette=None,
     ) -> None:
         self.ledger = ledger
         self.llm_call = llm_call
+        self.json_call = json_call
         self.llm_client = llm_client
         self.cassette = cassette
 
@@ -85,3 +88,68 @@ class Synthesizer:
             },
         )
         return response.text
+
+    async def reduce_node(
+        self, question, child_summaries: list[NodeSummary]
+    ) -> NodeSummary:
+        """Summarize ONE node from its own verified claims + direct
+        children's NodeSummary.answer strings only (never grandchild raw
+        claims). This bounded per-node context is the AC-a invariant.
+        """
+        pairs = await self.ledger.verified_claims(question.id)
+        claim_lines = []
+        for claim, evidence_rows in pairs:
+            ev = " ".join(
+                f"<evidence>{row.excerpt}</evidence>" for row in evidence_rows
+            )
+            claim_lines.append(
+                f"[C:{claim.id}] {claim.text} (conf {claim.confidence}) {ev}"
+            )
+        child_lines = [
+            f"[{c.question_id}] {c.answer}" for c in child_summaries
+        ]
+        prompt = render(
+            "node_summary",
+            question_id=question.id,
+            question_text=question.text,
+            verified_claims="\n".join(claim_lines) or "(없음)",
+            child_summaries="\n".join(child_lines) or "(없음)",
+        )
+        config = settings.config.deep_analysis
+        try:
+            data, resp = await self.json_call(
+                config.models.synth,
+                prompt,
+                max_tokens=config.synthesis_max_tokens,
+                client=self.llm_client,
+                cassette=self.cassette,
+            )
+        except Exception:
+            joined = " ".join(c.answer for c in child_summaries) or ""
+            return NodeSummary(
+                question_id=question.id,
+                answer=joined,
+                key_claim_ids=[],
+                confidence=0.0,
+                caveats=["node_summary_unparseable"],
+                conflicts=[],
+            )
+        await self.ledger.log(
+            "node_summary",
+            question.id,
+            {
+                "input_tokens": resp.input_tokens,
+                "prompt_chars": len(prompt),
+                "child_count": len(child_summaries),
+                "own_claims": len(pairs),
+            },
+        )
+        conflicts = [ConflictNote(**c) for c in data.get("conflicts", [])]
+        return NodeSummary(
+            question_id=question.id,
+            answer=str(data.get("answer", "")),
+            key_claim_ids=list(data.get("key_claim_ids", [])),
+            confidence=float(data.get("confidence", 0.0)),
+            caveats=list(data.get("caveats", [])),
+            conflicts=conflicts,
+        )
