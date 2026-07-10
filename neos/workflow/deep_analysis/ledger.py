@@ -272,6 +272,24 @@ class Ledger:
         )
         return list(result.scalars())
 
+    async def feedback_count(self, question_id: str) -> int:
+        """Total feedback rows (resolved or not) for a question's claims.
+
+        Used by the orchestrator's stall safety valve (D15) to detect whether
+        a pass produced any new rejection feedback -- a no-progress signal
+        must see this count stay flat."""
+        value = await self.db.scalar(
+            select(func.count(DAFeedback.id)).join(
+                DAClaim,
+                (DAFeedback.claim_id == DAClaim.id)
+                & (DAFeedback.run_id == DAClaim.run_id),
+            ).where(
+                DAFeedback.run_id == self.run_id,
+                DAClaim.question_id == question_id,
+            )
+        )
+        return int(value or 0)
+
     async def _max_attempt(self, claim_id: str) -> int:
         value = await self.db.scalar(
             select(func.coalesce(func.max(DAFeedback.attempt), 0)).where(

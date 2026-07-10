@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from neos.config.settings import settings
 
+from .graders.agentic import AgenticGrader
 from .graders.deterministic import DeterministicGrader
 from .ledger import Ledger
 from .orchestrator import Orchestrator
@@ -59,6 +60,13 @@ async def build_orchestrator(
         quote_threshold=config.quote_match_threshold,
         confidence_cap=config.confidence_cap,
     )
+    agentic_grader = AgenticGrader(
+        judge_model=config.models.judge,
+        threshold=config.agentic_threshold,
+        sample_rate=config.agentic_sample_rate,
+        llm_client=llm_client,
+        cassette=cassette,
+    )
 
     def worker_factory():
         options = {
@@ -88,6 +96,7 @@ async def build_orchestrator(
         run_id,
         worker_factory,
         grader,
+        agentic_grader=agentic_grader,
         ledger=ledger,
         event_sink=event_sink,
         checkpoint=checkpoint,

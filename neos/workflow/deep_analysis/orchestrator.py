@@ -54,6 +54,7 @@ class Orchestrator:
         global_token_cap: int | None = None,
         parallel_workers: int | None = None,
         max_depth: int | None = None,
+        max_stall_rounds: int | None = None,
     ) -> None:
         self.db = session
         self.run_id = run_id
@@ -84,6 +85,16 @@ class Orchestrator:
             config.parallel_workers if parallel_workers is None else parallel_workers
         )
         self.max_depth = config.max_depth if max_depth is None else max_depth
+        self.max_stall_rounds = (
+            config.max_stall_rounds
+            if max_stall_rounds is None
+            else max_stall_rounds
+        )
+        # D15: per-question consecutive no-progress counter (in-memory, run
+        # scoped). Reset on any progress; at the cap the question is force
+        # terminated (SPLIT if depth allows, else abandon) to break the
+        # zero-token-partial and always-mismatch livelock classes.
+        self._stall_counts: dict[str, int] = {}
         self.budgeter = Budgeter(
             global_token_cap=self.global_token_cap,
             max_depth=self.max_depth,
@@ -306,6 +317,89 @@ class Orchestrator:
             {"qid": question.id, "children": child_ids},
         )
 
+    async def _verified_count(self, question_id: str) -> int | None:
+        """Verified-claim count for the stall signal. Returns None when the
+        (possibly faked) ledger does not expose `verified_claims`, which makes
+        `_made_progress` treat the signal as changed and effectively disables
+        the valve for minimal test doubles."""
+        fn = getattr(self.ledger, "verified_claims", None)
+        if fn is None:
+            return None
+        return len(await fn(question_id))
+
+    async def _feedback_signal(self, question_id: str) -> int | None:
+        fn = getattr(self.ledger, "feedback_count", None)
+        if fn is None:
+            return None
+        return await fn(question_id)
+
+    async def _made_progress(
+        self,
+        question_id: str,
+        spent_before: int,
+        verified_before: int | None,
+        feedback_before: int | None,
+    ) -> bool:
+        """A pass made progress iff it produced a new verified claim, new
+        rejection feedback, or burned tokens. An inert pass (partial with 0
+        tokens/0 claims, or a mismatch-skipped assignment) fails all three.
+        Unavailable signals (limited fakes) count as progress -> no stall."""
+        question = await self.ledger.get_question(question_id)
+        spent_after = (
+            question.spent_tokens if question is not None else spent_before
+        )
+        if spent_after > spent_before:
+            return True
+        verified_after = await self._verified_count(question_id)
+        if (
+            verified_before is None
+            or verified_after is None
+            or verified_after > verified_before
+        ):
+            return True
+        feedback_after = await self._feedback_signal(question_id)
+        if (
+            feedback_before is None
+            or feedback_after is None
+            or feedback_after > feedback_before
+        ):
+            return True
+        return False
+
+    async def _register_progress(
+        self,
+        question_id: str,
+        made_progress: bool,
+    ) -> None:
+        """D15 stall safety valve: track consecutive no-progress passes and
+        force-terminate at the cap so a livelocked question cannot spin to the
+        global token cap."""
+        if made_progress:
+            self._stall_counts[question_id] = 0
+            return
+        count = self._stall_counts.get(question_id, 0) + 1
+        self._stall_counts[question_id] = count
+        if count >= self.max_stall_rounds:
+            await self._force_terminate_stalled(question_id)
+
+    async def _force_terminate_stalled(self, question_id: str) -> None:
+        question = await self.ledger.get_question(question_id)
+        if question is None or question.status != "open":
+            return
+        rounds = self._stall_counts.get(question_id, 0)
+        await self.ledger.log(
+            "stall_terminated",
+            question_id,
+            {"rounds": rounds},
+        )
+        await self._emit(
+            "stall_terminated",
+            {"qid": question_id, "rounds": rounds},
+        )
+        self._stall_counts[question_id] = 0
+        # SPLIT if depth allows, else abandon (both handled by _do_split).
+        await self._do_split(question)
+
     async def run(self, root_text: str) -> dict[str, str]:
         try:
             recovered = await self.ledger.recover()
@@ -363,8 +457,20 @@ class Orchestrator:
                             assignment.question_id,
                             "open",
                         )
+                        # D15: a mismatch-skipped assignment made no progress.
+                        await self._register_progress(
+                            assignment.question_id, False
+                        )
                         continue
                     value_est = question.value_est
+                    # D15 progress snapshot (before this pass mutates state).
+                    spent_before = question.spent_tokens
+                    verified_before = await self._verified_count(
+                        assignment.question_id
+                    )
+                    feedback_before = await self._feedback_signal(
+                        assignment.question_id
+                    )
                     await self.ledger.commit_blobs(result.blobs)
                     verdicts = {}
                     for claim in result.claims:
@@ -378,6 +484,17 @@ class Orchestrator:
                     )
                     await self._regrade_pending(
                         result.question_id, value_est
+                    )
+                    # D15: assess progress and trip the stall valve if this
+                    # question has made none for max_stall_rounds in a row.
+                    made_progress = await self._made_progress(
+                        assignment.question_id,
+                        spent_before,
+                        verified_before,
+                        feedback_before,
+                    )
+                    await self._register_progress(
+                        assignment.question_id, made_progress
                     )
                     for subq in result.proposed_subquestions:  # M3 연기: 로깅만
                         await self.ledger.log(

@@ -644,6 +644,7 @@ class DeepAnalysisConfig(StrictConfigModel):
     )
     agentic_threshold: float = 0.35
     agentic_sample_rate: float = 0.3
+    max_stall_rounds: int = 3
     claim_retry_cap: int = 2
     report_retry_cap: int = 2
     resolve_threshold: float = 0.7

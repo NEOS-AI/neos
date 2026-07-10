@@ -193,6 +193,26 @@ M4 ReportGrader가 추가되면 같은 오류 코드가 조립 재시도 처방�
 
 ---
 
+## D13. §6.3.2 서브질문 채택은 M3에서도 재연기 — `subq_proposed` 로깅만 유지
+
+**결정:** D11에서 M3로 연기했던 워커 `proposed_subquestions`의 트리 채택(중복 제거 + value_est
+부여 후 자식 삽입, §6.3.2)을 M3에서도 **구현하지 않고** 다시 M4+로 연기한다. 오케스트레이터는
+계속 `subq_proposed` 이벤트로 로깅만 한다(M2에서 붙인 관측 경로 그대로).
+**근거:** M3의 세 acceptance criteria(AC-a E_OVERCLAIM 약화, AC-b E_CONTRADICTED 부정 재진입,
+AC-c 재시도 캡→unverified)는 **어느 것도 서브질문 채택을 요구하지 않는다** — 셋 다 기존 질문 위의
+repair→pending→regrade 루프로 닫힌다. 채택 로직은 §6.3.2대로 "중복/유사 서브질문 병합 + 상대
+value_est 산정"을 위해 **독립적인 LLM 심사자**를 요구하는데, 이는 AgenticGrader(클레임 채점자)와
+역할이 다르고 별도 프롬프트·검증·테스트 하네스를 필요로 한다. M3에 끼워 넣으면 세 AC와 무관한
+표면적을 늘려 회귀 위험만 키운다. §1 원칙(최소 표면적, AC 주도)에 따라 채택은 계층 리듀스가
+들어오는 M4에서 응집적으로 다룬다.
+**이탈:** 원 설계 §6.3 메인 루프의 `_review_subquestions`(채택)를 M3에서도 로깅 부분 구현으로
+유지 — D11의 연기를 한 마일스톤 더 연장.
+**영향:** `subq_proposed` 이벤트는 이미 기록되므로 M4에서 소비할 데이터는 연속적으로 쌓인다.
+채택 미구현이 M3 AC 충족을 막지 않음은 Task 6 통합 테스트(AC-a/b/c)가 서브질문 없이 통과함으로
+입증된다.
+
+---
+
 ## D14. AgenticGrader — 판정 불가 시 "보류" 대신 미심사 통과(label=None)
 
 **결정:** `AgenticGrader.grade`가 judge 응답을 파싱하지 못하거나(`JSONParseError`, `call_json`이
@@ -212,3 +232,27 @@ M4 ReportGrader가 추가되면 같은 오류 코드가 조립 재시도 처방�
 `judge_unparseable`/`judge_unknown_label` detail이 있는 verdict로 관측 가능해야 한다. 재판정
 재시도가 필요하면 별도 샘플링 라운드(다음 pass)에서 자연히 재티어링되며, 이는 기존 tiering
 샘플러(`should_grade`)가 이미 제공하는 경로다 — 전용 pending 재시도 배관을 새로 만들 필요가 없다.
+
+---
+
+## D15. 무진전 안전밸브 — 질문별 연속 무진전 라운드 상한 도달 시 강제 SPLIT/abandon
+
+**결정:** 질문마다 **연속 무진전 라운드 수**를 오케스트레이터 인메모리 `{qid: stall_count}`로 센다.
+"무진전"은 한 pass가 (a) 신규 verified 클레임 0 **AND** (b) 신규 feedback(거절) 0 **AND** (c) 토큰
+증가 0 인 경우 — 또는 question_id 가드(Task 3)에 의해 커밋이 스킵된 경우로 정의한다. 진전이 하나라도
+있으면 카운터를 0으로 리셋하고, 무진전이면 +1 한다. `max_stall_rounds`(config 기본 3) 도달 시 해당
+질문을 강제 종료한다: `_do_split`을 호출해 depth가 허용되면 SPLIT, `depth >= max_depth`면 abandon.
+**근거:** M2/M3 이월 livelock 두 종을 결정적으로 차단한다 — (1) **zero-token-partial**: 타임아웃
+워커가 매 라운드 0 토큰·0 클레임 partial을 커밋해 예산은 안 줄고 상태도 안 변하는 무한 루프,
+(2) **always-mismatch**: 워커가 매번 다른 question_id를 돌려줘 Task 3 가드가 커밋을 스킵하고 질문을
+open으로 되돌리기만 하는 스핀. 둘 다 budgeter의 score/should_stop만으로는 멈추지 않는다(점수가
+floor 위에 남아 계속 재선택). 안전밸브는 "질문이 실제로 원장을 바꿨는가"라는 단일·결정적 신호로
+이 부류를 종료시킨다. 정상 진전(약화 repair→verified, 거절→feedback, 토큰 소비)은 무진전이 아니므로
+정상 파이프라인에는 개입하지 않는다.
+**이탈:** 없음(원 설계가 위임한 안전장치. 원 설계 §6.2 정지 조건을 보강하되 대체하지 않음 —
+전역 캡·score floor는 그대로 유지되고, 안전밸브는 그 위에 질문 단위 진전 보증을 더한다).
+**영향:** `neos/config/schema.py`에 `max_stall_rounds: int = 3` 추가, 오케스트레이터에
+`max_stall_rounds` 주입 파라미터 + `_made_progress`/`_register_progress`/`_force_terminate_stalled`
+추가, Ledger에 진전 판정용 `feedback_count(qid)` 추가. `stall_terminated` 이벤트로 관측 가능.
+결정적 테스트: 매 라운드 무진전 결과만 반환하는 워커 → run이 전역 캡에 도달하지 않고 종료하며
+질문이 split/abandoned로 끝난다.
