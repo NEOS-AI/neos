@@ -14,8 +14,11 @@ from .models import (
     ProposedBlob,
     ProposedClaim,
     ProposedEvidence,
+    RepairResult,
     WorkerResult,
 )
+
+_REPAIR_ACTIONS = {"fixed", "weakened", "abandoned"}
 
 
 class Worker:
@@ -65,6 +68,7 @@ class Worker:
         brief: str,
         effort: Effort,
         question_id: str,
+        repairs: list[dict] | None = None,
     ) -> WorkerResult:
         if effort not in {Effort.SCOUT, Effort.DIG}:
             raise ValueError(f"worker cannot execute effort {effort.value}")
@@ -80,6 +84,14 @@ class Worker:
             else config.models.dig
         )
         effort_config = config.effort[effort.value]
+
+        repairs = repairs or []
+        if repairs and all(
+            r.get("code") == "E_OVERCLAIM" for r in repairs
+        ):
+            return await self._weaken_only(
+                brief, question_id, repairs, effort_config
+            )
 
         search_results = await self._search(
             brief,
@@ -158,11 +170,15 @@ class Worker:
             1.0,
             max(0.0, float(data.get("self_assessment", 0.0))),
         )
+        repair_results = self._parse_repairs(
+            data.get("repairs", []), fetched_by_url
+        )
         return WorkerResult(
             question_id=question_id,
             status=status,
             claims=list(self._claims),
             blobs=list(self._blobs),
+            repairs=repair_results,
             proposed_subquestions=list(
                 data.get("proposed_subquestions", [])
             ),
@@ -171,4 +187,100 @@ class Worker:
             model=self._model,
             self_assessment=self_assessment,
             fail_reason=str(data.get("fail_reason", "")),
+        )
+
+    def _parse_repairs(
+        self,
+        raw_repairs: list[dict],
+        fetched_by_url: dict[str, ProposedBlob],
+    ) -> list[RepairResult]:
+        repair_results: list[RepairResult] = []
+        for raw_repair in raw_repairs:
+            evidence_items = []
+            for raw_evidence in raw_repair.get("new_evidence", []):
+                source_url = str(raw_evidence.get("source_url", ""))
+                fetched = fetched_by_url.get(source_url)
+                if fetched is None:
+                    continue
+                evidence_items.append(
+                    ProposedEvidence(
+                        source_url=source_url,
+                        excerpt=str(raw_evidence.get("excerpt", "")),
+                        raw_ref=fetched.content_hash,
+                    )
+                )
+            action = str(raw_repair.get("action", "fixed"))
+            if action not in _REPAIR_ACTIONS:
+                action = "fixed"
+            new_text = raw_repair.get("new_text")
+            repair_results.append(
+                RepairResult(
+                    claim_id=str(raw_repair.get("claim_id", "")),
+                    action=action,
+                    new_text=(
+                        str(new_text) if new_text is not None else None
+                    ),
+                    new_evidence=evidence_items,
+                )
+            )
+        return repair_results
+
+    async def _weaken_only(
+        self,
+        brief: str,
+        question_id: str,
+        repairs: list[dict],
+        effort_config,
+    ) -> WorkerResult:
+        """AC-a: E_OVERCLAIM-only repairs are salvaged by weakening the
+        claim text to evidence level. No search/fetch call is made -
+        `self._search`/`self.fetch_fn` are never invoked in this branch."""
+        config = settings.config.deep_analysis
+        repair_lines = "\n".join(
+            f"- claim_id={r.get('claim_id', '')} | "
+            f"detail={r.get('detail', '')}"
+            for r in repairs
+        )
+        prompt = (
+            brief.replace(
+                "{fetched_evidence}",
+                "(약화 전용 모드 - 재조사 생략)",
+            )
+            + "\n\n[REPAIR MODE - WEAKEN ONLY]\n"
+            "아래 클레임은 과잉주장(E_OVERCLAIM)으로 반려되었다. "
+            "재조사하지 말고 문구를 증거 수준으로 약화한 new_text만 "
+            "생성하라. JSON 객체 하나만 출력:\n"
+            '{"repairs": [{"claim_id": "...", "new_text": "약화된 문구"}]}'
+            f"\n\n수리 대상:\n{repair_lines}"
+        )
+
+        data, response = await call_json(
+            self._model,
+            prompt,
+            max_tokens=min(
+                effort_config.token_cap,
+                config.worker_max_output_tokens,
+            ),
+            client=self.llm_client,
+            cassette=self.cassette,
+        )
+        self._tokens += response.input_tokens + response.output_tokens
+
+        repair_results = [
+            RepairResult(
+                claim_id=str(raw.get("claim_id", "")),
+                action="weakened",
+                new_text=str(raw.get("new_text", "")),
+            )
+            for raw in data.get("repairs", [])
+        ]
+
+        return WorkerResult(
+            question_id=question_id,
+            status="completed",
+            claims=[],
+            blobs=[],
+            repairs=repair_results,
+            tokens_spent=self._tokens,
+            model=self._model,
         )

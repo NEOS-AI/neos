@@ -69,6 +69,11 @@ class MemoryLedger:
         # post-commit _regrade_pending to re-grade.
         return []
 
+    async def pending_feedback(self, question_id):
+        # Mirror real Ledger.pending_feedback: this fake never writes
+        # feedback rows, so _partition always sees "no pending feedback".
+        return []
+
     async def open_question(
         self,
         text,

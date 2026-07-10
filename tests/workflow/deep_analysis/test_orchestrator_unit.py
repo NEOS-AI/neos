@@ -59,6 +59,11 @@ class FakeLedger:
         # re-grade -> post-commit _regrade_pending is a no-op.
         return []
 
+    async def pending_feedback(self, question_id):
+        # Mirror real Ledger.pending_feedback: this fake never writes
+        # feedback rows, so _partition always sees "no pending feedback".
+        return []
+
     async def open_question(
         self,
         text,
@@ -119,7 +124,7 @@ class FakeLedger:
 
 
 class FakeWorker:
-    async def investigate(self, brief, effort, question_id):
+    async def investigate(self, brief, effort, question_id, repairs=None):
         return WorkerResult(
             question_id=question_id,
             status="completed",

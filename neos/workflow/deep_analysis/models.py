@@ -17,6 +17,7 @@ class Assignment:
     question_id: str
     brief: str
     effort: Effort
+    repairs: list = field(default_factory=list)
 
 
 @dataclass

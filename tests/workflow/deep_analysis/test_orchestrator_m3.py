@@ -64,7 +64,7 @@ def _result(qid, tokens=5000):
 class FixedWorker:
     """Returns the same well-formed result for whatever question it is given."""
 
-    async def investigate(self, brief, effort, qid):
+    async def investigate(self, brief, effort, qid, repairs=None):
         return _result(qid)
 
     def flush_partial(self, qid):
@@ -78,7 +78,7 @@ class MismatchThenFixWorker:
     def __init__(self, state):
         self.state = state
 
-    async def investigate(self, brief, effort, qid):
+    async def investigate(self, brief, effort, qid, repairs=None):
         self.state["n"] += 1
         if self.state["n"] == 1:
             return _result("ZZZZZZZZ")  # wrong question_id

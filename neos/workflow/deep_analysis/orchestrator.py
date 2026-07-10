@@ -26,6 +26,14 @@ def _wall_clock_cap(effort: Effort) -> float:
     return float(settings.config.deep_analysis.effort[effort.value].wall_clock_cap)
 
 
+_REPAIR_PRESCRIPTIONS = {
+    "E_OVERCLAIM": "문구를 증거 수준으로 약화(action=weakened, 재조사 금지)",
+    "E_CONTRADICTED": "부정형으로 재작성(action=fixed, new_text=부정형)",
+    "E_UNSUPPORTED": "다른 증거 탐색, 실패 시 action=abandoned",
+    "E_QUOTE_MISMATCH": "salvage 출처에서 정확 발췌 재수집",
+}
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -127,6 +135,7 @@ class Orchestrator:
                     assignment.brief,
                     assignment.effort,
                     assignment.question_id,
+                    repairs=assignment.repairs,
                 ),
                 timeout=_wall_clock_cap(assignment.effort),
             )
@@ -222,7 +231,7 @@ class Orchestrator:
         await self._checkpoint()
         return root_id
 
-    def _partition(self, picks):
+    async def _partition(self, picks):
         assignments: list[Assignment] = []
         splits = []
         config = settings.config.deep_analysis
@@ -230,16 +239,39 @@ class Orchestrator:
             if effort == Effort.SPLIT:
                 splits.append(question)
                 continue
+            feedback = await self.ledger.pending_feedback(question.id)
+            repairs = [
+                {
+                    "claim_id": item.claim_id,
+                    "code": item.code,
+                    "detail": item.detail,
+                    "salvage": item.salvage,
+                }
+                for item in feedback
+            ]
+            if repairs:
+                repair_count = len(repairs)
+                repairs_rendered = "\n".join(
+                    f"{r['claim_id']} | {r['code']} | {r['detail']} | "
+                    f"{_REPAIR_PRESCRIPTIONS.get(r['code'], '')} | "
+                    f"{r['salvage'] or ''}"
+                    for r in repairs
+                )
+            else:
+                repair_count = 0
+                repairs_rendered = "(없음)"
             brief = render(
                 "worker_brief",
                 question_text=question.text,
                 verified_summaries="(없음)",
                 dead_ends="(없음)",
-                repair_count=0,
-                repairs="(없음)",
+                repair_count=repair_count,
+                repairs=repairs_rendered,
                 token_cap=config.effort[effort.value].token_cap,
             )
-            assignments.append(Assignment(question.id, brief, effort))
+            assignments.append(
+                Assignment(question.id, brief, effort, repairs)
+            )
         return assignments, splits
 
     async def _do_split(self, question) -> None:
@@ -287,7 +319,7 @@ class Orchestrator:
                 picks = await self.budgeter.select(self.ledger)
                 if not picks:
                     break
-                assignments, splits = self._partition(picks)
+                assignments, splits = await self._partition(picks)
 
                 for question in splits:
                     await self._do_split(question)

@@ -5,14 +5,14 @@ from neos.workflow.deep_analysis.models import Assignment, Effort, WorkerResult,
 class HangingWorker:
     """buffer에 클레임 1개 넣고 무한 대기 → 타임아웃 시 flush_partial이 그 클레임 반환."""
     def __init__(self): self._claims = [ProposedClaim(text="buffered", confidence=0.5)]
-    async def investigate(self, brief, effort, qid):
+    async def investigate(self, brief, effort, qid, repairs=None):
         await asyncio.sleep(10)
         return WorkerResult(question_id=qid, status="completed")
     def flush_partial(self, qid):
         return WorkerResult(question_id=qid, status="partial", claims=list(self._claims))
 
 class BoomWorker:
-    async def investigate(self, brief, effort, qid): raise RuntimeError("boom")
+    async def investigate(self, brief, effort, qid, repairs=None): raise RuntimeError("boom")
     def flush_partial(self, qid): return WorkerResult(question_id=qid, status="partial")
 
 def _orch(factory):

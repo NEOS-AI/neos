@@ -7,7 +7,9 @@
 {"status": "completed|partial", "claims": [{"text": "클레임", "confidence": 0.6,
 "evidence": [{"source_url": "https://...", "excerpt": "원문 그대로",
 "raw_ref": "16자리 fetch 해시"}]}], "self_assessment": 0.8,
-"proposed_subquestions": [], "dead_ends": []}
+"proposed_subquestions": [], "dead_ends": [],
+"repairs": [{"claim_id":"...","action":"weakened|fixed|abandoned",
+"new_text":"...","new_evidence":[...]}]}
 
 규칙:
 - excerpt는 아래 fetch 원문에서 그대로 복사한다. 의역하지 않는다.
