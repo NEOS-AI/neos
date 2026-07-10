@@ -613,7 +613,8 @@ class DeepAnalysisDevProfileConfig(StrictConfigModel):
 
 
 class DeepAnalysisConfig(StrictConfigModel):
-    enabled: bool = True
+    enabled: bool = False
+    complexity_threshold: float = 0.5
     models: DeepAnalysisModelsConfig = Field(default_factory=DeepAnalysisModelsConfig)
     effort: dict[str, DeepAnalysisEffortConfig] = Field(
         default_factory=lambda: {
