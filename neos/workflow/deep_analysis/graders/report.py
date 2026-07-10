@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 
+from ..citation import OrphanCitationError
 from ..llm import JSONParseError, call_json
 from ..models import Verdict
 from ..prompt_loader import render
@@ -90,16 +91,17 @@ class ReportGrader:
         if _RAW_MARKER.search(report):
             return Verdict(
                 ok=False,
-                code="E_ORPHAN_CITE",
+                code=OrphanCitationError.code,
                 detail="raw [C:...] marker found post-render",
             )
 
-        # (b) the limits/unresolved section must exist.
-        if _LIMITS_HEADING not in report:
+        # (b) marker-less factual-assertion ratio must stay under threshold.
+        ratio = _uncited_ratio(_report_body(report))
+        if ratio >= _UNCITED_RATIO_MAX:
             return Verdict(
                 ok=False,
-                code="E_REPORT_NO_LIMITS",
-                detail=f"missing '{_LIMITS_HEADING}' section",
+                code="E_REPORT_UNCITED",
+                detail=f"uncited assertion ratio {ratio:.2f} >= {_UNCITED_RATIO_MAX}",
             )
 
         # (c) every resolved root-direct-child question must be mentioned.
@@ -114,13 +116,12 @@ class ReportGrader:
                     detail=f"resolved question not mentioned: {child.text}",
                 )
 
-        # (d) marker-less factual-assertion ratio must stay under threshold.
-        ratio = _uncited_ratio(_report_body(report))
-        if ratio >= _UNCITED_RATIO_MAX:
+        # (d) the limits/unresolved section must exist.
+        if _LIMITS_HEADING not in report:
             return Verdict(
                 ok=False,
-                code="E_REPORT_UNCITED",
-                detail=f"uncited assertion ratio {ratio:.2f} >= {_UNCITED_RATIO_MAX}",
+                code="E_REPORT_NO_LIMITS",
+                detail=f"missing '{_LIMITS_HEADING}' section",
             )
 
         return Verdict(ok=True)

@@ -6,6 +6,8 @@ import pytest
 from neos.workflow.deep_analysis.graders.report import ReportGrader
 from neos.workflow.deep_analysis.models import Verdict
 
+pytestmark = pytest.mark.no_db
+
 
 @dataclass
 class Question:
@@ -118,6 +120,30 @@ async def test_missing_limits_section_fails():
 
     assert verdict.ok is False
     assert verdict.code == "E_REPORT_NO_LIMITS"
+
+
+@pytest.mark.asyncio
+async def test_uncited_ratio_beats_missing_limits_on_priority():
+    """§6.8 order is (a) orphan, (b) uncited, (c) question, (d) limits --
+    a report failing both (b) and (d) must surface E_REPORT_UNCITED, not
+    E_REPORT_NO_LIMITS."""
+    ledger = FakeLedger(children=[CHILD1, CHILD2])
+    report = (
+        "## 요약\n2020년 매출은 100억 달러였다. "
+        "2021년 매출은 120억 달러였다. "
+        "2022년 매출은 150억 달러였다.\n\n"
+        "## 본문\n시장 규모는 얼마인가에 대한 답은 200억 달러이다. "
+        "주요 업체는 누구인가에 대한 답은 A사이다.\n\n"
+        "## 출처\n[1] https://a.example\n"
+    )
+    # sanity: no limits section present, so this report also fails (d) if we
+    # ever reach it -- the assertion below proves we don't.
+    assert "한계와 미확인 사항" not in report
+
+    verdict = await _grader(ledger).grade_deterministic(report, "root0001")
+
+    assert verdict.ok is False
+    assert verdict.code == "E_REPORT_UNCITED"
 
 
 @pytest.mark.asyncio
@@ -234,8 +260,9 @@ async def test_grade_short_circuits_on_deterministic_failure():
     judge = FakeJudge(answers_question=True, strength_ok=True)
     report = (
         "## 요약\n핵심 내용입니다[1].\n\n"
-        "## 본문\n시장 규모는 얼마인가에 대한 답은 100억 달러[1]이다.\n\n"
-        "## 출처\n[1] https://a.example\n"
+        "## 본문\n시장 규모는 얼마인가에 대한 답은 100억 달러[1]이다. "
+        "주요 업체는 누구인가에 대한 답은 A사와 B사이다[2].\n\n"
+        "## 출처\n[1] https://a.example\n[2] https://b.example\n"
     )
 
     grader = ReportGrader(ledger, judge_model="claude-j", llm_client=judge)
