@@ -190,3 +190,25 @@ M4 ReportGrader가 추가되면 같은 오류 코드가 조립 재시도 처방�
 **근거:** 원 설계 §10 "M2 AC 전부 FakeWorker로 재현". SPLIT은 LLM decompose를 호출하므로 주입점이 없으면 계약 테스트가 불가능. §6.3.1대로 decompose 입력에 verified 요약 + dead_ends를 포함한다.
 **이탈:** 없음(테스트 가능성 위한 구조적 분리 + §6.3.1 충실).
 **영향:** 프로덕션에서는 `_default_split_decompose`(LLM)가 쓰인다.
+
+---
+
+## D14. AgenticGrader — 판정 불가 시 "보류" 대신 미심사 통과(label=None)
+
+**결정:** `AgenticGrader.grade`가 judge 응답을 파싱하지 못하거나(`JSONParseError`, `call_json`이
+1회 재시도 후에도 실패) 라벨이 4종 열거값(SUPPORTS/PARTIAL/UNRELATED/CONTRADICTS) 밖이면, 판정을
+보류(pending) 상태로 묶어두지 않고 즉시 `Verdict(ok=True, label=None, detail="judge_unparseable"|
+"judge_unknown_label")`로 미심사 통과 처리한다. 시스템을 정지시키지 않는다(§6.5 엣지 케이스).
+**근거:** 원 설계는 판정 불가 시 "pending 유지"를 지시하지만, 이는 원 설계의 상태 기계에서 pending이
+별도의 종착 대기 상태임을 전제한다. 우리 파이프라인에서는 det(DeterministicGrader) 통과 클레임의
+기본 상태가 이미 `verified`이고, AgenticGrader는 그 위에 계층화된 티어링 심사(§6.5)일 뿐이다. 여기서
+"pending"을 새로 도입하면 (a) det 통과 후 verified였던 클레임이 agentic 계층 실패만으로 미검증 상태로
+격하되는 상태 역행이 생기고, (b) Ledger/오케스트레이터에 별도의 pending 재시도 배관을 요구해 §11.9
+("exactly-once용 추가 배관 금지")와 충돌한다. 판정 불가는 judge의 일시적 응답 실패이지 클레임 자체의
+증거 결함이 아니므로, det 통과라는 기존 신뢰를 유지한 채 이벤트로만 기록하는 편이 더 안전하다.
+**이탈:** 원 설계 §6.5의 "판정 불가 시 pending 유지" 지시에서 이탈. 미심사 통과(`label=None` +
+`detail`에 사유 기록)로 대체.
+**영향:** M3 Task 2/3(오케스트레이터 2단계 채점, Ledger pending_feedback)은 이 미심사 통과를
+`judge_unparseable`/`judge_unknown_label` detail이 있는 verdict로 관측 가능해야 한다. 재판정
+재시도가 필요하면 별도 샘플링 라운드(다음 pass)에서 자연히 재티어링되며, 이는 기존 tiering
+샘플러(`should_grade`)가 이미 제공하는 경로다 — 전용 pending 재시도 배관을 새로 만들 필요가 없다.

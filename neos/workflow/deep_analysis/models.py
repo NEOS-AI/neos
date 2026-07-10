@@ -72,6 +72,7 @@ class Verdict:
     code: str = ""
     detail: str = ""
     salvage: str | None = None
+    label: str | None = None
 
 
 @dataclass
