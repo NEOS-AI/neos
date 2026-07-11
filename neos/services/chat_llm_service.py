@@ -17,8 +17,15 @@ from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
 from neos.services.context_optimizer import context_optimizer
 from neos.config.settings import settings
-from neos.providers.anthropic_features import build_cache_control
-from neos.providers.anthropic_usage import normalize_anthropic_usage
+from neos.providers.anthropic_features import (
+    build_cache_control,
+    build_tool_policy,
+    serialize_content_block,
+)
+from neos.providers.anthropic_usage import (
+    calculate_anthropic_cost,
+    normalize_anthropic_usage,
+)
 from neos.tools.tool_search.search_tools_handler import SEARCH_TOOLS_TOOL
 
 logger = get_logger(__name__)
@@ -664,16 +671,36 @@ class ChatLLMService:
             기존 generate_response_stream_with_tools()와 동일한 이벤트 형식
         """
         model = model_name or self.default_model
+        prompt_cache_config = settings.config.llm.prompt_caching.model_copy(deep=True)
+        advisor_config = settings.config.llm.advisor.model_copy(deep=True)
+        cache_control = build_cache_control(prompt_cache_config)
         start_time = time.time()
         full_content = ""
-        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        aggregate_usage = {
+            "input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "iterations": [],
+        }
+        advisor_result_count = 0
+        advisor_error_codes: list[str] = []
+        tool_policy = None
 
         try:
             client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
-            # 1. 초기 도구 세트: 코어 도구 + search_tools
-            active_tools_dicts = list(core_tools)
-            active_tools_dicts.append(SEARCH_TOOLS_TOOL)
+            # 1. 초기 도구 세트: 코어 도구 + search_tools + 선택적 Advisor
+            tool_policy = build_tool_policy(
+                [*core_tools, SEARCH_TOOLS_TOOL],
+                executor_model=model,
+                prompt_caching=prompt_cache_config,
+                advisor=advisor_config,
+            )
+            active_tools_dicts = list(tool_policy.tools)
+            messages_api = (
+                client.beta.messages if tool_policy.use_beta else client.messages
+            )
 
             # 메시지 변환
             anthropic_messages = []
@@ -686,19 +713,24 @@ class ChatLLMService:
             yield {"type": "start", "model": model, "provider": "anthropic"}
 
             round_count = 0
+            pause_turn_count = 0
 
             while round_count < max_tool_rounds:
-                round_count += 1
-
                 # 2. Claude API 호출
-                async with client.messages.stream(
-                    model=model,
-                    messages=anthropic_messages,
-                    tools=active_tools_dicts,
-                    system=system_prompt or "",
-                    temperature=temperature,
-                    max_tokens=max_tokens or 4096,
-                ) as stream:
+                stream_kwargs: Dict[str, Any] = {
+                    "model": model,
+                    "messages": list(anthropic_messages),
+                    "tools": list(active_tools_dicts),
+                    "system": system_prompt or "",
+                    "temperature": temperature,
+                    "max_tokens": max_tokens or 4096,
+                }
+                if cache_control:
+                    stream_kwargs["cache_control"] = cache_control
+                if tool_policy.use_beta:
+                    stream_kwargs["betas"] = list(tool_policy.betas)
+
+                async with messages_api.stream(**stream_kwargs) as stream:
                     async for event in stream:
                         if not hasattr(event, 'type'):
                             continue
@@ -710,7 +742,7 @@ class ChatLLMService:
                                 elif event.content_block.type == "tool_use":
                                     logger.debug(
                                         f"Tool use started: {event.content_block.name} "
-                                        f"(round {round_count})"
+                                        f"(round {round_count + 1})"
                                     )
 
                         elif event.type == "content_block_delta":
@@ -727,12 +759,90 @@ class ChatLLMService:
                     # 최종 메시지 가져오기
                     final_message = await stream.get_final_message()
 
-                # Usage 누적
-                total_usage["prompt_tokens"] += final_message.usage.input_tokens
-                total_usage["completion_tokens"] += final_message.usage.output_tokens
-                total_usage["total_tokens"] = (
-                    total_usage["prompt_tokens"] + total_usage["completion_tokens"]
+                # Usage 누적: 요청별 정규화 후 비용 계산용 원시 키로 합친다.
+                request_usage = normalize_anthropic_usage(
+                    final_message.usage,
+                    model=model,
+                    cache_requested=bool(cache_control),
                 )
+                aggregate_usage["input_tokens"] += request_usage["prompt_tokens"]
+                aggregate_usage["cache_creation_input_tokens"] += request_usage[
+                    "cache_creation_tokens"
+                ]
+                aggregate_usage["cache_read_input_tokens"] += request_usage[
+                    "cache_read_tokens"
+                ]
+                aggregate_usage["output_tokens"] += request_usage[
+                    "completion_tokens"
+                ]
+                request_iterations = request_usage["iterations"]
+                if tool_policy.use_beta and not request_iterations:
+                    request_iterations = [
+                        {
+                            "type": "message",
+                            "model": None,
+                            "input_tokens": request_usage["prompt_tokens"],
+                            "cache_creation_tokens": request_usage[
+                                "cache_creation_tokens"
+                            ],
+                            "cache_read_tokens": request_usage["cache_read_tokens"],
+                            "output_tokens": request_usage["completion_tokens"],
+                        }
+                    ]
+                aggregate_usage["iterations"].extend(
+                    {
+                        "type": iteration["type"],
+                        "model": iteration["model"],
+                        "input_tokens": iteration["input_tokens"],
+                        "cache_creation_input_tokens": iteration[
+                            "cache_creation_tokens"
+                        ],
+                        "cache_read_input_tokens": iteration["cache_read_tokens"],
+                        "output_tokens": iteration["output_tokens"],
+                    }
+                    for iteration in request_iterations
+                )
+
+                serialized_content = [
+                    serialize_content_block(block)
+                    for block in final_message.content
+                ]
+                for block in final_message.content:
+                    if getattr(block, "type", None) != "advisor_tool_result":
+                        continue
+                    advisor_result_count += 1
+                    result = getattr(block, "content", None)
+                    result_type = (
+                        result.get("type")
+                        if isinstance(result, dict)
+                        else getattr(result, "type", None)
+                    )
+                    if result_type == "advisor_tool_result_error":
+                        error_code = (
+                            result.get("error_code")
+                            if isinstance(result, dict)
+                            else getattr(result, "error_code", None)
+                        )
+                        if error_code:
+                            advisor_error_codes.append(error_code)
+
+                if final_message.stop_reason == "pause_turn":
+                    pause_turn_count += 1
+                    if pause_turn_count > advisor_config.max_pause_turns:
+                        yield {
+                            "type": "error",
+                            "error": (
+                                "Anthropic Advisor pause_turn exceeded configured "
+                                f"limit ({advisor_config.max_pause_turns})"
+                            ),
+                        }
+                        return
+                    anthropic_messages.append(
+                        {"role": "assistant", "content": serialized_content}
+                    )
+                    continue
+
+                round_count += 1
 
                 # 3. tool_use 블록 확인
                 tool_uses = [
@@ -801,21 +911,9 @@ class ChatLLMService:
                     break
 
                 # 5. assistant 응답 + tool_results를 messages에 추가
-                def _serialize_content_block(b) -> dict:
-                    if hasattr(b, 'model_dump'):
-                        return b.model_dump()
-                    block: dict = {"type": b.type}
-                    if b.type == "text":
-                        block["text"] = b.text
-                    elif b.type == "tool_use":
-                        block.update({"id": b.id, "name": b.name, "input": b.input})
-                    elif b.type == "thinking":
-                        block["thinking"] = getattr(b, "thinking", "")
-                    return block
-
                 anthropic_messages.append({
                     "role": "assistant",
-                    "content": [_serialize_content_block(b) for b in final_message.content],
+                    "content": serialized_content,
                 })
                 anthropic_messages.append({
                     "role": "user",
@@ -824,17 +922,44 @@ class ChatLLMService:
 
             latency_ms = int((time.time() - start_time) * 1000)
 
-            # 비용 계산
-            cost_info = await cost_calculator.calculate_cost(
-                provider="anthropic",
-                model_name=model,
-                prompt_tokens=total_usage["prompt_tokens"],
-                completion_tokens=total_usage["completion_tokens"],
+            usage_info = normalize_anthropic_usage(
+                aggregate_usage,
+                model=model,
+                cache_requested=bool(cache_control),
             )
+            cost_info = await calculate_anthropic_cost(
+                aggregate_usage,
+                executor_model=model,
+                executor_cache_ttl=prompt_cache_config.ttl,
+                advisor_cache_ttl=advisor_config.prompt_caching.ttl,
+                calculator=cost_calculator.calculate_cost,
+            )
+            advisor_usage = dict(cost_info.get("advisor", {}))
+            advisor_usage["call_count"] = max(
+                advisor_usage.get("call_count", 0), advisor_result_count
+            )
+            advisor_usage["error_codes"] = list(
+                dict.fromkeys(
+                    [
+                        *advisor_usage.get("error_codes", []),
+                        *advisor_error_codes,
+                    ]
+                )
+            )
+            cost_info["advisor"] = advisor_usage
+            usage_info["anthropic"] = {
+                "prompt_caching": {"status": usage_info["cache_status"]},
+                "advisor": {
+                    "enabled": advisor_config.enabled,
+                    "injected": tool_policy.advisor.injected,
+                    "skip_reason": tool_policy.advisor.skip_reason,
+                    **advisor_usage,
+                },
+            }
 
             logger.info(
                 f"Tool search stream completed: {len(full_content)} chars, "
-                f"{total_usage['total_tokens']} tokens, "
+                f"{usage_info['total_tokens']} tokens, "
                 f"${cost_info['total_cost']:.6f}, "
                 f"{latency_ms}ms, {round_count} rounds"
             )
@@ -844,12 +969,23 @@ class ChatLLMService:
                 "full_content": full_content,
                 "model_name": model,
                 "provider": "anthropic",
-                "usage": total_usage,
+                "usage": usage_info,
                 "cost": cost_info,
                 "latency_ms": latency_ms,
                 "tool_search_rounds": round_count,
             }
 
+        except anthropic.BadRequestError as e:
+            if tool_policy is not None and tool_policy.use_beta:
+                error_message = (
+                    "Anthropic Advisor beta API rejected configured model pair "
+                    f"(executor={model}, advisor={advisor_config.model}): {e}"
+                )
+                logger.error(error_message)
+                yield {"type": "error", "error": error_message}
+                return
+            logger.error(f"Tool search stream error: {e}")
+            yield {"type": "error", "error": str(e)}
         except Exception as e:
             logger.error(f"Tool search stream error: {e}")
             yield {"type": "error", "error": str(e)}
