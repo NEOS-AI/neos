@@ -153,6 +153,31 @@ async def _langchain_chunks():
     )
 
 
+async def _langchain_usage_metadata_chunks():
+    yield AIMessageChunk(
+        content="answer",
+        response_metadata={"model_provider": "anthropic"},
+    )
+    yield AIMessageChunk(
+        content="",
+        response_metadata={
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "model_provider": "anthropic",
+        },
+        usage_metadata={
+            "input_tokens": 1010,
+            "output_tokens": 5,
+            "total_tokens": 1015,
+            "input_token_details": {
+                "cache_creation": 0,
+                "cache_read": 1000,
+            },
+        },
+        chunk_position="last",
+    )
+
+
 @pytest.mark.asyncio
 async def test_anthropic_langchain_stream_receives_automatic_cache_control():
     llm = SimpleNamespace(
@@ -187,6 +212,54 @@ async def test_anthropic_langchain_stream_receives_automatic_cache_control():
     assert events[-1]["usage"]["cache_read_tokens"] == 1000
     assert events[-1]["usage"]["total_input_tokens"] == 1010
     assert events[-1]["usage"]["cache_status"] == "hit"
+    calculate_cost.assert_awaited_once_with(
+        provider="anthropic",
+        model_name="claude-sonnet-4-6",
+        prompt_tokens=10,
+        completion_tokens=5,
+        cache_creation_tokens=0,
+        cache_read_tokens=1000,
+        cache_ttl="5m",
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_langchain_stream_reads_real_usage_metadata_shape():
+    llm = SimpleNamespace(
+        astream=MagicMock(
+            side_effect=lambda *args, **kwargs: _langchain_usage_metadata_chunks()
+        )
+    )
+    calculate_cost = AsyncMock(return_value=_cost_response())
+
+    with patch(
+        "neos.services.chat_llm_service.create_llm", return_value=llm
+    ), patch(
+        "neos.services.chat_llm_service.cost_calculator.calculate_cost",
+        new=calculate_cost,
+    ):
+        events = [
+            event
+            async for event in ChatLLMService().generate_response_stream(
+                conversation_id="c",
+                message_id="m",
+                conversation_messages=[{"role": "user", "content": "hello"}],
+                model_name="claude-sonnet-4-6",
+                enable_context_optimization=False,
+            )
+        ]
+
+    assert events[-1]["type"] == "complete"
+    assert events[-1]["usage"] == {
+        "prompt_tokens": 10,
+        "cache_creation_tokens": 0,
+        "cache_read_tokens": 1000,
+        "total_input_tokens": 1010,
+        "completion_tokens": 5,
+        "total_tokens": 1015,
+        "cache_status": "hit",
+        "iterations": [],
+    }
     calculate_cost.assert_awaited_once_with(
         provider="anthropic",
         model_name="claude-sonnet-4-6",

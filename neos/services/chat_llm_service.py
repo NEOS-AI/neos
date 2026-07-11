@@ -83,8 +83,43 @@ class ChatLLMService:
 
             # Anthropic 형식
             if provider == "anthropic":
+                usage_metadata = getattr(response, "usage_metadata", None)
+                if usage_metadata:
+                    input_token_details = (
+                        usage_metadata.get("input_token_details", {}) or {}
+                    )
+                    cache_read_tokens = int(
+                        input_token_details.get("cache_read", 0) or 0
+                    )
+                    cache_creation_tokens = int(
+                        input_token_details.get("cache_creation", 0) or 0
+                    )
+                    if not cache_creation_tokens:
+                        cache_creation_tokens = sum(
+                            int(input_token_details.get(key, 0) or 0)
+                            for key in (
+                                "ephemeral_5m_input_tokens",
+                                "ephemeral_1h_input_tokens",
+                            )
+                        )
+                    total_input_tokens = int(
+                        usage_metadata.get("input_tokens", 0) or 0
+                    )
+                    anthropic_usage = {
+                        "input_tokens": max(
+                            0,
+                            total_input_tokens
+                            - cache_creation_tokens
+                            - cache_read_tokens,
+                        ),
+                        "cache_creation_input_tokens": cache_creation_tokens,
+                        "cache_read_input_tokens": cache_read_tokens,
+                        "output_tokens": usage_metadata.get("output_tokens", 0),
+                    }
+                else:
+                    anthropic_usage = metadata.get("usage", {})
                 return normalize_anthropic_usage(
-                    metadata.get("usage", {}),
+                    anthropic_usage,
                     model=model or self.default_model,
                     cache_requested=cache_requested,
                 )
