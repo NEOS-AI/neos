@@ -15,12 +15,20 @@ from sqlalchemy import (
     TIMESTAMP,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 
 from .connection import Base
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _now_naive() -> datetime:
+    # For naive ``TIMESTAMP`` columns (matches the harness migrations, which
+    # use ``timestamp without time zone``); asyncpg rejects aware datetimes
+    # bound to a naive column.
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class DARun(Base):
@@ -202,6 +210,21 @@ class DAEvent(Base):
     payload = Column(Text, nullable=False, default="{}")
 
 
+class DAReport(Base):
+    """L5 improvement-report snapshot (Sub-project B).
+
+    Written only by the periodic Celery task; never by the harness run loop.
+    """
+
+    __tablename__ = "deep_analysis_reports"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    period_start = Column(TIMESTAMP, nullable=False)
+    period_end = Column(TIMESTAMP, nullable=False)
+    signals = Column(JSONB, nullable=False)
+    created_at = Column(TIMESTAMP, nullable=False, default=_now_naive)
+
+
 __all__ = [
     "DARun",
     "DAQuestion",
@@ -210,4 +233,5 @@ __all__ = [
     "DAEvidence",
     "DAFeedback",
     "DAEvent",
+    "DAReport",
 ]
