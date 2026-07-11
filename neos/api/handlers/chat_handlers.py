@@ -507,7 +507,20 @@ async def send_message(
                 completion_tokens=llm_response["usage"]["completion_tokens"],
                 total_tokens=llm_response["usage"]["total_tokens"],
                 latency_ms=llm_response["latency_ms"],
-                finish_reason=llm_response["finish_reason"]
+                finish_reason=llm_response["finish_reason"],
+                cache_creation_tokens=llm_response["usage"].get(
+                    "cache_creation_tokens", 0
+                ),
+                cache_read_tokens=llm_response["usage"].get(
+                    "cache_read_tokens", 0
+                ),
+                cache_ttl=app_settings.config.llm.prompt_caching.ttl,
+                additional_cost_usd=llm_response["cost"].get(
+                    "additional_cost", 0
+                ),
+                metadata={
+                    "anthropic": llm_response["usage"].get("anthropic", {})
+                },
             )
 
         return CreateMessageResponse(
@@ -677,7 +690,16 @@ async def regenerate_message(
             completion_tokens=llm_response["usage"]["completion_tokens"],
             total_tokens=llm_response["usage"]["total_tokens"],
             latency_ms=llm_response["latency_ms"],
-            finish_reason=llm_response["finish_reason"]
+            finish_reason=llm_response["finish_reason"],
+            cache_creation_tokens=llm_response["usage"].get(
+                "cache_creation_tokens", 0
+            ),
+            cache_read_tokens=llm_response["usage"].get("cache_read_tokens", 0),
+            cache_ttl=app_settings.config.llm.prompt_caching.ttl,
+            additional_cost_usd=llm_response["cost"].get("additional_cost", 0),
+            metadata={
+                "anthropic": llm_response["usage"].get("anthropic", {})
+            },
         )
 
         return MessageResponse(**new_message)
@@ -1198,7 +1220,14 @@ Use this information to provide a comprehensive and accurate answer. If needed, 
                     completion_tokens=usage_info["completion_tokens"],
                     total_tokens=usage_info["total_tokens"],
                     latency_ms=latency_ms,
-                    finish_reason="end_turn"
+                    finish_reason="end_turn",
+                    cache_creation_tokens=usage_info.get(
+                        "cache_creation_tokens", 0
+                    ),
+                    cache_read_tokens=usage_info.get("cache_read_tokens", 0),
+                    cache_ttl=app_settings.config.llm.prompt_caching.ttl,
+                    additional_cost_usd=cost_info.get("additional_cost", 0),
+                    metadata={"anthropic": usage_info.get("anthropic", {})},
                 )
 
             # OpenResponses: response.completed 이벤트
@@ -1505,7 +1534,20 @@ async def websocket_chat(websocket: WebSocket, conversation_id: str):
                                 completion_tokens=usage_info["completion_tokens"],
                                 total_tokens=usage_info["total_tokens"],
                                 latency_ms=chunk["latency_ms"],
-                                finish_reason="end_turn"
+                                finish_reason="end_turn",
+                                cache_creation_tokens=usage_info.get(
+                                    "cache_creation_tokens", 0
+                                ),
+                                cache_read_tokens=usage_info.get(
+                                    "cache_read_tokens", 0
+                                ),
+                                cache_ttl=app_settings.config.llm.prompt_caching.ttl,
+                                additional_cost_usd=cost_info.get(
+                                    "additional_cost", 0
+                                ),
+                                metadata={
+                                    "anthropic": usage_info.get("anthropic", {})
+                                },
                             )
 
                             await websocket.send_json({

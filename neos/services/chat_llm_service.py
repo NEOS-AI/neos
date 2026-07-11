@@ -17,6 +17,8 @@ from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
 from neos.services.context_optimizer import context_optimizer
 from neos.config.settings import settings
+from neos.providers.anthropic_features import build_cache_control
+from neos.providers.anthropic_usage import normalize_anthropic_usage
 from neos.tools.tool_search.search_tools_handler import SEARCH_TOOLS_TOOL
 
 logger = get_logger(__name__)
@@ -64,7 +66,14 @@ class ChatLLMService:
 
         return messages
 
-    def _extract_usage_from_response(self, response: Any) -> Dict[str, int]:
+    def _extract_usage_from_response(
+        self,
+        response: Any,
+        *,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        cache_requested: bool = False,
+    ) -> Dict[str, Any]:
         """응답에서 토큰 사용량 추출"""
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
@@ -73,7 +82,13 @@ class ChatLLMService:
             metadata = response.response_metadata
 
             # Anthropic 형식
-            if "usage" in metadata:
+            if provider == "anthropic":
+                return normalize_anthropic_usage(
+                    metadata.get("usage", {}),
+                    model=model or self.default_model,
+                    cache_requested=cache_requested,
+                )
+            elif "usage" in metadata:
                 anthropic_usage = metadata["usage"]
                 usage["prompt_tokens"] = anthropic_usage.get("input_tokens", 0)
                 usage["completion_tokens"] = anthropic_usage.get("output_tokens", 0)
@@ -130,6 +145,8 @@ class ChatLLMService:
         """
         model = model_name or self.default_model
         provider = self._extract_provider_from_model(model)
+        prompt_cache_config = settings.config.llm.prompt_caching
+        cache_control = build_cache_control(prompt_cache_config)
 
         start_time = time.time()
 
@@ -162,21 +179,36 @@ class ChatLLMService:
             messages = self._build_messages(optimized_messages, system_prompt)
 
             # LLM 호출
-            response = await llm.ainvoke(messages)
+            invoke_kwargs: Dict[str, Any] = {}
+            if provider == "anthropic" and cache_control:
+                invoke_kwargs["cache_control"] = cache_control
+            response = await llm.ainvoke(messages, **invoke_kwargs)
 
             # 응답 처리 (handles thinking blocks properly)
             content = extract_text_from_response(response)
-            usage = self._extract_usage_from_response(response)
+            usage = self._extract_usage_from_response(
+                response,
+                provider=provider,
+                model=model,
+                cache_requested="cache_control" in invoke_kwargs,
+            )
             finish_reason = self._extract_finish_reason(response)
             latency_ms = int((time.time() - start_time) * 1000)
 
             # 비용 계산 (기록은 호출자가 메시지 저장 후 수행)
-            cost_info = await cost_calculator.calculate_cost(
+            cost_kwargs: Dict[str, Any] = dict(
                 provider=provider,
                 model_name=model,
                 prompt_tokens=usage["prompt_tokens"],
                 completion_tokens=usage["completion_tokens"],
             )
+            if provider == "anthropic":
+                cost_kwargs.update(
+                    cache_creation_tokens=usage["cache_creation_tokens"],
+                    cache_read_tokens=usage["cache_read_tokens"],
+                    cache_ttl=prompt_cache_config.ttl,
+                )
+            cost_info = await cost_calculator.calculate_cost(**cost_kwargs)
 
             logger.info(
                 f"Generated response: {len(content)} chars, "
@@ -232,6 +264,8 @@ class ChatLLMService:
         """
         model = model_name or self.default_model
         provider = self._extract_provider_from_model(model)
+        prompt_cache_config = settings.config.llm.prompt_caching
+        cache_control = build_cache_control(prompt_cache_config)
 
         start_time = time.time()
         full_content = ""
@@ -269,7 +303,10 @@ class ChatLLMService:
             yield {"type": "start", "model": model, "provider": provider}
 
             # 스트리밍 호출
-            async for chunk in llm.astream(messages):
+            invoke_kwargs: Dict[str, Any] = {}
+            if provider == "anthropic" and cache_control:
+                invoke_kwargs["cache_control"] = cache_control
+            async for chunk in llm.astream(messages, **invoke_kwargs):
                 if hasattr(chunk, "content") and chunk.content:
                     content = chunk.content
 
@@ -305,7 +342,12 @@ class ChatLLMService:
 
                 # 마지막 청크에서 usage 정보 추출
                 if hasattr(chunk, "response_metadata"):
-                    usage_info = self._extract_usage_from_response(chunk)
+                    usage_info = self._extract_usage_from_response(
+                        chunk,
+                        provider=provider,
+                        model=model,
+                        cache_requested="cache_control" in invoke_kwargs,
+                    )
                     finish_reason_value = self._extract_finish_reason(chunk)
 
             # 스트리밍 완료 후 usage 정보가 없으면 추정
@@ -315,22 +357,39 @@ class ChatLLMService:
                     len(msg.get("content", "")) // 4 for msg in conversation_messages
                 )
                 estimated_completion_tokens = len(full_content) // 4
-                usage_info = {
-                    "prompt_tokens": estimated_prompt_tokens,
-                    "completion_tokens": estimated_completion_tokens,
-                    "total_tokens": estimated_prompt_tokens
-                    + estimated_completion_tokens,
-                }
+                if provider == "anthropic":
+                    usage_info = normalize_anthropic_usage(
+                        {
+                            "input_tokens": estimated_prompt_tokens,
+                            "output_tokens": estimated_completion_tokens,
+                        },
+                        model=model,
+                        cache_requested="cache_control" in invoke_kwargs,
+                    )
+                else:
+                    usage_info = {
+                        "prompt_tokens": estimated_prompt_tokens,
+                        "completion_tokens": estimated_completion_tokens,
+                        "total_tokens": estimated_prompt_tokens
+                        + estimated_completion_tokens,
+                    }
 
             latency_ms = int((time.time() - start_time) * 1000)
 
             # 비용 계산 (기록은 호출자가 메시지 저장 후 수행)
-            cost_info = await cost_calculator.calculate_cost(
+            cost_kwargs: Dict[str, Any] = dict(
                 provider=provider,
                 model_name=model,
                 prompt_tokens=usage_info["prompt_tokens"],
                 completion_tokens=usage_info["completion_tokens"],
             )
+            if provider == "anthropic":
+                cost_kwargs.update(
+                    cache_creation_tokens=usage_info["cache_creation_tokens"],
+                    cache_read_tokens=usage_info["cache_read_tokens"],
+                    cache_ttl=prompt_cache_config.ttl,
+                )
+            cost_info = await cost_calculator.calculate_cost(**cost_kwargs)
 
             logger.info(
                 f"Stream completed: {len(full_content)} chars, "
@@ -399,6 +458,8 @@ class ChatLLMService:
             }
         """
         model = model_name or self.default_model
+        prompt_cache_config = settings.config.llm.prompt_caching
+        cache_control = build_cache_control(prompt_cache_config)
         start_time = time.time()
         full_content = ""
         usage_info = None
@@ -423,14 +484,17 @@ class ChatLLMService:
             yield {"type": "start", "model": model, "provider": "anthropic"}
 
             # Anthropic SDK로 스트리밍 (tool calling 지원)
-            async with client.messages.stream(
+            stream_kwargs: Dict[str, Any] = dict(
                 model=model,
                 messages=anthropic_messages,
                 tools=tools if tools else None,
                 system=system_prompt or "",
                 temperature=temperature,
                 max_tokens=max_tokens or 4096,
-            ) as stream:
+            )
+            if cache_control:
+                stream_kwargs["cache_control"] = cache_control
+            async with client.messages.stream(**stream_kwargs) as stream:
                 # 스트리밍 이벤트 처리
                 async for event in stream:
                     if not hasattr(event, 'type'):
@@ -473,11 +537,11 @@ class ChatLLMService:
                 final_message = await stream.get_final_message()
 
                 # Usage 정보 추출
-                usage_info = {
-                    "prompt_tokens": final_message.usage.input_tokens,
-                    "completion_tokens": final_message.usage.output_tokens,
-                    "total_tokens": final_message.usage.input_tokens + final_message.usage.output_tokens
-                }
+                usage_info = normalize_anthropic_usage(
+                    final_message.usage,
+                    model=model,
+                    cache_requested=bool(cache_control),
+                )
 
                 # Tool use 확인
                 for content_block in final_message.content:
@@ -500,6 +564,9 @@ class ChatLLMService:
                 model_name=model,
                 prompt_tokens=usage_info["prompt_tokens"],
                 completion_tokens=usage_info["completion_tokens"],
+                cache_creation_tokens=usage_info["cache_creation_tokens"],
+                cache_read_tokens=usage_info["cache_read_tokens"],
+                cache_ttl=prompt_cache_config.ttl,
             )
 
             logger.info(
