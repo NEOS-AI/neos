@@ -366,3 +366,19 @@ Sub-project A final review에서 `DEEP_ANALYSIS_ENABLED=true`로 전환하기 **
 3. **분류기 intent 미도달:** `IntentType.DEEP_ANALYSIS`를 방출하는 쿼리 분류기가 아직 없어,
    현재는 복잡도 기반 분기만 라이브이고 intent 기반 라우팅 분기는 도달 불가능한 죽은 코드다.
    활성화 시점에 분류기에 해당 intent를 추가하거나, 미도달 분기를 정리할 것.
+
+---
+
+## D19. L5 개선 루프 — 관측/신호 + golden 게이트만, auto-mutation 없음
+
+**결정:** L5 개선 루프(Sub-project B)는 append-only 이벤트 로그(P4)를 개선 신호로 집계해
+사람에게 제시(analytics API + 주기 Celery 리포트)하고, 프롬프트 변경을 golden 회귀 게이트로
+가둔다. 신호로부터 프롬프트/설정을 **자동 변경(auto-mutation)하지 않는다.**
+**근거:** 자가 수정 루프는 가드레일(승인, 롤백, 안전 한계)이 필요하며 이번 범위를 벗어난다.
+§6.4의 "워커 과장 습관은 L5 신호"는 `overclaim_rate` 지표로 포착되고, §10의 "골든 통합이 L5
+게이트"는 record/replay 결정성 테스트 + 프롬프트 버전 매니페스트로 공식화된다 — 둘 다 사람이
+읽고 결정하는 관측 계층이지 자동 조정기가 아니다.
+**이탈:** 없음(원 설계는 L5를 개념으로만 언급; 이 결정은 그 범위를 관측/게이트로 명시 한정).
+**영향:** 신호는 `deep_analysis_reports` 테이블(D 신규)과 `/api/v1/deep-analysis/analytics`로
+노출. 이벤트 로그는 **읽기 전용**(§11.3, D8)이며 L5는 이벤트에 쓰지 않는다. 프롬프트 버전 bump는
+`test_golden_gate`의 매니페스트를 강제로 깨뜨려, golden 재녹화 + 신호 검토를 유도한다.
