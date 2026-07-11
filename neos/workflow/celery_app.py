@@ -146,6 +146,11 @@ app.conf.beat_schedule = {
         'task': 'neos.tasks.expire_pending_approvals',
         'schedule': 300.0,  # 5분
     },
+    # L5 개선 루프: deep_analysis 이벤트 로그 → 롤링 개선 신호 리포트 — 매일 1회
+    'compute-deep-analysis-report': {
+        'task': 'neos.tasks.compute_deep_analysis_report',
+        'schedule': 86400.0,  # 24시간
+    },
 }
 
 
