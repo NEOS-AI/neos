@@ -12,3 +12,14 @@ def utc_now_naive() -> datetime:
         tzinfo=None인 UTC 현재 시각
     """
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def to_naive_utc(value: datetime) -> datetime:
+    """aware datetime을 naive UTC로 정규화한다 (naive 값은 그대로 반환).
+
+    ``timestamp without time zone`` 컬럼과 비교/바인딩할 때 asyncpg가 aware
+    datetime을 거부하므로, 경계값을 naive UTC로 맞춘다.
+    """
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value

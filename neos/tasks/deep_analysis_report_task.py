@@ -5,19 +5,16 @@ snapshot to ``deep_analysis_reports``. The event log is never mutated.
 """
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from celery import shared_task
 
 from neos.utils.logger import get_logger
+from neos.utils.time_utils import utc_now_naive
 
 logger = get_logger(__name__)
 
 DEFAULT_WINDOW_DAYS = 7
-
-
-def _naive_utc_now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 async def _compute_report(session, *, window_days: int = DEFAULT_WINDOW_DAYS):
@@ -28,7 +25,7 @@ async def _compute_report(session, *, window_days: int = DEFAULT_WINDOW_DAYS):
     from neos.database.deep_analysis_models import DAReport
     from neos.workflow.deep_analysis.analytics import DeepAnalysisAnalyticsService
 
-    period_end = _naive_utc_now()
+    period_end = utc_now_naive()
     period_start = period_end - timedelta(days=window_days)
 
     service = DeepAnalysisAnalyticsService(session)

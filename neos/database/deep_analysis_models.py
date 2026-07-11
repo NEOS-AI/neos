@@ -17,18 +17,13 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
+from neos.utils.time_utils import utc_now_naive
+
 from .connection import Base
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _now_naive() -> datetime:
-    # For naive ``TIMESTAMP`` columns (matches the harness migrations, which
-    # use ``timestamp without time zone``); asyncpg rejects aware datetimes
-    # bound to a naive column.
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class DARun(Base):
@@ -222,7 +217,7 @@ class DAReport(Base):
     period_start = Column(TIMESTAMP, nullable=False)
     period_end = Column(TIMESTAMP, nullable=False)
     signals = Column(JSONB, nullable=False)
-    created_at = Column(TIMESTAMP, nullable=False, default=_now_naive)
+    created_at = Column(TIMESTAMP, nullable=False, default=utc_now_naive)
 
 
 __all__ = [
