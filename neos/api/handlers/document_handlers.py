@@ -3,10 +3,12 @@
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Depends,
     HTTPException,
     UploadFile,
     File,
-    Form
+    Form,
+    Query,
 )
 from typing import List, Optional
 import json
@@ -22,7 +24,10 @@ from neos.api.models.document_models import (
     DocumentSearchResult,
     DocumentSearchResponse
 )
+from neos.api.dependencies.auth import get_current_active_user
+from neos.api.dependencies.resource_access import get_owned_document
 from neos.api.services.document_service import DocumentService
+from neos.database.models import Document, User
 
 logger = logging.getLogger(__name__)
 
@@ -33,14 +38,15 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    user_id: str = Form(...),
+    user_id: Optional[str] = Form(None, deprecated=True),
     metadata: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     문서 업로드 및 처리
 
     - **file**: 업로드할 파일
-    - **user_id**: 사용자 ID
+    - **user_id**: 사용자 ID (deprecated, ignored)
     - **metadata**: 추가 메타데이터 (JSON 문자열)
     """
     try:
@@ -54,7 +60,7 @@ async def upload_document(
         document = await DocumentService.upload_and_process_document(
             file_content=file_content,
             filename=file.filename,
-            user_id=user_id,
+            user_id=current_user.user_id,
             metadata=metadata_dict,
             mime_type=file.content_type,
         )
@@ -77,21 +83,27 @@ async def upload_document(
 
 @router.get("/", response_model=DocumentListResponse)
 async def list_documents(
-    user_id: Optional[str] = None,
+    user_id: Optional[str] = Query(None, deprecated=True),
     status: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     문서 목록 조회
 
-    - **user_id**: 사용자 ID (필터)
+    - **user_id**: 사용자 ID (deprecated, ignored)
     - **status**: 처리 상태 (필터)
     - **skip**: 오프셋
     - **limit**: 최대 개수
     """
     try:
-        result = await DocumentService.list_documents(user_id, status, skip, limit)
+        result = await DocumentService.list_documents(
+            current_user.user_id,
+            status,
+            skip,
+            limit,
+        )
 
         # 응답 생성
         document_infos = []
@@ -122,17 +134,17 @@ async def list_documents(
 
 
 @router.get("/{document_id}", response_model=DocumentInfo)
-async def get_document(document_id: int):
+async def get_document(
+    document_id: int,
+    owned_document: Document = Depends(get_owned_document),
+):
     """
     문서 상세 정보 조회
 
     - **document_id**: 문서 ID
     """
     try:
-        document = await DocumentService.get_document_by_id(document_id)
-
-        if not document:
-            raise HTTPException(status_code=404, detail="Document not found")
+        document = owned_document
 
         return DocumentInfo(
             id=document.id,
@@ -158,17 +170,24 @@ async def get_document(document_id: int):
 
 
 @router.delete("/{document_id}")
-async def delete_document(document_id: int):
+async def delete_document(
+    document_id: int,
+    current_user: User = Depends(get_current_active_user),
+    owned_document: Document = Depends(get_owned_document),
+):
     """
     문서 삭제
 
     - **document_id**: 문서 ID
     """
     try:
-        success = await DocumentService.delete_document(document_id)
+        success = await DocumentService.delete_document_for_user(
+            owned_document.id,
+            current_user.user_id,
+        )
 
         if not success:
-            raise HTTPException(status_code=404, detail="Document not found")
+            raise HTTPException(status_code=404, detail="Resource not found")
 
         return {"message": "Document deleted successfully"}
 
@@ -180,7 +199,12 @@ async def delete_document(document_id: int):
 
 
 @router.get("/{document_id}/chunks", response_model=List[ChunkInfo])
-async def get_document_chunks(document_id: int, skip: int = 0, limit: int = 100):
+async def get_document_chunks(
+    document_id: int,
+    skip: int = 0,
+    limit: int = 100,
+    owned_document: Document = Depends(get_owned_document),
+):
     """
     문서의 청크 목록 조회
 
@@ -189,7 +213,11 @@ async def get_document_chunks(document_id: int, skip: int = 0, limit: int = 100)
     - **limit**: 최대 개수
     """
     try:
-        chunks = await DocumentService.get_document_chunks(document_id, skip, limit)
+        chunks = await DocumentService.get_document_chunks(
+            owned_document.id,
+            skip,
+            limit,
+        )
 
         return [
             ChunkInfo(
@@ -209,14 +237,19 @@ async def get_document_chunks(document_id: int, skip: int = 0, limit: int = 100)
 
 
 @router.get("/{document_id}/knowledge-graph", response_model=List[EntityInfo])
-async def get_document_knowledge_graph(document_id: int):
+async def get_document_knowledge_graph(
+    document_id: int,
+    owned_document: Document = Depends(get_owned_document),
+):
     """
     문서의 지식 그래프 조회
 
     - **document_id**: 문서 ID
     """
     try:
-        entities = await DocumentService.get_document_knowledge_graph(document_id)
+        entities = await DocumentService.get_document_knowledge_graph(
+            owned_document.id
+        )
 
         return [
             EntityInfo(
@@ -238,19 +271,22 @@ async def get_document_knowledge_graph(document_id: int):
 
 
 @router.post("/search", response_model=DocumentSearchResponse)
-async def search_documents(request: DocumentSearchRequest):
+async def search_documents(
+    request: DocumentSearchRequest,
+    current_user: User = Depends(get_current_active_user),
+):
     """
     문서 검색 (시맨틱 검색)
 
     - **query**: 검색 쿼리
     - **top_k**: 반환할 결과 개수
-    - **user_id**: 사용자 ID (필터)
+    - **user_id**: 사용자 ID (deprecated, ignored)
     """
     try:
         results = await DocumentService.search_documents(
             query=request.query,
             top_k=request.top_k,
-            user_id=request.user_id
+            user_id=current_user.user_id,
         )
 
         search_results = [DocumentSearchResult(**result) for result in results]

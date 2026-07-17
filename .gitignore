@@ -40,3 +40,4 @@ jest-cache/
 
 # superpowers
 .superpowers/
+.worktrees/

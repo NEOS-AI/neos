@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from neos.api.dependencies.auth import get_current_user
-from neos.database.connection import get_async_session
+from neos.database.connection import get_session_ctx
 from neos.database.models import ScheduledTask, User
 from neos.skills.builtin.cron.parser import parse_schedule, validate_cron_expression
 
@@ -120,7 +120,7 @@ async def create_scheduled_task(
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     next_run_at = croniter(cron_expr, now).get_next(datetime)
 
-    async with get_async_session() as session:
+    async with get_session_ctx() as session:
         task = ScheduledTask(
             id=uuid.uuid4(),
             user_id=current_user.user_id,
@@ -159,7 +159,7 @@ async def list_scheduled_tasks(
     current_user: User = Depends(get_current_user),
 ):
     """현재 사용자의 스케줄 태스크 목록을 반환한다."""
-    async with get_async_session() as session:
+    async with get_session_ctx() as session:
         stmt = select(ScheduledTask).where(
             ScheduledTask.user_id == current_user.user_id
         )
@@ -181,7 +181,7 @@ async def get_scheduled_task(
     current_user: User = Depends(get_current_user),
 ):
     """단일 스케줄 태스크 상세 정보를 반환한다."""
-    async with get_async_session() as session:
+    async with get_session_ctx() as session:
         task = await _get_task_or_404(session, task_id, current_user.user_id)
         return _to_response(task)
 
@@ -199,7 +199,7 @@ async def update_scheduled_task(
     """스케줄 태스크를 수정한다. is_active 토글로 일시정지/재활성화가 가능하다."""
     from croniter import croniter
 
-    async with get_async_session() as session:
+    async with get_session_ctx() as session:
         task = await _get_task_or_404(session, task_id, current_user.user_id)
 
         if payload.is_active is not None:
@@ -232,7 +232,7 @@ async def delete_scheduled_task(
     current_user: User = Depends(get_current_user),
 ):
     """스케줄 태스크를 영구 삭제한다. 일시정지는 PATCH is_active=false를 사용."""
-    async with get_async_session() as session:
+    async with get_session_ctx() as session:
         task = await _get_task_or_404(session, task_id, current_user.user_id)
         await session.delete(task)
         await session.commit()

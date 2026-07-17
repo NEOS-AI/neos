@@ -594,6 +594,83 @@ class HyperDeepAgentConfig(StrictConfigModel):
     task_level_harness_enabled: bool = True
 
 
+class DeepAnalysisEffortConfig(StrictConfigModel):
+    token_cap: int
+    wall_clock_cap: int
+
+
+class DeepAnalysisModelsConfig(StrictConfigModel):
+    scout: str = "claude-haiku-4-5-20251001"
+    dig: str = "claude-opus-4-6"
+    synth: str = "claude-opus-4-6"
+    judge: str = "claude-sonnet-4-6"
+
+
+class DeepAnalysisDevProfileConfig(StrictConfigModel):
+    global_token_cap: int = 20000
+    parallel_workers: int = 2
+    max_depth: int = 2
+
+
+class DeepAnalysisConfig(StrictConfigModel):
+    enabled: bool = False
+    complexity_threshold: float = 0.5
+    models: DeepAnalysisModelsConfig = Field(default_factory=DeepAnalysisModelsConfig)
+    effort: dict[str, DeepAnalysisEffortConfig] = Field(
+        default_factory=lambda: {
+            "scout": DeepAnalysisEffortConfig(
+                token_cap=2000,
+                wall_clock_cap=120,
+            ),
+            "dig": DeepAnalysisEffortConfig(
+                token_cap=12000,
+                wall_clock_cap=600,
+            ),
+            "synth": DeepAnalysisEffortConfig(
+                token_cap=8000,
+                wall_clock_cap=300,
+            ),
+        }
+    )
+    global_token_cap: int = 300000
+    breadth_pass_ratio: float = 0.30
+    score_floor: float = 0.05
+    aging_per_round: float = 0.05
+    value_decay: float = 0.8
+    max_depth: int = 4
+    parallel_workers: int = 4
+    quote_match_threshold: float = 0.92
+    confidence_cap: dict[int, float] = Field(
+        default_factory=lambda: {1: 0.6, 2: 0.8, 3: 0.95}
+    )
+    agentic_threshold: float = 0.35
+    agentic_sample_rate: float = 0.3
+    max_stall_rounds: int = 3
+    claim_retry_cap: int = 2
+    report_retry_cap: int = 2
+    resolve_threshold: float = 0.7
+    conflict_reinvestigation_cap: int = 1
+    conflict_value_threshold: float = 0.6
+    subq_adopt_threshold: float = 0.3
+    source_tiers: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "tier1": ["arxiv.org", ".gov", ".edu", "github.com"],
+            "tier2": ["*"],
+        }
+    )
+    dev_profile: DeepAnalysisDevProfileConfig = Field(
+        default_factory=DeepAnalysisDevProfileConfig
+    )
+    search_result_limit: int = 3
+    fetch_timeout_seconds: float = 15.0
+    evidence_context_chars: int = 2000
+    excerpt_max_chars: int = 500
+    decompose_max_tokens: int = 1500
+    worker_max_output_tokens: int = 4000
+    synthesis_max_tokens: int = 4000
+    sse_keepalive_seconds: float = 0.5
+
+
 class RayConfig(StrictConfigModel):
     enabled: bool = False
     address: str = "auto"
@@ -740,6 +817,7 @@ class AppConfig(StrictConfigModel):
     reranker: RerankerConfig = Field(default_factory=RerankerConfig)
     recursive_agent: RecursiveAgentConfig = Field(default_factory=RecursiveAgentConfig)
     hyper_deep_agent: HyperDeepAgentConfig = Field(default_factory=HyperDeepAgentConfig)
+    deep_analysis: DeepAnalysisConfig = Field(default_factory=DeepAnalysisConfig)
     ray: RayConfig = Field(default_factory=RayConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     contextual_retrieval: ContextualRetrievalConfig = Field(default_factory=ContextualRetrievalConfig)

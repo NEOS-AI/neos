@@ -1,6 +1,6 @@
 """Query API handlers - thin layer for FastAPI routes"""
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from typing import List, Optional
 import uuid
@@ -16,6 +16,12 @@ from neos.api.models.query_models import (
     HyperResearchReportSummary
 )
 from neos.api.services.query_service import QueryService
+from neos.api.dependencies.auth import (
+    get_current_active_user,
+    get_current_admin_user,
+)
+from neos.api.dependencies.resource_access import require_same_user_id
+from neos.database.models import User
 from neos.utils.cache import cache_manager
 
 router = APIRouter()
@@ -24,7 +30,8 @@ router = APIRouter()
 @router.post("/query", response_model=QueryResponse)
 async def process_query(
     request: QueryRequest,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     메인 쿼리 처리 엔드포인트
@@ -33,7 +40,7 @@ async def process_query(
     try:
         # 세션 ID 생성
         session_id = request.session_id or str(uuid.uuid4())
-        user_id = request.user_id or f"anonymous_{uuid.uuid4().hex[:8]}"
+        user_id = current_user.user_id
 
         # 사용자 생성/조회
         await QueryService.get_or_create_user(user_id)
@@ -111,9 +118,11 @@ async def get_related_queries(query_id: int, limit: int = 5):
 async def get_user_query_history(
     user_id: str,
     limit: int = 20,
-    offset: int = 0
+    offset: int = 0,
+    current_user: User = Depends(get_current_active_user),
 ):
     """사용자 쿼리 히스토리 조회"""
+    require_same_user_id(user_id, current_user)
     try:
         return await QueryService.get_user_query_history(user_id, limit, offset)
     except Exception as e:
@@ -121,7 +130,10 @@ async def get_user_query_history(
 
 
 @router.delete("/cache/{cache_key}")
-async def clear_cache(cache_key: str):
+async def clear_cache(
+    cache_key: str,
+    current_user: User = Depends(get_current_admin_user),
+):
     """특정 캐시 삭제"""
     try:
         success = await cache_manager.delete(cache_key)
@@ -131,7 +143,9 @@ async def clear_cache(cache_key: str):
 
 
 @router.get("/stats/system")
-async def get_system_stats():
+async def get_system_stats(
+    current_user: User = Depends(get_current_admin_user),
+):
     """시스템 통계"""
     try:
         return await QueryService.get_system_stats()
@@ -210,13 +224,18 @@ async def websocket_endpoint(websocket, session_id: str):
 
 
 @router.get("/hyper-research/{report_uuid}", response_model=HyperResearchReportResponse)
-async def get_hyper_research_report(report_uuid: str):
+async def get_hyper_research_report(
+    report_uuid: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """HyperDeepResearch 보고서 조회"""
     try:
         report = await QueryService.get_hyper_research_report(report_uuid)
 
         if not report:
-            raise HTTPException(status_code=404, detail=f"Report not found: {report_uuid}")
+            raise HTTPException(status_code=404, detail="Resource not found")
+
+        require_same_user_id(report.get("metadata", {}).get("user_id"), current_user)
 
         return HyperResearchReportResponse(**report)
 
@@ -231,14 +250,20 @@ async def get_hyper_research_report(report_uuid: str):
 
 @router.get("/hyper-research", response_model=HyperResearchReportsListResponse)
 async def list_hyper_research_reports(
-    user_id: Optional[str] = None,
+    user_id: Optional[str] = Query(default=None, deprecated=True),
     status: Optional[str] = None,
     limit: int = 50,
-    offset: int = 0
+    offset: int = 0,
+    current_user: User = Depends(get_current_active_user),
 ):
     """HyperDeepResearch 보고서 목록 조회"""
     try:
-        result = await QueryService.list_hyper_research_reports(user_id, status, limit, offset)
+        result = await QueryService.list_hyper_research_reports(
+            current_user.user_id,
+            status,
+            limit,
+            offset,
+        )
 
         reports = [HyperResearchReportSummary(**r) for r in result["reports"]]
 

@@ -1,0 +1,101 @@
+import pytest
+from neos.workflow.deep_analysis.ledger import Ledger, create_run
+from neos.workflow.deep_analysis.models import (
+    WorkerResult, ProposedClaim, ProposedEvidence, ProposedBlob, RepairResult, Verdict,
+)
+from neos.database.connection import db_manager
+import neos.database.models  # register FK targets
+from sqlalchemy import text as sql
+
+async def _investigating(led):
+    qid = await led.open_question("q?", None, 1.0, 5000, 0)
+    await led._transition(qid, "investigating")
+    return qid
+
+def _claim(text="fact", conf=0.6):
+    return ProposedClaim(text=text, confidence=conf,
+                         evidence=[ProposedEvidence("http://x", "body", "hh")])
+
+async def _blob(s, run_id):
+    await s.execute(sql("INSERT INTO deep_analysis_blobs (run_id, content_hash, url, http_status, raw_text, fetched_at) "
+        "VALUES (:r,'hh','http://x',200,'body',NOW()) ON CONFLICT DO NOTHING"), {"r": run_id})
+
+@pytest.mark.asyncio
+async def test_retry_cap_marks_unverified_after_two_rejections():
+    async with await db_manager.get_session() as s:
+        run_id = await create_run(s, "root", "dev"); led = Ledger(s, run_id)
+        await _blob(s, run_id)
+        # attempt 1 reject
+        qid = await _investigating(led)
+        await led.commit_pass(qid, WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
+                              {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")})
+        # attempt 2 reject (same hash) -> feedback attempt 2
+        await led._transition(qid, "investigating")
+        await led.commit_pass(qid, WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
+                              {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")})
+        # attempt 3 reject -> retry cap(2) hit -> unverified, no 3rd feedback
+        await led._transition(qid, "investigating")
+        await led.commit_pass(qid, WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
+                              {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")})
+        row = await s.execute(sql("SELECT status FROM deep_analysis_claims WHERE run_id=:r"), {"r": run_id})
+        assert row.scalar() == "unverified"
+        fb = await s.execute(sql("SELECT COUNT(*) FROM deep_analysis_feedback WHERE run_id=:r"), {"r": run_id})
+        assert fb.scalar() == 2   # capped at 2
+        await s.rollback()
+
+@pytest.mark.asyncio
+async def test_retry_cap_resolves_pending_feedback():
+    async with await db_manager.get_session() as s:
+        run_id = await create_run(s, "root", "dev"); led = Ledger(s, run_id)
+        await _blob(s, run_id)
+        qid = await _investigating(led)
+        # attempt 1 reject
+        await led.commit_pass(qid, WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
+                              {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")})
+        # attempt 2 reject (same hash) -> feedback attempt 2
+        await led._transition(qid, "investigating")
+        await led.commit_pass(qid, WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
+                              {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")})
+        # attempt 3 reject -> retry cap(2) hit -> unverified, feedback must be resolved
+        await led._transition(qid, "investigating")
+        await led.commit_pass(qid, WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
+                              {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")})
+        row = await s.execute(sql("SELECT status FROM deep_analysis_claims WHERE run_id=:r"), {"r": run_id})
+        assert row.scalar() == "unverified"
+        assert await led.pending_feedback(qid) == []
+        await s.rollback()
+
+@pytest.mark.asyncio
+async def test_weaken_repair_replaces_text_and_resolves_feedback():
+    async with await db_manager.get_session() as s:
+        run_id = await create_run(s, "root", "dev"); led = Ledger(s, run_id)
+        await _blob(s, run_id)
+        qid = await _investigating(led)
+        await led.commit_pass(qid, WorkerResult(question_id=qid, status="completed", claims=[_claim("overclaim")]),
+                              {"overclaim": Verdict(ok=False, code="E_OVERCLAIM", label="PARTIAL")})
+        cid = (await s.execute(sql("SELECT id FROM deep_analysis_claims WHERE run_id=:r"), {"r": run_id})).scalar()
+        await led._transition(qid, "investigating")
+        rep = RepairResult(claim_id=cid, action="weakened", new_text="weaker claim")
+        await led.commit_pass(qid, WorkerResult(question_id=qid, status="completed", repairs=[rep]), {})
+        row = await s.execute(sql("SELECT text, status FROM deep_analysis_claims WHERE run_id=:r"), {"r": run_id})
+        txt, st = row.one()
+        assert txt == "weaker claim" and st == "pending"
+        rf = await s.execute(sql("SELECT resolved FROM deep_analysis_feedback WHERE run_id=:r"), {"r": run_id})
+        assert rf.scalar() == 1
+        await s.rollback()
+
+@pytest.mark.asyncio
+async def test_verified_pass_resets_fail_streak():
+    async with await db_manager.get_session() as s:
+        run_id = await create_run(s, "root", "dev"); led = Ledger(s, run_id)
+        await _blob(s, run_id)
+        qid = await _investigating(led)
+        # a failed pass bumps streak
+        await led.commit_pass(qid, WorkerResult(question_id=qid, status="failed"), {})
+        await led._transition(qid, "investigating")
+        await led.commit_pass(qid, WorkerResult(question_id=qid, status="completed",
+            claims=[_claim(conf=0.55)], self_assessment=0.9),
+            {"fact": Verdict(ok=True)})
+        q = await led.get_question(qid)
+        assert q.fail_streak == 0 and q.status == "resolved"
+        await s.rollback()

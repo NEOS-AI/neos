@@ -21,6 +21,7 @@ def test_manual_autonomy_blocks_hyper_deep_route():
     with patch("neos.workflow.routing.orchestrator_router.settings") as mock_settings:
         mock_settings.A2UI_ENABLED = False
         mock_settings.EXECUTION_APPROVAL_ENABLED = False
+        mock_settings.DEEP_ANALYSIS_ENABLED = False
         mock_settings.HYPER_DEEP_AGENT_ENABLED = True
         mock_settings.RECURSIVE_AGENT_ENABLED = True
         mock_settings.HYPER_DEEP_COMPLEXITY_THRESHOLD = 0.8
@@ -43,6 +44,7 @@ def test_assisted_autonomy_allows_hyper_deep_route():
     with patch("neos.workflow.routing.orchestrator_router.settings") as mock_settings:
         mock_settings.A2UI_ENABLED = False
         mock_settings.EXECUTION_APPROVAL_ENABLED = False
+        mock_settings.DEEP_ANALYSIS_ENABLED = False
         mock_settings.HYPER_DEEP_AGENT_ENABLED = True
         mock_settings.RECURSIVE_AGENT_ENABLED = True
         mock_settings.HYPER_DEEP_COMPLEXITY_THRESHOLD = 0.8
@@ -67,6 +69,7 @@ def test_pending_approval_routes_before_orchestrators():
     with patch("neos.workflow.routing.orchestrator_router.settings") as mock_settings:
         mock_settings.A2UI_ENABLED = False
         mock_settings.EXECUTION_APPROVAL_ENABLED = True
+        mock_settings.DEEP_ANALYSIS_ENABLED = False
         mock_settings.HYPER_DEEP_AGENT_ENABLED = True
         mock_settings.RECURSIVE_AGENT_ENABLED = True
         result = OrchestratorRouter().route(state)

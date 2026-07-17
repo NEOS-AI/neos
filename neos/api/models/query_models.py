@@ -6,7 +6,11 @@ from typing import Dict, Any, List, Optional
 
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=10000, description="사용자 쿼리")
-    user_id: Optional[str] = Field(None, description="사용자 ID")
+    user_id: Optional[str] = Field(
+        None,
+        description="Deprecated compatibility field; authenticated identity is used",
+        deprecated=True,
+    )
     session_id: Optional[str] = Field(None, description="세션 ID")
     preferences: Optional[Dict[str, Any]] = Field(default_factory=dict, description="사용자 설정")
     autonomy_level: Optional[int] = Field(
@@ -129,7 +133,11 @@ class WorkflowStreamEvent(BaseModel):
 class WorkflowStreamRequest(BaseModel):
     """워크플로우 스트리밍 요청"""
     query: str = Field(..., min_length=1, max_length=10000, description="사용자 쿼리")
-    user_id: Optional[str] = Field(None, description="사용자 ID")
+    user_id: Optional[str] = Field(
+        None,
+        description="Deprecated compatibility field; authenticated identity is used",
+        deprecated=True,
+    )
     session_id: Optional[str] = Field(None, description="세션 ID")
     preferences: Optional[Dict[str, Any]] = Field(default_factory=dict, description="사용자 설정")
     autonomy_level: Optional[int] = Field(

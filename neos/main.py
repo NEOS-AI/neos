@@ -1,9 +1,10 @@
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, Response
+from fastapi.routing import APIWebSocketRoute
 import time
 import uuid
 import asyncio
@@ -19,6 +20,10 @@ from neos.api.handlers.document_handlers import router as document_router
 from neos.api.handlers.multimodal_handlers import router as multimodal_router
 from neos.api.handlers.chat_handlers import router as chat_router
 from neos.api.handlers.deep_research_handlers import router as deep_research_router
+from neos.api.handlers.deep_analysis_analytics_handlers import (
+    router as deep_analysis_analytics_router,
+)
+from neos.api.deep_analysis_routes import router as deep_analysis_router
 from neos.api.handlers.auth import router as auth_router
 from neos.api.handlers.skills_handlers import router as skills_router
 from neos.api.handlers.workflow_stream_handlers import router as workflow_stream_router
@@ -35,6 +40,8 @@ from neos.api.handlers.autonomy_handlers import router as autonomy_router
 from neos.api.handlers.scheduled_tasks_handlers import router as scheduled_tasks_router  # Phase 4: Cron 스케줄
 from neos.api.handlers.ui_submit_handlers import router as ui_submit_router  # Phase 8: A2UI
 from neos.api.similarity_chat_routes import similarity_chat_router
+from neos.api.dependencies.auth import get_current_admin_user
+from neos.database.models import User
 from neos.workflow.graph import multi_agent_workflow
 from neos.utils.exceptions import NeosBaseException, get_exception_status_code, is_client_error
 from neos.observability.metrics import get_metrics_collector
@@ -57,6 +64,42 @@ logger = logging.getLogger(__name__)
 
 TEST_EMBEDDING_ON_STARTUP = False  # 시작 시 임베딩 테스트 여부
 IS_DEBUG = settings.DEBUG
+
+
+def _router_with_routes(source_router: APIRouter, route_filter) -> APIRouter:
+    """Return a router containing only routes that match route_filter."""
+    filtered_router = APIRouter()
+    filtered_router.routes = [route for route in source_router.routes if route_filter(route)]
+    return filtered_router
+
+
+def _router_without_websockets(source_router: APIRouter) -> APIRouter:
+    """Return a router containing only HTTP routes from source_router."""
+    return _router_with_routes(
+        source_router,
+        lambda route: not isinstance(route, APIWebSocketRoute),
+    )
+
+
+def _is_health_http_route(route) -> bool:
+    """Health endpoints stay public under the HTTP authorization matrix."""
+    return (
+        not isinstance(route, APIWebSocketRoute)
+        and getattr(route, "path", "").endswith("/health")
+    )
+
+
+def _include_router_for_runtime(api_router: APIRouter, **kwargs) -> None:
+    """Include WebSockets only outside production until WebSocket auth is implemented."""
+    if IS_DEBUG:
+        app.include_router(api_router, **kwargs)
+        return
+
+    if any(isinstance(route, APIWebSocketRoute) for route in api_router.routes):
+        app.include_router(_router_without_websockets(api_router), **kwargs)
+        return
+
+    app.include_router(api_router, **kwargs)
 
 
 @asynccontextmanager
@@ -470,34 +513,56 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # API 라우터 등록
-app.include_router(auth_router, prefix=settings.API_V1_PREFIX, tags=["Authentication"])  # 인증 라우터 추가
-app.include_router(router, prefix=settings.API_V1_PREFIX, tags=["Multi-Agent AI"])
-app.include_router(web_search_analytics_router, prefix=f"{settings.API_V1_PREFIX}/analytics", tags=["Web Search Analytics"])
-app.include_router(document_router, prefix=f"{settings.API_V1_PREFIX}/documents", tags=["Document Management"])
-app.include_router(multimodal_router, prefix=f"{settings.API_V1_PREFIX}/multimodal", tags=["Multimodal Processing"])
-app.include_router(chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Chat & Conversations"])
-app.include_router(deep_research_router, prefix=settings.API_V1_PREFIX, tags=["Deep Research"])
-app.include_router(skills_router, prefix=f"{settings.API_V1_PREFIX}/skills", tags=["Skills Management"])
-app.include_router(workflow_stream_router, prefix=settings.API_V1_PREFIX, tags=["Workflow Streaming"])
-app.include_router(unified_router, tags=["Unified Processing"])  # 통합 API (문서 + 워크플로우)
-app.include_router(similarity_chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Similarity-based Chat"])
-app.include_router(vote_router, prefix=settings.API_V1_PREFIX, tags=["Votes & Feedback"])  # Vote API
-app.include_router(artifact_router, prefix=settings.API_V1_PREFIX, tags=["Artifacts & Documents"])  # Artifact API
-app.include_router(research_session_router, tags=["Research Sessions"])  # Research Session API (prefix already set in router)
-app.include_router(async_research_router, tags=["Async Research"])  # Phase 3.5: Celery-based async research
-app.include_router(export_router, tags=["Report Export"])  # Phase 3.4: Structured report export
-app.include_router(refinement_router, tags=["Research Refinement"])  # Phase 3.8: Interactive refinement
-app.include_router(template_router, tags=["Research Templates"])  # Phase 4.7: Research templates
-app.include_router(approval_router, prefix=settings.API_V1_PREFIX, tags=["Execution Approval"])  # Phase 2: OpenClaw Exec Approval
-app.include_router(autonomy_router, prefix=settings.API_V1_PREFIX, tags=["Agent Autonomy"])
-app.include_router(scheduled_tasks_router, prefix=settings.API_V1_PREFIX, tags=["Scheduled Tasks"])  # Phase 4: OpenClaw Cron
-app.include_router(ui_submit_router, prefix=settings.API_V1_PREFIX, tags=["A2UI"])  # Phase 8: OpenClaw A2UI
+_include_router_for_runtime(auth_router, prefix=settings.API_V1_PREFIX, tags=["Authentication"])  # 인증 라우터 추가
+_include_router_for_runtime(router, prefix=settings.API_V1_PREFIX, tags=["Multi-Agent AI"])
+_include_router_for_runtime(
+    _router_with_routes(web_search_analytics_router, _is_health_http_route),
+    prefix=f"{settings.API_V1_PREFIX}/analytics",
+    tags=["Web Search Analytics"],
+)
+_include_router_for_runtime(
+    _router_with_routes(
+        web_search_analytics_router,
+        lambda route: not _is_health_http_route(route),
+    ),
+    prefix=f"{settings.API_V1_PREFIX}/analytics",
+    tags=["Web Search Analytics"],
+    dependencies=[Depends(get_current_admin_user)],
+)
+_include_router_for_runtime(document_router, prefix=f"{settings.API_V1_PREFIX}/documents", tags=["Document Management"])
+_include_router_for_runtime(multimodal_router, prefix=f"{settings.API_V1_PREFIX}/multimodal", tags=["Multimodal Processing"])
+_include_router_for_runtime(chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Chat & Conversations"])
+_include_router_for_runtime(deep_research_router, prefix=settings.API_V1_PREFIX, tags=["Deep Research"])
+_include_router_for_runtime(deep_analysis_analytics_router, prefix=settings.API_V1_PREFIX, tags=["Deep Analysis Analytics"])
+_include_router_for_runtime(deep_analysis_router, prefix=settings.API_V1_PREFIX, tags=["Deep Analysis Harness"])
+_include_router_for_runtime(
+    skills_router,
+    prefix=f"{settings.API_V1_PREFIX}/skills",
+    tags=["Skills Management"],
+    dependencies=[Depends(get_current_admin_user)],
+)
+_include_router_for_runtime(workflow_stream_router, prefix=settings.API_V1_PREFIX, tags=["Workflow Streaming"])
+_include_router_for_runtime(unified_router, tags=["Unified Processing"])  # 통합 API (문서 + 워크플로우)
+_include_router_for_runtime(similarity_chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Similarity-based Chat"])
+_include_router_for_runtime(vote_router, prefix=settings.API_V1_PREFIX, tags=["Votes & Feedback"])  # Vote API
+_include_router_for_runtime(artifact_router, prefix=settings.API_V1_PREFIX, tags=["Artifacts & Documents"])  # Artifact API
+_include_router_for_runtime(research_session_router, tags=["Research Sessions"])  # Research Session API (prefix already set in router)
+_include_router_for_runtime(async_research_router, tags=["Async Research"])  # Phase 3.5: Celery-based async research
+_include_router_for_runtime(export_router, tags=["Report Export"])  # Phase 3.4: Structured report export
+_include_router_for_runtime(refinement_router, tags=["Research Refinement"])  # Phase 3.8: Interactive refinement
+_include_router_for_runtime(template_router, tags=["Research Templates"])  # Phase 4.7: Research templates
+_include_router_for_runtime(approval_router, prefix=settings.API_V1_PREFIX, tags=["Execution Approval"])  # Phase 2: OpenClaw Exec Approval
+_include_router_for_runtime(autonomy_router, prefix=settings.API_V1_PREFIX, tags=["Agent Autonomy"])
+_include_router_for_runtime(scheduled_tasks_router, prefix=settings.API_V1_PREFIX, tags=["Scheduled Tasks"])  # Phase 4: OpenClaw Cron
+_include_router_for_runtime(ui_submit_router, prefix=settings.API_V1_PREFIX, tags=["A2UI"])  # Phase 8: OpenClaw A2UI
 
 
 # === Enterprise Monitoring Endpoints ===
 
 @app.get("/metrics")
-async def metrics_endpoint():
+async def metrics_endpoint(
+    current_user: User = Depends(get_current_admin_user),
+):
     """
     Prometheus metrics endpoint for enterprise monitoring.
 
@@ -527,7 +592,9 @@ async def metrics_endpoint():
 
 
 @app.get(f"{settings.API_V1_PREFIX}/metrics/stats")
-async def metrics_stats():
+async def metrics_stats(
+    current_user: User = Depends(get_current_admin_user),
+):
     """
     Get human-readable metrics statistics.
     Useful for debugging and quick health checks.
@@ -544,58 +611,22 @@ async def metrics_stats():
 @app.get("/")
 async def root():
     """Root Endpoint - System Information"""
-    return {
+    response = {
         "name": "Multi-Agent AI System",
         "version": __VERSION__,
-        "description": "LangGraph, CrewAI, FastAPI 기반 멀티 에이전트 AI 시스템",
         "status": "running",
-        "endpoints": {
-            "docs": "/docs",
-            "health": f"{settings.API_V1_PREFIX}/health",
-            "query": f"{settings.API_V1_PREFIX}/query",
-            "multimodal_query": f"{settings.API_V1_PREFIX}/multimodal/query",
-            "image_analysis": f"{settings.API_V1_PREFIX}/multimodal/image/analyze",
-            "trending": f"{settings.API_V1_PREFIX}/trending",
-            "websocket": f"{settings.API_V1_PREFIX}/ws/{{session_id}}",
-            "chat": {
-                "conversations": f"{settings.API_V1_PREFIX}/chat/conversations",
-                "messages": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages",
-                "stream": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/stream",
-                "websocket": f"{settings.API_V1_PREFIX}/chat/ws/{{conversation_id}}",
-                "similarity": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity",
-                "similarity_stream": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/stream",
-                "similarity_cross_conversation": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/cross-conversation",
-                "similarity_high_confidence": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/high-confidence",
-                "similarity_config": f"{settings.API_V1_PREFIX}/chat/conversations/{{conversation_id}}/similarity/config"
-            },
-            "deep_research": {
-                "start": f"{settings.API_V1_PREFIX}/deep-research/start",
-                "stream": f"{settings.API_V1_PREFIX}/deep-research/{{report_id}}/stream",
-                "report": f"{settings.API_V1_PREFIX}/deep-research/{{report_id}}",
-                "conversation_reports": f"{settings.API_V1_PREFIX}/conversations/{{conversation_id}}/deep-research"
-            },
-            "workflow_streaming": {
-                "sse_stream": f"{settings.API_V1_PREFIX}/query/stream",
-                "websocket": f"{settings.API_V1_PREFIX}/ws/query/{{session_id}}",
-                "websocket_detailed": f"{settings.API_V1_PREFIX}/ws/query/detailed/{{session_id}}"
-            }
-        },
-        "features": [
-            "🔍 지능형 멀티모달 검색",
-            "📊 고급 데이터 분석",
-            "🎨 AI 콘텐츠 생성",
-            "🚀 자동화된 워크플로우",
-            "⚡ 실시간 처리",
-            "📈 품질 모니터링",
-            "🔄 SSE/WebSocket 스트리밍 응답",
-            "⏱️ 최적화된 타임아웃 관리"
-        ]
+        "health": f"{settings.API_V1_PREFIX}/health",
     }
+    if IS_DEBUG:
+        response["docs"] = "/docs"
+    return response
 
 
 # 시스템 정보 엔드포인트
 @app.get("/info")
-async def system_info():
+async def system_info(
+    current_user: User = Depends(get_current_admin_user),
+):
     """시스템 정보 및 설정"""
     return {
         "system": {
@@ -625,37 +656,53 @@ async def system_info():
         }
     }
 
+async def debug_test_workflow(
+    current_user: User = Depends(get_current_admin_user),
+):
+    """워크플로우 테스트 (디버그 전용)."""
+    test_input = {
+        "user_id": current_user.user_id,
+        "session_id": "debug_session",
+        "query": "안녕하세요, 테스트 쿼리입니다.",
+    }
+    return await multi_agent_workflow.execute_workflow(test_input)
+
+
+async def debug_cache_stats(
+    _current_user: User = Depends(get_current_admin_user),
+):
+    """캐시 통계 (디버그 전용)."""
+    try:
+        info = (
+            await cache_manager.redis_client.info()
+            if cache_manager.redis_client
+            else {}
+        )
+        return {
+            "cache_available": cache_manager.redis_client is not None,
+            "redis_info": {
+                "connected_clients": info.get("connected_clients", 0),
+                "used_memory_human": info.get("used_memory_human", "0B"),
+                "keyspace_hits": info.get("keyspace_hits", 0),
+                "keyspace_misses": info.get("keyspace_misses", 0),
+            },
+        }
+    except Exception as e:
+        return {"error": str(e), "cache_available": False}
+
+
 # 개발용 테스트 엔드포인트 (디버그 모드에서만)
 if IS_DEBUG:
-    @app.get("/debug/test-workflow")
-    async def test_workflow():
-        """워크플로우 테스트 (디버그 전용)"""
-        test_input = {
-            "user_id": "debug_user",
-            "session_id": "debug_session", 
-            "query": "안녕하세요, 테스트 쿼리입니다."
-        }
-        
-        result = await multi_agent_workflow.execute_workflow(test_input)
-        return result
-
-    @app.get("/debug/cache-stats")
-    async def cache_stats():
-        """캐시 통계 (디버그 전용)"""
-        try:
-            # Redis 정보 조회
-            info = await cache_manager.redis_client.info() if cache_manager.redis_client else {}
-            return {
-                "cache_available": cache_manager.redis_client is not None,
-                "redis_info": {
-                    "connected_clients": info.get("connected_clients", 0),
-                    "used_memory_human": info.get("used_memory_human", "0B"),
-                    "keyspace_hits": info.get("keyspace_hits", 0),
-                    "keyspace_misses": info.get("keyspace_misses", 0)
-                }
-            }
-        except Exception as e:
-            return {"error": str(e), "cache_available": False}
+    app.add_api_route(
+        "/debug/test-workflow",
+        debug_test_workflow,
+        methods=["GET"],
+    )
+    app.add_api_route(
+        "/debug/cache-stats",
+        debug_cache_stats,
+        methods=["GET"],
+    )
 
 
 if __name__ == "__main__":

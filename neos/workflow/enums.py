@@ -33,6 +33,9 @@ class WorkflowNode(Enum):
     # HyperDeep Recursive: ROMA + HyperDeepResearchAgent 통합
     HYPER_DEEP_ORCHESTRATOR = "hyper_deep_orchestrator"
 
+    # Deep Analysis: 심층 분석 하네스 오케스트레이터
+    DEEP_ANALYSIS_ORCHESTRATOR = "deep_analysis_orchestrator"
+
     # Mission Runtime
     MISSION_PLANNER = "mission_planner"
     MISSION_APPROVAL = "mission_approval"
@@ -80,6 +83,7 @@ class IntentType(Enum):
     RECURSIVE_RESEARCH = "recursive_research"  # ROMA 재귀 연구
     HYPER_DEEP_RESEARCH = "hyper_deep_research"  # ROMA + HyperDeepResearch 통합
     TASK_SCHEDULING = "task_scheduling"          # Phase 4: Cron 스케줄 등록 요청
+    DEEP_ANALYSIS = "deep_analysis"              # Sub-project A: 심층 분석 하네스 라우팅
 
 
 class ComplexityIndicator(Enum):

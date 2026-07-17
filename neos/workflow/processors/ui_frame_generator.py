@@ -218,7 +218,7 @@ class UIFrameGenerator:
             False: 저장 실패 (호출자는 SSE 발행을 건너뛰어야 함)
         """
         from datetime import datetime, timedelta, timezone
-        from neos.database.connection import get_db_session
+        from neos.database.connection import get_session_ctx
         from neos.database.models import UIFrameSession
         import uuid
 
@@ -227,7 +227,7 @@ class UIFrameGenerator:
         )
 
         try:
-            async with get_db_session() as db:
+            async with get_session_ctx() as db:
                 session_record = UIFrameSession(
                     frame_id=uuid.UUID(frame_id),
                     session_id=session_id,

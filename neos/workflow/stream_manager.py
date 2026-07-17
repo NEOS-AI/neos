@@ -159,6 +159,35 @@ class StreamManager:
         """세션 조회"""
         return self._sessions.get(session_id)
 
+    def claim_session(self, session_id: str, user_id: str) -> StreamSession:
+        """Atomically create or reuse a stream session for its authenticated owner."""
+        session = self._sessions.get(session_id)
+        if session is not None:
+            if not session.user_id or session.user_id != user_id:
+                raise PermissionError("Stream session belongs to another user")
+            session.last_activity = datetime.now()
+            session.active_connections += 1
+            logger.info(
+                "Claimed existing session %s, connections: %s",
+                session_id,
+                session.active_connections,
+            )
+            return session
+
+        session = StreamSession(
+            session_id=session_id,
+            user_id=user_id,
+            created_at=datetime.now(),
+            last_activity=datetime.now(),
+            event_buffer=deque(maxlen=self.buffer_size),
+            queue=asyncio.Queue(),
+            active_connections=1,
+            last_event_id=0,
+        )
+        self._sessions[session_id] = session
+        logger.info("Claimed new session %s for user %s", session_id, user_id)
+        return session
+
     async def add_event(
         self,
         session_id: str,

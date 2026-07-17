@@ -171,6 +171,9 @@ class AgentState(TypedDict):
     recursive_mode: Optional[bool]                      # 재귀 모드 활성화 여부
     recursive_budget_remaining: Optional[float]         # 가용 비용 (USD)
 
+    # Deep Analysis Harness
+    deep_analysis_run_id: Optional[str]                 # deep_analysis_runs.id (실행 추적용)
+
     # 최종 응답
     final_response: Optional[str]
     response_metadata: Optional[Dict[str, Any]]
