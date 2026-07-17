@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from neos.config.settings import settings
@@ -20,6 +20,10 @@ class LLMResponse:
     input_tokens: int
     output_tokens: int
     model: str
+    # 기본값이 필수다: 기존 golden cassette 레코드에는 이 키들이 없고,
+    # 재생 시 LLMResponse(**recorded)로 복원된다(D19 golden 게이트 유지).
+    content: list[dict[str, Any]] = field(default_factory=list)
+    stop_reason: str = ""
 
 
 _CODE_FENCE = re.compile(
