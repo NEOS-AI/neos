@@ -2,6 +2,10 @@ import NextAuth, { type DefaultSession } from "next-auth";
 import type { DefaultJWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
+import {
+  DEFAULT_ACCESS_TOKEN_TTL_MS,
+  mergeRefreshedTokens,
+} from "@/lib/auth-tokens";
 import { DUMMY_PASSWORD } from "@/lib/constants";
 import { getBackendUrl, getGoogleOAuthConfig } from "@/lib/server-config";
 import { compare } from "bcrypt-ts";
@@ -20,6 +24,14 @@ function mapBackendRole(beRole: string): UserType {
   return roleMap[beRole] ?? "regular";
 }
 
+/**
+ * 백엔드 액세스 토큰 갱신 — **이것이 코드베이스의 유일한 갱신 경로다.**
+ *
+ * 백엔드 리프레시 토큰은 1회용이므로(`auth_service.py:209,226`) 갱신 경로가 둘이면
+ * 같은 토큰을 경쟁 소비해 세션이 죽는다. 다른 곳(특히 `lib/backend-api.ts`)에서
+ * `/api/v1/auth/refresh`를 직접 호출하지 말 것.
+ * 자세한 내용은 `lib/auth-tokens.ts` 주석 참조.
+ */
 async function refreshAccessToken(token: any) {
   const backendUrl = getBackendUrl();
 
@@ -34,16 +46,8 @@ async function refreshAccessToken(token: any) {
 
     if (!response.ok) throw new Error(`Token refresh failed: ${response.status}`);
 
-    const refreshedTokens = await response.json();
-    if (!refreshedTokens.access_token) throw new Error("Missing access_token");
-
-    return {
-      ...token,
-      backendAccessToken: refreshedTokens.access_token,
-      backendRefreshToken: refreshedTokens.refresh_token ?? token.backendRefreshToken,
-      accessTokenExpires: Date.now() + 15 * 60 * 1000,
-      error: undefined,
-    };
+    // 회전된 refresh_token을 반드시 보존한다 (1회용 토큰)
+    return mergeRefreshedTokens(token, await response.json());
   } catch (error) {
     console.error("[Auth] Error refreshing access token:", error);
     return { ...token, error: "RefreshAccessTokenError" };
@@ -228,13 +232,13 @@ export const {
         token.usageQuota = user.usageQuota;
         token.backendAccessToken = user.backendAccessToken;
         token.backendRefreshToken = user.backendRefreshToken;
-        token.accessTokenExpires = Date.now() + 15 * 60 * 1000;
+        token.accessTokenExpires = Date.now() + DEFAULT_ACCESS_TOKEN_TTL_MS;
         token.error = undefined;
       }
 
       if (trigger === "update" && session?.backendAccessToken) {
         token.backendAccessToken = session.backendAccessToken;
-        token.accessTokenExpires = Date.now() + 15 * 60 * 1000;
+        token.accessTokenExpires = Date.now() + DEFAULT_ACCESS_TOKEN_TTL_MS;
       }
 
       if (token.accessTokenExpires && token.backendRefreshToken) {

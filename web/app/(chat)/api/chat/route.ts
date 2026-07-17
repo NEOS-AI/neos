@@ -4,6 +4,8 @@ import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import { mapToBackendModelName } from "@/lib/ai/models";
 import { callBackendAPI } from "@/lib/backend-api";
 import { ChatSDKError } from "@/lib/errors";
+import { extractAttachments, extractTextContent } from "@/lib/message-parts";
+import { isAbortError } from "@/lib/stream-errors";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
@@ -48,10 +50,10 @@ export async function POST(request: Request) {
       }
     }
 
-    const messageContent = message.parts
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n");
+    // text 파트는 content로, file 파트는 attachments로 전달한다.
+    // (이전에는 file 파트를 폐기해 첨부가 백엔드에 도달하지 못했다)
+    const messageContent = extractTextContent(message.parts);
+    const messageAttachments = extractAttachments(message.parts);
 
     // 기존 conversation 조회 (id = FE chat UUID = backendConversationId)
     let conversationId: string | null = null;
@@ -108,14 +110,18 @@ export async function POST(request: Request) {
       }
     }
 
-    // Backend 스트리밍 호출
+    // Backend 스트리밍 호출.
+    // `request.signal`을 전달해 클라이언트가 정지하면 백엔드 스트림도 함께 끊는다.
+    // (전달하지 않으면 사용자가 정지해도 백엔드는 계속 생성하고 계속 과금된다)
     const backendStreamResponse = await callBackendAPI(
       `/api/v1/chat/conversations/${conversationId}/messages/stream`,
       {
         method: "POST",
+        signal: request.signal,
         body: JSON.stringify({
           content: messageContent,
           role: "user",
+          attachments: messageAttachments,
           metadata: {
             fe_chat_id: id,
             model: selectedChatModel,
@@ -159,6 +165,12 @@ export async function POST(request: Request) {
 
     if (error instanceof ChatSDKError) {
       return error.toResponse();
+    }
+
+    // 클라이언트가 정지를 눌러 요청이 취소된 경우는 에러가 아니다.
+    // 백엔드 스트림도 signal 전파로 함께 끊긴다.
+    if (isAbortError(error)) {
+      return new Response(null, { status: 499 });
     }
 
     console.error("Unhandled error in chat API:", error, { vercelId });

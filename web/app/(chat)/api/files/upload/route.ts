@@ -2,21 +2,16 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { auth } from "@/app/(auth)/auth";
+import {
+  RAG_DOCUMENT_UPLOAD_PATH,
+  ragDocumentPath,
+} from "@/lib/backend-routes";
+import { SUPPORTED_ATTACHMENT_MIME_TYPES } from "@/lib/message-parts";
 import { getBackendUrl } from "@/lib/server-config";
 
-const SUPPORTED_MIME_TYPES = [
-  // Images
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-  // Documents
-  "application/pdf",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "text/plain",
-  "text/markdown",
-];
+// 채팅 요청 스키마(`api/chat/schema.ts`)와 동일한 목록을 공유한다.
+const SUPPORTED_MIME_TYPES: readonly string[] =
+  SUPPORTED_ATTACHMENT_MIME_TYPES;
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -83,8 +78,10 @@ export async function POST(request: Request) {
     uploadFormData.append("file", file, filename);
     uploadFormData.append("user_id", userId);
 
+    // RAG 문서 라우터의 실제 경로는 double-prefix를 포함한다.
+    // 이유와 근거는 lib/backend-routes.ts 주석 참조.
     const uploadResponse = await fetch(
-      `${backendUrl}/api/v1/documents/upload`,
+      `${backendUrl}${RAG_DOCUMENT_UPLOAD_PATH}`,
       {
         method: "POST",
         headers: {
@@ -107,9 +104,11 @@ export async function POST(request: Request) {
     const uploadData = await uploadResponse.json();
     // uploadData = { document_id, filename, status, message }
 
-    // document_id로 storage_url 조회
+    // document_id로 storage_url 조회.
+    // 반드시 RAG 라우터(DocumentInfo)로 조회해야 한다 — 아티팩트 라우터의
+    // `/api/v1/documents/{id}`는 storage_url이 없는 List<DocumentResponse>를 반환한다.
     const docResponse = await fetch(
-      `${backendUrl}/api/v1/documents/${uploadData.document_id}`,
+      `${backendUrl}${ragDocumentPath(uploadData.document_id)}`,
       {
         headers: {
           Authorization: `Bearer ${session.backendAccessToken}`,

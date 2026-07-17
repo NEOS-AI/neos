@@ -3,6 +3,7 @@ import pytest
 from neos.workflow.deep_analysis.cassette import Cassette
 from neos.workflow.deep_analysis.llm import (
     JSONParseError,
+    LLMResponse,
     call_json,
     call_llm,
     parse_json,
@@ -158,3 +159,29 @@ async def test_call_llm_replay_does_not_construct_provider_client(
     )
 
     assert response.text == "cached"
+
+
+def test_llm_response_defaults_keep_old_cassette_records_loadable():
+    # 기존 golden cassette 레코드에는 content/stop_reason 키가 없다.
+    old_record = {
+        "text": "hello",
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "model": "claude-opus-4-6",
+    }
+    response = LLMResponse(**old_record)
+    assert response.content == []
+    assert response.stop_reason == ""
+
+
+def test_llm_response_carries_content_blocks_and_stop_reason():
+    response = LLMResponse(
+        text="",
+        input_tokens=1,
+        output_tokens=2,
+        model="claude-opus-4-6",
+        content=[{"type": "tool_use", "id": "toolu_1", "name": "search_arxiv", "input": {"query": "moe"}}],
+        stop_reason="tool_use",
+    )
+    assert response.stop_reason == "tool_use"
+    assert response.content[0]["name"] == "search_arxiv"

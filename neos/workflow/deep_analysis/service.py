@@ -9,6 +9,7 @@ from .graders.deterministic import DeterministicGrader
 from .graders.report import ReportGrader
 from .ledger import Ledger
 from .orchestrator import Orchestrator
+from .skill_selector import SkillSelector
 from .worker import Worker
 
 
@@ -53,6 +54,7 @@ async def build_orchestrator(
     fetch_fn=None,
     llm_client=None,
     http_client=None,
+    skill_registry=None,
 ) -> Orchestrator:
     config = settings.config.deep_analysis
     ledger = Ledger(session, run_id)
@@ -75,11 +77,16 @@ async def build_orchestrator(
         cassette=cassette,
     )
 
+    skill_selector = (
+        SkillSelector(skill_registry) if skill_registry is not None else None
+    )
+
     def worker_factory():
         options = {
             "llm_client": llm_client,
             "http_client": http_client,
             "cassette": cassette,
+            "skill_selector": skill_selector,
         }
         if fetch_fn is not None:
             options["fetch_fn"] = fetch_fn

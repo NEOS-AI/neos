@@ -36,6 +36,56 @@ def _is_scheduling_intent(query: str) -> bool:
     return has_temporal and has_action
 
 
+# ── 스펙 §4.1 — deep 엔진 유형 판별 키워드 (Phase 2 엔진 재배치) ──────────
+# 세 엔진은 complexity 임계값이 아니라 "작업의 형태"로 갈린다.
+#   deep_analysis        : 검증형 분석 — "이 주장이 사실인가"
+#   hyper_deep_research  : 장문 리포트 — "긴 보고서를 써라"
+#   recursive_research   : 일반 태스크 분해 — "여러 단계 작업을 수행하라"
+#
+# 기존 self.intent_keywords 스코어링 맵에 넣지 않고 전용 전처리로 분리한 이유(K3):
+# 저 맵은 intent별 매칭 수를 세어 max()로 뽑으므로, 신규 키워드를 섞으면 기존
+# 질의의 승자가 바뀔 수 있다. 별도 전처리는 "신규 키워드가 하나도 안 맞으면
+# None"이므로 기존 방출이 구조적으로 불변이다.
+#
+# dict 삽입 순서 = 동점 시 우선순위(스펙 §4.1 표 순서와 동일).
+_ENGINE_INTENT_KEYWORDS: Dict[str, List[str]] = {
+    IntentType.DEEP_ANALYSIS.value: [
+        "팩트체크", "팩트 체크", "fact check", "fact-check", "factcheck",
+        "사실인가", "사실인지", "사실 확인", "사실확인", "진위",
+        "검증해", "검증이 필요", "교차 검증", "교차검증",
+        "verify", "verification", "cross-check", "cross check", "debunk",
+        "출처를 확인", "근거를 확인", "근거가 있는지",
+    ],
+    IntentType.HYPER_DEEP_RESEARCH.value: [
+        "장문", "장편", "긴 보고서", "긴 리포트", "긴 글",
+        "백서", "whitepaper", "white paper",
+        "long-form", "long form", "longform",
+        "섹션별", "챕터별", "목차를",
+        "페이지 분량", "페이지 이상", "page report",
+    ],
+    IntentType.RECURSIVE_RESEARCH.value: [
+        "단계별로", "단계로 나눠", "여러 단계", "step by step", "step-by-step",
+        "multi-step", "하위 작업", "서브태스크", "subtask", "sub-task",
+        "작업을 분해", "task decomposition", "분해해서",
+        "나눠서 수행", "나눠서 실행", "순서대로 수행", "순서대로 실행",
+    ],
+}
+
+
+def _classify_engine_intent(query_lower: str) -> Optional[str]:
+    """deep 엔진 유형(검증형/장문/분해형) intent를 판별한다 (스펙 §4.1).
+
+    어느 유형에도 해당하지 않으면 None을 반환하고, 호출자는 기존 키워드
+    스코어링을 그대로 수행한다 — 즉 기존 intent 방출은 불변이다(K3).
+    """
+    scores = {
+        intent: sum(1 for keyword in keywords if keyword in query_lower)
+        for intent, keywords in _ENGINE_INTENT_KEYWORDS.items()
+    }
+    best = max(scores, key=scores.get)  # 동점 시 dict 삽입 순서상 앞선 유형
+    return best if scores[best] > 0 else None
+
+
 # Phase 8: A2UI needs_ui 감지 — AND 조건 (task_execution/generation 계열 + UI 패턴 키워드)
 _UI_COLLECTION_KEYWORDS = {
     # 예약
@@ -86,6 +136,9 @@ Rules:
 - "youtube_search" for video/youtube related queries
 - "generation" for creating content, images, files
 - "task_execution" for planning, executing tasks
+- "deep_analysis" for verification-style queries where the goal is to establish whether a claim is true: fact-checking, verifying sources, cross-checking conflicting evidence
+- "hyper_deep_research" for long-form report writing where length and section structure are the goal: whitepapers, multi-section or multi-page reports
+- "recursive_research" for multi-step executable task decomposition: carry out a sequence of dependent steps or sub-tasks (not a research report)
 - Set needs_ui=true for: reservations, bookings, form-filling, multi-field configuration wizards
 - Set needs_ui=false for: informational queries, analysis, simple commands, single-step tasks
 
@@ -483,6 +536,15 @@ class QueryClassifier:
         if IntentType.TASK_SCHEDULING.value in intent_scores:
             if not _is_scheduling_intent(combined_lower):
                 del intent_scores[IntentType.TASK_SCHEDULING.value]
+
+        # 스펙 §4.1 — deep 엔진 유형 판별(Phase 2). 유형이 잡히면 그 intent가
+        # 키워드 스코어링을 이긴다. 단 TASK_SCHEDULING은 라우터의
+        # _PRIORITY_ROUTING_MAP에서 최우선이므로 살아있으면 양보한다.
+        if IntentType.TASK_SCHEDULING.value not in intent_scores:
+            engine_intent = _classify_engine_intent(combined_lower)
+            if engine_intent:
+                print(f"[DEBUG] Deep engine intent detected: {engine_intent}")
+                return engine_intent
 
         # 가장 높은 점수의 의도 반환
         if intent_scores:

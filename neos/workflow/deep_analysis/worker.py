@@ -7,6 +7,7 @@ from typing import Callable
 
 from neos.config.settings import settings
 
+from .discovery import run_discovery
 from .fetch import fetch_url
 from .llm import call_json
 from .models import (
@@ -30,12 +31,14 @@ class Worker:
         llm_client=None,
         http_client=None,
         cassette=None,
+        skill_selector=None,
     ) -> None:
         self.search_fn = search_fn
         self.fetch_fn = fetch_fn
         self.llm_client = llm_client
         self.http_client = http_client
         self.cassette = cassette
+        self.skill_selector = skill_selector
         self._claims: list[ProposedClaim] = []
         self._blobs: list[ProposedBlob] = []
         self._tokens = 0
@@ -62,6 +65,35 @@ class Worker:
             {"query": query, "limit": limit},
             produce,
         )
+
+    async def _collect_candidates(
+        self, brief: str, effort: Effort, limit: int
+    ) -> list[dict]:
+        """Discovery 단계 — URL 후보만 모은다. retrieval은 fetch_fn 독점(P3)."""
+        if self.skill_selector is None:
+            return await self._search(brief, limit)
+
+        skills = self.skill_selector.candidates(effort)
+        if not skills:
+            return await self._search(brief, limit)
+
+        config = settings.config.deep_analysis
+        effort_config = config.effort[effort.value]
+        items, tokens = await run_discovery(
+            brief,
+            skills,
+            search_fn=self.search_fn,
+            model=self._model,
+            max_tokens=min(effort_config.token_cap, config.worker_max_output_tokens),
+            limit=limit,
+            client=self.llm_client,
+            cassette=self.cassette,
+        )
+        self._tokens += tokens
+        if not items:
+            # 스킬이 전부 실패했으면 web_search 단독 경로로 degrade한다.
+            return await self._search(brief, limit)
+        return items
 
     async def investigate(
         self,
@@ -93,8 +125,9 @@ class Worker:
                 brief, question_id, repairs, effort_config
             )
 
-        search_results = await self._search(
+        search_results = await self._collect_candidates(
             brief,
+            effort,
             config.search_result_limit,
         )
         fetched_by_url: dict[str, ProposedBlob] = {}

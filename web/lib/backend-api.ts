@@ -53,57 +53,21 @@ export async function callBackendAPI(
     },
   });
 
-  // 401 에러 시 토큰 갱신 시도
-  if (response.status === 401 && session.backendRefreshToken) {
-    const newToken = await refreshBackendToken(session.backendRefreshToken);
-
-    if (newToken) {
-      // 새 토큰으로 재시도
-      // Note: 세션 업데이트는 클라이언트에서 useSession().update() 호출 필요
-      const retryResponse = await fetch(url, {
-        ...options,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${newToken}`,
-          ...options.headers,
-        },
-      });
-
-      return retryResponse;
-    }
-  }
-
+  // ⚠️ 여기서 토큰을 갱신하지 말 것.
+  //
+  // 백엔드 리프레시 토큰은 1회용이다(`auth_service.py:209,226`).
+  // 과거 이 지점에서 독자적으로 `/api/v1/auth/refresh`를 호출했으나,
+  //   ① 회전된 새 refresh_token을 버렸고,
+  //   ② 서버 라우트 핸들러라 NextAuth 세션에 되쓸 방법이 없었다.
+  // 결과적으로 세션에는 이미 소비된(is_used=True) 토큰만 남아
+  // NextAuth `jwt` 콜백의 다음 갱신이 401 → RefreshAccessTokenError →
+  // `useAuthMonitor`의 무작위 강제 로그아웃으로 이어졌다.
+  //
+  // 갱신은 `app/(auth)/auth.ts`의 `jwt` 콜백이 단독으로 담당한다. 이 콜백은
+  // 만료 5분 전부터 선제적으로 갱신하므로(`auth.ts`), `auth()`를 거치는 이 함수는
+  // 이미 유효한 액세스 토큰을 받는다. 401이 남는다면 그것은 실제 인증 실패이며,
+  // 호출자에게 그대로 전달해야 한다.
   return response;
-}
-
-/**
- * 백엔드 Refresh Token으로 새 Access Token 발급
- *
- * @param refreshToken - Refresh token
- * @returns 새 access token 또는 null
- */
-async function refreshBackendToken(
-  refreshToken: string
-): Promise<string | null> {
-  const backendUrl = getBackendUrl();
-
-  try {
-    const response = await fetch(`${backendUrl}/api/v1/auth/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const data = await response.json();
-    return data.access_token;
-  } catch (error) {
-    console.error("Token refresh failed:", error);
-    return null;
-  }
 }
 
 /**
