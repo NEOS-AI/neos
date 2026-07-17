@@ -78,6 +78,16 @@ run 스코프로 좁혀 "모든 원장 데이터는 run 스코프"라는 단일 
 **영향:** A2의 핵심 불변식("커밋 경로에서 네트워크 I/O 금지, 채점기는 사이드카를 읽기만") 유지 —
 `http_status`를 컬럼에서 읽으므로 커밋 경로 HTTP 호출 없음.
 
+**개정(코드리뷰 #4) — 빈 본문 content_hash 구분:** content_hash는 원칙적으로 `sha256(raw_text)[:16]`
+이지만, **본문 추출이 빈 경우**(모든 비-2xx 응답 + 200이지만 텍스트가 추출되지 않는 페이지)는
+전부 `sha256("")`로 붕괴해 PK `(run_id, content_hash)`에서 첫 blob만 남고 서로 다른 URL/`http_status`가
+뭉개진다. 그러면 죽은 404 blob과 유효한 200-빈 페이지가 한 행으로 합쳐져 DeterministicGrader가
+잘못된 `http_status`로 E_SOURCE_DEAD 오탈락(또는 오통과)한다. 따라서 **빈 본문에 한해**
+content_hash를 `sha256("\x00EMPTY\x00{status}\x00{url}")[:16]`로 계산해 소스별로 분리한다. 비어 있지
+않은 본문은 종전대로 순수 content-address(§6.1.3 교차 검증용 동일-본문 dedup)를 유지한다. 구현:
+`fetch._blob_hash`. 회귀 테스트: `tests/workflow/deep_analysis/test_fetch.py::test_empty_body_blobs_do_not_collide_across_sources`,
+`::test_identical_body_still_dedups_by_content`.
+
 ---
 
 ## D5. 순수 LLM 콜러가 원 설계 llm.py를 대체 (LangChain 미사용)
@@ -368,10 +378,12 @@ Sub-project A final review에서 `DEEP_ANALYSIS_ENABLED=true`로 전환하기 **
    동기로 완주시킨다. 프로덕션 캡(`global_token_cap` 20000, effort별 `wall_clock_cap` 최대
    600s 이상)에서는 챗 요청 하나가 수 분간 블로킹될 수 있어 HTTP/WS/게이트웨이 타임아웃과
    충돌할 위험이 있다. 활성화 전 `asyncio.wait_for` 등으로 노드 레벨 예산 바운드를 씌울 것.
-2. **fail_run 내구성:** 하네스 실행이 실패하는 경로에서 노드의 `except` 블록이 `async with`
-   세션을 커밋 없이 종료해, `fail_run()`이 기록한 상태 업데이트가 롤백될 수 있다. 반복되면
-   `status="running"`으로 멈춘 고아 run 행이 누적된다. 활성화 전 실패 경로에서 run 상태를
-   확실히 커밋하도록(별도 짧은 세션 또는 노드 레벨 명시적 commit) 고칠 것.
+2. **fail_run 내구성 — ✅ 해소됨(코드리뷰 #5):** 하네스 실행이 실패하는 경로에서 노드의
+   `except` 블록이 `async with` 세션을 커밋 없이 종료해, `fail_run()`이 기록한 상태 업데이트가
+   롤백될 수 있었다(반복 시 `status="running"` 고아 run 누적). 이제 노드 `except`가 **별도의
+   짧은 새 세션**을 열어 `Ledger(fail_session, run_id).fail_run()` 후 `commit()`하여 실패 상태를
+   내구성 있게 확정한다(원 세션은 롤백/오류 상태일 수 있어 재사용하지 않는다). 회귀 테스트:
+   `tests/workflow/test_deep_analysis_node.py::test_deep_analysis_node_persists_failed_status_on_run_error`.
 3. **분류기 intent 미도달:** `IntentType.DEEP_ANALYSIS`를 방출하는 쿼리 분류기가 아직 없어,
    현재는 복잡도 기반 분기만 라이브이고 intent 기반 라우팅 분기는 도달 불가능한 죽은 코드다.
    활성화 시점에 분류기에 해당 intent를 추가하거나, 미도달 분기를 정리할 것.
