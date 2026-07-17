@@ -100,7 +100,9 @@ export function extractAttachments(
     }
 
     if (part.type === "input_file") {
-      const file = (part as { file?: { url?: string; name?: string; media_type?: string } }).file;
+      const file = (
+        part as { file?: { url?: string; name?: string; media_type?: string } }
+      ).file;
       if (!file) {
         continue;
       }

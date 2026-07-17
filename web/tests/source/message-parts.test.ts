@@ -15,7 +15,12 @@ describe("message parts → backend payload", () => {
   test("text 파트만 content로 합쳐진다", () => {
     const content = extractTextContent([
       { type: "text", text: "first" },
-      { type: "file", url: "https://x/a.png", name: "a.png", mediaType: "image/png" },
+      {
+        type: "file",
+        url: "https://x/a.png",
+        name: "a.png",
+        mediaType: "image/png",
+      },
       { type: "text", text: "second" },
     ]);
 
@@ -77,8 +82,18 @@ describe("message parts → backend payload", () => {
 
   test("여러 첨부가 순서대로 보존된다", () => {
     const attachments = extractAttachments([
-      { type: "file", url: "https://x/1.png", name: "1.png", mediaType: "image/png" },
-      { type: "file", url: "https://x/2.pdf", name: "2.pdf", mediaType: "application/pdf" },
+      {
+        type: "file",
+        url: "https://x/1.png",
+        name: "1.png",
+        mediaType: "image/png",
+      },
+      {
+        type: "file",
+        url: "https://x/2.pdf",
+        name: "2.pdf",
+        mediaType: "application/pdf",
+      },
     ]);
 
     assert.deepEqual(

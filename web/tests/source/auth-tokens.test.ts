@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   DEFAULT_ACCESS_TOKEN_TTL_MS,
@@ -64,6 +64,7 @@ describe("백엔드 토큰 갱신 병합", () => {
   test("access_token이 없으면 갱신 실패로 처리한다", () => {
     assert.throws(
       () => mergeRefreshedTokens(baseToken, { refresh_token: "r" }, 0),
+      // biome-ignore lint/performance/useTopLevelRegex: 단언 1회용 리터럴
       /Missing access_token/
     );
   });
@@ -80,10 +81,16 @@ describe("백엔드 토큰 갱신 병합", () => {
   });
 
   test("expires_in이 없거나 이상하면 기본 TTL로 폴백한다", () => {
-    assert.equal(resolveAccessTokenExpiry(undefined, 0), DEFAULT_ACCESS_TOKEN_TTL_MS);
+    assert.equal(
+      resolveAccessTokenExpiry(undefined, 0),
+      DEFAULT_ACCESS_TOKEN_TTL_MS
+    );
     assert.equal(resolveAccessTokenExpiry(0, 0), DEFAULT_ACCESS_TOKEN_TTL_MS);
     assert.equal(resolveAccessTokenExpiry(-5, 0), DEFAULT_ACCESS_TOKEN_TTL_MS);
-    assert.equal(resolveAccessTokenExpiry("nope", 0), DEFAULT_ACCESS_TOKEN_TTL_MS);
+    assert.equal(
+      resolveAccessTokenExpiry("nope", 0),
+      DEFAULT_ACCESS_TOKEN_TTL_MS
+    );
   });
 });
 
@@ -95,17 +102,17 @@ describe("백엔드 토큰 갱신 병합", () => {
  */
 describe("갱신 경로 단일화", () => {
   const read = (relativePath: string) =>
-    readFileSync(
-      fileURLToPath(new URL(relativePath, import.meta.url)),
-      "utf8"
-    );
+    readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), "utf8");
 
   test("lib/backend-api.ts는 토큰을 직접 갱신하지 않는다", () => {
     const source = read("../../lib/backend-api.ts");
 
-    // 주석에는 경로가 언급될 수 있으므로 실제 fetch 호출 형태를 검사한다
+    // 주석에는 경로가 언급될 수 있으므로 실제 fetch 호출 형태를 검사한다.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: 소스 텍스트를 문자 그대로 검사한다
+    const refreshCall = "`${backendUrl}/api/v1/auth/refresh`";
+
     assert.ok(
-      !source.includes("`${backendUrl}/api/v1/auth/refresh`"),
+      !source.includes(refreshCall),
       "backend-api.ts가 다시 토큰 갱신을 시도하고 있다 — 1회용 토큰을 경쟁 소비해 강제 로그아웃을 유발한다"
     );
   });

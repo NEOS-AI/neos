@@ -1,9 +1,12 @@
 import { strict as assert } from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
 
-import { isAbortError, shouldSurfaceStreamError } from "../../lib/stream-errors";
+import {
+  isAbortError,
+  shouldSurfaceStreamError,
+} from "../../lib/stream-errors";
 
 /**
  * 회귀 테스트: 정지(Stop) 버튼이 에러 토스트를 띄우던 문제

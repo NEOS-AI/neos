@@ -48,7 +48,11 @@ export function resolveAccessTokenExpiry(
   expiresIn: unknown,
   now: number = Date.now()
 ): number {
-  if (typeof expiresIn === "number" && Number.isFinite(expiresIn) && expiresIn > 0) {
+  if (
+    typeof expiresIn === "number" &&
+    Number.isFinite(expiresIn) &&
+    expiresIn > 0
+  ) {
     return now + expiresIn * 1000;
   }
   return now + DEFAULT_ACCESS_TOKEN_TTL_MS;
