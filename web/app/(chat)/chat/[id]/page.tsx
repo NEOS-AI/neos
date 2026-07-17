@@ -68,7 +68,10 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
   return (
     <>
       <Chat
-        autoResume={true}
+        // 재개는 백엔드 이벤트 재생(Phase 3)이 붙기 전까지 비활성화한다.
+        // 예전 동작은 재개가 아니라 워크플로우 재실행이라 새로고침만으로 재과금됐다.
+        // (use-chat-stream.ts의 resumeStream도 no-op으로 이중 차단)
+        autoResume={false}
         id={chat.id}
         initialChatModel={chatModelFromCookie?.value ?? DEFAULT_CHAT_MODEL}
         initialMessages={uiMessages}

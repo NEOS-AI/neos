@@ -14,6 +14,7 @@ import {
   detectEventFormat,
 } from "@/lib/adapters/stream-adapter";
 import type { ChatModel } from "@/lib/ai/models";
+import { isAbortError } from "@/lib/stream-errors";
 import type { MessageItem, OpenResponsesEvent } from "@/lib/stream-types";
 import {
   // OpenResponses type guards
@@ -590,6 +591,12 @@ export function useChatStream({
           }
         }
       } catch (error) {
+        // 정지(Stop)로 인한 abort는 에러가 아니다 — 토스트를 띄우면 안 된다.
+        // 바깥 catch(sendMessage)가 abort를 정상 처리하도록 그대로 다시 던진다.
+        // (예전에는 여기서 삼켜져서 바깥의 AbortError 분기가 도달 불가였다)
+        if (isAbortError(error)) {
+          throw error;
+        }
         console.error("Stream processing error:", error);
         setStatus("error");
         if (onError && error instanceof Error) {
@@ -663,7 +670,9 @@ export function useChatStream({
         // SSE 스트림 처리
         await processStream(response);
       } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") {
+        // AbortError는 DOMException이라 `instanceof Error`가 아닐 수 있는 런타임이 있다.
+        // 이름 기반 판별(isAbortError)을 써야 정지가 에러로 새지 않는다.
+        if (isAbortError(error)) {
           console.log("Stream aborted");
           setStatus("ready");
         } else {
@@ -729,17 +738,23 @@ export function useChatStream({
   );
 
   /**
-   * 스트림 재개 (자동 재개용)
+   * 스트림 재개 — **현재는 의도적으로 no-op이다.**
+   *
+   * 예전 구현은 마지막 user 메시지로 `sendMessage`를 다시 호출했다. 그것은 "재개"가
+   * 아니라 **재실행**이다: `POST /api/chat`이 멀티에이전트 워크플로우를 처음부터
+   * 새로 돌려서 사용자 의도 없이 **다시 과금**되고 메시지가 중복 생성됐다.
+   * (중단된 대화를 새로고침하기만 해도 발생 — `use-auto-resume.ts`가 호출한다)
+   *
+   * 진짜 재개는 백엔드의 이벤트 로그 재생(run_id + `GET /{run_id}/events`)이 있어야
+   * 가능하며, 이는 Phase 3 범위다. 그 전까지는 재실행을 하지 않는 쪽이 옳다 —
+   * 재개 실패는 사용자가 다시 물어보면 되지만, 무단 재과금은 되돌릴 수 없다.
+   *
+   * 시그니처는 `UseChatHelpers`와의 호환을 위해 유지한다.
    */
-  const resumeStream = useCallback(
-    async (options?: ChatRequestOptions) => {
-      const lastMessage = messages[messages.length - 1];
-      if (lastMessage && lastMessage.role === "user") {
-        await sendMessage(lastMessage);
-      }
-    },
-    [messages, sendMessage]
-  );
+  const resumeStream = useCallback(async (_options?: ChatRequestOptions) => {
+    // 의도적 no-op: 재실행으로 인한 재과금 방지. Phase 3에서 이벤트 재생으로 대체 예정.
+    return;
+  }, []);
 
   return {
     messages,
