@@ -178,8 +178,15 @@ async def test_existing_intent_emission_is_unchanged(classifier, query, expected
 
 
 async def test_scheduling_wins_over_engine_intent(classifier):
-    """TASK_SCHEDULING은 라우터 _PRIORITY_ROUTING_MAP에서 최우선이므로 양보받는다."""
-    intent = await classifier._classify_intent("매일 아침 팩트체크 리포트를 등록해줘")
+    """TASK_SCHEDULING은 라우터 _PRIORITY_ROUTING_MAP에서 최우선이므로 양보받는다.
+
+    주의: 질의에 "리포트"/"보고서" 같은 기존 키워드를 섞으면 안 된다. TASK_SCHEDULING은
+    intent_keywords dict의 마지막 항목이라 max() 동점에서 항상 지는 기존 quirk가 있어
+    (예: "매일 ... 리포트 등록해줘" → deep_research), 이 테스트가 검증하려는
+    "engine intent가 스케줄에 양보하는가"와 무관한 이유로 실패한다. 이 quirk는
+    HEAD에서도 동일하며 이 계획의 범위 밖이다.
+    """
+    intent = await classifier._classify_intent("매일 아침 팩트체크 알림 등록해줘")
     assert intent == IntentType.TASK_SCHEDULING.value
 ```
 
