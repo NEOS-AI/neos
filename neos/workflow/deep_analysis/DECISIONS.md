@@ -421,3 +421,68 @@ open 집합이 소진되거나 global_token_cap(30만)에 닿을 때까지 계�
 정지 판단에 한해 aging 항을 뺀다. 선택 로직·점수 공식 자체는 불변.
 **영향:** `Budgeter.base_score()` 신설, `should_stop`이 이를 사용. select()의 aging 포함
 점수·breadth pass·사다리는 불변. 저가치 질문만 남으면 global cap 도달 전에 정지한다.
+
+---
+
+## D21. deep 엔진 라우팅은 complexity 임계값이 아니라 질의 유형으로 가른다 (R1 해소, D18 선결 조건 #3 해소)
+
+**결정:** `OrchestratorRouter.route()`의 엔진별 3중 if-체인을 `_DEEP_ENGINES` 테이블 기반
+**단일 디스패치**로 교체한다. 각 엔진은 자기 유형 intent를 갖고(스펙 §4.1) — `deep_analysis`
+= 검증형 분석, `hyper_deep` = 장문 리포트, `recursive` = 일반 태스크 분해 — 유형 intent가
+엔진을 **결정**한다. complexity 임계값은 "deep 엔진을 쓸지 말지"의 게이트로만 남고 "어느
+엔진인지"는 결정하지 않는다. 유형을 지목하지 않는 레거시 intent(`DEEP_RESEARCH`,
+`COMPLEX_ANALYSIS`)만 임계값 게이트를 타며, 테이블 순서(deep_analysis → hyper_deep →
+recursive)상 처음으로 "활성 + 게이트 통과"인 엔진이 받는다. 분류기(`query_classifier`)는
+키워드 경로와 LLM 경로 **양쪽에서** 세 유형 intent를 방출한다.
+
+**근거 — R1(임계값 역전, 기존 문서 미기록):** 종전 `orchestrator_router.py:98-129`의 세 블록은
+플래그명·상수·임계값만 다른 거의 동일한 코드였고 **셋 다 같은 intent를 두고 경쟁**했다.
+라우팅 순서는 deep_analysis(1순위) → hyper_deep(2순위) → recursive(3순위)인데 임계값은
+0.5 → 0.85 → 0.8로 **역전**돼 있었다. 0.85를 넘는 질의는 0.5도 이미 넘으므로 deep_analysis가
+먼저 가져간다 — 즉 `DEEP_ANALYSIS_ENABLED=true`인 순간 뒤 두 엔진의 complexity 경로는
+**100% 도달 불가능한 죽은 코드**가 됐다. 에러도 경고도 없다. 유일한 탈출구인 명시적
+intent는 R2(아래)로 막혀 있었으므로, 플래그를 켜는 것만으로 ROMA·Ray·HyperDeep이 통째로
+조용히 사라졌다. 임계값은 "얼마나 어려운가"라는 **1차원 척도**여서 세 엔진의 역할 차이를
+표현할 수 없다 — 세 엔진은 난이도가 아니라 **산출물의 형태**가 다르다. 척도를 유형으로
+바꾸면 경쟁 자체가 성립하지 않는다.
+
+**근거 — R2 해소(= D18 "프로덕션 활성화 전 선결 조건" #3):** D18은 "`IntentType.DEEP_ANALYSIS`를
+방출하는 쿼리 분류기가 아직 없어 intent 기반 라우팅 분기는 도달 불가능한 죽은 코드"라
+기록하고 활성화 전 처리를 요구했다. 키워드 경로는 해당 intent를 아예 생성하지 않았고, LLM
+경로는 `_VALID_INTENTS`에 전부 넣으면서 프롬프트 Rules에는 9개만 설명해 사실상 방출되지
+않았으며, `use_llm` 기본값이 꺼짐이라 키워드 경로가 기본이었다. 이 결정으로 **세 유형 모두
+양쪽 경로에서 방출**되므로 선결 조건 #3은 해소된다. (선결 조건 #1 wall-clock 바운드는
+**미해소로 남는다** — 이 결정의 범위 밖이며 활성화 전 여전히 필요하다.)
+
+**이탈:** 없음(원 설계는 챗 라우팅 방식을 규정하지 않는다). 승인 스펙
+`docs/superpowers/specs/2026-07-17-loop-architecture-consolidation-design.md` §4를 그대로 구현한다.
+**엔진은 삭제하지 않는다 — 재배치지 제거가 아니다**(스펙 §7).
+
+**영향 — 레거시 generic intent는 여전히 우선순위로 갈린다(의도된 잔여):** 스펙 §4.2는
+"세 엔진이 같은 intent를 두고 경쟁하지 않게 되므로 shadowing이 사라진다"고 하지만, 이는
+**유형 intent에 대해** 성립한다. `DEEP_RESEARCH`/`COMPLEX_ANALYSIS`는 유형을 지목하지
+않으므로 어느 엔진이 받을지 정의되지 않으며, 여기에 여전히 우선순위가 필요하다. 이를
+`deep_analysis` 1:1로 좁히는 대안은 **회귀**다 — 현재 프로덕션에 가까운 구성
+(`DEEP_ANALYSIS_ENABLED=false` + `HYPER_DEEP_AGENT_ENABLED=true`)에서 오늘 `hyper_deep`으로
+가는 고복잡도 `deep_research` 질의가 `base_route`로 떨어진다. 따라서 테이블 순서로 남기되,
+**R1과는 성질이 다르다**: (a) 순서가 임계값 상수의 사고가 아니라 테이블에 명시·문서화돼
+있고, (b) 어떤 엔진도 100% 도달 불가가 아니다 — `hyper_deep`/`recursive`는 자기 유형
+intent로 항상 도달한다. 후자를
+`tests/workflow/routing/test_engine_reassignment.py::test_every_engine_is_reachable_when_all_three_are_enabled`
+가 강제한다.
+
+**영향 — 기존 intent 방출 불변(K3):** 신규 유형 키워드는 기존 `intent_keywords` 스코어링
+맵에 넣지 않고 전용 전처리(`_classify_engine_intent`)로 분리했다. 저 맵은 매칭 수를 세어
+`max()`로 뽑으므로 키워드를 섞으면 기존 질의의 승자가 바뀔 수 있다. 전처리는 "신규 키워드가
+하나도 안 맞으면 `None`"이라 기존 방출이 **구조적으로** 불변이다. `TASK_SCHEDULING`은
+라우터 `_PRIORITY_ROUTING_MAP`에서 최우선이므로 전처리가 양보한다. 회귀 고정:
+`tests/workflow/utils/test_query_classifier_engine_intents.py::test_existing_intent_emission_is_unchanged`.
+
+**영향 — 엔진 추가는 이제 테이블 한 줄이다:** `DeepEngine(name, intent, enabled_flag,
+threshold_attr)`을 `_DEEP_ENGINES`에 추가하면 된다. 분기 코드는 늘지 않는다 — R1의 재발
+경로가 구조적으로 닫힌다. `test_route_has_no_per_engine_repeated_blocks`가 엔진명·플래그명·
+임계값명이 분기 코드에 하드코딩되는 것을 금지해 이를 강제한다.
+
+**영향 — `_ALWAYS_SEARCH_INTENTS`에 `DEEP_ANALYSIS` 추가:** 세 유형이 실제로 방출되기
+시작하므로, 엔진이 꺼진 상태에서 검증형 질의가 검색 없이 `skip_orchestrators`로 새지
+않도록 `deep_analysis`를 always-search 목록에 넣는다(나머지 두 유형은 이미 있었다).
