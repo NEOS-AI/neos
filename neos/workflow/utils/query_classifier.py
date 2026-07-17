@@ -136,6 +136,9 @@ Rules:
 - "youtube_search" for video/youtube related queries
 - "generation" for creating content, images, files
 - "task_execution" for planning, executing tasks
+- "deep_analysis" for verification-style queries where the goal is to establish whether a claim is true: fact-checking, verifying sources, cross-checking conflicting evidence
+- "hyper_deep_research" for long-form report writing where length and section structure are the goal: whitepapers, multi-section or multi-page reports
+- "recursive_research" for multi-step executable task decomposition: carry out a sequence of dependent steps or sub-tasks (not a research report)
 - Set needs_ui=true for: reservations, bookings, form-filling, multi-field configuration wizards
 - Set needs_ui=false for: informational queries, analysis, simple commands, single-step tasks
 

@@ -93,3 +93,78 @@ async def test_scheduling_wins_over_engine_intent(classifier):
     """
     intent = await classifier._classify_intent("매일 아침 팩트체크 알림 등록해줘")
     assert intent == IntentType.TASK_SCHEDULING.value
+
+
+# ── AC3: LLM 경로 ──────────────────────────────────────────────────────
+
+
+def test_llm_prompt_rules_describe_three_engine_types():
+    """LLM 프롬프트 Rules가 세 유형을 설명한다 (스펙 §4.3-1).
+
+    R2: _VALID_INTENTS는 전부 허용했지만 Rules에 설명이 없어 사실상 방출되지
+    않던 것이 결함이었다. 열거만으로는 부족하고 Rules 설명이 있어야 한다.
+    """
+    from neos.workflow.utils.query_classifier import _LLM_CLASSIFICATION_PROMPT
+
+    rules = _LLM_CLASSIFICATION_PROMPT.split("Rules:")[1].split("User query:")[0]
+    for intent in (
+        IntentType.DEEP_ANALYSIS.value,
+        IntentType.HYPER_DEEP_RESEARCH.value,
+        IntentType.RECURSIVE_RESEARCH.value,
+    ):
+        assert f'"{intent}"' in rules, f"Rules에 {intent} 설명이 없다"
+
+
+def test_llm_valid_intents_include_three_engine_types():
+    from neos.workflow.utils.query_classifier import _VALID_INTENTS
+
+    assert IntentType.DEEP_ANALYSIS.value in _VALID_INTENTS
+    assert IntentType.HYPER_DEEP_RESEARCH.value in _VALID_INTENTS
+    assert IntentType.RECURSIVE_RESEARCH.value in _VALID_INTENTS
+
+
+class _FakeResponse:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+
+class _FakeLLM:
+    def __init__(self, payload: str) -> None:
+        self._payload = payload
+        self.prompts: list[str] = []
+
+    async def ainvoke(self, prompt):
+        self.prompts.append(prompt)
+        return _FakeResponse(self._payload)
+
+
+@pytest.mark.parametrize(
+    "intent_value",
+    [
+        IntentType.DEEP_ANALYSIS.value,
+        IntentType.HYPER_DEEP_RESEARCH.value,
+        IntentType.RECURSIVE_RESEARCH.value,
+    ],
+)
+async def test_llm_path_emits_each_engine_type(classifier, monkeypatch, intent_value):
+    import json
+
+    payload = json.dumps(
+        {
+            "intent": intent_value,
+            "complexity": 0.9,
+            "sub_topics": ["a"],
+            "required_capabilities": ["web_search"],
+            "confidence": 0.9,
+            "needs_ui": False,
+        }
+    )
+    fake = _FakeLLM(payload)
+    monkeypatch.setattr("neos.utils.llm_factory.create_llm", lambda **kwargs: fake)
+
+    result = await classifier._classify_with_llm("이 주제를 다뤄줘")
+
+    assert result is not None
+    assert result["intent"] == intent_value
+    # 프롬프트에 세 유형 Rules가 실제로 실려 나갔는지 확인
+    assert intent_value in fake.prompts[0]
