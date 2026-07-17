@@ -638,6 +638,22 @@ class DeepAnalysisConfig(StrictConfigModel):
     aging_per_round: float = 0.05
     value_decay: float = 0.8
     max_depth: int = 4
+    # discovery 소스로 쓸 스킬 allowlist. URL을 반환해 fetch/원문대조가 가능한
+    # 것만 넣는다 — URL 없는 스킬 결과는 E_SOURCE_DEAD로 거절된다.
+    discovery_skills: list[str] = Field(
+        default_factory=lambda: [
+            "arxiv",
+            "pubmed",
+            "openalex",
+            "semantic_scholar",
+            "google_scholar",
+            "sec_edgar",
+            "news_api",
+            "wikipedia",
+        ]
+    )
+    # dig의 token_cap(12000)을 도구 스키마가 잠식하지 않도록 하는 상한.
+    max_discovery_skills: int = 3
     parallel_workers: int = 4
     quote_match_threshold: float = 0.92
     confidence_cap: dict[int, float] = Field(
