@@ -30,6 +30,13 @@ def _domain_suffix_match(candidate: str, entry: str) -> bool:
     entry = entry.lower()
     if not entry:
         return False
+    # Accept the design §8 glob form ("*.gov", "*.edu") by treating a leading
+    # "*" as a dotted-suffix wildcard: "*.gov" -> ".gov". Bare/dotted forms are
+    # unaffected, so both the documented and the shipped config values match.
+    if entry.startswith("*"):
+        entry = entry[1:]
+    if not entry:
+        return False
     if entry.startswith("."):
         return candidate.endswith(entry)
     return candidate == entry or candidate.endswith("." + entry)

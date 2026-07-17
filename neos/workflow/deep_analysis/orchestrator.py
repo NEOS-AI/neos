@@ -279,11 +279,35 @@ class Orchestrator:
             else:
                 repair_count = 0
                 repairs_rendered = "(없음)"
+            # worker_brief.md [3] "확정된 발견 — 재조사 금지": 이 질문의 이전
+            # 패스가 이미 확정한 클레임과 막다른 길을 워커에 전달해야 재조사가
+            # 같은 길을 반복하지 않고 수렴한다. (첫 패스에는 둘 다 "(없음)".)
+            # Ledger 접근자는 방어적으로 읽어 최소 test double은 구현할
+            # 필요가 없게 한다(_collect_caveats와 동일한 패턴).
+            summaries_fn = getattr(self.ledger, "verified_summaries", None)
+            verified_summaries = (
+                await summaries_fn(question.id)
+                if summaries_fn is not None
+                else "(없음)"
+            )
+            deadends_fn = getattr(
+                self.ledger, "unverified_and_deadends", None
+            )
+            dead_end_entries = (
+                await deadends_fn(question.id)
+                if deadends_fn is not None
+                else []
+            )
+            dead_ends_rendered = (
+                "\n".join(f"- {entry}" for entry in dead_end_entries)
+                if dead_end_entries
+                else "(없음)"
+            )
             brief = render(
                 "worker_brief",
                 question_text=question.text,
-                verified_summaries="(없음)",
-                dead_ends="(없음)",
+                verified_summaries=verified_summaries,
+                dead_ends=dead_ends_rendered,
                 repair_count=repair_count,
                 repairs=repairs_rendered,
                 token_cap=config.effort[effort.value].token_cap,
@@ -472,6 +496,9 @@ class Orchestrator:
                 assignment.question_id
             )
             await self.ledger.commit_blobs(result.blobs)
+            # verdicts는 claim 텍스트로 키잉한다. 이는 Ledger의 hash 기반
+            # 병합(§6.1.3, D3)과 정합적이다 — 동일 텍스트 클레임은 커밋 시
+            # 하나의 claim으로 병합되므로 텍스트당 verdict 하나가 맞다.
             verdicts = {}
             for claim in result.claims:
                 verdicts[claim.text] = await self._grade(claim, value_est)

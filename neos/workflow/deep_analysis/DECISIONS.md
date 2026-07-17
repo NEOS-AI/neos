@@ -233,6 +233,15 @@ value_est 산정"을 위해 **독립적인 LLM 심사자**를 요구하는데, �
 재시도가 필요하면 별도 샘플링 라운드(다음 pass)에서 자연히 재티어링되며, 이는 기존 tiering
 샘플러(`should_grade`)가 이미 제공하는 경로다 — 전용 pending 재시도 배관을 새로 만들 필요가 없다.
 
+**개정(코드리뷰 #6 / §A4):** 위 미심사 통과는 **저가치 샘플링 대상**(`value_est×confidence <
+agentic_threshold`)에만 적용한다. **필수 심사 대상**(mandatory, 임계 이상)은 judge 판정 불가 시
+자동 `verified`를 **금지**한다 — 대신 `Verdict(ok=False, code="E_UNSUPPORTED",
+detail="…_mandatory")`로 반려한다. 근거: §A4는 judge 분리를 사실상의 프롬프트 인젝션 방어층으로
+규정하고 "성능·비용을 이유로 완화하지 말 것"을 요구한다. 미개정 동작은 적대적 웹 원문이 judge
+출력을 비-JSON으로 깨뜨리기만 하면 고가치 클레임을 무심사로 verified 통과시키는 우회로를 열어
+그 방어층을 무력화했다. 반려된 클레임은 재조사되고, 재시도 캡 소진 시 `unverified`→보고서 "한계"
+섹션에 남는다(빈손 종료 없음). 저가치 샘플 경로의 D14 원결정은 그대로 유지된다.
+
 ---
 
 ## D15. 무진전 안전밸브 — 질문별 연속 무진전 라운드 상한 도달 시 강제 SPLIT/abandon
@@ -382,3 +391,21 @@ Sub-project A final review에서 `DEEP_ANALYSIS_ENABLED=true`로 전환하기 **
 **영향:** 신호는 `deep_analysis_reports` 테이블(D 신규)과 `/api/v1/deep-analysis/analytics`로
 노출. 이벤트 로그는 **읽기 전용**(§11.3, D8)이며 L5는 이벤트에 쓰지 않는다. 프롬프트 버전 bump는
 `test_golden_gate`의 매니페스트를 강제로 깨뜨려, golden 재녹화 + 신호 검토를 유도한다.
+
+---
+
+## D20. 정지 판단(should_stop)은 aging 제외 base_score로 한다
+
+**결정:** Budgeter.should_stop의 정지 조건 2("모든 open 질문의 score < score_floor")를
+`base_score = value_est×(1−conf)×gain_decay`(aging 제외)로 평가한다. 선택 우선순위
+(select)의 점수는 종전대로 aging을 포함한다.
+**근거:** 설계 §8 기본값이 `aging_per_round == score_floor == 0.05`다. aging을 정지 조건에
+포함하면 open 질문 수가 parallel_workers를 초과할 때 미선택 질문의 aging이 1라운드 만에
+floor에 도달해, `should_stop`의 조건 2가 사실상 영원히 False가 된다. 결과적으로 저가치 런도
+open 집합이 소진되거나 global_token_cap(30만)에 닿을 때까지 계속 조사해 §6.2가 의도한 '수익
+체감 시 조기 정지'가 무력화되고 실제 비용이 초과된다. aging은 기아 방지용 소프트 신호(D1/A6)
+이므로 선택 순서에만 쓰고, '남은 실제 가치'를 재는 정지 판단에서는 제외하는 것이 옳다.
+**이탈:** 원 설계 §6.2 정지 조건 2는 문자 그대로 "score"(aging 포함)를 본다. 이 결정은
+정지 판단에 한해 aging 항을 뺀다. 선택 로직·점수 공식 자체는 불변.
+**영향:** `Budgeter.base_score()` 신설, `should_stop`이 이를 사용. select()의 aging 포함
+점수·breadth pass·사다리는 불변. 저가치 질문만 남으면 global cap 도달 전에 정지한다.

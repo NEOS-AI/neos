@@ -35,6 +35,19 @@ def test_source_tier_subdomain_matches_dotted_suffix():
     assert source_tier("https://github.com/org/repo", TIERS) == 1
 
 
+def test_source_tier_accepts_design_glob_form():
+    # 설계 §8 config는 tier1을 glob 형식("*.gov", "*.edu")으로 명시한다.
+    # 파서는 그 문서 형식과 dotted-suffix 형식(".gov") 양쪽을 지원해야 한다.
+    glob_tiers = {
+        "tier1": ["arxiv.org", "*.gov", "*.edu", "github.com"],
+        "tier2": ["*"],
+    }
+    assert source_tier("https://nasa.gov/mission", glob_tiers) == 1
+    assert source_tier("https://sub.example.edu/p", glob_tiers) == 1
+    assert source_tier("https://arxiv.org/abs/1", glob_tiers) == 1
+    assert source_tier("https://blog.example.com/p", glob_tiers) == 2
+
+
 class FakeLedger:
     def __init__(self, urls):
         self._urls = urls  # {claim_id: [url]}

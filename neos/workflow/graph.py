@@ -1054,11 +1054,12 @@ class MultiAgentWorkflow:
         chat state(final_response/deep_analysis_run_id)로 매핑한다.
         """
         from neos.workflow.deep_analysis.service import build_orchestrator
-        from neos.workflow.deep_analysis.ledger import create_run
+        from neos.workflow.deep_analysis.ledger import Ledger, create_run
         from neos.database.connection import db_manager
 
         query = state.get("refined_query") or state.get("original_query", "")
         profile = "default"
+        run_id = None
         try:
             async with await db_manager.get_session() as session:
                 run_id = await create_run(session, query, profile)
@@ -1085,6 +1086,20 @@ class MultiAgentWorkflow:
             }
         except Exception as exc:
             logger.error(f"[DeepAnalysisOrchestratorNode] failed: {exc}")
+            # D18 선결조건(2): 실패한 run을 내구성 있게 'failed'로 확정한다.
+            # orch.run()의 예외 경로는 세션을 롤백한 뒤 fail_run()을 flush만
+            # 하므로, 원 세션(롤백/오류 상태일 수 있음)이 아닌 새 세션에서
+            # 상태를 커밋해야 status='running' 고아 run이 남지 않는다.
+            if run_id is not None:
+                try:
+                    async with await db_manager.get_session() as fail_session:
+                        await Ledger(fail_session, run_id).fail_run()
+                        await fail_session.commit()
+                except Exception as fail_exc:  # noqa: BLE001
+                    logger.error(
+                        f"[DeepAnalysisOrchestratorNode] fail_run persist "
+                        f"failed for run {run_id}: {fail_exc}"
+                    )
             return {"final_response": "심층 분석 하네스 실행에 실패했습니다."}
 
     def _should_use_recursive_agent(self, state: AgentState) -> str:

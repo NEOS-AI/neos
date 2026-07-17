@@ -46,3 +46,19 @@ async def test_should_stop_when_all_below_floor():
     b = Budgeter(global_token_cap=10000, score_floor=0.05)
     # confidence 1.0 → base 0, aging 0(첫 판정) → score 0 < floor
     assert await b.should_stop(FakeLedger([_q("a", confidence=1.0)], spent=0)) is True
+
+@pytest.mark.asyncio
+async def test_should_stop_ignores_accumulated_aging(monkeypatch):
+    # D20 회귀: aging(0.05)==score_floor(0.05)이므로, 미선택 라운드가 쌓인
+    # 저가치 질문은 aging만으로 floor를 넘겨 예전엔 정지가 무력화됐다.
+    # should_stop은 base_score(aging 제외)만 봐야 하므로 정지해야 한다.
+    b = Budgeter(global_token_cap=10000, score_floor=0.05, aging_per_round=0.05)
+    b._round = 10  # 미선택 질문 aging = 10 * 0.05 = 0.5 (>> floor)
+    # confidence 1.0 → base_score 0. select 점수(aging 포함)는 0.5지만 정지 판단은 무관.
+    assert await b.should_stop(FakeLedger([_q("a", confidence=1.0)], spent=0)) is True
+
+@pytest.mark.asyncio
+async def test_should_not_stop_when_base_value_remains():
+    # 아직 조사할 가치가 있는 질문(base_score >= floor)이면 정지하지 않는다.
+    b = Budgeter(global_token_cap=10000, score_floor=0.05)
+    assert await b.should_stop(FakeLedger([_q("a", value_est=0.5, confidence=0.0)], spent=0)) is False

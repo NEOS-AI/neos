@@ -247,3 +247,37 @@ async def test_orchestrator_rolls_back_failed_transaction_before_marking_run_fai
 
     assert session.rollbacks == 1
     assert ledger.failed
+
+
+async def test_partition_feeds_prior_findings_and_dead_ends_into_brief():
+    """재조사 패스의 worker brief는 이 질문의 확정된 발견과 막다른 길을
+    포함해야 한다(worker_brief.md [3] "확정된 발견 — 재조사 금지").
+    이전에는 항상 "(없음)"으로 하드코딩되어 문맥이 유실됐다."""
+    from neos.workflow.deep_analysis.models import Effort
+
+    class BriefLedger:
+        async def pending_feedback(self, question_id):
+            return []
+
+        async def verified_summaries(self, question_id):
+            return "- 지구는 둥글다"
+
+        async def unverified_and_deadends(self, question_id):
+            return ["평평한 지구설은 근거 없음"]
+
+    question = Question(id="q1000000", text="지구 모양은?", parent_id="root0000", depth=1)
+    orchestrator = Orchestrator(
+        session=None,
+        run_id="run00001",
+        worker_factory=FakeWorker,
+        grader=None,  # _partition은 grader를 사용하지 않는다
+        ledger=BriefLedger(),
+    )
+
+    assignments, splits = await orchestrator._partition([(question, Effort.SCOUT)])
+
+    assert splits == []
+    assert len(assignments) == 1
+    brief = assignments[0].brief
+    assert "지구는 둥글다" in brief
+    assert "평평한 지구설은 근거 없음" in brief

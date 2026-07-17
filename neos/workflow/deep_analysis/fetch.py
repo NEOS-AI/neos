@@ -44,6 +44,23 @@ def _content_hash(raw_text: str) -> str:
     return hashlib.sha256(raw_text.encode("utf-8")).hexdigest()[:16]
 
 
+def _blob_hash(raw_text: str, url: str, status: int) -> str:
+    """Content address for a fetched blob.
+
+    Non-empty bodies address by content (identical text from mirror URLs
+    dedups to one blob — the intended cross-verification behavior). But an
+    *empty* extraction (every non-2xx response, plus 2xx pages that yield no
+    text) would otherwise collapse every distinct source onto
+    ``sha256("")``; ``Ledger._store_blob`` keeps only the first, so a live
+    200-but-empty page could inherit an earlier dead 404's ``http_status``
+    and be mis-graded ``E_SOURCE_DEAD`` (and vice-versa). Disambiguate empty
+    bodies by ``url``+``status`` so each real source keeps its own blob row.
+    """
+    if raw_text:
+        return _content_hash(raw_text)
+    return _content_hash(f"\x00EMPTY\x00{status}\x00{url}")
+
+
 async def fetch_url(
     url: str,
     *,
@@ -74,7 +91,7 @@ async def fetch_url(
 
         return asdict(
             ProposedBlob(
-                content_hash=_content_hash(raw_text),
+                content_hash=_blob_hash(raw_text, url, status),
                 source_url=url,
                 http_status=status,
                 raw_text=raw_text,

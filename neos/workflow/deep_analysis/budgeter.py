@@ -52,10 +52,25 @@ class Budgeter:
         elapsed = self._round if last is None else (self._round - last)
         return elapsed * self.aging_per_round
 
-    async def score(self, ledger, question) -> float:
+    async def base_score(self, ledger, question) -> float:
+        """설계 §6.2 점수의 aging 제외 항: value_est×(1−conf)×gain_decay.
+
+        질문의 '남은 실제 가치'를 나타낸다. 정지 판단(should_stop)은 이
+        값만 본다 — aging은 기아 방지용 선택 우선순위 신호일 뿐이며(D1/D20),
+        정지 조건에 섞이면 미선택 질문의 aging 누적만으로 score_floor를
+        영원히 넘겨 조기 정지가 무력화되기 때문이다.
+        """
         history = await ledger.gain_history(question.id, last_n=3)
-        base = question.value_est * (1.0 - question.confidence) * self.gain_decay(history)
-        return base + self.aging(question.id)
+        return (
+            question.value_est
+            * (1.0 - question.confidence)
+            * self.gain_decay(history)
+        )
+
+    async def score(self, ledger, question) -> float:
+        return await self.base_score(ledger, question) + self.aging(
+            question.id
+        )
 
     def ladder(self, question) -> Effort:
         if question.fail_streak >= 2:
@@ -102,8 +117,11 @@ class Budgeter:
         open_questions = await ledger.open_questions()
         if not open_questions:
             return True
+        # D20: 정지 판단은 base_score(aging 제외)로 한다. aging을 포함하면
+        # 미선택 질문의 라운드 누적만으로 floor를 넘겨 조기 정지가 사실상
+        # 발동 불가가 된다(aging_per_round == score_floor == 0.05).
         for q in open_questions:
-            if (await self.score(ledger, q)) >= self.score_floor:
+            if (await self.base_score(ledger, q)) >= self.score_floor:
                 return False
         return True
 
