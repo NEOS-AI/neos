@@ -4,6 +4,7 @@ import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import { mapToBackendModelName } from "@/lib/ai/models";
 import { callBackendAPI } from "@/lib/backend-api";
 import { ChatSDKError } from "@/lib/errors";
+import { extractAttachments, extractTextContent } from "@/lib/message-parts";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
@@ -48,10 +49,10 @@ export async function POST(request: Request) {
       }
     }
 
-    const messageContent = message.parts
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n");
+    // text 파트는 content로, file 파트는 attachments로 전달한다.
+    // (이전에는 file 파트를 폐기해 첨부가 백엔드에 도달하지 못했다)
+    const messageContent = extractTextContent(message.parts);
+    const messageAttachments = extractAttachments(message.parts);
 
     // 기존 conversation 조회 (id = FE chat UUID = backendConversationId)
     let conversationId: string | null = null;
@@ -116,6 +117,7 @@ export async function POST(request: Request) {
         body: JSON.stringify({
           content: messageContent,
           role: "user",
+          attachments: messageAttachments,
           metadata: {
             fe_chat_id: id,
             model: selectedChatModel,

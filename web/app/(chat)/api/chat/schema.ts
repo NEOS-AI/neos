@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+import { SUPPORTED_ATTACHMENT_MIME_TYPES } from "@/lib/message-parts";
+
+/**
+ * 첨부 MIME 타입은 업로드 라우트와 동일한 목록을 사용한다.
+ * (두 곳이 어긋나면 업로드는 되는데 채팅 요청이 400으로 죽는다)
+ */
+const attachmentMediaTypeSchema = z.enum(SUPPORTED_ATTACHMENT_MIME_TYPES);
+
 // ============================================================================
 // OpenResponses Standard Input Types
 // ============================================================================
@@ -19,7 +27,7 @@ const inputFilePartSchema = z.object({
   type: z.literal("input_file"),
   file: z.object({
     url: z.string().url(),
-    media_type: z.enum(["image/jpeg", "image/png"]),
+    media_type: attachmentMediaTypeSchema,
     name: z.string().min(1).max(100),
   }),
 });
@@ -46,7 +54,7 @@ const textPartSchema = z.object({
  */
 const filePartSchema = z.object({
   type: z.enum(["file"]),
-  mediaType: z.enum(["image/jpeg", "image/png"]),
+  mediaType: attachmentMediaTypeSchema,
   name: z.string().min(1).max(100),
   url: z.string().url(),
 });
