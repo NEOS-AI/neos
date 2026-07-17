@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from neos.config.settings import settings
@@ -71,7 +72,63 @@ _ALWAYS_SEARCH_INTENTS = [
     IntentType.COMPLEX_ANALYSIS.value,
     IntentType.HYPER_DEEP_RESEARCH.value,
     IntentType.RECURSIVE_RESEARCH.value,
+    IntentType.DEEP_ANALYSIS.value,
 ]
+
+
+@dataclass(frozen=True)
+class DeepEngine:
+    """deep 엔진 하나를 라우팅 관점에서 기술한다.
+
+    route()는 이 표만 읽는다 — 엔진을 추가·제거해도 분기 코드는 늘지 않는다.
+    엔진별 if-블록을 복제하던 구조가 R1(임계값 역전)을 낳았다: 세 블록이 같은
+    intent를 두고 경쟁하는데 우선순위(deep_analysis→hyper_deep→recursive)와
+    임계값(0.5→0.85→0.8)이 역전돼, 뒤 두 엔진의 complexity 경로가 도달 불가능한
+    죽은 코드가 됐다. 테이블화는 그 복제를 구조적으로 불가능하게 만든다.
+    """
+
+    name: str  # 라우팅 키. graph.py `_routing_map`의 키와 일치해야 한다
+    intent: str  # 이 엔진을 지목하는 전용 유형 intent
+    enabled_flag: str  # settings의 활성 플래그 속성명
+    threshold_attr: str  # settings의 complexity 게이트 속성명
+
+
+# 스펙 §4.1 — 임계값이 아니라 "작업의 형태"가 엔진을 고른다.
+#   deep_analysis : 검증형 분석 — "이 주장이 사실인가" (인용·충돌해소·검증된 클레임)
+#   hyper_deep    : 장문 리포트 — "긴 보고서를 써라" (Ralph 정제 루프, 섹션 품질)
+#   recursive     : 일반 태스크 분해 — "여러 단계 작업을 수행하라" (Ray 병렬)
+#
+# 튜플 순서 = 유형을 지목하지 않는 레거시 intent(_GENERIC_DEEP_INTENTS)의
+# fallback 우선순위. 현행 동작(deep_analysis 1순위)과 동일하게 두어 무회귀를 지킨다.
+_DEEP_ENGINES: tuple[DeepEngine, ...] = (
+    DeepEngine(
+        name="deep_analysis",
+        intent=IntentType.DEEP_ANALYSIS.value,
+        enabled_flag="DEEP_ANALYSIS_ENABLED",
+        threshold_attr="DEEP_ANALYSIS_COMPLEXITY_THRESHOLD",
+    ),
+    DeepEngine(
+        name="hyper_deep",
+        intent=IntentType.HYPER_DEEP_RESEARCH.value,
+        enabled_flag="HYPER_DEEP_AGENT_ENABLED",
+        threshold_attr="HYPER_DEEP_COMPLEXITY_THRESHOLD",
+    ),
+    DeepEngine(
+        name="recursive",
+        intent=IntentType.RECURSIVE_RESEARCH.value,
+        enabled_flag="RECURSIVE_AGENT_ENABLED",
+        threshold_attr="RECURSIVE_COMPLEXITY_THRESHOLD",
+    ),
+)
+
+# 유형을 지목하지 않는 레거시 research intent. complexity 게이트를 통과하면
+# _DEEP_ENGINES 순서상 처음으로 활성화된 엔진이 받는다.
+_GENERIC_DEEP_INTENTS = frozenset(
+    {
+        IntentType.DEEP_RESEARCH.value,
+        IntentType.COMPLEX_ANALYSIS.value,
+    }
+)
 
 
 class OrchestratorRouter:
@@ -91,44 +148,41 @@ class OrchestratorRouter:
             if state.get("pending_approvals") and state.get("approval_decision") is None:
                 return "needs_approval"
 
-        classification = state.get("query_classification") or {}
-        complexity = classification.get("complexity_score", 0.0)
-        intent = state.get("query_intent", "")
-
-        if settings.DEEP_ANALYSIS_ENABLED and policy.allows_recursive_research():
-            if intent == IntentType.DEEP_ANALYSIS.value:
-                return "deep_analysis"
-
-            da_intents = (
-                IntentType.DEEP_RESEARCH.value,
-                IntentType.COMPLEX_ANALYSIS.value,
+        if policy.allows_recursive_research():
+            classification = state.get("query_classification") or {}
+            engine = self.select_deep_engine(
+                intent=state.get("query_intent", ""),
+                complexity=classification.get("complexity_score", 0.0),
             )
-            if complexity >= settings.DEEP_ANALYSIS_COMPLEXITY_THRESHOLD and intent in da_intents:
-                return "deep_analysis"
-
-        if settings.HYPER_DEEP_AGENT_ENABLED and policy.allows_recursive_research():
-            if intent == IntentType.HYPER_DEEP_RESEARCH.value:
-                return "hyper_deep"
-
-            hyper_deep_intents = (
-                IntentType.DEEP_RESEARCH.value,
-                IntentType.COMPLEX_ANALYSIS.value,
-            )
-            if complexity >= settings.HYPER_DEEP_COMPLEXITY_THRESHOLD and intent in hyper_deep_intents:
-                return "hyper_deep"
-
-        if settings.RECURSIVE_AGENT_ENABLED and policy.allows_recursive_research():
-            if intent == IntentType.RECURSIVE_RESEARCH.value:
-                return "recursive"
-
-            roma_intents = (
-                IntentType.DEEP_RESEARCH.value,
-                IntentType.COMPLEX_ANALYSIS.value,
-            )
-            if complexity >= settings.RECURSIVE_COMPLEXITY_THRESHOLD and intent in roma_intents:
-                return "recursive"
+            if engine is not None:
+                return engine
 
         return self.base_route(state)
+
+    def select_deep_engine(self, *, intent: str, complexity: float) -> str | None:
+        """유형(intent) → deep 엔진 단일 디스패치. 해당 없으면 None.
+
+        스펙 §4.3-3: complexity 임계값은 "deep 엔진을 쓸지 말지"의 게이트로만
+        남고, "어느 엔진인지"는 유형이 결정한다. 전용 유형 intent는 사용자가
+        형태를 명시한 것이므로 게이트를 적용하지 않는다.
+        """
+        for engine in _DEEP_ENGINES:
+            if engine.intent == intent:
+                return engine.name if self._engine_enabled(engine) else None
+
+        if intent not in _GENERIC_DEEP_INTENTS:
+            return None
+
+        # 유형이 없는 레거시 intent만 임계값 게이트를 탄다.
+        for engine in _DEEP_ENGINES:
+            if self._engine_enabled(engine) and complexity >= getattr(settings, engine.threshold_attr):
+                return engine.name
+
+        return None
+
+    @staticmethod
+    def _engine_enabled(engine: DeepEngine) -> bool:
+        return bool(getattr(settings, engine.enabled_flag, False))
 
     def base_route(self, state: "AgentState") -> str:
         priority = _PRIORITY_ROUTING_MAP.get(state.get("query_intent", ""))
