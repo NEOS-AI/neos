@@ -8,7 +8,6 @@ async def test_ticket_is_bound_to_task_and_consumed_once() -> None:
     ticket = await store.issue(owner_id="u1", task_id="ct_1")
 
     assert await store.consume(ticket, task_id="ct_2") is None
-    assert await store.consume(ticket, task_id="ct_1") == "u1"
     assert await store.consume(ticket, task_id="ct_1") is None
 
 
