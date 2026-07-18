@@ -576,3 +576,70 @@ DB 불변식으로 만들어 뒀으므로 P4와도 일치한다. seq 폴링이 �
 직렬화하고, 소비 회계가 DB에 있으므로 최악의 경우도 **진행 중이던 라운드 하나를 다시 도는 것**에
 그친다 — 이미 원장에 기록된 지출은 어느 경로로도 두 번 청구되지 않는다. 리스가 필요해지면
 `deep_analysis_runs`에 heartbeat 컬럼을 더하는 별도 결정으로 다룬다.
+
+---
+
+## D23. 챗은 job의 제출자다 — D18을 대체한다 (3b: 노드 제거·핸들 이벤트·리포트 영속화)
+
+**결정:** **D18을 대체한다.** D18은 스스로를 "챗 경로의 라우팅 대상만 교체하는 첫 이동"이라
+규정하고 per-claim 스트리밍의 챗 편입을 "그 다음 단계"로 예고했다 — 이 결정이 그 단계다.
+`_deep_analysis_orchestrator_node`(하네스를 `asyncio.wait_for`로 완주시키던 노드)와
+`_persist_deep_analysis_failure`를 **제거**하고, 라우팅 키 `"deep_analysis"`를
+`_deep_analysis_dispatch_node`로 돌린다. 이 노드는 run을 만들고 job을 제출한 뒤
+`neos:deep_analysis_started {run_id, events_url, assistant_message_id}` 챗 SSE 이벤트를
+발행하고 **END로 단락한다**. 진행 상황과 리포트는 전용 스트림
+`GET /api/v1/deep-analysis/{run_id}/events`가 전달한다 — 챗과 전용 API가 같은 계약을 쓴다.
+
+**근거 — 캡이 사라지는 것은 퇴행이 아니다:** `9763eb5`의 `node_wall_clock_cap`이 이 결정과
+함께 사라진다. D22가 정리했듯 세 예산은 프론트 `maxDuration` 60s < 노드 캡 300s < `dig`
+하나의 `wall_clock_cap` 600s이고, **가장 작은 예산이 클라이언트 쪽에 있다.** 노드 캡은
+"호출자가 떠난 뒤 백엔드가 자원을 붙들고 있는 것"만 막았을 뿐 사용자가 결과를 받게 하지
+못했다. 실행이 요청 밖으로 나간 지금 노드가 붙들 자원 자체가 없으므로 바운드할 대상이 없다.
+스펙 §5.2가 "Phase 3이 이걸 구조적으로 없앤다"고 규정한 그대로다. 회귀 고정:
+`tests/workflow/test_deep_analysis_job_no_regression.py::test_blocking_chat_node_is_gone_after_phase_3b`가
+`node_wall_clock_cap`의 재등장을 금지한다 — 그것이 돌아온다는 것은 블로킹 실행이 돌아왔다는 뜻이다.
+
+**근거 — 챗 턴을 END로 단락하는 이유:** 디스패치 노드를 `RESULT_INTEGRATOR`로 합류시키면
+후속 노드(fact-check·품질 검증·응답 생성)가 아직 존재하지 않는 리포트를 기다리게 된다.
+A2UI의 `UI_FRAME_GENERATOR → END` 단락이 이미 같은 형태의 선례다. 회귀 고정:
+`tests/workflow/test_deep_analysis_node.py::test_dispatch_node_registered_and_terminal_when_flag_on`.
+
+**결정 — 리포트 영속화는 실행자 계층에 둔다:** `jobs.py`는 프레임워크 프리이므로
+(LangChain/LangGraph/FastAPI/Celery/ChatService 미임포트) 리포트를 대화 메시지로 쓰는 일을
+할 수 없다. 그대로 두면 리포트는 `job_completed` 이벤트 페이로드로만 나가고, **프론트가 그
+순간 연결돼 있지 않은 run은 대화에 아무것도 남기지 않는다.** 영속화는
+`neos/tasks/deep_analysis_job_task.py::_persist_assistant_message`가 맡는다(3a에서 이미
+그 위치에 구현됐고, 3b는 챗 경로가 `conversation_id`/`assistant_message_id`를 실제로
+채우게 만들어 이 경로를 활성화한다). 이 함수는 Celery 태스크와 inline asyncio 태스크가
+**공유하는 `_execute` 본문**에 걸려 있어, 실행자별 코드 복제 없이 두 경로가 자동으로
+커버된다 — 한쪽만 영속화하면 `CELERY_ENABLED` 값에 따라 리포트가 남기도 하고 안 남기도
+하는 유령 버그가 된다. 콜백 주입 대신 이 위치를 고른 이유는 경계가 이미 거기 있기
+때문이다: `neos/tasks/`는 정의상 통합 계층이고, 주입은 호출자마다 어댑터를 요구해 실행자
+두 개가 서로 다른 어댑터를 쓸 여지를 만든다. 회귀 고정:
+`tests/tasks/test_deep_analysis_report_persistence.py`.
+
+**결정 — `conversation_id`를 `AgentState`에 명시 필드로 추가한다:** 챗은 `session_id`에
+`conversation_id`를 실어 보내지만 `/api/v1/query`는 `session_id`를 진짜 세션으로 쓴다.
+두 의미를 겹쳐 쓰면 대화가 아닌 run에 엉뚱한 `conversation_id`가 박혀 `add_message`가 없는
+대화를 가리킨다. 대화 밖에서 시작된 run은 `conversation_id`/`assistant_message_id`가 모두
+`None`이고, 리포트는 이벤트 스트림으로만 전달된다.
+
+**이탈 — 챗 API 계약이 바뀐다(스펙 §5.4, K4):** 챗 응답이 "완성된 리포트 1건"에서
+"job 핸들 + 별도 스트림"으로 바뀐다. 프론트엔드 변경이 필수다. 계약 필드는
+`{run_id, events_url, assistant_message_id}`로 고정했고
+`tests/api/models/test_deep_analysis_started_event.py`가 이를 못 박는다.
+
+**영향 — AC7 무회귀는 그대로다:** `DEEP_ANALYSIS_ENABLED=false`(기본)이면 라우팅 맵에
+`"deep_analysis"` 키가 없고 `WorkflowNode.DEEP_ANALYSIS_DISPATCH` 노드도 등록되지 않는다.
+구조적 보장의 형태는 D18과 동일하고 노드 이름만 바뀌었다(`DEEP_ANALYSIS_ORCHESTRATOR` →
+`DEEP_ANALYSIS_DISPATCH`). 회귀 고정:
+`tests/workflow/test_deep_analysis_node.py::test_no_regression_deep_analysis_off_by_default_node_not_registered`.
+
+**영향 — 스트림 해상도는 여전히 라운드 단위다:** D22가 기록했듯 `Ledger.log()`는 flush만
+하고 커밋은 `Orchestrator._checkpoint()`가 라운드 경계에서 한다. 챗이 전용 스트림을 구독하게
+된 지금도 claim 단위 실시간성은 나오지 않는다 — 이는 하네스의 커밋 주기 문제이지 소비
+경로의 문제가 아니며, 스펙 §5의 어떤 AC도 이를 요구하지 않는다.
+
+**영향 — D18 선결 조건 3건의 최종 상태:** (1) wall-clock 바운드 → 노드 제거로 **무의미해짐**,
+(2) fail_run 내구성 → 노드 제거로 사라졌고 job 쪽 `_record_failure`가 같은 역할을 이어받음,
+(3) 분류기 intent 미도달 → **D21이 해소**(질의 유형 기반 라우팅).
