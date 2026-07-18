@@ -9,6 +9,7 @@ from neos.coding.transport.memory import (
     InProcessCodingEventBroker,
     WsTicket,
 )
+from neos.coding.transport.redis_tickets import RedisCodingTicketStore
 
 __all__ = [
     "CodingEventSubscription",
@@ -17,5 +18,6 @@ __all__ = [
     "InMemoryCodingEventSubscription",
     "InMemoryWsTicketStore",
     "InProcessCodingEventBroker",
+    "RedisCodingTicketStore",
     "WsTicket",
 ]
