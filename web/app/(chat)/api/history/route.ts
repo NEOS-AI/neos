@@ -8,6 +8,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
 
   const limit = Number.parseInt(searchParams.get("limit") || "10", 10);
+  const cursor = searchParams.get("cursor");
 
   const session = await auth();
 
@@ -16,8 +17,11 @@ export async function GET(request: NextRequest) {
   }
 
   const userId = session.user.backendUserId || session.user.id;
+  const query = cursor
+    ? `limit=${limit}&cursor=${encodeURIComponent(cursor)}`
+    : `limit=${limit}`;
   const res = await callBackendAPI(
-    `/api/v1/chat/users/${userId}/conversations?limit=${limit}&offset=0`
+    `/api/v1/chat/users/${userId}/conversations?${query}`
   );
 
   if (!res.ok) {
