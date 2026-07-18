@@ -81,7 +81,7 @@ async def test_event_append_locks_task_sequence_before_insert() -> None:
     assert sql.index("FOR UPDATE") < sql.index("INSERT INTO coding_events")
 
 
-async def test_event_is_published_only_after_transaction_exits() -> None:
+async def test_event_append_wakes_outbox_only_after_transaction_exits() -> None:
     timeline: list[str] = []
 
     class TrackingTransaction(FakeTransaction):
@@ -93,19 +93,17 @@ async def test_event_is_published_only_after_transaction_exits() -> None:
         def begin(self):
             return TrackingTransaction()
 
-    class Broker:
-        async def publish(self, event):
-            timeline.append(f"published:{event.seq}")
-
     async def session_factory():
         return TrackingSession()
 
-    service = PostgresCodingService(session_factory, broker=Broker())
+    service = PostgresCodingService(
+        session_factory, wake_outbox=lambda: timeline.append("woken")
+    )
     await service.append(
         task_id="ct_fixed", event_type="text.delta", payload={"delta": "hi"}
     )
 
-    assert timeline == ["committed", "published:1"]
+    assert timeline == ["committed", "woken"]
 
 
 async def test_event_and_outbox_are_inserted_in_same_transaction() -> None:

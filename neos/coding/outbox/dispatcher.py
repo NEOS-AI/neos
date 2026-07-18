@@ -83,6 +83,9 @@ class CodingOutboxDispatcher:
     def wake(self) -> None:
         self._wake_event.set()
 
+    def set_publisher(self, publisher: EventPublisher) -> None:
+        self._publisher = publisher
+
     async def run(self) -> None:
         while True:
             try:

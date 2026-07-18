@@ -1,6 +1,6 @@
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Any, Awaitable, Callable, Mapping, Protocol
+from typing import Any, Awaitable, Callable, Mapping
 from uuid import uuid4
 
 from sqlalchemy import text
@@ -14,18 +14,16 @@ from neos.coding.domain.models import CodingTask, CodingTaskStatus
 SessionFactory = Callable[[], Awaitable[AsyncSession]]
 
 
-class EventPublisher(Protocol):
-    async def publish(self, event: CodingEvent) -> None: ...
-
-
 class PostgresCodingService:
     """Durable coding service with transactionally ordered task events."""
 
     def __init__(
-        self, session_factory: SessionFactory, broker: EventPublisher | None = None
+        self,
+        session_factory: SessionFactory,
+        wake_outbox: Callable[[], None] | None = None,
     ) -> None:
         self._session_factory = session_factory
-        self._broker = broker
+        self._wake_outbox = wake_outbox
         self.events = self
 
     async def create_task(
@@ -70,6 +68,8 @@ class PostgresCodingService:
                     payload={"status": task.status.value, "prompt": prompt},
                     now=now,
                 )
+        if self._wake_outbox is not None:
+            self._wake_outbox()
         return replace(task, last_seq=event.seq)
 
     async def append(
@@ -89,8 +89,8 @@ class PostgresCodingService:
                     payload=payload,
                     now=now or datetime.now(UTC),
                 )
-        if self._broker is not None:
-            await self._broker.publish(event)
+        if self._wake_outbox is not None:
+            self._wake_outbox()
         return event
 
     async def _append_in_session(

@@ -6,19 +6,16 @@ from neos.api.handlers.coding_handlers import event_response
 from neos.api.handlers.coding_handlers import get_coding_service
 from neos.api.handlers.coding_handlers import get_ws_ticket_store
 from neos.coding.application.task_service import CodingTaskService
-from neos.coding.auth.ws_tickets import InMemoryWsTicketStore
-from neos.coding.events.broker import (
-    InProcessCodingEventBroker,
-    coding_event_broker,
-)
+from neos.coding.runtime import get_coding_event_transport
+from neos.coding.transport.base import CodingEventTransport, CodingTicketStore
 from neos.utils.jwt import verify_token
 
 
 router = APIRouter(prefix="/coding", tags=["Coding Agent WebSocket"])
 
 
-def get_coding_event_broker() -> InProcessCodingEventBroker:
-    return coding_event_broker
+def get_coding_event_broker() -> CodingEventTransport:
+    return get_coding_event_transport()
 
 
 async def replay_protocol_messages(
@@ -57,8 +54,8 @@ async def coding_task_websocket(
     access_token: str | None = Query(None),
     ticket: str | None = Query(None),
     service: CodingTaskService = Depends(get_coding_service),
-    broker: InProcessCodingEventBroker = Depends(get_coding_event_broker),
-    tickets: InMemoryWsTicketStore = Depends(get_ws_ticket_store),
+    broker: CodingEventTransport = Depends(get_coding_event_broker),
+    tickets: CodingTicketStore = Depends(get_ws_ticket_store),
 ) -> None:
     requested_protocols = websocket.headers.get("sec-websocket-protocol", "")
     if "neos.coding.v1" not in {
@@ -112,4 +109,4 @@ async def coding_task_websocket(
     except WebSocketDisconnect:
         return
     finally:
-        await broker.unsubscribe(task_id, subscription)
+        await subscription.close()

@@ -8,10 +8,10 @@ from neos.api.models.coding_models import (
     CreateCodingTaskRequest,
 )
 from neos.coding.application.task_service import CodingTaskService
-from neos.coding.auth.ws_tickets import InMemoryWsTicketStore, ws_ticket_store
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.models import CodingTask
-from neos.coding.runtime import coding_service
+from neos.coding.runtime import coding_service, get_coding_ticket_store
+from neos.coding.transport.base import CodingTicketStore
 from neos.database.models import User
 
 
@@ -22,8 +22,8 @@ def get_coding_service() -> CodingTaskService:
     return coding_service
 
 
-def get_ws_ticket_store() -> InMemoryWsTicketStore:
-    return ws_ticket_store
+def get_ws_ticket_store() -> CodingTicketStore:
+    return get_coding_ticket_store()
 
 
 def _task_response(task: CodingTask) -> dict:
@@ -100,7 +100,7 @@ async def create_coding_ws_ticket(
     task_id: str,
     current_user: User = Depends(get_current_user),
     service: CodingTaskService = Depends(get_coding_service),
-    tickets: InMemoryWsTicketStore = Depends(get_ws_ticket_store),
+    tickets: CodingTicketStore = Depends(get_ws_ticket_store),
 ):
     if await service.snapshot(task_id, current_user.user_id) is None:
         raise HTTPException(status_code=404, detail="Coding task not found")
