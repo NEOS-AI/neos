@@ -345,6 +345,21 @@ export interface NeosHarnessEvent {
   data: Record<string, unknown>;
 }
 
+/**
+ * 비동기 deep_analysis job이 제출됐음을 알리는 챗 SSE 이벤트.
+ *
+ * 이 이벤트 뒤 **챗 턴은 정상 종료한다** — 분석이 끝날 때까지 블로킹하지
+ * 않는다. 진행 상황은 `events_url`이 가리키는 별도 스트림에서 온다.
+ * 페이로드 검증은 `lib/deep-analysis/events.ts`의
+ * `parseDeepAnalysisStarted`가 담당한다(형태만 여기 선언).
+ */
+export interface NeosDeepAnalysisStartedEvent {
+  type: "neos:deep_analysis_started";
+  run_id: string;
+  events_url: string;
+  assistant_message_id?: string;
+}
+
 export interface ApprovalRequest {
   request_id: string;
   skill_name: string;
@@ -483,6 +498,7 @@ export type NeosExtensionEvent =
   | NeosArtifactFinishEvent
   | NeosWorkflowProgressEvent
   | NeosHarnessEvent
+  | NeosDeepAnalysisStartedEvent
   | NeosApprovalRequestEvent
   | NeosUIFrameEvent
   | NeosInlineVizEvent
@@ -617,6 +633,16 @@ export function isNeosHarnessEvent(event: unknown): event is NeosHarnessEvent {
     typeof event === "object" &&
     event !== null &&
     (event as { type?: unknown }).type === "neos:harness"
+  );
+}
+
+export function isNeosDeepAnalysisStartedEvent(
+  event: unknown
+): event is NeosDeepAnalysisStartedEvent {
+  return (
+    typeof event === "object" &&
+    event !== null &&
+    (event as { type?: unknown }).type === "neos:deep_analysis_started"
   );
 }
 
