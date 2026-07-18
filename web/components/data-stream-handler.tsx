@@ -4,9 +4,9 @@ import { useEffect } from "react";
 import { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { initialArtifactData, useArtifact } from "@/hooks/use-artifact";
+import { getChatHistoryPaginationKey } from "@/lib/chat-history-pagination";
 import { artifactDefinitions } from "./artifact";
 import { useDataStream } from "./data-stream-provider";
-import { getChatHistoryPaginationKey } from "./sidebar-history";
 
 /**
  * DataStreamHandler - Processes streaming data events for artifacts

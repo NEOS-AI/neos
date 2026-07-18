@@ -26,18 +26,11 @@ import {
 import {
   type ChatHistory,
   getChatHistoryPaginationKey,
-  PAGE_SIZE,
 } from "@/lib/chat-history-pagination";
 import type { Chat } from "@/lib/db/schema";
 import { fetcher } from "@/lib/utils";
 import { LoaderIcon } from "./icons";
 import { ChatItem } from "./sidebar-history-item";
-
-export {
-  type ChatHistory,
-  getChatHistoryPaginationKey,
-  PAGE_SIZE,
-} from "@/lib/chat-history-pagination";
 
 type GroupedChats = {
   today: Chat[];
