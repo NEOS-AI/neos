@@ -486,3 +486,93 @@ threshold_attr)`을 `_DEEP_ENGINES`에 추가하면 된다. 분기 코드는 늘
 **영향 — `_ALWAYS_SEARCH_INTENTS`에 `DEEP_ANALYSIS` 추가:** 세 유형이 실제로 방출되기
 시작하므로, 엔진이 꺼진 상태에서 검증형 질의가 검색 없이 `skip_orchestrators`로 새지
 않도록 `deep_analysis`를 always-search 목록에 넣는다(나머지 두 유형은 이미 있었다).
+
+---
+
+## D22. durable job 서비스로 전환 — D7의 "나중"이 왔다 (3a: 제출·스트림·resume)
+
+**결정:** D7("M1은 인라인 asyncio + SSE, Celery는 나중")을 갱신한다. `POST /api/v1/deep-analysis`는
+run을 만들고 job을 디스패치한 뒤 **202 + run_id를 즉시 반환**한다. 실행은 요청 밖에서 진행되고,
+진행 상황은 `GET /api/v1/deep-analysis/{run_id}/events`가 append-only 이벤트 로그를
+`deep_analysis_events.seq` 커서로 재생해 전달한다. `POST /api/v1/deep-analysis/{run_id}/resume`가
+중단된 run의 재개 진입점이다. **실행자는 둘, 계약은 하나다** — `CELERY_ENABLED=true`면
+`apply_async`, 기본값 `false`면 응답을 막지 않는 백그라운드 asyncio 태스크. 두 경로 모두 같은
+이벤트 로그에 쓰므로 스트림 엔드포인트는 실행자와 무관하게 동일하게 동작한다.
+
+**근거 — 동기 요청 안에서 완주시키려는 시도 자체가 구조적으로 틀렸다:** 세 예산을 나란히 놓으면
+프론트 `maxDuration` 60s < 노드 wall-clock 캡 300s < `dig` effort 하나의 `wall_clock_cap` 600s다.
+**가장 작은 예산이 클라이언트 쪽에 있으므로**, 라운드를 여러 번 도는 run은 어떤 동기 요청 예산에도
+애초에 맞지 않는다. 커밋 `9763eb5`의 노드 캡은 "호출자가 떠난 뒤에도 백엔드가 자원을 붙들고 있는 것"을
+막을 뿐, 사용자가 결과를 받게 하지 못한다. 비동기 job + 이벤트 스트림은 우회가 아니라 유일한 해법이다.
+
+**근거 — 전달 매체는 `stream_manager`가 아니라 DB다:** `neos/workflow/stream_manager.py:99`의
+`self._sessions: Dict[str, StreamSession] = {}`는 **프로세스 내 메모리**다. Celery 워커가 넣은
+이벤트를 API 프로세스의 SSE가 볼 수 없다. 반면 `DAEvent.seq`는 BigInteger autoincrement PK라
+**그 자체가 단조 커서**이고, 매체가 DB이므로 프로세스 경계를 자연히 넘는다. 커서를 0에서 시작하면
+진행 중인 run의 전체 이력이 재생되므로 **AC6이 공짜로 따라온다.** D8이 이 테이블을 append-only
+DB 불변식으로 만들어 뒀으므로 P4와도 일치한다. seq 폴링이 행을 건너뛰지 않는 근거는 P2(단일
+작성자)다 — run당 작성자가 하나면 seq 할당 순서가 곧 커밋 순서다.
+
+**근거 — `event_sink`를 영속화 경로로 쓰지 않는다:** `Ledger.log()`가 이미 하네스 이벤트
+대부분(`question_opened`·`pass_completed`·`claim_verified` 등 14종)을 `deep_analysis_events`에
+쓴다. 오케스트레이터의 `_emit`은 그 kind들과 겹치므로, job이 "DB에 쓰는 싱크"를 넘기면 같은
+이벤트가 두 번 쌓인다. 겹치는 kind만 골라내는 allowlist는 오케스트레이터 내부와 조용히 결합되는
+유지보수 함정이다. 대신 **`job_` 접두어 라이프사이클 이벤트 4종**(`job_started`/`job_resumed`/
+`job_completed`/`job_failed`)만 직접 쓴다 — 이 접두어는 하네스의 어떤 kind와도 충돌할 수 없고,
+**하네스 코어(M0–M4)를 한 줄도 바꾸지 않는다**(D18의 "최소 침습" 제약 유지). 충돌 부재는
+`tests/workflow/deep_analysis/test_jobs.py::test_lifecycle_kinds_cannot_collide_with_harness_event_kinds`
+가 강제한다.
+
+**근거 — resume은 새 저장소가 아니라 진입점이다(AC5):** Ledger가 이미 단일 상태 저장소이므로(P2),
+같은 run_id로 `orch.run()`을 다시 부르는 것이 곧 resume이다. 중복 지출을 막는 것은 신규 코드가
+아니라 **이미 존재하던 네 불변식**이다:
+1. `ledger.recover()`가 `investigating`에 잠긴 질문을 `open`으로 회수한다
+2. `_ensure_root()`가 기존 루트를 찾으면 즉시 반환해 LLM 재분해를 막는다
+3. `budgeter.should_stop()`이 `ledger.total_spent()`(= `DAQuestion.spent_tokens`의 DB 합계)를
+   읽으므로, 크래시로 인메모리 Budgeter가 리셋돼도 소비 기록은 원장에 남는다. breadth pass도
+   같은 DB 값으로 게이팅된다
+4. 충돌 재조사 캡은 인메모리 카운터가 아니라 **이벤트 로그**를 게이트로 쓴다(`orchestrator.py:611`,
+   `ledger.has_event`) — "resumed run은 두 번째 라운드를 쓸 수 없다"는 불변식이 이미 코드에 있었다
+
+따라서 `resume` 플래그는 (a) 어떤 라이프사이클 이벤트를 남길지, (b) `failed` run을 `running`으로
+되돌릴지만 결정한다. 이 성질 덕분에 Celery가 worker-lost로 태스크를 `resume=False`로 재배달해도
+안전하다. `completed` run은 재개를 거부한다 — 리포트 조립/채점 비용 재지출은 곧 재과금이다.
+회귀 고정: `tests/workflow/deep_analysis/test_orchestrator_resume.py`. **실측**: 캡 200을 2패스로
+소진한 run을 새 Orchestrator 인스턴스로 재개하면 워커 패스가 **0회** 추가 실행된다.
+
+**이탈 — D7 갱신:** D7이 예고한 "later"가 왔다. D7이 사전 기록한 리스크 2건의 현황:
+1. **단일 작성자** — D2의 advisory lock으로 선제 해결됨. 변동 없음.
+2. **A1 partial 시맨틱이 Celery로 이전되지 않음** — **여전히 미해소다.** `asyncio.wait_for` 취소는
+   같은 프로세스 안이라 `flush_partial()`이 워커 버퍼에 닿지만, Celery **하드** 타임아웃
+   (`task_time_limit`)은 프로세스를 죽여 버퍼가 증발한다. 이 결정은 (a) 태스크 시간 제한을
+   run 규모에 맞게 크게 잡고(soft 3600s / hard 3900s — celery_app.py 전역 기본값 300/360s는
+   `dig` 하나의 600s에도 못 미친다), (b) soft 타임아웃 예외를 잡아 `job_failed`를 남긴 뒤
+   resume으로 회수하는 경로를 둔다. **그래도 하드 킬 시 진행 중 라운드의 partial 클레임은
+   유실된다** — 다만 커밋된 라운드는 원장에 남으므로 resume이 그 지점부터 속행한다.
+   손실 경계가 "라운드 하나"로 줄었을 뿐 사라지지는 않았다. M2의 partial AC는 **Celery
+   환경에서 여전히 재검증 대상**이다.
+- **부수 리스크(인라인 SSE ↔ nginx `proxy_read_timeout`)는 해소됐다.** POST가 더 이상 스트림을
+  붙들지 않고, GET 스트림은 `events_stream_idle_timeout`(기본 300s)로 스스로 닫힌 뒤
+  클라이언트가 `?after=<seq>`로 재접속해 이어받는다.
+
+**영향 — 3b가 남았다:** 이 결정은 스펙 §5의 AC 중 **AC1·AC5·AC6·AC7만** 이행한다. 남은 것:
+- **AC2** 챗 요청이 deep analysis 실행 중 블로킹되지 않는다
+- **AC3** `graph.py`에서 `_deep_analysis_orchestrator_node`가 제거된다
+- **AC4** 챗과 전용 API가 동일한 이벤트 스트림 계약을 사용한다(R4 no-op 싱크 해소)
+
+이 셋은 **챗 API 계약을 바꾸므로 프론트엔드 변경이 필수다**(스펙 §5.4, K4). FE 준비도가 낮다는
+감사 결과가 있으므로 3b는 FE 작업과 조율해 별도로 진행한다. 그때까지 `_deep_analysis_orchestrator_node`는
+`9763eb5`의 wall-clock 바운드를 단 채 그대로 남는다 — **제거는 3b의 일이다.** 경계 고정:
+`tests/workflow/test_deep_analysis_job_no_regression.py`.
+
+**영향 — 스트림 해상도는 라운드 단위다:** `Ledger.log()`는 flush만 하고, 다른 프로세스에
+보이려면 커밋이 필요하며 커밋은 `Orchestrator._checkpoint()`가 한다. `_checkpoint`는 라운드
+경계와 `_finalize` 중간에 호출되므로 claim 단위 실시간성은 나오지 않는다. 3a의 AC 중 어느 것도
+이를 요구하지 않는다. claim 단위 스트리밍은 3b에서 챗 SSE 프로토콜 통합과 함께 다룬다.
+
+**영향 — 동시 실행 방지는 도입하지 않는다:** 같은 run에 대해 두 job이 동시에 도는 것을 막는
+리스(lease)는 만들지 않았다. 크래시한 워커와 실행 중인 워커를 이벤트 로그만으로 구별할 수 없기
+때문이다(둘 다 `job_started`에 종료 이벤트 없음). 대신 P2의 advisory lock이 원장 쓰기를
+직렬화하고, 소비 회계가 DB에 있으므로 최악의 경우도 **진행 중이던 라운드 하나를 다시 도는 것**에
+그친다 — 이미 원장에 기록된 지출은 어느 경로로도 두 번 청구되지 않는다. 리스가 필요해지면
+`deep_analysis_runs`에 heartbeat 컬럼을 더하는 별도 결정으로 다룬다.
