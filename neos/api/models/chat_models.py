@@ -240,6 +240,7 @@ class ConversationListResponse(BaseModel):
     conversations: List[ConversationSummary]
     total_count: int
     has_more: bool
+    next_cursor: Optional[str] = None
 
 
 class ChatStreamChunk(BaseModel):
