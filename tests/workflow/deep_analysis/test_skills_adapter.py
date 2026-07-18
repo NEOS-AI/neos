@@ -62,6 +62,71 @@ def test_normalize_drops_items_without_url():
     assert items == [{"url": "https://ok.example/1", "title": "ok", "snippet": ""}]
 
 
+def test_normalize_prefers_arxiv_html_abstract_over_pdf():
+    # arxiv는 entry_url(HTML 초록)과 pdf_url을 둘 다 준다. fetch.py는 content-type
+    # 분기 없이 html_to_text를 돌리므로 PDF를 고르면 쓰레기 텍스트가 되어
+    # E_QUOTE_MISMATCH로 기각된다 — HTML을 골라야 검증을 통과한다.
+    items = normalize_discovery_items(
+        [
+            {
+                "entry_url": "https://arxiv.org/abs/2401.00001",
+                "pdf_url": "https://arxiv.org/pdf/2401.00001.pdf",
+                "title": "A paper",
+                "summary": "s",
+            }
+        ]
+    )
+    assert items[0]["url"] == "https://arxiv.org/abs/2401.00001"
+
+
+def test_normalize_keeps_pubmed_items():
+    # pubmed는 pubmed_url만 준다. 키 목록에 없으면 URL 없는 항목으로 취급돼
+    # 정규화 단계에서 통째로 사라진다 — fetch까지 가지도 못한다.
+    items = normalize_discovery_items(
+        [{"pubmed_url": "https://pubmed.ncbi.nlm.nih.gov/12345/", "title": "P"}]
+    )
+    assert items == [
+        {"url": "https://pubmed.ncbi.nlm.nih.gov/12345/", "title": "P", "snippet": ""}
+    ]
+
+
+def test_normalize_prefers_openalex_landing_page_over_pdf():
+    items = normalize_discovery_items(
+        [
+            {
+                "landing_page_url": "https://doi.org/10.1234/x",
+                "pdf_url": "https://example.org/x.pdf",
+                "title": "O",
+            }
+        ]
+    )
+    assert items[0]["url"] == "https://doi.org/10.1234/x"
+
+
+def test_normalize_falls_back_to_pdf_when_it_is_the_only_url():
+    # PDF만 있는 항목은 현재 검증을 통과하지 못하지만, 버리면 fetch.py가
+    # PDF를 지원하게 됐을 때 조용히 누락된다. 최후 수단으로 남긴다.
+    items = normalize_discovery_items(
+        [{"pdf_url": "https://example.org/only.pdf", "title": "P"}]
+    )
+    assert items[0]["url"] == "https://example.org/only.pdf"
+
+
+def test_normalize_still_prefers_plain_url_key():
+    # url을 쓰는 스킬(semantic_scholar·sec_edgar·wikipedia·news_api·google_scholar)
+    # 무회귀. news_api의 image_url을 집어서는 안 된다.
+    items = normalize_discovery_items(
+        [
+            {
+                "url": "https://news.example/article",
+                "image_url": "https://news.example/thumb.jpg",
+                "title": "N",
+            }
+        ]
+    )
+    assert items[0]["url"] == "https://news.example/article"
+
+
 def test_normalize_handles_non_list_data():
     assert normalize_discovery_items(None) == []
     assert normalize_discovery_items({"url": "https://x.example"}) == []
