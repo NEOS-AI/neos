@@ -102,6 +102,9 @@ class WorkflowStreamEventType(str):
     # 사용자 제출 후 POST /api/v1/ui/submit을 호출해야 한다.
     UI_FRAME = "ui_frame"
     UI_FRAME_UPDATE = "ui_frame_update"  # 향후 점진적 업데이트
+    # Phase 3b (D23): deep analysis job이 제출됐음을 알리는 핸들 이벤트.
+    # 클라이언트는 이 이벤트의 events_url로 별도 SSE를 열어 진행을 관찰한다.
+    DEEP_ANALYSIS_STARTED = "deep_analysis_started"
 
 
 class WorkflowStreamEvent(BaseModel):

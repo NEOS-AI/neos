@@ -301,6 +301,27 @@ class WorkflowStreamCallback(WorkflowEventHandler):
         )
         await self.event_queue.put(event)
 
+    async def on_deep_analysis_started(
+        self,
+        run_id: str,
+        events_url: str,
+        assistant_message_id: Optional[str] = None,
+    ) -> None:
+        """Phase 3b(D23): deep analysis job 제출 핸들을 클라이언트로 발행한다.
+
+        챗 턴은 이 이벤트 뒤 즉시 종료한다. 진행 상황은 events_url의 전용
+        SSE 스트림이 전달한다 -- 챗과 전용 API가 같은 계약을 쓴다.
+        """
+        event = self._create_event(
+            event_type=WorkflowStreamEventType.DEEP_ANALYSIS_STARTED,
+            data={
+                "run_id": run_id,
+                "events_url": events_url,
+                "assistant_message_id": assistant_message_id,
+            },
+        )
+        await self.event_queue.put(event)
+
     # ============================================================================
     # HDR (HyperDeep Research) Phase 이벤트 메서드들 — OpenResponses 브릿지
     # ============================================================================
