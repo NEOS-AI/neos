@@ -249,9 +249,8 @@ class TestConversationManagement:
 
     @pytest.mark.asyncio
     async def test_list_conversations_success(self):
-        """Test listing conversations"""
+        """Test listing conversations (no more pages)."""
         user_id = "user_123"
-
         mock_conversations = [
             {"conversation_id": "conv_1", "title": "Chat 1"},
             {"conversation_id": "conv_2", "title": "Chat 2"},
@@ -259,42 +258,79 @@ class TestConversationManagement:
 
         with patch("neos.api.services.chat_service.ChatRepository") as mock_repo:
             mock_repo.list_conversations = AsyncMock(
-                return_value=(mock_conversations, 2)
+                return_value=(mock_conversations, 2, False)
             )
 
             result = await ChatService.list_conversations(
-                user_id=user_id,
-                limit=10,
-                offset=0
+                user_id=user_id, limit=10
             )
 
-            assert result is not None
-            assert "conversations" in result
-            assert "total_count" in result
-            assert "has_more" in result
-            assert len(result["conversations"]) == 2
             assert result["total_count"] == 2
             assert result["has_more"] is False
+            assert result["next_cursor"] is None
+            assert len(result["conversations"]) == 2
 
     @pytest.mark.asyncio
-    async def test_list_conversations_with_pagination(self):
-        """Test conversation listing with pagination"""
+    async def test_list_conversations_emits_next_cursor_when_more(self):
+        """When has_more, service encodes a cursor from the last row."""
+        from datetime import datetime
+
         user_id = "user_123"
-        mock_conversations = [{"conversation_id": f"conv_{i}"} for i in range(10)]
+        last = {
+            "conversation_id": "conv_10",
+            "is_pinned": False,
+            "last_message_at": datetime(2026, 7, 17, 12, 0, 0),
+            "created_at": datetime(2026, 7, 1, 9, 0, 0),
+        }
+        mock_conversations = [{"conversation_id": f"conv_{i}"} for i in range(9)] + [last]
 
         with patch("neos.api.services.chat_service.ChatRepository") as mock_repo:
             mock_repo.list_conversations = AsyncMock(
-                return_value=(mock_conversations, 50)  # Total 50 conversations
+                return_value=(mock_conversations, 50, True)
             )
 
             result = await ChatService.list_conversations(
-                user_id=user_id,
-                limit=10,
-                offset=0
+                user_id=user_id, limit=10
             )
 
-            assert result["has_more"] is True  # 0 + 10 < 50
-            assert len(result["conversations"]) == 10
+            assert result["has_more"] is True
+            assert isinstance(result["next_cursor"], str) and result["next_cursor"]
+
+            # round-trips back to the last row's tuple
+            from neos.api.services.pagination import decode_conversation_cursor
+
+            decoded = decode_conversation_cursor(result["next_cursor"])
+            assert decoded.conversation_id == "conv_10"
+
+    @pytest.mark.asyncio
+    async def test_list_conversations_decodes_incoming_cursor(self):
+        """A string cursor is decoded and forwarded to the repository."""
+        from neos.api.services.pagination import encode_conversation_cursor
+        from datetime import datetime
+
+        token = encode_conversation_cursor(
+            is_pinned=False,
+            last_message_at=None,
+            created_at=datetime(2026, 7, 1, 9, 0, 0),
+            conversation_id="conv_3",
+        )
+
+        with patch("neos.api.services.chat_service.ChatRepository") as mock_repo:
+            mock_repo.list_conversations = AsyncMock(return_value=([], 0, False))
+
+            await ChatService.list_conversations(
+                user_id="user_123", limit=10, cursor=token
+            )
+
+            _, kwargs = mock_repo.list_conversations.call_args
+            assert kwargs["cursor"].conversation_id == "conv_3"
+
+    @pytest.mark.asyncio
+    async def test_list_conversations_rejects_bad_cursor(self):
+        with pytest.raises(ValueError):
+            await ChatService.list_conversations(
+                user_id="user_123", limit=10, cursor="!!!garbage!!!"
+            )
 
 
 @pytest.mark.unit

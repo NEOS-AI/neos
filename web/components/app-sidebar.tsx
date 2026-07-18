@@ -8,10 +8,7 @@ import { toast } from "sonner";
 import { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { PlusIcon, TrashIcon } from "@/components/icons";
-import {
-  getChatHistoryPaginationKey,
-  SidebarHistory,
-} from "@/components/sidebar-history";
+import { SidebarHistory } from "@/components/sidebar-history";
 import { SidebarUserNav } from "@/components/sidebar-user-nav";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +19,7 @@ import {
   SidebarMenu,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { getChatHistoryPaginationKey } from "@/lib/chat-history-pagination";
 import {
   AlertDialog,
   AlertDialogAction,

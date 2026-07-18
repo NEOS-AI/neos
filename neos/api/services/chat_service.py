@@ -7,6 +7,10 @@ import json
 
 from neos.database.connection import db_manager
 from neos.database.repositories.chat_repository import ChatRepository
+from neos.api.services.pagination import (
+    decode_conversation_cursor,
+    encode_conversation_cursor,
+)
 from neos.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -159,21 +163,41 @@ class ChatService:
         status: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
-        include_archived: bool = False
+        include_archived: bool = False,
+        cursor: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """사용자의 대화 목록 조회"""
-        conversations, total_count = await ChatRepository.list_conversations(
+        """사용자의 대화 목록 조회 (keyset 커서 페이지네이션).
+
+        cursor가 손상된 경우 ValueError를 전파한다 (핸들러가 400으로 변환).
+        """
+        decoded_cursor = (
+            decode_conversation_cursor(cursor) if cursor else None
+        )
+
+        conversations, total_count, has_more = await ChatRepository.list_conversations(
             user_id=user_id,
             status=status,
             include_archived=include_archived,
             limit=limit,
-            offset=offset
+            offset=offset,
+            cursor=decoded_cursor,
         )
+
+        next_cursor = None
+        if has_more and conversations:
+            last = conversations[-1]
+            next_cursor = encode_conversation_cursor(
+                is_pinned=last["is_pinned"],
+                last_message_at=last["last_message_at"],
+                created_at=last["created_at"],
+                conversation_id=last["conversation_id"],
+            )
 
         return {
             "conversations": conversations,
             "total_count": total_count,
-            "has_more": (offset + limit) < total_count
+            "has_more": has_more,
+            "next_cursor": next_cursor,
         }
 
     # ============================================================================
