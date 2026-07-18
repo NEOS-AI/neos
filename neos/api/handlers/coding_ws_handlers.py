@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 
@@ -8,6 +9,7 @@ from neos.api.handlers.coding_handlers import get_ws_ticket_store
 from neos.coding.application.task_service import CodingTaskService
 from neos.coding.runtime import get_coding_event_transport
 from neos.coding.transport.base import CodingEventTransport, CodingTicketStore
+from neos.coding.transport.redis_events import CodingEventSubscriptionClosed
 from neos.utils.jwt import verify_token
 
 
@@ -24,26 +26,96 @@ async def replay_protocol_messages(
     owner_id: str,
     after_seq: int,
 ) -> list[dict] | None:
+    result = await build_replay_messages(
+        service, task_id, owner_id, after_seq
+    )
+    return result.messages if result is not None else None
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayResult:
+    messages: list[dict]
+    last_contiguous_seq: int
+    requires_resync: bool
+
+
+def _resync_message(task_id: str, *, head_seq: int, after_seq: int) -> dict:
+    return {
+        "v": 1,
+        "type": "resync_required",
+        "task_id": task_id,
+        "head_seq": head_seq,
+        "after_seq": after_seq,
+    }
+
+
+async def build_replay_messages(
+    service: CodingTaskService,
+    task_id: str,
+    owner_id: str,
+    after_seq: int,
+    *,
+    page_size: int = 500,
+    max_events: int = 20_000,
+) -> ReplayResult | None:
     snapshot = await service.snapshot(task_id, owner_id)
     if snapshot is None:
         return None
-    replay = await service.events.list_after(task_id, after_seq=after_seq, limit=5000)
-    return [
+    head_seq = snapshot.head_seq
+    messages = [
         {
             "v": 1,
             "type": "hello",
             "task_id": task_id,
-            "head_seq": snapshot.head_seq,
+            "head_seq": head_seq,
             "heartbeat_ms": 30_000,
-        },
-        *[event_response(event) for event in replay],
+        }
+    ]
+    cursor = after_seq
+    if cursor > head_seq or head_seq - cursor > max_events:
+        messages.append(
+            _resync_message(task_id, head_seq=head_seq, after_seq=cursor)
+        )
+        return ReplayResult(messages, cursor, True)
+
+    while cursor < head_seq:
+        page = await service.events.list_after(
+            task_id,
+            after_seq=cursor,
+            limit=min(page_size, head_seq - cursor),
+        )
+        if not page:
+            messages.append(
+                _resync_message(task_id, head_seq=head_seq, after_seq=cursor)
+            )
+            return ReplayResult(messages, cursor, True)
+        advanced = False
+        for event in page:
+            if event.seq > head_seq:
+                break
+            if event.seq != cursor + 1:
+                messages.append(
+                    _resync_message(task_id, head_seq=head_seq, after_seq=cursor)
+                )
+                return ReplayResult(messages, cursor, True)
+            messages.append(event_response(event))
+            cursor = event.seq
+            advanced = True
+        if not advanced:
+            messages.append(
+                _resync_message(task_id, head_seq=head_seq, after_seq=cursor)
+            )
+            return ReplayResult(messages, cursor, True)
+
+    messages.append(
         {
             "v": 1,
             "type": "caught_up",
             "task_id": task_id,
-            "head_seq": snapshot.head_seq,
-        },
-    ]
+            "head_seq": head_seq,
+        }
+    )
+    return ReplayResult(messages, cursor, False)
 
 
 @router.websocket("/ws")
@@ -76,17 +148,20 @@ async def coding_task_websocket(
 
     subscription = await broker.subscribe(task_id)
     try:
-        messages = await replay_protocol_messages(
+        replay = await build_replay_messages(
             service, task_id, owner_id, after_seq
         )
-        if messages is None:
+        if replay is None:
             await websocket.close(code=4404, reason="Coding task not found")
             return
 
-        caught_up_seq = messages[-1]["head_seq"]
         await websocket.accept(subprotocol="neos.coding.v1")
-        for message in messages:
+        for message in replay.messages:
             await websocket.send_json(message)
+        if replay.requires_resync:
+            await websocket.close(code=1012, reason="Replay resync required")
+            return
+        caught_up_seq = replay.last_contiguous_seq
 
         while True:
             client_message = asyncio.create_task(websocket.receive_json())
@@ -103,10 +178,25 @@ async def coding_task_websocket(
                     await websocket.send_json({"v": 1, "type": "pong"})
             if live_event in done:
                 event = live_event.result()
-                if event.seq > caught_up_seq:
+                if event.seq <= caught_up_seq:
+                    continue
+                if event.seq == caught_up_seq + 1:
                     await websocket.send_json(event_response(event))
                     caught_up_seq = event.seq
+                    continue
+                await websocket.send_json(
+                    _resync_message(
+                        task_id,
+                        head_seq=event.seq,
+                        after_seq=caught_up_seq,
+                    )
+                )
+                await websocket.close(code=1012, reason="Live event gap")
+                return
     except WebSocketDisconnect:
+        return
+    except CodingEventSubscriptionClosed:
+        await websocket.close(code=1012, reason="Event subscription closed")
         return
     finally:
         await subscription.close()
