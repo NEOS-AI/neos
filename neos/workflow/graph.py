@@ -1053,13 +1053,17 @@ class MultiAgentWorkflow:
         DEEP_ANALYSIS_ENABLED 플래그로 격리. 하네스를 실행하고 리포트를
         chat state(final_response/deep_analysis_run_id)로 매핑한다.
         """
+        import asyncio
+
+        from neos.config.settings import settings
         from neos.workflow.deep_analysis.service import build_orchestrator
-        from neos.workflow.deep_analysis.ledger import Ledger, create_run
+        from neos.workflow.deep_analysis.ledger import create_run
         from neos.database.connection import db_manager
 
         query = state.get("refined_query") or state.get("original_query", "")
         profile = "default"
         run_id = None
+        cap = settings.config.deep_analysis.node_wall_clock_cap
         try:
             async with await db_manager.get_session() as session:
                 run_id = await create_run(session, query, profile)
@@ -1071,7 +1075,9 @@ class MultiAgentWorkflow:
                 orch = await build_orchestrator(
                     session, run_id, profile=profile, event_sink=sink
                 )
-                result = await orch.run(query)
+                # D18 선결조건(1): 타임아웃 없이 완주시키면 챗 요청 하나가 수 분간
+                # 블로킹돼 HTTP/WS/게이트웨이 타임아웃과 충돌한다.
+                result = await asyncio.wait_for(orch.run(query), timeout=cap)
                 await session.commit()
             return {
                 "final_response": result["report_markdown"],
@@ -1084,23 +1090,47 @@ class MultiAgentWorkflow:
                     }
                 ],
             }
+        except TimeoutError:
+            # 타임아웃도 실패 경로다 — 취소된 run을 그대로 두면 status='running'
+            # 고아가 남는다. 사용자에게는 일반 실패와 구분되는 원인을 알린다.
+            logger.error(
+                f"[DeepAnalysisOrchestratorNode] run {run_id} exceeded "
+                f"node wall-clock cap ({cap}s); aborted"
+            )
+            await self._persist_deep_analysis_failure(run_id)
+            return {
+                "final_response": (
+                    "심층 분석이 제한 시간 내에 완료되지 않았습니다. "
+                    "질문 범위를 좁혀 다시 시도해 주세요."
+                )
+            }
         except Exception as exc:
             logger.error(f"[DeepAnalysisOrchestratorNode] failed: {exc}")
-            # D18 선결조건(2): 실패한 run을 내구성 있게 'failed'로 확정한다.
-            # orch.run()의 예외 경로는 세션을 롤백한 뒤 fail_run()을 flush만
-            # 하므로, 원 세션(롤백/오류 상태일 수 있음)이 아닌 새 세션에서
-            # 상태를 커밋해야 status='running' 고아 run이 남지 않는다.
-            if run_id is not None:
-                try:
-                    async with await db_manager.get_session() as fail_session:
-                        await Ledger(fail_session, run_id).fail_run()
-                        await fail_session.commit()
-                except Exception as fail_exc:  # noqa: BLE001
-                    logger.error(
-                        f"[DeepAnalysisOrchestratorNode] fail_run persist "
-                        f"failed for run {run_id}: {fail_exc}"
-                    )
+            await self._persist_deep_analysis_failure(run_id)
             return {"final_response": "심층 분석 하네스 실행에 실패했습니다."}
+
+    async def _persist_deep_analysis_failure(self, run_id) -> None:
+        """D18 선결조건(2): 실패한 run을 내구성 있게 'failed'로 확정한다.
+
+        orch.run()의 예외 경로는 세션을 롤백한 뒤 fail_run()을 flush만 하므로,
+        원 세션(롤백/오류/취소 상태일 수 있음)이 아닌 새 세션에서 커밋해야
+        status='running' 고아 run이 남지 않는다.
+        """
+        if run_id is None:
+            return
+
+        from neos.database.connection import db_manager
+        from neos.workflow.deep_analysis.ledger import Ledger
+
+        try:
+            async with await db_manager.get_session() as fail_session:
+                await Ledger(fail_session, run_id).fail_run()
+                await fail_session.commit()
+        except Exception as fail_exc:  # noqa: BLE001
+            logger.error(
+                f"[DeepAnalysisOrchestratorNode] fail_run persist "
+                f"failed for run {run_id}: {fail_exc}"
+            )
 
     def _should_use_recursive_agent(self, state: AgentState) -> str:
         """ROMA / HyperDeep: 재귀 에이전트 사용 여부 판단 라우팅 함수.

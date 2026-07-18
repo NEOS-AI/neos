@@ -654,6 +654,11 @@ class DeepAnalysisConfig(StrictConfigModel):
     )
     # dig의 token_cap(12000)을 도구 스키마가 잠식하지 않도록 하는 상한.
     max_discovery_skills: int = 3
+    # 챗 워크플로우 노드가 orch.run()을 기다리는 상한(초). D18 선결조건(1).
+    # 이 값은 run 전체를 덮는다 — effort별 wall_clock_cap(dig 600s)보다 크게 잡으면
+    # 바운드 의미가 없다. 챗 경로의 실질 예산은 프론트 maxDuration(60s)이 더 작으므로,
+    # 이 캡은 "게이트웨이가 포기한 뒤에도 백엔드가 자원을 붙들고 있는 것"을 막는 용도다.
+    node_wall_clock_cap: float = 300.0
     parallel_workers: int = 4
     quote_match_threshold: float = 0.92
     confidence_cap: dict[int, float] = Field(

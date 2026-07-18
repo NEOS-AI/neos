@@ -163,3 +163,151 @@ async def test_no_regression_deep_analysis_off_by_default_node_not_registered(mo
     compiled = await workflow._create_workflow_graph(use_checkpointer=False)
 
     assert WorkflowNode.DEEP_ANALYSIS_ORCHESTRATOR.value not in compiled.nodes
+
+
+@pytest.mark.asyncio
+async def test_deep_analysis_node_aborts_run_exceeding_wall_clock_cap(monkeypatch):
+    """D18 선결조건(1) 회귀: 노드가 orch.run()을 무한정 기다리면 안 된다.
+
+    프로덕션 캡(global_token_cap 300,000)에서 챗 요청 하나가 수 분간 블로킹돼
+    HTTP/WS/게이트웨이 타임아웃과 충돌한다. 노드 레벨 예산으로 바운드해야 한다."""
+    import asyncio
+
+    from neos.config.settings import settings
+    from neos.workflow import graph as graph_mod
+
+    monkeypatch.setattr(
+        settings.config.deep_analysis, "node_wall_clock_cap", 0.05
+    )
+
+    started = asyncio.Event()
+    cancelled = []
+
+    class HangingOrch:
+        async def run(self, q):
+            started.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                cancelled.append(True)
+                raise
+            return {"report_markdown": "never", "run_id": "runHANG1"}
+
+    class FakeSessionCtx:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def commit(self):
+            pass
+
+    async def fake_get_session():
+        return FakeSessionCtx()
+
+    async def fake_create_run(s, q, p):
+        return "runHANG1"
+
+    async def fake_build(s, run_id, **kw):
+        return HangingOrch()
+
+    class FakeLedger:
+        def __init__(self, session, run_id):
+            self.run_id = run_id
+
+        async def fail_run(self):
+            pass
+
+    monkeypatch.setattr(
+        "neos.database.connection.db_manager.get_session", fake_get_session
+    )
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.ledger.create_run", fake_create_run
+    )
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.service.build_orchestrator", fake_build
+    )
+    monkeypatch.setattr("neos.workflow.deep_analysis.ledger.Ledger", FakeLedger)
+
+    g = graph_mod.multi_agent_workflow
+    out = await asyncio.wait_for(
+        g._deep_analysis_orchestrator_node({"original_query": "x"}),
+        timeout=5,  # 노드가 스스로 바운드하지 못하면 여기서 걸려 테스트가 실패한다
+    )
+
+    assert started.is_set()
+    assert cancelled == [True]  # 실행 중인 run을 실제로 취소했는가
+    assert "final_response" in out
+
+
+@pytest.mark.asyncio
+async def test_deep_analysis_node_persists_failed_status_on_timeout(monkeypatch):
+    """타임아웃도 실패 경로다 — status='running' 고아 run을 남기면 안 된다."""
+    import asyncio
+
+    from neos.config.settings import settings
+    from neos.workflow import graph as graph_mod
+
+    monkeypatch.setattr(
+        settings.config.deep_analysis, "node_wall_clock_cap", 0.05
+    )
+
+    sessions = []
+
+    class FakeSessionCtx:
+        def __init__(self):
+            self.committed = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def commit(self):
+            self.committed += 1
+
+    async def fake_get_session():
+        s = FakeSessionCtx()
+        sessions.append(s)
+        return s
+
+    async def fake_create_run(s, q, p):
+        return "runSLOW1"
+
+    class HangingOrch:
+        async def run(self, q):
+            await asyncio.sleep(30)
+
+    async def fake_build(s, run_id, **kw):
+        return HangingOrch()
+
+    failed = []
+
+    class FakeLedger:
+        def __init__(self, session, run_id):
+            self.run_id = run_id
+
+        async def fail_run(self):
+            failed.append(self.run_id)
+
+    monkeypatch.setattr(
+        "neos.database.connection.db_manager.get_session", fake_get_session
+    )
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.ledger.create_run", fake_create_run
+    )
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.service.build_orchestrator", fake_build
+    )
+    monkeypatch.setattr("neos.workflow.deep_analysis.ledger.Ledger", FakeLedger)
+
+    g = graph_mod.multi_agent_workflow
+    out = await asyncio.wait_for(
+        g._deep_analysis_orchestrator_node({"original_query": "x"}), timeout=5
+    )
+
+    assert failed == ["runSLOW1"]
+    assert sessions[-1].committed == 1  # 실패 확정용 새 세션이 커밋됨
+    assert "시간" in out["final_response"]  # 일반 실패와 구분되는 메시지
