@@ -48,16 +48,26 @@ def decode_conversation_cursor(token: str) -> ConversationCursor:
     if not isinstance(payload, dict) or not {"p", "m", "t", "i"} <= payload.keys():
         raise ValueError("cursor payload missing required fields")
 
+    # Type validation: p must be bool, i must be str
+    if not isinstance(payload["p"], bool):
+        raise ValueError(
+            f"invalid cursor field: 'p' must be bool, got {type(payload['p']).__name__}"
+        )
+    if not isinstance(payload["i"], str):
+        raise ValueError(
+            f"invalid cursor field: 'i' must be str, got {type(payload['i']).__name__}"
+        )
+
     try:
         return ConversationCursor(
-            is_pinned=bool(payload["p"]),
+            is_pinned=payload["p"],
             last_message_at=(
                 datetime.fromisoformat(payload["m"])
                 if payload["m"] is not None
                 else None
             ),
             created_at=datetime.fromisoformat(payload["t"]),
-            conversation_id=str(payload["i"]),
+            conversation_id=payload["i"],
         )
     except (TypeError, ValueError) as exc:
         raise ValueError(f"invalid cursor field: {exc}") from exc

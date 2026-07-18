@@ -1,3 +1,5 @@
+import base64
+import json
 from datetime import datetime
 
 import pytest
@@ -45,9 +47,34 @@ def test_decode_rejects_garbage():
 
 
 def test_decode_rejects_missing_fields():
-    import base64
-    import json
-
     bad = base64.urlsafe_b64encode(json.dumps({"p": True}).encode()).decode()
     with pytest.raises(ValueError):
         decode_conversation_cursor(bad)
+
+
+def test_decode_rejects_wrong_types():
+    # Test that string "false" in "p" field is rejected (not coerced to True)
+    payload_false_string = {
+        "p": "false",  # string instead of bool
+        "m": None,
+        "t": "2026-07-01T09:00:00",
+        "i": "conv_xyz",
+    }
+    bad_token_false_string = base64.urlsafe_b64encode(
+        json.dumps(payload_false_string).encode()
+    ).decode()
+    with pytest.raises(ValueError):
+        decode_conversation_cursor(bad_token_false_string)
+
+    # Test that integer in "i" field is rejected (not coerced to string)
+    payload_int_id = {
+        "p": True,
+        "m": None,
+        "t": "2026-07-01T09:00:00",
+        "i": 123,  # int instead of string
+    }
+    bad_token_int_id = base64.urlsafe_b64encode(
+        json.dumps(payload_int_id).encode()
+    ).decode()
+    with pytest.raises(ValueError):
+        decode_conversation_cursor(bad_token_int_id)
