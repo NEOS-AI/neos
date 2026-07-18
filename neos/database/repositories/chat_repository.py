@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import json
 
 from neos.database.connection import db_manager
+from neos.api.services.pagination import ConversationCursor
 
 
 @dataclass
@@ -324,34 +325,84 @@ class ChatRepository:
         status: Optional[str] = None,
         include_archived: bool = False,
         limit: int = 50,
-        offset: int = 0
-    ) -> Tuple[List[Dict[str, Any]], int]:
-        """대화 목록 조회
+        offset: int = 0,
+        cursor: Optional[ConversationCursor] = None,
+    ) -> Tuple[List[Dict[str, Any]], int, bool]:
+        """대화 목록 조회 (keyset 커서 페이지네이션)
 
         Args:
             user_id: 사용자 ID
             status: 상태 필터
             include_archived: 아카이브 포함 여부
             limit: 최대 결과 수
-            offset: 오프셋
+            offset: 오프셋 (cursor가 주어지면 무시)
+            cursor: keyset 커서. 주어지면 이 위치 다음부터 조회
 
         Returns:
-            (대화 목록, 전체 개수)
+            (대화 목록, 전체 개수, 다음 페이지 존재 여부)
         """
-        where_clauses = ["user_id = $1", "deleted_at IS NULL"]
-        params = [user_id]
-        param_idx = 2
+        # NULL last_message_at 정렬 센티넬. ORDER BY ... NULLS LAST와 동일 순서를
+        # 주도록 어떤 실제 timestamp보다도 작은 값을 실제 파라미터로 바인드한다.
+        null_lma_sentinel = datetime.min
+
+        # ---- 기본 WHERE (COUNT와 목록 공용) ----
+        base_where = ["user_id = $1", "deleted_at IS NULL"]
+        base_params: List[Any] = [user_id]
+        idx = 2
 
         if status:
-            where_clauses.append(f"status = ${param_idx}")
-            params.append(status)
-            param_idx += 1
+            base_where.append(f"status = ${idx}")
+            base_params.append(status)
+            idx += 1
         elif not include_archived:
-            where_clauses.append("status != 'archived'")
+            base_where.append("status != 'archived'")
 
-        where_sql = " AND ".join(where_clauses)
+        base_where_sql = " AND ".join(base_where)
 
-        # 목록 조회
+        # ---- 전체 개수 쿼리 (커서와 무관, 실행은 목록 조회 이후) ----
+        count_query = f"""
+        SELECT COUNT(*)
+        FROM conversations
+        WHERE {base_where_sql}
+        """
+
+        # ---- 목록 WHERE (기본 + 선택적 커서 술어) ----
+        list_where = list(base_where)
+        list_params = list(base_params)
+        lidx = idx
+
+        if cursor is not None:
+            cursor_m = (
+                cursor.last_message_at
+                if cursor.last_message_at is not None
+                else null_lma_sentinel
+            )
+            p, m, t, i, s = lidx, lidx + 1, lidx + 2, lidx + 3, lidx + 4
+            list_where.append(
+                "("
+                f"is_pinned < ${p} "
+                f"OR (is_pinned = ${p} AND COALESCE(last_message_at, ${s}) < ${m}) "
+                f"OR (is_pinned = ${p} AND COALESCE(last_message_at, ${s}) = ${m} "
+                f"AND created_at < ${t}) "
+                f"OR (is_pinned = ${p} AND COALESCE(last_message_at, ${s}) = ${m} "
+                f"AND created_at = ${t} AND conversation_id < ${i})"
+                ")"
+            )
+            list_params.extend(
+                [
+                    cursor.is_pinned,
+                    cursor_m,
+                    cursor.created_at,
+                    cursor.conversation_id,
+                    null_lma_sentinel,
+                ]
+            )
+            lidx += 5
+
+        list_where_sql = " AND ".join(list_where)
+
+        # has_more 판정용으로 limit+1 행을 읽는다.
+        limit_idx = lidx
         list_query = f"""
         SELECT
             conversation_id,
@@ -380,23 +431,24 @@ class ChatRepository:
                 LIMIT 1
             ) as last_message_preview
         FROM conversations c
-        WHERE {where_sql}
-        ORDER BY is_pinned DESC, last_message_at DESC NULLS LAST, created_at DESC
-        LIMIT ${param_idx} OFFSET ${param_idx + 1}
-        """
+        WHERE {list_where_sql}
+        ORDER BY is_pinned DESC, last_message_at DESC NULLS LAST,
+                 created_at DESC, conversation_id DESC
+        LIMIT ${limit_idx}"""
+        list_params.append(limit + 1)
 
-        params.extend([limit, offset])
-        rows = await db_manager.fetch_all(list_query, *params)
+        if cursor is None:
+            list_query += f" OFFSET ${limit_idx + 1}"
+            list_params.append(offset)
 
-        # 전체 개수 조회
-        count_query = f"""
-        SELECT COUNT(*)
-        FROM conversations
-        WHERE {where_sql}
-        """
-        count_params = params[:-2]  # limit, offset 제외
-        count_result = await db_manager.fetch_one(count_query, *count_params)
+        rows = await db_manager.fetch_all(list_query, *list_params)
+
+        # 목록 조회 이후 전체 개수 조회 (커서 술어 미포함, 기본 조건만)
+        count_result = await db_manager.fetch_one(count_query, *base_params)
         total_count = count_result[0] if count_result else 0
+
+        has_more = len(rows) > limit
+        rows = rows[:limit]
 
         conversations = [
             {
@@ -411,12 +463,12 @@ class ChatRepository:
                 "last_message_at": row[8],
                 "created_at": row[9],
                 "first_message_preview": row[10][:100] if row[10] else None,
-                "last_message_preview": row[11][:100] if row[11] else None
+                "last_message_preview": row[11][:100] if row[11] else None,
             }
             for row in rows
         ]
 
-        return conversations, total_count
+        return conversations, total_count, has_more
 
     # ==================== Message 관리 ====================
 
