@@ -18,3 +18,12 @@ class DeepAnalysisRequest(BaseModel):
             raise ValueError("question must not be blank")
         return stripped
 
+
+class DeepAnalysisJobResponse(BaseModel):
+    """202 제출 응답. 실행자가 무엇이든 계약은 동일하다."""
+
+    run_id: str
+    status: str = "accepted"
+    executor: str
+    events_url: str
+
