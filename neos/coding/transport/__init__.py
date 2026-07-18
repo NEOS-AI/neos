@@ -10,14 +10,22 @@ from neos.coding.transport.memory import (
     WsTicket,
 )
 from neos.coding.transport.redis_tickets import RedisCodingTicketStore
+from neos.coding.transport.redis_events import (
+    CodingEventSubscriptionClosed,
+    CodingEventSubscriptionOverloaded,
+    RedisCodingEventTransport,
+)
 
 __all__ = [
     "CodingEventSubscription",
+    "CodingEventSubscriptionClosed",
+    "CodingEventSubscriptionOverloaded",
     "CodingEventTransport",
     "CodingTicketStore",
     "InMemoryCodingEventSubscription",
     "InMemoryWsTicketStore",
     "InProcessCodingEventBroker",
     "RedisCodingTicketStore",
+    "RedisCodingEventTransport",
     "WsTicket",
 ]
