@@ -39,6 +39,9 @@ from neos.api.handlers.approval_handlers import router as approval_router  # Pha
 from neos.api.handlers.autonomy_handlers import router as autonomy_router
 from neos.api.handlers.scheduled_tasks_handlers import router as scheduled_tasks_router  # Phase 4: Cron 스케줄
 from neos.api.handlers.ui_submit_handlers import router as ui_submit_router  # Phase 8: A2UI
+from neos.api.handlers.coding_handlers import router as coding_router
+from neos.api.handlers.coding_ws_handlers import router as coding_ws_router
+from neos.coding.runtime import start_coding_outbox_dispatcher
 from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.api.dependencies.auth import get_current_admin_user
 from neos.database.models import User
@@ -147,6 +150,10 @@ async def lifespan(app: FastAPI):
         logger.info("🔄 Initializing cache connection...")
         await cache_manager.initialize()
         logger.info("✅ Cache connection established")
+
+        coding_outbox_task = start_coding_outbox_dispatcher()
+        background_tasks.append(coding_outbox_task)
+        logger.info("✅ Coding outbox dispatcher started")
 
         # StreamManager 시작 (Phase 3 - SSE 재연결 지원)
         logger.info("📡 Starting SSE Stream Manager...")
@@ -555,6 +562,8 @@ _include_router_for_runtime(approval_router, prefix=settings.API_V1_PREFIX, tags
 _include_router_for_runtime(autonomy_router, prefix=settings.API_V1_PREFIX, tags=["Agent Autonomy"])
 _include_router_for_runtime(scheduled_tasks_router, prefix=settings.API_V1_PREFIX, tags=["Scheduled Tasks"])  # Phase 4: OpenClaw Cron
 _include_router_for_runtime(ui_submit_router, prefix=settings.API_V1_PREFIX, tags=["A2UI"])  # Phase 8: OpenClaw A2UI
+_include_router_for_runtime(coding_router, prefix=settings.API_V1_PREFIX, tags=["Coding Agent"])
+_include_router_for_runtime(coding_ws_router, prefix=settings.API_V1_PREFIX, tags=["Coding Agent WebSocket"])
 
 
 # === Enterprise Monitoring Endpoints ===
