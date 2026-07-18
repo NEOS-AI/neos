@@ -13,6 +13,23 @@ export type CodingWsTicket = {
   websocket_url: string;
 };
 
+export class CodingAPIError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "CodingAPIError";
+    this.status = status;
+  }
+}
+
+async function responseError(response: Response, fallback: string) {
+  const body = await response.json().catch(() => ({}));
+  return new CodingAPIError(
+    response.status,
+    body.error ?? body.detail ?? fallback
+  );
+}
 
 export async function createCodingTask(prompt: string): Promise<CodingTask> {
   const response = await fetch("/api/coding/tasks", {
@@ -21,19 +38,20 @@ export async function createCodingTask(prompt: string): Promise<CodingTask> {
     body: JSON.stringify({ prompt }),
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error ?? body.detail ?? "Could not start coding task");
+    throw await responseError(response, "Could not start coding task");
   }
   return response.json();
 }
 
-export async function getCodingWsTicket(taskId: string): Promise<CodingWsTicket> {
+export async function getCodingWsTicket(
+  taskId: string
+): Promise<CodingWsTicket> {
   const response = await fetch(
     `/api/coding/tasks/${encodeURIComponent(taskId)}/ws-ticket`,
     { method: "POST" }
   );
   if (!response.ok) {
-    throw new Error("Could not authorize coding stream");
+    throw await responseError(response, "Could not authorize coding stream");
   }
   return response.json();
 }
