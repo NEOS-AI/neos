@@ -1,7 +1,8 @@
-"""AC7 + 3a/3b 경계 고정.
+"""AC3/AC7 + 프레임워크 프리 경계 고정.
 
-3a는 job 서비스만 만든다. 챗 경로(그래프 노드·라우터·분류기)는 3b의
-범위이며 이 단계에서 바뀌면 안 된다.
+3a는 job 서비스를 만들었고, 3b(D23)가 챗을 그 소비자로 바꿨다. 이 파일은
+"블로킹 노드가 돌아오지 않는다"와 "deep_analysis 패키지가 프레임워크 프리로
+남는다"를 함께 고정한다.
 """
 
 import ast
@@ -31,13 +32,20 @@ def _imported_modules(path: str) -> set[str]:
     return modules
 
 
-def test_chat_node_is_untouched_by_phase_3a():
-    """AC2/AC3(챗 노드 제거)는 3b다. 여기서 사라지면 범위 이탈이다."""
+def test_blocking_chat_node_is_gone_after_phase_3b():
+    """AC3: 챗 노드가 하네스를 완주시키던 구조가 제거됐다.
+
+    9763eb5의 wall-clock 캡도 함께 사라진다 -- 실행이 요청 밖으로 나가면
+    노드가 붙들 자원이 없다(스펙 §5.2). 캡이 돌아온다는 것은 블로킹 실행이
+    돌아왔다는 뜻이므로 함께 금지한다.
+    """
     source = Path("neos/workflow/graph.py").read_text(encoding="utf-8")
 
-    assert "_deep_analysis_orchestrator_node" in source
-    # 9763eb5의 wall-clock 바운드가 그대로 있어야 한다.
-    assert "node_wall_clock_cap" in source
+    assert "_deep_analysis_orchestrator_node" not in source
+    assert "_persist_deep_analysis_failure" not in source
+    assert "node_wall_clock_cap" not in source
+    # 대체 노드는 존재해야 한다 -- 라우팅 대상이 사라지면 그래프가 깨진다.
+    assert "_deep_analysis_dispatch_node" in source
 
 
 def test_deep_analysis_node_not_registered_when_flag_is_off():
