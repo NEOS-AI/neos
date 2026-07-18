@@ -731,3 +731,54 @@ async def test_user_conversation_routes_hide_other_users(
 
     assert exc_info.value.status_code == 404
     service.assert_not_awaited()
+
+
+def test_list_user_conversations_maps_model_validation_error_to_500(monkeypatch):
+    """M2: a repository row that fails ConversationSummary validation (e.g. an
+    out-of-enum `status`) must surface as a 500, not be mistaken for a
+    malformed-cursor 400."""
+    list_conversations = AsyncMock(
+        return_value={
+            "conversations": [
+                {
+                    "conversation_id": "c1",
+                    "user_id": "owner",
+                    "title": "New chat",
+                    "model_name": "claude-sonnet-4-5-20250929",
+                    "status": "not_a_real_status",  # invalid ConversationStatus enum value
+                    "visibility": "private",
+                    "is_pinned": False,
+                    "message_count": 0,
+                    "last_message_at": None,
+                    "created_at": "2026-07-01T00:00:00",
+                    "first_message_preview": None,
+                    "last_message_preview": None,
+                }
+            ],
+            "total_count": 1,
+            "has_more": False,
+            "next_cursor": None,
+        }
+    )
+    monkeypatch.setattr(chat_handlers.ChatService, "list_conversations", list_conversations)
+    current_user = SimpleNamespace(user_id="owner", is_active=True)
+
+    with TestClient(_chat_app(current_user)) as client:
+        response = client.get("/users/owner/conversations")
+
+    assert response.status_code == 500
+    assert "Invalid cursor" not in response.json()["detail"]
+
+
+def test_list_user_conversations_malformed_cursor_still_400(monkeypatch):
+    """Genuine cursor-decode failures (ValueError from ChatService.list_conversations,
+    which propagates decode_conversation_cursor errors) must still map to 400."""
+    list_conversations = AsyncMock(side_effect=ValueError("bad cursor token"))
+    monkeypatch.setattr(chat_handlers.ChatService, "list_conversations", list_conversations)
+    current_user = SimpleNamespace(user_id="owner", is_active=True)
+
+    with TestClient(_chat_app(current_user)) as client:
+        response = client.get("/users/owner/conversations", params={"cursor": "garbage"})
+
+    assert response.status_code == 400
+    assert "Invalid cursor" in response.json()["detail"]

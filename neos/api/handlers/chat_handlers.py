@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends, Query
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 from typing import Optional, AsyncGenerator, List, Union
 from datetime import datetime
 import uuid
@@ -326,6 +327,9 @@ async def list_user_conversations(
             has_more=result["has_more"],
             next_cursor=result["next_cursor"],
         )
+    except ValidationError as e:
+        logger.error(f"Failed to list conversations (response validation): {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid cursor: {e}")
     except Exception as e:
