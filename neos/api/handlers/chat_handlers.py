@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends, Query
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 from typing import Optional, AsyncGenerator, List, Union
 from datetime import datetime
 import uuid
@@ -304,10 +305,11 @@ async def list_user_conversations(
     status: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    cursor: Optional[str] = None,
     include_archived: bool = False,
     current_user: User = Depends(get_current_active_user),
 ):
-    """사용자의 대화 목록 조회"""
+    """사용자의 대화 목록 조회 (keyset 커서 페이지네이션)."""
     require_same_user_id(user_id, current_user)
     try:
         result = await ChatService.list_conversations(
@@ -315,14 +317,21 @@ async def list_user_conversations(
             status=status,
             limit=limit,
             offset=offset,
-            include_archived=include_archived
+            include_archived=include_archived,
+            cursor=cursor,
         )
 
         return ConversationListResponse(
             conversations=[ConversationSummary(**conv) for conv in result["conversations"]],
             total_count=result["total_count"],
-            has_more=result["has_more"]
+            has_more=result["has_more"],
+            next_cursor=result["next_cursor"],
         )
+    except ValidationError as e:
+        logger.error(f"Failed to list conversations (response validation): {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid cursor: {e}")
     except Exception as e:
         logger.error(f"Failed to list conversations: {e}")
         raise HTTPException(status_code=500, detail=str(e))

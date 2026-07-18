@@ -15,6 +15,7 @@ interface BEConversationListResponse {
   conversations: BEConversationResponse[];
   total_count: number;
   has_more: boolean;
+  next_cursor?: string | null;
 }
 
 export function adaptBEConversation(conv: BEConversationResponse): Chat {
@@ -32,9 +33,10 @@ export function adaptBEConversation(conv: BEConversationResponse): Chat {
 
 export function adaptBEConversationList(
   data: BEConversationListResponse
-): { chats: Chat[]; hasMore: boolean } {
+): { chats: Chat[]; hasMore: boolean; nextCursor: string | null } {
   return {
     chats: data.conversations.map(adaptBEConversation),
     hasMore: data.has_more,
+    nextCursor: data.next_cursor ?? null,
   };
 }
