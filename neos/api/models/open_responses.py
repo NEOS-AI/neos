@@ -430,6 +430,7 @@ NeosExtensionEvent = Union[
     NeosWorkflowProgressEvent,
     NeosHarnessEvent,
     NeosUIFrameEvent,            # Phase 8 (A2UI)
+    NeosDeepAnalysisStartedEvent,  # Phase 3b (D23) deep analysis job 핸들
     NeosInlineVizEvent,          # Inline Visualization (renderDiagram/renderChart)
     NeosInlineVizErrorEvent,     # Inline Visualization 에러 (non-fatal)
 ]
