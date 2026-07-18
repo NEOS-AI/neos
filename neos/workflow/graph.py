@@ -1723,6 +1723,7 @@ class MultiAgentWorkflow:
         return AgentState(
             user_id=user_input["user_id"],
             session_id=user_input["session_id"],
+            conversation_id=user_input.get("conversation_id"),
             original_query=user_input["query"],
             query_intent=None,
             query_embedding=None,

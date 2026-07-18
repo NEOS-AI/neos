@@ -831,6 +831,7 @@ async def stream_message_legacy(
                             user_input={
                                 "user_id": current_user.user_id,
                                 "session_id": conversation_id,
+                                "conversation_id": conversation_id,
                                 "query": request.content,
                                 # 채팅 히스토리 추가
                                 "chat_history": formatted_history,
