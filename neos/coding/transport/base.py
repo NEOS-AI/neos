@@ -3,6 +3,14 @@ from typing import Protocol
 from neos.coding.domain.events import CodingEvent
 
 
+class CodingEventSubscriptionClosed(RuntimeError):
+    pass
+
+
+class CodingEventSubscriptionOverloaded(CodingEventSubscriptionClosed):
+    pass
+
+
 class CodingTicketStore(Protocol):
     @property
     def expires_in(self) -> int: ...

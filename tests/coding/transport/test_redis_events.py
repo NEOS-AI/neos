@@ -144,4 +144,6 @@ async def test_queue_overflow_marks_only_slow_subscription_overloaded() -> None:
 
     with pytest.raises(CodingEventSubscriptionOverloaded):
         await asyncio.wait_for(slow.get(), timeout=0.1)
+    await asyncio.sleep(0)
+    assert bus.unsubscribe_calls == 1
     await transport.close()

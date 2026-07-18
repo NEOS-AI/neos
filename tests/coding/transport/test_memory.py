@@ -1,8 +1,12 @@
 from datetime import UTC, datetime, timedelta
 
+import asyncio
+import pytest
+
 from neos.coding.auth.ws_tickets import InMemoryWsTicketStore
 from neos.coding.domain.events import make_event
 from neos.coding.events.broker import InProcessCodingEventBroker
+from neos.coding.transport.base import CodingEventSubscriptionClosed
 
 
 async def test_wrong_task_consumes_ticket_and_expired_entries_are_swept() -> None:
@@ -44,3 +48,14 @@ async def test_subscriptions_close_idempotently_and_transport_closes_all() -> No
     await transport.close()
     await transport.close()
     assert transport.subscriber_count("ct_1") == 0
+
+
+async def test_transport_close_unblocks_waiting_subscription() -> None:
+    transport = InProcessCodingEventBroker()
+    subscription = await transport.subscribe("ct_1")
+    waiting = asyncio.create_task(subscription.get())
+
+    await transport.close()
+
+    with pytest.raises(CodingEventSubscriptionClosed):
+        await asyncio.wait_for(waiting, timeout=0.1)

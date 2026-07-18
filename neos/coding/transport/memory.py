@@ -6,6 +6,10 @@ from typing import Callable
 from uuid import uuid4
 
 from neos.coding.domain.events import CodingEvent
+from neos.coding.transport.base import (
+    CodingEventSubscriptionClosed,
+    CodingEventSubscriptionOverloaded,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,9 +84,22 @@ class InMemoryCodingEventSubscription:
         self._queue = queue
         self._transport = transport
         self._closed = False
+        self._error: CodingEventSubscriptionClosed | None = None
+        self._closed_event = asyncio.Event()
 
     async def get(self) -> CodingEvent:
-        return await self._queue.get()
+        if self._error is not None:
+            raise self._error
+        event_task = asyncio.create_task(self._queue.get())
+        closed_task = asyncio.create_task(self._closed_event.wait())
+        done, pending = await asyncio.wait(
+            {event_task, closed_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+        if closed_task in done:
+            raise self._error or CodingEventSubscriptionClosed("subscription closed")
+        return event_task.result()
 
     def empty(self) -> bool:
         return self._queue.empty()
@@ -93,8 +110,15 @@ class InMemoryCodingEventSubscription:
     async def close(self) -> None:
         if self._closed:
             return
-        self._closed = True
+        self._mark_closed(CodingEventSubscriptionClosed("subscription closed"))
         await self._transport._remove(self)
+
+    def _mark_closed(self, error: CodingEventSubscriptionClosed) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._error = error
+        self._closed_event.set()
 
 
 class InProcessCodingEventBroker:
@@ -144,7 +168,12 @@ class InProcessCodingEventBroker:
             try:
                 subscription.put_nowait(event)
             except asyncio.QueueFull:
-                await subscription.close()
+                subscription._mark_closed(
+                    CodingEventSubscriptionOverloaded(
+                        "local coding event subscription queue overflowed"
+                    )
+                )
+                await self._remove(subscription)
 
     async def close(self) -> None:
         async with self._lock:
@@ -158,7 +187,9 @@ class InProcessCodingEventBroker:
             ]
             self._subscribers.clear()
         for subscription in subscriptions:
-            subscription._closed = True
+            subscription._mark_closed(
+                CodingEventSubscriptionClosed("transport closed")
+            )
 
     def subscriber_count(self, task_id: str) -> int:
         return len(self._subscribers.get(task_id, ()))

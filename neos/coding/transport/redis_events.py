@@ -6,14 +6,10 @@ from datetime import datetime
 from typing import Any
 
 from neos.coding.domain.events import CodingEvent
-
-
-class CodingEventSubscriptionClosed(RuntimeError):
-    pass
-
-
-class CodingEventSubscriptionOverloaded(CodingEventSubscriptionClosed):
-    pass
+from neos.coding.transport.base import (
+    CodingEventSubscriptionClosed,
+    CodingEventSubscriptionOverloaded,
+)
 
 
 class RedisCodingEventSubscription:
@@ -142,6 +138,8 @@ class RedisCodingEventTransport:
                     subscription._offer(event)
                     if subscription._closed:
                         entry.subscriptions.discard(subscription)
+                if not entry.subscriptions:
+                    return
         except asyncio.CancelledError:
             raise
         except Exception as exc:

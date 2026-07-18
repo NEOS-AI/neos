@@ -13,6 +13,7 @@ const AFTER_SEQ_PATTERN = /afterSeq/;
 const HEARTBEAT_PATTERN = /heartbeat_ms/;
 const WRITE_CURSOR_PATTERN = /writeCursor/;
 const RESYNC_PATTERN = /resync_required/;
+const TERMINAL_RESYNC_PATTERN = /terminal = true;[\s\S]*protocol_error/;
 
 test("reconnect backoff is exponential and capped", () => {
   assert.equal(
@@ -52,4 +53,5 @@ test("coding task route fetches a fresh ticket for websocket connection", () => 
   assert.match(hook, HEARTBEAT_PATTERN);
   assert.match(hook, WRITE_CURSOR_PATTERN);
   assert.match(hook, RESYNC_PATTERN);
+  assert.match(hook, TERMINAL_RESYNC_PATTERN);
 });

@@ -134,9 +134,11 @@ export function useCodingStream(taskId: string) {
             return;
           }
           if (envelope.type === "resync_required") {
+            terminal = true;
             clearCursor(taskId);
             afterSeq.current = 0;
-            socket?.close(1012, "Server requires durable replay");
+            setConnection("protocol_error");
+            socket?.close(1002, "Full coding snapshot resync required");
             return;
           }
           if (envelope.type === "caught_up") {
