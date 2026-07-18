@@ -1156,7 +1156,7 @@ async def test_resume_recovers_questions_stranded_in_investigating():
 - [ ] **Step 2: 테스트를 실행해 현재 동작을 확인**
 
 Run: `.venv/bin/pytest tests/workflow/deep_analysis/test_orchestrator_resume.py -q`
-Expected: PASS (5 passed).
+Expected: PASS (4 passed).
 
 이 태스크는 **기존 동작을 고정하는 특성화 테스트**다. 여기서 실패가 나면 AC5의 전제(스펙 §5.3이 "resume은 진입점 추가일 뿐"이라 본 근거)가 틀렸다는 뜻이다. **그 경우 Task 5로 넘어가지 말고 멈춰서 어느 불변식이 깨졌는지 보고하라.**
 
