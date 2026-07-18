@@ -690,6 +690,24 @@ class DeepAnalysisConfig(StrictConfigModel):
     worker_max_output_tokens: int = 4000
     synthesis_max_tokens: int = 4000
     sse_keepalive_seconds: float = 0.5
+    # ── Phase 3a (D22): durable job 서비스 ──────────────────────────────
+    # 실행 큐. celery_app.py의 task_queues에 이미 정의된 4종 중 하나여야 한다
+    # ('default'/'search'/'analysis'/'generation').
+    job_queue: str = "analysis"
+    # celery_app.py의 전역 기본값(soft 300s / hard 360s)은 심층분석 run에
+    # 턱없이 짧다 -- dig effort 하나의 wall_clock_cap만 600s다. 태스크
+    # 데코레이터에서 이 값으로 덮어쓴다.
+    job_soft_time_limit: int = 3600
+    job_time_limit: int = 3900
+    # Celery 재시도는 resume=True로 재큐잉된다(스펙 §9 "resume 트리거 = Celery 재시도").
+    job_max_retries: int = 2
+    # 이벤트 커서 폴링 간격(초). 이벤트가 있으면 즉시 다음 배치를 읽으므로
+    # 이 간격은 "새 이벤트가 없을 때"만 적용된다.
+    events_poll_interval: float = 1.0
+    # 새 이벤트 없이 이만큼 지나면 스트림을 닫는다. 무한 유휴 SSE 커넥션이
+    # 워커/게이트웨이 슬롯을 잡아먹지 않게 하는 상한이다. 클라이언트는
+    # 마지막 seq를 ?after=로 넘겨 재접속하면 이어서 받는다.
+    events_stream_idle_timeout: float = 300.0
 
 
 class RayConfig(StrictConfigModel):
