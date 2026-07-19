@@ -12,6 +12,7 @@ from neos.coding.persistence.postgres import PostgresCodingService
 from neos.coding.repositories.run_repository import (
     PostgresCodingRunRepository,
 )
+from neos.coding.repositories.projection_repository import PostgresCodingProjectionRepository
 from neos.coding.repositories.task_repository import CodingTaskRepository
 from neos.coding.workers.execution import (
     CodingTaskOutcome,
@@ -89,15 +90,58 @@ async def run_coding_delivery(
     database_manager: DatabaseManager | None = None,
 ) -> CodingTaskOutcome:
     manager = database_manager or DatabaseManager()
+    runtime = None
     try:
         await manager.initialize()
-        return await _build_runner(manager).run(
+        if settings.config.coding_model.enabled:
+            # The real loop's provider is owned by a CodingRuntime so there is
+            # exactly one shutdown path for sandbox resources.
+            from neos.coding.runtime import create_coding_runtime
+            from neos.coding.sandbox.factory import create_sandbox_provider
+
+            provider = create_sandbox_provider(settings.config.sandbox)
+            repository = _build_run_repository(manager)
+            runtime = create_coding_runtime(
+                events=PostgresCodingService(manager.get_session),
+                tasks=CodingTaskRepository(manager),
+                run_repository=repository,
+                projection_repository=PostgresCodingProjectionRepository(
+                    manager.get_session
+                ),
+                loop=_create_worker_real_loop(manager, provider),
+                metrics_collector=metrics,
+                sandboxes=provider,
+            )
+            runner = CodingTaskRunner(
+                runs=runtime.runs,
+                propagate_exceptions=(
+                    ConnectionError,
+                    OSError,
+                    SQLAlchemyError,
+                    SoftTimeLimitExceeded,
+                ),
+            )
+        else:
+            runner = _build_runner(manager)
+        return await runner.run(
             task_id=task_id,
             worker_id=worker_id,
             failure_error_code="worker_retry_exhausted",
         )
     finally:
+        if runtime is not None:
+            await runtime.close()
         await manager.close()
+
+
+def _create_worker_real_loop(manager: DatabaseManager, provider):
+    from neos.coding.runtime import _create_real_coding_loop
+
+    return _create_real_coding_loop(
+        config=settings.config,
+        sandboxes=provider,
+        session_factory=manager.get_session,
+    )
 
 
 async def discover_coding_tasks(

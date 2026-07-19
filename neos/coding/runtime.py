@@ -4,6 +4,8 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
+from anthropic import AsyncAnthropic
+
 from neos.coding.application.run_service import (
     CodingRunService,
     InProcessRunInterrupter,
@@ -11,6 +13,13 @@ from neos.coding.application.run_service import (
 from neos.coding.application.snapshot_service import CodingSnapshotService
 from neos.coding.loop.base import CodingLoop
 from neos.coding.loop.fake import FakeDurableCodingLoop
+from neos.coding.loop.anthropic import AnthropicCodingLoop, AnthropicLoopConfig
+from neos.coding.model.anthropic import AnthropicCodingModel
+from neos.coding.repositories.sandbox_repository import PostgresSandboxBindingRepository
+from neos.coding.sandbox.base import SandboxLimits
+from neos.coding.sandbox.bindings import SandboxBindingService
+from neos.coding.tools.executor import SandboxToolExecutor
+from neos.coding.tools.registry import CodingToolRegistry
 from neos.coding.outbox.dispatcher import CodingOutboxDispatcher
 from neos.coding.outbox.repository import PostgresCodingOutboxRepository
 from neos.coding.persistence.postgres import PostgresCodingService
@@ -39,6 +48,7 @@ from neos.coding.workers.celery_runtime import (
 from neos.coding.sandbox.factory import create_sandbox_provider
 from neos.database.connection import db_manager
 from neos.config.settings import settings
+from neos.config.schema import AppConfig
 from neos.observability.metrics import metrics
 
 
@@ -115,7 +125,64 @@ def create_coding_runtime(
     )
 
 
-def create_development_coding_runtime() -> CodingRuntime:
+def _create_real_coding_loop(
+    *, config: AppConfig, sandboxes, session_factory=None
+) -> AnthropicCodingLoop:
+    coding = config.coding_model
+    sandbox = config.sandbox
+    resources = sandbox.resources
+    execution = sandbox.execution
+    limits = SandboxLimits(
+        cpu_count=resources.cpu_count,
+        memory_bytes=resources.memory_bytes,
+        pids=resources.pids,
+        workspace_bytes=resources.workspace_bytes,
+        command_timeout_sec=min(execution.command_timeout_sec, coding.tool_timeout_sec),
+        max_output_bytes=execution.max_output_bytes,
+        max_stdin_bytes=execution.max_stdin_bytes,
+    )
+    bindings = SandboxBindingService(
+        repository=PostgresSandboxBindingRepository(
+            session_factory or db_manager.get_session
+        ),
+        provider=sandboxes,
+        limits=limits,
+        snapshot_cadence=coding.mutation_snapshot_interval,
+    )
+    allowlist = coding.command_allowlist if coding.command_enabled else []
+    tools = CodingToolRegistry.default(
+        command_allowlist=frozenset(allowlist),
+        max_command_timeout_sec=coding.tool_timeout_sec,
+        max_command_output_bytes=execution.max_output_bytes,
+        max_command_stdin_bytes=execution.max_stdin_bytes,
+        allowed_env_names=frozenset(execution.allowed_env_names),
+    )
+    return AnthropicCodingLoop(
+        model=AnthropicCodingModel(
+            AsyncAnthropic(api_key=config.secrets.anthropic_api_key)
+        ),
+        tools=tools,
+        executor=SandboxToolExecutor(
+            max_preview_bytes=min(coding.max_transcript_bytes, execution.max_output_bytes),
+            max_entries=1000,
+        ),
+        bindings=bindings,
+        config=AnthropicLoopConfig(
+            model=coding.model,
+            system="Work safely in the provided sandbox and complete the coding task.",
+            max_output_tokens=coding.max_output_tokens,
+            timeout_sec=coding.model_timeout_sec,
+            tool_claim_ttl_sec=coding.tool_timeout_sec,
+            max_turns=coding.max_turns,
+            max_tools=coding.max_tool_calls,
+            max_consecutive_tool_errors=coding.max_consecutive_tool_errors,
+            max_cost_micros=int(coding.max_cost_usd * 1_000_000),
+        ),
+    )
+
+
+def create_development_coding_runtime(*, config: AppConfig | None = None) -> CodingRuntime:
+    config = config or settings.config
     if (
         settings.CODING_FAKE_LOOP_ENABLED
         and settings.CODING_CELERY_ENABLED
@@ -124,11 +191,15 @@ def create_development_coding_runtime() -> CodingRuntime:
             "CODING_FAKE_LOOP_ENABLED and CODING_CELERY_ENABLED "
             "cannot be enabled together"
         )
-    loop = (
-        FakeDurableCodingLoop(clock=lambda: datetime.now(UTC))
-        if settings.CODING_FAKE_LOOP_ENABLED
-        else None
-    )
+    if settings.CODING_FAKE_LOOP_ENABLED and config.coding_model.enabled:
+        raise RuntimeError("fake and real coding loops cannot be enabled together")
+    sandboxes = create_sandbox_provider(config.sandbox)
+    if settings.CODING_FAKE_LOOP_ENABLED:
+        loop = FakeDurableCodingLoop(clock=lambda: datetime.now(UTC))
+    elif config.coding_model.enabled:
+        loop = _create_real_coding_loop(config=config, sandboxes=sandboxes)
+    else:
+        loop = None
     run_repository = PostgresCodingRunRepository(db_manager.get_session)
     runtime = create_coding_runtime(
         events=coding_service,
@@ -140,9 +211,10 @@ def create_development_coding_runtime() -> CodingRuntime:
         loop=loop,
         metrics_collector=metrics,
         interrupter=InProcessRunInterrupter(),
+        sandboxes=sandboxes,
     )
     supervisor = None
-    if loop is not None:
+    if settings.CODING_FAKE_LOOP_ENABLED:
         supervisor = CodingDevelopmentSupervisor(
             runs=runtime.runs,
             work_repository=run_repository,
@@ -158,10 +230,12 @@ def create_development_coding_runtime() -> CodingRuntime:
         notifier = supervisor.notify
     elif settings.CODING_CELERY_ENABLED:
         validate_coding_worker_settings(settings)
-        dispatcher = create_celery_dispatcher()
-        notifier = lambda task_id: dispatcher.enqueue(
-            task_id, source=CodingDispatchSource.API
-        )
+
+        def notify_celery(task_id):
+            dispatcher = create_celery_dispatcher()
+            return dispatcher.enqueue(task_id, source=CodingDispatchSource.API)
+
+        notifier = notify_celery
     coding_service.set_task_created_notifier(notifier)
     return replace(runtime, supervisor=supervisor)
 

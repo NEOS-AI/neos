@@ -783,6 +783,37 @@ class SandboxConfig(StrictConfigModel):
     docker: SandboxDockerConfig = Field(default_factory=SandboxDockerConfig)
 
 
+class CodingModelConfig(StrictConfigModel):
+    enabled: bool = False
+    provider: Literal["anthropic"] = "anthropic"
+    model: str = "claude-sonnet-4-5-20250929"
+    model_timeout_sec: float = Field(default=120, gt=0, le=600)
+    tool_timeout_sec: float = Field(default=30, gt=0, le=300)
+    max_turns: int = Field(default=20, gt=0, le=100)
+    max_tool_calls: int = Field(default=50, gt=0, le=500)
+    max_consecutive_tool_errors: int = Field(default=3, gt=0, le=20)
+    max_output_tokens: int = Field(default=8192, gt=0)
+    max_transcript_bytes: int = Field(default=1_048_576, gt=0)
+    max_cost_usd: float = Field(default=5.0, gt=0)
+    command_enabled: bool = True
+    command_allowlist: list[str] = Field(
+        default_factory=lambda: ["pytest", "ruff", "mypy", "pnpm", "git"]
+    )
+    mutation_snapshot_interval: int = Field(default=5, gt=0)
+
+    @model_validator(mode="after")
+    def validate_command_policy(self) -> "CodingModelConfig":
+        malformed = any(
+            not command or re.fullmatch(r"[A-Za-z0-9._+-]+", command) is None
+            for command in self.command_allowlist
+        )
+        if malformed or (self.command_enabled and not self.command_allowlist):
+            raise ValueError("coding command allowlist is invalid")
+        if not self.command_enabled and self.command_allowlist:
+            raise ValueError("command-disabled mode requires an empty command allowlist")
+        return self
+
+
 class ContextualRetrievalConfig(StrictConfigModel):
     enabled: bool = False
     model: str = "claude-haiku-4-5-20251001"
@@ -919,6 +950,7 @@ class AppConfig(StrictConfigModel):
     deep_analysis: DeepAnalysisConfig = Field(default_factory=DeepAnalysisConfig)
     ray: RayConfig = Field(default_factory=RayConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    coding_model: CodingModelConfig = Field(default_factory=CodingModelConfig)
     contextual_retrieval: ContextualRetrievalConfig = Field(default_factory=ContextualRetrievalConfig)
     execution_approval: ExecutionApprovalConfig = Field(default_factory=ExecutionApprovalConfig)
     channels: ChannelConfig = Field(default_factory=ChannelConfig)
@@ -955,6 +987,23 @@ class AppConfig(StrictConfigModel):
                 or docker.allow_unpinned_image
             ):
                 raise ValueError("Unsafe production Docker sandbox configuration.")
+        return self
+
+    @model_validator(mode="after")
+    def validate_coding_model_policy(self) -> "AppConfig":
+        if not self.coding_model.enabled:
+            return self
+        if not self.sandbox.enabled or not self.secrets.anthropic_api_key:
+            raise ValueError(
+                "coding real loop requires an enabled sandbox and Anthropic credential"
+            )
+        if (
+            self.environment in {"staging", "production"}
+            and self.sandbox.provider != "docker"
+        ):
+            raise ValueError(
+                "coding real loop requires a Docker sandbox in staging and production"
+            )
         return self
 
     @model_validator(mode="after")

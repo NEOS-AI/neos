@@ -11,6 +11,7 @@ from neos.coding.workers.development_supervisor import (
 )
 from neos.coding.workers.dispatcher import CodingDispatchSource
 from neos.config.settings import settings
+from neos.config.schema import AppConfig
 
 
 def test_coding_websocket_bypasses_generic_production_filter() -> None:
@@ -71,6 +72,41 @@ def test_runtime_rejects_local_and_celery_execution_together(
 
     with pytest.raises(RuntimeError, match="cannot be enabled together"):
         create_development_coding_runtime()
+
+
+def test_runtime_rejects_fake_and_real_execution_together(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "CODING_FAKE_LOOP_ENABLED", True)
+    config = AppConfig.model_validate({
+        "coding_model": {"enabled": True, "model": "claude-test"},
+        "sandbox": {"enabled": True},
+        "secrets": {"anthropic_api_key": "test-key"},
+    })
+
+    with pytest.raises(RuntimeError, match="cannot be enabled together"):
+        create_development_coding_runtime(config=config)
+
+
+def test_real_loop_can_register_celery_delivery(monkeypatch) -> None:
+    calls = []
+    config = AppConfig.model_validate({
+        "coding_model": {"enabled": True, "model": "claude-test"},
+        "sandbox": {"enabled": True},
+        "secrets": {"anthropic_api_key": "test-key"},
+    })
+    monkeypatch.setattr(settings, "CODING_FAKE_LOOP_ENABLED", False)
+    monkeypatch.setattr(settings, "CODING_CELERY_ENABLED", True)
+    monkeypatch.setattr(runtime_module, "_create_real_coding_loop", lambda **kwargs: object())
+    monkeypatch.setattr(
+        runtime_module,
+        "create_celery_dispatcher",
+        lambda: SimpleNamespace(enqueue=lambda task_id, *, source: calls.append(task_id)),
+    )
+
+    runtime = create_development_coding_runtime(config=config)
+    runtime_module.coding_service._task_created_notifier("ct_real")
+
+    assert runtime.supervisor is None
+    assert calls == ["ct_real"]
 
 
 @pytest.mark.parametrize(
