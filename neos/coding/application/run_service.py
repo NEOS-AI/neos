@@ -3,6 +3,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Protocol
 from uuid import uuid4
 
+from neos.coding.domain.durability import (
+    RunAlreadyLeased,
+    StaleExecutionLease,
+)
 from neos.coding.domain.errors import CodingTaskNotFound
 from neos.coding.domain.phases import (
     CodingCheckpoint,
@@ -51,7 +55,6 @@ class CodingRunService:
         self._loop = loop
         self._metrics = metrics
         self._clock = clock
-        self._instructions: dict[str, str] = {}
 
     async def start(self, *, task_id: str, instruction: str) -> CodingRun:
         previous = await self._runs.latest_run(task_id)
@@ -66,7 +69,6 @@ class CodingRunService:
             started_at=self._clock(),
         )
         await self._runs.create_run(run)
-        self._instructions[task_id] = instruction
         await self._append(
             task_id=task_id,
             event_type="run.started",
@@ -75,7 +77,7 @@ class CodingRunService:
         )
         return run
 
-    async def advance_one_safe_point(self, *, task_id: str):
+    async def advance_one_safe_point(self, *, task_id: str, worker_id: str):
         """Advance a durable loop from its latest committed checkpoint.
 
         The iterator is intentionally rebuilt for every call. A replacement
@@ -87,22 +89,45 @@ class CodingRunService:
         run = await self._runs.latest_run(task_id)
         if run is None:
             raise RuntimeError(f"coding run does not exist: {task_id}")
+        now = self._clock()
+        lease = await self._runs.acquire_execution_lease(
+            task_id=task_id,
+            run_id=run.run_id,
+            worker_id=worker_id,
+            now=now,
+            expires_at=now + timedelta(seconds=30),
+        )
+        if lease is None:
+            if self._metrics is not None:
+                self._metrics.coding_lease_contention_total.labels(
+                    outcome="busy"
+                ).inc()
+            raise RunAlreadyLeased(task_id)
+        if self._metrics is not None:
+            self._metrics.coding_lease_contention_total.labels(
+                outcome="acquired"
+            ).inc()
         checkpoint = await self._runs.latest_checkpoint(task_id)
         if checkpoint is not None:
             applied = await self.on_safe_point(
-                task_id=task_id, checkpoint_id=checkpoint.checkpoint_id
+                task_id=task_id,
+                checkpoint_id=checkpoint.checkpoint_id,
+                lease=lease,
+                checkpoint=checkpoint,
+                worker_id=worker_id,
             )
             if applied:
-                checkpoint = await self._runs.latest_checkpoint(task_id)
-                run = await self._runs.latest_run(task_id)
-                if run is None:
-                    raise RuntimeError(f"coding run does not exist: {task_id}")
+                checkpoint = applied.checkpoint
+                run = applied.run
+                lease = applied.lease
 
-        instruction = self._instructions.get(task_id, "")
         if checkpoint is not None:
-            instruction = str(
-                checkpoint.loop_state.get("pending_instruction") or instruction
-            )
+            instruction = str(checkpoint.loop_state["current_instruction"])
+        else:
+            task = await self._tasks.get(task_id)
+            if task is None:
+                raise CodingTaskNotFound(task_id)
+            instruction = task.prompt
         stream = self._loop.run(
             LoopInput(
                 task_id=task_id,
@@ -110,7 +135,11 @@ class CodingRunService:
                 instruction=instruction,
             ),
             checkpoint,
-            LoopDependencies(repository=self._runs, events=self._events),
+            LoopDependencies(
+                repository=self._runs,
+                events=self._events,
+                lease=lease,
+            ),
         )
         phase_started: dict[str, datetime] = {}
         try:
@@ -130,10 +159,11 @@ class CodingRunService:
                         self._metrics.coding_checkpoint_total.labels(
                             phase=phase
                         ).inc()
-                        if checkpoint is not None:
+                        if lease.recovered:
                             self._metrics.coding_resume_total.labels(
                                 outcome="success"
                             ).inc()
+                    await self._release_lease(lease)
                     return event
                 if event.type == "run.completed":
                     await self._runs.update_run(
@@ -143,18 +173,23 @@ class CodingRunService:
                             completed_at=self._clock(),
                         )
                     )
+                    await self._release_lease(lease)
                     return event
         except Exception:
-            if self._metrics is not None and checkpoint is not None:
+            if self._metrics is not None and lease.recovered:
                 self._metrics.coding_resume_total.labels(
                     outcome="recovery_required"
                 ).inc()
             raise
         return None
 
-    async def advance_until(self, *, task_id: str, phase: str):
+    async def advance_until(
+        self, *, task_id: str, phase: str, worker_id: str
+    ):
         while True:
-            event = await self.advance_one_safe_point(task_id=task_id)
+            event = await self.advance_one_safe_point(
+                task_id=task_id, worker_id=worker_id
+            )
             if event is None or event.type == "run.completed":
                 return event
             if event.payload.get("phase") == phase:
@@ -184,7 +219,23 @@ class CodingRunService:
             payload={"steering_id": request.steering_id, "mode": mode.value},
         )
         if mode is SteeringMode.INTERRUPT_NOW:
-            await self._interrupt_active_run(task_id, request)
+            run = await self._runs.latest_run(task_id)
+            if run is not None:
+                now = self._clock()
+                lease = await self._runs.acquire_execution_lease(
+                    task_id=task_id,
+                    run_id=run.run_id,
+                    worker_id=f"interrupt:{request.steering_id}",
+                    now=now,
+                    expires_at=now + timedelta(seconds=30),
+                )
+                if lease is None:
+                    if self._metrics is not None:
+                        self._metrics.coding_lease_contention_total.labels(
+                            outcome="busy"
+                        ).inc()
+                    raise RunAlreadyLeased(task_id)
+                await self._interrupt_active_run(task_id, request, lease)
         return request
 
     async def on_safe_point(
@@ -272,7 +323,6 @@ class CodingRunService:
             self._metrics.coding_steering_latency_seconds.labels(
                 outcome="applied"
             ).observe(latency)
-        self._instructions[task_id] = request.instruction
         await self._runs.update_run(
             replace(
                 run,
@@ -301,57 +351,39 @@ class CodingRunService:
             replace(run, status=CodingRunStatus.CANCELLED, completed_at=self._clock())
         )
 
-    async def _interrupt_active_run(
-        self, task_id: str, request: SteeringRequest
-    ) -> None:
+    async def _interrupt_active_run(self, task_id, request, lease) -> None:
         run = await self._runs.latest_run(task_id)
         if run is None:
+            await self._release_lease(lease)
             return
-        await self._runs.update_run(
-            replace(run, status=CodingRunStatus.INTERRUPTING)
+        try:
+            result = await self._interrupter.interrupt(run.run_id)
+        except Exception:
+            await self._release_lease(lease)
+            raise
+        if not result.process_stopped:
+            await self._release_lease(lease)
+            raise RuntimeError("coding run process did not stop")
+        applied = await self._runs.commit_interruption(
+            lease=lease,
+            request=request,
+            workspace_revision=result.workspace_revision,
+            process_stopped=result.process_stopped,
+            now=self._clock(),
         )
-        result = await self._interrupter.interrupt(run.run_id)
-        checkpoint_id = f"cc_interrupt_{uuid4().hex}"
-        event = await self._append(
-            task_id=task_id,
-            event_type="run.interrupted",
-            payload={
-                "steering_id": request.steering_id,
-                "process_stopped": result.process_stopped,
-            },
-            run_id=run.run_id,
-            checkpoint_id=checkpoint_id,
-        )
-        await self._runs.save_checkpoint(
-            CodingCheckpoint(
-                checkpoint_id=checkpoint_id,
-                task_id=task_id,
-                run_id=run.run_id,
-                seq=event.seq,
-                loop_state={
-                    "phase_index": -1,
-                    "transcript": [],
-                    "pending_instruction": request.instruction,
-                },
-                workspace_revision=result.workspace_revision,
-                created_at=self._clock(),
-            )
-        )
-        await self._runs.update_run(
-            replace(run, status=CodingRunStatus.CANCELLED, completed_at=self._clock())
-        )
-        await self._runs.apply_steering(
-            replace(request, applied_checkpoint_id=checkpoint_id)
-        )
-        resumed = CodingRun(
-            run_id=f"cr_{uuid4().hex}",
-            task_id=task_id,
-            attempt=run.attempt + 1,
-            status=CodingRunStatus.RUNNING,
-            resume_from_checkpoint_id=checkpoint_id,
-            started_at=self._clock(),
-        )
-        await self._runs.create_run(resumed)
+        await self._release_lease(applied.lease)
 
     async def _append(self, **kwargs: Any):
         return await self._events.append(now=self._clock(), **kwargs)
+
+    async def _release_lease(self, lease) -> None:
+        try:
+            await self._runs.release_execution_lease(
+                lease, now=self._clock()
+            )
+        except StaleExecutionLease:
+            if self._metrics is not None:
+                self._metrics.coding_lease_contention_total.labels(
+                    outcome="stale_write"
+                ).inc()
+            raise

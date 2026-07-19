@@ -94,12 +94,10 @@ class InMemoryCodingRunRepository:
                 run_id=lease.run_id,
                 worker_id=lease.worker_id,
                 fencing_token=lease.fencing_token,
-                acquired_at=lease.acquired_at,
-                expires_at=(
-                    now
-                    if now > lease.acquired_at
-                    else lease.acquired_at + timedelta(microseconds=1)
+                acquired_at=min(
+                    lease.acquired_at, now - timedelta(microseconds=1)
                 ),
+                expires_at=now,
             )
 
     async def claim_tool_execution(
@@ -171,7 +169,9 @@ class InMemoryCodingRunRepository:
             or current.fencing_token != lease.fencing_token
             or (now is not None and current.expires_at <= now)
         ):
-            raise StaleExecutionLease(lease.task_id)
+            raise StaleExecutionLease(
+                f"{lease.task_id}: expected={lease!r}, current={current!r}, now={now!r}"
+            )
 
     async def begin_phase(self, *, lease, kind, now):
         async with self._durability_lock:
@@ -337,6 +337,7 @@ class InMemoryCodingRunRepository:
             )
             self._durability_seq += 1
             loop_state = dict(checkpoint.loop_state)
+            loop_state["phase_index"] = -1
             loop_state["current_instruction"] = request.instruction
             loop_state["pending_instruction"] = None
             steering_checkpoint = CodingCheckpoint(

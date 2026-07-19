@@ -52,24 +52,38 @@ class PostgresCodingRunRepository:
                 result = await session.execute(
                     text(
                         """
-                        INSERT INTO coding_run_leases
-                            (task_id, run_id, worker_id, fencing_token,
-                             acquired_at, heartbeat_at, expires_at)
-                        VALUES
-                            (:task_id, :run_id, :worker_id, 1,
-                             :now, :now, :expires_at)
-                        ON CONFLICT (task_id) DO UPDATE
-                        SET run_id = EXCLUDED.run_id,
-                            worker_id = EXCLUDED.worker_id,
-                            fencing_token =
-                                coding_run_leases.fencing_token + 1,
-                            acquired_at = EXCLUDED.acquired_at,
-                            heartbeat_at = EXCLUDED.heartbeat_at,
-                            expires_at = EXCLUDED.expires_at
-                        WHERE coding_run_leases.expires_at <= :now
-                        RETURNING task_id, run_id, worker_id, fencing_token,
-                                  acquired_at, expires_at,
-                                  fencing_token > 1 AS recovered
+                        WITH previous AS (
+                            SELECT worker_id
+                            FROM coding_run_leases
+                            WHERE task_id = :task_id
+                            FOR UPDATE
+                        ), acquired AS (
+                            INSERT INTO coding_run_leases
+                                (task_id, run_id, worker_id, fencing_token,
+                                 acquired_at, heartbeat_at, expires_at)
+                            VALUES
+                                (:task_id, :run_id, :worker_id, 1,
+                                 :now, :now, :expires_at)
+                            ON CONFLICT (task_id) DO UPDATE
+                            SET run_id = EXCLUDED.run_id,
+                                worker_id = EXCLUDED.worker_id,
+                                fencing_token =
+                                    coding_run_leases.fencing_token + 1,
+                                acquired_at = EXCLUDED.acquired_at,
+                                heartbeat_at = EXCLUDED.heartbeat_at,
+                                expires_at = EXCLUDED.expires_at
+                            WHERE coding_run_leases.expires_at <= :now
+                            RETURNING task_id, run_id, worker_id,
+                                      fencing_token, acquired_at, expires_at
+                        )
+                        SELECT task_id, run_id, worker_id, fencing_token,
+                               acquired_at, expires_at,
+                               COALESCE(
+                                   (SELECT previous.worker_id <> :worker_id
+                                    FROM previous),
+                                   FALSE
+                               ) AS recovered
+                        FROM acquired
                         """
                     ),
                     {
@@ -527,6 +541,7 @@ class PostgresCodingRunRepository:
                     session, task_id=lease.task_id, now=now
                 )
                 loop_state = dict(checkpoint.loop_state)
+                loop_state["phase_index"] = -1
                 loop_state["current_instruction"] = request.instruction
                 loop_state["pending_instruction"] = None
                 steering_checkpoint = CodingCheckpoint(

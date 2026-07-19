@@ -161,6 +161,12 @@ class EnterpriseMetricsCollector:
             ["outcome"],
             registry=self.registry,
         )
+        self.coding_lease_contention_total = Counter(
+            "coding_lease_contention_total",
+            "Durable coding execution lease outcomes",
+            ["outcome"],
+            registry=self.registry,
+        )
 
         # === LLM API Metrics ===
 

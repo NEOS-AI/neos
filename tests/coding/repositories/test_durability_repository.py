@@ -118,6 +118,7 @@ async def test_acquire_lease_uses_one_atomic_upsert() -> None:
     assert "INSERT INTO coding_run_leases" in sql
     assert "expires_at <= :now" in sql
     assert "fencing_token + 1" in sql
+    assert "previous.worker_id <> :worker_id" in sql
     assert lease is not None
     assert lease.fencing_token == 3
     assert lease.recovered is True

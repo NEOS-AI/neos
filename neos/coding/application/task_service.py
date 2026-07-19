@@ -9,6 +9,7 @@ from neos.coding.events.store import InMemoryCodingEventStore
 
 class TaskRepository(Protocol):
     async def create(self, task: CodingTask) -> CodingTask: ...
+    async def get(self, task_id: str) -> CodingTask | None: ...
     async def get_owned(self, task_id: str, owner_id: str) -> CodingTask | None: ...
     async def save(self, task: CodingTask) -> CodingTask: ...
 
@@ -22,6 +23,9 @@ class InMemoryCodingTaskRepository:
             raise ValueError(f"coding task already exists: {task.task_id}")
         self._tasks[task.task_id] = task
         return task
+
+    async def get(self, task_id: str) -> CodingTask | None:
+        return self._tasks.get(task_id)
 
     async def get_owned(self, task_id: str, owner_id: str) -> CodingTask | None:
         task = self._tasks.get(task_id)

@@ -66,8 +66,12 @@ def create_coding_runtime(
     loop: CodingLoop | None,
     metrics_collector=None,
     interrupter=None,
+    clock=None,
 ) -> CodingRuntime:
     snapshots = CodingSnapshotService(projection_repository)
+    run_kwargs = {}
+    if clock is not None:
+        run_kwargs["clock"] = clock
     runs = CodingRunService(
         tasks=tasks,
         runs=run_repository,
@@ -75,6 +79,7 @@ def create_coding_runtime(
         loop=loop,
         metrics=metrics_collector,
         interrupter=interrupter or InProcessRunInterrupter(),
+        **run_kwargs,
     )
     return CodingRuntime(events=events, runs=runs, snapshots=snapshots)
 
