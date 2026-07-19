@@ -36,6 +36,7 @@ from neos.coding.workers.dispatcher import (
 from neos.coding.workers.celery_runtime import (
     validate_coding_worker_settings,
 )
+from neos.coding.sandbox.factory import create_sandbox_provider
 from neos.database.connection import db_manager
 from neos.config.settings import settings
 from neos.observability.metrics import metrics
@@ -47,12 +48,22 @@ class CodingRuntimeTransport:
     events: CodingEventTransport
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class CodingRuntime:
     events: Any
     runs: CodingRunService
     snapshots: CodingSnapshotService
+    sandboxes: Any
     supervisor: CodingDevelopmentSupervisor | None = None
+    _closed: bool = False
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self.supervisor is not None:
+            await self.supervisor.stop()
+        await self.sandboxes.close()
 
 
 coding_transport = CodingRuntimeTransport(
@@ -78,6 +89,7 @@ def create_coding_runtime(
     metrics_collector=None,
     interrupter=None,
     clock=None,
+    sandboxes=None,
 ) -> CodingRuntime:
     snapshots = CodingSnapshotService(projection_repository)
     run_kwargs = {}
@@ -92,7 +104,15 @@ def create_coding_runtime(
         interrupter=interrupter or InProcessRunInterrupter(),
         **run_kwargs,
     )
-    return CodingRuntime(events=events, runs=runs, snapshots=snapshots)
+    sandbox_provider = sandboxes or create_sandbox_provider(
+        settings.config.sandbox
+    )
+    return CodingRuntime(
+        events=events,
+        runs=runs,
+        snapshots=snapshots,
+        sandboxes=sandbox_provider,
+    )
 
 
 def create_development_coding_runtime() -> CodingRuntime:

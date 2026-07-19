@@ -433,8 +433,34 @@ ray:
 
 sandbox:
   enabled: false
-  type: restricted
-  timeout_sec: 30
+  provider: memory
+  lifecycle:
+    create_timeout_sec: 30
+    idle_timeout_sec: 900
+    max_lifetime_sec: 14400
+  resources:
+    cpu_count: 1.0
+    memory_bytes: 536870912
+    pids: 128
+    workspace_bytes: 1073741824
+    tmpfs_bytes: 67108864
+  execution:
+    command_timeout_sec: 30
+    max_output_bytes: 1048576
+    max_stdin_bytes: 1048576
+    allowed_env_names: [HOME, LANG, LC_ALL, PATH, TERM, TMPDIR]
+  streams:
+    pty_max_sessions: 4
+    replay_events: 1024
+    replay_bytes: 1048576
+    watcher_debounce_sec: 0.05
+  memory:
+    root: .neos/sandboxes
+  docker:
+    image: ""
+    network_mode: none
+    user: "10001:10001"
+    allow_unpinned_image: false
 
 contextual_retrieval:
   enabled: false

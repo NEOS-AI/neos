@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -717,10 +718,69 @@ class RayConfig(StrictConfigModel):
     object_store_memory: int = 2_000_000_000
 
 
+class SandboxLifecycleConfig(StrictConfigModel):
+    create_timeout_sec: float = Field(default=30.0, gt=0, le=300)
+    idle_timeout_sec: float = Field(default=900.0, gt=0)
+    max_lifetime_sec: float = Field(default=14_400.0, gt=0)
+
+
+class SandboxResourceConfig(StrictConfigModel):
+    cpu_count: float = Field(default=1.0, gt=0, le=64)
+    memory_bytes: int = Field(default=512 * 1024 * 1024, gt=0)
+    pids: int = Field(default=128, gt=0)
+    workspace_bytes: int = Field(default=1024 * 1024 * 1024, gt=0)
+    tmpfs_bytes: int = Field(default=64 * 1024 * 1024, gt=0)
+
+
+class SandboxExecutionConfig(StrictConfigModel):
+    command_timeout_sec: float = Field(default=30.0, gt=0)
+    max_output_bytes: int = Field(default=1024 * 1024, gt=0)
+    max_stdin_bytes: int = Field(default=1024 * 1024, gt=0)
+    allowed_env_names: list[str] = Field(
+        default_factory=lambda: [
+            "HOME",
+            "LANG",
+            "LC_ALL",
+            "PATH",
+            "TERM",
+            "TMPDIR",
+        ]
+    )
+
+
+class SandboxStreamConfig(StrictConfigModel):
+    pty_max_sessions: int = Field(default=4, gt=0, le=32)
+    replay_events: int = Field(default=1024, gt=0)
+    replay_bytes: int = Field(default=1024 * 1024, gt=0)
+    watcher_debounce_sec: float = Field(default=0.05, gt=0, le=5)
+
+
+class SandboxDockerConfig(StrictConfigModel):
+    image: str = ""
+    network_mode: str = "none"
+    user: str = "10001:10001"
+    allow_unpinned_image: bool = False
+
+
+class SandboxMemoryConfig(StrictConfigModel):
+    root: str = ".neos/sandboxes"
+
+
 class SandboxConfig(StrictConfigModel):
     enabled: bool = False
-    type: str = "restricted"
-    timeout_sec: int = 30
+    provider: Literal["memory", "docker"] = "memory"
+    lifecycle: SandboxLifecycleConfig = Field(
+        default_factory=SandboxLifecycleConfig
+    )
+    resources: SandboxResourceConfig = Field(
+        default_factory=SandboxResourceConfig
+    )
+    execution: SandboxExecutionConfig = Field(
+        default_factory=SandboxExecutionConfig
+    )
+    streams: SandboxStreamConfig = Field(default_factory=SandboxStreamConfig)
+    memory: SandboxMemoryConfig = Field(default_factory=SandboxMemoryConfig)
+    docker: SandboxDockerConfig = Field(default_factory=SandboxDockerConfig)
 
 
 class ContextualRetrievalConfig(StrictConfigModel):
@@ -867,6 +927,35 @@ class AppConfig(StrictConfigModel):
     model_providers: ModelProviderConfig = Field(default_factory=ModelProviderConfig)
     a2ui: A2UIConfig = Field(default_factory=A2UIConfig)
     inline_visualization: InlineVisualizationConfig = Field(default_factory=InlineVisualizationConfig)
+
+    @model_validator(mode="after")
+    def validate_sandbox_policy(self) -> "AppConfig":
+        sandbox = self.sandbox
+        if (
+            sandbox.lifecycle.idle_timeout_sec
+            > sandbox.lifecycle.max_lifetime_sec
+        ):
+            raise ValueError("Sandbox idle timeout exceeds maximum lifetime.")
+        if (
+            sandbox.execution.command_timeout_sec
+            > sandbox.lifecycle.max_lifetime_sec
+        ):
+            raise ValueError("Sandbox command timeout exceeds maximum lifetime.")
+        if self.environment == "production" and sandbox.provider == "docker":
+            docker = sandbox.docker
+            digest_image = re.fullmatch(
+                r"[^\s]+@sha256:[0-9a-f]{64}",
+                docker.image,
+            )
+            non_root = docker.user.split(":", 1)[0] != "0"
+            if (
+                digest_image is None
+                or docker.network_mode != "none"
+                or not non_root
+                or docker.allow_unpinned_image
+            ):
+                raise ValueError("Unsafe production Docker sandbox configuration.")
+        return self
 
     @model_validator(mode="after")
     def validate_context_assembly_ratios(self) -> "AppConfig":
