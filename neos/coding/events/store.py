@@ -1,6 +1,6 @@
 import asyncio
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Mapping
 
 from neos.coding.domain.events import CodingEvent, make_event
@@ -19,7 +19,7 @@ class InMemoryCodingEventStore:
         task_id: str,
         event_type: str,
         payload: Mapping[str, Any],
-        now: datetime,
+        now: datetime | None = None,
         event_id: str | None = None,
         run_id: str | None = None,
         turn_id: str | None = None,
@@ -32,7 +32,7 @@ class InMemoryCodingEventStore:
                 seq=len(self._events[task_id]) + 1,
                 event_type=event_type,
                 payload=payload,
-                now=now,
+                now=now or datetime.now(UTC),
                 event_id=event_id,
                 run_id=run_id,
                 turn_id=turn_id,

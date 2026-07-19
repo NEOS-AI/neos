@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from neos.config.loader import LEGACY_ENV_KEYS, SECRET_ENV_MAPPING, load_app_config
@@ -33,6 +34,10 @@ CONSTANT_SETTINGS = {
     "WORKFLOW_CRITICAL_NODES": WORKFLOW_CRITICAL_NODES,
     "ALLOWED_FILE_EXTENSIONS": ALLOWED_FILE_EXTENSIONS,
     "CELERY_ACCEPT_CONTENT": CELERY_ACCEPT_CONTENT,
+    "CODING_FAKE_LOOP_ENABLED": os.getenv(
+        "CODING_FAKE_LOOP_ENABLED", "false"
+    ).lower()
+    in {"1", "true", "yes", "on"},
     "JWT_ALGORITHM": "HS256",
     "PASSWORD_MIN_LENGTH": 8,
     "PASSWORD_MAX_LENGTH": 72,

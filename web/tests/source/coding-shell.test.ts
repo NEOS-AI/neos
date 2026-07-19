@@ -50,5 +50,6 @@ test("task workspace renders durable stream state and connection status", () => 
   assert.match(page, /CodingTaskWorkspace/);
   assert.match(workspace, /useCodingStream/);
   assert.match(workspace, /connection/);
-  assert.match(workspace, /partsById/);
+  assert.match(workspace, /projection\.phases/);
+  assert.match(workspace, /connectionBasis/);
 });
