@@ -10,6 +10,12 @@ from neos.coding.domain.durability import (
     ToolExecutionDisposition,
 )
 from neos.coding.domain.events import CodingEvent
+from neos.coding.domain.phases import (
+    CodingCheckpoint,
+    CodingPhase,
+    CodingPhaseKind,
+    CodingPhaseStatus,
+)
 from neos.coding.repositories.run_repository import PostgresCodingRunRepository
 
 
@@ -22,6 +28,15 @@ LEASE = ExecutionLease(
     fencing_token=2,
     acquired_at=NOW,
     expires_at=EXPIRES,
+)
+ACTIVE_PHASE = CodingPhase(
+    phase_id="cp_cr_1_understand_1",
+    task_id="ct_1",
+    run_id="cr_1",
+    kind=CodingPhaseKind.UNDERSTAND,
+    attempt=1,
+    status=CodingPhaseStatus.ACTIVE,
+    started_at=NOW,
 )
 
 
@@ -52,7 +67,8 @@ class FakeSession:
         sql = str(statement)
         self.sql.append(sql)
         self.params.append(params or {})
-        row = self.rows.pop(0) if self.rows else None
+        reads_row = "SELECT" in sql or "RETURNING" in sql
+        row = self.rows.pop(0) if self.rows and reads_row else None
         return FakeResult(row)
 
 
@@ -195,3 +211,77 @@ async def test_complete_tool_result_rejects_stale_claim() -> None:
         await repository.complete_tool_execution(
             claim, result={"ok": True}, now=NOW
         )
+
+
+async def test_begin_phase_returns_existing_active_attempt_without_event() -> None:
+    session = FakeSession(
+        rows=[
+            ("ct_1",),
+            (
+                ACTIVE_PHASE.phase_id,
+                ACTIVE_PHASE.task_id,
+                ACTIVE_PHASE.run_id,
+                ACTIVE_PHASE.kind.value,
+                ACTIVE_PHASE.attempt,
+                ACTIVE_PHASE.status.value,
+                ACTIVE_PHASE.started_at,
+                None,
+            ),
+        ]
+    )
+    repository = repository_for(session)
+
+    started = await repository.begin_phase(
+        lease=LEASE, kind=CodingPhaseKind.UNDERSTAND, now=NOW
+    )
+
+    assert started.phase == ACTIVE_PHASE
+    assert started.event is None
+    assert started.resumed is True
+    assert "INSERT INTO coding_phases" not in "\n".join(session.sql)
+
+
+async def test_begin_phase_does_not_lock_aggregate_result() -> None:
+    session = FakeSession(rows=[("ct_1",), None, (1,), (5,)])
+    repository = repository_for(session)
+
+    started = await repository.begin_phase(
+        lease=LEASE, kind=CodingPhaseKind.PLAN, now=NOW
+    )
+
+    aggregate_sql = next(sql for sql in session.sql if "MAX(attempt)" in sql)
+    assert "FOR UPDATE" not in aggregate_sql
+    assert started.phase.attempt == 1
+    assert started.event is not None and started.event.seq == 5
+
+
+async def test_phase_checkpoint_satisfies_fk_order_in_one_transaction() -> None:
+    session = FakeSession(rows=[("ct_1",), (11,), (ACTIVE_PHASE.phase_id,)])
+    repository = repository_for(session)
+
+    committed = await repository.commit_phase_checkpoint(
+        lease=LEASE,
+        phase=ACTIVE_PHASE,
+        tool_call_id="tool_1",
+        result={"summary": "done"},
+        loop_state={
+            "phase_index": 0,
+            "transcript": [],
+            "current_instruction": "Fix it",
+            "pending_instruction": None,
+        },
+        workspace_revision="rev_1",
+        now=NOW,
+    )
+
+    sql = "\n".join(session.sql)
+    assert sql.index("INSERT INTO coding_checkpoints") < sql.index(
+        "INSERT INTO coding_events"
+    )
+    assert sql.index("INSERT INTO coding_events") < sql.index(
+        "INSERT INTO coding_event_outbox"
+    )
+    assert "UPDATE coding_phases" in sql
+    assert isinstance(committed.checkpoint, CodingCheckpoint)
+    assert committed.checkpoint.seq == committed.event.seq == 11
+    assert committed.phase.status is CodingPhaseStatus.COMPLETED

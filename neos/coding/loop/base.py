@@ -3,7 +3,12 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Mapping, Protocol
 
 from neos.coding.domain.events import CodingEvent
-from neos.coding.domain.durability import ExecutionLease, ToolExecutionClaim
+from neos.coding.domain.durability import (
+    ExecutionLease,
+    PhaseCheckpointCommit,
+    PhaseStart,
+    ToolExecutionClaim,
+)
 from neos.coding.domain.phases import CodingCheckpoint, CodingPhase, CodingPhaseKind
 
 
@@ -62,6 +67,26 @@ class CodingRunRepository(Protocol):
         now: datetime,
     ) -> CodingEvent: ...
 
+    async def begin_phase(
+        self,
+        *,
+        lease: ExecutionLease,
+        kind: CodingPhaseKind,
+        now: datetime,
+    ) -> PhaseStart: ...
+
+    async def commit_phase_checkpoint(
+        self,
+        *,
+        lease: ExecutionLease,
+        phase: CodingPhase,
+        tool_call_id: str,
+        result: Mapping[str, Any],
+        loop_state: Mapping[str, Any],
+        workspace_revision: str,
+        now: datetime,
+    ) -> PhaseCheckpointCommit: ...
+
     async def completed_tool_result(
         self, task_id: str, tool_call_id: str
     ) -> Mapping[str, Any] | None: ...
@@ -95,6 +120,7 @@ class CodingLoopEventSink(Protocol):
 class LoopDependencies:
     repository: CodingRunRepository
     events: CodingLoopEventSink
+    lease: ExecutionLease | None = None
 
 
 class CodingLoop(Protocol):

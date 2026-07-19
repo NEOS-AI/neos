@@ -84,6 +84,10 @@ class PostgresCodingService:
         tool_call_id: str | None = None,
         checkpoint_id: str | None = None,
     ) -> CodingEvent:
+        if checkpoint_id is not None:
+            raise ValueError(
+                "checkpoint-linked events require an atomic checkpoint command"
+            )
         async with await self._session_factory() as session:
             async with session.begin():
                 event = await self._append_in_session(

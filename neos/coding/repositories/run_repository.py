@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, Mapping
 from uuid import uuid4
@@ -7,6 +8,8 @@ from sqlalchemy import text
 
 from neos.coding.domain.durability import (
     ExecutionLease,
+    PhaseCheckpointCommit,
+    PhaseStart,
     StaleExecutionLease,
     ToolExecutionClaim,
     ToolExecutionDisposition,
@@ -16,6 +19,7 @@ from neos.coding.domain.phases import (
     CodingCheckpoint,
     CodingPhase,
     CodingPhaseKind,
+    CodingPhaseStatus,
     CodingRun,
     CodingRunStatus,
     SteeringMode,
@@ -268,6 +272,196 @@ class PostgresCodingRunRepository:
             self._wake_outbox()
         return event
 
+    async def begin_phase(
+        self,
+        *,
+        lease: ExecutionLease,
+        kind: CodingPhaseKind,
+        now: datetime,
+    ) -> PhaseStart:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(session, lease, now=now)
+                active_result = await session.execute(
+                    text(
+                        """
+                        SELECT phase_id, task_id, run_id, phase_kind, attempt,
+                               status, started_at, completed_at
+                        FROM coding_phases
+                        WHERE task_id = :task_id
+                          AND run_id = :run_id
+                          AND phase_kind = :phase_kind
+                          AND status = 'active'
+                        ORDER BY attempt DESC
+                        LIMIT 1
+                        FOR UPDATE
+                        """
+                    ),
+                    {
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "phase_kind": kind.value,
+                    },
+                )
+                active = active_result.first()
+                if active is not None:
+                    return PhaseStart(
+                        phase=self._phase_from_row(active),
+                        event=None,
+                        resumed=True,
+                    )
+                attempt_result = await session.execute(
+                    text(
+                        """
+                        SELECT COALESCE(MAX(attempt), 0) + 1
+                        FROM coding_phases
+                        WHERE task_id = :task_id
+                          AND phase_kind = :phase_kind
+                        """
+                    ),
+                    {"task_id": lease.task_id, "phase_kind": kind.value},
+                )
+                attempt_row = attempt_result.first()
+                attempt = int(attempt_row[0]) if attempt_row else 1
+                phase = CodingPhase(
+                    phase_id=(
+                        f"cp_{lease.run_id}_{kind.value}_{attempt}"
+                    ),
+                    task_id=lease.task_id,
+                    run_id=lease.run_id,
+                    kind=kind,
+                    attempt=attempt,
+                    status=CodingPhaseStatus.ACTIVE,
+                    started_at=now,
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_phases
+                            (phase_id, task_id, run_id, phase_kind, attempt,
+                             status, started_at, completed_at)
+                        VALUES
+                            (:phase_id, :task_id, :run_id, :phase_kind,
+                             :attempt, 'active', :started_at, NULL)
+                        """
+                    ),
+                    {
+                        "phase_id": phase.phase_id,
+                        "task_id": phase.task_id,
+                        "run_id": phase.run_id,
+                        "phase_kind": phase.kind.value,
+                        "attempt": phase.attempt,
+                        "started_at": phase.started_at,
+                    },
+                )
+                event = await self._append_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    event_type="phase.started",
+                    payload={
+                        "phase": kind.value,
+                        "attempt": attempt,
+                    },
+                    now=now,
+                    run_id=lease.run_id,
+                )
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return PhaseStart(phase=phase, event=event, resumed=False)
+
+    async def commit_phase_checkpoint(
+        self,
+        *,
+        lease: ExecutionLease,
+        phase: CodingPhase,
+        tool_call_id: str,
+        result: Mapping[str, Any],
+        loop_state: Mapping[str, Any],
+        workspace_revision: str,
+        now: datetime,
+    ) -> PhaseCheckpointCommit:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(session, lease, now=now)
+                seq = await self._allocate_sequence_in_session(
+                    session, task_id=lease.task_id, now=now
+                )
+                checkpoint = CodingCheckpoint(
+                    checkpoint_id=f"cc_{uuid4().hex}",
+                    task_id=lease.task_id,
+                    run_id=lease.run_id,
+                    seq=seq,
+                    loop_state=dict(loop_state),
+                    workspace_revision=workspace_revision,
+                    created_at=now,
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_checkpoints
+                            (checkpoint_id, task_id, run_id, seq,
+                             loop_state_json, workspace_revision, created_at)
+                        VALUES
+                            (:checkpoint_id, :task_id, :run_id, :seq,
+                             CAST(:loop_state AS JSONB),
+                             :workspace_revision, :created_at)
+                        """
+                    ),
+                    {
+                        "checkpoint_id": checkpoint.checkpoint_id,
+                        "task_id": checkpoint.task_id,
+                        "run_id": checkpoint.run_id,
+                        "seq": checkpoint.seq,
+                        "loop_state": json.dumps(dict(loop_state)),
+                        "workspace_revision": workspace_revision,
+                        "created_at": now,
+                    },
+                )
+                event = await self._insert_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    seq=seq,
+                    event_type="phase.completed",
+                    payload={
+                        "phase": phase.kind.value,
+                        "attempt": phase.attempt,
+                        **dict(result),
+                    },
+                    now=now,
+                    run_id=lease.run_id,
+                    tool_call_id=tool_call_id,
+                    checkpoint_id=checkpoint.checkpoint_id,
+                )
+                completed = replace(
+                    phase,
+                    status=CodingPhaseStatus.COMPLETED,
+                    completed_at=now,
+                )
+                updated = await session.execute(
+                    text(
+                        """
+                        UPDATE coding_phases
+                        SET status = 'completed', completed_at = :now
+                        WHERE phase_id = :phase_id
+                          AND task_id = :task_id
+                          AND run_id = :run_id
+                          AND status = 'active'
+                        RETURNING phase_id
+                        """
+                    ),
+                    {
+                        "phase_id": phase.phase_id,
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "now": now,
+                    },
+                )
+                if updated.first() is None:
+                    raise StaleExecutionLease(lease.task_id)
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return PhaseCheckpointCommit(checkpoint, event, completed)
+
     @staticmethod
     def _lease_from_row(row) -> ExecutionLease:
         return ExecutionLease(
@@ -292,18 +486,43 @@ class PostgresCodingRunRepository:
             **extra,
         }
 
-    async def _append_event_in_session(
-        self,
-        session,
-        *,
-        task_id: str,
-        event_type: str,
-        payload: Mapping[str, Any],
-        now: datetime,
-        run_id: str | None = None,
-        tool_call_id: str | None = None,
-        checkpoint_id: str | None = None,
-    ) -> CodingEvent:
+    async def _validate_lease_in_session(
+        self, session, lease: ExecutionLease, *, now: datetime
+    ) -> None:
+        result = await session.execute(
+            text(
+                """
+                SELECT task_id
+                FROM coding_run_leases
+                WHERE task_id = :task_id
+                  AND run_id = :run_id
+                  AND worker_id = :worker_id
+                  AND fencing_token = :fencing_token
+                  AND expires_at > :now
+                FOR UPDATE
+                """
+            ),
+            self._lease_params(lease, now=now),
+        )
+        if result.first() is None:
+            raise StaleExecutionLease(lease.task_id)
+
+    @staticmethod
+    def _phase_from_row(row) -> CodingPhase:
+        return CodingPhase(
+            phase_id=row[0],
+            task_id=row[1],
+            run_id=row[2],
+            kind=CodingPhaseKind(row[3]),
+            attempt=int(row[4]),
+            status=CodingPhaseStatus(row[5]),
+            started_at=row[6],
+            completed_at=row[7],
+        )
+
+    async def _allocate_sequence_in_session(
+        self, session, *, task_id: str, now: datetime
+    ) -> int:
         sequence = await session.execute(
             text(
                 """
@@ -320,10 +539,52 @@ class PostgresCodingRunRepository:
         row = sequence.first()
         if row is None:
             raise RuntimeError(f"coding task does not exist: {task_id}")
+        return int(row[0])
+
+    async def _append_event_in_session(
+        self,
+        session,
+        *,
+        task_id: str,
+        event_type: str,
+        payload: Mapping[str, Any],
+        now: datetime,
+        run_id: str | None = None,
+        tool_call_id: str | None = None,
+        checkpoint_id: str | None = None,
+    ) -> CodingEvent:
+        seq = await self._allocate_sequence_in_session(
+            session, task_id=task_id, now=now
+        )
+        return await self._insert_event_in_session(
+            session,
+            task_id=task_id,
+            seq=seq,
+            event_type=event_type,
+            payload=payload,
+            now=now,
+            run_id=run_id,
+            tool_call_id=tool_call_id,
+            checkpoint_id=checkpoint_id,
+        )
+
+    async def _insert_event_in_session(
+        self,
+        session,
+        *,
+        task_id: str,
+        seq: int,
+        event_type: str,
+        payload: Mapping[str, Any],
+        now: datetime,
+        run_id: str | None = None,
+        tool_call_id: str | None = None,
+        checkpoint_id: str | None = None,
+    ) -> CodingEvent:
         event = CodingEvent(
             version=1,
             task_id=task_id,
-            seq=int(row[0]),
+            seq=seq,
             event_id=f"ce_{uuid4().hex}",
             type=event_type,
             payload=dict(payload),

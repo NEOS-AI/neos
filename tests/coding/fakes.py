@@ -1,14 +1,22 @@
 import asyncio
+from dataclasses import replace
 from datetime import timedelta
 from typing import Any
 
 from neos.coding.domain.durability import (
     ExecutionLease,
+    PhaseCheckpointCommit,
+    PhaseStart,
     StaleExecutionLease,
     ToolExecutionClaim,
     ToolExecutionDisposition,
 )
 from neos.coding.domain.events import make_event
+from neos.coding.domain.phases import (
+    CodingCheckpoint,
+    CodingPhaseStatus,
+    next_phase_attempt,
+)
 
 
 class InMemoryCodingRunRepository:
@@ -26,6 +34,8 @@ class InMemoryCodingRunRepository:
         self.tool_claims = {}
         self._durability_lock = asyncio.Lock()
         self._durability_seq = 0
+        self.begin_phase_calls = 0
+        self.phase_commit_calls = 0
 
     async def acquire_execution_lease(
         self,
@@ -157,6 +167,92 @@ class InMemoryCodingRunRepository:
             or (now is not None and current.expires_at <= now)
         ):
             raise StaleExecutionLease(lease.task_id)
+
+    async def begin_phase(self, *, lease, kind, now):
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=now)
+            self.begin_phase_calls += 1
+            active = next(
+                (
+                    phase
+                    for phase in self.phases
+                    if phase.task_id == lease.task_id
+                    and phase.run_id == lease.run_id
+                    and phase.kind is kind
+                    and phase.status is CodingPhaseStatus.ACTIVE
+                ),
+                None,
+            )
+            if active is not None:
+                return PhaseStart(active, None, True)
+            phase = next_phase_attempt(
+                task_id=lease.task_id,
+                run_id=lease.run_id,
+                kind=kind,
+                existing=[(item.kind, item.attempt) for item in self.phases],
+                now=now,
+            )
+            self.phases.append(phase)
+            self._durability_seq += 1
+            event = make_event(
+                task_id=lease.task_id,
+                seq=self._durability_seq,
+                event_type="phase.started",
+                payload={"phase": kind.value, "attempt": phase.attempt},
+                now=now,
+                run_id=lease.run_id,
+            )
+            return PhaseStart(phase, event, False)
+
+    async def commit_phase_checkpoint(
+        self,
+        *,
+        lease,
+        phase,
+        tool_call_id,
+        result,
+        loop_state,
+        workspace_revision,
+        now,
+    ):
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=now)
+            self.phase_commit_calls += 1
+            self._durability_seq += 1
+            checkpoint = CodingCheckpoint(
+                checkpoint_id=f"cc_{phase.phase_id}",
+                task_id=lease.task_id,
+                run_id=lease.run_id,
+                seq=self._durability_seq,
+                loop_state=dict(loop_state),
+                workspace_revision=workspace_revision,
+                created_at=now,
+            )
+            completed = replace(
+                phase,
+                status=CodingPhaseStatus.COMPLETED,
+                completed_at=now,
+            )
+            self.checkpoints.append(checkpoint)
+            self.phases = [
+                completed if item.phase_id == phase.phase_id else item
+                for item in self.phases
+            ]
+            event = make_event(
+                task_id=lease.task_id,
+                seq=checkpoint.seq,
+                event_type="phase.completed",
+                payload={
+                    "phase": phase.kind.value,
+                    "attempt": phase.attempt,
+                    **dict(result),
+                },
+                now=now,
+                run_id=lease.run_id,
+                tool_call_id=tool_call_id,
+                checkpoint_id=checkpoint.checkpoint_id,
+            )
+            return PhaseCheckpointCommit(checkpoint, event, completed)
 
     async def create_run(self, run) -> None:
         self.created_runs.append(run)

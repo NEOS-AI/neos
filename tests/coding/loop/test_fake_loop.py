@@ -1,5 +1,6 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+from neos.coding.domain.durability import ExecutionLease
 from neos.coding.domain.events import make_event
 from neos.coding.domain.phases import CodingCheckpoint
 from neos.coding.loop.base import LoopDependencies, LoopInput
@@ -21,6 +22,14 @@ CHECKPOINT_AFTER_PLAN = CodingCheckpoint(
     },
     workspace_revision="fake:plan:1",
     created_at=NOW,
+)
+LEASE = ExecutionLease(
+    task_id="ct_1",
+    run_id="cr_1",
+    worker_id="worker-a",
+    fencing_token=1,
+    acquired_at=NOW,
+    expires_at=NOW + timedelta(seconds=30),
 )
 
 
@@ -123,3 +132,27 @@ async def test_checkpoint_identity_links_phase_completion_to_saved_state() -> No
     checkpoint = repository.checkpoints[0]
     assert completed.checkpoint_id == checkpoint.checkpoint_id
     assert completed.seq == checkpoint.seq
+
+
+async def test_fake_loop_uses_atomic_phase_commands() -> None:
+    repository = InMemoryCodingRunRepository()
+    repository.execution_leases["ct_1"] = LEASE
+    sink = RecordingEventSink()
+    loop = FakeDurableCodingLoop(clock=lambda: NOW)
+
+    events = [
+        event
+        async for event in loop.run(
+            INPUT,
+            None,
+            LoopDependencies(repository, sink, LEASE),
+        )
+    ]
+
+    assert repository.begin_phase_calls == 5
+    assert repository.phase_commit_calls == 5
+    assert all(
+        "current_instruction" in checkpoint.loop_state
+        for checkpoint in repository.checkpoints
+    )
+    assert events[-1].type == "run.completed"

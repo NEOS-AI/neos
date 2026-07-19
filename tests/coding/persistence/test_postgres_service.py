@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 
+import pytest
+
 from neos.coding.persistence.postgres import PostgresCodingService
 
 
@@ -125,7 +127,7 @@ async def test_event_and_outbox_are_inserted_in_same_transaction() -> None:
     )
 
 
-async def test_event_metadata_is_persisted_for_durable_replay() -> None:
+async def test_non_checkpoint_event_metadata_is_persisted_for_durable_replay() -> None:
     session = FakeSession()
 
     async def session_factory():
@@ -139,7 +141,6 @@ async def test_event_metadata_is_persisted_for_durable_replay() -> None:
         run_id="cr_1",
         turn_id="turn_1",
         tool_call_id="tool_1",
-        checkpoint_id="cc_1",
     )
 
     event_insert = next(
@@ -149,5 +150,17 @@ async def test_event_metadata_is_persisted_for_durable_replay() -> None:
     )
     sql, params = event_insert
     assert "checkpoint_id" in sql
-    assert params["checkpoint_id"] == "cc_1"
-    assert event.checkpoint_id == "cc_1"
+    assert params["checkpoint_id"] is None
+    assert event.checkpoint_id is None
+
+
+async def test_generic_append_rejects_checkpoint_identity() -> None:
+    service = PostgresCodingService(lambda: None)
+
+    with pytest.raises(ValueError, match="atomic checkpoint command"):
+        await service.append(
+            task_id="ct_1",
+            event_type="phase.completed",
+            payload={},
+            checkpoint_id="cc_1",
+        )
