@@ -67,20 +67,25 @@ class Worker:
         )
 
     async def _collect_candidates(
-        self, brief: str, effort: Effort, limit: int
+        self, search_query: str, effort: Effort, limit: int, *, brief: str = ""
     ) -> list[dict]:
-        """Discovery 단계 — URL 후보만 모은다. retrieval은 fetch_fn 독점(P3)."""
+        """Discovery 단계 — URL 후보만 모은다. retrieval은 fetch_fn 독점(P3).
+
+        `search_query`는 검색 엔진에 그대로 들어가는 짧은 질문이고, `brief`는
+        LLM tool-calling 경로가 맥락으로 쓰는 프롬프트 전문이다. 둘을 섞으면
+        검색이 0건을 반환한다.
+        """
         if self.skill_selector is None:
-            return await self._search(brief, limit)
+            return await self._search(search_query, limit)
 
         skills = self.skill_selector.candidates(effort)
         if not skills:
-            return await self._search(brief, limit)
+            return await self._search(search_query, limit)
 
         config = settings.config.deep_analysis
         effort_config = config.effort[effort.value]
         items, tokens = await run_discovery(
-            brief,
+            brief or search_query,
             skills,
             search_fn=self.search_fn,
             model=self._model,
@@ -92,7 +97,7 @@ class Worker:
         self._tokens += tokens
         if not items:
             # 스킬이 전부 실패했으면 web_search 단독 경로로 degrade한다.
-            return await self._search(brief, limit)
+            return await self._search(search_query, limit)
         return items
 
     async def investigate(
@@ -101,6 +106,7 @@ class Worker:
         effort: Effort,
         question_id: str,
         repairs: list[dict] | None = None,
+        question_text: str = "",
     ) -> WorkerResult:
         if effort not in {Effort.SCOUT, Effort.DIG}:
             raise ValueError(f"worker cannot execute effort {effort.value}")
@@ -125,10 +131,15 @@ class Worker:
                 brief, question_id, repairs, effort_config
             )
 
+        # 검색어는 원 질문이어야 한다. brief는 템플릿이 렌더링된 프롬프트
+        # 전문(~1KB)이라 그대로 검색 엔진에 넣으면 0건이 돌아온다 --
+        # 그러면 fetch할 URL이 없어 모든 클레임이 E_NO_EVIDENCE로 거절된다.
+        search_query = question_text or brief
         search_results = await self._collect_candidates(
-            brief,
+            search_query,
             effort,
             config.search_result_limit,
+            brief=brief,
         )
         fetched_by_url: dict[str, ProposedBlob] = {}
         for search_result in search_results:

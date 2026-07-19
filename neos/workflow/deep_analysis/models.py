@@ -18,6 +18,9 @@ class Assignment:
     brief: str
     effort: Effort
     repairs: list = field(default_factory=list)
+    # 검색어로 쓸 원 질문. brief는 템플릿이 렌더링된 프롬프트 전문(~1KB)이라
+    # 그대로 검색하면 결과가 0건이다. 비어 있으면 워커가 brief로 되돌아간다.
+    question_text: str = ""
 
 
 @dataclass

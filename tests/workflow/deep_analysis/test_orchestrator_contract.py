@@ -22,7 +22,7 @@ from neos.workflow.deep_analysis.synthesizer import Synthesizer
 
 
 class FakeWorker:
-    async def investigate(self, brief, effort, question_id, repairs=None):
+    async def investigate(self, brief, effort, question_id, repairs=None, question_text=""):
         blob = ProposedBlob(
             content_hash="abcdef0123456789",
             source_url="https://example.com/source",

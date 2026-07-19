@@ -109,3 +109,46 @@ async def test_worker_dig_degrades_to_plain_search_when_discovery_finds_nothing(
 
     assert [u["url"] for u in urls] == ["https://web.example/1"]
     assert worker._tokens == 13  # 실패했어도 쓴 토큰은 계상한다
+
+
+@pytest.mark.asyncio
+async def test_worker_searches_with_the_question_not_the_rendered_brief():
+    """실제 run이 verified 클레임을 0건 낸 회귀.
+
+    brief는 worker_brief.md가 렌더링된 프롬프트 전문(~1KB)이다. 그걸 그대로
+    검색 엔진에 넣으면 0건이 돌아오고, fetch할 URL이 없어 모든 클레임이
+    E_NO_EVIDENCE로 거절된다 -- 검증 사슬은 정상인데 근거가 없어 아무것도
+    통과하지 못한다.
+    """
+    seen: list[str] = []
+
+    async def recording_search_fn(query, k):
+        seen.append(query)
+        return [{"url": "https://ok.example/1", "title": "t", "snippet": "s"}]
+
+    worker = Worker(recording_search_fn)
+    worker._model = "claude-opus-4-6"
+
+    brief = "# 조사 지시\n" + ("맥락 " * 300)
+    await worker._collect_candidates(
+        "residual connection의 역할은?", Effort.DIG, 3, brief=brief
+    )
+
+    assert seen == ["residual connection의 역할은?"]
+    assert brief not in seen
+
+
+@pytest.mark.asyncio
+async def test_worker_falls_back_to_brief_when_question_text_is_absent():
+    """question_text가 비면 종전 동작(brief로 검색)으로 되돌아간다."""
+    seen: list[str] = []
+
+    async def recording_search_fn(query, k):
+        seen.append(query)
+        return []
+
+    worker = Worker(recording_search_fn)
+    worker._model = "claude-opus-4-6"
+    await worker._collect_candidates("brief-as-query", Effort.DIG, 3)
+
+    assert seen == ["brief-as-query"]

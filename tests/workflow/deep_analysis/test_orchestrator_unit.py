@@ -125,7 +125,7 @@ class FakeLedger:
 
 
 class FakeWorker:
-    async def investigate(self, brief, effort, question_id, repairs=None):
+    async def investigate(self, brief, effort, question_id, repairs=None, question_text=""):
         return WorkerResult(
             question_id=question_id,
             status="completed",

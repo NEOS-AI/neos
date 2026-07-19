@@ -22,7 +22,7 @@ class FakeSynthesizer:
 async def test_ac_b_cap_exhausted_question_splits():
     # 자식 cap을 작게 만들고, 워커가 cap 이상 토큰을 쓰게 해 다음 라운드 ladder가 SPLIT
     class Spender:
-        async def investigate(self, b, e, qid, repairs=None):
+        async def investigate(self, b, e, qid, repairs=None, question_text=""):
             blob = ProposedBlob("hh","http://x",200,"body")
             ev = ProposedEvidence("http://x","body","hh")
             # confidence 낮게 유지해 resolved 전이를 막고 open 복귀 → 재선택 → cap 소진 판정

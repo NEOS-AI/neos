@@ -39,7 +39,7 @@ async def test_ac_a_partial_claims_committed(monkeypatch):
     monkeypatch.setattr(mod, "_wall_clock_cap", lambda e: 0.05)
     class SlowPartial:
         def __init__(self): self._claims=[]; self._blobs=[ProposedBlob("hh","http://x",200,"body")]
-        async def investigate(self, b, e, qid, repairs=None): await asyncio.sleep(10)
+        async def investigate(self, b, e, qid, repairs=None, question_text=""): await asyncio.sleep(10)
         def flush_partial(self, qid):
             return WorkerResult(question_id=qid, status="partial",
                                 blobs=list(self._blobs), tokens_spent=10)
@@ -64,7 +64,7 @@ async def test_ac_a_partial_claims_committed(monkeypatch):
 async def test_ac_c_fail_streak_forces_split():
     calls = {"n": 0}
     class Flaky:
-        async def investigate(self, b, e, qid, repairs=None):
+        async def investigate(self, b, e, qid, repairs=None, question_text=""):
             calls["n"] += 1
             return WorkerResult(question_id=qid, status="failed", fail_reason="x")
         def flush_partial(self, qid): return WorkerResult(question_id=qid, status="partial")
@@ -85,7 +85,7 @@ async def test_ac_c_fail_streak_forces_split():
 @pytest.mark.asyncio
 async def test_ac_d_stops_at_global_cap():
     class Big:
-        async def investigate(self, b, e, qid, repairs=None):
+        async def investigate(self, b, e, qid, repairs=None, question_text=""):
             r = _ok_result(qid); r.tokens_spent = 4000; return r
         def flush_partial(self, qid): return WorkerResult(question_id=qid, status="partial")
     async with await db_manager.get_session() as s:

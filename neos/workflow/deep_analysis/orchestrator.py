@@ -155,6 +155,7 @@ class Orchestrator:
                     assignment.effort,
                     assignment.question_id,
                     repairs=assignment.repairs,
+                    question_text=assignment.question_text,
                 ),
                 timeout=_wall_clock_cap(assignment.effort),
             )
@@ -313,7 +314,13 @@ class Orchestrator:
                 token_cap=config.effort[effort.value].token_cap,
             )
             assignments.append(
-                Assignment(question.id, brief, effort, repairs)
+                Assignment(
+                    question.id,
+                    brief,
+                    effort,
+                    repairs,
+                    question_text=question.text,
+                )
             )
         return assignments, splits
 
