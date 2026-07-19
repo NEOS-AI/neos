@@ -1,5 +1,7 @@
 """job 러너 단위 테스트 — Fake 세션/오케스트레이터만 쓴다(Postgres 불필요)."""
 
+import asyncio
+import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -143,6 +145,67 @@ async def test_execute_run_records_failure_in_a_fresh_session_and_reraises():
     assert kinds(fail_session) == [jobs.JOB_FAILED]
     assert fail_session.run.status == "failed"
     assert fail_session.commits >= 1
+
+
+@pytest.mark.asyncio
+async def test_execute_run_timeout_records_durable_failure():
+    run_session = FakeSession()
+    failed_run = SimpleNamespace(status="running", report_path=None)
+    fail_session = FakeSession(run=failed_run)
+
+    async def build(sess, run_id, *, profile, checkpoint):
+        class Orchestrator:
+            async def run(self, question):
+                await asyncio.Event().wait()
+
+        return Orchestrator()
+
+    with pytest.raises(asyncio.TimeoutError):
+        await jobs.execute_run(
+            make_factory([run_session, fail_session]),
+            "run00001",
+            "질문",
+            "dev",
+            timeout_seconds=0.01,
+            build_orchestrator_fn=build,
+        )
+
+    assert kinds(run_session) == [jobs.JOB_STARTED]
+    assert kinds(fail_session) == [jobs.JOB_FAILED]
+    assert failed_run.status == "failed"
+    payload = json.loads(fail_session.added[-1].payload)
+    assert payload["error"] == "deep_analysis job timed out after 0.01 seconds"
+
+
+@pytest.mark.asyncio
+async def test_resume_run_forwards_timeout_to_execution():
+    stored_run = SimpleNamespace(
+        status="running",
+        root_question="원래 질문",
+        profile="dev",
+    )
+    lookup_session = FakeSession(run=stored_run)
+    run_session = FakeSession()
+    fail_session = FakeSession(run=stored_run)
+
+    async def build(sess, run_id, *, profile, checkpoint):
+        class Orchestrator:
+            async def run(self, question):
+                await asyncio.Event().wait()
+
+        return Orchestrator()
+
+    with pytest.raises(asyncio.TimeoutError):
+        await jobs.resume_run(
+            make_factory([lookup_session, run_session, fail_session]),
+            "run00001",
+            timeout_seconds=0.01,
+            build_orchestrator_fn=build,
+        )
+
+    assert kinds(run_session) == [jobs.JOB_RESUMED]
+    assert kinds(fail_session) == [jobs.JOB_FAILED]
+    assert stored_run.status == "failed"
 
 
 @pytest.mark.asyncio
