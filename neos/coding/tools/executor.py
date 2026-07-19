@@ -4,7 +4,6 @@ import hashlib
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from pathlib import PurePosixPath
 from typing import Literal
 
 from neos.coding.sandbox.base import (
@@ -18,6 +17,7 @@ from neos.coding.sandbox.base import (
     SandboxTimeout,
     SearchMatch,
 )
+from neos.coding.sandbox.observability import bounded_executable_category
 from neos.coding.tools.registry import ValidatedToolCall
 
 
@@ -120,7 +120,7 @@ class SandboxToolExecutor:
             return self._command_result(
                 result,
                 await self._revision(session),
-                audit={"executable_category": PurePosixPath(argv[0]).name},
+                audit={"executable_category": bounded_executable_category(argv[0])},
             )
         return ToolResult(
             "denied",
@@ -179,10 +179,15 @@ class SandboxToolExecutor:
         *,
         audit: Mapping[str, object] | None = None,
     ) -> ToolResult:
-        status: Literal["ok", "error", "denied"] = (
-            "error" if result.timed_out else "ok"
+        failed = result.timed_out or result.exit_code not in {0, None}
+        status: Literal["ok", "error", "denied"] = "error" if failed else "ok"
+        reason = (
+            "sandbox_timeout"
+            if result.timed_out
+            else "command_failed"
+            if result.exit_code not in {0, None}
+            else "ok"
         )
-        reason = "sandbox_timeout" if result.timed_out else "ok"
         stdout = self._bytes_mapping(
             result.stdout, already_truncated=result.stdout_truncated
         )

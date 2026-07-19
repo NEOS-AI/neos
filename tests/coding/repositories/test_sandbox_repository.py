@@ -171,6 +171,18 @@ async def test_worker_replace_validates_lease_in_same_update_as_binding_cas() ->
     assert params["worker_id"] == "worker-1"
 
 
+async def test_worker_can_validate_lease_transactionally_before_lifecycle_change() -> None:
+    session = Session([(1,)])
+    repository = PostgresSandboxBindingRepository(factory(session))
+
+    await repository.validate_fenced(lease=LEASE, now=NOW)
+
+    query, params = session.calls[0]
+    assert "coding_run_leases" in query
+    assert "FOR UPDATE" in query
+    assert params["fencing_token"] == 7
+
+
 async def test_worker_replace_rejects_stale_lease_after_atomic_cas_miss() -> None:
     session = Session([None, None])
     repository = PostgresSandboxBindingRepository(factory(session))

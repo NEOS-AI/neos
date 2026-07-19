@@ -14,6 +14,7 @@ from neos.coding.loop.anthropic import CodingLoopFailure
 
 class CodingTaskOutcome(StrEnum):
     COMPLETED = "completed"
+    CONTINUING = "continuing"
     FAILED = "failed"
     LEASE_BUSY = "lease_busy"
     STALE = "stale"
@@ -37,12 +38,14 @@ class CodingTaskRunner:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         on_retry: Callable[[str], None] | None = None,
         propagate_exceptions: tuple[type[BaseException], ...] = (),
+        advance_until_complete: bool = False,
     ) -> None:
         self._runs = runs
         self._policy = policy or CodingTaskExecutionPolicy()
         self._sleep = sleep
         self._on_retry = on_retry
         self._propagate_exceptions = propagate_exceptions
+        self._advance_until_complete = advance_until_complete
 
     async def run(
         self,
@@ -106,4 +109,6 @@ class CodingTaskRunner:
             failures = 0
             if event is None or event.type == "run.completed":
                 return CodingTaskOutcome.COMPLETED
+            if not self._advance_until_complete:
+                return CodingTaskOutcome.CONTINUING
         raise asyncio.CancelledError

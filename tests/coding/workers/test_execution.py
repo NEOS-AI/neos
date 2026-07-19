@@ -61,6 +61,21 @@ async def test_runner_returns_completed_for_terminal_event() -> None:
     assert runs.ensure_calls == ["ct_1"]
 
 
+async def test_runner_advances_exactly_one_safe_point_per_delivery() -> None:
+    runs = RecordingRuns(
+        [SimpleNamespace(type="phase.checkpointed"), SimpleNamespace(type="run.completed")]
+    )
+
+    outcome = await CodingTaskRunner(runs=runs).run(
+        task_id="ct_1",
+        worker_id="worker-1",
+        failure_error_code="worker_retry_exhausted",
+    )
+
+    assert outcome is CodingTaskOutcome.CONTINUING
+    assert runs.advance_calls == [("ct_1", "worker-1")]
+
+
 @pytest.mark.parametrize(
     ("effect", "expected"),
     [

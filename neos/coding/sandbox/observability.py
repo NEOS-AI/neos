@@ -50,10 +50,16 @@ _CODING_ERROR_CODES = {
     "sandbox_policy_violation",
     "sandbox_not_found",
     "sandbox_error",
+    "command_failed",
     "tool_execution_failed",
     "tool_outcome_unknown",
 }
 _logger = logging.getLogger(__name__)
+
+
+def bounded_executable_category(executable: str) -> str:
+    name = executable.rsplit("/", 1)[-1]
+    return _EXECUTABLE_CATEGORIES.get(name, "other")
 
 
 def _bounded_error_code(error_code: str | None) -> str | None:
@@ -85,14 +91,10 @@ class SandboxAuditEvent:
         outcome: str,
         error_code: str | None = None,
     ) -> SandboxAuditEvent:
-        executable = argv[0].rsplit("/", 1)[-1] if argv else ""
         return cls(
             sandbox_id=sandbox_id,
             operation="command",
-            executable_category=_EXECUTABLE_CATEGORIES.get(
-                executable,
-                "other",
-            ),
+            executable_category=bounded_executable_category(argv[0] if argv else ""),
             environment_names=tuple(sorted(env)),
             stdin_bytes=max(0, stdin_bytes),
             stdout_bytes=max(0, stdout_bytes),

@@ -25,6 +25,13 @@ class PostgresSandboxBindingRepository:
             )
         return self._from_row(result.first())
 
+    async def validate_fenced(
+        self, *, lease: ExecutionLease, now: datetime
+    ) -> None:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._require_current_lease(session, lease=lease, now=now)
+
     async def create_fenced(
         self,
         binding: SandboxBinding,

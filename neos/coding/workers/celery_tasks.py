@@ -9,6 +9,7 @@ from neos.coding.workers.celery_runtime import (
     discover_coding_tasks,
     run_coding_delivery,
 )
+from neos.coding.workers.execution import CodingTaskOutcome
 from neos.coding.workers.dispatcher import (
     CeleryCodingTaskDispatcher,
     CodingDispatchSource,
@@ -42,6 +43,12 @@ def execute_coding_task(self, task_id: str) -> dict[str, str]:
         metrics.coding_worker_tasks_total.labels(
             outcome=outcome.value
         ).inc()
+        if outcome is CodingTaskOutcome.CONTINUING:
+            CeleryCodingTaskDispatcher(
+                app=app,
+                queue=settings.CODING_CELERY_QUEUE,
+                metrics=metrics,
+            ).enqueue(task_id, source=CodingDispatchSource.CONTINUATION)
     except (
         ConnectionError,
         OSError,

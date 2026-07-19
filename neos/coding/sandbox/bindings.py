@@ -53,6 +53,10 @@ class SandboxBindingRepository(Protocol):
         now: datetime,
     ) -> bool: ...
 
+    async def validate_fenced(
+        self, *, lease: ExecutionLease, now: datetime
+    ) -> None: ...
+
     async def replace_fenced(
         self,
         binding: SandboxBinding,
@@ -139,6 +143,7 @@ class SandboxBindingService:
         self._verify_sandbox(current, sandbox)
         resumed = sandbox.state is SandboxState.SUSPENDED
         if resumed:
+            await self._repository.validate_fenced(lease=lease, now=self._clock())
             sandbox = await self._provider.resume(sandbox.sandbox_id)
         if sandbox.state is not SandboxState.RUNNING or not sandbox.healthy:
             raise SandboxBindingError("sandbox_unhealthy", retryable=True)
@@ -155,6 +160,12 @@ class SandboxBindingService:
             )
             if rebound is None:
                 winner = await self._repository.get(current.task_id)
+                if (
+                    resumed
+                    and winner is not None
+                    and winner.sandbox_id != sandbox.sandbox_id
+                ):
+                    await self._provider.suspend(sandbox.sandbox_id)
                 if winner is None:
                     raise SandboxBindingError(
                         "sandbox_binding_ownership_lost", retryable=False

@@ -55,6 +55,7 @@ def test_dispatch_source_is_a_bounded_enum() -> None:
     assert {item.value for item in CodingDispatchSource} == {
         "api",
         "reconciliation",
+        "continuation",
     }
 
 

@@ -59,6 +59,29 @@ def test_execute_task_returns_only_bounded_identity_and_outcome(
     assert result == {"task_id": "ct_1", "outcome": "completed"}
 
 
+def test_nonterminal_delivery_enqueues_exactly_one_continuation(monkeypatch) -> None:
+    calls = []
+
+    async def run(**kwargs):
+        return CodingTaskOutcome.CONTINUING
+
+    class RecordingDispatcher:
+        def __init__(self, **kwargs):
+            pass
+
+        def enqueue(self, task_id, *, source):
+            calls.append((task_id, source.value))
+            return "next-delivery"
+
+    monkeypatch.setattr(celery_tasks, "run_coding_delivery", run)
+    monkeypatch.setattr(celery_tasks, "CeleryCodingTaskDispatcher", RecordingDispatcher)
+
+    result = celery_tasks.execute_coding_task.run("ct_1")
+
+    assert result == {"task_id": "ct_1", "outcome": "continuing"}
+    assert calls == [("ct_1", "continuation")]
+
+
 def test_execute_task_records_active_and_bounded_outcome_metrics(
     monkeypatch,
 ) -> None:

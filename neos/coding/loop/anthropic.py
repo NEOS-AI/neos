@@ -135,6 +135,8 @@ class AnthropicCodingLoop:
         state = self._restore(input, checkpoint)
         if state.terminal_pending:
             return
+        if state.consecutive_tool_errors >= self._config.max_consecutive_tool_errors:
+            raise CodingLoopFailure("tool_error_budget_exceeded", retryable=False)
         bound = await self._bindings.resolve(lease)
         if state.has_pending_tool:
             async for event in self._advance_one_tool(input, state, bound, deps):
@@ -206,6 +208,8 @@ class AnthropicCodingLoop:
         next_state = self._completed_turn(state, text_parts, calls, completion)
         self._check_usage_budgets(next_state)
         if not calls:
+            if completion.stop_reason != "end_turn":
+                raise CodingLoopFailure("model_output_incomplete", retryable=False)
             next_state = self._with_terminal_pending(next_state)
             committed = await deps.repository.commit_model_checkpoint(
                 lease=deps.lease,
@@ -388,8 +392,6 @@ class AnthropicCodingLoop:
             state,
             ToolResultContent(call.tool_call_id, canonical_status, result),
         )
-        if after.consecutive_tool_errors > self._config.max_consecutive_tool_errors:
-            raise CodingLoopFailure("tool_error_budget_exceeded", retryable=False)
         revision = str(
             result.get("workspace_revision", bound.binding.workspace_revision)
         )
@@ -403,6 +405,8 @@ class AnthropicCodingLoop:
             now=self._clock(),
         )
         yield committed.event
+        if after.consecutive_tool_errors >= self._config.max_consecutive_tool_errors:
+            raise CodingLoopFailure("tool_error_budget_exceeded", retryable=False)
 
     def _completed_turn(self, state, text_parts, calls, completion):
         content = []

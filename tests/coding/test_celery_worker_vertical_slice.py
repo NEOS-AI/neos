@@ -27,7 +27,7 @@ class EagerRecordingDispatcher:
         self.deliveries: list[str] = []
 
     def enqueue(self, task_id: str, *, source: CodingDispatchSource) -> str:
-        assert source is CodingDispatchSource.API
+        assert source in {CodingDispatchSource.API, CodingDispatchSource.CONTINUATION}
         self.deliveries.append(task_id)
         return f"delivery-{len(self.deliveries)}"
 
@@ -93,13 +93,16 @@ class CeleryWorkerHarness:
     async def drain_deliveries(self) -> list[CodingTaskOutcome]:
         outcomes = []
         for index, task_id in enumerate(self.dispatcher.deliveries, start=1):
-            outcomes.append(
-                await CodingTaskRunner(runs=self.runtime.runs).run(
+            outcome = await CodingTaskRunner(runs=self.runtime.runs).run(
                     task_id=task_id,
                     worker_id=f"celery-{index}",
                     failure_error_code="worker_retry_exhausted",
                 )
-            )
+            outcomes.append(outcome)
+            if outcome is CodingTaskOutcome.CONTINUING:
+                self.dispatcher.enqueue(
+                    task_id, source=CodingDispatchSource.CONTINUATION
+                )
         return outcomes
 
     def completed_tool_count(self, tool_call_id: str) -> int:
@@ -115,7 +118,8 @@ async def test_post_commit_delivery_runs_fake_loop_to_completion() -> None:
     task = await harness.create_task()
     outcomes = await harness.drain_deliveries()
 
-    assert outcomes == [CodingTaskOutcome.COMPLETED]
+    assert outcomes[-1] is CodingTaskOutcome.COMPLETED
+    assert all(item is CodingTaskOutcome.CONTINUING for item in outcomes[:-1])
     assert harness.repository.active_run.task_id == task.task_id
     assert harness.repository.task_statuses[task.task_id] == "completed"
     assert harness.repository.checkpoints[0].loop_state[
@@ -132,7 +136,7 @@ async def test_late_duplicate_delivery_reuses_terminal_canonical_run() -> None:
 
     outcomes = await harness.drain_deliveries()
 
-    assert outcomes == [
+    assert outcomes[-2:] == [
         CodingTaskOutcome.COMPLETED,
         CodingTaskOutcome.COMPLETED,
     ]
@@ -159,11 +163,15 @@ async def test_replacement_delivery_resumes_after_committed_checkpoint() -> None
         pass
     harness.now += timedelta(seconds=31)
 
-    outcome = await CodingTaskRunner(runs=harness.runtime.runs).run(
-        task_id=harness.task_id,
-        worker_id="celery-replacement",
-        failure_error_code="worker_retry_exhausted",
-    )
+    outcome = CodingTaskOutcome.CONTINUING
+    delivery = 0
+    while outcome is CodingTaskOutcome.CONTINUING:
+        delivery += 1
+        outcome = await CodingTaskRunner(runs=harness.runtime.runs).run(
+            task_id=harness.task_id,
+            worker_id=f"celery-replacement-{delivery}",
+            failure_error_code="worker_retry_exhausted",
+        )
 
     completed = [
         (phase.kind.value, phase.attempt)

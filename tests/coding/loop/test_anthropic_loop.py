@@ -479,3 +479,42 @@ async def test_text_completion_marks_terminal_intent_for_next_invocation() -> No
     assert checkpoint.loop_state["terminal_pending"] is True
     assert await collect(h, checkpoint) == []
     assert len(h.model.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "future_reason"])
+async def test_nonterminal_no_tool_stop_reasons_fail_closed(stop_reason) -> None:
+    h = harness([[TextDelta("partial"), ModelCompleted(stop_reason, ModelUsage(2, 1))]])
+
+    with pytest.raises(CodingLoopFailure) as caught:
+        await collect(h)
+
+    assert caught.value.code == "model_output_incomplete"
+    assert caught.value.retryable is False
+    assert h.repository.checkpoints == []
+
+
+@pytest.mark.asyncio
+async def test_tool_error_budget_checkpoints_before_failure_and_does_not_repeat_event() -> None:
+    config = AnthropicLoopConfig(
+        model="claude-test", system="code", max_consecutive_tool_errors=1
+    )
+    h = harness([[tool_call(), completed()]], config=config)
+    h.executor.execute = lambda session, call: _error_result()
+
+    first_events = []
+    with pytest.raises(CodingLoopFailure, match="tool_error_budget_exceeded"):
+        async for event in h.loop.run(INPUT, None, h.deps):
+            first_events.append(event)
+    checkpoint = h.repository.checkpoints[-1]
+    assert sum(event.type == "tool.completed" for event in first_events) == 1
+
+    with pytest.raises(CodingLoopFailure, match="tool_error_budget_exceeded"):
+        await collect(h, checkpoint)
+    assert sum(event.type == "tool.completed" for event in first_events) == 1
+
+
+async def _error_result():
+    return ToolResult(
+        "error", "command_failed", None, None, False, None, "1", exit_code=1
+    )

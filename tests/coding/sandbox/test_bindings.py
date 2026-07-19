@@ -83,6 +83,7 @@ class Repository:
         self.replaced: list[tuple[SandboxBinding, int]] = []
         self.deleted: list[tuple[str, int]] = []
         self.lose_next_cas_to: SandboxBinding | None = None
+        self.stale = False
 
     async def get(self, task_id: str) -> SandboxBinding | None:
         return self.current if self.current and self.current.task_id == task_id else None
@@ -95,6 +96,12 @@ class Repository:
             return False
         self.current = value
         return True
+
+    async def validate_fenced(self, *, lease, now: datetime) -> None:
+        if self.stale or lease.expires_at <= now:
+            from neos.coding.domain.durability import StaleExecutionLease
+
+            raise StaleExecutionLease(lease.task_id)
 
     async def replace_fenced(
         self,
@@ -243,6 +250,20 @@ async def test_suspended_sandbox_is_resumed() -> None:
     assert ("resume", "sb_old") in provider.calls
     assert bound.binding.health_state == "healthy"
     assert repository.current == bound.binding
+
+
+async def test_stale_lease_cannot_resume_suspended_sandbox() -> None:
+    repository = Repository(binding(health_state="suspended"))
+    repository.stale = True
+    provider = Provider({"sb_old": sandbox("sb_old", state=SandboxState.SUSPENDED)})
+
+    from neos.coding.domain.durability import StaleExecutionLease
+
+    with pytest.raises(StaleExecutionLease):
+        await service(repository, provider).resolve(lease())
+
+    assert provider.sandboxes["sb_old"].state is SandboxState.SUSPENDED
+    assert ("resume", "sb_old") not in provider.calls
 
 
 async def test_suspended_sandbox_resume_persists_health_and_changed_run() -> None:

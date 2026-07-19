@@ -108,6 +108,9 @@ class InMemorySandboxBindingRepository:
         if current != lease or current.expires_at <= now:
             raise StaleExecutionLease(lease.task_id)
 
+    async def validate_fenced(self, *, lease, now):
+        self._require_lease(lease, now)
+
     async def create_fenced(self, binding, *, lease, now):
         self._require_lease(lease, now)
         if self.current is not None:

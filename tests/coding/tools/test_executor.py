@@ -168,6 +168,7 @@ async def test_command_bounds_stdout_and_stderr_separately() -> None:
     assert mapping["stderr"]["truncated"] is True
     assert mapping["exit_code"] == 3
     assert result.truncated is True
+    assert (result.status, result.reason_code) == ("error", "command_failed")
 
 
 @pytest.mark.asyncio
@@ -179,7 +180,17 @@ async def test_execute_never_serializes_environment_values() -> None:
     payload = json.dumps(result.to_mapping())
     assert "secret" not in payload
     assert "-q" not in payload
-    assert result.audit == {"executable_category": "pytest"}
+    assert result.audit == {"executable_category": "other"}
+
+
+@pytest.mark.asyncio
+async def test_execute_normalizes_hostile_executable_audit_category() -> None:
+    result = await SandboxToolExecutor(10, 10).execute(
+        FakeSession(),
+        call("execute.v1", {"argv": ["secret-client"], "cwd": ".", "env": {}, "stdin": "", "timeout_sec": 1, "max_output_bytes": 10}),
+    )
+
+    assert result.audit == {"executable_category": "other"}
 
 
 @pytest.mark.asyncio

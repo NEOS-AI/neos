@@ -10,6 +10,7 @@ EXECUTE_CODING_TASK = (
 class CodingDispatchSource(StrEnum):
     API = "api"
     RECONCILIATION = "reconciliation"
+    CONTINUATION = "continuation"
 
 
 class CodingTaskDispatcher(Protocol):
