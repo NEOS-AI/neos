@@ -3,9 +3,10 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
-from neos.coding.domain.durability import (
-    RunAlreadyLeased,
-    StaleExecutionLease,
+from neos.coding.workers.execution import (
+    CodingTaskExecutionPolicy,
+    CodingTaskOutcome,
+    CodingTaskRunner,
 )
 
 
@@ -36,14 +37,11 @@ class CodingDevelopmentSupervisor:
 
         self.worker_id = worker_id or f"coding-dev-{uuid4().hex}"
         self.outcomes: list[str] = []
-        self._runs = runs
         self._work_repository = work_repository
         self._metrics = metrics
         self._reconciliation_interval = reconciliation_interval
         self._discovery_batch_size = discovery_batch_size
-        self._retry_backoffs = retry_backoffs
         self._shutdown_timeout = shutdown_timeout
-        self._sleep = sleep
         self._pending: asyncio.Queue[str] = asyncio.Queue()
         self._queued: set[str] = set()
         self._active: dict[str, asyncio.Task[None]] = {}
@@ -52,6 +50,14 @@ class CodingDevelopmentSupervisor:
         self._idle = asyncio.Event()
         self._idle.set()
         self._stop_requested = asyncio.Event()
+        self._runner = CodingTaskRunner(
+            runs=runs,
+            policy=CodingTaskExecutionPolicy(
+                retry_backoffs=retry_backoffs
+            ),
+            sleep=sleep,
+            on_retry=self._record_retry,
+        )
 
     @property
     def is_running(self) -> bool:
@@ -166,43 +172,16 @@ class CodingDevelopmentSupervisor:
             self.notify(task_id)
 
     async def _run_task(self, task_id: str) -> None:
-        await self._runs.ensure_started(task_id=task_id)
-        failures = 0
-        while self._accepting:
-            try:
-                event = await self._runs.advance_one_safe_point(
-                    task_id=task_id, worker_id=self.worker_id
-                )
-            except RunAlreadyLeased:
-                self._record_outcome("lease_busy")
-                return
-            except StaleExecutionLease:
-                self._record_stale_write()
-                return
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                if failures >= len(self._retry_backoffs):
-                    try:
-                        await self._runs.fail_active_run(
-                            task_id=task_id,
-                            worker_id=self.worker_id,
-                            error_code="supervisor_retry_exhausted",
-                        )
-                    except RunAlreadyLeased:
-                        self._record_outcome("lease_busy")
-                        return
-                    self._record_outcome("failed")
-                    return
-                delay = self._retry_backoffs[failures]
-                failures += 1
-                self._record_retry("unexpected")
-                await self._sleep(delay)
-                continue
-            failures = 0
-            if event is None or event.type == "run.completed":
-                self._record_outcome("completed")
-                return
+        outcome = await self._runner.run(
+            task_id=task_id,
+            worker_id=self.worker_id,
+            failure_error_code="supervisor_retry_exhausted",
+            keep_running=lambda: self._accepting,
+        )
+        if outcome is CodingTaskOutcome.STALE:
+            self._record_stale_write()
+            return
+        self._record_outcome(outcome.value)
 
     def _record_outcome(self, outcome: str) -> None:
         self.outcomes.append(outcome)
