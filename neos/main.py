@@ -43,6 +43,7 @@ from neos.api.handlers.coding_handlers import router as coding_router
 from neos.api.handlers.coding_ws_handlers import router as coding_ws_router
 from neos.coding.runtime import (
     close_coding_transport,
+    coding_runtime,
     initialize_coding_transport,
     start_coding_outbox_dispatcher,
 )
@@ -164,6 +165,10 @@ async def lifespan(app: FastAPI):
         coding_outbox_task = start_coding_outbox_dispatcher()
         background_tasks.append(coding_outbox_task)
         logger.info("✅ Coding outbox dispatcher started")
+
+        if coding_runtime.supervisor is not None:
+            await coding_runtime.supervisor.start()
+            logger.info("✅ Coding development supervisor started")
 
         # StreamManager 시작 (Phase 3 - SSE 재연결 지원)
         logger.info("📡 Starting SSE Stream Manager...")
@@ -305,6 +310,10 @@ async def lifespan(app: FastAPI):
     logger.info("🔄 Shutting down Multi-Agent AI System...")
 
     try:
+        if coding_runtime.supervisor is not None:
+            await coding_runtime.supervisor.stop()
+            logger.info("✅ Coding development supervisor stopped")
+
         # Cancel background tasks
         for task in background_tasks:
             task.cancel()
