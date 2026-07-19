@@ -4,6 +4,7 @@ import pytest
 
 from neos.workflow.deep_analysis.text_norm import (
     claim_hash,
+    excerpt_match_score,
     excerpt_matches,
     normalize_for_hash,
     normalize_for_match,
@@ -58,3 +59,26 @@ def test_empty_or_unrelated_excerpt_does_not_match():
         "completely unrelated content here",
         0.92,
     )
+
+
+def test_excerpt_match_score_reports_exact_and_empty_cases():
+    assert excerpt_match_score("quick brown fox", "quick brown fox", 0.92) == 1.0
+    assert excerpt_match_score("", "source", 0.92) == 0.0
+
+
+def test_excerpt_match_score_preserves_boolean_match_decision():
+    cases = [
+        (
+            "mixture of experts routing scheme",
+            "GLM uses a mixture-of-experts routing scheme for efficiency",
+        ),
+        (
+            "quantum entanglement theory",
+            "completely unrelated content here",
+        ),
+    ]
+
+    for excerpt, raw in cases:
+        score = excerpt_match_score(excerpt, raw, 0.92)
+        assert excerpt_matches(excerpt, raw, 0.92) is (score >= 0.92)
+        assert 0.0 <= score <= 1.0

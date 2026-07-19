@@ -65,6 +65,17 @@ async def test_no_evidence_fails_before_blob_read():
 
     assert not verdict.ok
     assert verdict.code == "E_NO_EVIDENCE"
+    assert verdict.diagnostics == {
+        "deterministic": "rejected",
+        "deterministic_code": "E_NO_EVIDENCE",
+        "evidence_count": 0,
+        "source_count": 0,
+        "fetched_source_count": 0,
+        "dead_source_count": 0,
+        "excerpt_chars": 0,
+        "best_quote_score": None,
+        "quote_threshold": 0.92,
+    }
     assert ledger.reads == []
 
 
@@ -77,6 +88,9 @@ async def test_missing_or_dead_source_fails_from_blob_metadata():
 
     assert missing.code == "E_SOURCE_DEAD"
     assert dead.code == "E_SOURCE_DEAD"
+    assert missing.diagnostics["fetched_source_count"] == 0
+    assert missing.diagnostics["dead_source_count"] == 1
+    assert missing.diagnostics["best_quote_score"] is None
 
 
 @pytest.mark.asyncio
@@ -92,6 +106,11 @@ async def test_quote_mismatch_is_caught_with_salvage_url():
     assert not verdict.ok
     assert verdict.code == "E_QUOTE_MISMATCH"
     assert verdict.salvage == "https://example.com"
+    assert verdict.diagnostics["deterministic"] == "rejected"
+    assert verdict.diagnostics["deterministic_code"] == "E_QUOTE_MISMATCH"
+    assert verdict.diagnostics["fetched_source_count"] == 1
+    assert verdict.diagnostics["dead_source_count"] == 0
+    assert 0.0 <= verdict.diagnostics["best_quote_score"] < 0.92
 
 
 @pytest.mark.asyncio
@@ -104,6 +123,7 @@ async def test_confidence_above_unique_source_cap_fails():
 
     assert not verdict.ok
     assert verdict.code == "E_CONFIDENCE_INFLATED"
+    assert verdict.diagnostics["best_quote_score"] == 1.0
 
 
 @pytest.mark.asyncio
@@ -116,3 +136,14 @@ async def test_valid_claim_passes_without_network_io():
 
     assert verdict.ok
     assert verdict.code == ""
+    assert verdict.diagnostics == {
+        "deterministic": "passed",
+        "deterministic_code": "",
+        "evidence_count": 1,
+        "source_count": 1,
+        "fetched_source_count": 1,
+        "dead_source_count": 0,
+        "excerpt_chars": len("real source text"),
+        "best_quote_score": 1.0,
+        "quote_threshold": 0.92,
+    }
