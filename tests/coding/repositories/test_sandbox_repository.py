@@ -84,6 +84,18 @@ async def test_create_uses_conflict_safe_insert() -> None:
     assert params["sandbox_id"] == "sb_1"
 
 
+async def test_get_maps_binding_row() -> None:
+    session = Session([row(BINDING)])
+    repository = PostgresSandboxBindingRepository(factory(session))
+
+    found = await repository.get("ct_1")
+
+    query, params = session.calls[0]
+    assert "FROM coding_sandbox_bindings" in query
+    assert params == {"task_id": "ct_1"}
+    assert found == BINDING
+
+
 async def test_replace_uses_version_compare_and_swap_and_maps_returned_row() -> None:
     replacement = replace(BINDING, sandbox_id="sb_2", workspace_revision="4")
     session = Session([row(replace(replacement, version=2))])
@@ -106,3 +118,24 @@ async def test_replace_returns_none_when_compare_and_swap_loses() -> None:
     updated = await repository.replace(BINDING, expected_version=4, now=NOW)
 
     assert updated is None
+
+
+async def test_delete_uses_version_cas_and_returns_result() -> None:
+    session = Session([("ct_1",)])
+    repository = PostgresSandboxBindingRepository(factory(session))
+
+    deleted = await repository.delete("ct_1", expected_version=3)
+
+    query, params = session.calls[0]
+    assert "DELETE FROM coding_sandbox_bindings" in query
+    assert "WHERE task_id = :task_id AND version = :expected_version" in query
+    assert "RETURNING task_id" in query
+    assert params == {"task_id": "ct_1", "expected_version": 3}
+    assert deleted is True
+
+
+async def test_delete_returns_false_when_version_cas_loses() -> None:
+    session = Session([None])
+    repository = PostgresSandboxBindingRepository(factory(session))
+
+    assert await repository.delete("ct_1", expected_version=3) is False

@@ -47,6 +47,8 @@ def binding(
     snapshot_id: str | None = None,
     version: int = 1,
     mutation_count: int = 0,
+    health_state: str = "healthy",
+    workspace_revision: str = "0",
 ) -> SandboxBinding:
     return SandboxBinding(
         task_id="ct_1",
@@ -54,9 +56,9 @@ def binding(
         sandbox_id=sandbox_id,
         provider="fake",
         image_digest="sha256:image",
-        workspace_revision="0",
+        workspace_revision=workspace_revision,
         latest_snapshot_id=snapshot_id,
-        health_state="healthy",
+        health_state=health_state,
         mutation_count=mutation_count,
         version=version,
     )
@@ -200,12 +202,25 @@ async def test_healthy_running_sandbox_is_reused() -> None:
 
 
 async def test_suspended_sandbox_is_resumed() -> None:
-    repository = Repository(binding())
+    repository = Repository(binding(health_state="suspended"))
     provider = Provider({"sb_old": sandbox("sb_old", state=SandboxState.SUSPENDED)})
 
-    await service(repository, provider).resolve("ct_1", "cr_2")
+    bound = await service(repository, provider).resolve("ct_1", "cr_1")
 
     assert ("resume", "sb_old") in provider.calls
+    assert bound.binding.health_state == "healthy"
+    assert repository.current == bound.binding
+
+
+async def test_suspended_sandbox_resume_persists_health_and_changed_run() -> None:
+    repository = Repository(binding(health_state="suspended"))
+    provider = Provider({"sb_old": sandbox("sb_old", state=SandboxState.SUSPENDED)})
+
+    bound = await service(repository, provider).resolve("ct_1", "cr_2")
+
+    assert bound.binding.health_state == "healthy"
+    assert bound.binding.run_id == "cr_2"
+    assert repository.current == bound.binding
 
 
 async def test_missing_sandbox_restores_latest_snapshot_and_swaps_binding() -> None:
@@ -253,6 +268,27 @@ async def test_cas_loser_destroys_only_newly_restored_sandbox() -> None:
     assert ("destroy", "sb_winner") not in provider.calls
 
 
+async def test_restore_cas_loss_to_terminal_does_not_recreate() -> None:
+    class TerminalRaceRepository(Repository):
+        async def replace(self, value, *, expected_version, now):
+            self.current = None
+            return None
+
+    repository = TerminalRaceRepository(binding(snapshot_id="ss_latest"))
+    provider = Provider()
+
+    with pytest.raises(SandboxBindingError) as raised:
+        await service(repository, provider).resolve("ct_1", "cr_2")
+
+    assert raised.value.code == "sandbox_binding_ownership_lost"
+    assert raised.value.retryable is False
+    assert provider.calls == [
+        ("get", "sb_old"),
+        ("restore", "ss_latest"),
+        ("destroy", "sb_restored"),
+    ]
+
+
 async def test_successful_mutations_snapshot_at_cadence() -> None:
     repository = Repository(binding())
     provider = Provider({"sb_old": sandbox("sb_old", revision=2)})
@@ -266,6 +302,136 @@ async def test_successful_mutations_snapshot_at_cadence() -> None:
     assert second.mutation_count == 0
 
 
+async def test_mutation_cas_conflict_reconciles_winner_and_snapshots_once() -> None:
+    winner = binding(
+        version=2,
+        mutation_count=1,
+        workspace_revision="4",
+    )
+    repository = Repository(binding())
+    repository.lose_next_cas_to = winner
+    provider = Provider({"sb_old": sandbox("sb_old", revision=5)})
+
+    updated = await service(repository, provider, cadence=2).record_mutation(
+        "ct_1", workspace_revision=5
+    )
+
+    assert updated.workspace_revision == "5"
+    assert updated.mutation_count == 0
+    assert updated.latest_snapshot_id == "ss_1"
+    assert provider.calls == [("snapshot", "sb_old")]
+
+
+async def test_mutation_cas_conflict_with_changed_owner_is_nonretryable() -> None:
+    winner = binding(sandbox_id="sb_winner", version=2)
+    repository = Repository(binding())
+    repository.lose_next_cas_to = winner
+    provider = Provider({"sb_old": sandbox("sb_old", revision=5)})
+
+    with pytest.raises(SandboxBindingError) as raised:
+        await service(repository, provider, cadence=3).record_mutation(
+            "ct_1", workspace_revision=5
+        )
+
+    assert raised.value.code == "sandbox_mutation_bookkeeping_lost"
+    assert raised.value.retryable is False
+
+
+async def test_mutation_cas_conflict_with_deleted_binding_is_nonretryable() -> None:
+    class DeletedRaceRepository(Repository):
+        async def replace(self, value, *, expected_version, now):
+            self.current = None
+            return None
+
+    repository = DeletedRaceRepository(binding())
+    provider = Provider({"sb_old": sandbox("sb_old", revision=5)})
+
+    with pytest.raises(SandboxBindingError) as raised:
+        await service(repository, provider, cadence=3).record_mutation(
+            "ct_1", workspace_revision=5
+        )
+
+    assert raised.value.code == "sandbox_mutation_bookkeeping_lost"
+    assert raised.value.retryable is False
+
+
+async def test_mutation_same_owner_conflicts_are_bounded_and_retryable() -> None:
+    class BusyRepository(Repository):
+        async def replace(self, value, *, expected_version, now):
+            assert self.current is not None
+            self.current = replace(self.current, version=self.current.version + 1)
+            return None
+
+    repository = BusyRepository(binding())
+    provider = Provider({"sb_old": sandbox("sb_old", revision=5)})
+
+    with pytest.raises(SandboxBindingError) as raised:
+        await service(repository, provider, cadence=10).record_mutation(
+            "ct_1", workspace_revision=5
+        )
+
+    assert raised.value.code == "sandbox_mutation_bookkeeping_conflict"
+    assert raised.value.retryable is True
+    assert repository.current is not None and repository.current.version == 4
+
+
+async def test_create_repository_exception_destroys_allocated_sandbox() -> None:
+    class FailingRepository(Repository):
+        async def create(self, value, *, now):
+            raise RuntimeError("sandbox id conflict")
+
+    provider = Provider()
+
+    with pytest.raises(RuntimeError, match="sandbox id conflict"):
+        await service(FailingRepository(), provider).resolve("ct_1", "cr_1")
+
+    assert provider.calls == [("create", "ct_1"), ("destroy", "sb_created")]
+
+
+async def test_create_compatibility_failure_destroys_allocated_sandbox() -> None:
+    class WrongImageProvider(Provider):
+        async def create(self, *, owner_id, limits):
+            value = await super().create(owner_id=owner_id, limits=limits)
+            value = replace(value, image_digest="sha256:other")
+            self.sandboxes[value.sandbox_id] = value
+            return value
+
+    provider = WrongImageProvider()
+
+    with pytest.raises(SandboxBindingError, match="sandbox_image_mismatch"):
+        await service(Repository(), provider).resolve("ct_1", "cr_1")
+
+    assert provider.calls == [("create", "ct_1"), ("destroy", "sb_created")]
+
+
+async def test_create_cas_loser_destroys_only_allocated_sandbox() -> None:
+    winner = binding(sandbox_id="sb_winner")
+
+    class CreateRaceRepository(Repository):
+        def __init__(self):
+            super().__init__()
+            self.first_get = True
+
+        async def get(self, task_id):
+            if self.first_get:
+                self.first_get = False
+                return None
+            return await super().get(task_id)
+
+        async def create(self, value, *, now):
+            self.current = winner
+            return False
+
+    repository = CreateRaceRepository()
+    provider = Provider({"sb_winner": sandbox("sb_winner")})
+
+    bound = await service(repository, provider).resolve("ct_1", "cr_1")
+
+    assert bound.binding.sandbox_id == "sb_winner"
+    assert ("destroy", "sb_created") in provider.calls
+    assert ("destroy", "sb_winner") not in provider.calls
+
+
 async def test_suspend_snapshots_before_provider_suspend() -> None:
     repository = Repository(binding(mutation_count=1))
     provider = Provider({"sb_old": sandbox("sb_old", revision=1)})
@@ -277,10 +443,23 @@ async def test_suspend_snapshots_before_provider_suspend() -> None:
 
 
 async def test_terminal_destruction_removes_binding_after_destroy() -> None:
-    repository = Repository(binding())
-    provider = Provider({"sb_old": sandbox("sb_old")})
+    log = []
+
+    class OrderedRepository(Repository):
+        async def delete(self, task_id, *, expected_version):
+            log.append("delete")
+            return await super().delete(task_id, expected_version=expected_version)
+
+    class OrderedProvider(Provider):
+        async def destroy(self, sandbox_id):
+            log.append("destroy")
+            await super().destroy(sandbox_id)
+
+    repository = OrderedRepository(binding())
+    provider = OrderedProvider({"sb_old": sandbox("sb_old")})
 
     await service(repository, provider).destroy_terminal("ct_1")
 
     assert provider.calls == [("destroy", "sb_old")]
     assert repository.current is None
+    assert log == ["delete", "destroy"]
