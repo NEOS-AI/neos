@@ -13,9 +13,7 @@ import termios
 import uuid
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import TypeAlias
 
 from neos.coding.sandbox.base import (
     CommandRequest,
@@ -29,7 +27,6 @@ from neos.coding.sandbox.base import (
     SandboxStateConflict,
     SearchMatch,
     Snapshot,
-    StreamEvent,
 )
 from neos.coding.sandbox.archive import (
     SNAPSHOT_SCHEMA_VERSION,
@@ -46,139 +43,16 @@ from neos.coding.sandbox.paths import (
 )
 from neos.coding.sandbox.process import BoundedProcessRunner
 from neos.coding.sandbox.streams import BoundedReplayStream
-
-
-@dataclass(frozen=True, slots=True)
-class PtyOutput:
-    data: bytes
-
-
-@dataclass(frozen=True, slots=True)
-class PtyClosed:
-    reason: str
-    exit_code: int | None
-
-
-PtyEvent: TypeAlias = PtyOutput | PtyClosed
-
-
-class WorkspaceChangeKind(StrEnum):
-    CREATED = "created"
-    MODIFIED = "modified"
-    DELETED = "deleted"
-    RENAMED = "renamed"
-    WATCH_OVERFLOW = "watch_overflow"
-    WORKSPACE_INVALIDATED = "workspace_invalidated"
-
-
-@dataclass(frozen=True, slots=True)
-class WorkspaceChange:
-    path: str
-    kind: WorkspaceChangeKind
-    previous_path: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class WorkspaceChangeBatch:
-    changes: tuple[WorkspaceChange, ...]
-    workspace_revision: int
-
-
-class MemoryWatcher:
-    def __init__(
-        self,
-        stream: BoundedReplayStream[WorkspaceChangeBatch],
-        *,
-        after_cursor: int,
-    ) -> None:
-        self._stream = stream
-        self._subscription = stream.subscribe(after_cursor=after_cursor)
-
-    def __aiter__(self) -> MemoryWatcher:
-        return self
-
-    async def __anext__(self) -> StreamEvent[WorkspaceChangeBatch]:
-        return await anext(self._subscription)
-
-    async def replay(
-        self,
-        *,
-        after_cursor: int,
-    ) -> tuple[StreamEvent[WorkspaceChangeBatch], ...]:
-        return await self._stream.replay(after_cursor=after_cursor)
-
-    async def aclose(self) -> None:
-        await self._subscription.aclose()
-
-
-class _MemoryWatcherHub:
-    def __init__(
-        self,
-        *,
-        debounce_sec: float,
-        replay_events: int,
-    ) -> None:
-        self._debounce_sec = debounce_sec
-        self._stream = BoundedReplayStream[WorkspaceChangeBatch](
-            max_events=replay_events,
-            max_bytes=1024 * 1024,
-            size_of=lambda batch: sum(
-                len(change.path.encode()) + 32 for change in batch.changes
-            ),
-        )
-        self._pending: dict[str, WorkspaceChange] = {}
-        self._revision = 0
-        self._flush_task: asyncio.Task[None] | None = None
-        self._lock = asyncio.Lock()
-
-    async def record(
-        self,
-        change: WorkspaceChange,
-        *,
-        revision: int,
-    ) -> None:
-        async with self._lock:
-            previous = self._pending.get(change.path)
-            if (
-                previous is not None
-                and previous.kind is WorkspaceChangeKind.CREATED
-            ):
-                change = previous
-            self._pending[change.path] = change
-            self._revision = revision
-            if self._flush_task is None or self._flush_task.done():
-                self._flush_task = asyncio.create_task(self._flush_after_delay())
-
-    def open(self, *, after_cursor: int) -> MemoryWatcher:
-        return MemoryWatcher(self._stream, after_cursor=after_cursor)
-
-    async def close(self) -> None:
-        task = self._flush_task
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        await self._flush()
-        await self._stream.close()
-
-    async def _flush_after_delay(self) -> None:
-        await asyncio.sleep(self._debounce_sec)
-        await self._flush()
-
-    async def _flush(self) -> None:
-        async with self._lock:
-            if not self._pending:
-                return
-            batch = WorkspaceChangeBatch(
-                changes=tuple(
-                    self._pending[path] for path in sorted(self._pending)
-                ),
-                workspace_revision=self._revision,
-            )
-            self._pending.clear()
-        await self._stream.publish(batch)
+from neos.coding.sandbox.events import (
+    PtyClosed,
+    PtyEvent,
+    PtyOutput,
+    SandboxWatcher as MemoryWatcher,
+    SandboxWatcherHub as _MemoryWatcherHub,
+    WorkspaceChange,
+    WorkspaceChangeBatch,
+    WorkspaceChangeKind,
+)
 
 
 class MemoryPty:
@@ -891,4 +765,7 @@ class MemorySandboxSession:
         normalized = normalize_workspace_path(pattern).as_posix()
         if normalized.endswith("/**"):
             return path.startswith(normalized[:-3].rstrip("/") + "/")
-        return PurePosixPath(path).match(normalized)
+        return PurePosixPath(path).match(normalized) or (
+            normalized.startswith("**/")
+            and PurePosixPath(path).match(normalized[3:])
+        )

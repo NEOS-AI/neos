@@ -37,12 +37,12 @@ from neos.coding.sandbox.command import (
     DockerInteractiveProcess,
     build_create_args,
 )
-from neos.coding.sandbox.memory import (
+from neos.coding.sandbox.events import (
     PtyClosed,
     PtyOutput,
+    SandboxWatcherHub,
     WorkspaceChange,
     WorkspaceChangeKind,
-    _MemoryWatcherHub,
 )
 from neos.coding.sandbox.paths import (
     ensure_mutable_workspace_path,
@@ -74,7 +74,9 @@ matches = []
 for p in sorted(Path('/workspace').rglob('*')):
     if not p.is_file() or p.is_symlink(): continue
     relative = p.relative_to('/workspace').as_posix()
-    if not any(fnmatch.fnmatch(relative, pattern) for pattern in patterns): continue
+    if not any(fnmatch.fnmatch(relative, pattern) or
+               (pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:]))
+               for pattern in patterns): continue
     for number, line in enumerate(p.read_text(errors='replace').splitlines(), 1):
         match = expression.search(line)
         if match:
@@ -176,7 +178,7 @@ class _DockerRecord:
     volume_name: str
     lock: asyncio.Lock
     ptys: dict[str, DockerPty]
-    watcher: _MemoryWatcherHub
+    watcher: SandboxWatcherHub
     known_paths: set[str]
     watching: bool
 
@@ -363,7 +365,7 @@ class DockerSandboxProvider:
                 volume_name=volume_name,
                 lock=asyncio.Lock(),
                 ptys={},
-                watcher=_MemoryWatcherHub(
+                watcher=SandboxWatcherHub(
                     debounce_sec=self._config.watcher_debounce_sec,
                     replay_events=self._config.watcher_replay_events,
                 ),
@@ -457,7 +459,7 @@ class DockerSandboxProvider:
             volume_name=f"neos-sandbox-{sandbox_id}",
             lock=asyncio.Lock(),
             ptys={},
-            watcher=_MemoryWatcherHub(
+            watcher=SandboxWatcherHub(
                 debounce_sec=self._config.watcher_debounce_sec,
                 replay_events=self._config.watcher_replay_events,
             ),
