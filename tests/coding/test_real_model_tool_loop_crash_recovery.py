@@ -1,0 +1,83 @@
+from datetime import timedelta
+
+import pytest
+
+from neos.coding.domain.durability import StaleExecutionLease
+from neos.coding.loop.anthropic import CodingLoopFailure
+from tests.coding.fakes import text_turn, tool_turn
+
+pytestmark = pytest.mark.no_db
+
+
+@pytest.mark.asyncio
+async def test_crash_after_write_has_unknown_outcome_without_second_write(
+    real_loop_harness,
+) -> None:
+    harness = await real_loop_harness(
+        script=[
+            tool_turn(
+                "write_file.v1",
+                {"path": "calc.py", "content": "changed\n"},
+                tool_call_id="tool_1",
+            ),
+            # A replacement model turn deterministically proposes the same call id.
+            tool_turn(
+                "write_file.v1",
+                {"path": "calc.py", "content": "changed\n"},
+                tool_call_id="tool_1",
+            ),
+        ],
+        crash_after="write_file",
+    )
+
+    with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown"):
+        await harness.advance(worker_id="worker-1")
+    harness.elapse(timedelta(seconds=31))
+    with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown"):
+        await harness.advance(worker_id="worker-2")
+
+    assert await harness.session.read_file("calc.py") == b"changed\n"
+    assert harness.write_count == 1
+
+
+@pytest.mark.asyncio
+async def test_crash_after_durable_tool_completion_reuses_result(
+    real_loop_harness,
+) -> None:
+    harness = await real_loop_harness(
+        script=[
+            tool_turn(
+                "write_file.v1",
+                {"path": "calc.py", "content": "changed\n"},
+                tool_call_id="tool_1",
+            ),
+            text_turn("done"),
+        ],
+        crash_after="complete_tool_execution",
+    )
+
+    with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown"):
+        await harness.advance(worker_id="worker-1")
+    harness.elapse(timedelta(seconds=31))
+    harness.disable_crash()
+    await harness.advance_until_complete(worker_id="worker-2")
+
+    assert harness.write_count == 1
+    assert harness.completed_tool_ids == {"tool_1"}
+
+
+@pytest.mark.asyncio
+async def test_stale_fencing_token_cannot_commit_results_or_checkpoints_or_binding(
+    real_loop_harness,
+) -> None:
+    harness = await real_loop_harness(script=[])
+    old, current, claim, phase = await harness.replacement_lease()
+
+    with pytest.raises(StaleExecutionLease):
+        await harness.repository.complete_tool_execution(
+            claim, result={"status": "ok"}, now=harness.now
+        )
+    with pytest.raises(StaleExecutionLease):
+        await harness.commit_checkpoint(old, phase)
+    assert await harness.replace_binding_with_lease(old) is False
+    assert await harness.replace_binding_with_lease(current) is True

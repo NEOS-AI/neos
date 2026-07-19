@@ -1125,3 +1125,57 @@ Docker CLI, opt-in flag, digest image 중 하나라도 없으면 suite는 설치
 - watcher는 session write와 watcher가 열린 상태의 command 전후 fingerprint를 reconcile한다. sandbox 밖에서 발생한 장기 background 변경의 polling/sidecar push는 후속 sidecar 단계다.
 - rediscovery는 NEOS label, sandbox ID, owner, container 이름을 재검증한다. distributed lease와 absolute TTL reaper는 persistence/control-plane wiring 단계에서 추가한다.
 - browser는 Docker socket이나 PTY에 직접 연결하지 않는다. REST/WebSocket gateway가 sandbox session을 소유하고 cursor/revision을 클라이언트 event로 변환해야 한다.
+
+---
+
+## 20. Real model loop 운영과 복구
+
+### 20.1 설정과 기본 안전 정책
+
+real loop는 coding model과 sandbox가 모두 명시적으로 활성화된 환경에서만 사용한다. 모델 이름, turn/tool/token/cost 한도, model/tool timeout, transcript byte 한도, mutation snapshot cadence를 설정하고 Anthropic 키는 secret source로만 주입한다. 등록된 tool schema 밖의 입력은 거부하며 command는 `argv` 단위 allowlist, workspace 내부 `cwd`, 허용된 env 이름, stdin/output/time 한도를 모두 통과해야 한다. shell substitution, redirection, pipe, 보호된 `.git` 경로와 workspace 탈출은 허용하지 않는다.
+
+Docker sandbox는 digest-pinned image, non-root UID/GID, read-only root filesystem, capability drop, resource/PID 한도와 `network=none`을 유지한다. package registry나 repository egress가 필요해도 기본 네트워크 격리를 해제하지 않고 별도의 승인된 provider/network policy로 제공한다. Memory provider는 deterministic 개발·테스트 adapter이며 production 다중 tenant 경계가 아니다.
+
+### 20.2 one-safe-point scheduling
+
+worker delivery 한 번은 최신 durable checkpoint에서 정확히 한 safe point만 전진한다. model-only completion 또는 tool 하나의 durable result와 phase checkpoint가 safe point다. 매 호출마다 iterator와 sandbox binding을 다시 구성하므로 브라우저나 worker process 수명에 의존하지 않는다. 동일 task의 execution lease는 fencing token을 포함하고, 이전 token은 tool result, checkpoint, steering/binding 변경을 commit할 수 없다.
+
+### 20.3 snapshot과 crash recovery
+
+workspace mutation은 binding의 revision과 mutation count를 갱신하고 설정된 cadence에서 portable snapshot을 만든다. sandbox가 사라지면 호환되는 image digest와 checksum을 검증한 최신 snapshot으로 복원한다. durable tool completion 뒤 worker가 죽으면 replacement worker는 저장된 result를 재사용하고 mutation을 다시 실행하지 않는다. checkpoint 뒤에는 transcript, pending tool index, usage와 workspace revision부터 이어간다.
+
+mutation 실행 뒤 durable completion 전 연결이 끊기면 outcome을 추측하거나 재실행하지 않고 run을 비재시도 오류 `tool_outcome_unknown`으로 중단한다. 운영자는 workspace diff/revision과 외부 부작용을 조사하고, 결과를 보존할지 snapshot에서 되돌릴지 결정한 뒤 새 task/run으로 재개한다. 자동 retry나 claim 삭제로 이 오류를 우회하면 안 된다.
+
+### 20.4 관측성과 감사
+
+Prometheus 지표는 다음 fixed-cardinality label만 사용한다.
+
+| metric | labels |
+|---|---|
+| `coding_model_turn_total` | `provider`, `outcome` |
+| `coding_tool_execution_total` | 등록된 `tool`, `outcome` |
+| `coding_phase_duration_seconds` | `phase` |
+| `coding_checkpoint_total` | `phase` |
+| `coding_resume_total` | `outcome` |
+| `coding_lease_contention_total` | `outcome` |
+| `coding_sandbox_operation_total` | `provider`, `operation`, `outcome`, stable `error_code` |
+
+model 문자열, task/run/tool-call/sandbox ID, path, argv, prompt, file/stdin/stdout 내용, secret 값은 metric label에 넣지 않는다. audit event도 provider, 등록 tool, operation, outcome, stable error code, env 이름과 byte count 같은 content-free metadata만 기록한다.
+
+### 20.5 검증과 opt-in network smoke
+
+Memory vertical slice와 crash recovery suite는 기본 CI에서 network 없이 실행한다. 실제 Anthropic smoke는 읽기 전용 one-turn/low-token 요청이며 아래 두 조건을 **모두** 만족할 때만 실행된다.
+
+```bash
+NEOS_RUN_ANTHROPIC_INTEGRATION=1 \
+ANTHROPIC_API_KEY='<secret source>' \
+.venv/bin/pytest tests/coding/integration/test_anthropic_opt_in.py -q -rs
+```
+
+두 변수 중 하나라도 없으면 명시적 이유로 skip하며 default CI는 외부 요청을 만들지 않는다. Postgres와 Docker integration도 기존 명시적 opt-in guard만 사용한다.
+
+### 20.6 rollback과 설계 범위
+
+장애 시 `CODING_MODEL_ENABLED=false`로 real model loop 등록을 중단하고 development의 `FakeDurableCodingLoop`로 rollback한다. 기존 checkpoint/event schema와 migration은 되돌리지 않아 이전 durable data를 읽을 수 있게 한다.
+
+`2026-07-19-real-model-sandbox-tool-loop-design.md`의 1–11절은 Tasks 1–8에서 model contract, registry/policy, durable claim/checkpoint/fencing, sandbox binding/snapshot, bounded transcript/result, normalized errors/config, observability와 deterministic verification으로 반영했다. 12절 delivery sequence의 production provider rollout, multi-agent coordinator, 일반 egress, approval UI, semantic indexing과 managed/Kubernetes sandbox는 의도적으로 후속 단계로 남긴다. provider별 prompt caching과 장기 artifact/object-storage retention도 현재 Memory/Docker vertical slice 밖의 운영 작업이다.

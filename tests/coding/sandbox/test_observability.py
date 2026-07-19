@@ -3,7 +3,7 @@ from dataclasses import asdict
 
 from prometheus_client import CollectorRegistry
 
-from neos.coding.sandbox.observability import SandboxAuditEvent
+from neos.coding.sandbox.observability import CodingToolAuditEvent, SandboxAuditEvent
 from neos.observability.metrics import EnterpriseMetricsCollector
 
 
@@ -36,3 +36,20 @@ def test_audit_event_does_not_capture_contents_or_environment_values() -> None:
     assert "secret" not in serialized
     assert event.executable_category == "python"
     assert event.environment_names == ("TOKEN",)
+
+
+def test_tool_audit_event_normalizes_unbounded_outcome_without_content() -> None:
+    event = CodingToolAuditEvent.from_result(
+        provider="memory",
+        tool="write_file.v1",
+        operation="execute",
+        outcome="secret file contents",
+        error_code="sandbox_error",
+    )
+
+    serialized = json.dumps(asdict(event))
+    assert event.outcome == "error"
+    assert event.provider == "memory"
+    assert event.tool == "write_file.v1"
+    assert "secret" not in serialized
+    assert "file contents" not in serialized

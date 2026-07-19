@@ -106,6 +106,7 @@ class AnthropicCodingLoop:
         executor: SandboxToolExecutor,
         bindings: SandboxBindingService,
         config: AnthropicLoopConfig,
+        metrics=None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._model = model
@@ -113,6 +114,7 @@ class AnthropicCodingLoop:
         self._executor = executor
         self._bindings = bindings
         self._config = config
+        self._metrics = metrics
         self._clock = clock
 
     async def run(
@@ -186,6 +188,15 @@ class AnthropicCodingLoop:
             raise CodingLoopFailure(error.code, retryable=error.retryable) from error
         if completion is None:
             raise CodingLoopFailure("model_stream_incomplete", retryable=True)
+        if self._metrics is not None:
+            outcome = (
+                completion.stop_reason
+                if completion.stop_reason in {"tool_use", "end_turn", "max_tokens"}
+                else "other"
+            )
+            self._metrics.coding_model_turn_total.labels(
+                provider="anthropic", outcome=outcome
+            ).inc()
         next_state = self._completed_turn(state, text_parts, calls, completion)
         self._check_usage_budgets(next_state)
         if not calls:
@@ -275,6 +286,13 @@ class AnthropicCodingLoop:
                 raise CodingLoopFailure(
                     "tool_outcome_unknown", retryable=False
                 ) from error
+        if self._metrics is not None:
+            metric_outcome = str(result.get("status", "ok"))
+            if metric_outcome not in {"ok", "error", "denied"}:
+                metric_outcome = "error"
+            self._metrics.coding_tool_execution_total.labels(
+                tool=call.name, outcome=metric_outcome
+            ).inc()
         yield tool_event
         status = str(result.get("status", "ok"))
         canonical_status = status if status in {"ok", "error", "denied"} else "ok"

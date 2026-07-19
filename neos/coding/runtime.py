@@ -190,6 +190,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
             executor=executor,
             bindings=bindings,
             config=loop_config,
+            metrics=metrics,
         )
 
     return finish

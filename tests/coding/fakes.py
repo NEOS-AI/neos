@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Iterable
 from dataclasses import replace
 from datetime import timedelta
 from typing import Any
@@ -23,6 +24,93 @@ from neos.coding.domain.phases import (
     SteeringMode,
     next_phase_attempt,
 )
+from neos.coding.model.base import (
+    ModelCompleted,
+    ModelUsage,
+    TextDelta,
+    ToolCallCompleted,
+)
+
+
+def tool_turn(
+    name: str,
+    input: dict[str, Any],
+    *,
+    tool_call_id: str,
+) -> tuple[object, ...]:
+    return (
+        ToolCallCompleted(tool_call_id, name, input),
+        ModelCompleted("tool_use", ModelUsage(1, 1)),
+    )
+
+
+def text_turn(text: str) -> tuple[object, ...]:
+    return (TextDelta(text), ModelCompleted("end_turn", ModelUsage(1, 1)))
+
+
+class ScriptedCodingModel:
+    def __init__(self, script: Iterable[Iterable[object]]) -> None:
+        self.script = [tuple(turn) for turn in script]
+        self.requests = []
+
+    async def stream(self, request):
+        self.requests.append(request)
+        for event in self.script.pop(0):
+            yield event
+
+
+class RecordingMetric:
+    def __init__(self, name: str, records: list[tuple[str, dict[str, str]]]) -> None:
+        self._name = name
+        self._records = records
+        self._labels: dict[str, str] = {}
+
+    def labels(self, **labels):
+        metric = RecordingMetric(self._name, self._records)
+        metric._labels = labels
+        return metric
+
+    def inc(self) -> None:
+        self._records.append((self._name, self._labels))
+
+
+class RecordingCodingLoopMetrics:
+    def __init__(self) -> None:
+        self.records: list[tuple[str, dict[str, str]]] = []
+        self.coding_model_turn_total = RecordingMetric(
+            "coding_model_turn_total", self.records
+        )
+        self.coding_tool_execution_total = RecordingMetric(
+            "coding_tool_execution_total", self.records
+        )
+
+
+class InMemorySandboxBindingRepository:
+    def __init__(self) -> None:
+        self.current = None
+
+    async def get(self, task_id):
+        if self.current is None or self.current.task_id != task_id:
+            return None
+        return self.current
+
+    async def create(self, binding, *, now):
+        if self.current is not None:
+            return False
+        self.current = binding
+        return True
+
+    async def replace(self, binding, *, expected_version, now):
+        if self.current is None or self.current.version != expected_version:
+            return None
+        self.current = replace(binding, version=expected_version + 1)
+        return self.current
+
+    async def delete(self, task_id, *, expected_version):
+        if self.current is None or self.current.version != expected_version:
+            return False
+        self.current = None
+        return True
 
 
 class InMemoryCodingRunRepository:
