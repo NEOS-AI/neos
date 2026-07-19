@@ -4,11 +4,11 @@ Read-only aggregation of the append-only ``deep_analysis_events`` log into
 improvement signals for human review (P4). This service NEVER writes to the
 event log; the periodic report task persists to ``deep_analysis_reports``.
 
-Aggregation is global (across all runs), not run-scoped. **All rates are
-event-based**, not distinct-claim-based: a claim rejected on two attempts then
-capped contributes two ``claim_rejected`` + one ``claim_unverified`` event, and
-each is counted independently. Interpret the signals as event-frequency trends,
-not per-claim outcome distributions.
+Aggregation is global (across all runs) by default and can optionally be scoped
+to one run. **All rates are event-based**, not distinct-claim-based: a claim
+rejected on two attempts then capped contributes two ``claim_rejected`` + one
+``claim_unverified`` event, and each is counted independently. Interpret the
+signals as event-frequency trends, not per-claim outcome distributions.
 
 Per-kind totals come from a cheap ``GROUP BY kind`` (no payload parsing, so
 malformed JSON never breaks the count). Payload-derived signals fetch only the
@@ -24,7 +24,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 
 from neos.database.deep_analysis_models import DAEvent
 from neos.utils.time_utils import to_naive_utc
@@ -40,22 +40,41 @@ class DeepAnalysisAnalyticsService:
     def __init__(self, session) -> None:
         self.db = session
 
-    async def _totals(self, since: datetime | None) -> dict[str, int]:
-        stmt = select(DAEvent.kind, func.count()).group_by(DAEvent.kind)
+    @staticmethod
+    def _scope(
+        stmt: Select,
+        *,
+        since: datetime | None,
+        run_id: str | None,
+    ) -> Select:
         if since is not None:
             stmt = stmt.where(DAEvent.ts >= to_naive_utc(since))
-        result = await self.db.execute(stmt)
+        if run_id is not None:
+            stmt = stmt.where(DAEvent.run_id == run_id)
+        return stmt
+
+    async def _totals(
+        self,
+        since: datetime | None,
+        run_id: str | None,
+    ) -> dict[str, int]:
+        stmt = select(DAEvent.kind, func.count()).group_by(DAEvent.kind)
+        result = await self.db.execute(
+            self._scope(stmt, since=since, run_id=run_id)
+        )
         return {kind: int(count) for kind, count in result.all()}
 
     async def _payload_rows(
-        self, since: datetime | None
+        self,
+        since: datetime | None,
+        run_id: str | None,
     ) -> list[tuple[str, str]]:
         stmt = select(DAEvent.kind, DAEvent.payload).where(
             DAEvent.kind.in_(_PAYLOAD_KINDS)
         )
-        if since is not None:
-            stmt = stmt.where(DAEvent.ts >= to_naive_utc(since))
-        result = await self.db.execute(stmt)
+        result = await self.db.execute(
+            self._scope(stmt, since=since, run_id=run_id)
+        )
         return [(kind, payload) for kind, payload in result.all()]
 
     @staticmethod
@@ -66,8 +85,13 @@ class DeepAnalysisAnalyticsService:
             return None
         return parsed if isinstance(parsed, dict) else None
 
-    async def signals(self, *, since: datetime | None = None) -> dict[str, Any]:
-        totals = await self._totals(since)
+    async def signals(
+        self,
+        *,
+        since: datetime | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        totals = await self._totals(since, run_id)
         reject_total = totals.get("claim_rejected", 0)
         report_total = totals.get("report_graded", 0)
         questions = totals.get("question_opened", 0)
@@ -78,7 +102,7 @@ class DeepAnalysisAnalyticsService:
         code_counts: Counter[str] = Counter()
         verified_per_pass: list[float] = []
         report_failures = 0
-        for kind, payload in await self._payload_rows(since):
+        for kind, payload in await self._payload_rows(since, run_id):
             data = self._payload(payload)
             if kind == "claim_rejected":
                 if data and data.get("code"):
@@ -123,9 +147,14 @@ class DeepAnalysisAnalyticsService:
             "totals": totals,
         }
 
-    async def summary(self, *, since: datetime | None = None) -> dict[str, Any]:
+    async def summary(
+        self,
+        *,
+        since: datetime | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
         return {
-            "signals": await self.signals(since=since),
+            "signals": await self.signals(since=since, run_id=run_id),
             "since": since,
             "generated_at": datetime.now(timezone.utc),
         }
