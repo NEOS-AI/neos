@@ -35,6 +35,10 @@ _REPAIR_PRESCRIPTIONS = {
 }
 
 
+class SystemicWorkerFailure(RuntimeError):
+    """Every assigned worker failed for too many consecutive rounds."""
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -103,6 +107,10 @@ class Orchestrator:
         # spent resolving equal-tier conflicts before the report is assembled
         # with both-sides annotations only.
         self._reinvestigation_count = 0
+        # Run-scoped circuit breaker for systemic failures. Question-level
+        # fail_streak already drives SPLIT; counting all-failed rounds here
+        # prevents a shared dependency outage from expanding that tree.
+        self._all_failed_rounds = 0
         self.budgeter = Budgeter(
             global_token_cap=self.global_token_cap,
             max_depth=self.max_depth,
@@ -439,6 +447,39 @@ class Orchestrator:
         # SPLIT if depth allows, else abandon (both handled by _do_split).
         await self._do_split(question)
 
+    async def _register_round_outcome(
+        self,
+        results: list[WorkerResult],
+    ) -> None:
+        """Stop a run when every assigned worker repeatedly fails."""
+        if not results:
+            return
+        if any(result.status != "failed" for result in results):
+            self._all_failed_rounds = 0
+            return
+        self._all_failed_rounds += 1
+        if self._all_failed_rounds < self.max_stall_rounds:
+            return
+
+        reasons = [
+            (result.fail_reason or "unknown")[:200] for result in results
+        ]
+        payload = {
+            "rounds": self._all_failed_rounds,
+            "reasons": reasons,
+        }
+        await self.ledger.log(
+            "systemic_failure_terminated",
+            None,
+            payload,
+        )
+        await self._emit("systemic_failure_terminated", payload)
+        await self._checkpoint()
+        raise SystemicWorkerFailure(
+            "all workers failed for "
+            f"{self._all_failed_rounds} consecutive rounds"
+        )
+
     async def _run_round(self) -> bool:
         """Execute one SCOUT round: select → partition → split → workers →
         commit. Returns ``False`` when there is nothing to select (caller must
@@ -462,6 +503,7 @@ class Orchestrator:
         results = await asyncio.gather(
             *[self._run_worker(a) for a in assignments]
         )
+        await self._register_round_outcome(results)
         # P2: 순차 커밋 (single-writer). gather는 순서를 보존하므로
         # assignments[i] ↔ results[i]가 1:1 대응한다.
         for assignment, result in zip(assignments, results):
