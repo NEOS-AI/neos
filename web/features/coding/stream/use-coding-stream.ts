@@ -1,13 +1,21 @@
 "use client";
 
-import { useEffect, useReducer, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   CodingAPIError,
+  getCodingTaskSnapshot,
   getCodingWsTicket,
 } from "@/features/coding/api/coding-api";
+import { getCodingProjectionStore } from "@/features/coding/stream/coding-projection-store";
 import {
   classifyConnectionError,
-  clearCursor,
   heartbeatDeadlineMs,
   readCursor,
   writeCursor,
@@ -42,6 +50,8 @@ function terminalState(status: number): CodingConnectionState {
 }
 
 export function useCodingStream(taskId: string) {
+  const store = useMemo(() => getCodingProjectionStore(taskId), [taskId]);
+  const projection = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [state, dispatch] = useReducer(
     reduceCodingEvent,
     undefined,
@@ -59,8 +69,22 @@ export function useCodingStream(taskId: string) {
     let pongDeadline: ReturnType<typeof setTimeout> | null = null;
     let awaitingPong = false;
     let terminal = false;
+    let resyncing = false;
     let attempt = 0;
+    let hydrationGeneration = 0;
     afterSeq.current = readCursor(taskId);
+
+    async function hydrateFromSnapshot() {
+      const generation = ++hydrationGeneration;
+      const snapshot = await getCodingTaskSnapshot(taskId);
+      if (disposed || generation !== hydrationGeneration) {
+        return false;
+      }
+      store.replaceSnapshot(snapshot);
+      afterSeq.current = snapshot.head_seq;
+      writeCursor(taskId, snapshot.head_seq);
+      return true;
+    }
 
     function clearHeartbeat() {
       if (heartbeatTimer) {
@@ -98,6 +122,9 @@ export function useCodingStream(taskId: string) {
 
     async function connect() {
       try {
+        if (!(await hydrateFromSnapshot())) {
+          return;
+        }
         const authorization = await getCodingWsTicket(taskId);
         if (disposed) {
           return;
@@ -134,14 +161,21 @@ export function useCodingStream(taskId: string) {
             return;
           }
           if (envelope.type === "resync_required") {
-            terminal = true;
-            clearCursor(taskId);
-            afterSeq.current = 0;
-            setConnection("protocol_error");
-            socket?.close(1002, "Full coding snapshot resync required");
+            resyncing = true;
+            socket?.close(1012, "Refreshing coding snapshot");
+            hydrateFromSnapshot()
+              .then((hydrated) => {
+                if (!hydrated || disposed || terminal) {
+                  return;
+                }
+                resyncing = false;
+                return connect();
+              })
+              .catch(reconnect);
             return;
           }
           if (envelope.type === "caught_up") {
+            store.setConnectionBasis("live");
             setConnection("live");
             attempt = 0;
             return;
@@ -157,12 +191,16 @@ export function useCodingStream(taskId: string) {
               afterSeq.current = nextSeq;
               writeCursor(taskId, nextSeq);
               dispatch(envelope as CodingEvent);
+              store.applyEvent(envelope as CodingEvent);
             }
           }
         };
         socket.onclose = (event) => {
           clearHeartbeat();
           if (disposed || terminal) {
+            return;
+          }
+          if (resyncing) {
             return;
           }
           if (event.code === 4401 || event.code === 4403) {
@@ -210,7 +248,7 @@ export function useCodingStream(taskId: string) {
       socket?.close();
       setConnection("closed");
     };
-  }, [taskId]);
+  }, [store, taskId]);
 
-  return { state, connection };
+  return { state, projection, connection };
 }
