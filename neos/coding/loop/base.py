@@ -7,9 +7,15 @@ from neos.coding.domain.durability import (
     ExecutionLease,
     PhaseCheckpointCommit,
     PhaseStart,
+    SteeringApplication,
     ToolExecutionClaim,
 )
-from neos.coding.domain.phases import CodingCheckpoint, CodingPhase, CodingPhaseKind
+from neos.coding.domain.phases import (
+    CodingCheckpoint,
+    CodingPhase,
+    CodingPhaseKind,
+    SteeringRequest,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +92,26 @@ class CodingRunRepository(Protocol):
         workspace_revision: str,
         now: datetime,
     ) -> PhaseCheckpointCommit: ...
+
+    async def apply_steering_at_safe_point(
+        self,
+        *,
+        lease: ExecutionLease,
+        checkpoint: CodingCheckpoint,
+        worker_id: str,
+        claim_expires_at: datetime,
+        now: datetime,
+    ) -> SteeringApplication | None: ...
+
+    async def commit_interruption(
+        self,
+        *,
+        lease: ExecutionLease,
+        request: SteeringRequest,
+        workspace_revision: str,
+        process_stopped: bool,
+        now: datetime,
+    ) -> SteeringApplication: ...
 
     async def completed_tool_result(
         self, task_id: str, tool_call_id: str

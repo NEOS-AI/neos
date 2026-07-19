@@ -1,5 +1,5 @@
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Protocol
 from uuid import uuid4
 
@@ -187,7 +187,37 @@ class CodingRunService:
             await self._interrupt_active_run(task_id, request)
         return request
 
-    async def on_safe_point(self, *, task_id: str, checkpoint_id: str) -> bool:
+    async def on_safe_point(
+        self,
+        *,
+        task_id: str,
+        checkpoint_id: str,
+        lease=None,
+        checkpoint: CodingCheckpoint | None = None,
+        worker_id: str | None = None,
+    ):
+        if lease is not None:
+            if checkpoint is None:
+                raise ValueError("checkpoint is required for atomic steering")
+            now = self._clock()
+            applied = await self._runs.apply_steering_at_safe_point(
+                lease=lease,
+                checkpoint=checkpoint,
+                worker_id=worker_id or lease.worker_id,
+                claim_expires_at=now + timedelta(seconds=30),
+                now=now,
+            )
+            if applied is None:
+                return False
+            if self._metrics is not None:
+                latency = max(
+                    0.0,
+                    (now - applied.request.requested_at).total_seconds(),
+                )
+                self._metrics.coding_steering_latency_seconds.labels(
+                    outcome="applied"
+                ).observe(latency)
+            return applied
         request = await self._runs.claim_pending_steering(task_id)
         if request is None or request.mode is not SteeringMode.SAFE_POINT:
             return False

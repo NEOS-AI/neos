@@ -11,6 +11,7 @@ from neos.coding.domain.durability import (
     PhaseCheckpointCommit,
     PhaseStart,
     StaleExecutionLease,
+    SteeringApplication,
     ToolExecutionClaim,
     ToolExecutionDisposition,
 )
@@ -462,6 +463,431 @@ class PostgresCodingRunRepository:
             self._wake_outbox()
         return PhaseCheckpointCommit(checkpoint, event, completed)
 
+    async def apply_steering_at_safe_point(
+        self,
+        *,
+        lease: ExecutionLease,
+        checkpoint: CodingCheckpoint,
+        worker_id: str,
+        claim_expires_at: datetime,
+        now: datetime,
+    ) -> SteeringApplication | None:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(session, lease, now=now)
+                claimed = await session.execute(
+                    text(
+                        """
+                        WITH claimable AS (
+                            SELECT steering_id
+                            FROM coding_steering_requests
+                            WHERE task_id = :task_id
+                              AND mode = 'safe_point'
+                              AND (
+                                  status = 'pending'
+                                  OR (
+                                      status = 'claimed'
+                                      AND claim_expires_at <= :now
+                                  )
+                              )
+                            ORDER BY requested_at, steering_id
+                            LIMIT 1
+                            FOR UPDATE SKIP LOCKED
+                        )
+                        UPDATE coding_steering_requests request
+                        SET status = 'claimed',
+                            claimed_by = :worker_id,
+                            claimed_at = :now,
+                            claim_expires_at = :claim_expires_at
+                        FROM claimable
+                        WHERE request.steering_id = claimable.steering_id
+                        RETURNING request.steering_id, request.task_id,
+                                  request.mode, request.instruction,
+                                  request.requested_at
+                        """
+                    ),
+                    {
+                        "task_id": lease.task_id,
+                        "worker_id": worker_id,
+                        "now": now,
+                        "claim_expires_at": claim_expires_at,
+                    },
+                )
+                request_row = claimed.first()
+                if request_row is None:
+                    return None
+                request = SteeringRequest(
+                    steering_id=request_row[0],
+                    task_id=request_row[1],
+                    mode=SteeringMode(request_row[2]),
+                    instruction=request_row[3],
+                    requested_at=request_row[4],
+                )
+                seq = await self._allocate_sequence_in_session(
+                    session, task_id=lease.task_id, now=now
+                )
+                loop_state = dict(checkpoint.loop_state)
+                loop_state["current_instruction"] = request.instruction
+                loop_state["pending_instruction"] = None
+                steering_checkpoint = CodingCheckpoint(
+                    checkpoint_id=f"cc_steer_{uuid4().hex}",
+                    task_id=lease.task_id,
+                    run_id=lease.run_id,
+                    seq=seq,
+                    loop_state=loop_state,
+                    workspace_revision=checkpoint.workspace_revision,
+                    created_at=now,
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_checkpoints
+                            (checkpoint_id, task_id, run_id, seq,
+                             loop_state_json, workspace_revision, created_at)
+                        VALUES
+                            (:checkpoint_id, :task_id, :run_id, :seq,
+                             CAST(:loop_state AS JSONB),
+                             :workspace_revision, :created_at)
+                        """
+                    ),
+                    {
+                        "checkpoint_id": steering_checkpoint.checkpoint_id,
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "seq": seq,
+                        "loop_state": json.dumps(loop_state),
+                        "workspace_revision": checkpoint.workspace_revision,
+                        "created_at": now,
+                    },
+                )
+                event = await self._insert_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    seq=seq,
+                    event_type="steer.applied",
+                    payload={
+                        "steering_id": request.steering_id,
+                        "mode": request.mode.value,
+                        "instruction": request.instruction,
+                    },
+                    now=now,
+                    run_id=lease.run_id,
+                    checkpoint_id=steering_checkpoint.checkpoint_id,
+                )
+                previous_result = await session.execute(
+                    text(
+                        """
+                        SELECT run_id, task_id, attempt, status,
+                               resume_from_checkpoint_id, started_at, completed_at
+                        FROM coding_runs
+                        WHERE run_id = :run_id AND task_id = :task_id
+                        FOR UPDATE
+                        """
+                    ),
+                    {"run_id": lease.run_id, "task_id": lease.task_id},
+                )
+                previous_row = previous_result.first()
+                if previous_row is None:
+                    raise StaleExecutionLease(lease.task_id)
+                previous_run = self._run_from_row(previous_row)
+                cancelled_run = replace(
+                    previous_run,
+                    status=CodingRunStatus.CANCELLED,
+                    completed_at=now,
+                )
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_runs
+                        SET status = 'cancelled', completed_at = :now
+                        WHERE run_id = :run_id
+                          AND task_id = :task_id
+                          AND status = 'running'
+                        """
+                    ),
+                    {"run_id": lease.run_id, "task_id": lease.task_id, "now": now},
+                )
+                run = CodingRun(
+                    run_id=f"cr_{uuid4().hex}",
+                    task_id=lease.task_id,
+                    attempt=previous_run.attempt + 1,
+                    status=CodingRunStatus.RUNNING,
+                    resume_from_checkpoint_id=steering_checkpoint.checkpoint_id,
+                    started_at=now,
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_runs
+                            (run_id, task_id, attempt, status,
+                             resume_from_checkpoint_id, started_at, completed_at)
+                        VALUES
+                            (:run_id, :task_id, :attempt, 'running',
+                             :checkpoint_id, :now, NULL)
+                        """
+                    ),
+                    {
+                        "run_id": run.run_id,
+                        "task_id": run.task_id,
+                        "attempt": run.attempt,
+                        "checkpoint_id": steering_checkpoint.checkpoint_id,
+                        "now": now,
+                    },
+                )
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_steering_requests
+                        SET status = 'applied',
+                            applied_checkpoint_id = :checkpoint_id,
+                            claim_expires_at = NULL
+                        WHERE steering_id = :steering_id
+                          AND status = 'claimed'
+                          AND claimed_by = :worker_id
+                        """
+                    ),
+                    {
+                        "steering_id": request.steering_id,
+                        "checkpoint_id": steering_checkpoint.checkpoint_id,
+                        "worker_id": worker_id,
+                    },
+                )
+                lease_result = await session.execute(
+                    text(
+                        """
+                        UPDATE coding_run_leases
+                        SET run_id = :new_run_id,
+                            worker_id = :worker_id,
+                            fencing_token = fencing_token + 1,
+                            acquired_at = :now,
+                            heartbeat_at = :now,
+                            expires_at = :expires_at
+                        WHERE task_id = :task_id
+                          AND run_id = :old_run_id
+                          AND fencing_token = :fencing_token
+                        RETURNING task_id, run_id, worker_id, fencing_token,
+                                  acquired_at, expires_at, FALSE AS recovered
+                        """
+                    ),
+                    {
+                        "task_id": lease.task_id,
+                        "old_run_id": lease.run_id,
+                        "new_run_id": run.run_id,
+                        "worker_id": worker_id,
+                        "fencing_token": lease.fencing_token,
+                        "now": now,
+                        "expires_at": claim_expires_at,
+                    },
+                )
+                lease_row = lease_result.first()
+                if lease_row is None:
+                    raise StaleExecutionLease(lease.task_id)
+                next_lease = self._lease_from_row(lease_row)
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return SteeringApplication(
+            request=replace(
+                request,
+                applied_checkpoint_id=steering_checkpoint.checkpoint_id,
+            ),
+            checkpoint=steering_checkpoint,
+            previous_run=cancelled_run,
+            run=run,
+            lease=next_lease,
+            event=event,
+        )
+
+    async def commit_interruption(
+        self,
+        *,
+        lease: ExecutionLease,
+        request: SteeringRequest,
+        workspace_revision: str,
+        process_stopped: bool,
+        now: datetime,
+    ) -> SteeringApplication:
+        if not process_stopped:
+            raise ValueError("process must be stopped before interruption commit")
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(session, lease, now=now)
+                seq = await self._allocate_sequence_in_session(
+                    session, task_id=lease.task_id, now=now
+                )
+                checkpoint = CodingCheckpoint(
+                    checkpoint_id=f"cc_interrupt_{uuid4().hex}",
+                    task_id=lease.task_id,
+                    run_id=lease.run_id,
+                    seq=seq,
+                    loop_state={
+                        "phase_index": -1,
+                        "transcript": [],
+                        "current_instruction": request.instruction,
+                        "pending_instruction": None,
+                    },
+                    workspace_revision=workspace_revision,
+                    created_at=now,
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_checkpoints
+                            (checkpoint_id, task_id, run_id, seq,
+                             loop_state_json, workspace_revision, created_at)
+                        VALUES
+                            (:checkpoint_id, :task_id, :run_id, :seq,
+                             CAST(:loop_state AS JSONB),
+                             :workspace_revision, :created_at)
+                        """
+                    ),
+                    {
+                        "checkpoint_id": checkpoint.checkpoint_id,
+                        "task_id": checkpoint.task_id,
+                        "run_id": checkpoint.run_id,
+                        "seq": checkpoint.seq,
+                        "loop_state": json.dumps(dict(checkpoint.loop_state)),
+                        "workspace_revision": workspace_revision,
+                        "created_at": now,
+                    },
+                )
+                event = await self._insert_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    seq=seq,
+                    event_type="run.interrupted",
+                    payload={
+                        "steering_id": request.steering_id,
+                        "process_stopped": True,
+                    },
+                    now=now,
+                    run_id=lease.run_id,
+                    checkpoint_id=checkpoint.checkpoint_id,
+                )
+                previous_result = await session.execute(
+                    text(
+                        """
+                        SELECT run_id, task_id, attempt, status,
+                               resume_from_checkpoint_id, started_at, completed_at
+                        FROM coding_runs
+                        WHERE run_id = :run_id AND task_id = :task_id
+                        FOR UPDATE
+                        """
+                    ),
+                    {"run_id": lease.run_id, "task_id": lease.task_id},
+                )
+                previous_row = previous_result.first()
+                if previous_row is None:
+                    raise StaleExecutionLease(lease.task_id)
+                previous = self._run_from_row(previous_row)
+                cancelled = replace(
+                    previous,
+                    status=CodingRunStatus.CANCELLED,
+                    completed_at=now,
+                )
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_runs
+                        SET status = 'cancelled', completed_at = :now
+                        WHERE run_id = :run_id AND task_id = :task_id
+                        """
+                    ),
+                    {"run_id": lease.run_id, "task_id": lease.task_id, "now": now},
+                )
+                run = CodingRun(
+                    run_id=f"cr_{uuid4().hex}",
+                    task_id=lease.task_id,
+                    attempt=previous.attempt + 1,
+                    status=CodingRunStatus.RUNNING,
+                    resume_from_checkpoint_id=checkpoint.checkpoint_id,
+                    started_at=now,
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_runs
+                            (run_id, task_id, attempt, status,
+                             resume_from_checkpoint_id, started_at, completed_at)
+                        VALUES
+                            (:run_id, :task_id, :attempt, 'running',
+                             :checkpoint_id, :now, NULL)
+                        """
+                    ),
+                    {
+                        "run_id": run.run_id,
+                        "task_id": run.task_id,
+                        "attempt": run.attempt,
+                        "checkpoint_id": checkpoint.checkpoint_id,
+                        "now": now,
+                    },
+                )
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_steering_requests
+                        SET status = 'applied',
+                            applied_checkpoint_id = :checkpoint_id,
+                            claimed_by = :worker_id,
+                            claimed_at = :now,
+                            claim_expires_at = NULL
+                        WHERE steering_id = :steering_id
+                          AND task_id = :task_id
+                          AND status IN ('pending', 'claimed')
+                        """
+                    ),
+                    {
+                        "steering_id": request.steering_id,
+                        "task_id": lease.task_id,
+                        "checkpoint_id": checkpoint.checkpoint_id,
+                        "worker_id": lease.worker_id,
+                        "now": now,
+                    },
+                )
+                lease_result = await session.execute(
+                    text(
+                        """
+                        UPDATE coding_run_leases
+                        SET run_id = :new_run_id,
+                            fencing_token = fencing_token + 1,
+                            acquired_at = :now,
+                            heartbeat_at = :now,
+                            expires_at = :expires_at
+                        WHERE task_id = :task_id
+                          AND run_id = :old_run_id
+                          AND worker_id = :worker_id
+                          AND fencing_token = :fencing_token
+                        RETURNING task_id, run_id, worker_id, fencing_token,
+                                  acquired_at, expires_at, FALSE AS recovered
+                        """
+                    ),
+                    {
+                        "task_id": lease.task_id,
+                        "old_run_id": lease.run_id,
+                        "new_run_id": run.run_id,
+                        "worker_id": lease.worker_id,
+                        "fencing_token": lease.fencing_token,
+                        "now": now,
+                        "expires_at": lease.expires_at,
+                    },
+                )
+                lease_row = lease_result.first()
+                if lease_row is None:
+                    raise StaleExecutionLease(lease.task_id)
+                next_lease = self._lease_from_row(lease_row)
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        applied_request = replace(
+            request, applied_checkpoint_id=checkpoint.checkpoint_id
+        )
+        return SteeringApplication(
+            applied_request,
+            checkpoint,
+            cancelled,
+            run,
+            next_lease,
+            event,
+        )
+
     @staticmethod
     def _lease_from_row(row) -> ExecutionLease:
         return ExecutionLease(
@@ -518,6 +944,18 @@ class PostgresCodingRunRepository:
             status=CodingPhaseStatus(row[5]),
             started_at=row[6],
             completed_at=row[7],
+        )
+
+    @staticmethod
+    def _run_from_row(row) -> CodingRun:
+        return CodingRun(
+            run_id=row[0],
+            task_id=row[1],
+            attempt=int(row[2]),
+            status=CodingRunStatus(row[3]),
+            resume_from_checkpoint_id=row[4],
+            started_at=row[5],
+            completed_at=row[6],
         )
 
     async def _allocate_sequence_in_session(

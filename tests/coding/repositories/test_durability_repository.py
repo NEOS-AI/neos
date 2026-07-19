@@ -15,6 +15,8 @@ from neos.coding.domain.phases import (
     CodingPhase,
     CodingPhaseKind,
     CodingPhaseStatus,
+    SteeringRequest,
+    SteeringMode,
 )
 from neos.coding.repositories.run_repository import PostgresCodingRunRepository
 
@@ -37,6 +39,20 @@ ACTIVE_PHASE = CodingPhase(
     attempt=1,
     status=CodingPhaseStatus.ACTIVE,
     started_at=NOW,
+)
+SAFE_POINT_CHECKPOINT = CodingCheckpoint(
+    checkpoint_id="cc_safe_1",
+    task_id="ct_1",
+    run_id="cr_1",
+    seq=10,
+    loop_state={
+        "phase_index": 0,
+        "transcript": [{"role": "assistant", "content": "understood"}],
+        "current_instruction": "Fix it",
+        "pending_instruction": None,
+    },
+    workspace_revision="rev_1",
+    created_at=NOW,
 )
 
 
@@ -285,3 +301,91 @@ async def test_phase_checkpoint_satisfies_fk_order_in_one_transaction() -> None:
     assert isinstance(committed.checkpoint, CodingCheckpoint)
     assert committed.checkpoint.seq == committed.event.seq == 11
     assert committed.phase.status is CodingPhaseStatus.COMPLETED
+
+
+async def test_safe_steering_reclaims_expired_claim_and_transitions_atomically() -> None:
+    session = FakeSession(
+        rows=[
+            ("ct_1",),
+            (
+                "cs_1",
+                "ct_1",
+                SteeringMode.SAFE_POINT.value,
+                "Inspect cache first",
+                NOW - timedelta(seconds=10),
+            ),
+            (11,),
+            ("cr_1", "ct_1", 1, "running", None, NOW, None),
+            ("ct_1", "cr_2", "worker-b", 3, NOW, EXPIRES, False),
+        ]
+    )
+    repository = repository_for(session)
+
+    applied = await repository.apply_steering_at_safe_point(
+        lease=LEASE,
+        checkpoint=SAFE_POINT_CHECKPOINT,
+        worker_id="worker-b",
+        claim_expires_at=EXPIRES,
+        now=NOW,
+    )
+
+    sql = "\n".join(session.sql)
+    assert "claim_expires_at <= :now" in sql
+    assert sql.index("INSERT INTO coding_checkpoints") < sql.index(
+        "INSERT INTO coding_events"
+    )
+    assert "UPDATE coding_steering_requests" in sql
+    assert "UPDATE coding_runs" in sql
+    assert "INSERT INTO coding_runs" in sql
+    assert "UPDATE coding_run_leases" in sql
+    assert applied is not None
+    assert applied.request.instruction == "Inspect cache first"
+    assert applied.run.attempt == 2
+    assert applied.lease.fencing_token == 3
+
+
+async def test_interruption_commit_requires_stopped_process_and_is_atomic() -> None:
+    request = SteeringRequest(
+        steering_id="cs_interrupt_1",
+        task_id="ct_1",
+        mode=SteeringMode.INTERRUPT_NOW,
+        instruction="Inspect cache now",
+        requested_at=NOW,
+    )
+    session = FakeSession(
+        rows=[
+            ("ct_1",),
+            (12,),
+            ("cr_1", "ct_1", 1, "running", None, NOW, None),
+            ("ct_1", "cr_2", "worker-a", 3, NOW, EXPIRES, False),
+        ]
+    )
+    repository = repository_for(session)
+
+    with pytest.raises(ValueError, match="process must be stopped"):
+        await repository.commit_interruption(
+            lease=LEASE,
+            request=request,
+            workspace_revision="rev_interrupt",
+            process_stopped=False,
+            now=NOW,
+        )
+
+    applied = await repository.commit_interruption(
+        lease=LEASE,
+        request=request,
+        workspace_revision="rev_interrupt",
+        process_stopped=True,
+        now=NOW,
+    )
+
+    sql = "\n".join(session.sql)
+    assert sql.index("INSERT INTO coding_checkpoints") < sql.index(
+        "INSERT INTO coding_events"
+    )
+    assert "UPDATE coding_steering_requests" in sql
+    assert "UPDATE coding_runs" in sql
+    assert "INSERT INTO coding_runs" in sql
+    assert "UPDATE coding_run_leases" in sql
+    assert applied.event.type == "run.interrupted"
+    assert applied.run.attempt == 2

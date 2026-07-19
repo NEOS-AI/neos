@@ -8,6 +8,7 @@ from neos.coding.domain.durability import (
     PhaseCheckpointCommit,
     PhaseStart,
     StaleExecutionLease,
+    SteeringApplication,
     ToolExecutionClaim,
     ToolExecutionDisposition,
 )
@@ -15,6 +16,9 @@ from neos.coding.domain.events import make_event
 from neos.coding.domain.phases import (
     CodingCheckpoint,
     CodingPhaseStatus,
+    CodingRun,
+    CodingRunStatus,
+    SteeringMode,
     next_phase_attempt,
 )
 
@@ -29,6 +33,7 @@ class InMemoryCodingRunRepository:
         self.interrupt_calls = []
         self.applied_steering = []
         self.steering_requests = []
+        self.steering_claims = {}
         self.phases = []
         self.execution_leases = {}
         self.tool_claims = {}
@@ -298,6 +303,186 @@ class InMemoryCodingRunRepository:
 
     async def apply_steering(self, request) -> None:
         self.applied_steering.append(request)
+
+    async def apply_steering_at_safe_point(
+        self,
+        *,
+        lease,
+        checkpoint,
+        worker_id,
+        claim_expires_at,
+        now,
+    ):
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=now)
+            request = next(
+                (
+                    item
+                    for item in self.steering_requests
+                    if item.task_id == lease.task_id
+                    and item.mode is SteeringMode.SAFE_POINT
+                    and item not in self.applied_steering
+                    and (
+                        item.steering_id not in self.steering_claims
+                        or self.steering_claims[item.steering_id][1] <= now
+                    )
+                ),
+                None,
+            )
+            if request is None:
+                return None
+            self.steering_claims[request.steering_id] = (
+                worker_id,
+                claim_expires_at,
+            )
+            self._durability_seq += 1
+            loop_state = dict(checkpoint.loop_state)
+            loop_state["current_instruction"] = request.instruction
+            loop_state["pending_instruction"] = None
+            steering_checkpoint = CodingCheckpoint(
+                checkpoint_id=f"cc_steer_{request.steering_id}",
+                task_id=lease.task_id,
+                run_id=lease.run_id,
+                seq=self._durability_seq,
+                loop_state=loop_state,
+                workspace_revision=checkpoint.workspace_revision,
+                created_at=now,
+            )
+            previous = self.active_run
+            if previous is None or previous.run_id != lease.run_id:
+                raise StaleExecutionLease(lease.task_id)
+            cancelled = replace(
+                previous,
+                status=CodingRunStatus.CANCELLED,
+                completed_at=now,
+            )
+            run = CodingRun(
+                run_id=f"cr_steer_{request.steering_id}",
+                task_id=lease.task_id,
+                attempt=previous.attempt + 1,
+                status=CodingRunStatus.RUNNING,
+                resume_from_checkpoint_id=steering_checkpoint.checkpoint_id,
+                started_at=now,
+            )
+            next_lease = ExecutionLease(
+                task_id=lease.task_id,
+                run_id=run.run_id,
+                worker_id=worker_id,
+                fencing_token=lease.fencing_token + 1,
+                acquired_at=now,
+                expires_at=claim_expires_at,
+            )
+            applied = replace(
+                request,
+                applied_checkpoint_id=steering_checkpoint.checkpoint_id,
+            )
+            event = make_event(
+                task_id=lease.task_id,
+                seq=self._durability_seq,
+                event_type="steer.applied",
+                payload={
+                    "steering_id": request.steering_id,
+                    "mode": request.mode.value,
+                    "instruction": request.instruction,
+                },
+                now=now,
+                run_id=lease.run_id,
+                checkpoint_id=steering_checkpoint.checkpoint_id,
+            )
+            self.checkpoints.append(steering_checkpoint)
+            self.applied_steering.append(applied)
+            self.created_runs.append(run)
+            self.active_run = run
+            self.execution_leases[lease.task_id] = next_lease
+            return SteeringApplication(
+                applied,
+                steering_checkpoint,
+                cancelled,
+                run,
+                next_lease,
+                event,
+            )
+
+    async def commit_interruption(
+        self,
+        *,
+        lease,
+        request,
+        workspace_revision,
+        process_stopped,
+        now,
+    ):
+        if not process_stopped:
+            raise ValueError("process must be stopped before interruption commit")
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=now)
+            previous = self.active_run
+            if previous is None or previous.run_id != lease.run_id:
+                raise StaleExecutionLease(lease.task_id)
+            self._durability_seq += 1
+            checkpoint = CodingCheckpoint(
+                checkpoint_id=f"cc_interrupt_{request.steering_id}",
+                task_id=lease.task_id,
+                run_id=lease.run_id,
+                seq=self._durability_seq,
+                loop_state={
+                    "phase_index": -1,
+                    "transcript": [],
+                    "current_instruction": request.instruction,
+                    "pending_instruction": None,
+                },
+                workspace_revision=workspace_revision,
+                created_at=now,
+            )
+            cancelled = replace(
+                previous,
+                status=CodingRunStatus.CANCELLED,
+                completed_at=now,
+            )
+            run = CodingRun(
+                run_id=f"cr_interrupt_{request.steering_id}",
+                task_id=lease.task_id,
+                attempt=previous.attempt + 1,
+                status=CodingRunStatus.RUNNING,
+                resume_from_checkpoint_id=checkpoint.checkpoint_id,
+                started_at=now,
+            )
+            next_lease = ExecutionLease(
+                task_id=lease.task_id,
+                run_id=run.run_id,
+                worker_id=lease.worker_id,
+                fencing_token=lease.fencing_token + 1,
+                acquired_at=now,
+                expires_at=lease.expires_at,
+            )
+            applied = replace(
+                request, applied_checkpoint_id=checkpoint.checkpoint_id
+            )
+            event = make_event(
+                task_id=lease.task_id,
+                seq=checkpoint.seq,
+                event_type="run.interrupted",
+                payload={
+                    "steering_id": request.steering_id,
+                    "process_stopped": True,
+                },
+                now=now,
+                run_id=lease.run_id,
+                checkpoint_id=checkpoint.checkpoint_id,
+            )
+            self.checkpoints.append(checkpoint)
+            self.applied_steering.append(applied)
+            self.created_runs.append(run)
+            self.active_run = run
+            self.execution_leases[lease.task_id] = next_lease
+            return SteeringApplication(
+                applied,
+                checkpoint,
+                cancelled,
+                run,
+                next_lease,
+                event,
+            )
 
     async def phase_history(self, task_id: str):
         return tuple(

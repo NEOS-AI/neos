@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from neos.coding.application.run_service import (
     CodingRunService,
@@ -6,7 +6,12 @@ from neos.coding.application.run_service import (
 )
 from neos.coding.application.task_service import InMemoryCodingTaskRepository
 from neos.coding.domain.models import CodingTask, CodingTaskStatus
-from neos.coding.domain.phases import CodingRun, CodingRunStatus, SteeringMode
+from neos.coding.domain.phases import (
+    CodingCheckpoint,
+    CodingRun,
+    CodingRunStatus,
+    SteeringMode,
+)
 from neos.coding.events.store import InMemoryCodingEventStore
 from tests.coding.fakes import InMemoryCodingRunRepository
 
@@ -91,3 +96,59 @@ async def test_interrupt_steering_creates_new_run_from_checkpoint() -> None:
     )
     assert repository.created_runs[-1].attempt == 2
     assert repository.active_run.status is CodingRunStatus.RUNNING
+
+
+async def test_safe_point_steering_uses_atomic_repository_transition() -> None:
+    repository = InMemoryCodingRunRepository(active_run=run_fixture("cr_1"))
+    service = await make_run_service(repository)
+    checkpoint = CodingCheckpoint(
+        checkpoint_id="cc_5",
+        task_id="ct_1",
+        run_id="cr_1",
+        seq=5,
+        loop_state={
+            "phase_index": 1,
+            "transcript": [{"role": "assistant", "content": "planned"}],
+            "current_instruction": "Fix it",
+            "pending_instruction": None,
+        },
+        workspace_revision="rev_5",
+        created_at=NOW,
+    )
+    await repository.save_checkpoint(checkpoint)
+    lease = await repository.acquire_execution_lease(
+        task_id="ct_1",
+        run_id="cr_1",
+        worker_id="worker-a",
+        now=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+    )
+    assert lease is not None
+    steering = await service.steer(
+        task_id="ct_1",
+        owner_id="u1",
+        instruction="Inspect cache first",
+        mode=SteeringMode.SAFE_POINT,
+    )
+    repository.steering_claims[steering.steering_id] = (
+        "dead-worker",
+        NOW - timedelta(seconds=1),
+    )
+
+    applied = await service.on_safe_point(
+        task_id="ct_1",
+        checkpoint_id=checkpoint.checkpoint_id,
+        lease=lease,
+        checkpoint=checkpoint,
+        worker_id="worker-a",
+    )
+
+    assert applied is not False
+    assert applied.checkpoint.loop_state["current_instruction"] == (
+        "Inspect cache first"
+    )
+    assert applied.checkpoint.loop_state["transcript"] == checkpoint.loop_state[
+        "transcript"
+    ]
+    assert applied.run.attempt == 2
+    assert applied.lease.fencing_token == lease.fencing_token + 1
