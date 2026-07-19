@@ -62,9 +62,6 @@ class TokenBudget:
         recovered = dict(outstanding or {})
         if any(amount < 0 for amount in recovered.values()):
             raise ValueError("outstanding token counts must be non-negative")
-        if consumed_tokens + sum(recovered.values()) > cap_tokens:
-            raise ValueError("recovered token usage exceeds the hard cap")
-
         self.cap_tokens = cap_tokens
         self._consumed_tokens = consumed_tokens
         self._outstanding = recovered

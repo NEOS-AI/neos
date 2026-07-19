@@ -2,6 +2,7 @@ import pytest
 from types import SimpleNamespace
 from neos.workflow.deep_analysis.budgeter import Budgeter
 from neos.workflow.deep_analysis.models import Effort
+from neos.workflow.deep_analysis.token_budget import TokenBudget
 
 pytestmark = pytest.mark.no_db
 
@@ -41,3 +42,18 @@ def test_aging_increases_with_rounds():
     assert abs(b.aging("never_selected") - 0.20) < 1e-9
     b._last_selected["q1"] = 2
     assert abs(b.aging("q1") - 0.10) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_shared_token_budget_exhaustion_stops_below_ledger_cap():
+    class Ledger:
+        async def total_spent(self):
+            return 0
+
+        async def open_questions(self):
+            raise AssertionError("exhaustion must short-circuit question lookup")
+
+    token_budget = TokenBudget(100, outstanding={"orphan": 100})
+    budgeter = Budgeter(global_token_cap=100, token_budget=token_budget)
+
+    assert await budgeter.should_stop(Ledger()) is True

@@ -98,6 +98,13 @@ async def test_recovered_outstanding_reservations_reduce_remaining_budget():
     assert budget.remaining_tokens == 60
 
 
+def test_recovered_usage_above_reconfigured_cap_fails_closed():
+    budget = TokenBudget(20, consumed_tokens=15, outstanding={"old": 10})
+
+    assert budget.remaining_tokens == -5
+    assert budget.exhausted is True
+
+
 @pytest.mark.asyncio
 async def test_context_scopes_are_isolated_across_tasks():
     first = TokenBudget(100)

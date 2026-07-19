@@ -4,6 +4,7 @@ from __future__ import annotations
 from neos.config.settings import settings
 
 from .models import Effort
+from .token_budget import TokenBudget
 
 
 class Budgeter:
@@ -16,6 +17,7 @@ class Budgeter:
         global_token_cap: int | None = None,
         max_depth: int | None = None,
         parallel_workers: int | None = None,
+        token_budget: TokenBudget | None = None,
     ) -> None:
         config = settings.config.deep_analysis
         self.score_floor = config.score_floor if score_floor is None else score_floor
@@ -34,6 +36,7 @@ class Budgeter:
         self.parallel_workers = (
             config.parallel_workers if parallel_workers is None else parallel_workers
         )
+        self.token_budget = token_budget
         self._round = 0
         self._last_selected: dict[str, int] = {}
 
@@ -111,6 +114,8 @@ class Budgeter:
         return picks
 
     async def should_stop(self, ledger) -> bool:
+        if self.token_budget is not None and self.token_budget.exhausted:
+            return True
         spent = await ledger.total_spent()
         if spent >= self.global_token_cap:
             return True
@@ -124,4 +129,3 @@ class Budgeter:
             if (await self.base_score(ledger, q)) >= self.score_floor:
                 return False
         return True
-
