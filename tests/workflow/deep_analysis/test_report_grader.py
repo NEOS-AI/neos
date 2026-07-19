@@ -4,7 +4,6 @@ from dataclasses import dataclass
 import pytest
 
 from neos.workflow.deep_analysis.graders.report import ReportGrader
-from neos.workflow.deep_analysis.models import Verdict
 from neos.workflow.deep_analysis.token_budget import TokenBudgetExhausted
 
 pytestmark = pytest.mark.no_db
