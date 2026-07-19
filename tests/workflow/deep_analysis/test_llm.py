@@ -6,7 +6,13 @@ from neos.workflow.deep_analysis.llm import (
     LLMResponse,
     call_json,
     call_llm,
+    call_messages,
     parse_json,
+)
+from neos.workflow.deep_analysis.token_budget import (
+    TokenBudget,
+    TokenBudgetExhausted,
+    token_budget_scope,
 )
 
 
@@ -30,9 +36,11 @@ class FakeAnthropic:
         self._texts = list(texts)
         self.messages = self
         self.calls = 0
+        self.kwargs = []
 
     async def create(self, **kwargs):
         self.calls += 1
+        self.kwargs.append(kwargs)
         response_text = self._texts.pop(0)
 
         class Usage:
@@ -185,3 +193,120 @@ def test_llm_response_carries_content_blocks_and_stop_reason():
     )
     assert response.stop_reason == "tool_use"
     assert response.content[0]["name"] == "search_arxiv"
+
+
+@pytest.mark.asyncio
+async def test_scoped_call_reduces_provider_limit_and_settles_usage():
+    client = FakeAnthropic(["answer"])
+    budget = TokenBudget(220)
+
+    with token_budget_scope(budget):
+        response = await call_llm(
+            "claude-haiku-4-5-20251001",
+            "prompt",
+            max_tokens=1_000,
+            client=client,
+            stage="worker",
+        )
+
+    assert client.kwargs[0]["max_tokens"] < 1_000
+    assert budget.consumed_tokens == response.input_tokens + response.output_tokens
+    assert budget.reserved_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_scoped_call_does_not_dispatch_when_request_cannot_fit():
+    client = FakeAnthropic(["unused"])
+    budget = TokenBudget(1)
+
+    with token_budget_scope(budget):
+        with pytest.raises(TokenBudgetExhausted):
+            await call_llm(
+                "claude-haiku-4-5-20251001",
+                "prompt",
+                max_tokens=100,
+                client=client,
+            )
+
+    assert client.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_scoped_call_releases_reservation_on_pre_dispatch_failure(monkeypatch):
+    budget = TokenBudget(500)
+
+    def fail_before_dispatch(_model):
+        raise RuntimeError("client unavailable")
+
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.llm._default_client",
+        fail_before_dispatch,
+    )
+    with token_budget_scope(budget):
+        with pytest.raises(RuntimeError, match="client unavailable"):
+            await call_llm(
+                "claude-haiku-4-5-20251001",
+                "prompt",
+                max_tokens=100,
+            )
+
+    assert budget.reserved_tokens == 0
+    assert budget.remaining_tokens == 500
+
+
+@pytest.mark.asyncio
+async def test_scoped_call_keeps_reservation_on_provider_failure():
+    class FailingAnthropic(FakeAnthropic):
+        async def create(self, **kwargs):
+            self.calls += 1
+            raise RuntimeError("provider failed")
+
+    client = FailingAnthropic([])
+    budget = TokenBudget(500)
+
+    with token_budget_scope(budget):
+        with pytest.raises(RuntimeError, match="provider failed"):
+            await call_messages(
+                "claude-haiku-4-5-20251001",
+                [{"role": "user", "content": "prompt"}],
+                max_tokens=100,
+                client=client,
+                stage="grader",
+            )
+
+    assert client.calls == 1
+    assert budget.reserved_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_scoped_json_retry_reserves_and_settles_each_attempt():
+    client = FakeAnthropic(["garbage", '{"ok": true}'])
+    budget = TokenBudget(1_000)
+
+    with token_budget_scope(budget):
+        await call_json(
+            "claude-haiku-4-5-20251001",
+            "prompt",
+            max_tokens=100,
+            client=client,
+            retries=1,
+            stage="decomposition",
+        )
+
+    assert client.calls == 2
+    assert budget.consumed_tokens == 30
+    assert budget.reserved_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_unscoped_call_preserves_requested_limit():
+    client = FakeAnthropic(["answer"])
+
+    await call_llm(
+        "claude-haiku-4-5-20251001",
+        "prompt",
+        max_tokens=123,
+        client=client,
+    )
+
+    assert client.kwargs[0]["max_tokens"] == 123
