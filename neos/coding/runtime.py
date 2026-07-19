@@ -47,6 +47,7 @@ from neos.coding.workers.celery_runtime import (
     validate_coding_worker_settings,
 )
 from neos.coding.sandbox.factory import create_sandbox_provider
+from neos.coding.sandbox.observability import LoggingCodingAuditSink
 from neos.database.connection import db_manager
 from neos.config.settings import settings
 from neos.config.schema import AppConfig
@@ -191,6 +192,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
             bindings=bindings,
             config=loop_config,
             metrics=metrics,
+            audit=LoggingCodingAuditSink(),
         )
 
     return finish

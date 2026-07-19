@@ -6,7 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from neos.coding.domain.durability import ExecutionLease, ToolExecutionDisposition
+from neos.coding.domain.durability import (
+    ExecutionLease,
+    StaleExecutionLease,
+    ToolExecutionDisposition,
+)
 from neos.coding.domain.events import make_event
 from neos.coding.loop.anthropic import (
     AnthropicCodingLoop,
@@ -24,7 +28,7 @@ from neos.coding.model.base import (
 )
 from neos.coding.tools.executor import ToolResult
 from neos.coding.tools.registry import CodingToolRegistry
-from tests.coding.fakes import InMemoryCodingRunRepository
+from tests.coding.fakes import InMemoryCodingRunRepository, RecordingCodingAuditSink
 
 NOW = datetime(2026, 7, 19, tzinfo=UTC)
 
@@ -74,14 +78,28 @@ class Executor:
 
 
 class Bindings:
-    def __init__(self):
-        self.session = SimpleNamespace(writes=0)
+    def __init__(self, *, mutation_error=None):
+        self.session = Session()
+        self.mutation_error = mutation_error
 
-    async def resolve(self, task_id, run_id):
+    async def resolve(self, lease):
         return SimpleNamespace(
-            binding=SimpleNamespace(workspace_revision="1"),
+            binding=SimpleNamespace(workspace_revision="1", provider="memory"),
             session=self.session,
         )
+
+    async def record_mutation(self, lease, *, workspace_revision):
+        if self.mutation_error is not None:
+            raise self.mutation_error
+        return None
+
+
+class Session:
+    def __init__(self) -> None:
+        self.writes = 0
+
+    async def workspace_revision(self) -> int:
+        return self.writes + 1
 
 
 @dataclass
@@ -103,19 +121,28 @@ def completed(input_tokens=5, output_tokens=3):
     return ModelCompleted("tool_use", ModelUsage(input_tokens, output_tokens))
 
 
-def harness(turns, *, completed_tools=None, executor=None, config=None):
+def harness(
+    turns,
+    *,
+    completed_tools=None,
+    executor=None,
+    config=None,
+    audit=None,
+    bindings=None,
+):
     repository = InMemoryCodingRunRepository(completed_tools=completed_tools)
     repository.execution_leases["ct_1"] = LEASE
     events = Events()
     model = Model(turns)
     executor = executor or Executor()
-    bindings = Bindings()
+    bindings = bindings or Bindings()
     loop = AnthropicCodingLoop(
         model=model,
         tools=CodingToolRegistry.default(command_allowlist=frozenset({"git"})),
         executor=executor,
         bindings=bindings,
         config=config or AnthropicLoopConfig(model="claude-test", system="code"),
+        audit=audit,
         clock=lambda: NOW,
     )
     deps = LoopDependencies(repository=repository, events=events, lease=LEASE)
@@ -179,7 +206,8 @@ async def test_multiple_tool_calls_execute_across_invocations() -> None:
     ],
 )
 async def test_policy_or_schema_denial_checkpoints_without_claim(call, reason) -> None:
-    h = harness([[call, completed()]])
+    audit = RecordingCodingAuditSink()
+    h = harness([[call, completed()]], audit=audit)
     events = await collect(h)
     assert h.repository.tool_claims == {}
     assert (
@@ -189,6 +217,15 @@ async def test_policy_or_schema_denial_checkpoints_without_claim(call, reason) -
         == "denied"
     )
     assert events[-1].payload["reason_code"] == reason
+    assert audit.events == [
+        {
+            "provider": "memory",
+            "tool": call.name if call.name == "write_file.v1" else "unknown",
+            "operation": "validate",
+            "outcome": "denied",
+            "error_code": reason,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -246,12 +283,33 @@ async def test_provider_error_preserves_retryability() -> None:
 
 @pytest.mark.asyncio
 async def test_unknown_mutation_outcome_is_non_retryable() -> None:
+    audit = RecordingCodingAuditSink()
     h = harness(
-        [[tool_call(), completed()]], executor=Executor(fail_after_mutation=True)
+        [[tool_call(), completed()]],
+        executor=Executor(fail_after_mutation=True),
+        audit=audit,
     )
     with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown") as caught:
         await collect(h)
     assert caught.value.retryable is False
+    assert audit.events[-1]["outcome"] == "error"
+    assert audit.events[-1]["error_code"] == "tool_outcome_unknown"
+
+
+@pytest.mark.asyncio
+async def test_stale_mutation_bookkeeping_is_unknown_outcome() -> None:
+    audit = RecordingCodingAuditSink()
+    h = harness(
+        [[tool_call(), completed()]],
+        bindings=Bindings(mutation_error=StaleExecutionLease("ct_1")),
+        audit=audit,
+    )
+
+    with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown") as caught:
+        await collect(h)
+
+    assert caught.value.retryable is False
+    assert audit.events[-1]["error_code"] == "tool_outcome_unknown"
 
 
 @pytest.mark.asyncio

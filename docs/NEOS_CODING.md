@@ -1138,7 +1138,7 @@ Docker sandbox는 digest-pinned image, non-root UID/GID, read-only root filesyst
 
 ### 20.2 one-safe-point scheduling
 
-worker delivery 한 번은 최신 durable checkpoint에서 정확히 한 safe point만 전진한다. model-only completion 또는 tool 하나의 durable result와 phase checkpoint가 safe point다. 매 호출마다 iterator와 sandbox binding을 다시 구성하므로 브라우저나 worker process 수명에 의존하지 않는다. 동일 task의 execution lease는 fencing token을 포함하고, 이전 token은 tool result, checkpoint, steering/binding 변경을 commit할 수 없다.
+worker delivery 한 번은 최신 durable checkpoint에서 정확히 한 safe point만 전진한다. model-only completion 또는 tool 하나의 durable result와 phase checkpoint가 safe point다. 매 호출마다 iterator와 sandbox binding을 다시 구성하므로 브라우저나 worker process 수명에 의존하지 않는다. 동일 task의 execution lease는 fencing token을 포함한다. worker의 binding 생성·run 재결합·복원·workspace revision/snapshot bookkeeping CAS는 `coding_run_leases`의 run, worker, fencing token, 만료 시간을 같은 repository transaction에서 검증한다. 따라서 이전 token은 현재 binding version을 알고 있어도 tool result, checkpoint, steering 또는 binding 변경을 commit할 수 없다. 운영 lifecycle의 suspend/terminal destroy만 명시적인 `*_admin` API로 분리한다.
 
 ### 20.3 snapshot과 crash recovery
 
@@ -1160,7 +1160,7 @@ Prometheus 지표는 다음 fixed-cardinality label만 사용한다.
 | `coding_lease_contention_total` | `outcome` |
 | `coding_sandbox_operation_total` | `provider`, `operation`, `outcome`, stable `error_code` |
 
-model 문자열, task/run/tool-call/sandbox ID, path, argv, prompt, file/stdin/stdout 내용, secret 값은 metric label에 넣지 않는다. audit event도 provider, 등록 tool, operation, outcome, stable error code, env 이름과 byte count 같은 content-free metadata만 기록한다.
+model 문자열, task/run/tool-call/sandbox ID, path, argv, prompt, file/stdin/stdout 내용, secret 값은 metric label에 넣지 않는다. real loop는 injected audit sink에 validation `allowed/denied`와 execution `ok/error/reused`를 직접 보낸다. production runtime은 logging observability sink를 주입한다. audit event는 provider, 등록 tool, fixed operation/outcome과 allowlist의 stable error code만 기록하며 알 수 없는 error code는 `other`로 정규화한다. path, argv, env 값, prompt와 file/stdin/stdout 내용은 기록하지 않는다.
 
 ### 20.5 검증과 opt-in network smoke
 

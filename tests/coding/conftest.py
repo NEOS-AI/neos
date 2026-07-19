@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -17,7 +16,6 @@ from neos.coding.loop.anthropic import AnthropicCodingLoop, AnthropicLoopConfig
 from neos.coding.sandbox.base import SandboxLimits
 from neos.coding.sandbox.bindings import SandboxBindingService
 from neos.coding.sandbox.memory import MemorySandboxProvider
-from neos.coding.sandbox.observability import CodingToolAuditEvent
 from neos.coding.tools.executor import SandboxToolExecutor
 from neos.coding.tools.registry import CodingToolRegistry
 from tests.coding.fakes import (
@@ -65,6 +63,7 @@ class RealLoopHarness:
         runs,
         executor,
         events,
+        bindings,
         now,
     ) -> None:
         self.provider = provider
@@ -74,6 +73,7 @@ class RealLoopHarness:
         self.runs = runs
         self.executor = executor
         self.events = events
+        self.bindings = bindings
         self.now = now
 
     async def advance(self, *, worker_id="worker-1"):
@@ -111,28 +111,6 @@ class RealLoopHarness:
                 if content.get("type") == "text":
                     return content["text"]
         return None
-
-    @property
-    def audit_events(self):
-        return [
-            asdict(CodingToolAuditEvent.from_result(
-                provider="memory", tool=call[1],
-                operation="execute",
-                outcome="ok",
-            ))
-            for call in sorted(self.completed_tool_ids_with_names)
-        ]
-
-    @property
-    def completed_tool_ids_with_names(self):
-        names = {}
-        for checkpoint in self.repository.checkpoints:
-            for call in checkpoint.loop_state.get("pending_tool_calls", ()):
-                names[call["tool_call_id"]] = call["name"]
-        return {
-            (tool_id, names.get(tool_id, "unknown"))
-            for tool_id in self.completed_tool_ids
-        }
 
     async def replacement_lease(self):
         run = await self.repository.latest_run("ct_real")
@@ -173,29 +151,17 @@ class RealLoopHarness:
             now=self.now.value,
         )
 
-    async def replace_binding_with_lease(self, lease):
-        current_lease = self.repository.execution_leases.get(lease.task_id)
-        if current_lease != lease:
-            return False
-        binding = self.binding_repository.current
-        return (
-            await self.binding_repository.replace(
-                replace(binding, run_id=lease.run_id),
-                expected_version=binding.version,
-                now=self.now.value,
-            )
-            is not None
-        )
-
-
 @pytest.fixture
 async def real_loop_harness(tmp_path):
     harnesses = []
 
-    async def create(*, script, metrics=None, crash_after=None):
+    async def create(*, script, metrics=None, audit=None, crash_after=None):
         now = SimpleNamespace(value=datetime(2026, 7, 19, tzinfo=UTC))
         provider = MemorySandboxProvider(root=tmp_path / f"sandbox-{len(harnesses)}")
-        binding_repository = InMemorySandboxBindingRepository()
+        repository = CrashRepository(
+            task_prompts={"ct_real": "Implement add"}, crash_after=crash_after
+        )
+        binding_repository = InMemorySandboxBindingRepository(repository)
         bindings = SandboxBindingService(
             repository=binding_repository,
             provider=provider,
@@ -203,19 +169,10 @@ async def real_loop_harness(tmp_path):
             snapshot_cadence=10,
             clock=lambda: now.value,
         )
-        bound = await bindings.resolve("ct_real", "pending")
-        await bound.session.write_file("calc.py", b"def add(a, b): raise NotImplementedError\n")
-        await bound.session.write_file(
-            "test_calc.py",
-            b"from calc import add\n\ndef test_add(): assert add(2, 3) == 5\n",
-        )
         events = InMemoryCodingEventStore()
         tasks_repository = InMemoryCodingTaskRepository()
         tasks = CodingTaskService(tasks_repository, events, clock=lambda: now.value)
         await tasks.create_task(owner_id="u1", prompt="Implement add", task_id="ct_real")
-        repository = CrashRepository(
-            task_prompts={"ct_real": "Implement add"}, crash_after=crash_after
-        )
         executor = CountingCrashExecutor(crash_after=crash_after)
         loop = AnthropicCodingLoop(
             model=ScriptedCodingModel(script),
@@ -224,6 +181,7 @@ async def real_loop_harness(tmp_path):
             bindings=bindings,
             config=AnthropicLoopConfig(model="claude-test", system="code"),
             metrics=metrics,
+            audit=audit,
             clock=lambda: now.value,
         )
         runs = CodingRunService(
@@ -234,7 +192,23 @@ async def real_loop_harness(tmp_path):
             loop=loop,
             clock=lambda: now.value,
         )
-        await runs.ensure_started(task_id="ct_real")
+        run = await runs.ensure_started(task_id="ct_real")
+        seed_lease = await repository.acquire_execution_lease(
+            task_id="ct_real",
+            run_id=run.run_id,
+            worker_id="fixture-seed",
+            now=now.value,
+            expires_at=now.value + timedelta(seconds=30),
+        )
+        bound = await bindings.resolve(seed_lease)
+        await bound.session.write_file(
+            "calc.py", b"def add(a, b): raise NotImplementedError\n"
+        )
+        await bound.session.write_file(
+            "test_calc.py",
+            b"from calc import add\n\ndef test_add(): assert add(2, 3) == 5\n",
+        )
+        await repository.release_execution_lease(seed_lease, now=now.value)
         result = RealLoopHarness(
             provider=provider,
             session=bound.session,
@@ -243,6 +217,7 @@ async def real_loop_harness(tmp_path):
             runs=runs,
             executor=executor,
             events=events,
+            bindings=bindings,
             now=now,
         )
         harnesses.append(result)

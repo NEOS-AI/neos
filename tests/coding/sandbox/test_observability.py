@@ -38,18 +38,33 @@ def test_audit_event_does_not_capture_contents_or_environment_values() -> None:
     assert event.environment_names == ("TOKEN",)
 
 
+def test_command_audit_normalizes_hostile_error_code() -> None:
+    event = SandboxAuditEvent.for_command(
+        sandbox_id="sb_1",
+        argv=("python",),
+        env={},
+        stdin_bytes=0,
+        stdout_bytes=0,
+        outcome="error",
+        error_code="secret-customer-928374",
+    )
+
+    assert event.error_code == "other"
+
+
 def test_tool_audit_event_normalizes_unbounded_outcome_without_content() -> None:
     event = CodingToolAuditEvent.from_result(
         provider="memory",
         tool="write_file.v1",
         operation="execute",
         outcome="secret file contents",
-        error_code="sandbox_error",
+        error_code="secret-user-specific-error-928374",
     )
 
     serialized = json.dumps(asdict(event))
     assert event.outcome == "error"
     assert event.provider == "memory"
     assert event.tool == "write_file.v1"
+    assert event.error_code == "other"
     assert "secret" not in serialized
     assert "file contents" not in serialized

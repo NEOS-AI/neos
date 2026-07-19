@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Iterable
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import timedelta
 from typing import Any
 
@@ -85,28 +85,52 @@ class RecordingCodingLoopMetrics:
         )
 
 
-class InMemorySandboxBindingRepository:
+class RecordingCodingAuditSink:
     def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    async def emit(self, event) -> None:
+        self.events.append(asdict(event))
+
+
+class InMemorySandboxBindingRepository:
+    def __init__(self, leases) -> None:
         self.current = None
+        self._leases = leases
 
     async def get(self, task_id):
         if self.current is None or self.current.task_id != task_id:
             return None
         return self.current
 
-    async def create(self, binding, *, now):
+    def _require_lease(self, lease, now):
+        current = self._leases.execution_leases.get(lease.task_id)
+        if current != lease or current.expires_at <= now:
+            raise StaleExecutionLease(lease.task_id)
+
+    async def create_fenced(self, binding, *, lease, now):
+        self._require_lease(lease, now)
         if self.current is not None:
             return False
         self.current = binding
         return True
 
-    async def replace(self, binding, *, expected_version, now):
+    async def replace_fenced(
+        self, binding, *, expected_version, lease, now
+    ):
+        self._require_lease(lease, now)
         if self.current is None or self.current.version != expected_version:
             return None
         self.current = replace(binding, version=expected_version + 1)
         return self.current
 
-    async def delete(self, task_id, *, expected_version):
+    async def replace_admin(self, binding, *, expected_version, now):
+        if self.current is None or self.current.version != expected_version:
+            return None
+        self.current = replace(binding, version=expected_version + 1)
+        return self.current
+
+    async def delete_admin(self, task_id, *, expected_version):
         if self.current is None or self.current.version != expected_version:
             return False
         self.current = None

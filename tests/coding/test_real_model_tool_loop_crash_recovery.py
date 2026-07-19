@@ -4,7 +4,7 @@ import pytest
 
 from neos.coding.domain.durability import StaleExecutionLease
 from neos.coding.loop.anthropic import CodingLoopFailure
-from tests.coding.fakes import text_turn, tool_turn
+from tests.coding.fakes import RecordingCodingAuditSink, text_turn, tool_turn
 
 pytestmark = pytest.mark.no_db
 
@@ -44,8 +44,14 @@ async def test_crash_after_write_has_unknown_outcome_without_second_write(
 async def test_crash_after_durable_tool_completion_reuses_result(
     real_loop_harness,
 ) -> None:
+    audit = RecordingCodingAuditSink()
     harness = await real_loop_harness(
         script=[
+            tool_turn(
+                "write_file.v1",
+                {"path": "calc.py", "content": "changed\n"},
+                tool_call_id="tool_1",
+            ),
             tool_turn(
                 "write_file.v1",
                 {"path": "calc.py", "content": "changed\n"},
@@ -54,6 +60,7 @@ async def test_crash_after_durable_tool_completion_reuses_result(
             text_turn("done"),
         ],
         crash_after="complete_tool_execution",
+        audit=audit,
     )
 
     with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown"):
@@ -64,6 +71,7 @@ async def test_crash_after_durable_tool_completion_reuses_result(
 
     assert harness.write_count == 1
     assert harness.completed_tool_ids == {"tool_1"}
+    assert any(event["outcome"] == "reused" for event in audit.events)
 
 
 @pytest.mark.asyncio
@@ -79,5 +87,7 @@ async def test_stale_fencing_token_cannot_commit_results_or_checkpoints_or_bindi
         )
     with pytest.raises(StaleExecutionLease):
         await harness.commit_checkpoint(old, phase)
-    assert await harness.replace_binding_with_lease(old) is False
-    assert await harness.replace_binding_with_lease(current) is True
+    with pytest.raises(StaleExecutionLease):
+        await harness.bindings.record_mutation(old, workspace_revision=9)
+    updated = await harness.bindings.record_mutation(current, workspace_revision=9)
+    assert updated.workspace_revision == "9"

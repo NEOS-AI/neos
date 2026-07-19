@@ -27,6 +27,10 @@ from neos.coding.model.base import (
     ToolUseContent,
 )
 from neos.coding.sandbox.bindings import SandboxBindingService
+from neos.coding.sandbox.observability import (
+    CodingToolAuditEvent,
+    NullCodingAuditSink,
+)
 from neos.coding.tools.executor import SandboxToolExecutor
 from neos.coding.tools.registry import CodingToolRegistry, ToolRisk, ToolValidationError
 from neos.coding.domain.durability import ToolExecutionDisposition
@@ -107,6 +111,7 @@ class AnthropicCodingLoop:
         bindings: SandboxBindingService,
         config: AnthropicLoopConfig,
         metrics=None,
+        audit=None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._model = model
@@ -115,6 +120,7 @@ class AnthropicCodingLoop:
         self._bindings = bindings
         self._config = config
         self._metrics = metrics
+        self._audit = audit or NullCodingAuditSink()
         self._clock = clock
 
     async def run(
@@ -129,7 +135,7 @@ class AnthropicCodingLoop:
         state = self._restore(input, checkpoint)
         if state.terminal_pending:
             return
-        bound = await self._bindings.resolve(input.task_id, input.run_id)
+        bound = await self._bindings.resolve(lease)
         if state.has_pending_tool:
             async for event in self._advance_one_tool(input, state, bound, deps):
                 yield event
@@ -221,6 +227,15 @@ class AnthropicCodingLoop:
         try:
             validated = self._tools.validate(call.name, call.input)
         except ToolValidationError as error:
+            await self._audit.emit(
+                CodingToolAuditEvent.from_result(
+                    provider=bound.binding.provider,
+                    tool=call.name,
+                    operation="validate",
+                    outcome="denied",
+                    error_code=error.reason_code,
+                )
+            )
             denied = ToolResultContent(
                 call.tool_call_id, "denied", {"reason_code": error.reason_code}
             )
@@ -235,6 +250,14 @@ class AnthropicCodingLoop:
             )
             yield committed.event
             return
+        await self._audit.emit(
+            CodingToolAuditEvent.from_result(
+                provider=bound.binding.provider,
+                tool=call.name,
+                operation="validate",
+                outcome="allowed",
+            )
+        )
         claim = await deps.repository.claim_tool_execution(
             lease=deps.lease,
             tool_call_id=call.tool_call_id,
@@ -256,6 +279,14 @@ class AnthropicCodingLoop:
             yield started.event
         if claim.disposition is ToolExecutionDisposition.COMPLETED:
             result = dict(claim.result or {})
+            await self._audit.emit(
+                CodingToolAuditEvent.from_result(
+                    provider=bound.binding.provider,
+                    tool=call.name,
+                    operation="execute",
+                    outcome="reused",
+                )
+            )
             tool_event = await deps.events.append(
                 task_id=input.task_id,
                 event_type="tool.completed",
@@ -274,18 +305,75 @@ class AnthropicCodingLoop:
                     if validated.risk is not ToolRisk.READ_ONLY
                     else "tool_execution_failed"
                 )
+                await self._audit.emit(
+                    CodingToolAuditEvent.from_result(
+                        provider=bound.binding.provider,
+                        tool=call.name,
+                        operation="execute",
+                        outcome="error",
+                        error_code=code,
+                    )
+                )
                 raise CodingLoopFailure(
                     code, retryable=validated.risk is ToolRisk.READ_ONLY
                 ) from error
             result = dict(executed.to_mapping())
+            if validated.risk is not ToolRisk.READ_ONLY:
+                try:
+                    await self._bindings.record_mutation(
+                        deps.lease,
+                        workspace_revision=(
+                            await bound.session.workspace_revision()
+                        ),
+                    )
+                except Exception as error:
+                    await self._audit.emit(
+                        CodingToolAuditEvent.from_result(
+                            provider=bound.binding.provider,
+                            tool=call.name,
+                            operation="execute",
+                            outcome="error",
+                            error_code="tool_outcome_unknown",
+                        )
+                    )
+                    raise CodingLoopFailure(
+                        "tool_outcome_unknown", retryable=False
+                    ) from error
             try:
                 tool_event = await deps.repository.complete_tool_execution(
                     claim, result=result, now=self._clock()
                 )
             except Exception as error:
+                await self._audit.emit(
+                    CodingToolAuditEvent.from_result(
+                        provider=bound.binding.provider,
+                        tool=call.name,
+                        operation="execute",
+                        outcome="error",
+                        error_code="tool_outcome_unknown",
+                    )
+                )
                 raise CodingLoopFailure(
                     "tool_outcome_unknown", retryable=False
                 ) from error
+            result_status = str(result.get("status", "ok"))
+            await self._audit.emit(
+                CodingToolAuditEvent.from_result(
+                    provider=bound.binding.provider,
+                    tool=call.name,
+                    operation="execute",
+                    outcome=(
+                        result_status
+                        if result_status in {"ok", "error", "denied"}
+                        else "error"
+                    ),
+                    error_code=(
+                        str(result.get("reason_code"))
+                        if result_status != "ok"
+                        else None
+                    ),
+                )
+            )
         if self._metrics is not None:
             metric_outcome = str(result.get("status", "ok"))
             if metric_outcome not in {"ok", "error", "denied"}:

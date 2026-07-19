@@ -3,6 +3,7 @@ import json
 import pytest
 
 from tests.coding.fakes import (
+    RecordingCodingAuditSink,
     RecordingCodingLoopMetrics,
     text_turn,
     tool_turn,
@@ -16,6 +17,7 @@ async def test_model_reads_edits_tests_and_finishes_across_safe_points(
     real_loop_harness,
 ) -> None:
     metrics = RecordingCodingLoopMetrics()
+    audit = RecordingCodingAuditSink()
     harness = await real_loop_harness(
         script=[
             tool_turn("read_file.v1", {"path": "calc.py"}, tool_call_id="tool_1"),
@@ -30,6 +32,7 @@ async def test_model_reads_edits_tests_and_finishes_across_safe_points(
             text_turn("Implemented and verified add()."),
         ],
         metrics=metrics,
+        audit=audit,
     )
 
     await harness.advance_until_complete()
@@ -47,6 +50,12 @@ async def test_model_reads_edits_tests_and_finishes_across_safe_points(
         "coding_tool_execution_total",
         {"tool": "write_file.v1", "outcome": "ok"},
     ) in metrics.records
-    serialized = json.dumps(harness.audit_events)
+    serialized = json.dumps(audit.events)
     assert "secret" not in serialized
     assert "file contents" not in serialized
+    assert any(
+        event["tool"] == "write_file.v1"
+        and event["operation"] == "execute"
+        and event["outcome"] == "ok"
+        for event in audit.events
+    )

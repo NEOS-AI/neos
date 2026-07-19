@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Callable, Protocol
 
+from neos.coding.domain.durability import ExecutionLease
 from neos.coding.sandbox.base import (
     Sandbox,
     SandboxLimits,
@@ -44,11 +45,24 @@ class SandboxBindingError(RuntimeError):
 class SandboxBindingRepository(Protocol):
     async def get(self, task_id: str) -> SandboxBinding | None: ...
 
-    async def create(
-        self, binding: SandboxBinding, *, now: datetime
+    async def create_fenced(
+        self,
+        binding: SandboxBinding,
+        *,
+        lease: ExecutionLease,
+        now: datetime,
     ) -> bool: ...
 
-    async def replace(
+    async def replace_fenced(
+        self,
+        binding: SandboxBinding,
+        *,
+        expected_version: int,
+        lease: ExecutionLease,
+        now: datetime,
+    ) -> SandboxBinding | None: ...
+
+    async def replace_admin(
         self,
         binding: SandboxBinding,
         *,
@@ -56,7 +70,7 @@ class SandboxBindingRepository(Protocol):
         now: datetime,
     ) -> SandboxBinding | None: ...
 
-    async def delete(self, task_id: str, *, expected_version: int) -> bool: ...
+    async def delete_admin(self, task_id: str, *, expected_version: int) -> bool: ...
 
 
 class SandboxBindingService:
@@ -81,51 +95,62 @@ class SandboxBindingService:
         self._image_digest = image_digest
         self._clock = clock or (lambda: datetime.now(UTC))
 
-    async def resolve(self, task_id: str, run_id: str) -> BoundSandboxSession:
-        current = await self._repository.get(task_id)
+    async def resolve(self, lease: ExecutionLease) -> BoundSandboxSession:
+        current = await self._repository.get(lease.task_id)
         if current is None:
-            return await self._create_and_bind(task_id, run_id)
-        return await self._resolve_existing(current, run_id)
+            return await self._create_and_bind(lease)
+        return await self._resolve_existing(current, lease)
 
     async def _create_and_bind(
-        self, task_id: str, run_id: str
+        self, lease: ExecutionLease
     ) -> BoundSandboxSession:
-        created = await self._provider.create(owner_id=task_id, limits=self._limits)
+        created = await self._provider.create(
+            owner_id=lease.task_id, limits=self._limits
+        )
         try:
-            candidate = self._binding_from_sandbox(task_id, run_id, created)
-            persisted = await self._repository.create(candidate, now=self._clock())
+            candidate = self._binding_from_sandbox(
+                lease.task_id, lease.run_id, created
+            )
+            persisted = await self._repository.create_fenced(
+                candidate, lease=lease, now=self._clock()
+            )
         except Exception:
             await self._provider.destroy(created.sandbox_id)
             raise
         if not persisted:
             await self._provider.destroy(created.sandbox_id)
-            winner = await self._repository.get(task_id)
+            winner = await self._repository.get(lease.task_id)
             if winner is None:
                 raise SandboxBindingError(
                     "sandbox_binding_ownership_lost", retryable=False
                 )
-            return await self._resolve_existing(winner, run_id)
+            return await self._resolve_existing(winner, lease)
         session = await self._provider.open_session(created.sandbox_id)
         return BoundSandboxSession(candidate, session)
 
     async def _resolve_existing(
-        self, current: SandboxBinding, run_id: str
+        self, current: SandboxBinding, lease: ExecutionLease
     ) -> BoundSandboxSession:
         self._verify_image(current.image_digest)
         try:
             sandbox = await self._provider.get(current.sandbox_id)
         except SandboxNotFound:
-            return await self._restore(current, run_id)
+            return await self._restore(current, lease)
         self._verify_sandbox(current, sandbox)
         resumed = sandbox.state is SandboxState.SUSPENDED
         if resumed:
             sandbox = await self._provider.resume(sandbox.sandbox_id)
         if sandbox.state is not SandboxState.RUNNING or not sandbox.healthy:
             raise SandboxBindingError("sandbox_unhealthy", retryable=True)
-        if resumed or current.health_state != "healthy" or current.run_id != run_id:
-            rebound = await self._repository.replace(
-                replace(current, run_id=run_id, health_state="healthy"),
+        if (
+            resumed
+            or current.health_state != "healthy"
+            or current.run_id != lease.run_id
+        ):
+            rebound = await self._repository.replace_fenced(
+                replace(current, run_id=lease.run_id, health_state="healthy"),
                 expected_version=current.version,
+                lease=lease,
                 now=self._clock(),
             )
             if rebound is None:
@@ -134,13 +159,13 @@ class SandboxBindingService:
                     raise SandboxBindingError(
                         "sandbox_binding_ownership_lost", retryable=False
                     )
-                return await self._resolve_existing(winner, run_id)
+                return await self._resolve_existing(winner, lease)
             current = rebound
         session = await self._provider.open_session(sandbox.sandbox_id)
         return BoundSandboxSession(current, session)
 
     async def _restore(
-        self, current: SandboxBinding, run_id: str
+        self, current: SandboxBinding, lease: ExecutionLease
     ) -> BoundSandboxSession:
         if current.latest_snapshot_id is None:
             raise SandboxBindingError("sandbox_unrecoverable", retryable=True)
@@ -151,7 +176,7 @@ class SandboxBindingService:
             self._verify_image(restored.image_digest)
             candidate = replace(
                 current,
-                run_id=run_id,
+                run_id=lease.run_id,
                 sandbox_id=restored.sandbox_id,
                 provider=restored.provider,
                 image_digest=restored.image_digest,
@@ -159,9 +184,10 @@ class SandboxBindingService:
                 health_state="healthy",
                 mutation_count=0,
             )
-            updated = await self._repository.replace(
+            updated = await self._repository.replace_fenced(
                 candidate,
                 expected_version=current.version,
+                lease=lease,
                 now=self._clock(),
             )
             if updated is None:
@@ -171,7 +197,7 @@ class SandboxBindingService:
                     raise SandboxBindingError(
                         "sandbox_binding_ownership_lost", retryable=False
                     )
-                return await self._resolve_existing(winner, run_id)
+                return await self._resolve_existing(winner, lease)
             session = await self._provider.open_session(restored.sandbox_id)
             return BoundSandboxSession(updated, session)
         except Exception:
@@ -181,9 +207,9 @@ class SandboxBindingService:
             raise
 
     async def record_mutation(
-        self, task_id: str, *, workspace_revision: int
+        self, lease: ExecutionLease, *, workspace_revision: int
     ) -> SandboxBinding:
-        current = await self._require_binding(task_id)
+        current = await self._require_binding(lease.task_id)
         owned_sandbox_id = current.sandbox_id
         prepared_snapshot = None
         for _ in range(self._MUTATION_CAS_ATTEMPTS):
@@ -203,14 +229,15 @@ class SandboxBindingService:
                 latest_snapshot_id=snapshot_id,
                 mutation_count=mutation_count,
             )
-            updated = await self._repository.replace(
+            updated = await self._repository.replace_fenced(
                 candidate,
                 expected_version=current.version,
+                lease=lease,
                 now=self._clock(),
             )
             if updated is not None:
                 return updated
-            winner = await self._repository.get(task_id)
+            winner = await self._repository.get(lease.task_id)
             if winner is None or winner.sandbox_id != owned_sandbox_id:
                 raise SandboxBindingError(
                     "sandbox_mutation_bookkeeping_lost", retryable=False
@@ -220,7 +247,7 @@ class SandboxBindingService:
             "sandbox_mutation_bookkeeping_conflict", retryable=True
         )
 
-    async def suspend(self, task_id: str) -> SandboxBinding:
+    async def suspend_admin(self, task_id: str) -> SandboxBinding:
         current = await self._require_binding(task_id)
         snapshot = await self._provider.snapshot(current.sandbox_id)
         candidate = replace(
@@ -230,7 +257,7 @@ class SandboxBindingService:
             health_state="suspended",
             mutation_count=0,
         )
-        updated = await self._repository.replace(
+        updated = await self._repository.replace_admin(
             candidate,
             expected_version=current.version,
             now=self._clock(),
@@ -240,11 +267,11 @@ class SandboxBindingService:
         await self._provider.suspend(current.sandbox_id)
         return updated
 
-    async def destroy_terminal(self, task_id: str) -> None:
+    async def destroy_terminal_admin(self, task_id: str) -> None:
         current = await self._repository.get(task_id)
         if current is None:
             return
-        deleted = await self._repository.delete(
+        deleted = await self._repository.delete_admin(
             task_id, expected_version=current.version
         )
         if deleted:
