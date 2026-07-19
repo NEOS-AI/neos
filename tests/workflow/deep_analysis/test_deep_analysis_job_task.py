@@ -55,9 +55,20 @@ async def test_submit_falls_back_to_a_background_task_when_celery_is_off(
     ran = asyncio.Event()
     seen = {}
 
-    async def fake_execute(run_id, question, profile, resume):
+    async def fake_execute(
+        run_id,
+        question,
+        profile,
+        resume,
+        *,
+        timeout_seconds=None,
+    ):
         seen.update(
-            run_id=run_id, question=question, profile=profile, resume=resume
+            run_id=run_id,
+            question=question,
+            profile=profile,
+            resume=resume,
+            timeout_seconds=timeout_seconds,
         )
         ran.set()
 
@@ -73,6 +84,7 @@ async def test_submit_falls_back_to_a_background_task_when_celery_is_off(
         "question": "질문",
         "profile": "default",
         "resume": False,
+        "timeout_seconds": task_module._config.job_soft_time_limit,
     }
 
 
@@ -84,7 +96,14 @@ async def test_background_task_is_strongly_referenced_until_it_finishes(
     거둬갈 수 있다. 모듈 레벨 집합이 강한 참조를 유지해야 한다."""
     release = asyncio.Event()
 
-    async def fake_execute(run_id, question, profile, resume):
+    async def fake_execute(
+        run_id,
+        question,
+        profile,
+        resume,
+        *,
+        timeout_seconds=None,
+    ):
         await release.wait()
 
     monkeypatch.setattr(task_module, "_celery_enabled", lambda: False)
@@ -97,6 +116,34 @@ async def test_background_task_is_strongly_referenced_until_it_finishes(
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert len(task_module._BACKGROUND_TASKS) == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_does_not_persist_message_after_timeout(monkeypatch):
+    from neos.workflow.deep_analysis import jobs
+
+    persisted = False
+
+    async def timed_out(*args, **kwargs):
+        raise asyncio.TimeoutError
+
+    async def persist(*args, **kwargs):
+        nonlocal persisted
+        persisted = True
+
+    monkeypatch.setattr(jobs, "execute_run", timed_out)
+    monkeypatch.setattr(task_module, "_persist_assistant_message", persist)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await task_module._execute(
+            "run00001",
+            "질문",
+            "dev",
+            False,
+            timeout_seconds=0.01,
+        )
+
+    assert persisted is False
 
 
 def test_submit_passes_resume_through(monkeypatch):

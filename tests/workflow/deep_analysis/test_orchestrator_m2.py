@@ -1,6 +1,9 @@
 import asyncio, pytest
 import neos.database.models  # noqa: F401 - register Base metadata
-from neos.workflow.deep_analysis.orchestrator import Orchestrator
+from neos.workflow.deep_analysis.orchestrator import (
+    Orchestrator,
+    SystemicWorkerFailure,
+)
 from neos.workflow.deep_analysis.models import WorkerResult, ProposedClaim, ProposedEvidence, ProposedBlob, Verdict, NodeSummary
 from neos.workflow.deep_analysis.ledger import Ledger, create_run
 from neos.database.connection import db_manager
@@ -73,11 +76,13 @@ async def test_ac_c_fail_streak_forces_split():
         # decompose로 자식 1개(depth1) → 실패 반복 → fail_streak 2 → SPLIT(자식 depth2)
         orch = Orchestrator(s, run_id, lambda: Flaky(), OkGrader(),
                             decompose_fn=lambda t: [{"text":"sub","value_est":0.9}],
-                            global_token_cap=5000, max_depth=3, synthesizer=FakeSynthesizer())
+                            global_token_cap=5000, max_depth=3,
+                            synthesizer=FakeSynthesizer(), checkpoint=s.commit)
         # split이 일어나면 decompose가 다시 호출되어 자식 생성 → split 이벤트 존재
         async def split_decompose(text, *a): return [{"text":"child","value_est":0.5}]
         orch._split_decompose = split_decompose
-        await orch.run("root?")
+        with pytest.raises(SystemicWorkerFailure):
+            await orch.run("root?")
         row = await s.execute(sql("SELECT COUNT(*) FROM deep_analysis_events WHERE run_id=:r AND kind='split'"), {"r": run_id})
         assert row.scalar() >= 2   # root 초기 split + fail_streak 유발 split
         await s.rollback()

@@ -31,16 +31,18 @@ Celery 실행자는 soft/hard time limit이 있지만 기본 구성인 인라인
 
 ## 3. 오케스트레이터 실패 바운드
 
-`Orchestrator`에 run 범위의 질문별 연속 실패 카운터를 둔다. 이 카운터는 기존 `_stall_counts`와 역할을 분리한다.
+현재 ledger는 failed 패스마다 질문의 `fail_streak`을 증가시키며, `Budgeter.ladder()`는 2회 실패한 질문을 이미 split한다. 별도의 질문별 실패 카운터는 이 동작을 중복하고, 계통적 장애에서 split 자식마다 초기화되어 실패 트리 확장을 막지 못한다.
 
-- `WorkerResult.status == "failed"`이면 토큰·verified claim·feedback 변화와 관계없이 해당 질문의 실패 카운터를 1 증가시킨다.
-- 정상 또는 partial 패스가 실질적인 진전을 만들면 해당 질문의 실패 카운터를 0으로 초기화한다.
-- 다른 질문의 성공은 실패한 질문의 카운터에 영향을 주지 않는다.
-- split으로 생긴 자식 질문은 독립 카운터로 시작한다.
-- 연속 실패가 `max_stall_rounds`에 도달하면 기존 D15 종료 경로를 사용한다. 최대 깊이 전이면 split하고, 최대 깊이면 abandon한다.
-- 기존 `fail_streak`과 effort ladder 동작은 유지한다. 새 카운터는 실행 안전장치이고, ledger의 실패 이력은 조사 전략 신호다.
+따라서 `Orchestrator`에는 **run 범위 연속 전패 라운드 카운터**를 둔다. 이 카운터는 기존 질문별 `_stall_counts`와 역할을 분리한다.
 
-운영 관측을 위해 실패 패스에는 질문 ID, 연속 실패 횟수, 마지막 실패 사유를 이벤트로 남긴다. 상한 도달 시 기존 `stall_terminated` 이벤트에도 종료 근거가 반복 실패임을 구분할 수 있는 payload를 포함한다.
+- worker assignment가 하나 이상인 라운드에서 모든 `WorkerResult.status == "failed"`이면 카운터를 1 증가시킨다.
+- worker 결과가 하나라도 `failed`가 아니면 카운터를 0으로 초기화한다.
+- split만 수행해 worker assignment가 없던 라운드는 카운터를 변경하지 않는다.
+- 연속 전패 라운드가 `max_stall_rounds`에 도달하면 더 이상 질문을 split하지 않고 전용 `SystemicWorkerFailure` 예외를 발생시킨다.
+- 예외에는 연속 전패 라운드 수와 마지막 실패 사유들을 포함하되, 운영 로그·이벤트 크기를 제한하도록 각 사유를 잘라낸다.
+- 기존 질문별 `fail_streak`, effort ladder, D15 무진전 split/abandon 동작은 그대로 유지한다. 이들은 개별 질문의 조사 전략을 담당하고, 새 카운터는 run 전체의 계통적 실행 실패를 감지한다.
+
+상한 도달 직전에 `systemic_failure_terminated` 이벤트를 ledger와 event sink에 기록하고 checkpoint한 뒤 예외를 발생시킨다. job 실행에서는 `execute_run()`의 기존 실패 경계가 예외를 받아 run을 `failed`로 만들고 `job_failed` 이벤트를 커밋한다.
 
 ## 4. 인라인 job 전체 timeout
 
@@ -68,24 +70,26 @@ Celery 경로의 soft/hard limit과 retry 의미는 이번 변경에서 바꾸�
 ## 5. 오류 처리
 
 - 개별 워커 예외는 기존처럼 `WorkerResult(status="failed")`로 변환한다. 한 번의 워커 실패로 전체 run을 즉시 실패시키지 않는다.
-- 반복 실패 상한은 질문 단위로 적용한다.
+- 반복 실패 상한은 모든 worker assignment가 실패한 연속 라운드에 적용한다.
+- 일부 워커만 실패한 라운드는 정상 결과를 계속 커밋하고 전패 카운터를 초기화한다.
 - timeout 취소가 발생하면 예외를 삼키지 않는다. `execute_run()`이 run과 lifecycle event를 내구성 있게 실패 처리한다.
 - timeout 뒤 `_persist_assistant_message()`를 호출하지 않는다.
 - 완료된 run에 timeout 실패 이벤트가 추가되는 경쟁이 없도록 정상 완료와 timeout 경계를 검증한다.
 
 ## 6. 테스트 전략
 
-1. `tokens_spent=0`인 항상 실패 워커로 `Orchestrator.run()`이 제한된 라운드 안에 종료되는 회귀 테스트를 추가한다.
-2. 실패 뒤 실질적인 성공이 발생하면 해당 질문의 연속 실패 카운터가 초기화되는지 검증한다.
-3. 질문별 카운터가 서로 격리되고 split 자식이 독립적으로 시작하는지 검증한다.
+1. `tokens_spent=0`인 항상 실패 워커로 `Orchestrator.run()`이 제한된 전패 라운드 뒤 `SystemicWorkerFailure`를 발생시키는 회귀 테스트를 추가한다.
+2. 전패 라운드 뒤 하나라도 비실패 worker 결과가 발생하면 run 범위 카운터가 초기화되는지 검증한다.
+3. 일부 worker만 실패한 혼합 라운드는 정상 결과를 커밋하고 계통적 실패로 종료하지 않는지 검증한다.
 4. 인라인 실행이 `job_soft_time_limit`을 넘으면 task가 취소되고 timeout 예외가 관측되는지 검증한다.
 5. timeout이 `run.status="failed"`, `job_failed` 이벤트, `resume_run()` 가능 상태를 함께 만드는지 job 계약 테스트로 검증한다.
 6. 기존 정상 실행, partial worker, split/abandon, Celery dispatch 테스트를 실행해 회귀가 없음을 확인한다.
 
 ## 7. 수용 기준
 
-- 항상 실패하며 토큰을 소비하지 않는 워커가 더 이상 무한 루프를 만들지 않는다.
-- 실패 상한은 질문별이며 정상 질문의 진행을 방해하지 않는다.
+- 항상 실패하며 토큰을 소비하지 않는 워커가 `max_stall_rounds`회의 연속 전패 라운드 뒤 run 실패로 종료된다.
+- 일부 worker만 실패한 라운드는 정상 질문의 진행을 방해하지 않는다.
+- 계통적 실패 상한 도달 뒤 새로운 split 자식을 만들지 않는다.
 - 인라인 job은 `job_soft_time_limit`보다 오래 실행되지 않는다.
 - 인라인 timeout 후 run은 `failed`이고 `job_failed` 이벤트가 존재한다.
 - timeout run은 기존 `resume_run()`으로 재개할 수 있다.

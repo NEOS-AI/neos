@@ -34,3 +34,16 @@ async def test_exception_becomes_failed():
     r = await orch._run_worker(Assignment(question_id="q", brief="b", effort=Effort.SCOUT))
     assert r.status == "failed" and "boom" in r.fail_reason
 
+
+@pytest.mark.asyncio
+async def test_non_failed_worker_result_resets_systemic_failure_rounds():
+    orch = _orch(lambda: BoomWorker())
+    orch.max_stall_rounds = 2
+    failed = WorkerResult(question_id="q", status="failed")
+    completed = WorkerResult(question_id="q", status="completed")
+
+    await orch._register_round_outcome([failed])
+    await orch._register_round_outcome([completed])
+    await orch._register_round_outcome([failed])
+
+    assert orch._all_failed_rounds == 1

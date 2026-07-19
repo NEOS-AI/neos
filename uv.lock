@@ -3283,6 +3283,11 @@ sandbox = [
     { name = "restrictedpython" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ruff" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "aiofiles", specifier = ">=24.1.0" },
@@ -3365,6 +3370,9 @@ requires-dist = [
     { name = "youtube-transcript-api", specifier = ">=0.6.2" },
 ]
 provides-extras = ["reranker", "sandbox", "channels", "ollama"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ruff", specifier = "==0.14.13" }]
 
 [[package]]
 name = "neos-evals"
