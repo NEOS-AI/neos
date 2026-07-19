@@ -67,6 +67,26 @@ async def test_memory_session_exposes_read_only_git_inspection(
     await provider.close()
 
 
+async def test_memory_command_mutation_advances_revision(tmp_path: Path) -> None:
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+
+    assert await session.workspace_revision() == 0
+    result = await session.execute(
+        CommandRequest(
+            argv=(sys.executable, "-c", "open('generated.txt', 'w').write('x')")
+        )
+    )
+
+    assert result.exit_code == 0
+    assert await session.workspace_revision() == 1
+    await provider.close()
+
+
 async def test_memory_session_rejects_environment_outside_allowlist(
     tmp_path: Path,
 ) -> None:

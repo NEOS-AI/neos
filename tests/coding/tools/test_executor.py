@@ -183,6 +183,28 @@ async def test_execute_never_serializes_environment_values() -> None:
 
 
 @pytest.mark.asyncio
+async def test_execute_returns_revision_after_command_mutation() -> None:
+    class MutatingSession(FakeSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.revision = 7
+
+        async def workspace_revision(self) -> int:
+            return self.revision
+
+        async def execute(self, request: CommandRequest) -> CommandResult:
+            self.revision += 1
+            return await super().execute(request)
+
+    result = await SandboxToolExecutor(10, 10).execute(
+        MutatingSession(),
+        call("execute.v1", {"argv": ["pytest"], "cwd": ".", "env": {}, "stdin": "", "timeout_sec": 1, "max_output_bytes": 10}),
+    )
+
+    assert result.workspace_revision == "8"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("error", "status", "reason"),
     [

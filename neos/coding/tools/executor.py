@@ -57,15 +57,13 @@ class SandboxToolExecutor:
         try:
             return await self._execute(session, call)
         except SandboxTimeout:
-            return await self._failure(session, "error", "sandbox_timeout")
+            return self._failure("error", "sandbox_timeout")
         except SandboxPolicyViolation:
-            return await self._failure(
-                session, "denied", "sandbox_policy_violation"
-            )
+            return self._failure("denied", "sandbox_policy_violation")
         except (SandboxNotFound, FileNotFoundError):
-            return await self._failure(session, "error", "sandbox_not_found")
+            return self._failure("error", "sandbox_not_found")
         except SandboxError:
-            return await self._failure(session, "error", "sandbox_error")
+            return self._failure("error", "sandbox_error")
 
     async def _execute(
         self, session: SandboxSession, call: ValidatedToolCall
@@ -85,13 +83,12 @@ class SandboxToolExecutor:
     async def _dispatch_non_file_tool(
         self, session: SandboxSession, call: ValidatedToolCall
     ) -> ToolResult:
-        revision = await self._revision(session)
         if call.name == "list_tree.v1":
             entries = await session.list_tree(str(call.input["path"]))
-            return self._entry_result(entries, revision)
+            return self._entry_result(entries, await self._revision(session))
         if call.name == "stat.v1":
             entry = await session.stat(str(call.input["path"]))
-            return self._entry_result((entry,), revision)
+            return self._entry_result((entry,), await self._revision(session))
         if call.name == "search_text.v1":
             matches = await session.search_text(
                 str(call.input["query"]),
@@ -99,15 +96,16 @@ class SandboxToolExecutor:
                 regex=bool(call.input["regex"]),
                 limit=int(call.input["limit"]),
             )
-            return self._entry_result(matches, revision)
+            return self._entry_result(matches, await self._revision(session))
         if call.name == "git_status.v1":
-            return self._command_result(await session.git_status(), revision)
+            result = await session.git_status()
+            return self._command_result(result, await self._revision(session))
         if call.name == "git_diff.v1":
             result = await session.git_diff(staged=bool(call.input["staged"]))
-            return self._command_result(result, revision)
+            return self._command_result(result, await self._revision(session))
         if call.name == "git_log.v1":
             result = await session.git_log(limit=int(call.input["limit"]))
-            return self._command_result(result, revision)
+            return self._command_result(result, await self._revision(session))
         if call.name == "execute.v1":
             argv = tuple(str(value) for value in call.input["argv"])
             request = CommandRequest(
@@ -121,11 +119,17 @@ class SandboxToolExecutor:
             result = await session.execute(request)
             return self._command_result(
                 result,
-                revision,
+                await self._revision(session),
                 audit={"executable_category": PurePosixPath(argv[0]).name},
             )
         return ToolResult(
-            "denied", "unknown_tool", None, None, False, None, revision
+            "denied",
+            "unknown_tool",
+            None,
+            None,
+            False,
+            None,
+            await self._revision(session),
         )
 
     def _bounded_bytes(self, content: bytes, *, workspace_revision: str) -> ToolResult:
@@ -199,18 +203,13 @@ class SandboxToolExecutor:
             audit=audit,
         )
 
-    async def _failure(
-        self,
-        session: SandboxSession,
+    @staticmethod
+    def _failure(
         status: Literal["error", "denied"],
         reason: str,
     ) -> ToolResult:
-        try:
-            revision = await self._revision(session)
-        except Exception:
-            revision = "unknown"
         return ToolResult(
-            status, reason, None, None, False, None, revision
+            status, reason, None, None, False, None, "unknown"
         )
 
     async def _revision(self, session: SandboxSession) -> str:
