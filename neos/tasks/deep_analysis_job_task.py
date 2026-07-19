@@ -57,15 +57,15 @@ async def _persist_assistant_message(run_id: str, report_markdown: str) -> None:
     from neos.database.connection import get_session_ctx
     from neos.database.deep_analysis_models import DARun
 
-    async with get_session_ctx() as session:
-        run = await session.get(DARun, run_id)
-        conversation_id = getattr(run, "conversation_id", None)
-        message_id = getattr(run, "assistant_message_id", None)
-
-    if not conversation_id or not message_id:
-        return
-
     try:
+        async with get_session_ctx() as session:
+            run = await session.get(DARun, run_id)
+            conversation_id = getattr(run, "conversation_id", None)
+            message_id = getattr(run, "assistant_message_id", None)
+
+        if not conversation_id or not message_id:
+            return
+
         await ChatService.add_message(
             conversation_id=conversation_id,
             role="assistant",
@@ -79,9 +79,10 @@ async def _persist_assistant_message(run_id: str, report_markdown: str) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "failed to persist deep_analysis report message for run %s: %s",
+            "failed to persist deep_analysis report message: "
+            "run=%s error_type=%s",
             run_id,
-            exc,
+            type(exc).__name__,
         )
 
 
