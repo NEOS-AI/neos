@@ -74,7 +74,7 @@ async def test_claim_maps_canonical_event_envelope() -> None:
         rows=[
             (
                 "co_1", 2, 1, "ct_1", 7, "ce_7", "text.delta",
-                {"delta": "hi"}, NOW, "cr_1", "turn_1", None,
+                {"delta": "hi"}, NOW, "cr_1", "turn_1", None, "cc_7",
             )
         ]
     )
@@ -88,6 +88,7 @@ async def test_claim_maps_canonical_event_envelope() -> None:
     assert claimed[0].event.event_id == "ce_7"
     assert claimed[0].event.seq == 7
     assert claimed[0].event.payload == {"delta": "hi"}
+    assert claimed[0].event.checkpoint_id == "cc_7"
 
 
 @pytest.mark.parametrize("limit", [0, 501])

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -28,6 +28,7 @@ class CodingEventResponse(BaseModel):
     run_id: str | None = None
     turn_id: str | None = None
     tool_call_id: str | None = None
+    checkpoint_id: str | None = None
 
 
 class CodingEventListResponse(BaseModel):
@@ -39,3 +40,12 @@ class CodingTaskSnapshotResponse(BaseModel):
     task: CodingTaskResponse
     head_seq: int
 
+
+class CodingSteerRequest(BaseModel):
+    instruction: str = Field(min_length=1, max_length=100_000)
+    mode: Literal["safe_point", "interrupt_now"] = "safe_point"
+
+
+class CodingSteerResponse(BaseModel):
+    steering_id: str
+    mode: Literal["safe_point", "interrupt_now"]

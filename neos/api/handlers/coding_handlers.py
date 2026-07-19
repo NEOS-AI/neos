@@ -3,14 +3,23 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from neos.api.dependencies.auth import get_current_user
 from neos.api.models.coding_models import (
     CodingEventListResponse,
+    CodingSteerRequest,
+    CodingSteerResponse,
     CodingTaskResponse,
     CodingTaskSnapshotResponse,
     CreateCodingTaskRequest,
 )
+from neos.coding.application.run_service import CodingRunService
 from neos.coding.application.task_service import CodingTaskService
+from neos.coding.domain.errors import CodingTaskNotFound
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.models import CodingTask
-from neos.coding.runtime import coding_service, get_coding_ticket_store
+from neos.coding.domain.phases import SteeringMode
+from neos.coding.runtime import (
+    coding_run_service,
+    coding_service,
+    get_coding_ticket_store,
+)
 from neos.coding.transport.base import CodingTicketStore
 from neos.database.models import User
 
@@ -24,6 +33,10 @@ def get_coding_service() -> CodingTaskService:
 
 def get_ws_ticket_store() -> CodingTicketStore:
     return get_coding_ticket_store()
+
+
+def get_coding_run_service() -> CodingRunService:
+    return coding_run_service
 
 
 def _task_response(task: CodingTask) -> dict:
@@ -49,6 +62,7 @@ def event_response(event: CodingEvent) -> dict:
         "run_id": event.run_id,
         "turn_id": event.turn_id,
         "tool_call_id": event.tool_call_id,
+        "checkpoint_id": event.checkpoint_id,
     }
 
 
@@ -63,6 +77,31 @@ async def create_coding_task(
     return _task_response(
         await service.create_task(owner_id=current_user.user_id, prompt=body.prompt)
     )
+
+
+@router.post(
+    "/tasks/{task_id}/steer",
+    response_model=CodingSteerResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def steer_coding_task(
+    task_id: str,
+    body: CodingSteerRequest,
+    current_user: User = Depends(get_current_user),
+    runs: CodingRunService = Depends(get_coding_run_service),
+):
+    try:
+        steering = await runs.steer(
+            task_id=task_id,
+            owner_id=current_user.user_id,
+            instruction=body.instruction,
+            mode=SteeringMode(body.mode),
+        )
+    except CodingTaskNotFound as error:
+        raise HTTPException(
+            status_code=404, detail="Coding task not found"
+        ) from error
+    return {"steering_id": steering.steering_id, "mode": steering.mode.value}
 
 
 @router.get("/tasks/{task_id}/snapshot", response_model=CodingTaskSnapshotResponse)

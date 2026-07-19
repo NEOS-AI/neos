@@ -222,4 +222,5 @@ def _decode_event(raw: Any) -> CodingEvent:
         run_id=record.get("run_id"),
         turn_id=record.get("turn_id"),
         tool_call_id=record.get("tool_call_id"),
+        checkpoint_id=record.get("checkpoint_id"),
     )

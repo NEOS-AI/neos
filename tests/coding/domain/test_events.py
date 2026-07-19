@@ -29,7 +29,21 @@ def test_make_event_builds_versioned_envelope() -> None:
         run_id=None,
         turn_id=None,
         tool_call_id=None,
+        checkpoint_id=None,
     )
+
+
+def test_make_event_preserves_checkpoint_identity() -> None:
+    event = make_event(
+        task_id="ct_01",
+        seq=2,
+        event_type="checkpoint.created",
+        payload={},
+        now=NOW,
+        checkpoint_id="cc_01",
+    )
+
+    assert event.checkpoint_id == "cc_01"
 
 
 @pytest.mark.parametrize("seq", [0, -1])

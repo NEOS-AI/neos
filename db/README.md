@@ -177,4 +177,8 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/035_add_a
 # Add deep analysis tables for advanced research workflows
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/036_add_deep_analysis_tables.sql
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/037_add_deep_analysis_reports.sql
+
+# Tables for coding agent workflow loops
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/038_add_coding_phase0.sql
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/039_add_coding_runs_checkpoints.sql
 ```

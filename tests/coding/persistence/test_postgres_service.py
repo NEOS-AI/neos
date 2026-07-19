@@ -123,3 +123,31 @@ async def test_event_and_outbox_are_inserted_in_same_transaction() -> None:
     assert sql.index("INSERT INTO coding_events") < sql.index(
         "INSERT INTO coding_event_outbox"
     )
+
+
+async def test_event_metadata_is_persisted_for_durable_replay() -> None:
+    session = FakeSession()
+
+    async def session_factory():
+        return session
+
+    service = PostgresCodingService(session_factory)
+    event = await service.append(
+        task_id="ct_fixed",
+        event_type="checkpoint.created",
+        payload={},
+        run_id="cr_1",
+        turn_id="turn_1",
+        tool_call_id="tool_1",
+        checkpoint_id="cc_1",
+    )
+
+    event_insert = next(
+        (sql, params)
+        for sql, params in session.statements
+        if "INSERT INTO coding_events" in sql
+    )
+    sql, params = event_insert
+    assert "checkpoint_id" in sql
+    assert params["checkpoint_id"] == "cc_1"
+    assert event.checkpoint_id == "cc_1"
