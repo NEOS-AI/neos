@@ -15,10 +15,13 @@ from neos.coding.model.base import (
     ToolResultContent,
     ToolUseContent,
 )
+from neos.coding.model.anthropic import AnthropicCodingModel, CodingModelError
 
 __all__ = [
     "CanonicalContent",
     "CanonicalMessage",
+    "AnthropicCodingModel",
+    "CodingModelError",
     "CodingModel",
     "ModelCompleted",
     "ModelEvent",
