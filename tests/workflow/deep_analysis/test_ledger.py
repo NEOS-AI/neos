@@ -230,3 +230,81 @@ async def test_commit_pass_stores_blob_before_evidence_and_records_events():
         assert "claim_verified" in event_kinds
         assert event_kinds[-1] == "pass_completed"
         await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_token_budget_state_replays_only_valid_run_scoped_events():
+    async with await db_manager.get_session() as session:
+        run_id = await create_run(session, "root?", "dev")
+        other_run_id = await create_run(session, "other?", "dev")
+        ledger = Ledger(session, run_id)
+        other = Ledger(session, other_run_id)
+
+        await ledger.log(
+            "token_budget_reserved",
+            None,
+            {"reservation_id": "settled", "reserved_tokens": 40},
+        )
+        await ledger.log(
+            "token_budget_settled",
+            None,
+            {"reservation_id": "settled", "actual_tokens": 25},
+        )
+        # A second terminal event must not alter the first valid outcome.
+        await ledger.log(
+            "token_budget_released",
+            None,
+            {"reservation_id": "settled"},
+        )
+        await ledger.log(
+            "token_budget_reserved",
+            None,
+            {"reservation_id": "released", "reserved_tokens": 30},
+        )
+        await ledger.log(
+            "token_budget_released",
+            None,
+            {"reservation_id": "released"},
+        )
+        await ledger.log(
+            "token_budget_reserved",
+            None,
+            {"reservation_id": "orphan", "reserved_tokens": 20},
+        )
+        await ledger.log(
+            "token_budget_reserved",
+            None,
+            {"reservation_id": "duplicate", "reserved_tokens": 10},
+        )
+        await ledger.log(
+            "token_budget_reserved",
+            None,
+            {"reservation_id": "duplicate", "reserved_tokens": 999},
+        )
+        await ledger.log(
+            "token_budget_settled",
+            None,
+            {"reservation_id": "duplicate", "actual_tokens": 7},
+        )
+        await ledger.log(
+            "token_budget_settled",
+            None,
+            {"reservation_id": "duplicate", "actual_tokens": 2},
+        )
+        await ledger.log("token_budget_reserved", None, {"reserved_tokens": 50})
+        await ledger.log(
+            "token_budget_settled",
+            None,
+            {"reservation_id": "unknown", "actual_tokens": 5},
+        )
+        await other.log(
+            "token_budget_reserved",
+            None,
+            {"reservation_id": "foreign", "reserved_tokens": 99},
+        )
+
+        consumed, outstanding = await ledger.token_budget_state()
+
+        assert consumed == 32
+        assert outstanding == {"orphan": 20}
+        await session.rollback()
