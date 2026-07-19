@@ -7,6 +7,7 @@ from neos.coding.domain.durability import (
     RunAlreadyLeased,
     StaleExecutionLease,
 )
+from neos.coding.loop.anthropic import CodingLoopFailure
 from neos.coding.workers.execution import (
     CodingTaskExecutionPolicy,
     CodingTaskOutcome,
@@ -24,9 +25,7 @@ class RecordingRuns:
     async def ensure_started(self, *, task_id: str) -> None:
         self.ensure_calls.append(task_id)
 
-    async def advance_one_safe_point(
-        self, *, task_id: str, worker_id: str
-    ):
+    async def advance_one_safe_point(self, *, task_id: str, worker_id: str):
         self.advance_calls.append((task_id, worker_id))
         effect = self.effects.pop(0)
         if isinstance(effect, BaseException):
@@ -88,9 +87,7 @@ async def test_runner_retries_1_2_4_then_fails_atomically() -> None:
     runs = RecordingRuns([RuntimeError("transient")] * 4)
     runner = CodingTaskRunner(
         runs=runs,
-        policy=CodingTaskExecutionPolicy(
-            retry_backoffs=(1.0, 2.0, 4.0)
-        ),
+        policy=CodingTaskExecutionPolicy(retry_backoffs=(1.0, 2.0, 4.0)),
         sleep=sleeps,
     )
 
@@ -102,16 +99,12 @@ async def test_runner_retries_1_2_4_then_fails_atomically() -> None:
 
     assert outcome is CodingTaskOutcome.FAILED
     assert sleeps.delays == [1.0, 2.0, 4.0]
-    assert runs.fail_calls == [
-        ("ct_1", "worker-1", "worker_retry_exhausted")
-    ]
+    assert runs.fail_calls == [("ct_1", "worker-1", "worker_retry_exhausted")]
 
 
 async def test_runner_propagates_configured_infrastructure_exception() -> None:
     runs = RecordingRuns([ConnectionError("database unavailable")])
-    runner = CodingTaskRunner(
-        runs=runs, propagate_exceptions=(ConnectionError,)
-    )
+    runner = CodingTaskRunner(runs=runs, propagate_exceptions=(ConnectionError,))
 
     with pytest.raises(ConnectionError, match="database unavailable"):
         await runner.run(
@@ -121,3 +114,20 @@ async def test_runner_propagates_configured_infrastructure_exception() -> None:
         )
 
     assert runs.fail_calls == []
+
+
+async def test_runner_does_not_retry_nonretryable_coding_failure() -> None:
+    sleeps = RecordingSleeper()
+    runs = RecordingRuns([CodingLoopFailure("tool_outcome_unknown", retryable=False)])
+    runner = CodingTaskRunner(runs=runs, sleep=sleeps)
+
+    outcome = await runner.run(
+        task_id="ct_1",
+        worker_id="worker-1",
+        failure_error_code="worker_retry_exhausted",
+    )
+
+    assert outcome is CodingTaskOutcome.FAILED
+    assert sleeps.delays == []
+    assert len(runs.advance_calls) == 1
+    assert runs.fail_calls == [("ct_1", "worker-1", "tool_outcome_unknown")]

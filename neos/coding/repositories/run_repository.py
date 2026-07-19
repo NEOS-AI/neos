@@ -424,7 +424,12 @@ class PostgresCodingRunRepository:
                 result = await session.execute(
                     text(
                         """
-                        WITH valid_lease AS (
+                        WITH prior_execution AS MATERIALIZED (
+                            SELECT status
+                            FROM coding_tool_executions
+                            WHERE task_id = :task_id
+                              AND tool_call_id = :tool_call_id
+                        ), valid_lease AS (
                             SELECT 1
                             FROM coding_run_leases
                             WHERE task_id = :task_id
@@ -452,10 +457,17 @@ class PostgresCodingRunRepository:
                               AND coding_tool_executions.claim_expires_at <= :now
                             RETURNING status, result_json
                         )
-                        SELECT status, result_json, TRUE AS lease_valid
+                        SELECT CASE
+                                   WHEN EXISTS (
+                                       SELECT 1 FROM prior_execution
+                                   ) THEN 'reclaimed'
+                                   ELSE status
+                               END AS disposition,
+                               result_json, TRUE AS lease_valid
                         FROM claimed
                         UNION ALL
-                        SELECT execution.status, execution.result_json,
+                        SELECT execution.status AS disposition,
+                               execution.result_json,
                                TRUE AS lease_valid
                         FROM coding_tool_executions execution, valid_lease
                         WHERE execution.task_id = :task_id
@@ -497,7 +509,10 @@ class PostgresCodingRunRepository:
         result: Mapping[str, Any],
         now: datetime,
     ) -> CodingEvent:
-        if claim.disposition is not ToolExecutionDisposition.CLAIMED:
+        if claim.disposition not in {
+            ToolExecutionDisposition.CLAIMED,
+            ToolExecutionDisposition.RECLAIMED,
+        }:
             raise ValueError("only a claimed tool execution can complete")
         lease = claim.lease
         async with await self._session_factory() as session:

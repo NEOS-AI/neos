@@ -9,6 +9,7 @@ from neos.coding.domain.durability import (
     StaleExecutionLease,
 )
 from neos.coding.domain.phases import CodingRunStatus
+from neos.coding.loop.anthropic import CodingLoopFailure
 
 
 class CodingTaskOutcome(StrEnum):
@@ -76,6 +77,16 @@ class CodingTaskRunner:
                     raise
                 if not isinstance(exc, Exception):
                     raise
+                if isinstance(exc, CodingLoopFailure) and not exc.retryable:
+                    try:
+                        await self._runs.fail_active_run(
+                            task_id=task_id,
+                            worker_id=worker_id,
+                            error_code=exc.code,
+                        )
+                    except RunAlreadyLeased:
+                        return CodingTaskOutcome.LEASE_BUSY
+                    return CodingTaskOutcome.FAILED
                 if failures >= len(self._policy.retry_backoffs):
                     try:
                         await self._runs.fail_active_run(

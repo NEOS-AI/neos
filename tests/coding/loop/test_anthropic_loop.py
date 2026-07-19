@@ -312,3 +312,51 @@ async def test_token_and_cost_budgets_stop_before_checkpoint(config, code) -> No
     with pytest.raises(CodingLoopFailure, match=code):
         await collect(h)
     assert h.repository.checkpoints == []
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["input_cost_micros_per_million", "output_cost_micros_per_million"],
+)
+def test_negative_model_prices_are_rejected(field) -> None:
+    with pytest.raises(ValueError, match="cannot be negative"):
+        AnthropicLoopConfig(model="claude-test", system="code", **{field: -1})
+
+
+@pytest.mark.asyncio
+async def test_reclaimed_mutating_claim_is_never_executed() -> None:
+    h = harness([[tool_call(), completed()]])
+    h.repository.tool_claims[("ct_1", "toolu_1")] = (
+        SimpleNamespace(disposition=ToolExecutionDisposition.CLAIMED),
+        NOW - timedelta(seconds=1),
+    )
+    with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown") as caught:
+        await collect(h)
+    assert caught.value.retryable is False
+    assert h.bindings.session.writes == 0
+
+
+@pytest.mark.asyncio
+async def test_reclaimed_read_only_claim_is_safely_rerun() -> None:
+    call = tool_call("read_1", "read_file.v1", {"path": "a.txt"})
+    h = harness([[call, completed()]])
+    h.repository.tool_claims[("ct_1", "read_1")] = (
+        SimpleNamespace(disposition=ToolExecutionDisposition.CLAIMED),
+        NOW - timedelta(seconds=1),
+    )
+
+    events = await collect(h)
+
+    assert len(h.executor.calls) == 1
+    assert sum(event.type == "tool.completed" for event in events) == 1
+    assert h.bindings.session.writes == 0
+
+
+@pytest.mark.asyncio
+async def test_text_completion_marks_terminal_intent_for_next_invocation() -> None:
+    h = harness([[TextDelta("finished"), ModelCompleted("end_turn", ModelUsage(2, 1))]])
+    await collect(h)
+    checkpoint = h.repository.checkpoints[-1]
+    assert checkpoint.loop_state["terminal_pending"] is True
+    assert await collect(h, checkpoint) == []
+    assert len(h.model.requests) == 1

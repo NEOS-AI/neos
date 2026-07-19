@@ -28,6 +28,7 @@ class RunLifecycleCommit:
 
 class ToolExecutionDisposition(StrEnum):
     CLAIMED = "claimed"
+    RECLAIMED = "reclaimed"
     COMPLETED = "completed"
     BUSY = "busy"
 

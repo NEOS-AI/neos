@@ -69,6 +69,11 @@ class AnthropicLoopConfig:
         )
         if not self.model or not self.system or any(value <= 0 for value in numeric):
             raise ValueError("anthropic loop configuration limits must be positive")
+        if (
+            self.input_cost_micros_per_million < 0
+            or self.output_cost_micros_per_million < 0
+        ):
+            raise ValueError("anthropic model prices cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +88,7 @@ class AgentLoopState:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_micros: int = 0
+    terminal_pending: bool = False
 
     @property
     def has_pending_tool(self) -> bool:
@@ -117,6 +123,8 @@ class AnthropicCodingLoop:
         if lease is None:
             raise RuntimeError("real coding loop requires an execution lease")
         state = self._restore(input, checkpoint)
+        if state.terminal_pending:
+            return
         bound = await self._bindings.resolve(input.task_id, input.run_id)
         if state.has_pending_tool:
             async for event in self._advance_one_tool(input, state, bound, deps):
@@ -179,6 +187,7 @@ class AnthropicCodingLoop:
         next_state = self._completed_turn(state, text_parts, calls, completion)
         self._check_usage_budgets(next_state)
         if not calls:
+            next_state = self._with_terminal_pending(next_state)
             committed = await deps.repository.commit_model_checkpoint(
                 lease=deps.lease,
                 event_type="model.completed",
@@ -222,6 +231,11 @@ class AnthropicCodingLoop:
         )
         if claim.disposition is ToolExecutionDisposition.BUSY:
             raise CodingLoopFailure("tool_execution_busy", retryable=True)
+        if (
+            claim.disposition is ToolExecutionDisposition.RECLAIMED
+            and validated.risk is not ToolRisk.READ_ONLY
+        ):
+            raise CodingLoopFailure("tool_outcome_unknown", retryable=False)
         started = await deps.repository.begin_phase(
             lease=deps.lease, kind=CodingPhaseKind.IMPLEMENT, now=self._clock()
         )
@@ -331,6 +345,7 @@ class AnthropicCodingLoop:
             state.input_tokens,
             state.output_tokens,
             state.cost_micros,
+            False,
         )
 
     def _check_usage_budgets(self, state):
@@ -362,6 +377,7 @@ class AnthropicCodingLoop:
             int(raw.get("input_tokens", 0)),
             int(raw.get("output_tokens", 0)),
             int(raw.get("cost_micros", 0)),
+            bool(raw.get("terminal_pending", False)),
         )
 
     def _dump_state(self, input, state):
@@ -379,7 +395,24 @@ class AnthropicCodingLoop:
             "input_tokens": state.input_tokens,
             "output_tokens": state.output_tokens,
             "cost_micros": state.cost_micros,
+            "terminal_pending": state.terminal_pending,
         }
+
+    @staticmethod
+    def _with_terminal_pending(state: AgentLoopState) -> AgentLoopState:
+        return AgentLoopState(
+            state.transcript,
+            state.turn_count,
+            state.tool_count,
+            state.consecutive_tool_errors,
+            state.pending_tool_calls,
+            state.pending_tool_index,
+            state.transcript_digest,
+            state.input_tokens,
+            state.output_tokens,
+            state.cost_micros,
+            True,
+        )
 
     def _compact(self, transcript):
         if len(transcript) <= self._config.max_transcript_messages:

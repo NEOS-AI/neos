@@ -161,6 +161,21 @@ async def test_tool_claim_is_written_before_execution() -> None:
     assert claim.disposition is ToolExecutionDisposition.CLAIMED
 
 
+async def test_expired_tool_claim_is_reported_as_reclaimed() -> None:
+    session = FakeSession(rows=[("reclaimed", None)])
+    repository = repository_for(session)
+
+    claim = await repository.claim_tool_execution(
+        lease=LEASE,
+        tool_call_id="tool_1",
+        now=NOW,
+        claim_expires_at=EXPIRES,
+    )
+
+    assert claim.disposition is ToolExecutionDisposition.RECLAIMED
+    assert "prior_execution" in "\n".join(session.sql)
+
+
 async def test_completed_tool_claim_returns_persisted_result() -> None:
     session = FakeSession(rows=[("completed", {"ok": True})])
     repository = repository_for(session)

@@ -221,9 +221,12 @@ class InMemoryCodingRunRepository:
                 return ToolExecutionClaim(
                     ToolExecutionDisposition.BUSY, tool_call_id, lease
                 )
-            claim = ToolExecutionClaim(
-                ToolExecutionDisposition.CLAIMED, tool_call_id, lease
+            disposition = (
+                ToolExecutionDisposition.RECLAIMED
+                if current is not None
+                else ToolExecutionDisposition.CLAIMED
             )
+            claim = ToolExecutionClaim(disposition, tool_call_id, lease)
             self.tool_claims[(lease.task_id, tool_call_id)] = (
                 claim,
                 claim_expires_at,
