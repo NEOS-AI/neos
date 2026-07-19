@@ -5,6 +5,7 @@ asserts the derived improvement signals. All assertions roll back at the
 end -- this service (and these tests) must never leave writes behind.
 """
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -154,6 +155,97 @@ async def test_signals_malformed_payload_does_not_crash():
 
 
 @pytest.mark.asyncio
+async def test_claim_funnel_aggregates_grading_diagnostics():
+    async with await db_manager.get_session() as s:
+        run_id = await create_run(s, "funnel", "dev")
+        await _ev(s, run_id, "pass_completed", '{"new_claims":5,"verified":2}')
+
+        base = {
+            "claim_id": "c",
+            "outcome": "verified",
+            "code": "",
+            "deterministic": "passed",
+            "deterministic_code": "",
+            "agentic": "attempted_passed",
+            "agentic_label": "SUPPORTS",
+            "evidence_count": 2,
+            "source_count": 2,
+            "fetched_source_count": 2,
+            "dead_source_count": 0,
+            "excerpt_chars": 100,
+            "best_quote_score": 1.0,
+            "quote_threshold": 0.92,
+        }
+        events = [
+            base,
+            {
+                **base,
+                "claim_id": "near",
+                "outcome": "rejected",
+                "code": "E_QUOTE_MISMATCH",
+                "deterministic": "rejected",
+                "deterministic_code": "E_QUOTE_MISMATCH",
+                "agentic": "skipped",
+                "evidence_count": 1,
+                "source_count": 1,
+                "fetched_source_count": 1,
+                "excerpt_chars": 50,
+                "best_quote_score": 0.90,
+            },
+            {
+                **base,
+                "claim_id": "dead",
+                "outcome": "unverified",
+                "code": "E_SOURCE_DEAD",
+                "deterministic": "rejected",
+                "deterministic_code": "E_SOURCE_DEAD",
+                "agentic": "exhausted",
+                "evidence_count": 0,
+                "source_count": 0,
+                "fetched_source_count": 0,
+                "dead_source_count": 1,
+                "excerpt_chars": 0,
+                "best_quote_score": None,
+            },
+        ]
+        for payload in events:
+            await _ev(s, run_id, "claim_graded", json.dumps(payload))
+        await _ev(s, run_id, "claim_graded", "not-json")
+
+        sig = await DeepAnalysisAnalyticsService(s).signals(run_id=run_id)
+        funnel = sig["claim_funnel"]
+
+        assert sig["totals"]["claim_graded"] == 4
+        assert funnel == {
+            "proposed": 5,
+            "graded": 3,
+            "deterministic_passed": 1,
+            "deterministic_rejected": 2,
+            "agentic_attempted": 1,
+            "agentic_passed": 1,
+            "agentic_rejected": 0,
+            "agentic_skipped": 1,
+            "agentic_exhausted": 1,
+            "verified": 1,
+            "rejected": 1,
+            "unverified": 1,
+            "evidence_missing_rate": 0.0,
+            "source_dead_rate": pytest.approx(1 / 3),
+            "quote_score_buckets": {
+                "exact": 1,
+                "above_threshold": 0,
+                "near_miss": 1,
+                "low": 0,
+                "unavailable": 1,
+            },
+            "avg_evidence_count": 1.0,
+            "avg_source_count": 1.0,
+            "avg_excerpt_chars": 50.0,
+        }
+        await s.rollback()
+
+
+@pytest.mark.asyncio
 async def test_signals_since_filters_old_events():
     async with await db_manager.get_session() as s:
         run_id = await create_run(s, "root", "dev")
@@ -184,6 +276,8 @@ async def test_signals_empty_log_has_zero_rates_not_errors():
         assert sig["reinvestigation_count"] == 0
         assert sig["reject_rate_by_code"] == {}
         assert sig["totals"] == {}
+        assert sig["claim_funnel"]["graded"] == 0
+        assert sig["claim_funnel"]["quote_score_buckets"]["unavailable"] == 0
         await s.rollback()
 
 
