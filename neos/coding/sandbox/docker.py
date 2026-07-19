@@ -690,6 +690,10 @@ class DockerSandboxSession:
     def sandbox_id(self) -> str:
         return self._record.sandbox.sandbox_id
 
+    async def workspace_revision(self) -> int:
+        await self._provider._running_record(self.sandbox_id)
+        return self._record.sandbox.workspace_revision
+
     async def create_pty(self, *, argv: tuple[str, ...]) -> DockerPty:
         CommandRequest(argv=argv)
         async with self._record.lock:

@@ -27,6 +27,7 @@ from neos.coding.sandbox.base import (
     SandboxStateConflict,
     SearchMatch,
     Snapshot,
+    StreamEvent,
 )
 from neos.coding.sandbox.archive import (
     SNAPSHOT_SCHEMA_VERSION,
@@ -50,7 +51,6 @@ from neos.coding.sandbox.events import (
     SandboxWatcher as MemoryWatcher,
     SandboxWatcherHub as _MemoryWatcherHub,
     WorkspaceChange,
-    WorkspaceChangeBatch,
     WorkspaceChangeKind,
 )
 
@@ -443,6 +443,10 @@ class MemorySandboxSession:
     @property
     def sandbox_id(self) -> str:
         return self._record.sandbox.sandbox_id
+
+    async def workspace_revision(self) -> int:
+        await self._require_running()
+        return self._record.sandbox.workspace_revision
 
     async def list_tree(self, path: str = ".") -> tuple[FileEntry, ...]:
         await self._require_running()

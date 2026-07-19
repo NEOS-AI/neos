@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -206,17 +205,16 @@ class SandboxToolExecutor:
         status: Literal["error", "denied"],
         reason: str,
     ) -> ToolResult:
+        try:
+            revision = await self._revision(session)
+        except Exception:
+            revision = "unknown"
         return ToolResult(
-            status, reason, None, None, False, None, await self._revision(session)
+            status, reason, None, None, False, None, revision
         )
 
     async def _revision(self, session: SandboxSession) -> str:
-        revision = getattr(session, "workspace_revision", 0)
-        if callable(revision):
-            revision = revision()
-        if inspect.isawaitable(revision):
-            revision = await revision
-        return str(revision)
+        return str(await session.workspace_revision())
 
     @staticmethod
     def _json_entry(value: FileEntry | SearchMatch) -> Mapping[str, object]:

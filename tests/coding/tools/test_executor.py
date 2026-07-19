@@ -25,13 +25,15 @@ NOW = datetime(2026, 7, 19, tzinfo=UTC)
 
 class FakeSession:
     sandbox_id = "sandbox-1"
-    workspace_revision = 7
 
     def __init__(self) -> None:
         self.called: tuple[str, Any] | None = None
         self.file_content = b"abcdef"
         self.command_result = CommandResult(0, b"stdout", b"stderr")
         self.error: Exception | None = None
+
+    async def workspace_revision(self) -> int:
+        return 7
 
     def _raise(self) -> None:
         if self.error is not None:
@@ -218,3 +220,26 @@ async def test_unknown_validated_call_fails_closed() -> None:
         FakeSession(), call("future.v1", {})
     )
     assert (result.status, result.reason_code) == ("denied", "unknown_tool")
+
+
+@pytest.mark.asyncio
+async def test_original_error_is_sanitized_when_revision_lookup_also_fails() -> None:
+    class BrokenRevisionSession(FakeSession):
+        async def workspace_revision(self) -> int:
+            raise SandboxNotFound("revision secret")
+
+    session = BrokenRevisionSession()
+    session.error = SandboxPolicyViolation("input secret")
+    result = await SandboxToolExecutor(10, 10).execute(
+        session, call("read_file.v1", {"path": "sensitive-name"})
+    )
+
+    assert (result.status, result.reason_code) == (
+        "denied",
+        "sandbox_policy_violation",
+    )
+    assert result.workspace_revision == "unknown"
+    payload = json.dumps(result.to_mapping())
+    assert "input secret" not in payload
+    assert "revision secret" not in payload
+    assert "sensitive-name" not in payload

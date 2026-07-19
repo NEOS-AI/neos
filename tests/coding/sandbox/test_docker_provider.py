@@ -132,6 +132,7 @@ async def test_session_file_tree_search_and_git_use_fixed_helpers() -> None:
     )
     session = await provider.open_session(sandbox.sandbox_id)
 
+    assert await session.workspace_revision() == 0
     revision = await session.write_file("src/app.py", b"print('needle')\n")
     runner.results.extend(
         [
@@ -171,6 +172,7 @@ async def test_session_file_tree_search_and_git_use_fixed_helpers() -> None:
     status = await session.git_status()
 
     assert revision == 1
+    assert await session.workspace_revision() == revision
     assert runner.inputs[4] == b"print('needle')\n"
     assert content == b"print('needle')\n"
     assert [(match.path, match.line) for match in matches] == [
