@@ -31,15 +31,15 @@ def claim_hash(text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
-def excerpt_matches(excerpt: str, raw: str, threshold: float) -> bool:
-    """Match exact text first, then inspect only anchor-adjacent fuzzy windows."""
+def excerpt_match_score(excerpt: str, raw: str, threshold: float) -> float:
+    """Return the best score from the bounded excerpt matching algorithm."""
 
     candidate = normalize_for_match(excerpt)
     source = normalize_for_match(raw)
     if not candidate:
-        return False
+        return 0.0
     if candidate in source:
-        return True
+        return 1.0
 
     anchors = sorted(
         _ANCHOR.finditer(candidate),
@@ -47,9 +47,10 @@ def excerpt_matches(excerpt: str, raw: str, threshold: float) -> bool:
         reverse=True,
     )
     if not anchors:
-        return False
+        return 0.0
 
     tolerance = max(1, round(len(candidate) * (1 - threshold)))
+    best_score = 0.0
     for anchor_match in anchors:
         anchor = anchor_match.group(0)
         source_pos = source.find(anchor)
@@ -58,11 +59,14 @@ def excerpt_matches(excerpt: str, raw: str, threshold: float) -> bool:
             for shift in range(-tolerance, tolerance + 1):
                 start = max(0, expected_start + shift)
                 segment = source[start : start + len(candidate)]
-                if (
-                    SequenceMatcher(None, candidate, segment).ratio()
-                    >= threshold
-                ):
-                    return True
+                score = SequenceMatcher(None, candidate, segment).ratio()
+                best_score = max(best_score, score)
             source_pos = source.find(anchor, source_pos + len(anchor))
 
-    return False
+    return best_score
+
+
+def excerpt_matches(excerpt: str, raw: str, threshold: float) -> bool:
+    """Match exact text first, then inspect only anchor-adjacent fuzzy windows."""
+
+    return excerpt_match_score(excerpt, raw, threshold) >= threshold

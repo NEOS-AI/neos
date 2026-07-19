@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 
 class Effort(Enum):
@@ -77,6 +77,7 @@ class Verdict:
     detail: str = ""
     salvage: str | None = None
     label: str | None = None
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
