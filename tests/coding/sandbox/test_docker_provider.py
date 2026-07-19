@@ -1,0 +1,196 @@
+from datetime import UTC, datetime
+import json
+
+import pytest
+
+from neos.coding.sandbox.base import (
+    CommandRequest,
+    SandboxLimits,
+    SandboxPolicyViolation,
+    SandboxState,
+)
+from neos.coding.sandbox.command import DockerCommandResult
+from neos.coding.sandbox.docker import (
+    DockerSandboxConfig,
+    DockerSandboxProvider,
+)
+
+
+IMAGE = "neos-sandbox@sha256:" + "a" * 64
+
+
+class ScriptedDockerRunner:
+    def __init__(self, results=None) -> None:
+        self.results = list(results or [])
+        self.calls = []
+        self.inputs = []
+
+    async def run(
+        self,
+        *args: str,
+        timeout_sec: float,
+        allowed_exit_codes=(0,),
+        input: bytes = b"",
+    ) -> DockerCommandResult:
+        self.calls.append(args)
+        self.inputs.append(input)
+        if self.results:
+            result = self.results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+        return DockerCommandResult(exit_code=0, stdout=b"", stderr=b"")
+
+
+def _config() -> DockerSandboxConfig:
+    return DockerSandboxConfig(image=IMAGE, create_timeout_sec=5)
+
+
+async def test_create_is_running_only_after_readiness() -> None:
+    runner = ScriptedDockerRunner()
+    provider = DockerSandboxProvider(
+        runner=runner,
+        config=_config(),
+        clock=lambda: datetime(2026, 7, 19, tzinfo=UTC),
+    )
+
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+
+    assert sandbox.state is SandboxState.RUNNING
+    assert [call[0] for call in runner.calls] == [
+        "volume",
+        "create",
+        "start",
+        "exec",
+    ]
+    assert runner.calls[-1][-2:] == ("test", "-d") or runner.calls[-1][-3:] == (
+        "test",
+        "-d",
+        "/workspace",
+    )
+
+
+async def test_suspend_resume_and_command_execution_share_lifecycle() -> None:
+    runner = ScriptedDockerRunner()
+    provider = DockerSandboxProvider(runner=runner, config=_config())
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+
+    assert (await provider.suspend(sandbox.sandbox_id)).state is SandboxState.SUSPENDED
+    assert (await provider.resume(sandbox.sandbox_id)).state is SandboxState.RUNNING
+    session = await provider.open_session(sandbox.sandbox_id)
+    runner.results.append(
+        DockerCommandResult(exit_code=7, stdout=b"out", stderr=b"err")
+    )
+    result = await session.execute(CommandRequest(argv=("python", "-V")))
+
+    assert result.exit_code == 7
+    assert result.stdout == b"out"
+    assert runner.calls[-1][0:3] == ("exec", "--workdir", "/workspace")
+
+
+async def test_execute_forwards_bounded_stdin_and_rejects_unknown_env() -> None:
+    runner = ScriptedDockerRunner()
+    provider = DockerSandboxProvider(runner=runner, config=_config())
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+
+    await session.execute(CommandRequest(argv=("python", "-"), stdin=b"print(1)"))
+    assert runner.inputs[-1] == b"print(1)"
+    with pytest.raises(SandboxPolicyViolation, match="environment_not_allowed"):
+        await session.execute(
+            CommandRequest(argv=("env",), env={"TOKEN": "secret"})
+        )
+
+
+async def test_session_file_tree_search_and_git_use_fixed_helpers() -> None:
+    runner = ScriptedDockerRunner()
+    provider = DockerSandboxProvider(runner=runner, config=_config())
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+
+    revision = await session.write_file("src/app.py", b"print('needle')\n")
+    runner.results.extend(
+        [
+            DockerCommandResult(
+                exit_code=0,
+                stdout=b"print('needle')\n",
+                stderr=b"",
+            ),
+            DockerCommandResult(
+                exit_code=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "path": "src/app.py",
+                            "line": 1,
+                            "column": 8,
+                            "text": "print('needle')",
+                        }
+                    ]
+                ).encode(),
+                stderr=b"",
+            ),
+            DockerCommandResult(
+                exit_code=0,
+                stdout=b"?? src/app.py\n",
+                stderr=b"",
+            ),
+        ]
+    )
+
+    content = await session.read_file("src/app.py")
+    matches = await session.search_text(
+        "needle",
+        paths=("src/**",),
+        limit=10,
+    )
+    status = await session.git_status()
+
+    assert revision == 1
+    assert runner.inputs[4] == b"print('needle')\n"
+    assert content == b"print('needle')\n"
+    assert [(match.path, match.line) for match in matches] == [
+        ("src/app.py", 1)
+    ]
+    assert status.stdout == b"?? src/app.py\n"
+
+
+async def test_session_list_tree_and_stat_parse_fixed_helper_output() -> None:
+    payload = {
+        "path": "src/app.py",
+        "kind": "file",
+        "size": 12,
+        "modified_at": "2026-07-19T10:00:00+00:00",
+    }
+    runner = ScriptedDockerRunner()
+    provider = DockerSandboxProvider(runner=runner, config=_config())
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    runner.results.extend(
+        [
+            DockerCommandResult(0, json.dumps([payload]).encode(), b""),
+            DockerCommandResult(0, json.dumps(payload).encode(), b""),
+        ]
+    )
+
+    tree = await session.list_tree("src")
+    entry = await session.stat("src/app.py")
+
+    assert tree == (entry,)
+    assert entry.path == "src/app.py"
+    assert entry.modified_at == datetime(2026, 7, 19, 10, tzinfo=UTC)

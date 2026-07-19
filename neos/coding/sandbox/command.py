@@ -38,13 +38,23 @@ class DockerCommandRunner:
         *args: str,
         timeout_sec: float,
         allowed_exit_codes: tuple[int, ...] = (0,),
+        input: bytes = b"",
     ) -> DockerCommandResult:
         if timeout_sec <= 0:
             raise SandboxPolicyViolation("docker_timeout_must_be_positive")
         if any("\0" in arg for arg in args):
             raise SandboxPolicyViolation("docker_argument_contains_nul")
+        if len(input) > 16 * 1024 * 1024:
+            raise SandboxPolicyViolation("docker_input_limit_exceeded")
         try:
-            result = await self._exec(*args, timeout_sec=timeout_sec)
+            if input:
+                result = await self._exec(
+                    *args,
+                    timeout_sec=timeout_sec,
+                    input=input,
+                )
+            else:
+                result = await self._exec(*args, timeout_sec=timeout_sec)
         except (TimeoutError, asyncio.TimeoutError) as error:
             raise SandboxTimeout("docker_command_timeout") from error
         except FileNotFoundError as error:
@@ -115,18 +125,23 @@ def build_create_args(
 async def _execute_docker(
     *args: str,
     timeout_sec: float,
+    input: bytes = b"",
 ) -> DockerCommandResult:
     process = await asyncio.create_subprocess_exec(
         "docker",
         *args,
-        stdin=asyncio.subprocess.DEVNULL,
+        stdin=(
+            asyncio.subprocess.PIPE
+            if input
+            else asyncio.subprocess.DEVNULL
+        ),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
     )
     try:
         async with asyncio.timeout(timeout_sec):
-            stdout, stderr = await process.communicate()
+            stdout, stderr = await process.communicate(input or None)
     except TimeoutError:
         process.kill()
         await process.wait()

@@ -78,3 +78,31 @@ async def test_runner_maps_daemon_failure_without_raw_stderr() -> None:
         await runner.run("inspect", "sb_1", timeout_sec=1)
 
     assert "registry-token" not in str(error.value)
+
+
+async def test_runner_forwards_bounded_stdin_outside_argv() -> None:
+    received = {}
+
+    async def capture(
+        *args: str,
+        timeout_sec: float,
+        input: bytes,
+    ) -> DockerCommandResult:
+        received["args"] = args
+        received["input"] = input
+        return DockerCommandResult(exit_code=0, stdout=b"", stderr=b"")
+
+    runner = DockerCommandRunner(exec=capture)
+    await runner.run(
+        "exec",
+        "-i",
+        "sb_1",
+        "helper",
+        timeout_sec=1,
+        input=b"file contents",
+    )
+
+    assert received == {
+        "args": ("exec", "-i", "sb_1", "helper"),
+        "input": b"file contents",
+    }
