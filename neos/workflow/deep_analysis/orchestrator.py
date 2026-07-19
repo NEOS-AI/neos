@@ -179,11 +179,43 @@ class Orchestrator:
         agentic semantic tier. A deterministic failure short-circuits so the
         expensive judge is never invoked on already-rejected claims."""
         verdict = await self.grader.grade(claim)  # deterministic first
-        if not verdict.ok or self.agentic_grader is None:
+        if self.agentic_grader is None:
+            verdict.diagnostics = {
+                **verdict.diagnostics,
+                "agentic": "not_configured",
+                "agentic_label": None,
+            }
+            return verdict
+        if not verdict.ok:
+            verdict.diagnostics = {
+                **verdict.diagnostics,
+                "agentic": "skipped",
+                "agentic_label": None,
+            }
             return verdict
         try:
-            return await self.agentic_grader.grade(claim, value_est)
+            agentic_verdict = await self.agentic_grader.grade(claim, value_est)
+            agentic_state = agentic_verdict.diagnostics.get(
+                "agentic",
+                (
+                    "attempted_passed"
+                    if agentic_verdict.ok
+                    else "attempted_rejected"
+                ),
+            )
+            agentic_verdict.diagnostics = {
+                **verdict.diagnostics,
+                **agentic_verdict.diagnostics,
+                "agentic": agentic_state,
+                "agentic_label": agentic_verdict.label,
+            }
+            return agentic_verdict
         except TokenBudgetExhausted:
+            verdict.diagnostics = {
+                **verdict.diagnostics,
+                "agentic": "exhausted",
+                "agentic_label": None,
+            }
             return verdict
 
     async def _regrade_pending(self, question_id, value_est):

@@ -53,6 +53,31 @@ async def test_unsampled_passes_without_calling_judge():
                       llm_client=judge, sampler=lambda: 0.99)
     v = await g.grade(_claim(conf=0.01), value_est=0.01)   # 0.0001<0.35, not sampled
     assert v.ok is True and v.label is None and judge.calls == 0
+    assert v.diagnostics == {"agentic": "skipped", "agentic_label": None}
+
+
+async def test_attempted_judgment_reports_pass_or_rejection_state():
+    passed = await AgenticGrader(
+        judge_model="claude-j",
+        threshold=0.0,
+        sample_rate=1.0,
+        llm_client=FakeJudge("SUPPORTS"),
+    ).grade(_claim(), value_est=1.0)
+    rejected = await AgenticGrader(
+        judge_model="claude-j",
+        threshold=0.0,
+        sample_rate=1.0,
+        llm_client=FakeJudge("PARTIAL"),
+    ).grade(_claim(), value_est=1.0)
+
+    assert passed.diagnostics == {
+        "agentic": "attempted_passed",
+        "agentic_label": "SUPPORTS",
+    }
+    assert rejected.diagnostics == {
+        "agentic": "attempted_rejected",
+        "agentic_label": "PARTIAL",
+    }
 
 
 class Garbage(FakeJudge):
