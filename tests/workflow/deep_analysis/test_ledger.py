@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from sqlalchemy import text
 
@@ -204,7 +206,26 @@ async def test_commit_pass_stores_blob_before_evidence_and_records_events():
         await ledger.commit_pass(
             question_id,
             result,
-            {result.claims[0].text: Verdict(ok=True)},
+            {
+                result.claims[0].text: Verdict(
+                    ok=True,
+                    diagnostics={
+                        "deterministic": "passed",
+                        "deterministic_code": "",
+                        "agentic": "attempted_passed",
+                        "agentic_label": "SUPPORTS",
+                        "evidence_count": 1,
+                        "source_count": 1,
+                        "fetched_source_count": 1,
+                        "dead_source_count": 0,
+                        "excerpt_chars": 23,
+                        "best_quote_score": 1.0,
+                        "quote_threshold": 0.92,
+                        "raw_text": "must not be persisted",
+                        "source_url": "https://secret.example",
+                    },
+                )
+            },
         )
 
         blob_count = await session.scalar(
@@ -227,7 +248,26 @@ async def test_commit_pass_stores_blob_before_evidence_and_records_events():
 
         assert blob_count == 1
         assert stored_blob.raw_text == result.blobs[0].raw_text
-        assert "claim_verified" in event_kinds
+        assert event_kinds[-3:] == [
+            "claim_graded",
+            "claim_verified",
+            "pass_completed",
+        ]
+
+        graded_payload = await session.scalar(
+            text(
+                "SELECT payload FROM deep_analysis_events "
+                "WHERE run_id=:run_id AND kind='claim_graded'"
+            ),
+            {"run_id": run_id},
+        )
+        graded_payload = json.loads(graded_payload)
+        assert graded_payload["outcome"] == "verified"
+        assert graded_payload["deterministic"] == "passed"
+        assert graded_payload["agentic"] == "attempted_passed"
+        assert graded_payload["best_quote_score"] == 1.0
+        assert "raw_text" not in graded_payload
+        assert "source_url" not in graded_payload
         assert event_kinds[-1] == "pass_completed"
         await session.rollback()
 

@@ -30,7 +30,10 @@ from neos.api.services.chat_service import ChatService
 from neos.config.settings import settings
 from neos.database.connection import db_manager
 from neos.database.models import User
-from neos.tasks.deep_analysis_job_task import submit_deep_analysis_job
+from neos.tasks.deep_analysis_job_task import (
+    DeepAnalysisDispatchError,
+    submit_deep_analysis_job,
+)
 from neos.utils.logger import get_logger
 from neos.workflow.deep_analysis.event_stream import (
     get_run_owner,
@@ -49,6 +52,16 @@ router = APIRouter()
 
 def _events_url(run_id: str) -> str:
     return f"{settings.API_V1_PREFIX}/deep-analysis/{run_id}/events"
+
+
+async def _submit_or_503(*args, **kwargs) -> str:
+    try:
+        return await submit_deep_analysis_job(*args, **kwargs)
+    except DeepAnalysisDispatchError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Deep analysis dispatch unavailable",
+        ) from exc
 
 
 async def ensure_owned_conversation(
@@ -113,7 +126,7 @@ async def start_deep_analysis(
         # 커밋이 필수다 -- job이 다른 프로세스/태스크에서 이 run을 읽는다.
         await session.commit()
 
-    executor = submit_deep_analysis_job(
+    executor = await _submit_or_503(
         run_id,
         request.question,
         request.profile,
@@ -215,7 +228,7 @@ async def resume_deep_analysis(
             detail=f"run is {status!r} and cannot be resumed",
         )
 
-    executor = submit_deep_analysis_job(run_id, resume=True)
+    executor = await _submit_or_503(run_id, resume=True)
     logger.info(
         "deep_analysis run %s resumed by %s via %s",
         run_id,

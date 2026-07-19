@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from dataclasses import replace
 
 from neos.config.settings import settings
 
@@ -179,12 +180,52 @@ class Orchestrator:
         agentic semantic tier. A deterministic failure short-circuits so the
         expensive judge is never invoked on already-rejected claims."""
         verdict = await self.grader.grade(claim)  # deterministic first
-        if not verdict.ok or self.agentic_grader is None:
-            return verdict
+        if self.agentic_grader is None:
+            return replace(
+                verdict,
+                diagnostics={
+                    **verdict.diagnostics,
+                    "agentic": "not_configured",
+                    "agentic_label": None,
+                },
+            )
+        if not verdict.ok:
+            return replace(
+                verdict,
+                diagnostics={
+                    **verdict.diagnostics,
+                    "agentic": "skipped",
+                    "agentic_label": None,
+                },
+            )
         try:
-            return await self.agentic_grader.grade(claim, value_est)
+            agentic_verdict = await self.agentic_grader.grade(claim, value_est)
+            agentic_state = agentic_verdict.diagnostics.get(
+                "agentic",
+                (
+                    "attempted_passed"
+                    if agentic_verdict.ok
+                    else "attempted_rejected"
+                ),
+            )
+            return replace(
+                agentic_verdict,
+                diagnostics={
+                    **verdict.diagnostics,
+                    **agentic_verdict.diagnostics,
+                    "agentic": agentic_state,
+                    "agentic_label": agentic_verdict.label,
+                },
+            )
         except TokenBudgetExhausted:
-            return verdict
+            return replace(
+                verdict,
+                diagnostics={
+                    **verdict.diagnostics,
+                    "agentic": "exhausted",
+                    "agentic_label": None,
+                },
+            )
 
     async def _regrade_pending(self, question_id, value_est):
         """Re-grade claims that repair processing pushed back to `pending`

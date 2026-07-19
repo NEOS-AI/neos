@@ -1,4 +1,5 @@
 import pytest
+from fastapi import HTTPException
 from pathlib import Path
 from pydantic import ValidationError
 from types import SimpleNamespace
@@ -99,7 +100,7 @@ async def test_post_returns_202_with_run_id_without_blocking(monkeypatch):
 
     submitted = {}
 
-    def fake_submit(run_id, question="", profile="dev", *, resume=False):
+    async def fake_submit(run_id, question="", profile="dev", *, resume=False):
         submitted.update(
             run_id=run_id, question=question, profile=profile, resume=resume
         )
@@ -124,6 +125,32 @@ async def test_post_returns_202_with_run_id_without_blocking(monkeypatch):
     }
     # 사용자 메시지는 제출 시점에 저장된다. assistant 메시지는 job이 쓴다.
     assert [message["role"] for message in messages] == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_start_returns_503_when_broker_dispatch_fails(monkeypatch):
+    from neos.api.handlers import deep_analysis_handlers as handlers
+    from neos.tasks.deep_analysis_job_task import DeepAnalysisDispatchError
+
+    _patch_session(monkeypatch, handlers)
+
+    async def fake_create_run(*args, **kwargs):
+        return "run00001"
+
+    async def fail_submit(*args, **kwargs):
+        raise DeepAnalysisDispatchError("run00001")
+
+    monkeypatch.setattr(handlers, "create_run", fake_create_run)
+    monkeypatch.setattr(handlers, "submit_deep_analysis_job", fail_submit)
+
+    with pytest.raises(HTTPException) as captured:
+        await handlers.start_deep_analysis(
+            DeepAnalysisRequest(question="Question"),
+            SimpleNamespace(user_id="owner"),
+        )
+
+    assert captured.value.status_code == 503
+    assert captured.value.detail == "Deep analysis dispatch unavailable"
 
 
 def test_post_is_declared_202():
@@ -259,7 +286,7 @@ async def test_resume_dispatches_the_job_for_a_running_run(monkeypatch):
 
     submitted = {}
 
-    def fake_submit(run_id, question="", profile="dev", *, resume=False):
+    async def fake_submit(run_id, question="", profile="dev", *, resume=False):
         submitted.update(run_id=run_id, resume=resume)
         return "celery"
 
@@ -273,6 +300,31 @@ async def test_resume_dispatches_the_job_for_a_running_run(monkeypatch):
     assert response.status == "accepted"
     assert response.executor == "celery"
     assert submitted == {"run_id": "run00001", "resume": True}
+
+
+@pytest.mark.asyncio
+async def test_resume_returns_503_when_broker_dispatch_fails(monkeypatch):
+    from neos.api.handlers import deep_analysis_handlers as handlers
+    from neos.tasks.deep_analysis_job_task import DeepAnalysisDispatchError
+
+    _patch_session(monkeypatch, handlers)
+
+    async def fake_owner(session, run_id):
+        return ("owner", "failed")
+
+    async def fail_submit(*args, **kwargs):
+        raise DeepAnalysisDispatchError("run00001")
+
+    monkeypatch.setattr(handlers, "get_run_owner", fake_owner)
+    monkeypatch.setattr(handlers, "submit_deep_analysis_job", fail_submit)
+
+    with pytest.raises(HTTPException) as captured:
+        await handlers.resume_deep_analysis(
+            "run00001", SimpleNamespace(user_id="owner")
+        )
+
+    assert captured.value.status_code == 503
+    assert captured.value.detail == "Deep analysis dispatch unavailable"
 
 
 @pytest.mark.asyncio

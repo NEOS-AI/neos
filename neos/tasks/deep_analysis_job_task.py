@@ -34,6 +34,14 @@ _BACKGROUND_TASKS: set[asyncio.Task] = set()
 _config = settings.config.deep_analysis
 
 
+class DeepAnalysisDispatchError(RuntimeError):
+    """Bounded public error for a Celery broker enqueue failure."""
+
+    def __init__(self, run_id: str) -> None:
+        super().__init__(f"deep_analysis dispatch failed for run {run_id}")
+        self.run_id = run_id
+
+
 def _celery_enabled() -> bool:
     return bool(getattr(settings, "CELERY_ENABLED", False))
 
@@ -49,15 +57,15 @@ async def _persist_assistant_message(run_id: str, report_markdown: str) -> None:
     from neos.database.connection import get_session_ctx
     from neos.database.deep_analysis_models import DARun
 
-    async with get_session_ctx() as session:
-        run = await session.get(DARun, run_id)
-        conversation_id = getattr(run, "conversation_id", None)
-        message_id = getattr(run, "assistant_message_id", None)
-
-    if not conversation_id or not message_id:
-        return
-
     try:
+        async with get_session_ctx() as session:
+            run = await session.get(DARun, run_id)
+            conversation_id = getattr(run, "conversation_id", None)
+            message_id = getattr(run, "assistant_message_id", None)
+
+        if not conversation_id or not message_id:
+            return
+
         await ChatService.add_message(
             conversation_id=conversation_id,
             role="assistant",
@@ -71,9 +79,10 @@ async def _persist_assistant_message(run_id: str, report_markdown: str) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "failed to persist deep_analysis report message for run %s: %s",
+            "failed to persist deep_analysis report message: "
+            "run=%s error_type=%s",
             run_id,
-            exc,
+            type(exc).__name__,
         )
 
 
@@ -155,7 +164,14 @@ def _discard_task(task: asyncio.Task) -> None:
         logger.error("inline deep_analysis job failed: %s", exc, exc_info=exc)
 
 
-def submit_deep_analysis_job(
+async def _record_dispatch_failure(run_id: str) -> None:
+    from neos.database.connection import get_session_ctx
+    from neos.workflow.deep_analysis.jobs import record_dispatch_failure
+
+    await record_dispatch_failure(get_session_ctx, run_id)
+
+
+async def submit_deep_analysis_job(
     run_id: str,
     question: str = "",
     profile: str = "dev",
@@ -170,10 +186,27 @@ def submit_deep_analysis_job(
         "resume": resume,
     }
     if _celery_enabled():
-        run_deep_analysis_job.apply_async(
-            kwargs=kwargs,
-            queue=settings.config.deep_analysis.job_queue,
-        )
+        try:
+            run_deep_analysis_job.apply_async(
+                kwargs=kwargs,
+                queue=settings.config.deep_analysis.job_queue,
+            )
+        except Exception as exc:  # noqa: BLE001 - transport-specific errors
+            logger.error(
+                "deep_analysis broker dispatch failed for run %s",
+                run_id,
+                exc_info=True,
+            )
+            try:
+                await _record_dispatch_failure(run_id)
+            except Exception:  # noqa: BLE001 - preserve the broker failure
+                logger.error(
+                    "deep_analysis dispatch failure persistence failed "
+                    "for run %s",
+                    run_id,
+                    exc_info=True,
+                )
+            raise DeepAnalysisDispatchError(run_id) from exc
         return "celery"
 
     task = asyncio.create_task(

@@ -53,13 +53,29 @@ class AgenticGrader:
                 code="E_UNSUPPORTED",
                 label=None,
                 detail=f"{note}_mandatory",
+                diagnostics={
+                    "agentic": "attempted_rejected",
+                    "agentic_label": None,
+                },
             )
-        return Verdict(ok=True, label=None, detail=note)
+        return Verdict(
+            ok=True,
+            label=None,
+            detail=note,
+            diagnostics={
+                "agentic": "attempted_passed",
+                "agentic_label": None,
+            },
+        )
 
     async def grade(self, claim: ProposedClaim, value_est: float) -> Verdict:
         mandatory = self.is_mandatory(value_est, claim.confidence)
         if not mandatory and self.sampler() >= self.sample_rate:
-            return Verdict(ok=True, label=None)
+            return Verdict(
+                ok=True,
+                label=None,
+                diagnostics={"agentic": "skipped", "agentic_label": None},
+            )
         evidence_block = "\n".join(
             f"<evidence>{e.excerpt}</evidence>" for e in claim.evidence
         ) or "(증거 없음)"
@@ -79,4 +95,11 @@ class AgenticGrader:
         factory = _MAP.get(label)
         if factory is None:
             return self._judge_failed(mandatory, "judge_unknown_label")
-        return factory(str(data.get("rationale", "")))
+        verdict = factory(str(data.get("rationale", "")))
+        verdict.diagnostics = {
+            "agentic": (
+                "attempted_passed" if verdict.ok else "attempted_rejected"
+            ),
+            "agentic_label": verdict.label,
+        }
+        return verdict

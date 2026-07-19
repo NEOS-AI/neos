@@ -22,7 +22,8 @@ settings = get_settings()
 app = Celery(
     'neos_workflow',
     broker=settings.CELERY_BROKER_URL,
-    backend=settings.CELERY_RESULT_BACKEND
+    backend=settings.CELERY_RESULT_BACKEND,
+    include=["neos.coding.workers.celery_tasks"],
 )
 
 # Celery 설정
@@ -51,6 +52,9 @@ app.conf.update(
         'neos.workflow.celery_tasks.execute_generation_agent': {'queue': 'generation'},
         'neos.workflow.celery_tasks.execute_agent_generic': {'queue': 'default'},
         'neos.workflow.celery_tasks.execute_workflow_async': {'queue': 'search'},  # Phase 3.5
+        'neos.coding.workers.celery_tasks.execute_coding_task': {
+            'queue': settings.CODING_CELERY_QUEUE
+        },
     },
 
     # 큐 정의 (우선순위 지원)
@@ -59,6 +63,11 @@ app.conf.update(
         Queue('search', Exchange('search'), routing_key='search', priority=8),
         Queue('analysis', Exchange('analysis'), routing_key='analysis', priority=7),
         Queue('generation', Exchange('generation'), routing_key='generation', priority=6),
+        Queue(
+            settings.CODING_CELERY_QUEUE,
+            Exchange(settings.CODING_CELERY_QUEUE),
+            routing_key=settings.CODING_CELERY_QUEUE,
+        ),
     ),
 
     # 재시도 설정
@@ -119,6 +128,18 @@ def shutdown_worker(**kwargs):
     logger.info("Celery worker shutdown complete")
 
 
+def configure_coding_beat_schedule(
+    schedule: dict, *, enabled: bool, interval: float
+) -> None:
+    if enabled:
+        schedule["reconcile-coding-tasks"] = {
+            "task": "neos.coding.workers.celery_tasks.reconcile_coding_tasks",
+            "schedule": interval,
+        }
+    else:
+        schedule.pop("reconcile-coding-tasks", None)
+
+
 # Celery Beat 스케줄 (주기적 태스크)
 app.conf.beat_schedule = {
     # 예: 매일 자정에 오래된 체크포인트 정리
@@ -152,6 +173,12 @@ app.conf.beat_schedule = {
         'schedule': 86400.0,  # 24시간
     },
 }
+
+configure_coding_beat_schedule(
+    app.conf.beat_schedule,
+    enabled=settings.CODING_CELERY_ENABLED,
+    interval=settings.CODING_CELERY_RECONCILIATION_SECONDS,
+)
 
 
 if __name__ == '__main__':

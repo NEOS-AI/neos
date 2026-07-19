@@ -1,8 +1,10 @@
 import inspect
+import logging
 
 import pytest
 
 from neos.workflow.deep_analysis.models import Effort, ProposedBlob
+from neos.workflow.deep_analysis.pdf_text import PDFExtractionError
 from neos.workflow.deep_analysis.worker import Worker
 from neos.workflow.deep_analysis.token_budget import TokenBudgetExhausted
 
@@ -186,3 +188,39 @@ async def test_worker_returns_accumulated_partial_when_budget_exhausts(monkeypat
     assert result.status == "partial"
     assert len(result.blobs) == 1
     assert result.claims == []
+
+
+@pytest.mark.asyncio
+async def test_worker_skips_only_unreadable_pdf_source(caplog):
+    class TwoSourceSearch:
+        async def __call__(self, query, k):
+            return [
+                {"url": "https://example.com/broken.pdf"},
+                {"url": "https://example.com/source"},
+            ]
+
+    class PartiallyFailingFetch(FakeFetch):
+        async def __call__(self, url, **kwargs):
+            if url.endswith("broken.pdf"):
+                raise PDFExtractionError("secret parser payload")
+            return await super().__call__(url, **kwargs)
+
+    worker = Worker(
+        TwoSourceSearch(),
+        fetch_fn=PartiallyFailingFetch(),
+        llm_client=FakeLLM(),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = await worker.investigate(
+            "Question\n{fetched_evidence}",
+            Effort.SCOUT,
+            "question",
+        )
+
+    assert [blob.source_url for blob in result.blobs] == [
+        "https://example.com/source"
+    ]
+    assert "https://example.com/broken.pdf" in caplog.text
+    assert "PDFExtractionError" in caplog.text
+    assert "secret parser payload" not in caplog.text

@@ -70,6 +70,16 @@ class InMemoryCodingRunRepository:
                 and self.active_run.status is CodingRunStatus.RUNNING
             ):
                 return self.active_run
+            if self.task_statuses[task_id] in {
+                "completed",
+                "failed",
+                "cancelled",
+            }:
+                if self.active_run is None:
+                    raise RuntimeError(
+                        f"terminal coding task has no run: {task_id}"
+                    )
+                return self.active_run
             if self.task_statuses[task_id] == "queued" and not development_mode:
                 raise ValueError(
                     "queued task fast path requires development mode"

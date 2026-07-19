@@ -149,6 +149,31 @@ class EnterpriseMetricsCollector:
             ["phase"],
             registry=self.registry,
         )
+        self.coding_sandbox_lifecycle_seconds = Histogram(
+            "coding_sandbox_lifecycle_seconds",
+            "Coding sandbox lifecycle operation duration",
+            ["provider", "operation", "outcome"],
+            buckets=(0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60),
+            registry=self.registry,
+        )
+        self.coding_sandbox_stream_total = Counter(
+            "coding_sandbox_stream_total",
+            "Coding sandbox stream outcomes",
+            ["stream", "outcome"],
+            registry=self.registry,
+        )
+        self.coding_sandbox_active = Gauge(
+            "coding_sandbox_active",
+            "Active coding sandboxes by provider and state",
+            ["provider", "state"],
+            registry=self.registry,
+        )
+        self.coding_sandbox_operation_total = Counter(
+            "coding_sandbox_operation_total",
+            "Coding sandbox operation outcomes",
+            ["provider", "operation", "outcome", "error_code"],
+            registry=self.registry,
+        )
         self.coding_steering_latency_seconds = Histogram(
             "coding_steering_latency_seconds",
             "Time from steering request to safe-point application",
@@ -182,6 +207,35 @@ class EnterpriseMetricsCollector:
         self.coding_supervisor_active_tasks = Gauge(
             "coding_supervisor_active_tasks",
             "Active development coding supervisor tasks",
+            registry=self.registry,
+        )
+        self.coding_worker_tasks_total = Counter(
+            "coding_worker_tasks_total",
+            "Coding Celery worker task outcomes",
+            ["outcome"],
+            registry=self.registry,
+        )
+        self.coding_worker_retry_total = Counter(
+            "coding_worker_retry_total",
+            "Coding Celery worker retries",
+            ["reason"],
+            registry=self.registry,
+        )
+        self.coding_worker_active_tasks = Gauge(
+            "coding_worker_active_tasks",
+            "Active coding Celery worker tasks",
+            registry=self.registry,
+        )
+        self.coding_dispatch_total = Counter(
+            "coding_dispatch_total",
+            "Coding task dispatch attempts",
+            ["source", "outcome"],
+            registry=self.registry,
+        )
+        self.coding_reconciliation_tasks_total = Counter(
+            "coding_reconciliation_tasks_total",
+            "Coding reconciliation task outcomes",
+            ["outcome"],
             registry=self.registry,
         )
 

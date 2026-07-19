@@ -31,7 +31,12 @@ from neos.utils.time_utils import to_naive_utc
 
 _OVERCLAIM_CODES = ("E_OVERCLAIM", "E_CONFIDENCE_INFLATED")
 # Only these kinds carry payload fields the signals read.
-_PAYLOAD_KINDS = ("claim_rejected", "pass_completed", "report_graded")
+_PAYLOAD_KINDS = (
+    "claim_rejected",
+    "claim_graded",
+    "pass_completed",
+    "report_graded",
+)
 
 
 class DeepAnalysisAnalyticsService:
@@ -85,6 +90,48 @@ class DeepAnalysisAnalyticsService:
             return None
         return parsed if isinstance(parsed, dict) else None
 
+    @staticmethod
+    def _valid_claim_grade(data: dict[str, Any]) -> bool:
+        if data.get("outcome") not in {"verified", "rejected", "unverified"}:
+            return False
+        if data.get("deterministic") not in {"passed", "rejected"}:
+            return False
+        if data.get("agentic") not in {
+            "not_configured",
+            "skipped",
+            "attempted_passed",
+            "attempted_rejected",
+            "exhausted",
+        }:
+            return False
+        for key in (
+            "evidence_count",
+            "source_count",
+            "fetched_source_count",
+            "dead_source_count",
+            "excerpt_chars",
+        ):
+            value = data.get(key)
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 0
+            ):
+                return False
+        threshold = data.get("quote_threshold")
+        if (
+            not isinstance(threshold, (int, float))
+            or isinstance(threshold, bool)
+            or not 0 <= threshold <= 1
+        ):
+            return False
+        score = data.get("best_quote_score")
+        return score is None or (
+            isinstance(score, (int, float))
+            and not isinstance(score, bool)
+            and 0 <= score <= 1
+        )
+
     async def signals(
         self,
         *,
@@ -102,12 +149,50 @@ class DeepAnalysisAnalyticsService:
         code_counts: Counter[str] = Counter()
         verified_per_pass: list[float] = []
         report_failures = 0
+        funnel = {
+            "proposed": 0,
+            "graded": 0,
+            "deterministic_passed": 0,
+            "deterministic_rejected": 0,
+            "agentic_attempted": 0,
+            "agentic_passed": 0,
+            "agentic_rejected": 0,
+            "agentic_skipped": 0,
+            "agentic_exhausted": 0,
+            "verified": 0,
+            "rejected": 0,
+            "unverified": 0,
+            "evidence_missing_rate": 0.0,
+            "source_dead_rate": 0.0,
+            "quote_score_buckets": {
+                "exact": 0,
+                "above_threshold": 0,
+                "near_miss": 0,
+                "low": 0,
+                "unavailable": 0,
+            },
+            "avg_evidence_count": 0.0,
+            "avg_source_count": 0.0,
+            "avg_excerpt_chars": 0.0,
+        }
+        evidence_total = 0
+        source_total = 0
+        excerpt_chars_total = 0
+        evidence_missing = 0
+        source_dead = 0
         for kind, payload in await self._payload_rows(since, run_id):
             data = self._payload(payload)
             if kind == "claim_rejected":
                 if data and data.get("code"):
                     code_counts[str(data["code"])] += 1
             elif kind == "pass_completed":
+                new_claims = data.get("new_claims") if data else None
+                if (
+                    isinstance(new_claims, int)
+                    and not isinstance(new_claims, bool)
+                    and new_claims >= 0
+                ):
+                    funnel["proposed"] += new_claims
                 if data is not None and "verified" in data:
                     try:
                         verified_per_pass.append(float(data["verified"]))
@@ -116,6 +201,52 @@ class DeepAnalysisAnalyticsService:
             elif kind == "report_graded":
                 if data is not None and data.get("ok") is False:
                     report_failures += 1
+            elif kind == "claim_graded":
+                if data is None or not self._valid_claim_grade(data):
+                    continue
+                funnel["graded"] += 1
+                deterministic = data["deterministic"]
+                funnel[f"deterministic_{deterministic}"] += 1
+
+                agentic = data["agentic"]
+                if agentic.startswith("attempted_"):
+                    funnel["agentic_attempted"] += 1
+                    result = agentic.removeprefix("attempted_")
+                    funnel[f"agentic_{result}"] += 1
+                elif agentic == "skipped":
+                    funnel["agentic_skipped"] += 1
+                elif agentic == "exhausted":
+                    funnel["agentic_exhausted"] += 1
+
+                funnel[data["outcome"]] += 1
+                evidence_total += data["evidence_count"]
+                source_total += data["source_count"]
+                excerpt_chars_total += data["excerpt_chars"]
+                deterministic_code = data.get("deterministic_code")
+                evidence_missing += deterministic_code == "E_NO_EVIDENCE"
+                source_dead += deterministic_code == "E_SOURCE_DEAD"
+
+                score = data["best_quote_score"]
+                threshold = data["quote_threshold"]
+                buckets = funnel["quote_score_buckets"]
+                if score is None:
+                    buckets["unavailable"] += 1
+                elif score == 1.0:
+                    buckets["exact"] += 1
+                elif score >= threshold:
+                    buckets["above_threshold"] += 1
+                elif score >= max(0.0, threshold - 0.05):
+                    buckets["near_miss"] += 1
+                else:
+                    buckets["low"] += 1
+
+        graded = funnel["graded"]
+        if graded:
+            funnel["evidence_missing_rate"] = evidence_missing / graded
+            funnel["source_dead_rate"] = source_dead / graded
+            funnel["avg_evidence_count"] = evidence_total / graded
+            funnel["avg_source_count"] = source_total / graded
+            funnel["avg_excerpt_chars"] = excerpt_chars_total / graded
 
         reject_rate_by_code = (
             {code: count / reject_total for code, count in code_counts.items()}
@@ -144,6 +275,7 @@ class DeepAnalysisAnalyticsService:
             "reinvestigation_count": totals.get("conflict_reinvestigation", 0),
             "avg_verified_per_pass": avg_verified_per_pass,
             "report_retry_rate": report_retry_rate,
+            "claim_funnel": funnel,
             "totals": totals,
         }
 

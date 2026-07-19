@@ -1,7 +1,7 @@
 # NEOS Coding Agent 구현 계획
 
 > 작성일: 2026-07-18
-> 상태: 구현 제안서
+> 상태: 구현 진행 중 — durable coding loop와 sandbox foundation 구현 완료
 > 기준 문서: `docs/claude_code_spec.md`, `docs/superpowers/specs/2026-07-17-loop-architecture-consolidation-design.md`
 > 외부 사례: [Shadow](https://www.ishaand.com/shadow)
 
@@ -890,8 +890,10 @@ security review gate 없이 remote untrusted repository 지원 플래그를 켜�
 - Development supervisor notification + PostgreSQL reconciliation: 구현 완료
 - Automatic fake-loop task startup and restart recovery: 구현 완료
 - Atomic run/task start, completion, and failure lifecycle: 구현 완료
-- Production Celery coding worker and cross-process wake bus: 다음 vertical slice로 이관
-- Real model adapter, sandbox command, permission execution: 다음 vertical slice로 이관
+- Production Celery coding queue, post-commit dispatch, and DB reconciliation: 구현 완료
+- At-least-once delivery with canonical run/lease/checkpoint recovery: 구현 완료
+- Real model adapter and sandbox command/file/git execution: 다음 vertical slice로 이관
+- Permission and approval execution: 다음 vertical slice로 이관
 
 ### Phase 1 — Docker sandbox와 sidecar
 
@@ -1047,3 +1049,79 @@ NEOS Coding은 기존 chat의 새로운 prompt mode가 아니라 **durable task 
 4. snapshot/replay/live를 동일하게 축약하는 프론트 event reducer
 
 이 네 축을 Phase 0–3에서 먼저 완성하면 Shadow 수준의 실시간 UX를 안정적으로 얹을 수 있고, sandbox provider·모델·Git provider·향후 coordinator를 교체하거나 추가해도 제품의 중심 계약은 유지된다.
+
+---
+
+## 19. Sandbox foundation 구현 현황과 검증
+
+2026-07-19 기준으로 provider-neutral sandbox foundation이 `dev` 브랜치에 구현되어 있다.
+
+### 19.1 구현된 모듈
+
+| 영역 | 구현 |
+|---|---|
+| 계약 | `neos/coding/sandbox/base.py`: lifecycle, file/search/git/command, snapshot, PTY, watcher protocol |
+| 경로 정책 | `paths.py`: POSIX 상대 경로, traversal/symlink escape, Git 보호 경로 차단 |
+| 스트림 | `streams.py`: bounded replay, monotonic cursor, replay gap |
+| Memory provider | 실제 process group, portable snapshot, POSIX PTY, command 전후 filesystem reconciliation |
+| Docker provider | 제한된 container/volume lifecycle, readiness, 보상 정리, snapshot/restore, PTY, watcher, restart rediscovery |
+| 설정/runtime | nested strict config, provider factory, `CodingRuntime` shutdown ownership |
+| 관측성 | bounded-label Prometheus metric과 content-free audit metadata |
+
+Memory provider는 개발과 provider 계약 검증을 위한 실행 가능한 reference adapter다. Docker provider는 로컬 개발용이며 production multi-tenant 보안 경계로 간주하지 않는다.
+
+### 19.2 기본 설정
+
+기본 profile은 sandbox를 비활성화하고 provider를 `memory`로 둔다. 활성화 시 주요 설정은 다음과 같다.
+
+```yaml
+sandbox:
+  enabled: true
+  provider: memory
+  lifecycle:
+    create_timeout_sec: 30
+    idle_timeout_sec: 900
+    max_lifetime_sec: 14400
+  resources:
+    cpu_count: 1.0
+    memory_bytes: 536870912
+    pids: 128
+    workspace_bytes: 1073741824
+  execution:
+    command_timeout_sec: 30
+    max_output_bytes: 1048576
+    max_stdin_bytes: 1048576
+```
+
+production에서 `provider: docker`를 선택하면 image는 `name@sha256:<digest>` 형식이어야 하고, network는 `none`, user는 non-root여야 한다. unsafe 값은 애플리케이션 시작 시 Pydantic validation error로 거부된다.
+
+### 19.3 테스트 명령
+
+Docker daemon 없이 reference provider와 scripted Docker boundary를 검증한다.
+
+```bash
+.venv/bin/pytest -q tests/coding/sandbox/test_memory_conformance.py
+.venv/bin/pytest -q \
+  tests/coding/sandbox/test_docker_command.py \
+  tests/coding/sandbox/test_docker_provider.py \
+  tests/coding/sandbox/test_docker_failures.py \
+  tests/coding/sandbox/test_docker_pty.py \
+  tests/coding/sandbox/test_docker_watcher.py
+```
+
+실제 Docker conformance는 명시적으로 opt-in한다. image에는 Python 3, Git, `/bin/sh`가 있어야 하며 UID/GID `10001:10001`이 `/workspace` volume을 사용할 수 있어야 한다.
+
+```bash
+CODING_TEST_DOCKER=1 \
+CODING_TEST_DOCKER_IMAGE='registry/neos-sandbox@sha256:<digest>' \
+.venv/bin/pytest -q tests/coding/integration/test_docker_sandbox.py -rs
+```
+
+Docker CLI, opt-in flag, digest image 중 하나라도 없으면 suite는 설치·설정 방법을 포함한 이유와 함께 skip한다.
+
+### 19.4 현재 제한과 다음 경계
+
+- Docker stdout/stderr capture는 bounded이며 truncation을 명시적으로 보고한다. 대용량 snapshot은 streaming object store adapter가 추가되기 전까지 설정 상한 내에서만 허용한다.
+- watcher는 session write와 watcher가 열린 상태의 command 전후 fingerprint를 reconcile한다. sandbox 밖에서 발생한 장기 background 변경의 polling/sidecar push는 후속 sidecar 단계다.
+- rediscovery는 NEOS label, sandbox ID, owner, container 이름을 재검증한다. distributed lease와 absolute TTL reaper는 persistence/control-plane wiring 단계에서 추가한다.
+- browser는 Docker socket이나 PTY에 직접 연결하지 않는다. REST/WebSocket gateway가 sandbox session을 소유하고 cursor/revision을 클라이언트 event로 변환해야 한다.
