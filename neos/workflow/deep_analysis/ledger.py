@@ -479,6 +479,21 @@ class Ledger:
         for feedback in rows.scalars():
             feedback.resolved = 1
 
+    async def _claim_hash_taken(self, normalized_hash: str, *, exclude_id: str) -> bool:
+        """run 안의 다른 클레임이 이미 이 hash를 갖고 있는가.
+
+        삽입 경로(`propose_claim`)는 같은 검사를 먼저 하고 병합한다. 수리 경로에
+        이 검사가 없어 실제 run이 죽었다.
+        """
+        result = await self.db.execute(
+            select(DAClaim.id).where(
+                DAClaim.run_id == self.run_id,
+                DAClaim.hash == normalized_hash,
+                DAClaim.id != exclude_id,
+            )
+        )
+        return result.first() is not None
+
     async def _apply_repairs(
         self,
         question_id: str,
@@ -490,8 +505,20 @@ class Ledger:
                 continue
             if repair.action in ("fixed", "weakened"):
                 if repair.new_text:
+                    normalized_hash = claim_hash(repair.new_text)
+                    if normalized_hash != claim.hash and await self._claim_hash_taken(
+                        normalized_hash, exclude_id=claim.id
+                    ):
+                        # 수리가 run 안의 다른 클레임과 같은 문장으로 수렴했다.
+                        # weaken은 문장을 일반화하므로 실제로 자주 일어난다.
+                        # 그대로 쓰면 uq_deep_analysis_claims_run_hash를 위반해
+                        # 라운드 전체 트랜잭션이 죽는다. 내용은 이미 다른 행에
+                        # 있으므로 중복을 재검증하지 않고 abandoned와 같이 처리한다.
+                        claim.status = "unverified"
+                        await self._resolve_feedback(repair.claim_id)
+                        continue
                     claim.text = repair.new_text
-                    claim.hash = claim_hash(repair.new_text)
+                    claim.hash = normalized_hash
                 claim.status = "pending"
                 for proposed in repair.new_evidence:
                     self.db.add(
