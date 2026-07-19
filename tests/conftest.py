@@ -1,10 +1,16 @@
-"""
-Pytest configuration and fixtures
-"""
-import pytest
+"""Pytest configuration and fixtures."""
+
 import asyncio
-from httpx import AsyncClient, ASGITransport
+import os
 from typing import AsyncGenerator
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+os.environ.setdefault(
+    "JWT_SECRET_KEY",
+    "neos-test-only-secret-key-2026-07-19",
+)
 
 
 def _skip_database_fixtures(request: pytest.FixtureRequest) -> bool:
