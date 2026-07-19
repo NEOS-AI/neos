@@ -79,6 +79,27 @@ class PostgresCodingRunRepository:
                 existing_row = existing_result.first()
                 if existing_row is not None:
                     return self._run_from_row(existing_row)
+                if task_row[2] in {"completed", "failed", "cancelled"}:
+                    terminal_result = await session.execute(
+                        text(
+                            """
+                            SELECT run_id, task_id, attempt, status,
+                                   resume_from_checkpoint_id, started_at,
+                                   completed_at
+                            FROM coding_runs
+                            WHERE task_id = :task_id
+                            ORDER BY attempt DESC
+                            LIMIT 1
+                            """
+                        ),
+                        {"task_id": task_id},
+                    )
+                    terminal_row = terminal_result.first()
+                    if terminal_row is None:
+                        raise RuntimeError(
+                            f"terminal coding task has no run: {task_id}"
+                        )
+                    return self._run_from_row(terminal_row)
                 if task_row[2] == "queued" and not development_mode:
                     raise ValueError(
                         "queued task fast path requires development mode"

@@ -890,8 +890,10 @@ security review gate 없이 remote untrusted repository 지원 플래그를 켜�
 - Development supervisor notification + PostgreSQL reconciliation: 구현 완료
 - Automatic fake-loop task startup and restart recovery: 구현 완료
 - Atomic run/task start, completion, and failure lifecycle: 구현 완료
-- Production Celery coding worker and cross-process wake bus: 다음 vertical slice로 이관
-- Real model adapter, sandbox command, permission execution: 다음 vertical slice로 이관
+- Production Celery coding queue, post-commit dispatch, and DB reconciliation: 구현 완료
+- At-least-once delivery with canonical run/lease/checkpoint recovery: 구현 완료
+- Real model adapter and sandbox command/file/git execution: 다음 vertical slice로 이관
+- Permission and approval execution: 다음 vertical slice로 이관
 
 ### Phase 1 — Docker sandbox와 sidecar
 

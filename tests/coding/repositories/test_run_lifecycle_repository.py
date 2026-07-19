@@ -12,6 +12,15 @@ from tests.coding.fakes import InMemoryCodingRunRepository
 NOW = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
 TASK_ROW = ("ct_1", "Fix it", "queued")
 RUN_ROW = ("cr_1", "ct_1", 1, "running", None, NOW, None)
+COMPLETED_RUN_ROW = (
+    "cr_1",
+    "ct_1",
+    1,
+    "completed",
+    None,
+    NOW,
+    NOW,
+)
 LEASE = ExecutionLease(
     task_id="ct_1",
     run_id="cr_1",
@@ -121,6 +130,29 @@ async def test_ensure_run_started_returns_existing_running_run() -> None:
 
     assert run.run_id == "cr_1"
     assert run.attempt == 1
+    assert "INSERT INTO coding_runs" not in "\n".join(session.sql)
+    assert "INSERT INTO coding_events" not in "\n".join(session.sql)
+
+
+async def test_ensure_run_started_returns_terminal_run_for_late_delivery() -> None:
+    session = FakeSession(
+        rows=[
+            ("ct_1", "Fix it", "completed"),
+            None,
+            COMPLETED_RUN_ROW,
+        ]
+    )
+    repository = repository_for(session)
+
+    run = await repository.ensure_run_started(
+        task_id="ct_1",
+        instruction="Fix it",
+        development_mode=True,
+        now=NOW,
+    )
+
+    assert run.status is CodingRunStatus.COMPLETED
+    assert run.run_id == "cr_1"
     assert "INSERT INTO coding_runs" not in "\n".join(session.sql)
     assert "INSERT INTO coding_events" not in "\n".join(session.sql)
 

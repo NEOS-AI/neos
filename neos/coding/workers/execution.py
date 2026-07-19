@@ -8,6 +8,7 @@ from neos.coding.domain.durability import (
     RunAlreadyLeased,
     StaleExecutionLease,
 )
+from neos.coding.domain.phases import CodingRunStatus
 
 
 class CodingTaskOutcome(StrEnum):
@@ -50,7 +51,14 @@ class CodingTaskRunner:
         failure_error_code: str,
         keep_running: Callable[[], bool] = lambda: True,
     ) -> CodingTaskOutcome:
-        await self._runs.ensure_started(task_id=task_id)
+        run = await self._runs.ensure_started(task_id=task_id)
+        if run is not None and run.status is CodingRunStatus.COMPLETED:
+            return CodingTaskOutcome.COMPLETED
+        if run is not None and run.status in {
+            CodingRunStatus.FAILED,
+            CodingRunStatus.CANCELLED,
+        }:
+            return CodingTaskOutcome.FAILED
         failures = 0
         while keep_running():
             try:
