@@ -2,6 +2,7 @@ import pytest
 
 from neos.coding.workers import celery_runtime
 from neos.coding.workers.execution import CodingTaskOutcome, CodingTaskRunner
+from neos.config.schema import AppConfig
 
 
 class RecordingDatabaseManager:
@@ -114,3 +115,41 @@ async def test_discovery_closes_manager_when_repository_raises(
         )
 
     assert manager.calls == ["initialize", "close"]
+
+
+async def test_real_worker_closes_provider_once_when_loop_construction_fails(
+    monkeypatch,
+) -> None:
+    manager = RecordingDatabaseManager()
+    provider = type(
+        "Provider", (), {"close_count": 0, "close": lambda self: _close(self)}
+    )()
+    config = AppConfig.model_validate({
+        "coding_model": {
+            "enabled": True,
+            "input_cost_micros_per_million": 1,
+            "output_cost_micros_per_million": 1,
+        },
+        "sandbox": {"enabled": True},
+        "secrets": {"anthropic_api_key": "test"},
+    })
+    monkeypatch.setattr(celery_runtime.settings, "_config", config)
+    monkeypatch.setattr(
+        "neos.coding.sandbox.factory.create_sandbox_provider", lambda config: provider
+    )
+    monkeypatch.setattr(
+        celery_runtime,
+        "_create_worker_real_loop",
+        lambda manager, provider: (_ for _ in ()).throw(RuntimeError("loop failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="loop failed"):
+        await celery_runtime.run_coding_delivery(
+            task_id="ct_1", worker_id="worker", database_manager=manager
+        )
+
+    assert provider.close_count == 1
+
+
+async def _close(provider) -> None:
+    provider.close_count += 1

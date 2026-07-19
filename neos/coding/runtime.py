@@ -125,9 +125,7 @@ def create_coding_runtime(
     )
 
 
-def _create_real_coding_loop(
-    *, config: AppConfig, sandboxes, session_factory=None
-) -> AnthropicCodingLoop:
+def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
     coding = config.coding_model
     sandbox = config.sandbox
     resources = sandbox.resources
@@ -141,13 +139,8 @@ def _create_real_coding_loop(
         max_output_bytes=execution.max_output_bytes,
         max_stdin_bytes=execution.max_stdin_bytes,
     )
-    bindings = SandboxBindingService(
-        repository=PostgresSandboxBindingRepository(
-            session_factory or db_manager.get_session
-        ),
-        provider=sandboxes,
-        limits=limits,
-        snapshot_cadence=coding.mutation_snapshot_interval,
+    repository = PostgresSandboxBindingRepository(
+        session_factory or db_manager.get_session
     )
     allowlist = coding.command_allowlist if coding.command_enabled else []
     tools = CodingToolRegistry.default(
@@ -157,17 +150,14 @@ def _create_real_coding_loop(
         max_command_stdin_bytes=execution.max_stdin_bytes,
         allowed_env_names=frozenset(execution.allowed_env_names),
     )
-    return AnthropicCodingLoop(
-        model=AnthropicCodingModel(
-            AsyncAnthropic(api_key=config.secrets.anthropic_api_key)
-        ),
-        tools=tools,
-        executor=SandboxToolExecutor(
-            max_preview_bytes=min(coding.max_transcript_bytes, execution.max_output_bytes),
-            max_entries=1000,
-        ),
-        bindings=bindings,
-        config=AnthropicLoopConfig(
+    model = AnthropicCodingModel(
+        AsyncAnthropic(api_key=config.secrets.anthropic_api_key)
+    )
+    executor = SandboxToolExecutor(
+        max_preview_bytes=execution.max_output_bytes,
+        max_entries=1000,
+    )
+    loop_config = AnthropicLoopConfig(
             model=coding.model,
             system="Work safely in the provided sandbox and complete the coding task.",
             max_output_tokens=coding.max_output_tokens,
@@ -177,8 +167,39 @@ def _create_real_coding_loop(
             max_tools=coding.max_tool_calls,
             max_consecutive_tool_errors=coding.max_consecutive_tool_errors,
             max_cost_micros=int(coding.max_cost_usd * 1_000_000),
-        ),
+            input_cost_micros_per_million=(
+                coding.input_cost_micros_per_million
+            ),
+            output_cost_micros_per_million=(
+                coding.output_cost_micros_per_million
+            ),
+        max_transcript_bytes=coding.max_transcript_bytes,
     )
+
+    def finish(sandboxes) -> AnthropicCodingLoop:
+        bindings = SandboxBindingService(
+            repository=repository,
+            provider=sandboxes,
+            limits=limits,
+            snapshot_cadence=coding.mutation_snapshot_interval,
+        )
+        return AnthropicCodingLoop(
+            model=model,
+            tools=tools,
+            executor=executor,
+            bindings=bindings,
+            config=loop_config,
+        )
+
+    return finish
+
+
+def _create_real_coding_loop(
+    *, config: AppConfig, sandboxes, session_factory=None
+) -> AnthropicCodingLoop:
+    return _prepare_real_coding_loop(
+        config=config, session_factory=session_factory
+    )(sandboxes)
 
 
 def create_development_coding_runtime(*, config: AppConfig | None = None) -> CodingRuntime:
@@ -193,12 +214,15 @@ def create_development_coding_runtime(*, config: AppConfig | None = None) -> Cod
         )
     if settings.CODING_FAKE_LOOP_ENABLED and config.coding_model.enabled:
         raise RuntimeError("fake and real coding loops cannot be enabled together")
-    sandboxes = create_sandbox_provider(config.sandbox)
     if settings.CODING_FAKE_LOOP_ENABLED:
+        sandboxes = create_sandbox_provider(config.sandbox)
         loop = FakeDurableCodingLoop(clock=lambda: datetime.now(UTC))
     elif config.coding_model.enabled:
-        loop = _create_real_coding_loop(config=config, sandboxes=sandboxes)
+        finish_loop = _prepare_real_coding_loop(config=config)
+        sandboxes = create_sandbox_provider(config.sandbox)
+        loop = finish_loop(sandboxes)
     else:
+        sandboxes = create_sandbox_provider(config.sandbox)
         loop = None
     run_repository = PostgresCodingRunRepository(db_manager.get_session)
     runtime = create_coding_runtime(

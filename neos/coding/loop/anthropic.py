@@ -54,6 +54,7 @@ class AnthropicLoopConfig:
     input_cost_micros_per_million: int = 0
     output_cost_micros_per_million: int = 0
     max_transcript_messages: int = 100
+    max_transcript_bytes: int = 1_048_576
 
     def __post_init__(self) -> None:
         numeric = (
@@ -66,6 +67,7 @@ class AnthropicLoopConfig:
             self.max_total_tokens,
             self.max_cost_micros,
             self.max_transcript_messages,
+            self.max_transcript_bytes,
         )
         if not self.model or not self.system or any(value <= 0 for value in numeric):
             raise ValueError("anthropic loop configuration limits must be positive")
@@ -307,6 +309,7 @@ class AnthropicCodingLoop:
         transcript = state.transcript
         if content:
             transcript += (CanonicalMessage("assistant", tuple(content)),)
+        transcript = self._compact(transcript, preserve_tools=bool(calls))
         usage = completion.usage
         cost = (
             state.cost_micros
@@ -330,9 +333,11 @@ class AnthropicCodingLoop:
         )
 
     def _after_result(self, state, result):
-        transcript = state.transcript + (CanonicalMessage("tool", (result,)),)
-        if state.pending_tool_index + 1 >= len(state.pending_tool_calls):
-            transcript = self._compact(transcript)
+        has_more_tools = state.pending_tool_index + 1 < len(state.pending_tool_calls)
+        transcript = self._compact(
+            state.transcript + (CanonicalMessage("tool", (result,)),),
+            preserve_tools=has_more_tools,
+        )
         errors = 0 if result.status == "ok" else state.consecutive_tool_errors + 1
         return AgentLoopState(
             transcript,
@@ -414,15 +419,88 @@ class AnthropicCodingLoop:
             True,
         )
 
-    def _compact(self, transcript):
-        if len(transcript) <= self._config.max_transcript_messages:
+    def _compact(self, transcript, *, preserve_tools: bool = False):
+        transcript = tuple(transcript)
+        if (
+            len(transcript) <= self._config.max_transcript_messages
+            and self._serialized_bytes(transcript)
+            <= self._config.max_transcript_bytes
+        ):
             return tuple(transcript)
         digest = self._digest(transcript)
-        return (
+        compacted_notice = (
             CanonicalMessage(
                 "user",
                 (TextContent(f"Prior transcript compacted; sha256={digest}"),),
             ),
+        )
+        if not preserve_tools:
+            return compacted_notice
+        tool_start = next(
+            (
+                index
+                for index in range(len(transcript) - 1, -1, -1)
+                if transcript[index].role == "assistant"
+                and any(
+                    isinstance(item, ToolUseContent)
+                    for item in transcript[index].content
+                )
+            ),
+            None,
+        )
+        if tool_start is None:
+            return compacted_notice
+        active = tuple(
+            self._compact_tool_message(message) for message in transcript[tool_start:]
+        )
+        candidate = compacted_notice + active
+        if self._serialized_bytes(candidate) <= self._config.max_transcript_bytes:
+            return candidate
+        return active
+
+    @staticmethod
+    def _compact_tool_message(message: CanonicalMessage) -> CanonicalMessage:
+        content = []
+        for item in message.content:
+            if isinstance(item, TextContent):
+                continue
+            if isinstance(item, ToolUseContent):
+                digest = hashlib.sha256(
+                    json.dumps(
+                        dict(item.input), sort_keys=True, separators=(",", ":"),
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                ).hexdigest()
+                content.append(
+                    ToolUseContent(
+                        item.tool_call_id, item.name, {"compacted_sha256": digest}
+                    )
+                )
+            else:
+                digest = hashlib.sha256(
+                    json.dumps(
+                        dict(item.content), sort_keys=True, separators=(",", ":"),
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                ).hexdigest()
+                content.append(
+                    ToolResultContent(
+                        item.tool_call_id,
+                        item.status,
+                        {"compacted_sha256": digest},
+                    )
+                )
+        return CanonicalMessage(message.role, tuple(content))
+
+    @staticmethod
+    def _serialized_bytes(transcript) -> int:
+        return len(
+            json.dumps(
+                [_message_to_mapping(item) for item in transcript],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
         )
 
     @staticmethod
@@ -431,6 +509,7 @@ class AnthropicCodingLoop:
             [_message_to_mapping(item) for item in transcript],
             sort_keys=True,
             separators=(",", ":"),
+            ensure_ascii=False,
         )
         return hashlib.sha256(payload.encode()).hexdigest()
 

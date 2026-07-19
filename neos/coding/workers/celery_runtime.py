@@ -100,18 +100,22 @@ async def run_coding_delivery(
             from neos.coding.sandbox.factory import create_sandbox_provider
 
             provider = create_sandbox_provider(settings.config.sandbox)
-            repository = _build_run_repository(manager)
-            runtime = create_coding_runtime(
-                events=PostgresCodingService(manager.get_session),
-                tasks=CodingTaskRepository(manager),
-                run_repository=repository,
-                projection_repository=PostgresCodingProjectionRepository(
-                    manager.get_session
-                ),
-                loop=_create_worker_real_loop(manager, provider),
-                metrics_collector=metrics,
-                sandboxes=provider,
-            )
+            try:
+                repository = _build_run_repository(manager)
+                runtime = create_coding_runtime(
+                    events=PostgresCodingService(manager.get_session),
+                    tasks=CodingTaskRepository(manager),
+                    run_repository=repository,
+                    projection_repository=PostgresCodingProjectionRepository(
+                        manager.get_session
+                    ),
+                    loop=_create_worker_real_loop(manager, provider),
+                    metrics_collector=metrics,
+                    sandboxes=provider,
+                )
+            except BaseException:
+                await provider.close()
+                raise
             runner = CodingTaskRunner(
                 runs=runtime.runs,
                 propagate_exceptions=(

@@ -77,7 +77,11 @@ def test_runtime_rejects_local_and_celery_execution_together(
 def test_runtime_rejects_fake_and_real_execution_together(monkeypatch) -> None:
     monkeypatch.setattr(settings, "CODING_FAKE_LOOP_ENABLED", True)
     config = AppConfig.model_validate({
-        "coding_model": {"enabled": True, "model": "claude-test"},
+        "coding_model": {
+            "enabled": True, "model": "claude-test",
+            "input_cost_micros_per_million": 1,
+            "output_cost_micros_per_million": 1,
+        },
         "sandbox": {"enabled": True},
         "secrets": {"anthropic_api_key": "test-key"},
     })
@@ -89,7 +93,11 @@ def test_runtime_rejects_fake_and_real_execution_together(monkeypatch) -> None:
 def test_real_loop_can_register_celery_delivery(monkeypatch) -> None:
     calls = []
     config = AppConfig.model_validate({
-        "coding_model": {"enabled": True, "model": "claude-test"},
+        "coding_model": {
+            "enabled": True, "model": "claude-test",
+            "input_cost_micros_per_million": 1,
+            "output_cost_micros_per_million": 1,
+        },
         "sandbox": {"enabled": True},
         "secrets": {"anthropic_api_key": "test-key"},
     })
@@ -107,6 +115,28 @@ def test_real_loop_can_register_celery_delivery(monkeypatch) -> None:
 
     assert runtime.supervisor is None
     assert calls == ["ct_real"]
+
+
+def test_real_loop_maps_explicit_prices_and_transcript_cap() -> None:
+    config = AppConfig.model_validate({
+        "coding_model": {
+            "enabled": True,
+            "model": "claude-test",
+            "input_cost_micros_per_million": 3_000_000,
+            "output_cost_micros_per_million": 15_000_000,
+            "max_transcript_bytes": 12345,
+        },
+        "sandbox": {"enabled": True},
+        "secrets": {"anthropic_api_key": "test-key"},
+    })
+
+    loop = runtime_module._create_real_coding_loop(
+        config=config, sandboxes=object()
+    )
+
+    assert loop._config.input_cost_micros_per_million == 3_000_000
+    assert loop._config.output_cost_micros_per_million == 15_000_000
+    assert loop._config.max_transcript_bytes == 12345
 
 
 @pytest.mark.parametrize(

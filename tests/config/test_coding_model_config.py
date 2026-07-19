@@ -15,6 +15,16 @@ def real_config(**overrides):
     return data
 
 
+def priced_real_config(**overrides):
+    data = real_config()
+    data["coding_model"].update({
+        "input_cost_micros_per_million": 3_000_000,
+        "output_cost_micros_per_million": 15_000_000,
+    })
+    data.update(overrides)
+    return data
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
@@ -55,13 +65,24 @@ def test_real_loop_requires_sandbox_and_credential() -> None:
         AppConfig.model_validate(real_config(secrets={}))
 
 
+def test_real_loop_requires_nonzero_explicit_prices() -> None:
+    with pytest.raises(ValidationError, match="positive input and output prices"):
+        AppConfig.model_validate(real_config())
+
+
+def test_real_loop_accepts_explicit_prices() -> None:
+    config = AppConfig.model_validate(priced_real_config())
+    assert config.coding_model.input_cost_micros_per_million == 3_000_000
+    assert config.coding_model.output_cost_micros_per_million == 15_000_000
+
+
 @pytest.mark.parametrize("environment", ["staging", "production"])
 def test_real_loop_requires_docker_in_deployed_environments(environment) -> None:
     with pytest.raises(ValidationError, match="Docker sandbox"):
-        AppConfig.model_validate(real_config(environment=environment))
+        AppConfig.model_validate(priced_real_config(environment=environment))
 
 
 def test_anthropic_secret_is_redacted() -> None:
-    config = AppConfig.model_validate(real_config())
+    config = AppConfig.model_validate(priced_real_config())
     assert "secret-value" not in repr(config)
     assert "secret-value" not in str(config)

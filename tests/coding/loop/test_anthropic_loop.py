@@ -1,4 +1,5 @@
 import asyncio
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -283,6 +284,34 @@ async def test_transcript_digest_and_compaction_are_deterministic() -> None:
     state = h.repository.checkpoints[-1].loop_state
     assert len(state["transcript"]) <= 2
     assert len(state["transcript_digest"]) == 64
+
+
+@pytest.mark.asyncio
+async def test_transcript_byte_cap_preserves_pending_multi_tool_structure() -> None:
+    config = AnthropicLoopConfig(
+        model="claude-test", system="code", max_transcript_bytes=700
+    )
+    calls = [
+        tool_call("one", input={"content": "x" * 4000}),
+        tool_call("two", input={"content": "y" * 4000}),
+    ]
+    h = harness([[TextDelta("z" * 4000), *calls, completed()]], config=config)
+
+    await collect(h)
+    state = h.repository.checkpoints[-1].loop_state
+    encoded = json.dumps(
+        state["transcript"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+
+    assert len(encoded) <= 700
+    assert [call["tool_call_id"] for call in state["pending_tool_calls"]] == [
+        "one",
+        "two",
+    ]
+    assistant = next(
+        message for message in state["transcript"] if message["role"] == "assistant"
+    )
+    assert [item["tool_call_id"] for item in assistant["content"]] == ["one", "two"]
 
 
 @pytest.mark.asyncio

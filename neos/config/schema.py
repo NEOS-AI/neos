@@ -795,6 +795,8 @@ class CodingModelConfig(StrictConfigModel):
     max_output_tokens: int = Field(default=8192, gt=0)
     max_transcript_bytes: int = Field(default=1_048_576, gt=0)
     max_cost_usd: float = Field(default=5.0, gt=0)
+    input_cost_micros_per_million: int = Field(default=0, ge=0)
+    output_cost_micros_per_million: int = Field(default=0, ge=0)
     command_enabled: bool = True
     command_allowlist: list[str] = Field(
         default_factory=lambda: ["pytest", "ruff", "mypy", "pnpm", "git"]
@@ -996,6 +998,13 @@ class AppConfig(StrictConfigModel):
         if not self.sandbox.enabled or not self.secrets.anthropic_api_key:
             raise ValueError(
                 "coding real loop requires an enabled sandbox and Anthropic credential"
+            )
+        if (
+            self.coding_model.input_cost_micros_per_million <= 0
+            or self.coding_model.output_cost_micros_per_million <= 0
+        ):
+            raise ValueError(
+                "coding real loop requires positive input and output prices"
             )
         if (
             self.environment in {"staging", "production"}
