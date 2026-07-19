@@ -16,6 +16,8 @@ from neos.coding.domain.durability import (
     ToolExecutionDisposition,
 )
 from neos.coding.domain.events import make_event
+
+
 from neos.coding.domain.phases import (
     CodingCheckpoint,
     CodingPhaseStatus,
@@ -30,6 +32,9 @@ from neos.coding.model.base import (
     TextDelta,
     ToolCallCompleted,
 )
+
+
+_EXPECTED_CHECKPOINT_OMITTED = object()
 
 
 def tool_turn(
@@ -118,9 +123,7 @@ class InMemorySandboxBindingRepository:
         self.current = binding
         return True
 
-    async def replace_fenced(
-        self, binding, *, expected_version, lease, now
-    ):
+    async def replace_fenced(self, binding, *, expected_version, lease, now):
         self._require_lease(lease, now)
         if self.current is None or self.current.version != expected_version:
             return None
@@ -261,6 +264,18 @@ class InMemoryCodingRunRepository:
             if status in {"queued", "running"}
         )[:limit]
 
+    async def claimable_delivery_tokens(self, *, limit):
+        task_ids = await self.claimable_task_ids(limit=limit)
+        return tuple(
+            (
+                task_id,
+                self.checkpoints[-1].checkpoint_id
+                if self.checkpoints and self.checkpoints[-1].task_id == task_id
+                else None,
+            )
+            for task_id in task_ids
+        )
+
     async def acquire_execution_lease(
         self,
         *,
@@ -269,8 +284,22 @@ class InMemoryCodingRunRepository:
         worker_id,
         now,
         expires_at,
+        expected_checkpoint_id=_EXPECTED_CHECKPOINT_OMITTED,
     ):
         async with self._durability_lock:
+            latest = next(
+                (
+                    checkpoint.checkpoint_id
+                    for checkpoint in reversed(self.checkpoints)
+                    if checkpoint.task_id == task_id
+                ),
+                None,
+            )
+            if (
+                expected_checkpoint_id is not _EXPECTED_CHECKPOINT_OMITTED
+                and latest != expected_checkpoint_id
+            ):
+                return None
             current = self.execution_leases.get(task_id)
             if current is not None and current.expires_at > now:
                 return None

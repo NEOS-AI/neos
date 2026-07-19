@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Protocol
 from uuid import uuid4
 
+
 from neos.coding.domain.durability import (
     RunAlreadyLeased,
     StaleExecutionLease,
@@ -17,6 +18,9 @@ from neos.coding.domain.phases import (
     SteeringRequest,
 )
 from neos.coding.loop.base import CodingLoop, LoopDependencies, LoopInput
+
+
+_EXPECTED_CHECKPOINT_OMITTED = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +129,13 @@ class CodingRunService:
         )
         return run
 
-    async def advance_one_safe_point(self, *, task_id: str, worker_id: str):
+    async def advance_one_safe_point(
+        self,
+        *,
+        task_id: str,
+        worker_id: str,
+        expected_checkpoint_id: str | None | object = _EXPECTED_CHECKPOINT_OMITTED,
+    ):
         """Advance a durable loop from its latest committed checkpoint.
 
         The iterator is intentionally rebuilt for every call. A replacement
@@ -138,13 +148,16 @@ class CodingRunService:
         if run is None:
             raise RuntimeError(f"coding run does not exist: {task_id}")
         now = self._clock()
-        lease = await self._runs.acquire_execution_lease(
+        lease_kwargs = dict(
             task_id=task_id,
             run_id=run.run_id,
             worker_id=worker_id,
             now=now,
             expires_at=now + self._execution_lease,
         )
+        if expected_checkpoint_id is not _EXPECTED_CHECKPOINT_OMITTED:
+            lease_kwargs["expected_checkpoint_id"] = expected_checkpoint_id
+        lease = await self._runs.acquire_execution_lease(**lease_kwargs)
         if lease is None:
             if self._metrics is not None:
                 self._metrics.coding_lease_contention_total.labels(outcome="busy").inc()

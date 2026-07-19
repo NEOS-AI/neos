@@ -206,6 +206,18 @@ async def test_claimable_tasks_are_bounded_and_oldest_first() -> None:
     assert task_ids == ("ct_old", "ct_new")
 
 
+async def test_claimable_delivery_tokens_use_latest_durable_checkpoint() -> None:
+    session = FakeSession(rows=[[("ct_new", "cc_latest"), ("ct_initial", None)]])
+    repository = repository_for(session)
+
+    deliveries = await repository.claimable_delivery_tokens(limit=2)
+
+    sql = "\n".join(session.sql)
+    assert "FROM coding_checkpoints checkpoint" in sql
+    assert "ORDER BY checkpoint.seq DESC" in sql
+    assert deliveries == (("ct_new", "cc_latest"), ("ct_initial", None))
+
+
 async def test_in_memory_lifecycle_matches_atomic_repository_contract() -> None:
     repository = InMemoryCodingRunRepository(
         task_prompts={"ct_1": "Fix it", "ct_2": "Break safely"}

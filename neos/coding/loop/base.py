@@ -59,6 +59,10 @@ class CodingRunRepository(Protocol):
 
     async def claimable_task_ids(self, *, limit: int) -> tuple[str, ...]: ...
 
+    async def claimable_delivery_tokens(
+        self, *, limit: int
+    ) -> tuple[tuple[str, str | None], ...]: ...
+
     async def acquire_execution_lease(
         self,
         *,
@@ -67,6 +71,7 @@ class CodingRunRepository(Protocol):
         worker_id: str,
         now: datetime,
         expires_at: datetime,
+        expected_checkpoint_id: str | None = None,
     ) -> ExecutionLease | None: ...
 
     async def renew_execution_lease(

@@ -12,7 +12,9 @@ from neos.coding.persistence.postgres import PostgresCodingService
 from neos.coding.repositories.run_repository import (
     PostgresCodingRunRepository,
 )
-from neos.coding.repositories.projection_repository import PostgresCodingProjectionRepository
+from neos.coding.repositories.projection_repository import (
+    PostgresCodingProjectionRepository,
+)
 from neos.coding.repositories.task_repository import CodingTaskRepository
 from neos.coding.workers.execution import (
     CodingTaskOutcome,
@@ -36,9 +38,7 @@ def _build_runner(manager: DatabaseManager) -> CodingTaskRunner:
         loop=FakeDurableCodingLoop(clock=lambda: datetime.now(UTC)),
         metrics=metrics,
         interrupter=InProcessRunInterrupter(),
-        execution_lease=timedelta(
-            seconds=settings.CODING_EXECUTION_LEASE_SECONDS
-        ),
+        execution_lease=timedelta(seconds=settings.CODING_EXECUTION_LEASE_SECONDS),
     )
     return CodingTaskRunner(
         runs=runs,
@@ -65,9 +65,7 @@ def validate_coding_worker_settings(candidate) -> None:
         "CODING_CELERY_HARD_TIME_LIMIT_SECONDS": (
             candidate.CODING_CELERY_HARD_TIME_LIMIT_SECONDS
         ),
-        "CODING_EXECUTION_LEASE_SECONDS": (
-            candidate.CODING_EXECUTION_LEASE_SECONDS
-        ),
+        "CODING_EXECUTION_LEASE_SECONDS": (candidate.CODING_EXECUTION_LEASE_SECONDS),
     }
     for name, value in positive.items():
         if value <= 0:
@@ -78,15 +76,14 @@ def validate_coding_worker_settings(candidate) -> None:
         candidate.CODING_CELERY_HARD_TIME_LIMIT_SECONDS
         <= candidate.CODING_CELERY_SOFT_TIME_LIMIT_SECONDS
     ):
-        raise ValueError(
-            "CODING_CELERY_HARD_TIME_LIMIT_SECONDS must exceed soft limit"
-        )
+        raise ValueError("CODING_CELERY_HARD_TIME_LIMIT_SECONDS must exceed soft limit")
 
 
 async def run_coding_delivery(
     *,
     task_id: str,
     worker_id: str,
+    expected_checkpoint_id: str | None,
     database_manager: DatabaseManager | None = None,
 ) -> CodingTaskOutcome:
     manager = database_manager or DatabaseManager()
@@ -131,6 +128,7 @@ async def run_coding_delivery(
             task_id=task_id,
             worker_id=worker_id,
             failure_error_code="worker_retry_exhausted",
+            expected_checkpoint_id=expected_checkpoint_id,
         )
     finally:
         if runtime is not None:
@@ -152,11 +150,25 @@ async def discover_coding_tasks(
     *,
     limit: int,
     database_manager: DatabaseManager | None = None,
-) -> tuple[str, ...]:
+) -> tuple[tuple[str, str | None], ...]:
     manager = database_manager or DatabaseManager()
     try:
         await manager.initialize()
         repository = _build_run_repository(manager)
-        return tuple(await repository.claimable_task_ids(limit=limit))
+        return tuple(await repository.claimable_delivery_tokens(limit=limit))
+    finally:
+        await manager.close()
+
+
+async def current_coding_checkpoint_id(
+    *,
+    task_id: str,
+    database_manager: DatabaseManager | None = None,
+) -> str | None:
+    manager = database_manager or DatabaseManager()
+    try:
+        await manager.initialize()
+        checkpoint = await _build_run_repository(manager).latest_checkpoint(task_id)
+        return checkpoint.checkpoint_id if checkpoint is not None else None
     finally:
         await manager.close()

@@ -122,6 +122,28 @@ async def test_acquire_lease_uses_one_atomic_upsert() -> None:
     assert lease.recovered is True
 
 
+async def test_acquire_lease_fences_expected_checkpoint_in_same_statement() -> None:
+    session = FakeSession(rows=[None])
+    repository = repository_for(session)
+
+    lease = await repository.acquire_execution_lease(
+        task_id="ct_1",
+        run_id="cr_1",
+        worker_id="worker-a",
+        now=NOW,
+        expires_at=EXPIRES,
+        expected_checkpoint_id="cc_expected",
+    )
+
+    sql = "\n".join(session.sql)
+    assert "checkpoint_matches" in sql
+    assert "IS NOT DISTINCT FROM :expected_checkpoint_id" in sql
+    assert "status = 'running'" in sql
+    assert session.params[0]["expected_checkpoint_id"] == "cc_expected"
+    assert session.params[0]["validate_checkpoint"] is True
+    assert lease is None
+
+
 async def test_renew_rejects_stale_fencing_token() -> None:
     session = FakeSession(rows=[None])
     repository = repository_for(session)

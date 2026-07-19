@@ -12,6 +12,9 @@ from neos.coding.domain.phases import CodingRunStatus
 from neos.coding.loop.anthropic import CodingLoopFailure
 
 
+_EXPECTED_CHECKPOINT_OMITTED = object()
+
+
 class CodingTaskOutcome(StrEnum):
     COMPLETED = "completed"
     CONTINUING = "continuing"
@@ -53,6 +56,7 @@ class CodingTaskRunner:
         task_id: str,
         worker_id: str,
         failure_error_code: str,
+        expected_checkpoint_id: str | None | object = _EXPECTED_CHECKPOINT_OMITTED,
         keep_running: Callable[[], bool] = lambda: True,
     ) -> CodingTaskOutcome:
         run = await self._runs.ensure_started(task_id=task_id)
@@ -66,9 +70,13 @@ class CodingTaskRunner:
         failures = 0
         while keep_running():
             try:
-                event = await self._runs.advance_one_safe_point(
-                    task_id=task_id, worker_id=worker_id
-                )
+                advance_kwargs = {
+                    "task_id": task_id,
+                    "worker_id": worker_id,
+                }
+                if expected_checkpoint_id is not _EXPECTED_CHECKPOINT_OMITTED:
+                    advance_kwargs["expected_checkpoint_id"] = expected_checkpoint_id
+                event = await self._runs.advance_one_safe_point(**advance_kwargs)
             except RunAlreadyLeased:
                 return CodingTaskOutcome.LEASE_BUSY
             except StaleExecutionLease:

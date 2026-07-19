@@ -18,6 +18,8 @@ from neos.coding.domain.durability import (
     ToolExecutionDisposition,
 )
 from neos.coding.domain.events import CodingEvent
+
+
 from neos.coding.domain.phases import (
     CodingCheckpoint,
     CodingPhase,
@@ -29,6 +31,9 @@ from neos.coding.domain.phases import (
     SteeringRequest,
 )
 from neos.coding.persistence.postgres import SessionFactory
+
+
+_EXPECTED_CHECKPOINT_OMITTED = object()
 
 
 class PostgresCodingRunRepository:
@@ -297,6 +302,38 @@ class PostgresCodingRunRepository:
             rows = result.all()
         return tuple(row[0] for row in rows)
 
+    async def claimable_delivery_tokens(
+        self, *, limit: int
+    ) -> tuple[tuple[str, str | None], ...]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        async with await self._session_factory() as session:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT task.task_id,
+                           (SELECT checkpoint.checkpoint_id
+                            FROM coding_checkpoints checkpoint
+                            WHERE checkpoint.task_id = task.task_id
+                            ORDER BY checkpoint.seq DESC
+                            LIMIT 1) AS checkpoint_id
+                    FROM coding_tasks task
+                    WHERE task.deleted_at IS NULL
+                      AND task.status IN ('queued', 'running')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM coding_runs run
+                          WHERE run.task_id = task.task_id
+                            AND run.status IN ('completed', 'cancelled', 'failed')
+                      )
+                    ORDER BY task.last_activity_at, task.task_id
+                    LIMIT :limit
+                    """
+                ),
+                {"limit": limit},
+            )
+            rows = result.all()
+        return tuple((row[0], row[1]) for row in rows)
+
     async def acquire_execution_lease(
         self,
         *,
@@ -305,6 +342,7 @@ class PostgresCodingRunRepository:
         worker_id: str,
         now: datetime,
         expires_at: datetime,
+        expected_checkpoint_id: str | None | object = _EXPECTED_CHECKPOINT_OMITTED,
     ) -> ExecutionLease | None:
         async with await self._session_factory() as session:
             async with session.begin():
@@ -316,13 +354,28 @@ class PostgresCodingRunRepository:
                             FROM coding_run_leases
                             WHERE task_id = :task_id
                             FOR UPDATE
+                        ), checkpoint_matches AS (
+                            SELECT 1
+                            WHERE (:validate_checkpoint = FALSE OR
+                                   (SELECT checkpoint_id
+                                   FROM coding_checkpoints
+                                   WHERE task_id = :task_id
+                                   ORDER BY seq DESC
+                                   LIMIT 1)
+                                  IS NOT DISTINCT FROM :expected_checkpoint_id)
+                              AND EXISTS (
+                                  SELECT 1 FROM coding_runs
+                                  WHERE task_id = :task_id
+                                    AND run_id = :run_id
+                                    AND status = 'running'
+                              )
                         ), acquired AS (
                             INSERT INTO coding_run_leases
                                 (task_id, run_id, worker_id, fencing_token,
                                  acquired_at, heartbeat_at, expires_at)
-                            VALUES
-                                (:task_id, :run_id, :worker_id, 1,
-                                 :now, :now, :expires_at)
+                            SELECT :task_id, :run_id, :worker_id, 1,
+                                   :now, :now, :expires_at
+                            FROM checkpoint_matches
                             ON CONFLICT (task_id) DO UPDATE
                             SET run_id = EXCLUDED.run_id,
                                 worker_id = EXCLUDED.worker_id,
@@ -335,14 +388,14 @@ class PostgresCodingRunRepository:
                             RETURNING task_id, run_id, worker_id,
                                       fencing_token, acquired_at, expires_at
                         )
-                        SELECT task_id, run_id, worker_id, fencing_token,
+                            SELECT task_id, run_id, worker_id, fencing_token,
                                acquired_at, expires_at,
                                COALESCE(
                                    (SELECT previous.worker_id <> :worker_id
                                     FROM previous),
                                    FALSE
                                ) AS recovered
-                        FROM acquired
+                            FROM acquired
                         """
                     ),
                     {
@@ -351,6 +404,14 @@ class PostgresCodingRunRepository:
                         "worker_id": worker_id,
                         "now": now,
                         "expires_at": expires_at,
+                        "expected_checkpoint_id": (
+                            None
+                            if expected_checkpoint_id is _EXPECTED_CHECKPOINT_OMITTED
+                            else expected_checkpoint_id
+                        ),
+                        "validate_checkpoint": (
+                            expected_checkpoint_id is not _EXPECTED_CHECKPOINT_OMITTED
+                        ),
                     },
                 )
                 row = result.first()

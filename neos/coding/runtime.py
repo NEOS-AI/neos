@@ -116,9 +116,7 @@ def create_coding_runtime(
         interrupter=interrupter or InProcessRunInterrupter(),
         **run_kwargs,
     )
-    sandbox_provider = sandboxes or create_sandbox_provider(
-        settings.config.sandbox
-    )
+    sandbox_provider = sandboxes or create_sandbox_provider(settings.config.sandbox)
     return CodingRuntime(
         events=events,
         runs=runs,
@@ -160,21 +158,17 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         max_entries=1000,
     )
     loop_config = AnthropicLoopConfig(
-            model=coding.model,
-            system="Work safely in the provided sandbox and complete the coding task.",
-            max_output_tokens=coding.max_output_tokens,
-            timeout_sec=coding.model_timeout_sec,
-            tool_claim_ttl_sec=coding.tool_timeout_sec,
-            max_turns=coding.max_turns,
-            max_tools=coding.max_tool_calls,
-            max_consecutive_tool_errors=coding.max_consecutive_tool_errors,
-            max_cost_micros=int(coding.max_cost_usd * 1_000_000),
-            input_cost_micros_per_million=(
-                coding.input_cost_micros_per_million
-            ),
-            output_cost_micros_per_million=(
-                coding.output_cost_micros_per_million
-            ),
+        model=coding.model,
+        system="Work safely in the provided sandbox and complete the coding task.",
+        max_output_tokens=coding.max_output_tokens,
+        timeout_sec=coding.model_timeout_sec,
+        tool_claim_ttl_sec=coding.tool_timeout_sec,
+        max_turns=coding.max_turns,
+        max_tools=coding.max_tool_calls,
+        max_consecutive_tool_errors=coding.max_consecutive_tool_errors,
+        max_cost_micros=int(coding.max_cost_usd * 1_000_000),
+        input_cost_micros_per_million=(coding.input_cost_micros_per_million),
+        output_cost_micros_per_million=(coding.output_cost_micros_per_million),
         max_transcript_bytes=coding.max_transcript_bytes,
     )
 
@@ -201,9 +195,9 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
 def _create_real_coding_loop(
     *, config: AppConfig, sandboxes, session_factory=None
 ) -> AnthropicCodingLoop:
-    return _prepare_real_coding_loop(
-        config=config, session_factory=session_factory
-    )(sandboxes)
+    return _prepare_real_coding_loop(config=config, session_factory=session_factory)(
+        sandboxes
+    )
 
 
 def _close_provider_sync(provider) -> None:
@@ -227,12 +221,11 @@ def _close_provider_sync(provider) -> None:
         raise error[0]
 
 
-def create_development_coding_runtime(*, config: AppConfig | None = None) -> CodingRuntime:
+def create_development_coding_runtime(
+    *, config: AppConfig | None = None
+) -> CodingRuntime:
     config = config or settings.config
-    if (
-        settings.CODING_FAKE_LOOP_ENABLED
-        and settings.CODING_CELERY_ENABLED
-    ):
+    if settings.CODING_FAKE_LOOP_ENABLED and settings.CODING_CELERY_ENABLED:
         raise RuntimeError(
             "CODING_FAKE_LOOP_ENABLED and CODING_CELERY_ENABLED "
             "cannot be enabled together"
@@ -269,9 +262,7 @@ def create_development_coding_runtime(*, config: AppConfig | None = None) -> Cod
                 runs=runtime.runs,
                 work_repository=run_repository,
                 metrics=metrics,
-                reconciliation_interval=(
-                    settings.CODING_DEV_RECONCILIATION_SECONDS
-                ),
+                reconciliation_interval=(settings.CODING_DEV_RECONCILIATION_SECONDS),
                 discovery_batch_size=settings.CODING_DEV_DISCOVERY_BATCH_SIZE,
                 shutdown_timeout=settings.CODING_DEV_SHUTDOWN_SECONDS,
             )
@@ -283,7 +274,11 @@ def create_development_coding_runtime(*, config: AppConfig | None = None) -> Cod
 
             def notify_celery(task_id):
                 dispatcher = create_celery_dispatcher()
-                return dispatcher.enqueue(task_id, source=CodingDispatchSource.API)
+                return dispatcher.enqueue(
+                    task_id,
+                    expected_checkpoint_id=None,
+                    source=CodingDispatchSource.API,
+                )
 
             notifier = notify_celery
         coding_service.set_task_created_notifier(notifier)
@@ -344,9 +339,7 @@ def get_coding_event_transport() -> CodingEventTransport:
 def start_coding_outbox_dispatcher(
     dispatcher: CodingOutboxDispatcher = coding_outbox_dispatcher,
 ) -> asyncio.Task:
-    return asyncio.create_task(
-        dispatcher.run(), name="coding-outbox-dispatcher"
-    )
+    return asyncio.create_task(dispatcher.run(), name="coding-outbox-dispatcher")
 
 
 async def stop_coding_outbox_dispatcher(task: asyncio.Task) -> None:
