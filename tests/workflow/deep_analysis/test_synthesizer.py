@@ -4,6 +4,8 @@ import pytest
 
 from neos.workflow.deep_analysis.llm import LLMResponse
 from neos.workflow.deep_analysis.synthesizer import Synthesizer
+from neos.workflow.deep_analysis.models import NodeSummary
+from neos.workflow.deep_analysis.token_budget import TokenBudgetExhausted
 
 
 pytestmark = pytest.mark.no_db
@@ -118,3 +120,33 @@ async def test_reduce_includes_root_claims_when_decomposition_is_empty():
 
     assert "[C:d2b2d2b2]" in llm_call.prompt
     assert "root excerpt" in llm_call.prompt
+
+
+async def _exhausted(*args, **kwargs):
+    raise TokenBudgetExhausted("cap")
+
+
+@pytest.mark.asyncio
+async def test_reduce_node_uses_child_summary_when_budget_exhausts():
+    ledger = FakeLedger()
+    synth = Synthesizer(ledger, json_call=_exhausted)
+    child = NodeSummary("child001", "verified child answer", [], 0.8, [])
+
+    summary = await synth.reduce_node(ledger.root, [child])
+
+    assert summary.answer == "verified child answer"
+    assert summary.caveats == ["token_budget_exhausted"]
+
+
+@pytest.mark.asyncio
+async def test_assemble_renders_required_sections_when_budget_exhausts():
+    synth = Synthesizer(FakeLedger(), llm_call=_exhausted)
+    root = NodeSummary("root0001", "verified root answer", [], 0.8, [])
+
+    report = await synth.assemble(root, [], ["미확인 항목"])
+
+    assert "## 요약" in report
+    assert "## 본문" in report
+    assert "## 한계와 미확인 사항" in report
+    assert "## 출처" in report
+    assert "전체 심층분석 토큰 상한" in report

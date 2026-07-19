@@ -181,7 +181,10 @@ class Orchestrator:
         verdict = await self.grader.grade(claim)  # deterministic first
         if not verdict.ok or self.agentic_grader is None:
             return verdict
-        return await self.agentic_grader.grade(claim, value_est)  # agentic tier
+        try:
+            return await self.agentic_grader.grade(claim, value_est)
+        except TokenBudgetExhausted:
+            return verdict
 
     async def _regrade_pending(self, question_id, value_est):
         """Re-grade claims that repair processing pushed back to `pending`

@@ -5,6 +5,7 @@ import pytest
 
 from neos.workflow.deep_analysis.graders.report import ReportGrader
 from neos.workflow.deep_analysis.models import Verdict
+from neos.workflow.deep_analysis.token_budget import TokenBudgetExhausted
 
 pytestmark = pytest.mark.no_db
 
@@ -101,6 +102,10 @@ def _clean_report() -> str:
 
 def _grader(ledger, **kw):
     return ReportGrader(ledger, judge_model=kw.pop("judge_model", "claude-j"), **kw)
+
+
+async def _exhausted_json_call(*args, **kwargs):
+    raise TokenBudgetExhausted("cap")
 
 
 # ---- deterministic ----------------------------------------------------
@@ -202,6 +207,19 @@ async def test_clean_report_passes_deterministic():
 
     assert verdict.ok is True
     assert verdict.code == ""
+
+
+@pytest.mark.asyncio
+async def test_grade_keeps_deterministic_pass_when_agentic_budget_exhausts():
+    root = Question("root0001", "루트 질문")
+    grader = _grader(
+        FakeLedger(children=[CHILD1, CHILD2], root=root),
+        json_call=_exhausted_json_call,
+    )
+
+    verdict = await grader.grade(_clean_report(), root.id)
+
+    assert verdict.ok is True
 
 
 # ---- agentic ------------------------------------------------------------

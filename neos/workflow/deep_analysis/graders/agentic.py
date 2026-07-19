@@ -65,8 +65,14 @@ class AgenticGrader:
         ) or "(증거 없음)"
         prompt = render("judge", claim_text=claim.text, evidence_block=evidence_block)
         try:
-            data, _ = await call_json(self.judge_model, prompt, max_tokens=300,
-                                      client=self.llm_client, cassette=self.cassette)
+            data, _ = await call_json(
+                self.judge_model,
+                prompt,
+                max_tokens=300,
+                client=self.llm_client,
+                cassette=self.cassette,
+                stage="claim_grading",
+            )
         except JSONParseError:
             return self._judge_failed(mandatory, "judge_unparseable")
         label = str(data.get("label", "")).upper()

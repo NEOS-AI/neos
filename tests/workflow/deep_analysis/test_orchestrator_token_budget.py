@@ -2,8 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from neos.workflow.deep_analysis.models import NodeSummary, Verdict
+from neos.workflow.deep_analysis.models import NodeSummary, ProposedClaim, Verdict
 from neos.workflow.deep_analysis.orchestrator import Orchestrator
+from neos.workflow.deep_analysis.token_budget import TokenBudgetExhausted
 
 
 pytestmark = pytest.mark.no_db
@@ -99,3 +100,26 @@ async def test_recovered_orphan_exhaustion_stops_and_emits_once():
         "consumed_tokens": 10,
         "reserved_tokens": 10,
     }
+
+
+@pytest.mark.asyncio
+async def test_optional_agentic_exhaustion_keeps_deterministic_verdict():
+    class ExhaustedAgentic:
+        async def grade(self, claim, value_est):
+            raise TokenBudgetExhausted("cap")
+
+    orchestrator = Orchestrator(
+        object(),
+        "run",
+        worker_factory=lambda: None,
+        grader=Grader(),
+        agentic_grader=ExhaustedAgentic(),
+        ledger=ExhaustedLedger(),
+        synthesizer=Synthesizer(),
+        citation_renderer=CitationRenderer(),
+        global_token_cap=20,
+    )
+
+    verdict = await orchestrator._grade(ProposedClaim("fact", 0.8), 0.9)
+
+    assert verdict.ok is True

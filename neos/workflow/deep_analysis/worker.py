@@ -18,6 +18,7 @@ from .models import (
     RepairResult,
     WorkerResult,
 )
+from .token_budget import TokenBudgetExhausted
 
 _REPAIR_ACTIONS = {"fixed", "weakened", "abandoned"}
 
@@ -108,6 +109,25 @@ class Worker:
         repairs: list[dict] | None = None,
         question_text: str = "",
     ) -> WorkerResult:
+        try:
+            return await self._investigate(
+                brief,
+                effort,
+                question_id,
+                repairs=repairs,
+                question_text=question_text,
+            )
+        except TokenBudgetExhausted:
+            return self.flush_partial(question_id)
+
+    async def _investigate(
+        self,
+        brief: str,
+        effort: Effort,
+        question_id: str,
+        repairs: list[dict] | None = None,
+        question_text: str = "",
+    ) -> WorkerResult:
         if effort not in {Effort.SCOUT, Effort.DIG}:
             raise ValueError(f"worker cannot execute effort {effort.value}")
 
@@ -175,6 +195,7 @@ class Worker:
             ),
             client=self.llm_client,
             cassette=self.cassette,
+            stage="worker_analysis",
         )
         self._tokens += response.input_tokens + response.output_tokens
 
@@ -307,6 +328,7 @@ class Worker:
             ),
             client=self.llm_client,
             cassette=self.cassette,
+            stage="worker_repair",
         )
         self._tokens += response.input_tokens + response.output_tokens
 
