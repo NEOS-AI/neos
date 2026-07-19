@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from typing import Any
 
@@ -418,6 +419,90 @@ class Ledger:
         )
         return list(result.scalars())
 
+    @staticmethod
+    def _claim_graded_payload(
+        claim_id: str,
+        outcome: str,
+        verdict: Verdict,
+    ) -> dict[str, Any]:
+        """Build the privacy-bounded diagnostic event payload."""
+
+        diagnostics = (
+            verdict.diagnostics
+            if isinstance(verdict.diagnostics, dict)
+            else {}
+        )
+
+        def non_negative_int(key: str) -> int:
+            value = diagnostics.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                return max(0, value)
+            return 0
+
+        def finite_float(key: str, *, bounded: bool = False):
+            value = diagnostics.get(key)
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                return None
+            number = float(value)
+            if not math.isfinite(number):
+                return None
+            if bounded:
+                return min(1.0, max(0.0, number))
+            return max(0.0, number)
+
+        deterministic = diagnostics.get("deterministic")
+        if deterministic not in {"passed", "rejected"}:
+            deterministic = "passed" if verdict.ok else "rejected"
+        agentic = diagnostics.get("agentic")
+        if agentic not in {
+            "not_configured",
+            "skipped",
+            "attempted_passed",
+            "attempted_rejected",
+            "exhausted",
+        }:
+            agentic = "not_configured"
+        agentic_label = diagnostics.get("agentic_label")
+        if not isinstance(agentic_label, str):
+            agentic_label = None
+        deterministic_code = diagnostics.get("deterministic_code")
+        if not isinstance(deterministic_code, str):
+            deterministic_code = "" if deterministic == "passed" else verdict.code
+
+        return {
+            "claim_id": claim_id,
+            "outcome": outcome,
+            "code": verdict.code if isinstance(verdict.code, str) else "",
+            "deterministic": deterministic,
+            "deterministic_code": deterministic_code,
+            "agentic": agentic,
+            "agentic_label": agentic_label,
+            "evidence_count": non_negative_int("evidence_count"),
+            "source_count": non_negative_int("source_count"),
+            "fetched_source_count": non_negative_int(
+                "fetched_source_count"
+            ),
+            "dead_source_count": non_negative_int("dead_source_count"),
+            "excerpt_chars": non_negative_int("excerpt_chars"),
+            "best_quote_score": finite_float(
+                "best_quote_score", bounded=True
+            ),
+            "quote_threshold": finite_float("quote_threshold", bounded=True),
+        }
+
+    async def _log_claim_graded(
+        self,
+        question_id: str,
+        claim_id: str,
+        outcome: str,
+        verdict: Verdict,
+    ) -> None:
+        await self.log(
+            "claim_graded",
+            question_id,
+            self._claim_graded_payload(claim_id, outcome, verdict),
+        )
+
     async def _apply_verdict(
         self,
         question_id: str,
@@ -439,6 +524,9 @@ class Ledger:
 
         if verdict.ok:
             claim.status = "verified"
+            await self._log_claim_graded(
+                question_id, claim.id, "verified", verdict
+            )
             await self.log(
                 "claim_verified",
                 question_id,
@@ -451,6 +539,9 @@ class Ledger:
         if prior >= self.claim_retry_cap:
             claim.status = "unverified"
             await self._resolve_feedback(claim.id)
+            await self._log_claim_graded(
+                question_id, claim.id, "unverified", verdict
+            )
             await self.log(
                 "claim_unverified",
                 question_id,
@@ -468,6 +559,9 @@ class Ledger:
                 salvage=verdict.salvage,
                 attempt=prior + 1,
             )
+        )
+        await self._log_claim_graded(
+            question_id, claim.id, "rejected", verdict
         )
         await self.log(
             "claim_rejected",

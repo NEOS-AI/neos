@@ -41,6 +41,16 @@ async def test_retry_cap_marks_unverified_after_two_rejections():
         assert row.scalar() == "unverified"
         fb = await s.execute(sql("SELECT COUNT(*) FROM deep_analysis_feedback WHERE run_id=:r"), {"r": run_id})
         assert fb.scalar() == 2   # capped at 2
+        outcomes = (
+            await s.execute(
+                sql(
+                    "SELECT payload::jsonb->>'outcome' FROM deep_analysis_events "
+                    "WHERE run_id=:r AND kind='claim_graded' ORDER BY seq"
+                ),
+                {"r": run_id},
+            )
+        ).scalars().all()
+        assert outcomes == ["rejected", "rejected", "unverified"]
         await s.rollback()
 
 @pytest.mark.asyncio
