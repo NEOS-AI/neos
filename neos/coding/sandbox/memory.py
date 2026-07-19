@@ -20,6 +20,15 @@ from neos.coding.sandbox.base import (
     SandboxState,
     SandboxStateConflict,
     SearchMatch,
+    Snapshot,
+)
+from neos.coding.sandbox.archive import (
+    SNAPSHOT_SCHEMA_VERSION,
+    LocalSnapshotStore,
+    SnapshotManifest,
+    create_workspace_archive,
+    extract_workspace_archive,
+    sha256_file,
 )
 from neos.coding.sandbox.paths import (
     ensure_mutable_workspace_path,
@@ -47,11 +56,15 @@ class MemorySandboxProvider:
             {"HOME", "LANG", "LC_ALL", "PATH", "TERM", "TMPDIR"}
         ),
         process_runner: BoundedProcessRunner | None = None,
+        snapshot_root: Path | None = None,
     ) -> None:
         self._root = root
         self._root.mkdir(parents=True, exist_ok=True)
         self._allowed_env_names = allowed_env_names
         self._process_runner = process_runner or BoundedProcessRunner()
+        self._snapshot_store = LocalSnapshotStore(
+            snapshot_root or (self._root / "_snapshots")
+        )
         self._records: dict[str, _MemorySandboxRecord] = {}
         self._lock = asyncio.Lock()
 
@@ -88,6 +101,103 @@ class MemorySandboxProvider:
         record = await self._running_record(sandbox_id)
         return MemorySandboxSession(self, record)
 
+    async def suspend(self, sandbox_id: str) -> Sandbox:
+        record = await self._record(sandbox_id)
+        async with record.lock:
+            record.sandbox = record.sandbox.transition(
+                SandboxState.SUSPENDED,
+                datetime.now(UTC),
+            )
+            return record.sandbox
+
+    async def resume(self, sandbox_id: str) -> Sandbox:
+        record = await self._record(sandbox_id)
+        async with record.lock:
+            record.sandbox = record.sandbox.transition(
+                SandboxState.RUNNING,
+                datetime.now(UTC),
+            )
+            return record.sandbox
+
+    async def snapshot(self, sandbox_id: str) -> Snapshot:
+        record = await self._record(sandbox_id)
+        if record.sandbox.state not in {
+            SandboxState.RUNNING,
+            SandboxState.SUSPENDED,
+        }:
+            raise SandboxStateConflict(
+                f"sandbox_{record.sandbox.state.value}"
+            )
+        async with record.lock:
+            snapshot_id = f"ss_{uuid.uuid4().hex}"
+            created_at = datetime.now(UTC)
+            archive_path = self._snapshot_store.archive_path(snapshot_id)
+            checksum = await asyncio.to_thread(
+                create_workspace_archive,
+                record.workspace,
+                archive_path,
+                max_archive_bytes=record.sandbox.limits.workspace_bytes,
+            )
+            manifest = SnapshotManifest(
+                schema_version=SNAPSHOT_SCHEMA_VERSION,
+                source_sandbox_id=sandbox_id,
+                workspace_revision=record.sandbox.workspace_revision,
+                created_at=created_at,
+                base_image_digest=record.sandbox.image_digest,
+                content_checksum=checksum,
+            )
+            await asyncio.to_thread(
+                self._snapshot_store.save_manifest,
+                snapshot_id,
+                manifest,
+            )
+            return Snapshot(
+                snapshot_id=snapshot_id,
+                source_sandbox_id=sandbox_id,
+                workspace_revision=manifest.workspace_revision,
+                created_at=created_at,
+                content_checksum=checksum,
+                image_digest=manifest.base_image_digest,
+            )
+
+    async def restore(self, snapshot_id: str, *, owner_id: str) -> Sandbox:
+        manifest = await asyncio.to_thread(
+            self._snapshot_store.load_manifest,
+            snapshot_id,
+        )
+        if manifest.schema_version != SNAPSHOT_SCHEMA_VERSION:
+            raise SandboxPolicyViolation("snapshot_schema_incompatible")
+        archive_path = self._snapshot_store.archive_path(snapshot_id)
+        actual_checksum = await asyncio.to_thread(sha256_file, archive_path)
+        if actual_checksum != manifest.content_checksum:
+            raise SandboxPolicyViolation("snapshot_checksum_mismatch")
+
+        restored: Sandbox | None = None
+        complete = False
+        try:
+            restored = await self.create(
+                owner_id=owner_id,
+                limits=SandboxLimits.safe_defaults(),
+            )
+            record = await self._record(restored.sandbox_id)
+            async with record.lock:
+                await asyncio.to_thread(
+                    extract_workspace_archive,
+                    archive_path,
+                    record.workspace,
+                    max_expanded_bytes=record.sandbox.limits.workspace_bytes,
+                )
+                record.sandbox = replace(
+                    record.sandbox,
+                    workspace_revision=manifest.workspace_revision,
+                    updated_at=datetime.now(UTC),
+                )
+                complete = True
+                return record.sandbox
+        finally:
+            if restored is not None and not complete:
+                await self.destroy(restored.sandbox_id)
+
     async def destroy(self, sandbox_id: str) -> None:
         async with self._lock:
             record = self._records.pop(sandbox_id, None)
@@ -111,6 +221,9 @@ class MemorySandboxProvider:
         if record is None:
             raise SandboxNotFound(sandbox_id)
         return record.workspace
+
+    def snapshot_archive_path(self, snapshot_id: str) -> Path:
+        return self._snapshot_store.archive_path(snapshot_id)
 
     async def _record(self, sandbox_id: str) -> _MemorySandboxRecord:
         async with self._lock:
