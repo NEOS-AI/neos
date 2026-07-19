@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import errno
+import fcntl
+import os
+import pty
 import re
+import signal
+import struct
+import termios
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -68,6 +75,81 @@ class DockerCommandRunner:
                 f"docker_command_failed:{result.exit_code}"
             )
         return result
+
+
+class DockerInteractiveProcess:
+    """Interactive Docker CLI process attached to a local POSIX PTY."""
+
+    def __init__(self, process: asyncio.subprocess.Process, master_fd: int) -> None:
+        self._process = process
+        self._master_fd = master_fd
+
+    @classmethod
+    async def start(cls, *args: str) -> DockerInteractiveProcess:
+        if any("\0" in arg for arg in args):
+            raise SandboxPolicyViolation("docker_argument_contains_nul")
+        master_fd, slave_fd = pty.openpty()
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "docker",
+                *args,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                start_new_session=True,
+            )
+        except (FileNotFoundError, OSError) as error:
+            os.close(master_fd)
+            raise SandboxUnavailable("docker_cli_unavailable") from error
+        finally:
+            os.close(slave_fd)
+        return cls(process, master_fd)
+
+    async def read(self, maximum: int) -> bytes:
+        loop = asyncio.get_running_loop()
+        ready = loop.create_future()
+
+        def read_ready() -> None:
+            if ready.done():
+                return
+            try:
+                ready.set_result(os.read(self._master_fd, maximum))
+            except OSError as error:
+                if error.errno == errno.EIO:
+                    ready.set_result(b"")
+                else:
+                    ready.set_exception(error)
+
+        loop.add_reader(self._master_fd, read_ready)
+        try:
+            return await ready
+        finally:
+            loop.remove_reader(self._master_fd)
+
+    async def write(self, data: bytes) -> None:
+        await asyncio.to_thread(os.write, self._master_fd, data)
+
+    async def resize(self, *, rows: int, cols: int) -> None:
+        fcntl.ioctl(
+            self._master_fd,
+            termios.TIOCSWINSZ,
+            struct.pack("HHHH", rows, cols, 0, 0),
+        )
+
+    async def terminate(self) -> None:
+        if self._process.returncode is None:
+            try:
+                os.killpg(self._process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    async def wait(self) -> int:
+        code = await self._process.wait()
+        try:
+            os.close(self._master_fd)
+        except OSError:
+            pass
+        return code
 
 
 def build_create_args(

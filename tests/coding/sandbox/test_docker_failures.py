@@ -3,6 +3,7 @@ import pytest
 from neos.coding.sandbox.base import (
     SandboxLimits,
     SandboxNotFound,
+    SandboxTimeout,
     SandboxUnavailable,
 )
 from neos.coding.sandbox.docker import (
@@ -81,3 +82,28 @@ async def test_snapshot_rejects_truncated_archive(tmp_path) -> None:
 
     with pytest.raises(SandboxUnavailable, match="snapshot_archive_truncated"):
         await provider.snapshot(sandbox.sandbox_id)
+
+
+async def test_cleanup_timeout_does_not_mask_readiness_failure() -> None:
+    runner = ScriptedDockerRunner(
+        results=[
+            None,
+            None,
+            None,
+            SandboxUnavailable("probe_failed"),
+            SandboxTimeout("cleanup_timeout"),
+            None,
+        ]
+    )
+    provider = DockerSandboxProvider(
+        runner=runner,
+        config=DockerSandboxConfig(image=IMAGE),
+    )
+
+    with pytest.raises(SandboxUnavailable, match="probe_failed"):
+        await provider.create(
+            owner_id="u1",
+            limits=SandboxLimits.safe_defaults(),
+        )
+
+    assert [call[0] for call in runner.calls[-2:]] == ["rm", "volume"]

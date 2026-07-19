@@ -82,6 +82,7 @@ async def test_create_is_running_only_after_readiness() -> None:
         "-d",
         "/workspace",
     )
+    assert "com.neos.coding.owner-id=u1" in runner.calls[1]
 
 
 async def test_suspend_resume_and_command_execution_share_lifecycle() -> None:
@@ -231,3 +232,47 @@ async def test_snapshot_restore_transfers_validated_archive_and_revision(
     assert restored.workspace_revision == 1
     assert restored.sandbox_id != source.sandbox_id
     assert runner.inputs[-1] == archive
+
+
+async def test_provider_rediscovers_only_owned_labeled_containers() -> None:
+    runner = ScriptedDockerRunner(
+        results=[
+            DockerCommandResult(0, b"container-owned\ncontainer-other\n", b""),
+            DockerCommandResult(
+                0,
+                json.dumps(
+                    [
+                        {
+                            "Id": "container-owned",
+                            "Name": "/neos-sb_owned",
+                            "Config": {
+                                "Labels": {
+                                    "com.neos.coding.sandbox": "true",
+                                    "com.neos.coding.sandbox-id": "sb_owned",
+                                    "com.neos.coding.owner-id": "u1",
+                                    "com.neos.coding.created-at": "2026-07-19T10:00:00+00:00",
+                                    "com.neos.coding.workspace-revision": "3",
+                                }
+                            },
+                            "State": {"Running": True},
+                        },
+                        {
+                            "Id": "container-other",
+                            "Name": "/unrelated",
+                            "Config": {"Labels": {}},
+                            "State": {"Running": True},
+                        },
+                    ]
+                ).encode(),
+                b"",
+            ),
+        ]
+    )
+    provider = DockerSandboxProvider(runner=runner, config=_config())
+
+    recovered = await provider.reconcile()
+
+    assert [(item.sandbox_id, item.workspace_revision) for item in recovered] == [
+        ("sb_owned", 3)
+    ]
+    assert runner.calls[0][:3] == ("ps", "--all", "--filter")

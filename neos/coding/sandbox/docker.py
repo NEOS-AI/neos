@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from neos.coding.sandbox.base import (
     CommandRequest,
@@ -15,6 +16,7 @@ from neos.coding.sandbox.base import (
     FileEntry,
     SearchMatch,
     Sandbox,
+    SandboxError,
     SandboxLimits,
     SandboxNotFound,
     SandboxPolicyViolation,
@@ -32,12 +34,21 @@ from neos.coding.sandbox.archive import (
 )
 from neos.coding.sandbox.command import (
     DockerCommandRunner,
+    DockerInteractiveProcess,
     build_create_args,
+)
+from neos.coding.sandbox.memory import (
+    PtyClosed,
+    PtyOutput,
+    WorkspaceChange,
+    WorkspaceChangeKind,
+    _MemoryWatcherHub,
 )
 from neos.coding.sandbox.paths import (
     ensure_mutable_workspace_path,
     normalize_workspace_path,
 )
+from neos.coding.sandbox.streams import BoundedReplayStream
 
 
 _READ_FILE_HELPER = """\
@@ -105,6 +116,19 @@ import sys, tarfile
 with tarfile.open(fileobj=sys.stdin.buffer, mode='r|*') as archive:
     archive.extractall('/workspace', filter='data')
 """
+_SCAN_HELPER = """\
+import json
+from pathlib import Path
+root = Path('/workspace')
+result = {}
+for item in root.rglob('*'):
+    if not item.is_file() or item.is_symlink(): continue
+    relative = item.relative_to(root).as_posix()
+    if relative.startswith('.git/') or relative.endswith(('.swp', '~')): continue
+    value = item.stat()
+    result[relative] = [value.st_size, value.st_mtime_ns]
+print(json.dumps(result, sort_keys=True))
+"""
 
 
 def _write_atomic(path: Path, content: bytes) -> None:
@@ -135,6 +159,11 @@ class DockerSandboxConfig:
     tmpfs_bytes: int = 64 * 1024 * 1024
     snapshot_root: Path | None = None
     max_snapshot_bytes: int = 16 * 1024 * 1024
+    max_pty_sessions: int = 4
+    pty_replay_events: int = 1024
+    pty_replay_bytes: int = 1024 * 1024
+    watcher_debounce_sec: float = 0.05
+    watcher_replay_events: int = 1024
     allowed_env_names: frozenset[str] = frozenset(
         {"HOME", "LANG", "LC_ALL", "PATH", "TERM", "TMPDIR"}
     )
@@ -146,6 +175,92 @@ class _DockerRecord:
     container_name: str
     volume_name: str
     lock: asyncio.Lock
+    ptys: dict[str, DockerPty]
+    watcher: _MemoryWatcherHub
+    known_paths: set[str]
+    watching: bool
+
+
+class DockerPty:
+    def __init__(
+        self,
+        *,
+        pty_id: str,
+        transport: Any,
+        replay_events: int,
+        replay_bytes: int,
+    ) -> None:
+        self.pty_id = pty_id
+        self._transport = transport
+        self._stream = BoundedReplayStream(
+            max_events=replay_events,
+            max_bytes=replay_bytes,
+            size_of=lambda event: (
+                len(event.data) if isinstance(event, PtyOutput) else 32
+            ),
+        )
+        self._closed = asyncio.get_running_loop().create_future()
+        self._requested_reason: str | None = None
+        self._finish_lock = asyncio.Lock()
+        self._reader_task = asyncio.create_task(
+            self._read_output(),
+            name=f"docker-sandbox-pty-{pty_id}",
+        )
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed.done()
+
+    def subscribe(self, *, after_cursor: int):
+        return self._stream.subscribe(after_cursor=after_cursor)
+
+    async def replay(self, *, after_cursor: int):
+        return await self._stream.replay(after_cursor=after_cursor)
+
+    async def write(self, data: bytes) -> None:
+        if self.is_closed:
+            raise SandboxStateConflict("pty_closed")
+        await self._transport.write(data)
+
+    async def resize(self, *, rows: int, cols: int) -> None:
+        if rows < 1 or cols < 1 or rows > 1000 or cols > 1000:
+            raise SandboxPolicyViolation("pty_size_invalid")
+        await self._transport.resize(rows=rows, cols=cols)
+
+    async def terminate(self, reason: str) -> PtyClosed:
+        if self.is_closed:
+            return await self._closed
+        self._requested_reason = reason
+        await self._transport.terminate()
+        await self._reader_task
+        return await self._closed
+
+    async def wait_closed(self) -> PtyClosed:
+        return await self._closed
+
+    async def _read_output(self) -> None:
+        try:
+            while True:
+                data = await self._transport.read(4096)
+                if not data:
+                    break
+                await self._stream.publish(PtyOutput(data=data))
+        finally:
+            exit_code = await self._transport.wait()
+            reason = self._requested_reason or "process_exited"
+            await self._finish(
+                reason,
+                None if self._requested_reason is not None else exit_code,
+            )
+
+    async def _finish(self, reason: str, exit_code: int | None) -> None:
+        async with self._finish_lock:
+            if self._closed.done():
+                return
+            closed = PtyClosed(reason=reason, exit_code=exit_code)
+            await self._stream.publish(closed)
+            await self._stream.close()
+            self._closed.set_result(closed)
 
 
 class DockerSandboxProvider:
@@ -155,10 +270,14 @@ class DockerSandboxProvider:
         runner: DockerCommandRunner,
         config: DockerSandboxConfig,
         clock=None,
+        interactive_factory=None,
     ) -> None:
         self._runner = runner
         self._config = config
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._interactive_factory = (
+            interactive_factory or DockerInteractiveProcess.start
+        )
         self._temporary_snapshot_root = None
         snapshot_root = config.snapshot_root
         if snapshot_root is None:
@@ -202,14 +321,22 @@ class DockerSandboxProvider:
                 timeout_sec=self._config.create_timeout_sec,
             )
             volume_created = True
-            create_args = build_create_args(
+            create_args = list(build_create_args(
                 sandbox_id=sandbox_id,
                 image=self._config.image,
                 limits=limits,
                 network_mode=self._config.network_mode,
                 allow_unpinned_image=self._config.allow_unpinned_image,
                 tmpfs_bytes=self._config.tmpfs_bytes,
+            ))
+            metadata_labels = (
+                f"com.neos.coding.owner-id={owner_id}",
+                f"com.neos.coding.created-at={now.isoformat()}",
+                "com.neos.coding.workspace-revision=0",
             )
+            insertion = create_args.index("--user")
+            for label in reversed(metadata_labels):
+                create_args[insertion:insertion] = ["--label", label]
             await self._runner.run(
                 *create_args,
                 timeout_sec=self._config.create_timeout_sec,
@@ -235,15 +362,113 @@ class DockerSandboxProvider:
                 container_name=container_name,
                 volume_name=volume_name,
                 lock=asyncio.Lock(),
+                ptys={},
+                watcher=_MemoryWatcherHub(
+                    debounce_sec=self._config.watcher_debounce_sec,
+                    replay_events=self._config.watcher_replay_events,
+                ),
+                known_paths=set(),
+                watching=False,
             )
         return running
 
     async def get(self, sandbox_id: str) -> Sandbox:
         return (await self._record(sandbox_id)).sandbox
 
+    async def reconcile(self) -> tuple[Sandbox, ...]:
+        listed = await self._runner.run(
+            "ps",
+            "--all",
+            "--filter",
+            "label=com.neos.coding.sandbox=true",
+            "--format",
+            "{{.ID}}",
+            timeout_sec=self._config.operation_timeout_sec,
+        )
+        container_ids = tuple(
+            value for value in listed.stdout.decode().splitlines() if value
+        )
+        if not container_ids:
+            async with self._lock:
+                return tuple(
+                    self._records[key].sandbox for key in sorted(self._records)
+                )
+        inspected = await self._runner.run(
+            "inspect",
+            *container_ids,
+            timeout_sec=self._config.operation_timeout_sec,
+        )
+        try:
+            values = json.loads(inspected.stdout)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise SandboxUnavailable("docker_inspect_output_invalid") from error
+        recovered: list[Sandbox] = []
+        async with self._lock:
+            for value in values:
+                record = self._record_from_inspect(value)
+                if record is None:
+                    continue
+                existing = self._records.get(record.sandbox.sandbox_id)
+                if existing is None:
+                    self._records[record.sandbox.sandbox_id] = record
+                    existing = record
+                recovered.append(existing.sandbox)
+        return tuple(sorted(recovered, key=lambda item: item.sandbox_id))
+
+    def _record_from_inspect(self, value) -> _DockerRecord | None:
+        try:
+            labels = value["Config"]["Labels"] or {}
+            if labels.get("com.neos.coding.sandbox") != "true":
+                return None
+            sandbox_id = labels["com.neos.coding.sandbox-id"]
+            owner_id = labels["com.neos.coding.owner-id"]
+            created_at = datetime.fromisoformat(
+                labels["com.neos.coding.created-at"]
+            )
+            revision = int(labels["com.neos.coding.workspace-revision"])
+            if (
+                not sandbox_id.startswith("sb_")
+                or value["Name"] != f"/neos-{sandbox_id}"
+                or not owner_id
+                or revision < 0
+            ):
+                return None
+            state = (
+                SandboxState.RUNNING
+                if value["State"]["Running"]
+                else SandboxState.SUSPENDED
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        sandbox = Sandbox(
+            sandbox_id=sandbox_id,
+            owner_id=owner_id,
+            state=state,
+            limits=SandboxLimits.safe_defaults(),
+            created_at=created_at,
+            updated_at=self._clock(),
+            workspace_revision=revision,
+            provider="docker",
+            image_digest=self._config.image,
+        )
+        return _DockerRecord(
+            sandbox=sandbox,
+            container_name=f"neos-{sandbox_id}",
+            volume_name=f"neos-sandbox-{sandbox_id}",
+            lock=asyncio.Lock(),
+            ptys={},
+            watcher=_MemoryWatcherHub(
+                debounce_sec=self._config.watcher_debounce_sec,
+                replay_events=self._config.watcher_replay_events,
+            ),
+            known_paths=set(),
+            watching=False,
+        )
+
     async def suspend(self, sandbox_id: str) -> Sandbox:
         record = await self._running_record(sandbox_id)
         async with record.lock:
+            await self._terminate_ptys(record, "sandbox_suspended")
             await self._runner.run(
                 "stop",
                 record.container_name,
@@ -280,6 +505,8 @@ class DockerSandboxProvider:
         if record is None:
             return
         async with record.lock:
+            await self._terminate_ptys(record, "sandbox_destroyed")
+            await record.watcher.close()
             await self._cleanup_command(
                 "rm",
                 "--force",
@@ -437,8 +664,15 @@ class DockerSandboxProvider:
                 *args,
                 timeout_sec=self._config.operation_timeout_sec,
             )
-        except SandboxUnavailable:
+        except SandboxError:
             pass
+
+    @staticmethod
+    async def _terminate_ptys(record: _DockerRecord, reason: str) -> None:
+        terminals = tuple(record.ptys.values())
+        record.ptys.clear()
+        for terminal in terminals:
+            await terminal.terminate(reason)
 
 
 class DockerSandboxSession:
@@ -453,6 +687,52 @@ class DockerSandboxSession:
     @property
     def sandbox_id(self) -> str:
         return self._record.sandbox.sandbox_id
+
+    async def create_pty(self, *, argv: tuple[str, ...]) -> DockerPty:
+        CommandRequest(argv=argv)
+        async with self._record.lock:
+            await self._provider._running_record(self.sandbox_id)
+            active = sum(
+                not terminal.is_closed for terminal in self._record.ptys.values()
+            )
+            if active >= self._provider._config.max_pty_sessions:
+                raise SandboxPolicyViolation("pty_session_limit_exceeded")
+            transport = await self._provider._interactive_factory(
+                "exec",
+                "-i",
+                "-t",
+                self._record.container_name,
+                *argv,
+            )
+            pty_id = f"pty_{uuid.uuid4().hex}"
+            terminal = DockerPty(
+                pty_id=pty_id,
+                transport=transport,
+                replay_events=self._provider._config.pty_replay_events,
+                replay_bytes=self._provider._config.pty_replay_bytes,
+            )
+            self._record.ptys[pty_id] = terminal
+            return terminal
+
+    async def write_pty(self, pty_id: str, data: bytes) -> None:
+        if len(data) > self._record.sandbox.limits.max_stdin_bytes:
+            raise SandboxPolicyViolation("pty_input_limit_exceeded")
+        await (await self._pty(pty_id)).write(data)
+
+    async def resize_pty(self, pty_id: str, *, rows: int, cols: int) -> None:
+        await (await self._pty(pty_id)).resize(rows=rows, cols=cols)
+
+    async def kill_pty(self, pty_id: str) -> None:
+        terminal = await self._pty(pty_id)
+        await terminal.terminate("pty_killed")
+        self._record.ptys.pop(pty_id, None)
+
+    async def _pty(self, pty_id: str) -> DockerPty:
+        await self._provider._running_record(self.sandbox_id)
+        terminal = self._record.ptys.get(pty_id)
+        if terminal is None:
+            raise SandboxNotFound(pty_id)
+        return terminal
 
     async def list_tree(self, path: str = ".") -> tuple[FileEntry, ...]:
         relative = normalize_workspace_path(path)
@@ -489,12 +769,30 @@ class DockerSandboxSession:
                 relative.as_posix(),
                 input=content,
             )
+            existed = relative.as_posix() in self._record.known_paths
+            self._record.known_paths.add(relative.as_posix())
             self._record.sandbox = replace(
                 self._record.sandbox,
                 workspace_revision=self._record.sandbox.workspace_revision + 1,
                 updated_at=self._provider._clock(),
             )
+            await self._record.watcher.record(
+                WorkspaceChange(
+                    path=relative.as_posix(),
+                    kind=(
+                        WorkspaceChangeKind.MODIFIED
+                        if existed
+                        else WorkspaceChangeKind.CREATED
+                    ),
+                ),
+                revision=self._record.sandbox.workspace_revision,
+            )
             return self._record.sandbox.workspace_revision
+
+    async def watch_files(self, *, after_cursor: int = 0):
+        await self._provider._running_record(self.sandbox_id)
+        self._record.watching = True
+        return self._record.watcher.open(after_cursor=after_cursor)
 
     async def search_text(
         self,
@@ -598,15 +896,21 @@ class DockerSandboxSession:
             args.extend(("--env", f"{key}={value}"))
         args.append(self._record.container_name)
         args.extend(request.argv)
-        result = await self._provider._runner.run(
-            *args,
-            timeout_sec=min(
-                request.timeout_sec,
-                self._record.sandbox.limits.command_timeout_sec,
-            ),
-            allowed_exit_codes=tuple(range(256)),
-            input=request.stdin,
-        )
+        async with self._record.lock:
+            await self._provider._running_record(self.sandbox_id)
+            before = await self._scan_workspace() if self._record.watching else {}
+            result = await self._provider._runner.run(
+                *args,
+                timeout_sec=min(
+                    request.timeout_sec,
+                    self._record.sandbox.limits.command_timeout_sec,
+                ),
+                allowed_exit_codes=tuple(range(256)),
+                input=request.stdin,
+            )
+            if self._record.watching:
+                after = await self._scan_workspace()
+                await self._record_scan_changes(before, after)
         limit = min(
             request.max_output_bytes,
             self._record.sandbox.limits.max_output_bytes,
@@ -618,3 +922,41 @@ class DockerSandboxSession:
             stdout_truncated=len(result.stdout) > limit,
             stderr_truncated=len(result.stderr) > limit,
         )
+
+    async def _scan_workspace(self) -> dict[str, tuple[int, int]]:
+        result = await self._run_helper(_SCAN_HELPER)
+        values = self._load_json(result.stdout)
+        try:
+            return {path: tuple(value) for path, value in values.items()}
+        except (AttributeError, TypeError) as error:
+            raise SandboxUnavailable("docker_helper_output_invalid") from error
+
+    async def _record_scan_changes(
+        self,
+        before: dict[str, tuple[int, int]],
+        after: dict[str, tuple[int, int]],
+    ) -> None:
+        changes = []
+        for path in sorted(before.keys() | after.keys()):
+            if path not in before:
+                kind = WorkspaceChangeKind.CREATED
+            elif path not in after:
+                kind = WorkspaceChangeKind.DELETED
+            elif before[path] != after[path]:
+                kind = WorkspaceChangeKind.MODIFIED
+            else:
+                continue
+            changes.append(WorkspaceChange(path=path, kind=kind))
+        if not changes:
+            return
+        self._record.sandbox = replace(
+            self._record.sandbox,
+            workspace_revision=self._record.sandbox.workspace_revision + 1,
+            updated_at=self._provider._clock(),
+        )
+        self._record.known_paths = set(after)
+        for change in changes:
+            await self._record.watcher.record(
+                change,
+                revision=self._record.sandbox.workspace_revision,
+            )
