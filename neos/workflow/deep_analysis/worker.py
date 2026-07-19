@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Callable
 
 from neos.config.settings import settings
@@ -18,9 +19,11 @@ from .models import (
     RepairResult,
     WorkerResult,
 )
+from .pdf_text import PDFExtractionError
 from .token_budget import TokenBudgetExhausted
 
 _REPAIR_ACTIONS = {"fixed", "weakened", "abandoned"}
+logger = logging.getLogger(__name__)
 
 
 class Worker:
@@ -166,11 +169,19 @@ class Worker:
             url = search_result.get("url", "")
             if not url or url in fetched_by_url:
                 continue
-            blob = await self.fetch_fn(
-                url,
-                client=self.http_client,
-                cassette=self.cassette,
-            )
+            try:
+                blob = await self.fetch_fn(
+                    url,
+                    client=self.http_client,
+                    cassette=self.cassette,
+                )
+            except PDFExtractionError as exc:
+                logger.warning(
+                    "Skipping unreadable PDF source: url=%s error_type=%s",
+                    url,
+                    type(exc).__name__,
+                )
+                continue
             fetched_by_url[url] = blob
             self._blobs.append(blob)
 

@@ -11,6 +11,7 @@ from html.parser import HTMLParser
 from neos.config.settings import settings
 
 from .models import ProposedBlob
+from .pdf_text import pdf_bytes_to_text
 
 
 class _TextExtractor(HTMLParser):
@@ -61,6 +62,23 @@ def _blob_hash(raw_text: str, url: str, status: int) -> str:
     return _content_hash(f"\x00EMPTY\x00{status}\x00{url}")
 
 
+def _is_pdf_response(response) -> bool:
+    headers = getattr(response, "headers", {}) or {}
+    normalized_headers = {
+        str(key).lower(): value for key, value in headers.items()
+    }
+    media_type = (
+        str(normalized_headers.get("content-type", ""))
+        .split(";", 1)[0]
+        .strip()
+        .lower()
+    )
+    content = getattr(response, "content", b"") or b""
+    return media_type == "application/pdf" or bytes(content).lstrip().startswith(
+        b"%PDF-"
+    )
+
+
 async def fetch_url(
     url: str,
     *,
@@ -80,11 +98,12 @@ async def fetch_url(
         try:
             response = await resolved_client.get(url)
             status = int(response.status_code)
-            raw_text = (
-                html_to_text(response.text)
-                if 200 <= status < 300
-                else ""
-            )
+            if not 200 <= status < 300:
+                raw_text = ""
+            elif _is_pdf_response(response):
+                raw_text = pdf_bytes_to_text(bytes(response.content))
+            else:
+                raw_text = html_to_text(response.text)
         finally:
             if owns_client:
                 await resolved_client.aclose()

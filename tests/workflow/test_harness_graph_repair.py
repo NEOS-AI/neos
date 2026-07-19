@@ -1,7 +1,6 @@
 import os
 import sys
 import types
-from contextlib import contextmanager
 
 import pytest
 
@@ -36,18 +35,7 @@ isodate_module.parse_duration = lambda value: value
 sys.modules.setdefault("isodate", isodate_module)
 
 
-@contextmanager
-def _noop_trace(*args, **kwargs):
-    yield object()
-
-
-telemetry_module = types.ModuleType("neos.workflow.telemetry")
-telemetry_module.trace_workflow_node = _noop_trace
-telemetry_module.add_span_event = lambda *args, **kwargs: None
-telemetry_module.set_span_attributes = lambda *args, **kwargs: None
-sys.modules["neos.workflow.telemetry"] = telemetry_module
-
-from neos.workflow.graph import _should_route_to_harness_repair
+from neos.workflow.graph import _should_route_to_harness_repair  # noqa: E402
 
 
 def test_routes_needs_repair_to_repair_when_attempts_remain():

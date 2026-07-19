@@ -1,8 +1,10 @@
 import unicodedata
+from unittest.mock import Mock
 
 import pytest
 
 from neos.workflow.deep_analysis.cassette import Cassette
+from neos.workflow.deep_analysis import fetch as fetch_module
 from neos.workflow.deep_analysis.fetch import fetch_url, html_to_text
 
 
@@ -25,9 +27,10 @@ def test_html_to_text_removes_script_style_and_decodes_entities():
 
 
 class FakeHttpClient:
-    def __init__(self, status_code, body):
+    def __init__(self, status_code, body, headers=None):
         self.status_code = status_code
         self.body = body
+        self.headers = headers or {}
         self.calls = 0
 
     async def get(self, url):
@@ -35,7 +38,17 @@ class FakeHttpClient:
 
         class Response:
             status_code = self.status_code
-            text = self.body
+            headers = self.headers
+            content = (
+                self.body
+                if isinstance(self.body, bytes)
+                else self.body.encode("utf-8")
+            )
+            text = (
+                self.body.decode("utf-8", errors="replace")
+                if isinstance(self.body, bytes)
+                else self.body
+            )
 
         return Response()
 
@@ -101,3 +114,68 @@ async def test_identical_body_still_dedups_by_content():
     a = await fetch_url("https://a.example", client=FakeHttpClient(200, "<p>same text</p>"))
     b = await fetch_url("https://b.example", client=FakeHttpClient(200, "<p>same text</p>"))
     assert a.content_hash == b.content_hash
+
+
+@pytest.mark.asyncio
+async def test_fetch_uses_pdf_parser_for_pdf_content_type(monkeypatch):
+    parse = Mock(return_value="PDF evidence text")
+    monkeypatch.setattr(fetch_module, "pdf_bytes_to_text", parse)
+    client = FakeHttpClient(
+        200,
+        b"%PDF-body",
+        {"content-type": "application/pdf; charset=binary"},
+    )
+
+    blob = await fetch_url("https://example.com/paper", client=client)
+
+    assert blob.raw_text == "PDF evidence text"
+    parse.assert_called_once_with(b"%PDF-body")
+
+
+@pytest.mark.asyncio
+async def test_fetch_detects_pdf_magic_when_header_is_wrong(monkeypatch):
+    parse = Mock(return_value="Magic PDF")
+    monkeypatch.setattr(fetch_module, "pdf_bytes_to_text", parse)
+    client = FakeHttpClient(
+        200,
+        b"  \n%PDF-body",
+        {"content-type": "application/octet-stream"},
+    )
+
+    blob = await fetch_url("https://example.com/paper", client=client)
+
+    assert blob.raw_text == "Magic PDF"
+    parse.assert_called_once_with(b"  \n%PDF-body")
+
+
+@pytest.mark.asyncio
+async def test_fetch_does_not_parse_non_success_pdf(monkeypatch):
+    parse = Mock(return_value="must not be used")
+    monkeypatch.setattr(fetch_module, "pdf_bytes_to_text", parse)
+
+    blob = await fetch_url(
+        "https://example.com/missing.pdf",
+        client=FakeHttpClient(
+            404,
+            b"%PDF-body",
+            {"content-type": "application/pdf"},
+        ),
+    )
+
+    assert blob.raw_text == ""
+    parse.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fetch_keeps_legacy_text_only_response_compatible():
+    class LegacyClient:
+        async def get(self, url):
+            return type(
+                "LegacyResponse",
+                (),
+                {"status_code": 200, "text": "<p>legacy html</p>"},
+            )()
+
+    blob = await fetch_url("https://example.com/legacy", client=LegacyClient())
+
+    assert blob.raw_text == "legacy html"
