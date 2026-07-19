@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
+import io
 import json
+import tarfile
 
 import pytest
 
@@ -44,6 +46,15 @@ class ScriptedDockerRunner:
 
 def _config() -> DockerSandboxConfig:
     return DockerSandboxConfig(image=IMAGE, create_timeout_sec=5)
+
+
+def _tar_bytes(name: str, content: bytes) -> bytes:
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w") as archive:
+        info = tarfile.TarInfo(name)
+        info.size = len(content)
+        archive.addfile(info, io.BytesIO(content))
+    return output.getvalue()
 
 
 async def test_create_is_running_only_after_readiness() -> None:
@@ -194,3 +205,29 @@ async def test_session_list_tree_and_stat_parse_fixed_helper_output() -> None:
     assert tree == (entry,)
     assert entry.path == "src/app.py"
     assert entry.modified_at == datetime(2026, 7, 19, 10, tzinfo=UTC)
+
+
+async def test_snapshot_restore_transfers_validated_archive_and_revision(
+    tmp_path,
+) -> None:
+    archive = _tar_bytes("state.txt", b"v1")
+    runner = ScriptedDockerRunner()
+    provider = DockerSandboxProvider(
+        runner=runner,
+        config=DockerSandboxConfig(image=IMAGE, snapshot_root=tmp_path),
+    )
+    source = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(source.sandbox_id)
+    await session.write_file("state.txt", b"v1")
+    runner.results.append(DockerCommandResult(0, archive, b""))
+
+    snapshot = await provider.snapshot(source.sandbox_id)
+    restored = await provider.restore(snapshot.snapshot_id, owner_id="u2")
+
+    assert snapshot.workspace_revision == 1
+    assert restored.workspace_revision == 1
+    assert restored.sandbox_id != source.sandbox_id
+    assert runner.inputs[-1] == archive

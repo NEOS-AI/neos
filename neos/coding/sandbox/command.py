@@ -22,6 +22,8 @@ class DockerCommandResult:
     exit_code: int
     stdout: bytes
     stderr: bytes
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
 
 
 DockerExec = Callable[..., Awaitable[DockerCommandResult]]
@@ -151,4 +153,6 @@ async def _execute_docker(
         exit_code=process.returncode,
         stdout=stdout[:maximum],
         stderr=stderr[:maximum],
+        stdout_truncated=len(stdout) > maximum,
+        stderr_truncated=len(stderr) > maximum,
     )

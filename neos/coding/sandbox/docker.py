@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import tempfile
 import uuid
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 from neos.coding.sandbox.base import (
     CommandRequest,
@@ -18,6 +21,14 @@ from neos.coding.sandbox.base import (
     SandboxState,
     SandboxStateConflict,
     SandboxUnavailable,
+    Snapshot,
+)
+from neos.coding.sandbox.archive import (
+    SNAPSHOT_SCHEMA_VERSION,
+    LocalSnapshotStore,
+    SnapshotManifest,
+    extract_workspace_archive,
+    sha256_file,
 )
 from neos.coding.sandbox.command import (
     DockerCommandRunner,
@@ -77,6 +88,41 @@ def encode(item):
 result = [encode(item) for item in sorted(p.rglob('*'))] if sys.argv[2] == 'tree' else encode(p)
 sys.stdout.write(json.dumps(result))
 """
+_SNAPSHOT_HELPER = """\
+import sys, tarfile
+from pathlib import Path
+root = Path('/workspace')
+excluded = {'.env', '.git/credentials', '.neos/secrets'}
+with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as archive:
+    for item in sorted(root.rglob('*')):
+        relative = item.relative_to(root).as_posix()
+        if relative in excluded or relative.startswith('.neos/secrets/'): continue
+        if item.is_socket() or item.is_block_device() or item.is_char_device() or item.is_fifo(): continue
+        archive.add(item, arcname=relative, recursive=False)
+"""
+_RESTORE_HELPER = """\
+import sys, tarfile
+with tarfile.open(fileobj=sys.stdin.buffer, mode='r|*') as archive:
+    archive.extractall('/workspace', filter='data')
+"""
+
+
+def _write_atomic(path: Path, content: bytes) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        temporary.write_bytes(content)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _validate_archive(path: Path, maximum: int) -> None:
+    with tempfile.TemporaryDirectory(prefix="neos-snapshot-validate-") as root:
+        extract_workspace_archive(
+            path,
+            Path(root),
+            max_expanded_bytes=maximum,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +133,8 @@ class DockerSandboxConfig:
     network_mode: str = "none"
     allow_unpinned_image: bool = False
     tmpfs_bytes: int = 64 * 1024 * 1024
+    snapshot_root: Path | None = None
+    max_snapshot_bytes: int = 16 * 1024 * 1024
     allowed_env_names: frozenset[str] = frozenset(
         {"HOME", "LANG", "LC_ALL", "PATH", "TERM", "TMPDIR"}
     )
@@ -111,6 +159,14 @@ class DockerSandboxProvider:
         self._runner = runner
         self._config = config
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._temporary_snapshot_root = None
+        snapshot_root = config.snapshot_root
+        if snapshot_root is None:
+            self._temporary_snapshot_root = tempfile.TemporaryDirectory(
+                prefix="neos-docker-snapshots-"
+            )
+            snapshot_root = Path(self._temporary_snapshot_root.name)
+        self._snapshot_store = LocalSnapshotStore(snapshot_root)
         self._records: dict[str, _DockerRecord] = {}
         self._lock = asyncio.Lock()
 
@@ -239,6 +295,105 @@ class DockerSandboxProvider:
                 self._clock(),
             )
 
+    async def snapshot(self, sandbox_id: str) -> Snapshot:
+        record = await self._record(sandbox_id)
+        if record.sandbox.state not in {
+            SandboxState.RUNNING,
+            SandboxState.SUSPENDED,
+        }:
+            raise SandboxStateConflict(f"sandbox_{record.sandbox.state.value}")
+        async with record.lock:
+            result = await self._runner.run(
+                "exec",
+                record.container_name,
+                "python",
+                "-c",
+                _SNAPSHOT_HELPER,
+                timeout_sec=self._config.operation_timeout_sec,
+            )
+            if result.stdout_truncated:
+                raise SandboxUnavailable("snapshot_archive_truncated")
+            if len(result.stdout) > self._config.max_snapshot_bytes:
+                raise SandboxPolicyViolation("snapshot_archive_size_exceeded")
+            snapshot_id = f"ss_{uuid.uuid4().hex}"
+            archive_path = self._snapshot_store.archive_path(snapshot_id)
+            await asyncio.to_thread(_write_atomic, archive_path, result.stdout)
+            try:
+                await asyncio.to_thread(
+                    _validate_archive,
+                    archive_path,
+                    self._config.max_snapshot_bytes,
+                )
+                checksum = await asyncio.to_thread(sha256_file, archive_path)
+                created_at = self._clock()
+                manifest = SnapshotManifest(
+                    schema_version=SNAPSHOT_SCHEMA_VERSION,
+                    source_sandbox_id=sandbox_id,
+                    workspace_revision=record.sandbox.workspace_revision,
+                    created_at=created_at,
+                    base_image_digest=record.sandbox.image_digest,
+                    content_checksum=checksum,
+                )
+                await asyncio.to_thread(
+                    self._snapshot_store.save_manifest,
+                    snapshot_id,
+                    manifest,
+                )
+            except BaseException:
+                archive_path.unlink(missing_ok=True)
+                raise
+            return Snapshot(
+                snapshot_id=snapshot_id,
+                source_sandbox_id=sandbox_id,
+                workspace_revision=manifest.workspace_revision,
+                created_at=created_at,
+                content_checksum=checksum,
+                image_digest=manifest.base_image_digest,
+            )
+
+    async def restore(self, snapshot_id: str, *, owner_id: str) -> Sandbox:
+        manifest = await asyncio.to_thread(
+            self._snapshot_store.load_manifest,
+            snapshot_id,
+        )
+        if manifest.schema_version != SNAPSHOT_SCHEMA_VERSION:
+            raise SandboxPolicyViolation("snapshot_schema_incompatible")
+        archive_path = self._snapshot_store.archive_path(snapshot_id)
+        if await asyncio.to_thread(sha256_file, archive_path) != manifest.content_checksum:
+            raise SandboxPolicyViolation("snapshot_checksum_mismatch")
+        archive = await asyncio.to_thread(archive_path.read_bytes)
+        if len(archive) > self._config.max_snapshot_bytes:
+            raise SandboxPolicyViolation("snapshot_archive_size_exceeded")
+        restored: Sandbox | None = None
+        complete = False
+        try:
+            restored = await self.create(
+                owner_id=owner_id,
+                limits=SandboxLimits.safe_defaults(),
+            )
+            record = await self._record(restored.sandbox_id)
+            async with record.lock:
+                await self._runner.run(
+                    "exec",
+                    "-i",
+                    record.container_name,
+                    "python",
+                    "-c",
+                    _RESTORE_HELPER,
+                    timeout_sec=self._config.operation_timeout_sec,
+                    input=archive,
+                )
+                record.sandbox = replace(
+                    record.sandbox,
+                    workspace_revision=manifest.workspace_revision,
+                    updated_at=self._clock(),
+                )
+                complete = True
+                return record.sandbox
+        finally:
+            if restored is not None and not complete:
+                await self.destroy(restored.sandbox_id)
+
     async def open_session(self, sandbox_id: str) -> DockerSandboxSession:
         record = await self._running_record(sandbox_id)
         return DockerSandboxSession(self, record)
@@ -248,6 +403,8 @@ class DockerSandboxProvider:
             sandbox_ids = tuple(self._records)
         for sandbox_id in sandbox_ids:
             await self.destroy(sandbox_id)
+        if self._temporary_snapshot_root is not None:
+            self._temporary_snapshot_root.cleanup()
 
     async def _record(self, sandbox_id: str) -> _DockerRecord:
         async with self._lock:

@@ -9,6 +9,7 @@ from neos.coding.sandbox.docker import (
     DockerSandboxConfig,
     DockerSandboxProvider,
 )
+from neos.coding.sandbox.command import DockerCommandResult
 from tests.coding.sandbox.test_docker_provider import (
     IMAGE,
     ScriptedDockerRunner,
@@ -57,3 +58,26 @@ async def test_destroy_is_idempotent_and_hides_destroyed_sandbox() -> None:
     assert len(runner.calls) == cleanup_call_count
     with pytest.raises(SandboxNotFound):
         await provider.get(sandbox.sandbox_id)
+
+
+async def test_snapshot_rejects_truncated_archive(tmp_path) -> None:
+    runner = ScriptedDockerRunner()
+    provider = DockerSandboxProvider(
+        runner=runner,
+        config=DockerSandboxConfig(image=IMAGE, snapshot_root=tmp_path),
+    )
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    runner.results.append(
+        DockerCommandResult(
+            exit_code=0,
+            stdout=b"partial archive",
+            stderr=b"",
+            stdout_truncated=True,
+        )
+    )
+
+    with pytest.raises(SandboxUnavailable, match="snapshot_archive_truncated"):
+        await provider.snapshot(sandbox.sandbox_id)
