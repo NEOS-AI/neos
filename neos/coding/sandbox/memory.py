@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import errno
+import fcntl
 import os
+import pty
 import re
+import signal
 import shutil
+import struct
+import termios
 import uuid
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path, PurePosixPath
+from typing import TypeAlias
 
 from neos.coding.sandbox.base import (
     CommandRequest,
@@ -21,6 +29,7 @@ from neos.coding.sandbox.base import (
     SandboxStateConflict,
     SearchMatch,
     Snapshot,
+    StreamEvent,
 )
 from neos.coding.sandbox.archive import (
     SNAPSHOT_SCHEMA_VERSION,
@@ -36,6 +45,270 @@ from neos.coding.sandbox.paths import (
     resolve_workspace_path,
 )
 from neos.coding.sandbox.process import BoundedProcessRunner
+from neos.coding.sandbox.streams import BoundedReplayStream
+
+
+@dataclass(frozen=True, slots=True)
+class PtyOutput:
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class PtyClosed:
+    reason: str
+    exit_code: int | None
+
+
+PtyEvent: TypeAlias = PtyOutput | PtyClosed
+
+
+class WorkspaceChangeKind(StrEnum):
+    CREATED = "created"
+    MODIFIED = "modified"
+    DELETED = "deleted"
+    RENAMED = "renamed"
+    WATCH_OVERFLOW = "watch_overflow"
+    WORKSPACE_INVALIDATED = "workspace_invalidated"
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceChange:
+    path: str
+    kind: WorkspaceChangeKind
+    previous_path: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceChangeBatch:
+    changes: tuple[WorkspaceChange, ...]
+    workspace_revision: int
+
+
+class MemoryWatcher:
+    def __init__(
+        self,
+        stream: BoundedReplayStream[WorkspaceChangeBatch],
+        *,
+        after_cursor: int,
+    ) -> None:
+        self._stream = stream
+        self._subscription = stream.subscribe(after_cursor=after_cursor)
+
+    def __aiter__(self) -> MemoryWatcher:
+        return self
+
+    async def __anext__(self) -> StreamEvent[WorkspaceChangeBatch]:
+        return await anext(self._subscription)
+
+    async def replay(
+        self,
+        *,
+        after_cursor: int,
+    ) -> tuple[StreamEvent[WorkspaceChangeBatch], ...]:
+        return await self._stream.replay(after_cursor=after_cursor)
+
+    async def aclose(self) -> None:
+        await self._subscription.aclose()
+
+
+class _MemoryWatcherHub:
+    def __init__(
+        self,
+        *,
+        debounce_sec: float,
+        replay_events: int,
+    ) -> None:
+        self._debounce_sec = debounce_sec
+        self._stream = BoundedReplayStream[WorkspaceChangeBatch](
+            max_events=replay_events,
+            max_bytes=1024 * 1024,
+            size_of=lambda batch: sum(
+                len(change.path.encode()) + 32 for change in batch.changes
+            ),
+        )
+        self._pending: dict[str, WorkspaceChange] = {}
+        self._revision = 0
+        self._flush_task: asyncio.Task[None] | None = None
+        self._lock = asyncio.Lock()
+
+    async def record(
+        self,
+        change: WorkspaceChange,
+        *,
+        revision: int,
+    ) -> None:
+        async with self._lock:
+            previous = self._pending.get(change.path)
+            if (
+                previous is not None
+                and previous.kind is WorkspaceChangeKind.CREATED
+            ):
+                change = previous
+            self._pending[change.path] = change
+            self._revision = revision
+            if self._flush_task is None or self._flush_task.done():
+                self._flush_task = asyncio.create_task(self._flush_after_delay())
+
+    def open(self, *, after_cursor: int) -> MemoryWatcher:
+        return MemoryWatcher(self._stream, after_cursor=after_cursor)
+
+    async def close(self) -> None:
+        task = self._flush_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        await self._flush()
+        await self._stream.close()
+
+    async def _flush_after_delay(self) -> None:
+        await asyncio.sleep(self._debounce_sec)
+        await self._flush()
+
+    async def _flush(self) -> None:
+        async with self._lock:
+            if not self._pending:
+                return
+            batch = WorkspaceChangeBatch(
+                changes=tuple(
+                    self._pending[path] for path in sorted(self._pending)
+                ),
+                workspace_revision=self._revision,
+            )
+            self._pending.clear()
+        await self._stream.publish(batch)
+
+
+class MemoryPty:
+    def __init__(
+        self,
+        *,
+        pty_id: str,
+        process: asyncio.subprocess.Process,
+        master_fd: int,
+        replay_events: int,
+        replay_bytes: int,
+    ) -> None:
+        self.pty_id = pty_id
+        self._process = process
+        self._master_fd = master_fd
+        self._stream = BoundedReplayStream[PtyEvent](
+            max_events=replay_events,
+            max_bytes=replay_bytes,
+            size_of=lambda event: len(event.data)
+            if isinstance(event, PtyOutput)
+            else 32,
+        )
+        self._closed: asyncio.Future[PtyClosed] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._requested_reason: str | None = None
+        self._finish_lock = asyncio.Lock()
+        self._reader_task = asyncio.create_task(
+            self._read_output(),
+            name=f"sandbox-pty-{pty_id}",
+        )
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed.done()
+
+    def subscribe(self, *, after_cursor: int):
+        return self._stream.subscribe(after_cursor=after_cursor)
+
+    async def replay(
+        self,
+        *,
+        after_cursor: int,
+    ) -> tuple[StreamEvent[PtyEvent], ...]:
+        return await self._stream.replay(after_cursor=after_cursor)
+
+    async def write(self, data: bytes) -> None:
+        if self.is_closed:
+            raise SandboxStateConflict("pty_closed")
+        await asyncio.to_thread(os.write, self._master_fd, data)
+
+    async def resize(self, *, rows: int, cols: int) -> None:
+        if rows < 1 or cols < 1 or rows > 1000 or cols > 1000:
+            raise SandboxPolicyViolation("pty_size_invalid")
+        fcntl.ioctl(
+            self._master_fd,
+            termios.TIOCSWINSZ,
+            struct.pack("HHHH", rows, cols, 0, 0),
+        )
+
+    async def terminate(self, reason: str) -> PtyClosed:
+        if self.is_closed:
+            return await self._closed
+        self._requested_reason = reason
+        if self._process.returncode is None:
+            try:
+                os.killpg(self._process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        await self._process.wait()
+        await self._reader_task
+        return await self._closed
+
+    async def wait_closed(self) -> PtyClosed:
+        return await self._closed
+
+    async def _read_output(self) -> None:
+        try:
+            while True:
+                data = await _read_pty_fd(self._master_fd)
+                if not data:
+                    break
+                await self._stream.publish(PtyOutput(data=data))
+        finally:
+            await self._process.wait()
+            await self._finish(
+                self._requested_reason or "process_exited",
+                None
+                if self._requested_reason is not None
+                else self._process.returncode,
+            )
+
+    async def _finish(
+        self,
+        reason: str,
+        exit_code: int | None,
+    ) -> None:
+        async with self._finish_lock:
+            if self._closed.done():
+                return
+            closed = PtyClosed(reason=reason, exit_code=exit_code)
+            await self._stream.publish(closed)
+            await self._stream.close()
+            try:
+                os.close(self._master_fd)
+            except OSError:
+                pass
+            self._closed.set_result(closed)
+
+
+async def _read_pty_fd(fd: int) -> bytes:
+    loop = asyncio.get_running_loop()
+    ready: asyncio.Future[bytes] = loop.create_future()
+
+    def read_ready() -> None:
+        if ready.done():
+            return
+        try:
+            ready.set_result(os.read(fd, 4096))
+        except OSError as error:
+            if error.errno == errno.EIO:
+                ready.set_result(b"")
+            else:
+                ready.set_exception(error)
+
+    loop.add_reader(fd, read_ready)
+    try:
+        return await ready
+    finally:
+        loop.remove_reader(fd)
 
 
 @dataclass(slots=True)
@@ -43,6 +316,8 @@ class _MemorySandboxRecord:
     sandbox: Sandbox
     workspace: Path
     lock: asyncio.Lock
+    ptys: dict[str, MemoryPty]
+    watcher: _MemoryWatcherHub
 
 
 class MemorySandboxProvider:
@@ -57,6 +332,11 @@ class MemorySandboxProvider:
         ),
         process_runner: BoundedProcessRunner | None = None,
         snapshot_root: Path | None = None,
+        max_pty_sessions: int = 4,
+        pty_replay_events: int = 1024,
+        pty_replay_bytes: int = 1024 * 1024,
+        watcher_debounce_sec: float = 0.05,
+        watcher_replay_events: int = 1024,
     ) -> None:
         self._root = root
         self._root.mkdir(parents=True, exist_ok=True)
@@ -65,6 +345,11 @@ class MemorySandboxProvider:
         self._snapshot_store = LocalSnapshotStore(
             snapshot_root or (self._root / "_snapshots")
         )
+        self._max_pty_sessions = max_pty_sessions
+        self._pty_replay_events = pty_replay_events
+        self._pty_replay_bytes = pty_replay_bytes
+        self._watcher_debounce_sec = watcher_debounce_sec
+        self._watcher_replay_events = watcher_replay_events
         self._records: dict[str, _MemorySandboxRecord] = {}
         self._lock = asyncio.Lock()
 
@@ -91,6 +376,11 @@ class MemorySandboxProvider:
                 sandbox=running,
                 workspace=workspace,
                 lock=asyncio.Lock(),
+                ptys={},
+                watcher=_MemoryWatcherHub(
+                    debounce_sec=self._watcher_debounce_sec,
+                    replay_events=self._watcher_replay_events,
+                ),
             )
         return running
 
@@ -104,6 +394,7 @@ class MemorySandboxProvider:
     async def suspend(self, sandbox_id: str) -> Sandbox:
         record = await self._record(sandbox_id)
         async with record.lock:
+            await self._terminate_ptys(record, "sandbox_suspended")
             record.sandbox = record.sandbox.transition(
                 SandboxState.SUSPENDED,
                 datetime.now(UTC),
@@ -204,6 +495,8 @@ class MemorySandboxProvider:
         if record is None:
             return
         async with record.lock:
+            await self._terminate_ptys(record, "sandbox_destroyed")
+            await record.watcher.close()
             record.sandbox = record.sandbox.transition(
                 SandboxState.DESTROYED,
                 datetime.now(UTC),
@@ -253,6 +546,15 @@ class MemorySandboxProvider:
             updated_at=datetime.now(UTC),
         )
         return record.sandbox.workspace_revision
+
+    @staticmethod
+    async def _terminate_ptys(
+        record: _MemorySandboxRecord,
+        reason: str,
+    ) -> None:
+        for terminal in tuple(record.ptys.values()):
+            await terminal.terminate(reason)
+        record.ptys.clear()
 
 
 class MemorySandboxSession:
@@ -329,8 +631,21 @@ class MemorySandboxSession:
                 relative.as_posix(),
                 allow_missing_leaf=True,
             )
+            existed = item.exists()
             await asyncio.to_thread(item.write_bytes, content)
-            return await self._provider._increment_revision(self._record)
+            revision = await self._provider._increment_revision(self._record)
+            await self._record.watcher.record(
+                WorkspaceChange(
+                    path=relative.as_posix(),
+                    kind=(
+                        WorkspaceChangeKind.MODIFIED
+                        if existed
+                        else WorkspaceChangeKind.CREATED
+                    ),
+                ),
+                revision=revision,
+            )
+            return revision
 
     async def search_text(
         self,
@@ -418,11 +733,96 @@ class MemorySandboxSession:
             if key in self._provider._allowed_env_names
         }
         environment.update(request.env)
-        return await self._provider._process_runner.run(
-            bounded_request,
-            cwd=cwd,
-            env=environment,
+        async with self._record.lock:
+            await self._require_running()
+            before = self._workspace_fingerprint()
+            result = await self._provider._process_runner.run(
+                bounded_request,
+                cwd=cwd,
+                env=environment,
+            )
+            after = self._workspace_fingerprint()
+            changes = self._fingerprint_changes(before, after)
+            if changes:
+                revision = await self._provider._increment_revision(
+                    self._record
+                )
+                for change in changes:
+                    await self._record.watcher.record(
+                        change,
+                        revision=revision,
+                    )
+            return result
+
+    async def create_pty(self, *, argv: tuple[str, ...]) -> MemoryPty:
+        await self._require_running()
+        CommandRequest(argv=argv)
+        active = [
+            terminal
+            for terminal in self._record.ptys.values()
+            if not terminal.is_closed
+        ]
+        if len(active) >= self._provider._max_pty_sessions:
+            raise SandboxPolicyViolation("pty_session_limit_exceeded")
+        master_fd, slave_fd = pty.openpty()
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key in self._provider._allowed_env_names
+        }
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *argv,
+                cwd=self._record.workspace,
+                env=environment,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                start_new_session=True,
+            )
+        except BaseException:
+            os.close(master_fd)
+            raise
+        finally:
+            os.close(slave_fd)
+        pty_id = f"pty_{uuid.uuid4().hex}"
+        terminal = MemoryPty(
+            pty_id=pty_id,
+            process=process,
+            master_fd=master_fd,
+            replay_events=self._provider._pty_replay_events,
+            replay_bytes=self._provider._pty_replay_bytes,
         )
+        self._record.ptys[pty_id] = terminal
+        return terminal
+
+    async def write_pty(self, pty_id: str, data: bytes) -> None:
+        await self._require_running()
+        if len(data) > self._record.sandbox.limits.max_stdin_bytes:
+            raise SandboxPolicyViolation("pty_input_limit_exceeded")
+        await self._pty(pty_id).write(data)
+
+    async def resize_pty(
+        self,
+        pty_id: str,
+        *,
+        rows: int,
+        cols: int,
+    ) -> None:
+        await self._require_running()
+        await self._pty(pty_id).resize(rows=rows, cols=cols)
+
+    async def kill_pty(self, pty_id: str) -> None:
+        await self._pty(pty_id).terminate("killed")
+        self._record.ptys.pop(pty_id, None)
+
+    async def watch_files(
+        self,
+        *,
+        after_cursor: int = 0,
+    ) -> MemoryWatcher:
+        await self._require_running()
+        return self._record.watcher.open(after_cursor=after_cursor)
 
     async def _require_running(self) -> None:
         await self._provider._running_record(self.sandbox_id)
@@ -437,6 +837,54 @@ class MemorySandboxSession:
                 allow_missing_leaf=True,
             )
             candidate.mkdir(exist_ok=True)
+
+    def _pty(self, pty_id: str) -> MemoryPty:
+        terminal = self._record.ptys.get(pty_id)
+        if terminal is None:
+            raise SandboxNotFound(pty_id)
+        return terminal
+
+    def _workspace_fingerprint(self) -> dict[str, tuple[int, int]]:
+        fingerprint: dict[str, tuple[int, int]] = {}
+        for item in self._record.workspace.rglob("*"):
+            if not item.is_file() or item.is_symlink():
+                continue
+            relative = item.relative_to(self._record.workspace).as_posix()
+            if self._ignore_watch_path(relative):
+                continue
+            value = item.stat()
+            fingerprint[relative] = (value.st_size, value.st_mtime_ns)
+        return fingerprint
+
+    @staticmethod
+    def _fingerprint_changes(
+        before: dict[str, tuple[int, int]],
+        after: dict[str, tuple[int, int]],
+    ) -> tuple[WorkspaceChange, ...]:
+        changes = [
+            WorkspaceChange(path=path, kind=WorkspaceChangeKind.CREATED)
+            for path in sorted(after.keys() - before.keys())
+        ]
+        changes.extend(
+            WorkspaceChange(path=path, kind=WorkspaceChangeKind.MODIFIED)
+            for path in sorted(before.keys() & after.keys())
+            if before[path] != after[path]
+        )
+        changes.extend(
+            WorkspaceChange(path=path, kind=WorkspaceChangeKind.DELETED)
+            for path in sorted(before.keys() - after.keys())
+        )
+        return tuple(changes)
+
+    @staticmethod
+    def _ignore_watch_path(path: str) -> bool:
+        name = PurePosixPath(path).name
+        return (
+            path == ".git"
+            or path.startswith(".git/")
+            or name == ".DS_Store"
+            or name.endswith((".swp", ".swo", "~"))
+        )
 
     @staticmethod
     def _matches_path(path: str, pattern: str) -> bool:
