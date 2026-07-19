@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from dataclasses import replace
 
 from neos.config.settings import settings
 
@@ -180,19 +181,23 @@ class Orchestrator:
         expensive judge is never invoked on already-rejected claims."""
         verdict = await self.grader.grade(claim)  # deterministic first
         if self.agentic_grader is None:
-            verdict.diagnostics = {
-                **verdict.diagnostics,
-                "agentic": "not_configured",
-                "agentic_label": None,
-            }
-            return verdict
+            return replace(
+                verdict,
+                diagnostics={
+                    **verdict.diagnostics,
+                    "agentic": "not_configured",
+                    "agentic_label": None,
+                },
+            )
         if not verdict.ok:
-            verdict.diagnostics = {
-                **verdict.diagnostics,
-                "agentic": "skipped",
-                "agentic_label": None,
-            }
-            return verdict
+            return replace(
+                verdict,
+                diagnostics={
+                    **verdict.diagnostics,
+                    "agentic": "skipped",
+                    "agentic_label": None,
+                },
+            )
         try:
             agentic_verdict = await self.agentic_grader.grade(claim, value_est)
             agentic_state = agentic_verdict.diagnostics.get(
@@ -203,20 +208,24 @@ class Orchestrator:
                     else "attempted_rejected"
                 ),
             )
-            agentic_verdict.diagnostics = {
-                **verdict.diagnostics,
-                **agentic_verdict.diagnostics,
-                "agentic": agentic_state,
-                "agentic_label": agentic_verdict.label,
-            }
-            return agentic_verdict
+            return replace(
+                agentic_verdict,
+                diagnostics={
+                    **verdict.diagnostics,
+                    **agentic_verdict.diagnostics,
+                    "agentic": agentic_state,
+                    "agentic_label": agentic_verdict.label,
+                },
+            )
         except TokenBudgetExhausted:
-            verdict.diagnostics = {
-                **verdict.diagnostics,
-                "agentic": "exhausted",
-                "agentic_label": None,
-            }
-            return verdict
+            return replace(
+                verdict,
+                diagnostics={
+                    **verdict.diagnostics,
+                    "agentic": "exhausted",
+                    "agentic_label": None,
+                },
+            )
 
     async def _regrade_pending(self, question_id, value_est):
         """Re-grade claims that repair processing pushed back to `pending`

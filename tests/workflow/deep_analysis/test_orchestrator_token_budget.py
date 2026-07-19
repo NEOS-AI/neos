@@ -136,11 +136,23 @@ async def test_optional_agentic_exhaustion_keeps_deterministic_verdict():
 
 @pytest.mark.asyncio
 async def test_no_agentic_grader_preserves_deterministic_diagnostics():
+    deterministic = Verdict(
+        ok=True,
+        diagnostics={
+            "deterministic": "passed",
+            "deterministic_code": "",
+        },
+    )
+
+    class SharedGrader:
+        async def grade(self, claim):
+            return deterministic
+
     orchestrator = Orchestrator(
         object(),
         "run",
         worker_factory=lambda: None,
-        grader=Grader(),
+        grader=SharedGrader(),
         ledger=ExhaustedLedger(),
         synthesizer=Synthesizer(),
         citation_renderer=CitationRenderer(),
@@ -154,4 +166,8 @@ async def test_no_agentic_grader_preserves_deterministic_diagnostics():
         "deterministic_code": "",
         "agentic": "not_configured",
         "agentic_label": None,
+    }
+    assert deterministic.diagnostics == {
+        "deterministic": "passed",
+        "deterministic_code": "",
     }
