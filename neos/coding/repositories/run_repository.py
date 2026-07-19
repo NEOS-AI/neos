@@ -10,6 +10,7 @@ from neos.coding.domain.durability import (
     ExecutionLease,
     PhaseCheckpointCommit,
     PhaseStart,
+    RunLifecycleCommit,
     StaleExecutionLease,
     SteeringApplication,
     ToolExecutionClaim,
@@ -37,6 +38,244 @@ class PostgresCodingRunRepository:
     ) -> None:
         self._session_factory = session_factory
         self._wake_outbox = wake_outbox
+
+    async def ensure_run_started(
+        self,
+        *,
+        task_id: str,
+        instruction: str,
+        development_mode: bool,
+        now: datetime,
+    ) -> CodingRun:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                task_result = await session.execute(
+                    text(
+                        """
+                        SELECT task_id, prompt, status
+                        FROM coding_tasks
+                        WHERE task_id = :task_id AND deleted_at IS NULL
+                        FOR UPDATE
+                        """
+                    ),
+                    {"task_id": task_id},
+                )
+                task_row = task_result.first()
+                if task_row is None:
+                    raise RuntimeError(f"coding task does not exist: {task_id}")
+                existing_result = await session.execute(
+                    text(
+                        """
+                        SELECT run_id, task_id, attempt, status,
+                               resume_from_checkpoint_id, started_at, completed_at
+                        FROM coding_runs
+                        WHERE task_id = :task_id AND status = 'running'
+                        ORDER BY attempt DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {"task_id": task_id},
+                )
+                existing_row = existing_result.first()
+                if existing_row is not None:
+                    return self._run_from_row(existing_row)
+                if task_row[2] == "queued" and not development_mode:
+                    raise ValueError(
+                        "queued task fast path requires development mode"
+                    )
+                attempt_result = await session.execute(
+                    text(
+                        """
+                        SELECT COALESCE(MAX(attempt), 0)
+                        FROM coding_runs
+                        WHERE task_id = :task_id
+                        """
+                    ),
+                    {"task_id": task_id},
+                )
+                attempt = int(attempt_result.first()[0]) + 1
+                run = CodingRun(
+                    run_id=f"cr_{uuid4().hex}",
+                    task_id=task_id,
+                    attempt=attempt,
+                    status=CodingRunStatus.RUNNING,
+                    resume_from_checkpoint_id=None,
+                    started_at=now,
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_runs
+                            (run_id, task_id, attempt, status,
+                             resume_from_checkpoint_id, started_at, completed_at)
+                        VALUES
+                            (:run_id, :task_id, :attempt, 'running',
+                             NULL, :now, NULL)
+                        """
+                    ),
+                    {
+                        "run_id": run.run_id,
+                        "task_id": task_id,
+                        "attempt": attempt,
+                        "now": now,
+                    },
+                )
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_tasks
+                        SET status = 'running', updated_at = :now
+                        WHERE task_id = :task_id
+                        """
+                    ),
+                    {"task_id": task_id, "now": now},
+                )
+                await self._append_event_in_session(
+                    session,
+                    task_id=task_id,
+                    event_type="run.started",
+                    payload={"instruction": instruction, "attempt": attempt},
+                    now=now,
+                    run_id=run.run_id,
+                )
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return run
+
+    async def complete_run(
+        self, *, lease: ExecutionLease, now: datetime
+    ) -> RunLifecycleCommit:
+        return await self._commit_terminal_run(
+            lease=lease,
+            status=CodingRunStatus.COMPLETED,
+            payload={"status": "completed"},
+            now=now,
+        )
+
+    async def fail_run(
+        self,
+        *,
+        lease: ExecutionLease,
+        error_code: str,
+        now: datetime,
+    ) -> RunLifecycleCommit:
+        if not error_code or not error_code.replace("_", "").isalnum():
+            raise ValueError("error_code must be normalized")
+        return await self._commit_terminal_run(
+            lease=lease,
+            status=CodingRunStatus.FAILED,
+            payload={"status": "failed", "error_code": error_code},
+            now=now,
+        )
+
+    async def _commit_terminal_run(
+        self,
+        *,
+        lease: ExecutionLease,
+        status: CodingRunStatus,
+        payload: Mapping[str, Any],
+        now: datetime,
+    ) -> RunLifecycleCommit:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(session, lease, now=now)
+                run_result = await session.execute(
+                    text(
+                        """
+                        SELECT run_id, task_id, attempt, status,
+                               resume_from_checkpoint_id, started_at, completed_at
+                        FROM coding_runs
+                        WHERE run_id = :run_id AND task_id = :task_id
+                        FOR UPDATE
+                        """
+                    ),
+                    {"run_id": lease.run_id, "task_id": lease.task_id},
+                )
+                run_row = run_result.first()
+                if run_row is None:
+                    raise StaleExecutionLease(lease.task_id)
+                run = replace(
+                    self._run_from_row(run_row),
+                    status=status,
+                    completed_at=now,
+                )
+                seq = await self._allocate_sequence_in_session(
+                    session, task_id=lease.task_id, now=now
+                )
+                event = await self._insert_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    seq=seq,
+                    event_type=f"run.{status.value}",
+                    payload=payload,
+                    now=now,
+                    run_id=lease.run_id,
+                )
+                updated = await session.execute(
+                    text(
+                        """
+                        UPDATE coding_runs
+                        SET status = :status, completed_at = :now
+                        WHERE run_id = :run_id
+                          AND task_id = :task_id
+                          AND status = 'running'
+                        RETURNING run_id
+                        """
+                    ),
+                    {
+                        "run_id": lease.run_id,
+                        "task_id": lease.task_id,
+                        "status": status.value,
+                        "now": now,
+                    },
+                )
+                if updated.first() is None:
+                    raise StaleExecutionLease(lease.task_id)
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_tasks
+                        SET status = :status, updated_at = :now
+                        WHERE task_id = :task_id
+                        """
+                    ),
+                    {
+                        "task_id": lease.task_id,
+                        "status": status.value,
+                        "now": now,
+                    },
+                )
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return RunLifecycleCommit(run=run, event=event)
+
+    async def claimable_task_ids(self, *, limit: int) -> tuple[str, ...]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        async with await self._session_factory() as session:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT task.task_id
+                    FROM coding_tasks task
+                    WHERE task.deleted_at IS NULL
+                      AND task.status IN ('queued', 'running')
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM coding_runs run
+                          WHERE run.task_id = task.task_id
+                            AND run.status IN (
+                                'completed', 'cancelled', 'failed'
+                            )
+                      )
+                    ORDER BY task.last_activity_at, task.task_id
+                    LIMIT :limit
+                    """
+                ),
+                {"limit": limit},
+            )
+            rows = result.all()
+        return tuple(row[0] for row in rows)
 
     async def acquire_execution_lease(
         self,

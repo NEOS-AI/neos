@@ -7,6 +7,7 @@ from neos.coding.domain.durability import (
     ExecutionLease,
     PhaseCheckpointCommit,
     PhaseStart,
+    RunLifecycleCommit,
     StaleExecutionLease,
     SteeringApplication,
     ToolExecutionClaim,
@@ -24,7 +25,13 @@ from neos.coding.domain.phases import (
 
 
 class InMemoryCodingRunRepository:
-    def __init__(self, *, completed_tools=None, active_run=None) -> None:
+    def __init__(
+        self,
+        *,
+        completed_tools=None,
+        active_run=None,
+        task_prompts=None,
+    ) -> None:
         self.completed_tools = dict(completed_tools or {})
         self.active_run = active_run
         self.checkpoints = []
@@ -41,6 +48,102 @@ class InMemoryCodingRunRepository:
         self._durability_seq = 0
         self.begin_phase_calls = 0
         self.phase_commit_calls = 0
+        self.task_prompts = dict(task_prompts or {})
+        self.task_statuses = {
+            task_id: "queued" for task_id in self.task_prompts
+        }
+
+    async def ensure_run_started(
+        self,
+        *,
+        task_id,
+        instruction,
+        development_mode,
+        now,
+    ):
+        async with self._durability_lock:
+            if task_id not in self.task_statuses:
+                raise RuntimeError(f"coding task does not exist: {task_id}")
+            if (
+                self.active_run is not None
+                and self.active_run.task_id == task_id
+                and self.active_run.status is CodingRunStatus.RUNNING
+            ):
+                return self.active_run
+            if self.task_statuses[task_id] == "queued" and not development_mode:
+                raise ValueError(
+                    "queued task fast path requires development mode"
+                )
+            attempts = [
+                run.attempt
+                for run in self.created_runs
+                if run.task_id == task_id
+            ]
+            run = CodingRun(
+                run_id=f"cr_{task_id}_{max(attempts, default=0) + 1}",
+                task_id=task_id,
+                attempt=max(attempts, default=0) + 1,
+                status=CodingRunStatus.RUNNING,
+                resume_from_checkpoint_id=None,
+                started_at=now,
+            )
+            self.created_runs.append(run)
+            self.active_run = run
+            self.task_statuses[task_id] = "running"
+            self._durability_seq += 1
+            return run
+
+    async def complete_run(self, *, lease, now):
+        return await self._commit_terminal_run(
+            lease=lease,
+            status=CodingRunStatus.COMPLETED,
+            payload={"status": "completed"},
+            now=now,
+        )
+
+    async def fail_run(self, *, lease, error_code, now):
+        if not error_code or not error_code.replace("_", "").isalnum():
+            raise ValueError("error_code must be normalized")
+        return await self._commit_terminal_run(
+            lease=lease,
+            status=CodingRunStatus.FAILED,
+            payload={"status": "failed", "error_code": error_code},
+            now=now,
+        )
+
+    async def _commit_terminal_run(self, *, lease, status, payload, now):
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=now)
+            if self.active_run is None or self.active_run.run_id != lease.run_id:
+                raise StaleExecutionLease(lease.task_id)
+            run = replace(
+                self.active_run, status=status, completed_at=now
+            )
+            self.active_run = run
+            self.created_runs = [
+                run if item.run_id == run.run_id else item
+                for item in self.created_runs
+            ]
+            self.task_statuses[lease.task_id] = status.value
+            self._durability_seq += 1
+            event = make_event(
+                task_id=lease.task_id,
+                seq=self._durability_seq,
+                event_type=f"run.{status.value}",
+                payload=dict(payload),
+                now=now,
+                run_id=lease.run_id,
+            )
+            return RunLifecycleCommit(run=run, event=event)
+
+    async def claimable_task_ids(self, *, limit):
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        return tuple(
+            task_id
+            for task_id, status in self.task_statuses.items()
+            if status in {"queued", "running"}
+        )[:limit]
 
     async def acquire_execution_lease(
         self,

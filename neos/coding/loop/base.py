@@ -7,6 +7,7 @@ from neos.coding.domain.durability import (
     ExecutionLease,
     PhaseCheckpointCommit,
     PhaseStart,
+    RunLifecycleCommit,
     SteeringApplication,
     ToolExecutionClaim,
 )
@@ -34,6 +35,29 @@ class LoopCheckpointState:
 
 
 class CodingRunRepository(Protocol):
+    async def ensure_run_started(
+        self,
+        *,
+        task_id: str,
+        instruction: str,
+        development_mode: bool,
+        now: datetime,
+    ): ...
+
+    async def complete_run(
+        self, *, lease: ExecutionLease, now: datetime
+    ) -> RunLifecycleCommit: ...
+
+    async def fail_run(
+        self,
+        *,
+        lease: ExecutionLease,
+        error_code: str,
+        now: datetime,
+    ) -> RunLifecycleCommit: ...
+
+    async def claimable_task_ids(self, *, limit: int) -> tuple[str, ...]: ...
+
     async def acquire_execution_lease(
         self,
         *,

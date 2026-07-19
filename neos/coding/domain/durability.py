@@ -20,6 +20,12 @@ class StaleExecutionLease(RuntimeError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class RunLifecycleCommit:
+    run: CodingRun
+    event: CodingEvent
+
+
 class ToolExecutionDisposition(StrEnum):
     CLAIMED = "claimed"
     COMPLETED = "completed"
