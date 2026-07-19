@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Protocol
@@ -55,6 +56,49 @@ class CodingRunService:
         self._loop = loop
         self._metrics = metrics
         self._clock = clock
+
+    async def ensure_started(self, *, task_id: str) -> CodingRun:
+        task = await self._tasks.get(task_id)
+        if task is None:
+            raise CodingTaskNotFound(task_id)
+        return await self._runs.ensure_run_started(
+            task_id=task_id,
+            instruction=task.prompt,
+            development_mode=True,
+            now=self._clock(),
+        )
+
+    async def fail_active_run(
+        self,
+        *,
+        task_id: str,
+        worker_id: str,
+        error_code: str,
+    ):
+        run = await self._runs.latest_run(task_id)
+        if run is None:
+            raise RuntimeError(f"coding run does not exist: {task_id}")
+        now = self._clock()
+        lease = await self._runs.acquire_execution_lease(
+            task_id=task_id,
+            run_id=run.run_id,
+            worker_id=worker_id,
+            now=now,
+            expires_at=now + timedelta(seconds=30),
+        )
+        if lease is None:
+            raise RunAlreadyLeased(task_id)
+        try:
+            committed = await self._runs.fail_run(
+                lease=lease,
+                error_code=error_code,
+                now=now,
+            )
+        except Exception:
+            await self._release_lease(lease)
+            raise
+        await self._release_lease(lease)
+        return committed.event
 
     async def start(self, *, task_id: str, instruction: str) -> CodingRun:
         previous = await self._runs.latest_run(task_id)
@@ -175,11 +219,19 @@ class CodingRunService:
                     )
                     await self._release_lease(lease)
                     return event
+            committed = await self._runs.complete_run(
+                lease=lease, now=self._clock()
+            )
+            await self._release_lease(lease)
+            return committed.event
+        except asyncio.CancelledError:
+            raise
         except Exception:
             if self._metrics is not None and lease.recovered:
                 self._metrics.coding_resume_total.labels(
                     outcome="recovery_required"
                 ).inc()
+            await self._release_lease(lease)
             raise
         return None
 

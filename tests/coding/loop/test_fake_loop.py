@@ -155,4 +155,5 @@ async def test_fake_loop_uses_atomic_phase_commands() -> None:
         "current_instruction" in checkpoint.loop_state
         for checkpoint in repository.checkpoints
     )
-    assert events[-1].type == "run.completed"
+    assert events[-1].type == "phase.completed"
+    assert not any(event.type == "run.completed" for event in events)

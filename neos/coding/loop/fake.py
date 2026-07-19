@@ -211,9 +211,4 @@ class FakeDurableCodingLoop:
             )
             yield committed.event
 
-        yield await deps.events.append(
-            task_id=input.task_id,
-            event_type="run.completed",
-            payload={"status": "completed"},
-            run_id=input.run_id,
-        )
+        return
