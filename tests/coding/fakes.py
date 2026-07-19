@@ -16,6 +16,9 @@ class InMemoryCodingRunRepository:
         self.created_runs.append(run)
         self.active_run = run
 
+    async def update_run(self, run) -> None:
+        self.active_run = run
+
     async def latest_run(self, task_id: str):
         if self.active_run is None or self.active_run.task_id != task_id:
             return None
@@ -50,3 +53,6 @@ class InMemoryCodingRunRepository:
             if request.task_id == task_id and request not in self.applied_steering:
                 return request
         return None
+
+    async def apply_steering(self, request) -> None:
+        self.applied_steering.append(request)

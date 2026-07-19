@@ -3,9 +3,15 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
+from neos.coding.application.run_service import (
+    CodingRunService,
+    InProcessRunInterrupter,
+)
 from neos.coding.outbox.dispatcher import CodingOutboxDispatcher
 from neos.coding.outbox.repository import PostgresCodingOutboxRepository
 from neos.coding.persistence.postgres import PostgresCodingService
+from neos.coding.repositories.run_repository import PostgresCodingRunRepository
+from neos.coding.repositories.task_repository import CodingTaskRepository
 from neos.coding.transport.base import CodingEventTransport, CodingTicketStore
 from neos.coding.transport.memory import (
     InMemoryWsTicketStore,
@@ -32,6 +38,12 @@ coding_outbox_dispatcher = CodingOutboxDispatcher(
 )
 coding_service = PostgresCodingService(
     db_manager.get_session, wake_outbox=coding_outbox_dispatcher.wake
+)
+coding_run_service = CodingRunService(
+    tasks=CodingTaskRepository(db_manager),
+    runs=PostgresCodingRunRepository(db_manager.get_session),
+    events=coding_service,
+    interrupter=InProcessRunInterrupter(),
 )
 
 

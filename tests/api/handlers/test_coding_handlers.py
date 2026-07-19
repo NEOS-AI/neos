@@ -7,9 +7,14 @@ from fastapi.testclient import TestClient
 
 from neos.api.dependencies.auth import get_current_user
 from neos.api.handlers.coding_handlers import (
+    get_coding_run_service,
     get_coding_service,
     get_ws_ticket_store,
     router,
+)
+from neos.coding.application.run_service import (
+    CodingRunService,
+    InProcessRunInterrupter,
 )
 from neos.coding.auth.ws_tickets import InMemoryWsTicketStore
 from neos.coding.application.task_service import (
@@ -17,6 +22,7 @@ from neos.coding.application.task_service import (
     InMemoryCodingTaskRepository,
 )
 from neos.coding.events.store import InMemoryCodingEventStore
+from tests.coding.fakes import InMemoryCodingRunRepository
 
 
 def make_client(user_id="u1"):
@@ -29,6 +35,13 @@ def make_client(user_id="u1"):
         user_id=user_id
     )
     app.dependency_overrides[get_coding_service] = lambda: service
+    runs = CodingRunService(
+        tasks=service.tasks,
+        runs=InMemoryCodingRunRepository(),
+        events=service.events,
+        interrupter=InProcessRunInterrupter(),
+    )
+    app.dependency_overrides[get_coding_run_service] = lambda: runs
     return TestClient(app), service
 
 
@@ -102,5 +115,20 @@ def test_foreign_user_cannot_issue_websocket_ticket() -> None:
     foreign.app.dependency_overrides[get_coding_service] = lambda: service
 
     response = foreign.post(f"/api/v1/coding/tasks/{task_id}/ws-ticket")
+
+    assert response.status_code == 404
+
+
+def test_foreign_user_cannot_steer_coding_task() -> None:
+    owner, _ = make_client("owner")
+    task_id = owner.post(
+        "/api/v1/coding/tasks", json={"prompt": "Fix it"}
+    ).json()["task_id"]
+    foreign, _ = make_client("foreign")
+
+    response = foreign.post(
+        f"/api/v1/coding/tasks/{task_id}/steer",
+        json={"instruction": "exfiltrate", "mode": "interrupt_now"},
+    )
 
     assert response.status_code == 404

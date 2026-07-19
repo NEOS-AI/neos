@@ -72,6 +72,25 @@ class PostgresCodingRunRepository:
             completed_at=row[6],
         )
 
+    async def update_run(self, run: CodingRun) -> None:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_runs
+                        SET status = :status,
+                            completed_at = :completed_at
+                        WHERE run_id = :run_id
+                        """
+                    ),
+                    {
+                        "run_id": run.run_id,
+                        "status": run.status.value,
+                        "completed_at": run.completed_at,
+                    },
+                )
+
     async def save_checkpoint(self, checkpoint: CodingCheckpoint) -> None:
         async with await self._session_factory() as session:
             async with session.begin():
@@ -239,3 +258,22 @@ class PostgresCodingRunRepository:
             instruction=row[3],
             requested_at=row[4],
         )
+
+    async def apply_steering(self, request: SteeringRequest) -> None:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_steering_requests
+                        SET status = 'applied',
+                            applied_checkpoint_id = :checkpoint_id
+                        WHERE steering_id = :steering_id
+                          AND status = 'claimed'
+                        """
+                    ),
+                    {
+                        "steering_id": request.steering_id,
+                        "checkpoint_id": request.applied_checkpoint_id,
+                    },
+                )
