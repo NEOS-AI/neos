@@ -2,6 +2,13 @@
 Document API Example
 
 이 예제는 neos의 문서 관리 REST API를 사용하는 방법을 보여줍니다.
+
+⚠️ 이 라우터의 모든 엔드포인트는 인증을 요구한다
+(`get_current_active_user` / `get_owned_document`). 이 스크립트는 자격 증명을
+보내지 않으므로, 그대로 실행하면 모든 호출이 401을 반환하고 업로드부터 중단된다.
+401은 경로 오류가 아니라 인증 누락이다. 실제로 실행하려면 요청에
+`Authorization: Bearer <JWT>` 또는 `X-API-Key` 헤더를 추가해야 한다
+(`neos/api/dependencies/auth.py`).
 """
 
 import requests
@@ -9,7 +16,22 @@ import json
 from pathlib import Path
 
 # API 기본 URL
-BASE_URL = "http://localhost:8518/api/v1/documents"
+#
+# `documents`가 두 번 반복되는 것은 오타가 아니라 실제 운영 경로다.
+# RAG 문서 라우터는 자기 자신이 `APIRouter(prefix="/documents")`이고
+# (`neos/api/handlers/document_handlers.py:34`), `neos/main.py:532`가 이를 다시
+# `prefix="/api/v1/documents"`로 마운트한다 → `/api/v1/documents/documents/...`
+#
+# 백엔드의 중복 prefix를 제거해서 "고치면" 안 된다. `/api/v1/documents`는 이미
+# 아티팩트 라우터(`neos/api/handlers/artifact_handlers.py:21`, `main.py:548`에서
+# `prefix="/api/v1"`로 마운트)가 `GET/DELETE /{document_id}`로 점유하고 있다.
+# Starlette은 먼저 등록된 라우트가 이기므로(RAG=532 < 아티팩트=548), 중복 prefix를
+# 제거하면 프론트가 실제로 사용 중인 아티팩트 경로를 RAG가 가로챈다.
+# 백엔드 테스트도 이 경로를 의도적으로 고정한다:
+# `tests/api/handlers/test_document_authorization.py:20,44`
+#
+# 자세한 배경과 근본 해결(네임스페이스 분리) 계획은 `web/lib/backend-routes.ts` 참조.
+BASE_URL = "http://localhost:8518/api/v1/documents/documents"
 
 
 def example_upload_document():
@@ -41,10 +63,9 @@ OpenAI의 사명은 안전한 인공지능을 개발하는 것입니다.
 
     with open(test_file, "rb") as f:
         files = {"file": (test_file.name, f, "text/plain")}
-        data = {
-            "user_id": "api_test_user",
-            "metadata": json.dumps({"category": "AI", "company": "OpenAI"}),
-        }
+        # 소유자는 인증된 사용자에서 결정된다. `user_id` 폼 필드는 deprecated이며
+        # 서버가 무시한다 (`document_handlers.py:41,63`).
+        data = {"metadata": json.dumps({"category": "AI", "company": "OpenAI"})}
 
         response = requests.post(url, files=files, data=data)
 
@@ -61,14 +82,15 @@ OpenAI의 사명은 안전한 인공지능을 개발하는 것입니다.
         return None
 
 
-def example_list_documents(user_id="api_test_user"):
+def example_list_documents():
     """문서 목록 조회 API 예제"""
     print("\n" + "=" * 80)
     print("2. 문서 목록 조회 API")
     print("=" * 80)
 
     url = f"{BASE_URL}/"
-    params = {"user_id": user_id, "limit": 10}
+    # `user_id` 쿼리 파라미터도 deprecated이며 무시된다 (`document_handlers.py:86,102`).
+    params = {"limit": 10}
 
     response = requests.get(url, params=params)
 
@@ -156,14 +178,16 @@ def example_get_knowledge_graph(document_id: int):
         print(f"❌ 조회 실패: {response.status_code}")
 
 
-def example_search_documents(query: str, user_id="api_test_user"):
+def example_search_documents(query: str):
     """문서 검색 API 예제"""
     print("\n" + "=" * 80)
     print(f"6. 문서 검색 API: '{query}'")
     print("=" * 80)
 
     url = f"{BASE_URL}/search"
-    payload = {"query": query, "top_k": 5, "user_id": user_id}
+    # 검색 범위는 인증된 사용자로 한정된다. 요청 본문의 `user_id`는 deprecated이며
+    # 무시된다 (`document_models.py:79`, `document_handlers.py:289`).
+    payload = {"query": query, "top_k": 5}
 
     response = requests.post(url, json=payload)
 
@@ -223,7 +247,7 @@ def main():
         example_get_knowledge_graph(document_id)
 
         # 6. 문서 검색
-        example_search_documents("OpenAI GPT", user_id="api_test_user")
+        example_search_documents("OpenAI GPT")
 
         # 7. 문서 삭제 (주석 처리 - 필요시 해제)
         # example_delete_document(document_id)
