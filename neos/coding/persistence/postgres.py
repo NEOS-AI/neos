@@ -79,6 +79,10 @@ class PostgresCodingService:
         event_type: str,
         payload: Mapping[str, Any],
         now: datetime | None = None,
+        run_id: str | None = None,
+        turn_id: str | None = None,
+        tool_call_id: str | None = None,
+        checkpoint_id: str | None = None,
     ) -> CodingEvent:
         async with await self._session_factory() as session:
             async with session.begin():
@@ -88,6 +92,10 @@ class PostgresCodingService:
                     event_type=event_type,
                     payload=payload,
                     now=now or datetime.now(UTC),
+                    run_id=run_id,
+                    turn_id=turn_id,
+                    tool_call_id=tool_call_id,
+                    checkpoint_id=checkpoint_id,
                 )
         if self._wake_outbox is not None:
             self._wake_outbox()
@@ -101,6 +109,10 @@ class PostgresCodingService:
         event_type: str,
         payload: Mapping[str, Any],
         now: datetime,
+        run_id: str | None = None,
+        turn_id: str | None = None,
+        tool_call_id: str | None = None,
+        checkpoint_id: str | None = None,
     ) -> CodingEvent:
         await session.execute(
             text("SELECT task_id FROM coding_tasks WHERE task_id = :task_id FOR UPDATE"),
@@ -128,15 +140,21 @@ class PostgresCodingService:
             type=event_type,
             payload=dict(payload),
             created_at=now,
+            run_id=run_id,
+            turn_id=turn_id,
+            tool_call_id=tool_call_id,
+            checkpoint_id=checkpoint_id,
         )
         await session.execute(
             text(
                 """
                 INSERT INTO coding_events
-                    (event_id, task_id, seq, version, event_type, payload, created_at)
+                    (event_id, task_id, seq, version, event_type, payload, created_at,
+                     run_id, turn_id, tool_call_id, checkpoint_id)
                 VALUES
                     (:event_id, :task_id, :seq, 1, :event_type,
-                     CAST(:payload AS JSONB), :created_at)
+                     CAST(:payload AS JSONB), :created_at,
+                     :run_id, :turn_id, :tool_call_id, :checkpoint_id)
                 """
             ),
             {
@@ -146,6 +164,10 @@ class PostgresCodingService:
                 "event_type": event_type,
                 "payload": __import__("json").dumps(dict(payload)),
                 "created_at": now,
+                "run_id": run_id,
+                "turn_id": turn_id,
+                "tool_call_id": tool_call_id,
+                "checkpoint_id": checkpoint_id,
             },
         )
         await session.execute(
@@ -203,7 +225,7 @@ class PostgresCodingService:
                 text(
                     """
                     SELECT version, task_id, seq, event_id, event_type, payload,
-                           created_at, run_id, turn_id, tool_call_id
+                           created_at, run_id, turn_id, tool_call_id, checkpoint_id
                     FROM coding_events
                     WHERE task_id = :task_id AND seq > :after_seq
                     ORDER BY seq ASC LIMIT :limit
@@ -217,6 +239,7 @@ class PostgresCodingService:
                 version=row[0], task_id=row[1], seq=row[2], event_id=row[3],
                 type=row[4], payload=row[5], created_at=row[6], run_id=row[7],
                 turn_id=row[8], tool_call_id=row[9],
+                checkpoint_id=row[10],
             )
             for row in rows
         ]

@@ -28,6 +28,7 @@ class CodingEventResponse(BaseModel):
     run_id: str | None = None
     turn_id: str | None = None
     tool_call_id: str | None = None
+    checkpoint_id: str | None = None
 
 
 class CodingEventListResponse(BaseModel):
@@ -38,4 +39,3 @@ class CodingEventListResponse(BaseModel):
 class CodingTaskSnapshotResponse(BaseModel):
     task: CodingTaskResponse
     head_seq: int
-

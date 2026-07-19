@@ -1,3 +1,5 @@
+import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -40,6 +42,26 @@ def test_create_task_returns_202_and_replayable_created_event() -> None:
     replay = client.get(f"/api/v1/coding/tasks/{task_id}/events?after_seq=0")
     assert replay.status_code == 200
     assert replay.json()["events"][0]["type"] == "task.created"
+
+
+def test_event_replay_exposes_checkpoint_identity() -> None:
+    client, service = make_client()
+    task_id = client.post(
+        "/api/v1/coding/tasks", json={"prompt": "Fix it"}
+    ).json()["task_id"]
+    asyncio.run(
+        service.events.append(
+            task_id=task_id,
+            event_type="checkpoint.created",
+            payload={},
+            now=datetime(2026, 7, 19, tzinfo=UTC),
+            checkpoint_id="cc_1",
+        )
+    )
+
+    replay = client.get(f"/api/v1/coding/tasks/{task_id}/events?after_seq=1")
+
+    assert replay.json()["events"][0]["checkpoint_id"] == "cc_1"
 
 
 def test_foreign_task_is_hidden_as_404() -> None:

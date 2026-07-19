@@ -9,5 +9,5 @@ export type CodingEvent = {
   run_id?: string | null;
   turn_id?: string | null;
   tool_call_id?: string | null;
+  checkpoint_id?: string | null;
 };
-

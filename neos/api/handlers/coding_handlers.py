@@ -49,6 +49,7 @@ def event_response(event: CodingEvent) -> dict:
         "run_id": event.run_id,
         "turn_id": event.turn_id,
         "tool_call_id": event.tool_call_id,
+        "checkpoint_id": event.checkpoint_id,
     }
 
 

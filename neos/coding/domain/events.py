@@ -16,6 +16,7 @@ class CodingEvent:
     run_id: str | None = None
     turn_id: str | None = None
     tool_call_id: str | None = None
+    checkpoint_id: str | None = None
 
 
 def make_event(
@@ -29,6 +30,7 @@ def make_event(
     run_id: str | None = None,
     turn_id: str | None = None,
     tool_call_id: str | None = None,
+    checkpoint_id: str | None = None,
 ) -> CodingEvent:
     if not task_id:
         raise ValueError("task_id cannot be empty")
@@ -47,4 +49,5 @@ def make_event(
         run_id=run_id,
         turn_id=turn_id,
         tool_call_id=tool_call_id,
+        checkpoint_id=checkpoint_id,
     )

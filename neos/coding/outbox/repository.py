@@ -60,7 +60,7 @@ class PostgresCodingOutboxRepository:
                                event.version, event.task_id, event.seq,
                                event.event_id, event.event_type, event.payload,
                                event.created_at, event.run_id, event.turn_id,
-                               event.tool_call_id
+                               event.tool_call_id, event.checkpoint_id
                         FROM claimed
                         JOIN coding_events event
                           ON event.event_id = claimed.event_id
@@ -129,5 +129,6 @@ class PostgresCodingOutboxRepository:
                 run_id=row[9],
                 turn_id=row[10],
                 tool_call_id=row[11],
+                checkpoint_id=row[12],
             ),
         )

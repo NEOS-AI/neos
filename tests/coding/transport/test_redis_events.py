@@ -81,6 +81,7 @@ def event(seq: int = 1) -> CodingEvent:
         payload={"delta": "hi"},
         now=datetime(2026, 7, 18, tzinfo=UTC),
         run_id="run_1",
+        checkpoint_id="cc_1",
     )
 
 

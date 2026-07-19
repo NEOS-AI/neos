@@ -24,6 +24,7 @@ class InMemoryCodingEventStore:
         run_id: str | None = None,
         turn_id: str | None = None,
         tool_call_id: str | None = None,
+        checkpoint_id: str | None = None,
     ) -> CodingEvent:
         async with self._lock:
             event = make_event(
@@ -36,6 +37,7 @@ class InMemoryCodingEventStore:
                 run_id=run_id,
                 turn_id=turn_id,
                 tool_call_id=tool_call_id,
+                checkpoint_id=checkpoint_id,
             )
             self._events[task_id].append(event)
             return event
