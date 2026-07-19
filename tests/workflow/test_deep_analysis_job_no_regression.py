@@ -48,11 +48,16 @@ def test_blocking_chat_node_is_gone_after_phase_3b():
     assert "_deep_analysis_dispatch_node" in source
 
 
-def test_deep_analysis_node_not_registered_when_flag_is_off():
-    """D18의 구조적 무회귀: 플래그가 꺼져 있으면 노드가 등록되지 않는다."""
-    from neos.config.settings import settings
+def test_deep_analysis_ships_disabled_in_code():
+    """코드 기본값은 off다 -- 켜는 것은 배포 설정의 결정이다.
 
-    assert settings.config.deep_analysis.enabled is False
+    예전에는 런타임 `settings`를 단언했는데, 그러면 `config/neos.default.yaml`이
+    플래그를 켜는 순간 깨지면서도 정작 "코드가 꺼진 채로 출하된다"는 계약은
+    검증하지 못한다. 스키마 기본값을 직접 본다.
+    """
+    from neos.config.schema import DeepAnalysisConfig
+
+    assert DeepAnalysisConfig().enabled is False
 
 
 def test_job_service_does_not_import_langgraph_or_langchain():

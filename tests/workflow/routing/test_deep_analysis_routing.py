@@ -10,8 +10,17 @@ pytestmark = pytest.mark.no_db
 
 
 def test_deep_analysis_settings_defaults():
-    assert settings.DEEP_ANALYSIS_ENABLED is False
-    assert settings.DEEP_ANALYSIS_COMPLEXITY_THRESHOLD == 0.5
+    """스키마 기본값은 off다.
+
+    배포 값은 `config/neos.default.yaml`이 정하므로 여기서 런타임 설정을
+    단언하면 안 된다 -- 플래그를 켜는 순간 이 테스트가 깨지고, 정작 검증하려던
+    "코드 기본값" 계약은 확인하지 못한다.
+    """
+    from neos.config.schema import DeepAnalysisConfig
+
+    defaults = DeepAnalysisConfig()
+    assert defaults.enabled is False
+    assert defaults.complexity_threshold == 0.5
 
 
 def test_deep_analysis_enum_values():
@@ -100,8 +109,8 @@ def test_no_regression_deep_analysis_off_by_default():
     쿼리는 하네스("deep_analysis")로 라우팅되지 않고, 하네스 도입 이전과 동일한
     recursive/hyper_deep/base 경로로 간다. 여기서는 recursive/hyper_deep도 비활성인
     구성으로 base_route(use_orchestrators)에 떨어짐을 명시적으로 고정한다."""
-    assert settings.DEEP_ANALYSIS_ENABLED is False  # sanity: 실제 기본값도 False
-
+    # 배포 값(config/neos.default.yaml)에 의존하지 않는다 -- 아래에서 플래그를
+    # 명시적으로 끄고 그 경로를 검증한다.
     state = _state(IntentType.DEEP_RESEARCH.value, 0.9)
 
     with patch("neos.workflow.routing.orchestrator_router.settings") as mock_settings:
