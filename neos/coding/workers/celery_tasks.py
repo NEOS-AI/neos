@@ -34,18 +34,27 @@ RETRY_DELAYS = (5, 15, 45)
 )
 def execute_coding_task(self, task_id: str) -> dict[str, str]:
     worker_id = f"celery-{self.request.id or uuid4().hex}"
+    metrics.coding_worker_active_tasks.inc()
     try:
         outcome = asyncio.run(
             run_coding_delivery(task_id=task_id, worker_id=worker_id)
         )
+        metrics.coding_worker_tasks_total.labels(
+            outcome=outcome.value
+        ).inc()
     except (
         ConnectionError,
         OSError,
         SQLAlchemyError,
         SoftTimeLimitExceeded,
     ) as exc:
+        metrics.coding_worker_retry_total.labels(
+            reason="infrastructure"
+        ).inc()
         retry_index = min(self.request.retries, len(RETRY_DELAYS) - 1)
         raise self.retry(exc=exc, countdown=RETRY_DELAYS[retry_index])
+    finally:
+        metrics.coding_worker_active_tasks.dec()
     return {"task_id": task_id, "outcome": outcome.value}
 
 
@@ -79,6 +88,15 @@ def reconcile_coding_tasks() -> dict[str, int]:
                 "Coding reconciliation dispatch failed",
                 extra={"task_id": task_id},
             )
+    metrics.coding_reconciliation_tasks_total.labels(
+        outcome="discovered"
+    ).inc(len(task_ids))
+    metrics.coding_reconciliation_tasks_total.labels(
+        outcome="enqueued"
+    ).inc(enqueued)
+    metrics.coding_reconciliation_tasks_total.labels(
+        outcome="failed"
+    ).inc(failed)
     return {
         "discovered": len(task_ids),
         "enqueued": enqueued,

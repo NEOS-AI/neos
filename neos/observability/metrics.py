@@ -184,6 +184,35 @@ class EnterpriseMetricsCollector:
             "Active development coding supervisor tasks",
             registry=self.registry,
         )
+        self.coding_worker_tasks_total = Counter(
+            "coding_worker_tasks_total",
+            "Coding Celery worker task outcomes",
+            ["outcome"],
+            registry=self.registry,
+        )
+        self.coding_worker_retry_total = Counter(
+            "coding_worker_retry_total",
+            "Coding Celery worker retries",
+            ["reason"],
+            registry=self.registry,
+        )
+        self.coding_worker_active_tasks = Gauge(
+            "coding_worker_active_tasks",
+            "Active coding Celery worker tasks",
+            registry=self.registry,
+        )
+        self.coding_dispatch_total = Counter(
+            "coding_dispatch_total",
+            "Coding task dispatch attempts",
+            ["source", "outcome"],
+            registry=self.registry,
+        )
+        self.coding_reconciliation_tasks_total = Counter(
+            "coding_reconciliation_tasks_total",
+            "Coding reconciliation task outcomes",
+            ["outcome"],
+            registry=self.registry,
+        )
 
         # === LLM API Metrics ===
 
