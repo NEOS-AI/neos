@@ -80,10 +80,12 @@ portion. The actual value must not exceed the reservation. Such a result would
 invalidate the conservative-bound contract and raises
 `TokenBudgetContractError`; it is never silently clamped.
 
-Provider errors and task cancellation release the reservation only after a
-durable release record is written. Cassette replay follows the same reservation
-and settlement path using the recorded response usage, without changing the
-cassette key or payload format.
+An error before dispatch releases the reservation only after a durable release
+record is written. Once provider dispatch begins, an exception or task
+cancellation leaves the reservation outstanding because external usage is
+unknown. Recovery and the live budget both treat that amount as fully consumed.
+Cassette replay follows the same reservation and settlement path using the
+recorded response usage, without changing the cassette key or payload format.
 
 ## Durable reserve and settle protocol
 
@@ -96,7 +98,10 @@ Each provider attempt has a unique `reservation_id` and records:
    stage/model metadata, and reservation ID;
 2. exactly one terminal event:
    - `token_budget_settled` with actual usage, or
-   - `token_budget_released` when no provider response was obtained.
+   - `token_budget_released` only when dispatch did not begin.
+
+A dispatched call that ends without usage data intentionally has no terminal
+event and remains fully charged.
 
 The reserve event is checkpointed before the provider request begins. The
 terminal event is checkpointed before the released capacity becomes available
@@ -165,7 +170,9 @@ two-judgment checks, and discovery turns follow the same rule.
 - concurrent reservations never exceed the cap;
 - settlement releases unused reservation capacity;
 - insufficient input or output room rejects before dispatch;
-- provider error and cancellation persist a release before capacity returns;
+- pre-dispatch failure persists a release before capacity returns;
+- provider error and cancellation after dispatch leave a fully consumed
+  outstanding reservation;
 - actual usage greater than reservation raises a contract error;
 - recovery counts settled actual usage, released usage as zero, and orphaned
   reservations at their full reserved amount.
