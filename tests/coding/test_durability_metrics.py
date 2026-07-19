@@ -56,6 +56,14 @@ def test_coding_metrics_expose_only_bounded_labels() -> None:
     assert collector.coding_lease_contention_total._labelnames == ("outcome",)
 
 
+def test_supervisor_metrics_use_only_bounded_labels() -> None:
+    collector = EnterpriseMetricsCollector(CollectorRegistry())
+
+    assert collector.coding_supervisor_tasks_total._labelnames == ("outcome",)
+    assert collector.coding_supervisor_retry_total._labelnames == ("reason",)
+    assert collector.coding_supervisor_active_tasks._labelnames == ()
+
+
 async def test_normal_safe_point_continuation_is_not_counted_as_resume() -> None:
     metrics = RecordingCodingMetrics()
     harness = DurableCodingHarness(metrics=metrics)

@@ -127,6 +127,8 @@ class CodingDevelopmentSupervisor:
                 self._run_task(task_id), name=f"coding-dev-run-{task_id}"
             )
             self._active[task_id] = runner
+            self._record_task_metric("started")
+            self._change_active_tasks(1)
             runner.add_done_callback(
                 lambda completed, task_id=task_id: self._runner_done(
                     task_id, completed
@@ -138,8 +140,10 @@ class CodingDevelopmentSupervisor:
     ) -> None:
         if self._active.get(task_id) is completed:
             self._active.pop(task_id, None)
+            self._change_active_tasks(-1)
         if not completed.cancelled() and completed.exception() is not None:
-            self._record_outcome("runner_error")
+            self.outcomes.append("runner_error")
+            self._record_task_metric("failed")
         if not self._queued and not self._active:
             self._idle.set()
 
@@ -202,7 +206,12 @@ class CodingDevelopmentSupervisor:
 
     def _record_outcome(self, outcome: str) -> None:
         self.outcomes.append(outcome)
-        self._increment_metric("coding_supervisor_outcome_total", outcome=outcome)
+        self._record_task_metric(outcome)
+
+    def _record_task_metric(self, outcome: str) -> None:
+        self._increment_metric(
+            "coding_supervisor_tasks_total", outcome=outcome
+        )
 
     def _record_retry(self, reason: str) -> None:
         self._increment_metric("coding_supervisor_retry_total", reason=reason)
@@ -214,3 +223,12 @@ class CodingDevelopmentSupervisor:
         metric = getattr(self._metrics, name, None)
         if metric is not None:
             metric.labels(**labels).inc()
+
+    def _change_active_tasks(self, amount: int) -> None:
+        metric = getattr(self._metrics, "coding_supervisor_active_tasks", None)
+        if metric is None:
+            return
+        if amount > 0:
+            metric.inc(amount)
+        else:
+            metric.dec(-amount)

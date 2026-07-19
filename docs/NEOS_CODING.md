@@ -887,7 +887,10 @@ security review gate 없이 remote untrusted repository 지원 플래그를 켜�
 - Durable instruction restore and fenced tool claim: 구현 완료
 - PostgreSQL fault/concurrency integration suite: 구현 완료 (CI에서
   `CODING_TEST_DATABASE_URL` 설정 필요)
-- Development worker supervisor와 automatic task startup: 다음 vertical slice로 이관
+- Development supervisor notification + PostgreSQL reconciliation: 구현 완료
+- Automatic fake-loop task startup and restart recovery: 구현 완료
+- Atomic run/task start, completion, and failure lifecycle: 구현 완료
+- Production Celery coding worker and cross-process wake bus: 다음 vertical slice로 이관
 - Real model adapter, sandbox command, permission execution: 다음 vertical slice로 이관
 
 ### Phase 1 — Docker sandbox와 sidecar

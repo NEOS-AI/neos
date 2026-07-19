@@ -86,6 +86,30 @@ async def _seed_run(session_factory):
     return task_id, run_id
 
 
+async def _seed_queued_task(session_factory):
+    task_id = f"ct_{uuid4().hex}"
+    async with await session_factory() as session:
+        async with session.begin():
+            owner = await session.execute(text("SELECT user_id FROM users LIMIT 1"))
+            owner_row = owner.first()
+            if owner_row is None:
+                pytest.skip("prepared PostgreSQL schema has no test user")
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO coding_tasks
+                        (task_id, owner_id, prompt, status, version, last_seq,
+                         created_at, updated_at, last_activity_at)
+                    VALUES
+                        (:task_id, :owner_id, 'Fix it', 'queued', 1, 0,
+                         :now, :now, :now)
+                    """
+                ),
+                {"task_id": task_id, "owner_id": owner_row[0], "now": NOW},
+            )
+    return task_id
+
+
 @pytest.mark.integration
 async def test_checkpoint_event_fk_and_phase_commit_are_atomic(
     coding_postgres_session_factory,
@@ -349,3 +373,113 @@ async def test_expired_steering_claim_is_recovered_once(
         )
         row = result.first()
     assert row == (1, 1, 1)
+
+
+@pytest.mark.integration
+async def test_concurrent_start_creates_one_canonical_run(
+    coding_postgres_session_factory,
+) -> None:
+    task_id = await _seed_queued_task(coding_postgres_session_factory)
+    repository = PostgresCodingRunRepository(coding_postgres_session_factory)
+
+    async def start():
+        return await repository.ensure_run_started(
+            task_id=task_id,
+            instruction="Fix it",
+            development_mode=True,
+            now=NOW,
+        )
+
+    first, second = await asyncio.gather(start(), start())
+
+    assert first.run_id == second.run_id
+    async with await coding_postgres_session_factory() as session:
+        result = await session.execute(
+            text(
+                """
+                SELECT
+                    (SELECT count(*) FROM coding_runs
+                     WHERE task_id = :task_id),
+                    (SELECT count(*) FROM coding_events
+                     WHERE task_id = :task_id
+                       AND event_type = 'run.started')
+                """
+            ),
+            {"task_id": task_id},
+        )
+        row = result.first()
+    assert row == (1, 1)
+
+
+@pytest.mark.integration
+async def test_run_completion_rolls_back_when_event_insert_fails(
+    coding_postgres_session_factory,
+) -> None:
+    task_id, run_id = await _seed_run(coding_postgres_session_factory)
+    repository = PostgresCodingRunRepository(coding_postgres_session_factory)
+    lease = await repository.acquire_execution_lease(
+        task_id=task_id,
+        run_id=run_id,
+        worker_id="worker-a",
+        now=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+    )
+    assert lease is not None
+    async with await coding_postgres_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text(
+                    """
+                    CREATE OR REPLACE FUNCTION fail_run_completed()
+                    RETURNS trigger LANGUAGE plpgsql AS $$
+                    BEGIN
+                        IF NEW.event_type = 'run.completed' THEN
+                            RAISE EXCEPTION 'injected run completion failure';
+                        END IF;
+                        RETURN NEW;
+                    END;
+                    $$
+                    """
+                )
+            )
+            await session.execute(
+                text(
+                    """
+                    CREATE TRIGGER fail_run_completed_trigger
+                    BEFORE INSERT ON coding_events
+                    FOR EACH ROW EXECUTE FUNCTION fail_run_completed()
+                    """
+                )
+            )
+    try:
+        with pytest.raises(Exception, match="injected run completion failure"):
+            await repository.complete_run(lease=lease, now=NOW)
+    finally:
+        async with await coding_postgres_session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        "DROP TRIGGER IF EXISTS fail_run_completed_trigger "
+                        "ON coding_events"
+                    )
+                )
+                await session.execute(
+                    text("DROP FUNCTION IF EXISTS fail_run_completed()")
+                )
+    async with await coding_postgres_session_factory() as session:
+        result = await session.execute(
+            text(
+                """
+                SELECT
+                    (SELECT status FROM coding_runs WHERE run_id = :run_id),
+                    (SELECT status FROM coding_tasks WHERE task_id = :task_id),
+                    (SELECT count(*) FROM coding_events
+                     WHERE task_id = :task_id),
+                    (SELECT count(*) FROM coding_event_outbox
+                     WHERE task_id = :task_id)
+                """
+            ),
+            {"task_id": task_id, "run_id": run_id},
+        )
+        row = result.first()
+    assert row == ("running", "running", 0, 0)
