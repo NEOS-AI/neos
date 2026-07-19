@@ -7,10 +7,14 @@ from neos.coding.application.run_service import (
     CodingRunService,
     InProcessRunInterrupter,
 )
+from neos.coding.application.snapshot_service import CodingSnapshotService
 from neos.coding.outbox.dispatcher import CodingOutboxDispatcher
 from neos.coding.outbox.repository import PostgresCodingOutboxRepository
 from neos.coding.persistence.postgres import PostgresCodingService
 from neos.coding.repositories.run_repository import PostgresCodingRunRepository
+from neos.coding.repositories.projection_repository import (
+    PostgresCodingProjectionRepository,
+)
 from neos.coding.repositories.task_repository import CodingTaskRepository
 from neos.coding.transport.base import CodingEventTransport, CodingTicketStore
 from neos.coding.transport.memory import (
@@ -44,6 +48,9 @@ coding_run_service = CodingRunService(
     runs=PostgresCodingRunRepository(db_manager.get_session),
     events=coding_service,
     interrupter=InProcessRunInterrupter(),
+)
+coding_snapshot_service = CodingSnapshotService(
+    PostgresCodingProjectionRepository(db_manager.get_session)
 )
 
 

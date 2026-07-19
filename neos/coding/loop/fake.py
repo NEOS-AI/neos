@@ -1,8 +1,14 @@
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from datetime import datetime
 
 from neos.coding.domain.events import CodingEvent
-from neos.coding.domain.phases import CodingCheckpoint, CodingPhaseKind
+from neos.coding.domain.phases import (
+    CodingCheckpoint,
+    CodingPhaseKind,
+    CodingPhaseStatus,
+    next_phase_attempt,
+)
 from neos.coding.loop.base import LoopDependencies, LoopInput
 
 
@@ -35,10 +41,22 @@ class FakeDurableCodingLoop:
         )
 
         for index, phase in enumerate(PHASES[start_index:], start=start_index):
+            phase_record = next_phase_attempt(
+                task_id=input.task_id,
+                run_id=input.run_id,
+                kind=phase,
+                existing=await deps.repository.phase_history(input.task_id),
+                now=self._clock(),
+            )
+            await deps.repository.save_phase(phase_record)
             yield await deps.events.append(
                 task_id=input.task_id,
                 event_type="phase.started",
-                payload={"phase": phase.value, "attempt": 1, "index": index},
+                payload={
+                    "phase": phase.value,
+                    "attempt": phase_record.attempt,
+                    "index": index,
+                },
                 run_id=input.run_id,
             )
 
@@ -71,7 +89,11 @@ class FakeDurableCodingLoop:
             completed = await deps.events.append(
                 task_id=input.task_id,
                 event_type="phase.completed",
-                payload={"phase": phase.value, "attempt": 1, **persisted},
+                payload={
+                    "phase": phase.value,
+                    "attempt": phase_record.attempt,
+                    **persisted,
+                },
                 run_id=input.run_id,
                 tool_call_id=tool_call_id,
                 checkpoint_id=checkpoint_id,
@@ -89,6 +111,13 @@ class FakeDurableCodingLoop:
                     },
                     workspace_revision=f"fake:{phase.value}:{index}",
                     created_at=self._clock(),
+                )
+            )
+            await deps.repository.save_phase(
+                replace(
+                    phase_record,
+                    status=CodingPhaseStatus.COMPLETED,
+                    completed_at=self._clock(),
                 )
             )
             yield completed

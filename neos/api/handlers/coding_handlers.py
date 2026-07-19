@@ -6,10 +6,11 @@ from neos.api.models.coding_models import (
     CodingSteerRequest,
     CodingSteerResponse,
     CodingTaskResponse,
-    CodingTaskSnapshotResponse,
+    CodingProjectionSnapshotResponse,
     CreateCodingTaskRequest,
 )
 from neos.coding.application.run_service import CodingRunService
+from neos.coding.application.snapshot_service import CodingSnapshotService
 from neos.coding.application.task_service import CodingTaskService
 from neos.coding.domain.errors import CodingTaskNotFound
 from neos.coding.domain.events import CodingEvent
@@ -18,6 +19,7 @@ from neos.coding.domain.phases import SteeringMode
 from neos.coding.runtime import (
     coding_run_service,
     coding_service,
+    coding_snapshot_service,
     get_coding_ticket_store,
 )
 from neos.coding.transport.base import CodingTicketStore
@@ -37,6 +39,10 @@ def get_ws_ticket_store() -> CodingTicketStore:
 
 def get_coding_run_service() -> CodingRunService:
     return coding_run_service
+
+
+def get_coding_snapshot_service() -> CodingSnapshotService:
+    return coding_snapshot_service
 
 
 def _task_response(task: CodingTask) -> dict:
@@ -104,16 +110,18 @@ async def steer_coding_task(
     return {"steering_id": steering.steering_id, "mode": steering.mode.value}
 
 
-@router.get("/tasks/{task_id}/snapshot", response_model=CodingTaskSnapshotResponse)
+@router.get(
+    "/tasks/{task_id}/snapshot", response_model=CodingProjectionSnapshotResponse
+)
 async def get_coding_task_snapshot(
     task_id: str,
     current_user: User = Depends(get_current_user),
-    service: CodingTaskService = Depends(get_coding_service),
+    snapshots: CodingSnapshotService = Depends(get_coding_snapshot_service),
 ):
-    snapshot = await service.snapshot(task_id, current_user.user_id)
+    snapshot = await snapshots.get_owned(task_id, current_user.user_id)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Coding task not found")
-    return {"task": _task_response(snapshot.task), "head_seq": snapshot.head_seq}
+    return snapshot
 
 
 @router.get("/tasks/{task_id}/events", response_model=CodingEventListResponse)

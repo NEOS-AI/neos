@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator, Mapping, Protocol
 
 from neos.coding.domain.events import CodingEvent
-from neos.coding.domain.phases import CodingCheckpoint
+from neos.coding.domain.phases import CodingCheckpoint, CodingPhase, CodingPhaseKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +28,12 @@ class CodingRunRepository(Protocol):
     async def record_tool_result(self, **record: Any) -> None: ...
 
     async def save_checkpoint(self, checkpoint: CodingCheckpoint) -> None: ...
+
+    async def phase_history(
+        self, task_id: str
+    ) -> tuple[tuple[CodingPhaseKind, int], ...]: ...
+
+    async def save_phase(self, phase: CodingPhase) -> None: ...
 
 
 class CodingLoopEventSink(Protocol):

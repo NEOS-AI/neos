@@ -9,6 +9,7 @@ from neos.api.dependencies.auth import get_current_user
 from neos.api.handlers.coding_handlers import (
     get_coding_run_service,
     get_coding_service,
+    get_coding_snapshot_service,
     get_ws_ticket_store,
     router,
 )
@@ -35,6 +36,31 @@ def make_client(user_id="u1"):
         user_id=user_id
     )
     app.dependency_overrides[get_coding_service] = lambda: service
+
+    class SnapshotAdapter:
+        async def get_owned(self, task_id, owner_id):
+            snapshot = await service.snapshot(task_id, owner_id)
+            if snapshot is None:
+                return None
+            return SimpleNamespace(
+                task=snapshot.task,
+                active_run=None,
+                phases=(),
+                tools=(),
+                approvals=(),
+                todos=(),
+                workspace=SimpleNamespace(
+                    revision="uninitialized", git_head=None, changed_files=()
+                ),
+                latest_checkpoint=None,
+                head_seq=snapshot.head_seq,
+                connection_basis="checkpoint",
+            )
+
+    service.projection_snapshots = SnapshotAdapter()
+    app.dependency_overrides[get_coding_snapshot_service] = (
+        lambda: service.projection_snapshots
+    )
     runs = CodingRunService(
         tasks=service.tasks,
         runs=InMemoryCodingRunRepository(),
@@ -84,6 +110,9 @@ def test_foreign_task_is_hidden_as_404() -> None:
     ).json()["task_id"]
     foreign, _ = make_client("foreign")
     foreign.app.dependency_overrides[get_coding_service] = lambda: service
+    foreign.app.dependency_overrides[get_coding_snapshot_service] = (
+        lambda: service.projection_snapshots
+    )
 
     response = foreign.get(f"/api/v1/coding/tasks/{task_id}/snapshot")
 
@@ -132,3 +161,66 @@ def test_foreign_user_cannot_steer_coding_task() -> None:
     )
 
     assert response.status_code == 404
+
+
+def test_snapshot_returns_phase_and_checkpoint_state() -> None:
+    client, _ = make_client("u1")
+    now = datetime(2026, 7, 19, tzinfo=UTC)
+
+    class SnapshotService:
+        async def get_owned(self, task_id, owner_id):
+            assert owner_id == "u1"
+            return SimpleNamespace(
+                task=SimpleNamespace(
+                    task_id=task_id,
+                    status="running",
+                    version=2,
+                    last_seq=14,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                active_run=SimpleNamespace(
+                    run_id="cr_2",
+                    attempt=2,
+                    status="running",
+                    resume_from_checkpoint_id="cc_10",
+                ),
+                phases=(
+                    SimpleNamespace(
+                        phase_id="phase_1",
+                        run_id="cr_1",
+                        kind="understand",
+                        attempt=1,
+                        status="completed",
+                        started_at=now,
+                        completed_at=now,
+                    ),
+                ),
+                tools=(),
+                approvals=(),
+                todos=(),
+                workspace=SimpleNamespace(
+                    revision="rev_12", git_head=None, changed_files=("app.py",)
+                ),
+                latest_checkpoint=SimpleNamespace(
+                    checkpoint_id="cc_12",
+                    run_id="cr_2",
+                    seq=12,
+                    loop_state={"phase_index": 0},
+                    workspace_revision="rev_12",
+                    created_at=now,
+                ),
+                head_seq=14,
+                connection_basis="checkpoint",
+            )
+
+    client.app.dependency_overrides[get_coding_snapshot_service] = SnapshotService
+
+    response = client.get("/api/v1/coding/tasks/ct_1/snapshot")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["head_seq"] == 14
+    assert body["active_run"]["run_id"] == "cr_2"
+    assert body["phases"][0]["kind"] == "understand"
+    assert body["connection_basis"] == "checkpoint"

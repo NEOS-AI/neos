@@ -36,9 +36,56 @@ class CodingEventListResponse(BaseModel):
     events: list[CodingEventResponse]
 
 
-class CodingTaskSnapshotResponse(BaseModel):
+class CodingPhaseSnapshot(BaseModel):
+    phase_id: str
+    run_id: str
+    kind: str
+    attempt: int
+    status: str
+    started_at: datetime
+    completed_at: datetime | None
+
+
+class CodingRunSnapshot(BaseModel):
+    run_id: str
+    attempt: int
+    status: str
+    resume_from_checkpoint_id: str | None
+
+
+class CodingToolSnapshot(BaseModel):
+    tool_call_id: str
+    run_id: str
+    status: str
+    result: dict[str, Any] | None
+
+
+class CodingWorkspaceSnapshot(BaseModel):
+    revision: str
+    git_head: str | None
+    changed_files: list[str]
+
+
+class CodingCheckpointSnapshot(BaseModel):
+    checkpoint_id: str
+    run_id: str
+    seq: int
+    loop_state: dict[str, Any]
+    workspace_revision: str
+    created_at: datetime
+
+
+class CodingProjectionSnapshotResponse(BaseModel):
     task: CodingTaskResponse
+    active_run: CodingRunSnapshot | None
+    phases: list[CodingPhaseSnapshot]
+    tools: list[CodingToolSnapshot]
+    approvals: list[dict[str, Any]]
+    todos: list[dict[str, Any]]
+    workspace: CodingWorkspaceSnapshot
+    latest_checkpoint: CodingCheckpointSnapshot | None
     head_seq: int
+    connection_basis: Literal["checkpoint"]
 
 
 class CodingSteerRequest(BaseModel):

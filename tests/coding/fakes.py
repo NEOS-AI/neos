@@ -11,6 +11,7 @@ class InMemoryCodingRunRepository:
         self.interrupt_calls = []
         self.applied_steering = []
         self.steering_requests = []
+        self.phases = []
 
     async def create_run(self, run) -> None:
         self.created_runs.append(run)
@@ -56,3 +57,18 @@ class InMemoryCodingRunRepository:
 
     async def apply_steering(self, request) -> None:
         self.applied_steering.append(request)
+
+    async def phase_history(self, task_id: str):
+        return tuple(
+            (phase.kind, phase.attempt)
+            for phase in self.phases
+            if phase.task_id == task_id
+        )
+
+    async def save_phase(self, phase) -> None:
+        self.phases = [
+            existing
+            for existing in self.phases
+            if existing.phase_id != phase.phase_id
+        ]
+        self.phases.append(phase)
