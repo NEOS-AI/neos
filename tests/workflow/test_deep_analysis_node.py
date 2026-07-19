@@ -76,7 +76,7 @@ def _patch_dispatch(monkeypatch, *, submit=None, create_run=None):
 
     submitted = []
 
-    def default_submit(run_id, question="", profile="dev", **kw):
+    async def default_submit(run_id, question="", profile="dev", **kw):
         submitted.append((run_id, question, profile))
         return "inline"
 
@@ -202,6 +202,30 @@ async def test_dispatch_node_graceful_when_submission_fails(monkeypatch):
     )
     assert out["final_response"] == "심층 분석을 시작하지 못했습니다."
     assert out["deep_analysis_run_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_node_does_not_emit_started_when_broker_fails(monkeypatch):
+    from neos.tasks.deep_analysis_job_task import DeepAnalysisDispatchError
+    from neos.workflow import graph as graph_mod
+
+    async def fail_submit(*args, **kwargs):
+        raise DeepAnalysisDispatchError("runDISP1")
+
+    _patch_dispatch(monkeypatch, submit=fail_submit)
+    handler = _RecordingHandler()
+
+    out = await graph_mod.multi_agent_workflow._deep_analysis_dispatch_node(
+        {
+            "original_query": "private question",
+            "user_id": "u1",
+            "_event_handler": handler,
+        }
+    )
+
+    assert out["final_response"] == "심층 분석을 시작하지 못했습니다."
+    assert out["deep_analysis_run_id"] is None
+    assert handler.calls == []
 
 
 @pytest.mark.asyncio
