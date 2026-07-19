@@ -315,6 +315,38 @@ async def test_transcript_byte_cap_preserves_pending_multi_tool_structure() -> N
 
 
 @pytest.mark.asyncio
+async def test_tiny_completed_transcript_cap_fails_before_checkpoint() -> None:
+    config = AnthropicLoopConfig(
+        model="claude-test", system="code", max_transcript_bytes=8
+    )
+    h = harness([[TextDelta("finished"), completed()]], config=config)
+
+    with pytest.raises(CodingLoopFailure, match="transcript_budget_exceeded") as caught:
+        await collect(h)
+
+    assert caught.value.retryable is False
+    assert h.repository.checkpoints == []
+
+
+@pytest.mark.asyncio
+async def test_pending_tool_structure_over_cap_fails_before_execution() -> None:
+    config = AnthropicLoopConfig(
+        model="claude-test", system="code", max_transcript_bytes=250
+    )
+    calls = [
+        tool_call(f"tool_{index}", input={"content": "x" * 1000})
+        for index in range(10)
+    ]
+    h = harness([[*calls, completed()]], config=config)
+
+    with pytest.raises(CodingLoopFailure, match="transcript_budget_exceeded"):
+        await collect(h)
+
+    assert h.repository.checkpoints == []
+    assert h.executor.calls == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "config,code",
     [

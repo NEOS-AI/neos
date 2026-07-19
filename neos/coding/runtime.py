@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -202,6 +203,27 @@ def _create_real_coding_loop(
     )(sandboxes)
 
 
+def _close_provider_sync(provider) -> None:
+    error: list[BaseException] = []
+
+    def close() -> None:
+        try:
+            asyncio.run(provider.close())
+        except BaseException as caught:
+            error.append(caught)
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        close()
+    else:
+        thread = threading.Thread(target=close, name="coding-provider-close")
+        thread.start()
+        thread.join()
+    if error:
+        raise error[0]
+
+
 def create_development_coding_runtime(*, config: AppConfig | None = None) -> CodingRuntime:
     config = config or settings.config
     if (
@@ -214,54 +236,58 @@ def create_development_coding_runtime(*, config: AppConfig | None = None) -> Cod
         )
     if settings.CODING_FAKE_LOOP_ENABLED and config.coding_model.enabled:
         raise RuntimeError("fake and real coding loops cannot be enabled together")
-    if settings.CODING_FAKE_LOOP_ENABLED:
-        sandboxes = create_sandbox_provider(config.sandbox)
-        loop = FakeDurableCodingLoop(clock=lambda: datetime.now(UTC))
-    elif config.coding_model.enabled:
+    finish_loop = None
+    if config.coding_model.enabled:
         finish_loop = _prepare_real_coding_loop(config=config)
-        sandboxes = create_sandbox_provider(config.sandbox)
-        loop = finish_loop(sandboxes)
-    else:
-        sandboxes = create_sandbox_provider(config.sandbox)
-        loop = None
-    run_repository = PostgresCodingRunRepository(db_manager.get_session)
-    runtime = create_coding_runtime(
-        events=coding_service,
-        tasks=CodingTaskRepository(db_manager),
-        run_repository=run_repository,
-        projection_repository=PostgresCodingProjectionRepository(
-            db_manager.get_session
-        ),
-        loop=loop,
-        metrics_collector=metrics,
-        interrupter=InProcessRunInterrupter(),
-        sandboxes=sandboxes,
-    )
-    supervisor = None
-    if settings.CODING_FAKE_LOOP_ENABLED:
-        supervisor = CodingDevelopmentSupervisor(
-            runs=runtime.runs,
-            work_repository=run_repository,
-            metrics=metrics,
-            reconciliation_interval=(
-                settings.CODING_DEV_RECONCILIATION_SECONDS
+    sandboxes = create_sandbox_provider(config.sandbox)
+    try:
+        if settings.CODING_FAKE_LOOP_ENABLED:
+            loop = FakeDurableCodingLoop(clock=lambda: datetime.now(UTC))
+        elif finish_loop is not None:
+            loop = finish_loop(sandboxes)
+        else:
+            loop = None
+        run_repository = PostgresCodingRunRepository(db_manager.get_session)
+        runtime = create_coding_runtime(
+            events=coding_service,
+            tasks=CodingTaskRepository(db_manager),
+            run_repository=run_repository,
+            projection_repository=PostgresCodingProjectionRepository(
+                db_manager.get_session
             ),
-            discovery_batch_size=settings.CODING_DEV_DISCOVERY_BATCH_SIZE,
-            shutdown_timeout=settings.CODING_DEV_SHUTDOWN_SECONDS,
+            loop=loop,
+            metrics_collector=metrics,
+            interrupter=InProcessRunInterrupter(),
+            sandboxes=sandboxes,
         )
-    notifier = None
-    if supervisor is not None:
-        notifier = supervisor.notify
-    elif settings.CODING_CELERY_ENABLED:
-        validate_coding_worker_settings(settings)
+        supervisor = None
+        if settings.CODING_FAKE_LOOP_ENABLED:
+            supervisor = CodingDevelopmentSupervisor(
+                runs=runtime.runs,
+                work_repository=run_repository,
+                metrics=metrics,
+                reconciliation_interval=(
+                    settings.CODING_DEV_RECONCILIATION_SECONDS
+                ),
+                discovery_batch_size=settings.CODING_DEV_DISCOVERY_BATCH_SIZE,
+                shutdown_timeout=settings.CODING_DEV_SHUTDOWN_SECONDS,
+            )
+        notifier = None
+        if supervisor is not None:
+            notifier = supervisor.notify
+        elif settings.CODING_CELERY_ENABLED:
+            validate_coding_worker_settings(settings)
 
-        def notify_celery(task_id):
-            dispatcher = create_celery_dispatcher()
-            return dispatcher.enqueue(task_id, source=CodingDispatchSource.API)
+            def notify_celery(task_id):
+                dispatcher = create_celery_dispatcher()
+                return dispatcher.enqueue(task_id, source=CodingDispatchSource.API)
 
-        notifier = notify_celery
-    coding_service.set_task_created_notifier(notifier)
-    return replace(runtime, supervisor=supervisor)
+            notifier = notify_celery
+        coding_service.set_task_created_notifier(notifier)
+        return replace(runtime, supervisor=supervisor)
+    except BaseException:
+        _close_provider_sync(sandboxes)
+        raise
 
 
 def create_celery_dispatcher() -> CeleryCodingTaskDispatcher:

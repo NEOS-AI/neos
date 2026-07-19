@@ -435,7 +435,7 @@ class AnthropicCodingLoop:
             ),
         )
         if not preserve_tools:
-            return compacted_notice
+            return self._require_transcript_fit(compacted_notice)
         tool_start = next(
             (
                 index
@@ -449,14 +449,21 @@ class AnthropicCodingLoop:
             None,
         )
         if tool_start is None:
-            return compacted_notice
+            return self._require_transcript_fit(compacted_notice)
         active = tuple(
             self._compact_tool_message(message) for message in transcript[tool_start:]
         )
         candidate = compacted_notice + active
         if self._serialized_bytes(candidate) <= self._config.max_transcript_bytes:
             return candidate
-        return active
+        return self._require_transcript_fit(active)
+
+    def _require_transcript_fit(self, transcript):
+        if self._serialized_bytes(transcript) > self._config.max_transcript_bytes:
+            raise CodingLoopFailure(
+                "transcript_budget_exceeded", retryable=False
+            )
+        return tuple(transcript)
 
     @staticmethod
     def _compact_tool_message(message: CanonicalMessage) -> CanonicalMessage:
