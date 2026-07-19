@@ -4,13 +4,13 @@
 
 **Goal:** Ensure zero-token worker failures converge and inline deep-analysis jobs time out into a durable, resumable failed state.
 
-**Architecture:** Keep worker-failure convergence inside `Orchestrator` as a question-scoped in-memory safety signal, separate from ledger `fail_streak` and D15's general progress signal. Put the optional wall-clock timeout inside `jobs.execute_run()`'s existing durable failure boundary, and let only the inline dispatcher supply `job_soft_time_limit`; Celery retains its native soft/hard limits.
+**Architecture:** Detect systemic execution failure inside `Orchestrator` with a run-scoped counter of consecutive rounds in which every assigned worker failed; raise a typed exception instead of expanding the question tree. Put the optional wall-clock timeout inside `jobs.execute_run()`'s existing durable failure boundary, and let only the inline dispatcher supply `job_soft_time_limit`; both systemic failure and timeout become durable, resumable failed runs through the same job boundary.
 
 **Tech Stack:** Python 3.11 asyncio, pytest/pytest-asyncio, SQLAlchemy async session test doubles, Celery task dispatcher.
 
 ## Global Constraints
 
-- Reuse `max_stall_rounds` for the consecutive worker-failure cap; add no new configuration field.
+- Reuse `max_stall_rounds` for the consecutive all-workers-failed round cap; add no new configuration field.
 - Reuse `deep_analysis.job_soft_time_limit` for inline execution.
 - Do not change Celery retry, soft-limit, or hard-limit semantics.
 - Do not publish or persist a partial report after a job timeout.
@@ -20,26 +20,26 @@
 
 ## File Map
 
-- `neos/workflow/deep_analysis/orchestrator.py`: classify failed worker passes before generic progress accounting and terminate repeatedly failing questions.
+- `neos/workflow/deep_analysis/orchestrator.py`: count consecutive all-workers-failed rounds and raise a typed systemic-failure exception before further tree expansion.
 - `tests/workflow/deep_analysis/test_orchestrator_m3_integration.py`: exercise repeated failure through the real round/ledger contract.
 - `neos/workflow/deep_analysis/jobs.py`: apply an optional timeout inside the existing run failure boundary and forward it through resume.
 - `tests/workflow/deep_analysis/test_jobs.py`: verify timeout, durable failure event, and timeout propagation on resume.
 - `neos/tasks/deep_analysis_job_task.py`: pass the configured timeout only for inline execution.
 - `tests/workflow/deep_analysis/test_deep_analysis_job_task.py`: verify executor-specific timeout wiring and no assistant-message persistence after failure.
 
-### Task 1: Bound consecutive failed worker passes
+### Task 1: Bound consecutive all-workers-failed rounds
 
 **Files:**
-- Modify: `neos/workflow/deep_analysis/orchestrator.py:96-105, 413-441, 518-531`
+- Modify: `neos/workflow/deep_analysis/orchestrator.py:20-40, 96-105, 441-551`
 - Test: `tests/workflow/deep_analysis/test_orchestrator_m3_integration.py`
 
 **Interfaces:**
-- Consumes: `WorkerResult.status: str`, `WorkerResult.fail_reason: str | None`, `Orchestrator.max_stall_rounds: int`.
-- Produces: `Orchestrator._register_worker_outcome(question_id: str, result: WorkerResult, made_progress: bool) -> None`; question-scoped failure counts and `worker_failed`/`stall_terminated` event payloads.
+- Consumes: one round's `list[WorkerResult]` and `Orchestrator.max_stall_rounds: int`.
+- Produces: `SystemicWorkerFailure(RuntimeError)` and `Orchestrator._register_round_outcome(results: list[WorkerResult]) -> None`; run-scoped consecutive all-failed count and `systemic_failure_terminated` event.
 
 - [ ] **Step 1: Add a failing repeated-zero-token-worker regression test**
 
-Add a worker that always returns `WorkerResult(question_id=qid, status="failed", tokens_spent=0, fail_reason="systemic")`, configure `max_depth=1` and `max_stall_rounds=2`, and run the orchestrator under `asyncio.wait_for(..., timeout=1)`. Assert it returns a report, the failing leaf is no longer open, and exactly two `worker_failed` events were logged for that question.
+Add a worker that always returns `WorkerResult(question_id=qid, status="failed", tokens_spent=0, fail_reason="systemic")`, configure a high `max_depth` and `max_stall_rounds=2`, and run the orchestrator under `asyncio.wait_for(..., timeout=1)`. Assert `SystemicWorkerFailure`, exactly one `systemic_failure_terminated` event, and no questions deeper than the initially decomposed child. This depth assertion proves the safety valve stops the prior split-tree expansion.
 
 ```python
 class AlwaysFailingWorker:
@@ -55,51 +55,53 @@ class AlwaysFailingWorker:
         return WorkerResult(question_id=qid, status="partial")
 
 
-result = await asyncio.wait_for(orch.run("root"), timeout=1)
-assert result["report_markdown"]
-assert question.status in {"split", "abandoned"}
-assert [e.kind for e in events].count("worker_failed") == 2
+with pytest.raises(SystemicWorkerFailure, match="2 consecutive"):
+    await asyncio.wait_for(orch.run("root"), timeout=1)
+
+assert systemic_event_count == 1
+assert max_question_depth == 1
 ```
 
 - [ ] **Step 2: Run the regression test and verify it fails**
 
 Run: `.venv/bin/pytest tests/workflow/deep_analysis/test_orchestrator_m3_integration.py -k zero_token_worker_failure -q`
 
-Expected: FAIL by the 1-second outer timeout because repeated failed passes do not trip D15.
+Expected: FAIL because `SystemicWorkerFailure` does not exist and the current ladder starts expanding the failed question tree.
 
-- [ ] **Step 3: Add question-scoped failure outcome accounting**
+- [ ] **Step 3: Add run-scoped all-workers-failed accounting**
 
-Initialize `self._failure_counts: dict[str, int] = {}`. Add `_register_worker_outcome()` so failed results increment and log before reaching the cap, while a non-failed pass with real progress resets the counter.
+Define the typed exception and initialize `self._all_failed_rounds = 0`. Add `_register_round_outcome()` and call it immediately after `asyncio.gather()` returns, before sequential result commits can lead to another selection/split round.
 
 ```python
-async def _register_worker_outcome(
-    self,
-    question_id: str,
-    result: WorkerResult,
-    made_progress: bool,
-) -> None:
-    if result.status != "failed":
-        if made_progress:
-            self._failure_counts[question_id] = 0
-        await self._register_progress(question_id, made_progress)
-        return
+class SystemicWorkerFailure(RuntimeError):
+    """Every assigned worker failed for too many consecutive rounds."""
 
-    count = self._failure_counts.get(question_id, 0) + 1
-    self._failure_counts[question_id] = count
-    payload = {
-        "count": count,
-        "reason": (result.fail_reason or "")[:500],
-    }
-    await self.ledger.log("worker_failed", question_id, payload)
-    await self._emit("worker_failed", {"qid": question_id, **payload})
-    if count >= self.max_stall_rounds:
-        await self._force_terminate_stalled(
-            question_id,
-            reason="worker_failure",
-        )
+
+async def _register_round_outcome(
+    self,
+    results: list[WorkerResult],
+) -> None:
+    if not results:
+        return
+    if any(result.status != "failed" for result in results):
+        self._all_failed_rounds = 0
+        return
+    self._all_failed_rounds += 1
+    if self._all_failed_rounds < self.max_stall_rounds:
+        return
+    reasons = [
+        (result.fail_reason or "unknown")[:200] for result in results
+    ]
+    payload = {"rounds": self._all_failed_rounds, "reasons": reasons}
+    await self.ledger.log("systemic_failure_terminated", None, payload)
+    await self._emit("systemic_failure_terminated", payload)
+    await self._checkpoint()
+    raise SystemicWorkerFailure(
+        f"all workers failed for {self._all_failed_rounds} consecutive rounds"
+    )
 ```
 
-Extend `_force_terminate_stalled(question_id, *, reason="no_progress")` and include `reason` in both logged and emitted payloads. Replace the successful commit path's `_register_progress(...)` call with `_register_worker_outcome(...)`.
+Keep the existing per-question `_register_progress()` and `_force_terminate_stalled()` unchanged. Add a second test that directly drives `_register_round_outcome()` with `[failed]`, then `[completed]`, then `[failed]`, and asserts no exception: a non-failed worker result resets the run-scoped consecutive counter.
 
 - [ ] **Step 4: Run focused orchestrator tests**
 
@@ -111,7 +113,7 @@ Expected: all tests PASS, including the new bounded-failure regression.
 
 ```bash
 git add neos/workflow/deep_analysis/orchestrator.py tests/workflow/deep_analysis/test_orchestrator_m3_integration.py
-git commit -m "fix: bound repeated deep analysis worker failures"
+git commit -m "fix: stop systemic deep analysis worker failures"
 ```
 
 ### Task 2: Make job timeout durable and resumable
