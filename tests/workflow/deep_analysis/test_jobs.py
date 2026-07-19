@@ -56,6 +56,25 @@ def kinds(session):
 
 
 @pytest.mark.asyncio
+async def test_record_dispatch_failure_marks_run_failed_with_bounded_event():
+    run = SimpleNamespace(status="running", report_path=None)
+    fail_session = FakeSession(run=run)
+
+    await jobs.record_dispatch_failure(
+        make_factory([fail_session]), "run00001"
+    )
+
+    assert run.status == "failed"
+    assert kinds(fail_session) == [jobs.JOB_FAILED]
+    assert json.loads(fail_session.added[-1].payload) == {
+        "code": "E_BROKER_DISPATCH",
+        "error": "Celery broker dispatch failed",
+    }
+    assert fail_session.commits == 1
+    assert "redis://" not in fail_session.added[-1].payload
+
+
+@pytest.mark.asyncio
 async def test_execute_run_brackets_the_run_with_lifecycle_events():
     session = FakeSession()
     factory = make_factory([session])

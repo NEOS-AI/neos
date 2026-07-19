@@ -23,7 +23,8 @@ def test_celery_task_is_registered_with_long_time_limits():
     assert task.time_limit == config.job_time_limit
 
 
-def test_submit_uses_celery_when_enabled(monkeypatch):
+@pytest.mark.asyncio
+async def test_submit_uses_celery_when_enabled(monkeypatch):
     captured = {}
 
     def apply_async(**kwargs):
@@ -35,7 +36,9 @@ def test_submit_uses_celery_when_enabled(monkeypatch):
     )
     monkeypatch.setattr(task_module, "_celery_enabled", lambda: True)
 
-    executor = task_module.submit_deep_analysis_job("run00001", "질문", "dev")
+    executor = await task_module.submit_deep_analysis_job(
+        "run00001", "질문", "dev"
+    )
 
     assert executor == "celery"
     assert captured["queue"] == "analysis"
@@ -75,7 +78,9 @@ async def test_submit_falls_back_to_a_background_task_when_celery_is_off(
     monkeypatch.setattr(task_module, "_celery_enabled", lambda: False)
     monkeypatch.setattr(task_module, "_execute", fake_execute)
 
-    executor = task_module.submit_deep_analysis_job("run00001", "질문", "default")
+    executor = await task_module.submit_deep_analysis_job(
+        "run00001", "질문", "default"
+    )
 
     assert executor == "inline"
     await asyncio.wait_for(ran.wait(), timeout=2)
@@ -109,7 +114,7 @@ async def test_background_task_is_strongly_referenced_until_it_finishes(
     monkeypatch.setattr(task_module, "_celery_enabled", lambda: False)
     monkeypatch.setattr(task_module, "_execute", fake_execute)
 
-    task_module.submit_deep_analysis_job("run00001", "질문", "dev")
+    await task_module.submit_deep_analysis_job("run00001", "질문", "dev")
 
     assert len(task_module._BACKGROUND_TASKS) == 1
     release.set()
@@ -146,7 +151,8 @@ async def test_execute_does_not_persist_message_after_timeout(monkeypatch):
     assert persisted is False
 
 
-def test_submit_passes_resume_through(monkeypatch):
+@pytest.mark.asyncio
+async def test_submit_passes_resume_through(monkeypatch):
     captured = {}
 
     def apply_async(**kwargs):
@@ -158,9 +164,78 @@ def test_submit_passes_resume_through(monkeypatch):
     )
     monkeypatch.setattr(task_module, "_celery_enabled", lambda: True)
 
-    task_module.submit_deep_analysis_job("run00001", resume=True)
+    await task_module.submit_deep_analysis_job("run00001", resume=True)
 
     assert captured["kwargs"]["resume"] is True
+
+
+@pytest.mark.asyncio
+async def test_celery_broker_failure_is_recorded_and_never_runs_inline(
+    monkeypatch,
+):
+    recorded = []
+    executed = False
+
+    def broker_down(**kwargs):
+        raise ConnectionError("redis://user:secret@broker")
+
+    async def record(run_id):
+        recorded.append(run_id)
+
+    async def execute(*args, **kwargs):
+        nonlocal executed
+        executed = True
+
+    monkeypatch.setattr(task_module, "_celery_enabled", lambda: True)
+    monkeypatch.setattr(
+        task_module.run_deep_analysis_job, "apply_async", broker_down
+    )
+    monkeypatch.setattr(
+        task_module, "_record_dispatch_failure", record, raising=False
+    )
+    monkeypatch.setattr(task_module, "_execute", execute)
+
+    with pytest.raises(task_module.DeepAnalysisDispatchError) as captured:
+        await task_module.submit_deep_analysis_job(
+            "run00001", "private question"
+        )
+
+    assert str(captured.value) == (
+        "deep_analysis dispatch failed for run run00001"
+    )
+    assert recorded == ["run00001"]
+    assert executed is False
+    assert isinstance(captured.value.__cause__, ConnectionError)
+    assert "secret" not in str(captured.value)
+
+
+@pytest.mark.asyncio
+async def test_failure_persistence_error_does_not_replace_broker_error(
+    monkeypatch,
+):
+    broker_error = ConnectionError("broker unavailable")
+
+    def broker_down(**kwargs):
+        raise broker_error
+
+    async def record_failure(run_id):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(task_module, "_celery_enabled", lambda: True)
+    monkeypatch.setattr(
+        task_module.run_deep_analysis_job, "apply_async", broker_down
+    )
+    monkeypatch.setattr(
+        task_module,
+        "_record_dispatch_failure",
+        record_failure,
+        raising=False,
+    )
+
+    with pytest.raises(task_module.DeepAnalysisDispatchError) as captured:
+        await task_module.submit_deep_analysis_job("run00001")
+
+    assert captured.value.__cause__ is broker_error
 
 
 def test_task_is_exported_from_the_tasks_package():

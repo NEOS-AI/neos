@@ -1090,7 +1090,7 @@ class MultiAgentWorkflow:
                 # 커밋이 필수다 -- job이 다른 태스크/프로세스에서 이 run을 읽는다.
                 await session.commit()
 
-            executor = submit_deep_analysis_job(run_id, query, profile)
+            executor = await submit_deep_analysis_job(run_id, query, profile)
         except Exception as exc:
             logger.error(f"[DeepAnalysisDispatchNode] submission failed: {exc}")
             return {
