@@ -56,11 +56,12 @@ defensively.
 
 ## Quote Scoring
 
-Refactor evidence matching so `excerpt_match_score(excerpt, raw)` returns the
-best score using the existing exact-first, anchor-adjacent bounded-window
+Refactor evidence matching so
+`excerpt_match_score(excerpt, raw, threshold)` returns the best score using the
+existing threshold-dependent, exact-first, anchor-adjacent bounded-window
 algorithm. Exact containment returns `1.0`; an empty or anchorless excerpt
 returns `0.0`. `excerpt_matches(...)` becomes a compatibility wrapper comparing
-the score to the configured threshold.
+the score to the same configured threshold.
 
 The algorithm and acceptance decision therefore remain unchanged. The new
 score exists only to show whether failures cluster just below the threshold or
