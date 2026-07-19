@@ -47,6 +47,26 @@ CONSTANT_SETTINGS = {
     "CODING_DEV_SHUTDOWN_SECONDS": float(
         os.getenv("CODING_DEV_SHUTDOWN_SECONDS", "10")
     ),
+    "CODING_CELERY_ENABLED": os.getenv(
+        "CODING_CELERY_ENABLED", "false"
+    ).lower()
+    in {"1", "true", "yes", "on"},
+    "CODING_CELERY_QUEUE": os.getenv("CODING_CELERY_QUEUE", "coding"),
+    "CODING_CELERY_RECONCILIATION_SECONDS": float(
+        os.getenv("CODING_CELERY_RECONCILIATION_SECONDS", "10")
+    ),
+    "CODING_CELERY_DISCOVERY_BATCH_SIZE": int(
+        os.getenv("CODING_CELERY_DISCOVERY_BATCH_SIZE", "100")
+    ),
+    "CODING_CELERY_SOFT_TIME_LIMIT_SECONDS": int(
+        os.getenv("CODING_CELERY_SOFT_TIME_LIMIT_SECONDS", "300")
+    ),
+    "CODING_CELERY_HARD_TIME_LIMIT_SECONDS": int(
+        os.getenv("CODING_CELERY_HARD_TIME_LIMIT_SECONDS", "360")
+    ),
+    "CODING_EXECUTION_LEASE_SECONDS": int(
+        os.getenv("CODING_EXECUTION_LEASE_SECONDS", "30")
+    ),
     "JWT_ALGORITHM": "HS256",
     "PASSWORD_MIN_LENGTH": 8,
     "PASSWORD_MAX_LENGTH": 72,
