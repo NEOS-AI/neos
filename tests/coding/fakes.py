@@ -5,6 +5,7 @@ from typing import Any
 
 from neos.coding.domain.durability import (
     ExecutionLease,
+    ModelCheckpointCommit,
     PhaseCheckpointCommit,
     PhaseStart,
     RunLifecycleCommit,
@@ -48,10 +49,9 @@ class InMemoryCodingRunRepository:
         self._durability_seq = 0
         self.begin_phase_calls = 0
         self.phase_commit_calls = 0
+        self.model_commit_calls = 0
         self.task_prompts = dict(task_prompts or {})
-        self.task_statuses = {
-            task_id: "queued" for task_id in self.task_prompts
-        }
+        self.task_statuses = {task_id: "queued" for task_id in self.task_prompts}
 
     async def ensure_run_started(
         self,
@@ -76,18 +76,12 @@ class InMemoryCodingRunRepository:
                 "cancelled",
             }:
                 if self.active_run is None:
-                    raise RuntimeError(
-                        f"terminal coding task has no run: {task_id}"
-                    )
+                    raise RuntimeError(f"terminal coding task has no run: {task_id}")
                 return self.active_run
             if self.task_statuses[task_id] == "queued" and not development_mode:
-                raise ValueError(
-                    "queued task fast path requires development mode"
-                )
+                raise ValueError("queued task fast path requires development mode")
             attempts = [
-                run.attempt
-                for run in self.created_runs
-                if run.task_id == task_id
+                run.attempt for run in self.created_runs if run.task_id == task_id
             ]
             run = CodingRun(
                 run_id=f"cr_{task_id}_{max(attempts, default=0) + 1}",
@@ -126,13 +120,10 @@ class InMemoryCodingRunRepository:
             self._require_current_lease(lease, now=now)
             if self.active_run is None or self.active_run.run_id != lease.run_id:
                 raise StaleExecutionLease(lease.task_id)
-            run = replace(
-                self.active_run, status=status, completed_at=now
-            )
+            run = replace(self.active_run, status=status, completed_at=now)
             self.active_run = run
             self.created_runs = [
-                run if item.run_id == run.run_id else item
-                for item in self.created_runs
+                run if item.run_id == run.run_id else item for item in self.created_runs
             ]
             self.task_statuses[lease.task_id] = status.value
             self._durability_seq += 1
@@ -176,16 +167,12 @@ class InMemoryCodingRunRepository:
                 fencing_token=token,
                 acquired_at=now,
                 expires_at=expires_at,
-                recovered=(
-                    current is not None and current.worker_id != worker_id
-                ),
+                recovered=(current is not None and current.worker_id != worker_id),
             )
             self.execution_leases[task_id] = lease
             return lease
 
-    async def renew_execution_lease(
-        self, lease, *, now, expires_at
-    ):
+    async def renew_execution_lease(self, lease, *, now, expires_at):
         async with self._durability_lock:
             self._require_current_lease(lease, now=now)
             renewed = ExecutionLease(
@@ -207,9 +194,7 @@ class InMemoryCodingRunRepository:
                 run_id=lease.run_id,
                 worker_id=lease.worker_id,
                 fencing_token=lease.fencing_token,
-                acquired_at=min(
-                    lease.acquired_at, now - timedelta(microseconds=1)
-                ),
+                acquired_at=min(lease.acquired_at, now - timedelta(microseconds=1)),
                 expires_at=now,
             )
 
@@ -371,6 +356,41 @@ class InMemoryCodingRunRepository:
                 checkpoint_id=checkpoint.checkpoint_id,
             )
             return PhaseCheckpointCommit(checkpoint, event, completed)
+
+    async def commit_model_checkpoint(
+        self,
+        *,
+        lease,
+        event_type,
+        event_payload,
+        loop_state,
+        workspace_revision,
+        now,
+    ):
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=now)
+            self.model_commit_calls += 1
+            self._durability_seq += 1
+            checkpoint = CodingCheckpoint(
+                checkpoint_id=f"cc_model_{self._durability_seq}",
+                task_id=lease.task_id,
+                run_id=lease.run_id,
+                seq=self._durability_seq,
+                loop_state=dict(loop_state),
+                workspace_revision=workspace_revision,
+                created_at=now,
+            )
+            self.checkpoints.append(checkpoint)
+            event = make_event(
+                task_id=lease.task_id,
+                seq=checkpoint.seq,
+                event_type=event_type,
+                payload=dict(event_payload),
+                now=now,
+                run_id=lease.run_id,
+                checkpoint_id=checkpoint.checkpoint_id,
+            )
+            return ModelCheckpointCommit(checkpoint, event)
 
     async def create_run(self, run) -> None:
         self.created_runs.append(run)
@@ -569,9 +589,7 @@ class InMemoryCodingRunRepository:
                 acquired_at=now,
                 expires_at=lease.expires_at,
             )
-            applied = replace(
-                request, applied_checkpoint_id=checkpoint.checkpoint_id
-            )
+            applied = replace(request, applied_checkpoint_id=checkpoint.checkpoint_id)
             event = make_event(
                 task_id=lease.task_id,
                 seq=checkpoint.seq,
@@ -607,8 +625,6 @@ class InMemoryCodingRunRepository:
 
     async def save_phase(self, phase) -> None:
         self.phases = [
-            existing
-            for existing in self.phases
-            if existing.phase_id != phase.phase_id
+            existing for existing in self.phases if existing.phase_id != phase.phase_id
         ]
         self.phases.append(phase)

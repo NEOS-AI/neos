@@ -5,6 +5,7 @@ from typing import Any, AsyncIterator, Mapping, Protocol
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.durability import (
     ExecutionLease,
+    ModelCheckpointCommit,
     PhaseCheckpointCommit,
     PhaseStart,
     RunLifecycleCommit,
@@ -116,6 +117,17 @@ class CodingRunRepository(Protocol):
         workspace_revision: str,
         now: datetime,
     ) -> PhaseCheckpointCommit: ...
+
+    async def commit_model_checkpoint(
+        self,
+        *,
+        lease: ExecutionLease,
+        event_type: str,
+        event_payload: Mapping[str, Any],
+        loop_state: Mapping[str, Any],
+        workspace_revision: str,
+        now: datetime,
+    ) -> ModelCheckpointCommit: ...
 
     async def apply_steering_at_safe_point(
         self,

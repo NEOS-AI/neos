@@ -72,6 +72,12 @@ class PhaseCheckpointCommit:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelCheckpointCommit:
+    checkpoint: CodingCheckpoint
+    event: CodingEvent
+
+
+@dataclass(frozen=True, slots=True)
 class SteeringApplication:
     request: SteeringRequest
     checkpoint: CodingCheckpoint

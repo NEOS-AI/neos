@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 from neos.coding.domain.durability import (
     ExecutionLease,
+    ModelCheckpointCommit,
     PhaseCheckpointCommit,
     PhaseStart,
     RunLifecycleCommit,
@@ -101,9 +102,7 @@ class PostgresCodingRunRepository:
                         )
                     return self._run_from_row(terminal_row)
                 if task_row[2] == "queued" and not development_mode:
-                    raise ValueError(
-                        "queued task fast path requires development mode"
-                    )
+                    raise ValueError("queued task fast path requires development mode")
                 attempt_result = await session.execute(
                     text(
                         """
@@ -381,9 +380,7 @@ class PostgresCodingRunRepository:
                                   acquired_at, expires_at, FALSE AS recovered
                         """
                     ),
-                    self._lease_params(
-                        lease, now=now, expires_at=expires_at
-                    ),
+                    self._lease_params(lease, now=now, expires_at=expires_at),
                 )
                 row = result.first()
         if row is None:
@@ -599,9 +596,7 @@ class PostgresCodingRunRepository:
                 attempt_row = attempt_result.first()
                 attempt = int(attempt_row[0]) if attempt_row else 1
                 phase = CodingPhase(
-                    phase_id=(
-                        f"cp_{lease.run_id}_{kind.value}_{attempt}"
-                    ),
+                    phase_id=(f"cp_{lease.run_id}_{kind.value}_{attempt}"),
                     task_id=lease.task_id,
                     run_id=lease.run_id,
                     kind=kind,
@@ -736,6 +731,82 @@ class PostgresCodingRunRepository:
         if self._wake_outbox is not None:
             self._wake_outbox()
         return PhaseCheckpointCommit(checkpoint, event, completed)
+
+    async def commit_model_checkpoint(
+        self,
+        *,
+        lease: ExecutionLease,
+        event_type: str,
+        event_payload: Mapping[str, Any],
+        loop_state: Mapping[str, Any],
+        workspace_revision: str,
+        now: datetime,
+    ) -> ModelCheckpointCommit:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(session, lease, now=now)
+                locked = await session.execute(
+                    text(
+                        """
+                        SELECT run_id
+                        FROM coding_runs
+                        WHERE run_id = :run_id
+                          AND task_id = :task_id
+                          AND status = 'running'
+                        FOR UPDATE
+                        """
+                    ),
+                    {"run_id": lease.run_id, "task_id": lease.task_id},
+                )
+                if locked.first() is None:
+                    raise StaleExecutionLease(lease.task_id)
+                seq = await self._allocate_sequence_in_session(
+                    session, task_id=lease.task_id, now=now
+                )
+                checkpoint = CodingCheckpoint(
+                    checkpoint_id=f"cc_{uuid4().hex}",
+                    task_id=lease.task_id,
+                    run_id=lease.run_id,
+                    seq=seq,
+                    loop_state=dict(loop_state),
+                    workspace_revision=workspace_revision,
+                    created_at=now,
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_checkpoints
+                            (checkpoint_id, task_id, run_id, seq,
+                             loop_state_json, workspace_revision, created_at)
+                        VALUES
+                            (:checkpoint_id, :task_id, :run_id, :seq,
+                             CAST(:loop_state AS JSONB),
+                             :workspace_revision, :created_at)
+                        """
+                    ),
+                    {
+                        "checkpoint_id": checkpoint.checkpoint_id,
+                        "task_id": checkpoint.task_id,
+                        "run_id": checkpoint.run_id,
+                        "seq": seq,
+                        "loop_state": json.dumps(dict(loop_state)),
+                        "workspace_revision": workspace_revision,
+                        "created_at": now,
+                    },
+                )
+                event = await self._insert_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    seq=seq,
+                    event_type=event_type,
+                    payload=event_payload,
+                    now=now,
+                    run_id=lease.run_id,
+                    checkpoint_id=checkpoint.checkpoint_id,
+                )
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return ModelCheckpointCommit(checkpoint, event)
 
     async def apply_steering_at_safe_point(
         self,
@@ -1176,9 +1247,7 @@ class PostgresCodingRunRepository:
         )
 
     @staticmethod
-    def _lease_params(
-        lease: ExecutionLease, **extra
-    ) -> dict[str, Any]:
+    def _lease_params(lease: ExecutionLease, **extra) -> dict[str, Any]:
         return {
             "task_id": lease.task_id,
             "run_id": lease.run_id,
@@ -1600,9 +1669,7 @@ class PostgresCodingRunRepository:
                     },
                 )
 
-    async def claim_pending_steering(
-        self, task_id: str
-    ) -> SteeringRequest | None:
+    async def claim_pending_steering(self, task_id: str) -> SteeringRequest | None:
         async with await self._session_factory() as session:
             async with session.begin():
                 result = await session.execute(

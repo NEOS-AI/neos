@@ -1,0 +1,314 @@
+import asyncio
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+
+import pytest
+
+from neos.coding.domain.durability import ExecutionLease, ToolExecutionDisposition
+from neos.coding.domain.events import make_event
+from neos.coding.loop.anthropic import (
+    AnthropicCodingLoop,
+    AnthropicLoopConfig,
+    CodingLoopFailure,
+)
+from neos.coding.loop.base import LoopDependencies, LoopInput
+from neos.coding.model.anthropic import CodingModelError
+from neos.coding.model.base import (
+    ModelCompleted,
+    ModelUsage,
+    TextDelta,
+    ToolCallCompleted,
+    ToolInputDelta,
+)
+from neos.coding.tools.executor import ToolResult
+from neos.coding.tools.registry import CodingToolRegistry
+from tests.coding.fakes import InMemoryCodingRunRepository
+
+NOW = datetime(2026, 7, 19, tzinfo=UTC)
+
+
+class Model:
+    def __init__(self, turns):
+        self.turns = list(turns)
+        self.requests = []
+
+    async def stream(self, request):
+        self.requests.append(request)
+        turn = self.turns.pop(0)
+        if isinstance(turn, BaseException):
+            raise turn
+        for event in turn:
+            yield event
+
+
+class Events:
+    def __init__(self):
+        self.items = []
+
+    async def append(self, *, task_id, event_type, payload, **ids):
+        event = make_event(
+            task_id=task_id,
+            seq=100 + len(self.items),
+            event_type=event_type,
+            payload=payload,
+            now=NOW,
+            **ids,
+        )
+        self.items.append(event)
+        return event
+
+
+class Executor:
+    def __init__(self, *, fail_after_mutation=False):
+        self.calls = []
+        self.fail_after_mutation = fail_after_mutation
+
+    async def execute(self, session, call):
+        self.calls.append(call)
+        session.writes += call.name == "write_file.v1"
+        if self.fail_after_mutation:
+            raise RuntimeError("connection lost after mutation")
+        return ToolResult.ok(workspace_revision=str(session.writes + 1))
+
+
+class Bindings:
+    def __init__(self):
+        self.session = SimpleNamespace(writes=0)
+
+    async def resolve(self, task_id, run_id):
+        return SimpleNamespace(
+            binding=SimpleNamespace(workspace_revision="1"),
+            session=self.session,
+        )
+
+
+@dataclass
+class Harness:
+    loop: AnthropicCodingLoop
+    repository: InMemoryCodingRunRepository
+    events: Events
+    model: Model
+    executor: Executor
+    bindings: Bindings
+    deps: LoopDependencies
+
+
+def tool_call(call_id="toolu_1", name="write_file.v1", input=None):
+    return ToolCallCompleted(call_id, name, input or {"path": "a.txt", "content": "x"})
+
+
+def completed(input_tokens=5, output_tokens=3):
+    return ModelCompleted("tool_use", ModelUsage(input_tokens, output_tokens))
+
+
+def harness(turns, *, completed_tools=None, executor=None, config=None):
+    repository = InMemoryCodingRunRepository(completed_tools=completed_tools)
+    repository.execution_leases["ct_1"] = LEASE
+    events = Events()
+    model = Model(turns)
+    executor = executor or Executor()
+    bindings = Bindings()
+    loop = AnthropicCodingLoop(
+        model=model,
+        tools=CodingToolRegistry.default(command_allowlist=frozenset({"git"})),
+        executor=executor,
+        bindings=bindings,
+        config=config or AnthropicLoopConfig(model="claude-test", system="code"),
+        clock=lambda: NOW,
+    )
+    deps = LoopDependencies(repository=repository, events=events, lease=LEASE)
+    return Harness(loop, repository, events, model, executor, bindings, deps)
+
+
+LEASE = ExecutionLease("ct_1", "cr_1", "worker", 1, NOW, NOW + timedelta(minutes=1))
+INPUT = LoopInput("ct_1", "cr_1", "Fix it")
+
+
+async def collect(h, checkpoint=None):
+    return [event async for event in h.loop.run(INPUT, checkpoint, h.deps)]
+
+
+@pytest.mark.asyncio
+async def test_one_invocation_executes_and_checkpoints_one_tool_call() -> None:
+    h = harness([[tool_call(), completed()]])
+    events = await collect(h)
+    assert h.bindings.session.writes == 1
+    assert h.repository.checkpoints[-1].loop_state["pending_tool_index"] == 1
+    assert sum(event.type == "tool.completed" for event in events) == 1
+
+
+@pytest.mark.asyncio
+async def test_completed_claim_is_reused_without_reexecuting_mutation() -> None:
+    h = harness(
+        [[tool_call(), completed()]],
+        completed_tools={
+            ("ct_1", "toolu_1"): {"status": "ok", "workspace_revision": "2"}
+        },
+    )
+    await collect(h)
+    assert h.bindings.session.writes == 0
+    assert h.repository.tool_execution_calls == []
+
+
+@pytest.mark.asyncio
+async def test_multiple_tool_calls_execute_across_invocations() -> None:
+    h = harness(
+        [
+            [
+                tool_call("one"),
+                tool_call("two", input={"path": "b.txt", "content": "y"}),
+                completed(),
+            ]
+        ]
+    )
+    await collect(h)
+    assert h.bindings.session.writes == 1
+    await collect(h, h.repository.checkpoints[-1])
+    assert h.bindings.session.writes == 2
+    assert len(h.model.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call,reason",
+    [
+        (tool_call(name="unknown.v1"), "policy_unknown_tool"),
+        (tool_call(input={"path": "a.txt"}), "policy_schema_invalid"),
+    ],
+)
+async def test_policy_or_schema_denial_checkpoints_without_claim(call, reason) -> None:
+    h = harness([[call, completed()]])
+    events = await collect(h)
+    assert h.repository.tool_claims == {}
+    assert (
+        h.repository.checkpoints[-1].loop_state["transcript"][-1]["content"][0][
+            "status"
+        ]
+        == "denied"
+    )
+    assert events[-1].payload["reason_code"] == reason
+
+
+@pytest.mark.asyncio
+async def test_text_only_completion_uses_model_checkpoint_without_claim() -> None:
+    h = harness([[TextDelta("finished"), ModelCompleted("end_turn", ModelUsage(2, 1))]])
+    events = await collect(h)
+    assert h.repository.tool_claims == {}
+    assert events[-1].type == "model.completed"
+    assert (
+        h.repository.checkpoints[-1].loop_state["transcript"][-1]["content"][0]["text"]
+        == "finished"
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_deltas_are_sanitized_and_not_recovery_content() -> None:
+    h = harness(
+        [
+            [
+                TextDelta("token sk-ant-secret"),
+                ToolInputDelta("x", "write_file.v1", '{"content":"secret"}'),
+                tool_call("x"),
+                completed(),
+            ]
+        ]
+    )
+    events = await collect(h)
+    delta_payloads = [e.payload for e in events if e.type.endswith("delta")]
+    assert all(
+        "sk-ant-secret" not in str(payload) and "secret" not in str(payload)
+        for payload in delta_payloads
+    )
+    assert "partial_json" not in str(h.repository.checkpoints[-1].loop_state)
+
+
+@pytest.mark.asyncio
+async def test_busy_claim_is_retryable() -> None:
+    h = harness([[tool_call(), completed()]])
+    h.repository.tool_claims[("ct_1", "toolu_1")] = (
+        SimpleNamespace(disposition=ToolExecutionDisposition.CLAIMED),
+        NOW + timedelta(minutes=1),
+    )
+    with pytest.raises(CodingLoopFailure, match="tool_execution_busy") as caught:
+        await collect(h)
+    assert caught.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_provider_error_preserves_retryability() -> None:
+    h = harness([CodingModelError("model_rate_limited", retryable=True)])
+    with pytest.raises(CodingLoopFailure, match="model_rate_limited") as caught:
+        await collect(h)
+    assert caught.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_unknown_mutation_outcome_is_non_retryable() -> None:
+    h = harness(
+        [[tool_call(), completed()]], executor=Executor(fail_after_mutation=True)
+    )
+    with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown") as caught:
+        await collect(h)
+    assert caught.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_cancellation_is_not_wrapped() -> None:
+    h = harness([asyncio.CancelledError()])
+    with pytest.raises(asyncio.CancelledError):
+        await collect(h)
+
+
+@pytest.mark.asyncio
+async def test_turn_and_tool_budgets_are_durable() -> None:
+    config = AnthropicLoopConfig(
+        model="claude-test", system="code", max_turns=1, max_tools=1
+    )
+    h = harness([[tool_call("one"), tool_call("two"), completed()]], config=config)
+    await collect(h)
+    with pytest.raises(CodingLoopFailure, match="tool_budget_exceeded"):
+        await collect(h, h.repository.checkpoints[-1])
+
+
+@pytest.mark.asyncio
+async def test_transcript_digest_and_compaction_are_deterministic() -> None:
+    config = AnthropicLoopConfig(
+        model="claude-test", system="code", max_transcript_messages=2
+    )
+    h = harness([[tool_call("one"), tool_call("two"), completed()]], config=config)
+    await collect(h)
+    first = h.repository.checkpoints[-1]
+    await collect(h, first)
+    state = h.repository.checkpoints[-1].loop_state
+    assert len(state["transcript"]) <= 2
+    assert len(state["transcript_digest"]) == 64
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config,code",
+    [
+        (
+            AnthropicLoopConfig(model="claude-test", system="code", max_total_tokens=1),
+            "token_budget_exceeded",
+        ),
+        (
+            AnthropicLoopConfig(
+                model="claude-test",
+                system="code",
+                max_cost_micros=1,
+                input_cost_micros_per_million=1_000_000,
+            ),
+            "cost_budget_exceeded",
+        ),
+    ],
+)
+async def test_token_and_cost_budgets_stop_before_checkpoint(config, code) -> None:
+    h = harness(
+        [[TextDelta("done"), ModelCompleted("end_turn", ModelUsage(2, 0))]],
+        config=config,
+    )
+    with pytest.raises(CodingLoopFailure, match=code):
+        await collect(h)
+    assert h.repository.checkpoints == []
