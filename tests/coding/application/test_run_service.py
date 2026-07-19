@@ -42,7 +42,9 @@ def run_fixture(run_id: str) -> CodingRun:
     )
 
 
-async def make_run_service(repository, *, loop=None) -> CodingRunService:
+async def make_run_service(
+    repository, *, loop=None, execution_lease=None
+) -> CodingRunService:
     tasks = InMemoryCodingTaskRepository()
     await tasks.create(
         CodingTask(
@@ -56,6 +58,9 @@ async def make_run_service(repository, *, loop=None) -> CodingRunService:
             updated_at=NOW,
         )
     )
+    kwargs = {}
+    if execution_lease is not None:
+        kwargs["execution_lease"] = execution_lease
     return CodingRunService(
         tasks=tasks,
         runs=repository,
@@ -63,6 +68,7 @@ async def make_run_service(repository, *, loop=None) -> CodingRunService:
         interrupter=RecordingInterrupter(repository),
         loop=loop,
         clock=lambda: NOW,
+        **kwargs,
     )
 
 
@@ -71,6 +77,16 @@ class FailingLoop:
         if False:
             yield None
         raise RuntimeError("transient")
+
+
+class RecordingLeaseRepository(InMemoryCodingRunRepository):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.requested_expirations = []
+
+    async def acquire_execution_lease(self, **kwargs):
+        self.requested_expirations.append(kwargs["expires_at"])
+        return await super().acquire_execution_lease(**kwargs)
 
 
 async def test_safe_point_steering_is_applied_after_checkpoint() -> None:
@@ -248,3 +264,25 @@ async def test_fail_active_run_uses_fenced_terminal_command() -> None:
     assert event.type == "run.failed"
     assert repository.active_run.status is CodingRunStatus.FAILED
     assert repository.task_statuses["ct_1"] == "failed"
+
+
+async def test_configured_execution_lease_controls_repository_expiry() -> None:
+    repository = RecordingLeaseRepository(
+        active_run=run_fixture("cr_1"),
+        task_prompts={"ct_1": "Fix it"},
+    )
+    repository.task_statuses["ct_1"] = "running"
+    service = await make_run_service(
+        repository,
+        loop=FailingLoop(),
+        execution_lease=timedelta(seconds=75),
+    )
+
+    with pytest.raises(RuntimeError, match="transient"):
+        await service.advance_one_safe_point(
+            task_id="ct_1", worker_id="worker-a"
+        )
+
+    assert repository.requested_expirations == [
+        NOW + timedelta(seconds=75)
+    ]

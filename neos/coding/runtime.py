@@ -29,6 +29,13 @@ from neos.coding.transport.redis_tickets import RedisCodingTicketStore
 from neos.coding.workers.development_supervisor import (
     CodingDevelopmentSupervisor,
 )
+from neos.coding.workers.dispatcher import (
+    CeleryCodingTaskDispatcher,
+    CodingDispatchSource,
+)
+from neos.coding.workers.celery_runtime import (
+    validate_coding_worker_settings,
+)
 from neos.database.connection import db_manager
 from neos.config.settings import settings
 from neos.observability.metrics import metrics
@@ -89,6 +96,14 @@ def create_coding_runtime(
 
 
 def create_development_coding_runtime() -> CodingRuntime:
+    if (
+        settings.CODING_FAKE_LOOP_ENABLED
+        and settings.CODING_CELERY_ENABLED
+    ):
+        raise RuntimeError(
+            "CODING_FAKE_LOOP_ENABLED and CODING_CELERY_ENABLED "
+            "cannot be enabled together"
+        )
     loop = (
         FakeDurableCodingLoop(clock=lambda: datetime.now(UTC))
         if settings.CODING_FAKE_LOOP_ENABLED
@@ -118,10 +133,27 @@ def create_development_coding_runtime() -> CodingRuntime:
             discovery_batch_size=settings.CODING_DEV_DISCOVERY_BATCH_SIZE,
             shutdown_timeout=settings.CODING_DEV_SHUTDOWN_SECONDS,
         )
-    coding_service.set_task_created_notifier(
-        supervisor.notify if supervisor is not None else None
-    )
+    notifier = None
+    if supervisor is not None:
+        notifier = supervisor.notify
+    elif settings.CODING_CELERY_ENABLED:
+        validate_coding_worker_settings(settings)
+        dispatcher = create_celery_dispatcher()
+        notifier = lambda task_id: dispatcher.enqueue(
+            task_id, source=CodingDispatchSource.API
+        )
+    coding_service.set_task_created_notifier(notifier)
     return replace(runtime, supervisor=supervisor)
+
+
+def create_celery_dispatcher() -> CeleryCodingTaskDispatcher:
+    from neos.workflow.celery_app import app
+
+    return CeleryCodingTaskDispatcher(
+        app=app,
+        queue=settings.CODING_CELERY_QUEUE,
+        metrics=metrics,
+    )
 
 
 coding_runtime = create_development_coding_runtime()

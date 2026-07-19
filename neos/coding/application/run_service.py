@@ -48,7 +48,10 @@ class CodingRunService:
         loop: CodingLoop | None = None,
         metrics=None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        execution_lease: timedelta = timedelta(seconds=30),
     ) -> None:
+        if execution_lease.total_seconds() <= 0:
+            raise ValueError("execution_lease must be positive")
         self._tasks = tasks
         self._runs = runs
         self._events = events
@@ -56,6 +59,7 @@ class CodingRunService:
         self._loop = loop
         self._metrics = metrics
         self._clock = clock
+        self._execution_lease = execution_lease
 
     async def ensure_started(self, *, task_id: str) -> CodingRun:
         task = await self._tasks.get(task_id)
@@ -84,7 +88,7 @@ class CodingRunService:
             run_id=run.run_id,
             worker_id=worker_id,
             now=now,
-            expires_at=now + timedelta(seconds=30),
+            expires_at=now + self._execution_lease,
         )
         if lease is None:
             raise RunAlreadyLeased(task_id)
@@ -139,7 +143,7 @@ class CodingRunService:
             run_id=run.run_id,
             worker_id=worker_id,
             now=now,
-            expires_at=now + timedelta(seconds=30),
+            expires_at=now + self._execution_lease,
         )
         if lease is None:
             if self._metrics is not None:
@@ -279,7 +283,7 @@ class CodingRunService:
                     run_id=run.run_id,
                     worker_id=f"interrupt:{request.steering_id}",
                     now=now,
-                    expires_at=now + timedelta(seconds=30),
+                    expires_at=now + self._execution_lease,
                 )
                 if lease is None:
                     if self._metrics is not None:

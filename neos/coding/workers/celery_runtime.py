@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.exc import SQLAlchemyError
@@ -18,6 +18,7 @@ from neos.coding.workers.execution import (
     CodingTaskRunner,
 )
 from neos.database.connection import DatabaseManager
+from neos.config.settings import settings
 from neos.observability.metrics import metrics
 
 
@@ -34,6 +35,9 @@ def _build_runner(manager: DatabaseManager) -> CodingTaskRunner:
         loop=FakeDurableCodingLoop(clock=lambda: datetime.now(UTC)),
         metrics=metrics,
         interrupter=InProcessRunInterrupter(),
+        execution_lease=timedelta(
+            seconds=settings.CODING_EXECUTION_LEASE_SECONDS
+        ),
     )
     return CodingTaskRunner(
         runs=runs,
@@ -44,6 +48,38 @@ def _build_runner(manager: DatabaseManager) -> CodingTaskRunner:
             SoftTimeLimitExceeded,
         ),
     )
+
+
+def validate_coding_worker_settings(candidate) -> None:
+    positive = {
+        "CODING_CELERY_RECONCILIATION_SECONDS": (
+            candidate.CODING_CELERY_RECONCILIATION_SECONDS
+        ),
+        "CODING_CELERY_DISCOVERY_BATCH_SIZE": (
+            candidate.CODING_CELERY_DISCOVERY_BATCH_SIZE
+        ),
+        "CODING_CELERY_SOFT_TIME_LIMIT_SECONDS": (
+            candidate.CODING_CELERY_SOFT_TIME_LIMIT_SECONDS
+        ),
+        "CODING_CELERY_HARD_TIME_LIMIT_SECONDS": (
+            candidate.CODING_CELERY_HARD_TIME_LIMIT_SECONDS
+        ),
+        "CODING_EXECUTION_LEASE_SECONDS": (
+            candidate.CODING_EXECUTION_LEASE_SECONDS
+        ),
+    }
+    for name, value in positive.items():
+        if value <= 0:
+            raise ValueError(f"{name} must be positive")
+    if not candidate.CODING_CELERY_QUEUE.strip():
+        raise ValueError("CODING_CELERY_QUEUE cannot be empty")
+    if (
+        candidate.CODING_CELERY_HARD_TIME_LIMIT_SECONDS
+        <= candidate.CODING_CELERY_SOFT_TIME_LIMIT_SECONDS
+    ):
+        raise ValueError(
+            "CODING_CELERY_HARD_TIME_LIMIT_SECONDS must exceed soft limit"
+        )
 
 
 async def run_coding_delivery(

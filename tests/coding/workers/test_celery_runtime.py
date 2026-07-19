@@ -1,7 +1,7 @@
 import pytest
 
 from neos.coding.workers import celery_runtime
-from neos.coding.workers.execution import CodingTaskOutcome
+from neos.coding.workers.execution import CodingTaskOutcome, CodingTaskRunner
 
 
 class RecordingDatabaseManager:
@@ -13,6 +13,9 @@ class RecordingDatabaseManager:
 
     async def close(self) -> None:
         self.calls.append("close")
+
+    async def get_session(self):
+        raise AssertionError("factory construction must not open a session")
 
 
 class RecordingRunner:
@@ -64,6 +67,12 @@ async def test_delivery_initializes_and_closes_its_database_manager(
     assert runner.calls == [
         ("ct_1", "celery-1", "worker_retry_exhausted")
     ]
+
+
+def test_build_runner_returns_shared_execution_runner() -> None:
+    runner = celery_runtime._build_runner(RecordingDatabaseManager())
+
+    assert isinstance(runner, CodingTaskRunner)
 
 
 async def test_discovery_returns_bounded_ids_and_closes_manager(
