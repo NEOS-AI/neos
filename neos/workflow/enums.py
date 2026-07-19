@@ -34,7 +34,7 @@ class WorkflowNode(Enum):
     HYPER_DEEP_ORCHESTRATOR = "hyper_deep_orchestrator"
 
     # Deep Analysis: 심층 분석 하네스 오케스트레이터
-    DEEP_ANALYSIS_ORCHESTRATOR = "deep_analysis_orchestrator"
+    DEEP_ANALYSIS_DISPATCH = "deep_analysis_dispatch"
 
     # Mission Runtime
     MISSION_PLANNER = "mission_planner"

@@ -62,6 +62,22 @@ export const harnessMetadataSchema = z.object({
 export type HarnessMetadata = z.infer<typeof harnessMetadataSchema>;
 
 /**
+ * 비동기 deep_analysis job 핸들.
+ *
+ * 챗 턴은 `neos:deep_analysis_started`를 보내고 **즉시 끝난다**. 진행 상황은
+ * 이 `run_id`로 여는 별도 스트림(`/api/deep-analysis/{run_id}/events`)에서 온다.
+ * 메시지 메타데이터에 붙여 두는 이유는 새로고침 후에도 어떤 메시지가 어떤
+ * run에 속하는지 복원하기 위해서다(감사 §6 차단요인 2).
+ */
+export const deepAnalysisMetadataSchema = z.object({
+  run_id: z.string(),
+  events_url: z.string().optional(),
+  status: z.enum(["pending", "running", "completed", "failed"]).optional(),
+});
+
+export type DeepAnalysisMetadata = z.infer<typeof deepAnalysisMetadataSchema>;
+
+/**
  * Message metadata schema with OpenResponses fields
  */
 export const messageMetadataSchema = z.object({
@@ -98,6 +114,8 @@ export const messageMetadataSchema = z.object({
   approval_session_id: z.string().optional(),
   // Runtime research harness validation and repair progress.
   harness: harnessMetadataSchema.optional(),
+  // 비동기 deep_analysis job 핸들 (챗 턴은 제출만 하고 즉시 끝난다).
+  deep_analysis: deepAnalysisMetadataSchema.optional(),
   // Phase 8 (A2UI): UIFrame payload for form rendering
   ui_frame: z.custom<UIFramePayload>().optional(),
   // Inline Visualization: renderDiagram / renderChart 결과 (복수 지원)

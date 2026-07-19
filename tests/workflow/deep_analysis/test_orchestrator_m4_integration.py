@@ -249,7 +249,7 @@ class ConflictWorker:
     """One completed pass with two equal-tier (tier-2) contradicting claims;
     high self-assessment so the question resolves in a single round."""
 
-    async def investigate(self, brief, effort, qid, repairs=None):
+    async def investigate(self, brief, effort, qid, repairs=None, question_text=""):
         return WorkerResult(
             question_id=qid,
             status="completed",
@@ -375,7 +375,7 @@ async def test_ac_b_equal_tier_conflict_yields_both_sides_in_report():
 class SimpleWorker:
     """One completed pass with a single verified claim; resolves in one round."""
 
-    async def investigate(self, brief, effort, qid, repairs=None):
+    async def investigate(self, brief, effort, qid, repairs=None, question_text=""):
         return WorkerResult(
             question_id=qid,
             status="completed",

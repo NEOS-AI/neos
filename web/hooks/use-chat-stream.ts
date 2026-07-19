@@ -14,6 +14,12 @@ import {
   detectEventFormat,
 } from "@/lib/adapters/stream-adapter";
 import type { ChatModel } from "@/lib/ai/models";
+import {
+  type ActiveDeepAnalysisRun,
+  readActiveRun,
+  rememberActiveRun,
+} from "@/lib/deep-analysis/active-run-store";
+import { parseDeepAnalysisStarted } from "@/lib/deep-analysis/events";
 import { isAbortError } from "@/lib/stream-errors";
 import type { MessageItem, OpenResponsesEvent } from "@/lib/stream-types";
 import {
@@ -23,6 +29,7 @@ import {
   isNeosArtifactDeltaEvent,
   isNeosArtifactFinishEvent,
   isNeosArtifactMetaEvent,
+  isNeosDeepAnalysisStartedEvent,
   isNeosHarnessEvent,
   isNeosInlineVizErrorEvent,
   isNeosInlineVizEvent,
@@ -209,6 +216,77 @@ export function useChatStream({
       }
     };
   }, []);
+
+  /**
+   * 새로고침 후 진행 중인 deep_analysis run에 **다시 붙는다**.
+   *
+   * 감사 §4.2의 사고 재발 방지가 이 효과의 설계 제약이다: 여기서 하는 일은
+   * 메시지에 run_id 메타데이터를 되붙이는 것뿐이고, 실제 재접속은
+   * `DeepAnalysisStatus`가 커서를 든 **GET 재구독**으로 수행한다.
+   * `sendMessage`도 `POST /api/chat`도 호출하지 않는다 — 재실행은 없다.
+   *
+   * 이미 어떤 메시지가 같은 run을 물고 있으면(백엔드가 메타데이터를
+   * 영속화한 경우) 아무것도 하지 않는다.
+   */
+  useEffect(() => {
+    const active: ActiveDeepAnalysisRun | null = readActiveRun(id);
+    if (!active) {
+      return;
+    }
+
+    setMessages((prev) => {
+      const alreadyAttached = prev.some(
+        (message) => message.metadata?.deep_analysis?.run_id === active.runId
+      );
+      if (alreadyAttached) {
+        return prev;
+      }
+
+      const target = [...prev]
+        .reverse()
+        .find(
+          (message) =>
+            message.role === "assistant" && !message.metadata?.deep_analysis
+        );
+
+      const deepAnalysis = {
+        run_id: active.runId,
+        status: "running" as const,
+      };
+
+      if (target) {
+        return prev.map((message) =>
+          message.id === target.id
+            ? {
+                ...message,
+                metadata: {
+                  createdAt:
+                    message.metadata?.createdAt ?? new Date().toISOString(),
+                  ...message.metadata,
+                  deep_analysis: deepAnalysis,
+                },
+              }
+            : message
+        );
+      }
+
+      // 어시스턴트 메시지가 아직 저장되지 않은 채 새로고침된 경우:
+      // 진행 표시를 걸 자리를 하나 만든다.
+      return [
+        ...prev,
+        {
+          id: active.assistantMessageId ?? generateUUID(),
+          role: "assistant",
+          parts: [{ type: "text", text: "" }],
+          metadata: {
+            createdAt: new Date().toISOString(),
+            responseStatus: "in_progress" as const,
+            deep_analysis: deepAnalysis,
+          },
+        } satisfies ChatMessage,
+      ];
+    });
+  }, [id]);
 
   /**
    * SSE 스트림 처리 (OpenResponses 스펙 준수)
@@ -518,6 +596,49 @@ export function useChatStream({
                   }
                 }
 
+                // neos:deep_analysis_started — 비동기 job 제출됨.
+                //
+                // 이 이벤트 뒤 챗 턴은 정상 종료한다(블로킹 없음). run_id를
+                // 이 메시지에 붙여 두면 `components/deep-analysis-status.tsx`가
+                // 별도 이벤트 스트림을 구독해 진행 상황을 인라인 렌더링한다.
+                // 하네스 이벤트와 같은 자리·같은 방식이며, 새 메커니즘이 아니다.
+                else if (isNeosDeepAnalysisStartedEvent(eventData)) {
+                  // 감사 §4.5: 백엔드 응답을 그대로 믿지 않는다.
+                  const started = parseDeepAnalysisStarted(eventData);
+                  if (started) {
+                    assistantMessage.metadata = {
+                      createdAt:
+                        assistantMessage.metadata?.createdAt ??
+                        new Date().toISOString(),
+                      ...assistantMessage.metadata,
+                      deep_analysis: {
+                        run_id: started.runId,
+                        events_url: started.eventsUrl,
+                        status: "running",
+                      },
+                    };
+                    // 새로고침 후 진행 중 run에 다시 붙기 위한 포인터.
+                    // ⚠️ 재구독 전용이다 — 이 값으로 job을 재제출하지 않는다.
+                    rememberActiveRun(id, {
+                      runId: started.runId,
+                      assistantMessageId:
+                        started.assistantMessageId ?? assistantMessage.id,
+                    });
+                    updateMessage();
+                    if (onData) {
+                      onData({
+                        type: "deep-analysis-started",
+                        data: { runId: started.runId },
+                      });
+                    }
+                  } else {
+                    console.error(
+                      "[DeepAnalysis] deep_analysis_started 페이로드 검증 실패",
+                      eventData
+                    );
+                  }
+                }
+
                 // neos:approval_request - workflow paused for user approval
                 else if (isNeosApprovalRequestEvent(eventData)) {
                   assistantMessage.metadata = {
@@ -614,7 +735,7 @@ export function useChatStream({
         currentAssistantMessageRef.current = null;
       }
     },
-    [onData, onFinish, onError]
+    [id, onData, onFinish, onError]
   );
 
   /**

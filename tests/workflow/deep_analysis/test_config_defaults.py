@@ -57,3 +57,27 @@ def test_deep_analysis_operational_limits_are_configured():
     assert cfg.worker_max_output_tokens == 4000
     assert cfg.synthesis_max_tokens == 4000
     assert cfg.sse_keepalive_seconds == 0.5
+
+
+def test_deep_analysis_job_service_defaults():
+    """Phase 3a(D22): durable job 서비스 설정.
+
+    job_time_limit은 반드시 job_soft_time_limit보다 커야 한다 -- soft가 먼저
+    올라야 예외를 잡아 job_failed를 남길 수 있고, hard는 그 뒤의 마지막 수단이다.
+    """
+    cfg = _settings().config.deep_analysis
+
+    assert cfg.job_queue == "analysis"
+    assert cfg.job_soft_time_limit == 3600
+    assert cfg.job_time_limit == 3900
+    assert cfg.job_time_limit > cfg.job_soft_time_limit
+    assert cfg.job_max_retries == 2
+    assert cfg.events_poll_interval == 1.0
+    assert cfg.events_stream_idle_timeout == 300.0
+
+
+def test_deep_analysis_job_settings_reachable_via_legacy_uppercase():
+    settings = _settings()
+
+    assert settings.DEEP_ANALYSIS_JOB_QUEUE == "analysis"
+    assert settings.DEEP_ANALYSIS_EVENTS_POLL_INTERVAL == 1.0

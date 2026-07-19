@@ -7,6 +7,14 @@ export function getBackendUrl(): string {
   return value ? value.replace(/\/$/, "") : DEFAULT_BACKEND_URL;
 }
 
+export function getCodingWsPublicUrl(): string {
+  const configured = process.env.CODING_WS_PUBLIC_URL?.trim();
+  if (configured) {
+    return configured.replace(/\/$/, "");
+  }
+  return getBackendUrl().replace(/^http:/, "ws:").replace(/^https:/, "wss:");
+}
+
 export function getAuthSecret(): string | undefined {
   return process.env.AUTH_SECRET;
 }

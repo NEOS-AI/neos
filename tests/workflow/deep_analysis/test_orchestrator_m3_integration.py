@@ -115,7 +115,7 @@ class WeakenRepairWorker:
     (repairs non-empty) it returns a weakened RepairResult with NO fetch and NO
     new evidence."""
 
-    async def investigate(self, brief, effort, qid, repairs=None):
+    async def investigate(self, brief, effort, qid, repairs=None, question_text=""):
         if repairs:
             claim_id = repairs[0]["claim_id"]
             return WorkerResult(
@@ -181,7 +181,7 @@ class NegationRepairWorker:
     """Round 1 proposes a claim; once feedback arrives it returns a `fixed`
     RepairResult whose new_text is the negation."""
 
-    async def investigate(self, brief, effort, qid, repairs=None):
+    async def investigate(self, brief, effort, qid, repairs=None, question_text=""):
         if repairs:
             claim_id = repairs[0]["claim_id"]
             return WorkerResult(
@@ -239,7 +239,7 @@ class AlwaysRejectedWorker:
     """Re-submits the same claim every round; the agentic tier always rejects
     it as UNRELATED, so it exhausts the retry cap and becomes `unverified`."""
 
-    async def investigate(self, brief, effort, qid, repairs=None):
+    async def investigate(self, brief, effort, qid, repairs=None, question_text=""):
         blob, ev = _first_claim_evidence()
         return WorkerResult(
             question_id=qid, status="completed", blobs=[blob],
@@ -306,7 +306,7 @@ class NoProgressWorker:
     feedback, no token burn. Without the valve this spins forever (score never
     drops below the floor, the global cap is never approached)."""
 
-    async def investigate(self, brief, effort, qid, repairs=None):
+    async def investigate(self, brief, effort, qid, repairs=None, question_text=""):
         return WorkerResult(question_id=qid, status="completed", claims=[],
                             blobs=[], tokens_spent=0, self_assessment=0.0)
 

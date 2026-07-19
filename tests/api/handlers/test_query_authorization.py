@@ -384,10 +384,10 @@ def test_production_health_routes_remain_public():
     assert authenticated_health_routes == []
 
 
-def test_production_app_excludes_websocket_routes_when_debug_false():
+def test_production_app_exposes_only_authenticated_coding_websocket():
     _, production_app = _load_production_app()
 
-    assert _websocket_paths(production_app) == set()
+    assert _websocket_paths(production_app) == {f"{API_PREFIX}/coding/ws"}
 
 
 def test_query_compatibility_user_ids_are_optional_and_deprecated():

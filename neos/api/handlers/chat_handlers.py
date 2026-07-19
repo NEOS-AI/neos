@@ -74,6 +74,7 @@ from neos.api.models.open_responses import (
     NeosArtifactFinishEvent,
     NeosWorkflowProgressEvent,
     NeosUIFrameEvent,
+    NeosDeepAnalysisStartedEvent,
     NeosInlineVizEvent,
     NeosInlineVizErrorEvent,
     MermaidVizData,
@@ -831,6 +832,7 @@ async def stream_message_legacy(
                             user_input={
                                 "user_id": current_user.user_id,
                                 "session_id": conversation_id,
+                                "conversation_id": conversation_id,
                                 "query": request.content,
                                 # 채팅 히스토리 추가
                                 "chat_history": formatted_history,
@@ -901,6 +903,19 @@ async def stream_message_legacy(
                                     ui_frame=event.data.get("ui_frame", {})
                                 )
                                 yield format_sse_event(ui_frame_event)
+
+                            # Phase 3b (D23): deep analysis job 핸들 → 챗 SSE
+                            # 이 이벤트 뒤 챗 턴은 블로킹 없이 종료된다.
+                            # 진행 상황은 events_url의 전용 스트림이 전달한다.
+                            elif event.event == "deep_analysis_started":
+                                da_event = NeosDeepAnalysisStartedEvent(
+                                    run_id=event.data.get("run_id", ""),
+                                    events_url=event.data.get("events_url", ""),
+                                    assistant_message_id=event.data.get(
+                                        "assistant_message_id"
+                                    ),
+                                )
+                                yield format_sse_event(da_event)
 
                             # 워크플로우 완료 이벤트
                             elif event.event == "completed":

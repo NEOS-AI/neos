@@ -171,6 +171,11 @@ class AgentState(TypedDict):
     recursive_mode: Optional[bool]                      # 재귀 모드 활성화 여부
     recursive_budget_remaining: Optional[float]         # 가용 비용 (USD)
 
+    # Phase 3b: 챗에서 시작된 run을 대화에 되묶기 위한 대화 ID.
+    # session_id와 별도다 -- /api/v1/query는 session_id를 대화가 아닌
+    # 세션으로 쓰므로 의미를 겹쳐 쓰면 안 된다.
+    conversation_id: Optional[str]
+
     # Deep Analysis Harness
     deep_analysis_run_id: Optional[str]                 # deep_analysis_runs.id (실행 추적용)
 

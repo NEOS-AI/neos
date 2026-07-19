@@ -99,3 +99,80 @@ async def test_verified_pass_resets_fail_streak():
         q = await led.get_question(qid)
         assert q.fail_streak == 0 and q.status == "resolved"
         await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_repair_converging_on_an_existing_claim_does_not_break_the_round():
+    """실제 run을 죽인 회귀: repair가 run 안의 다른 클레임과 같은 텍스트로
+    수렴하면 uq_deep_analysis_claims_run_hash를 위반해 **라운드 전체
+    트랜잭션이 롤백**됐다.
+
+    weaken은 문장을 더 일반적으로 만들기 때문에 서로 다른 클레임이 같은
+    문장으로 수렴하는 일이 실제 LLM 출력에서 자연히 발생한다. 삽입 경로는
+    hash 중복을 먼저 조회해 병합하지만 repair 경로에는 그 검사가 없었다.
+    """
+    async with await db_manager.get_session() as s:
+        run_id = await create_run(s, "root", "dev"); led = Ledger(s, run_id)
+        await _blob(s, run_id)
+        qid = await _investigating(led)
+
+        # 클레임 둘: 하나는 거절돼 repair 대상, 하나는 살아남는다.
+        await led.commit_pass(
+            qid,
+            WorkerResult(
+                question_id=qid,
+                status="completed",
+                claims=[_claim("survivor"), _claim("doomed")],
+            ),
+            {
+                "survivor": Verdict(ok=True),
+                "doomed": Verdict(ok=False, code="E_OVERCLAIM", label="PARTIAL"),
+            },
+        )
+        doomed_id = (
+            await s.execute(
+                sql(
+                    "SELECT id FROM deep_analysis_claims "
+                    "WHERE run_id=:r AND text='doomed'"
+                ),
+                {"r": run_id},
+            )
+        ).scalar()
+
+        # repair가 살아있는 클레임과 같은 텍스트로 수렴한다.
+        await led._transition(qid, "investigating")
+        await led.commit_pass(
+            qid,
+            WorkerResult(
+                question_id=qid,
+                status="completed",
+                repairs=[
+                    RepairResult(
+                        claim_id=doomed_id, action="weakened", new_text="survivor"
+                    )
+                ],
+            ),
+            {},
+        )
+
+        # 제약 위반 없이 진행되고, 중복 행이 생기지 않아야 한다.
+        rows = (
+            await s.execute(
+                sql(
+                    "SELECT hash, COUNT(*) FROM deep_analysis_claims "
+                    "WHERE run_id=:r GROUP BY hash HAVING COUNT(*) > 1"
+                ),
+                {"r": run_id},
+            )
+        ).fetchall()
+        assert rows == []
+
+        # 수렴한 클레임은 재검증 대상이 아니다 -- 내용이 다른 행에 이미 있다.
+        st = (
+            await s.execute(
+                sql("SELECT status FROM deep_analysis_claims WHERE id=:c"),
+                {"c": doomed_id},
+            )
+        ).scalar()
+        assert st == "unverified"
+        await s.rollback()

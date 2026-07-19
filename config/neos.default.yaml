@@ -408,6 +408,23 @@ hyper_deep_agent:
   budget_cap: 5.0
   task_level_harness_enabled: true
 
+# 심층 분석 하네스 -- 검증된 클레임만 인용되는 검증형 분석 (D21에서 역할 재배치).
+#
+# 이 플래그는 **환경변수로 켤 수 없다.** `apply_legacy_env_overrides`는
+# `loader.py`의 `LEGACY_ENV_KEYS` 허용목록에 있는 키만 적용하고, 목록에 없는
+# 변수는 경고 없이 무시한다 -- `.env`에 DEEP_ANALYSIS_ENABLED=true를 써도
+# 아무 일도 일어나지 않는다. recursive_agent / hyper_deep_agent / ray /
+# a2ui / execution_approval도 같다. 전부 이 파일에서만 제어된다.
+#
+# 전제조건:
+#   - PostgreSQL   원장과 이벤트 로그의 단일 상태 저장소
+#   - TAVILY_API_KEY   discovery 단계의 web_search
+#   - celery.enabled=true라면 **Redis 브로커가 반드시 떠 있어야 한다.**
+#     submit_deep_analysis_job은 apply_async 실패 시 fallback이 없어
+#     브로커가 없으면 job 제출이 그대로 실패한다.
+deep_analysis:
+  enabled: true
+
 ray:
   enabled: false
   address: auto

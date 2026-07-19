@@ -339,6 +339,23 @@ class NeosUIFrameEvent(BaseModel):
         return self
 
 
+class NeosDeepAnalysisStartedEvent(BaseModel):
+    """
+    Event: neos:deep_analysis_started — Phase 3b(D23) deep analysis job 핸들
+
+    챗 턴은 이 이벤트를 낸 뒤 **블로킹 없이 정상 종료한다**. 클라이언트는
+    `events_url`로 별도 SSE를 열어 진행을 관찰한다 — 챗과 전용 API가 같은
+    이벤트 스트림을 소비하게 만드는 것이 이 이벤트의 존재 이유다(스펙 §5 AC4).
+
+    `assistant_message_id`는 job 완료 시 리포트가 채워질 대화 메시지의 ID다.
+    대화 밖에서 시작된 run(예: /api/v1/query)에서는 None이다.
+    """
+    type: Literal["neos:deep_analysis_started"] = "neos:deep_analysis_started"
+    run_id: str
+    events_url: str
+    assistant_message_id: Optional[str] = None
+
+
 # ── Inline Visualization Data Models ──────────────────────────────────────────
 
 class MermaidVizData(BaseModel):
@@ -413,6 +430,7 @@ NeosExtensionEvent = Union[
     NeosWorkflowProgressEvent,
     NeosHarnessEvent,
     NeosUIFrameEvent,            # Phase 8 (A2UI)
+    NeosDeepAnalysisStartedEvent,  # Phase 3b (D23) deep analysis job 핸들
     NeosInlineVizEvent,          # Inline Visualization (renderDiagram/renderChart)
     NeosInlineVizErrorEvent,     # Inline Visualization 에러 (non-fatal)
 ]

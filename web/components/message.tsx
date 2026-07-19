@@ -2,6 +2,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import equal from "fast-deep-equal";
 import { memo, useState } from "react";
+import { forgetActiveRun } from "@/lib/deep-analysis/active-run-store";
 import type { Vote } from "@/lib/db/schema";
 import type { ApprovalRequest } from "@/lib/open-responses-types";
 import type { ChatMessage } from "@/lib/types";
@@ -24,6 +25,7 @@ import {
   ToolOutput,
 } from "./elements/tool";
 import { CheckCircleFillIcon, SparklesIcon, StopIcon } from "./icons";
+import { DeepAnalysisStatus } from "./deep-analysis-status";
 import { HarnessStatus } from "./harness-status";
 import { MessageActions } from "./message-actions";
 import { MessageEditor } from "./message-editor";
@@ -97,6 +99,72 @@ const PurePreviewMessage = ({
         };
       })
     );
+  };
+
+  /**
+   * deep_analysis 종결 처리 — 리포트를 이 어시스턴트 메시지 본문에 넣고
+   * job 상태를 못박는다.
+   *
+   * 백엔드도 완료 시 리포트를 메시지에 영속화하므로 새로고침해도 남는다.
+   * 여기서 하는 일은 **즉시 보여주기**와, 다시 구독하지 않도록 상태를
+   * `completed`/`failed`로 확정하는 것뿐이다.
+   */
+  const settleDeepAnalysis = (
+    status: "completed" | "failed",
+    text?: string
+  ) => {
+    // 진행 중 run 포인터를 지운다 — 이 대화를 새로고침해도 다시 붙지 않는다.
+    forgetActiveRun(chatId);
+
+    setMessages((prev) =>
+      prev.map((item) => {
+        if (item.id !== message.id) {
+          return item;
+        }
+
+        let parts = item.parts;
+        if (text) {
+          let applied = false;
+          parts = item.parts.map((part: any) => {
+            // 비어 있는 텍스트 파트에만 채운다. 이미 본문이 있으면
+            // (영속화된 리포트를 복원한 경우) 덮어쓰지 않는다.
+            if (!applied && part.type === "text" && !part.text?.trim()) {
+              applied = true;
+              return { ...part, text };
+            }
+            return part;
+          });
+          if (!applied && !item.parts.some((p: any) => p.type === "text" && p.text?.trim())) {
+            parts = [...parts, { type: "text", text } as any];
+          }
+        }
+
+        return {
+          ...item,
+          parts,
+          metadata: {
+            createdAt: item.metadata?.createdAt ?? new Date().toISOString(),
+            ...item.metadata,
+            responseStatus: status === "failed" ? "failed" : "completed",
+            deep_analysis: {
+              ...(item.metadata?.deep_analysis ?? { run_id: "" }),
+              status,
+            },
+          },
+        };
+      })
+    );
+  };
+
+  const applyDeepAnalysisReport = (reportMarkdown: string | null) => {
+    settleDeepAnalysis("completed", reportMarkdown ?? undefined);
+  };
+
+  const applyDeepAnalysisFailure = (_error: string) => {
+    // 에러 문구 자체는 `DeepAnalysisStatus`가 인라인으로 보여준다.
+    // 여기서는 메시지 상태만 실패로 확정한다(토스트를 띄우지 않는다 —
+    // job 실패는 대화 안에서 설명되는 편이 낫다).
+    settleDeepAnalysis("failed");
   };
 
   const readApprovalResumeStream = async (sessionId: string) => {
@@ -325,6 +393,14 @@ const PurePreviewMessage = ({
 
           {message.role === "assistant" && message.metadata?.harness && (
             <HarnessStatus harness={message.metadata.harness} />
+          )}
+
+          {message.role === "assistant" && message.metadata?.deep_analysis && (
+            <DeepAnalysisStatus
+              deepAnalysis={message.metadata.deep_analysis}
+              onCompleted={applyDeepAnalysisReport}
+              onFailed={applyDeepAnalysisFailure}
+            />
           )}
 
           {message.parts?.map((part, index) => {

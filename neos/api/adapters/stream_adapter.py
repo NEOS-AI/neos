@@ -37,6 +37,7 @@ from neos.api.models.open_responses import (
     NeosWorkflowProgressEvent,
     NeosHarnessEvent,
     NeosUIFrameEvent,
+    NeosDeepAnalysisStartedEvent,
     # Types
     OpenResponsesEvent,
     create_response,
@@ -261,6 +262,17 @@ def adapt_legacy_event(
             or {}
         )
         events.append(NeosUIFrameEvent(ui_frame=ui_frame_data))
+
+    # ================================================================
+    # deep_analysis_started -> neos:deep_analysis_started (Phase 3b, D23)
+    # ================================================================
+    elif event_type == "deep_analysis_started":
+        data = legacy_event.get("data", {}) or {}
+        events.append(NeosDeepAnalysisStartedEvent(
+            run_id=data.get("run_id", ""),
+            events_url=data.get("events_url", ""),
+            assistant_message_id=data.get("assistant_message_id"),
+        ))
 
     # ================================================================
     # complete -> response.completed

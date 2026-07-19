@@ -76,7 +76,7 @@ class _ReinvestWorker:
     """Fake worker for the reinvestigation round: produces one fresh claim and
     burns tokens so the reopened question demonstrably gets re-investigated."""
 
-    async def investigate(self, brief, effort, question_id, repairs=None):
+    async def investigate(self, brief, effort, question_id, repairs=None, question_text=""):
         return WorkerResult(
             question_id=question_id,
             status="completed",

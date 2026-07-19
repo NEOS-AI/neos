@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Code2Icon, MessageCircleIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { User } from "next-auth";
 import { useState } from "react";
@@ -115,6 +116,24 @@ export function AppSidebar({ user }: { user: User | undefined }) {
           </SidebarMenu>
         </SidebarHeader>
         <SidebarContent>
+          <nav className="grid gap-1 px-2 pb-3" aria-label="Products">
+            <Link
+              className="flex items-center gap-3 rounded-md px-2 py-2 text-sidebar-foreground text-sm hover:bg-sidebar-accent"
+              href="/"
+              onClick={() => setOpenMobile(false)}
+            >
+              <MessageCircleIcon className="size-4" />
+              Chat
+            </Link>
+            <Link
+              className="flex items-center gap-3 rounded-md px-2 py-2 text-sidebar-foreground text-sm hover:bg-sidebar-accent"
+              href="/code"
+              onClick={() => setOpenMobile(false)}
+            >
+              <Code2Icon className="size-4" />
+              Code
+            </Link>
+          </nav>
           <SidebarHistory user={user} />
         </SidebarContent>
         <SidebarFooter>{user && <SidebarUserNav user={user} />}</SidebarFooter>

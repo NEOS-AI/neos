@@ -353,9 +353,9 @@ class MultiAgentWorkflow:
         if settings.HYPER_DEEP_AGENT_ENABLED:
             workflow.add_node(WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value, self._hyper_deep_orchestrator_node)
 
-        # Sub-project A: Deep Analysis Orchestrator 노드 (피처 플래그로 격리)
+        # Phase 3b(D23): Deep Analysis 디스패치 노드 (피처 플래그로 격리)
         if settings.DEEP_ANALYSIS_ENABLED:
-            workflow.add_node(WorkflowNode.DEEP_ANALYSIS_ORCHESTRATOR.value, self._deep_analysis_orchestrator_node)
+            workflow.add_node(WorkflowNode.DEEP_ANALYSIS_DISPATCH.value, self._deep_analysis_dispatch_node)
 
         # Phase 2 (OpenClaw Execution Approval): 민감 스킬 사용자 승인 노드
         # interrupt_before=[EXECUTION_APPROVAL]로 중단 → resume 후 이 노드 실행
@@ -415,7 +415,7 @@ class MultiAgentWorkflow:
             if settings.HYPER_DEEP_AGENT_ENABLED:
                 _routing_map["hyper_deep"] = WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value
             if settings.DEEP_ANALYSIS_ENABLED:
-                _routing_map["deep_analysis"] = WorkflowNode.DEEP_ANALYSIS_ORCHESTRATOR.value
+                _routing_map["deep_analysis"] = WorkflowNode.DEEP_ANALYSIS_DISPATCH.value
             # Phase 2: 승인 대기 경로 (최우선 — _should_use_recursive_agent에서 먼저 체크)
             if settings.EXECUTION_APPROVAL_ENABLED:
                 _routing_map["needs_approval"] = WorkflowNode.EXECUTION_APPROVAL.value
@@ -437,8 +437,9 @@ class MultiAgentWorkflow:
                 # HYPER_DEEP_ORCHESTRATOR → RESULT_INTEGRATOR (결과 통합 후 정상 파이프라인 합류)
                 workflow.add_edge(WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
             if settings.DEEP_ANALYSIS_ENABLED:
-                # DEEP_ANALYSIS_ORCHESTRATOR → RESULT_INTEGRATOR (결과 통합 후 정상 파이프라인 합류)
-                workflow.add_edge(WorkflowNode.DEEP_ANALYSIS_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
+                # 디스패치 노드는 END로 단락한다 — 챗 턴은 job 핸들을 낸 뒤
+                # 즉시 끝나야 하며(AC2), 후속 노드가 기다릴 결과가 없다.
+                workflow.add_edge(WorkflowNode.DEEP_ANALYSIS_DISPATCH.value, END)
             # Phase 8: UI_FRAME_GENERATOR 노드 등록 + END 단락 경로
             if settings.A2UI_ENABLED:
                 workflow.add_node(WorkflowNode.UI_FRAME_GENERATOR.value, self._ui_frame_generator_node)
@@ -1047,60 +1048,83 @@ class MultiAgentWorkflow:
         )
         return await self.hyper_deep_orchestrator.execute(state)
 
-    async def _deep_analysis_orchestrator_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Sub-project A: 심층 분석 하네스 오케스트레이터 노드.
+    async def _deep_analysis_dispatch_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Phase 3b(D23): 심층 분석을 job으로 제출하고 즉시 반환한다.
 
-        DEEP_ANALYSIS_ENABLED 플래그로 격리. 하네스를 실행하고 리포트를
-        chat state(final_response/deep_analysis_run_id)로 매핑한다.
+        D18의 블로킹 완주 노드를 대체한다. 세 예산을 나란히 놓으면 프론트
+        maxDuration 60s < 노드 캡 300s < dig 하나의 wall_clock_cap 600s이므로,
+        **가장 작은 예산이 클라이언트 쪽에 있다** -- 라운드를 여러 번 도는 run은
+        어떤 동기 요청 예산에도 애초에 맞지 않는다. 노드 레벨 캡(9763eb5)은
+        호출자가 떠난 뒤 자원을 붙드는 것만 막았을 뿐 사용자가 결과를 받게 하지
+        못했다. 여기서 캡이 사라지는 것은 퇴행이 아니라, 붙들 자원이 없어진
+        것이다(스펙 5.2).
+
+        진행 상황과 최종 리포트는 `events_url`의 전용 SSE 스트림이 전달한다 --
+        챗과 전용 API가 **같은 이벤트 스트림 계약**을 쓴다(AC4).
         """
-        from neos.workflow.deep_analysis.service import build_orchestrator
-        from neos.workflow.deep_analysis.ledger import Ledger, create_run
+        import uuid
+
+        from neos.config.settings import settings
         from neos.database.connection import db_manager
+        from neos.tasks.deep_analysis_job_task import submit_deep_analysis_job
+        from neos.workflow.deep_analysis.ledger import create_run
 
         query = state.get("refined_query") or state.get("original_query", "")
         profile = "default"
-        run_id = None
+        conversation_id = state.get("conversation_id")
+        # 대화에 묶인 run만 어시스턴트 메시지를 예약한다. job이 완료되면
+        # 실행자 계층(neos/tasks/deep_analysis_job_task.py)이 이 ID로 리포트를
+        # 영속화하므로, 프론트가 그 순간 접속해 있지 않아도 대화에 남는다.
+        assistant_message_id = str(uuid.uuid4()) if conversation_id else None
+
         try:
             async with await db_manager.get_session() as session:
-                run_id = await create_run(session, query, profile)
-                await session.commit()
-
-                def sink(kind, payload):  # 노드 레벨 진행(현재는 no-op)
-                    pass
-
-                orch = await build_orchestrator(
-                    session, run_id, profile=profile, event_sink=sink
+                run_id = await create_run(
+                    session,
+                    query,
+                    profile,
+                    user_id=state.get("user_id") or None,
+                    conversation_id=conversation_id,
+                    assistant_message_id=assistant_message_id,
                 )
-                result = await orch.run(query)
+                # 커밋이 필수다 -- job이 다른 태스크/프로세스에서 이 run을 읽는다.
                 await session.commit()
-            return {
-                "final_response": result["report_markdown"],
-                "deep_analysis_run_id": result["run_id"],
-                "execution_steps": state.get("execution_steps", [])
-                + [
-                    {
-                        "step": "deep_analysis_orchestrator",
-                        "result": f"run {result['run_id']}",
-                    }
-                ],
-            }
+
+            executor = submit_deep_analysis_job(run_id, query, profile)
         except Exception as exc:
-            logger.error(f"[DeepAnalysisOrchestratorNode] failed: {exc}")
-            # D18 선결조건(2): 실패한 run을 내구성 있게 'failed'로 확정한다.
-            # orch.run()의 예외 경로는 세션을 롤백한 뒤 fail_run()을 flush만
-            # 하므로, 원 세션(롤백/오류 상태일 수 있음)이 아닌 새 세션에서
-            # 상태를 커밋해야 status='running' 고아 run이 남지 않는다.
-            if run_id is not None:
-                try:
-                    async with await db_manager.get_session() as fail_session:
-                        await Ledger(fail_session, run_id).fail_run()
-                        await fail_session.commit()
-                except Exception as fail_exc:  # noqa: BLE001
-                    logger.error(
-                        f"[DeepAnalysisOrchestratorNode] fail_run persist "
-                        f"failed for run {run_id}: {fail_exc}"
-                    )
-            return {"final_response": "심층 분석 하네스 실행에 실패했습니다."}
+            logger.error(f"[DeepAnalysisDispatchNode] submission failed: {exc}")
+            return {
+                "final_response": "심층 분석을 시작하지 못했습니다.",
+                "deep_analysis_run_id": None,
+            }
+
+        events_url = f"{settings.API_V1_PREFIX}/deep-analysis/{run_id}/events"
+        event_handler = state.get("_event_handler")
+        if event_handler and hasattr(event_handler, "on_deep_analysis_started"):
+            await event_handler.on_deep_analysis_started(
+                run_id=run_id,
+                events_url=events_url,
+                assistant_message_id=assistant_message_id,
+            )
+
+        logger.info(
+            f"[DeepAnalysisDispatchNode] run {run_id} submitted via {executor}"
+        )
+        return {
+            "final_response": (
+                "심층 분석을 시작했습니다. 진행 상황과 최종 리포트는 "
+                "분석이 끝나는 대로 이 대화에 표시됩니다."
+            ),
+            "deep_analysis_run_id": run_id,
+            "execution_steps": state.get("execution_steps", [])
+            + [
+                {
+                    "step": "deep_analysis_dispatch",
+                    "result": f"run {run_id} submitted via {executor}",
+                }
+            ],
+        }
+
 
     def _should_use_recursive_agent(self, state: AgentState) -> str:
         """ROMA / HyperDeep: 재귀 에이전트 사용 여부 판단 라우팅 함수.
@@ -1693,6 +1717,7 @@ class MultiAgentWorkflow:
         return AgentState(
             user_id=user_input["user_id"],
             session_id=user_input["session_id"],
+            conversation_id=user_input.get("conversation_id"),
             original_query=user_input["query"],
             query_intent=None,
             query_embedding=None,

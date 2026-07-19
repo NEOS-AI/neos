@@ -12,7 +12,22 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_URL_KEYS = ("url", "link", "pdf_url", "html_url", "href")
+# 순서가 곧 우선순위다. fetch.py는 content-type 분기 없이 html_to_text를 돌리므로
+# (fetch.py:64) PDF URL은 쓰레기 텍스트가 되어 E_QUOTE_MISMATCH로 기각된다.
+# 따라서 HTML 랜딩/초록 페이지를 항상 PDF보다 먼저 고른다.
+_URL_KEYS = (
+    "url",  # semantic_scholar, sec_edgar, wikipedia, news_api, google_scholar
+    "entry_url",  # arxiv 초록 페이지 (HTML)
+    "pubmed_url",  # pubmed 초록 페이지 (HTML)
+    "landing_page_url",  # openalex 랜딩 페이지 (HTML)
+    "homepage_url",  # openalex 대체
+    "link",  # google_scholar 대체
+    "html_url",
+    "href",
+    # 최후 수단. PDF만 있는 항목은 현재 검증을 통과하지 못하지만, 버리면
+    # fetch.py가 PDF를 지원하게 됐을 때 조용히 누락된다.
+    "pdf_url",
+)
 _TITLE_KEYS = ("title", "name", "headline")
 _SNIPPET_KEYS = ("snippet", "summary", "abstract", "content", "description", "text")
 
