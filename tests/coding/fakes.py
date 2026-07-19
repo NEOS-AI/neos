@@ -1,4 +1,14 @@
+import asyncio
+from datetime import timedelta
 from typing import Any
+
+from neos.coding.domain.durability import (
+    ExecutionLease,
+    StaleExecutionLease,
+    ToolExecutionClaim,
+    ToolExecutionDisposition,
+)
+from neos.coding.domain.events import make_event
 
 
 class InMemoryCodingRunRepository:
@@ -12,6 +22,141 @@ class InMemoryCodingRunRepository:
         self.applied_steering = []
         self.steering_requests = []
         self.phases = []
+        self.execution_leases = {}
+        self.tool_claims = {}
+        self._durability_lock = asyncio.Lock()
+        self._durability_seq = 0
+
+    async def acquire_execution_lease(
+        self,
+        *,
+        task_id,
+        run_id,
+        worker_id,
+        now,
+        expires_at,
+    ):
+        async with self._durability_lock:
+            current = self.execution_leases.get(task_id)
+            if current is not None and current.expires_at > now:
+                return None
+            token = current.fencing_token + 1 if current else 1
+            lease = ExecutionLease(
+                task_id=task_id,
+                run_id=run_id,
+                worker_id=worker_id,
+                fencing_token=token,
+                acquired_at=now,
+                expires_at=expires_at,
+                recovered=(
+                    current is not None and current.worker_id != worker_id
+                ),
+            )
+            self.execution_leases[task_id] = lease
+            return lease
+
+    async def renew_execution_lease(
+        self, lease, *, now, expires_at
+    ):
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=now)
+            renewed = ExecutionLease(
+                task_id=lease.task_id,
+                run_id=lease.run_id,
+                worker_id=lease.worker_id,
+                fencing_token=lease.fencing_token,
+                acquired_at=lease.acquired_at,
+                expires_at=expires_at,
+            )
+            self.execution_leases[lease.task_id] = renewed
+            return renewed
+
+    async def release_execution_lease(self, lease, *, now) -> None:
+        async with self._durability_lock:
+            self._require_current_lease(lease)
+            self.execution_leases[lease.task_id] = ExecutionLease(
+                task_id=lease.task_id,
+                run_id=lease.run_id,
+                worker_id=lease.worker_id,
+                fencing_token=lease.fencing_token,
+                acquired_at=lease.acquired_at,
+                expires_at=(
+                    now
+                    if now > lease.acquired_at
+                    else lease.acquired_at + timedelta(microseconds=1)
+                ),
+            )
+
+    async def claim_tool_execution(
+        self,
+        *,
+        lease,
+        tool_call_id,
+        now,
+        claim_expires_at,
+    ):
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=now)
+            completed = self.completed_tools.get((lease.task_id, tool_call_id))
+            if completed is not None:
+                return ToolExecutionClaim(
+                    ToolExecutionDisposition.COMPLETED,
+                    tool_call_id,
+                    lease,
+                    completed,
+                )
+            current = self.tool_claims.get((lease.task_id, tool_call_id))
+            if current is not None and current[1] > now:
+                return ToolExecutionClaim(
+                    ToolExecutionDisposition.BUSY, tool_call_id, lease
+                )
+            claim = ToolExecutionClaim(
+                ToolExecutionDisposition.CLAIMED, tool_call_id, lease
+            )
+            self.tool_claims[(lease.task_id, tool_call_id)] = (
+                claim,
+                claim_expires_at,
+            )
+            return claim
+
+    async def complete_tool_execution(self, claim, *, result, now):
+        async with self._durability_lock:
+            self._require_current_lease(claim.lease, now=now)
+            key = (claim.lease.task_id, claim.tool_call_id)
+            current = self.tool_claims.get(key)
+            if current is None or current[0] != claim:
+                raise StaleExecutionLease(claim.lease.task_id)
+            self.completed_tools[key] = dict(result)
+            self.tool_execution_calls.append(
+                {
+                    "task_id": claim.lease.task_id,
+                    "run_id": claim.lease.run_id,
+                    "tool_call_id": claim.tool_call_id,
+                    "result": dict(result),
+                    "completed_at": now,
+                }
+            )
+            self._durability_seq += 1
+            return make_event(
+                task_id=claim.lease.task_id,
+                seq=self._durability_seq,
+                event_type="tool.completed",
+                payload={"result": dict(result), "reused": False},
+                now=now,
+                run_id=claim.lease.run_id,
+                tool_call_id=claim.tool_call_id,
+            )
+
+    def _require_current_lease(self, lease, *, now=None) -> None:
+        current = self.execution_leases.get(lease.task_id)
+        if (
+            current is None
+            or current.run_id != lease.run_id
+            or current.worker_id != lease.worker_id
+            or current.fencing_token != lease.fencing_token
+            or (now is not None and current.expires_at <= now)
+        ):
+            raise StaleExecutionLease(lease.task_id)
 
     async def create_run(self, run) -> None:
         self.created_runs.append(run)
