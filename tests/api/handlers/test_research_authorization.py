@@ -451,31 +451,25 @@ async def test_async_stream_hides_missing_and_foreign_start_owner_before_claim(
 
 
 @pytest.mark.asyncio
-async def test_async_stream_rejects_foreign_claim_before_response_or_buffer(
+async def test_async_stream_owner_opens_response_without_in_memory_claim(
     monkeypatch,
 ):
     monkeypatch.setattr(cache_manager, "get", AsyncMock(return_value="owner"))
-    claim = Mock(side_effect=PermissionError("foreign"))
-    get_events = Mock()
-    fake_stream_manager = SimpleNamespace(
-        claim_session=claim,
-        get_events_since=get_events,
-    )
+    read_after = AsyncMock()
     monkeypatch.setattr(
-        async_research_handlers,
-        "stream_manager",
-        fake_stream_manager,
-        raising=False,
+        async_research_handlers.async_research_event_stream,
+        "read_after",
+        read_after,
     )
 
-    with pytest.raises(HTTPException) as exc:
-        await async_research_handlers.stream_research_progress(
-            "s1",
-            SimpleNamespace(is_disconnected=AsyncMock(return_value=True)),
-            current_user=_user(),
-        )
+    response = await async_research_handlers.stream_research_progress(
+        "s1",
+        SimpleNamespace(
+            headers={},
+            is_disconnected=AsyncMock(return_value=True),
+        ),
+        current_user=_user(),
+    )
 
-    assert exc.value.status_code == 404
-    assert exc.value.detail == "Resource not found"
-    claim.assert_called_once_with("s1", "owner")
-    get_events.assert_not_called()
+    assert response.status_code == 200
+    read_after.assert_not_awaited()

@@ -19,7 +19,11 @@ from neos.api.dependencies.resource_access import get_owned_conversation
 from neos.database.models import User
 from neos.config.settings import settings
 from neos.utils.cache import cache_manager
-from neos.workflow.stream_manager import stream_manager
+from neos.workflow.async_research_event_stream import (
+    async_research_event_stream,
+    validate_event_id,
+)
+from neos.workflow.stream_manager import StreamEvent
 
 router = APIRouter(prefix="/api/v1/research", tags=["async-research"])
 logger = logging.getLogger(__name__)
@@ -177,36 +181,53 @@ async def stream_research_progress(
     if owner_id != current_user.user_id:
         raise HTTPException(status_code=404, detail="Resource not found")
 
+    last_event_id = request.headers.get("last-event-id", "0-0")
     try:
-        stream_manager.claim_session(session_id, current_user.user_id)
-    except PermissionError:
-        raise HTTPException(status_code=404, detail="Resource not found")
+        validate_event_id(last_event_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid Last-Event-ID",
+        ) from exc
 
     async def event_generator():
-        try:
-            while True:
-                if await request.is_disconnected():
-                    break
+        cursor = last_event_id
+        while True:
+            if await request.is_disconnected():
+                return
 
-                events = stream_manager.get_events_since(session_id)
+            try:
+                events = await async_research_event_stream.read_after(
+                    session_id,
+                    cursor,
+                    block_ms=15000,
+                    count=100,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Async research event stream read failed: session=%s error_type=%s",
+                    session_id,
+                    type(exc).__name__,
+                )
+                yield StreamEvent(
+                    id=cursor,
+                    event="stream_error",
+                    data=json.dumps(
+                        {"error": "Event stream unavailable"},
+                        ensure_ascii=False,
+                    ),
+                ).to_sse_format()
+                return
 
-                for event in events:
-                    data = json.dumps(event.data) if isinstance(event.data, dict) else str(event.data)
-                    yield f"id: {event.id}\nevent: {event.event}\ndata: {data}\n\n"
-
-                    # 워크플로우 완료/실패 시 스트림 종료
-                    if event.event in ("workflow_completed", "workflow_failed"):
-                        return
-
-                # Heartbeat
+            if not events:
                 yield ": heartbeat\n\n"
+                continue
 
-                # 짧은 대기 후 새 이벤트 확인
-                import asyncio
-                await asyncio.sleep(1.0)
-
-        finally:
-            stream_manager.disconnect(session_id)
+            for event in events:
+                yield event.to_sse_format()
+                cursor = event.id
+                if event.event in ("workflow_completed", "workflow_failed"):
+                    return
 
     return StreamingResponse(
         event_generator(),

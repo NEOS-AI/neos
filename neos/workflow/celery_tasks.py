@@ -5,12 +5,13 @@ Phase 3 Item 4: 에이전트를 Celery 태스크로 실행
 """
 
 import asyncio
-from typing import Dict, Any, List, Optional
+from datetime import datetime
+from typing import Dict, Any, Optional
 import logging
 
 from .celery_app import app
 from .telemetry import trace_agent_execution
-from neos.config.settings import settings
+from neos.workflow.async_research_event_stream import async_research_event_stream
 
 logger = logging.getLogger(__name__)
 
@@ -302,7 +303,7 @@ def execute_workflow_async(
     except Exception as e:
         logger.error(f"[Celery] Workflow failed: task={task_id}, error={e}", exc_info=True)
 
-        # Publish failure event via StreamManager
+        # Publish failure event without replacing the workflow's retry cause.
         try:
             run_async(_publish_workflow_event(
                 session_id or conversation_id,
@@ -310,7 +311,10 @@ def execute_workflow_async(
                 {"error": str(e), "task_id": task_id},
             ))
         except Exception:
-            pass
+            logger.exception(
+                "[Celery] Failed to publish workflow failure event: task=%s",
+                task_id,
+            )
 
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=60)
@@ -328,13 +332,12 @@ async def _execute_workflow_full_async(
 ) -> Dict[str, Any]:
     """전체 워크플로우 비동기 실행 (Celery worker 내)"""
     from neos.workflow.graph import multi_agent_workflow
-    from neos.workflow.stream_manager import stream_manager
 
     # SSE 이벤트로 워크플로우 시작 알림
-    await stream_manager.add_event(
-        session_id=session_id,
-        event="workflow_started",
-        data={"task_id": celery_task_id, "query": query[:100]},
+    await _publish_workflow_event(
+        session_id,
+        "workflow_started",
+        {"task_id": celery_task_id, "query": query[:100]},
     )
 
     # 워크플로우 실행
@@ -351,10 +354,10 @@ async def _execute_workflow_full_async(
     )
 
     # SSE 이벤트로 완료 알림
-    await stream_manager.add_event(
-        session_id=session_id,
-        event="workflow_completed",
-        data={
+    await _publish_workflow_event(
+        session_id,
+        "workflow_completed",
+        {
             "task_id": celery_task_id,
             "status": "completed",
         },
@@ -369,10 +372,9 @@ async def _execute_workflow_full_async(
 
 async def _publish_workflow_event(
     session_id: str, event: str, data: Dict[str, Any]
-) -> None:
-    """StreamManager를 통해 워크플로우 이벤트 발행"""
-    from neos.workflow.stream_manager import stream_manager
-    await stream_manager.add_event(session_id=session_id, event=event, data=data)
+) -> str:
+    """Redis Stream을 통해 워크플로우 이벤트 발행"""
+    return await async_research_event_stream.append(session_id, event, data)
 
 
 # ============================================================================
@@ -399,7 +401,7 @@ async def _cleanup_old_checkpoints_async() -> Dict[str, int]:
     from neos.workflow.checkpointer import get_checkpointer
     from datetime import datetime, timedelta
 
-    checkpointer = await get_checkpointer()
+    await get_checkpointer()
 
     # 7일 이상 된 체크포인트 삭제
     cutoff_date = datetime.now() - timedelta(days=7)
