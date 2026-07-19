@@ -33,3 +33,4 @@ async def test_exception_becomes_failed():
     orch = _orch(lambda: BoomWorker())
     r = await orch._run_worker(Assignment(question_id="q", brief="b", effort=Effort.SCOUT))
     assert r.status == "failed" and "boom" in r.fail_reason
+

@@ -541,6 +541,11 @@ class Orchestrator:
                     "tokens": result.tokens_spent,
                 },
             )
+            # 패스가 끝날 때마다 커밋한다. Ledger.log()는 flush만 하므로
+            # 커밋 전까지 이벤트는 다른 세션(SSE 소비자)에 보이지 않는다.
+            # 라운드 끝에 한 번만 커밋하면 그 라운드의 진행이 뭉텅이로
+            # 나타나고, 크래시 시 라운드 전체 작업이 날아간다.
+            await self._checkpoint()
         await self._checkpoint()
         return True
 
