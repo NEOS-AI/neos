@@ -69,3 +69,22 @@ export async function getCodingTaskSnapshot(
   }
   return response.json();
 }
+
+export async function steerCodingTask(
+  taskId: string,
+  instruction: string,
+  mode: "safe_point" | "interrupt_now"
+): Promise<{ steering_id: string; mode: string }> {
+  const response = await fetch(
+    `/api/coding/tasks/${encodeURIComponent(taskId)}/steer`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instruction, mode }),
+    }
+  );
+  if (!response.ok) {
+    throw await responseError(response, "Could not steer coding task");
+  }
+  return response.json();
+}
