@@ -1,0 +1,118 @@
+name: Backend CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DATABASE_URL: postgresql+asyncpg://neos:neos_password@localhost:5432/neos_db
+  JWT_SECRET_KEY: neos-ci-only-secret-key-2026-07-19
+  GOOGLE_API_KEY: neos-ci-placeholder
+  DEBUG: "false"
+  LITELLM_LOCAL_MODEL_COST_MAP: "True"
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          version: "0.11.16"
+      - run: uv sync --frozen --group dev
+      - name: Ruff
+        run: >-
+          uv run --frozen ruff check
+          neos/workflow/deep_analysis/analytics.py
+          tests/workflow/deep_analysis/test_deep_analysis_analytics.py
+          tests/config/test_test_environment_policy.py
+          tests/conftest.py
+      - name: Test CI environment policy
+        run: uv run --frozen pytest tests/config/test_test_environment_policy.py -q
+      - name: Collect backend tests
+        run: uv run --frozen pytest --collect-only tests/workflow tests/api -q
+
+  workflow-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: neos
+          POSTGRES_PASSWORD: neos_password
+          POSTGRES_DB: neos_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U neos -d neos_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          version: "0.11.16"
+      - run: uv sync --frozen --group dev
+      - name: Enable pgvector
+        run: >-
+          uv run --frozen python -c
+          "import psycopg2;
+          connection = psycopg2.connect(host='localhost', dbname='neos_db', user='neos', password='neos_password');
+          connection.autocommit = True;
+          connection.cursor().execute('CREATE EXTENSION IF NOT EXISTS vector');
+          connection.close()"
+      - run: uv run --frozen pytest tests/workflow -q
+
+  api-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: neos
+          POSTGRES_PASSWORD: neos_password
+          POSTGRES_DB: neos_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U neos -d neos_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          version: "0.11.16"
+      - run: uv sync --frozen --group dev
+      - name: Enable pgvector
+        run: >-
+          uv run --frozen python -c
+          "import psycopg2;
+          connection = psycopg2.connect(host='localhost', dbname='neos_db', user='neos', password='neos_password');
+          connection.autocommit = True;
+          connection.cursor().execute('CREATE EXTENSION IF NOT EXISTS vector');
+          connection.close()"
+      - run: uv run --frozen pytest tests/api -q
