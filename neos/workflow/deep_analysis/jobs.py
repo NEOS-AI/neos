@@ -81,24 +81,44 @@ async def _log_lifecycle(
     await session.commit()
 
 
-async def _record_failure(session_factory, run_id: str, error: str) -> None:
+async def _record_failure(
+    session_factory,
+    run_id: str,
+    error: str,
+    *,
+    code: str | None = None,
+) -> None:
     """실패 상태를 **새 세션**에서 내구성 있게 확정한다.
 
     실행 세션은 롤백/오류 상태일 수 있어 재사용하지 않는다(D18 선결조건 #2가
     챗 노드에서 겪은 것과 같은 함정).
     """
+    payload = {"error": error[:500]}
+    if code is not None:
+        payload["code"] = code
     try:
         async with session_factory() as session:
             run = await session.get(DARun, run_id)
             if run is not None:
                 run.status = "failed"
-            await _log_lifecycle(session, run_id, JOB_FAILED, {"error": error})
+            await _log_lifecycle(session, run_id, JOB_FAILED, payload)
     except Exception:  # noqa: BLE001 - 원래 예외를 가리면 안 된다
         logger.error(
             "failed to persist job_failed for deep_analysis run %s",
             run_id,
             exc_info=True,
         )
+
+
+async def record_dispatch_failure(session_factory, run_id: str) -> None:
+    """Persist a bounded terminal event for a failed Celery enqueue."""
+
+    await _record_failure(
+        session_factory,
+        run_id,
+        "Celery broker dispatch failed",
+        code="E_BROKER_DISPATCH",
+    )
 
 
 async def execute_run(
