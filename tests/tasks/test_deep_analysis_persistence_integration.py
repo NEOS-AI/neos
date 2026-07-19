@@ -98,7 +98,15 @@ async def test_execute_chain_persists_report_without_calling_an_llm(monkeypatch)
     message_id = str(uuid.uuid4())
     run_id = await _seed_run(conversation_id, message_id)
 
-    async def fake_execute_run(session_ctx, rid, question, profile):
+    async def fake_execute_run(
+        session_ctx,
+        rid,
+        question,
+        profile,
+        *,
+        timeout_seconds=None,
+    ):
+        assert timeout_seconds is None
         return {"run_id": rid, "report_markdown": REPORT}
 
     monkeypatch.setattr(
