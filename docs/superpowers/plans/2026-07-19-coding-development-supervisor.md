@@ -16,6 +16,7 @@
 - Retry backoffs are exactly 1, 2, and 4 seconds.
 - Graceful shutdown timeout is 10 seconds.
 - `RunAlreadyLeased` is expected competition and must not be recorded as failure.
+- Direct `queued -> running` is allowed only when `ensure_run_started` receives `development_mode=True`; do not relax the production domain transition table.
 - All run/task lifecycle state, terminal events, and outbox rows commit atomically.
 - Metric labels must remain bounded and must not contain task IDs, worker IDs, exception text, or user input.
 - Preserve unrelated modified and untracked files in the existing `dev` worktree.
@@ -64,7 +65,7 @@ async def test_ensure_run_started_commits_task_run_event_and_outbox() -> None:
     repository = repository_for(session)
 
     run = await repository.ensure_run_started(
-        task_id="ct_1", instruction="Fix it", now=NOW
+        task_id="ct_1", instruction="Fix it", development_mode=True, now=NOW
     )
 
     sql = "\n".join(session.sql)
@@ -81,7 +82,7 @@ async def test_ensure_run_started_returns_existing_running_run() -> None:
     repository = repository_for(session)
 
     run = await repository.ensure_run_started(
-        task_id="ct_1", instruction="Fix it", now=NOW
+        task_id="ct_1", instruction="Fix it", development_mode=True, now=NOW
     )
 
     assert run.run_id == "cr_1"
@@ -140,7 +141,12 @@ Add to `CodingRunRepository` in `neos/coding/loop/base.py`:
 
 ```python
 async def ensure_run_started(
-    self, *, task_id: str, instruction: str, now: datetime
+    self,
+    *,
+    task_id: str,
+    instruction: str,
+    development_mode: bool,
+    now: datetime,
 ) -> CodingRun:
     raise NotImplementedError
 
@@ -177,6 +183,11 @@ task_result = await session.execute(
 ```
 
 Return an existing running run when present. Otherwise select `MAX(attempt)`, insert one running run, update the task to `running`, allocate one sequence, and insert `run.started` plus outbox through `_insert_event_in_session()`.
+
+Before creating a run, require `development_mode is True` when the locked task
+status is `queued`. Add a failing test proving `development_mode=False` rejects
+the fast path without inserting a run. Do not modify `_ALLOWED_TRANSITIONS` in
+`neos/coding/domain/models.py`.
 
 Implement terminal commands with this shared internal shape:
 
@@ -327,6 +338,7 @@ async def ensure_started(self, *, task_id: str) -> CodingRun:
     return await self._runs.ensure_run_started(
         task_id=task_id,
         instruction=task.prompt,
+        development_mode=True,
         now=self._clock(),
     )
 
@@ -411,7 +423,7 @@ git commit -m "feat: drive coding run lifecycle durably"
 
 **Interfaces:**
 - Consumes: `CodingRunService.ensure_started`, `advance_one_safe_point`, `fail_active_run`, and repository `claimable_task_ids`.
-- Produces: `CodingDevelopmentSupervisor.start()`, `notify(task_id)`, `stop()`, and `is_running`.
+- Produces: `CodingDevelopmentSupervisor.start()`, `notify(task_id)`, `wait_idle()`, `stop()`, and `is_running`.
 
 - [ ] **Step 1: Write failing duplicate-notify and lease-competition tests**
 
@@ -497,6 +509,11 @@ class CodingDevelopmentSupervisor:
 ```
 
 `start()` creates dispatcher and reconciliation tasks. `notify()` returns `False` when stopped, queued, or already active; otherwise it adds the ID to `_queued` and `_pending`.
+
+`wait_idle()` is an awaitable synchronization helper used by tests and orderly
+development shutdown. It returns when `_queued` and `_active` are both empty;
+implement it with an internal `asyncio.Condition` or `asyncio.Event`, not polling
+sleep.
 
 - [ ] **Step 5: Implement dispatch, runner, and reconciliation**
 
@@ -880,10 +897,16 @@ async def test_concurrent_start_creates_one_canonical_run(runtime) -> None:
     task = await runtime.seed_task()
     first, second = await asyncio.gather(
         runtime.repository.ensure_run_started(
-            task_id=task.task_id, instruction=task.prompt, now=NOW
+            task_id=task.task_id,
+            instruction=task.prompt,
+            development_mode=True,
+            now=NOW,
         ),
         runtime.repository.ensure_run_started(
-            task_id=task.task_id, instruction=task.prompt, now=NOW
+            task_id=task.task_id,
+            instruction=task.prompt,
+            development_mode=True,
+            now=NOW,
         ),
     )
     assert first.run_id == second.run_id

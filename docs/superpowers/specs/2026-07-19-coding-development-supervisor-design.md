@@ -96,7 +96,7 @@ event append an unacceptable crash boundary. Add repository business commands.
 
 ```python
 async def ensure_run_started(
-    *, task_id: str, instruction: str, now: datetime
+    *, task_id: str, instruction: str, development_mode: bool, now: datetime
 ) -> CodingRun:
     raise NotImplementedError
 ```
@@ -109,6 +109,12 @@ In one transaction it:
 4. inserts a running run;
 5. changes the task state to `running`;
 6. inserts `run.started` and its outbox row.
+
+The direct `queued -> running` transition is a development-only fast path that
+skips the future sandbox provisioning states. The command requires
+`development_mode=True`; it rejects a queued task otherwise. This does not
+change the production domain transition table or authorize other callers to
+bypass `provisioning -> cloning -> ready`.
 
 Concurrent calls for one task must return one canonical running run and must not
 create duplicate attempts or lifecycle events.
