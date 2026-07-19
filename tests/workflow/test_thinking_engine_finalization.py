@@ -1,7 +1,6 @@
 import os
 import sys
 import types
-from contextlib import contextmanager
 
 os.environ["GOOGLE_API_KEY"] = "test-key"
 os.environ["OPENAI_API_KEY"] = "test-key"
@@ -34,18 +33,7 @@ isodate_module.parse_duration = lambda value: value
 sys.modules.setdefault("isodate", isodate_module)
 
 
-@contextmanager
-def _noop_trace(*args, **kwargs):
-    yield object()
-
-
-telemetry_module = types.ModuleType("neos.workflow.telemetry")
-telemetry_module.trace_workflow_node = _noop_trace
-telemetry_module.add_span_event = lambda *args, **kwargs: None
-telemetry_module.set_span_attributes = lambda *args, **kwargs: None
-sys.modules["neos.workflow.telemetry"] = telemetry_module
-
-from neos.workflow.graph import _is_gate_harness_blocked
+from neos.workflow.graph import _is_gate_harness_blocked  # noqa: E402
 
 
 def test_gate_fail_blocks_finalization():

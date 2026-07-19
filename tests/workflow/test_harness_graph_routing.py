@@ -1,7 +1,6 @@
 import os
 import sys
 import types
-from contextlib import contextmanager
 
 os.environ["GOOGLE_API_KEY"] = "test-key"
 
@@ -30,18 +29,6 @@ sys.modules.setdefault("googleapiclient.errors", googleapi_errors_module)
 isodate_module = types.ModuleType("isodate")
 isodate_module.parse_duration = lambda value: value
 sys.modules.setdefault("isodate", isodate_module)
-
-
-@contextmanager
-def _noop_trace(*args, **kwargs):
-    yield object()
-
-
-telemetry_module = types.ModuleType("neos.workflow.telemetry")
-telemetry_module.trace_workflow_node = _noop_trace
-telemetry_module.add_span_event = lambda *args, **kwargs: None
-telemetry_module.set_span_attributes = lambda *args, **kwargs: None
-sys.modules.setdefault("neos.workflow.telemetry", telemetry_module)
 
 
 class RecordingGraph:
