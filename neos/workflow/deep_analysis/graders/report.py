@@ -14,6 +14,7 @@ from ..citation import OrphanCitationError
 from ..llm import JSONParseError, call_json
 from ..models import Verdict
 from ..prompt_loader import render
+from ..token_budget import TokenBudgetExhausted
 
 # Post-CitationRender, every `[C:<claim_id>]` marker must have been rewritten
 # to a footnote number. Any survivor means CitationRenderer never ran, or ran
@@ -135,6 +136,7 @@ class ReportGrader:
                 max_tokens=400,
                 client=self.llm_client,
                 cassette=self.cassette,
+                stage="report_grading",
             )
         except JSONParseError:
             # Degrade to pass rather than halting the run (mirrors D14 in
@@ -160,4 +162,7 @@ class ReportGrader:
             root = await self.ledger.root_question()
         root_text = root.text if root is not None else ""
 
-        return await self.grade_agentic(report, root_text)
+        try:
+            return await self.grade_agentic(report, root_text)
+        except TokenBudgetExhausted:
+            return deterministic

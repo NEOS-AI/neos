@@ -1,14 +1,25 @@
+import warnings
 from pathlib import Path
 
 import pytest
 
 from neos.config import loader
 
+YAML_ONLY_FEATURE_FLAGS = {
+    "DEEP_ANALYSIS_ENABLED": "deep_analysis.enabled",
+    "RECURSIVE_AGENT_ENABLED": "recursive_agent.enabled",
+    "HYPER_DEEP_AGENT_ENABLED": "hyper_deep_agent.enabled",
+    "A2UI_ENABLED": "a2ui.enabled",
+    "RAY_ENABLED": "ray.enabled",
+    "EXECUTION_APPROVAL_ENABLED": "execution_approval.enabled",
+    "CELERY_ENABLED": "celery.enabled",
+}
+
 
 @pytest.fixture(autouse=True)
 def isolate_repo_dotenv(tmp_path, monkeypatch):
     monkeypatch.setattr(loader, "DEFAULT_DOTENV_PATH", tmp_path / "missing.env")
-    for env_key in loader.LEGACY_ENV_KEYS:
+    for env_key in loader.LEGACY_ENV_KEYS | YAML_ONLY_FEATURE_FLAGS:
         monkeypatch.delenv(env_key, raising=False)
 
 
@@ -55,6 +66,55 @@ def test_legacy_non_secret_env_overrides_yaml_with_warning(tmp_path, monkeypatch
         config = loader.load_app_config(env="development")
 
     assert config.llm.model == "legacy-env-model"
+
+
+@pytest.mark.parametrize(("env_key", "yaml_path"), YAML_ONLY_FEATURE_FLAGS.items())
+def test_yaml_only_feature_flag_env_warns(tmp_path, monkeypatch, env_key, yaml_path):
+    monkeypatch.setenv(env_key, "true")
+
+    with pytest.warns(UserWarning, match=rf"{env_key}.*{yaml_path}"):
+        loader.load_app_config(env="development")
+
+
+def test_yaml_only_feature_flag_env_does_not_override_yaml(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    write_yaml(config_dir / "neos.default.yaml", "deep_analysis:\n  enabled: false\n")
+    monkeypatch.setattr(loader, "DEFAULT_CONFIG_DIR", config_dir)
+    monkeypatch.setenv("DEEP_ANALYSIS_ENABLED", "true")
+
+    with pytest.warns(UserWarning, match=r"DEEP_ANALYSIS_ENABLED.*deep_analysis\.enabled"):
+        config = loader.load_app_config(env="development")
+
+    assert config.deep_analysis.enabled is False
+
+
+def test_unrelated_enabled_env_does_not_emit_yaml_only_warning(monkeypatch):
+    monkeypatch.setenv("THIRD_PARTY_ENABLED", "true")
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        loader.load_app_config(env="development")
+
+    assert not [
+        warning for warning in captured if "is ignored; configure" in str(warning.message)
+    ]
+
+
+def test_yaml_only_flag_in_dotenv_and_process_env_warns_once(tmp_path, monkeypatch):
+    dotenv_path = write_dotenv(tmp_path / ".env", "DEEP_ANALYSIS_ENABLED=false\n")
+    monkeypatch.setattr(loader, "DEFAULT_DOTENV_PATH", dotenv_path)
+    monkeypatch.setenv("DEEP_ANALYSIS_ENABLED", "true")
+
+    with pytest.warns(UserWarning) as captured:
+        loader.load_app_config(env="development")
+
+    matching = [
+        warning
+        for warning in captured
+        if "DEEP_ANALYSIS_ENABLED is ignored" in str(warning.message)
+    ]
+    assert len(matching) == 1
 
 
 def test_bootstrap_controls_prefer_process_env():

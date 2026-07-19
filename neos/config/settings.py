@@ -38,6 +38,15 @@ CONSTANT_SETTINGS = {
         "CODING_FAKE_LOOP_ENABLED", "false"
     ).lower()
     in {"1", "true", "yes", "on"},
+    "CODING_DEV_RECONCILIATION_SECONDS": float(
+        os.getenv("CODING_DEV_RECONCILIATION_SECONDS", "2")
+    ),
+    "CODING_DEV_DISCOVERY_BATCH_SIZE": int(
+        os.getenv("CODING_DEV_DISCOVERY_BATCH_SIZE", "100")
+    ),
+    "CODING_DEV_SHUTDOWN_SECONDS": float(
+        os.getenv("CODING_DEV_SHUTDOWN_SECONDS", "10")
+    ),
     "JWT_ALGORITHM": "HS256",
     "PASSWORD_MIN_LENGTH": 8,
     "PASSWORD_MAX_LENGTH": 72,

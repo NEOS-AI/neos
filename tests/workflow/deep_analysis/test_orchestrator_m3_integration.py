@@ -25,6 +25,7 @@ from neos.workflow.deep_analysis.models import (
     Verdict,
     WorkerResult,
 )
+from neos.workflow.deep_analysis import orchestrator as orchestrator_module
 from neos.workflow.deep_analysis.orchestrator import Orchestrator
 from neos.workflow.deep_analysis.synthesizer import Synthesizer
 
@@ -312,6 +313,72 @@ class NoProgressWorker:
 
     def flush_partial(self, qid):
         return WorkerResult(question_id=qid, status="partial")
+
+
+class AlwaysFailingWorker:
+    """Models a systemic dependency failure that never spends tokens."""
+
+    async def investigate(
+        self,
+        brief,
+        effort,
+        qid,
+        repairs=None,
+        question_text="",
+    ):
+        return WorkerResult(
+            question_id=qid,
+            status="failed",
+            tokens_spent=0,
+            fail_reason="systemic",
+        )
+
+    def flush_partial(self, qid):
+        return WorkerResult(question_id=qid, status="partial")
+
+
+@pytest.mark.asyncio
+async def test_zero_token_worker_failure_stops_before_split_tree_expands():
+    async with await db_manager.get_session() as s:
+        run_id = await create_run(s, "root?", "dev")
+        orch = Orchestrator(
+            s,
+            run_id,
+            lambda: AlwaysFailingWorker(),
+            OkDet(),
+            decompose_fn=_decompose_one,
+            global_token_cap=100000,
+            max_depth=10,
+            max_stall_rounds=2,
+            synthesizer=FakeSynth(),
+            checkpoint=s.commit,
+        )
+
+        async def split_decompose(text, *_a):
+            return [
+                {"text": f"{text}-child-{index}", "value_est": 0.5}
+                for index in range(4)
+            ]
+
+        orch._split_decompose = split_decompose
+
+        with pytest.raises(
+            orchestrator_module.SystemicWorkerFailure,
+            match="2 consecutive",
+        ):
+            await asyncio.wait_for(orch.run("root?"), timeout=1)
+
+        event_count = (await s.execute(sql(
+            "SELECT COUNT(*) FROM deep_analysis_events "
+            "WHERE run_id=:r AND kind='systemic_failure_terminated'"
+        ), {"r": run_id})).scalar()
+        assert event_count == 1
+
+        max_depth = (await s.execute(sql(
+            "SELECT MAX(depth) FROM deep_analysis_questions WHERE run_id=:r"
+        ), {"r": run_id})).scalar()
+        assert max_depth == 1
+        await s.rollback()
 
 
 @pytest.mark.asyncio

@@ -39,6 +39,7 @@ worker-lost로 태스크를 resume=False로 재배달해도 안전하다.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from neos.database.deep_analysis_models import DARun
@@ -107,6 +108,7 @@ async def execute_run(
     profile: str,
     *,
     resume: bool = False,
+    timeout_seconds: float | None = None,
     build_orchestrator_fn=build_orchestrator,
 ) -> dict[str, str]:
     """이미 생성된 run을 완주(또는 재개)시킨다.
@@ -129,12 +131,22 @@ async def execute_run(
             checkpoint=session.commit,
         )
         try:
-            result = await orchestrator.run(question)
-        except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "deep_analysis job %s failed: %s", run_id, exc, exc_info=True
+            run_coro = orchestrator.run(question)
+            result = (
+                await asyncio.wait_for(run_coro, timeout=timeout_seconds)
+                if timeout_seconds is not None
+                else await run_coro
             )
-            await _record_failure(session_factory, run_id, str(exc)[:500])
+        except Exception as exc:  # noqa: BLE001
+            error = (
+                f"deep_analysis job timed out after {timeout_seconds} seconds"
+                if isinstance(exc, TimeoutError)
+                else str(exc)
+            )
+            logger.error(
+                "deep_analysis job %s failed: %s", run_id, error, exc_info=True
+            )
+            await _record_failure(session_factory, run_id, error[:500])
             raise
         # AC6: 늦게 접속한 구독자가 이벤트 재생만으로 리포트를 받도록
         # 완료 이벤트가 리포트 본문을 싣는다.
@@ -151,6 +163,7 @@ async def resume_run(
     session_factory,
     run_id: str,
     *,
+    timeout_seconds: float | None = None,
     build_orchestrator_fn=build_orchestrator,
 ) -> dict[str, str]:
     """중단된 run을 원장에 저장된 질문/프로파일로 재개한다."""
@@ -175,5 +188,6 @@ async def resume_run(
         question,
         profile,
         resume=True,
+        timeout_seconds=timeout_seconds,
         build_orchestrator_fn=build_orchestrator_fn,
     )

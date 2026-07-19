@@ -116,6 +116,7 @@ async def run_discovery(
             max_tokens=max_tokens,
             client=client,
             cassette=cassette,
+            stage="discovery",
         )
         tokens += response.input_tokens + response.output_tokens
 

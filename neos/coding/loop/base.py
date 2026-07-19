@@ -1,8 +1,22 @@
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, AsyncIterator, Mapping, Protocol
 
 from neos.coding.domain.events import CodingEvent
-from neos.coding.domain.phases import CodingCheckpoint, CodingPhase, CodingPhaseKind
+from neos.coding.domain.durability import (
+    ExecutionLease,
+    PhaseCheckpointCommit,
+    PhaseStart,
+    RunLifecycleCommit,
+    SteeringApplication,
+    ToolExecutionClaim,
+)
+from neos.coding.domain.phases import (
+    CodingCheckpoint,
+    CodingPhase,
+    CodingPhaseKind,
+    SteeringRequest,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +35,108 @@ class LoopCheckpointState:
 
 
 class CodingRunRepository(Protocol):
+    async def ensure_run_started(
+        self,
+        *,
+        task_id: str,
+        instruction: str,
+        development_mode: bool,
+        now: datetime,
+    ): ...
+
+    async def complete_run(
+        self, *, lease: ExecutionLease, now: datetime
+    ) -> RunLifecycleCommit: ...
+
+    async def fail_run(
+        self,
+        *,
+        lease: ExecutionLease,
+        error_code: str,
+        now: datetime,
+    ) -> RunLifecycleCommit: ...
+
+    async def claimable_task_ids(self, *, limit: int) -> tuple[str, ...]: ...
+
+    async def acquire_execution_lease(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        worker_id: str,
+        now: datetime,
+        expires_at: datetime,
+    ) -> ExecutionLease | None: ...
+
+    async def renew_execution_lease(
+        self,
+        lease: ExecutionLease,
+        *,
+        now: datetime,
+        expires_at: datetime,
+    ) -> ExecutionLease: ...
+
+    async def release_execution_lease(
+        self, lease: ExecutionLease, *, now: datetime
+    ) -> None: ...
+
+    async def claim_tool_execution(
+        self,
+        *,
+        lease: ExecutionLease,
+        tool_call_id: str,
+        now: datetime,
+        claim_expires_at: datetime,
+    ) -> ToolExecutionClaim: ...
+
+    async def complete_tool_execution(
+        self,
+        claim: ToolExecutionClaim,
+        *,
+        result: Mapping[str, Any],
+        now: datetime,
+    ) -> CodingEvent: ...
+
+    async def begin_phase(
+        self,
+        *,
+        lease: ExecutionLease,
+        kind: CodingPhaseKind,
+        now: datetime,
+    ) -> PhaseStart: ...
+
+    async def commit_phase_checkpoint(
+        self,
+        *,
+        lease: ExecutionLease,
+        phase: CodingPhase,
+        tool_call_id: str,
+        result: Mapping[str, Any],
+        loop_state: Mapping[str, Any],
+        workspace_revision: str,
+        now: datetime,
+    ) -> PhaseCheckpointCommit: ...
+
+    async def apply_steering_at_safe_point(
+        self,
+        *,
+        lease: ExecutionLease,
+        checkpoint: CodingCheckpoint,
+        worker_id: str,
+        claim_expires_at: datetime,
+        now: datetime,
+    ) -> SteeringApplication | None: ...
+
+    async def commit_interruption(
+        self,
+        *,
+        lease: ExecutionLease,
+        request: SteeringRequest,
+        workspace_revision: str,
+        process_stopped: bool,
+        now: datetime,
+    ) -> SteeringApplication: ...
+
     async def completed_tool_result(
         self, task_id: str, tool_call_id: str
     ) -> Mapping[str, Any] | None: ...
@@ -54,6 +170,7 @@ class CodingLoopEventSink(Protocol):
 class LoopDependencies:
     repository: CodingRunRepository
     events: CodingLoopEventSink
+    lease: ExecutionLease | None = None
 
 
 class CodingLoop(Protocol):

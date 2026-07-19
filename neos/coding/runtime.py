@@ -1,6 +1,6 @@
 import asyncio
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -26,6 +26,9 @@ from neos.coding.transport.memory import (
 )
 from neos.coding.transport.redis_events import RedisCodingEventTransport
 from neos.coding.transport.redis_tickets import RedisCodingTicketStore
+from neos.coding.workers.development_supervisor import (
+    CodingDevelopmentSupervisor,
+)
 from neos.database.connection import db_manager
 from neos.config.settings import settings
 from neos.observability.metrics import metrics
@@ -42,6 +45,7 @@ class CodingRuntime:
     events: Any
     runs: CodingRunService
     snapshots: CodingSnapshotService
+    supervisor: CodingDevelopmentSupervisor | None = None
 
 
 coding_transport = CodingRuntimeTransport(
@@ -66,8 +70,12 @@ def create_coding_runtime(
     loop: CodingLoop | None,
     metrics_collector=None,
     interrupter=None,
+    clock=None,
 ) -> CodingRuntime:
     snapshots = CodingSnapshotService(projection_repository)
+    run_kwargs = {}
+    if clock is not None:
+        run_kwargs["clock"] = clock
     runs = CodingRunService(
         tasks=tasks,
         runs=run_repository,
@@ -75,6 +83,7 @@ def create_coding_runtime(
         loop=loop,
         metrics=metrics_collector,
         interrupter=interrupter or InProcessRunInterrupter(),
+        **run_kwargs,
     )
     return CodingRuntime(events=events, runs=runs, snapshots=snapshots)
 
@@ -85,10 +94,11 @@ def create_development_coding_runtime() -> CodingRuntime:
         if settings.CODING_FAKE_LOOP_ENABLED
         else None
     )
-    return create_coding_runtime(
+    run_repository = PostgresCodingRunRepository(db_manager.get_session)
+    runtime = create_coding_runtime(
         events=coding_service,
         tasks=CodingTaskRepository(db_manager),
-        run_repository=PostgresCodingRunRepository(db_manager.get_session),
+        run_repository=run_repository,
         projection_repository=PostgresCodingProjectionRepository(
             db_manager.get_session
         ),
@@ -96,6 +106,22 @@ def create_development_coding_runtime() -> CodingRuntime:
         metrics_collector=metrics,
         interrupter=InProcessRunInterrupter(),
     )
+    supervisor = None
+    if loop is not None:
+        supervisor = CodingDevelopmentSupervisor(
+            runs=runtime.runs,
+            work_repository=run_repository,
+            metrics=metrics,
+            reconciliation_interval=(
+                settings.CODING_DEV_RECONCILIATION_SECONDS
+            ),
+            discovery_batch_size=settings.CODING_DEV_DISCOVERY_BATCH_SIZE,
+            shutdown_timeout=settings.CODING_DEV_SHUTDOWN_SECONDS,
+        )
+    coding_service.set_task_created_notifier(
+        supervisor.notify if supervisor is not None else None
+    )
+    return replace(runtime, supervisor=supervisor)
 
 
 coding_runtime = create_development_coding_runtime()

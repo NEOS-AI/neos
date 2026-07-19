@@ -1,5 +1,6 @@
+import asyncio
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -9,6 +10,7 @@ from neos.coding.application.task_service import (
     InMemoryCodingTaskRepository,
 )
 from neos.coding.domain.phases import SteeringMode
+from neos.coding.domain.durability import RunAlreadyLeased
 from neos.coding.events.store import InMemoryCodingEventStore
 from neos.coding.loop.fake import FakeDurableCodingLoop
 from neos.coding.runtime import create_coding_runtime
@@ -19,16 +21,39 @@ NOW = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
 
 
 class CrashAfterToolRepository(InMemoryCodingRunRepository):
-    def __init__(self, tool_call_id: str | None) -> None:
+    def __init__(
+        self,
+        tool_call_id: str | None,
+        *,
+        block_after_lease: bool = False,
+    ) -> None:
         super().__init__()
         self._crash_after = tool_call_id
         self._crashed = False
+        self._block_after_lease = block_after_lease
+        self.first_worker_has_lease = asyncio.Event()
+        self.release_first_worker = asyncio.Event()
 
-    async def record_tool_result(self, **record) -> None:
-        await super().record_tool_result(**record)
-        if record["tool_call_id"] == self._crash_after and not self._crashed:
+    async def acquire_execution_lease(self, **kwargs):
+        lease = await super().acquire_execution_lease(**kwargs)
+        if (
+            lease is not None
+            and self._block_after_lease
+            and kwargs["worker_id"] == "worker-a"
+            and not self.first_worker_has_lease.is_set()
+        ):
+            self.first_worker_has_lease.set()
+            await self.release_first_worker.wait()
+        return lease
+
+    async def complete_tool_execution(self, claim, *, result, now):
+        event = await super().complete_tool_execution(
+            claim, result=result, now=now
+        )
+        if claim.tool_call_id == self._crash_after and not self._crashed:
             self._crashed = True
             raise RuntimeError("simulated worker crash")
+        return event
 
 
 class InMemoryCodingService:
@@ -48,16 +73,34 @@ class EmptyProjectionRepository:
         return None
 
 
+class RecordingLoop(FakeDurableCodingLoop):
+    def __init__(self, *, clock) -> None:
+        super().__init__(clock=clock)
+        self.inputs = []
+
+    async def run(self, input, checkpoint, deps):
+        self.inputs.append(input)
+        async for event in super().run(input, checkpoint, deps):
+            yield event
+
+
 @dataclass
 class DurableCodingHarness:
     crash_after_tool: str | None = None
+    block_first_worker_after_lease: bool = False
+    metrics: object | None = None
 
     def __post_init__(self) -> None:
+        self.now = NOW
         self.tasks = InMemoryCodingTaskRepository()
         self.events = InMemoryCodingEventStore()
-        self.repository = CrashAfterToolRepository(self.crash_after_tool)
+        self.repository = CrashAfterToolRepository(
+            self.crash_after_tool,
+            block_after_lease=self.block_first_worker_after_lease,
+        )
+        self.loop = RecordingLoop(clock=lambda: self.now)
         self.task_service = CodingTaskService(
-            self.tasks, self.events, clock=lambda: NOW
+            self.tasks, self.events, clock=lambda: self.now
         )
         self.service = InMemoryCodingService(self.task_service, self.events)
         self._new_worker()
@@ -68,8 +111,10 @@ class DurableCodingHarness:
             tasks=self.tasks,
             run_repository=self.repository,
             projection_repository=EmptyProjectionRepository(),
-            loop=FakeDurableCodingLoop(clock=lambda: NOW),
+            loop=self.loop,
             interrupter=InProcessRunInterrupter(),
+            clock=lambda: self.now,
+            metrics_collector=self.metrics,
         )
         self.runs = self.runtime.runs
 
@@ -81,10 +126,16 @@ class DurableCodingHarness:
         return task
 
     async def advance_until(self, task_id: str, phase: str) -> None:
-        await self.runs.advance_until(task_id=task_id, phase=phase)
+        await self.runs.advance_until(
+            task_id=task_id, phase=phase, worker_id="worker-a"
+        )
 
-    async def advance_one_safe_point(self, task_id: str) -> None:
-        await self.runs.advance_one_safe_point(task_id=task_id)
+    async def advance_one_safe_point(
+        self, task_id: str, worker_id: str = "worker-a"
+    ) -> None:
+        await self.runs.advance_one_safe_point(
+            task_id=task_id, worker_id=worker_id
+        )
 
     async def steer(self, **kwargs) -> None:
         await self.runs.steer(**kwargs)
@@ -92,11 +143,16 @@ class DurableCodingHarness:
     async def run_until_crash(self, task_id: str) -> None:
         with pytest.raises(RuntimeError, match="simulated worker crash"):
             while True:
-                await self.runs.advance_one_safe_point(task_id=task_id)
+                await self.runs.advance_one_safe_point(
+                    task_id=task_id, worker_id="worker-a"
+                )
 
     async def resume_with_new_worker(self, task_id: str) -> None:
+        self.now += timedelta(seconds=31)
         self._new_worker()
-        await self.runs.advance_one_safe_point(task_id=task_id)
+        await self.runs.advance_one_safe_point(
+            task_id=task_id, worker_id="worker-b"
+        )
 
     def tool_execution_count(self, tool_call_id: str) -> int:
         return sum(
@@ -134,3 +190,40 @@ async def test_worker_crash_after_tool_completion_does_not_repeat_tool() -> None
 
     assert harness.tool_execution_count("fake_implement_2") == 1
     assert harness.repository.active_run.status.value == "running"
+
+
+async def test_new_worker_restores_instruction_from_checkpoint() -> None:
+    harness = DurableCodingHarness()
+    task = await harness.create_task(owner_id="u1", prompt="Fix the cache")
+    await harness.advance_one_safe_point(task.task_id, worker_id="worker-a")
+
+    harness._new_worker()
+    await harness.advance_one_safe_point(task.task_id, worker_id="worker-b")
+
+    assert harness.loop.inputs[-1].instruction == "Fix the cache"
+    assert harness.repository.checkpoints[-1].loop_state[
+        "current_instruction"
+    ] == "Fix the cache"
+
+
+async def test_two_workers_cannot_advance_same_task() -> None:
+    harness = DurableCodingHarness(block_first_worker_after_lease=True)
+    task = await harness.create_task(owner_id="u1", prompt="Fix it")
+    first = asyncio.create_task(
+        harness.advance_one_safe_point(task.task_id, worker_id="worker-a")
+    )
+    await harness.repository.first_worker_has_lease.wait()
+
+    with pytest.raises(RunAlreadyLeased):
+        await harness.advance_one_safe_point(task.task_id, worker_id="worker-b")
+
+    harness.repository.release_first_worker.set()
+    await first
+    completed = [
+        phase
+        for phase in harness.repository.phases
+        if phase.kind.value == "understand"
+        and phase.attempt == 1
+        and phase.status.value == "completed"
+    ]
+    assert len(completed) == 1

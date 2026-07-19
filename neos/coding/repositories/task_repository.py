@@ -12,6 +12,18 @@ class CodingTaskRepository:
     def __init__(self, database: Database):
         self._database = database
 
+    async def get(self, task_id: str) -> CodingTask | None:
+        row = await self._database.fetch_one(
+            """
+            SELECT task_id, owner_id, prompt, status, version, last_seq,
+                   created_at, updated_at
+            FROM coding_tasks
+            WHERE task_id = $1 AND deleted_at IS NULL
+            """,
+            task_id,
+        )
+        return _task_from_row(row)
+
     async def get_owned(self, task_id: str, owner_id: str) -> CodingTask | None:
         row = await self._database.fetch_one(
             """
@@ -23,20 +35,23 @@ class CodingTaskRepository:
             task_id,
             owner_id,
         )
-        if row is None:
-            return None
-        return CodingTask(
-            task_id=row[0],
-            owner_id=row[1],
-            prompt=row[2],
-            status=CodingTaskStatus(row[3]),
-            version=row[4],
-            last_seq=row[5],
-            created_at=_as_datetime(row[6]),
-            updated_at=_as_datetime(row[7]),
-        )
+        return _task_from_row(row)
+
+
+def _task_from_row(row) -> CodingTask | None:
+    if row is None:
+        return None
+    return CodingTask(
+        task_id=row[0],
+        owner_id=row[1],
+        prompt=row[2],
+        status=CodingTaskStatus(row[3]),
+        version=row[4],
+        last_seq=row[5],
+        created_at=_as_datetime(row[6]),
+        updated_at=_as_datetime(row[7]),
+    )
 
 
 def _as_datetime(value: datetime | str) -> datetime:
     return value if isinstance(value, datetime) else datetime.fromisoformat(value)
-

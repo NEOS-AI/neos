@@ -38,3 +38,33 @@ async def test_snapshot_is_owner_scoped_and_contains_head_sequence() -> None:
     assert snapshot is not None
     assert snapshot.head_seq == 1
     assert snapshot.task.task_id == task.task_id
+
+
+async def test_task_service_notifies_only_after_event_commit() -> None:
+    calls: list[str] = []
+    events = InMemoryCodingEventStore()
+    service = CodingTaskService(
+        InMemoryCodingTaskRepository(), events, clock=lambda: NOW
+    )
+    service.set_task_created_notifier(calls.append)
+
+    task = await service.create_task(owner_id="u1", prompt="Fix it")
+
+    assert calls == [task.task_id]
+    assert (await events.list_after(task.task_id))[0].type == "task.created"
+
+
+async def test_task_service_ignores_notifier_failure_after_persistence() -> None:
+    tasks = InMemoryCodingTaskRepository()
+    service = CodingTaskService(
+        tasks, InMemoryCodingEventStore(), clock=lambda: NOW
+    )
+
+    def fail_notification(task_id: str) -> None:
+        raise RuntimeError("wake failed")
+
+    service.set_task_created_notifier(fail_notification)
+
+    task = await service.create_task(owner_id="u1", prompt="Fix it")
+
+    assert await tasks.get(task.task_id) == task

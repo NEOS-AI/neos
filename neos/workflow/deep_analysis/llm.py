@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from neos.config.settings import settings
+from neos.workflow.deep_analysis.token_budget import active_token_budget
 
 
 class JSONParseError(ValueError):
@@ -24,6 +26,11 @@ class LLMResponse:
     # 재생 시 LLMResponse(**recorded)로 복원된다(D19 golden 게이트 유지).
     content: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str = ""
+
+
+@dataclass
+class _DispatchState:
+    started: bool = False
 
 
 _CODE_FENCE = re.compile(
@@ -133,6 +140,41 @@ async def _call_provider(
     )
 
 
+async def _budgeted_dispatch(
+    *,
+    model: str,
+    request: dict[str, Any],
+    max_tokens: int,
+    stage: str,
+    invoke: Callable[[int, _DispatchState], Awaitable[LLMResponse]],
+) -> LLMResponse:
+    budget = active_token_budget()
+    if budget is None:
+        return await invoke(max_tokens, _DispatchState())
+
+    reservation = await budget.reserve(
+        request,
+        max_tokens,
+        stage=stage,
+        model=model,
+    )
+    dispatch = _DispatchState()
+    try:
+        response = await invoke(reservation.max_output_tokens, dispatch)
+    except BaseException:
+        if dispatch.started:
+            await budget.abandon(reservation)
+        else:
+            await budget.release(reservation)
+        raise
+
+    await budget.settle(
+        reservation,
+        response.input_tokens + response.output_tokens,
+    )
+    return response
+
+
 async def call_messages(
     model: str,
     messages: list[dict[str, Any]],
@@ -142,31 +184,42 @@ async def call_messages(
     temperature: float = 0.0,
     client=None,
     cassette=None,
+    stage: str = "llm",
 ) -> LLMResponse:
-    async def produce() -> dict[str, Any]:
-        resolved_client = client or _default_client(model)
-        response = await _call_provider(
-            model,
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            client=resolved_client,
-            tools=tools,
-        )
-        return asdict(response)
+    async def invoke(limit: int, dispatch: _DispatchState) -> LLMResponse:
+        async def produce() -> dict[str, Any]:
+            resolved_client = client or _default_client(model)
+            dispatch.started = True
+            response = await _call_provider(
+                model,
+                messages,
+                max_tokens=limit,
+                temperature=temperature,
+                client=resolved_client,
+                tools=tools,
+            )
+            return asdict(response)
 
-    if cassette is None:
-        return LLMResponse(**(await produce()))
+        if cassette is None:
+            return LLMResponse(**(await produce()))
 
-    payload = {
-        "model": model,
-        "messages": messages,
-        "tools": tools,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    recorded = await cassette.remember("llm", payload, produce)
-    return LLMResponse(**recorded)
+        payload = {
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+            "max_tokens": limit,
+            "temperature": temperature,
+        }
+        recorded = await cassette.remember("llm", payload, produce)
+        return LLMResponse(**recorded)
+
+    return await _budgeted_dispatch(
+        model=model,
+        request={"model": model, "messages": messages, "tools": tools},
+        max_tokens=max_tokens,
+        stage=stage,
+        invoke=invoke,
+    )
 
 
 async def call_llm(
@@ -177,30 +230,43 @@ async def call_llm(
     temperature: float = 0.0,
     client=None,
     cassette=None,
+    stage: str = "llm",
 ) -> LLMResponse:
-    async def produce() -> dict[str, Any]:
-        resolved_client = client or _default_client(model)
-        response = await _call_provider(
-            model,
-            [{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=temperature,
-            client=resolved_client,
-        )
-        return asdict(response)
+    messages = [{"role": "user", "content": prompt}]
 
-    if cassette is None:
-        return LLMResponse(**(await produce()))
+    async def invoke(limit: int, dispatch: _DispatchState) -> LLMResponse:
+        async def produce() -> dict[str, Any]:
+            resolved_client = client or _default_client(model)
+            dispatch.started = True
+            response = await _call_provider(
+                model,
+                messages,
+                max_tokens=limit,
+                temperature=temperature,
+                client=resolved_client,
+            )
+            return asdict(response)
 
-    # 페이로드 형태를 그대로 유지한다 — 기존 golden cassette 키가 바뀌면 안 된다.
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    recorded = await cassette.remember("llm", payload, produce)
-    return LLMResponse(**recorded)
+        if cassette is None:
+            return LLMResponse(**(await produce()))
+
+        # 페이로드 형태를 그대로 유지한다 — 기존 golden cassette 키가 바뀌면 안 된다.
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "max_tokens": limit,
+            "temperature": temperature,
+        }
+        recorded = await cassette.remember("llm", payload, produce)
+        return LLMResponse(**recorded)
+
+    return await _budgeted_dispatch(
+        model=model,
+        request={"model": model, "messages": messages, "tools": None},
+        max_tokens=max_tokens,
+        stage=stage,
+        invoke=invoke,
+    )
 
 
 async def call_json(
@@ -212,6 +278,7 @@ async def call_json(
     client=None,
     cassette=None,
     retries: int = 1,
+    stage: str = "llm",
 ) -> tuple[dict[str, Any], LLMResponse]:
     last_error: JSONParseError | None = None
     for _attempt in range(retries + 1):
@@ -222,6 +289,7 @@ async def call_json(
             temperature=temperature,
             client=client,
             cassette=cassette,
+            stage=stage,
         )
         try:
             return parse_json(response.text), response

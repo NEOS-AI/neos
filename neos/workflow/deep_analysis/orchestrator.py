@@ -15,6 +15,11 @@ from .llm import call_json
 from .models import Assignment, Effort, NodeSummary, Verdict, WorkerResult
 from .prompt_loader import render
 from .synthesizer import Synthesizer
+from .token_budget import (
+    TokenBudget,
+    TokenBudgetExhausted,
+    token_budget_scope,
+)
 
 
 async def _maybe_await(value):
@@ -33,6 +38,10 @@ _REPAIR_PRESCRIPTIONS = {
     "E_UNSUPPORTED": "다른 증거 탐색, 실패 시 action=abandoned",
     "E_QUOTE_MISMATCH": "salvage 출처에서 정확 발췌 재수집",
 }
+
+
+class SystemicWorkerFailure(RuntimeError):
+    """Every assigned worker failed for too many consecutive rounds."""
 
 
 class Orchestrator:
@@ -103,10 +112,17 @@ class Orchestrator:
         # spent resolving equal-tier conflicts before the report is assembled
         # with both-sides annotations only.
         self._reinvestigation_count = 0
+        # Run-scoped circuit breaker for systemic failures. Question-level
+        # fail_streak already drives SPLIT; counting all-failed rounds here
+        # prevents a shared dependency outage from expanding that tree.
+        self._all_failed_rounds = 0
+        self._token_budget_exhausted_logged = False
+        self.token_budget = TokenBudget(self.global_token_cap)
         self.budgeter = Budgeter(
             global_token_cap=self.global_token_cap,
             max_depth=self.max_depth,
             parallel_workers=self.parallel_workers,
+            token_budget=self.token_budget,
         )
         self._split_decompose = self._default_split_decompose
 
@@ -118,6 +134,45 @@ class Orchestrator:
         if self.checkpoint is not None:
             await _maybe_await(self.checkpoint())
 
+    async def _persist_token_budget(
+        self,
+        kind: str,
+        payload: dict,
+    ) -> None:
+        await self.ledger.log(kind, None, payload)
+        await self._checkpoint()
+
+    async def _install_token_budget(self) -> None:
+        state_fn = getattr(self.ledger, "token_budget_state", None)
+        if state_fn is None:
+            consumed, outstanding = 0, {}
+        else:
+            consumed, outstanding = await state_fn()
+        self.token_budget = TokenBudget(
+            self.global_token_cap,
+            consumed_tokens=consumed,
+            outstanding=outstanding,
+            persist=self._persist_token_budget,
+        )
+        self.budgeter.token_budget = self.token_budget
+
+    async def _mark_token_budget_exhausted(self) -> None:
+        if self._token_budget_exhausted_logged:
+            return
+        has_event = getattr(self.ledger, "has_event", None)
+        if has_event is not None and await has_event("token_budget_exhausted"):
+            self._token_budget_exhausted_logged = True
+            return
+        payload = {
+            "cap_tokens": self.token_budget.cap_tokens,
+            "consumed_tokens": self.token_budget.consumed_tokens,
+            "reserved_tokens": self.token_budget.reserved_tokens,
+        }
+        await self.ledger.log("token_budget_exhausted", None, payload)
+        await self._checkpoint()
+        await self._emit("token_budget_exhausted", payload)
+        self._token_budget_exhausted_logged = True
+
     async def _grade(self, claim, value_est):
         """Two-stage grading: deterministic tier first; only claims that pass
         it (and only when an agentic grader is configured) proceed to the
@@ -126,7 +181,10 @@ class Orchestrator:
         verdict = await self.grader.grade(claim)  # deterministic first
         if not verdict.ok or self.agentic_grader is None:
             return verdict
-        return await self.agentic_grader.grade(claim, value_est)  # agentic tier
+        try:
+            return await self.agentic_grader.grade(claim, value_est)
+        except TokenBudgetExhausted:
+            return verdict
 
     async def _regrade_pending(self, question_id, value_est):
         """Re-grade claims that repair processing pushed back to `pending`
@@ -184,6 +242,7 @@ class Orchestrator:
             max_tokens=config.decompose_max_tokens,
             client=self.llm_client,
             cassette=self.cassette,
+            stage="decompose",
         )
         return list(data.get("subquestions", []))[:7]
 
@@ -201,6 +260,7 @@ class Orchestrator:
             max_tokens=config.decompose_max_tokens,
             client=self.llm_client,
             cassette=self.cassette,
+            stage="split_decompose",
         )
         return list(data.get("subquestions", []))[:4]
 
@@ -439,6 +499,39 @@ class Orchestrator:
         # SPLIT if depth allows, else abandon (both handled by _do_split).
         await self._do_split(question)
 
+    async def _register_round_outcome(
+        self,
+        results: list[WorkerResult],
+    ) -> None:
+        """Stop a run when every assigned worker repeatedly fails."""
+        if not results:
+            return
+        if any(result.status != "failed" for result in results):
+            self._all_failed_rounds = 0
+            return
+        self._all_failed_rounds += 1
+        if self._all_failed_rounds < self.max_stall_rounds:
+            return
+
+        reasons = [
+            (result.fail_reason or "unknown")[:200] for result in results
+        ]
+        payload = {
+            "rounds": self._all_failed_rounds,
+            "reasons": reasons,
+        }
+        await self.ledger.log(
+            "systemic_failure_terminated",
+            None,
+            payload,
+        )
+        await self._emit("systemic_failure_terminated", payload)
+        await self._checkpoint()
+        raise SystemicWorkerFailure(
+            "all workers failed for "
+            f"{self._all_failed_rounds} consecutive rounds"
+        )
+
     async def _run_round(self) -> bool:
         """Execute one SCOUT round: select → partition → split → workers →
         commit. Returns ``False`` when there is nothing to select (caller must
@@ -462,6 +555,7 @@ class Orchestrator:
         results = await asyncio.gather(
             *[self._run_worker(a) for a in assignments]
         )
+        await self._register_round_outcome(results)
         # P2: 순차 커밋 (single-writer). gather는 순서를 보존하므로
         # assignments[i] ↔ results[i]가 1:1 대응한다.
         for assignment, result in zip(assignments, results):
@@ -704,32 +798,60 @@ class Orchestrator:
         return report
 
     async def run(self, root_text: str) -> dict[str, str]:
-        try:
-            recovered = await self.ledger.recover()
-            if recovered:
-                await self._emit("recovered", {"questions": recovered})
+        await self._install_token_budget()
+        with token_budget_scope(self.token_budget):
+            try:
+                recovered = await self.ledger.recover()
+                if recovered:
+                    await self._emit("recovered", {"questions": recovered})
+                    await self._checkpoint()
+
+                try:
+                    root_id = await self._ensure_root(root_text)
+
+                    while not await self.budgeter.should_stop(self.ledger):
+                        if not await self._run_round():
+                            break
+                except TokenBudgetExhausted:
+                    await self._mark_token_budget_exhausted()
+                    root = await self.ledger.root_question()
+                    if root is None:
+                        raise
+                    root_id = root.id
+
+                if self.token_budget.exhausted:
+                    await self._mark_token_budget_exhausted()
+
+                report = await self._finalize(root_id)
                 await self._checkpoint()
-
-            root_id = await self._ensure_root(root_text)
-
-            while not await self.budgeter.should_stop(self.ledger):
-                if not await self._run_round():
-                    break
-
-            report = await self._finalize(root_id)
-            await self._checkpoint()
-            await self._emit(
-                "completed",
-                {"run_id": self.run_id},
-            )
-            return {
-                "report_markdown": report,
-                "run_id": self.run_id,
-            }
-        except Exception:
-            rollback = getattr(self.db, "rollback", None)
-            if rollback is not None:
-                await _maybe_await(rollback())
-            await self.ledger.fail_run()
-            await self._checkpoint()
-            raise
+                await self._emit(
+                    "completed",
+                    {
+                        "run_id": self.run_id,
+                        "token_cap": self.token_budget.cap_tokens,
+                        "tokens_consumed": self.token_budget.consumed_tokens,
+                        "tokens_reserved": self.token_budget.reserved_tokens,
+                        "token_budget_exhausted": self.token_budget.exhausted,
+                    },
+                )
+                return {
+                    "report_markdown": report,
+                    "run_id": self.run_id,
+                }
+            except Exception:
+                rollback = getattr(self.db, "rollback", None)
+                if rollback is not None:
+                    await _maybe_await(rollback())
+                await self.ledger.fail_run()
+                await self._checkpoint()
+                await self._emit(
+                    "failed",
+                    {
+                        "run_id": self.run_id,
+                        "token_cap": self.token_budget.cap_tokens,
+                        "tokens_consumed": self.token_budget.consumed_tokens,
+                        "tokens_reserved": self.token_budget.reserved_tokens,
+                        "token_budget_exhausted": self.token_budget.exhausted,
+                    },
+                )
+                raise

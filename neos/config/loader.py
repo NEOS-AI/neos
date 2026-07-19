@@ -126,6 +126,16 @@ SECRET_ENV_MAPPING = {
     "GOOGLE_OAUTH_CLIENT_SECRET": "auth.google_oauth_client_secret",
 }
 
+YAML_ONLY_FEATURE_FLAG_ENV_KEYS = {
+    "DEEP_ANALYSIS_ENABLED": "deep_analysis.enabled",
+    "RECURSIVE_AGENT_ENABLED": "recursive_agent.enabled",
+    "HYPER_DEEP_AGENT_ENABLED": "hyper_deep_agent.enabled",
+    "A2UI_ENABLED": "a2ui.enabled",
+    "RAY_ENABLED": "ray.enabled",
+    "EXECUTION_APPROVAL_ENABLED": "execution_approval.enabled",
+    "CELERY_ENABLED": "celery.enabled",
+}
+
 LEGACY_ENV_KEYS = {
     "LLM_PROVIDER": "llm.provider",
     "LLM_MODEL": "llm.model",
@@ -290,6 +300,17 @@ def apply_legacy_env_overrides(
     return updated
 
 
+def warn_yaml_only_feature_flag_env(env: Mapping[str, str]) -> None:
+    for env_key, dotted_path in YAML_ONLY_FEATURE_FLAG_ENV_KEYS.items():
+        if env_key not in env:
+            continue
+        warnings.warn(
+            f"{env_key} is ignored; configure {dotted_path} in YAML.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+
 def validate_env_allowlist(env: Mapping[str, str], app_env: str) -> list[str]:
     allowed = SECRET_ENV_KEYS | CONTROL_ENV_KEYS | WEB_ENV_KEYS | GATEWAY_ENV_KEYS | set(LEGACY_ENV_KEYS)
     unknown: list[str] = []
@@ -334,7 +355,9 @@ def load_app_config(
     if selected_config_path is not None:
         config_data = deep_merge(config_data, load_yaml_file(selected_config_path))
 
-    config_data = apply_legacy_env_overrides(config_data, {**bootstrap_env, **process_env}, app_env)
+    runtime_env = {**bootstrap_env, **process_env}
+    warn_yaml_only_feature_flag_env(runtime_env)
+    config_data = apply_legacy_env_overrides(config_data, runtime_env, app_env)
 
     if selected_secrets_path is not None:
         secret_dotenv = load_dotenv_file(selected_secrets_path)

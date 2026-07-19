@@ -95,6 +95,11 @@ ollama = [
     "langchain-ollama>=0.2.0",
 ]
 
+[dependency-groups]
+dev = [
+    "ruff==0.14.13",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["neos*"]

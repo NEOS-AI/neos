@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Callable, Protocol
@@ -7,8 +8,12 @@ from neos.coding.domain.models import CodingTask, CodingTaskStatus
 from neos.coding.events.store import InMemoryCodingEventStore
 
 
+logger = logging.getLogger(__name__)
+
+
 class TaskRepository(Protocol):
     async def create(self, task: CodingTask) -> CodingTask: ...
+    async def get(self, task_id: str) -> CodingTask | None: ...
     async def get_owned(self, task_id: str, owner_id: str) -> CodingTask | None: ...
     async def save(self, task: CodingTask) -> CodingTask: ...
 
@@ -22,6 +27,9 @@ class InMemoryCodingTaskRepository:
             raise ValueError(f"coding task already exists: {task.task_id}")
         self._tasks[task.task_id] = task
         return task
+
+    async def get(self, task_id: str) -> CodingTask | None:
+        return self._tasks.get(task_id)
 
     async def get_owned(self, task_id: str, owner_id: str) -> CodingTask | None:
         task = self._tasks.get(task_id)
@@ -49,6 +57,23 @@ class CodingTaskService:
         self.tasks = tasks
         self.events = events
         self._clock = clock
+        self._task_created_notifier: Callable[[str], bool | None] | None = None
+
+    def set_task_created_notifier(
+        self, notifier: Callable[[str], bool | None] | None
+    ) -> None:
+        self._task_created_notifier = notifier
+
+    def _notify_task_created(self, task_id: str) -> None:
+        if self._task_created_notifier is None:
+            return
+        try:
+            self._task_created_notifier(task_id)
+        except Exception:
+            logger.exception(
+                "Coding task wake notification failed",
+                extra={"task_id": task_id},
+            )
 
     async def create_task(
         self, *, owner_id: str, prompt: str, task_id: str | None = None
@@ -72,7 +97,9 @@ class CodingTaskService:
             now=now,
         )
         task = replace(task, last_seq=event.seq)
-        return await self.tasks.save(task)
+        task = await self.tasks.save(task)
+        self._notify_task_created(task.task_id)
+        return task
 
     async def snapshot(
         self, task_id: str, owner_id: str

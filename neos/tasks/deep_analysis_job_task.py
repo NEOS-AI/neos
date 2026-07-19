@@ -82,15 +82,27 @@ async def _execute(
     question: str,
     profile: str,
     resume: bool,
+    *,
+    timeout_seconds: float | None = None,
 ) -> dict[str, str]:
     """두 실행자가 공유하는 async 본문."""
     from neos.database.connection import get_session_ctx
     from neos.workflow.deep_analysis.jobs import execute_run, resume_run
 
     if resume:
-        result = await resume_run(get_session_ctx, run_id)
+        result = await resume_run(
+            get_session_ctx,
+            run_id,
+            timeout_seconds=timeout_seconds,
+        )
     else:
-        result = await execute_run(get_session_ctx, run_id, question, profile)
+        result = await execute_run(
+            get_session_ctx,
+            run_id,
+            question,
+            profile,
+            timeout_seconds=timeout_seconds,
+        )
 
     await _persist_assistant_message(run_id, result["report_markdown"])
     return result
@@ -164,7 +176,15 @@ def submit_deep_analysis_job(
         )
         return "celery"
 
-    task = asyncio.create_task(_execute(run_id, question, profile, resume))
+    task = asyncio.create_task(
+        _execute(
+            run_id,
+            question,
+            profile,
+            resume,
+            timeout_seconds=_config.job_soft_time_limit,
+        )
+    )
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_discard_task)
     return "inline"

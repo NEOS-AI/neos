@@ -1,8 +1,9 @@
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from neos.coding.domain.events import CodingEvent
+from neos.coding.domain.durability import ToolExecutionDisposition
 from neos.coding.domain.phases import (
     CodingCheckpoint,
     CodingPhaseKind,
@@ -31,6 +32,10 @@ class FakeDurableCodingLoop:
         checkpoint: CodingCheckpoint | None,
         deps: LoopDependencies,
     ) -> AsyncIterator[CodingEvent]:
+        if deps.lease is not None:
+            async for event in self._run_durable(input, checkpoint, deps):
+                yield event
+            return
         start_index = (
             int(checkpoint.loop_state["phase_index"]) + 1 if checkpoint else 0
         )
@@ -128,3 +133,82 @@ class FakeDurableCodingLoop:
             payload={"status": "completed"},
             run_id=input.run_id,
         )
+
+    async def _run_durable(
+        self,
+        input: LoopInput,
+        checkpoint: CodingCheckpoint | None,
+        deps: LoopDependencies,
+    ) -> AsyncIterator[CodingEvent]:
+        lease = deps.lease
+        assert lease is not None
+        start_index = (
+            int(checkpoint.loop_state["phase_index"]) + 1
+            if checkpoint
+            else 0
+        )
+        transcript = (
+            list(checkpoint.loop_state.get("transcript", []))
+            if checkpoint
+            else []
+        )
+        current_instruction = (
+            str(checkpoint.loop_state["current_instruction"])
+            if checkpoint
+            else input.instruction
+        )
+
+        for index, phase_kind in enumerate(
+            PHASES[start_index:], start=start_index
+        ):
+            started = await deps.repository.begin_phase(
+                lease=lease, kind=phase_kind, now=self._clock()
+            )
+            phase = started.phase
+            if started.event is not None:
+                yield started.event
+
+            tool_call_id = f"fake_{phase_kind.value}_{index}"
+            claim = await deps.repository.claim_tool_execution(
+                lease=lease,
+                tool_call_id=tool_call_id,
+                now=self._clock(),
+                claim_expires_at=self._clock() + timedelta(seconds=30),
+            )
+            if claim.disposition is ToolExecutionDisposition.BUSY:
+                raise RuntimeError(f"tool execution is busy: {tool_call_id}")
+            if claim.disposition is ToolExecutionDisposition.COMPLETED:
+                persisted = dict(claim.result or {})
+                yield await deps.events.append(
+                    task_id=input.task_id,
+                    event_type="tool.completed",
+                    payload={"result": persisted, "reused": True},
+                    run_id=input.run_id,
+                    tool_call_id=tool_call_id,
+                )
+            else:
+                persisted = {"summary": f"{phase_kind.value} completed"}
+                yield await deps.repository.complete_tool_execution(
+                    claim, result=persisted, now=self._clock()
+                )
+
+            transcript.append(
+                {"phase": phase_kind.value, "summary": persisted["summary"]}
+            )
+            committed = await deps.repository.commit_phase_checkpoint(
+                lease=lease,
+                phase=phase,
+                tool_call_id=tool_call_id,
+                result=persisted,
+                loop_state={
+                    "phase_index": index,
+                    "transcript": list(transcript),
+                    "current_instruction": current_instruction,
+                    "pending_instruction": None,
+                },
+                workspace_revision=f"fake:{phase_kind.value}:{index}",
+                now=self._clock(),
+            )
+            yield committed.event
+
+        return

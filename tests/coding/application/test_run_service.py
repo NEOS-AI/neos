@@ -1,4 +1,6 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from neos.coding.application.run_service import (
     CodingRunService,
@@ -6,8 +8,14 @@ from neos.coding.application.run_service import (
 )
 from neos.coding.application.task_service import InMemoryCodingTaskRepository
 from neos.coding.domain.models import CodingTask, CodingTaskStatus
-from neos.coding.domain.phases import CodingRun, CodingRunStatus, SteeringMode
+from neos.coding.domain.phases import (
+    CodingCheckpoint,
+    CodingRun,
+    CodingRunStatus,
+    SteeringMode,
+)
 from neos.coding.events.store import InMemoryCodingEventStore
+from neos.coding.loop.fake import FakeDurableCodingLoop
 from tests.coding.fakes import InMemoryCodingRunRepository
 
 
@@ -34,7 +42,7 @@ def run_fixture(run_id: str) -> CodingRun:
     )
 
 
-async def make_run_service(repository) -> CodingRunService:
+async def make_run_service(repository, *, loop=None) -> CodingRunService:
     tasks = InMemoryCodingTaskRepository()
     await tasks.create(
         CodingTask(
@@ -53,8 +61,16 @@ async def make_run_service(repository) -> CodingRunService:
         runs=repository,
         events=InMemoryCodingEventStore(),
         interrupter=RecordingInterrupter(repository),
+        loop=loop,
         clock=lambda: NOW,
     )
+
+
+class FailingLoop:
+    async def run(self, input, checkpoint, deps):
+        if False:
+            yield None
+        raise RuntimeError("transient")
 
 
 async def test_safe_point_steering_is_applied_after_checkpoint() -> None:
@@ -91,3 +107,144 @@ async def test_interrupt_steering_creates_new_run_from_checkpoint() -> None:
     )
     assert repository.created_runs[-1].attempt == 2
     assert repository.active_run.status is CodingRunStatus.RUNNING
+
+
+async def test_safe_point_steering_uses_atomic_repository_transition() -> None:
+    repository = InMemoryCodingRunRepository(active_run=run_fixture("cr_1"))
+    service = await make_run_service(repository)
+    checkpoint = CodingCheckpoint(
+        checkpoint_id="cc_5",
+        task_id="ct_1",
+        run_id="cr_1",
+        seq=5,
+        loop_state={
+            "phase_index": 1,
+            "transcript": [{"role": "assistant", "content": "planned"}],
+            "current_instruction": "Fix it",
+            "pending_instruction": None,
+        },
+        workspace_revision="rev_5",
+        created_at=NOW,
+    )
+    await repository.save_checkpoint(checkpoint)
+    lease = await repository.acquire_execution_lease(
+        task_id="ct_1",
+        run_id="cr_1",
+        worker_id="worker-a",
+        now=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+    )
+    assert lease is not None
+    steering = await service.steer(
+        task_id="ct_1",
+        owner_id="u1",
+        instruction="Inspect cache first",
+        mode=SteeringMode.SAFE_POINT,
+    )
+    repository.steering_claims[steering.steering_id] = (
+        "dead-worker",
+        NOW - timedelta(seconds=1),
+    )
+
+    applied = await service.on_safe_point(
+        task_id="ct_1",
+        checkpoint_id=checkpoint.checkpoint_id,
+        lease=lease,
+        checkpoint=checkpoint,
+        worker_id="worker-a",
+    )
+
+    assert applied is not False
+    assert applied.checkpoint.loop_state["current_instruction"] == (
+        "Inspect cache first"
+    )
+    assert applied.checkpoint.loop_state["transcript"] == checkpoint.loop_state[
+        "transcript"
+    ]
+    assert applied.run.attempt == 2
+    assert applied.lease.fencing_token == lease.fencing_token + 1
+
+
+async def test_ensure_started_is_idempotent_and_uses_task_prompt() -> None:
+    repository = InMemoryCodingRunRepository(
+        task_prompts={"ct_1": "Fix it"}
+    )
+    service = await make_run_service(repository)
+
+    first = await service.ensure_started(task_id="ct_1")
+    second = await service.ensure_started(task_id="ct_1")
+
+    assert first == second
+    assert first.status is CodingRunStatus.RUNNING
+    assert repository.task_statuses["ct_1"] == "running"
+
+
+async def test_caught_exception_releases_lease_for_retry() -> None:
+    repository = InMemoryCodingRunRepository(
+        active_run=run_fixture("cr_1"),
+        task_prompts={"ct_1": "Fix it"},
+    )
+    repository.task_statuses["ct_1"] = "running"
+    service = await make_run_service(repository, loop=FailingLoop())
+
+    with pytest.raises(RuntimeError, match="transient"):
+        await service.advance_one_safe_point(
+            task_id="ct_1", worker_id="worker-a"
+        )
+
+    assert repository.execution_leases["ct_1"].expires_at == NOW
+
+
+async def test_no_remaining_phase_completes_run_and_task_atomically() -> None:
+    repository = InMemoryCodingRunRepository(
+        active_run=run_fixture("cr_1"),
+        task_prompts={"ct_1": "Fix it"},
+    )
+    repository.task_statuses["ct_1"] = "running"
+    await repository.save_checkpoint(
+        CodingCheckpoint(
+            checkpoint_id="cc_final",
+            task_id="ct_1",
+            run_id="cr_1",
+            seq=10,
+            loop_state={
+                "phase_index": 4,
+                "transcript": [],
+                "current_instruction": "Fix it",
+                "pending_instruction": None,
+            },
+            workspace_revision="rev_final",
+            created_at=NOW,
+        )
+    )
+    service = await make_run_service(
+        repository,
+        loop=FakeDurableCodingLoop(clock=lambda: NOW),
+    )
+
+    event = await service.advance_one_safe_point(
+        task_id="ct_1", worker_id="worker-a"
+    )
+
+    assert event.type == "run.completed"
+    assert repository.active_run.status is CodingRunStatus.COMPLETED
+    assert repository.task_statuses["ct_1"] == "completed"
+
+
+async def test_fail_active_run_uses_fenced_terminal_command() -> None:
+    repository = InMemoryCodingRunRepository(
+        active_run=run_fixture("cr_1"),
+        task_prompts={"ct_1": "Fix it"},
+    )
+    repository.task_statuses["ct_1"] = "running"
+    service = await make_run_service(repository)
+
+    event = await service.fail_active_run(
+        task_id="ct_1",
+        worker_id="worker-a",
+        error_code="supervisor_retry_exhausted",
+    )
+
+    assert event.type == "run.failed"
+    assert repository.active_run.status is CodingRunStatus.FAILED
+    assert repository.task_statuses["ct_1"] == "failed"

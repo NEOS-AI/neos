@@ -132,6 +132,72 @@ class Ledger:
         )
         return int(value or 0) > 0
 
+    async def token_budget_state(self) -> tuple[int, dict[str, int]]:
+        """Replay durable budget events into consumed and outstanding usage."""
+
+        result = await self.db.execute(
+            select(DAEvent.kind, DAEvent.payload).where(
+                DAEvent.run_id == self.run_id,
+                DAEvent.kind.in_(
+                    (
+                        "token_budget_reserved",
+                        "token_budget_settled",
+                        "token_budget_released",
+                    )
+                ),
+            ).order_by(DAEvent.seq)
+        )
+        consumed = 0
+        outstanding: dict[str, int] = {}
+        terminal: set[str] = set()
+
+        for kind, raw_payload in result:
+            try:
+                payload = (
+                    raw_payload
+                    if isinstance(raw_payload, dict)
+                    else json.loads(raw_payload)
+                )
+                if not isinstance(payload, dict):
+                    continue
+                reservation_id = payload.get("reservation_id")
+                if not isinstance(reservation_id, str) or not reservation_id:
+                    continue
+
+                if kind == "token_budget_reserved":
+                    reserved = payload.get("reserved_tokens")
+                    if (
+                        reservation_id in terminal
+                        or reservation_id in outstanding
+                        or not isinstance(reserved, int)
+                        or isinstance(reserved, bool)
+                        or reserved < 1
+                    ):
+                        continue
+                    outstanding[reservation_id] = reserved
+                    continue
+
+                if reservation_id not in outstanding:
+                    continue
+                reserved = outstanding[reservation_id]
+                if kind == "token_budget_settled":
+                    actual = payload.get("actual_tokens")
+                    if (
+                        not isinstance(actual, int)
+                        or isinstance(actual, bool)
+                        or actual < 0
+                        or actual > reserved
+                    ):
+                        continue
+                    consumed += actual
+
+                del outstanding[reservation_id]
+                terminal.add(reservation_id)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+
+        return consumed, outstanding
+
     async def open_question(
         self,
         question_text: str,

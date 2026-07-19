@@ -4,6 +4,7 @@ import pytest
 
 from neos.workflow.deep_analysis.models import Effort, ProposedBlob
 from neos.workflow.deep_analysis.worker import Worker
+from neos.workflow.deep_analysis.token_budget import TokenBudgetExhausted
 
 
 pytestmark = pytest.mark.no_db
@@ -166,3 +167,22 @@ async def test_worker_drops_unfetched_evidence_and_bounds_confidence():
 
     assert result.claims[0].confidence == 1.0
     assert result.claims[0].evidence == []
+
+
+@pytest.mark.asyncio
+async def test_worker_returns_accumulated_partial_when_budget_exhausts(monkeypatch):
+    async def exhausted(*args, **kwargs):
+        raise TokenBudgetExhausted("cap")
+
+    monkeypatch.setattr("neos.workflow.deep_analysis.worker.call_json", exhausted)
+    worker = Worker(FakeSearch(), fetch_fn=FakeFetch(), llm_client=FakeLLM())
+
+    result = await worker.investigate(
+        "Question\n{fetched_evidence}",
+        Effort.SCOUT,
+        "question",
+    )
+
+    assert result.status == "partial"
+    assert len(result.blobs) == 1
+    assert result.claims == []

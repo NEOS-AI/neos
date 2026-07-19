@@ -7,6 +7,7 @@ from neos.config.settings import settings
 from .llm import call_json, call_llm
 from .models import ConflictNote, NodeSummary
 from .prompt_loader import render
+from .token_budget import TokenBudgetExhausted
 
 
 class Synthesizer:
@@ -77,6 +78,7 @@ class Synthesizer:
             max_tokens=config.synthesis_max_tokens,
             client=self.llm_client,
             cassette=self.cassette,
+            stage="report_assembly",
         )
         await self.ledger.log(
             "synth_pass",
@@ -123,13 +125,21 @@ class Synthesizer:
             caveats=caveats_text,
         )
         config = settings.config.deep_analysis
-        response = await self.llm_call(
-            config.models.synth,
-            prompt,
-            max_tokens=config.synthesis_max_tokens,
-            client=self.llm_client,
-            cassette=self.cassette,
-        )
+        try:
+            response = await self.llm_call(
+                config.models.synth,
+                prompt,
+                max_tokens=config.synthesis_max_tokens,
+                client=self.llm_client,
+                cassette=self.cassette,
+                stage="report_assembly",
+            )
+        except TokenBudgetExhausted:
+            return self.deterministic_report(
+                root_summary,
+                child_summaries,
+                caveats,
+            )
         qid = root_summary.question_id if root_summary is not None else ""
         await self.ledger.log(
             "synth_pass",
@@ -141,6 +151,31 @@ class Synthesizer:
             },
         )
         return response.text
+
+    @staticmethod
+    def deterministic_report(
+        root_summary: NodeSummary | None,
+        child_summaries: list[NodeSummary],
+        caveats: list[str],
+    ) -> str:
+        root_answer = (
+            root_summary.answer.strip()
+            if root_summary is not None and root_summary.answer.strip()
+            else "검증된 요약을 확보하지 못했습니다."
+        )
+        body = "\n\n".join(
+            f"### {child.question_id}\n{child.answer}"
+            for child in child_summaries
+            if child.answer.strip()
+        ) or root_answer
+        limitations = [*caveats, "전체 심층분석 토큰 상한에 도달했습니다."]
+        return (
+            f"## 요약\n{root_answer}\n\n"
+            f"## 본문\n{body}\n\n"
+            "## 한계와 미확인 사항\n"
+            + "\n".join(f"- {item}" for item in limitations)
+            + "\n\n## 출처\n"
+        )
 
     async def reduce_node(
         self, question, child_summaries: list[NodeSummary]
@@ -176,6 +211,17 @@ class Synthesizer:
                 max_tokens=config.synthesis_max_tokens,
                 client=self.llm_client,
                 cassette=self.cassette,
+                stage="node_reduction",
+            )
+        except TokenBudgetExhausted:
+            joined = " ".join(c.answer for c in child_summaries) or ""
+            return NodeSummary(
+                question_id=question.id,
+                answer=joined,
+                key_claim_ids=[],
+                confidence=0.0,
+                caveats=["token_budget_exhausted"],
+                conflicts=[],
             )
         except Exception:
             joined = " ".join(c.answer for c in child_summaries) or ""

@@ -161,6 +161,29 @@ class EnterpriseMetricsCollector:
             ["outcome"],
             registry=self.registry,
         )
+        self.coding_lease_contention_total = Counter(
+            "coding_lease_contention_total",
+            "Durable coding execution lease outcomes",
+            ["outcome"],
+            registry=self.registry,
+        )
+        self.coding_supervisor_tasks_total = Counter(
+            "coding_supervisor_tasks_total",
+            "Development coding supervisor task outcomes",
+            ["outcome"],
+            registry=self.registry,
+        )
+        self.coding_supervisor_retry_total = Counter(
+            "coding_supervisor_retry_total",
+            "Development coding supervisor retries",
+            ["reason"],
+            registry=self.registry,
+        )
+        self.coding_supervisor_active_tasks = Gauge(
+            "coding_supervisor_active_tasks",
+            "Active development coding supervisor tasks",
+            registry=self.registry,
+        )
 
         # === LLM API Metrics ===
 
