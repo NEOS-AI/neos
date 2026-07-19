@@ -223,6 +223,38 @@ async def test_suspended_sandbox_resume_persists_health_and_changed_run() -> Non
     assert repository.current == bound.binding
 
 
+@pytest.mark.parametrize(
+    ("sandbox_state", "health_state", "run_id", "expected_lifecycle_call"),
+    [
+        (SandboxState.RUNNING, "healthy", "cr_2", None),
+        (SandboxState.SUSPENDED, "suspended", "cr_1", ("resume", "sb_old")),
+    ],
+)
+async def test_reuse_cas_loss_to_terminal_does_not_recreate_or_destroy(
+    sandbox_state: SandboxState,
+    health_state: str,
+    run_id: str,
+    expected_lifecycle_call: tuple[str, str] | None,
+) -> None:
+    class TerminalRaceRepository(Repository):
+        async def replace(self, value, *, expected_version, now):
+            self.current = None
+            return None
+
+    repository = TerminalRaceRepository(binding(health_state=health_state))
+    provider = Provider({"sb_old": sandbox("sb_old", state=sandbox_state)})
+
+    with pytest.raises(SandboxBindingError) as raised:
+        await service(repository, provider).resolve("ct_1", run_id)
+
+    assert raised.value.code == "sandbox_binding_ownership_lost"
+    assert raised.value.retryable is False
+    assert ("create", "ct_1") not in provider.calls
+    assert ("destroy", "sb_old") not in provider.calls
+    if expected_lifecycle_call is not None:
+        assert expected_lifecycle_call in provider.calls
+
+
 async def test_missing_sandbox_restores_latest_snapshot_and_swaps_binding() -> None:
     repository = Repository(binding(snapshot_id="ss_latest"))
     provider = Provider()

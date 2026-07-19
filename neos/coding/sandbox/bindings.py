@@ -129,7 +129,12 @@ class SandboxBindingService:
                 now=self._clock(),
             )
             if rebound is None:
-                return await self.resolve(current.task_id, run_id)
+                winner = await self._repository.get(current.task_id)
+                if winner is None:
+                    raise SandboxBindingError(
+                        "sandbox_binding_ownership_lost", retryable=False
+                    )
+                return await self._resolve_existing(winner, run_id)
             current = rebound
         session = await self._provider.open_session(sandbox.sandbox_id)
         return BoundSandboxSession(current, session)
