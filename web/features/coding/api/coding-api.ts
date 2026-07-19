@@ -13,6 +13,8 @@ export type CodingWsTicket = {
   websocket_url: string;
 };
 
+import type { CodingProjectionSnapshot } from "@/features/coding/types/projection";
+
 export class CodingAPIError extends Error {
   readonly status: number;
 
@@ -52,6 +54,37 @@ export async function getCodingWsTicket(
   );
   if (!response.ok) {
     throw await responseError(response, "Could not authorize coding stream");
+  }
+  return response.json();
+}
+
+export async function getCodingTaskSnapshot(
+  taskId: string
+): Promise<CodingProjectionSnapshot> {
+  const response = await fetch(
+    `/api/coding/tasks/${encodeURIComponent(taskId)}/snapshot`
+  );
+  if (!response.ok) {
+    throw await responseError(response, "Could not restore coding task");
+  }
+  return response.json();
+}
+
+export async function steerCodingTask(
+  taskId: string,
+  instruction: string,
+  mode: "safe_point" | "interrupt_now"
+): Promise<{ steering_id: string; mode: string }> {
+  const response = await fetch(
+    `/api/coding/tasks/${encodeURIComponent(taskId)}/steer`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instruction, mode }),
+    }
+  );
+  if (!response.ok) {
+    throw await responseError(response, "Could not steer coding task");
   }
   return response.json();
 }

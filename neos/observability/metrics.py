@@ -134,6 +134,34 @@ class EnterpriseMetricsCollector:
             registry=self.registry
         )
 
+        # === Durable Coding Loop Metrics ===
+
+        self.coding_phase_duration_seconds = Histogram(
+            "coding_phase_duration_seconds",
+            "Durable coding phase duration in seconds",
+            ["phase"],
+            buckets=(0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60, 300),
+            registry=self.registry,
+        )
+        self.coding_checkpoint_total = Counter(
+            "coding_checkpoint_total",
+            "Committed durable coding checkpoints",
+            ["phase"],
+            registry=self.registry,
+        )
+        self.coding_steering_latency_seconds = Histogram(
+            "coding_steering_latency_seconds",
+            "Time from steering request to safe-point application",
+            ["outcome"],
+            registry=self.registry,
+        )
+        self.coding_resume_total = Counter(
+            "coding_resume_total",
+            "Durable coding loop resume attempts",
+            ["outcome"],
+            registry=self.registry,
+        )
+
         # === LLM API Metrics ===
 
         self.llm_calls_total = Counter(

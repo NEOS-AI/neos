@@ -78,6 +78,8 @@ async def test_fake_loop_runs_all_phases_and_checkpoints_each_step() -> None:
         if event.type == "phase.started"
     ] == ["understand", "plan", "implement", "verify", "review"]
     assert len(repository.checkpoints) == 5
+    assert len(repository.phases) == 5
+    assert all(phase.status.value == "completed" for phase in repository.phases)
     assert events[-1].type == "run.completed"
 
 

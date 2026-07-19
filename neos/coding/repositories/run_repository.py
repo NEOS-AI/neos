@@ -6,6 +6,8 @@ from sqlalchemy import text
 
 from neos.coding.domain.phases import (
     CodingCheckpoint,
+    CodingPhase,
+    CodingPhaseKind,
     CodingRun,
     CodingRunStatus,
     SteeringMode,
@@ -114,6 +116,52 @@ class PostgresCodingRunRepository:
                         "state": json.dumps(dict(checkpoint.loop_state)),
                         "workspace_revision": checkpoint.workspace_revision,
                         "created_at": checkpoint.created_at,
+                    },
+                )
+
+    async def phase_history(
+        self, task_id: str
+    ) -> tuple[tuple[CodingPhaseKind, int], ...]:
+        async with await self._session_factory() as session:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT phase_kind, attempt FROM coding_phases
+                    WHERE task_id = :task_id
+                    ORDER BY started_at, attempt
+                    """
+                ),
+                {"task_id": task_id},
+            )
+            rows = result.all()
+        return tuple((CodingPhaseKind(row[0]), int(row[1])) for row in rows)
+
+    async def save_phase(self, phase: CodingPhase) -> None:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_phases
+                            (phase_id, task_id, run_id, phase_kind, attempt,
+                             status, started_at, completed_at)
+                        VALUES
+                            (:phase_id, :task_id, :run_id, :phase_kind, :attempt,
+                             :status, :started_at, :completed_at)
+                        ON CONFLICT (phase_id) DO UPDATE
+                        SET status = EXCLUDED.status,
+                            completed_at = EXCLUDED.completed_at
+                        """
+                    ),
+                    {
+                        "phase_id": phase.phase_id,
+                        "task_id": phase.task_id,
+                        "run_id": phase.run_id,
+                        "phase_kind": phase.kind.value,
+                        "attempt": phase.attempt,
+                        "status": phase.status.value,
+                        "started_at": phase.started_at,
+                        "completed_at": phase.completed_at,
                     },
                 )
 

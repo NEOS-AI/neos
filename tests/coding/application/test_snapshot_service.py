@@ -1,0 +1,150 @@
+from datetime import UTC, datetime
+
+from neos.coding.application.snapshot_service import CodingSnapshotService
+from neos.coding.repositories.projection_repository import (
+    CodingCheckpointRow,
+    CodingPhaseRow,
+    CodingProjectionRows,
+    CodingRunRow,
+    CodingTaskRow,
+    CodingToolExecutionRow,
+)
+
+
+NOW = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
+
+
+class ProjectionFixtureRepository:
+    def __init__(self, *, head_seq: int) -> None:
+        self.head_seq = head_seq
+
+    async def get_owned_snapshot(self, task_id: str, owner_id: str):
+        if (task_id, owner_id) != ("ct_1", "u1"):
+            return None
+        phases = tuple(
+            CodingPhaseRow(
+                phase_id=f"phase_{index}",
+                run_id="cr_1" if attempt == 1 else "cr_2",
+                kind=kind,
+                attempt=attempt,
+                status="completed" if index < 3 else "active",
+                started_at=NOW,
+                completed_at=NOW if index < 3 else None,
+            )
+            for index, (kind, attempt) in enumerate(
+                [
+                    ("understand", 1),
+                    ("plan", 1),
+                    ("implement", 1),
+                    ("understand", 2),
+                ]
+            )
+        )
+        return CodingProjectionRows(
+            task=CodingTaskRow(
+                task_id="ct_1",
+                status="running",
+                version=2,
+                last_seq=self.head_seq,
+                created_at=NOW,
+                updated_at=NOW,
+            ),
+            runs=(
+                CodingRunRow("cr_1", 1, "cancelled", None),
+                CodingRunRow("cr_2", 2, "running", "cc_10"),
+            ),
+            phases=phases,
+            tools=(
+                CodingToolExecutionRow(
+                    "tool_1", "cr_1", "completed", {"ok": True}
+                ),
+            ),
+            approvals=(),
+            todos=({"content": "Run tests", "status": "pending"},),
+            latest_checkpoint=CodingCheckpointRow(
+                "cc_12",
+                "cr_2",
+                12,
+                {"phase_index": 0, "changed_files": ["app.py"]},
+                "rev_12",
+                NOW,
+            ),
+            head_seq=self.head_seq,
+        )
+
+
+async def test_snapshot_is_one_consistent_head_projection() -> None:
+    service = CodingSnapshotService(ProjectionFixtureRepository(head_seq=14))
+
+    snapshot = await service.get_owned("ct_1", "u1")
+
+    assert snapshot is not None
+    assert snapshot.head_seq == 14
+    assert snapshot.active_run is not None
+    assert snapshot.active_run.run_id == "cr_2"
+    assert [(phase.kind.value, phase.attempt) for phase in snapshot.phases] == [
+        ("understand", 1),
+        ("plan", 1),
+        ("implement", 1),
+        ("understand", 2),
+    ]
+    assert snapshot.latest_checkpoint is not None
+    assert snapshot.latest_checkpoint.seq <= snapshot.head_seq
+    assert snapshot.workspace.changed_files == ("app.py",)
+
+
+async def test_snapshot_is_owner_scoped() -> None:
+    service = CodingSnapshotService(ProjectionFixtureRepository(head_seq=14))
+
+    assert await service.get_owned("ct_1", "foreign") is None
+
+
+class FakeResult:
+    def __init__(self, *, first=None, rows=()) -> None:
+        self._first = first
+        self._rows = list(rows)
+
+    def first(self):
+        return self._first
+
+    def all(self):
+        return self._rows
+
+
+class FakeSession:
+    def __init__(self) -> None:
+        self.sql = []
+        self.results = [FakeResult(first=None)]
+
+    def begin(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return False
+
+    async def execute(self, statement, params=None):
+        self.sql.append(str(statement))
+        if str(statement).startswith("SET TRANSACTION"):
+            return FakeResult()
+        return self.results.pop(0)
+
+
+async def test_postgres_projection_uses_repeatable_read_and_owner_scope() -> None:
+    from neos.coding.repositories.projection_repository import (
+        PostgresCodingProjectionRepository,
+    )
+
+    session = FakeSession()
+
+    async def session_factory():
+        return session
+
+    repository = PostgresCodingProjectionRepository(session_factory)
+
+    assert await repository.get_owned_snapshot("ct_1", "u1") is None
+    sql = "\n".join(session.sql)
+    assert "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ" in sql
+    assert "owner_id = :owner_id" in sql

@@ -1,16 +1,23 @@
 import asyncio
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from neos.coding.application.run_service import (
     CodingRunService,
     InProcessRunInterrupter,
 )
+from neos.coding.application.snapshot_service import CodingSnapshotService
+from neos.coding.loop.base import CodingLoop
+from neos.coding.loop.fake import FakeDurableCodingLoop
 from neos.coding.outbox.dispatcher import CodingOutboxDispatcher
 from neos.coding.outbox.repository import PostgresCodingOutboxRepository
 from neos.coding.persistence.postgres import PostgresCodingService
 from neos.coding.repositories.run_repository import PostgresCodingRunRepository
+from neos.coding.repositories.projection_repository import (
+    PostgresCodingProjectionRepository,
+)
 from neos.coding.repositories.task_repository import CodingTaskRepository
 from neos.coding.transport.base import CodingEventTransport, CodingTicketStore
 from neos.coding.transport.memory import (
@@ -20,12 +27,21 @@ from neos.coding.transport.memory import (
 from neos.coding.transport.redis_events import RedisCodingEventTransport
 from neos.coding.transport.redis_tickets import RedisCodingTicketStore
 from neos.database.connection import db_manager
+from neos.config.settings import settings
+from neos.observability.metrics import metrics
 
 
 @dataclass(frozen=True, slots=True)
 class CodingRuntimeTransport:
     tickets: CodingTicketStore
     events: CodingEventTransport
+
+
+@dataclass(frozen=True, slots=True)
+class CodingRuntime:
+    events: Any
+    runs: CodingRunService
+    snapshots: CodingSnapshotService
 
 
 coding_transport = CodingRuntimeTransport(
@@ -39,12 +55,52 @@ coding_outbox_dispatcher = CodingOutboxDispatcher(
 coding_service = PostgresCodingService(
     db_manager.get_session, wake_outbox=coding_outbox_dispatcher.wake
 )
-coding_run_service = CodingRunService(
-    tasks=CodingTaskRepository(db_manager),
-    runs=PostgresCodingRunRepository(db_manager.get_session),
-    events=coding_service,
-    interrupter=InProcessRunInterrupter(),
-)
+
+
+def create_coding_runtime(
+    *,
+    events,
+    tasks,
+    run_repository,
+    projection_repository,
+    loop: CodingLoop | None,
+    metrics_collector=None,
+    interrupter=None,
+) -> CodingRuntime:
+    snapshots = CodingSnapshotService(projection_repository)
+    runs = CodingRunService(
+        tasks=tasks,
+        runs=run_repository,
+        events=events,
+        loop=loop,
+        metrics=metrics_collector,
+        interrupter=interrupter or InProcessRunInterrupter(),
+    )
+    return CodingRuntime(events=events, runs=runs, snapshots=snapshots)
+
+
+def create_development_coding_runtime() -> CodingRuntime:
+    loop = (
+        FakeDurableCodingLoop(clock=lambda: datetime.now(UTC))
+        if settings.CODING_FAKE_LOOP_ENABLED
+        else None
+    )
+    return create_coding_runtime(
+        events=coding_service,
+        tasks=CodingTaskRepository(db_manager),
+        run_repository=PostgresCodingRunRepository(db_manager.get_session),
+        projection_repository=PostgresCodingProjectionRepository(
+            db_manager.get_session
+        ),
+        loop=loop,
+        metrics_collector=metrics,
+        interrupter=InProcessRunInterrupter(),
+    )
+
+
+coding_runtime = create_development_coding_runtime()
+coding_run_service = coding_runtime.runs
+coding_snapshot_service = coding_runtime.snapshots
 
 
 def initialize_coding_transport(

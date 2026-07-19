@@ -1,0 +1,223 @@
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Mapping
+
+from sqlalchemy import text
+
+from neos.coding.persistence.postgres import SessionFactory
+
+
+@dataclass(frozen=True, slots=True)
+class CodingTaskRow:
+    task_id: str
+    status: str
+    version: int
+    last_seq: int
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class CodingRunRow:
+    run_id: str
+    attempt: int
+    status: str
+    resume_from_checkpoint_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CodingPhaseRow:
+    phase_id: str
+    run_id: str
+    kind: str
+    attempt: int
+    status: str
+    started_at: datetime
+    completed_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class CodingToolExecutionRow:
+    tool_call_id: str
+    run_id: str
+    status: str
+    result: Mapping[str, Any] | None
+
+
+@dataclass(frozen=True, slots=True)
+class CodingCheckpointRow:
+    checkpoint_id: str
+    run_id: str
+    seq: int
+    loop_state: Mapping[str, Any]
+    workspace_revision: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class CodingProjectionRows:
+    task: CodingTaskRow
+    runs: tuple[CodingRunRow, ...]
+    phases: tuple[CodingPhaseRow, ...]
+    tools: tuple[CodingToolExecutionRow, ...]
+    approvals: tuple[Mapping[str, Any], ...]
+    todos: tuple[Mapping[str, Any], ...]
+    latest_checkpoint: CodingCheckpointRow | None
+    head_seq: int
+
+
+class PostgresCodingProjectionRepository:
+    def __init__(self, session_factory: SessionFactory) -> None:
+        self._session_factory = session_factory
+
+    async def get_owned_snapshot(
+        self, task_id: str, owner_id: str
+    ) -> CodingProjectionRows | None:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                )
+                result = await session.execute(
+                    text(
+                        """
+                        SELECT task_id, status, version, last_seq,
+                               created_at, updated_at
+                        FROM coding_tasks
+                        WHERE task_id = :task_id
+                          AND owner_id = :owner_id
+                          AND deleted_at IS NULL
+                        """
+                    ),
+                    {"task_id": task_id, "owner_id": owner_id},
+                )
+                task_record = result.first()
+                if task_record is None:
+                    return None
+                runs = await self._runs(session, task_id)
+                phases = await self._phases(session, task_id)
+                tools = await self._tools(session, task_id)
+                approvals = await self._approvals(session, task_id, owner_id)
+                checkpoint = await self._checkpoint(session, task_id)
+
+        task = CodingTaskRow(
+            task_id=task_record[0],
+            status=task_record[1],
+            version=int(task_record[2]),
+            last_seq=int(task_record[3]),
+            created_at=task_record[4],
+            updated_at=task_record[5],
+        )
+        todos = tuple(
+            dict(item)
+            for item in (
+                checkpoint.loop_state.get("todos", []) if checkpoint else []
+            )
+        )
+        return CodingProjectionRows(
+            task=task,
+            runs=runs,
+            phases=phases,
+            tools=tools,
+            approvals=approvals,
+            todos=todos,
+            latest_checkpoint=checkpoint,
+            head_seq=task.last_seq,
+        )
+
+    async def _runs(self, session, task_id: str) -> tuple[CodingRunRow, ...]:
+        result = await session.execute(
+            text(
+                """
+                SELECT run_id, attempt, status, resume_from_checkpoint_id
+                FROM coding_runs WHERE task_id = :task_id
+                ORDER BY attempt ASC
+                """
+            ),
+            {"task_id": task_id},
+        )
+        return tuple(
+            CodingRunRow(row[0], int(row[1]), row[2], row[3])
+            for row in result.all()
+        )
+
+    async def _phases(self, session, task_id: str) -> tuple[CodingPhaseRow, ...]:
+        result = await session.execute(
+            text(
+                """
+                SELECT phase_id, run_id, phase_kind, attempt, status,
+                       started_at, completed_at
+                FROM coding_phases WHERE task_id = :task_id
+                ORDER BY started_at ASC, attempt ASC
+                """
+            ),
+            {"task_id": task_id},
+        )
+        return tuple(
+            CodingPhaseRow(row[0], row[1], row[2], int(row[3]), row[4], row[5], row[6])
+            for row in result.all()
+        )
+
+    async def _tools(self, session, task_id: str) -> tuple[CodingToolExecutionRow, ...]:
+        result = await session.execute(
+            text(
+                """
+                SELECT tool_call_id, run_id, status, result_json
+                FROM coding_tool_executions WHERE task_id = :task_id
+                ORDER BY completed_at ASC NULLS LAST, tool_call_id ASC
+                """
+            ),
+            {"task_id": task_id},
+        )
+        return tuple(
+            CodingToolExecutionRow(
+                row[0], row[1], row[2], dict(row[3]) if row[3] is not None else None
+            )
+            for row in result.all()
+        )
+
+    async def _approvals(
+        self, session, task_id: str, owner_id: str
+    ) -> tuple[Mapping[str, Any], ...]:
+        result = await session.execute(
+            text(
+                """
+                SELECT request_id, skill_name, requested_at, expires_at
+                FROM pending_approvals
+                WHERE session_id = :task_id AND user_id = :owner_id
+                  AND resolved = FALSE AND expires_at > NOW()
+                ORDER BY requested_at ASC
+                """
+            ),
+            {"task_id": task_id, "owner_id": owner_id},
+        )
+        return tuple(
+            {
+                "request_id": row[0],
+                "skill_name": row[1],
+                "requested_at": row[2],
+                "expires_at": row[3],
+            }
+            for row in result.all()
+        )
+
+    async def _checkpoint(
+        self, session, task_id: str
+    ) -> CodingCheckpointRow | None:
+        result = await session.execute(
+            text(
+                """
+                SELECT checkpoint_id, run_id, seq, loop_state_json,
+                       workspace_revision, created_at
+                FROM coding_checkpoints WHERE task_id = :task_id
+                ORDER BY seq DESC LIMIT 1
+                """
+            ),
+            {"task_id": task_id},
+        )
+        row = result.first()
+        if row is None:
+            return None
+        return CodingCheckpointRow(
+            row[0], row[1], int(row[2]), dict(row[3]), row[4], row[5]
+        )
