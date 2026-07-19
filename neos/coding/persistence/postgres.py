@@ -1,3 +1,4 @@
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable, Mapping
@@ -9,6 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from neos.coding.application.task_service import CodingTaskSnapshot
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.models import CodingTask, CodingTaskStatus
+
+
+logger = logging.getLogger(__name__)
 
 
 SessionFactory = Callable[[], Awaitable[AsyncSession]]
@@ -24,7 +28,24 @@ class PostgresCodingService:
     ) -> None:
         self._session_factory = session_factory
         self._wake_outbox = wake_outbox
+        self._task_created_notifier: Callable[[str], bool | None] | None = None
         self.events = self
+
+    def set_task_created_notifier(
+        self, notifier: Callable[[str], bool | None] | None
+    ) -> None:
+        self._task_created_notifier = notifier
+
+    def _notify_task_created(self, task_id: str) -> None:
+        if self._task_created_notifier is None:
+            return
+        try:
+            self._task_created_notifier(task_id)
+        except Exception:
+            logger.exception(
+                "Coding task wake notification failed",
+                extra={"task_id": task_id},
+            )
 
     async def create_task(
         self, *, owner_id: str, prompt: str, task_id: str | None = None
@@ -70,7 +91,9 @@ class PostgresCodingService:
                 )
         if self._wake_outbox is not None:
             self._wake_outbox()
-        return replace(task, last_seq=event.seq)
+        task = replace(task, last_seq=event.seq)
+        self._notify_task_created(task.task_id)
+        return task
 
     async def append(
         self,

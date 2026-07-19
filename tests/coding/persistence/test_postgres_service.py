@@ -164,3 +164,49 @@ async def test_generic_append_rejects_checkpoint_identity() -> None:
             payload={},
             checkpoint_id="cc_1",
         )
+
+
+async def test_task_notifier_runs_after_transaction_and_outbox_wake() -> None:
+    timeline: list[str] = []
+
+    class TrackingTransaction(FakeTransaction):
+        async def __aexit__(self, *_):
+            timeline.append("transaction.exit")
+            return False
+
+    class TrackingSession(FakeSession):
+        def begin(self):
+            return TrackingTransaction()
+
+    async def session_factory():
+        return TrackingSession()
+
+    service = PostgresCodingService(
+        session_factory, wake_outbox=lambda: timeline.append("outbox.wake")
+    )
+    service.set_task_created_notifier(
+        lambda task_id: timeline.append("task.notify")
+    )
+
+    await service.create_task(owner_id="u1", prompt="Fix it")
+
+    assert timeline == ["transaction.exit", "outbox.wake", "task.notify"]
+
+
+async def test_postgres_notifier_failure_does_not_rollback_task() -> None:
+    session = FakeSession()
+
+    async def session_factory():
+        return session
+
+    service = PostgresCodingService(session_factory)
+
+    def fail_notification(task_id: str) -> None:
+        raise RuntimeError("wake failed")
+
+    service.set_task_created_notifier(fail_notification)
+
+    task = await service.create_task(owner_id="u1", prompt="Fix it")
+
+    assert task.task_id
+    assert any("INSERT INTO coding_tasks" in sql for sql, _ in session.statements)
