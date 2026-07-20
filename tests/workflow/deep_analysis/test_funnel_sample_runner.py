@@ -3,6 +3,8 @@ from copy import deepcopy
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -103,6 +105,27 @@ RESULT = {
         },
     },
 }
+
+
+def test_importing_runner_registers_users_foreign_key_target():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import neos.workflow.deep_analysis.funnel_sample_runner; "
+                "from neos.database.connection import Base; "
+                "from neos.database.deep_analysis_models import DARun; "
+                "foreign_key = next(iter(DARun.__table__.foreign_keys)); "
+                "assert 'users' in Base.metadata.tables; "
+                "assert foreign_key.column.table is Base.metadata.tables['users']"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_write_artifacts_creates_timestamped_contract(tmp_path):

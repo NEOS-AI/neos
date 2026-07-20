@@ -2,7 +2,6 @@ import json
 
 import pytest
 
-import neos.database.models  # noqa: F401
 from neos.database.connection import get_session_ctx
 from neos.database.deep_analysis_models import DAEvent, DAQuestion, DARun
 from neos.workflow.deep_analysis.funnel_sample import QuestionCase

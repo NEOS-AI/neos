@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import select, text
 
+import neos.database.models  # noqa: F401 - register DARun's users FK target
 from neos.config.settings import settings
 from neos.database.connection import get_session_ctx
 from neos.database.deep_analysis_models import DARun
