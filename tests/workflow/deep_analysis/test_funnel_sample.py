@@ -105,6 +105,35 @@ def test_aggregate_funnels_recomputes_weighted_rates_and_averages():
     assert combined["quote_score_buckets"]["near_miss"] == 4
 
 
+def test_aggregate_funnels_derives_safe_confidence_clamp_total():
+    first = {
+        **FUNNEL_A,
+        "confidence_clamped_count": 999,
+        "confidence_clamped_by_source_count": {
+            "0": 1,
+            "1": 2,
+            "2": True,
+            "3_plus": 3,
+            "unknown": 50,
+        },
+    }
+    second = {
+        **FUNNEL_B,
+        "confidence_clamped_count": 999,
+        "confidence_clamped_by_source_count": {"0": -1, "2": 4},
+    }
+
+    combined = aggregate_funnels([first, second])
+
+    assert combined["confidence_clamped_by_source_count"] == {
+        "0": 1,
+        "1": 2,
+        "2": 4,
+        "3_plus": 3,
+    }
+    assert combined["confidence_clamped_count"] == 10
+
+
 def test_representative_contains_dominant_loss_and_is_closest_to_median():
     selected = select_representative(OBSERVATIONS)
     assert selected["dominant_stage"] == "deterministic_rejection"
