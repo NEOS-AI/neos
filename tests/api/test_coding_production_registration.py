@@ -44,8 +44,8 @@ def test_runtime_registers_celery_dispatcher_when_enabled(
     calls = []
 
     class RecordingDispatcher:
-        def enqueue(self, task_id, *, source):
-            calls.append((task_id, source))
+        def enqueue(self, task_id, *, expected_checkpoint_id, source):
+            calls.append((task_id, expected_checkpoint_id, source))
             return "delivery-1"
 
     monkeypatch.setattr(settings, "CODING_FAKE_LOOP_ENABLED", False)
@@ -61,7 +61,7 @@ def test_runtime_registers_celery_dispatcher_when_enabled(
     notifier("ct_1")
 
     assert runtime.supervisor is None
-    assert calls == [("ct_1", CodingDispatchSource.API)]
+    assert calls == [("ct_1", None, CodingDispatchSource.API)]
 
 
 def test_runtime_rejects_local_and_celery_execution_together(
@@ -107,14 +107,18 @@ def test_real_loop_can_register_celery_delivery(monkeypatch) -> None:
     monkeypatch.setattr(
         runtime_module,
         "create_celery_dispatcher",
-        lambda: SimpleNamespace(enqueue=lambda task_id, *, source: calls.append(task_id)),
+        lambda: SimpleNamespace(
+            enqueue=lambda task_id, *, expected_checkpoint_id, source: calls.append(
+                (task_id, expected_checkpoint_id, source)
+            )
+        ),
     )
 
     runtime = create_development_coding_runtime(config=config)
     runtime_module.coding_service._task_created_notifier("ct_real")
 
     assert runtime.supervisor is None
-    assert calls == ["ct_real"]
+    assert calls == [("ct_real", None, CodingDispatchSource.API)]
 
 
 def test_real_loop_maps_explicit_prices_and_transcript_cap() -> None:
