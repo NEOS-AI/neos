@@ -158,7 +158,33 @@ async def test_signals_malformed_payload_does_not_crash():
 async def test_claim_funnel_aggregates_grading_diagnostics():
     async with await db_manager.get_session() as s:
         run_id = await create_run(s, "funnel", "dev")
-        await _ev(s, run_id, "pass_completed", '{"new_claims":5,"verified":2}')
+        await _ev(
+            s,
+            run_id,
+            "pass_completed",
+            json.dumps(
+                {
+                    "new_claims": 5,
+                    "verified": 2,
+                    "confidence_clamped_count": 999,
+                    "confidence_clamped_by_source_count": {
+                        "0": 1,
+                        "1": 2,
+                        "2": True,
+                        "3_plus": 3,
+                        "unknown": 99,
+                    },
+                }
+            ),
+        )
+        await _ev(s, run_id, "pass_completed", "{}")
+        await _ev(s, run_id, "pass_completed", "{broken")
+        await _ev(
+            s,
+            run_id,
+            "pass_completed",
+            '{"confidence_clamped_by_source_count":{"0":-1,"2":1}}',
+        )
 
         base = {
             "claim_id": "c",
@@ -241,6 +267,13 @@ async def test_claim_funnel_aggregates_grading_diagnostics():
             "avg_evidence_count": 1.0,
             "avg_source_count": 1.0,
             "avg_excerpt_chars": 50.0,
+            "confidence_clamped_count": 7,
+            "confidence_clamped_by_source_count": {
+                "0": 1,
+                "1": 2,
+                "2": 1,
+                "3_plus": 3,
+            },
         }
         await s.rollback()
 

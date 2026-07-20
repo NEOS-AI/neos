@@ -37,6 +37,19 @@ _LEGAL_TRANSITIONS = {
     ("investigating", "resolved"),
 }
 _TERMINAL_STATUSES = {"resolved", "split", "abandoned"}
+_CONFIDENCE_CLAMP_BUCKETS = ("0", "1", "2", "3_plus")
+
+
+def _safe_clamp_counts(raw: object) -> dict[str, int]:
+    values = raw if isinstance(raw, dict) else {}
+    return {
+        key: value
+        if isinstance((value := values.get(key, 0)), int)
+        and not isinstance(value, bool)
+        and value >= 0
+        else 0
+        for key in _CONFIDENCE_CLAMP_BUCKETS
+    }
 
 
 def _hex_id() -> str:
@@ -764,6 +777,9 @@ class Ledger:
         else:
             await self._transition(question_id, "open")
 
+        clamp_counts = _safe_clamp_counts(
+            result.confidence_clamped_by_source_count
+        )
         await self.log(
             "pass_completed",
             question_id,
@@ -772,6 +788,8 @@ class Ledger:
                 "new_claims": len(result.claims),
                 "verified": verified_count,
                 "tokens": result.tokens_spent,
+                "confidence_clamped_count": sum(clamp_counts.values()),
+                "confidence_clamped_by_source_count": clamp_counts,
             },
         )
         await self.db.flush()

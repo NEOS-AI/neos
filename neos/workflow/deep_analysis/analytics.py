@@ -30,6 +30,7 @@ from neos.database.deep_analysis_models import DAEvent
 from neos.utils.time_utils import to_naive_utc
 
 _OVERCLAIM_CODES = ("E_OVERCLAIM", "E_CONFIDENCE_INFLATED")
+_CONFIDENCE_CLAMP_BUCKETS = ("0", "1", "2", "3_plus")
 # Only these kinds carry payload fields the signals read.
 _PAYLOAD_KINDS = (
     "claim_rejected",
@@ -174,6 +175,10 @@ class DeepAnalysisAnalyticsService:
             "avg_evidence_count": 0.0,
             "avg_source_count": 0.0,
             "avg_excerpt_chars": 0.0,
+            "confidence_clamped_count": 0,
+            "confidence_clamped_by_source_count": {
+                key: 0 for key in _CONFIDENCE_CLAMP_BUCKETS
+            },
         }
         evidence_total = 0
         source_total = 0
@@ -186,6 +191,23 @@ class DeepAnalysisAnalyticsService:
                 if data and data.get("code"):
                     code_counts[str(data["code"])] += 1
             elif kind == "pass_completed":
+                raw_clamp_counts = (
+                    data.get("confidence_clamped_by_source_count")
+                    if data
+                    else None
+                )
+                if isinstance(raw_clamp_counts, dict):
+                    clamp_counts = funnel[
+                        "confidence_clamped_by_source_count"
+                    ]
+                    for bucket in _CONFIDENCE_CLAMP_BUCKETS:
+                        count = raw_clamp_counts.get(bucket)
+                        if (
+                            isinstance(count, int)
+                            and not isinstance(count, bool)
+                            and count >= 0
+                        ):
+                            clamp_counts[bucket] += count
                 new_claims = data.get("new_claims") if data else None
                 if (
                     isinstance(new_claims, int)
@@ -240,6 +262,9 @@ class DeepAnalysisAnalyticsService:
                 else:
                     buckets["low"] += 1
 
+        funnel["confidence_clamped_count"] = sum(
+            funnel["confidence_clamped_by_source_count"].values()
+        )
         graded = funnel["graded"]
         if graded:
             funnel["evidence_missing_rate"] = evidence_missing / graded
