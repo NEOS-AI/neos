@@ -247,6 +247,18 @@ class EnterpriseMetricsCollector:
             ["outcome"],
             registry=self.registry,
         )
+        self.coding_approval_total = Counter(
+            "coding_approval_total",
+            "Coding tool approval lifecycle outcomes",
+            ["risk", "outcome"],
+            registry=self.registry,
+        )
+        self.coding_approval_latency_seconds = Histogram(
+            "coding_approval_latency_seconds",
+            "Coding tool approval decision latency",
+            ["outcome"],
+            registry=self.registry,
+        )
 
         # === LLM API Metrics ===
 

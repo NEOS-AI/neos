@@ -11,6 +11,7 @@ from neos.coding.application.run_service import (
     CodingRunService,
     InProcessRunInterrupter,
 )
+from neos.coding.application.approval_service import CodingApprovalService
 from neos.coding.application.snapshot_service import CodingSnapshotService
 from neos.coding.loop.base import CodingLoop
 from neos.coding.loop.fake import FakeDurableCodingLoop
@@ -65,6 +66,7 @@ class CodingRuntime:
     events: Any
     runs: CodingRunService
     snapshots: CodingSnapshotService
+    approvals: CodingApprovalService
     sandboxes: Any
     supervisor: CodingDevelopmentSupervisor | None = None
     _closed: bool = False
@@ -102,6 +104,7 @@ def create_coding_runtime(
     interrupter=None,
     clock=None,
     sandboxes=None,
+    approval_wake=None,
 ) -> CodingRuntime:
     snapshots = CodingSnapshotService(projection_repository)
     run_kwargs = {}
@@ -117,10 +120,19 @@ def create_coding_runtime(
         **run_kwargs,
     )
     sandbox_provider = sandboxes or create_sandbox_provider(settings.config.sandbox)
+    if approval_wake is None:
+        async def approval_wake(_task_id: str, _checkpoint_id: str) -> None:
+            return None
     return CodingRuntime(
         events=events,
         runs=runs,
         snapshots=snapshots,
+        approvals=CodingApprovalService(
+            run_repository,
+            wake=approval_wake,
+            metrics=metrics_collector,
+            audit=LoggingCodingAuditSink(),
+        ),
         sandboxes=sandbox_provider,
     )
 
@@ -170,6 +182,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         input_cost_micros_per_million=(coding.input_cost_micros_per_million),
         output_cost_micros_per_million=(coding.output_cost_micros_per_million),
         max_transcript_bytes=coding.max_transcript_bytes,
+        approval_ttl_sec=coding.approval_ttl_seconds,
     )
 
     def finish(sandboxes) -> AnthropicCodingLoop:
@@ -282,6 +295,22 @@ def create_development_coding_runtime(
 
             notifier = notify_celery
         coding_service.set_task_created_notifier(notifier)
+        async def wake_approval(task_id: str, checkpoint_id: str) -> None:
+            if supervisor is not None:
+                supervisor.notify(task_id)
+            elif settings.CODING_CELERY_ENABLED:
+                create_celery_dispatcher().enqueue(
+                    task_id,
+                    expected_checkpoint_id=checkpoint_id,
+                    source=CodingDispatchSource.APPROVAL,
+                )
+
+        runtime.approvals = CodingApprovalService(
+            run_repository,
+            wake=wake_approval,
+            metrics=metrics,
+            audit=LoggingCodingAuditSink(),
+        )
         return replace(runtime, supervisor=supervisor)
     except BaseException:
         _close_provider_sync(sandboxes)
@@ -301,6 +330,7 @@ def create_celery_dispatcher() -> CeleryCodingTaskDispatcher:
 coding_runtime = create_development_coding_runtime()
 coding_run_service = coding_runtime.runs
 coding_snapshot_service = coding_runtime.snapshots
+coding_approval_service = coding_runtime.approvals
 
 
 def initialize_coding_transport(

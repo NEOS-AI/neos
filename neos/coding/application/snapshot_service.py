@@ -2,7 +2,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Protocol
 
+from neos.coding.domain.approvals import ApprovalStatus
 from neos.coding.domain.phases import CodingPhaseKind
+from neos.coding.tools.registry import ToolRisk
 from neos.coding.repositories.projection_repository import CodingProjectionRows
 
 
@@ -44,6 +46,17 @@ class CodingToolProjection:
 
 
 @dataclass(frozen=True, slots=True)
+class CodingApprovalProjection:
+    approval_id: str
+    tool_name: str
+    risk: ToolRisk
+    status: ApprovalStatus
+    requested_at: datetime
+    expires_at: datetime
+    display_summary: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class CodingCheckpointProjection:
     checkpoint_id: str
     run_id: str
@@ -66,7 +79,7 @@ class CodingProjectionSnapshot:
     active_run: CodingRunProjection | None
     phases: tuple[CodingPhaseProjection, ...]
     tools: tuple[CodingToolProjection, ...]
-    approvals: tuple[Mapping[str, Any], ...]
+    approvals: tuple[CodingApprovalProjection, ...]
     todos: tuple[Mapping[str, Any], ...]
     workspace: CodingWorkspaceProjection
     latest_checkpoint: CodingCheckpointProjection | None
@@ -123,6 +136,18 @@ class CodingSnapshotService:
             )
             for row in rows.tools
         )
+        approvals = tuple(
+            CodingApprovalProjection(
+                approval_id=row["approval_id"],
+                tool_name=row["tool_name"],
+                risk=ToolRisk(row["risk"]),
+                status=ApprovalStatus(row["status"]),
+                requested_at=row["requested_at"],
+                expires_at=row["expires_at"],
+                display_summary=dict(row["display_summary"]),
+            )
+            for row in rows.approvals
+        )
         checkpoint = (
             CodingCheckpointProjection(
                 checkpoint_id=rows.latest_checkpoint.checkpoint_id,
@@ -153,7 +178,7 @@ class CodingSnapshotService:
             active_run=active,
             phases=phases,
             tools=tools,
-            approvals=rows.approvals,
+            approvals=approvals,
             todos=rows.todos,
             workspace=workspace,
             latest_checkpoint=checkpoint,

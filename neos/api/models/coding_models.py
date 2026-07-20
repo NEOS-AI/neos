@@ -60,6 +60,20 @@ class CodingToolSnapshot(BaseModel):
     result: dict[str, Any] | None
 
 
+class CodingApprovalDecisionRequest(BaseModel):
+    decision: Literal["approve", "deny"]
+
+
+class CodingApprovalSnapshot(BaseModel):
+    approval_id: str
+    tool_name: str
+    risk: Literal["workspace_write", "command"]
+    status: Literal["pending", "approved", "denied", "expired", "invalidated"]
+    requested_at: datetime
+    expires_at: datetime
+    display_summary: dict[str, Any]
+
+
 class CodingWorkspaceSnapshot(BaseModel):
     revision: str
     git_head: str | None
@@ -80,7 +94,7 @@ class CodingProjectionSnapshotResponse(BaseModel):
     active_run: CodingRunSnapshot | None
     phases: list[CodingPhaseSnapshot]
     tools: list[CodingToolSnapshot]
-    approvals: list[dict[str, Any]]
+    approvals: list[CodingApprovalSnapshot]
     todos: list[dict[str, Any]]
     workspace: CodingWorkspaceSnapshot
     latest_checkpoint: CodingCheckpointSnapshot | None

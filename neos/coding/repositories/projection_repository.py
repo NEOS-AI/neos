@@ -182,10 +182,12 @@ class PostgresCodingProjectionRepository:
         result = await session.execute(
             text(
                 """
-                SELECT request_id, skill_name, requested_at, expires_at
-                FROM pending_approvals
-                WHERE session_id = :task_id AND user_id = :owner_id
-                  AND resolved = FALSE AND expires_at > NOW()
+                SELECT a.approval_id, a.tool_name, a.risk, a.status,
+                       a.requested_at, a.expires_at, a.display_summary_json
+                FROM coding_approvals a
+                JOIN coding_tasks t ON t.task_id = a.task_id
+                WHERE a.task_id = :task_id AND t.owner_id = :owner_id
+                  AND t.deleted_at IS NULL
                 ORDER BY requested_at ASC
                 """
             ),
@@ -193,10 +195,13 @@ class PostgresCodingProjectionRepository:
         )
         return tuple(
             {
-                "request_id": row[0],
-                "skill_name": row[1],
-                "requested_at": row[2],
-                "expires_at": row[3],
+                "approval_id": row[0],
+                "tool_name": row[1],
+                "risk": row[2],
+                "status": row[3],
+                "requested_at": row[4],
+                "expires_at": row[5],
+                "display_summary": dict(row[6]),
             }
             for row in result.all()
         )

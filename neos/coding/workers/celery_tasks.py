@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from neos.coding.workers.celery_runtime import (
     current_coding_checkpoint_id,
     discover_coding_tasks,
+    expire_coding_approvals,
     run_coding_delivery,
 )
 from neos.coding.workers.execution import CodingTaskOutcome
@@ -121,3 +122,16 @@ def reconcile_coding_tasks() -> dict[str, int]:
         "enqueued": enqueued,
         "failed": failed,
     }
+
+
+@app.task(
+    name="neos.coding.workers.celery_tasks.expire_coding_approvals",
+    ignore_result=True,
+)
+def expire_coding_approval_requests() -> dict[str, int]:
+    count = asyncio.run(
+        expire_coding_approvals(
+            limit=settings.config.coding_model.approval_reconciliation_batch_size
+        )
+    )
+    return {"expired": count}

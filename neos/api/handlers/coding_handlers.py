@@ -2,12 +2,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from neos.api.dependencies.auth import get_current_user
 from neos.api.models.coding_models import (
+    CodingApprovalDecisionRequest,
+    CodingApprovalSnapshot,
     CodingEventListResponse,
     CodingSteerRequest,
     CodingSteerResponse,
     CodingTaskResponse,
     CodingProjectionSnapshotResponse,
     CreateCodingTaskRequest,
+)
+from neos.coding.application.approval_service import CodingApprovalService
+from neos.coding.domain.approvals import (
+    ApprovalConflict,
+    ApprovalDecision,
+    ApprovalNotFound,
 )
 from neos.coding.application.run_service import CodingRunService
 from neos.coding.application.snapshot_service import CodingSnapshotService
@@ -18,6 +26,7 @@ from neos.coding.domain.models import CodingTask
 from neos.coding.domain.phases import SteeringMode
 from neos.coding.runtime import (
     coding_run_service,
+    coding_approval_service,
     coding_service,
     coding_snapshot_service,
     get_coding_ticket_store,
@@ -43,6 +52,22 @@ def get_coding_run_service() -> CodingRunService:
 
 def get_coding_snapshot_service() -> CodingSnapshotService:
     return coding_snapshot_service
+
+
+def get_coding_approval_service() -> CodingApprovalService:
+    return coding_approval_service
+
+
+def _approval_response(approval) -> dict:
+    return {
+        "approval_id": approval.approval_id,
+        "tool_name": approval.tool_name,
+        "risk": approval.risk.value,
+        "status": approval.status.value,
+        "requested_at": approval.requested_at,
+        "expires_at": approval.expires_at,
+        "display_summary": dict(approval.display_summary),
+    }
 
 
 def _task_response(task: CodingTask) -> dict:
@@ -108,6 +133,33 @@ async def steer_coding_task(
             status_code=404, detail="Coding task not found"
         ) from error
     return {"steering_id": steering.steering_id, "mode": steering.mode.value}
+
+
+@router.post(
+    "/tasks/{task_id}/approvals/{approval_id}",
+    response_model=CodingApprovalSnapshot,
+)
+async def resolve_coding_approval(
+    task_id: str,
+    approval_id: str,
+    body: CodingApprovalDecisionRequest,
+    current_user: User = Depends(get_current_user),
+    approvals: CodingApprovalService = Depends(get_coding_approval_service),
+):
+    try:
+        commit = await approvals.resolve(
+            task_id=task_id,
+            approval_id=approval_id,
+            owner_id=current_user.user_id,
+            decision=ApprovalDecision(body.decision),
+        )
+    except ApprovalNotFound as error:
+        raise HTTPException(status_code=404, detail="Coding approval not found") from error
+    except ApprovalConflict as error:
+        raise HTTPException(
+            status_code=409, detail="Coding approval cannot be resolved"
+        ) from error
+    return _approval_response(commit.approval)
 
 
 @router.get(

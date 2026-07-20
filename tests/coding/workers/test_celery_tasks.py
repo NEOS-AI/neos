@@ -260,3 +260,4 @@ def test_coding_reconciliation_schedule_follows_feature_flag() -> None:
 
     configure_coding_beat_schedule(schedule, enabled=False, interval=7.5)
     assert "reconcile-coding-tasks" not in schedule
+    assert "expire-coding-approvals" not in schedule

@@ -7,6 +7,8 @@ from neos.coding.application.run_service import (
     CodingRunService,
     InProcessRunInterrupter,
 )
+from neos.coding.application.approval_service import CodingApprovalService
+from neos.coding.workers.dispatcher import CodingDispatchSource
 from neos.coding.loop.fake import FakeDurableCodingLoop
 from neos.coding.persistence.postgres import PostgresCodingService
 from neos.coding.repositories.run_repository import (
@@ -16,6 +18,7 @@ from neos.coding.repositories.projection_repository import (
     PostgresCodingProjectionRepository,
 )
 from neos.coding.repositories.task_repository import CodingTaskRepository
+from neos.coding.sandbox.observability import LoggingCodingAuditSink
 from neos.coding.workers.execution import (
     CodingTaskOutcome,
     CodingTaskRunner,
@@ -49,6 +52,36 @@ def _build_runner(manager: DatabaseManager) -> CodingTaskRunner:
             SoftTimeLimitExceeded,
         ),
     )
+
+
+def _build_approval_service(manager: DatabaseManager) -> CodingApprovalService:
+    async def wake(task_id: str, checkpoint_id: str) -> None:
+        from neos.coding.runtime import create_celery_dispatcher
+
+        create_celery_dispatcher().enqueue(
+            task_id,
+            expected_checkpoint_id=checkpoint_id,
+            source=CodingDispatchSource.APPROVAL,
+        )
+
+    return CodingApprovalService(
+        _build_run_repository(manager),
+        wake=wake,
+        metrics=metrics,
+        audit=LoggingCodingAuditSink(),
+    )
+
+
+async def expire_coding_approvals(
+    *, limit: int, database_manager: DatabaseManager | None = None
+) -> int:
+    manager = database_manager or DatabaseManager()
+    try:
+        await manager.initialize()
+        commits = await _build_approval_service(manager).expire_pending(limit=limit)
+        return len(commits)
+    finally:
+        await manager.close()
 
 
 def validate_coding_worker_settings(candidate) -> None:

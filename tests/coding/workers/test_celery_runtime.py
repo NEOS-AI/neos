@@ -55,6 +55,24 @@ class RecordingDiscoveryRepository:
         return self.result
 
 
+async def test_expiry_reconciliation_owns_database_manager(monkeypatch) -> None:
+    manager = RecordingDatabaseManager()
+
+    class Service:
+        async def expire_pending(self, *, limit):
+            assert limit == 17
+            return (object(), object())
+
+    monkeypatch.setattr(
+        celery_runtime, "_build_approval_service", lambda manager: Service()
+    )
+    count = await celery_runtime.expire_coding_approvals(
+        limit=17, database_manager=manager
+    )
+    assert count == 2
+    assert manager.calls == ["initialize", "close"]
+
+
 async def test_delivery_initializes_and_closes_its_database_manager(
     monkeypatch,
 ) -> None:

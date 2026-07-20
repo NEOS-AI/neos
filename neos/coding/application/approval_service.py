@@ -7,6 +7,10 @@ from neos.coding.domain.approvals import (
     ApprovalDecision,
     ApprovalResolutionCommit,
 )
+from neos.coding.sandbox.observability import (
+    CodingApprovalAuditEvent,
+    NullCodingAuditSink,
+)
 
 
 class ApprovalRepository(Protocol):
@@ -35,10 +39,36 @@ class CodingApprovalService:
         *,
         wake: WakeApproval,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        metrics=None,
+        audit=None,
     ) -> None:
         self._repository = repository
         self._wake = wake
         self._clock = clock
+        self._metrics = metrics
+        self._audit = audit or NullCodingAuditSink()
+
+    async def _record(self, commit: ApprovalResolutionCommit) -> None:
+        approval = commit.approval
+        outcome = approval.status.value
+        if self._metrics is not None:
+            self._metrics.coding_approval_total.labels(
+                risk=approval.risk.value, outcome=outcome
+            ).inc()
+            decided_at = approval.decided_at or self._clock()
+            latency = max((decided_at - approval.requested_at).total_seconds(), 0)
+            self._metrics.coding_approval_latency_seconds.labels(
+                outcome=outcome
+            ).observe(latency)
+        await self._audit.emit(
+            CodingApprovalAuditEvent(
+                approval_id=approval.approval_id,
+                task_id=approval.task_id,
+                tool=approval.tool_name,
+                risk=approval.risk.value,
+                outcome=outcome,
+            )
+        )
 
     async def resolve(
         self,
@@ -55,6 +85,7 @@ class CodingApprovalService:
             decision=decision,
             now=self._clock(),
         )
+        await self._record(commit)
         await self._wake(commit.approval.task_id, commit.approval.checkpoint_id)
         if commit.conflict_code is not None:
             raise ApprovalConflict(commit.conflict_code)
@@ -69,5 +100,6 @@ class CodingApprovalService:
             limit=limit, now=self._clock()
         )
         for commit in commits:
+            await self._record(commit)
             await self._wake(commit.approval.task_id, commit.approval.checkpoint_id)
         return commits

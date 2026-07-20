@@ -7,12 +7,14 @@ from fastapi.testclient import TestClient
 
 from neos.api.dependencies.auth import get_current_user
 from neos.api.handlers.coding_handlers import (
+    get_coding_approval_service,
     get_coding_run_service,
     get_coding_service,
     get_coding_snapshot_service,
     get_ws_ticket_store,
     router,
 )
+from neos.coding.domain.approvals import ApprovalConflict, ApprovalNotFound
 from neos.coding.application.run_service import (
     CodingRunService,
     InProcessRunInterrupter,
@@ -69,6 +71,53 @@ def make_client(user_id="u1"):
     )
     app.dependency_overrides[get_coding_run_service] = lambda: runs
     return TestClient(app), service
+
+
+def test_owner_can_resolve_coding_approval() -> None:
+    client, _ = make_client("owner")
+
+    class Approvals:
+        async def resolve(self, **kwargs):
+            assert kwargs == {
+                "task_id": "ct_1", "approval_id": "ca_1",
+                "owner_id": "owner", "decision": kwargs["decision"],
+            }
+            return SimpleNamespace(approval=SimpleNamespace(
+                approval_id="ca_1", tool_name="write_file.v1",
+                risk=SimpleNamespace(value="workspace_write"), status=SimpleNamespace(value="approved"),
+                requested_at=datetime(2026, 7, 21, tzinfo=UTC),
+                expires_at=datetime(2026, 7, 21, 0, 15, tzinfo=UTC),
+                display_summary={"path": "a.py"},
+            ))
+
+    client.app.dependency_overrides[get_coding_approval_service] = Approvals
+    response = client.post(
+        "/api/v1/coding/tasks/ct_1/approvals/ca_1", json={"decision": "approve"}
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "approved"
+    assert response.json()["display_summary"] == {"path": "a.py"}
+
+
+def test_approval_not_found_and_conflict_are_sanitized() -> None:
+    client, _ = make_client()
+
+    class Approvals:
+        async def resolve(self, **kwargs):
+            if kwargs["approval_id"] == "missing":
+                raise ApprovalNotFound
+            raise ApprovalConflict("already_resolved")
+
+    client.app.dependency_overrides[get_coding_approval_service] = Approvals
+    missing = client.post(
+        "/api/v1/coding/tasks/ct_1/approvals/missing", json={"decision": "deny"}
+    )
+    conflict = client.post(
+        "/api/v1/coding/tasks/ct_1/approvals/stale", json={"decision": "deny"}
+    )
+    assert missing.status_code == 404
+    assert conflict.status_code == 409
+    assert conflict.json() == {"detail": "Coding approval cannot be resolved"}
 
 
 def test_create_task_returns_202_and_replayable_created_event() -> None:
