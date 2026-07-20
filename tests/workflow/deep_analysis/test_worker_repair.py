@@ -72,6 +72,14 @@ class WeakenLLM:
         return _fake_response(response_text)
 
 
+class AbandonWeakenLLM(WeakenLLM):
+    async def create(self, **kwargs):
+        self.prompts.append(kwargs["messages"][0]["content"])
+        return _fake_response(
+            '{"repairs": [{"claim_id": "c1", "action": "abandoned"}]}'
+        )
+
+
 class RepairParsingLLM:
     """LLM used for the normal (search+fetch) path with a mix of repair
     codes: returns both claims and a `repairs` list to be parsed."""
@@ -127,6 +135,28 @@ async def test_weaken_only_mode_skips_search_and_fetch():
     assert result.repairs[0].claim_id == "c1"
     assert result.repairs[0].action == "weakened"
     assert result.repairs[0].new_text == "일부 사례에서 관찰되었다(단정 아님)"
+    assert "날짜·집단·조건·수치 범위" in llm.prompts[0]
+    assert "상관 근거에는 인과 표현" in llm.prompts[0]
+    assert "action=abandoned" in llm.prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_weaken_only_accepts_explicit_abandoned_action():
+    search = FakeSearch()
+    fetch = FakeFetch()
+    worker = Worker(search, fetch_fn=fetch, llm_client=AbandonWeakenLLM())
+
+    result = await worker.investigate(
+        "Question\n{fetched_evidence}",
+        Effort.SCOUT,
+        "question",
+        repairs=[{"claim_id": "c1", "code": "E_OVERCLAIM"}],
+    )
+
+    assert search.calls == []
+    assert fetch.calls == []
+    assert result.repairs[0].action == "abandoned"
+    assert result.repairs[0].new_text is None
 
 
 @pytest.mark.asyncio

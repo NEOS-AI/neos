@@ -99,6 +99,65 @@ class InventedSourceLLM(FakeLLM):
         return Response()
 
 
+class SourceListSearch:
+    def __init__(self, urls):
+        self.urls = urls
+
+    async def __call__(self, query, k):
+        return [{"url": url} for url in self.urls]
+
+
+class SourceListFetch:
+    async def __call__(self, url, **kwargs):
+        return ProposedBlob(
+            content_hash=(url.encode().hex() + "0" * 16)[:16],
+            source_url=url,
+            http_status=200,
+            raw_text=f"evidence for {url}",
+        )
+
+
+class ConfidenceLLM(FakeLLM):
+    def __init__(self, urls, confidence):
+        super().__init__()
+        self.urls = urls
+        self.confidence = confidence
+
+    async def create(self, **kwargs):
+        self.prompts.append(kwargs["messages"][0]["content"])
+        evidence = [
+            {"source_url": url, "excerpt": f"evidence for {url}"}
+            for url in self.urls
+        ]
+        response_text = __import__("json").dumps(
+            {
+                "status": "completed",
+                "claims": [
+                    {
+                        "text": "claim",
+                        "confidence": self.confidence,
+                        "evidence": evidence,
+                    }
+                ],
+            }
+        )
+
+        class Usage:
+            input_tokens = 10
+            output_tokens = 5
+
+        class Block:
+            type = "text"
+            text = response_text
+
+        class Response:
+            content = [Block()]
+            usage = Usage()
+            model = kwargs["model"]
+
+        return Response()
+
+
 def test_worker_constructor_has_no_database_or_run_state():
     parameters = inspect.signature(Worker).parameters
 
@@ -167,8 +226,68 @@ async def test_worker_drops_unfetched_evidence_and_bounds_confidence():
         "question",
     )
 
-    assert result.claims[0].confidence == 1.0
+    assert result.claims[0].confidence == 0.0
     assert result.claims[0].evidence == []
+    assert result.confidence_clamped_count == 1
+    assert result.confidence_clamped_by_source_count == {"0": 1}
+
+
+@pytest.mark.parametrize(
+    ("urls", "requested", "expected", "bucket"),
+    [
+        ([], 0.9, 0.0, "0"),
+        (["a"], 0.9, 0.6, "1"),
+        (["a", "b"], 0.9, 0.8, "2"),
+        (["a", "b", "c"], 1.0, 0.95, "3_plus"),
+        (["a", "a"], 0.7, 0.6, "1"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_worker_clamps_after_retained_unique_sources(
+    urls, requested, expected, bucket
+):
+    worker = Worker(
+        SourceListSearch(urls),
+        fetch_fn=SourceListFetch(),
+        llm_client=ConfidenceLLM(urls, requested),
+        confidence_cap={1: 0.6, 2: 0.8, 3: 0.95},
+    )
+
+    result = await worker.investigate(
+        "Question\n{fetched_evidence}", Effort.SCOUT, "question"
+    )
+
+    assert result.claims[0].confidence == expected
+    assert result.confidence_clamped_count == 1
+    assert result.confidence_clamped_by_source_count == {bucket: 1}
+
+
+@pytest.mark.asyncio
+async def test_worker_does_not_count_confidence_at_cap_and_resets_next_run():
+    worker = Worker(
+        SourceListSearch(["a"]),
+        fetch_fn=SourceListFetch(),
+        llm_client=ConfidenceLLM(["a"], 0.9),
+        confidence_cap={1: 0.6, 2: 0.8, 3: 0.95},
+    )
+    completed = await worker.investigate(
+        "Question\n{fetched_evidence}", Effort.SCOUT, "question"
+    )
+    partial = worker.flush_partial("question")
+
+    assert partial.confidence_clamped_count == completed.confidence_clamped_count
+    assert (
+        partial.confidence_clamped_by_source_count
+        == completed.confidence_clamped_by_source_count
+    )
+
+    worker.llm_client = ConfidenceLLM(["a"], 0.6)
+    boundary = await worker.investigate(
+        "Question\n{fetched_evidence}", Effort.SCOUT, "question-2"
+    )
+    assert boundary.claims[0].confidence == 0.6
+    assert boundary.confidence_clamped_count == 0
+    assert boundary.confidence_clamped_by_source_count == {}
 
 
 @pytest.mark.asyncio
@@ -188,6 +307,8 @@ async def test_worker_returns_accumulated_partial_when_budget_exhausts(monkeypat
     assert result.status == "partial"
     assert len(result.blobs) == 1
     assert result.claims == []
+    assert result.confidence_clamped_count == 0
+    assert result.confidence_clamped_by_source_count == {}
 
 
 @pytest.mark.asyncio
