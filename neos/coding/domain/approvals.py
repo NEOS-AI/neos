@@ -83,7 +83,18 @@ class ApprovalRequestCommit:
     created: bool
 
 
+@dataclass(frozen=True, slots=True)
+class ApprovalResolutionCommit:
+    approval: CodingApproval
+    events: tuple[CodingEvent, ...]
+    conflict_code: str | None = None
+
+
 class ApprovalConflict(RuntimeError):
+    pass
+
+
+class ApprovalNotFound(LookupError):
     pass
 
 

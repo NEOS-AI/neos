@@ -3,7 +3,12 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Mapping, Protocol
 
 from neos.coding.domain.events import CodingEvent
-from neos.coding.domain.approvals import ApprovalRequestCommit, CodingApproval
+from neos.coding.domain.approvals import (
+    ApprovalDecision,
+    ApprovalRequestCommit,
+    ApprovalResolutionCommit,
+    CodingApproval,
+)
 from neos.coding.domain.durability import (
     ExecutionLease,
     ModelCheckpointCommit,
@@ -124,6 +129,20 @@ class CodingRunRepository(Protocol):
     async def get_tool_approval(
         self, *, task_id: str, run_id: str, tool_call_id: str
     ) -> CodingApproval | None: ...
+
+    async def resolve_tool_approval(
+        self,
+        *,
+        task_id: str,
+        approval_id: str,
+        owner_id: str,
+        decision: ApprovalDecision,
+        now: datetime,
+    ) -> ApprovalResolutionCommit: ...
+
+    async def expire_pending_approvals(
+        self, *, limit: int, now: datetime
+    ) -> tuple[ApprovalResolutionCommit, ...]: ...
 
     async def begin_phase(
         self,

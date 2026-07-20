@@ -17,7 +17,10 @@ from neos.coding.domain.durability import (
 )
 from neos.coding.domain.approvals import (
     ApprovalConflict,
+    ApprovalDecision,
+    ApprovalNotFound,
     ApprovalRequestCommit,
+    ApprovalResolutionCommit,
     ApprovalStatus,
     CodingApproval,
     approval_display_summary,
@@ -569,6 +572,114 @@ class InMemoryCodingRunRepository:
     async def get_tool_approval(self, *, task_id, run_id, tool_call_id):
         async with self._durability_lock:
             return self.approvals.get((task_id, run_id, tool_call_id))
+
+    async def resolve_tool_approval(
+        self, *, task_id, approval_id, owner_id, decision, now
+    ):
+        async with self._durability_lock:
+            item = next(
+                (
+                    (key, approval)
+                    for key, approval in self.approvals.items()
+                    if approval.task_id == task_id
+                    and approval.approval_id == approval_id
+                    and approval.requested_by == owner_id
+                ),
+                None,
+            )
+            if item is None:
+                raise ApprovalNotFound(approval_id)
+            key, approval = item
+            if approval.status is not ApprovalStatus.PENDING:
+                raise ApprovalConflict("approval_already_resolved")
+            conflict_code = None
+            if approval.expires_at <= now:
+                status = ApprovalStatus.EXPIRED
+                resolved = replace(
+                    approval,
+                    status=status,
+                    decided_at=now,
+                )
+                conflict_code = "approval_expired"
+            elif decision is ApprovalDecision.APPROVE:
+                status = ApprovalStatus.APPROVED
+                resolved = replace(
+                    approval,
+                    status=status,
+                    decision=decision,
+                    decided_by=owner_id,
+                    decided_at=now,
+                )
+            else:
+                status = ApprovalStatus.DENIED
+                resolved = replace(
+                    approval,
+                    status=status,
+                    decision=decision,
+                    decided_by=owner_id,
+                    decided_at=now,
+                )
+            self._durability_seq += 1
+            resolution_event = make_event(
+                task_id=task_id,
+                seq=self._durability_seq,
+                event_type=f"approval.{status.value}",
+                payload={
+                    "approval_id": approval_id,
+                    "tool_name": approval.tool_name,
+                    "risk": approval.risk.value,
+                    "status": status.value,
+                    "requested_at": approval.requested_at.isoformat(),
+                    "expires_at": approval.expires_at.isoformat(),
+                    "display_summary": dict(approval.display_summary),
+                },
+                now=now,
+                run_id=approval.run_id,
+                tool_call_id=approval.tool_call_id,
+                checkpoint_id=approval.checkpoint_id,
+            )
+            self._durability_seq += 1
+            status_event = make_event(
+                task_id=task_id,
+                seq=self._durability_seq,
+                event_type="task.status.changed",
+                payload={"status": "running"},
+                now=now,
+                run_id=approval.run_id,
+                checkpoint_id=approval.checkpoint_id,
+            )
+            self.approvals[key] = resolved
+            self.task_statuses[task_id] = "running"
+            return ApprovalResolutionCommit(
+                resolved,
+                (resolution_event, status_event),
+                conflict_code,
+            )
+
+    async def expire_pending_approvals(self, *, limit, now):
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        pending = sorted(
+            (
+                approval
+                for approval in self.approvals.values()
+                if approval.status is ApprovalStatus.PENDING
+                and approval.expires_at <= now
+            ),
+            key=lambda approval: (approval.expires_at, approval.approval_id),
+        )[:limit]
+        commits = []
+        for approval in pending:
+            commits.append(
+                await self.resolve_tool_approval(
+                    task_id=approval.task_id,
+                    approval_id=approval.approval_id,
+                    owner_id=approval.requested_by,
+                    decision=ApprovalDecision.DENY,
+                    now=now,
+                )
+            )
+        return tuple(commits)
 
     def _require_current_lease(self, lease, *, now=None) -> None:
         current = self.execution_leases.get(lease.task_id)

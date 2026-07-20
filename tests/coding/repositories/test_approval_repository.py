@@ -1,7 +1,11 @@
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
-from neos.coding.domain.approvals import ApprovalStatus
+from neos.coding.domain.approvals import (
+    ApprovalDecision,
+    ApprovalStatus,
+    canonical_approval_hash,
+)
 from neos.coding.domain.durability import ExecutionLease
 from neos.coding.model.base import ToolCallCompleted
 from neos.coding.repositories.run_repository import PostgresCodingRunRepository
@@ -191,3 +195,89 @@ async def test_in_memory_request_matches_atomic_contract() -> None:
     assert await repository.get_tool_approval(
         task_id="ct_1", run_id="cr_1", tool_call_id="tool_1"
     ) == first.approval
+
+
+async def prepared_in_memory(*, expires_at=None):
+    repository = InMemoryCodingRunRepository(task_prompts={"ct_1": "Fix it"})
+    run = CodingRun(
+        run_id="cr_1", task_id="ct_1", attempt=1,
+        status=CodingRunStatus.RUNNING, resume_from_checkpoint_id=None,
+        started_at=NOW,
+    )
+    repository.created_runs = [run]
+    repository.active_run = run
+    repository.task_statuses["ct_1"] = "running"
+    repository.execution_leases["ct_1"] = LEASE
+    kwargs = request_kwargs()
+    if expires_at is not None:
+        kwargs["expires_at"] = expires_at
+    requested = await repository.request_tool_approval(**kwargs)
+    return repository, requested
+
+
+async def test_in_memory_resolution_is_single_winner_and_returns_running() -> None:
+    repository, requested = await prepared_in_memory()
+
+    commit = await repository.resolve_tool_approval(
+        task_id="ct_1", approval_id=requested.approval.approval_id,
+        owner_id="test-owner", decision=ApprovalDecision.APPROVE,
+        now=NOW + timedelta(seconds=1),
+    )
+
+    assert commit.approval.status is ApprovalStatus.APPROVED
+    assert repository.task_statuses["ct_1"] == "running"
+    assert [event.type for event in commit.events] == [
+        "approval.approved", "task.status.changed",
+    ]
+
+
+async def test_in_memory_expiry_precedes_approve() -> None:
+    repository, requested = await prepared_in_memory(
+        expires_at=NOW + timedelta(seconds=1)
+    )
+
+    commit = await repository.resolve_tool_approval(
+        task_id="ct_1", approval_id=requested.approval.approval_id,
+        owner_id="test-owner", decision=ApprovalDecision.APPROVE,
+        now=NOW + timedelta(seconds=1),
+    )
+
+    assert commit.approval.status is ApprovalStatus.EXPIRED
+    assert commit.conflict_code == "approval_expired"
+    assert repository.task_statuses["ct_1"] == "running"
+
+
+async def test_postgres_resolution_locks_and_revalidates_binding() -> None:
+    loop_state = {
+        "pending_tool_calls": [
+            {"tool_call_id": "tool_1", "name": CALL.name, "input": dict(CALL.input)}
+        ]
+    }
+    request_hash = canonical_approval_hash(
+        {
+            "task_id": "ct_1", "run_id": "cr_1", "tool_call_id": "tool_1",
+            "tool_name": CALL.name, "normalized_input": dict(CALL.input),
+            "checkpoint_id": "cc_1", "workspace_revision": "rev-1",
+        }
+    )
+    row = (
+        "ca_1", "ct_1", "cr_1", "tool_1", "cc_1", CALL.name,
+        "workspace_write", "rev-1", request_hash, {"path": "src/main.py"},
+        "pending", "user-1", NOW, NOW + timedelta(seconds=900),
+        None, None, None, loop_state, "rev-1", "cr_1",
+    )
+    session = FakeSession(rows=[row, ("ct_1",), (12,), (13,)])
+
+    commit = await repository_for(session).resolve_tool_approval(
+        task_id="ct_1", approval_id="ca_1", owner_id="user-1",
+        decision=ApprovalDecision.APPROVE, now=NOW + timedelta(seconds=1),
+    )
+
+    sql = "\n".join(session.sql)
+    assert "ORDER BY candidate.attempt DESC" in sql
+    assert "checkpoint.loop_state_json" in sql
+    assert "binding.workspace_revision" in sql
+    assert "FOR UPDATE OF approval, task" in sql
+    assert "AND status = 'pending'" in sql
+    assert "SET status = 'running'" in sql
+    assert commit.approval.status is ApprovalStatus.APPROVED

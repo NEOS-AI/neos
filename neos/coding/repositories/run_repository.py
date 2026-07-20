@@ -9,7 +9,9 @@ from sqlalchemy import text
 from neos.coding.domain.approvals import (
     ApprovalConflict,
     ApprovalDecision,
+    ApprovalNotFound,
     ApprovalRequestCommit,
+    ApprovalResolutionCommit,
     ApprovalStatus,
     CodingApproval,
     approval_display_summary,
@@ -907,6 +909,227 @@ class PostgresCodingRunRepository:
             row = result.first()
         return self._approval_from_row(row) if row is not None else None
 
+    async def resolve_tool_approval(
+        self,
+        *,
+        task_id: str,
+        approval_id: str,
+        owner_id: str,
+        decision: ApprovalDecision,
+        now: datetime,
+    ) -> ApprovalResolutionCommit:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        """
+                        WITH canonical AS (
+                            SELECT candidate.run_id
+                            FROM coding_runs candidate
+                            WHERE candidate.task_id = :task_id
+                            ORDER BY candidate.attempt DESC
+                            LIMIT 1
+                        )
+                        SELECT approval.approval_id, approval.task_id,
+                               approval.run_id, approval.tool_call_id,
+                               approval.checkpoint_id, approval.tool_name,
+                               approval.risk, approval.workspace_revision,
+                               approval.request_hash, approval.display_summary,
+                               approval.status, approval.requested_by,
+                               approval.requested_at, approval.expires_at,
+                               approval.decision, approval.decided_by,
+                               approval.decided_at,
+                               checkpoint.loop_state_json,
+                               binding.workspace_revision,
+                               canonical.run_id
+                        FROM coding_approvals approval
+                        JOIN coding_tasks task
+                          ON task.task_id = approval.task_id
+                        JOIN coding_checkpoints checkpoint
+                          ON checkpoint.checkpoint_id = approval.checkpoint_id
+                        LEFT JOIN coding_sandbox_bindings binding
+                          ON binding.task_id = approval.task_id
+                        CROSS JOIN canonical
+                        WHERE approval.task_id = :task_id
+                          AND approval.approval_id = :approval_id
+                          AND task.owner_id = :owner_id
+                          AND task.deleted_at IS NULL
+                        FOR UPDATE OF approval, task
+                        """
+                    ),
+                    {
+                        "task_id": task_id,
+                        "approval_id": approval_id,
+                        "owner_id": owner_id,
+                    },
+                )
+                row = result.first()
+                if row is None:
+                    raise ApprovalNotFound(approval_id)
+                approval = self._approval_from_row(row)
+                if approval.status is not ApprovalStatus.PENDING:
+                    raise ApprovalConflict("approval_already_resolved")
+                status, conflict_code = self._resolution_status(
+                    approval=approval,
+                    loop_state=dict(row[17]),
+                    current_workspace_revision=row[18],
+                    canonical_run_id=row[19],
+                    decision=decision,
+                    now=now,
+                )
+                resolved = self._resolved_approval(
+                    approval=approval,
+                    status=status,
+                    decision=decision,
+                    owner_id=owner_id,
+                    now=now,
+                )
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_approvals
+                        SET status = :status, decision = :decision,
+                            decided_by = :decided_by, decided_at = :decided_at
+                        WHERE approval_id = :approval_id
+                          AND task_id = :task_id AND status = 'pending'
+                        """
+                    ),
+                    {
+                        "approval_id": approval_id,
+                        "task_id": task_id,
+                        "status": status.value,
+                        "decision": (
+                            resolved.decision.value
+                            if resolved.decision is not None
+                            else None
+                        ),
+                        "decided_by": resolved.decided_by,
+                        "decided_at": now,
+                    },
+                )
+                updated = await session.execute(
+                    text(
+                        """
+                        UPDATE coding_tasks
+                        SET status = 'running', updated_at = :now,
+                            last_activity_at = :now
+                        WHERE task_id = :task_id
+                          AND status = 'waiting_approval'
+                        RETURNING task_id
+                        """
+                    ),
+                    {"task_id": task_id, "now": now},
+                )
+                if updated.first() is None:
+                    raise ApprovalConflict("approval_task_state_changed")
+                resolution_event = await self._append_event_in_session(
+                    session,
+                    task_id=task_id,
+                    event_type=f"approval.{status.value}",
+                    payload=self._approval_event_payload(resolved),
+                    now=now,
+                    run_id=approval.run_id,
+                    tool_call_id=approval.tool_call_id,
+                    checkpoint_id=approval.checkpoint_id,
+                )
+                status_event = await self._append_event_in_session(
+                    session,
+                    task_id=task_id,
+                    event_type="task.status.changed",
+                    payload={"status": "running"},
+                    now=now,
+                    run_id=approval.run_id,
+                    checkpoint_id=approval.checkpoint_id,
+                )
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return ApprovalResolutionCommit(
+            resolved,
+            (resolution_event, status_event),
+            conflict_code,
+        )
+
+    async def expire_pending_approvals(
+        self, *, limit: int, now: datetime
+    ) -> tuple[ApprovalResolutionCommit, ...]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        async with await self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        """
+                        WITH claimable AS (
+                            SELECT approval_id
+                            FROM coding_approvals
+                            WHERE status = 'pending' AND expires_at <= :now
+                            ORDER BY expires_at, approval_id
+                            FOR UPDATE SKIP LOCKED
+                            LIMIT :limit
+                        )
+                        UPDATE coding_approvals approval
+                        SET status = 'expired', decided_at = :now
+                        FROM claimable
+                        WHERE approval.approval_id = claimable.approval_id
+                        RETURNING approval.approval_id, approval.task_id,
+                                  approval.run_id, approval.tool_call_id,
+                                  approval.checkpoint_id, approval.tool_name,
+                                  approval.risk, approval.workspace_revision,
+                                  approval.request_hash,
+                                  approval.display_summary, approval.status,
+                                  approval.requested_by,
+                                  approval.requested_at, approval.expires_at,
+                                  approval.decision, approval.decided_by,
+                                  approval.decided_at
+                        """
+                    ),
+                    {"now": now, "limit": limit},
+                )
+                rows = result.all()
+                commits = []
+                for row in rows:
+                    approval = self._approval_from_row(row)
+                    await session.execute(
+                        text(
+                            """
+                            UPDATE coding_tasks
+                            SET status = 'running', updated_at = :now,
+                                last_activity_at = :now
+                            WHERE task_id = :task_id
+                              AND status = 'waiting_approval'
+                            """
+                        ),
+                        {"task_id": approval.task_id, "now": now},
+                    )
+                    resolution_event = await self._append_event_in_session(
+                        session,
+                        task_id=approval.task_id,
+                        event_type="approval.expired",
+                        payload=self._approval_event_payload(approval),
+                        now=now,
+                        run_id=approval.run_id,
+                        tool_call_id=approval.tool_call_id,
+                        checkpoint_id=approval.checkpoint_id,
+                    )
+                    status_event = await self._append_event_in_session(
+                        session,
+                        task_id=approval.task_id,
+                        event_type="task.status.changed",
+                        payload={"status": "running"},
+                        now=now,
+                        run_id=approval.run_id,
+                        checkpoint_id=approval.checkpoint_id,
+                    )
+                    commits.append(
+                        ApprovalResolutionCommit(
+                            approval,
+                            (resolution_event, status_event),
+                        )
+                    )
+        if commits and self._wake_outbox is not None:
+            self._wake_outbox()
+        return tuple(commits)
+
     async def begin_phase(
         self,
         *,
@@ -1661,6 +1884,70 @@ class PostgresCodingRunRepository:
             "expires_at": approval.expires_at.isoformat(),
             "display_summary": dict(approval.display_summary),
         }
+
+    @staticmethod
+    def _resolution_status(
+        *,
+        approval: CodingApproval,
+        loop_state: Mapping[str, object],
+        current_workspace_revision: str | None,
+        canonical_run_id: str,
+        decision: ApprovalDecision,
+        now: datetime,
+    ) -> tuple[ApprovalStatus, str | None]:
+        if approval.expires_at <= now:
+            return ApprovalStatus.EXPIRED, "approval_expired"
+        calls = loop_state.get("pending_tool_calls", [])
+        call = next(
+            (
+                item
+                for item in calls
+                if isinstance(item, Mapping)
+                and item.get("tool_call_id") == approval.tool_call_id
+            ),
+            None,
+        )
+        if call is None:
+            return ApprovalStatus.INVALIDATED, "approval_invalidated"
+        expected_hash = canonical_approval_hash(
+            {
+                "task_id": approval.task_id,
+                "run_id": approval.run_id,
+                "tool_call_id": approval.tool_call_id,
+                "tool_name": call.get("name"),
+                "normalized_input": call.get("input"),
+                "checkpoint_id": approval.checkpoint_id,
+                "workspace_revision": approval.workspace_revision,
+            }
+        )
+        if (
+            approval.run_id != canonical_run_id
+            or current_workspace_revision != approval.workspace_revision
+            or expected_hash != approval.request_hash
+        ):
+            return ApprovalStatus.INVALIDATED, "approval_invalidated"
+        if decision is ApprovalDecision.APPROVE:
+            return ApprovalStatus.APPROVED, None
+        return ApprovalStatus.DENIED, None
+
+    @staticmethod
+    def _resolved_approval(
+        *,
+        approval: CodingApproval,
+        status: ApprovalStatus,
+        decision: ApprovalDecision,
+        owner_id: str,
+        now: datetime,
+    ) -> CodingApproval:
+        if status in {ApprovalStatus.APPROVED, ApprovalStatus.DENIED}:
+            return replace(
+                approval,
+                status=status,
+                decision=decision,
+                decided_by=owner_id,
+                decided_at=now,
+            )
+        return replace(approval, status=status, decided_at=now)
 
     @staticmethod
     def _lease_params(lease: ExecutionLease, **extra) -> dict[str, Any]:
