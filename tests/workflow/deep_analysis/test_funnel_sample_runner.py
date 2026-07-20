@@ -234,6 +234,19 @@ def test_artifacts_drop_adversarial_nested_funnel_and_error_metadata(tmp_path):
     result["dev_runs"][0]["signals"]["claim_funnel"][
         "quote_score_buckets"
     ] = unsafe_bucket
+    unsafe_clamps = {
+        "0": 1,
+        "1": True,
+        "2": -2,
+        "3_plus": 3,
+        "unknown": {"url": url, "secret": secret},
+        "requested_confidence": 0.99,
+    }
+    result["dev_funnel"]["confidence_clamped_count"] = 4
+    result["dev_funnel"]["confidence_clamped_by_source_count"] = unsafe_clamps
+    run_funnel = result["dev_runs"][0]["signals"]["claim_funnel"]
+    run_funnel["confidence_clamped_count"] = 4
+    run_funnel["confidence_clamped_by_source_count"] = unsafe_clamps
     result["default_run"]["error"] = {
         "type": f"RuntimeError_{secret}",
         "stage": f"collection_{url}",
@@ -271,6 +284,12 @@ def test_artifacts_drop_adversarial_nested_funnel_and_error_metadata(tmp_path):
     assert funnel["dev_funnel"]["quote_score_buckets"] == {
         "unavailable": 5
     }
+    assert funnel["dev_funnel"]["confidence_clamped_count"] == 4
+    assert funnel["dev_funnel"]["confidence_clamped_by_source_count"] == {
+        "0": 1,
+        "3_plus": 3,
+    }
+    assert "requested_confidence" not in serialized["funnel.json"]
     manifest = json.loads(serialized["manifest.json"])
     assert manifest["questions"]["items"] == _declared_questions()
 

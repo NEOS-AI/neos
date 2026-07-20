@@ -57,10 +57,16 @@ async def test_web_search_adapts_mcp_result_and_cleans_up():
 
 
 @pytest.mark.asyncio
-async def test_build_orchestrator_uses_dev_cap_and_pure_worker():
+async def test_build_orchestrator_uses_dev_cap_and_pure_worker(monkeypatch):
     async def search_fn(query, k):
         return []
 
+    from neos.config.settings import settings
+
+    custom_caps = {1: 0.51, 2: 0.72, 3: 0.93}
+    monkeypatch.setattr(
+        settings.config.deep_analysis, "confidence_cap", custom_caps
+    )
     orchestrator = await build_orchestrator(
         object(),
         "run00001",
@@ -72,3 +78,5 @@ async def test_build_orchestrator_uses_dev_cap_and_pure_worker():
     assert orchestrator.global_token_cap == 20000
     assert not hasattr(worker, "db")
     assert not hasattr(worker, "run_id")
+    assert worker._confidence_cap == custom_caps
+    assert worker._confidence_cap is not custom_caps

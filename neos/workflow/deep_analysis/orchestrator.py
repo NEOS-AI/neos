@@ -413,6 +413,9 @@ class Orchestrator:
                 repair_count=repair_count,
                 repairs=repairs_rendered,
                 token_cap=config.effort[effort.value].token_cap,
+                confidence_cap_one=config.confidence_cap[1],
+                confidence_cap_two=config.confidence_cap[2],
+                confidence_cap_three_plus=config.confidence_cap[3],
             )
             assignments.append(
                 Assignment(

@@ -75,6 +75,8 @@ _FUNNEL_FIELDS = (
     "avg_source_count",
     "avg_excerpt_chars",
     "quote_score_buckets",
+    "confidence_clamped_count",
+    "confidence_clamped_by_source_count",
 )
 _QUOTE_BUCKETS = (
     "exact",
@@ -83,6 +85,7 @@ _QUOTE_BUCKETS = (
     "low",
     "unavailable",
 )
+_CONFIDENCE_CLAMP_BUCKETS = ("0", "1", "2", "3_plus")
 _ERROR_TYPE_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _STAGES = {
     "proposal_to_grade",
@@ -145,6 +148,14 @@ def _safe_funnel(funnel: dict[str, Any]) -> dict[str, Any]:
                     if (count := value.get(bucket)) is not None
                     and _is_safe_number(count)
                 }
+        elif key == "confidence_clamped_by_source_count":
+            if isinstance(value, dict):
+                safe[key] = {
+                    bucket: count
+                    for bucket in _CONFIDENCE_CLAMP_BUCKETS
+                    if (count := value.get(bucket)) is not None
+                    and _is_safe_count(count)
+                }
         elif _is_safe_number(value):
             safe[key] = value
     return safe
@@ -157,6 +168,10 @@ def _is_safe_number(value: Any) -> bool:
         and math.isfinite(value)
         and value >= 0
     )
+
+
+def _is_safe_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _safe_selection(selection: Any) -> dict[str, Any] | None:

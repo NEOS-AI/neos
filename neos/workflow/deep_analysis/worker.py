@@ -23,7 +23,18 @@ from .pdf_text import PDFExtractionError
 from .token_budget import TokenBudgetExhausted
 
 _REPAIR_ACTIONS = {"fixed", "weakened", "abandoned"}
+_CLAMP_BUCKETS = ("0", "1", "2", "3_plus")
 logger = logging.getLogger(__name__)
+
+
+def _source_bucket(count: int) -> str:
+    return str(count) if count < 3 else "3_plus"
+
+
+def _confidence_limit(source_count: int, caps: dict[int, float]) -> float:
+    if source_count == 0:
+        return 0.0
+    return caps[3 if source_count >= 3 else source_count]
 
 
 class Worker:
@@ -36,6 +47,7 @@ class Worker:
         http_client=None,
         cassette=None,
         skill_selector=None,
+        confidence_cap: dict[int, float] | None = None,
     ) -> None:
         self.search_fn = search_fn
         self.fetch_fn = fetch_fn
@@ -43,10 +55,16 @@ class Worker:
         self.http_client = http_client
         self.cassette = cassette
         self.skill_selector = skill_selector
+        self._confidence_cap = dict(
+            confidence_cap
+            if confidence_cap is not None
+            else settings.config.deep_analysis.confidence_cap
+        )
         self._claims: list[ProposedClaim] = []
         self._blobs: list[ProposedBlob] = []
         self._tokens = 0
         self._model = ""
+        self._confidence_clamped_by_source_count: dict[str, int] = {}
 
     def flush_partial(self, question_id: str) -> WorkerResult:
         return WorkerResult(
@@ -56,6 +74,12 @@ class Worker:
             blobs=list(self._blobs),
             tokens_spent=self._tokens,
             model=self._model,
+            confidence_clamped_count=sum(
+                self._confidence_clamped_by_source_count.values()
+            ),
+            confidence_clamped_by_source_count=dict(
+                self._confidence_clamped_by_source_count
+            ),
         )
 
     async def _search(self, query: str, limit: int) -> list[dict]:
@@ -137,6 +161,7 @@ class Worker:
         self._claims = []
         self._blobs = []
         self._tokens = 0
+        self._confidence_clamped_by_source_count = {}
 
         config = settings.config.deep_analysis
         self._model = (
@@ -224,10 +249,24 @@ class Worker:
                         raw_ref=fetched.content_hash,
                     )
                 )
-            confidence = min(
+            requested_confidence = min(
                 1.0,
                 max(0.0, float(raw_claim.get("confidence", 0.0))),
             )
+            source_count = len(
+                {evidence.source_url for evidence in evidence_items}
+            )
+            confidence_limit = _confidence_limit(
+                source_count, self._confidence_cap
+            )
+            confidence = min(requested_confidence, confidence_limit)
+            if requested_confidence > confidence_limit:
+                bucket = _source_bucket(source_count)
+                assert bucket in _CLAMP_BUCKETS
+                self._confidence_clamped_by_source_count[bucket] = (
+                    self._confidence_clamped_by_source_count.get(bucket, 0)
+                    + 1
+                )
             self._claims.append(
                 ProposedClaim(
                     text=str(raw_claim["text"]),
@@ -263,6 +302,12 @@ class Worker:
             model=self._model,
             self_assessment=self_assessment,
             fail_reason=str(data.get("fail_reason", "")),
+            confidence_clamped_count=sum(
+                self._confidence_clamped_by_source_count.values()
+            ),
+            confidence_clamped_by_source_count=dict(
+                self._confidence_clamped_by_source_count
+            ),
         )
 
     def _parse_repairs(
@@ -325,8 +370,12 @@ class Worker:
             + "\n\n[REPAIR MODE - WEAKEN ONLY]\n"
             "아래 클레임은 과잉주장(E_OVERCLAIM)으로 반려되었다. "
             "재조사하지 말고 문구를 증거 수준으로 약화한 new_text만 "
-            "생성하라. JSON 객체 하나만 출력:\n"
-            '{"repairs": [{"claim_id": "...", "new_text": "약화된 문구"}]}'
+            "생성하라. 근거가 지지하는 날짜·집단·조건·수치 범위를 유지하라. "
+            "상관 근거에는 인과 표현을 쓰지 말고, 지지되지 않는 비교를 "
+            "제거하라. 근거 수준으로 약화할 수 없으면 action=abandoned로 "
+            "반환하라. JSON 객체 하나만 출력:\n"
+            '{"repairs": [{"claim_id": "...", "action": '
+            '"weakened|abandoned", "new_text": "약화된 문구"}]}'
             f"\n\n수리 대상:\n{repair_lines}"
         )
 
@@ -343,14 +392,21 @@ class Worker:
         )
         self._tokens += response.input_tokens + response.output_tokens
 
-        repair_results = [
-            RepairResult(
-                claim_id=str(raw.get("claim_id", "")),
-                action="weakened",
-                new_text=str(raw.get("new_text", "")),
+        repair_results = []
+        for raw in data.get("repairs", []):
+            action = str(raw.get("action", "weakened"))
+            if action not in _REPAIR_ACTIONS:
+                action = "weakened"
+            new_text = raw.get("new_text")
+            repair_results.append(
+                RepairResult(
+                    claim_id=str(raw.get("claim_id", "")),
+                    action=action,
+                    new_text=(
+                        str(new_text) if new_text is not None else None
+                    ),
+                )
             )
-            for raw in data.get("repairs", [])
-        ]
 
         return WorkerResult(
             question_id=question_id,
@@ -360,4 +416,10 @@ class Worker:
             repairs=repair_results,
             tokens_spent=self._tokens,
             model=self._model,
+            confidence_clamped_count=sum(
+                self._confidence_clamped_by_source_count.values()
+            ),
+            confidence_clamped_by_source_count=dict(
+                self._confidence_clamped_by_source_count
+            ),
         )

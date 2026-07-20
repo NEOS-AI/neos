@@ -249,7 +249,9 @@ async def test_orchestrator_rolls_back_failed_transaction_before_marking_run_fai
     assert ledger.failed
 
 
-async def test_partition_feeds_prior_findings_and_dead_ends_into_brief():
+async def test_partition_feeds_prior_findings_dead_ends_and_configured_caps_into_brief(
+    monkeypatch,
+):
     """재조사 패스의 worker brief는 이 질문의 확정된 발견과 막다른 길을
     포함해야 한다(worker_brief.md [3] "확정된 발견 — 재조사 금지").
     이전에는 항상 "(없음)"으로 하드코딩되어 문맥이 유실됐다."""
@@ -273,6 +275,11 @@ async def test_partition_feeds_prior_findings_and_dead_ends_into_brief():
         grader=None,  # _partition은 grader를 사용하지 않는다
         ledger=BriefLedger(),
     )
+    from neos.config.settings import settings
+
+    monkeypatch.setitem(settings.config.deep_analysis.confidence_cap, 1, 0.55)
+    monkeypatch.setitem(settings.config.deep_analysis.confidence_cap, 2, 0.75)
+    monkeypatch.setitem(settings.config.deep_analysis.confidence_cap, 3, 0.9)
 
     assignments, splits = await orchestrator._partition([(question, Effort.SCOUT)])
 
@@ -281,3 +288,6 @@ async def test_partition_feeds_prior_findings_and_dead_ends_into_brief():
     brief = assignments[0].brief
     assert "지구는 둥글다" in brief
     assert "평평한 지구설은 근거 없음" in brief
+    assert "1개 0.55" in brief
+    assert "2개 0.75" in brief
+    assert "3개 이상 0.9" in brief
