@@ -10,8 +10,6 @@
 """
 
 import pytest
-from sqlalchemy import text
-
 import neos.database.models  # noqa: F401 - Base 메타데이터 등록
 from neos.database.connection import db_manager
 from neos.workflow.deep_analysis.graders.deterministic import DeterministicGrader

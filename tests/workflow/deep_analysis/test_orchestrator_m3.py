@@ -6,7 +6,7 @@ from sqlalchemy import text as sql
 
 import neos.database.models  # noqa: F401 - register Base metadata
 from neos.database.connection import db_manager
-from neos.workflow.deep_analysis.ledger import Ledger, create_run
+from neos.workflow.deep_analysis.ledger import create_run
 from neos.workflow.deep_analysis.models import (
     NodeSummary,
     ProposedBlob,

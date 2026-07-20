@@ -1,4 +1,6 @@
-import asyncio, pytest
+import asyncio
+
+import pytest
 from neos.workflow.deep_analysis.orchestrator import Orchestrator
 from neos.workflow.deep_analysis.models import Assignment, Effort, WorkerResult, ProposedClaim
 
