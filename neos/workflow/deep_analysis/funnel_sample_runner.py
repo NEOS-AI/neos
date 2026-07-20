@@ -90,6 +90,21 @@ _STAGES = {
     "agentic_loss",
     "final_unresolved",
 }
+_QUESTIONS_SCHEMA_VERSION = "1"
+
+
+def _declared_questions(cases: Sequence[QuestionCase]) -> dict[str, Any]:
+    return {
+        "schema_version": _QUESTIONS_SCHEMA_VERSION,
+        "items": [
+            {
+                "case_id": case.case_id,
+                "category": case.category,
+                "question": case.question,
+            }
+            for case in cases
+        ],
+    }
 
 
 def _safe_run_metadata(run: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -253,6 +268,7 @@ def write_artifacts(
     manifest = {
         "schema_version": result.get("schema_version"),
         "question_set_version": result.get("question_set_version"),
+        "questions": _declared_questions(QUESTION_CASES),
         "dev_runs": [
             _safe_run_metadata(run) for run in result.get("dev_runs", [])
         ],
@@ -460,6 +476,7 @@ async def run_sample(
     return {
         "schema_version": "1",
         "question_set_version": QUESTION_SET_VERSION,
+        "questions": _declared_questions(cases),
         "dev_runs": dev_runs,
         "selection": selection,
         "default_run": default_run,

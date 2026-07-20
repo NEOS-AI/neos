@@ -9,8 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 
+import scripts.deep_analysis_funnel_sample as cli
 import neos.workflow.deep_analysis.funnel_sample_runner as runner
-from neos.workflow.deep_analysis.funnel_sample import QuestionCase
+from neos.workflow.deep_analysis.funnel_sample import QUESTION_CASES, QuestionCase
 from neos.workflow.deep_analysis.funnel_sample_runner import (
     PreflightError,
     preflight,
@@ -107,6 +108,17 @@ RESULT = {
 }
 
 
+def _declared_questions():
+    return [
+        {
+            "case_id": case.case_id,
+            "category": case.category,
+            "question": case.question,
+        }
+        for case in QUESTION_CASES
+    ]
+
+
 def test_importing_runner_registers_users_foreign_key_target():
     result = subprocess.run(
         [
@@ -135,9 +147,12 @@ def test_write_artifacts_creates_timestamped_contract(tmp_path):
         now=datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc),
     )
     assert artifact_dir.name == "20260719T120000Z"
-    assert json.loads((artifact_dir / "manifest.json").read_text())[
-        "schema_version"
-    ] == "1"
+    manifest = json.loads((artifact_dir / "manifest.json").read_text())
+    assert manifest["schema_version"] == "1"
+    assert manifest["questions"] == {
+        "schema_version": "1",
+        "items": _declared_questions(),
+    }
     assert json.loads((artifact_dir / "funnel.json").read_text())[
         "selection"
     ]["case_id"] == "fact-aspartame"
@@ -167,6 +182,35 @@ def test_write_artifacts_rejects_existing_directory(tmp_path):
         write_artifacts(RESULT, tmp_path, now=fixed)
 
 
+def test_manifest_preserves_fixed_questions_when_all_runs_fail(tmp_path):
+    result = deepcopy(RESULT)
+    result["dev_runs"] = [
+        {
+            "case_id": case.case_id,
+            "category": case.category,
+            "profile": "dev",
+            "status": "failed",
+            "order": order,
+            "error": {"type": "RuntimeError", "stage": "execution"},
+        }
+        for order, case in enumerate(QUESTION_CASES)
+    ]
+    result["selection"] = None
+    result["default_run"] = None
+
+    artifact_dir = write_artifacts(
+        result,
+        tmp_path,
+        now=datetime(2026, 7, 19, 12, 1, tzinfo=timezone.utc),
+    )
+
+    manifest = json.loads((artifact_dir / "manifest.json").read_text())
+    assert manifest["questions"] == {
+        "schema_version": "1",
+        "items": _declared_questions(),
+    }
+
+
 def test_render_report_states_overlap_and_policy_contract():
     report = render_report(RESULT)
     assert "stages overlap" in report
@@ -194,6 +238,17 @@ def test_artifacts_drop_adversarial_nested_funnel_and_error_metadata(tmp_path):
         "type": f"RuntimeError_{secret}",
         "stage": f"collection_{url}",
     }
+    result["questions"] = {
+        "schema_version": "1",
+        "items": [
+            *_declared_questions(),
+            {
+                "case_id": secret,
+                "category": url,
+                "question": report_text,
+            },
+        ],
+    }
 
     artifact_dir = write_artifacts(
         result,
@@ -216,6 +271,51 @@ def test_artifacts_drop_adversarial_nested_funnel_and_error_metadata(tmp_path):
     assert funnel["dev_funnel"]["quote_score_buckets"] == {
         "unavailable": 5
     }
+    manifest = json.loads(serialized["manifest.json"])
+    assert manifest["questions"]["items"] == _declared_questions()
+
+
+def test_cli_exits_nonzero_without_writing_or_reporting_artifact_when_no_dev_run_completed(
+    monkeypatch, capsys, tmp_path
+):
+    async def successful_preflight(*args):
+        return None
+
+    async def all_failed_sample(**kwargs):
+        return {
+            "schema_version": "1",
+            "question_set_version": "mixed-v1",
+            "questions": {
+                "schema_version": "1",
+                "items": _declared_questions(),
+            },
+            "dev_runs": [
+                {"case_id": case.case_id, "status": "failed"}
+                for case in QUESTION_CASES
+            ],
+            "selection": None,
+            "default_run": None,
+            "dev_funnel": {},
+        }
+
+    def unexpected_write(*args, **kwargs):
+        pytest.fail("an unsuccessful sample must not write an artifact")
+
+    monkeypatch.setattr(cli, "preflight", successful_preflight)
+    monkeypatch.setattr(cli, "run_sample", all_failed_sample)
+    monkeypatch.setattr(cli, "write_artifacts", unexpected_write)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["deep_analysis_funnel_sample", "--output-root", str(tmp_path)],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+
+    assert exc_info.value.code != 0
+    assert capsys.readouterr().out == ""
+    assert list(tmp_path.iterdir()) == []
 
 
 class HealthySession:
@@ -336,6 +436,34 @@ async def test_run_sample_skips_default_when_all_dev_runs_fail():
     assert calls == [(case.case_id, "dev") for case in CASES]
     assert result["selection"] is None
     assert result["default_run"] is None
+    assert result["questions"] == {
+        "schema_version": "1",
+        "items": [
+            {
+                "case_id": case.case_id,
+                "category": case.category,
+                "question": case.question,
+            }
+            for case in CASES
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_sample_preserves_all_declared_questions_with_mixed_failures():
+    async def mixed(case, profile):
+        if case == QUESTION_CASES[2]:
+            raise RuntimeError("failed")
+        return _completed(case, profile)
+
+    result = await run_sample(
+        cases=QUESTION_CASES, execute_case_fn=mixed, secrets=[]
+    )
+
+    assert result["questions"] == {
+        "schema_version": "1",
+        "items": _declared_questions(),
+    }
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,10 @@ from neos.workflow.deep_analysis.funnel_sample_runner import (
 from neos.workflow.deep_analysis.jobs import execute_run
 
 
+class NoCompletedDevRunsError(RuntimeError):
+    """Raised when a sample has no successful dev observation."""
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run the production-like deep-analysis claim funnel sample"
@@ -36,6 +40,10 @@ async def _main(output_root: Path) -> tuple[Path, list[str]]:
         timeout_seconds=settings.config.deep_analysis.job_time_limit,
         secrets=[settings.ANTHROPIC_API_KEY, settings.TAVILY_API_KEY],
     )
+    if not any(
+        item.get("status") == "completed" for item in result["dev_runs"]
+    ):
+        raise NoCompletedDevRunsError("no dev runs completed")
     artifact_dir = write_artifacts(result, output_root)
     run_ids = [
         item["run_id"]
@@ -49,7 +57,10 @@ async def _main(output_root: Path) -> tuple[Path, list[str]]:
 
 
 def main() -> None:
-    artifact_dir, run_ids = asyncio.run(_main(_parse_args().output_root))
+    try:
+        artifact_dir, run_ids = asyncio.run(_main(_parse_args().output_root))
+    except NoCompletedDevRunsError as exc:
+        raise SystemExit(f"sample failed: {exc}") from exc
     print(artifact_dir)
     for run_id in run_ids:
         print(run_id)

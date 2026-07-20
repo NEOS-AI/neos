@@ -121,7 +121,7 @@ def test_representative_returns_none_without_completed_run():
 
 def test_zero_graded_representative_is_first_completed_observation():
     observations = [
-        {"case_id": "second", "status": "completed", "order": 1, "signals": {"claim_funnel": _funnel(proposed=0, graded=0, deterministic_rejected=0, near_miss=0)}},
+        {"case_id": "second", "status": "completed", "order": 1, "signals": {"claim_funnel": _funnel(proposed=20, graded=0, deterministic_rejected=0, near_miss=0)}},
         {"case_id": "first", "status": "completed", "order": 0, "signals": {"claim_funnel": _funnel(proposed=0, graded=0, deterministic_rejected=0, near_miss=0)}},
     ]
     assert select_representative(observations)["case_id"] == "first"

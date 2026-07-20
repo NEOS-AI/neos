@@ -84,6 +84,12 @@ def select_representative(observations: list[dict]) -> dict | None:
     completed = [item for item in observations if item["status"] == "completed"]
     if not completed:
         return None
+    if all(
+        item["signals"]["claim_funnel"]["graded"] == 0
+        for item in completed
+    ):
+        selected = min(completed, key=lambda item: item["order"])
+        return {**selected, "dominant_stage": "proposal_to_grade"}
     aggregate = aggregate_funnels([item["signals"]["claim_funnel"] for item in completed])
     stage = dominant_stage(aggregate)
     candidates = [item for item in completed if stage_metrics(item["signals"]["claim_funnel"])[stage]["count"] > 0]
