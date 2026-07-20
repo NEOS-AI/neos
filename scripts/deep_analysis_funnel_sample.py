@@ -3,6 +3,9 @@
 import argparse
 import asyncio
 from pathlib import Path
+import sys
+
+sys.path.append(str(Path(__file__).parent.parent))
 
 from neos.config.settings import settings
 from neos.database.connection import get_session_ctx
