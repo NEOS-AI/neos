@@ -28,11 +28,12 @@ class PreflightError(RuntimeError):
 
 
 class _CreatedRunError(RuntimeError):
-    """Preserve a committed run identifier across an execution failure."""
+    """Preserve a committed run identifier and fixed failure stage."""
 
-    def __init__(self, run_id: str, cause: Exception) -> None:
-        super().__init__(str(cause))
+    def __init__(self, run_id: str, stage: str, cause: Exception) -> None:
+        super().__init__(f"created run failed during {stage}")
         self.run_id = run_id
+        self.stage = stage
         self.cause = cause
 
 
@@ -53,11 +54,12 @@ async def preflight(settings_obj, session_factory) -> None:
 def sanitize_error(
     exc: Exception, secrets: Iterable[str | None]
 ) -> dict[str, str]:
+    del secrets
     source = exc.cause if isinstance(exc, _CreatedRunError) else exc
-    message = " ".join(str(source).split())
-    for secret in (value for value in secrets if value):
-        message = message.replace(secret, "[REDACTED]")
-    return {"type": type(source).__name__, "message": message[:240]}
+    stage = getattr(exc, "stage", "execution")
+    if stage not in {"execution", "collection"}:
+        stage = "execution"
+    return {"type": type(source).__name__, "stage": stage}
 
 
 async def execute_case(
@@ -76,6 +78,7 @@ async def execute_case(
         await session.commit()
 
     started = time.monotonic()
+    stage = "execution"
     try:
         await execute_fn(
             session_factory,
@@ -88,30 +91,31 @@ async def execute_case(
                 else timeout_seconds
             ),
         )
+        elapsed = time.monotonic() - started
+
+        stage = "collection"
+        async with session_factory() as session:
+            status = await session.scalar(
+                select(DARun.status).where(DARun.id == run_id)
+            )
+            signals = await DeepAnalysisAnalyticsService(session).signals(
+                run_id=run_id
+            )
+            tokens_spent = await Ledger(session, run_id).total_spent()
+
+        return {
+            "case_id": case.case_id,
+            "category": case.category,
+            "question": case.question,
+            "profile": profile,
+            "status": status,
+            "run_id": run_id,
+            "elapsed_seconds": elapsed,
+            "tokens_spent": tokens_spent,
+            "signals": signals,
+        }
     except Exception as exc:
-        raise _CreatedRunError(run_id, exc) from exc
-    elapsed = time.monotonic() - started
-
-    async with session_factory() as session:
-        status = await session.scalar(
-            select(DARun.status).where(DARun.id == run_id)
-        )
-        signals = await DeepAnalysisAnalyticsService(session).signals(
-            run_id=run_id
-        )
-        tokens_spent = await Ledger(session, run_id).total_spent()
-
-    return {
-        "case_id": case.case_id,
-        "category": case.category,
-        "question": case.question,
-        "profile": profile,
-        "status": status,
-        "run_id": run_id,
-        "elapsed_seconds": elapsed,
-        "tokens_spent": tokens_spent,
-        "signals": signals,
-    }
+        raise _CreatedRunError(run_id, stage, exc) from exc
 
 
 async def run_sample(

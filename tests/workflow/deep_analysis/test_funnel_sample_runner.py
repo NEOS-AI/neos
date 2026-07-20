@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import neos.workflow.deep_analysis.funnel_sample_runner as runner
 from neos.workflow.deep_analysis.funnel_sample import QuestionCase
 from neos.workflow.deep_analysis.funnel_sample_runner import (
     PreflightError,
@@ -47,11 +48,13 @@ async def test_preflight_lists_missing_names_without_values():
         await preflight(fake_settings, healthy_session_factory)
 
 
-def test_sanitize_error_redacts_configured_secrets_and_truncates():
-    error = RuntimeError("provider rejected sk-live-secret " + "x" * 500)
+def test_sanitize_error_exposes_only_type_and_fixed_stage():
+    error = RuntimeError(
+        "sk-live-secret https://private.example report model claim"
+    )
     assert sanitize_error(error, ["sk-live-secret"]) == {
         "type": "RuntimeError",
-        "message": "provider rejected [REDACTED] " + "x" * 211,
+        "stage": "execution",
     }
 
 
@@ -99,7 +102,7 @@ async def test_run_sample_isolates_ordinary_failure_and_continues():
     ]
     assert result["dev_runs"][1]["error"] == {
         "type": "RuntimeError",
-        "message": "provider leaked [REDACTED]",
+        "stage": "execution",
     }
     assert "signals" not in result["dev_runs"][1]
     assert calls == [
@@ -160,6 +163,102 @@ async def test_run_sample_preserves_created_run_id_on_failure():
         "run_id",
         "error",
     }
+
+
+class _CommittedSession:
+    async def commit(self):
+        pass
+
+
+@asynccontextmanager
+async def committed_session_factory():
+    yield _CommittedSession()
+
+
+@pytest.mark.asyncio
+async def test_execution_failure_preserves_run_id_and_omits_sensitive_text(
+    monkeypatch,
+):
+    async def fake_create_run(session, question, profile):
+        return "execution-run"
+
+    async def failed_execute(*args, **kwargs):
+        raise RuntimeError(
+            "sk-secret https://private.example report model claim"
+        )
+
+    monkeypatch.setattr(runner, "create_run", fake_create_run)
+    result = await run_sample(
+        cases=CASES[:1],
+        session_factory=committed_session_factory,
+        execute_fn=failed_execute,
+        secrets=["sk-secret"],
+    )
+
+    failure = result["dev_runs"][0]
+    assert failure["run_id"] == "execution-run"
+    assert failure["error"] == {
+        "type": "RuntimeError",
+        "stage": "execution",
+    }
+    serialized = repr(failure)
+    for forbidden in (
+        "sk-secret",
+        "https://private.example",
+        "report",
+        "model",
+        "claim",
+    ):
+        assert forbidden not in serialized
+
+
+@pytest.mark.asyncio
+async def test_collection_failure_preserves_run_id_and_omits_sensitive_text(
+    monkeypatch,
+):
+    class CollectionSession(_CommittedSession):
+        async def scalar(self, statement):
+            raise LookupError(
+                "sk-secret https://private.example report model claim"
+            )
+
+    calls = 0
+
+    @asynccontextmanager
+    async def session_factory():
+        nonlocal calls
+        calls += 1
+        yield _CommittedSession() if calls == 1 else CollectionSession()
+
+    async def fake_create_run(session, question, profile):
+        return "collection-run"
+
+    async def successful_execute(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(runner, "create_run", fake_create_run)
+    result = await run_sample(
+        cases=CASES[:1],
+        session_factory=session_factory,
+        execute_fn=successful_execute,
+        secrets=["sk-secret"],
+    )
+
+    failure = result["dev_runs"][0]
+    assert failure["run_id"] == "collection-run"
+    assert failure["error"] == {
+        "type": "LookupError",
+        "stage": "collection",
+    }
+    serialized = repr(failure)
+    for forbidden in (
+        "sk-secret",
+        "https://private.example",
+        "report",
+        "model",
+        "claim",
+    ):
+        assert forbidden not in serialized
 
 
 @pytest.mark.asyncio
