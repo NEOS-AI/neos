@@ -15,6 +15,14 @@ from neos.coding.domain.durability import (
     ToolExecutionClaim,
     ToolExecutionDisposition,
 )
+from neos.coding.domain.approvals import (
+    ApprovalConflict,
+    ApprovalRequestCommit,
+    ApprovalStatus,
+    CodingApproval,
+    approval_display_summary,
+    canonical_approval_hash,
+)
 from neos.coding.domain.events import make_event
 from neos.coding.loop.base import EXPECTED_CHECKPOINT_OMITTED
 
@@ -160,6 +168,7 @@ class InMemoryCodingRunRepository:
         self.phases = []
         self.execution_leases = {}
         self.tool_claims = {}
+        self.approvals = {}
         self._durability_lock = asyncio.Lock()
         self._durability_seq = 0
         self.begin_phase_calls = 0
@@ -442,6 +451,124 @@ class InMemoryCodingRunRepository:
                 run_id=claim.lease.run_id,
                 tool_call_id=claim.tool_call_id,
             )
+
+    async def request_tool_approval(
+        self,
+        *,
+        lease,
+        tool_call,
+        validated,
+        loop_state,
+        workspace_revision,
+        requested_at,
+        expires_at,
+    ):
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=requested_at)
+            canonical = self._canonical_run(lease.task_id)
+            if (
+                canonical is None
+                or canonical.run_id != lease.run_id
+                or canonical.status is not CodingRunStatus.RUNNING
+            ):
+                raise StaleExecutionLease(lease.task_id)
+            key = (lease.task_id, lease.run_id, tool_call.tool_call_id)
+            existing = self.approvals.get(key)
+            if existing is not None:
+                expected = canonical_approval_hash(
+                    {
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "tool_call_id": tool_call.tool_call_id,
+                        "tool_name": validated.name,
+                        "normalized_input": dict(validated.input),
+                        "checkpoint_id": existing.checkpoint_id,
+                        "workspace_revision": workspace_revision,
+                    }
+                )
+                if existing.request_hash != expected:
+                    raise ApprovalConflict("approval_request_mismatch")
+                checkpoint = next(
+                    item
+                    for item in self.checkpoints
+                    if item.checkpoint_id == existing.checkpoint_id
+                )
+                return ApprovalRequestCommit(existing, checkpoint, (), False)
+            self._durability_seq += 1
+            checkpoint = CodingCheckpoint(
+                checkpoint_id=f"cc_approval_{tool_call.tool_call_id}",
+                task_id=lease.task_id,
+                run_id=lease.run_id,
+                seq=self._durability_seq,
+                loop_state=dict(loop_state),
+                workspace_revision=workspace_revision,
+                created_at=requested_at,
+            )
+            request_hash = canonical_approval_hash(
+                {
+                    "task_id": lease.task_id,
+                    "run_id": lease.run_id,
+                    "tool_call_id": tool_call.tool_call_id,
+                    "tool_name": validated.name,
+                    "normalized_input": dict(validated.input),
+                    "checkpoint_id": checkpoint.checkpoint_id,
+                    "workspace_revision": workspace_revision,
+                }
+            )
+            approval = CodingApproval(
+                approval_id=f"ca_{tool_call.tool_call_id}",
+                task_id=lease.task_id,
+                run_id=lease.run_id,
+                tool_call_id=tool_call.tool_call_id,
+                checkpoint_id=checkpoint.checkpoint_id,
+                tool_name=validated.name,
+                risk=validated.risk,
+                workspace_revision=workspace_revision,
+                request_hash=request_hash,
+                display_summary=approval_display_summary(validated),
+                status=ApprovalStatus.PENDING,
+                requested_by="test-owner",
+                requested_at=requested_at,
+                expires_at=expires_at,
+            )
+            requested_event = make_event(
+                task_id=lease.task_id,
+                seq=self._durability_seq,
+                event_type="approval.requested",
+                payload={
+                    "approval_id": approval.approval_id,
+                    "tool_name": approval.tool_name,
+                    "risk": approval.risk.value,
+                    "status": approval.status.value,
+                    "requested_at": requested_at.isoformat(),
+                    "expires_at": expires_at.isoformat(),
+                    "display_summary": dict(approval.display_summary),
+                },
+                now=requested_at,
+                run_id=lease.run_id,
+                tool_call_id=tool_call.tool_call_id,
+                checkpoint_id=checkpoint.checkpoint_id,
+            )
+            self._durability_seq += 1
+            status_event = make_event(
+                task_id=lease.task_id,
+                seq=self._durability_seq,
+                event_type="task.status.changed",
+                payload={"status": "waiting_approval"},
+                now=requested_at,
+                run_id=lease.run_id,
+                checkpoint_id=checkpoint.checkpoint_id,
+            )
+            self.checkpoints.append(checkpoint)
+            self.approvals[key] = approval
+            self.task_statuses[lease.task_id] = "waiting_approval"
+            return ApprovalRequestCommit(
+                approval, checkpoint, (requested_event, status_event), True
+            )
+
+    async def get_tool_approval(self, *, task_id, run_id, tool_call_id):
+        async with self._durability_lock:
+            return self.approvals.get((task_id, run_id, tool_call_id))
 
     def _require_current_lease(self, lease, *, now=None) -> None:
         current = self.execution_leases.get(lease.task_id)

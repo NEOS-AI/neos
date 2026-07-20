@@ -8,6 +8,8 @@ from datetime import datetime
 from enum import StrEnum
 
 from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
+from neos.coding.domain.events import CodingEvent
+from neos.coding.domain.phases import CodingCheckpoint
 
 
 class ApprovalStatus(StrEnum):
@@ -71,6 +73,18 @@ class CodingApproval:
             or self.decided_at is None
         ):
             raise ValueError("denied approval requires a deny decision")
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalRequestCommit:
+    approval: CodingApproval
+    checkpoint: CodingCheckpoint
+    events: tuple[CodingEvent, ...]
+    created: bool
+
+
+class ApprovalConflict(RuntimeError):
+    pass
 
 
 def evaluate_approval(call: ValidatedToolCall) -> ApprovalPolicyOutcome:

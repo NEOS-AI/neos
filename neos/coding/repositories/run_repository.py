@@ -6,6 +6,15 @@ from uuid import uuid4
 
 from sqlalchemy import text
 
+from neos.coding.domain.approvals import (
+    ApprovalConflict,
+    ApprovalDecision,
+    ApprovalRequestCommit,
+    ApprovalStatus,
+    CodingApproval,
+    approval_display_summary,
+    canonical_approval_hash,
+)
 from neos.coding.domain.durability import (
     ExecutionLease,
     ModelCheckpointCommit,
@@ -31,6 +40,8 @@ from neos.coding.domain.phases import (
     SteeringRequest,
 )
 from neos.coding.persistence.postgres import SessionFactory
+from neos.coding.model.base import ToolCallCompleted
+from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
 
 
 class PostgresCodingRunRepository:
@@ -632,6 +643,269 @@ class PostgresCodingRunRepository:
         if self._wake_outbox is not None:
             self._wake_outbox()
         return event
+
+    async def request_tool_approval(
+        self,
+        *,
+        lease: ExecutionLease,
+        tool_call: ToolCallCompleted,
+        validated: ValidatedToolCall,
+        loop_state: Mapping[str, Any],
+        workspace_revision: str,
+        requested_at: datetime,
+        expires_at: datetime,
+    ) -> ApprovalRequestCommit:
+        if expires_at <= requested_at:
+            raise ValueError("approval expiry must follow request time")
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(
+                    session, lease, now=requested_at
+                )
+                owner_result = await session.execute(
+                    text(
+                        """
+                        SELECT task.owner_id
+                        FROM coding_tasks task
+                        JOIN coding_runs run
+                          ON run.task_id = task.task_id
+                        WHERE task.task_id = :task_id
+                          AND task.deleted_at IS NULL
+                          AND task.status = 'running'
+                          AND run.run_id = :run_id
+                          AND run.status = 'running'
+                        FOR UPDATE OF task, run
+                        """
+                    ),
+                    {"task_id": lease.task_id, "run_id": lease.run_id},
+                )
+                owner_row = owner_result.first()
+                if owner_row is None:
+                    raise StaleExecutionLease(lease.task_id)
+                existing_result = await session.execute(
+                    text(
+                        """
+                        SELECT approval.approval_id, approval.task_id,
+                               approval.run_id, approval.tool_call_id,
+                               approval.checkpoint_id, approval.tool_name,
+                               approval.risk, approval.workspace_revision,
+                               approval.request_hash, approval.display_summary,
+                               approval.status, approval.requested_by,
+                               approval.requested_at, approval.expires_at,
+                               approval.decision, approval.decided_by,
+                               approval.decided_at, checkpoint.seq,
+                               checkpoint.loop_state_json,
+                               checkpoint.created_at
+                        FROM coding_approvals approval
+                        JOIN coding_checkpoints checkpoint
+                          ON checkpoint.checkpoint_id = approval.checkpoint_id
+                        WHERE approval.task_id = :task_id
+                          AND approval.run_id = :run_id
+                          AND approval.tool_call_id = :tool_call_id
+                        FOR UPDATE OF approval
+                        """
+                    ),
+                    {
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "tool_call_id": tool_call.tool_call_id,
+                    },
+                )
+                existing_row = existing_result.first()
+                if existing_row is not None:
+                    approval = self._approval_from_row(existing_row)
+                    expected_hash = canonical_approval_hash(
+                        self._approval_binding(
+                            lease=lease,
+                            tool_call=tool_call,
+                            validated=validated,
+                            checkpoint_id=approval.checkpoint_id,
+                            workspace_revision=workspace_revision,
+                        )
+                    )
+                    if (
+                        approval.request_hash != expected_hash
+                        or approval.workspace_revision != workspace_revision
+                    ):
+                        raise ApprovalConflict("approval_request_mismatch")
+                    checkpoint = CodingCheckpoint(
+                        checkpoint_id=approval.checkpoint_id,
+                        task_id=lease.task_id,
+                        run_id=lease.run_id,
+                        seq=int(existing_row[17]),
+                        loop_state=dict(existing_row[18]),
+                        workspace_revision=approval.workspace_revision,
+                        created_at=existing_row[19],
+                    )
+                    return ApprovalRequestCommit(
+                        approval=approval,
+                        checkpoint=checkpoint,
+                        events=(),
+                        created=False,
+                    )
+                seq = await self._allocate_sequence_in_session(
+                    session, task_id=lease.task_id, now=requested_at
+                )
+                checkpoint = CodingCheckpoint(
+                    checkpoint_id=f"cc_{uuid4().hex}",
+                    task_id=lease.task_id,
+                    run_id=lease.run_id,
+                    seq=seq,
+                    loop_state=dict(loop_state),
+                    workspace_revision=workspace_revision,
+                    created_at=requested_at,
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_checkpoints
+                            (checkpoint_id, task_id, run_id, seq,
+                             loop_state_json, workspace_revision, created_at)
+                        VALUES
+                            (:checkpoint_id, :task_id, :run_id, :seq,
+                             CAST(:loop_state AS JSONB),
+                             :workspace_revision, :created_at)
+                        """
+                    ),
+                    {
+                        "checkpoint_id": checkpoint.checkpoint_id,
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "seq": seq,
+                        "loop_state": json.dumps(dict(loop_state)),
+                        "workspace_revision": workspace_revision,
+                        "created_at": requested_at,
+                    },
+                )
+                request_hash = canonical_approval_hash(
+                    self._approval_binding(
+                        lease=lease,
+                        tool_call=tool_call,
+                        validated=validated,
+                        checkpoint_id=checkpoint.checkpoint_id,
+                        workspace_revision=workspace_revision,
+                    )
+                )
+                summary = approval_display_summary(validated)
+                approval = CodingApproval(
+                    approval_id=f"ca_{uuid4().hex}",
+                    task_id=lease.task_id,
+                    run_id=lease.run_id,
+                    tool_call_id=tool_call.tool_call_id,
+                    checkpoint_id=checkpoint.checkpoint_id,
+                    tool_name=validated.name,
+                    risk=validated.risk,
+                    workspace_revision=workspace_revision,
+                    request_hash=request_hash,
+                    display_summary=summary,
+                    status=ApprovalStatus.PENDING,
+                    requested_by=str(owner_row[0]),
+                    requested_at=requested_at,
+                    expires_at=expires_at,
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_approvals
+                            (approval_id, task_id, run_id, tool_call_id,
+                             checkpoint_id, tool_name, risk,
+                             workspace_revision, request_hash,
+                             display_summary, status, requested_by,
+                             requested_at, expires_at, decision,
+                             decided_by, decided_at)
+                        VALUES
+                            (:approval_id, :task_id, :run_id, :tool_call_id,
+                             :checkpoint_id, :tool_name, :risk,
+                             :workspace_revision, :request_hash,
+                             CAST(:display_summary AS JSONB), 'pending',
+                             :requested_by, :requested_at, :expires_at,
+                             NULL, NULL, NULL)
+                        """
+                    ),
+                    {
+                        "approval_id": approval.approval_id,
+                        "task_id": approval.task_id,
+                        "run_id": approval.run_id,
+                        "tool_call_id": approval.tool_call_id,
+                        "checkpoint_id": approval.checkpoint_id,
+                        "tool_name": approval.tool_name,
+                        "risk": approval.risk.value,
+                        "workspace_revision": approval.workspace_revision,
+                        "request_hash": approval.request_hash,
+                        "display_summary": json.dumps(dict(summary)),
+                        "requested_by": approval.requested_by,
+                        "requested_at": requested_at,
+                        "expires_at": expires_at,
+                    },
+                )
+                updated = await session.execute(
+                    text(
+                        """
+                        UPDATE coding_tasks
+                        SET status = 'waiting_approval', updated_at = :now,
+                            last_activity_at = :now
+                        WHERE task_id = :task_id AND status = 'running'
+                        RETURNING task_id
+                        """
+                    ),
+                    {"task_id": lease.task_id, "now": requested_at},
+                )
+                if updated.first() is None:
+                    raise StaleExecutionLease(lease.task_id)
+                requested_event = await self._insert_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    seq=seq,
+                    event_type="approval.requested",
+                    payload=self._approval_event_payload(approval),
+                    now=requested_at,
+                    run_id=lease.run_id,
+                    tool_call_id=tool_call.tool_call_id,
+                    checkpoint_id=checkpoint.checkpoint_id,
+                )
+                status_event = await self._append_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    event_type="task.status.changed",
+                    payload={"status": "waiting_approval"},
+                    now=requested_at,
+                    run_id=lease.run_id,
+                    checkpoint_id=checkpoint.checkpoint_id,
+                )
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return ApprovalRequestCommit(
+            approval=approval,
+            checkpoint=checkpoint,
+            events=(requested_event, status_event),
+            created=True,
+        )
+
+    async def get_tool_approval(
+        self, *, task_id: str, run_id: str, tool_call_id: str
+    ) -> CodingApproval | None:
+        async with await self._session_factory() as session:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT approval_id, task_id, run_id, tool_call_id,
+                           checkpoint_id, tool_name, risk,
+                           workspace_revision, request_hash, display_summary,
+                           status, requested_by, requested_at, expires_at,
+                           decision, decided_by, decided_at
+                    FROM coding_approvals
+                    WHERE task_id = :task_id AND run_id = :run_id
+                      AND tool_call_id = :tool_call_id
+                    """
+                ),
+                {
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "tool_call_id": tool_call_id,
+                },
+            )
+            row = result.first()
+        return self._approval_from_row(row) if row is not None else None
 
     async def begin_phase(
         self,
@@ -1334,6 +1608,59 @@ class PostgresCodingRunRepository:
             expires_at=row[5],
             recovered=bool(row[6]),
         )
+
+    @staticmethod
+    def _approval_from_row(row) -> CodingApproval:
+        return CodingApproval(
+            approval_id=row[0],
+            task_id=row[1],
+            run_id=row[2],
+            tool_call_id=row[3],
+            checkpoint_id=row[4],
+            tool_name=row[5],
+            risk=ToolRisk(row[6]),
+            workspace_revision=row[7],
+            request_hash=row[8],
+            display_summary=dict(row[9]),
+            status=ApprovalStatus(row[10]),
+            requested_by=row[11],
+            requested_at=row[12],
+            expires_at=row[13],
+            decision=ApprovalDecision(row[14]) if row[14] is not None else None,
+            decided_by=row[15],
+            decided_at=row[16],
+        )
+
+    @staticmethod
+    def _approval_binding(
+        *,
+        lease: ExecutionLease,
+        tool_call: ToolCallCompleted,
+        validated: ValidatedToolCall,
+        checkpoint_id: str,
+        workspace_revision: str,
+    ) -> Mapping[str, object]:
+        return {
+            "task_id": lease.task_id,
+            "run_id": lease.run_id,
+            "tool_call_id": tool_call.tool_call_id,
+            "tool_name": validated.name,
+            "normalized_input": dict(validated.input),
+            "checkpoint_id": checkpoint_id,
+            "workspace_revision": workspace_revision,
+        }
+
+    @staticmethod
+    def _approval_event_payload(approval: CodingApproval) -> Mapping[str, object]:
+        return {
+            "approval_id": approval.approval_id,
+            "tool_name": approval.tool_name,
+            "risk": approval.risk.value,
+            "status": approval.status.value,
+            "requested_at": approval.requested_at.isoformat(),
+            "expires_at": approval.expires_at.isoformat(),
+            "display_summary": dict(approval.display_summary),
+        }
 
     @staticmethod
     def _lease_params(lease: ExecutionLease, **extra) -> dict[str, Any]:
