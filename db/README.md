@@ -181,4 +181,7 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/037_add_d
 # Tables for coding agent workflow loops
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/038_add_coding_phase0.sql
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/039_add_coding_runs_checkpoints.sql
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/040_add_coding_execution_leases.sql
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/041_add_coding_sandbox_bindings.sql
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/042_add_coding_approvals.sql
 ```
