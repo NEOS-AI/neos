@@ -137,8 +137,11 @@ async def test_acquire_lease_fences_expected_checkpoint_in_same_statement() -> N
 
     sql = "\n".join(session.sql)
     assert "checkpoint_matches" in sql
+    assert "run_id = :run_id" in sql
     assert "IS NOT DISTINCT FROM :expected_checkpoint_id" in sql
-    assert "status = 'running'" in sql
+    assert "ORDER BY candidate.attempt DESC" in sql
+    assert "canonical.run_id = :run_id" in sql
+    assert "canonical.status = 'running'" in sql
     assert session.params[0]["expected_checkpoint_id"] == "cc_expected"
     assert session.params[0]["validate_checkpoint"] is True
     assert lease is None

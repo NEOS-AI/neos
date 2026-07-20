@@ -16,7 +16,7 @@ from neos.coding.domain.durability import (
     ToolExecutionDisposition,
 )
 from neos.coding.domain.events import make_event
-
+from neos.coding.loop.base import EXPECTED_CHECKPOINT_OMITTED
 
 from neos.coding.domain.phases import (
     CodingCheckpoint,
@@ -32,9 +32,6 @@ from neos.coding.model.base import (
     TextDelta,
     ToolCallCompleted,
 )
-
-
-_EXPECTED_CHECKPOINT_OMITTED = object()
 
 
 def tool_turn(
@@ -171,6 +168,14 @@ class InMemoryCodingRunRepository:
         self.task_prompts = dict(task_prompts or {})
         self.task_statuses = {task_id: "queued" for task_id in self.task_prompts}
 
+    def _canonical_run(self, task_id):
+        runs_by_id = {
+            run.run_id: run for run in self.created_runs if run.task_id == task_id
+        }
+        if self.active_run is not None and self.active_run.task_id == task_id:
+            runs_by_id[self.active_run.run_id] = self.active_run
+        return max(runs_by_id.values(), key=lambda run: run.attempt, default=None)
+
     async def ensure_run_started(
         self,
         *,
@@ -265,16 +270,34 @@ class InMemoryCodingRunRepository:
         )[:limit]
 
     async def claimable_delivery_tokens(self, *, limit):
-        task_ids = await self.claimable_task_ids(limit=limit)
-        return tuple(
-            (
-                task_id,
-                self.checkpoints[-1].checkpoint_id
-                if self.checkpoints and self.checkpoints[-1].task_id == task_id
-                else None,
-            )
-            for task_id in task_ids
-        )
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        async with self._durability_lock:
+            deliveries = []
+            for task_id, task_status in self.task_statuses.items():
+                if task_status not in {"queued", "running"}:
+                    continue
+                canonical = self._canonical_run(task_id)
+                if canonical is None:
+                    continue
+                if canonical.status is not CodingRunStatus.RUNNING:
+                    continue
+                latest = max(
+                    (
+                        checkpoint
+                        for checkpoint in self.checkpoints
+                        if checkpoint.task_id == task_id
+                        and checkpoint.run_id == canonical.run_id
+                    ),
+                    key=lambda checkpoint: checkpoint.seq,
+                    default=None,
+                )
+                deliveries.append(
+                    (task_id, latest.checkpoint_id if latest is not None else None)
+                )
+                if len(deliveries) == limit:
+                    break
+            return tuple(deliveries)
 
     async def acquire_execution_lease(
         self,
@@ -284,19 +307,34 @@ class InMemoryCodingRunRepository:
         worker_id,
         now,
         expires_at,
-        expected_checkpoint_id=_EXPECTED_CHECKPOINT_OMITTED,
+        expected_checkpoint_id=EXPECTED_CHECKPOINT_OMITTED,
     ):
         async with self._durability_lock:
-            latest = next(
+            canonical = self._canonical_run(task_id)
+            if canonical is None:
+                return None
+            if (
+                canonical.run_id != run_id
+                or canonical.status is not CodingRunStatus.RUNNING
+            ):
+                return None
+            latest_checkpoint = max(
                 (
-                    checkpoint.checkpoint_id
-                    for checkpoint in reversed(self.checkpoints)
+                    checkpoint
+                    for checkpoint in self.checkpoints
                     if checkpoint.task_id == task_id
+                    and checkpoint.run_id == canonical.run_id
                 ),
-                None,
+                key=lambda checkpoint: checkpoint.seq,
+                default=None,
+            )
+            latest = (
+                latest_checkpoint.checkpoint_id
+                if latest_checkpoint is not None
+                else None
             )
             if (
-                expected_checkpoint_id is not _EXPECTED_CHECKPOINT_OMITTED
+                expected_checkpoint_id is not EXPECTED_CHECKPOINT_OMITTED
                 and latest != expected_checkpoint_id
             ):
                 return None

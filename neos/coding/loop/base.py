@@ -20,6 +20,9 @@ from neos.coding.domain.phases import (
 )
 
 
+EXPECTED_CHECKPOINT_OMITTED = object()
+
+
 @dataclass(frozen=True, slots=True)
 class LoopInput:
     task_id: str
@@ -71,7 +74,7 @@ class CodingRunRepository(Protocol):
         worker_id: str,
         now: datetime,
         expires_at: datetime,
-        expected_checkpoint_id: str | None = None,
+        expected_checkpoint_id: str | None | object = EXPECTED_CHECKPOINT_OMITTED,
     ) -> ExecutionLease | None: ...
 
     async def renew_execution_lease(

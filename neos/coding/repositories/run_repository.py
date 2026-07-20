@@ -18,7 +18,7 @@ from neos.coding.domain.durability import (
     ToolExecutionDisposition,
 )
 from neos.coding.domain.events import CodingEvent
-
+from neos.coding.loop.base import EXPECTED_CHECKPOINT_OMITTED
 
 from neos.coding.domain.phases import (
     CodingCheckpoint,
@@ -31,9 +31,6 @@ from neos.coding.domain.phases import (
     SteeringRequest,
 )
 from neos.coding.persistence.postgres import SessionFactory
-
-
-_EXPECTED_CHECKPOINT_OMITTED = object()
 
 
 class PostgresCodingRunRepository:
@@ -311,20 +308,28 @@ class PostgresCodingRunRepository:
             result = await session.execute(
                 text(
                     """
-                    SELECT task.task_id,
-                           (SELECT checkpoint.checkpoint_id
-                            FROM coding_checkpoints checkpoint
-                            WHERE checkpoint.task_id = task.task_id
-                            ORDER BY checkpoint.seq DESC
-                            LIMIT 1) AS checkpoint_id
+                    SELECT task.task_id, durable_checkpoint.checkpoint_id
                     FROM coding_tasks task
+                    JOIN LATERAL (
+                        SELECT candidate.run_id, candidate.status
+                        FROM coding_runs candidate
+                        WHERE candidate.task_id = task.task_id
+                        ORDER BY candidate.attempt DESC,
+                                 candidate.started_at DESC,
+                                 candidate.run_id DESC
+                        LIMIT 1
+                    ) canonical ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT checkpoint.checkpoint_id
+                        FROM coding_checkpoints checkpoint
+                        WHERE checkpoint.task_id = task.task_id
+                          AND checkpoint.run_id = canonical.run_id
+                        ORDER BY checkpoint.seq DESC
+                        LIMIT 1
+                    ) durable_checkpoint ON TRUE
                     WHERE task.deleted_at IS NULL
                       AND task.status IN ('queued', 'running')
-                      AND NOT EXISTS (
-                          SELECT 1 FROM coding_runs run
-                          WHERE run.task_id = task.task_id
-                            AND run.status IN ('completed', 'cancelled', 'failed')
-                      )
+                      AND canonical.status = 'running'
                     ORDER BY task.last_activity_at, task.task_id
                     LIMIT :limit
                     """
@@ -342,7 +347,7 @@ class PostgresCodingRunRepository:
         worker_id: str,
         now: datetime,
         expires_at: datetime,
-        expected_checkpoint_id: str | None | object = _EXPECTED_CHECKPOINT_OMITTED,
+        expected_checkpoint_id: str | None | object = EXPECTED_CHECKPOINT_OMITTED,
     ) -> ExecutionLease | None:
         async with await self._session_factory() as session:
             async with session.begin():
@@ -354,20 +359,28 @@ class PostgresCodingRunRepository:
                             FROM coding_run_leases
                             WHERE task_id = :task_id
                             FOR UPDATE
+                        ), canonical AS (
+                            SELECT candidate.run_id, candidate.status
+                            FROM coding_runs candidate
+                            WHERE candidate.task_id = :task_id
+                            ORDER BY candidate.attempt DESC,
+                                     candidate.started_at DESC,
+                                     candidate.run_id DESC
+                            LIMIT 1
                         ), checkpoint_matches AS (
                             SELECT 1
                             WHERE (:validate_checkpoint = FALSE OR
                                    (SELECT checkpoint_id
                                    FROM coding_checkpoints
                                    WHERE task_id = :task_id
+                                     AND run_id = :run_id
                                    ORDER BY seq DESC
                                    LIMIT 1)
                                   IS NOT DISTINCT FROM :expected_checkpoint_id)
                               AND EXISTS (
-                                  SELECT 1 FROM coding_runs
-                                  WHERE task_id = :task_id
-                                    AND run_id = :run_id
-                                    AND status = 'running'
+                                  SELECT 1 FROM canonical
+                                  WHERE canonical.run_id = :run_id
+                                    AND canonical.status = 'running'
                               )
                         ), acquired AS (
                             INSERT INTO coding_run_leases
@@ -406,11 +419,11 @@ class PostgresCodingRunRepository:
                         "expires_at": expires_at,
                         "expected_checkpoint_id": (
                             None
-                            if expected_checkpoint_id is _EXPECTED_CHECKPOINT_OMITTED
+                            if expected_checkpoint_id is EXPECTED_CHECKPOINT_OMITTED
                             else expected_checkpoint_id
                         ),
                         "validate_checkpoint": (
-                            expected_checkpoint_id is not _EXPECTED_CHECKPOINT_OMITTED
+                            expected_checkpoint_id is not EXPECTED_CHECKPOINT_OMITTED
                         ),
                     },
                 )

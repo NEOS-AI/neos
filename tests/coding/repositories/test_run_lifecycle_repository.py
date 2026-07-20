@@ -4,7 +4,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from neos.coding.domain.durability import ExecutionLease
-from neos.coding.domain.phases import CodingRunStatus
+from neos.coding.domain.phases import (
+    CodingCheckpoint,
+    CodingRun,
+    CodingRunStatus,
+)
 from neos.coding.repositories.run_repository import PostgresCodingRunRepository
 from tests.coding.fakes import InMemoryCodingRunRepository
 
@@ -216,6 +220,97 @@ async def test_claimable_delivery_tokens_use_latest_durable_checkpoint() -> None
     assert "FROM coding_checkpoints checkpoint" in sql
     assert "ORDER BY checkpoint.seq DESC" in sql
     assert deliveries == (("ct_new", "cc_latest"), ("ct_initial", None))
+
+
+async def test_claimable_delivery_tokens_filter_only_canonical_run_status() -> None:
+    session = FakeSession(rows=[[("ct_retry", "cc_retry")]])
+    repository = repository_for(session)
+
+    deliveries = await repository.claimable_delivery_tokens(limit=10)
+
+    sql = "\n".join(session.sql)
+    assert "LEFT JOIN LATERAL" in sql
+    assert "ORDER BY candidate.attempt DESC" in sql
+    assert "canonical.status = 'running'" in sql
+    assert "NOT EXISTS" not in sql
+    assert deliveries == (("ct_retry", "cc_retry"),)
+
+
+async def test_in_memory_delivery_tokens_are_per_task_and_canonical() -> None:
+    repository = InMemoryCodingRunRepository(
+        task_prompts={"ct_a": "A", "ct_b": "B", "ct_terminal": "done"}
+    )
+    old_running = CodingRun(
+        run_id="cr_a_1",
+        task_id="ct_a",
+        attempt=1,
+        status=CodingRunStatus.RUNNING,
+        resume_from_checkpoint_id=None,
+        started_at=NOW,
+    )
+    current_a = CodingRun(
+        run_id="cr_a_2",
+        task_id="ct_a",
+        attempt=2,
+        status=CodingRunStatus.RUNNING,
+        resume_from_checkpoint_id="cc_a",
+        started_at=NOW,
+    )
+    current_b = CodingRun(
+        run_id="cr_b_1",
+        task_id="ct_b",
+        attempt=1,
+        status=CodingRunStatus.RUNNING,
+        resume_from_checkpoint_id="cc_b",
+        started_at=NOW,
+    )
+    terminal = CodingRun(
+        run_id="cr_terminal_1",
+        task_id="ct_terminal",
+        attempt=1,
+        status=CodingRunStatus.FAILED,
+        resume_from_checkpoint_id=None,
+        started_at=NOW,
+        completed_at=NOW,
+    )
+    repository.created_runs = [old_running, current_a, current_b, terminal]
+    repository.checkpoints = [
+        CodingCheckpoint(
+            checkpoint_id="cc_a",
+            task_id="ct_a",
+            run_id="cr_a_2",
+            seq=1,
+            loop_state={},
+            workspace_revision="a",
+            created_at=NOW,
+        ),
+        CodingCheckpoint(
+            checkpoint_id="cc_b",
+            task_id="ct_b",
+            run_id="cr_b_1",
+            seq=2,
+            loop_state={},
+            workspace_revision="b",
+            created_at=NOW,
+        ),
+    ]
+    repository.task_statuses.update(
+        {"ct_a": "running", "ct_b": "running", "ct_terminal": "running"}
+    )
+
+    assert await repository.claimable_delivery_tokens(limit=10) == (
+        ("ct_a", "cc_a"),
+        ("ct_b", "cc_b"),
+    )
+
+    assert await repository.acquire_execution_lease(
+        task_id="ct_a",
+        run_id="cr_a_1",
+        worker_id="worker",
+        now=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+        expected_checkpoint_id="cc_a",
+    ) is None
 
 
 async def test_in_memory_lifecycle_matches_atomic_repository_contract() -> None:
