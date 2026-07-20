@@ -1,5 +1,7 @@
 import asyncio
+import json
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -9,8 +11,10 @@ from neos.workflow.deep_analysis.funnel_sample import QuestionCase
 from neos.workflow.deep_analysis.funnel_sample_runner import (
     PreflightError,
     preflight,
+    render_report,
     run_sample,
     sanitize_error,
+    write_artifacts,
 )
 
 
@@ -19,6 +23,130 @@ CASES = (
     QuestionCase("second", "technical", "Second?"),
     QuestionCase("third", "causal_policy", "Third?"),
 )
+
+RESULT = {
+    "schema_version": "1",
+    "question_set_version": "mixed-v1",
+    "dev_runs": [
+        {
+            "case_id": "fact-aspartame",
+            "category": "fact",
+            "question": "Declared evaluation question",
+            "profile": "dev",
+            "status": "completed",
+            "run_id": "dev-run",
+            "elapsed_seconds": 1.25,
+            "tokens_spent": 20,
+            "order": 0,
+            "signals": {
+                "claim_funnel": {
+                    "proposed": 4,
+                    "graded": 3,
+                    "deterministic_rejected": 2,
+                    "verified": 1,
+                    "rejected": 2,
+                    "unverified": 0,
+                    "evidence_missing_rate": 1 / 3,
+                    "source_dead_rate": 0.0,
+                    "quote_score_buckets": {
+                        "exact": 1,
+                        "above_threshold": 0,
+                        "near_miss": 1,
+                        "low": 1,
+                        "unavailable": 0,
+                    },
+                },
+                "report": {"body": "report body"},
+                "model_response": "private response",
+                "claims": ["private claim"],
+                "evidence": ["private evidence"],
+                "fetched_body": "private fetched body",
+                "url": "https://private.example",
+                "api_key": "sk-private",
+            },
+        }
+    ],
+    "selection": {
+        "case_id": "fact-aspartame",
+        "dominant_stage": "deterministic_rejection",
+        "dev_order": 0,
+    },
+    "default_run": {
+        "case_id": "fact-aspartame",
+        "category": "fact",
+        "question": "Declared evaluation question",
+        "profile": "default",
+        "status": "failed",
+        "run_id": "default-run",
+        "error": {
+            "type": "RuntimeError",
+            "stage": "collection",
+            "message": "https://error.example sk-error private exception",
+        },
+    },
+    "dev_funnel": {
+        "proposed": 4,
+        "graded": 3,
+        "deterministic_rejected": 2,
+        "verified": 1,
+        "rejected": 2,
+        "unverified": 0,
+        "evidence_missing_rate": 1 / 3,
+        "source_dead_rate": 0.0,
+        "quote_score_buckets": {
+            "exact": 1,
+            "above_threshold": 0,
+            "near_miss": 1,
+            "low": 1,
+            "unavailable": 0,
+        },
+    },
+}
+
+
+def test_write_artifacts_creates_timestamped_contract(tmp_path):
+    artifact_dir = write_artifacts(
+        RESULT,
+        tmp_path,
+        now=datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc),
+    )
+    assert artifact_dir.name == "20260719T120000Z"
+    assert json.loads((artifact_dir / "manifest.json").read_text())[
+        "schema_version"
+    ] == "1"
+    assert json.loads((artifact_dir / "funnel.json").read_text())[
+        "selection"
+    ]["case_id"] == "fact-aspartame"
+    report = (artifact_dir / "report.md").read_text()
+    assert "Dominant loss stage" in report
+    assert "deterministic_rejection" in report
+    serialized = "".join(path.read_text() for path in artifact_dir.iterdir())
+    for forbidden in (
+        "report body",
+        "private response",
+        "private claim",
+        "private evidence",
+        "private fetched body",
+        "https://private.example",
+        "sk-private",
+        "https://error.example",
+        "sk-error",
+        "private exception",
+    ):
+        assert forbidden not in serialized
+
+
+def test_write_artifacts_rejects_existing_directory(tmp_path):
+    fixed = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+    write_artifacts(RESULT, tmp_path, now=fixed)
+    with pytest.raises(FileExistsError):
+        write_artifacts(RESULT, tmp_path, now=fixed)
+
+
+def test_render_report_states_overlap_and_policy_contract():
+    report = render_report(RESULT)
+    assert "stages overlap" in report
+    assert "no policy was changed" in report
 
 
 class HealthySession:

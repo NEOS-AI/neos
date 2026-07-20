@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable, Iterable, Sequence
+from datetime import datetime, timezone
+import json
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select, text
@@ -18,6 +21,7 @@ from neos.workflow.deep_analysis.funnel_sample import (
     QuestionCase,
     aggregate_funnels,
     select_representative,
+    stage_metrics,
 )
 from neos.workflow.deep_analysis.jobs import execute_run
 from neos.workflow.deep_analysis.ledger import Ledger, create_run
@@ -35,6 +39,202 @@ class _CreatedRunError(RuntimeError):
         self.run_id = run_id
         self.stage = stage
         self.cause = cause
+
+
+_RUN_METADATA_FIELDS = (
+    "case_id",
+    "category",
+    "question",
+    "profile",
+    "status",
+    "run_id",
+    "elapsed_seconds",
+    "tokens_spent",
+    "order",
+    "error",
+)
+_FUNNEL_FIELDS = (
+    "proposed",
+    "graded",
+    "deterministic_passed",
+    "deterministic_rejected",
+    "agentic_attempted",
+    "agentic_passed",
+    "agentic_rejected",
+    "agentic_skipped",
+    "agentic_exhausted",
+    "verified",
+    "rejected",
+    "unverified",
+    "evidence_missing_rate",
+    "source_dead_rate",
+    "avg_evidence_count",
+    "avg_source_count",
+    "avg_excerpt_chars",
+    "quote_score_buckets",
+)
+
+
+def _safe_run_metadata(run: dict[str, Any] | None) -> dict[str, Any] | None:
+    if run is None:
+        return None
+    metadata = {
+        key: run[key]
+        for key in _RUN_METADATA_FIELDS
+        if key in run and key != "error"
+    }
+    error = run.get("error")
+    if isinstance(error, dict):
+        stage = error.get("stage", "execution")
+        metadata["error"] = {
+            "type": error.get("type", "Exception"),
+            "stage": stage
+            if stage in {"execution", "collection"}
+            else "execution",
+        }
+    return metadata
+
+
+def _safe_funnel(funnel: dict[str, Any]) -> dict[str, Any]:
+    return {key: funnel[key] for key in _FUNNEL_FIELDS if key in funnel}
+
+
+def _run_funnel(run: dict[str, Any]) -> dict[str, Any]:
+    signals = run.get("signals")
+    if not isinstance(signals, dict):
+        return {}
+    funnel = signals.get("claim_funnel")
+    return _safe_funnel(funnel) if isinstance(funnel, dict) else {}
+
+
+def render_report(result: dict[str, Any]) -> str:
+    """Render a concise report from the artifact-safe evaluation fields."""
+    runs = [*result.get("dev_runs", [])]
+    if result.get("default_run") is not None:
+        runs.append(result["default_run"])
+    rows = []
+    for run in runs:
+        funnel = _run_funnel(run)
+        rows.append(
+            "| {case_id} | {profile} | {status} | {elapsed} | {tokens} | "
+            "{proposed} | {graded} | {verified} | {rejected} | {unverified} |".format(
+                case_id=run.get("case_id", "-"),
+                profile=run.get("profile", "-"),
+                status=run.get("status", "-"),
+                elapsed=run.get("elapsed_seconds", "-"),
+                tokens=run.get("tokens_spent", "-"),
+                proposed=funnel.get("proposed", 0),
+                graded=funnel.get("graded", 0),
+                verified=funnel.get("verified", 0),
+                rejected=funnel.get("rejected", 0),
+                unverified=funnel.get("unverified", 0),
+            )
+        )
+
+    aggregate = _safe_funnel(result.get("dev_funnel", {}))
+    selection = result.get("selection") or {}
+    stage = selection.get("dominant_stage", "none")
+    metrics = stage_metrics(aggregate)
+    stage_metric = metrics.get(stage, {"count": 0, "rate": 0.0})
+    buckets = aggregate.get("quote_score_buckets", {})
+    failures = [
+        f"{run.get('case_id', '-')}/{run.get('profile', '-')}: "
+        f"{run['error'].get('type', 'Exception')} at {run['error'].get('stage', 'execution')}"
+        for run in runs
+        if isinstance(run.get("error"), dict)
+    ]
+    failure_lines = "\n".join(f"- {failure}" for failure in failures) or "- None"
+    default_funnel = _run_funnel(result.get("default_run") or {})
+    selected_dev = next(
+        (
+            run
+            for run in result.get("dev_runs", [])
+            if run.get("case_id") == selection.get("case_id")
+        ),
+        {},
+    )
+    dev_funnel = _run_funnel(selected_dev)
+    delta_fields = ("proposed", "graded", "verified", "rejected", "unverified")
+    deltas = ", ".join(
+        f"{field}={default_funnel.get(field, 0) - dev_funnel.get(field, 0)}"
+        for field in delta_fields
+    )
+    return (
+        "# Deep-analysis claim funnel sample\n\n"
+        "| Case ID | Profile | Status | Elapsed seconds | Tokens | Proposed | Graded | Verified | Rejected | Unverified |\n"
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|\n"
+        + "\n".join(rows)
+        + "\n\n"
+        f"- Dominant loss stage: `{stage}` — {stage_metric['count']} "
+        f"({stage_metric['rate']:.1%})\n"
+        f"- Quote buckets: {json.dumps(buckets, sort_keys=True)}\n"
+        f"- Evidence missing rate: {aggregate.get('evidence_missing_rate', 0):.1%}\n"
+        f"- Source dead rate: {aggregate.get('source_dead_rate', 0):.1%}\n"
+        f"- Default minus dev deltas: {deltas}\n\n"
+        "## Failures\n\n"
+        f"{failure_lines}\n\n"
+        "The stages overlap, and no policy was changed.\n"
+    )
+
+
+def write_artifacts(
+    result: dict[str, Any],
+    output_root: Path,
+    now: datetime | None = None,
+) -> Path:
+    """Write a new timestamped artifact directory without overwriting."""
+    timestamp = now or datetime.now(timezone.utc)
+    artifact_dir = output_root / timestamp.astimezone(timezone.utc).strftime(
+        "%Y%m%dT%H%M%SZ"
+    )
+    artifact_dir.mkdir(parents=True, exist_ok=False)
+    manifest = {
+        "schema_version": result.get("schema_version"),
+        "question_set_version": result.get("question_set_version"),
+        "dev_runs": [
+            _safe_run_metadata(run) for run in result.get("dev_runs", [])
+        ],
+        "default_run": _safe_run_metadata(result.get("default_run")),
+    }
+    funnel = {
+        "dev_runs": [
+            {
+                "case_id": run.get("case_id"),
+                "profile": run.get("profile"),
+                "claim_funnel": _run_funnel(run),
+            }
+            for run in result.get("dev_runs", [])
+        ],
+        "selection": (
+            {
+                key: result["selection"][key]
+                for key in ("case_id", "dominant_stage", "dev_order")
+                if key in result["selection"]
+            }
+            if isinstance(result.get("selection"), dict)
+            else None
+        ),
+        "default_run": {
+            "case_id": (result.get("default_run") or {}).get("case_id"),
+            "profile": (result.get("default_run") or {}).get("profile"),
+            "claim_funnel": _run_funnel(result.get("default_run") or {}),
+        },
+        "dev_funnel": _safe_funnel(result.get("dev_funnel", {})),
+    }
+    json_options = {
+        "ensure_ascii": False,
+        "indent": 2,
+        "sort_keys": True,
+        "default": str,
+    }
+    (artifact_dir / "manifest.json").write_text(
+        json.dumps(manifest, **json_options) + "\n"
+    )
+    (artifact_dir / "funnel.json").write_text(
+        json.dumps(funnel, **json_options) + "\n"
+    )
+    (artifact_dir / "report.md").write_text(render_report(result))
+    return artifact_dir
 
 
 async def preflight(settings_obj, session_factory) -> None:
