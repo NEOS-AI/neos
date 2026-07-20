@@ -6,7 +6,7 @@ import os
 import shutil
 import tarfile
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from neos.coding.sandbox.base import (

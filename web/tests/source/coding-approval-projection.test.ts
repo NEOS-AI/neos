@@ -49,3 +49,18 @@ test("resolution and task status update durable projection", () => {
   assert.equal(running.approvalsById.ca_1.status, "denied");
   assert.equal(running.taskStatus, "running");
 });
+
+test("snapshot plus live tail equals full approval replay", () => {
+  const requested = event(1, "approval.requested", approval);
+  const waiting = event(2, "task.status.changed", { status: "waiting_approval" });
+  const approved = event(3, "approval.approved", { ...approval, status: "approved" });
+  const running = event(4, "task.status.changed", { status: "running" });
+  const replayed = [requested, waiting, approved, running].reduce(
+    reduceProjectionEvent, emptyProjection("ct_1")
+  );
+  const restored = [approved, running].reduce(reduceProjectionEvent, {
+    ...reduceSnapshot(snapshot()), appliedSeq: 2,
+  });
+  assert.deepEqual(restored.approvalsById, replayed.approvalsById);
+  assert.equal(restored.taskStatus, replayed.taskStatus);
+});

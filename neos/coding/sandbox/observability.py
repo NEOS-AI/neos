@@ -137,8 +137,6 @@ class CodingToolAuditEvent:
 class CodingApprovalAuditEvent:
     """Sanitized, bounded metadata for an approval lifecycle transition."""
 
-    approval_id: str
-    task_id: str
     tool: str
     risk: str
     outcome: str

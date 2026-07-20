@@ -62,8 +62,6 @@ class CodingApprovalService:
             ).observe(latency)
         await self._audit.emit(
             CodingApprovalAuditEvent(
-                approval_id=approval.approval_id,
-                task_id=approval.task_id,
                 tool=approval.tool_name,
                 risk=approval.risk.value,
                 outcome=outcome,
