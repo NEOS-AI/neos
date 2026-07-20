@@ -71,15 +71,16 @@ async def execute_case(
     timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Execute one committed run and collect only run-scoped observations."""
-    async with session_factory() as session:
-        run_id = await create_run(
-            session, case.question, profile
-        )
-        await session.commit()
-
-    started = time.monotonic()
+    run_id: str | None = None
     stage = "execution"
     try:
+        async with session_factory() as session:
+            run_id = await create_run(
+                session, case.question, profile
+            )
+            await session.commit()
+
+        started = time.monotonic()
         await execute_fn(
             session_factory,
             run_id,
@@ -115,6 +116,8 @@ async def execute_case(
             "signals": signals,
         }
     except Exception as exc:
+        if run_id is None:
+            raise
         raise _CreatedRunError(run_id, stage, exc) from exc
 
 

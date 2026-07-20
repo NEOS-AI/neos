@@ -213,6 +213,67 @@ async def test_execution_failure_preserves_run_id_and_omits_sensitive_text(
 
 
 @pytest.mark.asyncio
+async def test_creation_context_exit_failure_preserves_run_id(monkeypatch):
+    @asynccontextmanager
+    async def session_factory():
+        yield _CommittedSession()
+        raise RuntimeError("sensitive context exit detail")
+
+    async def fake_create_run(session, question, profile):
+        return "context-exit-run"
+
+    async def unexpected_execute(*args, **kwargs):
+        pytest.fail("execution must not begin after creation context exit fails")
+
+    monkeypatch.setattr(runner, "create_run", fake_create_run)
+    result = await run_sample(
+        cases=CASES[:1],
+        session_factory=session_factory,
+        execute_fn=unexpected_execute,
+        secrets=[],
+    )
+
+    failure = result["dev_runs"][0]
+    assert failure["run_id"] == "context-exit-run"
+    assert failure["error"] == {
+        "type": "RuntimeError",
+        "stage": "execution",
+    }
+    assert "sensitive context exit detail" not in repr(failure)
+
+
+@pytest.mark.asyncio
+async def test_initial_clock_failure_preserves_run_id(monkeypatch):
+    async def fake_create_run(session, question, profile):
+        return "clock-run"
+
+    def failed_monotonic():
+        raise RuntimeError("sensitive clock detail")
+
+    async def unexpected_execute(*args, **kwargs):
+        pytest.fail("execution must not begin after the initial clock fails")
+
+    monkeypatch.setattr(runner, "create_run", fake_create_run)
+    monkeypatch.setattr(
+        runner, "time", SimpleNamespace(monotonic=failed_monotonic)
+    )
+    result = await run_sample(
+        cases=CASES[:1],
+        session_factory=committed_session_factory,
+        execute_fn=unexpected_execute,
+        secrets=[],
+    )
+
+    failure = result["dev_runs"][0]
+    assert failure["run_id"] == "clock-run"
+    assert failure["error"] == {
+        "type": "RuntimeError",
+        "stage": "execution",
+    }
+    assert "sensitive clock detail" not in repr(failure)
+
+
+@pytest.mark.asyncio
 async def test_collection_failure_preserves_run_id_and_omits_sensitive_text(
     monkeypatch,
 ):
