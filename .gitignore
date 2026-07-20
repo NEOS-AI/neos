@@ -41,3 +41,4 @@ jest-cache/
 # superpowers
 .superpowers/
 .worktrees/
+/artifacts/deep-analysis-funnel/

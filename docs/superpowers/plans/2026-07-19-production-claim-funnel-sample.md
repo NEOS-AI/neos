@@ -202,7 +202,7 @@ git commit -m "feat(deep-analysis): define production funnel sample analysis"
 - Consumes: `QUESTION_CASES`, `select_representative`, `create_run`, `execute_run`, `DeepAnalysisAnalyticsService.signals(run_id=...)`, `Ledger.total_spent()`, and `settings.config.deep_analysis.job_time_limit`.
 - Produces: `PreflightError`, `preflight(settings_obj, session_factory)`, `sanitize_error(exc, secrets)`, `execute_case(case, profile, ...)`, and `run_sample(...)`.
 
-- [ ] **Step 1: Write failing preflight and redaction tests**
+- [ ] **Step 1: Write failing preflight and content-free diagnostic tests**
 
 ```python
 @pytest.mark.asyncio
@@ -218,15 +218,17 @@ async def test_preflight_lists_missing_names_without_values():
         await preflight(fake_settings, healthy_session_factory)
 
 
-def test_sanitize_error_redacts_configured_secrets_and_truncates():
-    error = RuntimeError("provider rejected sk-live-secret " + "x" * 500)
+def test_sanitize_error_exposes_only_type_and_fixed_stage():
+    error = RuntimeError("sk-live-secret https://private.example report model claim")
     assert sanitize_error(error, ["sk-live-secret"]) == {
         "type": "RuntimeError",
-        "message": "provider rejected [REDACTED] " + "x" * 211,
+        "stage": "execution",
     }
 ```
 
-The exact truncation limit is 240 characters after whitespace normalization and secret replacement.
+Artifact-bound diagnostics never serialize exception messages. They contain
+only the exception type and an allowlisted `execution` or `collection` stage.
+Preflight errors may list missing configuration names but never values.
 
 - [ ] **Step 2: Run and verify RED**
 
@@ -234,7 +236,7 @@ Run: `.venv/bin/pytest tests/workflow/deep_analysis/test_funnel_sample_runner.py
 
 Expected: collection fails because the runner module does not exist.
 
-- [ ] **Step 3: Implement preflight and bounded error serialization**
+- [ ] **Step 3: Implement preflight and content-free error serialization**
 
 ```python
 class PreflightError(RuntimeError):
@@ -250,15 +252,17 @@ async def preflight(settings_obj, session_factory) -> None:
 
 
 def sanitize_error(exc: Exception, secrets: list[str | None]) -> dict[str, str]:
-    message = " ".join(str(exc).split())
-    for secret in (value for value in secrets if value):
-        message = message.replace(secret, "[REDACTED]")
-    return {"type": type(exc).__name__, "message": message[:240]}
+    del secrets
+    source = exc.cause if isinstance(exc, _CreatedRunError) else exc
+    stage = getattr(exc, "stage", "execution")
+    if stage not in {"execution", "collection"}:
+        stage = "execution"
+    return {"type": type(source).__name__, "stage": stage}
 ```
 
 - [ ] **Step 4: Write failing execution-isolation tests**
 
-Test three ordered cases with an injected `execute_case_fn` whose second call raises `RuntimeError`. Assert the third still runs, observations retain order, the failure contains only sanitized type/message, and cancellation propagates rather than becoming an observation. Test that `run_sample()` calls a sixth `default` execution only for the case returned by `select_representative` and never calls it when all dev runs fail.
+Test three ordered cases with an injected `execute_case_fn` whose second call raises `RuntimeError`. Assert the third still runs, observations retain order, the failure contains only exception type and fixed stage code, and cancellation propagates rather than becoming an observation. Prove execution and collection failures preserve the created `run_id`, and that exception text containing secrets, URLs, report/model/claim-like content is absent. Test that `run_sample()` calls a sixth `default` execution only for the case returned by `select_representative` and never calls it when all dev runs fail.
 
 ```python
 @pytest.mark.asyncio
@@ -276,7 +280,13 @@ async def test_run_sample_propagates_cancellation():
 
 - [ ] **Step 5: Implement sequential execution and collection**
 
-`execute_case()` must create and commit the run in one session, call `execute_run(..., timeout_seconds=job_time_limit)`, then open a fresh session to read `DARun.status`, scoped analytics, and `Ledger.total_spent()`. Measure elapsed time with `time.monotonic()`. Do not include `result["report_markdown"]` in the returned observation.
+`execute_case()` must create and commit the run in one session, then preserve that
+`run_id` through a created-run error boundary covering every later failure. The
+boundary assigns fixed stage `execution` while calling
+`execute_run(..., timeout_seconds=job_time_limit)`, then fixed stage `collection`
+while a fresh session reads `DARun.status`, scoped analytics, and
+`Ledger.total_spent()`. Measure elapsed time with `time.monotonic()`. Do not
+include `result["report_markdown"]` in the returned observation.
 
 `run_sample()` uses a plain `for` loop and catches only `Exception`. It appends a bounded failed observation and continues. It then calls `select_representative`; if selected, it executes that case once with `default`. Returned data contains schema version, question-set version, dev observations, selection metadata, optional default observation, and aggregate dev funnel.
 

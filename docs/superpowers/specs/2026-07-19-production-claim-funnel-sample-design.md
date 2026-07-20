@@ -95,8 +95,10 @@ stage.
 Outputs are written below a gitignored local artifact directory and are not
 committed automatically. Each execution receives a timestamped directory with:
 
-- `manifest.json`: schema version, question-set version, configuration names,
-  run IDs, statuses, elapsed seconds, and bounded error type/message;
+- `manifest.json`: schema version, question-set version, a `questions` object
+  with its own schema version and the exact declared case ID, category, and
+  question text for all five inputs, configuration names, run IDs, statuses,
+  elapsed seconds, and error type plus a fixed stage code;
 - `funnel.json`: per-run signals, aggregate dev signals, representative
   selection details, and the dev/default comparison;
 - `report.md`: concise tables, dominant-stage interpretation, caveats, and
@@ -104,7 +106,10 @@ committed automatically. Each execution receives a timestamped directory with:
 
 No API key, complete model response, fetched document body, excerpt, URL, or
 claim text is copied into diagnostics. Questions are retained because they are
-the declared evaluation inputs. Errors are truncated and sanitized.
+the declared evaluation inputs. Artifact-bound failures contain only the
+exception type and an allowlisted `execution` or `collection` stage code; they
+never contain exception messages. Preflight may name missing configuration
+variables but never their values.
 
 ## Failure and Cost Boundaries
 
