@@ -802,6 +802,8 @@ class CodingModelConfig(StrictConfigModel):
         default_factory=lambda: ["pytest", "ruff", "mypy", "pnpm", "git"]
     )
     mutation_snapshot_interval: int = Field(default=5, gt=0)
+    approval_ttl_seconds: int = Field(default=900, gt=0)
+    approval_reconciliation_batch_size: int = Field(default=100, gt=0, le=1000)
 
     @model_validator(mode="after")
     def validate_command_policy(self) -> "CodingModelConfig":

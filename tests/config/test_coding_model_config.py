@@ -37,6 +37,8 @@ def priced_real_config(**overrides):
         ("max_transcript_bytes", 0),
         ("max_cost_usd", 0),
         ("mutation_snapshot_interval", 0),
+        ("approval_ttl_seconds", 0),
+        ("approval_reconciliation_batch_size", 0),
     ],
 )
 def test_coding_model_budgets_must_be_positive(field, value) -> None:
@@ -86,3 +88,13 @@ def test_anthropic_secret_is_redacted() -> None:
     config = AppConfig.model_validate(priced_real_config())
     assert "secret-value" not in repr(config)
     assert "secret-value" not in str(config)
+
+
+def test_coding_approval_defaults_are_bounded() -> None:
+    config = CodingModelConfig()
+
+    assert config.approval_ttl_seconds == 900
+    assert config.approval_reconciliation_batch_size == 100
+
+    with pytest.raises(ValidationError):
+        CodingModelConfig(approval_reconciliation_batch_size=1001)
