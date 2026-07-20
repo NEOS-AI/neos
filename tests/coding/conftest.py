@@ -13,6 +13,7 @@ from neos.coding.application.task_service import (
 from neos.coding.domain.phases import CodingPhaseKind
 from neos.coding.events.store import InMemoryCodingEventStore
 from neos.coding.loop.anthropic import AnthropicCodingLoop, AnthropicLoopConfig
+from neos.coding.domain.approvals import ApprovalPolicyOutcome
 from neos.coding.sandbox.base import SandboxLimits
 from neos.coding.sandbox.bindings import SandboxBindingService
 from neos.coding.sandbox.memory import MemorySandboxProvider
@@ -155,7 +156,10 @@ class RealLoopHarness:
 async def real_loop_harness(tmp_path):
     harnesses = []
 
-    async def create(*, script, metrics=None, audit=None, crash_after=None):
+    async def create(
+        *, script, metrics=None, audit=None, crash_after=None,
+        approval_evaluator=lambda _call: ApprovalPolicyOutcome.ALLOW,
+    ):
         now = SimpleNamespace(value=datetime(2026, 7, 19, tzinfo=UTC))
         provider = MemorySandboxProvider(root=tmp_path / f"sandbox-{len(harnesses)}")
         repository = CrashRepository(
@@ -183,6 +187,7 @@ async def real_loop_harness(tmp_path):
             metrics=metrics,
             audit=audit,
             clock=lambda: now.value,
+            approval_evaluator=approval_evaluator,
         )
         runs = CodingRunService(
             tasks=tasks_repository,

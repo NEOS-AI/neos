@@ -11,6 +11,12 @@ from neos.coding.domain.durability import (
     StaleExecutionLease,
     ToolExecutionDisposition,
 )
+from neos.coding.domain.approvals import (
+    ApprovalDecision,
+    ApprovalPolicyOutcome,
+    evaluate_approval,
+)
+from neos.coding.domain.phases import CodingRun, CodingRunStatus
 from neos.coding.domain.events import make_event
 from neos.coding.loop.anthropic import (
     AnthropicCodingLoop,
@@ -129,9 +135,14 @@ def harness(
     config=None,
     audit=None,
     bindings=None,
+    approval_evaluator=lambda _call: ApprovalPolicyOutcome.ALLOW,
 ):
     repository = InMemoryCodingRunRepository(completed_tools=completed_tools)
     repository.execution_leases["ct_1"] = LEASE
+    run = CodingRun("cr_1", "ct_1", 1, CodingRunStatus.RUNNING, None, NOW)
+    repository.active_run = run
+    repository.created_runs = [run]
+    repository.task_statuses["ct_1"] = "running"
     events = Events()
     model = Model(turns)
     executor = executor or Executor()
@@ -144,6 +155,7 @@ def harness(
         config=config or AnthropicLoopConfig(model="claude-test", system="code"),
         audit=audit,
         clock=lambda: NOW,
+        approval_evaluator=approval_evaluator,
     )
     deps = LoopDependencies(repository=repository, events=events, lease=LEASE)
     return Harness(loop, repository, events, model, executor, bindings, deps)
@@ -164,6 +176,55 @@ async def test_one_invocation_executes_and_checkpoints_one_tool_call() -> None:
     assert h.bindings.session.writes == 1
     assert h.repository.checkpoints[-1].loop_state["pending_tool_index"] == 1
     assert sum(event.type == "tool.completed" for event in events) == 1
+
+
+@pytest.mark.asyncio
+async def test_workspace_write_requests_approval_before_claim_or_execution() -> None:
+    h = harness([[tool_call(), completed()]], approval_evaluator=evaluate_approval)
+
+    events = await collect(h)
+
+    assert [event.type for event in events] == [
+        "approval.requested",
+        "task.status.changed",
+    ]
+    assert h.repository.tool_execution_calls == []
+    assert h.bindings.session.writes == 0
+
+
+@pytest.mark.asyncio
+async def test_approved_write_resumes_existing_claim_path_once() -> None:
+    h = harness([[tool_call(), completed()]], approval_evaluator=evaluate_approval)
+    await collect(h)
+    requested = next(iter(h.repository.approvals.values()))
+    await h.repository.resolve_tool_approval(
+        task_id="ct_1", approval_id=requested.approval_id,
+        owner_id="test-owner", decision=ApprovalDecision.APPROVE,
+        now=NOW + timedelta(seconds=1),
+    )
+
+    await collect(h, h.repository.checkpoints[-1])
+
+    assert h.bindings.session.writes == 1
+    assert len(h.repository.tool_execution_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_denied_write_commits_result_without_execution() -> None:
+    h = harness([[tool_call(), completed()]], approval_evaluator=evaluate_approval)
+    await collect(h)
+    requested = next(iter(h.repository.approvals.values()))
+    await h.repository.resolve_tool_approval(
+        task_id="ct_1", approval_id=requested.approval_id,
+        owner_id="test-owner", decision=ApprovalDecision.DENY,
+        now=NOW + timedelta(seconds=1),
+    )
+
+    events = await collect(h, h.repository.checkpoints[-1])
+
+    assert h.bindings.session.writes == 0
+    assert events[-1].type == "tool.denied"
+    assert h.repository.checkpoints[-1].loop_state["pending_tool_index"] == 1
 
 
 @pytest.mark.asyncio

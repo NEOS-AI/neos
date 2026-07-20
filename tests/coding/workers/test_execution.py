@@ -76,6 +76,20 @@ async def test_runner_advances_exactly_one_safe_point_per_delivery() -> None:
     assert runs.advance_calls == [("ct_1", "worker-1")]
 
 
+async def test_runner_returns_waiting_without_retrying_approval_checkpoint() -> None:
+    runs = RecordingRuns([SimpleNamespace(type="approval.requested")])
+
+    outcome = await CodingTaskRunner(runs=runs).run(
+        task_id="ct_1",
+        worker_id="worker-1",
+        failure_error_code="worker_retry_exhausted",
+    )
+
+    assert outcome is CodingTaskOutcome.WAITING_APPROVAL
+    assert runs.advance_calls == [("ct_1", "worker-1")]
+    assert runs.fail_calls == []
+
+
 @pytest.mark.parametrize(
     ("effect", "expected"),
     [
