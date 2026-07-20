@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -147,6 +148,51 @@ def test_render_report_states_overlap_and_policy_contract():
     report = render_report(RESULT)
     assert "stages overlap" in report
     assert "no policy was changed" in report
+
+
+def test_artifacts_drop_adversarial_nested_funnel_and_error_metadata(tmp_path):
+    result = deepcopy(RESULT)
+    secret = "sk-adversarial-secret"
+    url = "https://adversarial.example/private"
+    report_text = "adversarial report body"
+    unsafe_bucket = {
+        "exact": url,
+        "above_threshold": -2,
+        "near_miss": float("inf"),
+        "low": True,
+        "unavailable": 5,
+        "extra": {"url": url, "secret": secret, "report": report_text},
+    }
+    result["dev_funnel"]["quote_score_buckets"] = unsafe_bucket
+    result["dev_runs"][0]["signals"]["claim_funnel"][
+        "quote_score_buckets"
+    ] = unsafe_bucket
+    result["default_run"]["error"] = {
+        "type": f"RuntimeError_{secret}",
+        "stage": f"collection_{url}",
+    }
+
+    artifact_dir = write_artifacts(
+        result,
+        tmp_path,
+        now=datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+    )
+    serialized = {
+        path.name: path.read_text() for path in artifact_dir.iterdir()
+    }
+
+    for content in serialized.values():
+        assert secret not in content
+        assert url not in content
+        assert report_text not in content
+        assert '"extra"' not in content
+    assert '"type": "UnknownError"' in serialized["manifest.json"]
+    assert '"stage": "execution"' in serialized["manifest.json"]
+    assert "UnknownError at execution" in serialized["report.md"]
+    funnel = json.loads(serialized["funnel.json"])
+    assert funnel["dev_funnel"]["quote_score_buckets"] == {
+        "unavailable": 5
+    }
 
 
 class HealthySession:

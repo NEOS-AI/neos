@@ -6,7 +6,9 @@ import time
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
+import re
 from typing import Any
 
 from sqlalchemy import select, text
@@ -73,6 +75,20 @@ _FUNNEL_FIELDS = (
     "avg_excerpt_chars",
     "quote_score_buckets",
 )
+_QUOTE_BUCKETS = (
+    "exact",
+    "above_threshold",
+    "near_miss",
+    "low",
+    "unavailable",
+)
+_ERROR_TYPE_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_STAGES = {
+    "proposal_to_grade",
+    "deterministic_rejection",
+    "agentic_loss",
+    "final_unresolved",
+}
 
 
 def _safe_run_metadata(run: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -86,8 +102,14 @@ def _safe_run_metadata(run: dict[str, Any] | None) -> dict[str, Any] | None:
     error = run.get("error")
     if isinstance(error, dict):
         stage = error.get("stage", "execution")
+        error_type = error.get("type")
         metadata["error"] = {
-            "type": error.get("type", "Exception"),
+            "type": (
+                error_type
+                if isinstance(error_type, str)
+                and _ERROR_TYPE_PATTERN.fullmatch(error_type)
+                else "UnknownError"
+            ),
             "stage": stage
             if stage in {"execution", "collection"}
             else "execution",
@@ -96,7 +118,42 @@ def _safe_run_metadata(run: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _safe_funnel(funnel: dict[str, Any]) -> dict[str, Any]:
-    return {key: funnel[key] for key in _FUNNEL_FIELDS if key in funnel}
+    safe = {}
+    for key in _FUNNEL_FIELDS:
+        value = funnel.get(key)
+        if key == "quote_score_buckets":
+            if isinstance(value, dict):
+                safe[key] = {
+                    bucket: count
+                    for bucket in _QUOTE_BUCKETS
+                    if (count := value.get(bucket)) is not None
+                    and _is_safe_number(count)
+                }
+        elif _is_safe_number(value):
+            safe[key] = value
+    return safe
+
+
+def _is_safe_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
+
+
+def _safe_selection(selection: Any) -> dict[str, Any] | None:
+    if not isinstance(selection, dict):
+        return None
+    safe = {
+        key: selection[key]
+        for key in ("case_id", "dev_order")
+        if key in selection
+    }
+    stage = selection.get("dominant_stage")
+    safe["dominant_stage"] = stage if stage in _STAGES else "none"
+    return safe
 
 
 def _run_funnel(run: dict[str, Any]) -> dict[str, Any]:
@@ -109,12 +166,16 @@ def _run_funnel(run: dict[str, Any]) -> dict[str, Any]:
 
 def render_report(result: dict[str, Any]) -> str:
     """Render a concise report from the artifact-safe evaluation fields."""
-    runs = [*result.get("dev_runs", [])]
+    raw_runs = [*result.get("dev_runs", [])]
     if result.get("default_run") is not None:
-        runs.append(result["default_run"])
+        raw_runs.append(result["default_run"])
+    runs = [
+        {**(_safe_run_metadata(run) or {}), "claim_funnel": _run_funnel(run)}
+        for run in raw_runs
+    ]
     rows = []
     for run in runs:
-        funnel = _run_funnel(run)
+        funnel = run["claim_funnel"]
         rows.append(
             "| {case_id} | {profile} | {status} | {elapsed} | {tokens} | "
             "{proposed} | {graded} | {verified} | {rejected} | {unverified} |".format(
@@ -132,7 +193,7 @@ def render_report(result: dict[str, Any]) -> str:
         )
 
     aggregate = _safe_funnel(result.get("dev_funnel", {}))
-    selection = result.get("selection") or {}
+    selection = _safe_selection(result.get("selection")) or {}
     stage = selection.get("dominant_stage", "none")
     metrics = stage_metrics(aggregate)
     stage_metric = metrics.get(stage, {"count": 0, "rate": 0.0})
@@ -144,16 +205,16 @@ def render_report(result: dict[str, Any]) -> str:
         if isinstance(run.get("error"), dict)
     ]
     failure_lines = "\n".join(f"- {failure}" for failure in failures) or "- None"
-    default_funnel = _run_funnel(result.get("default_run") or {})
+    default_funnel = runs[-1]["claim_funnel"] if result.get("default_run") else {}
     selected_dev = next(
         (
             run
-            for run in result.get("dev_runs", [])
+            for run in runs[: len(result.get("dev_runs", []))]
             if run.get("case_id") == selection.get("case_id")
         ),
         {},
     )
-    dev_funnel = _run_funnel(selected_dev)
+    dev_funnel = selected_dev.get("claim_funnel", {})
     delta_fields = ("proposed", "graded", "verified", "rejected", "unverified")
     deltas = ", ".join(
         f"{field}={default_funnel.get(field, 0) - dev_funnel.get(field, 0)}"
@@ -205,15 +266,7 @@ def write_artifacts(
             }
             for run in result.get("dev_runs", [])
         ],
-        "selection": (
-            {
-                key: result["selection"][key]
-                for key in ("case_id", "dominant_stage", "dev_order")
-                if key in result["selection"]
-            }
-            if isinstance(result.get("selection"), dict)
-            else None
-        ),
+        "selection": _safe_selection(result.get("selection")),
         "default_run": {
             "case_id": (result.get("default_run") or {}).get("case_id"),
             "profile": (result.get("default_run") or {}).get("profile"),
