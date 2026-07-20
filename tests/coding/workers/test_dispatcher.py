@@ -44,29 +44,32 @@ def test_dispatcher_publishes_only_task_identity_to_coding_queue() -> None:
     dispatcher = CeleryCodingTaskDispatcher(app=app, queue="coding")
 
     delivery_id = dispatcher.enqueue(
-        "ct_1", source=CodingDispatchSource.API
+        "ct_1", expected_checkpoint_id=None, source=CodingDispatchSource.API
     )
 
     assert delivery_id == "delivery-1"
-    assert app.calls == [(EXECUTE_CODING_TASK, ["ct_1"], "coding")]
+    assert app.calls == [(EXECUTE_CODING_TASK, ["ct_1", None], "coding")]
 
 
 def test_dispatch_source_is_a_bounded_enum() -> None:
     assert {item.value for item in CodingDispatchSource} == {
         "api",
         "reconciliation",
+        "continuation",
     }
 
 
 def test_dispatch_failure_records_only_bounded_labels() -> None:
     app = RecordingCeleryApp(error=ConnectionError("broker down"))
     metrics = RecordingMetrics()
-    dispatcher = CeleryCodingTaskDispatcher(
-        app=app, queue="coding", metrics=metrics
-    )
+    dispatcher = CeleryCodingTaskDispatcher(app=app, queue="coding", metrics=metrics)
 
     with pytest.raises(ConnectionError, match="broker down"):
-        dispatcher.enqueue("ct_secret", source=CodingDispatchSource.API)
+        dispatcher.enqueue(
+            "ct_secret",
+            expected_checkpoint_id=None,
+            source=CodingDispatchSource.API,
+        )
 
     assert metrics.coding_dispatch_total.records == [
         {"source": "api", "outcome": "failed"}

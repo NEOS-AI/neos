@@ -5,6 +5,7 @@ from typing import Any, AsyncIterator, Mapping, Protocol
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.durability import (
     ExecutionLease,
+    ModelCheckpointCommit,
     PhaseCheckpointCommit,
     PhaseStart,
     RunLifecycleCommit,
@@ -17,6 +18,9 @@ from neos.coding.domain.phases import (
     CodingPhaseKind,
     SteeringRequest,
 )
+
+
+EXPECTED_CHECKPOINT_OMITTED = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +62,10 @@ class CodingRunRepository(Protocol):
 
     async def claimable_task_ids(self, *, limit: int) -> tuple[str, ...]: ...
 
+    async def claimable_delivery_tokens(
+        self, *, limit: int
+    ) -> tuple[tuple[str, str | None], ...]: ...
+
     async def acquire_execution_lease(
         self,
         *,
@@ -66,6 +74,7 @@ class CodingRunRepository(Protocol):
         worker_id: str,
         now: datetime,
         expires_at: datetime,
+        expected_checkpoint_id: str | None | object = EXPECTED_CHECKPOINT_OMITTED,
     ) -> ExecutionLease | None: ...
 
     async def renew_execution_lease(
@@ -116,6 +125,17 @@ class CodingRunRepository(Protocol):
         workspace_revision: str,
         now: datetime,
     ) -> PhaseCheckpointCommit: ...
+
+    async def commit_model_checkpoint(
+        self,
+        *,
+        lease: ExecutionLease,
+        event_type: str,
+        event_payload: Mapping[str, Any],
+        loop_state: Mapping[str, Any],
+        workspace_revision: str,
+        now: datetime,
+    ) -> ModelCheckpointCommit: ...
 
     async def apply_steering_at_safe_point(
         self,

@@ -2,7 +2,11 @@ from datetime import UTC, datetime
 
 from neos.coding.events.store import InMemoryCodingEventStore
 from neos.coding.loop.fake import FakeDurableCodingLoop
+import pytest
+
+import neos.coding.runtime as runtime_module
 from neos.coding.runtime import create_coding_runtime
+from neos.config.schema import AppConfig
 from tests.coding.fakes import InMemoryCodingRunRepository
 
 
@@ -37,5 +41,75 @@ async def test_runtime_owns_injected_sandbox_provider() -> None:
     assert runtime.sandboxes is provider
     await runtime.close()
     await runtime.close()
+
+    assert provider.close_count == 1
+
+
+def test_development_prepares_real_loop_before_provider_allocation(monkeypatch) -> None:
+    config = AppConfig.model_validate({
+        "coding_model": {
+            "enabled": True,
+            "input_cost_micros_per_million": 1,
+            "output_cost_micros_per_million": 1,
+        },
+        "sandbox": {"enabled": True},
+        "secrets": {"anthropic_api_key": "test"},
+    })
+    allocations = []
+    monkeypatch.setattr(runtime_module.settings, "CODING_FAKE_LOOP_ENABLED", False)
+    monkeypatch.setattr(runtime_module.settings, "CODING_CELERY_ENABLED", False)
+    monkeypatch.setattr(
+        runtime_module,
+        "_prepare_real_coding_loop",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("prepare failed")),
+    )
+    monkeypatch.setattr(
+        runtime_module, "create_sandbox_provider", lambda config: allocations.append(config)
+    )
+
+    with pytest.raises(RuntimeError, match="prepare failed"):
+        runtime_module.create_development_coding_runtime(config=config)
+
+    assert allocations == []
+
+
+@pytest.mark.parametrize("failure_point", ["finish", "notifier"])
+def test_development_closes_provider_once_after_allocation_failure(
+    monkeypatch, failure_point
+) -> None:
+    config = AppConfig.model_validate({
+        "coding_model": {
+            "enabled": True,
+            "input_cost_micros_per_million": 1,
+            "output_cost_micros_per_million": 1,
+        },
+        "sandbox": {"enabled": True},
+        "secrets": {"anthropic_api_key": "test"},
+    })
+    provider = RecordingSandboxProvider()
+    monkeypatch.setattr(runtime_module.settings, "CODING_FAKE_LOOP_ENABLED", False)
+    monkeypatch.setattr(
+        runtime_module.settings, "CODING_CELERY_ENABLED", failure_point == "notifier"
+    )
+    monkeypatch.setattr(
+        runtime_module, "create_sandbox_provider", lambda config: provider
+    )
+    if failure_point == "finish":
+        monkeypatch.setattr(
+            runtime_module,
+            "_prepare_real_coding_loop",
+            lambda **kwargs: lambda provider: (_ for _ in ()).throw(
+                RuntimeError("finish failed")
+            ),
+        )
+    else:
+        monkeypatch.setattr(
+            runtime_module,
+            "validate_coding_worker_settings",
+            lambda settings: (_ for _ in ()).throw(RuntimeError("notifier failed")),
+        )
+
+    with pytest.raises(RuntimeError, match=f"{failure_point} failed"):
+        runtime_module.create_development_coding_runtime(config=config)
 
     assert provider.close_count == 1

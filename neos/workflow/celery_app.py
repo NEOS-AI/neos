@@ -18,16 +18,30 @@ from neos.config.settings import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+
+def create_celery_app(candidate, *, name: str = "neos_workflow"):
+    created = Celery(
+        name,
+        broker=candidate.CELERY_BROKER_URL,
+        backend=candidate.CELERY_RESULT_BACKEND,
+        include=["neos.coding.workers.celery_tasks"],
+    )
+    created.conf.update(
+        broker_url=candidate.CELERY_BROKER_URL,
+        result_backend=candidate.CELERY_RESULT_BACKEND,
+    )
+    created.conf.broker_url = candidate.CELERY_BROKER_URL
+    created.conf.result_backend = candidate.CELERY_RESULT_BACKEND
+    return created
+
+
 # Celery 앱 생성
-app = Celery(
-    'neos_workflow',
-    broker=settings.CELERY_BROKER_URL,
-    backend=settings.CELERY_RESULT_BACKEND,
-    include=["neos.coding.workers.celery_tasks"],
-)
+app = create_celery_app(settings)
 
 # Celery 설정
 app.conf.update(
+    broker_url=settings.CELERY_BROKER_URL,
+    result_backend=settings.CELERY_RESULT_BACKEND,
     # 직렬화
     task_serializer=settings.CELERY_TASK_SERIALIZER,
     result_serializer=settings.CELERY_RESULT_SERIALIZER,
@@ -82,6 +96,10 @@ app.conf.update(
     # OpenTelemetry 통합 (Phase 3)
     task_send_sent_event=True,  # 태스크 전송 이벤트
 )
+# Celery may reuse a named app during module reloads (worker boot tests and
+# prefork initialization). Rebind transport settings from the current config.
+app.conf.broker_url = settings.CELERY_BROKER_URL
+app.conf.result_backend = settings.CELERY_RESULT_BACKEND
 
 
 @worker_process_init.connect

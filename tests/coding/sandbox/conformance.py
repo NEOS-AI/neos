@@ -59,7 +59,10 @@ class SandboxProviderConformance:
             limits=SandboxLimits.safe_defaults(),
         )
         session = await provider.open_session(sandbox.sandbox_id)
-        await session.write_file("main.py", b"print('contract')\n")
+        assert await session.workspace_revision() == 0
+        revision = await session.write_file("main.py", b"print('contract')\n")
+        assert revision == 1
+        assert await session.workspace_revision() == revision
         assert await session.read_file("main.py") == b"print('contract')\n"
         matches = await session.search_text(
             "contract",

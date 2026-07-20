@@ -24,11 +24,17 @@ class EmptyProjectionRepository:
 
 class EagerRecordingDispatcher:
     def __init__(self) -> None:
-        self.deliveries: list[str] = []
+        self.deliveries: list[tuple[str, str | None]] = []
 
-    def enqueue(self, task_id: str, *, source: CodingDispatchSource) -> str:
-        assert source is CodingDispatchSource.API
-        self.deliveries.append(task_id)
+    def enqueue(
+        self,
+        task_id: str,
+        *,
+        expected_checkpoint_id: str | None,
+        source: CodingDispatchSource,
+    ) -> str:
+        assert source in {CodingDispatchSource.API, CodingDispatchSource.CONTINUATION}
+        self.deliveries.append((task_id, expected_checkpoint_id))
         return f"delivery-{len(self.deliveries)}"
 
 
@@ -63,9 +69,7 @@ class CeleryWorkerHarness:
         self.tasks = CodingTaskService(
             self.task_repository, self.events, clock=lambda: self.now
         )
-        self.repository = InMemoryCodingRunRepository(
-            task_prompts={task_id: prompt}
-        )
+        self.repository = InMemoryCodingRunRepository(task_prompts={task_id: prompt})
         self.runtime = create_coding_runtime(
             events=self.events,
             tasks=self.task_repository,
@@ -78,7 +82,9 @@ class CeleryWorkerHarness:
         self.dispatcher = EagerRecordingDispatcher()
         self.tasks.set_task_created_notifier(
             lambda task_id: self.dispatcher.enqueue(
-                task_id, source=CodingDispatchSource.API
+                task_id,
+                expected_checkpoint_id=None,
+                source=CodingDispatchSource.API,
             )
         )
 
@@ -92,14 +98,23 @@ class CeleryWorkerHarness:
 
     async def drain_deliveries(self) -> list[CodingTaskOutcome]:
         outcomes = []
-        for index, task_id in enumerate(self.dispatcher.deliveries, start=1):
-            outcomes.append(
-                await CodingTaskRunner(runs=self.runtime.runs).run(
-                    task_id=task_id,
-                    worker_id=f"celery-{index}",
-                    failure_error_code="worker_retry_exhausted",
-                )
+        for index, delivery in enumerate(self.dispatcher.deliveries, start=1):
+            task_id, expected_checkpoint_id = delivery
+            outcome = await CodingTaskRunner(runs=self.runtime.runs).run(
+                task_id=task_id,
+                worker_id=f"celery-{index}",
+                failure_error_code="worker_retry_exhausted",
+                expected_checkpoint_id=expected_checkpoint_id,
             )
+            outcomes.append(outcome)
+            if outcome is CodingTaskOutcome.CONTINUING:
+                self.dispatcher.enqueue(
+                    task_id,
+                    expected_checkpoint_id=(
+                        self.repository.checkpoints[-1].checkpoint_id
+                    ),
+                    source=CodingDispatchSource.CONTINUATION,
+                )
         return outcomes
 
     def completed_tool_count(self, tool_call_id: str) -> int:
@@ -115,27 +130,25 @@ async def test_post_commit_delivery_runs_fake_loop_to_completion() -> None:
     task = await harness.create_task()
     outcomes = await harness.drain_deliveries()
 
-    assert outcomes == [CodingTaskOutcome.COMPLETED]
+    assert outcomes[-1] is CodingTaskOutcome.COMPLETED
+    assert all(item is CodingTaskOutcome.CONTINUING for item in outcomes[:-1])
     assert harness.repository.active_run.task_id == task.task_id
     assert harness.repository.task_statuses[task.task_id] == "completed"
-    assert harness.repository.checkpoints[0].loop_state[
-        "current_instruction"
-    ] == "Fix it"
-
-
-async def test_late_duplicate_delivery_reuses_terminal_canonical_run() -> None:
-    harness = CeleryWorkerHarness(
-        task_id="ct_duplicate", prompt="Fix it"
+    assert (
+        harness.repository.checkpoints[0].loop_state["current_instruction"] == "Fix it"
     )
+
+
+async def test_redelivered_initial_generation_cannot_advance_twice() -> None:
+    harness = CeleryWorkerHarness(task_id="ct_duplicate", prompt="Fix it")
     await harness.create_task()
     harness.duplicate_last_delivery()
 
     outcomes = await harness.drain_deliveries()
 
-    assert outcomes == [
-        CodingTaskOutcome.COMPLETED,
-        CodingTaskOutcome.COMPLETED,
-    ]
+    assert outcomes[0] is CodingTaskOutcome.CONTINUING
+    assert outcomes[1] is CodingTaskOutcome.LEASE_BUSY
+    assert outcomes[-1] is CodingTaskOutcome.COMPLETED
     assert len(harness.repository.created_runs) == 1
     assert harness.completed_tool_count("fake_understand_0") == 1
 
@@ -159,11 +172,15 @@ async def test_replacement_delivery_resumes_after_committed_checkpoint() -> None
         pass
     harness.now += timedelta(seconds=31)
 
-    outcome = await CodingTaskRunner(runs=harness.runtime.runs).run(
-        task_id=harness.task_id,
-        worker_id="celery-replacement",
-        failure_error_code="worker_retry_exhausted",
-    )
+    outcome = CodingTaskOutcome.CONTINUING
+    delivery = 0
+    while outcome is CodingTaskOutcome.CONTINUING:
+        delivery += 1
+        outcome = await CodingTaskRunner(runs=harness.runtime.runs).run(
+            task_id=harness.task_id,
+            worker_id=f"celery-replacement-{delivery}",
+            failure_error_code="worker_retry_exhausted",
+        )
 
     completed = [
         (phase.kind.value, phase.attempt)

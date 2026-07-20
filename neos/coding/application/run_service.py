@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Protocol
 from uuid import uuid4
 
+
 from neos.coding.domain.durability import (
     RunAlreadyLeased,
     StaleExecutionLease,
@@ -17,6 +18,9 @@ from neos.coding.domain.phases import (
     SteeringRequest,
 )
 from neos.coding.loop.base import CodingLoop, LoopDependencies, LoopInput
+
+
+_EXPECTED_CHECKPOINT_OMITTED = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +129,13 @@ class CodingRunService:
         )
         return run
 
-    async def advance_one_safe_point(self, *, task_id: str, worker_id: str):
+    async def advance_one_safe_point(
+        self,
+        *,
+        task_id: str,
+        worker_id: str,
+        expected_checkpoint_id: str | None | object = _EXPECTED_CHECKPOINT_OMITTED,
+    ):
         """Advance a durable loop from its latest committed checkpoint.
 
         The iterator is intentionally rebuilt for every call. A replacement
@@ -138,23 +148,22 @@ class CodingRunService:
         if run is None:
             raise RuntimeError(f"coding run does not exist: {task_id}")
         now = self._clock()
-        lease = await self._runs.acquire_execution_lease(
+        lease_kwargs = dict(
             task_id=task_id,
             run_id=run.run_id,
             worker_id=worker_id,
             now=now,
             expires_at=now + self._execution_lease,
         )
+        if expected_checkpoint_id is not _EXPECTED_CHECKPOINT_OMITTED:
+            lease_kwargs["expected_checkpoint_id"] = expected_checkpoint_id
+        lease = await self._runs.acquire_execution_lease(**lease_kwargs)
         if lease is None:
             if self._metrics is not None:
-                self._metrics.coding_lease_contention_total.labels(
-                    outcome="busy"
-                ).inc()
+                self._metrics.coding_lease_contention_total.labels(outcome="busy").inc()
             raise RunAlreadyLeased(task_id)
         if self._metrics is not None:
-            self._metrics.coding_lease_contention_total.labels(
-                outcome="acquired"
-            ).inc()
+            self._metrics.coding_lease_contention_total.labels(outcome="acquired").inc()
         checkpoint = await self._runs.latest_checkpoint(task_id)
         if checkpoint is not None:
             applied = await self.on_safe_point(
@@ -204,9 +213,7 @@ class CodingRunService:
                         self._metrics.coding_phase_duration_seconds.labels(
                             phase=phase
                         ).observe(duration)
-                        self._metrics.coding_checkpoint_total.labels(
-                            phase=phase
-                        ).inc()
+                        self._metrics.coding_checkpoint_total.labels(phase=phase).inc()
                         if lease.recovered:
                             self._metrics.coding_resume_total.labels(
                                 outcome="success"
@@ -223,9 +230,10 @@ class CodingRunService:
                     )
                     await self._release_lease(lease)
                     return event
-            committed = await self._runs.complete_run(
-                lease=lease, now=self._clock()
-            )
+                if event.checkpoint_id is not None:
+                    await self._release_lease(lease)
+                    return event
+            committed = await self._runs.complete_run(lease=lease, now=self._clock())
             await self._release_lease(lease)
             return committed.event
         except asyncio.CancelledError:
@@ -239,9 +247,7 @@ class CodingRunService:
             raise
         return None
 
-    async def advance_until(
-        self, *, task_id: str, phase: str, worker_id: str
-    ):
+    async def advance_until(self, *, task_id: str, phase: str, worker_id: str):
         while True:
             event = await self.advance_one_safe_point(
                 task_id=task_id, worker_id=worker_id
@@ -368,14 +374,10 @@ class CodingRunService:
                 created_at=self._clock(),
             )
         )
-        applied = replace(
-            request, applied_checkpoint_id=steering_checkpoint_id
-        )
+        applied = replace(request, applied_checkpoint_id=steering_checkpoint_id)
         await self._runs.apply_steering(applied)
         if self._metrics is not None:
-            latency = max(
-                0.0, (self._clock() - request.requested_at).total_seconds()
-            )
+            latency = max(0.0, (self._clock() - request.requested_at).total_seconds())
             self._metrics.coding_steering_latency_seconds.labels(
                 outcome="applied"
             ).observe(latency)
@@ -434,9 +436,7 @@ class CodingRunService:
 
     async def _release_lease(self, lease) -> None:
         try:
-            await self._runs.release_execution_lease(
-                lease, now=self._clock()
-            )
+            await self._runs.release_execution_lease(lease, now=self._clock())
         except StaleExecutionLease:
             if self._metrics is not None:
                 self._metrics.coding_lease_contention_total.labels(

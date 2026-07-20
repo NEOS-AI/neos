@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 from neos.coding.domain.durability import (
     ExecutionLease,
+    ModelCheckpointCommit,
     PhaseCheckpointCommit,
     PhaseStart,
     RunLifecycleCommit,
@@ -17,6 +18,8 @@ from neos.coding.domain.durability import (
     ToolExecutionDisposition,
 )
 from neos.coding.domain.events import CodingEvent
+from neos.coding.loop.base import EXPECTED_CHECKPOINT_OMITTED
+
 from neos.coding.domain.phases import (
     CodingCheckpoint,
     CodingPhase,
@@ -101,9 +104,7 @@ class PostgresCodingRunRepository:
                         )
                     return self._run_from_row(terminal_row)
                 if task_row[2] == "queued" and not development_mode:
-                    raise ValueError(
-                        "queued task fast path requires development mode"
-                    )
+                    raise ValueError("queued task fast path requires development mode")
                 attempt_result = await session.execute(
                     text(
                         """
@@ -298,6 +299,46 @@ class PostgresCodingRunRepository:
             rows = result.all()
         return tuple(row[0] for row in rows)
 
+    async def claimable_delivery_tokens(
+        self, *, limit: int
+    ) -> tuple[tuple[str, str | None], ...]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        async with await self._session_factory() as session:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT task.task_id, durable_checkpoint.checkpoint_id
+                    FROM coding_tasks task
+                    JOIN LATERAL (
+                        SELECT candidate.run_id, candidate.status
+                        FROM coding_runs candidate
+                        WHERE candidate.task_id = task.task_id
+                        ORDER BY candidate.attempt DESC,
+                                 candidate.started_at DESC,
+                                 candidate.run_id DESC
+                        LIMIT 1
+                    ) canonical ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT checkpoint.checkpoint_id
+                        FROM coding_checkpoints checkpoint
+                        WHERE checkpoint.task_id = task.task_id
+                          AND checkpoint.run_id = canonical.run_id
+                        ORDER BY checkpoint.seq DESC
+                        LIMIT 1
+                    ) durable_checkpoint ON TRUE
+                    WHERE task.deleted_at IS NULL
+                      AND task.status IN ('queued', 'running')
+                      AND canonical.status = 'running'
+                    ORDER BY task.last_activity_at, task.task_id
+                    LIMIT :limit
+                    """
+                ),
+                {"limit": limit},
+            )
+            rows = result.all()
+        return tuple((row[0], row[1]) for row in rows)
+
     async def acquire_execution_lease(
         self,
         *,
@@ -306,6 +347,7 @@ class PostgresCodingRunRepository:
         worker_id: str,
         now: datetime,
         expires_at: datetime,
+        expected_checkpoint_id: str | None | object = EXPECTED_CHECKPOINT_OMITTED,
     ) -> ExecutionLease | None:
         async with await self._session_factory() as session:
             async with session.begin():
@@ -317,13 +359,36 @@ class PostgresCodingRunRepository:
                             FROM coding_run_leases
                             WHERE task_id = :task_id
                             FOR UPDATE
+                        ), canonical AS (
+                            SELECT candidate.run_id, candidate.status
+                            FROM coding_runs candidate
+                            WHERE candidate.task_id = :task_id
+                            ORDER BY candidate.attempt DESC,
+                                     candidate.started_at DESC,
+                                     candidate.run_id DESC
+                            LIMIT 1
+                        ), checkpoint_matches AS (
+                            SELECT 1
+                            WHERE (:validate_checkpoint = FALSE OR
+                                   (SELECT checkpoint_id
+                                   FROM coding_checkpoints
+                                   WHERE task_id = :task_id
+                                     AND run_id = :run_id
+                                   ORDER BY seq DESC
+                                   LIMIT 1)
+                                  IS NOT DISTINCT FROM :expected_checkpoint_id)
+                              AND EXISTS (
+                                  SELECT 1 FROM canonical
+                                  WHERE canonical.run_id = :run_id
+                                    AND canonical.status = 'running'
+                              )
                         ), acquired AS (
                             INSERT INTO coding_run_leases
                                 (task_id, run_id, worker_id, fencing_token,
                                  acquired_at, heartbeat_at, expires_at)
-                            VALUES
-                                (:task_id, :run_id, :worker_id, 1,
-                                 :now, :now, :expires_at)
+                            SELECT :task_id, :run_id, :worker_id, 1,
+                                   :now, :now, :expires_at
+                            FROM checkpoint_matches
                             ON CONFLICT (task_id) DO UPDATE
                             SET run_id = EXCLUDED.run_id,
                                 worker_id = EXCLUDED.worker_id,
@@ -336,14 +401,14 @@ class PostgresCodingRunRepository:
                             RETURNING task_id, run_id, worker_id,
                                       fencing_token, acquired_at, expires_at
                         )
-                        SELECT task_id, run_id, worker_id, fencing_token,
+                            SELECT task_id, run_id, worker_id, fencing_token,
                                acquired_at, expires_at,
                                COALESCE(
                                    (SELECT previous.worker_id <> :worker_id
                                     FROM previous),
                                    FALSE
                                ) AS recovered
-                        FROM acquired
+                            FROM acquired
                         """
                     ),
                     {
@@ -352,6 +417,14 @@ class PostgresCodingRunRepository:
                         "worker_id": worker_id,
                         "now": now,
                         "expires_at": expires_at,
+                        "expected_checkpoint_id": (
+                            None
+                            if expected_checkpoint_id is EXPECTED_CHECKPOINT_OMITTED
+                            else expected_checkpoint_id
+                        ),
+                        "validate_checkpoint": (
+                            expected_checkpoint_id is not EXPECTED_CHECKPOINT_OMITTED
+                        ),
                     },
                 )
                 row = result.first()
@@ -381,9 +454,7 @@ class PostgresCodingRunRepository:
                                   acquired_at, expires_at, FALSE AS recovered
                         """
                     ),
-                    self._lease_params(
-                        lease, now=now, expires_at=expires_at
-                    ),
+                    self._lease_params(lease, now=now, expires_at=expires_at),
                 )
                 row = result.first()
         if row is None:
@@ -427,7 +498,12 @@ class PostgresCodingRunRepository:
                 result = await session.execute(
                     text(
                         """
-                        WITH valid_lease AS (
+                        WITH prior_execution AS MATERIALIZED (
+                            SELECT status
+                            FROM coding_tool_executions
+                            WHERE task_id = :task_id
+                              AND tool_call_id = :tool_call_id
+                        ), valid_lease AS (
                             SELECT 1
                             FROM coding_run_leases
                             WHERE task_id = :task_id
@@ -455,10 +531,17 @@ class PostgresCodingRunRepository:
                               AND coding_tool_executions.claim_expires_at <= :now
                             RETURNING status, result_json
                         )
-                        SELECT status, result_json, TRUE AS lease_valid
+                        SELECT CASE
+                                   WHEN EXISTS (
+                                       SELECT 1 FROM prior_execution
+                                   ) THEN 'reclaimed'
+                                   ELSE status
+                               END AS disposition,
+                               result_json, TRUE AS lease_valid
                         FROM claimed
                         UNION ALL
-                        SELECT execution.status, execution.result_json,
+                        SELECT execution.status AS disposition,
+                               execution.result_json,
                                TRUE AS lease_valid
                         FROM coding_tool_executions execution, valid_lease
                         WHERE execution.task_id = :task_id
@@ -500,7 +583,10 @@ class PostgresCodingRunRepository:
         result: Mapping[str, Any],
         now: datetime,
     ) -> CodingEvent:
-        if claim.disposition is not ToolExecutionDisposition.CLAIMED:
+        if claim.disposition not in {
+            ToolExecutionDisposition.CLAIMED,
+            ToolExecutionDisposition.RECLAIMED,
+        }:
             raise ValueError("only a claimed tool execution can complete")
         lease = claim.lease
         async with await self._session_factory() as session:
@@ -599,9 +685,7 @@ class PostgresCodingRunRepository:
                 attempt_row = attempt_result.first()
                 attempt = int(attempt_row[0]) if attempt_row else 1
                 phase = CodingPhase(
-                    phase_id=(
-                        f"cp_{lease.run_id}_{kind.value}_{attempt}"
-                    ),
+                    phase_id=(f"cp_{lease.run_id}_{kind.value}_{attempt}"),
                     task_id=lease.task_id,
                     run_id=lease.run_id,
                     kind=kind,
@@ -736,6 +820,82 @@ class PostgresCodingRunRepository:
         if self._wake_outbox is not None:
             self._wake_outbox()
         return PhaseCheckpointCommit(checkpoint, event, completed)
+
+    async def commit_model_checkpoint(
+        self,
+        *,
+        lease: ExecutionLease,
+        event_type: str,
+        event_payload: Mapping[str, Any],
+        loop_state: Mapping[str, Any],
+        workspace_revision: str,
+        now: datetime,
+    ) -> ModelCheckpointCommit:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(session, lease, now=now)
+                locked = await session.execute(
+                    text(
+                        """
+                        SELECT run_id
+                        FROM coding_runs
+                        WHERE run_id = :run_id
+                          AND task_id = :task_id
+                          AND status = 'running'
+                        FOR UPDATE
+                        """
+                    ),
+                    {"run_id": lease.run_id, "task_id": lease.task_id},
+                )
+                if locked.first() is None:
+                    raise StaleExecutionLease(lease.task_id)
+                seq = await self._allocate_sequence_in_session(
+                    session, task_id=lease.task_id, now=now
+                )
+                checkpoint = CodingCheckpoint(
+                    checkpoint_id=f"cc_{uuid4().hex}",
+                    task_id=lease.task_id,
+                    run_id=lease.run_id,
+                    seq=seq,
+                    loop_state=dict(loop_state),
+                    workspace_revision=workspace_revision,
+                    created_at=now,
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_checkpoints
+                            (checkpoint_id, task_id, run_id, seq,
+                             loop_state_json, workspace_revision, created_at)
+                        VALUES
+                            (:checkpoint_id, :task_id, :run_id, :seq,
+                             CAST(:loop_state AS JSONB),
+                             :workspace_revision, :created_at)
+                        """
+                    ),
+                    {
+                        "checkpoint_id": checkpoint.checkpoint_id,
+                        "task_id": checkpoint.task_id,
+                        "run_id": checkpoint.run_id,
+                        "seq": seq,
+                        "loop_state": json.dumps(dict(loop_state)),
+                        "workspace_revision": workspace_revision,
+                        "created_at": now,
+                    },
+                )
+                event = await self._insert_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    seq=seq,
+                    event_type=event_type,
+                    payload=event_payload,
+                    now=now,
+                    run_id=lease.run_id,
+                    checkpoint_id=checkpoint.checkpoint_id,
+                )
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return ModelCheckpointCommit(checkpoint, event)
 
     async def apply_steering_at_safe_point(
         self,
@@ -1176,9 +1336,7 @@ class PostgresCodingRunRepository:
         )
 
     @staticmethod
-    def _lease_params(
-        lease: ExecutionLease, **extra
-    ) -> dict[str, Any]:
+    def _lease_params(lease: ExecutionLease, **extra) -> dict[str, Any]:
         return {
             "task_id": lease.task_id,
             "run_id": lease.run_id,
@@ -1600,9 +1758,7 @@ class PostgresCodingRunRepository:
                     },
                 )
 
-    async def claim_pending_steering(
-        self, task_id: str
-    ) -> SteeringRequest | None:
+    async def claim_pending_steering(self, task_id: str) -> SteeringRequest | None:
         async with await self._session_factory() as session:
             async with session.begin():
                 result = await session.execute(

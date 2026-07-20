@@ -11,6 +11,7 @@ from neos.coding.workers.development_supervisor import (
 )
 from neos.coding.workers.dispatcher import CodingDispatchSource
 from neos.config.settings import settings
+from neos.config.schema import AppConfig
 
 
 def test_coding_websocket_bypasses_generic_production_filter() -> None:
@@ -43,8 +44,8 @@ def test_runtime_registers_celery_dispatcher_when_enabled(
     calls = []
 
     class RecordingDispatcher:
-        def enqueue(self, task_id, *, source):
-            calls.append((task_id, source))
+        def enqueue(self, task_id, *, expected_checkpoint_id, source):
+            calls.append((task_id, expected_checkpoint_id, source))
             return "delivery-1"
 
     monkeypatch.setattr(settings, "CODING_FAKE_LOOP_ENABLED", False)
@@ -60,7 +61,7 @@ def test_runtime_registers_celery_dispatcher_when_enabled(
     notifier("ct_1")
 
     assert runtime.supervisor is None
-    assert calls == [("ct_1", CodingDispatchSource.API)]
+    assert calls == [("ct_1", None, CodingDispatchSource.API)]
 
 
 def test_runtime_rejects_local_and_celery_execution_together(
@@ -71,6 +72,75 @@ def test_runtime_rejects_local_and_celery_execution_together(
 
     with pytest.raises(RuntimeError, match="cannot be enabled together"):
         create_development_coding_runtime()
+
+
+def test_runtime_rejects_fake_and_real_execution_together(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "CODING_FAKE_LOOP_ENABLED", True)
+    config = AppConfig.model_validate({
+        "coding_model": {
+            "enabled": True, "model": "claude-test",
+            "input_cost_micros_per_million": 1,
+            "output_cost_micros_per_million": 1,
+        },
+        "sandbox": {"enabled": True},
+        "secrets": {"anthropic_api_key": "test-key"},
+    })
+
+    with pytest.raises(RuntimeError, match="cannot be enabled together"):
+        create_development_coding_runtime(config=config)
+
+
+def test_real_loop_can_register_celery_delivery(monkeypatch) -> None:
+    calls = []
+    config = AppConfig.model_validate({
+        "coding_model": {
+            "enabled": True, "model": "claude-test",
+            "input_cost_micros_per_million": 1,
+            "output_cost_micros_per_million": 1,
+        },
+        "sandbox": {"enabled": True},
+        "secrets": {"anthropic_api_key": "test-key"},
+    })
+    monkeypatch.setattr(settings, "CODING_FAKE_LOOP_ENABLED", False)
+    monkeypatch.setattr(settings, "CODING_CELERY_ENABLED", True)
+    monkeypatch.setattr(runtime_module, "_create_real_coding_loop", lambda **kwargs: object())
+    monkeypatch.setattr(
+        runtime_module,
+        "create_celery_dispatcher",
+        lambda: SimpleNamespace(
+            enqueue=lambda task_id, *, expected_checkpoint_id, source: calls.append(
+                (task_id, expected_checkpoint_id, source)
+            )
+        ),
+    )
+
+    runtime = create_development_coding_runtime(config=config)
+    runtime_module.coding_service._task_created_notifier("ct_real")
+
+    assert runtime.supervisor is None
+    assert calls == [("ct_real", None, CodingDispatchSource.API)]
+
+
+def test_real_loop_maps_explicit_prices_and_transcript_cap() -> None:
+    config = AppConfig.model_validate({
+        "coding_model": {
+            "enabled": True,
+            "model": "claude-test",
+            "input_cost_micros_per_million": 3_000_000,
+            "output_cost_micros_per_million": 15_000_000,
+            "max_transcript_bytes": 12345,
+        },
+        "sandbox": {"enabled": True},
+        "secrets": {"anthropic_api_key": "test-key"},
+    })
+
+    loop = runtime_module._create_real_coding_loop(
+        config=config, sandboxes=object()
+    )
+
+    assert loop._config.input_cost_micros_per_million == 3_000_000
+    assert loop._config.output_cost_micros_per_million == 15_000_000
+    assert loop._config.max_transcript_bytes == 12345
 
 
 @pytest.mark.parametrize(

@@ -11,18 +11,15 @@ Prometheus-compatible metrics for comprehensive monitoring:
 Integration with Prometheus, Grafana, and alerting systems.
 """
 
-from typing import Dict, Any, Optional
-from datetime import datetime
+from typing import Optional
 import time
 from functools import wraps
-from collections import defaultdict
 import asyncio
 
 from prometheus_client import (
     Counter,
     Histogram,
     Gauge,
-    Summary,
     CollectorRegistry,
     generate_latest,
     CONTENT_TYPE_LATEST,
@@ -147,6 +144,18 @@ class EnterpriseMetricsCollector:
             "coding_checkpoint_total",
             "Committed durable coding checkpoints",
             ["phase"],
+            registry=self.registry,
+        )
+        self.coding_model_turn_total = Counter(
+            "coding_model_turn_total",
+            "Coding model turn outcomes",
+            ["provider", "outcome"],
+            registry=self.registry,
+        )
+        self.coding_tool_execution_total = Counter(
+            "coding_tool_execution_total",
+            "Coding tool execution outcomes",
+            ["tool", "outcome"],
             registry=self.registry,
         )
         self.coding_sandbox_lifecycle_seconds = Histogram(
@@ -451,7 +460,7 @@ class EnterpriseMetricsCollector:
 
                     return result
 
-                except Exception as e:
+                except Exception:
                     status = "500"
                     raise
 
@@ -514,7 +523,7 @@ class EnterpriseMetricsCollector:
 
                     return result
 
-                except Exception as e:
+                except Exception:
                     status = "error"
                     raise
 

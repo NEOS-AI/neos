@@ -57,6 +57,7 @@ class CodingDevelopmentSupervisor:
             ),
             sleep=sleep,
             on_retry=self._record_retry,
+            advance_until_complete=True,
         )
 
     @property

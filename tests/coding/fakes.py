@@ -1,10 +1,12 @@
 import asyncio
-from dataclasses import replace
+from collections.abc import Iterable
+from dataclasses import asdict, replace
 from datetime import timedelta
 from typing import Any
 
 from neos.coding.domain.durability import (
     ExecutionLease,
+    ModelCheckpointCommit,
     PhaseCheckpointCommit,
     PhaseStart,
     RunLifecycleCommit,
@@ -14,6 +16,8 @@ from neos.coding.domain.durability import (
     ToolExecutionDisposition,
 )
 from neos.coding.domain.events import make_event
+from neos.coding.loop.base import EXPECTED_CHECKPOINT_OMITTED
+
 from neos.coding.domain.phases import (
     CodingCheckpoint,
     CodingPhaseStatus,
@@ -22,6 +26,118 @@ from neos.coding.domain.phases import (
     SteeringMode,
     next_phase_attempt,
 )
+from neos.coding.model.base import (
+    ModelCompleted,
+    ModelUsage,
+    TextDelta,
+    ToolCallCompleted,
+)
+
+
+def tool_turn(
+    name: str,
+    input: dict[str, Any],
+    *,
+    tool_call_id: str,
+) -> tuple[object, ...]:
+    return (
+        ToolCallCompleted(tool_call_id, name, input),
+        ModelCompleted("tool_use", ModelUsage(1, 1)),
+    )
+
+
+def text_turn(text: str) -> tuple[object, ...]:
+    return (TextDelta(text), ModelCompleted("end_turn", ModelUsage(1, 1)))
+
+
+class ScriptedCodingModel:
+    def __init__(self, script: Iterable[Iterable[object]]) -> None:
+        self.script = [tuple(turn) for turn in script]
+        self.requests = []
+
+    async def stream(self, request):
+        self.requests.append(request)
+        for event in self.script.pop(0):
+            yield event
+
+
+class RecordingMetric:
+    def __init__(self, name: str, records: list[tuple[str, dict[str, str]]]) -> None:
+        self._name = name
+        self._records = records
+        self._labels: dict[str, str] = {}
+
+    def labels(self, **labels):
+        metric = RecordingMetric(self._name, self._records)
+        metric._labels = labels
+        return metric
+
+    def inc(self) -> None:
+        self._records.append((self._name, self._labels))
+
+
+class RecordingCodingLoopMetrics:
+    def __init__(self) -> None:
+        self.records: list[tuple[str, dict[str, str]]] = []
+        self.coding_model_turn_total = RecordingMetric(
+            "coding_model_turn_total", self.records
+        )
+        self.coding_tool_execution_total = RecordingMetric(
+            "coding_tool_execution_total", self.records
+        )
+
+
+class RecordingCodingAuditSink:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    async def emit(self, event) -> None:
+        self.events.append(asdict(event))
+
+
+class InMemorySandboxBindingRepository:
+    def __init__(self, leases) -> None:
+        self.current = None
+        self._leases = leases
+
+    async def get(self, task_id):
+        if self.current is None or self.current.task_id != task_id:
+            return None
+        return self.current
+
+    def _require_lease(self, lease, now):
+        current = self._leases.execution_leases.get(lease.task_id)
+        if current != lease or current.expires_at <= now:
+            raise StaleExecutionLease(lease.task_id)
+
+    async def validate_fenced(self, *, lease, now):
+        self._require_lease(lease, now)
+
+    async def create_fenced(self, binding, *, lease, now):
+        self._require_lease(lease, now)
+        if self.current is not None:
+            return False
+        self.current = binding
+        return True
+
+    async def replace_fenced(self, binding, *, expected_version, lease, now):
+        self._require_lease(lease, now)
+        if self.current is None or self.current.version != expected_version:
+            return None
+        self.current = replace(binding, version=expected_version + 1)
+        return self.current
+
+    async def replace_admin(self, binding, *, expected_version, now):
+        if self.current is None or self.current.version != expected_version:
+            return None
+        self.current = replace(binding, version=expected_version + 1)
+        return self.current
+
+    async def delete_admin(self, task_id, *, expected_version):
+        if self.current is None or self.current.version != expected_version:
+            return False
+        self.current = None
+        return True
 
 
 class InMemoryCodingRunRepository:
@@ -48,10 +164,17 @@ class InMemoryCodingRunRepository:
         self._durability_seq = 0
         self.begin_phase_calls = 0
         self.phase_commit_calls = 0
+        self.model_commit_calls = 0
         self.task_prompts = dict(task_prompts or {})
-        self.task_statuses = {
-            task_id: "queued" for task_id in self.task_prompts
+        self.task_statuses = {task_id: "queued" for task_id in self.task_prompts}
+
+    def _canonical_run(self, task_id):
+        runs_by_id = {
+            run.run_id: run for run in self.created_runs if run.task_id == task_id
         }
+        if self.active_run is not None and self.active_run.task_id == task_id:
+            runs_by_id[self.active_run.run_id] = self.active_run
+        return max(runs_by_id.values(), key=lambda run: run.attempt, default=None)
 
     async def ensure_run_started(
         self,
@@ -76,18 +199,12 @@ class InMemoryCodingRunRepository:
                 "cancelled",
             }:
                 if self.active_run is None:
-                    raise RuntimeError(
-                        f"terminal coding task has no run: {task_id}"
-                    )
+                    raise RuntimeError(f"terminal coding task has no run: {task_id}")
                 return self.active_run
             if self.task_statuses[task_id] == "queued" and not development_mode:
-                raise ValueError(
-                    "queued task fast path requires development mode"
-                )
+                raise ValueError("queued task fast path requires development mode")
             attempts = [
-                run.attempt
-                for run in self.created_runs
-                if run.task_id == task_id
+                run.attempt for run in self.created_runs if run.task_id == task_id
             ]
             run = CodingRun(
                 run_id=f"cr_{task_id}_{max(attempts, default=0) + 1}",
@@ -126,13 +243,10 @@ class InMemoryCodingRunRepository:
             self._require_current_lease(lease, now=now)
             if self.active_run is None or self.active_run.run_id != lease.run_id:
                 raise StaleExecutionLease(lease.task_id)
-            run = replace(
-                self.active_run, status=status, completed_at=now
-            )
+            run = replace(self.active_run, status=status, completed_at=now)
             self.active_run = run
             self.created_runs = [
-                run if item.run_id == run.run_id else item
-                for item in self.created_runs
+                run if item.run_id == run.run_id else item for item in self.created_runs
             ]
             self.task_statuses[lease.task_id] = status.value
             self._durability_seq += 1
@@ -155,6 +269,36 @@ class InMemoryCodingRunRepository:
             if status in {"queued", "running"}
         )[:limit]
 
+    async def claimable_delivery_tokens(self, *, limit):
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        async with self._durability_lock:
+            deliveries = []
+            for task_id, task_status in self.task_statuses.items():
+                if task_status not in {"queued", "running"}:
+                    continue
+                canonical = self._canonical_run(task_id)
+                if canonical is None:
+                    continue
+                if canonical.status is not CodingRunStatus.RUNNING:
+                    continue
+                latest = max(
+                    (
+                        checkpoint
+                        for checkpoint in self.checkpoints
+                        if checkpoint.task_id == task_id
+                        and checkpoint.run_id == canonical.run_id
+                    ),
+                    key=lambda checkpoint: checkpoint.seq,
+                    default=None,
+                )
+                deliveries.append(
+                    (task_id, latest.checkpoint_id if latest is not None else None)
+                )
+                if len(deliveries) == limit:
+                    break
+            return tuple(deliveries)
+
     async def acquire_execution_lease(
         self,
         *,
@@ -163,8 +307,37 @@ class InMemoryCodingRunRepository:
         worker_id,
         now,
         expires_at,
+        expected_checkpoint_id=EXPECTED_CHECKPOINT_OMITTED,
     ):
         async with self._durability_lock:
+            canonical = self._canonical_run(task_id)
+            if canonical is None:
+                return None
+            if (
+                canonical.run_id != run_id
+                or canonical.status is not CodingRunStatus.RUNNING
+            ):
+                return None
+            latest_checkpoint = max(
+                (
+                    checkpoint
+                    for checkpoint in self.checkpoints
+                    if checkpoint.task_id == task_id
+                    and checkpoint.run_id == canonical.run_id
+                ),
+                key=lambda checkpoint: checkpoint.seq,
+                default=None,
+            )
+            latest = (
+                latest_checkpoint.checkpoint_id
+                if latest_checkpoint is not None
+                else None
+            )
+            if (
+                expected_checkpoint_id is not EXPECTED_CHECKPOINT_OMITTED
+                and latest != expected_checkpoint_id
+            ):
+                return None
             current = self.execution_leases.get(task_id)
             if current is not None and current.expires_at > now:
                 return None
@@ -176,16 +349,12 @@ class InMemoryCodingRunRepository:
                 fencing_token=token,
                 acquired_at=now,
                 expires_at=expires_at,
-                recovered=(
-                    current is not None and current.worker_id != worker_id
-                ),
+                recovered=(current is not None and current.worker_id != worker_id),
             )
             self.execution_leases[task_id] = lease
             return lease
 
-    async def renew_execution_lease(
-        self, lease, *, now, expires_at
-    ):
+    async def renew_execution_lease(self, lease, *, now, expires_at):
         async with self._durability_lock:
             self._require_current_lease(lease, now=now)
             renewed = ExecutionLease(
@@ -207,9 +376,7 @@ class InMemoryCodingRunRepository:
                 run_id=lease.run_id,
                 worker_id=lease.worker_id,
                 fencing_token=lease.fencing_token,
-                acquired_at=min(
-                    lease.acquired_at, now - timedelta(microseconds=1)
-                ),
+                acquired_at=min(lease.acquired_at, now - timedelta(microseconds=1)),
                 expires_at=now,
             )
 
@@ -236,9 +403,12 @@ class InMemoryCodingRunRepository:
                 return ToolExecutionClaim(
                     ToolExecutionDisposition.BUSY, tool_call_id, lease
                 )
-            claim = ToolExecutionClaim(
-                ToolExecutionDisposition.CLAIMED, tool_call_id, lease
+            disposition = (
+                ToolExecutionDisposition.RECLAIMED
+                if current is not None
+                else ToolExecutionDisposition.CLAIMED
             )
+            claim = ToolExecutionClaim(disposition, tool_call_id, lease)
             self.tool_claims[(lease.task_id, tool_call_id)] = (
                 claim,
                 claim_expires_at,
@@ -371,6 +541,41 @@ class InMemoryCodingRunRepository:
                 checkpoint_id=checkpoint.checkpoint_id,
             )
             return PhaseCheckpointCommit(checkpoint, event, completed)
+
+    async def commit_model_checkpoint(
+        self,
+        *,
+        lease,
+        event_type,
+        event_payload,
+        loop_state,
+        workspace_revision,
+        now,
+    ):
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=now)
+            self.model_commit_calls += 1
+            self._durability_seq += 1
+            checkpoint = CodingCheckpoint(
+                checkpoint_id=f"cc_model_{self._durability_seq}",
+                task_id=lease.task_id,
+                run_id=lease.run_id,
+                seq=self._durability_seq,
+                loop_state=dict(loop_state),
+                workspace_revision=workspace_revision,
+                created_at=now,
+            )
+            self.checkpoints.append(checkpoint)
+            event = make_event(
+                task_id=lease.task_id,
+                seq=checkpoint.seq,
+                event_type=event_type,
+                payload=dict(event_payload),
+                now=now,
+                run_id=lease.run_id,
+                checkpoint_id=checkpoint.checkpoint_id,
+            )
+            return ModelCheckpointCommit(checkpoint, event)
 
     async def create_run(self, run) -> None:
         self.created_runs.append(run)
@@ -569,9 +774,7 @@ class InMemoryCodingRunRepository:
                 acquired_at=now,
                 expires_at=lease.expires_at,
             )
-            applied = replace(
-                request, applied_checkpoint_id=checkpoint.checkpoint_id
-            )
+            applied = replace(request, applied_checkpoint_id=checkpoint.checkpoint_id)
             event = make_event(
                 task_id=lease.task_id,
                 seq=checkpoint.seq,
@@ -607,8 +810,6 @@ class InMemoryCodingRunRepository:
 
     async def save_phase(self, phase) -> None:
         self.phases = [
-            existing
-            for existing in self.phases
-            if existing.phase_id != phase.phase_id
+            existing for existing in self.phases if existing.phase_id != phase.phase_id
         ]
         self.phases.append(phase)

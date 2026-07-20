@@ -96,14 +96,18 @@ async def test_suspend_resume_and_command_execution_share_lifecycle() -> None:
     assert (await provider.suspend(sandbox.sandbox_id)).state is SandboxState.SUSPENDED
     assert (await provider.resume(sandbox.sandbox_id)).state is SandboxState.RUNNING
     session = await provider.open_session(sandbox.sandbox_id)
-    runner.results.append(
-        DockerCommandResult(exit_code=7, stdout=b"out", stderr=b"err")
+    runner.results.extend(
+        [
+            DockerCommandResult(exit_code=0, stdout=b"{}", stderr=b""),
+            DockerCommandResult(exit_code=7, stdout=b"out", stderr=b"err"),
+            DockerCommandResult(exit_code=0, stdout=b"{}", stderr=b""),
+        ]
     )
     result = await session.execute(CommandRequest(argv=("python", "-V")))
 
     assert result.exit_code == 7
     assert result.stdout == b"out"
-    assert runner.calls[-1][0:3] == ("exec", "--workdir", "/workspace")
+    assert runner.calls[-2][0:3] == ("exec", "--workdir", "/workspace")
 
 
 async def test_execute_forwards_bounded_stdin_and_rejects_unknown_env() -> None:
@@ -115,8 +119,15 @@ async def test_execute_forwards_bounded_stdin_and_rejects_unknown_env() -> None:
     )
     session = await provider.open_session(sandbox.sandbox_id)
 
+    runner.results.extend(
+        [
+            DockerCommandResult(0, b"{}", b""),
+            DockerCommandResult(0, b"", b""),
+            DockerCommandResult(0, b"{}", b""),
+        ]
+    )
     await session.execute(CommandRequest(argv=("python", "-"), stdin=b"print(1)"))
-    assert runner.inputs[-1] == b"print(1)"
+    assert runner.inputs[-2] == b"print(1)"
     with pytest.raises(SandboxPolicyViolation, match="environment_not_allowed"):
         await session.execute(
             CommandRequest(argv=("env",), env={"TOKEN": "secret"})
@@ -132,6 +143,7 @@ async def test_session_file_tree_search_and_git_use_fixed_helpers() -> None:
     )
     session = await provider.open_session(sandbox.sandbox_id)
 
+    assert await session.workspace_revision() == 0
     revision = await session.write_file("src/app.py", b"print('needle')\n")
     runner.results.extend(
         [
@@ -154,11 +166,9 @@ async def test_session_file_tree_search_and_git_use_fixed_helpers() -> None:
                 ).encode(),
                 stderr=b"",
             ),
-            DockerCommandResult(
-                exit_code=0,
-                stdout=b"?? src/app.py\n",
-                stderr=b"",
-            ),
+            DockerCommandResult(exit_code=0, stdout=b"{}", stderr=b""),
+            DockerCommandResult(0, b"?? src/app.py\n", b""),
+            DockerCommandResult(exit_code=0, stdout=b"{}", stderr=b""),
         ]
     )
 
@@ -171,6 +181,7 @@ async def test_session_file_tree_search_and_git_use_fixed_helpers() -> None:
     status = await session.git_status()
 
     assert revision == 1
+    assert await session.workspace_revision() == revision
     assert runner.inputs[4] == b"print('needle')\n"
     assert content == b"print('needle')\n"
     assert [(match.path, match.line) for match in matches] == [

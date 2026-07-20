@@ -101,9 +101,7 @@ def repository_for(session: FakeSession) -> PostgresCodingRunRepository:
 
 
 async def test_acquire_lease_uses_one_atomic_upsert() -> None:
-    session = FakeSession(
-        rows=[("ct_1", "cr_1", "worker-a", 3, NOW, EXPIRES, True)]
-    )
+    session = FakeSession(rows=[("ct_1", "cr_1", "worker-a", 3, NOW, EXPIRES, True)])
     repository = repository_for(session)
 
     lease = await repository.acquire_execution_lease(
@@ -124,14 +122,37 @@ async def test_acquire_lease_uses_one_atomic_upsert() -> None:
     assert lease.recovered is True
 
 
+async def test_acquire_lease_fences_expected_checkpoint_in_same_statement() -> None:
+    session = FakeSession(rows=[None])
+    repository = repository_for(session)
+
+    lease = await repository.acquire_execution_lease(
+        task_id="ct_1",
+        run_id="cr_1",
+        worker_id="worker-a",
+        now=NOW,
+        expires_at=EXPIRES,
+        expected_checkpoint_id="cc_expected",
+    )
+
+    sql = "\n".join(session.sql)
+    assert "checkpoint_matches" in sql
+    assert "run_id = :run_id" in sql
+    assert "IS NOT DISTINCT FROM :expected_checkpoint_id" in sql
+    assert "ORDER BY candidate.attempt DESC" in sql
+    assert "canonical.run_id = :run_id" in sql
+    assert "canonical.status = 'running'" in sql
+    assert session.params[0]["expected_checkpoint_id"] == "cc_expected"
+    assert session.params[0]["validate_checkpoint"] is True
+    assert lease is None
+
+
 async def test_renew_rejects_stale_fencing_token() -> None:
     session = FakeSession(rows=[None])
     repository = repository_for(session)
 
     with pytest.raises(StaleExecutionLease):
-        await repository.renew_execution_lease(
-            LEASE, now=NOW, expires_at=EXPIRES
-        )
+        await repository.renew_execution_lease(LEASE, now=NOW, expires_at=EXPIRES)
 
     assert "fencing_token = :fencing_token" in "\n".join(session.sql)
 
@@ -163,6 +184,21 @@ async def test_tool_claim_is_written_before_execution() -> None:
     assert "INSERT INTO coding_tool_executions" in sql
     assert "fencing_token" in sql
     assert claim.disposition is ToolExecutionDisposition.CLAIMED
+
+
+async def test_expired_tool_claim_is_reported_as_reclaimed() -> None:
+    session = FakeSession(rows=[("reclaimed", None)])
+    repository = repository_for(session)
+
+    claim = await repository.claim_tool_execution(
+        lease=LEASE,
+        tool_call_id="tool_1",
+        now=NOW,
+        claim_expires_at=EXPIRES,
+    )
+
+    assert claim.disposition is ToolExecutionDisposition.RECLAIMED
+    assert "prior_execution" in "\n".join(session.sql)
 
 
 async def test_completed_tool_claim_returns_persisted_result() -> None:
@@ -225,9 +261,7 @@ async def test_complete_tool_result_rejects_stale_claim() -> None:
     )
 
     with pytest.raises(StaleExecutionLease):
-        await repository.complete_tool_execution(
-            claim, result={"ok": True}, now=NOW
-        )
+        await repository.complete_tool_execution(claim, result={"ok": True}, now=NOW)
 
 
 async def test_begin_phase_returns_existing_active_attempt_without_event() -> None:
@@ -304,7 +338,50 @@ async def test_phase_checkpoint_satisfies_fk_order_in_one_transaction() -> None:
     assert committed.phase.status is CodingPhaseStatus.COMPLETED
 
 
-async def test_safe_steering_reclaims_expired_claim_and_transitions_atomically() -> None:
+async def test_model_checkpoint_is_fenced_and_has_no_tool_claim() -> None:
+    session = FakeSession(rows=[("ct_1",), ("cr_1",), (12,)])
+    repository = repository_for(session)
+
+    committed = await repository.commit_model_checkpoint(
+        lease=LEASE,
+        event_type="model.completed",
+        event_payload={"stop_reason": "end_turn"},
+        loop_state={"transcript": [], "current_instruction": "Fix it"},
+        workspace_revision="rev_1",
+        now=NOW,
+    )
+
+    sql = "\n".join(session.sql)
+    assert "fencing_token = :fencing_token" in sql
+    assert "FROM coding_runs" in sql and "FOR UPDATE" in sql
+    assert sql.index("INSERT INTO coding_checkpoints") < sql.index(
+        "INSERT INTO coding_events"
+    )
+    assert "INSERT INTO coding_event_outbox" in sql
+    assert "coding_tool_executions" not in sql
+    assert committed.checkpoint.seq == committed.event.seq == 12
+
+
+async def test_model_checkpoint_rejects_stale_fencing_token() -> None:
+    session = FakeSession(rows=[None])
+    repository = repository_for(session)
+
+    with pytest.raises(StaleExecutionLease):
+        await repository.commit_model_checkpoint(
+            lease=LEASE,
+            event_type="tool.denied",
+            event_payload={"reason_code": "policy_unknown_tool"},
+            loop_state={"transcript": []},
+            workspace_revision="rev_1",
+            now=NOW,
+        )
+
+    assert "INSERT INTO coding_checkpoints" not in "\n".join(session.sql)
+
+
+async def test_safe_steering_reclaims_expired_claim_and_transitions_atomically() -> (
+    None
+):
     session = FakeSession(
         rows=[
             ("ct_1",),

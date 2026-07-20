@@ -28,6 +28,7 @@ class RunLifecycleCommit:
 
 class ToolExecutionDisposition(StrEnum):
     CLAIMED = "claimed"
+    RECLAIMED = "reclaimed"
     COMPLETED = "completed"
     BUSY = "busy"
 
@@ -69,6 +70,12 @@ class PhaseCheckpointCommit:
     checkpoint: CodingCheckpoint
     event: CodingEvent
     phase: CodingPhase
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCheckpointCommit:
+    checkpoint: CodingCheckpoint
+    event: CodingEvent
 
 
 @dataclass(frozen=True, slots=True)

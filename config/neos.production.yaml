@@ -1,4 +1,21 @@
 environment: production
+coding_model:
+  enabled: false
+  provider: anthropic
+  model: claude-sonnet-4-5-20250929
+  model_timeout_sec: 120
+  tool_timeout_sec: 30
+  max_turns: 20
+  max_tool_calls: 50
+  max_consecutive_tool_errors: 3
+  max_output_tokens: 8192
+  max_transcript_bytes: 1048576
+  max_cost_usd: 5.0
+  input_cost_micros_per_million: 0
+  output_cost_micros_per_million: 0
+  command_enabled: true
+  command_allowlist: [pytest, ruff, mypy, pnpm, git]
+  mutation_snapshot_interval: 5
 api:
   debug: false
 research_harness:

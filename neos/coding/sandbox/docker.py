@@ -690,6 +690,10 @@ class DockerSandboxSession:
     def sandbox_id(self) -> str:
         return self._record.sandbox.sandbox_id
 
+    async def workspace_revision(self) -> int:
+        await self._provider._running_record(self.sandbox_id)
+        return self._record.sandbox.workspace_revision
+
     async def create_pty(self, *, argv: tuple[str, ...]) -> DockerPty:
         CommandRequest(argv=argv)
         async with self._record.lock:
@@ -900,7 +904,7 @@ class DockerSandboxSession:
         args.extend(request.argv)
         async with self._record.lock:
             await self._provider._running_record(self.sandbox_id)
-            before = await self._scan_workspace() if self._record.watching else {}
+            before = await self._scan_workspace()
             result = await self._provider._runner.run(
                 *args,
                 timeout_sec=min(
@@ -910,9 +914,8 @@ class DockerSandboxSession:
                 allowed_exit_codes=tuple(range(256)),
                 input=request.stdin,
             )
-            if self._record.watching:
-                after = await self._scan_workspace()
-                await self._record_scan_changes(before, after)
+            after = await self._scan_workspace()
+            await self._record_scan_changes(before, after)
         limit = min(
             request.max_output_bytes,
             self._record.sandbox.limits.max_output_bytes,

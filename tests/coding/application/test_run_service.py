@@ -79,6 +79,32 @@ class FailingLoop:
         raise RuntimeError("transient")
 
 
+class ModelCheckpointLoop:
+    def __init__(self, *, deny_first=False) -> None:
+        self.calls = 0
+        self.deny_first = deny_first
+
+    async def run(self, input, checkpoint, deps):
+        self.calls += 1
+        if checkpoint is not None and checkpoint.loop_state.get("terminal_pending"):
+            return
+        denied = self.deny_first and self.calls == 1
+        committed = await deps.repository.commit_model_checkpoint(
+            lease=deps.lease,
+            event_type="tool.denied" if denied else "model.completed",
+            event_payload={"reason_code": "policy_unknown_tool"}
+            if denied
+            else {"stop_reason": "end_turn"},
+            loop_state={
+                "current_instruction": input.instruction,
+                "terminal_pending": not denied,
+            },
+            workspace_revision="rev_1",
+            now=NOW,
+        )
+        yield committed.event
+
+
 class RecordingLeaseRepository(InMemoryCodingRunRepository):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -174,17 +200,16 @@ async def test_safe_point_steering_uses_atomic_repository_transition() -> None:
     assert applied.checkpoint.loop_state["current_instruction"] == (
         "Inspect cache first"
     )
-    assert applied.checkpoint.loop_state["transcript"] == checkpoint.loop_state[
-        "transcript"
-    ]
+    assert (
+        applied.checkpoint.loop_state["transcript"]
+        == checkpoint.loop_state["transcript"]
+    )
     assert applied.run.attempt == 2
     assert applied.lease.fencing_token == lease.fencing_token + 1
 
 
 async def test_ensure_started_is_idempotent_and_uses_task_prompt() -> None:
-    repository = InMemoryCodingRunRepository(
-        task_prompts={"ct_1": "Fix it"}
-    )
+    repository = InMemoryCodingRunRepository(task_prompts={"ct_1": "Fix it"})
     service = await make_run_service(repository)
 
     first = await service.ensure_started(task_id="ct_1")
@@ -204,9 +229,7 @@ async def test_caught_exception_releases_lease_for_retry() -> None:
     service = await make_run_service(repository, loop=FailingLoop())
 
     with pytest.raises(RuntimeError, match="transient"):
-        await service.advance_one_safe_point(
-            task_id="ct_1", worker_id="worker-a"
-        )
+        await service.advance_one_safe_point(task_id="ct_1", worker_id="worker-a")
 
     assert repository.execution_leases["ct_1"].expires_at == NOW
 
@@ -238,13 +261,47 @@ async def test_no_remaining_phase_completes_run_and_task_atomically() -> None:
         loop=FakeDurableCodingLoop(clock=lambda: NOW),
     )
 
-    event = await service.advance_one_safe_point(
-        task_id="ct_1", worker_id="worker-a"
-    )
+    event = await service.advance_one_safe_point(task_id="ct_1", worker_id="worker-a")
 
     assert event.type == "run.completed"
     assert repository.active_run.status is CodingRunStatus.COMPLETED
     assert repository.task_statuses["ct_1"] == "completed"
+
+
+async def test_model_checkpoint_is_one_safe_point_before_run_completion() -> None:
+    repository = InMemoryCodingRunRepository(
+        active_run=run_fixture("cr_1"), task_prompts={"ct_1": "Fix it"}
+    )
+    repository.task_statuses["ct_1"] = "running"
+    loop = ModelCheckpointLoop()
+    service = await make_run_service(repository, loop=loop)
+
+    first = await service.advance_one_safe_point(task_id="ct_1", worker_id="worker-a")
+    assert first.type == "model.completed"
+    assert repository.active_run.status is CodingRunStatus.RUNNING
+
+    second = await service.advance_one_safe_point(task_id="ct_1", worker_id="worker-a")
+    assert second.type == "run.completed"
+    assert repository.active_run.status is CodingRunStatus.COMPLETED
+
+
+async def test_denial_checkpoint_returns_then_continues_model_on_next_call() -> None:
+    repository = InMemoryCodingRunRepository(
+        active_run=run_fixture("cr_1"), task_prompts={"ct_1": "Fix it"}
+    )
+    repository.task_statuses["ct_1"] = "running"
+    loop = ModelCheckpointLoop(deny_first=True)
+    service = await make_run_service(repository, loop=loop)
+
+    denied = await service.advance_one_safe_point(task_id="ct_1", worker_id="worker-a")
+    assert denied.type == "tool.denied"
+    assert repository.active_run.status is CodingRunStatus.RUNNING
+
+    completed = await service.advance_one_safe_point(
+        task_id="ct_1", worker_id="worker-a"
+    )
+    assert completed.type == "model.completed"
+    assert loop.calls == 2
 
 
 async def test_fail_active_run_uses_fenced_terminal_command() -> None:
@@ -279,10 +336,6 @@ async def test_configured_execution_lease_controls_repository_expiry() -> None:
     )
 
     with pytest.raises(RuntimeError, match="transient"):
-        await service.advance_one_safe_point(
-            task_id="ct_1", worker_id="worker-a"
-        )
+        await service.advance_one_safe_point(task_id="ct_1", worker_id="worker-a")
 
-    assert repository.requested_expirations == [
-        NOW + timedelta(seconds=75)
-    ]
+    assert repository.requested_expirations == [NOW + timedelta(seconds=75)]
