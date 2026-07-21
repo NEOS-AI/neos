@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import re
-import unicodedata
+from .text_norm import normalize_evidence_text
 
 
 class PDFExtractionError(Exception):
     """Raised when a PDF cannot be converted into evidence text."""
-
-
-def _normalize_text(value: str) -> str:
-    collapsed = re.sub(r"\s+", " ", value).strip()
-    return unicodedata.normalize("NFC", collapsed)
 
 
 def pdf_bytes_to_text(content: bytes) -> str:
@@ -25,7 +19,9 @@ def pdf_bytes_to_text(content: bytes) -> str:
         raise PDFExtractionError("Unable to extract PDF text") from exc
 
     try:
-        return _normalize_text("\n".join(page.get_text() for page in document))
+        return normalize_evidence_text(
+            "\n".join(page.get_text() for page in document)
+        )
     except Exception as exc:
         raise PDFExtractionError("Unable to extract PDF text") from exc
     finally:

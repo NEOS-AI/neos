@@ -26,6 +26,13 @@ def test_html_to_text_removes_script_style_and_decodes_entities():
     assert unicodedata.is_normalized("NFC", text)
 
 
+def test_html_to_text_removes_nul_before_normalizing():
+    text = html_to_text("<p>A\x00B cafe\u0301</p>")
+
+    assert text == "AB café"
+    assert "\x00" not in text
+
+
 class FakeHttpClient:
     def __init__(self, status_code, body, headers=None):
         self.status_code = status_code
@@ -114,6 +121,21 @@ async def test_identical_body_still_dedups_by_content():
     a = await fetch_url("https://a.example", client=FakeHttpClient(200, "<p>same text</p>"))
     b = await fetch_url("https://b.example", client=FakeHttpClient(200, "<p>same text</p>"))
     assert a.content_hash == b.content_hash
+
+
+@pytest.mark.asyncio
+async def test_nul_and_sanitized_html_share_canonical_hash():
+    nul = await fetch_url(
+        "https://nul.example",
+        client=FakeHttpClient(200, "<p>A\x00B</p>"),
+    )
+    clean = await fetch_url(
+        "https://clean.example",
+        client=FakeHttpClient(200, "<p>AB</p>"),
+    )
+
+    assert nul.raw_text == clean.raw_text == "AB"
+    assert nul.content_hash == clean.content_hash
 
 
 @pytest.mark.asyncio
