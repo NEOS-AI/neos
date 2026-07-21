@@ -54,6 +54,7 @@ def test_dispatcher_publishes_only_task_identity_to_coding_queue() -> None:
 def test_dispatch_source_is_a_bounded_enum() -> None:
     assert {item.value for item in CodingDispatchSource} == {
         "api",
+        "approval",
         "reconciliation",
         "continuation",
     }

@@ -41,6 +41,17 @@ _AVERAGE_FIELDS = (
     "avg_excerpt_chars",
 )
 _QUOTE_BUCKETS = ("exact", "above_threshold", "near_miss", "low", "unavailable")
+_CONFIDENCE_CLAMP_BUCKETS = ("0", "1", "2", "3_plus")
+
+
+def _safe_count(value: object) -> int:
+    return (
+        value
+        if isinstance(value, int)
+        and not isinstance(value, bool)
+        and value >= 0
+        else 0
+    )
 
 
 def _metric(count: int, denominator: int) -> dict[str, int | float]:
@@ -68,6 +79,22 @@ def aggregate_funnels(funnels: list[dict]) -> dict:
         bucket: sum(int(funnel.get("quote_score_buckets", {}).get(bucket, 0)) for funnel in funnels)
         for bucket in _QUOTE_BUCKETS
     }
+    combined["confidence_clamped_by_source_count"] = {
+        bucket: sum(
+            _safe_count(counts.get(bucket))
+            for funnel in funnels
+            if isinstance(
+                counts := funnel.get(
+                    "confidence_clamped_by_source_count"
+                ),
+                dict,
+            )
+        )
+        for bucket in _CONFIDENCE_CLAMP_BUCKETS
+    }
+    combined["confidence_clamped_count"] = sum(
+        combined["confidence_clamped_by_source_count"].values()
+    )
     graded = combined["graded"]
     for field in (*_RATE_FIELDS, *_AVERAGE_FIELDS):
         weighted_total = sum(float(funnel.get(field, 0.0)) * int(funnel.get("graded", 0)) for funnel in funnels)

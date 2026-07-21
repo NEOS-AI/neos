@@ -24,6 +24,16 @@ export type CodingToolView = {
   result: Record<string, unknown> | null;
 };
 
+export type CodingApprovalView = {
+  approval_id: string;
+  tool_name: string;
+  risk: "workspace_write" | "command";
+  status: "pending" | "approved" | "denied" | "expired" | "invalidated";
+  requested_at: string;
+  expires_at: string;
+  display_summary: Record<string, unknown>;
+};
+
 export type CodingWorkspaceView = {
   revision: string;
   git_head: string | null;
@@ -35,7 +45,7 @@ export type CodingProjectionSnapshot = {
   active_run: CodingRunView | null;
   phases: CodingPhaseView[];
   tools: CodingToolView[];
-  approvals: Record<string, unknown>[];
+  approvals: CodingApprovalView[];
   todos: Record<string, unknown>[];
   workspace: CodingWorkspaceView;
   latest_checkpoint: Record<string, unknown> | null;
@@ -51,7 +61,7 @@ export type CodingProjectionState = {
   activeRun: CodingRunView | null;
   phases: CodingPhaseView[];
   toolsById: Record<string, CodingToolView>;
-  approvalsById: Record<string, Record<string, unknown>>;
+  approvalsById: Record<string, CodingApprovalView>;
   todos: Record<string, unknown>[];
   workspace: CodingWorkspaceView;
   gap: { expected: number; received: number } | null;

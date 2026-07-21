@@ -1,5 +1,6 @@
 import type { CodingEvent } from "@/features/coding/types/events";
 import type {
+  CodingApprovalView,
   CodingPhaseView,
   CodingProjectionSnapshot,
   CodingProjectionState,
@@ -39,10 +40,7 @@ export function reduceSnapshot(
       snapshot.tools.map((tool) => [tool.tool_call_id, tool])
     ),
     approvalsById: Object.fromEntries(
-      snapshot.approvals.map((approval, index) => [
-        String(approval.request_id ?? index),
-        approval,
-      ])
+      snapshot.approvals.map((approval) => [approval.approval_id, approval])
     ),
     todos: snapshot.todos,
     workspace: snapshot.workspace,
@@ -110,6 +108,36 @@ export function reduceProjectionEvent(
       ...base,
       toolsById: { ...state.toolsById, [tool.tool_call_id]: tool },
     };
+  }
+  if (event.type.startsWith("approval.")) {
+    const approvalId = event.payload.approval_id;
+    if (typeof approvalId !== "string") {
+      return base;
+    }
+    const previous = state.approvalsById[approvalId];
+    const payload = event.payload as Partial<CodingApprovalView>;
+    if (!previous && event.type !== "approval.requested") {
+      return base;
+    }
+    const approval = {
+      ...previous,
+      ...payload,
+      approval_id: approvalId,
+      status:
+        event.type === "approval.requested"
+          ? "pending"
+          : event.type.slice("approval.".length),
+    } as CodingApprovalView;
+    return {
+      ...base,
+      approvalsById: { ...state.approvalsById, [approvalId]: approval },
+    };
+  }
+  if (
+    event.type === "task.status.changed" &&
+    typeof event.payload.status === "string"
+  ) {
+    return { ...base, taskStatus: event.payload.status };
   }
   return base;
 }

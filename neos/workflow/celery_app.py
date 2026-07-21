@@ -154,8 +154,13 @@ def configure_coding_beat_schedule(
             "task": "neos.coding.workers.celery_tasks.reconcile_coding_tasks",
             "schedule": interval,
         }
+        schedule["expire-coding-approvals"] = {
+            "task": "neos.coding.workers.celery_tasks.expire_coding_approvals",
+            "schedule": interval,
+        }
     else:
         schedule.pop("reconcile-coding-tasks", None)
+        schedule.pop("expire-coding-approvals", None)
 
 
 # Celery Beat 스케줄 (주기적 태스크)

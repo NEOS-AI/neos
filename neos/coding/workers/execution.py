@@ -9,7 +9,7 @@ from neos.coding.domain.durability import (
     StaleExecutionLease,
 )
 from neos.coding.domain.phases import CodingRunStatus
-from neos.coding.loop.anthropic import CodingLoopFailure
+from neos.coding.loop.anthropic import CodingLoopFailure, CodingLoopWaitingApproval
 
 
 _EXPECTED_CHECKPOINT_OMITTED = object()
@@ -18,6 +18,7 @@ _EXPECTED_CHECKPOINT_OMITTED = object()
 class CodingTaskOutcome(StrEnum):
     COMPLETED = "completed"
     CONTINUING = "continuing"
+    WAITING_APPROVAL = "waiting_approval"
     FAILED = "failed"
     LEASE_BUSY = "lease_busy"
     STALE = "stale"
@@ -81,6 +82,8 @@ class CodingTaskRunner:
                 return CodingTaskOutcome.LEASE_BUSY
             except StaleExecutionLease:
                 return CodingTaskOutcome.STALE
+            except CodingLoopWaitingApproval:
+                return CodingTaskOutcome.WAITING_APPROVAL
             except asyncio.CancelledError:
                 raise
             except BaseException as exc:
@@ -117,6 +120,8 @@ class CodingTaskRunner:
             failures = 0
             if event is None or event.type == "run.completed":
                 return CodingTaskOutcome.COMPLETED
+            if event.type == "approval.requested":
+                return CodingTaskOutcome.WAITING_APPROVAL
             if not self._advance_until_complete:
                 return CodingTaskOutcome.CONTINUING
         raise asyncio.CancelledError

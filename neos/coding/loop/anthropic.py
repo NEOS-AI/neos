@@ -10,6 +10,11 @@ from typing import Any
 from uuid import uuid4
 
 from neos.coding.domain.events import CodingEvent
+from neos.coding.domain.approvals import (
+    ApprovalPolicyOutcome,
+    ApprovalStatus,
+    evaluate_approval,
+)
 from neos.coding.domain.phases import CodingCheckpoint, CodingPhaseKind
 from neos.coding.loop.base import LoopDependencies, LoopInput
 from neos.coding.model.anthropic import CodingModelError
@@ -32,7 +37,12 @@ from neos.coding.sandbox.observability import (
     NullCodingAuditSink,
 )
 from neos.coding.tools.executor import SandboxToolExecutor
-from neos.coding.tools.registry import CodingToolRegistry, ToolRisk, ToolValidationError
+from neos.coding.tools.registry import (
+    CodingToolRegistry,
+    ToolRisk,
+    ToolValidationError,
+    ValidatedToolCall,
+)
 from neos.coding.domain.durability import ToolExecutionDisposition
 
 
@@ -41,6 +51,10 @@ class CodingLoopFailure(RuntimeError):
         super().__init__(code)
         self.code = code
         self.retryable = retryable
+
+
+class CodingLoopWaitingApproval(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +73,7 @@ class AnthropicLoopConfig:
     output_cost_micros_per_million: int = 0
     max_transcript_messages: int = 100
     max_transcript_bytes: int = 1_048_576
+    approval_ttl_sec: float = 900
 
     def __post_init__(self) -> None:
         numeric = (
@@ -72,6 +87,7 @@ class AnthropicLoopConfig:
             self.max_cost_micros,
             self.max_transcript_messages,
             self.max_transcript_bytes,
+            self.approval_ttl_sec,
         )
         if not self.model or not self.system or any(value <= 0 for value in numeric):
             raise ValueError("anthropic loop configuration limits must be positive")
@@ -113,6 +129,9 @@ class AnthropicCodingLoop:
         metrics=None,
         audit=None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        approval_evaluator: Callable[
+            [ValidatedToolCall], ApprovalPolicyOutcome
+        ] = evaluate_approval,
     ) -> None:
         self._model = model
         self._tools = tools
@@ -122,6 +141,7 @@ class AnthropicCodingLoop:
         self._metrics = metrics
         self._audit = audit or NullCodingAuditSink()
         self._clock = clock
+        self._approval_evaluator = approval_evaluator
 
     async def run(
         self,
@@ -262,6 +282,51 @@ class AnthropicCodingLoop:
                 outcome="allowed",
             )
         )
+        approval_outcome = self._approval_evaluator(validated)
+        if approval_outcome is ApprovalPolicyOutcome.REQUIRE_APPROVAL:
+            approval = await deps.repository.get_tool_approval(
+                task_id=input.task_id,
+                run_id=input.run_id,
+                tool_call_id=call.tool_call_id,
+            )
+            if approval is None:
+                now = self._clock()
+                committed = await deps.repository.request_tool_approval(
+                    lease=deps.lease,
+                    tool_call=call,
+                    validated=validated,
+                    loop_state=self._dump_state(input, state),
+                    workspace_revision=str(bound.binding.workspace_revision),
+                    requested_at=now,
+                    expires_at=now + timedelta(seconds=self._config.approval_ttl_sec),
+                )
+                for event in committed.events:
+                    yield event
+                return
+            if approval.status is ApprovalStatus.PENDING:
+                raise CodingLoopWaitingApproval(approval.approval_id)
+            if approval.status is not ApprovalStatus.APPROVED:
+                reason_code = {
+                    ApprovalStatus.DENIED: "approval_denied",
+                    ApprovalStatus.EXPIRED: "approval_expired",
+                    ApprovalStatus.INVALIDATED: "approval_invalidated",
+                }[approval.status]
+                denied = ToolResultContent(
+                    call.tool_call_id,
+                    "denied",
+                    {"reason_code": reason_code},
+                )
+                denied_state = self._after_result(state, denied)
+                committed = await deps.repository.commit_model_checkpoint(
+                    lease=deps.lease,
+                    event_type="tool.denied",
+                    event_payload={"reason_code": reason_code},
+                    loop_state=self._dump_state(input, denied_state),
+                    workspace_revision=str(bound.binding.workspace_revision),
+                    now=self._clock(),
+                )
+                yield committed.event
+                return
         claim = await deps.repository.claim_tool_execution(
             lease=deps.lease,
             tool_call_id=call.tool_call_id,

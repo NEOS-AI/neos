@@ -9,11 +9,14 @@ pytestmark = pytest.mark.no_db
 def _q(qid, **kw):
     base = dict(id=qid, confidence=0.0, value_est=1.0, spent_tokens=0,
                 cap_tokens=2000, fail_streak=0, depth=1, status="open", parent_id="root")
-    base.update(kw); return SimpleNamespace(**base)
+    base.update(kw)
+    return SimpleNamespace(**base)
 
 class FakeLedger:
     def __init__(self, questions, spent=0, root_id="root"):
-        self._questions = questions; self._spent = spent; self._root_id = root_id
+        self._questions = questions
+        self._spent = spent
+        self._root_id = root_id
     async def open_questions(self): return [q for q in self._questions if q.status == "open"]
     async def children(self, qid): return [q for q in self._questions if q.parent_id == qid]
     async def root_question(self): return SimpleNamespace(id=self._root_id)

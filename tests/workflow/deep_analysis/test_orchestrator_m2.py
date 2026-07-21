@@ -1,4 +1,6 @@
-import asyncio, pytest
+import asyncio
+
+import pytest
 import neos.database.models  # noqa: F401 - register Base metadata
 from neos.workflow.deep_analysis.orchestrator import (
     Orchestrator,
@@ -41,7 +43,9 @@ async def test_ac_a_partial_claims_committed(monkeypatch):
     from neos.workflow.deep_analysis import orchestrator as mod
     monkeypatch.setattr(mod, "_wall_clock_cap", lambda e: 0.05)
     class SlowPartial:
-        def __init__(self): self._claims=[]; self._blobs=[ProposedBlob("hh","http://x",200,"body")]
+        def __init__(self):
+            self._claims = []
+            self._blobs = [ProposedBlob("hh", "http://x", 200, "body")]
         async def investigate(self, b, e, qid, repairs=None, question_text=""): await asyncio.sleep(10)
         def flush_partial(self, qid):
             return WorkerResult(question_id=qid, status="partial",
@@ -91,7 +95,9 @@ async def test_ac_c_fail_streak_forces_split():
 async def test_ac_d_stops_at_global_cap():
     class Big:
         async def investigate(self, b, e, qid, repairs=None, question_text=""):
-            r = _ok_result(qid); r.tokens_spent = 4000; return r
+            r = _ok_result(qid)
+            r.tokens_spent = 4000
+            return r
         def flush_partial(self, qid): return WorkerResult(question_id=qid, status="partial")
     async with await db_manager.get_session() as s:
         run_id = await create_run(s, "root?", "dev")

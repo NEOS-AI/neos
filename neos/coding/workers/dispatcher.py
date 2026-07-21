@@ -9,6 +9,7 @@ class CodingDispatchSource(StrEnum):
     API = "api"
     RECONCILIATION = "reconciliation"
     CONTINUATION = "continuation"
+    APPROVAL = "approval"
 
 
 class CodingTaskDispatcher(Protocol):

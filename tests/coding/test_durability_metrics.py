@@ -54,6 +54,8 @@ def test_coding_metrics_expose_only_bounded_labels() -> None:
     assert collector.coding_phase_duration_seconds._labelnames == ("phase",)
     assert collector.coding_resume_total._labelnames == ("outcome",)
     assert collector.coding_lease_contention_total._labelnames == ("outcome",)
+    assert collector.coding_approval_total._labelnames == ("risk", "outcome")
+    assert collector.coding_approval_latency_seconds._labelnames == ("outcome",)
 
 
 def test_supervisor_metrics_use_only_bounded_labels() -> None:

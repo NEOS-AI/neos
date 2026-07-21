@@ -68,6 +68,10 @@ class WorkerResult:
     model: str = ""
     self_assessment: float = 0.0
     fail_reason: str = ""
+    confidence_clamped_count: int = 0
+    confidence_clamped_by_source_count: dict[str, int] = field(
+        default_factory=dict
+    )
 
 
 @dataclass

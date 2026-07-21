@@ -3,6 +3,7 @@
 import { Radio, TerminalSquare } from "lucide-react";
 import { useEffect, useState } from "react";
 import { CodingDetailPanel } from "@/features/coding/components/coding-detail-panel";
+import { CodingApprovalCard } from "@/features/coding/components/coding-approval-card";
 import { CodingSteerComposer } from "@/features/coding/components/coding-steer-composer";
 import { PhaseTimeline } from "@/features/coding/components/phase-timeline";
 import { useCodingStream } from "@/features/coding/stream/use-coding-stream";
@@ -26,6 +27,10 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
     connection in connectionMessages
       ? connectionMessages[connection as keyof typeof connectionMessages]
       : null;
+  const pendingApprovals = Object.values(projection.approvalsById).filter(
+    (approval) => approval.status === "pending"
+  );
+  const waitingApproval = projection.taskStatus === "waiting_approval";
 
   return (
     <main className="flex min-h-dvh flex-1 flex-col bg-background">
@@ -36,6 +41,11 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
           {projection.activeRun ? (
             <span className="hidden border border-border px-2 py-0.5 font-mono text-[10px] text-muted-foreground md:inline">
               RUN {projection.activeRun.attempt}
+            </span>
+          ) : null}
+          {waitingApproval ? (
+            <span className="border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 font-mono text-[10px] text-amber-300 uppercase tracking-wider">
+              waiting_approval
             </span>
           ) : null}
         </div>
@@ -71,7 +81,20 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
               onSelect={setSelectedPhase}
               phases={projection.phases}
               selectedId={selectedPhase}
+              waitingApproval={waitingApproval}
             />
+            {pendingApprovals.length > 0 ? (
+              <section aria-label="Tool approval requests" className="mt-5 space-y-2">
+                {pendingApprovals.map((approval) => (
+                  <CodingApprovalCard
+                    approval={approval}
+                    key={approval.approval_id}
+                    live={connection === "live"}
+                    taskId={taskId}
+                  />
+                ))}
+              </section>
+            ) : null}
             <div className="mt-5">
               <CodingSteerComposer
                 disabled={

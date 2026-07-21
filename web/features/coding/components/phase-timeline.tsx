@@ -15,10 +15,12 @@ export function PhaseTimeline({
   phases,
   selectedId,
   onSelect,
+  waitingApproval,
 }: {
   phases: CodingPhaseView[];
   selectedId: string | null;
   onSelect: (phaseId: string) => void;
+  waitingApproval?: boolean;
 }) {
   if (phases.length === 0) {
     return (
@@ -30,7 +32,13 @@ export function PhaseTimeline({
     );
   }
   return (
-    <ol aria-label="Coding task phases" className="relative space-y-2">
+    <div>
+      {waitingApproval ? (
+        <div className="mb-2 border border-amber-400/30 bg-amber-400/5 px-4 py-2 font-mono text-[10px] text-amber-300 uppercase tracking-[0.16em]">
+          Paused at approval checkpoint
+        </div>
+      ) : null}
+      <ol aria-label="Coding task phases" className="relative space-y-2">
       <span
         aria-hidden="true"
         className="absolute top-8 bottom-8 left-7 w-px bg-gradient-to-b from-amber-400/60 via-border to-transparent"
@@ -48,6 +56,7 @@ export function PhaseTimeline({
           />
         </li>
       ))}
-    </ol>
+      </ol>
+    </div>
   );
 }

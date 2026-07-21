@@ -1179,3 +1179,56 @@ ANTHROPIC_API_KEY='<secret source>' \
 장애 시 `CODING_MODEL_ENABLED=false`로 real model loop 등록을 중단하고 development의 `FakeDurableCodingLoop`로 rollback한다. 기존 checkpoint/event schema와 migration은 되돌리지 않아 이전 durable data를 읽을 수 있게 한다.
 
 `2026-07-19-real-model-sandbox-tool-loop-design.md`의 1–11절은 Tasks 1–8에서 model contract, registry/policy, durable claim/checkpoint/fencing, sandbox binding/snapshot, bounded transcript/result, normalized errors/config, observability와 deterministic verification으로 반영했다. 12절 delivery sequence의 production provider rollout, multi-agent coordinator, 일반 egress, approval UI, semantic indexing과 managed/Kubernetes sandbox는 의도적으로 후속 단계로 남긴다. provider별 prompt caching과 장기 artifact/object-storage retention도 현재 Memory/Docker vertical slice 밖의 운영 작업이다.
+
+---
+
+## 21. Durable tool approval 운영 계약
+
+### 21.1 실행 정책과 원자적 정지
+
+`read_file.v1`, 검색, 목록 조회 같은 read-only 도구는 기존 validation을 통과하면 바로 실행한다. `write_file.v1` 계열 workspace mutation과 `execute.v1` command는 validation 이후, tool claim 이전에 승인을 요구한다. hard-deny된 입력은 승인으로 우회할 수 없다.
+
+승인 요청 transaction은 checkpoint, `coding_approvals` 행, task의 `waiting_approval` 전이, `approval.requested`/`task.status.changed` event와 outbox를 함께 commit한다. 동일 `(task_id, run_id, tool_call_id)` 재전달은 같은 요청을 재사용한다. 승인 전에는 tool execution claim이 존재하지 않으며 sandbox mutation도 발생하지 않는다.
+
+결정 transaction은 승인·task·canonical run/checkpoint를 잠그고 `coding-approval-v1` request hash와 workspace revision을 다시 확인한다. 만료가 사용자 결정보다 우선하며 불일치는 `invalidated`로 닫힌다. 결정 event와 task의 `running` 전이를 commit한 뒤에만 checkpoint ID가 포함된 worker delivery를 발행한다. replacement worker는 기존 exactly-once claim 경로로 실행한다.
+
+### 21.2 설정과 만료 회수
+
+```yaml
+coding_model:
+  approval_ttl_seconds: 900
+  approval_reconciliation_batch_size: 100
+```
+
+TTL과 batch size는 양수이며 batch는 최대 1000이다. Celery Beat의 `expire-coding-approvals` task는 coding reconciliation 주기로 실행되고, `FOR UPDATE SKIP LOCKED`로 만료된 pending 요청을 제한된 batch만 claim한다. 각 요청을 `expired`로 전이한 뒤 commit 후 wake-up한다. 동시에 여러 beat/worker가 실행되어도 같은 요청은 한 번만 전이된다.
+
+### 21.3 REST, snapshot, event 계약
+
+결정 endpoint는 다음과 같다.
+
+```http
+POST /api/v1/coding/tasks/{task_id}/approvals/{approval_id}
+Content-Type: application/json
+
+{"decision":"approve"}
+```
+
+decision은 `approve` 또는 `deny`만 허용한다. 소유하지 않은 task/approval은 존재 여부를 숨기는 `404`, 이미 처리됨·만료·무효화·stale 상태는 정제된 `409`, schema 오류는 `422`다. 성공 응답과 task snapshot의 approval 항목은 `approval_id`, `tool_name`, bounded `risk/status`, `requested_at`, `expires_at`, allowlisted `display_summary`만 포함한다.
+
+이벤트는 `approval.requested`, `approval.approved`, `approval.denied`, `approval.expired`, `approval.invalidated`와 이어지는 `task.status.changed`를 사용한다. 이벤트와 공개 snapshot에는 request hash, actor ID, normalized input, checkpoint loop state, file content, full argv, stdin 또는 env 값이 없다. 브라우저는 snapshot과 live/replay event를 같은 `approvalsById` projection으로 reduce하며 REST 성공만으로 optimistic 제거하지 않는다.
+
+### 21.4 브라우저 동작과 장애 모드
+
+승인 카드는 phase timeline과 steer composer 사이에 나타난다. 복구된 checkpoint에서도 요청 내용을 볼 수 있지만 approve/deny 버튼은 WebSocket 상태가 `live`이고 요청 상태가 `pending`일 때만 활성화된다. 각 카드는 독립적인 submitting/error 상태를 가지며, 결정 후 실제 상태 변경은 durable event 또는 새 snapshot으로만 반영한다.
+
+- 결정 commit 후 broker publish가 불확실하면 coding reconciliation이 현재 checkpoint generation을 다시 전달한다.
+- 승인 요청 중 browser/worker가 종료되어도 pending 행과 checkpoint가 복구 기준이다.
+- 승인 후 worker가 중복 전달되면 tool claim/result 재사용이 mutation 중복을 막는다.
+- mutation 실행 후 durable completion 전 장애는 승인 여부와 무관하게 `tool_outcome_unknown`으로 fail closed한다.
+- 만료/거절/무효화는 canonical denied tool result를 transcript에 남기며 도구를 실행하지 않는다.
+
+### 21.5 관측성, rollout, rollback
+
+`coding_approval_total{risk,outcome}`과 `coding_approval_latency_seconds{outcome}`만 사용한다. risk와 outcome은 enum의 fixed-cardinality 값이다. 승인 audit event는 등록 tool과 bounded risk/outcome만 기록하며 task/approval ID, 입력 내용과 actor는 기록하지 않는다.
+
+rollout 순서는 migration `042` 적용 → API/worker 배포 → Beat 활성화 → browser 배포다. 구버전 browser는 `waiting_approval` task를 실행시키지 못할 뿐 mutation을 우회하지 않는다. rollback은 model/worker 기능을 비활성화하되 migration과 pending 행을 보존한다. 기능이 꺼진 동안 pending 승인은 자동 승인하거나 실행하지 않는다. 다시 활성화하면 만료 reconciliation 또는 명시적 사용자 결정으로만 이어간다.

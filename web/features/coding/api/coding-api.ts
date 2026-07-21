@@ -13,7 +13,10 @@ export type CodingWsTicket = {
   websocket_url: string;
 };
 
-import type { CodingProjectionSnapshot } from "@/features/coding/types/projection";
+import type {
+  CodingApprovalView,
+  CodingProjectionSnapshot,
+} from "@/features/coding/types/projection";
 
 export class CodingAPIError extends Error {
   readonly status: number;
@@ -85,6 +88,25 @@ export async function steerCodingTask(
   );
   if (!response.ok) {
     throw await responseError(response, "Could not steer coding task");
+  }
+  return response.json();
+}
+
+export async function decideCodingApproval(
+  taskId: string,
+  approvalId: string,
+  decision: "approve" | "deny"
+): Promise<CodingApprovalView> {
+  const response = await fetch(
+    `/api/coding/tasks/${encodeURIComponent(taskId)}/approvals/${encodeURIComponent(approvalId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision }),
+    }
+  );
+  if (!response.ok) {
+    throw await responseError(response, "Could not resolve coding approval");
   }
   return response.json();
 }

@@ -1,6 +1,5 @@
 """M4 Task 1: node-level reduce -> NodeSummary (bounded per-node context)."""
 
-import json
 import pytest
 from types import SimpleNamespace
 from neos.workflow.deep_analysis.synthesizer import Synthesizer

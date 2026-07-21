@@ -8,6 +8,7 @@ const UNDERSTAND_PATTERN = /Understand/;
 const REVIEW_PATTERN = /Review/;
 const SAFE_POINT_PATTERN = /safe_point/;
 const INTERRUPT_NOW_PATTERN = /interrupt_now/;
+const WAITING_APPROVAL_PATTERN = /waiting_approval/;
 
 test("workspace is phase-oriented and exposes both steering actions", () => {
   const workspace = readFileSync(
@@ -29,4 +30,6 @@ test("workspace is phase-oriented and exposes both steering actions", () => {
   assert.match(timeline, REVIEW_PATTERN);
   assert.match(composer, SAFE_POINT_PATTERN);
   assert.match(composer, INTERRUPT_NOW_PATTERN);
+  assert.match(workspace, WAITING_APPROVAL_PATTERN);
+  assert.match(timeline, /waitingApproval/);
 });

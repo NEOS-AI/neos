@@ -87,6 +87,7 @@ async def build_orchestrator(
             "http_client": http_client,
             "cassette": cassette,
             "skill_selector": skill_selector,
+            "confidence_cap": config.confidence_cap,
         }
         if fetch_fn is not None:
             options["fetch_fn"] = fetch_fn
@@ -121,4 +122,3 @@ async def build_orchestrator(
         parallel_workers=parallel_workers,
         max_depth=max_depth,
     )
-

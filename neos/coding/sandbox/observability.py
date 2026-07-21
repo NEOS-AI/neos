@@ -133,15 +133,30 @@ class CodingToolAuditEvent:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CodingApprovalAuditEvent:
+    """Sanitized, bounded metadata for an approval lifecycle transition."""
+
+    tool: str
+    risk: str
+    outcome: str
+
+
 class CodingAuditSink(Protocol):
-    async def emit(self, event: CodingToolAuditEvent) -> None: ...
+    async def emit(
+        self, event: CodingToolAuditEvent | CodingApprovalAuditEvent
+    ) -> None: ...
 
 
 class NullCodingAuditSink:
-    async def emit(self, event: CodingToolAuditEvent) -> None:
+    async def emit(
+        self, event: CodingToolAuditEvent | CodingApprovalAuditEvent
+    ) -> None:
         return None
 
 
 class LoggingCodingAuditSink:
-    async def emit(self, event: CodingToolAuditEvent) -> None:
+    async def emit(
+        self, event: CodingToolAuditEvent | CodingApprovalAuditEvent
+    ) -> None:
         _logger.info("coding_tool_audit", extra={"coding_audit": asdict(event)})

@@ -3,6 +3,12 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Mapping, Protocol
 
 from neos.coding.domain.events import CodingEvent
+from neos.coding.domain.approvals import (
+    ApprovalDecision,
+    ApprovalRequestCommit,
+    ApprovalResolutionCommit,
+    CodingApproval,
+)
 from neos.coding.domain.durability import (
     ExecutionLease,
     ModelCheckpointCommit,
@@ -18,6 +24,8 @@ from neos.coding.domain.phases import (
     CodingPhaseKind,
     SteeringRequest,
 )
+from neos.coding.model.base import ToolCallCompleted
+from neos.coding.tools.registry import ValidatedToolCall
 
 
 EXPECTED_CHECKPOINT_OMITTED = object()
@@ -105,6 +113,36 @@ class CodingRunRepository(Protocol):
         result: Mapping[str, Any],
         now: datetime,
     ) -> CodingEvent: ...
+
+    async def request_tool_approval(
+        self,
+        *,
+        lease: ExecutionLease,
+        tool_call: ToolCallCompleted,
+        validated: ValidatedToolCall,
+        loop_state: Mapping[str, Any],
+        workspace_revision: str,
+        requested_at: datetime,
+        expires_at: datetime,
+    ) -> ApprovalRequestCommit: ...
+
+    async def get_tool_approval(
+        self, *, task_id: str, run_id: str, tool_call_id: str
+    ) -> CodingApproval | None: ...
+
+    async def resolve_tool_approval(
+        self,
+        *,
+        task_id: str,
+        approval_id: str,
+        owner_id: str,
+        decision: ApprovalDecision,
+        now: datetime,
+    ) -> ApprovalResolutionCommit: ...
+
+    async def expire_pending_approvals(
+        self, *, limit: int, now: datetime
+    ) -> tuple[ApprovalResolutionCommit, ...]: ...
 
     async def begin_phase(
         self,

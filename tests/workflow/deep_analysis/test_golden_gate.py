@@ -24,7 +24,7 @@ _VERSION_RE = re.compile(r"<!--\s*version:\s*(\d+)\s*-->")
 # intentional prompt change + a fresh golden replay recording.
 EXPECTED_PROMPT_VERSIONS = {
     "decompose": 1,
-    "worker_brief": 1,
+    "worker_brief": 2,
     "judge": 1,
     "node_summary": 1,
     "final_compose": 1,

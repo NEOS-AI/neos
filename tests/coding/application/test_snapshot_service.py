@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 
 from neos.coding.application.snapshot_service import CodingSnapshotService
+from neos.coding.domain.approvals import ApprovalStatus
+from neos.coding.tools.registry import ToolRisk
 from neos.coding.repositories.projection_repository import (
     CodingCheckpointRow,
     CodingPhaseRow,
@@ -59,7 +61,12 @@ class ProjectionFixtureRepository:
                     "tool_1", "cr_1", "completed", {"ok": True}
                 ),
             ),
-            approvals=(),
+            approvals=({
+                "approval_id": "ca_1", "tool_name": "write_file.v1",
+                "risk": "workspace_write", "status": "pending",
+                "requested_at": NOW, "expires_at": NOW,
+                "display_summary": {"path": "app.py"},
+            },),
             todos=({"content": "Run tests", "status": "pending"},),
             latest_checkpoint=CodingCheckpointRow(
                 "cc_12",
@@ -91,6 +98,8 @@ async def test_snapshot_is_one_consistent_head_projection() -> None:
     assert snapshot.latest_checkpoint is not None
     assert snapshot.latest_checkpoint.seq <= snapshot.head_seq
     assert snapshot.workspace.changed_files == ("app.py",)
+    assert snapshot.approvals[0].status is ApprovalStatus.PENDING
+    assert snapshot.approvals[0].risk is ToolRisk.WORKSPACE_WRITE
 
 
 async def test_snapshot_is_owner_scoped() -> None:

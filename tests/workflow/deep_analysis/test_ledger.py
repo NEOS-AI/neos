@@ -202,6 +202,14 @@ async def test_commit_pass_stores_blob_before_evidence_and_records_events():
         )
         await ledger._transition(question_id, "investigating")
         result = _result(question_id)
+        result.confidence_clamped_count = 999
+        result.confidence_clamped_by_source_count = {
+            "0": 1,
+            "1": 2,
+            "2": True,
+            "3_plus": 3,
+            "unknown": 99,
+        }
 
         await ledger.commit_pass(
             question_id,
@@ -268,6 +276,23 @@ async def test_commit_pass_stores_blob_before_evidence_and_records_events():
         assert graded_payload["best_quote_score"] == 1.0
         assert "raw_text" not in graded_payload
         assert "source_url" not in graded_payload
+        pass_payload = await session.scalar(
+            text(
+                "SELECT payload FROM deep_analysis_events "
+                "WHERE run_id=:run_id AND kind='pass_completed'"
+            ),
+            {"run_id": run_id},
+        )
+        pass_payload = json.loads(pass_payload)
+        assert pass_payload["confidence_clamped_by_source_count"] == {
+            "0": 1,
+            "1": 2,
+            "2": 0,
+            "3_plus": 3,
+        }
+        assert pass_payload["confidence_clamped_count"] == 6
+        assert "unknown" not in pass_payload["confidence_clamped_by_source_count"]
+        assert "requested_confidence" not in json.dumps(pass_payload)
         assert event_kinds[-1] == "pass_completed"
         await session.rollback()
 

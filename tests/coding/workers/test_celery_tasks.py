@@ -102,6 +102,28 @@ def test_stale_delivery_does_not_enqueue_successor(monkeypatch) -> None:
     assert calls == []
 
 
+def test_waiting_approval_does_not_enqueue_successor(monkeypatch) -> None:
+    calls = []
+
+    async def run(**kwargs):
+        return CodingTaskOutcome.WAITING_APPROVAL
+
+    class RecordingDispatcher:
+        def __init__(self, **kwargs):
+            pass
+
+        def enqueue(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+    monkeypatch.setattr(celery_tasks, "run_coding_delivery", run)
+    monkeypatch.setattr(celery_tasks, "CeleryCodingTaskDispatcher", RecordingDispatcher)
+
+    result = celery_tasks.execute_coding_task.run("ct_1", "cc_approval")
+
+    assert result == {"task_id": "ct_1", "outcome": "waiting_approval"}
+    assert calls == []
+
+
 def test_ambiguous_continuation_publish_does_not_retry_advancement(
     monkeypatch,
 ) -> None:
@@ -238,3 +260,4 @@ def test_coding_reconciliation_schedule_follows_feature_flag() -> None:
 
     configure_coding_beat_schedule(schedule, enabled=False, interval=7.5)
     assert "reconcile-coding-tasks" not in schedule
+    assert "expire-coding-approvals" not in schedule
