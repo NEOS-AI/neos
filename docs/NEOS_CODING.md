@@ -944,6 +944,24 @@ security review gate 없이 remote untrusted repository 지원 플래그를 켜�
 
 **완료 조건:** 30분/10k event fixture에서 입력·스크롤이 유지되고 reconnect 결과가 동일하다.
 
+#### Frame-batched projection checkpoint (2026-07-21)
+
+Phase 4의 스트리밍 성능 기반으로 browser projection store는 상태를 두 층으로 관리한다. `workingState`는 contiguous event마다 즉시 reduce되어 `appliedSeq`와 gap 판정의 정확성을 유지한다. React의 `useSyncExternalStore`가 읽는 `publishedState`는 animation frame마다 최신 working state로 한 번만 교체된다. 같은 frame에 10,000개 event가 들어와도 scheduler 요청과 subscriber notification은 각각 한 번이다.
+
+다음 경계는 frame을 기다리지 않고 즉시 publish한다.
+
+- REST snapshot 교체
+- sequence gap 감지
+- `caught_up`에 따른 connection basis 변경
+- 명시적 `flush()`
+- store `dispose()`에 따른 예약 취소
+
+각 예약 callback은 단조 증가 generation을 캡처한다. snapshot 교체, gap, flush, dispose가 기존 frame을 취소하면 generation도 전진하므로 scheduler가 취소된 callback을 뒤늦게 호출해도 최신 snapshot을 덮어쓸 수 없다. duplicate event는 working state reference를 바꾸지 않아 frame을 예약하거나 subscriber를 호출하지 않는다.
+
+`useCodingStream()`의 미사용 legacy React reducer도 hot path에서 제거했다. durable cursor와 local storage는 event마다 즉시 전진하지만 화면 render는 frame-batched projection publish에만 반응한다. 순수 legacy reducer는 기존 격리 테스트 호환성을 위해 남겨 둔다.
+
+CI의 10k acceptance fixture는 wall-clock 시간 대신 scheduler 1회, notification 1회, direct reducer replay와 최종 projection deep equality를 검증한다. snapshot + batched live tail도 uninterrupted replay와 동일해야 한다. 이 변경은 backend/event/REST/WebSocket 계약을 바꾸지 않으므로 rollback은 projection store의 immediate publish 복원만으로 가능하며 데이터 migration은 필요 없다.
+
 ### Phase 5 — Managed sandbox pilot
 
 **목표:** production multi-tenant 실행환경을 선택하고 제한된 사용자에게 개방.

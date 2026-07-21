@@ -70,6 +70,7 @@ test("restored checkpoint becomes live after replay", () => {
   const uninterrupted = createCodingProjectionStore("ct_1");
   uninterrupted.replaceSnapshot(snapshotAtSeq10);
   for (const next of replay) uninterrupted.applyEvent(next);
+  uninterrupted.flush();
 
   assert.equal(restored.getSnapshot().appliedSeq, 14);
   assert.equal(restored.getSnapshot().connectionBasis, "live");

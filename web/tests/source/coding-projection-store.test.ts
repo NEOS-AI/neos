@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createCodingProjectionStore,
+  type CodingFrameScheduler,
+} from "../../features/coding/stream/coding-projection-store";
+import {
   emptyProjection,
   reduceProjectionEvent,
   reduceSnapshot,
@@ -79,6 +83,23 @@ const snapshotAtSeq4: CodingProjectionSnapshot = {
   connection_basis: "checkpoint",
 };
 
+class OneFrameScheduler implements CodingFrameScheduler {
+  callback: (() => void) | null = null;
+
+  request(callback: () => void) {
+    this.callback = callback;
+    return 1;
+  }
+
+  cancel() {
+    this.callback = null;
+  }
+
+  run() {
+    this.callback?.();
+  }
+}
+
 test("snapshot plus replay converges with uninterrupted live projection", () => {
   const live = events.reduce(reduceProjectionEvent, emptyProjection("ct_1"));
   const restored = events
@@ -88,6 +109,21 @@ test("snapshot plus replay converges with uninterrupted live projection", () => 
   assert.deepEqual(restored.phases, live.phases);
   assert.deepEqual(restored.toolsById, live.toolsById);
   assert.equal(restored.appliedSeq, live.appliedSeq);
+});
+
+test("frame-batched snapshot tail converges with uninterrupted replay", () => {
+  const scheduler = new OneFrameScheduler();
+  const store = createCodingProjectionStore("ct_1", scheduler);
+  const live = events.reduce(reduceProjectionEvent, emptyProjection("ct_1"));
+
+  store.replaceSnapshot(snapshotAtSeq4);
+  store.applyEvent(events[4]);
+
+  assert.equal(store.getSnapshot().appliedSeq, 4);
+  scheduler.run();
+  assert.deepEqual(store.getSnapshot().phases, live.phases);
+  assert.deepEqual(store.getSnapshot().toolsById, live.toolsById);
+  assert.equal(store.getSnapshot().appliedSeq, live.appliedSeq);
 });
 
 test("phase history appends a second attempt", () => {
