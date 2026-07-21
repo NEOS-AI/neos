@@ -92,6 +92,8 @@ WebSocket/replay event
 
 This batching changes render cadence, not durable cursor handling. `useCodingStream()` may continue to update `afterSeq` and local storage for every contiguous event.
 
+`useCodingStream()` currently also dispatches every event into a legacy React `useReducer` state. No production consumer reads that returned state, but each dispatch still schedules a component render and defeats external-store batching. This slice removes that reducer from the hook hot path and returns only `projection` and `connection`. The pure legacy reducer remains available for its isolated compatibility tests until its text-part model is absorbed into the projection schema.
+
 ## 7. Lifecycle and Error Handling
 
 - A scheduler callback is considered single-use. Its handle is cleared before notifying listeners so a listener-triggered event can schedule the next frame safely. A stale callback generation is a no-op.
@@ -112,12 +114,13 @@ Deterministic source tests cover:
 6. Snapshot replacement cancels a pending frame and cannot be overwritten by invoking an obsolete callback.
 7. `dispose()` cancels pending work and prevents later notifications.
 8. Existing snapshot/replay/live convergence tests remain unchanged and pass.
+9. A source regression confirms `useCodingStream()` contains no `useReducer` import, per-event `dispatch`, or returned legacy `state`.
 
 The 10,000-event fixture asserts notification count and deterministic state rather than a machine-dependent millisecond threshold. Optional timing may be reported locally but is not a CI gate.
 
 ## 9. Rollout and Compatibility
 
-No backend, event schema, REST, or WebSocket protocol changes are required. The change is confined to the browser projection store and its source tests.
+No backend, event schema, REST, or WebSocket protocol changes are required. The change is confined to the browser projection store, the coding stream hook, and their source tests.
 
 Rollback restores immediate notification without changing persisted state. Because `workingState` uses the existing pure reducer, batching can be disabled without data migration or replay incompatibility.
 

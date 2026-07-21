@@ -23,7 +23,9 @@
 
 **Files:**
 - Modify: `web/features/coding/stream/coding-projection-store.ts`
+- Modify: `web/features/coding/stream/use-coding-stream.ts`
 - Create: `web/tests/source/coding-projection-frame-batching.test.ts`
+- Create: `web/tests/source/coding-stream-render-batching.test.ts`
 
 **Interfaces:**
 - Consumes: `reduceProjectionEvent()`, `reduceSnapshot()`, `CodingProjectionState`, `CodingProjectionSnapshot`, and `CodingEvent`.
@@ -89,6 +91,8 @@ test("a burst schedules and publishes once", () => {
 ```
 
 Add separate tests for duplicate suppression, immediate gap publish, snapshot replacement with an obsolete callback invocation, `flush()`, and `dispose()`. Add the 10,000-event direct-reducer equivalence test from Task 2 Step 1 at this red-test stage as well, so notification count and final-state convergence fail before the implementation exists.
+
+Create `coding-stream-render-batching.test.ts` as a source regression. It must read `use-coding-stream.ts` and assert that the hook does not import `useReducer`, call `dispatch`, or return a legacy `state`, while still calling `store.applyEvent` for accepted events.
 
 - [ ] **Step 2: Run the new tests and verify the current immediate store fails**
 
@@ -168,6 +172,8 @@ function schedulePublish() {
 
 When emitting, invoke every subscriber even if one throws; capture and rethrow the first error after the loop.
 
+Remove the unused `useReducer`, `initialCodingStreamState`, `reduceCodingEvent`, `state`, and `dispatch` path from `use-coding-stream.ts`. Keep the pure reducer module unchanged for existing isolated tests. Return `{ projection, connection }` from the hook.
+
 - [ ] **Step 4: Run focused tests and TypeScript**
 
 Run:
@@ -176,6 +182,7 @@ Run:
 cd web
 PATH=/Users/ywsung/.nvm/versions/node/v22.19.0/bin:/Users/ywsung/Library/pnpm:$PATH \
   pnpm exec tsx --test tests/source/coding-projection-frame-batching.test.ts \
+  tests/source/coding-stream-render-batching.test.ts \
   tests/source/coding-projection-store.test.ts \
   tests/source/coding-approval-projection.test.ts
 /Users/ywsung/Library/pnpm/pnpm exec tsc --noEmit
@@ -187,7 +194,9 @@ Expected: all focused tests and type checking pass. Restore generated `web/tscon
 
 ```bash
 git add web/features/coding/stream/coding-projection-store.ts \
-  web/tests/source/coding-projection-frame-batching.test.ts
+  web/features/coding/stream/use-coding-stream.ts \
+  web/tests/source/coding-projection-frame-batching.test.ts \
+  web/tests/source/coding-stream-render-batching.test.ts
 git commit -m "perf(coding): batch projection publishes by frame"
 ```
 
