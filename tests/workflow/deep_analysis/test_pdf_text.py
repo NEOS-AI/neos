@@ -35,7 +35,9 @@ class FakeDocument:
 
 
 def test_pdf_bytes_to_text_normalizes_pages_and_closes(monkeypatch) -> None:
-    document = FakeDocument(["  First\npage  ", "cafe\u0301\tsecond"])
+    document = FakeDocument(
+        ["  First\npage\x00  ", "cafe\u0301\tsecond"]
+    )
 
     def open_pdf(**kwargs):
         return document

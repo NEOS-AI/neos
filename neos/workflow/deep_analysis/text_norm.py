@@ -11,6 +11,14 @@ _PUNCTUATION = re.compile(r"[^\w\s]", re.UNICODE)
 _ANCHOR = re.compile(r"\w+", re.UNICODE)
 
 
+def normalize_evidence_text(value: str) -> str:
+    """Return database-safe canonical source text."""
+
+    without_nul = value.replace("\x00", "")
+    normalized = unicodedata.normalize("NFC", without_nul)
+    return _WHITESPACE.sub(" ", normalized).strip()
+
+
 def normalize_for_hash(text: str) -> str:
     """Normalize semantic claim identity: NFC, lowercase, no punctuation."""
 

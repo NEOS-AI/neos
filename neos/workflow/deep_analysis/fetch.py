@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
-import unicodedata
 from dataclasses import asdict
 from html.parser import HTMLParser
 
@@ -12,6 +10,7 @@ from neos.config.settings import settings
 
 from .models import ProposedBlob
 from .pdf_text import pdf_bytes_to_text
+from .text_norm import normalize_evidence_text
 
 
 class _TextExtractor(HTMLParser):
@@ -37,8 +36,7 @@ def html_to_text(html: str) -> str:
     parser = _TextExtractor()
     parser.feed(html)
     parser.close()
-    collapsed = re.sub(r"\s+", " ", " ".join(parser.parts)).strip()
-    return unicodedata.normalize("NFC", collapsed)
+    return normalize_evidence_text(" ".join(parser.parts))
 
 
 def _content_hash(raw_text: str) -> str:
