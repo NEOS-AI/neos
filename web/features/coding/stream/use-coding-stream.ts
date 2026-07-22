@@ -178,9 +178,21 @@ export function useCodingStream(taskId: string) {
               return;
             }
             if (nextSeq > previousSeq) {
+              const outcome = store.applyEvent(envelope as CodingEvent);
+              if (outcome === "resync_required") {
+                resyncing = true;
+                socket?.close(1012, "Unknown text part requires snapshot resync");
+                hydrateFromSnapshot()
+                  .then((hydrated) => {
+                    if (!hydrated || disposed || terminal) return;
+                    resyncing = false;
+                    return connect();
+                  })
+                  .catch(reconnect);
+                return;
+              }
               afterSeq.current = nextSeq;
               writeCursor(taskId, nextSeq);
-              store.applyEvent(envelope as CodingEvent);
             }
           }
         };

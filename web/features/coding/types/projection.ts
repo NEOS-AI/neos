@@ -40,12 +40,23 @@ export type CodingWorkspaceView = {
   changed_files: string[];
 };
 
+export type CodingTextPartView = {
+  part_id: string;
+  run_id: string;
+  turn_id: string;
+  status: "streaming" | "completed" | "interrupted";
+  content: string;
+  first_seq: number;
+  last_seq: number;
+};
+
 export type CodingProjectionSnapshot = {
   task: CodingTask;
   active_run: CodingRunView | null;
   phases: CodingPhaseView[];
   tools: CodingToolView[];
   approvals: CodingApprovalView[];
+  parts?: CodingTextPartView[];
   todos: Record<string, unknown>[];
   workspace: CodingWorkspaceView;
   latest_checkpoint: Record<string, unknown> | null;
@@ -62,7 +73,10 @@ export type CodingProjectionState = {
   phases: CodingPhaseView[];
   toolsById: Record<string, CodingToolView>;
   approvalsById: Record<string, CodingApprovalView>;
+  textPartsById: Record<string, CodingTextPartView>;
+  orderedTextPartIds: string[];
   todos: Record<string, unknown>[];
   workspace: CodingWorkspaceView;
   gap: { expected: number; received: number } | null;
+  projectionIssue: { code: "unknown_text_part"; eventSeq: number } | null;
 };

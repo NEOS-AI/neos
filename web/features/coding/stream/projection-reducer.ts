@@ -5,6 +5,7 @@ import type {
   CodingProjectionSnapshot,
   CodingProjectionState,
   CodingToolView,
+  CodingTextPartView,
 } from "@/features/coding/types/projection";
 
 const phaseId = (kind: string, attempt: number) => `phase:${kind}:${attempt}`;
@@ -18,14 +19,20 @@ export const emptyProjection = (taskId: string): CodingProjectionState => ({
   phases: [],
   toolsById: {},
   approvalsById: {},
+  textPartsById: {},
+  orderedTextPartIds: [],
   todos: [],
   workspace: { revision: "uninitialized", git_head: null, changed_files: [] },
   gap: null,
+  projectionIssue: null,
 });
 
 export function reduceSnapshot(
   snapshot: CodingProjectionSnapshot
 ): CodingProjectionState {
+  const parts = [...(snapshot.parts ?? [])].sort(
+    (left, right) => left.first_seq - right.first_seq || left.part_id.localeCompare(right.part_id)
+  );
   return {
     taskId: snapshot.task.task_id,
     taskStatus: snapshot.task.status,
@@ -42,9 +49,12 @@ export function reduceSnapshot(
     approvalsById: Object.fromEntries(
       snapshot.approvals.map((approval) => [approval.approval_id, approval])
     ),
+    textPartsById: Object.fromEntries(parts.map((part) => [part.part_id, part])),
+    orderedTextPartIds: parts.map((part) => part.part_id),
     todos: snapshot.todos,
     workspace: snapshot.workspace,
     gap: null,
+    projectionIssue: null,
   };
 }
 
@@ -60,6 +70,59 @@ export function reduceProjectionEvent(
     return { ...state, gap: { expected, received: event.seq } };
   }
   const base = { ...state, appliedSeq: event.seq, gap: null };
+  if (event.type === "model.text_part.started") {
+    const partId = event.payload.part_id;
+    if (typeof partId !== "string" || !event.run_id || !event.turn_id) return base;
+    const interrupted = Array.isArray(event.payload.interrupted_part_ids)
+      ? event.payload.interrupted_part_ids.filter((id): id is string => typeof id === "string")
+      : [];
+    const textPartsById = { ...state.textPartsById };
+    for (const id of interrupted) {
+      const previous = textPartsById[id];
+      if (previous) textPartsById[id] = { ...previous, status: "interrupted", last_seq: event.seq };
+    }
+    if (textPartsById[partId]) return { ...base, textPartsById };
+    const part: CodingTextPartView = {
+      part_id: partId,
+      run_id: event.run_id,
+      turn_id: event.turn_id,
+      status: "streaming",
+      content: "",
+      first_seq: event.seq,
+      last_seq: event.seq,
+    };
+    return {
+      ...base,
+      textPartsById: { ...textPartsById, [partId]: part },
+      orderedTextPartIds: [...state.orderedTextPartIds, partId],
+    };
+  }
+  if (event.type === "model.text_delta" || event.type === "model.text_part.completed") {
+    const partId = event.payload.part_id;
+    if (typeof partId !== "string") return base;
+    const previous = state.textPartsById[partId];
+    if (!previous) {
+      return {
+        ...state,
+        projectionIssue: { code: "unknown_text_part", eventSeq: event.seq },
+      };
+    }
+    const delta = event.type === "model.text_delta" ? event.payload.delta : "";
+    if (event.type === "model.text_delta" && typeof delta !== "string") return base;
+    return {
+      ...base,
+      projectionIssue: null,
+      textPartsById: {
+        ...state.textPartsById,
+        [partId]: {
+          ...previous,
+          content: previous.content + delta,
+          status: event.type === "model.text_part.completed" ? "completed" : previous.status,
+          last_seq: event.seq,
+        },
+      },
+    };
+  }
   if (event.type === "phase.started") {
     const kind = event.payload.phase;
     const attempt = event.payload.attempt;
