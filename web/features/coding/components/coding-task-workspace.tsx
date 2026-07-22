@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { CodingDetailPanel } from "@/features/coding/components/coding-detail-panel";
 import { CodingApprovalCard } from "@/features/coding/components/coding-approval-card";
 import { CodingSteerComposer } from "@/features/coding/components/coding-steer-composer";
+import { CodingOutputLedger } from "@/features/coding/components/coding-output-ledger";
 import { PhaseTimeline } from "@/features/coding/components/phase-timeline";
 import { useCodingStream } from "@/features/coding/stream/use-coding-stream";
 
@@ -77,6 +78,11 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
                 SEQ {projection.appliedSeq}
               </span>
             </div>
+            <CodingOutputLedger
+              parts={projection.orderedTextPartIds.map(
+                (partId) => projection.textPartsById[partId]
+              )}
+            />
             <PhaseTimeline
               onSelect={setSelectedPhase}
               phases={projection.phases}

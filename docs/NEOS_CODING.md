@@ -1250,3 +1250,23 @@ decision은 `approve` 또는 `deny`만 허용한다. 소유하지 않은 task/ap
 `coding_approval_total{risk,outcome}`과 `coding_approval_latency_seconds{outcome}`만 사용한다. risk와 outcome은 enum의 fixed-cardinality 값이다. 승인 audit event는 등록 tool과 bounded risk/outcome만 기록하며 task/approval ID, 입력 내용과 actor는 기록하지 않는다.
 
 rollout 순서는 migration `042` 적용 → API/worker 배포 → Beat 활성화 → browser 배포다. 구버전 browser는 `waiting_approval` task를 실행시키지 못할 뿐 mutation을 우회하지 않는다. rollback은 model/worker 기능을 비활성화하되 migration과 pending 행을 보존한다. 기능이 꺼진 동안 pending 승인은 자동 승인하거나 실행하지 않는다. 다시 활성화하면 만료 reconciliation 또는 명시적 사용자 결정으로만 이어간다.
+
+---
+
+## 22. Durable public model text stream 운영 계약
+
+### 22.1 저장·이벤트·보안 경계
+
+Migration `043_add_coding_text_parts.sql`은 모델 turn마다 하나의 `coding_text_parts` 행을 만든다. `model.text_part.started`, `model.text_delta`, `model.text_part.completed` 이벤트와 part 변경, task sequence, outbox는 동일한 fenced transaction에서 commit된다. 공개되는 본문은 provider adapter가 정규화한 assistant `TextDelta.text`뿐이다. reasoning, raw provider frame, `ToolInputDelta.partial_json`, tool input, prompt, actor, checkpoint loop state는 본문이나 공개 event에 저장하지 않는다. Tool input delta event는 tool-call ID와 UTF-8 byte 수만 노출한다.
+
+part 상태는 `streaming`, `completed`, `interrupted`로 제한한다. replacement worker가 새 part를 시작하면 같은 canonical run의 남아 있는 streaming part를 새 start sequence에서 interrupted로 닫는다. stale fencing token은 start, append, complete 모두 거절되며, 브라우저는 알 수 없는 part를 참조하는 delta/completion을 적용하거나 cursor를 전진시키지 않고 snapshot resync를 수행한다.
+
+### 22.2 byte 제한과 실패 코드
+
+`max_text_delta_bytes <= max_public_text_bytes <= max_transcript_bytes`를 강제한다. 모든 크기는 문자 수가 아니라 UTF-8 byte 수로 계산한다. 단일 delta 초과는 `model_text_delta_too_large`, 누적 공개 본문 초과는 `model_public_text_budget_exceeded`, 유효하지 않거나 이미 닫힌 identity는 `model_text_part_stale`, 중복 start는 `model_text_part_exists`로 fail closed한다. 거절된 append는 part, sequence, event, outbox를 남기지 않는다.
+
+### 22.3 snapshot, UI, retention
+
+owner-scoped repeatable-read snapshot은 `first_seq, part_id` 순으로 `part_id`, `run_id`, `turn_id`, 상태, 본문, sequence 범위만 반환한다. 브라우저는 snapshot과 replay/live tail을 동일 projection에 합치며 frame당 한 번만 publish한다. 출력 ledger는 markdown이나 raw HTML을 실행하지 않고 plain `<pre>` child로 렌더링하며 streaming part에만 polite live-region을 사용한다.
+
+초기 retention은 coding task retention과 동일하게 task cascade 삭제를 따른다. 별도 archive 또는 장기 object storage가 도입되기 전에는 part만 독립 삭제하지 않는다. 배포 순서는 migration 043 → API/worker → browser다. rollback 시 model worker 기능을 끄되 migration, part, event를 보존한다. 구버전 browser는 새 event를 일반 sequence로 소비할 수 있지만 본문을 표시하지 않으므로, 안전한 복구가 필요하면 browser를 먼저 이전 버전으로 되돌리고 worker 생성을 중단한다.
