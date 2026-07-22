@@ -113,6 +113,8 @@ The event payload is:
 
 This makes replacement-worker recovery explicit for both snapshot and live clients.
 
+A repeated start with the same `(task_id, turn_id)` or `part_id` fails with `model_text_part_exists` and writes no sequence, event, or outbox row. Replacement attempts always create a new turn and part after acquiring a newer lease.
+
 ### 6.2 Delta
 
 `append_model_text_delta` validates part identity, streaming status, and lease. The SQL update requires `content_bytes + :delta_bytes <= :max_part_bytes`, appends text, updates byte count and `last_seq`, then appends `model.text_delta` plus outbox in the same transaction.
