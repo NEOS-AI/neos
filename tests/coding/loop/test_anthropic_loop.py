@@ -408,7 +408,11 @@ async def test_transcript_digest_and_compaction_are_deterministic() -> None:
 @pytest.mark.asyncio
 async def test_transcript_byte_cap_preserves_pending_multi_tool_structure() -> None:
     config = AnthropicLoopConfig(
-        model="claude-test", system="code", max_transcript_bytes=700
+        model="claude-test",
+        system="code",
+        max_transcript_bytes=700,
+        max_text_delta_bytes=700,
+        max_public_text_bytes=700,
     )
     calls = [
         tool_call("one", input={"content": "x" * 4000}),
@@ -436,7 +440,11 @@ async def test_transcript_byte_cap_preserves_pending_multi_tool_structure() -> N
 @pytest.mark.asyncio
 async def test_tiny_completed_transcript_cap_fails_before_checkpoint() -> None:
     config = AnthropicLoopConfig(
-        model="claude-test", system="code", max_transcript_bytes=8
+        model="claude-test",
+        system="code",
+        max_transcript_bytes=8,
+        max_text_delta_bytes=8,
+        max_public_text_bytes=8,
     )
     h = harness([[TextDelta("finished"), completed()]], config=config)
 
@@ -450,7 +458,11 @@ async def test_tiny_completed_transcript_cap_fails_before_checkpoint() -> None:
 @pytest.mark.asyncio
 async def test_pending_tool_structure_over_cap_fails_before_execution() -> None:
     config = AnthropicLoopConfig(
-        model="claude-test", system="code", max_transcript_bytes=250
+        model="claude-test",
+        system="code",
+        max_transcript_bytes=250,
+        max_text_delta_bytes=250,
+        max_public_text_bytes=250,
     )
     calls = [
         tool_call(f"tool_{index}", input={"content": "x" * 1000})

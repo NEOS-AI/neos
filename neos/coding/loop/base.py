@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Mapping, Protocol
 
 from neos.coding.domain.events import CodingEvent
+from neos.coding.domain.text_parts import ModelTextPartCommit
 from neos.coding.domain.approvals import (
     ApprovalDecision,
     ApprovalRequestCommit,
@@ -174,6 +175,36 @@ class CodingRunRepository(Protocol):
         workspace_revision: str,
         now: datetime,
     ) -> ModelCheckpointCommit: ...
+
+    async def start_model_text_part(
+        self,
+        *,
+        lease: ExecutionLease,
+        part_id: str,
+        turn_id: str,
+        now: datetime,
+    ) -> ModelTextPartCommit: ...
+
+    async def append_model_text_delta(
+        self,
+        *,
+        lease: ExecutionLease,
+        part_id: str,
+        turn_id: str,
+        delta: str,
+        delta_bytes: int,
+        max_part_bytes: int,
+        now: datetime,
+    ) -> ModelTextPartCommit: ...
+
+    async def complete_model_text_part(
+        self,
+        *,
+        lease: ExecutionLease,
+        part_id: str,
+        turn_id: str,
+        now: datetime,
+    ) -> ModelTextPartCommit: ...
 
     async def apply_steering_at_safe_point(
         self,

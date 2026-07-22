@@ -27,6 +27,12 @@ from neos.coding.domain.approvals import (
     canonical_approval_hash,
 )
 from neos.coding.domain.events import make_event
+from neos.coding.domain.text_parts import (
+    CodingTextPart,
+    ModelTextPartCommit,
+    TextPartConflict,
+    TextPartStatus,
+)
 from neos.coding.loop.base import EXPECTED_CHECKPOINT_OMITTED
 
 from neos.coding.domain.phases import (
@@ -172,6 +178,7 @@ class InMemoryCodingRunRepository:
         self.execution_leases = {}
         self.tool_claims = {}
         self.approvals = {}
+        self.text_parts = {}
         self._durability_lock = asyncio.Lock()
         self._durability_seq = 0
         self.begin_phase_calls = 0
@@ -693,6 +700,155 @@ class InMemoryCodingRunRepository:
             raise StaleExecutionLease(
                 f"{lease.task_id}: expected={lease!r}, current={current!r}, now={now!r}"
             )
+
+    def _require_canonical_running_run(self, lease) -> None:
+        run = self._canonical_run(lease.task_id)
+        if (
+            run is None
+            or run.run_id != lease.run_id
+            or run.status is not CodingRunStatus.RUNNING
+            or self.task_statuses.get(lease.task_id) != "running"
+        ):
+            raise StaleExecutionLease(lease.task_id)
+
+    async def start_model_text_part(self, *, lease, part_id, turn_id, now):
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=now)
+            self._require_canonical_running_run(lease)
+            if part_id in self.text_parts or any(
+                part.task_id == lease.task_id and part.turn_id == turn_id
+                for part in self.text_parts.values()
+            ):
+                raise TextPartConflict("model_text_part_exists")
+            self._durability_seq += 1
+            seq = self._durability_seq
+            interrupted_ids = tuple(
+                sorted(
+                    part.part_id
+                    for part in self.text_parts.values()
+                    if part.task_id == lease.task_id
+                    and part.run_id == lease.run_id
+                    and part.status is TextPartStatus.STREAMING
+                )
+            )
+            for interrupted_id in interrupted_ids:
+                self.text_parts[interrupted_id] = replace(
+                    self.text_parts[interrupted_id],
+                    status=TextPartStatus.INTERRUPTED,
+                    last_seq=seq,
+                    updated_at=now,
+                )
+            part = CodingTextPart(
+                part_id=part_id,
+                task_id=lease.task_id,
+                run_id=lease.run_id,
+                turn_id=turn_id,
+                first_seq=seq,
+                last_seq=seq,
+                status=TextPartStatus.STREAMING,
+                content="",
+                content_bytes=0,
+                created_at=now,
+                updated_at=now,
+            )
+            self.text_parts[part_id] = part
+            event = make_event(
+                task_id=lease.task_id,
+                seq=seq,
+                event_type="model.text_part.started",
+                payload={
+                    "part_id": part_id,
+                    "status": TextPartStatus.STREAMING.value,
+                    "interrupted_part_ids": list(interrupted_ids),
+                },
+                now=now,
+                run_id=lease.run_id,
+                turn_id=turn_id,
+            )
+            return ModelTextPartCommit(part, event, interrupted_ids)
+
+    async def append_model_text_delta(
+        self,
+        *,
+        lease,
+        part_id,
+        turn_id,
+        delta,
+        delta_bytes,
+        max_part_bytes,
+        now,
+    ):
+        if not delta or delta_bytes != len(delta.encode("utf-8")):
+            raise ValueError("delta_bytes must match a non-empty UTF-8 delta")
+        if max_part_bytes < 1:
+            raise ValueError("max_part_bytes must be positive")
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=now)
+            self._require_canonical_running_run(lease)
+            part = self.text_parts.get(part_id)
+            if (
+                part is None
+                or part.task_id != lease.task_id
+                or part.run_id != lease.run_id
+                or part.turn_id != turn_id
+                or part.status is not TextPartStatus.STREAMING
+            ):
+                raise TextPartConflict("model_text_part_stale")
+            if part.content_bytes + delta_bytes > max_part_bytes:
+                raise TextPartConflict("model_public_text_budget_exceeded")
+            self._durability_seq += 1
+            seq = self._durability_seq
+            updated = replace(
+                part,
+                content=part.content + delta,
+                content_bytes=part.content_bytes + delta_bytes,
+                last_seq=seq,
+                updated_at=now,
+            )
+            self.text_parts[part_id] = updated
+            event = make_event(
+                task_id=lease.task_id,
+                seq=seq,
+                event_type="model.text_delta",
+                payload={"part_id": part_id, "delta": delta},
+                now=now,
+                run_id=lease.run_id,
+                turn_id=turn_id,
+            )
+            return ModelTextPartCommit(updated, event)
+
+    async def complete_model_text_part(self, *, lease, part_id, turn_id, now):
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=now)
+            self._require_canonical_running_run(lease)
+            part = self.text_parts.get(part_id)
+            if (
+                part is None
+                or part.task_id != lease.task_id
+                or part.run_id != lease.run_id
+                or part.turn_id != turn_id
+                or part.status is not TextPartStatus.STREAMING
+            ):
+                raise TextPartConflict("model_text_part_stale")
+            self._durability_seq += 1
+            seq = self._durability_seq
+            completed = replace(
+                part,
+                status=TextPartStatus.COMPLETED,
+                last_seq=seq,
+                updated_at=now,
+            )
+            self.text_parts[part_id] = completed
+            event = make_event(
+                task_id=lease.task_id,
+                seq=seq,
+                event_type="model.text_part.completed",
+                payload={"part_id": part_id, "status": "completed"},
+                now=now,
+                run_id=lease.run_id,
+                turn_id=turn_id,
+            )
+            return ModelTextPartCommit(completed, event)
 
     async def begin_phase(self, *, lease, kind, now):
         async with self._durability_lock:
