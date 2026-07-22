@@ -9,6 +9,7 @@ from neos.coding.repositories.projection_repository import (
     CodingProjectionRows,
     CodingRunRow,
     CodingTaskRow,
+    CodingTextPartRow,
     CodingToolExecutionRow,
 )
 
@@ -67,6 +68,14 @@ class ProjectionFixtureRepository:
                 "requested_at": NOW, "expires_at": NOW,
                 "display_summary": {"path": "app.py"},
             },),
+            parts=(
+                CodingTextPartRow(
+                    "part_1", "cr_2", "turn_1", "completed", "안녕", 8, 10
+                ),
+                CodingTextPartRow(
+                    "part_2", "cr_2", "turn_2", "streaming", "계속", 13, 14
+                ),
+            ),
             todos=({"content": "Run tests", "status": "pending"},),
             latest_checkpoint=CodingCheckpointRow(
                 "cc_12",
@@ -100,6 +109,11 @@ async def test_snapshot_is_one_consistent_head_projection() -> None:
     assert snapshot.workspace.changed_files == ("app.py",)
     assert snapshot.approvals[0].status is ApprovalStatus.PENDING
     assert snapshot.approvals[0].risk is ToolRisk.WORKSPACE_WRITE
+    assert [part.content for part in snapshot.parts] == ["안녕", "계속"]
+    assert [part.status.value for part in snapshot.parts] == [
+        "completed",
+        "streaming",
+    ]
 
 
 async def test_snapshot_is_owner_scoped() -> None:

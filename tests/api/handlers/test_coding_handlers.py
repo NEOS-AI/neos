@@ -50,6 +50,7 @@ def make_client(user_id="u1"):
                 phases=(),
                 tools=(),
                 approvals=(),
+                parts=(),
                 todos=(),
                 workspace=SimpleNamespace(
                     revision="uninitialized", git_head=None, changed_files=()
@@ -247,6 +248,17 @@ def test_snapshot_returns_phase_and_checkpoint_state() -> None:
                 ),
                 tools=(),
                 approvals=(),
+                parts=(
+                    SimpleNamespace(
+                        part_id="part_1",
+                        run_id="cr_2",
+                        turn_id="turn_1",
+                        status="completed",
+                        content="안녕",
+                        first_seq=8,
+                        last_seq=10,
+                    ),
+                ),
                 todos=(),
                 workspace=SimpleNamespace(
                     revision="rev_12", git_head=None, changed_files=("app.py",)
@@ -273,3 +285,15 @@ def test_snapshot_returns_phase_and_checkpoint_state() -> None:
     assert body["active_run"]["run_id"] == "cr_2"
     assert body["phases"][0]["kind"] == "understand"
     assert body["connection_basis"] == "checkpoint"
+    assert body["parts"] == [
+        {
+            "part_id": "part_1",
+            "run_id": "cr_2",
+            "turn_id": "turn_1",
+            "status": "completed",
+            "content": "안녕",
+            "first_seq": 8,
+            "last_seq": 10,
+        }
+    ]
+    assert "content_bytes" not in body["parts"][0]

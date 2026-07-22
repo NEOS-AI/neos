@@ -74,6 +74,16 @@ class CodingApprovalSnapshot(BaseModel):
     display_summary: dict[str, Any]
 
 
+class CodingTextPartSnapshot(BaseModel):
+    part_id: str
+    run_id: str
+    turn_id: str
+    status: Literal["streaming", "completed", "interrupted"]
+    content: str
+    first_seq: int
+    last_seq: int
+
+
 class CodingWorkspaceSnapshot(BaseModel):
     revision: str
     git_head: str | None
@@ -95,6 +105,7 @@ class CodingProjectionSnapshotResponse(BaseModel):
     phases: list[CodingPhaseSnapshot]
     tools: list[CodingToolSnapshot]
     approvals: list[CodingApprovalSnapshot]
+    parts: list[CodingTextPartSnapshot]
     todos: list[dict[str, Any]]
     workspace: CodingWorkspaceSnapshot
     latest_checkpoint: CodingCheckpointSnapshot | None

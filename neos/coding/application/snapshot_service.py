@@ -4,6 +4,7 @@ from typing import Any, Mapping, Protocol
 
 from neos.coding.domain.approvals import ApprovalStatus
 from neos.coding.domain.phases import CodingPhaseKind
+from neos.coding.domain.text_parts import TextPartStatus
 from neos.coding.tools.registry import ToolRisk
 from neos.coding.repositories.projection_repository import CodingProjectionRows
 
@@ -57,6 +58,17 @@ class CodingApprovalProjection:
 
 
 @dataclass(frozen=True, slots=True)
+class CodingTextPartProjection:
+    part_id: str
+    run_id: str
+    turn_id: str
+    status: TextPartStatus
+    content: str
+    first_seq: int
+    last_seq: int
+
+
+@dataclass(frozen=True, slots=True)
 class CodingCheckpointProjection:
     checkpoint_id: str
     run_id: str
@@ -80,6 +92,7 @@ class CodingProjectionSnapshot:
     phases: tuple[CodingPhaseProjection, ...]
     tools: tuple[CodingToolProjection, ...]
     approvals: tuple[CodingApprovalProjection, ...]
+    parts: tuple[CodingTextPartProjection, ...]
     todos: tuple[Mapping[str, Any], ...]
     workspace: CodingWorkspaceProjection
     latest_checkpoint: CodingCheckpointProjection | None
@@ -148,6 +161,18 @@ class CodingSnapshotService:
             )
             for row in rows.approvals
         )
+        parts = tuple(
+            CodingTextPartProjection(
+                part_id=row.part_id,
+                run_id=row.run_id,
+                turn_id=row.turn_id,
+                status=TextPartStatus(row.status),
+                content=row.content,
+                first_seq=row.first_seq,
+                last_seq=row.last_seq,
+            )
+            for row in rows.parts
+        )
         checkpoint = (
             CodingCheckpointProjection(
                 checkpoint_id=rows.latest_checkpoint.checkpoint_id,
@@ -179,6 +204,7 @@ class CodingSnapshotService:
             phases=phases,
             tools=tools,
             approvals=approvals,
+            parts=parts,
             todos=rows.todos,
             workspace=workspace,
             latest_checkpoint=checkpoint,
