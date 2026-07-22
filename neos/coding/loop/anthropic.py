@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from neos.coding.domain.events import CodingEvent
+from neos.coding.domain.text_parts import TextPartConflict
 from neos.coding.domain.approvals import (
     ApprovalPolicyOutcome,
     ApprovalStatus,
@@ -190,20 +191,42 @@ class AnthropicCodingLoop:
             run_id=input.run_id,
             turn_id=f"turn_{uuid4().hex}",
         )
+        part_id = f"ctp_{uuid4().hex}"
+        try:
+            started = await deps.repository.start_model_text_part(
+                lease=deps.lease,
+                part_id=part_id,
+                turn_id=request.turn_id,
+                now=self._clock(),
+            )
+        except TextPartConflict as error:
+            raise CodingLoopFailure(str(error), retryable=False) from error
+        yield started.event
         text_parts: list[str] = []
         calls: list[ToolCallCompleted] = []
         completion: ModelCompleted | None = None
         try:
             async for model_event in self._model.stream(request):
                 if isinstance(model_event, TextDelta):
+                    delta_bytes = len(model_event.text.encode("utf-8"))
+                    if delta_bytes > self._config.max_text_delta_bytes:
+                        raise CodingLoopFailure(
+                            "model_text_delta_too_large", retryable=False
+                        )
                     text_parts.append(model_event.text)
-                    yield await deps.events.append(
-                        task_id=input.task_id,
-                        event_type="model.text_delta",
-                        payload={"bytes": len(model_event.text.encode("utf-8"))},
-                        run_id=input.run_id,
-                        turn_id=request.turn_id,
-                    )
+                    try:
+                        committed = await deps.repository.append_model_text_delta(
+                            lease=deps.lease,
+                            part_id=part_id,
+                            turn_id=request.turn_id,
+                            delta=model_event.text,
+                            delta_bytes=delta_bytes,
+                            max_part_bytes=self._config.max_public_text_bytes,
+                            now=self._clock(),
+                        )
+                    except TextPartConflict as error:
+                        raise CodingLoopFailure(str(error), retryable=False) from error
+                    yield committed.event
                 elif isinstance(model_event, ToolInputDelta):
                     yield await deps.events.append(
                         task_id=input.task_id,
@@ -226,6 +249,16 @@ class AnthropicCodingLoop:
             raise CodingLoopFailure(error.code, retryable=error.retryable) from error
         if completion is None:
             raise CodingLoopFailure("model_stream_incomplete", retryable=True)
+        try:
+            completed_part = await deps.repository.complete_model_text_part(
+                lease=deps.lease,
+                part_id=part_id,
+                turn_id=request.turn_id,
+                now=self._clock(),
+            )
+        except TextPartConflict as error:
+            raise CodingLoopFailure(str(error), retryable=False) from error
+        yield completed_part.event
         if self._metrics is not None:
             outcome = (
                 completion.stop_reason

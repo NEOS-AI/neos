@@ -3,6 +3,7 @@ from datetime import timedelta
 import pytest
 
 from neos.coding.domain.durability import StaleExecutionLease
+from neos.coding.domain.text_parts import TextPartStatus
 from neos.coding.loop.anthropic import CodingLoopFailure
 from tests.coding.fakes import RecordingCodingAuditSink, text_turn, tool_turn
 
@@ -72,6 +73,32 @@ async def test_crash_after_durable_tool_completion_reuses_result(
     assert harness.write_count == 1
     assert harness.completed_tool_ids == {"tool_1"}
     assert any(event["outcome"] == "reused" for event in audit.events)
+
+
+@pytest.mark.asyncio
+async def test_crash_after_durable_text_delta_interrupts_part_on_replacement(
+    real_loop_harness,
+) -> None:
+    harness = await real_loop_harness(
+        script=[text_turn("partial"), text_turn("done")],
+        crash_after="append_model_text_delta",
+    )
+
+    with pytest.raises(RuntimeError, match="injected crash"):
+        await harness.advance(worker_id="worker-1")
+    harness.elapse(timedelta(seconds=31))
+    harness.disable_crash()
+    await harness.advance_until_complete(worker_id="worker-2")
+
+    parts = sorted(
+        harness.repository.text_parts.values(), key=lambda part: part.first_seq
+    )
+    assert [part.status for part in parts] == [
+        TextPartStatus.INTERRUPTED,
+        TextPartStatus.COMPLETED,
+    ]
+    assert [part.content for part in parts] == ["partial", "done"]
+    assert parts[0].last_seq == parts[1].first_seq
 
 
 @pytest.mark.asyncio

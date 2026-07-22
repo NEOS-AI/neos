@@ -52,6 +52,12 @@ class CrashRepository(InMemoryCodingRunRepository):
             raise RuntimeError("injected crash after complete_tool_execution")
         return event
 
+    async def append_model_text_delta(self, **kwargs):
+        commit = await super().append_model_text_delta(**kwargs)
+        if self.crash_after == "append_model_text_delta":
+            raise RuntimeError("injected crash after append_model_text_delta")
+        return commit
+
 
 class RealLoopHarness:
     def __init__(
