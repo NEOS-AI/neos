@@ -3,7 +3,6 @@
 import {
   useEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
   useSyncExternalStore,
@@ -20,10 +19,6 @@ import {
   readCursor,
   writeCursor,
 } from "@/features/coding/stream/connection-policy";
-import {
-  initialCodingStreamState,
-  reduceCodingEvent,
-} from "@/features/coding/stream/event-reducer";
 import {
   nextContiguousSeq,
   reconnectDelayMs,
@@ -52,11 +47,6 @@ function terminalState(status: number): CodingConnectionState {
 export function useCodingStream(taskId: string) {
   const store = useMemo(() => getCodingProjectionStore(taskId), [taskId]);
   const projection = useSyncExternalStore(store.subscribe, store.getSnapshot);
-  const [state, dispatch] = useReducer(
-    reduceCodingEvent,
-    undefined,
-    initialCodingStreamState
-  );
   const [connection, setConnection] =
     useState<CodingConnectionState>("connecting");
   const afterSeq = useRef(0);
@@ -190,7 +180,6 @@ export function useCodingStream(taskId: string) {
             if (nextSeq > previousSeq) {
               afterSeq.current = nextSeq;
               writeCursor(taskId, nextSeq);
-              dispatch(envelope as CodingEvent);
               store.applyEvent(envelope as CodingEvent);
             }
           }
@@ -250,5 +239,5 @@ export function useCodingStream(taskId: string) {
     };
   }, [store, taskId]);
 
-  return { state, projection, connection };
+  return { projection, connection };
 }
