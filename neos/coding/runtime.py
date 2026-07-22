@@ -182,6 +182,8 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         input_cost_micros_per_million=(coding.input_cost_micros_per_million),
         output_cost_micros_per_million=(coding.output_cost_micros_per_million),
         max_transcript_bytes=coding.max_transcript_bytes,
+        max_text_delta_bytes=coding.max_text_delta_bytes,
+        max_public_text_bytes=coding.max_public_text_bytes,
         approval_ttl_sec=coding.approval_ttl_seconds,
     )
 

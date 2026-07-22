@@ -794,6 +794,8 @@ class CodingModelConfig(StrictConfigModel):
     max_consecutive_tool_errors: int = Field(default=3, gt=0, le=20)
     max_output_tokens: int = Field(default=8192, gt=0)
     max_transcript_bytes: int = Field(default=1_048_576, gt=0)
+    max_text_delta_bytes: int = Field(default=16_384, gt=0)
+    max_public_text_bytes: int = Field(default=1_048_576, gt=0)
     max_cost_usd: float = Field(default=5.0, gt=0)
     input_cost_micros_per_million: int = Field(default=0, ge=0)
     output_cost_micros_per_million: int = Field(default=0, ge=0)
@@ -807,6 +809,12 @@ class CodingModelConfig(StrictConfigModel):
 
     @model_validator(mode="after")
     def validate_command_policy(self) -> "CodingModelConfig":
+        if not (
+            self.max_text_delta_bytes
+            <= self.max_public_text_bytes
+            <= self.max_transcript_bytes
+        ):
+            raise ValueError("coding public text byte limits are invalid")
         malformed = any(
             not command or re.fullmatch(r"[A-Za-z0-9._+-]+", command) is None
             for command in self.command_allowlist

@@ -35,6 +35,8 @@ def priced_real_config(**overrides):
         ("max_consecutive_tool_errors", 0),
         ("max_output_tokens", 0),
         ("max_transcript_bytes", 0),
+        ("max_text_delta_bytes", 0),
+        ("max_public_text_bytes", 0),
         ("max_cost_usd", 0),
         ("mutation_snapshot_interval", 0),
         ("approval_ttl_seconds", 0),
@@ -98,3 +100,16 @@ def test_coding_approval_defaults_are_bounded() -> None:
 
     with pytest.raises(ValidationError):
         CodingModelConfig(approval_reconciliation_batch_size=1001)
+
+
+def test_public_text_defaults_and_ordering_are_bounded() -> None:
+    config = CodingModelConfig()
+    assert config.max_text_delta_bytes == 16_384
+    assert config.max_public_text_bytes == 1_048_576
+
+    with pytest.raises(ValidationError, match="public text byte limits"):
+        CodingModelConfig(max_text_delta_bytes=20, max_public_text_bytes=10)
+    with pytest.raises(ValidationError, match="public text byte limits"):
+        CodingModelConfig(
+            max_public_text_bytes=101, max_transcript_bytes=100
+        )

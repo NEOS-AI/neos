@@ -73,6 +73,8 @@ class AnthropicLoopConfig:
     output_cost_micros_per_million: int = 0
     max_transcript_messages: int = 100
     max_transcript_bytes: int = 1_048_576
+    max_text_delta_bytes: int = 16_384
+    max_public_text_bytes: int = 1_048_576
     approval_ttl_sec: float = 900
 
     def __post_init__(self) -> None:
@@ -87,10 +89,18 @@ class AnthropicLoopConfig:
             self.max_cost_micros,
             self.max_transcript_messages,
             self.max_transcript_bytes,
+            self.max_text_delta_bytes,
+            self.max_public_text_bytes,
             self.approval_ttl_sec,
         )
         if not self.model or not self.system or any(value <= 0 for value in numeric):
             raise ValueError("anthropic loop configuration limits must be positive")
+        if not (
+            self.max_text_delta_bytes
+            <= self.max_public_text_bytes
+            <= self.max_transcript_bytes
+        ):
+            raise ValueError("anthropic public text byte limits are invalid")
         if (
             self.input_cost_micros_per_million < 0
             or self.output_cost_micros_per_million < 0
