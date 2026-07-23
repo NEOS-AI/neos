@@ -46,7 +46,7 @@ def test_worker_brief_keeps_verified_findings_before_repairs():
     assert "self_assessment" in output
 
 
-def test_worker_brief_v2_calibrates_atomic_claims_and_confidence():
+def test_worker_brief_v3_scopes_claims_and_grounds_exact_quotes():
     output = render(
         "worker_brief",
         question_text="q",
@@ -61,9 +61,15 @@ def test_worker_brief_v2_calibrates_atomic_claims_and_confidence():
         fetched_evidence="<evidence>source</evidence>",
     )
 
-    assert "독립적으로 검증 가능한 명제 하나" in output
-    assert "대상" in output and "시점" in output and "조건" in output
-    assert "상관관계" in output and "인과" in output
+    assert "<!-- version: 3 -->" in output
+    assert "한 기관·한 결론·한 비교축" in output
+    assert "기관별로 별도 claim" in output
+    assert "비교 대상과 비교 방향을 모두 직접 명시" in output
+    assert "하나의 연속된 문자열" in output
+    assert "번역·의역·생략 부호·분리된 문장 결합" in output
+    assert "source_url의 fetch 원문에서 그대로 검색" in output
+    assert "분리하거나 지지 범위로 좁히고" in output
+    assert "지지되지 않는 나머지는 버린다" in output
     assert "고유 source_url" in output
     assert "1개 0.55" in output
     assert "2개 0.75" in output
