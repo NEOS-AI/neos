@@ -14,6 +14,9 @@ from neos.coding.application.run_service import (
 from neos.coding.application.approval_service import CodingApprovalService
 from neos.coding.application.snapshot_service import CodingSnapshotService
 from neos.coding.application.workspace_service import CodingWorkspaceService
+from neos.coding.application.workspace_stream_service import (
+    CodingWorkspaceStreamService,
+)
 from neos.coding.loop.base import CodingLoop
 from neos.coding.loop.fake import FakeDurableCodingLoop
 from neos.coding.loop.anthropic import AnthropicCodingLoop, AnthropicLoopConfig
@@ -41,6 +44,11 @@ from neos.coding.transport.memory import (
 )
 from neos.coding.transport.redis_events import RedisCodingEventTransport
 from neos.coding.transport.redis_tickets import RedisCodingTicketStore
+from neos.coding.transport.workspace_tickets import (
+    InMemoryWorkspaceTicketStore,
+    RedisWorkspaceTicketStore,
+    WorkspaceTicketStore,
+)
 from neos.coding.workers.development_supervisor import (
     CodingDevelopmentSupervisor,
 )
@@ -63,6 +71,7 @@ from neos.observability.metrics import metrics
 class CodingRuntimeTransport:
     tickets: CodingTicketStore
     events: CodingEventTransport
+    workspace_tickets: WorkspaceTicketStore
 
 
 @dataclass(slots=True)
@@ -72,6 +81,7 @@ class CodingRuntime:
     snapshots: CodingSnapshotService
     approvals: CodingApprovalService
     workspace: CodingWorkspaceService
+    workspace_streams: CodingWorkspaceStreamService
     sandboxes: Any
     supervisor: CodingDevelopmentSupervisor | None = None
     _closed: bool = False
@@ -88,6 +98,7 @@ class CodingRuntime:
 coding_transport = CodingRuntimeTransport(
     tickets=InMemoryWsTicketStore(),
     events=InProcessCodingEventBroker(),
+    workspace_tickets=InMemoryWorkspaceTicketStore(),
 )
 coding_outbox_repository = PostgresCodingOutboxRepository(db_manager.get_session)
 coding_outbox_dispatcher = CodingOutboxDispatcher(
@@ -170,6 +181,11 @@ def create_coding_runtime(
             max_file_bytes=workspace_config.file_max_bytes,
             max_tree_entries=workspace_config.tree_max_entries,
             max_diff_bytes=workspace_config.diff_max_bytes,
+        ),
+        workspace_streams=CodingWorkspaceStreamService(
+            tasks=tasks,
+            bindings=binding_service,
+            pty_max_sessions=workspace_config.pty_max_sessions,
         ),
         sandboxes=sandbox_provider,
     )
@@ -373,6 +389,7 @@ coding_run_service = coding_runtime.runs
 coding_snapshot_service = coding_runtime.snapshots
 coding_approval_service = coding_runtime.approvals
 coding_workspace_service = coding_runtime.workspace
+coding_workspace_stream_service = coding_runtime.workspace_streams
 
 
 def initialize_coding_transport(
@@ -385,11 +402,16 @@ def initialize_coding_transport(
         runtime = CodingRuntimeTransport(
             tickets=RedisCodingTicketStore(redis_client),
             events=RedisCodingEventTransport(redis_client),
+            workspace_tickets=RedisWorkspaceTicketStore(
+                redis_client,
+                ttl_seconds=settings.config.sandbox.workspace.ticket_ttl_seconds,
+            ),
         )
     else:
         runtime = CodingRuntimeTransport(
             tickets=InMemoryWsTicketStore(),
             events=InProcessCodingEventBroker(),
+            workspace_tickets=InMemoryWorkspaceTicketStore(),
         )
     coding_transport = runtime
     coding_outbox_dispatcher.set_publisher(runtime.events)
@@ -406,6 +428,10 @@ def get_coding_ticket_store() -> CodingTicketStore:
 
 def get_coding_event_transport() -> CodingEventTransport:
     return coding_transport.events
+
+
+def get_workspace_ticket_store() -> WorkspaceTicketStore:
+    return coding_transport.workspace_tickets
 
 
 def start_coding_outbox_dispatcher(

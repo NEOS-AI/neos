@@ -12,8 +12,13 @@ from neos.api.handlers.coding_handlers import (
     get_coding_service,
     get_coding_snapshot_service,
     get_coding_workspace_service,
+    get_workspace_stream_ticket_store,
     get_ws_ticket_store,
     router,
+)
+from neos.coding.transport.workspace_tickets import (
+    InMemoryWorkspaceTicketStore,
+    WorkspaceStreamKind,
 )
 from neos.coding.domain.approvals import ApprovalConflict, ApprovalNotFound
 from neos.coding.application.run_service import (
@@ -185,6 +190,32 @@ def test_owner_can_issue_task_bound_websocket_ticket() -> None:
     assert response.status_code == 201
     assert response.json()["ticket"].startswith("cwt_")
     assert response.json()["expires_in"] == 30
+
+
+def test_owner_can_issue_kind_bound_workspace_ticket() -> None:
+    client, service = make_client("u1")
+    tickets = InMemoryWorkspaceTicketStore()
+    client.app.dependency_overrides[get_workspace_stream_ticket_store] = (
+        lambda: tickets
+    )
+    task = asyncio.run(service.create_task(owner_id="u1", prompt="Fix"))
+    response = client.post(
+        f"/api/v1/coding/tasks/{task.task_id}/workspace/ws-ticket",
+        params={"kind": "pty"},
+    )
+
+    assert response.status_code == 201
+    token = response.json()["ticket"]
+    assert (
+        asyncio.run(
+            tickets.consume(
+                token,
+                task_id=task.task_id,
+                kind=WorkspaceStreamKind.PTY,
+            )
+        )
+        == "u1"
+    )
 
 
 def test_foreign_user_cannot_issue_websocket_ticket() -> None:

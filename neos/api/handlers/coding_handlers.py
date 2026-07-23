@@ -38,8 +38,13 @@ from neos.coding.runtime import (
     coding_snapshot_service,
     coding_workspace_service,
     get_coding_ticket_store,
+    get_workspace_ticket_store,
 )
 from neos.coding.transport.base import CodingTicketStore
+from neos.coding.transport.workspace_tickets import (
+    WorkspaceStreamKind,
+    WorkspaceTicketStore,
+)
 from neos.database.models import User
 
 
@@ -68,6 +73,10 @@ def get_coding_approval_service() -> CodingApprovalService:
 
 def get_coding_workspace_service() -> CodingWorkspaceService:
     return coding_workspace_service
+
+
+def get_workspace_stream_ticket_store() -> WorkspaceTicketStore:
+    return get_workspace_ticket_store()
 
 
 def _raise_workspace_error(error: WorkspaceEditConflict) -> None:
@@ -317,3 +326,24 @@ async def create_coding_ws_ticket(
         raise HTTPException(status_code=404, detail="Coding task not found")
     ticket = await tickets.issue(owner_id=current_user.user_id, task_id=task_id)
     return {"ticket": ticket, "expires_in": tickets.expires_in}
+
+
+@router.post(
+    "/tasks/{task_id}/workspace/ws-ticket",
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_workspace_ws_ticket(
+    task_id: str,
+    kind: WorkspaceStreamKind = Query(...),
+    current_user: User = Depends(get_current_user),
+    service: CodingTaskService = Depends(get_coding_service),
+    tickets: WorkspaceTicketStore = Depends(get_workspace_stream_ticket_store),
+):
+    if await service.snapshot(task_id, current_user.user_id) is None:
+        raise HTTPException(status_code=404, detail="Coding task not found")
+    ticket = await tickets.issue(
+        owner_id=current_user.user_id,
+        task_id=task_id,
+        kind=kind,
+    )
+    return {"ticket": ticket, "expires_in": tickets.expires_in, "kind": kind.value}

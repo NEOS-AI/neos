@@ -387,7 +387,11 @@ def test_production_health_routes_remain_public():
 def test_production_app_exposes_only_authenticated_coding_websocket():
     _, production_app = _load_production_app()
 
-    assert _websocket_paths(production_app) == {f"{API_PREFIX}/coding/ws"}
+    assert _websocket_paths(production_app) == {
+        f"{API_PREFIX}/coding/ws",
+        f"{API_PREFIX}/coding/workspace/ws",
+        f"{API_PREFIX}/coding/pty/ws",
+    }
 
 
 def test_query_compatibility_user_ids_are_optional_and_deprecated():

@@ -41,6 +41,9 @@ from neos.api.handlers.scheduled_tasks_handlers import router as scheduled_tasks
 from neos.api.handlers.ui_submit_handlers import router as ui_submit_router  # Phase 8: A2UI
 from neos.api.handlers.coding_handlers import router as coding_router
 from neos.api.handlers.coding_ws_handlers import router as coding_ws_router
+from neos.api.handlers.coding_workspace_ws_handlers import (
+    router as coding_workspace_ws_router,
+)
 from neos.coding.runtime import (
     close_coding_transport,
     coding_runtime,
@@ -589,6 +592,11 @@ app.include_router(
     coding_ws_router,
     prefix=settings.API_V1_PREFIX,
     tags=["Coding Agent WebSocket"],
+)
+app.include_router(
+    coding_workspace_ws_router,
+    prefix=settings.API_V1_PREFIX,
+    tags=["Coding Workspace WebSocket"],
 )
 
 
