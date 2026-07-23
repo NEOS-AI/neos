@@ -755,6 +755,16 @@ class SandboxStreamConfig(StrictConfigModel):
     watcher_debounce_sec: float = Field(default=0.05, gt=0, le=5)
 
 
+class SandboxWorkspaceConfig(StrictConfigModel):
+    tree_max_entries: int = Field(default=5_000, gt=0, le=20_000)
+    file_max_bytes: int = Field(default=1024 * 1024, gt=0)
+    diff_max_bytes: int = Field(default=2 * 1024 * 1024, gt=0)
+    edit_batch_size: int = Field(default=20, gt=0, le=100)
+    ticket_ttl_seconds: int = Field(default=30, gt=0, le=300)
+    pty_idle_ttl_seconds: int = Field(default=1_800, gt=0)
+    pty_max_sessions: int = Field(default=3, gt=0, le=10)
+
+
 class SandboxDockerConfig(StrictConfigModel):
     image: str = ""
     network_mode: str = "none"
@@ -779,6 +789,9 @@ class SandboxConfig(StrictConfigModel):
         default_factory=SandboxExecutionConfig
     )
     streams: SandboxStreamConfig = Field(default_factory=SandboxStreamConfig)
+    workspace: SandboxWorkspaceConfig = Field(
+        default_factory=SandboxWorkspaceConfig
+    )
     memory: SandboxMemoryConfig = Field(default_factory=SandboxMemoryConfig)
     docker: SandboxDockerConfig = Field(default_factory=SandboxDockerConfig)
 
