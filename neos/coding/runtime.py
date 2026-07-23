@@ -13,6 +13,7 @@ from neos.coding.application.run_service import (
 )
 from neos.coding.application.approval_service import CodingApprovalService
 from neos.coding.application.snapshot_service import CodingSnapshotService
+from neos.coding.application.workspace_service import CodingWorkspaceService
 from neos.coding.loop.base import CodingLoop
 from neos.coding.loop.fake import FakeDurableCodingLoop
 from neos.coding.loop.anthropic import AnthropicCodingLoop, AnthropicLoopConfig
@@ -26,6 +27,9 @@ from neos.coding.outbox.dispatcher import CodingOutboxDispatcher
 from neos.coding.outbox.repository import PostgresCodingOutboxRepository
 from neos.coding.persistence.postgres import PostgresCodingService
 from neos.coding.repositories.run_repository import PostgresCodingRunRepository
+from neos.coding.repositories.workspace_edit_repository import (
+    PostgresWorkspaceEditRepository,
+)
 from neos.coding.repositories.projection_repository import (
     PostgresCodingProjectionRepository,
 )
@@ -67,6 +71,7 @@ class CodingRuntime:
     runs: CodingRunService
     snapshots: CodingSnapshotService
     approvals: CodingApprovalService
+    workspace: CodingWorkspaceService
     sandboxes: Any
     supervisor: CodingDevelopmentSupervisor | None = None
     _closed: bool = False
@@ -105,7 +110,9 @@ def create_coding_runtime(
     clock=None,
     sandboxes=None,
     approval_wake=None,
+    config: AppConfig | None = None,
 ) -> CodingRuntime:
+    config = config or settings.config
     snapshots = CodingSnapshotService(projection_repository)
     run_kwargs = {}
     if clock is not None:
@@ -117,9 +124,28 @@ def create_coding_runtime(
         loop=loop,
         metrics=metrics_collector,
         interrupter=interrupter or InProcessRunInterrupter(),
+        workspace_edit_batch_size=config.sandbox.workspace.edit_batch_size,
         **run_kwargs,
     )
     sandbox_provider = sandboxes or create_sandbox_provider(settings.config.sandbox)
+    sandbox_config = config.sandbox
+    resources = sandbox_config.resources
+    execution = sandbox_config.execution
+    binding_service = SandboxBindingService(
+        repository=PostgresSandboxBindingRepository(db_manager.get_session),
+        provider=sandbox_provider,
+        limits=SandboxLimits(
+            cpu_count=resources.cpu_count,
+            memory_bytes=resources.memory_bytes,
+            pids=resources.pids,
+            workspace_bytes=resources.workspace_bytes,
+            command_timeout_sec=execution.command_timeout_sec,
+            max_output_bytes=execution.max_output_bytes,
+            max_stdin_bytes=execution.max_stdin_bytes,
+        ),
+        snapshot_cadence=config.coding_model.mutation_snapshot_interval,
+    )
+    workspace_config = sandbox_config.workspace
     if approval_wake is None:
         async def approval_wake(_task_id: str, _checkpoint_id: str) -> None:
             return None
@@ -132,6 +158,18 @@ def create_coding_runtime(
             wake=approval_wake,
             metrics=metrics_collector,
             audit=LoggingCodingAuditSink(),
+        ),
+        workspace=CodingWorkspaceService(
+            tasks=tasks,
+            runs=run_repository,
+            bindings=binding_service,
+            edits=PostgresWorkspaceEditRepository(
+                db_manager.get_session,
+                wake_outbox=coding_outbox_dispatcher.wake,
+            ),
+            max_file_bytes=workspace_config.file_max_bytes,
+            max_tree_entries=workspace_config.tree_max_entries,
+            max_diff_bytes=workspace_config.diff_max_bytes,
         ),
         sandboxes=sandbox_provider,
     )
@@ -270,6 +308,7 @@ def create_development_coding_runtime(
             metrics_collector=metrics,
             interrupter=InProcessRunInterrupter(),
             sandboxes=sandboxes,
+            config=config,
         )
         supervisor = None
         if settings.CODING_FAKE_LOOP_ENABLED:
@@ -333,6 +372,7 @@ coding_runtime = create_development_coding_runtime()
 coding_run_service = coding_runtime.runs
 coding_snapshot_service = coding_runtime.snapshots
 coding_approval_service = coding_runtime.approvals
+coding_workspace_service = coding_runtime.workspace
 
 
 def initialize_coding_transport(

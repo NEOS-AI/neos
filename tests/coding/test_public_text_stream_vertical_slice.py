@@ -67,6 +67,7 @@ async def test_public_text_survives_replacement_snapshot_without_tool_json(
                     )
                     for part in durable_parts
                 ),
+                workspace_edits=(),
                 todos=(),
                 latest_checkpoint=None,
                 head_seq=99,

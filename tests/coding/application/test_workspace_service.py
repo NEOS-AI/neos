@@ -12,7 +12,11 @@ from neos.coding.domain.workspace_edits import (
     WorkspaceEditConflict,
     WorkspaceEditStatus,
 )
-from neos.coding.sandbox.base import SandboxStateConflict
+from neos.coding.sandbox.base import (
+    CommandResult,
+    FileEntry,
+    SandboxStateConflict,
+)
 from neos.coding.sandbox.bindings import BoundSandboxSession, SandboxBinding
 
 
@@ -55,6 +59,7 @@ class Session:
         self.write_count = 0
         self.files: dict[str, bytes] = {}
         self.fail_after_write = False
+        self.diff = b""
 
     async def write_file_if_revision(
         self, path: str, content: bytes, *, expected_revision: int
@@ -73,6 +78,19 @@ class Session:
 
     async def read_file(self, path: str) -> bytes:
         return self.files[path]
+
+    async def stat(self, path: str) -> FileEntry:
+        content = self.files[path]
+        return FileEntry(path, "file", len(content), NOW)
+
+    async def list_tree(self, path: str = ".") -> tuple[FileEntry, ...]:
+        return tuple(
+            FileEntry(item, "file", len(content), NOW)
+            for item, content in reversed(tuple(self.files.items()))
+        )
+
+    async def git_diff(self, *, staged: bool = False) -> CommandResult:
+        return CommandResult(0, self.diff, b"")
 
 
 class Bindings:
@@ -173,6 +191,8 @@ def make_service(session: Session):
             bindings=Bindings(session),
             edits=edits,
             max_file_bytes=128,
+            max_tree_entries=10,
+            max_diff_bytes=16,
             clock=lambda: NOW,
         ),
         edits,

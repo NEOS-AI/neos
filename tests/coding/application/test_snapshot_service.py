@@ -11,6 +11,7 @@ from neos.coding.repositories.projection_repository import (
     CodingTaskRow,
     CodingTextPartRow,
     CodingToolExecutionRow,
+    CodingWorkspaceEditRow,
 )
 
 
@@ -76,6 +77,16 @@ class ProjectionFixtureRepository:
                     "part_2", "cr_2", "turn_2", "streaming", "계속", 13, 14
                 ),
             ),
+            workspace_edits=(
+                CodingWorkspaceEditRow(
+                    "cwe_1",
+                    "app.py",
+                    "11",
+                    "12",
+                    "applied",
+                    "cc_12",
+                ),
+            ),
             todos=({"content": "Run tests", "status": "pending"},),
             latest_checkpoint=CodingCheckpointRow(
                 "cc_12",
@@ -114,6 +125,8 @@ async def test_snapshot_is_one_consistent_head_projection() -> None:
         "completed",
         "streaming",
     ]
+    assert snapshot.workspace.user_edits[0].status == "agent_synced"
+    assert snapshot.workspace.user_edits[0].applied_checkpoint_id == "cc_12"
 
 
 async def test_snapshot_is_owner_scoped() -> None:

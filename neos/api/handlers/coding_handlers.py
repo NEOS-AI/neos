@@ -9,6 +9,11 @@ from neos.api.models.coding_models import (
     CodingSteerResponse,
     CodingTaskResponse,
     CodingProjectionSnapshotResponse,
+    CodingWorkspaceDiffResponse,
+    CodingWorkspaceFileResponse,
+    CodingWorkspaceFileSaveRequest,
+    CodingWorkspaceFileSaveResponse,
+    CodingWorkspaceTreeResponse,
     CreateCodingTaskRequest,
 )
 from neos.coding.application.approval_service import CodingApprovalService
@@ -19,16 +24,19 @@ from neos.coding.domain.approvals import (
 )
 from neos.coding.application.run_service import CodingRunService
 from neos.coding.application.snapshot_service import CodingSnapshotService
+from neos.coding.application.workspace_service import CodingWorkspaceService
 from neos.coding.application.task_service import CodingTaskService
 from neos.coding.domain.errors import CodingTaskNotFound
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.models import CodingTask
 from neos.coding.domain.phases import SteeringMode
+from neos.coding.domain.workspace_edits import WorkspaceEditConflict
 from neos.coding.runtime import (
     coding_run_service,
     coding_approval_service,
     coding_service,
     coding_snapshot_service,
+    coding_workspace_service,
     get_coding_ticket_store,
 )
 from neos.coding.transport.base import CodingTicketStore
@@ -56,6 +64,27 @@ def get_coding_snapshot_service() -> CodingSnapshotService:
 
 def get_coding_approval_service() -> CodingApprovalService:
     return coding_approval_service
+
+
+def get_coding_workspace_service() -> CodingWorkspaceService:
+    return coding_workspace_service
+
+
+def _raise_workspace_error(error: WorkspaceEditConflict) -> None:
+    code = str(error)
+    if code == "workspace_not_found":
+        raise HTTPException(
+            status_code=404, detail="Coding workspace not found"
+        ) from error
+    if code in {
+        "workspace_revision_conflict",
+        "workspace_edit_exists",
+        "workspace_edit_reconcile_required",
+        "workspace_run_changed",
+        "workspace_run_not_running",
+    }:
+        raise HTTPException(status_code=409, detail=code) from error
+    raise HTTPException(status_code=422, detail=code) from error
 
 
 def _approval_response(approval) -> dict:
@@ -174,6 +203,89 @@ async def get_coding_task_snapshot(
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Coding task not found")
     return snapshot
+
+
+@router.get(
+    "/tasks/{task_id}/workspace/tree",
+    response_model=CodingWorkspaceTreeResponse,
+)
+async def get_coding_workspace_tree(
+    task_id: str,
+    path: str = Query("."),
+    current_user: User = Depends(get_current_user),
+    workspace: CodingWorkspaceService = Depends(get_coding_workspace_service),
+):
+    try:
+        return await workspace.list_tree(
+            task_id=task_id,
+            owner_id=current_user.user_id,
+            path=path,
+        )
+    except WorkspaceEditConflict as error:
+        _raise_workspace_error(error)
+
+
+@router.get(
+    "/tasks/{task_id}/workspace/files",
+    response_model=CodingWorkspaceFileResponse,
+)
+async def get_coding_workspace_file(
+    task_id: str,
+    path: str = Query(..., min_length=1, max_length=4096),
+    current_user: User = Depends(get_current_user),
+    workspace: CodingWorkspaceService = Depends(get_coding_workspace_service),
+):
+    try:
+        return await workspace.read_file(
+            task_id=task_id,
+            owner_id=current_user.user_id,
+            path=path,
+        )
+    except WorkspaceEditConflict as error:
+        _raise_workspace_error(error)
+
+
+@router.get(
+    "/tasks/{task_id}/workspace/diff",
+    response_model=CodingWorkspaceDiffResponse,
+)
+async def get_coding_workspace_diff(
+    task_id: str,
+    staged: bool = Query(False),
+    current_user: User = Depends(get_current_user),
+    workspace: CodingWorkspaceService = Depends(get_coding_workspace_service),
+):
+    try:
+        return await workspace.git_diff(
+            task_id=task_id,
+            owner_id=current_user.user_id,
+            staged=staged,
+        )
+    except WorkspaceEditConflict as error:
+        _raise_workspace_error(error)
+
+
+@router.put(
+    "/tasks/{task_id}/workspace/files",
+    response_model=CodingWorkspaceFileSaveResponse,
+)
+async def save_coding_workspace_file(
+    task_id: str,
+    body: CodingWorkspaceFileSaveRequest,
+    current_user: User = Depends(get_current_user),
+    workspace: CodingWorkspaceService = Depends(get_coding_workspace_service),
+):
+    try:
+        return await workspace.save_file(
+            task_id=task_id,
+            owner_id=current_user.user_id,
+            edit_id=body.edit_id,
+            path=body.path,
+            base_revision=body.base_revision,
+            content=body.content,
+        )
+    except WorkspaceEditConflict as error:
+        _raise_workspace_error(error)
 
 
 @router.get("/tasks/{task_id}/events", response_model=CodingEventListResponse)

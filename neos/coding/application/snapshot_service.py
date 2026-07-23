@@ -83,6 +83,17 @@ class CodingWorkspaceProjection:
     revision: str
     git_head: str | None
     changed_files: tuple[str, ...]
+    user_edits: tuple["CodingWorkspaceEditProjection", ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CodingWorkspaceEditProjection:
+    edit_id: str
+    path: str
+    base_revision: str
+    resulting_revision: str | None
+    status: str
+    applied_checkpoint_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +201,21 @@ class CodingSnapshotService:
             revision=checkpoint.workspace_revision if checkpoint else "uninitialized",
             git_head=loop_state.get("git_head"),
             changed_files=tuple(loop_state.get("changed_files", [])),
+            user_edits=tuple(
+                CodingWorkspaceEditProjection(
+                    edit_id=row.edit_id,
+                    path=row.path,
+                    base_revision=row.base_revision,
+                    resulting_revision=row.resulting_revision,
+                    status={
+                        "committed": "pending_agent_sync",
+                        "applied": "agent_synced",
+                        "reconcile_required": "reconcile_required",
+                    }[row.status],
+                    applied_checkpoint_id=row.applied_checkpoint_id,
+                )
+                for row in rows.workspace_edits
+            ),
         )
         return CodingProjectionSnapshot(
             task=CodingTaskProjection(
