@@ -33,10 +33,18 @@ EXPECTED_CHECKPOINT_OMITTED = object()
 
 
 @dataclass(frozen=True, slots=True)
+class WorkspaceEditContext:
+    edit_id: str
+    path: str
+    resulting_revision: str
+
+
+@dataclass(frozen=True, slots=True)
 class LoopInput:
     task_id: str
     run_id: str
     instruction: str
+    workspace_edits: tuple[WorkspaceEditContext, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +223,15 @@ class CodingRunRepository(Protocol):
         claim_expires_at: datetime,
         now: datetime,
     ) -> SteeringApplication | None: ...
+
+    async def claim_workspace_edits_at_safe_point(
+        self,
+        *,
+        lease: ExecutionLease,
+        checkpoint: CodingCheckpoint,
+        limit: int,
+        now: datetime,
+    ): ...
 
     async def commit_interruption(
         self,

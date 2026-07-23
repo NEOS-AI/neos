@@ -35,6 +35,11 @@ from neos.coding.domain.text_parts import (
     TextPartConflict,
     TextPartStatus,
 )
+from neos.coding.domain.workspace_edits import (
+    CodingWorkspaceEdit,
+    WorkspaceEditApplication,
+    WorkspaceEditStatus,
+)
 from neos.coding.loop.base import EXPECTED_CHECKPOINT_OMITTED
 
 from neos.coding.domain.phases import (
@@ -2100,6 +2105,155 @@ class PostgresCodingRunRepository:
             event,
         )
 
+    async def claim_workspace_edits_at_safe_point(
+        self,
+        *,
+        lease: ExecutionLease,
+        checkpoint: CodingCheckpoint,
+        limit: int,
+        now: datetime,
+    ) -> WorkspaceEditApplication | None:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        result: WorkspaceEditApplication | None = None
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(session, lease, now=now)
+                await self._lock_canonical_running_run(session, lease)
+                selected = await session.execute(
+                    text(
+                        """
+                        SELECT edit_id, task_id, run_id, path, base_revision,
+                               resulting_revision, status, content_digest,
+                               content_bytes, created_at, committed_at,
+                               applied_checkpoint_id
+                        FROM coding_workspace_edits
+                        WHERE task_id = :task_id
+                          AND status = 'committed'
+                          AND applied_checkpoint_id IS NULL
+                        ORDER BY resulting_revision::BIGINT, edit_id
+                        LIMIT :limit
+                        FOR UPDATE SKIP LOCKED
+                        """
+                    ),
+                    {
+                        "task_id": lease.task_id,
+                        "limit": limit,
+                    },
+                )
+                rows = selected.fetchall()
+                if not rows:
+                    return None
+                edits = tuple(self._workspace_edit_from_row(row) for row in rows)
+                sequences = [
+                    await self._allocate_sequence_in_session(
+                        session,
+                        task_id=lease.task_id,
+                        now=now,
+                    )
+                    for _ in edits
+                ]
+                checkpoint_id = f"cc_workspace_{uuid4().hex}"
+                pending = [
+                    {
+                        "edit_id": edit.edit_id,
+                        "path": edit.path,
+                        "resulting_revision": edit.resulting_revision,
+                    }
+                    for edit in edits
+                ]
+                loop_state = {
+                    **dict(checkpoint.loop_state),
+                    "pending_workspace_edits": pending,
+                }
+                applied_checkpoint = CodingCheckpoint(
+                    checkpoint_id=checkpoint_id,
+                    task_id=lease.task_id,
+                    run_id=lease.run_id,
+                    seq=sequences[-1],
+                    loop_state=loop_state,
+                    workspace_revision=checkpoint.workspace_revision,
+                    created_at=now,
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_checkpoints
+                            (checkpoint_id, task_id, run_id, seq,
+                             loop_state_json, workspace_revision, created_at)
+                        VALUES
+                            (:checkpoint_id, :task_id, :run_id, :seq,
+                             CAST(:loop_state AS JSONB),
+                             :workspace_revision, :created_at)
+                        """
+                    ),
+                    {
+                        "checkpoint_id": checkpoint_id,
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "seq": sequences[-1],
+                        "loop_state": json.dumps(loop_state),
+                        "workspace_revision": checkpoint.workspace_revision,
+                        "created_at": now,
+                    },
+                )
+                applied_edits: list[CodingWorkspaceEdit] = []
+                events: list[CodingEvent] = []
+                for edit, seq in zip(edits, sequences, strict=True):
+                    updated = await session.execute(
+                        text(
+                            """
+                            UPDATE coding_workspace_edits
+                            SET status = 'applied',
+                                applied_checkpoint_id = :checkpoint_id
+                            WHERE edit_id = :edit_id
+                              AND status = 'committed'
+                              AND applied_checkpoint_id IS NULL
+                            RETURNING edit_id
+                            """
+                        ),
+                        {
+                            "edit_id": edit.edit_id,
+                            "checkpoint_id": checkpoint_id,
+                        },
+                    )
+                    if updated.first() is None:
+                        raise StaleExecutionLease(lease.task_id)
+                    applied = replace(
+                        edit,
+                        status=WorkspaceEditStatus.APPLIED,
+                        applied_checkpoint_id=checkpoint_id,
+                    )
+                    applied_edits.append(applied)
+                    events.append(
+                        await self._insert_event_in_session(
+                            session,
+                            task_id=lease.task_id,
+                            seq=seq,
+                            event_type="workspace.user_edit.synced",
+                            payload={
+                                "edit_id": applied.edit_id,
+                                "path": applied.path,
+                                "resulting_revision": (
+                                    applied.resulting_revision
+                                ),
+                                "status": "agent_synced",
+                                "applied_checkpoint_id": checkpoint_id,
+                            },
+                            now=now,
+                            run_id=lease.run_id,
+                            checkpoint_id=checkpoint_id,
+                        )
+                    )
+                result = WorkspaceEditApplication(
+                    tuple(applied_edits),
+                    applied_checkpoint,
+                    tuple(events),
+                )
+        if result is not None and self._wake_outbox is not None:
+            self._wake_outbox()
+        return result
+
     @staticmethod
     def _lease_from_row(row) -> ExecutionLease:
         return ExecutionLease(
@@ -2324,6 +2478,23 @@ class PostgresCodingRunRepository:
             resume_from_checkpoint_id=row[4],
             started_at=row[5],
             completed_at=row[6],
+        )
+
+    @staticmethod
+    def _workspace_edit_from_row(row) -> CodingWorkspaceEdit:
+        return CodingWorkspaceEdit(
+            edit_id=row[0],
+            task_id=row[1],
+            run_id=row[2],
+            path=row[3],
+            base_revision=row[4],
+            resulting_revision=row[5],
+            status=WorkspaceEditStatus(row[6]),
+            content_digest=row[7],
+            content_bytes=int(row[8]),
+            created_at=row[9],
+            committed_at=row[10],
+            applied_checkpoint_id=row[11],
         )
 
     async def _allocate_sequence_in_session(

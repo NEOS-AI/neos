@@ -33,6 +33,10 @@ from neos.coding.domain.text_parts import (
     TextPartConflict,
     TextPartStatus,
 )
+from neos.coding.domain.workspace_edits import (
+    WorkspaceEditApplication,
+    WorkspaceEditStatus,
+)
 from neos.coding.loop.base import EXPECTED_CHECKPOINT_OMITTED
 
 from neos.coding.domain.phases import (
@@ -164,6 +168,7 @@ class InMemoryCodingRunRepository:
         completed_tools=None,
         active_run=None,
         task_prompts=None,
+        workspace_edits=None,
     ) -> None:
         self.completed_tools = dict(completed_tools or {})
         self.active_run = active_run
@@ -179,6 +184,9 @@ class InMemoryCodingRunRepository:
         self.tool_claims = {}
         self.approvals = {}
         self.text_parts = {}
+        self.workspace_edits = {
+            edit.edit_id: edit for edit in (workspace_edits or ())
+        }
         self._durability_lock = asyncio.Lock()
         self._durability_seq = 0
         self.begin_phase_calls = 0
@@ -1114,6 +1122,90 @@ class InMemoryCodingRunRepository:
                 run,
                 next_lease,
                 event,
+            )
+
+    async def claim_workspace_edits_at_safe_point(
+        self,
+        *,
+        lease,
+        checkpoint,
+        limit,
+        now,
+    ):
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=now)
+            candidates = sorted(
+                (
+                    edit
+                    for edit in self.workspace_edits.values()
+                    if edit.task_id == lease.task_id
+                    and edit.status is WorkspaceEditStatus.COMMITTED
+                ),
+                key=lambda edit: (
+                    int(edit.resulting_revision or "0"),
+                    edit.edit_id,
+                ),
+            )[:limit]
+            if not candidates:
+                return None
+            contexts = [
+                {
+                    "edit_id": edit.edit_id,
+                    "path": edit.path,
+                    "resulting_revision": edit.resulting_revision,
+                }
+                for edit in candidates
+            ]
+            self._durability_seq += len(candidates)
+            applied_checkpoint = CodingCheckpoint(
+                checkpoint_id=f"cc_workspace_{self._durability_seq}",
+                task_id=lease.task_id,
+                run_id=lease.run_id,
+                seq=self._durability_seq,
+                loop_state={
+                    **dict(checkpoint.loop_state),
+                    "pending_workspace_edits": contexts,
+                },
+                workspace_revision=checkpoint.workspace_revision,
+                created_at=now,
+            )
+            applied = []
+            events = []
+            first_seq = self._durability_seq - len(candidates) + 1
+            for offset, edit in enumerate(candidates):
+                value = replace(
+                    edit,
+                    status=WorkspaceEditStatus.APPLIED,
+                    applied_checkpoint_id=applied_checkpoint.checkpoint_id,
+                )
+                self.workspace_edits[value.edit_id] = value
+                applied.append(value)
+                events.append(
+                    make_event(
+                        task_id=lease.task_id,
+                        seq=first_seq + offset,
+                        event_type="workspace.user_edit.synced",
+                        payload={
+                            "edit_id": value.edit_id,
+                            "path": value.path,
+                            "resulting_revision": value.resulting_revision,
+                            "status": "agent_synced",
+                            "applied_checkpoint_id": (
+                                applied_checkpoint.checkpoint_id
+                            ),
+                        },
+                        now=now,
+                        run_id=lease.run_id,
+                        checkpoint_id=applied_checkpoint.checkpoint_id,
+                    )
+                )
+            self.checkpoints.append(applied_checkpoint)
+            return WorkspaceEditApplication(
+                tuple(applied),
+                applied_checkpoint,
+                tuple(events),
             )
 
     async def commit_interruption(

@@ -23,7 +23,11 @@ from neos.coding.loop.anthropic import (
     AnthropicLoopConfig,
     CodingLoopFailure,
 )
-from neos.coding.loop.base import LoopDependencies, LoopInput
+from neos.coding.loop.base import (
+    LoopDependencies,
+    LoopInput,
+    WorkspaceEditContext,
+)
 from neos.coding.model.anthropic import CodingModelError
 from neos.coding.model.base import (
     ModelCompleted,
@@ -167,6 +171,28 @@ INPUT = LoopInput("ct_1", "cr_1", "Fix it")
 
 async def collect(h, checkpoint=None):
     return [event async for event in h.loop.run(INPUT, checkpoint, h.deps)]
+
+
+@pytest.mark.asyncio
+async def test_user_workspace_edits_are_added_to_the_model_transcript() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(5, 3))]])
+    input = LoopInput(
+        "ct_1",
+        "cr_1",
+        "Fix it",
+        workspace_edits=(
+            WorkspaceEditContext("cwe_1", "src/app.py", "13"),
+        ),
+    )
+
+    _ = [event async for event in h.loop.run(input, None, h.deps)]
+
+    messages = h.model.requests[0].messages
+    assert len(messages) == 2
+    assert messages[-1].role == "user"
+    text = messages[-1].content[0].text
+    assert "src/app.py @ revision 13" in text
+    assert "read files before changing them" in text
 
 
 @pytest.mark.asyncio

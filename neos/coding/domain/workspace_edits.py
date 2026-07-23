@@ -3,6 +3,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from neos.coding.domain.events import CodingEvent
+from neos.coding.domain.phases import CodingCheckpoint
 
 
 class WorkspaceEditStatus(StrEnum):
@@ -81,3 +82,10 @@ class WorkspaceEditCommit:
 
 class WorkspaceEditConflict(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceEditApplication:
+    edits: tuple[CodingWorkspaceEdit, ...]
+    checkpoint: CodingCheckpoint
+    events: tuple[CodingEvent, ...]

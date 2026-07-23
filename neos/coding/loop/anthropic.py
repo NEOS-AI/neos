@@ -580,10 +580,18 @@ class AnthropicCodingLoop:
     def _restore(self, input, checkpoint):
         if checkpoint is None:
             transcript = (CanonicalMessage("user", (TextContent(input.instruction),)),)
+            transcript = self._with_workspace_edits(
+                transcript,
+                input.workspace_edits,
+            )
             return AgentLoopState(transcript, 0, 0, 0, (), 0, self._digest(transcript))
         raw = checkpoint.loop_state
         transcript = tuple(
             _message_from_mapping(item) for item in raw.get("transcript", [])
+        )
+        transcript = self._with_workspace_edits(
+            transcript,
+            input.workspace_edits,
         )
         pending = tuple(
             ToolCallCompleted(item["tool_call_id"], item["name"], item["input"])
@@ -601,6 +609,28 @@ class AnthropicCodingLoop:
             int(raw.get("output_tokens", 0)),
             int(raw.get("cost_micros", 0)),
             bool(raw.get("terminal_pending", False)),
+        )
+
+    @staticmethod
+    def _with_workspace_edits(transcript, edits):
+        if not edits:
+            return transcript
+        summary = ", ".join(
+            f"{edit.path} @ revision {edit.resulting_revision}"
+            for edit in edits
+        )
+        return transcript + (
+            CanonicalMessage(
+                "user",
+                (
+                    TextContent(
+                        "The user directly edited these workspace files. "
+                        "Treat the listed revisions as authoritative and read "
+                        "files before changing them: "
+                        f"{summary}"
+                    ),
+                ),
+            ),
         )
 
     def _dump_state(self, input, state):

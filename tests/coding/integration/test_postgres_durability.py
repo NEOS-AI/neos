@@ -28,6 +28,12 @@ async def coding_postgres_session_factory():
         for statement in migration.read_text().split(";"):
             if statement.strip():
                 await connection.exec_driver_sql(statement)
+        workspace_migration = Path(
+            "db/migrations/044_add_coding_workspace_edits.sql"
+        )
+        for statement in workspace_migration.read_text().split(";"):
+            if statement.strip():
+                await connection.exec_driver_sql(statement)
     maker = async_sessionmaker(engine, expire_on_commit=False)
 
     async def session_factory():
@@ -44,6 +50,7 @@ async def coding_postgres_session_factory():
         async with engine.begin() as connection:
             await connection.exec_driver_sql(
                 "TRUNCATE coding_event_outbox, coding_events, "
+                "coding_workspace_edits, "
                 "coding_tool_executions, coding_steering_requests, "
                 "coding_run_leases, coding_checkpoints, coding_phases, "
                 "coding_runs, coding_tasks CASCADE"
@@ -483,3 +490,97 @@ async def test_run_completion_rolls_back_when_event_insert_fails(
         )
         row = result.first()
     assert row == ("running", "running", 0, 0)
+
+
+@pytest.mark.integration
+async def test_workspace_edit_claim_checkpoint_and_events_are_atomic(
+    coding_postgres_session_factory,
+) -> None:
+    task_id, run_id = await _seed_run(coding_postgres_session_factory)
+    repository = PostgresCodingRunRepository(coding_postgres_session_factory)
+    lease = await repository.acquire_execution_lease(
+        task_id=task_id,
+        run_id=run_id,
+        worker_id="worker-a",
+        now=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+    )
+    assert lease is not None
+    checkpoint = CodingCheckpoint(
+        checkpoint_id=f"cc_{uuid4().hex}",
+        task_id=task_id,
+        run_id=run_id,
+        seq=1,
+        loop_state={
+            "phase_index": 0,
+            "transcript": [],
+            "current_instruction": "Fix it",
+        },
+        workspace_revision="1",
+        created_at=NOW,
+    )
+    async with await coding_postgres_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO coding_checkpoints
+                        (checkpoint_id, task_id, run_id, seq,
+                         loop_state_json, workspace_revision, created_at)
+                    VALUES
+                        (:checkpoint_id, :task_id, :run_id, :seq,
+                         CAST(:loop_state AS JSONB), '1', :now)
+                    """
+                ),
+                {
+                    "checkpoint_id": checkpoint.checkpoint_id,
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "seq": checkpoint.seq,
+                    "loop_state": '{"current_instruction":"Fix it"}',
+                    "now": NOW,
+                },
+            )
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO coding_workspace_edits
+                        (edit_id, task_id, run_id, path, base_revision,
+                         resulting_revision, status, content_digest,
+                         content_bytes, created_at, committed_at)
+                    VALUES
+                        ('cwe_1', :task_id, :run_id, 'src/app.py', '1',
+                         '2', 'committed', 'sha256:test', 4, :now, :now)
+                    """
+                ),
+                {"task_id": task_id, "run_id": run_id, "now": NOW},
+            )
+
+    applied = await repository.claim_workspace_edits_at_safe_point(
+        lease=lease,
+        checkpoint=checkpoint,
+        limit=20,
+        now=NOW,
+    )
+
+    assert applied is not None
+    assert applied.edits[0].applied_checkpoint_id == (
+        applied.checkpoint.checkpoint_id
+    )
+    async with await coding_postgres_session_factory() as session:
+        result = await session.execute(
+            text(
+                """
+                SELECT
+                    (SELECT status FROM coding_workspace_edits
+                     WHERE edit_id = 'cwe_1'),
+                    (SELECT count(*) FROM coding_events
+                     WHERE task_id = :task_id
+                       AND event_type = 'workspace.user_edit.synced'),
+                    (SELECT count(*) FROM coding_event_outbox
+                     WHERE task_id = :task_id)
+                """
+            ),
+            {"task_id": task_id},
+        )
+    assert result.first() == ("applied", 1, 1)
