@@ -23,3 +23,10 @@ def test_migration_044_retains_metadata_but_not_file_content() -> None:
     assert "content_bytes BIGINT NOT NULL" in sql
     assert "content TEXT" not in sql
     assert "ON DELETE CASCADE" in sql
+
+
+def test_applied_checkpoint_reference_cannot_be_silently_cleared() -> None:
+    sql = MIGRATION.read_text()
+
+    assert "applied_checkpoint_id TEXT REFERENCES coding_checkpoints" in sql
+    assert "ON DELETE SET NULL" not in sql

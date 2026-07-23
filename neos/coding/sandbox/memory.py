@@ -497,12 +497,40 @@ class MemorySandboxSession:
         return await asyncio.to_thread(item.read_bytes)
 
     async def write_file(self, path: str, content: bytes) -> int:
+        return await self._write_file(path, content, expected_revision=None)
+
+    async def write_file_if_revision(
+        self,
+        path: str,
+        content: bytes,
+        *,
+        expected_revision: int,
+    ) -> int:
+        return await self._write_file(
+            path,
+            content,
+            expected_revision=expected_revision,
+        )
+
+    async def _write_file(
+        self,
+        path: str,
+        content: bytes,
+        *,
+        expected_revision: int | None,
+    ) -> int:
         await self._require_running()
         if len(content) > self._record.sandbox.limits.workspace_bytes:
             raise SandboxPolicyViolation("workspace_write_limit_exceeded")
         relative = ensure_mutable_workspace_path(path)
         async with self._record.lock:
             await self._require_running()
+            if (
+                expected_revision is not None
+                and self._record.sandbox.workspace_revision
+                != expected_revision
+            ):
+                raise SandboxStateConflict("workspace_revision_conflict")
             self._create_safe_parents(relative.parent)
             item = resolve_workspace_path(
                 self._record.workspace,

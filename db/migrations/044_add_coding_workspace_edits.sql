@@ -12,8 +12,7 @@ CREATE TABLE IF NOT EXISTS coding_workspace_edits (
     content_bytes BIGINT NOT NULL CHECK (content_bytes >= 0),
     created_at TIMESTAMPTZ NOT NULL,
     committed_at TIMESTAMPTZ,
-    applied_checkpoint_id TEXT REFERENCES coding_checkpoints(checkpoint_id)
-        ON DELETE SET NULL,
+    applied_checkpoint_id TEXT REFERENCES coding_checkpoints(checkpoint_id),
     CHECK (
         status NOT IN ('committed', 'applied')
         OR (resulting_revision IS NOT NULL AND committed_at IS NOT NULL)

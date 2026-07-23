@@ -105,6 +105,43 @@ class SandboxBindingService:
             return await self._create_and_bind(lease)
         return await self._resolve_existing(current, lease)
 
+    async def open_existing_admin(self, task_id: str) -> BoundSandboxSession:
+        current = await self._require_binding(task_id)
+        self._verify_image(current.image_digest)
+        try:
+            sandbox = await self._provider.get(current.sandbox_id)
+        except SandboxNotFound as error:
+            raise SandboxBindingError(
+                "sandbox_binding_missing", retryable=True
+            ) from error
+        self._verify_sandbox(current, sandbox)
+        if sandbox.owner_id != task_id:
+            raise SandboxBindingError(
+                "sandbox_owner_mismatch", retryable=False
+            )
+        if sandbox.state is SandboxState.SUSPENDED:
+            sandbox = await self._provider.resume(sandbox.sandbox_id)
+            resumed = await self._repository.replace_admin(
+                replace(
+                    current,
+                    workspace_revision=str(sandbox.workspace_revision),
+                    health_state="healthy",
+                ),
+                expected_version=current.version,
+                now=self._clock(),
+            )
+            if resumed is None:
+                raise SandboxBindingError(
+                    "sandbox_binding_conflict", retryable=True
+                )
+            current = resumed
+        if sandbox.state is not SandboxState.RUNNING or not sandbox.healthy:
+            raise SandboxBindingError("sandbox_unhealthy", retryable=True)
+        return BoundSandboxSession(
+            current,
+            await self._provider.open_session(sandbox.sandbox_id),
+        )
+
     async def _create_and_bind(
         self, lease: ExecutionLease
     ) -> BoundSandboxSession:

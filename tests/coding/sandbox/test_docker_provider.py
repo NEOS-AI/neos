@@ -10,6 +10,7 @@ from neos.coding.sandbox.base import (
     SandboxLimits,
     SandboxPolicyViolation,
     SandboxState,
+    SandboxStateConflict,
 )
 from neos.coding.sandbox.command import DockerCommandResult
 from neos.coding.sandbox.docker import (
@@ -188,6 +189,37 @@ async def test_session_file_tree_search_and_git_use_fixed_helpers() -> None:
         ("src/app.py", 1)
     ]
     assert status.stdout == b"?? src/app.py\n"
+
+
+async def test_conditional_write_rejects_stale_revision_before_docker_exec() -> None:
+    runner = ScriptedDockerRunner()
+    provider = DockerSandboxProvider(runner=runner, config=_config())
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    assert (
+        await session.write_file_if_revision(
+            "src/app.py",
+            b"first",
+            expected_revision=0,
+        )
+        == 1
+    )
+    calls_after_first_write = len(runner.calls)
+
+    with pytest.raises(
+        SandboxStateConflict, match="workspace_revision_conflict"
+    ):
+        await session.write_file_if_revision(
+            "src/app.py",
+            b"stale",
+            expected_revision=0,
+        )
+
+    assert len(runner.calls) == calls_after_first_write
+    assert await session.workspace_revision() == 1
 
 
 async def test_session_list_tree_and_stat_parse_fixed_helper_output() -> None:
