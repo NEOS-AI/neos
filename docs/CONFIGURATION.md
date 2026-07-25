@@ -51,6 +51,19 @@ Use process env only for bootstrap controls:
 - `NEOS_SECRETS_PATH`
 - `NEOS_MODEL_CONFIG_PATH`
 
+### Rust API Gateway
+
+`api_gateway/config.toml` follows the same policy and ships `secret_key = ""`
+and `password = ""` rather than usable defaults. The gateway **refuses to
+start** when `jwt.secret_key` is still empty after env overrides — an empty
+HS256 key would validate tokens signed with an empty key, so failing fast is
+the safe behavior. Set `JWT_SECRET_KEY` before running it.
+
+`DATABASE_URL` replaces the whole `[database]` block. When it is absent, the
+transitional `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`
+overrides apply individually. `GATEWAY_PORT`, `UPSTREAM_HOST`, `UPSTREAM_PORT`,
+`LOG_LEVEL`, and `CONFIG_PATH` cover the remaining runtime knobs.
+
 ## Loading Order
 
 The backend loader applies config in this order:

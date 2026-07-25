@@ -1,5 +1,22 @@
 # API Gateway Configuration
 # 이 파일은 Pingora 기반 API 게이트웨이의 설정을 담당합니다.
+#
+# 시크릿은 이 파일에 담지 않는다. 빈 값으로 두고 환경변수로 주입한다.
+#
+# 필수 시크릿 (required in production):
+#   JWT_SECRET_KEY  - jwt.secret_key. 비어 있으면 게이트웨이가 기동을 거부한다.
+#   DATABASE_URL    - [database] 전체를 대체한다.
+#                     형식: postgres://user:password@host:port/db?sslmode=prefer
+#
+# 과도기 개별 오버라이드 (DATABASE_URL 미설정 시에만 적용):
+#   DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+#
+# 그 밖의 런타임 오버라이드:
+#   GATEWAY_PORT   - server.listen_port
+#   UPSTREAM_HOST  - upstream.host
+#   UPSTREAM_PORT  - upstream.port
+#   LOG_LEVEL      - logging.level
+#   CONFIG_PATH    - 이 파일의 경로
 
 [server]
 # 게이트웨이 서버 설정
@@ -25,8 +42,9 @@ pool_size = 100
 
 [jwt]
 # JWT 인증 설정
-# 중요: 프로덕션 환경에서는 환경변수 JWT_SECRET_KEY로 오버라이드하세요
-secret_key = "neos_is_a_multiagent_ai_platform_for_research_and_knowledge_work"
+# secret_key는 반드시 환경변수 JWT_SECRET_KEY로 주입한다.
+# 빈 값이면 빈 키로 서명된 토큰이 통과하므로 기동 시 검증에서 즉시 실패한다.
+secret_key = ""
 # 지원하는 알고리즘
 algorithm = "HS256"
 # 토큰 유효성 검사 여부
@@ -42,12 +60,14 @@ bcrypt_cost = 12
 
 [database]
 # PostgreSQL 데이터베이스 설정
-# 환경변수로 오버라이드 가능: DATABASE_URL
+# DATABASE_URL이 있으면 이 블록 전체를 대체한다.
+# 없으면 DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD로 개별 오버라이드한다.
 host = "localhost"
 port = 5432
 database = "neos"
 username = "postgres"
-password = "postgres"
+# 비밀번호는 파일에 담지 않는다 — DATABASE_URL 또는 DB_PASSWORD로 주입한다.
+password = ""
 # 연결 풀 설정
 pool_size = 10
 # SSL 모드: disable, prefer, require
