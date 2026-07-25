@@ -472,6 +472,14 @@ sandbox:
     replay_events: 1024
     replay_bytes: 1048576
     watcher_debounce_sec: 0.05
+  workspace:
+    tree_max_entries: 5000
+    file_max_bytes: 1048576
+    diff_max_bytes: 2097152
+    edit_batch_size: 20
+    ticket_ttl_seconds: 30
+    pty_idle_ttl_seconds: 1800
+    pty_max_sessions: 3
   memory:
     root: .neos/sandboxes
   docker:

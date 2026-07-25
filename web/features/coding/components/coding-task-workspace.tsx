@@ -2,10 +2,12 @@
 
 import { Radio, TerminalSquare } from "lucide-react";
 import { useEffect, useState } from "react";
-import { CodingDetailPanel } from "@/features/coding/components/coding-detail-panel";
 import { CodingApprovalCard } from "@/features/coding/components/coding-approval-card";
+import { CodingDetailPanel } from "@/features/coding/components/coding-detail-panel";
+import { CodingOutputLedger } from "@/features/coding/components/coding-output-ledger";
 import { CodingSteerComposer } from "@/features/coding/components/coding-steer-composer";
 import { PhaseTimeline } from "@/features/coding/components/phase-timeline";
+import { CodingWorkspaceDock } from "@/features/coding/components/workspace/coding-workspace-dock";
 import { useCodingStream } from "@/features/coding/stream/use-coding-stream";
 
 const connectionMessages = {
@@ -63,8 +65,8 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
         </div>
       </header>
 
-      <div className="grid flex-1 lg:grid-cols-[minmax(0,1.65fr)_minmax(19rem,0.85fr)]">
-        <section className="border-border/70 p-4 lg:border-r lg:p-6">
+      <div className="flex min-h-0 flex-1">
+        <section className="min-w-0 flex-1 overflow-auto border-border/70 p-4 lg:p-6">
           <div className="mx-auto max-w-3xl">
             <div className="mb-5 flex items-end justify-between border-border/60 border-b pb-3">
               <div>
@@ -77,14 +79,28 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
                 SEQ {projection.appliedSeq}
               </span>
             </div>
+            <CodingOutputLedger
+              parts={projection.orderedTextPartIds.map(
+                (partId) => projection.textPartsById[partId]
+              )}
+            />
             <PhaseTimeline
               onSelect={setSelectedPhase}
               phases={projection.phases}
               selectedId={selectedPhase}
               waitingApproval={waitingApproval}
             />
+            <div className="mt-5">
+              <CodingDetailPanel
+                phaseId={selectedPhase}
+                projection={projection}
+              />
+            </div>
             {pendingApprovals.length > 0 ? (
-              <section aria-label="Tool approval requests" className="mt-5 space-y-2">
+              <section
+                aria-label="Tool approval requests"
+                className="mt-5 space-y-2"
+              >
                 {pendingApprovals.map((approval) => (
                   <CodingApprovalCard
                     approval={approval}
@@ -110,14 +126,11 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
             ) : null}
           </div>
         </section>
-        <aside className="border-border/70 border-t bg-card/20 p-5 lg:border-t-0 lg:p-6">
-          <div className="sticky top-6">
-            <CodingDetailPanel
-              phaseId={selectedPhase}
-              projection={projection}
-            />
-          </div>
-        </aside>
+        <CodingWorkspaceDock
+          codingConnection={connection}
+          projection={projection}
+          taskId={taskId}
+        />
       </div>
     </main>
   );

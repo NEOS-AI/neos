@@ -55,12 +55,35 @@ class CodingCheckpointRow:
 
 
 @dataclass(frozen=True, slots=True)
+class CodingTextPartRow:
+    part_id: str
+    run_id: str
+    turn_id: str
+    status: str
+    content: str
+    first_seq: int
+    last_seq: int
+
+
+@dataclass(frozen=True, slots=True)
+class CodingWorkspaceEditRow:
+    edit_id: str
+    path: str
+    base_revision: str
+    resulting_revision: str | None
+    status: str
+    applied_checkpoint_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class CodingProjectionRows:
     task: CodingTaskRow
     runs: tuple[CodingRunRow, ...]
     phases: tuple[CodingPhaseRow, ...]
     tools: tuple[CodingToolExecutionRow, ...]
     approvals: tuple[Mapping[str, Any], ...]
+    parts: tuple[CodingTextPartRow, ...]
+    workspace_edits: tuple[CodingWorkspaceEditRow, ...]
     todos: tuple[Mapping[str, Any], ...]
     latest_checkpoint: CodingCheckpointRow | None
     head_seq: int
@@ -98,6 +121,8 @@ class PostgresCodingProjectionRepository:
                 phases = await self._phases(session, task_id)
                 tools = await self._tools(session, task_id)
                 approvals = await self._approvals(session, task_id, owner_id)
+                parts = await self._parts(session, task_id)
+                workspace_edits = await self._workspace_edits(session, task_id)
                 checkpoint = await self._checkpoint(session, task_id)
 
         task = CodingTaskRow(
@@ -120,6 +145,8 @@ class PostgresCodingProjectionRepository:
             phases=phases,
             tools=tools,
             approvals=approvals,
+            parts=parts,
+            workspace_edits=workspace_edits,
             todos=todos,
             latest_checkpoint=checkpoint,
             head_seq=task.last_seq,
@@ -203,6 +230,62 @@ class PostgresCodingProjectionRepository:
                 "expires_at": row[5],
                 "display_summary": dict(row[6]),
             }
+            for row in result.all()
+        )
+
+    async def _parts(self, session, task_id: str) -> tuple[CodingTextPartRow, ...]:
+        result = await session.execute(
+            text(
+                """
+                SELECT part_id, run_id, turn_id, status, content,
+                       first_seq, last_seq
+                FROM coding_text_parts
+                WHERE task_id = :task_id
+                ORDER BY first_seq ASC, part_id ASC
+                """
+            ),
+            {"task_id": task_id},
+        )
+        return tuple(
+            CodingTextPartRow(
+                row[0], row[1], row[2], row[3], row[4], int(row[5]), int(row[6])
+            )
+            for row in result.all()
+        )
+
+    async def _workspace_edits(
+        self, session, task_id: str
+    ) -> tuple[CodingWorkspaceEditRow, ...]:
+        result = await session.execute(
+            text(
+                """
+                SELECT edit_id, path, base_revision, resulting_revision,
+                       status, applied_checkpoint_id
+                FROM (
+                    SELECT edit_id, path, base_revision, resulting_revision,
+                           status, applied_checkpoint_id, created_at
+                    FROM coding_workspace_edits
+                    WHERE task_id = :task_id
+                      AND status IN (
+                          'committed', 'reconcile_required', 'applied'
+                      )
+                    ORDER BY created_at DESC, edit_id DESC
+                    LIMIT 100
+                ) AS recent
+                ORDER BY created_at, edit_id
+                """
+            ),
+            {"task_id": task_id},
+        )
+        return tuple(
+            CodingWorkspaceEditRow(
+                edit_id=row[0],
+                path=row[1],
+                base_revision=row[2],
+                resulting_revision=row[3],
+                status=row[4],
+                applied_checkpoint_id=row[5],
+            )
             for row in result.all()
         )
 

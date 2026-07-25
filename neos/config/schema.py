@@ -755,6 +755,16 @@ class SandboxStreamConfig(StrictConfigModel):
     watcher_debounce_sec: float = Field(default=0.05, gt=0, le=5)
 
 
+class SandboxWorkspaceConfig(StrictConfigModel):
+    tree_max_entries: int = Field(default=5_000, gt=0, le=20_000)
+    file_max_bytes: int = Field(default=1024 * 1024, gt=0)
+    diff_max_bytes: int = Field(default=2 * 1024 * 1024, gt=0)
+    edit_batch_size: int = Field(default=20, gt=0, le=100)
+    ticket_ttl_seconds: int = Field(default=30, gt=0, le=300)
+    pty_idle_ttl_seconds: int = Field(default=1_800, gt=0)
+    pty_max_sessions: int = Field(default=3, gt=0, le=10)
+
+
 class SandboxDockerConfig(StrictConfigModel):
     image: str = ""
     network_mode: str = "none"
@@ -779,6 +789,9 @@ class SandboxConfig(StrictConfigModel):
         default_factory=SandboxExecutionConfig
     )
     streams: SandboxStreamConfig = Field(default_factory=SandboxStreamConfig)
+    workspace: SandboxWorkspaceConfig = Field(
+        default_factory=SandboxWorkspaceConfig
+    )
     memory: SandboxMemoryConfig = Field(default_factory=SandboxMemoryConfig)
     docker: SandboxDockerConfig = Field(default_factory=SandboxDockerConfig)
 
@@ -794,6 +807,8 @@ class CodingModelConfig(StrictConfigModel):
     max_consecutive_tool_errors: int = Field(default=3, gt=0, le=20)
     max_output_tokens: int = Field(default=8192, gt=0)
     max_transcript_bytes: int = Field(default=1_048_576, gt=0)
+    max_text_delta_bytes: int = Field(default=16_384, gt=0)
+    max_public_text_bytes: int = Field(default=1_048_576, gt=0)
     max_cost_usd: float = Field(default=5.0, gt=0)
     input_cost_micros_per_million: int = Field(default=0, ge=0)
     output_cost_micros_per_million: int = Field(default=0, ge=0)
@@ -807,6 +822,12 @@ class CodingModelConfig(StrictConfigModel):
 
     @model_validator(mode="after")
     def validate_command_policy(self) -> "CodingModelConfig":
+        if not (
+            self.max_text_delta_bytes
+            <= self.max_public_text_bytes
+            <= self.max_transcript_bytes
+        ):
+            raise ValueError("coding public text byte limits are invalid")
         malformed = any(
             not command or re.fullmatch(r"[A-Za-z0-9._+-]+", command) is None
             for command in self.command_allowlist

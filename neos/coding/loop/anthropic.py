@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from neos.coding.domain.events import CodingEvent
+from neos.coding.domain.text_parts import TextPartConflict
 from neos.coding.domain.approvals import (
     ApprovalPolicyOutcome,
     ApprovalStatus,
@@ -73,6 +74,8 @@ class AnthropicLoopConfig:
     output_cost_micros_per_million: int = 0
     max_transcript_messages: int = 100
     max_transcript_bytes: int = 1_048_576
+    max_text_delta_bytes: int = 16_384
+    max_public_text_bytes: int = 1_048_576
     approval_ttl_sec: float = 900
 
     def __post_init__(self) -> None:
@@ -87,10 +90,18 @@ class AnthropicLoopConfig:
             self.max_cost_micros,
             self.max_transcript_messages,
             self.max_transcript_bytes,
+            self.max_text_delta_bytes,
+            self.max_public_text_bytes,
             self.approval_ttl_sec,
         )
         if not self.model or not self.system or any(value <= 0 for value in numeric):
             raise ValueError("anthropic loop configuration limits must be positive")
+        if not (
+            self.max_text_delta_bytes
+            <= self.max_public_text_bytes
+            <= self.max_transcript_bytes
+        ):
+            raise ValueError("anthropic public text byte limits are invalid")
         if (
             self.input_cost_micros_per_million < 0
             or self.output_cost_micros_per_million < 0
@@ -180,20 +191,42 @@ class AnthropicCodingLoop:
             run_id=input.run_id,
             turn_id=f"turn_{uuid4().hex}",
         )
+        part_id = f"ctp_{uuid4().hex}"
+        try:
+            started = await deps.repository.start_model_text_part(
+                lease=deps.lease,
+                part_id=part_id,
+                turn_id=request.turn_id,
+                now=self._clock(),
+            )
+        except TextPartConflict as error:
+            raise CodingLoopFailure(str(error), retryable=False) from error
+        yield started.event
         text_parts: list[str] = []
         calls: list[ToolCallCompleted] = []
         completion: ModelCompleted | None = None
         try:
             async for model_event in self._model.stream(request):
                 if isinstance(model_event, TextDelta):
+                    delta_bytes = len(model_event.text.encode("utf-8"))
+                    if delta_bytes > self._config.max_text_delta_bytes:
+                        raise CodingLoopFailure(
+                            "model_text_delta_too_large", retryable=False
+                        )
                     text_parts.append(model_event.text)
-                    yield await deps.events.append(
-                        task_id=input.task_id,
-                        event_type="model.text_delta",
-                        payload={"bytes": len(model_event.text.encode("utf-8"))},
-                        run_id=input.run_id,
-                        turn_id=request.turn_id,
-                    )
+                    try:
+                        committed = await deps.repository.append_model_text_delta(
+                            lease=deps.lease,
+                            part_id=part_id,
+                            turn_id=request.turn_id,
+                            delta=model_event.text,
+                            delta_bytes=delta_bytes,
+                            max_part_bytes=self._config.max_public_text_bytes,
+                            now=self._clock(),
+                        )
+                    except TextPartConflict as error:
+                        raise CodingLoopFailure(str(error), retryable=False) from error
+                    yield committed.event
                 elif isinstance(model_event, ToolInputDelta):
                     yield await deps.events.append(
                         task_id=input.task_id,
@@ -216,6 +249,16 @@ class AnthropicCodingLoop:
             raise CodingLoopFailure(error.code, retryable=error.retryable) from error
         if completion is None:
             raise CodingLoopFailure("model_stream_incomplete", retryable=True)
+        try:
+            completed_part = await deps.repository.complete_model_text_part(
+                lease=deps.lease,
+                part_id=part_id,
+                turn_id=request.turn_id,
+                now=self._clock(),
+            )
+        except TextPartConflict as error:
+            raise CodingLoopFailure(str(error), retryable=False) from error
+        yield completed_part.event
         if self._metrics is not None:
             outcome = (
                 completion.stop_reason
@@ -537,10 +580,18 @@ class AnthropicCodingLoop:
     def _restore(self, input, checkpoint):
         if checkpoint is None:
             transcript = (CanonicalMessage("user", (TextContent(input.instruction),)),)
+            transcript = self._with_workspace_edits(
+                transcript,
+                input.workspace_edits,
+            )
             return AgentLoopState(transcript, 0, 0, 0, (), 0, self._digest(transcript))
         raw = checkpoint.loop_state
         transcript = tuple(
             _message_from_mapping(item) for item in raw.get("transcript", [])
+        )
+        transcript = self._with_workspace_edits(
+            transcript,
+            input.workspace_edits,
         )
         pending = tuple(
             ToolCallCompleted(item["tool_call_id"], item["name"], item["input"])
@@ -558,6 +609,28 @@ class AnthropicCodingLoop:
             int(raw.get("output_tokens", 0)),
             int(raw.get("cost_micros", 0)),
             bool(raw.get("terminal_pending", False)),
+        )
+
+    @staticmethod
+    def _with_workspace_edits(transcript, edits):
+        if not edits:
+            return transcript
+        summary = ", ".join(
+            f"{edit.path} @ revision {edit.resulting_revision}"
+            for edit in edits
+        )
+        return transcript + (
+            CanonicalMessage(
+                "user",
+                (
+                    TextContent(
+                        "The user directly edited these workspace files. "
+                        "Treat the listed revisions as authoritative and read "
+                        "files before changing them: "
+                        f"{summary}"
+                    ),
+                ),
+            ),
         )
 
     def _dump_state(self, input, state):

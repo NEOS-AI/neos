@@ -23,7 +23,11 @@ from neos.coding.loop.anthropic import (
     AnthropicLoopConfig,
     CodingLoopFailure,
 )
-from neos.coding.loop.base import LoopDependencies, LoopInput
+from neos.coding.loop.base import (
+    LoopDependencies,
+    LoopInput,
+    WorkspaceEditContext,
+)
 from neos.coding.model.anthropic import CodingModelError
 from neos.coding.model.base import (
     ModelCompleted,
@@ -170,6 +174,28 @@ async def collect(h, checkpoint=None):
 
 
 @pytest.mark.asyncio
+async def test_user_workspace_edits_are_added_to_the_model_transcript() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(5, 3))]])
+    input = LoopInput(
+        "ct_1",
+        "cr_1",
+        "Fix it",
+        workspace_edits=(
+            WorkspaceEditContext("cwe_1", "src/app.py", "13"),
+        ),
+    )
+
+    _ = [event async for event in h.loop.run(input, None, h.deps)]
+
+    messages = h.model.requests[0].messages
+    assert len(messages) == 2
+    assert messages[-1].role == "user"
+    text = messages[-1].content[0].text
+    assert "src/app.py @ revision 13" in text
+    assert "read files before changing them" in text
+
+
+@pytest.mark.asyncio
 async def test_one_invocation_executes_and_checkpoints_one_tool_call() -> None:
     h = harness([[tool_call(), completed()]])
     events = await collect(h)
@@ -185,6 +211,8 @@ async def test_workspace_write_requests_approval_before_claim_or_execution() -> 
     events = await collect(h)
 
     assert [event.type for event in events] == [
+        "model.text_part.started",
+        "model.text_part.completed",
         "approval.requested",
         "task.status.changed",
     ]
@@ -302,6 +330,46 @@ async def test_text_only_completion_uses_model_checkpoint_without_claim() -> Non
 
 
 @pytest.mark.asyncio
+async def test_model_text_uses_one_durable_part_lifecycle() -> None:
+    h = harness(
+        [[TextDelta("hel"), TextDelta("lo"), ModelCompleted("end_turn", ModelUsage(2, 1))]]
+    )
+
+    events = await collect(h)
+    text_events = [event for event in events if event.type.startswith("model.text")]
+
+    assert [event.type for event in text_events] == [
+        "model.text_part.started",
+        "model.text_delta",
+        "model.text_delta",
+        "model.text_part.completed",
+    ]
+    assert [event.payload.get("delta") for event in text_events[1:3]] == [
+        "hel",
+        "lo",
+    ]
+    assert len({event.payload["part_id"] for event in text_events}) == 1
+    assert len({event.turn_id for event in text_events}) == 1
+
+
+@pytest.mark.asyncio
+async def test_oversized_unicode_delta_fails_before_public_persistence() -> None:
+    config = AnthropicLoopConfig(
+        model="claude-test",
+        system="code",
+        max_text_delta_bytes=5,
+        max_public_text_bytes=10,
+    )
+    h = harness([[TextDelta("안녕"), completed()]], config=config)
+
+    with pytest.raises(CodingLoopFailure, match="model_text_delta_too_large"):
+        await collect(h)
+
+    part = next(iter(h.repository.text_parts.values()))
+    assert part.content == ""
+
+
+@pytest.mark.asyncio
 async def test_streaming_deltas_are_sanitized_and_not_recovery_content() -> None:
     h = harness(
         [
@@ -314,11 +382,10 @@ async def test_streaming_deltas_are_sanitized_and_not_recovery_content() -> None
         ]
     )
     events = await collect(h)
-    delta_payloads = [e.payload for e in events if e.type.endswith("delta")]
-    assert all(
-        "sk-ant-secret" not in str(payload) and "secret" not in str(payload)
-        for payload in delta_payloads
-    )
+    model_delta = next(e for e in events if e.type == "model.text_delta")
+    tool_delta = next(e for e in events if e.type == "model.tool_input_delta")
+    assert model_delta.payload["delta"] == "token sk-ant-secret"
+    assert "secret" not in str(tool_delta.payload)
     assert "partial_json" not in str(h.repository.checkpoints[-1].loop_state)
 
 
@@ -408,13 +475,17 @@ async def test_transcript_digest_and_compaction_are_deterministic() -> None:
 @pytest.mark.asyncio
 async def test_transcript_byte_cap_preserves_pending_multi_tool_structure() -> None:
     config = AnthropicLoopConfig(
-        model="claude-test", system="code", max_transcript_bytes=700
+        model="claude-test",
+        system="code",
+        max_transcript_bytes=700,
+        max_text_delta_bytes=700,
+        max_public_text_bytes=700,
     )
     calls = [
         tool_call("one", input={"content": "x" * 4000}),
         tool_call("two", input={"content": "y" * 4000}),
     ]
-    h = harness([[TextDelta("z" * 4000), *calls, completed()]], config=config)
+    h = harness([[TextDelta("z" * 600), *calls, completed()]], config=config)
 
     await collect(h)
     state = h.repository.checkpoints[-1].loop_state
@@ -436,7 +507,11 @@ async def test_transcript_byte_cap_preserves_pending_multi_tool_structure() -> N
 @pytest.mark.asyncio
 async def test_tiny_completed_transcript_cap_fails_before_checkpoint() -> None:
     config = AnthropicLoopConfig(
-        model="claude-test", system="code", max_transcript_bytes=8
+        model="claude-test",
+        system="code",
+        max_transcript_bytes=8,
+        max_text_delta_bytes=8,
+        max_public_text_bytes=8,
     )
     h = harness([[TextDelta("finished"), completed()]], config=config)
 
@@ -450,7 +525,11 @@ async def test_tiny_completed_transcript_cap_fails_before_checkpoint() -> None:
 @pytest.mark.asyncio
 async def test_pending_tool_structure_over_cap_fails_before_execution() -> None:
     config = AnthropicLoopConfig(
-        model="claude-test", system="code", max_transcript_bytes=250
+        model="claude-test",
+        system="code",
+        max_transcript_bytes=250,
+        max_text_delta_bytes=250,
+        max_public_text_bytes=250,
     )
     calls = [
         tool_call(f"tool_{index}", input={"content": "x" * 1000})

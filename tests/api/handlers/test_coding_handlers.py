@@ -11,8 +11,14 @@ from neos.api.handlers.coding_handlers import (
     get_coding_run_service,
     get_coding_service,
     get_coding_snapshot_service,
+    get_coding_workspace_service,
+    get_workspace_stream_ticket_store,
     get_ws_ticket_store,
     router,
+)
+from neos.coding.transport.workspace_tickets import (
+    InMemoryWorkspaceTicketStore,
+    WorkspaceStreamKind,
 )
 from neos.coding.domain.approvals import ApprovalConflict, ApprovalNotFound
 from neos.coding.application.run_service import (
@@ -25,6 +31,7 @@ from neos.coding.application.task_service import (
     InMemoryCodingTaskRepository,
 )
 from neos.coding.events.store import InMemoryCodingEventStore
+from neos.coding.domain.workspace_edits import WorkspaceEditConflict
 from tests.coding.fakes import InMemoryCodingRunRepository
 
 
@@ -50,6 +57,7 @@ def make_client(user_id="u1"):
                 phases=(),
                 tools=(),
                 approvals=(),
+                parts=(),
                 todos=(),
                 workspace=SimpleNamespace(
                     revision="uninitialized", git_head=None, changed_files=()
@@ -184,6 +192,32 @@ def test_owner_can_issue_task_bound_websocket_ticket() -> None:
     assert response.json()["expires_in"] == 30
 
 
+def test_owner_can_issue_kind_bound_workspace_ticket() -> None:
+    client, service = make_client("u1")
+    tickets = InMemoryWorkspaceTicketStore()
+    client.app.dependency_overrides[get_workspace_stream_ticket_store] = (
+        lambda: tickets
+    )
+    task = asyncio.run(service.create_task(owner_id="u1", prompt="Fix"))
+    response = client.post(
+        f"/api/v1/coding/tasks/{task.task_id}/workspace/ws-ticket",
+        params={"kind": "pty"},
+    )
+
+    assert response.status_code == 201
+    token = response.json()["ticket"]
+    assert (
+        asyncio.run(
+            tickets.consume(
+                token,
+                task_id=task.task_id,
+                kind=WorkspaceStreamKind.PTY,
+            )
+        )
+        == "u1"
+    )
+
+
 def test_foreign_user_cannot_issue_websocket_ticket() -> None:
     owner, service = make_client("owner")
     task_id = owner.post(
@@ -210,6 +244,113 @@ def test_foreign_user_cannot_steer_coding_task() -> None:
     )
 
     assert response.status_code == 404
+
+
+def test_owner_can_read_workspace_tree_file_and_diff() -> None:
+    client, _ = make_client("owner")
+    now = datetime(2026, 7, 23, tzinfo=UTC)
+
+    class Workspace:
+        async def list_tree(self, **kwargs):
+            assert kwargs["owner_id"] == "owner"
+            return SimpleNamespace(
+                entries=(
+                    SimpleNamespace(
+                        path="src/app.py",
+                        kind="file",
+                        size=4,
+                        modified_at=now,
+                    ),
+                ),
+                workspace_revision="12",
+            )
+
+        async def read_file(self, **kwargs):
+            return SimpleNamespace(
+                path=kwargs["path"],
+                content="code",
+                binary=False,
+                size=4,
+                workspace_revision="12",
+            )
+
+        async def git_diff(self, **kwargs):
+            return SimpleNamespace(
+                content="+code\n",
+                truncated=False,
+                workspace_revision="12",
+            )
+
+    client.app.dependency_overrides[get_coding_workspace_service] = Workspace
+
+    tree = client.get("/api/v1/coding/tasks/ct_1/workspace/tree")
+    file = client.get(
+        "/api/v1/coding/tasks/ct_1/workspace/files?path=src/app.py"
+    )
+    diff = client.get("/api/v1/coding/tasks/ct_1/workspace/diff")
+
+    assert tree.status_code == 200
+    assert tree.json()["entries"][0]["path"] == "src/app.py"
+    assert file.json()["content"] == "code"
+    assert diff.json()["content"] == "+code\n"
+
+
+def test_workspace_save_returns_pending_agent_sync() -> None:
+    client, _ = make_client("owner")
+
+    class Workspace:
+        async def save_file(self, **kwargs):
+            assert kwargs["owner_id"] == "owner"
+            return {
+                "edit_id": kwargs["edit_id"],
+                "path": kwargs["path"],
+                "base_revision": kwargs["base_revision"],
+                "resulting_revision": "13",
+                "status": "pending_agent_sync",
+            }
+
+    client.app.dependency_overrides[get_coding_workspace_service] = Workspace
+    response = client.put(
+        "/api/v1/coding/tasks/ct_1/workspace/files",
+        json={
+            "edit_id": "cwe_1",
+            "path": "src/app.py",
+            "base_revision": "12",
+            "content": "code",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["resulting_revision"] == "13"
+    assert response.json()["status"] == "pending_agent_sync"
+
+
+def test_foreign_workspace_is_hidden_and_revision_conflict_is_stable() -> None:
+    client, _ = make_client("foreign")
+
+    class Workspace:
+        async def list_tree(self, **kwargs):
+            raise WorkspaceEditConflict("workspace_not_found")
+
+        async def save_file(self, **kwargs):
+            raise WorkspaceEditConflict("workspace_revision_conflict")
+
+    client.app.dependency_overrides[get_coding_workspace_service] = Workspace
+
+    hidden = client.get("/api/v1/coding/tasks/ct_1/workspace/tree")
+    conflict = client.put(
+        "/api/v1/coding/tasks/ct_1/workspace/files",
+        json={
+            "edit_id": "cwe_1",
+            "path": "src/app.py",
+            "base_revision": "12",
+            "content": "code",
+        },
+    )
+
+    assert hidden.status_code == 404
+    assert conflict.status_code == 409
+    assert conflict.json() == {"detail": "workspace_revision_conflict"}
 
 
 def test_snapshot_returns_phase_and_checkpoint_state() -> None:
@@ -247,6 +388,17 @@ def test_snapshot_returns_phase_and_checkpoint_state() -> None:
                 ),
                 tools=(),
                 approvals=(),
+                parts=(
+                    SimpleNamespace(
+                        part_id="part_1",
+                        run_id="cr_2",
+                        turn_id="turn_1",
+                        status="completed",
+                        content="안녕",
+                        first_seq=8,
+                        last_seq=10,
+                    ),
+                ),
                 todos=(),
                 workspace=SimpleNamespace(
                     revision="rev_12", git_head=None, changed_files=("app.py",)
@@ -273,3 +425,15 @@ def test_snapshot_returns_phase_and_checkpoint_state() -> None:
     assert body["active_run"]["run_id"] == "cr_2"
     assert body["phases"][0]["kind"] == "understand"
     assert body["connection_basis"] == "checkpoint"
+    assert body["parts"] == [
+        {
+            "part_id": "part_1",
+            "run_id": "cr_2",
+            "turn_id": "turn_1",
+            "status": "completed",
+            "content": "안녕",
+            "first_seq": 8,
+            "last_seq": 10,
+        }
+    ]
+    assert "content_bytes" not in body["parts"][0]

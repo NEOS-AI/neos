@@ -17,7 +17,12 @@ from neos.coding.domain.phases import (
     SteeringMode,
     SteeringRequest,
 )
-from neos.coding.loop.base import CodingLoop, LoopDependencies, LoopInput
+from neos.coding.loop.base import (
+    CodingLoop,
+    LoopDependencies,
+    LoopInput,
+    WorkspaceEditContext,
+)
 
 
 _EXPECTED_CHECKPOINT_OMITTED = object()
@@ -53,9 +58,12 @@ class CodingRunService:
         metrics=None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         execution_lease: timedelta = timedelta(seconds=30),
+        workspace_edit_batch_size: int = 20,
     ) -> None:
         if execution_lease.total_seconds() <= 0:
             raise ValueError("execution_lease must be positive")
+        if workspace_edit_batch_size < 1:
+            raise ValueError("workspace_edit_batch_size must be positive")
         self._tasks = tasks
         self._runs = runs
         self._events = events
@@ -64,6 +72,7 @@ class CodingRunService:
         self._metrics = metrics
         self._clock = clock
         self._execution_lease = execution_lease
+        self._workspace_edit_batch_size = workspace_edit_batch_size
 
     async def ensure_started(self, *, task_id: str) -> CodingRun:
         task = await self._tasks.get(task_id)
@@ -177,6 +186,16 @@ class CodingRunService:
                 checkpoint = applied.checkpoint
                 run = applied.run
                 lease = applied.lease
+            workspace_application = (
+                await self._runs.claim_workspace_edits_at_safe_point(
+                    lease=lease,
+                    checkpoint=checkpoint,
+                    limit=self._workspace_edit_batch_size,
+                    now=self._clock(),
+                )
+            )
+            if workspace_application is not None:
+                checkpoint = workspace_application.checkpoint
 
         if checkpoint is not None:
             instruction = str(checkpoint.loop_state["current_instruction"])
@@ -190,6 +209,7 @@ class CodingRunService:
                 task_id=task_id,
                 run_id=run.run_id,
                 instruction=instruction,
+                workspace_edits=self._workspace_edit_contexts(checkpoint),
             ),
             checkpoint,
             LoopDependencies(
@@ -246,6 +266,22 @@ class CodingRunService:
             await self._release_lease(lease)
             raise
         return None
+
+    @staticmethod
+    def _workspace_edit_contexts(
+        checkpoint: CodingCheckpoint | None,
+    ) -> tuple[WorkspaceEditContext, ...]:
+        if checkpoint is None:
+            return ()
+        raw = checkpoint.loop_state.get("pending_workspace_edits", ())
+        return tuple(
+            WorkspaceEditContext(
+                edit_id=str(item["edit_id"]),
+                path=str(item["path"]),
+                resulting_revision=str(item["resulting_revision"]),
+            )
+            for item in raw
+        )
 
     async def advance_until(self, *, task_id: str, phase: str, worker_id: str):
         while True:

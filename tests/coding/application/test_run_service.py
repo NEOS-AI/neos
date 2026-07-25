@@ -14,6 +14,10 @@ from neos.coding.domain.phases import (
     CodingRunStatus,
     SteeringMode,
 )
+from neos.coding.domain.workspace_edits import (
+    CodingWorkspaceEdit,
+    WorkspaceEditStatus,
+)
 from neos.coding.events.store import InMemoryCodingEventStore
 from neos.coding.loop.fake import FakeDurableCodingLoop
 from tests.coding.fakes import InMemoryCodingRunRepository
@@ -83,9 +87,11 @@ class ModelCheckpointLoop:
     def __init__(self, *, deny_first=False) -> None:
         self.calls = 0
         self.deny_first = deny_first
+        self.inputs = []
 
     async def run(self, input, checkpoint, deps):
         self.calls += 1
+        self.inputs.append(input)
         if checkpoint is not None and checkpoint.loop_state.get("terminal_pending"):
             return
         denied = self.deny_first and self.calls == 1
@@ -283,6 +289,56 @@ async def test_model_checkpoint_is_one_safe_point_before_run_completion() -> Non
     second = await service.advance_one_safe_point(task_id="ct_1", worker_id="worker-a")
     assert second.type == "run.completed"
     assert repository.active_run.status is CodingRunStatus.COMPLETED
+
+
+async def test_pending_workspace_edit_is_passed_to_loop_once() -> None:
+    run = run_fixture("cr_1")
+    edit = CodingWorkspaceEdit(
+        edit_id="cwe_1",
+        task_id="ct_1",
+        run_id="cr_1",
+        path="src/app.py",
+        base_revision="1",
+        resulting_revision="2",
+        status=WorkspaceEditStatus.COMMITTED,
+        content_digest="sha256:test",
+        content_bytes=4,
+        created_at=NOW,
+        committed_at=NOW,
+        applied_checkpoint_id=None,
+    )
+    repository = InMemoryCodingRunRepository(
+        active_run=run,
+        task_prompts={"ct_1": "Fix it"},
+        workspace_edits=[edit],
+    )
+    repository.created_runs.append(run)
+    repository.task_statuses["ct_1"] = "running"
+    await repository.save_checkpoint(
+        CodingCheckpoint(
+            "cc_1",
+            "ct_1",
+            "cr_1",
+            1,
+            {"current_instruction": "Fix it", "transcript": []},
+            "1",
+            NOW,
+        )
+    )
+    loop = ModelCheckpointLoop()
+    service = await make_run_service(repository, loop=loop)
+
+    await service.advance_one_safe_point(
+        task_id="ct_1", worker_id="worker-a"
+    )
+
+    assert [item.edit_id for item in loop.inputs[0].workspace_edits] == [
+        "cwe_1"
+    ]
+    assert (
+        repository.workspace_edits["cwe_1"].status
+        is WorkspaceEditStatus.APPLIED
+    )
 
 
 async def test_denial_checkpoint_returns_then_continues_model_on_next_call() -> None:

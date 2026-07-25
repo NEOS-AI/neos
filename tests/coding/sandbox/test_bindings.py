@@ -241,6 +241,34 @@ async def test_healthy_running_sandbox_is_reused() -> None:
     assert provider.calls == [("get", "sb_old"), ("open_session", "sb_old")]
 
 
+async def test_admin_open_reuses_existing_binding_without_creating() -> None:
+    repository = Repository(binding())
+    provider = Provider({"sb_old": sandbox("sb_old")})
+
+    bound = await service(repository, provider).open_existing_admin("ct_1")
+
+    assert bound.binding == repository.current
+    assert provider.calls == [("get", "sb_old"), ("open_session", "sb_old")]
+    assert repository.created == []
+
+
+async def test_admin_open_persists_resumed_health() -> None:
+    repository = Repository(binding(health_state="suspended"))
+    provider = Provider(
+        {"sb_old": sandbox("sb_old", state=SandboxState.SUSPENDED)}
+    )
+
+    bound = await service(repository, provider).open_existing_admin("ct_1")
+
+    assert bound.binding.health_state == "healthy"
+    assert repository.current == bound.binding
+    assert provider.calls == [
+        ("get", "sb_old"),
+        ("resume", "sb_old"),
+        ("open_session", "sb_old"),
+    ]
+
+
 async def test_suspended_sandbox_is_resumed() -> None:
     repository = Repository(binding(health_state="suspended"))
     provider = Provider({"sb_old": sandbox("sb_old", state=SandboxState.SUSPENDED)})

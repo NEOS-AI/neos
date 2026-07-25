@@ -764,12 +764,40 @@ class DockerSandboxSession:
         return result.stdout
 
     async def write_file(self, path: str, content: bytes) -> int:
+        return await self._write_file(path, content, expected_revision=None)
+
+    async def write_file_if_revision(
+        self,
+        path: str,
+        content: bytes,
+        *,
+        expected_revision: int,
+    ) -> int:
+        return await self._write_file(
+            path,
+            content,
+            expected_revision=expected_revision,
+        )
+
+    async def _write_file(
+        self,
+        path: str,
+        content: bytes,
+        *,
+        expected_revision: int | None,
+    ) -> int:
         relative = ensure_mutable_workspace_path(path)
         limits = self._record.sandbox.limits
         if len(content) > min(limits.workspace_bytes, limits.max_stdin_bytes):
             raise SandboxPolicyViolation("workspace_write_limit_exceeded")
         async with self._record.lock:
             await self._provider._running_record(self.sandbox_id)
+            if (
+                expected_revision is not None
+                and self._record.sandbox.workspace_revision
+                != expected_revision
+            ):
+                raise SandboxStateConflict("workspace_revision_conflict")
             await self._run_helper(
                 _WRITE_FILE_HELPER,
                 relative.as_posix(),

@@ -29,6 +29,17 @@ from neos.coding.domain.durability import (
     ToolExecutionDisposition,
 )
 from neos.coding.domain.events import CodingEvent
+from neos.coding.domain.text_parts import (
+    CodingTextPart,
+    ModelTextPartCommit,
+    TextPartConflict,
+    TextPartStatus,
+)
+from neos.coding.domain.workspace_edits import (
+    CodingWorkspaceEdit,
+    WorkspaceEditApplication,
+    WorkspaceEditStatus,
+)
 from neos.coding.loop.base import EXPECTED_CHECKPOINT_OMITTED
 
 from neos.coding.domain.phases import (
@@ -1394,6 +1405,280 @@ class PostgresCodingRunRepository:
             self._wake_outbox()
         return ModelCheckpointCommit(checkpoint, event)
 
+    async def start_model_text_part(
+        self,
+        *,
+        lease: ExecutionLease,
+        part_id: str,
+        turn_id: str,
+        now: datetime,
+    ) -> ModelTextPartCommit:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(session, lease, now=now)
+                await self._lock_canonical_running_run(session, lease)
+                duplicate = await session.execute(
+                    text(
+                        """
+                        SELECT part_id
+                        FROM coding_text_parts
+                        WHERE part_id = :part_id
+                           OR (task_id = :task_id AND turn_id = :turn_id)
+                        LIMIT 1
+                        FOR UPDATE
+                        """
+                    ),
+                    {
+                        "part_id": part_id,
+                        "task_id": lease.task_id,
+                        "turn_id": turn_id,
+                    },
+                )
+                if duplicate.first() is not None:
+                    raise TextPartConflict("model_text_part_exists")
+                seq = await self._allocate_sequence_in_session(
+                    session, task_id=lease.task_id, now=now
+                )
+                interrupted = await session.execute(
+                    text(
+                        """
+                        UPDATE coding_text_parts
+                        SET status = 'interrupted', last_seq = :seq,
+                            updated_at = :now
+                        WHERE task_id = :task_id
+                          AND run_id = :run_id
+                          AND status = 'streaming'
+                        RETURNING part_id
+                        """
+                    ),
+                    {
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "seq": seq,
+                        "now": now,
+                    },
+                )
+                interrupted_ids = tuple(sorted(row[0] for row in interrupted))
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_text_parts
+                            (part_id, task_id, run_id, turn_id, first_seq,
+                             last_seq, status, content, content_bytes,
+                             created_at, updated_at)
+                        VALUES
+                            (:part_id, :task_id, :run_id, :turn_id, :seq,
+                             :seq, 'streaming', '', 0, :now, :now)
+                        """
+                    ),
+                    {
+                        "part_id": part_id,
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "turn_id": turn_id,
+                        "seq": seq,
+                        "now": now,
+                    },
+                )
+                part = CodingTextPart(
+                    part_id=part_id,
+                    task_id=lease.task_id,
+                    run_id=lease.run_id,
+                    turn_id=turn_id,
+                    first_seq=seq,
+                    last_seq=seq,
+                    status=TextPartStatus.STREAMING,
+                    content="",
+                    content_bytes=0,
+                    created_at=now,
+                    updated_at=now,
+                )
+                event = await self._insert_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    seq=seq,
+                    event_type="model.text_part.started",
+                    payload={
+                        "part_id": part_id,
+                        "status": "streaming",
+                        "interrupted_part_ids": list(interrupted_ids),
+                    },
+                    now=now,
+                    run_id=lease.run_id,
+                    turn_id=turn_id,
+                )
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return ModelTextPartCommit(part, event, interrupted_ids)
+
+    async def append_model_text_delta(
+        self,
+        *,
+        lease: ExecutionLease,
+        part_id: str,
+        turn_id: str,
+        delta: str,
+        delta_bytes: int,
+        max_part_bytes: int,
+        now: datetime,
+    ) -> ModelTextPartCommit:
+        if not delta or delta_bytes != len(delta.encode("utf-8")):
+            raise ValueError("delta_bytes must match a non-empty UTF-8 delta")
+        if max_part_bytes < 1:
+            raise ValueError("max_part_bytes must be positive")
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(session, lease, now=now)
+                await self._lock_canonical_running_run(session, lease)
+                current = await session.execute(
+                    text(
+                        """
+                        SELECT part_id, task_id, run_id, turn_id, first_seq,
+                               last_seq, status, content, content_bytes,
+                               created_at, updated_at
+                        FROM coding_text_parts
+                        WHERE part_id = :part_id
+                          AND task_id = :task_id
+                          AND run_id = :run_id
+                          AND turn_id = :turn_id
+                        FOR UPDATE
+                        """
+                    ),
+                    {
+                        "part_id": part_id,
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "turn_id": turn_id,
+                    },
+                )
+                row = current.first()
+                if row is None or row[6] != TextPartStatus.STREAMING.value:
+                    raise TextPartConflict("model_text_part_stale")
+                part = self._text_part_from_row(row)
+                if part.content_bytes + delta_bytes > max_part_bytes:
+                    raise TextPartConflict("model_public_text_budget_exceeded")
+                seq = await self._allocate_sequence_in_session(
+                    session, task_id=lease.task_id, now=now
+                )
+                updated = await session.execute(
+                    text(
+                        """
+                        UPDATE coding_text_parts
+                        SET content = content || :delta,
+                            content_bytes = content_bytes + :delta_bytes,
+                            last_seq = :seq, updated_at = :now
+                        WHERE part_id = :part_id
+                          AND task_id = :task_id
+                          AND run_id = :run_id
+                          AND turn_id = :turn_id
+                          AND status = 'streaming'
+                          AND content_bytes + :delta_bytes <= :max_part_bytes
+                        RETURNING part_id, task_id, run_id, turn_id, first_seq,
+                                  last_seq, status, content, content_bytes,
+                                  created_at, updated_at
+                        """
+                    ),
+                    {
+                        "part_id": part_id,
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "turn_id": turn_id,
+                        "delta": delta,
+                        "delta_bytes": delta_bytes,
+                        "max_part_bytes": max_part_bytes,
+                        "seq": seq,
+                        "now": now,
+                    },
+                )
+                updated_row = updated.first()
+                if updated_row is None:
+                    raise TextPartConflict("model_text_part_stale")
+                part = self._text_part_from_row(updated_row)
+                event = await self._insert_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    seq=seq,
+                    event_type="model.text_delta",
+                    payload={"part_id": part_id, "delta": delta},
+                    now=now,
+                    run_id=lease.run_id,
+                    turn_id=turn_id,
+                )
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return ModelTextPartCommit(part, event)
+
+    async def complete_model_text_part(
+        self,
+        *,
+        lease: ExecutionLease,
+        part_id: str,
+        turn_id: str,
+        now: datetime,
+    ) -> ModelTextPartCommit:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(session, lease, now=now)
+                await self._lock_canonical_running_run(session, lease)
+                current = await session.execute(
+                    text(
+                        """
+                        SELECT part_id, task_id, run_id, turn_id, first_seq,
+                               last_seq, status, content, content_bytes,
+                               created_at, updated_at
+                        FROM coding_text_parts
+                        WHERE part_id = :part_id
+                          AND task_id = :task_id
+                          AND run_id = :run_id
+                          AND turn_id = :turn_id
+                        FOR UPDATE
+                        """
+                    ),
+                    {
+                        "part_id": part_id,
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "turn_id": turn_id,
+                    },
+                )
+                row = current.first()
+                if row is None or row[6] != TextPartStatus.STREAMING.value:
+                    raise TextPartConflict("model_text_part_stale")
+                seq = await self._allocate_sequence_in_session(
+                    session, task_id=lease.task_id, now=now
+                )
+                completed = await session.execute(
+                    text(
+                        """
+                        UPDATE coding_text_parts
+                        SET status = 'completed', last_seq = :seq,
+                            updated_at = :now
+                        WHERE part_id = :part_id AND status = 'streaming'
+                        RETURNING part_id, task_id, run_id, turn_id, first_seq,
+                                  last_seq, status, content, content_bytes,
+                                  created_at, updated_at
+                        """
+                    ),
+                    {"part_id": part_id, "seq": seq, "now": now},
+                )
+                completed_row = completed.first()
+                if completed_row is None:
+                    raise TextPartConflict("model_text_part_stale")
+                part = self._text_part_from_row(completed_row)
+                event = await self._insert_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    seq=seq,
+                    event_type="model.text_part.completed",
+                    payload={"part_id": part_id, "status": "completed"},
+                    now=now,
+                    run_id=lease.run_id,
+                    turn_id=turn_id,
+                )
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return ModelTextPartCommit(part, event)
+
     async def apply_steering_at_safe_point(
         self,
         *,
@@ -1820,6 +2105,155 @@ class PostgresCodingRunRepository:
             event,
         )
 
+    async def claim_workspace_edits_at_safe_point(
+        self,
+        *,
+        lease: ExecutionLease,
+        checkpoint: CodingCheckpoint,
+        limit: int,
+        now: datetime,
+    ) -> WorkspaceEditApplication | None:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        result: WorkspaceEditApplication | None = None
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(session, lease, now=now)
+                await self._lock_canonical_running_run(session, lease)
+                selected = await session.execute(
+                    text(
+                        """
+                        SELECT edit_id, task_id, run_id, path, base_revision,
+                               resulting_revision, status, content_digest,
+                               content_bytes, created_at, committed_at,
+                               applied_checkpoint_id
+                        FROM coding_workspace_edits
+                        WHERE task_id = :task_id
+                          AND status = 'committed'
+                          AND applied_checkpoint_id IS NULL
+                        ORDER BY resulting_revision::BIGINT, edit_id
+                        LIMIT :limit
+                        FOR UPDATE SKIP LOCKED
+                        """
+                    ),
+                    {
+                        "task_id": lease.task_id,
+                        "limit": limit,
+                    },
+                )
+                rows = selected.fetchall()
+                if not rows:
+                    return None
+                edits = tuple(self._workspace_edit_from_row(row) for row in rows)
+                sequences = [
+                    await self._allocate_sequence_in_session(
+                        session,
+                        task_id=lease.task_id,
+                        now=now,
+                    )
+                    for _ in edits
+                ]
+                checkpoint_id = f"cc_workspace_{uuid4().hex}"
+                pending = [
+                    {
+                        "edit_id": edit.edit_id,
+                        "path": edit.path,
+                        "resulting_revision": edit.resulting_revision,
+                    }
+                    for edit in edits
+                ]
+                loop_state = {
+                    **dict(checkpoint.loop_state),
+                    "pending_workspace_edits": pending,
+                }
+                applied_checkpoint = CodingCheckpoint(
+                    checkpoint_id=checkpoint_id,
+                    task_id=lease.task_id,
+                    run_id=lease.run_id,
+                    seq=sequences[-1],
+                    loop_state=loop_state,
+                    workspace_revision=checkpoint.workspace_revision,
+                    created_at=now,
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_checkpoints
+                            (checkpoint_id, task_id, run_id, seq,
+                             loop_state_json, workspace_revision, created_at)
+                        VALUES
+                            (:checkpoint_id, :task_id, :run_id, :seq,
+                             CAST(:loop_state AS JSONB),
+                             :workspace_revision, :created_at)
+                        """
+                    ),
+                    {
+                        "checkpoint_id": checkpoint_id,
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "seq": sequences[-1],
+                        "loop_state": json.dumps(loop_state),
+                        "workspace_revision": checkpoint.workspace_revision,
+                        "created_at": now,
+                    },
+                )
+                applied_edits: list[CodingWorkspaceEdit] = []
+                events: list[CodingEvent] = []
+                for edit, seq in zip(edits, sequences, strict=True):
+                    updated = await session.execute(
+                        text(
+                            """
+                            UPDATE coding_workspace_edits
+                            SET status = 'applied',
+                                applied_checkpoint_id = :checkpoint_id
+                            WHERE edit_id = :edit_id
+                              AND status = 'committed'
+                              AND applied_checkpoint_id IS NULL
+                            RETURNING edit_id
+                            """
+                        ),
+                        {
+                            "edit_id": edit.edit_id,
+                            "checkpoint_id": checkpoint_id,
+                        },
+                    )
+                    if updated.first() is None:
+                        raise StaleExecutionLease(lease.task_id)
+                    applied = replace(
+                        edit,
+                        status=WorkspaceEditStatus.APPLIED,
+                        applied_checkpoint_id=checkpoint_id,
+                    )
+                    applied_edits.append(applied)
+                    events.append(
+                        await self._insert_event_in_session(
+                            session,
+                            task_id=lease.task_id,
+                            seq=seq,
+                            event_type="workspace.user_edit.synced",
+                            payload={
+                                "edit_id": applied.edit_id,
+                                "path": applied.path,
+                                "resulting_revision": (
+                                    applied.resulting_revision
+                                ),
+                                "status": "agent_synced",
+                                "applied_checkpoint_id": checkpoint_id,
+                            },
+                            now=now,
+                            run_id=lease.run_id,
+                            checkpoint_id=checkpoint_id,
+                        )
+                    )
+                result = WorkspaceEditApplication(
+                    tuple(applied_edits),
+                    applied_checkpoint,
+                    tuple(events),
+                )
+        if result is not None and self._wake_outbox is not None:
+            self._wake_outbox()
+        return result
+
     @staticmethod
     def _lease_from_row(row) -> ExecutionLease:
         return ExecutionLease(
@@ -1852,6 +2286,22 @@ class PostgresCodingRunRepository:
             decision=ApprovalDecision(row[14]) if row[14] is not None else None,
             decided_by=row[15],
             decided_at=row[16],
+        )
+
+    @staticmethod
+    def _text_part_from_row(row) -> CodingTextPart:
+        return CodingTextPart(
+            part_id=row[0],
+            task_id=row[1],
+            run_id=row[2],
+            turn_id=row[3],
+            first_seq=int(row[4]),
+            last_seq=int(row[5]),
+            status=TextPartStatus(row[6]),
+            content=row[7],
+            content_bytes=int(row[8]),
+            created_at=row[9],
+            updated_at=row[10],
         )
 
     @staticmethod
@@ -1981,6 +2431,31 @@ class PostgresCodingRunRepository:
             raise StaleExecutionLease(lease.task_id)
 
     @staticmethod
+    async def _lock_canonical_running_run(session, lease: ExecutionLease) -> None:
+        result = await session.execute(
+            text(
+                """
+                SELECT run.run_id
+                FROM coding_runs AS run
+                JOIN coding_tasks AS task ON task.task_id = run.task_id
+                WHERE run.run_id = :run_id
+                  AND run.task_id = :task_id
+                  AND run.status = 'running'
+                  AND task.status = 'running'
+                  AND run.attempt = (
+                      SELECT MAX(candidate.attempt)
+                      FROM coding_runs AS candidate
+                      WHERE candidate.task_id = :task_id
+                  )
+                FOR UPDATE OF run
+                """
+            ),
+            {"run_id": lease.run_id, "task_id": lease.task_id},
+        )
+        if result.first() is None:
+            raise StaleExecutionLease(lease.task_id)
+
+    @staticmethod
     def _phase_from_row(row) -> CodingPhase:
         return CodingPhase(
             phase_id=row[0],
@@ -2003,6 +2478,23 @@ class PostgresCodingRunRepository:
             resume_from_checkpoint_id=row[4],
             started_at=row[5],
             completed_at=row[6],
+        )
+
+    @staticmethod
+    def _workspace_edit_from_row(row) -> CodingWorkspaceEdit:
+        return CodingWorkspaceEdit(
+            edit_id=row[0],
+            task_id=row[1],
+            run_id=row[2],
+            path=row[3],
+            base_revision=row[4],
+            resulting_revision=row[5],
+            status=WorkspaceEditStatus(row[6]),
+            content_digest=row[7],
+            content_bytes=int(row[8]),
+            created_at=row[9],
+            committed_at=row[10],
+            applied_checkpoint_id=row[11],
         )
 
     async def _allocate_sequence_in_session(
@@ -2035,6 +2527,7 @@ class PostgresCodingRunRepository:
         payload: Mapping[str, Any],
         now: datetime,
         run_id: str | None = None,
+        turn_id: str | None = None,
         tool_call_id: str | None = None,
         checkpoint_id: str | None = None,
     ) -> CodingEvent:
@@ -2049,6 +2542,7 @@ class PostgresCodingRunRepository:
             payload=payload,
             now=now,
             run_id=run_id,
+            turn_id=turn_id,
             tool_call_id=tool_call_id,
             checkpoint_id=checkpoint_id,
         )
@@ -2063,6 +2557,7 @@ class PostgresCodingRunRepository:
         payload: Mapping[str, Any],
         now: datetime,
         run_id: str | None = None,
+        turn_id: str | None = None,
         tool_call_id: str | None = None,
         checkpoint_id: str | None = None,
     ) -> CodingEvent:
@@ -2075,6 +2570,7 @@ class PostgresCodingRunRepository:
             payload=dict(payload),
             created_at=now,
             run_id=run_id,
+            turn_id=turn_id,
             tool_call_id=tool_call_id,
             checkpoint_id=checkpoint_id,
         )
@@ -2087,7 +2583,7 @@ class PostgresCodingRunRepository:
                 VALUES
                     (:event_id, :task_id, :seq, 1, :event_type,
                      CAST(:payload AS JSONB), :created_at,
-                     :run_id, NULL, :tool_call_id, :checkpoint_id)
+                     :run_id, :turn_id, :tool_call_id, :checkpoint_id)
                 """
             ),
             {
@@ -2098,6 +2594,7 @@ class PostgresCodingRunRepository:
                 "payload": json.dumps(dict(payload)),
                 "created_at": now,
                 "run_id": run_id,
+                "turn_id": turn_id,
                 "tool_call_id": tool_call_id,
                 "checkpoint_id": checkpoint_id,
             },

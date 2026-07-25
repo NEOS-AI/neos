@@ -234,6 +234,14 @@ class SandboxSession(Protocol):
 
     async def write_file(self, path: str, content: bytes) -> int: ...
 
+    async def write_file_if_revision(
+        self,
+        path: str,
+        content: bytes,
+        *,
+        expected_revision: int,
+    ) -> int: ...
+
     async def search_text(
         self,
         query: str,

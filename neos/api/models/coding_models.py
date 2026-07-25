@@ -74,10 +74,73 @@ class CodingApprovalSnapshot(BaseModel):
     display_summary: dict[str, Any]
 
 
+class CodingTextPartSnapshot(BaseModel):
+    part_id: str
+    run_id: str
+    turn_id: str
+    status: Literal["streaming", "completed", "interrupted"]
+    content: str
+    first_seq: int
+    last_seq: int
+
+
 class CodingWorkspaceSnapshot(BaseModel):
     revision: str
     git_head: str | None
     changed_files: list[str]
+    user_edits: list["CodingWorkspaceEditSnapshot"] = Field(default_factory=list)
+
+
+class CodingWorkspaceEditSnapshot(BaseModel):
+    edit_id: str
+    path: str
+    base_revision: str
+    resulting_revision: str | None
+    status: Literal[
+        "pending_agent_sync", "agent_synced", "reconcile_required"
+    ]
+    applied_checkpoint_id: str | None
+
+
+class CodingWorkspaceEntryResponse(BaseModel):
+    path: str
+    kind: str
+    size: int
+    modified_at: datetime
+
+
+class CodingWorkspaceTreeResponse(BaseModel):
+    entries: list[CodingWorkspaceEntryResponse]
+    workspace_revision: str
+
+
+class CodingWorkspaceFileResponse(BaseModel):
+    path: str
+    content: str | None
+    binary: bool
+    size: int
+    workspace_revision: str
+
+
+class CodingWorkspaceDiffResponse(BaseModel):
+    content: str
+    truncated: bool
+    workspace_revision: str
+
+
+class CodingWorkspaceFileSaveRequest(BaseModel):
+    edit_id: str = Field(min_length=1, max_length=128)
+    path: str = Field(min_length=1, max_length=4096)
+    base_revision: str = Field(min_length=1, max_length=64)
+    content: str
+
+
+class CodingWorkspaceFileSaveResponse(BaseModel):
+    edit_id: str
+    path: str
+    base_revision: str
+    resulting_revision: str
+    status: Literal["pending_agent_sync"]
 
 
 class CodingCheckpointSnapshot(BaseModel):
@@ -95,6 +158,7 @@ class CodingProjectionSnapshotResponse(BaseModel):
     phases: list[CodingPhaseSnapshot]
     tools: list[CodingToolSnapshot]
     approvals: list[CodingApprovalSnapshot]
+    parts: list[CodingTextPartSnapshot]
     todos: list[dict[str, Any]]
     workspace: CodingWorkspaceSnapshot
     latest_checkpoint: CodingCheckpointSnapshot | None

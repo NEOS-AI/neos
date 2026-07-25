@@ -76,6 +76,27 @@ class SandboxProviderConformance:
         assert result.exit_code == 0
         assert result.stdout.startswith(b"git version")
 
+    async def test_conditional_write_rejects_stale_revision(self, provider) -> None:
+        sandbox = await provider.create(
+            owner_id="u1",
+            limits=SandboxLimits.safe_defaults(),
+        )
+        session = await provider.open_session(sandbox.sandbox_id)
+        assert (
+            await session.write_file_if_revision(
+                "main.py", b"first", expected_revision=0
+            )
+            == 1
+        )
+        with pytest.raises(
+            SandboxStateConflict, match="workspace_revision_conflict"
+        ):
+            await session.write_file_if_revision(
+                "main.py", b"stale", expected_revision=0
+            )
+        assert await session.read_file("main.py") == b"first"
+        assert await session.workspace_revision() == 1
+
     async def test_suspend_blocks_session_until_resume(self, provider) -> None:
         sandbox = await provider.create(
             owner_id="u1",

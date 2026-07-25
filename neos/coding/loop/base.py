@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Mapping, Protocol
 
 from neos.coding.domain.events import CodingEvent
+from neos.coding.domain.text_parts import ModelTextPartCommit
 from neos.coding.domain.approvals import (
     ApprovalDecision,
     ApprovalRequestCommit,
@@ -32,10 +33,18 @@ EXPECTED_CHECKPOINT_OMITTED = object()
 
 
 @dataclass(frozen=True, slots=True)
+class WorkspaceEditContext:
+    edit_id: str
+    path: str
+    resulting_revision: str
+
+
+@dataclass(frozen=True, slots=True)
 class LoopInput:
     task_id: str
     run_id: str
     instruction: str
+    workspace_edits: tuple[WorkspaceEditContext, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +184,36 @@ class CodingRunRepository(Protocol):
         now: datetime,
     ) -> ModelCheckpointCommit: ...
 
+    async def start_model_text_part(
+        self,
+        *,
+        lease: ExecutionLease,
+        part_id: str,
+        turn_id: str,
+        now: datetime,
+    ) -> ModelTextPartCommit: ...
+
+    async def append_model_text_delta(
+        self,
+        *,
+        lease: ExecutionLease,
+        part_id: str,
+        turn_id: str,
+        delta: str,
+        delta_bytes: int,
+        max_part_bytes: int,
+        now: datetime,
+    ) -> ModelTextPartCommit: ...
+
+    async def complete_model_text_part(
+        self,
+        *,
+        lease: ExecutionLease,
+        part_id: str,
+        turn_id: str,
+        now: datetime,
+    ) -> ModelTextPartCommit: ...
+
     async def apply_steering_at_safe_point(
         self,
         *,
@@ -184,6 +223,15 @@ class CodingRunRepository(Protocol):
         claim_expires_at: datetime,
         now: datetime,
     ) -> SteeringApplication | None: ...
+
+    async def claim_workspace_edits_at_safe_point(
+        self,
+        *,
+        lease: ExecutionLease,
+        checkpoint: CodingCheckpoint,
+        limit: int,
+        now: datetime,
+    ): ...
 
     async def commit_interruption(
         self,

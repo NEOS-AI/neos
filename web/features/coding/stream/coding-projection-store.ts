@@ -18,11 +18,17 @@ export type CodingProjectionStore = {
   getSnapshot(): CodingProjectionState;
   subscribe(listener: () => void): () => void;
   replaceSnapshot(snapshot: CodingProjectionSnapshot): void;
-  applyEvent(event: CodingEvent): void;
+  applyEvent(event: CodingEvent): ProjectionApplyOutcome;
   setConnectionBasis(basis: CodingProjectionState["connectionBasis"]): void;
   flush(): void;
   dispose(): void;
 };
+
+export type ProjectionApplyOutcome =
+  | "applied"
+  | "duplicate"
+  | "gap"
+  | "resync_required";
 
 const browserFrameScheduler: CodingFrameScheduler = {
   request(callback) {
@@ -116,19 +122,21 @@ export function createCodingProjectionStore(
     },
     applyEvent(event: CodingEvent) {
       if (disposed) {
-        return;
+        return "duplicate";
       }
+      if (event.seq <= workingState.appliedSeq) return "duplicate";
       const nextState = reduceProjectionEvent(workingState, event);
       if (nextState === workingState) {
-        return;
+        return "duplicate";
       }
       workingState = nextState;
-      if (nextState.gap !== null) {
+      if (nextState.gap !== null || nextState.projectionIssue !== null) {
         cancelScheduled();
         publishNow();
-        return;
+        return nextState.gap !== null ? "gap" : "resync_required";
       }
       schedulePublish();
+      return "applied";
     },
     setConnectionBasis(basis: CodingProjectionState["connectionBasis"]) {
       if (disposed || workingState.connectionBasis === basis) {

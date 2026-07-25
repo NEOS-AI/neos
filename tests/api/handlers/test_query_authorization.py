@@ -15,7 +15,6 @@ os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 
 from neos.api.dependencies.auth import (
     get_current_active_user,
-    get_current_admin_user,
 )
 from neos.api.handlers import query_handlers, workflow_stream_handlers
 from neos.api.models.query_models import QueryRequest, WorkflowStreamRequest
@@ -387,7 +386,11 @@ def test_production_health_routes_remain_public():
 def test_production_app_exposes_only_authenticated_coding_websocket():
     _, production_app = _load_production_app()
 
-    assert _websocket_paths(production_app) == {f"{API_PREFIX}/coding/ws"}
+    assert _websocket_paths(production_app) == {
+        f"{API_PREFIX}/coding/ws",
+        f"{API_PREFIX}/coding/workspace/ws",
+        f"{API_PREFIX}/coding/pty/ws",
+    }
 
 
 def test_query_compatibility_user_ids_are_optional_and_deprecated():
