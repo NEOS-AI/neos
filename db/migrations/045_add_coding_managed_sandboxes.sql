@@ -87,6 +87,7 @@ CREATE TABLE coding_managed_sandboxes (
     cleaned_at TIMESTAMPTZ,
     CHECK (absolute_expires_at > created_at),
     CHECK (lease_expires_at IS NULL OR lease_expires_at <= absolute_expires_at),
+    CHECK (state = 'cleaned' OR cleaned_at IS NULL),
     CHECK (
         state <> 'cleaned' OR (
             provider_ref IS NULL AND ownership_digest IS NULL

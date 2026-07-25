@@ -9,6 +9,7 @@ def test_migration_045_has_single_current_generation_and_cleanup_ledger() -> Non
     assert "CREATE TABLE coding_sandbox_cleanup_attempts" in sql
     assert "idx_coding_managed_sandboxes_current_task" in sql
     assert "WHERE cleaned_at IS NULL" in sql
+    assert "CHECK (state = 'cleaned' OR cleaned_at IS NULL)" in sql
     assert "provider_response" not in sql
     assert "prompt" not in sql
 
