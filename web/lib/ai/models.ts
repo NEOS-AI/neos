@@ -114,6 +114,8 @@ export function mapToBackendModelName(vercelModelId: string): string {
     "anthropic/claude-opus-5": "claude-opus-5",
     "anthropic/claude-haiku-4.5": "claude-haiku-4-5-20251001",
     "anthropic/claude-sonnet-4.5": "claude-sonnet-4-5-20250929",
+    // Retired from the picker, still mapped for stored cookies/conversations
+    "anthropic/claude-opus-4.5": "claude-opus-4-6",
     "anthropic/claude-3.7-sonnet-thinking": "claude-sonnet-4-5-20250929", // Use sonnet as fallback
     // OpenAI - remove provider prefix
     "openai/gpt-5.6-terra": "gpt-5.6-terra",

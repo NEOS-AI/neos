@@ -73,4 +73,23 @@ describe("curated AI models", () => {
 
     assert.notEqual(opus45?.name, "Claude Opus 4.6");
   });
+
+  test("still maps retired picker IDs so stored selections keep working", () => {
+    // Retired from the picker, but existing chat-model cookies and stored
+    // conversations still send this gateway ID.
+    assert.equal(
+      mapToBackendModelName("anthropic/claude-opus-4.5"),
+      "claude-opus-4-6"
+    );
+  });
+
+  test("never returns a gateway-prefixed ID to the backend", () => {
+    for (const model of chatModels) {
+      assert.equal(
+        mapToBackendModelName(model.id).includes("/"),
+        false,
+        `${model.id} has no backend mapping`
+      );
+    }
+  });
 });
