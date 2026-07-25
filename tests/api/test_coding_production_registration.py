@@ -128,7 +128,7 @@ def test_real_loop_maps_explicit_prices_and_transcript_cap() -> None:
             "model": "claude-test",
             "input_cost_micros_per_million": 3_000_000,
             "output_cost_micros_per_million": 15_000_000,
-            "max_transcript_bytes": 12345,
+            "max_transcript_bytes": 1_234_567,
         },
         "sandbox": {"enabled": True},
         "secrets": {"anthropic_api_key": "test-key"},
@@ -140,7 +140,7 @@ def test_real_loop_maps_explicit_prices_and_transcript_cap() -> None:
 
     assert loop._config.input_cost_micros_per_million == 3_000_000
     assert loop._config.output_cost_micros_per_million == 15_000_000
-    assert loop._config.max_transcript_bytes == 12345
+    assert loop._config.max_transcript_bytes == 1_234_567
 
 
 @pytest.mark.parametrize(
