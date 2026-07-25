@@ -9,10 +9,35 @@ from typing import Any, List
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseLanguageModel
 
+from neos.config.model_routing import is_claude_5
 from neos.config.settings import settings
 from .base import ModelProviderBase
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_anthropic_request(
+    model: str,
+    params: dict[str, Any],
+    *,
+    thinking_enabled: bool,
+) -> dict[str, Any]:
+    """Normalize Claude 5 requests to Anthropic's adaptive thinking contract."""
+    normalized = dict(params)
+    if not is_claude_5(model):
+        return normalized
+
+    thinking = normalized.get("thinking")
+    if isinstance(thinking, dict) and "budget_tokens" in thinking:
+        raise ValueError("budget_tokens is not supported for Claude 5 adaptive thinking")
+
+    normalized.pop("temperature", None)
+    normalized.pop("top_p", None)
+    normalized.pop("top_k", None)
+    normalized["thinking"] = (
+        {"type": "adaptive"} if thinking_enabled else {"type": "disabled"}
+    )
+    return normalized
 
 
 class AnthropicProvider(ModelProviderBase):
@@ -30,6 +55,8 @@ class AnthropicProvider(ModelProviderBase):
 
     def list_models(self) -> List[str]:
         return [
+            "claude-sonnet-5",
+            "claude-opus-5",
             "claude-haiku-4-5-20251001",
             "claude-sonnet-4-5-20250929",
             "claude-sonnet-4-6",
@@ -60,7 +87,13 @@ class AnthropicProvider(ModelProviderBase):
 
         # Thinking Blocks 제어
         disable_thinking = params.pop("disable_thinking", False)
-        if (settings.THINKING_BLOCKS_ENABLED or settings.MAX_THINKING_LENGTH > 0) and not disable_thinking:
+        if is_claude_5(model):
+            params = normalize_anthropic_request(
+                model,
+                params,
+                thinking_enabled=not disable_thinking,
+            )
+        elif (settings.THINKING_BLOCKS_ENABLED or settings.MAX_THINKING_LENGTH > 0) and not disable_thinking:
             budget = settings.MAX_THINKING_LENGTH
             if budget < 1024:
                 logger.warning("MAX_THINKING_LENGTH too low; raising to 1024")

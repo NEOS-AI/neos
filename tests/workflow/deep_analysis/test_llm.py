@@ -110,6 +110,23 @@ async def test_call_llm_uses_provider_usage_fields():
 
 
 @pytest.mark.asyncio
+async def test_claude_5_direct_call_uses_adaptive_thinking_without_temperature():
+    client = FakeAnthropic(["answer"])
+
+    await call_llm(
+        "claude-sonnet-5",
+        "prompt",
+        max_tokens=100,
+        temperature=0.7,
+        client=client,
+    )
+
+    params = client.kwargs[0]
+    assert "temperature" not in params
+    assert params["thinking"] == {"type": "adaptive"}
+
+
+@pytest.mark.asyncio
 async def test_call_json_retries_once_after_parse_failure():
     client = FakeAnthropic(["garbage", '{"ok": true}'])
 

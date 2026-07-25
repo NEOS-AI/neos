@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from neos.providers.anthropic import normalize_anthropic_request
 from neos.config.settings import settings
 from neos.workflow.deep_analysis.token_budget import active_token_budget
 
@@ -110,6 +111,11 @@ async def _call_provider(
         }
         if tools:
             kwargs["tools"] = tools
+        kwargs = normalize_anthropic_request(
+            model,
+            kwargs,
+            thinking_enabled=True,
+        )
         response = await client.messages.create(**kwargs)
         blocks = _blocks_to_dicts(response.content)
         output = "".join(b["text"] for b in blocks if b["type"] == "text")

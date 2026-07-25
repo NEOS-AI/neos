@@ -230,13 +230,13 @@ def get_recommended_models(provider: str) -> dict[str, str]:
     recommendations = {
         "openai": {
             "fast": "gpt-5-mini-2025-08-07",
-            "balanced": "gpt-5-2025-08-07",
-            "powerful": "gpt-5-2025-08-07",
+            "balanced": "gpt-5.6-terra",
+            "powerful": "gpt-5.6-sol",
         },
         "anthropic": {
             "fast": "claude-haiku-4-5-20251001",
-            "balanced": "claude-sonnet-4-5-20250929",
-            "powerful": "claude-sonnet-4-6",
+            "balanced": "claude-sonnet-5",
+            "powerful": "claude-opus-5",
         },
         "gemini": {
             "fast": "gemini-2.0-flash-exp",
