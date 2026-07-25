@@ -41,6 +41,10 @@ def test_schema_defaults_match_current_runtime_policy():
     assert config.api.debug is False
     assert config.api.v1_prefix == "/api/v1"
     assert config.research_harness.direct_repair.enabled is False
+    assert config.model_routing.anthropic.everyday == "claude-sonnet-5"
+    assert config.model_routing.anthropic.powerful == "claude-opus-5"
+    assert config.model_routing.openai.everyday == "gpt-5.6-terra"
+    assert config.model_routing.openai.powerful == "gpt-5.6-sol"
 
 
 def test_thinking_engine_config_defaults_are_conservative():

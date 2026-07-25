@@ -109,6 +109,26 @@ class LLMConfig(StrictConfigModel):
     fast_model: str = "claude-haiku-4-5-20251001"
 
 
+class ProviderModelRolesConfig(StrictConfigModel):
+    everyday: str
+    powerful: str
+
+
+class ModelRoutingConfig(StrictConfigModel):
+    anthropic: ProviderModelRolesConfig = Field(
+        default_factory=lambda: ProviderModelRolesConfig(
+            everyday="claude-sonnet-5",
+            powerful="claude-opus-5",
+        )
+    )
+    openai: ProviderModelRolesConfig = Field(
+        default_factory=lambda: ProviderModelRolesConfig(
+            everyday="gpt-5.6-terra",
+            powerful="gpt-5.6-sol",
+        )
+    )
+
+
 class EmbeddingDatasetConfig(StrictConfigModel):
     enabled: bool = False
     sample_rate: float = 0.1
@@ -930,6 +950,7 @@ class AppConfig(StrictConfigModel):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     smart_cache: SmartCacheConfig = Field(default_factory=SmartCacheConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    model_routing: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)

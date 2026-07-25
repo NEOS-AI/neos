@@ -37,7 +37,9 @@ def walk_yaml(value: Any, path: tuple[str, ...] = ()):
 def test_committed_config_profiles_exist_and_validate():
     for path in PROFILE_FILES:
         assert path.exists(), f"missing config profile: {path}"
-        AppConfig.model_validate(load_yaml_file(path))
+        config = AppConfig.model_validate(load_yaml_file(path))
+        assert config.model_routing.anthropic.everyday == "claude-sonnet-5"
+        assert config.model_routing.openai.powerful == "gpt-5.6-sol"
 
 
 def test_committed_config_profiles_do_not_contain_secrets():
