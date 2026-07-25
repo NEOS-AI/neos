@@ -110,6 +110,7 @@ async def test_concurrent_admissions_cannot_overbook_tenant_quota(
                 estimated_active_seconds=60,
                 estimated_archive_bytes=100,
                 estimated_cost_micros=10,
+                policy_version="integration-policy-v1",
             ),
             decision=AdmissionDecision.ADMITTED,
             reason=AdmissionReason.ALLOWED,

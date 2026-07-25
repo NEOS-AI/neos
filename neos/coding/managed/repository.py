@@ -13,9 +13,6 @@ from neos.coding.managed.domain import (
 from neos.coding.persistence.postgres import SessionFactory
 
 
-_POLICY_VERSION = "managed-v1"
-
-
 class PostgresManagedSandboxRepository:
     def __init__(self, session_factory: SessionFactory) -> None:
         self._session_factory = session_factory
@@ -53,6 +50,8 @@ class PostgresManagedSandboxRepository:
             raise ValueError("admitted decision requires a reservation expiry")
         if decision is AdmissionDecision.DENIED and reservation_expires_at is not None:
             raise ValueError("denied decision cannot reserve quota")
+        if not request.policy_version:
+            raise ValueError("admission request requires a policy version")
 
         async with await self._session_factory() as session:
             async with session.begin():
@@ -209,7 +208,7 @@ class PostgresManagedSandboxRepository:
                         "task_id": request.task_id,
                         "provider": request.provider,
                         "region": request.region,
-                        "policy_version": _POLICY_VERSION,
+                        "policy_version": request.policy_version,
                         "decision": final_decision.value,
                         "reason": final_reason.value,
                         "reservation_id": reservation_id,
@@ -359,14 +358,40 @@ class PostgresManagedSandboxRepository:
             raise ValueError("release limit must be between 1 and 1000")
         async with await self._session_factory() as session:
             async with session.begin():
+                locked = await session.execute(
+                    text(
+                        """
+                        WITH candidate_tenants AS MATERIALIZED (
+                            SELECT DISTINCT tenant_id
+                            FROM coding_sandbox_admissions
+                            WHERE reservation_state = 'reserved'
+                              AND reservation_expires_at <= :now
+                            ORDER BY tenant_id
+                            LIMIT :limit
+                        )
+                        SELECT candidate.tenant_id,
+                               pg_advisory_xact_lock(
+                                   hashtextextended(candidate.tenant_id, 0)
+                               )
+                        FROM candidate_tenants AS candidate
+                        ORDER BY candidate.tenant_id
+                        """
+                    ),
+                    {"now": now, "limit": limit},
+                )
+                tenant_ids = [str(row[0]) for row in locked.all()]
+                if not tenant_ids:
+                    return []
                 result = await session.execute(
                     text(
                         """
                         WITH candidates AS (
                             SELECT admission_id
-                            FROM coding_sandbox_admissions
-                            WHERE reservation_state = 'reserved'
-                              AND reservation_expires_at <= :now
+                            FROM coding_sandbox_admissions AS admission
+                            WHERE admission.reservation_state = 'reserved'
+                              AND admission.reservation_expires_at <= :now
+                              AND admission.tenant_id =
+                                  ANY(CAST(:tenant_ids AS VARCHAR[]))
                             ORDER BY reservation_expires_at, admission_id
                             LIMIT :limit
                             FOR UPDATE SKIP LOCKED
@@ -388,7 +413,11 @@ class PostgresManagedSandboxRepository:
                         ORDER BY allocation.allocation_id
                         """
                     ),
-                    {"now": now, "limit": limit},
+                    {
+                        "now": now,
+                        "limit": limit,
+                        "tenant_ids": tenant_ids,
+                    },
                 )
                 rows = result.all()
         return [str(row[0]) for row in rows]

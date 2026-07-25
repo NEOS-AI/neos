@@ -62,6 +62,7 @@ def request_fixture(**changes: object) -> AdmissionRequest:
         "estimated_active_seconds": 300,
         "estimated_archive_bytes": 1024,
         "estimated_cost_micros": 500,
+        "policy_version": "policy-v1",
     }
     values.update(changes)
     return AdmissionRequest(**values)  # type: ignore[arg-type]
@@ -137,7 +138,7 @@ async def test_pre_admission_denial_is_persisted_without_reading_quota() -> None
     )
 
     result = await repository_for(session).admit(
-        request_fixture(),
+        request_fixture(policy_version="canary-policy-denied"),
         decision=AdmissionDecision.DENIED,
         reason=AdmissionReason.PROVIDER_UNAVAILABLE,
         now=NOW,
@@ -155,6 +156,7 @@ async def test_pre_admission_denial_is_persisted_without_reading_quota() -> None
     _, insert_params = session.statements[2]
     assert insert_params["reservation_state"] == "unreserved"
     assert insert_params["reservation_expires_at"] is None
+    assert insert_params["policy_version"] == "canary-policy-denied"
     assert result.decision is AdmissionDecision.DENIED
 
 
@@ -177,6 +179,7 @@ async def test_admit_reserves_estimates_and_creates_admitted_allocation_atomical
         estimated_active_seconds=300,
         estimated_archive_bytes=1024,
         estimated_cost_micros=500,
+        policy_version="canary-policy-admitted",
     )
 
     result = await repository_for(session).admit(
@@ -201,6 +204,7 @@ async def test_admit_reserves_estimates_and_creates_admitted_allocation_atomical
     assert admission_params["reserved_active_seconds"] == 300
     assert admission_params["reserved_archive_bytes"] == 1024
     assert admission_params["reserved_cost_micros"] == 500
+    assert admission_params["policy_version"] == "canary-policy-admitted"
     assert "coding_managed_sandboxes" in allocation_sql
     assert allocation_params["admission_id"] == "adm_1"
     assert allocation_params["state"] == "admitted"
@@ -376,20 +380,34 @@ async def test_settle_updates_state_usage_and_matching_timestamp_together() -> N
 async def test_release_expired_reservations_sets_state_and_timestamp_atomically() -> (
     None
 ):
-    session = FakeSession([FakeResult(rows=[("alloc_1",), ("alloc_2",)])])
+    session = FakeSession(
+        [
+            FakeResult(rows=[("tenant_1",)]),
+            FakeResult(rows=[("alloc_1",), ("alloc_2",)]),
+        ]
+    )
 
     released = await repository_for(session).release_expired_reservations(
         now=NOW, limit=2
     )
 
-    sql, params = session.statements[0]
-    assert "FOR UPDATE SKIP LOCKED" in sql
-    assert "reservation_state = 'released'" in sql
-    assert "reservation_released_at = :now" in sql
-    assert "reservation_settled_at = NULL" in sql
-    assert "reservation_state = 'reserved'" in sql
-    assert "reservation_expires_at <= :now" in sql
+    assert len(session.statements) == 2
+    lock_sql, lock_params = session.statements[0]
+    update_sql, params = session.statements[1]
+    assert "pg_advisory_xact_lock" in lock_sql
+    assert "hashtextextended(candidate.tenant_id, 0)" in lock_sql
+    assert "reservation_state = 'reserved'" in lock_sql
+    assert "reservation_expires_at <= :now" in lock_sql
+    assert lock_params == {"now": NOW, "limit": 2}
+    assert "FOR UPDATE SKIP LOCKED" in update_sql
+    assert "reservation_state = 'released'" in update_sql
+    assert "reservation_released_at = :now" in update_sql
+    assert "reservation_settled_at = NULL" in update_sql
+    assert "reservation_state = 'reserved'" in update_sql
+    assert "ANY(CAST(:tenant_ids AS VARCHAR[]))" in update_sql
+    assert "reservation_expires_at <= :now" in update_sql
     assert params["limit"] == 2
+    assert params["tenant_ids"] == ["tenant_1"]
     assert released == ["alloc_1", "alloc_2"]
 
 

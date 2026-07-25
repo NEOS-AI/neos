@@ -91,6 +91,7 @@ class RecordingAdmissionRepository:
     def __init__(self, order: list[str] | None = None) -> None:
         self.reserve_calls = 0
         self.calls: list[dict[str, object]] = []
+        self.requests: list[AdmissionRequest] = []
         self.results: dict[tuple[str, str], AdmissionResult] = {}
         self.created_count = 0
         self.order = order
@@ -98,6 +99,7 @@ class RecordingAdmissionRepository:
     async def admit(self, request: AdmissionRequest, **kwargs) -> AdmissionResult:
         if self.order is not None:
             self.order.append("quota")
+        self.requests.append(request)
         self.calls.append(kwargs)
         key = (request.tenant_id, request.idempotency_key)
         original = self.results.get(key)
@@ -339,6 +341,19 @@ async def test_admitted_request_passes_exact_quota_and_lease_values() -> None:
             "daily_cost_micros_quota": 88_000,
         }
     ]
+
+
+async def test_service_threads_evaluated_policy_version_to_repository() -> None:
+    repository = RecordingAdmissionRepository()
+    policy = AllowlistedPolicy()
+    policy.version = "canary-policy-2026-07-25"
+
+    await admission_service(repository, policy=policy).admit(request_fixture())
+
+    assert (
+        getattr(repository.requests[0], "policy_version", None)
+        == "canary-policy-2026-07-25"
+    )
 
 
 async def test_denial_gets_bounded_reevaluation_and_no_reservation_lease() -> None:
