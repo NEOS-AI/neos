@@ -183,6 +183,49 @@ class EnterpriseMetricsCollector:
             ["provider", "operation", "outcome", "error_code"],
             registry=self.registry,
         )
+        self.coding_sandbox_admission_total = Counter(
+            "coding_sandbox_admission_total",
+            "Managed sandbox admission decisions",
+            ["decision", "reason"],
+            registry=self.registry,
+        )
+        self.coding_sandbox_allocation_total = Counter(
+            "coding_sandbox_allocation_total",
+            "Managed sandbox allocation outcomes",
+            ["provider", "region", "outcome", "error_code"],
+            registry=self.registry,
+        )
+        self.coding_sandbox_allocation_duration_seconds = Histogram(
+            "coding_sandbox_allocation_duration_seconds",
+            "Managed sandbox allocation duration in seconds",
+            ["provider", "region", "outcome"],
+            buckets=(0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60, 300),
+            registry=self.registry,
+        )
+        self.coding_sandbox_provider_circuit = Gauge(
+            "coding_sandbox_provider_circuit",
+            "Managed sandbox provider circuit state",
+            ["provider", "region", "state"],
+            registry=self.registry,
+        )
+        self.coding_sandbox_cleanup_age_seconds = Gauge(
+            "coding_sandbox_cleanup_age_seconds",
+            "Age of managed sandbox cleanup work in seconds",
+            ["provider", "region"],
+            registry=self.registry,
+        )
+        self.coding_sandbox_cleanup_total = Counter(
+            "coding_sandbox_cleanup_total",
+            "Managed sandbox cleanup outcomes",
+            ["provider", "region", "outcome", "error_code"],
+            registry=self.registry,
+        )
+        self.coding_sandbox_archive_total = Counter(
+            "coding_sandbox_archive_total",
+            "Managed sandbox archive operation outcomes",
+            ["provider", "operation", "outcome", "error_code"],
+            registry=self.registry,
+        )
         self.coding_steering_latency_seconds = Histogram(
             "coding_steering_latency_seconds",
             "Time from steering request to safe-point application",

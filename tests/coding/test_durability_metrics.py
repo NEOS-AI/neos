@@ -1,3 +1,7 @@
+import ast
+from inspect import getsource
+from textwrap import dedent
+
 from prometheus_client import CollectorRegistry
 
 from neos.observability.metrics import EnterpriseMetricsCollector
@@ -56,6 +60,82 @@ def test_coding_metrics_expose_only_bounded_labels() -> None:
     assert collector.coding_lease_contention_total._labelnames == ("outcome",)
     assert collector.coding_approval_total._labelnames == ("risk", "outcome")
     assert collector.coding_approval_latency_seconds._labelnames == ("outcome",)
+
+
+def test_managed_sandbox_metric_labels_are_fixed_cardinality() -> None:
+    collector = EnterpriseMetricsCollector(CollectorRegistry())
+    allowed = {
+        "provider",
+        "region",
+        "operation",
+        "outcome",
+        "reason",
+        "error_code",
+        "decision",
+        "state",
+    }
+    managed_metrics = (
+        collector.coding_sandbox_admission_total,
+        collector.coding_sandbox_allocation_total,
+        collector.coding_sandbox_allocation_duration_seconds,
+        collector.coding_sandbox_provider_circuit,
+        collector.coding_sandbox_cleanup_age_seconds,
+        collector.coding_sandbox_cleanup_total,
+        collector.coding_sandbox_archive_total,
+    )
+
+    parsed = ast.parse(dedent(getsource(EnterpriseMetricsCollector)))
+    managed_names = {metric._name for metric in managed_metrics}
+    source_labels = {
+        target.attr: {item.value for item in value.args[2].elts}
+        for node in ast.walk(parsed)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Attribute)
+        and target.attr in managed_names
+        if isinstance(value := node.value, ast.Call)
+        and isinstance(value.args[2], ast.List)
+        and all(isinstance(item, ast.Constant) for item in value.args[2].elts)
+    }
+
+    assert all(set(metric._labelnames).issubset(allowed) for metric in managed_metrics)
+    assert source_labels and all(labels.issubset(allowed) for labels in source_labels.values())
+    assert collector.coding_sandbox_admission_total._labelnames == (
+        "decision",
+        "reason",
+    )
+    assert collector.coding_sandbox_allocation_total._labelnames == (
+        "provider",
+        "region",
+        "outcome",
+        "error_code",
+    )
+    assert collector.coding_sandbox_allocation_duration_seconds._labelnames == (
+        "provider",
+        "region",
+        "outcome",
+    )
+    assert collector.coding_sandbox_provider_circuit._labelnames == (
+        "provider",
+        "region",
+        "state",
+    )
+    assert collector.coding_sandbox_cleanup_age_seconds._labelnames == (
+        "provider",
+        "region",
+    )
+    assert collector.coding_sandbox_cleanup_total._labelnames == (
+        "provider",
+        "region",
+        "outcome",
+        "error_code",
+    )
+    assert collector.coding_sandbox_archive_total._labelnames == (
+        "provider",
+        "operation",
+        "outcome",
+        "error_code",
+    )
 
 
 def test_supervisor_metrics_use_only_bounded_labels() -> None:
