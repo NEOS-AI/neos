@@ -92,7 +92,7 @@ Put non-secret runtime changes in `config/neos.local.yaml`:
 ```yaml
 llm:
   provider: anthropic
-  model: claude-sonnet-4-5-20250929
+  model: claude-sonnet-5
 
 research_harness:
   enabled: true
@@ -122,6 +122,50 @@ and HyperDeep leaf artifacts. The default is `true`.
 
 `thinking_engine.max_trace_text_length` controls text compaction in trace
 payloads. The default is `240`.
+
+### Model Routing
+
+`model_routing` maps a provider and a workload role to a concrete model. It only
+governs **automatic** workloads — a model the user picked is never overwritten.
+
+```yaml
+model_routing:
+  anthropic:
+    everyday: claude-sonnet-5
+    powerful: claude-opus-5
+  openai:
+    everyday: gpt-5.6-terra
+    powerful: gpt-5.6-sol
+```
+
+Resolution follows a strict precedence, and the winner is reported as
+`ModelResolution.source`:
+
+1. `user` — the model named in the current request
+2. `conversation` — the model already stored on an existing conversation
+3. `feature_override` — a deployment/feature setting (below)
+4. `role_default` — the `model_routing` entry for that provider and role
+
+There is no cross-provider fallback. An unknown provider or role, or a blank
+mapping entry, raises `ValueError` at resolution time rather than guessing.
+
+Role assignments for automatic workloads:
+
+| Workload | Role |
+|---|---|
+| New chat default, conversation titles, templates | `everyday` |
+| Routine coding executor (`coding_model.model`) | `everyday` |
+| Deep-analysis scout and judge | `everyday` |
+| Recursive planner (`recursive_agent.planner_model`) | `powerful` |
+| Deep-analysis dig and synth | `powerful` |
+
+Feature override fields are nullable, and `null` is meaningful:
+`coding_model.model`, `recursive_agent.planner_model`, and every
+`deep_analysis.models.*` field default to `null`, which means "use the role
+default". Setting a string pins that workload to an explicit model.
+
+`recursive_agent.atomizer_model` is deliberately *not* role-routed; it keeps its
+own Haiku value so sub-root atomization stays cheap.
 
 ## Staging and Production
 

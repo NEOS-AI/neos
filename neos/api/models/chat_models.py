@@ -389,7 +389,7 @@ class CreateTemplateRequest(BaseModel):
     description: Optional[str] = None
     category: Optional[str] = Field(None, max_length=100)
 
-    default_model: str = Field(default="claude-opus-4-5-20251101")
+    default_model: Optional[str] = Field(default=None)
     default_system_prompt: Optional[str] = None
     default_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     default_settings: Dict[str, Any] = Field(default_factory=dict)

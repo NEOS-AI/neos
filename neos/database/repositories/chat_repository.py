@@ -11,6 +11,8 @@ import json
 
 from neos.database.connection import db_manager
 from neos.api.services.pagination import ConversationCursor
+from neos.config.model_routing import resolve_model
+from neos.config.settings import settings
 
 
 @dataclass
@@ -991,7 +993,7 @@ class ChatRepository:
         created_by: str,
         description: Optional[str] = None,
         category: Optional[str] = None,
-        default_model: str = "claude-opus-4-5-20251101",
+        default_model: Optional[str] = None,
         default_system_prompt: Optional[str] = None,
         default_temperature: float = 0.7,
         default_settings: Optional[Dict[str, Any]] = None,
@@ -1008,7 +1010,7 @@ class ChatRepository:
             created_by: 생성자
             description: 설명
             category: 카테고리
-            default_model: 기본 모델
+            default_model: 기본 모델 (None이면 everyday 역할 기본값)
             default_system_prompt: 기본 시스템 프롬프트
             default_temperature: 기본 temperature
             default_settings: 기본 설정
@@ -1045,7 +1047,12 @@ class ChatRepository:
             name,
             description,
             category,
-            default_model,
+            default_model
+            or resolve_model(
+                config=settings.config.model_routing,
+                provider="anthropic",
+                role="everyday",
+            ).model,
             default_system_prompt,
             default_temperature,
             json.dumps(default_settings or {}),
