@@ -75,6 +75,30 @@ def repository_for(session: FakeSession) -> PostgresManagedSandboxRepository:
     return PostgresManagedSandboxRepository(session_factory)
 
 
+async def test_preflight_prefers_concurrent_quota_before_daily_budget() -> None:
+    session = FakeSession(
+        [
+            FakeResult(
+                row=(3, 50, 43_200, 5 * 1024**3, 10_000_000),
+            )
+        ]
+    )
+
+    reason = await repository_for(session).preflight_quota(
+        request_fixture(),
+        now=NOW,
+        concurrent_quota=3,
+        daily_quota=50,
+        daily_active_seconds_quota=43_200,
+        archive_bytes_quota=5 * 1024**3,
+        daily_cost_micros_quota=10_000_000,
+    )
+
+    assert reason is AdmissionReason.QUOTA_EXCEEDED
+    assert len(session.statements) == 1
+    assert "pg_advisory_xact_lock" not in session.statements[0][0]
+
+
 async def test_admit_serializes_tenant_before_reading_quota_and_replays_exactly() -> (
     None
 ):
@@ -250,7 +274,16 @@ async def test_admit_counts_all_five_quota_dimensions_from_durable_usage() -> No
     assert "actual_archive_bytes" in quota_sql
     assert "reserved_cost_micros" in quota_sql
     assert "actual_cost_micros" in quota_sql
+    assert "LEFT JOIN coding_managed_sandboxes AS allocation" in quota_sql
+    assert "allocation.state" in quota_sql
+    assert "ANY(CAST(:live_states AS VARCHAR[]))" in quota_sql
     assert quota_params["tenant_id"] == "tenant_1"
+    assert quota_params["live_states"] == [
+        "allocating",
+        "active",
+        "suspended",
+        "recovery_pending",
+    ]
 
 
 async def test_admission_ledger_excludes_policy_inputs_and_sensitive_content() -> None:
@@ -398,16 +431,33 @@ async def test_release_expired_reservations_sets_state_and_timestamp_atomically(
     assert "hashtextextended(candidate.tenant_id, 0)" in lock_sql
     assert "reservation_state = 'reserved'" in lock_sql
     assert "reservation_expires_at <= :now" in lock_sql
-    assert lock_params == {"now": NOW, "limit": 2}
-    assert "FOR UPDATE SKIP LOCKED" in update_sql
+    assert "allocation.state <> ALL" in lock_sql
+    assert lock_params == {
+        "now": NOW,
+        "limit": 2,
+        "live_states": [
+            "allocating",
+            "active",
+            "suspended",
+            "recovery_pending",
+        ],
+    }
+    assert "FOR UPDATE OF admission, allocation SKIP LOCKED" in update_sql
     assert "reservation_state = 'released'" in update_sql
     assert "reservation_released_at = :now" in update_sql
     assert "reservation_settled_at = NULL" in update_sql
     assert "reservation_state = 'reserved'" in update_sql
     assert "ANY(CAST(:tenant_ids AS VARCHAR[]))" in update_sql
     assert "reservation_expires_at <= :now" in update_sql
+    assert "allocation.state <> ALL" in update_sql
     assert params["limit"] == 2
     assert params["tenant_ids"] == ["tenant_1"]
+    assert params["live_states"] == [
+        "allocating",
+        "active",
+        "suspended",
+        "recovery_pending",
+    ]
     assert released == ["alloc_1", "alloc_2"]
 
 

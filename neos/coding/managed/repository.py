@@ -13,9 +13,53 @@ from neos.coding.managed.domain import (
 from neos.coding.persistence.postgres import SessionFactory
 
 
+_LIVE_QUOTA_STATES = (
+    ManagedSandboxState.ALLOCATING.value,
+    ManagedSandboxState.ACTIVE.value,
+    ManagedSandboxState.SUSPENDED.value,
+    ManagedSandboxState.RECOVERY_PENDING.value,
+)
+
+
 class PostgresManagedSandboxRepository:
     def __init__(self, session_factory: SessionFactory) -> None:
         self._session_factory = session_factory
+
+    async def preflight_quota(
+        self,
+        request: AdmissionRequest,
+        *,
+        now: datetime,
+        concurrent_quota: int,
+        daily_quota: int,
+        daily_active_seconds_quota: int,
+        archive_bytes_quota: int,
+        daily_cost_micros_quota: int,
+    ) -> AdmissionReason | None:
+        _require_timezone_aware("preflight time", now)
+        _require_positive_quotas(
+            concurrent_quota=concurrent_quota,
+            daily_quota=daily_quota,
+            daily_active_seconds_quota=daily_active_seconds_quota,
+            archive_bytes_quota=archive_bytes_quota,
+            daily_cost_micros_quota=daily_cost_micros_quota,
+        )
+        async with await self._session_factory() as session:
+            async with session.begin():
+                usage = await _read_quota_usage(
+                    session,
+                    tenant_id=request.tenant_id,
+                    now=now,
+                )
+        return _quota_reason(
+            request,
+            usage=usage,
+            concurrent_quota=concurrent_quota,
+            daily_quota=daily_quota,
+            daily_active_seconds_quota=daily_active_seconds_quota,
+            archive_bytes_quota=archive_bytes_quota,
+            daily_cost_micros_quota=daily_cost_micros_quota,
+        )
 
     async def admit(
         self,
@@ -77,92 +121,23 @@ class PostgresManagedSandboxRepository:
                 final_reason = reason
                 final_reevaluate = reevaluate_after
                 if decision is AdmissionDecision.ADMITTED:
-                    usage = await session.execute(
-                        text(
-                            """
-                            SELECT
-                                count(*) FILTER (
-                                    WHERE reservation_state = 'reserved'
-                                      AND reservation_expires_at > :now
-                                ),
-                                count(*) FILTER (
-                                    WHERE decision = 'admitted'
-                                      AND created_at >= :day_start
-                                      AND created_at < :day_end
-                                ),
-                                COALESCE(sum(
-                                    CASE
-                                        WHEN created_at >= :day_start
-                                         AND created_at < :day_end
-                                         AND reservation_state = 'reserved'
-                                         AND reservation_expires_at > :now
-                                        THEN reserved_active_seconds
-                                        WHEN created_at >= :day_start
-                                         AND created_at < :day_end
-                                         AND reservation_state = 'settled'
-                                        THEN actual_active_seconds
-                                        ELSE 0
-                                    END
-                                ), 0),
-                                COALESCE(sum(
-                                    CASE
-                                        WHEN reservation_state = 'reserved'
-                                         AND reservation_expires_at > :now
-                                        THEN reserved_archive_bytes
-                                        WHEN reservation_state = 'settled'
-                                        THEN actual_archive_bytes
-                                        ELSE 0
-                                    END
-                                ), 0),
-                                COALESCE(sum(
-                                    CASE
-                                        WHEN created_at >= :day_start
-                                         AND created_at < :day_end
-                                         AND reservation_state = 'reserved'
-                                         AND reservation_expires_at > :now
-                                        THEN reserved_cost_micros
-                                        WHEN created_at >= :day_start
-                                         AND created_at < :day_end
-                                         AND reservation_state = 'settled'
-                                        THEN actual_cost_micros
-                                        ELSE 0
-                                    END
-                                ), 0)
-                            FROM coding_sandbox_admissions
-                            WHERE tenant_id = :tenant_id
-                            """
-                        ),
-                        {
-                            "tenant_id": request.tenant_id,
-                            "now": now,
-                            "day_start": now.replace(
-                                hour=0, minute=0, second=0, microsecond=0
-                            ),
-                            "day_end": now.replace(
-                                hour=0, minute=0, second=0, microsecond=0
-                            )
-                            + timedelta(days=1),
-                        },
+                    usage = await _read_quota_usage(
+                        session,
+                        tenant_id=request.tenant_id,
+                        now=now,
                     )
-                    row = usage.first()
-                    assert row is not None
-                    concurrent, daily, active, archive, cost = (
-                        int(row[index] or 0) for index in range(5)
+                    quota_reason = _quota_reason(
+                        request,
+                        usage=usage,
+                        concurrent_quota=concurrent_quota,
+                        daily_quota=daily_quota,
+                        daily_active_seconds_quota=daily_active_seconds_quota,
+                        archive_bytes_quota=archive_bytes_quota,
+                        daily_cost_micros_quota=daily_cost_micros_quota,
                     )
-                    if concurrent >= concurrent_quota or daily >= daily_quota:
+                    if quota_reason is not None:
                         final_decision = AdmissionDecision.DENIED
-                        final_reason = AdmissionReason.QUOTA_EXCEEDED
-                    elif (
-                        active + request.estimated_active_seconds
-                        > daily_active_seconds_quota
-                        or archive + request.estimated_archive_bytes
-                        > archive_bytes_quota
-                        or cost + request.estimated_cost_micros
-                        > daily_cost_micros_quota
-                    ):
-                        final_decision = AdmissionDecision.DENIED
-                        final_reason = AdmissionReason.BUDGET_EXCEEDED
-                    if final_decision is AdmissionDecision.DENIED:
+                        final_reason = quota_reason
                         final_reevaluate = reevaluate_after or reservation_expires_at
 
                 admission_id = f"msa_{uuid4().hex}"
@@ -362,11 +337,17 @@ class PostgresManagedSandboxRepository:
                     text(
                         """
                         WITH candidate_tenants AS MATERIALIZED (
-                            SELECT DISTINCT tenant_id
-                            FROM coding_sandbox_admissions
-                            WHERE reservation_state = 'reserved'
-                              AND reservation_expires_at <= :now
-                            ORDER BY tenant_id
+                            SELECT DISTINCT admission.tenant_id
+                            FROM coding_sandbox_admissions AS admission
+                            JOIN coding_managed_sandboxes AS allocation
+                              ON allocation.admission_id =
+                                 admission.admission_id
+                            WHERE admission.reservation_state = 'reserved'
+                              AND admission.reservation_expires_at <= :now
+                              AND allocation.state <> ALL(
+                                  CAST(:live_states AS VARCHAR[])
+                              )
+                            ORDER BY admission.tenant_id
                             LIMIT :limit
                         )
                         SELECT candidate.tenant_id,
@@ -377,7 +358,11 @@ class PostgresManagedSandboxRepository:
                         ORDER BY candidate.tenant_id
                         """
                     ),
-                    {"now": now, "limit": limit},
+                    {
+                        "now": now,
+                        "limit": limit,
+                        "live_states": list(_LIVE_QUOTA_STATES),
+                    },
                 )
                 tenant_ids = [str(row[0]) for row in locked.all()]
                 if not tenant_ids:
@@ -386,15 +371,22 @@ class PostgresManagedSandboxRepository:
                     text(
                         """
                         WITH candidates AS (
-                            SELECT admission_id
+                            SELECT admission.admission_id
                             FROM coding_sandbox_admissions AS admission
+                            JOIN coding_managed_sandboxes AS allocation
+                              ON allocation.admission_id =
+                                 admission.admission_id
                             WHERE admission.reservation_state = 'reserved'
                               AND admission.reservation_expires_at <= :now
                               AND admission.tenant_id =
                                   ANY(CAST(:tenant_ids AS VARCHAR[]))
-                            ORDER BY reservation_expires_at, admission_id
+                              AND allocation.state <> ALL(
+                                  CAST(:live_states AS VARCHAR[])
+                              )
+                            ORDER BY admission.reservation_expires_at,
+                                     admission.admission_id
                             LIMIT :limit
-                            FOR UPDATE SKIP LOCKED
+                            FOR UPDATE OF admission, allocation SKIP LOCKED
                         ), released AS (
                             UPDATE coding_sandbox_admissions AS admission
                             SET reservation_state = 'released',
@@ -417,6 +409,7 @@ class PostgresManagedSandboxRepository:
                         "now": now,
                         "limit": limit,
                         "tenant_ids": tenant_ids,
+                        "live_states": list(_LIVE_QUOTA_STATES),
                     },
                 )
                 rows = result.all()
@@ -459,6 +452,138 @@ class PostgresManagedSandboxRepository:
             reevaluate_after=row[4],
             created=created,
         )
+
+
+async def _read_quota_usage(
+    session,
+    *,
+    tenant_id: str,
+    now: datetime,
+) -> tuple[int, int, int, int, int]:
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    result = await session.execute(
+        text(
+            """
+            SELECT
+                count(*) FILTER (
+                    WHERE (
+                        (
+                            admission.reservation_state = 'reserved'
+                            AND admission.reservation_expires_at > :now
+                        )
+                        OR allocation.state =
+                            ANY(CAST(:live_states AS VARCHAR[]))
+                    )
+                ),
+                count(*) FILTER (
+                    WHERE admission.decision = 'admitted'
+                      AND admission.created_at >= :day_start
+                      AND admission.created_at < :day_end
+                ),
+                COALESCE(sum(
+                    CASE
+                        WHEN admission.created_at >= :day_start
+                         AND admission.created_at < :day_end
+                         AND admission.reservation_state = 'settled'
+                        THEN admission.actual_active_seconds
+                        WHEN admission.created_at >= :day_start
+                         AND admission.created_at < :day_end
+                         AND (
+                            (
+                                admission.reservation_state = 'reserved'
+                                AND admission.reservation_expires_at > :now
+                            )
+                            OR allocation.state =
+                                ANY(CAST(:live_states AS VARCHAR[]))
+                         )
+                        THEN admission.reserved_active_seconds
+                        ELSE 0
+                    END
+                ), 0),
+                COALESCE(sum(
+                    CASE
+                        WHEN admission.reservation_state = 'settled'
+                        THEN admission.actual_archive_bytes
+                        WHEN (
+                            (
+                                admission.reservation_state = 'reserved'
+                                AND admission.reservation_expires_at > :now
+                            )
+                            OR allocation.state =
+                                ANY(CAST(:live_states AS VARCHAR[]))
+                        )
+                        THEN admission.reserved_archive_bytes
+                        ELSE 0
+                    END
+                ), 0),
+                COALESCE(sum(
+                    CASE
+                        WHEN admission.created_at >= :day_start
+                         AND admission.created_at < :day_end
+                         AND admission.reservation_state = 'settled'
+                        THEN admission.actual_cost_micros
+                        WHEN admission.created_at >= :day_start
+                         AND admission.created_at < :day_end
+                         AND (
+                            (
+                                admission.reservation_state = 'reserved'
+                                AND admission.reservation_expires_at > :now
+                            )
+                            OR allocation.state =
+                                ANY(CAST(:live_states AS VARCHAR[]))
+                         )
+                        THEN admission.reserved_cost_micros
+                        ELSE 0
+                    END
+                ), 0)
+            FROM coding_sandbox_admissions AS admission
+            LEFT JOIN coding_managed_sandboxes AS allocation
+              ON allocation.admission_id = admission.admission_id
+            WHERE admission.tenant_id = :tenant_id
+            """
+        ),
+        {
+            "tenant_id": tenant_id,
+            "now": now,
+            "day_start": day_start,
+            "day_end": day_start + timedelta(days=1),
+            "live_states": list(_LIVE_QUOTA_STATES),
+        },
+    )
+    row = result.first()
+    if row is None:
+        raise RuntimeError("quota usage query returned no aggregate row")
+    return (
+        int(row[0] or 0),
+        int(row[1] or 0),
+        int(row[2] or 0),
+        int(row[3] or 0),
+        int(row[4] or 0),
+    )
+
+
+def _quota_reason(
+    request: AdmissionRequest,
+    *,
+    usage: tuple[int, int, int, int, int],
+    concurrent_quota: int,
+    daily_quota: int,
+    daily_active_seconds_quota: int,
+    archive_bytes_quota: int,
+    daily_cost_micros_quota: int,
+) -> AdmissionReason | None:
+    concurrent, daily, active, archive, cost = usage
+    if concurrent >= concurrent_quota:
+        return AdmissionReason.QUOTA_EXCEEDED
+    if daily >= daily_quota:
+        return AdmissionReason.QUOTA_EXCEEDED
+    if (
+        active + request.estimated_active_seconds > daily_active_seconds_quota
+        or archive + request.estimated_archive_bytes > archive_bytes_quota
+        or cost + request.estimated_cost_micros > daily_cost_micros_quota
+    ):
+        return AdmissionReason.BUDGET_EXCEEDED
+    return None
 
 
 def _require_timezone_aware(name: str, value: datetime) -> None:

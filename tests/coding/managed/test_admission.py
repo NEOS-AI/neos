@@ -78,8 +78,12 @@ class OrderedPolicy(AllowlistedPolicy):
 
 
 class OrderedHealth(FixedHealth):
-    def __init__(self, calls: list[str]) -> None:
-        super().__init__(ProviderCircuitState.HEALTHY)
+    def __init__(
+        self,
+        calls: list[str],
+        state: ProviderCircuitState = ProviderCircuitState.HEALTHY,
+    ) -> None:
+        super().__init__(state)
         self.calls = calls
 
     async def state(self, provider: str, region: str) -> ProviderCircuitState:
@@ -88,17 +92,32 @@ class OrderedHealth(FixedHealth):
 
 
 class RecordingAdmissionRepository:
-    def __init__(self, order: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        order: list[str] | None = None,
+        *,
+        preflight_reason: AdmissionReason | None = None,
+    ) -> None:
         self.reserve_calls = 0
         self.calls: list[dict[str, object]] = []
+        self.preflight_calls: list[dict[str, object]] = []
         self.requests: list[AdmissionRequest] = []
         self.results: dict[tuple[str, str], AdmissionResult] = {}
         self.created_count = 0
         self.order = order
+        self.preflight_reason = preflight_reason
+
+    async def preflight_quota(
+        self, request: AdmissionRequest, **kwargs
+    ) -> AdmissionReason | None:
+        if self.order is not None:
+            self.order.append("quota")
+        self.preflight_calls.append(kwargs)
+        return self.preflight_reason
 
     async def admit(self, request: AdmissionRequest, **kwargs) -> AdmissionResult:
         if self.order is not None:
-            self.order.append("quota")
+            self.order.append("durable")
         self.requests.append(request)
         self.calls.append(kwargs)
         key = (request.tenant_id, request.idempotency_key)
@@ -191,7 +210,7 @@ async def test_unavailable_provider_denies_before_reserving_quota() -> None:
     assert repository.reserve_calls == 0
 
 
-async def test_admission_checks_run_in_fail_closed_order_before_quota() -> None:
+async def test_admission_checks_run_in_fail_closed_order() -> None:
     calls: list[str] = []
     repository = RecordingAdmissionRepository(calls)
     service = admission_service(
@@ -206,11 +225,38 @@ async def test_admission_checks_run_in_fail_closed_order_before_quota() -> None:
     assert calls == [
         "tenant",
         "repository",
-        "health",
-        "region",
         "capabilities",
         "quota",
+        "health",
+        "region",
+        "durable",
     ]
+
+
+async def test_over_quota_wins_before_unavailable_provider_and_region_gates() -> None:
+    calls: list[str] = []
+    repository = RecordingAdmissionRepository(
+        calls,
+        preflight_reason=AdmissionReason.QUOTA_EXCEEDED,
+    )
+    service = admission_service(
+        repository,
+        policy=OrderedPolicy(calls),
+        health=OrderedHealth(calls, ProviderCircuitState.UNAVAILABLE),
+    )
+
+    result = await service.admit(request_fixture())
+
+    assert result.decision is AdmissionDecision.DENIED
+    assert result.reason is AdmissionReason.QUOTA_EXCEEDED
+    assert calls == [
+        "tenant",
+        "repository",
+        "capabilities",
+        "quota",
+        "durable",
+    ]
+    assert repository.reserve_calls == 0
 
 
 async def test_kill_switch_short_circuits_every_external_check() -> None:
@@ -226,7 +272,7 @@ async def test_kill_switch_short_circuits_every_external_check() -> None:
     result = await service.admit(request_fixture())
 
     assert result.reason is AdmissionReason.KILL_SWITCH
-    assert calls == ["quota"]
+    assert calls == ["durable"]
     assert repository.reserve_calls == 0
 
 
@@ -334,6 +380,16 @@ async def test_admitted_request_passes_exact_quota_and_lease_values() -> None:
             "now": NOW,
             "reevaluate_after": None,
             "reservation_expires_at": datetime(2026, 7, 25, 12, 1, 15, tzinfo=UTC),
+            "concurrent_quota": 7,
+            "daily_quota": 23,
+            "daily_active_seconds_quota": 12_345,
+            "archive_bytes_quota": 54_321,
+            "daily_cost_micros_quota": 88_000,
+        }
+    ]
+    assert repository.preflight_calls == [
+        {
+            "now": NOW,
             "concurrent_quota": 7,
             "daily_quota": 23,
             "daily_active_seconds_quota": 12_345,

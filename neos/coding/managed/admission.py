@@ -58,6 +58,18 @@ class AdmissionResult:
 
 
 class AdmissionRepository(Protocol):
+    async def preflight_quota(
+        self,
+        request: AdmissionRequest,
+        *,
+        now: datetime,
+        concurrent_quota: int,
+        daily_quota: int,
+        daily_active_seconds_quota: int,
+        archive_bytes_quota: int,
+        daily_cost_micros_quota: int,
+    ) -> AdmissionReason | None: ...
+
     async def admit(
         self,
         request: AdmissionRequest,
@@ -110,12 +122,12 @@ class ManagedSandboxAdmissionService:
     async def admit(self, request: AdmissionRequest) -> AdmissionResult:
         now = self._clock()
         _require_timezone_aware("admission time", now)
-        decision, reason = await self._evaluate(request)
-        admitted = decision is AdmissionDecision.ADMITTED
         evaluated_request = replace(
             request,
             policy_version=self._policy.version,
         )
+        decision, reason = await self._evaluate(evaluated_request, now=now)
+        admitted = decision is AdmissionDecision.ADMITTED
         return await self._repository.admit(
             evaluated_request,
             decision=decision,
@@ -140,7 +152,10 @@ class ManagedSandboxAdmissionService:
         )
 
     async def _evaluate(
-        self, request: AdmissionRequest
+        self,
+        request: AdmissionRequest,
+        *,
+        now: datetime,
     ) -> tuple[AdmissionDecision, AdmissionReason]:
         if not self._config.enabled or self._config.global_kill_switch:
             return AdmissionDecision.DENIED, AdmissionReason.KILL_SWITCH
@@ -154,6 +169,23 @@ class ManagedSandboxAdmissionService:
                 AdmissionDecision.DENIED,
                 AdmissionReason.REPOSITORY_NOT_ALLOWED,
             )
+        available = self._policy.provider_capabilities(request.provider)
+        if not request.required_capabilities.issubset(available):
+            return (
+                AdmissionDecision.DENIED,
+                AdmissionReason.PROVIDER_UNAVAILABLE,
+            )
+        quota_reason = await self._repository.preflight_quota(
+            request,
+            now=now,
+            concurrent_quota=self._config.concurrent_quota,
+            daily_quota=self._config.daily_allocation_quota,
+            daily_active_seconds_quota=self._config.daily_active_seconds_quota,
+            archive_bytes_quota=self._config.archive_bytes_quota,
+            daily_cost_micros_quota=self._config.daily_cost_micros_quota,
+        )
+        if quota_reason is not None:
+            return AdmissionDecision.DENIED, quota_reason
         health = await self._health.state(request.provider, request.region)
         if health is ProviderCircuitState.UNAVAILABLE:
             return (
@@ -169,12 +201,6 @@ class ManagedSandboxAdmissionService:
             return (
                 AdmissionDecision.DENIED,
                 AdmissionReason.REGION_UNAVAILABLE,
-            )
-        available = self._policy.provider_capabilities(request.provider)
-        if not request.required_capabilities.issubset(available):
-            return (
-                AdmissionDecision.DENIED,
-                AdmissionReason.PROVIDER_UNAVAILABLE,
             )
         return AdmissionDecision.ADMITTED, AdmissionReason.ALLOWED
 
