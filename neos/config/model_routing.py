@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Literal, cast
@@ -28,11 +27,11 @@ class ModelResolution:
     source: ResolutionSource
 
 
-_CLAUDE_5_MODEL = re.compile(r"^claude-(?:[a-z0-9]+-)*5(?:-|$)")
+_CLAUDE_5_MODELS = frozenset({"claude-sonnet-5", "claude-opus-5"})
 
 
 def is_claude_5(model: str) -> bool:
-    return bool(_CLAUDE_5_MODEL.match(model))
+    return model in _CLAUDE_5_MODELS
 
 
 def resolve_model(

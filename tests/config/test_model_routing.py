@@ -92,7 +92,8 @@ def test_model_routing_config_rejects_incomplete_provider_mapping() -> None:
     [
         ("claude-sonnet-5", True),
         ("claude-opus-5", True),
-        ("claude-sonnet-5-20260101", True),
+        ("claude-sonnet-5-20260101", False),
+        ("claude-sonnet-4-5-20250929", False),
         ("claude-sonnet-4-6", False),
         ("gpt-5.6-terra", False),
         ("claude-sonnet-50", False),
