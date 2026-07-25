@@ -91,3 +91,10 @@ def test_claim_entailment_prompt_contract():
     assert '"index":0' in output
     assert '"action"' in output
     assert '"new_text"' in output
+    assert '{"index":0,"action":"keep"}' in output
+    assert (
+        '{"index":1,"action":"narrow","new_text":'
+        '"근거가 직접 지지하는 좁힌 claim"}' in output
+    )
+    assert '{"index":2,"action":"discard"}' in output
+    assert "new_text는 narrow action에만 포함" in output

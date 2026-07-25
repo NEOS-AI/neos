@@ -16,6 +16,10 @@ class JSONParseError(ValueError):
     """Raised when an LLM response does not contain one valid JSON object."""
 
 
+class LLMProviderError(RuntimeError):
+    """Raised when a live LLM provider call fails."""
+
+
 @dataclass(frozen=True)
 class LLMResponse:
     text: str
@@ -140,6 +144,15 @@ async def _call_provider(
     )
 
 
+async def _call_live_provider(*args, **kwargs) -> LLMResponse:
+    try:
+        return await _call_provider(*args, **kwargs)
+    except LLMProviderError:
+        raise
+    except Exception as exc:
+        raise LLMProviderError(str(exc)) from exc
+
+
 async def _budgeted_dispatch(
     *,
     model: str,
@@ -190,7 +203,7 @@ async def call_messages(
         async def produce() -> dict[str, Any]:
             resolved_client = client or _default_client(model)
             dispatch.started = True
-            response = await _call_provider(
+            response = await _call_live_provider(
                 model,
                 messages,
                 max_tokens=limit,
@@ -238,7 +251,7 @@ async def call_llm(
         async def produce() -> dict[str, Any]:
             resolved_client = client or _default_client(model)
             dispatch.started = True
-            response = await _call_provider(
+            response = await _call_live_provider(
                 model,
                 messages,
                 max_tokens=limit,

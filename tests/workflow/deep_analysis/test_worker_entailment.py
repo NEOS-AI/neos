@@ -2,9 +2,20 @@ import json
 
 import pytest
 
+from neos.workflow.deep_analysis.cassette import Cassette
 from neos.workflow.deep_analysis.llm import call_llm
-from neos.workflow.deep_analysis.models import Effort, ProposedBlob
-from neos.workflow.deep_analysis.token_budget import TokenBudgetExhausted
+from neos.workflow.deep_analysis.models import (
+    Effort,
+    ProposedBlob,
+    ProposedClaim,
+    ProposedEvidence,
+)
+from neos.workflow.deep_analysis.token_budget import (
+    TokenBudget,
+    TokenBudgetContractError,
+    TokenBudgetExhausted,
+    token_budget_scope,
+)
 from neos.workflow.deep_analysis.worker import Worker
 
 
@@ -65,6 +76,33 @@ def _generation(claims):
             ],
         }
     )
+
+
+def _claim_batch():
+    return [
+        ProposedClaim(
+            text="supported claim",
+            confidence=0.6,
+            evidence=[
+                ProposedEvidence(
+                    source_url="https://example.com/source",
+                    excerpt="Direct evidence.",
+                    raw_ref="0123456789abcdef",
+                )
+            ],
+        )
+    ]
+
+
+def _refinement_worker(*, llm_client=None, cassette=None):
+    worker = Worker(
+        Search(),
+        fetch_fn=Fetch(),
+        llm_client=llm_client,
+        cassette=cassette,
+    )
+    worker._model = "claude-haiku-4-5-20251001"
+    return worker
 
 
 class ScriptedLLM:
@@ -203,3 +241,35 @@ async def test_entailment_token_exhaustion_returns_buffered_partial(monkeypatch)
     assert result.status == "partial"
     assert [claim.text for claim in result.claims] == ["keep", "broad", "drop"]
     assert result.tokens_spent == 15
+
+
+@pytest.mark.asyncio
+async def test_worker_entailment_propagates_cassette_miss(tmp_path):
+    cassette_path = tmp_path / "empty.json"
+    cassette_path.write_text("{}", encoding="utf-8")
+    worker = _refinement_worker(
+        cassette=Cassette(cassette_path, mode="replay")
+    )
+
+    with pytest.raises(KeyError, match="cassette miss"):
+        await worker._refine_claims(_claim_batch())
+
+
+@pytest.mark.asyncio
+async def test_worker_entailment_propagates_token_budget_contract_error():
+    class ExcessiveUsageLLM:
+        def __init__(self):
+            self.messages = self
+
+        async def create(self, **kwargs):
+            return _response(
+                '{"results":[{"index":0,"action":"keep"}]}',
+                input_tokens=10_000,
+                output_tokens=10_000,
+            )
+
+    worker = _refinement_worker(llm_client=ExcessiveUsageLLM())
+
+    with token_budget_scope(TokenBudget(10_000)):
+        with pytest.raises(TokenBudgetContractError):
+            await worker._refine_claims(_claim_batch())

@@ -11,7 +11,13 @@ from neos.config.settings import settings
 from .claim_entailment import apply_entailment_results
 from .discovery import run_discovery
 from .fetch import fetch_url
-from .llm import JSONParseError, call_json, call_llm, parse_json
+from .llm import (
+    JSONParseError,
+    LLMProviderError,
+    call_json,
+    call_llm,
+    parse_json,
+)
 from .models import (
     Effort,
     ProposedBlob,
@@ -347,7 +353,7 @@ class Worker:
             )
         except TokenBudgetExhausted:
             raise
-        except Exception as exc:
+        except LLMProviderError as exc:
             logger.warning(
                 "Claim entailment provider failed: error_type=%s",
                 type(exc).__name__,
