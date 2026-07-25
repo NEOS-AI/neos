@@ -13,6 +13,13 @@ os.environ.setdefault(
 )
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
+# Several tests assert the production-shaped app (for example that unauthenticated
+# WebSocket routes are stripped). `neos.main` captures `IS_DEBUG` at import time, so
+# the shape depends on ambient config — and a developer `.env` with `DEBUG=true`
+# silently flips it. Pin the session to production shape while still letting an
+# explicit `DEBUG=1 pytest ...` opt back in.
+os.environ.setdefault("DEBUG", "false")
+
 
 def _skip_database_fixtures(request: pytest.FixtureRequest) -> bool:
     nodeid = getattr(request.node, "nodeid", "")

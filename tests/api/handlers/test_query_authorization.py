@@ -28,6 +28,14 @@ RESOURCE_NOT_FOUND = {"detail": "Resource not found"}
 def _load_production_app():
     import neos.main as main_module
 
+    # neos.main captures IS_DEBUG at import time and only strips unauthenticated
+    # WebSocket routes when it is false. Fail with the reason rather than with a
+    # confusing route diff if the session was not pinned to production shape.
+    assert not main_module.IS_DEBUG, (
+        "neos.main was imported with DEBUG enabled, so these production-shape "
+        "assertions cannot hold. Run pytest without DEBUG=true in the environment."
+    )
+
     return main_module, main_module.app
 
 
