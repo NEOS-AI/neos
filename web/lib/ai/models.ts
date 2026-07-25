@@ -48,49 +48,24 @@ export const chatModels: ChatModel[] = [
     description: "Most capable OpenAI model",
   },
   {
-    id: "openai/gpt-4.1-mini",
-    name: "GPT-4.1 Mini",
+    id: "openai/gpt-4o-mini",
+    name: "GPT-4o Mini",
     provider: "openai",
     description: "Fast and cost-effective for simple tasks",
   },
   {
-    id: "openai/gpt-4.1",
-    name: "GPT-4.1",
+    id: "openai/gpt-4o",
+    name: "GPT-4o",
     provider: "openai",
     description: "Previous-generation OpenAI model",
   },
-  // Google
+  // Reasoning models (extended thinking).
+  // The id must keep "thinking"/"reasoning" — lib/ai/prompts.ts branches on it.
   {
-    id: "google/gemini-2.5-flash-lite",
-    name: "Gemini 2.5 Flash Lite",
-    provider: "google",
-    description: "Ultra fast and affordable",
-  },
-  {
-    id: "google/gemini-3-pro-preview",
-    name: "Gemini 1.5 Pro",
-    provider: "google",
-    description: "Most capable Google model",
-  },
-  // xAI
-  {
-    id: "xai/grok-4.1-fast-non-reasoning",
-    name: "Grok 4.1 Fast",
-    provider: "xai",
-    description: "Fast with 30K context",
-  },
-  // Reasoning models (extended thinking)
-  {
-    id: "anthropic/claude-3.7-sonnet-thinking",
-    name: "Claude 3.7 Sonnet",
+    id: "anthropic/claude-sonnet-4.5-thinking",
+    name: "Claude Sonnet 4.5 (Thinking)",
     provider: "reasoning",
     description: "Extended thinking for complex problems",
-  },
-  {
-    id: "xai/grok-code-fast-1-thinking",
-    name: "Grok Code Fast",
-    provider: "reasoning",
-    description: "Reasoning optimized for code",
   },
 ];
 
@@ -106,29 +81,46 @@ export const modelsByProvider = chatModels.reduce(
   {} as Record<string, ChatModel[]>
 );
 
-// Map Vercel AI Gateway model IDs to backend model names
-export function mapToBackendModelName(vercelModelId: string): string {
-  const modelMap: Record<string, string> = {
-    // Anthropic
-    "anthropic/claude-sonnet-5": "claude-sonnet-5",
-    "anthropic/claude-opus-5": "claude-opus-5",
-    "anthropic/claude-haiku-4.5": "claude-haiku-4-5-20251001",
-    "anthropic/claude-sonnet-4.5": "claude-sonnet-4-5-20250929",
-    // Retired from the picker, still mapped for stored cookies/conversations
-    "anthropic/claude-opus-4.5": "claude-opus-4-6",
-    "anthropic/claude-3.7-sonnet-thinking": "claude-sonnet-4-5-20250929", // Use sonnet as fallback
-    // OpenAI - remove provider prefix
-    "openai/gpt-5.6-terra": "gpt-5.6-terra",
-    "openai/gpt-5.6-sol": "gpt-5.6-sol",
-    "openai/gpt-4.1-mini": "gpt-4o-mini",
-    "openai/gpt-4.1": "gpt-4o",
-    // Google - remove provider prefix
-    "google/gemini-2.5-flash-lite": "gemini-2.0-flash",
-    "google/gemini-3-pro-preview": "gemini-1.5-pro-latest",
-    // xAI - remove provider prefix
-    "xai/grok-4.1-fast-non-reasoning": "grok-beta",
-    "xai/grok-code-fast-1-thinking": "grok-beta",
-  };
+// Map Vercel AI Gateway model IDs to backend model names.
+//
+// The backend infers its provider from the model name and only recognizes
+// "gpt" and "claude"; every other name silently routes to Anthropic and fails
+// at request time. So every value here must be an OpenAI or Anthropic model.
+const MODEL_MAP: Record<string, string> = {
+  // Anthropic
+  "anthropic/claude-sonnet-5": "claude-sonnet-5",
+  "anthropic/claude-opus-5": "claude-opus-5",
+  "anthropic/claude-haiku-4.5": "claude-haiku-4-5-20251001",
+  "anthropic/claude-sonnet-4.5": "claude-sonnet-4-5-20250929",
+  "anthropic/claude-sonnet-4.5-thinking": "claude-sonnet-4-5-20250929",
+  // OpenAI - remove provider prefix
+  "openai/gpt-5.6-terra": "gpt-5.6-terra",
+  "openai/gpt-5.6-sol": "gpt-5.6-sol",
+  "openai/gpt-4o": "gpt-4o",
+  "openai/gpt-4o-mini": "gpt-4o-mini",
+};
 
-  return modelMap[vercelModelId] || vercelModelId;
+// Retired from the picker but still present in stored `chat-model` cookies.
+// The cookie is read verbatim and validated only as z.string(), so dropping an
+// entry here would leak the raw gateway ID to the backend.
+const RETIRED_MODEL_MAP: Record<string, string> = {
+  // Renamed picker entries — keep serving what they always served.
+  "openai/gpt-4.1": "gpt-4o",
+  "openai/gpt-4.1-mini": "gpt-4o-mini",
+  "anthropic/claude-3.7-sonnet-thinking": "claude-sonnet-4-5-20250929",
+  "anthropic/claude-opus-4.5": "claude-opus-4-6",
+  // Google and xAI were never servable — the backend has no provider for them,
+  // so these selections always failed. Retire them onto the default model.
+  "google/gemini-2.5-flash-lite": "claude-sonnet-5",
+  "google/gemini-3-pro-preview": "claude-sonnet-5",
+  "xai/grok-4.1-fast-non-reasoning": "claude-sonnet-5",
+  "xai/grok-code-fast-1-thinking": "claude-sonnet-5",
+};
+
+export function mapToBackendModelName(vercelModelId: string): string {
+  return (
+    MODEL_MAP[vercelModelId] ??
+    RETIRED_MODEL_MAP[vercelModelId] ??
+    vercelModelId
+  );
 }
