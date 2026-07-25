@@ -34,6 +34,7 @@ export type CodingWorkspaceState = {
     | "agent_synced"
     | "revision_conflict";
   pendingEditId: string | null;
+  syncedCheckpointId: string | null;
   watcherCursor: number;
   issue: string | null;
 };
@@ -54,6 +55,7 @@ export function createCodingWorkspaceStore(taskId: string) {
     draft: null,
     editState: "read_only",
     pendingEditId: null,
+    syncedCheckpointId: null,
     watcherCursor: 0,
     issue: null,
   };
@@ -96,7 +98,7 @@ export function createCodingWorkspaceStore(taskId: string) {
       commit({ ...state, diff, workspaceRevision: diff.workspace_revision });
     },
     beginEdit(content: string) {
-      if (!state.file?.content || state.file.binary) {
+      if (!state.file || state.file.content === null || state.file.binary) {
         return;
       }
       commit({
@@ -109,6 +111,15 @@ export function createCodingWorkspaceStore(taskId: string) {
         editState: "editing",
       });
     },
+    updateDraft(content: string) {
+      if (!state.draft) {
+        return;
+      }
+      commit({ ...state, draft: { ...state.draft, content } });
+    },
+    cancelEdit() {
+      commit({ ...state, draft: null, editState: "read_only", issue: null });
+    },
     markSaving() {
       commit({ ...state, editState: "saving", issue: null });
     },
@@ -117,6 +128,7 @@ export function createCodingWorkspaceStore(taskId: string) {
         ...state,
         workspaceRevision: result.resulting_revision,
         pendingEditId: result.edit_id,
+        syncedCheckpointId: null,
         draft: null,
         editState: "saved_pending_agent",
       });
@@ -128,6 +140,10 @@ export function createCodingWorkspaceStore(taskId: string) {
       commit({
         ...state,
         pendingEditId: edit.status === "agent_synced" ? null : edit.edit_id,
+        syncedCheckpointId:
+          edit.status === "agent_synced"
+            ? edit.applied_checkpoint_id
+            : state.syncedCheckpointId,
         editState:
           edit.status === "agent_synced"
             ? "agent_synced"

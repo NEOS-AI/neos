@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import {
+  getCodingWorkspaceDiff,
   getCodingWorkspaceFile,
   getCodingWorkspaceTree,
   getCodingWorkspaceWsTicket,
@@ -60,6 +61,14 @@ export function useCodingWorkspace(taskId: string) {
     }
   }, [store, taskId]);
 
+  const refreshDiff = useCallback(async () => {
+    try {
+      store.hydrateDiff(await getCodingWorkspaceDiff(taskId));
+    } catch {
+      store.setIssue("workspace_diff_failed");
+    }
+  }, [store, taskId]);
+
   useEffect(() => {
     let disposed = false;
     let socket: WebSocket | null = null;
@@ -96,8 +105,12 @@ export function useCodingWorkspace(taskId: string) {
   return {
     workspace,
     refreshTree,
+    refreshDiff,
     openFile,
     beginEdit: store.beginEdit,
+    updateDraft: store.updateDraft,
+    cancelEdit: store.cancelEdit,
+    applyUserEdit: store.applyUserEdit,
     saveDraft,
   };
 }
