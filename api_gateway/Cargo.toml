@@ -5,11 +5,11 @@ edition = "2024"
 
 [dependencies]
 # Cloudflare Pingora - 고성능 프록시 프레임워크
-pingora = "0.6"
-pingora-core = "0.6"
-pingora-proxy = "0.6"
-pingora-http = "0.6"
-pingora-load-balancing = "0.6"
+pingora = "0.8"
+pingora-core = "0.8"
+pingora-proxy = "0.8"
+pingora-http = "0.8"
+pingora-load-balancing = "0.8"
 
 # Async runtime
 tokio = { version = "1.41", features = ["full"] }
@@ -39,7 +39,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2.0"
 anyhow = "1.0"
 http = "1.1"
-bytes = "1.8"
+bytes = "1.11"
 regex = "1.11"
 
 [profile.release]
