@@ -309,6 +309,21 @@ class PostgresManagedSandboxRepository:
         )
         async with await self._session_factory() as session:
             async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        SELECT pg_advisory_xact_lock(
+                            hashtextextended(allocation.tenant_id, 0)
+                        )
+                        FROM coding_managed_sandboxes AS allocation
+                        JOIN coding_sandbox_admissions AS admission
+                          ON admission.admission_id = allocation.admission_id
+                        WHERE allocation.allocation_id = :allocation_id
+                          AND admission.reservation_state = 'reserved'
+                        """
+                    ),
+                    {"allocation_id": allocation_id},
+                )
                 result = await session.execute(
                     text(
                         """

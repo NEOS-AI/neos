@@ -104,6 +104,10 @@ async def test_admit_serializes_tenant_before_reading_quota_and_replays_exactly(
     assert "pg_advisory_xact_lock" in sql[0]
     assert "tenant_id = :tenant_id" in sql[1]
     assert "idempotency_key = :idempotency_key" in sql[1]
+    assert session.statements[1][1] == {
+        "tenant_id": "tenant_1",
+        "idempotency_key": "idem_1",
+    }
     assert len(sql) == 2
     assert result == AdmissionResult(
         admission_id="adm_original",
@@ -205,6 +209,90 @@ async def test_admit_reserves_estimates_and_creates_admitted_allocation_atomical
     assert result.allocation_id == "alloc_1"
 
 
+async def test_admit_counts_all_five_quota_dimensions_from_durable_usage() -> None:
+    session = FakeSession(
+        [
+            FakeResult(),
+            FakeResult(row=None),
+            FakeResult(row=(0, 0, 0, 0, 0)),
+            FakeResult(row=("adm_1",)),
+            FakeResult(),
+            FakeResult(row=("adm_1", "alloc_1", "admitted", "allowed", None)),
+        ]
+    )
+
+    await repository_for(session).admit(
+        request_fixture(),
+        decision=AdmissionDecision.ADMITTED,
+        reason=AdmissionReason.ALLOWED,
+        now=NOW,
+        reevaluate_after=None,
+        reservation_expires_at=NOW + timedelta(seconds=60),
+        concurrent_quota=3,
+        daily_quota=50,
+        daily_active_seconds_quota=43_200,
+        archive_bytes_quota=5 * 1024**3,
+        daily_cost_micros_quota=10_000_000,
+    )
+
+    quota_sql, quota_params = session.statements[2]
+    assert "reservation_state = 'reserved'" in quota_sql
+    assert "reservation_expires_at > :now" in quota_sql
+    assert "decision = 'admitted'" in quota_sql
+    assert "created_at >= :day_start" in quota_sql
+    assert "reserved_active_seconds" in quota_sql
+    assert "actual_active_seconds" in quota_sql
+    assert "reserved_archive_bytes" in quota_sql
+    assert "actual_archive_bytes" in quota_sql
+    assert "reserved_cost_micros" in quota_sql
+    assert "actual_cost_micros" in quota_sql
+    assert quota_params["tenant_id"] == "tenant_1"
+
+
+async def test_admission_ledger_excludes_policy_inputs_and_sensitive_content() -> None:
+    secret_organization = "credential-bearing-organization"
+    secret_capability = "workspace-content-capability"
+    session = FakeSession(
+        [
+            FakeResult(),
+            FakeResult(row=None),
+            FakeResult(row=(0, 0, 0, 0, 0)),
+            FakeResult(row=("adm_1",)),
+            FakeResult(),
+            FakeResult(row=("adm_1", "alloc_1", "admitted", "allowed", None)),
+        ]
+    )
+
+    await repository_for(session).admit(
+        request_fixture(
+            repository_organization=secret_organization,
+            required_capabilities=frozenset({secret_capability}),
+        ),
+        decision=AdmissionDecision.ADMITTED,
+        reason=AdmissionReason.ALLOWED,
+        now=NOW,
+        reevaluate_after=None,
+        reservation_expires_at=NOW + timedelta(seconds=60),
+        concurrent_quota=3,
+        daily_quota=50,
+        daily_active_seconds_quota=43_200,
+        archive_bytes_quota=5 * 1024**3,
+        daily_cost_micros_quota=10_000_000,
+    )
+
+    persisted_values = {
+        value
+        for _, params in session.statements
+        for value in params.values()
+        if isinstance(value, str)
+    }
+    persisted_sql = "\n".join(statement for statement, _ in session.statements)
+    assert secret_organization not in persisted_values
+    assert secret_capability not in persisted_values
+    assert "repository_organization" not in persisted_sql
+    assert "required_capabilities" not in persisted_sql
+
+
 @pytest.mark.parametrize(
     ("quota_row", "expected_reason"),
     [
@@ -254,7 +342,12 @@ async def test_admit_converts_quota_or_budget_overflow_to_durable_denial(
 
 
 async def test_settle_updates_state_usage_and_matching_timestamp_together() -> None:
-    session = FakeSession([FakeResult(row=("alloc_1",))])
+    session = FakeSession(
+        [
+            FakeResult(row=(None,)),
+            FakeResult(row=("alloc_1",)),
+        ]
+    )
 
     changed = await repository_for(session).settle_reservation(
         "alloc_1",
@@ -264,11 +357,16 @@ async def test_settle_updates_state_usage_and_matching_timestamp_together() -> N
         now=NOW,
     )
 
-    sql, params = session.statements[0]
-    assert "reservation_state = 'settled'" in sql
-    assert "reservation_settled_at = :now" in sql
-    assert "reservation_released_at = NULL" in sql
-    assert "reservation_state = 'reserved'" in sql
+    lock_sql, lock_params = session.statements[0]
+    update_sql, params = session.statements[1]
+    assert "pg_advisory_xact_lock" in lock_sql
+    assert "hashtextextended(allocation.tenant_id, 0)" in lock_sql
+    assert "reservation_state = 'reserved'" in lock_sql
+    assert lock_params == {"allocation_id": "alloc_1"}
+    assert "reservation_state = 'settled'" in update_sql
+    assert "reservation_settled_at = :now" in update_sql
+    assert "reservation_released_at = NULL" in update_sql
+    assert "reservation_state = 'reserved'" in update_sql
     assert params["active_seconds"] == 123
     assert params["archive_bytes"] == 456
     assert params["cost_micros"] == 789

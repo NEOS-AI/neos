@@ -246,6 +246,26 @@ async def test_same_idempotency_key_returns_original_admission() -> None:
     assert repository.created_count == 1
 
 
+async def test_idempotency_replay_is_scoped_to_tenant() -> None:
+    repository = RecordingAdmissionRepository()
+    service = admission_service(
+        repository,
+        policy=AllowlistedPolicy(tenants=frozenset({"tenant_1", "tenant_2"})),
+    )
+
+    first = await service.admit(
+        request_fixture(tenant_id="tenant_1", idempotency_key="idem_shared")
+    )
+    second = await service.admit(
+        request_fixture(tenant_id="tenant_2", idempotency_key="idem_shared")
+    )
+
+    assert first.admission_id != second.admission_id
+    assert first.created is True
+    assert second.created is True
+    assert repository.created_count == 2
+
+
 async def test_policy_and_capability_denials_happen_before_quota() -> None:
     cases = [
         (
