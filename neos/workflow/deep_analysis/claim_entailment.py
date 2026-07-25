@@ -25,31 +25,31 @@ def apply_entailment_results(
         if not isinstance(item, dict):
             return None
         index = item.get("index")
-        verdict = item.get("verdict")
+        action = item.get("action")
         if (
             type(index) is not int
             or index < 0
             or index >= len(claims)
             or index in by_index
-            or not isinstance(verdict, str)
-            or verdict not in _ACTIONS
+            or not isinstance(action, str)
+            or action not in _ACTIONS
         ):
             return None
 
-        allowed_fields = {"index", "verdict"}
-        if verdict == "narrow":
-            allowed_fields.add("narrowed_claim")
+        allowed_fields = {"index", "action"}
+        if action == "narrow":
+            allowed_fields.add("new_text")
         if set(item) != allowed_fields:
             return None
 
-        narrowed_claim = item.get("narrowed_claim")
-        if verdict == "narrow" and (
-            not isinstance(narrowed_claim, str) or not narrowed_claim.strip()
+        new_text = item.get("new_text")
+        if action == "narrow" and (
+            not isinstance(new_text, str) or not new_text.strip()
         ):
             return None
         by_index[index] = (
-            verdict,
-            narrowed_claim.strip() if verdict == "narrow" else None,
+            action,
+            new_text.strip() if action == "narrow" else None,
         )
 
     if set(by_index) != set(range(len(claims))):
@@ -57,15 +57,15 @@ def apply_entailment_results(
 
     refined: list[ProposedClaim] = []
     for index, claim in enumerate(claims):
-        verdict, narrowed_claim = by_index[index]
-        if verdict == "discard":
+        action, new_text = by_index[index]
+        if action == "discard":
             continue
-        if verdict == "keep":
+        if action == "keep":
             refined.append(claim)
             continue
         refined.append(
             ProposedClaim(
-                text=narrowed_claim or "",
+                text=new_text or "",
                 confidence=claim.confidence,
                 evidence=claim.evidence,
             )

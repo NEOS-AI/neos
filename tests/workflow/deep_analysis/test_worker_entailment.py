@@ -86,13 +86,13 @@ async def test_worker_applies_one_batched_entailment_response():
         json.dumps(
             {
                 "results": [
-                    {"index": 0, "verdict": "keep"},
+                    {"index": 0, "action": "keep"},
                     {
                         "index": 1,
-                        "verdict": "narrow",
-                        "narrowed_claim": "narrow",
+                        "action": "narrow",
+                        "new_text": "narrow",
                     },
-                    {"index": 2, "verdict": "discard"},
+                    {"index": 2, "action": "discard"},
                 ]
             }
         )
@@ -116,9 +116,9 @@ async def test_worker_applies_one_batched_entailment_response():
     "entailment",
     [
         "not json",
-        '{"results":[{"index":0,"verdict":"keep"}]}',
-        '{"results":[{"index":0,"verdict":"unknown"},'
-        '{"index":1,"verdict":"keep"},{"index":2,"verdict":"discard"}]}',
+        '{"results":[{"index":0,"action":"keep"}]}',
+        '{"results":[{"index":0,"action":"unknown"},'
+        '{"index":1,"action":"keep"},{"index":2,"action":"discard"}]}',
     ],
 )
 async def test_worker_entailment_fail_open_is_atomic(entailment):
@@ -196,7 +196,7 @@ async def test_entailment_token_exhaustion_returns_buffered_partial(monkeypatch)
         Search(),
         fetch_fn=Fetch(),
         llm_client=ScriptedLLM(
-            '{"results":[{"index":0,"verdict":"keep"}]}'
+            '{"results":[{"index":0,"action":"keep"}]}'
         ),
     ).investigate("Q\n{fetched_evidence}", Effort.SCOUT, "q")
 

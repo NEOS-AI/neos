@@ -89,5 +89,5 @@ def test_claim_entailment_prompt_contract():
     assert "새 사실·근거·기관·날짜·수치·인과관계" in output
     assert '{"results":' in output
     assert '"index":0' in output
-    assert '"verdict"' in output
-    assert '"narrowed_claim"' in output
+    assert '"action"' in output
+    assert '"new_text"' in output
