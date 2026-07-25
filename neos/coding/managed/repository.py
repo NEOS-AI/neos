@@ -13,6 +13,7 @@ from neos.coding.managed.domain import (
 from neos.coding.persistence.postgres import SessionFactory
 
 
+_POLICY_VERSION = "managed-v1"
 _LIVE_QUOTA_STATES = (
     ManagedSandboxState.ALLOCATING.value,
     ManagedSandboxState.ACTIVE.value,
@@ -94,8 +95,6 @@ class PostgresManagedSandboxRepository:
             raise ValueError("admitted decision requires a reservation expiry")
         if decision is AdmissionDecision.DENIED and reservation_expires_at is not None:
             raise ValueError("denied decision cannot reserve quota")
-        if not request.policy_version:
-            raise ValueError("admission request requires a policy version")
 
         async with await self._session_factory() as session:
             async with session.begin():
@@ -183,7 +182,7 @@ class PostgresManagedSandboxRepository:
                         "task_id": request.task_id,
                         "provider": request.provider,
                         "region": request.region,
-                        "policy_version": request.policy_version,
+                        "policy_version": _POLICY_VERSION,
                         "decision": final_decision.value,
                         "reason": final_reason.value,
                         "reservation_id": reservation_id,

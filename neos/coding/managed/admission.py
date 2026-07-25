@@ -1,5 +1,5 @@
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
@@ -24,7 +24,6 @@ class AdmissionRequest:
     estimated_active_seconds: int
     estimated_archive_bytes: int
     estimated_cost_micros: int
-    policy_version: str | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -122,14 +121,10 @@ class ManagedSandboxAdmissionService:
     async def admit(self, request: AdmissionRequest) -> AdmissionResult:
         now = self._clock()
         _require_timezone_aware("admission time", now)
-        evaluated_request = replace(
-            request,
-            policy_version=self._policy.version,
-        )
-        decision, reason = await self._evaluate(evaluated_request, now=now)
+        decision, reason = await self._evaluate(request, now=now)
         admitted = decision is AdmissionDecision.ADMITTED
         return await self._repository.admit(
-            evaluated_request,
+            request,
             decision=decision,
             reason=reason,
             now=now,

@@ -62,7 +62,6 @@ def request_fixture(**changes: object) -> AdmissionRequest:
         "estimated_active_seconds": 300,
         "estimated_archive_bytes": 1024,
         "estimated_cost_micros": 500,
-        "policy_version": "policy-v1",
     }
     values.update(changes)
     return AdmissionRequest(**values)  # type: ignore[arg-type]
@@ -73,6 +72,56 @@ def repository_for(session: FakeSession) -> PostgresManagedSandboxRepository:
         return session
 
     return PostgresManagedSandboxRepository(session_factory)
+
+
+async def test_direct_repository_caller_with_brief_request_reaches_processing() -> None:
+    denied = (
+        "adm_direct",
+        None,
+        "denied",
+        "provider_unavailable",
+        NOW + timedelta(seconds=30),
+    )
+    session = FakeSession(
+        [
+            FakeResult(),
+            FakeResult(row=None),
+            FakeResult(row=("adm_direct",)),
+            FakeResult(row=denied),
+        ]
+    )
+    request = AdmissionRequest(
+        tenant_id="tenant_1",
+        task_id="ct_direct",
+        run_id="cr_direct",
+        repository_organization="acme",
+        provider="fake",
+        region="local",
+        required_capabilities=frozenset({"network_block_all"}),
+        idempotency_key="idem_direct",
+        estimated_active_seconds=300,
+        estimated_archive_bytes=1024,
+        estimated_cost_micros=500,
+    )
+
+    result = await repository_for(session).admit(
+        request,
+        decision=AdmissionDecision.DENIED,
+        reason=AdmissionReason.PROVIDER_UNAVAILABLE,
+        now=NOW,
+        reevaluate_after=NOW + timedelta(seconds=30),
+        reservation_expires_at=None,
+        concurrent_quota=3,
+        daily_quota=50,
+        daily_active_seconds_quota=43_200,
+        archive_bytes_quota=5 * 1024**3,
+        daily_cost_micros_quota=10_000_000,
+    )
+
+    assert result.admission_id == "adm_direct"
+    assert result.created is True
+    assert len(session.statements) == 4
+    assert session.statements[2][1]["policy_version"] == "managed-v1"
 
 
 async def test_preflight_prefers_concurrent_quota_before_daily_budget() -> None:
@@ -162,7 +211,7 @@ async def test_pre_admission_denial_is_persisted_without_reading_quota() -> None
     )
 
     result = await repository_for(session).admit(
-        request_fixture(policy_version="canary-policy-denied"),
+        request_fixture(),
         decision=AdmissionDecision.DENIED,
         reason=AdmissionReason.PROVIDER_UNAVAILABLE,
         now=NOW,
@@ -180,7 +229,7 @@ async def test_pre_admission_denial_is_persisted_without_reading_quota() -> None
     _, insert_params = session.statements[2]
     assert insert_params["reservation_state"] == "unreserved"
     assert insert_params["reservation_expires_at"] is None
-    assert insert_params["policy_version"] == "canary-policy-denied"
+    assert insert_params["policy_version"] == "managed-v1"
     assert result.decision is AdmissionDecision.DENIED
 
 
@@ -203,7 +252,6 @@ async def test_admit_reserves_estimates_and_creates_admitted_allocation_atomical
         estimated_active_seconds=300,
         estimated_archive_bytes=1024,
         estimated_cost_micros=500,
-        policy_version="canary-policy-admitted",
     )
 
     result = await repository_for(session).admit(
@@ -228,7 +276,7 @@ async def test_admit_reserves_estimates_and_creates_admitted_allocation_atomical
     assert admission_params["reserved_active_seconds"] == 300
     assert admission_params["reserved_archive_bytes"] == 1024
     assert admission_params["reserved_cost_micros"] == 500
-    assert admission_params["policy_version"] == "canary-policy-admitted"
+    assert admission_params["policy_version"] == "managed-v1"
     assert "coding_managed_sandboxes" in allocation_sql
     assert allocation_params["admission_id"] == "adm_1"
     assert allocation_params["state"] == "admitted"

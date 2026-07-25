@@ -399,19 +399,6 @@ async def test_admitted_request_passes_exact_quota_and_lease_values() -> None:
     ]
 
 
-async def test_service_threads_evaluated_policy_version_to_repository() -> None:
-    repository = RecordingAdmissionRepository()
-    policy = AllowlistedPolicy()
-    policy.version = "canary-policy-2026-07-25"
-
-    await admission_service(repository, policy=policy).admit(request_fixture())
-
-    assert (
-        getattr(repository.requests[0], "policy_version", None)
-        == "canary-policy-2026-07-25"
-    )
-
-
 async def test_denial_gets_bounded_reevaluation_and_no_reservation_lease() -> None:
     repository = RecordingAdmissionRepository()
     config = managed_config(admission_reevaluation_seconds=45)
