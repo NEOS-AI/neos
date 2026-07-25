@@ -38,6 +38,7 @@ export type CodingWorkspaceView = {
   revision: string;
   git_head: string | null;
   changed_files: string[];
+  user_edits?: import("@/features/coding/workspace/types").WorkspaceUserEditView[];
 };
 
 export type CodingTextPartView = {

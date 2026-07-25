@@ -17,6 +17,14 @@ import type {
   CodingApprovalView,
   CodingProjectionSnapshot,
 } from "@/features/coding/types/projection";
+import type {
+  WorkspaceDiff,
+  WorkspaceFile,
+  WorkspaceFileSaveRequest,
+  WorkspaceFileSaveResult,
+  WorkspaceTree,
+  WorkspaceWsTicket,
+} from "@/features/coding/workspace/types";
 
 export class CodingAPIError extends Error {
   readonly status: number;
@@ -107,6 +115,76 @@ export async function decideCodingApproval(
   );
   if (!response.ok) {
     throw await responseError(response, "Could not resolve coding approval");
+  }
+  return response.json();
+}
+
+function workspaceUrl(taskId: string, operation: string) {
+  return `/api/coding/tasks/${encodeURIComponent(taskId)}/workspace/${operation}`;
+}
+
+export async function getCodingWorkspaceTree(
+  taskId: string,
+  path = "."
+): Promise<WorkspaceTree> {
+  const query = new URLSearchParams({ path });
+  const response = await fetch(`${workspaceUrl(taskId, "tree")}?${query}`);
+  if (!response.ok) {
+    throw await responseError(response, "Could not load workspace tree");
+  }
+  return response.json();
+}
+
+export async function getCodingWorkspaceFile(
+  taskId: string,
+  path: string
+): Promise<WorkspaceFile> {
+  const query = new URLSearchParams({ path });
+  const response = await fetch(`${workspaceUrl(taskId, "files")}?${query}`);
+  if (!response.ok) {
+    throw await responseError(response, "Could not load workspace file");
+  }
+  return response.json();
+}
+
+export async function getCodingWorkspaceDiff(
+  taskId: string
+): Promise<WorkspaceDiff> {
+  const response = await fetch(workspaceUrl(taskId, "diff"));
+  if (!response.ok) {
+    throw await responseError(response, "Could not load workspace diff");
+  }
+  return response.json();
+}
+
+export async function saveCodingWorkspaceFile(
+  taskId: string,
+  request: WorkspaceFileSaveRequest
+): Promise<WorkspaceFileSaveResult> {
+  const response = await fetch(workspaceUrl(taskId, "files"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    throw await responseError(response, "Could not save workspace file");
+  }
+  return response.json();
+}
+
+export async function getCodingWorkspaceWsTicket(
+  taskId: string,
+  kind: "watcher" | "pty"
+): Promise<WorkspaceWsTicket> {
+  const query = new URLSearchParams({ kind });
+  const response = await fetch(
+    `${workspaceUrl(taskId, "ws-ticket")}?${query}`,
+    {
+      method: "POST",
+    }
+  );
+  if (!response.ok) {
+    throw await responseError(response, "Could not authorize workspace stream");
   }
   return response.json();
 }
