@@ -184,7 +184,7 @@ async def test_worker_returns_blob_proposals_and_rewrites_raw_refs():
     )
 
     assert result.status == "completed"
-    assert result.tokens_spent == 150
+    assert result.tokens_spent == 300
     assert result.self_assessment == 0.8
     assert result.blobs[0].content_hash == "0123456789abcdef"
     assert (
@@ -193,6 +193,8 @@ async def test_worker_returns_blob_proposals_and_rewrites_raw_refs():
     )
     assert "<evidence" in llm.prompts[0]
     assert "MoE routing reduces inference cost by 40 percent" in llm.prompts[0]
+    assert len(llm.prompts) == 2
+    assert '"index": 0' in llm.prompts[1]
 
 
 @pytest.mark.asyncio
