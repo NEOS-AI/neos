@@ -46,8 +46,8 @@ class SearchOrchestrator:
         LLMFactory의 다중 키 캐싱을 활용하여 (model, temperature, max_tokens) 조합별로
         인스턴스를 재사용합니다. 이를 통해 다양한 파라미터 조합에 대한 캐싱이 가능합니다.
         """
+        # 자동 워크로드 — 모델을 지정하지 않아 everyday 역할 기본값으로 해석된다
         return create_llm(
-            model=settings.LLM_MODEL,
             temperature=temperature,
             max_tokens=max_tokens,
             use_cache=True  # LLMFactory 캐시 활용

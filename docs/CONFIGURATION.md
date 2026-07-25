@@ -146,26 +146,49 @@ Resolution follows a strict precedence, and the winner is reported as
 3. `feature_override` — a deployment/feature setting (below)
 4. `role_default` — the `model_routing` entry for that provider and role
 
-There is no cross-provider fallback. An unknown provider or role, or a blank
-mapping entry, raises `ValueError` at resolution time rather than guessing.
+The resolver itself never falls back across providers. An unknown provider or
+role, or a blank mapping entry, raises `ValueError` rather than guessing.
 
 Role assignments for automatic workloads:
 
 | Workload | Role |
 |---|---|
 | New chat default, conversation titles, templates | `everyday` |
+| Any `create_llm()` call that omits `model` (`llm.model`) | `everyday` |
 | Routine coding executor (`coding_model.model`) | `everyday` |
 | Deep-analysis scout and judge | `everyday` |
+| Knowledge-graph extraction (`knowledge_graph.extraction.model`) | `everyday` |
+| Tool-result summarization (`context_optimization.tool_result_summarization_model`) | `everyday` |
 | Recursive planner (`recursive_agent.planner_model`) | `powerful` |
 | Deep-analysis dig and synth | `powerful` |
 
-Feature override fields are nullable, and `null` is meaningful:
-`coding_model.model`, `recursive_agent.planner_model`, and every
+Feature override fields are nullable, and `null` is meaningful: `llm.model`,
+`coding_model.model`, `recursive_agent.planner_model`,
+`knowledge_graph.extraction.model`,
+`context_optimization.tool_result_summarization_model`, and every
 `deep_analysis.models.*` field default to `null`, which means "use the role
 default". Setting a string pins that workload to an explicit model.
 
 `recursive_agent.atomizer_model` is deliberately *not* role-routed; it keeps its
 own Haiku value so sub-root atomization stays cheap.
+
+#### Provider fallback in `LLMFactory`
+
+`create_llm()` may fall back to OpenAI when the configured provider cannot be
+constructed (typically a missing API key). That fallback is **only** available
+to fully automatic calls:
+
+| Call | Behavior on provider failure |
+|---|---|
+| `create_llm(temperature=0.3)` | falls back to OpenAI `everyday` (`gpt-5.6-terra`) |
+| `create_llm(model="claude-opus-5")` | raises — an explicit model is never replaced |
+| `create_llm(provider="anthropic")` | raises — an explicit provider is never replaced |
+| any `provider="ollama"` call | raises — Ollama is an explicit local service |
+
+Passing `model=` or `provider=` therefore means "use exactly this, or fail".
+Providers outside the routing policy (`gemini`, `ollama`) have no role mapping,
+so they require an explicit `model=` or a configured `llm.model`; otherwise
+`create_llm()` raises a `ValueError` naming the provider.
 
 ## Staging and Production
 

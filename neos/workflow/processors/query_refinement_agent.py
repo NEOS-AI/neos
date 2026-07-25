@@ -9,7 +9,6 @@ from datetime import datetime
 import logging
 
 from ..state import AgentState
-from neos.config.settings import settings
 from neos.utils.llm_factory import create_llm
 
 logger = logging.getLogger(__name__)
@@ -32,8 +31,8 @@ class QueryRefinementAgent:
 
     def _get_llm(self, temperature: float = None, max_tokens: int = None):
         """LLM 인스턴스 가져오기"""
+        # 자동 워크로드 — 모델을 지정하지 않아 everyday 역할 기본값으로 해석된다
         return create_llm(
-            model=settings.LLM_MODEL,
             temperature=temperature or self.temperature,
             max_tokens=max_tokens or self.max_tokens,
             use_cache=True
