@@ -10,9 +10,9 @@ vision_models:
     supports_video: false
 
   claude:
-    model_id: "claude-sonnet-4-5-20250929"
+    model_id: "claude-sonnet-5"
     provider: "anthropic"
-    description: "Anthropic Claude Sonnet 4.5"
+    description: "Anthropic Claude Sonnet 5"
     max_tokens: 8192
     supports_video: false
 
@@ -32,15 +32,15 @@ llm_models:
     max_tokens: 4096
 
   claude_opus:
-    model_id: "claude-opus-4-5-20251101"
+    model_id: "claude-opus-5"
     provider: "anthropic"
-    description: "Anthropic Claude Opus 4.5"
+    description: "Anthropic Claude Opus 5"
     max_tokens: 8192
 
   claude_sonnet:
-    model_id: "claude-sonnet-4-5-20250929"
+    model_id: "claude-sonnet-5"
     provider: "anthropic"
-    description: "Anthropic Claude Sonnet 4.5"
+    description: "Anthropic Claude Sonnet 5"
     max_tokens: 8192
 
   claude_haiku:

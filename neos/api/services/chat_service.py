@@ -11,9 +11,21 @@ from neos.api.services.pagination import (
     decode_conversation_cursor,
     encode_conversation_cursor,
 )
+from neos.config.model_routing import resolve_model
+from neos.config.settings import settings
 from neos.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def resolve_new_chat_model(model_name: str | None) -> str:
+    """Resolve a new chat's explicit choice or the Anthropic everyday role."""
+    return resolve_model(
+        config=settings.config.model_routing,
+        provider="anthropic",
+        role="everyday",
+        user_model=model_name,
+    ).model
 
 
 class ChatService:
@@ -27,7 +39,7 @@ class ChatService:
     async def create_conversation(
         user_id: str,
         conversation_id: Optional[str] = None,
-        model_name: str = "claude-opus-4-5-20251101",
+        model_name: Optional[str] = None,
         title: Optional[str] = None,
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
@@ -39,12 +51,13 @@ class ChatService:
     ) -> Dict[str, Any]:
         """새 대화 생성"""
         conversation_id = conversation_id or str(uuid.uuid4())
+        resolved_model = resolve_new_chat_model(model_name)
 
         try:
             await ChatRepository.create_conversation(
                 user_id=user_id,
                 conversation_id=conversation_id,
-                model_name=model_name,
+                model_name=resolved_model,
                 system_prompt=system_prompt,
                 template_id=template_id,
                 mode=mode,

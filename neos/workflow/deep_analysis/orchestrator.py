@@ -6,6 +6,7 @@ import asyncio
 import inspect
 from dataclasses import replace
 
+from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
 from .budgeter import Budgeter
@@ -271,6 +272,12 @@ class Orchestrator:
 
     async def _decompose(self, root_text: str) -> list[dict]:
         config = settings.config.deep_analysis
+        dig_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="powerful",
+            feature_override=config.models.dig,
+        ).model
         prompt = render(
             "decompose",
             question_text=root_text,
@@ -278,7 +285,7 @@ class Orchestrator:
             dead_ends="(없음)",
         )
         data, _response = await call_json(
-            config.models.dig,
+            dig_model,
             prompt,
             max_tokens=config.decompose_max_tokens,
             client=self.llm_client,
@@ -289,6 +296,12 @@ class Orchestrator:
 
     async def _default_split_decompose(self, text, verified_summaries, dead_ends):
         config = settings.config.deep_analysis
+        dig_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="powerful",
+            feature_override=config.models.dig,
+        ).model
         prompt = render(
             "decompose",
             question_text=text,
@@ -296,7 +309,7 @@ class Orchestrator:
             dead_ends="\n".join(dead_ends) if dead_ends else "(없음)",
         )
         data, _response = await call_json(
-            config.models.dig,
+            dig_model,
             prompt,
             max_tokens=config.decompose_max_tokens,
             client=self.llm_client,

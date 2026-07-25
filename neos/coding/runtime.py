@@ -62,6 +62,7 @@ from neos.coding.workers.celery_runtime import (
 from neos.coding.sandbox.factory import create_sandbox_provider
 from neos.coding.sandbox.observability import LoggingCodingAuditSink
 from neos.database.connection import db_manager
+from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 from neos.config.schema import AppConfig
 from neos.observability.metrics import metrics
@@ -195,6 +196,12 @@ def create_coding_runtime(
 
 def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
     coding = config.coding_model
+    coding_model = resolve_model(
+        config=config.model_routing,
+        provider=coding.provider,
+        role="everyday",
+        feature_override=coding.model,
+    ).model
     sandbox = config.sandbox
     resources = sandbox.resources
     execution = sandbox.execution
@@ -226,7 +233,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         max_entries=1000,
     )
     loop_config = AnthropicLoopConfig(
-        model=coding.model,
+        model=coding_model,
         system="Work safely in the provided sandbox and complete the coding task.",
         max_output_tokens=coding.max_output_tokens,
         timeout_sec=coding.model_timeout_sec,

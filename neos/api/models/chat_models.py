@@ -52,7 +52,10 @@ class CreateConversationRequest(BaseModel):
     )
     conversation_id: Optional[str] = Field(None, description="Conversation ID (FE chat UUID)")
     title: Optional[str] = Field(None, max_length=500, description="대화 제목")
-    model_name: str = Field(default="claude-opus-4-5-20251101", description="사용할 모델")
+    model_name: Optional[str] = Field(
+        default=None,
+        description="사용할 모델 (미지정 시 자동 라우팅)",
+    )
     system_prompt: Optional[str] = Field(None, description="시스템 프롬프트")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Temperature 설정")
     max_tokens: Optional[int] = Field(default=200000, gt=0, description="최대 토큰 수")

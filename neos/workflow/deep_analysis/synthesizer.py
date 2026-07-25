@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
 from .llm import call_json, call_llm
@@ -72,8 +73,14 @@ class Synthesizer:
             caveats=caveats,
         )
         config = settings.config.deep_analysis
+        synth_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="powerful",
+            feature_override=config.models.synth,
+        ).model
         response = await self.llm_call(
-            config.models.synth,
+            synth_model,
             prompt,
             max_tokens=config.synthesis_max_tokens,
             client=self.llm_client,
@@ -125,9 +132,15 @@ class Synthesizer:
             caveats=caveats_text,
         )
         config = settings.config.deep_analysis
+        synth_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="powerful",
+            feature_override=config.models.synth,
+        ).model
         try:
             response = await self.llm_call(
-                config.models.synth,
+                synth_model,
                 prompt,
                 max_tokens=config.synthesis_max_tokens,
                 client=self.llm_client,
@@ -204,9 +217,15 @@ class Synthesizer:
             child_summaries="\n".join(child_lines) or "(없음)",
         )
         config = settings.config.deep_analysis
+        synth_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="powerful",
+            feature_override=config.models.synth,
+        ).model
         try:
             data, resp = await self.json_call(
-                config.models.synth,
+                synth_model,
                 prompt,
                 max_tokens=config.synthesis_max_tokens,
                 client=self.llm_client,

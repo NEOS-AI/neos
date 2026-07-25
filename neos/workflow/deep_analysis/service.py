@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
 from .graders.agentic import AgenticGrader
@@ -57,6 +58,12 @@ async def build_orchestrator(
     skill_registry=None,
 ) -> Orchestrator:
     config = settings.config.deep_analysis
+    judge_model = resolve_model(
+        config=settings.config.model_routing,
+        provider="anthropic",
+        role="everyday",
+        feature_override=config.models.judge,
+    ).model
     ledger = Ledger(session, run_id)
     grader = DeterministicGrader(
         ledger,
@@ -64,7 +71,7 @@ async def build_orchestrator(
         confidence_cap=config.confidence_cap,
     )
     agentic_grader = AgenticGrader(
-        judge_model=config.models.judge,
+        judge_model=judge_model,
         threshold=config.agentic_threshold,
         sample_rate=config.agentic_sample_rate,
         llm_client=llm_client,
@@ -72,7 +79,7 @@ async def build_orchestrator(
     )
     report_grader = ReportGrader(
         ledger,
-        judge_model=config.models.judge,
+        judge_model=judge_model,
         llm_client=llm_client,
         cassette=cassette,
     )

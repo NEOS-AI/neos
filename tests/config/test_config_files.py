@@ -40,6 +40,12 @@ def test_committed_config_profiles_exist_and_validate():
         config = AppConfig.model_validate(load_yaml_file(path))
         assert config.model_routing.anthropic.everyday == "claude-sonnet-5"
         assert config.model_routing.openai.powerful == "gpt-5.6-sol"
+        assert config.coding_model.model is None
+        assert config.recursive_agent.planner_model is None
+        assert config.deep_analysis.models.scout is None
+        assert config.deep_analysis.models.dig is None
+        assert config.deep_analysis.models.synth is None
+        assert config.deep_analysis.models.judge is None
 
 
 def test_committed_config_profiles_do_not_contain_secrets():

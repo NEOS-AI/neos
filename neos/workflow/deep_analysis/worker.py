@@ -6,6 +6,7 @@ import json
 import logging
 from typing import Callable
 
+from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
 from .claim_entailment import apply_entailment_results
@@ -173,11 +174,16 @@ class Worker:
         self._confidence_clamped_by_source_count = {}
 
         config = settings.config.deep_analysis
-        self._model = (
-            config.models.scout
-            if effort == Effort.SCOUT
-            else config.models.dig
+        role = "everyday" if effort == Effort.SCOUT else "powerful"
+        feature_override = (
+            config.models.scout if effort == Effort.SCOUT else config.models.dig
         )
+        self._model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role=role,
+            feature_override=feature_override,
+        ).model
         effort_config = config.effort[effort.value]
 
         repairs = repairs or []

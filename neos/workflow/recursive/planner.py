@@ -10,6 +10,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
+from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 from neos.utils.llm_factory import LLMFactory
 
@@ -82,7 +83,12 @@ class RecursivePlanner:
     def _select_model(self, depth: int) -> str:
         """깊이에 따라 LLM 모델 선택."""
         if depth == 0:
-            return settings.RECURSIVE_PLANNER_MODEL
+            return resolve_model(
+                config=settings.config.model_routing,
+                provider="anthropic",
+                role="powerful",
+                feature_override=settings.config.recursive_agent.planner_model,
+            ).model
         return settings.RECURSIVE_ATOMIZER_MODEL  # Haiku
 
     async def decompose(
