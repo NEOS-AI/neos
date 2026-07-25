@@ -1,8 +1,22 @@
 from pathlib import Path
 
-from neos.config import loader
+import pytest
+
+from neos.config import loader, settings as settings_module
 from neos.config.schema import AppConfig
 from neos.config.settings import Settings, reload_settings_for_tests, settings
+
+
+@pytest.fixture(autouse=True)
+def restore_settings_singleton():
+    """Undo the global singleton rebinding done by reload_settings_for_tests.
+
+    These tests intentionally reload the process-wide settings object. Without
+    this teardown the replacement leaks into every later test in the session.
+    """
+    original = settings_module.settings
+    yield
+    settings_module.settings = original
 
 
 def write_yaml(path: Path, content: str) -> Path:
