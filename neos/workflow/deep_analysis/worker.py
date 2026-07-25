@@ -6,11 +6,19 @@ import json
 import logging
 from typing import Callable
 
+from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
+from .claim_entailment import apply_entailment_results
 from .discovery import run_discovery
 from .fetch import fetch_url
-from .llm import call_json
+from .llm import (
+    JSONParseError,
+    LLMProviderError,
+    call_json,
+    call_llm,
+    parse_json,
+)
 from .models import (
     Effort,
     ProposedBlob,
@@ -20,10 +28,12 @@ from .models import (
     WorkerResult,
 )
 from .pdf_text import PDFExtractionError
+from .prompt_loader import render
 from .token_budget import TokenBudgetExhausted
 
 _REPAIR_ACTIONS = {"fixed", "weakened", "abandoned"}
 _CLAMP_BUCKETS = ("0", "1", "2", "3_plus")
+_ENTAILMENT_MAX_OUTPUT_TOKENS = 1200
 logger = logging.getLogger(__name__)
 
 
@@ -164,11 +174,16 @@ class Worker:
         self._confidence_clamped_by_source_count = {}
 
         config = settings.config.deep_analysis
-        self._model = (
-            config.models.scout
-            if effort == Effort.SCOUT
-            else config.models.dig
+        role = "everyday" if effort == Effort.SCOUT else "powerful"
+        feature_override = (
+            config.models.scout if effort == Effort.SCOUT else config.models.dig
         )
+        self._model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role=role,
+            feature_override=feature_override,
+        ).model
         effort_config = config.effort[effort.value]
 
         repairs = repairs or []
@@ -275,6 +290,8 @@ class Worker:
                 )
             )
 
+        self._claims = await self._refine_claims(self._claims)
+
         raw_status = data.get("status", "completed")
         status = (
             raw_status
@@ -309,6 +326,58 @@ class Worker:
                 self._confidence_clamped_by_source_count
             ),
         )
+
+    async def _refine_claims(
+        self,
+        claims: list[ProposedClaim],
+    ) -> list[ProposedClaim]:
+        if not claims:
+            return claims
+
+        claims_json = json.dumps(
+            [
+                {
+                    "index": index,
+                    "claim": claim.text,
+                    "evidence": [
+                        evidence.excerpt for evidence in claim.evidence
+                    ],
+                }
+                for index, claim in enumerate(claims)
+            ],
+            ensure_ascii=False,
+        )
+        prompt = render("claim_entailment", claims_json=claims_json)
+        try:
+            response = await call_llm(
+                self._model,
+                prompt,
+                max_tokens=_ENTAILMENT_MAX_OUTPUT_TOKENS,
+                client=self.llm_client,
+                cassette=self.cassette,
+                stage="claim_entailment",
+            )
+        except TokenBudgetExhausted:
+            raise
+        except LLMProviderError as exc:
+            logger.warning(
+                "Claim entailment provider failed: error_type=%s",
+                type(exc).__name__,
+            )
+            return claims
+
+        self._tokens += response.input_tokens + response.output_tokens
+        try:
+            payload = parse_json(response.text)
+        except JSONParseError:
+            logger.warning("Claim entailment response was not valid JSON")
+            return claims
+
+        refined = apply_entailment_results(claims, payload)
+        if refined is None:
+            logger.warning("Claim entailment response failed validation")
+            return claims
+        return refined
 
     def _parse_repairs(
         self,

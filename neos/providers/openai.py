@@ -24,6 +24,8 @@ class OpenAIProvider(ModelProviderBase):
 
     def list_models(self) -> List[str]:
         return [
+            "gpt-5.6-terra",
+            "gpt-5.6-sol",
             "gpt-5-mini-2025-08-07",
             "gpt-5-2025-08-07",
             "o3-mini",

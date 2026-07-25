@@ -109,6 +109,26 @@ class LLMConfig(StrictConfigModel):
     fast_model: str = "claude-haiku-4-5-20251001"
 
 
+class ProviderModelRolesConfig(StrictConfigModel):
+    everyday: str
+    powerful: str
+
+
+class ModelRoutingConfig(StrictConfigModel):
+    anthropic: ProviderModelRolesConfig = Field(
+        default_factory=lambda: ProviderModelRolesConfig(
+            everyday="claude-sonnet-5",
+            powerful="claude-opus-5",
+        )
+    )
+    openai: ProviderModelRolesConfig = Field(
+        default_factory=lambda: ProviderModelRolesConfig(
+            everyday="gpt-5.6-terra",
+            powerful="gpt-5.6-sol",
+        )
+    )
+
+
 class EmbeddingDatasetConfig(StrictConfigModel):
     enabled: bool = False
     sample_rate: float = 0.1
@@ -582,7 +602,7 @@ class RecursiveAgentConfig(StrictConfigModel):
     max_tasks_per_level: int = 4
     complexity_threshold: float = 0.8
     atomizer_model: str = "claude-haiku-4-5-20251001"
-    planner_model: str = "claude-opus-4-6"
+    planner_model: str | None = None
     budget_cap: float = 0.5
 
 
@@ -601,10 +621,10 @@ class DeepAnalysisEffortConfig(StrictConfigModel):
 
 
 class DeepAnalysisModelsConfig(StrictConfigModel):
-    scout: str = "claude-haiku-4-5-20251001"
-    dig: str = "claude-opus-4-6"
-    synth: str = "claude-opus-4-6"
-    judge: str = "claude-sonnet-4-6"
+    scout: str | None = None
+    dig: str | None = None
+    synth: str | None = None
+    judge: str | None = None
 
 
 class DeepAnalysisDevProfileConfig(StrictConfigModel):
@@ -799,7 +819,7 @@ class SandboxConfig(StrictConfigModel):
 class CodingModelConfig(StrictConfigModel):
     enabled: bool = False
     provider: Literal["anthropic"] = "anthropic"
-    model: str = "claude-sonnet-4-5-20250929"
+    model: str | None = None
     model_timeout_sec: float = Field(default=120, gt=0, le=600)
     tool_timeout_sec: float = Field(default=30, gt=0, le=300)
     max_turns: int = Field(default=20, gt=0, le=100)
@@ -930,6 +950,7 @@ class AppConfig(StrictConfigModel):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     smart_cache: SmartCacheConfig = Field(default_factory=SmartCacheConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    model_routing: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)

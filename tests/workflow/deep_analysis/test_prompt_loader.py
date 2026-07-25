@@ -74,3 +74,27 @@ def test_worker_brief_v3_scopes_claims_and_grounds_exact_quotes():
     assert "1개 0.55" in output
     assert "2개 0.75" in output
     assert "3개 이상 0.9" in output
+
+
+def test_claim_entailment_prompt_contract():
+    output = render(
+        "claim_entailment",
+        claims_json='[{"index":0,"claim":"c","evidence":["e"]}]',
+    )
+
+    assert "<!-- version: 1 -->" in output
+    assert "keep|narrow|discard" in output
+    assert "기관·행위자·날짜·대상 집단·조건·수치" in output
+    assert "비교 대상과 방향·인과 표현·보고된 결론" in output
+    assert "새 사실·근거·기관·날짜·수치·인과관계" in output
+    assert '{"results":' in output
+    assert '"index":0' in output
+    assert '"action"' in output
+    assert '"new_text"' in output
+    assert '{"index":0,"action":"keep"}' in output
+    assert (
+        '{"index":1,"action":"narrow","new_text":'
+        '"근거가 직접 지지하는 좁힌 claim"}' in output
+    )
+    assert '{"index":2,"action":"discard"}' in output
+    assert "new_text는 narrow action에만 포함" in output

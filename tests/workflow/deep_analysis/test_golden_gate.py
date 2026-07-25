@@ -23,6 +23,7 @@ _VERSION_RE = re.compile(r"<!--\s*version:\s*(\d+)\s*-->")
 # Prompt content baseline. Bump a value here ONLY together with an
 # intentional prompt change + a fresh golden replay recording.
 EXPECTED_PROMPT_VERSIONS = {
+    "claim_entailment": 1,
     "decompose": 1,
     "worker_brief": 3,
     "judge": 1,

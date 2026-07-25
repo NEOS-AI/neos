@@ -73,6 +73,34 @@ def test_development_prepares_real_loop_before_provider_allocation(monkeypatch) 
     assert allocations == []
 
 
+@pytest.mark.parametrize(
+    ("feature_model", "expected_model"),
+    [
+        (None, "claude-sonnet-5"),
+        ("claude-manual", "claude-manual"),
+    ],
+)
+def test_real_loop_resolves_coding_model_at_runtime_boundary(
+    monkeypatch, feature_model, expected_model
+) -> None:
+    config = AppConfig.model_validate({
+        "coding_model": {
+            "enabled": True,
+            "model": feature_model,
+            "input_cost_micros_per_million": 1,
+            "output_cost_micros_per_million": 1,
+        },
+        "sandbox": {"enabled": True},
+        "secrets": {"anthropic_api_key": "test"},
+    })
+    monkeypatch.setattr(runtime_module, "AsyncAnthropic", lambda **kwargs: object())
+
+    finish = runtime_module._prepare_real_coding_loop(config=config)
+    loop = finish(object())
+
+    assert loop._config.model == expected_model
+
+
 @pytest.mark.parametrize("failure_point", ["finish", "notifier"])
 def test_development_closes_provider_once_after_allocation_failure(
     monkeypatch, failure_point

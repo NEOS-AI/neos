@@ -3,6 +3,7 @@ import logging
 
 import pytest
 
+from neos.config.settings import settings
 from neos.workflow.deep_analysis.models import Effort, ProposedBlob
 from neos.workflow.deep_analysis.pdf_text import PDFExtractionError
 from neos.workflow.deep_analysis.worker import Worker
@@ -45,9 +46,11 @@ class FakeLLM:
     def __init__(self):
         self.messages = self
         self.prompts = []
+        self.models = []
 
     async def create(self, **kwargs):
         self.prompts.append(kwargs["messages"][0]["content"])
+        self.models.append(kwargs["model"])
         response_text = (
             '{"status":"completed","claims":[{"text":"MoE routing reduces '
             'inference cost","confidence":0.6,"evidence":[{"source_url":'
@@ -166,6 +169,38 @@ def test_worker_constructor_has_no_database_or_run_state():
     assert "run_id" not in parameters
 
 
+@pytest.mark.parametrize(
+    ("effort", "field", "feature_model", "expected_model"),
+    [
+        (Effort.SCOUT, "scout", None, "claude-sonnet-5"),
+        (Effort.SCOUT, "scout", "claude-scout-manual", "claude-scout-manual"),
+        (Effort.DIG, "dig", None, "claude-opus-5"),
+        (Effort.DIG, "dig", "claude-dig-manual", "claude-dig-manual"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_worker_resolves_role_at_provider_boundary(
+    monkeypatch, effort, field, feature_model, expected_model
+) -> None:
+    monkeypatch.setattr(
+        settings.config.deep_analysis.models,
+        field,
+        feature_model,
+    )
+    llm = FakeLLM()
+    worker = Worker(FakeSearch(), fetch_fn=FakeFetch(), llm_client=llm)
+
+    result = await worker.investigate(
+        "Question\n{fetched_evidence}",
+        effort,
+        "question",
+    )
+
+    assert result.model == expected_model
+    assert llm.models
+    assert set(llm.models) == {expected_model}
+
+
 @pytest.mark.asyncio
 async def test_worker_returns_blob_proposals_and_rewrites_raw_refs():
     search = FakeSearch()
@@ -184,7 +219,7 @@ async def test_worker_returns_blob_proposals_and_rewrites_raw_refs():
     )
 
     assert result.status == "completed"
-    assert result.tokens_spent == 150
+    assert result.tokens_spent == 300
     assert result.self_assessment == 0.8
     assert result.blobs[0].content_hash == "0123456789abcdef"
     assert (
@@ -193,6 +228,8 @@ async def test_worker_returns_blob_proposals_and_rewrites_raw_refs():
     )
     assert "<evidence" in llm.prompts[0]
     assert "MoE routing reduces inference cost by 40 percent" in llm.prompts[0]
+    assert len(llm.prompts) == 2
+    assert '"index": 0' in llm.prompts[1]
 
 
 @pytest.mark.asyncio

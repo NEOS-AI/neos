@@ -58,8 +58,18 @@ class ModelConfig:
         return {
             'vision_models': {
                 'gpt4o': {'model_id': 'gpt-4o', 'provider': 'openai'},
-                'claude': {'model_id': 'claude-sonnet-4-5-20250929', 'provider': 'anthropic'},
+                'claude': {'model_id': 'claude-sonnet-5', 'provider': 'anthropic'},
                 'gemini': {'model_id': 'gemini-1.5-pro-latest', 'provider': 'google'},
+            },
+            'llm_models': {
+                'claude_opus': {
+                    'model_id': 'claude-opus-5',
+                    'provider': 'anthropic',
+                },
+                'claude_sonnet': {
+                    'model_id': 'claude-sonnet-5',
+                    'provider': 'anthropic',
+                },
             },
             'defaults': {
                 'vision': 'gpt4o',

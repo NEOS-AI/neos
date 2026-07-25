@@ -4,9 +4,8 @@ LLM 비용 계산 유틸리티
 실시간으로 LLM 호출 비용을 계산하고 DB에 기록합니다.
 """
 
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 from decimal import Decimal
-import logging
 
 from neos.database.connection import db_manager
 from neos.utils.logger import get_logger
@@ -20,12 +19,26 @@ class CostCalculator:
     # 모델별 기본 가격 (USD per 1M tokens) - DB 조회 실패 시 fallback
     DEFAULT_PRICING = {
         "openai": {
+            "gpt-5.6-terra": {"input": 2.50, "output": 15.00},
+            "gpt-5.6-sol": {"input": 5.00, "output": 30.00},
             "gpt-4o": {"input": 2.50, "output": 10.00},
             "gpt-4o-mini": {"input": 0.15, "output": 0.60},
             "gpt-4-turbo": {"input": 10.00, "output": 30.00},
             "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
         },
         "anthropic": {
+            "claude-sonnet-5": {
+                "input": 3.00,
+                "output": 15.00,
+                "cache_creation": 3.75,
+                "cache_read": 0.30,
+            },
+            "claude-opus-5": {
+                "input": 5.00,
+                "output": 25.00,
+                "cache_creation": 6.25,
+                "cache_read": 0.50,
+            },
             "claude-sonnet-4-5-20250929": {
                 "input": 3.00,
                 "output": 15.00,

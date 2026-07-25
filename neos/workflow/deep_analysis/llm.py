@@ -8,12 +8,17 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from neos.providers.anthropic import normalize_anthropic_request
 from neos.config.settings import settings
 from neos.workflow.deep_analysis.token_budget import active_token_budget
 
 
 class JSONParseError(ValueError):
     """Raised when an LLM response does not contain one valid JSON object."""
+
+
+class LLMProviderError(RuntimeError):
+    """Raised when a live LLM provider call fails."""
 
 
 @dataclass(frozen=True)
@@ -106,6 +111,11 @@ async def _call_provider(
         }
         if tools:
             kwargs["tools"] = tools
+        kwargs = normalize_anthropic_request(
+            model,
+            kwargs,
+            thinking_enabled=True,
+        )
         response = await client.messages.create(**kwargs)
         blocks = _blocks_to_dicts(response.content)
         output = "".join(b["text"] for b in blocks if b["type"] == "text")
@@ -138,6 +148,15 @@ async def _call_provider(
         content=[{"type": "text", "text": text}],
         stop_reason="end_turn",
     )
+
+
+async def _call_live_provider(*args, **kwargs) -> LLMResponse:
+    try:
+        return await _call_provider(*args, **kwargs)
+    except LLMProviderError:
+        raise
+    except Exception as exc:
+        raise LLMProviderError(str(exc)) from exc
 
 
 async def _budgeted_dispatch(
@@ -190,7 +209,7 @@ async def call_messages(
         async def produce() -> dict[str, Any]:
             resolved_client = client or _default_client(model)
             dispatch.started = True
-            response = await _call_provider(
+            response = await _call_live_provider(
                 model,
                 messages,
                 max_tokens=limit,
@@ -238,7 +257,7 @@ async def call_llm(
         async def produce() -> dict[str, Any]:
             resolved_client = client or _default_client(model)
             dispatch.started = True
-            response = await _call_provider(
+            response = await _call_live_provider(
                 model,
                 messages,
                 max_tokens=limit,

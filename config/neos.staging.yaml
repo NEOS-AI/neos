@@ -2,7 +2,6 @@ environment: staging
 coding_model:
   enabled: false
   provider: anthropic
-  model: claude-sonnet-4-5-20250929
   model_timeout_sec: 120
   tool_timeout_sec: 30
   max_turns: 20

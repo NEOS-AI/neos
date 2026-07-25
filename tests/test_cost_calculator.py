@@ -13,8 +13,7 @@ Tests cover:
 
 import pytest
 from decimal import Decimal
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from typing import Dict, Any, Optional
+from unittest.mock import AsyncMock, patch
 
 from neos.utils.cost_calculator import CostCalculator, cost_calculator
 
@@ -102,6 +101,19 @@ class TestCostCalculator:
         assert pricing is not None
         assert pricing["input"] == Decimal("0.15")
         assert pricing["output"] == Decimal("0.60")
+
+    def test_get_default_pricing_current_model_catalog(self):
+        anthropic = CostCalculator.DEFAULT_PRICING["anthropic"]
+        openai = CostCalculator.DEFAULT_PRICING["openai"]
+
+        assert anthropic["claude-sonnet-5"]["input"] == 3.00
+        assert anthropic["claude-sonnet-5"]["output"] == 15.00
+        assert anthropic["claude-opus-5"]["input"] == 5.00
+        assert anthropic["claude-opus-5"]["output"] == 25.00
+        assert openai["gpt-5.6-terra"]["input"] == 2.50
+        assert openai["gpt-5.6-terra"]["output"] == 15.00
+        assert openai["gpt-5.6-sol"]["input"] == 5.00
+        assert openai["gpt-5.6-sol"]["output"] == 30.00
 
     def test_get_default_pricing_anthropic_claude_sonnet(self):
         """Test default pricing for Anthropic Claude Sonnet"""

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from neos.config.settings import settings
 from neos.workflow.deep_analysis.llm import LLMResponse
 from neos.workflow.deep_analysis.synthesizer import Synthesizer
 from neos.workflow.deep_analysis.models import NodeSummary
@@ -67,9 +68,11 @@ class FakeLedger:
 class FakeLLMCall:
     def __init__(self):
         self.prompt = ""
+        self.models = []
 
     async def __call__(self, model, prompt, **kwargs):
         self.prompt = prompt
+        self.models.append(model)
         return LLMResponse(
             text=(
                 "## 요약\nVerified fact [C:c1a1c1a1]\n\n"
@@ -80,6 +83,29 @@ class FakeLLMCall:
             output_tokens=10,
             model=model,
         )
+
+
+@pytest.mark.parametrize(
+    ("feature_model", "expected_model"),
+    [
+        (None, "claude-opus-5"),
+        ("claude-synth-manual", "claude-synth-manual"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_synthesizer_resolves_model_at_provider_boundary(
+    monkeypatch, feature_model, expected_model
+) -> None:
+    monkeypatch.setattr(
+        settings.config.deep_analysis.models,
+        "synth",
+        feature_model,
+    )
+    llm_call = FakeLLMCall()
+
+    await Synthesizer(FakeLedger(), llm_call=llm_call).reduce("root0001")
+
+    assert llm_call.models == [expected_model]
 
 
 @pytest.mark.asyncio

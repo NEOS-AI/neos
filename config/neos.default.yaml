@@ -3,7 +3,6 @@ environment: development
 coding_model:
   enabled: false
   provider: anthropic
-  model: claude-sonnet-4-5-20250929
   model_timeout_sec: 120
   tool_timeout_sec: 30
   max_turns: 20
@@ -415,7 +414,6 @@ recursive_agent:
   max_tasks_per_level: 4
   complexity_threshold: 0.8
   atomizer_model: claude-haiku-4-5-20251001
-  planner_model: claude-opus-4-6
   budget_cap: 0.5
 
 hyper_deep_agent:
