@@ -2,7 +2,7 @@ BEGIN;
 
 CREATE TABLE coding_sandbox_admissions (
     admission_id VARCHAR(64) PRIMARY KEY,
-    idempotency_key VARCHAR(128) NOT NULL UNIQUE,
+    idempotency_key VARCHAR(128) NOT NULL,
     tenant_id VARCHAR(255) NOT NULL,
     task_id VARCHAR(64) NOT NULL
         REFERENCES coding_tasks(task_id) ON DELETE CASCADE,
@@ -18,17 +18,41 @@ CREATE TABLE coding_sandbox_admissions (
     )),
     reservation_id VARCHAR(64),
     reservation_expires_at TIMESTAMPTZ,
+    reserved_active_seconds BIGINT NOT NULL DEFAULT 0
+        CHECK (reserved_active_seconds >= 0),
+    reserved_archive_bytes BIGINT NOT NULL DEFAULT 0
+        CHECK (reserved_archive_bytes >= 0),
+    reserved_cost_micros BIGINT NOT NULL DEFAULT 0
+        CHECK (reserved_cost_micros >= 0),
+    reservation_state VARCHAR(16) NOT NULL DEFAULT 'unreserved'
+        CHECK (reservation_state IN (
+            'unreserved', 'reserved', 'settled', 'released'
+        )),
+    actual_active_seconds BIGINT NOT NULL DEFAULT 0
+        CHECK (actual_active_seconds >= 0),
+    actual_archive_bytes BIGINT NOT NULL DEFAULT 0
+        CHECK (actual_archive_bytes >= 0),
+    actual_cost_micros BIGINT NOT NULL DEFAULT 0
+        CHECK (actual_cost_micros >= 0),
+    reservation_settled_at TIMESTAMPTZ,
+    reservation_released_at TIMESTAMPTZ,
     reevaluate_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL,
+    UNIQUE (tenant_id, idempotency_key),
     CHECK (
         (decision = 'admitted' AND reservation_id IS NOT NULL
-            AND reservation_expires_at IS NOT NULL)
-        OR decision = 'denied'
+            AND reservation_expires_at IS NOT NULL
+            AND reservation_state IN ('reserved', 'settled', 'released'))
+        OR (decision = 'denied' AND reservation_id IS NULL
+            AND reservation_expires_at IS NULL
+            AND reservation_state = 'unreserved')
     )
 );
 
 CREATE TABLE coding_managed_sandboxes (
     allocation_id VARCHAR(64) PRIMARY KEY,
+    admission_id VARCHAR(64) NOT NULL UNIQUE
+        REFERENCES coding_sandbox_admissions(admission_id) ON DELETE RESTRICT,
     tenant_id VARCHAR(255) NOT NULL,
     task_id VARCHAR(64) NOT NULL
         REFERENCES coding_tasks(task_id) ON DELETE RESTRICT,
