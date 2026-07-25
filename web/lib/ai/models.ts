@@ -1,5 +1,5 @@
 // Curated list of top models from Vercel AI Gateway
-export const DEFAULT_CHAT_MODEL = "anthropic/claude-sonnet-4.5";
+export const DEFAULT_CHAT_MODEL = "anthropic/claude-sonnet-5";
 
 export type ChatModel = {
   id: string;
@@ -11,6 +11,18 @@ export type ChatModel = {
 export const chatModels: ChatModel[] = [
   // Anthropic
   {
+    id: "anthropic/claude-sonnet-5",
+    name: "Claude Sonnet 5",
+    provider: "anthropic",
+    description: "Best balance of speed, intelligence, and cost",
+  },
+  {
+    id: "anthropic/claude-opus-5",
+    name: "Claude Opus 5",
+    provider: "anthropic",
+    description: "Most capable Anthropic model",
+  },
+  {
     id: "anthropic/claude-haiku-4.5",
     name: "Claude Haiku 4.5",
     provider: "anthropic",
@@ -20,15 +32,21 @@ export const chatModels: ChatModel[] = [
     id: "anthropic/claude-sonnet-4.5",
     name: "Claude Sonnet 4.5",
     provider: "anthropic",
-    description: "Best balance of speed, intelligence, and cost",
-  },
-  {
-    id: "anthropic/claude-opus-4.5",
-    name: "Claude Opus 4.6",
-    provider: "anthropic",
-    description: "Most capable Anthropic model",
+    description: "Previous-generation balanced model",
   },
   // OpenAI
+  {
+    id: "openai/gpt-5.6-terra",
+    name: "GPT-5.6 Terra",
+    provider: "openai",
+    description: "Balanced OpenAI model for everyday tasks",
+  },
+  {
+    id: "openai/gpt-5.6-sol",
+    name: "GPT-5.6 Sol",
+    provider: "openai",
+    description: "Most capable OpenAI model",
+  },
   {
     id: "openai/gpt-4.1-mini",
     name: "GPT-4.1 Mini",
@@ -39,7 +57,7 @@ export const chatModels: ChatModel[] = [
     id: "openai/gpt-4.1",
     name: "GPT-4.1",
     provider: "openai",
-    description: "Most capable OpenAI model",
+    description: "Previous-generation OpenAI model",
   },
   // Google
   {
@@ -92,11 +110,14 @@ export const modelsByProvider = chatModels.reduce(
 export function mapToBackendModelName(vercelModelId: string): string {
   const modelMap: Record<string, string> = {
     // Anthropic
-    "anthropic/claude-haiku-4.5": "claude-haiku-4-5-20250929",
+    "anthropic/claude-sonnet-5": "claude-sonnet-5",
+    "anthropic/claude-opus-5": "claude-opus-5",
+    "anthropic/claude-haiku-4.5": "claude-haiku-4-5-20251001",
     "anthropic/claude-sonnet-4.5": "claude-sonnet-4-5-20250929",
-    "anthropic/claude-opus-4.5": "claude-opus-4-6",
     "anthropic/claude-3.7-sonnet-thinking": "claude-sonnet-4-5-20250929", // Use sonnet as fallback
     // OpenAI - remove provider prefix
+    "openai/gpt-5.6-terra": "gpt-5.6-terra",
+    "openai/gpt-5.6-sol": "gpt-5.6-sol",
     "openai/gpt-4.1-mini": "gpt-4o-mini",
     "openai/gpt-4.1": "gpt-4o",
     // Google - remove provider prefix
