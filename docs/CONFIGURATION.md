@@ -182,8 +182,22 @@ Feature override fields are nullable, and `null` is meaningful: `llm.model`,
 `deep_analysis.models.*` field default to `null`, which means "use the role
 default". Setting a string pins that workload to an explicit model.
 
-`recursive_agent.atomizer_model` is deliberately *not* role-routed; it keeps its
-own Haiku value so sub-root atomization stays cheap.
+#### What is deliberately *not* role-routed
+
+The policy has exactly two roles, `everyday` and `powerful`. There is no `fast`
+role, so cheap workloads keep their own explicit settings:
+
+- `recursive_agent.atomizer_model` keeps its Haiku value so sub-root
+  atomization stays cheap.
+- Query classification, expansion, and similar helpers keep their own
+  `*_LLM_MODEL` settings.
+- `get_recommended_models()` still reports a `fast` tier, but that is a manual
+  reference list for operators, not a routing role.
+
+Adding a `fast` role means extending `WorkloadRole` and
+`ProviderModelRolesConfig` together, and needs a Haiku-tier policy designed
+first. `tests/config/test_model_routing.py::test_policy_stays_at_two_roles`
+pins the current decision.
 
 #### Provider fallback in `LLMFactory`
 
