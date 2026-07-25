@@ -172,6 +172,8 @@ async def lifespan(app: FastAPI):
         if coding_runtime.supervisor is not None:
             await coding_runtime.supervisor.start()
             logger.info("✅ Coding development supervisor started")
+        coding_runtime.workspace_streams.start()
+        logger.info("✅ Coding workspace PTY reaper started")
 
         # StreamManager 시작 (Phase 3 - SSE 재연결 지원)
         logger.info("📡 Starting SSE Stream Manager...")
@@ -313,9 +315,8 @@ async def lifespan(app: FastAPI):
     logger.info("🔄 Shutting down Multi-Agent AI System...")
 
     try:
-        if coding_runtime.supervisor is not None:
-            await coding_runtime.supervisor.stop()
-            logger.info("✅ Coding development supervisor stopped")
+        await coding_runtime.close()
+        logger.info("✅ Coding runtime stopped")
 
         # Cancel background tasks
         for task in background_tasks:

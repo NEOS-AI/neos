@@ -92,6 +92,7 @@ class CodingRuntime:
         self._closed = True
         if self.supervisor is not None:
             await self.supervisor.stop()
+        await self.workspace_streams.close()
         await self.sandboxes.close()
 
 
@@ -186,6 +187,7 @@ def create_coding_runtime(
             tasks=tasks,
             bindings=binding_service,
             pty_max_sessions=workspace_config.pty_max_sessions,
+            pty_idle_ttl_seconds=workspace_config.pty_idle_ttl_seconds,
         ),
         sandboxes=sandbox_provider,
     )

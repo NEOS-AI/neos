@@ -15,7 +15,6 @@ os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 
 from neos.api.dependencies.auth import (
     get_current_active_user,
-    get_current_admin_user,
 )
 from neos.api.handlers import query_handlers, workflow_stream_handlers
 from neos.api.models.query_models import QueryRequest, WorkflowStreamRequest

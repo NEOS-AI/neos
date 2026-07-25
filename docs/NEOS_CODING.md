@@ -1270,3 +1270,72 @@ part 상태는 `streaming`, `completed`, `interrupted`로 제한한다. replacem
 owner-scoped repeatable-read snapshot은 `first_seq, part_id` 순으로 `part_id`, `run_id`, `turn_id`, 상태, 본문, sequence 범위만 반환한다. 브라우저는 snapshot과 replay/live tail을 동일 projection에 합치며 frame당 한 번만 publish한다. 출력 ledger는 markdown이나 raw HTML을 실행하지 않고 plain `<pre>` child로 렌더링하며 streaming part에만 polite live-region을 사용한다.
 
 초기 retention은 coding task retention과 동일하게 task cascade 삭제를 따른다. 별도 archive 또는 장기 object storage가 도입되기 전에는 part만 독립 삭제하지 않는다. 배포 순서는 migration 043 → API/worker → browser다. rollback 시 model worker 기능을 끄되 migration, part, event를 보존한다. 구버전 browser는 새 event를 일반 sequence로 소비할 수 있지만 본문을 표시하지 않으므로, 안전한 복구가 필요하면 browser를 먼저 이전 버전으로 되돌리고 worker 생성을 중단한다.
+
+---
+
+## 23. Workspace gateway 운영 계약
+
+### 23.1 Migration 044와 사용자 편집 상태 머신
+
+`044_add_coding_workspace_edits.sql`은 브라우저에서 명시적으로 저장한 편집의 identity와 revision만 보존한다. 상태는 `prepared → committed → applied`이며 sandbox write 결과가 불확실하면 `reconcile_required`로 전이한다. 행에는 파일 본문을 저장하지 않고 content digest와 byte 수는 reconciliation에만 사용한다.
+
+저장은 `(task_id, edit_id)` 기준으로 멱등적이다. `prepared` intent를 먼저 commit한 뒤 sandbox의 `write_file_if_revision`을 실행한다. base revision이 stale이면 파일을 변경하지 않고 `workspace_revision_conflict`를 반환한다. write 성공 여부가 불확실하면 같은 파일을 재실행하지 않는다. reconciliation은 현재 revision과 digest가 모두 정확히 일치할 때만 `committed`로 복구하며, 불일치는 운영자 확인 전까지 `reconcile_required`에 남긴다.
+
+### 23.2 Safe-point exactly-once 반영
+
+`committed` 편집은 canonical run의 다음 fenced safe point transaction에서 checkpoint와 함께 claim된다. transaction은 checkpoint loop state에 bounded edit context를 기록하고 행을 `applied`로 바꾸며 `workspace.user_edit.synced` event를 함께 commit한다. model context에는 `edit_id`, path, resulting revision만 한 번 주입하고 agent에게 파일을 다시 읽도록 지시한다.
+
+worker 교체나 safe-point 재전달이 발생해도 이미 `applied`인 행은 다시 claim하지 않는다. 이전 run에서 commit된 편집도 task의 현재 canonical run이 claim하므로 steering replacement에 stranded되지 않는다. pending 행을 시간 경과만으로 applied 처리하거나 운영 스크립트로 자동 완료해서는 안 된다.
+
+### 23.3 REST와 독립 WebSocket cursor
+
+owner-scoped REST 계약은 다음과 같다.
+
+```text
+GET  /api/v1/coding/tasks/{task_id}/workspace/tree
+GET  /api/v1/coding/tasks/{task_id}/workspace/files?path=
+GET  /api/v1/coding/tasks/{task_id}/workspace/diff
+PUT  /api/v1/coding/tasks/{task_id}/workspace/files
+POST /api/v1/coding/tasks/{task_id}/workspace/ws-ticket?kind=watcher|pty
+```
+
+소유하지 않은 task는 binding이나 sandbox를 열기 전에 404로 숨긴다. tree/file/diff/body와 edit batch는 `sandbox.workspace` 한도로 제한한다. WebSocket ticket은 짧은 TTL의 일회용 token이며 owner, task, `watcher|pty` kind에 바인딩된다. 잘못된 kind나 task의 consume 시도는 유효한 ticket을 소모하지 않는다.
+
+```text
+/api/v1/coding/workspace/ws  · neos.coding.workspace.v1 · after_cursor
+/api/v1/coding/pty/ws        · neos.coding.pty.v1       · after_cursor
+/api/v1/coding/ws            · neos.coding.v1           · after_seq
+```
+
+coding event sequence, watcher cursor, PTY cursor는 서로 저장·replay·resync 실패 도메인을 공유하지 않는다. watcher gap은 workspace cache만 다시 읽고, PTY gap은 terminal만 재연결하며, agent event gap만 durable coding snapshot을 복원한다.
+
+### 23.4 PTY 수명과 제한
+
+PTY는 `(task_id, pty_id)`로 추적하고 disconnect만으로 process를 종료하지 않는다. 새 ticket과 마지막 cursor로 재연결할 수 있다. explicit kill, sandbox suspend/destroy, process exit, task terminal state 또는 `pty_idle_ttl_seconds` 초과 시 종료한다. task별 session 수는 `pty_max_sessions`로 제한하고 input/output/replay/rows/cols를 bounded validation한다.
+
+운영 기본값은 `sandbox.workspace.ticket_ttl_seconds`, `pty_idle_ttl_seconds`, `pty_max_sessions`에서 관리한다. session limit 도달률과 idle reap 오류를 경보로 연결한다. `reconcile_required`가 한 reconciliation 주기 이상 남거나 증가하면 paging 가능한 운영 경보로 승격한다.
+
+### 23.5 Privacy와 audit 경계
+
+일반 log, metric label, public coding event와 workspace edit snapshot에는 파일 본문, content digest, terminal input/output, command 값, path 이외의 actor identity를 넣지 않는다. 공개 edit event는 edit identity, path, revision, status와 checkpoint identity만 제공한다. BFF는 PUT body를 전달하되 기록하지 않으며 browser는 raw HTML을 렌더링하지 않는다.
+
+audit는 owner authorization 결과, bounded operation, provider, stable outcome/error code만 남긴다. metric label에는 task/run/edit/PTY ID나 path를 사용하지 않는다.
+
+### 23.6 Rollout과 rollback
+
+rollout 순서는 migration 044 → backend repository/service → safe-point worker → REST/WS gateway → browser workspace dock이다. browser의 Edit control과 PTY create는 backend capability가 활성화된 tenant에만 노출한다. watcher와 read-only Files/Diff를 먼저 활성화하고 Edit, PTY create 순으로 범위를 확장한다.
+
+rollback은 새 **Edit와 PTY create를 먼저 비활성화**하고 기존 watcher/read-only 조회와 이미 열린 PTY cleanup 경로는 유지한다. 이어 worker의 workspace edit claim을 중단할 수 있지만 migration, edit 행, checkpoint와 event는 보존한다. pending/reconcile-required 행을 삭제하거나 자동 applied 처리하지 않는다. 재활성화 후 canonical fenced safe point 또는 정확한 reconciliation 증명만 상태를 전진시킨다.
+
+### 23.7 검증
+
+기본 CI는 memory vertical slice에서 사용자 저장이 workspace revision을 증가시키고 다음 safe point에 한 번만 주입되며 공개 event에 본문/digest가 없는지 확인한다. 실제 Docker gateway slice는 다음처럼 opt-in한다.
+
+```bash
+CODING_TEST_DOCKER=1 \
+CODING_TEST_DOCKER_IMAGE='registry/neos-sandbox@sha256:<digest>' \
+.venv/bin/pytest -q \
+  tests/coding/integration/test_docker_workspace_gateway.py -rs
+```
+
+Docker provider는 digest-pinned image, non-root user, read-only root, capability drop, resource/PID 한도와 `network=none` 정책을 유지한다.

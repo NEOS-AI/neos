@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -6,12 +7,20 @@ from neos.coding.application.workspace_stream_service import (
     CodingWorkspaceStreamService,
     WorkspaceStreamConflict,
 )
+from neos.coding.domain.models import CodingTaskStatus
 
 
 class Tasks:
+    status = CodingTaskStatus.RUNNING
+
+    async def get(self, task_id):
+        if task_id == "ct_1":
+            return SimpleNamespace(task_id=task_id, status=self.status)
+        return None
+
     async def get_owned(self, task_id, owner_id):
         if (task_id, owner_id) == ("ct_1", "u1"):
-            return SimpleNamespace(task_id=task_id)
+            return SimpleNamespace(task_id=task_id, status=self.status)
         return None
 
 
@@ -91,3 +100,68 @@ async def test_pty_session_limit_is_task_scoped() -> None:
         await service.create_pty(
             task_id="ct_1", owner_id="u1", argv=("/bin/sh",)
         )
+
+
+async def test_reap_idle_kills_expired_pty() -> None:
+    now = datetime(2026, 7, 25, tzinfo=UTC)
+    session = Session()
+    service = CodingWorkspaceStreamService(
+        tasks=Tasks(),
+        bindings=Bindings(session),
+        pty_max_sessions=2,
+        pty_idle_ttl_seconds=10,
+        clock=lambda: now,
+    )
+    created = await service.create_pty(
+        task_id="ct_1", owner_id="u1", argv=("/bin/sh",)
+    )
+
+    reaped = await service.reap(now=now + timedelta(seconds=11))
+
+    assert reaped == 1
+    assert session.killed == [created.pty_id]
+    with pytest.raises(WorkspaceStreamConflict, match="pty_not_found"):
+        await service.connect_pty(
+            task_id="ct_1", owner_id="u1", pty_id=created.pty_id
+        )
+
+
+async def test_reap_kills_all_ptys_for_terminal_task() -> None:
+    tasks = Tasks()
+    session = Session()
+    service = CodingWorkspaceStreamService(
+        tasks=tasks,
+        bindings=Bindings(session),
+        pty_max_sessions=2,
+        pty_idle_ttl_seconds=60,
+    )
+    first = await service.create_pty(
+        task_id="ct_1", owner_id="u1", argv=("/bin/sh",)
+    )
+    second = await service.create_pty(
+        task_id="ct_1", owner_id="u1", argv=("/bin/sh",)
+    )
+    tasks.status = CodingTaskStatus.COMPLETED
+
+    reaped = await service.reap()
+
+    assert reaped == 2
+    assert session.killed == [first.pty_id, second.pty_id]
+
+
+async def test_close_kills_remaining_ptys_and_is_idempotent() -> None:
+    session = Session()
+    service = CodingWorkspaceStreamService(
+        tasks=Tasks(),
+        bindings=Bindings(session),
+        pty_max_sessions=2,
+        pty_idle_ttl_seconds=60,
+    )
+    created = await service.create_pty(
+        task_id="ct_1", owner_id="u1", argv=("/bin/sh",)
+    )
+
+    await service.close()
+    await service.close()
+
+    assert session.killed == [created.pty_id]
