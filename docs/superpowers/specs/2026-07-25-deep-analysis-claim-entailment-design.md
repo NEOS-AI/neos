@@ -92,6 +92,10 @@ improvement layer, not the final truthfulness boundary. The existing graders
 still reject unsupported or over-broad original claims. No partially valid
 entailment response is applied.
 
+`TokenBudgetExhausted` is not an entailment provider failure and is never
+swallowed by fail-open handling. It follows the existing worker path that
+returns a bounded partial result, preserving the global hard token cap.
+
 ## Token Accounting and Record/Replay
 
 The entailment call uses the same worker model selected for the current effort
