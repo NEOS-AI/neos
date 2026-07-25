@@ -776,6 +776,27 @@ class SandboxMemoryConfig(StrictConfigModel):
     root: str = ".neos/sandboxes"
 
 
+class ManagedSandboxConfig(StrictConfigModel):
+    enabled: bool = False
+    shadow_admission: bool = True
+    global_kill_switch: bool = False
+    provider: str = "fake"
+    region: str = "local"
+    admission_reevaluation_seconds: int = Field(default=30, gt=0, le=300)
+    reservation_lease_seconds: int = Field(default=60, gt=0, le=600)
+    allocation_lease_seconds: int = Field(default=60, gt=0, le=600)
+    cleanup_batch_size: int = Field(default=100, gt=0, le=1000)
+    cleanup_slo_seconds: int = Field(default=300, gt=0)
+    health_window_size: int = Field(default=20, ge=4, le=100)
+    degraded_failure_ratio: float = Field(default=0.25, ge=0, le=1)
+    unavailable_failure_ratio: float = Field(default=0.5, ge=0, le=1)
+    concurrent_quota: int = Field(default=3, gt=0, le=100)
+    daily_allocation_quota: int = Field(default=50, gt=0)
+    daily_active_seconds_quota: int = Field(default=43_200, gt=0)
+    archive_bytes_quota: int = Field(default=5 * 1024**3, gt=0)
+    daily_cost_micros_quota: int = Field(default=10_000_000, gt=0)
+
+
 class SandboxConfig(StrictConfigModel):
     enabled: bool = False
     provider: Literal["memory", "docker"] = "memory"
@@ -794,6 +815,7 @@ class SandboxConfig(StrictConfigModel):
     )
     memory: SandboxMemoryConfig = Field(default_factory=SandboxMemoryConfig)
     docker: SandboxDockerConfig = Field(default_factory=SandboxDockerConfig)
+    managed: ManagedSandboxConfig = Field(default_factory=ManagedSandboxConfig)
 
 
 class CodingModelConfig(StrictConfigModel):
