@@ -34,13 +34,13 @@ def test_apply_entailment_results_keeps_narrows_and_discards_atomically():
         claims,
         {
             "results": [
-                {"index": 0, "action": "keep"},
+                {"index": 0, "verdict": "keep"},
                 {
                     "index": 1,
-                    "action": "narrow",
-                    "new_text": "supported qualifier",
+                    "verdict": "narrow",
+                    "narrowed_claim": "supported qualifier",
                 },
-                {"index": 2, "action": "discard"},
+                {"index": 2, "verdict": "discard"},
             ]
         },
     )
@@ -60,47 +60,96 @@ def test_apply_entailment_results_keeps_narrows_and_discards_atomically():
     [
         {},
         {"results": "not-a-list"},
-        {"results": [{"index": 0, "action": "keep"}]},
+        {"results": [{"index": 0, "verdict": "keep"}]},
         {
             "results": [
-                {"index": 0, "action": "keep"},
-                {"index": 0, "action": "keep"},
-                {"index": 2, "action": "discard"},
+                {"index": 0, "verdict": "keep"},
+                {"index": 0, "verdict": "keep"},
+                {"index": 2, "verdict": "discard"},
+            ]
+        },
+        {
+            "results": [
+                {"index": 0, "verdict": "keep"},
+                {"index": 1, "verdict": "keep"},
+                {"index": 9, "verdict": "discard"},
+            ]
+        },
+        {
+            "results": [
+                {"index": 0, "verdict": "rewrite"},
+                {"index": 1, "verdict": "keep"},
+                {"index": 2, "verdict": "discard"},
+            ]
+        },
+        {
+            "results": [
+                {"index": 0, "verdict": ["keep"]},
+                {"index": 1, "verdict": "keep"},
+                {"index": 2, "verdict": "discard"},
+            ]
+        },
+        {
+            "results": [
+                {"index": 0, "verdict": "keep"},
+                {
+                    "index": 1,
+                    "verdict": "narrow",
+                    "narrowed_claim": "  ",
+                },
+                {"index": 2, "verdict": "discard"},
+            ]
+        },
+        {
+            "results": [
+                {"index": 0, "verdict": "keep"},
+                {
+                    "index": 1,
+                    "verdict": "narrow",
+                    "narrowed_claim": 123,
+                },
+                {"index": 2, "verdict": "discard"},
             ]
         },
         {
             "results": [
                 {"index": 0, "action": "keep"},
-                {"index": 1, "action": "keep"},
-                {"index": 9, "action": "discard"},
-            ]
-        },
-        {
-            "results": [
-                {"index": 0, "action": "rewrite"},
-                {"index": 1, "action": "keep"},
+                {
+                    "index": 1,
+                    "action": "narrow",
+                    "new_text": "supported qualifier",
+                },
                 {"index": 2, "action": "discard"},
             ]
         },
         {
             "results": [
-                {"index": 0, "action": ["keep"]},
-                {"index": 1, "action": "keep"},
-                {"index": 2, "action": "discard"},
+                {
+                    "index": 0,
+                    "verdict": "keep",
+                    "narrowed_claim": "unexpected",
+                },
+                {
+                    "index": 1,
+                    "verdict": "narrow",
+                    "narrowed_claim": "supported qualifier",
+                },
+                {"index": 2, "verdict": "discard"},
             ]
         },
         {
             "results": [
-                {"index": 0, "action": "keep"},
-                {"index": 1, "action": "narrow", "new_text": "  "},
-                {"index": 2, "action": "discard"},
-            ]
-        },
-        {
-            "results": [
-                {"index": 0, "action": "keep"},
-                {"index": 1, "action": "narrow", "new_text": 123},
-                {"index": 2, "action": "discard"},
+                {"index": 0, "verdict": "keep"},
+                {
+                    "index": 1,
+                    "verdict": "narrow",
+                    "narrowed_claim": "supported qualifier",
+                },
+                {
+                    "index": 2,
+                    "verdict": "discard",
+                    "narrowed_claim": "unexpected",
+                },
             ]
         },
     ],
@@ -114,3 +163,8 @@ def test_apply_entailment_results_rejects_invalid_batch(payload):
         "too broad qualifier",
         "discard me",
     ]
+
+
+@pytest.mark.parametrize("payload", [[], "not-an-object", None])
+def test_apply_entailment_results_rejects_non_object_payload(payload):
+    assert apply_entailment_results(_claims(), payload) is None
