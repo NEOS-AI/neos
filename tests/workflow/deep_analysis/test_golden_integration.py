@@ -198,6 +198,7 @@ class ScriptedAnthropic:
             '"https://example.com/source","excerpt":"MoE routing lowers '
             'inference cost","raw_ref":"ignored"}]}],"self_assessment":0.8,'
             '"proposed_subquestions":[],"dead_ends":[]}',
+            '{"results":[{"index":0,"action":"keep"}]}',
             # M4 hierarchical reduce: reduce_node(child) then reduce_node(root)
             # each return a NodeSummary JSON object (json_call).
             '{"question_id":"child","answer":"MoE routing lowers inference '
