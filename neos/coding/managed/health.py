@@ -182,7 +182,7 @@ class ProviderHealthCircuit:
             )
         window = self._windows[key]
         if current is ProviderCircuitState.HEALTHY:
-            if len(window) < self._window_size:
+            if len(window) < self._window_size or not any(window):
                 return current
             ratio = sum(window) / len(window)
             if ratio >= self._unavailable_ratio:

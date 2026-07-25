@@ -8,6 +8,54 @@ from neos.observability.metrics import EnterpriseMetricsCollector
 from tests.coding.test_durable_phase_vertical_slice import DurableCodingHarness
 
 
+_MANAGED_SANDBOX_METRIC_LABELS = {
+    "coding_sandbox_admission_total": ("decision", "reason"),
+    "coding_sandbox_allocation_total": (
+        "provider",
+        "region",
+        "outcome",
+        "error_code",
+    ),
+    "coding_sandbox_allocation_duration_seconds": (
+        "provider",
+        "region",
+        "outcome",
+    ),
+    "coding_sandbox_provider_circuit": ("provider", "region", "state"),
+    "coding_sandbox_cleanup_age_seconds": ("provider", "region"),
+    "coding_sandbox_cleanup_total": (
+        "provider",
+        "region",
+        "outcome",
+        "error_code",
+    ),
+    "coding_sandbox_archive_total": (
+        "provider",
+        "operation",
+        "outcome",
+        "error_code",
+    ),
+}
+
+
+def _managed_metric_source_labels(source: str) -> dict[str, tuple[str, ...]]:
+    parsed = ast.parse(dedent(source))
+    labels: dict[str, tuple[str, ...]] = {}
+    for node in ast.walk(parsed):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Attribute):
+                continue
+            if target.attr not in _MANAGED_SANDBOX_METRIC_LABELS:
+                continue
+            label_list = node.value.args[2]
+            assert isinstance(label_list, ast.List)
+            assert all(isinstance(item, ast.Constant) for item in label_list.elts)
+            labels[target.attr] = tuple(item.value for item in label_list.elts)
+    return labels
+
+
 class RecordingMetric:
     def __init__(self, sink, name) -> None:
         self._sink = sink
@@ -84,22 +132,12 @@ def test_managed_sandbox_metric_labels_are_fixed_cardinality() -> None:
         collector.coding_sandbox_archive_total,
     )
 
-    parsed = ast.parse(dedent(getsource(EnterpriseMetricsCollector)))
-    managed_names = {metric._name for metric in managed_metrics}
-    source_labels = {
-        target.attr: {item.value for item in value.args[2].elts}
-        for node in ast.walk(parsed)
-        if isinstance(node, ast.Assign)
-        for target in node.targets
-        if isinstance(target, ast.Attribute)
-        and target.attr in managed_names
-        if isinstance(value := node.value, ast.Call)
-        and isinstance(value.args[2], ast.List)
-        and all(isinstance(item, ast.Constant) for item in value.args[2].elts)
-    }
+    source_labels = _managed_metric_source_labels(
+        getsource(EnterpriseMetricsCollector)
+    )
 
     assert all(set(metric._labelnames).issubset(allowed) for metric in managed_metrics)
-    assert source_labels and all(labels.issubset(allowed) for labels in source_labels.values())
+    assert source_labels == _MANAGED_SANDBOX_METRIC_LABELS
     assert collector.coding_sandbox_admission_total._labelnames == (
         "decision",
         "reason",
@@ -136,6 +174,16 @@ def test_managed_sandbox_metric_labels_are_fixed_cardinality() -> None:
         "outcome",
         "error_code",
     )
+
+
+def test_managed_metric_source_guard_rejects_a_missing_declaration() -> None:
+    source = getsource(EnterpriseMetricsCollector).replace(
+        "self.coding_sandbox_archive_total = Counter(",
+        "self.unmanaged_archive_total = Counter(",
+        1,
+    )
+
+    assert _managed_metric_source_labels(source) != _MANAGED_SANDBOX_METRIC_LABELS
 
 
 def test_supervisor_metrics_use_only_bounded_labels() -> None:

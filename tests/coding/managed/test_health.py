@@ -102,6 +102,42 @@ def test_degraded_returns_to_healthy_only_after_a_full_healthy_window() -> None:
     assert healthy.failure_count == 0
 
 
+@pytest.mark.parametrize(
+    ("degraded_ratio", "unavailable_ratio"),
+    [(0, 0), (0, 0.5)],
+)
+def test_zero_thresholds_do_not_transition_a_fully_successful_window(
+    degraded_ratio: float,
+    unavailable_ratio: float,
+) -> None:
+    circuit = ProviderHealthCircuit(
+        window_size=4,
+        degraded_ratio=degraded_ratio,
+        unavailable_ratio=unavailable_ratio,
+    )
+
+    for _ in range(4):
+        result = circuit.observe(success())
+
+    assert result.state is ProviderCircuitState.HEALTHY
+    assert result.failure_count == 0
+
+
+def test_zero_degraded_threshold_still_transitions_a_failure_bearing_window() -> None:
+    circuit = ProviderHealthCircuit(
+        window_size=4,
+        degraded_ratio=0,
+        unavailable_ratio=0.5,
+    )
+
+    for _ in range(4):
+        circuit.observe(success())
+    result = circuit.observe(failure(ProviderErrorCode.PROVIDER_TIMEOUT))
+
+    assert result.state is ProviderCircuitState.DEGRADED
+    assert result.failure_count == 1
+
+
 class AdapterTimeout(Exception):
     pass
 
