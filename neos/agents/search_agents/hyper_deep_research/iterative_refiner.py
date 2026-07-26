@@ -1760,7 +1760,7 @@ class IterativeReportRefiner:
         # ★ NEW: Generate and display metrics report
         metrics_report = None
         if self.metrics_collector:
-            self.metrics_collector.end_collection()
+            self.metrics_collector.finalize_collection()
             metrics_report = self.metrics_collector.generate_report()
 
             # Display dashboard to console
