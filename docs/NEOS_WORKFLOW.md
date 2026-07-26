@@ -248,14 +248,33 @@ HyperDeep/Recursive는 Manual 자율성에서는 차단된다. `AutonomyPolicy.a
 
 파일 시스템 auto-discovery로 추가될 수 있는 skill:
 
-- `semantic_scholar`
+- `semantic-scholar`
 - `openalex`
-- `google_scholar`
-- `news_api`
+- `google-scholar`
+- `news-api`
 - `reddit`
-- `sec_edgar`
+- `sec-edgar`
 - `canvas`
 - `cron`
+
+### 스킬 이름 규칙 — kebab-case
+
+스킬 이름은 **유니코드 문자·숫자와 하이픈만** 쓴다 (`neos/skills/base/validator.py`).
+언더스코어는 허용하지 않는다. 세 곳이 **모두 같은 이름**이어야 한다:
+
+| 위치 | 예 |
+|---|---|
+| 디렉터리 | `neos/skills/builtin/news-api/` |
+| `SKILL.md`의 `name:` | `name: news-api` |
+| `skill.py`의 `super().__init__(name=...)` | `name="news-api"` |
+
+디렉터리 이름과 `SKILL.md`의 `name`이 다르면 검증에 실패한다. 실패한 스킬은
+auto-discovery에서 **조용히 건너뛰어져** 영영 등록되지 않으므로, 새 스킬을 추가할 때
+반드시 `pytest tests/test_skills_auto_discovery.py::TestSkillNamingRule`로 확인한다.
+
+> ℹ️ API 키·설정 키 이름(`NEWS_API_KEY`, `sec_edgar_user_agent`)은 별개 네임스페이스이며
+> 언더스코어를 그대로 쓴다. `SourceType`(`neos/agents/search_agents/source_fallback_chain.py`)의
+> 검색 소스 식별자도 스킬 이름이 아니다.
 
 관련 코드:
 
@@ -315,13 +334,13 @@ HyperDeep/Recursive는 Manual 자율성에서는 차단된다. `AutonomyPolicy.a
 | `arxiv` | `search`, `get_by_id` | LangChain `ArxivAPIWrapper`로 논문 검색과 metadata 추출. | `langchain-community`, `arxiv` 필요. |
 | `pubmed` | `search`, `get_by_pmid` | LangChain `PubMedAPIWrapper`로 의학 문헌 검색. PMID URL 생성. | `langchain-community` 필요. |
 | `wikipedia` | `search`, `get_page` | LangChain `WikipediaAPIWrapper`로 문서 검색/페이지 로딩. 언어 옵션을 받는다. | `wikipedia` 패키지 필요. |
-| `semantic_scholar` | `search`, `get_citations`, `get_references`, `get_paper` | Semantic Scholar Graph API로 논문, citation/reference graph, open access PDF metadata를 조회한다. | API key는 선택. httpx 필요. |
+| `semantic-scholar` | `search`, `get_citations`, `get_references`, `get_paper` | Semantic Scholar Graph API로 논문, citation/reference graph, open access PDF metadata를 조회한다. | API key는 선택. httpx 필요. |
 | `openalex` | `search_works`, `search_authors`, `search_institutions`, `get_work` | OpenAlex 무료 API로 학술 메타데이터, 저자, 기관, DOI/OpenAlex ID 상세 조회. inverted index abstract 복원. | API key 불필요. polite pool email 설정 가능. |
-| `google_scholar` | `search`, `cite` | SerpAPI를 통해 Google Scholar 결과와 citation format 조회. | `SERPAPI_API_KEY` 필요. |
-| `news_api` | `search`, `top_headlines` | NewsAPI.org의 실시간 뉴스 검색/헤드라인 조회. | `NEWS_API_KEY` 필요. |
+| `google-scholar` | `search`, `cite` | SerpAPI를 통해 Google Scholar 결과와 citation format 조회. | `SERPAPI_API_KEY` 필요. |
+| `news-api` | `search`, `top_headlines` | NewsAPI.org의 실시간 뉴스 검색/헤드라인 조회. | `NEWS_API_KEY` 필요. |
 | `reddit` | `search`, `subreddit_search` | OAuth2 또는 old.reddit JSON fallback으로 Reddit 게시물/서브레딧 검색. | `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` 있으면 인증 rate limit 개선. |
-| `sec_edgar` | `full_text_search`, `company_filings` | SEC EDGAR EFTS/company submissions API로 10-K, 10-Q, 8-K 등 공시 검색. | API key 불필요. User-Agent 설정 권장. |
-| `github_search` | `search_repos`, `search_code`, `search_issues` | GitHub REST API v3로 레포지토리, 코드, 이슈 검색. | token 없이도 동작하나 rate limit이 낮다. |
+| `sec-edgar` | `full_text_search`, `company_filings` | SEC EDGAR EFTS/company submissions API로 10-K, 10-Q, 8-K 등 공시 검색. | API key 불필요. User-Agent 설정 권장. |
+| `github-search` | `search_repos`, `search_code`, `search_issues` | GitHub REST API v3로 레포지토리, 코드, 이슈 검색. | token 없이도 동작하나 rate limit이 낮다. |
 | `canvas` | schema 기반 render | 연구 결과를 동적 canvas payload로 렌더링하는 OpenClaw/A2UI 계열 스킬. | frontend renderer와 payload schema 정합성이 중요하다. |
 | `cron` | schedule creation | 자연어/직접 cron 표현식을 파싱, 검증하고 DB에 예약 작업을 저장한다. 규칙 기반 파서 후 LLM fallback을 사용한다. | `croniter` 검증. channel type은 `api`, `telegram`, `discord`, `slack` 계열. |
 

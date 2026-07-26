@@ -113,8 +113,8 @@ def test_normalize_falls_back_to_pdf_when_it_is_the_only_url():
 
 
 def test_normalize_still_prefers_plain_url_key():
-    # url을 쓰는 스킬(semantic_scholar·sec_edgar·wikipedia·news_api·google_scholar)
-    # 무회귀. news_api의 image_url을 집어서는 안 된다.
+    # url을 쓰는 스킬(semantic-scholar·sec-edgar·wikipedia·news-api·google-scholar)
+    # 무회귀. news-api의 image_url을 집어서는 안 된다.
     items = normalize_discovery_items(
         [
             {

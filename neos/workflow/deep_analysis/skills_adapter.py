@@ -16,12 +16,12 @@ logger = logging.getLogger(__name__)
 # (fetch.py:64) PDF URL은 쓰레기 텍스트가 되어 E_QUOTE_MISMATCH로 기각된다.
 # 따라서 HTML 랜딩/초록 페이지를 항상 PDF보다 먼저 고른다.
 _URL_KEYS = (
-    "url",  # semantic_scholar, sec_edgar, wikipedia, news_api, google_scholar
+    "url",  # semantic-scholar, sec-edgar, wikipedia, news-api, google-scholar
     "entry_url",  # arxiv 초록 페이지 (HTML)
     "pubmed_url",  # pubmed 초록 페이지 (HTML)
     "landing_page_url",  # openalex 랜딩 페이지 (HTML)
     "homepage_url",  # openalex 대체
-    "link",  # google_scholar 대체
+    "link",  # google-scholar 대체
     "html_url",
     "href",
     # 최후 수단. PDF만 있는 항목은 현재 검증을 통과하지 못하지만, 버리면

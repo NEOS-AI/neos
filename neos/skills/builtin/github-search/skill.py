@@ -20,7 +20,7 @@ class GitHubSearchSkill(BaseSkill):
 
     def __init__(self, **kwargs):
         super().__init__(
-            name="github_search",
+            name="github-search",
             skill_type=SkillType.RESEARCH,
             description="GitHub 코드/레포지토리/이슈 검색 - 오픈소스 프로젝트, 코드 예제, 기술 토론",
             capabilities=[

@@ -669,10 +669,10 @@ class DeepAnalysisConfig(StrictConfigModel):
             "arxiv",
             "pubmed",
             "openalex",
-            "semantic_scholar",
-            "google_scholar",
-            "sec_edgar",
-            "news_api",
+            "semantic-scholar",
+            "google-scholar",
+            "sec-edgar",
+            "news-api",
             "wikipedia",
         ]
     )

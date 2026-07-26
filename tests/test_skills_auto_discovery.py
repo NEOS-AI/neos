@@ -214,5 +214,48 @@ class TestIntegration:
         assert len(discovered) == valid_count
 
 
+class TestSkillNamingRule:
+    """스킬 이름은 kebab-case로 통일한다.
+
+    validator.validate_skill_name이 유니코드 문자 + 하이픈만 허용하고,
+    디렉터리 이름이 스킬 이름과 일치할 것을 요구한다. 언더스코어를 쓰면
+    auto_discovery에서 조용히 건너뛰어져 스킬이 영영 등록되지 않는다.
+    """
+
+    def test_builtin_skill_directories_use_kebab_case(self):
+        builtin_dir = Path("neos/skills/builtin")
+        if not builtin_dir.exists():
+            pytest.skip("Builtin skills directory not found")
+
+        offenders = [
+            d.name
+            for d in builtin_dir.iterdir()
+            if d.is_dir() and not d.name.startswith("__") and "_" in d.name
+        ]
+
+        assert offenders == [], (
+            f"kebab-case를 쓰지 않는 스킬 디렉터리: {offenders}. "
+            "언더스코어는 validate_skill_name을 통과하지 못한다."
+        )
+
+    def test_every_builtin_skill_md_validates(self):
+        from neos.skills.base.metadata_parser import parse_skill_metadata
+
+        builtin_dir = Path("neos/skills/builtin")
+        if not builtin_dir.exists():
+            pytest.skip("Builtin skills directory not found")
+
+        failures = {}
+        for skill_dir in sorted(builtin_dir.iterdir()):
+            if not skill_dir.is_dir() or not (skill_dir / "SKILL.md").exists():
+                continue
+            try:
+                parse_skill_metadata(skill_dir)
+            except Exception as exc:  # noqa: BLE001 - 어떤 실패든 보고한다
+                failures[skill_dir.name] = str(exc)
+
+        assert failures == {}, f"검증에 실패하는 빌트인 스킬: {failures}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
