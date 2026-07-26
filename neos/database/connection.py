@@ -113,8 +113,13 @@ class DatabaseManager:
         if self.engine:
             logger.info("데이터베이스 연결 종료 중...")
             try:
-                # asyncpg 연결 풀을 안전하게 종료
-                # close=False로 설정하여 graceful shutdown
+                # close=False: 풀만 버리고 DBAPI 커넥션은 닫지 않는다.
+                #
+                # 커넥션을 만든 이벤트 루프가 이미 닫힌 뒤에 close를 시도하면
+                # asyncpg가 "attached to a different loop"로 실패한다. 테스트
+                # 스위트는 테스트마다 새 루프를 만들고 이 매니저를 재초기화하므로
+                # close=True로 바꾸면 실패가 급증한다(측정: 8 → 17건).
+                # 커넥션은 GC와 서버측 타임아웃에 맡긴다.
                 await self.engine.dispose(close=False)
                 logger.info("데이터베이스 연결 종료 완료")
             except Exception as e:
