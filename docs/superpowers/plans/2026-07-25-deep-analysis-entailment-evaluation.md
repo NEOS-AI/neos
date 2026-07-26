@@ -19,6 +19,34 @@
 - Compare against the complete prompt-v3 artifact `artifacts/deep-analysis-funnel/20260723T124006Z` when locally available and the durable baseline recorded in `docs/TODO_260729.md`: dev verified `19/38`, rejected `19/38`, overclaim `16`, quote mismatch `1`.
 - A single 5+1 observation is non-causal. Report provider, search-result, time, and query-selection variability explicitly.
 
+## Execution Flags (raised 2026-07-26 during execution)
+
+Two deviations from this plan as written. Both are recorded here so the plan
+matches what was actually done.
+
+**Flag 1 — reject codes are not in the artifact; they come from the database.**
+Task 2 Step 1 asks for `rejection_reasons.overclaim`, `.quote_mismatch`,
+`.confidence_inflated`, `.evidence_missing`, and `.source_dead`. No such fields
+exist in `funnel.json`. `_safe_funnel` keeps only an allowlist of numeric fields
+(`funnel_sample_runner.py:139-161`), so `reject_rate_by_code` never reaches the
+artifact. The counts were instead read from append-only `deep_analysis_events`
+rows of kind `claim_rejected`, scoped by the manifest run IDs, via a read-only
+`SELECT`. The method was validated by reproducing the published prompt-v3
+baseline exactly (overclaim 16, quote mismatch 1, confidence inflated 2). The
+`E_*` → TODO-vocabulary mapping is recorded under Task 2 Step 1. Any future
+funnel comparison must use this database path, not the artifact.
+
+**Flag 2 — the committed file set exceeds Task 2 Step 5.** Step 5 states "only
+the TODO document is committed." The commit recording this evaluation also
+contains this plan file. (No hash is cited here: this paragraph lives inside the
+commit it would describe, so any hash written here is stale the moment the commit
+is amended. See the SDD ledger for the resolved hash.)
+The Task 1 review required correcting the stale Step 4 validator "and any test
+plan that copied it"; this plan is one of the two places it was copied, so
+leaving it stale would have left a snippet that can only raise `KeyError`. The
+deviation is stated in the commit message. No policy, threshold, prompt, model,
+or cap file was touched — the commit remains documentation-only.
+
 ---
 
 ### Task 1: Execute and Validate One Bounded `mixed-v1` 5+1 Sample
@@ -106,10 +134,34 @@ assert all(run_ids)
 assert len(run_ids) == len(set(run_ids))
 assert len(funnel["dev_runs"]) == 5
 assert funnel["default_run"] is not None
-assert sum(funnel["dev_funnel"]["safe_confidence_clamp"]["buckets"].values()) == funnel["dev_funnel"]["safe_confidence_clamp"]["total"]
-assert funnel["dev_funnel"]["tokens_spent"] == sum(run["tokens_spent"] for run in funnel["dev_runs"])
+dev_funnel = funnel["dev_funnel"]
+assert sum(dev_funnel["confidence_clamped_by_source_count"].values()) == dev_funnel["confidence_clamped_count"]
+assert sum(run["tokens_spent"] for run in manifest["dev_runs"]) > 0
 print("artifact validation passed")
 ```
+
+> **Schema correction (2026-07-26).** The last two assertions previously named
+> `dev_funnel.safe_confidence_clamp.buckets/total` and
+> `dev_funnel.tokens_spent`. Neither field is emitted: clamp counts are
+> `confidence_clamped_by_source_count` / `confidence_clamped_count` (allowlisted
+> at `funnel_sample_runner.py:78`, serialized at `:151-160`) and token spend
+> lives only in manifest run metadata (`:283-291`). The legacy form raises
+> `KeyError` against any artifact this runner produces, so both are recorded as
+> **not applicable**.
+>
+> The two replacements are **not** of equal strength, and the difference matters:
+>
+> - The clamp replacement **is** semantically equivalent — it asserts the same
+>   bucket-sum-equals-total property against the emitted field names.
+> - The token replacement is **weaker by necessity**. The original was an
+>   aggregate-equals-sum-of-parts cross-check, but no funnel-level token
+>   aggregate exists to cross-check against, so no equivalent is possible. (The
+>   original was doubly broken: `funnel["dev_runs"]` entries carry only
+>   `case_id`, `profile`, and `claim_funnel` — no `tokens_spent` on either side.)
+>   `> 0` is a liveness check that asserts no aggregation property at all.
+>
+> Corrections apply to the specification only — never regenerate an artifact to
+> satisfy a stale snippet.
 
 Also scan serialized artifact key names and values without printing secrets; record only whether any configured credential value was present. Expected: false for all credentials and no raw content/provider-response fields outside the existing allowlist.
 
@@ -147,14 +199,24 @@ agentic_exhausted
 verified
 rejected
 unverified
-tokens_spent
-safe_confidence_clamp total and buckets
-rejection_reasons.overclaim
-rejection_reasons.quote_mismatch
-rejection_reasons.confidence_inflated
-rejection_reasons.evidence_missing
-rejection_reasons.source_dead
-quote_match buckets
+tokens_spent                          (manifest run metadata, not funnel.json)
+confidence_clamped_count and confidence_clamped_by_source_count
+quote_score_buckets
+```
+
+Reject codes are **not** serialized into the artifact — `_safe_funnel` keeps only
+allowlisted numeric fields (`funnel_sample_runner.py:139-161`), so
+`reject_rate_by_code` never reaches `funnel.json`. Read them instead from the
+append-only `deep_analysis_events` rows of kind `claim_rejected`, scoped by the
+manifest run IDs, and map them to the historical TODO vocabulary:
+
+```text
+E_OVERCLAIM             -> overclaim
+E_QUOTE_MISMATCH        -> quote mismatch
+E_CONFIDENCE_INFLATED   -> confidence inflated
+E_NO_EVIDENCE           -> no evidence
+E_SOURCE_DEAD           -> source dead
+E_CONTRADICTED          -> contradicted
 ```
 
 Calculate `verified / graded` and `rejected / graded` with exact numerators and denominators. Extract the same per-run values for `fact-aspartame` and `policy-london-ulez`.
