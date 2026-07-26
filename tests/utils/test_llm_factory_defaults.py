@@ -162,3 +162,41 @@ def test_explicit_provider_selection_is_never_replaced_by_fallback(monkeypatch, 
         LLMFactory.create_llm(provider="anthropic", use_cache=False)
 
     assert factory.openai.calls == []
+
+
+# ---------------------------------------------------------------- Fix D
+
+
+def test_warned_unknown_models_set_is_capped(monkeypatch):
+    """request.model_name is user-supplied; the dedup set must not grow forever.
+
+    Once the cap is reached, new names are still warned about (the operator
+    keeps getting a signal) but stop being recorded, so the set never grows
+    past the ceiling.
+    """
+    monkeypatch.setattr(LLMFactory, "_MAX_WARNED_UNKNOWN_MODELS", 3)
+    LLMFactory._warned_unknown_models.clear()
+    try:
+        for i in range(10):
+            LLMFactory._warn_if_unknown_model(f"junk-model-{i}")
+
+        assert len(LLMFactory._warned_unknown_models) == 3
+    finally:
+        LLMFactory._warned_unknown_models.clear()
+
+
+def test_warned_unknown_models_keeps_warning_past_the_cap(monkeypatch, caplog):
+    monkeypatch.setattr(LLMFactory, "_MAX_WARNED_UNKNOWN_MODELS", 1)
+    LLMFactory._warned_unknown_models.clear()
+    try:
+        with caplog.at_level("WARNING", logger="neos.utils.llm_factory"):
+            LLMFactory._warn_if_unknown_model("junk-model-a")
+            LLMFactory._warn_if_unknown_model("junk-model-b")
+            LLMFactory._warn_if_unknown_model("junk-model-b")
+
+        # The cap is 1, so junk-model-a fills it and junk-model-b is never
+        # recorded -- it warns on every call instead of just the first.
+        b_warnings = [r for r in caplog.records if "junk-model-b" in r.message]
+        assert len(b_warnings) == 2
+    finally:
+        LLMFactory._warned_unknown_models.clear()

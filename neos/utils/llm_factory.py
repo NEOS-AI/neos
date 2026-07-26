@@ -51,6 +51,12 @@ class LLMFactory:
     # 카탈로그에 없는 모델을 이미 경고한 이름들 — 로그 폭주를 막는다
     _warned_unknown_models: set[str] = set()
 
+    # request.model_name은 사용자 입력이다 — 캡이 없으면 이 집합이 무한정
+    # 자란다. 캡에 도달하면 dedup 기록은 멈추지만 경고 자체는 계속 낸다
+    # (운영자에게 신호를 계속 주는 쪽을 택함; 대신 그 이름은 매 호출마다
+    # 다시 경고될 수 있다).
+    _MAX_WARNED_UNKNOWN_MODELS = 1000
+
     @classmethod
     def register_provider(cls, name: str, provider_class: Type[ModelProviderBase]) -> None:
         """런타임에 새 프로바이더를 등록한다.
@@ -102,7 +108,8 @@ class LLMFactory:
             return
         if get_model_spec(model) is not None:
             return
-        cls._warned_unknown_models.add(model)
+        if len(cls._warned_unknown_models) < cls._MAX_WARNED_UNKNOWN_MODELS:
+            cls._warned_unknown_models.add(model)
         logger.warning(
             "Model %r is not declared in the model catalog "
             "(neos/config/models.yaml); pricing and thinking contract fall back "
