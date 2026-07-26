@@ -144,6 +144,11 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("ℹ️ OpenTelemetry disabled (set OTEL_ENABLED=true to enable)")
 
+        # 모델 카탈로그와 라우팅 정책 정합성 확인 (경고만 — 부팅을 막지 않는다)
+        from neos.config.model_config import warn_unknown_routed_models
+
+        warn_unknown_routed_models(settings.config.model_routing)
+
         # 데이터베이스 연결 초기화
         logger.info("📊 Initializing database connection...")
         await db_manager.initialize()

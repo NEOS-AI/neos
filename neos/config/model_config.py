@@ -18,12 +18,15 @@ import logging
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import yaml
 from pydantic import Field, ValidationError, model_validator
 
 from neos.config.schema import StrictConfigModel
+
+if TYPE_CHECKING:
+    from neos.config.schema import ModelRoutingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -379,3 +382,35 @@ def thinking_contract(model: str) -> ThinkingContract:
 
 def pricing_for(provider: str, model: str) -> ModelPricing | None:
     return model_config.catalog.pricing_for(provider, model)
+
+
+def warn_unknown_routed_models(routing: "ModelRoutingConfig") -> list[str]:
+    """역할 기본값이 카탈로그에 없는 모델을 가리키면 경고한다.
+
+    예외는 던지지 않는다 — 카탈로그 갱신 전에도 배포에서 신종 모델을
+    지정할 수 있어야 한다(spec §6). 오타는 로그로 드러난다.
+
+    기능 오버라이드(`coding_model.model`, `deep_analysis.models.*` 등)는
+    검사하지 않는다. 그 값들은 `create_llm(model=...)`로 흘러가 거기서
+    모델별 1회 경고를 받는다. 반면 역할 기본값은 `model=`을 생략한
+    경로에서만 쓰여 사용 시점 경고가 늦으므로, 기동 검사의 값이 여기에 있다.
+
+    Returns:
+        카탈로그에 없던 모델 이름 목록 (선언 순서).
+    """
+    catalog = model_config.catalog
+    unknown: list[str] = []
+    for provider in ("anthropic", "openai"):
+        provider_roles = getattr(routing, provider)
+        for role in ("everyday", "powerful"):
+            model = getattr(provider_roles, role)
+            if model and catalog.get_model_spec(model) is None:
+                unknown.append(model)
+                logger.warning(
+                    "model_routing.%s.%s = %r is not declared in the model catalog "
+                    "(neos/config/models.yaml) — check for a typo",
+                    provider,
+                    role,
+                    model,
+                )
+    return unknown

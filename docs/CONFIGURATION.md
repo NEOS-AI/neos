@@ -136,6 +136,83 @@ and HyperDeep leaf artifacts. The default is `true`.
 `thinking_engine.max_trace_text_length` controls text compaction in trace
 payloads. The default is `240`.
 
+### Model Catalog
+
+`neos/config/models.yaml` is the single source of truth for facts *about*
+models — which ones the pickers offer, which recommendation tier they fill,
+which thinking contract they follow, and what they cost. Adding a new Claude or
+GPT model is an edit to this one file.
+
+```yaml
+models:
+  claude-sonnet-5:
+    provider: anthropic          # anthropic | openai | gemini | ollama
+    tiers: [balanced]            # fast | balanced | powerful (a model may fill two)
+    thinking: adaptive           # adaptive | budgeted | none
+    selectable: true             # exposed by list_models() (default true)
+    max_tokens: 8192
+    pricing: {input: 3.00, output: 15.00, cache_creation: 3.75, cache_read: 0.30}
+```
+
+Declaration order is the `list_models()` order, so keep newest models first.
+
+| Field | Consumer |
+|---|---|
+| `provider` + `selectable` | `AnthropicProvider.list_models()`, `OpenAIProvider.list_models()` |
+| `tiers` | `get_recommended_models(provider)` |
+| `thinking` | `normalize_anthropic_request()` |
+| `pricing` | `CostCalculator._get_default_pricing()` |
+
+`thinking` names the request *contract*, not the model generation. A future
+Claude that uses adaptive thinking needs one line — `thinking: adaptive` — and
+no code change:
+
+| Value | Behavior |
+|---|---|
+| `adaptive` | sends `thinking={"type": "adaptive"}` and strips `temperature`, `top_p`, `top_k`. A caller-supplied `budget_tokens` raises `ValueError` |
+| `budgeted` | legacy path — honors `THINKING_BLOCKS_ENABLED` / `MAX_THINKING_LENGTH` and forces `temperature=1.0` |
+| `none` | no thinking support; the payload is left alone |
+
+A model absent from the catalog defaults to `budgeted`, which preserves the
+behavior unknown Anthropic models had before the catalog existed.
+
+`selectable: false` marks models the system still knows a price or a legacy
+alias for but does not offer in a picker — for example `gpt-4o`, which
+`aliases.vision.gpt4o` resolves to. It exists because `list_models()` and the
+pricing table used to disagree: models were selectable with no price, and their
+cost silently aggregated as zero.
+
+Derivation applies to Anthropic and OpenAI only. Gemini keeps a static
+`list_models()` (out of routing-policy scope) and Ollama queries its live
+server at `/api/tags`, so neither list can be derived. Their `tiers` still live
+in the catalog so `get_recommended_models()` covers all four providers, and
+their entries are marked `selectable: false` to make that split explicit.
+
+#### The catalog is not an allowlist
+
+An unlisted model passes through and only produces a warning, so a brand-new
+model can be used before the catalog is updated:
+
+- `create_llm(model=...)` logs a warning **once per model name**.
+- Cost aggregation warns and records zero when no price is known.
+- `model_routing` role defaults are checked at startup and warn only — they
+  never raise. Feature override fields are not checked there because their
+  values reach `create_llm(model=...)`, which already warns.
+
+Pricing resolves in three layers, and the database still wins:
+
+```
+llm_model_pricing DB (time-bounded)  →  models.yaml pricing  →  warn + no price
+```
+
+#### Legacy catalog files
+
+`NEOS_MODEL_CONFIG_PATH` can point at a custom file. A file with no `models:`
+key is read in the old shape (`vision_models` / `llm_models` /
+`embedding_models`), converted in memory, and logged with a migration notice.
+Converted entries have no tier and no price, and fall back to
+`thinking: budgeted`. Provider `google` is normalized to `gemini`.
+
 ### Model Routing
 
 `model_routing` maps a provider and a workload role to a concrete model. It only

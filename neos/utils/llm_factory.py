@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Type, cast
 
 from langchain_core.language_models import BaseLanguageModel
 
-from neos.config.model_config import tiers_for_provider
+from neos.config.model_config import get_model_spec, tiers_for_provider
 from neos.config.model_routing import ModelProvider, resolve_model
 from neos.config.settings import settings
 from neos.providers.base import ModelProviderBase
@@ -47,6 +47,9 @@ class LLMFactory:
 
     # LLM 인스턴스 캐시
     _llm_cache: Dict[str, BaseLanguageModel] = {}
+
+    # 카탈로그에 없는 모델을 이미 경고한 이름들 — 로그 폭주를 막는다
+    _warned_unknown_models: set[str] = set()
 
     @classmethod
     def register_provider(cls, name: str, provider_class: Type[ModelProviderBase]) -> None:
@@ -85,6 +88,26 @@ class LLMFactory:
         raise ValueError(
             f"No default model for provider {provider_name!r}: "
             "pass model= explicitly or set llm.model in configuration"
+        )
+
+    @classmethod
+    def _warn_if_unknown_model(cls, model: str) -> None:
+        """카탈로그에 없는 모델을 이름별 1회 경고한다.
+
+        카탈로그는 allowlist가 아니다 — 카탈로그 갱신 전에도 신종 모델을
+        지정할 수 있어야 하므로 통과시킨다. 다만 그 모델의 가격과 thinking
+        계약은 기본값으로 떨어진다.
+        """
+        if model in cls._warned_unknown_models:
+            return
+        if get_model_spec(model) is not None:
+            return
+        cls._warned_unknown_models.add(model)
+        logger.warning(
+            "Model %r is not declared in the model catalog "
+            "(neos/config/models.yaml); pricing and thinking contract fall back "
+            "to defaults",
+            model,
         )
 
     @classmethod
@@ -128,6 +151,7 @@ class LLMFactory:
             raise ValueError(f"Unsupported LLM provider: {provider_name}")
 
         resolved_model = model or cls._resolve_default_model(provider_name)
+        cls._warn_if_unknown_model(resolved_model)
         resolved_temperature = temperature if temperature is not None else settings.LLM_TEMPERATURE
         resolved_max_tokens = kwargs.pop("max_tokens", 0)
 

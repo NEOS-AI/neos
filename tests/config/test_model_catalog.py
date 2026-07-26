@@ -362,3 +362,88 @@ def test_legacy_lookup_of_unknown_alias_raises_with_available_names() -> None:
 
     with pytest.raises(ValueError, match="Available models"):
         model_config.get_llm_model("nonexistent_alias")
+
+
+def test_unknown_model_warns_once_per_name(caplog) -> None:
+    """카탈로그에 없는 모델은 통과시키되, 이름별로 한 번만 경고한다 (spec §6)."""
+    from neos.utils.llm_factory import LLMFactory
+
+    LLMFactory._warned_unknown_models.clear()
+
+    with caplog.at_level("WARNING", logger="neos.utils.llm_factory"):
+        LLMFactory._warn_if_unknown_model("claude-from-the-future")
+        LLMFactory._warn_if_unknown_model("claude-from-the-future")
+        LLMFactory._warn_if_unknown_model("claude-sonnet-5")
+
+    warnings = [r for r in caplog.records if "claude-from-the-future" in r.message]
+    assert len(warnings) == 1
+    assert not [r for r in caplog.records if "claude-sonnet-5" in r.message]
+
+
+def test_create_llm_warns_for_unregistered_model(caplog, monkeypatch) -> None:
+    """미등록 모델은 예외가 아니라 경고로 통과한다."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from neos.utils.llm_factory import LLMFactory
+
+    LLMFactory._warned_unknown_models.clear()
+    LLMFactory.clear_cache()
+    # settings 객체 전체를 바꾼다 — 실제 Settings에 setattr하면
+    # validate_assignment가 걸리거나 다른 테스트로 상태가 새어 나간다.
+    monkeypatch.setattr(
+        "neos.providers.anthropic.settings",
+        SimpleNamespace(
+            ANTHROPIC_API_KEY="test-key",
+            LLM_TIMEOUT=30,
+            THINKING_BLOCKS_ENABLED=False,
+            MAX_THINKING_LENGTH=0,
+        ),
+    )
+
+    with caplog.at_level("WARNING", logger="neos.utils.llm_factory"):
+        with patch("neos.providers.anthropic.ChatAnthropic"):
+            LLMFactory.create_llm(
+                provider="anthropic",
+                model="claude-not-in-catalog",
+                temperature=0.3,
+                use_cache=False,
+            )
+
+    assert any("claude-not-in-catalog" in r.message for r in caplog.records)
+
+
+def test_warn_unknown_routed_models_flags_typos(caplog) -> None:
+    from neos.config.model_config import warn_unknown_routed_models
+    from neos.config.schema import ModelRoutingConfig
+
+    routing = ModelRoutingConfig.model_validate(
+        {
+            "anthropic": {"everyday": "claude-sonnet-5", "powerful": "claude-opus-5"},
+            "openai": {"everyday": "gpt-5.6-tera", "powerful": "gpt-5.6-sol"},
+        }
+    )
+
+    with caplog.at_level("WARNING", logger="neos.config.model_config"):
+        unknown = warn_unknown_routed_models(routing)
+
+    assert unknown == ["gpt-5.6-tera"]
+    assert any("gpt-5.6-tera" in record.message for record in caplog.records)
+
+
+def test_warn_unknown_routed_models_is_silent_for_committed_defaults(caplog) -> None:
+    from neos.config.model_config import warn_unknown_routed_models
+    from neos.config.schema import ModelRoutingConfig
+
+    with caplog.at_level("WARNING", logger="neos.config.model_config"):
+        unknown = warn_unknown_routed_models(ModelRoutingConfig())
+
+    assert unknown == []
+    assert not [r for r in caplog.records if "model_routing" in r.message]
+
+
+def test_main_lifespan_checks_routed_models_against_the_catalog() -> None:
+    """기동 경로에 검사가 연결돼 있는지 소스로 고정한다."""
+    source = Path("neos/main.py").read_text(encoding="utf-8")
+
+    assert "warn_unknown_routed_models" in source
