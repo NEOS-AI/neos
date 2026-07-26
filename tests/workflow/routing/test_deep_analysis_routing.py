@@ -128,6 +128,12 @@ def test_recursive_planner_resolves_model_at_consumer_boundary(
     assert planner._select_model(0) == expected_model
 
 
+def test_recursive_planner_lower_depth_keeps_configured_atomizer() -> None:
+    planner = RecursivePlanner()
+
+    assert planner._select_model(1) == settings.RECURSIVE_ATOMIZER_MODEL
+
+
 def test_deep_analysis_enum_values():
     assert WorkflowNode.DEEP_ANALYSIS_DISPATCH.value == "deep_analysis_dispatch"
     assert IntentType.DEEP_ANALYSIS.value == "deep_analysis"

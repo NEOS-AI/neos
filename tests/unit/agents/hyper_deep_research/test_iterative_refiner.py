@@ -49,6 +49,9 @@ def mock_citation_tracker():
         "suggestions": {}
     }
     tracker.get_source_list_for_prompt.return_value = "Sources: [1] Source A, [2] Source B"
+    # _quick_quality_check()가 len()을 취하므로 실제 계약(List[CitationContext])을
+    # 지켜야 한다. Mock을 그대로 두면 TypeError로 터진다.
+    tracker.parse_citations_from_text.return_value = []
     return tracker
 
 
@@ -475,9 +478,11 @@ class TestAbstractGenerator:
             {"title": "Results", "summary": "Summary of results"},
         ]
 
-        with patch.object(
-            abstract_generator.agent_name, "__str__", return_value="test_agent"
-        ), patch("neos.agents.search_agents.hyper_deep_research.iterative_refiner.create_tracked_llm") as mock_llm_factory:
+        # agent_name is a plain str, so the old patch.object(..., "__str__") on it
+        # raised TypeError before the test could run. Only the LLM needs patching.
+        with patch(
+            "neos.agents.search_agents.hyper_deep_research.iterative_refiner.create_tracked_llm"
+        ) as mock_llm_factory:
             mock_llm = AsyncMock()
             mock_llm.ainvoke.return_value = MagicMock(
                 content="Generated abstract based on summaries."
@@ -628,7 +633,9 @@ class TestConsistencyAligner:
         ) as mock_realign, patch.object(
             consistency_aligner, "_fix_invalid_citations", new=AsyncMock()
         ) as mock_fix:
-            mock_identify.return_value = []
+            # Must be non-empty: align_section_with_abstract returns early when
+            # there are no consistency issues, so realign/fix would never run.
+            mock_identify.return_value = ["Tone mismatch with abstract"]
             mock_realign.return_value = "Content with [99]"
             mock_fix.return_value = "Content with [1,2]"  # Fixed
 

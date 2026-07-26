@@ -51,6 +51,19 @@ Use process env only for bootstrap controls:
 - `NEOS_SECRETS_PATH`
 - `NEOS_MODEL_CONFIG_PATH`
 
+### Rust API Gateway
+
+`api_gateway/config.toml` follows the same policy and ships `secret_key = ""`
+and `password = ""` rather than usable defaults. The gateway **refuses to
+start** when `jwt.secret_key` is still empty after env overrides — an empty
+HS256 key would validate tokens signed with an empty key, so failing fast is
+the safe behavior. Set `JWT_SECRET_KEY` before running it.
+
+`DATABASE_URL` replaces the whole `[database]` block. When it is absent, the
+transitional `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`
+overrides apply individually. `GATEWAY_PORT`, `UPSTREAM_HOST`, `UPSTREAM_PORT`,
+`LOG_LEVEL`, and `CONFIG_PATH` cover the remaining runtime knobs.
+
 ## Loading Order
 
 The backend loader applies config in this order:
@@ -92,7 +105,7 @@ Put non-secret runtime changes in `config/neos.local.yaml`:
 ```yaml
 llm:
   provider: anthropic
-  model: claude-sonnet-4-5-20250929
+  model: claude-sonnet-5
 
 research_harness:
   enabled: true
@@ -122,6 +135,87 @@ and HyperDeep leaf artifacts. The default is `true`.
 
 `thinking_engine.max_trace_text_length` controls text compaction in trace
 payloads. The default is `240`.
+
+### Model Routing
+
+`model_routing` maps a provider and a workload role to a concrete model. It only
+governs **automatic** workloads — a model the user picked is never overwritten.
+
+```yaml
+model_routing:
+  anthropic:
+    everyday: claude-sonnet-5
+    powerful: claude-opus-5
+  openai:
+    everyday: gpt-5.6-terra
+    powerful: gpt-5.6-sol
+```
+
+Resolution follows a strict precedence, and the winner is reported as
+`ModelResolution.source`:
+
+1. `user` — the model named in the current request
+2. `conversation` — the model already stored on an existing conversation
+3. `feature_override` — a deployment/feature setting (below)
+4. `role_default` — the `model_routing` entry for that provider and role
+
+The resolver itself never falls back across providers. An unknown provider or
+role, or a blank mapping entry, raises `ValueError` rather than guessing.
+
+Role assignments for automatic workloads:
+
+| Workload | Role |
+|---|---|
+| New chat default, conversation titles, templates | `everyday` |
+| Any `create_llm()` call that omits `model` (`llm.model`) | `everyday` |
+| Routine coding executor (`coding_model.model`) | `everyday` |
+| Deep-analysis scout and judge | `everyday` |
+| Knowledge-graph extraction (`knowledge_graph.extraction.model`) | `everyday` |
+| Tool-result summarization (`context_optimization.tool_result_summarization_model`) | `everyday` |
+| Recursive planner (`recursive_agent.planner_model`) | `powerful` |
+| Deep-analysis dig and synth | `powerful` |
+
+Feature override fields are nullable, and `null` is meaningful: `llm.model`,
+`coding_model.model`, `recursive_agent.planner_model`,
+`knowledge_graph.extraction.model`,
+`context_optimization.tool_result_summarization_model`, and every
+`deep_analysis.models.*` field default to `null`, which means "use the role
+default". Setting a string pins that workload to an explicit model.
+
+#### What is deliberately *not* role-routed
+
+The policy has exactly two roles, `everyday` and `powerful`. There is no `fast`
+role, so cheap workloads keep their own explicit settings:
+
+- `recursive_agent.atomizer_model` keeps its Haiku value so sub-root
+  atomization stays cheap.
+- Query classification, expansion, and similar helpers keep their own
+  `*_LLM_MODEL` settings.
+- `get_recommended_models()` still reports a `fast` tier, but that is a manual
+  reference list for operators, not a routing role.
+
+Adding a `fast` role means extending `WorkloadRole` and
+`ProviderModelRolesConfig` together, and needs a Haiku-tier policy designed
+first. `tests/config/test_model_routing.py::test_policy_stays_at_two_roles`
+pins the current decision.
+
+#### Provider fallback in `LLMFactory`
+
+`create_llm()` may fall back to OpenAI when the configured provider cannot be
+constructed (typically a missing API key). That fallback is **only** available
+to fully automatic calls:
+
+| Call | Behavior on provider failure |
+|---|---|
+| `create_llm(temperature=0.3)` | falls back to OpenAI `everyday` (`gpt-5.6-terra`) |
+| `create_llm(model="claude-opus-5")` | raises — an explicit model is never replaced |
+| `create_llm(provider="anthropic")` | raises — an explicit provider is never replaced |
+| any `provider="ollama"` call | raises — Ollama is an explicit local service |
+
+Passing `model=` or `provider=` therefore means "use exactly this, or fail".
+Providers outside the routing policy (`gemini`, `ollama`) have no role mapping,
+so they require an explicit `model=` or a configured `llm.model`; otherwise
+`create_llm()` raises a `ValueError` naming the provider.
 
 ## Staging and Production
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import logging
 
 from neos.config.settings import settings
-from neos.utils.llm_factory import create_llm
+from neos.utils.llm_factory import create_llm, get_default_model
 
 
 logger = logging.getLogger(__name__)
@@ -60,9 +60,11 @@ class KnowledgeGraphExtractor:
             model_name: LLM 모델 이름
             min_confidence: 최소 신뢰도 임계값
         """
-        self.model_name = model_name or settings.KG_EXTRACTION_MODEL
+        # None을 그대로 넘겨야 everyday 역할 해석과 폴백 경로가 유지된다
+        configured_model = model_name or settings.KG_EXTRACTION_MODEL
         self.min_confidence = min_confidence or settings.KG_MIN_CONFIDENCE
-        self.llm = create_llm(model=self.model_name)
+        self.llm = create_llm(model=configured_model)
+        self.model_name = configured_model or get_default_model()
 
         logger.info(
             f"KnowledgeGraphExtractor initialized: model={self.model_name}, min_confidence={self.min_confidence}"

@@ -18,7 +18,7 @@ class NewsApiSkill(BaseSkill):
 
     def __init__(self, **kwargs):
         super().__init__(
-            name="news_api",
+            name="news-api",
             skill_type=SkillType.RESEARCH,
             description="NewsAPI: 80,000+ 소스에서 실시간 뉴스 검색",
             capabilities=[

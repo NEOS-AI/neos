@@ -1,5 +1,5 @@
 ---
-name: semantic_scholar
+name: semantic-scholar
 type: research
 version: 1.0.0
 description: Semantic Scholar 학술 논문 검색 - 인용 그래프, 오픈 액세스 PDF, 풍부한 메타데이터
@@ -42,11 +42,11 @@ Semantic Scholar API를 통해 학술 논문을 검색하고 인용 그래프를
 ```python
 # 논문 검색
 params = {"action": "search", "query": "large language models", "max_results": 10}
-result = await skill_manager.execute_skill("semantic_scholar", params)
+result = await skill_manager.execute_skill("semantic-scholar", params)
 
 # 인용 그래프 탐색
 params = {"action": "get_citations", "paper_id": "paper_id_here", "max_results": 20}
-result = await skill_manager.execute_skill("semantic_scholar", params)
+result = await skill_manager.execute_skill("semantic-scholar", params)
 ```
 
 ## Requirements

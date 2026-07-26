@@ -22,7 +22,7 @@ class SemanticScholarSkill(BaseSkill):
 
     def __init__(self, **kwargs):
         super().__init__(
-            name="semantic_scholar",
+            name="semantic-scholar",
             skill_type=SkillType.RESEARCH,
             description="Semantic Scholar: 학술 논문 검색, 인용 그래프, 오픈 액세스 PDF",
             capabilities=[

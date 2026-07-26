@@ -7,14 +7,33 @@ from fastapi.testclient import TestClient
 from io import BytesIO
 from PIL import Image
 import json
+from types import SimpleNamespace
 
+from neos.api.dependencies.auth import get_current_active_user
 from neos.main import app
 
 
 @pytest.fixture
 def client():
-    """테스트 클라이언트"""
-    return TestClient(app)
+    """인증된 테스트 클라이언트.
+
+    멀티모달 라우트는 get_current_active_user를 요구한다. 이 스위트는 인가가
+    아니라 멀티모달 동작을 검증하므로 인증된 사용자를 주입한다.
+    (인가 자체는 tests/api/handlers/의 authorization 스위트가 다룬다.)
+    """
+    previous = app.dependency_overrides.copy()
+    app.dependency_overrides[get_current_active_user] = lambda: SimpleNamespace(
+        user_id="multimodal-test-user",
+        is_active=True,
+        is_admin=False,
+        role="user",
+    )
+    try:
+        # Deliberately not used as a context manager: that would run the app
+        # lifespan, which needs Redis and Postgres.
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides = previous
 
 
 @pytest.fixture
@@ -220,18 +239,21 @@ class TestMultimodalRoutes:
 class TestMultimodalIntegration:
     """멀티모달 API 통합 테스트"""
 
-    def test_root_endpoint_includes_multimodal(self, client):
-        """루트 엔드포인트에 멀티모달 API 정보 포함 확인"""
+    def test_root_endpoint_does_not_advertise_endpoints(self, client):
+        """루트는 엔드포인트 목록을 노출하지 않는다.
+
+        예전에는 루트가 멀티모달 경로를 나열했지만, 정보 노출을 줄이기 위해
+        최소 정보만 반환하도록 바뀌었다. 멀티모달 등록 여부는 아래
+        test_api_documentation_includes_multimodal이 OpenAPI 스펙으로 검증한다.
+        """
         response = client.get("/")
 
         assert response.status_code == 200
         data = response.json()
 
-        assert "endpoints" in data
-        assert "multimodal_query" in data["endpoints"]
-        assert "image_analysis" in data["endpoints"]
-        assert "/multimodal/query" in data["endpoints"]["multimodal_query"]
-        assert "/multimodal/image/analyze" in data["endpoints"]["image_analysis"]
+        assert set(data) <= {"name", "version", "status", "health", "docs"}
+        assert "endpoints" not in data
+        assert "multimodal" not in json.dumps(data)
 
     def test_api_documentation_includes_multimodal(self, client):
         """API 문서에 멀티모달 엔드포인트 포함 확인"""

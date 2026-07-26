@@ -380,7 +380,7 @@ class ChatService:
         created_by: str,
         description: Optional[str] = None,
         category: Optional[str] = None,
-        default_model: str = "claude-opus-4-5-20251101",
+        default_model: Optional[str] = None,
         default_system_prompt: Optional[str] = None,
         default_temperature: float = 0.7,
         default_settings: Optional[Dict[str, Any]] = None,
@@ -391,6 +391,7 @@ class ChatService:
     ) -> Dict[str, Any]:
         """대화 템플릿 생성"""
         template_id = str(uuid.uuid4())
+        resolved_default_model = resolve_new_chat_model(default_model)
 
         query = """
         INSERT INTO conversation_templates (
@@ -417,7 +418,7 @@ class ChatService:
             name,
             description,
             category,
-            default_model,
+            resolved_default_model,
             default_system_prompt,
             default_temperature,
             json.dumps(default_settings or {}),
@@ -492,12 +493,19 @@ Only return the title, nothing else.
 
 User message: {user_message}"""
 
+        # 제목 생성은 자동 워크로드이므로 everyday 역할로 한 번만 해석한다
+        title_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="everyday",
+        ).model
+
         try:
             response = await chat_llm_service.generate_response(
                 conversation_id=conversation_id,
                 message_id=str(uuid.uuid4()),  # 임시 message_id
                 conversation_messages=[{"role": "user", "content": title_prompt}],
-                model_name="claude-sonnet-4-5-20250929",
+                model_name=title_model,
                 temperature=0.7,
                 max_tokens=50,
                 workflow_type="title_generation",

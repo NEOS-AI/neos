@@ -1,5 +1,5 @@
 ---
-name: news_api
+name: news-api
 type: research
 version: 1.0.0
 description: NewsAPI - 80,000+ 소스에서 실시간 뉴스 검색
@@ -43,11 +43,11 @@ NewsAPI.org를 통해 80,000+ 뉴스 소스에서 실시간 뉴스를 검색하�
 ```python
 # 뉴스 검색
 params = {"action": "search", "query": "AI regulation", "max_results": 10}
-result = await skill_manager.execute_skill("news_api", params)
+result = await skill_manager.execute_skill("news-api", params)
 
 # 주요 뉴스
 params = {"action": "top_headlines", "country": "us", "category": "technology"}
-result = await skill_manager.execute_skill("news_api", params)
+result = await skill_manager.execute_skill("news-api", params)
 ```
 
 ## Requirements

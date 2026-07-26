@@ -18,6 +18,7 @@ from neos.utils.logger import get_logger
 from neos.services.context_optimizer import context_optimizer
 from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
+from neos.providers.anthropic import normalize_anthropic_request
 from neos.tools.tool_search.search_tools_handler import SEARCH_TOOLS_TOOL
 
 logger = get_logger(__name__)
@@ -409,11 +410,25 @@ class ChatLLMService:
             }
         """
         model = resolve_conversation_chat_model(model_name)
+        provider = self._extract_provider_from_model(model)
         start_time = time.time()
         full_content = ""
         usage_info = None
 
         try:
+            if provider != "anthropic":
+                async for event in self.generate_response_stream(
+                    conversation_id=conversation_id,
+                    message_id=message_id,
+                    conversation_messages=conversation_messages,
+                    model_name=model,
+                    system_prompt=system_prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ):
+                    yield event
+                return
+
             # Anthropic 클라이언트 초기화
             client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
@@ -433,14 +448,19 @@ class ChatLLMService:
             yield {"type": "start", "model": model, "provider": "anthropic"}
 
             # Anthropic SDK로 스트리밍 (tool calling 지원)
-            async with client.messages.stream(
-                model=model,
-                messages=anthropic_messages,
-                tools=tools if tools else None,
-                system=system_prompt or "",
-                temperature=temperature,
-                max_tokens=max_tokens or 4096,
-            ) as stream:
+            stream_kwargs = normalize_anthropic_request(
+                model,
+                {
+                    "model": model,
+                    "messages": anthropic_messages,
+                    "tools": tools if tools else None,
+                    "system": system_prompt or "",
+                    "temperature": temperature,
+                    "max_tokens": max_tokens or 4096,
+                },
+                thinking_enabled=True,
+            )
+            async with client.messages.stream(**stream_kwargs) as stream:
                 # 스트리밍 이벤트 처리
                 async for event in stream:
                     if not hasattr(event, 'type'):
@@ -572,11 +592,25 @@ class ChatLLMService:
             기존 generate_response_stream_with_tools()와 동일한 이벤트 형식
         """
         model = resolve_conversation_chat_model(model_name)
+        provider = self._extract_provider_from_model(model)
         start_time = time.time()
         full_content = ""
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         try:
+            if provider != "anthropic":
+                async for event in self.generate_response_stream(
+                    conversation_id=conversation_id,
+                    message_id=message_id,
+                    conversation_messages=conversation_messages,
+                    model_name=model,
+                    system_prompt=system_prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ):
+                    yield event
+                return
+
             client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
             # 1. 초기 도구 세트: 코어 도구 + search_tools
@@ -599,14 +633,19 @@ class ChatLLMService:
                 round_count += 1
 
                 # 2. Claude API 호출
-                async with client.messages.stream(
-                    model=model,
-                    messages=anthropic_messages,
-                    tools=active_tools_dicts,
-                    system=system_prompt or "",
-                    temperature=temperature,
-                    max_tokens=max_tokens or 4096,
-                ) as stream:
+                stream_kwargs = normalize_anthropic_request(
+                    model,
+                    {
+                        "model": model,
+                        "messages": anthropic_messages,
+                        "tools": active_tools_dicts,
+                        "system": system_prompt or "",
+                        "temperature": temperature,
+                        "max_tokens": max_tokens or 4096,
+                    },
+                    thinking_enabled=True,
+                )
+                async with client.messages.stream(**stream_kwargs) as stream:
                     async for event in stream:
                         if not hasattr(event, 'type'):
                             continue

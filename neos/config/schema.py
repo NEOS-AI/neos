@@ -102,7 +102,8 @@ class SmartCacheConfig(StrictConfigModel):
 
 class LLMConfig(StrictConfigModel):
     provider: str = "anthropic"
-    model: str = "gpt-4-turbo-preview"
+    # None이면 provider × everyday 역할 기본값으로 해석된다 (neos/config/model_routing.py)
+    model: str | None = None
     temperature: float = 0.1
     timeout: int = 120
     research_planning_timeout: int = 180
@@ -442,7 +443,8 @@ class KnowledgeGraphFeatureConfig(StrictConfigModel):
 
 class KnowledgeGraphExtractionConfig(StrictConfigModel):
     enabled: bool = True
-    model: str = "gpt-4-turbo-preview"
+    # None이면 everyday 역할 기본값으로 해석된다
+    model: str | None = None
 
 
 class KnowledgeGraphConfig(StrictConfigModel):
@@ -495,7 +497,8 @@ class ContextOptimizationConfig(StrictConfigModel):
     reserve_tokens: int = 4096
     tool_result_summarization: bool = True
     tool_result_max_length: int = 4000
-    tool_result_summarization_model: str = "gpt-4-turbo-preview"
+    # None이면 everyday 역할 기본값으로 해석된다
+    tool_result_summarization_model: str | None = None
     message_compression_enabled: bool = True
     message_compression_threshold: int = 30
     message_compression_ratio: float = 0.5
@@ -666,10 +669,10 @@ class DeepAnalysisConfig(StrictConfigModel):
             "arxiv",
             "pubmed",
             "openalex",
-            "semantic_scholar",
-            "google_scholar",
-            "sec_edgar",
-            "news_api",
+            "semantic-scholar",
+            "google-scholar",
+            "sec-edgar",
+            "news-api",
             "wikipedia",
         ]
     )

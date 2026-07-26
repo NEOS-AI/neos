@@ -9,15 +9,12 @@ import logging
 import re
 import yaml
 
-from .errors import SkillValidationError, SkillParseError
+from .errors import SkillMetadataError, SkillValidationError, SkillParseError
 
 
 logger = logging.getLogger(__name__)
 
-
-class SkillMetadataError(Exception):
-    """스킬 메타데이터 관련 에러 (backward compatibility)"""
-    pass
+__all__ = ["SkillMetadataError", "parse_skill_metadata", "validate_metadata", "extract_frontmatter"]
 
 
 def parse_skill_metadata(

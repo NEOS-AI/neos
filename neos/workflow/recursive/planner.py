@@ -2,7 +2,7 @@
 RecursivePlanner: 하위 태스크 분해기
 
 non-atomic 태스크를 2-N개의 하위 태스크로 분해합니다.
-상위 레벨(depth=0)은 Opus, 하위 레벨은 Haiku를 사용합니다.
+상위 레벨(depth=0)은 중앙 powerful 역할, 하위 레벨은 Haiku를 사용합니다.
 """
 
 import json
@@ -69,7 +69,7 @@ class RecursivePlanner:
 
     non-atomic 태스크를 2-N개의 하위 RecursiveTaskNode로 분해합니다.
     깊이(depth)에 따라 모델을 선택합니다:
-    - depth=0: RECURSIVE_PLANNER_MODEL (Opus)
+    - depth=0: anthropic powerful 역할 (planner_model 재정의 가능)
     - depth>0: RECURSIVE_ATOMIZER_MODEL (Haiku, 비용 절감)
     """
 

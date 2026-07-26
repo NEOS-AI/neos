@@ -20,7 +20,7 @@ class SECEdgarSkill(BaseSkill):
 
     def __init__(self, **kwargs):
         super().__init__(
-            name="sec_edgar",
+            name="sec-edgar",
             skill_type=SkillType.RESEARCH,
             description="SEC EDGAR 재무 보고서 검색 - 10-K, 10-Q, 8-K 등 기업 공시",
             capabilities=[

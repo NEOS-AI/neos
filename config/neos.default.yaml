@@ -63,7 +63,7 @@ smart_cache:
 
 llm:
   provider: anthropic
-  model: gpt-4-turbo-preview
+  # model 미지정 = everyday 역할 기본값 (claude-sonnet-5). 고정하려면 문자열로 지정.
   temperature: 0.1
   timeout: 120
   research_planning_timeout: 180
@@ -285,7 +285,7 @@ knowledge_graph:
   search_weight: 0.3
   extraction:
     enabled: true
-    model: gpt-4-turbo-preview
+    # model 미지정 = everyday 역할 기본값
   min_confidence: 0.7
 
 deep_research:
@@ -326,7 +326,7 @@ context_optimization:
   reserve_tokens: 4096
   tool_result_summarization: true
   tool_result_max_length: 4000
-  tool_result_summarization_model: gpt-4-turbo-preview
+  # tool_result_summarization_model 미지정 = everyday 역할 기본값
   message_compression_enabled: true
   message_compression_threshold: 30
   message_compression_ratio: 0.5

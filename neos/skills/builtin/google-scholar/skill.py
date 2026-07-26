@@ -20,7 +20,7 @@ class GoogleScholarSkill(BaseSkill):
 
     def __init__(self, **kwargs):
         super().__init__(
-            name="google_scholar",
+            name="google-scholar",
             skill_type=SkillType.RESEARCH,
             description="Google Scholar 학술 검색 - 광범위 학술 논문, 인용 추적, 저자 프로필",
             capabilities=[
