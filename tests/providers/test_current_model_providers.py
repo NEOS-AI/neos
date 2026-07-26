@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -132,10 +133,69 @@ def test_claude_5_rejects_manual_thinking_budget(monkeypatch):
     )
     provider = AnthropicProvider.__new__(AnthropicProvider)
 
-    with pytest.raises(ValueError, match="budget_tokens.*Claude 5"):
+    with pytest.raises(ValueError, match="budget_tokens.*adaptive"):
         provider.create_llm(
             model="claude-sonnet-5",
             temperature=0.7,
             max_tokens=8192,
             thinking={"type": "enabled", "budget_tokens": 2048},
         )
+
+
+def test_unregistered_anthropic_model_keeps_budgeted_thinking(monkeypatch):
+    """카탈로그에 없는 Anthropic 모델은 레거시 분기를 유지한다 (spec §4)."""
+    monkeypatch.setattr(
+        "neos.providers.anthropic.settings",
+        _anthropic_settings(thinking_enabled=True, max_thinking_length=2048),
+    )
+    provider = AnthropicProvider.__new__(AnthropicProvider)
+
+    with patch("neos.providers.anthropic.ChatAnthropic") as chat_anthropic:
+        provider.create_llm(
+            model="claude-sonnet-9-not-in-catalog",
+            temperature=0.7,
+            max_tokens=8192,
+        )
+
+    params = chat_anthropic.call_args.kwargs
+    assert params["temperature"] == 1.0
+    assert params["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+
+
+def test_thinking_contract_drives_normalization_not_the_model_name(monkeypatch):
+    """계약이 adaptive면 이름과 무관하게 adaptive 경로를 탄다.
+
+    Claude 5.5 / 6이 나와도 YAML 한 줄로 끝나는지를 고정한다.
+    """
+    from neos.config.model_config import ThinkingContract
+
+    monkeypatch.setattr(
+        "neos.providers.anthropic.thinking_contract",
+        lambda model: ThinkingContract.ADAPTIVE,
+    )
+    monkeypatch.setattr(
+        "neos.providers.anthropic.settings",
+        _anthropic_settings(thinking_enabled=False, max_thinking_length=0),
+    )
+    provider = AnthropicProvider.__new__(AnthropicProvider)
+
+    with patch("neos.providers.anthropic.ChatAnthropic") as chat_anthropic:
+        provider.create_llm(
+            model="claude-sonnet-7-hypothetical",
+            temperature=0.7,
+            max_tokens=8192,
+        )
+
+    params = chat_anthropic.call_args.kwargs
+    assert "temperature" not in params
+    assert params["thinking"] == {"type": "adaptive"}
+
+
+def test_version_baked_identifiers_are_gone():
+    """`is_claude_5`가 shim으로도 남지 않는다 (spec §4)."""
+    import neos.config.model_routing as model_routing
+
+    assert not hasattr(model_routing, "is_claude_5")
+    assert "is_claude_5" not in Path("neos/providers/anthropic.py").read_text(
+        encoding="utf-8"
+    )

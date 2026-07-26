@@ -6,7 +6,6 @@ from pydantic import ValidationError
 from neos.config.model_routing import (
     ResolutionSource,
     WorkloadRole,
-    is_claude_5,
     resolve_model,
 )
 from neos.config.schema import ModelRoutingConfig, ProviderModelRolesConfig
@@ -93,24 +92,6 @@ def test_model_routing_config_rejects_incomplete_provider_mapping() -> None:
         ModelRoutingConfig.model_validate(
             {"anthropic": {"everyday": "claude-sonnet-5"}}
         )
-
-
-@pytest.mark.parametrize(
-    ("model", "expected"),
-    [
-        ("claude-sonnet-5", True),
-        ("claude-opus-5", True),
-        ("claude-sonnet-5-20260101", False),
-        ("claude-sonnet-4-5-20250929", False),
-        ("claude-sonnet-4-6", False),
-        ("gpt-5.6-terra", False),
-        ("claude-sonnet-50", False),
-    ],
-)
-def test_is_claude_5_matches_only_claude_five_models(
-    model: str, expected: bool
-) -> None:
-    assert is_claude_5(model) is expected
 
 
 def test_policy_stays_at_two_roles() -> None:

@@ -190,13 +190,3 @@ def test_crosscheck_pricing_against_hardcoded() -> None:
         assert values["output"] == expected_output
         assert values.get("cache_creation", 0.0) == expected_cc
         assert values.get("cache_read", 0.0) == expected_cr
-
-
-def test_crosscheck_adaptive_contract_against_is_claude_5() -> None:
-    """Task 3에서 제거 — is_claude_5와 함께."""
-    from neos.config.model_routing import is_claude_5
-
-    for model in ADAPTIVE_MODELS:
-        assert is_claude_5(model) is True
-    for model in BUDGETED_MODELS:
-        assert is_claude_5(model) is False
