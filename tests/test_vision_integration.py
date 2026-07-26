@@ -55,11 +55,32 @@ class TestVisionModels:
         # GPT4o는 Claude -> Gemini 순으로 폴백하므로 세 키를 모두 비워야
         # "사용 가능한 모델 없음" 경로에 도달한다. (개발 환경에 GOOGLE_API_KEY가
         # 설정돼 있으면 Gemini로 폴백해 예외가 발생하지 않는다.)
-        with patch("neos.config.settings.settings.OPENAI_API_KEY", ""):
-            with patch("neos.config.settings.settings.ANTHROPIC_API_KEY", None):
-                with patch("neos.config.settings.settings.GOOGLE_API_KEY", ""):
-                    with pytest.raises(ValueError):
-                        VisionModelFactory.create(VisionProvider.GPT4O)
+        #
+        # 각 vision 모듈은 import 시점에 `from neos.config.settings import settings`로
+        # 객체를 붙잡는다. 그래서 "neos.config.settings.settings.X"를 패치하면 싱글턴이
+        # 재바인딩된 세션에서는 다른 객체를 건드리게 된다. 실제로 참조되는 객체를 패치한다.
+        from contextlib import ExitStack
+
+        from neos.workflow.pipelines.vision import (
+            vision_claude,
+            vision_factory,
+            vision_gemini,
+            vision_gpt4o,
+        )
+
+        empty_keys = (
+            ("OPENAI_API_KEY", ""),
+            ("ANTHROPIC_API_KEY", None),
+            ("GOOGLE_API_KEY", ""),
+        )
+
+        with ExitStack() as stack:
+            for module in (vision_gpt4o, vision_claude, vision_gemini, vision_factory):
+                for key, value in empty_keys:
+                    stack.enter_context(patch.object(module.settings, key, value))
+
+            with pytest.raises(ValueError):
+                VisionModelFactory.create(VisionProvider.GPT4O)
 
 
 @pytest.mark.asyncio
