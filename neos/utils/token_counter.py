@@ -6,9 +6,40 @@ context overflow detection.
 
 from typing import Dict, Any, List, Optional, Union
 import logging
+from neos.config.model_config import get_model_spec
 from neos.config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+def estimate_cost_usd(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> float:
+    """모델 카탈로그 가격으로 비용을 추정한다 (USD).
+
+    가격의 단일 원천은 `neos/config/models.yaml`이다. 가격을 모르면 추측하지
+    않고 경고 후 0.0을 돌려준다 — 틀린 가격은 없는 가격보다 나쁘다. 그럴듯한
+    숫자는 아무도 의심하지 않는 반면, 0과 경고는 눈에 띈다.
+
+    이 함수는 추정 전용이다. 과금 경로는 `CostCalculator`이며 DB 가격을
+    최우선으로 쓴다.
+    """
+    spec = get_model_spec(model)
+    pricing = spec.pricing if spec is not None else None
+
+    if pricing is None:
+        logger.warning(
+            "No catalog pricing for model %r; estimating cost as 0.0. "
+            "Add it to neos/config/models.yaml to get real estimates.",
+            model,
+        )
+        return 0.0
+
+    return (
+        prompt_tokens * pricing.input + completion_tokens * pricing.output
+    ) / 1_000_000
 
 
 class TokenCounter:
@@ -203,13 +234,10 @@ class TokenCounter:
     ) -> float:
         """Calculate cost based on token usage.
 
-        Pricing (updated 2025):
-        - GPT-4 Turbo: $0.01/1K prompt, $0.03/1K completion
-        - GPT-4: $0.03/1K prompt, $0.06/1K completion
-        - GPT-3.5 Turbo: $0.0015/1K prompt, $0.002/1K completion
-        - Claude 3.5 Sonnet: $0.003/1K prompt, $0.015/1K completion
-        - Claude 3 Opus: $0.015/1K prompt, $0.075/1K completion
-        - Claude 3 Haiku: $0.00025/1K prompt, $0.00125/1K completion
+        가격은 모델 카탈로그(`neos/config/models.yaml`)에서 온다. 이 메서드는
+        `estimate_cost_usd()`에 위임할 뿐 자체 가격표를 갖지 않는다 — 예전에는
+        per-1K 표 + 부분 문자열 매칭 + "모르면 GPT-4" 기본값이었고, 그 결과
+        현행 주 모델 claude-sonnet-5가 실제의 10배(입력)로 계산됐다.
 
         Args:
             prompt_tokens: Number of prompt tokens
@@ -217,41 +245,13 @@ class TokenCounter:
             model: Model name (uses instance model if not provided)
 
         Returns:
-            Estimated cost in USD
+            Estimated cost in USD. 가격 미상이면 0.0 (경고 로그 발생).
         """
-        model = model or self.model_name
-
-        # Pricing table
-        pricing = {
-            "gpt-4-turbo": {"prompt": 0.01, "completion": 0.03},
-            "gpt-4": {"prompt": 0.03, "completion": 0.06},
-            "gpt-3.5-turbo": {"prompt": 0.0015, "completion": 0.002},
-            "claude-3.5-sonnet": {"prompt": 0.003, "completion": 0.015},
-            "claude-3-opus": {"prompt": 0.015, "completion": 0.075},
-            "claude-3-sonnet": {"prompt": 0.003, "completion": 0.015},
-            "claude-3-haiku": {"prompt": 0.00025, "completion": 0.00125},
-            "claude-sonnet-4": {"prompt": 0.003, "completion": 0.015},  # Sonnet 4.5
-        }
-
-        # Match model to pricing
-        model_key = model.lower()
-        matched_key = None
-
-        for key in pricing.keys():
-            if key in model_key:
-                matched_key = key
-                break
-
-        if not matched_key:
-            # Default to GPT-4 pricing
-            matched_key = "gpt-4"
-            logger.warning(f"[TokenCounter] Unknown model {model}, using gpt-4 pricing")
-
-        rates = pricing[matched_key]
-        prompt_cost = (prompt_tokens / 1000) * rates["prompt"]
-        completion_cost = (completion_tokens / 1000) * rates["completion"]
-
-        return prompt_cost + completion_cost
+        return estimate_cost_usd(
+            model or self.model_name,
+            prompt_tokens,
+            completion_tokens,
+        )
 
     def track_usage(
         self,
