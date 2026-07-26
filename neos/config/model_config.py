@@ -176,12 +176,34 @@ def _convert_legacy_catalog(data: dict[str, Any]) -> dict[str, Any]:
     옛 형태에는 tier·pricing·thinking이 없으므로 그 모델들은 티어 없음,
     가격 미상, `thinking: budgeted`로 취급된다. 한 모델 ID가 여러 그룹에
     나타나면 처음 만난 항목의 메타데이터를 쓴다.
+
+    손으로 편집된 옛 파일은 형태가 깨져 있을 수 있다(항목이 dict가 아니거나
+    `model_id`가 없거나). 이런 항목은 예외를 내지 않고 건너뛴다 — 별칭 하나가
+    잘못됐다고 파일 전체를 무효화하지 않는다. `load_catalog`의 "실패해도
+    부팅을 막지 않는다" 계약은 이 함수가 예외를 내지 않을 때만 성립한다.
     """
     models: dict[str, dict[str, Any]] = {}
     aliases: dict[str, dict[str, str]] = {}
 
     for legacy_key, group in _LEGACY_GROUPS:
         for alias, entry in (data.get(legacy_key) or {}).items():
+            if not isinstance(entry, dict):
+                logger.warning(
+                    "Skipping malformed legacy catalog entry %s.%s: expected a "
+                    "mapping, got %s",
+                    legacy_key,
+                    alias,
+                    type(entry).__name__,
+                )
+                continue
+            if "model_id" not in entry:
+                logger.warning(
+                    "Skipping malformed legacy catalog entry %s.%s: missing "
+                    "'model_id'",
+                    legacy_key,
+                    alias,
+                )
+                continue
             model_id = entry["model_id"]
             aliases.setdefault(group, {})[alias] = model_id
             if model_id in models:

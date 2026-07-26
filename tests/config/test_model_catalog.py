@@ -204,6 +204,52 @@ def test_legacy_shape_conversion_logs_migration_notice(tmp_path: Path, caplog) -
     assert any("legacy" in record.message.lower() for record in caplog.records)
 
 
+def test_legacy_entry_missing_model_id_is_skipped_with_warning(
+    tmp_path: Path, caplog
+) -> None:
+    """옛 형태 항목에 model_id가 없으면 그 항목만 건너뛰고 나머지는 로드된다."""
+    path = _write(
+        tmp_path,
+        {
+            "llm_models": {
+                "sonnet": {"provider": "anthropic"},  # model_id 누락
+                "opus": {"model_id": "claude-opus-5", "provider": "anthropic"},
+            }
+        },
+    )
+
+    with caplog.at_level("WARNING", logger="neos.config.model_config"):
+        catalog = load_catalog(path)
+
+    assert catalog.aliases["llm"] == {"opus": "claude-opus-5"}
+    assert catalog.models["claude-opus-5"].provider == "anthropic"
+    warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
+    assert any("llm_models" in msg and "sonnet" in msg for msg in warnings)
+
+
+def test_legacy_entry_that_is_not_a_mapping_is_skipped_with_warning(
+    tmp_path: Path, caplog
+) -> None:
+    """옛 형태 항목 값이 dict가 아니라 문자열 등이면 그 항목만 건너뛴다."""
+    path = _write(
+        tmp_path,
+        {
+            "llm_models": {
+                "sonnet": "claude-sonnet-5",  # dict가 아니라 맨 문자열
+                "opus": {"model_id": "claude-opus-5", "provider": "anthropic"},
+            }
+        },
+    )
+
+    with caplog.at_level("WARNING", logger="neos.config.model_config"):
+        catalog = load_catalog(path)
+
+    assert catalog.aliases["llm"] == {"opus": "claude-opus-5"}
+    assert catalog.models["claude-opus-5"].provider == "anthropic"
+    warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
+    assert any("llm_models" in msg and "sonnet" in msg for msg in warnings)
+
+
 def test_missing_file_yields_empty_catalog(tmp_path: Path, caplog) -> None:
     """파일이 없으면 부팅을 막지 않고 빈 카탈로그로 성능 저하만 감수한다."""
     with caplog.at_level("ERROR", logger="neos.config.model_config"):
