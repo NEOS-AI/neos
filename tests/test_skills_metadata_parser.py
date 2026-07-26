@@ -10,6 +10,21 @@ from neos.skills.base import (
 )
 
 
+class TestErrorCompatibility:
+    """SkillMetadataError는 하위 호환 베이스로 유지돼야 한다.
+
+    neos/skills/manager/auto_discovery.py가 SkillMetadataError를 catch해서
+    깨진 스킬을 건너뛴다. 파서가 던지는 구체 예외가 이 베이스를 상속하지 않으면
+    그 예외 처리가 통째로 무력화된다.
+    """
+
+    def test_parse_errors_are_catchable_as_metadata_error(self):
+        from neos.skills.base.errors import SkillParseError, SkillValidationError
+
+        assert issubclass(SkillParseError, SkillMetadataError)
+        assert issubclass(SkillValidationError, SkillMetadataError)
+
+
 class TestExtractFrontmatter:
     """Test frontmatter extraction"""
 
@@ -22,19 +37,18 @@ type: custom
 
 # Test Skill
 """
-        result = extract_frontmatter(content)
-        assert result is not None
-        assert "name: test_skill" in result
-        assert "type: custom" in result
+        frontmatter, body = extract_frontmatter(content)
+        assert "name: test_skill" in frontmatter
+        assert "type: custom" in frontmatter
+        assert body == "# Test Skill"
 
     def test_extract_no_frontmatter(self):
-        """Content without frontmatter should return None"""
+        """Content without frontmatter should return (None, None)"""
         content = "# Test Skill\n\nNo frontmatter here"
-        result = extract_frontmatter(content)
-        assert result is None
+        assert extract_frontmatter(content) == (None, None)
 
     def test_extract_invalid_frontmatter(self):
-        """Frontmatter not at start should return None"""
+        """Frontmatter not at start should return (None, None)"""
         content = """
 Some text before
 
@@ -42,8 +56,7 @@ Some text before
 name: test_skill
 ---
 """
-        result = extract_frontmatter(content)
-        assert result is None
+        assert extract_frontmatter(content) == (None, None)
 
 
 class TestValidateMetadata:
