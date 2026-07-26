@@ -277,10 +277,11 @@ class TestPromptFallback:
             language="en"
         )
 
-        # Should only include first 4000 characters
-        # Count occurrences of "A" in prompt
-        a_count = prompt.count("A")
-        assert a_count == 4000
+        # Should include exactly the first 4000 characters.
+        # Assert on the run length rather than prompt.count("A"): the surrounding
+        # English template contains "A" characters of its own.
+        assert ("A" * 4000) in prompt
+        assert ("A" * 4001) not in prompt
 
         # Should not contain all 6000 characters
         assert long_content not in prompt

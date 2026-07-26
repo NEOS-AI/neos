@@ -413,9 +413,11 @@ class SectionIterator:
             )
 
             # Step 2: Check completion condition (Ralph Loop's completion-promise equivalent)
-            if quality.overall_score() >= self.quality_threshold:
+            # Use the effective threshold resolved above (adaptive or default);
+            # `self.quality_threshold` no longer exists — it is `default_quality_threshold`.
+            if quality.overall_score() >= quality_threshold:
                 logger.info(
-                    f"    ✓ Quality threshold met ({quality.overall_score():.2f} >= {self.quality_threshold})"
+                    f"    ✓ Quality threshold met ({quality.overall_score():.2f} >= {quality_threshold})"
                 )
                 quality_history.append(
                     IterationHistory(
