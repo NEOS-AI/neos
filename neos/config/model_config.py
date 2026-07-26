@@ -288,14 +288,44 @@ class ModelConfig:
         return self._catalog
 
     def reload(self) -> None:
+        """카탈로그를 다시 읽는다.
+
+        검증 실패 시 빈 카탈로그로 통째로 갈아치우지 않는다 — 그것은
+        조용한 성능 저하가 아니라 라이브 사고다(예: thinking 계약이 전부
+        BUDGETED로 떨어지며 Claude 5에 잘못된 요청 모양이 나간다). 대신:
+
+        - 이전에 유효한 카탈로그가 있었다면(`last-good`) 그것을 유지하고
+          ERROR로 리로드가 거부됐음을 알린다.
+        - 첫 로드부터 실패했다면(last-good 없음) 기존처럼 빈 카탈로그로
+          가되, ERROR가 "카탈로그가 비었고 목록/가격/thinking 계약이 모두
+          기본값으로 떨어진다"를 분명히 말한다.
+        """
         path = _catalog_path()
+        previous = self._catalog
         try:
-            self._catalog = load_catalog(path)
+            new_catalog = load_catalog(path)
         except ValidationError as exc:
-            logger.error("Model catalog %s failed validation: %s", path, exc)
-            self._catalog = ModelCatalog()
-        else:
-            logger.info("Model catalog loaded from: %s", path)
+            if previous is not None:
+                logger.error(
+                    "Model catalog %s failed validation: %s — reload rejected, "
+                    "the previous catalog (%d models) is still in effect",
+                    path,
+                    exc,
+                    len(previous.models),
+                )
+                self._catalog = previous
+            else:
+                logger.error(
+                    "Model catalog %s failed validation: %s — the catalog is "
+                    "now EMPTY; model lists, pricing, and thinking contracts "
+                    "will all fall back to defaults",
+                    path,
+                    exc,
+                )
+                self._catalog = ModelCatalog()
+            return
+        self._catalog = new_catalog
+        logger.info("Model catalog loaded from: %s", path)
 
     # ---- 레거시 API ----
 
@@ -390,15 +420,34 @@ def warn_unknown_routed_models(routing: "ModelRoutingConfig") -> list[str]:
     예외는 던지지 않는다 — 카탈로그 갱신 전에도 배포에서 신종 모델을
     지정할 수 있어야 한다(spec §6). 오타는 로그로 드러난다.
 
-    기능 오버라이드(`coding_model.model`, `deep_analysis.models.*` 등)는
-    검사하지 않는다. 그 값들은 `create_llm(model=...)`로 흘러가 거기서
-    모델별 1회 경고를 받는다. 반면 역할 기본값은 `model=`을 생략한
-    경로에서만 쓰여 사용 시점 경고가 늦으므로, 기동 검사의 값이 여기에 있다.
+    기능 오버라이드(`coding_model.model`, `knowledge_graph.extraction.model` 등)는
+    여기서 검사하지 않는다. 그 값들이 `create_llm(model=...)`로 흘러가는
+    한, 거기서 모델별 1회 경고를 받는다. 반면 역할 기본값은 `model=`을
+    생략한 경로에서만 쓰여 사용 시점 경고가 늦으므로, 기동 검사의 값이
+    여기에 있다.
+
+    주의: 다음 두 경로는 `create_llm()`을 아예 거치지 않으므로 이 기동
+    검사도, `create_llm`의 사용 시점 경고도 받지 못한다 — 오타가 나면
+    provider 오류로만 드러난다.
+
+    - deep_analysis (`deep_analysis.models.{scout,dig,synth,judge}`): 자체
+      클라이언트를 만드는 `neos/workflow/deep_analysis/llm.py`의
+      `call_llm`/`_default_client`로 넘어간다.
+    - chat tool-streaming: `neos/services/chat_llm_service.py`가
+      `anthropic.AsyncAnthropic`을 직접 생성한다.
 
     Returns:
         카탈로그에 없던 모델 이름 목록 (선언 순서).
     """
     catalog = model_config.catalog
+    if not catalog.models:
+        logger.error(
+            "Model catalog is EMPTY — model lists, pricing, and thinking "
+            "contracts are all falling back to defaults. This is likely a "
+            "rejected reload or a first-load validation failure; check the "
+            "ERROR logged at catalog load time and fix neos/config/models.yaml "
+            "(or the file at NEOS_MODEL_CONFIG_PATH)."
+        )
     unknown: list[str] = []
     for provider in ("anthropic", "openai"):
         provider_roles = getattr(routing, provider)

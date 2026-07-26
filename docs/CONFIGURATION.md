@@ -141,7 +141,19 @@ payloads. The default is `240`.
 `neos/config/models.yaml` is the single source of truth for facts *about*
 models — which ones the pickers offer, which recommendation tier they fill,
 which thinking contract they follow, and what they cost. Adding a new Claude or
-GPT model is an edit to this one file.
+GPT model is a `models.yaml` edit plus updating the two expected-value lists
+that pin the catalog against transcription errors, both in
+`tests/config/test_model_catalog_parity.py`:
+
+- `ANTHROPIC_SELECTABLE` / `OPENAI_SELECTABLE`, asserted by
+  `test_catalog_selectable_lists_match_expected_order`
+- the unpriced-model set, asserted by
+  `test_every_selectable_model_without_pricing_is_known`
+
+Both are deliberate pins, not incidental test debt — they are what catches a
+new model silently breaking `list_models()` order or landing with no price. Do
+not delete or relax them when adding a model; update them alongside
+`models.yaml`.
 
 ```yaml
 models:
@@ -196,8 +208,19 @@ model can be used before the catalog is updated:
 - `create_llm(model=...)` logs a warning **once per model name**.
 - Cost aggregation warns and records zero when no price is known.
 - `model_routing` role defaults are checked at startup and warn only — they
-  never raise. Feature override fields are not checked there because their
-  values reach `create_llm(model=...)`, which already warns.
+  never raise. Feature override fields are not checked there because, when
+  they flow through `create_llm(model=...)`, that call already warns.
+
+  Two paths bypass **both** checks — they never call `create_llm()`, so a
+  typo in their override surfaces only as a provider error at request time,
+  not a warning:
+
+  - deep_analysis (`deep_analysis.models.{scout,dig,synth,judge}`) — resolved
+    in `synthesizer.py`, `orchestrator.py`, `service.py`, and `worker.py`, then
+    passed to `neos/workflow/deep_analysis/llm.py`'s `call_llm`, which builds
+    its own client in `_default_client` instead of using `create_llm`.
+  - chat tool-streaming (`neos/services/chat_llm_service.py`) — instantiates
+    `anthropic.AsyncAnthropic` directly.
 
 Pricing resolves in three layers, and the database still wins:
 

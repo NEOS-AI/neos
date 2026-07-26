@@ -13,6 +13,8 @@ from neos.config.model_config import (
     ModelCatalog,
     ThinkingContract,
     load_catalog,
+    model_config,
+    warn_unknown_routed_models,
 )
 
 pytestmark = pytest.mark.no_db
@@ -22,6 +24,33 @@ def _write(tmp_path: Path, data: dict) -> Path:
     path = tmp_path / "models.yaml"
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return path
+
+
+def _invalid_catalog_data() -> dict:
+    """A schema violation that would previously wipe the whole catalog.
+
+    Two models claim the same (provider, tier) pair — one of the three
+    plausible operator mistakes named in the review.
+    """
+    return {
+        "models": {
+            "claude-a": {"provider": "anthropic", "tiers": ["balanced"]},
+            "claude-b": {"provider": "anthropic", "tiers": ["balanced"]},
+        }
+    }
+
+
+@pytest.fixture
+def restore_model_config(monkeypatch):
+    """Point ModelConfig at a scratch file for the test, then restore the real catalog.
+
+    `ModelConfig` is a class-level singleton, so any test that calls
+    `reload()` or pokes `_catalog` directly must undo it — otherwise every
+    later test in the session sees a poisoned (empty or scratch) catalog.
+    """
+    yield
+    monkeypatch.delenv("NEOS_MODEL_CONFIG_PATH", raising=False)
+    model_config.reload()
 
 
 def test_catalog_rejects_unknown_model_field(tmp_path: Path) -> None:
@@ -447,3 +476,97 @@ def test_main_lifespan_checks_routed_models_against_the_catalog() -> None:
     source = Path("neos/main.py").read_text(encoding="utf-8")
 
     assert "warn_unknown_routed_models" in source
+
+
+# ---- Fix A: a validation failure must not wipe a previously-good catalog ----
+
+
+def test_reload_with_invalid_catalog_retains_last_good_catalog(
+    tmp_path: Path, monkeypatch, caplog, restore_model_config
+) -> None:
+    """An operator typo in models.yaml must not wipe a working catalog.
+
+    Reproduces one of the three plausible mistakes from the review: a new
+    model claims a tier an existing model already holds.
+    """
+    # Establish a known-good state from the real, committed catalog first.
+    model_config.reload()
+    good_catalog = model_config.catalog
+    assert good_catalog.models, "sanity: the real catalog must be non-empty"
+
+    bad_path = _write(tmp_path, _invalid_catalog_data())
+    monkeypatch.setenv("NEOS_MODEL_CONFIG_PATH", str(bad_path))
+
+    with caplog.at_level("ERROR", logger="neos.config.model_config"):
+        model_config.reload()
+
+    # The previous, valid catalog is retained verbatim -- not swapped for
+    # an empty one.
+    assert model_config.catalog is good_catalog
+    assert model_config.catalog.models
+
+    error_messages = [r.message for r in caplog.records if r.levelname == "ERROR"]
+    assert any("rejected" in msg.lower() for msg in error_messages)
+    assert any("previous catalog" in msg.lower() for msg in error_messages)
+
+
+def test_reload_first_load_invalid_yields_empty_catalog_with_clear_error(
+    tmp_path: Path, monkeypatch, caplog, restore_model_config
+) -> None:
+    """No last-good catalog exists yet: fall back to empty, but say so loudly."""
+    bad_path = _write(tmp_path, _invalid_catalog_data())
+    monkeypatch.setenv("NEOS_MODEL_CONFIG_PATH", str(bad_path))
+    # Simulate "no catalog has ever loaded successfully yet".
+    model_config._catalog = None
+
+    with caplog.at_level("ERROR", logger="neos.config.model_config"):
+        model_config.reload()
+
+    assert model_config.catalog.models == {}
+
+    error_messages = [r.message for r in caplog.records if r.levelname == "ERROR"]
+    assert any("empty" in msg.lower() for msg in error_messages)
+    assert any(
+        "fall back to defaults" in msg.lower() or "falling back to defaults" in msg.lower()
+        for msg in error_messages
+    )
+
+
+def test_load_catalog_itself_still_raises_validation_error(tmp_path: Path) -> None:
+    """Fix A changes reload()/startup logging, not load_catalog()'s contract.
+
+    tests/config/test_model_catalog.py's schema tests depend on load_catalog
+    raising ValidationError directly.
+    """
+    path = _write(tmp_path, _invalid_catalog_data())
+
+    with pytest.raises(ValidationError, match="balanced"):
+        load_catalog(path)
+
+
+def test_warn_unknown_routed_models_logs_error_when_catalog_is_empty(
+    caplog, restore_model_config
+) -> None:
+    """An empty catalog must be loud at startup, not inferred from routing warnings."""
+    from neos.config.schema import ModelRoutingConfig
+
+    model_config._catalog = ModelCatalog()
+
+    with caplog.at_level("ERROR", logger="neos.config.model_config"):
+        warn_unknown_routed_models(ModelRoutingConfig())
+
+    error_messages = [r.message for r in caplog.records if r.levelname == "ERROR"]
+    assert any("empty" in msg.lower() for msg in error_messages)
+
+
+def test_warn_unknown_routed_models_does_not_log_empty_error_for_a_good_catalog(
+    caplog, restore_model_config
+) -> None:
+    from neos.config.schema import ModelRoutingConfig
+
+    model_config.reload()
+
+    with caplog.at_level("ERROR", logger="neos.config.model_config"):
+        warn_unknown_routed_models(ModelRoutingConfig())
+
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
