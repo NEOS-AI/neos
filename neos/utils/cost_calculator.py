@@ -9,62 +9,16 @@ from decimal import Decimal
 
 from neos.database.connection import db_manager
 from neos.utils.logger import get_logger
+from neos.config.model_config import pricing_for
 
 logger = get_logger(__name__)
 
 
 class CostCalculator:
-    """LLM 비용 계산기"""
+    """LLM 비용 계산기
 
-    # 모델별 기본 가격 (USD per 1M tokens) - DB 조회 실패 시 fallback
-    DEFAULT_PRICING = {
-        "openai": {
-            "gpt-5.6-terra": {"input": 2.50, "output": 15.00},
-            "gpt-5.6-sol": {"input": 5.00, "output": 30.00},
-            "gpt-4o": {"input": 2.50, "output": 10.00},
-            "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-            "gpt-4-turbo": {"input": 10.00, "output": 30.00},
-            "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
-        },
-        "anthropic": {
-            "claude-sonnet-5": {
-                "input": 3.00,
-                "output": 15.00,
-                "cache_creation": 3.75,
-                "cache_read": 0.30,
-            },
-            "claude-opus-5": {
-                "input": 5.00,
-                "output": 25.00,
-                "cache_creation": 6.25,
-                "cache_read": 0.50,
-            },
-            "claude-sonnet-4-5-20250929": {
-                "input": 3.00,
-                "output": 15.00,
-                "cache_creation": 3.75,
-                "cache_read": 0.30,
-            },
-            "claude-3-5-sonnet-20240620": {
-                "input": 3.00,
-                "output": 15.00,
-                "cache_creation": 3.75,
-                "cache_read": 0.30,
-            },
-            "claude-opus-4-5-20251101": {
-                "input": 15.00,
-                "output": 75.00,
-                "cache_creation": 18.75,
-                "cache_read": 1.50,
-            },
-            "claude-haiku-4-5-20251001": {
-                "input": 0.25,
-                "output": 1.25,
-                "cache_creation": 0.30,
-                "cache_read": 0.03,
-            },
-        },
-    }
+    가격 우선순위: `llm_model_pricing` DB → `neos/config/models.yaml` → 경고 + None
+    """
 
     @staticmethod
     async def get_model_pricing(
@@ -118,16 +72,15 @@ class CostCalculator:
     def _get_default_pricing(
         provider: str, model_name: str
     ) -> Optional[Dict[str, Decimal]]:
-        """기본 가격 정보 반환"""
-        if provider in CostCalculator.DEFAULT_PRICING:
-            if model_name in CostCalculator.DEFAULT_PRICING[provider]:
-                pricing = CostCalculator.DEFAULT_PRICING[provider][model_name]
-                return {
-                    "input": Decimal(str(pricing.get("input", 0))),
-                    "output": Decimal(str(pricing.get("output", 0))),
-                    "cache_creation": Decimal(str(pricing.get("cache_creation", 0))),
-                    "cache_read": Decimal(str(pricing.get("cache_read", 0))),
-                }
+        """모델 카탈로그의 가격을 반환한다 (DB 조회 실패/미등재 시 폴백)."""
+        pricing = pricing_for(provider, model_name)
+        if pricing is not None:
+            return {
+                "input": Decimal(str(pricing.input)),
+                "output": Decimal(str(pricing.output)),
+                "cache_creation": Decimal(str(pricing.cache_creation)),
+                "cache_read": Decimal(str(pricing.cache_read)),
+            }
 
         logger.warning(f"No pricing found for {provider}/{model_name}")
         return None

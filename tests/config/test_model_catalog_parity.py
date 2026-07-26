@@ -150,23 +150,3 @@ def test_every_selectable_model_without_pricing_is_known() -> None:
     }
 
 
-# ---- 교차 대조: 하드코딩이 살아 있는 동안만 (해당 Task에서 제거) ----
-
-
-def test_crosscheck_pricing_against_hardcoded() -> None:
-    """Task 5에서 제거 — DEFAULT_PRICING과 함께."""
-    from neos.utils.cost_calculator import CostCalculator
-
-    flat = {
-        (provider, model): values
-        for provider, models in CostCalculator.DEFAULT_PRICING.items()
-        for model, values in models.items()
-    }
-
-    assert set(flat) == set(EXPECTED_PRICING)
-    for key, values in flat.items():
-        expected_input, expected_output, expected_cc, expected_cr = EXPECTED_PRICING[key]
-        assert values["input"] == expected_input
-        assert values["output"] == expected_output
-        assert values.get("cache_creation", 0.0) == expected_cc
-        assert values.get("cache_read", 0.0) == expected_cr
