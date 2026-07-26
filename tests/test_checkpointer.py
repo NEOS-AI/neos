@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from neos.workflow.checkpointer import PostgreSQLCheckpointer, get_checkpointer
-from langgraph.checkpoint.base import Checkpoint
+from langgraph.checkpoint.base import Checkpoint, CheckpointTuple
 
 
 @pytest.fixture
@@ -150,12 +150,15 @@ class TestPostgreSQLCheckpointer:
         with patch.object(checkpointer, 'get_session') as mock_get_session:
             mock_get_session.return_value.__aenter__.return_value = mock_session
 
-            checkpoints = await checkpointer.alist(config, limit=10)
+            # alist is an async generator (BaseCheckpointSaver contract), not a coroutine
+            checkpoints = [cp async for cp in checkpointer.alist(config, limit=10)]
 
             assert len(checkpoints) == 3
-            # Checkpoints may be dicts or objects
+            # alist yields CheckpointTuple. Checkpoint itself is a TypedDict, so it
+            # cannot be used with isinstance().
             for cp in checkpoints:
-                assert isinstance(cp, (dict, Checkpoint)) or hasattr(cp, 'v')
+                assert isinstance(cp, CheckpointTuple)
+                assert cp.checkpoint is not None
 
     @pytest.mark.asyncio
     async def test_delete_thread(self, checkpointer):
