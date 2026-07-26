@@ -153,26 +153,6 @@ def test_every_selectable_model_without_pricing_is_known() -> None:
 # ---- 교차 대조: 하드코딩이 살아 있는 동안만 (해당 Task에서 제거) ----
 
 
-def test_crosscheck_list_models_against_hardcoded() -> None:
-    """Task 4에서 제거 — list_models()가 카탈로그 파생이 되면 항진명제가 된다."""
-    from neos.providers.anthropic import AnthropicProvider
-    from neos.providers.openai import OpenAIProvider
-
-    assert (
-        AnthropicProvider.__new__(AnthropicProvider).list_models()
-        == ANTHROPIC_SELECTABLE
-    )
-    assert OpenAIProvider.__new__(OpenAIProvider).list_models() == OPENAI_SELECTABLE
-
-
-def test_crosscheck_recommended_models_against_hardcoded() -> None:
-    """Task 4에서 제거."""
-    from neos.utils.llm_factory import get_recommended_models
-
-    for provider, expected in EXPECTED_TIERS.items():
-        assert get_recommended_models(provider) == expected
-
-
 def test_crosscheck_pricing_against_hardcoded() -> None:
     """Task 5에서 제거 — DEFAULT_PRICING과 함께."""
     from neos.utils.cost_calculator import CostCalculator

@@ -9,7 +9,11 @@ from typing import Any, List
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseLanguageModel
 
-from neos.config.model_config import ThinkingContract, thinking_contract
+from neos.config.model_config import (
+    ThinkingContract,
+    models_for_provider,
+    thinking_contract,
+)
 from neos.config.settings import settings
 from .base import ModelProviderBase
 
@@ -59,14 +63,7 @@ class AnthropicProvider(ModelProviderBase):
         return "anthropic"
 
     def list_models(self) -> List[str]:
-        return [
-            "claude-sonnet-5",
-            "claude-opus-5",
-            "claude-haiku-4-5-20251001",
-            "claude-sonnet-4-5-20250929",
-            "claude-sonnet-4-6",
-            "claude-opus-4-6",
-        ]
+        return models_for_provider("anthropic")
 
     def validate_config(self) -> bool:
         return bool(settings.ANTHROPIC_API_KEY)

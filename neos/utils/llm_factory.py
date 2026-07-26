@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Type, cast
 
 from langchain_core.language_models import BaseLanguageModel
 
+from neos.config.model_config import tiers_for_provider
 from neos.config.model_routing import ModelProvider, resolve_model
 from neos.config.settings import settings
 from neos.providers.base import ModelProviderBase
@@ -278,27 +279,10 @@ def create_ollama_llm(**kwargs) -> BaseLanguageModel:
 
 
 def get_recommended_models(provider: str) -> dict[str, str]:
-    """Provider별 추천 모델 (fast / balanced / powerful)."""
-    recommendations = {
-        "openai": {
-            "fast": "gpt-5-mini-2025-08-07",
-            "balanced": "gpt-5.6-terra",
-            "powerful": "gpt-5.6-sol",
-        },
-        "anthropic": {
-            "fast": "claude-haiku-4-5-20251001",
-            "balanced": "claude-sonnet-5",
-            "powerful": "claude-opus-5",
-        },
-        "gemini": {
-            "fast": "gemini-2.0-flash-exp",
-            "balanced": "gemini-1.5-pro-latest",
-            "powerful": "gemini-1.5-pro-latest",
-        },
-        "ollama": {
-            "fast": "llama3.1:8b",
-            "balanced": "llama3.1:8b",
-            "powerful": "llama3.1:70b",
-        },
-    }
-    return recommendations.get(provider, {})
+    """Provider별 추천 모델 (fast / balanced / powerful).
+
+    모델 카탈로그(`neos/config/models.yaml`)의 `tiers`에서 파생된다.
+    라우팅 역할이 아니라 운영자용 수동 참고값이다
+    (`docs/CONFIGURATION.md` — Model Routing 참조).
+    """
+    return tiers_for_provider(provider)
