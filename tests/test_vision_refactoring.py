@@ -124,7 +124,8 @@ class TestVisionRefactoring:
         from neos.workflow.pipelines.vision import ClaudeVision
 
         model = ClaudeVision()
-        assert model.model == "claude-sonnet-4-5-20250929"
+        # neos/config/models.yaml의 vision_models.claude 값
+        assert model.model == "claude-sonnet-5"
 
 
 class TestVisionModuleStructure:

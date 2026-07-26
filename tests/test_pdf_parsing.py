@@ -45,12 +45,17 @@ class TestPDFParser:
             await parser.parse()
 
     @pytest.mark.asyncio
-    async def test_parse_pdf_pypdf2_not_installed(self):
-        """PyPDF2 미설치 시 에러 처리 테스트"""
-        parser = PDFParser()
-        parser.supports_pypdf2 = False  # PyPDF2 미설치로 가정
+    async def test_parse_pdf_no_backend_installed(self):
+        """PDF 백엔드가 하나도 없을 때 에러 처리 테스트
 
-        with pytest.raises(ImportError, match="PyPDF2 is not installed"):
+        PyMuPDF가 주 파서이고 PyPDF2는 fallback이므로, 둘 다 꺼야
+        "설치된 파서 없음" 경로에 도달한다.
+        """
+        parser = PDFParser()
+        parser.supports_pymupdf = False
+        parser.supports_pypdf2 = False
+
+        with pytest.raises(ImportError, match="Neither PyMuPDF nor PyPDF2 is installed"):
             await parser.parse(file_content=b"fake pdf content")
 
     @pytest.mark.asyncio
@@ -90,10 +95,11 @@ class TestDocumentPipelineWithPDF:
         assert isinstance(pipeline.pdf_parser, PDFParser)
 
     async def test_document_pipeline_pdf_not_installed(self):
-        """PyPDF2 미설치 시 DocumentPipeline 동작 테스트"""
+        """PDF 백엔드 부재 시 DocumentPipeline 동작 테스트"""
         pipeline = DocumentPipeline()
 
-        # PyPDF2 미설치로 가정
+        # PyMuPDF가 주 파서이므로 둘 다 꺼야 미설치 상황이 된다
+        pipeline.pdf_parser.supports_pymupdf = False
         pipeline.pdf_parser.supports_pypdf2 = False
 
         file = FileInput(

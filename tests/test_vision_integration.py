@@ -33,7 +33,8 @@ class TestVisionModels:
     async def test_claude_vision_initialization(self):
         """Claude Vision 초기화 테스트"""
         vision = ClaudeVision(api_key="test_key")
-        assert vision.model == "claude-sonnet-4-5-20250929"
+        # neos/config/models.yaml의 vision_models.claude 값
+        assert vision.model == "claude-sonnet-5"
         assert vision.api_key == "test_key"
         assert vision.is_available() is True
 
@@ -51,10 +52,14 @@ class TestVisionModels:
 
     async def test_vision_model_factory_no_key(self):
         """VisionModelFactory API 키 없을 때 테스트"""
+        # GPT4o는 Claude -> Gemini 순으로 폴백하므로 세 키를 모두 비워야
+        # "사용 가능한 모델 없음" 경로에 도달한다. (개발 환경에 GOOGLE_API_KEY가
+        # 설정돼 있으면 Gemini로 폴백해 예외가 발생하지 않는다.)
         with patch("neos.config.settings.settings.OPENAI_API_KEY", ""):
             with patch("neos.config.settings.settings.ANTHROPIC_API_KEY", None):
-                with pytest.raises(ValueError):
-                    VisionModelFactory.create(VisionProvider.GPT4O)
+                with patch("neos.config.settings.settings.GOOGLE_API_KEY", ""):
+                    with pytest.raises(ValueError):
+                        VisionModelFactory.create(VisionProvider.GPT4O)
 
 
 @pytest.mark.asyncio
