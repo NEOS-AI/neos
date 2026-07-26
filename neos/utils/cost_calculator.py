@@ -83,7 +83,28 @@ class CostCalculator:
             }
 
         logger.warning(f"No pricing found for {provider}/{model_name}")
+        CostCalculator._record_unpriced_call(provider, model_name)
         return None
+
+    @staticmethod
+    def _record_unpriced_call(provider: str, model_name: str) -> None:
+        """가격 미상 호출을 메트릭으로 남긴다.
+
+        이 호출의 비용은 0으로 집계되므로 `neos_llm_cost_usd`가 실제보다
+        낮아진다. 로그 경고만으로는 몇 주 뒤에 비용 리포트를 의심하는 사람이
+        찾아낼 수 없다 — 알람 가능한 카운터가 필요하다.
+
+        메트릭 수집 실패가 비용 계산을 막아서는 안 되므로 조용히 넘긴다.
+        """
+        try:
+            from neos.observability.metrics import get_metrics_collector
+
+            get_metrics_collector().llm_unpriced_calls_total.labels(
+                provider=provider,
+                model=model_name,
+            ).inc()
+        except Exception:  # pragma: no cover - 관찰 실패는 과금을 막지 않는다
+            logger.debug("Could not record unpriced-call metric", exc_info=True)
 
     @staticmethod
     async def calculate_cost(

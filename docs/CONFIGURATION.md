@@ -228,6 +228,48 @@ Pricing resolves in three layers, and the database still wins:
 llm_model_pricing DB (time-bounded)  →  models.yaml pricing  →  warn + no price
 ```
 
+#### One price, every consumer
+
+The catalog is the single source of model pricing. Every consumer reads it:
+
+| Consumer | Purpose |
+|---|---|
+| `CostCalculator` (`neos/utils/cost_calculator.py`) | billing — records into `message_costs`; the DB layer above still wins |
+| `estimate_cost_usd()` (`neos/utils/token_counter.py`) | estimation, shared by both `TokenCounter` classes |
+| `QualityMetricsCollector` (HDR) | per-report cost estimate, blending input and output rates |
+
+Each of those used to carry its own table. They had already drifted: the two
+token counters priced `gpt-4-turbo` differently from each other, and both fell
+back to GPT-4 rates for anything unrecognized — which priced `claude-sonnet-5`,
+the current default model, at $30/$60 per 1M instead of $3/$15.
+
+None of them guess any more. An unknown or unpriced model estimates as `0.0`
+with a warning, because a plausible-looking wrong price is worse than a missing
+one: nobody audits a number that looks reasonable.
+
+**`coding_model` prices are the exception, deliberately.**
+`coding_model.input_cost_micros_per_million` and its `output_` counterpart are
+integer micros used as the coding loop's budget guard — operator policy, so a
+negotiated rate must be allowed to differ, and the catalog never overwrites
+them. But the same model's price then lives in two places and can silently
+diverge, so startup logs a warning when they disagree
+(`warn_coding_model_price_drift`). The check cannot live in
+`neos/config/schema.py`: that module is pure schema and `model_config` imports
+`StrictConfigModel` from it, so a validator reading the catalog would create an
+import cycle.
+
+#### Watching for unpriced models
+
+Six selectable models currently have no price — `claude-sonnet-4-6`,
+`claude-opus-4-6`, `gpt-5-mini-2025-08-07`, `gpt-5-2025-08-07`, `o3`, and
+`o3-mini`. Picking one of them is allowed (the catalog is not an allowlist), but
+its cost aggregates as zero, which makes `neos_llm_cost_usd` under-report.
+
+Every such lookup increments `neos_llm_unpriced_calls_total{provider,model}`.
+Alert on it: a non-zero value names exactly which models need a price, and the
+fix is one row in `llm_model_pricing` or one `pricing:` block in
+`neos/config/models.yaml`.
+
 #### Legacy catalog files
 
 `NEOS_MODEL_CONFIG_PATH` can point at a custom file. A file with no `models:`
