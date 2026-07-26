@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -20,6 +21,25 @@ def _anthropic_settings(*, thinking_enabled: bool, max_thinking_length: int):
     )
 
 
+def test_provider_catalogs_are_derived_from_the_model_catalog(monkeypatch):
+    """카탈로그를 바꾸면 list_models()가 따라온다 — 하드코딩이 아니다."""
+    monkeypatch.setattr(
+        "neos.providers.anthropic.models_for_provider",
+        lambda provider: ["sentinel-anthropic"] if provider == "anthropic" else [],
+    )
+    assert AnthropicProvider.__new__(AnthropicProvider).list_models() == [
+        "sentinel-anthropic"
+    ]
+
+
+def test_openai_catalog_is_derived_from_the_model_catalog(monkeypatch):
+    monkeypatch.setattr(
+        "neos.providers.openai.models_for_provider",
+        lambda provider: ["sentinel-openai"] if provider == "openai" else [],
+    )
+    assert OpenAIProvider.__new__(OpenAIProvider).list_models() == ["sentinel-openai"]
+
+
 def test_provider_catalogs_include_current_and_legacy_models():
     anthropic_models = AnthropicProvider.__new__(AnthropicProvider).list_models()
     openai_models = OpenAIProvider.__new__(OpenAIProvider).list_models()
@@ -37,11 +57,34 @@ def test_provider_catalogs_include_current_and_legacy_models():
     )
 
 
+def test_priced_only_models_stay_out_of_the_selectable_lists():
+    """가격만 아는 레거시 모델을 목록에 끼워넣지 않는다 (spec §3 selectable)."""
+    anthropic_models = AnthropicProvider.__new__(AnthropicProvider).list_models()
+    openai_models = OpenAIProvider.__new__(OpenAIProvider).list_models()
+
+    assert "claude-opus-4-5-20251101" not in anthropic_models
+    assert "claude-3-5-sonnet-20240620" not in anthropic_models
+    assert "gpt-4o" not in openai_models
+    assert "gpt-3.5-turbo" not in openai_models
+
+
+def test_recommendations_are_derived_from_the_model_catalog(monkeypatch):
+    monkeypatch.setattr(
+        "neos.utils.llm_factory.tiers_for_provider",
+        lambda provider: {"balanced": f"sentinel-{provider}"},
+    )
+    assert get_recommended_models("anthropic") == {"balanced": "sentinel-anthropic"}
+
+
 def test_recommendations_use_current_everyday_and_powerful_models():
     assert get_recommended_models("anthropic")["balanced"] == "claude-sonnet-5"
     assert get_recommended_models("anthropic")["powerful"] == "claude-opus-5"
     assert get_recommended_models("openai")["balanced"] == "gpt-5.6-terra"
     assert get_recommended_models("openai")["powerful"] == "gpt-5.6-sol"
+
+
+def test_recommendations_for_unknown_provider_are_empty():
+    assert get_recommended_models("no-such-provider") == {}
 
 
 def test_claude_sonnet_5_uses_adaptive_thinking_without_temperature(monkeypatch):
@@ -132,10 +175,69 @@ def test_claude_5_rejects_manual_thinking_budget(monkeypatch):
     )
     provider = AnthropicProvider.__new__(AnthropicProvider)
 
-    with pytest.raises(ValueError, match="budget_tokens.*Claude 5"):
+    with pytest.raises(ValueError, match="budget_tokens.*adaptive"):
         provider.create_llm(
             model="claude-sonnet-5",
             temperature=0.7,
             max_tokens=8192,
             thinking={"type": "enabled", "budget_tokens": 2048},
         )
+
+
+def test_unregistered_anthropic_model_keeps_budgeted_thinking(monkeypatch):
+    """카탈로그에 없는 Anthropic 모델은 레거시 분기를 유지한다 (spec §4)."""
+    monkeypatch.setattr(
+        "neos.providers.anthropic.settings",
+        _anthropic_settings(thinking_enabled=True, max_thinking_length=2048),
+    )
+    provider = AnthropicProvider.__new__(AnthropicProvider)
+
+    with patch("neos.providers.anthropic.ChatAnthropic") as chat_anthropic:
+        provider.create_llm(
+            model="claude-sonnet-9-not-in-catalog",
+            temperature=0.7,
+            max_tokens=8192,
+        )
+
+    params = chat_anthropic.call_args.kwargs
+    assert params["temperature"] == 1.0
+    assert params["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+
+
+def test_thinking_contract_drives_normalization_not_the_model_name(monkeypatch):
+    """계약이 adaptive면 이름과 무관하게 adaptive 경로를 탄다.
+
+    Claude 5.5 / 6이 나와도 YAML 한 줄로 끝나는지를 고정한다.
+    """
+    from neos.config.model_config import ThinkingContract
+
+    monkeypatch.setattr(
+        "neos.providers.anthropic.thinking_contract",
+        lambda model: ThinkingContract.ADAPTIVE,
+    )
+    monkeypatch.setattr(
+        "neos.providers.anthropic.settings",
+        _anthropic_settings(thinking_enabled=False, max_thinking_length=0),
+    )
+    provider = AnthropicProvider.__new__(AnthropicProvider)
+
+    with patch("neos.providers.anthropic.ChatAnthropic") as chat_anthropic:
+        provider.create_llm(
+            model="claude-sonnet-7-hypothetical",
+            temperature=0.7,
+            max_tokens=8192,
+        )
+
+    params = chat_anthropic.call_args.kwargs
+    assert "temperature" not in params
+    assert params["thinking"] == {"type": "adaptive"}
+
+
+def test_version_baked_identifiers_are_gone():
+    """`is_claude_5`가 shim으로도 남지 않는다 (spec §4)."""
+    import neos.config.model_routing as model_routing
+
+    assert not hasattr(model_routing, "is_claude_5")
+    assert "is_claude_5" not in Path("neos/providers/anthropic.py").read_text(
+        encoding="utf-8"
+    )

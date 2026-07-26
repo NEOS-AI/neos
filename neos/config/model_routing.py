@@ -27,13 +27,6 @@ class ModelResolution:
     source: ResolutionSource
 
 
-_CLAUDE_5_MODELS = frozenset({"claude-sonnet-5", "claude-opus-5"})
-
-
-def is_claude_5(model: str) -> bool:
-    return model in _CLAUDE_5_MODELS
-
-
 def resolve_model(
     *,
     config: ModelRoutingConfig,

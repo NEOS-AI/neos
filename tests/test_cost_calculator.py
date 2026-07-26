@@ -102,18 +102,57 @@ class TestCostCalculator:
         assert pricing["input"] == Decimal("0.15")
         assert pricing["output"] == Decimal("0.60")
 
-    def test_get_default_pricing_current_model_catalog(self):
-        anthropic = CostCalculator.DEFAULT_PRICING["anthropic"]
-        openai = CostCalculator.DEFAULT_PRICING["openai"]
+    def test_get_default_pricing_is_derived_from_the_model_catalog(self):
+        from neos.config.model_config import pricing_for
 
-        assert anthropic["claude-sonnet-5"]["input"] == 3.00
-        assert anthropic["claude-sonnet-5"]["output"] == 15.00
-        assert anthropic["claude-opus-5"]["input"] == 5.00
-        assert anthropic["claude-opus-5"]["output"] == 25.00
-        assert openai["gpt-5.6-terra"]["input"] == 2.50
-        assert openai["gpt-5.6-terra"]["output"] == 15.00
-        assert openai["gpt-5.6-sol"]["input"] == 5.00
-        assert openai["gpt-5.6-sol"]["output"] == 30.00
+        for provider, model in (
+            ("anthropic", "claude-sonnet-5"),
+            ("anthropic", "claude-opus-5"),
+            ("openai", "gpt-5.6-terra"),
+            ("openai", "gpt-5.6-sol"),
+        ):
+            catalog_pricing = pricing_for(provider, model)
+            assert catalog_pricing is not None
+
+            pricing = CostCalculator._get_default_pricing(provider, model)
+
+            assert pricing is not None
+            assert pricing["input"] == Decimal(str(catalog_pricing.input))
+            assert pricing["output"] == Decimal(str(catalog_pricing.output))
+
+    def test_get_default_pricing_current_model_values(self):
+        anthropic_sonnet = CostCalculator._get_default_pricing(
+            "anthropic", "claude-sonnet-5"
+        )
+        anthropic_opus = CostCalculator._get_default_pricing("anthropic", "claude-opus-5")
+        openai_terra = CostCalculator._get_default_pricing("openai", "gpt-5.6-terra")
+        openai_sol = CostCalculator._get_default_pricing("openai", "gpt-5.6-sol")
+
+        assert anthropic_sonnet["input"] == Decimal("3.00")
+        assert anthropic_sonnet["output"] == Decimal("15.00")
+        assert anthropic_opus["input"] == Decimal("5.00")
+        assert anthropic_opus["output"] == Decimal("25.00")
+        assert openai_terra["input"] == Decimal("2.50")
+        assert openai_terra["output"] == Decimal("15.00")
+        assert openai_sol["input"] == Decimal("5.00")
+        assert openai_sol["output"] == Decimal("30.00")
+
+    def test_get_default_pricing_ignores_provider_mismatch(self):
+        """provider가 어긋난 조회는 가격을 주지 않는다."""
+        assert CostCalculator._get_default_pricing("openai", "claude-sonnet-5") is None
+        assert CostCalculator._get_default_pricing("anthropic", "gpt-4o") is None
+
+    def test_get_default_pricing_warns_for_unpriced_catalog_model(self, caplog):
+        """카탈로그에 있지만 가격이 없는 모델은 경고 후 None (spec §6)."""
+        with caplog.at_level("WARNING", logger="neos.utils.cost_calculator"):
+            pricing = CostCalculator._get_default_pricing("anthropic", "claude-sonnet-4-6")
+
+        assert pricing is None
+        assert any("claude-sonnet-4-6" in record.message for record in caplog.records)
+
+    def test_default_pricing_table_is_gone(self):
+        """가격 하드코딩이 shim으로도 남지 않는다."""
+        assert not hasattr(CostCalculator, "DEFAULT_PRICING")
 
     def test_get_default_pricing_anthropic_claude_sonnet(self):
         """Test default pricing for Anthropic Claude Sonnet"""

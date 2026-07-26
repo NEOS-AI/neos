@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Type, cast
 
 from langchain_core.language_models import BaseLanguageModel
 
+from neos.config.model_config import get_model_spec, tiers_for_provider
 from neos.config.model_routing import ModelProvider, resolve_model
 from neos.config.settings import settings
 from neos.providers.base import ModelProviderBase
@@ -46,6 +47,15 @@ class LLMFactory:
 
     # LLM 인스턴스 캐시
     _llm_cache: Dict[str, BaseLanguageModel] = {}
+
+    # 카탈로그에 없는 모델을 이미 경고한 이름들 — 로그 폭주를 막는다
+    _warned_unknown_models: set[str] = set()
+
+    # request.model_name은 사용자 입력이다 — 캡이 없으면 이 집합이 무한정
+    # 자란다. 캡에 도달하면 dedup 기록은 멈추지만 경고 자체는 계속 낸다
+    # (운영자에게 신호를 계속 주는 쪽을 택함; 대신 그 이름은 매 호출마다
+    # 다시 경고될 수 있다).
+    _MAX_WARNED_UNKNOWN_MODELS = 1000
 
     @classmethod
     def register_provider(cls, name: str, provider_class: Type[ModelProviderBase]) -> None:
@@ -84,6 +94,27 @@ class LLMFactory:
         raise ValueError(
             f"No default model for provider {provider_name!r}: "
             "pass model= explicitly or set llm.model in configuration"
+        )
+
+    @classmethod
+    def _warn_if_unknown_model(cls, model: str) -> None:
+        """카탈로그에 없는 모델을 이름별 1회 경고한다.
+
+        카탈로그는 allowlist가 아니다 — 카탈로그 갱신 전에도 신종 모델을
+        지정할 수 있어야 하므로 통과시킨다. 다만 그 모델의 가격과 thinking
+        계약은 기본값으로 떨어진다.
+        """
+        if model in cls._warned_unknown_models:
+            return
+        if get_model_spec(model) is not None:
+            return
+        if len(cls._warned_unknown_models) < cls._MAX_WARNED_UNKNOWN_MODELS:
+            cls._warned_unknown_models.add(model)
+        logger.warning(
+            "Model %r is not declared in the model catalog "
+            "(neos/config/models.yaml); pricing and thinking contract fall back "
+            "to defaults",
+            model,
         )
 
     @classmethod
@@ -127,6 +158,7 @@ class LLMFactory:
             raise ValueError(f"Unsupported LLM provider: {provider_name}")
 
         resolved_model = model or cls._resolve_default_model(provider_name)
+        cls._warn_if_unknown_model(resolved_model)
         resolved_temperature = temperature if temperature is not None else settings.LLM_TEMPERATURE
         resolved_max_tokens = kwargs.pop("max_tokens", 0)
 
@@ -278,27 +310,10 @@ def create_ollama_llm(**kwargs) -> BaseLanguageModel:
 
 
 def get_recommended_models(provider: str) -> dict[str, str]:
-    """Provider별 추천 모델 (fast / balanced / powerful)."""
-    recommendations = {
-        "openai": {
-            "fast": "gpt-5-mini-2025-08-07",
-            "balanced": "gpt-5.6-terra",
-            "powerful": "gpt-5.6-sol",
-        },
-        "anthropic": {
-            "fast": "claude-haiku-4-5-20251001",
-            "balanced": "claude-sonnet-5",
-            "powerful": "claude-opus-5",
-        },
-        "gemini": {
-            "fast": "gemini-2.0-flash-exp",
-            "balanced": "gemini-1.5-pro-latest",
-            "powerful": "gemini-1.5-pro-latest",
-        },
-        "ollama": {
-            "fast": "llama3.1:8b",
-            "balanced": "llama3.1:8b",
-            "powerful": "llama3.1:70b",
-        },
-    }
-    return recommendations.get(provider, {})
+    """Provider별 추천 모델 (fast / balanced / powerful).
+
+    모델 카탈로그(`neos/config/models.yaml`)의 `tiers`에서 파생된다.
+    라우팅 역할이 아니라 운영자용 수동 참고값이다
+    (`docs/CONFIGURATION.md` — Model Routing 참조).
+    """
+    return tiers_for_provider(provider)
