@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .models import ProposedClaim
+from .models import EntailmentOutcome, ProposedClaim
 
 _ACTIONS = {"keep", "narrow", "discard"}
 
@@ -12,7 +12,7 @@ _ACTIONS = {"keep", "narrow", "discard"}
 def apply_entailment_results(
     claims: list[ProposedClaim],
     payload: Any,
-) -> list[ProposedClaim] | None:
+) -> EntailmentOutcome | None:
     if not isinstance(payload, dict):
         return None
 
@@ -56,9 +56,11 @@ def apply_entailment_results(
         return None
 
     refined: list[ProposedClaim] = []
+    discarded: list[ProposedClaim] = []
     for index, claim in enumerate(claims):
         action, new_text = by_index[index]
         if action == "discard":
+            discarded.append(claim)
             continue
         if action == "keep":
             refined.append(claim)
@@ -70,4 +72,4 @@ def apply_entailment_results(
                 evidence=claim.evidence,
             )
         )
-    return refined
+    return EntailmentOutcome(refined=refined, discarded=discarded)
