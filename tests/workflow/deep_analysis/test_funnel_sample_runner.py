@@ -11,6 +11,7 @@ import pytest
 
 import scripts.deep_analysis_funnel_sample as cli
 import neos.workflow.deep_analysis.funnel_sample_runner as runner
+from neos.config.settings import settings
 from neos.workflow.deep_analysis.funnel_sample import QUESTION_CASES, QuestionCase
 from neos.workflow.deep_analysis.funnel_sample_runner import (
     PreflightError,
@@ -182,6 +183,38 @@ def test_write_artifacts_rejects_existing_directory(tmp_path):
         write_artifacts(RESULT, tmp_path, now=fixed)
 
 
+def test_write_artifacts_records_execution_receipt(tmp_path):
+    artifact_dir = write_artifacts(
+        RESULT,
+        tmp_path,
+        receipt={
+            "pid": 4242,
+            "started_at": "2026-07-27T00:00:00Z",
+            "finished_at": "2026-07-27T00:10:00Z",
+            "exit_status": 0,
+            "tests_passed": True,
+            "ruff_passed": True,
+            "preflight_passed": True,
+        },
+        fingerprint={"global_token_cap": 20000, "quote_threshold": 0.85},
+    )
+
+    manifest = json.loads((artifact_dir / "manifest.json").read_text())
+
+    assert manifest["execution_receipt"]["pid"] == 4242
+    assert manifest["execution_receipt"]["exit_status"] == 0
+    assert manifest["config_fingerprint"]["global_token_cap"] == 20000
+
+
+def test_write_artifacts_omits_provenance_when_not_supplied(tmp_path):
+    artifact_dir = write_artifacts(RESULT, tmp_path)
+
+    manifest = json.loads((artifact_dir / "manifest.json").read_text())
+
+    assert manifest["execution_receipt"] is None
+    assert manifest["config_fingerprint"] is None
+
+
 def test_manifest_preserves_fixed_questions_when_all_runs_fail(tmp_path):
     result = deepcopy(RESULT)
     result["dev_runs"] = [
@@ -335,6 +368,83 @@ def test_cli_exits_nonzero_without_writing_or_reporting_artifact_when_no_dev_run
     assert exc_info.value.code != 0
     assert capsys.readouterr().out == ""
     assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_writes_execution_receipt_and_reraises_when_sample_run_fails(
+    monkeypatch, tmp_path
+):
+    """The receipt must survive failure: a previous evaluation lost its exit
+    status because nothing persisted it when the run itself blew up. This
+    drives the script's real `_main`/`write_artifacts` — not a hand-built
+    dict — so a future edit that removes the try/except fails this test."""
+
+    async def successful_preflight(*args):
+        return None
+
+    async def failing_sample(**kwargs):
+        raise RuntimeError("sample run exploded")
+
+    monkeypatch.setattr(cli, "preflight", successful_preflight)
+    monkeypatch.setattr(cli, "run_sample", failing_sample)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["deep_analysis_funnel_sample", "--output-root", str(tmp_path)],
+    )
+
+    with pytest.raises(RuntimeError, match="sample run exploded"):
+        cli.main()
+
+    artifact_dirs = list(tmp_path.iterdir())
+    assert len(artifact_dirs) == 1
+    manifest = json.loads((artifact_dirs[0] / "manifest.json").read_text())
+
+    receipt = manifest["execution_receipt"]
+    assert receipt is not None
+    assert receipt["exit_status"] != 0
+    assert receipt["started_at"]
+    assert receipt["finished_at"]
+    assert isinstance(receipt["pid"], int)
+
+    assert manifest["config_fingerprint"] is not None
+    assert (
+        manifest["config_fingerprint"]["global_token_cap"]
+        == settings.config.deep_analysis.global_token_cap
+    )
+
+
+def test_fingerprint_reports_real_config_without_credential_shaped_keys():
+    config = settings.config.deep_analysis
+
+    fingerprint = cli._fingerprint()
+
+    assert fingerprint["global_token_cap"] == config.global_token_cap
+    assert fingerprint["max_depth"] == config.max_depth
+    assert fingerprint["quote_match_threshold"] == config.quote_match_threshold
+    assert fingerprint["models"] == {
+        "scout": config.models.scout,
+        "dig": config.models.dig,
+        "synth": config.models.synth,
+        "judge": config.models.judge,
+    }
+    assert fingerprint["effort"] == {
+        name: {
+            "token_cap": effort.token_cap,
+            "wall_clock_cap": effort.wall_clock_cap,
+        }
+        for name, effort in config.effort.items()
+    }
+
+    serialized = json.dumps(fingerprint).lower()
+    for forbidden in (
+        "secret",
+        "password",
+        "credential",
+        "api_key",
+        "anthropic_api_key",
+        "tavily_api_key",
+    ):
+        assert forbidden not in serialized
 
 
 class HealthySession:

@@ -256,6 +256,56 @@ async def test_worker_entailment_propagates_cassette_miss(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_worker_result_carries_discarded_claims():
+    llm = ScriptedLLM(
+        json.dumps(
+            {
+                "results": [
+                    {"index": 0, "action": "keep"},
+                    {
+                        "index": 1,
+                        "action": "narrow",
+                        "new_text": "narrow",
+                    },
+                    {"index": 2, "action": "discard"},
+                ]
+            }
+        )
+    )
+
+    result = await Worker(
+        Search(), fetch_fn=Fetch(), llm_client=llm
+    ).investigate("Q\n{fetched_evidence}", Effort.SCOUT, "q")
+
+    # narrow survives in claims and must not be reported as discarded
+    assert [claim.text for claim in result.claims] == ["keep", "narrow"]
+    assert [claim.text for claim in result.discarded_claims] == ["drop"]
+    # evidence must survive so phase 2 can re-grade the claim
+    assert result.discarded_claims[0].evidence[0].raw_ref == "0123456789abcdef"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entailment",
+    [
+        "not json",
+        '{"results":[{"index":0,"action":"keep"}]}',
+    ],
+)
+async def test_worker_records_no_discards_when_entailment_fails_open(
+    entailment,
+):
+    result = await Worker(
+        Search(),
+        fetch_fn=Fetch(),
+        llm_client=ScriptedLLM(entailment),
+    ).investigate("Q\n{fetched_evidence}", Effort.SCOUT, "q")
+
+    assert [claim.text for claim in result.claims] == ["keep", "broad", "drop"]
+    assert result.discarded_claims == []
+
+
+@pytest.mark.asyncio
 async def test_worker_entailment_propagates_token_budget_contract_error():
     class ExcessiveUsageLLM:
         def __init__(self):

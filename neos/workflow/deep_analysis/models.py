@@ -48,6 +48,19 @@ class ProposedClaim:
 
 
 @dataclass
+class EntailmentOutcome:
+    """Result of applying one entailment batch.
+
+    ``discarded`` carries the claims the batch dropped so the orchestrator can
+    record them. A ``narrow`` action is not a discard — the narrowed claim
+    appears in ``refined``.
+    """
+
+    refined: list[ProposedClaim] = field(default_factory=list)
+    discarded: list[ProposedClaim] = field(default_factory=list)
+
+
+@dataclass
 class RepairResult:
     claim_id: str
     action: Literal["fixed", "weakened", "abandoned"]
@@ -60,6 +73,7 @@ class WorkerResult:
     question_id: str
     status: Literal["completed", "partial", "failed"]
     claims: list[ProposedClaim] = field(default_factory=list)
+    discarded_claims: list[ProposedClaim] = field(default_factory=list)
     blobs: list[ProposedBlob] = field(default_factory=list)
     repairs: list[RepairResult] = field(default_factory=list)
     proposed_subquestions: list[str] = field(default_factory=list)

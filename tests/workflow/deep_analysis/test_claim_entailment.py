@@ -46,13 +46,49 @@ def test_apply_entailment_results_keeps_narrows_and_discards_atomically():
     )
 
     assert result is not None
-    assert [claim.text for claim in result] == [
+    assert [claim.text for claim in result.refined] == [
         "keep me",
         "supported qualifier",
     ]
-    assert result[0] is claims[0]
-    assert result[1].confidence == claims[1].confidence
-    assert result[1].evidence is claims[1].evidence
+    assert result.refined[0] is claims[0]
+    assert result.refined[1].confidence == claims[1].confidence
+    assert result.refined[1].evidence is claims[1].evidence
+
+
+def test_apply_entailment_results_reports_discarded_claims():
+    claims = _claims()
+
+    result = apply_entailment_results(
+        claims,
+        {
+            "results": [
+                {"index": 0, "action": "keep"},
+                {
+                    "index": 1,
+                    "action": "narrow",
+                    "new_text": "supported qualifier",
+                },
+                {"index": 2, "action": "discard"},
+            ]
+        },
+    )
+
+    assert result is not None
+    assert [claim.text for claim in result.refined] == [
+        "keep me",
+        "supported qualifier",
+    ]
+    # narrow survives and must never be reported as discarded
+    assert [claim.text for claim in result.discarded] == ["discard me"]
+    assert result.discarded[0] is claims[2]
+
+
+def test_apply_entailment_results_discards_nothing_when_validation_fails():
+    claims = _claims()
+
+    result = apply_entailment_results(claims, {"results": []})
+
+    assert result is None
 
 
 @pytest.mark.parametrize(

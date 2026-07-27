@@ -1,8 +1,21 @@
 # 모델 카탈로그 config화 설계
 
 **작성일:** 2026-07-26
+**상태:** ✅ **구현 완료** (2026-07-27, `783fe864..88dea3ab`)
 **목표:** Claude·GPT 등 모델에 관한 사실(지원 목록, 추천 티어, 요청 계약, 가격)을
 `neos/config/models.yaml` 한 곳에서 관리한다. 새 모델 추가가 **config 변경만으로** 끝나야 한다.
+
+> **이 문서는 구현 전 설계다.** 현재 동작의 정본은
+> [CONFIGURATION.md](../../CONFIGURATION.md)의 **Model Catalog** 절이다.
+> 구현하며 아래 세 가지가 이 설계와 달라졌다.
+>
+> | 이 문서 | 실제 구현 | 이유 |
+> |---|---|---|
+> | §3 `tier: <스칼라>` | **`tiers: [<티어>, ...]` 리스트** | 현행 `get_recommended_models()`가 한 모델을 두 티어에 매핑한다 (gemini `balanced`==`powerful`, ollama `fast`==`balanced`). 스칼라로는 전사 불가. 부수 이득으로 "(provider, tier)당 모델 1개" 검증기가 가능해졌다 |
+> | §6 `model_routing` **및 기능 오버라이드** 기동 검사 | **`model_routing` 4개 역할 기본값만** | `schema.py`의 모델 이름 필드 20여 개 중 `token_counter_model`(`"gpt-4"`, 토크나이저 식별자), `embedding.model`, `reranker.model`은 의도적으로 카탈로그 밖이라 매 부팅 거짓 경고가 난다. 기능 오버라이드는 값이 `create_llm(model=...)`로 흘러가 거기서 모델별 1회 경고를 받는다 |
+> | §1·§11 "선택 가능하지만 가격 없는 모델 6개"를 그대로 둠 | **6개 전부 은퇴** (2026-07-27) | 그 비용이 조용히 0으로 집계됐다. `claude-sonnet-5` / `claude-opus-5` / `gpt-5.6-terra` / `gpt-5.6-sol`로 대체하고, "선택 가능한 모델은 전부 가격을 가진다"를 불변식으로 고정했다 |
+>
+> §4의 `thinking` 계약 설계는 그대로 구현됐다 — `is_claude_5`는 shim 없이 삭제됐다.
 
 ---
 

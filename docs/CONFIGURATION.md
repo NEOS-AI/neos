@@ -301,6 +301,28 @@ model, so a brand-new model still works before the catalog is updated. In
 payload shape, so client choice and payload shape share one helper
 (`_is_anthropic_model`) and cannot disagree.
 
+#### When the catalog fails to load
+
+A bad catalog never blocks boot, but it must never be mistaken for a good one
+either — an empty catalog would send Claude 5 the legacy `budgeted` request
+shape, empty every picker, and zero all pricing.
+
+| Situation | Behavior |
+|---|---|
+| File missing or unparseable YAML | empty catalog, `logger.error` |
+| Schema violation on the **first** load | empty catalog, `logger.error` naming what falls back to defaults |
+| Schema violation on a **reload** | **the last-good catalog stays in effect**, `logger.error` says the reload was rejected |
+| Catalog is empty at startup | `logger.error` from the lifespan check, before the database is touched |
+
+A "schema violation" is anything Pydantic rejects: an unknown `provider:` value,
+a mistyped field name, or two models claiming the same `(provider, tier)` pair.
+`load_catalog()` itself still raises `ValidationError` — the graceful handling
+lives in `ModelConfig.reload()`, so callers that want the error can still get it.
+
+Malformed *legacy-shape* entries are skipped individually with a warning rather
+than discarding the file, so one bad hand-edited alias does not take every other
+model with it.
+
 #### Legacy catalog files
 
 `NEOS_MODEL_CONFIG_PATH` can point at a custom file. A file with no `models:`
