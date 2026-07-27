@@ -103,6 +103,23 @@ recall 손실의 하한(lower bound)이다.**
 이 한계를 감수하는 이유는 실제 의사결정이 "entailment가 출하 가능한 claim을
 파괴하고 있는가"이기 때문이다. 그 질문에는 이 측정으로 충분하다.
 
+**추가 한계 — SCOUT effort claim은 그 claim을 작성한 모델이 스스로 판정한다.**
+judge는 `role="everyday"`로 해석되어 `claude-sonnet-5`를 쓰고
+(`service.py:61-66`), SCOUT effort의 worker도 같은 `role="everyday"`로
+해석되어 동일 모델을 쓴다(`worker.py:179`). 즉 SCOUT effort로 생성된
+claim에 한해 `judge ≠ worker` 불변식이 깨지며, 그 claim을 쓴 모델이 그
+claim을 채점한다. 자기 산출물에 관대한 자기 확인 편향(self-verification
+bias)이 일반적이므로 이 편향은 **verified 쪽으로** 기울 개연성이 있고, 그
+결과 측정된 false-discard 비율은 실제보다 **과대평가**될 수 있다. 이는
+"entailment가 안전하다"는 결론 방향으로는 **보수적**이다 — 비율이
+부풀려질수록 §2.3의 안전 임계값(상한 < 10%)은 더 어렵게 통과되므로, 이
+편향이 `safe` 판정을 거짓으로 만들 위험은 낮고 오히려 `over_discarding`
+쪽으로 오판할 위험만 남긴다. DIG effort는 `role="powerful"`로 해석되어
+`claude-opus-5`를 쓰므로(`worker.py:180`, `config.models.dig`) 이 문제에서
+자유롭다. **사용자 결정: judge 모델은 바꾸지 않는다** — 바꾸면 이전
+prompt-v3·entailment 표본과의 judge 동일성이 깨져 비교 가능성이
+사라진다.
+
 ### 2.3 사전 등록된 중단 규칙 (pre-registered stopping rule)
 
 **데이터를 보기 전에 확정한다.** 지난 평가에서 p≈0.42 결과를 발견으로 읽을 뻔한
@@ -241,6 +258,18 @@ class EntailmentOutcome:
 scripts/deep_analysis_discard_recall.py --run-id <id> [--run-id <id> ...]
 ```
 
+- 채점 전에 `preflight()`가 크리덴셜 존재(boolean만, 값은 절대 출력하지
+  않는다)와 DB 연결을 확인한다. `ANTHROPIC_API_KEY`가 없으면 judge 토큰을
+  전혀 쓰지 않고 즉시 실패한다.
+- 채점 도중 개별 claim에서 발생하는 오류(예: 일시적 `LLMProviderError`)는
+  전체 exhaustive pass를 중단시키지 않고 `grade_errors` 카운터로만 집계한다.
+  **오류가 난 claim은 절대 verified로 세지 않는다** — 샘플링 게이트·
+  `_judge_failed`에서 이미 두 번 고친 것과 같은 fail-open 함정이므로 예외도
+  fail-closed로 처리한다.
+- 중복된 `--run-id`는 순서를 유지한 채 한 번으로 합친다(중복 세는 문제
+  방지). run마다 raw_events 등을 개별 집계해 `manifest.json`의 `per_run`에
+  남기므로, 존재하지 않거나 이벤트가 0건인 run도 조용히 묻히지 않고
+  `raw_events: 0` 행으로 드러난다.
 - `claim_discarded` 이벤트를 run 스코프로 조회 → `ProposedClaim` 재구성
 - §2.1의 두 축약(hash 병합 + kept-elsewhere 제외)을 채점 **전에** 적용한다
 - `DeterministicGrader` → 통과분만 `AgenticGrader`
@@ -254,11 +283,20 @@ scripts/deep_analysis_discard_recall.py --run-id <id> [--run-id <id> ...]
   터지면서 `over_discarding` 쪽으로 편향된다. 따라서 `ok and label == "SUPPORTS"`
   를 요구하고, `ok=True, label=None`은 `judge_failed` 버킷으로 따로 보고한다.
 - 아티팩트: `artifacts/deep-analysis-discard-recall/<UTC timestamp>/`
-  (`manifest.json`, `recall.json`, `report.md`) — gitignore 대상, 커밋 금지
+  (`manifest.json`, `recall.json`, `report.md`, `claims.json`) — gitignore
+  대상, 커밋 금지
 - `manifest.json`에는 실행 영수증(PID·UTC start/end)과 구성 지문(judge 모델,
   **resolve된** worker 모델, `agentic_threshold`, `quote_match_threshold`,
   `confidence_cap`, `agentic_sample_rate_override`)을 남긴다. 이것이 없으면 이
-  숫자를 사후 재현할 수 없고 `judge ≠ worker`도 확인할 수 없다.
+  숫자를 사후 재현할 수 없고 `judge ≠ worker`도 확인할 수 없다. 요청된
+  `--run-id`마다 raw_events·distinct_claims·verified 등을 개별 집계하는
+  `per_run` 배열도 여기 남긴다 — 중복 run-id는 값이 아니라 순서만 유지한 채
+  한 번으로 합치고(§4.4), 존재하지 않거나 이벤트가 없는 run은 `raw_events: 0`
+  행으로 드러나 조용히 묻히지 않는다.
+- `claims.json`은 §2.2가 요구하는 사람 판정을 위한 claim 단위 명세다.
+  채점된 discard claim마다 원문, deterministic 통과 여부, agentic label,
+  최종 verified 판정, (있다면) 채점 오류 여부를 담는다. 집계만 있는
+  `recall.json`을 부풀리지 않도록 별도 파일로 둔다.
 - 크리덴셜 값은 출력·영속화하지 않는다 (boolean 유무만). 모델 ID와 threshold는
   구성이지 비밀이 아니다.
 
@@ -267,12 +305,27 @@ scripts/deep_analysis_discard_recall.py --run-id <id> [--run-id <id> ...]
 ## 5. 측정 run 운영
 
 - 범위: `mixed-v1` 5+1 **1회** (기존 표본과 동일 구성)
-- **cassette 기록은 이번 구현에 반영되지 않았다 (미착수).** `funnel_sample_runner`는
-  여전히 cassette를 넘기지 않는다. 미해결 항목으로 `docs/TODO_260729.md`에 남겼다.
-  - **초안의 근거는 틀렸다.** cassette는 프롬프트의 SHA-256으로 키잉되고
-    (`cassette.py:29-36`), discard된 claim은 run 중에 **한 번도 judge에 들어가지
-    않는다**. 따라서 run cassette에는 phase 2의 judge 프롬프트에 대응하는 엔트리가
-    아예 없고, 재채점이 무료가 되지 않는다 — phase 2는 어차피 judge 토큰을 쓴다.
+- **cassette 기록은 착수·완료됐다.** `scripts/deep_analysis_funnel_sample.py`가
+  record 모드 `Cassette`를 임시 디렉터리에 만들고,
+  `functools.partial(build_orchestrator, cassette=cassette)`를
+  `functools.partial(execute_run, build_orchestrator_fn=...)`로 감싸
+  `run_sample(execute_fn=...)`에 주입한다. `execute_run`은 이미
+  `build_orchestrator_fn` 파라미터를 받고(`jobs.py:132`) `build_orchestrator`는
+  이미 `cassette` 파라미터를 받으므로(`service.py:51`), 이 partial 적용
+  하나로 `jobs.py`도 그 테스트 fake도 손대지 않고 cassette를 관통시킬 수
+  있었다. 초안이 "`execute_run`이 cassette를 받지 않는다"고 판단해 미착수로
+  분류했던 것 자체가 틀린 전제였다.
+  - run 종료(성공/실패 모두) 후 `cassette.save()`로 디스크에 flush하고
+    `write_artifacts`가 만든 아티팩트 디렉터리로 옮긴다(`cassette.json`).
+    `Cassette.save()`는 명시적으로 호출하지 않으면 아무것도 쓰지 않으므로
+    (`cassette.py:46-60`), 이 flush를 빠뜨리면 "기록됐지만 실제로는 아무것도
+    담기지 않은" 최악의 상태가 된다 — 그래서 flush 자체를 회귀 테스트로
+    고정했다.
+  - **여전히 사실인 것 — 근거는 그대로 유효하다.** cassette는 프롬프트의
+    SHA-256으로 키잉되고(`cassette.py:29-36`), discard된 claim은 run 중에
+    **한 번도 judge에 들어가지 않는다**. 따라서 run cassette에는 phase 2의
+    judge 프롬프트에 대응하는 엔트리가 아예 없고, 재채점이 무료가 되지 않는다
+    — phase 2는 어차피 judge 토큰을 쓴다.
   - **실제 가치는 run 자체의 재현성**이다: 같은 worker/decompose/synth 호출을
     재생해 동일한 discard 집합을 다시 만들어낼 수 있고, 그래야 phase 1 계측을
     토큰 없이 회귀 검증할 수 있다. phase 2 비용 절감과는 무관하다.
