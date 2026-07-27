@@ -636,6 +636,19 @@ class DeepAnalysisDevProfileConfig(StrictConfigModel):
     max_depth: int = 2
 
 
+class DeepAnalysisDiscardRecallConfig(StrictConfigModel):
+    """Thresholds for the entailment discard-recall measurement.
+
+    ``safe_upper_bound`` and ``over_discard_lower_bound`` are the
+    pre-registered stopping rule. They are fixed before data is collected and
+    must not be tuned after seeing a result.
+    """
+
+    wilson_z: float = 1.96
+    safe_upper_bound: float = 0.10
+    over_discard_lower_bound: float = 0.40
+
+
 class DeepAnalysisConfig(StrictConfigModel):
     enabled: bool = False
     complexity_threshold: float = 0.5
@@ -705,6 +718,9 @@ class DeepAnalysisConfig(StrictConfigModel):
     )
     dev_profile: DeepAnalysisDevProfileConfig = Field(
         default_factory=DeepAnalysisDevProfileConfig
+    )
+    discard_recall: DeepAnalysisDiscardRecallConfig = Field(
+        default_factory=DeepAnalysisDiscardRecallConfig
     )
     search_result_limit: int = 3
     fetch_timeout_seconds: float = 15.0
