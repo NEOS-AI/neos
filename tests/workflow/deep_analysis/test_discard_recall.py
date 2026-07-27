@@ -88,3 +88,37 @@ def test_stopping_verdict_applies_preregistered_rule():
         stopping_verdict(0.05, 0.60, safe_upper=0.10, over_discard_lower=0.40)
         == "inconclusive"
     )
+
+
+def test_claim_from_event_rejects_boolean_confidence():
+    payload = _payload()
+    payload["confidence"] = True
+
+    assert claim_from_event(payload) is None
+
+
+def test_value_est_from_event_rejects_boolean():
+    assert value_est_from_event({"value_est": True}) is None
+    assert value_est_from_event({"value_est": False}) is None
+
+
+def test_stopping_verdict_boundaries_are_strict():
+    # Exactly on a bound is not past it — both fall to inconclusive.
+    assert (
+        stopping_verdict(0.0, 0.10, safe_upper=0.10, over_discard_lower=0.40)
+        == "inconclusive"
+    )
+    assert (
+        stopping_verdict(0.40, 1.0, safe_upper=0.10, over_discard_lower=0.40)
+        == "inconclusive"
+    )
+
+
+def test_wilson_interval_stays_in_unit_range_at_extremes():
+    low, high = wilson_interval(0, 10, 1.96)
+    assert low == 0.0
+    assert 0.0 < high < 1.0
+
+    low, high = wilson_interval(10, 10, 1.96)
+    assert 0.0 < low < 1.0
+    assert high == 1.0
