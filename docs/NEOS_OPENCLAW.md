@@ -425,6 +425,15 @@ class ModelProviderBase(ABC):
     def validate_config(self) -> bool: return True  # 오버라이드 가능
 ```
 
+> **`list_models()`의 출처 (2026-07-26 이후)**
+> Anthropic·OpenAI는 목록을 하드코딩하지 않고 모델 카탈로그
+> (`neos/config/models.yaml`)에서 파생한다 — `selectable: true`인 항목을
+> 선언 순서대로 돌려준다. 새 모델 추가가 config 편집으로 끝난다.
+> Gemini는 정책 범위 밖이라 정적 목록을 유지하고, Ollama는 라이브 서버
+> (`/api/tags`)를 조회하므로 파생이 불가능하다. 두 provider도 추천 티어
+> (`tiers`)는 카탈로그에 있다. 자세한 내용은
+> [CONFIGURATION.md](CONFIGURATION.md)의 Model Catalog 절 참조.
+
 #### LLMFactory 레지스트리 패턴
 
 ```python

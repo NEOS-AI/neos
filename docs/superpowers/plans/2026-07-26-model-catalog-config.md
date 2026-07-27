@@ -1,5 +1,34 @@
 # 모델 카탈로그 config화 구현 계획
 
+> ## ✅ 실행 완료 — 2026-07-27
+>
+> Task 1~7 전부 완료. 커밋 `783fe864..907134db` (구현) + `d306dc63`, `5f6b48ed`
+> (최종 리뷰 수정) + `5279a8ed..88dea3ab` (후속). 전체 스위트 2234 passed / 0 failed.
+>
+> **현재 동작의 정본은 이 계획이 아니라
+> [CONFIGURATION.md](../../CONFIGURATION.md)의 Model Catalog 절이다.**
+> 아래는 실행하며 계획과 달라진 점이다.
+>
+> - **Task 4의 파생 테스트 2개를 교체했다.** 계획의
+>   `assert list_models() == models_for_provider(...)`는 파생이 적용되면 함수를
+>   자기 구현과 비교하는 항진명제가 된다. monkeypatch로 sentinel 카탈로그를
+>   주입하고 소비자가 그것을 따르는지 단언하는 형태로 바꿨다 — 실제로 RED가 난다.
+> - **계획의 `is_claude_5` grep 검사가 자기모순이었다.** "어디에도 나타나면 안 된다"는
+>   검사와, 부재를 단언하기 위해 그 문자열을 적어야 하는 가드 테스트가 충돌한다.
+>   검사 범위를 `neos/`(프로덕션 코드)로 좁혔다.
+> - **`budget_tokens.*adaptive` 정규식이 옛 메시지에도 우연히 매치했다**
+>   ("...Claude 5 adaptive thinking"). 최종 동작은 정확하지만 그 단언의 RED 단계는
+>   의도보다 약했다.
+> - **최종 리뷰가 잡은 것:** 카탈로그 검증 오류 하나가 전체 카탈로그를 비워
+>   Claude 5에 잘못된 요청 형태를 보낼 수 있었다. 이제 reload 실패 시
+>   **last-good 카탈로그를 유지**하고 빈 카탈로그는 기동 시 ERROR를 남긴다.
+> - **계획의 편차 1 근거가 사실과 달랐다.** `tiers` 리스트를 "cli.py가 gemini의
+>   `powerful`을 표시하므로"로 정당화했는데, `neos/cli.py:1649`는 `openai`·`anthropic`만
+>   순회한다. 결정 자체는 유효하다 — 한 모델이 두 티어를 채우는 기존 값을 충실히
+>   전사할 수 있는 유일한 형태이고, 고유성 검증기를 가능하게 한다.
+> - **후속(2026-07-27):** 가격 없이 선택 가능하던 모델 6개를 은퇴시켰다.
+>   "선택 가능한 모델은 전부 가격을 가진다"가 이제 불변식이다.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Claude·GPT 등 모델에 관한 사실(목록 노출, 추천 티어, thinking 요청 계약, 가격)을 `neos/config/models.yaml` 한 곳에서 관리해, 새 모델 추가가 config 편집만으로 끝나게 한다.
