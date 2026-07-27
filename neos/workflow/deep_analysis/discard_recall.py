@@ -105,3 +105,56 @@ def stopping_verdict(
     if low > over_discard_lower:
         return "over_discarding"
     return "inconclusive"
+
+
+async def score_discards(
+    events: list[Any],
+    *,
+    grade_fn,
+    wilson_z: float,
+    safe_upper: float,
+    over_discard_lower: float,
+) -> dict[str, Any]:
+    """Grade every discarded claim and summarise the recall loss.
+
+    ``grade_fn(claim, value_est)`` must return True when the graders would
+    have verified the claim. Every claim is graded — the agentic sampling
+    gate is deliberately bypassed so the denominator stays exact.
+    """
+    verified = 0
+    total = 0
+    malformed = 0
+    for payload in events:
+        claim = claim_from_event(payload)
+        value_est = value_est_from_event(payload)
+        if claim is None or value_est is None:
+            malformed += 1
+            continue
+        total += 1
+        if await grade_fn(claim, value_est):
+            verified += 1
+
+    low, high = wilson_interval(verified, total, wilson_z)
+    # A zero-total interval degenerates to (0.0, 0.0), which would read as
+    # "safe" under the pre-registered rule despite there being no data to
+    # support that conclusion. Treat the no-data case as inconclusive
+    # explicitly rather than let the degenerate interval imply safety.
+    verdict = (
+        "inconclusive"
+        if total == 0
+        else stopping_verdict(
+            low,
+            high,
+            safe_upper=safe_upper,
+            over_discard_lower=over_discard_lower,
+        )
+    )
+    return {
+        "total_discarded": total,
+        "verified": verified,
+        "malformed": malformed,
+        "false_discard_rate": false_discard_rate(verified, total),
+        "wilson_low": low,
+        "wilson_high": high,
+        "verdict": verdict,
+    }

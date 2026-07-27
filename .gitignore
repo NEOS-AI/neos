@@ -42,3 +42,4 @@ jest-cache/
 .superpowers/
 .worktrees/
 /artifacts/deep-analysis-funnel/
+/artifacts/deep-analysis-discard-recall/
