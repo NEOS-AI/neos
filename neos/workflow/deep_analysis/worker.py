@@ -373,11 +373,11 @@ class Worker:
             logger.warning("Claim entailment response was not valid JSON")
             return claims
 
-        refined = apply_entailment_results(claims, payload)
-        if refined is None:
+        outcome = apply_entailment_results(claims, payload)
+        if outcome is None:
             logger.warning("Claim entailment response failed validation")
             return claims
-        return refined
+        return outcome.refined
 
     def _parse_repairs(
         self,
