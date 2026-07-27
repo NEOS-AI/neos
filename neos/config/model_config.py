@@ -414,6 +414,20 @@ def pricing_for(provider: str, model: str) -> ModelPricing | None:
     return model_config.catalog.pricing_for(provider, model)
 
 
+def provider_for_model(model: str, default: str | None = None) -> str | None:
+    """모델이 속한 provider를 카탈로그에서 조회한다.
+
+    이름에서 provider를 추측하던 코드를 대체한다. `gpt`/`claude` 부분 문자열
+    검사는 이름에 provider가 드러나지 않는 모델(예: 은퇴한 `o3`)을 놓쳤고,
+    그런 모델은 기본 provider로 잘못 라우팅됐다.
+
+    카탈로그는 allowlist가 아니므로 미등록 모델은 `default`를 돌려준다 —
+    호출자는 거기서 자기 휴리스틱으로 폴백하면 된다.
+    """
+    spec = model_config.catalog.get_model_spec(model)
+    return spec.provider if spec is not None else default
+
+
 def warn_unknown_routed_models(routing: "ModelRoutingConfig") -> list[str]:
     """역할 기본값이 카탈로그에 없는 모델을 가리키면 경고한다.
 
