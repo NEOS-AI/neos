@@ -258,17 +258,48 @@ diverge, so startup logs a warning when they disagree
 `StrictConfigModel` from it, so a validator reading the catalog would create an
 import cycle.
 
-#### Watching for unpriced models
+#### Every selectable model is priced
 
-Six selectable models currently have no price — `claude-sonnet-4-6`,
-`claude-opus-4-6`, `gpt-5-mini-2025-08-07`, `gpt-5-2025-08-07`, `o3`, and
-`o3-mini`. Picking one of them is allowed (the catalog is not an allowlist), but
-its cost aggregates as zero, which makes `neos_llm_cost_usd` under-report.
+A model with no price still works — the catalog is not an allowlist — but its
+cost aggregates as **zero**, which silently makes `neos_llm_cost_usd`
+under-report. So nothing offered in a picker may lack a price.
 
-Every such lookup increments `neos_llm_unpriced_calls_total{provider,model}`.
-Alert on it: a non-zero value names exactly which models need a price, and the
-fix is one row in `llm_model_pricing` or one `pricing:` block in
-`neos/config/models.yaml`.
+Six models used to violate that and were retired:
+
+| Retired | Replaced by |
+|---|---|
+| `claude-sonnet-4-6` | `claude-sonnet-5` |
+| `claude-opus-4-6` | `claude-opus-5` |
+| `gpt-5-mini-2025-08-07`, `o3-mini` | `gpt-5.6-terra` |
+| `gpt-5-2025-08-07`, `o3` | `gpt-5.6-sol` |
+
+`gpt-5-mini-2025-08-07` held OpenAI's `fast` tier, which moved to
+`gpt-5.6-terra` — so terra now fills both `fast` and `balanced`, the same
+one-model-two-tiers shape Gemini and Ollama already use.
+
+`test_every_selectable_model_is_priced` enforces the invariant, and
+`test_retired_models_are_gone_from_the_catalog` stops the six coming back
+without a `pricing:` block.
+
+Should the invariant ever break — or should a stored conversation still name a
+retired model — every unpriced lookup increments
+`neos_llm_unpriced_calls_total{provider,model}`. Alert on it: a non-zero value
+names exactly which model needs a price, and the fix is one row in
+`llm_model_pricing` or one `pricing:` block in `neos/config/models.yaml`.
+
+#### Which provider serves a model
+
+`provider_for_model()` answers this from the catalog. Code used to guess from
+the name — `"gpt" in model` / `model.startswith("claude")` — which mis-routed
+any model whose name carries no provider hint. Retired `o3` was exactly that
+case: an OpenAI model, offered in the OpenAI picker, that fell through to the
+default provider (Anthropic).
+
+Callers fall back to the old name heuristic when the catalog does not know the
+model, so a brand-new model still works before the catalog is updated. In
+`neos/workflow/deep_analysis/llm.py` the same predicate also selects the request
+payload shape, so client choice and payload shape share one helper
+(`_is_anthropic_model`) and cannot disagree.
 
 #### Legacy catalog files
 
