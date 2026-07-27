@@ -71,6 +71,7 @@ class Worker:
             else settings.config.deep_analysis.confidence_cap
         )
         self._claims: list[ProposedClaim] = []
+        self._discarded_claims: list[ProposedClaim] = []
         self._blobs: list[ProposedBlob] = []
         self._tokens = 0
         self._model = ""
@@ -81,6 +82,7 @@ class Worker:
             question_id=question_id,
             status="partial",
             claims=list(self._claims),
+            discarded_claims=list(self._discarded_claims),
             blobs=list(self._blobs),
             tokens_spent=self._tokens,
             model=self._model,
@@ -169,6 +171,7 @@ class Worker:
             raise ValueError(f"worker cannot execute effort {effort.value}")
 
         self._claims = []
+        self._discarded_claims = []
         self._blobs = []
         self._tokens = 0
         self._confidence_clamped_by_source_count = {}
@@ -309,6 +312,7 @@ class Worker:
             question_id=question_id,
             status=status,
             claims=list(self._claims),
+            discarded_claims=list(self._discarded_claims),
             blobs=list(self._blobs),
             repairs=repair_results,
             proposed_subquestions=list(
@@ -377,6 +381,7 @@ class Worker:
         if outcome is None:
             logger.warning("Claim entailment response failed validation")
             return claims
+        self._discarded_claims = list(outcome.discarded)
         return outcome.refined
 
     def _parse_repairs(
