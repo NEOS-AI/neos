@@ -73,7 +73,13 @@ def _graders(session, run_id: str):
     agentic = AgenticGrader(
         judge_model=judge_model,
         threshold=config.agentic_threshold,
-        sample_rate=config.agentic_sample_rate,
+        # Exhaustive by design. grade() has its own sampling gate
+        # (agentic.py:71-78) that returns ok=True — i.e. "verified" —
+        # for skipped claims. At the configured rate that would silently
+        # count never-judged claims as false discards and make the
+        # measurement non-reproducible. sample_rate=1.0 disables it:
+        # random.random() is always < 1.0, so nothing is ever skipped.
+        sample_rate=1.0,
     )
     return deterministic, agentic
 
