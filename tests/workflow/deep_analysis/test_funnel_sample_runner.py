@@ -182,6 +182,38 @@ def test_write_artifacts_rejects_existing_directory(tmp_path):
         write_artifacts(RESULT, tmp_path, now=fixed)
 
 
+def test_write_artifacts_records_execution_receipt(tmp_path):
+    artifact_dir = write_artifacts(
+        RESULT,
+        tmp_path,
+        receipt={
+            "pid": 4242,
+            "started_at": "2026-07-27T00:00:00Z",
+            "finished_at": "2026-07-27T00:10:00Z",
+            "exit_status": 0,
+            "tests_passed": True,
+            "ruff_passed": True,
+            "preflight_passed": True,
+        },
+        fingerprint={"global_token_cap": 20000, "quote_threshold": 0.85},
+    )
+
+    manifest = json.loads((artifact_dir / "manifest.json").read_text())
+
+    assert manifest["execution_receipt"]["pid"] == 4242
+    assert manifest["execution_receipt"]["exit_status"] == 0
+    assert manifest["config_fingerprint"]["global_token_cap"] == 20000
+
+
+def test_write_artifacts_omits_provenance_when_not_supplied(tmp_path):
+    artifact_dir = write_artifacts(RESULT, tmp_path)
+
+    manifest = json.loads((artifact_dir / "manifest.json").read_text())
+
+    assert manifest["execution_receipt"] is None
+    assert manifest["config_fingerprint"] is None
+
+
 def test_manifest_preserves_fixed_questions_when_all_runs_fail(tmp_path):
     result = deepcopy(RESULT)
     result["dev_runs"] = [

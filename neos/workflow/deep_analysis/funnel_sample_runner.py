@@ -273,6 +273,9 @@ def write_artifacts(
     result: dict[str, Any],
     output_root: Path,
     now: datetime | None = None,
+    *,
+    receipt: dict[str, Any] | None = None,
+    fingerprint: dict[str, Any] | None = None,
 ) -> Path:
     """Write a new timestamped artifact directory without overwriting."""
     timestamp = now or datetime.now(timezone.utc)
@@ -288,6 +291,8 @@ def write_artifacts(
             _safe_run_metadata(run) for run in result.get("dev_runs", [])
         ],
         "default_run": _safe_run_metadata(result.get("default_run")),
+        "execution_receipt": receipt,
+        "config_fingerprint": fingerprint,
     }
     funnel = {
         "dev_runs": [
