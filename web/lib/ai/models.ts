@@ -108,7 +108,9 @@ const RETIRED_MODEL_MAP: Record<string, string> = {
   "openai/gpt-4.1": "gpt-4o",
   "openai/gpt-4.1-mini": "gpt-4o-mini",
   "anthropic/claude-3.7-sonnet-thinking": "claude-sonnet-4-5-20250929",
-  "anthropic/claude-opus-4.5": "claude-opus-4-6",
+  // claude-opus-4-6 was retired from the backend catalog (no known price, so
+  // its cost aggregated as zero). Serve its replacement.
+  "anthropic/claude-opus-4.5": "claude-opus-5",
   // Google and xAI were never servable — the backend has no provider for them,
   // so these selections always failed. Retire them onto the default model.
   "google/gemini-2.5-flash-lite": "claude-sonnet-5",

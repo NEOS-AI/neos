@@ -76,11 +76,33 @@ describe("curated AI models", () => {
 
   test("still maps retired picker IDs so stored selections keep working", () => {
     // Retired from the picker, but existing chat-model cookies and stored
-    // conversations still send this gateway ID.
+    // conversations still send this gateway ID. It used to resolve to
+    // claude-opus-4-6, which the backend catalog has since retired for having
+    // no known price, so it now serves claude-opus-5.
     assert.equal(
       mapToBackendModelName("anthropic/claude-opus-4.5"),
-      "claude-opus-4-6"
+      "claude-opus-5"
     );
+  });
+
+  test("never maps onto a model the backend catalog retired", () => {
+    // These were selectable without a price, so their cost aggregated as zero.
+    const retired = new Set([
+      "claude-sonnet-4-6",
+      "claude-opus-4-6",
+      "gpt-5-mini-2025-08-07",
+      "gpt-5-2025-08-07",
+      "o3",
+      "o3-mini",
+    ]);
+
+    for (const model of chatModels) {
+      assert.equal(
+        retired.has(mapToBackendModelName(model.id)),
+        false,
+        `${model.id} maps onto retired backend model ${mapToBackendModelName(model.id)}`
+      );
+    }
   });
 
   test("never returns a gateway-prefixed ID to the backend", () => {

@@ -44,15 +44,9 @@ models:
     thinking: budgeted
     pricing: {input: 3.00, output: 15.00, cache_creation: 3.75, cache_read: 0.30}
 
-  claude-sonnet-4-6:
-    provider: anthropic
-    thinking: budgeted
-    # 가격 미상 — 현행과 동일. 비용 집계 시 경고 후 0으로 처리된다.
-
-  claude-opus-4-6:
-    provider: anthropic
-    thinking: budgeted
-    # 가격 미상
+  # claude-sonnet-4-6 / claude-opus-4-6은 은퇴했다. 가격을 모르는 채로
+  # 선택 가능해서 비용이 0으로 집계됐다. 각각 claude-sonnet-5 / claude-opus-5로
+  # 대체한다.
 
   # ---- Anthropic (가격만 아는 레거시) ----
   claude-3-5-sonnet-20240620:
@@ -70,7 +64,9 @@ models:
   # ---- OpenAI (선택 가능) ----
   gpt-5.6-terra:
     provider: openai
-    tiers: [balanced]
+    # gpt-5-mini-2025-08-07 은퇴로 `fast`를 넘겨받았다. 한 모델이 두 티어를
+    # 채우는 것은 Gemini·Ollama와 같은 형태다.
+    tiers: [fast, balanced]
     thinking: none
     pricing: {input: 2.50, output: 15.00}
 
@@ -80,26 +76,10 @@ models:
     thinking: none
     pricing: {input: 5.00, output: 30.00}
 
-  gpt-5-mini-2025-08-07:
-    provider: openai
-    tiers: [fast]
-    thinking: none
-    # 가격 미상
-
-  gpt-5-2025-08-07:
-    provider: openai
-    thinking: none
-    # 가격 미상
-
-  o3-mini:
-    provider: openai
-    thinking: none
-    # 가격 미상
-
-  o3:
-    provider: openai
-    thinking: none
-    # 가격 미상
+  # gpt-5-mini-2025-08-07 / gpt-5-2025-08-07 / o3-mini / o3은 은퇴했다.
+  # 가격을 모르는 채로 선택 가능해서 비용이 0으로 집계됐다.
+  # gpt-5-mini와 o3-mini는 gpt-5.6-terra가, gpt-5와 o3은 gpt-5.6-sol이 대신한다.
+  # `fast` 티어는 gpt-5-mini에서 gpt-5.6-terra로 넘어갔다 (위 tiers 참조).
 
   # ---- OpenAI (가격·별칭만 아는 레거시) ----
   gpt-4o:
@@ -149,6 +129,13 @@ models:
     selectable: false
     description: "OpenAI Embedding Large"
     dimension: 3072
+
+  text-embedding-ada-002:
+    provider: openai
+    thinking: none
+    selectable: false
+    description: "OpenAI Embedding Ada v2 (legacy)"
+    dimension: 1536
 
   # ---- Gemini (tier만 이관. list_models()는 정적 목록 유지) ----
   gemini-2.0-flash-exp:
