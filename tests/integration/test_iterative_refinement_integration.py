@@ -190,70 +190,86 @@ class TestFullRefinementProcess:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_parallel_refinement_performance(
+    async def test_max_concurrent_refinements_controls_llm_concurrency(
         self, research_config, mock_citation_tracker_full, sample_sections_data
     ):
-        """Test that parallel refinement is faster than sequential."""
-        # Create two refiners: one with parallelism, one without
-        config_parallel = research_config.to_dict()
-        config_parallel["max_concurrent_refinements"] = 3
+        """`max_concurrent_refinements`가 실제 LLM 동시 호출 수를 제한하는지 검증한다.
 
-        config_sequential = research_config.to_dict()
-        config_sequential["max_concurrent_refinements"] = 1
+        이전 버전은 병렬/순차 실행의 벽시계 시간 비율을 단언했다
+        (`duration_parallel < duration_sequential * 0.7`). 그 단언은 불안정하다 —
+        고정 오버헤드가 목킹된 0.1초 지연을 압도해서 실측 비율이 0.7 경계에
+        걸쳐 있었다(측정: 1.04s / 1.45s = 0.72로 실패). 부하가 걸린 CI에서는
+        더 흔들린다.
 
-        refiner_parallel = IterativeReportRefiner(
-            agent_name="parallel",
-            citation_tracker=mock_citation_tracker_full,
-            config=config_parallel,
-        )
+        동시 실행 여부는 시간으로 추론할 필요가 없다 — 진행 중인 호출 수를
+        직접 세면 결정론적으로 관측된다.
+        """
 
-        refiner_sequential = IterativeReportRefiner(
-            agent_name="sequential",
-            citation_tracker=mock_citation_tracker_full,
-            config=config_sequential,
-        )
+        async def run_with_concurrency_probe(max_concurrent: int) -> int:
+            """리파이너를 한 번 돌리고 관측된 최대 동시 LLM 호출 수를 돌려준다."""
+            config = research_config.to_dict()
+            config["max_concurrent_refinements"] = max_concurrent
 
-        # Mock LLM with fixed delay
-        with patch(
-            "neos.agents.search_agents.hyper_deep_research.iterative_refiner.create_tracked_llm"
-        ) as mock_llm_factory:
-            mock_llm = AsyncMock()
-
-            async def delayed_invoke(messages):
-                await asyncio.sleep(0.1)  # Simulate LLM delay
-                response = MagicMock()
-                response.content = "coherence: 0.85\ncompleteness: 0.85\nclarity: 0.85"
-                return response
-
-            mock_llm.ainvoke = delayed_invoke
-            mock_llm_factory.return_value = mock_llm
-
-            # Time parallel execution
-            import time
-            start_parallel = time.time()
-            result_parallel = await refiner_parallel.generate_coherent_report(
-                sections_data=sample_sections_data,
-                query="Test",
-                context={},
-                session_id="test",
-                user_id="test",
+            refiner = IterativeReportRefiner(
+                agent_name=f"concurrency-{max_concurrent}",
+                citation_tracker=mock_citation_tracker_full,
+                config=config,
             )
-            duration_parallel = time.time() - start_parallel
 
-            # Time sequential execution
-            start_sequential = time.time()
-            result_sequential = await refiner_sequential.generate_coherent_report(
-                sections_data=sample_sections_data,
-                query="Test",
-                context={},
-                session_id="test",
-                user_id="test",
-            )
-            duration_sequential = time.time() - start_sequential
+            in_flight = 0
+            max_in_flight = 0
 
-            # Parallel should be significantly faster
-            # With 3 sections and 0.1s delay, sequential takes ~0.3s, parallel ~0.1s
-            assert duration_parallel < duration_sequential * 0.7
+            with patch(
+                "neos.agents.search_agents.hyper_deep_research.iterative_refiner.create_tracked_llm"
+            ) as mock_llm_factory:
+                mock_llm = AsyncMock()
+
+                async def probed_invoke(messages):
+                    nonlocal in_flight, max_in_flight
+                    in_flight += 1
+                    max_in_flight = max(max_in_flight, in_flight)
+                    try:
+                        # 겹칠 기회를 주는 실제 await 지점. 이 지연이 없으면
+                        # 코루틴이 순차적으로 완주해 동시성이 드러나지 않는다.
+                        await asyncio.sleep(0.05)
+                        response = MagicMock()
+                        response.content = (
+                            "coherence: 0.85\ncompleteness: 0.85\nclarity: 0.85"
+                        )
+                        return response
+                    finally:
+                        in_flight -= 1
+
+                mock_llm.ainvoke = probed_invoke
+                mock_llm_factory.return_value = mock_llm
+
+                await refiner.generate_coherent_report(
+                    sections_data=sample_sections_data,
+                    query="Test",
+                    context={},
+                    session_id="test",
+                    user_id="test",
+                )
+
+            return max_in_flight
+
+        max_in_flight_parallel = await run_with_concurrency_probe(3)
+        max_in_flight_sequential = await run_with_concurrency_probe(1)
+
+        # 순차 설정은 절대 겹치지 않는다.
+        assert max_in_flight_sequential == 1, (
+            f"max_concurrent_refinements=1 should never overlap LLM calls, "
+            f"observed {max_in_flight_sequential}"
+        )
+        # 병렬 설정은 실제로 겹치고, 상한을 넘지 않는다.
+        assert max_in_flight_parallel > 1, (
+            "max_concurrent_refinements=3 did not overlap any LLM calls; "
+            "refinement ran sequentially"
+        )
+        assert max_in_flight_parallel <= 3, (
+            f"max_concurrent_refinements=3 was exceeded, "
+            f"observed {max_in_flight_parallel}"
+        )
 
 
 class TestConfigDrivenBehavior:
@@ -279,7 +295,9 @@ class TestConfigDrivenBehavior:
 
         # Verify threshold is set correctly
         assert refiner.quality_threshold == 0.95
-        assert refiner.section_iterator.quality_threshold == 0.95
+        # SectionIterator는 섹션별 adaptive threshold를 지원하면서 이 필드를
+        # `default_quality_threshold`로 개명했다 (iterative_refiner.py:312).
+        assert refiner.section_iterator.default_quality_threshold == 0.95
 
     @pytest.mark.asyncio
     @pytest.mark.integration

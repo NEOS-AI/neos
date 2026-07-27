@@ -64,8 +64,26 @@ def parse_json(raw: str) -> dict[str, Any]:
     return parsed
 
 
+def _is_anthropic_model(model: str) -> bool:
+    """Anthropic 모델인가 — 클라이언트와 페이로드 형태를 함께 결정한다.
+
+    모델 카탈로그가 우선이다. 이름 접두사만 보던 예전 방식은 `claude`로
+    시작하지 않는 모델을 전부 OpenAI로 보냈다.
+
+    두 호출처(`_default_client`, `_call_provider`)가 반드시 같은 판단을 써야
+    한다. 어긋나면 Anthropic 클라이언트에 OpenAI 페이로드를 보내게 된다.
+    """
+    from neos.config.model_config import provider_for_model
+
+    provider = provider_for_model(model)
+    if provider is not None:
+        return provider == "anthropic"
+    # 카탈로그는 allowlist가 아니다 — 모르는 이름은 접두사로 판단한다.
+    return model.startswith("claude")
+
+
 def _default_client(model: str):
-    if model.startswith("claude"):
+    if _is_anthropic_model(model):
         from anthropic import AsyncAnthropic
 
         return AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -102,7 +120,9 @@ async def _call_provider(
     client,
     tools: list[dict[str, Any]] | None = None,
 ) -> LLMResponse:
-    if model.startswith("claude"):
+    # `_default_client`와 같은 판단을 써야 한다 — 어긋나면 클라이언트와
+    # 페이로드 형태가 짝이 맞지 않는다.
+    if _is_anthropic_model(model):
         kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,

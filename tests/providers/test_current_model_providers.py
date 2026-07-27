@@ -48,13 +48,26 @@ def test_provider_catalogs_include_current_and_legacy_models():
     assert {
         "claude-haiku-4-5-20251001",
         "claude-sonnet-4-5-20250929",
-        "claude-sonnet-4-6",
-        "claude-opus-4-6",
     } <= set(anthropic_models)
     assert {"gpt-5.6-terra", "gpt-5.6-sol"} <= set(openai_models)
-    assert {"gpt-5-mini-2025-08-07", "gpt-5-2025-08-07", "o3-mini", "o3"} <= set(
-        openai_models
-    )
+
+
+def test_retired_unpriced_models_are_not_offered():
+    """가격 없이 선택 가능하던 모델들은 목록에서 빠졌다.
+
+    이들의 비용은 0으로 집계돼 `neos_llm_cost_usd`를 낮췄다. 각각
+    claude-sonnet-5 / claude-opus-5 / gpt-5.6-terra / gpt-5.6-sol로 대체했다.
+    """
+    anthropic_models = AnthropicProvider.__new__(AnthropicProvider).list_models()
+    openai_models = OpenAIProvider.__new__(OpenAIProvider).list_models()
+
+    assert {"claude-sonnet-4-6", "claude-opus-4-6"}.isdisjoint(anthropic_models)
+    assert {
+        "gpt-5-mini-2025-08-07",
+        "gpt-5-2025-08-07",
+        "o3-mini",
+        "o3",
+    }.isdisjoint(openai_models)
 
 
 def test_priced_only_models_stay_out_of_the_selectable_lists():

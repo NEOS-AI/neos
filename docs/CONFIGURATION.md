@@ -228,6 +228,79 @@ Pricing resolves in three layers, and the database still wins:
 llm_model_pricing DB (time-bounded)  →  models.yaml pricing  →  warn + no price
 ```
 
+#### One price, every consumer
+
+The catalog is the single source of model pricing. Every consumer reads it:
+
+| Consumer | Purpose |
+|---|---|
+| `CostCalculator` (`neos/utils/cost_calculator.py`) | billing — records into `message_costs`; the DB layer above still wins |
+| `estimate_cost_usd()` (`neos/utils/token_counter.py`) | estimation, shared by both `TokenCounter` classes |
+| `QualityMetricsCollector` (HDR) | per-report cost estimate, blending input and output rates |
+
+Each of those used to carry its own table. They had already drifted: the two
+token counters priced `gpt-4-turbo` differently from each other, and both fell
+back to GPT-4 rates for anything unrecognized — which priced `claude-sonnet-5`,
+the current default model, at $30/$60 per 1M instead of $3/$15.
+
+None of them guess any more. An unknown or unpriced model estimates as `0.0`
+with a warning, because a plausible-looking wrong price is worse than a missing
+one: nobody audits a number that looks reasonable.
+
+**`coding_model` prices are the exception, deliberately.**
+`coding_model.input_cost_micros_per_million` and its `output_` counterpart are
+integer micros used as the coding loop's budget guard — operator policy, so a
+negotiated rate must be allowed to differ, and the catalog never overwrites
+them. But the same model's price then lives in two places and can silently
+diverge, so startup logs a warning when they disagree
+(`warn_coding_model_price_drift`). The check cannot live in
+`neos/config/schema.py`: that module is pure schema and `model_config` imports
+`StrictConfigModel` from it, so a validator reading the catalog would create an
+import cycle.
+
+#### Every selectable model is priced
+
+A model with no price still works — the catalog is not an allowlist — but its
+cost aggregates as **zero**, which silently makes `neos_llm_cost_usd`
+under-report. So nothing offered in a picker may lack a price.
+
+Six models used to violate that and were retired:
+
+| Retired | Replaced by |
+|---|---|
+| `claude-sonnet-4-6` | `claude-sonnet-5` |
+| `claude-opus-4-6` | `claude-opus-5` |
+| `gpt-5-mini-2025-08-07`, `o3-mini` | `gpt-5.6-terra` |
+| `gpt-5-2025-08-07`, `o3` | `gpt-5.6-sol` |
+
+`gpt-5-mini-2025-08-07` held OpenAI's `fast` tier, which moved to
+`gpt-5.6-terra` — so terra now fills both `fast` and `balanced`, the same
+one-model-two-tiers shape Gemini and Ollama already use.
+
+`test_every_selectable_model_is_priced` enforces the invariant, and
+`test_retired_models_are_gone_from_the_catalog` stops the six coming back
+without a `pricing:` block.
+
+Should the invariant ever break — or should a stored conversation still name a
+retired model — every unpriced lookup increments
+`neos_llm_unpriced_calls_total{provider,model}`. Alert on it: a non-zero value
+names exactly which model needs a price, and the fix is one row in
+`llm_model_pricing` or one `pricing:` block in `neos/config/models.yaml`.
+
+#### Which provider serves a model
+
+`provider_for_model()` answers this from the catalog. Code used to guess from
+the name — `"gpt" in model` / `model.startswith("claude")` — which mis-routed
+any model whose name carries no provider hint. Retired `o3` was exactly that
+case: an OpenAI model, offered in the OpenAI picker, that fell through to the
+default provider (Anthropic).
+
+Callers fall back to the old name heuristic when the catalog does not know the
+model, so a brand-new model still works before the catalog is updated. In
+`neos/workflow/deep_analysis/llm.py` the same predicate also selects the request
+payload shape, so client choice and payload shape share one helper
+(`_is_anthropic_model`) and cannot disagree.
+
 #### Legacy catalog files
 
 `NEOS_MODEL_CONFIG_PATH` can point at a custom file. A file with no `models:`

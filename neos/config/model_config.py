@@ -26,7 +26,7 @@ from pydantic import Field, ValidationError, model_validator
 from neos.config.schema import StrictConfigModel
 
 if TYPE_CHECKING:
-    from neos.config.schema import ModelRoutingConfig
+    from neos.config.schema import CodingModelConfig, ModelRoutingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -414,6 +414,20 @@ def pricing_for(provider: str, model: str) -> ModelPricing | None:
     return model_config.catalog.pricing_for(provider, model)
 
 
+def provider_for_model(model: str, default: str | None = None) -> str | None:
+    """모델이 속한 provider를 카탈로그에서 조회한다.
+
+    이름에서 provider를 추측하던 코드를 대체한다. `gpt`/`claude` 부분 문자열
+    검사는 이름에 provider가 드러나지 않는 모델(예: 은퇴한 `o3`)을 놓쳤고,
+    그런 모델은 기본 provider로 잘못 라우팅됐다.
+
+    카탈로그는 allowlist가 아니므로 미등록 모델은 `default`를 돌려준다 —
+    호출자는 거기서 자기 휴리스틱으로 폴백하면 된다.
+    """
+    spec = model_config.catalog.get_model_spec(model)
+    return spec.provider if spec is not None else default
+
+
 def warn_unknown_routed_models(routing: "ModelRoutingConfig") -> list[str]:
     """역할 기본값이 카탈로그에 없는 모델을 가리키면 경고한다.
 
@@ -463,3 +477,56 @@ def warn_unknown_routed_models(routing: "ModelRoutingConfig") -> list[str]:
                     model,
                 )
     return unknown
+
+
+# USD / 1M 토큰 → micros / 1M 토큰
+_MICROS_PER_USD = 1_000_000
+
+
+def warn_coding_model_price_drift(
+    coding_model: "CodingModelConfig",
+) -> list[str]:
+    """`coding_model` 가격이 카탈로그와 어긋나면 경고한다.
+
+    이 값들은 코딩 루프의 예산 가드용이며 **운영자 정책**이다. 협상 요율을
+    쓸 수 있어야 하므로 카탈로그가 덮어쓰지 않는다. 다만 같은 모델의 가격이
+    두 곳에 있으면 조용히 어긋날 수 있으므로, 불일치를 기동 시 드러낸다.
+
+    카탈로그를 `neos/config/schema.py`의 검증기에서 조회할 수는 없다 —
+    이 모듈이 그쪽에서 `StrictConfigModel`을 가져오므로 순환 import가 된다.
+    그래서 스키마가 아니라 기동 경로에서 확인한다.
+
+    Returns:
+        어긋난 항목 이름 목록 (`"input"`, `"output"`). 일치하거나 비교
+        대상이 없으면 빈 목록.
+    """
+    if not coding_model.enabled or not coding_model.model:
+        return []
+
+    spec = model_config.catalog.get_model_spec(coding_model.model)
+    pricing = spec.pricing if spec is not None else None
+    if pricing is None:
+        # 카탈로그는 allowlist가 아니다 — 모르는 모델은 비교할 근거가 없다.
+        return []
+
+    drift: list[str] = []
+    for field, configured, catalog_usd in (
+        ("input", coding_model.input_cost_micros_per_million, pricing.input),
+        ("output", coding_model.output_cost_micros_per_million, pricing.output),
+    ):
+        expected = int(round(catalog_usd * _MICROS_PER_USD))
+        if configured != expected:
+            drift.append(field)
+            logger.warning(
+                "coding_model.%s_cost_micros_per_million = %d disagrees with the "
+                "model catalog price for %r (%d micros = $%.2f per 1M tokens). "
+                "Budget accounting and cost reporting will not match. Intentional "
+                "(negotiated rate)? Leave it; otherwise align it with "
+                "neos/config/models.yaml.",
+                field,
+                configured,
+                coding_model.model,
+                expected,
+                catalog_usd,
+            )
+    return drift

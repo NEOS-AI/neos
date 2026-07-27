@@ -41,13 +41,26 @@ class ChatLLMService:
         self.default_provider = "anthropic"
 
     def _extract_provider_from_model(self, model_name: str) -> str:
-        """모델명에서 provider 추출"""
-        if "gpt" in model_name.lower():
+        """모델의 provider를 결정한다.
+
+        모델 카탈로그가 우선이다. 이름만 보던 예전 방식은 `gpt`/`claude`가
+        들어 있지 않은 모델을 놓쳐 기본 provider로 잘못 보냈다.
+
+        카탈로그는 allowlist가 아니므로, 모르는 이름은 예전 휴리스틱으로
+        폴백한다 — 카탈로그 갱신 전에도 신종 모델을 쓸 수 있어야 한다.
+        """
+        from neos.config.model_config import provider_for_model
+
+        catalogued = provider_for_model(model_name)
+        if catalogued is not None:
+            return catalogued
+
+        lowered = model_name.lower()
+        if "gpt" in lowered:
             return "openai"
-        elif "claude" in model_name.lower():
+        if "claude" in lowered:
             return "anthropic"
-        else:
-            return self.default_provider
+        return self.default_provider
 
     def _build_messages(
         self,

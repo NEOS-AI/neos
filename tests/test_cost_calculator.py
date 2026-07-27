@@ -143,12 +143,20 @@ class TestCostCalculator:
         assert CostCalculator._get_default_pricing("anthropic", "gpt-4o") is None
 
     def test_get_default_pricing_warns_for_unpriced_catalog_model(self, caplog):
-        """카탈로그에 있지만 가격이 없는 모델은 경고 후 None (spec §6)."""
+        """카탈로그에 있지만 가격이 없는 모델은 경고 후 None (spec §6).
+
+        `gpt-4-turbo-preview`는 `aliases.llm.gpt4`가 가리키는 레거시 별칭
+        대상이라 카탈로그에 있지만 가격이 없다. 선택 가능한 모델 중에는
+        이런 경우가 없어야 하며, 그 불변식은 별도로 지켜진다
+        (`test_model_catalog_parity.py::test_every_selectable_model_is_priced`).
+        """
         with caplog.at_level("WARNING", logger="neos.utils.cost_calculator"):
-            pricing = CostCalculator._get_default_pricing("anthropic", "claude-sonnet-4-6")
+            pricing = CostCalculator._get_default_pricing("openai", "gpt-4-turbo-preview")
 
         assert pricing is None
-        assert any("claude-sonnet-4-6" in record.message for record in caplog.records)
+        assert any(
+            "gpt-4-turbo-preview" in record.message for record in caplog.records
+        )
 
     def test_default_pricing_table_is_gone(self):
         """가격 하드코딩이 shim으로도 남지 않는다."""

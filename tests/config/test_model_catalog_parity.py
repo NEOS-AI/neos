@@ -9,6 +9,7 @@ import pytest
 
 from neos.config.model_config import (
     ThinkingContract,
+    get_model_spec,
     models_for_provider,
     pricing_for,
     thinking_contract,
@@ -23,13 +24,18 @@ ANTHROPIC_SELECTABLE = [
     "claude-opus-5",
     "claude-haiku-4-5-20251001",
     "claude-sonnet-4-5-20250929",
-    "claude-sonnet-4-6",
-    "claude-opus-4-6",
 ]
 
 OPENAI_SELECTABLE = [
     "gpt-5.6-terra",
     "gpt-5.6-sol",
+]
+
+# 은퇴한 모델. 가격을 모르는 채로 선택 가능해서 비용이 0으로 집계됐다.
+# 목록에 되살아나면 그 구멍도 함께 돌아온다.
+RETIRED_MODELS = [
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
     "gpt-5-mini-2025-08-07",
     "gpt-5-2025-08-07",
     "o3-mini",
@@ -43,7 +49,8 @@ EXPECTED_TIERS = {
         "powerful": "claude-opus-5",
     },
     "openai": {
-        "fast": "gpt-5-mini-2025-08-07",
+        # gpt-5-mini-2025-08-07 은퇴로 terra가 fast까지 겸한다
+        "fast": "gpt-5.6-terra",
         "balanced": "gpt-5.6-terra",
         "powerful": "gpt-5.6-sol",
     },
@@ -79,8 +86,6 @@ ADAPTIVE_MODELS = ["claude-sonnet-5", "claude-opus-5"]
 BUDGETED_MODELS = [
     "claude-haiku-4-5-20251001",
     "claude-sonnet-4-5-20250929",
-    "claude-sonnet-4-6",
-    "claude-opus-4-6",
     "claude-3-5-sonnet-20240620",
     "claude-opus-4-5-20251101",
 ]
@@ -127,26 +132,35 @@ def test_openai_models_declare_no_thinking_contract() -> None:
         assert thinking_contract(model) is ThinkingContract.NONE
 
 
-def test_every_selectable_model_without_pricing_is_known() -> None:
-    """가격 미상 모델은 의도된 목록과 정확히 일치해야 한다.
+def test_every_selectable_model_is_priced() -> None:
+    """선택 가능한 모델은 예외 없이 가격을 가져야 한다.
 
-    선택 가능하지만 가격이 없는 모델의 비용은 0으로 집계된다(spec §1).
-    새 모델을 가격 없이 추가하면 이 테스트가 알려준다.
+    가격 없는 모델을 고를 수 있으면 그 비용은 조용히 0으로 집계되고
+    `neos_llm_cost_usd`가 실제보다 낮아진다(spec §1). 예전에는 그런 모델이
+    6개 있었고, 이 테스트는 그 목록을 고정하기만 했다. 지금은 전부 은퇴시켰고,
+    테스트도 목록 고정이 아니라 **불변식**을 지킨다.
+
+    가격 없이 새 모델을 선택 가능하게 만들면 여기서 걸린다.
     """
     unpriced = {
-        model
+        f"{provider}/{model}"
         for provider in ("anthropic", "openai")
         for model in models_for_provider(provider)
         if pricing_for(provider, model) is None
     }
 
-    assert unpriced == {
-        "claude-sonnet-4-6",
-        "claude-opus-4-6",
-        "gpt-5-mini-2025-08-07",
-        "gpt-5-2025-08-07",
-        "o3",
-        "o3-mini",
-    }
+    assert unpriced == set(), (
+        "these models are selectable but have no price, so their cost "
+        f"aggregates as zero: {sorted(unpriced)}"
+    )
+
+
+@pytest.mark.parametrize("model", RETIRED_MODELS)
+def test_retired_models_are_gone_from_the_catalog(model: str) -> None:
+    """은퇴 모델이 되살아나면 $0 집계 구멍도 함께 돌아온다."""
+    assert get_model_spec(model) is None, (
+        f"{model} was retired for having no price; re-adding it needs a "
+        "`pricing:` block, otherwise its cost aggregates as zero"
+    )
 
 

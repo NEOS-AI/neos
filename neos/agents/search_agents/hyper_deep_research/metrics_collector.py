@@ -127,18 +127,29 @@ class QualityMetricsCollector:
         self,
         report_id: str,
         enabled: bool = True,
-        llm_cost_per_1k_tokens: float = 0.015,  # Default: GPT-4 pricing
+        model: Optional[str] = None,
+        llm_cost_per_1k_tokens: Optional[float] = None,
     ):
         """Initialize metrics collector.
 
         Args:
             report_id: Unique identifier for this report
             enabled: Whether to collect metrics (feature flag)
-            llm_cost_per_1k_tokens: Cost per 1k tokens for estimation
+            model: 비용 추정에 쓸 모델 이름. 주면 요율을 모델 카탈로그
+                (`neos/config/models.yaml`)에서 가져온다.
+            llm_cost_per_1k_tokens: 요율을 직접 지정한다 (카탈로그보다 우선).
+                운영자가 협상 요율을 쓰는 경우를 위한 탈출구다.
+
+        Note:
+            예전 기본값은 `0.015  # Default: GPT-4 pricing`이었다. 그 주석은
+            틀렸고(GPT-4의 어느 요율도 0.015가 아니다) 실제로 쓰이는 모델과도
+            무관했다. 이제 요율을 모르면 추측하지 않고 0.0으로 두고 경고한다.
         """
         self.report_id = report_id
         self.enabled = enabled
-        self.llm_cost_per_1k_tokens = llm_cost_per_1k_tokens
+        self.llm_cost_per_1k_tokens = self._resolve_rate_per_1k(
+            model, llm_cost_per_1k_tokens
+        )
 
         # Storage
         self.section_metrics: Dict[str, SectionMetrics] = {}
@@ -149,6 +160,43 @@ class QualityMetricsCollector:
         self.end_time: Optional[datetime] = None
 
         logger.info(f"QualityMetricsCollector initialized (enabled={enabled})")
+
+    @staticmethod
+    def _resolve_rate_per_1k(
+        model: Optional[str],
+        explicit_rate: Optional[float],
+    ) -> float:
+        """비용 추정 요율(USD / 1K 토큰)을 정한다.
+
+        우선순위: 명시 요율 → 카탈로그 → 0.0 + 경고.
+
+        `_estimate_cost`가 호출당 약 1000 토큰을 가정하되 입력/출력 비율은
+        모르므로, 카탈로그의 입력·출력 단가를 반반으로 섞어 쓴다. 거친
+        추정이지만 근거가 있고, 실제로 쓰는 모델을 따라간다.
+        """
+        if explicit_rate is not None:
+            return explicit_rate
+
+        if model is None:
+            logger.warning(
+                "No model given for cost estimation; reporting 0.0. "
+                "Pass model= to derive the rate from the model catalog."
+            )
+            return 0.0
+
+        from neos.config.model_config import get_model_spec
+
+        spec = get_model_spec(model)
+        pricing = spec.pricing if spec is not None else None
+        if pricing is None:
+            logger.warning(
+                "No catalog pricing for model %r; estimating cost as 0.0. "
+                "Add it to neos/config/models.yaml to get real estimates.",
+                model,
+            )
+            return 0.0
+
+        return ((pricing.input + pricing.output) / 2) / 1000
 
     def start_collection(self):
         """Start metrics collection (mark start time)."""

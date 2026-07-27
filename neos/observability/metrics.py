@@ -291,6 +291,16 @@ class EnterpriseMetricsCollector:
             registry=self.registry
         )
 
+        # 가격을 모르는 모델의 호출 수. 이 모델들의 비용은 0으로 집계되므로
+        # neos_llm_cost_usd가 실제보다 낮게 나온다. 0이 아니면 해당 모델의
+        # 가격을 llm_model_pricing DB나 neos/config/models.yaml에 넣어야 한다.
+        self.llm_unpriced_calls_total = Counter(
+            'neos_llm_unpriced_calls_total',
+            'LLM cost lookups with no known price (cost aggregated as zero)',
+            ['provider', 'model'],
+            registry=self.registry
+        )
+
         # === Database Metrics ===
 
         self.db_queries_total = Counter(
