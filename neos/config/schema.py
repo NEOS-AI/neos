@@ -642,6 +642,18 @@ class DeepAnalysisDiscardRecallConfig(StrictConfigModel):
     ``safe_upper_bound`` and ``over_discard_lower_bound`` are the
     pre-registered stopping rule. They are fixed before data is collected and
     must not be tuned after seeing a result.
+
+    **Sample-size consequence of these defaults.** With zero verified
+    discards, the Wilson upper bound is ``z^2 / (n + z^2)``. At ``z=1.96``
+    that falls below ``safe_upper_bound=0.10`` only from **n = 35** distinct
+    discards upward (n=34 gives 0.1015, n=35 gives 0.0989). The planned
+    ``mixed-v1`` 5+1 run is expected to yield roughly 16 distinct discards,
+    where the best attainable upper bound is ~0.194. A ``safe`` verdict is
+    therefore unreachable at the planned sample size — only
+    ``over_discarding`` or ``inconclusive`` can be returned, and clearing
+    entailment requires the staged expansion to pool at least 35 distinct
+    discards with zero verified. This is a documented property of the
+    pre-registered rule, not a defect to be tuned away.
     """
 
     wilson_z: float = 1.96

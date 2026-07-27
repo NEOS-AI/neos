@@ -52,7 +52,21 @@ if action == "discard":
 discard된 claim을 **기존 파이프라인의 grader에 통과시켜** 몇 개가 verified 판정을
 받는지 센다.
 
-**false-discard 비율 = (discard된 claim 중 verified 판정 수) / (전체 discard 수)**
+**false-discard 비율 = (discard된 claim 중 verified 판정 수) / (distinct discard 수)**
+
+**분모의 단위는 이벤트가 아니라 distinct claim이다.** 질문이 `open`으로 되돌아가
+재조사되면 entailment가 다시 돌고 같은 claim이 또 discard되어 `claim_discarded`
+이벤트가 하나 더 쌓인다. 이벤트 단위로 세면 (a) 그 claim이 복제 수만큼 가중되고,
+(b) 독립이 아닌 관측으로 n이 부풀어 Wilson 구간이 좁아진다. 그래서 phase 2는
+채점 전에 두 번 접는다:
+
+1. `claim_hash(text)`로 병합한다 — ledger가 커밋 claim을 병합하는 것과 **같은**
+   run 스코프 동일성이다 (`ledger._upsert_claim`).
+2. 해당 run의 `deep_analysis_claims`에 존재하는 hash는 제외한다. 다른 pass에서
+   entailment가 살렸다는 뜻이므로 recall 손실이 아니다.
+
+`raw_events` / `distinct_claims` / `kept_elsewhere`를 모두 아티팩트에 남겨 이
+축약 과정을 감사 가능하게 한다.
 
 여기서 "verified"는 파이프라인과 동일한 정의다: DeterministicGrader를 통과하고
 이어서 AgenticGrader도 통과한 claim. 어느 단계에서 거부되든 verified가 아니다.
@@ -102,6 +116,23 @@ recall 손실의 하한(lower bound)이다.**
 
 10%/40%는 판단값이다. 구현 전에 조정할 수 있으나 **데이터를 본 뒤에는 조정하지
 않는다.**
+
+#### 2.3.1 ⚠️ `safe`는 계획된 표본 크기로는 도달 불가능하다
+
+verified가 0일 때 Wilson 상한은 `z² / (n + z²)`이다. `z=1.96`에서 이 값이 10%
+미만이 되려면 **distinct discard n ≥ 35**가 필요하다 (n=34 → 0.1015, n=35 →
+0.0989). 그런데 §5의 `mixed-v1` 5+1 **1회** run에서 기대되는 discard는 대략
+16건이고, 그때 달성 가능한 최선의 상한은 ~0.194다.
+
+따라서 계획된 1회 run으로는 **`safe` 판정이 원리적으로 나올 수 없다.**
+`over_discarding` 또는 `inconclusive` 둘 중 하나만 반환된다. entailment를
+"안전"으로 정리하려면 §5의 단계적 확대가 **pooled distinct discard 35건 이상 +
+verified 0건**에 도달해야 한다.
+
+이는 사전 등록된 규칙의 문서화된 성질이지 결함이 아니다. **임계값을 낮춰
+해결하지 않는다** — 그것이 바로 §2.3이 금지하는 사후 조정이다. 첫 run이
+`inconclusive`로 끝나는 것은 실패가 아니라 예상된 결과다. 같은 내용이
+`neos/config/schema.py`의 `DeepAnalysisDiscardRecallConfig` docstring에도 있다.
 
 ---
 
@@ -211,23 +242,43 @@ scripts/deep_analysis_discard_recall.py --run-id <id> [--run-id <id> ...]
 ```
 
 - `claim_discarded` 이벤트를 run 스코프로 조회 → `ProposedClaim` 재구성
+- §2.1의 두 축약(hash 병합 + kept-elsewhere 제외)을 채점 **전에** 적용한다
 - `DeterministicGrader` → 통과분만 `AgenticGrader`
 - **전수 채점한다.** `AgenticGrader.should_grade()`의 샘플링 게이트를 **우회**하고
-  모든 discard claim에 `grade()`를 직접 호출한다. 샘플링을 적용하면 분모가
-  흐려져 비율 자체가 오염된다.
+  (`sample_rate=1.0`) 모든 discard claim에 `grade()`를 직접 호출한다. 샘플링을
+  적용하면 분모가 흐려져 비율 자체가 오염된다.
+- **verified 판정은 `Verdict.ok`만으로 인정하지 않는다.** `_judge_failed`는
+  비필수(non-mandatory) claim에 대해 fail-open하여 `ok=True, label=None`을
+  돌려준다(`agentic.py:61-69`). discard된 claim은 confidence가 낮아 비필수로
+  분류되는 비중이 높으므로, `ok`만 보면 이 경로가 측정 대상 모집단에 편중되어
+  터지면서 `over_discarding` 쪽으로 편향된다. 따라서 `ok and label == "SUPPORTS"`
+  를 요구하고, `ok=True, label=None`은 `judge_failed` 버킷으로 따로 보고한다.
 - 아티팩트: `artifacts/deep-analysis-discard-recall/<UTC timestamp>/`
   (`manifest.json`, `recall.json`, `report.md`) — gitignore 대상, 커밋 금지
-- 크리덴셜 값은 출력·영속화하지 않는다 (boolean 유무만)
+- `manifest.json`에는 실행 영수증(PID·UTC start/end)과 구성 지문(judge 모델,
+  **resolve된** worker 모델, `agentic_threshold`, `quote_match_threshold`,
+  `confidence_cap`, `agentic_sample_rate_override`)을 남긴다. 이것이 없으면 이
+  숫자를 사후 재현할 수 없고 `judge ≠ worker`도 확인할 수 없다.
+- 크리덴셜 값은 출력·영속화하지 않는다 (boolean 유무만). 모델 ID와 threshold는
+  구성이지 비밀이 아니다.
 
 ---
 
 ## 5. 측정 run 운영
 
 - 범위: `mixed-v1` 5+1 **1회** (기존 표본과 동일 구성)
-- **cassette를 기록한다.** phase 2 재채점과 추후 재현이 무료가 된다. 기존 funnel
-  러너는 cassette를 넘기지 않으므로 이 연결이 필요하다.
+- **cassette 기록은 이번 구현에 반영되지 않았다 (미착수).** `funnel_sample_runner`는
+  여전히 cassette를 넘기지 않는다. 미해결 항목으로 `docs/TODO_260729.md`에 남겼다.
+  - **초안의 근거는 틀렸다.** cassette는 프롬프트의 SHA-256으로 키잉되고
+    (`cassette.py:29-36`), discard된 claim은 run 중에 **한 번도 judge에 들어가지
+    않는다**. 따라서 run cassette에는 phase 2의 judge 프롬프트에 대응하는 엔트리가
+    아예 없고, 재채점이 무료가 되지 않는다 — phase 2는 어차피 judge 토큰을 쓴다.
+  - **실제 가치는 run 자체의 재현성**이다: 같은 worker/decompose/synth 호출을
+    재생해 동일한 discard 집합을 다시 만들어낼 수 있고, 그래야 phase 1 계측을
+    토큰 없이 회귀 검증할 수 있다. phase 2 비용 절감과는 무관하다.
 - 단계적 확대: §2.3 중단 규칙에 따라 미결이면 그때 표본을 늘린다. 미리 3회를
-  돌리지 않는다.
+  돌리지 않는다. **§2.3.1 참고 — `safe` 판정에는 pooled distinct discard 35건이
+  필요하므로 확대 계획은 이 수치를 전제로 세운다.**
 - 실행 영수증(PID·UTC start/end·exit status·통과 boolean)과 구성 지문(model ID,
   threshold, cap)을 `manifest.json`에 남긴다 — 지난 평가에서 도출된 계측 부채다.
 
