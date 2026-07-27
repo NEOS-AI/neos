@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -411,6 +412,136 @@ def test_cli_writes_execution_receipt_and_reraises_when_sample_run_fails(
         manifest["config_fingerprint"]["global_token_cap"]
         == settings.config.deep_analysis.global_token_cap
     )
+
+
+def test_finalize_cassette_flushes_and_moves_into_artifact_dir(tmp_path):
+    """`Cassette.save()` never runs implicitly -- if `_finalize_cassette`
+    forgot to call it, the cassette would look captured while carrying
+    nothing, which is worse than not recording at all."""
+    cassette, cassette_tmp_dir = cli._new_recording_cassette()
+    try:
+        assert cassette.mode == "record"
+        assert not cassette.path.exists()
+
+        cassette._data["deadbeef"] = {"result": "cached"}
+        artifact_dir = tmp_path / "artifact"
+        artifact_dir.mkdir()
+
+        cli._finalize_cassette(cassette, artifact_dir)
+
+        assert not cassette.path.exists()
+        persisted = json.loads((artifact_dir / "cassette.json").read_text())
+        assert persisted == {"deadbeef": {"result": "cached"}}
+    finally:
+        shutil.rmtree(cassette_tmp_dir, ignore_errors=True)
+
+
+async def _cached_value(value):
+    return value
+
+
+def test_main_threads_a_recording_cassette_through_build_orchestrator(
+    monkeypatch, tmp_path
+):
+    """`execute_run` accepts `build_orchestrator_fn` and `build_orchestrator`
+    accepts `cassette` -- this was previously believed to require editing
+    `jobs.py`, which is wrong. The script should thread a cassette through
+    with a `functools.partial`, and the recorded cassette must survive
+    save + move into the artifact directory."""
+    captured = {}
+
+    async def successful_preflight(*args):
+        return None
+
+    async def fake_run_sample(**kwargs):
+        execute_fn = kwargs["execute_fn"]
+        captured["execute_fn"] = execute_fn
+        build_fn = execute_fn.keywords["build_orchestrator_fn"]
+        cassette = build_fn.keywords["cassette"]
+        captured["cassette"] = cassette
+        # Simulate the run recording at least one call during execution.
+        await cassette.remember(
+            "llm", {"prompt": "hi"}, lambda: _cached_value("cached")
+        )
+        return {
+            "schema_version": "1",
+            "question_set_version": "mixed-v1",
+            "questions": {
+                "schema_version": "1",
+                "items": _declared_questions(),
+            },
+            "dev_runs": [_completed(QUESTION_CASES[0], "dev")],
+            "selection": None,
+            "default_run": None,
+            "dev_funnel": {},
+        }
+
+    monkeypatch.setattr(cli, "preflight", successful_preflight)
+    monkeypatch.setattr(cli, "run_sample", fake_run_sample)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["deep_analysis_funnel_sample", "--output-root", str(tmp_path)],
+    )
+
+    cli.main()
+
+    build_fn = captured["execute_fn"].keywords["build_orchestrator_fn"]
+    assert build_fn.func is cli.build_orchestrator
+    assert captured["cassette"].mode == "record"
+
+    artifact_dirs = list(tmp_path.iterdir())
+    assert len(artifact_dirs) == 1
+    cassette_path = artifact_dirs[0] / "cassette.json"
+    assert cassette_path.exists()
+    recorded = json.loads(cassette_path.read_text())
+    assert recorded  # not empty -- the recorded call survived save + move
+
+    # The private temp directory is cleaned up, not left behind.
+    assert not captured["cassette"].path.exists()
+    assert not captured["cassette"].path.parent.exists()
+
+
+def test_main_cleans_up_cassette_temp_dir_when_sample_raises(
+    monkeypatch, tmp_path
+):
+    """Failure must not leak the private cassette temp directory, and the
+    partially-recorded cassette should still be salvaged into the failure
+    artifact rather than silently dropped."""
+    captured = {}
+
+    async def successful_preflight(*args):
+        return None
+
+    async def failing_sample(**kwargs):
+        execute_fn = kwargs["execute_fn"]
+        cassette = execute_fn.keywords["build_orchestrator_fn"].keywords[
+            "cassette"
+        ]
+        captured["cassette"] = cassette
+        await cassette.remember(
+            "llm", {"prompt": "before crash"}, lambda: _cached_value("v")
+        )
+        raise RuntimeError("sample run exploded")
+
+    monkeypatch.setattr(cli, "preflight", successful_preflight)
+    monkeypatch.setattr(cli, "run_sample", failing_sample)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["deep_analysis_funnel_sample", "--output-root", str(tmp_path)],
+    )
+
+    with pytest.raises(RuntimeError, match="sample run exploded"):
+        cli.main()
+
+    artifact_dirs = list(tmp_path.iterdir())
+    assert len(artifact_dirs) == 1
+    cassette_path = artifact_dirs[0] / "cassette.json"
+    assert cassette_path.exists()
+    assert json.loads(cassette_path.read_text())
+
+    assert not captured["cassette"].path.parent.exists()
 
 
 def test_fingerprint_reports_real_config_without_credential_shaped_keys():
