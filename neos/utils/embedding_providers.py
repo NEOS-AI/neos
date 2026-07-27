@@ -13,6 +13,10 @@ from neos.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+# 카탈로그가 차원을 모르는 임베딩 모델의 폴백. OpenAI 임베딩 계열의
+# 관례적 차원이다.
+_DEFAULT_EMBEDDING_DIMENSION = 1536
+
 
 class EmbeddingProvider(ABC):
     """임베딩 Provider 추상 클래스"""
@@ -66,12 +70,23 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         self.client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
         self.model = model
 
-        self.dimension_map = {
-            "text-embedding-3-small": 1536,
-            "text-embedding-3-large": 3072,
-            "text-embedding-ada-002": 1536
-        }
-        self.dimension = self.dimension_map.get(model, 1536)
+        # 차원은 모델 카탈로그(`neos/config/models.yaml`)의 `dimension`에서
+        # 온다. 예전에는 여기 별도 표가 있어 카탈로그와 조용히 어긋날 수 있었다.
+        from neos.config.model_config import get_model_spec
+
+        spec = get_model_spec(model)
+        if spec is not None and spec.dimension is not None:
+            self.dimension = spec.dimension
+        else:
+            # 카탈로그는 allowlist가 아니다 — 모르는 임베딩 모델도 쓸 수 있어야
+            # 한다. OpenAI 임베딩의 관례적 기본값으로 폴백하고 알린다.
+            logger.warning(
+                "No catalog dimension for embedding model %r; assuming %d. "
+                "Add it to neos/config/models.yaml with a `dimension:` field.",
+                model,
+                _DEFAULT_EMBEDDING_DIMENSION,
+            )
+            self.dimension = _DEFAULT_EMBEDDING_DIMENSION
 
     async def get_embedding(self, text: str) -> Optional[List[float]]:
         try:
