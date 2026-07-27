@@ -654,6 +654,27 @@ class Orchestrator:
                 assignment.question_id
             )
             await self.ledger.commit_blobs(result.blobs)
+            # Recall measurement: entailment drops claims before grading, so
+            # they never reach the claims table. Record them here — blobs are
+            # already committed above, so phase 2 can re-grade offline.
+            for discarded in result.discarded_claims:
+                await self.ledger.log(
+                    "claim_discarded",
+                    result.question_id,
+                    {
+                        "text": discarded.text,
+                        "confidence": discarded.confidence,
+                        "value_est": value_est,
+                        "evidence": [
+                            {
+                                "source_url": evidence.source_url,
+                                "excerpt": evidence.excerpt,
+                                "raw_ref": evidence.raw_ref,
+                            }
+                            for evidence in discarded.evidence
+                        ],
+                    },
+                )
             # verdicts는 claim 텍스트로 키잉한다. 이는 Ledger의 hash 기반
             # 병합(§6.1.3, D3)과 정합적이다 — 동일 텍스트 클레임은 커밋 시
             # 하나의 claim으로 병합되므로 텍스트당 verdict 하나가 맞다.
