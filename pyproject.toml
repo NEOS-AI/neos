@@ -74,7 +74,7 @@ dependencies = [
     "graphviz>=0.21",
     "youtube-transcript-api>=0.6.2",
     "google-api-python-client>=2.198.0",
-    "isodate>=0.6.1",
+    "isodate>=0.7.2",
     "ray[default]>=2.8.0",
     "croniter>=2.0.0",
 ]
