@@ -5,6 +5,7 @@ import pytest
 from neos.workflow.deep_analysis.discard_recall import score_discards
 from neos.workflow.deep_analysis.graders.agentic import AgenticGrader
 from neos.workflow.deep_analysis.models import ProposedClaim, ProposedEvidence
+from neos.workflow.deep_analysis.text_norm import claim_hash
 
 
 pytestmark = pytest.mark.no_db
@@ -47,6 +48,119 @@ async def test_score_discards_counts_verified_and_reports_interval():
     assert result["false_discard_rate"] == pytest.approx(1 / 3)
     assert result["verdict"] == "inconclusive"
     assert result["malformed"] == 0
+    assert result["raw_events"] == 3
+    assert result["distinct_claims"] == 3
+    assert result["kept_elsewhere"] == 0
+
+
+async def test_repeated_discards_of_one_claim_collapse_to_one_observation():
+    """A question that returns to `open` is re-investigated, entailment
+    re-runs, and the same claim is discarded again — emitting a second
+    `claim_discarded` event. Grading both would weight that claim twice in
+    the point estimate and shrink the Wilson interval with a replicate that
+    carries no independent information.
+    """
+    graded = []
+
+    async def grade_fn(claim, value_est):
+        graded.append(claim.text)
+        return True
+
+    events = [_event("a", True), _event("a", True), _event("b", True)]
+
+    result = await score_discards(
+        events,
+        grade_fn=grade_fn,
+        wilson_z=1.96,
+        safe_upper=0.10,
+        over_discard_lower=0.40,
+    )
+
+    assert graded == ["a", "b"]
+    assert result["raw_events"] == 3
+    assert result["distinct_claims"] == 2
+    assert result["total_discarded"] == 2
+    assert result["verified"] == 2
+
+
+async def test_dedupe_uses_the_ledger_claim_hash_normalization():
+    """Merging must use the same identity the ledger merges committed claims
+    on (`_upsert_claim`), not raw text equality — otherwise casing or
+    punctuation differences would split one claim into several observations.
+    """
+    assert claim_hash("Some Claim.") == claim_hash("some claim")
+
+    graded = []
+
+    async def grade_fn(claim, value_est):
+        graded.append(claim.text)
+        return False
+
+    result = await score_discards(
+        [_event("Some Claim.", False), _event("some claim", False)],
+        grade_fn=grade_fn,
+        wilson_z=1.96,
+        safe_upper=0.10,
+        over_discard_lower=0.40,
+    )
+
+    assert graded == ["Some Claim."]
+    assert result["distinct_claims"] == 1
+    assert result["total_discarded"] == 1
+
+
+async def test_claim_kept_elsewhere_in_the_run_is_not_a_false_discard():
+    """Discarded on one pass, kept on another: the claim reached
+    `deep_analysis_claims`, so the pipeline never lost it. Counting it as a
+    false discard would report recall loss that did not happen.
+    """
+    graded = []
+
+    async def grade_fn(claim, value_est):
+        graded.append(claim.text)
+        return True
+
+    result = await score_discards(
+        [_event("kept", True), _event("lost", True)],
+        grade_fn=grade_fn,
+        wilson_z=1.96,
+        safe_upper=0.10,
+        over_discard_lower=0.40,
+        kept_hashes={claim_hash("kept")},
+    )
+
+    assert graded == ["lost"]
+    assert result["raw_events"] == 2
+    assert result["distinct_claims"] == 2
+    assert result["kept_elsewhere"] == 1
+    assert result["total_discarded"] == 1
+    assert result["verified"] == 1
+
+
+async def test_all_three_collapse_counts_are_reported():
+    async def grade_fn(claim, value_est):
+        return False
+
+    result = await score_discards(
+        [
+            _event("kept", False),
+            _event("kept", False),
+            _event("lost", False),
+            {"text": "", "confidence": 0.6, "evidence": []},
+        ],
+        grade_fn=grade_fn,
+        wilson_z=1.96,
+        safe_upper=0.10,
+        over_discard_lower=0.40,
+        kept_hashes={claim_hash("kept")},
+    )
+
+    assert result["raw_events"] == 4
+    assert result["malformed"] == 1
+    assert result["distinct_claims"] == 2
+    assert result["kept_elsewhere"] == 1
+    # The graded denominator is what feeds the rate and the interval.
+    assert result["total_discarded"] == 1
 
 
 async def test_score_discards_counts_malformed_events_without_grading():
