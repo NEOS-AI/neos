@@ -738,7 +738,13 @@ class DeepAnalysisConfig(StrictConfigModel):
     fetch_timeout_seconds: float = 15.0
     evidence_context_chars: int = 2000
     excerpt_max_chars: int = 500
-    decompose_max_tokens: int = 1500
+    # 1500이었을 때 실측 캐소트(20260728T104241Z)에서 decompose 응답 3건이
+    # 정확히 1500 output_tokens에서 stop_reason=max_tokens로 잘렸다(1235/1995/1869자,
+    # ≈1.13자/토큰 — 에러 로그의 "~1680자" 관측과 일치). 그중 최대 개별
+    # subquestion 객체는 399자였다. 완전한 응답(최대 7개) 추정치:
+    # 7 * 399자 + JSON 오버헤드(~40자) ≈ 2833자 / 1.13자당토큰 ≈ 2501토큰.
+    # 여기에 여유를 두어 3200으로 설정(추정치 대비 +28% 여유, 기존 1500의 ~2.1배).
+    decompose_max_tokens: int = 3200
     worker_max_output_tokens: int = 4000
     synthesis_max_tokens: int = 4000
     sse_keepalive_seconds: float = 0.5
