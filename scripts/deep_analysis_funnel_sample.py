@@ -52,6 +52,10 @@ def _fingerprint() -> dict:
         "global_token_cap": config.global_token_cap,
         "max_depth": config.max_depth,
         "quote_match_threshold": config.quote_match_threshold,
+        # Raised 1500 -> 3200 on 2026-07-28 after truncated decompose JSON
+        # failed 5 of 7 runs. Recorded so a later reader can tell which
+        # samples ran under which cap.
+        "decompose_max_tokens": config.decompose_max_tokens,
         "models": {
             "scout": config.models.scout,
             "dig": config.models.dig,
