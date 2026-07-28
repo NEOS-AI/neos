@@ -121,7 +121,8 @@ def select_representative(observations: list[dict]) -> dict | None:
     stage = dominant_stage(aggregate)
     candidates = [item for item in completed if stage_metrics(item["signals"]["claim_funnel"])[stage]["count"] > 0]
     if not candidates:
-        return min(completed, key=lambda item: item["order"])
+        selected = min(completed, key=lambda item: item["order"])
+        return {**selected, "dominant_stage": stage}
     median_graded = statistics.median(item["signals"]["claim_funnel"]["graded"] for item in completed)
     selected = min(candidates, key=lambda item: (abs(item["signals"]["claim_funnel"]["graded"] - median_graded), item["order"]))
     return {**selected, "dominant_stage": stage}
