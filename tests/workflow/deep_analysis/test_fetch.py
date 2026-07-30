@@ -64,27 +64,33 @@ def test_extract_article_text_drops_navigation_and_keeps_body():
 
 
 def test_extract_article_text_falls_back_when_trafilatura_finds_nothing():
-    # No article structure for trafilatura to latch onto.
-    html = "<html><body><nav>Home About</nav></body></html>"
+    # trafilatura returns None for this (no article content in <body>), but
+    # html_to_text still picks up the <title> text node, so this fixture
+    # actually distinguishes the fallback from an empty result rather than
+    # passing by coincidence.
+    html = "<html><head><title>Untitled placeholder page</title></head><body></body></html>"
 
     text = extract_article_text(html)
 
-    # Fallback is html_to_text, so its output is what we must get.
     assert text == html_to_text(html)
+    assert text == "Untitled placeholder page"
 
 
-def test_extract_article_text_normalizes_both_paths():
-    spaced = """
-    <html><body><article><p>Alpha    beta
-    gamma</p></article></body></html>
-    """
+def test_extract_article_text_normalizes_the_trafilatura_path():
+    # trafilatura joins paragraphs with newlines; normalize_evidence_text is
+    # what collapses them. Without that call this assertion fails.
+    html = (
+        "<html><body><article>"
+        "<p>First paragraph about systemic risk obligations for providers.</p>"
+        "<p>Second paragraph covering model evaluation and documentation duties.</p>"
+        "</article></body></html>"
+    )
 
-    text = extract_article_text(spaced)
+    text = extract_article_text(html)
 
-    # normalize_evidence_text collapses runs of whitespace; no raw newlines
-    # or double spaces may reach the content hash.
-    assert "  " not in text
+    assert "systemic risk" in text
     assert "\n" not in text
+    assert "  " not in text
 
 
 class FakeHttpClient:
