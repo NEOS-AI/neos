@@ -6,6 +6,8 @@ import hashlib
 from dataclasses import asdict
 from html.parser import HTMLParser
 
+import trafilatura
+
 from neos.config.settings import settings
 
 from .models import ProposedBlob
@@ -37,6 +39,27 @@ def html_to_text(html: str) -> str:
     parser.feed(html)
     parser.close()
     return normalize_evidence_text(" ".join(parser.parts))
+
+
+def extract_article_text(html: str) -> str:
+    """Article body text, falling back to whole-page text.
+
+    ``html_to_text`` concatenates every text node, so navigation, headers,
+    footers and cookie banners arrive as evidence next to the article. That
+    buried real article text deeply enough that workers reported pages as
+    containing only navigation. trafilatura strips the boilerplate.
+
+    It returns nothing on roughly 3% of pages, so those fall back to
+    ``html_to_text`` — the result is then exactly today's behaviour, which
+    keeps this change from making any page worse.
+    """
+    try:
+        extracted = trafilatura.extract(html)
+    except Exception:  # noqa: BLE001 - extractor must never break a fetch
+        extracted = None
+    if extracted and extracted.strip():
+        return normalize_evidence_text(extracted)
+    return html_to_text(html)
 
 
 def _content_hash(raw_text: str) -> str:

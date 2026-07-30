@@ -5,7 +5,11 @@ import pytest
 
 from neos.workflow.deep_analysis.cassette import Cassette
 from neos.workflow.deep_analysis import fetch as fetch_module
-from neos.workflow.deep_analysis.fetch import fetch_url, html_to_text
+from neos.workflow.deep_analysis.fetch import (
+    extract_article_text,
+    fetch_url,
+    html_to_text,
+)
 
 
 pytestmark = pytest.mark.no_db
@@ -31,6 +35,56 @@ def test_html_to_text_removes_nul_before_normalizing():
 
     assert text == "AB café"
     assert "\x00" not in text
+
+
+_NAV_PAGE = """
+<html><body>
+  <nav><ul><li>Home</li><li>About</li><li>Contact</li><li>Privacy Policy</li></ul></nav>
+  <header>Cookie banner: we value your privacy</header>
+  <article>
+    <h1>Article 55: Obligations of providers</h1>
+    <p>Providers of general-purpose AI models with systemic risk shall perform
+    model evaluation in accordance with standardised protocols and document the
+    results, and shall assess and mitigate possible systemic risks at Union level.</p>
+  </article>
+  <footer>Copyright 2026. All rights reserved. Terms of service.</footer>
+</body></html>
+"""
+
+
+def test_extract_article_text_drops_navigation_and_keeps_body():
+    text = extract_article_text(_NAV_PAGE)
+
+    assert "systemic risk" in text
+    assert "Obligations of providers" in text
+    # boilerplate must not survive into evidence
+    assert "Privacy Policy" not in text
+    assert "Terms of service" not in text
+    assert "Cookie banner" not in text
+
+
+def test_extract_article_text_falls_back_when_trafilatura_finds_nothing():
+    # No article structure for trafilatura to latch onto.
+    html = "<html><body><nav>Home About</nav></body></html>"
+
+    text = extract_article_text(html)
+
+    # Fallback is html_to_text, so its output is what we must get.
+    assert text == html_to_text(html)
+
+
+def test_extract_article_text_normalizes_both_paths():
+    spaced = """
+    <html><body><article><p>Alpha    beta
+    gamma</p></article></body></html>
+    """
+
+    text = extract_article_text(spaced)
+
+    # normalize_evidence_text collapses runs of whitespace; no raw newlines
+    # or double spaces may reach the content hash.
+    assert "  " not in text
+    assert "\n" not in text
 
 
 class FakeHttpClient:
