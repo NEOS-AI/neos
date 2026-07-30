@@ -124,7 +124,7 @@ async def fetch_url(
             elif _is_pdf_response(response):
                 raw_text = pdf_bytes_to_text(bytes(response.content))
             else:
-                raw_text = html_to_text(response.text)
+                raw_text = extract_article_text(response.text)
         finally:
             if owns_client:
                 await resolved_client.aclose()

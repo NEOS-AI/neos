@@ -133,6 +133,18 @@ async def test_fetch_returns_content_addressed_blob_proposal():
 
 
 @pytest.mark.asyncio
+async def test_fetch_url_stores_article_text_not_navigation():
+    client = FakeHttpClient(200, _NAV_PAGE)
+
+    blob = await fetch_url("https://example.com/article-55", client=client)
+
+    assert "systemic risk" in blob.raw_text
+    assert "Privacy Policy" not in blob.raw_text
+    assert "Terms of service" not in blob.raw_text
+    assert blob.http_status == 200
+
+
+@pytest.mark.asyncio
 async def test_fetch_replay_avoids_http_client(tmp_path):
     path = tmp_path / "fetch.json"
     record_client = FakeHttpClient(200, "<p>cached body</p>")
