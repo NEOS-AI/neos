@@ -93,6 +93,53 @@ def test_extract_article_text_normalizes_the_trafilatura_path():
     assert "  " not in text
 
 
+_COMMENTED_PAGE = """
+<html><body>
+  <article>
+    <h1>Study Finds Treatment Reduces Incidence</h1>
+    <p>Researchers published new findings this week describing a large randomized
+    controlled trial conducted across twelve clinical sites over a period of eighteen
+    months, enrolling more than four thousand participants who met strict eligibility
+    criteria for chronic condition management.</p>
+    <p>The treatment reduced measured incidence by thirty-one percent compared to the
+    placebo control group, according to the peer reviewed study published in a leading
+    medical journal this month, drawing attention from clinicians and public health
+    officials alike.</p>
+  </article>
+  <div id="comments" class="comments-section">
+    <h3>42 Comments</h3>
+    <div class="comment"><p>Total nonsense. It actually increases incidence by fifty
+    percent and the authors are lying about their methodology here.</p></div>
+  </div>
+</body></html>
+"""
+
+
+def test_extract_article_text_drops_reader_comments():
+    # include_comments defaults to True in trafilatura, so a bare
+    # trafilatura.extract(html) call lets a commenter's counter-claim ride
+    # along as if it were article prose. Once normalize_evidence_text
+    # collapses newlines, "the authors are lying" is indistinguishable from
+    # body text in raw_text, and DeterministicGrader would score a worker's
+    # quote of it 1.0. Prove the comment does not survive extraction.
+    text = extract_article_text(_COMMENTED_PAGE)
+
+    assert "thirty-one percent" in text
+    assert "Total nonsense" not in text
+    assert "authors are lying" not in text
+
+
+def test_extract_article_text_drops_comments_break_check():
+    # Break-check: with the bare (include_comments defaults to True) call,
+    # this must fail. This proves the assertions above are only true because
+    # of the explicit include_comments=False, not by fixture coincidence.
+    import trafilatura
+
+    bare = trafilatura.extract(_COMMENTED_PAGE)
+    assert bare is not None
+    assert "authors are lying" in bare  # documents the pre-fix behavior
+
+
 class FakeHttpClient:
     def __init__(self, status_code, body, headers=None):
         self.status_code = status_code
