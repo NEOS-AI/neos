@@ -154,3 +154,37 @@ def test_zero_graded_representative_is_first_completed_observation():
         {"case_id": "first", "status": "completed", "order": 0, "signals": {"claim_funnel": _funnel(proposed=0, graded=0, deterministic_rejected=0, near_miss=0)}},
     ]
     assert select_representative(observations)["case_id"] == "first"
+
+
+def test_representative_includes_dominant_stage_when_no_candidate_has_the_loss():
+    # Drive execution into the "no candidate has a positive count for the
+    # dominant stage" fallback at funnel_sample.py:124.
+    #
+    # A single completed observation with proposed == graded and zero
+    # rejections/unverified at every stage has stage_metrics() == 0 for all
+    # four stages (proposal_to_grade, deterministic_rejection, agentic_loss,
+    # final_unresolved). Because graded > 0, this does NOT take the
+    # all-graded-zero early return at line 114-119. aggregate_funnels() of
+    # this single funnel reproduces the same all-zero stage_metrics, so
+    # dominant_stage() picks "proposal_to_grade" as the tie-break winner
+    # (first key with the max (count=0, rate=0.0) tuple). The candidates
+    # filter then finds no completed observation with a positive count for
+    # that stage, so `candidates` is empty and line 124 fires.
+    clean_funnel = _funnel(proposed=5, graded=5, deterministic_rejected=0, near_miss=0)
+    assert stage_metrics(clean_funnel) == {
+        "proposal_to_grade": {"count": 0, "denominator": 5, "rate": 0.0},
+        "deterministic_rejection": {"count": 0, "denominator": 5, "rate": 0.0},
+        "agentic_loss": {"count": 0, "denominator": 5, "rate": 0.0},
+        "final_unresolved": {"count": 0, "denominator": 5, "rate": 0.0},
+    }
+
+    observations = [
+        {"case_id": "clean-run", "status": "completed", "order": 0, "signals": {"claim_funnel": clean_funnel}},
+    ]
+
+    selected = select_representative(observations)
+
+    assert selected is not None
+    assert selected["case_id"] == "clean-run"
+    assert "dominant_stage" in selected
+    assert selected["dominant_stage"] == "proposal_to_grade"

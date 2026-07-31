@@ -157,7 +157,10 @@ CREATE TABLE events (                 -- append-only. UPDATE/DELETE 금지
 CREATE INDEX idx_events_qid ON events(qid, kind);
 -- kind 목록: question_opened, pass_completed, worker_failed, claim_verified,
 --   claim_rejected, dead_end, subq_proposed, subq_adopted, split, abandoned,
---   conflict_found, conflict_reinvestigation, synth_pass, report_graded
+--   conflict_found, conflict_reinvestigation, synth_pass, report_graded,
+--   claim_discarded
+--   claim_discarded: entailment가 keep/narrow 없이 버린 claim 1건당 1회,
+--   상시 기록(플래그 게이팅 없음) (2026-07-27, discard-recall 계측)
 ```
 
 ### 4.1 질문 상태 기계 (완성판)

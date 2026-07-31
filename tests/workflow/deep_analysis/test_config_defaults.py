@@ -53,7 +53,10 @@ def test_deep_analysis_operational_limits_are_configured():
     assert cfg.fetch_timeout_seconds == 15.0
     assert cfg.evidence_context_chars == 2000
     assert cfg.excerpt_max_chars == 500
-    assert cfg.decompose_max_tokens == 1500
+    # Calibrated from the 20260728T104241Z cassette: three decompose
+    # responses hit the old 1500-token cap and were truncated mid-JSON
+    # (see neos/config/schema.py comment for the arithmetic).
+    assert cfg.decompose_max_tokens == 3200
     assert cfg.worker_max_output_tokens == 4000
     assert cfg.synthesis_max_tokens == 4000
     assert cfg.sse_keepalive_seconds == 0.5

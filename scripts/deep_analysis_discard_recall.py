@@ -10,7 +10,7 @@ import sys
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
@@ -39,6 +39,10 @@ from neos.workflow.deep_analysis.ledger import Ledger
 _EXHAUSTIVE_SAMPLE_RATE = 1.0
 
 
+class PreflightError(RuntimeError):
+    """Raised when required production dependencies are unavailable."""
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Measure entailment discard recall loss"
@@ -50,6 +54,31 @@ def _parse_args() -> argparse.Namespace:
         default=Path("artifacts/deep-analysis-discard-recall"),
     )
     return parser.parse_args()
+
+
+def _dedupe_preserving_order(run_ids: list[str]) -> list[str]:
+    """Repeated ``--run-id`` values must not double-count a run's claims."""
+    return list(dict.fromkeys(run_ids))
+
+
+async def preflight(settings_obj, session_factory) -> None:
+    """Fail before any judge token is spent, not partway through.
+
+    Checks credential *presence* only -- never the value -- and that the
+    database is reachable. Mirrors the shape of
+    ``funnel_sample_runner.preflight``.
+    """
+    missing = [
+        name
+        for name in ("ANTHROPIC_API_KEY",)
+        if not getattr(settings_obj, name, None)
+    ]
+    if missing:
+        raise PreflightError(
+            "missing required credentials: " + ", ".join(missing)
+        )
+    async with session_factory() as session:
+        await session.execute(text("SELECT 1"))
 
 
 async def _load_events(session, run_ids: list[str]) -> list[dict]:
@@ -110,7 +139,7 @@ def _graders(session, run_id: str):
     return deterministic, agentic
 
 
-def make_grade_fn(deterministic, agentic, counters: dict):
+def make_grade_fn(deterministic, agentic, counters: dict, claims_log=None):
     """Build the pipeline-equivalent "would this have been verified?" predicate.
 
     A claim counts as verified only when the deterministic grader passes and
@@ -122,20 +151,63 @@ def make_grade_fn(deterministic, agentic, counters: dict):
     fire that path disproportionately on exactly the population being measured
     and manufacture false discards. Those outcomes are counted into
     ``judge_failed`` instead and reported in the artifact.
+
+    A transient grading error (e.g. an ``LLMProviderError`` mid-pass) is
+    caught here rather than left to abort the whole exhaustive run — judge
+    tokens already spent on every other claim would otherwise be wasted with
+    no artifact to show for them. The errored claim is counted into
+    ``counters["grade_errors"]`` and **never** counted as verified: that is
+    the same fail-open trap already fixed twice in this work (the
+    ``should_grade`` sampling gate and ``_judge_failed``), so an exception
+    must fail closed here too.
+
+    If ``claims_log`` is given, one record per graded claim is appended to it
+    (claim text, deterministic outcome, agentic label, whether it counted as
+    verified) so a human can adjudicate the ones the grader disagreed with.
     """
 
     async def grade_fn(claim, value_est) -> bool:
-        verdict = await deterministic.grade(claim)
-        if not verdict.ok:
+        entry = {"text": claim.text} if claims_log is not None else None
+        try:
+            verdict = await deterministic.grade(claim)
+            if not verdict.ok:
+                if entry is not None:
+                    entry["deterministic_ok"] = False
+                    entry["agentic_label"] = None
+                    entry["verified"] = False
+                    claims_log.append(entry)
+                return False
+            if entry is not None:
+                entry["deterministic_ok"] = True
+
+            # Exhaustive by design: sample_rate=1.0 means the sampling gate
+            # cannot blur the denominator, so ok+label=None is a judge
+            # failure rather than a skipped claim.
+            agentic_verdict = await agentic.grade(claim, value_est)
+            if entry is not None:
+                entry["agentic_label"] = agentic_verdict.label
+
+            if agentic_verdict.ok and agentic_verdict.label is None:
+                counters["judge_failed"] += 1
+                if entry is not None:
+                    entry["verified"] = False
+                    claims_log.append(entry)
+                return False
+
+            verified = (
+                agentic_verdict.ok and agentic_verdict.label == "SUPPORTS"
+            )
+            if entry is not None:
+                entry["verified"] = verified
+                claims_log.append(entry)
+            return verified
+        except Exception:  # noqa: BLE001 - one bad claim must not sink the run
+            counters["grade_errors"] = counters.get("grade_errors", 0) + 1
+            if entry is not None:
+                entry["error"] = True
+                entry["verified"] = False
+                claims_log.append(entry)
             return False
-        # Exhaustive by design: sample_rate=1.0 means the sampling gate
-        # cannot blur the denominator, so ok+label=None is a judge failure
-        # rather than a skipped claim.
-        agentic_verdict = await agentic.grade(claim, value_est)
-        if agentic_verdict.ok and agentic_verdict.label is None:
-            counters["judge_failed"] += 1
-            return False
-        return agentic_verdict.ok and agentic_verdict.label == "SUPPORTS"
 
     return grade_fn
 
@@ -181,6 +253,8 @@ def _write_artifact(
     *,
     receipt: dict,
     fingerprint: dict,
+    per_run=None,
+    claims=None,
 ) -> Path:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     artifact_dir = output_root / timestamp
@@ -188,6 +262,10 @@ def _write_artifact(
     config = settings.config.deep_analysis.discard_recall
     manifest = {
         "run_ids": run_ids,
+        # One row per requested run, even a run with zero events -- an
+        # unknown or empty --run-id must be visible here, not silently
+        # absorbed into the pooled total.
+        "per_run": list(per_run) if per_run is not None else [],
         "thresholds": {
             "wilson_z": config.wilson_z,
             "safe_upper_bound": config.safe_upper_bound,
@@ -203,6 +281,16 @@ def _write_artifact(
     (artifact_dir / "recall.json").write_text(
         json.dumps(result, **options) + "\n"
     )
+    # Separate file, not folded into recall.json -- spec §2.2 requires a
+    # human to adjudicate the claims the grader flagged, and that needs the
+    # claim text and per-stage outcome the aggregate alone can't provide.
+    (artifact_dir / "claims.json").write_text(
+        json.dumps(
+            {"claims": list(claims) if claims is not None else []},
+            **options,
+        )
+        + "\n"
+    )
     (artifact_dir / "report.md").write_text(
         "# Entailment discard recall\n\n"
         f"- Raw `claim_discarded` events: {result['raw_events']}\n"
@@ -212,6 +300,8 @@ def _write_artifact(
         f"- Discarded claims graded: {result['total_discarded']}\n"
         f"- Would have been verified: {result['verified']}\n"
         f"- Judge failed to return a label: {result['judge_failed']}\n"
+        f"- Grading errors (never counted as verified): "
+        f"{result.get('grade_errors', 0)}\n"
         f"- Malformed events skipped: {result['malformed']}\n"
         f"- False-discard rate: {result['false_discard_rate']:.1%}\n"
         f"- Wilson 95% CI: "
@@ -221,12 +311,15 @@ def _write_artifact(
         "by claim hash and claims kept elsewhere in the run are excluded — "
         "the rate and interval use the distinct, not-kept count.\n\n"
         "The grader is not ground truth, so this rate is a lower bound on "
-        "recall loss.\n"
+        "recall loss. See `claims.json` for the per-claim breakdown to "
+        "adjudicate.\n"
     )
     return artifact_dir
 
 
 async def _main(run_ids: list[str], output_root: Path) -> Path:
+    run_ids = _dedupe_preserving_order(run_ids)
+    await preflight(settings, get_session_ctx)
     config = settings.config.deep_analysis.discard_recall
     started_at = datetime.now(timezone.utc)
     totals = {
@@ -237,7 +330,9 @@ async def _main(run_ids: list[str], output_root: Path) -> Path:
         "distinct_claims": 0,
         "kept_elsewhere": 0,
     }
-    counters = {"judge_failed": 0}
+    counters = {"judge_failed": 0, "grade_errors": 0}
+    claims_log: list[dict] = []
+    per_run: list[dict] = []
 
     async with get_session_ctx() as session:
         for run_id in run_ids:
@@ -246,7 +341,9 @@ async def _main(run_ids: list[str], output_root: Path) -> Path:
             # run, and separate runs are independent samples.
             kept = await _kept_hashes(session, [run_id])
             deterministic, agentic = _graders(session, run_id)
-            grade_fn = make_grade_fn(deterministic, agentic, counters)
+            grade_fn = make_grade_fn(
+                deterministic, agentic, counters, claims_log
+            )
 
             partial = await score_discards(
                 events,
@@ -255,6 +352,9 @@ async def _main(run_ids: list[str], output_root: Path) -> Path:
                 safe_upper=config.safe_upper_bound,
                 over_discard_lower=config.over_discard_lower_bound,
                 kept_hashes=kept,
+            )
+            per_run.append(
+                {"run_id": run_id, **{key: partial[key] for key in totals}}
             )
             for key in totals:
                 totals[key] += partial[key]
@@ -289,6 +389,8 @@ async def _main(run_ids: list[str], output_root: Path) -> Path:
         result,
         receipt=_receipt(started_at, datetime.now(timezone.utc)),
         fingerprint=_fingerprint(),
+        per_run=per_run,
+        claims=claims_log,
     )
 
 

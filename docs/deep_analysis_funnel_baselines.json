@@ -1,0 +1,546 @@
+{
+  "20260723T124006Z_prompt_v3": {
+    "default_run": {
+      "claim_funnel": {
+        "agentic_attempted": 73,
+        "agentic_exhausted": 0,
+        "agentic_passed": 59,
+        "agentic_rejected": 14,
+        "agentic_skipped": 11,
+        "avg_evidence_count": 1.4047619047619047,
+        "avg_excerpt_chars": 142.9404761904762,
+        "avg_source_count": 1.369047619047619,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 3,
+          "2": 1,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 4,
+        "deterministic_passed": 76,
+        "deterministic_rejected": 8,
+        "evidence_missing_rate": 0.0,
+        "graded": 84,
+        "proposed": 76,
+        "quote_score_buckets": {
+          "above_threshold": 1,
+          "exact": 81,
+          "low": 2,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 20,
+        "source_dead_rate": 0.0,
+        "unverified": 2,
+        "verified": 62
+      },
+      "run_id": "bf2cae1f"
+    },
+    "dev_funnel": {
+      "agentic_attempted": 35,
+      "agentic_exhausted": 0,
+      "agentic_passed": 19,
+      "agentic_rejected": 16,
+      "agentic_skipped": 3,
+      "avg_evidence_count": 1.1578947368421053,
+      "avg_excerpt_chars": 188.8684210526316,
+      "avg_source_count": 1.131578947368421,
+      "confidence_clamped_by_source_count": {
+        "0": 0,
+        "1": 1,
+        "2": 1,
+        "3_plus": 0
+      },
+      "confidence_clamped_count": 2,
+      "deterministic_passed": 35,
+      "deterministic_rejected": 3,
+      "evidence_missing_rate": 0.0,
+      "graded": 38,
+      "proposed": 36,
+      "quote_score_buckets": {
+        "above_threshold": 3,
+        "exact": 35,
+        "low": 0,
+        "near_miss": 0,
+        "unavailable": 0
+      },
+      "rejected": 19,
+      "source_dead_rate": 0.0,
+      "unverified": 0,
+      "verified": 19
+    },
+    "dev_runs": [
+      {
+        "claim_funnel": {
+          "agentic_attempted": 8,
+          "agentic_exhausted": 0,
+          "agentic_passed": 4,
+          "agentic_rejected": 4,
+          "agentic_skipped": 1,
+          "avg_evidence_count": 1.0,
+          "avg_excerpt_chars": 69.0,
+          "avg_source_count": 1.0,
+          "confidence_clamped_by_source_count": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3_plus": 0
+          },
+          "confidence_clamped_count": 0,
+          "deterministic_passed": 8,
+          "deterministic_rejected": 1,
+          "evidence_missing_rate": 0.0,
+          "graded": 9,
+          "proposed": 8,
+          "quote_score_buckets": {
+            "above_threshold": 0,
+            "exact": 9,
+            "low": 0,
+            "near_miss": 0,
+            "unavailable": 0
+          },
+          "rejected": 5,
+          "source_dead_rate": 0.0,
+          "unverified": 0,
+          "verified": 4
+        },
+        "reject_rate_by_code": {
+          "E_CONFIDENCE_INFLATED": 0.2,
+          "E_OVERCLAIM": 0.8
+        },
+        "run_id": "838174a8"
+      },
+      {
+        "claim_funnel": {
+          "agentic_attempted": 8,
+          "agentic_exhausted": 0,
+          "agentic_passed": 2,
+          "agentic_rejected": 6,
+          "agentic_skipped": 1,
+          "avg_evidence_count": 1.1111111111111112,
+          "avg_excerpt_chars": 232.33333333333334,
+          "avg_source_count": 1.1111111111111112,
+          "confidence_clamped_by_source_count": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3_plus": 0
+          },
+          "confidence_clamped_count": 0,
+          "deterministic_passed": 8,
+          "deterministic_rejected": 1,
+          "evidence_missing_rate": 0.0,
+          "graded": 9,
+          "proposed": 8,
+          "quote_score_buckets": {
+            "above_threshold": 2,
+            "exact": 7,
+            "low": 0,
+            "near_miss": 0,
+            "unavailable": 0
+          },
+          "rejected": 7,
+          "source_dead_rate": 0.0,
+          "unverified": 0,
+          "verified": 2
+        },
+        "reject_rate_by_code": {
+          "E_CONFIDENCE_INFLATED": 0.14285714285714285,
+          "E_OVERCLAIM": 0.8571428571428571
+        },
+        "run_id": "0e1b047e"
+      },
+      {
+        "claim_funnel": {
+          "agentic_attempted": 7,
+          "agentic_exhausted": 0,
+          "agentic_passed": 6,
+          "agentic_rejected": 1,
+          "agentic_skipped": 0,
+          "avg_evidence_count": 1.2857142857142858,
+          "avg_excerpt_chars": 274.85714285714283,
+          "avg_source_count": 1.2857142857142858,
+          "confidence_clamped_by_source_count": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3_plus": 0
+          },
+          "confidence_clamped_count": 0,
+          "deterministic_passed": 7,
+          "deterministic_rejected": 0,
+          "evidence_missing_rate": 0.0,
+          "graded": 7,
+          "proposed": 7,
+          "quote_score_buckets": {
+            "above_threshold": 0,
+            "exact": 7,
+            "low": 0,
+            "near_miss": 0,
+            "unavailable": 0
+          },
+          "rejected": 1,
+          "source_dead_rate": 0.0,
+          "unverified": 0,
+          "verified": 6
+        },
+        "reject_rate_by_code": {
+          "E_OVERCLAIM": 1.0
+        },
+        "run_id": "9d0202f7"
+      },
+      {
+        "claim_funnel": {
+          "agentic_attempted": 6,
+          "agentic_exhausted": 0,
+          "agentic_passed": 6,
+          "agentic_rejected": 0,
+          "agentic_skipped": 1,
+          "avg_evidence_count": 1.4285714285714286,
+          "avg_excerpt_chars": 196.28571428571428,
+          "avg_source_count": 1.2857142857142858,
+          "confidence_clamped_by_source_count": {
+            "0": 0,
+            "1": 1,
+            "2": 1,
+            "3_plus": 0
+          },
+          "confidence_clamped_count": 2,
+          "deterministic_passed": 6,
+          "deterministic_rejected": 1,
+          "evidence_missing_rate": 0.0,
+          "graded": 7,
+          "proposed": 7,
+          "quote_score_buckets": {
+            "above_threshold": 1,
+            "exact": 6,
+            "low": 0,
+            "near_miss": 0,
+            "unavailable": 0
+          },
+          "rejected": 1,
+          "source_dead_rate": 0.0,
+          "unverified": 0,
+          "verified": 6
+        },
+        "reject_rate_by_code": {
+          "E_QUOTE_MISMATCH": 1.0
+        },
+        "run_id": "abf77d29"
+      },
+      {
+        "claim_funnel": {
+          "agentic_attempted": 6,
+          "agentic_exhausted": 0,
+          "agentic_passed": 1,
+          "agentic_rejected": 5,
+          "agentic_skipped": 0,
+          "avg_evidence_count": 1.0,
+          "avg_excerpt_chars": 194.5,
+          "avg_source_count": 1.0,
+          "confidence_clamped_by_source_count": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3_plus": 0
+          },
+          "confidence_clamped_count": 0,
+          "deterministic_passed": 6,
+          "deterministic_rejected": 0,
+          "evidence_missing_rate": 0.0,
+          "graded": 6,
+          "proposed": 6,
+          "quote_score_buckets": {
+            "above_threshold": 0,
+            "exact": 6,
+            "low": 0,
+            "near_miss": 0,
+            "unavailable": 0
+          },
+          "rejected": 5,
+          "source_dead_rate": 0.0,
+          "unverified": 0,
+          "verified": 1
+        },
+        "reject_rate_by_code": {
+          "E_OVERCLAIM": 1.0
+        },
+        "run_id": "c2b04df4"
+      }
+    ]
+  },
+  "20260725T081707Z_entailment": {
+    "default_run": {
+      "claim_funnel": {
+        "agentic_attempted": 94,
+        "agentic_exhausted": 0,
+        "agentic_passed": 83,
+        "agentic_rejected": 11,
+        "agentic_skipped": 5,
+        "avg_evidence_count": 1.1414141414141414,
+        "avg_excerpt_chars": 159.25252525252526,
+        "avg_source_count": 1.1414141414141414,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 1,
+          "2": 1,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 2,
+        "deterministic_passed": 94,
+        "deterministic_rejected": 5,
+        "evidence_missing_rate": 0.0,
+        "graded": 99,
+        "proposed": 94,
+        "quote_score_buckets": {
+          "above_threshold": 0,
+          "exact": 99,
+          "low": 0,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 16,
+        "source_dead_rate": 0.0,
+        "unverified": 0,
+        "verified": 83
+      },
+      "run_id": "ddf7dfdf"
+    },
+    "dev_funnel": {
+      "agentic_attempted": 22,
+      "agentic_exhausted": 0,
+      "agentic_passed": 14,
+      "agentic_rejected": 8,
+      "agentic_skipped": 0,
+      "avg_evidence_count": 1.2272727272727273,
+      "avg_excerpt_chars": 169.5,
+      "avg_source_count": 1.1818181818181819,
+      "confidence_clamped_by_source_count": {
+        "0": 0,
+        "1": 7,
+        "2": 0,
+        "3_plus": 0
+      },
+      "confidence_clamped_count": 7,
+      "deterministic_passed": 22,
+      "deterministic_rejected": 0,
+      "evidence_missing_rate": 0.0,
+      "graded": 22,
+      "proposed": 22,
+      "quote_score_buckets": {
+        "above_threshold": 1,
+        "exact": 21,
+        "low": 0,
+        "near_miss": 0,
+        "unavailable": 0
+      },
+      "rejected": 8,
+      "source_dead_rate": 0.0,
+      "unverified": 0,
+      "verified": 14
+    },
+    "dev_runs": [
+      {
+        "claim_funnel": {
+          "agentic_attempted": 2,
+          "agentic_exhausted": 0,
+          "agentic_passed": 2,
+          "agentic_rejected": 0,
+          "agentic_skipped": 0,
+          "avg_evidence_count": 1.0,
+          "avg_excerpt_chars": 86.0,
+          "avg_source_count": 1.0,
+          "confidence_clamped_by_source_count": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3_plus": 0
+          },
+          "confidence_clamped_count": 0,
+          "deterministic_passed": 2,
+          "deterministic_rejected": 0,
+          "evidence_missing_rate": 0.0,
+          "graded": 2,
+          "proposed": 2,
+          "quote_score_buckets": {
+            "above_threshold": 0,
+            "exact": 2,
+            "low": 0,
+            "near_miss": 0,
+            "unavailable": 0
+          },
+          "rejected": 0,
+          "source_dead_rate": 0.0,
+          "unverified": 0,
+          "verified": 2
+        },
+        "reject_rate_by_code": {},
+        "run_id": "4ee86228"
+      },
+      {
+        "claim_funnel": {
+          "agentic_attempted": 8,
+          "agentic_exhausted": 0,
+          "agentic_passed": 4,
+          "agentic_rejected": 4,
+          "agentic_skipped": 0,
+          "avg_evidence_count": 1.125,
+          "avg_excerpt_chars": 219.125,
+          "avg_source_count": 1.0,
+          "confidence_clamped_by_source_count": {
+            "0": 0,
+            "1": 7,
+            "2": 0,
+            "3_plus": 0
+          },
+          "confidence_clamped_count": 7,
+          "deterministic_passed": 8,
+          "deterministic_rejected": 0,
+          "evidence_missing_rate": 0.0,
+          "graded": 8,
+          "proposed": 8,
+          "quote_score_buckets": {
+            "above_threshold": 1,
+            "exact": 7,
+            "low": 0,
+            "near_miss": 0,
+            "unavailable": 0
+          },
+          "rejected": 4,
+          "source_dead_rate": 0.0,
+          "unverified": 0,
+          "verified": 4
+        },
+        "reject_rate_by_code": {
+          "E_OVERCLAIM": 1.0
+        },
+        "run_id": "706c3402"
+      },
+      {
+        "claim_funnel": {
+          "agentic_attempted": 3,
+          "agentic_exhausted": 0,
+          "agentic_passed": 1,
+          "agentic_rejected": 2,
+          "agentic_skipped": 0,
+          "avg_evidence_count": 1.0,
+          "avg_excerpt_chars": 132.0,
+          "avg_source_count": 1.0,
+          "confidence_clamped_by_source_count": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3_plus": 0
+          },
+          "confidence_clamped_count": 0,
+          "deterministic_passed": 3,
+          "deterministic_rejected": 0,
+          "evidence_missing_rate": 0.0,
+          "graded": 3,
+          "proposed": 3,
+          "quote_score_buckets": {
+            "above_threshold": 0,
+            "exact": 3,
+            "low": 0,
+            "near_miss": 0,
+            "unavailable": 0
+          },
+          "rejected": 2,
+          "source_dead_rate": 0.0,
+          "unverified": 0,
+          "verified": 1
+        },
+        "reject_rate_by_code": {
+          "E_CONTRADICTED": 0.5,
+          "E_OVERCLAIM": 0.5
+        },
+        "run_id": "66dd80ca"
+      },
+      {
+        "claim_funnel": {
+          "agentic_attempted": 5,
+          "agentic_exhausted": 0,
+          "agentic_passed": 4,
+          "agentic_rejected": 1,
+          "agentic_skipped": 0,
+          "avg_evidence_count": 1.4,
+          "avg_excerpt_chars": 153.6,
+          "avg_source_count": 1.4,
+          "confidence_clamped_by_source_count": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3_plus": 0
+          },
+          "confidence_clamped_count": 0,
+          "deterministic_passed": 5,
+          "deterministic_rejected": 0,
+          "evidence_missing_rate": 0.0,
+          "graded": 5,
+          "proposed": 5,
+          "quote_score_buckets": {
+            "above_threshold": 0,
+            "exact": 5,
+            "low": 0,
+            "near_miss": 0,
+            "unavailable": 0
+          },
+          "rejected": 1,
+          "source_dead_rate": 0.0,
+          "unverified": 0,
+          "verified": 4
+        },
+        "reject_rate_by_code": {
+          "E_OVERCLAIM": 1.0
+        },
+        "run_id": "d32d61d7"
+      },
+      {
+        "claim_funnel": {
+          "agentic_attempted": 4,
+          "agentic_exhausted": 0,
+          "agentic_passed": 3,
+          "agentic_rejected": 1,
+          "agentic_skipped": 0,
+          "avg_evidence_count": 1.5,
+          "avg_excerpt_chars": 160.0,
+          "avg_source_count": 1.5,
+          "confidence_clamped_by_source_count": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3_plus": 0
+          },
+          "confidence_clamped_count": 0,
+          "deterministic_passed": 4,
+          "deterministic_rejected": 0,
+          "evidence_missing_rate": 0.0,
+          "graded": 4,
+          "proposed": 4,
+          "quote_score_buckets": {
+            "above_threshold": 0,
+            "exact": 4,
+            "low": 0,
+            "near_miss": 0,
+            "unavailable": 0
+          },
+          "rejected": 1,
+          "source_dead_rate": 0.0,
+          "unverified": 0,
+          "verified": 3
+        },
+        "reject_rate_by_code": {
+          "E_OVERCLAIM": 1.0
+        },
+        "run_id": "be539372"
+      }
+    ]
+  },
+  "_meta": {
+    "contents": "Numeric claim-funnel counts, reject-code rates, and 8-char run-id prefixes only. No claim text, URLs, or credentials.",
+    "note": "run_id values are 8-char prefixes, matching how they appear in docs/TODO_260729.md.",
+    "provenance": "Rebuilt with DeepAnalysisAnalyticsService.signals(run_id=...) + funnel_sample.aggregate_funnels over the surviving events. Reproduces the published figures exactly: prompt-v3 proposed 36 / graded 38 / verified 19 / rejected 19; entailment proposed 22 / graded 22 / verified 14 / rejected 8.",
+    "purpose": "Funnel baselines for deep-analysis claim quality, recomputed from the append-only deep_analysis_events log on 2026-07-29.",
+    "why_committed": "The original gitignored artifacts (20260723T124006Z, 20260725T081707Z) were destroyed on disk on 2026-07-27. docs/TODO_260729.md cites their numbers, so the numbers now live in version control instead of in derived artifacts."
+  }
+}
