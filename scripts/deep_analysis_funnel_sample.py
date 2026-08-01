@@ -56,6 +56,7 @@ def _fingerprint() -> dict:
         # failed 5 of 7 runs. Recorded so a later reader can tell which
         # samples ran under which cap.
         "decompose_max_tokens": config.decompose_max_tokens,
+        "fetch_user_agent": config.fetch_user_agent,
         "models": {
             "scout": config.models.scout,
             "dig": config.models.dig,

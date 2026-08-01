@@ -6,6 +6,7 @@ import hashlib
 from dataclasses import asdict
 from html.parser import HTMLParser
 
+import httpx
 import trafilatura
 
 from neos.config.settings import settings
@@ -121,6 +122,20 @@ def _is_pdf_response(response) -> bool:
     )
 
 
+def _build_fetch_client():
+    """The HTTP client ``fetch_url`` uses when the caller supplies none.
+
+    The User-Agent is descriptive rather than browser-like on purpose — see
+    ``DeepAnalysisConfig.fetch_user_agent``.
+    """
+    config = settings.config.deep_analysis
+    return httpx.AsyncClient(
+        timeout=config.fetch_timeout_seconds,
+        follow_redirects=True,
+        headers={"User-Agent": config.fetch_user_agent},
+    )
+
+
 async def fetch_url(
     url: str,
     *,
@@ -131,12 +146,7 @@ async def fetch_url(
         owns_client = client is None
         resolved_client = client
         if owns_client:
-            import httpx
-
-            resolved_client = httpx.AsyncClient(
-                timeout=settings.config.deep_analysis.fetch_timeout_seconds,
-                follow_redirects=True,
-            )
+            resolved_client = _build_fetch_client()
         try:
             response = await resolved_client.get(url)
             status = int(response.status_code)

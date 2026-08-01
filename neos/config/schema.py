@@ -736,6 +736,15 @@ class DeepAnalysisConfig(StrictConfigModel):
     )
     search_result_limit: int = 3
     fetch_timeout_seconds: float = 15.0
+    # Identifies this client to the sites it fetches. Deliberately a
+    # descriptive bot string, not a browser string: sites that block bots are
+    # expressing a preference, and impersonating a browser circumvents it.
+    # Wikipedia requires an identifiable UA and returns 403 for browser-like
+    # strings; it returns 200 for this one. Deployments should point the
+    # contact URL at something they actually monitor.
+    fetch_user_agent: str = (
+        "NEOS-DeepAnalysis/0.23 (+https://github.com/NEOS-AI/neos)"
+    )
     evidence_context_chars: int = 2000
     excerpt_max_chars: int = 500
     # 1500이었을 때 실측 캐소트(20260728T104241Z)에서 decompose 응답 3건이
