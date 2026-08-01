@@ -206,8 +206,8 @@ async def test_fetch_url_does_not_override_an_injected_client():
     blob = await fetch_url("https://example.com/a", client=client)
 
     assert blob.http_status == 200
-    # FakeHttpClient has no headers attribute mutation; the call simply works.
     assert client.calls == 1
+    assert client.headers == {}  # fetch_url must not stamp its UA on a caller's client
 
 
 @pytest.mark.asyncio
