@@ -145,7 +145,8 @@ async def test_worker_applies_one_batched_entailment_response():
     assert result.claims[1].evidence[0].excerpt == "Direct evidence."
     assert result.tokens_spent == 30
     assert len(llm.prompts) == 2
-    assert llm.max_tokens[1] == 1200
+    assert llm.max_tokens[1] == settings.config.deep_analysis.entailment_max_output_tokens
+    assert llm.max_tokens[1] > 1200  # the old literal must no longer bind
     assert '"index": 0' in llm.prompts[1]
     assert '"index": 2' in llm.prompts[1]
 

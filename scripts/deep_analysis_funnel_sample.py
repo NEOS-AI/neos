@@ -57,6 +57,7 @@ def _fingerprint() -> dict:
         # samples ran under which cap.
         "decompose_max_tokens": config.decompose_max_tokens,
         "judge_max_output_tokens": config.judge_max_output_tokens,
+        "entailment_max_output_tokens": config.entailment_max_output_tokens,
         "fetch_user_agent": config.fetch_user_agent,
         "models": {
             "scout": config.models.scout,

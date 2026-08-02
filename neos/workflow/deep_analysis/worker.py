@@ -33,7 +33,6 @@ from .token_budget import TokenBudgetExhausted
 
 _REPAIR_ACTIONS = {"fixed", "weakened", "abandoned"}
 _CLAMP_BUCKETS = ("0", "1", "2", "3_plus")
-_ENTAILMENT_MAX_OUTPUT_TOKENS = 1200
 logger = logging.getLogger(__name__)
 
 
@@ -341,6 +340,7 @@ class Worker:
         if not claims:
             return claims
 
+        config = settings.config.deep_analysis
         claims_json = json.dumps(
             [
                 {
@@ -359,7 +359,7 @@ class Worker:
             response = await call_llm(
                 self._model,
                 prompt,
-                max_tokens=_ENTAILMENT_MAX_OUTPUT_TOKENS,
+                max_tokens=config.entailment_max_output_tokens,
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="claim_entailment",

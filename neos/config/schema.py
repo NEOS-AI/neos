@@ -730,6 +730,16 @@ class DeepAnalysisConfig(StrictConfigModel):
     # acceptance. Completed responses measured 60-282 tokens (median 104),
     # a maximum censored by the old ceiling.
     judge_max_output_tokens: int = 800
+    # One batched entailment call decides keep/narrow/discard for every claim a
+    # worker produced. On truncation, parse_json raises and worker.py returns
+    # the original batch — the whole batch bypasses the discard filter, and
+    # nothing records it. At 1200, one of eighteen calls in sample
+    # 20260802T052306Z was cut; completed responses ran 97-923 tokens.
+    # As with the judge ceiling, adaptive thinking (llm.py:137) consumes most
+    # of the budget invisibly — the truncated call spent ~1155 tokens on
+    # thinking for 183 characters of text. Batches also grow with claim
+    # production, which recently tripled, so this ceiling binds more over time.
+    entailment_max_output_tokens: int = 3000
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
     report_retry_cap: int = 2
