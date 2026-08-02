@@ -158,11 +158,18 @@ CREATE INDEX idx_events_qid ON events(qid, kind);
 -- kind 목록: question_opened, pass_completed, worker_failed, claim_verified,
 --   claim_rejected, dead_end, subq_proposed, subq_adopted, split, abandoned,
 --   conflict_found, conflict_reinvestigation, synth_pass, report_graded,
---   claim_discarded, llm_truncated
+--   claim_discarded, llm_truncated, truncation_handled, entailment_filter_skipped
 --   claim_discarded: entailment가 keep/narrow 없이 버린 claim 1건당 1회,
 --   상시 기록(플래그 게이팅 없음) (2026-07-27, discard-recall 계측)
 --   llm_truncated: 응답이 max_tokens에서 잘렸을 때 1회, settle 직후
 --   상시 기록(플래그 게이팅 없음) (2026-08-02, truncation-visibility 계측)
+--   truncation_handled: 잘린 call_json 호출 1건당 1회, 확장 재시도의 성패와
+--   예산 clamp 여부를 action(retried_ok/retried_failed/budget_bound)으로 기록
+--   (2026-08-02, truncation 신호 전파). llm_truncated와 1:1이 아니다 — 확장
+--   재시도가 다시 잘리면 llm_truncated 2건에 truncation_handled 1건이 대응한다.
+--   entailment_filter_skipped: entailment 배치가 provider 실패·truncation·
+--   파싱 실패로 통째로 건너뛰어졌을 때 1회, 오케스트레이터가 워커 결과의
+--   entailment_skipped 플래그를 읽어 기록 (2026-08-02, truncation 신호 전파)
 ```
 
 ### 4.1 질문 상태 기계 (완성판)
