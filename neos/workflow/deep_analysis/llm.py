@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 from neos.providers.anthropic import normalize_anthropic_request
@@ -15,6 +15,15 @@ from neos.workflow.deep_analysis.token_budget import active_token_budget
 
 class JSONParseError(ValueError):
     """Raised when an LLM response does not contain one valid JSON object."""
+
+
+class TruncatedResponseError(JSONParseError):
+    """Raised when the response failed to parse *because it was cut off*.
+
+    A subclass of JSONParseError on purpose: the five call sites that already
+    let a parse failure propagate keep working untouched, while the two that
+    fail open on D14 can opt into the distinction by catching this first.
+    """
 
 
 class LLMProviderError(RuntimeError):
@@ -31,6 +40,10 @@ class LLMResponse:
     # 재생 시 LLMResponse(**recorded)로 복원된다(D19 golden 게이트 유지).
     content: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str = ""
+    # 이 호출에 실제로 허용된 출력 상한. 0은 "미상"(레거시 레코드)이다.
+    # _budgeted_dispatch가 카세트 계층 이후에 채운다 — 허용 상한은 기록 시점이
+    # 아니라 이번 run의 예산 속성이므로, 재생 시에도 덮어써야 한다.
+    granted_max_output_tokens: int = 0
 
 
 @dataclass
@@ -189,7 +202,8 @@ async def _budgeted_dispatch(
 ) -> LLMResponse:
     budget = active_token_budget()
     if budget is None:
-        return await invoke(max_tokens, _DispatchState())
+        response = await invoke(max_tokens, _DispatchState())
+        return replace(response, granted_max_output_tokens=max_tokens)
 
     reservation = await budget.reserve(
         request,
@@ -218,7 +232,10 @@ async def _budgeted_dispatch(
             max_output_tokens=reservation.max_output_tokens,
             output_tokens=response.output_tokens,
         )
-    return response
+    return replace(
+        response,
+        granted_max_output_tokens=reservation.max_output_tokens,
+    )
 
 
 async def call_messages(
@@ -326,12 +343,27 @@ async def call_json(
     retries: int = 1,
     stage: str = "llm",
 ) -> tuple[dict[str, Any], LLMResponse]:
+    """Call the model and parse one JSON object out of its response.
+
+    `retries` counts tolerance for *malformed* responses. Truncation is a
+    separate axis: a call cut at its ceiling earns one extra attempt at a
+    larger ceiling regardless of `retries`, because the two failures have
+    different causes and different cures.
+    """
+
+    from neos.config.settings import settings
+
+    multiplier = settings.config.deep_analysis.truncation_retry_multiplier
+    limit = max_tokens
+    expanded = False
     last_error: JSONParseError | None = None
-    for _attempt in range(retries + 1):
+    attempts_left = retries + 1
+
+    while attempts_left > 0:
         response = await call_llm(
             model,
             prompt,
-            max_tokens=max_tokens,
+            max_tokens=limit,
             temperature=temperature,
             client=client,
             cassette=cassette,
@@ -341,6 +373,24 @@ async def call_json(
             return parse_json(response.text), response
         except JSONParseError as exc:
             last_error = exc
+
+        if response.stop_reason != "max_tokens":
+            attempts_left -= 1
+            continue
+
+        # Cut off. Retrying only helps if the ceiling -- not the budget --
+        # was the binding constraint: settling this call already shrank
+        # `remaining`, so a budget-clamped retry gets *less* room, not more.
+        budget_bound = response.granted_max_output_tokens < limit
+        if budget_bound or expanded:
+            raise TruncatedResponseError(str(last_error))
+
+        # The expansion is a separate axis from `retries`: it answers a
+        # different failure, so it does not consume a malformed-response
+        # attempt. It is available at most once, and the `expanded` guard
+        # above makes a second truncation terminal -- so the loop always ends.
+        expanded = True
+        limit = int(limit * multiplier)
 
     if last_error is None:
         raise JSONParseError("JSON parsing failed without a response")

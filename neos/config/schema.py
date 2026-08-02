@@ -745,6 +745,19 @@ class DeepAnalysisConfig(StrictConfigModel):
     # 6->{512-655}. The cut hit a 3-claim batch while every 6-claim batch
     # finished. The driver is thinking-token variance, not batch size.
     entailment_max_output_tokens: int = 3000
+
+    # A truncated response is a *different failure* from a malformed one: the
+    # judgement is unfinished, not wrong. When a call is cut at its configured
+    # ceiling (not by the budget clamp), call_json retries once at this
+    # multiple of the ceiling.
+    #
+    # 2.0 is a compromise, not a measured sufficiency. The judge was cut at
+    # both 300 and 800, so doubling is not guaranteed to be enough — when it
+    # is not, the call site fails closed. The alternative, requesting all
+    # remaining headroom, lets one worker monopolise the dev profile's
+    # global_token_cap of 20000 across parallel_workers=2 and starve its peer.
+    truncation_retry_multiplier: float = 2.0
+
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
     report_retry_cap: int = 2
