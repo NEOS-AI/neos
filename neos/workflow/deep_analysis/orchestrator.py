@@ -865,18 +865,28 @@ class Orchestrator:
                 if self.report_grader is not None
                 else Verdict(ok=True)
             )
+            # The gate's own measurements ride along so the threshold can be
+            # evaluated after the fact. Spread rather than nested: an event
+            # consumer aggregating these should not have to know they were
+            # once a sub-object. Empty when the grader measured nothing, and
+            # then nothing is added.
             if verdict.ok:
                 await self.ledger.log(
                     "report_graded",
                     root_id,
-                    {"ok": True, "attempt": attempt},
+                    {"ok": True, "attempt": attempt, **verdict.diagnostics},
                 )
                 await self.ledger.complete_run()
                 return report
             await self.ledger.log(
                 "report_graded",
                 root_id,
-                {"ok": False, "code": verdict.code, "attempt": attempt},
+                {
+                    "ok": False,
+                    "code": verdict.code,
+                    "attempt": attempt,
+                    **verdict.diagnostics,
+                },
             )
 
         # Cap exhausted — no empty-handed exit (§6.8): attach a failure

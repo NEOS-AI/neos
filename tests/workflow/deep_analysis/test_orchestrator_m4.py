@@ -289,3 +289,61 @@ async def test_reinvestigation_gate_is_event_based_and_durable(monkeypatch):
     reinvest = [e for e in ledger.events if e[0] == "conflict_reinvestigation"]
     assert len(reinvest) == 1  # still exactly one, from the prior run
     assert ledger.completed
+
+
+class DiagnosticGrader:
+    """Grader that reports the uncited measurements the real one now carries."""
+
+    def __init__(self, ok):
+        self._ok = ok
+
+    async def grade(self, report, root_id):
+        return Verdict(
+            ok=self._ok,
+            code="" if self._ok else "E_REPORT_UNCITED",
+            diagnostics={
+                "uncited_ratio": 0.75,
+                "uncited_assertions": 4,
+                "uncited_count": 3,
+                "uncited_threshold": 0.2,
+            },
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ok", [True, False])
+async def test_report_graded_event_carries_grader_diagnostics(ok):
+    """G2: 156 recorded rejections stored only a code.
+
+    Without the ratio and its denominator on the event there is no telling a
+    threshold that is too tight from reports that are genuinely uncited. The
+    passing case is parametrised too -- logging only rejections leaves a
+    distribution censored at the threshold.
+    """
+    ledger = FakeLedger()
+    orch = _orch(ledger, FakeSynth(), FlakyRenderer(fail_times=0),
+                 grader=DiagnosticGrader(ok=ok))
+
+    await orch._finalize("root0001")
+
+    graded = [p for p in _graded(ledger) if p.get("code") != "E_ORPHAN_CITE"]
+    assert graded
+    assert graded[0]["uncited_ratio"] == 0.75
+    assert graded[0]["uncited_assertions"] == 4
+    assert graded[0]["uncited_count"] == 3
+    assert graded[0]["uncited_threshold"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_report_graded_omits_diagnostics_when_the_grader_reports_none():
+    """The orphan-citation path never reached the gate, so it measured
+    nothing -- an empty diagnostics dict must not add empty keys."""
+    ledger = FakeLedger()
+    orch = _orch(ledger, FakeSynth(), FlakyRenderer(fail_times=1),
+                 grader=OkGrader())
+
+    await orch._finalize("root0001")
+
+    assert _graded(ledger)[0] == {
+        "ok": False, "code": "E_ORPHAN_CITE", "attempt": 0
+    }

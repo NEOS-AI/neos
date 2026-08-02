@@ -380,3 +380,91 @@ async def test_report_judge_ceiling_comes_from_settings_not_a_literal():
     expected = settings.config.deep_analysis.report_judge_max_output_tokens
     assert judge.max_tokens == [expected]
     assert expected > 400  # the old literal must no longer bind
+
+
+# ---- G2: the uncited gate must be observable ------------------------------
+
+
+def _uncited_diag(verdict):
+    return {
+        k: verdict.diagnostics.get(k)
+        for k in ("uncited_ratio", "uncited_assertions", "uncited_count",
+                  "uncited_threshold")
+    }
+
+
+@pytest.mark.asyncio
+async def test_rejected_report_reports_the_ratio_and_its_denominator():
+    """A bare ratio cannot be calibrated against.
+
+    1.00 from one assertion is a short report; 1.00 from forty is a badly
+    cited one. Recording the ratio without its denominator makes the two
+    indistinguishable after the fact, which is what left 156 recorded
+    rejections uninterpretable.
+    """
+    report = (
+        "## 본문\n"
+        "2024년에 규정이 발효되었다.\n"
+        "적용 대상은 2026년부터 확대된다.\n"
+        "\n## 한계와 미확인 사항\n없음.\n"
+    )
+
+    verdict = await _grader(FakeLedger()).grade_deterministic(report, "root0001")
+
+    assert verdict.ok is False
+    assert verdict.code == "E_REPORT_UNCITED"
+    diag = _uncited_diag(verdict)
+    assert diag["uncited_assertions"] == 2
+    assert diag["uncited_count"] == 2
+    assert diag["uncited_ratio"] == 1.0
+
+
+def test_latin_proper_nouns_do_not_count_when_a_korean_particle_follows():
+    """`\\b[A-Z][A-Za-z]{2,}\\b` cannot fire on "Act가" or "OpenAI가".
+
+    Python's `\\b` sees no boundary between Latin and Hangul -- both are word
+    characters -- and Korean attaches its particles directly. So in Korean
+    prose the proper-noun half of the assertion heuristic is nearly dead and
+    the gate is driven almost entirely by digits.
+
+    That shrinks the denominator, which is what makes the 0.20 threshold so
+    easy to breach: at four assertions a single uncited sentence is already
+    0.25. Pinned because it is load-bearing for any threshold calibration,
+    not because the behaviour is desirable.
+    """
+    from neos.workflow.deep_analysis.graders.report import _PROPER_NOUN
+
+    assert _PROPER_NOUN.findall("EU AI Act가 적용된다.") == []
+    assert _PROPER_NOUN.findall("OpenAI가 발표했다.") == []
+    assert _PROPER_NOUN.findall("The Act applies.") == ["The", "Act"]
+
+
+@pytest.mark.asyncio
+async def test_passing_report_also_reports_its_ratio():
+    """Logging only rejections yields a censored distribution.
+
+    Calibrating a threshold needs the passing side too — otherwise every
+    recorded sample sits above the cut by construction.
+    """
+    verdict = await _grader(
+        FakeLedger(children=[CHILD1, CHILD2])
+    ).grade_deterministic(_clean_report(), "root0001")
+
+    assert verdict.ok is True
+    diag = _uncited_diag(verdict)
+    assert diag["uncited_ratio"] is not None
+    assert diag["uncited_assertions"] is not None
+
+
+@pytest.mark.asyncio
+async def test_uncited_threshold_comes_from_settings():
+    from neos.config.settings import settings
+
+    verdict = await _grader(
+        FakeLedger(children=[CHILD1, CHILD2])
+    ).grade_deterministic(_clean_report(), "root0001")
+
+    assert (
+        verdict.diagnostics["uncited_threshold"]
+        == settings.config.deep_analysis.report_uncited_ratio_max
+    )

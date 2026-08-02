@@ -777,6 +777,17 @@ class DeepAnalysisConfig(StrictConfigModel):
     # two judges with the same output shape on the same model should not drift
     # apart for no measured reason.
     report_judge_max_output_tokens: int = 800
+    # Share of "factual assertion" sentences allowed to carry no footnote
+    # before the report is rejected. Was a module literal in report.py.
+    #
+    # This is the single most consequential gate in the harness by measured
+    # effect: it accounts for all 156 recorded report rejections, and 52 of
+    # 61 runs never got past it. Whether 0.20 is right is genuinely open --
+    # the reports may be badly cited, or the threshold may be too tight --
+    # and that cannot be settled until the ratios themselves are recorded
+    # (see report_graded diagnostics). The value is unchanged pending that
+    # evidence; it is a setting so the answer can be acted on.
+    report_uncited_ratio_max: float = Field(default=0.20, gt=0.0, le=1.0)
 
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2

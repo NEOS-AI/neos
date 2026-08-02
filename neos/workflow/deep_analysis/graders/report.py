@@ -35,8 +35,6 @@ _PROPER_NOUN = re.compile(r"\b[A-Z][A-Za-z]{2,}\b")
 
 _SOURCE_HEADING = re.compile(r"(?m)^##\s*출처\s*$")
 
-_UNCITED_RATIO_MAX = 0.20
-
 
 def _report_body(report: str) -> str:
     """Everything before the '## 출처' footnote block, if present.
@@ -60,15 +58,25 @@ def _sentences(body: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def _uncited_ratio(body: str) -> float:
+def _uncited_stats(body: str) -> tuple[float, int, int]:
+    """Return (ratio, assertion count, uncited count).
+
+    The counts travel with the ratio because the ratio alone cannot be
+    calibrated against: 1.00 over one assertion is a short report, 1.00 over
+    forty is a badly cited one, and the two call for opposite fixes. 156
+    recorded rejections stored only the code and so cannot distinguish them.
+    """
+
     sentences = _sentences(body)
     assertions = [
         s for s in sentences if _DIGIT.search(s) or _PROPER_NOUN.search(s)
     ]
     if not assertions:
-        return 0.0
+        return 0.0, 0, 0
     uncited = [s for s in assertions if not _FOOTNOTE_REF.search(s)]
-    return len(uncited) / len(assertions)
+    return len(uncited) / len(assertions), len(assertions), len(uncited)
+
+
 
 
 class ReportGrader:
@@ -99,12 +107,24 @@ class ReportGrader:
             )
 
         # (b) marker-less factual-assertion ratio must stay under threshold.
-        ratio = _uncited_ratio(_report_body(report))
-        if ratio >= _UNCITED_RATIO_MAX:
+        threshold = settings.config.deep_analysis.report_uncited_ratio_max
+        ratio, assertions, uncited = _uncited_stats(_report_body(report))
+        # Carried by every verdict from here on, not only the rejection:
+        # recording the failing side alone yields a distribution censored at
+        # the threshold, which cannot say whether the cut is in the right
+        # place.
+        diagnostics = {
+            "uncited_ratio": round(ratio, 4),
+            "uncited_assertions": assertions,
+            "uncited_count": uncited,
+            "uncited_threshold": threshold,
+        }
+        if ratio >= threshold:
             return Verdict(
                 ok=False,
                 code="E_REPORT_UNCITED",
-                detail=f"uncited assertion ratio {ratio:.2f} >= {_UNCITED_RATIO_MAX}",
+                detail=f"uncited assertion ratio {ratio:.2f} >= {threshold}",
+                diagnostics=diagnostics,
             )
 
         # (c) every resolved root-direct-child question must be mentioned.
@@ -117,6 +137,7 @@ class ReportGrader:
                     ok=False,
                     code="E_REPORT_MISSING_QUESTION",
                     detail=f"resolved question not mentioned: {child.text}",
+                    diagnostics=diagnostics,
                 )
 
         # (d) the limits/unresolved section must exist.
@@ -125,9 +146,10 @@ class ReportGrader:
                 ok=False,
                 code="E_REPORT_NO_LIMITS",
                 detail=f"missing '{_LIMITS_HEADING}' section",
+                diagnostics=diagnostics,
             )
 
-        return Verdict(ok=True)
+        return Verdict(ok=True, diagnostics=diagnostics)
 
     async def grade_agentic(self, report: str, root_text: str) -> Verdict:
         prompt = render("report_judge", report=report, root_text=root_text)
@@ -174,6 +196,13 @@ class ReportGrader:
         root_text = root.text if root is not None else ""
 
         try:
-            return await self.grade_agentic(report, root_text)
+            agentic = await self.grade_agentic(report, root_text)
         except TokenBudgetExhausted:
             return deterministic
+        # The agentic verdict is the answer, but the deterministic gate's
+        # measurements have to survive it: reports that reach the judge are
+        # exactly the ones that cleared the uncited cut, so dropping their
+        # ratios here would leave only rejections on record and make the
+        # threshold impossible to evaluate.
+        agentic.diagnostics = {**deterministic.diagnostics, **agentic.diagnostics}
+        return agentic
