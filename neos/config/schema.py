@@ -737,8 +737,13 @@ class DeepAnalysisConfig(StrictConfigModel):
     # 20260802T052306Z was cut; completed responses ran 97-923 tokens.
     # As with the judge ceiling, adaptive thinking (llm.py:137) consumes most
     # of the budget invisibly — the truncated call spent ~1155 tokens on
-    # thinking for 183 characters of text. Batches also grow with claim
-    # production, which recently tripled, so this ceiling binds more over time.
+    # thinking for 183 characters of text.
+    #
+    # Do NOT recalibrate this from batch size. Measured across all 18 calls in
+    # that sample, tokens do not scale with claim count: 1 claim->97,
+    # 3 claims->{237,434,923,1200(cut)}, 4->{302-598}, 5->{181,225},
+    # 6->{512-655}. The cut hit a 3-claim batch while every 6-claim batch
+    # finished. The driver is thinking-token variance, not batch size.
     entailment_max_output_tokens: int = 3000
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
