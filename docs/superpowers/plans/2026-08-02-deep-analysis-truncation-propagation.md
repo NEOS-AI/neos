@@ -633,8 +633,12 @@ Expected: FAIL — `assert len(handled) == 1` 이 `0`으로 실패
         be told apart from one whose filter never ran -- which is exactly
         what left the discard-recall measurement inconclusive twice.
 
-        Written only when a truncation actually occurred, so one
-        `llm_truncated` corresponds to one of these.
+        Written once per truncated `call_json` invocation -- not once per
+        truncated provider response. `_budgeted_dispatch` writes
+        `llm_truncated` for every cut response, so a `retried_failed`
+        outcome (cut, expanded, cut again) has two of those against one of
+        these. `retried_ok` and `budget_bound` are one-to-one. Aggregation
+        must not assume the two kinds have equal counts.
 
         Payload carries counts and identifiers only — never response text.
         """
@@ -748,8 +752,9 @@ distinguish 'nothing to discard' from 'the filter never ran'.
 truncation_handled carries the outcome -- retried_ok, retried_failed, or
 budget_bound -- alongside the requested and granted ceilings, so the two
 prescriptions stay separable after the fact. Written only when a truncation
-occurred, so it pairs one-to-one with llm_truncated, and skipped outside a
-budget scope where TokenBudget has nowhere to write."
+occurred, and skipped outside a budget scope where TokenBudget has nowhere
+to write. It counts truncated call_json invocations, not truncated provider
+responses -- a retried_failed outcome answers two llm_truncated events."
 ```
 
 ---

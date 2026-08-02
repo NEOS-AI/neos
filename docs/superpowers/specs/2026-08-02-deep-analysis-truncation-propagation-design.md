@@ -265,8 +265,13 @@ recall 손실을 새로 만들어내 측정 대상을 오염시킨다.
 `action` ∈ `retried_ok` | `retried_failed` | `budget_bound`.
 
 `truncation_handled`는 **truncation이 실제로 발생했을 때만** 쓴다. 잘리지 않은 호출까지
-기록하면 정상 경로 전체가 이벤트가 되어 로그를 압도한다. 따라서 `llm_truncated` 1건에
-`truncation_handled` 1건이 대응한다.
+기록하면 정상 경로 전체가 이벤트가 되어 로그를 압도한다.
+
+⚠️ **두 이벤트는 1:1이 아니다.** `llm_truncated`는 `_budgeted_dispatch`가 **잘린 응답마다**
+쓰고, `truncation_handled`는 `call_json`이 **잘린 호출마다** 한 번 쓴다. 확장 재시도가
+다시 잘리는 `retried_failed` 경로에서는 `llm_truncated` 2건에 `truncation_handled` 1건이
+대응한다. `retried_ok`와 `budget_bound`는 1:1이다. 사후 집계에서 두 kind의 개수를
+같다고 가정하면 안 된다.
 
 ⚠️ 두 이벤트 모두 `TokenBudget`이 작성자이므로 **활성 예산이 없으면 기록되지 않는다**
 (`active_token_budget()` is None). 프로덕션 경로에는 항상 예산이 있으나, 예산을 주입하지
