@@ -4,6 +4,7 @@ from neos.workflow.deep_analysis.cassette import Cassette
 from neos.workflow.deep_analysis.llm import (
     JSONParseError,
     LLMResponse,
+    TruncatedResponseError,
     call_json,
     call_llm,
     call_messages,
@@ -462,3 +463,87 @@ async def test_granted_max_output_tokens_without_a_budget_is_the_ceiling():
     )
 
     assert response.granted_max_output_tokens == 300
+
+
+@pytest.mark.asyncio
+async def test_ceiling_bound_truncation_retries_at_a_larger_ceiling():
+    """상한에 걸려 잘렸으면 2배로 한 번 더 부른다."""
+    client = FakeAnthropic(
+        ['{"partial": tru', '{"ok": true}'],
+        stop_reasons=["max_tokens", "end_turn"],
+    )
+
+    data, _response = await call_json(
+        "claude-haiku-4-5-20251001",
+        "prompt",
+        max_tokens=400,
+        client=client,
+    )
+
+    assert data == {"ok": True}
+    assert client.calls == 2
+    assert [kw["max_tokens"] for kw in client.kwargs] == [400, 800]
+
+
+@pytest.mark.asyncio
+async def test_budget_bound_truncation_does_not_retry():
+    """예산에 깎여 잘렸으면 재시도해도 같거나 더 적은 여유를 받는다 — 부르지 않는다."""
+    client = FakeAnthropic(
+        ['{"partial": tru'],
+        stop_reasons=["max_tokens"],
+    )
+    budget = TokenBudget(400)
+
+    with token_budget_scope(budget):
+        with pytest.raises(TruncatedResponseError):
+            await call_json(
+                "claude-haiku-4-5-20251001",
+                "prompt",
+                max_tokens=5000,
+                client=client,
+            )
+
+    assert client.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_exhausted_expansion_raises_truncated_response_error():
+    """확장 재시도도 잘리면 종단이다 — 더 늘리지 않는다."""
+    client = FakeAnthropic(
+        ['{"partial": tru', '{"still cu'],
+        stop_reasons=["max_tokens", "max_tokens"],
+    )
+
+    with pytest.raises(TruncatedResponseError):
+        await call_json(
+            "claude-haiku-4-5-20251001",
+            "prompt",
+            max_tokens=400,
+            client=client,
+        )
+
+    assert client.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_garbage_response_still_retries_at_the_same_ceiling():
+    """잘리지 않은 쓰레기 응답의 기존 동작은 그대로다."""
+    client = FakeAnthropic(["garbage", "still garbage"])
+
+    with pytest.raises(JSONParseError) as excinfo:
+        await call_json(
+            "claude-haiku-4-5-20251001",
+            "prompt",
+            max_tokens=400,
+            client=client,
+        )
+
+    assert not isinstance(excinfo.value, TruncatedResponseError)
+    assert client.calls == 2
+    assert [kw["max_tokens"] for kw in client.kwargs] == [400, 400]
+
+
+@pytest.mark.asyncio
+async def test_truncated_response_error_is_a_json_parse_error():
+    """예외를 전파하던 호출부가 변경 없이 계속 잡을 수 있어야 한다."""
+    assert issubclass(TruncatedResponseError, JSONParseError)

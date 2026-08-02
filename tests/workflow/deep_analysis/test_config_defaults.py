@@ -84,3 +84,9 @@ def test_deep_analysis_job_settings_reachable_via_legacy_uppercase():
 
     assert settings.DEEP_ANALYSIS_JOB_QUEUE == "analysis"
     assert settings.DEEP_ANALYSIS_EVENTS_POLL_INTERVAL == 1.0
+
+
+def test_truncation_retry_multiplier_default():
+    from neos.config.settings import settings
+
+    assert settings.config.deep_analysis.truncation_retry_multiplier == 2.0

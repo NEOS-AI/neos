@@ -17,6 +17,15 @@ class JSONParseError(ValueError):
     """Raised when an LLM response does not contain one valid JSON object."""
 
 
+class TruncatedResponseError(JSONParseError):
+    """Raised when the response failed to parse *because it was cut off*.
+
+    A subclass of JSONParseError on purpose: the five call sites that already
+    let a parse failure propagate keep working untouched, while the two that
+    fail open on D14 can opt into the distinction by catching this first.
+    """
+
+
 class LLMProviderError(RuntimeError):
     """Raised when a live LLM provider call fails."""
 
@@ -334,12 +343,27 @@ async def call_json(
     retries: int = 1,
     stage: str = "llm",
 ) -> tuple[dict[str, Any], LLMResponse]:
+    """Call the model and parse one JSON object out of its response.
+
+    `retries` counts tolerance for *malformed* responses. Truncation is a
+    separate axis: a call cut at its ceiling earns one extra attempt at a
+    larger ceiling regardless of `retries`, because the two failures have
+    different causes and different cures.
+    """
+
+    from neos.config.settings import settings
+
+    multiplier = settings.config.deep_analysis.truncation_retry_multiplier
+    limit = max_tokens
+    expanded = False
     last_error: JSONParseError | None = None
-    for _attempt in range(retries + 1):
+    attempts_left = retries + 1
+
+    while attempts_left > 0:
         response = await call_llm(
             model,
             prompt,
-            max_tokens=max_tokens,
+            max_tokens=limit,
             temperature=temperature,
             client=client,
             cassette=cassette,
@@ -349,6 +373,24 @@ async def call_json(
             return parse_json(response.text), response
         except JSONParseError as exc:
             last_error = exc
+
+        if response.stop_reason != "max_tokens":
+            attempts_left -= 1
+            continue
+
+        # Cut off. Retrying only helps if the ceiling -- not the budget --
+        # was the binding constraint: settling this call already shrank
+        # `remaining`, so a budget-clamped retry gets *less* room, not more.
+        budget_bound = response.granted_max_output_tokens < limit
+        if budget_bound or expanded:
+            raise TruncatedResponseError(str(last_error))
+
+        # The expansion is a separate axis from `retries`: it answers a
+        # different failure, so it does not consume a malformed-response
+        # attempt. It is available at most once, and the `expanded` guard
+        # above makes a second truncation terminal -- so the loop always ends.
+        expanded = True
+        limit = int(limit * multiplier)
 
     if last_error is None:
         raise JSONParseError("JSON parsing failed without a response")
