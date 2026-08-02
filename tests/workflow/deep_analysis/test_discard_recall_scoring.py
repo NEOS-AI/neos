@@ -246,6 +246,7 @@ async def test_sample_rate_one_disables_the_agentic_sampling_gate():
         judge_model="claude-j",
         threshold=0.35,
         sample_rate=1.0,
+        max_output_tokens=800,
         llm_client=judge,
         sampler=lambda: highest_possible_sample,
     )

@@ -715,6 +715,15 @@ class DeepAnalysisConfig(StrictConfigModel):
     )
     agentic_threshold: float = 0.35
     agentic_sample_rate: float = 0.3
+    # The judge returns {"label", "rationale"}; the rationale is free-form
+    # Korean and variable in length. At the previous hardcoded 300, four
+    # responses in sample 20260802T052306Z were cut mid-rationale — and a
+    # truncated response raises JSONParseError, which _judge_failed turns
+    # into a D14 fail-open pass for non-mandatory claims. One of those had
+    # already emitted "label": "CONTRADICTS", so a rejection became an
+    # acceptance. Completed responses measured 60-282 tokens (median 104),
+    # a maximum censored by the old ceiling.
+    judge_max_output_tokens: int = 800
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
     report_retry_cap: int = 2
