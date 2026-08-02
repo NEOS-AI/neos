@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from neos.config.settings import settings
 from neos.workflow.deep_analysis.cassette import Cassette
 from neos.workflow.deep_analysis.llm import call_llm
 from neos.workflow.deep_analysis.models import (
@@ -144,9 +145,28 @@ async def test_worker_applies_one_batched_entailment_response():
     assert result.claims[1].evidence[0].excerpt == "Direct evidence."
     assert result.tokens_spent == 30
     assert len(llm.prompts) == 2
-    assert llm.max_tokens[1] == 1200
+    assert llm.max_tokens[1] == settings.config.deep_analysis.entailment_max_output_tokens
+    assert llm.max_tokens[1] > 1200  # the old literal must no longer bind
     assert '"index": 0' in llm.prompts[1]
     assert '"index": 2' in llm.prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_scout_analysis_is_not_capped_by_the_effort_budget():
+    # effort.token_cap is a budget, not a per-response output allowance.
+    # SCOUT's 2000 truncated claim-bearing responses mid-JSON, losing every
+    # claim in them. The analysis call must use the output ceiling instead.
+    llm = ScriptedLLM(json.dumps({"results": [{"index": 0, "action": "keep"},
+                                              {"index": 1, "action": "keep"},
+                                              {"index": 2, "action": "keep"}]}))
+
+    await Worker(
+        Search(), fetch_fn=Fetch(), llm_client=llm
+    ).investigate("Q\n{fetched_evidence}", Effort.SCOUT, "q")
+
+    analysis_max_tokens = llm.max_tokens[0]
+    assert analysis_max_tokens == settings.config.deep_analysis.worker_max_output_tokens
+    assert analysis_max_tokens > settings.config.deep_analysis.effort["scout"].token_cap
 
 
 @pytest.mark.asyncio

@@ -135,6 +135,7 @@ def _graders(session, run_id: str):
         judge_model=_judge_model(),
         threshold=config.agentic_threshold,
         sample_rate=_EXHAUSTIVE_SAMPLE_RATE,
+        max_output_tokens=config.judge_max_output_tokens,
     )
     return deterministic, agentic
 

@@ -1,5 +1,6 @@
 import pytest
 
+from neos.config.settings import settings
 from neos.workflow.deep_analysis.graders.agentic import AgenticGrader
 from neos.workflow.deep_analysis.models import ProposedClaim, ProposedEvidence
 
@@ -41,19 +42,29 @@ class FakeJudge:
 
 
 def test_tiering_high_value_always_grades():
-    g = AgenticGrader(judge_model="j", threshold=0.35, sample_rate=0.0)
+    g = AgenticGrader(
+        judge_model="j", threshold=0.35, sample_rate=0.0, max_output_tokens=800
+    )
     assert g.should_grade(value_est=0.8, confidence=0.6) is True  # 0.48 >= 0.35
 
 
 def test_tiering_low_value_samples():
     g = AgenticGrader(
-        judge_model="j", threshold=0.35, sample_rate=0.0, sampler=lambda: 0.99
+        judge_model="j",
+        threshold=0.35,
+        sample_rate=0.0,
+        max_output_tokens=800,
+        sampler=lambda: 0.99,
     )
     assert (
         g.should_grade(value_est=0.1, confidence=0.1) is False
     )  # 0.01<0.35, sample 0.99>=0.0
     g2 = AgenticGrader(
-        judge_model="j", threshold=0.35, sample_rate=1.0, sampler=lambda: 0.0
+        judge_model="j",
+        threshold=0.35,
+        sample_rate=1.0,
+        max_output_tokens=800,
+        sampler=lambda: 0.0,
     )
     assert g2.should_grade(value_est=0.1, confidence=0.1) is True
 
@@ -72,6 +83,7 @@ async def test_label_to_verdict(label, ok, code):
         judge_model="claude-j",
         threshold=0.0,
         sample_rate=1.0,
+        max_output_tokens=800,
         llm_client=FakeJudge(label),
     )
     v = await g.grade(_claim(), value_est=1.0)
@@ -84,6 +96,7 @@ async def test_unsampled_passes_without_calling_judge():
         judge_model="j",
         threshold=0.35,
         sample_rate=0.0,
+        max_output_tokens=800,
         llm_client=judge,
         sampler=lambda: 0.99,
     )
@@ -97,12 +110,14 @@ async def test_attempted_judgment_reports_pass_or_rejection_state():
         judge_model="claude-j",
         threshold=0.0,
         sample_rate=1.0,
+        max_output_tokens=800,
         llm_client=FakeJudge("SUPPORTS"),
     ).grade(_claim(), value_est=1.0)
     rejected = await AgenticGrader(
         judge_model="claude-j",
         threshold=0.0,
         sample_rate=1.0,
+        max_output_tokens=800,
         llm_client=FakeJudge("PARTIAL"),
     ).grade(_claim(), value_est=1.0)
 
@@ -114,6 +129,18 @@ async def test_attempted_judgment_reports_pass_or_rejection_state():
         "agentic": "attempted_rejected",
         "agentic_label": "PARTIAL",
     }
+
+
+class RecordingJudge(FakeJudge):
+    """Records the max_tokens each call was made with, on top of FakeJudge's reply."""
+
+    def __init__(self, label):
+        super().__init__(label)
+        self.received_max_tokens = None
+
+    async def create(self, **kw):
+        self.received_max_tokens = kw["max_tokens"]
+        return await super().create(**kw)
 
 
 class Garbage(FakeJudge):
@@ -143,6 +170,7 @@ async def test_unparseable_judge_passes_low_value_sampled_claim():
         judge_model="claude-j",
         threshold=1.0,
         sample_rate=1.0,
+        max_output_tokens=800,
         llm_client=Garbage("x"),
         sampler=lambda: 0.0,
     )
@@ -154,7 +182,11 @@ async def test_unparseable_judge_rejects_mandatory_claim():
     # #6/§A4 강화: 필수 심사 대상은 judge 판정 불가 시 자동 verified 금지.
     # value_est*conf=0.6 >= threshold 0.35 → mandatory → E_UNSUPPORTED 반려.
     g = AgenticGrader(
-        judge_model="claude-j", threshold=0.35, sample_rate=1.0, llm_client=Garbage("x")
+        judge_model="claude-j",
+        threshold=0.35,
+        sample_rate=1.0,
+        max_output_tokens=800,
+        llm_client=Garbage("x"),
     )
     v = await g.grade(_claim(), value_est=1.0)
     assert v.ok is False and v.code == "E_UNSUPPORTED" and v.label is None
@@ -167,7 +199,33 @@ async def test_unknown_label_rejects_mandatory_claim():
         judge_model="claude-j",
         threshold=0.35,
         sample_rate=1.0,
+        max_output_tokens=800,
         llm_client=FakeJudge("WOBBLE"),
     )
     v = await g.grade(_claim(), value_est=1.0)
     assert v.ok is False and v.code == "E_UNSUPPORTED" and v.label is None
+
+
+async def test_judge_call_uses_the_configured_output_ceiling():
+    # A truncated judge response raises JSONParseError, which _judge_failed
+    # fail-opens to ok=True for non-mandatory claims -- turning a CONTRADICTS
+    # verdict into a pass. The ceiling must come from config, not a literal.
+    judge = RecordingJudge("SUPPORTS")
+    configured = settings.config.deep_analysis.judge_max_output_tokens
+    g = AgenticGrader(
+        judge_model="claude-j",
+        threshold=0.35,
+        sample_rate=0.0,
+        max_output_tokens=configured,
+        llm_client=judge,
+    )
+    claim = _claim(conf=0.6)
+    # value_est(1.0) * confidence(0.6) = 0.6 >= threshold(0.35) -> mandatory,
+    # so the sampling gate cannot skip the judge call.
+    assert g.is_mandatory(value_est=1.0, confidence=claim.confidence) is True
+
+    await g.grade(claim, value_est=1.0)
+
+    recorded_max_tokens = judge.received_max_tokens
+    assert recorded_max_tokens == settings.config.deep_analysis.judge_max_output_tokens
+    assert recorded_max_tokens > 300  # the old literal must no longer bind

@@ -16,11 +16,12 @@ _MAP = {
 
 
 class AgenticGrader:
-    def __init__(self, *, judge_model, threshold, sample_rate,
+    def __init__(self, *, judge_model, threshold, sample_rate, max_output_tokens,
                  llm_client=None, cassette=None, sampler=None):
         self.judge_model = judge_model
         self.threshold = threshold
         self.sample_rate = sample_rate
+        self.max_output_tokens = max_output_tokens
         self.llm_client = llm_client
         self.cassette = cassette
         self.sampler = sampler or random.random
@@ -84,7 +85,7 @@ class AgenticGrader:
             data, _ = await call_json(
                 self.judge_model,
                 prompt,
-                max_tokens=300,
+                max_tokens=self.max_output_tokens,
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="claim_grading",

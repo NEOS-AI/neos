@@ -74,6 +74,7 @@ async def build_orchestrator(
         judge_model=judge_model,
         threshold=config.agentic_threshold,
         sample_rate=config.agentic_sample_rate,
+        max_output_tokens=config.judge_max_output_tokens,
         llm_client=llm_client,
         cassette=cassette,
     )

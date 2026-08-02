@@ -32,8 +32,9 @@ def test_parse_json_rejects_missing_or_invalid_object():
 
 
 class FakeAnthropic:
-    def __init__(self, texts):
+    def __init__(self, texts, stop_reasons=None):
         self._texts = list(texts)
+        self._stop_reasons = list(stop_reasons) if stop_reasons is not None else None
         self.messages = self
         self.calls = 0
         self.kwargs = []
@@ -42,6 +43,9 @@ class FakeAnthropic:
         self.calls += 1
         self.kwargs.append(kwargs)
         response_text = self._texts.pop(0)
+        stop_reason = (
+            self._stop_reasons.pop(0) if self._stop_reasons else "end_turn"
+        )
 
         class Usage:
             input_tokens = 10
@@ -56,6 +60,7 @@ class FakeAnthropic:
             usage = Usage()
             model = kwargs["model"]
 
+        Response.stop_reason = stop_reason
         return Response()
 
 
@@ -327,3 +332,86 @@ async def test_unscoped_call_preserves_requested_limit():
     )
 
     assert client.kwargs[0]["max_tokens"] == 123
+
+
+@pytest.mark.asyncio
+async def test_truncated_response_records_an_llm_truncated_event():
+    # A response stopped at max_tokens must leave a durable trace: this bug
+    # cost a whole baseline run precisely because nothing recorded it.
+    events = []
+
+    async def capture(kind, payload):
+        events.append((kind, payload))
+
+    client = FakeAnthropic(["truncated text"], stop_reasons=["max_tokens"])
+    budget = TokenBudget(500, persist=capture)
+
+    with token_budget_scope(budget):
+        await call_llm(
+            "claude-haiku-4-5-20251001",
+            "prompt",
+            max_tokens=100,
+            client=client,
+            stage="worker_analysis",
+        )
+
+    assert any(kind == "llm_truncated" for kind, _ in events)
+    payload = next(p for k, p in events if k == "llm_truncated")
+    assert payload["stage"] == "worker_analysis"
+    assert payload["max_output_tokens"] > 0
+    assert payload["output_tokens"] > 0
+    # No response text may reach the event.
+    assert "text" not in payload
+    assert "content" not in payload
+
+
+@pytest.mark.asyncio
+async def test_completed_response_records_no_truncation_event():
+    events = []
+
+    async def capture(kind, payload):
+        events.append((kind, payload))
+
+    client = FakeAnthropic(["answer"], stop_reasons=["end_turn"])
+    budget = TokenBudget(500, persist=capture)
+
+    with token_budget_scope(budget):
+        await call_llm(
+            "claude-haiku-4-5-20251001",
+            "prompt",
+            max_tokens=100,
+            client=client,
+            stage="worker_analysis",
+        )
+
+    assert not any(kind == "llm_truncated" for kind, _ in events)
+
+
+@pytest.mark.asyncio
+async def test_truncation_event_does_not_replace_settlement():
+    # The budget must still settle on the real usage; the new event is
+    # additive, not a substitute.
+    events = []
+
+    async def capture(kind, payload):
+        events.append((kind, payload))
+
+    client = FakeAnthropic(["truncated text"], stop_reasons=["max_tokens"])
+    budget = TokenBudget(500, persist=capture)
+
+    with token_budget_scope(budget):
+        await call_llm(
+            "claude-haiku-4-5-20251001",
+            "prompt",
+            max_tokens=100,
+            client=client,
+            stage="worker_analysis",
+        )
+
+    kinds = [kind for kind, _ in events]
+    assert "token_budget_settled" in kinds
+    assert "llm_truncated" in kinds
+    # Settlement stays first: never trade accounting correctness for
+    # observability. A test that only checked presence would still pass
+    # if the truncation event were emitted before settlement.
+    assert kinds.index("token_budget_settled") < kinds.index("llm_truncated")

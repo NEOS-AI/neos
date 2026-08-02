@@ -3,9 +3,11 @@ from unittest.mock import Mock
 
 import pytest
 
+from neos.config.settings import settings
 from neos.workflow.deep_analysis.cassette import Cassette
 from neos.workflow.deep_analysis import fetch as fetch_module
 from neos.workflow.deep_analysis.fetch import (
+    _build_fetch_client,
     extract_article_text,
     fetch_url,
     html_to_text,
@@ -140,6 +142,21 @@ def test_extract_article_text_drops_comments_break_check():
     assert "authors are lying" in bare  # documents the pre-fix behavior
 
 
+def test_build_fetch_client_sends_a_descriptive_user_agent():
+    client = _build_fetch_client()
+    ua = client.headers.get("user-agent", "")
+
+    assert ua == settings.config.deep_analysis.fetch_user_agent
+    assert ua  # must not be empty
+    # A descriptive bot string, not a browser impersonation.
+    assert "Mozilla" not in ua
+    assert "Chrome" not in ua
+    assert "Safari" not in ua
+    # Identifiable, with a contact URL.
+    assert "NEOS" in ua
+    assert "http" in ua
+
+
 class FakeHttpClient:
     def __init__(self, status_code, body, headers=None):
         self.status_code = status_code
@@ -177,6 +194,20 @@ async def test_fetch_returns_content_addressed_blob_proposal():
     assert blob.http_status == 200
     assert blob.raw_text == "quick brown fox"
     assert len(blob.content_hash) == 16
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_does_not_override_an_injected_client():
+    # An injected client owns its own configuration; fetch_url must not
+    # rewrite its headers.
+    client = FakeHttpClient(200, "<html><body><article><p>Body text here that "
+                                 "is long enough to extract.</p></article></body></html>")
+
+    blob = await fetch_url("https://example.com/a", client=client)
+
+    assert blob.http_status == 200
+    assert client.calls == 1
+    assert client.headers == {}  # fetch_url must not stamp its UA on a caller's client
 
 
 @pytest.mark.asyncio

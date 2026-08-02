@@ -715,6 +715,36 @@ class DeepAnalysisConfig(StrictConfigModel):
     )
     agentic_threshold: float = 0.35
     agentic_sample_rate: float = 0.3
+    # The judge returns {"label", "rationale"}. The budget is consumed mainly
+    # by ADAPTIVE THINKING, not the rationale: the judge model declares
+    # `thinking: adaptive` and llm.py:137 hardcodes thinking_enabled=True.
+    # Thinking tokens count against max_tokens but are stripped from content,
+    # so they are invisible in a cassette while fully charged — one truncated
+    # response spent 300 output tokens on 83 characters of text. Tune this
+    # against the thinking budget, not against rationale length.
+    # At the previous hardcoded 300, four
+    # responses in sample 20260802T052306Z were cut mid-rationale — and a
+    # truncated response raises JSONParseError, which _judge_failed turns
+    # into a D14 fail-open pass for non-mandatory claims. One of those had
+    # already emitted "label": "CONTRADICTS", so a rejection became an
+    # acceptance. Completed responses measured 60-282 tokens (median 104),
+    # a maximum censored by the old ceiling.
+    judge_max_output_tokens: int = 800
+    # One batched entailment call decides keep/narrow/discard for every claim a
+    # worker produced. On truncation, parse_json raises and worker.py returns
+    # the original batch — the whole batch bypasses the discard filter, and
+    # nothing records it. At 1200, one of eighteen calls in sample
+    # 20260802T052306Z was cut; completed responses ran 97-923 tokens.
+    # As with the judge ceiling, adaptive thinking (llm.py:137) consumes most
+    # of the budget invisibly — the truncated call spent ~1155 tokens on
+    # thinking for 183 characters of text.
+    #
+    # Do NOT recalibrate this from batch size. Measured across all 18 calls in
+    # that sample, tokens do not scale with claim count: 1 claim->97,
+    # 3 claims->{237,434,923,1200(cut)}, 4->{302-598}, 5->{181,225},
+    # 6->{512-655}. The cut hit a 3-claim batch while every 6-claim batch
+    # finished. The driver is thinking-token variance, not batch size.
+    entailment_max_output_tokens: int = 3000
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
     report_retry_cap: int = 2
@@ -736,6 +766,15 @@ class DeepAnalysisConfig(StrictConfigModel):
     )
     search_result_limit: int = 3
     fetch_timeout_seconds: float = 15.0
+    # Identifies this client to the sites it fetches. Deliberately a
+    # descriptive bot string, not a browser string: sites that block bots are
+    # expressing a preference, and impersonating a browser circumvents it.
+    # Wikipedia requires an identifiable UA and returns 403 for browser-like
+    # strings; it returns 200 for this one. Deployments should point the
+    # contact URL at something they actually monitor.
+    fetch_user_agent: str = (
+        "NEOS-DeepAnalysis/0.23 (+https://github.com/NEOS-AI/neos)"
+    )
     evidence_context_chars: int = 2000
     excerpt_max_chars: int = 500
     # 1500이었을 때 실측 캐소트(20260728T104241Z)에서 decompose 응답 3건이
