@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import re
 
+from neos.config.settings import settings
+
 from ..citation import OrphanCitationError
 from ..llm import JSONParseError, TruncatedResponseError, call_json
 from ..models import Verdict
@@ -133,7 +135,7 @@ class ReportGrader:
             data, _ = await self.json_call(
                 self.judge_model,
                 prompt,
-                max_tokens=400,
+                max_tokens=settings.config.deep_analysis.report_judge_max_output_tokens,
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="report_grading",

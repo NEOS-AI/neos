@@ -348,3 +348,35 @@ async def test_grade_runs_agentic_after_deterministic_pass():
 
     assert verdict.ok is True
     assert judge.calls == 1
+
+
+class CeilingRecordingJudge(FakeJudge):
+    """Records the max_tokens each call was dispatched with."""
+
+    def __init__(self):
+        super().__init__(answers_question=True, strength_ok=True)
+        self.max_tokens = []
+
+    async def create(self, **kw):
+        self.max_tokens.append(kw["max_tokens"])
+        return await super().create(**kw)
+
+
+@pytest.mark.asyncio
+async def test_report_judge_ceiling_comes_from_settings_not_a_literal():
+    """The ceiling was hardcoded at 400 in report.py.
+
+    It is the same output shape on the same model as the claim judge, so the
+    two must not drift apart silently -- a literal in report.py cannot be
+    tuned when the sibling stage's measurements move.
+    """
+    from neos.config.settings import settings
+
+    judge = CeilingRecordingJudge()
+    grader = ReportGrader(FakeLedger(), judge_model="claude-j", llm_client=judge)
+
+    await grader.grade_agentic(_clean_report(), "루트 질문")
+
+    expected = settings.config.deep_analysis.report_judge_max_output_tokens
+    assert judge.max_tokens == [expected]
+    assert expected > 400  # the old literal must no longer bind

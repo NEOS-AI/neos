@@ -760,6 +760,23 @@ class DeepAnalysisConfig(StrictConfigModel):
     # gt=1.0 because a multiplier at or below 1.0 would not expand the
     # retry's ceiling at all -- it terminates safely but is meaningless.
     truncation_retry_multiplier: float = Field(default=2.0, gt=1.0)
+    # The report judge returns {"answers_question", "strength_ok", "rationale"}
+    # -- a shape as small as the claim judge's, and it runs on the same model
+    # (service.py resolves both from role="everyday").
+    #
+    # This was hardcoded at 400 in report.py. No truncation has ever been
+    # observed at stage="report_grading", but that is not evidence the ceiling
+    # is adequate: the deterministic gate rejects before the judge is called in
+    # 52 of 61 recorded runs, so the call itself is rare. The relevant evidence
+    # comes from the sibling stage -- claim_grading truncated four times at a
+    # cap of 300 on the same model, because adaptive thinking (llm.py) spends
+    # the ceiling invisibly. 400 sits between that observed failure and the 800
+    # the claim judge now uses.
+    #
+    # Aligned with judge_max_output_tokens rather than raised independently:
+    # two judges with the same output shape on the same model should not drift
+    # apart for no measured reason.
+    report_judge_max_output_tokens: int = 800
 
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
