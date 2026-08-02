@@ -408,4 +408,10 @@ async def test_truncation_event_does_not_replace_settlement():
             stage="worker_analysis",
         )
 
-    assert any(kind == "token_budget_settled" for kind, _ in events)
+    kinds = [kind for kind, _ in events]
+    assert "token_budget_settled" in kinds
+    assert "llm_truncated" in kinds
+    # Settlement stays first: never trade accounting correctness for
+    # observability. A test that only checked presence would still pass
+    # if the truncation event were emitted before settlement.
+    assert kinds.index("token_budget_settled") < kinds.index("llm_truncated")

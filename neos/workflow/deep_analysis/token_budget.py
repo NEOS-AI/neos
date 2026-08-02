@@ -185,15 +185,16 @@ class TokenBudget:
 
         Payload carries counts and identifiers only — never response text.
         """
-        await self._persist_event(
-            "llm_truncated",
-            {
-                "stage": stage,
-                "model": model,
-                "max_output_tokens": max_output_tokens,
-                "output_tokens": output_tokens,
-            },
-        )
+        async with self._lock:
+            await self._persist_event(
+                "llm_truncated",
+                {
+                    "stage": stage,
+                    "model": model,
+                    "max_output_tokens": max_output_tokens,
+                    "output_tokens": output_tokens,
+                },
+            )
 
     def _require_active(self, reservation: TokenReservation) -> int:
         try:
