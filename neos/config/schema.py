@@ -715,8 +715,14 @@ class DeepAnalysisConfig(StrictConfigModel):
     )
     agentic_threshold: float = 0.35
     agentic_sample_rate: float = 0.3
-    # The judge returns {"label", "rationale"}; the rationale is free-form
-    # Korean and variable in length. At the previous hardcoded 300, four
+    # The judge returns {"label", "rationale"}. The budget is consumed mainly
+    # by ADAPTIVE THINKING, not the rationale: the judge model declares
+    # `thinking: adaptive` and llm.py:137 hardcodes thinking_enabled=True.
+    # Thinking tokens count against max_tokens but are stripped from content,
+    # so they are invisible in a cassette while fully charged — one truncated
+    # response spent 300 output tokens on 83 characters of text. Tune this
+    # against the thinking budget, not against rationale length.
+    # At the previous hardcoded 300, four
     # responses in sample 20260802T052306Z were cut mid-rationale — and a
     # truncated response raises JSONParseError, which _judge_failed turns
     # into a D14 fail-open pass for non-mandatory claims. One of those had
