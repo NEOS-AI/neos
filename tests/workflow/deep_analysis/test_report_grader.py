@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import pytest
 
 from neos.workflow.deep_analysis.graders.report import ReportGrader
+from neos.workflow.deep_analysis.llm import TruncatedResponseError
 from neos.workflow.deep_analysis.token_budget import TokenBudgetExhausted
 
 pytestmark = pytest.mark.no_db
@@ -219,6 +220,52 @@ async def test_grade_keeps_deterministic_pass_when_agentic_budget_exhausts():
     verdict = await grader.grade(_clean_report(), root.id)
 
     assert verdict.ok is True
+
+
+@pytest.mark.asyncio
+async def test_grade_keeps_deterministic_pass_when_agentic_judge_is_truncated():
+    """재조립은 잘린 judge를 고치지 못한다 — 초안 품질과 무관하기 때문이다.
+
+    반려하면 orchestrator가 초안을 다시 조립하는데, 같은 judge가 같은 상한에서
+    또 잘린다. report_retry_cap + 1회의 synthesizer 호출을 태우고 제자리다.
+    """
+    calls = 0
+
+    async def truncated_json_call(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise TruncatedResponseError("cut off mid-rationale")
+
+    root = Question("root0001", "루트 질문")
+    grader = _grader(
+        FakeLedger(children=[CHILD1, CHILD2], root=root),
+        json_call=truncated_json_call,
+    )
+
+    verdict = await grader.grade(_clean_report(), root.id)
+
+    assert verdict.ok is True
+    assert verdict.detail == "judge_truncated"
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_truncated_report_judge_does_not_mask_a_deterministic_failure():
+    """결정론적 게이트가 먼저 막았으면 judge는 불리지도 않는다."""
+    calls = 0
+
+    async def truncated_json_call(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise TruncatedResponseError("cut off mid-rationale")
+
+    grader = _grader(FakeLedger(), json_call=truncated_json_call)
+
+    verdict = await grader.grade("한계 절이 없는 본문.", "root0001")
+
+    assert verdict.ok is False
+    assert verdict.code == "E_REPORT_NO_LIMITS"
+    assert calls == 0
 
 
 # ---- agentic ------------------------------------------------------------

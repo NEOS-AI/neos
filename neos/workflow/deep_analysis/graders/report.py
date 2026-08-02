@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 
 from ..citation import OrphanCitationError
-from ..llm import JSONParseError, call_json
+from ..llm import JSONParseError, TruncatedResponseError, call_json
 from ..models import Verdict
 from ..prompt_loader import render
 from ..token_budget import TokenBudgetExhausted
@@ -138,6 +138,15 @@ class ReportGrader:
                 cassette=self.cassette,
                 stage="report_grading",
             )
+        except TruncatedResponseError:
+            # Rejecting here sends the orchestrator back to re-assemble the
+            # draft (orchestrator.py:833-868), but a truncated judge has
+            # nothing to do with draft quality -- the same judge cuts at the
+            # same ceiling on every retry, burning report_retry_cap + 1
+            # synthesizer calls to reach the same place. Treat it the way a
+            # budget-exhausted judge is already treated below: fall back to
+            # the deterministic verdict, and say why.
+            return Verdict(ok=True, detail="judge_truncated")
         except JSONParseError:
             # Degrade to pass rather than halting the run (mirrors D14 in
             # AgenticGrader): an unparseable judge response is not evidence
