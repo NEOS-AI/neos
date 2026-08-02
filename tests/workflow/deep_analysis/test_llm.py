@@ -415,3 +415,50 @@ async def test_truncation_event_does_not_replace_settlement():
     # observability. A test that only checked presence would still pass
     # if the truncation event were emitted before settlement.
     assert kinds.index("token_budget_settled") < kinds.index("llm_truncated")
+
+
+@pytest.mark.asyncio
+async def test_granted_max_output_tokens_reports_the_requested_ceiling():
+    """예산이 넉넉하면 허용 상한 == 요청 상한이다."""
+    budget = TokenBudget(100_000)
+
+    with token_budget_scope(budget):
+        response = await call_llm(
+            "claude-haiku-4-5-20251001",
+            "prompt",
+            max_tokens=500,
+            client=FakeAnthropic(["answer"]),
+        )
+
+    assert response.granted_max_output_tokens == 500
+
+
+@pytest.mark.asyncio
+async def test_granted_max_output_tokens_reports_the_budget_clamp():
+    """예산이 모자라면 허용 상한이 요청 상한보다 작다 — 이 차이가 재시도 판정의 근거다."""
+    # conservative_input_bound가 요청 크기에 64를 더하므로 정확한 값 대신
+    # "요청보다 작고 양수"만 단언한다.
+    budget = TokenBudget(400)
+
+    with token_budget_scope(budget):
+        response = await call_llm(
+            "claude-haiku-4-5-20251001",
+            "prompt",
+            max_tokens=5000,
+            client=FakeAnthropic(["answer"]),
+        )
+
+    assert 0 < response.granted_max_output_tokens < 5000
+
+
+@pytest.mark.asyncio
+async def test_granted_max_output_tokens_without_a_budget_is_the_ceiling():
+    """예산 스코프 밖에서는 깎을 것이 없으므로 항상 상한 그대로다."""
+    response = await call_llm(
+        "claude-haiku-4-5-20251001",
+        "prompt",
+        max_tokens=300,
+        client=FakeAnthropic(["answer"]),
+    )
+
+    assert response.granted_max_output_tokens == 300
