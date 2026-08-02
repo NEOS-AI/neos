@@ -271,6 +271,39 @@ async def test_entailment_token_exhaustion_returns_buffered_partial(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_entailment_token_exhaustion_flags_the_skip(monkeypatch):
+    """예산 소진으로 entailment가 못 돌면 미필터 배치가 그대로 나가는데,
+    그 사실이 `entailment_skipped`로 남아야 한다.
+
+    이게 없으면 `flush_partial`이 반환하는 미필터 claim 배치가
+    `entailment_skipped=False`를 달고 나가 "버릴 게 없었다"와 "필터가 안
+    돌았다"가 다시 구분 불가능해진다.
+    """
+    from neos.workflow.deep_analysis.llm import call_json as real_call_json
+
+    async def exhausted(model, prompt, **kwargs):
+        if kwargs["stage"] == "claim_entailment":
+            raise TokenBudgetExhausted("cap")
+        return await real_call_json(model, prompt, **kwargs)
+
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.worker.call_json",
+        exhausted,
+    )
+    result = await Worker(
+        Search(),
+        fetch_fn=Fetch(),
+        llm_client=ScriptedLLM(
+            '{"results":[{"index":0,"action":"keep"}]}'
+        ),
+    ).investigate("Q\n{fetched_evidence}", Effort.SCOUT, "q")
+
+    assert result.status == "partial"
+    assert [claim.text for claim in result.claims] == ["keep", "broad", "drop"]
+    assert result.entailment_skipped is True
+
+
+@pytest.mark.asyncio
 async def test_worker_entailment_propagates_cassette_miss(tmp_path):
     cassette_path = tmp_path / "empty.json"
     cassette_path.write_text("{}", encoding="utf-8")

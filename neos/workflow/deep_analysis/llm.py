@@ -371,6 +371,14 @@ async def call_json(
     separate axis: a call cut at its ceiling earns one extra attempt at a
     larger ceiling regardless of `retries`, because the two failures have
     different causes and different cures.
+
+    On a `truncation_handled` event, `requested` is always the *original*
+    ceiling passed in as `max_tokens`, but `granted` reflects the *final*
+    attempt -- the expanded one, if an expansion retry ran. That means
+    `granted` can exceed `requested` (a `retried_failed` outcome where the
+    budget clamps the expanded attempt to something between the original
+    and expanded ceilings): that is not a bug, it is the expanded ceiling
+    being visible in the payload.
     """
 
     from neos.config.settings import settings
@@ -416,12 +424,21 @@ async def call_json(
         # `remaining`, so a budget-clamped retry gets *less* room, not more.
         budget_bound = response.granted_max_output_tokens < limit
         if budget_bound or expanded:
+            # `expanded` takes priority: once an expansion retry has run,
+            # "retried_failed" is the truthful label regardless of what
+            # bound the second attempt. Recomputing `budget_bound` against
+            # the already-doubled `limit` on the expanded attempt can be
+            # True (e.g. ceiling 800 -> expanded to 1600 -> the global
+            # token cap clamps `reserve` to ~1000) even though a retry DID
+            # run -- mislabelling it "budget_bound" would also produce a
+            # self-contradictory payload where granted > requested.
+            action = "retried_failed" if expanded else "budget_bound"
             await _record_truncation_handled(
                 stage=stage,
                 model=model,
                 requested=original_limit,
                 granted=response.granted_max_output_tokens,
-                action="budget_bound" if budget_bound else "retried_failed",
+                action=action,
             )
             raise TruncatedResponseError(str(last_error))
 

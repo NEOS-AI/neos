@@ -756,7 +756,10 @@ class DeepAnalysisConfig(StrictConfigModel):
     # is not, the call site fails closed. The alternative, requesting all
     # remaining headroom, lets one worker monopolise the dev profile's
     # global_token_cap of 20000 across parallel_workers=2 and starve its peer.
-    truncation_retry_multiplier: float = 2.0
+    #
+    # gt=1.0 because a multiplier at or below 1.0 would not expand the
+    # retry's ceiling at all -- it terminates safely but is meaningless.
+    truncation_retry_multiplier: float = Field(default=2.0, gt=1.0)
 
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2

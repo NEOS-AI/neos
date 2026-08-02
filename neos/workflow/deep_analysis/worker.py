@@ -373,6 +373,11 @@ class Worker:
                 retries=0,
             )
         except TokenBudgetExhausted:
+            # The batch propagates unrefined via `investigate()`'s
+            # `flush_partial` -- flag the skip here so that unfiltered batch
+            # is never silently mistaken for "entailment found nothing to
+            # discard".
+            self._entailment_skipped = True
             raise
         except LLMProviderError as exc:
             logger.warning(

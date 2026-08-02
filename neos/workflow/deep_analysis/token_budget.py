@@ -220,6 +220,11 @@ class TokenBudget:
         `llm_truncated`. After-the-fact aggregation must join on `action` to
         get the count right, not assume a flat 1:1 pairing.
 
+        `requested` is always the original ceiling of the call; `granted` is
+        the allowance of the *final* attempt (the expanded one, if a retry
+        ran). On a "retried_failed" outcome `granted` can therefore exceed
+        `requested` -- that reflects the expanded ceiling, not a bug.
+
         Payload carries counts and identifiers only — never response text.
         """
         async with self._lock:

@@ -637,6 +637,52 @@ async def test_exhausted_expansion_records_one_retried_failed_for_two_llm_trunca
 
 
 @pytest.mark.asyncio
+async def test_expanded_retry_clamped_by_budget_records_retried_failed():
+    """확장 재시도가 실제로 일어났으면, 그 재시도가 예산에 깎여 다시 잘려도
+    action은 "budget_bound"가 아니라 "retried_failed"여야 한다.
+
+    첫 시도(상한 400)는 예산에 깎이지 않고(granted == 400) 잘리므로 확장
+    재시도(800)가 실행된다. 그런데 첫 시도가 settle되며 남은 예산이 줄어든
+    탓에 확장 시도는 800보다 작은 523으로 깎여 또 잘린다. 이때
+    `budget_bound = granted < limit`을 확장된 limit(800)에 대해 재계산하면
+    True가 나와 "재시도가 실제로 일어났다"는 사실을 숨기고, granted(523)가
+    requested(400)보다 큰데도 "budget_bound"라는 self-contradictory 페이로드가
+    남는다. `expanded`가 우선해야 한다.
+    """
+    events, persist = _event_recorder()
+    # cap=700: 첫 예약(162 input_bound + 400 output)은 딱 맞아 안 깎이지만,
+    # 정산 후 남은 예산(700-15=685)에서 두 번째 예약(162 + 800)은 685-162=523으로
+    # 깎인다.
+    budget = TokenBudget(700, persist=persist)
+    client = FakeAnthropic(
+        ['{"partial": tru', '{"still cu'],
+        stop_reasons=["max_tokens", "max_tokens"],
+    )
+
+    with token_budget_scope(budget):
+        with pytest.raises(TruncatedResponseError):
+            await call_json(
+                "claude-haiku-4-5-20251001",
+                "prompt",
+                max_tokens=400,
+                client=client,
+                stage="claim_grading",
+            )
+
+    assert client.calls == 2
+    assert [kw["max_tokens"] for kw in client.kwargs] == [400, 523]
+
+    handled = [p for kind, p in events if kind == "truncation_handled"]
+    assert len(handled) == 1
+    assert handled[0]["action"] == "retried_failed"
+    assert handled[0]["requested"] == 400
+    # The bug this pins: granted reflects the FINAL (expanded) attempt, so it
+    # can legitimately exceed requested. That is not evidence of a missing
+    # retry -- the docstring on record_truncation_handled explains why.
+    assert handled[0]["granted"] > handled[0]["requested"]
+
+
+@pytest.mark.asyncio
 async def test_untruncated_call_records_no_truncation_event():
     """정상 경로 전체가 이벤트가 되면 로그를 압도한다 — 잘렸을 때만 쓴다."""
     events, persist = _event_recorder()

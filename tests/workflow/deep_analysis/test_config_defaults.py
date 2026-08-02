@@ -90,3 +90,14 @@ def test_truncation_retry_multiplier_default():
     from neos.config.settings import settings
 
     assert settings.config.deep_analysis.truncation_retry_multiplier == 2.0
+
+
+def test_truncation_retry_multiplier_rejects_values_at_or_below_one():
+    from pydantic import ValidationError
+
+    from neos.config.schema import DeepAnalysisConfig
+
+    with pytest.raises(ValidationError):
+        DeepAnalysisConfig(truncation_retry_multiplier=1.0)
+    with pytest.raises(ValidationError):
+        DeepAnalysisConfig(truncation_retry_multiplier=0.5)
