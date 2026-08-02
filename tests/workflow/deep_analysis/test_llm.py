@@ -606,6 +606,37 @@ async def test_budget_bound_truncation_records_budget_bound():
 
 
 @pytest.mark.asyncio
+async def test_exhausted_expansion_records_one_retried_failed_for_two_llm_truncated():
+    """retried_failed는 1:1이 아니다 -- 원 시도와 확장 재시도 모두 잘리므로
+    llm_truncated는 둘, truncation_handled는 하나뿐이다. 사후 집계가 이 차이를
+    반영하지 않으면 잘못 센다."""
+    events, persist = _event_recorder()
+    budget = TokenBudget(100_000, persist=persist)
+    client = FakeAnthropic(
+        ['{"partial": tru', '{"still cu'],
+        stop_reasons=["max_tokens", "max_tokens"],
+    )
+
+    with token_budget_scope(budget):
+        with pytest.raises(TruncatedResponseError):
+            await call_json(
+                "claude-haiku-4-5-20251001",
+                "prompt",
+                max_tokens=400,
+                client=client,
+                stage="claim_grading",
+            )
+
+    handled = [p for kind, p in events if kind == "truncation_handled"]
+    assert len(handled) == 1
+    assert handled[0]["action"] == "retried_failed"
+    assert handled[0]["requested"] == 400
+
+    truncated = [p for kind, p in events if kind == "llm_truncated"]
+    assert len(truncated) == 2
+
+
+@pytest.mark.asyncio
 async def test_untruncated_call_records_no_truncation_event():
     """정상 경로 전체가 이벤트가 되면 로그를 압도한다 — 잘렸을 때만 쓴다."""
     events, persist = _event_recorder()

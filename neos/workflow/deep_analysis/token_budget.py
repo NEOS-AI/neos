@@ -212,8 +212,13 @@ class TokenBudget:
         be told apart from one whose filter never ran -- which is exactly
         what left the discard-recall measurement inconclusive twice.
 
-        Written only when a truncation actually occurred, so one
-        `llm_truncated` corresponds to one of these.
+        This is written once per truncated `call_json` invocation, not once
+        per truncated provider response -- `llm_truncated` fires on every
+        attempt that hits its ceiling, but a "retried_failed" outcome means
+        *two* attempts truncated (the original and the expanded retry) for
+        one of these. Only "retried_ok" and "budget_bound" are 1:1 with
+        `llm_truncated`. After-the-fact aggregation must join on `action` to
+        get the count right, not assume a flat 1:1 pairing.
 
         Payload carries counts and identifiers only — never response text.
         """
