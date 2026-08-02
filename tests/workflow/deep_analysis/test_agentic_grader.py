@@ -2,6 +2,7 @@ import pytest
 
 from neos.config.settings import settings
 from neos.workflow.deep_analysis.graders.agentic import AgenticGrader
+from neos.workflow.deep_analysis.llm import JSONParseError, TruncatedResponseError
 from neos.workflow.deep_analysis.models import ProposedClaim, ProposedEvidence
 
 pytestmark = pytest.mark.no_db
@@ -229,3 +230,77 @@ async def test_judge_call_uses_the_configured_output_ceiling():
     recorded_max_tokens = judge.received_max_tokens
     assert recorded_max_tokens == settings.config.deep_analysis.judge_max_output_tokens
     assert recorded_max_tokens > 300  # the old literal must no longer bind
+
+
+@pytest.mark.asyncio
+async def test_truncated_judge_rejects_a_mandatory_claim(monkeypatch):
+    async def truncated(*args, **kwargs):
+        raise TruncatedResponseError("cut off")
+
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.graders.agentic.call_json", truncated
+    )
+    g = AgenticGrader(
+        judge_model="j", threshold=0.35, sample_rate=0.0, max_output_tokens=800
+    )
+
+    verdict = await g.grade(_claim(conf=0.9), value_est=0.9)  # 0.81 >= 0.35
+
+    assert verdict.ok is False
+    assert verdict.code == "E_UNSUPPORTED"
+    assert verdict.detail == "judge_truncated"
+
+
+@pytest.mark.asyncio
+async def test_truncated_judge_also_rejects_a_sampled_claim(monkeypatch):
+    """D24: truncation은 mandatory 여부와 무관하게 반려다.
+
+    측정된 사례가 정확히 이 경로에서 나왔다 — 잘린 응답이 이미
+    "label": "CONTRADICTS"를 내뱉었는데 D14 fail-open이 승인으로 뒤집었다.
+    저가치 샘플이라 D14의 mandatory 예외로도 막히지 않았다.
+    """
+
+    async def truncated(*args, **kwargs):
+        raise TruncatedResponseError("cut off")
+
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.graders.agentic.call_json", truncated
+    )
+    g = AgenticGrader(
+        judge_model="j",
+        threshold=0.35,
+        sample_rate=1.0,
+        max_output_tokens=800,
+        sampler=lambda: 0.0,
+    )
+
+    verdict = await g.grade(_claim(conf=0.1), value_est=0.1)  # 0.01 < 0.35
+
+    assert verdict.ok is False
+    assert verdict.code == "E_UNSUPPORTED"
+    assert verdict.detail == "judge_truncated"
+    assert verdict.diagnostics["agentic"] == "attempted_rejected"
+
+
+@pytest.mark.asyncio
+async def test_malformed_judge_still_fails_open_for_a_sampled_claim(monkeypatch):
+    """D14 원결정은 그대로다 — 쓰레기 응답은 여전히 미심사 통과다."""
+
+    async def malformed(*args, **kwargs):
+        raise JSONParseError("not json")
+
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.graders.agentic.call_json", malformed
+    )
+    g = AgenticGrader(
+        judge_model="j",
+        threshold=0.35,
+        sample_rate=1.0,
+        max_output_tokens=800,
+        sampler=lambda: 0.0,
+    )
+
+    verdict = await g.grade(_claim(conf=0.1), value_est=0.1)
+
+    assert verdict.ok is True
+    assert verdict.detail == "judge_unparseable"
