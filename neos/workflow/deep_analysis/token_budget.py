@@ -168,6 +168,33 @@ class TokenBudget:
         async with self._lock:
             self._require_active(reservation)
 
+    async def record_truncation(
+        self,
+        *,
+        stage: str,
+        model: str,
+        max_output_tokens: int,
+        output_tokens: int,
+    ) -> None:
+        """Record that a response was cut off at its output ceiling.
+
+        A truncated response fails JSON parsing and yields nothing, so the
+        work it represents is lost silently. Nothing read ``stop_reason``
+        before this; a whole baseline run was spent before the loss was
+        noticed, and only because a cassette happened to exist.
+
+        Payload carries counts and identifiers only — never response text.
+        """
+        await self._persist_event(
+            "llm_truncated",
+            {
+                "stage": stage,
+                "model": model,
+                "max_output_tokens": max_output_tokens,
+                "output_tokens": output_tokens,
+            },
+        )
+
     def _require_active(self, reservation: TokenReservation) -> int:
         try:
             reserved = self._outstanding[reservation.id]

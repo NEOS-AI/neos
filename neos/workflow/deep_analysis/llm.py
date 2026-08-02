@@ -211,6 +211,13 @@ async def _budgeted_dispatch(
         reservation,
         response.input_tokens + response.output_tokens,
     )
+    if response.stop_reason == "max_tokens":
+        await budget.record_truncation(
+            stage=reservation.stage,
+            model=reservation.model,
+            max_output_tokens=reservation.max_output_tokens,
+            output_tokens=response.output_tokens,
+        )
     return response
 
 
