@@ -95,8 +95,9 @@ def _evidence():
 class DiscardWorker:
     """One completed pass: one surviving claim, two discarded."""
 
-    def __init__(self, discarded=2):
+    def __init__(self, discarded=2, entailment_skipped=False):
         self.discarded = discarded
+        self.entailment_skipped = entailment_skipped
 
     async def investigate(
         self, brief, effort, qid, repairs=None, question_text=""
@@ -116,6 +117,7 @@ class DiscardWorker:
             ],
             tokens_spent=100,
             self_assessment=0.9,
+            entailment_skipped=self.entailment_skipped,
         )
 
     def flush_partial(self, qid):
@@ -194,5 +196,57 @@ async def test_orchestrator_logs_no_event_when_nothing_discarded():
         await orch.run("root?")
 
         events = await _discard_events(session, run_id)
+
+    assert events == []
+
+
+async def _skip_events(session, run_id):
+    rows = await session.execute(
+        select(DAEvent.qid, DAEvent.payload).where(
+            DAEvent.run_id == run_id,
+            DAEvent.kind == "entailment_filter_skipped",
+        )
+    )
+    return rows.all()
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_logs_one_event_when_entailment_was_skipped():
+    async with await db_manager.get_session() as session:
+        run_id = await create_run(session, "root?", "dev")
+        ledger = Ledger(session, run_id)
+        orch = _make_orchestrator(
+            session,
+            run_id,
+            ledger,
+            lambda: DiscardWorker(discarded=0, entailment_skipped=True),
+        )
+        await orch.run("root?")
+
+        events = await _skip_events(session, run_id)
+
+    assert len(events) == 1
+    qid, payload = events[0]
+    assert qid
+    assert json.loads(payload) == {
+        "claim_count": 1,
+        "reason": "entailment_unavailable",
+    }
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_logs_no_skip_event_on_a_normal_pass():
+    async with await db_manager.get_session() as session:
+        run_id = await create_run(session, "root?", "dev")
+        ledger = Ledger(session, run_id)
+        orch = _make_orchestrator(
+            session,
+            run_id,
+            ledger,
+            lambda: DiscardWorker(discarded=2, entailment_skipped=False),
+        )
+        await orch.run("root?")
+
+        events = await _skip_events(session, run_id)
 
     assert events == []

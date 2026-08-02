@@ -654,6 +654,18 @@ class Orchestrator:
                 assignment.question_id
             )
             await self.ledger.commit_blobs(result.blobs)
+            # P2: the worker has no ledger, so it flags the skip on its result
+            # and the single writer records it here -- the same shape the
+            # discarded-claim loop below already uses.
+            if result.entailment_skipped:
+                await self.ledger.log(
+                    "entailment_filter_skipped",
+                    result.question_id,
+                    {
+                        "claim_count": len(result.claims),
+                        "reason": "entailment_unavailable",
+                    },
+                )
             # Recall measurement: entailment drops claims before grading, so
             # they never reach the claims table. Record them here — blobs are
             # already committed above, so phase 2 can re-grade offline.
