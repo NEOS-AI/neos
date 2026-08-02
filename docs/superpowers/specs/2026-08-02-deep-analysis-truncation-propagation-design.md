@@ -319,7 +319,7 @@ entailment 18회 중 1회가 잘렸으므로 후자가 0의 일부를 설명할 
 | judge 종단 | mandatory / 비-mandatory **둘 다** 반려되는지. 쓰레기 응답은 여전히 D14 fail-open인지 |
 | report 종단 | 결정론적 판정이 반환되고 재조립 루프가 돌지 않는지 |
 | entailment 종단 | 원본 claim 통과 + `entailment_filter_skipped` 이벤트 1건 |
-| 서브클래스 회귀 | 미변경 4개 호출부가 여전히 예외를 전파하는지 |
+| 서브클래스 회귀 | 미변경 5개 호출부가 여전히 예외를 전파하는지 |
 | 레거시 카세트 | `stop_reason=""` 레코드에서 동작 완전 불변 |
 | 골든 게이트 (D19) | `tests/workflow/deep_analysis/test_golden_gate.py` green 유지 |
 
