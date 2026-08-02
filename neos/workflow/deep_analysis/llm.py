@@ -332,6 +332,28 @@ async def call_llm(
     )
 
 
+async def _record_truncation_handled(
+    *,
+    stage: str,
+    model: str,
+    requested: int,
+    granted: int,
+    action: str,
+) -> None:
+    # TokenBudget is the writer (P2). Outside a budget scope there is nowhere
+    # to write, and that is not an error -- tests and ad-hoc calls run there.
+    budget = active_token_budget()
+    if budget is None:
+        return
+    await budget.record_truncation_handled(
+        stage=stage,
+        model=model,
+        requested=requested,
+        granted=granted,
+        action=action,
+    )
+
+
 async def call_json(
     model: str,
     prompt: str,
@@ -354,6 +376,7 @@ async def call_json(
     from neos.config.settings import settings
 
     multiplier = settings.config.deep_analysis.truncation_retry_multiplier
+    original_limit = max_tokens
     limit = max_tokens
     expanded = False
     last_error: JSONParseError | None = None
@@ -370,9 +393,19 @@ async def call_json(
             stage=stage,
         )
         try:
-            return parse_json(response.text), response
+            parsed = parse_json(response.text)
         except JSONParseError as exc:
             last_error = exc
+        else:
+            if expanded:
+                await _record_truncation_handled(
+                    stage=stage,
+                    model=model,
+                    requested=original_limit,
+                    granted=response.granted_max_output_tokens,
+                    action="retried_ok",
+                )
+            return parsed, response
 
         if response.stop_reason != "max_tokens":
             attempts_left -= 1
@@ -383,6 +416,13 @@ async def call_json(
         # `remaining`, so a budget-clamped retry gets *less* room, not more.
         budget_bound = response.granted_max_output_tokens < limit
         if budget_bound or expanded:
+            await _record_truncation_handled(
+                stage=stage,
+                model=model,
+                requested=original_limit,
+                granted=response.granted_max_output_tokens,
+                action="budget_bound" if budget_bound else "retried_failed",
+            )
             raise TruncatedResponseError(str(last_error))
 
         # The expansion is a separate axis from `retries`: it answers a

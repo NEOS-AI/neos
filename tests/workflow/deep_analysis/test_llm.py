@@ -547,3 +547,94 @@ async def test_garbage_response_still_retries_at_the_same_ceiling():
 async def test_truncated_response_error_is_a_json_parse_error():
     """예외를 전파하던 호출부가 변경 없이 계속 잡을 수 있어야 한다."""
     assert issubclass(TruncatedResponseError, JSONParseError)
+
+
+def _event_recorder():
+    events: list[tuple[str, dict]] = []
+
+    async def persist(kind, payload):
+        events.append((kind, payload))
+
+    return events, persist
+
+
+@pytest.mark.asyncio
+async def test_successful_expansion_records_retried_ok():
+    events, persist = _event_recorder()
+    budget = TokenBudget(100_000, persist=persist)
+    client = FakeAnthropic(
+        ['{"partial": tru', '{"ok": true}'],
+        stop_reasons=["max_tokens", "end_turn"],
+    )
+
+    with token_budget_scope(budget):
+        await call_json(
+            "claude-haiku-4-5-20251001",
+            "prompt",
+            max_tokens=400,
+            client=client,
+            stage="claim_grading",
+        )
+
+    handled = [p for kind, p in events if kind == "truncation_handled"]
+    assert len(handled) == 1
+    assert handled[0]["action"] == "retried_ok"
+    assert handled[0]["stage"] == "claim_grading"
+    assert handled[0]["requested"] == 400
+
+
+@pytest.mark.asyncio
+async def test_budget_bound_truncation_records_budget_bound():
+    events, persist = _event_recorder()
+    budget = TokenBudget(400, persist=persist)
+    client = FakeAnthropic(['{"partial": tru'], stop_reasons=["max_tokens"])
+
+    with token_budget_scope(budget):
+        with pytest.raises(TruncatedResponseError):
+            await call_json(
+                "claude-haiku-4-5-20251001",
+                "prompt",
+                max_tokens=5000,
+                client=client,
+                stage="claim_grading",
+            )
+
+    handled = [p for kind, p in events if kind == "truncation_handled"]
+    assert len(handled) == 1
+    assert handled[0]["action"] == "budget_bound"
+    assert handled[0]["granted"] < handled[0]["requested"]
+
+
+@pytest.mark.asyncio
+async def test_untruncated_call_records_no_truncation_event():
+    """정상 경로 전체가 이벤트가 되면 로그를 압도한다 — 잘렸을 때만 쓴다."""
+    events, persist = _event_recorder()
+    budget = TokenBudget(100_000, persist=persist)
+
+    with token_budget_scope(budget):
+        await call_json(
+            "claude-haiku-4-5-20251001",
+            "prompt",
+            max_tokens=400,
+            client=FakeAnthropic(['{"ok": true}']),
+        )
+
+    assert [kind for kind, _ in events if kind == "truncation_handled"] == []
+
+
+@pytest.mark.asyncio
+async def test_truncation_events_are_skipped_without_an_active_budget():
+    """TokenBudget이 작성자이므로 예산 밖에서는 기록할 곳이 없다 — 터지면 안 된다."""
+    client = FakeAnthropic(
+        ['{"partial": tru', '{"ok": true}'],
+        stop_reasons=["max_tokens", "end_turn"],
+    )
+
+    data, _ = await call_json(
+        "claude-haiku-4-5-20251001",
+        "prompt",
+        max_tokens=400,
+        client=client,
+    )
+
+    assert data == {"ok": True}

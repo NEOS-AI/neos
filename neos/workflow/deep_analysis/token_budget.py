@@ -196,6 +196,39 @@ class TokenBudget:
                 },
             )
 
+    async def record_truncation_handled(
+        self,
+        *,
+        stage: str,
+        model: str,
+        requested: int,
+        granted: int,
+        action: str,
+    ) -> None:
+        """Record what was done about a truncated response.
+
+        `llm_truncated` says a response was cut; this says whether the cut
+        was recoverable. Without it, a run that produced no discards cannot
+        be told apart from one whose filter never ran -- which is exactly
+        what left the discard-recall measurement inconclusive twice.
+
+        Written only when a truncation actually occurred, so one
+        `llm_truncated` corresponds to one of these.
+
+        Payload carries counts and identifiers only — never response text.
+        """
+        async with self._lock:
+            await self._persist_event(
+                "truncation_handled",
+                {
+                    "stage": stage,
+                    "model": model,
+                    "requested": requested,
+                    "granted": granted,
+                    "action": action,
+                },
+            )
+
     def _require_active(self, reservation: TokenReservation) -> int:
         try:
             reserved = self._outstanding[reservation.id]
