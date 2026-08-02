@@ -1539,7 +1539,12 @@ HOME=/tmp/neos-test-home /Users/ywsung/Desktop/neos/.venv/bin/python -m pytest \
   tests/workflow/deep_analysis/ -q --disable-warnings
 ```
 
-Expected: PASS 전량. 기준선은 직전 작업의 344 passed이며, 이 플랜이 추가한 테스트만큼 늘어난다.
+Expected: PASS 전량. 기준선(`1251cafe`, 이 플랜의 첫 커밋 직전)은 **424 passed**다 — 이전에
+적혀 있던 344는 2026-07-26 리쥼 문서에서 이어받은 값으로, judge·entailment 상한 수정
+플랜(`62dc2643`..`1251cafe`)이 추가한 테스트를 반영하기 전 수치라 낡았다. 이 플랜은 테스트
+24개를 새로 추가해(`test_agentic_grader.py` +3, `test_config_defaults.py` +1, `test_llm.py`
++13, `test_orchestrator_discard_events.py` +2, `test_report_grader.py` +2,
+`test_worker_entailment.py` +3) 총 **448 passed**가 된다.
 
 - [ ] **Step 2: 라우팅·노드 회귀를 돌린다**
 
