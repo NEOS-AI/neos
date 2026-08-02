@@ -15,9 +15,8 @@ from .fetch import fetch_url
 from .llm import (
     JSONParseError,
     LLMProviderError,
+    TruncatedResponseError,
     call_json,
-    call_llm,
-    parse_json,
 )
 from .models import (
     Effort,
@@ -75,6 +74,7 @@ class Worker:
         self._tokens = 0
         self._model = ""
         self._confidence_clamped_by_source_count: dict[str, int] = {}
+        self._entailment_skipped = False
 
     def flush_partial(self, question_id: str) -> WorkerResult:
         return WorkerResult(
@@ -91,6 +91,7 @@ class Worker:
             confidence_clamped_by_source_count=dict(
                 self._confidence_clamped_by_source_count
             ),
+            entailment_skipped=self._entailment_skipped,
         )
 
     async def _search(self, query: str, limit: int) -> list[dict]:
@@ -174,6 +175,7 @@ class Worker:
         self._blobs = []
         self._tokens = 0
         self._confidence_clamped_by_source_count = {}
+        self._entailment_skipped = False
 
         config = settings.config.deep_analysis
         role = "everyday" if effort == Effort.SCOUT else "powerful"
@@ -331,6 +333,7 @@ class Worker:
             confidence_clamped_by_source_count=dict(
                 self._confidence_clamped_by_source_count
             ),
+            entailment_skipped=self._entailment_skipped,
         )
 
     async def _refine_claims(
@@ -356,13 +359,18 @@ class Worker:
         )
         prompt = render("claim_entailment", claims_json=claims_json)
         try:
-            response = await call_llm(
+            payload, response = await call_json(
                 self._model,
                 prompt,
                 max_tokens=config.entailment_max_output_tokens,
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="claim_entailment",
+                # This call never retried a malformed response and must not
+                # start: a second batch costs the same tokens for a response
+                # the first attempt already showed the model will not format.
+                # The truncation expansion is a separate axis and still runs.
+                retries=0,
             )
         except TokenBudgetExhausted:
             raise
@@ -371,18 +379,28 @@ class Worker:
                 "Claim entailment provider failed: error_type=%s",
                 type(exc).__name__,
             )
+            self._entailment_skipped = True
+            return claims
+        except TruncatedResponseError:
+            # A filter, not a gate: these claims still face the deterministic
+            # and agentic graders. Dropping or rejecting the batch would
+            # manufacture the very recall loss the discard measurement exists
+            # to detect. Pass them through, but record that the filter never
+            # ran on them.
+            logger.warning("Claim entailment response was cut off")
+            self._entailment_skipped = True
+            return claims
+        except JSONParseError:
+            logger.warning("Claim entailment response was not valid JSON")
+            self._entailment_skipped = True
             return claims
 
         self._tokens += response.input_tokens + response.output_tokens
-        try:
-            payload = parse_json(response.text)
-        except JSONParseError:
-            logger.warning("Claim entailment response was not valid JSON")
-            return claims
 
         outcome = apply_entailment_results(claims, payload)
         if outcome is None:
             logger.warning("Claim entailment response failed validation")
+            self._entailment_skipped = True
             return claims
         self._discarded_claims = list(outcome.discarded)
         return outcome.refined
