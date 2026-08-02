@@ -240,7 +240,7 @@ ceiling belongs to this run's budget, not to the recording."
 - Consumes: `LLMResponse.granted_max_output_tokens` (Task 1)
 - Produces:
   - `TruncatedResponseError(JSONParseError)` — `neos/workflow/deep_analysis/llm.py`에서 export. 확장 재시도까지 실패했거나 예산에 걸려 재시도가 무의미할 때 `call_json`이 올린다.
-  - `settings.deep_analysis.truncation_retry_multiplier: float` — 기본 `2.0`
+  - `settings.config.deep_analysis.truncation_retry_multiplier: float` — 기본 `2.0`
 
 - [ ] **Step 1: 설정값 테스트를 쓴다**
 
@@ -250,7 +250,7 @@ ceiling belongs to this run's budget, not to the recording."
 def test_truncation_retry_multiplier_default():
     from neos.config.settings import settings
 
-    assert settings.deep_analysis.truncation_retry_multiplier == 2.0
+    assert settings.config.deep_analysis.truncation_retry_multiplier == 2.0
 ```
 
 - [ ] **Step 2: 재시도 매트릭스 테스트를 쓴다**
@@ -346,8 +346,9 @@ async def test_truncated_response_error_is_a_json_parse_error():
 
 ```bash
 HOME=/tmp/neos-test-home /Users/ywsung/Desktop/neos/.venv/bin/python -m pytest \
-  tests/workflow/deep_analysis/test_llm.py -k "truncat or garbage_response" -q \
-  tests/workflow/deep_analysis/test_config_defaults.py -k truncation_retry
+  tests/workflow/deep_analysis/test_llm.py \
+  tests/workflow/deep_analysis/test_config_defaults.py \
+  -k "truncat or garbage_response" -q
 ```
 
 Expected: FAIL — `ImportError: cannot import name 'TruncatedResponseError'`
@@ -414,8 +415,7 @@ async def call_json(
 
     from neos.config.settings import settings
 
-    multiplier = settings.deep_analysis.truncation_retry_multiplier
-    original_limit = max_tokens
+    multiplier = settings.config.deep_analysis.truncation_retry_multiplier
     limit = max_tokens
     expanded = False
     last_error: JSONParseError | None = None
@@ -445,13 +445,6 @@ async def call_json(
         # `remaining`, so a budget-clamped retry gets *less* room, not more.
         budget_bound = response.granted_max_output_tokens < limit
         if budget_bound or expanded:
-            await _record_truncation_handled(
-                stage=stage,
-                model=model,
-                requested=original_limit,
-                granted=response.granted_max_output_tokens,
-                action="budget_bound" if budget_bound else "retried_failed",
-            )
             raise TruncatedResponseError(str(last_error))
 
         # The expansion is a separate axis from `retries`: it answers a
@@ -468,27 +461,9 @@ async def call_json(
 
 ⚠️ **루프 종료 조건에 주의한다.** 초기 구상은 `while attempts_left > 0 or not expanded`였는데, 이는 `retries=0` + 비-truncation 실패에서 **무한 루프**가 된다(`attempts_left`가 음수로 내려가도 `not expanded`가 계속 참). 위 형태는 매 반복이 `attempts_left`를 줄이거나 `expanded`를 세우고, `expanded`가 선 상태의 두 번째 truncation은 즉시 종단이므로 반드시 끝난다.
 
-`requested`는 확장된 `limit`이 아니라 **원래 상한(`original_limit`)**을 쓴다. 사후 집계에서 "얼마로 요청했다가 잘렸나"가 호출부의 설정값과 대응해야 하기 때문이다.
+**이 태스크는 관측(이벤트)을 다루지 않는다.** truncation을 *어떻게 처리하는가*가 여기까지고, *무엇을 했는지 기록하는가*는 Task 3이다. 두 관심사를 나눠야 각 커밋이 독립적으로 리뷰 가능하다. Task 3이 원래 상한을 기록하려고 `original_limit`을 도입하는데, 그 변수를 여기서 미리 잡아두면 미사용 지역변수가 되어 Ruff에 걸린다 — 도입은 Task 3에서 한다.
 
-`_record_truncation_handled`는 Task 3에서 만든다. **지금은 아래 임시 스텁을 `call_json` 위에 둔다** — Task 3이 본체로 교체한다.
-
-```python
-async def _record_truncation_handled(
-    *,
-    stage: str,
-    model: str,
-    requested: int,
-    granted: int,
-    action: str,
-) -> None:
-    return None
-```
-
-- [ ] **Step 7: `retried_ok` 경로에도 기록이 필요함을 남긴다**
-
-성공한 확장 재시도는 위 코드에서 아직 기록되지 않는다. Task 3이 채운다. 지금은 넘어간다.
-
-- [ ] **Step 8: 테스트 통과를 확인한다**
+- [ ] **Step 7: 테스트 통과를 확인한다**
 
 ```bash
 HOME=/tmp/neos-test-home /Users/ywsung/Desktop/neos/.venv/bin/python -m pytest \
@@ -523,12 +498,14 @@ propagate stay untouched."
 ## Task 3: `truncation_handled` 이벤트
 
 **Files:**
-- Modify: `neos/workflow/deep_analysis/token_budget.py:171-197` 부근, `neos/workflow/deep_analysis/llm.py` (Task 2의 스텁 교체)
+- Modify: `neos/workflow/deep_analysis/token_budget.py:171-197` 부근, `neos/workflow/deep_analysis/llm.py` (헬퍼 추가 + Task 2의 `call_json`에 기록 지점 삽입)
 - Test: `tests/workflow/deep_analysis/test_llm.py`
 
 **Interfaces:**
-- Consumes: `TruncatedResponseError`, `_record_truncation_handled` 스텁 (Task 2)
-- Produces: `TokenBudget.record_truncation_handled(*, stage: str, model: str, requested: int, granted: int, action: str) -> None` — `action`은 `"retried_ok"` | `"retried_failed"` | `"budget_bound"`
+- Consumes: `TruncatedResponseError`와 Task 2가 만든 `call_json` 재시도 루프 (`limit` / `expanded` / `budget_bound` 지역변수를 그대로 쓴다)
+- Produces:
+  - `TokenBudget.record_truncation_handled(*, stage: str, model: str, requested: int, granted: int, action: str) -> None` — `action`은 `"retried_ok"` | `"retried_failed"` | `"budget_bound"`
+  - `llm.py`의 모듈 수준 헬퍼 `_record_truncation_handled(...)` — 같은 시그니처, 활성 예산이 없으면 조용히 넘어간다
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
@@ -674,9 +651,9 @@ Expected: FAIL — `assert len(handled) == 1` 이 `0`으로 실패
             )
 ```
 
-- [ ] **Step 4: `llm.py`의 스텁을 본체로 교체한다**
+- [ ] **Step 4: `llm.py`에 모듈 헬퍼를 추가한다**
 
-Task 2에서 넣은 `_record_truncation_handled` 스텁을 바꾼다.
+`call_json` 정의 **위**에 넣는다.
 
 ```python
 async def _record_truncation_handled(
@@ -701,9 +678,17 @@ async def _record_truncation_handled(
     )
 ```
 
-- [ ] **Step 5: 성공한 확장 재시도도 기록하게 한다**
+- [ ] **Step 5: `call_json`에 기록 지점 두 곳을 넣는다**
 
-Task 2의 `call_json`에서 `return parse_json(response.text), response` 줄을 바꾼다. 확장 재시도로 성공한 경우에만 기록해야 하므로 `expanded` 플래그를 본다. `original_limit`은 Task 2에서 이미 잡아뒀다.
+Task 2가 만든 루프에 세 가지를 더한다.
+
+**(a) 원래 상한을 잡아둔다.** `limit = max_tokens` 바로 위에 넣는다. `limit`은 확장 시 덮어써지므로 원래 값이 따로 필요하다.
+
+```python
+    original_limit = max_tokens
+```
+
+**(b) 성공 경로** — `return parse_json(response.text), response` 줄을 바꾼다. 확장 재시도로 살아난 경우에만 기록하므로 `expanded`를 본다.
 
 ```python
         try:
@@ -721,6 +706,23 @@ Task 2의 `call_json`에서 `return parse_json(response.text), response` 줄을 
                 )
             return parsed, response
 ```
+
+**(c) 종단 경로** — Task 2가 남긴 `raise TruncatedResponseError(str(last_error))` 앞에 기록을 넣는다.
+
+```python
+        budget_bound = response.granted_max_output_tokens < limit
+        if budget_bound or expanded:
+            await _record_truncation_handled(
+                stage=stage,
+                model=model,
+                requested=original_limit,
+                granted=response.granted_max_output_tokens,
+                action="budget_bound" if budget_bound else "retried_failed",
+            )
+            raise TruncatedResponseError(str(last_error))
+```
+
+세 기록 모두 `requested`에 **원래 상한**을 쓴다 — 사후 집계에서 "얼마로 요청했다가 잘렸나"가 호출부의 설정값과 대응해야 하기 때문이다.
 
 - [ ] **Step 6: 테스트 통과를 확인한다**
 
