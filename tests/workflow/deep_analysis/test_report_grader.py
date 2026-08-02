@@ -468,3 +468,29 @@ async def test_uncited_threshold_comes_from_settings():
         verdict.diagnostics["uncited_threshold"]
         == settings.config.deep_analysis.report_uncited_ratio_max
     )
+
+
+@pytest.mark.asyncio
+async def test_a_report_with_no_assertions_scores_a_perfect_zero():
+    """CHARACTERISATION, not endorsement — this is G1's finding.
+
+    `_uncited_stats` returns 0.0 when nothing looks like a factual assertion,
+    so a report that asserts nothing is scored as perfectly cited and sails
+    through the gate that rejects substantive ones.
+
+    Measured consequence: of 61 runs, the 9 that passed had a median of 0
+    verified claims (7 of them had no claims at all), while the 52 that were
+    rejected had a median of 4. The gate is passing vacuous reports and
+    blocking the ones that found something.
+
+    Pinned so that changing it is a deliberate decision with a failing test,
+    not an accident. Whether an assertion-less report should pass, fail, or
+    be judged some third way is a policy question this test does not answer.
+    """
+    empty = "## 본문\n특별한 내용이 없다.\n\n## 한계와 미확인 사항\n없음.\n"
+
+    verdict = await _grader(FakeLedger()).grade_deterministic(empty, "root0001")
+
+    assert verdict.ok is True
+    assert verdict.diagnostics["uncited_assertions"] == 0
+    assert verdict.diagnostics["uncited_ratio"] == 0.0
