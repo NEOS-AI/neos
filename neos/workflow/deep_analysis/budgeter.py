@@ -114,8 +114,12 @@ class Budgeter:
         return picks
 
     async def should_stop(self, ledger) -> bool:
-        if self.token_budget is not None and self.token_budget.exhausted:
-            return True
+        if self.token_budget is not None:
+            # The floor belongs to finalization. Investigation is done once it
+            # is all that remains -- continuing only produces refused
+            # reservations and wasted rounds.
+            if self.token_budget.available_for_investigation <= 0:
+                return True
         spent = await ledger.total_spent()
         if spent >= self.global_token_cap:
             return True

@@ -120,3 +120,23 @@ async def test_floor_defaults_to_zero_and_preserves_current_behaviour():
         {"model": "m"}, 9_000, stage="worker_analysis", model="m"
     )
     assert reservation.max_output_tokens > 8_000
+
+
+@pytest.mark.asyncio
+async def test_should_stop_when_only_the_floor_remains():
+    """floor만 남으면 조사는 끝이다.
+
+    계속 돌면 워커가 거절만 반복하고 flush_partial로 받아내며 라운드를 태운다.
+    """
+
+    class Ledger:
+        async def total_spent(self):
+            return 0
+
+        async def open_questions(self):
+            raise AssertionError("floor stop must short-circuit question lookup")
+
+    budget = TokenBudget(10_000, floor_tokens=10_000)
+    budgeter = Budgeter(global_token_cap=10_000, token_budget=budget)
+
+    assert await budgeter.should_stop(Ledger()) is True
