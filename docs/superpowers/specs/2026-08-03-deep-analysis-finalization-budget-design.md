@@ -106,7 +106,22 @@ global_token_cap
 전부 싣기 때문에 input이 크다. 따라서 floor가 12,800이어도 assembly가 출력 4,000을
 온전히 받는다는 보장은 없다.
 
-**정직한 보장은 이것이다: 마무리 단계는 항상 0이 아닌 예약을 받는다.**
+**정직한 보장은 이것이다: 마무리는 더 이상 조사에 의해 굶지 않으며, 마무리 자신의
+프롬프트가 floor 안에 들어가는 한 0이 아닌 예약을 받는다.**
+
+> ⚠️ **정정 (최종 리뷰, 2026-08-03).** 최초 초안은 "마무리 단계는 항상 0이 아닌
+> 예약을 받는다"라고 썼으나 이는 과장이었다 — floor는 `output_tokens`만 보장하고
+> `input_bound`(프롬프트 전체의 UTF-8 바이트 길이 + 64, `conservative_input_bound`)는
+> 계산에 넣지 않는다. `reduce_node`는 검증된 클레임 전부와 근거 발췌
+> (`excerpt_max_chars=500`)를 프롬프트에 싣고, 한국어는 문자당 약 3바이트이므로
+> 클레임 몇 건만으로도 `input_bound`가 dev의 floor(4,400) 전체를 넘어
+> `ceiling - input_bound < 1`이 되어 그 stage가 통째로 건너뛰어질 수 있다 — floor가
+> 있어도, 조사가 그것을 전혀 침범하지 않아도 발생한다. 또한 floor는 하나의 통합
+> 풀이고 `finalization_reduction_allowance`는 floor의 **크기**만 정할 뿐 실제
+> `reduce_node` 호출 횟수를 강제하지 않는다 — 노드가 많은 트리는 assembly에
+> 도달하기 전에 floor를 다 쓸 수 있고, `assemble`/`grade`도
+> `report_retry_cap + 1`회까지 같은 풀을 나눠 쓴다. 두 문제 모두 재아키텍처
+> 대상이며 이 작업의 범위 밖이다 — `docs/TODO_260729.md` G6·G7에 백로그로 남겼다.
 
 현재는 `reserve()`가 `TokenBudgetExhausted`를 던져 세 단계가 통째로 건너뛰어진다.
 "clamp되어 작게 돌았다"와 "아예 안 돌았다"는 다른 실패이고, 이 설계가 닫는 것은
@@ -294,8 +309,13 @@ bare `pytest`는 asyncio 마커 수집에 실패한다. Ruff도 통과해야 한
 
 ## 8. 성공 기준
 
-1. 마무리 3단계가 **0이 아닌 예약**을 받는다 — `TokenBudgetExhausted`로 통째로
+1. 마무리는 더 이상 조사에 의해 굶지 않으며, **마무리 자신의 프롬프트가 floor
+   안에 들어가는 한** 0이 아닌 예약을 받는다 — `TokenBudgetExhausted`로 통째로
    건너뛰어지지 않는다.
+   ⚠️ **정정 (최종 리뷰, 2026-08-03):** "항상 0이 아닌 예약"은 과장이었다. floor는
+   `output_tokens`만 보장하고 `input_bound`는 계산에 넣지 않으므로, 클레임이 많은
+   `reduce_node` 호출은 floor 안에서도 여전히 건너뛰어질 수 있다(§3.1 참고,
+   `docs/TODO_260729.md` G6·G7).
 2. 조사 stage가 floor 아래로 예약할 수 없다 (병렬 워커 포함).
 3. `should_stop`이 floor에서 멈춘다 — 거절만 반복하는 라운드가 없다.
 4. dev 프로파일이 조사 예산의 78%를 유지하면서 마무리 체인을 실행한다.
@@ -308,7 +328,7 @@ bare `pytest`는 asyncio 마커 수집에 실패한다. Ruff도 통과해야 한
 
 ## 9. 참조
 
-- 잔여 과제 정본: `docs/TODO_260729.md` G1~G5
+- 잔여 과제 정본: `docs/TODO_260729.md` G1~G7 (G6·G7은 이 작업의 최종 리뷰에서 발견)
 - 결정 원장: `neos/workflow/deep_analysis/DECISIONS.md` (D8 append-only, P2 단일 작성자)
 - 설계 원본: `docs/DEEP_ANALYSIS_HARNESS_DESIGN.md`
 - 직전 작업: `docs/superpowers/specs/2026-08-02-deep-analysis-truncation-propagation-design.md`

@@ -158,7 +158,8 @@ CREATE INDEX idx_events_qid ON events(qid, kind);
 -- kind 목록: question_opened, pass_completed, worker_failed, claim_verified,
 --   claim_rejected, dead_end, subq_proposed, subq_adopted, split, abandoned,
 --   conflict_found, conflict_reinvestigation, synth_pass, report_graded,
---   claim_discarded, llm_truncated, truncation_handled, entailment_filter_skipped
+--   claim_discarded, llm_truncated, truncation_handled, entailment_filter_skipped,
+--   report_assembly_degraded, investigation_stopped_at_floor
 --   claim_discarded: entailment가 keep/narrow 없이 버린 claim 1건당 1회,
 --   상시 기록(플래그 게이팅 없음) (2026-07-27, discard-recall 계측)
 --   llm_truncated: 응답이 max_tokens에서 잘렸을 때 1회, settle 직후
@@ -170,6 +171,14 @@ CREATE INDEX idx_events_qid ON events(qid, kind);
 --   entailment_filter_skipped: entailment 배치가 provider 실패·truncation·
 --   파싱 실패로 통째로 건너뛰어졌을 때 1회, 오케스트레이터가 워커 결과의
 --   entailment_skipped 플래그를 읽어 기록 (2026-08-02, truncation 신호 전파)
+--   report_assembly_degraded: assemble()이 TokenBudgetExhausted를 잡아
+--   deterministic_report() 템플릿으로 떨어질 때 1회, {"reason": "token_budget_exhausted"}
+--   (2026-08-03, G5 마무리 예산 확보 — 조용한 템플릿 강등을 흔적으로 남긴다)
+--   investigation_stopped_at_floor: 조사 루프가 예산 고갈이 아니라 finalization
+--   floor 때문에 멈췄을 때 1회(should_stop이 available_for_investigation<=0으로
+--   정지), {"cap_tokens", "consumed_tokens", "reserved_tokens", "floor_tokens"}.
+--   token_budget_exhausted와 상호 배타적으로 기록된다 — floor에서 멈췄다면
+--   remaining_tokens > 0이므로 exhausted는 아니다 (2026-08-03, G5 마무리 예산 확보)
 ```
 
 ### 4.1 질문 상태 기계 (완성판)
