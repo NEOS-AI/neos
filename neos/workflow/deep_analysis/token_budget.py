@@ -14,6 +14,20 @@ from uuid import uuid4
 
 PersistEvent = Callable[[str, dict[str, Any]], Awaitable[None]]
 
+# Stages that run after investigation is over: hierarchical reduction, report
+# assembly, and the report judgement. They are the only callers allowed to
+# draw on the reserved floor.
+#
+# The budget layer knowing stage names is a deliberate coupling. Threading an
+# `is_finalization` flag from each call site through call_llm / call_json /
+# call_messages / _budgeted_dispatch would touch every caller; one constant is
+# explicit, testable, and lives in a single place.
+FINALIZATION_STAGES = frozenset({
+    "node_reduction",
+    "report_assembly",
+    "report_grading",
+})
+
 
 class TokenBudgetExhausted(RuntimeError):
     """Raised when no output token can be reserved within the hard cap."""
@@ -56,9 +70,12 @@ class TokenBudget:
         consumed_tokens: int = 0,
         outstanding: Mapping[str, int] | None = None,
         persist: PersistEvent | None = None,
+        floor_tokens: int = 0,
     ) -> None:
         if cap_tokens < 0 or consumed_tokens < 0:
             raise ValueError("token counts must be non-negative")
+        if floor_tokens < 0:
+            raise ValueError("floor_tokens must be non-negative")
         recovered = dict(outstanding or {})
         if any(amount < 0 for amount in recovered.values()):
             raise ValueError("outstanding token counts must be non-negative")
@@ -66,6 +83,7 @@ class TokenBudget:
         self._consumed_tokens = consumed_tokens
         self._outstanding = recovered
         self._persist = persist
+        self.floor_tokens = floor_tokens
         self._lock = asyncio.Lock()
 
     @property
@@ -79,6 +97,16 @@ class TokenBudget:
     @property
     def remaining_tokens(self) -> int:
         return self.cap_tokens - self.consumed_tokens - self.reserved_tokens
+
+    @property
+    def available_for_investigation(self) -> int:
+        """Remaining tokens that non-finalization stages may reserve.
+
+        The floor is what stops the investigation loop from consuming the
+        whole cap and leaving report assembly and grading to fail open --
+        which is what every recorded run did before this existed.
+        """
+        return max(0, self.remaining_tokens - self.floor_tokens)
 
     @property
     def exhausted(self) -> bool:
@@ -97,10 +125,12 @@ class TokenBudget:
 
         input_bound = conservative_input_bound(request)
         async with self._lock:
-            output_tokens = min(
-                max_output_tokens,
-                self.remaining_tokens - input_bound,
+            ceiling = (
+                self.remaining_tokens
+                if stage in FINALIZATION_STAGES
+                else self.available_for_investigation
             )
+            output_tokens = min(max_output_tokens, ceiling - input_bound)
             if output_tokens < 1:
                 raise TokenBudgetExhausted("deep-analysis token budget exhausted")
 
