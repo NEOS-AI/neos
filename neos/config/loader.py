@@ -311,6 +311,38 @@ def warn_yaml_only_feature_flag_env(env: Mapping[str, str]) -> None:
         )
 
 
+def warn_finalization_floor_ratio(deep_analysis) -> None:
+    """Warn when the finalization reserve crowds out investigation.
+
+    Not expected to fire on the shipped defaults -- it is a backstop for a
+    profile tuned into a corner, where the reserve would leave too little
+    budget to investigate anything worth reporting on.
+    """
+
+    def _floor(synthesis: int) -> int:
+        return (
+            (deep_analysis.finalization_reduction_allowance + 1) * synthesis
+            + deep_analysis.report_judge_max_output_tokens
+        )
+
+    warn_ratio = deep_analysis.finalization_floor_warn_ratio
+    profiles = (
+        ("default", deep_analysis.global_token_cap,
+         _floor(deep_analysis.synthesis_max_tokens)),
+        ("dev", deep_analysis.dev_profile.global_token_cap,
+         _floor(deep_analysis.dev_profile.synthesis_max_tokens)),
+    )
+    for name, cap, floor in profiles:
+        if cap > 0 and floor >= cap * warn_ratio:
+            warnings.warn(
+                f"deep_analysis {name} profile: finalization floor {floor} is "
+                f"{floor / cap:.0%} of global_token_cap {cap}; raise the cap or "
+                f"lower finalization_reduction_allowance / synthesis_max_tokens.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+
 def validate_env_allowlist(env: Mapping[str, str], app_env: str) -> list[str]:
     allowed = SECRET_ENV_KEYS | CONTROL_ENV_KEYS | WEB_ENV_KEYS | GATEWAY_ENV_KEYS | set(LEGACY_ENV_KEYS)
     unknown: list[str] = []
@@ -366,4 +398,6 @@ def load_app_config(
     config_data = apply_secret_overrides(config_data, secret_dotenv)
     config_data = apply_secret_overrides(config_data, process_env)
 
-    return AppConfig.model_validate(config_data)
+    app_config = AppConfig.model_validate(config_data)
+    warn_finalization_floor_ratio(app_config.deep_analysis)
+    return app_config

@@ -806,6 +806,13 @@ class DeepAnalysisConfig(StrictConfigModel):
     # twice the dev profile's entire cap.
     finalization_reduction_allowance: int = Field(default=2, ge=1)
 
+    # Fraction of a profile's global_token_cap above which the finalization
+    # floor is judged to be crowding out investigation. Not expected to fire
+    # on the shipped defaults -- the floor is 4.3% of the default profile's
+    # cap and 22% of dev's -- so this is a backstop for a profile tuned into
+    # a corner, not a signal for normal operation.
+    finalization_floor_warn_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
+
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
     report_retry_cap: int = 2
