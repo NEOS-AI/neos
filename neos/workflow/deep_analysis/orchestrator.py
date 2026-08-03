@@ -127,6 +127,7 @@ class Orchestrator:
         # prevents a shared dependency outage from expanding that tree.
         self._all_failed_rounds = 0
         self._token_budget_exhausted_logged = False
+        self._investigation_stopped_at_floor_logged = False
         self.token_budget = TokenBudget(
             self.global_token_cap,
             floor_tokens=self.finalization_floor_tokens,
@@ -186,6 +187,38 @@ class Orchestrator:
         await self._checkpoint()
         await self._emit("token_budget_exhausted", payload)
         self._token_budget_exhausted_logged = True
+
+    async def _mark_investigation_stopped_at_floor(self) -> None:
+        """Record that the investigation loop stopped because only the
+        finalization floor remained -- not because the cap was exhausted.
+
+        Before the floor existed, every run spent the cap to ~97% and
+        `token_budget_exhausted` was the only signal available. Now
+        `should_stop` (budgeter.py) halts earlier, at the floor, so that
+        event stops firing for a reason unrelated to any real improvement --
+        and without a replacement, a run that stopped clean at the floor is
+        indistinguishable from one where investigation simply ran out of
+        open questions. Payload carries counts only, mirroring
+        `token_budget_exhausted` -- never report or response text.
+        """
+        if self._investigation_stopped_at_floor_logged:
+            return
+        has_event = getattr(self.ledger, "has_event", None)
+        if has_event is not None and await has_event(
+            "investigation_stopped_at_floor"
+        ):
+            self._investigation_stopped_at_floor_logged = True
+            return
+        payload = {
+            "cap_tokens": self.token_budget.cap_tokens,
+            "consumed_tokens": self.token_budget.consumed_tokens,
+            "reserved_tokens": self.token_budget.reserved_tokens,
+            "floor_tokens": self.token_budget.floor_tokens,
+        }
+        await self.ledger.log("investigation_stopped_at_floor", None, payload)
+        await self._checkpoint()
+        await self._emit("investigation_stopped_at_floor", payload)
+        self._investigation_stopped_at_floor_logged = True
 
     async def _grade(self, claim, value_est):
         """Two-stage grading: deterministic tier first; only claims that pass
@@ -933,6 +966,11 @@ class Orchestrator:
 
                 if self.token_budget.exhausted:
                     await self._mark_token_budget_exhausted()
+                elif self.token_budget.available_for_investigation <= 0:
+                    # Stopped at the floor with headroom left in the cap --
+                    # the case the floor exists to produce, and the case
+                    # that must not look like silent success.
+                    await self._mark_investigation_stopped_at_floor()
 
                 report = await self._finalize(root_id)
                 await self._checkpoint()

@@ -171,12 +171,26 @@ class ReportGrader:
             # synthesizer calls to reach the same place. Treat it the way a
             # budget-exhausted judge is already treated below: fall back to
             # the deterministic verdict, and say why.
-            return Verdict(ok=True, detail="judge_truncated")
+            #
+            # `detail` is useful in-process, but the orchestrator's
+            # `report_graded` event only persists `verdict.diagnostics`
+            # (orchestrator.py:886-902) -- without a diagnostics key this
+            # degraded mode is byte-identical in the ledger to a judge that
+            # ran and approved.
+            return Verdict(
+                ok=True,
+                detail="judge_truncated",
+                diagnostics={"judge": "truncated"},
+            )
         except JSONParseError:
             # Degrade to pass rather than halting the run (mirrors D14 in
             # AgenticGrader): an unparseable judge response is not evidence
-            # of a bad report.
-            return Verdict(ok=True, detail="judge_unparseable")
+            # of a bad report. Same durability note as above.
+            return Verdict(
+                ok=True,
+                detail="judge_unparseable",
+                diagnostics={"judge": "unparseable"},
+            )
 
         answers_question = bool(data.get("answers_question", False))
         strength_ok = bool(data.get("strength_ok", False))
@@ -202,7 +216,20 @@ class ReportGrader:
             # Same fallback as before, but no longer indistinguishable from a
             # judge that ran and approved. P2 keeps this grader read-only, so
             # the marker rides the verdict to the orchestrator's event.
-            return replace(deterministic, detail="judge_budget_exhausted")
+            #
+            # `detail` alone does not survive: the orchestrator's
+            # `report_graded` sink (orchestrator.py:886-902) logs `ok`,
+            # `attempt`, `code`, and `**verdict.diagnostics` -- it never reads
+            # `detail`. `diagnostics` is what actually reaches the ledger, so
+            # the marker has to ride there, not just on `detail`.
+            return replace(
+                deterministic,
+                detail="judge_budget_exhausted",
+                diagnostics={
+                    **deterministic.diagnostics,
+                    "judge": "budget_exhausted",
+                },
+            )
         # The agentic verdict is the answer, but the deterministic gate's
         # measurements have to survive it: reports that reach the judge are
         # exactly the ones that cleared the uncited cut, so dropping their
