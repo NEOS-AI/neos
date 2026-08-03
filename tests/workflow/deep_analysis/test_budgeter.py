@@ -3,7 +3,11 @@ from types import SimpleNamespace
 from neos.workflow.deep_analysis.budgeter import Budgeter
 from neos.workflow.deep_analysis.models import Effort
 from neos.workflow.deep_analysis.orchestrator import Orchestrator
-from neos.workflow.deep_analysis.token_budget import TokenBudget, TokenBudgetExhausted
+from neos.workflow.deep_analysis.token_budget import (
+    TokenBudget,
+    TokenBudgetExhausted,
+    conservative_input_bound,
+)
 
 pytestmark = pytest.mark.no_db
 
@@ -155,6 +159,76 @@ def test_orchestrator_floor_defaults_to_zero():
 
     assert orch.token_budget.floor_tokens == 0
     assert orch.token_budget.available_for_investigation == 1000
+
+
+@pytest.mark.asyncio
+async def test_reserve_succeeds_at_the_one_token_margin_above_the_floor():
+    """§7 경계: 조사 stage가 floor 위로 1토큰 여유가 있으면 예약이 성공한다.
+
+    `test_investigation_is_clamped_to_the_floor_not_refused`는 넉넉한 여유에서
+    `0 < n <= 6000`만 단언했다 -- 정확히 성공/실패가 갈리는 지점(여유 1 vs 0)은
+    검증된 적이 없다.
+    """
+    request = {"model": "m"}
+    input_bound = conservative_input_bound(request)
+    floor = 100
+    # available_for_investigation == input_bound + 1 -> ceiling - input_bound == 1
+    cap = floor + input_bound + 1
+    budget = TokenBudget(cap, floor_tokens=floor)
+    assert budget.available_for_investigation == input_bound + 1
+
+    reservation = await budget.reserve(
+        request, 10, stage="worker_analysis", model="m"
+    )
+
+    assert reservation.max_output_tokens == 1
+
+
+@pytest.mark.asyncio
+async def test_reserve_raises_with_zero_margin_above_the_floor():
+    """§7 경계: 여유가 정확히 0이면(available_for_investigation == input_bound)
+    조사 stage의 예약은 TokenBudgetExhausted를 던진다."""
+    request = {"model": "m"}
+    input_bound = conservative_input_bound(request)
+    floor = 100
+    cap = floor + input_bound
+    budget = TokenBudget(cap, floor_tokens=floor)
+    assert budget.available_for_investigation == input_bound
+
+    with pytest.raises(TokenBudgetExhausted):
+        await budget.reserve(request, 10, stage="worker_analysis", model="m")
+
+
+@pytest.mark.asyncio
+async def test_should_stop_falls_through_to_ledger_when_one_token_remains():
+    """§7 경계: available_for_investigation == 1이면 floor 검사만으로 멈추면
+    안 된다 -- 1은 0이 아니므로 ledger의 나머지 조건까지 내려가야 한다.
+
+    `test_should_stop_when_only_the_floor_remains`는 ==0(short-circuit)만
+    다뤘다. 여기서는 반대쪽 경계를 증명한다: ledger.open_questions가 실제로
+    호출되고, 그 결과가 계속할 이유를 주면 should_stop은 False다.
+    """
+
+    class Ledger:
+        async def total_spent(self):
+            return 0
+
+        async def open_questions(self):
+            return [
+                SimpleNamespace(
+                    id="q1", value_est=1.0, confidence=0.0, spent_tokens=0,
+                    cap_tokens=2000, fail_streak=0, depth=1, status="open",
+                )
+            ]
+
+        async def gain_history(self, question_id, last_n=3):
+            return []
+
+    budget = TokenBudget(10_000, floor_tokens=9_999)
+    budgeter = Budgeter(global_token_cap=10_000, token_budget=budget)
+
+    assert budget.available_for_investigation == 1
+    assert await budgeter.should_stop(Ledger()) is False
 
 
 def test_orchestrator_accepts_an_injected_floor():

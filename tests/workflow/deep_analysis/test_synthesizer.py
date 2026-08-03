@@ -221,6 +221,33 @@ async def test_synthesizer_falls_back_to_the_global_ceiling():
 
 
 @pytest.mark.asyncio
+async def test_reduce_uses_the_injected_ceiling():
+    """§7: 세 호출부(assemble/reduce/reduce_node) 모두 주입된 상한을 써야 한다.
+
+    `assemble`만 검증되어 있었다 -- `reduce`가 여전히 전역 설정을 직접 읽는
+    회귀는 dev 프로파일에서 20000 예산에 4000짜리 호출을 넣는 바로 그 결함을
+    되살린다.
+    """
+    seen = []
+
+    async def recording_llm_call(model, prompt, **kw):
+        seen.append(kw["max_tokens"])
+        return LLMResponse(
+            text="보고서", input_tokens=1, output_tokens=1, model=model
+        )
+
+    synth = Synthesizer(
+        FakeLedger(),
+        llm_call=recording_llm_call,
+        synthesis_max_tokens=1200,
+    )
+
+    await synth.reduce("root0001")
+
+    assert seen == [1200]
+
+
+@pytest.mark.asyncio
 async def test_template_fallback_is_recorded():
     """예산 고갈로 템플릿으로 떨어지는 것이 성공처럼 보이면 안 된다.
 
