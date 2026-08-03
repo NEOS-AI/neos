@@ -493,6 +493,7 @@ async def test_a_report_with_no_assertions_scores_a_perfect_zero():
 
     assert verdict.ok is True
     assert verdict.diagnostics["uncited_assertions"] == 0
+    assert verdict.diagnostics["uncited_ratio"] == 0.0
 
 
 @pytest.mark.asyncio
@@ -507,4 +508,3 @@ async def test_budget_exhausted_judge_is_marked_not_silent():
 
     assert verdict.ok is True
     assert verdict.detail == "judge_budget_exhausted"
-    assert verdict.diagnostics["uncited_ratio"] == 0.0
