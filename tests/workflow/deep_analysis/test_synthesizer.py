@@ -176,3 +176,45 @@ async def test_assemble_renders_required_sections_when_budget_exhausts():
     assert "## 한계와 미확인 사항" in report
     assert "## 출처" in report
     assert "전체 심층분석 토큰 상한" in report
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_uses_the_injected_ceiling():
+    """dev는 cap을 15배 줄이면서 합성 상한은 물려받았다.
+
+    상한을 주입받지 못하면 20000 예산에 4000짜리 호출을 세 번 넣게 된다.
+    """
+    seen = []
+
+    async def recording_llm_call(model, prompt, **kw):
+        seen.append(kw["max_tokens"])
+        return LLMResponse(
+            text="보고서", input_tokens=1, output_tokens=1, model=model
+        )
+
+    synth = Synthesizer(
+        FakeLedger(),
+        llm_call=recording_llm_call,
+        synthesis_max_tokens=1200,
+    )
+
+    await synth.assemble(None, [], [])
+
+    assert seen == [1200]
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_falls_back_to_the_global_ceiling():
+    seen = []
+
+    async def recording_llm_call(model, prompt, **kw):
+        seen.append(kw["max_tokens"])
+        return LLMResponse(
+            text="보고서", input_tokens=1, output_tokens=1, model=model
+        )
+
+    synth = Synthesizer(FakeLedger(), llm_call=recording_llm_call)
+
+    await synth.assemble(None, [], [])
+
+    assert seen == [settings.config.deep_analysis.synthesis_max_tokens]

@@ -69,6 +69,7 @@ class Orchestrator:
         parallel_workers: int | None = None,
         max_depth: int | None = None,
         max_stall_rounds: int | None = None,
+        synthesis_max_tokens: int | None = None,
     ) -> None:
         self.db = session
         self.run_id = run_id
@@ -81,6 +82,7 @@ class Orchestrator:
             self.ledger,
             llm_client=llm_client,
             cassette=cassette,
+            synthesis_max_tokens=synthesis_max_tokens,
         )
         self.citation_renderer = citation_renderer or CitationRenderer(
             self.ledger

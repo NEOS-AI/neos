@@ -114,9 +114,14 @@ async def build_orchestrator(
     max_depth = (
         config.dev_profile.max_depth if profile == "dev" else config.max_depth
     )
+    synthesis_max_tokens = (
+        config.dev_profile.synthesis_max_tokens
+        if profile == "dev"
+        else config.synthesis_max_tokens
+    )
     # The floor buys one reduction per allowance, one assembly, and one judge.
     finalization_floor_tokens = (
-        (config.finalization_reduction_allowance + 1) * config.synthesis_max_tokens
+        (config.finalization_reduction_allowance + 1) * synthesis_max_tokens
         + config.report_judge_max_output_tokens
     )
     return Orchestrator(
@@ -135,4 +140,5 @@ async def build_orchestrator(
         finalization_floor_tokens=finalization_floor_tokens,
         parallel_workers=parallel_workers,
         max_depth=max_depth,
+        synthesis_max_tokens=synthesis_max_tokens,
     )

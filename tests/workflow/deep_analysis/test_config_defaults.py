@@ -44,6 +44,7 @@ def test_deep_analysis_dev_profile_present():
     assert dev.global_token_cap == 20000
     assert dev.parallel_workers == 2
     assert dev.max_depth == 2
+    assert dev.synthesis_max_tokens == 1200
 
 
 def test_deep_analysis_operational_limits_are_configured():
