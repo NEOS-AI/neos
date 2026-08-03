@@ -874,6 +874,23 @@ class DeepAnalysisConfig(StrictConfigModel):
     # 마지막 seq를 ?after=로 넘겨 재접속하면 이어서 받는다.
     events_stream_idle_timeout: float = 300.0
 
+    def finalization_floor_tokens(self, synthesis_max_tokens: int) -> int:
+        """Reserve for the 3 finalization stages: node_reduction × allowance,
+        one assembly, and the report judge.
+
+        Shared by `neos/config/loader.py`'s `warn_finalization_floor_ratio`
+        (checks this against `global_token_cap` at config-load time) and
+        `neos/workflow/deep_analysis/service.py`'s `build_orchestrator` (the
+        floor actually enforced by `TokenBudget`). Kept as one method, not two
+        independent expressions, so a future change to the formula cannot
+        silently leave the warning describing a floor that is no longer in
+        force.
+        """
+        return (
+            (self.finalization_reduction_allowance + 1) * synthesis_max_tokens
+            + self.report_judge_max_output_tokens
+        )
+
 
 class RayConfig(StrictConfigModel):
     enabled: bool = False

@@ -119,10 +119,13 @@ async def build_orchestrator(
         if profile == "dev"
         else config.synthesis_max_tokens
     )
-    # The floor buys one reduction per allowance, one assembly, and one judge.
-    finalization_floor_tokens = (
-        (config.finalization_reduction_allowance + 1) * synthesis_max_tokens
-        + config.report_judge_max_output_tokens
+    # The floor buys `finalization_reduction_allowance` node_reduction calls,
+    # one assembly, and one judge. Shared with
+    # `neos/config/loader.py`'s `warn_finalization_floor_ratio` via
+    # `DeepAnalysisConfig.finalization_floor_tokens` so the warning can never
+    # silently describe a floor that is not the one actually enforced here.
+    finalization_floor_tokens = config.finalization_floor_tokens(
+        synthesis_max_tokens
     )
     return Orchestrator(
         session,

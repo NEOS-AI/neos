@@ -319,18 +319,19 @@ def warn_finalization_floor_ratio(deep_analysis) -> None:
     budget to investigate anything worth reporting on.
     """
 
-    def _floor(synthesis: int) -> int:
-        return (
-            (deep_analysis.finalization_reduction_allowance + 1) * synthesis
-            + deep_analysis.report_judge_max_output_tokens
-        )
-
+    # The formula itself lives once, on DeepAnalysisConfig.finalization_floor_tokens
+    # -- shared with service.py's build_orchestrator, which computes the floor
+    # actually enforced by TokenBudget. Two independent copies of this
+    # expression agree today but would silently diverge on the next tuning
+    # pass; one shared method cannot.
     warn_ratio = deep_analysis.finalization_floor_warn_ratio
     profiles = (
         ("default", deep_analysis.global_token_cap,
-         _floor(deep_analysis.synthesis_max_tokens)),
+         deep_analysis.finalization_floor_tokens(deep_analysis.synthesis_max_tokens)),
         ("dev", deep_analysis.dev_profile.global_token_cap,
-         _floor(deep_analysis.dev_profile.synthesis_max_tokens)),
+         deep_analysis.finalization_floor_tokens(
+             deep_analysis.dev_profile.synthesis_max_tokens
+         )),
     )
     for name, cap, floor in profiles:
         if cap > 0 and floor >= cap * warn_ratio:
