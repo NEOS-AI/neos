@@ -789,6 +789,15 @@ class DeepAnalysisConfig(StrictConfigModel):
     # evidence; it is a setting so the answer can be acted on.
     report_uncited_ratio_max: float = Field(default=0.20, gt=0.0, le=1.0)
 
+    # How many node_reduction calls the finalization floor budgets for.
+    #
+    # Measured: node_reduction runs a median of 2 times per run (max 9). Runs
+    # with deeper trees will see their last reductions clamped, but assembly
+    # and the judge survive -- which is the point of the reserve. Budgeting
+    # for the observed maximum of 9 would put the floor at 40,800, more than
+    # twice the dev profile's entire cap.
+    finalization_reduction_allowance: int = Field(default=2, ge=1)
+
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
     report_retry_cap: int = 2

@@ -2,6 +2,7 @@ import pytest
 from types import SimpleNamespace
 from neos.workflow.deep_analysis.budgeter import Budgeter
 from neos.workflow.deep_analysis.models import Effort
+from neos.workflow.deep_analysis.orchestrator import Orchestrator
 from neos.workflow.deep_analysis.token_budget import TokenBudget, TokenBudgetExhausted
 
 pytestmark = pytest.mark.no_db
@@ -140,3 +141,31 @@ async def test_should_stop_when_only_the_floor_remains():
     budgeter = Budgeter(global_token_cap=10_000, token_budget=budget)
 
     assert await budgeter.should_stop(Ledger()) is True
+
+
+def test_orchestrator_floor_defaults_to_zero():
+    """골든/통합 테스트가 작은 cap으로 오케스트레이터를 만든다.
+
+    floor를 안에서 전역 설정으로 계산하면 그런 run의 조사 예산이 0이 된다.
+    주입받고 기본값은 0이어야 한다.
+    """
+    orch = Orchestrator(
+        object(), "run0001", lambda: None, None, global_token_cap=1000
+    )
+
+    assert orch.token_budget.floor_tokens == 0
+    assert orch.token_budget.available_for_investigation == 1000
+
+
+def test_orchestrator_accepts_an_injected_floor():
+    orch = Orchestrator(
+        object(),
+        "run0001",
+        lambda: None,
+        None,
+        global_token_cap=20_000,
+        finalization_floor_tokens=4_400,
+    )
+
+    assert orch.token_budget.floor_tokens == 4_400
+    assert orch.token_budget.available_for_investigation == 15_600

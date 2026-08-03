@@ -101,3 +101,9 @@ def test_truncation_retry_multiplier_rejects_values_at_or_below_one():
         DeepAnalysisConfig(truncation_retry_multiplier=1.0)
     with pytest.raises(ValidationError):
         DeepAnalysisConfig(truncation_retry_multiplier=0.5)
+
+
+def test_finalization_reduction_allowance_default():
+    from neos.config.settings import settings
+
+    assert settings.config.deep_analysis.finalization_reduction_allowance == 2

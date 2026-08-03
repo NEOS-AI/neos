@@ -65,6 +65,7 @@ class Orchestrator:
         llm_client=None,
         cassette=None,
         global_token_cap: int | None = None,
+        finalization_floor_tokens: int = 0,
         parallel_workers: int | None = None,
         max_depth: int | None = None,
         max_stall_rounds: int | None = None,
@@ -94,6 +95,11 @@ class Orchestrator:
             if global_token_cap is None
             else global_token_cap
         )
+        # Injected, never computed here: integration and golden tests build
+        # this orchestrator with caps as small as 1000, and a floor derived
+        # from global config would leave those runs no investigation budget
+        # at all. service.py computes it from the resolved profile.
+        self.finalization_floor_tokens = finalization_floor_tokens
         config = settings.config.deep_analysis
         self.parallel_workers = (
             config.parallel_workers if parallel_workers is None else parallel_workers
@@ -119,7 +125,10 @@ class Orchestrator:
         # prevents a shared dependency outage from expanding that tree.
         self._all_failed_rounds = 0
         self._token_budget_exhausted_logged = False
-        self.token_budget = TokenBudget(self.global_token_cap)
+        self.token_budget = TokenBudget(
+            self.global_token_cap,
+            floor_tokens=self.finalization_floor_tokens,
+        )
         self.budgeter = Budgeter(
             global_token_cap=self.global_token_cap,
             max_depth=self.max_depth,
@@ -155,6 +164,7 @@ class Orchestrator:
             consumed_tokens=consumed,
             outstanding=outstanding,
             persist=self._persist_token_budget,
+            floor_tokens=self.finalization_floor_tokens,
         )
         self.budgeter.token_budget = self.token_budget
 
