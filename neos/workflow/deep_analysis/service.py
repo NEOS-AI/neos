@@ -141,6 +141,7 @@ async def build_orchestrator(
         cassette=cassette,
         global_token_cap=global_token_cap,
         finalization_floor_tokens=finalization_floor_tokens,
+        min_viable_output_tokens=config.min_viable_output_tokens,
         parallel_workers=parallel_workers,
         max_depth=max_depth,
         synthesis_max_tokens=synthesis_max_tokens,

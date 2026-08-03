@@ -813,6 +813,23 @@ class DeepAnalysisConfig(StrictConfigModel):
     # a corner, not a signal for normal operation.
     finalization_floor_warn_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
 
+    # Smallest output grant `TokenBudget.reserve` will issue rather than refuse.
+    #
+    # A reservation used to succeed on >= 1 token. Measured 2026-08-04: all 5
+    # dev runs of the funnel sample died because grants of 25, 38, 851, and
+    # 1,123 tokens were issued for prompts needing far more, truncated, and
+    # (truncation now being a hard error) failed the whole run.
+    #
+    # Derived from the same sample's SUCCESSFUL split_decompose calls, which
+    # consumed 1,229 / 1,460 / 1,903 / 2,044 output tokens. 2048 covers that
+    # observed range, so a grant below it is one the stage has never been
+    # seen to complete within. It is not a truncation guarantee -- nothing at
+    # this layer can be -- it removes the catastrophic tail.
+    #
+    # `reserve` clamps this by the caller's own `max_output_tokens`, so stages
+    # that deliberately ask for less (the report judge asks 800) are unaffected.
+    min_viable_output_tokens: int = Field(default=2048, ge=1)
+
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
     report_retry_cap: int = 2

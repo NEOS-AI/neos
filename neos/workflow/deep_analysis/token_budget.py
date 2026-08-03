@@ -71,11 +71,14 @@ class TokenBudget:
         outstanding: Mapping[str, int] | None = None,
         persist: PersistEvent | None = None,
         floor_tokens: int = 0,
+        min_viable_output_tokens: int = 1,
     ) -> None:
         if cap_tokens < 0 or consumed_tokens < 0:
             raise ValueError("token counts must be non-negative")
         if floor_tokens < 0:
             raise ValueError("floor_tokens must be non-negative")
+        if min_viable_output_tokens < 1:
+            raise ValueError("min_viable_output_tokens must be positive")
         recovered = dict(outstanding or {})
         if any(amount < 0 for amount in recovered.values()):
             raise ValueError("outstanding token counts must be non-negative")
@@ -84,6 +87,7 @@ class TokenBudget:
         self._outstanding = recovered
         self._persist = persist
         self.floor_tokens = floor_tokens
+        self.min_viable_output_tokens = min_viable_output_tokens
         self._lock = asyncio.Lock()
 
     @property
@@ -131,7 +135,20 @@ class TokenBudget:
                 else self.available_for_investigation
             )
             output_tokens = min(max_output_tokens, ceiling - input_bound)
-            if output_tokens < 1:
+            # A grant of >= 1 token used to count as a successful reservation.
+            # It is not: a 25-token grant for a JSON prompt truncates with
+            # certainty, and (since truncation became a hard error) takes the
+            # whole run down with it -- 5 of 5 dev runs died this way on
+            # 2026-08-04. Refuse the doomed call instead. `run` already
+            # catches TokenBudgetExhausted around the investigation loop and
+            # falls through to `_finalize`, so refusing here ends the
+            # investigation cleanly and lets the floor be spent on the report.
+            #
+            # Clamped by the caller's own request so a deliberately small
+            # `max_output_tokens` stays legal: the threshold exists to catch
+            # budget-starved grants, not modest ones.
+            viability = min(max_output_tokens, self.min_viable_output_tokens)
+            if output_tokens < viability:
                 raise TokenBudgetExhausted("deep-analysis token budget exhausted")
 
             reservation = TokenReservation(

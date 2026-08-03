@@ -66,6 +66,7 @@ class Orchestrator:
         cassette=None,
         global_token_cap: int | None = None,
         finalization_floor_tokens: int = 0,
+        min_viable_output_tokens: int = 1,
         parallel_workers: int | None = None,
         max_depth: int | None = None,
         max_stall_rounds: int | None = None,
@@ -102,6 +103,11 @@ class Orchestrator:
         # from global config would leave those runs no investigation budget
         # at all. service.py computes it from the resolved profile.
         self.finalization_floor_tokens = finalization_floor_tokens
+        # Injected for the same reason as the floor above: a golden test with
+        # a 1,000-token cap would have every reservation refused by the
+        # shipped 2,048 default. Defaults to 1 -- the pre-2026-08-04
+        # behaviour -- so only service.py opts real runs in.
+        self.min_viable_output_tokens = min_viable_output_tokens
         config = settings.config.deep_analysis
         self.parallel_workers = (
             config.parallel_workers if parallel_workers is None else parallel_workers
@@ -131,6 +137,7 @@ class Orchestrator:
         self.token_budget = TokenBudget(
             self.global_token_cap,
             floor_tokens=self.finalization_floor_tokens,
+            min_viable_output_tokens=self.min_viable_output_tokens,
         )
         self.budgeter = Budgeter(
             global_token_cap=self.global_token_cap,
@@ -168,6 +175,7 @@ class Orchestrator:
             outstanding=outstanding,
             persist=self._persist_token_budget,
             floor_tokens=self.finalization_floor_tokens,
+            min_viable_output_tokens=self.min_viable_output_tokens,
         )
         self.budgeter.token_budget = self.token_budget
 
@@ -966,10 +974,17 @@ class Orchestrator:
 
                 if self.token_budget.exhausted:
                     await self._mark_token_budget_exhausted()
-                elif self.token_budget.available_for_investigation <= 0:
+                elif (
+                    self.token_budget.available_for_investigation
+                    < self.token_budget.min_viable_output_tokens
+                ):
                     # Stopped at the floor with headroom left in the cap --
                     # the case the floor exists to produce, and the case
                     # that must not look like silent success.
+                    #
+                    # Mirrors `Budgeter.should_stop`: the stop happens at the
+                    # viability threshold, so testing `<= 0` here would leave
+                    # the ordinary floor stop unrecorded.
                     await self._mark_investigation_stopped_at_floor()
 
                 report = await self._finalize(root_id)
