@@ -9,6 +9,7 @@ drives the assembly-retry loop off this grader's `Verdict`.
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 from neos.config.settings import settings
 
@@ -198,7 +199,10 @@ class ReportGrader:
         try:
             agentic = await self.grade_agentic(report, root_text)
         except TokenBudgetExhausted:
-            return deterministic
+            # Same fallback as before, but no longer indistinguishable from a
+            # judge that ran and approved. P2 keeps this grader read-only, so
+            # the marker rides the verdict to the orchestrator's event.
+            return replace(deterministic, detail="judge_budget_exhausted")
         # The agentic verdict is the answer, but the deterministic gate's
         # measurements have to survive it: reports that reach the judge are
         # exactly the ones that cleared the uncited cut, so dropping their

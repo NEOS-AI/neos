@@ -218,3 +218,23 @@ async def test_synthesizer_falls_back_to_the_global_ceiling():
     await synth.assemble(None, [], [])
 
     assert seen == [settings.config.deep_analysis.synthesis_max_tokens]
+
+
+@pytest.mark.asyncio
+async def test_template_fallback_is_recorded():
+    """예산 고갈로 템플릿으로 떨어지는 것이 성공처럼 보이면 안 된다.
+
+    이 침묵 때문에 synth_pass=0을 알아채는 데 세션 하나가 걸렸다.
+    """
+
+    async def exhausted_llm_call(model, prompt, **kw):
+        raise TokenBudgetExhausted("cap")
+
+    ledger = FakeLedger()
+    synth = Synthesizer(ledger, llm_call=exhausted_llm_call)
+
+    report = await synth.assemble(None, [], [])
+
+    assert report  # 빈손 종료는 없다 (§6.8)
+    kinds = [kind for (kind, _qid, _payload) in ledger.events]
+    assert "report_assembly_degraded" in kinds

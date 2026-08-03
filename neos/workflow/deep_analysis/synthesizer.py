@@ -158,6 +158,15 @@ class Synthesizer:
                 stage="report_assembly",
             )
         except TokenBudgetExhausted:
+            # Falling back to a template is correct -- no empty-handed exit
+            # (§6.8) -- but it must not look like success. Every recorded run
+            # took this path and nothing said so.
+            qid = root_summary.question_id if root_summary is not None else ""
+            await self.ledger.log(
+                "report_assembly_degraded",
+                qid,
+                {"reason": "token_budget_exhausted"},
+            )
             return self.deterministic_report(
                 root_summary,
                 child_summaries,
