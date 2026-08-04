@@ -233,14 +233,20 @@ def prompt_input_bound(model: str, prompt: str) -> int:
 ```
 
 `Synthesizer.assemble`과 `Synthesizer.reduce_node`가 **렌더 → 측정 → (초과 시) 축소 →
-재렌더**를 유한 횟수 반복한다. allowance는 `synthesis_max_tokens`와 같은 경로로
-`service.py`에서 주입하며, 단계마다 다른 값을 받는다:
+재렌더**를 유한 횟수 반복한다. 루프와 축소 정책은 별도 모듈 `prompt_clamp.py`에 두어
+LLM·DB 없이 테스트되게 한다. allowance는 `Synthesizer`의 프로퍼티로 계산한다 —
+`synthesis_max_tokens`가 이미 프로파일 해석된 값으로 들어와 있고 비율은 전역이므로,
+생성자 파라미터를 늘리면 같은 수에 원천이 둘 생긴다.
 
 | 호출부 | allowance |
 |---|---|
 | `Synthesizer.assemble` | `assembly_input_ratio × synthesis_max_tokens` |
 | `Synthesizer.reduce_node` | `reduction_input_ratio × synthesis_max_tokens` |
 | `ReportGrader.grade_agentic` | 없음 — 클램프하지 않는다 (§3.2) |
+
+축소 정책은 두 슬롯(`primary` · `secondary`)에 대한 단일 함수이며, 호출부가 자기 재료를
+매핑한다 — `assemble`은 (자식 요약 블록, caveats), `reduce_node`는 (verified 클레임 줄,
+자식 요약 줄). 루트 답변과 질문 텍스트는 이 함수에 넘어가지 않으므로 결코 잘리지 않는다.
 
 `Synthesizer.reduce`(M1 단일 레이어 경로, `synthesizer.py:40`)는 클램프하지 않는다.
 `_finalize`가 쓰지 않는 하위 호환 경로이며 마무리 floor를 소비하지 않는다.
@@ -270,7 +276,7 @@ def prompt_input_bound(model: str, prompt: str) -> int:
 
 | 이벤트 | 언제 | 페이로드 |
 |---|---|---|
-| `finalization_prompt_clamped` | 클램프가 실제로 잘랐을 때 | `stage`, `bound_before`, `bound_after`, `allowance`, `dropped_caveats`, `dropped_children`, `exhausted` |
+| `finalization_prompt_clamped` | 클램프가 실제로 잘랐을 때 | `stage`, `bound_before`, `bound_after`, `allowance`, `dropped_primary`, `dropped_secondary`, `exhausted` |
 | `node_reduction_degraded` | `reduce_node`가 예산 소진/파싱 실패로 강등 | `question_id`, `child_count`, `reason` |
 
 `node_reduction_degraded`는 **W1 검증에 필수**다. 현재 강등(`synthesizer.py:254`)은 원장에
