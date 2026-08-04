@@ -9,9 +9,12 @@ drives the assembly-retry loop off this grader's `Verdict`.
 from __future__ import annotations
 
 import re
+from dataclasses import replace
+
+from neos.config.settings import settings
 
 from ..citation import OrphanCitationError
-from ..llm import JSONParseError, call_json
+from ..llm import JSONParseError, TruncatedResponseError, call_json
 from ..models import Verdict
 from ..prompt_loader import render
 from ..token_budget import TokenBudgetExhausted
@@ -32,8 +35,6 @@ _DIGIT = re.compile(r"\d")
 _PROPER_NOUN = re.compile(r"\b[A-Z][A-Za-z]{2,}\b")
 
 _SOURCE_HEADING = re.compile(r"(?m)^##\s*출처\s*$")
-
-_UNCITED_RATIO_MAX = 0.20
 
 
 def _report_body(report: str) -> str:
@@ -58,15 +59,25 @@ def _sentences(body: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def _uncited_ratio(body: str) -> float:
+def _uncited_stats(body: str) -> tuple[float, int, int]:
+    """Return (ratio, assertion count, uncited count).
+
+    The counts travel with the ratio because the ratio alone cannot be
+    calibrated against: 1.00 over one assertion is a short report, 1.00 over
+    forty is a badly cited one, and the two call for opposite fixes. 156
+    recorded rejections stored only the code and so cannot distinguish them.
+    """
+
     sentences = _sentences(body)
     assertions = [
         s for s in sentences if _DIGIT.search(s) or _PROPER_NOUN.search(s)
     ]
     if not assertions:
-        return 0.0
+        return 0.0, 0, 0
     uncited = [s for s in assertions if not _FOOTNOTE_REF.search(s)]
-    return len(uncited) / len(assertions)
+    return len(uncited) / len(assertions), len(assertions), len(uncited)
+
+
 
 
 class ReportGrader:
@@ -97,12 +108,24 @@ class ReportGrader:
             )
 
         # (b) marker-less factual-assertion ratio must stay under threshold.
-        ratio = _uncited_ratio(_report_body(report))
-        if ratio >= _UNCITED_RATIO_MAX:
+        threshold = settings.config.deep_analysis.report_uncited_ratio_max
+        ratio, assertions, uncited = _uncited_stats(_report_body(report))
+        # Carried by every verdict from here on, not only the rejection:
+        # recording the failing side alone yields a distribution censored at
+        # the threshold, which cannot say whether the cut is in the right
+        # place.
+        diagnostics = {
+            "uncited_ratio": round(ratio, 4),
+            "uncited_assertions": assertions,
+            "uncited_count": uncited,
+            "uncited_threshold": threshold,
+        }
+        if ratio >= threshold:
             return Verdict(
                 ok=False,
                 code="E_REPORT_UNCITED",
-                detail=f"uncited assertion ratio {ratio:.2f} >= {_UNCITED_RATIO_MAX}",
+                detail=f"uncited assertion ratio {ratio:.2f} >= {threshold}",
+                diagnostics=diagnostics,
             )
 
         # (c) every resolved root-direct-child question must be mentioned.
@@ -115,6 +138,7 @@ class ReportGrader:
                     ok=False,
                     code="E_REPORT_MISSING_QUESTION",
                     detail=f"resolved question not mentioned: {child.text}",
+                    diagnostics=diagnostics,
                 )
 
         # (d) the limits/unresolved section must exist.
@@ -123,9 +147,10 @@ class ReportGrader:
                 ok=False,
                 code="E_REPORT_NO_LIMITS",
                 detail=f"missing '{_LIMITS_HEADING}' section",
+                diagnostics=diagnostics,
             )
 
-        return Verdict(ok=True)
+        return Verdict(ok=True, diagnostics=diagnostics)
 
     async def grade_agentic(self, report: str, root_text: str) -> Verdict:
         prompt = render("report_judge", report=report, root_text=root_text)
@@ -133,16 +158,39 @@ class ReportGrader:
             data, _ = await self.json_call(
                 self.judge_model,
                 prompt,
-                max_tokens=400,
+                max_tokens=settings.config.deep_analysis.report_judge_max_output_tokens,
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="report_grading",
             )
+        except TruncatedResponseError:
+            # Rejecting here sends the orchestrator back to re-assemble the
+            # draft (orchestrator.py:833-868), but a truncated judge has
+            # nothing to do with draft quality -- the same judge cuts at the
+            # same ceiling on every retry, burning report_retry_cap + 1
+            # synthesizer calls to reach the same place. Treat it the way a
+            # budget-exhausted judge is already treated below: fall back to
+            # the deterministic verdict, and say why.
+            #
+            # `detail` is useful in-process, but the orchestrator's
+            # `report_graded` event only persists `verdict.diagnostics`
+            # (orchestrator.py:886-902) -- without a diagnostics key this
+            # degraded mode is byte-identical in the ledger to a judge that
+            # ran and approved.
+            return Verdict(
+                ok=True,
+                detail="judge_truncated",
+                diagnostics={"judge": "truncated"},
+            )
         except JSONParseError:
             # Degrade to pass rather than halting the run (mirrors D14 in
             # AgenticGrader): an unparseable judge response is not evidence
-            # of a bad report.
-            return Verdict(ok=True, detail="judge_unparseable")
+            # of a bad report. Same durability note as above.
+            return Verdict(
+                ok=True,
+                detail="judge_unparseable",
+                diagnostics={"judge": "unparseable"},
+            )
 
         answers_question = bool(data.get("answers_question", False))
         strength_ok = bool(data.get("strength_ok", False))
@@ -163,6 +211,29 @@ class ReportGrader:
         root_text = root.text if root is not None else ""
 
         try:
-            return await self.grade_agentic(report, root_text)
+            agentic = await self.grade_agentic(report, root_text)
         except TokenBudgetExhausted:
-            return deterministic
+            # Same fallback as before, but no longer indistinguishable from a
+            # judge that ran and approved. P2 keeps this grader read-only, so
+            # the marker rides the verdict to the orchestrator's event.
+            #
+            # `detail` alone does not survive: the orchestrator's
+            # `report_graded` sink (orchestrator.py:886-902) logs `ok`,
+            # `attempt`, `code`, and `**verdict.diagnostics` -- it never reads
+            # `detail`. `diagnostics` is what actually reaches the ledger, so
+            # the marker has to ride there, not just on `detail`.
+            return replace(
+                deterministic,
+                detail="judge_budget_exhausted",
+                diagnostics={
+                    **deterministic.diagnostics,
+                    "judge": "budget_exhausted",
+                },
+            )
+        # The agentic verdict is the answer, but the deterministic gate's
+        # measurements have to survive it: reports that reach the judge are
+        # exactly the ones that cleared the uncited cut, so dropping their
+        # ratios here would leave only rejections on record and make the
+        # threshold impossible to evaluate.
+        agentic.diagnostics = {**deterministic.diagnostics, **agentic.diagnostics}
+        return agentic

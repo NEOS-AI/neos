@@ -44,6 +44,7 @@ def test_deep_analysis_dev_profile_present():
     assert dev.global_token_cap == 20000
     assert dev.parallel_workers == 2
     assert dev.max_depth == 2
+    assert dev.synthesis_max_tokens == 1200
 
 
 def test_deep_analysis_operational_limits_are_configured():
@@ -90,3 +91,51 @@ def test_truncation_retry_multiplier_default():
     from neos.config.settings import settings
 
     assert settings.config.deep_analysis.truncation_retry_multiplier == 2.0
+
+
+def test_truncation_retry_multiplier_rejects_values_at_or_below_one():
+    from pydantic import ValidationError
+
+    from neos.config.schema import DeepAnalysisConfig
+
+    with pytest.raises(ValidationError):
+        DeepAnalysisConfig(truncation_retry_multiplier=1.0)
+    with pytest.raises(ValidationError):
+        DeepAnalysisConfig(truncation_retry_multiplier=0.5)
+
+
+def test_finalization_reduction_allowance_default():
+    from neos.config.settings import settings
+
+    assert settings.config.deep_analysis.finalization_reduction_allowance == 2
+
+
+def test_default_config_does_not_warn_about_the_floor():
+    """기본값에서 보일 경고가 아니다 — 보인다면 산식이나 기본값이 틀린 것이다."""
+    import warnings
+
+    from neos.config.loader import warn_finalization_floor_ratio
+    from neos.config.settings import settings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        warn_finalization_floor_ratio(settings.config.deep_analysis)
+
+    assert [w for w in caught if issubclass(w.category, UserWarning)] == []
+
+
+def test_a_disproportionate_floor_warns():
+    import warnings
+
+    from neos.config.loader import warn_finalization_floor_ratio
+    from neos.config.settings import settings
+
+    config = settings.config.deep_analysis.model_copy(deep=True)
+    config.dev_profile.global_token_cap = 4000  # floor 4400 > 2000
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        warn_finalization_floor_ratio(config)
+
+    messages = [str(w.message) for w in caught]
+    assert any("4400" in m and "4000" in m for m in messages)

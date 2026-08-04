@@ -1,0 +1,269 @@
+# Coding Agent 작업 재개 문서
+
+**작성일:** 2026-07-25
+**작업 위치:** `.worktrees/` 워크트리 격리 방식
+**현재 활성 워크트리:** `.worktrees/managed-sandbox-control-plane` (브랜치 `feature/managed-sandbox-control-plane`)
+**근거:** `docs/superpowers/plans/*coding*`, `*sandbox*`, `*durable*`, git 커밋 이력,
+`.superpowers/sdd/2026-07-25-managed-sandbox-control-plane/progress.md`
+
+> ⚠️ **플랜 문서의 체크박스는 신뢰하지 말 것.** 전 플랜의 `- [x]`가 0개다.
+> 실제 진행 상황은 git 커밋 메시지와 워크트리 내 `.superpowers/sdd/<plan>/progress.md`에만 있다.
+
+---
+
+## 1. 워크트리 현황
+
+```
+/Users/ywsung/Desktop/neos                             370bfff3 [dev]
+/Users/ywsung/Desktop/neos/.worktrees/managed-sandbox-control-plane  89196755 [feature/managed-sandbox-control-plane]  ← 코딩 에이전트
+/Users/ywsung/Desktop/neos/.worktrees/deep-analysis-entailment-eval  f9e4dc5e [codex/deep-analysis-entailment-eval]     ← deep analysis
+/Users/ywsung/Desktop/neos/.worktrees/anthropic-caching-advisor      0fe2fa29 [codex/anthropic-caching-advisor]         ← 방치됨 (아래 §5)
+```
+
+`managed-sandbox-control-plane` 상태: dev 대비 **+11 커밋 / -17 커밋**,
+**미커밋 변경 2개 파일 존재** (`docker_shadow.py` +305줄, `test_docker_shadow.py` +206줄).
+
+---
+
+## 2. Coding Agent 트랙 전체 계보 (완료분)
+
+2026-07-18 ~ 07-25, 14개 플랜. 각 단계는 **durable(내구성) 우선** 원칙으로 쌓였다 —
+"프로세스가 죽어도 상태가 남고, 재접속하면 이어진다"가 일관된 목표다.
+
+| # | 플랜 | 내용 | 상태 |
+|---|---|---|---|
+| 1 | `2026-07-18-neos-coding-phase0.md` | Phase 0 기반, 마이그레이션 038 | ✅ |
+| 2 | `2026-07-18-coding-outbox-dispatcher.md` | outbox 디스패처 | ✅ |
+| 3 | `2026-07-18-coding-production-streaming-hardening.md` | 프로덕션 스트리밍 경화 | ✅ |
+| 4 | `2026-07-19-coding-backend-durability.md` | 내구성 계약, 워커·툴 클레임 펜싱, 원자적 체크포인트 (039) | ✅ |
+| 5 | `2026-07-19-coding-development-supervisor.md` | 개발 슈퍼바이저, 태스크 자동 시작 | ✅ |
+| 6 | `2026-07-19-coding-celery-worker.md` | Celery 워커 런타임 + 디스패처 + 관측 | ✅ |
+| 7 | `2026-07-19-coding-sandbox-foundation.md` | 샌드박스 계약, Docker 스냅샷/재개, 보안 런타임 (040/041) | ✅ |
+| 8 | `2026-07-19-durable-phase-vertical-slice.md` | durable phase 수직 슬라이스 | ✅ |
+| 9 | `2026-07-19-real-model-sandbox-tool-loop.md` | 실 모델 런타임 + 한정 툴 실행 + 안전 한도 | ✅ |
+| 10 | `2026-07-21-coding-tool-approval.md` | 내구성 툴 승인 — 안전 지점, 원자적 해결/만료, 재접속 안전 UI (042) | ✅ |
+| 11 | `2026-07-21-coding-projection-frame-batching.md` | 프레임 단위 프로젝션 배칭 (10k 리플레이 검증) | ✅ |
+| 12 | `2026-07-22-durable-coding-public-text-stream.md` | 펜스된 공개 텍스트 파트 영속화·스트림·브라우저 투영 (043) | ✅ |
+| 13 | `2026-07-23-coding-workspace-gateway.md` | 워크스페이스 게이트웨이 8 tasks (044) | ✅ |
+| 14 | `2026-07-25-managed-sandbox-control-plane.md` | 관리형 샌드박스 컨트롤 플레인 10 tasks (045) | 🔵 **진행 중** |
+
+### 마이그레이션 궤적
+
+```
+038_add_coding_phase0.sql
+039_add_coding_runs_checkpoints.sql
+040_add_coding_execution_leases.sql
+041_add_coding_sandbox_bindings.sql
+042_add_coding_approvals.sql
+043_add_coding_text_parts.sql
+044_add_coding_workspace_edits.sql
+045_add_coding_managed_sandboxes.sql   ← 현재 작업
+```
+
+### 직전 완료: Workspace Gateway (2026-07-23 ~ 07-25)
+
+8개 태스크 전부 커밋됨 — 마지막 커밋 `ebe10721 test(coding): verify workspace gateway recovery`.
+
+1. 내구성 워크스페이스 편집 도메인 + 설정 + 마이그레이션 044
+2. 의도 기반 사용자 편집 변형 · 조정
+3. 정확히 한 번 안전 지점 편집 주입
+4. 소유자 스코프 워크스페이스 REST + 스냅샷 투영
+5. kind 바인딩 watcher + 대화형 PTY WebSocket
+6. 브라우저 워크스페이스 데이터 · 드래프트 · 스트림 스토어
+7. 리사이즈 가능한 파일 · diff · 터미널 dock
+8. Docker 수직 슬라이스 · 운영 · 전체 검증
+
+---
+
+## 3. 🔵 진행 중 — Managed Sandbox Control Plane
+
+**플랜:** `docs/superpowers/plans/2026-07-25-managed-sandbox-control-plane.md` (10 tasks, 1201줄)
+**스펙:** `docs/superpowers/specs/2026-07-25-managed-sandbox-control-plane-design.md`
+**베이스:** `c5f881a4` · **HEAD:** `89196755`
+
+### 목표
+
+기존 `SandboxProvider` / `SandboxSession`은 **실행 데이터 플레인**으로 남긴다.
+별도 `neos.coding.managed` 패키지가 PostgreSQL 원장 · 애플리케이션 서비스 · Celery 조정자 ·
+capability 인식 어댑터로 **admission · 할당 · 헬스 · 아카이브 복구 · 정리**를 소유한다.
+브라우저는 한정된 소유자 스코프 투영만 받고, provider 참조나 raw 에러는 절대 받지 않는다.
+
+### 핵심 설계 원칙 — 의도적 fail-closed
+
+- 선택된 provider가 불가용이면 **신규 태스크 거부**
+- 기존 태스크는 **동일 provider에서만** 재접속·복구
+- **자동 크로스 프로바이더 failover 금지**
+- 크로스 프로바이더 복구는 **검증된 portable 워크스페이스 아카이브에서 운영자 승인 시에만**
+
+**Non-goals:** 자동 provider 선택/비용 최적화, 프로세스·메모리·PTY·소켓 라이브 마이그레이션,
+멀티 에이전트 코디네이터, 일반 아웃바운드 네트워크, 과금 정산, GitHub App 크리덴셜/push/PR 생성,
+provider 스냅샷을 벤더 간 portable로 취급하는 것.
+
+### 태스크 진행 상황
+
+| Task | 내용 | 상태 | 커밋 |
+|---|---|---|---|
+| 1 | 관리형 샌드박스 도메인 · 설정 · 마이그레이션 045 | ✅ 완료 (리뷰 clean) | `c5f881a4..777fdd33` |
+| 2 | 내구성 admission · 쿼터 예약 | ✅ 완료 (리뷰 clean, minor 2건 유예) | `777fdd33..9245d5d5` |
+| 3 | provider 헬스 서킷 · 안정적 에러 매핑 | ✅ 완료 (리뷰 clean) | `9245d5d5..3e3935f1` |
+| 4 | capability 인식 어댑터 포트 · 결정론적 fake 어댑터 | ✅ 완료 | `3e3935f1..89196755` |
+| 5 | 펜스된 할당 · 모호한 결과 복구 · 바인딩 | ⬜ **다음 차례** | — |
+| 6 | 라이프사이클 조정 · 정리 SLO · Celery 전달 | ⬜ | — |
+| 7 | portable 아카이브 · 운영자 승인 복구 | ⬜ | — |
+| 8 | 소유자 투영 · 관리자 제어 API | ⬜ | — |
+| 9 | 브라우저 샌드박스 상태 · 실행 게이팅 | ⬜ | — |
+| 10 | E2B · Modal 벤치마크 어댑터 · 수직 슬라이스 · 운영 | ⬜ | — |
+
+### 현재 코드 구조
+
+```
+neos/coding/managed/
+├── __init__.py
+├── domain.py            # ManagedSandboxState, ProviderCircuitState, transition_allocation (순수)
+├── repository.py        # PostgreSQL 원장
+├── admission.py         # AdmissionRequest, AdmissionPolicy, 쿼터 예약
+├── health.py            # provider 헬스 서킷
+└── adapters/
+    ├── base.py          # ManagedSandboxAdapter 프로토콜, frozen 요청/결과 계약
+    ├── fake.py          # 결정론적 fake + 타입 지정 1회성 결함 주입
+    └── docker_shadow.py # Docker shadow 어댑터 ← 미커밋 변경 있음
+
+tests/coding/managed/
+├── test_domain.py, test_repository.py, test_admission.py, test_health.py
+├── adapters/conformance.py, test_fake.py, test_docker_shadow.py
+└── integration/test_postgres_admission.py
+
+db/migrations/045_add_coding_managed_sandboxes.sql
+```
+
+### Task 1–4에서 내려진 범위 결정 (재개 시 반드시 지킬 것)
+
+원장 `progress.md`에 기록된 결정들:
+
+1. **`transition_allocation`은 순수 함수로 유지.** version/fence 검사는
+   **Task 5의 repository claim/commit에서 필수**로 구현한다.
+2. **provider NotFound 소유권 검증은 Task 6 cleanup 서비스에서 필수.**
+3. **유예된 minor 2건 (Task 2):**
+   - 트랜잭션 쿼터 거부가 admission denial TTL이 아니라 reservation lease에서 재평가 시점을 도출
+   - 내구 `policy_version`이 `AdmissionPolicy.version` 영속화 대신 하드코딩
+4. **유예된 minor 1건 (Task 1):** 마이그레이션이 reservation 타임스탬프/상태 대응을 강제하지 않음
+   → **Task 2 repository 트랜잭션이 이를 유지해야 한다.**
+
+### Task 4 완료 상태 (`89196755`)
+
+- frozen 관리형 할당/결과 계약 + 정확한 async `ManagedSandboxAdapter` 프로토콜
+- 타입 지정 validation / capability / ownership / not-found / timeout 실패
+- 결정론적 fake: 1회성 결함 주입, 명시적 create-then-timeout 모호성, 멱등 재발견,
+  호출 기록·카운터 (Task 5에서 사용)
+- 공유 conformance 스위트: 할당 리플레이, 재발견, inspect, suspend/resume, 검증된 파괴
+- Docker shadow 어댑터: 컨테이너·볼륨 생성에 allocation/idempotency/ownership 라벨 주입,
+  inspect·destroy 전 Docker 메타데이터 검증, 데몬 헬스 프로브
+- Docker는 network mode가 `none`일 때만 네트워크 차단을 선언. allowlist·메모리 스냅샷 미지원 →
+  네트워크 정책을 약화시키는 대신 **요청 자체를 거부**
+- **프로덕션 팩토리 배선은 의도적으로 미변경**
+
+검증: `pytest -q tests/coding/managed/adapters` → **17 passed**, ruff check/format 통과.
+테스트는 `no_db` 마킹, 외부 네트워크·Docker 데몬 불사용.
+
+**Task 4가 남긴 우려 (Task 10 전에 해소 필요):**
+- 현 Docker provider에 공개 관리형 라벨 확장점이 없어, shadow 어댑터가 커맨드 러너를 감싸고
+  private 속성으로 config를 읽는다. shadow 어댑터에 격리되어 있고 프로덕션 팩토리에는 미배선.
+- Docker 멱등성은 단일 어댑터 프로세스 내 동시 호출과 라벨 재발견 기반 재시도에서만 보호된다.
+  기존 Docker provider가 **크로스 프로세스 원자적 create 프리미티브를 노출하지 않는다.**
+  프로덕션 팩토리 채택 전 이것부터 경화해야 한다.
+
+---
+
+## 4. 🔴 재개 전 즉시 확인 — 미커밋 변경의 출처
+
+```bash
+cd /Users/ywsung/Desktop/neos/.worktrees/managed-sandbox-control-plane
+git status --short
+#  M neos/coding/managed/adapters/docker_shadow.py       (+305 −33)
+#  M tests/coding/managed/adapters/test_docker_shadow.py (+206)
+```
+
+변경 내용 (diff 확인 결과): `ManagedAdapterTimeoutError` / `SandboxError` import 추가,
+`CLAIM_TOKEN_LABEL` 신설, 할당 리플레이 로직을 `_replayed_allocation()` 헬퍼로 추출,
+`hashlib`·`uuid` 도입.
+
+**성격:** Task 5(펜스된 할당 · 모호한 결과 복구)의 선행 작업으로 보이나,
+Task 5 브리프·리포트가 생성되지 않았고 원장에도 기록이 없다.
+
+> ⚠️ **이 워크트리에는 "리뷰 후 출처 불명 미커밋 변경 등장" 전례가 두 번 있다.**
+> 원장 9번 줄: *"Task 2: implementer blocked — RED preceded unknown-provenance production
+> files; preserved uncommitted and reassigned for fresh ownership review."*
+> 원장 24번 줄: *"Task 3: BLOCKED — unexpected uncommitted changes appeared in Task 2
+> production and test files after review; ownership must be resolved before dependent work."*
+>
+> 두 번 모두 **의존 작업을 시작하기 전에 소유권을 먼저 해결**하는 것으로 처리했다.
+> 같은 절차를 밟을 것 — 지우지 말고 보존한 채 출처를 판정한 뒤 Task 5로 넘어가라.
+
+### 원장 무결성 문제
+
+`progress.md`가 **두 번 기록되어 있다.** 17번째 줄 빈 줄 이후 Task 1–3이 **다른 커밋
+해시로 다시** 나온다 (예: Task 1 완료가 `c5f881a4..777fdd33`와 `c5f881a4..29ab632d`로 이중).
+두 번째 블록은 `Task 3: BLOCKED`로 끝난다. 재개 시 **어느 계보가 실제인지 git 이력으로
+확정**하고 원장을 정리하라. 커밋 순서상 `591640ce → 29ab632d → 777fdd33 → 79645f2e →
+8b6ef183 → d8f4e2e4 → d308443e → 9245d5d5 → 2d38f1a6 → 3e3935f1 → 89196755`가 실제 이력이다.
+
+---
+
+## 5. ⚠️ 방치된 워크트리 — anthropic-caching-advisor
+
+```
+.worktrees/anthropic-caching-advisor  0fe2fa29 [codex/anthropic-caching-advisor]
+dev 대비: -332 커밋 / +7 커밋   ← 2026-07-11 이후 방치
+```
+
+작업 트리는 clean이고 7개 커밋이 미병합 상태다:
+
+```
+4af72620 feat(config): add Anthropic caching and advisor settings
+e8005ec6 feat(anthropic): add request feature policy
+497bd4f5 feat(anthropic): track cache and advisor cost
+48a51cda feat(chat): enable Anthropic prompt caching
+5b2fb007 fix(chat): read Anthropic streaming usage metadata
+06d8bbd7 feat(chat): add config-controlled Anthropic advisor
+0fe2fa29 perf(retrieval): warm Anthropic document cache
+```
+
+플랜: `docs/superpowers/plans/2026-07-11-anthropic-prompt-caching-advisor.md` (53 steps)
+스펙: `docs/superpowers/specs/2026-07-11-anthropic-prompt-caching-advisor-design.md`
+
+**332 커밋 뒤처져 있어 리베이스 비용이 크다.** 특히 role-based model routing이
+`neos/providers/anthropic.py`와 `neos/utils/llm_factory.py`를 크게 바꿨으므로 충돌이 확실하다.
+**병합할지 폐기할지 결정이 필요하다.** 결정 전까지는 손대지 말 것.
+
+---
+
+## 6. 재개 절차 (Managed Sandbox Task 5)
+
+```bash
+cd /Users/ywsung/Desktop/neos/.worktrees/managed-sandbox-control-plane
+
+# 1) 미커밋 변경 출처 판정 (§4) — 먼저 해결
+git diff neos/coding/managed/adapters/docker_shadow.py
+git diff tests/coding/managed/adapters/test_docker_shadow.py
+
+# 2) 기존 베이스라인 확인
+GOOGLE_API_KEY=test-key /Users/ywsung/Desktop/neos/.venv/bin/pytest -q tests/coding/managed
+/Users/ywsung/Desktop/neos/.venv/bin/ruff check neos/coding/managed tests/coding/managed
+/Users/ywsung/Desktop/neos/.venv/bin/ruff format --check neos/coding/managed tests/coding/managed
+
+# 3) 원장 정리 후 Task 5 착수
+#    - Task 5 필수 구현: repository claim/commit의 version/fence 검사 (Task 1 결정 #1)
+#    - fake 어댑터의 create-then-timeout 모호성 + 호출 카운터를 활용
+```
+
+플랜 Task 5 위치: `docs/superpowers/plans/2026-07-25-managed-sandbox-control-plane.md:553`
+
+---
+
+## 7. 참조
+
+- 최종 수용 게이트: 플랜 `:1201`
+- 관련 문서: [deep_analysis_task_task_resume.md](deep_analysis_task_task_resume.md),
+  [role_based_model_routing_task_resume.md](role_based_model_routing_task_resume.md)
+- SDD 원장: `.worktrees/managed-sandbox-control-plane/.superpowers/sdd/2026-07-25-managed-sandbox-control-plane/`
+- 로드맵: `docs/ROADMAP.md`

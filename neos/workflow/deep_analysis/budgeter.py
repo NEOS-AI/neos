@@ -114,8 +114,22 @@ class Budgeter:
         return picks
 
     async def should_stop(self, ledger) -> bool:
-        if self.token_budget is not None and self.token_budget.exhausted:
-            return True
+        if self.token_budget is not None:
+            # The floor belongs to finalization. Investigation is done once it
+            # is all that remains -- continuing only produces refused
+            # reservations and wasted rounds.
+            #
+            # The comparison is against the viability threshold, not zero:
+            # `reserve` now refuses anything below it, so a budget of (say)
+            # 947 against a 2,048 minimum buys no investigation at all. Every
+            # worker would swallow the refusal via `flush_partial`, make no
+            # progress, and the round would repeat until the stall counter
+            # tripped -- the exact wasted rounds this check exists to avoid.
+            if (
+                self.token_budget.available_for_investigation
+                < self.token_budget.min_viable_output_tokens
+            ):
+                return True
         spent = await ledger.total_spent()
         if spent >= self.global_token_cap:
             return True

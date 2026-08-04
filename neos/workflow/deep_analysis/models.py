@@ -86,6 +86,9 @@ class WorkerResult:
     confidence_clamped_by_source_count: dict[str, int] = field(
         default_factory=dict
     )
+    # entailment 배치가 필터를 적용하지 못하고 원본 claim을 그대로 통과시켰는가.
+    # discard 0건의 두 원인("버릴 게 없었다" / "필터가 안 돌았다")을 가른다.
+    entailment_skipped: bool = False
 
 
 @dataclass

@@ -89,11 +89,26 @@ call_json ── 파싱 실패의 원인을 3분류 ──┬─ 상한에 걸�
 |---|---|---|
 | `worker.py:242` (analysis) | 전파 | 변경 없음 + 확장 재시도 이득 (A3 12건 완화) |
 | `worker.py:459` (repair) | 전파 | 변경 없음 + 확장 재시도 이득 (A4 완화) |
-| `synthesizer.py:227` | 전파 | 변경 없음 |
+| `synthesizer.py:245` | fail-open (bare `except Exception`) | 변경 없음 (§3.1.1 참고) |
 | `orchestrator.py:287` (decompose) | 전파 | 변경 없음 |
 | `orchestrator.py:311` (decompose) | 전파 | 변경 없음 |
 | `graders/agentic.py:93` | fail-open (D14) | **명시적 변경** (§5.1) |
 | `graders/report.py:141` | fail-open (무조건) | **명시적 변경** (§5.2) |
+
+#### 3.1.1 네 번째 fail-open 지점 — `synthesizer.py:245`
+
+원 표는 이 지점을 "전파"로 잘못 적었다. 실제로는 `json_call`을 감싼 bare
+`except Exception:`이 `NodeSummary(confidence=0.0,
+caveats=["node_summary_unparseable"])`로 fail-open한다. 이 except 절은 이번
+작업 이전부터 `JSONParseError`를 이미 잡고 있었으므로 `TruncatedResponseError`가
+그 서브클래스가 되어도 **동작은 바뀌지 않는다** — "코드 변경 없이 그대로"라는
+마이그레이션 주장 자체는 유지된다.
+
+다만 이 지점은 judge·report·entailment에 이어 **네 번째 fail-open 지점**이고,
+지금은 truncation과 진짜 쓰레기 응답이 똑같이 `"node_summary_unparseable"`
+캐비어트로 파일링된다 — D24가 판정 지점에서 없애려는 바로 그 혼동이 노드 요약
+지점에는 그대로 남는다. 이번 작업 범위에서는 `synthesizer.py`를 변경하지
+않는다. 별도 판단이 필요하다.
 
 여덟 번째 지점인 `worker.py:379`(entailment)는 `call_json`이 아니라 `call_llm` +
 `parse_json`을 직접 쓴다. 이미 응답 객체를 손에 쥐고 있어 오늘도 `stop_reason`을 볼 수
@@ -164,6 +179,15 @@ granted_max_output_tokens: int = 0   # 0 = 미상(레거시 카세트)
 별개로 1회 허용되는 추가 시도이며, `retries=0`으로 호출해도 확장은 시도한다 —
 `retries`는 "쓰레기 응답을 몇 번 봐줄 것인가"이고 확장은 "잘린 것을 복구할 것인가"로
 서로 다른 축이다.
+
+⚠️ **디버깅 인체공학 참고 (프로덕션 영향 없음):** cassette 키는 요청 페이로드에서
+파생되고 `max_tokens`가 그 페이로드의 일부다(`llm.py:317-322`, `269-275`). 확장
+재시도는 `max_tokens`를 바꾸므로 그 두 번째 호출은 원래 상한으로 기록된 cassette
+엔트리와 **다른 키**를 요청한다. 그 결과 상한에 걸려 잘렸던 호출을 담은 기존
+cassette를 재생하면, 이번 작업 이전에는 "같은 상한으로 재시도"가 같은 키를 맞혀
+정상 재생됐던 것이 이제는 `KeyError: cassette miss`로 끊긴다. 오늘 이런 cassette를
+재생하는 프로덕션 코드는 없으므로 동작 결함은 아니다 — 다만 §7의 discard-recall
+재측정처럼 옛 cassette를 재사용해 디버깅하려는 사람은 이 차이를 예상해야 한다.
 
 ### 4.3 설정값
 
@@ -265,8 +289,22 @@ recall 손실을 새로 만들어내 측정 대상을 오염시킨다.
 `action` ∈ `retried_ok` | `retried_failed` | `budget_bound`.
 
 `truncation_handled`는 **truncation이 실제로 발생했을 때만** 쓴다. 잘리지 않은 호출까지
-기록하면 정상 경로 전체가 이벤트가 되어 로그를 압도한다. 따라서 `llm_truncated` 1건에
-`truncation_handled` 1건이 대응한다.
+기록하면 정상 경로 전체가 이벤트가 되어 로그를 압도한다.
+
+⚠️ **두 이벤트는 1:1이 아니다.** `llm_truncated`는 `_budgeted_dispatch`가 **잘린 응답마다**
+쓰고, `truncation_handled`는 `call_json`이 **잘린 호출마다** 한 번 쓴다. 확장 재시도가
+다시 잘리는 `retried_failed` 경로에서는 `llm_truncated` 2건에 `truncation_handled` 1건이
+대응한다. `retried_ok`와 `budget_bound`는 1:1이다. 사후 집계에서 두 kind의 개수를
+같다고 가정하면 안 된다.
+
+⚠️ **또 다른 비대칭이 있다: `llm_truncated`만 쓰이고 `truncation_handled`는 전혀
+쓰이지 않는 경로가 존재한다.** `stop_reason == "max_tokens"`이면서도 잘린 텍스트가
+우연히 유효한 JSON으로 파싱되는 응답이다 — `_budgeted_dispatch`는 파싱 성공 여부와
+무관하게 `stop_reason`만 보고 `llm_truncated`를 쓰지만, `call_json`은 파싱이
+성공하면(그리고 이 호출이 확장 재시도가 아니면) `truncation_handled`를 전혀 쓰지
+않고 그대로 성공 반환한다. 그래서 `llm_truncated` 개수가 `truncation_handled`의
+네 가지 action 합계보다 항상 클 수 있다 — 이 차이를 이상 신호로 읽고 "누락된
+`truncation_handled`를 찾는" 순진한 개수 대조를 만들면 안 된다.
 
 ⚠️ 두 이벤트 모두 `TokenBudget`이 작성자이므로 **활성 예산이 없으면 기록되지 않는다**
 (`active_token_budget()` is None). 프로덕션 경로에는 항상 예산이 있으나, 예산을 주입하지

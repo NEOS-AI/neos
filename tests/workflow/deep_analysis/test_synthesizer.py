@@ -176,3 +176,92 @@ async def test_assemble_renders_required_sections_when_budget_exhausts():
     assert "## 한계와 미확인 사항" in report
     assert "## 출처" in report
     assert "전체 심층분석 토큰 상한" in report
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_uses_the_injected_ceiling():
+    """dev는 cap을 15배 줄이면서 합성 상한은 물려받았다.
+
+    상한을 주입받지 못하면 20000 예산에 4000짜리 호출을 세 번 넣게 된다.
+    """
+    seen = []
+
+    async def recording_llm_call(model, prompt, **kw):
+        seen.append(kw["max_tokens"])
+        return LLMResponse(
+            text="보고서", input_tokens=1, output_tokens=1, model=model
+        )
+
+    synth = Synthesizer(
+        FakeLedger(),
+        llm_call=recording_llm_call,
+        synthesis_max_tokens=1200,
+    )
+
+    await synth.assemble(None, [], [])
+
+    assert seen == [1200]
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_falls_back_to_the_global_ceiling():
+    seen = []
+
+    async def recording_llm_call(model, prompt, **kw):
+        seen.append(kw["max_tokens"])
+        return LLMResponse(
+            text="보고서", input_tokens=1, output_tokens=1, model=model
+        )
+
+    synth = Synthesizer(FakeLedger(), llm_call=recording_llm_call)
+
+    await synth.assemble(None, [], [])
+
+    assert seen == [settings.config.deep_analysis.synthesis_max_tokens]
+
+
+@pytest.mark.asyncio
+async def test_reduce_uses_the_injected_ceiling():
+    """§7: 세 호출부(assemble/reduce/reduce_node) 모두 주입된 상한을 써야 한다.
+
+    `assemble`만 검증되어 있었다 -- `reduce`가 여전히 전역 설정을 직접 읽는
+    회귀는 dev 프로파일에서 20000 예산에 4000짜리 호출을 넣는 바로 그 결함을
+    되살린다.
+    """
+    seen = []
+
+    async def recording_llm_call(model, prompt, **kw):
+        seen.append(kw["max_tokens"])
+        return LLMResponse(
+            text="보고서", input_tokens=1, output_tokens=1, model=model
+        )
+
+    synth = Synthesizer(
+        FakeLedger(),
+        llm_call=recording_llm_call,
+        synthesis_max_tokens=1200,
+    )
+
+    await synth.reduce("root0001")
+
+    assert seen == [1200]
+
+
+@pytest.mark.asyncio
+async def test_template_fallback_is_recorded():
+    """예산 고갈로 템플릿으로 떨어지는 것이 성공처럼 보이면 안 된다.
+
+    이 침묵 때문에 synth_pass=0을 알아채는 데 세션 하나가 걸렸다.
+    """
+
+    async def exhausted_llm_call(model, prompt, **kw):
+        raise TokenBudgetExhausted("cap")
+
+    ledger = FakeLedger()
+    synth = Synthesizer(ledger, llm_call=exhausted_llm_call)
+
+    report = await synth.assemble(None, [], [])
+
+    assert report  # 빈손 종료는 없다 (§6.8)
+    kinds = [kind for (kind, _qid, _payload) in ledger.events]
+    assert "report_assembly_degraded" in kinds

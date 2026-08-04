@@ -643,3 +643,22 @@ A2UI의 `UI_FRAME_GENERATOR → END` 단락이 이미 같은 형태의 선례다
 **영향 — D18 선결 조건 3건의 최종 상태:** (1) wall-clock 바운드 → 노드 제거로 **무의미해짐**,
 (2) fail_run 내구성 → 노드 제거로 사라졌고 job 쪽 `_record_failure`가 같은 역할을 이어받음,
 (3) 분류기 intent 미도달 → **D21이 해소**(질의 유형 기반 라우팅).
+
+## D24. truncation은 D14 fail-open의 사유가 아니다 — judge 반려
+
+**결정:** `AgenticGrader.grade`가 `TruncatedResponseError`를 받으면 **mandatory 여부와
+무관하게** `Verdict(ok=False, code="E_UNSUPPORTED", detail="judge_truncated")`로 반려한다.
+`JSONParseError`(비-truncation)에 대한 D14의 미심사 통과는 그대로 유지된다.
+
+**근거:** D14는 "judge가 판정 불가한 응답을 냈다"를 전제로 한 결정이다. truncation은 다르다 —
+판정이 *미완성*일 뿐 부재가 아니다. `20260802T052306Z` 표본에서 잘린 judge 응답 하나는 이미
+`"label": "CONTRADICTS"`를 내뱉은 뒤 잘렸고, 파싱 실패가 D14 fail-open을 발동시켜 **거절이
+승인으로 뒤집혔다.** 저가치 샘플 경로였으므로 D14의 mandatory 예외로도 막히지 않았다.
+
+**이탈:** D14 원결정 중 `judge_unparseable`의 저가치 샘플 fail-open을, 원인이 truncation인
+경우에 한해 철회한다.
+
+**영향:** 반려된 claim은 기존 경로대로 재조사되고 `claim_retry_cap` 소진 시 `unverified`로
+보고서 「한계」 절에 남는다(빈손 종료 없음). **claim funnel 수치가 이동하므로 이전 표본과
+직접 비교할 수 없다** — `docs/TODO_260729.md` E1의 baseline 단절이 한 번 더 발생한다.
+discard recall 재측정(C1)은 이 변경 이후 표본으로 수행해야 두 효과가 섞이지 않는다.

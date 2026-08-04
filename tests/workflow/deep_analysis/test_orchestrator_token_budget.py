@@ -108,6 +108,101 @@ async def test_recovered_orphan_exhaustion_stops_and_emits_once():
     }
 
 
+class FloorLedger:
+    """Never exhausted (tokens remain), but the floor consumes all of them --
+    the case `should_stop` is meant to catch (budgeter.py:121)."""
+
+    def __init__(self):
+        self.events = []
+
+    async def token_budget_state(self):
+        return 0, {}
+
+    async def recover(self):
+        return 0
+
+    async def root_question(self):
+        return SimpleNamespace(id="root", parent_id=None)
+
+    async def total_spent(self):
+        raise AssertionError("a floor stop must short-circuit before this read")
+
+    async def open_questions(self):
+        raise AssertionError("a floor stop must short-circuit before this read")
+
+    async def children(self, _question_id):
+        return []
+
+    async def log(self, kind, qid, payload):
+        self.events.append((kind, qid, payload))
+
+    async def has_event(self, kind):
+        return any(event[0] == kind for event in self.events)
+
+    async def complete_run(self, report_path=None):
+        return None
+
+    async def fail_run(self):
+        raise AssertionError("run unexpectedly failed")
+
+
+@pytest.mark.asyncio
+async def test_investigation_stopped_at_floor_is_recorded_once():
+    """FIX 2: stopping at the floor must leave a trace distinguishable from
+    `token_budget_exhausted`.
+
+    There are 53 recorded `token_budget_exhausted` events; once the floor
+    exists, `should_stop` halts while `remaining_tokens == floor_tokens > 0`
+    (budgeter.py:121), so `token_budget.exhausted` is False and
+    `_mark_token_budget_exhausted` never fires (orchestrator.py:934). Without
+    a replacement, those events trend to zero for a reason unrelated to any
+    real improvement, and a run that stopped clean at the floor becomes
+    indistinguishable from one that simply ran out of open questions.
+    """
+    ledger = FloorLedger()
+    emitted = []
+
+    async def event_sink(kind, payload):
+        emitted.append((kind, payload))
+
+    def forbidden_worker():
+        raise AssertionError("worker must not be created")
+
+    orchestrator = Orchestrator(
+        object(),
+        "run",
+        worker_factory=forbidden_worker,
+        grader=Grader(),
+        ledger=ledger,
+        synthesizer=Synthesizer(),
+        citation_renderer=CitationRenderer(),
+        event_sink=event_sink,
+        global_token_cap=20,
+        finalization_floor_tokens=20,
+    )
+
+    result = await orchestrator.run("root")
+
+    assert result["report_markdown"] == "report"
+    floor_events = [
+        e for e in ledger.events if e[0] == "investigation_stopped_at_floor"
+    ]
+    assert len(floor_events) == 1
+    assert floor_events[0][2] == {
+        "cap_tokens": 20,
+        "consumed_tokens": 0,
+        "reserved_tokens": 0,
+        "floor_tokens": 20,
+    }
+    assert not any(e[0] == "token_budget_exhausted" for e in ledger.events)
+    assert (
+        [kind for kind, _payload in emitted].count(
+            "investigation_stopped_at_floor"
+        )
+        == 1
+    )
+
+
 @pytest.mark.asyncio
 async def test_optional_agentic_exhaustion_keeps_deterministic_verdict():
     class ExhaustedAgentic:

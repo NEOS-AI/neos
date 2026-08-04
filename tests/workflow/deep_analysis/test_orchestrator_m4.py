@@ -289,3 +289,100 @@ async def test_reinvestigation_gate_is_event_based_and_durable(monkeypatch):
     reinvest = [e for e in ledger.events if e[0] == "conflict_reinvestigation"]
     assert len(reinvest) == 1  # still exactly one, from the prior run
     assert ledger.completed
+
+
+class DiagnosticGrader:
+    """Grader that reports the uncited measurements the real one now carries."""
+
+    def __init__(self, ok):
+        self._ok = ok
+
+    async def grade(self, report, root_id):
+        return Verdict(
+            ok=self._ok,
+            code="" if self._ok else "E_REPORT_UNCITED",
+            diagnostics={
+                "uncited_ratio": 0.75,
+                "uncited_assertions": 4,
+                "uncited_count": 3,
+                "uncited_threshold": 0.2,
+            },
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ok", [True, False])
+async def test_report_graded_event_carries_grader_diagnostics(ok):
+    """G2: 156 recorded rejections stored only a code.
+
+    Without the ratio and its denominator on the event there is no telling a
+    threshold that is too tight from reports that are genuinely uncited. The
+    passing case is parametrised too -- logging only rejections leaves a
+    distribution censored at the threshold.
+    """
+    ledger = FakeLedger()
+    orch = _orch(ledger, FakeSynth(), FlakyRenderer(fail_times=0),
+                 grader=DiagnosticGrader(ok=ok))
+
+    await orch._finalize("root0001")
+
+    graded = [p for p in _graded(ledger) if p.get("code") != "E_ORPHAN_CITE"]
+    assert graded
+    assert graded[0]["uncited_ratio"] == 0.75
+    assert graded[0]["uncited_assertions"] == 4
+    assert graded[0]["uncited_count"] == 3
+    assert graded[0]["uncited_threshold"] == 0.2
+
+
+class DegradedJudgeGrader:
+    """Mirrors what `ReportGrader.grade` now returns for a budget-starved
+    judge: `ok=True` (the deterministic pass survives) with a `diagnostics`
+    marker riding along, since `report.py:205`'s `detail` field is never read
+    by the orchestrator's sink below.
+    """
+
+    async def grade(self, report, root_id):
+        return Verdict(
+            ok=True,
+            detail="judge_budget_exhausted",
+            diagnostics={"judge": "budget_exhausted"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_report_graded_event_persists_the_judge_budget_marker():
+    """FIX 1: the existing report-grader test asserted `verdict.detail` in
+    process, which is exactly what let this slip through -- the orchestrator's
+    `report_graded` sink (orchestrator.py:886-902) logs `ok`, `attempt`,
+    `code`, and `**verdict.diagnostics`, and never reads `detail` at all.
+
+    This asserts the marker at the level that actually matters: what lands in
+    the ledger's `report_graded` event, not what the grader returns in
+    memory. Before the fix, this payload was byte-identical to a judge that
+    ran and approved.
+    """
+    ledger = FakeLedger()
+    orch = _orch(
+        ledger, FakeSynth(), FlakyRenderer(fail_times=0),
+        grader=DegradedJudgeGrader(),
+    )
+
+    await orch._finalize("root0001")
+
+    graded = _graded(ledger)
+    assert graded == [{"ok": True, "attempt": 0, "judge": "budget_exhausted"}]
+
+
+@pytest.mark.asyncio
+async def test_report_graded_omits_diagnostics_when_the_grader_reports_none():
+    """The orphan-citation path never reached the gate, so it measured
+    nothing -- an empty diagnostics dict must not add empty keys."""
+    ledger = FakeLedger()
+    orch = _orch(ledger, FakeSynth(), FlakyRenderer(fail_times=1),
+                 grader=OkGrader())
+
+    await orch._finalize("root0001")
+
+    assert _graded(ledger)[0] == {
+        "ok": False, "code": "E_ORPHAN_CITE", "attempt": 0
+    }

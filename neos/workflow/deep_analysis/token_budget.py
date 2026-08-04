@@ -14,6 +14,20 @@ from uuid import uuid4
 
 PersistEvent = Callable[[str, dict[str, Any]], Awaitable[None]]
 
+# Stages that run after investigation is over: hierarchical reduction, report
+# assembly, and the report judgement. They are the only callers allowed to
+# draw on the reserved floor.
+#
+# The budget layer knowing stage names is a deliberate coupling. Threading an
+# `is_finalization` flag from each call site through call_llm / call_json /
+# call_messages / _budgeted_dispatch would touch every caller; one constant is
+# explicit, testable, and lives in a single place.
+FINALIZATION_STAGES = frozenset({
+    "node_reduction",
+    "report_assembly",
+    "report_grading",
+})
+
 
 class TokenBudgetExhausted(RuntimeError):
     """Raised when no output token can be reserved within the hard cap."""
@@ -56,9 +70,15 @@ class TokenBudget:
         consumed_tokens: int = 0,
         outstanding: Mapping[str, int] | None = None,
         persist: PersistEvent | None = None,
+        floor_tokens: int = 0,
+        min_viable_output_tokens: int = 1,
     ) -> None:
         if cap_tokens < 0 or consumed_tokens < 0:
             raise ValueError("token counts must be non-negative")
+        if floor_tokens < 0:
+            raise ValueError("floor_tokens must be non-negative")
+        if min_viable_output_tokens < 1:
+            raise ValueError("min_viable_output_tokens must be positive")
         recovered = dict(outstanding or {})
         if any(amount < 0 for amount in recovered.values()):
             raise ValueError("outstanding token counts must be non-negative")
@@ -66,6 +86,8 @@ class TokenBudget:
         self._consumed_tokens = consumed_tokens
         self._outstanding = recovered
         self._persist = persist
+        self.floor_tokens = floor_tokens
+        self.min_viable_output_tokens = min_viable_output_tokens
         self._lock = asyncio.Lock()
 
     @property
@@ -79,6 +101,16 @@ class TokenBudget:
     @property
     def remaining_tokens(self) -> int:
         return self.cap_tokens - self.consumed_tokens - self.reserved_tokens
+
+    @property
+    def available_for_investigation(self) -> int:
+        """Remaining tokens that non-finalization stages may reserve.
+
+        The floor is what stops the investigation loop from consuming the
+        whole cap and leaving report assembly and grading to fail open --
+        which is what every recorded run did before this existed.
+        """
+        return max(0, self.remaining_tokens - self.floor_tokens)
 
     @property
     def exhausted(self) -> bool:
@@ -97,11 +129,26 @@ class TokenBudget:
 
         input_bound = conservative_input_bound(request)
         async with self._lock:
-            output_tokens = min(
-                max_output_tokens,
-                self.remaining_tokens - input_bound,
+            ceiling = (
+                self.remaining_tokens
+                if stage in FINALIZATION_STAGES
+                else self.available_for_investigation
             )
-            if output_tokens < 1:
+            output_tokens = min(max_output_tokens, ceiling - input_bound)
+            # A grant of >= 1 token used to count as a successful reservation.
+            # It is not: a 25-token grant for a JSON prompt truncates with
+            # certainty, and (since truncation became a hard error) takes the
+            # whole run down with it -- 5 of 5 dev runs died this way on
+            # 2026-08-04. Refuse the doomed call instead. `run` already
+            # catches TokenBudgetExhausted around the investigation loop and
+            # falls through to `_finalize`, so refusing here ends the
+            # investigation cleanly and lets the floor be spent on the report.
+            #
+            # Clamped by the caller's own request so a deliberately small
+            # `max_output_tokens` stays legal: the threshold exists to catch
+            # budget-starved grants, not modest ones.
+            viability = min(max_output_tokens, self.min_viable_output_tokens)
+            if output_tokens < viability:
                 raise TokenBudgetExhausted("deep-analysis token budget exhausted")
 
             reservation = TokenReservation(
@@ -193,6 +240,49 @@ class TokenBudget:
                     "model": model,
                     "max_output_tokens": max_output_tokens,
                     "output_tokens": output_tokens,
+                },
+            )
+
+    async def record_truncation_handled(
+        self,
+        *,
+        stage: str,
+        model: str,
+        requested: int,
+        granted: int,
+        action: str,
+    ) -> None:
+        """Record what was done about a truncated response.
+
+        `llm_truncated` says a response was cut; this says whether the cut
+        was recoverable. Without it, a run that produced no discards cannot
+        be told apart from one whose filter never ran -- which is exactly
+        what left the discard-recall measurement inconclusive twice.
+
+        This is written once per truncated `call_json` invocation, not once
+        per truncated provider response -- `llm_truncated` fires on every
+        attempt that hits its ceiling, but a "retried_failed" outcome means
+        *two* attempts truncated (the original and the expanded retry) for
+        one of these. Only "retried_ok" and "budget_bound" are 1:1 with
+        `llm_truncated`. After-the-fact aggregation must join on `action` to
+        get the count right, not assume a flat 1:1 pairing.
+
+        `requested` is always the original ceiling of the call; `granted` is
+        the allowance of the *final* attempt (the expanded one, if a retry
+        ran). On a "retried_failed" outcome `granted` can therefore exceed
+        `requested` -- that reflects the expanded ceiling, not a bug.
+
+        Payload carries counts and identifiers only — never response text.
+        """
+        async with self._lock:
+            await self._persist_event(
+                "truncation_handled",
+                {
+                    "stage": stage,
+                    "model": model,
+                    "requested": requested,
+                    "granted": granted,
+                    "action": action,
                 },
             )
 

@@ -65,9 +65,12 @@ class Orchestrator:
         llm_client=None,
         cassette=None,
         global_token_cap: int | None = None,
+        finalization_floor_tokens: int = 0,
+        min_viable_output_tokens: int = 1,
         parallel_workers: int | None = None,
         max_depth: int | None = None,
         max_stall_rounds: int | None = None,
+        synthesis_max_tokens: int | None = None,
     ) -> None:
         self.db = session
         self.run_id = run_id
@@ -80,6 +83,7 @@ class Orchestrator:
             self.ledger,
             llm_client=llm_client,
             cassette=cassette,
+            synthesis_max_tokens=synthesis_max_tokens,
         )
         self.citation_renderer = citation_renderer or CitationRenderer(
             self.ledger
@@ -94,6 +98,16 @@ class Orchestrator:
             if global_token_cap is None
             else global_token_cap
         )
+        # Injected, never computed here: integration and golden tests build
+        # this orchestrator with caps as small as 1000, and a floor derived
+        # from global config would leave those runs no investigation budget
+        # at all. service.py computes it from the resolved profile.
+        self.finalization_floor_tokens = finalization_floor_tokens
+        # Injected for the same reason as the floor above: a golden test with
+        # a 1,000-token cap would have every reservation refused by the
+        # shipped 2,048 default. Defaults to 1 -- the pre-2026-08-04
+        # behaviour -- so only service.py opts real runs in.
+        self.min_viable_output_tokens = min_viable_output_tokens
         config = settings.config.deep_analysis
         self.parallel_workers = (
             config.parallel_workers if parallel_workers is None else parallel_workers
@@ -119,7 +133,12 @@ class Orchestrator:
         # prevents a shared dependency outage from expanding that tree.
         self._all_failed_rounds = 0
         self._token_budget_exhausted_logged = False
-        self.token_budget = TokenBudget(self.global_token_cap)
+        self._investigation_stopped_at_floor_logged = False
+        self.token_budget = TokenBudget(
+            self.global_token_cap,
+            floor_tokens=self.finalization_floor_tokens,
+            min_viable_output_tokens=self.min_viable_output_tokens,
+        )
         self.budgeter = Budgeter(
             global_token_cap=self.global_token_cap,
             max_depth=self.max_depth,
@@ -155,6 +174,8 @@ class Orchestrator:
             consumed_tokens=consumed,
             outstanding=outstanding,
             persist=self._persist_token_budget,
+            floor_tokens=self.finalization_floor_tokens,
+            min_viable_output_tokens=self.min_viable_output_tokens,
         )
         self.budgeter.token_budget = self.token_budget
 
@@ -174,6 +195,38 @@ class Orchestrator:
         await self._checkpoint()
         await self._emit("token_budget_exhausted", payload)
         self._token_budget_exhausted_logged = True
+
+    async def _mark_investigation_stopped_at_floor(self) -> None:
+        """Record that the investigation loop stopped because only the
+        finalization floor remained -- not because the cap was exhausted.
+
+        Before the floor existed, every run spent the cap to ~97% and
+        `token_budget_exhausted` was the only signal available. Now
+        `should_stop` (budgeter.py) halts earlier, at the floor, so that
+        event stops firing for a reason unrelated to any real improvement --
+        and without a replacement, a run that stopped clean at the floor is
+        indistinguishable from one where investigation simply ran out of
+        open questions. Payload carries counts only, mirroring
+        `token_budget_exhausted` -- never report or response text.
+        """
+        if self._investigation_stopped_at_floor_logged:
+            return
+        has_event = getattr(self.ledger, "has_event", None)
+        if has_event is not None and await has_event(
+            "investigation_stopped_at_floor"
+        ):
+            self._investigation_stopped_at_floor_logged = True
+            return
+        payload = {
+            "cap_tokens": self.token_budget.cap_tokens,
+            "consumed_tokens": self.token_budget.consumed_tokens,
+            "reserved_tokens": self.token_budget.reserved_tokens,
+            "floor_tokens": self.token_budget.floor_tokens,
+        }
+        await self.ledger.log("investigation_stopped_at_floor", None, payload)
+        await self._checkpoint()
+        await self._emit("investigation_stopped_at_floor", payload)
+        self._investigation_stopped_at_floor_logged = True
 
     async def _grade(self, claim, value_est):
         """Two-stage grading: deterministic tier first; only claims that pass
@@ -654,6 +707,18 @@ class Orchestrator:
                 assignment.question_id
             )
             await self.ledger.commit_blobs(result.blobs)
+            # P2: the worker has no ledger, so it flags the skip on its result
+            # and the single writer records it here -- the same shape the
+            # discarded-claim loop below already uses.
+            if result.entailment_skipped:
+                await self.ledger.log(
+                    "entailment_filter_skipped",
+                    result.question_id,
+                    {
+                        "claim_count": len(result.claims),
+                        "reason": "entailment_unavailable",
+                    },
+                )
             # Recall measurement: entailment drops claims before grading, so
             # they never reach the claims table. Record them here — blobs are
             # already committed above, so phase 2 can re-grade offline.
@@ -853,18 +918,28 @@ class Orchestrator:
                 if self.report_grader is not None
                 else Verdict(ok=True)
             )
+            # The gate's own measurements ride along so the threshold can be
+            # evaluated after the fact. Spread rather than nested: an event
+            # consumer aggregating these should not have to know they were
+            # once a sub-object. Empty when the grader measured nothing, and
+            # then nothing is added.
             if verdict.ok:
                 await self.ledger.log(
                     "report_graded",
                     root_id,
-                    {"ok": True, "attempt": attempt},
+                    {"ok": True, "attempt": attempt, **verdict.diagnostics},
                 )
                 await self.ledger.complete_run()
                 return report
             await self.ledger.log(
                 "report_graded",
                 root_id,
-                {"ok": False, "code": verdict.code, "attempt": attempt},
+                {
+                    "ok": False,
+                    "code": verdict.code,
+                    "attempt": attempt,
+                    **verdict.diagnostics,
+                },
             )
 
         # Cap exhausted — no empty-handed exit (§6.8): attach a failure
@@ -899,6 +974,18 @@ class Orchestrator:
 
                 if self.token_budget.exhausted:
                     await self._mark_token_budget_exhausted()
+                elif (
+                    self.token_budget.available_for_investigation
+                    < self.token_budget.min_viable_output_tokens
+                ):
+                    # Stopped at the floor with headroom left in the cap --
+                    # the case the floor exists to produce, and the case
+                    # that must not look like silent success.
+                    #
+                    # Mirrors `Budgeter.should_stop`: the stop happens at the
+                    # viability threshold, so testing `<= 0` here would leave
+                    # the ordinary floor stop unrecorded.
+                    await self._mark_investigation_stopped_at_floor()
 
                 report = await self._finalize(root_id)
                 await self._checkpoint()

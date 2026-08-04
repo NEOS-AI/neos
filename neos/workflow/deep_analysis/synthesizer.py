@@ -20,12 +20,22 @@ class Synthesizer:
         json_call=call_json,
         llm_client=None,
         cassette=None,
+        synthesis_max_tokens: int | None = None,
     ) -> None:
         self.ledger = ledger
         self.llm_call = llm_call
         self.json_call = json_call
         self.llm_client = llm_client
         self.cassette = cassette
+        # None means "use the global default" so every existing construction
+        # site keeps working; service.py passes the profile-resolved value.
+        self._synthesis_max_tokens = synthesis_max_tokens
+
+    @property
+    def synthesis_max_tokens(self) -> int:
+        if self._synthesis_max_tokens is not None:
+            return self._synthesis_max_tokens
+        return settings.config.deep_analysis.synthesis_max_tokens
 
     async def reduce(self, root_id: str) -> str:
         root = await self.ledger.root_question()
@@ -82,7 +92,7 @@ class Synthesizer:
         response = await self.llm_call(
             synth_model,
             prompt,
-            max_tokens=config.synthesis_max_tokens,
+            max_tokens=self.synthesis_max_tokens,
             client=self.llm_client,
             cassette=self.cassette,
             stage="report_assembly",
@@ -142,12 +152,21 @@ class Synthesizer:
             response = await self.llm_call(
                 synth_model,
                 prompt,
-                max_tokens=config.synthesis_max_tokens,
+                max_tokens=self.synthesis_max_tokens,
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="report_assembly",
             )
         except TokenBudgetExhausted:
+            # Falling back to a template is correct -- no empty-handed exit
+            # (§6.8) -- but it must not look like success. Every recorded run
+            # took this path and nothing said so.
+            qid = root_summary.question_id if root_summary is not None else ""
+            await self.ledger.log(
+                "report_assembly_degraded",
+                qid,
+                {"reason": "token_budget_exhausted"},
+            )
             return self.deterministic_report(
                 root_summary,
                 child_summaries,
@@ -227,7 +246,7 @@ class Synthesizer:
             data, resp = await self.json_call(
                 synth_model,
                 prompt,
-                max_tokens=config.synthesis_max_tokens,
+                max_tokens=self.synthesis_max_tokens,
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="node_reduction",

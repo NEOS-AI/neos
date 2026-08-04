@@ -634,6 +634,14 @@ class DeepAnalysisDevProfileConfig(StrictConfigModel):
     global_token_cap: int = 20000
     parallel_workers: int = 2
     max_depth: int = 2
+    # dev shrinks the budget 15x (300000 -> 20000) but inherited a synthesis
+    # ceiling sized for the full profile, which is why the finalization floor
+    # did not fit: three 4000-token calls against a 20000 cap.
+    #
+    # 1200 is measured, not chosen for roundness -- node_reduction's actual
+    # consumption ran a median of 1109 tokens INCLUDING input, at granted
+    # ceilings whose median was 748.
+    synthesis_max_tokens: int = 1200
 
 
 class DeepAnalysisDiscardRecallConfig(StrictConfigModel):
@@ -756,7 +764,71 @@ class DeepAnalysisConfig(StrictConfigModel):
     # is not, the call site fails closed. The alternative, requesting all
     # remaining headroom, lets one worker monopolise the dev profile's
     # global_token_cap of 20000 across parallel_workers=2 and starve its peer.
-    truncation_retry_multiplier: float = 2.0
+    #
+    # gt=1.0 because a multiplier at or below 1.0 would not expand the
+    # retry's ceiling at all -- it terminates safely but is meaningless.
+    truncation_retry_multiplier: float = Field(default=2.0, gt=1.0)
+    # The report judge returns {"answers_question", "strength_ok", "rationale"}
+    # -- a shape as small as the claim judge's, and it runs on the same model
+    # (service.py resolves both from role="everyday").
+    #
+    # This was hardcoded at 400 in report.py. No truncation has ever been
+    # observed at stage="report_grading", but that is not evidence the ceiling
+    # is adequate: the deterministic gate rejects before the judge is called in
+    # 52 of 61 recorded runs, so the call itself is rare. The relevant evidence
+    # comes from the sibling stage -- claim_grading truncated four times at a
+    # cap of 300 on the same model, because adaptive thinking (llm.py) spends
+    # the ceiling invisibly. 400 sits between that observed failure and the 800
+    # the claim judge now uses.
+    #
+    # Aligned with judge_max_output_tokens rather than raised independently:
+    # two judges with the same output shape on the same model should not drift
+    # apart for no measured reason.
+    report_judge_max_output_tokens: int = 800
+    # Share of "factual assertion" sentences allowed to carry no footnote
+    # before the report is rejected. Was a module literal in report.py.
+    #
+    # This is the single most consequential gate in the harness by measured
+    # effect: it accounts for all 156 recorded report rejections, and 52 of
+    # 61 runs never got past it. Whether 0.20 is right is genuinely open --
+    # the reports may be badly cited, or the threshold may be too tight --
+    # and that cannot be settled until the ratios themselves are recorded
+    # (see report_graded diagnostics). The value is unchanged pending that
+    # evidence; it is a setting so the answer can be acted on.
+    report_uncited_ratio_max: float = Field(default=0.20, gt=0.0, le=1.0)
+
+    # How many node_reduction calls the finalization floor budgets for.
+    #
+    # Measured: node_reduction runs a median of 2 times per run (max 9). Runs
+    # with deeper trees will see their last reductions clamped, but assembly
+    # and the judge survive -- which is the point of the reserve. Budgeting
+    # for the observed maximum of 9 would put the floor at 40,800, more than
+    # twice the dev profile's entire cap.
+    finalization_reduction_allowance: int = Field(default=2, ge=1)
+
+    # Fraction of a profile's global_token_cap above which the finalization
+    # floor is judged to be crowding out investigation. Not expected to fire
+    # on the shipped defaults -- the floor is 4.3% of the default profile's
+    # cap and 22% of dev's -- so this is a backstop for a profile tuned into
+    # a corner, not a signal for normal operation.
+    finalization_floor_warn_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
+
+    # Smallest output grant `TokenBudget.reserve` will issue rather than refuse.
+    #
+    # A reservation used to succeed on >= 1 token. Measured 2026-08-04: all 5
+    # dev runs of the funnel sample died because grants of 25, 38, 851, and
+    # 1,123 tokens were issued for prompts needing far more, truncated, and
+    # (truncation now being a hard error) failed the whole run.
+    #
+    # Derived from the same sample's SUCCESSFUL split_decompose calls, which
+    # consumed 1,229 / 1,460 / 1,903 / 2,044 output tokens. 2048 covers that
+    # observed range, so a grant below it is one the stage has never been
+    # seen to complete within. It is not a truncation guarantee -- nothing at
+    # this layer can be -- it removes the catastrophic tail.
+    #
+    # `reserve` clamps this by the caller's own `max_output_tokens`, so stages
+    # that deliberately ask for less (the report judge asks 800) are unaffected.
+    min_viable_output_tokens: int = Field(default=2048, ge=1)
 
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
@@ -818,6 +890,23 @@ class DeepAnalysisConfig(StrictConfigModel):
     # 워커/게이트웨이 슬롯을 잡아먹지 않게 하는 상한이다. 클라이언트는
     # 마지막 seq를 ?after=로 넘겨 재접속하면 이어서 받는다.
     events_stream_idle_timeout: float = 300.0
+
+    def finalization_floor_tokens(self, synthesis_max_tokens: int) -> int:
+        """Reserve for the 3 finalization stages: node_reduction × allowance,
+        one assembly, and the report judge.
+
+        Shared by `neos/config/loader.py`'s `warn_finalization_floor_ratio`
+        (checks this against `global_token_cap` at config-load time) and
+        `neos/workflow/deep_analysis/service.py`'s `build_orchestrator` (the
+        floor actually enforced by `TokenBudget`). Kept as one method, not two
+        independent expressions, so a future change to the formula cannot
+        silently leave the warning describing a floor that is no longer in
+        force.
+        """
+        return (
+            (self.finalization_reduction_allowance + 1) * synthesis_max_tokens
+            + self.report_judge_max_output_tokens
+        )
 
 
 class RayConfig(StrictConfigModel):
