@@ -3,7 +3,8 @@
 **작성일:** 2026-08-04
 **작업 브랜치:** `dev` (worktree 없이 직접 작업 중)
 **범위:** `neos/workflow/deep_analysis/` 하네스와 `neos/config/model_routing.py` 계열의
-모델 라우팅 — 두 트랙의 로드맵, 진행 경과, 미해결 이슈, 실행 순서, 최종 방향성
+모델 라우팅, 그리고 두 트랙을 소비하는 프론트엔드(`web/`) — 세 트랙의 로드맵,
+진행 경과, 미해결 이슈, 실행 순서, 최종 방향성
 
 **근거 문서 (이 문서는 이들의 종합이며 대체가 아니다):**
 
@@ -13,6 +14,7 @@
 | [deep_analysis_task_task_resume.md](archive/deep_analysis_task_task_resume.md) | 하네스 작업 계보와 재개 절차 |
 | [role_based_model_routing_task_resume.md](archive/role_based_model_routing_task_resume.md) | 라우팅 작업 결과와 잔여 이슈 |
 | [TODO_260729.md](TODO_260729.md) | 미해결 백로그 원장 — A·B·C·D·E·F·G 계열 실측 수치 |
+| [FE_AUDIT_260717.md](FE_AUDIT_260717.md) | 프론트엔드 감사 — §6이 job 서비스 전환 준비도를 판정 (트랙 C의 기준선) |
 | `neos/workflow/deep_analysis/DECISIONS.md` | 결정 원장 D1–D23 |
 
 > ⚠️ **진행 상황의 근거 규칙.** 플랜 문서(`docs/superpowers/plans/*`)의 체크박스는
@@ -28,6 +30,7 @@
 |---|---|---|
 | **A. 심층분석 하네스** | 🟡 코어 완성, **산출물 미달** | 마무리 단계가 예산을 받아 LLM 리포트를 실제로 내는 것 (G6·G7) |
 | **B. 역할 기반 모델 라우팅** | ✅ 완료 · 안정 | 유지보수 모드. 카탈로그 불변식 지키기 |
+| **C. 프론트엔드** | ✅ job 마이그레이션 완료, 🟡 **가시성 갭** | 새 실패 이벤트 6종이 UI에 라벨 없이 흘러간다 (§5.2) |
 
 **트랙 A 한 줄 요약 (2026-08-04 실측):**
 사용자에게 나간 deep-analysis 리포트 중 **LLM이 작성한 것은 아직 0건이다.**
@@ -40,8 +43,15 @@ G8 수정 후 재측정에서도 6/6 run이 전부 `Synthesizer.deterministic_re
 `neos/config/models.yaml` 단일 원천으로 모였고, 배포 *정책*(`model_routing`)과
 분리돼 있다. 백엔드 2234 passed / 0 failed, 게이트웨이 5/5, 프론트 `tsc` clean.
 
+**트랙 C 한 줄 요약 (2026-08-04 실측):**
+`docs/FE_AUDIT_260717.md` §6이 "미준비"로 판정했던 job 서비스 전환 차단 요인
+**5개가 전부 해소**됐다 — run 스트림 프록시·커서 재구독·active-run-store가
+약 1,665줄로 구현돼 있고 `pnpm test:source` 147 passed. 남은 것은 기능이 아니라
+**가시성**이다: 08-02~04에 추가한 실패 이벤트 6종에 FE 라벨이 없다.
+
 **기본 플래그:** `deep_analysis.enabled = False` (`neos/config/schema.py:613`).
-즉 두 트랙 모두 **프로덕션 기본 경로에는 아직 없다.**
+즉 세 트랙 모두 **프로덕션 기본 경로에는 아직 없다** — 프론트엔드 UI도 백엔드가
+job을 dispatch해야 살아나므로 이 플래그에 함께 묶여 있다.
 
 ---
 
@@ -62,7 +72,7 @@ G8 수정 후 재측정에서도 6/6 run이 전부 `Synthesizer.deterministic_re
 
 ### 2.2 `enabled = True`로 전환하기 위한 출하 기준
 
-아래 5개가 전부 참이 되기 전에는 기본 활성화하지 않는다.
+아래 6개가 전부 참이 되기 전에는 기본 활성화하지 않는다.
 
 | # | 기준 | 현재 | 측정 방법 |
 |---|---|---|---|
@@ -71,6 +81,10 @@ G8 수정 후 재측정에서도 6/6 run이 전부 `Synthesizer.deterministic_re
 | S3 | 리포트 본문이 보존된다 | ❌ `report_path` 574 run 전부 NULL | reports 테이블 |
 | S4 | 정지 사유가 원장에서 정확히 구분된다 | ⚠️ 6건 중 4건 오분류 (G9) | `token_budget_exhausted` vs `investigation_stopped_at_floor` |
 | S5 | 전체 스위트가 CI에서 결정론적으로 통과한다 | ⚠️ 선결 3건 (#9·#10·#11) | CI 워크플로 |
+| S6 | 실패가 사용자에게도 보인다 (원장뿐 아니라 UI에서) | ❌ 실패 이벤트 6종에 FE 라벨 없음 | `progress.ts`의 `activityLabel()` 커버리지 |
+
+> S6은 나중에 추가됐다(2026-08-04, 트랙 C 확인 중). S1~S5를 다 채워도 사용자가
+> 여전히 강등을 모른다면 "조용한 실패"를 고쳤다고 할 수 없기 때문이다.
 
 ### 2.3 절대 타협하지 않는 것
 
@@ -78,7 +92,7 @@ G8 수정 후 재측정에서도 6/6 run이 전부 `Synthesizer.deterministic_re
 특히 아래 넷은 지금까지의 모든 사고에서 방어선 역할을 했다.
 
 - **P2 단일 작성자** — 원장 쓰기는 오케스트레이터 한 곳
-- **judge ≠ worker** — 자기 승인 편향 방지 (지금 위반 중, §5 E3 참조)
+- **judge ≠ worker** — 자기 승인 편향 방지 (지금 위반 중, §6 E3 참조)
 - **append-only 이벤트 로그** — UPDATE/DELETE 금지 (D8)
 - **매직넘버 금지** — 전부 settings. 프롬프트는 전부 파일
 
@@ -242,7 +256,82 @@ G5(마무리 예산 floor)는 조사가 마무리 몫을 침범하지 못하게 
 
 ---
 
-## 5. 두 트랙의 접점 — 잊기 쉬운 곳
+## 5. 트랙 C — 프론트엔드
+
+### 5.1 job 서비스 마이그레이션은 **완료돼 있다**
+
+`docs/FE_AUDIT_260717.md` §6은 D22/D23 계약 전환에 대한 프론트엔드 준비도를
+**"낮음 (미준비)"**로 판정하고 차단 요인 5개를 지목했다. 확인 결과 **다섯 개 전부
+해소됐다.**
+
+| FE 감사 §6 차단 요인 | 현재 |
+|---|---|
+| 🔴 AC6 늦은 접속 시 전체 이력 재생을 받을 구조가 없다 | ✅ `lib/deep-analysis/reader.ts` + seq 커서. `after=0`이면 진행 중 run도 처음부터 재생 |
+| 🔴 run_id를 담을 곳이 없다 (FE는 conversation_id 단일 키) | ✅ `lib/deep-analysis/active-run-store.ts` |
+| 🔴 `maxDuration = 60`이 장시간 job 스트림과 충돌 | ✅ 전용 라우트가 `maxDuration = 300`. 끊겨도 커서로 재구독 |
+| 🟡 스트림 소비가 `POST /api/chat` 응답에 강결합 | ✅ 독립 **GET 전용** 프록시 라우트로 분리 |
+| 🟡 스트리밍 로직에 단위 테스트 0개 | ✅ `tests/source/deep-analysis-*.test.ts` 5개 파일 630줄 |
+
+구현 규모는 약 1,665줄이다 (`lib/deep-analysis/` 671 + `hooks/use-deep-analysis-stream.ts`
+194 + `components/deep-analysis-status.tsx` 170 + 테스트 630).
+
+**FE↔BE 계약 일치 확인:**
+`web/app/(chat)/api/deep-analysis/[runId]/events/route.ts` →
+`GET /api/v1/deep-analysis/{run_id}/events?after=N`
+(`neos/api/handlers/deep_analysis_handlers.py:148`). 커서 파라미터·소유자 검사(비소유
+404)·SSE 헤더가 양쪽에서 일치한다.
+
+> 📌 **설계 판단 하나가 특히 좋다.** 프록시 라우트에 **POST가 없다.** 재접속은
+> 커서를 든 GET일 뿐이고, job 재제출 경로를 프론트에 두지 않는 것이 FE 감사 §4.2
+> **재과금 사고**(`autoResume`가 재개가 아니라 재실행이었다)의 재발 방지책이다.
+> 이 구조를 되돌리지 말 것.
+
+**검증 상태:** `pnpm --dir web test:source` **147 passed / 0 failed** (2026-08-04 실행).
+로드맵 초안과 라우팅 문서가 적은 "141/141"은 낡은 수치다.
+
+### 5.2 🔴 남은 갭 — 새 가시성 이벤트가 UI에 도달하지 않는다
+
+FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 kind는
+14종이다. **2026-08-02~04에 추가된 "조용한 실패를 보이게 만드는" 이벤트는 하나도
+포함돼 있지 않다.**
+
+| 이벤트 | 추가 시점 | FE 라벨 |
+|---|---|---|
+| `report_assembly_degraded` | 08-03 (G5) | ❌ 없음 |
+| `investigation_stopped_at_floor` | 08-03/08-04 (G5·G8) | ❌ 없음 |
+| `judge_budget_exhausted` | 08-03 (G5) | ❌ 없음 |
+| `llm_truncated` · `truncation_handled` | 08-02 (A2) | ❌ 없음 |
+| `entailment_filter_skipped` | 08-02 (A2) | ❌ 없음 |
+| `claim_discarded` | 07-27 | ❌ 없음 |
+
+**동작은 안전하다** — 모르는 kind도 커서를 전진시키고 라벨만 `null`을 반환한다
+(`progress.ts:148-153`의 명시적 설계: "모르는 이벤트 때문에 커서가 멈추면 재구독이
+영원히 같은 지점을 다시 읽는다"). **깨지지 않지만 보이지 않는다.**
+
+**왜 문제인가.** §3.2에 적은 이 구간의 주제가 "고치기 전에 보이게 만든다"였는데,
+그 가시성이 **원장에서 멈춘다.** 사용자는 여전히 리포트가 템플릿으로 강등된 것을
+알 수 없다 — 정확히 이 작업이 없애려던 상태다.
+
+> ⚠️ FE는 `synth_pass`와 `report_graded`는 **이미 인식한다**(`progress.ts:133,136`).
+> 즉 W1이 성공하면 그 성과는 FE에 자동으로 나타난다. 반대로 **실패 경로만 보이지
+> 않는다** — 성공만 보이고 실패는 침묵하는 비대칭이다.
+
+### 5.3 프론트엔드 잔여 (TODO §12~14 재확인)
+
+| TODO | 원 서술 | 2026-08-04 실측 |
+|---|---|---|
+| #14 | `chat/route.ts`의 `maxDuration = 60` | ⚠️ **그대로 존재** (`route.ts:12`). 심층분석은 전용 라우트(300)를 쓰므로 무해하나 다른 장시간 챗 경로에는 위험 |
+| #13 | `prompt-input.tsx:67` 첨부만 있는 메시지가 400 | ❓ **경로가 사라졌다.** 현재는 `components/elements/`·`components/ai-elements/`로 재구성됨. 신규 경로에서 재확인 필요 |
+| #12 | `examples/document_api_example.py` 죽은 경로 | ❓ **파일이 존재하지 않는다.** 항목 자체가 무의미해졌을 가능성 — 삭제 확인 필요 |
+
+`docs/FE_AUDIT_260717.md`의 🔴 5건은 전부 해소됐고, 남은 것은 §3.5·§4.3~4.6의
+🟡 항목들이다(스트림 재연결·SSE 파서 이중화·런타임 검증 부재). **단 그 감사는
+2026-07-17 기준이며 §1이 "나머지 항목은 재확인하지 않았다"고 명시한다** — 위
+#12·#13처럼 이미 무의미해진 항목이 섞여 있으므로 근거로 쓰기 전에 재확인할 것.
+
+---
+
+## 6. 세 트랙의 접점 — 잊기 쉬운 곳
 
 라우팅이 끝났다고 하네스와 무관한 게 아니다. 실제로 얽힌 지점이 넷 있다.
 
@@ -255,7 +344,7 @@ G5(마무리 예산 floor)는 조사가 마무리 몫을 침범하지 못하게 
 
 > **현재 결정: 바꾸지 않는다.** 모델을 바꾸면 이전 표본과 비교 불가해진다.
 > 편향 방향이 **보수적**(verified 쪽으로 기울어 false-discard를 과대추정)이라
-> 측정을 무효화하지는 않는다. 다만 **출하 전에는 반드시 해소**해야 한다 — §7 W4.
+> 측정을 무효화하지는 않는다. 다만 **출하 전에는 반드시 해소**해야 한다 — §8 W4.
 
 **② 기능 오버라이드가 라우팅의 마지막 사용처다.**
 `DeepAnalysisModelsConfig`(scout/dig/synth/judge)는 전부 `str | None`이다.
@@ -274,7 +363,7 @@ G5(마무리 예산 floor)는 조사가 마무리 몫을 침범하지 못하게 
 
 ---
 
-## 6. 미해결 이슈 통합 인벤토리
+## 7. 미해결 이슈 통합 인벤토리
 
 | 우선 | ID | 내용 | 트랙 |
 |---|---|---|---|
@@ -294,11 +383,14 @@ G5(마무리 예산 floor)는 조사가 마무리 몫을 침범하지 못하게 
 | 🧪 | CI #10 | `tests/api/` 순서 의존 오염 미확인 | — |
 | 🧪 | CI #11 | analytics 테스트 run 스코프 — **코드 확인상 해소**, 실행 검증 필요 | — |
 | ⚠️ | F3 | `managed-sandbox-control-plane` worktree에 구식 `AgenticGrader(...)` 11곳 — 병합 시 `TypeError` | — |
+| 🟡 | **FE1** | 실패 이벤트 6종에 FE 라벨 없음 — 성공만 보이고 실패는 침묵 (§5.2) | C |
+| 🟡 | FE2 | `chat/route.ts`의 `maxDuration = 60` 잔존 (TODO #14) | C |
+| 🟢 | FE3 | TODO #12·#13이 **존재하지 않는 파일**을 가리킨다 — 항목 재확인 또는 폐기 필요 | C |
 | 🟢 | — | SKILL.md 누락 6개 / `deep_analysis_*` 테이블 1.6만 행 | B |
 
 ---
 
-## 7. 실행 계획 — 웨이브
+## 8. 실행 계획 — 웨이브
 
 각 웨이브는 **측정 가능한 완료 기준**을 갖는다. 기준을 못 채우면 다음으로 넘어가지 않는다
 (설계 §9 마일스톤 규율의 연장).
@@ -308,7 +400,7 @@ G5(마무리 예산 floor)는 조사가 마무리 몫을 침범하지 못하게 
 **대상:** G6, G7
 **목표:** 설계 §6.7 최종 조립과 §6.8 에이전틱 판정을 **처음으로 실행시킨다.**
 
-접근 후보 (택일 또는 조합, §8에서 결정):
+접근 후보 (택일 또는 조합, §9에서 결정):
 
 | 안 | 내용 | 트레이드오프 |
 |---|---|---|
@@ -324,14 +416,23 @@ G5(마무리 예산 floor)는 조사가 마무리 몫을 침범하지 못하게 
 
 ### W2. 원장이 진실을 말한다
 
-**대상:** G9, G4
+**대상:** G9, G4, **FE1**
 - G9: `except TokenBudgetExhausted` 핸들러가 무조건 `_mark_token_budget_exhausted`를
   부르지 말고 `token_budget.exhausted`를 실제로 확인 → floor 정지면
   `_mark_investigation_stopped_at_floor`
 - G4: 리포트 본문 영속화 (`report_path` 채우기)
+- **FE1: 원장의 진실을 UI까지 밀어낸다** — `progress.ts`의 `activityLabel()`에
+  실패 이벤트 6종 라벨 추가 (§5.2). 백엔드만 고치면 "원장은 정확한데 사용자는
+  여전히 모른다"에서 멈춘다
 
-**완료 기준:** 정지 사유 오분류 0건(**S4**), 신규 run의 `report_path` NULL 비율 0%(**S3**).
+**완료 기준:** 정지 사유 오분류 0건(**S4**), 신규 run의 `report_path` NULL 비율 0%(**S3**),
+실패 경로가 UI에 라벨로 나타남(회귀 가드는 `tests/source/deep-analysis-progress.test.ts`).
 G4는 **G3 판단의 선행 조건**이다 — 본문 없이는 게이트 임계값을 재보정할 수 없다.
+
+> FE1을 W2에 묶은 이유: G9와 같은 결함의 서로 다른 층이다. G9는 원장이 정지 사유를
+> 틀리게 적는 문제이고, FE1은 정확히 적힌 것이 화면에 도달하지 않는 문제다.
+> **W1이 성공하면 그 성과(`synth_pass`)는 FE에 자동으로 뜨지만 실패는 여전히
+> 침묵한다** — 이 비대칭을 남기면 "성공만 보이는 UI"가 된다.
 
 ### W3. 게이트를 다시 판단한다 — ⚠️ 정책 결정 필요
 
@@ -364,8 +465,13 @@ W1 이후 게이트가 채점하는 대상이 **템플릿에서 LLM 산문으로
 
 ### W5. CI와 운영 위생
 
-**대상:** CI #9·#10·#11, F3, 테이블 정리, SKILL.md 6개
+**대상:** CI #9·#10·#11, F3, 테이블 정리, SKILL.md 6개, **FE2·FE3**
 **완료 기준:** `pytest tests/` 전체가 CI에서 3회 연속 동일 결과 — **S5 충족**
+
+FE2·FE3은 백로그 위생 작업이다. 특히 **FE3은 항목을 고치는 게 아니라 폐기하는
+쪽일 수 있다** — TODO #12의 `examples/document_api_example.py`와 #13의
+`web/components/prompt-input.tsx`는 **둘 다 더 이상 존재하지 않는다.**
+없는 파일을 가리키는 백로그 항목은 다음 사람에게 유령 작업을 준다.
 
 > 주의: F3은 이 저장소 문제가 아니라 **병합 시점 폭발물**이다.
 > `managed-sandbox-control-plane` worktree가 rebase되면 `AgenticGrader` 11곳이
@@ -373,27 +479,27 @@ W1 이후 게이트가 채점하는 대상이 **템플릿에서 LLM 산문으로
 
 ### W6. 승격
 
-S1–S5 전부 충족 후 `deep_analysis.enabled` 기본값 전환을 **별도 결정으로** 다룬다.
+S1–S6 전부 충족 후 `deep_analysis.enabled` 기본값 전환을 **별도 결정으로** 다룬다.
 관련 잔여 결함은 `docs/ROADMAP.md`의 R1(임계값 역전)·R2(intent 미방출)·R6(3엔진 기본 비활성).
 
 ---
 
-## 8. 사람의 결정이 필요한 지점
+## 9. 사람의 결정이 필요한 지점
 
 아래는 코드나 측정으로 답이 나오지 않는다. **착수 전에 정해야 한다.**
 
 | # | 결정 | 선택지 | 영향 |
 |---|---|---|---|
-| **D-1** | W1의 접근 (§7 W1 표) | a 산식 보정 / b 프롬프트 축소 / c 풀 분할 | c가 근본적이나 범위가 크다. **b→a→c 순 점증 권장** |
+| **D-1** | W1의 접근 (§8 W1 표) | a 산식 보정 / b 프롬프트 축소 / c 풀 분할 | c가 근본적이나 범위가 크다. **b→a→c 순 점증 권장** |
 | **D-2** | assertion 0건 리포트 채점 (G3) | 통과 / 반려 / 제3 판정(예: "내용 없음" 코드) | 사용자 영향 최대. 지금은 빈 리포트만 통과 중 |
 | **D-3** | E3 judge 모델 분리 시점 | W4에서 / 출하 직전 / 즉시 | 즉시 하면 진행 중 표본과의 비교가 끊긴다 |
 | **D-4** | dev floor 비율 | 현행 22%(4,400/20,000) 유지 / 축소 | `finalization_floor_warn_ratio=0.5` 경고가 22%에서 발동 안 함 — **경고 임계값이 실제 파괴 임계값보다 느슨하다** |
 
 ---
 
-## 9. 작업 규칙 — 반복해서 다친 곳
+## 10. 작업 규칙 — 반복해서 다친 곳
 
-### 9.1 증거 보존 (실제로 겪은 위험)
+### 10.1 증거 보존 (실제로 겪은 위험)
 
 `git worktree remove`는 **gitignore 대상 파일을 경고 없이 삭제한다.**
 `artifacts/deep-analysis-funnel/<ts>/`는 "정확히 1회" 원칙 때문에 **재생성 불가**이고,
@@ -413,7 +519,7 @@ git worktree remove "$WT" && git worktree prune
 2026-08-04 라이브 검증 6건의 근거는 **`deep_analysis_events` 테이블뿐이다**
 (수정 전 run이 실패해 아티팩트 디렉터리가 남지 않았다). 이 테이블을 지우면 재현 불가.
 
-### 9.2 라이브 표본 실행 규칙
+### 10.2 라이브 표본 실행 규칙
 
 - ❌ 표본 **재실행** 금지 (정확히 1회 원칙, 실패해도 자동 재시도 금지)
 - ❌ 실행 중 grader 임계값 / 샘플링 / 프롬프트 / 모델 / 토큰·워커·깊이·벽시계 한도 변경
@@ -422,7 +528,7 @@ git worktree remove "$WT" && git worktree prune
   **구성 지문**(model ID, threshold, cap)을 남길 것 — `20260725T081707Z`는 exit code를
   복구할 수 없어 `unavailable`로 기록해야 했다
 
-### 9.3 앰비언트 상태 오염 3종 (전부 실제 발생)
+### 10.3 앰비언트 상태 오염 3종 (전부 실제 발생)
 
 | 증상 | 원인 | 커밋 |
 |---|---|---|
@@ -440,7 +546,7 @@ git worktree remove "$WT" && git worktree prune
 버그가 아니라 **테스트별 이벤트 루프에 대한 의도적 회피책**이다. `dispose()`로
 바꾸면 악화된다(8 → 17건). 이유는 `neos/database/connection.py` 주석에 못박아 뒀다.
 
-### 9.4 검증 명령
+### 10.4 검증 명령
 
 ```bash
 # 백엔드 (bare pytest는 asyncio 마커 수집 실패 — .venv 경로로)
@@ -453,9 +559,11 @@ HOME=/tmp/neos-test-home .venv/bin/pytest tests/workflow/deep_analysis -q
 pytest -q tests/config/test_model_catalog.py tests/config/test_model_catalog_parity.py \
          tests/config/test_model_routing.py tests/utils/test_llm_factory_defaults.py
 
-# 게이트웨이 / 프론트
+# 게이트웨이 / 프론트 — 현재 cargo 5/5, test:source 147 passed
 cd api_gateway && cargo test --offline && cargo build --offline
 pnpm --dir web test:source && pnpm --dir web exec tsc --noEmit
+# 심층분석 FE 계약만 빠르게 (progress/reader/subscription/active-run-store/events)
+pnpm --dir web test:source 2>&1 | grep -i "deep-analysis"
 
 # 낡은 자동 기본값 재스캔
 rg -n 'gpt-4-turbo-preview|gpt-4o|claude-sonnet-4-6|claude-opus-4-6|gpt-5-mini-2025-08-07' \
@@ -467,7 +575,7 @@ rg -n 'gpt-4-turbo-preview|gpt-4o|claude-sonnet-4-6|claude-opus-4-6|gpt-5-mini-2
 > 회귀 비교 시 `grep '^FAILED tests/'`로 걸러야 한다 — `'^FAILED'`만 쓰면
 > 진행 표시(`FAILED  [ 7%]`)까지 걸린다.
 
-### 9.5 낡은 문서 주의
+### 10.5 낡은 문서 주의
 
 - ❌ `2026-07-11-deep-analysis-chatswap.md` **재실행 금지** — D21/D22/D23이 세 번 덮어썼다.
   현재 챗 노드는 하네스를 직접 실행하지 않고 job을 제출만 한다 (`graph.py:1051–1122`)
@@ -477,13 +585,19 @@ rg -n 'gpt-4-turbo-preview|gpt-4o|claude-sonnet-4-6|claude-opus-4-6|gpt-5-mini-2
 
 ---
 
-## 10. 참조
+## 11. 참조
 
 - 설계 정본: [DEEP_ANALYSIS_HARNESS_DESIGN.md](DEEP_ANALYSIS_HARNESS_DESIGN.md)
 - 재개 문서: [deep_analysis_task_task_resume.md](archive/deep_analysis_task_task_resume.md),
   [role_based_model_routing_task_resume.md](archive/role_based_model_routing_task_resume.md),
   [coding_agent_task_resume.md](coding_agent_task_resume.md)
 - 백로그 원장: [TODO_260729.md](TODO_260729.md) — G 계열 실측 수치의 원본
+- 프론트엔드 감사: [FE_AUDIT_260717.md](FE_AUDIT_260717.md) — §6이 트랙 C의 기준선.
+  ⚠️ 2026-07-17 시점이며 §1이 "나머지 항목은 재확인하지 않았다"고 명시한다
+- 트랙 C 코드 표면: `web/lib/deep-analysis/` (reader·subscription·progress·events·
+  active-run-store), `web/hooks/use-deep-analysis-stream.ts`,
+  `web/components/deep-analysis-status.tsx`,
+  `web/app/(chat)/api/deep-analysis/[runId]/events/route.ts` (GET 전용 프록시)
 - 결정 원장: `neos/workflow/deep_analysis/DECISIONS.md` (D1–D23)
 - 설정·모델 정본: [CONFIGURATION.md](CONFIGURATION.md) — Model Catalog / Model Routing 절
 - L5 운영: [deep_analysis_l5.md](deep_analysis_l5.md)
