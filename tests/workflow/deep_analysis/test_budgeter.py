@@ -349,3 +349,53 @@ def test_orchestrator_defaults_the_threshold_to_one_and_accepts_injection():
         min_viable_output_tokens=2_048,
     )
     assert injected.token_budget.min_viable_output_tokens == 2_048
+
+
+@pytest.mark.asyncio
+async def test_node_reduction_cannot_reach_the_report_tier():
+    """G7: 리덕션이 몇 번 돌든 조립 몫에 닿지 못한다.
+
+    `reduce_tree`는 노드마다 `reduce_node`를 부르고 상한이 없다 --
+    `finalization_reduction_allowance`는 floor의 크기만 정했지 호출 수를
+    제한한 적이 없다. 실측 6 run 평균 3.7회 vs allowance 2. 안쪽 tier가
+    호출 카운터 없이 이 초과를 무해하게 만든다.
+    """
+    budget = TokenBudget(
+        10_000, floor_tokens=6_000, report_floor_tokens=4_000
+    )
+
+    # 조사와 리덕션이 접근 가능한 것을 전부 태운다.
+    spent = await budget.reserve(
+        {"model": "m"}, 10_000, stage="node_reduction", model="m"
+    )
+    await budget.settle(spent, spent.reserved_tokens)
+
+    assert budget.available_for_reduction == 0
+    with pytest.raises(TokenBudgetExhausted):
+        await budget.reserve(
+            {"model": "m"}, 500, stage="node_reduction", model="m"
+        )
+
+    # 조립은 여전히 자기 몫을 받는다 -- 이것이 이 작업 전체의 목적이다.
+    reservation = await budget.reserve(
+        {"model": "m"}, 500, stage="report_assembly", model="m"
+    )
+    assert reservation.max_output_tokens > 0
+
+
+def test_report_tier_may_not_exceed_the_total_floor():
+    """안쪽 tier가 바깥 tier보다 크면 계단이 아니라 모순이다."""
+    with pytest.raises(ValueError):
+        TokenBudget(10_000, floor_tokens=1_000, report_floor_tokens=2_000)
+
+    with pytest.raises(ValueError):
+        TokenBudget(10_000, floor_tokens=1_000, report_floor_tokens=-1)
+
+
+@pytest.mark.asyncio
+async def test_report_tier_defaults_to_zero_and_preserves_current_behaviour():
+    """기존 호출부는 안쪽 tier를 모른다 -- 기본값에서 동작이 바뀌면 안 된다."""
+    budget = TokenBudget(10_000, floor_tokens=4_000)
+
+    assert budget.report_floor_tokens == 0
+    assert budget.available_for_reduction == budget.remaining_tokens
