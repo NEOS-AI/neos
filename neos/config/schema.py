@@ -771,7 +771,7 @@ class DeepAnalysisConfig(StrictConfigModel):
     # both 300 and 800, so doubling is not guaranteed to be enough — when it
     # is not, the call site fails closed. The alternative, requesting all
     # remaining headroom, lets one worker monopolise the dev profile's
-    # global_token_cap of 20000 across parallel_workers=2 and starve its peer.
+    # global_token_cap of 100000 across parallel_workers=2 and starve its peer.
     #
     # gt=1.0 because a multiplier at or below 1.0 would not expand the
     # retry's ceiling at all -- it terminates safely but is meaningless.
@@ -817,9 +817,13 @@ class DeepAnalysisConfig(StrictConfigModel):
 
     # Fraction of a profile's global_token_cap above which the finalization
     # floor is judged to be crowding out investigation. Not expected to fire
-    # on the shipped defaults -- the floor is 4.3% of the default profile's
-    # cap and 22% of dev's -- so this is a backstop for a profile tuned into
-    # a corner, not a signal for normal operation.
+    # on the shipped defaults -- the floor is 43.7% of the default profile's
+    # cap (131,200 / 300,000) and 41.0% of dev's (41,040 / 100,000) -- so this
+    # is a backstop for a profile tuned into a corner, not a signal for normal
+    # operation. That margin is thinner than it looks: before the input
+    # currency was added the floor was 4.3%/22% of the same caps, nowhere
+    # near this 0.5 threshold; 41-44% sits close enough that a moderate
+    # further increase to the floor (or cut to a cap) would trip it.
     finalization_floor_warn_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
 
     # Smallest output grant `TokenBudget.reserve` will issue rather than refuse.
