@@ -59,6 +59,13 @@ async def test_web_search_adapts_mcp_result_and_cleans_up():
 
 @pytest.mark.asyncio
 async def test_build_orchestrator_uses_dev_cap_and_pure_worker(monkeypatch):
+    """profile="dev" must resolve the DEV profile's cap, not the default's.
+
+    dev.global_token_cap is 100000 (see schema.py), default is 300000 --
+    still distinct enough that this assertion fails if build_orchestrator
+    ever falls back to the default profile's cap.
+    """
+
     async def search_fn(query, k):
         return []
 
@@ -76,7 +83,7 @@ async def test_build_orchestrator_uses_dev_cap_and_pure_worker(monkeypatch):
     )
     worker = orchestrator.worker_factory()
 
-    assert orchestrator.global_token_cap == 20000
+    assert orchestrator.global_token_cap == 100000
     assert not hasattr(worker, "db")
     assert not hasattr(worker, "run_id")
     assert worker._confidence_cap == custom_caps

@@ -641,9 +641,10 @@ class DeepAnalysisDevProfileConfig(StrictConfigModel):
     global_token_cap: int = 100000
     parallel_workers: int = 2
     max_depth: int = 2
-    # dev shrinks the budget 15x (300000 -> 20000) but inherited a synthesis
+    # dev shrinks the budget 3x (300000 -> 100000) but inherited a synthesis
     # ceiling sized for the full profile, which is why the finalization floor
-    # did not fit: three 4000-token calls against a 20000 cap.
+    # did not fit before this file's input allowances were added: three
+    # 4000-token calls against what was then a 20000 cap.
     #
     # 1200 is measured, not chosen for roundness -- node_reduction's actual
     # consumption ran a median of 1109 tokens INCLUDING input, at granted
