@@ -41,7 +41,7 @@ def test_deep_analysis_nested_effort_and_tiers():
 def test_deep_analysis_dev_profile_present():
     dev = _settings().config.deep_analysis.dev_profile
 
-    assert dev.global_token_cap == 20000
+    assert dev.global_token_cap == 100000
     assert dev.parallel_workers == 2
     assert dev.max_depth == 2
     assert dev.synthesis_max_tokens == 1200
@@ -131,11 +131,61 @@ def test_a_disproportionate_floor_warns():
     from neos.config.settings import settings
 
     config = settings.config.deep_analysis.model_copy(deep=True)
-    config.dev_profile.global_token_cap = 4000  # floor 4400 > 2000
+    config.dev_profile.global_token_cap = 4000  # floor 41040 > 2000
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         warn_finalization_floor_ratio(config)
 
     messages = [str(w.message) for w in caught]
-    assert any("4400" in m and "4000" in m for m in messages)
+    assert any("41040" in m and "4000" in m for m in messages)
+
+
+def test_the_floor_counts_input_not_only_output():
+    """G6: floor는 출력만 셌고 reserve()는 입력+출력을 뺐다.
+
+    node_reduction 한 번의 input_bound 실측 최대는 6,480 -- 기존 dev floor
+    4,400 전체보다 크다. 두 tier 모두 reserve()가 실제로 차감하는 통화로
+    사이징돼야 한다.
+    """
+    from neos.config.schema import DeepAnalysisConfig
+
+    config = DeepAnalysisConfig()
+
+    # default 프로파일: assembly (3.0+1)*4000=16,000 / grading 5.0*4000+800=20,800
+    # -> attempt 36,800 * (report_retry_cap 2 + 1) = 110,400
+    assert config.report_floor_tokens(4_000) == 110_400
+    # reduction (1.6+1)*4000=10,400 * allowance 2 = 20,800
+    assert config.finalization_floor_tokens(4_000) == 110_400 + 20_800
+
+    # dev 프로파일 (synthesis_max_tokens=1200)
+    assert config.report_floor_tokens(1_200) == 34_800
+    assert config.finalization_floor_tokens(1_200) == 41_040
+
+
+def test_the_report_tier_never_exceeds_the_total_floor():
+    """TokenBudget의 불변식이 config 산식에서 이미 성립해야 한다."""
+    from neos.config.schema import DeepAnalysisConfig
+
+    config = DeepAnalysisConfig()
+    for synth in (1, 100, 1_200, 4_000, 40_000):
+        assert config.report_floor_tokens(synth) <= (
+            config.finalization_floor_tokens(synth)
+        )
+
+
+def test_dev_profile_can_hold_a_worker_call():
+    """실측 worker_analysis input_bound는 5,542~17,723이다.
+
+    dev의 기존 20,000 캡은 floor를 빼기 전에도 워커 호출 하나를 확실히
+    담지 못했다 -- dev run이 병리적이었던 이유다.
+    """
+    from neos.config.schema import DeepAnalysisConfig
+
+    config = DeepAnalysisConfig()
+    cap = config.dev_profile.global_token_cap
+    floor = config.finalization_floor_tokens(
+        config.dev_profile.synthesis_max_tokens
+    )
+
+    assert cap - floor > 17_723 * 2

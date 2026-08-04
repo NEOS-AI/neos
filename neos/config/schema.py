@@ -631,7 +631,14 @@ class DeepAnalysisModelsConfig(StrictConfigModel):
 
 
 class DeepAnalysisDevProfileConfig(StrictConfigModel):
-    global_token_cap: int = 20000
+    # 20000 could not hold ONE worker_analysis call: measured input_bound for
+    # that stage ran 5,542 / 10,893 / 17,723 (min/median/max), and that is
+    # before the finalization floor is subtracted. The profile was sized
+    # before `reserve` charged for input at all, which is why dev runs were
+    # pathological rather than merely small. 100,000 leaves 58,960 for
+    # investigation against a 41,040 floor (41%), matching the default
+    # profile's 43.7%.
+    global_token_cap: int = 100000
     parallel_workers: int = 2
     max_depth: int = 2
     # dev shrinks the budget 15x (300000 -> 20000) but inherited a synthesis
@@ -800,10 +807,11 @@ class DeepAnalysisConfig(StrictConfigModel):
     # How many node_reduction calls the finalization floor budgets for.
     #
     # Measured: node_reduction runs a median of 2 times per run (max 9). Runs
-    # with deeper trees will see their last reductions clamped, but assembly
-    # and the judge survive -- which is the point of the reserve. Budgeting
-    # for the observed maximum of 9 would put the floor at 40,800, more than
-    # twice the dev profile's entire cap.
+    # with deeper trees will see their last reductions degrade to joining
+    # child answers, but assembly and the judge survive -- which is the point
+    # of the reserve, and why the report tier is isolated from this one.
+    # Budgeting for the observed maximum of 9 would put the reduction tier at
+    # 93,600 on the default profile, more than four times the whole dev cap.
     finalization_reduction_allowance: int = Field(default=2, ge=1)
 
     # Fraction of a profile's global_token_cap above which the finalization
@@ -829,6 +837,35 @@ class DeepAnalysisConfig(StrictConfigModel):
     # `reserve` clamps this by the caller's own `max_output_tokens`, so stages
     # that deliberately ask for less (the report judge asks 800) are unaffected.
     min_viable_output_tokens: int = Field(default=2048, ge=1)
+
+    # Input allowances for the finalization stages, expressed as multiples of
+    # `synthesis_max_tokens` so a profile that shrinks its synthesis ceiling
+    # shrinks its floor with it instead of needing three more per-profile
+    # knobs.
+    #
+    # These exist because the floor and `TokenBudget.reserve` used different
+    # currencies: the floor counted output tokens only, while `reserve`
+    # charges `conservative_input_bound(request) + output`. Measured
+    # 2026-08-04: one node_reduction took 6,480 on input alone -- larger than
+    # the entire 4,400-token dev floor of the time.
+    #
+    # Measured: node_reduction input_bound ran 1,225 / 1,369 / 6,480
+    # (min/median/max) against synthesis_max_tokens=4000 -> 6480/4000 = 1.62.
+    reduction_input_ratio: float = Field(default=1.6, gt=0.0)
+    # Never measured -- report_assembly has never received a reservation in
+    # 574 runs. This is not an estimate but a CLAMP: `prompt_clamp` shrinks
+    # the assembly prompt until `prompt_input_bound` reports a value under
+    # this allowance, so the bound holds by construction.
+    assembly_input_ratio: float = Field(default=3.0, gt=0.0)
+    # Derived, not clamped. The judge is handed the whole report and giving it
+    # a truncated one changes what is being judged, so there is nothing to
+    # clamp. The report body is already bounded by the assembly's own output
+    # ceiling (synthesis_max_tokens); only the token -> UTF-8 byte conversion
+    # that `conservative_input_bound` performs remains. Korean runs ~3 bytes
+    # per syllable at roughly one token per syllable; 4.5 bytes/token covers
+    # rarer 4-byte characters and JSON escaping, plus ~600 bytes of the
+    # report_judge.md template.
+    grading_input_ratio: float = Field(default=5.0, gt=0.0)
 
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
@@ -891,9 +928,29 @@ class DeepAnalysisConfig(StrictConfigModel):
     # 마지막 seq를 ?after=로 넘겨 재접속하면 이어서 받는다.
     events_stream_idle_timeout: float = 300.0
 
+    def report_floor_tokens(self, synthesis_max_tokens: int) -> int:
+        """The INNER floor tier: `report_retry_cap + 1` rounds of one
+        assembly plus one judge, counted in the input+output currency
+        `TokenBudget.reserve` actually charges.
+
+        `node_reduction` cannot draw on this (token_budget.REPORT_STAGES).
+        Sizing it for the whole retry loop is deliberate: `_finalize`
+        re-assembles up to `report_retry_cap` times and grades every draft,
+        so a tier covering one round leaves the later rounds to fail open --
+        the failure this split exists to end.
+        """
+        assembly = int(
+            (self.assembly_input_ratio + 1) * synthesis_max_tokens
+        )
+        grading = int(
+            self.grading_input_ratio * synthesis_max_tokens
+            + self.report_judge_max_output_tokens
+        )
+        return (self.report_retry_cap + 1) * (assembly + grading)
+
     def finalization_floor_tokens(self, synthesis_max_tokens: int) -> int:
-        """Reserve for the 3 finalization stages: node_reduction × allowance,
-        one assembly, and the report judge.
+        """The TOTAL floor: the report tier plus
+        `finalization_reduction_allowance` node_reduction calls.
 
         Shared by `neos/config/loader.py`'s `warn_finalization_floor_ratio`
         (checks this against `global_token_cap` at config-load time) and
@@ -903,9 +960,12 @@ class DeepAnalysisConfig(StrictConfigModel):
         silently leave the warning describing a floor that is no longer in
         force.
         """
+        reduction = int(
+            (self.reduction_input_ratio + 1) * synthesis_max_tokens
+        )
         return (
-            (self.finalization_reduction_allowance + 1) * synthesis_max_tokens
-            + self.report_judge_max_output_tokens
+            self.report_floor_tokens(synthesis_max_tokens)
+            + self.finalization_reduction_allowance * reduction
         )
 
 
