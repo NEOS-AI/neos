@@ -4,7 +4,7 @@
 **상태:** 설계 승인됨, 구현 플랜 미작성
 **선행 작업:** `2026-07-25-deep-analysis-claim-entailment.md` (구현),
 entailment 실측 평가 (`bc4e0656`, 병합 `ad19cf26`)
-**관련 문서:** `docs/TODO_260729.md` §7, `docs/deep_analysis_task_task_resume.md` §5
+**관련 문서:** `docs/TODO_260729.md` §7, `docs/archive/deep_analysis_task_task_resume.md` §5
 
 ---
 

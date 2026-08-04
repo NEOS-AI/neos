@@ -1,5 +1,11 @@
 # Role-Based Model Routing — 남은 이슈
 
+> 📦 **보관 문서 (2026-08-04 archive 이동).** 현재 진입점은
+> [DEEP_ANALYSIS_HARNESS_ROADMAP.md](../DEEP_ANALYSIS_HARNESS_ROADMAP.md) §4다.
+> 제목의 "남은 이슈"는 낡았다 — **I1~I6 전부 종결됐다.** 이 문서는 로드맵이
+> 압축한 진단 기록(I1~I6 원인 분석, fixture 재설계 상세, 스킬 이름 규칙 근거)을
+> 위해 남긴다. 지켜야 할 불변식은 §7이며 로드맵 §4.2에 요약돼 있다.
+
 **갱신일:** 2026-07-26
 **작업 위치:** `dev` 브랜치 직접 작업 (워크트리 없음 — 사용자 명시 승인)
 **플랜:** `docs/superpowers/plans/2026-07-25-role-based-model-routing.md` (untracked)
@@ -35,9 +41,9 @@
 
 **요약:** 모델에 관한 사실(목록 노출, 추천 티어, thinking 계약, 가격)이
 `neos/config/models.yaml` 한 곳으로 모였다. 새 모델 추가가 config 편집으로 끝난다.
-운영 문서는 [CONFIGURATION.md](CONFIGURATION.md)의 **Model Catalog** 절이며,
-설계는 [스펙](superpowers/specs/2026-07-26-model-catalog-config-design.md),
-실행은 [플랜](superpowers/plans/2026-07-26-model-catalog-config.md)에 있다.
+운영 문서는 [CONFIGURATION.md](../CONFIGURATION.md)의 **Model Catalog** 절이며,
+설계는 [스펙](../superpowers/specs/2026-07-26-model-catalog-config-design.md),
+실행은 [플랜](../superpowers/plans/2026-07-26-model-catalog-config.md)에 있다.
 
 이 문서에서 **더 이상 유효하지 않은 서술:**
 
@@ -742,7 +748,7 @@ Task 6에서 추가로 잡은 자동 기본값 누락 3곳 (`9c7d7519`):
 
 ## 10. 참조
 
-- 설정 문서: [CONFIGURATION.md](CONFIGURATION.md) — `### Model Routing` 절
+- 설정 문서: [CONFIGURATION.md](../CONFIGURATION.md) — `### Model Routing` 절
 - 관련 재개 문서: [deep_analysis_task_task_resume.md](deep_analysis_task_task_resume.md),
-  [coding_agent_task_resume.md](coding_agent_task_resume.md)
+  [coding_agent_task_resume.md](../coding_agent_task_resume.md)
 - SDD 원장: `.superpowers/sdd/2026-07-25-role-based-model-routing/`

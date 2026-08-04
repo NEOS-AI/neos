@@ -1,5 +1,11 @@
 # Deep Analysis 작업 재개 문서
 
+> 📦 **보관 문서 (2026-08-04 archive 이동).** 현재 진입점은
+> [DEEP_ANALYSIS_HARNESS_ROADMAP.md](../DEEP_ANALYSIS_HARNESS_ROADMAP.md)다.
+> 이 문서는 **로드맵이 압축한 상세 기록**을 위해 남긴다 — 특히 §4의 entailment
+> 평가 측정표(run ID·토큰·Fisher p)와 §8의 2026-08-04 라이브 6건 run ID는
+> 여기에만 있다. 로드맵과 충돌하면 **로드맵이 최신**이다.
+
 **작성일:** 2026-07-25 (갱신: 2026-08-04)
 **작업 위치:** `dev` 브랜치. entailment 평가 worktree는 병합 후 제거됨 (§6 절차 준수).
 2026-07-28 이후 작업은 worktree 없이 `dev`에서 직접 수행했다.
@@ -504,6 +510,6 @@ SDD 원장은 이 절차로 main 체크아웃에 보존했다(체크섬 일치 �
 - 백로그: `docs/TODO_260729.md`
 - 로드맵: `docs/ROADMAP.md`
 - 관련 문서: [role_based_model_routing_task_resume.md](role_based_model_routing_task_resume.md),
-  [coding_agent_task_resume.md](coding_agent_task_resume.md)
+  [coding_agent_task_resume.md](../coding_agent_task_resume.md)
 
 **테스트 명령:** `.venv/bin/python -m pytest` (bare `pytest`는 asyncio 마커 수집 실패)
