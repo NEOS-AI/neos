@@ -649,7 +649,12 @@ class DeepAnalysisDevProfileConfig(StrictConfigModel):
     # 1200 is measured, not chosen for roundness -- node_reduction's actual
     # consumption ran a median of 1109 tokens INCLUDING input, at granted
     # ceilings whose median was 748.
-    synthesis_max_tokens: int = 1200
+    #
+    # ge=1: at s <= 0, the floor formulas can push report_floor_tokens above
+    # floor_tokens (which stays non-negative) and `TokenBudget.__init__`
+    # raises an opaque ValueError on every run instead of failing at config
+    # validation with a clear message.
+    synthesis_max_tokens: int = Field(default=1200, ge=1)
 
 
 class DeepAnalysisDiscardRecallConfig(StrictConfigModel):
@@ -912,7 +917,11 @@ class DeepAnalysisConfig(StrictConfigModel):
     # 여기에 여유를 두어 3200으로 설정(추정치 대비 +28% 여유, 기존 1500의 ~2.1배).
     decompose_max_tokens: int = 3200
     worker_max_output_tokens: int = 4000
-    synthesis_max_tokens: int = 4000
+    # ge=1: at s <= 0, the floor formulas can push report_floor_tokens above
+    # floor_tokens (which stays non-negative) and `TokenBudget.__init__`
+    # raises an opaque ValueError on every run instead of failing at config
+    # validation with a clear message.
+    synthesis_max_tokens: int = Field(default=4000, ge=1)
     sse_keepalive_seconds: float = 0.5
     # ── Phase 3a (D22): durable job 서비스 ──────────────────────────────
     # 실행 큐. celery_app.py의 task_queues에 이미 정의된 4종 중 하나여야 한다

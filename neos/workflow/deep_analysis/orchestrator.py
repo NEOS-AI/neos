@@ -229,6 +229,7 @@ class Orchestrator:
             "consumed_tokens": self.token_budget.consumed_tokens,
             "reserved_tokens": self.token_budget.reserved_tokens,
             "floor_tokens": self.token_budget.floor_tokens,
+            "report_floor_tokens": self.token_budget.report_floor_tokens,
         }
         await self.ledger.log("investigation_stopped_at_floor", None, payload)
         await self._checkpoint()

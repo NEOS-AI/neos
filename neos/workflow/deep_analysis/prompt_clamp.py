@@ -84,19 +84,51 @@ def clamp_prompt(
 ) -> ClampResult:
     """Render, measure, shrink, repeat until the prompt fits ``allowance``.
 
-    Termination does not depend on ``shrink_once`` being correct: a step
-    that returns the same lists it was given ends the loop as surely as one
-    that returns ``None``. The policy is the part a human tunes, so the loop
-    refuses to trust it.
+    Termination does NOT depend on ``shrink_once`` being correct -- but not
+    for the reason a fixed-point check alone can promise. A step that
+    returns the exact lists it was given is caught immediately (below), but
+    a policy that returns something *different* every time without ever
+    shrinking -- e.g. one that alternates between two states -- passes that
+    check on every step and would loop forever under it alone. A monkeypatched
+    policy doing exactly that hung this function past a 10s test timeout
+    before this cap existed.
+
+    What actually guarantees termination is ``max_iterations``, derived from
+    the inputs themselves: ``len(primary) + len(secondary)`` (the most
+    element-drop steps either list can ever take) plus the summed character
+    length of both (the most halving steps ``shrink_once``'s own policy can
+    ever take, since each halving at least removes one character and a
+    binary search style halving needs only O(log n) of those). Any
+    legitimately-progressing policy finishes within that many steps, so the
+    cap can never cut one short; a policy that is not progressing hits the
+    cap and this function still returns.
     """
     original_primary = len(primary)
     original_secondary = len(secondary)
     prompt = render_prompt(primary, secondary)
     bound_before = prompt_input_bound(model, prompt)
 
+    max_iterations = (
+        len(primary)
+        + len(secondary)
+        + sum(len(item) for item in primary)
+        + sum(len(item) for item in secondary)
+    )
+    iterations = 0
+
     while prompt_input_bound(model, prompt) > allowance:
         shrunk = shrink_once(primary, secondary)
         if shrunk is None or shrunk == (primary, secondary):
+            return ClampResult(
+                prompt=prompt,
+                bound_before=bound_before,
+                bound_after=prompt_input_bound(model, prompt),
+                dropped_primary=original_primary - len(primary),
+                dropped_secondary=original_secondary - len(secondary),
+                exhausted=True,
+            )
+        iterations += 1
+        if iterations > max_iterations:
             return ClampResult(
                 prompt=prompt,
                 bound_before=bound_before,

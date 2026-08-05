@@ -168,7 +168,6 @@ class Synthesizer:
             f"- [{child.question_id}] {child.answer}"
             for child in child_summaries
         ]
-        has_content = bool(root_answer.strip()) or bool(child_blocks)
         config = settings.config.deep_analysis
         synth_model = resolve_model(
             config=settings.config.model_routing,
@@ -179,6 +178,11 @@ class Synthesizer:
         qid = root_summary.question_id if root_summary is not None else ""
 
         def render_assembly(blocks: list[str], notes: list[str]) -> str:
+            # Computed from this call's own `blocks`, not the pre-clamp
+            # `child_blocks` -- the clamp can drop every child block and
+            # leave `root_answer` empty too, and this must reflect that
+            # (F10): the closure is pure with respect to its arguments.
+            has_content = bool(root_answer.strip()) or bool(blocks)
             if notes:
                 caveats_text = "\n".join(notes)
             elif has_content:
