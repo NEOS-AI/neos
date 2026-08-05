@@ -447,3 +447,41 @@ def test_service_wiring_keeps_the_tiers_ordered():
             config.report_floor_tokens(synth)
             <= config.finalization_floor_tokens(synth)
         )
+
+
+class _StubLedger:
+    """Mirrors the ledger stubs in test_orchestrator_token_budget.py --
+    only `token_budget_state` is exercised by `_install_token_budget`."""
+
+    async def token_budget_state(self):
+        return 0, {}
+
+
+@pytest.mark.asyncio
+async def test_install_token_budget_carries_both_tiers_into_the_rebuilt_budget():
+    """`_install_token_budget` rebuilds `token_budget` at the start of every
+    `run()`, to restore consumed/outstanding tokens after a crash. Every
+    other tier assertion in this module reads `orchestrator.token_budget`
+    as set by `__init__` -- so a regression that drops `floor_tokens` or
+    `report_floor_tokens` from the `TokenBudget(...)` call inside
+    `_install_token_budget` (as opposed to `__init__`) would leave the
+    whole suite green while every real run silently lost the tier. This
+    test rebuilds the budget the same way `run()` does and asserts on the
+    result, so that specific regression fails here instead of only in
+    production.
+    """
+    orch = Orchestrator(
+        object(),
+        "run0001",
+        lambda: None,
+        None,
+        ledger=_StubLedger(),
+        global_token_cap=100_000,
+        finalization_floor_tokens=41_040,
+        report_floor_tokens=34_800,
+    )
+
+    await orch._install_token_budget()
+
+    assert orch.token_budget.floor_tokens == 41_040
+    assert orch.token_budget.report_floor_tokens == 34_800
