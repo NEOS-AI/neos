@@ -3,11 +3,16 @@
 import pytest
 
 from neos.workflow.deep_analysis.llm import prompt_input_bound
+from neos.workflow.deep_analysis.models import NodeSummary
 from neos.workflow.deep_analysis.prompt_clamp import (
     clamp_prompt,
     shrink_once,
 )
-from neos.workflow.deep_analysis.token_budget import conservative_input_bound
+from neos.workflow.deep_analysis.synthesizer import Synthesizer
+from neos.workflow.deep_analysis.token_budget import (
+    TokenBudgetExhausted,
+    conservative_input_bound,
+)
 
 
 def _render(primary: list[str], secondary: list[str]) -> str:
@@ -135,3 +140,139 @@ def test_clamp_terminates_even_if_the_policy_stops_making_progress(
     )
 
     assert result.exhausted is True
+
+
+class _Ledger:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, dict]] = []
+
+    async def log(self, kind, qid, payload):
+        self.events.append((kind, qid, payload))
+
+    async def verified_claims(self, qid):
+        return []
+
+    def kinds(self) -> list[str]:
+        return [kind for kind, _qid, _payload in self.events]
+
+    def payload(self, kind: str) -> dict:
+        return next(p for k, _q, p in self.events if k == kind)
+
+
+class _Response:
+    text = "## 요약\n본문"
+    input_tokens = 10
+    output_tokens = 20
+
+
+@pytest.mark.asyncio
+async def test_assemble_clamps_an_oversized_prompt_and_records_it():
+    ledger = _Ledger()
+    seen: dict[str, str] = {}
+
+    async def llm_call(model, prompt, **kwargs):
+        seen["model"] = model
+        seen["prompt"] = prompt
+        return _Response()
+
+    synth = Synthesizer(
+        ledger, llm_call=llm_call, synthesis_max_tokens=1_200
+    )
+    # 루트 요약은 절대 잘리지 않는다(D-6). 이 테스트는 자식·caveats 축소만
+    # 보려는 것이므로 루트를 짧게 두어 허용량 대부분을 가변 조각에 남긴다.
+    root = NodeSummary(
+        question_id="q0000000",
+        answer="루트 요약",
+        key_claim_ids=[],
+        confidence=0.8,
+        caveats=[],
+    )
+    children = [
+        NodeSummary(
+            question_id=f"q{i:07d}",
+            answer="가" * 900,
+            key_claim_ids=[],
+            confidence=0.5,
+            caveats=[],
+        )
+        for i in range(10)
+    ]
+
+    await synth.assemble(root, children, ["미확인: " + "나" * 400])
+
+    # 예약이 쓸 자와 같은 자로, 실제로 넘어간 모델명으로 잰다.
+    assert (
+        prompt_input_bound(seen["model"], seen["prompt"])
+        <= synth.assembly_input_allowance
+    )
+    assert "finalization_prompt_clamped" in ledger.kinds()
+    clamped = ledger.payload("finalization_prompt_clamped")
+    assert clamped["stage"] == "report_assembly"
+    assert clamped["bound_after"] < clamped["bound_before"]
+    assert clamped["exhausted"] is False
+    assert "synth_pass" in ledger.kinds()
+
+
+@pytest.mark.asyncio
+async def test_assemble_does_not_log_a_clamp_when_nothing_was_cut():
+    """클램프 이벤트는 실제로 잘랐을 때만 나온다 -- 원장을 노이즈로 채우지 않는다."""
+    ledger = _Ledger()
+
+    async def llm_call(model, prompt, **kwargs):
+        return _Response()
+
+    synth = Synthesizer(
+        ledger, llm_call=llm_call, synthesis_max_tokens=1_200
+    )
+    root = NodeSummary(
+        question_id="q0000001",
+        answer="짧은 답",
+        key_claim_ids=[],
+        confidence=0.9,
+        caveats=[],
+    )
+
+    await synth.assemble(root, [], [])
+
+    assert "finalization_prompt_clamped" not in ledger.kinds()
+    assert "synth_pass" in ledger.kinds()
+
+
+@pytest.mark.asyncio
+async def test_a_degraded_reduction_leaves_a_trace():
+    """W1 검증에 필수다.
+
+    강등이 원장에 안 남으면 "리덕션은 강등됐지만 조립은 살았다"(설계 의도)와
+    "리덕션이 전부 성공했다"를 구분할 수 없다.
+    """
+    ledger = _Ledger()
+
+    async def json_call(model, prompt, **kwargs):
+        raise TokenBudgetExhausted("budget")
+
+    synth = Synthesizer(
+        ledger, json_call=json_call, synthesis_max_tokens=1_200
+    )
+
+    class _Question:
+        id = "q0000001"
+        text = "질문"
+
+    child = NodeSummary(
+        question_id="q0000002",
+        answer="자식 답",
+        key_claim_ids=[],
+        confidence=0.4,
+        caveats=[],
+    )
+
+    summary = await synth.reduce_node(_Question(), [child])
+
+    assert summary.caveats == ["token_budget_exhausted"]
+    assert "node_reduction_degraded" in ledger.kinds()
+    degraded = ledger.payload("node_reduction_degraded")
+    assert degraded == {
+        "question_id": "q0000001",
+        "child_count": 1,
+        "reason": "token_budget_exhausted",
+    }

@@ -7,6 +7,7 @@ from neos.config.settings import settings
 
 from .llm import call_json, call_llm
 from .models import ConflictNote, NodeSummary
+from .prompt_clamp import clamp_prompt
 from .prompt_loader import render
 from .token_budget import TokenBudgetExhausted
 
@@ -36,6 +37,45 @@ class Synthesizer:
         if self._synthesis_max_tokens is not None:
             return self._synthesis_max_tokens
         return settings.config.deep_analysis.synthesis_max_tokens
+
+    @property
+    def assembly_input_allowance(self) -> int:
+        """Input bytes report_assembly's prompt may occupy.
+
+        Derived here rather than injected: `synthesis_max_tokens` above is
+        already the profile-resolved value, and the ratio is global policy.
+        Threading two more constructor arguments through service.py would
+        give the same number two sources.
+        """
+        ratio = settings.config.deep_analysis.assembly_input_ratio
+        return int(ratio * self.synthesis_max_tokens)
+
+    @property
+    def reduction_input_allowance(self) -> int:
+        ratio = settings.config.deep_analysis.reduction_input_ratio
+        return int(ratio * self.synthesis_max_tokens)
+
+    async def _log_clamp(self, stage: str, qid: str, result, allowance: int) -> None:
+        """Record a clamp only when it actually cut something.
+
+        Logging every call would bury the signal: the interesting event is
+        a finalization prompt that did not fit, not one that did.
+        """
+        if not (result.clamped or result.exhausted):
+            return
+        await self.ledger.log(
+            "finalization_prompt_clamped",
+            qid,
+            {
+                "stage": stage,
+                "bound_before": result.bound_before,
+                "bound_after": result.bound_after,
+                "allowance": allowance,
+                "dropped_primary": result.dropped_primary,
+                "dropped_secondary": result.dropped_secondary,
+                "exhausted": result.exhausted,
+            },
+        )
 
     async def reduce(self, root_id: str) -> str:
         root = await self.ledger.root_question()
@@ -129,18 +169,6 @@ class Synthesizer:
             for child in child_summaries
         ]
         has_content = bool(root_answer.strip()) or bool(child_blocks)
-        if caveats:
-            caveats_text = "\n".join(caveats)
-        elif has_content:
-            caveats_text = "(없음)"
-        else:
-            caveats_text = "검증된 클레임을 확보하지 못함"
-        prompt = render(
-            "final_compose",
-            root_summary=root_answer or "(요약 없음)",
-            child_summaries="\n".join(child_blocks) or "(검증된 발견 없음)",
-            caveats=caveats_text,
-        )
         config = settings.config.deep_analysis
         synth_model = resolve_model(
             config=settings.config.model_routing,
@@ -148,10 +176,36 @@ class Synthesizer:
             role="powerful",
             feature_override=config.models.synth,
         ).model
+        qid = root_summary.question_id if root_summary is not None else ""
+
+        def render_assembly(blocks: list[str], notes: list[str]) -> str:
+            if notes:
+                caveats_text = "\n".join(notes)
+            elif has_content:
+                caveats_text = "(없음)"
+            else:
+                caveats_text = "검증된 클레임을 확보하지 못함"
+            return render(
+                "final_compose",
+                root_summary=root_answer or "(요약 없음)",
+                child_summaries="\n".join(blocks) or "(검증된 발견 없음)",
+                caveats=caveats_text,
+            )
+
+        clamp = clamp_prompt(
+            model=synth_model,
+            allowance=self.assembly_input_allowance,
+            render_prompt=render_assembly,
+            primary=child_blocks,
+            secondary=list(caveats),
+        )
+        await self._log_clamp(
+            "report_assembly", qid, clamp, self.assembly_input_allowance
+        )
         try:
             response = await self.llm_call(
                 synth_model,
-                prompt,
+                clamp.prompt,
                 max_tokens=self.synthesis_max_tokens,
                 client=self.llm_client,
                 cassette=self.cassette,
@@ -161,7 +215,6 @@ class Synthesizer:
             # Falling back to a template is correct -- no empty-handed exit
             # (§6.8) -- but it must not look like success. Every recorded run
             # took this path and nothing said so.
-            qid = root_summary.question_id if root_summary is not None else ""
             await self.ledger.log(
                 "report_assembly_degraded",
                 qid,
@@ -172,7 +225,6 @@ class Synthesizer:
                 child_summaries,
                 caveats,
             )
-        qid = root_summary.question_id if root_summary is not None else ""
         await self.ledger.log(
             "synth_pass",
             qid,
@@ -228,20 +280,36 @@ class Synthesizer:
         child_lines = [
             f"[{c.question_id}] {c.answer}" for c in child_summaries
         ]
-        prompt = render(
-            "node_summary",
-            question_id=question.id,
-            question_text=question.text,
-            verified_claims="\n".join(claim_lines) or "(없음)",
-            child_summaries="\n".join(child_lines) or "(없음)",
-        )
-        config = settings.config.deep_analysis
         synth_model = resolve_model(
             config=settings.config.model_routing,
             provider="anthropic",
             role="powerful",
-            feature_override=config.models.synth,
+            feature_override=settings.config.deep_analysis.models.synth,
         ).model
+
+        def render_node(claims: list[str], children: list[str]) -> str:
+            return render(
+                "node_summary",
+                question_id=question.id,
+                question_text=question.text,
+                verified_claims="\n".join(claims) or "(없음)",
+                child_summaries="\n".join(children) or "(없음)",
+            )
+
+        clamp = clamp_prompt(
+            model=synth_model,
+            allowance=self.reduction_input_allowance,
+            render_prompt=render_node,
+            primary=claim_lines,
+            secondary=child_lines,
+        )
+        await self._log_clamp(
+            "node_reduction",
+            question.id,
+            clamp,
+            self.reduction_input_allowance,
+        )
+        prompt = clamp.prompt
         try:
             data, resp = await self.json_call(
                 synth_model,
@@ -252,24 +320,12 @@ class Synthesizer:
                 stage="node_reduction",
             )
         except TokenBudgetExhausted:
-            joined = " ".join(c.answer for c in child_summaries) or ""
-            return NodeSummary(
-                question_id=question.id,
-                answer=joined,
-                key_claim_ids=[],
-                confidence=0.0,
-                caveats=["token_budget_exhausted"],
-                conflicts=[],
+            return await self._degraded_summary(
+                question, child_summaries, "token_budget_exhausted"
             )
         except Exception:
-            joined = " ".join(c.answer for c in child_summaries) or ""
-            return NodeSummary(
-                question_id=question.id,
-                answer=joined,
-                key_claim_ids=[],
-                confidence=0.0,
-                caveats=["node_summary_unparseable"],
-                conflicts=[],
+            return await self._degraded_summary(
+                question, child_summaries, "node_summary_unparseable"
             )
         await self.ledger.log(
             "node_summary",
@@ -316,6 +372,35 @@ class Synthesizer:
             confidence=confidence,
             caveats=caveats,
             conflicts=conflicts,
+        )
+
+    async def _degraded_summary(
+        self, question, child_summaries: list[NodeSummary], reason: str
+    ) -> NodeSummary:
+        """Fall back to joining the children's answers, and say so.
+
+        This degradation predates the ledger entry and left no trace, so a
+        run whose reductions all degraded was byte-identical to one where
+        they all succeeded. That distinction is exactly what tells whether
+        isolating the report tier worked: reductions are allowed to degrade,
+        the assembly is not.
+        """
+        await self.ledger.log(
+            "node_reduction_degraded",
+            question.id,
+            {
+                "question_id": question.id,
+                "child_count": len(child_summaries),
+                "reason": reason,
+            },
+        )
+        return NodeSummary(
+            question_id=question.id,
+            answer=" ".join(c.answer for c in child_summaries) or "",
+            key_claim_ids=[],
+            confidence=0.0,
+            caveats=[reason],
+            conflicts=[],
         )
 
     async def reduce_tree(self, root_id: str) -> dict[str, NodeSummary]:
