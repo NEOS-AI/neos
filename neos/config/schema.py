@@ -817,7 +817,9 @@ class DeepAnalysisConfig(StrictConfigModel):
     # child answers, but assembly and the judge survive -- which is the point
     # of the reserve, and why the report tier is isolated from this one.
     # Budgeting for the observed maximum of 9 would put the reduction tier at
-    # 93,600 on the default profile, more than four times the whole dev cap.
+    # 93,600 on the default profile -- 93.6% of the dev profile's entire
+    # 100,000-token cap on its own, before the report tier or any
+    # investigation budget is even counted.
     finalization_reduction_allowance: int = Field(default=2, ge=1)
 
     # Fraction of a profile's global_token_cap above which the finalization
@@ -864,17 +866,37 @@ class DeepAnalysisConfig(StrictConfigModel):
     reduction_input_ratio: float = Field(default=1.6, gt=0.0)
     # Never measured -- report_assembly has never received a reservation in
     # 574 runs. This is not an estimate but a CLAMP: `prompt_clamp` shrinks
-    # the assembly prompt until `prompt_input_bound` reports a value under
-    # this allowance, so the bound holds by construction.
+    # the assembly's child blocks and caveats until `prompt_input_bound`
+    # reports a value under this allowance. That bounds those two pieces,
+    # not the whole prompt: `root_answer` is deliberately never clamped
+    # (design D-6, prompt_clamp.py) so body coverage is preserved, and on
+    # the degraded-reduction path it comes from
+    # `Synthesizer._degraded_summary`, which joins EVERY child's answer with
+    # no bound on child count. A wide degraded tree can therefore make
+    # `root_answer` plus the template alone exceed this allowance after the
+    # clampable material has already been dropped to nothing. When that
+    # happens `clamp_prompt` reports `exhausted=True` and lets `reserve()`
+    # decide, same as any other oversized call -- the clamp narrows the
+    # failure mode, it does not eliminate it.
     assembly_input_ratio: float = Field(default=3.0, gt=0.0)
     # Derived, not clamped. The judge is handed the whole report and giving it
     # a truncated one changes what is being judged, so there is nothing to
-    # clamp. The report body is already bounded by the assembly's own output
-    # ceiling (synthesis_max_tokens); only the token -> UTF-8 byte conversion
-    # that `conservative_input_bound` performs remains. Korean runs ~3 bytes
+    # clamp. This ratio is NOT a strict bound on the judge's input -- three
+    # things add to the assembly's own output ceiling (synthesis_max_tokens)
+    # before `ReportGrader.grade_agentic` sees the prompt:
+    #   1. `CitationRenderer.render` (citation.py) appends a `## 출처` block
+    #      with ONE LINE PER CITED CLAIM, each carrying that claim's full
+    #      source URL(s). The count of cited claims is unbounded here.
+    #   2. `root_text` (the root question) is passed alongside the report and
+    #      is not part of the assembly's output at all.
+    #   3. The `report_judge.md` prompt template's own literal instruction
+    #      text is a fixed but non-trivial number of bytes.
+    # 5.0x carries headroom for all three rather than deriving a strict
+    # bound: the token -> UTF-8 byte conversion alone (Korean runs ~3 bytes
     # per syllable at roughly one token per syllable; 4.5 bytes/token covers
-    # rarer 4-byte characters and JSON escaping, plus ~600 bytes of the
-    # report_judge.md template.
+    # rarer 4-byte characters and JSON escaping) would already consume most
+    # of the margin over 4.0x, so the round-up to 5.0x is what actually
+    # absorbs 1-3 above.
     grading_input_ratio: float = Field(default=5.0, gt=0.0)
 
     max_stall_rounds: int = 3
