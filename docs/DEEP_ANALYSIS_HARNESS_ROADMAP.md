@@ -417,6 +417,11 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
 - `report_assembly` stage의 `token_budget_reserved` > 0 (현재 0)
 - `report_assembly_degraded`가 run당 3건에서 감소
 - dev run 완료율 5/5 유지 (G8 회귀 재발 없음)
+- `finalization_prompt_clamped`가 `exhausted=true`이거나 `dropped_primary`가
+  그 run의 child 개수와 같은 건수는 0이어야 한다 — `root_answer`는 클램프되지
+  않으므로(D-6) 모든 child finding이 잘려나가도 `synth_pass`는 그대로 남는다.
+  이 건수가 0이 아니면 그 `synth_pass`는 가짜 양성이다(루트 답변만 남은 리포트가
+  LLM 성공처럼 보이는 것)
 
 **2026-08-04 상태:** 코드·결정론 테스트 완료(D-1 = 2안 풀 분할, D-4 = dev cap 100,000,
 D-5 = 재시도 3회분 보장, D-6 = caveats → 자식 꼬리 → 자식 수).
@@ -503,7 +508,7 @@ S1–S6 전부 충족 후 `deep_analysis.enabled` 기본값 전환을 **별도 �
 | **D-1** | W1의 접근 (§8 W1 표) | a 산식 보정 / b 프롬프트 축소 / c 풀 분할 | ✅ 결정됨: **c(풀 분할) + 측정 클램프** — `report_floor_tokens` 안쪽 tier + `prompt_input_bound`로 마무리 프롬프트를 강제 축소(D25, `c9a05d19`/`bf4ba20a`/`30419503`). c가 근본적이나 범위가 크다는 우려는 있었으나, 산식 보정(a)은 input 예측이 빗나가면 floor가 과대해지는 문제가 있어 채택하지 않았다 |
 | **D-2** | assertion 0건 리포트 채점 (G3) | 통과 / 반려 / 제3 판정(예: "내용 없음" 코드) | 사용자 영향 최대. 지금은 빈 리포트만 통과 중 |
 | **D-3** | E3 judge 모델 분리 시점 | W4에서 / 출하 직전 / 즉시 | 즉시 하면 진행 중 표본과의 비교가 끊긴다 |
-| **D-4** | dev floor 비율 | 현행 22%(4,400/20,000) 유지 / 축소 | ✅ 결정됨: **dev `global_token_cap` 20,000 → 100,000** — 기존 캡은 `worker_analysis` 호출 한 번(input_bound 5,542~17,723)도 담지 못했다. 새 floor 비율은 41.0%(34,800/41,040)로 default(43.7%)와 같은 수준(`4a2499cc`/`5376048a`). 논의 중 80,000으로 합의됐다가 `grading_input_ratio` 교정(4.0→5.0) 후 100,000으로 재조정됐다 — 80,000이면 경고 임계값 0.5가 상시 발동한다 |
+| **D-4** | dev floor 비율 | 현행 22%(4,400/20,000) 유지 / 축소 | ✅ 결정됨: **dev `global_token_cap` 20,000 → 100,000** — 기존 캡은 `worker_analysis` 호출 한 번(input_bound 5,542~17,723)도 담지 못했다. 새 floor 비율은 41.0%(41,040/100,000)로 default(43.7%)와 같은 수준(`4a2499cc`/`5376048a`). 논의 중 80,000으로 합의됐다가 `grading_input_ratio` 교정(4.0→5.0) 후 100,000으로 재조정됐다 — 80,000이면 경고 임계값 0.5가 상시 발동한다 |
 
 ---
 
