@@ -15,7 +15,7 @@
 | [role_based_model_routing_task_resume.md](archive/role_based_model_routing_task_resume.md) | 라우팅 작업 결과와 잔여 이슈 |
 | [TODO_260729.md](TODO_260729.md) | 미해결 백로그 원장 — A·B·C·D·E·F·G 계열 실측 수치 |
 | [FE_AUDIT_260717.md](FE_AUDIT_260717.md) | 프론트엔드 감사 — §6이 job 서비스 전환 준비도를 판정 (트랙 C의 기준선) |
-| `neos/workflow/deep_analysis/DECISIONS.md` | 결정 원장 D1–D23 |
+| `neos/workflow/deep_analysis/DECISIONS.md` | 결정 원장 D1–D25 |
 
 > ⚠️ **진행 상황의 근거 규칙.** 플랜 문서(`docs/superpowers/plans/*`)의 체크박스는
 > 43개 전부 `- [x]`가 0개다. **신뢰하지 말 것.** 실제 진행은 (1) git 커밋,
@@ -28,9 +28,9 @@
 
 | 트랙 | 상태 | 다음 관문 |
 |---|---|---|
-| **A. 심층분석 하네스** | 🟡 코어 완성, **산출물 미달** | 마무리 단계가 예산을 받아 LLM 리포트를 실제로 내는 것 (G6·G7) |
+| **A. 심층분석 하네스** | 🟡 코어 완성, **산출물 미달** | 마무리 예산 구조 완료(G6·G7 해소) — 남은 것은 라이브 표본으로 `synth_pass`를 확인하는 것 (W1, 아직 미실행) |
 | **B. 역할 기반 모델 라우팅** | ✅ 완료 · 안정 | 유지보수 모드. 카탈로그 불변식 지키기 |
-| **C. 프론트엔드** | ✅ job 마이그레이션 완료, 🟡 **가시성 갭** | 새 실패 이벤트 6종이 UI에 라벨 없이 흘러간다 (§5.2) |
+| **C. 프론트엔드** | ✅ job 마이그레이션 완료, 🟡 **가시성 갭** | 새 실패 이벤트 8종이 UI에 라벨 없이 흘러간다 (§5.2) |
 
 **트랙 A 한 줄 요약 (2026-08-04 실측):**
 사용자에게 나간 deep-analysis 리포트 중 **LLM이 작성한 것은 아직 0건이다.**
@@ -47,7 +47,7 @@ G8 수정 후 재측정에서도 6/6 run이 전부 `Synthesizer.deterministic_re
 `docs/FE_AUDIT_260717.md` §6이 "미준비"로 판정했던 job 서비스 전환 차단 요인
 **5개가 전부 해소**됐다 — run 스트림 프록시·커서 재구독·active-run-store가
 약 1,665줄로 구현돼 있고 `pnpm test:source` 147 passed. 남은 것은 기능이 아니라
-**가시성**이다: 08-02~04에 추가한 실패 이벤트 6종에 FE 라벨이 없다.
+**가시성**이다: 08-02~04에 추가한 실패 이벤트 8종에 FE 라벨이 없다.
 
 **기본 플래그:** `deep_analysis.enabled = False` (`neos/config/schema.py:613`).
 즉 세 트랙 모두 **프로덕션 기본 경로에는 아직 없다** — 프론트엔드 UI도 백엔드가
@@ -81,7 +81,7 @@ job을 dispatch해야 살아나므로 이 플래그에 함께 묶여 있다.
 | S3 | 리포트 본문이 보존된다 | ❌ `report_path` 574 run 전부 NULL | reports 테이블 |
 | S4 | 정지 사유가 원장에서 정확히 구분된다 | ⚠️ 6건 중 4건 오분류 (G9) | `token_budget_exhausted` vs `investigation_stopped_at_floor` |
 | S5 | 전체 스위트가 CI에서 결정론적으로 통과한다 | ⚠️ 선결 3건 (#9·#10·#11) | CI 워크플로 |
-| S6 | 실패가 사용자에게도 보인다 (원장뿐 아니라 UI에서) | ❌ 실패 이벤트 6종에 FE 라벨 없음 | `progress.ts`의 `activityLabel()` 커버리지 |
+| S6 | 실패가 사용자에게도 보인다 (원장뿐 아니라 UI에서) | ❌ 실패 이벤트 8종에 FE 라벨 없음 | `progress.ts`의 `activityLabel()` 커버리지 |
 
 > S6은 나중에 추가됐다(2026-08-04, 트랙 C 확인 중). S1~S5를 다 채워도 사용자가
 > 여전히 강등을 모른다면 "조용한 실패"를 고쳤다고 할 수 없기 때문이다.
@@ -130,7 +130,7 @@ job을 dispatch해야 살아나므로 이 플래그에 함께 묶여 있다.
 07-25~26       entailment 실측 평가                   ✅ 결론: 비율↑는 노이즈와 구별 불가, pool은 -42%
 07-28~29       discard recall 측정                    🟡 n=0으로 `inconclusive`
       ↓
-08-02~04       "조용한 실패" 계열                     🟡 A1·A2·G1·G2·G8 해소, G5 부분, G6·G7 미해결
+08-02~04       "조용한 실패" 계열                     🟡 A1·A2·G1·G2·G8 해소, G5 부분, G6·G7 해소(D25)
 ```
 
 **7월 말~8월 초 구간을 관통하는 주제 하나:**
@@ -154,12 +154,14 @@ job을 dispatch해야 살아나므로 이 플래그에 함께 묶여 있다.
 > **읽는 법:** 설계 §6.7·§6.8은 **설계 의도이지 관측된 동작이 아니다.**
 > 게이트 통계를 인용할 때 반드시 이 전제를 붙일 것.
 
-### 3.4 현재 프론티어 — G6 · G7
+### 3.4 이전 프론티어 — G6 · G7 (2026-08-04 해소, §3.5로 이동)
 
 G5(마무리 예산 floor)는 조사가 마무리 몫을 침범하지 못하게 막는 데는 성공했다.
-그런데도 조립이 예약을 못 받는다. 원인 두 가지가 **실측으로 확정**됐다.
+그런데도 조립이 예약을 못 받았다. 원인 두 가지가 **실측으로 확정**됐고, D25가
+`report_floor_tokens` 안쪽 tier + 입력 통화 사이징으로 둘 다 해소했다. 아래는
+당시 실측 기록이며, 해소 사실 자체는 §3.5를 볼 것.
 
-**🔴 G6 — floor가 input을 계산에 넣지 않는다**
+**✅ (해소) G6 — floor가 input을 계산에 넣지 않는다**
 
 `floor = (allowance+1) × synthesis + judge`는 **output 토큰만** 센다. 반면
 `reserve()`는 `conservative_input_bound`로 프롬프트 전체(UTF-8 바이트 + 64)를
@@ -174,7 +176,7 @@ G5(마무리 예산 floor)는 조사가 마무리 몫을 침범하지 못하게 
 
 `node_reduction` 한 번이 최대 6,480을 input으로만 쓴다 — **dev floor 4,400 전체보다 크다.**
 
-**🔴 G7 — floor가 하나의 통합 풀이라 호출 횟수가 강제되지 않는다**
+**✅ (해소) G7 — floor가 하나의 통합 풀이라 호출 횟수가 강제되지 않는다**
 
 `finalization_reduction_allowance=2`는 floor의 **크기**만 정하고 실제
 `reduce_node` 호출 수를 제한하지 않는다. default run `20c4798f`(floor 12,800) 추적:
@@ -202,6 +204,8 @@ G5(마무리 예산 floor)는 조사가 마무리 몫을 침범하지 못하게 
 | G1 | "게이트 문제인가 §7 하류 증상인가" → **게이트 문제로 확정** | 2026-08-03 |
 | G5 | `TokenBudget.floor_tokens` + `available_for_investigation` (부분 완료) | 2026-08-03 |
 | G8 | `min_viable_output_tokens`(2,048) 미만 예약 거절 — dev run 0/5 → **5/5** | `71769b0f` |
+| G7 | `REPORT_STAGES`(assembly·grading) 전용 안쪽 tier — 리덕션이 조립 몫에 닿지 못한다 | `c9a05d19` |
+| G6 | floor를 입력 통화로 재사이징 — 비율 3종을 `synthesis_max_tokens`에서 유도, dev cap 20,000 → 100,000 | `5376048a` |
 
 > G8은 **회귀 대응**이었다. floor 도입이 dev run을 100% 죽였고(25 토큰짜리 JSON
 > decompose가 반드시 잘림), 그것이 하드 에러가 되어 job까지 전파됐다.
@@ -303,6 +307,8 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
 | `llm_truncated` · `truncation_handled` | 08-02 (A2) | ❌ 없음 |
 | `entailment_filter_skipped` | 08-02 (A2) | ❌ 없음 |
 | `claim_discarded` | 07-27 | ❌ 없음 |
+| `finalization_prompt_clamped` | 08-04 (D25/G6·G7) | ❌ 없음 |
+| `node_reduction_degraded` | 08-04 (D25/G6·G7) | ❌ 없음 |
 
 **동작은 안전하다** — 모르는 kind도 커서를 전진시키고 라벨만 `null`을 반환한다
 (`progress.ts:148-153`의 명시적 설계: "모르는 이벤트 때문에 커서가 멈추면 재구독이
@@ -367,8 +373,6 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
 
 | 우선 | ID | 내용 | 트랙 |
 |---|---|---|---|
-| 🔴 | **G6** | floor가 `input_bound`를 계산에 안 넣는다 — `node_reduction` input 최대 6,480 > dev floor 4,400 | A |
-| 🔴 | **G7** | floor가 통합 풀이라 reduction 호출 횟수 미강제 — run당 3.7회 vs allowance 2 | A |
 | 🟡 | G9 | floor 정지가 `token_budget_exhausted`로 오분류 (6건 중 4건). 예외 핸들러가 if/elif보다 먼저 실행 | A |
 | 🟡 | G4 | `report_path`가 574 run 전부 NULL — 리포트 본문이 보존된 적 없다 | A |
 | 🟡 | G3 | 게이트가 뒤집혀 있다 — assertion 0건이면 비율 0.0(만점). **정책 결정 필요** | A |
@@ -383,7 +387,7 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
 | 🧪 | CI #10 | `tests/api/` 순서 의존 오염 미확인 | — |
 | 🧪 | CI #11 | analytics 테스트 run 스코프 — **코드 확인상 해소**, 실행 검증 필요 | — |
 | ⚠️ | F3 | `managed-sandbox-control-plane` worktree에 구식 `AgenticGrader(...)` 11곳 — 병합 시 `TypeError` | — |
-| 🟡 | **FE1** | 실패 이벤트 6종에 FE 라벨 없음 — 성공만 보이고 실패는 침묵 (§5.2) | C |
+| 🟡 | **FE1** | 실패 이벤트 8종에 FE 라벨 없음 — 성공만 보이고 실패는 침묵 (§5.2) | C |
 | 🟡 | FE2 | `chat/route.ts`의 `maxDuration = 60` 잔존 (TODO #14) | C |
 | 🟢 | FE3 | TODO #12·#13이 **존재하지 않는 파일**을 가리킨다 — 항목 재확인 또는 폐기 필요 | C |
 | 🟢 | — | SKILL.md 누락 6개 / `deep_analysis_*` 테이블 1.6만 행 | B |
@@ -414,6 +418,12 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
 - `report_assembly_degraded`가 run당 3건에서 감소
 - dev run 완료율 5/5 유지 (G8 회귀 재발 없음)
 
+**2026-08-04 상태:** 코드·결정론 테스트 완료(D-1 = 2안 풀 분할, D-4 = dev cap 100,000,
+D-5 = 재시도 3회분 보장, D-6 = caveats → 자식 꼬리 → 자식 수).
+**완료 기준은 아직 미판정이다** — `synth_pass ≥ 1`은 라이브 표본 5+1이 필요하고,
+§10.2의 "정확히 1회" 원칙상 코드가 확정된 지금 한 번만 실행해야 한다.
+따라서 §2.2의 S1은 ❌로 유지한다.
+
 ### W2. 원장이 진실을 말한다
 
 **대상:** G9, G4, **FE1**
@@ -422,7 +432,7 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
   `_mark_investigation_stopped_at_floor`
 - G4: 리포트 본문 영속화 (`report_path` 채우기)
 - **FE1: 원장의 진실을 UI까지 밀어낸다** — `progress.ts`의 `activityLabel()`에
-  실패 이벤트 6종 라벨 추가 (§5.2). 백엔드만 고치면 "원장은 정확한데 사용자는
+  실패 이벤트 8종 라벨 추가 (§5.2). 백엔드만 고치면 "원장은 정확한데 사용자는
   여전히 모른다"에서 멈춘다
 
 **완료 기준:** 정지 사유 오분류 0건(**S4**), 신규 run의 `report_path` NULL 비율 0%(**S3**),
@@ -490,10 +500,10 @@ S1–S6 전부 충족 후 `deep_analysis.enabled` 기본값 전환을 **별도 �
 
 | # | 결정 | 선택지 | 영향 |
 |---|---|---|---|
-| **D-1** | W1의 접근 (§8 W1 표) | a 산식 보정 / b 프롬프트 축소 / c 풀 분할 | c가 근본적이나 범위가 크다. **b→a→c 순 점증 권장** |
+| **D-1** | W1의 접근 (§8 W1 표) | a 산식 보정 / b 프롬프트 축소 / c 풀 분할 | ✅ 결정됨: **c(풀 분할) + 측정 클램프** — `report_floor_tokens` 안쪽 tier + `prompt_input_bound`로 마무리 프롬프트를 강제 축소(D25, `c9a05d19`/`bf4ba20a`/`30419503`). c가 근본적이나 범위가 크다는 우려는 있었으나, 산식 보정(a)은 input 예측이 빗나가면 floor가 과대해지는 문제가 있어 채택하지 않았다 |
 | **D-2** | assertion 0건 리포트 채점 (G3) | 통과 / 반려 / 제3 판정(예: "내용 없음" 코드) | 사용자 영향 최대. 지금은 빈 리포트만 통과 중 |
 | **D-3** | E3 judge 모델 분리 시점 | W4에서 / 출하 직전 / 즉시 | 즉시 하면 진행 중 표본과의 비교가 끊긴다 |
-| **D-4** | dev floor 비율 | 현행 22%(4,400/20,000) 유지 / 축소 | `finalization_floor_warn_ratio=0.5` 경고가 22%에서 발동 안 함 — **경고 임계값이 실제 파괴 임계값보다 느슨하다** |
+| **D-4** | dev floor 비율 | 현행 22%(4,400/20,000) 유지 / 축소 | ✅ 결정됨: **dev `global_token_cap` 20,000 → 100,000** — 기존 캡은 `worker_analysis` 호출 한 번(input_bound 5,542~17,723)도 담지 못했다. 새 floor 비율은 41.0%(34,800/41,040)로 default(43.7%)와 같은 수준(`4a2499cc`/`5376048a`). 논의 중 80,000으로 합의됐다가 `grading_input_ratio` 교정(4.0→5.0) 후 100,000으로 재조정됐다 — 80,000이면 경고 임계값 0.5가 상시 발동한다 |
 
 ---
 
@@ -570,10 +580,14 @@ rg -n 'gpt-4-turbo-preview|gpt-4o|claude-sonnet-4-6|claude-opus-4-6|gpt-5-mini-2
   neos config web/lib docs/CONFIGURATION.md examples
 ```
 
-> 전체 스위트는 `c219531d` 이후 **결정론적**이다(2112~2234 passed / 0 failed).
+> 전체 스위트는 `c219531d` 이후 **결정론적**이다.
 > 실패가 하나라도 보이면 **실제 회귀로 취급하라.**
 > 회귀 비교 시 `grep '^FAILED tests/'`로 걸러야 한다 — `'^FAILED'`만 쓰면
 > 진행 표시(`FAILED  [ 7%]`)까지 걸린다.
+>
+> ⚠️ **"2112~2234 passed" 기준선은 낡았다.** 이 기계에 PostgreSQL이 없던 시절의
+> 수치다. 2026-08-04 기준 DB가 떠 있는 상태의 실측은 **2,386 passed / 16 skipped /
+> 0 failed**다 — 이것이 현재 참 기준선이다.
 
 ### 10.5 낡은 문서 주의
 
