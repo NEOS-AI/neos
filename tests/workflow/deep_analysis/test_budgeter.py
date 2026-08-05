@@ -399,3 +399,51 @@ async def test_report_tier_defaults_to_zero_and_preserves_current_behaviour():
 
     assert budget.report_floor_tokens == 0
     assert budget.available_for_reduction == budget.remaining_tokens
+
+
+def test_orchestrator_report_tier_defaults_to_zero():
+    """골든/통합 테스트가 1,000토큰 캡으로 오케스트레이터를 만든다.
+
+    안쪽 tier를 안에서 전역 설정으로 계산하면 그런 run의 리덕션 예산이
+    0이 된다. floor와 같은 이유로 주입받고 기본값은 0이다.
+    """
+    orch = Orchestrator(
+        object(), "run0001", lambda: None, None, global_token_cap=1000
+    )
+
+    assert orch.token_budget.report_floor_tokens == 0
+    assert orch.token_budget.available_for_reduction == 1000
+
+
+def test_orchestrator_passes_both_tiers_to_the_budget():
+    orch = Orchestrator(
+        object(),
+        "run0001",
+        lambda: None,
+        None,
+        global_token_cap=100_000,
+        finalization_floor_tokens=41_040,
+        report_floor_tokens=34_800,
+    )
+
+    assert orch.token_budget.floor_tokens == 41_040
+    assert orch.token_budget.report_floor_tokens == 34_800
+    assert orch.token_budget.available_for_investigation == 58_960
+
+
+def test_service_wiring_keeps_the_tiers_ordered():
+    """service.py가 계산해 넣는 두 값이 TokenBudget의 불변식을 만족해야 한다.
+
+    build_orchestrator 를 세션 없이 부를 수는 없으므로 산식만 검증한다.
+    """
+    from neos.config.settings import settings
+
+    config = settings.config.deep_analysis
+    for synth in (
+        config.synthesis_max_tokens,
+        config.dev_profile.synthesis_max_tokens,
+    ):
+        assert (
+            config.report_floor_tokens(synth)
+            <= config.finalization_floor_tokens(synth)
+        )
