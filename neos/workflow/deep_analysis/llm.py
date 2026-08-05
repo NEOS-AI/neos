@@ -10,7 +10,10 @@ from typing import Any
 
 from neos.providers.anthropic import normalize_anthropic_request
 from neos.config.settings import settings
-from neos.workflow.deep_analysis.token_budget import active_token_budget
+from neos.workflow.deep_analysis.token_budget import (
+    active_token_budget,
+    conservative_input_bound,
+)
 
 
 class JSONParseError(ValueError):
@@ -190,6 +193,24 @@ async def _call_live_provider(*args, **kwargs) -> LLMResponse:
         raise
     except Exception as exc:
         raise LLMProviderError(str(exc)) from exc
+
+
+def prompt_input_bound(model: str, prompt: str) -> int:
+    """The input bound `reserve()` would charge for this single-prompt call.
+
+    Deliberately mirrors the `request` dict `call_llm` passes to
+    `_budgeted_dispatch` below. Two rulers -- one for measuring, one for
+    charging -- would let a clamp certify a prompt the budget then refuses,
+    which is the whole failure this measurement exists to prevent. If the
+    request shape below changes, this changes with it.
+    """
+    return conservative_input_bound(
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "tools": None,
+        }
+    )
 
 
 async def _budgeted_dispatch(
