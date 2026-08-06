@@ -391,6 +391,10 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
 | 🟡 | FE2 | `chat/route.ts`의 `maxDuration = 60` 잔존 (TODO #14) | C |
 | 🟢 | FE3 | TODO #12·#13이 **존재하지 않는 파일**을 가리킨다 — 항목 재확인 또는 폐기 필요 | C |
 | 🟢 | — | SKILL.md 누락 6개 / `deep_analysis_*` 테이블 1.6만 행 | B |
+| 🟢 | W1-m1 | `node_summary.prompt_chars`가 이제 **클램프된** 프롬프트를 잰다 — 이 경계 전후로 비교 불가. 비교하려면 `finalization_prompt_clamped`와 조인해야 한다 | A |
+| 🟢 | W1-m2 | `Synthesizer.assembly_input_allowance`는 외부에서 만든 Synthesizer를 주입하면 **전역** `synthesis_max_tokens`로 떨어진다(프로파일 값이 아니라). 프로덕션 경로는 일관되지만 주석은 이 경우를 부정한다 | A |
+| 🟢 | W1-m3 | `tests/workflow/deep_analysis/test_synthesizer.py`의 docstring이 옛 dev 프로파일(15x / 20,000)을 서술한다. 단언은 의존하지 않는다 | A |
+| 🟢 | W1-m4 | §8 W1의 접근 후보 표에서 **c**가 "`reduce_node` 호출 수를 실제 강제"라고 적혀 있으나 구현은 의도적으로 강제하지 않았다(풀 격리로 대체). §9 D-1 칸이 이를 정정한다 | A |
 
 ---
 
