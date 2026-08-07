@@ -30,7 +30,8 @@
 |---|---|---|
 | **A. 심층분석 하네스** | 🟡 코어 완성, **산출물 미달** | 마무리 예산 구조 완료(G6·G7 해소) — 남은 것은 라이브 표본으로 `synth_pass`를 확인하는 것 (W1, 아직 미실행) |
 | **B. 역할 기반 모델 라우팅** | ✅ 완료 · 안정 | 유지보수 모드. 카탈로그 불변식 지키기 |
-| **C. 프론트엔드** | ✅ job 마이그레이션 완료, 🟡 **가시성 갭** | 새 실패 이벤트 8종이 UI에 라벨 없이 흘러간다 (§5.2) |
+| **C. 프론트엔드** | ✅ job 마이그레이션 완료, ✅ 가시성 갭 해소(FE1, W2) | 남은 것은 §5.3의 저위험 잔여(FE2·FE3)뿐 |
+| **D. 프레임워크 이탈·계측 통일** | ⬜ 미착수 (2026-08-07 신규) | 4개 과제 중 crewai 삭제만 즉시 가능. 나머지는 라이브 표본 측정과 상호배타 (§11) |
 
 **트랙 A 한 줄 요약 (2026-08-04 실측):**
 사용자에게 나간 deep-analysis 리포트 중 **LLM이 작성한 것은 아직 0건이다.**
@@ -43,11 +44,19 @@ G8 수정 후 재측정에서도 6/6 run이 전부 `Synthesizer.deterministic_re
 `neos/config/models.yaml` 단일 원천으로 모였고, 배포 *정책*(`model_routing`)과
 분리돼 있다. 백엔드 2234 passed / 0 failed, 게이트웨이 5/5, 프론트 `tsc` clean.
 
-**트랙 C 한 줄 요약 (2026-08-04 실측):**
+**트랙 C 한 줄 요약 (2026-08-04 실측, 가시성 갭은 2026-08-07 W2로 해소):**
 `docs/FE_AUDIT_260717.md` §6이 "미준비"로 판정했던 job 서비스 전환 차단 요인
 **5개가 전부 해소**됐다 — run 스트림 프록시·커서 재구독·active-run-store가
-약 1,665줄로 구현돼 있고 `pnpm test:source` 147 passed. 남은 것은 기능이 아니라
-**가시성**이다: 08-02~04에 추가한 실패 이벤트 8종에 FE 라벨이 없다.
+약 1,665줄로 구현돼 있고 `pnpm test:source` 147 passed. 당시 남았던 갭 —
+08-02~04에 추가한 실패 이벤트 8종에 FE 라벨이 없던 것(FE1) — 은 W2에서
+라벨 7종 + `report_graded` 분기 수정 + `degradations` 누적으로 해소했다(`a9dbcfe3`).
+
+**트랙 D 한 줄 요약 (2026-08-07 신설):**
+데이터셋 콜렉터 확장 · 멀티홉/citation 스킬화 · langgraph·crewai 삭제 ·
+네이티브 SDK 전환 — 네 과제가 하나의 의존 사슬로 묶여 있다. 핵심은
+**콜렉터의 유일한 자동 계측 지점(`TrackedLLM`)이 LangChain 타입에 묶여 있어서
+SDK 전환이 계측을 파괴한다**는 것이다. 순서를 틀리면 §3.2가 경고한
+"조용한 실패"가 계측 계층에서 재현된다. 전체 설계는 **§11**.
 
 **기본 플래그:** `deep_analysis.enabled = False` (`neos/config/schema.py:613`).
 즉 세 트랙 모두 **프로덕션 기본 경로에는 아직 없다** — 프론트엔드 UI도 백엔드가
@@ -78,10 +87,10 @@ job을 dispatch해야 살아나므로 이 플래그에 함께 묶여 있다.
 |---|---|---|---|
 | S1 | LLM이 조립한 리포트가 실제로 나온다 | ❌ `synth_pass` 0건 | `deep_analysis_events` `kind='synth_pass'` |
 | S2 | 리포트 게이트가 알맹이 있는 리포트를 통과시킨다 | ❌ 통과 9건 중 7건이 claim 0건 | `report_graded` × run별 verified claim 수 |
-| S3 | 리포트 본문이 보존된다 | ❌ `report_path` 574 run 전부 NULL | reports 테이블 |
-| S4 | 정지 사유가 원장에서 정확히 구분된다 | ⚠️ 6건 중 4건 오분류 (G9) | `token_budget_exhausted` vs `investigation_stopped_at_floor` |
+| S3 | 리포트 본문이 보존된다 | ✅ (2026-08-07, W2 — 전제 정정: 본문은 유실된 적이 없었다) | `job_completed` 페이로드에 `report_markdown`이 실린 비율 |
+| S4 | 정지 사유가 원장에서 정확히 구분된다 | ✅ (2026-08-07, W2 — G9 해소) | `token_budget_exhausted` vs `investigation_stopped_at_floor` |
 | S5 | 전체 스위트가 CI에서 결정론적으로 통과한다 | ⚠️ 선결 3건 (#9·#10·#11) | CI 워크플로 |
-| S6 | 실패가 사용자에게도 보인다 (원장뿐 아니라 UI에서) | ❌ 실패 이벤트 8종에 FE 라벨 없음 | `progress.ts`의 `activityLabel()` 커버리지 |
+| S6 | 실패가 사용자에게도 보인다 (원장뿐 아니라 UI에서) | ✅ (2026-08-07, W2 — FE1 해소) | `progress.ts`의 `activityLabel()` 커버리지 |
 
 > S6은 나중에 추가됐다(2026-08-04, 트랙 C 확인 중). S1~S5를 다 채워도 사용자가
 > 여전히 강등을 모른다면 "조용한 실패"를 고쳤다고 할 수 없기 때문이다.
@@ -198,6 +207,9 @@ G5(마무리 예산 floor)는 조사가 마무리 몫을 침범하지 못하게 
 
 | 항목 | 내용 | 커밋 |
 |---|---|---|
+| G9 | 정지 사유 판정을 `_mark_stop_reason()` 하나로 접음 — 정상/예외 두 경로가 이제 같은 판정을 냄. 오분류 6건 중 4건 → 0건 | `7318a840` |
+| G4 | **전제 정정**: `report_path` NULL은 사실이나 본문 유실은 없었다(`jobs.py`가 `job_completed` 페이로드에 실음, AC6). `Ledger.report_markdown()` / `report_bodies()` 조회 경로 신설 | `a258f36e`(원본 `f200b26c`) |
+| FE1 | `activityLabel()`에 실패 이벤트 7종 라벨 추가 + `report_graded`가 굶은 판정자를 승인과 구별 + `degradations` 누적 상태 신설 | `a9dbcfe3` |
 | A2 | `stop_reason` 전파 — 잘린 응답 ≠ 파싱 실패한 쓰레기. `call_json` 1회 확장 재시도(2배) | 2026-08-02 |
 | A1 | `report.py` 판정자 상한 300 → 800 | `a92fa4f9` |
 | G2 | `report_graded`에 `uncited_ratio`·분자·분모·임계값 적재 | `56b28f3e` |
@@ -301,26 +313,30 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
 
 | 이벤트 | 추가 시점 | FE 라벨 |
 |---|---|---|
-| `report_assembly_degraded` | 08-03 (G5) | ❌ 없음 |
-| `investigation_stopped_at_floor` | 08-03/08-04 (G5·G8) | ❌ 없음 |
-| `judge_budget_exhausted` | 08-03 (G5) | ❌ 없음 |
-| `llm_truncated` · `truncation_handled` | 08-02 (A2) | ❌ 없음 |
-| `entailment_filter_skipped` | 08-02 (A2) | ❌ 없음 |
-| `claim_discarded` | 07-27 | ❌ 없음 |
-| `finalization_prompt_clamped` | 08-04 (D25/G6·G7) | ❌ 없음 |
-| `node_reduction_degraded` | 08-04 (D25/G6·G7) | ❌ 없음 |
+| `report_assembly_degraded` | 08-03 (G5) | ✅ (2026-08-07, W2) |
+| `investigation_stopped_at_floor` | 08-03/08-04 (G5·G8) | ✅ (2026-08-07, W2) |
+| `judge_budget_exhausted` | 08-03 (G5) | ✅ (2026-08-07, W2) — 이벤트 kind가 **아니다**. `report_graded.diagnostics.judge` 값(`"budget_exhausted"`/`"truncated"`/`"unparseable"`)이며, `report_graded` 분기가 이 값을 읽어 굶은 판정자의 통과를 승인과 다른 문구로 낸다 |
+| `llm_truncated` · `truncation_handled` | 08-02 (A2) | ✅ (2026-08-07, W2) |
+| `entailment_filter_skipped` | 08-02 (A2) | ✅ (2026-08-07, W2) |
+| `claim_discarded` | 07-27 | ✅ (2026-08-07, W2) |
+| `finalization_prompt_clamped` | 08-04 (D25/G6·G7) | ✅ (2026-08-07, W2) |
+| `node_reduction_degraded` | 08-04 (D25/G6·G7) | ✅ (2026-08-07, W2) |
 
-**동작은 안전하다** — 모르는 kind도 커서를 전진시키고 라벨만 `null`을 반환한다
+**해소됨(2026-08-07, W2, `a9dbcfe3`)** — 위 표는 갭이 있던 시점의 스냅샷으로 남긴다.
+당시 동작은 안전했다 — 모르는 kind도 커서를 전진시키고 라벨만 `null`을 반환했다
 (`progress.ts:148-153`의 명시적 설계: "모르는 이벤트 때문에 커서가 멈추면 재구독이
-영원히 같은 지점을 다시 읽는다"). **깨지지 않지만 보이지 않는다.**
+영원히 같은 지점을 다시 읽는다"). **깨지지는 않았지만 보이지 않았다.**
 
-**왜 문제인가.** §3.2에 적은 이 구간의 주제가 "고치기 전에 보이게 만든다"였는데,
-그 가시성이 **원장에서 멈춘다.** 사용자는 여전히 리포트가 템플릿으로 강등된 것을
-알 수 없다 — 정확히 이 작업이 없애려던 상태다.
+**당시 왜 문제였는가.** §3.2에 적은 이 구간의 주제가 "고치기 전에 보이게 만든다"였는데,
+그 가시성이 **원장에서 멈췄다.** 사용자는 리포트가 템플릿으로 강등된 것을 알 수 없었다
+— 정확히 이 작업이 없애려던 상태다. `judge_budget_exhausted`의 경우 실제 결함은 라벨
+누락이 아니라 **라벨이 거짓말을 하는 것**이었다 — `report_graded` 분기가
+`payload.ok === true`만 보아 굶은 판정자의 통과와 실제 승인이 같은 문구로 나왔다.
 
-> ⚠️ FE는 `synth_pass`와 `report_graded`는 **이미 인식한다**(`progress.ts:133,136`).
-> 즉 W1이 성공하면 그 성과는 FE에 자동으로 나타난다. 반대로 **실패 경로만 보이지
-> 않는다** — 성공만 보이고 실패는 침묵하는 비대칭이다.
+> ⚠️ FE는 `synth_pass`와 `report_graded`는 **이미 인식했다**(`progress.ts:133,136`).
+> 즉 W1이 성공하면 그 성과는 FE에 자동으로 나타난다. W2 이전에는 **실패 경로만
+> 보이지 않았다** — 성공만 보이고 실패는 침묵하는 비대칭이었다. `degradations` 필드가
+> 이제 🔴 3종을 run 종료 후에도 남는 상태로 누적한다(§8 W2).
 
 ### 5.3 프론트엔드 잔여 (TODO §12~14 재확인)
 
@@ -340,6 +356,8 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
 ## 6. 세 트랙의 접점 — 잊기 쉬운 곳
 
 라우팅이 끝났다고 하네스와 무관한 게 아니다. 실제로 얽힌 지점이 넷 있다.
+(트랙 D가 라우팅과 얽히는 지점은 여기가 아니라 **§11.4**에 있다 — 네이티브 SDK
+전환이 §4.2 불변식을 되돌릴 수 있다.)
 
 **① E3 — `judge ≠ worker` 불변식이 지금 깨져 있다 🔴**
 
@@ -373,8 +391,6 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
 
 | 우선 | ID | 내용 | 트랙 |
 |---|---|---|---|
-| 🟡 | G9 | floor 정지가 `token_budget_exhausted`로 오분류 (6건 중 4건). 예외 핸들러가 if/elif보다 먼저 실행 | A |
-| 🟡 | G4 | `report_path`가 574 run 전부 NULL — 리포트 본문이 보존된 적 없다 | A |
 | 🟡 | G3 | 게이트가 뒤집혀 있다 — assertion 0건이면 비율 0.0(만점). **정책 결정 필요** | A |
 | 🟡 | E3 | judge = SCOUT worker (동일 모델). 불변식 위반, 의도적 유예 중 | A×B |
 | 🟡 | C1 | discard recall 재측정 — 2회 연속 n=0 | A |
@@ -387,13 +403,17 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
 | 🧪 | CI #10 | `tests/api/` 순서 의존 오염 미확인 | — |
 | 🧪 | CI #11 | analytics 테스트 run 스코프 — **코드 확인상 해소**, 실행 검증 필요 | — |
 | ⚠️ | F3 | `managed-sandbox-control-plane` worktree에 구식 `AgenticGrader(...)` 11곳 — 병합 시 `TypeError` | — |
-| 🟡 | **FE1** | 실패 이벤트 8종에 FE 라벨 없음 — 성공만 보이고 실패는 침묵 (§5.2) | C |
 | 🟡 | FE2 | `chat/route.ts`의 `maxDuration = 60` 잔존 (TODO #14) | C |
 | 🟢 | FE3 | TODO #12·#13이 **존재하지 않는 파일**을 가리킨다 — 항목 재확인 또는 폐기 필요 | C |
 | 🟢 | — | SKILL.md 누락 6개 / `deep_analysis_*` 테이블 1.6만 행 | B |
 | 🟢 | W1-m1 | `node_summary.prompt_chars`가 이제 **클램프된** 프롬프트를 잰다 — 이 경계 전후로 비교 불가. 비교하려면 `finalization_prompt_clamped`와 조인해야 한다 | A |
 | 🟢 | W1-m2 | `Synthesizer.assembly_input_allowance`는 외부에서 만든 Synthesizer를 주입하면 **전역** `synthesis_max_tokens`로 떨어진다(프로파일 값이 아니라). 프로덕션 경로는 일관되지만 주석은 이 경우를 부정한다 | A |
 | 🟢 | W1-m3 | `tests/workflow/deep_analysis/test_synthesizer.py`의 docstring이 옛 dev 프로파일(15x / 20,000)을 서술한다. 단언은 의존하지 않는다 | A |
+| 🟡 | **D1** | 데이터셋 콜렉터가 `neos/coding/`·`deep_analysis/`를 전혀 계측하지 않는다 (각 0곳). 게다가 프로세스 메모리 싱글턴이라 워커 프로세스 레코드는 유실된다 (§11.1) | D |
+| 🟢 | **D2** | 멀티홉 2,468줄이 스킬 계약 밖에 있다 / citation 렌더 경로가 3곳에 흩어져 있다 (§11.2) | D |
+| 🟢 | **D3a** | `crewai`가 **죽은 코드**인데 모든 BaseAgent가 `Agent`를 생성하고 import 시 `.env`를 오염시킨다 (§10.3 오염원 2번, §11.3) | D |
+| 🔴 | **D3b** | langgraph 제거는 "삭제"가 아니라 **런타임 교체 + 체크포인트 자체 구현**이다 — `graph.py` 2,259줄 + 체크포인터 991줄 (§11.3) | D |
+| 🟡 | **D4** | `ModelProviderBase.create_llm()`이 `BaseLanguageModel`을 반환해 LangChain을 저장소 전체에 고정한다. 전환 시 §4.2 라우팅 불변식과 충돌 위험 (§11.4) | D×B |
 | 🟢 | W1-m4 | §8 W1의 접근 후보 표에서 **c**가 "`reduce_node` 호출 수를 실제 강제"라고 적혀 있으나 구현은 의도적으로 강제하지 않았다(풀 격리로 대체). §9 D-1 칸이 이를 정정한다 | A |
 
 ---
@@ -453,6 +473,17 @@ G4는 **G3 판단의 선행 조건**이다 — 본문 없이는 게이트 임계
 > **W1이 성공하면 그 성과(`synth_pass`)는 FE에 자동으로 뜨지만 실패는 여전히
 > 침묵한다** — 이 비대칭을 남기면 "성공만 보이는 UI"가 된다.
 
+**2026-08-07 완료.** G9는 `_mark_stop_reason()` 단일 판정으로, FE1은 라벨 7종 +
+`report_graded` 분기 수정 + `degradations` 누적으로 해소했다.
+
+**G4는 전제가 틀려 있었다** — `report_path`가 NULL인 것은 사실이나 리포트 본문은
+`job_completed` 페이로드에 계속 보존돼 있었다(`jobs.py`, AC6). 컬럼을 채우는 대신
+`Ledger.report_markdown()`과 `DeepAnalysisAnalyticsService.report_bodies()`를 만들어
+G3가 표본 전체의 본문을 읽을 수 있게 했다. §2.2 S3의 측정법도 이에 맞춰 정정했다.
+
+D26이 이 웨이브의 결정을 기록한다(`neos/workflow/deep_analysis/DECISIONS.md`).
+관련 커밋: G9 `7318a840` · G4 `a258f36e`(원본 `f200b26c`) · FE1 `a9dbcfe3`.
+
 ### W3. 게이트를 다시 판단한다 — ⚠️ 정책 결정 필요
 
 **대상:** G3
@@ -484,13 +515,17 @@ W1 이후 게이트가 채점하는 대상이 **템플릿에서 LLM 산문으로
 
 ### W5. CI와 운영 위생
 
-**대상:** CI #9·#10·#11, F3, 테이블 정리, SKILL.md 6개, **FE2·FE3**
+**대상:** CI #9·#10·#11, F3, 테이블 정리, SKILL.md 6개, **FE2·FE3**, **D3a(crewai 삭제)**
 **완료 기준:** `pytest tests/` 전체가 CI에서 3회 연속 동일 결과 — **S5 충족**
 
 FE2·FE3은 백로그 위생 작업이다. 특히 **FE3은 항목을 고치는 게 아니라 폐기하는
 쪽일 수 있다** — TODO #12의 `examples/document_api_example.py`와 #13의
 `web/components/prompt-input.tsx`는 **둘 다 더 이상 존재하지 않는다.**
 없는 파일을 가리키는 백로그 항목은 다음 사람에게 유령 작업을 준다.
+
+D3a(crewai 삭제)를 여기에 넣은 이유: 죽은 코드 제거이므로 호출 경로를 건드리지
+않아 라이브 표본과 충돌하지 않고, §10.3 오염원 하나를 없애 **W5의 목표(CI 결정론)를
+직접 돕는다.** 트랙 D의 나머지 셋과 달리 W6을 기다릴 이유가 없다 (§11.3 D3a).
 
 > 주의: F3은 이 저장소 문제가 아니라 **병합 시점 폭발물**이다.
 > `managed-sandbox-control-plane` worktree가 rebase되면 `AgenticGrader` 11곳이
@@ -500,6 +535,59 @@ FE2·FE3은 백로그 위생 작업이다. 특히 **FE3은 항목을 고치는 �
 
 S1–S6 전부 충족 후 `deep_analysis.enabled` 기본값 전환을 **별도 결정으로** 다룬다.
 관련 잔여 결함은 `docs/ROADMAP.md`의 R1(임계값 역전)·R2(intent 미방출)·R6(3엔진 기본 비활성).
+
+---
+
+**여기서 트랙 D가 시작된다.** W7~W10은 §11의 네 과제이며, W6 이후에 두는 이유는
+§11.0의 상호배타 규칙이다: D1·D2·D4는 LLM 호출 계층을 바꾸므로 §10.2가 금지한
+"측정 중 변경"에 해당한다. **W1~W4의 라이브 표본이 끝나기 전에는 착수하지 않는다.**
+
+### W7. 계측이 모든 실행 경로를 덮는다
+
+**대상:** D1 (§11.1)
+**순서:** 콜렉터 탈-LangChain → 저장소 경유 영속화 → 코딩 루프·deep_analysis 확장.
+**세 단계를 뒤집지 말 것** — 지금 상태로 확장하면 워커 프로세스의 레코드가 flush
+지점을 못 만나 조용히 사라진다.
+
+**완료 기준:**
+- `neos/coding/`·`neos/workflow/deep_analysis/` 호출이 `LLMCallRecord`로 남는다
+- `rg 'langchain' neos/utils/llm_wrapper.py` 0건 — **W9의 선행 조건**
+- 별도 프로세스(Celery 워커·job 서비스)에서 만든 레코드의 유실률 0%
+
+### W8. 멀티홉이 스킬 계약 안으로 들어온다
+
+**대상:** D2 (§11.2)
+**완료 기준:**
+- auto-discovery 카운트 9 → 10 (멀티홉 등록)
+- 멀티홉을 discovery 소스로 쓴 run의 `E_QUOTE_MISMATCH` 비율이 기존 소스와 동등
+  — **P3(검증 사슬)이 유지됐다는 증거다**
+- citation 렌더 경로 3개 → 1개 (§9 **D-6**이 "통합"으로 결정된 경우)
+
+> W7보다 뒤에 두는 이유는 하나뿐이다: 새 스킬이 만드는 LLM 호출도 계측 대상이므로
+> 계측 계약이 먼저 확정돼야 두 번 고치지 않는다. 급하면 순서를 바꿔도 되지만
+> **그 경우 W7에서 멀티홉 스킬 계측을 다시 붙여야 한다.**
+
+### W9. 프로바이더 계층이 LangChain을 벗는다
+
+**대상:** D4 (§11.4)
+**완료 기준:**
+- `ModelProviderBase.create_llm()`이 LangChain 타입을 반환하지 않는다
+- 라우팅 테스트 전량 통과 — **§4.2 불변식 6종이 그대로**
+- 전환 중 계측 공백 0 (W7의 회귀 가드가 이것을 잡는다)
+
+> 🔴 이 웨이브가 트랙 B를 되돌릴 수 있는 유일한 지점이다. §9 **D-7**(SDK 채택 범위)을
+> 착수 전에 확정할 것. "전송만" 이외의 답을 고르면 §4.2의 "경계마다 한 번만 해석"이
+> SDK 내부 재시도와 충돌한다.
+
+### W10. langgraph 런타임 교체
+
+**대상:** D3b (§11.3)
+**완료 기준:** `rg langgraph neos/` 0건 · 대화 재개 의미론이 체크포인터 교체 후에도
+동일 (기존 세션 재개 회귀 테스트 통과)
+
+> ⚠️ **가장 큰 웨이브다.** `graph.py` 2,259줄 + 체크포인터 991줄이며, "삭제"가 아니라
+> **런타임 교체 + 체크포인트 영속화 자체 구현**이다. 착수 전에 이 웨이브만 별도
+> 설계 문서로 분리하는 것을 권한다 — 나머지 아홉 웨이브를 합친 것과 규모가 비슷하다.
 
 ---
 
@@ -513,6 +601,11 @@ S1–S6 전부 충족 후 `deep_analysis.enabled` 기본값 전환을 **별도 �
 | **D-2** | assertion 0건 리포트 채점 (G3) | 통과 / 반려 / 제3 판정(예: "내용 없음" 코드) | 사용자 영향 최대. 지금은 빈 리포트만 통과 중 |
 | **D-3** | E3 judge 모델 분리 시점 | W4에서 / 출하 직전 / 즉시 | 즉시 하면 진행 중 표본과의 비교가 끊긴다 |
 | **D-4** | dev floor 비율 | 현행 22%(4,400/20,000) 유지 / 축소 | ✅ 결정됨: **dev `global_token_cap` 20,000 → 100,000** — 기존 캡은 `worker_analysis` 호출 한 번(input_bound 5,542~17,723)도 담지 못했다. 새 floor 비율은 41.0%(41,040/100,000)로 default(43.7%)와 같은 수준(`4a2499cc`/`5376048a`). 논의 중 80,000으로 합의됐다가 `grading_input_ratio` 교정(4.0→5.0) 후 100,000으로 재조정됐다 — 80,000이면 경고 임계값 0.5가 상시 발동한다 |
+| **D-5** | 트랙 D 착수 시점 (§11.0) | W6 이후 / W1 직후 / 트랙 A와 병행 | 권고: **W6 이후**, 단 D3a(crewai)만 W5로 앞당김. 병행하면 §10.2의 "측정 중 변경 금지"를 어겨 W1~W4 표본이 무효가 된다 |
+| **D-6** | citation을 스킬로 만들 것인가 (§11.2) | 스킬화 / **공용 렌더러로 통합** / 현행 유지 | 권고: **통합**. 스킬 계약은 `execute → SkillResult`(외부 데이터 가져오기) 모양이고 citation은 검증된 클레임을 표시하는 일이라 계약이 맞지 않는다. 요청 원문("고유 스킬화")과 다른 결론이므로 명시적 승인이 필요하다 |
+| **D-7** | 네이티브 SDK 채택 범위 (§11.4) | **전송(transport)만** / 에이전트 루프까지 / 전면 위임 | 권고: **전송만**. 루프까지 위임하면 모델 선택·재시도가 SDK 내부로 들어가 §4.2의 "경계마다 한 번만 해석"·"크로스 프로바이더 폴백 금지"가 깨진다 — 트랙 B의 I1–I6을 되돌리는 셈이다 |
+| **D-8** | 콜렉터 정본 스키마 (§11.1) | `LLMCallRecord` 확장 / 계층별 어댑터 3종 유지 / OTel span 대체 | 권고: **`LLMCallRecord` 정본 + 계층 어댑터**. span 대체는 관찰가능성엔 맞지만 데이터셋 용도(재학습·평가 코퍼스)에는 부적합하다 |
+| **D-9** | langgraph 교체를 이 문서에서 다룰 것인가 (§11.3 D3b) | **별도 설계 문서로 분리** / W10으로 유지 | 권고: **분리**. `graph.py` 2,259줄 + 체크포인터 991줄로, 나머지 아홉 웨이브를 합친 것과 규모가 비슷하다 |
 
 ---
 
@@ -608,7 +701,185 @@ rg -n 'gpt-4-turbo-preview|gpt-4o|claude-sonnet-4-6|claude-opus-4-6|gpt-5-mini-2
 
 ---
 
-## 11. 참조
+## 11. 트랙 D — 프레임워크 이탈과 계측 통일 (2026-08-07 신설)
+
+네 과제(D1 콜렉터 확장 · D2 스킬화 · D3 langgraph/crewai 삭제 · D4 네이티브 SDK 전환)는
+**출하 기준 S1–S6에 직접 걸려 있지 않다.** 그러나 서로 강하게 얽혀 있고, 특히 D4는
+D1의 유일한 자동 계측 지점을 파괴한다. 하나의 트랙으로 다루는 이유가 그것이다.
+
+### 11.0 의존 그래프와 착수 순서
+
+```
+D3a crewai 삭제 ────(독립·즉시 가능)───────────────────────────> 완료
+D1 콜렉터 탈-LangChain ──> D1 루프·코딩 확장 ──┐
+D2 스킬화 ────────────────────────────────────┼──> D4 네이티브 전환 ──> D3b langgraph 제거
+                                              ┘
+```
+
+**D3b는 D4의 선행이 아니라 결과다.** langgraph를 먼저 지우면 대체 런타임이 없다.
+
+> ⚠️ **트랙 D는 라이브 표본 측정 구간과 상호배타다.** §10.2가 "실행 중 프롬프트·모델
+> 변경 금지"를 못박고 있는데, D1·D4는 정확히 LLM 호출 계층을 바꾼다. W1의 5+1 표본이
+> 아직 미실행이므로(§8 W1), **트랙 D의 D1·D2·D4는 W1~W4의 측정이 끝난 뒤에 착수한다.**
+> D3a(crewai)만 예외다 — 죽은 코드 삭제라 호출 경로를 건드리지 않는다.
+
+### 11.1 D1 — 데이터셋 콜렉터를 루프·코딩 에이전트로 확장
+
+**현재 계측 범위 (2026-08-07 실측):**
+
+| 경로 | 자동 계측 | 근거 |
+|---|---|---|
+| LangChain 계열 에이전트 (21개 파일) | ✅ `create_tracked_llm` 약 70곳 | `neos/utils/llm_wrapper.py:312` |
+| `neos/coding/` (코딩 에이전트 루프) | ❌ **0곳** | `rg 'dataset' neos/coding/` 무결과 |
+| `neos/workflow/deep_analysis/` | ❌ **0곳** | 자체 `llm.py`가 usage를 따로 센다 |
+
+**장애물 ① — 콜렉터가 LangChain 타입에 묶여 있다.**
+`TrackedLLM`은 `BaseLanguageModel`·`BaseMessage`·`LLMResult`를 직접 임포트한다
+(`llm_wrapper.py:10-12`). 반면 코딩 루프는 `CanonicalMessage`/`ModelUsage`
+(`neos/coding/model/base.py`)를, deep_analysis는 `LLMResponse`(`llm.py:36`)를 쓴다.
+**서로 다른 usage 표현이 셋 있고 콜렉터는 그중 하나만 안다.**
+
+**장애물 ② — 콜렉터가 프로세스 메모리 싱글턴이다.**
+`LLMCallCollector`는 `_records: List[...]`를 클래스 변수로 들고 있고(`collector.py:19-29`),
+영속화는 `graph.py:2056`을 지나갈 때만 일어난다. 코딩 에이전트는 Celery 워커에서,
+deep_analysis는 job 서비스에서 돈다 — **둘 다 그 flush 지점을 지나가지 않는 별도
+프로세스다.** 지금 구조로는 확장해도 레코드가 워커와 함께 사라진다.
+
+| 안 | 내용 | 트레이드오프 |
+|---|---|---|
+| a | `TrackedLLM`을 두고 코딩·deep_analysis용 별도 어댑터 추가 | 가장 작다. 대신 usage 표현 3개가 그대로 굳는다 |
+| **b** | `LLMCallRecord`를 정본 스키마로 두고 각 계층이 어댑터로 변환 **(권장)** | D4 이후에도 살아남는 유일한 안 — 레코드가 LangChain을 모르게 된다 |
+| c | 콜렉터 폐기 후 OTel span으로 대체 | 관찰가능성 스택과 합쳐지지만, 데이터셋 용도(재학습·평가 코퍼스)에는 span이 부적합하다 |
+
+**완료 기준:**
+- `neos/coding/`·`neos/workflow/deep_analysis/`의 LLM 호출이 `LLMCallRecord`로 남는다
+- 워커 프로세스에서 생성된 레코드가 `graph.py` flush 지점 없이 영속화된다
+- `TrackedLLM`이 `langchain_core` 임포트 없이 동작한다 — **D4의 선행 조건**
+- 계측 확장이 §6 ④(토큰 집계는 API `usage`만 사용)를 위반하지 않는다: 자체 추정 금지
+
+### 11.2 D2 — 멀티홉 검색·citation 고유 스킬화
+
+**대상 규모 (실측):**
+- 멀티홉: `neos/agents/search_agents/multi_hop/` 5개 모듈 2,087줄 +
+  `multi_hop_search.py` 381줄. LLM 호출 7곳(decomposer 3 / integrator 2 / extractor 2)
+- citation: `deep_analysis/citation.py` 55줄 + `neos/utils/citations.py` 105줄 +
+  exporters 3개 — **한 곳에 모여 있지 않다**
+
+스킬 계약은 `BaseSkill`(`neos/skills/base/skill.py:15`) + `SKILL.md` frontmatter,
+자동 발견은 `neos/skills/manager/auto_discovery.py`다.
+
+**🔴 가장 중요한 제약 — 스킬화가 설계 P3를 깰 수 있다.**
+`skills_adapter.py`는 스킬을 **discovery 전용**으로만 소비한다:
+`(skill, query) → [{url, title, snippet}]`. 검색(retrieval)은 `fetch.py` 독점이고
+스킬이 준 URL은 반드시 fetch를 거쳐 원문 대조로 검증된다
+(`skills_adapter.py:3-6`에 명시). **멀티홉 스킬이 답변을 반환하면 검증 사슬을
+우회한다** — 검증되지 않은 문장이 리포트에 실린다는 뜻이다.
+
+citation은 더 근본적으로 맞지 않는다. 스킬 계약은 `execute(params) → SkillResult`,
+즉 **외부 데이터를 가져오는** 모양이다. citation 렌더링은 가져오는 일이 아니라
+**이미 검증된 클레임을 표시하는** 일이다. 스킬 슬롯에 끼우면 discovery 파이프라인에
+렌더러가 섞인다.
+
+| 대상 | 안 | 평가 |
+|---|---|---|
+| 멀티홉 | **discovery 전용 스킬** — 홉마다 URL만 반환, 답변 조립은 하네스가 | ✅ P3 유지. 대신 `answer_extractor`·`result_integrator`는 스킬 밖에 남는다 |
+| 멀티홉 | 완결형 스킬 — 답변까지 반환 | ❌ P3 위반 |
+| citation | 스킬화 | ❌ 계약 불일치 (가져오기 ≠ 표시하기) |
+| citation | **공용 렌더러로 통합** — 3곳을 `neos/utils/citations.py`로 수렴 | ✅ 실제 문제는 "스킬이 아니라 흩어져 있는 것"이다 |
+
+> **권고:** citation은 스킬이 아니라 **통합 대상**으로 재정의한다. 요청 원문은
+> "고유 스킬화"였으나 스킬 계약이 discovery 모양이라 citation은 들어갈 자리가 없다.
+> 목적(중복 제거·단일 렌더 경로)은 모듈 통합으로 더 잘 달성된다 — §9 **D-6**에서 확정.
+
+**완료 기준:**
+- 멀티홉이 `SKILL.md` + `BaseSkill`로 등록되고 auto-discovery 카운트 9 → 10
+- 멀티홉 스킬을 discovery 소스로 쓴 run의 `E_QUOTE_MISMATCH` 비율이 기존 소스와 동등
+- citation 렌더 경로가 3개 → 1개
+
+### 11.3 D3 — langgraph·crewai 코드 삭제
+
+**두 개를 같은 항목으로 묶으면 안 된다. 위험도가 두 자릿수 다르다.**
+
+#### D3a. crewai — 이미 죽은 코드다 (2026-08-07 실측)
+
+| 심볼 | 외부 호출자 |
+|---|---|
+| `BaseAgent.run_crew` | **0곳** |
+| `BaseAgent.create_task` | **0곳** (동명의 `service.create_task`는 무관) |
+| `self.agent` (crewai `Agent`) | **0곳** |
+
+즉 현재 상태는 **모든 BaseAgent 인스턴스가 생성 시 `crewai.Agent`를 하나씩 만들고
+아무도 쓰지 않는 것**이다(`base.py:31,34-44`). 삭제 대상은 import 1줄 + 메서드 2개
++ 필드 1개 + `pyproject.toml` 의존성 1줄이다.
+
+> **부수 효과가 본체보다 크다.** §10.3 오염원 2번("litellm·crewai가 import 시
+> `load_dotenv()`로 `.env`를 `os.environ`에 복사", `4b37a3fe`)에서 crewai가 빠진다.
+> 회피책을 고치는 게 아니라 **원인 하나를 제거**하는 것이다.
+
+#### D3b. langgraph — 살아 있는 실행 엔진이다
+
+| 파일 | 줄 |
+|---|---:|
+| `neos/workflow/graph.py` | 2,259 |
+| `neos/workflow/checkpointer.py` | 588 |
+| `neos/workflow/distributed_graph.py` | 438 |
+| `neos/workflow/checkpointers/hybrid_checkpointer.py` | 403 |
+| `neos/workflow/builder/workflow_executor.py` | 304 |
+| 그 외 | `observability/` 3개, `recursive/graph.py`, `api/services/research_session_service.py` |
+
+`graph.py`는 프로덕션 챗 경로 본체이고, D23 이후 deep_analysis job 제출도 여기서 한다
+(`graph.py:1051–1122`). 그리고 교체 대상은 StateGraph만이 아니라 **체크포인터 991줄**이다
+— LangGraph 체크포인터를 걷어내면 대화 재개 의미론을 직접 구현해야 한다.
+
+> ⚠️ **이 항목을 "삭제"로 적으면 다음 사람이 규모를 오해한다.** 정확한 서술은
+> **"오케스트레이션 런타임 교체 + 체크포인트 영속화 자체 구현"**이다.
+> §5.3의 FE3(없는 파일을 가리키는 백로그)과 같은 종류의 사고를 예방하는 표기다.
+
+**완료 기준 (분리):**
+- **D3a:** `pyproject.toml`에서 `crewai>=0.175.0` 제거 · 전체 스위트 2,386 passed 유지 ·
+  §10.3 오염원 표에서 crewai 항목 삭제
+- **D3b:** `rg langgraph neos/` 0건 — **D4 완료 이후에만 성립 가능**
+
+### 11.4 D4 — 네이티브 SDK 전환 (claude-agent-sdk / openai-agents)
+
+📌 **이 저장소에는 네이티브 구현이 이미 두 개 있다.** 새로 설계하는 문제가 아니라
+**어느 것을 정본으로 삼을지** 고르는 문제다.
+
+| 구현 | 위치 | 성격 |
+|---|---|---|
+| 코딩 루프 | `neos/coding/model/base.py`(`CodingModel` 프로토콜·`CanonicalMessage`·`ModelRequest`·`ModelUsage`) + `model/anthropic.py`(raw `anthropic` 스트리밍) | 스트리밍·툴콜·usage 완비. **LangChain 참조 0** |
+| deep_analysis | `deep_analysis/llm.py`(`LLMResponse`·`call_json`) | 단발 JSON 호출 특화. 예산·카세트와 결합 |
+| (변환 대상) | `neos/providers/` — `base.py`·`anthropic.py`·`openai.py`·`gemini.py`·`ollama.py` | 전부 `BaseLanguageModel` 반환. OpenClaw 레지스트리의 계약면 |
+
+**전체 범위를 정하는 결정 하나: `ModelProviderBase.create_llm()`의 반환 타입.**
+지금은 `BaseLanguageModel`이며(`providers/base.py:19`), 이것이 LangChain을 저장소
+전체에 고정하는 못이다. 이 계약을 바꾸면 `create_tracked_llm` 약 70곳이 전부 영향을 받는다.
+
+| 안 | 내용 | 트레이드오프 |
+|---|---|---|
+| **a** | `neos/coding/model/`의 `CodingModel` 프로토콜을 저장소 공용으로 승격 **(권장)** | 이미 프로덕션에서 도는 코드다. 이름이 coding에 묶여 있어 이동·개명이 필요 |
+| b | `claude-agent-sdk`/`openai-agents`를 프로바이더로 직접 채택 | 에이전트 루프·툴 실행을 SDK에 위임 → 코드 감소. 대신 **두 SDK의 루프 의미론이 다르다**(툴 승인·중단·재개) |
+| c | 프로바이더 계층은 자체 프로토콜(a) + 에이전트 루프만 SDK(b) | 범위가 가장 크지만 각 층이 제 역할을 한다 |
+
+**🔴 라우팅 불변식과의 충돌 (§4.2).**
+"경계마다 한 번만 해석", "크로스 프로바이더 폴백 추가 금지"는 **NEOS가 모델 선택을
+소유한다**는 전제 위에 있다. 반면 `claude-agent-sdk`와 `openai-agents`는 각자 루프
+안에서 모델·재시도를 관리한다. **SDK에 루프를 위임하면 라우팅 결정이 SDK 내부로
+새어 들어간다.** 트랙 B가 태스크 6개와 잔여 이슈 I1–I6으로 세운 계약을 되돌리지
+않으려면, SDK 채택 범위를 "루프"가 아니라 **"전송(transport)"으로 한정**하는 것이
+안전하다 — §9 **D-7**에서 확정.
+
+**완료 기준:**
+- `ModelProviderBase.create_llm()`이 LangChain 타입을 반환하지 않는다
+- `pyproject.toml`에서 `langchain*` 5종(`langchain`·`-anthropic`·`-community`·
+  `-openai`·`langgraph`) 제거
+- 라우팅 테스트 전량 통과(`test_model_catalog*`·`test_model_routing`·
+  `test_llm_factory_defaults`) — **해석 우선순위 4단계가 그대로여야 한다**
+- **전환 중 계측 공백 0** — D1의 콜렉터가 전환 후에도 레코드를 남긴다
+
+---
+
+## 12. 참조
 
 - 설계 정본: [DEEP_ANALYSIS_HARNESS_DESIGN.md](DEEP_ANALYSIS_HARNESS_DESIGN.md)
 - 재개 문서: [deep_analysis_task_task_resume.md](archive/deep_analysis_task_task_resume.md),

@@ -688,3 +688,41 @@ discard recall 재측정(C1)은 이 변경 이후 표본으로 수행해야 두 
 34,800 / 41,040 = 새 cap(100,000)의 41.0%. **`synth_pass ≥ 1`은 이 결정으로 아직
 관측되지 않는다** — 라이브 표본이 필요하며, 로드맵 §8 W1과 §2.2 S1은 이 결정만으로
 충족되지 않는다.
+
+## D26. 정지 사유는 예산 상태가 정한다. 리포트 본문의 정본은 `job_completed`다.
+
+**결정:** 정지 사유 판정을 `_mark_stop_reason()` 하나로 접어 정상 종료 경로와 예외 종료
+경로 양쪽에서 부른다. 리포트 본문은 `report_path` 컬럼을 채우는 대신 `Ledger.report_markdown()`과
+`DeepAnalysisAnalyticsService.report_bodies()`로 `job_completed` 페이로드에서 읽는 조회
+경로를 만든다. 강등(`degradations`) 판정 기준은 "리포트 내용을 깎았는가"로 정하고, FE
+라벨 7종을 추가한다.
+
+**근거 — G9:** 정지 사유를 판정하는 코드가 정상 경로(`orchestrator.py`의 if/elif)와
+예외 경로 두 벌이었고 서로 달랐다. `TokenBudget.reserve`는 캡 소진과 floor 정지 두 사유
+모두에 같은 `TokenBudgetExhausted`를 던지므로 예외 타입만으로는 구분할 수 없는데, 예외
+핸들러는 구분을 시도조차 하지 않고 무조건 소진으로 기록했다. 실측 6건 중 4건이 오분류였다.
+
+**근거 — G4, 로드맵의 전제를 정정한다:** `report_path`가 574 run 전부 NULL인 것은 사실이나,
+리포트 본문이 유실된 적은 없다. `jobs.py`가 완료 이벤트(`job_completed`) 페이로드에
+`report_markdown`을 싣고(AC6), `neos/` 전체에서 `orchestrator.run()`의 호출자는 `jobs.py`
+하나뿐이라 모든 실행이 이 경로를 지난다. NULL인 것은 열 포인터이지 본문이 아니다. 컬럼은
+채우지도 은퇴시키지도 않고 — 그것은 별도의 스키마 결정이다 — 이미 있는 본문을 향한 조회
+경로만 만들었다.
+
+**근거 — FE1:** 강등 판정 기준은 "리포트가 사용자가 받았어야 할 것보다 못한가"다.
+최종 리포트 내용을 직접 깎는 3종(`report_assembly_degraded`,
+`finalization_prompt_clamped{exhausted:true}`, `node_reduction_degraded`)만
+`degradations`에 누적한다. `llm_truncated`는 확장 재시도가 성공하면(`truncation_handled.
+action === "retried_ok"`) 최종 산출물에 영향이 없어 제외했다 — 재시도 성공/실패를 가르려면
+두 이벤트를 상관시키는 상태 기계가 필요하고 이번 범위를 넘으므로, 잘못된 경고보다 과소
+보고를 택했다.
+
+**발견:** `judge_budget_exhausted`는 독립 이벤트 kind가 아니라 `report_graded.diagnostics.judge`
+값(`"budget_exhausted"` / `"truncated"` / `"unparseable"`)이다. FE의 실제 결함은 라벨
+누락이 아니라, `report_graded` 분기가 `payload.ok`만 보고 굶은 판정자의 통과를 실제 승인과
+같은 문구로 냈다는 것이었다.
+
+**영향:** floor 정지 오분류 6건 중 4건 → 0건(`7318a840`). G3(게이트 재보정)가 표본
+전체의 리포트 본문을 읽을 수 있게 됐다(`a258f36e`, 원본 `f200b26c`). FE가 실패 이벤트
+8종에 라벨을 붙이고 강등 상태를 `degradations`로 누적한다(`a9dbcfe3`). 로드맵 §2.2
+S3·S4·S6이 충족됐다 — 단 S1(`synth_pass ≥ 1`)은 라이브 표본 미실행으로 여전히 ❌다.
