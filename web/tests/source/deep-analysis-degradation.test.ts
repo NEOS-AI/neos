@@ -108,3 +108,23 @@ test("2회 이상이면 횟수가 문구에 실린다", () => {
 test("빈 입력은 빈 배열을 낸다", () => {
   assert.deepEqual(degradationNotices([]), []);
 });
+
+// 회귀 가드: 새로고침 후 복원 경로에서는 `kind`가 와이어 위의 임의
+// 문자열이다. 일반 객체 리터럴 테이블을 썼다면 이런 kind가
+// `Object.prototype`의 상속 멤버(함수)에 걸려 `degradationLabel`이 문자열이
+// 아닌 값을 돌려줬을 것이다 — 컴포넌트가 `{notice.text}`를 그대로 렌더하면
+// React가 던진다.
+test("Object.prototype 체인에 걸리는 kind도 문자열 문구를 낸다", () => {
+  for (const kind of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
+    const label = degradationLabel(kind);
+    assert.equal(typeof label, "string");
+    assert.ok(label.includes(kind), `원시 kind가 문구에 없다: ${kind}`);
+  }
+});
+
+test("judge_unreviewed: 뒤에 Object.prototype 체인 이름이 와도 문자열 문구를 낸다", () => {
+  const label = degradationLabel("judge_unreviewed:constructor");
+
+  assert.equal(typeof label, "string");
+  assert.ok(label.includes("constructor"));
+});

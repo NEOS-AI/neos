@@ -17,20 +17,23 @@ import type { DegradationEntry } from "./progress";
 /** `degradationKind()`가 판정자 강등에 붙이는 접두사 (progress.ts와 짝). */
 const JUDGE_PREFIX = "judge_unreviewed:";
 
-const LABELS: Record<string, string> = {
-  report_assembly_degraded:
-    "리포트가 LLM 조립 없이 템플릿으로 작성됐습니다",
-  node_reduction_degraded:
-    "하위 요약이 강등돼 자식 답변을 그대로 이어붙였습니다",
-  finalization_prompt_clamped:
-    "마무리 입력이 허용량을 넘어 일부 내용이 잘렸습니다",
-};
+// `kind`는 백엔드 이벤트 원문에서 그대로 온다 — 새로고침 후 복원 경로에서는
+// 와이어 위의 임의 문자열이다. 일반 객체 리터럴로 테이블을 만들면
+// `"constructor"`, `"toString"` 같은 kind가 `Object.prototype`의 메서드에
+// 걸려 함수를 돌려준다(`declared string` 타입을 런타임에 깨고, 컴포넌트가
+// `{notice.text}`를 그대로 렌더하면 React가 던진다). `Map`은 프로토타입
+// 체인을 타지 않으므로 이 클래스의 버그를 원천 차단한다.
+const LABELS = new Map<string, string>([
+  ["report_assembly_degraded", "리포트가 LLM 조립 없이 템플릿으로 작성됐습니다"],
+  ["node_reduction_degraded", "하위 요약이 강등돼 자식 답변을 그대로 이어붙였습니다"],
+  ["finalization_prompt_clamped", "마무리 입력이 허용량을 넘어 일부 내용이 잘렸습니다"],
+]);
 
-const JUDGE_LABELS: Record<string, string> = {
-  budget_exhausted: "심사 없이 통과됐습니다 — 판정자 예산 소진",
-  truncated: "심사 없이 통과됐습니다 — 판정자 응답이 잘림",
-  unparseable: "심사 없이 통과됐습니다 — 판정자 응답을 해석하지 못함",
-};
+const JUDGE_LABELS = new Map<string, string>([
+  ["budget_exhausted", "심사 없이 통과됐습니다 — 판정자 예산 소진"],
+  ["truncated", "심사 없이 통과됐습니다 — 판정자 응답이 잘림"],
+  ["unparseable", "심사 없이 통과됐습니다 — 판정자 응답을 해석하지 못함"],
+]);
 
 /**
  * kind 하나를 문구로 만든다.
@@ -39,13 +42,13 @@ const JUDGE_LABELS: Record<string, string> = {
  * 그 죄다. `progress.ts`가 모르는 이벤트에도 커서를 전진시키는 것과 같은 판단.
  */
 export function degradationLabel(kind: string): string {
-  const known = LABELS[kind];
+  const known = LABELS.get(kind);
   if (known) {
     return known;
   }
   if (kind.startsWith(JUDGE_PREFIX)) {
     const reason = kind.slice(JUDGE_PREFIX.length);
-    return JUDGE_LABELS[reason] ?? `심사 없이 통과됐습니다 — ${reason}`;
+    return JUDGE_LABELS.get(reason) ?? `심사 없이 통과됐습니다 — ${reason}`;
   }
   return `리포트 품질이 저하됐습니다 · ${kind}`;
 }
