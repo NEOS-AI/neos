@@ -86,3 +86,40 @@ test("강등 배열이 배열이 아니면 무시한다", () => {
 
   assert.equal(result?.degradations, undefined);
 });
+
+test("run_id 접근에서 던지는 getter에도 던지지 않는다", () => {
+  const metadata = {
+    get deep_analysis_run_id(): string {
+      throw new Error("boom");
+    },
+  };
+
+  assert.doesNotThrow(() => deepAnalysisFromMessageMetadata(metadata));
+  assert.equal(deepAnalysisFromMessageMetadata(metadata), undefined);
+});
+
+test("degradations 접근에서 던지는 getter에도 던지지 않는다", () => {
+  const metadata = {
+    deep_analysis_run_id: "a1b2c3d4",
+    get deep_analysis_degradations(): unknown[] {
+      throw new Error("boom2");
+    },
+  };
+
+  assert.doesNotThrow(() => deepAnalysisFromMessageMetadata(metadata));
+  assert.equal(deepAnalysisFromMessageMetadata(metadata), undefined);
+});
+
+test("get 트랩이 던지는 Proxy에도 던지지 않는다", () => {
+  const metadata = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("proxy-boom");
+      },
+    }
+  );
+
+  assert.doesNotThrow(() => deepAnalysisFromMessageMetadata(metadata));
+  assert.equal(deepAnalysisFromMessageMetadata(metadata), undefined);
+});

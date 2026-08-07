@@ -60,18 +60,27 @@ function asDegradations(value: unknown): DegradationEntry[] | undefined {
 export function deepAnalysisFromMessageMetadata(
   metadata: Record<string, unknown> | undefined | null
 ): DeepAnalysisMetadata | undefined {
-  if (!metadata) {
+  // 위 주석의 "어떤 입력에도 던지지 않는다"는 약속을 코드로 지킨다. 평범한
+  // JSON에서 온 metadata라면 속성 접근이 던질 리 없지만, 이 함수의 시그니처는
+  // 그 전제를 강제하지 않는다 — 언젠가 getter나 Proxy가 섞인 객체로 호출될
+  // 수 있다. try/catch로 감싸 두면 그런 입력이 이력 로드 전체를 끌고
+  // 내려가는 대신 이 메시지 하나만 "심층분석 아님"으로 처리하고 넘어간다.
+  try {
+    if (!metadata) {
+      return;
+    }
+    const runId = metadata[RUN_ID_KEY];
+    if (typeof runId !== "string" || runId.length === 0) {
+      return;
+    }
+    return {
+      run_id: runId,
+      // 백엔드는 **완료된** run 만 메시지로 영속화하므로, run_id 가 있는데
+      // 상태가 없으면 완료로 본다.
+      status: asStatus(metadata[STATUS_KEY]) ?? "completed",
+      degradations: asDegradations(metadata[DEGRADATIONS_KEY]),
+    };
+  } catch {
     return;
   }
-  const runId = metadata[RUN_ID_KEY];
-  if (typeof runId !== "string" || runId.length === 0) {
-    return;
-  }
-  return {
-    run_id: runId,
-    // 백엔드는 **완료된** run 만 메시지로 영속화하므로, run_id 가 있는데
-    // 상태가 없으면 완료로 본다.
-    status: asStatus(metadata[STATUS_KEY]) ?? "completed",
-    degradations: asDegradations(metadata[DEGRADATIONS_KEY]),
-  };
 }
