@@ -8,6 +8,7 @@ from neos.workflow.deep_analysis.token_budget import (
     TokenBudgetExhausted,
     TokenReservation,
     active_token_budget,
+    conservative_input_bound,
     token_budget_scope,
 )
 
@@ -119,3 +120,66 @@ async def test_context_scopes_are_isolated_across_tasks():
 
     assert observed == [first, second]
     assert active_token_budget() is None
+
+
+def test_a_bare_exception_still_reads_as_a_spent_tier():
+    """테스트 9곳이 메시지만으로 생성한다 -- 기본값이 옛 해석을 지켜야 한다."""
+    exc = TokenBudgetExhausted("cap")
+
+    assert exc.cause == "tier_floor"
+    assert str(exc) == "cap"
+
+
+@pytest.mark.asyncio
+async def test_an_empty_tier_refuses_with_tier_floor():
+    budget = TokenBudget(10, min_viable_output_tokens=4)
+    budget._consumed_tokens = 10
+
+    with pytest.raises(TokenBudgetExhausted) as excinfo:
+        await budget.reserve({}, 100, stage="worker_analysis", model="m")
+
+    assert excinfo.value.cause == "tier_floor"
+    assert excinfo.value.ceiling == 0
+
+
+@pytest.mark.asyncio
+async def test_a_prompt_larger_than_the_headroom_refuses_with_input_bound():
+    """G10 이 가리키는 클래스 -- tier 에 여유가 있는데도 나는 거절이다."""
+    budget = TokenBudget(5_000, min_viable_output_tokens=2_048)
+    request = {"prompt": "가" * 2_000}
+
+    with pytest.raises(TokenBudgetExhausted) as excinfo:
+        await budget.reserve(
+            request, 4_000, stage="worker_analysis", model="claude-sonnet-5"
+        )
+
+    exc = excinfo.value
+    assert exc.cause == "input_bound"
+    assert exc.stage == "worker_analysis"
+    assert exc.model == "claude-sonnet-5"
+    assert exc.ceiling == 5_000
+    assert exc.input_bound == conservative_input_bound(request)
+    assert exc.requested == 4_000
+    # 프롬프트가 tier 보다 크면 음수다 -- 0 으로 깎지 않는다.
+    assert exc.granted == exc.ceiling - exc.input_bound
+    assert exc.granted < 0
+
+
+@pytest.mark.asyncio
+async def test_the_boundary_between_the_last_grant_and_the_first_refusal():
+    """`ceiling - input_bound == viability` 가 마지막 승인이다."""
+    request = {"prompt": "x" * 1_000}
+    input_bound = conservative_input_bound(request)
+
+    granting = TokenBudget(input_bound + 2_048, min_viable_output_tokens=2_048)
+    reservation = await granting.reserve(
+        request, 2_048, stage="worker_analysis", model="m"
+    )
+    assert reservation.max_output_tokens == 2_048
+
+    refusing = TokenBudget(input_bound + 2_047, min_viable_output_tokens=2_048)
+    with pytest.raises(TokenBudgetExhausted) as excinfo:
+        await refusing.reserve(
+            request, 2_048, stage="worker_analysis", model="m"
+        )
+    assert excinfo.value.cause == "input_bound"
