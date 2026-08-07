@@ -152,6 +152,58 @@ async def _exhausted(*args, **kwargs):
     raise TokenBudgetExhausted("cap")
 
 
+async def _refused_for_input_bound(*args, **kwargs):
+    raise TokenBudgetExhausted(cause="input_bound", stage="node_reduction")
+
+
+@pytest.mark.asyncio
+async def test_a_degraded_summary_names_the_refusal_it_actually_hit():
+    ledger = FakeLedger()
+    synth = Synthesizer(ledger, json_call=_refused_for_input_bound)
+    child = NodeSummary("child001", "verified child answer", [], 0.8, [])
+
+    summary = await synth.reduce_node(ledger.root, [child])
+
+    assert summary.caveats == ["input_bound"]
+    degraded = [e for e in ledger.events if e[0] == "node_reduction_degraded"]
+    assert len(degraded) == 1
+    assert degraded[0][2]["reason"] == "input_bound"
+
+
+@pytest.mark.asyncio
+async def test_a_degraded_assembly_names_the_refusal_it_actually_hit():
+    ledger = FakeLedger()
+    synth = Synthesizer(ledger, llm_call=_refused_for_input_bound)
+    root = NodeSummary("root0001", "verified root answer", [], 0.8, [])
+
+    await synth.assemble(root, [], [])
+
+    degraded = [
+        e for e in ledger.events if e[0] == "report_assembly_degraded"
+    ]
+    assert len(degraded) == 1
+    assert degraded[0][2] == {"reason": "input_bound"}
+
+
+@pytest.mark.asyncio
+async def test_a_spent_tier_keeps_the_word_the_ledger_already_uses():
+    """의도적 결정: `tier_floor` 는 옛 문자열을 그대로 낸다.
+
+    이미 쌓인 강등 이벤트가 그 어휘를 쓰고 있어 경계 전후 집계가 이어져야
+    한다. 새 어휘는 새로 구별된 경우에만 붙는다.
+    """
+    ledger = FakeLedger()
+    synth = Synthesizer(ledger, llm_call=_exhausted)
+    root = NodeSummary("root0001", "verified root answer", [], 0.8, [])
+
+    await synth.assemble(root, [], [])
+
+    degraded = [
+        e for e in ledger.events if e[0] == "report_assembly_degraded"
+    ]
+    assert degraded[0][2] == {"reason": "token_budget_exhausted"}
+
+
 @pytest.mark.asyncio
 async def test_reduce_node_uses_child_summary_when_budget_exhausts():
     ledger = FakeLedger()

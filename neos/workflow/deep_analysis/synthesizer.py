@@ -12,6 +12,23 @@ from .prompt_loader import render
 from .token_budget import TokenBudgetExhausted
 
 
+def _degradation_reason(exc: TokenBudgetExhausted) -> str:
+    """강등 이벤트의 `reason` -- 예외 타입이 아니라 거절 사유에서 온다.
+
+    이 두 자리는 `"token_budget_exhausted"` 를 하드코딩하고 있었다.
+    `reserve` 가 캡 소진과 `input_bound` 거절에 같은 예외를 던지므로, 여유가
+    남은 채 거절된 run 도 "예산 소진"으로 기록됐다 -- G9 가 정지 사유에서
+    없앤 것과 같은 종류의 거짓이다.
+
+    `tier_floor` 는 옛 문자열을 그대로 낸다. 이미 원장에 쌓인 강등 이벤트가
+    그 어휘를 쓰고 있어 경계 전후 집계가 이어져야 하기 때문이다. 새 문자열은
+    지금까지 존재하지 않던 구별에만 붙는다.
+    """
+    if exc.cause == "input_bound":
+        return "input_bound"
+    return "token_budget_exhausted"
+
+
 class Synthesizer:
     def __init__(
         self,
@@ -215,14 +232,14 @@ class Synthesizer:
                 cassette=self.cassette,
                 stage="report_assembly",
             )
-        except TokenBudgetExhausted:
+        except TokenBudgetExhausted as exc:
             # Falling back to a template is correct -- no empty-handed exit
             # (§6.8) -- but it must not look like success. Every recorded run
             # took this path and nothing said so.
             await self.ledger.log(
                 "report_assembly_degraded",
                 qid,
-                {"reason": "token_budget_exhausted"},
+                {"reason": _degradation_reason(exc)},
             )
             return self.deterministic_report(
                 root_summary,
@@ -323,9 +340,9 @@ class Synthesizer:
                 cassette=self.cassette,
                 stage="node_reduction",
             )
-        except TokenBudgetExhausted:
+        except TokenBudgetExhausted as exc:
             return await self._degraded_summary(
-                question, child_summaries, "token_budget_exhausted"
+                question, child_summaries, _degradation_reason(exc)
             )
         except Exception:
             return await self._degraded_summary(
