@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -90,6 +91,37 @@ class DeepAnalysisAnalyticsService:
         except (ValueError, TypeError):
             return None
         return parsed if isinstance(parsed, dict) else None
+
+    async def report_bodies(
+        self, run_ids: Sequence[str]
+    ) -> dict[str, str]:
+        """Map run_id -> final report body, for the runs that have one.
+
+        The batch form exists because report-gate recalibration walks
+        hundreds of runs at once; looping `Ledger.report_markdown()` would
+        cost one round trip per run. Runs with no completed job -- or a
+        payload without a body -- are simply absent from the result rather
+        than mapping to None, so callers iterate what exists.
+        """
+        if not run_ids:
+            return {}
+        result = await self.db.execute(
+            select(DAEvent.run_id, DAEvent.payload).where(
+                DAEvent.run_id.in_(list(run_ids)),
+                DAEvent.kind == "job_completed",
+            )
+        )
+        bodies: dict[str, str] = {}
+        for run_id, raw in result.all():
+            payload = (
+                raw if isinstance(raw, dict) else self._payload(raw)
+            )
+            if not isinstance(payload, dict):
+                continue
+            body = payload.get("report_markdown")
+            if isinstance(body, str):
+                bodies[run_id] = body
+        return bodies
 
     @staticmethod
     def _valid_claim_grade(data: dict[str, Any]) -> bool:

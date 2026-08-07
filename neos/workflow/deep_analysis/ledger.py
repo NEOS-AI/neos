@@ -888,6 +888,40 @@ class Ledger:
         )
         return int(value or 0)
 
+    async def report_markdown(self) -> str | None:
+        """This run's final report body, or ``None`` if there isn't one yet.
+
+        Read from the `job_completed` event payload -- NOT from the
+        `deep_analysis_runs.report_path` column, which is always NULL. The
+        body has been persisted since the job service landed: `jobs.py`
+        puts it in that payload so a late subscriber replaying the event
+        stream receives the report without a second request (AC6). The
+        column is a missing pointer, not a missing body.
+
+        Returns ``None`` for a run that failed or has not finished, and for
+        a payload that carries no `report_markdown` key -- callers get one
+        answer for "no report", not an exception to distinguish.
+        """
+        raw = await self.db.scalar(
+            select(DAEvent.payload)
+            .where(
+                DAEvent.run_id == self.run_id,
+                DAEvent.kind == "job_completed",
+            )
+            .order_by(DAEvent.seq.desc())
+            .limit(1)
+        )
+        if raw is None:
+            return None
+        try:
+            payload = raw if isinstance(raw, dict) else json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        body = payload.get("report_markdown")
+        return body if isinstance(body, str) else None
+
     async def complete_run(self, report_path: str | None = None) -> None:
         run = await self.db.get(DARun, self.run_id)
         if run is None:
