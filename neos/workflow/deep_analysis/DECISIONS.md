@@ -816,3 +816,49 @@ available 12,000). 세 번째 분기를 추가하는 것은 이번 결정의 범
 케이스 하나뿐이며, 그것은 예산 사건이 아니라 의도적 무이벤트다. **코드상 해소 —
 재측정은 라이브 표본에서**, D25·D26 과 같은 규율이다. 로드맵 §2.2 S4 는 ⚠️(코드상
 해소, 라이브 미측정)로 남는다. 강등 어휘를 건드리지 않았으므로 FE6(이중 구현)은 그대로다.
+
+## D29. W1 라이브 표본 — 마무리가 출력을 냈다. 이제 게이트가 문제다.
+
+**맥락:** D25(마무리 예산 풀 분할)와 D28(거절 사유) 이후, §10.2 의 "정확히 1회" 규칙에
+따라 5+1 라이브 표본을 한 번 실행했다.
+아티팩트: `artifacts/deep-analysis-funnel/20260807T164924Z` (트리 `07790085`,
+2026-08-07 15:57:30~16:49:24Z, 51분 54초, exit 0, run 6건 전부 `completed`).
+**재실행하지 않는다.**
+
+**결과 — S1 충족:** `synth_pass` 18건 / 6 run (run 당 3). 574 run 동안 0 이던 값이다.
+`report_assembly` stage 가 처음으로 예약을 받았다(18건). `report_assembly_degraded`
+는 0건 — 템플릿 강등이 한 번도 일어나지 않았다. 리포트는 `[C:...]` 인용 마커가 실린
+LLM 산문이다.
+
+**결과 — S4 충족:** 6/6 run 이 **정확히 하나씩** 정지 이벤트를 가진다.
+`investigation_stopped_at_input_bound` 5건 · `investigation_stopped_at_floor` 1건 ·
+`token_budget_exhausted` 0건. **무이벤트 정지 0건.**
+
+**D28 을 표본 전에 한 것이 이 표본을 구했다.** 새로 만든 정지 kind 가 6 run 중 5건에서
+발생했다 — 이 클래스는 드문 게 아니라 **지배적 사유**였다. 하루 전 코드였다면 그 5건은
+영구 침묵으로 기록됐을 것이고, 다시 셀 기회는 규칙상 없다. 같은 이유로
+`node_reduction_degraded` 56건 **전부**가 `reason=input_bound` 로 기록됐다 — 옛 코드는
+56건 전부에 `token_budget_exhausted` 라는 거짓 사유를 달았을 것이다.
+
+**미달 항목의 정확한 서술:** 완료 기준 중 "`finalization_prompt_clamped` 의
+`exhausted=true` 건수 0" 은 **문자 그대로 미달**이다(12건). 그러나 그 기준이 막으려던
+가짜 양성 — 루트 답변만 남은 리포트가 LLM 성공처럼 보이는 것 — 은 일어나지 않았다.
+어느 run 도 `dropped_primary` 가 child 수에 도달하지 않았다(6/14, 7/11, 6/14, 6/10).
+**가짜 양성 `synth_pass` 는 0건**이고, 대신 4/6 run 이 child finding 의 절반가량을
+조립 프롬프트에서 떨어뜨렸다. 두 사실을 뭉치지 말 것.
+
+**드러난 다음 문제 (W3/G3):** `report_graded` 가 6/6 run 에서 3회 전부 `ok=False` 이고
+`report_grading` 예약은 0건이다 — **에이전틱 리포트 판정자는 여전히 한 번도 돌지
+않았다.** 결정론 게이트가 먼저 막는다. `uncited_ratio` 는 3 run 이 1.0, 3 run 이
+0.29~0.50 으로 18회 시도 전부 임계값 0.20 을 넘겼다. 그런데 본문에는 인용 마커가
+다수 실려 있다 — **마커가 있는데 비율이 1.0** 인 run 이 3개라는 것은 임계값이 아니라
+**분자·분모 정의**를 의심하게 한다. G3 는 D-2(assertion 0건 채점 정책)를 정하기 전에
+게이트가 마커를 실제로 세는지부터 확인해야 한다.
+
+**manifest 규율 보강 (`07790085`):** 이 표본부터 `execution_receipt.verification`
+(pytest 요약 + ruff), `config_fingerprint.git`(commit·branch·dirty),
+`config_fingerprint.resolved_models`(역할 해석 결과)를 남긴다. §10.2 가 영수증 항목으로
+적어둔 test/Ruff 가 어떤 표본에도 없었고, 모델은 네 칸 모두 `null` 이라 E3(judge =
+scout) 상태를 사후에 확인할 수 없었다. 이 표본의 지문은 judge·scout 이 둘 다
+`claude-sonnet-5` 임을 명시한다 — E3 는 의도적으로 유예된 채 측정됐다.
+ruff 는 `exit_status: 1`(저장소 전역 370건, 전부 기존 위반)로 **정직하게** 기록됐다.
