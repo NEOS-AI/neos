@@ -250,9 +250,24 @@ class Orchestrator:
         both causes, so the exception type carries no information about
         which one happened. Only the budget's state does.
 
+        The floor branch below tests `<` against `min_viable_output_tokens`
+        rather than `<= 0`, mirroring `Budgeter.should_stop`'s own viability
+        threshold -- `<= 0` would leave the ordinary floor stop unrecorded,
+        since the loop already halts once headroom drops below viability,
+        not once it reaches zero.
+
         There is deliberately no third branch: a run that stopped because
         no open question cleared `score_floor` has no budget event to
         record, and inventing one would put the ledger back to guessing.
+        That reasoning only covers the score-floor case, though -- it is not
+        a claim that every silent stop is accounted for. `TokenBudget.reserve`
+        also refuses a reservation when
+        `available_for_investigation - input_bound < min_viable_output_tokens`,
+        i.e. with headroom left in `available_for_investigation` itself; that
+        refusal raises the same `TokenBudgetExhausted` but satisfies neither
+        branch here, so it reaches this method and still logs nothing (see
+        G10 in `docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md` §7 -- tracked, not
+        fixed here).
 
         Both `_mark_*` helpers are idempotent (in-memory flag plus a
         `has_event` lookup), so calling this from both paths cannot

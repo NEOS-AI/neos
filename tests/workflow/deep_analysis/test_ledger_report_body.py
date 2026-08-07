@@ -70,11 +70,14 @@ async def test_report_bodies_reads_many_runs_in_one_query():
 
 
 @pytest.mark.asyncio
-async def test_report_bodies_agrees_with_report_markdown_on_the_latest_event():
+async def test_report_bodies_pins_the_latest_event_contract():
     """run 하나에 job_completed 가 두 번 있으면(크래시 후 재개) 최신 것이 이긴다.
 
     report_markdown() 은 seq desc + limit 1 로 최신을 고른다. report_bodies() 도
     같은 답을 내야 한다 -- 배치 조회가 더 빨라야지, 다른 답을 내면 안 된다.
+
+    이 테스트는 falsify되지 않는다(2행 테이블은 ORDER BY 없이도 삽입 순서로
+    돌아온다) -- 실질 가드는 `analytics.py`의 주석과 코드 리뷰다.
     """
     async with await db_manager.get_session() as s:
         run_id = await create_run(s, "루트 질문", "dev")

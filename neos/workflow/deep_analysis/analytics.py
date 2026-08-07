@@ -117,8 +117,13 @@ class DeepAnalysisAnalyticsService:
             # the dict-overwrite below, since SQL gives no ordering
             # guarantee without ORDER BY. Ascending by seq means the last
             # write into `bodies` per run_id is the highest-seq row, which
-            # is exactly what `Ledger.report_markdown()` (desc + limit 1)
-            # returns. Do not remove this sort.
+            # agrees with `Ledger.report_markdown()` (desc + limit 1) as long
+            # as that highest-seq row's payload actually carries
+            # `report_markdown` -- if it doesn't, `report_markdown()` returns
+            # None while this falls back to an earlier row's stale body.
+            # `jobs.py` always writes the key today, so that gap is currently
+            # unreachable, not structurally impossible. Do not remove this
+            # sort.
             .order_by(DAEvent.seq)
         )
         bodies: dict[str, str] = {}

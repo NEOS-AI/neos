@@ -150,9 +150,12 @@ function activityLabel(event: DeepAnalysisJobEvent): string | null {
       return "리포트 채점 재시도";
     }
     // `judge_budget_exhausted`는 이벤트 kind가 아니다 — 판정자가 굶었다는
-    // 사실은 이 페이로드의 diagnostics.judge 로만 남는다
-    // (graders/report.py). `ok`만 보면 굶은 판정자의 통과와 실제 승인이
-    // 같은 문구를 내고, 그것이 이 항목의 실제 결함이었다.
+    // 사실은 이 payload의 `judge` 키로만 남는다 (graders/report.py).
+    // 오케스트레이터가 `report_graded`를 `{"ok": ..., "attempt": ...,
+    // **verdict.diagnostics}`로 남기면서 diagnostics를 spread하기 때문에
+    // `judge`는 `payload.diagnostics.judge`가 아니라 `payload.judge`다.
+    // `ok`만 보면 굶은 판정자의 통과와 실제 승인이 같은 문구를 내고,
+    // 그것이 이 항목의 실제 결함이었다.
     const judge = asString(payload.judge);
     if (judge === "budget_exhausted") {
       return "리포트 채점 통과 (판정자 예산 소진 — 실제 심사 없음)";
