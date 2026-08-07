@@ -8,6 +8,7 @@ import { type ClassValue, clsx } from 'clsx';
 import { formatISO } from 'date-fns';
 import { twMerge } from 'tailwind-merge';
 import type { DBMessage, Document } from '@/lib/db/schema';
+import { deepAnalysisFromMessageMetadata } from './deep-analysis/metadata';
 import { ChatSDKError, type ErrorCode } from './errors';
 import type { ChatMessage, ChatTools, CustomUIDataTypes } from './types';
 
@@ -135,6 +136,14 @@ export function convertBackendMessagesToUI(
           metadata[key] = msg.metadata[key];
         }
       });
+    }
+
+    // 백엔드 키(`deep_analysis_run_id`)를 프론트 모양(`deep_analysis`)으로 옮긴다.
+    // 이 브리지가 없으면 새로고침 후 진행 카드가 통째로 사라진다 — 강등 경고만이
+    // 아니라 카드 자체가. 자세한 근거는 `lib/deep-analysis/metadata.ts` 주석 참조.
+    const deepAnalysis = deepAnalysisFromMessageMetadata(msg.metadata);
+    if (deepAnalysis) {
+      metadata.deep_analysis = deepAnalysis;
     }
 
     return {
