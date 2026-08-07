@@ -207,20 +207,40 @@ function activityLabel(event: DeepAnalysisJobEvent): string | null {
 }
 
 /**
- * 이 이벤트가 리포트를 사용자가 받았어야 할 것보다 못하게 만들었는가.
+ * 이 이벤트가 리포트를 사용자가 받았어야 할 것보다 못하게 만들었는가 —
+ * 만들었다면 어떤 이름으로 셀 것인가.
+ *
+ * ⚠️ 🟡 **알려진 중복.** 같은 규칙이 백엔드에도 있다:
+ * `neos/workflow/deep_analysis/ledger.py`의 `_degradation_kind()`.
+ * 이쪽은 라이브 스트림을, 저쪽은 새로고침 후 복원을 담당한다. 어휘를 바꿀 때
+ * **반드시 양쪽을 함께** 고칠 것 — 정본 fixture 목록이
+ * `web/tests/source/deep-analysis-degradation.test.ts`와
+ * `tests/workflow/deep_analysis/test_ledger_degradations.py`에 같은 내용으로
+ * 들어 있다. 통합 검토는 로드맵 §7 FE6.
  *
  * 조사 범위나 검증 강도를 깎은 것(`investigation_stopped_at_floor`,
  * `claim_discarded` 등)은 여기 들지 않는다 — 리포트 자체는 주어진 재료로
  * 낼 수 있는 최선이기 때문이다. `llm_truncated`도 마찬가지다: 확장 재시도가
  * 성공하면 산출물에 영향이 없고, 실패한 경우만 가르려면 `truncation_handled`와
  * 상관시켜야 한다. 잘못된 경고보다 과소 보고를 택한다.
+ *
+ * `report_graded`는 kind가 아니라 **payload가** 강등을 결정하는 유일한 경우다.
+ * 굶은/잘린/해석 실패 판정자는 전부 `ok=true`로 재조립 루프를 끝내므로
+ * (`graders/report.py`) `judge` 키가 달린 이벤트는 run당 최대 1건이고 항상
+ * 최종 판정이다 — 중간 시도가 오탐으로 잡히지 않는다.
  */
-function degradedReport(event: DeepAnalysisJobEvent): boolean {
+function degradationKind(event: DeepAnalysisJobEvent): string | null {
   const { kind, payload } = event;
-  if (kind === "report_assembly_degraded") return true;
-  if (kind === "node_reduction_degraded") return true;
-  if (kind === "finalization_prompt_clamped") return payload.exhausted === true;
-  return false;
+  if (kind === "report_assembly_degraded") return kind;
+  if (kind === "node_reduction_degraded") return kind;
+  if (kind === "finalization_prompt_clamped") {
+    return payload.exhausted === true ? kind : null;
+  }
+  if (kind === "report_graded") {
+    const judge = asString(payload.judge);
+    return judge ? `judge_unreviewed:${judge}` : null;
+  }
+  return null;
 }
 
 /** 최초 발생 순서를 보존하며 같은 kind를 count로 합친다. */
@@ -260,13 +280,14 @@ export function reduceDeepAnalysisEvent(
     return state;
   }
 
+  const degradation = degradationKind(event);
   const next: DeepAnalysisProgress = {
     ...state,
     cursor: event.seq,
     lastKind: event.kind,
     lastActivity: activityLabel(event) ?? state.lastActivity,
-    degradations: degradedReport(event)
-      ? withDegradation(state.degradations, event.kind)
+    degradations: degradation
+      ? withDegradation(state.degradations, degradation)
       : state.degradations,
     idleTimedOut: false,
   };

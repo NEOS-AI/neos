@@ -202,6 +202,56 @@ test("클램프가 허용량 안에 들어갔으면 강등이 아니다", () => 
   ]);
 });
 
+test("굶은 판정자는 강등으로 센다 — 심사 없이 통과한 리포트다", () => {
+  const state = applyAll([
+    event(1, "report_graded", { ok: true, judge: "budget_exhausted" }),
+  ]);
+
+  assert.deepEqual(state.degradations, [
+    { kind: "judge_unreviewed:budget_exhausted", count: 1 },
+  ]);
+});
+
+test("실제로 심사한 판정자의 통과는 강등이 아니다", () => {
+  const state = applyAll([
+    event(1, "report_graded", { ok: true, uncited_ratio: 0.1 }),
+    event(2, "report_graded", { ok: false, code: "E_REPORT_AGENTIC" }),
+  ]);
+
+  assert.deepEqual(state.degradations, []);
+  assert.equal(state.gradeAttempts, 2);
+});
+
+test("판정자 강등 3종이 각각 다른 항목으로 남는다", () => {
+  const state = applyAll([
+    event(1, "report_graded", { ok: true, judge: "truncated" }),
+    event(2, "report_graded", { ok: true, judge: "unparseable" }),
+  ]);
+
+  assert.deepEqual(state.degradations, [
+    { kind: "judge_unreviewed:truncated", count: 1 },
+    { kind: "judge_unreviewed:unparseable", count: 1 },
+  ]);
+});
+
+test("재생된 이벤트는 강등을 두 번 세지 않는다", () => {
+  // `after=0` 재구독은 전체 이력을 다시 흘려보낸다. 커서 가드가 없으면
+  // 재연결 한 번에 "3회"가 "6회"가 된다.
+  const replayed = [
+    event(1, "report_assembly_degraded", {}),
+    event(2, "report_graded", { ok: true, judge: "budget_exhausted" }),
+  ];
+  const state = [...replayed, ...replayed].reduce(
+    reduceDeepAnalysisEvent,
+    initialDeepAnalysisProgress()
+  );
+
+  assert.deepEqual(state.degradations, [
+    { kind: "report_assembly_degraded", count: 1 },
+    { kind: "judge_unreviewed:budget_exhausted", count: 1 },
+  ]);
+});
+
 test("굶은 판정자가 통과시킨 리포트는 승인된 리포트와 다르게 말한다", () => {
   const approved = applyAll([event(1, "report_graded", { ok: true })]);
   const starved = applyAll([
