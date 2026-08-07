@@ -22,7 +22,8 @@
   - `report_graded` — `payload.judge`가 비지 않은 문자열일 때 `judge_unreviewed:<judge>`
 - **DB 있는 테스트 실행:** `HOME=/tmp/neos-test-home .venv/bin/pytest tests/workflow/deep_analysis -q`
 - **프론트 검증:** `pnpm --dir web test:source && pnpm --dir web exec tsc --noEmit`
-- 현재 기준선: 프론트 `test:source` **147 passed**
+- 현재 기준선: 프론트 `test:source` **153 passed** (2026-08-07 실측. 로드맵 §10.4의
+  "147 passed"는 W2가 테스트를 추가하기 전 수치라 낡았다 — Task 8에서 함께 정정한다)
 
 ---
 
@@ -801,7 +802,7 @@ function degradationKind(event: DeepAnalysisJobEvent): string | null {
 - [ ] **Step 5: 테스트가 통과하는지 확인한다**
 
 Run: `pnpm --dir web test:source && pnpm --dir web exec tsc --noEmit`
-Expected: PASS — 147 + 4 = **151 passed**, tsc 무출력
+Expected: PASS — 153 + 4 = **157 passed**, tsc 무출력
 
 - [ ] **Step 6: 커밋**
 
@@ -1037,7 +1038,7 @@ export function degradationNotices(
 - [ ] **Step 4: 테스트가 통과하는지 확인한다**
 
 Run: `pnpm --dir web test:source && pnpm --dir web exec tsc --noEmit`
-Expected: PASS — 151 + 6 = **157 passed**, tsc 무출력
+Expected: PASS — 157 + 6 = **163 passed**, tsc 무출력
 
 - [ ] **Step 5: 커밋**
 
@@ -1298,7 +1299,7 @@ import { deepAnalysisFromMessageMetadata } from './deep-analysis/metadata';
 - [ ] **Step 6: 테스트가 통과하는지 확인한다**
 
 Run: `pnpm --dir web test:source && pnpm --dir web exec tsc --noEmit`
-Expected: PASS — 157 + 6 = **163 passed**, tsc 무출력
+Expected: PASS — 163 + 6 = **169 passed**, tsc 무출력
 
 - [ ] **Step 7: 커밋**
 
@@ -1403,7 +1404,7 @@ import { degradationNotices } from "@/lib/deep-analysis/degradation";
 - [ ] **Step 6: 타입 검사와 전체 프론트 스위트를 확인한다**
 
 Run: `pnpm --dir web exec tsc --noEmit && pnpm --dir web test:source`
-Expected: tsc 무출력, **163 passed** (컴포넌트는 test:source 범위 밖이라 건수 불변)
+Expected: tsc 무출력, **169 passed** (컴포넌트는 test:source 범위 밖이라 건수 불변)
 
 - [ ] **Step 7: 커밋**
 
@@ -1546,7 +1547,7 @@ Expected: §8 W2 문단의 과거 서술만 남고 §1·§7의 미해결 항목�
 HOME=/tmp/neos-test-home .venv/bin/pytest tests/workflow/deep_analysis -q
 pnpm --dir web test:source && pnpm --dir web exec tsc --noEmit
 ```
-Expected: 백엔드 0 failed, 프론트 **163 passed**, tsc 무출력
+Expected: 백엔드 0 failed, 프론트 **169 passed**, tsc 무출력
 
 ```bash
 git add docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md neos/workflow/deep_analysis/DECISIONS.md
