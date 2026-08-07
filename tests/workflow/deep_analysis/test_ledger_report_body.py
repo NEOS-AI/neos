@@ -70,6 +70,29 @@ async def test_report_bodies_reads_many_runs_in_one_query():
 
 
 @pytest.mark.asyncio
+async def test_report_bodies_agrees_with_report_markdown_on_the_latest_event():
+    """run 하나에 job_completed 가 두 번 있으면(크래시 후 재개) 최신 것이 이긴다.
+
+    report_markdown() 은 seq desc + limit 1 로 최신을 고른다. report_bodies() 도
+    같은 답을 내야 한다 -- 배치 조회가 더 빨라야지, 다른 답을 내면 안 된다.
+    """
+    async with await db_manager.get_session() as s:
+        run_id = await create_run(s, "루트 질문", "dev")
+        await Ledger(s, run_id).log(
+            "job_completed", None, {"report_markdown": "리포트 1"}
+        )
+        await Ledger(s, run_id).log(
+            "job_completed", None, {"report_markdown": "리포트 2"}
+        )
+
+        bodies = await DeepAnalysisAnalyticsService(s).report_bodies([run_id])
+
+        assert bodies[run_id] == "리포트 2"
+        assert await Ledger(s, run_id).report_markdown() == bodies[run_id]
+        await s.rollback()
+
+
+@pytest.mark.asyncio
 async def test_report_bodies_returns_empty_for_no_run_ids():
     """빈 입력에서 질의를 아예 내지 않는다 -- IN () 은 DB마다 다르게 군다."""
     async with await db_manager.get_session() as s:

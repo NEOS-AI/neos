@@ -106,10 +106,20 @@ class DeepAnalysisAnalyticsService:
         if not run_ids:
             return {}
         result = await self.db.execute(
-            select(DAEvent.run_id, DAEvent.payload).where(
+            select(DAEvent.run_id, DAEvent.payload)
+            .where(
                 DAEvent.run_id.in_(list(run_ids)),
                 DAEvent.kind == "job_completed",
             )
+            # Load-bearing: without this, a run with more than one
+            # job_completed event (crash-resume re-logs one -- see
+            # RESUMABLE_STATUSES in jobs.py) could have any of its rows win
+            # the dict-overwrite below, since SQL gives no ordering
+            # guarantee without ORDER BY. Ascending by seq means the last
+            # write into `bodies` per run_id is the highest-seq row, which
+            # is exactly what `Ledger.report_markdown()` (desc + limit 1)
+            # returns. Do not remove this sort.
+            .order_by(DAEvent.seq)
         )
         bodies: dict[str, str] = {}
         for run_id, raw in result.all():
