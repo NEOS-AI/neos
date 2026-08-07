@@ -14,9 +14,19 @@ from uuid import uuid4
 
 PersistEvent = Callable[[str, dict[str, Any]], Awaitable[None]]
 
-# Stages that run after investigation is over: hierarchical reduction, report
-# assembly, and the report judgement. They are the only callers allowed to
-# draw on the reserved floor.
+# The report is the run's only user-visible product. `node_reduction`
+# improving a summary that will never be assembled is worthless, yet it
+# drew first from the shared floor and starved assembly in every recorded
+# run -- `reduce_tree` calls `reduce_node` once per node and nothing caps
+# that count. `REPORT_STAGES` is the inner tier reduction cannot reach.
+REPORT_STAGES = frozenset({
+    "report_assembly",
+    "report_grading",
+})
+
+# Stages that run after investigation is over: hierarchical reduction plus
+# everything in REPORT_STAGES. They are the only callers allowed to draw on
+# the reserved floor.
 #
 # The budget layer knowing stage names is a deliberate coupling. Threading an
 # `is_finalization` flag from each call site through call_llm / call_json /
@@ -24,8 +34,7 @@ PersistEvent = Callable[[str, dict[str, Any]], Awaitable[None]]
 # explicit, testable, and lives in a single place.
 FINALIZATION_STAGES = frozenset({
     "node_reduction",
-    "report_assembly",
-    "report_grading",
+    *REPORT_STAGES,
 })
 
 
@@ -71,12 +80,19 @@ class TokenBudget:
         outstanding: Mapping[str, int] | None = None,
         persist: PersistEvent | None = None,
         floor_tokens: int = 0,
+        report_floor_tokens: int = 0,
         min_viable_output_tokens: int = 1,
     ) -> None:
         if cap_tokens < 0 or consumed_tokens < 0:
             raise ValueError("token counts must be non-negative")
         if floor_tokens < 0:
             raise ValueError("floor_tokens must be non-negative")
+        if report_floor_tokens < 0:
+            raise ValueError("report_floor_tokens must be non-negative")
+        if report_floor_tokens > floor_tokens:
+            raise ValueError(
+                "report_floor_tokens must not exceed floor_tokens"
+            )
         if min_viable_output_tokens < 1:
             raise ValueError("min_viable_output_tokens must be positive")
         recovered = dict(outstanding or {})
@@ -87,6 +103,7 @@ class TokenBudget:
         self._outstanding = recovered
         self._persist = persist
         self.floor_tokens = floor_tokens
+        self.report_floor_tokens = report_floor_tokens
         self.min_viable_output_tokens = min_viable_output_tokens
         self._lock = asyncio.Lock()
 
@@ -113,6 +130,19 @@ class TokenBudget:
         return max(0, self.remaining_tokens - self.floor_tokens)
 
     @property
+    def available_for_reduction(self) -> int:
+        """Remaining tokens `node_reduction` may reserve.
+
+        Isolating the report's tier enforces the reduction allowance
+        without a call counter. `finalization_reduction_allowance` sizes
+        the floor but never limited how many times `reduce_node` runs;
+        reductions past the allowance now degrade through the path they
+        already have (synthesizer.py) instead of eating the assembly's
+        reservation.
+        """
+        return max(0, self.remaining_tokens - self.report_floor_tokens)
+
+    @property
     def exhausted(self) -> bool:
         return self.remaining_tokens <= 0
 
@@ -129,11 +159,12 @@ class TokenBudget:
 
         input_bound = conservative_input_bound(request)
         async with self._lock:
-            ceiling = (
-                self.remaining_tokens
-                if stage in FINALIZATION_STAGES
-                else self.available_for_investigation
-            )
+            if stage in REPORT_STAGES:
+                ceiling = self.remaining_tokens
+            elif stage in FINALIZATION_STAGES:
+                ceiling = self.available_for_reduction
+            else:
+                ceiling = self.available_for_investigation
             output_tokens = min(max_output_tokens, ceiling - input_bound)
             # A grant of >= 1 token used to count as a successful reservation.
             # It is not: a 25-token grant for a JSON prompt truncates with

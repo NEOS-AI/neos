@@ -119,14 +119,19 @@ async def build_orchestrator(
         if profile == "dev"
         else config.synthesis_max_tokens
     )
-    # The floor buys `finalization_reduction_allowance` node_reduction calls,
-    # one assembly, and one judge. Shared with
-    # `neos/config/loader.py`'s `warn_finalization_floor_ratio` via
-    # `DeepAnalysisConfig.finalization_floor_tokens` so the warning can never
-    # silently describe a floor that is not the one actually enforced here.
+    # Two nested tiers, not one pool. The outer floor keeps investigation out
+    # of the finalization chain; the inner one keeps node_reduction out of the
+    # report. `reduce_tree` calls `reduce_node` once per node and nothing caps
+    # that count -- 6 measured runs averaged 3.7 calls against an allowance of
+    # 2 -- so without the inner tier the assembly's reservation is taken by
+    # whichever reduction happens to run last. Both come from
+    # `DeepAnalysisConfig` so `neos/config/loader.py`'s
+    # `warn_finalization_floor_ratio` can never describe a floor that is not
+    # the one enforced here.
     finalization_floor_tokens = config.finalization_floor_tokens(
         synthesis_max_tokens
     )
+    report_floor_tokens = config.report_floor_tokens(synthesis_max_tokens)
     return Orchestrator(
         session,
         run_id,
@@ -141,6 +146,7 @@ async def build_orchestrator(
         cassette=cassette,
         global_token_cap=global_token_cap,
         finalization_floor_tokens=finalization_floor_tokens,
+        report_floor_tokens=report_floor_tokens,
         min_viable_output_tokens=config.min_viable_output_tokens,
         parallel_workers=parallel_workers,
         max_depth=max_depth,

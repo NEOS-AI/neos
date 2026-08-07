@@ -1,7 +1,14 @@
 # Deep Analysis 작업 재개 문서
 
-**작성일:** 2026-07-25 (갱신: 2026-07-26)
-**작업 위치:** `dev` 브랜치. entailment 평가 worktree는 병합 후 제거됨 (§6 절차 준수)
+> 📦 **보관 문서 (2026-08-04 archive 이동).** 현재 진입점은
+> [DEEP_ANALYSIS_HARNESS_ROADMAP.md](../DEEP_ANALYSIS_HARNESS_ROADMAP.md)다.
+> 이 문서는 **로드맵이 압축한 상세 기록**을 위해 남긴다 — 특히 §4의 entailment
+> 평가 측정표(run ID·토큰·Fisher p)와 §8의 2026-08-04 라이브 6건 run ID는
+> 여기에만 있다. 로드맵과 충돌하면 **로드맵이 최신**이다.
+
+**작성일:** 2026-07-25 (갱신: 2026-08-04)
+**작업 위치:** `dev` 브랜치. entailment 평가 worktree는 병합 후 제거됨 (§6 절차 준수).
+2026-07-28 이후 작업은 worktree 없이 `dev`에서 직접 수행했다.
 **근거:** `docs/superpowers/plans/*deep-analysis*`, `docs/superpowers/specs/*deep-analysis*`,
 `neos/workflow/deep_analysis/DECISIONS.md` (D1–D23), git 커밋 이력, `.superpowers/sdd/` 원장
 
@@ -14,10 +21,17 @@
 ## 1. 한눈에 보는 현재 상태
 
 deep_analysis 하네스는 **M0–M4 코어 → 챗 편입 → durable job 서비스 → 신뢰도 개선 루프**
-순서로 진화했고, entailment 실측 평가까지 종료했다. 현재 프론티어는
-**entailment discard의 claim recall 손실 측정**이다 (§5).
+순서로 진화했고, entailment 실측 평가를 거쳐 **2026-07-28~08-04에는 "조용한 실패"
+계열을 계측·수정**했다. 현재 프론티어는 **마무리(리포트 조립·판정)가 예산을 받지
+못하는 문제**다 (§2.7, G6·G7).
 
-> 갱신: 2026-07-26.
+> 갱신: 2026-08-04.
+
+> 🔴 **한 줄 요약:** 사용자에게 전달된 deep-analysis 리포트 중 **LLM이 쓴 것은
+> 아직 0건이다.** 574 run·183 report_graded 동안 `synth_pass`가 한 번도 기록되지
+> 않았고, 2026-08-04 라이브 재측정에서도 6/6 run이 전부 템플릿 리포트를 냈다.
+> 이제 그 사실이 `report_assembly_degraded` 이벤트로 원장에 남는다는 점이
+> 이전과의 차이다 — 원인은 G6·G7로 확정됐고 아직 미해결이다.
 
 | 단계 | 상태 | 비고 |
 |---|---|---|
@@ -32,6 +46,11 @@ deep_analysis 하네스는 **M0–M4 코어 → 챗 편입 → durable job 서�
 | claim entailment | ✅ 완료 (dev 병합) | `7c561d99` 머지 |
 | entailment 실측 평가 | ✅ 완료 | `bc4e0656` — Task 1·2 + 최종 리뷰 종료 (§4) |
 | claim recall 손실 측정 | 🟡 측정됨, 미결 | 2026-07-29 run: entailment 19회 호출, discard 0건 → `inconclusive` (§5) |
+| truncation 전파 (A2·A1) | ✅ 완료 | 2026-08-02 — 잘린 응답과 쓰레기 응답을 구분한다 (§2.7) |
+| 리포트 게이트 계측 (G2·G1) | ✅ 완료 | 2026-08-03 — 게이트 거부 사유를 측정 가능하게 (§2.7) |
+| 마무리 예산 floor (G5) | ⚠️ 부분 완료 | 2026-08-03~04 — 예약은 보장, **출력은 미보장** (§2.7) |
+| floor 회귀 (G8) | ✅ 해소 | 2026-08-04 `71769b0f` — dev run 0/5 → 5/5 (§2.7) |
+| 리포트 조립이 예약을 못 받음 | 🔴 **미해결** | G6·G7 — 실측 확정, 다음 프론티어 (§2.7) |
 
 **기본 플래그:** `deep_analysis.enabled = False` (프로덕션 기본값에서 비활성).
 `neos/config/schema.py:616`.
@@ -146,6 +165,63 @@ claim recall 손실 측정                  ← ⬜ 다음 (§5)
 - Task 2: 버전 프롬프트 + 워커 통합
 - Task 3: golden 프롬프트 변경 통제 + 리플레이
 - Task 4: 전체 회귀 + 평가 인계
+
+### 2.7 "조용한 실패" 계열 — 2026-07-28 ~ 08-04
+
+**관통하는 주제 하나: 이 시스템의 모든 실패가 성공처럼 보였다.** truncation
+fallback, 템플릿 리포트, 굶은 판정자 — 전부 조용히 degrade했고 원장에는
+성공과 구별되지 않는 흔적만 남았다. 이 구간의 작업은 대부분 **고치기 전에
+보이게 만드는** 일이었다.
+
+```
+A2 truncation 전파 (08-02)      stop_reason를 LLMResponse로 올린다
+        ↓                        잘린 응답 ≠ 파싱 실패한 쓰레기
+A1 report.py 판정자 상한 (08-02) 300 → 800 (thinking 몫 실측 후)
+        ↓
+G2 게이트 계측 (08-03)           uncited_ratio를 모든 verdict에 싣는다
+G1 게이트 진단 (08-03)           → 답: 게이트 문제다. §7 하류 증상이 아니다
+        ↓
+G5 마무리 예산 floor (08-03)     조사가 마무리를 굶기지 못하게 한다
+        ↓
+G8 floor 회귀 (08-04)           ← floor가 dev run을 100% 죽였다. 수정 완료
+        ↓
+G6·G7                           ← ⬜ 다음. 조립이 여전히 예약을 못 받는다
+```
+
+**A2 truncation 전파** — `docs/superpowers/specs/2026-08-02-deep-analysis-truncation-propagation-design.md`
+- `LLMResponse.stop_reason` / `granted_max_output_tokens` 추가, `TruncatedResponseError` 도입
+- `call_json`이 잘림을 감지하면 상한을 `truncation_retry_multiplier`(2배)로 1회 확장 재시도
+- **예산이 구속조건이면 확장하지 않는다** — 같은 예산에서 같은 자리에 다시 잘린다
+- worker의 entailment를 `call_llm`+`parse_json`에서 `call_json`으로 이전
+- 검증: 2026-08-04 default run에서 확장 재시도 5건 전부 성공(`retried_ok`, 4000→8000)
+
+**G5 마무리 예산 floor** — `docs/superpowers/specs/2026-08-03-deep-analysis-finalization-budget-design.md`
+- `TokenBudget.floor_tokens` + `available_for_investigation`, 조사 stage는 floor를 못 넘본다
+- floor 산식 `(finalization_reduction_allowance+1)×synthesis + judge`를 설정·런타임이 공유
+- 두 fallback(`report_assembly_degraded`, `judge_budget_exhausted`)이 흔적을 남긴다
+- ⚠️ **성공 기준 5 미달.** 아래 참조.
+
+**G8 floor 회귀** — `71769b0f` (스펙·플랜 없이 실측 → 수정 → 재측정)
+- `reserve()`가 1토큰만 남아도 예약을 내주던 것을 `min_viable_output_tokens`(2,048)로 차단
+- `should_stop`·`investigation_stopped_at_floor` 조건도 0이 아닌 임계값 기준으로 정렬
+
+#### 라이브 검증 결과 (2026-08-04)
+
+`scripts/deep_analysis_funnel_sample.py`를 두 번 실행했다.
+
+| | G8 수정 전 | G8 수정 후 |
+|---|---|---|
+| dev run 완료 | **0 / 5** (전부 `job_failed`) | **5 / 5** |
+| default run | 실행 못 함 | 완료 |
+| 마무리 도달 | 0건 | 6건 전부 |
+| `report_graded` | 0 | 18 |
+| `report_assembly` 예약 | 0 | **0 (여전히)** |
+| `synth_pass` | 0 | **0 (여전히)** |
+
+**결론: 회귀는 해소됐고, 성공 기준 5는 미달이다.** 원인은 G6(floor가 input을
+계산에 넣지 않는다)·G7(reduction 호출 횟수가 강제되지 않는다)로 확정됐다 —
+실측 수치는 `docs/TODO_260729.md`의 두 항목 "실측 확인" 절에 있다.
+**G5가 실제로 바꾼 것은 예약 보장이지 출력 보장이 아니다.**
 
 ---
 
@@ -309,7 +385,13 @@ append-only `deep_analysis_events`의 `kind='claim_rejected'` 행을 run ID로
 
 플랜: `docs/superpowers/plans/2026-07-28-deep-analysis-discard-recall-measurement.md`
 
-### 왜 이것이 1순위인가
+> ⚠️ **2026-08-04 갱신 — 더 이상 1순위가 아니다.** 아래 "왜 이것이 1순위인가"는
+> 2026-07-26 시점의 판단이며 그 근거는 지금도 유효하다. 다만 그 사이에 **리포트가
+> 아예 LLM으로 조립되지 않는다**는 더 상위의 문제가 확인됐다(§2.7). claim recall을
+> 다듬는 것은 그 클레임이 실제로 리포트에 실린 뒤에 의미가 있다. 순서를 G6·G7
+> 뒤로 미룬다.
+
+### 왜 이것이 1순위인가 (2026-07-26 시점 판단)
 
 entailment 평가에서 verified 비율은 50.0%→63.6%로 올랐지만 **Fisher p≈0.42로
 표본오차와 구별되지 않는다.** 반면 claim pool 축소(graded -42.1%, verified 절대수
@@ -396,11 +478,21 @@ SDD 원장은 이 절차로 main 체크아웃에 보존했다(체크섬 일치 �
 
 | 우선순위 | 항목 |
 |---|---|
+| 🔴 **G6** | floor가 `input_bound`를 계산에 넣지 않는다 — `node_reduction` input이 최대 6,480(dev floor 4,400보다 크다) |
+| 🔴 **G7** | floor가 통합 풀이라 reduction 호출 횟수가 강제되지 않는다 — run당 3.7회 vs allowance 2 |
+| 🟡 G9 | floor 정지가 `token_budget_exhausted`와 `investigation_stopped_at_floor` 두 이름으로 기록된다 (6건 중 4건 오분류) |
+| 🟡 G3 | assertion이 없는 리포트를 게이트가 통과시킨다 — **재판단 필요**. 기존 관찰은 템플릿 리포트 기준이었다 |
+| 🟡 G4 | `report_path`가 574 run 전부 NULL — 리포트 본문이 보존된 적 없다 |
+| 🟡 A3·A4 | worker/판정자 상한 재보정 (thinking 몫 실측 후) |
+| 🟡 C1 | discard recall 재측정 (§5) |
+| 🟡 C3·C4 | `call_json`이 예외 시 토큰을 흘린다 / `entailment_filter_skipped`가 4가지 원인을 뭉갠다 |
 | 🧪 CI 선결 #9 | `pytest tests/workflow/` 단일 실행이 수집 단계에서 실패 |
 | 🧪 CI 선결 #10 | `tests/api/`에 순서 의존 오염 |
 | 🧪 CI 선결 #11 | analytics 테스트가 run 스코프 없이 전역 집계 검증 |
 | 🟡 P1 #7 | verified 클레임 비율 — **entailment 평가 완료**, recall 측정으로 이어짐 (§5) |
 | 🟡 P1 #8 | `_persist_assistant_message`가 예외를 삼킴 |
+
+**해소됨:** A1·A2 (2026-08-02), G1·G2 (08-03), G5 부분 (08-03), G8 (08-04).
 
 ---
 
@@ -408,11 +500,16 @@ SDD 원장은 이 절차로 main 체크아웃에 보존했다(체크섬 일치 �
 
 - 평가 증거: `artifacts/deep-analysis-funnel/20260725T081707Z` (gitignore, 재생성 불가),
   `.superpowers/sdd/2026-07-25-deep-analysis-entailment-evaluation/` (task 원장)
+- 2026-08-04 라이브 검증 증거: `deep_analysis_events` 테이블. 수정 전 표본은
+  run `711def44`·`1b117d0e`·`d47fa2d5`·`017c2f44`·`a2838cf0`(전부 failed),
+  수정 후 표본은 `6c942849`·`e09026de`·`f4aba282`·`2acb905c`·`331f3152`(dev) +
+  `20c4798f`(default). **아티팩트 디렉터리는 수정 전 run이 실패해 남지 않았다** —
+  이 6건의 근거는 DB 이벤트뿐이므로 `deep_analysis_events`를 지우면 재현 불가다.
 - 결정 원장: `neos/workflow/deep_analysis/DECISIONS.md` (D1–D23)
 - L5 운영 문서: `docs/deep_analysis_l5.md`
 - 백로그: `docs/TODO_260729.md`
 - 로드맵: `docs/ROADMAP.md`
 - 관련 문서: [role_based_model_routing_task_resume.md](role_based_model_routing_task_resume.md),
-  [coding_agent_task_resume.md](coding_agent_task_resume.md)
+  [coding_agent_task_resume.md](../coding_agent_task_resume.md)
 
 **테스트 명령:** `.venv/bin/python -m pytest` (bare `pytest`는 asyncio 마커 수집 실패)

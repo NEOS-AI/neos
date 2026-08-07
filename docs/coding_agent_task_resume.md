@@ -263,7 +263,7 @@ GOOGLE_API_KEY=test-key /Users/ywsung/Desktop/neos/.venv/bin/pytest -q tests/cod
 ## 7. 참조
 
 - 최종 수용 게이트: 플랜 `:1201`
-- 관련 문서: [deep_analysis_task_task_resume.md](deep_analysis_task_task_resume.md),
-  [role_based_model_routing_task_resume.md](role_based_model_routing_task_resume.md)
+- 관련 문서: [deep_analysis_task_task_resume.md](archive/deep_analysis_task_task_resume.md),
+  [role_based_model_routing_task_resume.md](archive/role_based_model_routing_task_resume.md)
 - SDD 원장: `.worktrees/managed-sandbox-control-plane/.superpowers/sdd/2026-07-25-managed-sandbox-control-plane/`
 - 로드맵: `docs/ROADMAP.md`

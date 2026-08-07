@@ -631,17 +631,30 @@ class DeepAnalysisModelsConfig(StrictConfigModel):
 
 
 class DeepAnalysisDevProfileConfig(StrictConfigModel):
-    global_token_cap: int = 20000
+    # 20000 could not hold ONE worker_analysis call: measured input_bound for
+    # that stage ran 5,542 / 10,893 / 17,723 (min/median/max), and that is
+    # before the finalization floor is subtracted. The profile was sized
+    # before `reserve` charged for input at all, which is why dev runs were
+    # pathological rather than merely small. 100,000 leaves 58,960 for
+    # investigation against a 41,040 floor (41%), matching the default
+    # profile's 43.7%.
+    global_token_cap: int = 100000
     parallel_workers: int = 2
     max_depth: int = 2
-    # dev shrinks the budget 15x (300000 -> 20000) but inherited a synthesis
+    # dev shrinks the budget 3x (300000 -> 100000) but inherited a synthesis
     # ceiling sized for the full profile, which is why the finalization floor
-    # did not fit: three 4000-token calls against a 20000 cap.
+    # did not fit before this file's input allowances were added: three
+    # 4000-token calls against what was then a 20000 cap.
     #
     # 1200 is measured, not chosen for roundness -- node_reduction's actual
     # consumption ran a median of 1109 tokens INCLUDING input, at granted
     # ceilings whose median was 748.
-    synthesis_max_tokens: int = 1200
+    #
+    # ge=1: at s <= 0, the floor formulas can push report_floor_tokens above
+    # floor_tokens (which stays non-negative) and `TokenBudget.__init__`
+    # raises an opaque ValueError on every run instead of failing at config
+    # validation with a clear message.
+    synthesis_max_tokens: int = Field(default=1200, ge=1)
 
 
 class DeepAnalysisDiscardRecallConfig(StrictConfigModel):
@@ -763,7 +776,7 @@ class DeepAnalysisConfig(StrictConfigModel):
     # both 300 and 800, so doubling is not guaranteed to be enough — when it
     # is not, the call site fails closed. The alternative, requesting all
     # remaining headroom, lets one worker monopolise the dev profile's
-    # global_token_cap of 20000 across parallel_workers=2 and starve its peer.
+    # global_token_cap of 100000 across parallel_workers=2 and starve its peer.
     #
     # gt=1.0 because a multiplier at or below 1.0 would not expand the
     # retry's ceiling at all -- it terminates safely but is meaningless.
@@ -800,17 +813,24 @@ class DeepAnalysisConfig(StrictConfigModel):
     # How many node_reduction calls the finalization floor budgets for.
     #
     # Measured: node_reduction runs a median of 2 times per run (max 9). Runs
-    # with deeper trees will see their last reductions clamped, but assembly
-    # and the judge survive -- which is the point of the reserve. Budgeting
-    # for the observed maximum of 9 would put the floor at 40,800, more than
-    # twice the dev profile's entire cap.
+    # with deeper trees will see their last reductions degrade to joining
+    # child answers, but assembly and the judge survive -- which is the point
+    # of the reserve, and why the report tier is isolated from this one.
+    # Budgeting for the observed maximum of 9 would put the reduction tier at
+    # 93,600 on the default profile -- 93.6% of the dev profile's entire
+    # 100,000-token cap on its own, before the report tier or any
+    # investigation budget is even counted.
     finalization_reduction_allowance: int = Field(default=2, ge=1)
 
     # Fraction of a profile's global_token_cap above which the finalization
     # floor is judged to be crowding out investigation. Not expected to fire
-    # on the shipped defaults -- the floor is 4.3% of the default profile's
-    # cap and 22% of dev's -- so this is a backstop for a profile tuned into
-    # a corner, not a signal for normal operation.
+    # on the shipped defaults -- the floor is 43.7% of the default profile's
+    # cap (131,200 / 300,000) and 41.0% of dev's (41,040 / 100,000) -- so this
+    # is a backstop for a profile tuned into a corner, not a signal for normal
+    # operation. That margin is thinner than it looks: before the input
+    # currency was added the floor was 4.3%/22% of the same caps, nowhere
+    # near this 0.5 threshold; 41-44% sits close enough that a moderate
+    # further increase to the floor (or cut to a cap) would trip it.
     finalization_floor_warn_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
 
     # Smallest output grant `TokenBudget.reserve` will issue rather than refuse.
@@ -829,6 +849,55 @@ class DeepAnalysisConfig(StrictConfigModel):
     # `reserve` clamps this by the caller's own `max_output_tokens`, so stages
     # that deliberately ask for less (the report judge asks 800) are unaffected.
     min_viable_output_tokens: int = Field(default=2048, ge=1)
+
+    # Input allowances for the finalization stages, expressed as multiples of
+    # `synthesis_max_tokens` so a profile that shrinks its synthesis ceiling
+    # shrinks its floor with it instead of needing three more per-profile
+    # knobs.
+    #
+    # These exist because the floor and `TokenBudget.reserve` used different
+    # currencies: the floor counted output tokens only, while `reserve`
+    # charges `conservative_input_bound(request) + output`. Measured
+    # 2026-08-04: one node_reduction took 6,480 on input alone -- larger than
+    # the entire 4,400-token dev floor of the time.
+    #
+    # Measured: node_reduction input_bound ran 1,225 / 1,369 / 6,480
+    # (min/median/max) against synthesis_max_tokens=4000 -> 6480/4000 = 1.62.
+    reduction_input_ratio: float = Field(default=1.6, gt=0.0)
+    # Never measured -- report_assembly has never received a reservation in
+    # 574 runs. This is not an estimate but a CLAMP: `prompt_clamp` shrinks
+    # the assembly's child blocks and caveats until `prompt_input_bound`
+    # reports a value under this allowance. That bounds those two pieces,
+    # not the whole prompt: `root_answer` is deliberately never clamped
+    # (design D-6, prompt_clamp.py) so body coverage is preserved, and on
+    # the degraded-reduction path it comes from
+    # `Synthesizer._degraded_summary`, which joins EVERY child's answer with
+    # no bound on child count. A wide degraded tree can therefore make
+    # `root_answer` plus the template alone exceed this allowance after the
+    # clampable material has already been dropped to nothing. When that
+    # happens `clamp_prompt` reports `exhausted=True` and lets `reserve()`
+    # decide, same as any other oversized call -- the clamp narrows the
+    # failure mode, it does not eliminate it.
+    assembly_input_ratio: float = Field(default=3.0, gt=0.0)
+    # Derived, not clamped. The judge is handed the whole report and giving it
+    # a truncated one changes what is being judged, so there is nothing to
+    # clamp. This ratio is NOT a strict bound on the judge's input -- three
+    # things add to the assembly's own output ceiling (synthesis_max_tokens)
+    # before `ReportGrader.grade_agentic` sees the prompt:
+    #   1. `CitationRenderer.render` (citation.py) appends a `## 출처` block
+    #      with ONE LINE PER CITED CLAIM, each carrying that claim's full
+    #      source URL(s). The count of cited claims is unbounded here.
+    #   2. `root_text` (the root question) is passed alongside the report and
+    #      is not part of the assembly's output at all.
+    #   3. The `report_judge.md` prompt template's own literal instruction
+    #      text is a fixed but non-trivial number of bytes.
+    # 5.0x carries headroom for all three rather than deriving a strict
+    # bound: the token -> UTF-8 byte conversion alone (Korean runs ~3 bytes
+    # per syllable at roughly one token per syllable; 4.5 bytes/token covers
+    # rarer 4-byte characters and JSON escaping) would already consume most
+    # of the margin over 4.0x, so the round-up to 5.0x is what actually
+    # absorbs 1-3 above.
+    grading_input_ratio: float = Field(default=5.0, gt=0.0)
 
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
@@ -870,7 +939,11 @@ class DeepAnalysisConfig(StrictConfigModel):
     # 여기에 여유를 두어 3200으로 설정(추정치 대비 +28% 여유, 기존 1500의 ~2.1배).
     decompose_max_tokens: int = 3200
     worker_max_output_tokens: int = 4000
-    synthesis_max_tokens: int = 4000
+    # ge=1: at s <= 0, the floor formulas can push report_floor_tokens above
+    # floor_tokens (which stays non-negative) and `TokenBudget.__init__`
+    # raises an opaque ValueError on every run instead of failing at config
+    # validation with a clear message.
+    synthesis_max_tokens: int = Field(default=4000, ge=1)
     sse_keepalive_seconds: float = 0.5
     # ── Phase 3a (D22): durable job 서비스 ──────────────────────────────
     # 실행 큐. celery_app.py의 task_queues에 이미 정의된 4종 중 하나여야 한다
@@ -891,9 +964,29 @@ class DeepAnalysisConfig(StrictConfigModel):
     # 마지막 seq를 ?after=로 넘겨 재접속하면 이어서 받는다.
     events_stream_idle_timeout: float = 300.0
 
+    def report_floor_tokens(self, synthesis_max_tokens: int) -> int:
+        """The INNER floor tier: `report_retry_cap + 1` rounds of one
+        assembly plus one judge, counted in the input+output currency
+        `TokenBudget.reserve` actually charges.
+
+        `node_reduction` cannot draw on this (token_budget.REPORT_STAGES).
+        Sizing it for the whole retry loop is deliberate: `_finalize`
+        re-assembles up to `report_retry_cap` times and grades every draft,
+        so a tier covering one round leaves the later rounds to fail open --
+        the failure this split exists to end.
+        """
+        assembly = int(
+            (self.assembly_input_ratio + 1) * synthesis_max_tokens
+        )
+        grading = int(
+            self.grading_input_ratio * synthesis_max_tokens
+            + self.report_judge_max_output_tokens
+        )
+        return (self.report_retry_cap + 1) * (assembly + grading)
+
     def finalization_floor_tokens(self, synthesis_max_tokens: int) -> int:
-        """Reserve for the 3 finalization stages: node_reduction × allowance,
-        one assembly, and the report judge.
+        """The TOTAL floor: the report tier plus
+        `finalization_reduction_allowance` node_reduction calls.
 
         Shared by `neos/config/loader.py`'s `warn_finalization_floor_ratio`
         (checks this against `global_token_cap` at config-load time) and
@@ -903,9 +996,12 @@ class DeepAnalysisConfig(StrictConfigModel):
         silently leave the warning describing a floor that is no longer in
         force.
         """
+        reduction = int(
+            (self.reduction_input_ratio + 1) * synthesis_max_tokens
+        )
         return (
-            (self.finalization_reduction_allowance + 1) * synthesis_max_tokens
-            + self.report_judge_max_output_tokens
+            self.report_floor_tokens(synthesis_max_tokens)
+            + self.finalization_reduction_allowance * reduction
         )
 
 

@@ -66,6 +66,7 @@ class Orchestrator:
         cassette=None,
         global_token_cap: int | None = None,
         finalization_floor_tokens: int = 0,
+        report_floor_tokens: int = 0,
         min_viable_output_tokens: int = 1,
         parallel_workers: int | None = None,
         max_depth: int | None = None,
@@ -103,6 +104,10 @@ class Orchestrator:
         # from global config would leave those runs no investigation budget
         # at all. service.py computes it from the resolved profile.
         self.finalization_floor_tokens = finalization_floor_tokens
+        # The inner tier, injected for the same reason as the floor above.
+        # Golden tests build this with caps as small as 1,000; a tier derived
+        # from global config would leave them no reduction budget at all.
+        self.report_floor_tokens = report_floor_tokens
         # Injected for the same reason as the floor above: a golden test with
         # a 1,000-token cap would have every reservation refused by the
         # shipped 2,048 default. Defaults to 1 -- the pre-2026-08-04
@@ -137,6 +142,7 @@ class Orchestrator:
         self.token_budget = TokenBudget(
             self.global_token_cap,
             floor_tokens=self.finalization_floor_tokens,
+            report_floor_tokens=self.report_floor_tokens,
             min_viable_output_tokens=self.min_viable_output_tokens,
         )
         self.budgeter = Budgeter(
@@ -175,6 +181,7 @@ class Orchestrator:
             outstanding=outstanding,
             persist=self._persist_token_budget,
             floor_tokens=self.finalization_floor_tokens,
+            report_floor_tokens=self.report_floor_tokens,
             min_viable_output_tokens=self.min_viable_output_tokens,
         )
         self.budgeter.token_budget = self.token_budget
@@ -222,6 +229,7 @@ class Orchestrator:
             "consumed_tokens": self.token_budget.consumed_tokens,
             "reserved_tokens": self.token_budget.reserved_tokens,
             "floor_tokens": self.token_budget.floor_tokens,
+            "report_floor_tokens": self.token_budget.report_floor_tokens,
         }
         await self.ledger.log("investigation_stopped_at_floor", None, payload)
         await self._checkpoint()

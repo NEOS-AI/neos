@@ -349,3 +349,139 @@ def test_orchestrator_defaults_the_threshold_to_one_and_accepts_injection():
         min_viable_output_tokens=2_048,
     )
     assert injected.token_budget.min_viable_output_tokens == 2_048
+
+
+@pytest.mark.asyncio
+async def test_node_reduction_cannot_reach_the_report_tier():
+    """G7: 리덕션이 몇 번 돌든 조립 몫에 닿지 못한다.
+
+    `reduce_tree`는 노드마다 `reduce_node`를 부르고 상한이 없다 --
+    `finalization_reduction_allowance`는 floor의 크기만 정했지 호출 수를
+    제한한 적이 없다. 실측 6 run 평균 3.7회 vs allowance 2. 안쪽 tier가
+    호출 카운터 없이 이 초과를 무해하게 만든다.
+    """
+    budget = TokenBudget(
+        10_000, floor_tokens=6_000, report_floor_tokens=4_000
+    )
+
+    # 조사와 리덕션이 접근 가능한 것을 전부 태운다.
+    spent = await budget.reserve(
+        {"model": "m"}, 10_000, stage="node_reduction", model="m"
+    )
+    await budget.settle(spent, spent.reserved_tokens)
+
+    assert budget.available_for_reduction == 0
+    with pytest.raises(TokenBudgetExhausted):
+        await budget.reserve(
+            {"model": "m"}, 500, stage="node_reduction", model="m"
+        )
+
+    # 조립은 여전히 자기 몫을 받는다 -- 이것이 이 작업 전체의 목적이다.
+    reservation = await budget.reserve(
+        {"model": "m"}, 500, stage="report_assembly", model="m"
+    )
+    assert reservation.max_output_tokens > 0
+
+
+def test_report_tier_may_not_exceed_the_total_floor():
+    """안쪽 tier가 바깥 tier보다 크면 계단이 아니라 모순이다."""
+    with pytest.raises(ValueError):
+        TokenBudget(10_000, floor_tokens=1_000, report_floor_tokens=2_000)
+
+    with pytest.raises(ValueError):
+        TokenBudget(10_000, floor_tokens=1_000, report_floor_tokens=-1)
+
+
+@pytest.mark.asyncio
+async def test_report_tier_defaults_to_zero_and_preserves_current_behaviour():
+    """기존 호출부는 안쪽 tier를 모른다 -- 기본값에서 동작이 바뀌면 안 된다."""
+    budget = TokenBudget(10_000, floor_tokens=4_000)
+
+    assert budget.report_floor_tokens == 0
+    assert budget.available_for_reduction == budget.remaining_tokens
+
+
+def test_orchestrator_report_tier_defaults_to_zero():
+    """골든/통합 테스트가 1,000토큰 캡으로 오케스트레이터를 만든다.
+
+    안쪽 tier를 안에서 전역 설정으로 계산하면 그런 run의 리덕션 예산이
+    0이 된다. floor와 같은 이유로 주입받고 기본값은 0이다.
+    """
+    orch = Orchestrator(
+        object(), "run0001", lambda: None, None, global_token_cap=1000
+    )
+
+    assert orch.token_budget.report_floor_tokens == 0
+    assert orch.token_budget.available_for_reduction == 1000
+
+
+def test_orchestrator_passes_both_tiers_to_the_budget():
+    orch = Orchestrator(
+        object(),
+        "run0001",
+        lambda: None,
+        None,
+        global_token_cap=100_000,
+        finalization_floor_tokens=41_040,
+        report_floor_tokens=34_800,
+    )
+
+    assert orch.token_budget.floor_tokens == 41_040
+    assert orch.token_budget.report_floor_tokens == 34_800
+    assert orch.token_budget.available_for_investigation == 58_960
+
+
+def test_service_wiring_keeps_the_tiers_ordered():
+    """service.py가 계산해 넣는 두 값이 TokenBudget의 불변식을 만족해야 한다.
+
+    build_orchestrator 를 세션 없이 부를 수는 없으므로 산식만 검증한다.
+    """
+    from neos.config.settings import settings
+
+    config = settings.config.deep_analysis
+    for synth in (
+        config.synthesis_max_tokens,
+        config.dev_profile.synthesis_max_tokens,
+    ):
+        assert (
+            config.report_floor_tokens(synth)
+            <= config.finalization_floor_tokens(synth)
+        )
+
+
+class _StubLedger:
+    """Mirrors the ledger stubs in test_orchestrator_token_budget.py --
+    only `token_budget_state` is exercised by `_install_token_budget`."""
+
+    async def token_budget_state(self):
+        return 0, {}
+
+
+@pytest.mark.asyncio
+async def test_install_token_budget_carries_both_tiers_into_the_rebuilt_budget():
+    """`_install_token_budget` rebuilds `token_budget` at the start of every
+    `run()`, to restore consumed/outstanding tokens after a crash. Every
+    other tier assertion in this module reads `orchestrator.token_budget`
+    as set by `__init__` -- so a regression that drops `floor_tokens` or
+    `report_floor_tokens` from the `TokenBudget(...)` call inside
+    `_install_token_budget` (as opposed to `__init__`) would leave the
+    whole suite green while every real run silently lost the tier. This
+    test rebuilds the budget the same way `run()` does and asserts on the
+    result, so that specific regression fails here instead of only in
+    production.
+    """
+    orch = Orchestrator(
+        object(),
+        "run0001",
+        lambda: None,
+        None,
+        ledger=_StubLedger(),
+        global_token_cap=100_000,
+        finalization_floor_tokens=41_040,
+        report_floor_tokens=34_800,
+    )
+
+    await orch._install_token_budget()
+
+    assert orch.token_budget.floor_tokens == 41_040
+    assert orch.token_budget.report_floor_tokens == 34_800

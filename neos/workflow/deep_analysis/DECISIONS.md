@@ -662,3 +662,29 @@ A2UI의 `UI_FRAME_GENERATOR → END` 단락이 이미 같은 형태의 선례다
 보고서 「한계」 절에 남는다(빈손 종료 없음). **claim funnel 수치가 이동하므로 이전 표본과
 직접 비교할 수 없다** — `docs/TODO_260729.md` E1의 baseline 단절이 한 번 더 발생한다.
 discard recall 재측정(C1)은 이 변경 이후 표본으로 수행해야 두 효과가 섞이지 않는다.
+
+## D25. 마무리 floor를 중첩 계단으로 분할한다
+
+**맥락:** floor가 단일 풀이었고 출력 토큰만 계상했다. `reserve()`는 입력+출력을 뺀다.
+574 run · `synth_pass` 0건.
+
+**결정:** `REPORT_STAGES`(assembly·grading) 전용 안쪽 tier를 두고, 두 tier 모두 입력
+허용량을 포함해 사이징한다. 마무리 프롬프트는 `prompt_input_bound`로 측정해 허용량 안으로
+강제한다.
+
+**기각한 대안:** `reduce_node` 호출 수 하드 캡 — 풀 격리가 같은 일을 하며 "예산은 남았는데
+못 부른다"는 새 실패 모드를 만든다.
+
+**기각한 대안:** `conservative_input_bound` 완화 — `settle()`의 계약이 참인 상한에 의존한다.
+
+**부수 결정:** dev `global_token_cap` 20,000 → 100,000. 기존 캡은 워커 호출 하나
+(input_bound 5,542~17,723)도 담지 못했다.
+
+**영향:** `report_floor_tokens`가 `TokenBudget`의 독립 tier로 들어가 `node_reduction`이
+아무리 반복돼도 `report_assembly`·`report_grading` 몫에 닿지 못한다(회귀 고정:
+`tests/workflow/deep_analysis/test_budgeter.py`). 마무리 프롬프트 클램프는
+`tests/workflow/deep_analysis/test_prompt_clamp.py`가 고정한다. 측정 결과: default
+프로파일 `report_floor_tokens` 110,400 / floor 합계 131,200 = cap의 43.7%, dev
+34,800 / 41,040 = 새 cap(100,000)의 41.0%. **`synth_pass ≥ 1`은 이 결정으로 아직
+관측되지 않는다** — 라이브 표본이 필요하며, 로드맵 §8 W1과 §2.2 S1은 이 결정만으로
+충족되지 않는다.

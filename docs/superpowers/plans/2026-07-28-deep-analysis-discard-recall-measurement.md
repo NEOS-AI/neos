@@ -248,7 +248,7 @@ Record the artifact path, every metric above, the config fingerprint (confirming
 **Files:**
 - Read: both artifacts from Tasks 1 and 2
 - Modify: `docs/TODO_260729.md`
-- Modify: `docs/deep_analysis_task_task_resume.md`
+- Modify: `docs/archive/deep_analysis_task_task_resume.md`
 - Report only: `.superpowers/sdd/2026-07-28-deep-analysis-discard-recall-measurement/task-3-report.md`
 
 **Interfaces:**
@@ -288,7 +288,7 @@ Place it immediately after the 2026-07-26 entailment-evaluation subsection, in K
 
 - [ ] **Step 4: Update the resume document**
 
-In `docs/deep_analysis_task_task_resume.md`: mark §5 (claim recall 손실 측정) as complete, add the result to the §1 status table, and write the next frontier based on the verdict. Keep the §6 worktree-hazard section as is.
+In `docs/archive/deep_analysis_task_task_resume.md`: mark §5 (claim recall 손실 측정) as complete, add the result to the §1 status table, and write the next frontier based on the verdict. Keep the §6 worktree-hazard section as is.
 
 - [ ] **Step 5: Verify and commit documentation only**
 
@@ -300,7 +300,7 @@ HOME=/tmp/neos-test-home /Users/ywsung/Desktop/neos/.venv/bin/pytest \
   neos/workflow/deep_analysis/ scripts/deep_analysis_discard_recall.py
 
 git status --short
-git add docs/TODO_260729.md docs/deep_analysis_task_task_resume.md
+git add docs/TODO_260729.md docs/archive/deep_analysis_task_task_resume.md
 git commit -m "docs: record entailment discard recall measurement"
 ```
 

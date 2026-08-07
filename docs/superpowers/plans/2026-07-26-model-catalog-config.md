@@ -2219,7 +2219,7 @@ git commit -m "feat: warn when a model is missing from the catalog"
 Run: `python -m pytest -p no:cacheprovider -q 2>&1 | tail -30`
 Expected: `2112 passed` 이상, 0 failed.
 
-> 이 스위트는 결정론적이다 (`docs/role_based_model_routing_task_resume.md` §8). 실패가 나오면 진짜 회귀다.
+> 이 스위트는 결정론적이다 (`docs/archive/role_based_model_routing_task_resume.md` §8). 실패가 나오면 진짜 회귀다.
 > 실패 목록을 뽑을 때는 `grep '^FAILED tests/'`를 쓴다 — `grep '^FAILED'`는 라이브 로그의 진행 표시(`FAILED   [ 7%]`)까지 잡는다.
 
 - [ ] **Step 2: 새 모델 추가가 config 한 파일로 끝나는지 확인한다**

@@ -175,10 +175,16 @@ CREATE INDEX idx_events_qid ON events(qid, kind);
 --   deterministic_report() 템플릿으로 떨어질 때 1회, {"reason": "token_budget_exhausted"}
 --   (2026-08-03, G5 마무리 예산 확보 — 조용한 템플릿 강등을 흔적으로 남긴다)
 --   investigation_stopped_at_floor: 조사 루프가 예산 고갈이 아니라 finalization
---   floor 때문에 멈췄을 때 1회(should_stop이 available_for_investigation<=0으로
---   정지), {"cap_tokens", "consumed_tokens", "reserved_tokens", "floor_tokens"}.
---   token_budget_exhausted와 상호 배타적으로 기록된다 — floor에서 멈췄다면
---   remaining_tokens > 0이므로 exhausted는 아니다 (2026-08-03, G5 마무리 예산 확보)
+--   floor 때문에 멈췄을 때 1회(should_stop이 available_for_investigation <
+--   min_viable_output_tokens로 정지),
+--   {"cap_tokens", "consumed_tokens", "reserved_tokens", "floor_tokens"}
+--   (2026-08-03, G5 마무리 예산 확보 / 2026-08-04, G8 임계값 정렬)
+--   ⚠️ token_budget_exhausted와 상호 배타적이라던 초기 서술은 실측으로
+--   반증됐다(2026-08-04). run()의 except TokenBudgetExhausted 핸들러가
+--   if/elif 분기보다 먼저 _mark_token_budget_exhausted()를 부르므로, reserve
+--   거절이 should_stop보다 먼저 걸리면 floor 정지가 token_budget_exhausted로
+--   기록된다 — 라이브 6건 중 4건이 cap의 39%가 남은 채 그렇게 오분류됐다.
+--   미해결 (docs/TODO_260729.md G9)
 ```
 
 ### 4.1 질문 상태 기계 (완성판)
@@ -368,9 +374,20 @@ else:
 # 단, effort == SPLIT인데 q.depth >= config.max_depth 이면 → abandon
 ```
 
-**정지 조건 (둘 중 하나):**
+**정지 조건 (셋 중 하나):**
 1. `ledger.total_spent() >= config.global_token_cap`
 2. 모든 open 질문의 score < `config.score_floor`
+3. `token_budget.available_for_investigation < token_budget.min_viable_output_tokens`
+   — 마무리 floor 위에 남은 몫이 유효한 호출 하나를 못 낸다 (2026-08-03 G5,
+   2026-08-04 G8에서 `<= 0`에서 임계값 기준으로 정렬)
+
+> **3번이 0이 아니라 임계값과 비교하는 이유 (2026-08-04 실측).** `reserve()`는
+> 원래 1토큰만 남아도 예약을 내줬다. 25토큰짜리 JSON decompose는 반드시 잘리고,
+> truncation이 하드 에러가 된 뒤로는 run 전체를 죽인다 — 라이브 샘플에서 dev run
+> 5건이 전부 이렇게 실패했다(G8). 지금은 `min_viable_output_tokens`(기본 2,048)
+> 아래의 예약을 `TokenBudgetExhausted`로 거절한다. 워커는 그 거절을
+> `flush_partial`로 삼키므로, 정지 조건이 임계값을 모르면 진전 없는 라운드만
+> stall cap까지 반복된다.
 
 **엣지 케이스:** 첫 라운드는 점수 계산 없이 루트의 직계 자식 전원을 SCOUT으로 배정한다 (breadth pass, 전역 캡의 30% 한도).
 
@@ -508,6 +525,26 @@ class Worker:
 - 에이전틱 (judge 모델, 판정 2개만): "루트 질문에 답하는가", "주장 강도가 인용 클레임 confidence를 초과하지 않는가".
 - 실패 시 RequeueFeedback 형식 그대로 조립 단계에 반환, 재시도 캡 2회. 소진 시 마지막 초안에 실패 사유를 부록으로 붙여 산출한다 (빈손 종료 금지).
 
+> 🔴 **구현 현황 경고 (2026-08-04 실측) — §6.7의 "최종 조립"과 §6.8의 에이전틱
+> 판정은 아직 한 번도 실행된 적이 없다.**
+>
+> 574 run · 183 `report_graded` 동안 `synth_pass`가 **0건**이고 `report_assembly`
+> 예약도 **0건**이다. 실제로 사용자에게 나간 리포트는 전부
+> `Synthesizer.deterministic_report()` 템플릿이다. 위 §6.7·§6.8 서술은 **설계
+> 의도이지 관측된 동작이 아니다.**
+>
+> 원인은 예산이다. 마무리 floor(G5, 2026-08-03)가 조사로부터 몫을 지켜내는 데는
+> 성공했지만, floor는 **output 토큰만** 계산에 넣는 반면 예약은
+> `conservative_input_bound`로 프롬프트 전체를 함께 부과한다. `node_reduction`
+> 하나의 input이 최대 6,480으로 dev floor(4,400) 전체보다 크고(G6), reduction
+> 호출 횟수도 강제되지 않아 run당 3.7회로 allowance 2를 상시 초과한다(G7) —
+> 세 번째 reduction이 조립 몫을 먹는다.
+>
+> **따라서 §6.8의 결정론 게이트가 지금 채점하는 것은 템플릿 리포트다.** 게이트
+> 통계를 읽을 때 이 점을 전제해야 한다 — 예컨대 "uncited 비율 1.0, assertion
+> 20건"은 LLM 산문이 인용에 실패한 것이 아니라 템플릿에 각주가 없는 것이다.
+> 상세와 실측 수치: `docs/TODO_260729.md` G6·G7.
+
 ## 7. 프롬프트 명세 (prompts/)
 
 ### 7.1 공통 규칙
@@ -558,6 +595,13 @@ budget:
   value_decay: 0.8              # 자식 value_est = 부모 × 이 값
   max_depth: 4
   parallel_workers: 4
+  # 마무리 몫 (2026-08-03 G5). floor = (allowance+1)×synthesis + judge.
+  # 조사 stage는 이 아래로 예약할 수 없다.
+  finalization_reduction_allowance: 2
+  finalization_floor_warn_ratio: 0.5   # floor가 cap의 이 비율을 넘으면 경고
+  # 예산이 이 값 아래로 깎아버린 예약은 내주지 않고 거절한다 (2026-08-04 G8).
+  # caller의 max_output_tokens로 clamp되므로 적게 요청하는 stage는 무관하다.
+  min_viable_output_tokens: 2048
 
 grading:
   quote_match_threshold: 0.92
