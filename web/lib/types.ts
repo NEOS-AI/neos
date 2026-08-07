@@ -62,6 +62,14 @@ export const harnessMetadataSchema = z.object({
 export type HarnessMetadata = z.infer<typeof harnessMetadataSchema>;
 
 /**
+ * 개별 강등(degradation) 항목 하나. 종류(`kind`)와 발생 횟수(`count`)만 담는다.
+ */
+export const deepAnalysisDegradationSchema = z.object({
+  kind: z.string(),
+  count: z.number(),
+});
+
+/**
  * 비동기 deep_analysis job 핸들.
  *
  * 챗 턴은 `neos:deep_analysis_started`를 보내고 **즉시 끝난다**. 진행 상황은
@@ -69,11 +77,6 @@ export type HarnessMetadata = z.infer<typeof harnessMetadataSchema>;
  * 메시지 메타데이터에 붙여 두는 이유는 새로고침 후에도 어떤 메시지가 어떤
  * run에 속하는지 복원하기 위해서다(감사 §6 차단요인 2).
  */
-export const deepAnalysisDegradationSchema = z.object({
-  kind: z.string(),
-  count: z.number(),
-});
-
 export const deepAnalysisMetadataSchema = z.object({
   run_id: z.string(),
   events_url: z.string().optional(),

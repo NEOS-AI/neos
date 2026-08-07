@@ -80,7 +80,13 @@ export function deepAnalysisFromMessageMetadata(
       status: asStatus(metadata[STATUS_KEY]) ?? "completed",
       degradations: asDegradations(metadata[DEGRADATIONS_KEY]),
     };
-  } catch {
+  } catch (error) {
+    // 여기서 삼킨 예외는 사용자에게 보이지 않는다 — 로그가 없으면 향후
+    // asStatus/asDegradations 수정이 내부 TypeError를 일으켜도 아무 신호 없이
+    // 모든 대화의 deep_analysis 카드가 이력에서 통째로 사라진다. 이 모듈이
+    // 막으려는 바로 그 "조용한 강등"이 되지 않도록, metadata 객체(대화 내용)는
+    // 찍지 않고 에러만 남긴다.
+    console.error("deepAnalysisFromMessageMetadata failed", error);
     return;
   }
 }
