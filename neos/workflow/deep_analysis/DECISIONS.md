@@ -774,3 +774,45 @@ available 12,000). 세 번째 분기를 추가하는 것은 이번 결정의 범
 (`ledger.py._degradation_kind()` / `progress.ts.degradationKind()`). 문구는 프론트 한
 곳뿐이라 중복되지 않는다. 상호 참조 주석 · 양쪽 테스트의 동일 fixture · 로드맵 §7 FE6
 으로 표시했다. 갈라져도 **과소 보고** 쪽으로 기운다.
+
+## D28. 거절은 사유를 안다. 그 사유는 예외가 운반한다.
+
+**맥락:** D26 이 정지 사유 판정을 `_mark_stop_reason()` 하나로 접으면서 구멍을 하나
+남겼고 코드가 스스로 그렇게 적었다(`orchestrator.py`, "tracked, not fixed here").
+`TokenBudget.reserve` 는 `available_for_investigation - input_bound < min_viable` 일
+때도 거절하는데, 그때는 헤드룸이 **남아 있어서** 두 상태 분기 모두 거짓이다. 그 정지는
+원장에 아무것도 남기지 않았다. 로드맵 §7 G10.
+
+**결정:** (1) `TokenBudgetExhausted` 가 `cause`(`tier_floor` | `input_bound`)와 거절
+순간의 수치(`stage`·`model`·`input_bound`·`ceiling`·`requested`·`granted`)를 싣는다.
+모든 필드가 기본값을 가져 맨손 생성이 계속 유효하다. (2) `_mark_stop_reason(exc=None)`
+에 셋째 분기를 달되 **상태 분기 둘 뒤에** 둔다. (3) 새 kind
+`investigation_stopped_at_input_bound` 를 쓴다 — `floor_tokens` 는 싣지 않는다.
+(4) synthesizer 의 하드코딩된 강등 `reason` 두 곳이 `cause` 를 따른다.
+
+**근거 — 왜 예외인가:** 사유를 아는 코드는 `reserve()` 하나뿐이다. 캡 소진과
+`input_bound` 거절은 같은 예외 타입이고, 거절 **후**의 예산 상태는 두 번째 경우에
+"헤드룸이 남은 정상 run" 과 구별되지 않는다. 사후 상태로는 복원할 수 없는 사실이므로
+거절 지점에서 실어 보내는 것 외에 방법이 없다.
+
+**근거 — 왜 상태 분기가 먼저인가:** D26 이 세운 판정("경로가 아니라 예산 상태에서")을
+보존하기 위해서다. 예산이 실제로 없으면, 마지막 거절이 우연히 큰 프롬프트였다는 사실은
+정지 사유가 아니다. 새 분기는 **지금 침묵이 나는 자리만** 채운다.
+
+**근거 — 왜 별도 kind 인가:** floor 정지는 "남은 것이 마무리 몫뿐", input_bound 정지는
+"여유는 있는데 이 프롬프트가 안 들어감"이다. 하나로 접으면 D26 이 없앤 실수 — 한 라벨이
+두 사유를 덮는 것 — 를 그대로 반복한다. 이미 쌓인 floor 이벤트에는 분별 키가 없어 경계
+전후 비교도 애매해진다.
+
+**의도적 보존:** `tier_floor` 의 강등 `reason` 은 옛 문자열 `"token_budget_exhausted"`
+그대로다. 이미 원장에 쌓인 강등 이벤트가 그 어휘를 쓰고 있어 집계가 이어져야 한다.
+새 문자열 `"input_bound"` 는 지금까지 존재하지 않던 구별에만 붙는다. `test_prompt_clamp.py`
+와 `test_synthesizer.py` 의 기존 단언이 **수정 없이** 통과하는 것이 그 증거다.
+
+**범위 밖:** 거절 **전부**를 기록하는 `token_budget_refused`. 워커와 판정자가 삼키는
+거절은 정지가 아니라 부분 실패이므로 stop 이벤트로 세면 S4 집계가 오염된다.
+
+**영향:** `_mark_stop_reason` 의 어느 분기에도 안 걸리는 정지는 이제 `score_floor`
+케이스 하나뿐이며, 그것은 예산 사건이 아니라 의도적 무이벤트다. **코드상 해소 —
+재측정은 라이브 표본에서**, D25·D26 과 같은 규율이다. 로드맵 §2.2 S4 는 ⚠️(코드상
+해소, 라이브 미측정)로 남는다. 강등 어휘를 건드리지 않았으므로 FE6(이중 구현)은 그대로다.

@@ -90,7 +90,7 @@ job을 dispatch해야 살아나므로 이 플래그에 함께 묶여 있다.
 | S1 | LLM이 조립한 리포트가 실제로 나온다 | ❌ `synth_pass` 0건 | `deep_analysis_events` `kind='synth_pass'` |
 | S2 | 리포트 게이트가 알맹이 있는 리포트를 통과시킨다 | ❌ 통과 9건 중 7건이 claim 0건 | `report_graded` × run별 verified claim 수 |
 | S3 | 리포트 본문이 보존된다 | ✅ (2026-08-07, W2 — 전제 정정: 본문은 유실된 적이 없었다) | `job_completed` 페이로드에 `report_markdown`이 실린 비율 |
-| S4 | 정지 사유가 원장에서 정확히 구분된다 | ⚠️ 부분 (2026-08-07, W2 — G9 해소, `input_bound` 거절 클래스는 미해소) | `token_budget_exhausted` vs `investigation_stopped_at_floor` **그리고** `_mark_stop_reason`의 두 분기 모두를 벗어나는 무이벤트 정지 건수(G10, 목표 0) |
+| S4 | 정지 사유가 원장에서 정확히 구분된다 | ⚠️ 코드상 해소, 라이브 미측정 (2026-08-08, G10) | `token_budget_exhausted` vs `investigation_stopped_at_floor` vs `investigation_stopped_at_input_bound` — 세 kind 밖의 무이벤트 정지는 `score_floor` 케이스뿐이어야 한다 |
 | S5 | 전체 스위트가 CI에서 결정론적으로 통과한다 | ⚠️ 선결 3건 (#9·#10·#11) | CI 워크플로 |
 | S6 | 실패가 사용자에게도 보인다 (원장뿐 아니라 UI에서) | ✅ (2026-08-07, FE4) | `progress.ts`의 `activityLabel()` 커버리지 **그리고** `degradations`를 실제로 그리는 화면 컴포넌트의 존재 |
 
@@ -209,7 +209,8 @@ G5(마무리 예산 floor)는 조사가 마무리 몫을 침범하지 못하게 
 
 | 항목 | 내용 | 커밋 |
 |---|---|---|
-| G9 | 정지 사유 판정을 `_mark_stop_reason()` 하나로 접음 — 정상/예외 두 경로가 이제 같은 판정을 냄. 실측 6건 중 4건 오분류의 원인을 **코드상 해소** — 재측정은 라이브 표본에서(D25가 `synth_pass`에 적용한 것과 같은 규율). `input_bound` 거절 클래스는 여전히 무이벤트(G10) | `7318a840` |
+| G10 | `_mark_stop_reason`이 놓치던 `input_bound` 거절 클래스가 이름을 얻었다 — `TokenBudgetExhausted`가 `cause`를 싣고, 상태 분기 **뒤에** 셋째 분기가 붙는다(G9 판정 보존). 새 kind `investigation_stopped_at_input_bound`. 부수로 synthesizer의 하드코딩된 강등 `reason` 두 곳이 예외 타입 대신 실제 사유를 적는다. **코드상 해소 — 재측정은 라이브 표본에서** (D28) | `e28e0d23`·`0d5991d9`·`cc6c4365`·`a3112650` |
+| G9 | 정지 사유 판정을 `_mark_stop_reason()` 하나로 접음 — 정상/예외 두 경로가 이제 같은 판정을 냄. 실측 6건 중 4건 오분류의 원인을 **코드상 해소** — 재측정은 라이브 표본에서(D25가 `synth_pass`에 적용한 것과 같은 규율). 당시 남았던 `input_bound` 거절 클래스는 위 G10이 해소했다 | `7318a840` |
 | G4 | **전제 정정**: `report_path` NULL은 사실이나 본문 유실은 없었다(`jobs.py`가 `job_completed` 페이로드에 실음, AC6). `Ledger.report_markdown()` / `report_bodies()` 조회 경로 신설 | `a258f36e`(원본 `f200b26c`) |
 | FE1 | `activityLabel()`에 실패 이벤트 8종 라벨 추가 + `report_graded`가 굶은 판정자를 승인과 구별 + `degradations` 누적 상태 신설 (렌더링은 이후 FE4가 해소) | `a9dbcfe3` |
 | A2 | `stop_reason` 전파 — 잘린 응답 ≠ 파싱 실패한 쓰레기. `call_json` 1회 확장 재시도(2배) | 2026-08-02 |
@@ -409,7 +410,6 @@ FE4가 이후 해소했다.
 | 우선 | ID | 내용 | 트랙 |
 |---|---|---|---|
 | 🟡 | G3 | 게이트가 뒤집혀 있다 — assertion 0건이면 비율 0.0(만점). **정책 결정 필요** | A |
-| 🟡 | **G10** | `_mark_stop_reason`이 `input_bound` 때문에 거절된 예약을 어느 분기로도 잡지 못해 이벤트를 남기지 않는다. 예: `_default_split_decompose`. 옛 코드는 틀린 라벨을, 새 코드는 침묵을 남긴다 | A |
 | 🟡 | E3 | judge = SCOUT worker (동일 모델). 불변식 위반, 의도적 유예 중 | A×B |
 | 🟡 | C1 | discard recall 재측정 — 2회 연속 n=0 | A |
 | 🟡 | A3·A4 | worker/판정자 상한 재보정 (thinking 몫 실측 선행) | A |
@@ -496,8 +496,8 @@ D-5 = 재시도 3회분 보장, D-6 = caveats → 자식 꼬리 → 자식 수).
 > 침묵한다** — 이 비대칭을 남기면 "성공만 보이는 UI"가 된다.
 
 **2026-08-07 코드 완료, 출하 기준은 부분 충족.** G9는 `_mark_stop_reason()` 단일
-판정으로 두 경로의 불일치를 없앴다(단 `input_bound` 거절 클래스는 G10으로 남는다 —
-S4는 ⚠️ 부분). FE1은 라벨 8종 + `report_graded` 분기 수정 + `degradations` 누적
+판정으로 두 경로의 불일치를 없앴다(당시 `input_bound` 거절 클래스는 G10으로 남았고,
+2026-08-08 D28이 해소했다 — 아래 문단 참조). FE1은 라벨 8종 + `report_graded` 분기 수정 + `degradations` 누적
 상태로 **원장→상태** 구간을 해소했다. **상태→화면** 구간(강등을 실제로 그리는
 컴포넌트)은 이번 웨이브 범위 밖으로 남았고 FE4로 추적한다 — S6은 ⚠️ 부분.
 
@@ -511,9 +511,14 @@ S3는 이 웨이브에서 유일하게 완전히 충족된 기준이다.
 실제 관측이다. `_mark_stop_reason()`으로의 통합이 그 오분류 원인을 코드상 없앴다는
 것도 참이다. 하지만 "0건"은 **이 브랜치에서 라이브 run을 다시 실행해 관측한 값이
 아니다** — 추론이다. D25가 `synth_pass`에 적용한 것과 같은 규율을 따른다: **코드상
-해소 — 재측정은 라이브 표본에서.** 게다가 G10이 가리키는 클래스(`input_bound` 거절)는
-이 브랜치에서 다시 세면 "무이벤트"로 기록될 것이므로, 재측정 전까지 "오분류 0건"을
-사실처럼 인용하지 않는다.
+해소 — 재측정은 라이브 표본에서.** 그러니 재측정 전까지 "오분류 0건"을 사실처럼
+인용하지 않는다.
+
+> 📌 이 문단이 W2 시점에 덧붙였던 경고 — "G10이 가리키는 클래스는 다시 세면
+> 무이벤트로 기록될 것이다" — 는 **2026-08-08 D28로 무효가 됐다.** 그 클래스는 이제
+> `investigation_stopped_at_input_bound`로 기록된다. G10을 표본 전에 고친 이유가
+> 정확히 이것이다: §10.2의 "정확히 1회" 규칙 때문에, 세는 눈을 먼저 고치지 않으면
+> 그 침묵이 영구 기록이 된다.
 
 D26이 이 웨이브의 결정을 기록한다(`neos/workflow/deep_analysis/DECISIONS.md`).
 관련 커밋: G9 `7318a840` · G4 `a258f36e`(원본 `f200b26c`) · FE1 `a9dbcfe3`.
