@@ -695,7 +695,7 @@ discard recall 재측정(C1)은 이 변경 이후 표본으로 수행해야 두 
 경로 양쪽에서 부른다. 리포트 본문은 `report_path` 컬럼을 채우는 대신 `Ledger.report_markdown()`과
 `DeepAnalysisAnalyticsService.report_bodies()`로 `job_completed` 페이로드에서 읽는 조회
 경로를 만든다. 강등(`degradations`) 판정 기준은 "리포트 내용을 깎았는가"로 정하고, FE
-라벨 7종을 추가한다.
+라벨 8종을 추가한다.
 
 **근거 — G9:** 정지 사유를 판정하는 코드가 정상 경로(`orchestrator.py`의 if/elif)와
 예외 경로 두 벌이었고 서로 달랐다. `TokenBudget.reserve`는 캡 소진과 floor 정지 두 사유
@@ -715,14 +715,31 @@ discard recall 재측정(C1)은 이 변경 이후 표본으로 수행해야 두 
 `degradations`에 누적한다. `llm_truncated`는 확장 재시도가 성공하면(`truncation_handled.
 action === "retried_ok"`) 최종 산출물에 영향이 없어 제외했다 — 재시도 성공/실패를 가르려면
 두 이벤트를 상관시키는 상태 기계가 필요하고 이번 범위를 넘으므로, 잘못된 경고보다 과소
-보고를 택했다.
+보고를 택했다. 단, `degradations`를 화면에 그리는 일은 이번 범위 밖이다(FE4로 추적) —
+상태에는 쌓이지만 아직 아무 컴포넌트도 읽지 않고, `deep-analysis-status.tsx`는
+`phase === "completed"`가 되는 순간 `lastActivity` 줄을 감춘다.
 
-**발견:** `judge_budget_exhausted`는 독립 이벤트 kind가 아니라 `report_graded.diagnostics.judge`
-값(`"budget_exhausted"` / `"truncated"` / `"unparseable"`)이다. FE의 실제 결함은 라벨
-누락이 아니라, `report_graded` 분기가 `payload.ok`만 보고 굶은 판정자의 통과를 실제 승인과
+**발견:** `judge_budget_exhausted`는 독립 이벤트 kind가 아니다. 판정자가 굶었다는 사실은
+`report_graded` 이벤트 payload의 **최상위** `judge` 키(`"budget_exhausted"` /
+`"truncated"` / `"unparseable"`)로 남는다 — 오케스트레이터가 `{"ok": ..., "attempt":
+..., **verdict.diagnostics}`로 로그하며 `diagnostics`를 spread하기 때문에
+`payload.diagnostics.judge`가 아니라 `payload.judge`다. FE의 실제 결함은 라벨 누락이
+아니라, `report_graded` 분기가 `payload.ok`만 보고 굶은 판정자의 통과를 실제 승인과
 같은 문구로 냈다는 것이었다.
 
-**영향:** floor 정지 오분류 6건 중 4건 → 0건(`7318a840`). G3(게이트 재보정)가 표본
-전체의 리포트 본문을 읽을 수 있게 됐다(`a258f36e`, 원본 `f200b26c`). FE가 실패 이벤트
-8종에 라벨을 붙이고 강등 상태를 `degradations`로 누적한다(`a9dbcfe3`). 로드맵 §2.2
-S3·S4·S6이 충족됐다 — 단 S1(`synth_pass ≥ 1`)은 라이브 표본 미실행으로 여전히 ❌다.
+**미해결로 남는 것 (G10):** `_mark_stop_reason`은 `exhausted`와 floor 미달 두 경우만
+판정한다. `TokenBudget.reserve`가 `available_for_investigation - input_bound <
+min_viable`로 거절하는 세 번째 경우 — 헤드룸은 있지만 `input_bound` 때문에 거절된 예약 —
+는 어느 분기에도 걸리지 않아 이벤트가 전혀 남지 않는다. `_default_split_decompose`가
+이 경로에 닿을 수 있다(측정된 `worker_analysis` `input_bound` 5,542~17,723, dev
+available 12,000). 세 번째 분기를 추가하는 것은 이번 결정의 범위가 아니다 — 다음
+웨이브의 설계 판단으로 남긴다. 로드맵 §7 G10.
+
+**영향:** floor 정지 오분류는 **코드상 해소**됐다 — `_mark_stop_reason()` 단일 판정이
+2026-08-04 실측(6건 중 4건 오분류)이 지적한 원인을 없앴다. 다만 이것이 새 라이브
+표본에서 "0건"으로 **재측정된 적은 없다** — D25가 `synth_pass`에 적용한 것과 같은
+규율로, 재측정은 라이브 표본에서 한다. G3(게이트 재보정)가 표본 전체의 리포트 본문을
+읽을 수 있게 됐다(`a258f36e`, 원본 `f200b26c`). FE가 실패 이벤트 8종에 라벨을 붙이고
+강등 상태를 `degradations`로 누적한다(`a9dbcfe3`) — 단 그 상태를 화면에 그리는 일은
+아직 없다(FE4). 로드맵 §2.2 S3이 충족됐고, S4·S6은 **부분** 충족이다(각각 G10, FE4가
+남는다). S1(`synth_pass ≥ 1`)은 라이브 표본 미실행으로 여전히 ❌다.

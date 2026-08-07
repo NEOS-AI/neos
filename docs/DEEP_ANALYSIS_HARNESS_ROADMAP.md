@@ -30,7 +30,7 @@
 |---|---|---|
 | **A. 심층분석 하네스** | 🟡 코어 완성, **산출물 미달** | 마무리 예산 구조 완료(G6·G7 해소) — 남은 것은 라이브 표본으로 `synth_pass`를 확인하는 것 (W1, 아직 미실행) |
 | **B. 역할 기반 모델 라우팅** | ✅ 완료 · 안정 | 유지보수 모드. 카탈로그 불변식 지키기 |
-| **C. 프론트엔드** | ✅ job 마이그레이션 완료, ✅ 가시성 갭 해소(FE1, W2) | 남은 것은 §5.3의 저위험 잔여(FE2·FE3)뿐 |
+| **C. 프론트엔드** | ✅ job 마이그레이션 완료, ⚠️ 가시성 갭 절반 해소(FE1, W2 — 상태 계층만) | 렌더 계층(FE4, 신규)과 §5.3의 저위험 잔여(FE2·FE3) |
 | **D. 프레임워크 이탈·계측 통일** | ⬜ 미착수 (2026-08-07 신규) | 4개 과제 중 crewai 삭제만 즉시 가능. 나머지는 라이브 표본 측정과 상호배타 (§11) |
 
 **트랙 A 한 줄 요약 (2026-08-04 실측):**
@@ -44,12 +44,16 @@ G8 수정 후 재측정에서도 6/6 run이 전부 `Synthesizer.deterministic_re
 `neos/config/models.yaml` 단일 원천으로 모였고, 배포 *정책*(`model_routing`)과
 분리돼 있다. 백엔드 2234 passed / 0 failed, 게이트웨이 5/5, 프론트 `tsc` clean.
 
-**트랙 C 한 줄 요약 (2026-08-04 실측, 가시성 갭은 2026-08-07 W2로 해소):**
+**트랙 C 한 줄 요약 (2026-08-04 실측, 가시성 갭은 2026-08-07 W2로 절반 해소):**
 `docs/FE_AUDIT_260717.md` §6이 "미준비"로 판정했던 job 서비스 전환 차단 요인
 **5개가 전부 해소**됐다 — run 스트림 프록시·커서 재구독·active-run-store가
 약 1,665줄로 구현돼 있고 `pnpm test:source` 147 passed. 당시 남았던 갭 —
-08-02~04에 추가한 실패 이벤트 8종에 FE 라벨이 없던 것(FE1) — 은 W2에서
-라벨 7종 + `report_graded` 분기 수정 + `degradations` 누적으로 해소했다(`a9dbcfe3`).
+08-02~04에 추가한 실패 이벤트 8종에 FE 라벨이 없던 것(FE1) — 은 W2에서 **상태
+계층만** 해소했다: 라벨 8종 + `report_graded` 분기 수정 + `degradations` 누적
+(`a9dbcfe3`). **화면 계층은 아직이다** — `degradations`를 읽는 소비자가 코드
+어디에도 없고, `deep-analysis-status.tsx:139`는 `phase !== "completed"`일 때만
+`lastActivity`를 그려서 강등된 리포트가 막 도착한 순간(`phase === "completed"`)
+정확히 활동 줄을 감춘다. 신규 항목 FE4(§7)로 추적한다.
 
 **트랙 D 한 줄 요약 (2026-08-07 신설):**
 데이터셋 콜렉터 확장 · 멀티홉/citation 스킬화 · langgraph·crewai 삭제 ·
@@ -88,9 +92,9 @@ job을 dispatch해야 살아나므로 이 플래그에 함께 묶여 있다.
 | S1 | LLM이 조립한 리포트가 실제로 나온다 | ❌ `synth_pass` 0건 | `deep_analysis_events` `kind='synth_pass'` |
 | S2 | 리포트 게이트가 알맹이 있는 리포트를 통과시킨다 | ❌ 통과 9건 중 7건이 claim 0건 | `report_graded` × run별 verified claim 수 |
 | S3 | 리포트 본문이 보존된다 | ✅ (2026-08-07, W2 — 전제 정정: 본문은 유실된 적이 없었다) | `job_completed` 페이로드에 `report_markdown`이 실린 비율 |
-| S4 | 정지 사유가 원장에서 정확히 구분된다 | ✅ (2026-08-07, W2 — G9 해소) | `token_budget_exhausted` vs `investigation_stopped_at_floor` |
+| S4 | 정지 사유가 원장에서 정확히 구분된다 | ⚠️ 부분 (2026-08-07, W2 — G9 해소, `input_bound` 거절 클래스는 미해소) | `token_budget_exhausted` vs `investigation_stopped_at_floor` **그리고** `_mark_stop_reason`의 두 분기 모두를 벗어나는 무이벤트 정지 건수(G10, 목표 0) |
 | S5 | 전체 스위트가 CI에서 결정론적으로 통과한다 | ⚠️ 선결 3건 (#9·#10·#11) | CI 워크플로 |
-| S6 | 실패가 사용자에게도 보인다 (원장뿐 아니라 UI에서) | ✅ (2026-08-07, W2 — FE1 해소) | `progress.ts`의 `activityLabel()` 커버리지 |
+| S6 | 실패가 사용자에게도 보인다 (원장뿐 아니라 UI에서) | ⚠️ 부분 (2026-08-07, W2 — 원장→상태 절반만 해소) | `progress.ts`의 `activityLabel()` 커버리지 **그리고** `degradations`를 실제로 그리는 화면 컴포넌트의 존재 |
 
 > S6은 나중에 추가됐다(2026-08-04, 트랙 C 확인 중). S1~S5를 다 채워도 사용자가
 > 여전히 강등을 모른다면 "조용한 실패"를 고쳤다고 할 수 없기 때문이다.
@@ -207,9 +211,9 @@ G5(마무리 예산 floor)는 조사가 마무리 몫을 침범하지 못하게 
 
 | 항목 | 내용 | 커밋 |
 |---|---|---|
-| G9 | 정지 사유 판정을 `_mark_stop_reason()` 하나로 접음 — 정상/예외 두 경로가 이제 같은 판정을 냄. 오분류 6건 중 4건 → 0건 | `7318a840` |
+| G9 | 정지 사유 판정을 `_mark_stop_reason()` 하나로 접음 — 정상/예외 두 경로가 이제 같은 판정을 냄. 실측 6건 중 4건 오분류의 원인을 **코드상 해소** — 재측정은 라이브 표본에서(D25가 `synth_pass`에 적용한 것과 같은 규율). `input_bound` 거절 클래스는 여전히 무이벤트(G10) | `7318a840` |
 | G4 | **전제 정정**: `report_path` NULL은 사실이나 본문 유실은 없었다(`jobs.py`가 `job_completed` 페이로드에 실음, AC6). `Ledger.report_markdown()` / `report_bodies()` 조회 경로 신설 | `a258f36e`(원본 `f200b26c`) |
-| FE1 | `activityLabel()`에 실패 이벤트 7종 라벨 추가 + `report_graded`가 굶은 판정자를 승인과 구별 + `degradations` 누적 상태 신설 | `a9dbcfe3` |
+| FE1 | `activityLabel()`에 실패 이벤트 8종 라벨 추가 + `report_graded`가 굶은 판정자를 승인과 구별 + `degradations` 누적 상태 신설 (렌더링은 FE4로 남음) | `a9dbcfe3` |
 | A2 | `stop_reason` 전파 — 잘린 응답 ≠ 파싱 실패한 쓰레기. `call_json` 1회 확장 재시도(2배) | 2026-08-02 |
 | A1 | `report.py` 판정자 상한 300 → 800 | `a92fa4f9` |
 | G2 | `report_graded`에 `uncited_ratio`·분자·분모·임계값 적재 | `56b28f3e` |
@@ -311,27 +315,40 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
 14종이다. **2026-08-02~04에 추가된 "조용한 실패를 보이게 만드는" 이벤트는 하나도
 포함돼 있지 않다.**
 
+이벤트 8종(라벨이 없던 것) + 기존 kind `report_graded`(분기가 `ok`만 보던 것):
+
 | 이벤트 | 추가 시점 | FE 라벨 |
 |---|---|---|
 | `report_assembly_degraded` | 08-03 (G5) | ✅ (2026-08-07, W2) |
 | `investigation_stopped_at_floor` | 08-03/08-04 (G5·G8) | ✅ (2026-08-07, W2) |
-| `judge_budget_exhausted` | 08-03 (G5) | ✅ (2026-08-07, W2) — 이벤트 kind가 **아니다**. `report_graded.diagnostics.judge` 값(`"budget_exhausted"`/`"truncated"`/`"unparseable"`)이며, `report_graded` 분기가 이 값을 읽어 굶은 판정자의 통과를 승인과 다른 문구로 낸다 |
-| `llm_truncated` · `truncation_handled` | 08-02 (A2) | ✅ (2026-08-07, W2) |
+| `llm_truncated` | 08-02 (A2) | ✅ (2026-08-07, W2) |
+| `truncation_handled` | 08-02 (A2) | ✅ (2026-08-07, W2) |
 | `entailment_filter_skipped` | 08-02 (A2) | ✅ (2026-08-07, W2) |
 | `claim_discarded` | 07-27 | ✅ (2026-08-07, W2) |
 | `finalization_prompt_clamped` | 08-04 (D25/G6·G7) | ✅ (2026-08-07, W2) |
 | `node_reduction_degraded` | 08-04 (D25/G6·G7) | ✅ (2026-08-07, W2) |
 
-**해소됨(2026-08-07, W2, `a9dbcfe3`)** — 위 표는 갭이 있던 시점의 스냅샷으로 남긴다.
+> ⚠️ `judge_budget_exhausted`는 이 8종에 들지 않는다 — **이벤트 kind가 아니다.** 판정자가
+> 굶었다는 사실은 기존 kind `report_graded`의 payload에 **최상위** `judge` 키
+> (`"budget_exhausted"`/`"truncated"`/`"unparseable"`)로 남는다 — 오케스트레이터가
+> `{"ok": ..., "attempt": ..., **verdict.diagnostics}`로 로그하며 `diagnostics`를
+> spread하므로 `payload.diagnostics.judge`가 아니라 `payload.judge`다. 위 8종은 라벨이
+> 없어서 고친 것이고, `report_graded`는 라벨은 있었으나 `payload.ok`만 보고 굶은 판정자의
+> 통과와 실제 승인을 같은 문구로 내던 **기존 분기의 수정**이다 — 신규 kind로 세지 않는다.
+
+**상태 계층만 해소(2026-08-07, W2, `a9dbcfe3`)** — 위 표는 갭이 있던 시점의 스냅샷으로 남긴다.
 당시 동작은 안전했다 — 모르는 kind도 커서를 전진시키고 라벨만 `null`을 반환했다
 (`progress.ts:148-153`의 명시적 설계: "모르는 이벤트 때문에 커서가 멈추면 재구독이
-영원히 같은 지점을 다시 읽는다"). **깨지지는 않았지만 보이지 않았다.**
+영원히 같은 지점을 다시 읽는다"). **깨지지는 않았지만 보이지 않았다.** ✅ 표시는
+`activityLabel()`이 문자열을 낸다는 뜻이지, 그 문자열이 화면에 그려진다는 뜻이
+아니다 — `degradations`를 읽는 컴포넌트가 아직 없다(FE4, §7).
 
 **당시 왜 문제였는가.** §3.2에 적은 이 구간의 주제가 "고치기 전에 보이게 만든다"였는데,
 그 가시성이 **원장에서 멈췄다.** 사용자는 리포트가 템플릿으로 강등된 것을 알 수 없었다
 — 정확히 이 작업이 없애려던 상태다. `judge_budget_exhausted`의 경우 실제 결함은 라벨
 누락이 아니라 **라벨이 거짓말을 하는 것**이었다 — `report_graded` 분기가
 `payload.ok === true`만 보아 굶은 판정자의 통과와 실제 승인이 같은 문구로 나왔다.
+W2는 이 문구 문제를 고쳤지만, 강등을 **화면에 그리는 문제**는 남아 있다 — FE4 참조.
 
 > ⚠️ FE는 `synth_pass`와 `report_graded`는 **이미 인식했다**(`progress.ts:133,136`).
 > 즉 W1이 성공하면 그 성과는 FE에 자동으로 나타난다. W2 이전에는 **실패 경로만
@@ -392,6 +409,7 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
 | 우선 | ID | 내용 | 트랙 |
 |---|---|---|---|
 | 🟡 | G3 | 게이트가 뒤집혀 있다 — assertion 0건이면 비율 0.0(만점). **정책 결정 필요** | A |
+| 🟡 | **G10** | `_mark_stop_reason`이 `input_bound` 때문에 거절된 예약을 어느 분기로도 잡지 못해 이벤트를 남기지 않는다. 예: `_default_split_decompose`. 옛 코드는 틀린 라벨을, 새 코드는 침묵을 남긴다 | A |
 | 🟡 | E3 | judge = SCOUT worker (동일 모델). 불변식 위반, 의도적 유예 중 | A×B |
 | 🟡 | C1 | discard recall 재측정 — 2회 연속 n=0 | A |
 | 🟡 | A3·A4 | worker/판정자 상한 재보정 (thinking 몫 실측 선행) | A |
@@ -405,6 +423,7 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
 | ⚠️ | F3 | `managed-sandbox-control-plane` worktree에 구식 `AgenticGrader(...)` 11곳 — 병합 시 `TypeError` | — |
 | 🟡 | FE2 | `chat/route.ts`의 `maxDuration = 60` 잔존 (TODO #14) | C |
 | 🟢 | FE3 | TODO #12·#13이 **존재하지 않는 파일**을 가리킨다 — 항목 재확인 또는 폐기 필요 | C |
+| 🟡 | **FE4** | `degradations`에 소비자가 없고 `deep-analysis-status.tsx:139`가 `phase !== "completed"`로 활동 줄을 가린다 — 강등된 리포트가 도착하는 순간 정확히 활동 줄이 사라진다 | C |
 | 🟢 | — | SKILL.md 누락 6개 / `deep_analysis_*` 테이블 1.6만 행 | B |
 | 🟢 | W1-m1 | `node_summary.prompt_chars`가 이제 **클램프된** 프롬프트를 잰다 — 이 경계 전후로 비교 불가. 비교하려면 `finalization_prompt_clamped`와 조인해야 한다 | A |
 | 🟢 | W1-m2 | `Synthesizer.assembly_input_allowance`는 외부에서 만든 Synthesizer를 주입하면 **전역** `synthesis_max_tokens`로 떨어진다(프로파일 값이 아니라). 프로덕션 경로는 일관되지만 주석은 이 경우를 부정한다 | A |
@@ -464,22 +483,35 @@ D-5 = 재시도 3회분 보장, D-6 = caveats → 자식 꼬리 → 자식 수).
   실패 이벤트 8종 라벨 추가 (§5.2). 백엔드만 고치면 "원장은 정확한데 사용자는
   여전히 모른다"에서 멈춘다
 
-**완료 기준:** 정지 사유 오분류 0건(**S4**), 신규 run의 `report_path` NULL 비율 0%(**S3**),
-실패 경로가 UI에 라벨로 나타남(회귀 가드는 `tests/source/deep-analysis-progress.test.ts`).
-G4는 **G3 판단의 선행 조건**이다 — 본문 없이는 게이트 임계값을 재보정할 수 없다.
+**완료 기준:** 정지 사유 오분류 0건(**S4**), `job_completed`에 `report_markdown`이
+실린 비율(**S3**), 실패 경로가 UI에 라벨로 나타남(회귀 가드는
+`tests/source/deep-analysis-progress.test.ts`). G4는 **G3 판단의 선행 조건**이다 —
+본문 없이는 게이트 임계값을 재보정할 수 없다.
 
 > FE1을 W2에 묶은 이유: G9와 같은 결함의 서로 다른 층이다. G9는 원장이 정지 사유를
 > 틀리게 적는 문제이고, FE1은 정확히 적힌 것이 화면에 도달하지 않는 문제다.
 > **W1이 성공하면 그 성과(`synth_pass`)는 FE에 자동으로 뜨지만 실패는 여전히
 > 침묵한다** — 이 비대칭을 남기면 "성공만 보이는 UI"가 된다.
 
-**2026-08-07 완료.** G9는 `_mark_stop_reason()` 단일 판정으로, FE1은 라벨 7종 +
-`report_graded` 분기 수정 + `degradations` 누적으로 해소했다.
+**2026-08-07 코드 완료, 출하 기준은 부분 충족.** G9는 `_mark_stop_reason()` 단일
+판정으로 두 경로의 불일치를 없앴다(단 `input_bound` 거절 클래스는 G10으로 남는다 —
+S4는 ⚠️ 부분). FE1은 라벨 8종 + `report_graded` 분기 수정 + `degradations` 누적
+상태로 **원장→상태** 구간을 해소했다. **상태→화면** 구간(강등을 실제로 그리는
+컴포넌트)은 이번 웨이브 범위 밖으로 남았고 FE4로 추적한다 — S6은 ⚠️ 부분.
 
 **G4는 전제가 틀려 있었다** — `report_path`가 NULL인 것은 사실이나 리포트 본문은
 `job_completed` 페이로드에 계속 보존돼 있었다(`jobs.py`, AC6). 컬럼을 채우는 대신
 `Ledger.report_markdown()`과 `DeepAnalysisAnalyticsService.report_bodies()`를 만들어
 G3가 표본 전체의 본문을 읽을 수 있게 했다. §2.2 S3의 측정법도 이에 맞춰 정정했다.
+S3는 이 웨이브에서 유일하게 완전히 충족된 기준이다.
+
+**G9의 "6건 중 4건 → 0건"에 대한 정확한 서술:** 2026-08-04 실측 6건 중 4건 오분류는
+실제 관측이다. `_mark_stop_reason()`으로의 통합이 그 오분류 원인을 코드상 없앴다는
+것도 참이다. 하지만 "0건"은 **이 브랜치에서 라이브 run을 다시 실행해 관측한 값이
+아니다** — 추론이다. D25가 `synth_pass`에 적용한 것과 같은 규율을 따른다: **코드상
+해소 — 재측정은 라이브 표본에서.** 게다가 G10이 가리키는 클래스(`input_bound` 거절)는
+이 브랜치에서 다시 세면 "무이벤트"로 기록될 것이므로, 재측정 전까지 "오분류 0건"을
+사실처럼 인용하지 않는다.
 
 D26이 이 웨이브의 결정을 기록한다(`neos/workflow/deep_analysis/DECISIONS.md`).
 관련 커밋: G9 `7318a840` · G4 `a258f36e`(원본 `f200b26c`) · FE1 `a9dbcfe3`.
