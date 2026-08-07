@@ -14,7 +14,7 @@ pytestmark = pytest.mark.no_db
 
 
 class FakeSession:
-    """Ledger.log()가 쓰는 add/flush와 commit/get만 흉내낸다."""
+    """Ledger.log()가 쓰는 add/flush와 commit/get, 그리고 degradations()의 조회만 흉내낸다."""
 
     def __init__(self, run=None):
         self.added = []
@@ -35,6 +35,17 @@ class FakeSession:
 
     async def get(self, model, key):
         return self.run
+
+    async def execute(self, statement):
+        """`Ledger.degradations()`의 SELECT를 흉내낸다.
+
+        WHERE 절을 해석하지 않고 이 세션에 add된 것을 그대로 되돌려준다 --
+        이 Fake는 run 하나만 다루므로 run_id 필터는 항상 참이고, kind 필터는
+        `_degradation_kind()`가 어차피 한 번 더 거른다. 즉 이 단순화가
+        테스트를 느슨하게 만들지 않는다.
+        """
+        rows = [(obj.kind, obj.payload) for obj in self.added]
+        return SimpleNamespace(all=lambda: rows)
 
 
 def make_factory(sessions):
@@ -133,6 +144,62 @@ async def test_execute_run_carries_the_report_in_the_completion_event():
     completed = session.added[-1]
     assert completed.kind == jobs.JOB_COMPLETED
     assert json.loads(completed.payload)["report_markdown"] == "## 요약\n본문"
+
+
+@pytest.mark.asyncio
+async def test_execute_run_carries_degradations_in_its_result():
+    """새로고침 후 UI가 강등을 그리려면 이 값이 메시지까지 흘러가야 한다."""
+    session = FakeSession()
+
+    async def build(sess, run_id, *, profile, checkpoint):
+        from neos.workflow.deep_analysis.ledger import Ledger
+
+        class Orchestrator:
+            async def run(self, question):
+                ledger = Ledger(sess, run_id)
+                await ledger.log("node_reduction_degraded", None, {})
+                await ledger.log("node_reduction_degraded", None, {})
+                await ledger.log("report_graded", None, {"ok": True, "judge": "truncated"})
+                await ledger.log("claim_verified", None, {})
+                return {"run_id": run_id, "report_markdown": "## 요약\n본문"}
+
+        return Orchestrator()
+
+    result = await jobs.execute_run(
+        make_factory([session]),
+        "run00001",
+        "질문",
+        "dev",
+        build_orchestrator_fn=build,
+    )
+
+    assert result["degradations"] == [
+        {"kind": "node_reduction_degraded", "count": 2},
+        {"kind": "judge_unreviewed:truncated", "count": 1},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_run_reports_no_degradations_for_a_clean_run():
+    """강등이 없으면 빈 리스트다 -- None 이 아니다. 소비자가 분기를 하나만 갖게 한다."""
+    session = FakeSession()
+
+    async def build(sess, run_id, *, profile, checkpoint):
+        class Orchestrator:
+            async def run(self, question):
+                return {"run_id": run_id, "report_markdown": "## 요약\n본문"}
+
+        return Orchestrator()
+
+    result = await jobs.execute_run(
+        make_factory([session]),
+        "run00001",
+        "질문",
+        "dev",
+        build_orchestrator_fn=build,
+    )
+
+    assert result["degradations"] == []
 
 
 @pytest.mark.asyncio

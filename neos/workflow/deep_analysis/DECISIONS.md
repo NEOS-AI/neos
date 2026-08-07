@@ -688,3 +688,89 @@ discard recall 재측정(C1)은 이 변경 이후 표본으로 수행해야 두 
 34,800 / 41,040 = 새 cap(100,000)의 41.0%. **`synth_pass ≥ 1`은 이 결정으로 아직
 관측되지 않는다** — 라이브 표본이 필요하며, 로드맵 §8 W1과 §2.2 S1은 이 결정만으로
 충족되지 않는다.
+
+## D26. 정지 사유는 예산 상태가 정한다. 리포트 본문의 정본은 `job_completed`다.
+
+**결정:** 정지 사유 판정을 `_mark_stop_reason()` 하나로 접어 정상 종료 경로와 예외 종료
+경로 양쪽에서 부른다. 리포트 본문은 `report_path` 컬럼을 채우는 대신 `Ledger.report_markdown()`과
+`DeepAnalysisAnalyticsService.report_bodies()`로 `job_completed` 페이로드에서 읽는 조회
+경로를 만든다. 강등(`degradations`) 판정 기준은 "리포트 내용을 깎았는가"로 정하고, FE
+라벨 8종을 추가한다.
+
+**근거 — G9:** 정지 사유를 판정하는 코드가 정상 경로(`orchestrator.py`의 if/elif)와
+예외 경로 두 벌이었고 서로 달랐다. `TokenBudget.reserve`는 캡 소진과 floor 정지 두 사유
+모두에 같은 `TokenBudgetExhausted`를 던지므로 예외 타입만으로는 구분할 수 없는데, 예외
+핸들러는 구분을 시도조차 하지 않고 무조건 소진으로 기록했다. 실측 6건 중 4건이 오분류였다.
+
+**근거 — G4, 로드맵의 전제를 정정한다:** `report_path`가 574 run 전부 NULL인 것은 사실이나,
+리포트 본문이 유실된 적은 없다. `jobs.py`가 완료 이벤트(`job_completed`) 페이로드에
+`report_markdown`을 싣고(AC6), `neos/` 전체에서 `orchestrator.run()`의 호출자는 `jobs.py`
+하나뿐이라 모든 실행이 이 경로를 지난다. NULL인 것은 열 포인터이지 본문이 아니다. 컬럼은
+채우지도 은퇴시키지도 않고 — 그것은 별도의 스키마 결정이다 — 이미 있는 본문을 향한 조회
+경로만 만들었다.
+
+**근거 — FE1:** 강등 판정 기준은 "리포트가 사용자가 받았어야 할 것보다 못한가"다.
+최종 리포트 내용을 직접 깎는 3종(`report_assembly_degraded`,
+`finalization_prompt_clamped{exhausted:true}`, `node_reduction_degraded`)만
+`degradations`에 누적한다. `llm_truncated`는 확장 재시도가 성공하면(`truncation_handled.
+action === "retried_ok"`) 최종 산출물에 영향이 없어 제외했다 — 재시도 성공/실패를 가르려면
+두 이벤트를 상관시키는 상태 기계가 필요하고 이번 범위를 넘으므로, 잘못된 경고보다 과소
+보고를 택했다. 단, `degradations`를 화면에 그리는 일은 이번 범위 밖이다(FE4로 추적) —
+상태에는 쌓이지만 아직 아무 컴포넌트도 읽지 않고, `deep-analysis-status.tsx`는
+`phase === "completed"`가 되는 순간 `lastActivity` 줄을 감춘다.
+
+**발견:** `judge_budget_exhausted`는 독립 이벤트 kind가 아니다. 판정자가 굶었다는 사실은
+`report_graded` 이벤트 payload의 **최상위** `judge` 키(`"budget_exhausted"` /
+`"truncated"` / `"unparseable"`)로 남는다 — 오케스트레이터가 `{"ok": ..., "attempt":
+..., **verdict.diagnostics}`로 로그하며 `diagnostics`를 spread하기 때문에
+`payload.diagnostics.judge`가 아니라 `payload.judge`다. FE의 실제 결함은 라벨 누락이
+아니라, `report_graded` 분기가 `payload.ok`만 보고 굶은 판정자의 통과를 실제 승인과
+같은 문구로 냈다는 것이었다.
+
+**미해결로 남는 것 (G10):** `_mark_stop_reason`은 `exhausted`와 floor 미달 두 경우만
+판정한다. `TokenBudget.reserve`가 `available_for_investigation - input_bound <
+min_viable`로 거절하는 세 번째 경우 — 헤드룸은 있지만 `input_bound` 때문에 거절된 예약 —
+는 어느 분기에도 걸리지 않아 이벤트가 전혀 남지 않는다. `_default_split_decompose`가
+이 경로에 닿을 수 있다(측정된 `worker_analysis` `input_bound` 5,542~17,723, dev
+available 12,000). 세 번째 분기를 추가하는 것은 이번 결정의 범위가 아니다 — 다음
+웨이브의 설계 판단으로 남긴다. 로드맵 §7 G10.
+
+**영향:** floor 정지 오분류는 **코드상 해소**됐다 — `_mark_stop_reason()` 단일 판정이
+2026-08-04 실측(6건 중 4건 오분류)이 지적한 원인을 없앴다. 다만 이것이 새 라이브
+표본에서 "0건"으로 **재측정된 적은 없다** — D25가 `synth_pass`에 적용한 것과 같은
+규율로, 재측정은 라이브 표본에서 한다. G3(게이트 재보정)가 표본 전체의 리포트 본문을
+읽을 수 있게 됐다(`a258f36e`, 원본 `f200b26c`). FE가 실패 이벤트 8종에 라벨을 붙이고
+강등 상태를 `degradations`로 누적한다(`a9dbcfe3`) — 단 그 상태를 화면에 그리는 일은
+아직 없다(FE4). 로드맵 §2.2 S3이 충족됐고, S4·S6은 **부분** 충족이다(각각 G10, FE4가
+남는다). S1(`synth_pass ≥ 1`)은 라이브 표본 미실행으로 여전히 ❌다.
+
+## D27. 강등은 화면까지 간다. 새로고침 후 출처는 메시지 메타데이터다.
+
+**맥락:** D26이 강등을 상태(`progress.degradations`)까지 밀어냈으나 소비자가 0곳이었고,
+종결된 run 은 다시 구독하지 않으므로 새로고침하면 그 상태가 사라졌다. 추적해보니 더
+근본적인 문제가 있었다 — 백엔드는 메시지에 `deep_analysis_run_id` 를 심는데 프론트는
+`deep_analysis` 를 읽어서, 새로고침하면 **진행 카드가 통째로** 사라졌다.
+
+**결정:** (1) `Ledger.degradations()` 로 원장에서 강등을 집계하고 `execute_run` 을 거쳐
+어시스턴트 메시지 메타데이터(`deep_analysis_degradations`)에 영속화한다. (2) 프론트는
+라이브 스트림에서 같은 규칙으로 누적하되 새로고침 후에는 메타데이터를 출처로 쓴다.
+(3) 굶은 판정자(`report_graded.judge`)를 강등 넷째 항목으로 추가한다. (4) 표시 문구는
+`web/lib/deep-analysis/degradation.ts` 순수 함수에 두고 컴포넌트는 map 만 한다.
+
+**근거 — 굶은 판정자:** D26은 강등을 "리포트 내용을 깎았는가"로 정의했다. 판정자는
+내용을 바꾸지 않지만 **보증이 부재**한다 — 리포트가 실제 심사 없이 게이트를 통과했다.
+축이 다를 뿐 사용자가 알아야 하는 사실은 같다. `graders/report.py` 의 세 강등 모드가
+전부 `ok=True` 로 재조립 루프를 끝내므로 `judge` 키가 달린 이벤트는 run 당 최대 1건이고
+항상 최종 판정이다 — 중간 시도가 오탐으로 잡히지 않는다.
+
+**근거 — 표시 문구를 lib 에 두는 이유:** `web/package.json` 의 `test:source` 는
+`tsx --test` 라 DOM 이 없다. 표시 로직이 컴포넌트로 들어가면 회귀 가드가 0 이 된다.
+
+**기각한 대안:** 종결된 run 도 카드를 펼치면 `after=0` 으로 이력 재생 — 규칙 중복이 0
+이고 충실도가 100% 이지만 **펼치지 않으면 영영 모른다.** 접힌 카드에 경고를 띄우려면
+먼저 재생해야 하고 재생하려면 펼쳐야 하는 순환이 생긴다.
+
+**남긴 부채:** "어떤 이벤트가 강등인가" 규칙이 두 언어로 구현돼 있다
+(`ledger.py._degradation_kind()` / `progress.ts.degradationKind()`). 문구는 프론트 한
+곳뿐이라 중복되지 않는다. 상호 참조 주석 · 양쪽 테스트의 동일 fixture · 로드맵 §7 FE6
+으로 표시했다. 갈라져도 **과소 보고** 쪽으로 기운다.

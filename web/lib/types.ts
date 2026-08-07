@@ -62,6 +62,14 @@ export const harnessMetadataSchema = z.object({
 export type HarnessMetadata = z.infer<typeof harnessMetadataSchema>;
 
 /**
+ * 개별 강등(degradation) 항목 하나. 종류(`kind`)와 발생 횟수(`count`)만 담는다.
+ */
+export const deepAnalysisDegradationSchema = z.object({
+  kind: z.string(),
+  count: z.number(),
+});
+
+/**
  * 비동기 deep_analysis job 핸들.
  *
  * 챗 턴은 `neos:deep_analysis_started`를 보내고 **즉시 끝난다**. 진행 상황은
@@ -73,6 +81,13 @@ export const deepAnalysisMetadataSchema = z.object({
   run_id: z.string(),
   events_url: z.string().optional(),
   status: z.enum(["pending", "running", "completed", "failed"]).optional(),
+  /**
+   * 리포트 품질을 깎은 사건들. 백엔드가 run 종료 시 원장에서 집계해 메시지
+   * 메타데이터에 실은 값이며(`deep_analysis_job_task.py`), 새로고침 후에는
+   * **이것이 유일한 출처**다 — 종결된 run 은 다시 구독하지 않으므로 라이브
+   * 리듀서의 상태가 남지 않는다.
+   */
+  degradations: z.array(deepAnalysisDegradationSchema).optional(),
 });
 
 export type DeepAnalysisMetadata = z.infer<typeof deepAnalysisMetadataSchema>;

@@ -19,6 +19,7 @@ import {
   type DeepAnalysisConnectionState,
   useDeepAnalysisStream,
 } from "@/hooks/use-deep-analysis-stream";
+import { degradationNotices } from "@/lib/deep-analysis/degradation";
 import type { DeepAnalysisProgress } from "@/lib/deep-analysis/progress";
 import type { DeepAnalysisMetadata } from "@/lib/types";
 import { Tool, ToolContent, ToolHeader } from "./elements/tool";
@@ -100,13 +101,23 @@ export function DeepAnalysisStatus({
   const phase = alreadySettled
     ? (deepAnalysis.status as DeepAnalysisProgress["phase"])
     : progress.phase;
+  // 우선순위 판단이 아니라 "둘 중 채워진 쪽을 고른다"는 뜻이다. 라이브 세션에서는
+  // 구독이 상태를 채우고, 새로고침 후에는 `alreadySettled`라 구독하지 않으므로
+  // `progress.degradations`가 항상 비어 있다 — 둘 다 값을 갖는 경우는 없다.
+  const notices = degradationNotices(
+    progress.degradations.length > 0
+      ? progress.degradations
+      : (deepAnalysis.degradations ?? [])
+  );
   const visibleStats = stats(progress);
   const connectionNote = connectionLabel[connection];
 
   return (
     <Tool
       className="border-purple-200/70 bg-purple-50/40 dark:border-purple-300/15 dark:bg-purple-950/20"
-      defaultOpen={phase === "running" || phase === "pending"}
+      defaultOpen={
+        phase === "running" || phase === "pending" || notices.length > 0
+      }
     >
       <ToolHeader
         state={toolState(phase) as never}
@@ -136,10 +147,30 @@ export function DeepAnalysisStatus({
             )}
           </div>
 
+          {/*
+            완료 후 활동 줄을 감추는 것은 의도다. 이 줄은 "지금 무슨 일이
+            일어나는가"이고 완료 후엔 의미가 없다. 강등은 위 경고 블록이
+            영구히 맡으므로 이 게이트가 강등을 숨기지 않는다 — 게이트를
+            없애면 같은 사실이 두 줄로 중복된다.
+          */}
           {progress.lastActivity && phase !== "completed" && (
             <div className="truncate text-muted-foreground text-xs">
               {progress.lastActivity}
             </div>
+          )}
+
+          {notices.length > 0 && (
+            <ul
+              className="space-y-1 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-amber-800 text-xs dark:border-amber-500/20 dark:bg-amber-950/30 dark:text-amber-200"
+              data-testid="deep-analysis-degradations"
+            >
+              {notices.map((notice) => (
+                <li className="flex items-start gap-1.5" key={notice.kind}>
+                  <AlertTriangleIcon className="mt-0.5 size-3 shrink-0" />
+                  <span>{notice.text}</span>
+                </li>
+              ))}
+            </ul>
           )}
 
           {visibleStats.length > 0 && (

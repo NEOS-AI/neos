@@ -79,6 +79,14 @@ async def _message_content(conversation_id: str, message_id: str) -> str | None:
         return None if row is None else row[0]
 
 
+async def _message_metadata(message_id: str) -> dict | None:
+    """`ChatService.get_message`로 영속화된 metadata 를 읽는다(기존 서비스 경로 재사용)."""
+    from neos.api.services.chat_service import ChatService
+
+    message = await ChatService.get_message(message_id)
+    return None if message is None else message["metadata"]
+
+
 @pytest.mark.asyncio
 async def test_persist_assistant_message_writes_report_to_the_real_conversation():
     """목이 아닌 실제 ChatService/DB에 리포트가 실제로 남는가."""
@@ -117,6 +125,52 @@ async def test_execute_chain_persists_report_without_calling_an_llm(monkeypatch)
 
     assert result["report_markdown"] == REPORT
     assert await _message_content(conversation_id, message_id) == REPORT
+
+
+@pytest.mark.asyncio
+async def test_execute_chain_persists_degradations_to_the_real_database(monkeypatch):
+    """degradations 도 report_markdown 과 같은 사슬을 타고 실제 DB에 남는가.
+
+    목 테스트(`test_deep_analysis_job_task.py`)는 ChatService 전체를 목으로
+    두므로 `deep_analysis_degradations` 키가 실제로 살아 돌아오는지 증명하지
+    못한다 -- 이 파일의 존재 이유 그대로다.
+    """
+    conversation_id, _ = await _seed_conversation()
+    message_id = str(uuid.uuid4())
+    run_id = await _seed_run(conversation_id, message_id)
+
+    degradations = [
+        {"kind": "report_assembly_degraded", "count": 3},
+        {"kind": "judge_unreviewed:budget_exhausted", "count": 1},
+    ]
+
+    async def fake_execute_run(
+        session_ctx,
+        rid,
+        question,
+        profile,
+        *,
+        timeout_seconds=None,
+    ):
+        assert timeout_seconds is None
+        return {
+            "run_id": rid,
+            "report_markdown": REPORT,
+            "degradations": degradations,
+        }
+
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.jobs.execute_run", fake_execute_run
+    )
+
+    result = await _execute(run_id, "이 주장이 사실인가?", "dev", False)
+
+    assert result["report_markdown"] == REPORT
+    assert await _message_content(conversation_id, message_id) == REPORT
+
+    metadata = await _message_metadata(message_id)
+    assert metadata is not None
+    assert metadata["deep_analysis_degradations"] == degradations
 
 
 @pytest.mark.asyncio
