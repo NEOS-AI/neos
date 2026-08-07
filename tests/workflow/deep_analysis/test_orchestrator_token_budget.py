@@ -267,3 +267,114 @@ async def test_no_agentic_grader_preserves_deterministic_diagnostics():
         "deterministic": "passed",
         "deterministic_code": "",
     }
+
+
+@pytest.mark.asyncio
+async def test_the_exception_path_does_not_call_the_stop_a_cap_exhaustion():
+    """G9: 예외 경로가 사유를 독자 판정하던 것이 6건 중 4건을 오분류했다.
+
+    `reserve` 는 캡 소진과 floor 정지 양쪽에 같은 `TokenBudgetExhausted` 를
+    던진다(token_budget.py). 예외 타입은 사유를 말해주지 않으므로 예산의
+    상태를 봐야 한다.
+    """
+    ledger = FloorLedger()
+    orchestrator = Orchestrator(
+        object(),
+        "run",
+        worker_factory=lambda: None,
+        grader=Grader(),
+        ledger=ledger,
+        synthesizer=Synthesizer(),
+        citation_renderer=CitationRenderer(),
+        global_token_cap=100,
+        finalization_floor_tokens=100,
+    )
+    await orchestrator._install_token_budget()
+
+    # floor 가 캡 전체다 -> 조사 예산 0, 그러나 캡은 소진되지 않았다.
+    assert orchestrator.token_budget.exhausted is False
+
+    await orchestrator._mark_stop_reason()
+
+    kinds = [event[0] for event in ledger.events]
+    assert "investigation_stopped_at_floor" in kinds
+    assert "token_budget_exhausted" not in kinds
+
+
+@pytest.mark.asyncio
+async def test_a_genuinely_exhausted_cap_is_still_reported_as_exhausted():
+    """floor 정지와 캡 소진을 뭉개면 반대 방향의 거짓이 된다."""
+    ledger = FloorLedger()
+    orchestrator = Orchestrator(
+        object(),
+        "run",
+        worker_factory=lambda: None,
+        grader=Grader(),
+        ledger=ledger,
+        synthesizer=Synthesizer(),
+        citation_renderer=CitationRenderer(),
+        global_token_cap=100,
+    )
+    await orchestrator._install_token_budget()
+    # 캡 전체를 소비한 것으로 만든다.
+    orchestrator.token_budget._consumed_tokens = 100
+    assert orchestrator.token_budget.exhausted is True
+
+    await orchestrator._mark_stop_reason()
+
+    kinds = [event[0] for event in ledger.events]
+    assert "token_budget_exhausted" in kinds
+    assert "investigation_stopped_at_floor" not in kinds
+
+
+@pytest.mark.asyncio
+async def test_a_normal_stop_records_no_budget_event():
+    """열린 질문이 없어 멈춘 run은 예산 사건이 아니다.
+
+    세 번째 분기를 두지 않는 것이 의도다 -- 정상 종료에 예산 이벤트를
+    남기면 원장이 다시 거짓말을 시작한다.
+    """
+    ledger = FloorLedger()
+    orchestrator = Orchestrator(
+        object(),
+        "run",
+        worker_factory=lambda: None,
+        grader=Grader(),
+        ledger=ledger,
+        synthesizer=Synthesizer(),
+        citation_renderer=CitationRenderer(),
+        global_token_cap=1_000_000,
+    )
+    await orchestrator._install_token_budget()
+
+    await orchestrator._mark_stop_reason()
+
+    kinds = [event[0] for event in ledger.events]
+    assert "token_budget_exhausted" not in kinds
+    assert "investigation_stopped_at_floor" not in kinds
+
+
+@pytest.mark.asyncio
+async def test_calling_the_stop_reason_twice_records_it_once():
+    """예외 경로와 정상 경로가 연달아 부를 수 있다 -- 중복 적재는 안 된다."""
+    ledger = FloorLedger()
+    orchestrator = Orchestrator(
+        object(),
+        "run",
+        worker_factory=lambda: None,
+        grader=Grader(),
+        ledger=ledger,
+        synthesizer=Synthesizer(),
+        citation_renderer=CitationRenderer(),
+        global_token_cap=100,
+        finalization_floor_tokens=100,
+    )
+    await orchestrator._install_token_budget()
+
+    await orchestrator._mark_stop_reason()
+    await orchestrator._mark_stop_reason()
+
+    floor_events = [
+        e for e in ledger.events if e[0] == "investigation_stopped_at_floor"
+    ]
+    assert len(floor_events) == 1

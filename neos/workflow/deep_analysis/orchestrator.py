@@ -236,6 +236,36 @@ class Orchestrator:
         await self._emit("investigation_stopped_at_floor", payload)
         self._investigation_stopped_at_floor_logged = True
 
+    async def _mark_stop_reason(self) -> None:
+        """Record why investigation stopped, from the budget's state.
+
+        The exception path used to assert "exhausted" on its own, and the
+        normal path made a different decision from the same facts a few
+        lines later -- two judgements of one question, disagreeing. Measured
+        2026-08-04: 4 of 6 recorded stops were labelled `token_budget_
+        exhausted` when the run had actually stopped at the floor with
+        headroom left in the cap.
+
+        `TokenBudget.reserve` raises the same `TokenBudgetExhausted` for
+        both causes, so the exception type carries no information about
+        which one happened. Only the budget's state does.
+
+        There is deliberately no third branch: a run that stopped because
+        no open question cleared `score_floor` has no budget event to
+        record, and inventing one would put the ledger back to guessing.
+
+        Both `_mark_*` helpers are idempotent (in-memory flag plus a
+        `has_event` lookup), so calling this from both paths cannot
+        double-log.
+        """
+        if self.token_budget.exhausted:
+            await self._mark_token_budget_exhausted()
+        elif (
+            self.token_budget.available_for_investigation
+            < self.token_budget.min_viable_output_tokens
+        ):
+            await self._mark_investigation_stopped_at_floor()
+
     async def _grade(self, claim, value_est):
         """Two-stage grading: deterministic tier first; only claims that pass
         it (and only when an agentic grader is configured) proceed to the
@@ -974,26 +1004,13 @@ class Orchestrator:
                         if not await self._run_round():
                             break
                 except TokenBudgetExhausted:
-                    await self._mark_token_budget_exhausted()
+                    await self._mark_stop_reason()
                     root = await self.ledger.root_question()
                     if root is None:
                         raise
                     root_id = root.id
 
-                if self.token_budget.exhausted:
-                    await self._mark_token_budget_exhausted()
-                elif (
-                    self.token_budget.available_for_investigation
-                    < self.token_budget.min_viable_output_tokens
-                ):
-                    # Stopped at the floor with headroom left in the cap --
-                    # the case the floor exists to produce, and the case
-                    # that must not look like silent success.
-                    #
-                    # Mirrors `Budgeter.should_stop`: the stop happens at the
-                    # viability threshold, so testing `<= 0` here would leave
-                    # the ordinary floor stop unrecorded.
-                    await self._mark_investigation_stopped_at_floor()
+                await self._mark_stop_reason()
 
                 report = await self._finalize(root_id)
                 await self._checkpoint()
