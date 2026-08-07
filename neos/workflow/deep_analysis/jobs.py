@@ -130,7 +130,7 @@ async def execute_run(
     resume: bool = False,
     timeout_seconds: float | None = None,
     build_orchestrator_fn=build_orchestrator,
-) -> dict[str, str]:
+) -> dict[str, object]:
     """이미 생성된 run을 완주(또는 재개)시킨다.
 
     `session_factory`는 인자 없이 호출하면 async context manager를 돌려주는
@@ -168,6 +168,11 @@ async def execute_run(
             )
             await _record_failure(session_factory, run_id, error[:500])
             raise
+        # 강등 집계는 run 이 끝난 뒤에 읽는다 -- 원장 쓰기가 전부 끝난 시점이다.
+        # 읽기 전용이므로 P2(원장 단일 작성자)를 건드리지 않는다. 이 값은
+        # `_persist_assistant_message` 를 거쳐 어시스턴트 메시지 메타데이터로
+        # 들어가고, 새로고침 후 UI 가 강등을 다시 그리는 유일한 출처가 된다.
+        result["degradations"] = await Ledger(session, run_id).degradations()
         # AC6: 늦게 접속한 구독자가 이벤트 재생만으로 리포트를 받도록
         # 완료 이벤트가 리포트 본문을 싣는다.
         await _log_lifecycle(
@@ -185,7 +190,7 @@ async def resume_run(
     *,
     timeout_seconds: float | None = None,
     build_orchestrator_fn=build_orchestrator,
-) -> dict[str, str]:
+) -> dict[str, object]:
     """중단된 run을 원장에 저장된 질문/프로파일로 재개한다."""
     async with session_factory() as session:
         run = await session.get(DARun, run_id)
