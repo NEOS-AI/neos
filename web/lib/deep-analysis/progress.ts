@@ -182,6 +182,12 @@ function activityLabel(event: DeepAnalysisJobEvent): string | null {
   if (kind === "investigation_stopped_at_floor") {
     return "조사 중단 — 마무리 예산만 남음";
   }
+  if (kind === "investigation_stopped_at_input_bound") {
+    // floor 정지와 다른 사실이다 — 예산은 남았는데 프롬프트가 그 안에
+    // 안 들어갔다. 하나로 묶으면 백엔드가 방금 없앤 구별이 화면에서
+    // 다시 사라진다 (로드맵 §7 G10).
+    return "조사 중단 — 남은 예산에 프롬프트가 들어가지 않음";
+  }
   if (kind === "llm_truncated") {
     const stage = asString(payload.stage);
     return stage ? `응답 잘림 · ${stage}` : "응답 잘림";

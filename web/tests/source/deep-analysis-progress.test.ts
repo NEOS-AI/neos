@@ -269,6 +269,7 @@ test("새 실패 이벤트 전부가 라벨을 가진다", () => {
     "node_reduction_degraded",
     "finalization_prompt_clamped",
     "investigation_stopped_at_floor",
+    "investigation_stopped_at_input_bound",
     "llm_truncated",
     "truncation_handled",
     "entailment_filter_skipped",
