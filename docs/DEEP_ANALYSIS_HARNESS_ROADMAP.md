@@ -30,7 +30,7 @@
 |---|---|---|
 | **A. 심층분석 하네스** | 🟡 코어 완성, **산출물 미달** | 마무리 예산 구조 완료(G6·G7 해소) — 남은 것은 라이브 표본으로 `synth_pass`를 확인하는 것 (W1, 아직 미실행) |
 | **B. 역할 기반 모델 라우팅** | ✅ 완료 · 안정 | 유지보수 모드. 카탈로그 불변식 지키기 |
-| **C. 프론트엔드** | ✅ job 마이그레이션 완료, ⚠️ 가시성 갭 절반 해소(FE1, W2 — 상태 계층만) | 렌더 계층(FE4, 신규)과 §5.3의 저위험 잔여(FE2·FE3) |
+| **C. 프론트엔드** | ✅ job 마이그레이션 완료, ✅ 가시성 갭 해소(FE1·FE4) | §5.3의 저위험 잔여(FE2·FE3)와 신규 FE5·FE6 |
 | **D. 프레임워크 이탈·계측 통일** | ⬜ 미착수 (2026-08-07 신규) | 4개 과제 중 crewai 삭제만 즉시 가능. 나머지는 라이브 표본 측정과 상호배타 (§11) |
 
 **트랙 A 한 줄 요약 (2026-08-04 실측):**
@@ -47,13 +47,11 @@ G8 수정 후 재측정에서도 6/6 run이 전부 `Synthesizer.deterministic_re
 **트랙 C 한 줄 요약 (2026-08-04 실측, 가시성 갭은 2026-08-07 W2로 절반 해소):**
 `docs/FE_AUDIT_260717.md` §6이 "미준비"로 판정했던 job 서비스 전환 차단 요인
 **5개가 전부 해소**됐다 — run 스트림 프록시·커서 재구독·active-run-store가
-약 1,665줄로 구현돼 있고 `pnpm test:source` 147 passed. 당시 남았던 갭 —
-08-02~04에 추가한 실패 이벤트 8종에 FE 라벨이 없던 것(FE1) — 은 W2에서 **상태
-계층만** 해소했다: 라벨 8종 + `report_graded` 분기 수정 + `degradations` 누적
-(`a9dbcfe3`). **화면 계층은 아직이다** — `degradations`를 읽는 소비자가 코드
-어디에도 없고, `deep-analysis-status.tsx:139`는 `phase !== "completed"`일 때만
-`lastActivity`를 그려서 강등된 리포트가 막 도착한 순간(`phase === "completed"`)
-정확히 활동 줄을 감춘다. 신규 항목 FE4(§7)로 추적한다.
+약 1,665줄로 구현돼 있고 `pnpm test:source` 147 passed. 당시 남았던 갭 — 08-02~04에 추가한 실패 이벤트 8종에 FE 라벨이 없던 것(FE1) — 은
+W2가 **상태 계층**을(`a9dbcfe3`), FE4가 **화면 계층**을 해소했다: 강등 경고 블록 +
+새로고침 복원(백엔드 메타데이터 경유) + 굶은 판정자를 강등 넷째로 추가. 그 과정에서
+원래부터 있던 키 이름 불일치도 잡았다 — 백엔드는 `deep_analysis_run_id`를, 프론트는
+`deep_analysis`를 읽어서 **새로고침하면 진행 카드가 통째로 사라졌다.**
 
 **트랙 D 한 줄 요약 (2026-08-07 신설):**
 데이터셋 콜렉터 확장 · 멀티홉/citation 스킬화 · langgraph·crewai 삭제 ·
@@ -94,7 +92,7 @@ job을 dispatch해야 살아나므로 이 플래그에 함께 묶여 있다.
 | S3 | 리포트 본문이 보존된다 | ✅ (2026-08-07, W2 — 전제 정정: 본문은 유실된 적이 없었다) | `job_completed` 페이로드에 `report_markdown`이 실린 비율 |
 | S4 | 정지 사유가 원장에서 정확히 구분된다 | ⚠️ 부분 (2026-08-07, W2 — G9 해소, `input_bound` 거절 클래스는 미해소) | `token_budget_exhausted` vs `investigation_stopped_at_floor` **그리고** `_mark_stop_reason`의 두 분기 모두를 벗어나는 무이벤트 정지 건수(G10, 목표 0) |
 | S5 | 전체 스위트가 CI에서 결정론적으로 통과한다 | ⚠️ 선결 3건 (#9·#10·#11) | CI 워크플로 |
-| S6 | 실패가 사용자에게도 보인다 (원장뿐 아니라 UI에서) | ⚠️ 부분 (2026-08-07, W2 — 원장→상태 절반만 해소) | `progress.ts`의 `activityLabel()` 커버리지 **그리고** `degradations`를 실제로 그리는 화면 컴포넌트의 존재 |
+| S6 | 실패가 사용자에게도 보인다 (원장뿐 아니라 UI에서) | ✅ (2026-08-07, FE4) | `progress.ts`의 `activityLabel()` 커버리지 **그리고** `degradations`를 실제로 그리는 화면 컴포넌트의 존재 |
 
 > S6은 나중에 추가됐다(2026-08-04, 트랙 C 확인 중). S1~S5를 다 채워도 사용자가
 > 여전히 강등을 모른다면 "조용한 실패"를 고쳤다고 할 수 없기 때문이다.
@@ -213,7 +211,7 @@ G5(마무리 예산 floor)는 조사가 마무리 몫을 침범하지 못하게 
 |---|---|---|
 | G9 | 정지 사유 판정을 `_mark_stop_reason()` 하나로 접음 — 정상/예외 두 경로가 이제 같은 판정을 냄. 실측 6건 중 4건 오분류의 원인을 **코드상 해소** — 재측정은 라이브 표본에서(D25가 `synth_pass`에 적용한 것과 같은 규율). `input_bound` 거절 클래스는 여전히 무이벤트(G10) | `7318a840` |
 | G4 | **전제 정정**: `report_path` NULL은 사실이나 본문 유실은 없었다(`jobs.py`가 `job_completed` 페이로드에 실음, AC6). `Ledger.report_markdown()` / `report_bodies()` 조회 경로 신설 | `a258f36e`(원본 `f200b26c`) |
-| FE1 | `activityLabel()`에 실패 이벤트 8종 라벨 추가 + `report_graded`가 굶은 판정자를 승인과 구별 + `degradations` 누적 상태 신설 (렌더링은 FE4로 남음) | `a9dbcfe3` |
+| FE1 | `activityLabel()`에 실패 이벤트 8종 라벨 추가 + `report_graded`가 굶은 판정자를 승인과 구별 + `degradations` 누적 상태 신설 (렌더링은 이후 FE4가 해소) | `a9dbcfe3` |
 | A2 | `stop_reason` 전파 — 잘린 응답 ≠ 파싱 실패한 쓰레기. `call_json` 1회 확장 재시도(2배) | 2026-08-02 |
 | A1 | `report.py` 판정자 상한 300 → 800 | `a92fa4f9` |
 | G2 | `report_graded`에 `uncited_ratio`·분자·분모·임계값 적재 | `56b28f3e` |
@@ -340,20 +338,22 @@ FE `lib/deep-analysis/progress.ts`의 `activityLabel()`이 라벨을 붙이는 k
 당시 동작은 안전했다 — 모르는 kind도 커서를 전진시키고 라벨만 `null`을 반환했다
 (`progress.ts:148-153`의 명시적 설계: "모르는 이벤트 때문에 커서가 멈추면 재구독이
 영원히 같은 지점을 다시 읽는다"). **깨지지는 않았지만 보이지 않았다.** ✅ 표시는
-`activityLabel()`이 문자열을 낸다는 뜻이지, 그 문자열이 화면에 그려진다는 뜻이
-아니다 — `degradations`를 읽는 컴포넌트가 아직 없다(FE4, §7).
+`activityLabel()`이 문자열을 낸다는 뜻이었고, 그 문자열이 화면에 그려지는
+문제는 FE4가 해소했다 — `degradations`는 이제 `deep-analysis-status.tsx`의 앰버 경고
+블록으로 그려지고, 강등이 있으면 카드가 펼쳐진 채로 열린다.
 
 **당시 왜 문제였는가.** §3.2에 적은 이 구간의 주제가 "고치기 전에 보이게 만든다"였는데,
 그 가시성이 **원장에서 멈췄다.** 사용자는 리포트가 템플릿으로 강등된 것을 알 수 없었다
 — 정확히 이 작업이 없애려던 상태다. `judge_budget_exhausted`의 경우 실제 결함은 라벨
 누락이 아니라 **라벨이 거짓말을 하는 것**이었다 — `report_graded` 분기가
 `payload.ok === true`만 보아 굶은 판정자의 통과와 실제 승인이 같은 문구로 나왔다.
-W2는 이 문구 문제를 고쳤지만, 강등을 **화면에 그리는 문제**는 남아 있다 — FE4 참조.
+W2는 이 문구 문제를 고쳤지만, 강등을 **화면에 그리는 문제**는 당시 남아 있었다 —
+FE4가 이후 해소했다.
 
 > ⚠️ FE는 `synth_pass`와 `report_graded`는 **이미 인식했다**(`progress.ts:133,136`).
 > 즉 W1이 성공하면 그 성과는 FE에 자동으로 나타난다. W2 이전에는 **실패 경로만
-> 보이지 않았다** — 성공만 보이고 실패는 침묵하는 비대칭이었다. `degradations` 필드가
-> 이제 🔴 3종을 run 종료 후에도 남는 상태로 누적한다(§8 W2).
+> 보이지 않았다** — 성공만 보이고 실패는 침묵하는 비대칭이었다. W2가 `degradations`
+> 상태를, FE4가 그 렌더와 새로고침 복원을 붙여 비대칭이 사라졌다.
 
 ### 5.3 프론트엔드 잔여 (TODO §12~14 재확인)
 
@@ -416,14 +416,16 @@ W2는 이 문구 문제를 고쳤지만, 강등을 **화면에 그리는 문제*
 | 🟡 | C3·C4 | `call_json` 예외 시 토큰 누락 / `entailment_filter_skipped`가 4가지 원인을 뭉갠다 | A |
 | 🟡 | B2 | dev 프로파일 여유 축소 (감시 항목) | A |
 | 🟡 | D1·D2 | search 0건 반환 7% / 403 잔존·429 backoff 없음 | A |
-| 🟡 | P1 #8 | `_persist_assistant_message`가 예외를 삼킴 | — |
+| 🟡 | P1 #8 | `_persist_assistant_message`가 예외를 삼킴 — FE4 이후 **강등 요약이 이 경로에만 있으므로** 삼킴의 대가가 커졌다. 로그에 `degradations_lost` 건수는 남긴다 | — |
 | 🧪 | CI #9 | `pytest tests/workflow/` 전체 실행 미검증 (수집 661건은 통과) | — |
 | 🧪 | CI #10 | `tests/api/` 순서 의존 오염 미확인 | — |
 | 🧪 | CI #11 | analytics 테스트 run 스코프 — **코드 확인상 해소**, 실행 검증 필요 | — |
 | ⚠️ | F3 | `managed-sandbox-control-plane` worktree에 구식 `AgenticGrader(...)` 11곳 — 병합 시 `TypeError` | — |
 | 🟡 | FE2 | `chat/route.ts`의 `maxDuration = 60` 잔존 (TODO #14) | C |
 | 🟢 | FE3 | TODO #12·#13이 **존재하지 않는 파일**을 가리킨다 — 항목 재확인 또는 폐기 필요 | C |
-| 🟡 | **FE4** | `degradations`에 소비자가 없고 `deep-analysis-status.tsx:139`가 `phase !== "completed"`로 활동 줄을 가린다 — 강등된 리포트가 도착하는 순간 정확히 활동 줄이 사라진다 | C |
+| 🟢 | **FE5** | 실패한 run의 강등은 메시지에 남지 않는다 — `_persist_assistant_message`가 완료 시에만 호출되므로 실패 run은 메시지 자체가 없다. `job_failed` 경로에 같은 영속화를 붙일지 미결 | C |
+| 🟢 | **FE6** | 강등 판정 규칙이 두 언어로 구현돼 있다 (`ledger.py._degradation_kind()` / `progress.ts.degradationKind()`). 문구는 FE 한 곳뿐이라 중복 없음. 갈라지면 과소 보고 쪽으로 기운다. 통합하려면 BE가 어휘를 API로 노출하거나 공유 스키마가 필요 — 별도 판단 | C×A |
+| 🟢 | **FE7** | 복원 경로의 강등 항목은 kind 중복을 제거하지 않는다 — `metadata.ts`의 `asDegradations()`가 dedupe하지 않으므로 백엔드가 같은 kind를 두 번 실으면 React key가 겹친다. 라이브 경로는 `withDegradation`이 합치므로 안전하다 | C |
 | 🟢 | — | SKILL.md 누락 6개 / `deep_analysis_*` 테이블 1.6만 행 | B |
 | 🟢 | W1-m1 | `node_summary.prompt_chars`가 이제 **클램프된** 프롬프트를 잰다 — 이 경계 전후로 비교 불가. 비교하려면 `finalization_prompt_clamped`와 조인해야 한다 | A |
 | 🟢 | W1-m2 | `Synthesizer.assembly_input_allowance`는 외부에서 만든 Synthesizer를 주입하면 **전역** `synthesis_max_tokens`로 떨어진다(프로파일 값이 아니라). 프로덕션 경로는 일관되지만 주석은 이 경우를 부정한다 | A |
@@ -703,7 +705,7 @@ HOME=/tmp/neos-test-home .venv/bin/pytest tests/workflow/deep_analysis -q
 pytest -q tests/config/test_model_catalog.py tests/config/test_model_catalog_parity.py \
          tests/config/test_model_routing.py tests/utils/test_llm_factory_defaults.py
 
-# 게이트웨이 / 프론트 — 현재 cargo 5/5, test:source 147 passed
+# 게이트웨이 / 프론트 — 현재 cargo 5/5, test:source 174 passed
 cd api_gateway && cargo test --offline && cargo build --offline
 pnpm --dir web test:source && pnpm --dir web exec tsc --noEmit
 # 심층분석 FE 계약만 빠르게 (progress/reader/subscription/active-run-store/events)
