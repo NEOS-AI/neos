@@ -770,7 +770,7 @@ git worktree remove "$WT" && git worktree prune
 | 증상 | 원인 | 커밋 |
 |---|---|---|
 | 전역 `settings` 싱글턴이 바뀐 채 남음 | `reload_settings_for_tests()`가 모듈 전역 재바인딩 | `d3d3fd96` |
-| 프로세스 env가 테스트 지정값을 이김 | litellm·crewai가 import 시 `load_dotenv()`로 `.env`를 `os.environ`에 복사 | `4b37a3fe` |
+| 프로세스 env가 테스트 지정값을 이김 | ~~litellm·crewai~~ → **litellm만 남음** (2026-08-08, D3a가 crewai import를 제거). import 시 `load_dotenv()`로 `.env`를 `os.environ`에 복사 | `4b37a3fe` · `b5e03802` |
 | import 시점에 고정된 플래그가 어긋남 | `neos/main.py`의 `IS_DEBUG`는 최초 import 때 확정 | `fe425578` |
 
 > 세 번째가 가장 잡기 어렵다. **모듈 최상단에서 `os.environ[...]`으로 앱 형태를
