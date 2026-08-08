@@ -119,4 +119,8 @@ class NodeSummary:
     key_claim_ids: list[str]
     confidence: float
     caveats: list[str]
+    # The question this answers, in the words it was asked (W3-i). Optional
+    # because `reduce_node` builds summaries before the orchestrator pairs
+    # them with the ledger's questions; `_child_summaries` fills it in.
+    question_text: str = ""
     conflicts: list[ConflictNote] = field(default_factory=list)

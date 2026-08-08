@@ -190,8 +190,17 @@ class Synthesizer:
         already-reduced hierarchical ``NodeSummary`` objects.
         """
         root_answer = root_summary.answer if root_summary is not None else ""
+        # The question comes before its answer (W3-i). A block used to be
+        # `- [{question_id}] {answer}`, which named the question only by an
+        # opaque id -- the composer could not tell what any answer was an
+        # answer *to*, and the report gate's "every resolved child question
+        # must be mentioned" check demanded text the composer had never been
+        # shown.
         child_blocks = [
-            f"- [{child.question_id}] {child.answer}"
+            f"- [{child.question_id}] 질문: {child.question_text}\n"
+            f"  답: {child.answer}"
+            if child.question_text
+            else f"- [{child.question_id}] {child.answer}"
             for child in child_summaries
         ]
         config = settings.config.deep_analysis

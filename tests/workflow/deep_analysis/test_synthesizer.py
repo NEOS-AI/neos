@@ -291,6 +291,44 @@ async def test_assemble_renders_required_sections_when_budget_exhausts():
 
 
 @pytest.mark.asyncio
+async def test_the_composer_is_told_which_question_each_answer_answers():
+    """W3-i: 조립 프롬프트에 질문 텍스트가 들어간 적이 없었다.
+
+    자식 블록은 `- [{question_id}] {answer}` 였다 -- 작성자는 어떤 답이
+    무엇에 대한 답인지 알 수 없었고, 게이트의 "resolved 자식 질문은 모두
+    언급돼야 한다" 검사는 작성자가 본 적 없는 문자열을 요구했다. 표본 #5 의
+    `6e65093e` 가 인용 비율 0.063 으로도 3/3 반려된 이유다.
+    """
+    seen = []
+
+    async def _capture(model, prompt, **kwargs):
+        seen.append(prompt)
+        return LLMResponse(
+            text="## 요약\n답\n\n## 출처",
+            input_tokens=1,
+            output_tokens=1,
+            model=model,
+        )
+
+    synth = Synthesizer(FakeLedger(), llm_call=_capture)
+    child = NodeSummary(
+        "child001",
+        "적용일은 2025-08-02 이다 [C:aaaaaaaa]",
+        [],
+        0.8,
+        [],
+        question_text="GPAI 의무의 적용 개시일은 언제인가?",
+    )
+
+    await synth.assemble(
+        NodeSummary("root0001", "루트 답", [], 0.8, []), [child], []
+    )
+
+    assert "GPAI 의무의 적용 개시일은 언제인가?" in seen[0]
+    assert "적용일은 2025-08-02 이다 [C:aaaaaaaa]" in seen[0]
+
+
+@pytest.mark.asyncio
 async def test_synthesizer_uses_the_injected_ceiling():
     """dev는 cap을 15배 줄이면서 합성 상한은 물려받았다.
 

@@ -950,7 +950,20 @@ class Orchestrator:
                 continue
             summary = summaries.get(child.id)
             if summary is not None:
-                out.append(summary)
+                # Carry the question's own wording into assembly (W3-i). The
+                # report gate requires every *resolved* child question to be
+                # mentioned, but the composer's input was
+                # `- [{question_id}] {answer}` -- it had never seen the
+                # question text it was being asked to reproduce, so the check
+                # could not be satisfied. Sample #5's `6e65093e` failed it
+                # 3/3 with an uncited ratio of 0.063, the best-cited run in
+                # the sample after the one that passed.
+                out.append(
+                    replace(
+                        summary,
+                        question_text=getattr(child, "text", "") or "",
+                    )
+                )
         return out
 
     async def _collect_caveats(
