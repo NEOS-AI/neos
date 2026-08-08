@@ -102,8 +102,3 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["neos*"]
-
-[tool.uv.workspace]
-members = [
-    "neos_evals",
-]
