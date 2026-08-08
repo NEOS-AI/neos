@@ -31,7 +31,7 @@
 | **A. 심층분석 하네스** | 🟢 **W1 완료 — LLM 리포트가 나온다** (2026-08-07 표본) | **W3(G3) 게이트 재판단.** 리포트는 나오는데 게이트가 6/6 run을 3회 전부 반려한다. `report_grading` 예약은 아직 0건 |
 | **B. 역할 기반 모델 라우팅** | ✅ 완료 · 안정 | 유지보수 모드. 카탈로그 불변식 지키기 |
 | **C. 프론트엔드** | ✅ job 마이그레이션 완료, ✅ 가시성 갭 해소(FE1·FE4) | §5.3의 저위험 잔여(FE2·FE3)와 신규 FE5·FE6·FE7 |
-| **D. 프레임워크 이탈·계측 통일** | 🟡 **D3a 완료** (`963730ee`) | **D1a 콜렉터 탈-LangChain**이 다음. 라이브 표본이 끝나 §11.0의 상호배타가 풀렸다 |
+| **D. 프레임워크 이탈·계측 통일** | 🟡 **D3a·D1a 완료** (`963730ee`·`d9681104`) | **D1b 워커 프로세스 영속화** — 지금 확장하면 레코드가 flush 지점을 못 만나 사라진다 (§11.1 장애물 ②) |
 
 **트랙 A 한 줄 요약 (2026-08-07 라이브 표본 `20260807T164924Z`로 갱신):**
 **마무리가 처음으로 출력을 냈다.** 574 run 동안 0건이던 `synth_pass`가 6 run에서
@@ -450,7 +450,7 @@ FE4가 이후 해소했다.
 | 🟢 | W1-m1 | `node_summary.prompt_chars`가 이제 **클램프된** 프롬프트를 잰다 — 이 경계 전후로 비교 불가. 비교하려면 `finalization_prompt_clamped`와 조인해야 한다 | A |
 | 🟢 | W1-m2 | `Synthesizer.assembly_input_allowance`는 외부에서 만든 Synthesizer를 주입하면 **전역** `synthesis_max_tokens`로 떨어진다(프로파일 값이 아니라). 프로덕션 경로는 일관되지만 주석은 이 경우를 부정한다 | A |
 | 🟢 | W1-m3 | `tests/workflow/deep_analysis/test_synthesizer.py`의 docstring이 옛 dev 프로파일(15x / 20,000)을 서술한다. 단언은 의존하지 않는다 | A |
-| 🟡 | **D1** | 데이터셋 콜렉터가 `neos/coding/`·`deep_analysis/`를 전혀 계측하지 않는다 (각 0곳). 게다가 프로세스 메모리 싱글턴이라 워커 프로세스 레코드는 유실된다 (§11.1) | D |
+| 🟡 | **D1b·D1c** | 콜렉터가 `neos/coding/`·`deep_analysis/`를 계측하지 않는다(각 0곳) · 프로세스 메모리 싱글턴이라 워커 레코드가 유실된다 (§11.1). **D1a(탈-LangChain)는 완료** `d9681104` | D |
 | 🟢 | **D2** | 멀티홉 2,468줄이 스킬 계약 밖에 있다 / citation 렌더 경로가 3곳에 흩어져 있다 (§11.2) | D |
 | 🔴 | **D3b** | langgraph 제거는 "삭제"가 아니라 **런타임 교체 + 체크포인트 자체 구현**이다 — `graph.py` 2,259줄 + 체크포인터 991줄 (§11.3) | D |
 | 🟡 | **D4** | `ModelProviderBase.create_llm()`이 `BaseLanguageModel`을 반환해 LangChain을 저장소 전체에 고정한다. 전환 시 §4.2 라우팅 불변식과 충돌 위험 (§11.4) | D×B |
@@ -899,10 +899,23 @@ deep_analysis는 job 서비스에서 돈다 — **둘 다 그 flush 지점을 �
 | c | 콜렉터 폐기 후 OTel span으로 대체 | 관찰가능성 스택과 합쳐지지만, 데이터셋 용도(재학습·평가 코퍼스)에는 span이 부적합하다 |
 
 **완료 기준:**
-- `neos/coding/`·`neos/workflow/deep_analysis/`의 LLM 호출이 `LLMCallRecord`로 남는다
-- 워커 프로세스에서 생성된 레코드가 `graph.py` flush 지점 없이 영속화된다
-- `TrackedLLM`이 `langchain_core` 임포트 없이 동작한다 — **D4의 선행 조건**
-- 계측 확장이 §6 ④(토큰 집계는 API `usage`만 사용)를 위반하지 않는다: 자체 추정 금지
+- `neos/coding/`·`neos/workflow/deep_analysis/`의 LLM 호출이 `LLMCallRecord`로 남는다 — ⬜ D1c
+- 워커 프로세스에서 생성된 레코드가 `graph.py` flush 지점 없이 영속화된다 — ⬜ D1b
+- `TrackedLLM`이 `langchain_core` 임포트 없이 동작한다 — ✅ **D1a 완료** (`d9681104`)
+- 계측 확장이 §6 ④(토큰 집계는 API `usage`만 사용)를 위반하지 않는다: 자체 추정 금지 — ✅ 회귀 가드 있음
+
+**D1a 결과 (2026-08-08).** 조사해 보니 §11.1이 적은 장애물 ①은 예상보다 얕았다 —
+`LLMCallRecord`는 **이미 프레임워크 중립**이었고(`input_messages: List[Dict]`·
+`output_text: str`·평범한 int), LangChain에 묶여 있던 것은 정본 스키마가 아니라
+`TrackedLLM`의 **어댑터**뿐이었다. `isinstance(BaseMessage)`·`isinstance(LLMResult)`
+두 곳과 타입 주석 다섯 곳을 형태 판정(`.content`·`.llm_output`·`.generations`)으로
+바꾸니 `rg langchain neos/utils/llm_wrapper.py`가 **0건**이 됐다.
+`create_tracked_llm` 호출부 79곳은 **한 줄도 바뀌지 않았다.**
+
+회귀 가드는 `tests/utils/test_llm_wrapper_decoupling.py`다. 모듈이 langchain을
+import하지 않는다는 것 자체를 단언하고, 역할 없는 메시지(`CanonicalMessage` 모양)와
+LangChain 모양이 같은 필드를 내는지, usage가 없을 때 0을 지어내지 않고 `None`을
+내는지(§6 ④)를 고정한다.
 
 ### 11.2 D2 — 멀티홉 검색·citation 고유 스킬화
 
