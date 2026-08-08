@@ -214,6 +214,35 @@ def prompt_input_bound(model: str, prompt: str) -> int:
     )
 
 
+def _record_dataset_call(
+    model: str,
+    request: dict[str, Any],
+    stage: str,
+    response: LLMResponse,
+) -> None:
+    """이 호출을 데이터셋 콜렉터에 남긴다 (D1c).
+
+    `_budgeted_dispatch` 는 deep_analysis 의 **모든** LLM 호출이 지나가는
+    한 곳이다 -- `call_llm` 도 `call_messages` 도 여기로 온다. 그래서 계측을
+    여기 한 번만 붙이면 이 계층 전체가 덮인다.
+
+    토큰은 `LLMResponse` 가 API `usage` 에서 그대로 옮겨 온 값이다(§A5).
+    `record_llm_call` 이 절대 던지지 않으므로 여기서도 감싸지 않는다.
+    """
+    from neos.dataset.adapters import record_llm_call
+
+    record_llm_call(
+        provider="anthropic",
+        model=model,
+        workflow_step=stage,
+        input_messages=list(request.get("messages") or []),
+        output_text=response.text,
+        input_tokens=response.input_tokens,
+        output_tokens=response.output_tokens,
+        custom_metadata={"stop_reason": response.stop_reason},
+    )
+
+
 async def _budgeted_dispatch(
     *,
     model: str,
@@ -225,6 +254,7 @@ async def _budgeted_dispatch(
     budget = active_token_budget()
     if budget is None:
         response = await invoke(max_tokens, _DispatchState())
+        _record_dataset_call(model, request, stage, response)
         return replace(response, granted_max_output_tokens=max_tokens)
 
     reservation = await budget.reserve(
@@ -243,6 +273,7 @@ async def _budgeted_dispatch(
             await budget.release(reservation)
         raise
 
+    _record_dataset_call(model, request, stage, response)
     await budget.settle(
         reservation,
         response.input_tokens + response.output_tokens,
