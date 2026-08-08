@@ -1,7 +1,26 @@
+from dataclasses import dataclass, field
+from typing import Any
+
 from neos.workflow.harness.adapters.neos_evals import (
     grader_result_to_harness_check,
 )
-from neos_evals.graders.base import GraderResult
+
+
+@dataclass
+class GraderResult:
+    """`neos_evals.graders.base.GraderResult` 를 대신하는 최소 스텁.
+
+    `neos_evals` 패키지는 2026-08-08 에 저장소에서 제거됐다(`6b397713`).
+    어댑터(`adapters/neos_evals.py`)는 그 패키지를 import 하지 않고 `Any` 를
+    형태로만 읽으므로 살아 있다 -- 그래서 이 테스트도 살릴 수 있다.
+    스텁이 노출하는 필드가 곧 어댑터가 의존하는 계약이다.
+    """
+
+    grader_id: str
+    score: float
+    passed: bool
+    feedback: str = ""
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 def test_converts_grader_result_to_harness_check_result():

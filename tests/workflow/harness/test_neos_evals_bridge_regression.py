@@ -1,3 +1,6 @@
+from dataclasses import dataclass, field
+from typing import Any
+
 from neos.workflow.harness.adapters.neos_evals import (
     grader_result_to_harness_check,
 )
@@ -8,7 +11,18 @@ from neos.workflow.harness.models import (
     HarnessVerdict,
 )
 from neos.workflow.harness.runner import HarnessRunner
-from neos_evals.graders.base import GraderResult
+
+
+@dataclass
+class GraderResult:
+    """`neos_evals` 제거(`6b397713`) 이후의 스텁. 자세한 내용은
+    `test_neos_evals_adapter.py` 의 같은 클래스 주석을 볼 것."""
+
+    grader_id: str
+    score: float
+    passed: bool
+    feedback: str = ""
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 class StaticChecker:
