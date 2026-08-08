@@ -7,6 +7,7 @@ LLM 호출 추적 및 임베딩 데이터셋 생성 모듈
 from .models import LLMCallRecord, DatasetMetadata
 from .collector import LLMCallCollector, track_llm_call, llm_call_collector
 from .storage import DatasetManager, dataset_manager
+from .record_sink import RecordSink, records_root
 
 # 임베딩 데이터셋 수집 컴포넌트
 from .embedding_models import EmbeddingRecord
@@ -23,6 +24,8 @@ __all__ = [
     "DatasetManager",
     "llm_call_collector",
     "dataset_manager",
+    "RecordSink",
+    "records_root",
     # 임베딩 데이터셋 수집
     "EmbeddingRecord",
     "EmbeddingCollector",

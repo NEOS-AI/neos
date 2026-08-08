@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 import asyncio
 
 from .models import LLMCallRecord
+from .record_sink import RecordSink, records_root
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +34,14 @@ class LLMCallCollector:
         if not hasattr(self, 'initialized'):
             self._records = []
             self._enabled = True
+            self._sink = RecordSink(records_root())
             self.initialized = True
             logger.info("LLM Call Collector initialized")
+
+    @property
+    def sink_path(self):
+        """이 프로세스가 쓰고 있는 파일 -- 운영 중 어디를 봐야 하는지."""
+        return self._sink.path
 
     def enable(self) -> None:
         """수집 활성화"""
@@ -51,9 +58,22 @@ class LLMCallCollector:
         return self._enabled
 
     def add_record(self, record: LLMCallRecord) -> None:
-        """레코드 추가"""
+        """레코드 추가 -- 메모리와 디스크 양쪽에.
+
+        디스크 쓰기가 여기 있는 것이 D1b 의 요점이다. 예전에는 영속화가
+        `graph.py` 의 `_auto_save_dataset()` 한 곳에서만 일어났고, Celery
+        워커와 deep-analysis job 서비스는 그 지점을 지나가지 않는 별도
+        프로세스라 거기서 만든 레코드가 통째로 사라졌다(§11.1 장애물 ②).
+        이제 `add_record` 자체가 영속화 지점이므로 **어느 프로세스에서 돌든
+        상관이 없고, 새 진입점이 flush 를 기억할 필요도 없다.**
+
+        메모리 리스트는 그대로 둔다 -- `get_statistics()`·`get_records()` 와
+        `_auto_save_dataset()` 의 기존 산출물이 그것을 읽는다. 디스크가
+        정본이고 메모리는 이 프로세스가 본 것의 캐시다.
+        """
         if self._enabled:
             self._records.append(record)
+            self._sink.append(record)
             logger.debug(f"Added LLM call record: {record.call_id} (total: {len(self._records)})")
 
 
