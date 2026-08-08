@@ -424,3 +424,35 @@ async def test_report_graded_omits_diagnostics_when_the_grader_reports_none():
     assert _graded(ledger)[0] == {
         "ok": False, "code": "E_ORPHAN_CITE", "attempt": 0
     }
+
+
+@pytest.mark.asyncio
+async def test_the_harness_guarantees_the_limits_section_the_model_lost():
+    """W3-e: 필수 마지막 절은 하네스가 보장한다.
+
+    조립 출력은 세 표본 54회 전부 상한에 정확히 붙어 잘렸고(확장 재시도
+    이후에도), 프롬프트가 마지막에 요구하는 `## 한계와 미확인 사항` 이 매번
+    죽었다. 두 표본 연속으로 **인용 기준을 넘긴 유일한 시도**가 그 절이
+    없다는 이유로 반려됐다(`dd8dc763` #2 ratio 0.267, `a38d441a` #2 ratio
+    0.191, 임계값 0.20).
+
+    `## 출처` 는 CitationRenderer 가 붙이므로 잘림과 무관하게 항상 있다.
+    한계 절만 모델에게 맡겨져 있었다 -- 그런데 그 내용(`caveats`)은
+    `_finalize` 가 이미 손에 들고 있다. 구조적 완전성은 하네스의 일이지
+    모델의 일이 아니다.
+    """
+    ledger = FakeLedger()
+
+    class _TruncatedSynth(FakeSynth):
+        async def assemble(self, root_summary, child_summaries, caveats):
+            self.assemble_calls += 1
+            # 본문 중간에서 잘린 모양 -- 한계 절에 닿지 못했다.
+            return "## 요약\n답.\n\n## 본문\n근거가 이어지다가 잘"
+
+    synth = _TruncatedSynth()
+    renderer = FlakyRenderer(fail_times=0)
+    orch = _orch(ledger, synth, renderer, grader=OkGrader())
+
+    report = await orch._finalize("root0001")
+
+    assert "## 한계와 미확인 사항" in report

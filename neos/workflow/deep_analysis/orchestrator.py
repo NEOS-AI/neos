@@ -46,6 +46,39 @@ class SystemicWorkerFailure(RuntimeError):
     """Every assigned worker failed for too many consecutive rounds."""
 
 
+_LIMITS_HEADING = "## 한계와 미확인 사항"
+
+
+def _ensure_limits_section(report: str, caveats: list[str]) -> str:
+    """Guarantee the report's required limits section, from what we already know.
+
+    The prompt asks the model for it (`final_compose.md`, 필수 섹션 3/4), and the
+    model never got that far. Measured across three live samples: 54 of 54
+    assemblies stopped exactly at their output ceiling -- including after
+    W3-d's expansion retry, which fired 18 times and was cut 18 times. The
+    section sits near the end of the template, so truncation kills it first,
+    every time.
+
+    Twice now that has been the only thing standing between a report and the
+    gate: `dd8dc763` #2 (uncited 0.267) and `a38d441a` #2 (uncited 0.191,
+    under the 0.20 threshold) both cleared the citation bar and were rejected
+    with `E_REPORT_NO_LIMITS`.
+
+    `## 출처` never had this problem because CitationRenderer appends it --
+    the harness owns it. The limits section is the same kind of obligation
+    and its content (`caveats`) is already in `_finalize`'s hand, gathered by
+    `_collect_caveats`. Asking a truncated model to dictate back something we
+    already hold is the mistake; structural completeness is the harness's job.
+
+    Nothing is invented: with no caveats the section says so explicitly
+    rather than implying a clean bill of health.
+    """
+    if _LIMITS_HEADING in report:
+        return report
+    body = "\n".join(f"- {item}" for item in caveats) or "- (기록된 미확인 항목 없음)"
+    return f"{report.rstrip()}\n\n{_LIMITS_HEADING}\n{body}\n"
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -1019,6 +1052,7 @@ class Orchestrator:
                     },
                 )
                 continue  # AC-c: orphan citation → re-assemble
+            report = _ensure_limits_section(report, caveats)
             last_rendered = report
             verdict = (
                 await self.report_grader.grade(report, root_id)
