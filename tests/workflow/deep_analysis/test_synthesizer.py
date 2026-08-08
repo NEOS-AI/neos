@@ -157,6 +157,30 @@ async def _refused_for_input_bound(*args, **kwargs):
 
 
 @pytest.mark.asyncio
+async def test_a_degraded_leaf_keeps_its_verified_claims_and_their_markers():
+    """W3-b: 강등된 **잎** 노드가 검증 클레임을 통째로 버리고 있었다.
+
+    `_degraded_summary` 는 자식 답변을 이어붙이는데 잎에는 자식이 없다 --
+    그래서 답변이 빈 문자열이 됐고, 그 잎의 verified claim 은 `[C:...]` 마커가
+    붙은 산문이 되지 못한 채 사라졌다. 2026-08-07 표본에서 리덕션의 67~79% 가
+    이렇게 강등된 5개 run 은 최종 리포트에 마커를 0~8개밖에 싣지 못했고,
+    18% 만 강등된 run 하나만 60개를 실었다. 인용할 것이 없으니 게이트는
+    18회 전부 반려했다.
+    """
+    ledger = FakeLedger()
+    synth = Synthesizer(ledger, json_call=_exhausted)
+
+    summary = await synth.reduce_node(ledger.child, [])
+
+    assert "[C:c1a1c1a1]" in summary.answer
+    assert "Verified fact" in summary.answer
+    # 프롬프트 비계(evidence 원문·신뢰도)는 사용자 산문에 실리지 않는다.
+    assert "<evidence>" not in summary.answer
+    assert "verbatim excerpt" not in summary.answer
+    assert summary.key_claim_ids == ["c1a1c1a1"]
+
+
+@pytest.mark.asyncio
 async def test_a_degraded_summary_names_the_refusal_it_actually_hit():
     ledger = FakeLedger()
     synth = Synthesizer(ledger, json_call=_refused_for_input_bound)

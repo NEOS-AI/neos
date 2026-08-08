@@ -342,11 +342,14 @@ class Synthesizer:
             )
         except TokenBudgetExhausted as exc:
             return await self._degraded_summary(
-                question, child_summaries, _degradation_reason(exc)
+                question, child_summaries, _degradation_reason(exc), pairs
             )
         except Exception:
             return await self._degraded_summary(
-                question, child_summaries, "node_summary_unparseable"
+                question,
+                child_summaries,
+                "node_summary_unparseable",
+                pairs,
             )
         await self.ledger.log(
             "node_summary",
@@ -396,7 +399,11 @@ class Synthesizer:
         )
 
     async def _degraded_summary(
-        self, question, child_summaries: list[NodeSummary], reason: str
+        self,
+        question,
+        child_summaries: list[NodeSummary],
+        reason: str,
+        pairs: list | None = None,
     ) -> NodeSummary:
         """Fall back to joining the children's answers, and say so.
 
@@ -405,6 +412,21 @@ class Synthesizer:
         they all succeeded. That distinction is exactly what tells whether
         isolating the report tier worked: reductions are allowed to degrade,
         the assembly is not.
+
+        `pairs` is the node's own verified claims, and it exists because
+        joining children is not a fallback for a **leaf**: a leaf has no
+        children, so the join produced `""` and the leaf's verified claims
+        vanished. Measured 2026-08-07: most degraded reductions were leaves
+        (8 of 10, 11 of 14, 8 of 11 ...), the runs that degraded 67-79% of
+        their reductions shipped 0-8 citation markers, and the one that
+        degraded 18% shipped 60. With nothing to cite the report gate
+        rejected all 18 attempts.
+
+        The deterministic answer keeps `[C:...]` markers so CitationRenderer
+        can still resolve them -- these are verified claims by construction,
+        so they cannot orphan. It deliberately drops the prompt scaffolding
+        (evidence excerpts, confidence) that `reduce_node` builds for the
+        model: that is input for an LLM, not prose for a reader.
         """
         await self.ledger.log(
             "node_reduction_degraded",
@@ -415,10 +437,19 @@ class Synthesizer:
                 "reason": reason,
             },
         )
+        answer = " ".join(
+            c.answer for c in child_summaries if c.answer.strip()
+        )
+        claim_ids: list[str] = []
+        if not answer and pairs:
+            answer = " ".join(
+                f"[C:{claim.id}] {claim.text}" for claim, _evidence in pairs
+            )
+            claim_ids = [claim.id for claim, _evidence in pairs]
         return NodeSummary(
             question_id=question.id,
-            answer=" ".join(c.answer for c in child_summaries) or "",
-            key_claim_ids=[],
+            answer=answer,
+            key_claim_ids=claim_ids,
             confidence=0.0,
             caveats=[reason],
             conflicts=[],
