@@ -964,6 +964,36 @@ class DeepAnalysisConfig(StrictConfigModel):
     # 마지막 seq를 ?after=로 넘겨 재접속하면 이어서 받는다.
     events_stream_idle_timeout: float = 300.0
 
+    def grading_floor_tokens(self, synthesis_max_tokens: int) -> int:
+        """The INNERMOST floor: one judge call that `report_assembly` cannot
+        touch (token_budget.GRADING_STAGES).
+
+        Sized for **one** call, not the whole retry loop. The loop's earlier
+        gradings are welcome to run on the tier above; what this guarantees
+        is that the *last* draft -- the one that actually ships -- can still
+        be judged. That was the failure: all three gate passes in the
+        ledger's history came from the judge starving on the final attempt,
+        which `ReportGrader.grade` degrades to a pass.
+
+        `truncation_retry_multiplier` is in the formula because a judge call
+        is really up to two: `call_json` retries a truncated response with a
+        doubled ceiling, visible in the ledger as `report_grading`
+        reservations of 800 then 1600. The floor that ignored the retry
+        could fund the first call and not the second.
+
+        Sample #6 measured judge prompts of 5,900-17,084 tokens against
+        3,555-9,443 remaining, so this is checked against reality rather
+        than derived and hoped for: dev (1200) gives 13,600 and prod (4000)
+        gives 41,600, covering both.
+        """
+        return int(
+            self.truncation_retry_multiplier
+            * (
+                self.grading_input_ratio * synthesis_max_tokens
+                + self.report_judge_max_output_tokens
+            )
+        )
+
     def report_floor_tokens(self, synthesis_max_tokens: int) -> int:
         """The INNER floor tier: `report_retry_cap + 1` rounds of one
         assembly plus one judge, counted in the input+output currency
@@ -974,6 +1004,16 @@ class DeepAnalysisConfig(StrictConfigModel):
         re-assembles up to `report_retry_cap` times and grades every draft,
         so a tier covering one round leaves the later rounds to fail open --
         the failure this split exists to end.
+
+        Known undersized, deliberately left (2026-08-09). The `assembly`
+        term assumes `input_bound ~= ratio * synthesis_max_tokens`; sample #6
+        measured assembly reservations totalling 34,984-134,983 per run
+        against a whole tier of 34,800 (dev). Correcting it the way
+        `grading_floor_tokens` is corrected would push the floor past
+        `finalization_floor_warn_ratio` of the cap, which is a decision about
+        the cap and the retry policy -- not a formula tweak -- so it is
+        recorded here rather than quietly applied. `grading_floor_tokens`
+        below is what stops the judge from paying for it in the meantime.
         """
         assembly = int(
             (self.assembly_input_ratio + 1) * synthesis_max_tokens

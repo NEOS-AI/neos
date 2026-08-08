@@ -196,6 +196,7 @@ async def test_investigation_stopped_at_floor_is_recorded_once():
         "reserved_tokens": 0,
         "floor_tokens": 20,
         "report_floor_tokens": 0,
+        "grading_floor_tokens": 0,
     }
     assert not any(e[0] == "token_budget_exhausted" for e in ledger.events)
     assert (

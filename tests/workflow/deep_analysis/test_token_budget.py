@@ -183,3 +183,54 @@ async def test_the_boundary_between_the_last_grant_and_the_first_refusal():
             request, 2_048, stage="worker_analysis", model="m"
         )
     assert excinfo.value.cause == "input_bound"
+
+
+@pytest.mark.asyncio
+async def test_assembly_cannot_spend_the_judge_s_floor():
+    """리포트 층에 하위 배분이 없어 조립이 판정자 몫을 먹고 있었다.
+
+    `_finalize` 는 매 시도 조립을 먼저 부르고(확장 재시도까지 2회), 둘 다
+    같은 `remaining_tokens` 에서 꺼냈다. 마지막 시도에서 층이 말라 판정자가
+    예약에 실패하면 `ReportGrader.grade` 가 그것을 **통과**로 바꾼다 --
+    원장의 게이트 통과 3건이 전부 그 모양이다.
+    """
+    budget = TokenBudget(
+        10_000,
+        floor_tokens=6_000,
+        report_floor_tokens=6_000,
+        grading_floor_tokens=4_000,
+        min_viable_output_tokens=100,
+    )
+
+    # 조립은 판정자 몫 4,000 을 뺀 6,000 까지만 본다.
+    assembly = await budget.reserve({}, 9_000, stage="report_assembly", model="m")
+    assert assembly.max_output_tokens < 9_000
+    assert budget.available_for_assembly == budget.remaining_tokens - 4_000
+
+
+@pytest.mark.asyncio
+async def test_the_judge_still_reserves_after_assembly_drained_the_tier():
+    """세 번째 티어의 존재 이유 그 자체."""
+    budget = TokenBudget(
+        10_000,
+        floor_tokens=6_000,
+        report_floor_tokens=6_000,
+        grading_floor_tokens=4_000,
+        min_viable_output_tokens=100,
+    )
+    # 조립이 티어를 최대한 긁어간다.
+    await budget.reserve({}, 100_000, stage="report_assembly", model="m")
+
+    # 판정자는 여전히 예약할 수 있어야 한다 -- 아무도 이 몫에 닿지 못한다.
+    grading = await budget.reserve({}, 800, stage="report_grading", model="m")
+
+    assert grading.max_output_tokens == 800
+
+
+def test_the_floors_must_nest():
+    """조사 ⊃ 리포트 ⊃ 채점. 뒤집히면 안쪽 층이 바깥층을 넘어선다."""
+    with pytest.raises(ValueError, match="grading_floor_tokens"):
+        TokenBudget(
+            10_000, floor_tokens=5_000,
+            report_floor_tokens=1_000, grading_floor_tokens=2_000,
+        )
