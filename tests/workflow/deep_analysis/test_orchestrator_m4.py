@@ -166,7 +166,12 @@ async def test_orphan_citation_retries_assembly_then_succeeds():
     assert "DRAFT-2" in report  # second assembly is the one that shipped
     assert synth.assemble_calls == 2
     graded = _graded(ledger)
-    assert graded[0] == {"ok": False, "code": "E_ORPHAN_CITE", "attempt": 0}
+    assert graded[0] == {
+        "ok": False,
+        "code": "E_ORPHAN_CITE",
+        "attempt": 0,
+        "orphan_claim_id": "aaaaaaaa",
+    }
     assert graded[1] == {"ok": True, "attempt": 1}
     assert ledger.completed
 
@@ -339,6 +344,21 @@ async def test_an_orphan_citation_gets_its_own_hint_not_a_stale_one():
     assert synth.hints_seen[0] == []
     assert "claim id" in synth.hints_seen[1][0]
     assert synth.hints_seen[2] == synth.hints_seen[1]
+
+
+@pytest.mark.asyncio
+async def test_an_orphan_rejection_records_which_claim_orphaned():
+    """표본 #6 이 원장 역사상 첫 `E_ORPHAN_CITE` 3건을 냈는데, 어느 클레임이
+    원인인지 사후에 알 수 없었다 -- 이벤트가 코드만 적었기 때문이다.
+    `CitationRenderer` 는 claim id 를 손에 쥔 채로 raise 한다."""
+    ledger = FakeLedger()
+    orch = _orch(
+        ledger, FakeSynth(), FlakyRenderer(fail_times=99), grader=OkGrader()
+    )
+
+    await orch._finalize("root0001")
+
+    assert all(p["orphan_claim_id"] == "aaaaaaaa" for p in _graded(ledger))
 
 
 @pytest.mark.asyncio
@@ -572,7 +592,11 @@ async def test_report_graded_event_persists_the_judge_budget_marker():
 @pytest.mark.asyncio
 async def test_report_graded_omits_diagnostics_when_the_grader_reports_none():
     """The orphan-citation path never reached the gate, so it measured
-    nothing -- an empty diagnostics dict must not add empty keys."""
+    nothing -- an empty diagnostics dict must not add empty keys.
+
+    `orphan_claim_id` is not a diagnostic: it is the failure's cause, which
+    the renderer already had in hand and the event used to drop.
+    """
     ledger = FakeLedger()
     orch = _orch(ledger, FakeSynth(), FlakyRenderer(fail_times=1),
                  grader=OkGrader())
@@ -580,7 +604,10 @@ async def test_report_graded_omits_diagnostics_when_the_grader_reports_none():
     await orch._finalize("root0001")
 
     assert _graded(ledger)[0] == {
-        "ok": False, "code": "E_ORPHAN_CITE", "attempt": 0
+        "ok": False,
+        "code": "E_ORPHAN_CITE",
+        "attempt": 0,
+        "orphan_claim_id": "aaaaaaaa",
     }
 
 

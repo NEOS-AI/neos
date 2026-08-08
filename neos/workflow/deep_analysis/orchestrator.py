@@ -1143,7 +1143,15 @@ class Orchestrator:
             last = draft
             try:
                 report = await self.citation_renderer.render(draft)
-            except OrphanCitationError:
+            except OrphanCitationError as exc:
+                # The offending claim id, or the ledger cannot say what went
+                # wrong. Sample #6 produced the first three E_ORPHAN_CITE
+                # rejections in the ledger's history, all in one run
+                # (`36903adc`), and the cause was not recoverable after the
+                # fact: replaying the cassette showed that run's drafts cited
+                # only its own *verified* claims, so the recorded event ruled
+                # nothing in or out. `CitationRenderer` raises with the claim
+                # id already in hand -- it just was not being written down.
                 await self.ledger.log(
                     "report_graded",
                     root_id,
@@ -1151,6 +1159,7 @@ class Orchestrator:
                         "ok": False,
                         "code": OrphanCitationError.code,
                         "attempt": attempt,
+                        "orphan_claim_id": exc.claim_id,
                     },
                 )
                 # This branch skips grading, so without its own hint the
