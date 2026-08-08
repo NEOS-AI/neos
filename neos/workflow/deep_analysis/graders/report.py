@@ -143,6 +143,13 @@ def _uncited_stats(body: str) -> tuple[float, int, int, list[str]]:
 _MAX_HINTED_SENTENCES = 8
 _MAX_HINT_CHARS = 160
 
+# The judge's rationale is model prose entering an event payload, so it is
+# bounded. It is the judge's own assessment of a rendered report -- not
+# fetched source text -- so the no-raw invariant this grader documents is
+# untouched. The booleans beside it carry the part that aggregates; this is
+# for reading one rejection.
+_MAX_RATIONALE_CHARS = 400
+
 
 def _uncited_hints(offenders: list[str]) -> list[str]:
     """Turn uncited sentences into instructions the next attempt can act on.
@@ -323,21 +330,39 @@ class ReportGrader:
         rationale = str(data.get("rationale", ""))
 
         if not answers_question or not strength_ok:
-            # The judge's rationale is the only account of *why* a draft that
-            # cleared every deterministic check was still refused. It reached
-            # nowhere before: the orchestrator logs `code` and `diagnostics`,
-            # never `detail`, so all 3 recorded E_REPORT_AGENTIC rejections
-            # say only that the judge said no. Carrying it as a hint at least
-            # spends it on the retry.
+            # The judge's account of *why* a draft that cleared every
+            # deterministic check was still refused. It reached nowhere
+            # before: the orchestrator logs `code` and `diagnostics`, never
+            # `detail`, so every recorded E_REPORT_AGENTIC rejection said
+            # only that the judge said no.
+            #
+            # The two booleans matter more than the prose. "Does not answer
+            # the question" and "the evidence is too weak" are different
+            # failures with different fixes, and they are structured -- they
+            # aggregate across runs, which a rationale string cannot.
+            # Sample #6 made this urgent: the judge became the dominant
+            # rejection (8 of 18 gradings, up from 3) and not one of those 8
+            # can be told apart today.
             return Verdict(
                 ok=False,
                 code="E_REPORT_AGENTIC",
                 detail=rationale,
+                diagnostics={
+                    "judge": "ran",
+                    "judge_answers_question": answers_question,
+                    "judge_strength_ok": strength_ok,
+                    "judge_rationale": rationale[:_MAX_RATIONALE_CHARS],
+                },
                 revision_hints=(
                     [f"판정자 반려 사유: {rationale}"] if rationale else []
                 ),
             )
-        return Verdict(ok=True)
+        # An approving judge has to say so. Recording nothing here is what
+        # made a real approval indistinguishable in the ledger from the
+        # degraded fallbacks above -- and sample #6's two gate passes were
+        # both `judge: budget_exhausted`, so "the judge approved" and "the
+        # judge never ran" is exactly the distinction that needs to survive.
+        return Verdict(ok=True, diagnostics={"judge": "ran"})
 
     async def grade(self, report: str, root_id: str) -> Verdict:
         deterministic = await self.grade_deterministic(report, root_id)

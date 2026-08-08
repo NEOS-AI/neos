@@ -309,6 +309,71 @@ async def test_agentic_passes_when_both_true():
 
 
 @pytest.mark.asyncio
+async def test_a_judge_rejection_says_which_of_its_two_checks_failed():
+    """표본 #6 에서 판정자가 지배적 반려 사유가 됐다 (18회 중 8회, 직전 3회).
+    그런데 8건 중 어느 것도 서로 구분되지 않았다 -- 이벤트에 `code` 밖에
+    없었기 때문이다.
+
+    "질문에 답하지 않았다" 와 "근거가 약하다" 는 고치는 방법이 다른 별개의
+    실패다. 불리언은 run 을 가로질러 집계되지만 rationale 문자열은 그럴 수
+    없으므로, 산문보다 이 둘이 먼저다.
+    """
+    judge = FakeJudge(
+        answers_question=False, strength_ok=True, rationale="질문을 비껴갔다"
+    )
+    grader = ReportGrader(FakeLedger(), judge_model="claude-j", llm_client=judge)
+
+    verdict = await grader.grade_agentic(_clean_report(), "루트 질문")
+
+    assert verdict.diagnostics["judge"] == "ran"
+    assert verdict.diagnostics["judge_answers_question"] is False
+    assert verdict.diagnostics["judge_strength_ok"] is True
+    assert verdict.diagnostics["judge_rationale"] == "질문을 비껴갔다"
+
+
+@pytest.mark.asyncio
+async def test_an_approving_judge_is_not_silent():
+    """승인이 아무것도 남기지 않으면, 원장에서 **판정자가 돌아 승인한 것**과
+    **판정자가 아예 못 돈 것**이 구별되지 않는다.
+
+    표본 #5·#6 의 게이트 통과 3건이 전부 `judge=budget_exhausted` 였다 --
+    바로 이 구분이 살아남아야 S2 를 제대로 읽을 수 있다.
+    """
+    judge = FakeJudge(answers_question=True, strength_ok=True)
+    grader = ReportGrader(FakeLedger(), judge_model="claude-j", llm_client=judge)
+
+    approved = await grader.grade_agentic(_clean_report(), "루트 질문")
+
+    assert approved.ok is True
+    assert approved.diagnostics["judge"] == "ran"
+
+    degraded = GarbageJudge(answers_question=True, strength_ok=True)
+    fallback = await ReportGrader(
+        FakeLedger(), judge_model="claude-j", llm_client=degraded
+    ).grade_agentic(_clean_report(), "루트 질문")
+
+    assert fallback.ok is True
+    assert fallback.diagnostics["judge"] != approved.diagnostics["judge"]
+
+
+@pytest.mark.asyncio
+async def test_a_long_judge_rationale_is_bounded_in_the_event():
+    """모델 산문이 이벤트 페이로드로 들어가므로 상한이 있어야 한다.
+    (판정자가 렌더된 리포트에 대해 스스로 내린 평가이지 가져온 원문이
+    아니므로 no-raw 불변식과는 무관하다.)"""
+    judge = FakeJudge(
+        answers_question=True, strength_ok=False, rationale="가" * 2000
+    )
+    grader = ReportGrader(FakeLedger(), judge_model="claude-j", llm_client=judge)
+
+    verdict = await grader.grade_agentic(_clean_report(), "루트 질문")
+
+    assert len(verdict.diagnostics["judge_rationale"]) == 400
+    # 프로세스 안에서 쓰는 `detail`/힌트는 자르지 않는다 -- 재시도는 전부 본다.
+    assert len(verdict.detail) == 2000
+
+
+@pytest.mark.asyncio
 async def test_agentic_unparseable_judge_degrades_to_pass():
     judge = GarbageJudge(answers_question=True, strength_ok=True)
     grader = ReportGrader(FakeLedger(), judge_model="claude-j", llm_client=judge)
