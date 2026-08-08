@@ -5,7 +5,7 @@ from __future__ import annotations
 from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
-from .llm import call_json, call_llm
+from .llm import call_json, call_text
 from .models import ConflictNote, NodeSummary
 from .prompt_clamp import clamp_prompt
 from .prompt_loader import render
@@ -34,7 +34,10 @@ class Synthesizer:
         self,
         ledger,
         *,
-        llm_call=call_llm,
+        # `call_text` 는 잘린 조립에 한 번 더 큰 시도를 준다. 예전 기본값
+        # `call_llm` 은 잘림을 기록만 했고, 그래서 조립만 회복하지 못했다
+        # (2026-08-08 표본 #2: 18/18 잘림, 필수 마지막 절이 매번 소실).
+        llm_call=call_text,
         json_call=call_json,
         llm_client=None,
         cassette=None,
