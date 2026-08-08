@@ -51,7 +51,10 @@ _LIMITS_SCORING_BOUNDARY = re.compile(
 # 2026-08-08 (sample #4): 1-7 of each run's uncited items were heading
 # fragments, and excluding them moved `93795eaf` 0.348 -> 0.167 and
 # `2ff4761c` 0.333 -> 0.143, both under the 0.20 threshold.
-_HEADING_LINE = re.compile(r"^#{1,6}\s")
+#
+# Up to three leading spaces, per CommonMark. Applied to whole *lines* before
+# any sentence splitting -- see `_uncited_stats`.
+_HEADING_LINE = re.compile(r"^ {0,3}#{1,6}\s")
 
 
 def _report_body(report: str) -> str:
@@ -94,12 +97,25 @@ def _uncited_stats(body: str) -> tuple[float, int, int]:
     recorded rejections stored only the code and so cannot distinguish them.
     """
 
-    sentences = _sentences(body)
+    # Headings come out *before* splitting, not after. `_sentences` cuts on
+    # sentence-terminator punctuation, and a numbered heading carries one:
+    # "### 2. 기준일(2026년 7월 19일) 시점의 상태" became
+    # ["### 2.", "기준일(2026년 7월 19일) 시점의 상태"], and the second
+    # fragment no longer starts with `#`, so filtering the *fragments* let it
+    # through to be scored as an uncited assertion.
+    #
+    # W3-f filtered fragments and looked correct because its cases were
+    # "### 1. 배경" -- the remainder held no digit and no Latin proper noun,
+    # so it fell out of the denominator by accident. Any heading whose title
+    # names a year or a product leaked. Measured 2026-08-09 over sample #5's
+    # cassette: 1 of 11 reports crossed back under the threshold
+    # (`94b0483c` 0.208 -> 0.116).
+    prose = "\n".join(
+        line for line in body.splitlines() if not _HEADING_LINE.match(line)
+    )
+    sentences = _sentences(prose)
     assertions = [
-        s
-        for s in sentences
-        if not _HEADING_LINE.match(s)
-        and (_DIGIT.search(s) or _PROPER_NOUN.search(s))
+        s for s in sentences if _DIGIT.search(s) or _PROPER_NOUN.search(s)
     ]
     if not assertions:
         return 0.0, 0, 0

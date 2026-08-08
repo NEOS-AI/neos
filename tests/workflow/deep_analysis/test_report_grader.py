@@ -559,6 +559,38 @@ async def test_a_markdown_heading_is_not_a_factual_assertion():
 
 
 @pytest.mark.asyncio
+async def test_a_numbered_heading_is_excluded_by_its_whole_line():
+    """W3-g: 위 W3-f 테스트는 통과했지만 제외는 절반만 작동하고 있었다.
+
+    `_sentences` 가 `_HEADING_LINE` 보다 **먼저** 돌고, 서수의 마침표에서
+    문장을 자른다. `### 2. 기준일(2026년 7월 19일) 시점의 상태` 는
+    `['### 2.', '기준일(2026년 7월 19일) 시점의 상태']` 가 되고, 뒷조각에는
+    `#` 이 없으므로 헤딩 제외를 빠져나간 뒤 `_DIGIT` 에 걸려 인용 없는 주장이
+    된다.
+
+    W3-f 가 통하는 것처럼 보인 이유는 그 사례가 `### 1. 배경` 이었기 때문이다 --
+    `배경` 은 숫자도 라틴 대문자도 없어 우연히 분모에 들지 않았다. 제목에 연도나
+    고유명사가 들어가는 순간 새기 시작한다.
+
+    2026-08-09 표본 #5 카세트 실측: 제목 조각을 빼면 리포트 11건 중 1건이
+    반려 → 통과로 바뀌고(0.208 → 0.116), 그 run 이 `94b0483c` 다.
+    """
+    report = (
+        "## 본문\n"
+        "### 2. 기준일(2026년 7월 19일) 시점의 상태\n"
+        "### 4. GPAI 의무의 적용시점\n"
+        "2024년 8월 1일에 발효되었다[1].\n\n"
+        "## 한계와 미확인 사항\n없음.\n"
+    )
+
+    verdict = await _grader(FakeLedger()).grade_deterministic(report, "root0001")
+
+    # 제목 둘 다 분모 밖 -- 인용된 문장 하나만 남는다.
+    assert verdict.diagnostics["uncited_assertions"] == 1
+    assert verdict.diagnostics["uncited_count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_the_limits_section_is_not_scored_for_citations():
     """W3-f: 한계 절은 **검증하지 못한 것들의 목록**이다.
 
