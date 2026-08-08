@@ -1,6 +1,6 @@
 # Coding Agent 작업 재개 문서
 
-**작성일:** 2026-07-25
+**작성일:** 2026-07-25 · **최종 정정:** 2026-08-08 (수치·사실 재실측)
 **작업 위치:** `.worktrees/` 워크트리 격리 방식
 **현재 활성 워크트리:** `.worktrees/managed-sandbox-control-plane` (브랜치 `feature/managed-sandbox-control-plane`)
 **근거:** `docs/superpowers/plans/*coding*`, `*sandbox*`, `*durable*`, git 커밋 이력,
@@ -9,19 +9,64 @@
 > ⚠️ **플랜 문서의 체크박스는 신뢰하지 말 것.** 전 플랜의 `- [x]`가 0개다.
 > 실제 진행 상황은 git 커밋 메시지와 워크트리 내 `.superpowers/sdd/<plan>/progress.md`에만 있다.
 
+> 📌 **이 트랙은 이제 로드맵의 트랙 E다.**
+> [DEEP_ANALYSIS_HARNESS_ROADMAP.md §12](DEEP_ANALYSIS_HARNESS_ROADMAP.md)가 요약·출하
+> 기준(E-S1~E-S4)·미해결 인벤토리(CA1~CA7)를 갖고, 이 문서는 **상세 원장**으로 남는다.
+> 충돌하면 실측 근거가 더 최신인 쪽이 이긴다.
+
 ---
 
 ## 1. 워크트리 현황
 
+**2026-08-08 실측 (아래 원문은 2026-07-25 기준이며 절반이 낡았다):**
+
 ```
-/Users/ywsung/Desktop/neos                             370bfff3 [dev]
-/Users/ywsung/Desktop/neos/.worktrees/managed-sandbox-control-plane  89196755 [feature/managed-sandbox-control-plane]  ← 코딩 에이전트
-/Users/ywsung/Desktop/neos/.worktrees/deep-analysis-entailment-eval  f9e4dc5e [codex/deep-analysis-entailment-eval]     ← deep analysis
-/Users/ywsung/Desktop/neos/.worktrees/anthropic-caching-advisor      0fe2fa29 [codex/anthropic-caching-advisor]         ← 방치됨 (아래 §5)
+/Users/ywsung/Desktop/neos                                           d73cec44 [dev]
+/Users/ywsung/Desktop/neos/.worktrees/managed-sandbox-control-plane  89196755 [feature/managed-sandbox-control-plane]
 ```
 
-`managed-sandbox-control-plane` 상태: dev 대비 **+11 커밋 / -17 커밋**,
-**미커밋 변경 2개 파일 존재** (`docker_shadow.py` +305줄, `test_docker_shadow.py` +206줄).
+**남은 워크트리는 하나뿐이다.** `deep-analysis-entailment-eval`은 정리됐고,
+`anthropic-caching-advisor`는 **디렉터리가 사라진 채 `prunable`로 남아 있다**(§5).
+
+`managed-sandbox-control-plane` 상태:
+
+| 항목 | 2026-07-25 (원문) | 2026-08-08 (실측) |
+|---|---|---|
+| dev 대비 | +11 / **−17** | +11 / **−232** |
+| 미커밋 변경 | 2파일 | **2파일 그대로 — 2주째 미해결** |
+| `tests/coding/managed` | — | **76 passed / 2 skipped** (미커밋 변경 포함 상태) |
+
+> 🔴 **−232라는 숫자에 겁먹지 말 것. 드리프트는 커밋 수가 아니라 공유 파일의 겹침으로 잰다.**
+> 이 브랜치가 건드린 24파일 중 **19개가 신규 파일**(`neos/coding/managed/**` ·
+> `tests/coding/managed/**` · `db/migrations/045`)이라 충돌 대상이 아니다.
+> 045는 dev 최신이 044이므로 **번호 충돌도 없다.**
+> 공유 파일은 5개이고 **그중 dev가 실제로 바꾼 것은 3개뿐이다:**
+>
+> | 파일 | dev 변화 | 워크트리 변화 | 충돌 |
+> |---|---|---|---|
+> | `neos/config/schema.py` | **26커밋** +311/−16 | 1커밋 +22/−0 | 🟡 가능 |
+> | `config/neos.default.yaml` | 2커밋 +3/−5 | 1커밋 +19/−0 | 🟢 소규모 |
+> | `neos/observability/metrics.py` | 1커밋 +10/−0 | 1커밋 +43/−0 | 🟢 순수 추가 |
+> | `tests/coding/test_durability_metrics.py` | **0커밋** | 1커밋 | ⚪ 불가 |
+> | `tests/config/test_sandbox_config.py` | **0커밋** | 1커밋 | ⚪ 불가 |
+>
+> **병합 비용의 지배 요인은 드리프트가 아니라 §4의 미커밋 변경 소유권이다.**
+
+### 1.1 ⚠️ 정정 — "병합하면 `AgenticGrader`가 `TypeError`" (F3)는 틀렸다
+
+`docs/TODO_260729.md` F3과 로드맵이 이 브랜치를 **병합 시점 폭발물**로 적었다.
+근거는 워크트리에 `max_output_tokens` 없는 `AgenticGrader(...)` 호출부가 11곳
+보인다는 것이었다. **실측 결과 그런 일은 일어나지 않는다.**
+
+이 브랜치의 11커밋이 건드린 파일에 **`deep_analysis`는 0개**다. 즉
+`service.py`와 `test_agentic_grader.py`는 브랜치가 손대지 않았고, rebase하면
+**dev 버전이 그대로 온다.** 워크트리에서 보이던 11곳은 브랜치의 변경이 아니라
+**2주 전 dev 파일의 낡은 사본**이며 rebase 순간 사라진다.
+
+> **오독의 성격을 남겨둔다:** 워킹트리에서 *본 것*을 브랜치가 *바꾼 것*으로 착각했다.
+> 워크트리 격리의 대가다 — **체크아웃 상태와 브랜치 변경을 눈으로 구분할 수 없다.**
+> 다음에 같은 판정을 할 때는 `git diff --name-only $(git merge-base dev <브랜치>) <브랜치>`로
+> **브랜치가 실제로 바꾼 파일만** 본다.
 
 ---
 
@@ -72,6 +117,29 @@
 6. 브라우저 워크스페이스 데이터 · 드래프트 · 스트림 스토어
 7. 리사이즈 가능한 파일 · diff · 터미널 dock
 8. Docker 수직 슬라이스 · 운영 · 전체 검증
+
+### 2.1 그 이후 dev에서 일어난 일 (2026-08-08 추가)
+
+워크트리가 멈춰 있는 동안 **dev의 코딩 트랙에도 커밋이 하나 들어왔다.**
+
+| 커밋 | 내용 |
+|---|---|
+| `7f4beca1` | `_prepare_real_coding_loop()`가 `AnthropicCodingModel`을 `TrackedCodingModel`로 감싼다 (`neos/coding/runtime.py`) |
+
+이것은 코딩 트랙의 작업이 아니라 **로드맵 트랙 D의 D1c**(데이터셋 콜렉터를 계측
+사각지대까지 확장)가 지나가며 배선한 것이다. 코드 주석이 설계 의도를 명시한다:
+
+- 계측은 **전송 계층 밖에서** 감싼다 → D4(네이티브 SDK 전환)가 그 아래를 바꿔도
+  함께 무너지지 않는다
+- 코딩 루프는 Celery 워커에서 도는데, **D1b 이후 레코드가 그 프로세스에서 바로
+  디스크에 남으므로**(`neos/dataset/record_sink.py`) `graph.py` flush 지점을
+  지나갈 필요가 없다
+
+> ⚠️ **재개 시 이 배선을 깨지 말 것.** Task 5 이후 프로덕션 팩토리를 건드리게 되면
+> (Task 10) `runtime.py`를 반드시 지나간다. 로드맵 **E-S4**가 이 배선의 유지를
+> 출하 기준으로 고정하고 있다.
+
+**dev 기준 검증 베이스라인 (2026-08-08 실측):** `tests/coding` **457 passed / 16 skipped**.
 
 ---
 
@@ -176,6 +244,10 @@ db/migrations/045_add_coding_managed_sandboxes.sql
 
 ## 4. 🔴 재개 전 즉시 확인 — 미커밋 변경의 출처
 
+> 🔴 **2026-08-08 재확인: 두 파일이 2주째 그대로다.** 이 항목은 해결되지 않았고,
+> 로드맵 **CA2**로 추적된다. §1의 −232 드리프트보다 **이것이 병합 비용의 지배
+> 요인**이다 — 소유권이 판정되지 않으면 Task 5 자체를 시작할 수 없다.
+
 ```bash
 cd /Users/ywsung/Desktop/neos/.worktrees/managed-sandbox-control-plane
 git status --short
@@ -209,14 +281,27 @@ Task 5 브리프·리포트가 생성되지 않았고 원장에도 기록이 없
 
 ---
 
-## 5. ⚠️ 방치된 워크트리 — anthropic-caching-advisor
+## 5. ⚠️ 방치된 브랜치 — anthropic-caching-advisor
+
+> 🔴 **정정 (2026-08-08): 워크트리는 이미 사라졌다.** 아래 원문은 워크트리가 살아
+> 있던 시절의 서술이다. 현재 `.worktrees/`에는 `managed-sandbox-control-plane`
+> 하나뿐이고, `git worktree list`가 이 항목을 **`prunable`**로 표시한다
+> (디렉터리 삭제 시점 ~2026-07-27).
+>
+> **커밋 7개는 브랜치 `codex/anthropic-caching-advisor`(`0fe2fa29`)에 살아남았다.**
+> 그러나 로드맵 §10.1이 경고한 대로 `git worktree remove`는 **gitignore 대상 파일을
+> 경고 없이 삭제**하므로, 그 워크트리 안에 산출물이 있었다면 **재생성 불가**이며
+> 무엇이 있었는지 확인할 방법도 없다. 체크리스트를 밟았다는 기록은 없다.
+>
+> 즉 **결정은 여전히 미결이고(로드맵 CA6), 대상이 "워크트리"가 아니라 "브랜치"로
+> 바뀌었을 뿐이다.** 브랜치를 지우면 그때는 커밋까지 사라진다.
 
 ```
-.worktrees/anthropic-caching-advisor  0fe2fa29 [codex/anthropic-caching-advisor]
-dev 대비: -332 커밋 / +7 커밋   ← 2026-07-11 이후 방치
+codex/anthropic-caching-advisor  0fe2fa29   ← 브랜치는 생존, 워크트리는 소멸
+원문 기준 dev 대비: -332 커밋 / +7 커밋      ← 2026-07-11 이후 방치
 ```
 
-작업 트리는 clean이고 7개 커밋이 미병합 상태다:
+7개 커밋이 미병합 상태다:
 
 ```
 4af72620 feat(config): add Anthropic caching and advisor settings
@@ -231,9 +316,14 @@ e8005ec6 feat(anthropic): add request feature policy
 플랜: `docs/superpowers/plans/2026-07-11-anthropic-prompt-caching-advisor.md` (53 steps)
 스펙: `docs/superpowers/specs/2026-07-11-anthropic-prompt-caching-advisor-design.md`
 
-**332 커밋 뒤처져 있어 리베이스 비용이 크다.** 특히 role-based model routing이
+**리베이스 비용이 크다.** 특히 role-based model routing이
 `neos/providers/anthropic.py`와 `neos/utils/llm_factory.py`를 크게 바꿨으므로 충돌이 확실하다.
-**병합할지 폐기할지 결정이 필요하다.** 결정 전까지는 손대지 말 것.
+**병합할지 폐기할지 결정이 필요하다** (로드맵 CA6).
+
+> 단, §1.1에서 배운 것을 여기에도 적용할 것: **커밋 수가 아니라 공유 파일의 겹침으로
+> 재라.** 위 "332 커밋"은 낡았고 검증되지 않은 수치다. 결정 전에
+> `git diff --name-only $(git merge-base dev codex/anthropic-caching-advisor) codex/anthropic-caching-advisor`로
+> 실제 충돌면부터 측정한다 — 그 결과가 폐기/병합 판단을 바꿀 수 있다.
 
 ---
 
@@ -258,12 +348,25 @@ GOOGLE_API_KEY=test-key /Users/ywsung/Desktop/neos/.venv/bin/pytest -q tests/cod
 
 플랜 Task 5 위치: `docs/superpowers/plans/2026-07-25-managed-sandbox-control-plane.md:553`
 
+**2026-08-08 실측 베이스라인:** 위 2)의 `pytest -q tests/coding/managed`는
+현재 **76 passed / 2 skipped**다 (미커밋 변경이 있는 상태에서 측정한 값이므로,
+§4의 소유권 판정 결과에 따라 달라질 수 있다).
+
+> ⚠️ **병합을 먼저 할지 Task 5를 먼저 할지는 아직 결정되지 않았다 (CA3).**
+> 위 절차는 "워크트리에서 계속 진행" 쪽을 전제한다. dev로 먼저 rebase하려면
+> §1의 공유 파일 3개만 보면 되고 §1.1대로 `AgenticGrader`는 문제가 아니다.
+
 ---
 
 ## 7. 참조
 
+- **로드맵 트랙 E:** [DEEP_ANALYSIS_HARNESS_ROADMAP.md](DEEP_ANALYSIS_HARNESS_ROADMAP.md) §12
+  — 출하 기준 E-S1~E-S4, 미해결 인벤토리 CA1~CA7, 트랙 D와의 접점
+- 코딩 에이전트 설계: [NEOS_CODING.md](NEOS_CODING.md)
 - 최종 수용 게이트: 플랜 `:1201`
 - 관련 문서: [deep_analysis_task_task_resume.md](archive/deep_analysis_task_task_resume.md),
   [role_based_model_routing_task_resume.md](archive/role_based_model_routing_task_resume.md)
 - SDD 원장: `.worktrees/managed-sandbox-control-plane/.superpowers/sdd/2026-07-25-managed-sandbox-control-plane/`
-- 로드맵: `docs/ROADMAP.md`
+  (⚠️ 이중 기록 — §4 「원장 무결성 문제」, 로드맵 CA4)
+- 전체 로드맵: `docs/ROADMAP.md` — ⚠️ 여기에는 **코딩 트랙이 한 번도 등장하지 않는다**
+  (로드맵 CA7)
