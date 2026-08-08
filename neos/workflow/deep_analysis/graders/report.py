@@ -120,6 +120,27 @@ class ReportGrader:
             "uncited_count": uncited,
             "uncited_threshold": threshold,
         }
+        # (b0) a report that asserts nothing is not a well-cited report --
+        # it is an absent one, and it must not borrow the perfect score that
+        # an empty ratio produces. D-2, decided 2026-08-08 on sample #2:
+        # 5 of 18 gradings scored 0.00 with `assertions == 0`, and one of
+        # those reports (`a82648e3`) was the empty string. What stopped it
+        # was `E_REPORT_NO_LIMITS` -- a *formatting* check for the "한계와
+        # 미확인 사항" heading. Had the model emitted that heading, a report
+        # with no content would have cleared every substantive check.
+        #
+        # A dedicated code rather than folding into E_REPORT_UNCITED, for the
+        # reason `_uncited_stats` already documents: 1.00 over one assertion
+        # and 1.00 over forty call for opposite fixes, and so do "said
+        # nothing" and "cited nothing".
+        if assertions == 0:
+            return Verdict(
+                ok=False,
+                code="E_REPORT_EMPTY",
+                detail="report contains no factual assertion to cite",
+                diagnostics=diagnostics,
+            )
+
         if ratio >= threshold:
             return Verdict(
                 ok=False,

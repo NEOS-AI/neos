@@ -11,6 +11,7 @@ from typing import Any
 from neos.providers.anthropic import normalize_anthropic_request
 from neos.config.settings import settings
 from neos.workflow.deep_analysis.token_budget import (
+    TokenBudgetExhausted,
     active_token_budget,
     conservative_input_bound,
 )
@@ -213,6 +214,35 @@ def prompt_input_bound(model: str, prompt: str) -> int:
     )
 
 
+def _record_dataset_call(
+    model: str,
+    request: dict[str, Any],
+    stage: str,
+    response: LLMResponse,
+) -> None:
+    """이 호출을 데이터셋 콜렉터에 남긴다 (D1c).
+
+    `_budgeted_dispatch` 는 deep_analysis 의 **모든** LLM 호출이 지나가는
+    한 곳이다 -- `call_llm` 도 `call_messages` 도 여기로 온다. 그래서 계측을
+    여기 한 번만 붙이면 이 계층 전체가 덮인다.
+
+    토큰은 `LLMResponse` 가 API `usage` 에서 그대로 옮겨 온 값이다(§A5).
+    `record_llm_call` 이 절대 던지지 않으므로 여기서도 감싸지 않는다.
+    """
+    from neos.dataset.adapters import record_llm_call
+
+    record_llm_call(
+        provider="anthropic",
+        model=model,
+        workflow_step=stage,
+        input_messages=list(request.get("messages") or []),
+        output_text=response.text,
+        input_tokens=response.input_tokens,
+        output_tokens=response.output_tokens,
+        custom_metadata={"stop_reason": response.stop_reason},
+    )
+
+
 async def _budgeted_dispatch(
     *,
     model: str,
@@ -224,6 +254,7 @@ async def _budgeted_dispatch(
     budget = active_token_budget()
     if budget is None:
         response = await invoke(max_tokens, _DispatchState())
+        _record_dataset_call(model, request, stage, response)
         return replace(response, granted_max_output_tokens=max_tokens)
 
     reservation = await budget.reserve(
@@ -242,6 +273,7 @@ async def _budgeted_dispatch(
             await budget.release(reservation)
         raise
 
+    _record_dataset_call(model, request, stage, response)
     await budget.settle(
         reservation,
         response.input_tokens + response.output_tokens,
@@ -373,6 +405,101 @@ async def _record_truncation_handled(
         granted=granted,
         action=action,
     )
+
+
+async def call_text(
+    model: str,
+    prompt: str,
+    *,
+    max_tokens: int,
+    temperature: float = 0.0,
+    client=None,
+    cassette=None,
+    stage: str = "llm",
+) -> LLMResponse:
+    """A prose call that earns one larger attempt when it hits its ceiling.
+
+    `call_json` has had this since A2. `call_llm` only *recorded* the
+    truncation, and `report_assembly` is the one stage that calls `call_llm`
+    directly -- so it was the one stage that could not recover. Measured
+    2026-08-08 (sample #2): 18 of 18 assemblies stopped exactly at their
+    ceiling (dev 1200 / default 4000) with no `truncation_handled` event for
+    that stage at all. The prompt's last required section
+    ("## 한계와 미확인 사항") never survived, and the only attempt that ever
+    cleared the citation bar (`dd8dc763` #2, ratio 0.1538 < 0.20) was
+    rejected for missing it.
+
+    Unlike `call_json` this never raises. There is no parse step that could
+    fail, and a cut report is still a report -- §6.8 forbids the
+    empty-handed exit that a raised error would produce here.
+    """
+
+    from neos.config.settings import settings
+
+    response = await call_llm(
+        model,
+        prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        client=client,
+        cassette=cassette,
+        stage=stage,
+    )
+    if response.stop_reason != "max_tokens":
+        return response
+
+    # Retrying only helps if the ceiling -- not the budget -- was binding:
+    # settling this call already shrank `remaining`, so a budget-clamped
+    # retry gets *less* room, not more. Same judgement `call_json` makes.
+    if response.granted_max_output_tokens < max_tokens:
+        await _record_truncation_handled(
+            stage=stage,
+            model=model,
+            requested=max_tokens,
+            granted=response.granted_max_output_tokens,
+            action="budget_bound",
+        )
+        return response
+
+    multiplier = settings.config.deep_analysis.truncation_retry_multiplier
+    try:
+        retried = await call_llm(
+            model,
+            prompt,
+            max_tokens=int(max_tokens * multiplier),
+            temperature=temperature,
+            client=client,
+            cassette=cassette,
+            stage=stage,
+        )
+    except TokenBudgetExhausted:
+        # No room for the bigger attempt. The cut text still stands.
+        await _record_truncation_handled(
+            stage=stage,
+            model=model,
+            requested=max_tokens,
+            granted=response.granted_max_output_tokens,
+            action="budget_bound",
+        )
+        return response
+
+    await _record_truncation_handled(
+        stage=stage,
+        model=model,
+        requested=max_tokens,
+        granted=retried.granted_max_output_tokens,
+        action=(
+            "retried_failed"
+            if retried.stop_reason == "max_tokens"
+            else "retried_ok"
+        ),
+    )
+    if retried.stop_reason != "max_tokens":
+        return retried
+    # Both were cut. Neither is complete, so prefer the one that carries
+    # more of the report -- the expanded attempt usually does, but a model
+    # can wander and produce less from the same prompt.
+    return retried if len(retried.text) >= len(response.text) else response
 
 
 async def call_json(

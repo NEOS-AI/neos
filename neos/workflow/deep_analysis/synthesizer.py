@@ -5,7 +5,7 @@ from __future__ import annotations
 from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
-from .llm import call_json, call_llm
+from .llm import call_json, call_text
 from .models import ConflictNote, NodeSummary
 from .prompt_clamp import clamp_prompt
 from .prompt_loader import render
@@ -34,7 +34,10 @@ class Synthesizer:
         self,
         ledger,
         *,
-        llm_call=call_llm,
+        # `call_text` 는 잘린 조립에 한 번 더 큰 시도를 준다. 예전 기본값
+        # `call_llm` 은 잘림을 기록만 했고, 그래서 조립만 회복하지 못했다
+        # (2026-08-08 표본 #2: 18/18 잘림, 필수 마지막 절이 매번 소실).
+        llm_call=call_text,
         json_call=call_json,
         llm_client=None,
         cassette=None,
@@ -246,6 +249,28 @@ class Synthesizer:
                 child_summaries,
                 caveats,
             )
+        if not response.text.strip():
+            # A blank assembly used to log `synth_pass` and return "" -- the
+            # call succeeded, so nothing looked wrong. Measured 2026-08-08
+            # (sample #2, `a82648e3`): three blank assemblies, three
+            # `synth_pass` events, and a report that was the empty string.
+            # S1 counts `synth_pass`, so the one metric that says "an LLM
+            # actually wrote a report" was counting reports that did not exist.
+            #
+            # `report_assembly_degraded` is deliberate rather than a new kind:
+            # it is already registered in `_DEGRADATION_KINDS` (ledger.py) and
+            # `degradationKind()` (progress.ts), so this reaches the user's
+            # screen without touching either copy of that vocabulary.
+            await self.ledger.log(
+                "report_assembly_degraded",
+                qid,
+                {"reason": "empty_assembly"},
+            )
+            return self.deterministic_report(
+                root_summary,
+                child_summaries,
+                caveats,
+            )
         await self.ledger.log(
             "synth_pass",
             qid,
@@ -342,11 +367,14 @@ class Synthesizer:
             )
         except TokenBudgetExhausted as exc:
             return await self._degraded_summary(
-                question, child_summaries, _degradation_reason(exc)
+                question, child_summaries, _degradation_reason(exc), pairs
             )
         except Exception:
             return await self._degraded_summary(
-                question, child_summaries, "node_summary_unparseable"
+                question,
+                child_summaries,
+                "node_summary_unparseable",
+                pairs,
             )
         await self.ledger.log(
             "node_summary",
@@ -396,7 +424,11 @@ class Synthesizer:
         )
 
     async def _degraded_summary(
-        self, question, child_summaries: list[NodeSummary], reason: str
+        self,
+        question,
+        child_summaries: list[NodeSummary],
+        reason: str,
+        pairs: list | None = None,
     ) -> NodeSummary:
         """Fall back to joining the children's answers, and say so.
 
@@ -405,6 +437,21 @@ class Synthesizer:
         they all succeeded. That distinction is exactly what tells whether
         isolating the report tier worked: reductions are allowed to degrade,
         the assembly is not.
+
+        `pairs` is the node's own verified claims, and it exists because
+        joining children is not a fallback for a **leaf**: a leaf has no
+        children, so the join produced `""` and the leaf's verified claims
+        vanished. Measured 2026-08-07: most degraded reductions were leaves
+        (8 of 10, 11 of 14, 8 of 11 ...), the runs that degraded 67-79% of
+        their reductions shipped 0-8 citation markers, and the one that
+        degraded 18% shipped 60. With nothing to cite the report gate
+        rejected all 18 attempts.
+
+        The deterministic answer keeps `[C:...]` markers so CitationRenderer
+        can still resolve them -- these are verified claims by construction,
+        so they cannot orphan. It deliberately drops the prompt scaffolding
+        (evidence excerpts, confidence) that `reduce_node` builds for the
+        model: that is input for an LLM, not prose for a reader.
         """
         await self.ledger.log(
             "node_reduction_degraded",
@@ -415,10 +462,19 @@ class Synthesizer:
                 "reason": reason,
             },
         )
+        answer = " ".join(
+            c.answer for c in child_summaries if c.answer.strip()
+        )
+        claim_ids: list[str] = []
+        if not answer and pairs:
+            answer = " ".join(
+                f"[C:{claim.id}] {claim.text}" for claim, _evidence in pairs
+            )
+            claim_ids = [claim.id for claim, _evidence in pairs]
         return NodeSummary(
             question_id=question.id,
-            answer=" ".join(c.answer for c in child_summaries) or "",
-            key_claim_ids=[],
+            answer=answer,
+            key_claim_ids=claim_ids,
             confidence=0.0,
             caveats=[reason],
             conflicts=[],

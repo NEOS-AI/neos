@@ -157,6 +157,66 @@ async def _refused_for_input_bound(*args, **kwargs):
 
 
 @pytest.mark.asyncio
+async def test_an_empty_assembly_degrades_instead_of_passing_as_success():
+    """빈 조립이 `synth_pass` 로 기록되던 것을 고친다.
+
+    2026-08-08 표본 #2 의 `a82648e3` 은 리포트 본문이 **빈 문자열**이었는데도
+    `synth_pass` 를 3건 남겼다. `assemble` 이 호출 성공 직후 무조건 로그하고
+    `response.text` 를 그대로 반환했기 때문이다. 그래서 §2.2 S1("LLM 이 조립한
+    리포트가 실제로 나온다")의 집계가 부풀려졌다 -- 나온 적 없는 리포트가
+    성공으로 세어졌다.
+
+    `report_assembly_degraded` 를 쓰는 것은 의도다: 이미 `_DEGRADATION_KINDS`
+    (ledger.py) 와 `degradationKind()`(progress.ts) 양쪽에 등록된 kind 라
+    새 어휘 없이 **사용자 화면까지 그대로 도달**한다(FE6 이중 구현 무관).
+    """
+    ledger = FakeLedger()
+
+    async def _blank(*args, **kwargs):
+        return LLMResponse(
+            text="   \n", input_tokens=10, output_tokens=0, model="m"
+        )
+
+    synth = Synthesizer(ledger, llm_call=_blank)
+    root = NodeSummary("root0001", "verified root answer", [], 0.8, [])
+
+    report = await synth.assemble(root, [], [])
+
+    kinds = [k for (k, _q, _p) in ledger.events]
+    assert "synth_pass" not in kinds
+    degraded = [
+        p for (k, _q, p) in ledger.events if k == "report_assembly_degraded"
+    ]
+    assert degraded == [{"reason": "empty_assembly"}]
+    # 빈손으로 나가지 않는다(§6.8) -- 결정론 템플릿이 대신 나간다.
+    assert "## 요약" in report
+
+
+@pytest.mark.asyncio
+async def test_a_degraded_leaf_keeps_its_verified_claims_and_their_markers():
+    """W3-b: 강등된 **잎** 노드가 검증 클레임을 통째로 버리고 있었다.
+
+    `_degraded_summary` 는 자식 답변을 이어붙이는데 잎에는 자식이 없다 --
+    그래서 답변이 빈 문자열이 됐고, 그 잎의 verified claim 은 `[C:...]` 마커가
+    붙은 산문이 되지 못한 채 사라졌다. 2026-08-07 표본에서 리덕션의 67~79% 가
+    이렇게 강등된 5개 run 은 최종 리포트에 마커를 0~8개밖에 싣지 못했고,
+    18% 만 강등된 run 하나만 60개를 실었다. 인용할 것이 없으니 게이트는
+    18회 전부 반려했다.
+    """
+    ledger = FakeLedger()
+    synth = Synthesizer(ledger, json_call=_exhausted)
+
+    summary = await synth.reduce_node(ledger.child, [])
+
+    assert "[C:c1a1c1a1]" in summary.answer
+    assert "Verified fact" in summary.answer
+    # 프롬프트 비계(evidence 원문·신뢰도)는 사용자 산문에 실리지 않는다.
+    assert "<evidence>" not in summary.answer
+    assert "verbatim excerpt" not in summary.answer
+    assert summary.key_claim_ids == ["c1a1c1a1"]
+
+
+@pytest.mark.asyncio
 async def test_a_degraded_summary_names_the_refusal_it_actually_hit():
     ledger = FakeLedger()
     synth = Synthesizer(ledger, json_call=_refused_for_input_bound)
