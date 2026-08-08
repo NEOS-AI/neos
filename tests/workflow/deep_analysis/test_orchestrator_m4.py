@@ -18,7 +18,10 @@ from neos.workflow.deep_analysis.ledger import (
     _TERMINAL_STATUSES,
 )
 from neos.workflow.deep_analysis.models import NodeSummary, Verdict
-from neos.workflow.deep_analysis.orchestrator import Orchestrator
+from neos.workflow.deep_analysis.orchestrator import (
+    Orchestrator,
+    _best_rejected_draft,
+)
 
 
 pytestmark = pytest.mark.no_db
@@ -219,6 +222,107 @@ async def test_a_rejection_reaches_the_next_assembly():
     assert synth.hints_seen[0] == []
     assert synth.hints_seen[1] == ["- 2024년에 발효되었다"]
     assert synth.hints_seen[2] == ["- 2024년에 발효되었다"]
+
+
+class ScriptedGrader:
+    """시도 순서대로 미리 정한 판정을 돌려준다."""
+
+    def __init__(self, verdicts):
+        self._verdicts = list(verdicts)
+
+    async def grade(self, report, root_id):
+        return self._verdicts.pop(0)
+
+
+def _rejected(code, ratio, assertions):
+    return Verdict(
+        ok=False,
+        code=code,
+        diagnostics={
+            "uncited_ratio": ratio,
+            "uncited_assertions": assertions,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_draft_that_got_furthest_is_delivered_not_the_last():
+    """W3-j: 표본 #5 의 `94b0483c` 형태.
+
+    두 초안이 인용 기준(.140/.095)을 넘어 판정자까지 갔는데, 세 번째가
+    .208 로 되돌아갔고 사용자는 그 세 번째를 받았다. 도착 순서 말고는
+    이유가 없었다. `E_REPORT_AGENTIC` 은 결정론 검사 넷을 모두 통과했다는
+    뜻이므로 `E_REPORT_UNCITED` 보다 깊다.
+    """
+    ledger = FakeLedger()
+    synth = FakeSynth()
+    grader = ScriptedGrader(
+        [
+            _rejected("E_REPORT_AGENTIC", 0.1395, 43),
+            _rejected("E_REPORT_AGENTIC", 0.0952, 42),
+            _rejected("E_REPORT_UNCITED", 0.2083, 48),
+        ]
+    )
+    orch = _orch(ledger, synth, FlakyRenderer(fail_times=0), grader=grader)
+
+    report = await orch._finalize("root0001")
+
+    assert "DRAFT-2" in report  # 가장 깊이 가고, 그중 가장 잘 인용된 것
+    assert "DRAFT-3" not in report
+    assert "## 부록: 미해결 사유" in report
+
+
+@pytest.mark.asyncio
+async def test_at_equal_depth_the_better_cited_draft_wins():
+    """`d8cda7c5` 형태 -- 셋 다 같은 검사에서 죽었다.
+
+    마지막 초안(.250, 주장 12개)이 아니라 두 번째(.235, 주장 17개)가
+    비율과 알맹이 양쪽에서 낫다.
+    """
+    ledger = FakeLedger()
+    synth = FakeSynth()
+    grader = ScriptedGrader(
+        [
+            _rejected("E_REPORT_UNCITED", 0.3158, 19),
+            _rejected("E_REPORT_UNCITED", 0.2353, 17),
+            _rejected("E_REPORT_UNCITED", 0.2500, 12),
+        ]
+    )
+    orch = _orch(ledger, synth, FlakyRenderer(fail_times=0), grader=grader)
+
+    report = await orch._finalize("root0001")
+
+    assert "DRAFT-2" in report
+    assert "DRAFT-3" not in report
+
+
+@pytest.mark.asyncio
+async def test_equal_scores_do_not_drift_toward_the_last_draft():
+    """동점이면 먼저 나온 초안을 지킨다 -- 뒤에 온 초안이 더 낫다는 증거가
+    있어야 자리를 빼앗는다."""
+    ledger = FakeLedger()
+    synth = FakeSynth()
+    grader = ScriptedGrader(
+        [_rejected("E_REPORT_UNCITED", 0.3, 10) for _ in range(3)]
+    )
+    orch = _orch(ledger, synth, FlakyRenderer(fail_times=0), grader=grader)
+
+    report = await orch._finalize("root0001")
+
+    assert "DRAFT-1" in report
+
+
+@pytest.mark.asyncio
+async def test_an_ungraded_orphan_draft_never_outranks_a_graded_one():
+    """고아 마커 분기는 채점을 건너뛰므로 `diagnostics` 가 비어 있다.
+
+    그 초안은 애초에 `rejected` 에 들어가지도 않지만, 기본값이 낙관적이면
+    빈 판정이 실측된 판정을 이기게 된다 -- 기본값은 비관적이어야 한다.
+    """
+    empty = Verdict(ok=False, code="E_REPORT_UNCITED")
+    graded = _rejected("E_REPORT_UNCITED", 0.9, 30)
+
+    assert _best_rejected_draft([(graded, "좋음"), (empty, "미채점")]) == "좋음"
 
 
 @pytest.mark.asyncio

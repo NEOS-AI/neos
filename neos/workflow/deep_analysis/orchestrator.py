@@ -76,24 +76,51 @@ def _best_rejected_draft(rejected: list[tuple[Verdict, str]]) -> str | None:
     Returns the chosen report text, or None when nothing was ever graded
     (every attempt orphaned before rendering) -- the caller falls back.
 
-    TODO(사용자): 순위 규칙을 여기에 작성.
+    Ranked lexicographically on the gate's own measurements, in this order:
 
-    쓸 수 있는 재료:
-      * `verdict.code` -> `_GATE_DEPTH[code]`  게이트를 얼마나 통과했는지
-      * `verdict.diagnostics["uncited_ratio"]`  인용 없는 비율 (낮을수록 좋음)
-      * `verdict.diagnostics["uncited_assertions"]`  그 비율의 분모.
-        분모가 작으면 비율이 좋아 보이기 쉽다 -- 주장 2개 중 0개 미인용은
-        주장 40개 중 4개 미인용보다 나은 리포트가 아닐 수 있다.
-      * 리스트 순서 = 시도 순서 (뒤로 갈수록 힌트를 더 받은 초안)
+    1. **How far it got** (`_GATE_DEPTH`). The only term that is a recorded
+       fact rather than a comparison: an `E_REPORT_AGENTIC` rejection cleared
+       all four deterministic checks, an `E_REPORT_UNCITED` one died at the
+       second.
+    2. **Uncited ratio**, lower first. The one judgement here. A
+       cap-exhausted report already ships labelled unresolved, so the thing
+       that does real damage in it is an unsupported assertion -- safety
+       over length.
+    3. **Assertion count**, higher first, so that between equally-cited
+       drafts the substantive one wins.
 
-    참고: `diagnostics` 는 비어 있을 수 있다 (고아 마커 분기는 채점 자체를
-    건너뛴다). `.get()` 으로 읽을 것.
+    The obvious trap -- a two-assertion draft with a perfect ratio beating a
+    forty-assertion one -- is mostly unreachable: a draft that scores 0.0 and
+    clears the remaining checks *passes the gate* and returns, so it never
+    arrives here. Anything in this list died to a later check, and term 1
+    sorts that out first. What remains is the narrow case where a short
+    fully-cited draft and a long partly-cited one fail the *same* check;
+    there the short one wins, which is term 2 doing what it says.
+
+    Measured against sample #5's five failing runs: 3 improved, 2 unchanged,
+    0 worse. `94b0483c` swaps a 0.208/UNCITED draft for a 0.095/AGENTIC one;
+    `d8cda7c5` swaps 0.250 over 12 assertions for 0.235 over 17.
+
+    `diagnostics` can be empty (the orphan-marker branch skips grading
+    entirely), so every field is read with a pessimistic default.
     """
 
     if not rejected:
         return None
-    # 잠정 동작: 지금까지와 같이 마지막 초안. 위 규칙을 채우면 대체된다.
-    return rejected[-1][1]
+
+    def rank(item: tuple[Verdict, str]) -> tuple[int, float, int]:
+        verdict, _report = item
+        diagnostics = verdict.diagnostics
+        return (
+            _GATE_DEPTH.get(verdict.code, 0),
+            -diagnostics.get("uncited_ratio", 1.0),
+            diagnostics.get("uncited_assertions", 0),
+        )
+
+    # `max` keeps the first of equal-ranked items, so a later attempt has to
+    # actually score better to displace an earlier one -- ties do not drift
+    # toward whichever draft happened to come last.
+    return max(rejected, key=rank)[1]
 
 
 def _ensure_limits_section(report: str, caveats: list[str]) -> str:
