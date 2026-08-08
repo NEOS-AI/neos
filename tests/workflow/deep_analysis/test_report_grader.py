@@ -261,7 +261,11 @@ async def test_truncated_report_judge_does_not_mask_a_deterministic_failure():
 
     grader = _grader(FakeLedger(), json_call=truncated_json_call)
 
-    verdict = await grader.grade("한계 절이 없는 본문.", "root0001")
+    # 인용된 사실 주장을 하나 둔다 -- 그래야 E_REPORT_EMPTY(D-2)를 지나
+    # 실제로 "한계 절 없음"에서 막히는지를 본다.
+    verdict = await grader.grade(
+        "2024년 8월 1일에 발효되었다[1]. 한계 절이 없는 본문.", "root0001"
+    )
 
     assert verdict.ok is False
     assert verdict.code == "E_REPORT_NO_LIMITS"
@@ -471,29 +475,49 @@ async def test_uncited_threshold_comes_from_settings():
 
 
 @pytest.mark.asyncio
-async def test_a_report_with_no_assertions_scores_a_perfect_zero():
-    """CHARACTERISATION, not endorsement — this is G1's finding.
+async def test_a_report_with_no_assertions_is_rejected_on_its_own_code():
+    """D-2 결정 (2026-08-08): assertion 0건은 **제3 판정**으로 반려한다.
 
-    `_uncited_stats` returns 0.0 when nothing looks like a factual assertion,
-    so a report that asserts nothing is scored as perfectly cited and sails
-    through the gate that rejects substantive ones.
+    이 자리에는 반대 동작을 고정한 특성화 테스트가 있었다 -- assertion 이 없으면
+    `_uncited_stats` 가 0.0 을 내므로 아무것도 주장하지 않는 리포트가 만점을
+    받았다. 그 테스트는 "바꾸려면 의도적으로 깨라"고 적혀 있었고, 이것이 그
+    결정이다.
 
-    Measured consequence: of 61 runs, the 9 that passed had a median of 0
-    verified claims (7 of them had no claims at all), while the 52 that were
-    rejected had a median of 4. The gate is passing vacuous reports and
-    blocking the ones that found something.
+    근거는 2026-08-07 표본이 아니라 **2026-08-08 표본 #2**다. W3-a·W3-b 가
+    산출물을 바꾸자 퇴화 케이스가 드러났다: 18회 채점 중 5회가 `assert=0` 으로
+    만점을 받았고, 그중 `a82648e3` 의 리포트는 **완전히 빈 문자열**이었다.
+    그것을 막은 것은 실질 검사가 아니라 `E_REPORT_NO_LIMITS`, 즉 "한계와
+    미확인 사항" 제목이 없다는 **서식** 검사였다. 모델이 그 제목만 찍었다면
+    내용 0인 리포트가 게이트를 통과했을 것이다.
 
-    Pinned so that changing it is a deliberate decision with a failing test,
-    not an accident. Whether an assertion-less report should pass, fail, or
-    be judged some third way is a policy question this test does not answer.
+    전용 코드를 쓰는 이유는 `_uncited_stats` 독스트링이 이미 적어둔 것과 같다 --
+    "1.00 over one assertion is a short report, 1.00 over forty is a badly
+    cited one, and the two call for opposite fixes". 빈 리포트와 인용을 안 단
+    리포트는 원장에서 구별돼야 한다.
     """
     empty = "## 본문\n특별한 내용이 없다.\n\n## 한계와 미확인 사항\n없음.\n"
 
     verdict = await _grader(FakeLedger()).grade_deterministic(empty, "root0001")
 
-    assert verdict.ok is True
+    assert verdict.ok is False
+    assert verdict.code == "E_REPORT_EMPTY"
     assert verdict.diagnostics["uncited_assertions"] == 0
+    # 통계 자체는 그대로다 -- 바뀐 것은 판정이지 측정이 아니다.
     assert verdict.diagnostics["uncited_ratio"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_substantive_report_is_still_judged_on_its_citations():
+    """전용 코드가 기존 판정을 삼키지 않는다 -- assertion 이 있으면 비율이 정한다."""
+    cited = (
+        "## 본문\n2024년 8월 1일에 발효되었다[1].\n\n"
+        "## 한계와 미확인 사항\n없음.\n"
+    )
+
+    verdict = await _grader(FakeLedger()).grade_deterministic(cited, "root0001")
+
+    assert verdict.code != "E_REPORT_EMPTY"
+    assert verdict.diagnostics["uncited_assertions"] > 0
 
 
 @pytest.mark.asyncio

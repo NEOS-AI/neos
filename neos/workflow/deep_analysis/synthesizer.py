@@ -246,6 +246,28 @@ class Synthesizer:
                 child_summaries,
                 caveats,
             )
+        if not response.text.strip():
+            # A blank assembly used to log `synth_pass` and return "" -- the
+            # call succeeded, so nothing looked wrong. Measured 2026-08-08
+            # (sample #2, `a82648e3`): three blank assemblies, three
+            # `synth_pass` events, and a report that was the empty string.
+            # S1 counts `synth_pass`, so the one metric that says "an LLM
+            # actually wrote a report" was counting reports that did not exist.
+            #
+            # `report_assembly_degraded` is deliberate rather than a new kind:
+            # it is already registered in `_DEGRADATION_KINDS` (ledger.py) and
+            # `degradationKind()` (progress.ts), so this reaches the user's
+            # screen without touching either copy of that vocabulary.
+            await self.ledger.log(
+                "report_assembly_degraded",
+                qid,
+                {"reason": "empty_assembly"},
+            )
+            return self.deterministic_report(
+                root_summary,
+                child_summaries,
+                caveats,
+            )
         await self.ledger.log(
             "synth_pass",
             qid,
