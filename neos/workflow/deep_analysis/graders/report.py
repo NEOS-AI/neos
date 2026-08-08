@@ -376,7 +376,7 @@ class ReportGrader:
 
         try:
             agentic = await self.grade_agentic(report, root_text)
-        except TokenBudgetExhausted:
+        except TokenBudgetExhausted as exc:
             # Same fallback as before, but no longer indistinguishable from a
             # judge that ran and approved. P2 keeps this grader read-only, so
             # the marker rides the verdict to the orchestrator's event.
@@ -386,12 +386,24 @@ class ReportGrader:
             # `attempt`, `code`, and `**verdict.diagnostics` -- it never reads
             # `detail`. `diagnostics` is what actually reaches the ledger, so
             # the marker has to ride there, not just on `detail`.
+            #
+            # The marker alone says the judge did not run; it does not say
+            # by how much it missed. `token_budget_exhausted` is logged only
+            # from the *investigation* stop path, so finalization exhaustion
+            # recorded no numbers at all -- sample #6 has zero of those
+            # events and two `judge: budget_exhausted` passes. G10 already
+            # put the numbers on the exception; they were being dropped one
+            # layer short of the ledger.
             return replace(
                 deterministic,
                 detail="judge_budget_exhausted",
                 diagnostics={
                     **deterministic.diagnostics,
                     "judge": "budget_exhausted",
+                    "judge_budget_cause": exc.cause,
+                    "judge_budget_input_bound": exc.input_bound,
+                    "judge_budget_ceiling": exc.ceiling,
+                    "judge_budget_granted": exc.granted,
                 },
             )
         # The agentic verdict is the answer, but the deterministic gate's

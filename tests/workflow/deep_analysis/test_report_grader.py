@@ -600,6 +600,47 @@ async def test_budget_exhausted_judge_is_marked_not_silent():
 
 
 @pytest.mark.asyncio
+async def test_a_starved_judge_records_by_how_much_it_missed():
+    """표식은 판정자가 못 돌았다고만 말한다 -- 얼마나 모자랐는지는 말하지 않는다.
+
+    `token_budget_exhausted` 이벤트는 **조사** 정지 경로에서만 기록되므로
+    최종화 단계의 고갈은 숫자를 하나도 남기지 않았다(표본 #6: 그 이벤트 0건,
+    `judge=budget_exhausted` 통과 2건). G10 이 이미 예외에 숫자를 실어뒀는데
+    원장 한 층 앞에서 버려지고 있었다.
+
+    2026-08-09 실측이 이 숫자가 왜 필요한지를 말한다: 판정자 프롬프트가
+    5,900~17,084 인데 남은 예산은 3,555~9,443 이었다.
+    """
+
+    async def _starved(*args, **kwargs):
+        raise TokenBudgetExhausted(
+            "cap",
+            cause="input_bound",
+            stage="report_grading",
+            input_bound=8529,
+            ceiling=3555,
+            requested=800,
+            granted=0,
+        )
+
+    root = Question("root0001", "루트 질문")
+    grader = _grader(
+        FakeLedger(children=[CHILD1, CHILD2], root=root),
+        json_call=_starved,
+    )
+
+    verdict = await grader.grade(_clean_report(), root.id)
+
+    assert verdict.diagnostics["judge"] == "budget_exhausted"
+    assert verdict.diagnostics["judge_budget_cause"] == "input_bound"
+    assert verdict.diagnostics["judge_budget_input_bound"] == 8529
+    assert verdict.diagnostics["judge_budget_ceiling"] == 3555
+    assert verdict.diagnostics["judge_budget_granted"] == 0
+    # 결정론 측정도 함께 살아남아야 한다 -- 어떤 리포트가 굶었는지 알아야 한다.
+    assert "uncited_ratio" in verdict.diagnostics
+
+
+@pytest.mark.asyncio
 async def test_a_markdown_heading_is_not_a_factual_assertion():
     """W3-f: `### 1.` 이 "인용 없는 사실 주장"으로 세어지고 있었다.
 
