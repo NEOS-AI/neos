@@ -141,6 +141,11 @@ class Synthesizer:
             child_summaries="\n".join(claim_blocks)
             or "(검증된 발견 없음)",
             caveats=caveats,
+            # `reduce` is the single-pass M1 path -- no retry loop, so there
+            # is never a previous rejection. Supplied anyway because `render`
+            # leaves unfilled placeholders as literal text, and a stray
+            # "{revision_note}" in the prompt is worse than an empty one.
+            revision_note="(없음 -- 재시도 없는 경로)",
         )
         config = settings.config.deep_analysis
         synth_model = resolve_model(
@@ -173,6 +178,7 @@ class Synthesizer:
         root_summary: NodeSummary | None,
         child_summaries: list[NodeSummary],
         caveats: list[str],
+        revision_hints: list[str] | None = None,
     ) -> str:
         """Final compose (§6.8) over the root ``NodeSummary`` + direct-child
         ``NodeSummary`` answers + collected caveats.
@@ -214,6 +220,12 @@ class Synthesizer:
                 root_summary=root_answer or "(요약 없음)",
                 child_summaries="\n".join(blocks) or "(검증된 발견 없음)",
                 caveats=caveats_text,
+                # Not clamped alongside `blocks`: the hints name the exact
+                # lines to fix, and dropping them would put the attempt back
+                # where the previous one already failed. `_uncited_hints`
+                # caps their size at the source for the same reason.
+                revision_note="\n".join(revision_hints or [])
+                or "(없음 -- 첫 시도)",
             )
 
         clamp = clamp_prompt(

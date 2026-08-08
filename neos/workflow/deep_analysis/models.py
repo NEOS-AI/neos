@@ -99,6 +99,10 @@ class Verdict:
     salvage: str | None = None
     label: str | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    # What the next attempt should change, in the rejected draft's own words
+    # (W3-h). In-process only: the orchestrator logs `code` and
+    # `diagnostics`, never this, so report prose stays out of the ledger.
+    revision_hints: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -1034,9 +1034,21 @@ class Orchestrator:
         # assembly output and still carries `[C:xxxxxxxx]` markers, which are
         # internal claim addresses -- not citations a reader can follow.
         last_rendered: str | None = None
+        # What the previous attempt was rejected for (W3-h). Empty on the
+        # first pass. Without this the loop re-rolled the identical prompt:
+        # `assemble` got the same three arguments every time, so the three
+        # attempts were three independent samples rather than a correction.
+        # Sample #5 shows the consequence -- 18 gradings, and the uncited
+        # ratios wander instead of falling (`4098117c` .357 -> .500 -> .267,
+        # `d8cda7c5` .316 -> .235 -> .250). Two of `94b0483c`'s drafts had
+        # already cleared the citation cut and the third undid it.
+        revision_hints: list[str] = []
         for attempt in range(cap + 1):
             draft = await self.synthesizer.assemble(
-                root_summary, child_summaries, caveats
+                root_summary,
+                child_summaries,
+                caveats,
+                revision_hints=revision_hints,
             )
             last = draft
             try:
@@ -1051,6 +1063,13 @@ class Orchestrator:
                         "attempt": attempt,
                     },
                 )
+                # This branch skips grading, so without its own hint the
+                # next attempt would inherit whatever the *previous*
+                # rejection said -- or nothing at all on attempt 0.
+                revision_hints = [
+                    "인용 마커가 입력에 없는 claim id 를 가리켰다. 입력의 "
+                    "[C:claimid] 목록에 있는 id 만 사용하라."
+                ]
                 continue  # AC-c: orphan citation → re-assemble
             report = _ensure_limits_section(report, caveats)
             last_rendered = report
@@ -1082,6 +1101,10 @@ class Orchestrator:
                     **verdict.diagnostics,
                 },
             )
+            # Only the verdict's diagnostics reach the ledger above; the
+            # hints carry the rejected draft's own sentences and stay in
+            # process, feeding the next iteration's prompt.
+            revision_hints = verdict.revision_hints
 
         # Cap exhausted — no empty-handed exit (§6.8): attach a failure
         # appendix to the last draft that rendered.

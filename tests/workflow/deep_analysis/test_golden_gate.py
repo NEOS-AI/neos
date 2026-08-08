@@ -28,7 +28,11 @@ EXPECTED_PROMPT_VERSIONS = {
     "worker_brief": 3,
     "judge": 1,
     "node_summary": 1,
-    "final_compose": 1,
+    # v2 (W3-h, 2026-08-09): `{revision_note}` 슬롯 + 근거 없는 사항을 본문이
+    # 아니라 한계 절에 적으라는 규칙. 앞의 것은 재시도가 판정을 되먹이게 하고,
+    # 뒤의 것은 표본 #5 에서 인용 없는 문장의 최대 범주였던 부재 진술을
+    # `_report_body` 가 이미 채점에서 빼는 절로 보낸다.
+    "final_compose": 2,
     "report_judge": 1,
 }
 

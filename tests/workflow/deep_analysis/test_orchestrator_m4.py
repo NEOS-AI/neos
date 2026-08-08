@@ -89,6 +89,9 @@ class FakeSynth:
         self._summaries = summaries
         self.assemble_calls = 0
         self.reduce_tree_calls = 0
+        # One entry per assemble call, so a test can assert what the loop
+        # handed forward from the previous rejection (W3-h).
+        self.hints_seen = []
 
     async def reduce_tree(self, root_id):
         self.reduce_tree_calls += 1
@@ -96,8 +99,11 @@ class FakeSynth:
             return dict(self._summaries)
         return {root_id: NodeSummary(root_id, "루트 요약 [C:aaaaaaaa]", [], 0.9, [])}
 
-    async def assemble(self, root_summary, child_summaries, caveats):
+    async def assemble(
+        self, root_summary, child_summaries, caveats, revision_hints=None
+    ):
         self.assemble_calls += 1
+        self.hints_seen.append(list(revision_hints or []))
         return f"DRAFT-{self.assemble_calls}\n\n## 출처"
 
 
@@ -181,6 +187,54 @@ async def test_orphan_every_attempt_exhausts_cap_and_appends_appendix():
     assert all(p["ok"] is False for p in graded)
     assert all(p["code"] == "E_ORPHAN_CITE" for p in graded)
     assert ledger.completed
+
+
+@pytest.mark.asyncio
+async def test_a_rejection_reaches_the_next_assembly():
+    """W3-h: 재시도는 판정을 되먹여야 한다.
+
+    이전에는 `assemble` 이 매 시도 완전히 같은 세 인자를 받았다 -- 세 번의
+    시도가 교정이 아니라 같은 분포에서 뽑은 표본 세 개였다. 표본 #5 의 결과가
+    그 모양이다: 인용 없는 비율이 내려가지 않고 배회한다
+    (`4098117c` .357 -> .500 -> .267, `d8cda7c5` .316 -> .235 -> .250).
+    """
+    ledger = FakeLedger()
+    synth = FakeSynth()
+    renderer = FlakyRenderer(fail_times=0)
+
+    class _HintingGrader:
+        async def grade(self, report, root_id):
+            return Verdict(
+                ok=False,
+                code="E_REPORT_UNCITED",
+                revision_hints=["- 2024년에 발효되었다"],
+            )
+
+    orch = _orch(ledger, synth, renderer, grader=_HintingGrader())
+
+    await orch._finalize("root0001")
+
+    assert synth.assemble_calls == 3
+    # 첫 시도는 되먹일 것이 없고, 이후 시도는 직전 반려를 손에 쥔다.
+    assert synth.hints_seen[0] == []
+    assert synth.hints_seen[1] == ["- 2024년에 발효되었다"]
+    assert synth.hints_seen[2] == ["- 2024년에 발효되었다"]
+
+
+@pytest.mark.asyncio
+async def test_an_orphan_citation_gets_its_own_hint_not_a_stale_one():
+    """고아 마커 분기는 채점을 건너뛴다 -- 자기 힌트가 없으면 첫 시도에서는
+    빈 손으로, 이후에는 *직전* 반려 사유를 그대로 물려주게 된다."""
+    ledger = FakeLedger()
+    synth = FakeSynth()
+    renderer = FlakyRenderer(fail_times=99)
+    orch = _orch(ledger, synth, renderer, grader=OkGrader())
+
+    await orch._finalize("root0001")
+
+    assert synth.hints_seen[0] == []
+    assert "claim id" in synth.hints_seen[1][0]
+    assert synth.hints_seen[2] == synth.hints_seen[1]
 
 
 @pytest.mark.asyncio
@@ -444,7 +498,9 @@ async def test_the_harness_guarantees_the_limits_section_the_model_lost():
     ledger = FakeLedger()
 
     class _TruncatedSynth(FakeSynth):
-        async def assemble(self, root_summary, child_summaries, caveats):
+        async def assemble(
+            self, root_summary, child_summaries, caveats, revision_hints=None
+        ):
             self.assemble_calls += 1
             # 본문 중간에서 잘린 모양 -- 한계 절에 닿지 못했다.
             return "## 요약\n답.\n\n## 본문\n근거가 이어지다가 잘"
