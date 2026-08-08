@@ -378,3 +378,128 @@ async def test_calling_the_stop_reason_twice_records_it_once():
         e for e in ledger.events if e[0] == "investigation_stopped_at_floor"
     ]
     assert len(floor_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_with_headroom_left_records_its_own_stop():
+    """G10: `reserve` 는 tier 에 여유가 있어도 프롬프트가 안 들어가면 거절한다.
+
+    두 상태 분기 모두 그 정지를 잡지 못해 원장에 아무것도 남지 않았다.
+    W1 의 라이브 표본은 "정확히 1회"라 그 침묵이 영구 기록이 된다.
+    """
+    ledger = FloorLedger()
+    emitted = []
+
+    async def event_sink(kind, payload):
+        emitted.append((kind, payload))
+
+    orchestrator = Orchestrator(
+        object(),
+        "run",
+        worker_factory=lambda: None,
+        grader=Grader(),
+        ledger=ledger,
+        synthesizer=Synthesizer(),
+        citation_renderer=CitationRenderer(),
+        event_sink=event_sink,
+        global_token_cap=100_000,
+    )
+    await orchestrator._install_token_budget()
+    # 두 상태 분기가 모두 거짓인 조건 -- 여기가 지금 침묵하는 자리다.
+    assert orchestrator.token_budget.exhausted is False
+    assert (
+        orchestrator.token_budget.available_for_investigation
+        >= orchestrator.token_budget.min_viable_output_tokens
+    )
+
+    await orchestrator._mark_stop_reason(
+        TokenBudgetExhausted(
+            cause="input_bound",
+            stage="worker_analysis",
+            model="claude-sonnet-5",
+            input_bound=17_723,
+            ceiling=12_000,
+        )
+    )
+
+    kinds = [event[0] for event in ledger.events]
+    stops = [
+        e for e in ledger.events
+        if e[0] == "investigation_stopped_at_input_bound"
+    ]
+    assert len(stops) == 1
+    assert stops[0][2] == {
+        "cap_tokens": 100_000,
+        "consumed_tokens": 0,
+        "reserved_tokens": 0,
+        "stage": "worker_analysis",
+        "model": "claude-sonnet-5",
+        "input_bound": 17_723,
+        "ceiling": 12_000,
+    }
+    assert "token_budget_exhausted" not in kinds
+    assert "investigation_stopped_at_floor" not in kinds
+    assert (
+        [kind for kind, _payload in emitted].count(
+            "investigation_stopped_at_input_bound"
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_budget_state_outranks_the_refusal_cause():
+    """상태 분기를 먼저 두는 것이 설계다.
+
+    예산이 실제로 없으면, 마지막 거절이 우연히 큰 프롬프트였다는 사실은
+    정지 사유가 아니다. G9 의 판정이 그대로 이겨야 한다.
+    """
+    ledger = FloorLedger()
+    orchestrator = Orchestrator(
+        object(),
+        "run",
+        worker_factory=lambda: None,
+        grader=Grader(),
+        ledger=ledger,
+        synthesizer=Synthesizer(),
+        citation_renderer=CitationRenderer(),
+        global_token_cap=100,
+    )
+    await orchestrator._install_token_budget()
+    orchestrator.token_budget._consumed_tokens = 100
+
+    await orchestrator._mark_stop_reason(
+        TokenBudgetExhausted(cause="input_bound", stage="report_assembly")
+    )
+
+    kinds = [event[0] for event in ledger.events]
+    assert "token_budget_exhausted" in kinds
+    assert "investigation_stopped_at_input_bound" not in kinds
+
+
+@pytest.mark.asyncio
+async def test_recording_an_input_bound_stop_twice_records_it_once():
+    """예외 경로가 부르고 무조건 호출이 뒤따른다 -- 중복 적재는 안 된다."""
+    ledger = FloorLedger()
+    orchestrator = Orchestrator(
+        object(),
+        "run",
+        worker_factory=lambda: None,
+        grader=Grader(),
+        ledger=ledger,
+        synthesizer=Synthesizer(),
+        citation_renderer=CitationRenderer(),
+        global_token_cap=100_000,
+    )
+    await orchestrator._install_token_budget()
+    exc = TokenBudgetExhausted(cause="input_bound", stage="worker_analysis")
+
+    await orchestrator._mark_stop_reason(exc)
+    await orchestrator._mark_stop_reason(exc)
+    await orchestrator._mark_stop_reason()
+
+    stops = [
+        e for e in ledger.events
+        if e[0] == "investigation_stopped_at_input_bound"
+    ]
+    assert len(stops) == 1

@@ -39,7 +39,41 @@ FINALIZATION_STAGES = frozenset({
 
 
 class TokenBudgetExhausted(RuntimeError):
-    """Raised when no output token can be reserved within the hard cap."""
+    """Raised when no output token can be reserved within the hard cap.
+
+    Carries *why*. `reserve` refuses for two different reasons and used to
+    throw the same bare exception for both, so every consumer had to guess:
+    `_mark_stop_reason` guessed "neither" and logged nothing at all (G10),
+    and the synthesizer guessed "token_budget_exhausted" and wrote it into
+    the ledger even when the budget had headroom left. The refusal site is
+    the only place that knows which of the two happened -- the budget's own
+    state afterwards looks identical for the second case. This is how it
+    says so.
+
+    Every field defaults, so `TokenBudgetExhausted("cap")` stays valid; the
+    default `cause` is the reading the bare exception always carried.
+    """
+
+    def __init__(
+        self,
+        message: str = "deep-analysis token budget exhausted",
+        *,
+        cause: str = "tier_floor",
+        stage: str = "",
+        model: str = "",
+        input_bound: int = 0,
+        ceiling: int = 0,
+        requested: int = 0,
+        granted: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.cause = cause
+        self.stage = stage
+        self.model = model
+        self.input_bound = input_bound
+        self.ceiling = ceiling
+        self.requested = requested
+        self.granted = granted
 
 
 class TokenBudgetContractError(RuntimeError):
@@ -180,7 +214,22 @@ class TokenBudget:
             # budget-starved grants, not modest ones.
             viability = min(max_output_tokens, self.min_viable_output_tokens)
             if output_tokens < viability:
-                raise TokenBudgetExhausted("deep-analysis token budget exhausted")
+                # `ceiling > 0` separates the two refusals: the tier is
+                # empty, or the tier has room and this prompt does not fit
+                # in it. Nothing downstream can recover the distinction --
+                # both raise from here, and for the second case the budget
+                # still reads as having headroom, which is exactly why that
+                # stop went unrecorded (G10).
+                raise TokenBudgetExhausted(
+                    "deep-analysis token budget exhausted",
+                    cause="input_bound" if ceiling > 0 else "tier_floor",
+                    stage=stage,
+                    model=model,
+                    input_bound=input_bound,
+                    ceiling=ceiling,
+                    requested=max_output_tokens,
+                    granted=output_tokens,
+                )
 
             reservation = TokenReservation(
                 id=uuid4().hex,

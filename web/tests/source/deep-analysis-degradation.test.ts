@@ -38,6 +38,8 @@ const CANONICAL_FIXTURE: [string, Record<string, unknown>, string | null][] = [
     "judge_unreviewed:unparseable"],
   ["report_graded", { ok: true, uncited_ratio: 0.1 }, null],
   ["investigation_stopped_at_floor", { floor_tokens: 41040 }, null],
+  ["investigation_stopped_at_input_bound",
+    { stage: "worker_analysis", input_bound: 17723, ceiling: 12000 }, null],
   ["claim_discarded", {}, null],
   ["llm_truncated", { stage: "worker_analysis" }, null],
 ];

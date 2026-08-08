@@ -33,6 +33,8 @@ CANONICAL_FIXTURE = [
      "judge_unreviewed:unparseable"),
     ("report_graded", {"ok": True, "uncited_ratio": 0.1}, None),
     ("investigation_stopped_at_floor", {"floor_tokens": 41040}, None),
+    ("investigation_stopped_at_input_bound",
+     {"stage": "worker_analysis", "input_bound": 17723, "ceiling": 12000}, None),
     ("claim_discarded", {}, None),
     ("llm_truncated", {"stage": "worker_analysis"}, None),
 ]

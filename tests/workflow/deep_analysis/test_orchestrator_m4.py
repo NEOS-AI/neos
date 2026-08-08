@@ -200,6 +200,44 @@ async def test_report_grader_rejection_exhausts_cap_and_appends_appendix():
 
 
 @pytest.mark.asyncio
+async def test_cap_exhaustion_ships_the_rendered_draft_not_the_raw_one():
+    """W3-a: 캡이 소진돼도 사용자는 렌더된 리포트를 받아야 한다.
+
+    2026-08-07 라이브 표본 6/6 run 이 이 경로로 나갔고, 전부 원본
+    `[C:xxxxxxxx]` 마커를 달고 `## 출처` 절 없이 사용자에게 갔다. 원본 마커는
+    독자가 따라갈 수 있는 인용이 아니라 내부 주소다. 게이트 정책을 어떻게
+    정하든 이건 결함이다.
+    """
+    ledger = FakeLedger()
+    synth = FakeSynth()
+    renderer = FlakyRenderer(fail_times=0)  # render always clean
+    orch = _orch(ledger, synth, renderer, grader=FailGrader())
+
+    report = await orch._finalize("root0001")
+
+    assert "[1] http://x" in report  # 렌더 결과가 실렸다
+    assert "## 부록: 미해결 사유" in report
+
+
+@pytest.mark.asyncio
+async def test_cap_exhaustion_falls_back_to_the_raw_draft_when_nothing_rendered():
+    """모든 시도가 orphan 이면 렌더된 텍스트가 존재하지 않는다.
+
+    그 경우에만 원본 draft 로 떨어진다 -- 빈손으로 나가는 것보다 낫다(§6.8).
+    """
+    ledger = FakeLedger()
+    synth = FakeSynth()
+    renderer = FlakyRenderer(fail_times=99)
+    orch = _orch(ledger, synth, renderer, grader=OkGrader())
+
+    report = await orch._finalize("root0001")
+
+    assert "DRAFT-3" in report
+    assert "[1] http://x" not in report
+    assert "## 부록: 미해결 사유" in report
+
+
+@pytest.mark.asyncio
 async def test_missing_report_grader_defaults_to_ok():
     ledger = FakeLedger()
     synth = FakeSynth()

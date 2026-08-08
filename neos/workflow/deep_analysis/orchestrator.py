@@ -139,6 +139,7 @@ class Orchestrator:
         self._all_failed_rounds = 0
         self._token_budget_exhausted_logged = False
         self._investigation_stopped_at_floor_logged = False
+        self._investigation_stopped_at_input_bound_logged = False
         self.token_budget = TokenBudget(
             self.global_token_cap,
             floor_tokens=self.finalization_floor_tokens,
@@ -236,7 +237,53 @@ class Orchestrator:
         await self._emit("investigation_stopped_at_floor", payload)
         self._investigation_stopped_at_floor_logged = True
 
-    async def _mark_stop_reason(self) -> None:
+    async def _mark_investigation_stopped_at_input_bound(
+        self, exc: TokenBudgetExhausted
+    ) -> None:
+        """Record that investigation stopped because a prompt would not fit
+        the headroom left -- not because there was no headroom.
+
+        `TokenBudget.reserve` refuses when `ceiling - input_bound` falls
+        under viability even with `ceiling > 0`. Afterwards the budget looks
+        like a run that simply had questions left, so neither state branch in
+        `_mark_stop_reason` catches it and the stop went unrecorded (G10).
+        Only the refusal carries the fact; this payload is what it carried.
+
+        `floor_tokens` is deliberately absent. This stop did not reach the
+        floor, and quoting floor numbers would read as if it had -- the same
+        mistake, one label covering two facts, that G9 removed. `stage`,
+        `input_bound` and `ceiling` say what failed to fit into what.
+
+        Payload carries counts and identifiers only, mirroring the other two
+        stop events -- never prompt or report text.
+        """
+        if self._investigation_stopped_at_input_bound_logged:
+            return
+        has_event = getattr(self.ledger, "has_event", None)
+        if has_event is not None and await has_event(
+            "investigation_stopped_at_input_bound"
+        ):
+            self._investigation_stopped_at_input_bound_logged = True
+            return
+        payload = {
+            "cap_tokens": self.token_budget.cap_tokens,
+            "consumed_tokens": self.token_budget.consumed_tokens,
+            "reserved_tokens": self.token_budget.reserved_tokens,
+            "stage": exc.stage,
+            "model": exc.model,
+            "input_bound": exc.input_bound,
+            "ceiling": exc.ceiling,
+        }
+        await self.ledger.log(
+            "investigation_stopped_at_input_bound", None, payload
+        )
+        await self._checkpoint()
+        await self._emit("investigation_stopped_at_input_bound", payload)
+        self._investigation_stopped_at_input_bound_logged = True
+
+    async def _mark_stop_reason(
+        self, exc: TokenBudgetExhausted | None = None
+    ) -> None:
         """Record why investigation stopped, from the budget's state.
 
         The exception path used to assert "exhausted" on its own, and the
@@ -247,8 +294,10 @@ class Orchestrator:
         headroom left in the cap.
 
         `TokenBudget.reserve` raises the same `TokenBudgetExhausted` for
-        both causes, so the exception type carries no information about
-        which one happened. Only the budget's state does.
+        every cause, so the exception *type* carries no information about
+        which one happened. The budget's state answers two of the three;
+        for the third only the exception's `cause` does, which is why it is
+        now carried (token_budget.py).
 
         The floor branch below tests `<` against `min_viable_output_tokens`
         rather than `<= 0`, mirroring `Budgeter.should_stop`'s own viability
@@ -256,20 +305,18 @@ class Orchestrator:
         since the loop already halts once headroom drops below viability,
         not once it reaches zero.
 
-        There is deliberately no third branch: a run that stopped because
-        no open question cleared `score_floor` has no budget event to
-        record, and inventing one would put the ledger back to guessing.
-        That reasoning only covers the score-floor case, though -- it is not
-        a claim that every silent stop is accounted for. `TokenBudget.reserve`
-        also refuses a reservation when
-        `available_for_investigation - input_bound < min_viable_output_tokens`,
-        i.e. with headroom left in `available_for_investigation` itself; that
-        refusal raises the same `TokenBudgetExhausted` but satisfies neither
-        branch here, so it reaches this method and still logs nothing (see
-        G10 in `docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md` §7 -- tracked, not
-        fixed here).
+        Order matters. The two state branches come first so G9's judgement
+        is untouched: when the budget really is spent, the last refusal
+        happening to carry a large prompt is not the reason the run stopped.
+        The third branch only fills the silence -- a refusal raised while
+        `available_for_investigation` still cleared viability, which used to
+        satisfy no branch at all (G10).
 
-        Both `_mark_*` helpers are idempotent (in-memory flag plus a
+        There is still deliberately no branch for a run that stopped because
+        no open question cleared `score_floor`: it has no budget event to
+        record, and inventing one would put the ledger back to guessing.
+
+        All three `_mark_*` helpers are idempotent (in-memory flag plus a
         `has_event` lookup), so calling this from both paths cannot
         double-log.
         """
@@ -280,6 +327,8 @@ class Orchestrator:
             < self.token_budget.min_viable_output_tokens
         ):
             await self._mark_investigation_stopped_at_floor()
+        elif exc is not None and exc.cause == "input_bound":
+            await self._mark_investigation_stopped_at_input_bound(exc)
 
     async def _grade(self, claim, value_est):
         """Two-stage grading: deterministic tier first; only claims that pass
@@ -948,6 +997,10 @@ class Orchestrator:
 
         cap = config.report_retry_cap
         last: str | None = None
+        # The last draft that survived citation rendering. `last` is the raw
+        # assembly output and still carries `[C:xxxxxxxx]` markers, which are
+        # internal claim addresses -- not citations a reader can follow.
+        last_rendered: str | None = None
         for attempt in range(cap + 1):
             draft = await self.synthesizer.assemble(
                 root_summary, child_summaries, caveats
@@ -966,6 +1019,7 @@ class Orchestrator:
                     },
                 )
                 continue  # AC-c: orphan citation → re-assemble
+            last_rendered = report
             verdict = (
                 await self.report_grader.grade(report, root_id)
                 if self.report_grader is not None
@@ -996,8 +1050,20 @@ class Orchestrator:
             )
 
         # Cap exhausted — no empty-handed exit (§6.8): attach a failure
-        # appendix to the last draft (best-effort raw text).
-        report = (last or "") + (
+        # appendix to the last draft that rendered.
+        #
+        # This used to ship `last`, the raw assembly output. Every run of the
+        # 2026-08-07 live sample left by this path (the gate rejected 18 of 18
+        # attempts), so every report handed to a user carried raw
+        # `[C:da8b7072]` markers and no `## 출처` list -- an internal claim
+        # address where a citation belonged. The rendered text is also the
+        # exact text the grader judged, so the `uncited_ratio` recorded in the
+        # ledger now describes what was actually delivered.
+        #
+        # `last` remains the fallback for the case where every attempt
+        # orphaned: there is no rendered text then, and a raw draft still
+        # beats exiting empty-handed.
+        report = (last_rendered or last or "") + (
             "\n\n## 부록: 미해결 사유\n조립/채점 재시도 캡 소진."
         )
         await self.ledger.complete_run()
@@ -1018,8 +1084,8 @@ class Orchestrator:
                     while not await self.budgeter.should_stop(self.ledger):
                         if not await self._run_round():
                             break
-                except TokenBudgetExhausted:
-                    await self._mark_stop_reason()
+                except TokenBudgetExhausted as exc:
+                    await self._mark_stop_reason(exc)
                     root = await self.ledger.root_question()
                     if root is None:
                         raise
