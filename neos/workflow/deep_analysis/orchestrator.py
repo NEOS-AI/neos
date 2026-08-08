@@ -48,6 +48,53 @@ class SystemicWorkerFailure(RuntimeError):
 
 _LIMITS_HEADING = "## 한계와 미확인 사항"
 
+# How far each rejection code got through `grade_deterministic`, in the order
+# that grader applies its checks. A draft refused later cleared every check
+# before it, so this is a fact about the gate rather than a judgement call.
+# `E_REPORT_AGENTIC` sits highest: it cleared all four deterministic checks
+# and only the LLM judge objected.
+_GATE_DEPTH = {
+    "E_ORPHAN_CITE": 0,
+    "E_REPORT_EMPTY": 1,
+    "E_REPORT_UNCITED": 2,
+    "E_REPORT_MISSING_QUESTION": 3,
+    "E_REPORT_NO_LIMITS": 4,
+    "E_REPORT_AGENTIC": 5,
+}
+
+
+def _best_rejected_draft(rejected: list[tuple[Verdict, str]]) -> str | None:
+    """Pick which refused draft the user actually receives.
+
+    Every attempt was rejected, so this does not change the pass rate --
+    it changes what a failed run hands back. Today the loop keeps whichever
+    draft came last, and sample #5 shows the cost: `94b0483c` produced
+    drafts scoring 0.140 and 0.095 (both under the 0.20 citation cut, both
+    stopped by the agentic judge) and then shipped its third at 0.208. The
+    two better drafts were discarded for no reason other than arrival order.
+
+    Returns the chosen report text, or None when nothing was ever graded
+    (every attempt orphaned before rendering) -- the caller falls back.
+
+    TODO(사용자): 순위 규칙을 여기에 작성.
+
+    쓸 수 있는 재료:
+      * `verdict.code` -> `_GATE_DEPTH[code]`  게이트를 얼마나 통과했는지
+      * `verdict.diagnostics["uncited_ratio"]`  인용 없는 비율 (낮을수록 좋음)
+      * `verdict.diagnostics["uncited_assertions"]`  그 비율의 분모.
+        분모가 작으면 비율이 좋아 보이기 쉽다 -- 주장 2개 중 0개 미인용은
+        주장 40개 중 4개 미인용보다 나은 리포트가 아닐 수 있다.
+      * 리스트 순서 = 시도 순서 (뒤로 갈수록 힌트를 더 받은 초안)
+
+    참고: `diagnostics` 는 비어 있을 수 있다 (고아 마커 분기는 채점 자체를
+    건너뛴다). `.get()` 으로 읽을 것.
+    """
+
+    if not rejected:
+        return None
+    # 잠정 동작: 지금까지와 같이 마지막 초안. 위 규칙을 채우면 대체된다.
+    return rejected[-1][1]
+
 
 def _ensure_limits_section(report: str, caveats: list[str]) -> str:
     """Guarantee the report's required limits section, from what we already know.
@@ -1056,6 +1103,9 @@ class Orchestrator:
         # `d8cda7c5` .316 -> .235 -> .250). Two of `94b0483c`'s drafts had
         # already cleared the citation cut and the third undid it.
         revision_hints: list[str] = []
+        # Every rendered draft the gate refused, with the verdict that
+        # refused it. Feeds `_best_rejected_draft` once the cap is spent.
+        rejected: list[tuple[Verdict, str]] = []
         for attempt in range(cap + 1):
             draft = await self.synthesizer.assemble(
                 root_summary,
@@ -1118,6 +1168,7 @@ class Orchestrator:
             # hints carry the rejected draft's own sentences and stay in
             # process, feeding the next iteration's prompt.
             revision_hints = verdict.revision_hints
+            rejected.append((verdict, report))
 
         # Cap exhausted — no empty-handed exit (§6.8): attach a failure
         # appendix to the last draft that rendered.
@@ -1133,7 +1184,8 @@ class Orchestrator:
         # `last` remains the fallback for the case where every attempt
         # orphaned: there is no rendered text then, and a raw draft still
         # beats exiting empty-handed.
-        report = (last_rendered or last or "") + (
+        chosen = _best_rejected_draft(rejected)
+        report = (chosen or last_rendered or last or "") + (
             "\n\n## 부록: 미해결 사유\n조립/채점 재시도 캡 소진."
         )
         await self.ledger.complete_run()
