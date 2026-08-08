@@ -997,6 +997,10 @@ class Orchestrator:
 
         cap = config.report_retry_cap
         last: str | None = None
+        # The last draft that survived citation rendering. `last` is the raw
+        # assembly output and still carries `[C:xxxxxxxx]` markers, which are
+        # internal claim addresses -- not citations a reader can follow.
+        last_rendered: str | None = None
         for attempt in range(cap + 1):
             draft = await self.synthesizer.assemble(
                 root_summary, child_summaries, caveats
@@ -1015,6 +1019,7 @@ class Orchestrator:
                     },
                 )
                 continue  # AC-c: orphan citation → re-assemble
+            last_rendered = report
             verdict = (
                 await self.report_grader.grade(report, root_id)
                 if self.report_grader is not None
@@ -1045,8 +1050,20 @@ class Orchestrator:
             )
 
         # Cap exhausted — no empty-handed exit (§6.8): attach a failure
-        # appendix to the last draft (best-effort raw text).
-        report = (last or "") + (
+        # appendix to the last draft that rendered.
+        #
+        # This used to ship `last`, the raw assembly output. Every run of the
+        # 2026-08-07 live sample left by this path (the gate rejected 18 of 18
+        # attempts), so every report handed to a user carried raw
+        # `[C:da8b7072]` markers and no `## 출처` list -- an internal claim
+        # address where a citation belonged. The rendered text is also the
+        # exact text the grader judged, so the `uncited_ratio` recorded in the
+        # ledger now describes what was actually delivered.
+        #
+        # `last` remains the fallback for the case where every attempt
+        # orphaned: there is no rendered text then, and a raw draft still
+        # beats exiting empty-handed.
+        report = (last_rendered or last or "") + (
             "\n\n## 부록: 미해결 사유\n조립/채점 재시도 캡 소진."
         )
         await self.ledger.complete_run()
