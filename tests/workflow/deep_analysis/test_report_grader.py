@@ -532,3 +532,50 @@ async def test_budget_exhausted_judge_is_marked_not_silent():
 
     assert verdict.ok is True
     assert verdict.detail == "judge_budget_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_a_markdown_heading_is_not_a_factual_assertion():
+    """W3-f: `### 1.` 이 "인용 없는 사실 주장"으로 세어지고 있었다.
+
+    `_sentences` 가 줄바꿈으로 나누므로 제목이 독립 문장이 되고, 번호가 붙어
+    있으면 `_DIGIT` 에 걸려 assertion 으로 분류됐다. 2026-08-08 표본 #4 실측:
+    run 당 1~7개의 uncited 가 제목 조각이었고, 제외하면 `93795eaf` 는
+    0.348 → 0.167, `2ff4761c` 는 0.333 → 0.143 으로 임계값(0.20) 아래로 내려간다.
+    """
+    report = (
+        "## 본문\n"
+        "### 1. 배경\n"
+        "### 2. 근거\n"
+        "2024년 8월 1일에 발효되었다[1].\n\n"
+        "## 한계와 미확인 사항\n없음.\n"
+    )
+
+    verdict = await _grader(FakeLedger()).grade_deterministic(report, "root0001")
+
+    # 제목 둘은 분모에 들지 않는다 -- 남는 assertion 은 인용된 문장 하나뿐.
+    assert verdict.diagnostics["uncited_assertions"] == 1
+    assert verdict.diagnostics["uncited_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_the_limits_section_is_not_scored_for_citations():
+    """W3-f: 한계 절은 **검증하지 못한 것들의 목록**이다.
+
+    구조상 뒷받침할 verified claim 이 없는 문장들이므로 각주를 요구하는 것은
+    불가능한 요구다. `_report_body` 가 `## 출처` 를 빼는 것과 같은 이유이며,
+    W3-e 가 그 절을 항상 존재하게 만들면서 문제가 드러났다 -- 표본 #4 의
+    `cb1593f2` 는 그 절 때문에 0.353 → 0.455 로 올라갔다.
+    """
+    report = (
+        "## 본문\n"
+        "2024년 8월 1일에 발효되었다[1].\n\n"
+        "## 한계와 미확인 사항\n"
+        "- 미확인: 2025년 이후 EU 집행 통계\n"
+        "- 미조사: GPAI 벌칙 조항 3건\n"
+    )
+
+    verdict = await _grader(FakeLedger()).grade_deterministic(report, "root0001")
+
+    assert verdict.diagnostics["uncited_assertions"] == 1
+    assert verdict.diagnostics["uncited_count"] == 0

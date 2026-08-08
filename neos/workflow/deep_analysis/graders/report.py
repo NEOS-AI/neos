@@ -36,16 +36,42 @@ _PROPER_NOUN = re.compile(r"\b[A-Z][A-Za-z]{2,}\b")
 
 _SOURCE_HEADING = re.compile(r"(?m)^##\s*출처\s*$")
 
+# The limits section lists what could NOT be verified. By construction no
+# verified claim stands behind those lines, so demanding a citation on them
+# is an impossible requirement -- the same reason the footnote block is
+# excluded below. It only became visible once W3-e made the section always
+# present: sample #4's `cb1593f2` scored 0.455 with it and 0.353 without.
+_LIMITS_SCORING_BOUNDARY = re.compile(
+    r"(?m)^##\s*" + re.escape(_LIMITS_HEADING) + r"\s*$"
+)
+
+# A markdown heading is a label, not a factual assertion. `_sentences` splits
+# on newlines, so "### 1. 배경" became its own "sentence"; the digit in it
+# then satisfied `_DIGIT` and it was counted as an uncited claim. Measured
+# 2026-08-08 (sample #4): 1-7 of each run's uncited items were heading
+# fragments, and excluding them moved `93795eaf` 0.348 -> 0.167 and
+# `2ff4761c` 0.333 -> 0.143, both under the 0.20 threshold.
+_HEADING_LINE = re.compile(r"^#{1,6}\s")
+
 
 def _report_body(report: str) -> str:
-    """Everything before the '## 출처' footnote block, if present.
+    """The prose that a citation gate may fairly score.
 
-    The footnote list itself (`[1] https://...`) is not body prose and must
-    not be scored by the uncited-assertion heuristic.
+    Excludes the '## 출처' footnote block (a list of URLs is not prose) and
+    the limits section (a list of things that could not be verified cannot
+    carry citations). Whichever comes first wins, so the order the model
+    emits them in does not change the score.
     """
 
-    match = _SOURCE_HEADING.search(report)
-    return report[: match.start()] if match else report
+    cuts = [
+        match.start()
+        for match in (
+            _SOURCE_HEADING.search(report),
+            _LIMITS_SCORING_BOUNDARY.search(report),
+        )
+        if match is not None
+    ]
+    return report[: min(cuts)] if cuts else report
 
 
 def _sentences(body: str) -> list[str]:
@@ -70,7 +96,10 @@ def _uncited_stats(body: str) -> tuple[float, int, int]:
 
     sentences = _sentences(body)
     assertions = [
-        s for s in sentences if _DIGIT.search(s) or _PROPER_NOUN.search(s)
+        s
+        for s in sentences
+        if not _HEADING_LINE.match(s)
+        and (_DIGIT.search(s) or _PROPER_NOUN.search(s))
     ]
     if not assertions:
         return 0.0, 0, 0
