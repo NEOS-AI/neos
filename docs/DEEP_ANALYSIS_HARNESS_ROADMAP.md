@@ -31,7 +31,7 @@
 | **A. 심층분석 하네스** | 🟢 **W1 완료 — LLM 리포트가 나온다** (2026-08-07 표본) | **W3(G3) 게이트 재판단.** 리포트는 나오는데 게이트가 6/6 run을 3회 전부 반려한다. `report_grading` 예약은 아직 0건 |
 | **B. 역할 기반 모델 라우팅** | ✅ 완료 · 안정 | 유지보수 모드. 카탈로그 불변식 지키기 |
 | **C. 프론트엔드** | ✅ job 마이그레이션 완료, ✅ 가시성 갭 해소(FE1·FE4) | §5.3의 저위험 잔여(FE2·FE3)와 신규 FE5·FE6·FE7 |
-| **D. 프레임워크 이탈·계측 통일** | 🟡 **D3a·D1a 완료** (`963730ee`·`d9681104`) | **D1b 워커 프로세스 영속화** — 지금 확장하면 레코드가 flush 지점을 못 만나 사라진다 (§11.1 장애물 ②) |
+| **D. 프레임워크 이탈·계측 통일** | 🟡 **D3a·D1a·D1b 완료** | **D1c** — 이제 `neos/coding/`·`deep_analysis/`에 어댑터를 붙이면 된다. 장애물 ①②가 둘 다 치워졌다 |
 
 **트랙 A 한 줄 요약 (2026-08-07 라이브 표본 `20260807T164924Z`로 갱신):**
 **마무리가 처음으로 출력을 냈다.** 574 run 동안 0건이던 `synth_pass`가 6 run에서
@@ -450,7 +450,7 @@ FE4가 이후 해소했다.
 | 🟢 | W1-m1 | `node_summary.prompt_chars`가 이제 **클램프된** 프롬프트를 잰다 — 이 경계 전후로 비교 불가. 비교하려면 `finalization_prompt_clamped`와 조인해야 한다 | A |
 | 🟢 | W1-m2 | `Synthesizer.assembly_input_allowance`는 외부에서 만든 Synthesizer를 주입하면 **전역** `synthesis_max_tokens`로 떨어진다(프로파일 값이 아니라). 프로덕션 경로는 일관되지만 주석은 이 경우를 부정한다 | A |
 | 🟢 | W1-m3 | `tests/workflow/deep_analysis/test_synthesizer.py`의 docstring이 옛 dev 프로파일(15x / 20,000)을 서술한다. 단언은 의존하지 않는다 | A |
-| 🟡 | **D1b·D1c** | 콜렉터가 `neos/coding/`·`deep_analysis/`를 계측하지 않는다(각 0곳) · 프로세스 메모리 싱글턴이라 워커 레코드가 유실된다 (§11.1). **D1a(탈-LangChain)는 완료** `d9681104` | D |
+| 🟡 | **D1c** | 콜렉터가 `neos/coding/`·`deep_analysis/`를 계측하지 않는다 (각 0곳). 선행 둘은 해소됐다 — D1a 탈-LangChain `d9681104` · D1b 쓰기-즉시 영속화 `29223829` | D |
 | 🟢 | **D2** | 멀티홉 2,468줄이 스킬 계약 밖에 있다 / citation 렌더 경로가 3곳에 흩어져 있다 (§11.2) | D |
 | 🔴 | **D3b** | langgraph 제거는 "삭제"가 아니라 **런타임 교체 + 체크포인트 자체 구현**이다 — `graph.py` 2,259줄 + 체크포인터 991줄 (§11.3) | D |
 | 🟡 | **D4** | `ModelProviderBase.create_llm()`이 `BaseLanguageModel`을 반환해 LangChain을 저장소 전체에 고정한다. 전환 시 §4.2 라우팅 불변식과 충돌 위험 (§11.4) | D×B |
@@ -923,6 +923,28 @@ D2 스킬화 ──────────────────────�
 (`neos/coding/model/base.py`)를, deep_analysis는 `LLMResponse`(`llm.py:36`)를 쓴다.
 **서로 다른 usage 표현이 셋 있고 콜렉터는 그중 하나만 안다.**
 
+**✅ D1b 해소 (2026-08-08, `29223829`) — 배출구를 늘리지 않고 없앴다.**
+워커 teardown·job 완료·`atexit`에 flush를 더 다는 길은 택하지 않았다. 새 진입점이
+생길 때마다 누군가 flush를 기억해야 하고, 잊으면 조용히 사라진다 — 이 저장소가
+반복해서 다친 그 실패 모드다. 대신 `add_record`가 곧 영속화 지점이 되도록 바꿨다
+(`neos/dataset/record_sink.py`). 레코드 1건 = JSONL 1줄을 `datasets/records/{날짜}/
+{PID}-{난수}.jsonl`에 append한다.
+
+| 제약 | 이유 |
+|---|---|
+| 동기 파일 I/O | `create_llm_call_record`가 동기 함수다 — sync 호출부(`invoke`)에서도 불린다 |
+| 프로세스당 파일 | 잠금 없이 워커 N개가 동시에 쓴다. 파일명이 PID를 담아 출처도 남는다 |
+| 절대 던지지 않는다 | 수집 실패는 데이터 손실이지만, 예외를 올리면 그 LLM 호출 자체가 죽는다 |
+| 잘린 줄은 건너뛴다 | 프로세스가 쓰다 죽으면 마지막 줄이 불완전하다. 그 한 줄 때문에 앞의 것을 잃지 않는다 |
+
+완료 기준 검증은 **실제 서브프로세스를 띄워** 한다
+(`tests/dataset/test_record_sink.py::test_a_separate_process_leaves_its_records_behind`)
+— 모킹으로는 "별도 프로세스에서 살아남는다"를 증명할 수 없다.
+
+메모리 리스트와 `_auto_save_dataset()`은 그대로 뒀다. 기존 `datasets/*.jsonl` 산출물과
+`get_statistics()` 소비자를 깨지 않기 위해서다. **디스크가 정본이고 메모리는 이 프로세스가
+본 것의 캐시다.**
+
 **장애물 ② — 콜렉터가 프로세스 메모리 싱글턴이다.**
 `LLMCallCollector`는 `_records: List[...]`를 클래스 변수로 들고 있고(`collector.py:19-29`),
 영속화는 `graph.py:2056`을 지나갈 때만 일어난다. 코딩 에이전트는 Celery 워커에서,
@@ -937,7 +959,7 @@ deep_analysis는 job 서비스에서 돈다 — **둘 다 그 flush 지점을 �
 
 **완료 기준:**
 - `neos/coding/`·`neos/workflow/deep_analysis/`의 LLM 호출이 `LLMCallRecord`로 남는다 — ⬜ D1c
-- 워커 프로세스에서 생성된 레코드가 `graph.py` flush 지점 없이 영속화된다 — ⬜ D1b
+- 워커 프로세스에서 생성된 레코드가 `graph.py` flush 지점 없이 영속화된다 — ✅ **D1b 완료** (`29223829`)
 - `TrackedLLM`이 `langchain_core` 임포트 없이 동작한다 — ✅ **D1a 완료** (`d9681104`)
 - 계측 확장이 §6 ④(토큰 집계는 API `usage`만 사용)를 위반하지 않는다: 자체 추정 금지 — ✅ 회귀 가드 있음
 
