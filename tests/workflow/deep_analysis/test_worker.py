@@ -429,6 +429,83 @@ def test_tier_ranking_is_a_no_op_without_primary_sources():
 
 
 @pytest.mark.asyncio
+async def test_primary_source_augmentation_adds_candidates_the_base_query_missed():
+    """D45 는 **후보 선택**만 고쳤다 -- 엔진이 tier1 을 0건 주면 정렬은 항등
+    함수다. 증강 질의는 **무엇을 후보로 받는가**를 바꾼다.
+
+    표본 #10 의 판정자 불만 두 가지 중 하나가 여기다: "질문이 요구한 공식 EU
+    출처 대신 2차 비공식 출처".
+    """
+
+    class TieredSearch:
+        """기저 질의는 tier2 만, 증강 질의는 tier1 을 준다."""
+
+        def __init__(self):
+            self.calls = []
+
+        async def __call__(self, query, k):
+            self.calls.append(query)
+            if "official primary source" in query:
+                return [{"url": "https://eur-lex.europa.eu/reg", "title": "t"}]
+            return [
+                {"url": f"https://blog.example.com/{i}", "title": "t"}
+                for i in range(k)
+            ]
+
+    search = TieredSearch()
+    fetch = FakeFetch()
+    worker = Worker(search, fetch_fn=fetch, llm_client=FakeLLM())
+
+    result = await worker.investigate(
+        "Q\n{fetched_evidence}", Effort.SCOUT, "question", question_text="Q"
+    )
+
+    assert len(search.calls) == 2
+    assert search.calls[0] == "Q"
+    assert search.calls[1].startswith("Q ")
+    # 기저 질의가 못 찾은 1차 출처를 증강이 찾아왔고, 슬라이스를 통과했다.
+    assert result.search_augmentation["base_tier1"] == 0
+    assert result.search_augmentation["added_tier1"] == 1
+    assert result.search_augmentation["selected_tier1"] == 1
+    assert "https://eur-lex.europa.eu/reg" in fetch.calls
+
+
+@pytest.mark.asyncio
+async def test_augmentation_never_removes_a_base_candidate():
+    """증강 질의가 관련도를 흐리는 최악의 경우에도 결과는 기저 질의의
+    **상위집합**이어야 한다. 그래야 이 기능이 손해를 볼 수 없다."""
+    from neos.workflow.deep_analysis.worker import _merge_candidates
+
+    base = [{"url": "https://a.com/1"}, {"url": "https://b.com/2"}]
+    extra = [{"url": "https://b.com/2"}, {"url": "https://junk.com/9"}]
+
+    merged = [c["url"] for c in _merge_candidates(base, extra)]
+
+    # 기저가 먼저, 중복 없이, 증강은 뒤에만 붙는다. `_rank_by_source_tier` 가
+    # 안정 정렬이므로 같은 tier 안에서는 이 순서가 그대로 남는다.
+    assert merged == ["https://a.com/1", "https://b.com/2", "https://junk.com/9"]
+
+
+@pytest.mark.asyncio
+async def test_empty_augment_string_skips_the_second_query():
+    """빈 문자열이 off 스위치다 -- 별도 플래그를 두지 않는다."""
+    search = FakeSearch()
+    worker = Worker(search, fetch_fn=FakeFetch(), llm_client=FakeLLM())
+    config = settings.config.deep_analysis
+    original = config.search_primary_augment
+    object.__setattr__(config, "search_primary_augment", "")
+    try:
+        result = await worker.investigate(
+            "Q\n{fetched_evidence}", Effort.SCOUT, "question", question_text="Q"
+        )
+    finally:
+        object.__setattr__(config, "search_primary_augment", original)
+
+    assert len(search.calls) == 1
+    assert result.search_augmentation["added_candidates"] == 0
+
+
+@pytest.mark.asyncio
 async def test_wider_candidate_search_does_not_widen_fetching():
     """넓게 받아 고르되 **fetch 수는 그대로**여야 한다.
 

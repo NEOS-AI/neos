@@ -162,7 +162,7 @@ _MAX_HINT_CHARS = 160
 _MAX_RATIONALE_CHARS = 400
 
 
-def _uncited_hints(offenders: list[str]) -> list[str]:
+def _uncited_hints(offenders: list[str], assertions: int) -> list[str]:
     """Turn uncited sentences into instructions the next attempt can act on.
 
     Two ways out, and the second is the one that matters (W3-h): sentences
@@ -173,15 +173,37 @@ def _uncited_hints(offenders: list[str]) -> list[str]:
     수 없다"), written into the body where it gets scored. Naming the escape
     route beats teaching the grader to excuse the phrasing, which would only
     hand the model a way to dodge citations.
+
+    The framing carries as much weight as the content. `assemble` never
+    receives the rejected draft -- only these lines -- so an attempt cannot
+    literally "attach a marker to each sentence": it writes a fresh report
+    with eight orphaned sentences sitting in its prompt, where they read as
+    *material to include* rather than *lines to fix*. Sample #10 measured the
+    consequence: attempt 1 raised the assertion count in all three retried
+    runs (19->60, 31->46, 16->42) and the uncited ratio worsened every time
+    (.400/.435/.714). So the sentences are named as belonging to a previous
+    draft, and `assertions` anchors the length -- the retry's failure is
+    citation coverage, and writing more of the same only enlarges the
+    denominator.
+
+    Not fixed by passing the draft itself: dev's assembly input allowance is
+    `assembly_input_ratio * synthesis_max_tokens` = 6000, samples #7-#8
+    clamped that prompt 39-42 times already, and `shrink_once` drops child
+    summary blocks first -- the very evidence the citations come from. That
+    trades a citation problem for an evidence problem.
     """
 
     if not offenders:
         return []
     shown = offenders[:_MAX_HINTED_SENTENCES]
     lines = [
-        f"다음 {len(offenders)}개 문장에 인용이 없다. 각각 입력에 있는 "
-        "[C:claimid] 마커를 붙이거나, 뒷받침할 클레임이 없다면 "
-        f"'## {_LIMITS_HEADING}' 절로 옮겨라:"
+        f"직전 초안은 사실 주장 {assertions}개를 담았고 그중 "
+        f"{len(offenders)}개에 인용이 없어 반려됐다. 문제는 분량이 아니라 "
+        f"인용이다 -- 이번 초안을 {assertions}개보다 길게 쓰지 마라. "
+        "아래는 직전 초안에서 인용이 없던 문장이다. 그대로 다시 쓰지 말고, "
+        "입력에 있는 [C:claimid] 마커를 붙일 수 있으면 붙여 쓰고 "
+        f"뒷받침할 클레임이 없으면 '## {_LIMITS_HEADING}' 절로 옮기거나 "
+        "빼라:"
     ]
     for sentence in shown:
         text = sentence[:_MAX_HINT_CHARS].strip()
@@ -265,7 +287,7 @@ class ReportGrader:
                 code="E_REPORT_UNCITED",
                 detail=f"uncited assertion ratio {ratio:.2f} >= {threshold}",
                 diagnostics=diagnostics,
-                revision_hints=_uncited_hints(offenders),
+                revision_hints=_uncited_hints(offenders, assertions),
             )
 
         # (c) every resolved root-direct-child question must be mentioned.

@@ -974,6 +974,24 @@ class DeepAnalysisConfig(StrictConfigModel):
     # 몇 배를 후보로 받아 tier 순으로 고른다. fetch 수는 그대로이므로
     # 늘어나는 비용은 검색 결과 몇 줄뿐이다.
     source_candidate_multiplier: int = 3
+    # 1차 기관 출처를 겨냥해 한 번 더 검색할 때 원 질문 뒤에 붙일 키워드.
+    #
+    # `source_candidate_multiplier` 와 `_rank_by_source_tier`(D45)는 **엔진이
+    # 이미 돌려준 것 안에서만** 고른다. 엔진이 tier1 URL 을 0건 반환하면 정렬은
+    # 항등 함수이고 후보를 3배로 넓혀도 같은 질의의 3배일 뿐이다. 표본 #10 의
+    # 판정자가 남긴 두 불만 중 하나가 여기다 -- "질문이 요구한 공식 EU 출처
+    # 대신 2차 비공식 출처".
+    #
+    # `site:` 문법이 아니라 평문 키워드인 이유: `web_search` 는 질의 문자열
+    # 하나만 받고(`service.py:17`) 백엔드 엔진이 무엇인지 모른다. `site:` 를
+    # 지원하지 않는 엔진에서는 0건이 돌아오는데, 그러면 fetch 할 URL 이 없어
+    # 모든 클레임이 E_NO_EVIDENCE 로 거절된다 -- 검색어에 brief 전문을 넣었을
+    # 때와 같은 고장이다. 키워드는 최악의 경우에도 결과를 흐릴 뿐 없애지 않고,
+    # 워커는 두 질의를 **병합**하므로 결과 집합은 기저 질의의 상위집합이다.
+    # `site:` 를 지원하는 배포는 이 값을 그 문법으로 덮어쓰면 된다.
+    #
+    # 빈 문자열이면 2차 질의를 건너뛴다 -- 별도 on/off 플래그를 두지 않는다.
+    search_primary_augment: str = "공식 기관 원문 official primary source"
     dev_profile: DeepAnalysisDevProfileConfig = Field(
         default_factory=DeepAnalysisDevProfileConfig
     )

@@ -848,6 +848,13 @@ class Ledger:
                 "tokens": result.tokens_spent,
                 "confidence_clamped_count": sum(clamp_counts.values()),
                 "confidence_clamped_by_source_count": clamp_counts,
+                **{
+                    f"search_{key}": value
+                    for key, value in sorted(
+                        result.search_augmentation.items()
+                    )
+                    if isinstance(value, int)
+                },
             },
         )
         await self.db.flush()

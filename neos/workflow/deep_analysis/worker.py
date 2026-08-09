@@ -58,6 +58,36 @@ def _rank_by_source_tier(
     )
 
 
+def _merge_candidates(
+    base: list[dict], extra: list[dict]
+) -> list[dict]:
+    """`base` 뒤에 `extra` 의 새 URL 만 잇는다. 결과는 base 의 상위집합.
+
+    순서가 정책이다. `_rank_by_source_tier` 는 안정 정렬이므로 **같은 tier
+    안에서는 여기서 정한 순서가 그대로 남는다** -- 기저 질의가 먼저 오므로
+    증강 질의는 기저 질의가 놓친 자리에만 끼어든다. 증강이 관련도를 흐리는
+    최악의 경우에도 기존 후보를 밀어내지 못한다.
+    """
+
+    seen = {candidate.get("url", "") for candidate in base}
+    merged = list(base)
+    for candidate in extra:
+        url = candidate.get("url", "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        merged.append(candidate)
+    return merged
+
+
+def _tier1_count(candidates: list[dict], source_tiers: dict) -> int:
+    return sum(
+        1
+        for candidate in candidates
+        if source_tier(candidate.get("url", ""), source_tiers) == 1
+    )
+
+
 def _source_bucket(count: int) -> str:
     return str(count) if count < 3 else "3_plus"
 
@@ -98,6 +128,7 @@ class Worker:
         self._model = ""
         self._confidence_clamped_by_source_count: dict[str, int] = {}
         self._entailment_skipped = False
+        self._search_augmentation: dict[str, int] = {}
 
     def flush_partial(self, question_id: str) -> WorkerResult:
         return WorkerResult(
@@ -115,6 +146,7 @@ class Worker:
                 self._confidence_clamped_by_source_count
             ),
             entailment_skipped=self._entailment_skipped,
+            search_augmentation=dict(self._search_augmentation),
         )
 
     async def _search(self, query: str, limit: int) -> list[dict]:
@@ -163,6 +195,50 @@ class Worker:
             return await self._search(search_query, limit)
         return items
 
+    async def _augment_with_primary_sources(
+        self,
+        search_query: str,
+        effort: Effort,
+        limit: int,
+        brief: str,
+        base: list[dict],
+    ) -> list[dict]:
+        """1차 기관 출처를 겨냥한 2차 질의를 돌려 후보에 합친다.
+
+        D45 는 **후보 선택**만 고쳤다. `_rank_by_source_tier` 는 엔진이 이미
+        돌려준 목록을 재배열할 뿐이라, tier1 URL 이 애초에 0건이면 아무 일도
+        하지 않는다. 여기서 고치는 것은 **무엇을 후보로 받는가** 다.
+
+        기저 후보는 절대 버리지 않는다(`_merge_candidates`). 증강 질의가
+        관련도를 흐리는 최악의 경우에도 결과는 기저 질의의 상위집합이고,
+        추가 비용은 검색 호출 한 번이다 -- fetch 수는 슬라이스가 정하므로
+        그대로다.
+
+        `_search` 를 직접 부르고 `_collect_candidates` 의 스킬 경로를 타지
+        않는다. discovery 는 LLM tool-calling 이라 토큰을 쓰고, 증강 질의는
+        같은 질문에 대한 **보조** 조회지 별도 조사가 아니다.
+        """
+
+        config = settings.config.deep_analysis
+        augment = config.search_primary_augment.strip()
+        self._search_augmentation = {
+            "base_candidates": len(base),
+            "base_tier1": _tier1_count(base, config.source_tiers),
+            "added_candidates": 0,
+            "added_tier1": 0,
+        }
+        if not augment:
+            return base
+
+        extra = await self._search(f"{search_query} {augment}", limit)
+        merged = _merge_candidates(base, extra)
+        added = merged[len(base) :]
+        self._search_augmentation["added_candidates"] = len(added)
+        self._search_augmentation["added_tier1"] = _tier1_count(
+            added, config.source_tiers
+        )
+        return merged
+
     async def investigate(
         self,
         brief: str,
@@ -199,6 +275,7 @@ class Worker:
         self._tokens = 0
         self._confidence_clamped_by_source_count = {}
         self._entailment_skipped = False
+        self._search_augmentation = {}
 
         config = settings.config.deep_analysis
         role = "everyday" if effort == Effort.SCOUT else "powerful"
@@ -226,15 +303,27 @@ class Worker:
         # 그러면 fetch할 URL이 없어 모든 클레임이 E_NO_EVIDENCE로 거절된다.
         search_query = question_text or brief
         # 필요한 것보다 넓게 받아 tier 로 고른다. fetch 수는 그대로다.
+        candidate_limit = (
+            config.search_result_limit * config.source_candidate_multiplier
+        )
         candidates = await self._collect_candidates(
             search_query,
             effort,
-            config.search_result_limit * config.source_candidate_multiplier,
+            candidate_limit,
             brief=brief,
+        )
+        candidates = await self._augment_with_primary_sources(
+            search_query, effort, candidate_limit, brief, candidates
         )
         search_results = _rank_by_source_tier(candidates, config.source_tiers)[
             : config.search_result_limit
         ]
+        # 후보에 tier1 이 늘어도 슬라이스가 잘라내면 아무 일도 일어나지 않는다.
+        # `added_tier1` 은 증강이 무엇을 **찾았는지**, 이 값은 그중 무엇이
+        # 실제로 **fetch 됐는지**를 말한다. 뒤가 판정자가 보는 숫자다.
+        self._search_augmentation["selected_tier1"] = _tier1_count(
+            search_results, config.source_tiers
+        )
         fetched_by_url: dict[str, ProposedBlob] = {}
         for search_result in search_results:
             url = search_result.get("url", "")
@@ -354,6 +443,7 @@ class Worker:
             model=self._model,
             self_assessment=self_assessment,
             fail_reason=str(data.get("fail_reason", "")),
+            search_augmentation=dict(self._search_augmentation),
             confidence_clamped_count=sum(
                 self._confidence_clamped_by_source_count.values()
             ),

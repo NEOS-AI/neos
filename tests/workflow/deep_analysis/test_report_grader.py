@@ -200,6 +200,39 @@ async def test_high_uncited_assertion_ratio_fails():
 
 
 @pytest.mark.asyncio
+async def test_uncited_hints_anchor_length_and_disown_the_quoted_sentences():
+    """재시도 힌트는 **고칠 지시**여야지 넣을 재료로 읽혀선 안 된다.
+
+    `assemble` 은 직전 초안을 받지 않는다 -- 힌트에 실린 문장만 프롬프트에
+    들어가므로, 출처를 밝히지 않으면 그 문장들이 새 재료처럼 보인다. 표본
+    #10 의 재시도 3건 모두 주장 수가 늘고(19->60, 31->46, 16->42) 인용
+    비율이 나빠졌다(.400/.435/.714).
+    """
+    ledger = FakeLedger(children=[CHILD1, CHILD2])
+    report = (
+        "## 요약\n2020년 시장 규모는 100억 달러였다. "
+        "2021년에는 120억 달러로 성장했다. "
+        "2022년에는 150억 달러였다. "
+        "2023년 규모는 180억 달러였다[1]. "
+        "시장 규모는 얼마인가에 대한 답은 100억 달러다. "
+        "주요 업체는 누구인가에 대한 답은 A사이다.\n\n"
+        "## 한계와 미확인 사항\n조사 미흡.\n\n"
+        "## 출처\n[1] https://a.example\n"
+    )
+
+    verdict = await _grader(ledger).grade_deterministic(report, "root0001")
+
+    assert verdict.code == "E_REPORT_UNCITED"
+    header = verdict.revision_hints[0]
+    # 길이 앵커가 직전 초안의 실측 주장 수를 그대로 인용한다.
+    assertions = verdict.diagnostics["uncited_assertions"]
+    assert f"{assertions}개보다 길게 쓰지 마라" in header
+    # 인용된 문장이 직전 초안 것임을 밝히고, 다시 쓰지 말라고 말한다.
+    assert "직전 초안" in header
+    assert "그대로 다시 쓰지 말고" in header
+
+
+@pytest.mark.asyncio
 async def test_clean_report_passes_deterministic():
     ledger = FakeLedger(children=[CHILD1, CHILD2])
 

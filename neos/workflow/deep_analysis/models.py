@@ -89,6 +89,15 @@ class WorkerResult:
     # entailment 배치가 필터를 적용하지 못하고 원본 claim을 그대로 통과시켰는가.
     # discard 0건의 두 원인("버릴 게 없었다" / "필터가 안 돌았다")을 가른다.
     entailment_skipped: bool = False
+    # 1차 출처 증강 질의가 무엇을 바꿨는가. 키:
+    # `base_candidates`/`base_tier1` (기저 질의가 가져온 것),
+    # `added_candidates`/`added_tier1` (증강 질의만 가져온 것),
+    # `selected_tier1` (슬라이스를 통과해 실제 fetch 된 tier1 수).
+    #
+    # `added_tier1` 이 표본 전체에서 0 이면 평문 키워드 증강은 효과가 없고
+    # `site:` 문법이나 다른 기전이 필요하다는 뜻이다 -- 이 필드가 있어야
+    # 그 반증이 가능하다.
+    search_augmentation: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
