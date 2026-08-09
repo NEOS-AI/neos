@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import re
+
 from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
-from .llm import call_json, call_text
+from .llm import call_json, call_text, prompt_input_bound
 from .models import ConflictNote, NodeSummary
 from .prompt_clamp import clamp_prompt
 from .prompt_loader import render
 from .token_budget import TokenBudgetExhausted
+
+# A `[C:` that the truncation cut through, with fewer than the 8 hex digits
+# and the closing bracket a real marker carries.
+_DANGLING_MARKER = re.compile(r"\[C:[0-9a-f]{0,8}$")
 
 
 def _degradation_reason(exc: TokenBudgetExhausted) -> str:
@@ -94,6 +100,12 @@ class Synthesizer:
                 "dropped_primary": result.dropped_primary,
                 "dropped_secondary": result.dropped_secondary,
                 "exhausted": result.exhausted,
+                # Halving the root answer leaves no mark on the dropped
+                # counts, so without these a prompt that kept every child
+                # block by cutting its root summary to a fifth looks
+                # identical to one that never needed clamping at all.
+                "anchor_chars_before": result.anchor_chars_before,
+                "anchor_chars_after": result.anchor_chars_after,
             },
         )
 
@@ -212,12 +224,17 @@ class Synthesizer:
         ).model
         qid = root_summary.question_id if root_summary is not None else ""
 
-        def render_assembly(blocks: list[str], notes: list[str]) -> str:
+        def render_assembly(
+            blocks: list[str], notes: list[str], root: str
+        ) -> str:
             # Computed from this call's own `blocks`, not the pre-clamp
             # `child_blocks` -- the clamp can drop every child block and
             # leave `root_answer` empty too, and this must reflect that
             # (F10): the closure is pure with respect to its arguments.
-            has_content = bool(root_answer.strip()) or bool(blocks)
+            # `root` likewise: it is now clamped material (D54), so reading
+            # the captured `root_answer` here would describe a prompt this
+            # call is not sending.
+            has_content = bool(root.strip()) or bool(blocks)
             if notes:
                 caveats_text = "\n".join(notes)
             elif has_content:
@@ -226,7 +243,7 @@ class Synthesizer:
                 caveats_text = "검증된 클레임을 확보하지 못함"
             return render(
                 "final_compose",
-                root_summary=root_answer or "(요약 없음)",
+                root_summary=root or "(요약 없음)",
                 child_summaries="\n".join(blocks) or "(검증된 발견 없음)",
                 caveats=caveats_text,
                 # Not clamped alongside `blocks`: the hints name the exact
@@ -243,6 +260,10 @@ class Synthesizer:
             render_prompt=render_assembly,
             primary=child_blocks,
             secondary=list(caveats),
+            # The root answer is clamped material now (D54). It is still the
+            # most protected -- only halved, never dropped -- but it can no
+            # longer be paid for by every child block in the prompt.
+            anchor=root_answer,
         )
         await self._log_clamp(
             "report_assembly", qid, clamp, self.assembly_input_allowance
@@ -354,7 +375,11 @@ class Synthesizer:
             feature_override=settings.config.deep_analysis.models.synth,
         ).model
 
-        def render_node(claims: list[str], children: list[str]) -> str:
+        def render_node(
+            claims: list[str], children: list[str], _anchor: str = ""
+        ) -> str:
+            # `reduce_node` passes no anchor -- the question text is tiny and
+            # must never shrink, so it stays outside the clamp entirely.
             return render(
                 "node_summary",
                 question_id=question.id,
@@ -444,6 +469,38 @@ class Synthesizer:
             conflicts=conflicts,
         )
 
+    def _bound_degraded_answer(self, answer: str) -> str:
+        """Cut a degraded join down to the ceiling a real answer obeys.
+
+        The ceiling is `synthesis_max_tokens` -- the same number that caps
+        `reduce_node`'s output -- measured with `prompt_input_bound`, the
+        ruler `reserve()` charges with. Halving rather than a computed cut:
+        it is scale-free, converges in O(log n) regardless of how oversized
+        the join is, and needs no chars-per-token constant (Korean and Latin
+        text differ by ~3x, so any such constant would be wrong for one of
+        them).
+
+        The cut is pulled back to a whitespace boundary, and a `[C:` left
+        dangling by the cut is removed: a half-written marker matches neither
+        `_RAW_MARKER` nor the renderer's lookup, so it would survive into the
+        report as literal text where a citation belongs.
+        """
+
+        synth_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="powerful",
+            feature_override=settings.config.deep_analysis.models.synth,
+        ).model
+        ceiling = self.synthesis_max_tokens
+        text = answer
+        while text and prompt_input_bound(synth_model, text) > ceiling:
+            text = text[: len(text) // 2]
+        if len(text) == len(answer):
+            return answer
+        cut = text.rsplit(" ", 1)[0] if " " in text else text
+        return _DANGLING_MARKER.sub("", cut).rstrip()
+
     async def _degraded_summary(
         self,
         question,
@@ -473,16 +530,21 @@ class Synthesizer:
         so they cannot orphan. It deliberately drops the prompt scaffolding
         (evidence excerpts, confidence) that `reduce_node` builds for the
         model: that is input for an LLM, not prose for a reader.
+
+        **The join is bounded** (D54). It stands in for an answer an LLM
+        would have written under a `synthesis_max_tokens` output ceiling, and
+        it was the one path in the tree that respected no ceiling at all: a
+        degraded parent joins its children's answers, and a degraded child's
+        answer is itself such a join, so the text accumulates up the tree.
+        Sample #11's `7aa21c7f` degraded 12 reductions and **the last was the
+        root** -- its answer became most of the subtree, ~5,800-12,200 input
+        tokens against an assembly allowance of 6,000. `shrink_once` refuses
+        to drop the root answer, so the assembly clamp dropped every child
+        block and every caveat and still did not fit (12 of 12 clamps
+        `exhausted`), which starved the report of the very claims it had to
+        cite and made attempt 1 fail its reservation outright. The retry loop
+        had never run.
         """
-        await self.ledger.log(
-            "node_reduction_degraded",
-            question.id,
-            {
-                "question_id": question.id,
-                "child_count": len(child_summaries),
-                "reason": reason,
-            },
-        )
         answer = " ".join(
             c.answer for c in child_summaries if c.answer.strip()
         )
@@ -492,6 +554,22 @@ class Synthesizer:
                 f"[C:{claim.id}] {claim.text}" for claim, _evidence in pairs
             )
             claim_ids = [claim.id for claim, _evidence in pairs]
+        bounded = self._bound_degraded_answer(answer)
+        await self.ledger.log(
+            "node_reduction_degraded",
+            question.id,
+            {
+                "question_id": question.id,
+                "child_count": len(child_summaries),
+                "reason": reason,
+                # The cascade is invisible without these: a degraded root is
+                # byte-identical in the ledger whether its join was 400 chars
+                # or 40,000, and the latter is what breaks the assembly.
+                "answer_chars": len(answer),
+                "answer_truncated": len(bounded) < len(answer),
+            },
+        )
+        answer = bounded
         return NodeSummary(
             question_id=question.id,
             answer=answer,

@@ -26,61 +26,88 @@ class ClampResult:
     dropped_primary: int
     dropped_secondary: int
     exhausted: bool
+    # How far the anchor had to be cut. `dropped_primary` counts items
+    # removed, so an anchor that is halved five times leaves no trace in any
+    # other field -- and "the root summary was cut to a fifth" is exactly the
+    # thing that has to be visible when the report reads thin.
+    anchor_chars_before: int = 0
+    anchor_chars_after: int = 0
 
     @property
     def clamped(self) -> bool:
         return self.bound_after < self.bound_before
 
+    @property
+    def anchor_clamped(self) -> bool:
+        return self.anchor_chars_after < self.anchor_chars_before
+
 
 def shrink_once(
     primary: list[str],
     secondary: list[str],
-) -> tuple[list[str], list[str]] | None:
+    anchor: str = "",
+) -> tuple[list[str], list[str], str] | None:
     """Drop the least valuable remaining input, once.
 
-    Returns the reduced ``(primary, secondary)``, or ``None`` when there is
-    nothing left to drop.
+    Returns the reduced ``(primary, secondary, anchor)``, or ``None`` when
+    there is nothing left to drop.
 
-    Callers map their own material onto the two slots:
+    Callers map their own material onto the three slots:
 
-    ==================  ==========================  ====================
-    call site           primary                     secondary
-    ==================  ==========================  ====================
-    Synthesizer         child summary blocks        caveats
+    ==================  ====================  ==================  ==========
+    call site           primary               secondary           anchor
+    ==================  ====================  ==================  ==========
+    Synthesizer         child summary blocks  caveats             root answer
       .assemble
-    Synthesizer         verified claim lines        child summary lines
-      .reduce_node
-    ==================  ==========================  ====================
+    Synthesizer         verified claim lines  child summary       (none)
+      .reduce_node                            lines
+    ==================  ====================  ==================  ==========
 
-    Neither the root answer (assemble) nor the question text (reduce_node)
-    is passed here -- those are never dropped.
+    The question text (reduce_node) is still never passed here.
 
-    POLICY (design D-6): secondary is dropped from the end first, one item
-    at a time; once secondary is empty, the longest remaining primary is
-    halved; once no primary is longer than one character, primary is
-    dropped from the end, one item at a time. Halving is scale-free -- it
-    converges regardless of how oversized the input is, so no tunable
-    constant is needed here.
+    POLICY (design D-6, amended D54): secondary is dropped from the end
+    first, one item at a time; once secondary is empty, **the longest of
+    the primaries and the anchor** is halved; once nothing is longer than
+    one character, primary is dropped from the end, one item at a time.
+    The anchor is never dropped, only halved -- a report with no root
+    summary is worse than a short one.
+
+    The anchor used to sit outside this function entirely, on the grounds
+    that the root answer is the most valuable material and must survive.
+    It does survive -- but "most valuable" was being read as "unbounded",
+    and an oversized anchor is paid for by everything else. Sample #11
+    measured the end state: 12 of 12 assembly clamps ran to `exhausted`,
+    having dropped every child block and every caveat, because a degraded
+    root summary alone exceeded the allowance. The report was then written
+    with no claims in its prompt to cite.
+
+    Halving the *longest* keeps the old behaviour whenever the anchor is
+    normally sized -- it is only ever chosen when it is the thing that
+    does not fit, which is exactly when it should be.
     """
     if secondary:
-        return primary, secondary[:-1]
-    if not primary:
-        return None
-    longest = max(range(len(primary)), key=lambda i: len(primary[i]))
-    if len(primary[longest]) > 1:
+        return primary, secondary[:-1], anchor
+    candidates = [*primary, anchor]
+    longest = max(range(len(candidates)), key=lambda i: len(candidates[i]))
+    if len(candidates[longest]) > 1:
+        if longest == len(primary):
+            return primary, secondary, anchor[: len(anchor) // 2]
         trimmed = list(primary)
         trimmed[longest] = trimmed[longest][: len(trimmed[longest]) // 2]
-        return trimmed, secondary
-    return primary[:-1], secondary
+        return trimmed, secondary, anchor
+    if not primary:
+        return None
+    return primary[:-1], secondary, anchor
 
 
 def clamp_prompt(
     *,
     model: str,
     allowance: int,
-    render_prompt: Callable[[list[str], list[str]], str],
+    render_prompt: Callable[[list[str], list[str], str], str],
     primary: list[str],
     secondary: list[str],
+    anchor: str = "",
 ) -> ClampResult:
     """Render, measure, shrink, repeat until the prompt fits ``allowance``.
 
@@ -96,16 +123,18 @@ def clamp_prompt(
     What actually guarantees termination is ``max_iterations``, derived from
     the inputs themselves: ``len(primary) + len(secondary)`` (the most
     element-drop steps either list can ever take) plus the summed character
-    length of both (the most halving steps ``shrink_once``'s own policy can
-    ever take, since each halving at least removes one character and a
-    binary search style halving needs only O(log n) of those). Any
+    length of both **and of the anchor** (the most halving steps
+    ``shrink_once``'s own policy can ever take, since each halving at least
+    removes one character and a binary search style halving needs only
+    O(log n) of those). Any
     legitimately-progressing policy finishes within that many steps, so the
     cap can never cut one short; a policy that is not progressing hits the
     cap and this function still returns.
     """
     original_primary = len(primary)
     original_secondary = len(secondary)
-    prompt = render_prompt(primary, secondary)
+    original_anchor = len(anchor)
+    prompt = render_prompt(primary, secondary, anchor)
     bound_before = prompt_input_bound(model, prompt)
 
     max_iterations = (
@@ -113,12 +142,13 @@ def clamp_prompt(
         + len(secondary)
         + sum(len(item) for item in primary)
         + sum(len(item) for item in secondary)
+        + len(anchor)
     )
     iterations = 0
 
     while prompt_input_bound(model, prompt) > allowance:
-        shrunk = shrink_once(primary, secondary)
-        if shrunk is None or shrunk == (primary, secondary):
+        shrunk = shrink_once(primary, secondary, anchor)
+        if shrunk is None or shrunk == (primary, secondary, anchor):
             return ClampResult(
                 prompt=prompt,
                 bound_before=bound_before,
@@ -126,6 +156,8 @@ def clamp_prompt(
                 dropped_primary=original_primary - len(primary),
                 dropped_secondary=original_secondary - len(secondary),
                 exhausted=True,
+                anchor_chars_before=original_anchor,
+                anchor_chars_after=len(anchor),
             )
         iterations += 1
         if iterations > max_iterations:
@@ -136,9 +168,11 @@ def clamp_prompt(
                 dropped_primary=original_primary - len(primary),
                 dropped_secondary=original_secondary - len(secondary),
                 exhausted=True,
+                anchor_chars_before=original_anchor,
+                anchor_chars_after=len(anchor),
             )
-        primary, secondary = shrunk
-        prompt = render_prompt(primary, secondary)
+        primary, secondary, anchor = shrunk
+        prompt = render_prompt(primary, secondary, anchor)
 
     return ClampResult(
         prompt=prompt,
@@ -147,4 +181,6 @@ def clamp_prompt(
         dropped_primary=original_primary - len(primary),
         dropped_secondary=original_secondary - len(secondary),
         exhausted=False,
+        anchor_chars_before=original_anchor,
+        anchor_chars_after=len(anchor),
     )
