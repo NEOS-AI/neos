@@ -51,6 +51,52 @@ _LIMITS_HEADING = "## 한계와 미확인 사항"
 # `graders/report.py` mirrors this string in its scoring boundaries.
 _QUESTIONS_HEADING = "## 조사한 하위 질문"
 
+# 원장 어휘 -> 독자 문장. 강등 사유는 `node_reduction_degraded` /
+# `report_assembly_degraded` 이벤트의 `reason` 이고, 그 기계 문자열이
+# `NodeSummary.caveats` 를 타고 리포트의 한계 절까지 그대로 흘렀다.
+#
+# 표본 #9 의 배달된 리포트에 `- input_bound` 라는 줄이 **51회** 찍혔고,
+# 판정자가 그것을 반려 사유로 인용했다 -- "다수의 '미확인'·'input_bound'
+# 항목이 남아 실질적 종합이 이루어지지 않았다".
+#
+# 원장 쪽 문자열은 건드리지 않는다. D28 이 정지 사유를 기계가 읽을 수 있게
+# 만들려고 싸운 자리이고, 경계 전후 집계도 그 어휘에 걸려 있다. 바꾸는 것은
+# **독자에게 보여줄 때뿐**이다.
+_DEGRADATION_PROSE = {
+    "input_bound": (
+        "이 하위 질문의 요약은 입력이 한도를 넘어 축약본으로 대체되었습니다."
+    ),
+    "token_budget_exhausted": (
+        "전체 토큰 예산이 소진되어 이 하위 질문을 끝까지 요약하지 못했습니다."
+    ),
+    "tier_floor": (
+        "남은 토큰 예산이 부족해 이 하위 질문을 끝까지 요약하지 못했습니다."
+    ),
+    "empty_assembly": (
+        "본문 조립이 비어 있어 결정론적 템플릿으로 대체되었습니다."
+    ),
+}
+
+
+def _reader_facing_caveats(caveats: list[str]) -> list[str]:
+    """Translate ledger vocabulary and drop repeats, for the limits section.
+
+    Dedup matters as much as the wording: one run degraded 18 nodes for the
+    same reason, so the section repeated a single line 18 times. Order is
+    preserved -- the first occurrence keeps its place.
+    """
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for caveat in caveats:
+        text = _DEGRADATION_PROSE.get(caveat, caveat)
+        if text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
 # How far each rejection code got through `grade_deterministic`, in the order
 # that grader applies its checks. A draft refused later cleared every check
 # before it, so this is a fact about the gate rather than a judgement call.
@@ -1109,7 +1155,7 @@ class Orchestrator:
                     caveats.append(f"미조사: {question.text}")
         for summary in summaries.values():
             caveats.extend(summary.caveats)
-        return caveats
+        return _reader_facing_caveats(caveats)
 
     async def _finalize(self, root_id: str) -> str:
         """Reduce the tree, resolve conflicts (with at most one bounded

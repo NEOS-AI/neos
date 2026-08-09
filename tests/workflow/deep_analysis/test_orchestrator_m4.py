@@ -791,3 +791,43 @@ async def test_the_harness_names_the_resolved_questions_the_model_dropped():
 
 async def _as_coro(value):
     return value
+
+
+@pytest.mark.asyncio
+async def test_the_limits_section_speaks_to_a_reader_not_the_ledger():
+    """강등 사유는 원장 어휘다. 그 기계 문자열이 `NodeSummary.caveats` 를 타고
+    리포트 한계 절까지 그대로 흘렀다 -- 표본 #9 의 배달된 리포트에
+    `- input_bound` 가 **51회** 찍혔고, 판정자가 그것을 반려 사유로 인용했다.
+
+    원장 쪽 문자열은 그대로 둔다(D28 이 정지 사유를 기계가 읽게 만든 자리다).
+    바꾸는 것은 독자에게 보여줄 때뿐이고, 같은 줄의 반복도 접는다.
+    """
+    from neos.workflow.deep_analysis.orchestrator import _reader_facing_caveats
+
+    out = _reader_facing_caveats(
+        ["input_bound", "input_bound", "미확인: EUR-Lex 원문", "input_bound"]
+    )
+
+    assert "input_bound" not in " ".join(out)
+    assert len(out) == 2  # 중복 접힘
+    assert out[1] == "미확인: EUR-Lex 원문"  # 원래 순서 유지
+    assert "축약본" in out[0]
+
+
+@pytest.mark.asyncio
+async def test_collect_caveats_hands_the_report_reader_facing_text():
+    """`_collect_caveats` 가 경계다 -- 원장 어휘가 리포트 내용이 되는 지점."""
+    ledger = FakeLedger()
+    orch = _orch(
+        ledger, FakeSynth(), FlakyRenderer(fail_times=0), grader=OkGrader()
+    )
+    summaries = {
+        "q1": NodeSummary("q1", "답", [], 0.5, ["input_bound"]),
+        "q2": NodeSummary("q2", "답", [], 0.5, ["input_bound"]),
+    }
+
+    caveats = await orch._collect_caveats(summaries)
+
+    assert caveats == [
+        "이 하위 질문의 요약은 입력이 한도를 넘어 축약본으로 대체되었습니다."
+    ]
