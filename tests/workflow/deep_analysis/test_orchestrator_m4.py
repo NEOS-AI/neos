@@ -24,6 +24,7 @@ from neos.workflow.deep_analysis.orchestrator import (
     Orchestrator,
     _best_rejected_draft,
 )
+from neos.workflow.deep_analysis.token_budget import TokenBudgetExhausted
 
 
 _CLAIM_MARKER = re.compile(r"\[C:([0-9a-f]{8})\]")
@@ -708,3 +709,85 @@ async def test_the_harness_guarantees_the_limits_section_the_model_lost():
     report = await orch._finalize("root0001")
 
     assert "## 한계와 미확인 사항" in report
+
+
+@pytest.mark.asyncio
+async def test_a_starved_reinvestigation_round_does_not_kill_the_run(monkeypatch):
+    """§6.8 빈손 종료 금지. 재조사 라운드는 진짜 워커를 돌리므로 예산을
+    소진할 수 있는데, 본 조사 루프(`run`)와 달리 여기서는 아무도 잡지 않았다.
+
+    예외가 `_finalize` 를 빠져나가 `run` 의 일반 핸들러로 가면 run 이 실패한다 --
+    표본 #8 의 `8817a935` 가 `job_failed(deep-analysis token budget exhausted)`
+    로 죽었고 리포트가 없다. 원장 job_failed 15건 중 예산 고갈은 이것이 처음이다.
+    재조사는 **선택적 추가 라운드**이므로, 굶으면 가진 요약으로 진행해야 한다.
+    """
+    ledger = FakeLedger(statuses={"subq0001": "resolved"})
+    orch = _orch(
+        ledger, FakeSynth(), FlakyRenderer(fail_times=0), grader=OkGrader()
+    )
+
+    async def always_reinvestigate(_ledger, summary, _tiers):
+        return summary, ["subq0001"]
+
+    monkeypatch.setattr(orch_mod, "resolve_conflicts", always_reinvestigate)
+
+    async def starved_round():
+        raise TokenBudgetExhausted("cap", cause="input_bound")
+
+    orch._run_round = starved_round
+
+    report = await orch._finalize("root0001")
+
+    assert report  # 빈손으로 나가지 않는다
+    assert ledger.completed
+
+
+@pytest.mark.asyncio
+async def test_the_harness_names_the_resolved_questions_the_model_dropped():
+    """W3-l: 하네스가 커버리지를 소유한다.
+
+    하위 질문은 *의문문 + 출처 지시문* 이고 합성기는 지시문 꼬리를 버린다.
+    표본 #8 에서 `E_REPORT_MISSING_QUESTION` 이 15회 채점 중 5회로 지배
+    사유가 됐고, `da8e7ba6` 는 주장 27~30개에 인용없음 0~2개인 리포트를
+    3/3 이 검사로 잃었다. `## 출처`·한계 절과 같은 해결이다.
+    """
+    ledger = FakeLedger()
+    resolved = NodeSummary(
+        "child001",
+        "답 [C:aaaaaaaa]",
+        [],
+        0.8,
+        [],
+        question_text="IARC는 2023년에 어떤 등급으로 분류했는가? 원문에서 확인하라.",
+        question_status="resolved",
+    )
+    open_child = NodeSummary(
+        "child002",
+        "미완",
+        [],
+        0.3,
+        [],
+        question_text="아직 조사 중인 질문",
+        question_status="open",
+    )
+
+    class _Synth(FakeSynth):
+        async def reduce_tree(self, root_id):
+            self.reduce_tree_calls += 1
+            return {root_id: NodeSummary(root_id, "루트", [], 0.9, [])}
+
+    orch = _orch(ledger, _Synth(), FlakyRenderer(fail_times=0), grader=OkGrader())
+    orch._child_summaries = lambda root_id, summaries: _as_coro(
+        [resolved, open_child]
+    )
+
+    report = await orch._finalize("root0001")
+
+    assert "## 조사한 하위 질문" in report
+    assert resolved.question_text in report
+    # resolved 가 아닌 질문은 넣지 않는다 -- 검사 대상이 아니다.
+    assert open_child.question_text not in report
+
+
+async def _as_coro(value):
+    return value

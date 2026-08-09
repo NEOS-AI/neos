@@ -45,6 +45,16 @@ _LIMITS_SCORING_BOUNDARY = re.compile(
     r"(?m)^##\s*" + re.escape(_LIMITS_HEADING) + r"\s*$"
 )
 
+# The harness-owned list of resolved sub-questions (W3-l,
+# `orchestrator._QUESTIONS_HEADING`). Excluded for the same reason as the
+# limits section: it is a list of questions, not factual assertions, so no
+# verified claim stands behind its lines and demanding citations on them is
+# an impossible requirement.
+_QUESTIONS_HEADING = "조사한 하위 질문"
+_QUESTIONS_SCORING_BOUNDARY = re.compile(
+    r"(?m)^##\s*" + re.escape(_QUESTIONS_HEADING) + r"\s*$"
+)
+
 # A markdown heading is a label, not a factual assertion. `_sentences` splits
 # on newlines, so "### 1. 배경" became its own "sentence"; the digit in it
 # then satisfied `_DIGIT` and it was counted as an uncited claim. Measured
@@ -71,6 +81,7 @@ def _report_body(report: str) -> str:
         for match in (
             _SOURCE_HEADING.search(report),
             _LIMITS_SCORING_BOUNDARY.search(report),
+            _QUESTIONS_SCORING_BOUNDARY.search(report),
         )
         if match is not None
     ]

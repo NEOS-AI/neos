@@ -717,3 +717,26 @@ async def test_the_limits_section_is_not_scored_for_citations():
 
     assert verdict.diagnostics["uncited_assertions"] == 1
     assert verdict.diagnostics["uncited_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_the_question_coverage_section_is_not_scored_for_citations():
+    """W3-l: 하네스가 붙이는 '조사한 하위 질문' 절은 **질문 목록**이다.
+
+    한계 절과 같은 범주다 -- 뒷받침할 verified claim 이 있을 수 없는 줄들이라
+    각주를 요구하는 것은 불가능한 요구다. 질문에는 연도와 기관명이 들어가므로
+    제외하지 않으면 `_DIGIT`/`_PROPER_NOUN` 에 그대로 걸린다.
+    """
+    report = (
+        "## 본문\n"
+        "2024년 8월 1일에 발효되었다[1].\n\n"
+        "## 조사한 하위 질문\n"
+        "- 2023년 IARC는 아스파탐을 어떤 등급으로 분류했는가? Monographs 134 원문에서 확인하라.\n"
+        "- JECFA의 2023년 ADI 유지 여부는? WHO/FAO 요약 원문에서 확인하라.\n\n"
+        "## 한계와 미확인 사항\n- 없음\n"
+    )
+
+    verdict = await _grader(FakeLedger()).grade_deterministic(report, "root0001")
+
+    assert verdict.diagnostics["uncited_assertions"] == 1
+    assert verdict.diagnostics["uncited_count"] == 0

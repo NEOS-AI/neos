@@ -47,6 +47,9 @@ class SystemicWorkerFailure(RuntimeError):
 
 
 _LIMITS_HEADING = "## 한계와 미확인 사항"
+# Harness-owned, like `_LIMITS_HEADING` and CitationRenderer's `## 출처`.
+# `graders/report.py` mirrors this string in its scoring boundaries.
+_QUESTIONS_HEADING = "## 조사한 하위 질문"
 
 # How far each rejection code got through `grade_deterministic`, in the order
 # that grader applies its checks. A draft refused later cleared every check
@@ -151,6 +154,45 @@ def _ensure_limits_section(report: str, caveats: list[str]) -> str:
         return report
     body = "\n".join(f"- {item}" for item in caveats) or "- (기록된 미확인 항목 없음)"
     return f"{report.rstrip()}\n\n{_LIMITS_HEADING}\n{body}\n"
+
+
+def _ensure_question_coverage(
+    report: str, child_summaries: list[NodeSummary]
+) -> str:
+    """Guarantee that every resolved sub-question is named in the report.
+
+    Third harness-owned section, for the same reason as the other two
+    (W3-l). The gate requires each `resolved` child question to appear in
+    the report, and asking the model to reproduce it never worked: a
+    sub-question is an interrogative *plus a sourcing directive*
+    ("...원문에서 ...을 확인하라"), 128-213 characters of it, and the
+    composer reliably copies the question and drops the directive. Sample
+    #8 measured the result -- `E_REPORT_MISSING_QUESTION` became the
+    dominant rejection at 5 of 15 gradings, and `da8e7ba6` lost three
+    reports carrying 27-30 assertions with 0-2 uncited to it.
+
+    Matching on the interrogative alone was the cheap alternative and the
+    measurement rejected it: it resolves 1 of the 3 failing questions.
+
+    Only the questions go in, never the answers -- the body already holds
+    those, and duplicating them would inflate the report and its uncited
+    count. That also makes this section the same *kind* of text as the
+    limits section: a list, not a set of factual assertions, which is why
+    `graders/report.py` excludes both from citation scoring.
+    """
+
+    resolved = [
+        summary
+        for summary in child_summaries
+        if summary.question_status == "resolved" and summary.question_text
+    ]
+    if not resolved or _QUESTIONS_HEADING in report:
+        return report
+    missing = [s for s in resolved if s.question_text not in report]
+    if not missing:
+        return report
+    body = "\n".join(f"- {s.question_text}" for s in missing)
+    return f"{report.rstrip()}\n\n{_QUESTIONS_HEADING}\n{body}\n"
 
 
 class Orchestrator:
@@ -1041,6 +1083,7 @@ class Orchestrator:
                     replace(
                         summary,
                         question_text=getattr(child, "text", "") or "",
+                        question_status=getattr(child, "status", "") or "",
                     )
                 )
         return out
@@ -1104,8 +1147,23 @@ class Orchestrator:
                 {"qids": reinvestigate},
             )
             await self.ledger.reopen_for_reinvestigation(target)
-            await self._run_round()
-            summaries, reinvestigate = await self._reduce_and_resolve(root_id)
+            # This round runs real workers, so it can exhaust the budget --
+            # and unlike the main investigation loop (`run`, which catches
+            # exactly this) nothing here did. The exception escaped
+            # `_finalize` to `run`'s generic handler, which fails the run:
+            # `8817a935` in sample #8 died as
+            # `job_failed(deep-analysis token budget exhausted)` with no
+            # report at all, the first budget-caused hard failure among the
+            # ledger's 15 job failures. §6.8 forbids the empty-handed exit;
+            # a run that spent its budget still has summaries to assemble
+            # from, and reinvestigation is an *optional* extra round.
+            try:
+                await self._run_round()
+                summaries, reinvestigate = await self._reduce_and_resolve(
+                    root_id
+                )
+            except TokenBudgetExhausted as exc:
+                await self._mark_stop_reason(exc)
 
         root_summary = summaries.get(root_id)
         if root_summary is None:
@@ -1169,6 +1227,9 @@ class Orchestrator:
             # raises here, which is the correct answer rather than shipping
             # an unresolvable marker.
             draft = _ensure_limits_section(draft, caveats)
+            # Same pre-render placement, same reason (D44): anything the
+            # harness appends after rendering carries its markers raw.
+            draft = _ensure_question_coverage(draft, child_summaries)
             try:
                 report = await self.citation_renderer.render(draft)
             except OrphanCitationError as exc:
@@ -1202,6 +1263,7 @@ class Orchestrator:
             # itself is a stand-in that returns text without the section.
             # Idempotent: the pre-render call above normally satisfies it.
             report = _ensure_limits_section(report, caveats)
+            report = _ensure_question_coverage(report, child_summaries)
             last_rendered = report
             verdict = (
                 await self.report_grader.grade(report, root_id)

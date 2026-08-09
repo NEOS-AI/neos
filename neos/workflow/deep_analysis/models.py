@@ -123,4 +123,8 @@ class NodeSummary:
     # because `reduce_node` builds summaries before the orchestrator pairs
     # them with the ledger's questions; `_child_summaries` fills it in.
     question_text: str = ""
+    # The ledger's status for that question, filled in beside the text. The
+    # report gate demands coverage of `resolved` children specifically, so
+    # the harness needs to know which ones those are (W3-l).
+    question_status: str = ""
     conflicts: list[ConflictNote] = field(default_factory=list)
