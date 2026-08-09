@@ -1146,6 +1146,29 @@ class Orchestrator:
                 revision_hints=revision_hints,
             )
             last = draft
+            # The limits section joins the draft *before* rendering, so its
+            # markers are resolved by the same pass as the body's (W3-k).
+            #
+            # It used to be appended to the already-rendered report, which
+            # meant CitationRenderer never saw it. `node_summary.md` tells
+            # the model to mark every factual assertion, and the model
+            # obliges in its `caveats` too -- 3 of sample #7's 30 node
+            # summaries did. Those raw `[C:xxxxxxxx]` markers rode straight
+            # into the final text, where `grade_deterministic`'s check (a)
+            # rejected the whole report for carrying them.
+            #
+            # It only fired when the harness actually appended the section:
+            # a degraded assembly emits the heading itself, `_ensure_limits_
+            # section` then skips, and the run survived. That is exactly the
+            # observed shape -- `03dd8ddd` and `ba84c409` orphaned on
+            # attempts 0 and 1 and not on the degraded attempt 2.
+            #
+            # Safe against the obvious worry: a caveat may only cite claims
+            # the renderer can resolve, and all 12 caveat-referenced claims
+            # across samples #6 and #7 were `verified`. One that is not still
+            # raises here, which is the correct answer rather than shipping
+            # an unresolvable marker.
+            draft = _ensure_limits_section(draft, caveats)
             try:
                 report = await self.citation_renderer.render(draft)
             except OrphanCitationError as exc:
@@ -1175,6 +1198,9 @@ class Orchestrator:
                     "[C:claimid] 목록에 있는 id 만 사용하라."
                 ]
                 continue  # AC-c: orphan citation → re-assemble
+            # Still guaranteed after rendering, for the case the renderer
+            # itself is a stand-in that returns text without the section.
+            # Idempotent: the pre-render call above normally satisfies it.
             report = _ensure_limits_section(report, caveats)
             last_rendered = report
             verdict = (

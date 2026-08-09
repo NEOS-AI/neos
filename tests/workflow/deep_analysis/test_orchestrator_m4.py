@@ -8,6 +8,8 @@ by monkeypatching `resolve_conflicts` to report a persistent conflict and
 asserting only one extra investigation round is spent.
 """
 
+import re
+
 import pytest
 
 import neos.workflow.deep_analysis.orchestrator as orch_mod
@@ -23,6 +25,8 @@ from neos.workflow.deep_analysis.orchestrator import (
     _best_rejected_draft,
 )
 
+
+_CLAIM_MARKER = re.compile(r"\[C:([0-9a-f]{8})\]")
 
 pytestmark = pytest.mark.no_db
 
@@ -344,6 +348,67 @@ async def test_an_orphan_citation_gets_its_own_hint_not_a_stale_one():
     assert synth.hints_seen[0] == []
     assert "claim id" in synth.hints_seen[1][0]
     assert synth.hints_seen[2] == synth.hints_seen[1]
+
+
+class ResolvingRenderer:
+    """실제 CitationRenderer 처럼 마커를 각주로 바꾸고 `## 출처` 를 붙인다.
+
+    `FlakyRenderer` 는 마커를 건드리지 않으므로 이 결함을 재현할 수 없다.
+    """
+
+    def __init__(self, known):
+        self.known = set(known)
+
+    async def render(self, draft):
+        seen = []
+        for claim_id in dict.fromkeys(_CLAIM_MARKER.findall(draft)):
+            if claim_id not in self.known:
+                raise OrphanCitationError(claim_id)
+            seen.append(claim_id)
+            draft = draft.replace(f"[C:{claim_id}]", f"[{len(seen)}]")
+        notes = "\n".join(f"[{i}] http://x/{c}" for i, c in enumerate(seen, 1))
+        return f"{draft}\n\n## 출처\n{notes}"
+
+
+@pytest.mark.asyncio
+async def test_caveat_markers_are_rendered_not_shipped_raw():
+    """W3-k: 한계 절이 렌더 **이후에** 덧붙여져 마커가 raw 로 살아남았다.
+
+    `node_summary.md` 는 모든 사실 주장에 마커를 붙이라고 지시하고, 모델은
+    `caveats` 에도 붙인다 -- 표본 #7 의 node_summary 응답 30건 중 3건이
+    그랬다. CitationRenderer 가 본 적 없는 텍스트라 `[C:xxxxxxxx]` 가 최종
+    리포트까지 가고, `grade_deterministic` 의 검사 (a) 가 리포트 전체를
+    반려한다. 표본 #6·#7 에서 6개 run 중 2개를 통째로 날렸다.
+    """
+    ledger = FakeLedger()
+
+    class _CaveatSynth(FakeSynth):
+        async def reduce_tree(self, root_id):
+            self.reduce_tree_calls += 1
+            return {
+                root_id: NodeSummary(
+                    root_id,
+                    "본문 [C:aaaaaaaa]",
+                    [],
+                    0.9,
+                    ["[C:bbbbbbbb]의 성능 비교는 단일 사례 관측이다"],
+                )
+            }
+
+    synth = _CaveatSynth()
+    orch = _orch(
+        ledger,
+        synth,
+        ResolvingRenderer({"aaaaaaaa", "bbbbbbbb"}),
+        grader=OkGrader(),
+    )
+
+    report = await orch._finalize("root0001")
+
+    assert "[C:" not in report
+    # 마커가 지워진 게 아니라 각주로 바뀌어야 한다 -- caveat 이 읽을 수 있어야 한다.
+    assert "의 성능 비교는 단일 사례 관측이다" in report
+    assert "## 한계와 미확인 사항" in report
 
 
 @pytest.mark.asyncio
