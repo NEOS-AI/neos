@@ -646,15 +646,29 @@ class DeepAnalysisDevProfileConfig(StrictConfigModel):
     # did not fit before this file's input allowances were added: three
     # 4000-token calls against what was then a 20000 cap.
     #
-    # 1200 is measured, not chosen for roundness -- node_reduction's actual
-    # consumption ran a median of 1109 tokens INCLUDING input, at granted
-    # ceilings whose median was 748.
+    # 1200 was measured against node_reduction -- its actual consumption ran a
+    # median of 1109 tokens INCLUDING input, at granted ceilings whose median
+    # was 748. That sized the *reduction* stage correctly and the *assembly*
+    # stage far too small, because the same knob caps both.
+    #
+    # 2000 (2026-08-09) is measured against assembly. Sample #9: `llm_truncated`
+    # fired 13 times for `report_assembly` out of 17 truncations run-wide, and
+    # the delivered report bodies cluster at 1,309-1,932 characters -- right at
+    # what a 1200-token ceiling can emit. The judge rejected 3 of its 4 refusals
+    # partly for "본문이 중간에 끊겼다". With `truncation_retry_multiplier` the
+    # expansion retry reaches 4000, which covers the 1,932-character median body
+    # with margin.
+    #
+    # Paid for by `report_retry_cap` 2 -> 1: the floor is
+    # `(cap + 1) * (assembly + grading)`, so one fewer attempt funds a larger
+    # ceiling. dev's finalization floor goes 41,040 -> 48,000 (41% -> 48% of
+    # the cap), still under `finalization_floor_warn_ratio`.
     #
     # ge=1: at s <= 0, the floor formulas can push report_floor_tokens above
     # floor_tokens (which stays non-negative) and `TokenBudget.__init__`
     # raises an opaque ValueError on every run instead of failing at config
     # validation with a clear message.
-    synthesis_max_tokens: int = Field(default=1200, ge=1)
+    synthesis_max_tokens: int = Field(default=2000, ge=1)
 
 
 class DeepAnalysisDiscardRecallConfig(StrictConfigModel):
@@ -901,7 +915,15 @@ class DeepAnalysisConfig(StrictConfigModel):
 
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
-    report_retry_cap: int = 2
+    # 2 -> 1 (2026-08-09). The extra attempt was buying nothing: sample #9's
+    # `report_assembly` reservations were `[1200, 2400]` per run -- the initial
+    # call plus its expansion retry, both on attempt 0. Attempts 1 and 2 never
+    # got an LLM call at all; they emitted the deterministic template, which is
+    # why their `uncited_ratio` and assertion counts were byte-identical to each
+    # other in every run. Meanwhile the cap multiplies the report floor
+    # (`(cap + 1) * (assembly + grading)`), so the dead attempt was taxing the
+    # ceiling that made attempt 0 truncate.
+    report_retry_cap: int = 1
     resolve_threshold: float = 0.7
     conflict_reinvestigation_cap: int = 1
     conflict_value_threshold: float = 0.6

@@ -44,7 +44,7 @@ def test_deep_analysis_dev_profile_present():
     assert dev.global_token_cap == 100000
     assert dev.parallel_workers == 2
     assert dev.max_depth == 2
-    assert dev.synthesis_max_tokens == 1200
+    assert dev.synthesis_max_tokens == 2000
 
 
 def test_deep_analysis_operational_limits_are_configured():
@@ -131,14 +131,21 @@ def test_a_disproportionate_floor_warns():
     from neos.config.settings import settings
 
     config = settings.config.deep_analysis.model_copy(deep=True)
-    config.dev_profile.global_token_cap = 4000  # floor 41040 > 2000
+    config.dev_profile.global_token_cap = 4000
+
+    # 층 값은 config 에서 읽는다 -- 하드코딩하면 `report_retry_cap` 이나
+    # `synthesis_max_tokens` 를 조정할 때마다 이 테스트가 조용히 낡는다.
+    floor = config.finalization_floor_tokens(
+        config.dev_profile.synthesis_max_tokens
+    )
+    assert floor > 4000  # 경고가 나올 조건인지 먼저 확인
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         warn_finalization_floor_ratio(config)
 
     messages = [str(w.message) for w in caught]
-    assert any("41040" in m and "4000" in m for m in messages)
+    assert any(str(floor) in m and "4000" in m for m in messages)
 
 
 def test_the_floor_counts_input_not_only_output():
@@ -153,14 +160,14 @@ def test_the_floor_counts_input_not_only_output():
     config = DeepAnalysisConfig()
 
     # default 프로파일: assembly (3.0+1)*4000=16,000 / grading 5.0*4000+800=20,800
-    # -> attempt 36,800 * (report_retry_cap 2 + 1) = 110,400
-    assert config.report_floor_tokens(4_000) == 110_400
+    # -> attempt 36,800 * (report_retry_cap 1 + 1) = 73,600
+    assert config.report_floor_tokens(4_000) == 73_600
     # reduction (1.6+1)*4000=10,400 * allowance 2 = 20,800
-    assert config.finalization_floor_tokens(4_000) == 110_400 + 20_800
+    assert config.finalization_floor_tokens(4_000) == 73_600 + 20_800
 
-    # dev 프로파일 (synthesis_max_tokens=1200)
-    assert config.report_floor_tokens(1_200) == 34_800
-    assert config.finalization_floor_tokens(1_200) == 41_040
+    # dev 프로파일 (synthesis_max_tokens=2000)
+    assert config.report_floor_tokens(2_000) == 37_600
+    assert config.finalization_floor_tokens(2_000) == 48_000
 
 
 def test_the_report_tier_never_exceeds_the_total_floor():

@@ -13,6 +13,7 @@ import re
 import pytest
 
 import neos.workflow.deep_analysis.orchestrator as orch_mod
+from neos.config.settings import settings
 from neos.workflow.deep_analysis.citation import OrphanCitationError
 from neos.workflow.deep_analysis.ledger import (
     IllegalTransition,
@@ -28,6 +29,10 @@ from neos.workflow.deep_analysis.token_budget import TokenBudgetExhausted
 
 
 _CLAIM_MARKER = re.compile(r"\[C:([0-9a-f]{8})\]")
+
+# `_finalize` 는 `report_retry_cap + 1` 회 시도한다. 설정에서 읽어야
+# 캡을 조정할 때 테스트가 조용히 낡지 않는다.
+_ATTEMPTS = settings.config.deep_analysis.report_retry_cap + 1
 
 pytestmark = pytest.mark.no_db
 
@@ -193,10 +198,11 @@ async def test_orphan_every_attempt_exhausts_cap_and_appends_appendix():
     report = await orch._finalize("root0001")
 
     assert "## 부록: 미해결 사유" in report
-    assert "DRAFT-3" in report  # last draft retained under the appendix
-    assert synth.assemble_calls == 3  # cap(2) + 1 attempts
+    # 캡은 설정에서 읽는다 -- `report_retry_cap` 이 바뀌면 이 테스트도 따라온다.
+    assert f"DRAFT-{_ATTEMPTS}" in report  # last draft retained under the appendix
+    assert synth.assemble_calls == _ATTEMPTS
     graded = _graded(ledger)
-    assert len(graded) == 3
+    assert len(graded) == _ATTEMPTS
     assert all(p["ok"] is False for p in graded)
     assert all(p["code"] == "E_ORPHAN_CITE" for p in graded)
     assert ledger.completed
@@ -227,11 +233,10 @@ async def test_a_rejection_reaches_the_next_assembly():
 
     await orch._finalize("root0001")
 
-    assert synth.assemble_calls == 3
+    assert synth.assemble_calls == _ATTEMPTS
     # 첫 시도는 되먹일 것이 없고, 이후 시도는 직전 반려를 손에 쥔다.
     assert synth.hints_seen[0] == []
-    assert synth.hints_seen[1] == ["- 2024년에 발효되었다"]
-    assert synth.hints_seen[2] == ["- 2024년에 발효되었다"]
+    assert all(h == ["- 2024년에 발효되었다"] for h in synth.hints_seen[1:])
 
 
 class ScriptedGrader:
@@ -348,7 +353,7 @@ async def test_an_orphan_citation_gets_its_own_hint_not_a_stale_one():
 
     assert synth.hints_seen[0] == []
     assert "claim id" in synth.hints_seen[1][0]
-    assert synth.hints_seen[2] == synth.hints_seen[1]
+    assert all(h == synth.hints_seen[1] for h in synth.hints_seen[2:])
 
 
 class ResolvingRenderer:
@@ -437,9 +442,9 @@ async def test_report_grader_rejection_exhausts_cap_and_appends_appendix():
     report = await orch._finalize("root0001")
 
     assert "## 부록: 미해결 사유" in report
-    assert synth.assemble_calls == 3
+    assert synth.assemble_calls == _ATTEMPTS
     graded = _graded(ledger)
-    assert [p["code"] for p in graded] == ["E_REPORT_AGENTIC"] * 3
+    assert [p["code"] for p in graded] == ["E_REPORT_AGENTIC"] * _ATTEMPTS
     assert ledger.completed
 
 
@@ -476,7 +481,7 @@ async def test_cap_exhaustion_falls_back_to_the_raw_draft_when_nothing_rendered(
 
     report = await orch._finalize("root0001")
 
-    assert "DRAFT-3" in report
+    assert f"DRAFT-{_ATTEMPTS}" in report
     assert "[1] http://x" not in report
     assert "## 부록: 미해결 사유" in report
 

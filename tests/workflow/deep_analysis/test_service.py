@@ -93,13 +93,13 @@ async def test_build_orchestrator_uses_dev_cap_and_pure_worker(monkeypatch):
     worker = orchestrator.worker_factory()
 
     assert orchestrator.global_token_cap == 100000
-    # dev profile values (synthesis_max_tokens=1200): report_floor_tokens =
-    # (3.0+1)*1200 assembly + (5.0*1200+800) grading, * (report_retry_cap+1)
-    # = 34,800; floor_tokens = report_floor_tokens + reduction_floor(6,240)
-    # = 41,040. Both tiers must land on the orchestrator's actual
+    # dev profile values (synthesis_max_tokens=2000): report_floor_tokens =
+    # (3.0+1)*2000 assembly + (5.0*2000+800) grading, * (report_retry_cap+1)
+    # = 37,600; floor_tokens = report_floor_tokens + reduction_floor(10,400)
+    # = 48,000. Both tiers must land on the orchestrator's actual
     # TokenBudget, not just be computed and dropped.
-    assert orchestrator.token_budget.report_floor_tokens == 34_800
-    assert orchestrator.token_budget.floor_tokens == 41_040
+    assert orchestrator.token_budget.report_floor_tokens == 37_600
+    assert orchestrator.token_budget.floor_tokens == 48_000
     assert not hasattr(worker, "db")
     assert not hasattr(worker, "run_id")
     assert worker._confidence_cap == custom_caps

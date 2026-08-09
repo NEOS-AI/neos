@@ -37,7 +37,11 @@ EXPECTED_PROMPT_VERSIONS = {
     # 그 질문을 본문에 그대로 옮겨 적고 답하라는 규칙을 더했다. 게이트의
     # "resolved 자식 질문은 모두 언급돼야 한다" 검사는 작성자가 본 적 없는
     # 문자열을 요구하고 있었다.
-    "final_compose": 3,
+    #
+    # v4 (2026-08-09): `## 출처` 를 모델의 필수 섹션에서 뺐다. CitationRenderer
+    # 가 항상 붙이고 모델은 URL 을 모르므로, 모델이 쓰는 출처 절은 claim id
+    # 나열에 그친다 -- 표본 #9 카세트에서 666자가 거기로 갔다.
+    "final_compose": 4,
     "report_judge": 1,
 }
 
