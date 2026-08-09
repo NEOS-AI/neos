@@ -906,12 +906,52 @@ class DeepAnalysisConfig(StrictConfigModel):
     conflict_reinvestigation_cap: int = 1
     conflict_value_threshold: float = 0.6
     subq_adopt_threshold: float = 0.3
+    # Tier 1 은 **1차 기관 출처**다 -- 규칙을 만든 기관, 데이터를 낸 기관,
+    # 심사를 거친 학술 저장소. 편입 기준은 "이 도메인의 문서가 그 사실의
+    # 원본인가" 이지 "신뢰할 만한가" 가 아니다. 언론과 기업 블로그는 신뢰할
+    # 만해도 2차이므로 들어오지 않는다.
+    #
+    # 2026-08-09 확장. 원래 목록은 `.gov`/`.edu` 로 **미국 중심**이라
+    # `eur-lex.europa.eu`, `who.int`, `birmingham.ac.uk` 이 전부 tier2 --
+    # `dev.to` 와 같은 등급이었다. 표본 #7 에서 판정자가 반려한 사유가 정확히
+    # 이것이다: "질문이 요구한 '공식 EU 출처' 를 전혀 사용하지 못하고 모두
+    # 2차 블로그성 출처에 의존". 증거 119건 중 tier1 은 19건(16%)뿐이었고,
+    # 그중에도 `.ac.uk`/`.gov.uk` 는 세지 않은 채였다.
     source_tiers: dict[str, list[str]] = Field(
         default_factory=lambda: {
-            "tier1": ["arxiv.org", ".gov", ".edu", "github.com"],
+            "tier1": [
+                # 학술 저장소·코드 원본
+                "arxiv.org",
+                "github.com",
+                # 미국
+                ".gov",
+                ".edu",
+                # 초국가 기관 (EU, UN/WHO 계열)
+                "europa.eu",
+                ".int",
+                # 영국
+                ".gov.uk",
+                ".ac.uk",
+                # 한국
+                ".go.kr",
+                ".re.kr",
+                ".ac.kr",
+                # 일본
+                ".go.jp",
+                ".ac.jp",
+                # 호주·캐나다·뉴질랜드
+                ".gov.au",
+                ".edu.au",
+                ".gc.ca",
+                ".govt.nz",
+            ],
             "tier2": ["*"],
         }
     )
+    # 검색에서 가져올 후보 배수. `search_result_limit` 개를 fetch 하되 그
+    # 몇 배를 후보로 받아 tier 순으로 고른다. fetch 수는 그대로이므로
+    # 늘어나는 비용은 검색 결과 몇 줄뿐이다.
+    source_candidate_multiplier: int = 3
     dev_profile: DeepAnalysisDevProfileConfig = Field(
         default_factory=DeepAnalysisDevProfileConfig
     )

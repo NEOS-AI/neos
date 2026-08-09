@@ -10,6 +10,7 @@ from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
 from .claim_entailment import apply_entailment_results
+from .conflict import source_tier
 from .discovery import run_discovery
 from .fetch import fetch_url
 from .llm import (
@@ -33,6 +34,28 @@ from .token_budget import TokenBudgetExhausted
 _REPAIR_ACTIONS = {"fixed", "weakened", "abandoned"}
 _CLAMP_BUCKETS = ("0", "1", "2", "3_plus")
 logger = logging.getLogger(__name__)
+
+
+def _rank_by_source_tier(
+    candidates: list[dict], source_tiers: dict
+) -> list[dict]:
+    """1차 기관 출처를 앞으로, 같은 tier 안에서는 검색 순위를 그대로.
+
+    `source_tiers` 는 여태 충돌 해소에서만 쓰였다 -- 어떤 클레임이 이기는지는
+    정했지만 **무엇을 수집할지는 전혀 정하지 못했다.** 워커는 검색 엔진이 준
+    상위 N 개를 순서대로 전부 fetch 했고, 그래서 표본 #7 의 증거 119건 중
+    tier1 은 19건(16%)이었다. 판정자의 지배적 반려 사유(`strength_ok=False`
+    7건)가 바로 그것이다 -- "질문이 요구한 공식 출처를 전혀 사용하지 못하고
+    2차 블로그성 출처에 의존".
+
+    `sorted` 는 안정 정렬이므로 tier 는 **검색 순위를 대체하지 않고 그 위에
+    얹히는 기준**이다. 같은 tier 안에서는 엔진이 매긴 관련도 순서가 그대로
+    남는다. tier1 후보가 없으면 아무것도 바뀌지 않는다.
+    """
+
+    return sorted(
+        candidates, key=lambda c: source_tier(c.get("url", ""), source_tiers)
+    )
 
 
 def _source_bucket(count: int) -> str:
@@ -202,12 +225,16 @@ class Worker:
         # 전문(~1KB)이라 그대로 검색 엔진에 넣으면 0건이 돌아온다 --
         # 그러면 fetch할 URL이 없어 모든 클레임이 E_NO_EVIDENCE로 거절된다.
         search_query = question_text or brief
-        search_results = await self._collect_candidates(
+        # 필요한 것보다 넓게 받아 tier 로 고른다. fetch 수는 그대로다.
+        candidates = await self._collect_candidates(
             search_query,
             effort,
-            config.search_result_limit,
+            config.search_result_limit * config.source_candidate_multiplier,
             brief=brief,
         )
+        search_results = _rank_by_source_tier(candidates, config.source_tiers)[
+            : config.search_result_limit
+        ]
         fetched_by_url: dict[str, ProposedBlob] = {}
         for search_result in search_results:
             url = search_result.get("url", "")

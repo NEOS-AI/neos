@@ -126,3 +126,28 @@ async def test_no_conflicts_is_a_noop():
     out, reinv = await resolve_conflicts(led, s, TIERS)
     assert out.answer == "주장"
     assert reinv == []
+
+
+def test_tier1_is_not_only_american():
+    """실제 배포 목록은 `.gov`/`.edu` 로 미국 중심이라 유럽·영국·한국의
+    1차 기관 출처가 블로그와 같은 등급이었다.
+
+    표본 #7 에서 판정자가 반려한 사유가 정확히 이것이다 -- "질문이 요구한
+    '공식 EU 출처' 를 전혀 사용하지 못하고 2차 블로그성 출처에 의존".
+    """
+    from neos.config.settings import settings
+
+    tiers = settings.config.deep_analysis.source_tiers
+
+    # 1차 기관: 규칙을 만든 곳, 데이터를 낸 곳.
+    assert source_tier("https://eur-lex.europa.eu/eli/reg/2024/1689", tiers) == 1
+    assert source_tier("https://digital-strategy.ec.europa.eu/en/news/x", tiers) == 1
+    assert source_tier("https://www.iarc.who.int/news/x", tiers) == 1
+    assert source_tier("https://www.gov.uk/guidance/x", tiers) == 1
+    assert source_tier("https://www.birmingham.ac.uk/research/x", tiers) == 1
+    assert source_tier("https://www.data.go.kr/x", tiers) == 1
+
+    # 신뢰할 만해도 2차인 것들 -- 신뢰도가 아니라 원본성이 기준이다.
+    assert source_tier("https://www.bbc.com/news/x", tiers) == 2
+    assert source_tier("https://dev.to/p/x", tiers) == 2
+    assert source_tier("https://blog.example.tistory.com/1", tiers) == 2

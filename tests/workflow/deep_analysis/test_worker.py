@@ -382,3 +382,83 @@ async def test_worker_skips_only_unreadable_pdf_source(caplog):
     assert "https://example.com/broken.pdf" in caplog.text
     assert "PDFExtractionError" in caplog.text
     assert "secret parser payload" not in caplog.text
+
+
+def test_tier_ranking_lifts_primary_sources_without_discarding_relevance():
+    """`source_tiers` 는 여태 충돌 해소에서만 쓰였다 -- 어떤 클레임이 이기는지는
+    정했지만 **무엇을 수집할지는 전혀 정하지 못했다.** 워커는 엔진이 준 상위
+    N 개를 순서대로 전부 fetch 했고, 그래서 표본 #7 의 증거 119건 중 tier1 은
+    19건(16%)이었다.
+
+    tier 는 검색 순위를 **대체하지 않고 그 위에 얹힌다** -- 안정 정렬이므로
+    같은 tier 안에서는 엔진의 관련도 순서가 그대로 남는다.
+    """
+    from neos.workflow.deep_analysis.worker import _rank_by_source_tier
+
+    tiers = {"tier1": [".gov", "europa.eu"], "tier2": ["*"]}
+    candidates = [
+        {"url": "https://dev.to/a"},
+        {"url": "https://blog.example.com/b"},
+        {"url": "https://eur-lex.europa.eu/c"},
+        {"url": "https://news.example.com/d"},
+        {"url": "https://cdc.gov/e"},
+    ]
+
+    ranked = [c["url"] for c in _rank_by_source_tier(candidates, tiers)]
+
+    assert ranked[:2] == ["https://eur-lex.europa.eu/c", "https://cdc.gov/e"]
+    # tier2 끼리는 엔진이 준 순서 그대로다.
+    assert ranked[2:] == [
+        "https://dev.to/a",
+        "https://blog.example.com/b",
+        "https://news.example.com/d",
+    ]
+
+
+def test_tier_ranking_is_a_no_op_without_primary_sources():
+    """tier1 후보가 없으면 아무것도 바뀌지 않아야 한다 -- 이 기능은 순위를
+    흔드는 것이 아니라 1차 출처가 있을 때 그것을 앞세우는 것이다."""
+    from neos.workflow.deep_analysis.worker import _rank_by_source_tier
+
+    tiers = {"tier1": [".gov"], "tier2": ["*"]}
+    urls = ["https://a.com/1", "https://b.com/2", "https://c.com/3"]
+
+    ranked = _rank_by_source_tier([{"url": u} for u in urls], tiers)
+
+    assert [c["url"] for c in ranked] == urls
+
+
+@pytest.mark.asyncio
+async def test_wider_candidate_search_does_not_widen_fetching():
+    """넓게 받아 고르되 **fetch 수는 그대로**여야 한다.
+
+    이 기능이 비용을 늘리면 안 된다 -- 늘어나는 것은 검색 결과 몇 줄이고,
+    fetch(그리고 그 뒤의 프롬프트 크기)는 `search_result_limit` 에 묶인다.
+    """
+    from neos.config.settings import settings
+
+    config = settings.config.deep_analysis
+    limit = config.search_result_limit
+
+    class WideSearch:
+        def __init__(self):
+            self.calls = []
+
+        async def __call__(self, query, k):
+            self.calls.append((query, k))
+            # 엔진이 요청한 만큼 준다 -- 전부 tier2 라 순위는 그대로다.
+            return [
+                {"url": f"https://example.com/{i}", "title": "t", "snippet": "s"}
+                for i in range(k)
+            ]
+
+    search = WideSearch()
+    fetch = FakeFetch()
+    worker = Worker(search, fetch_fn=fetch, llm_client=FakeLLM())
+
+    await worker.investigate("Q\n{fetched_evidence}", Effort.SCOUT, "question")
+
+    requested = search.calls[0][1]
+    assert requested == limit * config.source_candidate_multiplier
+    assert requested > limit
+    assert len(fetch.calls) == limit
