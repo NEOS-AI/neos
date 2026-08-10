@@ -635,10 +635,26 @@ class DeepAnalysisDevProfileConfig(StrictConfigModel):
     # that stage ran 5,542 / 10,893 / 17,723 (min/median/max), and that is
     # before the finalization floor is subtracted. The profile was sized
     # before `reserve` charged for input at all, which is why dev runs were
-    # pathological rather than merely small. 100,000 leaves 58,960 for
+    # pathological rather than merely small. 100,000 left 58,960 for
     # investigation against a 41,040 floor (41%), matching the default
     # profile's 43.7%.
-    global_token_cap: int = 100000
+    #
+    # 140,000 (2026-08-10, D56). `report_floor_tokens` now counts the
+    # truncation expansion it always paid for, which moves dev's finalization
+    # floor 48,000 -> 68,000. At the old cap that is 68% -- past
+    # `finalization_floor_warn_ratio`, so the shipped defaults would warn --
+    # and it would cut investigation from 52,000 to 32,000, below what dev
+    # runs already use (sample #12's `f9bba141` consumed 50,318 before
+    # stopping at the floor). 140,000 puts the floor at 49% and gives
+    # investigation 72,000.
+    #
+    # The default profile needs no change: the same correction takes it from
+    # 31% to 45% of its 300,000 cap.
+    #
+    # This costs real tokens, and only on the runs that reach the floor --
+    # one of five dev runs in each of samples #11 and #12. The other four
+    # spent 23,000-39,000, nowhere near either cap.
+    global_token_cap: int = 140000
     parallel_workers: int = 2
     max_depth: int = 2
     # dev shrinks the budget 3x (300000 -> 100000) but inherited a synthesis
@@ -1085,18 +1101,38 @@ class DeepAnalysisConfig(StrictConfigModel):
         so a tier covering one round leaves the later rounds to fail open --
         the failure this split exists to end.
 
-        Known undersized, deliberately left (2026-08-09). The `assembly`
-        term assumes `input_bound ~= ratio * synthesis_max_tokens`; sample #6
-        measured assembly reservations totalling 34,984-134,983 per run
-        against a whole tier of 34,800 (dev). Correcting it the way
-        `grading_floor_tokens` is corrected would push the floor past
-        `finalization_floor_warn_ratio` of the cap, which is a decision about
-        the cap and the retry policy -- not a formula tweak -- so it is
-        recorded here rather than quietly applied. `grading_floor_tokens`
-        below is what stops the judge from paying for it in the meantime.
+        The `assembly` term counts the truncation expansion, for the same
+        reason `grading_floor_tokens` does (D56, 2026-08-10). `call_text`
+        answers a truncated assembly with **the same prompt at
+        `truncation_retry_multiplier` times the output ceiling**
+        (llm.py:464-474), so a truncated attempt charges its input twice and
+        its output `1 + m` times -- not the `input + output` this term used
+        to assume.
+
+        Measured, not derived and hoped for. Sample #12 logged the pair
+        directly:
+
+            reserved  input_bound=5926 max_out=2000 total=7926   <- attempt
+            reserved  input_bound=5926 max_out=4000 total=9926   <- expansion
+            DEGRADED  reason=input_bound                          <- retry
+
+        17,852 against a term of 8,000. Five of six runs reserved twice for
+        `report_assembly`; one reserved three times. The old term funded two
+        attempts, a truncated attempt costs three, and so `_finalize`'s retry
+        was refused its reservation in four of six runs -- which is why the
+        retry loop had never run (D53, D55). The corrected term is 18,000.
+
+        Note `grading` is left as `m * (input + output)` rather than the
+        exact `m * input + (1 + m) * output`. The two differ by exactly one
+        `report_judge_max_output_tokens` (800 dev / 800 prod) against a term
+        of 10,800 -- under 8%, and no measurement points at it. The assembly
+        term is corrected because a sample measured it binding.
         """
         assembly = int(
-            (self.assembly_input_ratio + 1) * synthesis_max_tokens
+            self.truncation_retry_multiplier
+            * self.assembly_input_ratio
+            * synthesis_max_tokens
+            + (1 + self.truncation_retry_multiplier) * synthesis_max_tokens
         )
         grading = int(
             self.grading_input_ratio * synthesis_max_tokens

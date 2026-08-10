@@ -41,7 +41,7 @@ def test_deep_analysis_nested_effort_and_tiers():
 def test_deep_analysis_dev_profile_present():
     dev = _settings().config.deep_analysis.dev_profile
 
-    assert dev.global_token_cap == 100000
+    assert dev.global_token_cap == 140000
     assert dev.parallel_workers == 2
     assert dev.max_depth == 2
     assert dev.synthesis_max_tokens == 2000
@@ -159,15 +159,74 @@ def test_the_floor_counts_input_not_only_output():
 
     config = DeepAnalysisConfig()
 
-    # default 프로파일: assembly (3.0+1)*4000=16,000 / grading 5.0*4000+800=20,800
-    # -> attempt 36,800 * (report_retry_cap 1 + 1) = 73,600
-    assert config.report_floor_tokens(4_000) == 73_600
+    # default 프로파일. assembly 는 절단 확장을 센다(D56): `call_text` 가
+    # 같은 프롬프트를 출력 2배로 다시 보내므로 입력이 2회, 출력이 1+2회다 --
+    # 2*3.0*4000 + 3*4000 = 36,000. grading 5.0*4000+800 = 20,800.
+    # -> attempt 56,800 * (report_retry_cap 1 + 1) = 113,600
+    assert config.report_floor_tokens(4_000) == 113_600
     # reduction (1.6+1)*4000=10,400 * allowance 2 = 20,800
-    assert config.finalization_floor_tokens(4_000) == 73_600 + 20_800
+    assert config.finalization_floor_tokens(4_000) == 113_600 + 20_800
 
     # dev 프로파일 (synthesis_max_tokens=2000)
-    assert config.report_floor_tokens(2_000) == 37_600
-    assert config.finalization_floor_tokens(2_000) == 48_000
+    # assembly 2*3.0*2000 + 3*2000 = 18,000 -- 표본 #12 가 실측한 절단 시도
+    # 1회 비용 17,852 를 덮는다. 옛 값 8,000 은 못 덮었고, 그래서 시도 1 이
+    # 6개 run 중 4개에서 예약을 거절당했다.
+    assert config.report_floor_tokens(2_000) == 57_600
+    assert config.finalization_floor_tokens(2_000) == 68_000
+
+
+def test_the_assembly_tier_funds_every_attempt_including_its_truncation_retry():
+    """D56. 바닥이 재시도를 실제로 감당하는지 -- 표본 #12 의 실측 숫자로.
+
+    `call_text` 는 잘린 조립에 **같은 프롬프트를 출력 2배로** 다시 보낸다
+    (llm.py:464-474). 그래서 한 시도가 예약을 두 번 한다:
+
+        input_bound=5926 max_out=2000 total=7926   <- 시도
+        input_bound=5926 max_out=4000 total=9926   <- 확장
+
+    옛 조립항 8,000 은 이 17,852 를 못 덮었고, 그래서 시도 1 이 6개 run 중
+    4개에서 `input_bound` 로 거절돼 결정론 템플릿으로 강등됐다 -- 재시도
+    루프가 실재한 적이 없던 이유다(D53·D55).
+    """
+    from neos.config.schema import DeepAnalysisConfig
+
+    config = DeepAnalysisConfig()
+    smt = config.dev_profile.synthesis_max_tokens
+
+    # `available_for_assembly` = remaining - grading_floor (token_budget.py).
+    # 최악의 경우 remaining 은 report_floor 까지 줄어 있다.
+    assembly_tier = config.report_floor_tokens(smt) - config.grading_floor_tokens(smt)
+
+    input_bound = 5_926  # 표본 #12 `01eadc5b` 실측
+    attempt = input_bound + smt
+    expansion = input_bound + int(config.truncation_retry_multiplier * smt)
+    attempts = config.report_retry_cap + 1
+
+    # 모든 시도가 절단되는 최악의 경우까지 덮어야 한다 -- 바닥은 예약
+    # 보증이지 기대값이 아니다.
+    assert assembly_tier >= attempts * (attempt + expansion)
+
+    # 그리고 옛 공식으로는 못 덮었다는 것이 이 테스트의 요점이다.
+    old_assembly = int((config.assembly_input_ratio + 1) * smt)
+    old_tier = attempts * old_assembly
+    assert old_tier < attempts * (attempt + expansion)
+
+
+def test_the_shipped_defaults_do_not_trip_the_finalization_floor_warning():
+    """D56 이 바닥을 키웠다. 경고는 코너로 몰린 프로파일용 백스톱이지
+    기본값이 늘 켜두는 것이 아니다 -- dev cap 을 함께 올린 이유다."""
+    import warnings as _warnings
+
+    from neos.config.loader import warn_finalization_floor_ratio
+    from neos.config.schema import DeepAnalysisConfig
+
+    config = DeepAnalysisConfig()
+
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        warn_finalization_floor_ratio(config)
+
+    assert [str(w.message) for w in caught] == []
 
 
 def test_the_report_tier_never_exceeds_the_total_floor():
