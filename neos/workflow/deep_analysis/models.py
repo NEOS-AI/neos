@@ -89,6 +89,15 @@ class WorkerResult:
     # entailment 배치가 필터를 적용하지 못하고 원본 claim을 그대로 통과시켰는가.
     # discard 0건의 두 원인("버릴 게 없었다" / "필터가 안 돌았다")을 가른다.
     entailment_skipped: bool = False
+    # 1차 출처 증강 질의가 무엇을 바꿨는가. 키:
+    # `base_candidates`/`base_tier1` (기저 질의가 가져온 것),
+    # `added_candidates`/`added_tier1` (증강 질의만 가져온 것),
+    # `selected_tier1` (슬라이스를 통과해 실제 fetch 된 tier1 수).
+    #
+    # `added_tier1` 이 표본 전체에서 0 이면 평문 키워드 증강은 효과가 없고
+    # `site:` 문법이나 다른 기전이 필요하다는 뜻이다 -- 이 필드가 있어야
+    # 그 반증이 가능하다.
+    search_augmentation: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -99,6 +108,10 @@ class Verdict:
     salvage: str | None = None
     label: str | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    # What the next attempt should change, in the rejected draft's own words
+    # (W3-h). In-process only: the orchestrator logs `code` and
+    # `diagnostics`, never this, so report prose stays out of the ledger.
+    revision_hints: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -115,4 +128,12 @@ class NodeSummary:
     key_claim_ids: list[str]
     confidence: float
     caveats: list[str]
+    # The question this answers, in the words it was asked (W3-i). Optional
+    # because `reduce_node` builds summaries before the orchestrator pairs
+    # them with the ledger's questions; `_child_summaries` fills it in.
+    question_text: str = ""
+    # The ledger's status for that question, filled in beside the text. The
+    # report gate demands coverage of `resolved` children specifically, so
+    # the harness needs to know which ones those are (W3-l).
+    question_status: str = ""
     conflicts: list[ConflictNote] = field(default_factory=list)

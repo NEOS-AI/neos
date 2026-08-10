@@ -133,7 +133,9 @@ class _ConflictSynth:
             )
         }
 
-    async def assemble(self, root_summary, child_summaries, caveats):
+    async def assemble(
+        self, root_summary, child_summaries, caveats, revision_hints=None
+    ):
         self.assemble_calls += 1
         return "DRAFT\n\n## 출처"
 

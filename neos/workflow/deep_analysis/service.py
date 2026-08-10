@@ -132,6 +132,7 @@ async def build_orchestrator(
         synthesis_max_tokens
     )
     report_floor_tokens = config.report_floor_tokens(synthesis_max_tokens)
+    grading_floor_tokens = config.grading_floor_tokens(synthesis_max_tokens)
     return Orchestrator(
         session,
         run_id,
@@ -147,6 +148,7 @@ async def build_orchestrator(
         global_token_cap=global_token_cap,
         finalization_floor_tokens=finalization_floor_tokens,
         report_floor_tokens=report_floor_tokens,
+        grading_floor_tokens=grading_floor_tokens,
         min_viable_output_tokens=config.min_viable_output_tokens,
         parallel_workers=parallel_workers,
         max_depth=max_depth,

@@ -36,16 +36,56 @@ _PROPER_NOUN = re.compile(r"\b[A-Z][A-Za-z]{2,}\b")
 
 _SOURCE_HEADING = re.compile(r"(?m)^##\s*출처\s*$")
 
+# The limits section lists what could NOT be verified. By construction no
+# verified claim stands behind those lines, so demanding a citation on them
+# is an impossible requirement -- the same reason the footnote block is
+# excluded below. It only became visible once W3-e made the section always
+# present: sample #4's `cb1593f2` scored 0.455 with it and 0.353 without.
+_LIMITS_SCORING_BOUNDARY = re.compile(
+    r"(?m)^##\s*" + re.escape(_LIMITS_HEADING) + r"\s*$"
+)
+
+# The harness-owned list of resolved sub-questions (W3-l,
+# `orchestrator._QUESTIONS_HEADING`). Excluded for the same reason as the
+# limits section: it is a list of questions, not factual assertions, so no
+# verified claim stands behind its lines and demanding citations on them is
+# an impossible requirement.
+_QUESTIONS_HEADING = "조사한 하위 질문"
+_QUESTIONS_SCORING_BOUNDARY = re.compile(
+    r"(?m)^##\s*" + re.escape(_QUESTIONS_HEADING) + r"\s*$"
+)
+
+# A markdown heading is a label, not a factual assertion. `_sentences` splits
+# on newlines, so "### 1. 배경" became its own "sentence"; the digit in it
+# then satisfied `_DIGIT` and it was counted as an uncited claim. Measured
+# 2026-08-08 (sample #4): 1-7 of each run's uncited items were heading
+# fragments, and excluding them moved `93795eaf` 0.348 -> 0.167 and
+# `2ff4761c` 0.333 -> 0.143, both under the 0.20 threshold.
+#
+# Up to three leading spaces, per CommonMark. Applied to whole *lines* before
+# any sentence splitting -- see `_uncited_stats`.
+_HEADING_LINE = re.compile(r"^ {0,3}#{1,6}\s")
+
 
 def _report_body(report: str) -> str:
-    """Everything before the '## 출처' footnote block, if present.
+    """The prose that a citation gate may fairly score.
 
-    The footnote list itself (`[1] https://...`) is not body prose and must
-    not be scored by the uncited-assertion heuristic.
+    Excludes the '## 출처' footnote block (a list of URLs is not prose) and
+    the limits section (a list of things that could not be verified cannot
+    carry citations). Whichever comes first wins, so the order the model
+    emits them in does not change the score.
     """
 
-    match = _SOURCE_HEADING.search(report)
-    return report[: match.start()] if match else report
+    cuts = [
+        match.start()
+        for match in (
+            _SOURCE_HEADING.search(report),
+            _LIMITS_SCORING_BOUNDARY.search(report),
+            _QUESTIONS_SCORING_BOUNDARY.search(report),
+        )
+        if match is not None
+    ]
+    return report[: min(cuts)] if cuts else report
 
 
 def _sentences(body: str) -> list[str]:
@@ -59,25 +99,119 @@ def _sentences(body: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def _uncited_stats(body: str) -> tuple[float, int, int]:
-    """Return (ratio, assertion count, uncited count).
+def _uncited_stats(body: str) -> tuple[float, int, int, list[str]]:
+    """Return (ratio, assertion count, uncited count, uncited sentences).
 
     The counts travel with the ratio because the ratio alone cannot be
     calibrated against: 1.00 over one assertion is a short report, 1.00 over
     forty is a badly cited one, and the two call for opposite fixes. 156
     recorded rejections stored only the code and so cannot distinguish them.
+
+    The sentences travel too, for the retry loop (W3-h). A count tells the
+    orchestrator that the draft failed; only the sentences let the next
+    attempt fix the specific lines. They stay out of `diagnostics` on
+    purpose -- `diagnostics` is what reaches the ledger, and report prose
+    does not belong in an event payload.
     """
 
-    sentences = _sentences(body)
+    # Headings come out *before* splitting, not after. `_sentences` cuts on
+    # sentence-terminator punctuation, and a numbered heading carries one:
+    # "### 2. 기준일(2026년 7월 19일) 시점의 상태" became
+    # ["### 2.", "기준일(2026년 7월 19일) 시점의 상태"], and the second
+    # fragment no longer starts with `#`, so filtering the *fragments* let it
+    # through to be scored as an uncited assertion.
+    #
+    # W3-f filtered fragments and looked correct because its cases were
+    # "### 1. 배경" -- the remainder held no digit and no Latin proper noun,
+    # so it fell out of the denominator by accident. Any heading whose title
+    # names a year or a product leaked. Measured 2026-08-09 over sample #5's
+    # cassette: 1 of 11 reports crossed back under the threshold
+    # (`94b0483c` 0.208 -> 0.116).
+    prose = "\n".join(
+        line for line in body.splitlines() if not _HEADING_LINE.match(line)
+    )
+    sentences = _sentences(prose)
     assertions = [
         s for s in sentences if _DIGIT.search(s) or _PROPER_NOUN.search(s)
     ]
     if not assertions:
-        return 0.0, 0, 0
+        return 0.0, 0, 0, []
     uncited = [s for s in assertions if not _FOOTNOTE_REF.search(s)]
-    return len(uncited) / len(assertions), len(assertions), len(uncited)
+    return (
+        len(uncited) / len(assertions),
+        len(assertions),
+        len(uncited),
+        uncited,
+    )
 
 
+
+
+# A rejected draft's hints share the assembly prompt with the child summaries
+# that the report is actually made of, and `clamp_prompt` drops child blocks
+# to fit. Hints are capped so a badly cited draft cannot starve the next
+# attempt of the very evidence it needs to cite.
+_MAX_HINTED_SENTENCES = 8
+_MAX_HINT_CHARS = 160
+
+# The judge's rationale is model prose entering an event payload, so it is
+# bounded. It is the judge's own assessment of a rendered report -- not
+# fetched source text -- so the no-raw invariant this grader documents is
+# untouched. The booleans beside it carry the part that aggregates; this is
+# for reading one rejection.
+_MAX_RATIONALE_CHARS = 400
+
+
+def _uncited_hints(offenders: list[str], assertions: int) -> list[str]:
+    """Turn uncited sentences into instructions the next attempt can act on.
+
+    Two ways out, and the second is the one that matters (W3-h): sentences
+    reporting what could *not* be verified carry no citation because none
+    exists, and they belong under the limits heading -- which `_report_body`
+    already excludes from scoring. Sample #5's largest class of uncited
+    sentences was exactly that ("검증된 클레임이 극히 제한적이어서 결론을 제시할
+    수 없다"), written into the body where it gets scored. Naming the escape
+    route beats teaching the grader to excuse the phrasing, which would only
+    hand the model a way to dodge citations.
+
+    The framing carries as much weight as the content. `assemble` never
+    receives the rejected draft -- only these lines -- so an attempt cannot
+    literally "attach a marker to each sentence": it writes a fresh report
+    with eight orphaned sentences sitting in its prompt, where they read as
+    *material to include* rather than *lines to fix*. Sample #10 measured the
+    consequence: attempt 1 raised the assertion count in all three retried
+    runs (19->60, 31->46, 16->42) and the uncited ratio worsened every time
+    (.400/.435/.714). So the sentences are named as belonging to a previous
+    draft, and `assertions` anchors the length -- the retry's failure is
+    citation coverage, and writing more of the same only enlarges the
+    denominator.
+
+    Not fixed by passing the draft itself: dev's assembly input allowance is
+    `assembly_input_ratio * synthesis_max_tokens` = 6000, samples #7-#8
+    clamped that prompt 39-42 times already, and `shrink_once` drops child
+    summary blocks first -- the very evidence the citations come from. That
+    trades a citation problem for an evidence problem.
+    """
+
+    if not offenders:
+        return []
+    shown = offenders[:_MAX_HINTED_SENTENCES]
+    lines = [
+        f"직전 초안은 사실 주장 {assertions}개를 담았고 그중 "
+        f"{len(offenders)}개에 인용이 없어 반려됐다. 문제는 분량이 아니라 "
+        f"인용이다 -- 이번 초안을 {assertions}개보다 길게 쓰지 마라. "
+        "아래는 직전 초안에서 인용이 없던 문장이다. 그대로 다시 쓰지 말고, "
+        "입력에 있는 [C:claimid] 마커를 붙일 수 있으면 붙여 쓰고 "
+        f"뒷받침할 클레임이 없으면 '## {_LIMITS_HEADING}' 절로 옮기거나 "
+        "빼라:"
+    ]
+    for sentence in shown:
+        text = sentence[:_MAX_HINT_CHARS].strip()
+        suffix = "..." if len(sentence) > _MAX_HINT_CHARS else ""
+        lines.append(f"- {text}{suffix}")
+    if len(offenders) > len(shown):
+        lines.append(f"- (그 외 {len(offenders) - len(shown)}개 문장)")
+    return lines
 
 
 class ReportGrader:
@@ -109,7 +243,9 @@ class ReportGrader:
 
         # (b) marker-less factual-assertion ratio must stay under threshold.
         threshold = settings.config.deep_analysis.report_uncited_ratio_max
-        ratio, assertions, uncited = _uncited_stats(_report_body(report))
+        ratio, assertions, uncited, offenders = _uncited_stats(
+            _report_body(report)
+        )
         # Carried by every verdict from here on, not only the rejection:
         # recording the failing side alone yields a distribution censored at
         # the threshold, which cannot say whether the cut is in the right
@@ -139,6 +275,10 @@ class ReportGrader:
                 code="E_REPORT_EMPTY",
                 detail="report contains no factual assertion to cite",
                 diagnostics=diagnostics,
+                revision_hints=[
+                    "리포트가 사실 주장을 하나도 담지 않았다. 입력의 verified "
+                    "클레임을 인용해 본문을 작성하라."
+                ],
             )
 
         if ratio >= threshold:
@@ -147,6 +287,7 @@ class ReportGrader:
                 code="E_REPORT_UNCITED",
                 detail=f"uncited assertion ratio {ratio:.2f} >= {threshold}",
                 diagnostics=diagnostics,
+                revision_hints=_uncited_hints(offenders, assertions),
             )
 
         # (c) every resolved root-direct-child question must be mentioned.
@@ -160,6 +301,10 @@ class ReportGrader:
                     code="E_REPORT_MISSING_QUESTION",
                     detail=f"resolved question not mentioned: {child.text}",
                     diagnostics=diagnostics,
+                    revision_hints=[
+                        "다음 하위 질문은 조사가 끝났는데 리포트가 다루지 "
+                        f"않았다. 본문에서 답하라:\n{child.text}"
+                    ],
                 )
 
         # (d) the limits/unresolved section must exist.
@@ -218,8 +363,39 @@ class ReportGrader:
         rationale = str(data.get("rationale", ""))
 
         if not answers_question or not strength_ok:
-            return Verdict(ok=False, code="E_REPORT_AGENTIC", detail=rationale)
-        return Verdict(ok=True)
+            # The judge's account of *why* a draft that cleared every
+            # deterministic check was still refused. It reached nowhere
+            # before: the orchestrator logs `code` and `diagnostics`, never
+            # `detail`, so every recorded E_REPORT_AGENTIC rejection said
+            # only that the judge said no.
+            #
+            # The two booleans matter more than the prose. "Does not answer
+            # the question" and "the evidence is too weak" are different
+            # failures with different fixes, and they are structured -- they
+            # aggregate across runs, which a rationale string cannot.
+            # Sample #6 made this urgent: the judge became the dominant
+            # rejection (8 of 18 gradings, up from 3) and not one of those 8
+            # can be told apart today.
+            return Verdict(
+                ok=False,
+                code="E_REPORT_AGENTIC",
+                detail=rationale,
+                diagnostics={
+                    "judge": "ran",
+                    "judge_answers_question": answers_question,
+                    "judge_strength_ok": strength_ok,
+                    "judge_rationale": rationale[:_MAX_RATIONALE_CHARS],
+                },
+                revision_hints=(
+                    [f"판정자 반려 사유: {rationale}"] if rationale else []
+                ),
+            )
+        # An approving judge has to say so. Recording nothing here is what
+        # made a real approval indistinguishable in the ledger from the
+        # degraded fallbacks above -- and sample #6's two gate passes were
+        # both `judge: budget_exhausted`, so "the judge approved" and "the
+        # judge never ran" is exactly the distinction that needs to survive.
+        return Verdict(ok=True, diagnostics={"judge": "ran"})
 
     async def grade(self, report: str, root_id: str) -> Verdict:
         deterministic = await self.grade_deterministic(report, root_id)
@@ -233,7 +409,7 @@ class ReportGrader:
 
         try:
             agentic = await self.grade_agentic(report, root_text)
-        except TokenBudgetExhausted:
+        except TokenBudgetExhausted as exc:
             # Same fallback as before, but no longer indistinguishable from a
             # judge that ran and approved. P2 keeps this grader read-only, so
             # the marker rides the verdict to the orchestrator's event.
@@ -243,12 +419,24 @@ class ReportGrader:
             # `attempt`, `code`, and `**verdict.diagnostics` -- it never reads
             # `detail`. `diagnostics` is what actually reaches the ledger, so
             # the marker has to ride there, not just on `detail`.
+            #
+            # The marker alone says the judge did not run; it does not say
+            # by how much it missed. `token_budget_exhausted` is logged only
+            # from the *investigation* stop path, so finalization exhaustion
+            # recorded no numbers at all -- sample #6 has zero of those
+            # events and two `judge: budget_exhausted` passes. G10 already
+            # put the numbers on the exception; they were being dropped one
+            # layer short of the ledger.
             return replace(
                 deterministic,
                 detail="judge_budget_exhausted",
                 diagnostics={
                     **deterministic.diagnostics,
                     "judge": "budget_exhausted",
+                    "judge_budget_cause": exc.cause,
+                    "judge_budget_input_bound": exc.input_bound,
+                    "judge_budget_ceiling": exc.ceiling,
+                    "judge_budget_granted": exc.granted,
                 },
             )
         # The agentic verdict is the answer, but the deterministic gate's

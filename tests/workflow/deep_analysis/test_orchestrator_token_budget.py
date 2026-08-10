@@ -49,7 +49,9 @@ class Synthesizer:
     async def reduce_tree(self, root_id):
         return {root_id: NodeSummary(root_id, "answer", [], 1.0, [])}
 
-    async def assemble(self, root_summary, child_summaries, caveats):
+    async def assemble(
+        self, root_summary, child_summaries, caveats, revision_hints=None
+    ):
         return "report"
 
 
@@ -96,8 +98,8 @@ async def test_recovered_orphan_exhaustion_stops_and_emits_once():
     first = await build().run("root")
     second = await build().run("root")
 
-    assert first["report_markdown"] == "report"
-    assert second["report_markdown"] == "report"
+    assert first["report_markdown"].startswith("report")
+    assert second["report_markdown"].startswith("report")
     exhausted_events = [e for e in ledger.events if e[0] == "token_budget_exhausted"]
     assert len(exhausted_events) == 1
     assert [kind for kind, _payload in emitted].count("token_budget_exhausted") == 1
@@ -183,7 +185,7 @@ async def test_investigation_stopped_at_floor_is_recorded_once():
 
     result = await orchestrator.run("root")
 
-    assert result["report_markdown"] == "report"
+    assert result["report_markdown"].startswith("report")
     floor_events = [
         e for e in ledger.events if e[0] == "investigation_stopped_at_floor"
     ]
@@ -194,6 +196,7 @@ async def test_investigation_stopped_at_floor_is_recorded_once():
         "reserved_tokens": 0,
         "floor_tokens": 20,
         "report_floor_tokens": 0,
+        "grading_floor_tokens": 0,
     }
     assert not any(e[0] == "token_budget_exhausted" for e in ledger.events)
     assert (

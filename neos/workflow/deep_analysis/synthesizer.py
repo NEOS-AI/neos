@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
+import re
+
 from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
-from .llm import call_json, call_text
+from .llm import call_json, call_text, prompt_input_bound
 from .models import ConflictNote, NodeSummary
 from .prompt_clamp import clamp_prompt
 from .prompt_loader import render
 from .token_budget import TokenBudgetExhausted
+
+# A `[C:` that the truncation cut through, with fewer than the 8 hex digits
+# and the closing bracket a real marker carries.
+_DANGLING_MARKER = re.compile(r"\[C:[0-9a-f]{0,8}$")
+
+# A whole claim address. Deliberately the same shape `citation._MARKER` and
+# `graders.report._RAW_MARKER` match: this counts the very things the
+# renderer will later resolve into footnotes, so a looser pattern here would
+# report markers the renderer cannot use.
+_CLAIM_MARKER = re.compile(r"\[C:[0-9a-f]{8}\]")
 
 
 def _degradation_reason(exc: TokenBudgetExhausted) -> str:
@@ -75,11 +87,28 @@ class Synthesizer:
         ratio = settings.config.deep_analysis.reduction_input_ratio
         return int(ratio * self.synthesis_max_tokens)
 
-    async def _log_clamp(self, stage: str, qid: str, result, allowance: int) -> None:
+    async def _log_clamp(
+        self,
+        stage: str,
+        qid: str,
+        result,
+        allowance: int,
+        *,
+        markers_before: int | None = None,
+    ) -> None:
         """Record a clamp only when it actually cut something.
 
         Logging every call would bury the signal: the interesting event is
         a finalization prompt that did not fit, not one that did.
+
+        `markers_before` is the domain half of the measurement (D58). The
+        clamp reports sizes because sizes are all it knows; only the caller
+        knows that those characters carry `[C:xxxxxxxx]` claim addresses, and
+        the number of those **surviving into the prompt** is the ceiling on
+        how many citations the report can possibly carry. Sample #13 left
+        that unanswerable: footnote counts in delivered reports fell 12 -> 7
+        -> 2 -> 2 while nothing on record said whether the markers ever
+        reached the composer.
         """
         if not (result.clamped or result.exhausted):
             return
@@ -94,6 +123,27 @@ class Synthesizer:
                 "dropped_primary": result.dropped_primary,
                 "dropped_secondary": result.dropped_secondary,
                 "exhausted": result.exhausted,
+                # Halving the root answer leaves no mark on the dropped
+                # counts, so without these a prompt that kept every child
+                # block by cutting its root summary to a fifth looks
+                # identical to one that never needed clamping at all.
+                "anchor_chars_before": result.anchor_chars_before,
+                "anchor_chars_after": result.anchor_chars_after,
+                # Same for the child blocks (D58): halving precedes dropping,
+                # so `dropped_primary=0` was reported by clamps that cut every
+                # block to a fraction of itself.
+                "primary_chars_before": result.primary_chars_before,
+                "primary_chars_after": result.primary_chars_after,
+                **(
+                    {
+                        "claim_markers_before": markers_before,
+                        "claim_markers_after": len(
+                            _CLAIM_MARKER.findall(result.prompt)
+                        ),
+                    }
+                    if markers_before is not None
+                    else {}
+                ),
             },
         )
 
@@ -141,6 +191,11 @@ class Synthesizer:
             child_summaries="\n".join(claim_blocks)
             or "(검증된 발견 없음)",
             caveats=caveats,
+            # `reduce` is the single-pass M1 path -- no retry loop, so there
+            # is never a previous rejection. Supplied anyway because `render`
+            # leaves unfilled placeholders as literal text, and a stray
+            # "{revision_note}" in the prompt is worse than an empty one.
+            revision_note="(없음 -- 재시도 없는 경로)",
         )
         config = settings.config.deep_analysis
         synth_model = resolve_model(
@@ -173,6 +228,7 @@ class Synthesizer:
         root_summary: NodeSummary | None,
         child_summaries: list[NodeSummary],
         caveats: list[str],
+        revision_hints: list[str] | None = None,
     ) -> str:
         """Final compose (§6.8) over the root ``NodeSummary`` + direct-child
         ``NodeSummary`` answers + collected caveats.
@@ -184,8 +240,17 @@ class Synthesizer:
         already-reduced hierarchical ``NodeSummary`` objects.
         """
         root_answer = root_summary.answer if root_summary is not None else ""
+        # The question comes before its answer (W3-i). A block used to be
+        # `- [{question_id}] {answer}`, which named the question only by an
+        # opaque id -- the composer could not tell what any answer was an
+        # answer *to*, and the report gate's "every resolved child question
+        # must be mentioned" check demanded text the composer had never been
+        # shown.
         child_blocks = [
-            f"- [{child.question_id}] {child.answer}"
+            f"- [{child.question_id}] 질문: {child.question_text}\n"
+            f"  답: {child.answer}"
+            if child.question_text
+            else f"- [{child.question_id}] {child.answer}"
             for child in child_summaries
         ]
         config = settings.config.deep_analysis
@@ -197,12 +262,17 @@ class Synthesizer:
         ).model
         qid = root_summary.question_id if root_summary is not None else ""
 
-        def render_assembly(blocks: list[str], notes: list[str]) -> str:
+        def render_assembly(
+            blocks: list[str], notes: list[str], root: str
+        ) -> str:
             # Computed from this call's own `blocks`, not the pre-clamp
             # `child_blocks` -- the clamp can drop every child block and
             # leave `root_answer` empty too, and this must reflect that
             # (F10): the closure is pure with respect to its arguments.
-            has_content = bool(root_answer.strip()) or bool(blocks)
+            # `root` likewise: it is now clamped material (D54), so reading
+            # the captured `root_answer` here would describe a prompt this
+            # call is not sending.
+            has_content = bool(root.strip()) or bool(blocks)
             if notes:
                 caveats_text = "\n".join(notes)
             elif has_content:
@@ -211,9 +281,15 @@ class Synthesizer:
                 caveats_text = "검증된 클레임을 확보하지 못함"
             return render(
                 "final_compose",
-                root_summary=root_answer or "(요약 없음)",
+                root_summary=root or "(요약 없음)",
                 child_summaries="\n".join(blocks) or "(검증된 발견 없음)",
                 caveats=caveats_text,
+                # Not clamped alongside `blocks`: the hints name the exact
+                # lines to fix, and dropping them would put the attempt back
+                # where the previous one already failed. `_uncited_hints`
+                # caps their size at the source for the same reason.
+                revision_note="\n".join(revision_hints or [])
+                or "(없음 -- 첫 시도)",
             )
 
         clamp = clamp_prompt(
@@ -222,9 +298,23 @@ class Synthesizer:
             render_prompt=render_assembly,
             primary=child_blocks,
             secondary=list(caveats),
+            # The root answer is clamped material now (D54). It is still the
+            # most protected -- only halved, never dropped -- but it can no
+            # longer be paid for by every child block in the prompt.
+            anchor=root_answer,
         )
         await self._log_clamp(
-            "report_assembly", qid, clamp, self.assembly_input_allowance
+            "report_assembly",
+            qid,
+            clamp,
+            self.assembly_input_allowance,
+            # Counted over everything the clamp could cut, anchor included:
+            # a degraded root answer is a join of child answers and carries
+            # their markers, so attributing the loss needs both sources in
+            # the "before" figure.
+            markers_before=len(
+                _CLAIM_MARKER.findall("\n".join(child_blocks) + root_answer)
+            ),
         )
         try:
             response = await self.llm_call(
@@ -333,7 +423,11 @@ class Synthesizer:
             feature_override=settings.config.deep_analysis.models.synth,
         ).model
 
-        def render_node(claims: list[str], children: list[str]) -> str:
+        def render_node(
+            claims: list[str], children: list[str], _anchor: str = ""
+        ) -> str:
+            # `reduce_node` passes no anchor -- the question text is tiny and
+            # must never shrink, so it stays outside the clamp entirely.
             return render(
                 "node_summary",
                 question_id=question.id,
@@ -354,6 +448,12 @@ class Synthesizer:
             question.id,
             clamp,
             self.reduction_input_allowance,
+            # Reductions carry markers too, and a marker lost here never
+            # reaches the assembly to be lost there -- attributing the drop
+            # to the report tier requires ruling this tier out first.
+            markers_before=len(
+                _CLAIM_MARKER.findall("\n".join(claim_lines))
+            ),
         )
         prompt = clamp.prompt
         try:
@@ -423,6 +523,38 @@ class Synthesizer:
             conflicts=conflicts,
         )
 
+    def _bound_degraded_answer(self, answer: str) -> str:
+        """Cut a degraded join down to the ceiling a real answer obeys.
+
+        The ceiling is `synthesis_max_tokens` -- the same number that caps
+        `reduce_node`'s output -- measured with `prompt_input_bound`, the
+        ruler `reserve()` charges with. Halving rather than a computed cut:
+        it is scale-free, converges in O(log n) regardless of how oversized
+        the join is, and needs no chars-per-token constant (Korean and Latin
+        text differ by ~3x, so any such constant would be wrong for one of
+        them).
+
+        The cut is pulled back to a whitespace boundary, and a `[C:` left
+        dangling by the cut is removed: a half-written marker matches neither
+        `_RAW_MARKER` nor the renderer's lookup, so it would survive into the
+        report as literal text where a citation belongs.
+        """
+
+        synth_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="powerful",
+            feature_override=settings.config.deep_analysis.models.synth,
+        ).model
+        ceiling = self.synthesis_max_tokens
+        text = answer
+        while text and prompt_input_bound(synth_model, text) > ceiling:
+            text = text[: len(text) // 2]
+        if len(text) == len(answer):
+            return answer
+        cut = text.rsplit(" ", 1)[0] if " " in text else text
+        return _DANGLING_MARKER.sub("", cut).rstrip()
+
     async def _degraded_summary(
         self,
         question,
@@ -452,16 +584,21 @@ class Synthesizer:
         so they cannot orphan. It deliberately drops the prompt scaffolding
         (evidence excerpts, confidence) that `reduce_node` builds for the
         model: that is input for an LLM, not prose for a reader.
+
+        **The join is bounded** (D54). It stands in for an answer an LLM
+        would have written under a `synthesis_max_tokens` output ceiling, and
+        it was the one path in the tree that respected no ceiling at all: a
+        degraded parent joins its children's answers, and a degraded child's
+        answer is itself such a join, so the text accumulates up the tree.
+        Sample #11's `7aa21c7f` degraded 12 reductions and **the last was the
+        root** -- its answer became most of the subtree, ~5,800-12,200 input
+        tokens against an assembly allowance of 6,000. `shrink_once` refuses
+        to drop the root answer, so the assembly clamp dropped every child
+        block and every caveat and still did not fit (12 of 12 clamps
+        `exhausted`), which starved the report of the very claims it had to
+        cite and made attempt 1 fail its reservation outright. The retry loop
+        had never run.
         """
-        await self.ledger.log(
-            "node_reduction_degraded",
-            question.id,
-            {
-                "question_id": question.id,
-                "child_count": len(child_summaries),
-                "reason": reason,
-            },
-        )
         answer = " ".join(
             c.answer for c in child_summaries if c.answer.strip()
         )
@@ -471,6 +608,22 @@ class Synthesizer:
                 f"[C:{claim.id}] {claim.text}" for claim, _evidence in pairs
             )
             claim_ids = [claim.id for claim, _evidence in pairs]
+        bounded = self._bound_degraded_answer(answer)
+        await self.ledger.log(
+            "node_reduction_degraded",
+            question.id,
+            {
+                "question_id": question.id,
+                "child_count": len(child_summaries),
+                "reason": reason,
+                # The cascade is invisible without these: a degraded root is
+                # byte-identical in the ledger whether its join was 400 chars
+                # or 40,000, and the latter is what breaks the assembly.
+                "answer_chars": len(answer),
+                "answer_truncated": len(bounded) < len(answer),
+            },
+        )
+        answer = bounded
         return NodeSummary(
             question_id=question.id,
             answer=answer,

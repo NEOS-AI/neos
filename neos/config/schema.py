@@ -635,10 +635,26 @@ class DeepAnalysisDevProfileConfig(StrictConfigModel):
     # that stage ran 5,542 / 10,893 / 17,723 (min/median/max), and that is
     # before the finalization floor is subtracted. The profile was sized
     # before `reserve` charged for input at all, which is why dev runs were
-    # pathological rather than merely small. 100,000 leaves 58,960 for
+    # pathological rather than merely small. 100,000 left 58,960 for
     # investigation against a 41,040 floor (41%), matching the default
     # profile's 43.7%.
-    global_token_cap: int = 100000
+    #
+    # 140,000 (2026-08-10, D56). `report_floor_tokens` now counts the
+    # truncation expansion it always paid for, which moves dev's finalization
+    # floor 48,000 -> 68,000. At the old cap that is 68% -- past
+    # `finalization_floor_warn_ratio`, so the shipped defaults would warn --
+    # and it would cut investigation from 52,000 to 32,000, below what dev
+    # runs already use (sample #12's `f9bba141` consumed 50,318 before
+    # stopping at the floor). 140,000 puts the floor at 49% and gives
+    # investigation 72,000.
+    #
+    # The default profile needs no change: the same correction takes it from
+    # 31% to 45% of its 300,000 cap.
+    #
+    # This costs real tokens, and only on the runs that reach the floor --
+    # one of five dev runs in each of samples #11 and #12. The other four
+    # spent 23,000-39,000, nowhere near either cap.
+    global_token_cap: int = 140000
     parallel_workers: int = 2
     max_depth: int = 2
     # dev shrinks the budget 3x (300000 -> 100000) but inherited a synthesis
@@ -646,15 +662,29 @@ class DeepAnalysisDevProfileConfig(StrictConfigModel):
     # did not fit before this file's input allowances were added: three
     # 4000-token calls against what was then a 20000 cap.
     #
-    # 1200 is measured, not chosen for roundness -- node_reduction's actual
-    # consumption ran a median of 1109 tokens INCLUDING input, at granted
-    # ceilings whose median was 748.
+    # 1200 was measured against node_reduction -- its actual consumption ran a
+    # median of 1109 tokens INCLUDING input, at granted ceilings whose median
+    # was 748. That sized the *reduction* stage correctly and the *assembly*
+    # stage far too small, because the same knob caps both.
+    #
+    # 2000 (2026-08-09) is measured against assembly. Sample #9: `llm_truncated`
+    # fired 13 times for `report_assembly` out of 17 truncations run-wide, and
+    # the delivered report bodies cluster at 1,309-1,932 characters -- right at
+    # what a 1200-token ceiling can emit. The judge rejected 3 of its 4 refusals
+    # partly for "본문이 중간에 끊겼다". With `truncation_retry_multiplier` the
+    # expansion retry reaches 4000, which covers the 1,932-character median body
+    # with margin.
+    #
+    # Paid for by `report_retry_cap` 2 -> 1: the floor is
+    # `(cap + 1) * (assembly + grading)`, so one fewer attempt funds a larger
+    # ceiling. dev's finalization floor goes 41,040 -> 48,000 (41% -> 48% of
+    # the cap), still under `finalization_floor_warn_ratio`.
     #
     # ge=1: at s <= 0, the floor formulas can push report_floor_tokens above
     # floor_tokens (which stays non-negative) and `TokenBudget.__init__`
     # raises an opaque ValueError on every run instead of failing at config
     # validation with a clear message.
-    synthesis_max_tokens: int = Field(default=1200, ge=1)
+    synthesis_max_tokens: int = Field(default=2000, ge=1)
 
 
 class DeepAnalysisDiscardRecallConfig(StrictConfigModel):
@@ -901,17 +931,83 @@ class DeepAnalysisConfig(StrictConfigModel):
 
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
-    report_retry_cap: int = 2
+    # 2 -> 1 (2026-08-09). The extra attempt was buying nothing: sample #9's
+    # `report_assembly` reservations were `[1200, 2400]` per run -- the initial
+    # call plus its expansion retry, both on attempt 0. Attempts 1 and 2 never
+    # got an LLM call at all; they emitted the deterministic template, which is
+    # why their `uncited_ratio` and assertion counts were byte-identical to each
+    # other in every run. Meanwhile the cap multiplies the report floor
+    # (`(cap + 1) * (assembly + grading)`), so the dead attempt was taxing the
+    # ceiling that made attempt 0 truncate.
+    report_retry_cap: int = 1
     resolve_threshold: float = 0.7
     conflict_reinvestigation_cap: int = 1
     conflict_value_threshold: float = 0.6
     subq_adopt_threshold: float = 0.3
+    # Tier 1 은 **1차 기관 출처**다 -- 규칙을 만든 기관, 데이터를 낸 기관,
+    # 심사를 거친 학술 저장소. 편입 기준은 "이 도메인의 문서가 그 사실의
+    # 원본인가" 이지 "신뢰할 만한가" 가 아니다. 언론과 기업 블로그는 신뢰할
+    # 만해도 2차이므로 들어오지 않는다.
+    #
+    # 2026-08-09 확장. 원래 목록은 `.gov`/`.edu` 로 **미국 중심**이라
+    # `eur-lex.europa.eu`, `who.int`, `birmingham.ac.uk` 이 전부 tier2 --
+    # `dev.to` 와 같은 등급이었다. 표본 #7 에서 판정자가 반려한 사유가 정확히
+    # 이것이다: "질문이 요구한 '공식 EU 출처' 를 전혀 사용하지 못하고 모두
+    # 2차 블로그성 출처에 의존". 증거 119건 중 tier1 은 19건(16%)뿐이었고,
+    # 그중에도 `.ac.uk`/`.gov.uk` 는 세지 않은 채였다.
     source_tiers: dict[str, list[str]] = Field(
         default_factory=lambda: {
-            "tier1": ["arxiv.org", ".gov", ".edu", "github.com"],
+            "tier1": [
+                # 학술 저장소·코드 원본
+                "arxiv.org",
+                "github.com",
+                # 미국
+                ".gov",
+                ".edu",
+                # 초국가 기관 (EU, UN/WHO 계열)
+                "europa.eu",
+                ".int",
+                # 영국
+                ".gov.uk",
+                ".ac.uk",
+                # 한국
+                ".go.kr",
+                ".re.kr",
+                ".ac.kr",
+                # 일본
+                ".go.jp",
+                ".ac.jp",
+                # 호주·캐나다·뉴질랜드
+                ".gov.au",
+                ".edu.au",
+                ".gc.ca",
+                ".govt.nz",
+            ],
             "tier2": ["*"],
         }
     )
+    # 검색에서 가져올 후보 배수. `search_result_limit` 개를 fetch 하되 그
+    # 몇 배를 후보로 받아 tier 순으로 고른다. fetch 수는 그대로이므로
+    # 늘어나는 비용은 검색 결과 몇 줄뿐이다.
+    source_candidate_multiplier: int = 3
+    # 1차 기관 출처를 겨냥해 한 번 더 검색할 때 원 질문 뒤에 붙일 키워드.
+    #
+    # `source_candidate_multiplier` 와 `_rank_by_source_tier`(D45)는 **엔진이
+    # 이미 돌려준 것 안에서만** 고른다. 엔진이 tier1 URL 을 0건 반환하면 정렬은
+    # 항등 함수이고 후보를 3배로 넓혀도 같은 질의의 3배일 뿐이다. 표본 #10 의
+    # 판정자가 남긴 두 불만 중 하나가 여기다 -- "질문이 요구한 공식 EU 출처
+    # 대신 2차 비공식 출처".
+    #
+    # `site:` 문법이 아니라 평문 키워드인 이유: `web_search` 는 질의 문자열
+    # 하나만 받고(`service.py:17`) 백엔드 엔진이 무엇인지 모른다. `site:` 를
+    # 지원하지 않는 엔진에서는 0건이 돌아오는데, 그러면 fetch 할 URL 이 없어
+    # 모든 클레임이 E_NO_EVIDENCE 로 거절된다 -- 검색어에 brief 전문을 넣었을
+    # 때와 같은 고장이다. 키워드는 최악의 경우에도 결과를 흐릴 뿐 없애지 않고,
+    # 워커는 두 질의를 **병합**하므로 결과 집합은 기저 질의의 상위집합이다.
+    # `site:` 를 지원하는 배포는 이 값을 그 문법으로 덮어쓰면 된다.
+    #
+    # 빈 문자열이면 2차 질의를 건너뛴다 -- 별도 on/off 플래그를 두지 않는다.
+    search_primary_augment: str = "공식 기관 원문 official primary source"
     dev_profile: DeepAnalysisDevProfileConfig = Field(
         default_factory=DeepAnalysisDevProfileConfig
     )
@@ -964,6 +1060,36 @@ class DeepAnalysisConfig(StrictConfigModel):
     # 마지막 seq를 ?after=로 넘겨 재접속하면 이어서 받는다.
     events_stream_idle_timeout: float = 300.0
 
+    def grading_floor_tokens(self, synthesis_max_tokens: int) -> int:
+        """The INNERMOST floor: one judge call that `report_assembly` cannot
+        touch (token_budget.GRADING_STAGES).
+
+        Sized for **one** call, not the whole retry loop. The loop's earlier
+        gradings are welcome to run on the tier above; what this guarantees
+        is that the *last* draft -- the one that actually ships -- can still
+        be judged. That was the failure: all three gate passes in the
+        ledger's history came from the judge starving on the final attempt,
+        which `ReportGrader.grade` degrades to a pass.
+
+        `truncation_retry_multiplier` is in the formula because a judge call
+        is really up to two: `call_json` retries a truncated response with a
+        doubled ceiling, visible in the ledger as `report_grading`
+        reservations of 800 then 1600. The floor that ignored the retry
+        could fund the first call and not the second.
+
+        Sample #6 measured judge prompts of 5,900-17,084 tokens against
+        3,555-9,443 remaining, so this is checked against reality rather
+        than derived and hoped for: dev (1200) gives 13,600 and prod (4000)
+        gives 41,600, covering both.
+        """
+        return int(
+            self.truncation_retry_multiplier
+            * (
+                self.grading_input_ratio * synthesis_max_tokens
+                + self.report_judge_max_output_tokens
+            )
+        )
+
     def report_floor_tokens(self, synthesis_max_tokens: int) -> int:
         """The INNER floor tier: `report_retry_cap + 1` rounds of one
         assembly plus one judge, counted in the input+output currency
@@ -974,9 +1100,39 @@ class DeepAnalysisConfig(StrictConfigModel):
         re-assembles up to `report_retry_cap` times and grades every draft,
         so a tier covering one round leaves the later rounds to fail open --
         the failure this split exists to end.
+
+        The `assembly` term counts the truncation expansion, for the same
+        reason `grading_floor_tokens` does (D56, 2026-08-10). `call_text`
+        answers a truncated assembly with **the same prompt at
+        `truncation_retry_multiplier` times the output ceiling**
+        (llm.py:464-474), so a truncated attempt charges its input twice and
+        its output `1 + m` times -- not the `input + output` this term used
+        to assume.
+
+        Measured, not derived and hoped for. Sample #12 logged the pair
+        directly:
+
+            reserved  input_bound=5926 max_out=2000 total=7926   <- attempt
+            reserved  input_bound=5926 max_out=4000 total=9926   <- expansion
+            DEGRADED  reason=input_bound                          <- retry
+
+        17,852 against a term of 8,000. Five of six runs reserved twice for
+        `report_assembly`; one reserved three times. The old term funded two
+        attempts, a truncated attempt costs three, and so `_finalize`'s retry
+        was refused its reservation in four of six runs -- which is why the
+        retry loop had never run (D53, D55). The corrected term is 18,000.
+
+        Note `grading` is left as `m * (input + output)` rather than the
+        exact `m * input + (1 + m) * output`. The two differ by exactly one
+        `report_judge_max_output_tokens` (800 dev / 800 prod) against a term
+        of 10,800 -- under 8%, and no measurement points at it. The assembly
+        term is corrected because a sample measured it binding.
         """
         assembly = int(
-            (self.assembly_input_ratio + 1) * synthesis_max_tokens
+            self.truncation_retry_multiplier
+            * self.assembly_input_ratio
+            * synthesis_max_tokens
+            + (1 + self.truncation_retry_multiplier) * synthesis_max_tokens
         )
         grading = int(
             self.grading_input_ratio * synthesis_max_tokens

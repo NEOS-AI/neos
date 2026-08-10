@@ -24,6 +24,11 @@ REPORT_STAGES = frozenset({
     "report_grading",
 })
 
+# The innermost tier of all: the only stage that may draw on the last
+# `grading_floor_tokens`. Nothing else can reach them, which is the point --
+# see `TokenBudget.available_for_assembly`.
+GRADING_STAGES = frozenset({"report_grading"})
+
 # Stages that run after investigation is over: hierarchical reduction plus
 # everything in REPORT_STAGES. They are the only callers allowed to draw on
 # the reserved floor.
@@ -115,6 +120,7 @@ class TokenBudget:
         persist: PersistEvent | None = None,
         floor_tokens: int = 0,
         report_floor_tokens: int = 0,
+        grading_floor_tokens: int = 0,
         min_viable_output_tokens: int = 1,
     ) -> None:
         if cap_tokens < 0 or consumed_tokens < 0:
@@ -123,9 +129,15 @@ class TokenBudget:
             raise ValueError("floor_tokens must be non-negative")
         if report_floor_tokens < 0:
             raise ValueError("report_floor_tokens must be non-negative")
+        if grading_floor_tokens < 0:
+            raise ValueError("grading_floor_tokens must be non-negative")
         if report_floor_tokens > floor_tokens:
             raise ValueError(
                 "report_floor_tokens must not exceed floor_tokens"
+            )
+        if grading_floor_tokens > report_floor_tokens:
+            raise ValueError(
+                "grading_floor_tokens must not exceed report_floor_tokens"
             )
         if min_viable_output_tokens < 1:
             raise ValueError("min_viable_output_tokens must be positive")
@@ -138,6 +150,7 @@ class TokenBudget:
         self._persist = persist
         self.floor_tokens = floor_tokens
         self.report_floor_tokens = report_floor_tokens
+        self.grading_floor_tokens = grading_floor_tokens
         self.min_viable_output_tokens = min_viable_output_tokens
         self._lock = asyncio.Lock()
 
@@ -177,6 +190,30 @@ class TokenBudget:
         return max(0, self.remaining_tokens - self.report_floor_tokens)
 
     @property
+    def available_for_assembly(self) -> int:
+        """Remaining tokens `report_assembly` may reserve.
+
+        The innermost split (2026-08-09). The report tier had a floor but no
+        internal ordering guarantee: `report_assembly` and `report_grading`
+        both drew on `remaining_tokens`, and `_finalize` runs assembly first
+        on every attempt -- twice, since `call_text`'s expansion retry asks
+        again with a doubled ceiling. By the last attempt the tier was dry,
+        the judge could not reserve, and `ReportGrader.grade` turned that
+        into a pass.
+
+        That made the gate most lenient on the draft that actually ships.
+        All three gate passes in the ledger's history have the same shape:
+        judge rejects attempts 0 and 1, then starves on attempt 2. Sample #6
+        measured the size of it -- 3,555-9,443 tokens left against a judge
+        prompt of 5,900-17,084.
+
+        Assembly degrading is the price. A shorter report that was judged
+        beats a longer one that never was.
+        """
+
+        return max(0, self.remaining_tokens - self.grading_floor_tokens)
+
+    @property
     def exhausted(self) -> bool:
         return self.remaining_tokens <= 0
 
@@ -193,8 +230,10 @@ class TokenBudget:
 
         input_bound = conservative_input_bound(request)
         async with self._lock:
-            if stage in REPORT_STAGES:
+            if stage in GRADING_STAGES:
                 ceiling = self.remaining_tokens
+            elif stage in REPORT_STAGES:
+                ceiling = self.available_for_assembly
             elif stage in FINALIZATION_STAGES:
                 ceiling = self.available_for_reduction
             else:

@@ -27,7 +27,9 @@ class FakeSynthesizer:
     async def reduce_tree(self, root_id):
         return {root_id: NodeSummary(root_id, "stub", [], 1.0, [])}
 
-    async def assemble(self, root_summary, child_summaries, caveats):
+    async def assemble(
+        self, root_summary, child_summaries, caveats, revision_hints=None
+    ):
         return _STUB_REPORT
 
 def _ok_result(qid, text="a fact"):

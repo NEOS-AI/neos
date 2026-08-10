@@ -17,8 +17,14 @@ from neos.workflow.deep_analysis.token_budget import (
 )
 
 
-def _render(primary: list[str], secondary: list[str]) -> str:
-    return "머리말\n" + "\n".join(primary) + "\n" + "\n".join(secondary)
+def _render(primary: list[str], secondary: list[str], anchor: str = "") -> str:
+    return (
+        "머리말\n"
+        + anchor
+        + "\n".join(primary)
+        + "\n"
+        + "\n".join(secondary)
+    )
 
 
 def test_prompt_input_bound_matches_what_reserve_would_charge():
@@ -99,7 +105,9 @@ def test_an_unshrinkable_prompt_reports_exhaustion_instead_of_looping():
     포기하고 reserve() 에 판단을 넘긴다. 무한 루프를 만들지 않는다.
     """
 
-    def huge_template(primary: list[str], secondary: list[str]) -> str:
+    def huge_template(
+        primary: list[str], secondary: list[str], anchor: str = ""
+    ) -> str:
         return "머" * 5_000 + "\n".join(primary) + "\n".join(secondary)
 
     result = clamp_prompt(
@@ -118,6 +126,76 @@ def test_shrink_once_returns_none_when_nothing_is_left():
     assert shrink_once([], []) is None
 
 
+def test_an_oversized_anchor_is_halved_instead_of_eating_every_child():
+    """D54: 앵커가 클램프 밖에 있으면 나머지 전부가 그 값을 치른다.
+
+    표본 #11 이 잰 끝 상태 -- 조립 클램프 12건이 **12/12 exhausted** 였고,
+    자식 블록 전부와 caveats 전부를 버리고도 허용량을 못 맞췄다. 강등된 루트
+    요약 하나가 허용량을 단독으로 넘었기 때문이다. 그 결과 리포트는 **인용할
+    클레임이 프롬프트에 없는 채로** 쓰였다.
+    """
+    primary = ["- [q0001] 자식 A", "- [q0002] 자식 B"]
+    anchor = "루" * 4_000
+    allowance = 3_000
+
+    result = clamp_prompt(
+        model="m",
+        allowance=allowance,
+        render_prompt=_render,
+        primary=primary,
+        secondary=[],
+        anchor=anchor,
+    )
+
+    assert prompt_input_bound("m", result.prompt) <= allowance
+    assert result.exhausted is False
+    # 자식은 하나도 잃지 않았다 -- 값을 치른 것은 앵커다.
+    assert result.dropped_primary == 0
+    assert result.anchor_clamped is True
+    assert result.anchor_chars_after < result.anchor_chars_before
+    for block in primary:
+        assert block in result.prompt
+
+
+def test_a_normally_sized_anchor_does_not_change_the_old_ordering():
+    """앵커가 평범한 크기면 정책은 D-6 그대로여야 한다 -- 이 변경은 순위를
+    뒤집는 것이 아니라 앵커가 무한할 수 없게 만드는 것이다."""
+    primary = [f"- [q{i:04d}] {'가' * 400}" for i in range(6)]
+    secondary = [f"미확인: {'나' * 200}" for _ in range(4)]
+    anchor = "루트 요약"
+
+    result = clamp_prompt(
+        model="m",
+        allowance=prompt_input_bound("m", _render(primary, [], anchor)) + 32,
+        render_prompt=_render,
+        primary=primary,
+        secondary=secondary,
+        anchor=anchor,
+    )
+
+    assert result.dropped_secondary > 0
+    assert result.dropped_primary == 0
+    assert result.anchor_clamped is False
+    assert anchor in result.prompt
+
+
+def test_shrink_once_never_drops_the_anchor_to_nothing():
+    """앵커는 반토막이 나도 사라지지는 않는다 -- 루트 요약이 없는 리포트는
+    짧은 리포트보다 나쁘다."""
+    primary: list[str] = []
+    anchor = "루" * 64
+    steps = 0
+    while (step := shrink_once(primary, [], anchor)) is not None:
+        primary, _sec, anchor = step
+        steps += 1
+        assert steps < 100, "반토막이 수렴하지 않는다"
+    # 더 줄일 것이 없다고 판단할 때까지 반토막이 났지만, 앵커는 남아 있다.
+    assert anchor != ""
+    assert len(anchor) == 1
+    # 아무것도 없을 때만 None 이다.
+    assert shrink_once([], [], "") is None
+
+
 def test_clamp_terminates_even_if_the_policy_stops_making_progress(
     monkeypatch,
 ):
@@ -130,7 +208,7 @@ def test_clamp_terminates_even_if_the_policy_stops_making_progress(
     monkeypatch.setattr(
         prompt_clamp,
         "shrink_once",
-        lambda primary, secondary: (primary, secondary),
+        lambda primary, secondary, anchor="": (primary, secondary, anchor),
     )
 
     result = prompt_clamp.clamp_prompt(
@@ -156,11 +234,11 @@ def test_clamp_terminates_even_if_the_policy_cycles_between_two_states(
     """
     from neos.workflow.deep_analysis import prompt_clamp
 
-    state_a = (["자식"], ["미확인"])
-    state_b = (["다른"], ["다른 미확인"])
+    state_a = (["자식"], ["미확인"], "")
+    state_b = (["다른"], ["다른 미확인"], "")
     calls = {"n": 0}
 
-    def alternating(primary, secondary):
+    def alternating(primary, secondary, anchor=""):
         calls["n"] += 1
         return state_b if calls["n"] % 2 else state_a
 
@@ -323,6 +401,160 @@ async def test_assemble_reports_no_verified_claims_when_the_clamp_drops_every_ch
     assert "(없음)" not in seen["prompt"]
 
 
+def test_halving_a_primary_block_is_visible_without_dropping_it():
+    """D58. `dropped_primary` 는 **항목 수**만 센다.
+
+    `shrink_once` 는 버리기 전에 반토막부터 낸다. 그래서 자식 블록 일곱 개를
+    전부 유지하면서 각각을 8분의 1로 자른 클램프가 `dropped_primary=0` 으로
+    기록되고 손대지 않은 것처럼 보인다 -- 표본 #13 이 정확히 그 모양이었다.
+    앵커는 절반만 줄고 자식은 하나도 안 버려졌는데 프롬프트는 3분의 1이 됐고,
+    그 토큰이 어디로 갔는지 원장에 답이 없었다.
+    """
+    primary = [f"- [q{i:04d}] {'가' * 800}" for i in range(4)]
+
+    result = clamp_prompt(
+        model="m",
+        allowance=2_000,
+        render_prompt=_render,
+        primary=primary,
+        secondary=[],
+    )
+
+    assert result.dropped_primary == 0  # 아무것도 버리지 않았는데
+    assert result.primary_clamped is True  # 실제로는 크게 잘렸다
+    assert result.primary_chars_after < result.primary_chars_before // 2
+    assert result.primary_chars_before == sum(len(b) for b in primary)
+
+
+@pytest.mark.asyncio
+async def test_assembly_records_how_many_claim_markers_survived_the_clamp():
+    """D58 의 도메인 절반. 클램프는 크기만 알고, 그 글자들이 `[C:...]` 주소를
+    나른다는 것은 호출자만 안다.
+
+    프롬프트에 살아남은 마커 수가 리포트가 가질 수 있는 인용의 **상한**이다.
+    표본 #13 은 배달 리포트의 각주가 12 -> 7 -> 2 -> 2 로 떨어졌는데 마커가
+    작성자에게 도달하기는 했는지조차 원장이 답하지 못했다.
+    """
+    ledger = _Ledger()
+
+    async def llm_call(model, prompt, **kwargs):
+        class R:
+            text = "## 요약\n본문"
+            input_tokens = 1
+            output_tokens = 1
+
+        return R()
+
+    synth = Synthesizer(ledger, llm_call=llm_call, synthesis_max_tokens=200)
+    root = NodeSummary(
+        question_id="q0000001",
+        answer="[C:aaaaaaaa] 루트 " + "루" * 2_000,
+        key_claim_ids=[],
+        confidence=0.5,
+        caveats=[],
+    )
+    children = [
+        NodeSummary(
+            question_id=f"q000000{i}",
+            answer=f"[C:{i:08x}] 자식 답 " + "가" * 800,
+            key_claim_ids=[],
+            confidence=0.5,
+            caveats=[],
+        )
+        for i in range(2, 7)
+    ]
+
+    await synth.assemble(root, children, [])
+
+    clamp = ledger.payload("finalization_prompt_clamped")
+    # 자식 5개 + 루트 1개 = 마커 6개가 들어갔다.
+    assert clamp["claim_markers_before"] == 6
+    # 살아남은 수는 프롬프트에서 직접 센 것이고, 절삭됐으므로 더 적다.
+    assert clamp["claim_markers_after"] < clamp["claim_markers_before"]
+    # 그리고 크기 쪽 계측이 그 손실이 어느 슬롯에서 났는지 말해준다.
+    assert clamp["primary_chars_before"] > clamp["primary_chars_after"]
+    assert clamp["anchor_chars_before"] > clamp["anchor_chars_after"]
+
+
+@pytest.mark.asyncio
+async def test_a_degraded_join_is_bounded_by_the_answer_ceiling():
+    """D54 근본 원인. 강등 요약은 자식 답을 이어붙이는데 그것이 무계였다.
+
+    강등된 부모가 강등된 자식을 이어붙이므로 텍스트가 트리를 타고 누적된다.
+    표본 #11 의 `7aa21c7f` 은 리덕션 12건이 강등됐고 **마지막이 루트**였다 --
+    그 답이 서브트리 대부분이 되어 입력 5,800~12,200 토큰, 조립 허용량 6,000
+    을 단독으로 넘었다.
+    """
+    ledger = _Ledger()
+
+    async def json_call(model, prompt, **kwargs):
+        raise TokenBudgetExhausted("budget")
+
+    ceiling = 1_200
+    synth = Synthesizer(
+        ledger, json_call=json_call, synthesis_max_tokens=ceiling
+    )
+
+    class _Question:
+        id = "q0000001"
+        text = "질문"
+
+    # 자식 넷이 각각 큰 답을 들고 있다 -- 강등 join 은 이것을 전부 잇는다.
+    children = [
+        NodeSummary(
+            question_id=f"q000000{i}",
+            answer="가" * 4_000,
+            key_claim_ids=[],
+            confidence=0.4,
+            caveats=[],
+        )
+        for i in range(2, 6)
+    ]
+
+    summary = await synth.reduce_node(_Question(), children)
+
+    # 잘리지 않았다면 16,000자 -- 실제 LLM 답이 결코 될 수 없는 크기다.
+    assert len(summary.answer) < 16_000
+    assert prompt_input_bound("m", summary.answer) <= ceiling
+    degraded = ledger.payload("node_reduction_degraded")
+    assert degraded["answer_truncated"] is True
+    assert degraded["answer_chars"] > len(summary.answer)
+
+
+@pytest.mark.asyncio
+async def test_a_bounded_join_does_not_ship_half_a_citation_marker():
+    """잘린 자리에 `[C:` 조각이 남으면 `_RAW_MARKER` 도 렌더러도 그것을 못
+    알아본다 -- 인용이 있어야 할 자리에 문자 그대로 남는다."""
+    ledger = _Ledger()
+
+    async def json_call(model, prompt, **kwargs):
+        raise TokenBudgetExhausted("budget")
+
+    synth = Synthesizer(ledger, json_call=json_call, synthesis_max_tokens=400)
+
+    class _Question:
+        id = "q0000001"
+        text = "질문"
+
+    child = NodeSummary(
+        question_id="q0000002",
+        # 잘림이 마커 중간에 떨어지도록 마커를 촘촘히 깐다.
+        answer=" ".join(f"[C:{i:08x}] 문장 {i}" for i in range(400)),
+        key_claim_ids=[],
+        confidence=0.4,
+        caveats=[],
+    )
+
+    summary = await synth.reduce_node(_Question(), [child])
+
+    import re
+
+    assert not re.search(r"\[C:[0-9a-f]{0,7}$", summary.answer)
+    # 남은 마커는 전부 온전하다.
+    for fragment in summary.answer.split("[C:")[1:]:
+        assert re.match(r"^[0-9a-f]{8}\]", fragment)
+
+
 @pytest.mark.asyncio
 async def test_a_degraded_reduction_leaves_a_trace():
     """W1 검증에 필수다.
@@ -360,6 +592,11 @@ async def test_a_degraded_reduction_leaves_a_trace():
         "question_id": "q0000001",
         "child_count": 1,
         "reason": "token_budget_exhausted",
+        # D54: 강등 join 은 이제 유계다. 이 두 값이 없으면 강등된 루트가
+        # 400자짜리 join 이었는지 40,000자짜리였는지 원장에서 구별되지 않고,
+        # 조립을 망가뜨리는 것은 후자다.
+        "answer_chars": 4,
+        "answer_truncated": False,
     }
 
 
