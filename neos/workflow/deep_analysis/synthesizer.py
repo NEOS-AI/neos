@@ -17,6 +17,12 @@ from .token_budget import TokenBudgetExhausted
 # and the closing bracket a real marker carries.
 _DANGLING_MARKER = re.compile(r"\[C:[0-9a-f]{0,8}$")
 
+# A whole claim address. Deliberately the same shape `citation._MARKER` and
+# `graders.report._RAW_MARKER` match: this counts the very things the
+# renderer will later resolve into footnotes, so a looser pattern here would
+# report markers the renderer cannot use.
+_CLAIM_MARKER = re.compile(r"\[C:[0-9a-f]{8}\]")
+
 
 def _degradation_reason(exc: TokenBudgetExhausted) -> str:
     """강등 이벤트의 `reason` -- 예외 타입이 아니라 거절 사유에서 온다.
@@ -81,11 +87,28 @@ class Synthesizer:
         ratio = settings.config.deep_analysis.reduction_input_ratio
         return int(ratio * self.synthesis_max_tokens)
 
-    async def _log_clamp(self, stage: str, qid: str, result, allowance: int) -> None:
+    async def _log_clamp(
+        self,
+        stage: str,
+        qid: str,
+        result,
+        allowance: int,
+        *,
+        markers_before: int | None = None,
+    ) -> None:
         """Record a clamp only when it actually cut something.
 
         Logging every call would bury the signal: the interesting event is
         a finalization prompt that did not fit, not one that did.
+
+        `markers_before` is the domain half of the measurement (D58). The
+        clamp reports sizes because sizes are all it knows; only the caller
+        knows that those characters carry `[C:xxxxxxxx]` claim addresses, and
+        the number of those **surviving into the prompt** is the ceiling on
+        how many citations the report can possibly carry. Sample #13 left
+        that unanswerable: footnote counts in delivered reports fell 12 -> 7
+        -> 2 -> 2 while nothing on record said whether the markers ever
+        reached the composer.
         """
         if not (result.clamped or result.exhausted):
             return
@@ -106,6 +129,21 @@ class Synthesizer:
                 # identical to one that never needed clamping at all.
                 "anchor_chars_before": result.anchor_chars_before,
                 "anchor_chars_after": result.anchor_chars_after,
+                # Same for the child blocks (D58): halving precedes dropping,
+                # so `dropped_primary=0` was reported by clamps that cut every
+                # block to a fraction of itself.
+                "primary_chars_before": result.primary_chars_before,
+                "primary_chars_after": result.primary_chars_after,
+                **(
+                    {
+                        "claim_markers_before": markers_before,
+                        "claim_markers_after": len(
+                            _CLAIM_MARKER.findall(result.prompt)
+                        ),
+                    }
+                    if markers_before is not None
+                    else {}
+                ),
             },
         )
 
@@ -266,7 +304,17 @@ class Synthesizer:
             anchor=root_answer,
         )
         await self._log_clamp(
-            "report_assembly", qid, clamp, self.assembly_input_allowance
+            "report_assembly",
+            qid,
+            clamp,
+            self.assembly_input_allowance,
+            # Counted over everything the clamp could cut, anchor included:
+            # a degraded root answer is a join of child answers and carries
+            # their markers, so attributing the loss needs both sources in
+            # the "before" figure.
+            markers_before=len(
+                _CLAIM_MARKER.findall("\n".join(child_blocks) + root_answer)
+            ),
         )
         try:
             response = await self.llm_call(
@@ -400,6 +448,12 @@ class Synthesizer:
             question.id,
             clamp,
             self.reduction_input_allowance,
+            # Reductions carry markers too, and a marker lost here never
+            # reaches the assembly to be lost there -- attributing the drop
+            # to the report tier requires ruling this tier out first.
+            markers_before=len(
+                _CLAIM_MARKER.findall("\n".join(claim_lines))
+            ),
         )
         prompt = clamp.prompt
         try:

@@ -401,6 +401,81 @@ async def test_assemble_reports_no_verified_claims_when_the_clamp_drops_every_ch
     assert "(없음)" not in seen["prompt"]
 
 
+def test_halving_a_primary_block_is_visible_without_dropping_it():
+    """D58. `dropped_primary` 는 **항목 수**만 센다.
+
+    `shrink_once` 는 버리기 전에 반토막부터 낸다. 그래서 자식 블록 일곱 개를
+    전부 유지하면서 각각을 8분의 1로 자른 클램프가 `dropped_primary=0` 으로
+    기록되고 손대지 않은 것처럼 보인다 -- 표본 #13 이 정확히 그 모양이었다.
+    앵커는 절반만 줄고 자식은 하나도 안 버려졌는데 프롬프트는 3분의 1이 됐고,
+    그 토큰이 어디로 갔는지 원장에 답이 없었다.
+    """
+    primary = [f"- [q{i:04d}] {'가' * 800}" for i in range(4)]
+
+    result = clamp_prompt(
+        model="m",
+        allowance=2_000,
+        render_prompt=_render,
+        primary=primary,
+        secondary=[],
+    )
+
+    assert result.dropped_primary == 0  # 아무것도 버리지 않았는데
+    assert result.primary_clamped is True  # 실제로는 크게 잘렸다
+    assert result.primary_chars_after < result.primary_chars_before // 2
+    assert result.primary_chars_before == sum(len(b) for b in primary)
+
+
+@pytest.mark.asyncio
+async def test_assembly_records_how_many_claim_markers_survived_the_clamp():
+    """D58 의 도메인 절반. 클램프는 크기만 알고, 그 글자들이 `[C:...]` 주소를
+    나른다는 것은 호출자만 안다.
+
+    프롬프트에 살아남은 마커 수가 리포트가 가질 수 있는 인용의 **상한**이다.
+    표본 #13 은 배달 리포트의 각주가 12 -> 7 -> 2 -> 2 로 떨어졌는데 마커가
+    작성자에게 도달하기는 했는지조차 원장이 답하지 못했다.
+    """
+    ledger = _Ledger()
+
+    async def llm_call(model, prompt, **kwargs):
+        class R:
+            text = "## 요약\n본문"
+            input_tokens = 1
+            output_tokens = 1
+
+        return R()
+
+    synth = Synthesizer(ledger, llm_call=llm_call, synthesis_max_tokens=200)
+    root = NodeSummary(
+        question_id="q0000001",
+        answer="[C:aaaaaaaa] 루트 " + "루" * 2_000,
+        key_claim_ids=[],
+        confidence=0.5,
+        caveats=[],
+    )
+    children = [
+        NodeSummary(
+            question_id=f"q000000{i}",
+            answer=f"[C:{i:08x}] 자식 답 " + "가" * 800,
+            key_claim_ids=[],
+            confidence=0.5,
+            caveats=[],
+        )
+        for i in range(2, 7)
+    ]
+
+    await synth.assemble(root, children, [])
+
+    clamp = ledger.payload("finalization_prompt_clamped")
+    # 자식 5개 + 루트 1개 = 마커 6개가 들어갔다.
+    assert clamp["claim_markers_before"] == 6
+    # 살아남은 수는 프롬프트에서 직접 센 것이고, 절삭됐으므로 더 적다.
+    assert clamp["claim_markers_after"] < clamp["claim_markers_before"]
+    # 그리고 크기 쪽 계측이 그 손실이 어느 슬롯에서 났는지 말해준다.
+    assert clamp["primary_chars_before"] > clamp["primary_chars_after"]
+    assert clamp["anchor_chars_before"] > clamp["anchor_chars_after"]
+
+
 @pytest.mark.asyncio
 async def test_a_degraded_join_is_bounded_by_the_answer_ceiling():
     """D54 근본 원인. 강등 요약은 자식 답을 이어붙이는데 그것이 무계였다.

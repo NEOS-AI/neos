@@ -32,6 +32,15 @@ class ClampResult:
     # thing that has to be visible when the report reads thin.
     anchor_chars_before: int = 0
     anchor_chars_after: int = 0
+    # The same measurement for primary, and it exists for the same reason
+    # (D58). `dropped_primary` counts items, and `shrink_once` halves before
+    # it drops -- so a clamp that kept all seven child blocks while cutting
+    # each of them to an eighth reported `dropped_primary=0` and looked
+    # untouched. Sample #13 is exactly that: anchor merely halved, no child
+    # dropped, and the prompt still fell 17,812 -> 5,883. Nothing on record
+    # could say where those tokens went.
+    primary_chars_before: int = 0
+    primary_chars_after: int = 0
 
     @property
     def clamped(self) -> bool:
@@ -40,6 +49,10 @@ class ClampResult:
     @property
     def anchor_clamped(self) -> bool:
         return self.anchor_chars_after < self.anchor_chars_before
+
+    @property
+    def primary_clamped(self) -> bool:
+        return self.primary_chars_after < self.primary_chars_before
 
 
 def shrink_once(
@@ -134,6 +147,7 @@ def clamp_prompt(
     original_primary = len(primary)
     original_secondary = len(secondary)
     original_anchor = len(anchor)
+    original_primary_chars = sum(len(item) for item in primary)
     prompt = render_prompt(primary, secondary, anchor)
     bound_before = prompt_input_bound(model, prompt)
 
@@ -158,6 +172,8 @@ def clamp_prompt(
                 exhausted=True,
                 anchor_chars_before=original_anchor,
                 anchor_chars_after=len(anchor),
+                primary_chars_before=original_primary_chars,
+                primary_chars_after=sum(len(item) for item in primary),
             )
         iterations += 1
         if iterations > max_iterations:
@@ -170,6 +186,8 @@ def clamp_prompt(
                 exhausted=True,
                 anchor_chars_before=original_anchor,
                 anchor_chars_after=len(anchor),
+                primary_chars_before=original_primary_chars,
+                primary_chars_after=sum(len(item) for item in primary),
             )
         primary, secondary, anchor = shrunk
         prompt = render_prompt(primary, secondary, anchor)
@@ -183,4 +201,6 @@ def clamp_prompt(
         exhausted=False,
         anchor_chars_before=original_anchor,
         anchor_chars_after=len(anchor),
+        primary_chars_before=original_primary_chars,
+        primary_chars_after=sum(len(item) for item in primary),
     )
