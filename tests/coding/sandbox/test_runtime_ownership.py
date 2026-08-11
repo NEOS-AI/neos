@@ -2,6 +2,8 @@ from datetime import UTC, datetime
 
 from neos.coding.events.store import InMemoryCodingEventStore
 from neos.coding.loop.fake import FakeDurableCodingLoop
+from neos.coding.model.anthropic import AnthropicCodingModel
+from neos.dataset.adapters import TrackedCodingModel
 import pytest
 
 import neos.coding.runtime as runtime_module
@@ -46,15 +48,17 @@ async def test_runtime_owns_injected_sandbox_provider() -> None:
 
 
 def test_development_prepares_real_loop_before_provider_allocation(monkeypatch) -> None:
-    config = AppConfig.model_validate({
-        "coding_model": {
-            "enabled": True,
-            "input_cost_micros_per_million": 1,
-            "output_cost_micros_per_million": 1,
-        },
-        "sandbox": {"enabled": True},
-        "secrets": {"anthropic_api_key": "test"},
-    })
+    config = AppConfig.model_validate(
+        {
+            "coding_model": {
+                "enabled": True,
+                "input_cost_micros_per_million": 1,
+                "output_cost_micros_per_million": 1,
+            },
+            "sandbox": {"enabled": True},
+            "secrets": {"anthropic_api_key": "test"},
+        }
+    )
     allocations = []
     monkeypatch.setattr(runtime_module.settings, "CODING_FAKE_LOOP_ENABLED", False)
     monkeypatch.setattr(runtime_module.settings, "CODING_CELERY_ENABLED", False)
@@ -64,7 +68,9 @@ def test_development_prepares_real_loop_before_provider_allocation(monkeypatch) 
         lambda **kwargs: (_ for _ in ()).throw(RuntimeError("prepare failed")),
     )
     monkeypatch.setattr(
-        runtime_module, "create_sandbox_provider", lambda config: allocations.append(config)
+        runtime_module,
+        "create_sandbox_provider",
+        lambda config: allocations.append(config),
     )
 
     with pytest.raises(RuntimeError, match="prepare failed"):
@@ -83,16 +89,18 @@ def test_development_prepares_real_loop_before_provider_allocation(monkeypatch) 
 def test_real_loop_resolves_coding_model_at_runtime_boundary(
     monkeypatch, feature_model, expected_model
 ) -> None:
-    config = AppConfig.model_validate({
-        "coding_model": {
-            "enabled": True,
-            "model": feature_model,
-            "input_cost_micros_per_million": 1,
-            "output_cost_micros_per_million": 1,
-        },
-        "sandbox": {"enabled": True},
-        "secrets": {"anthropic_api_key": "test"},
-    })
+    config = AppConfig.model_validate(
+        {
+            "coding_model": {
+                "enabled": True,
+                "model": feature_model,
+                "input_cost_micros_per_million": 1,
+                "output_cost_micros_per_million": 1,
+            },
+            "sandbox": {"enabled": True},
+            "secrets": {"anthropic_api_key": "test"},
+        }
+    )
     monkeypatch.setattr(runtime_module, "AsyncAnthropic", lambda **kwargs: object())
 
     finish = runtime_module._prepare_real_coding_loop(config=config)
@@ -105,15 +113,17 @@ def test_real_loop_resolves_coding_model_at_runtime_boundary(
 def test_development_closes_provider_once_after_allocation_failure(
     monkeypatch, failure_point
 ) -> None:
-    config = AppConfig.model_validate({
-        "coding_model": {
-            "enabled": True,
-            "input_cost_micros_per_million": 1,
-            "output_cost_micros_per_million": 1,
-        },
-        "sandbox": {"enabled": True},
-        "secrets": {"anthropic_api_key": "test"},
-    })
+    config = AppConfig.model_validate(
+        {
+            "coding_model": {
+                "enabled": True,
+                "input_cost_micros_per_million": 1,
+                "output_cost_micros_per_million": 1,
+            },
+            "sandbox": {"enabled": True},
+            "secrets": {"anthropic_api_key": "test"},
+        }
+    )
     provider = RecordingSandboxProvider()
     monkeypatch.setattr(runtime_module.settings, "CODING_FAKE_LOOP_ENABLED", False)
     monkeypatch.setattr(
@@ -141,3 +151,31 @@ def test_development_closes_provider_once_after_allocation_failure(
         runtime_module.create_development_coding_runtime(config=config)
 
     assert provider.close_count == 1
+
+
+def test_real_loop_wraps_the_production_model_for_collection(monkeypatch) -> None:
+    """E-S4 회귀 가드.
+
+    이 단언이 깨지면 코딩 루프의 LLM 호출이 데이터셋 원장에서 조용히 샌다.
+    D1c(`7f4beca1`)가 계측을 전송 계층 **밖에서** 감싼 이유가 여기 있다 --
+    래퍼가 벗겨져도 루프는 정상 동작하므로 테스트 없이는 아무도 모른다.
+    """
+    config = AppConfig.model_validate(
+        {
+            "coding_model": {
+                "enabled": True,
+                "input_cost_micros_per_million": 1,
+                "output_cost_micros_per_million": 1,
+            },
+            "sandbox": {"enabled": True},
+            "secrets": {"anthropic_api_key": "test"},
+        }
+    )
+    monkeypatch.setattr(runtime_module, "AsyncAnthropic", lambda **kwargs: object())
+
+    finish = runtime_module._prepare_real_coding_loop(config=config)
+    loop = finish(object())
+
+    assert isinstance(loop._model, TrackedCodingModel)
+    assert isinstance(loop._model._inner, AnthropicCodingModel)
+    assert loop._model._workflow_step == "coding_loop"
