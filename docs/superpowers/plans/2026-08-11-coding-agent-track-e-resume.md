@@ -120,13 +120,19 @@ Expected: `git status --short` 출력이 비어 있다.
 ### Task 2: CA4 원장 정합 — 덧붙여 정정한다
 
 **Files:**
-- Modify: `.superpowers/sdd/2026-07-25-managed-sandbox-control-plane/progress.md` (끝에 덧붙이기)
+- Modify (**로컬 전용, 커밋하지 않음**): `.superpowers/sdd/2026-07-25-managed-sandbox-control-plane/progress.md` (끝에 덧붙이기)
+- Modify (**커밋 대상**): `docs/coding_agent_task_resume.md` §4「원장 무결성 문제」
 
 **Interfaces:**
 - Consumes: Task 1의 커밋 해시
-- Produces: Task 4 항목과 단일 계보가 기록된 원장. Task 9가 여기에 `Task 5: complete`를 덧붙인다.
+- Produces: 정정된 계보와 Task 4 항목. Task 9가 로컬 원장에 `Task 5: complete`를 덧붙인다.
 
 > **기존 24줄을 수정·삭제하지 않는다.** 이중 기록된 두 블록을 그대로 두고 아래에 정정 블록을 덧붙인다. 원장을 재작성하면 스펙 §1.4가 지적한 문제(원장이 자기 이력을 잃는 것)를 한 번 더 저지르게 된다.
+>
+> 🔴 **`.superpowers/`는 `.gitignore:42`로 무시된다 (PF1 판정, 2026-08-11).** 그래서 원장
+> 파일 자체는 **커밋하지 않는다** — `git add`가 조용히 아무것도 스테이징하지 않는다.
+> 대신 **정정 내용을 `docs/coding_agent_task_resume.md`에 옮겨 담아 커밋한다.** 그 문서가
+> CA4의 영속 기록이다. 원장 파일은 구현자의 작업 연속성을 위한 로컬 사본으로만 남는다.
 
 - [ ] **Step 1: Task 1의 커밋 해시를 확보**
 
@@ -170,21 +176,57 @@ test_docker_shadow.py(+206)의 미커밋 변경을 CA5-b 구현으로 판정하�
 
 - [ ] **Step 3: 기존 24줄이 그대로인지 확인**
 
+`.superpowers/`는 gitignore이라 `git diff`가 보여주지 않는다. 줄 수로 확인한다:
+
 ```bash
-git diff .superpowers/sdd/2026-07-25-managed-sandbox-control-plane/progress.md \
-  | grep "^-" | grep -v "^---"
+head -24 .superpowers/sdd/2026-07-25-managed-sandbox-control-plane/progress.md | md5
 ```
 
-Expected: **출력 없음** (삭제된 줄이 하나도 없어야 한다). 출력이 있으면 되돌리고 덧붙이기만 다시 한다.
+Expected: `1d0dd1a5b0dd3d0b1f79f1b5e2a4f6c8` — 값이 다르면 앞 24줄을 건드린 것이므로
+되돌리고 덧붙이기만 다시 한다. (구현자는 편집 **전에** 이 명령을 한 번 돌려 기준값을
+먼저 기록하고, 편집 후 같은지 비교하면 된다. 위 해시는 예시가 아니라 **직접 잰 값을
+쓴다** — 편집 전 출력을 그대로 옮겨 적을 것.)
 
-- [ ] **Step 4: 커밋**
+- [ ] **Step 4: 정정 내용을 추적되는 문서로 옮긴다**
+
+`docs/coding_agent_task_resume.md`의 §4「원장 무결성 문제」를 아래로 **교체**한다.
+이것이 CA4의 영속 기록이다 — 원장 파일은 gitignore이라 커밋되지 않는다.
+
+```markdown
+### 원장 무결성 문제 — 정정 완료 (2026-08-11)
+
+`progress.md`는 **이중 기록 + Task 4 누락** 두 문제를 함께 갖고 있었다.
+
+1. **이중 기록.** 17번째 줄 빈 줄 이후 Task 1–3이 다른 커밋 해시로 다시 나온다.
+   git 이력으로 확정한 실제 계보는
+   `591640ce → 29ab632d → 777fdd33 → 79645f2e → 8b6ef183 → d8f4e2e4 → d308443e →
+   9245d5d5 → 2d38f1a6 → 3e3935f1 → 89196755`이며, **첫째 블록**의 해시가 이와
+   일치하므로 첫째 블록이 실제다.
+2. **Task 4 누락.** 두 블록 모두 Task 3에서 끝나 Task 4 항목이 아예 없었다.
+   즉 로드맵 §12.2의 "Task 4 ✅"는 **원장 근거 없이** 커밋 존재에만 기대고 있었다.
+
+**CA2 소유권 판정 (해소).** `docker_shadow.py`(+305/−33)·`test_docker_shadow.py`(+206)의
+미커밋 변경을 **CA5-b(크로스 프로세스 원자적 create) 구현으로 판정하고 채택**했다.
+근거 넷: (1) 내용이 CA5-b와 일치(클레임 볼륨 락), (2) Task 4 커밋 12분 뒤 mtime으로
+동일 세션, (3) `tests/coding/managed/adapters` 30 passed(Task 4 시점 17 → +13),
+(4) 신규 테스트가 클레임 경로를 직접 겨냥.
+
+> ⚠️ **원장 파일은 git에 없다.** `.superpowers/`가 `.gitignore:42`로 무시되므로
+> `progress.md`는 워크트리 로컬 사본일 뿐이고 `git clean -fdx`로 사라진다.
+> **이 절이 그 원장의 영속 기록이다.**
+```
+
+- [ ] **Step 5: 커밋**
 
 ```bash
-git add .superpowers/sdd/2026-07-25-managed-sandbox-control-plane/progress.md
+git add docs/coding_agent_task_resume.md
 git commit -m "docs(coding): reconcile the managed sandbox ledger
 
-이중 기록된 두 블록을 보존한 채 정정 블록을 덧붙인다. 실제 계보를 git 이력으로
-확정하고, 두 블록 모두에서 누락돼 있던 Task 4 항목과 CA2 소유권 판정을 기록한다."
+원장은 이중 기록 + Task 4 누락 두 문제를 함께 갖고 있었다. git 이력으로 실제 계보를
+확정하고 CA2 소유권 판정을 기록한다.
+
+.superpowers/ 가 gitignore 이므로 원장 파일 자체는 커밋되지 않는다 -- 이 문서가
+그 원장의 영속 기록이다."
 ```
 
 ---
@@ -1783,21 +1825,26 @@ GOOGLE_API_KEY=test-key /Users/ywsung/Desktop/neos/.venv/bin/pytest -q tests/cod
 
 Expected: `0 failed`
 
-`.superpowers/sdd/2026-07-25-managed-sandbox-control-plane/progress.md` 끝에 덧붙인다:
+`.superpowers/sdd/2026-07-25-managed-sandbox-control-plane/progress.md` 끝에 덧붙인다
+(**로컬 전용 — 커밋하지 않는다**, PF1 판정):
 
 ```
 Task 5: complete (2026-08-11) — 펜스된 claim/commit, 모호한 결과 복구, provider 참조
 봉인, 런타임 어댑터 레지스트리. Task 1 범위 결정 #1(version/fence 검사) 이행 완료.
 045 에 lease_owner 컬럼이 없어 worker_id 는 영속화하지 않고 fencing_token 이 단독으로
 소유권을 증명한다 — 마이그레이션 046 을 만들지 않았다.
+통합 테스트(펜싱 원자성)는 CODING_TEST_DATABASE_URL 유무에 따라 실행/skip 된다.
 ```
+
+Task 7 Step 7에서 통합 테스트가 skip 됐다면 그 사실도 여기 한 줄로 남긴다.
 
 - [ ] **Step 9: 커밋**
 
+`.superpowers/`는 gitignore이므로 원장 파일은 `git add`에 넣지 않는다.
+
 ```bash
 git add neos/coding/managed/crypto.py neos/config/schema.py neos/coding/runtime.py \
-  tests/coding/managed/test_crypto.py tests/coding/sandbox/test_runtime_ownership.py \
-  .superpowers/sdd/2026-07-25-managed-sandbox-control-plane/progress.md
+  tests/coding/managed/test_crypto.py tests/coding/sandbox/test_runtime_ownership.py
 git commit -m "feat(coding): seal managed provider references
 
 AES-GCM 으로 provider 참조를 봉인한다. AAD 에 allocation_id:provider:generation 을
@@ -1852,9 +1899,10 @@ AES-GCM 으로 provider 참조를 봉인한다. AAD 에 allocation_id:provider:g
 
 `docs/coding_agent_task_resume.md`:
 - §4(미커밋 변경) → 판정 완료로 바꾸고 근거 넷과 커밋 해시를 남긴다
-- §4「원장 무결성 문제」 → Task 4 누락 사실을 추가하고 해소를 기록한다
-- §6(재개 절차) → Task 6부터 시작하도록 갱신하고, CA3 미결 경고 상자를 제거한다
+- §6(재개 절차) → 플랜14 Task 6부터 시작하도록 갱신하고, CA3 미결 경고 상자를 제거한다
 - §3「Task 4가 남긴 우려」 → CA5-a/CA5-b 각각의 해소 커밋을 적는다
+
+> §4「원장 무결성 문제」는 **Task 2가 이미 교체했다** — 다시 쓰지 않는다.
 
 - [ ] **Step 5: 커밋**
 
