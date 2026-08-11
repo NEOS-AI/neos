@@ -778,7 +778,7 @@ _MANAGED_LABELS: ContextVar[Mapping[str, str]] = ContextVar(
    `volume ls`, `inspect`, `rm`은 shadow 자신의 리소스를 다루는 정당한 docker CLI
    호출이다.
 
-- [ ] **Step 5: 통과를 확인한다**
+- [ ] **Step 5: 여기까지 통과를 확인한다**
 
 ```bash
 GOOGLE_API_KEY=test-key /Users/ywsung/Desktop/neos/.venv/bin/pytest -q \
@@ -788,7 +788,116 @@ grep -c "provider\._" neos/coding/managed/adapters/docker_shadow.py
 
 Expected: 전부 PASS이고 grep 결과가 `0`.
 
-- [ ] **Step 6: 커밋**
+> 🔴 **아래 Step 6–9는 Task 1 리뷰가 찾은 결함의 이월분이다 (2026-08-11 판정).**
+> Task 1이 채택한 CA5-b 코드는 **획득의 원자성**은 풀었지만 **해제의 보장**을 빠뜨렸다.
+> 분산 락에서 이 둘은 쌍으로 온다 — 전자만 있으면 fail-closed가 **fail-forever**가 된다.
+> Task 1은 소유권 판정 커밋으로 깨끗이 남기고, 기능 수정은 이 태스크가 맡는다.
+
+- [ ] **Step 6: 클레임 누수 테스트를 쓴다 (실패 확인)**
+
+`tests/coding/managed/adapters/test_docker_shadow.py`에 추가:
+
+```python
+async def test_a_failed_create_releases_the_claim() -> None:
+    """클레임을 이긴 뒤 create 가 실패하면 클레임을 반납해야 한다.
+
+    반납하지 않으면 그 idempotency_key 로 오는 모든 이후 allocate 가 나타나지 않을
+    소유자를 기다리다 타임아웃한다 -- 운영자가 볼륨을 지울 때까지 키가 영구히 오염된다.
+    """
+    adapter, runner = docker_adapter()
+    runner.fail_next("create", SandboxError("docker_create_failed"))
+
+    with pytest.raises(SandboxError):
+        await adapter.allocate(allocation_request())
+
+    assert runner.volumes == {}
+
+    # 키가 오염되지 않았다: 다음 시도가 정상적으로 성공한다.
+    created = await adapter.allocate(allocation_request())
+    assert created.state is ManagedSandboxState.ACTIVE
+
+
+async def test_a_stale_claim_is_reclaimed_instead_of_blocking_forever() -> None:
+    """소유자가 죽어 클레임만 남은 경우, 기다리다 포기하지 말고 회수해야 한다."""
+    adapter, runner = docker_adapter()
+    request = allocation_request()
+    runner.seed_orphan_claim(
+        adapter._claim_volume_name(request.idempotency_key),
+        claimed_at=STALE_CLAIMED_AT,
+    )
+
+    created = await adapter.allocate(request)
+
+    assert created.state is ManagedSandboxState.ACTIVE
+```
+
+`runner.fail_next(op, error)`와 `runner.seed_orphan_claim(name, *, claimed_at)`은
+`EmulatedDockerRunner`(`:45`)에 함께 추가한다. `STALE_CLAIMED_AT`은
+`claim_lease_seconds`보다 오래된 ISO 타임스탬프다.
+
+```bash
+GOOGLE_API_KEY=test-key /Users/ywsung/Desktop/neos/.venv/bin/pytest -q \
+  tests/coding/managed/adapters/test_docker_shadow.py -k "releases_the_claim or stale_claim"
+```
+
+Expected: FAIL — 현재는 클레임이 남고 두 번째 `allocate`가 타임아웃한다.
+
+- [ ] **Step 7: 실패 시 클레임을 반납한다**
+
+`allocate()`에서 클레임을 이긴 뒤의 구간을 `try`로 감싸고, **`provider.create()`가
+실패하면 클레임 볼륨을 지운 뒤 예외를 다시 올린다:**
+
+```python
+        try:
+            with self._provider.resource_labels(labels):
+                created = await self._provider.create(
+                    owner_id=request.owner_id,
+                    limits=request.resource_limits,
+                )
+        except BaseException:
+            # 획득의 원자성만으로는 부족하다 -- 해제를 보장하지 않으면
+            # fail-closed 가 fail-forever 가 된다.
+            await self._remove_volume_if_present(claim_name)
+            raise
+```
+
+`_remove_volume_if_present`는 CA5-b가 이미 만들어 둔 헬퍼다. `BaseException`으로
+잡는 이유는 `CancelledError`에도 클레임을 남기지 않기 위해서다.
+
+- [ ] **Step 8: 죽은 소유자의 클레임을 회수한다**
+
+클레임 볼륨 생성 시 `CLAIMED_AT_LABEL`(`com.neos.coding.managed-claimed-at`)에
+ISO 타임스탬프를 함께 싣는다. `_wait_for_claim_owner`가 데드라인에 도달하면 포기하기
+전에 클레임을 다시 조회해서:
+
+- 해당 idempotency_key로 컨테이너가 **없고**
+- `claimed_at`이 `claim_lease_seconds`보다 오래됐으면
+
+→ 그 클레임 볼륨을 지우고 `ManagedAdapterTimeoutError`를 올린다. **같은 호출 안에서
+재시도하지 않는다** — 호출자가 다시 부르면 그때 정상적으로 클레임을 이긴다.
+(한 호출이 락을 깨고 곧바로 잡으면 두 프로세스가 동시에 깨는 창이 생긴다.)
+
+`neos/config/schema.py`의 `ManagedSandboxConfig`에 설정을 추가한다 (매직넘버 금지):
+
+```python
+    claim_lease_seconds: int = Field(
+        default=300,
+        gt=0,
+        le=3600,
+        description="클레임 볼륨의 수명. 이보다 오래되고 컨테이너가 없으면 회수한다.",
+    )
+```
+
+- [ ] **Step 9: 통과를 확인한다**
+
+```bash
+GOOGLE_API_KEY=test-key /Users/ywsung/Desktop/neos/.venv/bin/pytest -q \
+  tests/coding/managed tests/coding/sandbox tests/config
+```
+
+Expected: 전부 PASS
+
+- [ ] **Step 10: 커밋**
 
 ```bash
 /Users/ywsung/Desktop/neos/.venv/bin/ruff check neos/coding tests/coding
