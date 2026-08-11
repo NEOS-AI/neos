@@ -641,28 +641,29 @@ async def test_release_claim_deletes_when_the_token_still_matches() -> None:
     assert claim_name not in runner.volumes
 
 
-async def test_two_waiters_do_not_both_reclaim_the_same_stale_claim() -> None:
-    """finding 1 (round 2): 두 대기자가 같은 죽은 클레임을 동시에 회수하려 하면,
-    먼저 회수해 새로 이긴 쪽의 아직 진행 중인(살아있는) 클레임을 나중 쪽이 훔쳐
-    지우면 안 된다.
+async def test_two_waiters_converge_on_one_container_after_a_forced_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """finding 1 (round 3): 클레임의 CAS 해제(`_release_claim`)에는 "확인 후
+    삭제" 특유의 좁은 창이 항상 남는다 -- inspect 로 죽은 토큰을 확인한 뒤
+    실제로 `rm` 하기까지 사이에, 다른 대기자가 그 자리를 회수해 새 토큰으로
+    이길 수 있다. `docker volume rm`에는 compare-and-swap이 없어서 이 창은
+    검사를 더 촘촘히 해도 닫히지 않는다(더 촘촘히 검사할수록 같은 결함을 다른
+    자리로 옮길 뿐이다 -- round 1의 두 지점, round 2의 세 번째 지점, 그리고
+    지금 이 펜스 자체가 그 패턴이었다).
 
-    훔쳐 지우면(이름만 보고 무조건 삭제) 두 프로세스가 각자 컨테이너를 만들어,
-    같은 idempotency_key 로 컨테이너가 두 개 생기고 find_by_idempotency_key 가
-    idempotency_metadata_not_unique 로 영구히 막힌다.
+    그래서 전략을 바꾼다: 클레임은 "대부분의 이중 생성을 피하는 최선형
+    최적화"로 남겨두고, `provider.create()` 직후 사후 수렴(reconciliation)으로
+    보완한다 -- 이중 생성이 실제로 일어나도, 모든 경쟁자가 조율 없이 같은
+    승자를 계산해 진 쪽이 스스로 정리한다.
 
-    asyncio.gather 로만 돌리면 이 사고 창이 에뮬레이터의 우연한 스케줄링으로는
-    재현되지 않는다(직접 확인함): 두 대기자 모두 volume 관련 호출에 진짜
-    양보점(await asyncio.sleep)이 없어서, 한쪽이 죽은 클레임을 관찰하고 지우기
-    시작하면 그 사이 다른 쪽이 끼어들 기회가 없다 -- 그래서 A 가 완전히 끝난
-    "뒤"에야 B 가 재확인하게 되어 사고가 나지 않는다(그 경우는 이 테스트가
-    잡으려는 것과 다른, 이미 알려진 잔여 창이다).
-
-    사고 창을 실제로 재현하려면 B(두 번째 대기자)가 죽은 토큰을 들고 실제로
-    지우려는 순간(`_release_claim` 진입 직전)과, A(첫 번째 대기자)가 클레임을
-    이긴 뒤 컨테이너 생성을 실제로 시작하기 직전(`provider.create()` 진입
-    직전) 두 지점을 결정적으로 맞물려야 한다: B 를 멈춰 세운 채 A 가 클레임을
-    이기게 하고, A 도 멈춰 세운 뒤 B 를 풀어준다 -- 이때 B 가 보는 것은 A 가
-    "아직 진행 중인" 살아있는 클레임이다.
+    이 테스트는 그 좁은 창을 결정적으로 강제한다: B(두 번째 대기자)를
+    `_release_claim`의 inspect 와 rm 사이(=`_remove_volume_if_present` 진입
+    직전)에 멈춰 세우고, 그 사이 A(첫 번째 대기자)가 죽은 클레임을 회수하고
+    자신의 새 토큰으로 완주해 이기게 한다. B 를 풀어주면 B 의 rm 은 (여전히)
+    A 의 살아있는 클레임을 지워버린다 -- 클레임 계층 혼자서는 이 사고를 막을
+    수 없다는 뜻이다. 그래도 사후 수렴이 정확히 컨테이너 하나만 남긴다는
+    것을 검증한다.
     """
     runner = EmulatedDockerRunner()
     providers = [
@@ -679,52 +680,61 @@ async def test_two_waiters_do_not_both_reclaim_the_same_stale_claim() -> None:
         claimed_at=STALE_CLAIMED_AT,
     )
 
-    b_reached_release = asyncio.Event()
-    b_may_release = asyncio.Event()
+    b_reached_rm = asyncio.Event()
+    b_may_rm = asyncio.Event()
     a_reached_create = asyncio.Event()
     a_may_create = asyncio.Event()
-    original_release_claim = DockerShadowManagedAdapter._release_claim
+    original_remove = DockerShadowManagedAdapter._remove_volume_if_present
     original_provider_create = DockerSandboxProvider.create
 
-    async def paused_release_claim(self, claim_name, claim_token):
-        if self is adapters[1]:
-            b_reached_release.set()
-            await b_may_release.wait()
-        return await original_release_claim(self, claim_name, claim_token)
+    async def paused_remove(self, name):
+        # `_release_claim`이 토큰을 이미 확인한 "뒤"(즉 이 메서드 진입 시점)
+        # 에만 멈춘다 -- inspect 와 rm 사이의 창을 정확히 강제한다. 첫 호출
+        # 이후엔 다시 멈추지 않는다(B 자신의 재획득·정리 흐름은 정상 진행).
+        if self is adapters[1] and not b_reached_rm.is_set():
+            b_reached_rm.set()
+            await asyncio.wait_for(b_may_rm.wait(), 5)
+        return await original_remove(self, name)
 
     async def paused_provider_create(self, **kwargs):
         if self is providers[0]:
             a_reached_create.set()
-            await a_may_create.wait()
+            await asyncio.wait_for(a_may_create.wait(), 5)
         return await original_provider_create(self, **kwargs)
 
-    DockerShadowManagedAdapter._release_claim = paused_release_claim
-    DockerSandboxProvider.create = paused_provider_create
-    try:
-        # B: 죽은 클레임을 관찰하고, 실제로 지우기 직전에 멈춘다.
-        task_b = asyncio.create_task(adapters[1].allocate(request))
-        await b_reached_release.wait()
+    # monkeypatch.setattr 를 쓴다 -- 수동 대입은 finally 에서만 복구되므로,
+    # 이 테스트가 (타임아웃 등으로) 죽으면 클래스 레벨 패치가 세션 전체에
+    # 새어 나간다. monkeypatch 는 테스트 종료 시 항상 복구를 보장한다.
+    monkeypatch.setattr(
+        DockerShadowManagedAdapter, "_remove_volume_if_present", paused_remove
+    )
+    monkeypatch.setattr(DockerSandboxProvider, "create", paused_provider_create)
 
-        # A: B 가 아직 지우지 않았으므로 A 는 죽은 클레임을 정상적으로 회수하고
-        # 자신의 새 토큰으로 이긴다. 컨테이너를 실제로 만들기 직전에 멈춘다 --
-        # 이 시점에 A 의 클레임 볼륨은 A 의 새 토큰을 든 채 살아있다.
-        task_a = asyncio.create_task(adapters[0].allocate(request))
-        await a_reached_create.wait()
+    # B: 죽은 토큰을 확인하고, 실제로 지우기(rm) 직전에 멈춘다.
+    task_b = asyncio.create_task(adapters[1].allocate(request))
+    await asyncio.wait_for(b_reached_rm.wait(), 5)
 
-        # 이제 두 게이트를 동시에 연다: B 의 CAS 확인이 A 의 (아직 안 끝난)
-        # 살아있는 클레임을 보게 하고, A 도 마저 완주하게 한다.
-        b_may_release.set()
-        a_may_create.set()
+    # A: B 가 아직 지우지 않았으므로 A 는 죽은 클레임을 정상적으로 회수하고
+    # 자신의 새 토큰으로 이긴다. 컨테이너를 실제로 만들기 직전에 멈춘다.
+    task_a = asyncio.create_task(adapters[0].allocate(request))
+    await asyncio.wait_for(a_reached_create.wait(), 5)
 
-        first, second = await asyncio.gather(task_a, task_b)
-    finally:
-        DockerShadowManagedAdapter._release_claim = original_release_claim
-        DockerSandboxProvider.create = original_provider_create
+    # 이제 두 게이트를 동시에 연다: B 의 rm 은 A 의 (아직 안 끝난) 살아있는
+    # 클레임을 지워버리고, A 도 마저 완주한다 -- 클레임 계층에서는 사고가
+    # 난다. 사후 수렴이 그 사고를 정리해야 한다.
+    b_may_rm.set()
+    a_may_create.set()
 
+    first, second = await asyncio.wait_for(asyncio.gather(task_a, task_b), 10)
+
+    # 클레임 계층에서는 실제로 컨테이너가 두 개 생긴다 -- 이 스케줄에서는
+    # 그것이 정상이다. 사후 수렴이 정확히 하나만 남겨야 한다.
+    assert sum(call[0] == "create" for call in runner.calls) == 2
     assert first.provider_ref == second.provider_ref
-    assert sum(call[0] == "create" for call in runner.calls) == 1
-    # 훔쳐 지우는 사고가 났다면 컨테이너가 두 개 생겨 여기서
-    # idempotency_metadata_not_unique 가 올라온다.
+    survivors = await adapters[0]._list_by_idempotency_key(request.idempotency_key)
+    assert len(survivors) == 1
+    assert survivors[0].provider_ref == first.provider_ref
+    # 수렴 뒤에는 유일성 보장도 정상적으로 다시 성립한다.
     await adapters[0].find_by_idempotency_key(request.idempotency_key)
 
 

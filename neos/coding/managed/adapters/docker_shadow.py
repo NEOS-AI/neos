@@ -59,6 +59,13 @@ _DEFAULT_CLAIM_LEASE_SECONDS: int = ManagedSandboxConfig.model_fields[
 # 인한 라이브락을 막는다 (CA5-b 이월 결함 수정).
 _MAX_CLAIM_ACQUIRE_ATTEMPTS = 2
 
+# 이중 생성 수렴(_reconcile_duplicate_creation) 판정을 몇 번까지 다시
+# 확인할지. 거의 동시에 경쟁하는 대기자는 각자 자신의 컨테이너를 만든 직후
+# 곧바로 확인하므로, 상대가 아직 생성을 끝내지 못한 그 찰나에는 "나 혼자다"
+# 로 보일 수 있다(직접 재현해 확인함). 짧게 양보하며 몇 번 더 확인하면 그
+# 찰나를 메운다 -- 무한정 기다리지 않도록 횟수를 못박는다.
+_RECONCILE_SETTLE_ATTEMPTS = 5
+
 
 class DockerShadowManagedAdapter:
     __slots__ = (
@@ -125,6 +132,13 @@ class DockerShadowManagedAdapter:
             claim_name = self._claim_volume_name(request.idempotency_key)
             claim_token = ""
             won = False
+            # 죽은 소유자의 클레임을 회수한 적이 있는지 기록해 둔다 --
+            # _reconcile_duplicate_creation 에게 재확인이 필요한지 알려주는
+            # 신호다. 클레임이 살아있는(죽지 않은) 채로 경합했을 뿐이면
+            # 지는 쪽은 애초에 컨테이너를 만들지 않고 이긴 쪽을 기다리기만
+            # 하므로 이중 생성 자체가 없다 -- 재확인이 필요한 유일한 경우는
+            # "확인 후 삭제" 창(finding 1) 이 열리는 죽은 클레임 회수뿐이다.
+            reclaimed_stale_claim = False
             # 죽은 소유자의 클레임을 회수했다면(_wait_for_claim_owner 가 None 을
             # 돌려줌) 딱 한 번만 재획득을 시도한다 -- 무한 재시도로 인한
             # 라이브락을 막는다.
@@ -153,6 +167,7 @@ class DockerShadowManagedAdapter:
                     return replay
                 # replay 가 None 이면 죽은 소유자의 클레임을 방금 회수했다는
                 # 뜻이다 -- 다음 attempt 에서 깨끗하게 재획득을 시도한다.
+                reclaimed_stale_claim = True
             if not won:
                 raise ManagedAdapterTimeoutError("idempotent_allocation_claim_pending")
             try:
@@ -161,6 +176,25 @@ class DockerShadowManagedAdapter:
                         owner_id=request.ownership_digest,
                         limits=request.resource_limits,
                     )
+                winner = await self._reconcile_duplicate_creation(
+                    request,
+                    sandbox.sandbox_id,
+                    settle=reclaimed_stale_claim,
+                )
+                if winner is not None:
+                    # 클레임의 CAS 해제(_release_claim)로도 이 창은 완전히 못
+                    # 닫는다: docker volume rm 에는 compare-and-swap 이 없어서,
+                    # inspect 로 죽은 토큰을 확인한 뒤 rm 하기까지 사이에 다른
+                    # 대기자가 그 자리를 회수해 이길 수 있다 -- 검사를 더
+                    # 촘촘히 해도 같은 결함을 다른 자리로 옮길 뿐이다. 그래서
+                    # 클레임은 "대부분의 이중 생성을 피하는 최선형 최적화"로
+                    # 남겨두고, 여기서 사후 수렴으로 보완한다. 우리가 졌다:
+                    # 방금 우리가 만들어 소유를 증명할 수 있는 자원(우리
+                    # 컨테이너)만 정리한다. 승자의 자원은 절대 건드리지
+                    # 않는다.
+                    await self._provider.destroy(sandbox.sandbox_id)
+                    await self._release_claim(claim_name, claim_token)
+                    return self._replayed_allocation(winner, request)
                 ownership_name = self._ownership_volume_name(sandbox.sandbox_id)
                 ownership_labels = {
                     **labels,
@@ -281,6 +315,25 @@ class DockerShadowManagedAdapter:
         self,
         idempotency_key: str,
     ) -> ProviderSandboxState | None:
+        matches = await self._list_by_idempotency_key(idempotency_key)
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise ManagedAdapterOwnershipError("idempotency_metadata_not_unique")
+        return matches[0]
+
+    async def _list_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> tuple[ProviderSandboxState, ...]:
+        """`idempotency_key` 라벨이 같은 컨테이너를 개수 제한 없이 전부 돌려준다.
+
+        `find_by_idempotency_key`는 정확히 하나가 아니면 예외를 올려 다른
+        호출자들에게 유일성을 보장한다 -- 그 보장은 그대로 둔다(약화하지
+        않는다). 이 메서드는 경합 수렴(`_reconcile_duplicate_creation`) 전용
+        조회 경로다: "여러 개 있을 수 있다"는 전제 자체가 그 로직의 목적이라
+        따로 둔다.
+        """
         require_capability(self.capabilities, "metadata_rediscovery")
         listed = await self._runner.run(
             "ps",
@@ -295,24 +348,77 @@ class DockerShadowManagedAdapter:
             value for value in listed.stdout.decode().splitlines() if value
         )
         if not container_ids:
-            return None
+            return ()
         inspected = await self._runner.run(
             "inspect",
             *container_ids,
             timeout_sec=self._provider.operation_timeout_sec,
         )
         documents = self._decode_inspection(inspected.stdout)
-        matches = [
+        return tuple(
             self._state_from_document(document)
             for document in documents
             if (document.get("Config", {}).get("Labels") or {}).get(
                 IDEMPOTENCY_KEY_LABEL
             )
             == idempotency_key
-        ]
-        if len(matches) != 1:
-            raise ManagedAdapterOwnershipError("idempotency_metadata_not_unique")
-        return matches[0]
+        )
+
+    async def _reconcile_duplicate_creation(
+        self,
+        request: ManagedAllocationRequest,
+        sandbox_id: str,
+        *,
+        settle: bool,
+    ) -> ProviderSandboxState | None:
+        """`provider.create()` 직후, 같은 idempotency_key 로 컨테이너가 두 개
+        이상 생겼는지 확인하고 조율 없이 수렴시킨다.
+
+        클레임 볼륨의 CAS 해제(`_release_claim`)는 대부분의 이중 생성을
+        피하는 최선형 최적화일 뿐, 보장은 아니다: "확인 후 삭제"인 이상
+        inspect 와 rm 사이에 다른 대기자가 끼어들 수 있는 창이 항상 남는다
+        (`docker volume rm`에는 compare-and-swap 이 없다 -- 검사를 더
+        촘촘히 해도 같은 결함을 다른 자리로 옮길 뿐이다). 그래서 여기서
+        사후에 수렴시킨다: 모든 경쟁자가 조율 없이 컨테이너 메타데이터만
+        보고 동일한 승자를 계산할 수 있어야 한다 -- `provider_ref`(무작위
+        UUID 기반이라 편향이 없다)의 사전식 최솟값을 승자로 정한다.
+
+        우리가 이겼거나 유일하면 `None`을 돌려준다(호출자는 평소처럼 계속
+        진행한다). 우리가 졌으면 승자의 상태를 돌려준다 -- 호출자는 **자신의**
+        컨테이너만 정리하고 그 상태를 대신 반환해야 한다. 이 메서드는 정리를
+        직접 하지 않는다: 아직 증명하지 못한 자원(=승자의 컨테이너)은 절대
+        건드리지 않는다는 원칙을 호출자가 지키게 하기 위해서다.
+
+        거의 동시에 경쟁하는 대기자는 각자 자신의 컨테이너를 만든 직후 곧바로
+        이 메서드를 부르므로, 상대가 아직 컨테이너를 다 만들지 못한 찰나에는
+        아무도 안 보여 "나 혼자다"로 판정될 수 있다 -- 둘 다 그렇게 판정하면
+        둘 다 살아남아 이 메서드가 막으려는 사고가 그대로 재현된다(직접
+        재현해 확인함). `settle`이 참이면 한 번만 보고 끝내지 않고
+        `_RECONCILE_SETTLE_ATTEMPTS` 번까지 짧게 양보하며(`asyncio.sleep`)
+        다시 확인한다 -- 도중에 중복이 보이면 그 순간의 결과로 승자를
+        계산한다.
+
+        `settle`은 호출자가 이번 allocate() 안에서 죽은 클레임을 실제로
+        회수했는지(finding 1 의 "확인 후 삭제" 창이 열렸는지)를 나타낸다.
+        클레임이 살아있는 채로 경합했을 뿐이면(가장 흔한 경우) 지는 쪽은
+        애초에 컨테이너를 만들지 않고 이긴 쪽을 기다리기만 하므로 이중 생성
+        자체가 없다 -- 그런 보통 경로에까지 재확인 지연을 물리면 매
+        allocate() 호출마다 불필요한 지연만 쌓인다.
+        """
+        attempts = _RECONCILE_SETTLE_ATTEMPTS if settle else 1
+        matches: tuple[ProviderSandboxState, ...] = ()
+        for attempt in range(attempts):
+            matches = await self._list_by_idempotency_key(request.idempotency_key)
+            if len(matches) > 1:
+                break
+            if attempt + 1 < attempts:
+                await asyncio.sleep(0.01)
+        if len(matches) <= 1:
+            return None
+        winner = min(matches, key=lambda match: match.provider_ref)
+        if winner.provider_ref == sandbox_id:
+            return None
+        return winner
 
     async def health(self, region: str) -> ProviderHealthProbe:
         await self._runner.run(
