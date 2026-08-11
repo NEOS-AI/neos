@@ -12,6 +12,7 @@ from neos.coding.managed.adapters.base import (
     AllocationResult,
     DestroyResult,
     LifecycleResult,
+    ManagedAdapterError,
     ManagedAdapterNotFoundError,
     ManagedAdapterOwnershipError,
     ManagedAdapterTimeoutError,
@@ -373,48 +374,77 @@ class DockerShadowManagedAdapter:
                     volume=True,
                 )
                 return replay
-            if await self._claim_is_stale(claim_name):
-                await self._remove_volume_if_present(claim_name)
+            stale_token = await self._stale_claim_token(claim_name)
+            if stale_token is not None:
+                # 죽은 소유자의 토큰으로만 CAS 삭제한다 (finding 1): 우리가
+                # 판정한 뒤 삭제하기까지 사이에 다른 대기자(B)도 같은 클레임을
+                # 죽었다고 판정할 수 있다. 그 사이 A 가 먼저 회수해 새 토큰으로
+                # 이겼다면, B 의 삭제는 관찰했던 죽은 토큰과 지금 토큰이 달라
+                # 거부된다 -- A 의 살아있는 클레임을 B 가 훔쳐 지우는 사고를
+                # 막는다.
+                await self._release_claim(claim_name, stale_token)
                 return None
             await asyncio.sleep(0.01)
         raise ManagedAdapterTimeoutError("idempotent_allocation_claim_pending")
 
-    async def _claim_is_stale(self, claim_name: str) -> bool:
-        """소유자가 죽어 남은 클레임인지 판정한다.
+    async def _stale_claim_token(self, claim_name: str) -> str | None:
+        """소유자가 죽어 남은 클레임이면 그 클레임이 물고 있던 토큰을 돌려준다.
 
         컨테이너가 없는 상태에서 클레임의 claimed_at 이 claim_lease_seconds 보다
-        오래됐으면 죽은 소유자의 클레임으로 간주한다. 라벨이 없거나, 문자열이
-        아니거나, 파싱할 수 없으면(예전 버전이 만든 클레임 등) 판단 근거가
-        없으므로 회수하지 않는다 -- 안전한 쪽으로 fail 한다.
+        오래됐으면 죽은 소유자의 클레임으로 간주하고, 그 클레임이 들고 있던
+        `CLAIM_TOKEN_LABEL` 값을 돌려준다 -- 호출자는 이 값을 `_release_claim`
+        에 넘겨, 지금 이 순간에도 여전히 그 죽은 토큰을 들고 있을 때만 지우게
+        한다. 이 판정과 실제 삭제 사이에도 시간이 지난다 -- 그 사이 누군가
+        이미 회수해 새 토큰으로 이겼다면 `_release_claim`의 확인에서 토큰이
+        달라 삭제가 거부된다(`_release_claim` 문서 참고: 원자적 CAS 는 아니다).
+
+        판단 근거가 없으면(라벨이 없거나, 문자열이 아니거나, 파싱할 수 없거나,
+        오프셋 없는 naive 타임스탬프거나, 아직 lease 안이거나, 토큰 라벨 자체가
+        없으면) `None` 을 돌려준다 -- 회수하지 않는다. naive 타임스탬프를 UTC 로
+        임의 가정하지 않는 것도 이 안전한 쪽 fail 의 일부다: UTC 동쪽 지역에서
+        쓰인 naive 값을 UTC 로 잘못 해석하면 실제보다 더 오래된 것으로 보여,
+        claim_lease_seconds(최대 3600 초) 안에서도 아직 살아있는 소유자의
+        클레임을 회수해버릴 수 있다.
         """
         claim = await self._inspect_volume_optional(claim_name)
         if claim is None:
-            return False
-        claimed_at_text = (claim.get("Labels") or {}).get(CLAIMED_AT_LABEL)
+            return None
+        labels = claim.get("Labels") or {}
+        claimed_at_text = labels.get(CLAIMED_AT_LABEL)
         if not claimed_at_text:
-            return False
+            return None
         try:
             claimed_at = datetime.fromisoformat(claimed_at_text)
             if claimed_at.tzinfo is None:
-                # 오프셋이 없는 값은 우리가 쓰는 형식이 아니다(우리는 항상
-                # UTC 오프셋을 붙여 쓴다). 비교가 가능하도록 UTC 로 간주한다.
-                claimed_at = claimed_at.replace(tzinfo=UTC)
+                # 오프셋이 없다 -- 우리가 쓰는 값은 항상 UTC 오프셋을 붙여
+                # 쓰므로, 어떤 시간대의 naive 값인지 알 길이 없다. 임의로 UTC
+                # 로 가정하면 살아있는 소유자를 회수할 위험이 있으므로 판단
+                # 근거 없음으로 처리한다.
+                return None
             age_seconds = (datetime.now(UTC) - claimed_at).total_seconds()
         except (TypeError, ValueError):
             # 라벨 값이 문자열이 아니거나(docker inspect JSON 은 shape 만
             # 검증된다) ISO 형식이 아니다 -- 판단 근거가 없으므로 회수하지
             # 않는다.
-            return False
-        return age_seconds > self._claim_lease_seconds
+            return None
+        if age_seconds <= self._claim_lease_seconds:
+            return None
+        observed_token = labels.get(CLAIM_TOKEN_LABEL)
+        return observed_token or None
 
     async def _release_claim(self, claim_name: str, claim_token: str) -> None:
-        """우리 토큰일 때만 클레임을 반납한다 (CAS 방식 해제).
+        """`claim_token`을 들고 있을 때만 클레임을 반납한다 (확인 후 삭제).
 
-        Step 8 이후 클레임은 재할당 가능해졌다 -- 무조건 이름으로 지우면
-        이미 다른 프로세스가 죽은 것으로 오판해 회수하고 새로 이긴 클레임을
-        실수로 지워버릴 수 있다(그 프로세스의 락을 훔치는 셈). 그러면 같은
-        idempotency_key 로 컨테이너가 두 개 생긴다. 토큰이 여전히 우리
-        것일 때만 지운다.
+        `docker volume rm`에는 compare-and-swap 이 없다 -- 이건 원자적 CAS 가
+        아니라 "확인한 뒤 지우는" 순차 동작이다: inspect 로 토큰이 여전히
+        `claim_token` 인지 확인하고, 맞으면 지운다. 이 두 단계 사이에도 다른
+        프로세스가 끼어들 수 있는 아주 좁은 창이 남는다 -- 완전한 상호배제는
+        아니다. 그래도 이름만 보고 무조건 지우는 것보다는 훨씬 안전하다:
+        Step 8 이후 클레임은 재할당 가능해져서, 무조건 지우면 이미 다른
+        프로세스가 죽은 것으로 오판해 회수하고 새로 이긴 클레임을 실수로
+        지워버릴 수 있다(그 프로세스의 락을 훔치는 셈). 그러면 같은
+        idempotency_key 로 컨테이너가 두 개 생긴다. 토큰이 검사 시점에
+        `claim_token`과 다르면 아무것도 하지 않는다.
         """
         claim = await self._inspect_volume_optional(claim_name)
         if claim is None:
@@ -435,6 +465,12 @@ class DockerShadowManagedAdapter:
         끊지 못하게 막고, `wait_for` 로 전체 시도 시간을 묶어 죽은 docker
         데몬이 취소 처리 자체를 hang 시키지 않게 한다. 실패해도 원래
         예외를 삼키지 않는다 -- 호출자가 곧바로 `raise` 한다.
+
+        `ManagedAdapterError`도 잡는다: `_release_claim` -> `_inspect_volume_optional`
+        은 docker inspect 출력이 깨지면 `ManagedAdapterOwnershipError`(그 기반
+        클래스가 `ManagedAdapterError`)를 올린다 -- `SandboxError`의 자손이
+        아니므로 따로 잡지 않으면 여기를 빠져나가 호출자의 `raise`(원래
+        예외 -- 취소였을 수도 있다)를 대체해버린다.
         """
         try:
             await asyncio.wait_for(
@@ -446,6 +482,7 @@ class DockerShadowManagedAdapter:
             asyncio.TimeoutError,
             asyncio.CancelledError,
             SandboxError,
+            ManagedAdapterError,
         ):
             pass
 

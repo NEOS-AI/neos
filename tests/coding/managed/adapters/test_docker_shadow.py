@@ -555,17 +555,22 @@ async def test_a_cancelled_create_still_releases_the_claim() -> None:
 
 async def test_a_naive_claimed_at_timestamp_does_not_crash_reclaim() -> None:
     """오프셋 없는 ISO 문자열(예전 버전이 남긴 값 등)도 TypeError 없이 처리돼야
-    한다 -- UTC로 간주해 정상적으로 오래됐다고 판정하고 회수한다."""
-    adapter, runner = docker_adapter()
+    한다 -- 그리고 UTC로 임의 가정해 회수하면 안 된다: UTC 동쪽 지역에서 쓰인
+    naive 값을 UTC로 잘못 해석하면 실제보다 오래된 것으로 보여, 아직 살아있는
+    소유자의 클레임을 회수할 수 있다. 판단 근거 없음으로 처리해 회수하지
+    않고 제네릭 타임아웃으로 끝나야 한다."""
+    adapter, runner = docker_adapter(create_timeout_sec=0.05)
     request = allocation_request()
+    claim_name = adapter._claim_volume_name(request.idempotency_key)
     runner.seed_orphan_claim(
-        adapter._claim_volume_name(request.idempotency_key),
-        claimed_at="2020-01-01T00:00:00",  # 오프셋 없음
-    )
+        claim_name, claimed_at="2020-01-01T00:00:00"
+    )  # 오프셋 없음
 
-    created = await adapter.allocate(request)
+    with pytest.raises(ManagedAdapterTimeoutError):
+        await adapter.allocate(request)
 
-    assert created.state is ManagedSandboxState.ACTIVE
+    # 회수되지 않았다 -- 판단 근거가 없어 그대로 남아 있다.
+    assert claim_name in runner.volumes
 
 
 async def test_a_non_string_claimed_at_label_does_not_crash_reclaim() -> None:
@@ -634,3 +639,117 @@ async def test_release_claim_deletes_when_the_token_still_matches() -> None:
     await adapter._release_claim(claim_name, "our-token")
 
     assert claim_name not in runner.volumes
+
+
+async def test_two_waiters_do_not_both_reclaim_the_same_stale_claim() -> None:
+    """finding 1 (round 2): 두 대기자가 같은 죽은 클레임을 동시에 회수하려 하면,
+    먼저 회수해 새로 이긴 쪽의 아직 진행 중인(살아있는) 클레임을 나중 쪽이 훔쳐
+    지우면 안 된다.
+
+    훔쳐 지우면(이름만 보고 무조건 삭제) 두 프로세스가 각자 컨테이너를 만들어,
+    같은 idempotency_key 로 컨테이너가 두 개 생기고 find_by_idempotency_key 가
+    idempotency_metadata_not_unique 로 영구히 막힌다.
+
+    asyncio.gather 로만 돌리면 이 사고 창이 에뮬레이터의 우연한 스케줄링으로는
+    재현되지 않는다(직접 확인함): 두 대기자 모두 volume 관련 호출에 진짜
+    양보점(await asyncio.sleep)이 없어서, 한쪽이 죽은 클레임을 관찰하고 지우기
+    시작하면 그 사이 다른 쪽이 끼어들 기회가 없다 -- 그래서 A 가 완전히 끝난
+    "뒤"에야 B 가 재확인하게 되어 사고가 나지 않는다(그 경우는 이 테스트가
+    잡으려는 것과 다른, 이미 알려진 잔여 창이다).
+
+    사고 창을 실제로 재현하려면 B(두 번째 대기자)가 죽은 토큰을 들고 실제로
+    지우려는 순간(`_release_claim` 진입 직전)과, A(첫 번째 대기자)가 클레임을
+    이긴 뒤 컨테이너 생성을 실제로 시작하기 직전(`provider.create()` 진입
+    직전) 두 지점을 결정적으로 맞물려야 한다: B 를 멈춰 세운 채 A 가 클레임을
+    이기게 하고, A 도 멈춰 세운 뒤 B 를 풀어준다 -- 이때 B 가 보는 것은 A 가
+    "아직 진행 중인" 살아있는 클레임이다.
+    """
+    runner = EmulatedDockerRunner()
+    providers = [
+        DockerSandboxProvider(
+            runner=runner,
+            config=DockerSandboxConfig(image=IMAGE),
+        )
+        for _ in range(2)
+    ]
+    adapters = [DockerShadowManagedAdapter(provider=provider) for provider in providers]
+    request = allocation_request()
+    runner.seed_orphan_claim(
+        adapters[0]._claim_volume_name(request.idempotency_key),
+        claimed_at=STALE_CLAIMED_AT,
+    )
+
+    b_reached_release = asyncio.Event()
+    b_may_release = asyncio.Event()
+    a_reached_create = asyncio.Event()
+    a_may_create = asyncio.Event()
+    original_release_claim = DockerShadowManagedAdapter._release_claim
+    original_provider_create = DockerSandboxProvider.create
+
+    async def paused_release_claim(self, claim_name, claim_token):
+        if self is adapters[1]:
+            b_reached_release.set()
+            await b_may_release.wait()
+        return await original_release_claim(self, claim_name, claim_token)
+
+    async def paused_provider_create(self, **kwargs):
+        if self is providers[0]:
+            a_reached_create.set()
+            await a_may_create.wait()
+        return await original_provider_create(self, **kwargs)
+
+    DockerShadowManagedAdapter._release_claim = paused_release_claim
+    DockerSandboxProvider.create = paused_provider_create
+    try:
+        # B: 죽은 클레임을 관찰하고, 실제로 지우기 직전에 멈춘다.
+        task_b = asyncio.create_task(adapters[1].allocate(request))
+        await b_reached_release.wait()
+
+        # A: B 가 아직 지우지 않았으므로 A 는 죽은 클레임을 정상적으로 회수하고
+        # 자신의 새 토큰으로 이긴다. 컨테이너를 실제로 만들기 직전에 멈춘다 --
+        # 이 시점에 A 의 클레임 볼륨은 A 의 새 토큰을 든 채 살아있다.
+        task_a = asyncio.create_task(adapters[0].allocate(request))
+        await a_reached_create.wait()
+
+        # 이제 두 게이트를 동시에 연다: B 의 CAS 확인이 A 의 (아직 안 끝난)
+        # 살아있는 클레임을 보게 하고, A 도 마저 완주하게 한다.
+        b_may_release.set()
+        a_may_create.set()
+
+        first, second = await asyncio.gather(task_a, task_b)
+    finally:
+        DockerShadowManagedAdapter._release_claim = original_release_claim
+        DockerSandboxProvider.create = original_provider_create
+
+    assert first.provider_ref == second.provider_ref
+    assert sum(call[0] == "create" for call in runner.calls) == 1
+    # 훔쳐 지우는 사고가 났다면 컨테이너가 두 개 생겨 여기서
+    # idempotency_metadata_not_unique 가 올라온다.
+    await adapters[0].find_by_idempotency_key(request.idempotency_key)
+
+
+async def test_managed_adapter_error_during_cleanup_does_not_swallow_the_cancellation() -> (
+    None
+):
+    """IMPORTANT 2 (round 2): 취소 정리 중 docker inspect 출력이 깨져도
+    (`ManagedAdapterOwnershipError`, `SandboxError`의 자손이 아님) 원래
+    취소(`CancelledError`)가 다른 예외로 치환되면 안 된다."""
+    adapter, runner = docker_adapter()
+    runner.fail_next("create", asyncio.CancelledError())
+    original_run = runner.run
+    inspect_calls = 0
+
+    async def corrupt_second_claim_inspect(*args, **kwargs):
+        nonlocal inspect_calls
+        if args[:2] == ("volume", "inspect"):
+            inspect_calls += 1
+            # 1번째 inspect = 클레임을 이기는 정상 조회, 2번째 = 취소 정리
+            # 중 `_release_claim`이 하는 조회 -- 그것만 깨뜨린다.
+            if inspect_calls == 2:
+                return DockerCommandResult(0, b"not-json", b"")
+        return await original_run(*args, **kwargs)
+
+    runner.run = corrupt_second_claim_inspect
+
+    with pytest.raises(asyncio.CancelledError):
+        await adapter.allocate(allocation_request())
