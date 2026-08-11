@@ -6,6 +6,7 @@ import asyncio
 import inspect
 from dataclasses import replace
 
+from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
 from .budgeter import Budgeter
@@ -45,6 +46,201 @@ class SystemicWorkerFailure(RuntimeError):
     """Every assigned worker failed for too many consecutive rounds."""
 
 
+_LIMITS_HEADING = "## 한계와 미확인 사항"
+# Harness-owned, like `_LIMITS_HEADING` and CitationRenderer's `## 출처`.
+# `graders/report.py` mirrors this string in its scoring boundaries.
+_QUESTIONS_HEADING = "## 조사한 하위 질문"
+
+# 원장 어휘 -> 독자 문장. 강등 사유는 `node_reduction_degraded` /
+# `report_assembly_degraded` 이벤트의 `reason` 이고, 그 기계 문자열이
+# `NodeSummary.caveats` 를 타고 리포트의 한계 절까지 그대로 흘렀다.
+#
+# 표본 #9 의 배달된 리포트에 `- input_bound` 라는 줄이 **51회** 찍혔고,
+# 판정자가 그것을 반려 사유로 인용했다 -- "다수의 '미확인'·'input_bound'
+# 항목이 남아 실질적 종합이 이루어지지 않았다".
+#
+# 원장 쪽 문자열은 건드리지 않는다. D28 이 정지 사유를 기계가 읽을 수 있게
+# 만들려고 싸운 자리이고, 경계 전후 집계도 그 어휘에 걸려 있다. 바꾸는 것은
+# **독자에게 보여줄 때뿐**이다.
+_DEGRADATION_PROSE = {
+    "input_bound": (
+        "이 하위 질문의 요약은 입력이 한도를 넘어 축약본으로 대체되었습니다."
+    ),
+    "token_budget_exhausted": (
+        "전체 토큰 예산이 소진되어 이 하위 질문을 끝까지 요약하지 못했습니다."
+    ),
+    "tier_floor": (
+        "남은 토큰 예산이 부족해 이 하위 질문을 끝까지 요약하지 못했습니다."
+    ),
+    "empty_assembly": (
+        "본문 조립이 비어 있어 결정론적 템플릿으로 대체되었습니다."
+    ),
+}
+
+
+def _reader_facing_caveats(caveats: list[str]) -> list[str]:
+    """Translate ledger vocabulary and drop repeats, for the limits section.
+
+    Dedup matters as much as the wording: one run degraded 18 nodes for the
+    same reason, so the section repeated a single line 18 times. Order is
+    preserved -- the first occurrence keeps its place.
+    """
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for caveat in caveats:
+        text = _DEGRADATION_PROSE.get(caveat, caveat)
+        if text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
+# How far each rejection code got through `grade_deterministic`, in the order
+# that grader applies its checks. A draft refused later cleared every check
+# before it, so this is a fact about the gate rather than a judgement call.
+# `E_REPORT_AGENTIC` sits highest: it cleared all four deterministic checks
+# and only the LLM judge objected.
+_GATE_DEPTH = {
+    "E_ORPHAN_CITE": 0,
+    "E_REPORT_EMPTY": 1,
+    "E_REPORT_UNCITED": 2,
+    "E_REPORT_MISSING_QUESTION": 3,
+    "E_REPORT_NO_LIMITS": 4,
+    "E_REPORT_AGENTIC": 5,
+}
+
+
+def _best_rejected_draft(rejected: list[tuple[Verdict, str]]) -> str | None:
+    """Pick which refused draft the user actually receives.
+
+    Every attempt was rejected, so this does not change the pass rate --
+    it changes what a failed run hands back. Today the loop keeps whichever
+    draft came last, and sample #5 shows the cost: `94b0483c` produced
+    drafts scoring 0.140 and 0.095 (both under the 0.20 citation cut, both
+    stopped by the agentic judge) and then shipped its third at 0.208. The
+    two better drafts were discarded for no reason other than arrival order.
+
+    Returns the chosen report text, or None when nothing was ever graded
+    (every attempt orphaned before rendering) -- the caller falls back.
+
+    Ranked lexicographically on the gate's own measurements, in this order:
+
+    1. **How far it got** (`_GATE_DEPTH`). The only term that is a recorded
+       fact rather than a comparison: an `E_REPORT_AGENTIC` rejection cleared
+       all four deterministic checks, an `E_REPORT_UNCITED` one died at the
+       second.
+    2. **Uncited ratio**, lower first. The one judgement here. A
+       cap-exhausted report already ships labelled unresolved, so the thing
+       that does real damage in it is an unsupported assertion -- safety
+       over length.
+    3. **Assertion count**, higher first, so that between equally-cited
+       drafts the substantive one wins.
+
+    The obvious trap -- a two-assertion draft with a perfect ratio beating a
+    forty-assertion one -- is mostly unreachable: a draft that scores 0.0 and
+    clears the remaining checks *passes the gate* and returns, so it never
+    arrives here. Anything in this list died to a later check, and term 1
+    sorts that out first. What remains is the narrow case where a short
+    fully-cited draft and a long partly-cited one fail the *same* check;
+    there the short one wins, which is term 2 doing what it says.
+
+    Measured against sample #5's five failing runs: 3 improved, 2 unchanged,
+    0 worse. `94b0483c` swaps a 0.208/UNCITED draft for a 0.095/AGENTIC one;
+    `d8cda7c5` swaps 0.250 over 12 assertions for 0.235 over 17.
+
+    `diagnostics` can be empty (the orphan-marker branch skips grading
+    entirely), so every field is read with a pessimistic default.
+    """
+
+    if not rejected:
+        return None
+
+    def rank(item: tuple[Verdict, str]) -> tuple[int, float, int]:
+        verdict, _report = item
+        diagnostics = verdict.diagnostics
+        return (
+            _GATE_DEPTH.get(verdict.code, 0),
+            -diagnostics.get("uncited_ratio", 1.0),
+            diagnostics.get("uncited_assertions", 0),
+        )
+
+    # `max` keeps the first of equal-ranked items, so a later attempt has to
+    # actually score better to displace an earlier one -- ties do not drift
+    # toward whichever draft happened to come last.
+    return max(rejected, key=rank)[1]
+
+
+def _ensure_limits_section(report: str, caveats: list[str]) -> str:
+    """Guarantee the report's required limits section, from what we already know.
+
+    The prompt asks the model for it (`final_compose.md`, 필수 섹션 3/4), and the
+    model never got that far. Measured across three live samples: 54 of 54
+    assemblies stopped exactly at their output ceiling -- including after
+    W3-d's expansion retry, which fired 18 times and was cut 18 times. The
+    section sits near the end of the template, so truncation kills it first,
+    every time.
+
+    Twice now that has been the only thing standing between a report and the
+    gate: `dd8dc763` #2 (uncited 0.267) and `a38d441a` #2 (uncited 0.191,
+    under the 0.20 threshold) both cleared the citation bar and were rejected
+    with `E_REPORT_NO_LIMITS`.
+
+    `## 출처` never had this problem because CitationRenderer appends it --
+    the harness owns it. The limits section is the same kind of obligation
+    and its content (`caveats`) is already in `_finalize`'s hand, gathered by
+    `_collect_caveats`. Asking a truncated model to dictate back something we
+    already hold is the mistake; structural completeness is the harness's job.
+
+    Nothing is invented: with no caveats the section says so explicitly
+    rather than implying a clean bill of health.
+    """
+    if _LIMITS_HEADING in report:
+        return report
+    body = "\n".join(f"- {item}" for item in caveats) or "- (기록된 미확인 항목 없음)"
+    return f"{report.rstrip()}\n\n{_LIMITS_HEADING}\n{body}\n"
+
+
+def _ensure_question_coverage(
+    report: str, child_summaries: list[NodeSummary]
+) -> str:
+    """Guarantee that every resolved sub-question is named in the report.
+
+    Third harness-owned section, for the same reason as the other two
+    (W3-l). The gate requires each `resolved` child question to appear in
+    the report, and asking the model to reproduce it never worked: a
+    sub-question is an interrogative *plus a sourcing directive*
+    ("...원문에서 ...을 확인하라"), 128-213 characters of it, and the
+    composer reliably copies the question and drops the directive. Sample
+    #8 measured the result -- `E_REPORT_MISSING_QUESTION` became the
+    dominant rejection at 5 of 15 gradings, and `da8e7ba6` lost three
+    reports carrying 27-30 assertions with 0-2 uncited to it.
+
+    Matching on the interrogative alone was the cheap alternative and the
+    measurement rejected it: it resolves 1 of the 3 failing questions.
+
+    Only the questions go in, never the answers -- the body already holds
+    those, and duplicating them would inflate the report and its uncited
+    count. That also makes this section the same *kind* of text as the
+    limits section: a list, not a set of factual assertions, which is why
+    `graders/report.py` excludes both from citation scoring.
+    """
+
+    resolved = [
+        summary
+        for summary in child_summaries
+        if summary.question_status == "resolved" and summary.question_text
+    ]
+    if not resolved or _QUESTIONS_HEADING in report:
+        return report
+    missing = [s for s in resolved if s.question_text not in report]
+    if not missing:
+        return report
+    body = "\n".join(f"- {s.question_text}" for s in missing)
+    return f"{report.rstrip()}\n\n{_QUESTIONS_HEADING}\n{body}\n"
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -64,9 +260,14 @@ class Orchestrator:
         llm_client=None,
         cassette=None,
         global_token_cap: int | None = None,
+        finalization_floor_tokens: int = 0,
+        report_floor_tokens: int = 0,
+        grading_floor_tokens: int = 0,
+        min_viable_output_tokens: int = 1,
         parallel_workers: int | None = None,
         max_depth: int | None = None,
         max_stall_rounds: int | None = None,
+        synthesis_max_tokens: int | None = None,
     ) -> None:
         self.db = session
         self.run_id = run_id
@@ -79,6 +280,7 @@ class Orchestrator:
             self.ledger,
             llm_client=llm_client,
             cassette=cassette,
+            synthesis_max_tokens=synthesis_max_tokens,
         )
         self.citation_renderer = citation_renderer or CitationRenderer(
             self.ledger
@@ -93,6 +295,21 @@ class Orchestrator:
             if global_token_cap is None
             else global_token_cap
         )
+        # Injected, never computed here: integration and golden tests build
+        # this orchestrator with caps as small as 1000, and a floor derived
+        # from global config would leave those runs no investigation budget
+        # at all. service.py computes it from the resolved profile.
+        self.finalization_floor_tokens = finalization_floor_tokens
+        # The inner tier, injected for the same reason as the floor above.
+        # Golden tests build this with caps as small as 1,000; a tier derived
+        # from global config would leave them no reduction budget at all.
+        self.report_floor_tokens = report_floor_tokens
+        self.grading_floor_tokens = grading_floor_tokens
+        # Injected for the same reason as the floor above: a golden test with
+        # a 1,000-token cap would have every reservation refused by the
+        # shipped 2,048 default. Defaults to 1 -- the pre-2026-08-04
+        # behaviour -- so only service.py opts real runs in.
+        self.min_viable_output_tokens = min_viable_output_tokens
         config = settings.config.deep_analysis
         self.parallel_workers = (
             config.parallel_workers if parallel_workers is None else parallel_workers
@@ -118,7 +335,15 @@ class Orchestrator:
         # prevents a shared dependency outage from expanding that tree.
         self._all_failed_rounds = 0
         self._token_budget_exhausted_logged = False
-        self.token_budget = TokenBudget(self.global_token_cap)
+        self._investigation_stopped_at_floor_logged = False
+        self._investigation_stopped_at_input_bound_logged = False
+        self.token_budget = TokenBudget(
+            self.global_token_cap,
+            floor_tokens=self.finalization_floor_tokens,
+            report_floor_tokens=self.report_floor_tokens,
+            grading_floor_tokens=self.grading_floor_tokens,
+            min_viable_output_tokens=self.min_viable_output_tokens,
+        )
         self.budgeter = Budgeter(
             global_token_cap=self.global_token_cap,
             max_depth=self.max_depth,
@@ -154,6 +379,10 @@ class Orchestrator:
             consumed_tokens=consumed,
             outstanding=outstanding,
             persist=self._persist_token_budget,
+            floor_tokens=self.finalization_floor_tokens,
+            report_floor_tokens=self.report_floor_tokens,
+            grading_floor_tokens=self.grading_floor_tokens,
+            min_viable_output_tokens=self.min_viable_output_tokens,
         )
         self.budgeter.token_budget = self.token_budget
 
@@ -173,6 +402,133 @@ class Orchestrator:
         await self._checkpoint()
         await self._emit("token_budget_exhausted", payload)
         self._token_budget_exhausted_logged = True
+
+    async def _mark_investigation_stopped_at_floor(self) -> None:
+        """Record that the investigation loop stopped because only the
+        finalization floor remained -- not because the cap was exhausted.
+
+        Before the floor existed, every run spent the cap to ~97% and
+        `token_budget_exhausted` was the only signal available. Now
+        `should_stop` (budgeter.py) halts earlier, at the floor, so that
+        event stops firing for a reason unrelated to any real improvement --
+        and without a replacement, a run that stopped clean at the floor is
+        indistinguishable from one where investigation simply ran out of
+        open questions. Payload carries counts only, mirroring
+        `token_budget_exhausted` -- never report or response text.
+        """
+        if self._investigation_stopped_at_floor_logged:
+            return
+        has_event = getattr(self.ledger, "has_event", None)
+        if has_event is not None and await has_event(
+            "investigation_stopped_at_floor"
+        ):
+            self._investigation_stopped_at_floor_logged = True
+            return
+        payload = {
+            "cap_tokens": self.token_budget.cap_tokens,
+            "consumed_tokens": self.token_budget.consumed_tokens,
+            "reserved_tokens": self.token_budget.reserved_tokens,
+            "floor_tokens": self.token_budget.floor_tokens,
+            "report_floor_tokens": self.token_budget.report_floor_tokens,
+            "grading_floor_tokens": self.token_budget.grading_floor_tokens,
+        }
+        await self.ledger.log("investigation_stopped_at_floor", None, payload)
+        await self._checkpoint()
+        await self._emit("investigation_stopped_at_floor", payload)
+        self._investigation_stopped_at_floor_logged = True
+
+    async def _mark_investigation_stopped_at_input_bound(
+        self, exc: TokenBudgetExhausted
+    ) -> None:
+        """Record that investigation stopped because a prompt would not fit
+        the headroom left -- not because there was no headroom.
+
+        `TokenBudget.reserve` refuses when `ceiling - input_bound` falls
+        under viability even with `ceiling > 0`. Afterwards the budget looks
+        like a run that simply had questions left, so neither state branch in
+        `_mark_stop_reason` catches it and the stop went unrecorded (G10).
+        Only the refusal carries the fact; this payload is what it carried.
+
+        `floor_tokens` is deliberately absent. This stop did not reach the
+        floor, and quoting floor numbers would read as if it had -- the same
+        mistake, one label covering two facts, that G9 removed. `stage`,
+        `input_bound` and `ceiling` say what failed to fit into what.
+
+        Payload carries counts and identifiers only, mirroring the other two
+        stop events -- never prompt or report text.
+        """
+        if self._investigation_stopped_at_input_bound_logged:
+            return
+        has_event = getattr(self.ledger, "has_event", None)
+        if has_event is not None and await has_event(
+            "investigation_stopped_at_input_bound"
+        ):
+            self._investigation_stopped_at_input_bound_logged = True
+            return
+        payload = {
+            "cap_tokens": self.token_budget.cap_tokens,
+            "consumed_tokens": self.token_budget.consumed_tokens,
+            "reserved_tokens": self.token_budget.reserved_tokens,
+            "stage": exc.stage,
+            "model": exc.model,
+            "input_bound": exc.input_bound,
+            "ceiling": exc.ceiling,
+        }
+        await self.ledger.log(
+            "investigation_stopped_at_input_bound", None, payload
+        )
+        await self._checkpoint()
+        await self._emit("investigation_stopped_at_input_bound", payload)
+        self._investigation_stopped_at_input_bound_logged = True
+
+    async def _mark_stop_reason(
+        self, exc: TokenBudgetExhausted | None = None
+    ) -> None:
+        """Record why investigation stopped, from the budget's state.
+
+        The exception path used to assert "exhausted" on its own, and the
+        normal path made a different decision from the same facts a few
+        lines later -- two judgements of one question, disagreeing. Measured
+        2026-08-04: 4 of 6 recorded stops were labelled `token_budget_
+        exhausted` when the run had actually stopped at the floor with
+        headroom left in the cap.
+
+        `TokenBudget.reserve` raises the same `TokenBudgetExhausted` for
+        every cause, so the exception *type* carries no information about
+        which one happened. The budget's state answers two of the three;
+        for the third only the exception's `cause` does, which is why it is
+        now carried (token_budget.py).
+
+        The floor branch below tests `<` against `min_viable_output_tokens`
+        rather than `<= 0`, mirroring `Budgeter.should_stop`'s own viability
+        threshold -- `<= 0` would leave the ordinary floor stop unrecorded,
+        since the loop already halts once headroom drops below viability,
+        not once it reaches zero.
+
+        Order matters. The two state branches come first so G9's judgement
+        is untouched: when the budget really is spent, the last refusal
+        happening to carry a large prompt is not the reason the run stopped.
+        The third branch only fills the silence -- a refusal raised while
+        `available_for_investigation` still cleared viability, which used to
+        satisfy no branch at all (G10).
+
+        There is still deliberately no branch for a run that stopped because
+        no open question cleared `score_floor`: it has no budget event to
+        record, and inventing one would put the ledger back to guessing.
+
+        All three `_mark_*` helpers are idempotent (in-memory flag plus a
+        `has_event` lookup), so calling this from both paths cannot
+        double-log.
+        """
+        if self.token_budget.exhausted:
+            await self._mark_token_budget_exhausted()
+        elif (
+            self.token_budget.available_for_investigation
+            < self.token_budget.min_viable_output_tokens
+        ):
+            await self._mark_investigation_stopped_at_floor()
+        elif exc is not None and exc.cause == "input_bound":
+            await self._mark_investigation_stopped_at_input_bound(exc)
 
     async def _grade(self, claim, value_est):
         """Two-stage grading: deterministic tier first; only claims that pass
@@ -271,6 +627,12 @@ class Orchestrator:
 
     async def _decompose(self, root_text: str) -> list[dict]:
         config = settings.config.deep_analysis
+        dig_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="powerful",
+            feature_override=config.models.dig,
+        ).model
         prompt = render(
             "decompose",
             question_text=root_text,
@@ -278,7 +640,7 @@ class Orchestrator:
             dead_ends="(없음)",
         )
         data, _response = await call_json(
-            config.models.dig,
+            dig_model,
             prompt,
             max_tokens=config.decompose_max_tokens,
             client=self.llm_client,
@@ -289,6 +651,12 @@ class Orchestrator:
 
     async def _default_split_decompose(self, text, verified_summaries, dead_ends):
         config = settings.config.deep_analysis
+        dig_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="powerful",
+            feature_override=config.models.dig,
+        ).model
         prompt = render(
             "decompose",
             question_text=text,
@@ -296,7 +664,7 @@ class Orchestrator:
             dead_ends="\n".join(dead_ends) if dead_ends else "(없음)",
         )
         data, _response = await call_json(
-            config.models.dig,
+            dig_model,
             prompt,
             max_tokens=config.decompose_max_tokens,
             client=self.llm_client,
@@ -641,6 +1009,39 @@ class Orchestrator:
                 assignment.question_id
             )
             await self.ledger.commit_blobs(result.blobs)
+            # P2: the worker has no ledger, so it flags the skip on its result
+            # and the single writer records it here -- the same shape the
+            # discarded-claim loop below already uses.
+            if result.entailment_skipped:
+                await self.ledger.log(
+                    "entailment_filter_skipped",
+                    result.question_id,
+                    {
+                        "claim_count": len(result.claims),
+                        "reason": "entailment_unavailable",
+                    },
+                )
+            # Recall measurement: entailment drops claims before grading, so
+            # they never reach the claims table. Record them here — blobs are
+            # already committed above, so phase 2 can re-grade offline.
+            for discarded in result.discarded_claims:
+                await self.ledger.log(
+                    "claim_discarded",
+                    result.question_id,
+                    {
+                        "text": discarded.text,
+                        "confidence": discarded.confidence,
+                        "value_est": value_est,
+                        "evidence": [
+                            {
+                                "source_url": evidence.source_url,
+                                "excerpt": evidence.excerpt,
+                                "raw_ref": evidence.raw_ref,
+                            }
+                            for evidence in discarded.evidence
+                        ],
+                    },
+                )
             # verdicts는 claim 텍스트로 키잉한다. 이는 Ledger의 hash 기반
             # 병합(§6.1.3, D3)과 정합적이다 — 동일 텍스트 클레임은 커밋 시
             # 하나의 claim으로 병합되므로 텍스트당 verdict 하나가 맞다.
@@ -716,7 +1117,21 @@ class Orchestrator:
                 continue
             summary = summaries.get(child.id)
             if summary is not None:
-                out.append(summary)
+                # Carry the question's own wording into assembly (W3-i). The
+                # report gate requires every *resolved* child question to be
+                # mentioned, but the composer's input was
+                # `- [{question_id}] {answer}` -- it had never seen the
+                # question text it was being asked to reproduce, so the check
+                # could not be satisfied. Sample #5's `6e65093e` failed it
+                # 3/3 with an uncited ratio of 0.063, the best-cited run in
+                # the sample after the one that passed.
+                out.append(
+                    replace(
+                        summary,
+                        question_text=getattr(child, "text", "") or "",
+                        question_status=getattr(child, "status", "") or "",
+                    )
+                )
         return out
 
     async def _collect_caveats(
@@ -740,7 +1155,7 @@ class Orchestrator:
                     caveats.append(f"미조사: {question.text}")
         for summary in summaries.values():
             caveats.extend(summary.caveats)
-        return caveats
+        return _reader_facing_caveats(caveats)
 
     async def _finalize(self, root_id: str) -> str:
         """Reduce the tree, resolve conflicts (with at most one bounded
@@ -778,8 +1193,23 @@ class Orchestrator:
                 {"qids": reinvestigate},
             )
             await self.ledger.reopen_for_reinvestigation(target)
-            await self._run_round()
-            summaries, reinvestigate = await self._reduce_and_resolve(root_id)
+            # This round runs real workers, so it can exhaust the budget --
+            # and unlike the main investigation loop (`run`, which catches
+            # exactly this) nothing here did. The exception escaped
+            # `_finalize` to `run`'s generic handler, which fails the run:
+            # `8817a935` in sample #8 died as
+            # `job_failed(deep-analysis token budget exhausted)` with no
+            # report at all, the first budget-caused hard failure among the
+            # ledger's 15 job failures. §6.8 forbids the empty-handed exit;
+            # a run that spent its budget still has summaries to assemble
+            # from, and reinvestigation is an *optional* extra round.
+            try:
+                await self._run_round()
+                summaries, reinvestigate = await self._reduce_and_resolve(
+                    root_id
+                )
+            except TokenBudgetExhausted as exc:
+                await self._mark_stop_reason(exc)
 
         root_summary = summaries.get(root_id)
         if root_summary is None:
@@ -796,14 +1226,67 @@ class Orchestrator:
 
         cap = config.report_retry_cap
         last: str | None = None
+        # The last draft that survived citation rendering. `last` is the raw
+        # assembly output and still carries `[C:xxxxxxxx]` markers, which are
+        # internal claim addresses -- not citations a reader can follow.
+        last_rendered: str | None = None
+        # What the previous attempt was rejected for (W3-h). Empty on the
+        # first pass. Without this the loop re-rolled the identical prompt:
+        # `assemble` got the same three arguments every time, so the three
+        # attempts were three independent samples rather than a correction.
+        # Sample #5 shows the consequence -- 18 gradings, and the uncited
+        # ratios wander instead of falling (`4098117c` .357 -> .500 -> .267,
+        # `d8cda7c5` .316 -> .235 -> .250). Two of `94b0483c`'s drafts had
+        # already cleared the citation cut and the third undid it.
+        revision_hints: list[str] = []
+        # Every rendered draft the gate refused, with the verdict that
+        # refused it. Feeds `_best_rejected_draft` once the cap is spent.
+        rejected: list[tuple[Verdict, str]] = []
         for attempt in range(cap + 1):
             draft = await self.synthesizer.assemble(
-                root_summary, child_summaries, caveats
+                root_summary,
+                child_summaries,
+                caveats,
+                revision_hints=revision_hints,
             )
             last = draft
+            # The limits section joins the draft *before* rendering, so its
+            # markers are resolved by the same pass as the body's (W3-k).
+            #
+            # It used to be appended to the already-rendered report, which
+            # meant CitationRenderer never saw it. `node_summary.md` tells
+            # the model to mark every factual assertion, and the model
+            # obliges in its `caveats` too -- 3 of sample #7's 30 node
+            # summaries did. Those raw `[C:xxxxxxxx]` markers rode straight
+            # into the final text, where `grade_deterministic`'s check (a)
+            # rejected the whole report for carrying them.
+            #
+            # It only fired when the harness actually appended the section:
+            # a degraded assembly emits the heading itself, `_ensure_limits_
+            # section` then skips, and the run survived. That is exactly the
+            # observed shape -- `03dd8ddd` and `ba84c409` orphaned on
+            # attempts 0 and 1 and not on the degraded attempt 2.
+            #
+            # Safe against the obvious worry: a caveat may only cite claims
+            # the renderer can resolve, and all 12 caveat-referenced claims
+            # across samples #6 and #7 were `verified`. One that is not still
+            # raises here, which is the correct answer rather than shipping
+            # an unresolvable marker.
+            draft = _ensure_limits_section(draft, caveats)
+            # Same pre-render placement, same reason (D44): anything the
+            # harness appends after rendering carries its markers raw.
+            draft = _ensure_question_coverage(draft, child_summaries)
             try:
                 report = await self.citation_renderer.render(draft)
-            except OrphanCitationError:
+            except OrphanCitationError as exc:
+                # The offending claim id, or the ledger cannot say what went
+                # wrong. Sample #6 produced the first three E_ORPHAN_CITE
+                # rejections in the ledger's history, all in one run
+                # (`36903adc`), and the cause was not recoverable after the
+                # fact: replaying the cassette showed that run's drafts cited
+                # only its own *verified* claims, so the recorded event ruled
+                # nothing in or out. `CitationRenderer` raises with the claim
+                # id already in hand -- it just was not being written down.
                 await self.ledger.log(
                     "report_graded",
                     root_id,
@@ -811,31 +1294,73 @@ class Orchestrator:
                         "ok": False,
                         "code": OrphanCitationError.code,
                         "attempt": attempt,
+                        "orphan_claim_id": exc.claim_id,
                     },
                 )
+                # This branch skips grading, so without its own hint the
+                # next attempt would inherit whatever the *previous*
+                # rejection said -- or nothing at all on attempt 0.
+                revision_hints = [
+                    "인용 마커가 입력에 없는 claim id 를 가리켰다. 입력의 "
+                    "[C:claimid] 목록에 있는 id 만 사용하라."
+                ]
                 continue  # AC-c: orphan citation → re-assemble
+            # Still guaranteed after rendering, for the case the renderer
+            # itself is a stand-in that returns text without the section.
+            # Idempotent: the pre-render call above normally satisfies it.
+            report = _ensure_limits_section(report, caveats)
+            report = _ensure_question_coverage(report, child_summaries)
+            last_rendered = report
             verdict = (
                 await self.report_grader.grade(report, root_id)
                 if self.report_grader is not None
                 else Verdict(ok=True)
             )
+            # The gate's own measurements ride along so the threshold can be
+            # evaluated after the fact. Spread rather than nested: an event
+            # consumer aggregating these should not have to know they were
+            # once a sub-object. Empty when the grader measured nothing, and
+            # then nothing is added.
             if verdict.ok:
                 await self.ledger.log(
                     "report_graded",
                     root_id,
-                    {"ok": True, "attempt": attempt},
+                    {"ok": True, "attempt": attempt, **verdict.diagnostics},
                 )
                 await self.ledger.complete_run()
                 return report
             await self.ledger.log(
                 "report_graded",
                 root_id,
-                {"ok": False, "code": verdict.code, "attempt": attempt},
+                {
+                    "ok": False,
+                    "code": verdict.code,
+                    "attempt": attempt,
+                    **verdict.diagnostics,
+                },
             )
+            # Only the verdict's diagnostics reach the ledger above; the
+            # hints carry the rejected draft's own sentences and stay in
+            # process, feeding the next iteration's prompt.
+            revision_hints = verdict.revision_hints
+            rejected.append((verdict, report))
 
         # Cap exhausted — no empty-handed exit (§6.8): attach a failure
-        # appendix to the last draft (best-effort raw text).
-        report = (last or "") + (
+        # appendix to the last draft that rendered.
+        #
+        # This used to ship `last`, the raw assembly output. Every run of the
+        # 2026-08-07 live sample left by this path (the gate rejected 18 of 18
+        # attempts), so every report handed to a user carried raw
+        # `[C:da8b7072]` markers and no `## 출처` list -- an internal claim
+        # address where a citation belonged. The rendered text is also the
+        # exact text the grader judged, so the `uncited_ratio` recorded in the
+        # ledger now describes what was actually delivered.
+        #
+        # `last` remains the fallback for the case where every attempt
+        # orphaned: there is no rendered text then, and a raw draft still
+        # beats exiting empty-handed.
+        chosen = _best_rejected_draft(rejected)
+        report = (chosen or last_rendered or last or "") + (
             "\n\n## 부록: 미해결 사유\n조립/채점 재시도 캡 소진."
         )
         await self.ledger.complete_run()
@@ -856,15 +1381,14 @@ class Orchestrator:
                     while not await self.budgeter.should_stop(self.ledger):
                         if not await self._run_round():
                             break
-                except TokenBudgetExhausted:
-                    await self._mark_token_budget_exhausted()
+                except TokenBudgetExhausted as exc:
+                    await self._mark_stop_reason(exc)
                     root = await self.ledger.root_question()
                     if root is None:
                         raise
                     root_id = root.id
 
-                if self.token_budget.exhausted:
-                    await self._mark_token_budget_exhausted()
+                await self._mark_stop_reason()
 
                 report = await self._finalize(root_id)
                 await self._checkpoint()

@@ -146,8 +146,24 @@ impl Config {
 
         // 환경변수로 설정 오버라이드
         config.apply_env_overrides();
+        config.validate()?;
 
         Ok(config)
+    }
+
+    /// 기동 전 필수 시크릿 검증
+    ///
+    /// config.toml은 시크릿 기본값을 담지 않으므로, 값이 비어 있으면
+    /// 환경변수가 주입되지 않은 것이다. 빈 JWT 키로 기동하면 빈 키로 서명된
+    /// 토큰이 통과하므로 조용히 넘어가지 않고 즉시 실패한다.
+    pub fn validate(&self) -> Result<()> {
+        if self.jwt.secret_key.trim().is_empty() {
+            anyhow::bail!(
+                "jwt.secret_key is empty: set the JWT_SECRET_KEY environment variable"
+            );
+        }
+
+        Ok(())
     }
 
     /// 환경변수로 설정 오버라이드
@@ -246,6 +262,92 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 검증 테스트용 최소 설정. secret_key만 바꿔가며 쓴다.
+    fn config_toml(secret_key: &str) -> String {
+        format!(
+            r#"
+[server]
+listen_addr = "0.0.0.0"
+listen_port = 8080
+threads = 0
+work_stealing = true
+
+[upstream]
+host = "127.0.0.1"
+port = 8518
+health_check_interval_secs = 10
+connect_timeout_secs = 5
+read_timeout_secs = 60
+write_timeout_secs = 60
+pool_size = 100
+
+[jwt]
+secret_key = "{secret_key}"
+algorithm = "HS256"
+validate_exp = true
+leeway_secs = 60
+
+[api_key]
+prefix = "neos_"
+bcrypt_cost = 12
+
+[database]
+host = "localhost"
+port = 5432
+database = "neos"
+username = "postgres"
+password = ""
+pool_size = 10
+ssl_mode = "prefer"
+
+[auth]
+public_paths = []
+user_id_header = "X-User-ID"
+authorization_header = "Authorization"
+api_key_header = "X-API-Key"
+
+[rate_limit]
+enabled = false
+default_rpm = 100
+burst_size = 20
+
+[logging]
+level = "info"
+format = "pretty"
+log_requests = true
+log_responses = false
+
+[cors]
+enabled = true
+allowed_origins = []
+allowed_methods = []
+allowed_headers = []
+max_age_secs = 86400
+"#
+        )
+    }
+
+    #[test]
+    fn validate_rejects_an_empty_jwt_secret() {
+        let config: Config = toml::from_str(&config_toml("")).unwrap();
+
+        let err = config
+            .validate()
+            .expect_err("empty JWT secret must not be accepted");
+
+        assert!(
+            err.to_string().contains("JWT_SECRET_KEY"),
+            "error should name the env var to set, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_a_configured_jwt_secret() {
+        let config: Config = toml::from_str(&config_toml("set-from-environment")).unwrap();
+
+        assert!(config.validate().is_ok());
+    }
 
     #[test]
     fn test_parse_database_url() {

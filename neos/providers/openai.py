@@ -8,6 +8,7 @@ from typing import Any, List
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models import BaseLanguageModel
 
+from neos.config.model_config import models_for_provider
 from neos.config.settings import settings
 from .base import ModelProviderBase
 
@@ -23,12 +24,7 @@ class OpenAIProvider(ModelProviderBase):
         return "openai"
 
     def list_models(self) -> List[str]:
-        return [
-            "gpt-5-mini-2025-08-07",
-            "gpt-5-2025-08-07",
-            "o3-mini",
-            "o3",
-        ]
+        return models_for_provider("openai")
 
     def validate_config(self) -> bool:
         return bool(settings.OPENAI_API_KEY)

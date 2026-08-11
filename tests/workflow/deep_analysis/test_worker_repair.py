@@ -188,7 +188,10 @@ async def test_mixed_or_other_code_repairs_go_through_normal_path_and_parse():
         repairs=repairs,
     )
 
-    assert len(search.calls) == 1
+    # 기저 질의 + 1차 출처 증강 질의. 대비되는 것은 약화 전용 경로로,
+    # 거기서는 `search.calls == []` 다(위 두 테스트). fetch 는 두 질의가
+    # 같은 URL 을 주므로 병합 후 1건 그대로다.
+    assert len(search.calls) == 2
     assert len(fetch.calls) == 1
     assert result.status == "completed"
     assert len(result.claims) == 1
@@ -217,7 +220,7 @@ async def test_investigate_without_repairs_is_unchanged():
         "question",
     )
 
-    assert len(search.calls) == 1
+    assert len(search.calls) == 2  # 기저 + 증강
     assert len(fetch.calls) == 1
     assert result.status == "completed"
     # repairs still parsed from data["repairs"] even without pending

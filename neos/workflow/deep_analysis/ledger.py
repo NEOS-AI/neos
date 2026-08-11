@@ -52,6 +52,64 @@ def _safe_clamp_counts(raw: object) -> dict[str, int]:
     }
 
 
+# 강등으로 세는 이벤트 kind. 조회를 좁히는 용도이며, 실제 판정은
+# `_degradation_kind()` 가 payload 까지 보고 내린다.
+_DEGRADATION_KINDS = (
+    "report_assembly_degraded",
+    "node_reduction_degraded",
+    "finalization_prompt_clamped",
+    "report_graded",
+)
+
+
+def _payload_dict(raw: object) -> dict[str, Any]:
+    """`DAEvent.payload` 를 dict 로 읽는다 -- 어떤 모양으로 와도 던지지 않는다.
+
+    컬럼은 Text 라 보통 str 로 오지만 드라이버·테스트에 따라 dict 로도 온다.
+    `report_markdown()` 과 같은 방어적 읽기다.
+    """
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _degradation_kind(kind: str, payload: dict[str, Any]) -> str | None:
+    """이 이벤트가 리포트를 깎았는가 -- 깎았다면 어떤 이름으로 셀 것인가.
+
+    ⚠️ 🟡 **알려진 중복.** 같은 규칙이 프론트엔드에도 있다:
+    `web/lib/deep-analysis/progress.ts` 의 `degradationKind()`.
+    이쪽은 새로고침 후 복원을, 저쪽은 라이브 스트림을 담당한다. 어휘를 바꿀
+    때 **반드시 양쪽을 함께** 고칠 것. 정본 fixture 목록은
+    `tests/workflow/deep_analysis/test_ledger_degradations.py` 의
+    `CANONICAL_FIXTURE` 와 `web/tests/source/deep-analysis-degradation.test.ts`
+    의 `CANONICAL_FIXTURE` 에 같은 내용으로 들어 있다.
+    통합 검토는 로드맵 §7 FE6.
+
+    조사 범위나 검증 강도를 깎은 것(`investigation_stopped_at_floor`,
+    `claim_discarded` 등)은 여기 들지 않는다 -- 리포트 자체는 주어진 재료로
+    낼 수 있는 최선이기 때문이다(D26).
+
+    `report_graded` 는 kind 가 아니라 **payload 가** 강등을 결정하는 유일한
+    경우다. 굶은/잘린/해석 실패 판정자는 전부 `ok=True` 로 재조립 루프를
+    끝내므로(`graders/report.py`) `judge` 키가 달린 이벤트는 run 당 최대 1건이고
+    항상 최종 판정이다 -- 중간 시도가 오탐으로 잡히지 않는다.
+    """
+    if kind in ("report_assembly_degraded", "node_reduction_degraded"):
+        return kind
+    if kind == "finalization_prompt_clamped":
+        return kind if payload.get("exhausted") is True else None
+    if kind == "report_graded":
+        judge = payload.get("judge")
+        if isinstance(judge, str) and judge:
+            return f"judge_unreviewed:{judge}"
+        return None
+    return None
+
+
 def _hex_id() -> str:
     return uuid.uuid4().hex[:8]
 
@@ -790,6 +848,13 @@ class Ledger:
                 "tokens": result.tokens_spent,
                 "confidence_clamped_count": sum(clamp_counts.values()),
                 "confidence_clamped_by_source_count": clamp_counts,
+                **{
+                    f"search_{key}": value
+                    for key, value in sorted(
+                        result.search_augmentation.items()
+                    )
+                    if isinstance(value, int)
+                },
             },
         )
         await self.db.flush()
@@ -887,6 +952,72 @@ class Ledger:
             )
         )
         return int(value or 0)
+
+    async def report_markdown(self) -> str | None:
+        """This run's final report body, or ``None`` if there isn't one yet.
+
+        Read from the `job_completed` event payload -- NOT from the
+        `deep_analysis_runs.report_path` column, which is always NULL. The
+        body has been persisted since the job service landed: `jobs.py`
+        puts it in that payload so a late subscriber replaying the event
+        stream receives the report without a second request (AC6). The
+        column is a missing pointer, not a missing body.
+
+        Returns ``None`` for a run that failed or has not finished, and for
+        a payload that carries no `report_markdown` key -- callers get one
+        answer for "no report", not an exception to distinguish.
+        """
+        raw = await self.db.scalar(
+            select(DAEvent.payload)
+            .where(
+                DAEvent.run_id == self.run_id,
+                DAEvent.kind == "job_completed",
+            )
+            .order_by(DAEvent.seq.desc())
+            .limit(1)
+        )
+        if raw is None:
+            return None
+        try:
+            payload = raw if isinstance(raw, dict) else json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        body = payload.get("report_markdown")
+        return body if isinstance(body, str) else None
+
+    async def degradations(self) -> list[dict[str, Any]]:
+        """이 run 이 리포트 품질을 깎은 사건들 -- kind 별 합산, 최초 발생 순서 보존.
+
+        새로고침 후 챗 UI 가 강등을 다시 그릴 수 있는 **유일한 출처**다. 라이브
+        스트림은 프론트가 이벤트를 직접 접어 만들지만(`progress.ts`), 종결된 run 은
+        다시 구독하지 않으므로 그 상태가 남지 않는다. `jobs.execute_run` 이 이
+        값을 어시스턴트 메시지 메타데이터로 넘긴다.
+
+        판정 규칙과 그 중복에 대해서는 `_degradation_kind()` 주석을 볼 것.
+
+        3회와 1회는 다른 이야기이므로 집합이 아니라 카운트로 돌려준다(D26).
+        """
+        rows = (
+            await self.db.execute(
+                select(DAEvent.kind, DAEvent.payload)
+                .where(
+                    DAEvent.run_id == self.run_id,
+                    DAEvent.kind.in_(_DEGRADATION_KINDS),
+                )
+                .order_by(DAEvent.seq)
+            )
+        ).all()
+
+        # dict 는 삽입 순서를 보존한다 -- 최초 발생 순서가 그대로 결과 순서다.
+        counts: dict[str, int] = {}
+        for kind, raw in rows:
+            resolved = _degradation_kind(kind, _payload_dict(raw))
+            if resolved is None:
+                continue
+            counts[resolved] = counts.get(resolved, 0) + 1
+        return [{"kind": kind, "count": count} for kind, count in counts.items()]
 
     async def complete_run(self, report_path: str | None = None) -> None:
         run = await self.db.get(DARun, self.run_id)

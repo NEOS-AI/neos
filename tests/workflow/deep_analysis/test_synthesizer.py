@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from neos.config.settings import settings
 from neos.workflow.deep_analysis.llm import LLMResponse
 from neos.workflow.deep_analysis.synthesizer import Synthesizer
 from neos.workflow.deep_analysis.models import NodeSummary
@@ -67,9 +68,11 @@ class FakeLedger:
 class FakeLLMCall:
     def __init__(self):
         self.prompt = ""
+        self.models = []
 
     async def __call__(self, model, prompt, **kwargs):
         self.prompt = prompt
+        self.models.append(model)
         return LLMResponse(
             text=(
                 "## 요약\nVerified fact [C:c1a1c1a1]\n\n"
@@ -80,6 +83,29 @@ class FakeLLMCall:
             output_tokens=10,
             model=model,
         )
+
+
+@pytest.mark.parametrize(
+    ("feature_model", "expected_model"),
+    [
+        (None, "claude-opus-5"),
+        ("claude-synth-manual", "claude-synth-manual"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_synthesizer_resolves_model_at_provider_boundary(
+    monkeypatch, feature_model, expected_model
+) -> None:
+    monkeypatch.setattr(
+        settings.config.deep_analysis.models,
+        "synth",
+        feature_model,
+    )
+    llm_call = FakeLLMCall()
+
+    await Synthesizer(FakeLedger(), llm_call=llm_call).reduce("root0001")
+
+    assert llm_call.models == [expected_model]
 
 
 @pytest.mark.asyncio
@@ -126,6 +152,118 @@ async def _exhausted(*args, **kwargs):
     raise TokenBudgetExhausted("cap")
 
 
+async def _refused_for_input_bound(*args, **kwargs):
+    raise TokenBudgetExhausted(cause="input_bound", stage="node_reduction")
+
+
+@pytest.mark.asyncio
+async def test_an_empty_assembly_degrades_instead_of_passing_as_success():
+    """빈 조립이 `synth_pass` 로 기록되던 것을 고친다.
+
+    2026-08-08 표본 #2 의 `a82648e3` 은 리포트 본문이 **빈 문자열**이었는데도
+    `synth_pass` 를 3건 남겼다. `assemble` 이 호출 성공 직후 무조건 로그하고
+    `response.text` 를 그대로 반환했기 때문이다. 그래서 §2.2 S1("LLM 이 조립한
+    리포트가 실제로 나온다")의 집계가 부풀려졌다 -- 나온 적 없는 리포트가
+    성공으로 세어졌다.
+
+    `report_assembly_degraded` 를 쓰는 것은 의도다: 이미 `_DEGRADATION_KINDS`
+    (ledger.py) 와 `degradationKind()`(progress.ts) 양쪽에 등록된 kind 라
+    새 어휘 없이 **사용자 화면까지 그대로 도달**한다(FE6 이중 구현 무관).
+    """
+    ledger = FakeLedger()
+
+    async def _blank(*args, **kwargs):
+        return LLMResponse(
+            text="   \n", input_tokens=10, output_tokens=0, model="m"
+        )
+
+    synth = Synthesizer(ledger, llm_call=_blank)
+    root = NodeSummary("root0001", "verified root answer", [], 0.8, [])
+
+    report = await synth.assemble(root, [], [])
+
+    kinds = [k for (k, _q, _p) in ledger.events]
+    assert "synth_pass" not in kinds
+    degraded = [
+        p for (k, _q, p) in ledger.events if k == "report_assembly_degraded"
+    ]
+    assert degraded == [{"reason": "empty_assembly"}]
+    # 빈손으로 나가지 않는다(§6.8) -- 결정론 템플릿이 대신 나간다.
+    assert "## 요약" in report
+
+
+@pytest.mark.asyncio
+async def test_a_degraded_leaf_keeps_its_verified_claims_and_their_markers():
+    """W3-b: 강등된 **잎** 노드가 검증 클레임을 통째로 버리고 있었다.
+
+    `_degraded_summary` 는 자식 답변을 이어붙이는데 잎에는 자식이 없다 --
+    그래서 답변이 빈 문자열이 됐고, 그 잎의 verified claim 은 `[C:...]` 마커가
+    붙은 산문이 되지 못한 채 사라졌다. 2026-08-07 표본에서 리덕션의 67~79% 가
+    이렇게 강등된 5개 run 은 최종 리포트에 마커를 0~8개밖에 싣지 못했고,
+    18% 만 강등된 run 하나만 60개를 실었다. 인용할 것이 없으니 게이트는
+    18회 전부 반려했다.
+    """
+    ledger = FakeLedger()
+    synth = Synthesizer(ledger, json_call=_exhausted)
+
+    summary = await synth.reduce_node(ledger.child, [])
+
+    assert "[C:c1a1c1a1]" in summary.answer
+    assert "Verified fact" in summary.answer
+    # 프롬프트 비계(evidence 원문·신뢰도)는 사용자 산문에 실리지 않는다.
+    assert "<evidence>" not in summary.answer
+    assert "verbatim excerpt" not in summary.answer
+    assert summary.key_claim_ids == ["c1a1c1a1"]
+
+
+@pytest.mark.asyncio
+async def test_a_degraded_summary_names_the_refusal_it_actually_hit():
+    ledger = FakeLedger()
+    synth = Synthesizer(ledger, json_call=_refused_for_input_bound)
+    child = NodeSummary("child001", "verified child answer", [], 0.8, [])
+
+    summary = await synth.reduce_node(ledger.root, [child])
+
+    assert summary.caveats == ["input_bound"]
+    degraded = [e for e in ledger.events if e[0] == "node_reduction_degraded"]
+    assert len(degraded) == 1
+    assert degraded[0][2]["reason"] == "input_bound"
+
+
+@pytest.mark.asyncio
+async def test_a_degraded_assembly_names_the_refusal_it_actually_hit():
+    ledger = FakeLedger()
+    synth = Synthesizer(ledger, llm_call=_refused_for_input_bound)
+    root = NodeSummary("root0001", "verified root answer", [], 0.8, [])
+
+    await synth.assemble(root, [], [])
+
+    degraded = [
+        e for e in ledger.events if e[0] == "report_assembly_degraded"
+    ]
+    assert len(degraded) == 1
+    assert degraded[0][2] == {"reason": "input_bound"}
+
+
+@pytest.mark.asyncio
+async def test_a_spent_tier_keeps_the_word_the_ledger_already_uses():
+    """의도적 결정: `tier_floor` 는 옛 문자열을 그대로 낸다.
+
+    이미 쌓인 강등 이벤트가 그 어휘를 쓰고 있어 경계 전후 집계가 이어져야
+    한다. 새 어휘는 새로 구별된 경우에만 붙는다.
+    """
+    ledger = FakeLedger()
+    synth = Synthesizer(ledger, llm_call=_exhausted)
+    root = NodeSummary("root0001", "verified root answer", [], 0.8, [])
+
+    await synth.assemble(root, [], [])
+
+    degraded = [
+        e for e in ledger.events if e[0] == "report_assembly_degraded"
+    ]
+    assert degraded[0][2] == {"reason": "token_budget_exhausted"}
+
+
 @pytest.mark.asyncio
 async def test_reduce_node_uses_child_summary_when_budget_exhausts():
     ledger = FakeLedger()
@@ -150,3 +288,130 @@ async def test_assemble_renders_required_sections_when_budget_exhausts():
     assert "## 한계와 미확인 사항" in report
     assert "## 출처" in report
     assert "전체 심층분석 토큰 상한" in report
+
+
+@pytest.mark.asyncio
+async def test_the_composer_is_told_which_question_each_answer_answers():
+    """W3-i: 조립 프롬프트에 질문 텍스트가 들어간 적이 없었다.
+
+    자식 블록은 `- [{question_id}] {answer}` 였다 -- 작성자는 어떤 답이
+    무엇에 대한 답인지 알 수 없었고, 게이트의 "resolved 자식 질문은 모두
+    언급돼야 한다" 검사는 작성자가 본 적 없는 문자열을 요구했다. 표본 #5 의
+    `6e65093e` 가 인용 비율 0.063 으로도 3/3 반려된 이유다.
+    """
+    seen = []
+
+    async def _capture(model, prompt, **kwargs):
+        seen.append(prompt)
+        return LLMResponse(
+            text="## 요약\n답\n\n## 출처",
+            input_tokens=1,
+            output_tokens=1,
+            model=model,
+        )
+
+    synth = Synthesizer(FakeLedger(), llm_call=_capture)
+    child = NodeSummary(
+        "child001",
+        "적용일은 2025-08-02 이다 [C:aaaaaaaa]",
+        [],
+        0.8,
+        [],
+        question_text="GPAI 의무의 적용 개시일은 언제인가?",
+    )
+
+    await synth.assemble(
+        NodeSummary("root0001", "루트 답", [], 0.8, []), [child], []
+    )
+
+    assert "GPAI 의무의 적용 개시일은 언제인가?" in seen[0]
+    assert "적용일은 2025-08-02 이다 [C:aaaaaaaa]" in seen[0]
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_uses_the_injected_ceiling():
+    """dev는 cap을 15배 줄이면서 합성 상한은 물려받았다.
+
+    상한을 주입받지 못하면 20000 예산에 4000짜리 호출을 세 번 넣게 된다.
+    """
+    seen = []
+
+    async def recording_llm_call(model, prompt, **kw):
+        seen.append(kw["max_tokens"])
+        return LLMResponse(
+            text="보고서", input_tokens=1, output_tokens=1, model=model
+        )
+
+    synth = Synthesizer(
+        FakeLedger(),
+        llm_call=recording_llm_call,
+        synthesis_max_tokens=1200,
+    )
+
+    await synth.assemble(None, [], [])
+
+    assert seen == [1200]
+
+
+@pytest.mark.asyncio
+async def test_synthesizer_falls_back_to_the_global_ceiling():
+    seen = []
+
+    async def recording_llm_call(model, prompt, **kw):
+        seen.append(kw["max_tokens"])
+        return LLMResponse(
+            text="보고서", input_tokens=1, output_tokens=1, model=model
+        )
+
+    synth = Synthesizer(FakeLedger(), llm_call=recording_llm_call)
+
+    await synth.assemble(None, [], [])
+
+    assert seen == [settings.config.deep_analysis.synthesis_max_tokens]
+
+
+@pytest.mark.asyncio
+async def test_reduce_uses_the_injected_ceiling():
+    """§7: 세 호출부(assemble/reduce/reduce_node) 모두 주입된 상한을 써야 한다.
+
+    `assemble`만 검증되어 있었다 -- `reduce`가 여전히 전역 설정을 직접 읽는
+    회귀는 dev 프로파일에서 20000 예산에 4000짜리 호출을 넣는 바로 그 결함을
+    되살린다.
+    """
+    seen = []
+
+    async def recording_llm_call(model, prompt, **kw):
+        seen.append(kw["max_tokens"])
+        return LLMResponse(
+            text="보고서", input_tokens=1, output_tokens=1, model=model
+        )
+
+    synth = Synthesizer(
+        FakeLedger(),
+        llm_call=recording_llm_call,
+        synthesis_max_tokens=1200,
+    )
+
+    await synth.reduce("root0001")
+
+    assert seen == [1200]
+
+
+@pytest.mark.asyncio
+async def test_template_fallback_is_recorded():
+    """예산 고갈로 템플릿으로 떨어지는 것이 성공처럼 보이면 안 된다.
+
+    이 침묵 때문에 synth_pass=0을 알아채는 데 세션 하나가 걸렸다.
+    """
+
+    async def exhausted_llm_call(model, prompt, **kw):
+        raise TokenBudgetExhausted("cap")
+
+    ledger = FakeLedger()
+    synth = Synthesizer(ledger, llm_call=exhausted_llm_call)
+
+    report = await synth.assemble(None, [], [])
+
+    assert report  # 빈손 종료는 없다 (§6.8)
+    kinds = [kind for (kind, _qid, _payload) in ledger.events]
+    assert "report_assembly_degraded" in kinds

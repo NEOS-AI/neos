@@ -244,3 +244,76 @@ def test_task_is_exported_from_the_tasks_package():
 
     assert tasks.run_deep_analysis_job is task_module.run_deep_analysis_job
     assert "run_deep_analysis_job" in tasks.__all__
+
+
+@pytest.mark.asyncio
+async def test_execute_passes_degradations_to_the_message_persister(monkeypatch):
+    """강등이 메시지까지 가지 않으면 새로고침 후 UI가 다시 침묵한다."""
+    from neos.workflow.deep_analysis import jobs
+
+    seen = {}
+
+    async def run(*args, **kwargs):
+        return {
+            "run_id": "run00001",
+            "report_markdown": "## 요약\n본문",
+            "degradations": [{"kind": "report_assembly_degraded", "count": 3}],
+        }
+
+    async def persist(run_id, report_markdown, degradations):
+        seen["run_id"] = run_id
+        seen["degradations"] = degradations
+
+    monkeypatch.setattr(jobs, "execute_run", run)
+    monkeypatch.setattr(task_module, "_persist_assistant_message", persist)
+
+    await task_module._execute("run00001", "질문", "dev", False)
+
+    assert seen["run_id"] == "run00001"
+    assert seen["degradations"] == [
+        {"kind": "report_assembly_degraded", "count": 3}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_persisted_message_metadata_carries_the_degradations(monkeypatch):
+    """FE 브리지가 읽는 키 이름을 고정한다 -- 이름이 어긋나면 카드가 침묵한다."""
+    from contextlib import asynccontextmanager
+
+    import neos.api.services.chat_service as chat_service_module
+    import neos.database.connection as connection_module
+
+    captured = {}
+
+    class FakeChatService:
+        @staticmethod
+        async def add_message(**kwargs):
+            captured.update(kwargs)
+
+    class FakeRun:
+        conversation_id = "conv-1"
+        assistant_message_id = "msg-1"
+
+    class FakeSession:
+        async def get(self, model, key):
+            return FakeRun()
+
+    @asynccontextmanager
+    async def fake_session_ctx():
+        yield FakeSession()
+
+    # `_persist_assistant_message` 는 함수 안에서 import 하므로 모듈 속성을
+    # 갈아끼우면 그 import 가 Fake 를 집어온다.
+    monkeypatch.setattr(chat_service_module, "ChatService", FakeChatService)
+    monkeypatch.setattr(connection_module, "get_session_ctx", fake_session_ctx)
+
+    await task_module._persist_assistant_message(
+        "run00001",
+        "## 요약\n본문",
+        [{"kind": "judge_unreviewed:budget_exhausted", "count": 1}],
+    )
+
+    assert captured["metadata"]["deep_analysis_degradations"] == [
+        {"kind": "judge_unreviewed:budget_exhausted", "count": 1}
+    ]
+    assert captured["metadata"]["deep_analysis_run_id"] == "run00001"

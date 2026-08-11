@@ -15,7 +15,7 @@ class ResearchAssistantSkill(BaseSkill):
 
     def __init__(self, **kwargs):
         super().__init__(
-            name="research_assistant",
+            name="research-assistant",
             skill_type=SkillType.RESEARCH,
             description="리서치 작업 보조 - 소스 분석, 요약, 참고문헌 정리",
             capabilities=[

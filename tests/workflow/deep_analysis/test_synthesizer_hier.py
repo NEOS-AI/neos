@@ -132,6 +132,39 @@ async def test_reduce_node_logs_node_summary_event_with_prompt_size():
     assert "prompt_chars" in payload
 
 
+async def test_reduce_node_uses_the_injected_ceiling():
+    """§7: 세 호출부(assemble/reduce/reduce_node) 모두 주입된 상한을 써야 한다.
+
+    `assemble`만 검증되어 있었다. `reduce_node`가 여전히 전역 설정을 직접
+    읽는 회귀는 dev 프로파일의 finalization floor 산식(§4.2, 4,400)이 실제로
+    쓰는 상한과 어긋난다 -- floor는 주입된 1,200을 가정하고 계산됐다.
+    """
+    q = SimpleNamespace(id="n1", text="Q", status="open", value_est=0.8)
+    led = FakeLedger({"n1": []})
+    seen = []
+
+    async def recording_json_call(model, prompt, **kw):
+        seen.append(kw["max_tokens"])
+        return (
+            {
+                "question_id": "n1",
+                "answer": "ans",
+                "key_claim_ids": [],
+                "confidence": 0.5,
+                "caveats": [],
+                "conflicts": [],
+            },
+            SimpleNamespace(input_tokens=10, output_tokens=10),
+        )
+
+    synth = Synthesizer(
+        led, json_call=recording_json_call, synthesis_max_tokens=1200
+    )
+    await synth.reduce_node(q, [])
+
+    assert seen == [1200]
+
+
 async def test_reduce_node_split_question_uses_only_child_summaries():
     """자기 클레임이 없는 split 질문: child_summaries만으로 answer."""
     q = SimpleNamespace(id="n2", text="split Q", status="open", value_est=0.5)

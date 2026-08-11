@@ -149,3 +149,141 @@ test("stream_idle_timeout은 커서를 전진시키지 않고 재연결 신호�
   assert.equal(resumed.claimsVerified, 2);
   assert.equal(resumed.idleTimedOut, false);
 });
+
+// ---------------------------------------------------------------------------
+// degradations: 리포트 품질을 깎은 사건은 lastActivity와 달리 덮어써지지 않는다.
+// ---------------------------------------------------------------------------
+
+test("리포트 품질을 깎은 사건은 뒤따르는 이벤트가 덮어쓰지 않는다", () => {
+  const state = applyAll([
+    event(1, "node_reduction_degraded", { reason: "token_budget_exhausted" }),
+    event(2, "node_reduction_degraded", { reason: "token_budget_exhausted" }),
+    event(3, "report_assembly_degraded", { reason: "token_budget_exhausted" }),
+    event(4, "claim_verified"),
+  ]);
+
+  assert.deepEqual(state.degradations, [
+    { kind: "node_reduction_degraded", count: 2 },
+    { kind: "report_assembly_degraded", count: 1 },
+  ]);
+  // lastActivity 는 덮어써졌지만 degradations 는 남았다 -- 이 대비가 요점이다.
+  assert.equal(state.lastActivity, "클레임 검증됨");
+});
+
+test("조사 범위만 깎은 사건은 라벨은 붙되 강등으로 세지 않는다", () => {
+  const state = applyAll([
+    event(1, "investigation_stopped_at_floor", { floor_tokens: 41040 }),
+    event(2, "claim_discarded"),
+    event(3, "llm_truncated", { stage: "worker_analysis" }),
+    event(4, "entailment_filter_skipped"),
+  ]);
+
+  assert.deepEqual(state.degradations, []);
+  assert.notEqual(state.lastActivity, null);
+});
+
+test("클램프가 허용량 안에 들어갔으면 강등이 아니다", () => {
+  const fitted = applyAll([
+    event(1, "finalization_prompt_clamped", {
+      exhausted: false,
+      stage: "report_assembly",
+    }),
+  ]);
+  assert.deepEqual(fitted.degradations, []);
+
+  const overflowed = applyAll([
+    event(1, "finalization_prompt_clamped", {
+      exhausted: true,
+      stage: "report_assembly",
+    }),
+  ]);
+  assert.deepEqual(overflowed.degradations, [
+    { kind: "finalization_prompt_clamped", count: 1 },
+  ]);
+});
+
+test("굶은 판정자는 강등으로 센다 — 심사 없이 통과한 리포트다", () => {
+  const state = applyAll([
+    event(1, "report_graded", { ok: true, judge: "budget_exhausted" }),
+  ]);
+
+  assert.deepEqual(state.degradations, [
+    { kind: "judge_unreviewed:budget_exhausted", count: 1 },
+  ]);
+});
+
+test("실제로 심사한 판정자의 통과는 강등이 아니다", () => {
+  const state = applyAll([
+    event(1, "report_graded", { ok: true, uncited_ratio: 0.1 }),
+    event(2, "report_graded", { ok: false, code: "E_REPORT_AGENTIC" }),
+  ]);
+
+  assert.deepEqual(state.degradations, []);
+  assert.equal(state.gradeAttempts, 2);
+});
+
+test("판정자 강등 3종이 각각 다른 항목으로 남는다", () => {
+  const state = applyAll([
+    event(1, "report_graded", { ok: true, judge: "truncated" }),
+    event(2, "report_graded", { ok: true, judge: "unparseable" }),
+  ]);
+
+  assert.deepEqual(state.degradations, [
+    { kind: "judge_unreviewed:truncated", count: 1 },
+    { kind: "judge_unreviewed:unparseable", count: 1 },
+  ]);
+});
+
+test("재생된 이벤트는 강등을 두 번 세지 않는다", () => {
+  // `after=0` 재구독은 전체 이력을 다시 흘려보낸다. 커서 가드가 없으면
+  // 재연결 한 번에 "3회"가 "6회"가 된다.
+  const replayed = [
+    event(1, "report_assembly_degraded", {}),
+    event(2, "report_graded", { ok: true, judge: "budget_exhausted" }),
+  ];
+  const state = [...replayed, ...replayed].reduce(
+    reduceDeepAnalysisEvent,
+    initialDeepAnalysisProgress()
+  );
+
+  assert.deepEqual(state.degradations, [
+    { kind: "report_assembly_degraded", count: 1 },
+    { kind: "judge_unreviewed:budget_exhausted", count: 1 },
+  ]);
+});
+
+test("굶은 판정자가 통과시킨 리포트는 승인된 리포트와 다르게 말한다", () => {
+  const approved = applyAll([event(1, "report_graded", { ok: true })]);
+  const starved = applyAll([
+    event(1, "report_graded", { ok: true, judge: "budget_exhausted" }),
+  ]);
+
+  assert.equal(approved.lastActivity, "리포트 채점 통과");
+  assert.notEqual(starved.lastActivity, "리포트 채점 통과");
+  assert.ok(starved.lastActivity?.includes("판정자"));
+});
+
+test("새 실패 이벤트 전부가 라벨을 가진다", () => {
+  const kinds = [
+    "report_assembly_degraded",
+    "node_reduction_degraded",
+    "finalization_prompt_clamped",
+    "investigation_stopped_at_floor",
+    "investigation_stopped_at_input_bound",
+    "llm_truncated",
+    "truncation_handled",
+    "entailment_filter_skipped",
+    "claim_discarded",
+  ];
+  for (const kind of kinds) {
+    const state = applyAll([event(1, kind)]);
+    assert.notEqual(state.lastActivity, null, `${kind} 에 라벨이 없다`);
+  }
+});
+
+test("모르는 kind는 여전히 커서를 전진시킨다", () => {
+  const state = applyAll([event(7, "a_kind_from_the_future")]);
+  assert.equal(state.cursor, 7);
+  assert.equal(state.lastActivity, null);
+  assert.deepEqual(state.degradations, []);
+});

@@ -413,9 +413,11 @@ class SectionIterator:
             )
 
             # Step 2: Check completion condition (Ralph Loop's completion-promise equivalent)
-            if quality.overall_score() >= self.quality_threshold:
+            # Use the effective threshold resolved above (adaptive or default);
+            # `self.quality_threshold` no longer exists — it is `default_quality_threshold`.
+            if quality.overall_score() >= quality_threshold:
                 logger.info(
-                    f"    ✓ Quality threshold met ({quality.overall_score():.2f} >= {self.quality_threshold})"
+                    f"    ✓ Quality threshold met ({quality.overall_score():.2f} >= {quality_threshold})"
                 )
                 quality_history.append(
                     IterationHistory(
@@ -1506,9 +1508,21 @@ class IterativeReportRefiner:
         self.metrics_collector: Optional[QualityMetricsCollector] = None
         if self.metrics_enabled:
             report_id = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            # 이 리파이너는 create_llm()을 model= 없이 호출하므로 실제 모델은
+            # provider × everyday 역할 기본값이다. 비용 추정 요율을 그 모델의
+            # 카탈로그 가격에서 끌어오도록 이름을 넘긴다.
+            from neos.utils.llm_factory import get_default_model
+
+            try:
+                metrics_model = get_default_model()
+            except Exception as exc:  # 설정 문제로 메트릭이 죽지 않게 한다
+                logger.warning("Could not resolve model for cost metrics: %s", exc)
+                metrics_model = None
+
             self.metrics_collector = QualityMetricsCollector(
                 report_id=report_id,
                 enabled=True,
+                model=metrics_model,
             )
             logger.info(f"Metrics collection enabled (report_id={report_id})")
 
@@ -1758,7 +1772,7 @@ class IterativeReportRefiner:
         # ★ NEW: Generate and display metrics report
         metrics_report = None
         if self.metrics_collector:
-            self.metrics_collector.end_collection()
+            self.metrics_collector.finalize_collection()
             metrics_report = self.metrics_collector.generate_report()
 
             # Display dashboard to console

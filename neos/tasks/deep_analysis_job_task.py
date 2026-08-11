@@ -46,12 +46,21 @@ def _celery_enabled() -> bool:
     return bool(getattr(settings, "CELERY_ENABLED", False))
 
 
-async def _persist_assistant_message(run_id: str, report_markdown: str) -> None:
+async def _persist_assistant_message(
+    run_id: str,
+    report_markdown: str,
+    degradations: list[dict[str, object]] | None = None,
+) -> None:
     """리포트를 대화 메시지로 저장한다(대화에 묶인 run만).
 
     인라인 SSE 시절 핸들러가 하던 일이다. 실행이 요청 밖으로 나갔으므로
     job 쪽으로 옮긴다. 실패해도 run 자체는 성공이므로 삼킨다 -- 리포트는
     이미 job_completed 이벤트에 실려 있다.
+
+    ⚠️ 다만 **강등은 이 경로에만 있다.** 여기서 예외가 나면 새로고침 후 UI가
+    다시 침묵한다 -- 로드맵 §7 P1 #8(예외를 삼키는 영속화)의 새 피해자다.
+    삼키는 동작 자체는 이번 범위 밖이라 유지하되, 로그에 강등 건수를 남겨
+    사라진 사실이 흔적을 갖게 한다.
     """
     from neos.api.services.chat_service import ChatService
     from neos.database.connection import get_session_ctx
@@ -75,14 +84,18 @@ async def _persist_assistant_message(run_id: str, report_markdown: str) -> None:
             metadata={
                 "deep_analysis_run_id": run_id,
                 "research_status": "completed",
+                # 프론트 브리지(`web/lib/deep-analysis/metadata.ts`)가 읽는 키다.
+                # 이름을 바꾸면 새로고침 후 강등 경고가 조용히 사라진다.
+                "deep_analysis_degradations": degradations or [],
             },
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "failed to persist deep_analysis report message: "
-            "run=%s error_type=%s",
+            "run=%s error_type=%s degradations_lost=%d",
             run_id,
             type(exc).__name__,
+            len(degradations or []),
         )
 
 
@@ -93,7 +106,7 @@ async def _execute(
     resume: bool,
     *,
     timeout_seconds: float | None = None,
-) -> dict[str, str]:
+) -> dict[str, object]:
     """두 실행자가 공유하는 async 본문."""
     from neos.database.connection import get_session_ctx
     from neos.workflow.deep_analysis.jobs import execute_run, resume_run
@@ -113,7 +126,11 @@ async def _execute(
             timeout_seconds=timeout_seconds,
         )
 
-    await _persist_assistant_message(run_id, result["report_markdown"])
+    await _persist_assistant_message(
+        run_id,
+        result["report_markdown"],
+        result.get("degradations"),
+    )
     return result
 
 

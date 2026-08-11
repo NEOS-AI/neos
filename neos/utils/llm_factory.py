@@ -11,10 +11,12 @@ LLMFactory는 레지스트리 딕셔너리를 통해 프로바이더에 위임�
 """
 
 import logging
-from typing import Dict, List, Optional, Type
+from typing import Dict, List, Optional, Type, cast
 
 from langchain_core.language_models import BaseLanguageModel
 
+from neos.config.model_config import get_model_spec, tiers_for_provider
+from neos.config.model_routing import ModelProvider, resolve_model
 from neos.config.settings import settings
 from neos.providers.base import ModelProviderBase
 from neos.providers.anthropic import AnthropicProvider
@@ -46,6 +48,15 @@ class LLMFactory:
     # LLM 인스턴스 캐시
     _llm_cache: Dict[str, BaseLanguageModel] = {}
 
+    # 카탈로그에 없는 모델을 이미 경고한 이름들 — 로그 폭주를 막는다
+    _warned_unknown_models: set[str] = set()
+
+    # request.model_name은 사용자 입력이다 — 캡이 없으면 이 집합이 무한정
+    # 자란다. 캡에 도달하면 dedup 기록은 멈추지만 경고 자체는 계속 낸다
+    # (운영자에게 신호를 계속 주는 쪽을 택함; 대신 그 이름은 매 호출마다
+    # 다시 경고될 수 있다).
+    _MAX_WARNED_UNKNOWN_MODELS = 1000
+
     @classmethod
     def register_provider(cls, name: str, provider_class: Type[ModelProviderBase]) -> None:
         """런타임에 새 프로바이더를 등록한다.
@@ -56,6 +67,55 @@ class LLMFactory:
         """
         cls._providers[name] = provider_class
         logger.info("Registered LLM provider: %s", name)
+
+    # 역할 라우팅 정책이 적용되는 프로바이더. 나머지는 명시적 모델을 요구한다.
+    _ROLE_ROUTED_PROVIDERS = frozenset({"anthropic", "openai"})
+
+    @classmethod
+    def _resolve_default_model(cls, provider_name: str) -> str:
+        """model= 을 생략한 자동 호출의 기본 모델을 해석한다.
+
+        `llm.model`이 설정돼 있으면 배포 오버라이드로 취급하고, 없으면
+        provider × everyday 역할 기본값을 쓴다.
+        """
+        configured = settings.config.llm.model
+
+        if provider_name in cls._ROLE_ROUTED_PROVIDERS:
+            return resolve_model(
+                config=settings.config.model_routing,
+                provider=cast(ModelProvider, provider_name),
+                role="everyday",
+                feature_override=configured,
+            ).model
+
+        if configured:
+            return configured
+
+        raise ValueError(
+            f"No default model for provider {provider_name!r}: "
+            "pass model= explicitly or set llm.model in configuration"
+        )
+
+    @classmethod
+    def _warn_if_unknown_model(cls, model: str) -> None:
+        """카탈로그에 없는 모델을 이름별 1회 경고한다.
+
+        카탈로그는 allowlist가 아니다 — 카탈로그 갱신 전에도 신종 모델을
+        지정할 수 있어야 하므로 통과시킨다. 다만 그 모델의 가격과 thinking
+        계약은 기본값으로 떨어진다.
+        """
+        if model in cls._warned_unknown_models:
+            return
+        if get_model_spec(model) is not None:
+            return
+        if len(cls._warned_unknown_models) < cls._MAX_WARNED_UNKNOWN_MODELS:
+            cls._warned_unknown_models.add(model)
+        logger.warning(
+            "Model %r is not declared in the model catalog "
+            "(neos/config/models.yaml); pricing and thinking contract fall back "
+            "to defaults",
+            model,
+        )
 
     @classmethod
     def _get_cache_key(
@@ -82,7 +142,7 @@ class LLMFactory:
 
         Args:
             provider: 프로바이더 키 ("anthropic", "openai", "gemini", "ollama")
-            model: 모델 식별자 (None이면 settings.LLM_MODEL 사용)
+            model: 모델 식별자 (None이면 provider × everyday 역할 기본값으로 해석)
             temperature: 온도 (None이면 settings.LLM_TEMPERATURE 사용)
             use_cache: 캐시 재사용 여부
             **kwargs: 프로바이더별 추가 파라미터
@@ -90,12 +150,15 @@ class LLMFactory:
         Returns:
             BaseLanguageModel 인스턴스
         """
+        # 호출자가 provider나 model을 직접 지정했는지 — 폴백 허용 여부를 가른다
+        explicit_selection = provider is not None or model is not None
         provider_name = provider or settings.LLM_PROVIDER
 
         if provider_name not in cls._providers:
             raise ValueError(f"Unsupported LLM provider: {provider_name}")
 
-        resolved_model = model or settings.LLM_MODEL
+        resolved_model = model or cls._resolve_default_model(provider_name)
+        cls._warn_if_unknown_model(resolved_model)
         resolved_temperature = temperature if temperature is not None else settings.LLM_TEMPERATURE
         resolved_max_tokens = kwargs.pop("max_tokens", 0)
 
@@ -143,15 +206,31 @@ class LLMFactory:
             if provider_name == "ollama":
                 raise
 
-            # 폴백: OpenAI가 사용 가능하면 전환
-            if provider_name != "openai" and settings.OPENAI_API_KEY:
+            # 호출자가 provider나 model을 명시했으면 그 선택을 절대 덮어쓰지 않는다.
+            # 크로스 프로바이더 폴백은 아무것도 지정하지 않은 자동 워크로드 전용이다.
+            if explicit_selection:
                 logger.error(
-                    "FALLING BACK to OpenAI from %s — check provider configuration",
+                    "NOT falling back from %s/%s — caller explicitly selected %s",
+                    provider_name,
+                    resolved_model,
+                    "model" if model is not None else "provider",
+                )
+                raise
+
+            fallback_class = cls._providers.get("openai")
+            if provider_name != "openai" and fallback_class and settings.OPENAI_API_KEY:
+                fallback_model = resolve_model(
+                    config=settings.config.model_routing,
+                    provider="openai",
+                    role="everyday",
+                ).model
+                logger.error(
+                    "FALLING BACK to OpenAI %s from %s — check provider configuration",
+                    fallback_model,
                     provider_name,
                 )
-                fallback = OpenAIProvider()
-                return fallback.create_llm(
-                    model=settings.LLM_MODEL,
+                return fallback_class().create_llm(
+                    model=fallback_model,
                     temperature=resolved_temperature,
                     max_tokens=resolved_max_tokens,
                     **kwargs,
@@ -208,6 +287,11 @@ def create_llm(**kwargs) -> BaseLanguageModel:
     return llm_factory.create_llm(**kwargs)
 
 
+def get_default_model(provider: Optional[str] = None) -> str:
+    """model= 없이 호출했을 때 실제로 쓰일 모델을 돌려준다 (상태 표시용)."""
+    return LLMFactory._resolve_default_model(provider or settings.LLM_PROVIDER)
+
+
 def create_openai_llm(**kwargs) -> BaseLanguageModel:
     return llm_factory.create_llm(provider="openai", **kwargs)
 
@@ -226,27 +310,10 @@ def create_ollama_llm(**kwargs) -> BaseLanguageModel:
 
 
 def get_recommended_models(provider: str) -> dict[str, str]:
-    """Provider별 추천 모델 (fast / balanced / powerful)."""
-    recommendations = {
-        "openai": {
-            "fast": "gpt-5-mini-2025-08-07",
-            "balanced": "gpt-5-2025-08-07",
-            "powerful": "gpt-5-2025-08-07",
-        },
-        "anthropic": {
-            "fast": "claude-haiku-4-5-20251001",
-            "balanced": "claude-sonnet-4-5-20250929",
-            "powerful": "claude-sonnet-4-6",
-        },
-        "gemini": {
-            "fast": "gemini-2.0-flash-exp",
-            "balanced": "gemini-1.5-pro-latest",
-            "powerful": "gemini-1.5-pro-latest",
-        },
-        "ollama": {
-            "fast": "llama3.1:8b",
-            "balanced": "llama3.1:8b",
-            "powerful": "llama3.1:70b",
-        },
-    }
-    return recommendations.get(provider, {})
+    """Provider별 추천 모델 (fast / balanced / powerful).
+
+    모델 카탈로그(`neos/config/models.yaml`)의 `tiers`에서 파생된다.
+    라우팅 역할이 아니라 운영자용 수동 참고값이다
+    (`docs/CONFIGURATION.md` — Model Routing 참조).
+    """
+    return tiers_for_provider(provider)

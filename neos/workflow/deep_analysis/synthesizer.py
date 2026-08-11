@@ -2,12 +2,60 @@
 
 from __future__ import annotations
 
+import re
+
+from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
-from .llm import call_json, call_llm
+from .llm import call_json, call_text, prompt_input_bound
 from .models import ConflictNote, NodeSummary
+from .prompt_clamp import clamp_prompt
 from .prompt_loader import render
 from .token_budget import TokenBudgetExhausted
+
+# A `[C:` that the truncation cut through, with fewer than the 8 hex digits
+# and the closing bracket a real marker carries.
+_DANGLING_MARKER = re.compile(r"\[C:[0-9a-f]{0,8}$")
+
+# A whole claim address, capturing its id. Deliberately the same shape
+# `citation._MARKER` and `graders.report._RAW_MARKER` match: this counts the
+# very things the renderer will later resolve into footnotes, so a looser
+# pattern here would report markers the renderer cannot use.
+_CLAIM_MARKER = re.compile(r"\[C:([0-9a-f]{8})\]")
+
+
+def _distinct_claims(*texts: str) -> set[str]:
+    """The distinct claim ids these texts address.
+
+    Distinct, not occurrences (D59). `CitationRenderer` gives one footnote
+    per claim however many times the draft cites it, so occurrences answer a
+    different question than the one being asked -- and the same claim
+    routinely appears in both a child block and the root summary that
+    summarizes it, which double-counts every one of them. Sample #14's counts
+    are occurrence counts and must not be pooled with these.
+    """
+
+    found: set[str] = set()
+    for text in texts:
+        found.update(_CLAIM_MARKER.findall(text))
+    return found
+
+
+def _degradation_reason(exc: TokenBudgetExhausted) -> str:
+    """강등 이벤트의 `reason` -- 예외 타입이 아니라 거절 사유에서 온다.
+
+    이 두 자리는 `"token_budget_exhausted"` 를 하드코딩하고 있었다.
+    `reserve` 가 캡 소진과 `input_bound` 거절에 같은 예외를 던지므로, 여유가
+    남은 채 거절된 run 도 "예산 소진"으로 기록됐다 -- G9 가 정지 사유에서
+    없앤 것과 같은 종류의 거짓이다.
+
+    `tier_floor` 는 옛 문자열을 그대로 낸다. 이미 원장에 쌓인 강등 이벤트가
+    그 어휘를 쓰고 있어 경계 전후 집계가 이어져야 하기 때문이다. 새 문자열은
+    지금까지 존재하지 않던 구별에만 붙는다.
+    """
+    if exc.cause == "input_bound":
+        return "input_bound"
+    return "token_budget_exhausted"
 
 
 class Synthesizer:
@@ -15,16 +63,114 @@ class Synthesizer:
         self,
         ledger,
         *,
-        llm_call=call_llm,
+        # `call_text` 는 잘린 조립에 한 번 더 큰 시도를 준다. 예전 기본값
+        # `call_llm` 은 잘림을 기록만 했고, 그래서 조립만 회복하지 못했다
+        # (2026-08-08 표본 #2: 18/18 잘림, 필수 마지막 절이 매번 소실).
+        llm_call=call_text,
         json_call=call_json,
         llm_client=None,
         cassette=None,
+        synthesis_max_tokens: int | None = None,
     ) -> None:
         self.ledger = ledger
         self.llm_call = llm_call
         self.json_call = json_call
         self.llm_client = llm_client
         self.cassette = cassette
+        # None means "use the global default" so every existing construction
+        # site keeps working; service.py passes the profile-resolved value.
+        self._synthesis_max_tokens = synthesis_max_tokens
+
+    @property
+    def synthesis_max_tokens(self) -> int:
+        if self._synthesis_max_tokens is not None:
+            return self._synthesis_max_tokens
+        return settings.config.deep_analysis.synthesis_max_tokens
+
+    @property
+    def assembly_input_allowance(self) -> int:
+        """Input bytes report_assembly's prompt may occupy.
+
+        Derived here rather than injected: `synthesis_max_tokens` above is
+        already the profile-resolved value, and the ratio is global policy.
+        Threading two more constructor arguments through service.py would
+        give the same number two sources.
+        """
+        ratio = settings.config.deep_analysis.assembly_input_ratio
+        return int(ratio * self.synthesis_max_tokens)
+
+    @property
+    def reduction_input_allowance(self) -> int:
+        ratio = settings.config.deep_analysis.reduction_input_ratio
+        return int(ratio * self.synthesis_max_tokens)
+
+    async def _log_clamp(
+        self,
+        stage: str,
+        qid: str,
+        result,
+        allowance: int,
+        *,
+        claims_before: int | None = None,
+    ) -> None:
+        """Record a clamp only when it actually cut something.
+
+        Logging every call would bury the signal: the interesting event is
+        a finalization prompt that did not fit, not one that did.
+
+        `claims_before` is the domain half of the measurement (D58). The
+        clamp reports sizes because sizes are all it knows; only the caller
+        knows that those characters carry `[C:xxxxxxxx]` claim addresses, and
+        the number of those **surviving into the prompt** is the ceiling on
+        how many citations the report can possibly carry. Sample #13 left
+        that unanswerable: footnote counts in delivered reports fell 12 -> 7
+        -> 2 -> 2 while nothing on record said whether the markers ever
+        reached the composer.
+
+        Renamed from `markers_*` rather than corrected in place (D59). The
+        first version counted occurrences and, at `node_reduction`, counted a
+        "before" that omitted material the prompt actually contains -- so its
+        totals read 35 -> 90, an "after" larger than its "before". Both are
+        now distinct claim ids over the full input. Keeping the old key would
+        let two incompatible measurements be pooled across samples, which is
+        the mistake D48 already cost a sample to.
+        """
+        if not (result.clamped or result.exhausted):
+            return
+        await self.ledger.log(
+            "finalization_prompt_clamped",
+            qid,
+            {
+                "stage": stage,
+                "bound_before": result.bound_before,
+                "bound_after": result.bound_after,
+                "allowance": allowance,
+                "dropped_primary": result.dropped_primary,
+                "dropped_secondary": result.dropped_secondary,
+                "exhausted": result.exhausted,
+                # Halving the root answer leaves no mark on the dropped
+                # counts, so without these a prompt that kept every child
+                # block by cutting its root summary to a fifth looks
+                # identical to one that never needed clamping at all.
+                "anchor_chars_before": result.anchor_chars_before,
+                "anchor_chars_after": result.anchor_chars_after,
+                # Same for the child blocks (D58): halving precedes dropping,
+                # so `dropped_primary=0` was reported by clamps that cut every
+                # block to a fraction of itself.
+                "primary_chars_before": result.primary_chars_before,
+                "primary_chars_after": result.primary_chars_after,
+                **(
+                    {
+                        "distinct_claims_before": claims_before,
+                        "distinct_claims_after": len(
+                            _distinct_claims(result.prompt)
+                        ),
+                    }
+                    if claims_before is not None
+                    else {}
+                ),
+            },
+        )
 
     async def reduce(self, root_id: str) -> str:
         root = await self.ledger.root_question()
@@ -70,12 +216,23 @@ class Synthesizer:
             child_summaries="\n".join(claim_blocks)
             or "(검증된 발견 없음)",
             caveats=caveats,
+            # `reduce` is the single-pass M1 path -- no retry loop, so there
+            # is never a previous rejection. Supplied anyway because `render`
+            # leaves unfilled placeholders as literal text, and a stray
+            # "{revision_note}" in the prompt is worse than an empty one.
+            revision_note="(없음 -- 재시도 없는 경로)",
         )
         config = settings.config.deep_analysis
+        synth_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="powerful",
+            feature_override=config.models.synth,
+        ).model
         response = await self.llm_call(
-            config.models.synth,
+            synth_model,
             prompt,
-            max_tokens=config.synthesis_max_tokens,
+            max_tokens=self.synthesis_max_tokens,
             client=self.llm_client,
             cassette=self.cassette,
             stage="report_assembly",
@@ -96,6 +253,7 @@ class Synthesizer:
         root_summary: NodeSummary | None,
         child_summaries: list[NodeSummary],
         caveats: list[str],
+        revision_hints: list[str] | None = None,
     ) -> str:
         """Final compose (§6.8) over the root ``NodeSummary`` + direct-child
         ``NodeSummary`` answers + collected caveats.
@@ -107,40 +265,132 @@ class Synthesizer:
         already-reduced hierarchical ``NodeSummary`` objects.
         """
         root_answer = root_summary.answer if root_summary is not None else ""
+        # The question comes before its answer (W3-i). A block used to be
+        # `- [{question_id}] {answer}`, which named the question only by an
+        # opaque id -- the composer could not tell what any answer was an
+        # answer *to*, and the report gate's "every resolved child question
+        # must be mentioned" check demanded text the composer had never been
+        # shown.
         child_blocks = [
-            f"- [{child.question_id}] {child.answer}"
+            f"- [{child.question_id}] 질문: {child.question_text}\n"
+            f"  답: {child.answer}"
+            if child.question_text
+            else f"- [{child.question_id}] {child.answer}"
             for child in child_summaries
         ]
-        has_content = bool(root_answer.strip()) or bool(child_blocks)
-        if caveats:
-            caveats_text = "\n".join(caveats)
-        elif has_content:
-            caveats_text = "(없음)"
-        else:
-            caveats_text = "검증된 클레임을 확보하지 못함"
-        prompt = render(
-            "final_compose",
-            root_summary=root_answer or "(요약 없음)",
-            child_summaries="\n".join(child_blocks) or "(검증된 발견 없음)",
-            caveats=caveats_text,
-        )
         config = settings.config.deep_analysis
+        synth_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="powerful",
+            feature_override=config.models.synth,
+        ).model
+        qid = root_summary.question_id if root_summary is not None else ""
+
+        def render_assembly(
+            blocks: list[str], notes: list[str], root: str
+        ) -> str:
+            # Computed from this call's own `blocks`, not the pre-clamp
+            # `child_blocks` -- the clamp can drop every child block and
+            # leave `root_answer` empty too, and this must reflect that
+            # (F10): the closure is pure with respect to its arguments.
+            # `root` likewise: it is now clamped material (D54), so reading
+            # the captured `root_answer` here would describe a prompt this
+            # call is not sending.
+            has_content = bool(root.strip()) or bool(blocks)
+            if notes:
+                caveats_text = "\n".join(notes)
+            elif has_content:
+                caveats_text = "(없음)"
+            else:
+                caveats_text = "검증된 클레임을 확보하지 못함"
+            return render(
+                "final_compose",
+                root_summary=root or "(요약 없음)",
+                child_summaries="\n".join(blocks) or "(검증된 발견 없음)",
+                caveats=caveats_text,
+                # Not clamped alongside `blocks`: the hints name the exact
+                # lines to fix, and dropping them would put the attempt back
+                # where the previous one already failed. `_uncited_hints`
+                # caps their size at the source for the same reason.
+                revision_note="\n".join(revision_hints or [])
+                or "(없음 -- 첫 시도)",
+            )
+
+        clamp = clamp_prompt(
+            model=synth_model,
+            allowance=self.assembly_input_allowance,
+            render_prompt=render_assembly,
+            primary=child_blocks,
+            secondary=list(caveats),
+            # The root answer is clamped material now (D54). It is still the
+            # most protected -- only halved, never dropped -- but it can no
+            # longer be paid for by every child block in the prompt.
+            anchor=root_answer,
+        )
+        await self._log_clamp(
+            "report_assembly",
+            qid,
+            clamp,
+            self.assembly_input_allowance,
+            # Counted over every slot the clamp can cut. The anchor belongs
+            # here because a degraded root answer is a join of child answers
+            # and carries their markers; the caveats belong here because
+            # node summaries mark their caveats too -- D44 found 3 of sample
+            # #7's 30 doing it, which is how raw markers once reached the
+            # final text. Omitting either slot is the same defect D59 found
+            # at `node_reduction`: an "after" that can exceed its "before".
+            claims_before=len(
+                _distinct_claims(
+                    "\n".join(child_blocks), root_answer, "\n".join(caveats)
+                )
+            ),
+        )
         try:
             response = await self.llm_call(
-                config.models.synth,
-                prompt,
-                max_tokens=config.synthesis_max_tokens,
+                synth_model,
+                clamp.prompt,
+                max_tokens=self.synthesis_max_tokens,
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="report_assembly",
             )
-        except TokenBudgetExhausted:
+        except TokenBudgetExhausted as exc:
+            # Falling back to a template is correct -- no empty-handed exit
+            # (§6.8) -- but it must not look like success. Every recorded run
+            # took this path and nothing said so.
+            await self.ledger.log(
+                "report_assembly_degraded",
+                qid,
+                {"reason": _degradation_reason(exc)},
+            )
             return self.deterministic_report(
                 root_summary,
                 child_summaries,
                 caveats,
             )
-        qid = root_summary.question_id if root_summary is not None else ""
+        if not response.text.strip():
+            # A blank assembly used to log `synth_pass` and return "" -- the
+            # call succeeded, so nothing looked wrong. Measured 2026-08-08
+            # (sample #2, `a82648e3`): three blank assemblies, three
+            # `synth_pass` events, and a report that was the empty string.
+            # S1 counts `synth_pass`, so the one metric that says "an LLM
+            # actually wrote a report" was counting reports that did not exist.
+            #
+            # `report_assembly_degraded` is deliberate rather than a new kind:
+            # it is already registered in `_DEGRADATION_KINDS` (ledger.py) and
+            # `degradationKind()` (progress.ts), so this reaches the user's
+            # screen without touching either copy of that vocabulary.
+            await self.ledger.log(
+                "report_assembly_degraded",
+                qid,
+                {"reason": "empty_assembly"},
+            )
+            return self.deterministic_report(
+                root_summary,
+                child_summaries,
+                caveats,
+            )
         await self.ledger.log(
             "synth_pass",
             qid,
@@ -196,42 +446,71 @@ class Synthesizer:
         child_lines = [
             f"[{c.question_id}] {c.answer}" for c in child_summaries
         ]
-        prompt = render(
-            "node_summary",
-            question_id=question.id,
-            question_text=question.text,
-            verified_claims="\n".join(claim_lines) or "(없음)",
-            child_summaries="\n".join(child_lines) or "(없음)",
+        synth_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="powerful",
+            feature_override=settings.config.deep_analysis.models.synth,
+        ).model
+
+        def render_node(
+            claims: list[str], children: list[str], _anchor: str = ""
+        ) -> str:
+            # `reduce_node` passes no anchor -- the question text is tiny and
+            # must never shrink, so it stays outside the clamp entirely.
+            return render(
+                "node_summary",
+                question_id=question.id,
+                question_text=question.text,
+                verified_claims="\n".join(claims) or "(없음)",
+                child_summaries="\n".join(children) or "(없음)",
+            )
+
+        clamp = clamp_prompt(
+            model=synth_model,
+            allowance=self.reduction_input_allowance,
+            render_prompt=render_node,
+            primary=claim_lines,
+            secondary=child_lines,
         )
-        config = settings.config.deep_analysis
+        await self._log_clamp(
+            "node_reduction",
+            question.id,
+            clamp,
+            self.reduction_input_allowance,
+            # Reductions carry markers too, and a marker lost here never
+            # reaches the assembly to be lost there -- attributing the drop
+            # to the report tier requires ruling this tier out first.
+            #
+            # `child_lines` belongs here and was missing (D59). It is the
+            # other half of what `render_node` puts in the prompt and it
+            # carries the children's markers, so leaving it out produced an
+            # "after" larger than its "before" (35 -> 90 across sample #14)
+            # and made the whole reduction-tier reading unusable.
+            claims_before=len(
+                _distinct_claims("\n".join(claim_lines), "\n".join(child_lines))
+            ),
+        )
+        prompt = clamp.prompt
         try:
             data, resp = await self.json_call(
-                config.models.synth,
+                synth_model,
                 prompt,
-                max_tokens=config.synthesis_max_tokens,
+                max_tokens=self.synthesis_max_tokens,
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="node_reduction",
             )
-        except TokenBudgetExhausted:
-            joined = " ".join(c.answer for c in child_summaries) or ""
-            return NodeSummary(
-                question_id=question.id,
-                answer=joined,
-                key_claim_ids=[],
-                confidence=0.0,
-                caveats=["token_budget_exhausted"],
-                conflicts=[],
+        except TokenBudgetExhausted as exc:
+            return await self._degraded_summary(
+                question, child_summaries, _degradation_reason(exc), pairs
             )
         except Exception:
-            joined = " ".join(c.answer for c in child_summaries) or ""
-            return NodeSummary(
-                question_id=question.id,
-                answer=joined,
-                key_claim_ids=[],
-                confidence=0.0,
-                caveats=["node_summary_unparseable"],
-                conflicts=[],
+            return await self._degraded_summary(
+                question,
+                child_summaries,
+                "node_summary_unparseable",
+                pairs,
             )
         await self.ledger.log(
             "node_summary",
@@ -278,6 +557,116 @@ class Synthesizer:
             confidence=confidence,
             caveats=caveats,
             conflicts=conflicts,
+        )
+
+    def _bound_degraded_answer(self, answer: str) -> str:
+        """Cut a degraded join down to the ceiling a real answer obeys.
+
+        The ceiling is `synthesis_max_tokens` -- the same number that caps
+        `reduce_node`'s output -- measured with `prompt_input_bound`, the
+        ruler `reserve()` charges with. Halving rather than a computed cut:
+        it is scale-free, converges in O(log n) regardless of how oversized
+        the join is, and needs no chars-per-token constant (Korean and Latin
+        text differ by ~3x, so any such constant would be wrong for one of
+        them).
+
+        The cut is pulled back to a whitespace boundary, and a `[C:` left
+        dangling by the cut is removed: a half-written marker matches neither
+        `_RAW_MARKER` nor the renderer's lookup, so it would survive into the
+        report as literal text where a citation belongs.
+        """
+
+        synth_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="powerful",
+            feature_override=settings.config.deep_analysis.models.synth,
+        ).model
+        ceiling = self.synthesis_max_tokens
+        text = answer
+        while text and prompt_input_bound(synth_model, text) > ceiling:
+            text = text[: len(text) // 2]
+        if len(text) == len(answer):
+            return answer
+        cut = text.rsplit(" ", 1)[0] if " " in text else text
+        return _DANGLING_MARKER.sub("", cut).rstrip()
+
+    async def _degraded_summary(
+        self,
+        question,
+        child_summaries: list[NodeSummary],
+        reason: str,
+        pairs: list | None = None,
+    ) -> NodeSummary:
+        """Fall back to joining the children's answers, and say so.
+
+        This degradation predates the ledger entry and left no trace, so a
+        run whose reductions all degraded was byte-identical to one where
+        they all succeeded. That distinction is exactly what tells whether
+        isolating the report tier worked: reductions are allowed to degrade,
+        the assembly is not.
+
+        `pairs` is the node's own verified claims, and it exists because
+        joining children is not a fallback for a **leaf**: a leaf has no
+        children, so the join produced `""` and the leaf's verified claims
+        vanished. Measured 2026-08-07: most degraded reductions were leaves
+        (8 of 10, 11 of 14, 8 of 11 ...), the runs that degraded 67-79% of
+        their reductions shipped 0-8 citation markers, and the one that
+        degraded 18% shipped 60. With nothing to cite the report gate
+        rejected all 18 attempts.
+
+        The deterministic answer keeps `[C:...]` markers so CitationRenderer
+        can still resolve them -- these are verified claims by construction,
+        so they cannot orphan. It deliberately drops the prompt scaffolding
+        (evidence excerpts, confidence) that `reduce_node` builds for the
+        model: that is input for an LLM, not prose for a reader.
+
+        **The join is bounded** (D54). It stands in for an answer an LLM
+        would have written under a `synthesis_max_tokens` output ceiling, and
+        it was the one path in the tree that respected no ceiling at all: a
+        degraded parent joins its children's answers, and a degraded child's
+        answer is itself such a join, so the text accumulates up the tree.
+        Sample #11's `7aa21c7f` degraded 12 reductions and **the last was the
+        root** -- its answer became most of the subtree, ~5,800-12,200 input
+        tokens against an assembly allowance of 6,000. `shrink_once` refuses
+        to drop the root answer, so the assembly clamp dropped every child
+        block and every caveat and still did not fit (12 of 12 clamps
+        `exhausted`), which starved the report of the very claims it had to
+        cite and made attempt 1 fail its reservation outright. The retry loop
+        had never run.
+        """
+        answer = " ".join(
+            c.answer for c in child_summaries if c.answer.strip()
+        )
+        claim_ids: list[str] = []
+        if not answer and pairs:
+            answer = " ".join(
+                f"[C:{claim.id}] {claim.text}" for claim, _evidence in pairs
+            )
+            claim_ids = [claim.id for claim, _evidence in pairs]
+        bounded = self._bound_degraded_answer(answer)
+        await self.ledger.log(
+            "node_reduction_degraded",
+            question.id,
+            {
+                "question_id": question.id,
+                "child_count": len(child_summaries),
+                "reason": reason,
+                # The cascade is invisible without these: a degraded root is
+                # byte-identical in the ledger whether its join was 400 chars
+                # or 40,000, and the latter is what breaks the assembly.
+                "answer_chars": len(answer),
+                "answer_truncated": len(bounded) < len(answer),
+            },
+        )
+        answer = bounded
+        return NodeSummary(
+            question_id=question.id,
+            answer=answer,
+            key_claim_ids=claim_ids,
+            confidence=0.0,
+            caveats=[reason],
+            conflicts=[],
         )
 
     async def reduce_tree(self, root_id: str) -> dict[str, NodeSummary]:

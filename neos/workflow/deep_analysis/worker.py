@@ -6,11 +6,19 @@ import json
 import logging
 from typing import Callable
 
+from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
+from .claim_entailment import apply_entailment_results
+from .conflict import source_tier
 from .discovery import run_discovery
 from .fetch import fetch_url
-from .llm import call_json
+from .llm import (
+    JSONParseError,
+    LLMProviderError,
+    TruncatedResponseError,
+    call_json,
+)
 from .models import (
     Effort,
     ProposedBlob,
@@ -20,11 +28,64 @@ from .models import (
     WorkerResult,
 )
 from .pdf_text import PDFExtractionError
+from .prompt_loader import render
 from .token_budget import TokenBudgetExhausted
 
 _REPAIR_ACTIONS = {"fixed", "weakened", "abandoned"}
 _CLAMP_BUCKETS = ("0", "1", "2", "3_plus")
 logger = logging.getLogger(__name__)
+
+
+def _rank_by_source_tier(
+    candidates: list[dict], source_tiers: dict
+) -> list[dict]:
+    """1차 기관 출처를 앞으로, 같은 tier 안에서는 검색 순위를 그대로.
+
+    `source_tiers` 는 여태 충돌 해소에서만 쓰였다 -- 어떤 클레임이 이기는지는
+    정했지만 **무엇을 수집할지는 전혀 정하지 못했다.** 워커는 검색 엔진이 준
+    상위 N 개를 순서대로 전부 fetch 했고, 그래서 표본 #7 의 증거 119건 중
+    tier1 은 19건(16%)이었다. 판정자의 지배적 반려 사유(`strength_ok=False`
+    7건)가 바로 그것이다 -- "질문이 요구한 공식 출처를 전혀 사용하지 못하고
+    2차 블로그성 출처에 의존".
+
+    `sorted` 는 안정 정렬이므로 tier 는 **검색 순위를 대체하지 않고 그 위에
+    얹히는 기준**이다. 같은 tier 안에서는 엔진이 매긴 관련도 순서가 그대로
+    남는다. tier1 후보가 없으면 아무것도 바뀌지 않는다.
+    """
+
+    return sorted(
+        candidates, key=lambda c: source_tier(c.get("url", ""), source_tiers)
+    )
+
+
+def _merge_candidates(
+    base: list[dict], extra: list[dict]
+) -> list[dict]:
+    """`base` 뒤에 `extra` 의 새 URL 만 잇는다. 결과는 base 의 상위집합.
+
+    순서가 정책이다. `_rank_by_source_tier` 는 안정 정렬이므로 **같은 tier
+    안에서는 여기서 정한 순서가 그대로 남는다** -- 기저 질의가 먼저 오므로
+    증강 질의는 기저 질의가 놓친 자리에만 끼어든다. 증강이 관련도를 흐리는
+    최악의 경우에도 기존 후보를 밀어내지 못한다.
+    """
+
+    seen = {candidate.get("url", "") for candidate in base}
+    merged = list(base)
+    for candidate in extra:
+        url = candidate.get("url", "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        merged.append(candidate)
+    return merged
+
+
+def _tier1_count(candidates: list[dict], source_tiers: dict) -> int:
+    return sum(
+        1
+        for candidate in candidates
+        if source_tier(candidate.get("url", ""), source_tiers) == 1
+    )
 
 
 def _source_bucket(count: int) -> str:
@@ -61,16 +122,20 @@ class Worker:
             else settings.config.deep_analysis.confidence_cap
         )
         self._claims: list[ProposedClaim] = []
+        self._discarded_claims: list[ProposedClaim] = []
         self._blobs: list[ProposedBlob] = []
         self._tokens = 0
         self._model = ""
         self._confidence_clamped_by_source_count: dict[str, int] = {}
+        self._entailment_skipped = False
+        self._search_augmentation: dict[str, int] = {}
 
     def flush_partial(self, question_id: str) -> WorkerResult:
         return WorkerResult(
             question_id=question_id,
             status="partial",
             claims=list(self._claims),
+            discarded_claims=list(self._discarded_claims),
             blobs=list(self._blobs),
             tokens_spent=self._tokens,
             model=self._model,
@@ -80,6 +145,8 @@ class Worker:
             confidence_clamped_by_source_count=dict(
                 self._confidence_clamped_by_source_count
             ),
+            entailment_skipped=self._entailment_skipped,
+            search_augmentation=dict(self._search_augmentation),
         )
 
     async def _search(self, query: str, limit: int) -> list[dict]:
@@ -128,6 +195,50 @@ class Worker:
             return await self._search(search_query, limit)
         return items
 
+    async def _augment_with_primary_sources(
+        self,
+        search_query: str,
+        effort: Effort,
+        limit: int,
+        brief: str,
+        base: list[dict],
+    ) -> list[dict]:
+        """1차 기관 출처를 겨냥한 2차 질의를 돌려 후보에 합친다.
+
+        D45 는 **후보 선택**만 고쳤다. `_rank_by_source_tier` 는 엔진이 이미
+        돌려준 목록을 재배열할 뿐이라, tier1 URL 이 애초에 0건이면 아무 일도
+        하지 않는다. 여기서 고치는 것은 **무엇을 후보로 받는가** 다.
+
+        기저 후보는 절대 버리지 않는다(`_merge_candidates`). 증강 질의가
+        관련도를 흐리는 최악의 경우에도 결과는 기저 질의의 상위집합이고,
+        추가 비용은 검색 호출 한 번이다 -- fetch 수는 슬라이스가 정하므로
+        그대로다.
+
+        `_search` 를 직접 부르고 `_collect_candidates` 의 스킬 경로를 타지
+        않는다. discovery 는 LLM tool-calling 이라 토큰을 쓰고, 증강 질의는
+        같은 질문에 대한 **보조** 조회지 별도 조사가 아니다.
+        """
+
+        config = settings.config.deep_analysis
+        augment = config.search_primary_augment.strip()
+        self._search_augmentation = {
+            "base_candidates": len(base),
+            "base_tier1": _tier1_count(base, config.source_tiers),
+            "added_candidates": 0,
+            "added_tier1": 0,
+        }
+        if not augment:
+            return base
+
+        extra = await self._search(f"{search_query} {augment}", limit)
+        merged = _merge_candidates(base, extra)
+        added = merged[len(base) :]
+        self._search_augmentation["added_candidates"] = len(added)
+        self._search_augmentation["added_tier1"] = _tier1_count(
+            added, config.source_tiers
+        )
+        return merged
+
     async def investigate(
         self,
         brief: str,
@@ -159,16 +270,24 @@ class Worker:
             raise ValueError(f"worker cannot execute effort {effort.value}")
 
         self._claims = []
+        self._discarded_claims = []
         self._blobs = []
         self._tokens = 0
         self._confidence_clamped_by_source_count = {}
+        self._entailment_skipped = False
+        self._search_augmentation = {}
 
         config = settings.config.deep_analysis
-        self._model = (
-            config.models.scout
-            if effort == Effort.SCOUT
-            else config.models.dig
+        role = "everyday" if effort == Effort.SCOUT else "powerful"
+        feature_override = (
+            config.models.scout if effort == Effort.SCOUT else config.models.dig
         )
+        self._model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role=role,
+            feature_override=feature_override,
+        ).model
         effort_config = config.effort[effort.value]
 
         repairs = repairs or []
@@ -183,11 +302,27 @@ class Worker:
         # 전문(~1KB)이라 그대로 검색 엔진에 넣으면 0건이 돌아온다 --
         # 그러면 fetch할 URL이 없어 모든 클레임이 E_NO_EVIDENCE로 거절된다.
         search_query = question_text or brief
-        search_results = await self._collect_candidates(
+        # 필요한 것보다 넓게 받아 tier 로 고른다. fetch 수는 그대로다.
+        candidate_limit = (
+            config.search_result_limit * config.source_candidate_multiplier
+        )
+        candidates = await self._collect_candidates(
             search_query,
             effort,
-            config.search_result_limit,
+            candidate_limit,
             brief=brief,
+        )
+        candidates = await self._augment_with_primary_sources(
+            search_query, effort, candidate_limit, brief, candidates
+        )
+        search_results = _rank_by_source_tier(candidates, config.source_tiers)[
+            : config.search_result_limit
+        ]
+        # 후보에 tier1 이 늘어도 슬라이스가 잘라내면 아무 일도 일어나지 않는다.
+        # `added_tier1` 은 증강이 무엇을 **찾았는지**, 이 값은 그중 무엇이
+        # 실제로 **fetch 됐는지**를 말한다. 뒤가 판정자가 보는 숫자다.
+        self._search_augmentation["selected_tier1"] = _tier1_count(
+            search_results, config.source_tiers
         )
         fetched_by_url: dict[str, ProposedBlob] = {}
         for search_result in search_results:
@@ -225,10 +360,13 @@ class Worker:
         data, response = await call_json(
             self._model,
             prompt,
-            max_tokens=min(
-                effort_config.token_cap,
-                config.worker_max_output_tokens,
-            ),
+            # effort.token_cap is the effort's BUDGET, not a per-response
+            # output allowance. Using it here truncated claim-bearing
+            # responses mid-JSON at SCOUT's 2000 tokens — 18 of them in the
+            # 20260731T130316Z sample — and a truncated response parses to
+            # zero claims, so every claim in it was silently lost. The budget
+            # is still enforced, by the token budget layer.
+            max_tokens=config.worker_max_output_tokens,
             client=self.llm_client,
             cassette=self.cassette,
             stage="worker_analysis",
@@ -275,6 +413,8 @@ class Worker:
                 )
             )
 
+        self._claims = await self._refine_claims(self._claims)
+
         raw_status = data.get("status", "completed")
         status = (
             raw_status
@@ -292,6 +432,7 @@ class Worker:
             question_id=question_id,
             status=status,
             claims=list(self._claims),
+            discarded_claims=list(self._discarded_claims),
             blobs=list(self._blobs),
             repairs=repair_results,
             proposed_subquestions=list(
@@ -302,13 +443,89 @@ class Worker:
             model=self._model,
             self_assessment=self_assessment,
             fail_reason=str(data.get("fail_reason", "")),
+            search_augmentation=dict(self._search_augmentation),
             confidence_clamped_count=sum(
                 self._confidence_clamped_by_source_count.values()
             ),
             confidence_clamped_by_source_count=dict(
                 self._confidence_clamped_by_source_count
             ),
+            entailment_skipped=self._entailment_skipped,
         )
+
+    async def _refine_claims(
+        self,
+        claims: list[ProposedClaim],
+    ) -> list[ProposedClaim]:
+        if not claims:
+            return claims
+
+        config = settings.config.deep_analysis
+        claims_json = json.dumps(
+            [
+                {
+                    "index": index,
+                    "claim": claim.text,
+                    "evidence": [
+                        evidence.excerpt for evidence in claim.evidence
+                    ],
+                }
+                for index, claim in enumerate(claims)
+            ],
+            ensure_ascii=False,
+        )
+        prompt = render("claim_entailment", claims_json=claims_json)
+        try:
+            payload, response = await call_json(
+                self._model,
+                prompt,
+                max_tokens=config.entailment_max_output_tokens,
+                client=self.llm_client,
+                cassette=self.cassette,
+                stage="claim_entailment",
+                # This call never retried a malformed response and must not
+                # start: a second batch costs the same tokens for a response
+                # the first attempt already showed the model will not format.
+                # The truncation expansion is a separate axis and still runs.
+                retries=0,
+            )
+        except TokenBudgetExhausted:
+            # The batch propagates unrefined via `investigate()`'s
+            # `flush_partial` -- flag the skip here so that unfiltered batch
+            # is never silently mistaken for "entailment found nothing to
+            # discard".
+            self._entailment_skipped = True
+            raise
+        except LLMProviderError as exc:
+            logger.warning(
+                "Claim entailment provider failed: error_type=%s",
+                type(exc).__name__,
+            )
+            self._entailment_skipped = True
+            return claims
+        except TruncatedResponseError:
+            # A filter, not a gate: these claims still face the deterministic
+            # and agentic graders. Dropping or rejecting the batch would
+            # manufacture the very recall loss the discard measurement exists
+            # to detect. Pass them through, but record that the filter never
+            # ran on them.
+            logger.warning("Claim entailment response was cut off")
+            self._entailment_skipped = True
+            return claims
+        except JSONParseError:
+            logger.warning("Claim entailment response was not valid JSON")
+            self._entailment_skipped = True
+            return claims
+
+        self._tokens += response.input_tokens + response.output_tokens
+
+        outcome = apply_entailment_results(claims, payload)
+        if outcome is None:
+            logger.warning("Claim entailment response failed validation")
+            self._entailment_skipped = True
+            return claims
+        self._discarded_claims = list(outcome.discarded)
+        return outcome.refined
 
     def _parse_repairs(
         self,

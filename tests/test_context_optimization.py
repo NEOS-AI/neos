@@ -97,22 +97,43 @@ class TestTokenCounter:
         assert status["is_overflow"] is True or status["is_warning"] is True
 
     def test_calculate_cost(self):
-        """비용 계산 테스트"""
+        """비용 계산 테스트
+
+        가격은 모델 카탈로그(`neos/config/models.yaml`)에서 온다. 예전에는
+        per-1K 하드코딩 표 + 부분 문자열 매칭이었고, `"gpt-4"`나
+        `"claude-3-sonnet"`처럼 이 배포가 실제로 호출하지 않는 이름도
+        그 표에 걸려 그럴듯한 값을 냈다. 지금은 카탈로그에 있는 모델만
+        가격이 있다.
+        """
         from neos.utils.token_counter import get_token_counter
 
         counter = get_token_counter()
 
-        # GPT-4 비용
-        cost = counter.calculate_cost(1000, 500, "gpt-4")
-        assert cost > 0
-        assert isinstance(cost, float)
+        # 카탈로그에 있는 OpenAI 모델
+        cost_openai = counter.calculate_cost(1000, 500, "gpt-4o")
+        assert cost_openai > 0
+        assert isinstance(cost_openai, float)
 
-        # Claude 비용
-        cost_claude = counter.calculate_cost(1000, 500, "claude-3-sonnet")
+        # 카탈로그에 있는 Anthropic 모델
+        cost_claude = counter.calculate_cost(1000, 500, "claude-sonnet-5")
         assert cost_claude > 0
 
         # 0 토큰
-        assert counter.calculate_cost(0, 0, "gpt-4") == 0.0
+        assert counter.calculate_cost(0, 0, "gpt-4o") == 0.0
+
+    def test_calculate_cost_does_not_guess_for_uncatalogued_names(self):
+        """카탈로그에 없는 이름은 추측하지 않는다.
+
+        `"gpt-4"`는 `context_optimization.token_counter_model`의 값이지만
+        tiktoken 인코딩 식별자이지 이 배포가 호출하는 모델이 아니다. 옛
+        구현은 부분 문자열 매칭으로 $0.03/1K를 붙였다.
+        """
+        from neos.utils.token_counter import get_token_counter
+
+        counter = get_token_counter()
+
+        assert counter.calculate_cost(1000, 500, "gpt-4") == 0.0
+        assert counter.calculate_cost(1000, 500, "claude-3-sonnet") == 0.0
 
 
 class TestContextOptimizer:

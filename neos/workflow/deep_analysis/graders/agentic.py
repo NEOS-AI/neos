@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import random
 
-from ..llm import call_json, JSONParseError
+from ..llm import call_json, JSONParseError, TruncatedResponseError
 from ..models import ProposedClaim, Verdict
 from ..prompt_loader import render
 
@@ -16,11 +16,12 @@ _MAP = {
 
 
 class AgenticGrader:
-    def __init__(self, *, judge_model, threshold, sample_rate,
+    def __init__(self, *, judge_model, threshold, sample_rate, max_output_tokens,
                  llm_client=None, cassette=None, sampler=None):
         self.judge_model = judge_model
         self.threshold = threshold
         self.sample_rate = sample_rate
+        self.max_output_tokens = max_output_tokens
         self.llm_client = llm_client
         self.cassette = cassette
         self.sampler = sampler or random.random
@@ -84,10 +85,27 @@ class AgenticGrader:
             data, _ = await call_json(
                 self.judge_model,
                 prompt,
-                max_tokens=300,
+                max_tokens=self.max_output_tokens,
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="claim_grading",
+            )
+        except TruncatedResponseError:
+            # D24: a cut judgement is unfinished, not absent. D14's fail-open
+            # answers "the judge produced garbage"; it does not answer "the
+            # judge was interrupted mid-verdict". One measured response had
+            # already emitted "label": "CONTRADICTS" before the cut, and the
+            # fail-open turned that rejection into an acceptance. Mandatory or
+            # sampled, a truncated judgement is rejected.
+            return Verdict(
+                ok=False,
+                code="E_UNSUPPORTED",
+                label=None,
+                detail="judge_truncated",
+                diagnostics={
+                    "agentic": "attempted_rejected",
+                    "agentic_label": None,
+                },
             )
         except JSONParseError:
             return self._judge_failed(mandatory, "judge_unparseable")

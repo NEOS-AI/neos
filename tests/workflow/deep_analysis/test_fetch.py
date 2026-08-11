@@ -3,9 +3,15 @@ from unittest.mock import Mock
 
 import pytest
 
+from neos.config.settings import settings
 from neos.workflow.deep_analysis.cassette import Cassette
 from neos.workflow.deep_analysis import fetch as fetch_module
-from neos.workflow.deep_analysis.fetch import fetch_url, html_to_text
+from neos.workflow.deep_analysis.fetch import (
+    _build_fetch_client,
+    extract_article_text,
+    fetch_url,
+    html_to_text,
+)
 
 
 pytestmark = pytest.mark.no_db
@@ -31,6 +37,124 @@ def test_html_to_text_removes_nul_before_normalizing():
 
     assert text == "AB café"
     assert "\x00" not in text
+
+
+_NAV_PAGE = """
+<html><body>
+  <nav><ul><li>Home</li><li>About</li><li>Contact</li><li>Privacy Policy</li></ul></nav>
+  <header>Cookie banner: we value your privacy</header>
+  <article>
+    <h1>Article 55: Obligations of providers</h1>
+    <p>Providers of general-purpose AI models with systemic risk shall perform
+    model evaluation in accordance with standardised protocols and document the
+    results, and shall assess and mitigate possible systemic risks at Union level.</p>
+  </article>
+  <footer>Copyright 2026. All rights reserved. Terms of service.</footer>
+</body></html>
+"""
+
+
+def test_extract_article_text_drops_navigation_and_keeps_body():
+    text = extract_article_text(_NAV_PAGE)
+
+    assert "systemic risk" in text
+    assert "Obligations of providers" in text
+    # boilerplate must not survive into evidence
+    assert "Privacy Policy" not in text
+    assert "Terms of service" not in text
+    assert "Cookie banner" not in text
+
+
+def test_extract_article_text_falls_back_when_trafilatura_finds_nothing():
+    # trafilatura returns None for this (no article content in <body>), but
+    # html_to_text still picks up the <title> text node, so this fixture
+    # actually distinguishes the fallback from an empty result rather than
+    # passing by coincidence.
+    html = "<html><head><title>Untitled placeholder page</title></head><body></body></html>"
+
+    text = extract_article_text(html)
+
+    assert text == html_to_text(html)
+    assert text == "Untitled placeholder page"
+
+
+def test_extract_article_text_normalizes_the_trafilatura_path():
+    # trafilatura joins paragraphs with newlines; normalize_evidence_text is
+    # what collapses them. Without that call this assertion fails.
+    html = (
+        "<html><body><article>"
+        "<p>First paragraph about systemic risk obligations for providers.</p>"
+        "<p>Second paragraph covering model evaluation and documentation duties.</p>"
+        "</article></body></html>"
+    )
+
+    text = extract_article_text(html)
+
+    assert "systemic risk" in text
+    assert "\n" not in text
+    assert "  " not in text
+
+
+_COMMENTED_PAGE = """
+<html><body>
+  <article>
+    <h1>Study Finds Treatment Reduces Incidence</h1>
+    <p>Researchers published new findings this week describing a large randomized
+    controlled trial conducted across twelve clinical sites over a period of eighteen
+    months, enrolling more than four thousand participants who met strict eligibility
+    criteria for chronic condition management.</p>
+    <p>The treatment reduced measured incidence by thirty-one percent compared to the
+    placebo control group, according to the peer reviewed study published in a leading
+    medical journal this month, drawing attention from clinicians and public health
+    officials alike.</p>
+  </article>
+  <div id="comments" class="comments-section">
+    <h3>42 Comments</h3>
+    <div class="comment"><p>Total nonsense. It actually increases incidence by fifty
+    percent and the authors are lying about their methodology here.</p></div>
+  </div>
+</body></html>
+"""
+
+
+def test_extract_article_text_drops_reader_comments():
+    # include_comments defaults to True in trafilatura, so a bare
+    # trafilatura.extract(html) call lets a commenter's counter-claim ride
+    # along as if it were article prose. Once normalize_evidence_text
+    # collapses newlines, "the authors are lying" is indistinguishable from
+    # body text in raw_text, and DeterministicGrader would score a worker's
+    # quote of it 1.0. Prove the comment does not survive extraction.
+    text = extract_article_text(_COMMENTED_PAGE)
+
+    assert "thirty-one percent" in text
+    assert "Total nonsense" not in text
+    assert "authors are lying" not in text
+
+
+def test_extract_article_text_drops_comments_break_check():
+    # Break-check: with the bare (include_comments defaults to True) call,
+    # this must fail. This proves the assertions above are only true because
+    # of the explicit include_comments=False, not by fixture coincidence.
+    import trafilatura
+
+    bare = trafilatura.extract(_COMMENTED_PAGE)
+    assert bare is not None
+    assert "authors are lying" in bare  # documents the pre-fix behavior
+
+
+def test_build_fetch_client_sends_a_descriptive_user_agent():
+    client = _build_fetch_client()
+    ua = client.headers.get("user-agent", "")
+
+    assert ua == settings.config.deep_analysis.fetch_user_agent
+    assert ua  # must not be empty
+    # A descriptive bot string, not a browser impersonation.
+    assert "Mozilla" not in ua
+    assert "Chrome" not in ua
+    assert "Safari" not in ua
+    # Identifiable, with a contact URL.
+    assert "NEOS" in ua
+    assert "http" in ua
 
 
 class FakeHttpClient:
@@ -70,6 +194,32 @@ async def test_fetch_returns_content_addressed_blob_proposal():
     assert blob.http_status == 200
     assert blob.raw_text == "quick brown fox"
     assert len(blob.content_hash) == 16
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_does_not_override_an_injected_client():
+    # An injected client owns its own configuration; fetch_url must not
+    # rewrite its headers.
+    client = FakeHttpClient(200, "<html><body><article><p>Body text here that "
+                                 "is long enough to extract.</p></article></body></html>")
+
+    blob = await fetch_url("https://example.com/a", client=client)
+
+    assert blob.http_status == 200
+    assert client.calls == 1
+    assert client.headers == {}  # fetch_url must not stamp its UA on a caller's client
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_stores_article_text_not_navigation():
+    client = FakeHttpClient(200, _NAV_PAGE)
+
+    blob = await fetch_url("https://example.com/article-55", client=client)
+
+    assert "systemic risk" in blob.raw_text
+    assert "Privacy Policy" not in blob.raw_text
+    assert "Terms of service" not in blob.raw_text
+    assert blob.http_status == 200
 
 
 @pytest.mark.asyncio

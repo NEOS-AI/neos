@@ -5,7 +5,17 @@ for validation, parsing, and prompt generation failures.
 """
 
 
-class SkillError(Exception):
+class SkillMetadataError(Exception):
+    """스킬 메타데이터 관련 에러 (backward compatibility).
+
+    `neos.skills.manager.auto_discovery`가 깨진 스킬을 건너뛰기 위해 이 타입을
+    catch한다. 아래 구체 예외들의 베이스로 유지해야 그 예외 처리가 동작한다.
+    """
+
+    pass
+
+
+class SkillError(SkillMetadataError):
     """Base exception for all skill-related errors."""
 
     pass

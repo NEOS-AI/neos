@@ -6,6 +6,8 @@ Provides precise token estimation for cost tracking and optimization.
 from typing import Dict, Any
 import logging
 
+from neos.utils.token_counter import estimate_cost_usd
+
 logger = logging.getLogger(__name__)
 
 
@@ -99,9 +101,12 @@ class TokenCounter:
     ) -> float:
         """Calculate cost based on token usage.
 
-        Pricing (as of 2024):
-        - GPT-4: $0.03/1K prompt, $0.06/1K completion
-        - GPT-3.5: $0.0015/1K prompt, $0.002/1K completion
+        가격은 모델 카탈로그(`neos/config/models.yaml`)에서 오며,
+        `neos.utils.token_counter.estimate_cost_usd()`에 위임한다.
+
+        예전에는 이 모듈이 `neos/utils/token_counter.py`와 거의 같은 per-1K
+        가격표를 따로 들고 있었다. 두 표는 이미 서로 어긋나 있었다 — 이쪽은
+        "gpt-4"를 먼저 검사해서 `gpt-4-turbo`가 gpt-4 요율($0.03/1K)로 계산됐다.
 
         Args:
             prompt_tokens: Number of prompt tokens
@@ -109,33 +114,9 @@ class TokenCounter:
             model: Model name
 
         Returns:
-            Estimated cost in USD
+            Estimated cost in USD. 가격 미상이면 0.0 (경고 로그 발생).
         """
-        # Pricing table
-        pricing = {
-            "gpt-4": {"prompt": 0.03, "completion": 0.06},
-            "gpt-4-turbo": {"prompt": 0.01, "completion": 0.03},
-            "gpt-3.5-turbo": {"prompt": 0.0015, "completion": 0.002},
-            "claude-3-opus": {"prompt": 0.015, "completion": 0.075},
-            "claude-3-sonnet": {"prompt": 0.003, "completion": 0.015},
-            "claude-3-haiku": {"prompt": 0.00025, "completion": 0.00125},
-        }
-
-        # Default to GPT-4 pricing if model not found
-        model_key = model.lower()
-        for key in pricing.keys():
-            if key in model_key:
-                model_key = key
-                break
-
-        if model_key not in pricing:
-            model_key = "gpt-4"
-
-        rates = pricing[model_key]
-        prompt_cost = (prompt_tokens / 1000) * rates["prompt"]
-        completion_cost = (completion_tokens / 1000) * rates["completion"]
-
-        return prompt_cost + completion_cost
+        return estimate_cost_usd(model, prompt_tokens, completion_tokens)
 
     def track_usage(
         self,

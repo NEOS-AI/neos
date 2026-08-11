@@ -1,7 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from neos.config.schema import AppConfig, CodingModelConfig
+from neos.config.model_routing import resolve_model
+from neos.config.schema import AppConfig, CodingModelConfig, ModelRoutingConfig
 
 
 def real_config(**overrides):
@@ -100,6 +101,35 @@ def test_coding_approval_defaults_are_bounded() -> None:
 
     with pytest.raises(ValidationError):
         CodingModelConfig(approval_reconciliation_batch_size=1001)
+
+
+def test_coding_model_uses_everyday_role_when_feature_override_is_omitted() -> None:
+    coding = CodingModelConfig()
+
+    assert coding.model is None
+    assert (
+        resolve_model(
+            config=ModelRoutingConfig(),
+            provider=coding.provider,
+            role="everyday",
+            feature_override=coding.model,
+        ).model
+        == "claude-sonnet-5"
+    )
+
+
+def test_explicit_coding_model_wins_over_everyday_role() -> None:
+    coding = CodingModelConfig(model="claude-manual")
+
+    assert (
+        resolve_model(
+            config=ModelRoutingConfig(),
+            provider=coding.provider,
+            role="everyday",
+            feature_override=coding.model,
+        ).model
+        == "claude-manual"
+    )
 
 
 def test_public_text_defaults_and_ordering_are_bounded() -> None:

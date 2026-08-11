@@ -9,10 +9,44 @@ from typing import Any, List
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseLanguageModel
 
+from neos.config.model_config import (
+    ThinkingContract,
+    models_for_provider,
+    thinking_contract,
+)
 from neos.config.settings import settings
 from .base import ModelProviderBase
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_anthropic_request(
+    model: str,
+    params: dict[str, Any],
+    *,
+    thinking_enabled: bool,
+) -> dict[str, Any]:
+    """adaptive thinking 계약을 쓰는 모델의 요청을 정규화한다.
+
+    계약은 모델 카탈로그(`neos/config/models.yaml`)가 선언한다.
+    """
+    normalized = dict(params)
+    if thinking_contract(model) is not ThinkingContract.ADAPTIVE:
+        return normalized
+
+    thinking = normalized.get("thinking")
+    if isinstance(thinking, dict) and "budget_tokens" in thinking:
+        raise ValueError(
+            "budget_tokens is not supported by the adaptive thinking contract"
+        )
+
+    normalized.pop("temperature", None)
+    normalized.pop("top_p", None)
+    normalized.pop("top_k", None)
+    normalized["thinking"] = (
+        {"type": "adaptive"} if thinking_enabled else {"type": "disabled"}
+    )
+    return normalized
 
 
 class AnthropicProvider(ModelProviderBase):
@@ -29,12 +63,7 @@ class AnthropicProvider(ModelProviderBase):
         return "anthropic"
 
     def list_models(self) -> List[str]:
-        return [
-            "claude-haiku-4-5-20251001",
-            "claude-sonnet-4-5-20250929",
-            "claude-sonnet-4-6",
-            "claude-opus-4-6",
-        ]
+        return models_for_provider("anthropic")
 
     def validate_config(self) -> bool:
         return bool(settings.ANTHROPIC_API_KEY)
@@ -58,9 +87,20 @@ class AnthropicProvider(ModelProviderBase):
             params["max_tokens"] = max_tokens
         params.update(kwargs)
 
-        # Thinking Blocks 제어
+        # Thinking Blocks 제어 — 계약은 카탈로그가 선언한다
         disable_thinking = params.pop("disable_thinking", False)
-        if (settings.THINKING_BLOCKS_ENABLED or settings.MAX_THINKING_LENGTH > 0) and not disable_thinking:
+        contract = thinking_contract(model)
+
+        if contract is ThinkingContract.ADAPTIVE:
+            params = normalize_anthropic_request(
+                model,
+                params,
+                thinking_enabled=not disable_thinking,
+            )
+        elif contract is ThinkingContract.BUDGETED and (
+            (settings.THINKING_BLOCKS_ENABLED or settings.MAX_THINKING_LENGTH > 0)
+            and not disable_thinking
+        ):
             budget = settings.MAX_THINKING_LENGTH
             if budget < 1024:
                 logger.warning("MAX_THINKING_LENGTH too low; raising to 1024")

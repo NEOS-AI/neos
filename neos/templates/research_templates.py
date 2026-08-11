@@ -62,7 +62,7 @@ RESEARCH_TEMPLATES: Dict[str, ResearchTemplate] = {
             "realtime_data_search",
             "comparative_analysis",
         ],
-        recommended_skills=["news_api", "sec_edgar", "google_scholar", "openalex"],
+        recommended_skills=["news-api", "sec-edgar", "google-scholar", "openalex"],
         research_guidance=(
             "다음 항목을 포괄적으로 분석하세요:\n"
             "1. 시장 규모 및 성장률 (최근 3년 데이터)\n"
@@ -96,10 +96,10 @@ RESEARCH_TEMPLATES: Dict[str, ResearchTemplate] = {
             "multi_query_search",
         ],
         recommended_skills=[
-            "semantic_scholar",
+            "semantic-scholar",
             "arxiv",
             "pubmed",
-            "google_scholar",
+            "google-scholar",
             "openalex",
         ],
         research_guidance=(
@@ -135,7 +135,7 @@ RESEARCH_TEMPLATES: Dict[str, ResearchTemplate] = {
             "web_lookup",
             "comparative_analysis",
         ],
-        recommended_skills=["news_api", "reddit", "github_search"],
+        recommended_skills=["news-api", "reddit", "github-search"],
         research_guidance=(
             "다음 항목별로 경쟁사를 비교 분석하세요:\n"
             "1. 제품/서비스 포트폴리오\n"
@@ -170,11 +170,11 @@ RESEARCH_TEMPLATES: Dict[str, ResearchTemplate] = {
             "multi_query_search",
         ],
         recommended_skills=[
-            "news_api",
-            "github_search",
+            "news-api",
+            "github-search",
             "arxiv",
             "reddit",
-            "semantic_scholar",
+            "semantic-scholar",
         ],
         research_guidance=(
             "다음 관점에서 기술 동향을 분석하세요:\n"
@@ -209,7 +209,7 @@ RESEARCH_TEMPLATES: Dict[str, ResearchTemplate] = {
             "realtime_data_search",
             "realtime_info_search",
         ],
-        recommended_skills=["sec_edgar", "news_api", "openalex"],
+        recommended_skills=["sec-edgar", "news-api", "openalex"],
         research_guidance=(
             "다음 항목을 분석하세요:\n"
             "1. 재무제표 분석 (매출, 영업이익, 순이익 추이)\n"

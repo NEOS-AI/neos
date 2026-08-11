@@ -181,7 +181,7 @@ async def test_execute_persists_report_to_assistant_message(monkeypatch):
 
     persisted = []
 
-    async def fake_persist(run_id, report_markdown):
+    async def fake_persist(run_id, report_markdown, degradations=None):
         persisted.append((run_id, report_markdown))
 
     monkeypatch.setattr(
@@ -205,7 +205,7 @@ async def test_resume_path_also_persists_report(monkeypatch):
 
     persisted = []
 
-    async def fake_persist(run_id, report_markdown):
+    async def fake_persist(run_id, report_markdown, degradations=None):
         persisted.append((run_id, report_markdown))
 
     monkeypatch.setattr(

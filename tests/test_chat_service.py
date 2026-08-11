@@ -11,9 +11,7 @@ CORE FEATURE CRITICAL - Tests cover:
 
 import pytest
 from datetime import datetime
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from typing import Dict, Any, Optional
-import uuid
+from unittest.mock import ANY, AsyncMock, patch, MagicMock
 
 from neos.api.services.chat_service import ChatService
 
@@ -21,6 +19,32 @@ from neos.api.services.chat_service import ChatService
 @pytest.mark.unit
 class TestConversationManagement:
     """Test suite for conversation management"""
+
+    @pytest.mark.asyncio
+    async def test_create_conversation_without_model_stores_everyday_role(self):
+        with (
+            patch("neos.api.services.chat_service.ChatRepository") as mock_repo,
+            patch.object(
+                ChatService,
+                "get_conversation",
+                AsyncMock(return_value={"model_name": "claude-sonnet-5"}),
+            ),
+        ):
+            mock_repo.create_conversation = AsyncMock()
+            mock_repo.update_conversation = AsyncMock()
+
+            result = await ChatService.create_conversation(user_id="user_123")
+
+            assert result["model_name"] == "claude-sonnet-5"
+            mock_repo.create_conversation.assert_awaited_once_with(
+                user_id="user_123",
+                conversation_id=ANY,
+                model_name="claude-sonnet-5",
+                system_prompt=None,
+                template_id=None,
+                mode="standard",
+                visibility="private",
+            )
 
     @pytest.mark.asyncio
     async def test_create_conversation_success(self):

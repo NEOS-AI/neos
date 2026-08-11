@@ -11,9 +11,21 @@ from neos.api.services.pagination import (
     decode_conversation_cursor,
     encode_conversation_cursor,
 )
+from neos.config.model_routing import resolve_model
+from neos.config.settings import settings
 from neos.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def resolve_new_chat_model(model_name: str | None) -> str:
+    """Resolve a new chat's explicit choice or the Anthropic everyday role."""
+    return resolve_model(
+        config=settings.config.model_routing,
+        provider="anthropic",
+        role="everyday",
+        user_model=model_name,
+    ).model
 
 
 class ChatService:
@@ -27,7 +39,7 @@ class ChatService:
     async def create_conversation(
         user_id: str,
         conversation_id: Optional[str] = None,
-        model_name: str = "claude-opus-4-5-20251101",
+        model_name: Optional[str] = None,
         title: Optional[str] = None,
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
@@ -39,12 +51,13 @@ class ChatService:
     ) -> Dict[str, Any]:
         """새 대화 생성"""
         conversation_id = conversation_id or str(uuid.uuid4())
+        resolved_model = resolve_new_chat_model(model_name)
 
         try:
             await ChatRepository.create_conversation(
                 user_id=user_id,
                 conversation_id=conversation_id,
-                model_name=model_name,
+                model_name=resolved_model,
                 system_prompt=system_prompt,
                 template_id=template_id,
                 mode=mode,
@@ -367,7 +380,7 @@ class ChatService:
         created_by: str,
         description: Optional[str] = None,
         category: Optional[str] = None,
-        default_model: str = "claude-opus-4-5-20251101",
+        default_model: Optional[str] = None,
         default_system_prompt: Optional[str] = None,
         default_temperature: float = 0.7,
         default_settings: Optional[Dict[str, Any]] = None,
@@ -378,6 +391,7 @@ class ChatService:
     ) -> Dict[str, Any]:
         """대화 템플릿 생성"""
         template_id = str(uuid.uuid4())
+        resolved_default_model = resolve_new_chat_model(default_model)
 
         query = """
         INSERT INTO conversation_templates (
@@ -404,7 +418,7 @@ class ChatService:
             name,
             description,
             category,
-            default_model,
+            resolved_default_model,
             default_system_prompt,
             default_temperature,
             json.dumps(default_settings or {}),
@@ -479,12 +493,19 @@ Only return the title, nothing else.
 
 User message: {user_message}"""
 
+        # 제목 생성은 자동 워크로드이므로 everyday 역할로 한 번만 해석한다
+        title_model = resolve_model(
+            config=settings.config.model_routing,
+            provider="anthropic",
+            role="everyday",
+        ).model
+
         try:
             response = await chat_llm_service.generate_response(
                 conversation_id=conversation_id,
                 message_id=str(uuid.uuid4()),  # 임시 message_id
                 conversation_messages=[{"role": "user", "content": title_prompt}],
-                model_name="claude-sonnet-4-5-20250929",
+                model_name=title_model,
                 temperature=0.7,
                 max_tokens=50,
                 workflow_type="title_generation",

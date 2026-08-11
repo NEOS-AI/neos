@@ -198,6 +198,7 @@ class ScriptedAnthropic:
             '"https://example.com/source","excerpt":"MoE routing lowers '
             'inference cost","raw_ref":"ignored"}]}],"self_assessment":0.8,'
             '"proposed_subquestions":[],"dead_ends":[]}',
+            '{"results":[{"index":0,"action":"keep"}]}',
             # M4 hierarchical reduce: reduce_node(child) then reduce_node(root)
             # each return a NodeSummary JSON object (json_call).
             '{"question_id":"child","answer":"MoE routing lowers inference '
@@ -296,7 +297,16 @@ def _orchestrator(ledger, cassette, llm_client, search, http):
         citation_renderer=CitationRenderer(ledger),
         llm_client=llm_client,
         cassette=cassette,
-        global_token_cap=1000,
+        # 이 테스트가 지키는 것은 "동일한 **완전 해결** 리포트로 리플레이된다"
+        # 이므로, 캡은 행복 경로가 실제로 돌 만큼은 돼야 한다. 1000 은 그 경계에
+        # 정확히 붙어 있었다 -- final_compose 프롬프트가 172자 늘자(W3-h) 런이
+        # 통째로 열화 경로로 넘어가, 리플레이가 "검증된 요약을 확보하지 못했습니다"
+        # 템플릿을 비교하게 됐다. 결정론은 그래도 성립하므로 이 테스트는 조용히
+        # 성격이 바뀌었을 것이다.
+        #
+        # 2026-08-09 이분 측정: v1 프롬프트는 1000 으로 통과, v2 는 2500 실패 /
+        # 3000 통과. 4000 은 그 위에 여유를 둔 값이다.
+        global_token_cap=4000,
     )
 
 

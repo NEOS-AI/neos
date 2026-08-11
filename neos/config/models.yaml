@@ -1,70 +1,188 @@
-# VLM (Vision Language Model) 모델 설정
-# 이 파일에서 사용할 모델 ID를 중앙에서 관리합니다.
+# 모델 카탈로그 — 모델 사실의 단일 원천
+#
+# 새 Claude/GPT 모델 추가는 이 파일 편집으로 끝난다.
+# 배포 *정책*(provider × role 라우팅, 기능 오버라이드)은 여기가 아니라
+# config/neos.*.yaml에 있다.
+#
+# 필드:
+#   provider     anthropic | openai | gemini | ollama
+#   tiers        추천 티어 목록 (fast|balanced|powerful). 비면 추천에 등장하지 않음
+#   thinking     adaptive | budgeted | none  (미선언 시 budgeted)
+#   selectable   list_models()에 노출되는가 (기본 true). Anthropic·OpenAI에만 파생 적용
+#   pricing      USD / 1M 토큰. 없으면 "가격 미상" — 비용 집계 시 경고 후 0
+#
+# 선언 순서가 list_models() 순서다. 최신 → 레거시 순을 유지할 것.
 
-vision_models:
-  gpt4o:
-    model_id: "gpt-4o"
-    provider: "openai"
+models:
+  # ---- Anthropic (선택 가능) ----
+  claude-sonnet-5:
+    provider: anthropic
+    tiers: [balanced]
+    thinking: adaptive
+    description: "Anthropic Claude Sonnet 5"
+    max_tokens: 8192
+    pricing: {input: 3.00, output: 15.00, cache_creation: 3.75, cache_read: 0.30}
+
+  claude-opus-5:
+    provider: anthropic
+    tiers: [powerful]
+    thinking: adaptive
+    description: "Anthropic Claude Opus 5"
+    max_tokens: 8192
+    pricing: {input: 5.00, output: 25.00, cache_creation: 6.25, cache_read: 0.50}
+
+  claude-haiku-4-5-20251001:
+    provider: anthropic
+    tiers: [fast]
+    thinking: budgeted
+    description: "Anthropic Claude Haiku 4.5"
+    max_tokens: 8192
+    pricing: {input: 0.25, output: 1.25, cache_creation: 0.30, cache_read: 0.03}
+
+  claude-sonnet-4-5-20250929:
+    provider: anthropic
+    thinking: budgeted
+    pricing: {input: 3.00, output: 15.00, cache_creation: 3.75, cache_read: 0.30}
+
+  # claude-sonnet-4-6 / claude-opus-4-6은 은퇴했다. 가격을 모르는 채로
+  # 선택 가능해서 비용이 0으로 집계됐다. 각각 claude-sonnet-5 / claude-opus-5로
+  # 대체한다.
+
+  # ---- Anthropic (가격만 아는 레거시) ----
+  claude-3-5-sonnet-20240620:
+    provider: anthropic
+    thinking: budgeted
+    selectable: false
+    pricing: {input: 3.00, output: 15.00, cache_creation: 3.75, cache_read: 0.30}
+
+  claude-opus-4-5-20251101:
+    provider: anthropic
+    thinking: budgeted
+    selectable: false
+    pricing: {input: 15.00, output: 75.00, cache_creation: 18.75, cache_read: 1.50}
+
+  # ---- OpenAI (선택 가능) ----
+  gpt-5.6-terra:
+    provider: openai
+    # gpt-5-mini-2025-08-07 은퇴로 `fast`를 넘겨받았다. 한 모델이 두 티어를
+    # 채우는 것은 Gemini·Ollama와 같은 형태다.
+    tiers: [fast, balanced]
+    thinking: none
+    pricing: {input: 2.50, output: 15.00}
+
+  gpt-5.6-sol:
+    provider: openai
+    tiers: [powerful]
+    thinking: none
+    pricing: {input: 5.00, output: 30.00}
+
+  # gpt-5-mini-2025-08-07 / gpt-5-2025-08-07 / o3-mini / o3은 은퇴했다.
+  # 가격을 모르는 채로 선택 가능해서 비용이 0으로 집계됐다.
+  # gpt-5-mini와 o3-mini는 gpt-5.6-terra가, gpt-5와 o3은 gpt-5.6-sol이 대신한다.
+  # `fast` 티어는 gpt-5-mini에서 gpt-5.6-terra로 넘어갔다 (위 tiers 참조).
+
+  # ---- OpenAI (가격·별칭만 아는 레거시) ----
+  gpt-4o:
+    provider: openai
+    thinking: none
+    selectable: false
     description: "OpenAI GPT-4o Vision"
     max_tokens: 4096
-    supports_video: false
+    pricing: {input: 2.50, output: 10.00}
 
-  claude:
-    model_id: "claude-sonnet-4-5-20250929"
-    provider: "anthropic"
-    description: "Anthropic Claude Sonnet 4.5"
-    max_tokens: 8192
-    supports_video: false
+  gpt-4o-mini:
+    provider: openai
+    thinking: none
+    selectable: false
+    pricing: {input: 0.15, output: 0.60}
 
-  gemini:
-    model_id: "gemini-1.5-pro-latest"
-    provider: "google"
+  gpt-4-turbo:
+    provider: openai
+    thinking: none
+    selectable: false
+    pricing: {input: 10.00, output: 30.00}
+
+  gpt-3.5-turbo:
+    provider: openai
+    thinking: none
+    selectable: false
+    pricing: {input: 0.50, output: 1.50}
+
+  gpt-4-turbo-preview:
+    provider: openai
+    thinking: none
+    selectable: false
+    description: "OpenAI GPT-4 Turbo"
+    max_tokens: 4096
+    # 가격 미상. aliases.llm.gpt4가 가리키는 레거시 별칭 대상이다.
+
+  text-embedding-3-small:
+    provider: openai
+    thinking: none
+    selectable: false
+    description: "OpenAI Embedding Small"
+    dimension: 1536
+
+  text-embedding-3-large:
+    provider: openai
+    thinking: none
+    selectable: false
+    description: "OpenAI Embedding Large"
+    dimension: 3072
+
+  text-embedding-ada-002:
+    provider: openai
+    thinking: none
+    selectable: false
+    description: "OpenAI Embedding Ada v2 (legacy)"
+    dimension: 1536
+
+  # ---- Gemini (tier만 이관. list_models()는 정적 목록 유지) ----
+  gemini-2.0-flash-exp:
+    provider: gemini
+    tiers: [fast]
+    thinking: none
+    selectable: false
+
+  gemini-1.5-pro-latest:
+    provider: gemini
+    tiers: [balanced, powerful]
+    thinking: none
+    selectable: false
     description: "Google Gemini 1.5 Pro"
     max_tokens: 8192
     supports_video: true
 
-# LLM 모델 설정 (텍스트 전용)
-llm_models:
-  gpt4:
-    model_id: "gpt-4-turbo-preview"
-    provider: "openai"
-    description: "OpenAI GPT-4 Turbo"
-    max_tokens: 4096
+  # ---- Ollama (tier만 이관. list_models()는 라이브 서버 조회 유지) ----
+  # 키에 콜론이 있으므로 반드시 인용한다 — 인용하지 않으면 PyYAML이 파싱에 실패한다.
+  "llama3.1:8b":
+    provider: ollama
+    tiers: [fast, balanced]
+    thinking: none
+    selectable: false
 
-  claude_opus:
-    model_id: "claude-opus-4-5-20251101"
-    provider: "anthropic"
-    description: "Anthropic Claude Opus 4.5"
-    max_tokens: 8192
+  "llama3.1:70b":
+    provider: ollama
+    tiers: [powerful]
+    thinking: none
+    selectable: false
 
-  claude_sonnet:
-    model_id: "claude-sonnet-4-5-20250929"
-    provider: "anthropic"
-    description: "Anthropic Claude Sonnet 4.5"
-    max_tokens: 8192
+# 레거시 별칭 API — get_vision_model_id / get_llm_model_id / get_embedding_model_id
+aliases:
+  vision:
+    gpt4o: gpt-4o
+    claude: claude-sonnet-5
+    gemini: gemini-1.5-pro-latest
+  llm:
+    gpt4: gpt-4-turbo-preview
+    claude_opus: claude-opus-5
+    claude_sonnet: claude-sonnet-5
+    claude_haiku: claude-haiku-4-5-20251001
+  embedding:
+    openai_small: text-embedding-3-small
+    openai_large: text-embedding-3-large
 
-  claude_haiku:
-    model_id: "claude-haiku-4-5-20251001"
-    provider: "anthropic"
-    description: "Anthropic Claude Haiku 4.5"
-    max_tokens: 8192
-
-# Embedding 모델 설정
-embedding_models:
-  openai_small:
-    model_id: "text-embedding-3-small"
-    provider: "openai"
-    description: "OpenAI Embedding Small"
-    dimension: 1536
-
-  openai_large:
-    model_id: "text-embedding-3-large"
-    provider: "openai"
-    description: "OpenAI Embedding Large"
-    dimension: 3072
-
-# 기본 모델 설정 (환경 변수로 오버라이드 가능)
 defaults:
-  vision: "gpt4o"
-  llm: "claude_sonnet"
-  embedding: "openai_small"
+  vision: gpt4o
+  llm: claude_sonnet
+  embedding: openai_small

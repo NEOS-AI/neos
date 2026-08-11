@@ -2,8 +2,15 @@ from unittest.mock import patch
 
 import pytest
 
+from neos.config.model_routing import resolve_model
+from neos.config.schema import (
+    DeepAnalysisModelsConfig,
+    ModelRoutingConfig,
+    RecursiveAgentConfig,
+)
 from neos.config.settings import settings
 from neos.workflow.enums import AutonomyLevel, IntentType, WorkflowNode, WorkflowPathway
+from neos.workflow.recursive.planner import RecursivePlanner
 from neos.workflow.routing import OrchestratorRouter
 
 pytestmark = pytest.mark.no_db
@@ -21,6 +28,110 @@ def test_deep_analysis_settings_defaults():
     defaults = DeepAnalysisConfig()
     assert defaults.enabled is False
     assert defaults.complexity_threshold == 0.5
+
+
+@pytest.mark.parametrize(
+    ("field", "role", "expected"),
+    [
+        ("scout", "everyday", "claude-sonnet-5"),
+        ("dig", "powerful", "claude-opus-5"),
+        ("synth", "powerful", "claude-opus-5"),
+        ("judge", "everyday", "claude-sonnet-5"),
+    ],
+)
+def test_deep_analysis_models_use_role_defaults(
+    field, role, expected
+) -> None:
+    models = DeepAnalysisModelsConfig()
+
+    assert getattr(models, field) is None
+    assert (
+        resolve_model(
+            config=ModelRoutingConfig(),
+            provider="anthropic",
+            role=role,
+            feature_override=getattr(models, field),
+        ).model
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "role"),
+    [
+        ("scout", "everyday"),
+        ("dig", "powerful"),
+        ("synth", "powerful"),
+        ("judge", "everyday"),
+    ],
+)
+def test_deep_analysis_feature_models_win_over_roles(field, role) -> None:
+    models = DeepAnalysisModelsConfig.model_validate({field: "claude-manual"})
+
+    assert (
+        resolve_model(
+            config=ModelRoutingConfig(),
+            provider="anthropic",
+            role=role,
+            feature_override=getattr(models, field),
+        ).model
+        == "claude-manual"
+    )
+
+
+def test_recursive_planner_uses_powerful_role_without_feature_override() -> None:
+    recursive = RecursiveAgentConfig()
+
+    assert recursive.planner_model is None
+    assert (
+        resolve_model(
+            config=ModelRoutingConfig(),
+            provider="anthropic",
+            role="powerful",
+            feature_override=recursive.planner_model,
+        ).model
+        == "claude-opus-5"
+    )
+
+
+def test_explicit_recursive_planner_model_wins_over_powerful_role() -> None:
+    recursive = RecursiveAgentConfig(planner_model="claude-manual")
+
+    assert (
+        resolve_model(
+            config=ModelRoutingConfig(),
+            provider="anthropic",
+            role="powerful",
+            feature_override=recursive.planner_model,
+        ).model
+        == "claude-manual"
+    )
+
+
+@pytest.mark.parametrize(
+    ("feature_model", "expected_model"),
+    [
+        (None, "claude-opus-5"),
+        ("claude-manual", "claude-manual"),
+    ],
+)
+def test_recursive_planner_resolves_model_at_consumer_boundary(
+    monkeypatch, feature_model, expected_model
+) -> None:
+    monkeypatch.setattr(
+        settings.config.recursive_agent,
+        "planner_model",
+        feature_model,
+    )
+    planner = object.__new__(RecursivePlanner)
+
+    assert planner._select_model(0) == expected_model
+
+
+def test_recursive_planner_lower_depth_keeps_configured_atomizer() -> None:
+    planner = RecursivePlanner()
+
+    assert planner._select_model(1) == settings.RECURSIVE_ATOMIZER_MODEL
 
 
 def test_deep_analysis_enum_values():

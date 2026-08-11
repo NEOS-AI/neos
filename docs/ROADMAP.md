@@ -38,8 +38,8 @@
 ### 스킬 시스템
 
 - **빌트인 15종** (`neos/skills/builtin/`):
-  연구 소스 10종 — `arxiv`, `google_scholar`, `openalex`, `pubmed`, `semantic_scholar`,
-  `sec_edgar`, `news_api`, `reddit`, `wikipedia`, `github_search`
+  연구 소스 10종 — `arxiv`, `google-scholar`, `openalex`, `pubmed`, `semantic-scholar`,
+  `sec-edgar`, `news-api`, `reddit`, `wikipedia`, `github-search`
   기타 5종 — `canvas`, `cron`, `docx`, `pdf`, `research-assistant`
 - **자동 발견** — `discover_skills(skills_dir: Path)`가 임의 디렉터리를 스캔
   (`SKILL.md` + `skill.py` 규약, `neos/skills/manager/auto_discovery.py`)
@@ -232,8 +232,8 @@ complexity는 "deep 엔진을 쓸지 말지"의 게이트로만 남김
 
 | 스킬 | URL 필드 | `data["url"]`로 잡히나 |
 |---|---|---|
-| `semantic_scholar`, `sec_edgar`, `reddit`, `wikipedia`, `news_api`, `github_search` | `url` | ✅ |
-| `google_scholar` | `url` + `link` | ✅ |
+| `semantic-scholar`, `sec-edgar`, `reddit`, `wikipedia`, `news-api`, `github-search` | `url` | ✅ |
+| `google-scholar` | `url` + `link` | ✅ |
 | **`arxiv`** | `entry_url`(abs 페이지), `pdf_url` | ❌ **배제됨** |
 | **`pubmed`** | `pubmed_url` | ❌ **배제됨** |
 | **`openalex`** | `oa_url`, `doi`, `landing_page_url`, `homepage_url` | ❌ **배제됨** |

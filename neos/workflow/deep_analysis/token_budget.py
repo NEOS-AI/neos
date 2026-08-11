@@ -14,9 +14,71 @@ from uuid import uuid4
 
 PersistEvent = Callable[[str, dict[str, Any]], Awaitable[None]]
 
+# The report is the run's only user-visible product. `node_reduction`
+# improving a summary that will never be assembled is worthless, yet it
+# drew first from the shared floor and starved assembly in every recorded
+# run -- `reduce_tree` calls `reduce_node` once per node and nothing caps
+# that count. `REPORT_STAGES` is the inner tier reduction cannot reach.
+REPORT_STAGES = frozenset({
+    "report_assembly",
+    "report_grading",
+})
+
+# The innermost tier of all: the only stage that may draw on the last
+# `grading_floor_tokens`. Nothing else can reach them, which is the point --
+# see `TokenBudget.available_for_assembly`.
+GRADING_STAGES = frozenset({"report_grading"})
+
+# Stages that run after investigation is over: hierarchical reduction plus
+# everything in REPORT_STAGES. They are the only callers allowed to draw on
+# the reserved floor.
+#
+# The budget layer knowing stage names is a deliberate coupling. Threading an
+# `is_finalization` flag from each call site through call_llm / call_json /
+# call_messages / _budgeted_dispatch would touch every caller; one constant is
+# explicit, testable, and lives in a single place.
+FINALIZATION_STAGES = frozenset({
+    "node_reduction",
+    *REPORT_STAGES,
+})
+
 
 class TokenBudgetExhausted(RuntimeError):
-    """Raised when no output token can be reserved within the hard cap."""
+    """Raised when no output token can be reserved within the hard cap.
+
+    Carries *why*. `reserve` refuses for two different reasons and used to
+    throw the same bare exception for both, so every consumer had to guess:
+    `_mark_stop_reason` guessed "neither" and logged nothing at all (G10),
+    and the synthesizer guessed "token_budget_exhausted" and wrote it into
+    the ledger even when the budget had headroom left. The refusal site is
+    the only place that knows which of the two happened -- the budget's own
+    state afterwards looks identical for the second case. This is how it
+    says so.
+
+    Every field defaults, so `TokenBudgetExhausted("cap")` stays valid; the
+    default `cause` is the reading the bare exception always carried.
+    """
+
+    def __init__(
+        self,
+        message: str = "deep-analysis token budget exhausted",
+        *,
+        cause: str = "tier_floor",
+        stage: str = "",
+        model: str = "",
+        input_bound: int = 0,
+        ceiling: int = 0,
+        requested: int = 0,
+        granted: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.cause = cause
+        self.stage = stage
+        self.model = model
+        self.input_bound = input_bound
+        self.ceiling = ceiling
+        self.requested = requested
+        self.granted = granted
 
 
 class TokenBudgetContractError(RuntimeError):
@@ -56,9 +118,29 @@ class TokenBudget:
         consumed_tokens: int = 0,
         outstanding: Mapping[str, int] | None = None,
         persist: PersistEvent | None = None,
+        floor_tokens: int = 0,
+        report_floor_tokens: int = 0,
+        grading_floor_tokens: int = 0,
+        min_viable_output_tokens: int = 1,
     ) -> None:
         if cap_tokens < 0 or consumed_tokens < 0:
             raise ValueError("token counts must be non-negative")
+        if floor_tokens < 0:
+            raise ValueError("floor_tokens must be non-negative")
+        if report_floor_tokens < 0:
+            raise ValueError("report_floor_tokens must be non-negative")
+        if grading_floor_tokens < 0:
+            raise ValueError("grading_floor_tokens must be non-negative")
+        if report_floor_tokens > floor_tokens:
+            raise ValueError(
+                "report_floor_tokens must not exceed floor_tokens"
+            )
+        if grading_floor_tokens > report_floor_tokens:
+            raise ValueError(
+                "grading_floor_tokens must not exceed report_floor_tokens"
+            )
+        if min_viable_output_tokens < 1:
+            raise ValueError("min_viable_output_tokens must be positive")
         recovered = dict(outstanding or {})
         if any(amount < 0 for amount in recovered.values()):
             raise ValueError("outstanding token counts must be non-negative")
@@ -66,6 +148,10 @@ class TokenBudget:
         self._consumed_tokens = consumed_tokens
         self._outstanding = recovered
         self._persist = persist
+        self.floor_tokens = floor_tokens
+        self.report_floor_tokens = report_floor_tokens
+        self.grading_floor_tokens = grading_floor_tokens
+        self.min_viable_output_tokens = min_viable_output_tokens
         self._lock = asyncio.Lock()
 
     @property
@@ -79,6 +165,53 @@ class TokenBudget:
     @property
     def remaining_tokens(self) -> int:
         return self.cap_tokens - self.consumed_tokens - self.reserved_tokens
+
+    @property
+    def available_for_investigation(self) -> int:
+        """Remaining tokens that non-finalization stages may reserve.
+
+        The floor is what stops the investigation loop from consuming the
+        whole cap and leaving report assembly and grading to fail open --
+        which is what every recorded run did before this existed.
+        """
+        return max(0, self.remaining_tokens - self.floor_tokens)
+
+    @property
+    def available_for_reduction(self) -> int:
+        """Remaining tokens `node_reduction` may reserve.
+
+        Isolating the report's tier enforces the reduction allowance
+        without a call counter. `finalization_reduction_allowance` sizes
+        the floor but never limited how many times `reduce_node` runs;
+        reductions past the allowance now degrade through the path they
+        already have (synthesizer.py) instead of eating the assembly's
+        reservation.
+        """
+        return max(0, self.remaining_tokens - self.report_floor_tokens)
+
+    @property
+    def available_for_assembly(self) -> int:
+        """Remaining tokens `report_assembly` may reserve.
+
+        The innermost split (2026-08-09). The report tier had a floor but no
+        internal ordering guarantee: `report_assembly` and `report_grading`
+        both drew on `remaining_tokens`, and `_finalize` runs assembly first
+        on every attempt -- twice, since `call_text`'s expansion retry asks
+        again with a doubled ceiling. By the last attempt the tier was dry,
+        the judge could not reserve, and `ReportGrader.grade` turned that
+        into a pass.
+
+        That made the gate most lenient on the draft that actually ships.
+        All three gate passes in the ledger's history have the same shape:
+        judge rejects attempts 0 and 1, then starves on attempt 2. Sample #6
+        measured the size of it -- 3,555-9,443 tokens left against a judge
+        prompt of 5,900-17,084.
+
+        Assembly degrading is the price. A shorter report that was judged
+        beats a longer one that never was.
+        """
+
+        return max(0, self.remaining_tokens - self.grading_floor_tokens)
 
     @property
     def exhausted(self) -> bool:
@@ -97,12 +230,45 @@ class TokenBudget:
 
         input_bound = conservative_input_bound(request)
         async with self._lock:
-            output_tokens = min(
-                max_output_tokens,
-                self.remaining_tokens - input_bound,
-            )
-            if output_tokens < 1:
-                raise TokenBudgetExhausted("deep-analysis token budget exhausted")
+            if stage in GRADING_STAGES:
+                ceiling = self.remaining_tokens
+            elif stage in REPORT_STAGES:
+                ceiling = self.available_for_assembly
+            elif stage in FINALIZATION_STAGES:
+                ceiling = self.available_for_reduction
+            else:
+                ceiling = self.available_for_investigation
+            output_tokens = min(max_output_tokens, ceiling - input_bound)
+            # A grant of >= 1 token used to count as a successful reservation.
+            # It is not: a 25-token grant for a JSON prompt truncates with
+            # certainty, and (since truncation became a hard error) takes the
+            # whole run down with it -- 5 of 5 dev runs died this way on
+            # 2026-08-04. Refuse the doomed call instead. `run` already
+            # catches TokenBudgetExhausted around the investigation loop and
+            # falls through to `_finalize`, so refusing here ends the
+            # investigation cleanly and lets the floor be spent on the report.
+            #
+            # Clamped by the caller's own request so a deliberately small
+            # `max_output_tokens` stays legal: the threshold exists to catch
+            # budget-starved grants, not modest ones.
+            viability = min(max_output_tokens, self.min_viable_output_tokens)
+            if output_tokens < viability:
+                # `ceiling > 0` separates the two refusals: the tier is
+                # empty, or the tier has room and this prompt does not fit
+                # in it. Nothing downstream can recover the distinction --
+                # both raise from here, and for the second case the budget
+                # still reads as having headroom, which is exactly why that
+                # stop went unrecorded (G10).
+                raise TokenBudgetExhausted(
+                    "deep-analysis token budget exhausted",
+                    cause="input_bound" if ceiling > 0 else "tier_floor",
+                    stage=stage,
+                    model=model,
+                    input_bound=input_bound,
+                    ceiling=ceiling,
+                    requested=max_output_tokens,
+                    granted=output_tokens,
+                )
 
             reservation = TokenReservation(
                 id=uuid4().hex,
@@ -167,6 +333,77 @@ class TokenBudget:
 
         async with self._lock:
             self._require_active(reservation)
+
+    async def record_truncation(
+        self,
+        *,
+        stage: str,
+        model: str,
+        max_output_tokens: int,
+        output_tokens: int,
+    ) -> None:
+        """Record that a response was cut off at its output ceiling.
+
+        A truncated response fails JSON parsing and yields nothing, so the
+        work it represents is lost silently. Nothing read ``stop_reason``
+        before this; a whole baseline run was spent before the loss was
+        noticed, and only because a cassette happened to exist.
+
+        Payload carries counts and identifiers only — never response text.
+        """
+        async with self._lock:
+            await self._persist_event(
+                "llm_truncated",
+                {
+                    "stage": stage,
+                    "model": model,
+                    "max_output_tokens": max_output_tokens,
+                    "output_tokens": output_tokens,
+                },
+            )
+
+    async def record_truncation_handled(
+        self,
+        *,
+        stage: str,
+        model: str,
+        requested: int,
+        granted: int,
+        action: str,
+    ) -> None:
+        """Record what was done about a truncated response.
+
+        `llm_truncated` says a response was cut; this says whether the cut
+        was recoverable. Without it, a run that produced no discards cannot
+        be told apart from one whose filter never ran -- which is exactly
+        what left the discard-recall measurement inconclusive twice.
+
+        This is written once per truncated `call_json` invocation, not once
+        per truncated provider response -- `llm_truncated` fires on every
+        attempt that hits its ceiling, but a "retried_failed" outcome means
+        *two* attempts truncated (the original and the expanded retry) for
+        one of these. Only "retried_ok" and "budget_bound" are 1:1 with
+        `llm_truncated`. After-the-fact aggregation must join on `action` to
+        get the count right, not assume a flat 1:1 pairing.
+
+        `requested` is always the original ceiling of the call; `granted` is
+        the allowance of the *final* attempt (the expanded one, if a retry
+        ran). On a "retried_failed" outcome `granted` can therefore exceed
+        `requested` -- that reflects the expanded ceiling, not a bug.
+
+        Payload carries counts and identifiers only — never response text.
+        """
+        async with self._lock:
+            await self._persist_event(
+                "truncation_handled",
+                {
+                    "stage": stage,
+                    "model": model,
+                    "requested": requested,
+                    "granted": granted,
+                    "action": action,
+                },
+            )
 
     def _require_active(self, reservation: TokenReservation) -> int:
         try:

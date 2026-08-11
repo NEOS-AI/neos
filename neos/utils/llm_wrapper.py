@@ -1,15 +1,20 @@
 """
 LLM 래퍼 - 호출 추적 통합
 
-LangChain LLM을 래핑하여 모든 호출을 자동으로 추적합니다.
+LLM 클라이언트를 래핑하여 모든 호출을 자동으로 추적합니다.
+
+이 모듈은 **어떤 LLM 프레임워크도 import 하지 않는다.** 래핑 대상은 대개
+LangChain 객체지만, 추출은 전부 형태(`.content`, `.llm_output`,
+`.response_metadata` ...)로만 판정한다 -- 그래야 코딩 루프의
+`CanonicalMessage` 와 deep_analysis 의 `LLMResponse` 도 같은 어댑터를 탈 수
+있고(로드맵 §11.1 장애물 ①), D4 가 LangChain 을 걷어낼 때 계측이 함께
+무너지지 않는다. `LLMCallRecord`(`neos/dataset/models.py`)가 정본 스키마이고
+이 파일은 그 어댑터 중 하나일 뿐이다(§9 D-8 = b안).
 """
 
 import time
 import logging
 from typing import Dict, Any, List, Optional, Union
-from langchain_core.messages import BaseMessage
-from langchain_core.language_models import BaseLanguageModel
-from langchain_core.outputs import LLMResult
 
 from neos.config.settings import settings
 from neos.dataset.collector import create_llm_call_record
@@ -35,7 +40,7 @@ class TrackedLLM:
 
     def __init__(
         self,
-        llm: BaseLanguageModel,
+        llm: Any,
         session_id: str = "",
         user_id: str = "",
         workflow_step: str = "",
@@ -69,30 +74,40 @@ class TrackedLLM:
         else:
             return "unknown"
 
-    def _extract_messages(self, messages: Union[List[BaseMessage], str]) -> List[Dict[str, Any]]:
-        """메시지를 딕셔너리 형식으로 변환"""
+    def _extract_messages(self, messages: Union[List[Any], str]) -> List[Dict[str, Any]]:
+        """메시지를 딕셔너리 형식으로 변환
+
+        형태로만 판정한다. `.content` 를 가진 것은 메시지로 취급하고, 역할은
+        `.type`(LangChain) 또는 `.role`(코딩 루프의 `CanonicalMessage`)에서
+        찾되 없으면 `user` 로 둔다.
+        """
         if isinstance(messages, str):
             return [{"role": "user", "content": messages}]
 
         result = []
         for msg in messages:
-            if isinstance(msg, BaseMessage):
+            if isinstance(msg, dict):
+                result.append(msg)
+            elif hasattr(msg, "content"):
+                role = getattr(msg, "type", None) or getattr(msg, "role", None)
                 result.append({
-                    "role": msg.type if hasattr(msg, 'type') else "user",
+                    "role": role or "user",
                     "content": msg.content
                 })
-            elif isinstance(msg, dict):
-                result.append(msg)
             else:
                 result.append({"role": "user", "content": str(msg)})
 
         return result
 
     def _extract_usage(self, response: Any) -> Optional[Dict[str, int]]:
-        """토큰 사용량 추출"""
-        # LLMResult 객체인 경우
-        if isinstance(response, LLMResult):
-            if hasattr(response, 'llm_output') and response.llm_output:
+        """토큰 사용량 추출
+
+        전부 API 가 준 `usage` 만 읽는다 -- 설계 §A5 대로 자체 추정은 하지
+        않으며, 못 찾으면 0 을 지어내지 않고 `None` 을 낸다.
+        """
+        # LangChain `LLMResult` 모양: `.llm_output` 을 가진다.
+        if hasattr(response, 'llm_output'):
+            if response.llm_output:
                 token_usage = response.llm_output.get('token_usage', {})
                 if token_usage:
                     return {
@@ -137,12 +152,13 @@ class TrackedLLM:
             return response
         elif hasattr(response, 'content'):
             return response.content
-        elif isinstance(response, LLMResult):
+        elif hasattr(response, 'generations'):
+            # LangChain `LLMResult` 모양.
             if response.generations and response.generations[0]:
                 return response.generations[0][0].text
         return str(response)
 
-    async def ainvoke(self, messages: Union[List[BaseMessage], str], **kwargs) -> Any:
+    async def ainvoke(self, messages: Union[List[Any], str], **kwargs) -> Any:
         """비동기 LLM 호출 (추적 포함)"""
         start_time = time.time()
 
@@ -205,7 +221,7 @@ class TrackedLLM:
 
             raise
 
-    def invoke(self, messages: Union[List[BaseMessage], str], **kwargs) -> Any:
+    def invoke(self, messages: Union[List[Any], str], **kwargs) -> Any:
         """동기 LLM 호출 (추적 포함)"""
         start_time = time.time()
 
@@ -258,7 +274,7 @@ class TrackedLLM:
 
             raise
 
-    async def agenerate(self, messages: List[List[BaseMessage]], **kwargs) -> LLMResult:
+    async def agenerate(self, messages: List[List[Any]], **kwargs) -> Any:
         """배치 생성 (추적 포함)"""
         start_time = time.time()
 
@@ -310,7 +326,7 @@ class TrackedLLM:
 
 
 def create_tracked_llm(
-    llm: BaseLanguageModel,
+    llm: Any,
     session_id: str = "",
     user_id: str = "",
     workflow_step: str = "",

@@ -6,6 +6,9 @@ import hashlib
 from dataclasses import asdict
 from html.parser import HTMLParser
 
+import httpx
+import trafilatura
+
 from neos.config.settings import settings
 
 from .models import ProposedBlob
@@ -37,6 +40,48 @@ def html_to_text(html: str) -> str:
     parser.feed(html)
     parser.close()
     return normalize_evidence_text(" ".join(parser.parts))
+
+
+def extract_article_text(html: str) -> str:
+    """Article body text, falling back to whole-page text.
+
+    ``html_to_text`` concatenates every text node, so navigation, headers,
+    footers and cookie banners arrive as evidence next to the article. That
+    buried real article text deeply enough that workers reported pages as
+    containing only navigation. trafilatura strips the boilerplate.
+
+    ``include_comments=False`` matches the existing trafilatura call in
+    ``neos/agents/analysis_agents.py`` — without it, reader comments are
+    extracted as if they were article prose and become indistinguishable
+    from body text once normalized to a single line, so a worker could quote
+    a commenter's claim and have it graded as if the source asserted it.
+    ``include_tables=True`` is trafilatura's own default and is passed
+    explicitly for the same reason: it recovers in-content fact tables
+    (e.g. Wikipedia-style ``<table class="infobox">`` markup) without
+    pulling in out-of-content tables such as nav menus, since boilerplate
+    removal excludes those containers regardless of this flag.
+
+    It returns nothing on roughly 3% of pages, so those fall back to
+    ``html_to_text`` — that fallback path is exactly today's behaviour, which
+    keeps this change from making any page worse *on the fallback path*. On
+    the success path, trafilatura can still drop content ``html_to_text``
+    would have kept — e.g. a headline in a ``<header>`` outside the main
+    content container, or a key-facts box marked up as ``<aside>`` (trafilatura
+    treats ``<aside>`` as a sidebar and strips it, table settings included).
+    Neither of those causes a false verdict (a worker can only quote what it
+    sees), but both cost recall on fact-dense pages. If recall drops in a
+    later baseline, this is a plausible contributing cause, not something
+    this function rules out.
+    """
+    try:
+        extracted = trafilatura.extract(
+            html, include_comments=False, include_tables=True
+        )
+    except Exception:  # noqa: BLE001 - extractor must never break a fetch
+        extracted = None
+    if extracted and extracted.strip():
+        return normalize_evidence_text(extracted)
+    return html_to_text(html)
 
 
 def _content_hash(raw_text: str) -> str:
@@ -77,6 +122,20 @@ def _is_pdf_response(response) -> bool:
     )
 
 
+def _build_fetch_client():
+    """The HTTP client ``fetch_url`` uses when the caller supplies none.
+
+    The User-Agent is descriptive rather than browser-like on purpose — see
+    ``DeepAnalysisConfig.fetch_user_agent``.
+    """
+    config = settings.config.deep_analysis
+    return httpx.AsyncClient(
+        timeout=config.fetch_timeout_seconds,
+        follow_redirects=True,
+        headers={"User-Agent": config.fetch_user_agent},
+    )
+
+
 async def fetch_url(
     url: str,
     *,
@@ -87,12 +146,7 @@ async def fetch_url(
         owns_client = client is None
         resolved_client = client
         if owns_client:
-            import httpx
-
-            resolved_client = httpx.AsyncClient(
-                timeout=settings.config.deep_analysis.fetch_timeout_seconds,
-                follow_redirects=True,
-            )
+            resolved_client = _build_fetch_client()
         try:
             response = await resolved_client.get(url)
             status = int(response.status_code)
@@ -101,7 +155,7 @@ async def fetch_url(
             elif _is_pdf_response(response):
                 raw_text = pdf_bytes_to_text(bytes(response.content))
             else:
-                raw_text = html_to_text(response.text)
+                raw_text = extract_article_text(response.text)
         finally:
             if owns_client:
                 await resolved_client.aclose()

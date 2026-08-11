@@ -102,11 +102,32 @@ class SmartCacheConfig(StrictConfigModel):
 
 class LLMConfig(StrictConfigModel):
     provider: str = "anthropic"
-    model: str = "gpt-4-turbo-preview"
+    # None이면 provider × everyday 역할 기본값으로 해석된다 (neos/config/model_routing.py)
+    model: str | None = None
     temperature: float = 0.1
     timeout: int = 120
     research_planning_timeout: int = 180
     fast_model: str = "claude-haiku-4-5-20251001"
+
+
+class ProviderModelRolesConfig(StrictConfigModel):
+    everyday: str
+    powerful: str
+
+
+class ModelRoutingConfig(StrictConfigModel):
+    anthropic: ProviderModelRolesConfig = Field(
+        default_factory=lambda: ProviderModelRolesConfig(
+            everyday="claude-sonnet-5",
+            powerful="claude-opus-5",
+        )
+    )
+    openai: ProviderModelRolesConfig = Field(
+        default_factory=lambda: ProviderModelRolesConfig(
+            everyday="gpt-5.6-terra",
+            powerful="gpt-5.6-sol",
+        )
+    )
 
 
 class EmbeddingDatasetConfig(StrictConfigModel):
@@ -422,7 +443,8 @@ class KnowledgeGraphFeatureConfig(StrictConfigModel):
 
 class KnowledgeGraphExtractionConfig(StrictConfigModel):
     enabled: bool = True
-    model: str = "gpt-4-turbo-preview"
+    # None이면 everyday 역할 기본값으로 해석된다
+    model: str | None = None
 
 
 class KnowledgeGraphConfig(StrictConfigModel):
@@ -475,7 +497,8 @@ class ContextOptimizationConfig(StrictConfigModel):
     reserve_tokens: int = 4096
     tool_result_summarization: bool = True
     tool_result_max_length: int = 4000
-    tool_result_summarization_model: str = "gpt-4-turbo-preview"
+    # None이면 everyday 역할 기본값으로 해석된다
+    tool_result_summarization_model: str | None = None
     message_compression_enabled: bool = True
     message_compression_threshold: int = 30
     message_compression_ratio: float = 0.5
@@ -582,7 +605,7 @@ class RecursiveAgentConfig(StrictConfigModel):
     max_tasks_per_level: int = 4
     complexity_threshold: float = 0.8
     atomizer_model: str = "claude-haiku-4-5-20251001"
-    planner_model: str = "claude-opus-4-6"
+    planner_model: str | None = None
     budget_cap: float = 0.5
 
 
@@ -601,16 +624,92 @@ class DeepAnalysisEffortConfig(StrictConfigModel):
 
 
 class DeepAnalysisModelsConfig(StrictConfigModel):
-    scout: str = "claude-haiku-4-5-20251001"
-    dig: str = "claude-opus-4-6"
-    synth: str = "claude-opus-4-6"
-    judge: str = "claude-sonnet-4-6"
+    scout: str | None = None
+    dig: str | None = None
+    synth: str | None = None
+    judge: str | None = None
 
 
 class DeepAnalysisDevProfileConfig(StrictConfigModel):
-    global_token_cap: int = 20000
+    # 20000 could not hold ONE worker_analysis call: measured input_bound for
+    # that stage ran 5,542 / 10,893 / 17,723 (min/median/max), and that is
+    # before the finalization floor is subtracted. The profile was sized
+    # before `reserve` charged for input at all, which is why dev runs were
+    # pathological rather than merely small. 100,000 left 58,960 for
+    # investigation against a 41,040 floor (41%), matching the default
+    # profile's 43.7%.
+    #
+    # 140,000 (2026-08-10, D56). `report_floor_tokens` now counts the
+    # truncation expansion it always paid for, which moves dev's finalization
+    # floor 48,000 -> 68,000. At the old cap that is 68% -- past
+    # `finalization_floor_warn_ratio`, so the shipped defaults would warn --
+    # and it would cut investigation from 52,000 to 32,000, below what dev
+    # runs already use (sample #12's `f9bba141` consumed 50,318 before
+    # stopping at the floor). 140,000 puts the floor at 49% and gives
+    # investigation 72,000.
+    #
+    # The default profile needs no change: the same correction takes it from
+    # 31% to 45% of its 300,000 cap.
+    #
+    # This costs real tokens, and only on the runs that reach the floor --
+    # one of five dev runs in each of samples #11 and #12. The other four
+    # spent 23,000-39,000, nowhere near either cap.
+    global_token_cap: int = 140000
     parallel_workers: int = 2
     max_depth: int = 2
+    # dev shrinks the budget 3x (300000 -> 100000) but inherited a synthesis
+    # ceiling sized for the full profile, which is why the finalization floor
+    # did not fit before this file's input allowances were added: three
+    # 4000-token calls against what was then a 20000 cap.
+    #
+    # 1200 was measured against node_reduction -- its actual consumption ran a
+    # median of 1109 tokens INCLUDING input, at granted ceilings whose median
+    # was 748. That sized the *reduction* stage correctly and the *assembly*
+    # stage far too small, because the same knob caps both.
+    #
+    # 2000 (2026-08-09) is measured against assembly. Sample #9: `llm_truncated`
+    # fired 13 times for `report_assembly` out of 17 truncations run-wide, and
+    # the delivered report bodies cluster at 1,309-1,932 characters -- right at
+    # what a 1200-token ceiling can emit. The judge rejected 3 of its 4 refusals
+    # partly for "본문이 중간에 끊겼다". With `truncation_retry_multiplier` the
+    # expansion retry reaches 4000, which covers the 1,932-character median body
+    # with margin.
+    #
+    # Paid for by `report_retry_cap` 2 -> 1: the floor is
+    # `(cap + 1) * (assembly + grading)`, so one fewer attempt funds a larger
+    # ceiling. dev's finalization floor goes 41,040 -> 48,000 (41% -> 48% of
+    # the cap), still under `finalization_floor_warn_ratio`.
+    #
+    # ge=1: at s <= 0, the floor formulas can push report_floor_tokens above
+    # floor_tokens (which stays non-negative) and `TokenBudget.__init__`
+    # raises an opaque ValueError on every run instead of failing at config
+    # validation with a clear message.
+    synthesis_max_tokens: int = Field(default=2000, ge=1)
+
+
+class DeepAnalysisDiscardRecallConfig(StrictConfigModel):
+    """Thresholds for the entailment discard-recall measurement.
+
+    ``safe_upper_bound`` and ``over_discard_lower_bound`` are the
+    pre-registered stopping rule. They are fixed before data is collected and
+    must not be tuned after seeing a result.
+
+    **Sample-size consequence of these defaults.** With zero verified
+    discards, the Wilson upper bound is ``z^2 / (n + z^2)``. At ``z=1.96``
+    that falls below ``safe_upper_bound=0.10`` only from **n = 35** distinct
+    discards upward (n=34 gives 0.1015, n=35 gives 0.0989). The planned
+    ``mixed-v1`` 5+1 run is expected to yield roughly 16 distinct discards,
+    where the best attainable upper bound is ~0.194. A ``safe`` verdict is
+    therefore unreachable at the planned sample size — only
+    ``over_discarding`` or ``inconclusive`` can be returned, and clearing
+    entailment requires the staged expansion to pool at least 35 distinct
+    discards with zero verified. This is a documented property of the
+    pre-registered rule, not a defect to be tuned away.
+    """
+
+    wilson_z: float = 1.96
+    safe_upper_bound: float = 0.10
+    over_discard_lower_bound: float = 0.40
 
 
 class DeepAnalysisConfig(StrictConfigModel):
@@ -646,10 +745,10 @@ class DeepAnalysisConfig(StrictConfigModel):
             "arxiv",
             "pubmed",
             "openalex",
-            "semantic_scholar",
-            "google_scholar",
-            "sec_edgar",
-            "news_api",
+            "semantic-scholar",
+            "google-scholar",
+            "sec-edgar",
+            "news-api",
             "wikipedia",
         ]
     )
@@ -667,29 +766,280 @@ class DeepAnalysisConfig(StrictConfigModel):
     )
     agentic_threshold: float = 0.35
     agentic_sample_rate: float = 0.3
+    # The judge returns {"label", "rationale"}. The budget is consumed mainly
+    # by ADAPTIVE THINKING, not the rationale: the judge model declares
+    # `thinking: adaptive` and llm.py:137 hardcodes thinking_enabled=True.
+    # Thinking tokens count against max_tokens but are stripped from content,
+    # so they are invisible in a cassette while fully charged — one truncated
+    # response spent 300 output tokens on 83 characters of text. Tune this
+    # against the thinking budget, not against rationale length.
+    # At the previous hardcoded 300, four
+    # responses in sample 20260802T052306Z were cut mid-rationale — and a
+    # truncated response raises JSONParseError, which _judge_failed turns
+    # into a D14 fail-open pass for non-mandatory claims. One of those had
+    # already emitted "label": "CONTRADICTS", so a rejection became an
+    # acceptance. Completed responses measured 60-282 tokens (median 104),
+    # a maximum censored by the old ceiling.
+    judge_max_output_tokens: int = 800
+    # One batched entailment call decides keep/narrow/discard for every claim a
+    # worker produced. On truncation, parse_json raises and worker.py returns
+    # the original batch — the whole batch bypasses the discard filter, and
+    # nothing records it. At 1200, one of eighteen calls in sample
+    # 20260802T052306Z was cut; completed responses ran 97-923 tokens.
+    # As with the judge ceiling, adaptive thinking (llm.py:137) consumes most
+    # of the budget invisibly — the truncated call spent ~1155 tokens on
+    # thinking for 183 characters of text.
+    #
+    # Do NOT recalibrate this from batch size. Measured across all 18 calls in
+    # that sample, tokens do not scale with claim count: 1 claim->97,
+    # 3 claims->{237,434,923,1200(cut)}, 4->{302-598}, 5->{181,225},
+    # 6->{512-655}. The cut hit a 3-claim batch while every 6-claim batch
+    # finished. The driver is thinking-token variance, not batch size.
+    entailment_max_output_tokens: int = 3000
+
+    # A truncated response is a *different failure* from a malformed one: the
+    # judgement is unfinished, not wrong. When a call is cut at its configured
+    # ceiling (not by the budget clamp), call_json retries once at this
+    # multiple of the ceiling.
+    #
+    # 2.0 is a compromise, not a measured sufficiency. The judge was cut at
+    # both 300 and 800, so doubling is not guaranteed to be enough — when it
+    # is not, the call site fails closed. The alternative, requesting all
+    # remaining headroom, lets one worker monopolise the dev profile's
+    # global_token_cap of 100000 across parallel_workers=2 and starve its peer.
+    #
+    # gt=1.0 because a multiplier at or below 1.0 would not expand the
+    # retry's ceiling at all -- it terminates safely but is meaningless.
+    truncation_retry_multiplier: float = Field(default=2.0, gt=1.0)
+    # The report judge returns {"answers_question", "strength_ok", "rationale"}
+    # -- a shape as small as the claim judge's, and it runs on the same model
+    # (service.py resolves both from role="everyday").
+    #
+    # This was hardcoded at 400 in report.py. No truncation has ever been
+    # observed at stage="report_grading", but that is not evidence the ceiling
+    # is adequate: the deterministic gate rejects before the judge is called in
+    # 52 of 61 recorded runs, so the call itself is rare. The relevant evidence
+    # comes from the sibling stage -- claim_grading truncated four times at a
+    # cap of 300 on the same model, because adaptive thinking (llm.py) spends
+    # the ceiling invisibly. 400 sits between that observed failure and the 800
+    # the claim judge now uses.
+    #
+    # Aligned with judge_max_output_tokens rather than raised independently:
+    # two judges with the same output shape on the same model should not drift
+    # apart for no measured reason.
+    report_judge_max_output_tokens: int = 800
+    # Share of "factual assertion" sentences allowed to carry no footnote
+    # before the report is rejected. Was a module literal in report.py.
+    #
+    # This is the single most consequential gate in the harness by measured
+    # effect: it accounts for all 156 recorded report rejections, and 52 of
+    # 61 runs never got past it. Whether 0.20 is right is genuinely open --
+    # the reports may be badly cited, or the threshold may be too tight --
+    # and that cannot be settled until the ratios themselves are recorded
+    # (see report_graded diagnostics). The value is unchanged pending that
+    # evidence; it is a setting so the answer can be acted on.
+    report_uncited_ratio_max: float = Field(default=0.20, gt=0.0, le=1.0)
+
+    # How many node_reduction calls the finalization floor budgets for.
+    #
+    # Measured: node_reduction runs a median of 2 times per run (max 9). Runs
+    # with deeper trees will see their last reductions degrade to joining
+    # child answers, but assembly and the judge survive -- which is the point
+    # of the reserve, and why the report tier is isolated from this one.
+    # Budgeting for the observed maximum of 9 would put the reduction tier at
+    # 93,600 on the default profile -- 93.6% of the dev profile's entire
+    # 100,000-token cap on its own, before the report tier or any
+    # investigation budget is even counted.
+    finalization_reduction_allowance: int = Field(default=2, ge=1)
+
+    # Fraction of a profile's global_token_cap above which the finalization
+    # floor is judged to be crowding out investigation. Not expected to fire
+    # on the shipped defaults -- the floor is 43.7% of the default profile's
+    # cap (131,200 / 300,000) and 41.0% of dev's (41,040 / 100,000) -- so this
+    # is a backstop for a profile tuned into a corner, not a signal for normal
+    # operation. That margin is thinner than it looks: before the input
+    # currency was added the floor was 4.3%/22% of the same caps, nowhere
+    # near this 0.5 threshold; 41-44% sits close enough that a moderate
+    # further increase to the floor (or cut to a cap) would trip it.
+    finalization_floor_warn_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
+
+    # Smallest output grant `TokenBudget.reserve` will issue rather than refuse.
+    #
+    # A reservation used to succeed on >= 1 token. Measured 2026-08-04: all 5
+    # dev runs of the funnel sample died because grants of 25, 38, 851, and
+    # 1,123 tokens were issued for prompts needing far more, truncated, and
+    # (truncation now being a hard error) failed the whole run.
+    #
+    # Derived from the same sample's SUCCESSFUL split_decompose calls, which
+    # consumed 1,229 / 1,460 / 1,903 / 2,044 output tokens. 2048 covers that
+    # observed range, so a grant below it is one the stage has never been
+    # seen to complete within. It is not a truncation guarantee -- nothing at
+    # this layer can be -- it removes the catastrophic tail.
+    #
+    # `reserve` clamps this by the caller's own `max_output_tokens`, so stages
+    # that deliberately ask for less (the report judge asks 800) are unaffected.
+    min_viable_output_tokens: int = Field(default=2048, ge=1)
+
+    # Input allowances for the finalization stages, expressed as multiples of
+    # `synthesis_max_tokens` so a profile that shrinks its synthesis ceiling
+    # shrinks its floor with it instead of needing three more per-profile
+    # knobs.
+    #
+    # These exist because the floor and `TokenBudget.reserve` used different
+    # currencies: the floor counted output tokens only, while `reserve`
+    # charges `conservative_input_bound(request) + output`. Measured
+    # 2026-08-04: one node_reduction took 6,480 on input alone -- larger than
+    # the entire 4,400-token dev floor of the time.
+    #
+    # Measured: node_reduction input_bound ran 1,225 / 1,369 / 6,480
+    # (min/median/max) against synthesis_max_tokens=4000 -> 6480/4000 = 1.62.
+    reduction_input_ratio: float = Field(default=1.6, gt=0.0)
+    # Never measured -- report_assembly has never received a reservation in
+    # 574 runs. This is not an estimate but a CLAMP: `prompt_clamp` shrinks
+    # the assembly's child blocks and caveats until `prompt_input_bound`
+    # reports a value under this allowance. That bounds those two pieces,
+    # not the whole prompt: `root_answer` is deliberately never clamped
+    # (design D-6, prompt_clamp.py) so body coverage is preserved, and on
+    # the degraded-reduction path it comes from
+    # `Synthesizer._degraded_summary`, which joins EVERY child's answer with
+    # no bound on child count. A wide degraded tree can therefore make
+    # `root_answer` plus the template alone exceed this allowance after the
+    # clampable material has already been dropped to nothing. When that
+    # happens `clamp_prompt` reports `exhausted=True` and lets `reserve()`
+    # decide, same as any other oversized call -- the clamp narrows the
+    # failure mode, it does not eliminate it.
+    assembly_input_ratio: float = Field(default=3.0, gt=0.0)
+    # Derived, not clamped. The judge is handed the whole report and giving it
+    # a truncated one changes what is being judged, so there is nothing to
+    # clamp. This ratio is NOT a strict bound on the judge's input -- three
+    # things add to the assembly's own output ceiling (synthesis_max_tokens)
+    # before `ReportGrader.grade_agentic` sees the prompt:
+    #   1. `CitationRenderer.render` (citation.py) appends a `## 출처` block
+    #      with ONE LINE PER CITED CLAIM, each carrying that claim's full
+    #      source URL(s). The count of cited claims is unbounded here.
+    #   2. `root_text` (the root question) is passed alongside the report and
+    #      is not part of the assembly's output at all.
+    #   3. The `report_judge.md` prompt template's own literal instruction
+    #      text is a fixed but non-trivial number of bytes.
+    # 5.0x carries headroom for all three rather than deriving a strict
+    # bound: the token -> UTF-8 byte conversion alone (Korean runs ~3 bytes
+    # per syllable at roughly one token per syllable; 4.5 bytes/token covers
+    # rarer 4-byte characters and JSON escaping) would already consume most
+    # of the margin over 4.0x, so the round-up to 5.0x is what actually
+    # absorbs 1-3 above.
+    grading_input_ratio: float = Field(default=5.0, gt=0.0)
+
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
-    report_retry_cap: int = 2
+    # 2 -> 1 (2026-08-09). The extra attempt was buying nothing: sample #9's
+    # `report_assembly` reservations were `[1200, 2400]` per run -- the initial
+    # call plus its expansion retry, both on attempt 0. Attempts 1 and 2 never
+    # got an LLM call at all; they emitted the deterministic template, which is
+    # why their `uncited_ratio` and assertion counts were byte-identical to each
+    # other in every run. Meanwhile the cap multiplies the report floor
+    # (`(cap + 1) * (assembly + grading)`), so the dead attempt was taxing the
+    # ceiling that made attempt 0 truncate.
+    report_retry_cap: int = 1
     resolve_threshold: float = 0.7
     conflict_reinvestigation_cap: int = 1
     conflict_value_threshold: float = 0.6
     subq_adopt_threshold: float = 0.3
+    # Tier 1 은 **1차 기관 출처**다 -- 규칙을 만든 기관, 데이터를 낸 기관,
+    # 심사를 거친 학술 저장소. 편입 기준은 "이 도메인의 문서가 그 사실의
+    # 원본인가" 이지 "신뢰할 만한가" 가 아니다. 언론과 기업 블로그는 신뢰할
+    # 만해도 2차이므로 들어오지 않는다.
+    #
+    # 2026-08-09 확장. 원래 목록은 `.gov`/`.edu` 로 **미국 중심**이라
+    # `eur-lex.europa.eu`, `who.int`, `birmingham.ac.uk` 이 전부 tier2 --
+    # `dev.to` 와 같은 등급이었다. 표본 #7 에서 판정자가 반려한 사유가 정확히
+    # 이것이다: "질문이 요구한 '공식 EU 출처' 를 전혀 사용하지 못하고 모두
+    # 2차 블로그성 출처에 의존". 증거 119건 중 tier1 은 19건(16%)뿐이었고,
+    # 그중에도 `.ac.uk`/`.gov.uk` 는 세지 않은 채였다.
     source_tiers: dict[str, list[str]] = Field(
         default_factory=lambda: {
-            "tier1": ["arxiv.org", ".gov", ".edu", "github.com"],
+            "tier1": [
+                # 학술 저장소·코드 원본
+                "arxiv.org",
+                "github.com",
+                # 미국
+                ".gov",
+                ".edu",
+                # 초국가 기관 (EU, UN/WHO 계열)
+                "europa.eu",
+                ".int",
+                # 영국
+                ".gov.uk",
+                ".ac.uk",
+                # 한국
+                ".go.kr",
+                ".re.kr",
+                ".ac.kr",
+                # 일본
+                ".go.jp",
+                ".ac.jp",
+                # 호주·캐나다·뉴질랜드
+                ".gov.au",
+                ".edu.au",
+                ".gc.ca",
+                ".govt.nz",
+            ],
             "tier2": ["*"],
         }
     )
+    # 검색에서 가져올 후보 배수. `search_result_limit` 개를 fetch 하되 그
+    # 몇 배를 후보로 받아 tier 순으로 고른다. fetch 수는 그대로이므로
+    # 늘어나는 비용은 검색 결과 몇 줄뿐이다.
+    source_candidate_multiplier: int = 3
+    # 1차 기관 출처를 겨냥해 한 번 더 검색할 때 원 질문 뒤에 붙일 키워드.
+    #
+    # `source_candidate_multiplier` 와 `_rank_by_source_tier`(D45)는 **엔진이
+    # 이미 돌려준 것 안에서만** 고른다. 엔진이 tier1 URL 을 0건 반환하면 정렬은
+    # 항등 함수이고 후보를 3배로 넓혀도 같은 질의의 3배일 뿐이다. 표본 #10 의
+    # 판정자가 남긴 두 불만 중 하나가 여기다 -- "질문이 요구한 공식 EU 출처
+    # 대신 2차 비공식 출처".
+    #
+    # `site:` 문법이 아니라 평문 키워드인 이유: `web_search` 는 질의 문자열
+    # 하나만 받고(`service.py:17`) 백엔드 엔진이 무엇인지 모른다. `site:` 를
+    # 지원하지 않는 엔진에서는 0건이 돌아오는데, 그러면 fetch 할 URL 이 없어
+    # 모든 클레임이 E_NO_EVIDENCE 로 거절된다 -- 검색어에 brief 전문을 넣었을
+    # 때와 같은 고장이다. 키워드는 최악의 경우에도 결과를 흐릴 뿐 없애지 않고,
+    # 워커는 두 질의를 **병합**하므로 결과 집합은 기저 질의의 상위집합이다.
+    # `site:` 를 지원하는 배포는 이 값을 그 문법으로 덮어쓰면 된다.
+    #
+    # 빈 문자열이면 2차 질의를 건너뛴다 -- 별도 on/off 플래그를 두지 않는다.
+    search_primary_augment: str = "공식 기관 원문 official primary source"
     dev_profile: DeepAnalysisDevProfileConfig = Field(
         default_factory=DeepAnalysisDevProfileConfig
     )
+    discard_recall: DeepAnalysisDiscardRecallConfig = Field(
+        default_factory=DeepAnalysisDiscardRecallConfig
+    )
     search_result_limit: int = 3
     fetch_timeout_seconds: float = 15.0
+    # Identifies this client to the sites it fetches. Deliberately a
+    # descriptive bot string, not a browser string: sites that block bots are
+    # expressing a preference, and impersonating a browser circumvents it.
+    # Wikipedia requires an identifiable UA and returns 403 for browser-like
+    # strings; it returns 200 for this one. Deployments should point the
+    # contact URL at something they actually monitor.
+    fetch_user_agent: str = (
+        "NEOS-DeepAnalysis/0.23 (+https://github.com/NEOS-AI/neos)"
+    )
     evidence_context_chars: int = 2000
     excerpt_max_chars: int = 500
-    decompose_max_tokens: int = 1500
+    # 1500이었을 때 실측 캐소트(20260728T104241Z)에서 decompose 응답 3건이
+    # 정확히 1500 output_tokens에서 stop_reason=max_tokens로 잘렸다(1235/1995/1869자,
+    # ≈1.13자/토큰 — 에러 로그의 "~1680자" 관측과 일치). 그중 최대 개별
+    # subquestion 객체는 399자였다. 완전한 응답(최대 7개) 추정치:
+    # 7 * 399자 + JSON 오버헤드(~40자) ≈ 2833자 / 1.13자당토큰 ≈ 2501토큰.
+    # 여기에 여유를 두어 3200으로 설정(추정치 대비 +28% 여유, 기존 1500의 ~2.1배).
+    decompose_max_tokens: int = 3200
     worker_max_output_tokens: int = 4000
-    synthesis_max_tokens: int = 4000
+    # ge=1: at s <= 0, the floor formulas can push report_floor_tokens above
+    # floor_tokens (which stays non-negative) and `TokenBudget.__init__`
+    # raises an opaque ValueError on every run instead of failing at config
+    # validation with a clear message.
+    synthesis_max_tokens: int = Field(default=4000, ge=1)
     sse_keepalive_seconds: float = 0.5
     # ── Phase 3a (D22): durable job 서비스 ──────────────────────────────
     # 실행 큐. celery_app.py의 task_queues에 이미 정의된 4종 중 하나여야 한다
@@ -709,6 +1059,106 @@ class DeepAnalysisConfig(StrictConfigModel):
     # 워커/게이트웨이 슬롯을 잡아먹지 않게 하는 상한이다. 클라이언트는
     # 마지막 seq를 ?after=로 넘겨 재접속하면 이어서 받는다.
     events_stream_idle_timeout: float = 300.0
+
+    def grading_floor_tokens(self, synthesis_max_tokens: int) -> int:
+        """The INNERMOST floor: one judge call that `report_assembly` cannot
+        touch (token_budget.GRADING_STAGES).
+
+        Sized for **one** call, not the whole retry loop. The loop's earlier
+        gradings are welcome to run on the tier above; what this guarantees
+        is that the *last* draft -- the one that actually ships -- can still
+        be judged. That was the failure: all three gate passes in the
+        ledger's history came from the judge starving on the final attempt,
+        which `ReportGrader.grade` degrades to a pass.
+
+        `truncation_retry_multiplier` is in the formula because a judge call
+        is really up to two: `call_json` retries a truncated response with a
+        doubled ceiling, visible in the ledger as `report_grading`
+        reservations of 800 then 1600. The floor that ignored the retry
+        could fund the first call and not the second.
+
+        Sample #6 measured judge prompts of 5,900-17,084 tokens against
+        3,555-9,443 remaining, so this is checked against reality rather
+        than derived and hoped for: dev (1200) gives 13,600 and prod (4000)
+        gives 41,600, covering both.
+        """
+        return int(
+            self.truncation_retry_multiplier
+            * (
+                self.grading_input_ratio * synthesis_max_tokens
+                + self.report_judge_max_output_tokens
+            )
+        )
+
+    def report_floor_tokens(self, synthesis_max_tokens: int) -> int:
+        """The INNER floor tier: `report_retry_cap + 1` rounds of one
+        assembly plus one judge, counted in the input+output currency
+        `TokenBudget.reserve` actually charges.
+
+        `node_reduction` cannot draw on this (token_budget.REPORT_STAGES).
+        Sizing it for the whole retry loop is deliberate: `_finalize`
+        re-assembles up to `report_retry_cap` times and grades every draft,
+        so a tier covering one round leaves the later rounds to fail open --
+        the failure this split exists to end.
+
+        The `assembly` term counts the truncation expansion, for the same
+        reason `grading_floor_tokens` does (D56, 2026-08-10). `call_text`
+        answers a truncated assembly with **the same prompt at
+        `truncation_retry_multiplier` times the output ceiling**
+        (llm.py:464-474), so a truncated attempt charges its input twice and
+        its output `1 + m` times -- not the `input + output` this term used
+        to assume.
+
+        Measured, not derived and hoped for. Sample #12 logged the pair
+        directly:
+
+            reserved  input_bound=5926 max_out=2000 total=7926   <- attempt
+            reserved  input_bound=5926 max_out=4000 total=9926   <- expansion
+            DEGRADED  reason=input_bound                          <- retry
+
+        17,852 against a term of 8,000. Five of six runs reserved twice for
+        `report_assembly`; one reserved three times. The old term funded two
+        attempts, a truncated attempt costs three, and so `_finalize`'s retry
+        was refused its reservation in four of six runs -- which is why the
+        retry loop had never run (D53, D55). The corrected term is 18,000.
+
+        Note `grading` is left as `m * (input + output)` rather than the
+        exact `m * input + (1 + m) * output`. The two differ by exactly one
+        `report_judge_max_output_tokens` (800 dev / 800 prod) against a term
+        of 10,800 -- under 8%, and no measurement points at it. The assembly
+        term is corrected because a sample measured it binding.
+        """
+        assembly = int(
+            self.truncation_retry_multiplier
+            * self.assembly_input_ratio
+            * synthesis_max_tokens
+            + (1 + self.truncation_retry_multiplier) * synthesis_max_tokens
+        )
+        grading = int(
+            self.grading_input_ratio * synthesis_max_tokens
+            + self.report_judge_max_output_tokens
+        )
+        return (self.report_retry_cap + 1) * (assembly + grading)
+
+    def finalization_floor_tokens(self, synthesis_max_tokens: int) -> int:
+        """The TOTAL floor: the report tier plus
+        `finalization_reduction_allowance` node_reduction calls.
+
+        Shared by `neos/config/loader.py`'s `warn_finalization_floor_ratio`
+        (checks this against `global_token_cap` at config-load time) and
+        `neos/workflow/deep_analysis/service.py`'s `build_orchestrator` (the
+        floor actually enforced by `TokenBudget`). Kept as one method, not two
+        independent expressions, so a future change to the formula cannot
+        silently leave the warning describing a floor that is no longer in
+        force.
+        """
+        reduction = int(
+            (self.reduction_input_ratio + 1) * synthesis_max_tokens
+        )
+        return (
+            self.report_floor_tokens(synthesis_max_tokens)
+            + self.finalization_reduction_allowance * reduction
+        )
 
 
 class RayConfig(StrictConfigModel):
@@ -821,7 +1271,7 @@ class SandboxConfig(StrictConfigModel):
 class CodingModelConfig(StrictConfigModel):
     enabled: bool = False
     provider: Literal["anthropic"] = "anthropic"
-    model: str = "claude-sonnet-4-5-20250929"
+    model: str | None = None
     model_timeout_sec: float = Field(default=120, gt=0, le=600)
     tool_timeout_sec: float = Field(default=30, gt=0, le=300)
     max_turns: int = Field(default=20, gt=0, le=100)
@@ -952,6 +1402,7 @@ class AppConfig(StrictConfigModel):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     smart_cache: SmartCacheConfig = Field(default_factory=SmartCacheConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    model_routing: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)

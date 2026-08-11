@@ -467,7 +467,12 @@ async def test_ac_c_orphan_citation_retries_assembly_through_run():
         # report_graded events show the attempt-0 orphan failure then the
         # attempt-1 success -- the retry trace AC-c calls for.
         graded = await _events(session, run_id, "report_graded")
-        assert graded[0] == {"ok": False, "code": "E_ORPHAN_CITE", "attempt": 0}
+        assert graded[0] == {
+        "ok": False,
+        "code": "E_ORPHAN_CITE",
+        "attempt": 0,
+        "orphan_claim_id": "aaaaaaaa",
+    }
         assert graded[1] == {"ok": True, "attempt": 1}
 
         completed = (

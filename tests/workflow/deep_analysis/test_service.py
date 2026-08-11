@@ -1,5 +1,6 @@
 import pytest
 
+from neos.config.settings import settings
 from neos.workflow.deep_analysis.service import (
     build_orchestrator,
     web_search,
@@ -58,6 +59,22 @@ async def test_web_search_adapts_mcp_result_and_cleans_up():
 
 @pytest.mark.asyncio
 async def test_build_orchestrator_uses_dev_cap_and_pure_worker(monkeypatch):
+    """profile="dev" must resolve the DEV profile's cap, not the default's.
+
+    dev.global_token_cap is 100000 (see schema.py), default is 300000 --
+    still distinct enough that this assertion fails if build_orchestrator
+    ever falls back to the default profile's cap.
+
+    Also guards the service -> budget wiring itself: build_orchestrator
+    computes both floor tiers from config and passes `report_floor_tokens`
+    into `Orchestrator(...)` (service.py). That kwarg is the only thing
+    that makes the inner tier real in production -- drop it and every run
+    gets `report_floor_tokens=0`, `report_assembly` competes with
+    `node_reduction` for the same pool again, and the original 574-run
+    defect (report_assembly never reserved) returns silently, with
+    `tests/workflow/deep_analysis` still green apart from this assertion.
+    """
+
     async def search_fn(query, k):
         return []
 
@@ -75,8 +92,43 @@ async def test_build_orchestrator_uses_dev_cap_and_pure_worker(monkeypatch):
     )
     worker = orchestrator.worker_factory()
 
-    assert orchestrator.global_token_cap == 20000
+    assert orchestrator.global_token_cap == 140000
+    # dev profile values (synthesis_max_tokens=2000): report_floor_tokens =
+    # assembly (2*3.0*2000 + 3*2000 = 18,000, counting call_text's truncation
+    # expansion -- D56) + grading (5.0*2000+800 = 10,800), * (report_retry_cap
+    # + 1) = 57,600; floor_tokens = report_floor_tokens + reduction_floor
+    # (10,400) = 68,000. Both tiers must land on the orchestrator's actual
+    # TokenBudget, not just be computed and dropped.
+    assert orchestrator.token_budget.report_floor_tokens == 57_600
+    assert orchestrator.token_budget.floor_tokens == 68_000
     assert not hasattr(worker, "db")
     assert not hasattr(worker, "run_id")
     assert worker._confidence_cap == custom_caps
     assert worker._confidence_cap is not custom_caps
+
+
+@pytest.mark.parametrize(
+    ("feature_model", "expected_model"),
+    [
+        (None, "claude-sonnet-5"),
+        ("claude-judge-manual", "claude-judge-manual"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_build_orchestrator_resolves_judge_at_construction_boundary(
+    monkeypatch, feature_model, expected_model
+) -> None:
+    monkeypatch.setattr(
+        settings.config.deep_analysis.models,
+        "judge",
+        feature_model,
+    )
+
+    orchestrator = await build_orchestrator(
+        object(),
+        "run00001",
+        search_fn=lambda query, k: [],
+    )
+
+    assert orchestrator.agentic_grader.judge_model == expected_model
+    assert orchestrator.report_grader.judge_model == expected_model

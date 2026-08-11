@@ -2,7 +2,7 @@
 RecursivePlanner: 하위 태스크 분해기
 
 non-atomic 태스크를 2-N개의 하위 태스크로 분해합니다.
-상위 레벨(depth=0)은 Opus, 하위 레벨은 Haiku를 사용합니다.
+상위 레벨(depth=0)은 중앙 powerful 역할, 하위 레벨은 Haiku를 사용합니다.
 """
 
 import json
@@ -10,6 +10,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
+from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 from neos.utils.llm_factory import LLMFactory
 
@@ -68,7 +69,7 @@ class RecursivePlanner:
 
     non-atomic 태스크를 2-N개의 하위 RecursiveTaskNode로 분해합니다.
     깊이(depth)에 따라 모델을 선택합니다:
-    - depth=0: RECURSIVE_PLANNER_MODEL (Opus)
+    - depth=0: anthropic powerful 역할 (planner_model 재정의 가능)
     - depth>0: RECURSIVE_ATOMIZER_MODEL (Haiku, 비용 절감)
     """
 
@@ -82,7 +83,12 @@ class RecursivePlanner:
     def _select_model(self, depth: int) -> str:
         """깊이에 따라 LLM 모델 선택."""
         if depth == 0:
-            return settings.RECURSIVE_PLANNER_MODEL
+            return resolve_model(
+                config=settings.config.model_routing,
+                provider="anthropic",
+                role="powerful",
+                feature_override=settings.config.recursive_agent.planner_model,
+            ).model
         return settings.RECURSIVE_ATOMIZER_MODEL  # Haiku
 
     async def decompose(

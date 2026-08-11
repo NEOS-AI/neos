@@ -1,6 +1,5 @@
 """Pytest configuration and fixtures."""
 
-import asyncio
 import os
 from typing import AsyncGenerator
 
@@ -13,6 +12,13 @@ os.environ.setdefault(
 )
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
+# Several tests assert the production-shaped app (for example that unauthenticated
+# WebSocket routes are stripped). `neos.main` captures `IS_DEBUG` at import time, so
+# the shape depends on ambient config — and a developer `.env` with `DEBUG=true`
+# silently flips it. Pin the session to production shape while still letting an
+# explicit `DEBUG=1 pytest ...` opt back in.
+os.environ.setdefault("DEBUG", "false")
+
 
 def _skip_database_fixtures(request: pytest.FixtureRequest) -> bool:
     nodeid = getattr(request.node, "nodeid", "")
@@ -24,20 +30,8 @@ def _skip_database_fixtures(request: pytest.FixtureRequest) -> bool:
     )
 
 
-@pytest.fixture(scope="function")
-def event_loop():
-    """
-    Create a new event loop for each test function.
-    This ensures database connections don't leak between tests.
-    """
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    yield loop
-    loop.close()
-
-
 @pytest.fixture(scope="function", autouse=True)
-async def cleanup_test_data(event_loop, request):
+async def cleanup_test_data(request):
     """
     Clean test data before and after each test.
     """
@@ -77,41 +71,33 @@ async def cleanup_test_data(event_loop, request):
     await do_cleanup()
 
 
-@pytest.fixture(scope="function", autouse=True)
-async def reset_db_manager(event_loop, cleanup_test_data, request):
+@pytest.fixture(scope="session", autouse=True)
+async def database_engine_lifecycle():
+    """세션 전체에서 DB 엔진 하나를 재사용하고, 끝에서 한 번만 정리한다.
+
+    이전에는 테스트마다 엔진을 폐기·재생성했다. 그러면 매 테스트가 새 커넥션 풀을
+    만들고, `close()`는 `dispose(close=False)`라 이전 커넥션을 닫지 않은 채 버린다.
+    2000개가 넘는 테스트를 지나며 그 잔여물이 쌓여 후반부에 커넥션 생성이
+    간헐적으로 실패했다.
+
+    엔진 생성은 첫 사용 시점까지 미룬다 — `no_db` 테스트만 돌릴 때 DB를 요구하지
+    않기 위해서다.
     """
-    Reset the database manager before and after each test to prevent event loop conflicts.
-    This ensures each test gets a fresh database connection pool bound to the current event loop.
-    """
-    if _skip_database_fixtures(request):
-        yield
-        return
+    yield
 
     from neos.database.connection import db_manager
 
-    # Dispose existing connections before test
     if db_manager.engine is not None:
         try:
             await db_manager.close()
-            db_manager.engine = None
-            db_manager.session_factory = None
         except Exception:
             pass
-
-    yield
-
-    # Clean up database connections after test
-    if db_manager.engine is not None:
-        try:
-            await db_manager.close()
-            db_manager.engine = None
-            db_manager.session_factory = None
-        except Exception:
-            pass
+        db_manager.engine = None
+        db_manager.session_factory = None
 
 
 @pytest.fixture(scope="function")
-async def client(event_loop) -> AsyncGenerator[AsyncClient, None]:
+async def client() -> AsyncGenerator[AsyncClient, None]:
     """
     Test client fixture with proper cleanup.
     Function-scoped to ensure each test gets a fresh client and event loop.

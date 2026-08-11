@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
 from .graders.agentic import AgenticGrader
@@ -57,6 +58,12 @@ async def build_orchestrator(
     skill_registry=None,
 ) -> Orchestrator:
     config = settings.config.deep_analysis
+    judge_model = resolve_model(
+        config=settings.config.model_routing,
+        provider="anthropic",
+        role="everyday",
+        feature_override=config.models.judge,
+    ).model
     ledger = Ledger(session, run_id)
     grader = DeterministicGrader(
         ledger,
@@ -64,15 +71,16 @@ async def build_orchestrator(
         confidence_cap=config.confidence_cap,
     )
     agentic_grader = AgenticGrader(
-        judge_model=config.models.judge,
+        judge_model=judge_model,
         threshold=config.agentic_threshold,
         sample_rate=config.agentic_sample_rate,
+        max_output_tokens=config.judge_max_output_tokens,
         llm_client=llm_client,
         cassette=cassette,
     )
     report_grader = ReportGrader(
         ledger,
-        judge_model=config.models.judge,
+        judge_model=judge_model,
         llm_client=llm_client,
         cassette=cassette,
     )
@@ -106,6 +114,25 @@ async def build_orchestrator(
     max_depth = (
         config.dev_profile.max_depth if profile == "dev" else config.max_depth
     )
+    synthesis_max_tokens = (
+        config.dev_profile.synthesis_max_tokens
+        if profile == "dev"
+        else config.synthesis_max_tokens
+    )
+    # Two nested tiers, not one pool. The outer floor keeps investigation out
+    # of the finalization chain; the inner one keeps node_reduction out of the
+    # report. `reduce_tree` calls `reduce_node` once per node and nothing caps
+    # that count -- 6 measured runs averaged 3.7 calls against an allowance of
+    # 2 -- so without the inner tier the assembly's reservation is taken by
+    # whichever reduction happens to run last. Both come from
+    # `DeepAnalysisConfig` so `neos/config/loader.py`'s
+    # `warn_finalization_floor_ratio` can never describe a floor that is not
+    # the one enforced here.
+    finalization_floor_tokens = config.finalization_floor_tokens(
+        synthesis_max_tokens
+    )
+    report_floor_tokens = config.report_floor_tokens(synthesis_max_tokens)
+    grading_floor_tokens = config.grading_floor_tokens(synthesis_max_tokens)
     return Orchestrator(
         session,
         run_id,
@@ -119,6 +146,11 @@ async def build_orchestrator(
         llm_client=llm_client,
         cassette=cassette,
         global_token_cap=global_token_cap,
+        finalization_floor_tokens=finalization_floor_tokens,
+        report_floor_tokens=report_floor_tokens,
+        grading_floor_tokens=grading_floor_tokens,
+        min_viable_output_tokens=config.min_viable_output_tokens,
         parallel_workers=parallel_workers,
         max_depth=max_depth,
+        synthesis_max_tokens=synthesis_max_tokens,
     )

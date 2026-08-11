@@ -29,7 +29,7 @@ try:
     from neos.database.connection import db_manager
     from neos.utils.cache import cache_manager
     from neos.utils.embeddings import embedding_manager
-    from neos.utils.llm_factory import llm_factory, get_recommended_models
+    from neos.utils.llm_factory import llm_factory, get_default_model, get_recommended_models
     from neos.workflow.graph import multi_agent_workflow
     from neos.agents.search_agents import KnowledgeSearchAgent, RealtimeInfoSearchAgent, RealtimeDataSearchAgent
     from neos.agents.analysis_agents import DataAnalysisAgent, ComparativeAnalysisAgent
@@ -122,7 +122,7 @@ def _check_configuration() -> Dict[str, Any]:
     
     # LLM 설정
     status["llm_config"]["provider"] = settings.LLM_PROVIDER
-    status["llm_config"]["model"] = settings.LLM_MODEL
+    status["llm_config"]["model"] = get_default_model()
     status["llm_config"]["temperature"] = settings.LLM_TEMPERATURE
     
     # 데이터베이스
@@ -1668,7 +1668,7 @@ def config():
     current_table.add_column("Value", style="green")
     
     current_table.add_row("LLM Provider", settings.LLM_PROVIDER)
-    current_table.add_row("LLM Model", settings.LLM_MODEL)
+    current_table.add_row("LLM Model", get_default_model())
     current_table.add_row("LLM Temperature", str(settings.LLM_TEMPERATURE))
     current_table.add_row("Embedding Model", settings.EMBEDDING_MODEL)
     current_table.add_row("Search System", "Hybrid (Vector + Keyword)")
