@@ -18,6 +18,7 @@ from neos.coding.managed.adapters.docker_shadow import (
 )
 from neos.coding.managed.domain import ProviderCircuitState
 from neos.coding.sandbox.command import DockerCommandResult
+from neos.coding.sandbox.base import SandboxUnavailable
 from neos.coding.sandbox.docker import (
     DockerSandboxConfig,
     DockerSandboxProvider,
@@ -45,6 +46,8 @@ class EmulatedDockerRunner:
     def __init__(self) -> None:
         self.calls: list[tuple[str, ...]] = []
         self.containers: dict[str, dict[str, object]] = {}
+        self.volumes: dict[str, dict[str, object]] = {}
+        self.removal_failures: set[tuple[str, str]] = set()
 
     async def run(
         self,
@@ -53,15 +56,35 @@ class EmulatedDockerRunner:
         allowed_exit_codes=(0,),
         input: bytes = b"",
     ) -> DockerCommandResult:
-        del timeout_sec, allowed_exit_codes, input
+        del timeout_sec, input
         self.calls.append(args)
-        if args[0] == "create":
+        if args[:2] == ("volume", "create"):
+            name = args[-1]
+            labels = _labels_from_args(args)
+            self.volumes.setdefault(
+                name,
+                {
+                    "Name": name,
+                    "Labels": labels,
+                },
+            )
+            await asyncio.sleep(0)
+        elif args[:2] == ("volume", "inspect"):
+            name = args[2]
+            value = self.volumes.get(name)
+            if value is None:
+                return self._missing_or_raise(args, allowed_exit_codes)
+            return DockerCommandResult(0, json.dumps([value]).encode(), b"")
+        elif args[:2] == ("volume", "rm"):
+            name = args[2]
+            if ("volume", name) in self.removal_failures:
+                raise SandboxUnavailable("emulated_volume_remove_failed")
+            if name not in self.volumes:
+                return self._missing_or_raise(args, allowed_exit_codes)
+            self.volumes.pop(name)
+        elif args[0] == "create":
             name = args[args.index("--name") + 1]
-            labels = {
-                args[index + 1].split("=", 1)[0]: args[index + 1].split("=", 1)[1]
-                for index, value in enumerate(args)
-                if value == "--label"
-            }
+            labels = _labels_from_args(args)
             self.containers[name] = {
                 "Id": f"container-{name}",
                 "Name": f"/{name}",
@@ -73,6 +96,11 @@ class EmulatedDockerRunner:
         elif args[0] == "stop":
             self.containers[args[1]]["State"] = {"Running": False}
         elif args[0] == "rm":
+            name = args[-1]
+            if ("container", name) in self.removal_failures:
+                raise SandboxUnavailable("emulated_container_remove_failed")
+            if name not in self.containers:
+                return self._missing_or_raise(args, allowed_exit_codes)
             self.containers.pop(args[-1], None)
         elif args[0] == "inspect":
             values = []
@@ -80,10 +108,15 @@ class EmulatedDockerRunner:
                 value = self.containers.get(reference)
                 if value is None:
                     value = next(
-                        item
-                        for item in self.containers.values()
-                        if item["Id"] == reference
+                        (
+                            item
+                            for item in self.containers.values()
+                            if item["Id"] == reference
+                        ),
+                        None,
                     )
+                if value is None:
+                    return self._missing_or_raise(args, allowed_exit_codes)
                 values.append(value)
             return DockerCommandResult(0, json.dumps(values).encode(), b"")
         elif args[:2] == ("ps", "--all"):
@@ -100,6 +133,23 @@ class EmulatedDockerRunner:
         elif args[0] == "exec" and "test" not in args:
             return DockerCommandResult(0, _archive(), b"")
         return DockerCommandResult(0, b"", b"")
+
+    @staticmethod
+    def _missing_or_raise(
+        args: tuple[str, ...],
+        allowed_exit_codes: tuple[int, ...],
+    ) -> DockerCommandResult:
+        if 1 in allowed_exit_codes:
+            return DockerCommandResult(1, b"", b"not found")
+        raise SandboxUnavailable(f"emulated_not_found:{args[-1]}")
+
+
+def _labels_from_args(args: tuple[str, ...]) -> dict[str, str]:
+    return {
+        args[index + 1].split("=", 1)[0]: args[index + 1].split("=", 1)[1]
+        for index, value in enumerate(args)
+        if value == "--label"
+    }
 
 
 def docker_adapter(
@@ -134,6 +184,11 @@ async def test_allocate_binds_managed_metadata_in_docker_labels() -> None:
     assert f"{ALLOCATION_ID_LABEL}={request.allocation_id}" in create_call
     assert f"{IDEMPOTENCY_KEY_LABEL}={request.idempotency_key}" in create_call
     assert f"{OWNERSHIP_DIGEST_LABEL}={request.ownership_digest}" in create_call
+    assert len(runner.volumes) == 2
+    for volume in runner.volumes.values():
+        assert volume["Labels"][ALLOCATION_ID_LABEL] == request.allocation_id
+        assert volume["Labels"][IDEMPOTENCY_KEY_LABEL] == request.idempotency_key
+        assert volume["Labels"][OWNERSHIP_DIGEST_LABEL] == request.ownership_digest
     assert (await adapter.inspect(created.provider_ref)).ownership_verified is True
 
 
@@ -178,6 +233,137 @@ async def test_concurrent_idempotent_allocate_creates_one_container() -> None:
 
     assert first.provider_ref == second.provider_ref
     assert sum(call[0] == "create" for call in runner.calls) == 1
+
+
+async def test_two_adapters_atomically_share_one_idempotent_allocation() -> None:
+    runner = EmulatedDockerRunner()
+    providers = [
+        DockerSandboxProvider(
+            runner=runner,
+            config=DockerSandboxConfig(image=IMAGE),
+        )
+        for _ in range(2)
+    ]
+    adapters = [DockerShadowManagedAdapter(provider=provider) for provider in providers]
+    request = allocation_request()
+
+    first, second = await asyncio.gather(
+        adapters[0].allocate(request),
+        adapters[1].allocate(request),
+    )
+
+    assert first.provider_ref == second.provider_ref
+    assert sum(call[0] == "create" for call in runner.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("resource", "label"),
+    [
+        ("workspace", ALLOCATION_ID_LABEL),
+        ("workspace", IDEMPOTENCY_KEY_LABEL),
+        ("workspace", OWNERSHIP_DIGEST_LABEL),
+        ("claim", ALLOCATION_ID_LABEL),
+        ("claim", IDEMPOTENCY_KEY_LABEL),
+        ("claim", OWNERSHIP_DIGEST_LABEL),
+    ],
+)
+async def test_destroy_rejects_managed_metadata_mismatch_on_every_volume(
+    resource: str,
+    label: str,
+) -> None:
+    adapter, runner = docker_adapter()
+    created = await adapter.allocate(allocation_request())
+    workspace_name = f"neos-sandbox-{created.provider_ref}"
+    if resource == "workspace":
+        volume_name = workspace_name
+    else:
+        claim_names = [name for name in runner.volumes if name != workspace_name]
+        assert len(claim_names) == 1, "allocation claim volume must exist"
+        volume_name = claim_names[0]
+    runner.volumes[volume_name]["Labels"][label] = "tampered"
+
+    with pytest.raises(ManagedAdapterOwnershipError, match="metadata"):
+        await adapter.destroy(
+            created.provider_ref,
+            ownership_digest=created.ownership_digest,
+        )
+
+    assert f"neos-{created.provider_ref}" in runner.containers
+    assert workspace_name in runner.volumes
+    assert volume_name in runner.volumes
+
+
+@pytest.mark.parametrize("resource", ["container", "volume"])
+async def test_destroy_is_unconfirmed_when_a_resource_remains(
+    resource: str,
+) -> None:
+    adapter, runner = docker_adapter()
+    created = await adapter.allocate(allocation_request())
+    name = (
+        f"neos-{created.provider_ref}"
+        if resource == "container"
+        else f"neos-sandbox-{created.provider_ref}"
+    )
+    runner.removal_failures.add((resource, name))
+
+    result = await adapter.destroy(
+        created.provider_ref,
+        ownership_digest=created.ownership_digest,
+    )
+
+    assert result.confirmed is False
+    remaining = runner.containers if resource == "container" else runner.volumes
+    assert name in remaining
+
+
+@pytest.mark.parametrize("resource", ["container", "volume", "claim"])
+async def test_partial_destroy_can_be_confirmed_on_retry(resource: str) -> None:
+    adapter, runner = docker_adapter()
+    created = await adapter.allocate(allocation_request())
+    workspace_name = f"neos-sandbox-{created.provider_ref}"
+    claim_name = next(name for name in runner.volumes if name != workspace_name)
+    names = {
+        "container": f"neos-{created.provider_ref}",
+        "volume": workspace_name,
+        "claim": claim_name,
+    }
+    kinds = {
+        "container": "container",
+        "volume": "volume",
+        "claim": "volume",
+    }
+    failure = (kinds[resource], names[resource])
+    runner.removal_failures.add(failure)
+
+    first = await adapter.destroy(
+        created.provider_ref,
+        ownership_digest=created.ownership_digest,
+    )
+    runner.removal_failures.remove(failure)
+    second = await adapter.destroy(
+        created.provider_ref,
+        ownership_digest=created.ownership_digest,
+    )
+
+    assert first.confirmed is False
+    assert second.confirmed is True
+    assert runner.containers == {}
+    assert runner.volumes == {}
+
+
+async def test_confirmed_destroy_removes_container_workspace_and_claim() -> None:
+    adapter, runner = docker_adapter()
+    created = await adapter.allocate(allocation_request())
+    assert len(runner.volumes) == 2
+
+    result = await adapter.destroy(
+        created.provider_ref,
+        ownership_digest=created.ownership_digest,
+    )
+
+    assert result.confirmed is True
+    assert runner.containers == {}
+    assert runner.volumes == {}
 
 
 async def test_inspect_rejects_disagreement_with_docker_owner_label() -> None:
