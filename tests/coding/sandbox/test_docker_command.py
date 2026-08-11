@@ -106,3 +106,37 @@ async def test_runner_forwards_bounded_stdin_outside_argv() -> None:
         "args": ("exec", "-i", "sb_1", "helper"),
         "input": b"file contents",
     }
+
+
+_SB = "sb_" + "a" * 32
+_IMAGE = "neos-sandbox@sha256:" + "a" * 64
+
+
+def _create_args(**kwargs):
+    return build_create_args(
+        sandbox_id=_SB,
+        image=_IMAGE,
+        limits=SandboxLimits.safe_defaults(),
+        **kwargs,
+    )
+
+
+def test_build_create_args_emits_extra_labels() -> None:
+    args = _create_args(extra_labels={"com.neos.coding.owner-id": "owner_1"})
+
+    index = args.index("com.neos.coding.owner-id=owner_1")
+    assert args[index - 1] == "--label"
+
+
+def test_build_create_args_is_byte_identical_without_extra_labels() -> None:
+    """관리형 라벨이 없을 때 argv가 종전과 완전히 같아야 한다.
+
+    이 단언이 CA5-a 작업이 데이터 플레인을 건드리지 않았다는 증거다.
+    """
+    assert _create_args(extra_labels=None) == _create_args()
+    assert _create_args(extra_labels={}) == _create_args()
+
+
+def test_build_create_args_rejects_label_injection() -> None:
+    with pytest.raises(SandboxPolicyViolation, match="docker_label_invalid"):
+        _create_args(extra_labels={"com.neos.coding.owner-id": "a\nb"})

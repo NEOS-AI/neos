@@ -323,22 +323,21 @@ class DockerSandboxProvider:
                 timeout_sec=self._config.create_timeout_sec,
             )
             volume_created = True
-            create_args = list(build_create_args(
-                sandbox_id=sandbox_id,
-                image=self._config.image,
-                limits=limits,
-                network_mode=self._config.network_mode,
-                allow_unpinned_image=self._config.allow_unpinned_image,
-                tmpfs_bytes=self._config.tmpfs_bytes,
-            ))
-            metadata_labels = (
-                f"com.neos.coding.owner-id={owner_id}",
-                f"com.neos.coding.created-at={now.isoformat()}",
-                "com.neos.coding.workspace-revision=0",
+            create_args = list(
+                build_create_args(
+                    sandbox_id=sandbox_id,
+                    image=self._config.image,
+                    limits=limits,
+                    network_mode=self._config.network_mode,
+                    allow_unpinned_image=self._config.allow_unpinned_image,
+                    tmpfs_bytes=self._config.tmpfs_bytes,
+                    extra_labels={
+                        "com.neos.coding.owner-id": owner_id,
+                        "com.neos.coding.created-at": now.isoformat(),
+                        "com.neos.coding.workspace-revision": "0",
+                    },
+                )
             )
-            insertion = create_args.index("--user")
-            for label in reversed(metadata_labels):
-                create_args[insertion:insertion] = ["--label", label]
             await self._runner.run(
                 *create_args,
                 timeout_sec=self._config.create_timeout_sec,
