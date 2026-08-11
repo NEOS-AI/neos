@@ -9,7 +9,7 @@ from neos.config.settings import settings
 
 from .llm import call_json, call_text, prompt_input_bound
 from .models import ConflictNote, NodeSummary
-from .prompt_clamp import clamp_prompt
+from .prompt_clamp import clamp_prompt, halve
 from .prompt_loader import render
 from .token_budget import TokenBudgetExhausted
 
@@ -22,6 +22,52 @@ _DANGLING_MARKER = re.compile(r"\[C:[0-9a-f]{0,8}$")
 # very things the renderer will later resolve into footnotes, so a looser
 # pattern here would report markers the renderer cannot use.
 _CLAIM_MARKER = re.compile(r"\[C:([0-9a-f]{8})\]")
+
+
+# Sentence-ish pieces. A citation binds to the sentence it sits in, so this
+# is the unit that can be kept or shed without stranding a marker on prose
+# that no longer says anything.
+_SEGMENT = re.compile(r"[^.!?\n]*[.!?\n]|[^.!?\n]+")
+
+
+def compact_keeping_claims(text: str) -> str:
+    """Halve `text`, shedding claim-free segments before cited ones (D62).
+
+    `halve` cuts at a character offset and takes whatever is past it. That
+    destroys citations faster than characters: samples #14 and #15 measured
+    the assembly clamp retaining 36% / 33% of its characters while distinct
+    claims fell to 9% / 15%. And the loss is terminal in a way lost prose is
+    not -- a claim that never reaches the composer cannot be cited, and
+    sample #15 showed footnote counts equal to surviving claims in five runs
+    of six exactly.
+
+    Same character budget as `halve`, so the clamp converges exactly as
+    before; only the choice of *which* characters changes. Segments carrying
+    a marker are taken first in their original order, then the rest fill
+    whatever budget is left.
+
+    Falls back to `halve` when it cannot do better -- a single segment, or a
+    budget too small for any whole segment. `prompt_clamp._progress` also
+    guards the shrink-must-shrink contract, so a fallback here can only cost
+    quality, never termination.
+    """
+
+    budget = len(text) // 2
+    segments = _SEGMENT.findall(text)
+    if len(segments) < 2 or budget <= 0:
+        return halve(text)
+
+    keep = [False] * len(segments)
+    used = 0
+    for cited in (True, False):
+        for index, segment in enumerate(segments):
+            if keep[index] or bool(_CLAIM_MARKER.search(segment)) is not cited:
+                continue
+            if used + len(segment) <= budget:
+                keep[index] = True
+                used += len(segment)
+    kept = "".join(s for i, s in enumerate(segments) if keep[i])
+    return kept if 0 < len(kept) < len(text) else halve(text)
 
 
 def _distinct_claims(*texts: str) -> set[str]:
@@ -323,6 +369,7 @@ class Synthesizer:
             render_prompt=render_assembly,
             primary=child_blocks,
             secondary=list(caveats),
+            compact=compact_keeping_claims,
             # The root answer is clamped material now (D54). It is still the
             # most protected -- only halved, never dropped -- but it can no
             # longer be paid for by every child block in the prompt.
@@ -472,6 +519,7 @@ class Synthesizer:
             render_prompt=render_node,
             primary=claim_lines,
             secondary=child_lines,
+            compact=compact_keeping_claims,
         )
         await self._log_clamp(
             "node_reduction",

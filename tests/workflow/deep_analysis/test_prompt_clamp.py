@@ -1,5 +1,7 @@
 """클램프는 추정하지 않는다 -- 예산과 같은 함수로 재고 줄인다."""
 
+import re
+
 import pytest
 
 from neos.workflow.deep_analysis.llm import prompt_input_bound
@@ -126,6 +128,82 @@ def test_shrink_once_returns_none_when_nothing_is_left():
     assert shrink_once([], []) is None
 
 
+def test_compaction_sheds_uncited_prose_before_cited_sentences():
+    """D62. 같은 글자 예산에서 **어느 글자를 남기는가**만 바꾼다.
+
+    `halve` 는 문자 오프셋에서 자르고 그 뒤를 전부 버린다. 그래서 인용이
+    글자보다 빨리 사라진다 -- 표본 #14·#15 의 조립 클램프는 글자를 36% /
+    33% 남기면서 고유 클레임은 9% / 15% 로 떨어뜨렸다. 잃은 산문은 회복
+    가능하지만 **작성자에게 도달하지 못한 클레임은 인용될 수 없다**(표본
+    #15 에서 6개 중 5개가 각주 = 잔존 클레임으로 정확히 일치).
+    """
+    from neos.workflow.deep_analysis.prompt_clamp import halve
+    from neos.workflow.deep_analysis.synthesizer import compact_keeping_claims
+
+    text = " ".join(
+        f"[C:{i:08x}] 인용 있는 문장 {i}. 인용 없는 서술 {'가' * 60}."
+        for i in range(6)
+    )
+    marker = re.compile(r"\[C:[0-9a-f]{8}\]")
+
+    kept = compact_keeping_claims(text)
+    halved = halve(text)
+
+    # 예산은 같다 -- 절반 이하.
+    assert len(kept) <= len(text) // 2
+    # 그런데 클레임은 훨씬 많이 남는다.
+    assert len(marker.findall(kept)) > len(marker.findall(halved))
+
+
+def test_compaction_never_strands_half_a_marker():
+    """세그먼트 경계는 문장 부호와 개행이고 마커에는 그런 문자가 없다 --
+    자르는 자리가 마커 한가운데로 떨어질 수 없다. 반쪽 마커는 `_RAW_MARKER`
+    도 렌더러도 못 알아보므로 인용 자리에 문자 그대로 남는다."""
+    from neos.workflow.deep_analysis.synthesizer import compact_keeping_claims
+
+    text = " ".join(
+        f"[C:{i:08x}] 문장 {i} 입니다. 뒤따르는 설명 {'나' * 30}."
+        for i in range(8)
+    )
+
+    kept = compact_keeping_claims(text)
+
+    assert not re.search(r"\[C:[0-9a-f]{0,7}$", kept)
+    for fragment in kept.split("[C:")[1:]:
+        assert re.match(r"^[0-9a-f]{8}\]", fragment)
+
+
+def test_compaction_falls_back_to_halving_when_it_cannot_do_better():
+    """세그먼트가 하나뿐이면 고를 것이 없다. 그래도 **반드시 줄어야** 한다 --
+    `clamp_prompt` 의 수렴이 거기 걸려 있다."""
+    from neos.workflow.deep_analysis.prompt_clamp import halve
+    from neos.workflow.deep_analysis.synthesizer import compact_keeping_claims
+
+    single = "가" * 400  # 문장 부호도 개행도 없다
+
+    assert compact_keeping_claims(single) == halve(single)
+    assert len(compact_keeping_claims(single)) < len(single)
+
+
+def test_a_compactor_that_refuses_to_shrink_cannot_stall_the_clamp():
+    """정책이 주입 가능해진 이상 수렴을 정책의 선의에 걸 수 없다(D62).
+
+    반복 상한이 잡기는 하지만, 그때 `exhausted` 로 보고되는 프롬프트는
+    **줄일 수 있었는데 안 줄인** 것이다. 그래서 한 걸음마다 진전을 강제한다.
+    """
+    result = clamp_prompt(
+        model="m",
+        allowance=1_500,
+        render_prompt=_render,
+        primary=[f"- [q{i:04d}] {'가' * 500}" for i in range(4)],
+        secondary=[],
+        compact=lambda text: text + "더 붙인다",  # 줄이기는커녕 늘린다
+    )
+
+    assert prompt_input_bound("m", result.prompt) <= 1_500
+    assert result.exhausted is False
+
+
 def test_an_oversized_anchor_is_halved_instead_of_eating_every_child():
     """D54: 앵커가 클램프 밖에 있으면 나머지 전부가 그 값을 치른다.
 
@@ -208,7 +286,11 @@ def test_clamp_terminates_even_if_the_policy_stops_making_progress(
     monkeypatch.setattr(
         prompt_clamp,
         "shrink_once",
-        lambda primary, secondary, anchor="": (primary, secondary, anchor),
+        lambda primary, secondary, anchor="", *_a, **_k: (
+            primary,
+            secondary,
+            anchor,
+        ),
     )
 
     result = prompt_clamp.clamp_prompt(
@@ -238,7 +320,7 @@ def test_clamp_terminates_even_if_the_policy_cycles_between_two_states(
     state_b = (["다른"], ["다른 미확인"], "")
     calls = {"n": 0}
 
-    def alternating(primary, secondary, anchor=""):
+    def alternating(primary, secondary, anchor="", *_a, **_k):
         calls["n"] += 1
         return state_b if calls["n"] % 2 else state_a
 
@@ -482,6 +564,65 @@ async def test_assembly_records_how_many_distinct_claims_survived_the_clamp():
     # 그리고 크기 쪽 계측이 그 손실이 어느 슬롯에서 났는지 말해준다.
     assert clamp["primary_chars_before"] > clamp["primary_chars_after"]
     assert clamp["anchor_chars_before"] > clamp["anchor_chars_after"]
+
+
+@pytest.mark.asyncio
+async def test_assembly_keeps_more_claims_than_blind_halving_would():
+    """D62 를 조립 경로 끝까지 -- 압축기가 실제로 배선돼 있는가.
+
+    단위 테스트는 `compact_keeping_claims` 가 옳다는 것만 보인다. 이 테스트는
+    `assemble` 이 그것을 clamp 에 **넘긴다**는 것을 보인다. 넘기지 않으면
+    기본값 `halve` 로 돌아가고 아무것도 달라지지 않는다.
+    """
+    from neos.workflow.deep_analysis.prompt_clamp import halve
+
+    def build(compact_arg):
+        ledger = _Ledger()
+        synth = _echo_synth(ledger, synthesis_max_tokens=2_000)
+        return ledger, synth
+
+    children = [
+        NodeSummary(
+            question_id=f"q{i:07d}",
+            answer=" ".join(
+                f"[C:{i * 5 + j:08x}] 근거 {j} 입니다. "
+                f"인용 없는 서술 {'가' * 60}."
+                for j in range(5)
+            ),
+            key_claim_ids=[],
+            confidence=0.5,
+            caveats=[],
+        )
+        for i in range(6)
+    ]
+    root = NodeSummary(
+        question_id="q0000000",
+        answer="루트 요약 " + "루" * 400,
+        key_claim_ids=[],
+        confidence=0.5,
+        caveats=[],
+    )
+
+    ledger, synth = build(None)
+    await synth.assemble(root, children, [])
+    with_compactor = ledger.payload("finalization_prompt_clamped")
+
+    # 대조군: 같은 입력을 기본 `halve` 로 클램프했을 때의 잔존 클레임.
+    import neos.workflow.deep_analysis.synthesizer as synth_mod
+
+    blind_ledger, blind_synth = build(None)
+    original = synth_mod.compact_keeping_claims
+    synth_mod.compact_keeping_claims = halve
+    try:
+        await blind_synth.assemble(root, children, [])
+    finally:
+        synth_mod.compact_keeping_claims = original
+    blind = blind_ledger.payload("finalization_prompt_clamped")
+
+    assert (
+        with_compactor["distinct_claims_after"]
+        > blind["distinct_claims_after"]
+    ), (with_compactor, blind)
 
 
 @pytest.mark.asyncio
