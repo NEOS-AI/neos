@@ -160,31 +160,32 @@ class DockerShadowManagedAdapter:
                         owner_id=request.ownership_digest,
                         limits=request.resource_limits,
                     )
+                ownership_name = self._ownership_volume_name(sandbox.sandbox_id)
+                ownership_labels = {
+                    **labels,
+                    SANDBOX_ID_LABEL: sandbox.sandbox_id,
+                    CLAIM_TOKEN_LABEL: claim_token,
+                }
+                await self._runner.run(
+                    "volume",
+                    "create",
+                    *self._label_args(ownership_labels),
+                    ownership_name,
+                    timeout_sec=self._provider.create_timeout_sec,
+                )
+                ownership = await self._inspect_volume(ownership_name)
+                self._verify_resource_metadata(
+                    ownership,
+                    ownership_labels,
+                    volume=True,
+                )
             except BaseException:
                 # 획득의 원자성만으로는 부족하다 -- 해제를 보장하지 않으면
-                # fail-closed 가 fail-forever 가 된다.
-                await self._remove_volume_if_present(claim_name)
+                # fail-closed 가 fail-forever 가 된다. 소유권 볼륨 발행까지
+                # try 를 넓힌다 -- 그 단계가 실패해도 클레임이 새야 한다.
+                await self._best_effort_release_claim(claim_name, claim_token)
                 raise
-            ownership_name = self._ownership_volume_name(sandbox.sandbox_id)
-            ownership_labels = {
-                **labels,
-                SANDBOX_ID_LABEL: sandbox.sandbox_id,
-                CLAIM_TOKEN_LABEL: claim_token,
-            }
-            await self._runner.run(
-                "volume",
-                "create",
-                *self._label_args(ownership_labels),
-                ownership_name,
-                timeout_sec=self._provider.create_timeout_sec,
-            )
-            ownership = await self._inspect_volume(ownership_name)
-            self._verify_resource_metadata(
-                ownership,
-                ownership_labels,
-                volume=True,
-            )
-            await self._remove_volume_if_present(claim_name)
+            await self._release_claim(claim_name, claim_token)
             return AllocationResult(
                 provider_ref=sandbox.sandbox_id,
                 ownership_digest=request.ownership_digest,
@@ -382,9 +383,9 @@ class DockerShadowManagedAdapter:
         """소유자가 죽어 남은 클레임인지 판정한다.
 
         컨테이너가 없는 상태에서 클레임의 claimed_at 이 claim_lease_seconds 보다
-        오래됐으면 죽은 소유자의 클레임으로 간주한다. 라벨이 없거나 형식이
-        깨졌으면(예전 버전이 만든 클레임 등) 판단 근거가 없으므로 회수하지
-        않는다 -- 안전한 쪽으로 fail 한다.
+        오래됐으면 죽은 소유자의 클레임으로 간주한다. 라벨이 없거나, 문자열이
+        아니거나, 파싱할 수 없으면(예전 버전이 만든 클레임 등) 판단 근거가
+        없으므로 회수하지 않는다 -- 안전한 쪽으로 fail 한다.
         """
         claim = await self._inspect_volume_optional(claim_name)
         if claim is None:
@@ -394,10 +395,59 @@ class DockerShadowManagedAdapter:
             return False
         try:
             claimed_at = datetime.fromisoformat(claimed_at_text)
-        except ValueError:
+            if claimed_at.tzinfo is None:
+                # 오프셋이 없는 값은 우리가 쓰는 형식이 아니다(우리는 항상
+                # UTC 오프셋을 붙여 쓴다). 비교가 가능하도록 UTC 로 간주한다.
+                claimed_at = claimed_at.replace(tzinfo=UTC)
+            age_seconds = (datetime.now(UTC) - claimed_at).total_seconds()
+        except (TypeError, ValueError):
+            # 라벨 값이 문자열이 아니거나(docker inspect JSON 은 shape 만
+            # 검증된다) ISO 형식이 아니다 -- 판단 근거가 없으므로 회수하지
+            # 않는다.
             return False
-        age_seconds = (datetime.now(UTC) - claimed_at).total_seconds()
         return age_seconds > self._claim_lease_seconds
+
+    async def _release_claim(self, claim_name: str, claim_token: str) -> None:
+        """우리 토큰일 때만 클레임을 반납한다 (CAS 방식 해제).
+
+        Step 8 이후 클레임은 재할당 가능해졌다 -- 무조건 이름으로 지우면
+        이미 다른 프로세스가 죽은 것으로 오판해 회수하고 새로 이긴 클레임을
+        실수로 지워버릴 수 있다(그 프로세스의 락을 훔치는 셈). 그러면 같은
+        idempotency_key 로 컨테이너가 두 개 생긴다. 토큰이 여전히 우리
+        것일 때만 지운다.
+        """
+        claim = await self._inspect_volume_optional(claim_name)
+        if claim is None:
+            return
+        if (claim.get("Labels") or {}).get(CLAIM_TOKEN_LABEL) != claim_token:
+            return
+        await self._remove_volume_if_present(claim_name)
+
+    async def _best_effort_release_claim(
+        self,
+        claim_name: str,
+        claim_token: str,
+    ) -> None:
+        """취소된 컨텍스트에서도 클레임 반납을 최선을 다해 시도한다.
+
+        `except BaseException:` 블록에서만 호출된다 -- 이미 취소됐을 수 있는
+        컨텍스트다. `asyncio.shield` 로 두 번째 취소가 반납 시도 자체를
+        끊지 못하게 막고, `wait_for` 로 전체 시도 시간을 묶어 죽은 docker
+        데몬이 취소 처리 자체를 hang 시키지 않게 한다. 실패해도 원래
+        예외를 삼키지 않는다 -- 호출자가 곧바로 `raise` 한다.
+        """
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(self._release_claim(claim_name, claim_token)),
+                timeout=self._provider.operation_timeout_sec,
+            )
+        except (
+            TimeoutError,
+            asyncio.TimeoutError,
+            asyncio.CancelledError,
+            SandboxError,
+        ):
+            pass
 
     @staticmethod
     def _replayed_allocation(

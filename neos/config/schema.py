@@ -1226,6 +1226,15 @@ class SandboxMemoryConfig(StrictConfigModel):
     root: str = ".neos/sandboxes"
 
 
+# 클레임 하나가 살아있는 create() 경로에서 순차적으로 도는, create_timeout_sec 로
+# 묶인 docker 호출 개수다: 클레임 볼륨 생성(1) + provider.create() 내부 4단계
+# (워크스페이스 볼륨 생성·컨테이너 생성·start·probe) + 소유권 볼륨 생성(1) = 6.
+# claim_lease_seconds 가 이 worst-case 총합보다 짧으면, 아직 살아서 create 를
+# 진행 중인 소유자를 죽은 것으로 오판해 회수하게 된다 (AppConfig.validate_sandbox_policy
+# 참고).
+_CLAIM_LEASE_CREATE_STEPS = 6
+
+
 class ManagedSandboxConfig(StrictConfigModel):
     enabled: bool = False
     shadow_admission: bool = True
@@ -1239,7 +1248,12 @@ class ManagedSandboxConfig(StrictConfigModel):
         default=300,
         gt=0,
         le=3600,
-        description="클레임 볼륨의 수명. 이보다 오래되고 컨테이너가 없으면 회수한다.",
+        description=(
+            "클레임 볼륨의 수명. 이보다 오래되고 컨테이너가 없으면 회수한다. "
+            "sandbox.lifecycle.create_timeout_sec 의 _CLAIM_LEASE_CREATE_STEPS배 "
+            "보다 커야 한다 -- 그렇지 않으면 아직 create 를 진행 중인 살아있는 "
+            "소유자를 죽은 것으로 오판해 회수한다 (AppConfig.validate_sandbox_policy)."
+        ),
     )
     cleanup_batch_size: int = Field(default=100, gt=0, le=1000)
     cleanup_slo_seconds: int = Field(default=300, gt=0)
@@ -1477,6 +1491,15 @@ class AppConfig(StrictConfigModel):
             > sandbox.lifecycle.max_lifetime_sec
         ):
             raise ValueError("Sandbox command timeout exceeds maximum lifetime.")
+        if (
+            sandbox.managed.claim_lease_seconds
+            <= _CLAIM_LEASE_CREATE_STEPS * sandbox.lifecycle.create_timeout_sec
+        ):
+            raise ValueError(
+                "Managed sandbox claim_lease_seconds must exceed "
+                f"{_CLAIM_LEASE_CREATE_STEPS} x sandbox.lifecycle.create_timeout_sec, "
+                "or a live owner still finishing create() gets reclaimed as dead."
+            )
         if self.environment == "production" and sandbox.provider == "docker":
             docker = sandbox.docker
             digest_image = re.fullmatch(

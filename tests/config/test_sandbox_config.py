@@ -132,3 +132,33 @@ def test_lifecycle_timeout_relationships_are_validated() -> None:
                 }
             }
         )
+
+
+def test_claim_lease_must_outlast_the_worst_case_create_sequence() -> None:
+    """claim_lease_seconds 가 create_timeout_sec 에 비해 너무 짧으면 안 된다.
+
+    짧으면, 아직 create() 를 진행 중인 살아있는 소유자를 죽은 것으로 오판해
+    회수한다 -- 같은 idempotency_key 로 컨테이너가 두 개 생기는 사고로 이어진다.
+    """
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(
+            {
+                "sandbox": {
+                    "lifecycle": {"create_timeout_sec": 30},
+                    "managed": {"claim_lease_seconds": 1},
+                }
+            }
+        )
+
+
+def test_claim_lease_that_comfortably_outlasts_create_is_accepted() -> None:
+    config = AppConfig.model_validate(
+        {
+            "sandbox": {
+                "lifecycle": {"create_timeout_sec": 30},
+                "managed": {"claim_lease_seconds": 300},
+            }
+        }
+    )
+
+    assert config.sandbox.managed.claim_lease_seconds == 300

@@ -11,6 +11,7 @@ from neos.coding.managed.adapters import (
     DockerShadowManagedAdapter,
     ManagedAdapterCapabilityError,
     ManagedAdapterOwnershipError,
+    ManagedAdapterTimeoutError,
 )
 from neos.coding.managed.adapters import docker_shadow as docker_shadow_module
 from neos.coding.managed.adapters.docker_shadow import (
@@ -56,14 +57,17 @@ class EmulatedDockerRunner:
         self.containers: dict[str, dict[str, object]] = {}
         self.volumes: dict[str, dict[str, object]] = {}
         self.removal_failures: set[tuple[str, str]] = set()
-        self._pending_failures: dict[str, Exception] = {}
+        self._pending_failures: dict[str, tuple[Exception, int]] = {}
 
-    def fail_next(self, op: str, error: Exception) -> None:
-        """다음 `op`(예: `"create"`) 호출에서 정상 처리 대신 `error`를 올린다.
+    def fail_next(self, op: str, error: Exception, *, occurrence: int = 1) -> None:
+        """`op`(args[0])가 `occurrence`번째로 불릴 때 정상 처리 대신 `error`를 올린다.
 
         일회성이다 -- 그 호출을 소비하면 이후 같은 op는 다시 정상 처리된다.
+        "volume"은 args[0]만으로 매칭하므로 create/inspect/rm을 모두 센다 --
+        예를 들어 allocate() 한 번의 성공 경로에서는 클레임 생성(1)·클레임
+        inspect(2)·워크스페이스 생성(3)·소유권 발행(4) 순서로 불린다.
         """
-        self._pending_failures[op] = error
+        self._pending_failures[op] = (error, occurrence)
 
     def seed_orphan_claim(self, name: str, *, claimed_at: str) -> None:
         """소유자가 죽어 아무도 정리하지 않은 클레임 볼륨을 미리 심어 둔다.
@@ -93,7 +97,11 @@ class EmulatedDockerRunner:
         del timeout_sec, input
         self.calls.append(args)
         if args and args[0] in self._pending_failures:
-            raise self._pending_failures.pop(args[0])
+            error, remaining = self._pending_failures[args[0]]
+            if remaining <= 1:
+                del self._pending_failures[args[0]]
+                raise error
+            self._pending_failures[args[0]] = (error, remaining - 1)
         if args[:2] == ("volume", "create"):
             name = args[-1]
             labels = _labels_from_args(args)
@@ -191,6 +199,7 @@ def _labels_from_args(args: tuple[str, ...]) -> dict[str, str]:
 def docker_adapter(
     *,
     network_mode: str = "none",
+    create_timeout_sec: float = 30.0,
 ) -> tuple[DockerShadowManagedAdapter, EmulatedDockerRunner]:
     runner = EmulatedDockerRunner()
     provider = DockerSandboxProvider(
@@ -198,6 +207,7 @@ def docker_adapter(
         config=DockerSandboxConfig(
             image=IMAGE,
             network_mode=network_mode,
+            create_timeout_sec=create_timeout_sec,
         ),
         clock=lambda: datetime(2026, 7, 25, 12, tzinfo=UTC),
     )
@@ -511,3 +521,116 @@ async def test_a_stale_claim_is_reclaimed_instead_of_blocking_forever() -> None:
     created = await adapter.allocate(request)
 
     assert created.state is ManagedSandboxState.ACTIVE
+
+
+async def test_a_fresh_orphan_claim_is_not_reclaimed() -> None:
+    """`_claim_is_stale`가 무조건 True를 돌려줘도 회수 테스트는 통과한다 --
+    이 테스트가 그 위양성을 잡는다. 방금 생긴 클레임은 아직 살아있는 소유자의
+    것일 수 있으므로 회수 대상이 아니다: 제네릭 타임아웃으로 끝나야 한다."""
+    adapter, runner = docker_adapter(create_timeout_sec=0.05)
+    request = allocation_request()
+    claim_name = adapter._claim_volume_name(request.idempotency_key)
+    runner.seed_orphan_claim(claim_name, claimed_at=datetime.now(UTC).isoformat())
+
+    with pytest.raises(ManagedAdapterTimeoutError):
+        await adapter.allocate(request)
+
+    # 회수되지 않았다: 클레임 볼륨이 그대로 남아 있다.
+    assert claim_name in runner.volumes
+
+
+async def test_a_cancelled_create_still_releases_the_claim() -> None:
+    """`except BaseException`이 실제로 `CancelledError`도 잡는지 확인한다.
+
+    `SandboxError`(평범한 `Exception`)만으로는 `except Exception`과 구분되지
+    않는다 -- `BaseException`을 쓴 이유는 취소도 놓치지 않기 위해서였다."""
+    adapter, runner = docker_adapter()
+    runner.fail_next("create", asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await adapter.allocate(allocation_request())
+
+    assert runner.volumes == {}
+
+
+async def test_a_naive_claimed_at_timestamp_does_not_crash_reclaim() -> None:
+    """오프셋 없는 ISO 문자열(예전 버전이 남긴 값 등)도 TypeError 없이 처리돼야
+    한다 -- UTC로 간주해 정상적으로 오래됐다고 판정하고 회수한다."""
+    adapter, runner = docker_adapter()
+    request = allocation_request()
+    runner.seed_orphan_claim(
+        adapter._claim_volume_name(request.idempotency_key),
+        claimed_at="2020-01-01T00:00:00",  # 오프셋 없음
+    )
+
+    created = await adapter.allocate(request)
+
+    assert created.state is ManagedSandboxState.ACTIVE
+
+
+async def test_a_non_string_claimed_at_label_does_not_crash_reclaim() -> None:
+    """docker inspect 출력은 shape만 검증되므로 라벨 값이 문자열이 아닐 수도
+    있다 -- `fromisoformat`이 TypeError를 올려도 죽지 않고 판단 근거 없음으로
+    처리해야 한다(회수하지 않고 제네릭 타임아웃으로 끝난다)."""
+    adapter, runner = docker_adapter(create_timeout_sec=0.05)
+    request = allocation_request()
+    claim_name = adapter._claim_volume_name(request.idempotency_key)
+    runner.seed_orphan_claim(claim_name, claimed_at=STALE_CLAIMED_AT)
+    runner.volumes[claim_name]["Labels"][CLAIMED_AT_LABEL] = 12345  # 문자열이 아님
+
+    with pytest.raises(ManagedAdapterTimeoutError):
+        await adapter.allocate(request)
+
+    assert claim_name in runner.volumes
+
+
+async def test_a_failed_ownership_publish_still_releases_the_claim() -> None:
+    """create()는 성공했지만 소유권 볼륨 발행이 실패해도 클레임은 새야 한다.
+
+    Step 7의 try가 소유권 볼륨 발행 이전에서 끝나면, 그 구간의 실패가 클레임을
+    영영 새게 만든다."""
+    adapter, runner = docker_adapter()
+    request = allocation_request()
+    # args[0]=="volume"인 호출 순서: 1=클레임 생성, 2=클레임 inspect,
+    # 3=provider.create()의 워크스페이스 생성, 4=소유권 발행 -- 그 4번째만
+    # 실패시킨다.
+    runner.fail_next(
+        "volume",
+        SandboxError("ownership_volume_create_failed"),
+        occurrence=4,
+    )
+
+    with pytest.raises(SandboxError):
+        await adapter.allocate(request)
+
+    assert adapter._claim_volume_name(request.idempotency_key) not in runner.volumes
+
+
+async def test_release_claim_does_not_delete_a_claim_whose_token_changed() -> None:
+    """CRITICAL: 다른 프로세스가 이미 회수해 간 클레임을 실수로 지우면 안 된다.
+
+    무조건 이름으로 지우면 그 프로세스의 락을 훔치는 셈이 되어, 같은
+    idempotency_key로 컨테이너가 두 개 생기는 사고로 이어진다."""
+    adapter, runner = docker_adapter()
+    claim_name = "neos-managed-claim-test"
+    runner.volumes[claim_name] = {
+        "Name": claim_name,
+        "Labels": {CLAIM_TOKEN_LABEL: "someone-elses-token"},
+    }
+
+    await adapter._release_claim(claim_name, "our-old-token")
+
+    assert claim_name in runner.volumes
+
+
+async def test_release_claim_deletes_when_the_token_still_matches() -> None:
+    adapter, runner = docker_adapter()
+    claim_name = "neos-managed-claim-test"
+    runner.volumes[claim_name] = {
+        "Name": claim_name,
+        "Labels": {CLAIM_TOKEN_LABEL: "our-token"},
+    }
+
+    await adapter._release_claim(claim_name, "our-token")
+
+    assert claim_name not in runner.volumes
