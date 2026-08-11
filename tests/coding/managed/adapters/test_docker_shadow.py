@@ -2,6 +2,7 @@ import asyncio
 from datetime import UTC, datetime
 import io
 import json
+from pathlib import Path
 import tarfile
 
 import pytest
@@ -11,14 +12,17 @@ from neos.coding.managed.adapters import (
     ManagedAdapterCapabilityError,
     ManagedAdapterOwnershipError,
 )
+from neos.coding.managed.adapters import docker_shadow as docker_shadow_module
 from neos.coding.managed.adapters.docker_shadow import (
     ALLOCATION_ID_LABEL,
+    CLAIM_TOKEN_LABEL,
+    CLAIMED_AT_LABEL,
     IDEMPOTENCY_KEY_LABEL,
     OWNERSHIP_DIGEST_LABEL,
 )
-from neos.coding.managed.domain import ProviderCircuitState
+from neos.coding.managed.domain import ManagedSandboxState, ProviderCircuitState
 from neos.coding.sandbox.command import DockerCommandResult
-from neos.coding.sandbox.base import SandboxUnavailable
+from neos.coding.sandbox.base import SandboxError, SandboxLimits, SandboxUnavailable
 from neos.coding.sandbox.docker import (
     DockerSandboxConfig,
     DockerSandboxProvider,
@@ -30,6 +34,10 @@ from tests.coding.managed.adapters.conformance import (
 )
 
 pytestmark = pytest.mark.no_db
+
+# claim_lease_seconds(기본값 300초)보다 훨씬 오래된 시각 -- 테스트 실행 시각과
+# 무관하게 항상 회수 대상으로 판정된다.
+STALE_CLAIMED_AT = "2020-01-01T00:00:00+00:00"
 
 
 def _archive() -> bytes:
@@ -48,6 +56,32 @@ class EmulatedDockerRunner:
         self.containers: dict[str, dict[str, object]] = {}
         self.volumes: dict[str, dict[str, object]] = {}
         self.removal_failures: set[tuple[str, str]] = set()
+        self._pending_failures: dict[str, Exception] = {}
+
+    def fail_next(self, op: str, error: Exception) -> None:
+        """다음 `op`(예: `"create"`) 호출에서 정상 처리 대신 `error`를 올린다.
+
+        일회성이다 -- 그 호출을 소비하면 이후 같은 op는 다시 정상 처리된다.
+        """
+        self._pending_failures[op] = error
+
+    def seed_orphan_claim(self, name: str, *, claimed_at: str) -> None:
+        """소유자가 죽어 아무도 정리하지 않은 클레임 볼륨을 미리 심어 둔다.
+
+        라벨은 `allocation_request()`의 기본값(allocation_id="msa_1",
+        idempotency_key="idem_1", ownership_digest="sha256:owner")과 맞춘다 --
+        회수 대상 판정 전에 `_verify_resource_metadata`가 먼저 통과해야 한다.
+        """
+        self.volumes[name] = {
+            "Name": name,
+            "Labels": {
+                ALLOCATION_ID_LABEL: "msa_1",
+                IDEMPOTENCY_KEY_LABEL: "idem_1",
+                OWNERSHIP_DIGEST_LABEL: "sha256:owner",
+                CLAIM_TOKEN_LABEL: "dead-owner-token",
+                CLAIMED_AT_LABEL: claimed_at,
+            },
+        }
 
     async def run(
         self,
@@ -58,6 +92,8 @@ class EmulatedDockerRunner:
     ) -> DockerCommandResult:
         del timeout_sec, input
         self.calls.append(args)
+        if args and args[0] in self._pending_failures:
+            raise self._pending_failures.pop(args[0])
         if args[:2] == ("volume", "create"):
             name = args[-1]
             labels = _labels_from_args(args)
@@ -395,3 +431,83 @@ async def test_docker_shadow_never_weakens_network_policy() -> None:
     ):
         await adapter.allocate(allocation_request())
     assert not any(call[0] == "create" for call in runner.calls)
+
+
+def test_docker_shadow_uses_only_the_public_provider_surface() -> None:
+    """CA5-a 완료 기준.
+
+    shadow가 provider의 private 속성을 읽거나 러너를 갈아끼우면, 관리형 어댑터가
+    데이터 플레인 객체를 영구히 변형하는 구조가 된다.
+    """
+    source = Path(docker_shadow_module.__file__).read_text(encoding="utf-8")
+
+    assert "provider._" not in source
+    assert "_ManagedLabelRunner" not in source
+
+
+async def test_resource_labels_reach_both_the_volume_and_the_container() -> None:
+    _adapter, runner = docker_adapter()
+    provider = DockerSandboxProvider(
+        runner=runner,
+        config=DockerSandboxConfig(image=IMAGE, network_mode="none"),
+        clock=lambda: datetime(2026, 7, 25, 12, tzinfo=UTC),
+    )
+
+    with provider.resource_labels({ALLOCATION_ID_LABEL: "msa_1"}):
+        await provider.create(owner_id="owner_1", limits=SandboxLimits.safe_defaults())
+
+    container_create = next(call for call in runner.calls if call[0] == "create")
+    volume_create = next(
+        call for call in runner.calls if call[:2] == ("volume", "create")
+    )
+    assert _labels_from_args(container_create)[ALLOCATION_ID_LABEL] == "msa_1"
+    assert _labels_from_args(volume_create)[ALLOCATION_ID_LABEL] == "msa_1"
+
+
+async def test_resource_labels_do_not_leak_outside_the_block() -> None:
+    _adapter, runner = docker_adapter()
+    provider = DockerSandboxProvider(
+        runner=runner,
+        config=DockerSandboxConfig(image=IMAGE, network_mode="none"),
+        clock=lambda: datetime(2026, 7, 25, 12, tzinfo=UTC),
+    )
+
+    with provider.resource_labels({ALLOCATION_ID_LABEL: "msa_1"}):
+        pass
+    await provider.create(owner_id="owner_1", limits=SandboxLimits.safe_defaults())
+
+    container_create = next(call for call in runner.calls if call[0] == "create")
+    assert ALLOCATION_ID_LABEL not in _labels_from_args(container_create)
+
+
+async def test_a_failed_create_releases_the_claim() -> None:
+    """클레임을 이긴 뒤 create 가 실패하면 클레임을 반납해야 한다.
+
+    반납하지 않으면 그 idempotency_key 로 오는 모든 이후 allocate 가 나타나지 않을
+    소유자를 기다리다 타임아웃한다 -- 운영자가 볼륨을 지울 때까지 키가 영구히 오염된다.
+    """
+    adapter, runner = docker_adapter()
+    runner.fail_next("create", SandboxError("docker_create_failed"))
+
+    with pytest.raises(SandboxError):
+        await adapter.allocate(allocation_request())
+
+    assert runner.volumes == {}
+
+    # 키가 오염되지 않았다: 다음 시도가 정상적으로 성공한다.
+    created = await adapter.allocate(allocation_request())
+    assert created.state is ManagedSandboxState.ACTIVE
+
+
+async def test_a_stale_claim_is_reclaimed_instead_of_blocking_forever() -> None:
+    """소유자가 죽어 클레임만 남은 경우, 기다리다 포기하지 말고 회수해야 한다."""
+    adapter, runner = docker_adapter()
+    request = allocation_request()
+    runner.seed_orphan_claim(
+        adapter._claim_volume_name(request.idempotency_key),
+        claimed_at=STALE_CLAIMED_AT,
+    )
+
+    created = await adapter.allocate(request)
+
+    assert created.state is ManagedSandboxState.ACTIVE

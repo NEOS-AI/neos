@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from contextlib import contextmanager
-from contextvars import ContextVar
+from datetime import UTC, datetime
 import hashlib
 import json
 from typing import Any
@@ -30,7 +29,9 @@ from neos.coding.managed.domain import (
     ProviderCircuitState,
 )
 from neos.coding.sandbox.base import SandboxError, SandboxNotFound, SandboxState
+from neos.coding.sandbox.command import DockerCommandRunner
 from neos.coding.sandbox.docker import DockerSandboxProvider
+from neos.config.schema import ManagedSandboxConfig
 
 
 ALLOCATION_ID_LABEL = "com.neos.coding.managed-allocation-id"
@@ -39,6 +40,7 @@ OWNERSHIP_DIGEST_LABEL = "com.neos.coding.managed-ownership-digest"
 SANDBOX_ID_LABEL = "com.neos.coding.sandbox-id"
 OWNER_ID_LABEL = "com.neos.coding.owner-id"
 CLAIM_TOKEN_LABEL = "com.neos.coding.managed-claim-token"
+CLAIMED_AT_LABEL = "com.neos.coding.managed-claimed-at"
 
 _MANAGED_LABELS = (
     ALLOCATION_ID_LABEL,
@@ -46,59 +48,44 @@ _MANAGED_LABELS = (
     OWNERSHIP_DIGEST_LABEL,
 )
 
+# claim_lease_seconds 의 기본값은 ManagedSandboxConfig 가 단일 원천이다 -- 여기서
+# 매직넘버로 다시 적지 않는다.
+_DEFAULT_CLAIM_LEASE_SECONDS: int = ManagedSandboxConfig.model_fields[
+    "claim_lease_seconds"
+].default
 
-class _ManagedLabelRunner:
-    def __init__(self, delegate: Any) -> None:
-        self._delegate = delegate
-        self._labels: ContextVar[Mapping[str, str] | None] = ContextVar(
-            "managed_docker_labels",
-            default=None,
-        )
-
-    @contextmanager
-    def binding(self, labels: Mapping[str, str]):
-        token = self._labels.set(labels)
-        try:
-            yield
-        finally:
-            self._labels.reset(token)
-
-    async def run(self, *args: str, **kwargs):
-        labels = self._labels.get()
-        if labels and args[0] == "create":
-            values = list(args)
-            insertion = values.index("--user")
-            for key, value in reversed(tuple(labels.items())):
-                values[insertion:insertion] = ["--label", f"{key}={value}"]
-            args = tuple(values)
-        elif labels and args[:2] == ("volume", "create"):
-            values = list(args)
-            insertion = len(values) - 1
-            for key, value in reversed(tuple(labels.items())):
-                values[insertion:insertion] = ["--label", f"{key}={value}"]
-            args = tuple(values)
-        return await self._delegate.run(*args, **kwargs)
+# 죽은 소유자의 클레임을 회수한 뒤 재획득은 딱 한 번만 허용한다 -- 무한 재시도로
+# 인한 라이브락을 막는다 (CA5-b 이월 결함 수정).
+_MAX_CLAIM_ACQUIRE_ATTEMPTS = 2
 
 
 class DockerShadowManagedAdapter:
-    __slots__ = ("_allocation_lock", "_capabilities", "_provider", "_runner")
+    __slots__ = (
+        "_allocation_lock",
+        "_capabilities",
+        "_claim_lease_seconds",
+        "_provider",
+        "_runner",
+    )
 
-    def __init__(self, *, provider: DockerSandboxProvider) -> None:
+    def __init__(
+        self,
+        *,
+        provider: DockerSandboxProvider,
+        runner: DockerCommandRunner | None = None,
+        claim_lease_seconds: int = _DEFAULT_CLAIM_LEASE_SECONDS,
+    ) -> None:
         self._provider = provider
         self._allocation_lock = asyncio.Lock()
-        original_runner = provider._runner
-        self._runner = (
-            original_runner
-            if isinstance(original_runner, _ManagedLabelRunner)
-            else _ManagedLabelRunner(original_runner)
-        )
-        provider._runner = self._runner
+        # provider 의 러너를 **교체**하지 않고 공개 표면으로 빌려 쓴다.
+        self._runner = runner or provider.command_runner
+        self._claim_lease_seconds = claim_lease_seconds
         self._capabilities = ManagedSandboxCapabilities(
             pause_resume=True,
             filesystem_snapshot=True,
             memory_snapshot=False,
             portable_archive=True,
-            network_block_all=provider._config.network_mode == "none",
+            network_block_all=provider.network_mode == "none",
             network_allowlist=False,
             region_pin=False,
             idempotent_allocate=True,
@@ -123,7 +110,7 @@ class DockerShadowManagedAdapter:
             raise ManagedAdapterValidationError(
                 "docker shadow supports only the local region"
             )
-        if request.image_identity != self._provider._config.image:
+        if request.image_identity != self._provider.image_identity:
             raise ManagedAdapterValidationError("image_identity_mismatch")
         async with self._allocation_lock:
             existing = await self.find_by_idempotency_key(request.idempotency_key)
@@ -134,29 +121,50 @@ class DockerShadowManagedAdapter:
                 IDEMPOTENCY_KEY_LABEL: request.idempotency_key,
                 OWNERSHIP_DIGEST_LABEL: request.ownership_digest,
             }
-            claim_token = uuid.uuid4().hex
             claim_name = self._claim_volume_name(request.idempotency_key)
-            await self._runner.run(
-                "volume",
-                "create",
-                *self._label_args(
-                    {
-                        **labels,
-                        CLAIM_TOKEN_LABEL: claim_token,
-                    }
-                ),
-                claim_name,
-                timeout_sec=self._provider._config.create_timeout_sec,
-            )
-            claim = await self._inspect_volume(claim_name)
-            self._verify_resource_metadata(claim, labels, volume=True)
-            if claim["Labels"].get(CLAIM_TOKEN_LABEL) != claim_token:
-                return await self._wait_for_claim_owner(request)
-            with self._runner.binding(labels):
-                sandbox = await self._provider.create(
-                    owner_id=request.ownership_digest,
-                    limits=request.resource_limits,
+            claim_token = ""
+            won = False
+            # 죽은 소유자의 클레임을 회수했다면(_wait_for_claim_owner 가 None 을
+            # 돌려줌) 딱 한 번만 재획득을 시도한다 -- 무한 재시도로 인한
+            # 라이브락을 막는다.
+            for _attempt in range(_MAX_CLAIM_ACQUIRE_ATTEMPTS):
+                claim_token = uuid.uuid4().hex
+                await self._runner.run(
+                    "volume",
+                    "create",
+                    *self._label_args(
+                        {
+                            **labels,
+                            CLAIM_TOKEN_LABEL: claim_token,
+                            CLAIMED_AT_LABEL: datetime.now(UTC).isoformat(),
+                        }
+                    ),
+                    claim_name,
+                    timeout_sec=self._provider.create_timeout_sec,
                 )
+                claim = await self._inspect_volume(claim_name)
+                self._verify_resource_metadata(claim, labels, volume=True)
+                if claim["Labels"].get(CLAIM_TOKEN_LABEL) == claim_token:
+                    won = True
+                    break
+                replay = await self._wait_for_claim_owner(request)
+                if replay is not None:
+                    return replay
+                # replay 가 None 이면 죽은 소유자의 클레임을 방금 회수했다는
+                # 뜻이다 -- 다음 attempt 에서 깨끗하게 재획득을 시도한다.
+            if not won:
+                raise ManagedAdapterTimeoutError("idempotent_allocation_claim_pending")
+            try:
+                with self._provider.resource_labels(labels):
+                    sandbox = await self._provider.create(
+                        owner_id=request.ownership_digest,
+                        limits=request.resource_limits,
+                    )
+            except BaseException:
+                # 획득의 원자성만으로는 부족하다 -- 해제를 보장하지 않으면
+                # fail-closed 가 fail-forever 가 된다.
+                await self._remove_volume_if_present(claim_name)
+                raise
             ownership_name = self._ownership_volume_name(sandbox.sandbox_id)
             ownership_labels = {
                 **labels,
@@ -168,7 +176,7 @@ class DockerShadowManagedAdapter:
                 "create",
                 *self._label_args(ownership_labels),
                 ownership_name,
-                timeout_sec=self._provider._config.create_timeout_sec,
+                timeout_sec=self._provider.create_timeout_sec,
             )
             ownership = await self._inspect_volume(ownership_name)
             self._verify_resource_metadata(
@@ -279,7 +287,7 @@ class DockerShadowManagedAdapter:
             f"label={IDEMPOTENCY_KEY_LABEL}={idempotency_key}",
             "--format",
             "{{.ID}}",
-            timeout_sec=self._provider._config.operation_timeout_sec,
+            timeout_sec=self._provider.operation_timeout_sec,
         )
         container_ids = tuple(
             value for value in listed.stdout.decode().splitlines() if value
@@ -289,7 +297,7 @@ class DockerShadowManagedAdapter:
         inspected = await self._runner.run(
             "inspect",
             *container_ids,
-            timeout_sec=self._provider._config.operation_timeout_sec,
+            timeout_sec=self._provider.operation_timeout_sec,
         )
         documents = self._decode_inspection(inspected.stdout)
         matches = [
@@ -309,7 +317,7 @@ class DockerShadowManagedAdapter:
             "info",
             "--format",
             "{{json .ServerVersion}}",
-            timeout_sec=self._provider._config.operation_timeout_sec,
+            timeout_sec=self._provider.operation_timeout_sec,
         )
         return ProviderHealthProbe(
             provider=self.provider,
@@ -329,9 +337,20 @@ class DockerShadowManagedAdapter:
     async def _wait_for_claim_owner(
         self,
         request: ManagedAllocationRequest,
-    ) -> AllocationResult:
+    ) -> AllocationResult | None:
+        """클레임 소유자가 컨테이너를 완성하기를 기다린다.
+
+        소유자가 나타나면 그 결과를 재생(replay)해서 돌려준다. 컨테이너가 끝내
+        나타나지 않고 클레임의 claimed_at 이 claim_lease_seconds 보다 오래됐다고
+        판정되면(죽은 소유자) 클레임 볼륨을 회수하고 `None` 을 돌려준다 -- 호출자는
+        이 신호를 받아 딱 한 번만 재획득을 시도해야 한다.
+
+        획득의 원자성만으로는 부족하다: 소유자가 죽어도 해제를 보장해야
+        fail-closed 가 fail-forever 로 굳지 않는다.
+        """
+        claim_name = self._claim_volume_name(request.idempotency_key)
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self._provider._config.create_timeout_sec
+        deadline = loop.time() + self._provider.create_timeout_sec
         while loop.time() < deadline:
             existing = await self.find_by_idempotency_key(request.idempotency_key)
             if existing is not None:
@@ -353,8 +372,32 @@ class DockerShadowManagedAdapter:
                     volume=True,
                 )
                 return replay
+            if await self._claim_is_stale(claim_name):
+                await self._remove_volume_if_present(claim_name)
+                return None
             await asyncio.sleep(0.01)
         raise ManagedAdapterTimeoutError("idempotent_allocation_claim_pending")
+
+    async def _claim_is_stale(self, claim_name: str) -> bool:
+        """소유자가 죽어 남은 클레임인지 판정한다.
+
+        컨테이너가 없는 상태에서 클레임의 claimed_at 이 claim_lease_seconds 보다
+        오래됐으면 죽은 소유자의 클레임으로 간주한다. 라벨이 없거나 형식이
+        깨졌으면(예전 버전이 만든 클레임 등) 판단 근거가 없으므로 회수하지
+        않는다 -- 안전한 쪽으로 fail 한다.
+        """
+        claim = await self._inspect_volume_optional(claim_name)
+        if claim is None:
+            return False
+        claimed_at_text = (claim.get("Labels") or {}).get(CLAIMED_AT_LABEL)
+        if not claimed_at_text:
+            return False
+        try:
+            claimed_at = datetime.fromisoformat(claimed_at_text)
+        except ValueError:
+            return False
+        age_seconds = (datetime.now(UTC) - claimed_at).total_seconds()
+        return age_seconds > self._claim_lease_seconds
 
     @staticmethod
     def _replayed_allocation(
@@ -379,7 +422,7 @@ class DockerShadowManagedAdapter:
         inspected = await self._runner.run(
             "inspect",
             name,
-            timeout_sec=self._provider._config.operation_timeout_sec,
+            timeout_sec=self._provider.operation_timeout_sec,
             allowed_exit_codes=(0, 1),
         )
         if inspected.exit_code == 1:
@@ -403,7 +446,7 @@ class DockerShadowManagedAdapter:
             "volume",
             "inspect",
             name,
-            timeout_sec=self._provider._config.operation_timeout_sec,
+            timeout_sec=self._provider.operation_timeout_sec,
             allowed_exit_codes=(0, 1),
         )
         if inspected.exit_code == 1:
@@ -421,7 +464,7 @@ class DockerShadowManagedAdapter:
                 "rm",
                 "--force",
                 name,
-                timeout_sec=self._provider._config.operation_timeout_sec,
+                timeout_sec=self._provider.operation_timeout_sec,
             )
         except SandboxError:
             return
@@ -434,7 +477,7 @@ class DockerShadowManagedAdapter:
                 "volume",
                 "rm",
                 name,
-                timeout_sec=self._provider._config.operation_timeout_sec,
+                timeout_sec=self._provider.operation_timeout_sec,
             )
         except SandboxError:
             return

@@ -1235,6 +1235,12 @@ class ManagedSandboxConfig(StrictConfigModel):
     admission_reevaluation_seconds: int = Field(default=30, gt=0, le=300)
     reservation_lease_seconds: int = Field(default=60, gt=0, le=600)
     allocation_lease_seconds: int = Field(default=60, gt=0, le=600)
+    claim_lease_seconds: int = Field(
+        default=300,
+        gt=0,
+        le=3600,
+        description="클레임 볼륨의 수명. 이보다 오래되고 컨테이너가 없으면 회수한다.",
+    )
     cleanup_batch_size: int = Field(default=100, gt=0, le=1000)
     cleanup_slo_seconds: int = Field(default=300, gt=0)
     health_window_size: int = Field(default=20, ge=4, le=100)
