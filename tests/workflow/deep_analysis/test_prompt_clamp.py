@@ -426,17 +426,12 @@ def test_halving_a_primary_block_is_visible_without_dropping_it():
     assert result.primary_chars_before == sum(len(b) for b in primary)
 
 
-@pytest.mark.asyncio
-async def test_assembly_records_how_many_claim_markers_survived_the_clamp():
-    """D58 의 도메인 절반. 클램프는 크기만 알고, 그 글자들이 `[C:...]` 주소를
-    나른다는 것은 호출자만 안다.
+async def _claims_for(claim):
+    """`ledger.verified_claims` 가 돌려주는 (claim, evidence rows) 짝."""
+    return [(claim, [])]
 
-    프롬프트에 살아남은 마커 수가 리포트가 가질 수 있는 인용의 **상한**이다.
-    표본 #13 은 배달 리포트의 각주가 12 -> 7 -> 2 -> 2 로 떨어졌는데 마커가
-    작성자에게 도달하기는 했는지조차 원장이 답하지 못했다.
-    """
-    ledger = _Ledger()
 
+def _echo_synth(ledger, **kw):
     async def llm_call(model, prompt, **kwargs):
         class R:
             text = "## 요약\n본문"
@@ -445,7 +440,20 @@ async def test_assembly_records_how_many_claim_markers_survived_the_clamp():
 
         return R()
 
-    synth = Synthesizer(ledger, llm_call=llm_call, synthesis_max_tokens=200)
+    return Synthesizer(ledger, llm_call=llm_call, **kw)
+
+
+@pytest.mark.asyncio
+async def test_assembly_records_how_many_distinct_claims_survived_the_clamp():
+    """D58 의 도메인 절반. 클램프는 크기만 알고, 그 글자들이 `[C:...]` 주소를
+    나른다는 것은 호출자만 안다.
+
+    프롬프트에 살아남은 클레임 수가 리포트가 가질 수 있는 인용의 **상한**이다.
+    표본 #13 은 배달 리포트의 각주가 12 -> 7 -> 2 -> 2 로 떨어졌는데 마커가
+    작성자에게 도달하기는 했는지조차 원장이 답하지 못했다.
+    """
+    ledger = _Ledger()
+    synth = _echo_synth(ledger, synthesis_max_tokens=200)
     root = NodeSummary(
         question_id="q0000001",
         answer="[C:aaaaaaaa] 루트 " + "루" * 2_000,
@@ -467,13 +475,126 @@ async def test_assembly_records_how_many_claim_markers_survived_the_clamp():
     await synth.assemble(root, children, [])
 
     clamp = ledger.payload("finalization_prompt_clamped")
-    # 자식 5개 + 루트 1개 = 마커 6개가 들어갔다.
-    assert clamp["claim_markers_before"] == 6
+    # 자식 5개 + 루트 1개 = 고유 클레임 6개가 들어갔다.
+    assert clamp["distinct_claims_before"] == 6
     # 살아남은 수는 프롬프트에서 직접 센 것이고, 절삭됐으므로 더 적다.
-    assert clamp["claim_markers_after"] < clamp["claim_markers_before"]
+    assert clamp["distinct_claims_after"] < clamp["distinct_claims_before"]
     # 그리고 크기 쪽 계측이 그 손실이 어느 슬롯에서 났는지 말해준다.
     assert clamp["primary_chars_before"] > clamp["primary_chars_after"]
     assert clamp["anchor_chars_before"] > clamp["anchor_chars_after"]
+
+
+@pytest.mark.asyncio
+async def test_a_claim_cited_in_two_slots_is_counted_once():
+    """D59(2). 각주는 클레임당 하나다 -- `CitationRenderer` 가 몇 번 인용되든
+    하나로 묶는다. 출현 횟수를 세면 다른 질문에 답하게 되고, 같은 클레임이
+    자식 블록과 그것을 요약한 루트 답에 함께 나오는 것은 예외가 아니라 상례다.
+    """
+    ledger = _Ledger()
+    synth = _echo_synth(ledger, synthesis_max_tokens=200)
+    root = NodeSummary(
+        question_id="q0000001",
+        # 자식이 인용한 바로 그 클레임을 루트도 인용한다.
+        answer="[C:0000002a] 루트 요약 " + "루" * 3_000,
+        key_claim_ids=[],
+        confidence=0.5,
+        caveats=[],
+    )
+    child = NodeSummary(
+        question_id="q0000002",
+        answer="[C:0000002a] 자식 답 " + "가" * 3_000,
+        key_claim_ids=[],
+        confidence=0.5,
+        caveats=[],
+    )
+
+    await synth.assemble(root, [child], [])
+
+    clamp = ledger.payload("finalization_prompt_clamped")
+    assert clamp["distinct_claims_before"] == 1
+
+
+@pytest.mark.asyncio
+async def test_before_counts_every_slot_the_prompt_will_contain():
+    """D59(1). `before` 는 프롬프트가 담게 될 **모든** 슬롯을 세야 한다.
+
+    `node_reduction` 의 `before` 가 `child_lines` 를 빠뜨려 표본 #14 에서
+    합계가 35 -> 90 으로 나왔다 -- `after` 가 `before` 보다 컸고, 그 한 가지
+    사실이 리덕션 층 계측 전체를 무효로 만들었다. 조립 쪽에는 같은 함정이
+    `caveats` 에 있다: 프롬프트에 들어가고, 노드 요약은 자기 caveat 에도
+    마커를 단다(D44 가 표본 #7 의 30건 중 3건에서 관측).
+
+    `after <= before` 라는 불변식으로 잡으려 했으나 **잡지 못한다**:
+    `shrink_once` 는 secondary 를 가장 먼저 버리므로 자식 줄의 마커가
+    `after` 에 남지 못하는 경우가 많고, 그러면 빠뜨린 `before` 로도 부등식이
+    성립한다. 그래서 의도를 직접 주장한다.
+    """
+    ledger = _Ledger()
+    synth = _echo_synth(ledger, synthesis_max_tokens=200)
+
+    class _Q:
+        id = "q0000001"
+        text = "질문"
+
+    class _Claim:
+        id = "0000000a"
+        text = "노드 자신의 클레임"
+        confidence = 0.5
+
+    # 노드 자신의 클레임은 **짧게**. 그래야 `shrink_once` 가 긴 쪽(자식 줄)을
+    # 치고, 두 슬롯의 마커가 **둘 다 프롬프트에 살아남는다** -- 양쪽이 0 이
+    # 되어버리면 `after <= before` 는 버그가 있어도 성립해서 아무것도 잡지
+    # 못한다(이 테스트를 처음 썼을 때 실제로 그랬다).
+    ledger.verified_claims = lambda qid: _claims_for(_Claim())
+    child = NodeSummary(
+        question_id="q0000002",
+        # 마커를 맨 앞에 둔다. 반토막은 앞을 남기므로 여러 번 잘려도 남는다.
+        answer="[C:0000000b] " + "가" * 3_000,
+        key_claim_ids=[],
+        confidence=0.5,
+        caveats=[],
+    )
+
+    async def json_call(model, prompt, **kwargs):
+        return {"answer": "요약", "caveats": [], "conflicts": []}, type(
+            "R", (), {"input_tokens": 1, "output_tokens": 1}
+        )()
+
+    synth.json_call = json_call
+    await synth.reduce_node(_Q(), [child])
+
+    # (2) 조립 -- caveat 에만 있는 마커. `caveats` 도 프롬프트에 들어가고
+    # 노드 요약은 자기 caveat 에도 마커를 단다(D44).
+    root = NodeSummary(
+        question_id="q0000001",
+        answer="[C:0000000d] " + "루" * 3_000,
+        key_claim_ids=[],
+        confidence=0.5,
+        caveats=[],
+    )
+    await synth.assemble(root, [child], ["[C:0000000c] 미확인: 확인 실패"])
+
+    by_stage = {
+        payload["stage"]: payload
+        for kind, _qid, payload in ledger.events
+        if kind == "finalization_prompt_clamped"
+        and "distinct_claims_before" in payload
+    }
+
+    # 리덕션: 노드 자신의 클레임 1 + 자식 줄의 클레임 1 = 2.
+    # `child_lines` 를 빠뜨리면 1 이 된다.
+    assert by_stage["node_reduction"]["distinct_claims_before"] == 2
+    # 조립: 자식 블록 1 + 루트 답 1 + caveat 1 = 3.
+    # `caveats` 를 빠뜨리면 2 가 된다.
+    assert by_stage["report_assembly"]["distinct_claims_before"] == 3
+
+    # 부등식은 이 데이터에서 저 두 결함을 잡지 못하지만(독스트링 참조),
+    # 성립하기는 해야 한다.
+    for payload in by_stage.values():
+        assert (
+            payload["distinct_claims_after"]
+            <= payload["distinct_claims_before"]
+        ), payload
 
 
 @pytest.mark.asyncio
