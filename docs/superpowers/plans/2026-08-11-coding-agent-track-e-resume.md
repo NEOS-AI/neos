@@ -1331,22 +1331,38 @@ class ManagedAllocationLease:
 
 이어서 조인 뷰를 만든다. `neos/coding/managed/allocation.py`:
 
+> 🔴 **정정 (2026-08-12, Task 7 실측).** 이 자리에 처음 적었던 AllocationPlan 은
+> `resource_limits` 와 `network_policy` 를 admission 행에서 읽는다고 했으나 **그 두
+> 컬럼은 어디에도 없다** — `coding_sandbox_admissions` 에도, `coding_managed_sandboxes`
+> 에도, 심지어 `AdmissionRequest` dataclass 에도 없다. 이름이 다른 게 아니라 **존재하지
+> 않는다.**
+>
+> **그리고 있어서도 안 된다.** 그 둘은 per-allocation 상태가 아니라 **배포 정책**이다 —
+> `SandboxLimits` 는 이미 `config.sandbox.resources` 에서 만들어지고(`runtime.py`),
+> 네트워크 정책은 fail-closed 설계상 `BLOCK_ALL` 이다. 할당마다 DB 에 복제하면 정책을
+> 바꿔도 진행 중인 할당이 옛 값을 들고 다닌다.
+>
+> **따라서 마이그레이션 046 을 만들지 않는다.** 조인 뷰는 **DB 에 실제로 있는 것만**
+> 담고, 정책 두 값은 서비스가 config 에서 주입받는다.
+
 ```python
 @dataclass(frozen=True, slots=True)
 class AllocationPlan:
-    """할당 행 + admission 행에서 어댑터 요청에 필요한 것만 모은 읽기 뷰.
+    """할당 행 + admission 행에서 **DB 에 실제로 있는 것만** 모은 읽기 뷰.
 
     `ManagedSandboxAllocation` 을 부풀리지 않는 이유는 그 dataclass 가 원장 행의
-    모양이고, idempotency_key/resource_limits/network_policy 는 admission 소유이기
-    때문이다.
+    모양이고 `idempotency_key` 는 admission 소유이기 때문이다.
+
+    `resource_limits` 와 `network_policy` 는 여기 없다 -- 정책이지 상태가 아니며,
+    서비스가 config 에서 받아 요청을 만들 때 채운다.
     """
 
     allocation: ManagedSandboxAllocation
     idempotency_key: str
-    image_identity: str
-    resource_limits: SandboxLimits
-    network_policy: ManagedNetworkPolicy
 ```
+
+`image_identity` 는 `coding_managed_sandboxes` 에 컬럼으로 있으므로 `allocation` 이
+들고 온다 — 도메인 dataclass 에 없다면 그 필드를 함께 추가한다.
 
 `repository.py`:
 
@@ -1677,19 +1693,25 @@ class ManagedSandboxAllocationService:
 
 `_request_for(plan)`은 조인 뷰에서 8필드를 채워 `ManagedAllocationRequest`를 만든다:
 
+정책 두 값(`resource_limits` · `network_policy`)은 DB 가 아니라 **서비스 생성 시
+주입**받는다 (위 정정 상자 참조). `ManagedSandboxAllocationService.__init__` 에
+`resource_limits: SandboxLimits` 와 `network_policy: ManagedNetworkPolicy` 를 받고,
+Task 9 의 런타임 배선이 `config.sandbox.resources` 와 `ManagedNetworkPolicy.BLOCK_ALL`
+을 넘긴다.
+
 ```python
-def _request_for(plan: AllocationPlan) -> ManagedAllocationRequest:
-    allocation = plan.allocation
-    return ManagedAllocationRequest(
-        allocation_id=allocation.allocation_id,
-        idempotency_key=plan.idempotency_key,
-        region=allocation.region,
-        image_identity=plan.image_identity,
-        resource_limits=plan.resource_limits,
-        network_policy=plan.network_policy,
-        ownership_digest=allocation.ownership_digest,
-        absolute_expires_at=allocation.absolute_expires_at,
-    )
+    def _request_for(self, plan: AllocationPlan) -> ManagedAllocationRequest:
+        allocation = plan.allocation
+        return ManagedAllocationRequest(
+            allocation_id=allocation.allocation_id,
+            idempotency_key=plan.idempotency_key,
+            region=allocation.region,
+            image_identity=allocation.image_identity,
+            resource_limits=self._resource_limits,
+            network_policy=self._network_policy,
+            ownership_digest=allocation.ownership_digest,
+            absolute_expires_at=allocation.absolute_expires_at,
+        )
 ```
 
 `except` 절의 **순서를 바꾸지 않는다** — `ManagedAdapterTimeoutError`가
