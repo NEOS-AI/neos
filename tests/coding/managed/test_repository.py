@@ -8,6 +8,7 @@ from neos.coding.managed.adapters import AllocationResult
 from neos.coding.managed.allocation import (
     AllocationPlan,
     ManagedAllocationLease,
+    ManagedSandboxNotClaimable,
     ManagedSandboxNotFound,
     StaleManagedSandboxLease,
 )
@@ -607,19 +608,49 @@ async def test_claim_allocation_only_takes_a_free_or_expired_lease() -> None:
 
     statement, params = session.statements[-1]
     assert "fencing_token = fencing_token + 1" in statement
+    assert "state = ANY(CAST(:claimable_states AS VARCHAR[]))" in statement
     assert "lease_expires_at IS NULL" in statement
     assert "lease_expires_at <= :now" in statement
     assert params["allocation_id"] == "msa_1"
+    assert params["claimable_states"] == [
+        "admitted",
+        "recovery_pending",
+        "cleanup_pending",
+        "cleanup_retry",
+    ]
     assert lease.fencing_token == 2
     assert lease.worker_id == "worker_1"
 
 
 async def test_claim_allocation_raises_when_a_live_lease_holds() -> None:
-    session = FakeSession([FakeResult(row=None)])
+    # 첫 결과 = 원자적 UPDATE가 0행(리스가 살아 있어 걸러짐), 두 번째 결과 =
+    # 실패 원인을 구분하려고 같은 트랜잭션에서 한 번 더 읽는 진단 SELECT.
+    session = FakeSession(
+        [
+            FakeResult(row=None),
+            FakeResult(row=_row(state="admitted")),
+        ]
+    )
     repo = repository_with(session)
 
     with pytest.raises(StaleManagedSandboxLease):
         await repo.claim_allocation("msa_1", "worker_2", now=NOW, lease_seconds=300)
+
+
+async def test_claim_allocation_raises_not_claimable_for_an_ineligible_state() -> None:
+    """리스가 살아있어 지는 것과 상태 자체가 claim 대상이 아닌 것은 구별돼야
+    한다 -- 호출자가 재시도할지 포기할지 다르게 판단해야 하기 때문이다.
+    """
+    session = FakeSession(
+        [
+            FakeResult(row=None),
+            FakeResult(row=_row(state="active")),
+        ]
+    )
+    repo = repository_with(session)
+
+    with pytest.raises(ManagedSandboxNotClaimable):
+        await repo.claim_allocation("msa_1", "worker_1", now=NOW, lease_seconds=300)
 
 
 async def test_commit_filters_on_the_fencing_token() -> None:
@@ -637,6 +668,77 @@ async def test_commit_filters_on_the_fencing_token() -> None:
     statement, params = session.statements[-1]
     assert "fencing_token = :fencing_token" in statement
     assert params["fencing_token"] == 2
+
+
+async def test_commit_state_to_cleaned_clears_provider_and_lease_columns() -> None:
+    """045의 CHECK 제약은 state='cleaned'인 행에 provider_ref/ownership_digest/
+    lease_expires_at이 NULL이고 cleaned_at이 NOT NULL이길 요구한다 -- 이걸
+    맞추지 않으면 UPDATE 자체가 DB에서 거부된다. domain.transition_allocation()이
+    메모리에서 이미 하는 클리어링을 쓰기 경로도 그대로 반영해야 한다.
+    """
+    session = FakeSession([FakeResult(row=_row(fencing_token=2, state="cleaned"))])
+    repo = repository_with(session)
+    lease = ManagedAllocationLease(
+        allocation_id="msa_1",
+        worker_id="worker_1",
+        fencing_token=2,
+        expires_at=NOW + timedelta(seconds=300),
+    )
+
+    await repo.commit_state(lease, ManagedSandboxState.CLEANED, now=NOW)
+
+    statement, params = session.statements[-1]
+    assert "provider_ref = NULL" in statement
+    assert "ownership_digest = NULL" in statement
+    assert "lease_expires_at = NULL" in statement
+    assert "cleaned_at = :now" in statement
+    assert params["state"] == "cleaned"
+    assert params["now"] == NOW
+
+
+async def test_commit_state_writes_image_identity_when_given() -> None:
+    """다음 태스크가 ALLOCATING 전이 시점에 이미지를 고정할 때 쓸 쓰기 경로.
+    안 주면(기본 None) SET 절에 안 들어가야 한다 -- 이미 확정된 값을 실수로
+    지우면 안 되기 때문이다.
+    """
+    session = FakeSession([FakeResult(row=_row(fencing_token=2))])
+    repo = repository_with(session)
+    lease = ManagedAllocationLease(
+        allocation_id="msa_1",
+        worker_id="worker_1",
+        fencing_token=2,
+        expires_at=NOW + timedelta(seconds=300),
+    )
+
+    await repo.commit_state(
+        lease,
+        ManagedSandboxState.ALLOCATING,
+        now=NOW,
+        image_identity="ghcr.io/acme/sandbox:sha-1",
+    )
+
+    statement, params = session.statements[-1]
+    assert "image_identity = :image_identity" in statement
+    assert params["image_identity"] == "ghcr.io/acme/sandbox:sha-1"
+
+
+async def test_commit_state_omits_image_identity_when_not_given() -> None:
+    session = FakeSession([FakeResult(row=_row(fencing_token=2))])
+    repo = repository_with(session)
+    lease = ManagedAllocationLease(
+        allocation_id="msa_1",
+        worker_id="worker_1",
+        fencing_token=2,
+        expires_at=NOW + timedelta(seconds=300),
+    )
+
+    await repo.commit_state(lease, ManagedSandboxState.ALLOCATING, now=NOW)
+
+    # RETURNING 절에는 image_identity가 항상 있다(응답 왕복용) -- 여기서
+    # 확인할 건 SET 절에 안 들어갔다는 것과 바인드하지 않았다는 것뿐이다.
+    statement, params = session.statements[-1]
+    assert "image_identity = :image_identity" not in statement
+    assert "image_identity" not in params
 
 
 async def test_commit_active_binds_only_the_encrypted_reference() -> None:

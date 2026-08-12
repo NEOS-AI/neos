@@ -9,6 +9,7 @@ from neos.coding.managed.admission import AdmissionRequest, AdmissionResult
 from neos.coding.managed.allocation import (
     AllocationPlan,
     ManagedAllocationLease,
+    ManagedSandboxNotClaimable,
     ManagedSandboxNotFound,
     StaleManagedSandboxLease,
 )
@@ -28,6 +29,17 @@ _LIVE_QUOTA_STATES = (
     ManagedSandboxState.ACTIVE.value,
     ManagedSandboxState.SUSPENDED.value,
     ManagedSandboxState.RECOVERY_PENDING.value,
+)
+# claim_allocation이 허용하는 원본 상태 -- 아직 어떤 워커도 다음 단계로
+# 진행시키지 않은 채 대기 중인 상태만 담는다. ALLOCATING/ACTIVE/SUSPENDED는
+# 이미 리스를 쥔 워커가 관리 중이므로 제외한다 (리스가 만료돼도 그 상태 자체를
+# 재클레임 대상으로 삼지 않는다). `domain.ManagedSandboxAllocation.claimable_at()`
+# 이 이미 이 집합을 정의해뒀다 -- 두 곳이 갈라지지 않도록 반드시 함께 바꾼다.
+_CLAIMABLE_STATES = (
+    ManagedSandboxState.ADMITTED.value,
+    ManagedSandboxState.RECOVERY_PENDING.value,
+    ManagedSandboxState.CLEANUP_PENDING.value,
+    ManagedSandboxState.CLEANUP_RETRY.value,
 )
 
 
@@ -431,12 +443,20 @@ class PostgresManagedSandboxRepository:
         now: datetime,
         lease_seconds: int,
     ) -> ManagedAllocationLease:
-        """리스가 비어있거나 만료된 경우에만 펜싱 토큰을 올려 클레임한다.
+        """claim 가능한 상태이면서 리스가 비어있거나 만료된 경우에만 펜싱
+        토큰을 올려 클레임한다.
 
         `UPDATE`가 대상 행을 잠그므로 별도 `SELECT ... FOR UPDATE`가 필요
-        없다. 살아 있는 리스가 있으면 WHERE 절이 걸러 0행이 되고
-        `StaleManagedSandboxLease`가 난다 -- 만료된 리스는 같은 조건이
-        통과시키므로 별도의 reclaim 경로가 필요 없다.
+        없다. 만료된 리스는 같은 조건이 통과시키므로 별도의 reclaim 경로가
+        필요 없다.
+
+        실패하면 원인을 구분해서 알린다 -- "이미 끝났거나 다른 단계에 있다"
+        (`ManagedSandboxNotClaimable`)와 "누군가 지금 쥐고 있다"
+        (`StaleManagedSandboxLease`)는 호출자가 재시도할지 포기할지 다르게
+        판단해야 하는 서로 다른 상황이다. 이 UPDATE 자체는 두 조건을 한
+        WHERE 절에서 원자적으로 판정하므로, 실패 시에만 원인 구분용으로
+        같은 트랜잭션 안에서 한 번 더 읽는다 -- 소유권 판정 자체는 여전히
+        이 UPDATE 하나가 한다.
         """
         _require_timezone_aware("claim time", now)
         if lease_seconds < 1:
@@ -454,6 +474,7 @@ class PostgresManagedSandboxRepository:
                                    version = version + 1,
                                    updated_at = :now
                              WHERE allocation_id = :allocation_id
+                               AND state = ANY(CAST(:claimable_states AS VARCHAR[]))
                                AND (
                                    lease_expires_at IS NULL
                                    OR lease_expires_at <= :now
@@ -465,11 +486,12 @@ class PostgresManagedSandboxRepository:
                             "allocation_id": allocation_id,
                             "expires_at": expires_at,
                             "now": now,
+                            "claimable_states": list(_CLAIMABLE_STATES),
                         },
                     )
                 ).one_or_none()
-        if row is None:
-            raise StaleManagedSandboxLease(allocation_id)
+                if row is None:
+                    await _raise_claim_failure(session, allocation_id)
         return ManagedAllocationLease(
             allocation_id=allocation_id,
             worker_id=worker_id,
@@ -484,12 +506,38 @@ class PostgresManagedSandboxRepository:
         *,
         now: datetime,
         error_code: ProviderErrorCode | None = None,
+        image_identity: str | None = None,
     ) -> ManagedSandboxAllocation:
+        """상태 전이를 커밋한다.
+
+        `target`이 `CLEANED`면 `domain.transition_allocation()`이 메모리에서
+        하는 클리어링(provider_ref/ownership_digest/lease_expires_at를 비우기)을
+        쓰기 경로에도 그대로 반영한다 -- 045의 CHECK 제약이 CLEANED 행에
+        그 값들이 NULL이고 `cleaned_at`이 NOT NULL이길 요구하므로, 반영하지
+        않으면 UPDATE 자체가 거부된다.
+
+        `image_identity`는 선택 인자다 -- 사용할 이미지가 정해지는 시점
+        (전형적으로 ALLOCATING으로 전이할 때)에 호출자가 넘기면 같이 쓴다.
+        """
+        assignment_parts = ["state = :state", "error_code = :error_code"]
+        params: dict[str, object] = {"state": target.value, "error_code": error_code}
+        if image_identity is not None:
+            assignment_parts.append("image_identity = :image_identity")
+            params["image_identity"] = image_identity
+        if target is ManagedSandboxState.CLEANED:
+            assignment_parts.extend(
+                [
+                    "provider_ref = NULL",
+                    "ownership_digest = NULL",
+                    "lease_expires_at = NULL",
+                    "cleaned_at = :now",
+                ]
+            )
         return await self._commit(
             lease,
             now=now,
-            assignments="state = :state, error_code = :error_code",
-            params={"state": target.value, "error_code": error_code},
+            assignments=", ".join(assignment_parts),
+            params=params,
         )
 
     async def commit_active(
@@ -766,6 +814,34 @@ def _quota_reason(
     ):
         return AdmissionReason.BUDGET_EXCEEDED
     return None
+
+
+async def _raise_claim_failure(session, allocation_id: str) -> None:
+    """`claim_allocation`의 원자적 UPDATE가 0행을 반환했을 때 원인을 구분해서
+    알린다.
+
+    이 조회는 UPDATE와 별개 문장이라 그 사이에 다른 트랜잭션이 행을 바꿀 수
+    있다 -- 그래도 소유권 판정 자체(누가 이겼는지)는 이미 끝난 원자적 UPDATE가
+    했으므로 안전하다. 이 함수는 그 실패를 사람이 구분할 수 있는 예외로
+    번역할 뿐이다.
+    """
+    row = (
+        await session.execute(
+            text(
+                """
+                SELECT state
+                  FROM coding_managed_sandboxes
+                 WHERE allocation_id = :allocation_id
+                """
+            ),
+            {"allocation_id": allocation_id},
+        )
+    ).one_or_none()
+    if row is None:
+        raise ManagedSandboxNotFound(allocation_id)
+    if row.state not in _CLAIMABLE_STATES:
+        raise ManagedSandboxNotClaimable(allocation_id)
+    raise StaleManagedSandboxLease(allocation_id)
 
 
 def _allocation_from_row(row) -> ManagedSandboxAllocation:

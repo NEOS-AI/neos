@@ -15,11 +15,20 @@ from neos.coding.managed.domain import ManagedSandboxAllocation
 
 
 class StaleManagedSandboxLease(RuntimeError):
-    """펜싱 토큰이 낡아 이 워커는 더 이상 이 할당을 진행시킬 수 없다."""
+    """펜싱 토큰이 낡거나 리스가 살아 있어 이 워커는 더 이상 이 할당을
+    진행시킬 수 없다 -- "누군가 지금 쥐고 있다"는 뜻이다.
+    """
 
 
 class ManagedSandboxNotFound(LookupError):
     """`allocation_id`에 해당하는 할당 행이 없다."""
+
+
+class ManagedSandboxNotClaimable(RuntimeError):
+    """할당이 claim 가능한 상태가 아니다 -- "이미 끝났거나 다른 단계에
+    있다"는 뜻이다. 리스가 살아 있어서 지는 것(`StaleManagedSandboxLease`)과
+    구별해야 호출자가 재시도할지 포기할지 판단할 수 있다.
+    """
 
 
 @dataclass(frozen=True, slots=True)
