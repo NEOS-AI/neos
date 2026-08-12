@@ -3,7 +3,6 @@
 `None` = provider × 역할 기본값, 문자열 = 배포/기능 오버라이드.
 """
 
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest

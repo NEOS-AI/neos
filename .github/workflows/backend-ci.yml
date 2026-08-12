@@ -33,12 +33,21 @@ jobs:
           enable-cache: true
           version: "0.11.16"
       - run: uv sync --frozen --group dev
+      # 파일 나열이 아니라 디렉터리다. 예전 판은 네 파일만 검사했고, 그래서
+      # 2026-08-13 에 `tests/config/test_test_environment_policy.py` 를 고치며
+      # 남긴 미사용 임포트가 **린트 대상 안에 있었는데도** 그 파일만 통과시켜
+      # 놓친 것이 아니라 -- 반대로, 그 좁은 목록에 없던 다른 파일들은 애초에
+      # 검사된 적이 없다. 목록은 새 파일이 생길 때마다 조용히 낡는다.
+      #
+      # 저장소 전체는 아직 343건이 남아 있어 게이트로 세울 수 없다. 여기 적힌
+      # 세 디렉터리는 **현재 0건**이며, 이 트랙이 실제로 작업하는 표면이다.
+      # 나머지는 정리되는 대로 추가한다.
       - name: Ruff
         run: >-
           uv run --frozen ruff check
-          neos/workflow/deep_analysis/analytics.py
-          tests/workflow/deep_analysis/test_deep_analysis_analytics.py
-          tests/config/test_test_environment_policy.py
+          neos/workflow/deep_analysis
+          tests/workflow/deep_analysis
+          tests/config
           tests/conftest.py
       - name: Test CI environment policy
         run: uv run --frozen pytest tests/config/test_test_environment_policy.py -q
