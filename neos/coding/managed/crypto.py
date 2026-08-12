@@ -10,6 +10,11 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 _NONCE_BYTES = 12
 _VERSION_BYTES = 2
+# 봉인 값이 최소 이 길이는 돼야 버전·nonce 를 슬라이싱할 수 있다(암호문·태그는
+# 없어도 된다 -- 그 경우는 AEAD 인증 실패로 자연스럽게 갈라진다). 이보다
+# 짧으면 슬라이싱이 조용히 짧은 nonce 를 만들어 AESGCM 이 다른(untyped) 예외를
+# 내게 된다 -- 그래서 슬라이싱 전에 길이부터 검사한다.
+_MIN_SEALED_BYTES = _VERSION_BYTES + _NONCE_BYTES
 # AES-128/192/256-GCM 이 허용하는 키 길이. AESGCM(key) 생성자 자체가 이
 # 세 길이만 받으므로 여기서 미리 걸러 더 명확한 오류 메시지를 낸다.
 _VALID_KEY_BYTE_LENGTHS = frozenset({16, 24, 32})
@@ -43,6 +48,15 @@ class ProviderReferenceKeyVersionMismatch(ProviderReferenceCipherError):
     """
 
 
+class ProviderReferenceMalformedError(ProviderReferenceCipherError):
+    """봉인 값이 버전·nonce 조차 담을 수 없을 만큼 짧다.
+
+    `BYTEA` 컬럼은 어떤 길이든 담을 수 있어 손상되거나 잘린 행에서도 나올 수
+    있다 -- 공격이 아니어도 발생한다. 길이 부족을 버전 불일치나 인증 실패로
+    잘못 진단하지 않도록 슬라이싱보다 먼저 걸러낸다.
+    """
+
+
 class AesGcmProviderReferenceCipher:
     """provider 참조를 봉인한다.
 
@@ -70,6 +84,11 @@ class AesGcmProviderReferenceCipher:
         return self._key_version.to_bytes(_VERSION_BYTES, "big") + nonce + sealed
 
     def decrypt(self, encrypted_ref: bytes) -> str:
+        if len(encrypted_ref) < _MIN_SEALED_BYTES:
+            raise ProviderReferenceMalformedError(
+                f"sealed reference is {len(encrypted_ref)} bytes, "
+                f"expected at least {_MIN_SEALED_BYTES} (version + nonce)"
+            )
         embedded_version = int.from_bytes(encrypted_ref[:_VERSION_BYTES], "big")
         if embedded_version != self._key_version:
             # 이 cipher 가 쥔 키가 이 봉인을 만든 키와 실제로 같은 것인지는

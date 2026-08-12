@@ -4,6 +4,7 @@ from neos.coding.managed.crypto import (
     AesGcmProviderReferenceCipher,
     ProviderReferenceAuthenticationError,
     ProviderReferenceKeyVersionMismatch,
+    ProviderReferenceMalformedError,
 )
 
 
@@ -65,3 +66,23 @@ def test_a_different_key_version_is_rejected_before_authentication() -> None:
     )
     with pytest.raises(ProviderReferenceKeyVersionMismatch):
         other.decrypt(sealed)
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        pytest.param(b"", id="empty"),
+        pytest.param(b"\x00", id="shorter_than_version_prefix"),
+        pytest.param(b"\x00\x01" + b"\x00" * 5, id="shorter_than_version_plus_nonce"),
+    ],
+)
+def test_a_too_short_reference_is_rejected_as_malformed(malformed: bytes) -> None:
+    """`BYTEA` 컬럼은 손상되거나 잘린 값도 담을 수 있다 -- 공격이 아니어도
+    이런 입력이 들어올 수 있다.
+
+    슬라이싱 전에 길이를 검사하지 않으면 짧은 입력이 조용히 짧은 nonce 를
+    만들어 AESGCM 이 버전/인증 오류가 아닌 다른(untyped) 예외를 낸다 -- 또한
+    길이가 부족한 걸 버전 불일치로 잘못 진단해서도 안 된다.
+    """
+    with pytest.raises(ProviderReferenceMalformedError):
+        _cipher().decrypt(malformed)
