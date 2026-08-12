@@ -217,6 +217,17 @@ class FakeManagedSandboxAdapter:
             state=ProviderCircuitState.HEALTHY,
         )
 
+    def forget_all(self) -> None:
+        """내부 기록을 모두 비운다 -- 재발견이 아무것도 못 찾게 만드는 테스트
+        전용 메서드다.
+
+        provider 쪽 메타데이터가 사라진 상황(운영 사고, 리전 장애 등)을
+        흉내 내 `find_by_idempotency_key()`가 `None`을 내게 한다.
+        """
+        self._records.clear()
+        self._idempotency.clear()
+        self._requests.clear()
+
     def _get(self, provider_ref: str) -> ProviderSandboxState:
         try:
             return self._records[provider_ref]
