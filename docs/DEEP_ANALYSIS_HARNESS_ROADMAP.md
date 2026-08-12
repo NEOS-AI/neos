@@ -2046,8 +2046,8 @@ D4(네이티브 SDK 전환)가 그 아래를 바꾸면 함께 흔들린다. 별�
 | 구간 | 위치 | 범위 | 검증 |
 |---|---|---|---|
 | 플랜 1–13 | **`dev`** (마이그레이션 044까지) | `neos/coding/` 70파일 · `tests/coding/` 90파일 | `tests/coding` **457 passed / 16 skipped** (2026-08-08 실측) |
-| 플랜 14 Task 1–4 | **워크트리 전용** (`feature/managed-sandbox-control-plane` `89196755`) | `neos/coding/managed/` + 마이그레이션 045 | `tests/coding/managed` **76 passed / 2 skipped** (워크트리, 미커밋 변경 포함 상태) |
-| 플랜 14 Task 5–10 | — | 미착수 | — |
+| 플랜 14 Task 1–5 | **워크트리 전용** (`feature/managed-sandbox-control-plane`, HEAD `5aa31a22`) | `neos/coding/managed/` + 마이그레이션 045 | `tests/coding/managed` **76 passed / 2 skipped**는 Task 5 이전(Task 4 시점, 미커밋 변경 포함 상태)의 낡은 값 — 재측정 필요. 참고: dev 병합 직후(`a9f37c6a`) `tests/coding` 전체는 **537 passed / 18 skipped** |
+| 플랜 14 Task 6–10 | — | 미착수 (CA1) | — |
 
 **기본 플래그 — 트랙 A와 같은 자세로 꺼져 있다.**
 
@@ -2082,7 +2082,7 @@ neos/config/schema.py:1094   coding_model.enabled  = False
 | 11 | 프레임 단위 프로젝션 배칭 (10k 리플레이 검증) | — | ✅ |
 | 12 | 펜스된 공개 텍스트 파트 영속화·스트림·투영 | 043 | ✅ |
 | 13 | 워크스페이스 게이트웨이 8 tasks | 044 | ✅ `ebe10721` |
-| **14** | **관리형 샌드박스 컨트롤 플레인 10 tasks** | **045** | 🔵 **Task 4/10** |
+| **14** | **관리형 샌드박스 컨트롤 플레인 10 tasks** | **045** | 🔵 **Task 5/10** |
 
 상세 계보와 재개 절차는 [coding_agent_task_resume.md](coding_agent_task_resume.md).
 
@@ -2103,8 +2103,8 @@ failover는 금지**이며, 크로스 프로바이더 복구는 검증된 portab
 | 2 | 내구성 admission · 쿼터 예약 | ✅ (minor 2건 유예) |
 | 3 | provider 헬스 서킷 · 안정적 에러 매핑 | ✅ |
 | 4 | capability 인식 어댑터 포트 · 결정론적 fake | ✅ |
-| **5** | **펜스된 할당 · 모호한 결과 복구 · 바인딩** | ⬜ **다음 차례** |
-| 6 | 라이프사이클 조정 · 정리 SLO · Celery 전달 | ⬜ |
+| 5 | 펜스된 할당 · 모호한 결과 복구 · 바인딩 | ✅ (`1b9d2ad5`·`f38e357e`·`5aa31a22`) |
+| **6** | **라이프사이클 조정 · 정리 SLO · Celery 전달** | ⬜ **다음 차례** |
 | 7 | portable 아카이브 · 운영자 승인 복구 | ⬜ |
 | 8 | 소유자 투영 · 관리자 제어 API | ⬜ |
 | 9 | 브라우저 샌드박스 상태 · 실행 게이팅 | ⬜ |
@@ -2118,12 +2118,14 @@ failover는 금지**이며, 크로스 프로바이더 복구는 검증된 portab
 3. 마이그레이션이 reservation 타임스탬프/상태 대응을 강제하지 않으므로 **Task 2의
    repository 트랜잭션이 이를 유지**해야 한다
 
-**Task 4가 남긴 우려 (CA5 — Task 10 전 해소 필요):**
+**Task 4가 남긴 우려 — 해소됨 (2026-08-11, CA5):**
 현 Docker provider에 공개 관리형 라벨 확장점이 없어 shadow 어댑터가 커맨드 러너를
-감싸고 private 속성으로 config를 읽는다. 또한 Docker 멱등성이 **단일 어댑터 프로세스
-안에서만** 보호된다 — 기존 provider가 **크로스 프로세스 원자적 create 프리미티브를
-노출하지 않는다.** 프로덕션 팩토리 배선은 **의도적으로 미변경**이며, 채택 전에
-이 둘을 경화해야 한다.
+감싸고 private 속성으로 config를 읽는다 → **CA5-a로 해소** (`51a21fc4`..`0148d7fa`,
+`build_create_args`의 `extra_labels` 파라미터 + `DockerSandboxProvider`의 공개
+`resource_labels()`). 또한 Docker 멱등성이 **단일 어댑터 프로세스 안에서만** 보호된다 —
+기존 provider가 **크로스 프로세스 원자적 create 프리미티브를 노출하지 않는다** →
+**CA5-b로 해소** (`c7876999`, 클레임 볼륨 락). 프로덕션 팩토리 배선은 여전히
+**의도적으로 미변경**이다(§12.6 E-S1). 상세는 재개 문서 §3.
 
 ### 12.3 병합 위험 — 실측으로 다시 쟀다 (2026-08-08)
 
@@ -2149,22 +2151,39 @@ failover는 금지**이며, 크로스 프로바이더 복구는 검증된 portab
 `tests/coding/managed/**` · `db/migrations/045`)이라 충돌 대상이 아니다.
 045는 dev 최신이 044이므로 **번호 충돌도 없다.**
 
-**공유 파일은 5개이고, 그중 dev가 실제로 바꾼 것은 3개뿐이다** — 둘을 구분해야 한다:
+**공유 파일은 5개이고, 그중 dev가 실제로 바꾼 것은 3개뿐이다** — 둘을 구분해야 한다.
+그리고 이 셋만으로는 부족하다 — **브랜치가 앞으로 바꿀 파일**까지 세야 한다. 플랜 14
+Task 5는 `neos/coding/runtime.py`를 수정하는데, 그 파일도 merge-base 이후 dev가
+2커밋 건드렸다(스펙 §1.2, `docs/superpowers/specs/2026-08-11-coding-agent-track-e-resume-design.md`):
 
 | 파일 | dev 변화 (merge-base 이후) | 워크트리 변화 | 충돌 가능성 |
 |---|---|---|---|
 | `neos/config/schema.py` | **26커밋** +311/−16 | 1커밋 +22/−0 | 🟡 양쪽 추가 위주지만 인접줄 충돌 가능 |
 | `config/neos.default.yaml` | 2커밋 +3/−5 | 1커밋 +19/−0 | 🟢 소규모 |
 | `neos/observability/metrics.py` | 1커밋 +10/−0 | 1커밋 +43/−0 | 🟢 양쪽 순수 추가 |
+| `neos/coding/runtime.py` | **2커밋** +18/−3 (D1c·역할 라우팅) | Task 5가 수정 | 🟡 **앞으로 바꿀 파일** |
 | `tests/coding/test_durability_metrics.py` | **0커밋** | 1커밋 | ⚪ **불가** — dev가 손대지 않았다 |
 | `tests/config/test_sandbox_config.py` | **0커밋** | 1커밋 | ⚪ **불가** — dev가 손대지 않았다 |
 
 > 재현: `git diff --name-only $(git merge-base dev feature/managed-sandbox-control-plane) feature/managed-sandbox-control-plane`으로
 > 브랜치가 바꾼 파일을 뽑고, 각각 `git cat-file -e <merge-base>:<파일>`로 신규/공유를
 > 가른 뒤 `git rev-list --count <merge-base>..dev -- <파일>`로 dev 쪽 변경을 센다.
+>
+> 충돌면을 "브랜치가 이미 바꾼 파일"로만 재면 과소평가된다. **앞으로 바꿀 파일**까지
+> 세야 한다. 그리고 추정 대신 측정할 수 있다 — 아무것도 체크아웃하지 않는다:
+> `git merge-tree --write-tree --name-only dev feature/managed-sandbox-control-plane`
+> (exit 0 + 트리 OID 한 줄 = 충돌 없음). **실측 결과 (2026-08-11): 충돌 0건.**
 
 **따라서 병합 비용의 지배 요인은 드리프트가 아니라 CA2(출처 불명 미커밋 변경)다** —
 재개 문서가 "의존 작업 전에 소유권부터 판정하라"고 못박은 그 항목이 2주째 그대로다.
+
+> ⚠️ **정정 (2026-08-11).** 위 문단이 지목한 CA2는 종결됐다 — `docker_shadow.py`의
+> 미커밋 변경을 CA5-b(크로스 프로세스 원자적 create) 구현으로 판정·채택했고
+> (`c7876999`, §12.7), 바로 위 `git merge-tree` 실측도 충돌 0건이다. CA3도
+> dev → 워크트리 merge(`a9f37c6a`)로 종결됐다. **따라서 이 둘은 더는 병합 비용의
+> 지배 요인이 아니다.** 남은 실질 제약은 위 표의 `runtime.py` 행 하나뿐이다 —
+> 낡은 워크트리 위에서 작업하면 `TrackedCodingModel` 배선도 역할 라우팅도 없는
+> 버전 위에 코드를 얹게 된다(§12.4).
 
 ### 12.4 트랙 D와의 접점 — D1c가 이미 코딩 루프를 감쌌다
 
@@ -2203,23 +2222,37 @@ codex/anthropic-caching-advisor  0fe2fa29   커밋 7개 (2026-07-11)
 
 | # | 기준 | 현재 | 측정 방법 |
 |---|---|---|---|
-| **E-S1** | 플랜 14가 dev에 병합돼 있다 | ❌ Task 4/10, 워크트리 전용 | `db/migrations/045` 존재 + `tests/coding/managed` 통과 |
+| **E-S1** | 플랜 14가 dev에 병합돼 있다 | ❌ Task 5/10, 워크트리 전용 — dev→워크트리 merge(`a9f37c6a`)는 반대 방향이라 해당 없음 | `db/migrations/045` 존재 + `tests/coding/managed` 통과 |
 | **E-S2** | 실 루프가 정책 검증을 통과한다 | ❌ 두 플래그 모두 `False` | `validate_coding_model_policy()` — sandbox 활성 · Anthropic 크리덴셜 · 양수 가격 · staging/prod Docker |
-| **E-S3** | fail-closed가 실제로 지켜진다 | ❌ Task 5–7 미착수 | 자동 크로스 프로바이더 failover **0건** · 브라우저 투영에 provider 참조·raw 에러 **0건** |
-| **E-S4** | 코딩 루프의 LLM 호출이 전부 원장에 남는다 | ✅ (2026-08-08, D1c) | `TrackedCodingModel` 배선 유지 — 별도 프로세스 유실률 0% |
+| **E-S3** | fail-closed가 실제로 지켜진다 | 🟡 **부분** (2026-08-11) — 플랜 14 Task 5(펜스된 할당·모호한 결과 복구·provider-reference 암호화) 완료. Task 6–7(라이프사이클 조정·정리 SLO, portable 아카이브·운영자 승인 복구) 미착수라 fail-closed 전체는 아직 실증되지 않았다 | 자동 크로스 프로바이더 failover **0건** · 브라우저 투영에 provider 참조·raw 에러 **0건** |
+| **E-S4** | 코딩 루프의 LLM 호출이 전부 원장에 남는다 | ✅ | `tests/coding/sandbox/test_runtime_ownership.py::test_real_loop_wraps_the_production_model_for_collection`(`fe626bef`) — 2026-08-11 이전에는 측정법만 있고 **그것을 실행하는 테스트가 없었다** |
 
-> E-S4만 이미 참이다. 그리고 그것은 트랙 E가 한 일이 아니라 **트랙 D가 지나가며
-> 채운 것**이다 — §12.4의 접점이 생긴 경위가 이것이다.
+> E-S4는 배선 자체는 여전히 트랙 D가 지나가며 채운 것이지만(§12.4), 트랙 E는 그
+> 배선이 깨지면 잡아내는 **회귀 가드**를 처음 추가했다.
+>
+> ⚠️ **E-S3의 "부분"이 검증한 범위를 넘겨짚지 말 것.** 펜싱 SQL·클레임 상태 필터·
+> CLEANED 컬럼 정리·join 쿼리는 스크립트 fake 세션을 대상으로 **방출된 SQL과
+> 바인드 파라미터**로만 검증했다 — 이 환경에는 `CODING_TEST_DATABASE_URL`이 없어
+> `@pytest.mark.integration`이 전부 skip되고, **실제 Postgres로 검증한 적이 한 번도
+> 없다.** `CHECK` 제약 위반은 지금 아무것도 잡아내지 못한다. provider-reference
+> AES-GCM 암호화는 어떤 프로덕션 호출자에도 배선되지 않았다 — `decrypt()`는 아직
+> 호출되지 않는다. per-allocation AAD를 지금의 `encrypt(value)`/`decrypt(value)`
+> Protocol과 프로세스 시작 시 1회 생성되는 cipher로는 실을 수 없어서, 고정 AAD로
+> 어설피 배선하는 대신 **의도적으로 미배선** 상태로 남겼다(고정 AAD였다면 한
+> 할당의 ciphertext를 다른 할당 행에 재생해도 걸러지지 않았을 것이다) — Celery
+> 조정자 몫으로 남는다. 그리고 결정론적으로 계산되는 `ownership_digest`는
+> `_rediscover()` 복구 경로에서 **아직 비교되지 않는다** — 비교할 수 있게
+> 만들었을 뿐, 비교하는 코드 경로는 없다.
 
 ### 12.7 미해결 인벤토리
 
 | 우선 | ID | 내용 |
 |---|---|---|
-| 🔴 | **CA1** | 플랜 14의 Task 5–10 미착수 (10개 중 6개). Task 5가 다음 차례이며 repository claim/commit의 version/fence 검사가 필수 |
-| 🔴 | **CA2** | `docker_shadow.py`(+305/−33)·`test_docker_shadow.py`(+206) **출처 불명 미커밋 변경이 2주째 미해결.** 이 워크트리에는 같은 전례가 두 번 있고 두 번 다 "의존 작업 전 소유권 판정"으로 처리했다. **지우지 말고 보존한 채 판정할 것** |
-| 🟡 | **CA3** | 워크트리 병합 시점 미결. 충돌면은 §12.3의 파일 3개이며, 비용의 지배 요인은 드리프트가 아니라 CA2다 |
-| 🟡 | **CA4** | 워크트리 `progress.md`가 **이중 기록**돼 있다 — Task 1–3이 다른 커밋 해시로 두 번 나오고 둘째 블록은 `Task 3: BLOCKED`로 끝난다. 실제 이력은 `591640ce → 29ab632d → 777fdd33 → 79645f2e → 8b6ef183 → d8f4e2e4 → d308443e → 9245d5d5 → 2d38f1a6 → 3e3935f1 → 89196755` |
-| 🟡 | **CA5** | Task 4 잔여 우려 2건 — Docker provider의 공개 관리형 라벨 확장점 부재 / 크로스 프로세스 원자적 create 미노출. **Task 10(프로덕션 팩토리 채택) 전에 경화 필요** |
+| 🔴 | **CA1** | 플랜 14의 Task 5 완료(`1b9d2ad5`·`f38e357e`·`5aa31a22` — 펜스된 클레임/커밋, `advance()` 모호성 복구, provider-reference AES-GCM 암호화). Task 6–10 미착수 (10개 중 5개) |
+| ✅ | **CA2** | **종결** (2026-08-11, `c7876999`). `docker_shadow.py`(+305/−33)·`test_docker_shadow.py`(+206)의 출처 불명 미커밋 변경을 **CA5-b(크로스 프로세스 원자적 create) 구현으로 판정하고 채택**했다. 판정 근거는 스펙 §1.1(`docs/superpowers/specs/2026-08-11-coding-agent-track-e-resume-design.md`) |
+| ✅ | **CA3** | **종결** (`a9f37c6a`). dev → 워크트리 방향 merge로 합류했다. `git merge-tree` 실측 충돌 0건(§12.3). 리베이스를 쓰지 않은 이유는 11커밋 해시 재작성이 CA4 정리의 근거를 지우기 때문 |
+| ✅ | **CA4** | **종결** (`472856b7`). 이중 기록 + Task 4 누락을 정정했다 — 기존 24줄을 보존한 채 정정 블록을 덧붙였다 |
+| ✅ | **CA5** | **종결.** CA5-a(공개 관리형 라벨 확장점, `51a21fc4`..`0148d7fa`) / CA5-b(크로스 프로세스 원자적 create, `c7876999`)로 분리해 둘 다 해소했다 |
 | 🟢 | **CA6** | `codex/anthropic-caching-advisor` 7커밋의 병합·폐기 결정 미결 (§12.5) |
 | 🟢 | **CA7** | 코딩 에이전트 트랙이 `docs/ROADMAP.md`에 **한 번도 등장하지 않는다.** 마스터 로드맵과 이 문서 사이에 트랙 하나만큼의 공백이 있다 |
 

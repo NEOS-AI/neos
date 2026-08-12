@@ -233,20 +233,29 @@ db/migrations/045_add_coding_managed_sandboxes.sql
 검증: `pytest -q tests/coding/managed/adapters` → **17 passed**, ruff check/format 통과.
 테스트는 `no_db` 마킹, 외부 네트워크·Docker 데몬 불사용.
 
-**Task 4가 남긴 우려 (Task 10 전에 해소 필요):**
+**Task 4가 남긴 우려 — 해소됨 (2026-08-11, CA5):**
 - 현 Docker provider에 공개 관리형 라벨 확장점이 없어, shadow 어댑터가 커맨드 러너를 감싸고
   private 속성으로 config를 읽는다. shadow 어댑터에 격리되어 있고 프로덕션 팩토리에는 미배선.
+  → **CA5-a로 해소** (`51a21fc4`..`0148d7fa`). `build_create_args`가 `extra_labels`
+  파라미터를 얻어 `create_args.index("--user")` 포지셔널 argv 스플라이스(그 플래그가
+  더는 방출되지 않게 되는 날 `ValueError`를 냈을 코드)를 제거했고, `DockerSandboxProvider`가
+  공개 `resource_labels()` 컨텍스트 매니저 + 읽기 전용 접근자를 얻어 shadow 어댑터가
+  더는 자신이 소유하지 않는 provider를 변경하지 않는다. 리뷰 후 클레임 락에
+  실패 시 해제 · 오래된 클레임 재확보 · create 이후 조정(reconciliation)도 추가됐다.
 - Docker 멱등성은 단일 어댑터 프로세스 내 동시 호출과 라벨 재발견 기반 재시도에서만 보호된다.
   기존 Docker provider가 **크로스 프로세스 원자적 create 프리미티브를 노출하지 않는다.**
   프로덕션 팩토리 채택 전 이것부터 경화해야 한다.
+  → **CA5-b로 해소** (`c7876999`). §4의 출처 불명 미커밋 변경(`docker_shadow.py`)을
+  Docker 볼륨을 클레임 락으로 쓰는 크로스 프로세스 원자적 create 구현으로 판정하고
+  채택했다.
 
 ---
 
 ## 4. 🔴 재개 전 즉시 확인 — 미커밋 변경의 출처
 
-> 🔴 **2026-08-08 재확인: 두 파일이 2주째 그대로다.** 이 항목은 해결되지 않았고,
-> 로드맵 **CA2**로 추적된다. §1의 −232 드리프트보다 **이것이 병합 비용의 지배
-> 요인**이다 — 소유권이 판정되지 않으면 Task 5 자체를 시작할 수 없다.
+> ✅ **해결됨 (2026-08-11, `c7876999`).** 두 파일의 미커밋 변경을 CA5-b(크로스
+> 프로세스 원자적 create) 구현으로 판정하고 채택했다 — 로드맵 **CA2**는 종결됐다.
+> 판정 근거 넷과 절차는 아래 「원장 무결성 문제 — 정정 완료」 절을 참고할 것.
 
 ```bash
 cd /Users/ywsung/Desktop/neos/.worktrees/managed-sandbox-control-plane
@@ -341,34 +350,42 @@ e8005ec6 feat(anthropic): add request feature policy
 
 ---
 
-## 6. 재개 절차 (Managed Sandbox Task 5)
+## 6. 재개 절차 (Managed Sandbox Task 6부터)
+
+**2026-08-11 갱신.** CA2·CA3·CA4·CA5는 전부 종결됐다(§3·§4). dev는 이미 `a9f37c6a`로
+이 워크트리에 병합됐고, 플랜 14 Task 5(펜스된 할당 · 모호한 결과 복구 ·
+provider-reference 암호화, `1b9d2ad5`·`f38e357e`·`5aa31a22`)도 완료됐다. **더는
+미커밋 변경 소유권 판정도, 병합 순서 결정도 남아 있지 않다.** 다음 재개는
+플랜 14 **Task 6(라이프사이클 조정 · 정리 SLO · Celery 전달)** 부터다.
 
 ```bash
 cd /Users/ywsung/Desktop/neos/.worktrees/managed-sandbox-control-plane
 
-# 1) 미커밋 변경 출처 판정 (§4) — 먼저 해결
-git diff neos/coding/managed/adapters/docker_shadow.py
-git diff tests/coding/managed/adapters/test_docker_shadow.py
-
-# 2) 기존 베이스라인 확인
+# 1) 기존 베이스라인 확인
+GOOGLE_API_KEY=test-key /Users/ywsung/Desktop/neos/.venv/bin/pytest -q tests/coding
 GOOGLE_API_KEY=test-key /Users/ywsung/Desktop/neos/.venv/bin/pytest -q tests/coding/managed
-/Users/ywsung/Desktop/neos/.venv/bin/ruff check neos/coding/managed tests/coding/managed
-/Users/ywsung/Desktop/neos/.venv/bin/ruff format --check neos/coding/managed tests/coding/managed
+/Users/ywsung/Desktop/neos/.venv/bin/ruff check neos/coding tests/coding
+/Users/ywsung/Desktop/neos/.venv/bin/ruff format --check neos/coding tests/coding
 
-# 3) 원장 정리 후 Task 5 착수
-#    - Task 5 필수 구현: repository claim/commit의 version/fence 검사 (Task 1 결정 #1)
-#    - fake 어댑터의 create-then-timeout 모호성 + 호출 카운터를 활용
+# 2) Task 6 착수
+#    - 라이프사이클 조정 · 정리 SLO · Celery 전달 (플랜 Task 6)
+#    - Task 7이 image_identity 기록에 의존한다 — 아직 없다면 Task 6 범위에서 결정할 것
 ```
 
-플랜 Task 5 위치: `docs/superpowers/plans/2026-07-25-managed-sandbox-control-plane.md:553`
+플랜 Task 6 위치: `docs/superpowers/plans/2026-07-25-managed-sandbox-control-plane.md:659`
 
-**2026-08-08 실측 베이스라인:** 위 2)의 `pytest -q tests/coding/managed`는
-현재 **76 passed / 2 skipped**다 (미커밋 변경이 있는 상태에서 측정한 값이므로,
-§4의 소유권 판정 결과에 따라 달라질 수 있다).
+**2026-08-11 실측 베이스라인:** dev → 워크트리 merge(`a9f37c6a`) 직후
+`pytest -q tests/coding`는 **537 passed / 18 skipped**다. `tests/coding/managed`는
+merge 이후 갱신되지 않았으므로 재개 시 위 1)로 다시 실측할 것.
 
-> ⚠️ **병합을 먼저 할지 Task 5를 먼저 할지는 아직 결정되지 않았다 (CA3).**
-> 위 절차는 "워크트리에서 계속 진행" 쪽을 전제한다. dev로 먼저 rebase하려면
-> §1의 공유 파일 3개만 보면 되고 §1.1대로 `AgenticGrader`는 문제가 아니다.
+> ⚠️ **알려진 한계 세 가지 — Task 6 이후 작업은 이를 전제로 시작할 것.**
+> (1) 펜싱 SQL·클레임 상태 필터·CLEANED 컬럼 정리·join 쿼리는 이 환경에
+> `CODING_TEST_DATABASE_URL`이 없어 스크립트 fake 세션 대상 SQL/바인드파라미터로만
+> 검증했다 — 실제 Postgres로 검증한 적이 **한 번도 없다.** (2) provider-reference
+> AES-GCM cipher는 어떤 프로덕션 호출자에도 배선되지 않았다 — `decrypt()`는 아직
+> 호출되지 않는다. Celery 조정자가 실제로 배선할 몫이다. (3) 결정론적으로 계산되는
+> `ownership_digest`는 `_rediscover()` 복구 경로에서 아직 비교되지 않는다.
+> 상세는 로드맵 §12.6 E-S3 각주.
 
 ---
 
