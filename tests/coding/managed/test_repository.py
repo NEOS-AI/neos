@@ -1,9 +1,19 @@
+from collections import namedtuple
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from neos.coding.managed.admission import AdmissionRequest, AdmissionResult
-from neos.coding.managed.domain import AdmissionDecision, AdmissionReason
+from neos.coding.managed.adapters import AllocationResult
+from neos.coding.managed.allocation import (
+    ManagedAllocationLease,
+    StaleManagedSandboxLease,
+)
+from neos.coding.managed.domain import (
+    AdmissionDecision,
+    AdmissionReason,
+    ManagedSandboxState,
+)
 from neos.coding.managed.repository import PostgresManagedSandboxRepository
 
 
@@ -16,6 +26,9 @@ class FakeResult:
         self._rows = list(rows)
 
     def first(self):
+        return self._row
+
+    def one_or_none(self):
         return self._row
 
     def all(self):
@@ -72,6 +85,65 @@ def repository_for(session: FakeSession) -> PostgresManagedSandboxRepository:
         return session
 
     return PostgresManagedSandboxRepository(session_factory)
+
+
+# claim_allocation/commit_state/commit_active 테스트 전용 별칭 -- 모양은
+# repository_for와 같다 (브리프가 지정한 헬퍼 이름).
+repository_with = repository_for
+
+
+_AllocationRow = namedtuple(
+    "_AllocationRow",
+    [
+        "allocation_id",
+        "tenant_id",
+        "task_id",
+        "run_id",
+        "provider",
+        "region",
+        "provider_ref",
+        "ownership_digest",
+        "state",
+        "generation",
+        "fencing_token",
+        "lease_expires_at",
+        "absolute_expires_at",
+        "version",
+        "error_code",
+        "snapshot_ref",
+        "archive_ref",
+    ],
+)
+
+
+def _row(**changes: object) -> _AllocationRow:
+    """claim/commit이 돌려받는 `coding_managed_sandboxes` 행을 흉내낸다.
+
+    claim_allocation은 이 중 `fencing_token`만 읽고, `_commit`은
+    `_allocation_from_row`로 나머지까지 전부 읽어 `ManagedSandboxAllocation`을
+    만든다 -- 두 경로 모두 같은 fake 행으로 통과하도록 전 필드에 기본값을 둔다.
+    """
+    values: dict[str, object] = {
+        "allocation_id": "msa_1",
+        "tenant_id": "tenant_1",
+        "task_id": "ct_1",
+        "run_id": "cr_1",
+        "provider": "fake",
+        "region": "local",
+        "provider_ref": None,
+        "ownership_digest": None,
+        "state": "allocating",
+        "generation": 1,
+        "fencing_token": 1,
+        "lease_expires_at": None,
+        "absolute_expires_at": NOW + timedelta(hours=1),
+        "version": 1,
+        "error_code": None,
+        "snapshot_ref": None,
+        "archive_ref": None,
+    }
+    values.update(changes)
+    return _AllocationRow(**values)
 
 
 async def test_direct_repository_caller_with_brief_request_reaches_processing() -> None:
@@ -515,3 +587,69 @@ async def test_release_rejects_unbounded_batch(limit: int) -> None:
         await repository_for(FakeSession([])).release_expired_reservations(
             now=NOW, limit=limit
         )
+
+
+async def test_claim_allocation_only_takes_a_free_or_expired_lease() -> None:
+    session = FakeSession([FakeResult(row=_row(fencing_token=2))])
+    repo = repository_with(session)
+
+    lease = await repo.claim_allocation("msa_1", "worker_1", now=NOW, lease_seconds=300)
+
+    statement, params = session.statements[-1]
+    assert "fencing_token = fencing_token + 1" in statement
+    assert "lease_expires_at IS NULL" in statement
+    assert "lease_expires_at <= :now" in statement
+    assert params["allocation_id"] == "msa_1"
+    assert lease.fencing_token == 2
+    assert lease.worker_id == "worker_1"
+
+
+async def test_claim_allocation_raises_when_a_live_lease_holds() -> None:
+    session = FakeSession([FakeResult(row=None)])
+    repo = repository_with(session)
+
+    with pytest.raises(StaleManagedSandboxLease):
+        await repo.claim_allocation("msa_1", "worker_2", now=NOW, lease_seconds=300)
+
+
+async def test_commit_filters_on_the_fencing_token() -> None:
+    session = FakeSession([FakeResult(row=_row(fencing_token=2))])
+    repo = repository_with(session)
+    lease = ManagedAllocationLease(
+        allocation_id="msa_1",
+        worker_id="worker_1",
+        fencing_token=2,
+        expires_at=NOW + timedelta(seconds=300),
+    )
+
+    await repo.commit_state(lease, ManagedSandboxState.ALLOCATING, now=NOW)
+
+    statement, params = session.statements[-1]
+    assert "fencing_token = :fencing_token" in statement
+    assert params["fencing_token"] == 2
+
+
+async def test_commit_active_binds_only_the_encrypted_reference() -> None:
+    session = FakeSession([FakeResult(row=_row(fencing_token=2))])
+    repo = repository_with(session)
+    lease = ManagedAllocationLease(
+        allocation_id="msa_1",
+        worker_id="worker_1",
+        fencing_token=2,
+        expires_at=NOW + timedelta(seconds=300),
+    )
+
+    await repo.commit_active(
+        lease,
+        AllocationResult(
+            provider_ref="ref_secret",
+            ownership_digest="digest_1",
+            state=ManagedSandboxState.ACTIVE,
+        ),
+        encrypted_ref=b"cipher",
+        now=NOW,
+    )
+
+    _statement, params = session.statements[-1]
+    assert params["provider_ref"] == b"cipher"
+    assert "ref_secret" not in str(params)

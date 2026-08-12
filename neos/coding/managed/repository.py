@@ -4,11 +4,18 @@ from uuid import uuid4
 
 from sqlalchemy import text
 
+from neos.coding.managed.adapters import AllocationResult
 from neos.coding.managed.admission import AdmissionRequest, AdmissionResult
+from neos.coding.managed.allocation import (
+    ManagedAllocationLease,
+    StaleManagedSandboxLease,
+)
 from neos.coding.managed.domain import (
     AdmissionDecision,
     AdmissionReason,
+    ManagedSandboxAllocation,
     ManagedSandboxState,
+    ProviderErrorCode,
 )
 from neos.coding.persistence.postgres import SessionFactory
 
@@ -414,6 +421,143 @@ class PostgresManagedSandboxRepository:
                 rows = result.all()
         return [str(row[0]) for row in rows]
 
+    async def claim_allocation(
+        self,
+        allocation_id: str,
+        worker_id: str,
+        *,
+        now: datetime,
+        lease_seconds: int,
+    ) -> ManagedAllocationLease:
+        """리스가 비어있거나 만료된 경우에만 펜싱 토큰을 올려 클레임한다.
+
+        `UPDATE`가 대상 행을 잠그므로 별도 `SELECT ... FOR UPDATE`가 필요
+        없다. 살아 있는 리스가 있으면 WHERE 절이 걸러 0행이 되고
+        `StaleManagedSandboxLease`가 난다 -- 만료된 리스는 같은 조건이
+        통과시키므로 별도의 reclaim 경로가 필요 없다.
+        """
+        _require_timezone_aware("claim time", now)
+        if lease_seconds < 1:
+            raise ValueError("lease_seconds_invalid")
+        expires_at = now + timedelta(seconds=lease_seconds)
+        async with await self._session_factory() as session:
+            async with session.begin():
+                row = (
+                    await session.execute(
+                        text(
+                            """
+                            UPDATE coding_managed_sandboxes
+                               SET fencing_token = fencing_token + 1,
+                                   lease_expires_at = :expires_at,
+                                   version = version + 1,
+                                   updated_at = :now
+                             WHERE allocation_id = :allocation_id
+                               AND (
+                                   lease_expires_at IS NULL
+                                   OR lease_expires_at <= :now
+                               )
+                         RETURNING fencing_token
+                            """
+                        ),
+                        {
+                            "allocation_id": allocation_id,
+                            "expires_at": expires_at,
+                            "now": now,
+                        },
+                    )
+                ).one_or_none()
+        if row is None:
+            raise StaleManagedSandboxLease(allocation_id)
+        return ManagedAllocationLease(
+            allocation_id=allocation_id,
+            worker_id=worker_id,
+            fencing_token=row.fencing_token,
+            expires_at=expires_at,
+        )
+
+    async def commit_state(
+        self,
+        lease: ManagedAllocationLease,
+        target: ManagedSandboxState,
+        *,
+        now: datetime,
+        error_code: ProviderErrorCode | None = None,
+    ) -> ManagedSandboxAllocation:
+        return await self._commit(
+            lease,
+            now=now,
+            assignments="state = :state, error_code = :error_code",
+            params={"state": target.value, "error_code": error_code},
+        )
+
+    async def commit_active(
+        self,
+        lease: ManagedAllocationLease,
+        result: AllocationResult,
+        *,
+        encrypted_ref: bytes,
+        now: datetime,
+    ) -> ManagedSandboxAllocation:
+        return await self._commit(
+            lease,
+            now=now,
+            assignments=(
+                "state = :state, provider_ref = :provider_ref, "
+                "ownership_digest = :ownership_digest, error_code = NULL"
+            ),
+            params={
+                "state": result.state.value,
+                "provider_ref": encrypted_ref,
+                "ownership_digest": result.ownership_digest,
+            },
+        )
+
+    async def _commit(
+        self,
+        lease: ManagedAllocationLease,
+        *,
+        now: datetime,
+        assignments: str,
+        params: dict[str, object],
+    ) -> ManagedSandboxAllocation:
+        """`fencing_token`을 WHERE에 넣어 낡은 리스를 든 워커의 commit을 거른다.
+
+        `assignments`는 호출자(이 클래스 안)가 넘기는 리터럴 문자열만 들어간다
+        (사용자 입력이 아니다). 값은 전부 바인드 파라미터다.
+        """
+        _require_timezone_aware("commit time", now)
+        async with await self._session_factory() as session:
+            async with session.begin():
+                row = (
+                    await session.execute(
+                        text(
+                            f"""
+                            UPDATE coding_managed_sandboxes
+                               SET {assignments},
+                                   version = version + 1,
+                                   updated_at = :now
+                             WHERE allocation_id = :allocation_id
+                               AND fencing_token = :fencing_token
+                         RETURNING allocation_id, tenant_id, task_id, run_id,
+                                   provider, region, provider_ref,
+                                   ownership_digest, state, generation,
+                                   fencing_token, lease_expires_at,
+                                   absolute_expires_at, version, error_code,
+                                   snapshot_ref, archive_ref
+                            """
+                        ),
+                        {
+                            **params,
+                            "allocation_id": lease.allocation_id,
+                            "fencing_token": lease.fencing_token,
+                            "now": now,
+                        },
+                    )
+                ).one_or_none()
+        if row is None:
+            raise StaleManagedSandboxLease(lease.allocation_id)
+        return _allocation_from_row(row)
+
     @staticmethod
     async def _read_admission(
         session,
@@ -583,6 +727,30 @@ def _quota_reason(
     ):
         return AdmissionReason.BUDGET_EXCEEDED
     return None
+
+
+def _allocation_from_row(row) -> ManagedSandboxAllocation:
+    return ManagedSandboxAllocation(
+        allocation_id=str(row.allocation_id),
+        tenant_id=str(row.tenant_id),
+        task_id=str(row.task_id),
+        run_id=str(row.run_id),
+        provider=str(row.provider),
+        region=str(row.region),
+        provider_ref=row.provider_ref,
+        ownership_digest=row.ownership_digest,
+        state=ManagedSandboxState(row.state),
+        generation=row.generation,
+        fencing_token=row.fencing_token,
+        lease_expires_at=row.lease_expires_at,
+        absolute_expires_at=row.absolute_expires_at,
+        version=row.version,
+        error_code=(
+            ProviderErrorCode(row.error_code) if row.error_code is not None else None
+        ),
+        snapshot_ref=row.snapshot_ref,
+        archive_ref=row.archive_ref,
+    )
 
 
 def _require_timezone_aware(name: str, value: datetime) -> None:
