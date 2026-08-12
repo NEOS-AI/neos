@@ -7,7 +7,9 @@ from sqlalchemy import text
 from neos.coding.managed.adapters import AllocationResult
 from neos.coding.managed.admission import AdmissionRequest, AdmissionResult
 from neos.coding.managed.allocation import (
+    AllocationPlan,
     ManagedAllocationLease,
+    ManagedSandboxNotFound,
     StaleManagedSandboxLease,
 )
 from neos.coding.managed.domain import (
@@ -543,7 +545,7 @@ class PostgresManagedSandboxRepository:
                                    ownership_digest, state, generation,
                                    fencing_token, lease_expires_at,
                                    absolute_expires_at, version, error_code,
-                                   snapshot_ref, archive_ref
+                                   snapshot_ref, archive_ref, image_identity
                             """
                         ),
                         {
@@ -557,6 +559,43 @@ class PostgresManagedSandboxRepository:
         if row is None:
             raise StaleManagedSandboxLease(lease.allocation_id)
         return _allocation_from_row(row)
+
+    async def read_allocation_plan(self, allocation_id: str) -> AllocationPlan:
+        """할당 행과 admission 행을 조인해 어댑터 요청에 필요한 최소 뷰를 읽는다.
+
+        `resource_limits`·`network_policy`는 여기 없다 -- DB에 없는 컬럼이고
+        (045 확인), 정책이지 상태가 아니라서 호출자가 config에서 채운다.
+        `idempotency_key`만 admission 소유라 조인이 필요하다.
+        """
+        async with await self._session_factory() as session:
+            async with session.begin():
+                row = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT s.allocation_id, s.tenant_id, s.task_id,
+                                   s.run_id, s.provider, s.region,
+                                   s.provider_ref, s.ownership_digest,
+                                   s.state, s.generation, s.fencing_token,
+                                   s.lease_expires_at, s.absolute_expires_at,
+                                   s.version, s.error_code, s.snapshot_ref,
+                                   s.archive_ref, s.image_identity,
+                                   a.idempotency_key
+                              FROM coding_managed_sandboxes AS s
+                              JOIN coding_sandbox_admissions AS a
+                                ON a.admission_id = s.admission_id
+                             WHERE s.allocation_id = :allocation_id
+                            """
+                        ),
+                        {"allocation_id": allocation_id},
+                    )
+                ).one_or_none()
+        if row is None:
+            raise ManagedSandboxNotFound(allocation_id)
+        return AllocationPlan(
+            allocation=_allocation_from_row(row),
+            idempotency_key=str(row.idempotency_key),
+        )
 
     @staticmethod
     async def _read_admission(
@@ -750,6 +789,7 @@ def _allocation_from_row(row) -> ManagedSandboxAllocation:
         ),
         snapshot_ref=row.snapshot_ref,
         archive_ref=row.archive_ref,
+        image_identity=row.image_identity,
     )
 
 

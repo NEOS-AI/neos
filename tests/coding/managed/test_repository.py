@@ -6,7 +6,9 @@ import pytest
 from neos.coding.managed.admission import AdmissionRequest, AdmissionResult
 from neos.coding.managed.adapters import AllocationResult
 from neos.coding.managed.allocation import (
+    AllocationPlan,
     ManagedAllocationLease,
+    ManagedSandboxNotFound,
     StaleManagedSandboxLease,
 )
 from neos.coding.managed.domain import (
@@ -112,16 +114,22 @@ _AllocationRow = namedtuple(
         "error_code",
         "snapshot_ref",
         "archive_ref",
+        "image_identity",
+        # read_allocation_plan의 조인 결과에만 있는 admission 소유 필드.
+        # claim/commit 경로의 RETURNING 행에는 없지만, _allocation_from_row는
+        # 이 속성을 읽지 않으므로 같은 fake 행 모양을 공유해도 무해하다.
+        "idempotency_key",
     ],
 )
 
 
 def _row(**changes: object) -> _AllocationRow:
-    """claim/commit이 돌려받는 `coding_managed_sandboxes` 행을 흉내낸다.
+    """claim/commit/read_allocation_plan이 돌려받는 행을 흉내낸다.
 
-    claim_allocation은 이 중 `fencing_token`만 읽고, `_commit`은
-    `_allocation_from_row`로 나머지까지 전부 읽어 `ManagedSandboxAllocation`을
-    만든다 -- 두 경로 모두 같은 fake 행으로 통과하도록 전 필드에 기본값을 둔다.
+    claim_allocation은 이 중 `fencing_token`만 읽고, `_commit`과
+    `read_allocation_plan`은 `_allocation_from_row`로 나머지까지 전부 읽어
+    `ManagedSandboxAllocation`을 만든다 -- 세 경로 모두 같은 fake 행으로
+    통과하도록 전 필드에 기본값을 둔다.
     """
     values: dict[str, object] = {
         "allocation_id": "msa_1",
@@ -141,6 +149,8 @@ def _row(**changes: object) -> _AllocationRow:
         "error_code": None,
         "snapshot_ref": None,
         "archive_ref": None,
+        "image_identity": None,
+        "idempotency_key": "idem_1",
     }
     values.update(changes)
     return _AllocationRow(**values)
@@ -653,3 +663,30 @@ async def test_commit_active_binds_only_the_encrypted_reference() -> None:
     _statement, params = session.statements[-1]
     assert params["provider_ref"] == b"cipher"
     assert "ref_secret" not in str(params)
+
+
+async def test_read_allocation_plan_joins_admission_for_the_idempotency_key() -> None:
+    session = FakeSession(
+        [FakeResult(row=_row(allocation_id="msa_1", idempotency_key="idem_9"))]
+    )
+    repo = repository_with(session)
+
+    plan = await repo.read_allocation_plan("msa_1")
+
+    statement, params = session.statements[-1]
+    assert "JOIN coding_sandbox_admissions AS a" in statement
+    assert "a.admission_id = s.admission_id" in statement
+    assert "a.idempotency_key" in statement
+    assert "s.allocation_id = :allocation_id" in statement
+    assert params["allocation_id"] == "msa_1"
+    assert isinstance(plan, AllocationPlan)
+    assert plan.idempotency_key == "idem_9"
+    assert plan.allocation.allocation_id == "msa_1"
+
+
+async def test_read_allocation_plan_raises_when_the_allocation_is_missing() -> None:
+    session = FakeSession([FakeResult(row=None)])
+    repo = repository_with(session)
+
+    with pytest.raises(ManagedSandboxNotFound):
+        await repo.read_allocation_plan("msa_missing")

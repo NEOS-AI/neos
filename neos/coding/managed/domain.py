@@ -90,6 +90,7 @@ class ManagedSandboxAllocation:
     error_code: ProviderErrorCode | None
     snapshot_ref: str | None
     archive_ref: str | None
+    image_identity: str | None = None
 
     def __post_init__(self) -> None:
         for name, value in (

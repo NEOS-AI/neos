@@ -6,7 +6,11 @@ import pytest
 from sqlalchemy import text
 
 from neos.coding.managed.adapters import AllocationResult
-from neos.coding.managed.allocation import StaleManagedSandboxLease
+from neos.coding.managed.allocation import (
+    AllocationPlan,
+    ManagedSandboxNotFound,
+    StaleManagedSandboxLease,
+)
 from neos.coding.managed.domain import ManagedSandboxState
 from neos.coding.managed.repository import PostgresManagedSandboxRepository
 
@@ -170,3 +174,34 @@ async def test_a_stale_token_cannot_commit_after_lease_takeover(
         fresh, result, encrypted_ref=b"cipher", now=later
     )
     assert committed.state is ManagedSandboxState.ACTIVE
+
+
+@pytest.mark.integration
+async def test_read_allocation_plan_joins_the_real_admission_row(
+    managed_postgres_session_factory,
+) -> None:
+    """실제 Postgres에서 `coding_managed_sandboxes` <-> `coding_sandbox_admissions`
+    조인이 두 테이블에 진짜로 존재하는 컬럼만으로 성립하는지 증명한다.
+
+    fake 세션 단위 테스트는 SQL 텍스트만 검증하므로, 조인 대상 컬럼이 실제
+    스키마에 있는지는 이 통합 테스트가 아니면 확인되지 않는다.
+    """
+    repo = PostgresManagedSandboxRepository(managed_postgres_session_factory)
+    await _seed_admitted_allocation(managed_postgres_session_factory, "msa_3")
+
+    plan = await repo.read_allocation_plan("msa_3")
+
+    assert isinstance(plan, AllocationPlan)
+    assert plan.allocation.allocation_id == "msa_3"
+    assert plan.allocation.state is ManagedSandboxState.ADMITTED
+    assert plan.idempotency_key == "idem_msa_3"
+
+
+@pytest.mark.integration
+async def test_read_allocation_plan_raises_for_an_unknown_allocation(
+    managed_postgres_session_factory,
+) -> None:
+    repo = PostgresManagedSandboxRepository(managed_postgres_session_factory)
+
+    with pytest.raises(ManagedSandboxNotFound):
+        await repo.read_allocation_plan("msa_does_not_exist")
