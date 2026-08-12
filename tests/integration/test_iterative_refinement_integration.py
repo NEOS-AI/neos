@@ -27,6 +27,36 @@ from neos.agents.search_agents.hyper_deep_research.utils import CitationTracker
 # Test Fixtures
 # ============================================================================
 
+@pytest.fixture(autouse=True)
+def no_real_llm_provider(monkeypatch):
+    """이 파일의 어떤 테스트도 실제 프로바이더를 만들지 못하게 한다.
+
+    `iterative_refiner` 는 모든 호출 지점에서
+
+        llm = create_tracked_llm(llm=create_llm(...), ...)
+
+    형태를 쓴다. 개별 테스트들은 `create_tracked_llm` 만 패치해 왔는데,
+    **인자인 `create_llm(...)` 이 먼저 평가되므로** 그 패치는 실제 프로바이더
+    생성을 막지 못한다. `ANTHROPIC_API_KEY` 가 있는 기계에서는 성공해서 보이지
+    않았을 뿐이다.
+
+    키가 없으면 `create_llm` 이 `ValueError` 를 던지고, refiner 는 그것을
+    경고로 삼키고 계속 간다 -- 그래서 테스트는 크래시 대신 **엉뚱한 단언 실패**
+    로 나타난다(`validate_citations.call_count` 가 2 가 아니라 1). 2026-08-12
+    S5 조사에서 `.env` 를 숨기고 돌려 확인했다.
+
+    autouse 로 파일 전체에 건다: 새 테스트가 같은 함정에 빠지는 것을 막는
+    유일한 방법이 각 테스트의 선의가 아니라 여기이기 때문이다.
+    """
+    from neos.agents.search_agents.hyper_deep_research import iterative_refiner
+
+    monkeypatch.setattr(
+        iterative_refiner,
+        "create_llm",
+        lambda *args, **kwargs: MagicMock(name="create_llm"),
+    )
+
+
 @pytest.fixture
 def research_config():
     """Create test research configuration."""
