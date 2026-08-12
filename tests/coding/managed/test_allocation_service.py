@@ -21,8 +21,13 @@ from neos.coding.managed.allocation import (
     AllocationPlan,
     ManagedAllocationLease,
     ManagedSandboxAllocationService,
+    _ownership_digest_for,
 )
-from neos.coding.managed.domain import ManagedSandboxAllocation, ManagedSandboxState
+from neos.coding.managed.domain import (
+    InvalidManagedSandboxTransition,
+    ManagedSandboxAllocation,
+    ManagedSandboxState,
+)
 from neos.coding.sandbox.base import SandboxLimits
 
 
@@ -36,11 +41,11 @@ def _admitted_allocation() -> ManagedSandboxAllocation:
     """ADMITTED 상태 할당 하나를 만든다.
 
     provider_ref·ownership_digest·image_identity는 admission INSERT가 실제로
-    NULL로 남기는 필드들이다(Task 7 carry-forward) -- image_identity는 여기서도
-    None으로 둬서, 서비스가 config 주입값을 쓰지 않으면 요청 검증이 곧바로
-    거부한다는 것을 자연스럽게 증명한다. ownership_digest는 이 테스트 스위트의
-    관심사가 아니므로(advance()의 오류 분류·전이 순서만 본다) 유효한 값을 미리
-    채워 둔다.
+    NULL로 남기는 필드들이다 -- 여기서도 그대로 None으로 둔다. 픽스처가 값을
+    미리 채워주면, 그 필드를 서비스가 실제로 써넣는지 검증하지 못한 채로
+    테스트가 통과해 버린다(ownership_digest가 바로 그렇게 숨겨졌던 Critical
+    이었다). 이 스위트가 통과한다면 그건 코드가 값을 만들어 넣었기 때문이어야
+    한다.
     """
     return ManagedSandboxAllocation(
         allocation_id="msa_1",
@@ -50,7 +55,7 @@ def _admitted_allocation() -> ManagedSandboxAllocation:
         provider="docker",
         region="local",
         provider_ref=None,
-        ownership_digest="sha256:owner",
+        ownership_digest=None,
         state=ManagedSandboxState.ADMITTED,
         generation=1,
         fencing_token=1,
@@ -74,9 +79,11 @@ class FakeAllocationRepository:
     def __init__(self, allocation: ManagedSandboxAllocation) -> None:
         self.allocation = allocation
         self.committed: list[ManagedSandboxState] = []
-        # ALLOCATING 전이마다 넘어온 image_identity를 기록한다 -- carry-forward
-        # 회귀(commit_state를 image_identity 없이 부르는 것)를 테스트가 잡아낸다.
+        # ALLOCATING 전이마다 넘어온 image_identity·ownership_digest를 기록한다
+        # -- carry-forward 회귀(commit_state를 그 값들 없이 부르는 것)를
+        # 테스트가 잡아낸다.
         self.image_identity_writes: list[str | None] = []
+        self.ownership_digest_writes: list[str | None] = []
         self._token = allocation.fencing_token
 
     async def claim_allocation(
@@ -104,9 +111,11 @@ class FakeAllocationRepository:
         now: datetime,
         error_code=None,
         image_identity: str | None = None,
+        ownership_digest: str | None = None,
     ) -> ManagedSandboxAllocation:
         self.committed.append(target)
         self.image_identity_writes.append(image_identity)
+        self.ownership_digest_writes.append(ownership_digest)
         changes: dict[str, object] = {
             "state": target,
             "error_code": error_code,
@@ -114,6 +123,8 @@ class FakeAllocationRepository:
         }
         if image_identity is not None:
             changes["image_identity"] = image_identity
+        if ownership_digest is not None:
+            changes["ownership_digest"] = ownership_digest
         self.allocation = replace(self.allocation, **changes)
         return self.allocation
 
@@ -244,3 +255,77 @@ async def test_allocating_transition_persists_image_identity(
     await service.advance("msa_1", worker_id="worker_1")
 
     assert service._repository.image_identity_writes == [_IMAGE_IDENTITY]
+
+
+def test_ownership_digest_is_deterministic_for_a_given_allocation() -> None:
+    """난수가 아니라 순수 함수여야 한다 -- 재발견 경로가 같은 할당에 대해
+    같은 값을 다시 유도해서 소유권을 확인해야 하기 때문이다.
+    """
+    allocation = _admitted_allocation()
+
+    assert _ownership_digest_for(allocation) == _ownership_digest_for(allocation)
+
+    other = replace(allocation, allocation_id="msa_2")
+    assert _ownership_digest_for(allocation) != _ownership_digest_for(other)
+
+
+async def test_allocating_transition_persists_a_deterministic_ownership_digest(
+    allocation_service,
+) -> None:
+    """ALLOCATING 커밋은 ownership_digest도 image_identity와 같은 모양으로
+    명시적으로 같이 써야 한다.
+
+    admission INSERT는 이 컬럼을 NULL로 남긴다 -- 픽스처가 값을 대신
+    채워주지 않으므로(`_admitted_allocation()`이 `ownership_digest=None`),
+    이 테스트가 통과한다는 것 자체가 서비스 코드가 값을 만들어 썼다는
+    증거다.
+    """
+    service, _adapter = allocation_service()
+
+    await service.advance("msa_1", worker_id="worker_1")
+
+    expected = _ownership_digest_for(_admitted_allocation())
+    assert service._repository.ownership_digest_writes == [expected]
+
+
+async def test_crash_after_allocating_commit_recovers_via_rediscovery_not_a_second_create(
+    allocation_service,
+) -> None:
+    """ALLOCATING 커밋과 종결 커밋(commit_active) 사이에서 워커가 죽으면
+    (또는 종결 커밋 자체가 실패하면), 리스가 만료된 뒤 새 워커가 들어와도
+    재발견만 해야 한다 -- allocate()를 다시 부르면 provider 쪽에 이미 만들어진
+    리소스가 고아가 된다.
+
+    provider 쪽 create는 실제로 성공했다고 가정한다(어댑터에 직접 걸어 기록을
+    남긴다). repository 상태를 ALLOCATING에 그대로 둬서 "두 번째 커밋이 오지
+    않고 죽었다"를 흉내 내고, 새 워커로 advance()를 부른다.
+    """
+    service, adapter = allocation_service()
+    plan = await service._repository.read_allocation_plan("msa_1")
+    ownership_digest = _ownership_digest_for(plan.allocation)
+    await adapter.allocate(
+        service._request_for(plan, ownership_digest=ownership_digest)
+    )
+    service._repository.allocation = replace(
+        service._repository.allocation, state=ManagedSandboxState.ALLOCATING
+    )
+
+    result = await service.advance("msa_1", worker_id="worker_2")
+
+    assert result.state is ManagedSandboxState.ACTIVE
+    assert adapter.allocate_calls == 1
+    assert adapter.rediscovery_calls == 1
+
+
+async def test_advance_rejects_a_non_advanceable_state(allocation_service) -> None:
+    """ACTIVE처럼 이미 안정된 상태는 advance() 대상이 아니다."""
+    service, adapter = allocation_service()
+    service._repository.allocation = replace(
+        service._repository.allocation, state=ManagedSandboxState.ACTIVE
+    )
+
+    with pytest.raises(InvalidManagedSandboxTransition):
+        await service.advance("msa_1", worker_id="worker_1")
+
+    assert adapter.allocate_calls == 0
+    assert adapter.rediscovery_calls == 0

@@ -614,6 +614,7 @@ async def test_claim_allocation_only_takes_a_free_or_expired_lease() -> None:
     assert params["allocation_id"] == "msa_1"
     assert params["claimable_states"] == [
         "admitted",
+        "allocating",
         "recovery_pending",
         "cleanup_pending",
         "cleanup_retry",
@@ -739,6 +740,75 @@ async def test_commit_state_omits_image_identity_when_not_given() -> None:
     statement, params = session.statements[-1]
     assert "image_identity = :image_identity" not in statement
     assert "image_identity" not in params
+
+
+async def test_commit_state_writes_ownership_digest_when_given() -> None:
+    """Task 8이 ALLOCATING 전이 시점에 소유권 증명을 고정할 때 쓰는 쓰기 경로
+    -- image_identity와 같은 모양이다.
+    """
+    session = FakeSession([FakeResult(row=_row(fencing_token=2))])
+    repo = repository_with(session)
+    lease = ManagedAllocationLease(
+        allocation_id="msa_1",
+        worker_id="worker_1",
+        fencing_token=2,
+        expires_at=NOW + timedelta(seconds=300),
+    )
+
+    await repo.commit_state(
+        lease,
+        ManagedSandboxState.ALLOCATING,
+        now=NOW,
+        ownership_digest="sha256:owner",
+    )
+
+    statement, params = session.statements[-1]
+    assert "ownership_digest = :ownership_digest" in statement
+    assert params["ownership_digest"] == "sha256:owner"
+
+
+async def test_commit_state_omits_ownership_digest_when_not_given() -> None:
+    session = FakeSession([FakeResult(row=_row(fencing_token=2))])
+    repo = repository_with(session)
+    lease = ManagedAllocationLease(
+        allocation_id="msa_1",
+        worker_id="worker_1",
+        fencing_token=2,
+        expires_at=NOW + timedelta(seconds=300),
+    )
+
+    await repo.commit_state(lease, ManagedSandboxState.ALLOCATING, now=NOW)
+
+    statement, params = session.statements[-1]
+    assert "ownership_digest = :ownership_digest" not in statement
+    assert "ownership_digest" not in params
+
+
+async def test_commit_state_to_cleaned_ignores_a_given_ownership_digest() -> None:
+    """CLEANED로의 클리어링(ownership_digest = NULL)이 이겨야 한다 --
+    호출자가 실수로 둘 다 넘겨도 같은 컬럼에 두 번 대입하는 SQL을 만들면
+    안 된다(UPDATE 자체가 거부된다).
+    """
+    session = FakeSession([FakeResult(row=_row(fencing_token=2, state="cleaned"))])
+    repo = repository_with(session)
+    lease = ManagedAllocationLease(
+        allocation_id="msa_1",
+        worker_id="worker_1",
+        fencing_token=2,
+        expires_at=NOW + timedelta(seconds=300),
+    )
+
+    await repo.commit_state(
+        lease,
+        ManagedSandboxState.CLEANED,
+        now=NOW,
+        ownership_digest="sha256:owner",
+    )
+
+    statement, params = session.statements[-1]
+    assert statement.count("ownership_digest = ") == 1
+    assert "ownership_digest = NULL" in statement
+    assert "ownership_digest" not in params
 
 
 async def test_commit_active_binds_only_the_encrypted_reference() -> None:

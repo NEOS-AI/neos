@@ -112,14 +112,28 @@ class ManagedSandboxAllocation:
                 self.lease_expires_at is not None,
             )
         ):
-            raise ValueError("cleaned allocation cannot retain provider references or lease")
+            raise ValueError(
+                "cleaned allocation cannot retain provider references or lease"
+            )
 
     def claimable_at(self, now: datetime) -> bool:
+        """`repository._CLAIMABLE_STATES`와 반드시 함께 바꾼다 -- 두 곳이
+        같은 집합을 각자 정의한다.
+
+        `ALLOCATING`을 포함한다: 그 전이를 커밋한 워커가 종결 커밋(`ACTIVE`로
+        가는 `commit_active`) 전에 죽으면, 리스가 만료된 뒤 아무도 이 행을
+        다시 못 집는 게 아니라 다음 워커가 재클레임해서 재발견 경로로
+        복구해야 한다 -- 이 상태를 빼면 리퍼 없이 영원히 멈춘 행이 남는다.
+        `lease_expires_at` 검사가 여전히 살아있는 리스는 걸러내므로, 그저
+        느린 워커가 있을 뿐이라면 그 워커의 종결 커밋이 fencing_token
+        불일치로 실패할 뿐 이중 생성은 일어나지 않는다.
+        """
         _require_timezone_aware("claim time", now)
         return (
             self.state
             in {
                 ManagedSandboxState.ADMITTED,
+                ManagedSandboxState.ALLOCATING,
                 ManagedSandboxState.RECOVERY_PENDING,
                 ManagedSandboxState.CLEANUP_PENDING,
                 ManagedSandboxState.CLEANUP_RETRY,

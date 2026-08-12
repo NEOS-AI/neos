@@ -30,13 +30,22 @@ _LIVE_QUOTA_STATES = (
     ManagedSandboxState.SUSPENDED.value,
     ManagedSandboxState.RECOVERY_PENDING.value,
 )
-# claim_allocation이 허용하는 원본 상태 -- 아직 어떤 워커도 다음 단계로
-# 진행시키지 않은 채 대기 중인 상태만 담는다. ALLOCATING/ACTIVE/SUSPENDED는
-# 이미 리스를 쥔 워커가 관리 중이므로 제외한다 (리스가 만료돼도 그 상태 자체를
-# 재클레임 대상으로 삼지 않는다). `domain.ManagedSandboxAllocation.claimable_at()`
-# 이 이미 이 집합을 정의해뒀다 -- 두 곳이 갈라지지 않도록 반드시 함께 바꾼다.
+# claim_allocation이 허용하는 원본 상태. ACTIVE/SUSPENDED는 이미 리스를 쥔
+# 워커가 정상적으로 관리 중인 안정 상태라서 제외한다 -- 리스가 만료돼도 그
+# 상태 자체를 재클레임 대상으로 삼지 않는다.
+# ALLOCATING은 포함한다 -- commit_state(ALLOCATING)와 종결 커밋
+# (commit_active/commit_state) 사이에서 워커가 죽으면(또는 종결 커밋 자체가
+# 실패하면) 그 행이 영원히 멈춘다: 이 상태를 재클레임 대상에서 빼면 리스가
+# 만료돼도 아무도 다시 못 집는다(리퍼가 따로 없다). 리스가 아직 살아있는
+# 워커는 이 WHERE의 lease_expires_at 검사가 그대로 걸러내므로, 그저 느린
+# 워커가 있을 뿐이라면 그 워커의 종결 커밋이 fencing_token 불일치로
+# StaleManagedSandboxLease가 되고 새 워커는 재발견만 한다(중복 생성 없음) --
+# `neos.coding.managed.allocation.ManagedSandboxAllocationService._rediscover`.
+# `domain.ManagedSandboxAllocation.claimable_at()`이 이미 이 집합을
+# 정의해뒀다 -- 두 곳이 갈라지지 않도록 반드시 함께 바꾼다.
 _CLAIMABLE_STATES = (
     ManagedSandboxState.ADMITTED.value,
+    ManagedSandboxState.ALLOCATING.value,
     ManagedSandboxState.RECOVERY_PENDING.value,
     ManagedSandboxState.CLEANUP_PENDING.value,
     ManagedSandboxState.CLEANUP_RETRY.value,
@@ -507,6 +516,7 @@ class PostgresManagedSandboxRepository:
         now: datetime,
         error_code: ProviderErrorCode | None = None,
         image_identity: str | None = None,
+        ownership_digest: str | None = None,
     ) -> ManagedSandboxAllocation:
         """상태 전이를 커밋한다.
 
@@ -516,27 +526,35 @@ class PostgresManagedSandboxRepository:
         그 값들이 NULL이고 `cleaned_at`이 NOT NULL이길 요구하므로, 반영하지
         않으면 UPDATE 자체가 거부된다.
 
-        `image_identity`는 선택 인자다 -- 사용할 이미지가 정해지는 시점
-        (전형적으로 ALLOCATING으로 전이할 때)에 호출자가 넘기면 같이 쓴다.
+        `image_identity`·`ownership_digest`는 선택 인자다 -- 각각 사용할
+        이미지와 소유권 증명이 정해지는 시점(전형적으로 둘 다 ALLOCATING으로
+        전이할 때)에 호출자가 넘기면 같이 쓴다. 컬럼명을 키로 쓰는 dict로
+        SET 절을 조립한다 -- 같은 컬럼에 두 번 대입하면(예: 호출자가
+        `ownership_digest`를 주면서 동시에 `target=CLEANED`인 조합) `UPDATE`
+        문 자체가 SQL 단계에서 거부되는데, dict는 나중 대입이 앞의 것을
+        덮어써서 그런 조합이 애초에 안 생긴다.
         """
-        assignment_parts = ["state = :state", "error_code = :error_code"]
+        assignments: dict[str, str] = {
+            "state": "state = :state",
+            "error_code": "error_code = :error_code",
+        }
         params: dict[str, object] = {"state": target.value, "error_code": error_code}
         if image_identity is not None:
-            assignment_parts.append("image_identity = :image_identity")
+            assignments["image_identity"] = "image_identity = :image_identity"
             params["image_identity"] = image_identity
+        if ownership_digest is not None:
+            assignments["ownership_digest"] = "ownership_digest = :ownership_digest"
+            params["ownership_digest"] = ownership_digest
         if target is ManagedSandboxState.CLEANED:
-            assignment_parts.extend(
-                [
-                    "provider_ref = NULL",
-                    "ownership_digest = NULL",
-                    "lease_expires_at = NULL",
-                    "cleaned_at = :now",
-                ]
-            )
+            assignments["provider_ref"] = "provider_ref = NULL"
+            assignments["ownership_digest"] = "ownership_digest = NULL"
+            assignments["lease_expires_at"] = "lease_expires_at = NULL"
+            assignments["cleaned_at"] = "cleaned_at = :now"
+            params.pop("ownership_digest", None)
         return await self._commit(
             lease,
             now=now,
-            assignments=", ".join(assignment_parts),
+            assignments=", ".join(assignments.values()),
             params=params,
         )
 
