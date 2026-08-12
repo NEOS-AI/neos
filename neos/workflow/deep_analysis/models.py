@@ -61,6 +61,21 @@ class EntailmentOutcome:
 
 
 @dataclass
+class ProposedSubquestion:
+    """조사 중 워커가 "이것도 봐야 한다" 고 남긴 질문.
+
+    `value_est` 는 워커가 스스로 매긴다. 원 설계 §6.3.2 는 중복 병합과 상대
+    value 산정을 **독립 LLM 심사자**에게 맡기는데, 그 심사자는 별도 프롬프트와
+    검증 하네스를 요구해 D11 · D13 이 두 번 연기했다. 자기 채점은 그보다
+    공정하지 않지만 **공짜**이고, 중복 제거는 오케스트레이터에서 결정론적으로
+    한다(D65).
+    """
+
+    text: str
+    value_est: float = 0.0
+
+
+@dataclass
 class RepairResult:
     claim_id: str
     action: Literal["fixed", "weakened", "abandoned"]
@@ -76,7 +91,9 @@ class WorkerResult:
     discarded_claims: list[ProposedClaim] = field(default_factory=list)
     blobs: list[ProposedBlob] = field(default_factory=list)
     repairs: list[RepairResult] = field(default_factory=list)
-    proposed_subquestions: list[str] = field(default_factory=list)
+    proposed_subquestions: list[ProposedSubquestion] = field(
+        default_factory=list
+    )
     dead_ends: list[str] = field(default_factory=list)
     tokens_spent: int = 0
     model: str = ""

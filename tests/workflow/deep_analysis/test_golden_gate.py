@@ -25,7 +25,11 @@ _VERSION_RE = re.compile(r"<!--\s*version:\s*(\d+)\s*-->")
 EXPECTED_PROMPT_VERSIONS = {
     "claim_entailment": 1,
     "decompose": 1,
-    "worker_brief": 3,
+    # v4 (D65, 2026-08-13): 서브질문마다 `value_est`. 채택 임계값
+    # (`subq_adopt_threshold`)을 적용할 값이 없어 D11·D13 이 두 번 연기한
+    # 트리 채택이 계속 불가능했다. 표본 #16 에서 고유 제안 161건이 버려지고
+    # 실제 조사된 질문은 82건이었다.
+    "worker_brief": 4,
     "judge": 1,
     "node_summary": 1,
     # v2 (W3-h, 2026-08-09): `{revision_note}` 슬롯 + 근거 없는 사항을 본문이

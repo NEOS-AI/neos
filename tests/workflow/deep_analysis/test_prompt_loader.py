@@ -46,7 +46,7 @@ def test_worker_brief_keeps_verified_findings_before_repairs():
     assert "self_assessment" in output
 
 
-def test_worker_brief_v3_scopes_claims_and_grounds_exact_quotes():
+def test_worker_brief_v4_scopes_claims_and_scores_subquestions():
     output = render(
         "worker_brief",
         question_text="q",
@@ -58,15 +58,21 @@ def test_worker_brief_v3_scopes_claims_and_grounds_exact_quotes():
         confidence_cap_one=0.55,
         confidence_cap_two=0.75,
         confidence_cap_three_plus=0.9,
+        subq_adopt_threshold=0.3,
         fetched_evidence="<evidence>source</evidence>",
     )
 
-    assert "<!-- version: 3 -->" in output
+    assert "<!-- version: 4 -->" in output
     assert "한 기관·한 결론·한 비교축" in output
     assert "기관별로 별도 claim" in output
     assert "비교 대상과 비교 방향을 모두 직접 명시" in output
     assert "하나의 연속된 문자열" in output
     assert "번역·의역·생략 부호·분리된 문장 결합" in output
+    # v4: 서브질문에 value_est 를 매기게 한다. 그 값이 없으면
+    # `subq_adopt_threshold` 를 적용할 수 없고, 그래서 D11·D13 이 두 번
+    # 연기한 채택이 계속 불가능했다(D65).
+    assert '"value_est"' in output
+    assert "0.3 이상만 실제로 조사되므로" in output
     assert "source_url의 fetch 원문에서 그대로 검색" in output
     assert "분리하거나 지지 범위로 좁히고" in output
     assert "지지되지 않는 나머지는 버린다" in output

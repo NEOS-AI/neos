@@ -49,6 +49,22 @@ class SystemicWorkerFailure(RuntimeError):
 _LIMITS_HEADING = "## 한계와 미확인 사항"
 # Harness-owned, like `_LIMITS_HEADING` and CitationRenderer's `## 출처`.
 # `graders/report.py` mirrors this string in its scoring boundaries.
+# 한 패스가 트리를 무한정 넓히지 못하게 하는 상한. `_do_split` 이 자식을
+# 4개로 자르는 것과 같은 수이며, 같은 이유다 -- 넓이는 예산을 나누고
+# 예산이 갈리면 어느 가지도 답에 닿지 못한다.
+_ADOPT_CAP = 4
+
+
+def _normalize_question(text: str) -> str:
+    """중복 판정용 정규화 -- 공백 접기 + 소문자 + 끝 문장부호 제거.
+
+    완전한 의미 중복 제거가 아니다(원 설계 §6.3.2 는 그것을 LLM 심사자에게
+    맡긴다). 같은 질문을 글자만 다르게 다시 조사하는 것을 막는 값싼 하한이다.
+    """
+
+    return " ".join(text.split()).strip(" ?？.。").lower()
+
+
 _QUESTIONS_HEADING = "## 조사한 하위 질문"
 
 # 원장 어휘 -> 독자 문장. 강등 사유는 `node_reduction_degraded` /
@@ -784,6 +800,7 @@ class Orchestrator:
                 confidence_cap_one=config.confidence_cap[1],
                 confidence_cap_two=config.confidence_cap[2],
                 confidence_cap_three_plus=config.confidence_cap[3],
+                subq_adopt_threshold=config.subq_adopt_threshold,
             )
             assignments.append(
                 Assignment(
@@ -795,6 +812,95 @@ class Orchestrator:
                 )
             )
         return assignments, splits
+
+    async def _adopt_subquestions(
+        self, question_id: str, proposals: list
+    ) -> None:
+        """워커가 제안한 하위 질문 중 값이 되는 것을 트리에 넣는다 (D65).
+
+        여태 이 자리는 로깅만 했다(D11 -> D13 이 두 번 연기). 표본 #16 에서
+        **고유 제안 161건이 버려지고 실제 조사된 질문은 82건**이었고, 버려진
+        것들이 판정자가 빠졌다고 지적한 바로 그 축이었다 -- `ca8fd65c` 는
+        "PostgreSQL 코어 전문검색 … 을 다루지 않은 채" 로 반려됐는데 같은
+        표본이 "PostgreSQL 17 공식 문서(Chapter 12. Full Text Search)" 를
+        제안해 두고 버렸다.
+
+        정책:
+
+        - **임계값** `subq_adopt_threshold` -- config 에 정의만 되어 있고
+          코드 어디에서도 쓰이지 않던 죽은 노브다. 이제 이것이 쓰인다.
+        - **상한** `_ADOPT_CAP` -- 한 패스가 트리를 무한정 넓히지 못한다.
+          `_do_split` 이 자식을 4개로 자르는 것과 같은 수다.
+        - **중복 제거** -- 정규화한 텍스트가 이 run 의 기존 질문과 같으면
+          버린다. 원 설계 §6.3.2 는 이것을 독립 LLM 심사자에게 맡기지만,
+          그 심사자가 D11·D13 연기의 이유였다. 결정론적 일치는 완전하지
+          않아도 공짜이고, 재탕을 다시 조사하는 것만은 막는다.
+        - **깊이** -- `max_depth` 를 넘기지 않는다.
+        - **예산** -- 부모의 잔여를 자식들과 부모가 나눈다(`n + 1`).
+          `_do_split` 은 부모가 끝나므로 `n` 으로 나누지만, 채택된 부모는
+          계속 조사하므로 자기 몫을 남겨야 한다.
+
+        `record_split` 을 부르지 않는 것이 중요하다 -- 그것은 부모를 `split`
+        으로 전이시켜 **부모의 조사를 끝낸다.** 채택은 부모가 살아 있는 채로
+        가지를 더하는 일이다. `ledger.children()` 은 `parent_id` 로 조회하므로
+        트리는 이것만으로 성립한다.
+        """
+
+        if not proposals:
+            return
+        config = settings.config.deep_analysis
+        question = await self.ledger.get_question(question_id)
+        if question is None or question.depth + 1 > self.max_depth:
+            return
+
+        existing = {
+            _normalize_question(q.text) for q in await self.ledger.questions()
+        }
+        adopted: list = []
+        for proposal in sorted(
+            proposals, key=lambda p: p.value_est, reverse=True
+        ):
+            if len(adopted) >= _ADOPT_CAP:
+                break
+            if proposal.value_est < config.subq_adopt_threshold:
+                continue
+            key = _normalize_question(proposal.text)
+            if key in existing:
+                continue
+            existing.add(key)
+            adopted.append(proposal)
+
+        if not adopted:
+            return
+
+        remaining = await self.ledger.remaining_budget(question_id)
+        child_cap = max(1, remaining // (len(adopted) + 1))
+        for proposal in adopted:
+            child_id = await self.ledger.open_question(
+                proposal.text,
+                question_id,
+                value_est=proposal.value_est,
+                cap_tokens=child_cap,
+                depth=question.depth + 1,
+            )
+            await self.ledger.log(
+                "subq_adopted",
+                child_id,
+                {
+                    "parent_id": question_id,
+                    "value_est": proposal.value_est,
+                    "depth": question.depth + 1,
+                    "cap_tokens": child_cap,
+                },
+            )
+            await self._emit(
+                "question_opened",
+                {
+                    "qid": child_id,
+                    "text": proposal.text,
+                    "depth": question.depth + 1,
+                },
+            )
 
     async def _do_split(self, question) -> None:
         if question.depth >= self.max_depth:
@@ -1065,12 +1171,15 @@ class Orchestrator:
             await self._register_progress(
                 assignment.question_id, made_progress
             )
-            for subq in result.proposed_subquestions:  # M3 연기: 로깅만
+            for subq in result.proposed_subquestions:
                 await self.ledger.log(
                     "subq_proposed",
                     result.question_id,
-                    {"text": subq},
+                    {"text": subq.text, "value_est": subq.value_est},
                 )
+            await self._adopt_subquestions(
+                result.question_id, result.proposed_subquestions
+            )
             await self._emit(
                 "pass_completed",
                 {
