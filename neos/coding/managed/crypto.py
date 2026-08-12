@@ -4,6 +4,7 @@ import base64
 import binascii
 import os
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
@@ -12,6 +13,34 @@ _VERSION_BYTES = 2
 # AES-128/192/256-GCM 이 허용하는 키 길이. AESGCM(key) 생성자 자체가 이
 # 세 길이만 받으므로 여기서 미리 걸러 더 명확한 오류 메시지를 낸다.
 _VALID_KEY_BYTE_LENGTHS = frozenset({16, 24, 32})
+
+
+class ProviderReferenceCipherError(RuntimeError):
+    """provider 참조 봉인/복호화 실패의 공통 기반.
+
+    `ManagedAdapterError`(`neos.coding.managed.adapters.base`)와 같은 모양의
+    taxonomy다 -- 공통 기반 하나 + 원인별 구체 타입. `cryptography` 라이브러리의
+    예외가 이 모듈 밖 도메인 코드로 새 나가지 않게 여기서 잡아 옮긴다.
+    """
+
+
+class ProviderReferenceAuthenticationError(ProviderReferenceCipherError):
+    """AEAD 인증 실패 -- 변조되었거나, AAD·키가 다른 봉인을 복호화하려 한 경우.
+
+    나중에 이 cipher가 실제로 배선되면 호출자는 이 타입을
+    `ProviderErrorCode.PROVIDER_AUTH_ERROR` / `MANUAL_RECOVERY_REQUIRED`로
+    옮겨야 한다 -- `ManagedAdapterOwnershipError` -> `PROVIDER_AUTH_ERROR`
+    매핑과 같은 자리다 (`neos.coding.managed.allocation._error_code` 참고).
+    """
+
+
+class ProviderReferenceKeyVersionMismatch(ProviderReferenceCipherError):
+    """봉인에 박힌 key_version 이 이 cipher 가 쥔 key_version 과 다르다.
+
+    키 로테이션이 있는 한 반드시 검사해야 한다 -- 검사하지 않으면 이미 퇴역한
+    키로 봉인된 값을 새 키를 쥔 cipher 가 조용히(그리고 틀리게) 복호화해
+    받아들이는 사고가 난다.
+    """
 
 
 class AesGcmProviderReferenceCipher:
@@ -41,11 +70,26 @@ class AesGcmProviderReferenceCipher:
         return self._key_version.to_bytes(_VERSION_BYTES, "big") + nonce + sealed
 
     def decrypt(self, encrypted_ref: bytes) -> str:
+        embedded_version = int.from_bytes(encrypted_ref[:_VERSION_BYTES], "big")
+        if embedded_version != self._key_version:
+            # 이 cipher 가 쥔 키가 이 봉인을 만든 키와 실제로 같은 것인지는
+            # AEAD 인증(아래)이 결국 증명해주지만, 그건 이미 잘못된 평문 후보를
+            # 만들어 낸 *뒤에* 확인하는 것이다. 버전이 안 맞으면 그 시도 자체를
+            # 하지 않는다 -- 키 로테이션 중 퇴역한 키로 봉인된 값을 새 키를 쥔
+            # cipher 가 (우연히) 인증까지 통과시켜 받아들이는 경우를 막는다.
+            raise ProviderReferenceKeyVersionMismatch(
+                f"sealed under key_version={embedded_version}, "
+                f"this cipher serves key_version={self._key_version}"
+            )
         nonce = encrypted_ref[_VERSION_BYTES : _VERSION_BYTES + _NONCE_BYTES]
         sealed = encrypted_ref[_VERSION_BYTES + _NONCE_BYTES :]
-        return self._aesgcm.decrypt(nonce, sealed, self._associated_data).decode(
-            "utf-8"
-        )
+        try:
+            plaintext = self._aesgcm.decrypt(nonce, sealed, self._associated_data)
+        except InvalidTag as error:
+            raise ProviderReferenceAuthenticationError(
+                "provider reference authentication failed"
+            ) from error
+        return plaintext.decode("utf-8")
 
     # __repr__ 을 정의하지 않는다 -- 기본 repr 은 키를 노출하지 않는다.
 
