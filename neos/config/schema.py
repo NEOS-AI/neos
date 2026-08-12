@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 import re
 from typing import Any, Literal
@@ -7,6 +9,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
+
+# AES-128/192/256-GCM 이 허용하는 키 길이. `neos.coding.managed.crypto`의
+# 같은 이름 상수와 값이 반드시 같아야 한다 -- 이 파일은 `neos.coding.*` 기능
+# 모듈에 의존하지 않는 계층 경계를 지키려고 상수를 공유하지 않고 각자 둔다.
+_MANAGED_CIPHER_KEY_VALID_BYTE_LENGTHS = frozenset({16, 24, 32})
 
 
 def _split_csv(value: Any) -> Any:
@@ -303,6 +310,9 @@ class SecretsConfig(StrictConfigModel):
     channel_discord_bot_token: str | None = Field(default=None, repr=False)
     channel_slack_bot_token: str | None = Field(default=None, repr=False)
     channel_slack_app_token: str | None = Field(default=None, repr=False)
+    # 관리형 샌드박스 provider 참조 봉인 키 (base64). 평문 값은 여기 두지
+    # 않는다 -- .env.template 에도 이름만 남긴다.
+    managed_provider_reference_key: str | None = Field(default=None, repr=False)
 
 
 class SourceIntegrationsConfig(StrictConfigModel):
@@ -1265,6 +1275,11 @@ class ManagedSandboxConfig(StrictConfigModel):
     daily_active_seconds_quota: int = Field(default=43_200, gt=0)
     archive_bytes_quota: int = Field(default=5 * 1024**3, gt=0)
     daily_cost_micros_quota: int = Field(default=10_000_000, gt=0)
+    provider_reference_key_version: int = Field(
+        default=1,
+        ge=1,
+        description="provider 참조 봉인에 쓰는 키 버전.",
+    )
 
 
 class SandboxConfig(StrictConfigModel):
@@ -1514,6 +1529,34 @@ class AppConfig(StrictConfigModel):
                 or docker.allow_unpinned_image
             ):
                 raise ValueError("Unsafe production Docker sandbox configuration.")
+        return self
+
+    @model_validator(mode="after")
+    def validate_managed_provider_reference_key(self) -> "AppConfig":
+        """관리형이 켜졌는데 봉인 키가 없거나 부실하면 기동을 막는다.
+
+        빈 키로 뜨면 빈 키로 암호화한 참조가 그대로 통과한다 -- 원장이
+        유출되면 provider 세션을 바로 조작당한다. `validate_coding_model_policy`
+        옆에 같은 fail-closed 형태로 둔다.
+        """
+        if not self.sandbox.managed.enabled:
+            return self
+        secret = self.secrets.managed_provider_reference_key
+        if not secret:
+            raise ValueError(
+                "managed sandbox control plane requires "
+                "secrets.managed_provider_reference_key"
+            )
+        try:
+            key_bytes = base64.b64decode(secret, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise ValueError(
+                "managed_provider_reference_key must be valid base64"
+            ) from error
+        if len(key_bytes) not in _MANAGED_CIPHER_KEY_VALID_BYTE_LENGTHS:
+            raise ValueError(
+                "managed_provider_reference_key must decode to 16, 24, or 32 bytes"
+            )
         return self
 
     @model_validator(mode="after")

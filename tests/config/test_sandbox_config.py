@@ -1,3 +1,5 @@
+import base64
+
 import pytest
 from pydantic import ValidationError
 
@@ -43,6 +45,45 @@ def test_managed_sandbox_defaults_are_safe_for_shadow_admission() -> None:
     assert config.sandbox.managed.daily_active_seconds_quota == 43_200
     assert config.sandbox.managed.archive_bytes_quota == 5 * 1024**3
     assert config.sandbox.managed.daily_cost_micros_quota == 10_000_000
+    assert config.sandbox.managed.provider_reference_key_version == 1
+
+
+def test_managed_enabled_without_provider_reference_key_refuses_to_start() -> None:
+    with pytest.raises(ValidationError, match="managed_provider_reference_key"):
+        AppConfig.model_validate({"sandbox": {"managed": {"enabled": True}}})
+
+
+def test_managed_enabled_with_non_base64_reference_key_refuses_to_start() -> None:
+    with pytest.raises(ValidationError, match="base64"):
+        AppConfig.model_validate(
+            {
+                "sandbox": {"managed": {"enabled": True}},
+                "secrets": {"managed_provider_reference_key": "not-base64!!"},
+            }
+        )
+
+
+def test_managed_enabled_with_wrong_length_reference_key_refuses_to_start() -> None:
+    short_key_b64 = "AAAA"  # 3 bytes, decoded -- not a valid AES key length.
+    with pytest.raises(ValidationError, match="16, 24, or 32 bytes"):
+        AppConfig.model_validate(
+            {
+                "sandbox": {"managed": {"enabled": True}},
+                "secrets": {"managed_provider_reference_key": short_key_b64},
+            }
+        )
+
+
+def test_managed_enabled_with_valid_reference_key_starts() -> None:
+    key_b64 = base64.b64encode(bytes(32)).decode("ascii")
+    config = AppConfig.model_validate(
+        {
+            "sandbox": {"managed": {"enabled": True}},
+            "secrets": {"managed_provider_reference_key": key_b64},
+        }
+    )
+
+    assert config.sandbox.managed.enabled is True
 
 
 @pytest.mark.parametrize(

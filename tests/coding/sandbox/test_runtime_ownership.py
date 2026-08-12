@@ -179,3 +179,23 @@ def test_real_loop_wraps_the_production_model_for_collection(monkeypatch) -> Non
     assert isinstance(loop._model, TrackedCodingModel)
     assert isinstance(loop._model._inner, AnthropicCodingModel)
     assert loop._model._workflow_step == "coding_loop"
+
+
+def test_managed_registry_is_empty_when_managed_is_disabled(monkeypatch) -> None:
+    """managed.enabled=false 에서 기존 Memory/Docker 경로가 그대로여야 한다."""
+    config = AppConfig.model_validate(
+        {
+            "coding_model": {
+                "enabled": True,
+                "input_cost_micros_per_million": 1,
+                "output_cost_micros_per_million": 1,
+            },
+            "sandbox": {"enabled": True},
+            "secrets": {"anthropic_api_key": "test"},
+        }
+    )
+
+    assert (
+        runtime_module._managed_adapter_registry(config=config, sandboxes=object())
+        == {}
+    )
