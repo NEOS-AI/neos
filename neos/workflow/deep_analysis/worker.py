@@ -24,6 +24,7 @@ from .models import (
     ProposedBlob,
     ProposedClaim,
     ProposedEvidence,
+    ProposedSubquestion,
     RepairResult,
     WorkerResult,
 )
@@ -86,6 +87,40 @@ def _tier1_count(candidates: list[dict], source_tiers: dict) -> int:
         for candidate in candidates
         if source_tier(candidate.get("url", ""), source_tiers) == 1
     )
+
+
+def _parse_subquestions(raw: object) -> list[ProposedSubquestion]:
+    """`{"text": ..., "value_est": ...}` 를 읽되 옛 문자열도 받는다.
+
+    문자열은 `value_est=0.0` 이 된다 -- `subq_adopt_threshold` 아래이므로
+    **채택되지 않는다.** 의도한 기본값이다: 옛 형태를 내는 응답(기록된
+    카세트 포함)은 이 기능이 없던 시절과 정확히 같이 동작해야 하고, 값을
+    모르는 제안을 통과시키는 쪽으로 기울면 그것은 "임계값 없이 전부 채택"
+    이 된다(D65).
+    """
+
+    if not isinstance(raw, list):
+        return []
+    parsed: list[ProposedSubquestion] = []
+    for item in raw:
+        if isinstance(item, str):
+            text, value = item, 0.0
+        elif isinstance(item, dict):
+            text = str(item.get("text", ""))
+            try:
+                value = float(item.get("value_est", 0.0))
+            except (TypeError, ValueError):
+                value = 0.0
+        else:
+            continue
+        if not text.strip():
+            continue
+        parsed.append(
+            ProposedSubquestion(
+                text=text.strip(), value_est=min(1.0, max(0.0, value))
+            )
+        )
+    return parsed
 
 
 def _source_bucket(count: int) -> str:
@@ -435,7 +470,7 @@ class Worker:
             discarded_claims=list(self._discarded_claims),
             blobs=list(self._blobs),
             repairs=repair_results,
-            proposed_subquestions=list(
+            proposed_subquestions=_parse_subquestions(
                 data.get("proposed_subquestions", [])
             ),
             dead_ends=list(data.get("dead_ends", [])),

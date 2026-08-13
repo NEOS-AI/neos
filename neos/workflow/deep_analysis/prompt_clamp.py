@@ -55,10 +55,38 @@ class ClampResult:
         return self.primary_chars_after < self.primary_chars_before
 
 
+def halve(text: str) -> str:
+    """The default way to make one string smaller: keep its front half.
+
+    Scale-free and needs no tuning, which is why the policy has always used
+    it. What it does not know is that these characters carry `[C:xxxxxxxx]`
+    claim addresses, and that cutting one out costs the report a citation it
+    can never get back. Callers that know better pass their own `compact`
+    (D62); this stays the default for callers that have nothing to preserve.
+    """
+
+    return text[: len(text) // 2]
+
+
+def _progress(text: str, compact: Callable[[str], str]) -> str:
+    """`compact(text)`, or `halve(text)` if it did not actually shrink.
+
+    `clamp_prompt`'s termination no longer rests on the policy alone once the
+    policy is injectable: a `compact` that returns its input, or something
+    longer, would spin. The iteration cap still catches it, but the cap
+    reports `exhausted` on a prompt that could have been shrunk. Falling back
+    here keeps a badly-behaved compactor from costing the caller its report.
+    """
+
+    shrunk = compact(text)
+    return shrunk if len(shrunk) < len(text) else halve(text)
+
+
 def shrink_once(
     primary: list[str],
     secondary: list[str],
     anchor: str = "",
+    compact: Callable[[str], str] = halve,
 ) -> tuple[list[str], list[str], str] | None:
     """Drop the least valuable remaining input, once.
 
@@ -104,9 +132,9 @@ def shrink_once(
     longest = max(range(len(candidates)), key=lambda i: len(candidates[i]))
     if len(candidates[longest]) > 1:
         if longest == len(primary):
-            return primary, secondary, anchor[: len(anchor) // 2]
+            return primary, secondary, _progress(anchor, compact)
         trimmed = list(primary)
-        trimmed[longest] = trimmed[longest][: len(trimmed[longest]) // 2]
+        trimmed[longest] = _progress(trimmed[longest], compact)
         return trimmed, secondary, anchor
     if not primary:
         return None
@@ -121,6 +149,7 @@ def clamp_prompt(
     primary: list[str],
     secondary: list[str],
     anchor: str = "",
+    compact: Callable[[str], str] = halve,
 ) -> ClampResult:
     """Render, measure, shrink, repeat until the prompt fits ``allowance``.
 
@@ -161,7 +190,7 @@ def clamp_prompt(
     iterations = 0
 
     while prompt_input_bound(model, prompt) > allowance:
-        shrunk = shrink_once(primary, secondary, anchor)
+        shrunk = shrink_once(primary, secondary, anchor, compact)
         if shrunk is None or shrunk == (primary, secondary, anchor):
             return ClampResult(
                 prompt=prompt,

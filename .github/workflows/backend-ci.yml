@@ -33,12 +33,21 @@ jobs:
           enable-cache: true
           version: "0.11.16"
       - run: uv sync --frozen --group dev
+      # 파일 나열이 아니라 디렉터리다. 예전 판은 네 파일만 검사했고, 그래서
+      # 2026-08-13 에 `tests/config/test_test_environment_policy.py` 를 고치며
+      # 남긴 미사용 임포트가 **린트 대상 안에 있었는데도** 그 파일만 통과시켜
+      # 놓친 것이 아니라 -- 반대로, 그 좁은 목록에 없던 다른 파일들은 애초에
+      # 검사된 적이 없다. 목록은 새 파일이 생길 때마다 조용히 낡는다.
+      #
+      # 저장소 전체는 아직 343건이 남아 있어 게이트로 세울 수 없다. 여기 적힌
+      # 세 디렉터리는 **현재 0건**이며, 이 트랙이 실제로 작업하는 표면이다.
+      # 나머지는 정리되는 대로 추가한다.
       - name: Ruff
         run: >-
           uv run --frozen ruff check
-          neos/workflow/deep_analysis/analytics.py
-          tests/workflow/deep_analysis/test_deep_analysis_analytics.py
-          tests/config/test_test_environment_policy.py
+          neos/workflow/deep_analysis
+          tests/workflow/deep_analysis
+          tests/config
           tests/conftest.py
       - name: Test CI environment policy
         run: uv run --frozen pytest tests/config/test_test_environment_policy.py -q
@@ -116,3 +125,49 @@ jobs:
           connection.cursor().execute('CREATE EXTENSION IF NOT EXISTS vector');
           connection.close()"
       - run: uv run --frozen pytest tests/api -q
+
+  # tests/ 에서 위 두 잡이 안 도는 나머지 전부. 셋을 합치면 `pytest tests/`
+  # 와 같은 집합이고, `test_ci_workflow_covers_every_test_file` 이 그 등식을
+  # 강제한다.
+  #
+  # 이 잡이 없던 동안 CI 는 2,518건 중 1,192건(47%)만 돌았다 -- S5("전체
+  # 스위트가 CI 에서 결정론적으로 통과한다")의 지배적 격차였고, 2026-08-12
+  # 에 실측으로 드러났다. 빠져 있던 1,326건 중 3건은 `.env` 의 실제 API 키가
+  # 있을 때만 통과하는 상태였다.
+  rest-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: neos
+          POSTGRES_PASSWORD: neos_password
+          POSTGRES_DB: neos_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U neos -d neos_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          version: "0.11.16"
+      - run: uv sync --frozen --group dev
+      - name: Enable pgvector
+        run: >-
+          uv run --frozen python -c
+          "import psycopg2;
+          connection = psycopg2.connect(host='localhost', dbname='neos_db', user='neos', password='neos_password');
+          connection.autocommit = True;
+          connection.cursor().execute('CREATE EXTENSION IF NOT EXISTS vector');
+          connection.close()"
+      - run: >-
+          uv run --frozen pytest tests
+          --ignore=tests/workflow --ignore=tests/api -q

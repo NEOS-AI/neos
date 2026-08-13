@@ -9,7 +9,7 @@ from neos.config.settings import settings
 
 from .llm import call_json, call_text, prompt_input_bound
 from .models import ConflictNote, NodeSummary
-from .prompt_clamp import clamp_prompt
+from .prompt_clamp import clamp_prompt, halve
 from .prompt_loader import render
 from .token_budget import TokenBudgetExhausted
 
@@ -17,11 +17,74 @@ from .token_budget import TokenBudgetExhausted
 # and the closing bracket a real marker carries.
 _DANGLING_MARKER = re.compile(r"\[C:[0-9a-f]{0,8}$")
 
-# A whole claim address. Deliberately the same shape `citation._MARKER` and
-# `graders.report._RAW_MARKER` match: this counts the very things the
-# renderer will later resolve into footnotes, so a looser pattern here would
-# report markers the renderer cannot use.
-_CLAIM_MARKER = re.compile(r"\[C:[0-9a-f]{8}\]")
+# A whole claim address, capturing its id. Deliberately the same shape
+# `citation._MARKER` and `graders.report._RAW_MARKER` match: this counts the
+# very things the renderer will later resolve into footnotes, so a looser
+# pattern here would report markers the renderer cannot use.
+_CLAIM_MARKER = re.compile(r"\[C:([0-9a-f]{8})\]")
+
+
+# Sentence-ish pieces. A citation binds to the sentence it sits in, so this
+# is the unit that can be kept or shed without stranding a marker on prose
+# that no longer says anything.
+_SEGMENT = re.compile(r"[^.!?\n]*[.!?\n]|[^.!?\n]+")
+
+
+def compact_keeping_claims(text: str) -> str:
+    """Halve `text`, shedding claim-free segments before cited ones (D62).
+
+    `halve` cuts at a character offset and takes whatever is past it. That
+    destroys citations faster than characters: samples #14 and #15 measured
+    the assembly clamp retaining 36% / 33% of its characters while distinct
+    claims fell to 9% / 15%. And the loss is terminal in a way lost prose is
+    not -- a claim that never reaches the composer cannot be cited, and
+    sample #15 showed footnote counts equal to surviving claims in five runs
+    of six exactly.
+
+    Same character budget as `halve`, so the clamp converges exactly as
+    before; only the choice of *which* characters changes. Segments carrying
+    a marker are taken first in their original order, then the rest fill
+    whatever budget is left.
+
+    Falls back to `halve` when it cannot do better -- a single segment, or a
+    budget too small for any whole segment. `prompt_clamp._progress` also
+    guards the shrink-must-shrink contract, so a fallback here can only cost
+    quality, never termination.
+    """
+
+    budget = len(text) // 2
+    segments = _SEGMENT.findall(text)
+    if len(segments) < 2 or budget <= 0:
+        return halve(text)
+
+    keep = [False] * len(segments)
+    used = 0
+    for cited in (True, False):
+        for index, segment in enumerate(segments):
+            if keep[index] or bool(_CLAIM_MARKER.search(segment)) is not cited:
+                continue
+            if used + len(segment) <= budget:
+                keep[index] = True
+                used += len(segment)
+    kept = "".join(s for i, s in enumerate(segments) if keep[i])
+    return kept if 0 < len(kept) < len(text) else halve(text)
+
+
+def _distinct_claims(*texts: str) -> set[str]:
+    """The distinct claim ids these texts address.
+
+    Distinct, not occurrences (D59). `CitationRenderer` gives one footnote
+    per claim however many times the draft cites it, so occurrences answer a
+    different question than the one being asked -- and the same claim
+    routinely appears in both a child block and the root summary that
+    summarizes it, which double-counts every one of them. Sample #14's counts
+    are occurrence counts and must not be pooled with these.
+    """
+
+    found: set[str] = set()
+    for text in texts:
+        found.update(_CLAIM_MARKER.findall(text))
+    return found
 
 
 def _degradation_reason(exc: TokenBudgetExhausted) -> str:
@@ -94,14 +157,14 @@ class Synthesizer:
         result,
         allowance: int,
         *,
-        markers_before: int | None = None,
+        claims_before: int | None = None,
     ) -> None:
         """Record a clamp only when it actually cut something.
 
         Logging every call would bury the signal: the interesting event is
         a finalization prompt that did not fit, not one that did.
 
-        `markers_before` is the domain half of the measurement (D58). The
+        `claims_before` is the domain half of the measurement (D58). The
         clamp reports sizes because sizes are all it knows; only the caller
         knows that those characters carry `[C:xxxxxxxx]` claim addresses, and
         the number of those **surviving into the prompt** is the ceiling on
@@ -109,6 +172,14 @@ class Synthesizer:
         that unanswerable: footnote counts in delivered reports fell 12 -> 7
         -> 2 -> 2 while nothing on record said whether the markers ever
         reached the composer.
+
+        Renamed from `markers_*` rather than corrected in place (D59). The
+        first version counted occurrences and, at `node_reduction`, counted a
+        "before" that omitted material the prompt actually contains -- so its
+        totals read 35 -> 90, an "after" larger than its "before". Both are
+        now distinct claim ids over the full input. Keeping the old key would
+        let two incompatible measurements be pooled across samples, which is
+        the mistake D48 already cost a sample to.
         """
         if not (result.clamped or result.exhausted):
             return
@@ -136,12 +207,12 @@ class Synthesizer:
                 "primary_chars_after": result.primary_chars_after,
                 **(
                     {
-                        "claim_markers_before": markers_before,
-                        "claim_markers_after": len(
-                            _CLAIM_MARKER.findall(result.prompt)
+                        "distinct_claims_before": claims_before,
+                        "distinct_claims_after": len(
+                            _distinct_claims(result.prompt)
                         ),
                     }
-                    if markers_before is not None
+                    if claims_before is not None
                     else {}
                 ),
             },
@@ -298,6 +369,7 @@ class Synthesizer:
             render_prompt=render_assembly,
             primary=child_blocks,
             secondary=list(caveats),
+            compact=compact_keeping_claims,
             # The root answer is clamped material now (D54). It is still the
             # most protected -- only halved, never dropped -- but it can no
             # longer be paid for by every child block in the prompt.
@@ -308,12 +380,17 @@ class Synthesizer:
             qid,
             clamp,
             self.assembly_input_allowance,
-            # Counted over everything the clamp could cut, anchor included:
-            # a degraded root answer is a join of child answers and carries
-            # their markers, so attributing the loss needs both sources in
-            # the "before" figure.
-            markers_before=len(
-                _CLAIM_MARKER.findall("\n".join(child_blocks) + root_answer)
+            # Counted over every slot the clamp can cut. The anchor belongs
+            # here because a degraded root answer is a join of child answers
+            # and carries their markers; the caveats belong here because
+            # node summaries mark their caveats too -- D44 found 3 of sample
+            # #7's 30 doing it, which is how raw markers once reached the
+            # final text. Omitting either slot is the same defect D59 found
+            # at `node_reduction`: an "after" that can exceed its "before".
+            claims_before=len(
+                _distinct_claims(
+                    "\n".join(child_blocks), root_answer, "\n".join(caveats)
+                )
             ),
         )
         try:
@@ -442,6 +519,7 @@ class Synthesizer:
             render_prompt=render_node,
             primary=claim_lines,
             secondary=child_lines,
+            compact=compact_keeping_claims,
         )
         await self._log_clamp(
             "node_reduction",
@@ -451,8 +529,14 @@ class Synthesizer:
             # Reductions carry markers too, and a marker lost here never
             # reaches the assembly to be lost there -- attributing the drop
             # to the report tier requires ruling this tier out first.
-            markers_before=len(
-                _CLAIM_MARKER.findall("\n".join(claim_lines))
+            #
+            # `child_lines` belongs here and was missing (D59). It is the
+            # other half of what `render_node` puts in the prompt and it
+            # carries the children's markers, so leaving it out produced an
+            # "after" larger than its "before" (35 -> 90 across sample #14)
+            # and made the whole reduction-tier reading unusable.
+            claims_before=len(
+                _distinct_claims("\n".join(claim_lines), "\n".join(child_lines))
             ),
         )
         prompt = clamp.prompt

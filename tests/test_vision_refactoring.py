@@ -99,18 +99,76 @@ class TestVisionRefactoring:
         detected = detect_image_media_type()
         assert detected == "image/jpeg"
 
-    def test_vision_factory_auto_selection(self):
-        """Vision Factory AUTO 선택 테스트"""
-        from neos.workflow.pipelines.vision import VisionModelFactory, VisionProvider
+    @pytest.mark.parametrize(
+        ("llm_provider", "expected"),
+        [
+            ("openai", "GPT4oVision"),
+            ("anthropic", "ClaudeVision"),
+            ("gemini", "GeminiVision"),
+        ],
+    )
+    def test_vision_factory_auto_follows_the_configured_provider(
+        self, monkeypatch, llm_provider, expected
+    ):
+        """AUTO 는 `settings.LLM_PROVIDER` 를 따른다.
 
-        try:
-            model = VisionModelFactory.create(VisionProvider.AUTO)
-            assert model is not None
-            # GPT4oVision 또는 ClaudeVision이어야 함
-            assert type(model).__name__ in ["GPT4oVision", "ClaudeVision"]
-        except ValueError as e:
-            # API 키가 없으면 예상된 에러
-            assert "API key" in str(e)
+        이 테스트는 환경을 **읽지 않고 정한다**. 예전 판은
+        `VisionModelFactory.create(AUTO)` 를 그대로 부르고 결과가 GPT4o 나
+        Claude 이기를 단언했는데, 그것은 코드가 아니라 **어떤 API 키가 그
+        기계에 있는가**를 검사한 것이다. `.env` 가 있는 개발 기계에서는
+        통과하고 CI 에서는 `GeminiVision` 이 나와 실패한다 -- 실제로
+        2026-08-12 에 그렇게 확인됐다(S5).
+        """
+        from neos.config.settings import settings
+        from neos.workflow.pipelines.vision import (
+            VisionModelFactory,
+            VisionProvider,
+        )
+
+        monkeypatch.setattr(settings, "LLM_PROVIDER", llm_provider)
+        # 세 모델 다 사용 가능해야 fallback 이 선택을 덮어쓰지 않는다.
+        for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
+            monkeypatch.setattr(settings, key, "test-key", raising=False)
+
+        model = VisionModelFactory.create(VisionProvider.AUTO)
+
+        assert type(model).__name__ == expected
+
+    def test_vision_factory_auto_falls_back_to_whichever_key_exists(
+        self, monkeypatch
+    ):
+        """프로바이더가 셋 중 아무것도 아니면 있는 키 순서대로 고른다."""
+        from neos.config.settings import settings
+        from neos.workflow.pipelines.vision import (
+            VisionModelFactory,
+            VisionProvider,
+        )
+
+        monkeypatch.setattr(settings, "LLM_PROVIDER", "unknown-provider")
+        monkeypatch.setattr(settings, "OPENAI_API_KEY", "", raising=False)
+        monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "", raising=False)
+        monkeypatch.setattr(settings, "GOOGLE_API_KEY", "test-key", raising=False)
+
+        model = VisionModelFactory.create(VisionProvider.AUTO)
+
+        assert type(model).__name__ == "GeminiVision"
+
+    def test_vision_factory_auto_raises_when_no_key_is_configured(
+        self, monkeypatch
+    ):
+        """키가 하나도 없으면 조용히 고르지 말고 말해야 한다."""
+        from neos.config.settings import settings
+        from neos.workflow.pipelines.vision import (
+            VisionModelFactory,
+            VisionProvider,
+        )
+
+        monkeypatch.setattr(settings, "LLM_PROVIDER", "unknown-provider")
+        for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
+            monkeypatch.setattr(settings, key, "", raising=False)
+
+        with pytest.raises(ValueError, match="API key"):
+            VisionModelFactory.create(VisionProvider.AUTO)
 
     def test_gpt4o_vision_initialization(self):
         """GPT4oVision 초기화 테스트"""
