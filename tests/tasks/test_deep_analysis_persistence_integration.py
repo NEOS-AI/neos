@@ -9,7 +9,6 @@
 `job -> 리포트 영속화` 사슬만 실제 Postgres에 대고 확인한다.
 """
 
-import pathlib
 import uuid
 
 import pytest
@@ -17,49 +16,11 @@ import pytest
 from neos.tasks.deep_analysis_job_task import _execute, _persist_assistant_message
 
 
-_SCHEMA_SQL = pathlib.Path("db/chat_system.sql")
-_FUNCTION = "CREATE OR REPLACE FUNCTION create_conversation("
-
-
-def _create_conversation_ddl() -> str | None:
-    """`db/chat_system.sql` 에서 `create_conversation` 함수 정의만 떼어낸다."""
-    if not _SCHEMA_SQL.exists():
-        return None
-    text = _SCHEMA_SQL.read_text(encoding="utf-8")
-    start = text.find(_FUNCTION)
-    if start < 0:
-        return None
-    end = text.find("$$ LANGUAGE plpgsql;", start)
-    if end < 0:
-        return None
-    return text[start : end + len("$$ LANGUAGE plpgsql;")]
-
-
-@pytest.fixture(autouse=True)
-async def create_conversation_function():
-    """이 파일이 필요로 하는 저장 함수를 **직접 만든다**.
-
-    `db_manager.initialize()` 는 `Base.metadata.create_all` 로 ORM 테이블만
-    만든다. `create_conversation` 은 `db/chat_system.sql` 의 저장 함수이고
-    테스트 부트스트랩은 그 파일을 적용하지 않는다 -- 그러니 이 테스트들은
-    **개발 기계에 그 함수가 수동으로 적용돼 있을 때만** 통과했다.
-
-    2026-08-13 에 CI 범위를 넓히자마자 드러났다:
-    `UndefinedFunctionError: function create_conversation(...) does not exist`.
-    `.env` 의 실제 API 키에 기대던 테스트들과 같은 부류다 -- 테스트가 환경을
-    **정하지 않고 읽는다**.
-    """
-    from sqlalchemy import text as sql_text
-
-    from neos.database.connection import get_session_ctx
-
-    ddl = _create_conversation_ddl()
-    if ddl is None:
-        pytest.skip(f"{_SCHEMA_SQL} 에서 create_conversation 정의를 못 찾았다")
-    async with get_session_ctx() as session:
-        await session.execute(sql_text(ddl))
-        await session.commit()
-
+# 이 파일은 `conversations` 테이블과 `create_conversation` 저장 함수를 쓴다.
+# 둘 다 ORM 모델이 아니라 `db/chat_system.sql` 에 있고, 그것을 적용하는 것은
+# `tests/conftest.py` 의 부트스트랩이다. 한때 여기서 그 함수 하나만 떼어
+# 만들었는데, 그러자 실패가 한 층 아래(`relation "conversations" does not
+# exist`)로 내려갔을 뿐이다 -- 조각이 아니라 파일 전체가 있어야 한다.
 
 REPORT = "# 심층 분석 보고서\n\n검증된 클레임 기반 본문."
 

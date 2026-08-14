@@ -944,6 +944,34 @@ class DeepAnalysisConfig(StrictConfigModel):
     conflict_reinvestigation_cap: int = 1
     conflict_value_threshold: float = 0.6
     subq_adopt_threshold: float = 0.3
+    # 채택 상한. D65 는 `_do_split` 과 같은 4 를 하드코딩했다. 표본 #17 이
+    # 그것을 재는 이유를 줬다 -- dev 5건에서 질문이 74 -> 155 로 늘었는데
+    # `claim_verified` 는 129 -> 116 으로 **줄었다.** 넓이를 산 대가로 자식
+    # 하나하나의 조사가 얕아졌다는 가설이고, 이 노브가 그 가설의 손잡이다.
+    subq_adopt_cap: int = 4
+    # 채택된 자식들에게 부모의 잔여를 어떻게 나누는가.
+    #
+    #   "uniform"       -- 잔여 / (n + 1). D65 의 정책이고 표본 #17 이 이것으로
+    #                      측정됐다. 부모가 계속 조사하므로 자기 몫을 남긴다.
+    #   "value_weighted" -- 부모 몫 하나를 떼고, 나머지를 `value_est` 비율로
+    #                      나눈다. 워커가 매긴 값이 실제로 조사 가치를 반영한다면
+    #                      값이 높은 가지가 더 깊이 판다.
+    #
+    # 2026-08-15: 표본 #18 이 이것을 잰다 (D69). `uniform` 은 표본 #17 이
+    # 측정했고, 그 표본이 남긴 진단이 "넓이는 늘고 근거는 줄었다" 였다.
+    # H-1 이 반증되면 되돌리는 것이 조치다.
+    subq_budget_policy: Literal["uniform", "value_weighted"] = "value_weighted"
+    # §6.3.2 의 독립 심사자. D11 -> D13 -> D65 가 세 번 미뤘다.
+    #
+    # 워커가 자기 제안에 스스로 값을 매기는 것(D65)은 공짜지만 공정하지 않다.
+    # 표본 #17 에서 채택 88건 중 `resolved` 는 2건이고 `abandoned` 가 15건
+    # 새로 생겼다 -- 자기 채점이 넓이를 과대평가한다는 신호일 수 있다.
+    # 심사자는 제안 전체를 한 번에 보고 **상대 가치**를 다시 매기고 의미
+    # 중복을 병합한다(결정론적 정규화가 못 잡는 것).
+    #
+    # 호출 하나가 더 늘어나므로 기본은 꺼짐이다.
+    subq_reviewer_enabled: bool = False
+    subq_reviewer_max_output_tokens: int = 700
     # Tier 1 은 **1차 기관 출처**다 -- 규칙을 만든 기관, 데이터를 낸 기관,
     # 심사를 거친 학술 저장소. 편입 기준은 "이 도메인의 문서가 그 사실의
     # 원본인가" 이지 "신뢰할 만한가" 가 아니다. 언론과 기업 블로그는 신뢰할

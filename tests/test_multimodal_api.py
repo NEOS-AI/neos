@@ -12,6 +12,38 @@ from types import SimpleNamespace
 from neos.api.dependencies.auth import get_current_active_user
 from neos.main import app
 
+# 이 파일은 DB 를 쓰지 않는다(요청 경로의 미들웨어만 건드린다). 표시하지 않으면
+# autouse 정리 픽스처가 **세션 루프에서** 엔진을 만들어 두는데, 아래
+# `engine_belongs_to_this_test_loop` 가 설명하는 루프 불일치의 절반이 그것이다.
+pytestmark = pytest.mark.no_db
+
+
+@pytest.fixture(autouse=True)
+def engine_belongs_to_this_test_loop():
+    """전역 DB 엔진을 테스트마다 비운다.
+
+    `TestClient` 는 인스턴스마다 자기 이벤트 루프(portal)를 돌리는데,
+    `db_manager.engine` 은 프로세스 전역이고 asyncpg 커넥션은 **만들어진 루프에
+    묶인다.** 그래서 이 파일의 두 번째 요청부터 미들웨어의 DB 접근이
+    `got Future attached to a different loop` 로 터지고, 핸들러가 그것을 500 으로
+    바꾼다.
+
+    이것은 **원래 있던 결함**이고 내가 만든 것이 아니다. 다만 단언이
+    `status_code in [200, 500]` 이라 보이지 않았을 뿐이다 -- 그 관용이 실제로
+    가리고 있던 것이 이것이다.
+
+    엔진을 비우면 각 요청이 자기 루프에서 새로 만든다. 버려진 엔진이 테스트당
+    하나씩 쌓이지만 이 파일은 12개이고, 전역 엔진을 루프별로 관리하는 것은
+    이 파일이 감당할 범위가 아니다(로드맵에 등록).
+    """
+    from neos.database.connection import db_manager
+
+    db_manager.engine = None
+    db_manager.session_factory = None
+    yield
+    db_manager.engine = None
+    db_manager.session_factory = None
+
 
 @pytest.fixture
 def client():
@@ -34,6 +66,56 @@ def client():
         yield TestClient(app)
     finally:
         app.dependency_overrides = previous
+
+
+@pytest.fixture(autouse=True)
+def no_real_vision_calls(monkeypatch):
+    """Vision 경로를 서비스 경계에서 끊는다.
+
+    이 파일은 실제 이미지를 `/multimodal/image/analyze` 와 `/multimodal/query`
+    로 올렸고, 그 핸들러는 Anthropic vision 을 호출한다. `.env` 에 키가 있는
+    기계에서는 **한 번 돌 때마다 실제 API 를 15회 호출**했다 -- 게이트에 돈과
+    네트워크 변동성이 섞였다는 뜻이다.
+
+    그런데도 초록이었던 이유는 단언이 `status_code in [200, 500]` 이었기
+    때문이다. 그건 "되든 안 되든 통과"이고, 그래서 **키가 있는 로컬과 키가 없는
+    CI 가 서로 다른 코드 경로를 검사**하고 있었다. 정제 테스트·vision 팩토리
+    테스트와 같은 부류다(D64) -- 테스트가 환경을 정하지 않고 읽는다.
+
+    여기서 정한다. 그러면 200 과 응답 계약을 실제로 단언할 수 있다.
+    """
+    from neos.api.services.multimodal_service import MultimodalService
+
+    async def fake_analyze_image(*, filename, **_kwargs):
+        return {
+            "success": True,
+            "filename": filename,
+            "description": "A red square.",
+            "objects": ["square"],
+            "image_metadata": {"width": 100, "height": 100, "format": "JPEG"},
+            "vision_provider": "stub",
+            "confidence": 0.9,
+            "processing_time_ms": 1.0,
+        }
+
+    async def fake_process_multimodal_query(*, query, session_id=None, **_kwargs):
+        return {
+            "success": True,
+            "response": f"stubbed answer for: {query}",
+            "session_id": session_id or "stub-session",
+            "input_type": "multimodal",
+            "metadata": {"stub": True},
+            "processing_time_ms": 1.0,
+        }
+
+    monkeypatch.setattr(
+        MultimodalService, "analyze_image", staticmethod(fake_analyze_image)
+    )
+    monkeypatch.setattr(
+        MultimodalService,
+        "process_multimodal_query",
+        staticmethod(fake_process_multimodal_query),
+    )
 
 
 @pytest.fixture
@@ -105,16 +187,12 @@ class TestMultimodalRoutes:
             data=data
         )
 
-        # Vision API 키가 없을 수도 있으므로 200 또는 500 허용
-        assert response.status_code in [200, 500]
-
-        if response.status_code == 200:
-            result = response.json()
-            assert "success" in result
-            assert "filename" in result
-            assert result["filename"] == "test.jpg"
-            assert "image_metadata" in result
-            assert "processing_time_ms" in result
+        assert response.status_code == 200
+        result = response.json()
+        assert result["success"] is True
+        assert result["filename"] == "test.jpg"
+        assert "image_metadata" in result
+        assert "processing_time_ms" in result
 
     @pytest.mark.asyncio
     async def test_multimodal_query_endpoint(self, client, sample_image):
@@ -134,17 +212,14 @@ class TestMultimodalRoutes:
             data=data
         )
 
-        # Vision API 키가 없을 수도 있으므로 200 또는 500 허용
-        assert response.status_code in [200, 500]
-
-        if response.status_code == 200:
-            result = response.json()
-            assert "success" in result
-            assert "response" in result
-            assert "session_id" in result
-            assert "input_type" in result
-            assert "metadata" in result
-            assert "processing_time_ms" in result
+        assert response.status_code == 200
+        result = response.json()
+        assert result["success"] is True
+        assert "Describe this image" in result["response"]
+        assert result["session_id"]
+        assert result["input_type"]
+        assert "metadata" in result
+        assert "processing_time_ms" in result
 
     def test_multimodal_query_no_files(self, client):
         """파일 없이 멀티모달 쿼리 시도 (에러 테스트)"""
@@ -203,9 +278,9 @@ class TestMultimodalRoutes:
             files=files
         )
 
-        # 파일 크기 제한으로 400 또는 413 에러 예상
-        # 구현에 따라 200도 가능 (내부에서 처리)
-        assert response.status_code in [200, 400, 413, 500]
+        # 20MB 상한은 핸들러가 강제한다. 스텁 때문에 서비스까지 가지 않으므로
+        # 남은 결과는 둘뿐이다 -- 거부되거나, 상한 아래라 통과하거나.
+        assert response.status_code in [200, 400]
 
     @pytest.mark.asyncio
     async def test_multiple_files_upload(self, client, sample_image, sample_image_png):
@@ -226,14 +301,11 @@ class TestMultimodalRoutes:
             data=data
         )
 
-        # Vision API 키가 없을 수도 있으므로 200 또는 500 허용
-        assert response.status_code in [200, 500]
-
-        if response.status_code == 200:
-            result = response.json()
-            assert result["success"] is True
-            # 멀티모달 타입으로 분류되어야 함
-            assert result["input_type"] in ["image", "multimodal"]
+        assert response.status_code == 200
+        result = response.json()
+        assert result["success"] is True
+        # 멀티모달 타입으로 분류되어야 함
+        assert result["input_type"] in ["image", "multimodal"]
 
 
 class TestMultimodalIntegration:

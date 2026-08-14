@@ -1,6 +1,17 @@
 -- Chat System Schema
 -- Claude 서비스와 같은 AI 채팅 시스템을 위한 데이터베이스 스키마
 -- 사용자는 여러 대화(conversation)를 가질 수 있으며, 각 대화는 여러 메시지로 구성됨
+--
+-- 이 파일은 **몇 번 적용해도 안전해야 한다**. 테스트 부트스트랩(tests/conftest.py)이
+-- 세션마다 통째로 적용하고, 그 DB 는 이미 적용돼 있을 수도 있기 때문이다.
+-- 테이블·ENUM·함수는 처음부터 그렇게 쓰여 있었으나 인덱스와 트리거는 아니어서
+-- 두 번째 적용이 중간에 깨졌다 (2026-08-14 수정: `CREATE INDEX IF NOT EXISTS`,
+-- `CREATE OR REPLACE TRIGGER`). 새 문장을 더할 때 이 성질을 지킬 것.
+--
+-- 선행 조건 두 가지:
+--   * 확장 `pg_trgm` (본문의 gin_trgm_ops 인덱스) -- db/init.sql 이 만든다
+--   * 테이블 `users` -- 여러 FK 가 참조한다. 애플리케이션에서는 ORM 모델이,
+--     테스트에서는 `Base.metadata.create_all` 이 먼저 만든다
 
 -- ============================================================================
 -- 1. 대화방 테이블 (Conversations)
@@ -319,48 +330,48 @@ CREATE TABLE IF NOT EXISTS conversation_templates (
 -- ============================================================================
 
 -- conversations 테이블 인덱스
-CREATE INDEX idx_conversations_user_id ON conversations(user_id);
-CREATE INDEX idx_conversations_status ON conversations(status);
-CREATE INDEX idx_conversations_created_at ON conversations(created_at DESC);
-CREATE INDEX idx_conversations_last_message_at ON conversations(last_message_at DESC);
-CREATE INDEX idx_conversations_pinned ON conversations(is_pinned, user_id) WHERE is_pinned = TRUE;
-CREATE INDEX idx_conversations_shared ON conversations(is_shared) WHERE is_shared = TRUE;
-CREATE INDEX idx_conversations_share_token ON conversations(share_token) WHERE share_token IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(status);
+CREATE INDEX IF NOT EXISTS idx_conversations_created_at ON conversations(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_last_message_at ON conversations(last_message_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_pinned ON conversations(is_pinned, user_id) WHERE is_pinned = TRUE;
+CREATE INDEX IF NOT EXISTS idx_conversations_shared ON conversations(is_shared) WHERE is_shared = TRUE;
+CREATE INDEX IF NOT EXISTS idx_conversations_share_token ON conversations(share_token) WHERE share_token IS NOT NULL;
 
 -- messages 테이블 인덱스
-CREATE INDEX idx_messages_conversation_id ON messages(conversation_id);
-CREATE INDEX idx_messages_sequence ON messages(conversation_id, sequence_number);
-CREATE INDEX idx_messages_created_at ON messages(created_at DESC);
-CREATE INDEX idx_messages_role ON messages(role);
-CREATE INDEX idx_messages_status ON messages(status);
-CREATE INDEX idx_messages_parent ON messages(parent_message_id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_sequence ON messages(conversation_id, sequence_number);
+CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_role ON messages(role);
+CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
+CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_message_id);
 
 -- 전문 검색 인덱스 (pg_trgm)
-CREATE INDEX idx_messages_content_trgm ON messages USING gin (content gin_trgm_ops);
-CREATE INDEX idx_conversations_title_trgm ON conversations USING gin (title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_messages_content_trgm ON messages USING gin (content gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_conversations_title_trgm ON conversations USING gin (title gin_trgm_ops);
 
 -- message_edits 테이블 인덱스
-CREATE INDEX idx_message_edits_message_id ON message_edits(message_id);
-CREATE INDEX idx_message_edits_edited_at ON message_edits(edited_at DESC);
+CREATE INDEX IF NOT EXISTS idx_message_edits_message_id ON message_edits(message_id);
+CREATE INDEX IF NOT EXISTS idx_message_edits_edited_at ON message_edits(edited_at DESC);
 
 -- conversation_participants 테이블 인덱스
-CREATE INDEX idx_participants_conversation ON conversation_participants(conversation_id);
-CREATE INDEX idx_participants_user ON conversation_participants(user_id);
-CREATE INDEX idx_participants_active ON conversation_participants(is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_participants_conversation ON conversation_participants(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_participants_user ON conversation_participants(user_id);
+CREATE INDEX IF NOT EXISTS idx_participants_active ON conversation_participants(is_active) WHERE is_active = TRUE;
 
 -- conversation_branches 테이블 인덱스
-CREATE INDEX idx_branches_conversation ON conversation_branches(conversation_id);
-CREATE INDEX idx_branches_branch_point ON conversation_branches(branch_point_message_id);
-CREATE INDEX idx_branches_active ON conversation_branches(is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_branches_conversation ON conversation_branches(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_branches_branch_point ON conversation_branches(branch_point_message_id);
+CREATE INDEX IF NOT EXISTS idx_branches_active ON conversation_branches(is_active) WHERE is_active = TRUE;
 
 -- chat_analytics 테이블 인덱스
-CREATE INDEX idx_analytics_conversation ON chat_analytics(conversation_id);
-CREATE INDEX idx_analytics_period ON chat_analytics(analysis_period, period_start);
+CREATE INDEX IF NOT EXISTS idx_analytics_conversation ON chat_analytics(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_analytics_period ON chat_analytics(analysis_period, period_start);
 
 -- conversation_templates 테이블 인덱스
-CREATE INDEX idx_templates_category ON conversation_templates(category);
-CREATE INDEX idx_templates_created_by ON conversation_templates(created_by);
-CREATE INDEX idx_templates_public ON conversation_templates(is_public) WHERE is_public = TRUE;
+CREATE INDEX IF NOT EXISTS idx_templates_category ON conversation_templates(category);
+CREATE INDEX IF NOT EXISTS idx_templates_created_by ON conversation_templates(created_by);
+CREATE INDEX IF NOT EXISTS idx_templates_public ON conversation_templates(is_public) WHERE is_public = TRUE;
 
 -- ============================================================================
 -- 트리거 및 함수
@@ -375,7 +386,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_update_conversation_updated_at
+CREATE OR REPLACE TRIGGER trigger_update_conversation_updated_at
     BEFORE UPDATE ON conversations
     FOR EACH ROW
     EXECUTE FUNCTION update_conversation_updated_at();
@@ -389,7 +400,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_update_message_updated_at
+CREATE OR REPLACE TRIGGER trigger_update_message_updated_at
     BEFORE UPDATE ON messages
     FOR EACH ROW
     EXECUTE FUNCTION update_message_updated_at();
@@ -426,7 +437,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_update_conversation_on_message
+CREATE OR REPLACE TRIGGER trigger_update_conversation_on_message
     AFTER INSERT OR DELETE ON messages
     FOR EACH ROW
     EXECUTE FUNCTION update_conversation_on_message();
@@ -446,7 +457,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_set_message_sequence_number
+CREATE OR REPLACE TRIGGER trigger_set_message_sequence_number
     BEFORE INSERT ON messages
     FOR EACH ROW
     EXECUTE FUNCTION set_message_sequence_number();
@@ -475,7 +486,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_auto_generate_conversation_title
+CREATE OR REPLACE TRIGGER trigger_auto_generate_conversation_title
     AFTER INSERT ON messages
     FOR EACH ROW
     EXECUTE FUNCTION auto_generate_conversation_title();
@@ -493,7 +504,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_increment_template_usage
+CREATE OR REPLACE TRIGGER trigger_increment_template_usage
     AFTER INSERT ON conversations
     FOR EACH ROW
     EXECUTE FUNCTION increment_template_usage();

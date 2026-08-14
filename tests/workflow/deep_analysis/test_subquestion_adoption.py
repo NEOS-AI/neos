@@ -11,7 +11,6 @@ import pytest
 
 from neos.workflow.deep_analysis.models import ProposedSubquestion
 from neos.workflow.deep_analysis.orchestrator import (
-    _ADOPT_CAP,
     Orchestrator,
     _normalize_question,
 )
@@ -150,6 +149,13 @@ async def test_a_proposal_that_repeats_an_existing_question_is_dropped():
 
 @pytest.mark.asyncio
 async def test_adoption_stops_at_the_cap_and_takes_the_most_valuable():
+    """상한은 `subq_adopt_cap` 이다 -- D65 의 하드코딩된 4 가 아니라(D68).
+
+    두 벌로 두면 config 를 낮춰도 테스트는 옛 수를 계속 주장한다.
+    """
+    from neos.config.settings import settings
+
+    cap = settings.config.deep_analysis.subq_adopt_cap
     ledger = _Ledger([_Q("root0001", "루트 질문")])
     orch = _orchestrator(ledger)
 
@@ -157,14 +163,14 @@ async def test_adoption_stops_at_the_cap_and_takes_the_most_valuable():
         "root0001",
         [
             ProposedSubquestion(f"제안 {i}", 0.5 + i / 100)
-            for i in range(_ADOPT_CAP + 5)
+            for i in range(cap + 5)
         ],
     )
 
-    assert len(ledger.opened) == _ADOPT_CAP
+    assert len(ledger.opened) == cap
     # 값이 높은 것부터.
     assert [text for _q, text, *_r in ledger.opened] == [
-        f"제안 {i}" for i in range(_ADOPT_CAP + 4, _ADOPT_CAP, -1)
+        f"제안 {i}" for i in range(cap + 4, cap, -1)
     ]
 
 

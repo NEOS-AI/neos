@@ -49,10 +49,70 @@ class SystemicWorkerFailure(RuntimeError):
 _LIMITS_HEADING = "## 한계와 미확인 사항"
 # Harness-owned, like `_LIMITS_HEADING` and CitationRenderer's `## 출처`.
 # `graders/report.py` mirrors this string in its scoring boundaries.
-# 한 패스가 트리를 무한정 넓히지 못하게 하는 상한. `_do_split` 이 자식을
-# 4개로 자르는 것과 같은 수이며, 같은 이유다 -- 넓이는 예산을 나누고
-# 예산이 갈리면 어느 가지도 답에 닿지 못한다.
-_ADOPT_CAP = 4
+
+
+def adopted_child_caps(
+    remaining: int, values: list[float], policy: str
+) -> list[int]:
+    """채택된 자식들에게 부모의 잔여 예산을 나눈다.
+
+    두 정책 다 **부모 몫 하나를 먼저 뗀다.** `_do_split` 은 부모가 `split` 로
+    끝나므로 `n` 으로 나누지만, 채택된 부모는 계속 조사하므로 `n + 1` 이다.
+
+    - `uniform` -- 균등. D65 의 정책이고 표본 #17 이 이것으로 측정됐다.
+    - `value_weighted` -- 나머지 `n` 몫을 `value_est` 비율로 나눈다. 표본 #17
+      에서 질문이 2.1배가 되는 동안 `claim_verified` 는 129 -> 116 으로 줄었다.
+      균등 분할이 넓이를 사면서 **자식마다의 깊이를 팔았다**는 가설의 손잡이다.
+
+    값이 전부 0 이면(옛 형태의 문자열 제안은 `value_est=0.0` 이다) 비율을 만들
+    수 없으므로 균등으로 떨어진다 -- 0 으로 나누지 않기 위해서가 아니라, 그
+    경우 "값에 비례"가 아무 의미도 없기 때문이다.
+
+    최소 1 을 보장한다. 0 토큰짜리 자식은 열리자마자 바닥에 걸린다.
+    """
+
+    count = len(values)
+    if count == 0:
+        return []
+    share = max(0, remaining) // (count + 1)
+    if policy != "value_weighted":
+        return [max(1, share)] * count
+
+    total = sum(max(0.0, v) for v in values)
+    if total <= 0:
+        return [max(1, share)] * count
+
+    pool = share * count
+    return [max(1, int(pool * max(0.0, v) / total)) for v in values]
+
+
+def _apply_review(proposals: list, reviewed: list) -> list:
+    """심사자의 응답을 제안 목록에 입힌다.
+
+    심사자는 **인덱스로 말한다** -- 텍스트를 되받아 적게 하면 그것이 곧 재작성
+    이고, 워커가 실제 증거에서 뽑은 문장이 심사 과정에서 조용히 바뀐다.
+    인덱스는 그런 일이 일어날 수 없게 한다.
+
+    응답에 없는 인덱스는 **버려진 것**이다(의미 중복 병합의 결과). 알 수 없는
+    인덱스와 잘못된 값은 무시한다 -- 심사자의 실수가 제안을 없애면 안 된다.
+    전부 무효면 원래 목록을 돌려준다.
+    """
+
+    kept: list = []
+    seen: set[int] = set()
+    for item in reviewed:
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = int(item["index"])
+            value = float(item["value_est"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if index in seen or not 0 <= index < len(proposals):
+            continue
+        seen.add(index)
+        kept.append(replace(proposals[index], value_est=min(1.0, max(0.0, value))))
+    return kept or proposals
 
 
 def _normalize_question(text: str) -> str:
@@ -813,6 +873,82 @@ class Orchestrator:
             )
         return assignments, splits
 
+    async def _review_subquestions(self, question, proposals: list) -> list:
+        """§6.3.2 의 독립 심사자 -- 제안들의 **상대 가치**를 다시 매긴다.
+
+        D11 -> D13 -> D65 가 세 번 미룬 자리다. D65 는 워커가 자기 제안에 스스로
+        값을 매기게 했다. 공짜지만 공정하지 않고, 표본 #17 이 그 대가를 보여줬을
+        수 있다 -- 채택 88건에 `resolved` 2건, 새로 생긴 `abandoned` 15건.
+
+        심사자가 워커와 다른 점은 **한 번에 전부 본다**는 것이다. 워커는 자기
+        제안 하나하나에 절대값을 매기지만, 예산은 상대적으로 갈린다. 그리고
+        `_normalize_question` 이 못 잡는 **의미 중복**(같은 것을 다른 말로)을
+        여기서 병합한다.
+
+        꺼져 있으면(기본) 제안을 그대로 돌려준다 -- 표본 하나는 변경 하나만
+        재야 하므로 예산 정책과 이것을 동시에 켜지 않는다(§10.2).
+
+        **실패는 삼킨다.** 심사자는 조사를 돕는 장치이지 관문이 아니다. 여기서
+        터지면 워커가 실제로 수집한 증거에서 나온 제안이 통째로 사라지는데,
+        그것이 D65 가 고친 바로 그 손실이다. 대신 `subq_review_failed` 를
+        남긴다 -- 조용히 원래 값으로 돌아가면 심사자가 도는지 아닌지 알 수 없다.
+        """
+
+        config = settings.config.deep_analysis
+        if not config.subq_reviewer_enabled or not proposals:
+            return proposals
+
+        try:
+            judge_model = resolve_model(
+                config=settings.config.model_routing,
+                provider="anthropic",
+                role="everyday",
+                feature_override=config.models.judge,
+            ).model
+            prompt = render(
+                "subq_review",
+                question_text=question.text,
+                proposals="\n".join(
+                    f"{i}. [{p.value_est:.2f}] {p.text}"
+                    for i, p in enumerate(proposals)
+                ),
+                subq_adopt_threshold=config.subq_adopt_threshold,
+            )
+            data, _response = await call_json(
+                judge_model,
+                prompt,
+                max_tokens=config.subq_reviewer_max_output_tokens,
+                client=self.llm_client,
+                cassette=self.cassette,
+                stage="subq_review",
+            )
+            reviewed = _apply_review(proposals, data.get("reviewed", []))
+        except Exception as error:  # noqa: BLE001 -- 위 독스트링
+            await self.ledger.log(
+                "subq_review_failed",
+                question.id,
+                {"error_type": type(error).__name__, "proposals": len(proposals)},
+            )
+            return proposals
+
+        await self.ledger.log(
+            "subq_reviewed",
+            question.id,
+            {
+                "before": len(proposals),
+                "after": len(reviewed),
+                "value_before": round(
+                    sum(p.value_est for p in proposals) / len(proposals), 3
+                ),
+                "value_after": (
+                    round(sum(p.value_est for p in reviewed) / len(reviewed), 3)
+                    if reviewed
+                    else 0.0
+                ),
+            },
+        )
+        return reviewed
+
     async def _adopt_subquestions(
         self, question_id: str, proposals: list
     ) -> None:
@@ -829,8 +965,10 @@ class Orchestrator:
 
         - **임계값** `subq_adopt_threshold` -- config 에 정의만 되어 있고
           코드 어디에서도 쓰이지 않던 죽은 노브다. 이제 이것이 쓰인다.
-        - **상한** `_ADOPT_CAP` -- 한 패스가 트리를 무한정 넓히지 못한다.
-          `_do_split` 이 자식을 4개로 자르는 것과 같은 수다.
+        - **상한** `subq_adopt_cap` -- 한 패스가 트리를 무한정 넓히지 못한다.
+          D65 는 `_do_split` 과 같은 4 를 하드코딩했으나, 표본 #17 이 넓이의
+          대가를 보여줬으므로(질문 2.1배, `claim_verified` 129 -> 116) 이제
+          config 노브다.
         - **중복 제거** -- 정규화한 텍스트가 이 run 의 기존 질문과 같으면
           버린다. 원 설계 §6.3.2 는 이것을 독립 LLM 심사자에게 맡기지만,
           그 심사자가 D11·D13 연기의 이유였다. 결정론적 일치는 완전하지
@@ -856,11 +994,13 @@ class Orchestrator:
         existing = {
             _normalize_question(q.text) for q in await self.ledger.questions()
         }
+        proposals = await self._review_subquestions(question, proposals)
+        cap = max(1, config.subq_adopt_cap)
         adopted: list = []
         for proposal in sorted(
             proposals, key=lambda p: p.value_est, reverse=True
         ):
-            if len(adopted) >= _ADOPT_CAP:
+            if len(adopted) >= cap:
                 break
             if proposal.value_est < config.subq_adopt_threshold:
                 continue
@@ -874,8 +1014,12 @@ class Orchestrator:
             return
 
         remaining = await self.ledger.remaining_budget(question_id)
-        child_cap = max(1, remaining // (len(adopted) + 1))
-        for proposal in adopted:
+        caps = adopted_child_caps(
+            remaining,
+            [p.value_est for p in adopted],
+            config.subq_budget_policy,
+        )
+        for proposal, child_cap in zip(adopted, caps):
             child_id = await self.ledger.open_question(
                 proposal.text,
                 question_id,

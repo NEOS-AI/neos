@@ -116,8 +116,14 @@ class TestImagePipeline:
     """ImagePipeline 테스트"""
 
     async def test_image_processing(self):
-        """이미지 처리 테스트"""
-        pipeline = ImagePipeline()
+        """이미지 처리 테스트 -- 디코딩과 메타데이터.
+
+        `enable_vision=False` 로 만든다. 단언하는 것은 파일명·크기·포맷이고
+        그중 어느 것도 vision 을 타지 않는데, 기본값(`True`)으로 두면 이 테스트
+        하나가 스위트를 돌 때마다 **실제 Anthropic vision 을 호출**했다.
+        게이트에 돈과 네트워크 변동성이 섞이는 것을 여기서 끊는다.
+        """
+        pipeline = ImagePipeline(enable_vision=False)
 
         # 테스트 이미지 생성
         img = Image.new("RGB", (100, 100), color="red")

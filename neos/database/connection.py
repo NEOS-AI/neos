@@ -63,7 +63,15 @@ class DatabaseManager:
             expire_on_commit=False
         )
 
-        # 테이블 생성
+        # 테이블 생성.
+        #
+        # `Base.metadata` 는 **모델 모듈이 임포트된 만큼만** 채워져 있다. 이 모듈은
+        # 모델을 임포트하지 않으므로, 임포트하기 전에 initialize() 가 먼저 불리면
+        # 빈 메타데이터로 create_all 을 돌려 테이블을 하나도 만들지 않는다 --
+        # 그러고도 조용히 성공한다. 지금까지 이것이 안 터진 이유는 다른 코드가
+        # 우연히 먼저 모델을 임포트했기 때문이고, 그건 보장이 아니다.
+        from neos.database import models  # noqa: F401  (모델 등록 목적)
+
         try:
             async with self.engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
