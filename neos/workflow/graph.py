@@ -14,6 +14,7 @@ from neos.utils.smart_cache_manager import smart_cache_manager
 from neos.config.settings import settings
 from neos.tools.tool_selector import tool_selector
 
+from .contracts import node_contract
 from .enums import WorkflowNode, WorkflowPathway, IntentType, AutonomyLevel
 from .state import AgentState, WorkflowConfig
 from .harness.cache_policy import should_cache_harness_result
@@ -652,6 +653,29 @@ class MultiAgentWorkflow:
         """Phase 2.4: 중간 결과 기반 적응형 연구 재계획"""
         return await self.research_replanner.evaluate_and_replan(state)
 
+    @node_contract(
+        node=WorkflowNode.QUERY_CLS,
+        reads={
+            "original_query",
+            "refined_query",
+            "template_id",
+            "conversation_context",
+        },
+        writes={
+            "detected_language",
+            "query_intent",
+            "required_agents",
+            "query_classification",
+            "needs_ui",
+            "template_id",
+            "template_config",
+        },
+        # original_query 가 없으면 `state["original_query"]` 에서 즉시 KeyError --
+        # 분류할 대상 자체가 없으므로 이 노드의 실행이 무의미하다.
+        # refined_query/template_id/conversation_context 는 없어도 의미 있는
+        # 기본 동작(원본 쿼리 사용, 템플릿 자동선택, 컨텍스트 보강 생략)으로 진행한다.
+        requires={"original_query"},
+    )
     async def _classify_query_node(self, state: AgentState) -> Dict[str, Any]:
         """쿼리 분류 노드"""
         # refined_query가 있으면 그것을 사용, 없으면 original_query 사용
@@ -970,6 +994,25 @@ class MultiAgentWorkflow:
             logger.debug(f"[ApprovalCheck] Allowlist DB query failed: {e} — requiring approval")
             return False
 
+    @node_contract(
+        node=WorkflowNode.SEARCH_ORCHESTRATOR,
+        reads={
+            "conversation_context",
+            "original_query",
+            "query_classification",
+            "required_agents",
+            "session_id",
+        },
+        writes={"search_results", "search_metadata", "search_synthesis"},
+        # original_query 가 없으면 `state["original_query"]` 에서 즉시 KeyError.
+        # required_agents 도 `state["required_agents"]` 로 서브스크립트 접근하므로
+        # 없으면 KeyError -- 있어도 비어 있으면 "실행할 검색 에이전트가 없습니다"
+        # 경고만 찍고 그대로 반환한다(조용히 빈 산출물, (c) 케이스). 어느 쪽이든
+        # required_agents 없이 이 노드를 돌리는 것은 무의미하다.
+        # conversation_context/query_classification/session_id 는 없어도 각각
+        # 컨텍스트 보강 생략·경고 로그·빈 문자열 기본값으로 의미 있게 진행한다.
+        requires={"original_query", "required_agents"},
+    )
     async def _orchestrate_search_node(self, state: AgentState) -> Dict[str, Any]:
         """검색 오케스트레이션 노드"""
         return await self.search_orchestrator.orchestrate(state)
@@ -982,6 +1025,17 @@ class MultiAgentWorkflow:
         """생성 오케스트레이션 노드"""
         return await self.generation_orchestrator.orchestrate(state)
 
+    @node_contract(
+        node=WorkflowNode.RESULT_INTEGRATOR,
+        reads={"search_results", "analysis_results", "generation_results"},
+        writes={"integrated_results"},
+        # search_results 가 없으면(검색 노드가 아직 안 돌았으면) search_summary와
+        # total_sources가 전부 0/빈 값으로 채워진 integrated_results 를 조용히
+        # 만들어낸다 -- (c) 케이스. 순서가 틀려도 예외 없이 빈 통합 결과가 나오는
+        # 것이 정확히 이 기능이 잡으려는 실패다. analysis_results/generation_results
+        # 는 검색만 필요한 쿼리에서는 정상적으로 비어 있을 수 있어 requires 에서 뺀다.
+        requires={"search_results"},
+    )
     async def _integrate_results_node(self, state: AgentState) -> Dict[str, Any]:
         """결과 통합 노드"""
         return await self.result_processor.integrate_results(state)

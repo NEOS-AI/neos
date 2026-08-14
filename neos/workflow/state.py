@@ -46,6 +46,10 @@ class AgentState(TypedDict):
     user_id: str
     session_id: str
     original_query: str
+    # query_refinement_agent 가 채우는 재작성된 쿼리. 여러 노드가 이미
+    # `state.get("refined_query", ...)` 로 읽고 있었으나 TypedDict 선언이
+    # 누락돼 있었다 (Task 1: 노드 계약 작업 중 발견).
+    refined_query: Optional[str]
     query_intent: Optional[str]
     query_embedding: Optional[List[float]]
     detected_language: Optional[str]  # 감지된 사용자 질문 언어
