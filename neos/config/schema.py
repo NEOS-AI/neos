@@ -957,8 +957,10 @@ class DeepAnalysisConfig(StrictConfigModel):
     #                      나눈다. 워커가 매긴 값이 실제로 조사 가치를 반영한다면
     #                      값이 높은 가지가 더 깊이 판다.
     #
-    # 기본값을 바꾸지 않는 이유는 §10.2 다 -- 표본 하나는 변경 하나만 잰다.
-    subq_budget_policy: Literal["uniform", "value_weighted"] = "uniform"
+    # 2026-08-15: 표본 #18 이 이것을 잰다 (D69). `uniform` 은 표본 #17 이
+    # 측정했고, 그 표본이 남긴 진단이 "넓이는 늘고 근거는 줄었다" 였다.
+    # H-1 이 반증되면 되돌리는 것이 조치다.
+    subq_budget_policy: Literal["uniform", "value_weighted"] = "value_weighted"
     # §6.3.2 의 독립 심사자. D11 -> D13 -> D65 가 세 번 미뤘다.
     #
     # 워커가 자기 제안에 스스로 값을 매기는 것(D65)은 공짜지만 공정하지 않다.

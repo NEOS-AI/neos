@@ -196,6 +196,15 @@ def _fingerprint() -> dict:
         "judge_max_output_tokens": config.judge_max_output_tokens,
         "entailment_max_output_tokens": config.entailment_max_output_tokens,
         "fetch_user_agent": config.fetch_user_agent,
+        # 하위 질문 채택(D65)과 그 예산·심사 정책(D68). 표본 #17 은 이것들이
+        # 지문에 없어서, 영수증만 봐서는 어떤 채택 정책으로 돌았는지 알 수
+        # 없었다 -- 두 표본이 다른 정책으로 돌아도 지문이 같아 보인다.
+        "subquestions": {
+            "adopt_threshold": config.subq_adopt_threshold,
+            "adopt_cap": config.subq_adopt_cap,
+            "budget_policy": config.subq_budget_policy,
+            "reviewer_enabled": config.subq_reviewer_enabled,
+        },
         "models": {
             "scout": config.models.scout,
             "dig": config.models.dig,
