@@ -32,6 +32,9 @@ EXPECTED_PROMPT_VERSIONS = {
     "worker_brief": 4,
     "judge": 1,
     "node_summary": 1,
+    # v1 (D68, 2026-08-15): §6.3.2 의 독립 심사자. D11 -> D13 -> D65 가 세 번
+    # 미룬 자리이며, 기본은 꺼져 있다(`subq_reviewer_enabled`).
+    "subq_review": 1,
     # v2 (W3-h, 2026-08-09): `{revision_note}` 슬롯 + 근거 없는 사항을 본문이
     # 아니라 한계 절에 적으라는 규칙. 앞의 것은 재시도가 판정을 되먹이게 하고,
     # 뒤의 것은 표본 #5 에서 인용 없는 문장의 최대 범주였던 부재 진술을
