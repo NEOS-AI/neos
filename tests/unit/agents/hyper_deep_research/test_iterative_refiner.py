@@ -35,6 +35,27 @@ from neos.agents.search_agents.hyper_deep_research.utils import CitationTracker
 # Test Fixtures
 # ============================================================================
 
+@pytest.fixture(autouse=True)
+def no_real_llm_provider(monkeypatch):
+    """이 파일의 어떤 테스트도 실제 프로바이더에 닿지 못하게 한다.
+
+    `tests/integration/test_iterative_refinement_integration.py` 에 같은 픽스처를
+    두고도 **여기는 빠져 있었다.** 2026-08-14 게이트 로그에서 잡혔다 -- 스위트
+    한 번에 실제 Anthropic 호출 6회가 이 파일에서 나갔다.
+
+    개별 테스트들은 `evaluate_section_quality` 만 패치하는데, 리파이너는 품질이
+    낮으면 `rewrite_section_with_improvements` 로 넘어가고 그 경로가 열려 있다.
+    막는 자리는 각 테스트의 선의가 아니라 여기다.
+    """
+    from neos.agents.search_agents.hyper_deep_research import iterative_refiner
+
+    monkeypatch.setattr(
+        iterative_refiner,
+        "create_llm",
+        lambda *args, **kwargs: MagicMock(name="create_llm"),
+    )
+
+
 @pytest.fixture
 def mock_citation_tracker():
     """Create a mock CitationTracker."""
