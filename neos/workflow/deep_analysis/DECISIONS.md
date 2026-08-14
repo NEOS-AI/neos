@@ -2992,3 +2992,10 @@ integration` 의 정리가 여기 걸렸다 -- 트리거 없는 DB 에서만 통
 
 개발 DB 에 마이그레이션을 매 세션 적용하는 것이 안전한가 -- 확인했다.
 `db/migrations/*.sql` 에 `DROP TABLE`·`DELETE FROM`·`TRUNCATE` 는 **없다**.
+
+### 결과 — CI 네 잡이 처음으로 전부 초록 (`761f80d4`)
+
+quality · workflow-tests · api-tests · rest-tests. **S5 는 1/3 이다** -- 기준이
+"CI 에서 3회 연속"이므로 한 번으로 충족을 선언하지 않는다. `pytest-randomly`
+때문에 남은 두 번은 같은 순서의 반복이 아니라 **서로 다른 순서**이고, 그것이
+이 기준이 원래 재려던 것이다.
