@@ -2897,3 +2897,65 @@ for subq in result.proposed_subquestions:  # M3 연기: 로깅만
 D54~D62 가 그 압박과 싸운 기록이다.
 
 게이트: **2517 passed / 16 skipped / 0 failed** (무작위 순서, 신규 10건).
+
+## D66. 테스트 DB 부트스트랩이 `db/*.sql` 을 적용한다 (2026-08-14)
+
+D64 가 CI 범위를 넓히자 세 건이 깨졌다(`create_conversation ... does not
+exist`). 그때 그 **저장 함수 하나만** 떼어 만들었더니 다음 CI 는 한 층 아래에서
+죽었다 -- `relation "conversations" does not exist`. 그것을 고치니 또 한 층
+아래였다 -- `column "visibility" does not exist`(마이그레이션 008).
+
+세 번의 실패가 같은 하나를 가리킨다. **`db_manager.initialize()` 는
+`Base.metadata.create_all` 로 ORM 모델만 만들고, 테스트 부트스트랩은 `db/` 의
+SQL 을 한 번도 적용한 적이 없다.** 채팅 스키마는 ORM 모델이 아니다.
+
+### 왜 이제껏 초록이었나 -- 두 겹의 은폐
+
+1. **정리 픽스처가 삼켰다.** conftest 의 `except Exception: print(...)` 안에서
+   `DELETE FROM conversations` 가 CI 매 테스트마다 조용히 실패하고 있었다.
+2. **개발 기계에는 손으로 적용해 둔 스키마가 있었다.** `db/README.md` 가 psql
+   명령을 적어 두고 사람이 실행하는 방식이다.
+
+즉 이 격차는 **CI 범위를 넓히기 전까지 관측될 수 없었다.** `.env` 의 실제 API
+키를 읽던 테스트들과 같은 부류다 -- 테스트가 환경을 **정하지 않고 읽는다**.
+
+### 결정
+
+| 대상 | 조치 |
+|---|---|
+| `tests/conftest.py` | `chat_system.sql` + `db/migrations/*.sql` 를 세션당 한 번 적용. **스키마 적용 실패는 삼키지 않는다**(DELETE 만 관용) |
+| `db/chat_system.sql` | 인덱스 28개 → `IF NOT EXISTS`, 트리거 6개 → `OR REPLACE`. 파일의 나머지는 처음부터 멱등했다 |
+| `neos/database/connection.py` | `create_all` 직전에 `neos.database.models` 임포트 |
+| CI 워크플로 | `CREATE EXTENSION vector` 인라인 3벌 → `scripts/enable_db_extensions.py`(`db/init.sql` 에서 읽는다). `pg_trgm` 이 빠져 있었다 |
+| `tests/test_database_schema_bootstrap.py` | 신규 3건 |
+
+`create_all` 앞의 임포트가 별건처럼 보이지만 아니다. `Base.metadata` 는 **모델
+모듈이 임포트된 만큼만** 채워져 있어서, 신선한 DB 로 이 테스트들만 돌리면
+테이블이 하나도 안 만들어지고 **조용히 성공한다**. 지금까지 안 터진 이유는 다른
+코드가 우연히 먼저 임포트했기 때문이고 그건 보장이 아니다.
+
+### 가드가 검사하는 것
+
+`test_every_table_the_cleanup_fixture_deletes_from_exists` 는 정리 픽스처의 SQL
+을 **conftest 소스에서 읽어** 그 테이블이 전부 있는지 본다. 목록을 손으로 들면
+CI 커버리지 가드·Ruff 파일 목록과 똑같이 낡는다. 대소문자로 구분한다 -- SQL 은
+`FROM`, 파이썬 임포트는 `from`.
+
+### 범위 -- 반쯤 고치고 다 고쳤다고 하지 않는다
+
+이것은 **배포 스키마의 재현이 아니다.** 신선한 DB 에 마이그레이션 44개를 순서대로
+적용하면 7개가 실패한다:
+
+| 사유 | 건수 |
+|---|---|
+| 다른 `db/*.sql` 이 만드는 테이블에 기댄다 (`hyper_research_reports`·`message_embeddings`) | 4 |
+| pgvector 가 3072차원에 hnsw 인덱스를 못 만든다 | 1 |
+| 스크립트 하나가 곧 암묵적 트랜잭션이라 `CONCURRENTLY`·자체 `BEGIN` 을 못 쓴다 | 2 |
+
+그 7개는 테스트가 건드리지 않으므로 건너뛰고 `skipped_migrations` 에 남겨
+출력한다. **배포 스키마 전체가 신선한 DB 에서 재현되지 않는다는 것은 별개의
+실제 문제**이고 로드맵 §5.2.25 에 적었다.
+
+검증: 빈 DB 를 만들어 CI 상태를 재현하고(`neos_ci_repro`) 확장 → 부트스트랩 →
+대상 테스트 7건 통과를 확인했다. 중간 단계 두 번의 실패(`users`, `visibility`)도
+같은 방법으로 관측한 것이다.

@@ -80,14 +80,10 @@ jobs:
           enable-cache: true
           version: "0.11.16"
       - run: uv sync --frozen --group dev
-      - name: Enable pgvector
-        run: >-
-          uv run --frozen python -c
-          "import psycopg2;
-          connection = psycopg2.connect(host='localhost', dbname='neos_db', user='neos', password='neos_password');
-          connection.autocommit = True;
-          connection.cursor().execute('CREATE EXTENSION IF NOT EXISTS vector');
-          connection.close()"
+      # db/init.sql 이 요구하는 확장 전부(vector + pg_trgm). 목록을 여기 적으면
+      # 확장이 늘어날 때 낡으므로 스크립트가 그 파일에서 읽는다.
+      - name: Enable database extensions
+        run: uv run --frozen python scripts/enable_db_extensions.py
       - run: uv run --frozen pytest tests/workflow -q
 
   api-tests:
@@ -116,14 +112,10 @@ jobs:
           enable-cache: true
           version: "0.11.16"
       - run: uv sync --frozen --group dev
-      - name: Enable pgvector
-        run: >-
-          uv run --frozen python -c
-          "import psycopg2;
-          connection = psycopg2.connect(host='localhost', dbname='neos_db', user='neos', password='neos_password');
-          connection.autocommit = True;
-          connection.cursor().execute('CREATE EXTENSION IF NOT EXISTS vector');
-          connection.close()"
+      # db/init.sql 이 요구하는 확장 전부(vector + pg_trgm). 목록을 여기 적으면
+      # 확장이 늘어날 때 낡으므로 스크립트가 그 파일에서 읽는다.
+      - name: Enable database extensions
+        run: uv run --frozen python scripts/enable_db_extensions.py
       - run: uv run --frozen pytest tests/api -q
 
   # tests/ 에서 위 두 잡이 안 도는 나머지 전부. 셋을 합치면 `pytest tests/`
@@ -160,14 +152,10 @@ jobs:
           enable-cache: true
           version: "0.11.16"
       - run: uv sync --frozen --group dev
-      - name: Enable pgvector
-        run: >-
-          uv run --frozen python -c
-          "import psycopg2;
-          connection = psycopg2.connect(host='localhost', dbname='neos_db', user='neos', password='neos_password');
-          connection.autocommit = True;
-          connection.cursor().execute('CREATE EXTENSION IF NOT EXISTS vector');
-          connection.close()"
+      # db/init.sql 이 요구하는 확장 전부(vector + pg_trgm). 목록을 여기 적으면
+      # 확장이 늘어날 때 낡으므로 스크립트가 그 파일에서 읽는다.
+      - name: Enable database extensions
+        run: uv run --frozen python scripts/enable_db_extensions.py
       - run: >-
           uv run --frozen pytest tests
           --ignore=tests/workflow --ignore=tests/api -q
