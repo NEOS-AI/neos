@@ -5,6 +5,12 @@ import pathlib
 import subprocess
 import sys
 
+import pytest
+
+# 파일과 워크플로 YAML 만 읽는다. DB 는 필요 없고, `quality` 잡에는 postgres
+# 서비스가 없다 -- 표시하지 않으면 autouse 정리 픽스처가 연결을 시도한다.
+pytestmark = pytest.mark.no_db
+
 
 def _run_bootstrap(code: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()

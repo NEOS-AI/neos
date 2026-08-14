@@ -126,6 +126,10 @@ async def cleanup_test_data(request):
                 await db_manager.initialize()
         except Exception as e:
             print(f"DB init error: {e}")
+            # 엔진 객체는 `create_all` 이 터지기 **전에** 만들어진다. 그대로 두면
+            # 다음 호출이 `engine is None` 을 거짓으로 보고 초기화를 건너뛴 채
+            # 스키마 적용으로 직행한다 -- DB 가 없는 잡(quality)에서 그게 터졌다.
+            db_manager.engine = None
             return
 
         # 스키마 적용 실패는 **삼키지 않는다**. 아래 DELETE 들은 best-effort 라
