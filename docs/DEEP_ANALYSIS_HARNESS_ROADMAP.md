@@ -18,7 +18,7 @@
 | [coding_agent_task_resume.md](coding_agent_task_resume.md) | 코딩 에이전트 계보와 재개 절차 (트랙 E의 상세 원장) |
 | [TODO_260729.md](TODO_260729.md) | 미해결 백로그 원장 — A·B·C·D·E·F·G 계열 실측 수치 |
 | [FE_AUDIT_260717.md](FE_AUDIT_260717.md) | 프론트엔드 감사 — §6이 job 서비스 전환 준비도를 판정 (트랙 C의 기준선) |
-| `neos/workflow/deep_analysis/DECISIONS.md` | 결정 원장 D1–D25 |
+| `neos/workflow/deep_analysis/DECISIONS.md` | 결정 원장 D1–D66 |
 
 > ⚠️ **진행 상황의 근거 규칙.** 플랜 문서(`docs/superpowers/plans/*`)의 체크박스는
 > 43개 전부 `- [x]`가 0개다. **신뢰하지 말 것.** 실제 진행은 (1) git 커밋,
@@ -1909,6 +1909,7 @@ S1–S6 전부 충족 후 `deep_analysis.enabled` 기본값 전환을 **별도 �
 | **D-7** | 네이티브 SDK 채택 범위 (§11.4) | **전송(transport)만** / 에이전트 루프까지 / 전면 위임 | 권고: **전송만**. 루프까지 위임하면 모델 선택·재시도가 SDK 내부로 들어가 §4.2의 "경계마다 한 번만 해석"·"크로스 프로바이더 폴백 금지"가 깨진다 — 트랙 B의 I1–I6을 되돌리는 셈이다 |
 | **D-8** | 콜렉터 정본 스키마 (§11.1) | `LLMCallRecord` 확장 / 계층별 어댑터 3종 유지 / OTel span 대체 | 권고: **`LLMCallRecord` 정본 + 계층 어댑터**. span 대체는 관찰가능성엔 맞지만 데이터셋 용도(재학습·평가 코퍼스)에는 부적합하다 |
 | **D-9** | langgraph 교체를 이 문서에서 다룰 것인가 (§11.3 D3b) | **별도 설계 문서로 분리** / W10으로 유지 | 권고: **분리**. `graph.py` 2,259줄 + 체크포인터 991줄로, 나머지 아홉 웨이브를 합친 것과 규모가 비슷하다 |
+| **D-10** | 트랙 F 서브에이전트에게 쓰기 권한을 주는가 (§13.6 F-1) | 읽기 전용(진단·판정)만 / 구현자까지 | 권고: **읽기 전용부터**. 진단자는 라이브 표본 없이 백테스트로 검증되지만(§13.3 F1), 구현자의 실패는 조용하고 예산·클램프 결합(D54~D62)을 건드린다. F-2(트랙 E와의 통합)·F-3(사이클당 표본 예산)은 F1 결과를 보고 정한다 |
 
 ---
 
@@ -2544,7 +2545,7 @@ D51이 이 트랙의 존재 이유이자 경고다. 나는 "재시도가 예산�
 - 트랙 E 원장: `.worktrees/managed-sandbox-control-plane/.superpowers/sdd/2026-07-25-managed-sandbox-control-plane/progress.md`
   (⚠️ 이중 기록 — CA4), 플랜 `docs/superpowers/plans/2026-07-25-managed-sandbox-control-plane.md`
 - 코딩 에이전트 설계: [NEOS_CODING.md](NEOS_CODING.md)
-- 결정 원장: `neos/workflow/deep_analysis/DECISIONS.md` (D1–D23)
+- 결정 원장: `neos/workflow/deep_analysis/DECISIONS.md` (D1–D66)
 - 설정·모델 정본: [CONFIGURATION.md](CONFIGURATION.md) — Model Catalog / Model Routing 절
 - L5 운영: [deep_analysis_l5.md](deep_analysis_l5.md)
 - 전체 로드맵: [ROADMAP.md](ROADMAP.md) — Loop 아키텍처 통합 3단계
