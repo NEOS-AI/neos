@@ -1507,7 +1507,8 @@ class AppConfig(StrictConfigModel):
         ):
             raise ValueError("Sandbox command timeout exceeds maximum lifetime.")
         if (
-            sandbox.managed.claim_lease_seconds
+            sandbox.managed.enabled
+            and sandbox.managed.claim_lease_seconds
             <= _CLAIM_LEASE_CREATE_STEPS * sandbox.lifecycle.create_timeout_sec
         ):
             raise ValueError(

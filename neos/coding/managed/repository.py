@@ -466,11 +466,20 @@ class PostgresManagedSandboxRepository:
         WHERE 절에서 원자적으로 판정하므로, 실패 시에만 원인 구분용으로
         같은 트랜잭션 안에서 한 번 더 읽는다 -- 소유권 판정 자체는 여전히
         이 UPDATE 하나가 한다.
+
+        요청한 `lease_seconds`가 `absolute_expires_at`을 넘기면 SQL에서
+        `LEAST()`로 클램프한다 -- 이게 바로 이 설계가 존재하는 이유인, 수명
+        막바지에 좌초된 `ALLOCATING`을 회수하는 상황이다. 클램프하지 않으면
+        045의 CHECK 제약(`lease_expires_at <= absolute_expires_at`)에 걸려
+        원시 `IntegrityError`가 새고, 아무도 리스를 쥐고 있지 않은데도
+        `StaleManagedSandboxLease`처럼 재시도를 유도하는 오해의 소지가 있는
+        예외를 던지게 된다. 반환하는 리스의 `expires_at`도 클램프된 값을
+        그대로 반영해야 리스 객체가 실제 만료 시점을 정직하게 말한다.
         """
         _require_timezone_aware("claim time", now)
         if lease_seconds < 1:
             raise ValueError("lease_seconds_invalid")
-        expires_at = now + timedelta(seconds=lease_seconds)
+        requested_expires_at = now + timedelta(seconds=lease_seconds)
         async with await self._session_factory() as session:
             async with session.begin():
                 row = (
@@ -479,7 +488,8 @@ class PostgresManagedSandboxRepository:
                             """
                             UPDATE coding_managed_sandboxes
                                SET fencing_token = fencing_token + 1,
-                                   lease_expires_at = :expires_at,
+                                   lease_expires_at =
+                                       LEAST(:expires_at, absolute_expires_at),
                                    version = version + 1,
                                    updated_at = :now
                              WHERE allocation_id = :allocation_id
@@ -488,12 +498,12 @@ class PostgresManagedSandboxRepository:
                                    lease_expires_at IS NULL
                                    OR lease_expires_at <= :now
                                )
-                         RETURNING fencing_token
+                         RETURNING fencing_token, lease_expires_at
                             """
                         ),
                         {
                             "allocation_id": allocation_id,
-                            "expires_at": expires_at,
+                            "expires_at": requested_expires_at,
                             "now": now,
                             "claimable_states": list(_CLAIMABLE_STATES),
                         },
@@ -505,7 +515,7 @@ class PostgresManagedSandboxRepository:
             allocation_id=allocation_id,
             worker_id=worker_id,
             fencing_token=row.fencing_token,
-            expires_at=expires_at,
+            expires_at=row.lease_expires_at,
         )
 
     async def commit_state(

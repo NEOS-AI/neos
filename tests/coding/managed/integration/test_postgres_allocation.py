@@ -18,13 +18,22 @@ from neos.coding.managed.repository import PostgresManagedSandboxRepository
 NOW = datetime(2026, 8, 11, 12, tzinfo=UTC)
 
 
-async def _seed_admitted_allocation(session_factory, allocation_id: str) -> None:
+async def _seed_admitted_allocation(
+    session_factory,
+    allocation_id: str,
+    *,
+    absolute_expires_at: datetime = NOW + timedelta(hours=1),
+) -> None:
     """`admitted` 상태의 할당 하나를 심는다.
 
     `coding_tasks` -> `coding_runs` -> `coding_sandbox_admissions` ->
     `coding_managed_sandboxes` 순으로 넣는다 (`test_postgres_admission.py`의
     `_seed_runs()`와 같은 스타일). `state='admitted'`, `generation=1`,
     `fencing_token=1`, `version=1`로 시작해 claim이 그 위에서 증가시킨다.
+
+    `absolute_expires_at`은 기본으로 1시간 뒤다 -- 대부분의 테스트가 클레임
+    만료를 신경 쓰지 않기 때문이다. 클램프 동작을 확인하는 테스트는 이걸
+    가깝게 줘서 요청한 lease_seconds가 absolute_expires_at을 넘기게 만든다.
     """
     task_id = f"ct_{uuid4().hex}"
     run_id = f"cr_{uuid4().hex}"
@@ -88,7 +97,7 @@ async def _seed_admitted_allocation(session_factory, allocation_id: str) -> None
                     "region": "local",
                     "policy_version": "managed-v1",
                     "reservation_id": f"rsv_{allocation_id}",
-                    "reservation_expires_at": NOW + timedelta(hours=1),
+                    "reservation_expires_at": absolute_expires_at,
                     "now": NOW,
                 },
             )
@@ -119,7 +128,7 @@ async def _seed_admitted_allocation(session_factory, allocation_id: str) -> None
                     "run_id": run_id,
                     "provider": "fake",
                     "region": "local",
-                    "absolute_expires_at": NOW + timedelta(hours=1),
+                    "absolute_expires_at": absolute_expires_at,
                     "now": NOW,
                 },
             )
@@ -174,6 +183,34 @@ async def test_a_stale_token_cannot_commit_after_lease_takeover(
         fresh, result, encrypted_ref=b"cipher", now=later
     )
     assert committed.state is ManagedSandboxState.ACTIVE
+
+
+@pytest.mark.integration
+async def test_claim_near_absolute_expiry_clamps_instead_of_violating_the_check(
+    managed_postgres_session_factory,
+) -> None:
+    """045의 CHECK 제약(`lease_expires_at <= absolute_expires_at`)을 실제
+    Postgres에서 검증한다.
+
+    좌초된 `ALLOCATING`을 수명 막바지에 회수하는 게 바로 이 설계가 존재하는
+    이유다 -- `absolute_expires_at`을 15초 뒤로 심어두고 300초짜리 리스를
+    요청하면, 클램프가 없으면 원시 `IntegrityError`가 새 나간다.
+    """
+    absolute_expires_at = NOW + timedelta(seconds=15)
+    await _seed_admitted_allocation(
+        managed_postgres_session_factory,
+        "msa_near_expiry",
+        absolute_expires_at=absolute_expires_at,
+    )
+    repo = PostgresManagedSandboxRepository(managed_postgres_session_factory)
+
+    lease = await repo.claim_allocation(
+        "msa_near_expiry", "worker_1", now=NOW, lease_seconds=300
+    )
+
+    assert lease.expires_at == absolute_expires_at
+    plan = await repo.read_allocation_plan("msa_near_expiry")
+    assert plan.allocation.lease_expires_at == absolute_expires_at
 
 
 @pytest.mark.integration

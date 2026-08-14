@@ -623,6 +623,31 @@ async def test_claim_allocation_only_takes_a_free_or_expired_lease() -> None:
     assert lease.worker_id == "worker_1"
 
 
+async def test_claim_allocation_clamps_lease_to_the_absolute_expiry() -> None:
+    """수명 막바지에 좌초된 할당을 회수할 때, 요청한 lease_seconds가
+    absolute_expires_at을 넘기더라도 045의 CHECK 제약
+    (`lease_expires_at <= absolute_expires_at`)을 어기면 안 된다.
+
+    fake 세션은 SQL이 실제로 `LEAST()`를 계산하지 않으므로, 이 테스트는
+    (1) SQL 문 자체가 `LEAST(:expires_at, absolute_expires_at)`로
+    조립됐는지, (2) 리포지토리가 요청값이 아니라 RETURNING된
+    `lease_expires_at`을 그대로 반환하는지를 확인한다 -- 클램프된 값을
+    돌려주지 않으면 리스 객체가 실제 만료 시점을 정직하게 말하지 못한다.
+    """
+    clamped_expires_at = NOW + timedelta(seconds=45)
+    session = FakeSession(
+        [FakeResult(row=_row(fencing_token=2, lease_expires_at=clamped_expires_at))]
+    )
+    repo = repository_with(session)
+
+    lease = await repo.claim_allocation("msa_1", "worker_1", now=NOW, lease_seconds=300)
+
+    statement, params = session.statements[-1]
+    assert "LEAST(:expires_at, absolute_expires_at)" in statement
+    assert params["expires_at"] == NOW + timedelta(seconds=300)
+    assert lease.expires_at == clamped_expires_at
+
+
 async def test_claim_allocation_raises_when_a_live_lease_holds() -> None:
     # 첫 결과 = 원자적 UPDATE가 0행(리스가 살아 있어 걸러짐), 두 번째 결과 =
     # 실패 원인을 구분하려고 같은 트랜잭션에서 한 번 더 읽는 진단 SELECT.

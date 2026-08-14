@@ -180,26 +180,52 @@ def test_claim_lease_must_outlast_the_worst_case_create_sequence() -> None:
 
     짧으면, 아직 create() 를 진행 중인 살아있는 소유자를 죽은 것으로 오판해
     회수한다 -- 같은 idempotency_key 로 컨테이너가 두 개 생기는 사고로 이어진다.
+    관리형 sandbox 를 쓰지 않는 배포에는 이 불변식이 무의미하므로
+    `managed.enabled` 가 켜져 있을 때만 적용된다.
     """
+    key_b64 = base64.b64encode(bytes(32)).decode("ascii")
     with pytest.raises(ValidationError):
         AppConfig.model_validate(
             {
                 "sandbox": {
                     "lifecycle": {"create_timeout_sec": 30},
-                    "managed": {"claim_lease_seconds": 1},
-                }
+                    "managed": {"enabled": True, "claim_lease_seconds": 1},
+                },
+                "secrets": {"managed_provider_reference_key": key_b64},
             }
         )
 
 
 def test_claim_lease_that_comfortably_outlasts_create_is_accepted() -> None:
+    key_b64 = base64.b64encode(bytes(32)).decode("ascii")
     config = AppConfig.model_validate(
         {
             "sandbox": {
                 "lifecycle": {"create_timeout_sec": 30},
-                "managed": {"claim_lease_seconds": 300},
-            }
+                "managed": {"enabled": True, "claim_lease_seconds": 300},
+            },
+            "secrets": {"managed_provider_reference_key": key_b64},
         }
     )
 
     assert config.sandbox.managed.claim_lease_seconds == 300
+
+
+def test_claim_lease_check_is_skipped_when_managed_sandbox_is_disabled() -> None:
+    """관리형 sandbox 를 쓰지 않는 배포는 이 불변식을 무시해야 한다.
+
+    `sandbox.enabled` 와 `sandbox.managed.enabled` 모두 꺼진 상태에서
+    `create_timeout_sec` 를 상한(300)까지 올려도, claim_lease_seconds 는
+    기본값 그대로 통과해야 한다 -- 이 기능을 전혀 쓰지 않는 배포가
+    막히면 안 된다.
+    """
+    config = AppConfig.model_validate(
+        {
+            "sandbox": {
+                "enabled": False,
+                "lifecycle": {"create_timeout_sec": 50},
+            }
+        }
+    )
+
+    assert config.sandbox.managed.enabled is False
