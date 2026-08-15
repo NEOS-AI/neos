@@ -14,10 +14,11 @@ from neos.utils.smart_cache_manager import smart_cache_manager
 from neos.config.settings import settings
 from neos.tools.tool_selector import tool_selector
 
-from .contracts import node_contract
+from .contracts import NODE_CONTRACTS, node_contract
 from .enums import WorkflowNode, WorkflowPathway, IntentType, AutonomyLevel
 from .state import AgentState, WorkflowConfig
 from .harness.cache_policy import should_cache_harness_result
+from .topology import END as TOPOLOGY_END, GraphTopology, START as TOPOLOGY_START
 from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationOrchestrator
 from .processors import (
     ResultProcessor,
@@ -128,6 +129,55 @@ def _mission_validation_passed(result: Dict[str, Any]) -> bool:
 def _get_priority_routing(state: AgentState) -> str | None:
     """최우선 라우팅 경로 반환. 해당 없으면 None."""
     return _PRIORITY_ROUTING_MAP.get(state.get("query_intent", ""))
+
+
+# `neos.workflow.topology` 의 START/END 는 langgraph 와 무관한 우리 자신의
+# 센티널이다 -- 오늘은 둘 다 "__start__"/"__end__" 문자열이라 우연히 같지만,
+# 그 우연에 기대지 않고 명시적으로 대응시킨다. langgraph 가 자신의 센티널
+# 값을 바꾸거나 우리 쪽 센티널이 바뀌어도 이 매핑 하나만 고치면 된다.
+_TOPOLOGY_SENTINEL_TO_LANGGRAPH: dict[str, str] = {
+    TOPOLOGY_START: START,
+    TOPOLOGY_END: END,
+}
+
+
+def build_ephemeral_workflow(
+    workflow: "MultiAgentWorkflow", topology: GraphTopology
+) -> Any:
+    """검증을 통과한 `GraphTopology` 하나를 그 자리에서 조립해 컴파일한다.
+
+    `design_graph_or_fallback` 이 승인한(=`validate_topology` 를 통과한) 토폴로지만
+    이 함수에 들어온다는 전제 위에 서 있다 -- 이 함수 자신은 재검증하지 않는다.
+
+    `NODE_CONTRACTS[name].handler` 는 언바운드 함수다 (contracts.py 의
+    `node_contract` 데코레이터가 클래스 조립 이전 시점의 원본 함수를 그대로
+    돌려주고 등록만 하기 때문에, `self` 를 쥔 바운드 메서드가 아니다). 그래서
+    `handler.__get__(workflow, type(workflow))` 로 디스크립터 프로토콜을 직접
+    호출해 주어진 `workflow` 인스턴스에 바인딩한다 -- `getattr(workflow, name)`
+    을 쓰지 않는 이유는, 노드 이름과 파이썬 메서드 이름이 항상 같지 않을 수
+    있어(예: 헬퍼 이름이 노드 이름과 다르게 지어진 경우) 계약이 쥔 핸들러
+    자체를 바인딩 대상으로 삼는 편이 더 정확하기 때문이다.
+
+    설계된 토폴로지는 정적 엣지만 갖는다 -- 조건부 엣지(`add_conditional_edges`)
+    는 이 함수의 범위 밖이다. 검증기의 "모든 경로" 분석이 조건부 엣지를 이미
+    모든 목적지로 펼쳐서 보므로, 분기가 필요한 설계는 애초에 정적 엣지로
+    표현된다(브리프의 의도적 범위 제한).
+    """
+
+    graph = StateGraph(AgentState)
+
+    for node_name in topology.nodes:
+        contract = NODE_CONTRACTS[node_name]
+        bound_handler = contract.handler.__get__(workflow, type(workflow))
+        graph.add_node(node_name, bound_handler)
+
+    for source, target in topology.edges:
+        graph.add_edge(
+            _TOPOLOGY_SENTINEL_TO_LANGGRAPH.get(source, source),
+            _TOPOLOGY_SENTINEL_TO_LANGGRAPH.get(target, target),
+        )
+
+    return graph.compile()
 
 
 class MultiAgentWorkflow:
@@ -253,6 +303,15 @@ class MultiAgentWorkflow:
         self._graph_uses_checkpointer = False
         self._orchestrator_router = OrchestratorRouter()
         self._quality_router = QualityRouter()
+        # `graph_design_enabled` 가 켜졌을 때 마지막으로 채택된 설계 토폴로지.
+        # `design_graph_or_fallback` 을 실제 질의 경로에서 호출해 이 값을
+        # 채우는 배선은 이 태스크(Task 9)의 범위 밖이다 -- 여기서는
+        # `build_ephemeral_workflow` 로 토폴로지를 실행 가능한 그래프로
+        # 조립하는 조립기만 만든다. 그래서 어떤 코드도 이 값을 대입하지
+        # 않으며, `_create_workflow_graph`/`_ensure_graph_initialized` 는
+        # 이 속성을 참조조차 하지 않는다 -- 플래그가 꺼져 있을 때는 물론
+        # 켜져 있어도, 정적 그래프 경로는 지금과 바이트 단위로 같다.
+        self._designed_topology: GraphTopology | None = None
 
 
     def _initialize_agents(self) -> Dict[str, Any]:
