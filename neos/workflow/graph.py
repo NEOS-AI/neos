@@ -1356,6 +1356,19 @@ class MultiAgentWorkflow:
         requires={"original_query", "required_agents"},
         # 추출기는 orchestrate() 자신이 읽는 6개만 보고, 두 헬퍼 안의
         # errors/query_embedding/search_results 는 보지 못한다.
+        #
+        # 이보다 더 넓은 두 번째 사각지대가 있다: `_execute_with_fallback` 이
+        # 지역 변수로 선택한 `SearchStrategy` 서브클래스 인스턴스에
+        # `strategy.execute(state, search_agents, self.agents,
+        # self.tool_selector)` 로 위임하고, `search_strategies.py`
+        # (MultiHopSearchStrategy/IterativeSearchStrategy/StandardSearchStrategy)
+        # 가 그 안에서 detected_language/query_intent/search_metadata/
+        # use_iterative_search/use_multi_hop_search/user_id 를 읽는다. `strategy`
+        # 가 런타임에 다형적으로 선택되는 지역 변수라(`self.<attr>` 형태가
+        # 아님) 추출기가 원천적으로 따라갈 수 없고, 이 계약도 이 여섯 개를
+        # 선언하지 않는다 -- 양쪽 다 놓치므로 카나리아는 조용하다. 이건 현재
+        # 추출기의 설계 한계(다형적 전략 디스패치)이지 이번 라운드에서 닫을
+        # 결함이 아니다.
         hand_curated=True,
     )
     async def _orchestrate_search_node(self, state: AgentState) -> Dict[str, Any]:
@@ -1385,11 +1398,15 @@ class MultiAgentWorkflow:
             "analysis_results",
         },
         writes={"analysis_results", "errors", "execution_steps"},
-        # required_agents/search_results 모두 orchestrate() 자신이 `state["x"]`
-        # 리터럴 서브스크립트로 읽는다 -- 없으면 즉시 KeyError. user_id/
-        # session_id/original_query 는 분석 에이전트가 하나라도 선택된 경우
-        # _create_analysis_tasks 에서 전부 리터럴 서브스크립트로 읽혀 없으면
-        # KeyError -- 다섯 다 (a) 케이스. errors/analysis_results/
+        # required_agents/search_results 는 orchestrate() 자신이 `state["x"]`
+        # 리터럴 서브스크립트로 읽는다 -- try/except 밖이라 없으면 즉시
+        # KeyError, (a) 케이스. user_id/session_id/original_query 는
+        # _create_analysis_tasks 안에서 에이전트별 `try/except Exception`
+        # (analysis_orchestrator.py:44-59)에 감싸여 읽힌다 -- 없으면
+        # KeyError가 나긴 하지만 그 자리에서 잡혀 `state["errors"]`에
+        # 추가되고 해당 에이전트의 태스크만 조용히 빠진다. 크래시가 아니라
+        # (c) 케이스: 태스크 목록이 비거나 줄어들어 "분석을 실행할 게
+        # 없습니다"로 조용히 저하된다. errors/analysis_results/
         # execution_steps 는 `_create_initial_state` 가 항상 `[]`로 초기화하는
         # 누적용 필드라 requires 에서 제외한다. query_intent 는 `.get()` 기본값
         # 경로라 제외한다.
@@ -1434,13 +1451,18 @@ class MultiAgentWorkflow:
             "generation_results",
         },
         writes={"generation_results", "errors", "execution_steps"},
-        # required_agents 는 orchestrate() 자신이 리터럴 서브스크립트로 읽는다.
+        # required_agents 는 orchestrate() 자신이 try/except 밖에서 리터럴
+        # 서브스크립트로 읽는다 -- 없으면 즉시 KeyError, (a) 케이스.
         # search_results/analysis_results/user_id/session_id/original_query 는
-        # 생성 에이전트가 하나라도 선택된 경우 _create_generation_tasks 에서
-        # 전부 리터럴 서브스크립트로 읽혀 없으면 KeyError -- (a) 케이스.
-        # errors/generation_results/execution_steps 는 `_create_initial_state`
-        # 가 항상 `[]`로 초기화하는 누적용 필드라 다른 계약과 동일하게 requires
-        # 에서 제외한다. query_intent 는 `.get()` 기본값 경로라 제외한다.
+        # _create_generation_tasks 안에서 에이전트별 `try/except Exception`
+        # (generation_orchestrator.py:44-60)에 감싸여 읽힌다 -- 없으면
+        # KeyError가 나긴 하지만 그 자리에서 잡혀 `state["errors"]`에 추가되고
+        # 해당 에이전트의 태스크만 조용히 빠진다. 크래시가 아니라 (c) 케이스:
+        # 태스크 목록이 비거나 줄어들어 "생성을 실행할 게 없습니다"로 조용히
+        # 저하된다. errors/generation_results/execution_steps 는
+        # `_create_initial_state` 가 항상 `[]`로 초기화하는 누적용 필드라 다른
+        # 계약과 동일하게 requires 에서 제외한다. query_intent 는 `.get()`
+        # 기본값 경로라 제외한다.
         requires={
             "required_agents",
             "search_results",
@@ -1577,6 +1599,18 @@ class MultiAgentWorkflow:
         },
         # 전부 `.get()` 기본값 경로 -- report/sources 가 비어 있어도 harness가
         # 낮은 점수의 verdict를 명시적으로 산출한다(침묵이 아니라 검증 결과).
+        # 위 네 함수(build_harness_contract/extract_report_text/extract_sources/
+        # extract_context)가 읽는 나머지 키(final_response, search_synthesis,
+        # search_results, generation_results, analysis_results,
+        # integrated_results, fact_check_result, quality_score,
+        # processing_time_ms, token_usage, harness_config 등)는 여기 선언하지
+        # 않았다 -- declared reads(process() 자신의 8개)가 extractor가 찾는
+        # 것과 정확히 같아서 `reads - state_keys_read(...)` 가 비어 있으므로
+        # 카나리아가 조용하다(=미검증인데 검증된 것처럼 보인다, Task 2 fix
+        # round 2가 잡아낸 그 허점). 완전한 확장은 AgentState 필드를 8개
+        # 안팎 새로 추가해야 하는 규모라 이번 라운드에서는 의도적으로 미루고
+        # hand_curated=True로만 명시한다.
+        hand_curated=True,
     )
     async def _research_harness_node(self, state: AgentState) -> Dict[str, Any]:
         """Research harness validation node."""
