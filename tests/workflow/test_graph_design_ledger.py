@@ -195,3 +195,77 @@ async def test_a_bare_exception_from_the_designer_also_falls_back() -> None:
     fallback = next(e for e in outcome.events if e.kind == "graph_design_fallback")
     assert "model client blew up" in fallback.payload["reason"]
     assert outcome.topology is None
+
+
+def _accepted_event(outcome: DesignOutcome) -> LedgerEvent:
+    return next(e for e in outcome.events if e.kind == "graph_design_accepted")
+
+
+async def test_the_accepted_payload_carries_a_stable_topology_hash() -> None:
+    """같은 설계를 두 번 승인해도 해시가 같아야 한다 -- 이 해시가 정적 run 과
+    비교할 수 있는 안정적 식별자라는 스펙 §7-5 의 요구를 고정한다."""
+
+    outcome_1 = await design_graph_or_fallback(
+        designer=FakeGraphDesigner(_valid_topology()),
+        request=_request(),
+        contracts=_contracts(),
+    )
+    outcome_2 = await design_graph_or_fallback(
+        designer=FakeGraphDesigner(_valid_topology()),
+        request=_request(),
+        contracts=_contracts(),
+    )
+    hash_1 = _accepted_event(outcome_1).payload["topology_hash"]
+    hash_2 = _accepted_event(outcome_2).payload["topology_hash"]
+    assert hash_1
+    assert hash_1 == hash_2
+
+
+async def test_reordered_edges_produce_the_same_hash() -> None:
+    """같은 그래프를 엣지 나열 순서만 다르게 제안해도 논리적으로 같은
+    토폴로지이므로 해시가 같아야 한다 -- 순서는 우연(모델이 JSON 을 낸 순서)일
+    뿐 그래프의 정체성이 아니다."""
+
+    ordered = GraphTopology(
+        nodes=("a", "b"), edges=((START, "a"), ("a", "b"), ("b", END))
+    )
+    reordered = GraphTopology(
+        nodes=("a", "b"), edges=(("b", END), ("a", "b"), (START, "a"))
+    )
+
+    outcome_ordered = await design_graph_or_fallback(
+        designer=FakeGraphDesigner(ordered), request=_request(), contracts=_contracts()
+    )
+    outcome_reordered = await design_graph_or_fallback(
+        designer=FakeGraphDesigner(reordered),
+        request=_request(),
+        contracts=_contracts(),
+    )
+
+    assert (
+        _accepted_event(outcome_ordered).payload["topology_hash"]
+        == _accepted_event(outcome_reordered).payload["topology_hash"]
+    )
+
+
+async def test_a_genuinely_different_topology_produces_a_different_hash() -> None:
+    """노드 하나가 늘거나 엣지가 다른 곳으로 이어지면 다른 그래프이므로 해시도
+    달라야 한다 -- 같은 해시만 나오는 상수 구현을 잡아낸다."""
+
+    bigger = GraphTopology(
+        nodes=("a", "b"), edges=((START, "a"), ("a", "b"), ("b", END))
+    )
+
+    outcome_small = await design_graph_or_fallback(
+        designer=FakeGraphDesigner(_valid_topology()),
+        request=_request(),
+        contracts=_contracts(),
+    )
+    outcome_bigger = await design_graph_or_fallback(
+        designer=FakeGraphDesigner(bigger), request=_request(), contracts=_contracts()
+    )
+
+    assert (
+        _accepted_event(outcome_small).payload["topology_hash"]
+        != _accepted_event(outcome_bigger).payload["topology_hash"]
+    )

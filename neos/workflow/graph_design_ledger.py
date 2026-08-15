@@ -26,6 +26,8 @@ deep_analysis 하네스는 값비싼 교훈 하나를 남겼다: **이벤트를 
 """
 
 import asyncio
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -34,6 +36,11 @@ from neos.config.settings import settings
 from neos.workflow.contracts import NodeContract
 from neos.workflow.graph_designer import DesignRequest, GraphDesigner
 from neos.workflow.topology import GraphTopology, validate_topology
+
+# sha256 다이제스트(64자) 전체를 실어 나르는 건 원장 페이로드에 과하다. 앞
+# 16자(64비트)면 우연한 충돌 확률이 무시할 만한 수준이면서도 로그에서 눈으로
+# 비교하기 좋은 짧은 식별자가 된다 -- 매직 넘버로 흩어놓지 않도록 이름을 준다.
+_TOPOLOGY_HASH_HEX_LENGTH = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,7 +151,35 @@ async def design_graph_or_fallback(
     events.append(
         LedgerEvent(
             kind="graph_design_accepted",
-            payload={"nodes": topology.nodes},
+            payload={
+                "nodes": topology.nodes,
+                "topology_hash": _topology_hash(topology),
+            },
         )
     )
     return DesignOutcome(topology=topology, events=tuple(events))
+
+
+def _topology_hash(topology: GraphTopology) -> str:
+    """토폴로지의 **논리적** 정체성을 나타내는 안정적 해시.
+
+    노드가 나열된 순서, 엣지가 나열된 순서는 우연이다 -- 설계 서브에이전트가
+    같은 그래프를 두 번 제안해도 모델이 그때그때 다른 순서로 JSON 을 낼 수
+    있다. 튜플이 도착한 순서 그대로 해시하면 논리적으로 동일한 두 설계가
+    다른 해시를 받아, 스펙 §7-5 가 원하는 "토폴로지 해시로 설계된 run 과
+    정적 run 을 비교" 가 무의미해진다. 그래서 정렬된 노드 집합과 정렬된 엣지
+    집합 위에서 계산한다.
+
+    `loop_bounds` 도 포함한다 -- 노드·엣지 집합이 완전히 같아도 반복 상한이
+    다르면 실행 시 실제로 다른 그래프다(같은 사이클이 3회로 도는 설계와 5회로
+    도는 설계는 도달 가능한 상태 공간이 다르다). 그래서 이 필드도 논리적
+    정체성의 일부로 본다.
+    """
+
+    canonical = {
+        "nodes": sorted(topology.nodes),
+        "edges": sorted(topology.edges),
+        "loop_bounds": sorted(topology.loop_bounds.items()),
+    }
+    encoded = json.dumps(canonical, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:_TOPOLOGY_HASH_HEX_LENGTH]
