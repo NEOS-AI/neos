@@ -54,6 +54,17 @@ class GraphTopology:
     # 상한이 없다" 를 표현하기 위해서만 존재한다 -- 기본값이 빈 매핑이므로
     # 이 태스크의 사이클은 전부 거부된다.
     loop_bounds: Mapping[str, int] = field(default_factory=dict)
+    # 그래프 호출자가 START 이전에 이미 채워 넣는 키 -- 어떤 노드도 쓰지 않지만
+    # 항상 존재하는 "그래프 진입 계약" 이다 (예: 사용자의 원본 질의). 어떤
+    # 노드의 `requires` 가 이 집합의 부분집합이면, 그 노드가 START 에서 바로
+    # 이어지는 경로로 들어와도(즉 아무 노드도 거치지 않아도) 위반으로 잡히지
+    # 않는다. Task 3-4 의 `_guaranteed_keys` 는 이 필드가 없던 시절 "START 를
+    # 거치는 경로는 아무것도 보장하지 않는다" 로 짰다(정확히 노드가 쓴 것만
+    # 인정) -- 그 규칙은 그래프 *내부* 에서 흐르는 키에는 여전히 맞지만, 호출자가
+    # 애초에 채워 주는 키에는 안 맞다: 그런 키를 요구하는 진입 노드가 하나만
+    # 있어도 매번 거짓 위반이 뜬다. 기본값이 빈 집합이므로 이 필드를 쓰지 않는
+    # 기존 호출자(Task 3-4 의 손으로 만든 토폴로지들)는 동작이 그대로다.
+    initial_writes: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,11 +241,14 @@ def _guaranteed_keys(
     선행 노드들의 보장 집합을 **교집합** 한다 -- 어느 한 경로에만 있는 키는
     보장이 아니다. 사이클이 있어도 수렴하도록 비-START 노드를 전체 집합으로
     낙관적으로 초기화하고 줄여 나간다(must-analysis 의 표준 형태). 선행 노드
-    중 하나라도 START 면 그 지점에서는 아무것도 보장되지 않은 상태이므로,
-    교집합 전체가 빈 집합으로 무너진다.
+    중 하나가 START 면 그 경로에서는 `topology.initial_writes` (그래프
+    호출자가 이미 채워 준 키) 만큼만 보장된다 -- 노드가 쓴 게 아니라도 이
+    키들은 항상 있다는 뜻이다. `initial_writes` 가 비어 있으면(기본값)
+    START 경로의 기여가 빈 집합이 되어 교집합 전체가 무너지는 예전 동작과
+    100% 동일하다.
     """
 
-    universe = frozenset().union(*writes.values()) if writes else frozenset()
+    universe = frozenset().union(*writes.values(), topology.initial_writes)
     incoming: dict[str, list[str]] = {n: [] for n in topology.nodes}
     for source, target in topology.edges:
         if target in incoming:
@@ -252,8 +266,8 @@ def _guaranteed_keys(
                 merged = frozenset(universe)
                 for pred in preds:
                     if pred == START:
-                        merged = frozenset()
-                        break
+                        merged &= topology.initial_writes
+                        continue
                     merged &= guaranteed.get(pred, frozenset()) | writes.get(
                         pred, frozenset()
                     )

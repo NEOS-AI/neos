@@ -175,6 +175,58 @@ def test_a_bypassable_loop_leaves_the_key_written_inside_it_unguaranteed() -> No
     assert any(v.node == "exit" and "k" in v.detail for v in violations)
 
 
+def test_a_requires_key_covered_by_initial_writes_is_satisfied_even_at_the_entry_node() -> (
+    None
+):
+    """호출자가 START 이전에 채워 주는 키는 진입 노드에서도 보장된다.
+
+    `entry` 는 START 에서 바로 이어지므로 어떤 노드도 거치지 않는다 -- 그런데도
+    `original_query` 를 요구할 수 있는 건, 그 키가 그래프 *호출자* 의 초기 상태에
+    이미 있기 때문이다(`initial_writes`).
+    """
+    contracts = {"entry": _contract("entry", requires=("original_query",))}
+    topology = GraphTopology(
+        nodes=("entry",),
+        edges=((START, "entry"), ("entry", END)),
+        initial_writes=frozenset({"original_query"}),
+    )
+    assert validate_topology(topology, contracts=contracts) == ()
+
+
+def test_initial_writes_do_not_cover_keys_outside_the_declared_set() -> None:
+    """`initial_writes` 는 선언된 키만 면제한다 -- 다른 키는 여전히 노드가 써야 한다."""
+    contracts = {"entry": _contract("entry", requires=("search_results",))}
+    topology = GraphTopology(
+        nodes=("entry",),
+        edges=((START, "entry"), ("entry", END)),
+        initial_writes=frozenset({"original_query"}),
+    )
+    violations = validate_topology(topology, contracts=contracts)
+    assert "unsatisfied_requires" in _rules(violations)
+    assert any("search_results" in v.detail for v in violations)
+
+
+def test_initial_writes_still_intersect_with_real_predecessor_guarantees() -> None:
+    """START 와 실제 노드 둘 다 선행자면, 둘의 보장을 교집합해야 한다.
+
+    `x` 는 START 직후 노드라 `k` 를 못 쓴다(`k` 는 `initial_writes` 에도 없다).
+    `n` 은 `x` 와 START 양쪽에서 오므로, `x` 경로로 들어온 실행은 `k` 를 여전히
+    못 받는다 -- `initial_writes` 가 비어 있는 키에 대해서까지 통과시켜서는 안 된다.
+    """
+    contracts = {
+        "x": _contract("x", writes=("other_key",)),
+        "n": _contract("n", requires=("k",)),
+    }
+    topology = GraphTopology(
+        nodes=("x", "n"),
+        edges=((START, "x"), ("x", "n"), (START, "n"), ("n", END)),
+        initial_writes=frozenset({"other_key"}),
+    )
+    violations = validate_topology(topology, contracts=contracts)
+    assert "unsatisfied_requires" in _rules(violations)
+    assert any(v.node == "n" and "k" in v.detail for v in violations)
+
+
 def test_an_unbypassable_loop_guarantees_the_key_written_inside_it() -> None:
     """우회 경로가 없으면, 루프 안에서 쓰는 키는 루프 뒤 노드에서 보장된다.
 
