@@ -205,6 +205,13 @@ class AgentState(TypedDict):
     final_response: Optional[str]
     response_metadata: Optional[Dict[str, Any]]
 
+    # ResponseGenerator._apply_citations 가 읽는 인용 스타일 옵션. 여러
+    # 호출자가 이미 `state.get("citation_style"/"citation_only_cited")` 로
+    # 읽고 있었으나 TypedDict 선언이 누락돼 있었다 (Task 2 fix round 1,
+    # 코드 리뷰가 response_generator.py 전체 재감사로 발견).
+    citation_style: Optional[str]
+    citation_only_cited: Optional[bool]
+
     # 메타데이터 및 에러 처리
     execution_start: datetime
     execution_steps: List[Dict[str, Any]]

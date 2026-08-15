@@ -26,10 +26,13 @@ from dataclasses import dataclass
 
 from neos.workflow.enums import WorkflowNode
 
-# 위임 체인을 몇 단계까지 따라갈지의 상한. 1단계(노드→오케스트레이터)면 이
-# 저장소의 실제 위임 깊이는 대부분 커버된다. 그 이상은 서로 다른 클래스
-# 그래프로 계속 번져 나가 정적 추적의 신뢰도가 급격히 떨어지므로, 여유를 두는
-# 선에서 3으로 고정한다 (매직넘버로 흩어놓지 않기 위한 이름 있는 상수).
+# 위임 체인을 따라 함수 소스를 몇 개까지 훑을지의 상한 (깊이 0 = 노드 핸들러
+# 자신, 1 = 첫 위임 대상, ... ). 1단계(노드→오케스트레이터)면 이 저장소의
+# 실제 위임 깊이는 대부분 커버된다. 그 이상은 서로 다른 클래스 그래프로 계속
+# 번져 나가 정적 추적의 신뢰도가 급격히 떨어지므로, 여유를 두는 선에서 3으로
+# 고정한다 (매직넘버로 흩어놓지 않기 위한 이름 있는 상수). `_state_keys_read`
+# 는 `depth >= MAX_DELEGATE_DEPTH` 에서 멈추므로 정확히 함수 3개(깊이 0,1,2)
+# 까지만 소스를 훑는다 -- 이름이 약속하는 숫자와 실제 스캔 횟수를 맞춘다.
 MAX_DELEGATE_DEPTH = 3
 
 
@@ -217,7 +220,7 @@ def _resolve_class(cls: type, class_name: str) -> type | None:
 def _state_keys_read(
     fn: Callable, owner: type | None, depth: int, visited: set[int]
 ) -> set[str]:
-    if id(fn) in visited or depth > MAX_DELEGATE_DEPTH:
+    if id(fn) in visited or depth >= MAX_DELEGATE_DEPTH:
         return set()
     visited.add(id(fn))
 

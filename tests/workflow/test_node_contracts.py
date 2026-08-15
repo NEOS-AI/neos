@@ -87,14 +87,22 @@ def test_declared_reads_cover_what_the_source_actually_reads(name: str) -> None:
 def test_a_contract_the_extractor_cannot_reach_is_marked_as_hand_curated(
     name: str,
 ) -> None:
-    """추출기가 아무 키도 못 뽑았는데 reads 가 비어 있지 않으면, 그 계약의 드리프트
-    가드는 **작동하지 않는다.** 조용히 통과시키지 말고 손으로 큐레이션했다고 명시하게 한다.
+    """reads 중 추출기가 소스에서 확인하지 못하는 키가 하나라도 있으면, 그 계약의
+    드리프트 가드는 그 키에 대해서는 **작동하지 않는다.** 조용히 통과시키지 말고
+    손으로 큐레이션했다고 명시하게 한다.
 
-    Task 1 리뷰가 변조 테스트로 증명한 구멍이다 -- reads 를 빈 집합으로 바꿔도 통과했다.
+    Task 1 리뷰가 변조 테스트로 증명한 구멍이다 -- reads 를 빈 집합으로 바꿔도
+    통과했다. 처음 이 테스트는 `reads` 전체가 안 보일 때만(완전 실명) 걸렸는데,
+    그러면 9개 중 4개만 보여도 통과해 나머지 5개가 미검증인 채로 숨었다
+    (Task 2 fix round 1, 코드 리뷰가 잡아냄). 그래서 부분 실명 -- `reads` 의
+    일부만 추출기 시야 밖에 있는 경우 -- 도 걸리도록 `reads - state_keys_read(...)`
+    가 비어 있는지로 판정한다.
     """
     contract = NODE_CONTRACTS[name]
-    if contract.reads and not state_keys_read(contract.handler):
+    unverified = contract.reads - state_keys_read(contract.handler)
+    if unverified:
         assert contract.hand_curated, (
-            f"{name}: 추출기가 소스에서 키를 못 찾았다. 가드가 공허하므로 "
+            f"{name}: 추출기가 다음 read를 소스에서 확인하지 못했다: "
+            f"{sorted(unverified)}. 그 키들에는 드리프트 가드가 공허하므로 "
             f"hand_curated=True 로 명시하고 근거를 주석에 남길 것"
         )

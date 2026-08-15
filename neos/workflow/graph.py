@@ -774,6 +774,15 @@ class MultiAgentWorkflow:
             "detected_language",
             "query_intent",
             "execution_steps",
+            # thinking_strategy/query_embedding 는 classify_query() 자신이
+            # 아니라 같은 클래스의 헬퍼 `_attach_thinking_strategy`/
+            # `_generate_embedding` (neos/workflow/utils/query_classifier.py:
+            # 209,447,455-458) 안에서 읽고 쓴다 -- classify_query 안에서 두
+            # 갈래(LLM/keyword fallback) 모두 무조건 호출한다. 같은 인스턴스의
+            # 다른 메서드 호출이라 추출기가 따라가지 못해 재감사(Task 2 fix
+            # round 1)로 찾아 손으로 채웠다.
+            "thinking_strategy",
+            "query_embedding",
         },
         writes={
             "detected_language",
@@ -783,12 +792,17 @@ class MultiAgentWorkflow:
             "needs_ui",
             "template_id",
             "template_config",
+            "thinking_strategy",
+            "query_embedding",
         },
         # original_query 가 없으면 `state["original_query"]` 에서 즉시 KeyError --
         # 분류할 대상 자체가 없으므로 이 노드의 실행이 무의미하다.
         # refined_query/template_id/conversation_context 는 없어도 의미 있는
         # 기본 동작(원본 쿼리 사용, 템플릿 자동선택, 컨텍스트 보강 생략)으로 진행한다.
         requires={"original_query"},
+        # 추출기는 classify_query() 자신이 읽는 8개만 보고, 위 두 헬퍼 안의
+        # thinking_strategy/query_embedding 은 보지 못한다.
+        hand_curated=True,
     )
     async def _classify_query_node(self, state: AgentState) -> Dict[str, Any]:
         """쿼리 분류 노드"""
@@ -1043,6 +1057,12 @@ class MultiAgentWorkflow:
             "autonomy_level",
             "original_query",
             "query_intent",
+            # required_agents 는 plan() 자신이 아니라 같은 클래스의 헬퍼
+            # `_build_plan`/`_mission_type_for_state`
+            # (neos/workflow/mission/planner.py:96,240) 안에서 읽힌다 -- 같은
+            # 인스턴스의 다른 메서드 호출이라 추출기가 따라가지 못해
+            # 재감사(Task 2 fix round 1)로 찾아 손으로 채웠다.
+            "required_agents",
         },
         writes={
             "mission_id",
@@ -1061,6 +1081,9 @@ class MultiAgentWorkflow:
         # original_query 가 없으면 예외는 안 나지만 각 MissionTask.inputs가
         # 빈 쿼리로 채워져 mission_plan 전체가 조용히 무의미해진다 -- (c) 케이스.
         requires={"original_query"},
+        # 추출기는 plan() 자신이 읽는 5개만 보고, 두 헬퍼 안의 required_agents
+        # 는 보지 못한다.
+        hand_curated=True,
     )
     async def _mission_planner_node(self, state: AgentState) -> Dict[str, Any]:
         """Mission Runtime: MissionPlan과 ValidationContract 생성."""
@@ -1143,6 +1166,15 @@ class MultiAgentWorkflow:
             "validation_contract",
             "harness_verdict",
             "mission_id",
+            # execution_steps/quality_feedback 는 validate() 자신이 아니라
+            # 같은 클래스의 헬퍼 `_ensure_quality_score`
+            # (neos/workflow/mission/validators.py:113-116) 안에서 읽힌다 --
+            # quality_score 가 이미 있으면(무료 검증 재사용 경로) 그 두 값을
+            # 그대로 전달하려고 참조한다. 같은 인스턴스의 다른 메서드 호출이라
+            # 추출기가 따라가지 못해 재감사(Task 2 fix round 1)로 찾아 손으로
+            # 채웠다.
+            "execution_steps",
+            "quality_feedback",
         },
         writes={
             "validator_runs",
@@ -1156,6 +1188,10 @@ class MultiAgentWorkflow:
         # required_sources=0/min_quality=0.0 으로 완화되어 "통과"로 판정된다
         # (의도된 완화 동작, quality_validator 위임에서 quality_score를 직접
         # 계산해 보정하므로 무의미한 침묵이 아니다).
+        # 추출기는 validate() 자신과 위임된 ContractCoverageValidator.validate
+        # 가 읽는 9개만 보고, _ensure_quality_score 안의 execution_steps/
+        # quality_feedback 은 보지 못한다.
+        hand_curated=True,
     )
     async def _mission_validator_node(self, state: AgentState) -> Dict[str, Any]:
         """Mission Runtime: ValidationContract 기반 검증."""
@@ -1298,6 +1334,16 @@ class MultiAgentWorkflow:
             # `state["execution_steps"].append(...)` 로 직접 건드린다 (Task 2:
             # 위임 추적을 켜기 전에는 보이지 않던 read).
             "execution_steps",
+            # errors/query_embedding/search_results 는 orchestrate() 자신이
+            # 아니라 같은 클래스의 헬퍼 `_augment_with_cache_hybrid`(query_embedding
+            # 읽기, search_results 에 append)/`_execute_with_fallback`(errors 에
+            # append) 안에서 읽힌다. 두 헬퍼 모두 orchestrate() 가 무조건 또는
+            # 정상 경로에서 호출한다 -- 같은 인스턴스의 다른 메서드 호출이라
+            # 추출기가 따라가지 못해 재감사(Task 2 fix round 1)로 찾아 손으로
+            # 채웠다.
+            "errors",
+            "query_embedding",
+            "search_results",
         },
         writes={"search_results", "search_metadata", "search_synthesis"},
         # original_query 가 없으면 `state["original_query"]` 에서 즉시 KeyError.
@@ -1308,6 +1354,9 @@ class MultiAgentWorkflow:
         # conversation_context/query_classification/session_id 는 없어도 각각
         # 컨텍스트 보강 생략·경고 로그·빈 문자열 기본값으로 의미 있게 진행한다.
         requires={"original_query", "required_agents"},
+        # 추출기는 orchestrate() 자신이 읽는 6개만 보고, 두 헬퍼 안의
+        # errors/query_embedding/search_results 는 보지 못한다.
+        hand_curated=True,
     )
     async def _orchestrate_search_node(self, state: AgentState) -> Dict[str, Any]:
         """검색 오케스트레이션 노드"""
@@ -1315,12 +1364,45 @@ class MultiAgentWorkflow:
 
     @node_contract(
         node=WorkflowNode.ANALYSIS_ORCHESTRATOR,
-        reads={"required_agents", "search_results", "execution_steps"},
+        reads={
+            "required_agents",
+            "search_results",
+            "execution_steps",
+            # 아래는 orchestrate() 자신이 아니라 같은 클래스의 헬퍼
+            # `_create_analysis_tasks`/`_process_analysis_results`
+            # (neos/workflow/orchestrators/analysis_orchestrator.py:49-54,59,
+            # 89,107,110) 안에서 리터럴 서브스크립트로 읽힌다. 추출기는
+            # `self.<attr>.<method>` 형태만 따라가므로(같은 인스턴스의 다른
+            # 메서드 호출은 추적 밖) 소스를 직접 읽어 손으로 채웠다 --
+            # GENERATION_ORCHESTRATOR 계약에서 같은 부류의 누락이 코드 리뷰에
+            # 걸린 뒤(Task 2 fix round 1), 구조가 동일한 이 계약도 재감사해
+            # 같은 문제를 확인했다.
+            "user_id",
+            "session_id",
+            "original_query",
+            "errors",
+            "query_intent",
+            "analysis_results",
+        },
         writes={"analysis_results", "errors", "execution_steps"},
-        # required_agents/search_results 모두 `state["x"]` 리터럴 서브스크립트로
-        # 읽는다 -- 없으면 즉시 KeyError. (분석 에이전트가 없거나 검색 결과가
-        # 없으면 정상적으로 skip 하지만, 그 판단 자체가 두 키의 존재를 전제한다.)
-        requires={"required_agents", "search_results"},
+        # required_agents/search_results 모두 orchestrate() 자신이 `state["x"]`
+        # 리터럴 서브스크립트로 읽는다 -- 없으면 즉시 KeyError. user_id/
+        # session_id/original_query 는 분석 에이전트가 하나라도 선택된 경우
+        # _create_analysis_tasks 에서 전부 리터럴 서브스크립트로 읽혀 없으면
+        # KeyError -- 다섯 다 (a) 케이스. errors/analysis_results/
+        # execution_steps 는 `_create_initial_state` 가 항상 `[]`로 초기화하는
+        # 누적용 필드라 requires 에서 제외한다. query_intent 는 `.get()` 기본값
+        # 경로라 제외한다.
+        requires={
+            "required_agents",
+            "search_results",
+            "user_id",
+            "session_id",
+            "original_query",
+        },
+        # 추출기는 orchestrate() 자신이 읽는 required_agents/search_results/
+        # execution_steps만 보고, 위 헬퍼 메서드 안의 나머지는 보지 못한다.
+        hand_curated=True,
     )
     async def _orchestrate_analysis_node(self, state: AgentState) -> Dict[str, Any]:
         """분석 오케스트레이션 노드"""
@@ -1331,20 +1413,46 @@ class MultiAgentWorkflow:
         reads={
             "required_agents",
             "execution_steps",
-            # search_results/analysis_results 는 orchestrate() 자신이 아니라
-            # 같은 클래스의 헬퍼 `_create_generation_tasks(state, ...)` 안에서
-            # 리터럴 서브스크립트로 읽힌다 -- 추출기는 `self.<attr>.<method>`
-            # 형태만 따라가므로(같은 인스턴스의 다른 메서드 호출은 추적 밖) 이
-            # 두 키는 소스를 직접 읽어 손으로 채웠다.
+            # 아래는 orchestrate() 자신이 아니라 같은 클래스의 헬퍼
+            # `_create_generation_tasks`/`_process_generation_results`
+            # (neos/workflow/orchestrators/generation_orchestrator.py:49-55,60,
+            # 90,108,111) 안에서 리터럴 서브스크립트로 읽힌다. 추출기는
+            # `self.<attr>.<method>` 형태만 따라가므로(같은 인스턴스의 다른
+            # 메서드 호출은 추적 밖) 소스를 직접 읽어 손으로 채웠다 -- 코드
+            # 리뷰(Task 2 fix round 1)가 search_results/analysis_results 옆에
+            # 나란히 있던 user_id/session_id/original_query/errors 가 빠져
+            # 있었음을 잡아냈고, 재감사에서 query_intent(선택적 .get)와
+            # generation_results(자기 자신에 append 하려고 먼저 서브스크립트로
+            # 읽음)도 함께 빠져 있었음을 확인했다.
             "search_results",
             "analysis_results",
+            "user_id",
+            "session_id",
+            "original_query",
+            "errors",
+            "query_intent",
+            "generation_results",
         },
         writes={"generation_results", "errors", "execution_steps"},
         # required_agents 는 orchestrate() 자신이 리터럴 서브스크립트로 읽는다.
-        # search_results/analysis_results 는 생성 에이전트가 하나라도 선택된
-        # 경우 _create_generation_tasks 에서 리터럴 서브스크립트로 읽혀 없으면
-        # KeyError -- 셋 다 (a) 케이스.
-        requires={"required_agents", "search_results", "analysis_results"},
+        # search_results/analysis_results/user_id/session_id/original_query 는
+        # 생성 에이전트가 하나라도 선택된 경우 _create_generation_tasks 에서
+        # 전부 리터럴 서브스크립트로 읽혀 없으면 KeyError -- (a) 케이스.
+        # errors/generation_results/execution_steps 는 `_create_initial_state`
+        # 가 항상 `[]`로 초기화하는 누적용 필드라 다른 계약과 동일하게 requires
+        # 에서 제외한다. query_intent 는 `.get()` 기본값 경로라 제외한다.
+        requires={
+            "required_agents",
+            "search_results",
+            "analysis_results",
+            "user_id",
+            "session_id",
+            "original_query",
+        },
+        # 추출기는 orchestrate() 자신이 읽는 required_agents/execution_steps만
+        # 보고, 위 헬퍼 메서드 안의 나머지 여섯 개는 보지 못한다 -- 드리프트
+        # 가드가 이 계약에서는 부분적으로만 작동한다.
+        hand_curated=True,
     )
     async def _orchestrate_generation_node(self, state: AgentState) -> Dict[str, Any]:
         """생성 오케스트레이션 노드"""
@@ -1422,6 +1530,14 @@ class MultiAgentWorkflow:
             "generation_results",
             "errors",
         },
+        # 추출기는 validate_quality() 자신이 읽는 quality_score/quality_feedback/
+        # retry_count/execution_steps 만 보고, 세 헬퍼 안에서 읽히는
+        # requires 5개(required_agents 외)는 전혀 보지 못한다 -- 위 두 헬퍼가
+        # `self.<attr>.<method>` 형태가 아닌 같은 인스턴스 메서드 호출이라
+        # 추적 밖이다. 이 5개는 소스를 직접 읽어 확인했고(위 주석) 조건 없이
+        # 항상 실행되므로 requires 판정도 정확하다 -- 검증 안 되는 게 아니라
+        # 검증 못 하는 것뿐이므로 hand_curated 로 명시한다.
+        hand_curated=True,
     )
     async def _validate_quality_node(self, state: AgentState) -> Dict[str, Any]:
         """품질 검증 노드"""
@@ -1551,6 +1667,29 @@ class MultiAgentWorkflow:
             # `state["execution_time_ms"] = ...` 대입이 Subscript Store로
             # 잡힌다 (research_continuation과 동일한 추출기 특성).
             "execution_time_ms",
+            # 아래 14개는 generate_response() 자신이 아니라 같은 클래스의
+            # 헬퍼 세 개 안에서 읽힌다 -- `_create_response_metadata`
+            # (neos/workflow/processors/response_generator.py:210-241, 항상
+            # 호출됨), `_apply_citations`(524,548, final_response와
+            # CITATIONS_ENABLED 조건부 호출), `_format_harness_repair_instructions`
+            # (176, 부분 성공/에러 시 응답 정제 조건부 호출). 같은 인스턴스의
+            # 다른 메서드 호출이라 추출기가 따라가지 못한다. 처음 이 파일을
+            # 200줄까지만 읽어 뒷부분(전체 572줄)을 놓쳤던 게 원인이었고,
+            # 재감사(Task 2 fix round 1)로 전체를 다시 읽어 찾았다.
+            "mission_id",
+            "mission_status",
+            "mission_plan",
+            "validation_summary",
+            "mission_task_results",
+            "harness_verdict",
+            "harness_mode",
+            "harness_score",
+            "harness_failed_checks",
+            "harness_repair_attempts",
+            "quality_score",
+            "citation_style",
+            "citation_only_cited",
+            "harness_repair_plan",
         },
         writes={
             "final_response",
@@ -1566,13 +1705,17 @@ class MultiAgentWorkflow:
         # 없으면 KeyError, 있어도 전부 비었으면 기본 "찾지 못했습니다" 메시지로
         # 조용히 낮은 품질 응답을 낸다. original_query 는 응답 정제/요약
         # 기능(ENABLE_RESPONSE_REFINEMENT, EXECUTIVE_SUMMARY_ENABLED)에서만
-        # 조건부로 서브스크립트 접근하므로 여기서는 제외한다.
+        # 조건부로 서브스크립트 접근하므로 여기서는 제외한다. 새로 찾은 14개는
+        # 전부 `.get()` 기본값 경로라 requires 에 넣지 않는다.
         requires={
             "execution_start",
             "search_results",
             "analysis_results",
             "generation_results",
         },
+        # 추출기는 generate_response() 자신이 읽는 15개만 보고, 세 헬퍼 안의
+        # 나머지 14개는 보지 못한다.
+        hand_curated=True,
     )
     async def _generate_response_node(self, state: AgentState) -> Dict[str, Any]:
         """응답 생성 노드"""
@@ -1585,14 +1728,18 @@ class MultiAgentWorkflow:
             "cumulative_cost",
             "execution_steps",
             # session_id/user_id/detected_language/search_synthesis/
-            # conversation_context 는 execute() 자신이 아니라 같은 클래스의
-            # 헬퍼 `_build_context(state)` 안에서 읽힌다 -- 같은 인스턴스의
-            # 다른 메서드 호출이라 추출기가 따라가지 못해 손으로 채웠다.
+            # conversation_context/_event_handler 는 execute() 자신이 아니라
+            # 같은 클래스의 헬퍼 `_build_context(state)`
+            # (neos/workflow/recursive/orchestrator.py:298-317) 안에서 읽힌다 --
+            # 같은 인스턴스의 다른 메서드 호출이라 추출기가 따라가지 못해 손으로
+            # 채웠다. _event_handler 는 SSE 스트림 콜백(`_stream_callback`)으로
+            # 전달된다 (코드 리뷰, Task 2 fix round 1이 누락을 잡아냄).
             "session_id",
             "user_id",
             "detected_language",
             "search_synthesis",
             "conversation_context",
+            "_event_handler",
         },
         writes={
             "final_response",
@@ -1607,6 +1754,10 @@ class MultiAgentWorkflow:
         # 전부 `.get()` 기본값 경로 -- original_query 없이도 ROMA가 빈 문자열
         # 태스크로 진행하며 예외를 던지지 않는다(결과 품질은 낮아지지만 이는
         # 별도의 품질 검증 단계가 잡는다).
+        # 추출기는 execute() 자신이 읽는 original_query/cumulative_cost/
+        # execution_steps만 보고, _build_context 안의 나머지 여섯 개는 보지
+        # 못한다 -- 드리프트 가드가 이 계약에서는 부분적으로만 작동한다.
+        hand_curated=True,
     )
     async def _recursive_orchestrator_node(self, state: AgentState) -> Dict[str, Any]:
         """ROMA: 재귀 오케스트레이터 노드"""
@@ -1621,15 +1772,19 @@ class MultiAgentWorkflow:
             "original_query",
             "cumulative_cost",
             "execution_steps",
-            # RECURSIVE_ORCHESTRATOR 와 동일한 이유(_build_context 헬퍼) --
-            # RAY_ENABLED 여부에 따라 DistributedRecursiveOrchestrator 또는
-            # RecursiveOrchestrator 가 주입되지만 둘 다 execute()를 오버라이드
-            #하지 않아 결국 같은 RecursiveOrchestrator.execute 로 귀결된다.
+            # RECURSIVE_ORCHESTRATOR 와 동일한 이유(_build_context 헬퍼,
+            # neos/workflow/recursive/orchestrator.py:298-317) -- RAY_ENABLED
+            # 여부에 따라 DistributedRecursiveOrchestrator 또는
+            # RecursiveOrchestrator 가 주입되지만 둘 다 execute()/_build_context
+            # 를 오버라이드하지 않아 결국 같은 RecursiveOrchestrator.execute /
+            # _build_context 로 귀결된다. _event_handler 는 SSE 스트림 콜백으로
+            # 전달된다 (코드 리뷰, Task 2 fix round 1이 누락을 잡아냄).
             "session_id",
             "user_id",
             "detected_language",
             "search_synthesis",
             "conversation_context",
+            "_event_handler",
         },
         writes={
             "final_response",
@@ -1641,6 +1796,9 @@ class MultiAgentWorkflow:
             "cumulative_cost",
             "execution_steps",
         },
+        # RECURSIVE_ORCHESTRATOR 와 동일하게 추출기가 execute() 자신의 세 키만
+        # 보고 _build_context 안의 나머지는 보지 못한다.
+        hand_curated=True,
     )
     async def _hyper_deep_orchestrator_node(self, state: AgentState) -> Dict[str, Any]:
         """HyperDeep Recursive: ROMA + HyperDeepResearchAgent 오케스트레이터 노드"""
