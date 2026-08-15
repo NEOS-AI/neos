@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from neos.config.settings import settings
+from neos.utils.llm_wrapper import extract_text_from_response
 from neos.workflow.contracts import NodeContract
 from neos.workflow.graph_designer import (
     DesignRequest,
@@ -92,7 +93,15 @@ class LlmGraphDesigner:
         response = await asyncio.wait_for(
             self._model.ainvoke(prompt), timeout=self._timeout_sec
         )
-        payload = _parse_json_payload(_extract_text(response))
+        # `extract_text_from_response` 를 재구현하지 않고 그대로 재사용한다.
+        # 확장 사고(extended thinking) 를 쓰는 모델은 `.content` 가 블록
+        # 리스트로 온다(예: [{"type": "thinking", ...}, {"type": "text",
+        # ...}]) -- 이 헬퍼는 그 리스트를 걸러 text 블록만 이어붙인다. 직접
+        # 판정을 다시 짰다면 `str(list)` 로 떨어져, 멀쩡한 응답을 JSON 파싱
+        # 실패로 오판할 뻔했다. 이 헬퍼는 LLM 프레임워크를 임포트하지 않는다는
+        # 제약을 이미 지키고 있으므로(모듈 자체 docstring 이 그렇게 선언한다),
+        # 재사용을 막을 이유가 없다.
+        payload = _parse_json_payload(extract_text_from_response(response))
 
         known_nodes = frozenset(contract.node for contract in request.catalog)
         return parse_topology(payload, known_nodes=known_nodes)
@@ -125,23 +134,6 @@ def _render_catalog(catalog: Sequence[NodeContract]) -> str:
             f"- {contract.node}: reads=[{reads}] writes=[{writes}] requires=[{requires}]"
         )
     return "\n".join(lines)
-
-
-def _extract_text(response: Any) -> str:
-    """모델 응답에서 텍스트를 뽑는다.
-
-    LangChain 계열 응답(`.content`)과 순수 문자열(테스트의 `_FakeModel`)을 모두
-    받아들인다 -- `neos.utils.llm_wrapper.extract_text_from_response` 와 같은
-    형태 판정 방식이지만, 이 모듈은 LLM 프레임워크를 임포트하지 않기 위해
-    필요한 부분만 직접 판정한다.
-    """
-
-    if isinstance(response, str):
-        return response
-    content = getattr(response, "content", response)
-    if isinstance(content, str):
-        return content
-    return str(content)
 
 
 def _parse_json_payload(text: str) -> Mapping:

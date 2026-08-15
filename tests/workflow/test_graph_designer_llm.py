@@ -7,7 +7,12 @@
 - 카탈로그에 없는 노드를 절대 지어내지 못하는지,
 - 마크다운 코드펜스는 벗겨내되(기계적으로 명확한 변형) 코드펜스 없는
   산문(prose)에 섞인 JSON 은 거부하는지 (모호한 입력을 되살리지 않고
-  거부한다는 `parse_topology` 의 원칙을 그대로 잇는다),
+  거부한다는 `parse_topology` 의 원칙을 그대로 잇는다), 그리고 그 펜스
+  제거가 언어 태그 없음/닫는 펜스 뒤 공백/펜스 두 개/닫히지 않은 펜스에서도
+  고정된 대로 동작하는지,
+- 확장 사고(extended thinking) 모델처럼 `.content` 가 블록 리스트로 오는
+  응답도 text 블록만 골라내 파싱하는지 (`neos.utils.llm_wrapper.
+  extract_text_from_response` 재사용을 고정한다),
 - 타임아웃이 실제로 걸리는지
 를 검증한다.
 
@@ -149,6 +154,94 @@ async def test_a_well_formed_response_reaches_parse_topology_unvalidated() -> No
 
     assert topology.nodes == ("a",)
     assert topology.edges == (("__start__", "a"),)
+
+
+async def test_a_thinking_block_response_is_still_parsed() -> None:
+    """확장 사고(extended thinking) 모델은 `.content` 가 블록 리스트로 온다
+    (예: opus-5 의 adaptive thinking). 그 리스트에서 text 블록만 골라내지
+    않고 `str(list)` 로 뭉뚱그리면, 멀쩡한 설계 응답이 JSON 파싱 실패로
+    오판된다 -- 이 테스트가 그 회귀를 고정한다."""
+
+    class _ThinkingResponse:
+        content = [
+            {"type": "thinking", "thinking": "이 질의에는 노드 a 하나면 충분하다"},
+            {
+                "type": "text",
+                "text": '{"nodes": ["a"], "edges": [["__start__", "a"], ["a", "__end__"]]}',
+            },
+        ]
+
+    class _ThinkingModel:
+        async def ainvoke(self, prompt: str) -> _ThinkingResponse:
+            return _ThinkingResponse()
+
+    designer = LlmGraphDesigner(model=_ThinkingModel(), prompt_path=PROMPT)
+
+    topology = await designer.design(
+        DesignRequest(query="q", catalog=(_contract_for("a"),), budget=1000)
+    )
+
+    assert topology.nodes == ("a",)
+
+
+async def test_fence_stripper_handles_no_language_tag() -> None:
+    """```` ``` ```` 만 있고 `json` 언어 태그가 없어도 벗겨내야 한다."""
+
+    fenced = '```\n{"nodes": ["a"], "edges": []}\n```'
+    designer = LlmGraphDesigner(model=_FakeModel(fenced), prompt_path=PROMPT)
+
+    topology = await designer.design(
+        DesignRequest(query="q", catalog=(_contract_for("a"),), budget=1000)
+    )
+
+    assert topology.nodes == ("a",)
+
+
+async def test_fence_stripper_handles_trailing_whitespace_after_closing_fence() -> None:
+    """닫는 펜스 뒤에 공백/개행이 남아 있어도 벗겨내야 한다."""
+
+    fenced = '```json\n{"nodes": ["a"], "edges": []}\n```   \n\n'
+    designer = LlmGraphDesigner(model=_FakeModel(fenced), prompt_path=PROMPT)
+
+    topology = await designer.design(
+        DesignRequest(query="q", catalog=(_contract_for("a"),), budget=1000)
+    )
+
+    assert topology.nodes == ("a",)
+
+
+async def test_fence_stripper_takes_the_first_of_two_fenced_blocks() -> None:
+    """펜스가 두 개면 첫 번째 것만 취한다 -- 정규식이 non-greedy 이기 때문이다.
+    이 동작을 명시적으로 고정해, 나중에 "개선"한답시고 마지막 블록을 취하거나
+    여러 블록을 합치는 식으로 바뀌지 않게 한다."""
+
+    two_blocks = (
+        '```json\n{"nodes": ["a"], "edges": []}\n```\n'
+        "설명 다음에 또 다른 펜스가 온다.\n"
+        '```json\n{"nodes": ["ghost"], "edges": []}\n```'
+    )
+    designer = LlmGraphDesigner(model=_FakeModel(two_blocks), prompt_path=PROMPT)
+
+    topology = await designer.design(
+        DesignRequest(query="q", catalog=(_contract_for("a"),), budget=1000)
+    )
+
+    # 두 번째 블록의 "ghost" 가 아니라 첫 번째 블록의 "a" 가 취해졌다.
+    assert topology.nodes == ("a",)
+
+
+async def test_fence_stripper_rejects_an_unclosed_fence() -> None:
+    """여는 펜스만 있고 닫는 펜스가 없으면 정규식이 매치하지 않는다 -- 원문이
+    그대로 `json.loads` 에 넘어가 실패로 닫힌다(fail closed). 코드펜스가
+    없는 산문처럼, 애매한 입력을 되살리려 하지 않는다."""
+
+    unclosed = '```json\n{"nodes": ["a"], "edges": []}\n'
+    designer = LlmGraphDesigner(model=_FakeModel(unclosed), prompt_path=PROMPT)
+
+    with pytest.raises(InvalidDesignPayload):
+        await designer.design(
+            DesignRequest(query="q", catalog=(_contract_for("a"),), budget=1000)
+        )
 
 
 async def test_the_query_and_catalog_reach_the_prompt() -> None:
