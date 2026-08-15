@@ -10,17 +10,37 @@ START 에서 N 에 이르는 **모든** 경로에 K 를 `writes` 하는 노드�
 한 경로에만 있으면, 그 나머지 경로로 들어온 실행은 예외 없이 조용히 빈 값을 읽는다
 -- 이 검증기가 유일한 방어선이다. 그 밖에 필수 노드 존재 여부(`missing_mandatory`)와
 노드 비용 합계가 예산을 넘지 않는지(`budget_exceeded`)도 함께 본다.
+
+계약의 `writes`/`requires` 두 필드만 있으면 위 규칙을 계산할 수 있다. 그래서
+`neos.workflow.contracts` (AST 로 소스를 파싱해 위임 체인을 추적하는 계약
+레지스트리 전체)를 임포트하지 않고, 아래 `_ContractLike` 프로토콜로 그 두 필드만
+구조적으로 요구한다 -- Task 3 가 지켰던 "순수 그래프 모듈" 속성을 유지해, 계약
+레지스트리 없이도 토폴로지 규칙만 독립적으로 시험·추론할 수 있게 한다.
+`NodeContract` 는 이 프로토콜을 별도 선언 없이 구조적으로 만족한다.
 """
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-
-from neos.workflow.contracts import NodeContract
+from typing import Protocol
 
 # START/END 는 실제 노드가 아니라 그래프의 진입점·종료점을 나타내는 센티널이다.
 # `NODE_CONTRACTS` 에 존재하지 않으며, 어떤 계약도 요구하지 않는다.
 START = "__start__"
 END = "__end__"
+
+
+class _ContractLike(Protocol):
+    """`validate_topology` 가 실제로 쓰는 계약 속성 두 개만 요구하는 구조적 타입.
+
+    `neos.workflow.contracts.NodeContract` 전체(핸들러, hand_curated 플래그,
+    AST 추출 로직 등)가 아니라 `writes`/`requires` 만 있으면 이 모듈의 규칙을
+    계산할 수 있다. `Protocol` 을 쓰면 `NodeContract` 가 이 타입을 상속하지
+    않고도 구조적으로 만족하므로, 이 모듈은 계약 레지스트리를 임포트하지 않고도
+    타입 안정성을 잃지 않는다.
+    """
+
+    writes: frozenset[str]
+    requires: frozenset[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +68,7 @@ class TopologyViolation:
 def validate_topology(
     topology: GraphTopology,
     *,
-    contracts: Mapping[str, NodeContract],
+    contracts: Mapping[str, _ContractLike],
     mandatory: Sequence[str] = (),
     budget: int | None = None,
     node_costs: Mapping[str, int] | None = None,
@@ -61,7 +81,9 @@ def validate_topology(
     - `unsatisfied_requires`: 노드가 `requires` 하는 키가 START 에서 그 노드에
       이르는 모든 경로에서 보장되지 않는다.
     - `missing_mandatory`: `mandatory` 로 지정한 노드 이름이 토폴로지에 없다.
-    - `budget_exceeded`: `node_costs` 합계가 `budget` 을 넘는다.
+    - `budget_exceeded`: `node_costs` 합계가 `budget` 을 넘는다. 비용이
+      선언되지 않은 노드는 0 (무료)으로 보지 않고 그 자체로 위반이다 -- 값을
+      모르면 통과시키지 않는다(fail closed).
 
     `mandatory`, `budget`, `node_costs` 는 기본값이 no-op 이라 기존 호출부
     (`contracts` 만 넘기는 Task 3 호출자)는 그대로 동작한다.
@@ -168,17 +190,33 @@ def validate_topology(
             )
 
     # -- 예산 -----------------------------------------------------------------
+    # 방어선이 실패 시 열리면 안 된다: 비용이 선언되지 않은 노드를 0 으로 취급해
+    # 조용히 넘어가면, 값비싼 노드 하나가 node_costs 에서 누락되는 것만으로
+    # 예산 검사가 아무 경고 없이 무력화된다. 그래서 비용 미선언 노드는 "무료"가
+    # 아니라 그 자체로 위반으로 본다 (fail closed) -- 합계를 계산하기 전에
+    # 먼저 전부 가격이 매겨져 있는지부터 확인한다.
     if budget is not None:
         costs = node_costs or {}
-        total_cost = sum(costs.get(node, 0) for node in topology.nodes)
-        if total_cost > budget:
-            violations.append(
-                TopologyViolation(
-                    rule="budget_exceeded",
-                    node=None,
-                    detail=f"노드 비용 합계 {total_cost} 가 예산 {budget} 을 초과했다",
+        unpriced_nodes = tuple(node for node in topology.nodes if node not in costs)
+        if unpriced_nodes:
+            for node in unpriced_nodes:
+                violations.append(
+                    TopologyViolation(
+                        rule="budget_exceeded",
+                        node=node,
+                        detail=f"'{node}' 의 비용이 node_costs 에 선언되지 않아 예산을 계산할 수 없다",
+                    )
                 )
-            )
+        else:
+            total_cost = sum(costs.get(node, 0) for node in topology.nodes)
+            if total_cost > budget:
+                violations.append(
+                    TopologyViolation(
+                        rule="budget_exceeded",
+                        node=None,
+                        detail=f"노드 비용 합계 {total_cost} 가 예산 {budget} 을 초과했다",
+                    )
+                )
 
     return tuple(violations)
 
