@@ -957,10 +957,15 @@ class DeepAnalysisConfig(StrictConfigModel):
     #                      나눈다. 워커가 매긴 값이 실제로 조사 가치를 반영한다면
     #                      값이 높은 가지가 더 깊이 판다.
     #
-    # 2026-08-15: 표본 #18 이 이것을 잰다 (D69). `uniform` 은 표본 #17 이
-    # 측정했고, 그 표본이 남긴 진단이 "넓이는 늘고 근거는 줄었다" 였다.
-    # H-1 이 반증되면 되돌리는 것이 조치다.
-    subq_budget_policy: Literal["uniform", "value_weighted"] = "value_weighted"
+    # 표본 #18 이 `value_weighted` 를 쟀고 **반증됐다** (D70). 사전 등록대로
+    # 되돌린다. 배선은 확실히 작동했다 -- 형제 예산이 흩어진 그룹이 0/23 에서
+    # 21/22 로 갔다(H-2). 그런데 `claim_verified` 는 dev 5건에서 82 -> 65 로
+    # 내려갔고 `abandoned` 는 15 -> 30 으로 **두 배**가 됐다.
+    #
+    # 즉 워커의 `value_est` 는 **어느 가지가 증거를 낼지 예측하지 못한다.**
+    # 값이 낮다고 예산을 덜 준 가지들이 굶어 죽었고, 그 대가로 산 깊이는
+    # 검증된 클레임으로 돌아오지 않았다.
+    subq_budget_policy: Literal["uniform", "value_weighted"] = "uniform"
     # §6.3.2 의 독립 심사자. D11 -> D13 -> D65 가 세 번 미뤘다.
     #
     # 워커가 자기 제안에 스스로 값을 매기는 것(D65)은 공짜지만 공정하지 않다.
