@@ -14,19 +14,47 @@ from neos.workflow.enums import WorkflowNode
 from neos.workflow.state import AgentState
 
 
-PILOT_NODES = (
-    WorkflowNode.QUERY_CLS.value,
-    WorkflowNode.SEARCH_ORCHESTRATOR.value,
-    WorkflowNode.RESULT_INTEGRATOR.value,
-)
+def _graph_node_names() -> tuple[str, ...]:
+    """graph.py 가 add_node 로 등록하는 노드 이름을 소스에서 뽑는다."""
+    import ast
+    from pathlib import Path
+
+    import neos.workflow.graph as graph_module
+
+    source = Path(graph_module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    names: set[str] = set()
+    for item in ast.walk(tree):
+        if (
+            isinstance(item, ast.Call)
+            and isinstance(item.func, ast.Attribute)
+            and item.func.attr == "add_node"
+            and item.args
+            and isinstance(item.args[0], ast.Attribute)
+            and item.args[0].attr == "value"
+        ):
+            names.add(item.args[0].value.attr)
+    return tuple(sorted(names))
+
+
+def test_every_graph_node_declares_a_contract() -> None:
+    """계약 없는 노드가 하나라도 있으면 검증기는 그 노드의 의존을 못 본다."""
+    declared = {
+        member.name for member in WorkflowNode if member.value in NODE_CONTRACTS
+    }
+    missing = set(_graph_node_names()) - declared
+    assert missing == set(), f"계약 미선언 노드: {sorted(missing)}"
+
+
+ALL_NODES = tuple(NODE_CONTRACTS)
 
 
 def test_pilot_nodes_declare_contracts() -> None:
-    for name in PILOT_NODES:
+    for name in ALL_NODES:
         assert name in NODE_CONTRACTS, f"{name} 에 계약 선언이 없다"
 
 
-@pytest.mark.parametrize("name", PILOT_NODES)
+@pytest.mark.parametrize("name", ALL_NODES)
 def test_declared_keys_exist_on_agent_state(name: str) -> None:
     """오타난 키를 선언하면 검증기가 허구를 검사하게 된다."""
     contract = NODE_CONTRACTS[name]
@@ -35,14 +63,14 @@ def test_declared_keys_exist_on_agent_state(name: str) -> None:
     assert unknown == set(), f"{name}: AgentState 에 없는 키 {sorted(unknown)}"
 
 
-@pytest.mark.parametrize("name", PILOT_NODES)
+@pytest.mark.parametrize("name", ALL_NODES)
 def test_requires_is_a_subset_of_reads(name: str) -> None:
     """요구하는데 읽지 않는 키는 선언이 잘못된 것이다."""
     contract = NODE_CONTRACTS[name]
     assert contract.requires <= contract.reads
 
 
-@pytest.mark.parametrize("name", PILOT_NODES)
+@pytest.mark.parametrize("name", ALL_NODES)
 def test_declared_reads_cover_what_the_source_actually_reads(name: str) -> None:
     """선언하지 않고 읽는 키가 있으면 검증기가 그 의존을 못 본다.
 
@@ -53,3 +81,20 @@ def test_declared_reads_cover_what_the_source_actually_reads(name: str) -> None:
     actual = state_keys_read(contract.handler)
     undeclared = actual - contract.reads
     assert undeclared == set(), f"{name}: 선언되지 않은 읽기 {sorted(undeclared)}"
+
+
+@pytest.mark.parametrize("name", ALL_NODES)
+def test_a_contract_the_extractor_cannot_reach_is_marked_as_hand_curated(
+    name: str,
+) -> None:
+    """추출기가 아무 키도 못 뽑았는데 reads 가 비어 있지 않으면, 그 계약의 드리프트
+    가드는 **작동하지 않는다.** 조용히 통과시키지 말고 손으로 큐레이션했다고 명시하게 한다.
+
+    Task 1 리뷰가 변조 테스트로 증명한 구멍이다 -- reads 를 빈 집합으로 바꿔도 통과했다.
+    """
+    contract = NODE_CONTRACTS[name]
+    if contract.reads and not state_keys_read(contract.handler):
+        assert contract.hand_curated, (
+            f"{name}: 추출기가 소스에서 키를 못 찾았다. 가드가 공허하므로 "
+            f"hand_curated=True 로 명시하고 근거를 주석에 남길 것"
+        )

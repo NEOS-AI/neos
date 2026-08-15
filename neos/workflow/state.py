@@ -54,6 +54,24 @@ class AgentState(TypedDict):
     query_embedding: Optional[List[float]]
     detected_language: Optional[str]  # 감지된 사용자 질문 언어
 
+    # 워크플로우 실행 중 주입되는 이벤트 핸들러 (직렬화 대상 아님).
+    # execute_workflow() 가 initial_state["_event_handler"] 로 채우고, 여러
+    # 노드가 SSE 진행 이벤트 발행에 사용한다. 밑줄 프리픽스는 "스키마가 아닌
+    # 런타임 주입"이라는 기존 관례를 따른다 (Task 2: 노드 계약 작업 중 발견 --
+    # 여러 노드가 이미 `state.get("_event_handler")` 로 읽고 있었으나 TypedDict
+    # 선언이 누락돼 있었다).
+    _event_handler: Optional[Any]
+
+    # RefinementChecker / QueryRefinementAgent 가 쓰고 읽는 필드들. 여러 노드가
+    # 이미 이 키들로 읽고 쓰고 있었으나 TypedDict 선언이 누락돼 있었다
+    # (Task 2: 노드 계약 작업 중 발견).
+    needs_refinement: Optional[bool]
+    refinement_reasons: Optional[List[str]]
+    refinement_check_time_ms: Optional[int]
+    refinement_applied: Optional[List[str]]
+    refinement_time_ms: Optional[int]
+    original_query_backup: Optional[str]
+
     # 채팅 히스토리 관련
     chat_history: Optional[List[Dict[str, Any]]]  # 대화 히스토리
     conversation_context: Optional[str]  # LLM이 생성한 대화 맥락 요약
