@@ -84,10 +84,10 @@ def validate_topology(
     budget: int | None = None,
     node_costs: Mapping[str, int] | None = None,
 ) -> tuple[TopologyViolation, ...]:
-    """일곱 가지 규칙을 검사한다. 빈 튜플이면 유효.
+    """여덟 가지 규칙을 검사한다. 빈 튜플이면 유효.
 
     구조 규칙 넷(`unknown_node`, `unreachable_node`, `dead_end`,
-    `unbounded_cycle`) 은 Task 3 그대로다. 이 태스크가 더하는 셋:
+    `unbounded_cycle`) 은 Task 3 그대로다. Task 4 가 더한 셋:
 
     - `unsatisfied_requires`: 노드가 `requires` 하는 키가 START 에서 그 노드에
       이르는 모든 경로에서 보장되지 않는다.
@@ -96,11 +96,36 @@ def validate_topology(
       선언되지 않은 노드는 0 (무료)으로 보지 않고 그 자체로 위반이다 -- 값을
       모르면 통과시키지 않는다(fail closed).
 
+    Task 6 이 더한 하나:
+
+    - `empty_topology`: `nodes` 가 비어 있다. `mandatory` 를 넘기지 않은
+      호출부(기본값 `()`)에서도 **무조건** 검사한다 -- 노드가 하나도 없는
+      설계는 필수 노드 목록과 무관하게 항상 무효다. 이게 없으면
+      `{"nodes": [], "edges": []}` 처럼 `parse_topology` 를 통과한 빈
+      토폴로지가 이 함수에서도 위반 0개로 승인되고, 훨씬 나중에야(예: 실제
+      그래프를 빌드하는 단계에서) 정체불명의 오류로 죽는다 -- 폴백이
+      조용히 일어나면 안 된다는 이 시스템의 불변식을 어긴다.
+
     `mandatory`, `budget`, `node_costs` 는 기본값이 no-op 이라 기존 호출부
     (`contracts` 만 넘기는 Task 3 호출자)는 그대로 동작한다.
     """
 
     violations: list[TopologyViolation] = []
+
+    if not topology.nodes:
+        # 노드가 없으면 이후의 도달성·사이클·requires 계산은 전부 공허하게
+        # 참(vacuously true)이 되어 아무 신호도 못 낸다 -- 그 "위반 없음"을
+        # "유효함"으로 오인하지 않도록 여기서 명시적으로 위반을 하나 낸다.
+        # `mandatory`/`budget` 검사는 그대로 아래에서 계속 돈다 -- 이 규칙은
+        # 그것들을 대체하는 게 아니라, 그것들이 비어 있는 nodes 앞에서
+        # 침묵하는 상황에 무조건 추가되는 방어선이다.
+        violations.append(
+            TopologyViolation(
+                rule="empty_topology",
+                node=None,
+                detail="노드가 하나도 없다 -- 빈 설계는 mandatory 목록과 무관하게 항상 무효다",
+            )
+        )
     declared = frozenset(topology.nodes) | {START, END}
 
     unknown_nodes = _find_unknown_nodes(topology.edges, declared)

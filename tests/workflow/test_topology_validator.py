@@ -29,6 +29,19 @@ def test_a_linear_topology_is_valid() -> None:
     assert validate_topology(topology, contracts={}) == ()
 
 
+def test_an_empty_topology_is_rejected_unconditionally() -> None:
+    """`mandatory` 를 넘기지 않아도(기본값 `()`) 노드 0개는 항상 위반이다.
+
+    `{"nodes": [], "edges": []}` 는 `parse_topology` 의 형식·어휘 검사를
+    통과한다 -- 빈 리스트도 유효한 타입이기 때문이다. 이 규칙이 없으면 그런
+    빈 토폴로지가 여기서도 위반 0개로 승인되고, 훨씬 나중에(실제 그래프를
+    빌드하는 단계에서) 정체불명의 오류로만 죽는다.
+    """
+    topology = GraphTopology(nodes=(), edges=())
+    violations = validate_topology(topology, contracts={})
+    assert "empty_topology" in _rules(violations)
+
+
 def test_an_unreachable_node_is_rejected() -> None:
     topology = GraphTopology(
         nodes=("a", "orphan"),
