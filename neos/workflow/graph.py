@@ -140,6 +140,28 @@ _TOPOLOGY_SENTINEL_TO_LANGGRAPH: dict[str, str] = {
     TOPOLOGY_END: END,
 }
 
+# 정적 그래프(`_create_workflow_graph`)에서는 이 두 노드가 `interrupt_before`
+# 로 지정되고, 그 지정 자체가 `use_checkpointer=True` 일 때만 (PostgreSQL
+# checkpointer 가 실행 상태를 저장할 수 있을 때만) 의미가 있다 -- 상태가
+# 저장되지 않으면 "여기서 멈춰서 사람 승인을 기다린다" 는 인터럽트가 재개할
+# 지점 자체를 잃는다. `build_ephemeral_workflow` 는 checkpointer 도
+# interrupt_before 도 받지 않으므로, 이 두 노드를 포함한 토폴로지를 그냥
+# `compile()` 하면 사람 승인 게이트가 아무 신호 없이 사라진다 -- 이 플랜
+# 전체가 잡으려는 "조용한 폴백/조용한 degrade" 와 같은 실패 유형이다.
+_INTERRUPT_GATED_NODES: frozenset[str] = frozenset(
+    {WorkflowNode.EXECUTION_APPROVAL.value, WorkflowNode.MISSION_APPROVAL.value}
+)
+
+
+class EphemeralApprovalGateUnsupported(ValueError):
+    """설계된 토폴로지가 사람 승인 게이트 노드(`execution_approval`/
+    `mission_approval`)를 포함하는데, `build_ephemeral_workflow` 는 아직
+    checkpointer/interrupt_before 를 지원하지 않아 그 게이트를 실제로
+    구현할 수 없다는 뜻이다. checkpointer 를 받아 정적 경로와 동등하게
+    지원하는 일은, 실제 배선(다음 태스크)이 checkpointer 를 어떤 모양으로
+    이 함수까지 넘길지 결정한 뒤에 하는 편이 낫다고 판단해 지금은 조용히
+    컴파일하는 대신 명시적으로 거부한다."""
+
 
 def build_ephemeral_workflow(
     workflow: "MultiAgentWorkflow", topology: GraphTopology
@@ -162,7 +184,22 @@ def build_ephemeral_workflow(
     는 이 함수의 범위 밖이다. 검증기의 "모든 경로" 분석이 조건부 엣지를 이미
     모든 목적지로 펼쳐서 보므로, 분기가 필요한 설계는 애초에 정적 엣지로
     표현된다(브리프의 의도적 범위 제한).
+
+    `EXECUTION_APPROVAL`/`MISSION_APPROVAL` 노드가 토폴로지에 있으면
+    `EphemeralApprovalGateUnsupported` 를 던진다 -- checkpointer/
+    interrupt_before 없이 그 노드를 컴파일하면 사람 승인 게이트가 조용히
+    사라지기 때문이다(위 `_INTERRUPT_GATED_NODES` 주석 참고).
     """
+
+    gated_nodes = sorted(set(topology.nodes) & _INTERRUPT_GATED_NODES)
+    if gated_nodes:
+        raise EphemeralApprovalGateUnsupported(
+            "ephemeral_checkpointer_unsupported: "
+            f"{gated_nodes} 는 checkpointer + interrupt_before 로만 사람 "
+            "승인을 기다릴 수 있는 노드인데, build_ephemeral_workflow 는 "
+            "아직 그 둘을 받지 않는다. 이 노드들을 포함한 토폴로지는 "
+            "checkpointer 지원이 추가되기 전까지 조립할 수 없다."
+        )
 
     graph = StateGraph(AgentState)
 
@@ -303,15 +340,14 @@ class MultiAgentWorkflow:
         self._graph_uses_checkpointer = False
         self._orchestrator_router = OrchestratorRouter()
         self._quality_router = QualityRouter()
-        # `graph_design_enabled` 가 켜졌을 때 마지막으로 채택된 설계 토폴로지.
-        # `design_graph_or_fallback` 을 실제 질의 경로에서 호출해 이 값을
-        # 채우는 배선은 이 태스크(Task 9)의 범위 밖이다 -- 여기서는
-        # `build_ephemeral_workflow` 로 토폴로지를 실행 가능한 그래프로
-        # 조립하는 조립기만 만든다. 그래서 어떤 코드도 이 값을 대입하지
-        # 않으며, `_create_workflow_graph`/`_ensure_graph_initialized` 는
-        # 이 속성을 참조조차 하지 않는다 -- 플래그가 꺼져 있을 때는 물론
-        # 켜져 있어도, 정적 그래프 경로는 지금과 바이트 단위로 같다.
-        self._designed_topology: GraphTopology | None = None
+        # 의도적으로 "설계된 토폴로지" 를 담는 인스턴스 속성을 두지 않는다.
+        # `MultiAgentWorkflow` 는 오래 살아남고 요청들이 공유하는 객체다
+        # (`self.graph`/`self._graphs_by_checkpointer` 가 이미 그렇듯). 설계된
+        # 토폴로지는 질의 하나에 종속된 값이므로, 여기 인스턴스 속성으로
+        # 얹으면 동시 요청 두 개가 같은 슬롯을 덮어써 서로의 그래프를 실행하는
+        # 경합을 만든다. 다음 태스크가 실제 배선을 만들 때는 이 값을 인스턴스
+        # 상태가 아니라 호출 스코프(함수 인자/반환값, 또는 요청별 로컬 변수)
+        # 로만 들고 다녀야 한다.
 
 
     def _initialize_agents(self) -> Dict[str, Any]:

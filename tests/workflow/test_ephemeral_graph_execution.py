@@ -5,19 +5,28 @@ Task 8 까지는 토폴로지를 설계·검증·기록할 뿐, 그 토폴로지
 `NODE_CONTRACTS[name].handler` 로 각 노드의 핸들러를 찾아 `MultiAgentWorkflow`
 인스턴스에 바인딩하고, 토폴로지의 정적 엣지대로 이어 붙여 컴파일한다.
 
-가장 중요한 성질은 두 번째 테스트가 고정한다: `graph_design_enabled` 가
-꺼져 있으면(기본값) 이 새 경로는 아예 타지 않고, 기존 정적 그래프의 배선은
-바이트 단위로 그대로다. 단순히 속성이 `None` 인지 보는 것보다 더 강하게
-고정하기 위해, 실제로 컴파일한 정적 그래프의 노드·엣지 집합을 해시해 이
-파일을 작성하기 직전(= 이번 태스크의 코드 변경 이전)에 캡처한 값과 비교한다
--- `_create_workflow_graph` 를 이번 태스크가 단 한 줄도 건드리지 않았다는
-주장을, 손으로 짠 그래프 구조 스냅샷으로 검증 가능하게 만든다.
+가장 중요한 성질은 `test_the_compiled_static_graph_matches_its_pre_task_9_snapshot`
+가 고정한다: `graph_design_enabled` 가 꺼져 있으면(기본값) 이 새 경로는 아예
+타지 않고, 기존 정적 그래프의 배선은 바이트 단위로 그대로다. 실제로 컴파일한
+정적 그래프의 노드·엣지 집합을 해시해, 이번 태스크의 코드 변경 **이전**에
+캡처한 값과 비교한다 -- `_create_workflow_graph` 를 이번 태스크가 단 한 줄도
+건드리지 않았다는 주장을, 손으로 짠 그래프 구조 스냅샷으로 검증 가능하게
+만든다.
+
+승인 게이트(`execution_approval`/`mission_approval`)는 정적 그래프에서
+checkpointer + `interrupt_before` 로만 사람 승인을 기다린다.
+`build_ephemeral_workflow` 는 아직 그 둘을 받지 않으므로, 이 두 노드를 포함한
+토폴로지를 조용히 컴파일하는 대신 `EphemeralApprovalGateUnsupported` 로
+명시적으로 거부한다 -- `test_build_ephemeral_workflow_refuses_a_topology_
+with_an_approval_gate` 가 그 계약을 고정한다.
 """
 
 import hashlib
 import json
 import sys
 import types
+
+import pytest
 
 import neos.config.settings as settings_module
 
@@ -50,15 +59,46 @@ _isodate_module.parse_duration = lambda value: value
 sys.modules.setdefault("isodate", _isodate_module)
 
 from neos.workflow.enums import WorkflowNode  # noqa: E402
-from neos.workflow.graph import MultiAgentWorkflow, build_ephemeral_workflow  # noqa: E402
+from neos.workflow.graph import (  # noqa: E402
+    EphemeralApprovalGateUnsupported,
+    MultiAgentWorkflow,
+    build_ephemeral_workflow,
+)
 from neos.workflow.topology import END, START, GraphTopology  # noqa: E402
 
 # `_create_workflow_graph(use_checkpointer=False)` 가 이번 태스크의 코드 변경
 # 이전에 실제로 컴파일해 낸 정적 그래프의 (정렬된 노드 목록, 정렬된 엣지 목록)
-# 을 표준 JSON 으로 인코딩해 sha256 한 값. 캡처 방법은 task-9-report.md 에
-# 그대로 남겨 재현 가능하게 했다. 이 해시가 바뀌면 `_create_workflow_graph`
-# 의 배선(add_node/add_edge 호출 순서나 대상)이 달라졌다는 뜻이다 -- 이
-# 태스크는 그 함수를 단 한 줄도 고치지 않으므로 항상 같아야 한다.
+# 을 표준 JSON 으로 인코딩해 sha256 한 값. 이 해시가 바뀌면
+# `_create_workflow_graph` 의 배선(add_node/add_edge 호출 순서나 대상)이
+# 달라졌다는 뜻이다.
+#
+# 재현/재캡처 방법 (그래프 배선을 실제로 바꾼 뒤 이 상수를 의도적으로
+# 갱신해야 할 때 -- 이 파일이 유일한 재현 경로다, 리포트에만 있으면 안 된다):
+#
+#     GOOGLE_API_KEY=test-key OPENAI_API_KEY=test-key \
+#       .venv/bin/python -c "
+#     import asyncio
+#     from neos.workflow.graph import MultiAgentWorkflow
+#
+#     async def main():
+#         wf = MultiAgentWorkflow()
+#         compiled = await wf._create_workflow_graph(use_checkpointer=False)
+#         g = compiled.get_graph()
+#         nodes = sorted(g.nodes)
+#         edges = sorted((e.source, e.target) for e in g.edges)
+#         import hashlib, json
+#         payload = json.dumps(
+#             {'nodes': nodes, 'edges': edges}, sort_keys=True
+#         ).encode()
+#         print(hashlib.sha256(payload).hexdigest())
+#     asyncio.run(main())
+#     "
+#
+# (실행 전 이 파일 상단의 youtube_transcript_api/googleapiclient/isodate
+# 가짜 모듈 등록을 그대로 앞에 붙여야 임포트가 죽지 않는다.) 출력된 해시로
+# 아래 상수를 교체하고, 왜 배선이 바뀌었는지를 커밋 메시지에 남긴다 -- 이
+# 테스트가 실패했다고 해시만 바꿔치기하면 "정적 그래프가 안 바뀌었다" 는
+# 보증 자체가 조용히 사라진다.
 _STATIC_GRAPH_SNAPSHOT_SHA256 = (
     "79fada0ebc474cc6167e6a146aa0862189b9a99ce4f643f31593386a0fc5ba0f"
 )
@@ -66,9 +106,10 @@ _STATIC_GRAPH_SNAPSHOT_SHA256 = (
 
 def _harness(*, graph_design_enabled: bool = False) -> MultiAgentWorkflow:
     """실제 `MultiAgentWorkflow` 인스턴스를 만들되, 설계 플래그를 명시적으로
-    맞춰 준다. 오늘은 이 값이 `_designed_topology` 를 채우는 코드가 없어
-    결과에 영향을 주지 않지만(Task 9 의 의도적 범위 제한), 앞으로 그 배선이
-    생겼을 때도 이 헬퍼 하나만 고치면 되도록 지금부터 신호를 흘려 둔다."""
+    맞춰 준다. 오늘은 이 플래그를 읽어 인스턴스 상태를 채우는 코드가 없어
+    결과에 영향을 주지 않지만(Task 9 의 의도적 범위 제한 -- 실제 배선은
+    다음 태스크), 앞으로 그 배선이 생겼을 때도 이 헬퍼 하나만 고치면
+    되도록 지금부터 신호를 흘려 둔다."""
 
     settings_module.settings.config.workflow.graph_design_enabled = graph_design_enabled
     return MultiAgentWorkflow()
@@ -127,18 +168,56 @@ def test_an_ephemeral_graph_can_actually_run() -> None:
     assert result is not None
 
 
-def test_the_static_path_is_unchanged_when_the_flag_is_off() -> None:
-    """graph_design_enabled=False 에서 기존 동작이 바이트 단위로 같아야 한다."""
+@pytest.mark.parametrize(
+    "gated_node",
+    [WorkflowNode.EXECUTION_APPROVAL.value, WorkflowNode.MISSION_APPROVAL.value],
+)
+def test_build_ephemeral_workflow_refuses_a_topology_with_an_approval_gate(
+    gated_node: str,
+) -> None:
+    """정적 그래프에서 이 두 노드는 checkpointer + interrupt_before 로만
+    사람 승인을 기다린다. build_ephemeral_workflow 는 그 둘을 받지 않으므로,
+    이 노드를 포함한 토폴로지를 조용히 컴파일해 승인 게이트를 잃어버리는
+    대신 명시적으로 거부해야 한다."""
+
+    topology = GraphTopology(
+        nodes=(WorkflowNode.QUERY_CLS.value, gated_node),
+        edges=(
+            (START, WorkflowNode.QUERY_CLS.value),
+            (WorkflowNode.QUERY_CLS.value, gated_node),
+            (gated_node, END),
+        ),
+    )
+    with pytest.raises(EphemeralApprovalGateUnsupported):
+        build_ephemeral_workflow(_harness(), topology)
+
+
+def test_the_static_path_does_not_carry_a_shared_designed_topology_slot() -> None:
+    """`_designed_topology` 를 인스턴스 속성으로 두면, 오래 살아남고 요청들이
+    공유하는 `MultiAgentWorkflow` 위에 질의별 값을 얹는 꼴이라 동시 요청
+    두 개가 서로의 설계를 덮어쓰는 경합을 만든다(fix round 1/5, 리뷰 지적).
+    그래서 그런 슬롯을 아예 두지 않는다 -- 이 테스트는 그 부재를 고정해,
+    나중에 누군가 실제 배선을 만들며 인스턴스 속성을 다시 들이는 것을
+    막는다. 설계된 토폴로지는 호출 스코프로만 전달돼야 한다."""
+
     harness = _harness(graph_design_enabled=False)
-    assert harness._designed_topology is None
+    assert not hasattr(harness, "_designed_topology")
 
 
 def test_the_compiled_static_graph_matches_its_pre_task_9_snapshot() -> None:
-    """`_designed_topology` 가 `None` 이라는 것만으로는 "정적 그래프 배선이
-    안 바뀌었다" 를 증명하지 못한다 (그 속성은 애초에 아무도 안 채운다).
-    이 테스트는 더 강하게, `_create_workflow_graph` 가 실제로 컴파일해 내는
-    노드·엣지 집합이 이번 태스크의 코드 변경 이전에 캡처한 스냅샷과 정확히
-    같은지를 해시로 고정한다."""
+    """`_create_workflow_graph` 가 실제로 컴파일해 내는 노드·엣지 집합이
+    이번 태스크의 코드 변경 이전에 캡처한 스냅샷과 정확히 같은지를 해시로
+    고정한다. `_create_workflow_graph`/`_ensure_graph_initialized` 는 이
+    태스크에서 단 한 줄도 바뀌지 않았으므로 항상 같아야 한다."""
 
     harness = _harness(graph_design_enabled=False)
-    assert _static_graph_snapshot_hash(harness) == _STATIC_GRAPH_SNAPSHOT_SHA256
+    actual_hash = _static_graph_snapshot_hash(harness)
+    assert actual_hash == _STATIC_GRAPH_SNAPSHOT_SHA256, (
+        "정적 그래프(_create_workflow_graph)가 컴파일해 내는 노드/엣지 집합이 "
+        "바뀌었다. graph_design 관련 코드는 이 그래프를 절대 건드리지 않아야 "
+        "하므로, 이 실패는 (a) 이 태스크의 변경이 실수로 정적 배선에 영향을 "
+        "줬거나 (b) 다른 누군가 정적 그래프 배선을 의도적으로 바꿨다는 뜻이다. "
+        "(b) 라면 이 파일 상단의 '재현/재캡처 방법' 주석에 있는 스크립트로 "
+        "새 해시를 다시 캡처해 _STATIC_GRAPH_SNAPSHOT_SHA256 을 갱신하고, "
+        "무엇이 왜 바뀌었는지 커밋 메시지에 남긴다."
+    )
