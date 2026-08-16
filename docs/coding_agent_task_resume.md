@@ -1,13 +1,21 @@
 # Coding Agent 작업 재개 문서
 
-**작성일:** 2026-07-25 · **최종 정정:** 2026-08-08 (수치·사실 재실측)
-**작업 위치:** `.worktrees/` 워크트리 격리 방식
-**현재 활성 워크트리:** `.worktrees/managed-sandbox-control-plane` (브랜치 `feature/managed-sandbox-control-plane`)
+**작성일:** 2026-07-25 · **최종 정정:** 2026-08-16 (dev 병합·워크트리 제거 반영)
+**작업 위치:** **`dev` 직접** — 워크트리는 제거됐다
 **근거:** `docs/superpowers/plans/*coding*`, `*sandbox*`, `*durable*`, git 커밋 이력,
 `.superpowers/sdd/2026-07-25-managed-sandbox-control-plane/progress.md`
 
+> ✅ **2026-08-16: 플랜14 Task 5까지 dev에 병합됐다** (`508dd275`). 마이그레이션 045가
+> dev에 있고 **E-S1이 충족**됐다. 워크트리 `.worktrees/managed-sandbox-control-plane`은
+> 제거했고 브랜치 `feature/managed-sandbox-control-plane`만 남아 있다.
+> **아래 본문의 워크트리 경로는 당시 기록이며 지금은 존재하지 않는다** — 명령을 그대로
+> 복사하지 말고 저장소 루트에서 실행할 것.
+>
+> SDD 원장 3종은 워크트리 제거 전에 `.superpowers/sdd/<plan>/`(저장소 루트)로 옮겨 뒀다.
+> `.superpowers/`는 gitignore이므로 **커밋에는 없고 이 머신에만 있다.**
+
 > ⚠️ **플랜 문서의 체크박스는 신뢰하지 말 것.** 전 플랜의 `- [x]`가 0개다.
-> 실제 진행 상황은 git 커밋 메시지와 워크트리 내 `.superpowers/sdd/<plan>/progress.md`에만 있다.
+> 실제 진행 상황은 git 커밋 메시지와 `.superpowers/sdd/<plan>/progress.md`에만 있다.
 
 > 📌 **이 트랙은 이제 로드맵의 트랙 E다.**
 > [DEEP_ANALYSIS_HARNESS_ROADMAP.md §12](DEEP_ANALYSIS_HARNESS_ROADMAP.md)가 요약·출하
@@ -265,7 +273,7 @@ db/migrations/045_add_coding_managed_sandboxes.sql
 > 판정 근거 넷과 절차는 아래 「원장 무결성 문제 — 정정 완료」 절을 참고할 것.
 
 ```bash
-cd /Users/ywsung/Desktop/neos/.worktrees/managed-sandbox-control-plane
+cd /Users/ywsung/Desktop/neos
 git status --short
 #  M neos/coding/managed/adapters/docker_shadow.py       (+305 −33)
 #  M tests/coding/managed/adapters/test_docker_shadow.py (+206)
@@ -366,7 +374,7 @@ provider-reference 암호화, `1b9d2ad5`·`f38e357e`·`5aa31a22`)도 완료됐�
 플랜 14 **Task 6(라이프사이클 조정 · 정리 SLO · Celery 전달)** 부터다.
 
 ```bash
-cd /Users/ywsung/Desktop/neos/.worktrees/managed-sandbox-control-plane
+cd /Users/ywsung/Desktop/neos
 
 # 1) 기존 베이스라인 확인
 GOOGLE_API_KEY=test-key /Users/ywsung/Desktop/neos/.venv/bin/pytest -q tests/coding
@@ -404,7 +412,8 @@ merge 이후 갱신되지 않았으므로 재개 시 위 1)로 다시 실측할 
 - 최종 수용 게이트: 플랜 `:1201`
 - 관련 문서: [deep_analysis_task_task_resume.md](archive/deep_analysis_task_task_resume.md),
   [role_based_model_routing_task_resume.md](archive/role_based_model_routing_task_resume.md)
-- SDD 원장: `.worktrees/managed-sandbox-control-plane/.superpowers/sdd/2026-07-25-managed-sandbox-control-plane/`
+- SDD 원장: `.superpowers/sdd/2026-07-25-managed-sandbox-control-plane/` 와
+  `.superpowers/sdd/2026-08-11-coding-agent-track-e-resume/` (저장소 루트, gitignore)
   (⚠️ 이중 기록 — §4 「원장 무결성 문제」, 로드맵 CA4)
 - 전체 로드맵: `docs/ROADMAP.md` — ⚠️ 여기에는 **코딩 트랙이 한 번도 등장하지 않는다**
   (로드맵 CA7)
