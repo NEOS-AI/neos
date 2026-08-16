@@ -28,6 +28,30 @@ from typing import Protocol
 START = "__start__"
 END = "__end__"
 
+# `MultiAgentWorkflow._create_initial_state` (neos/workflow/graph.py) 가 그래프
+# 실행 전에 `user_input[...]` 필수 접근(=`.get()` 이 아니라 서브스크립트)으로
+# 채우는 키들 -- 노드가 하나도 안 써도 START 이전부터 항상 진짜 값이 들어
+# 있다. `user_id`/`session_id`/`original_query` 는 각각 `user_input["user_id"]`
+# / `["session_id"]` / `["query"]` 로 대입되고(누락되면 그래프가 시작하기도
+# 전에 KeyError), `execution_start` 는 `datetime.now()` 로 무조건 대입된다.
+# 이 넷 말고 `_create_initial_state` 가 채우는 나머지 필드(`search_results=[]`,
+# `mission_id=None` 등)는 전부 `.get()` 이거나 빈 컨테이너/None 기본값이라
+# "항상 의미 있는 값" 이 아니므로 여기 넣지 않는다 -- 그런 필드를 requires 하는
+# 노드가 실제로 빈 값을 받는 경로는 이 함수가 아니라 진짜 그래프 배선(또는
+# 계약)의 문제이지, 초기 상태의 문제가 아니다.
+#
+# 원래 `topology_export.py` (정적 그래프를 AST 로 추출하는 모듈) 안에만
+# `_INITIAL_WRITES` 로 사설(private)로 존재했다. 이 상수는 그 모듈 하나의
+# 관심사가 아니라 "그래프 진입 계약" 그 자체를 나타내는 그래프 어휘라서,
+# `GraphTopology.initial_writes` 를 채우는 모든 호출자(정적 배선을 뽑는
+# `topology_export.static_topology`, 서브에이전트 설계를 파싱하는
+# `graph_designer.parse_topology` 양쪽 다) 가 같은 정의 하나를 공유해야
+# 한다 -- 두 곳에 값을 따로 적으면 언젠가 한쪽만 고쳐져 드리프트한다. 그래서
+# `GraphTopology` 가 사는 이 모듈로 옮겼다.
+GRAPH_ENTRY_WRITES: frozenset[str] = frozenset(
+    {"user_id", "session_id", "original_query", "execution_start"}
+)
+
 
 class _ContractLike(Protocol):
     """`validate_topology` 가 실제로 쓰는 계약 속성 두 개만 요구하는 구조적 타입.

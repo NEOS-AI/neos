@@ -23,6 +23,25 @@ deep_analysis 하네스는 값비싼 교훈 하나를 남겼다: **이벤트를 
 예외든 타임아웃이든, 이 함수의 반응은 항상 하나다: 이벤트를 남기고
 `topology=None` 을 돌려준다. 호출자는 `topology` 가 `None` 이면 정적
 그래프를 쓴다.
+
+**응답 없는 설계는 승인하지 않는다 (I1).** `mandatory` 의 기본값
+(`_DEFAULT_MANDATORY_NODES`)은 `response_generator` 를 못박는다 -- 그
+노드가 없는 토폴로지는 START 에서 END 까지 구조적으로 성립해도(다른 일곱
+규칙을 전부 통과해도) 사용자에게 돌려줄 응답을 만들지 않는다. 그런 설계가
+`graph_design_accepted` 로 조용히 승인되는 것이 이 관문이 막아야 하는
+"그럴듯하지만 빈 산출물" 이다. 이 기본값은 호출자가 `mandatory=()` 를
+명시적으로 넘기면 오버라이드된다 -- 그 선택은 코드에 드러난다.
+
+**예산은 아직 강제하지 않는다.** `prompts/graph_design.md` 는 서브에이전트
+에게 노드 비용 합계가 예산을 넘지 않게 설계하라고 지시하지만, 이 트리
+어디에도 노드별 실제 비용 표가 없다. 없는 비용 표를 추측해 채우면 근거
+없는 숫자로 설계를 거부/통과시키는 셈이라 하지 않는다. 그래서 `budget`/
+`node_costs` 는 `validate_topology` 로 그대로 흘려보내는 통로만 열어 뒀고
+(호출자가 실제 비용 표를 갖게 되면 채울 수 있다), 기본값은 둘 다 `None`
+이라 예산 검사 자체가 돌지 않는다. `request.budget`(프롬프트에 박아 넣는
+값)을 여기 `budget` 에 자동으로 흘려보내지 않는다 -- `node_costs` 없이
+`budget` 만 넘기면 `validate_topology` 의 fail-closed 규칙이 모든 노드를
+"비용 미선언" 위반으로 잡아, 사실상 모든 설계를 거부하게 된다.
 """
 
 import asyncio
@@ -34,6 +53,7 @@ from typing import Any
 
 from neos.config.settings import settings
 from neos.workflow.contracts import NodeContract
+from neos.workflow.enums import WorkflowNode
 from neos.workflow.graph_designer import DesignRequest, GraphDesigner
 from neos.workflow.topology import GraphTopology, validate_topology
 
@@ -41,6 +61,17 @@ from neos.workflow.topology import GraphTopology, validate_topology
 # 16자(64비트)면 우연한 충돌 확률이 무시할 만한 수준이면서도 로그에서 눈으로
 # 비교하기 좋은 짧은 식별자가 된다 -- 매직 넘버로 흩어놓지 않도록 이름을 준다.
 _TOPOLOGY_HASH_HEX_LENGTH = 16
+
+# 이 관문을 통과한 설계는 반드시 응답을 만들어 낼 수 있어야 한다 -- 그렇지
+# 않으면 "그럴듯하지만 빈 산출물"(§ 리뷰 I1)이 `graph_design_accepted` 로
+# 조용히 승인된다. `mandatory` 의 기본값을 여기 명시적 상수로 못박는다: 이
+# 요구는 "호출자가 깜빡하면 사라지는 습관"이 아니라 "이 관문 자체의 불변식"
+# 이어야 한다 -- 오늘은 `design_graph_or_fallback` 을 실제로 부르는 프로덕션
+# 호출자가 아직 없으므로(설계자는 아직 `execute_workflow` 에 배선되지
+# 않았다), 그 불변식을 지킬 다른 자리가 없다. 호출자가 정말로 응답 없는
+# 설계(예: 순수 부수효과 파이프라인)를 원한다면 `mandatory=()` 를 명시적으로
+# 넘겨 이 기본값을 오버라이드할 수 있다 -- 그 선택은 호출자 책임으로 드러난다.
+_DEFAULT_MANDATORY_NODES: tuple[str, ...] = (WorkflowNode.RESP_GENERATOR.value,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,14 +101,29 @@ async def design_graph_or_fallback(
     designer: GraphDesigner,
     request: DesignRequest,
     contracts: Mapping[str, NodeContract],
-    # 기본값이 안전한 이유는 이 함수의 신중함이 아니라, `validate_topology` 의
-    # `empty_topology` 규칙이 노드 0개인 설계를 `mandatory` 목록과 무관하게
-    # 무조건 거부하기 때문이다(topology.py 참조). 그 규칙이 없다면
-    # `{"nodes": [], "edges": []}` 처럼 `parse_topology` 는 통과하지만
-    # 아무것도 하지 않는 설계가 여기서도 위반 0개로 승인됐을 것이다.
-    # `mandatory` 를 "필수 노드는 없어도 그만" 으로 넓히고 싶다면, 그 전에
-    # `empty_topology` 가 여전히 무조건 검사되는지부터 확인해야 한다.
-    mandatory: Sequence[str] = (),
+    # 기본값을 `_DEFAULT_MANDATORY_NODES` (response_generator) 로 못박는다.
+    # `validate_topology` 의 `empty_topology` 규칙은 노드 0개인 설계만 잡는다
+    # -- "노드가 있지만 응답을 만드는 노드가 없는" 설계(예: query_classifier
+    # 하나로 끝나는 그래프)는 그 규칙을 통과하고도 아무 응답도 내지 않는다.
+    # 그게 바로 이 관문이 막아야 하는 "그럴듯하지만 빈 산출물" 이다. 호출자가
+    # 정말 응답 없는 설계를 원하면(예: 순수 부수효과 파이프라인) `mandatory=()`
+    # 를 명시적으로 넘겨 이 기본값을 오버라이드한다 -- 그 선택은 호출자 책임
+    # 으로 코드에 드러난다.
+    mandatory: Sequence[str] = _DEFAULT_MANDATORY_NODES,
+    # 예산: `prompts/graph_design.md` 는 서브에이전트에게 "노드 비용 합계가
+    # budget 을 넘지 않아야 한다"고 지시하지만, 오늘 이 트리 어디에도 노드별
+    # 실제 비용 표(`node_costs`)가 없다 -- 그 표를 지어내면(추측한 숫자를
+    # `budget_exceeded` 판정에 쓰면) 근거 없는 수치로 설계를 거부하거나
+    # 통과시키는 꼴이라 하지 않는다. 그래서 `budget`/`node_costs` 는 여기서
+    # `validate_topology` 로 그대로 전달하는 통로만 열어 둔다: 실제 비용 표가
+    # 생기면 호출자가 이 둘을 채워 예산을 강제할 수 있다. 오늘은 둘 다
+    # 기본값 `None` 이라 `validate_topology` 의 예산 검사 자체가 아예 돌지
+    # 않는다(budget=None 이면 그 블록을 건너뛴다) -- "느슨하게 통과"가 아니라
+    # "아직 검사하지 않음" 이며, 그 사실은 `request.budget` 을 그대로
+    # `budget` 에 흘려보내지 않는 이 코드와, 위 프롬프트에 추가한 주석으로
+    # 드러난다.
+    budget: int | None = None,
+    node_costs: Mapping[str, int] | None = None,
     timeout_sec: float | None = None,
 ) -> DesignOutcome:
     """설계자를 호출하고, 성공하면 검증하고, 어느 쪽이든 이벤트를 남긴다.
@@ -111,7 +157,11 @@ async def design_graph_or_fallback(
             designer.design(request), timeout=effective_timeout
         )
         violations = validate_topology(
-            topology, contracts=contracts, mandatory=mandatory
+            topology,
+            contracts=contracts,
+            mandatory=mandatory,
+            budget=budget,
+            node_costs=node_costs,
         )
     except TimeoutError:
         events.append(

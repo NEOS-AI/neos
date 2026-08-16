@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Protocol
 
 from neos.workflow.contracts import NodeContract
-from neos.workflow.topology import END, START, GraphTopology
+from neos.workflow.topology import END, GRAPH_ENTRY_WRITES, START, GraphTopology
 
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "graph_design.md"
 # 엣지 하나는 [source, target] 정확히 두 원소여야 한다. 그 외 길이는 형식 오류다.
@@ -111,6 +111,15 @@ def parse_topology(payload: Mapping, *, known_nodes: frozenset[str]) -> GraphTop
     노드라도 이 토폴로지의 `nodes` 목록 밖에서 엣지에만 등장하는 내부
     불일치는 `validate_topology` 의 `unknown_node` 규칙이 별도로 잡는다
     (그 규칙은 카탈로그가 아니라 이 토폴로지 자신의 `nodes` 를 기준으로 삼는다).
+
+    `initial_writes` 는 `GRAPH_ENTRY_WRITES` 로 채운다. 설계자가 낸 토폴로지도
+    정적 그래프와 똑같이 `MultiAgentWorkflow._create_initial_state` 가 START
+    이전부터 채워 두는 진입 계약(`original_query` 등) 위에서 실행된다 --
+    여기서 빠뜨리면(과거에 실제로 그랬다) `query_classifier` 처럼 그 키를
+    `requires` 하는 자연스러운 진입 노드가 있는 거의 모든 설계가
+    `validate_topology` 에서 `unsatisfied_requires` 로 거부된다. 모델이 나쁜
+    그래프를 설계해서가 아니라, 이 파서가 호출자(그래프 실행기)가 이미
+    보장하는 값을 검증기에 전달하지 않아서 생기는 거짓 위반이다.
     """
 
     if not isinstance(payload, Mapping):
@@ -145,7 +154,7 @@ def parse_topology(payload: Mapping, *, known_nodes: frozenset[str]) -> GraphTop
             + ", ".join(unknown)
         )
 
-    return GraphTopology(nodes=nodes, edges=edges)
+    return GraphTopology(nodes=nodes, edges=edges, initial_writes=GRAPH_ENTRY_WRITES)
 
 
 def _parse_nodes(raw: object) -> tuple[str, ...]:

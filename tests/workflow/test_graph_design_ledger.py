@@ -15,6 +15,7 @@
 import asyncio
 
 from neos.workflow.contracts import NodeContract
+from neos.workflow.enums import WorkflowNode
 from neos.workflow.graph_design_ledger import (
     DesignOutcome,
     LedgerEvent,
@@ -206,17 +207,25 @@ def _accepted_event(outcome: DesignOutcome) -> LedgerEvent:
 
 async def test_the_accepted_payload_carries_a_stable_topology_hash() -> None:
     """같은 설계를 두 번 승인해도 해시가 같아야 한다 -- 이 해시가 정적 run 과
-    비교할 수 있는 안정적 식별자라는 스펙 §7-5 의 요구를 고정한다."""
+    비교할 수 있는 안정적 식별자라는 스펙 §7-5 의 요구를 고정한다.
+
+    이 테스트는 해시의 안정성만 본다 -- `mandatory` 기본값(response_generator
+    필수화, I1)과는 무관하므로 `mandatory=()` 를 명시적으로 넘겨 그 게이트를
+    끈다. `_valid_topology()` 의 노드 'a' 는 response_generator 가 아니라서,
+    기본값을 그대로 두면 이 설계는 `missing_mandatory` 로 거부되어
+    `graph_design_accepted` 이벤트 자체가 없어진다."""
 
     outcome_1 = await design_graph_or_fallback(
         designer=FakeGraphDesigner(_valid_topology()),
         request=_request(),
         contracts=_contracts(),
+        mandatory=(),
     )
     outcome_2 = await design_graph_or_fallback(
         designer=FakeGraphDesigner(_valid_topology()),
         request=_request(),
         contracts=_contracts(),
+        mandatory=(),
     )
     hash_1 = _accepted_event(outcome_1).payload["topology_hash"]
     hash_2 = _accepted_event(outcome_2).payload["topology_hash"]
@@ -227,7 +236,11 @@ async def test_the_accepted_payload_carries_a_stable_topology_hash() -> None:
 async def test_reordered_edges_produce_the_same_hash() -> None:
     """같은 그래프를 엣지 나열 순서만 다르게 제안해도 논리적으로 같은
     토폴로지이므로 해시가 같아야 한다 -- 순서는 우연(모델이 JSON 을 낸 순서)일
-    뿐 그래프의 정체성이 아니다."""
+    뿐 그래프의 정체성이 아니다.
+
+    'a'/'b' 는 response_generator 가 아니므로, `mandatory` 기본값(I1)을 그대로
+    두면 이 설계들은 `missing_mandatory` 로 거부된다 -- 이 테스트는 해시
+    안정성만 보므로 그 게이트를 `mandatory=()` 로 명시적으로 끈다."""
 
     ordered = GraphTopology(
         nodes=("a", "b"), edges=((START, "a"), ("a", "b"), ("b", END))
@@ -237,12 +250,16 @@ async def test_reordered_edges_produce_the_same_hash() -> None:
     )
 
     outcome_ordered = await design_graph_or_fallback(
-        designer=FakeGraphDesigner(ordered), request=_request(), contracts=_contracts()
+        designer=FakeGraphDesigner(ordered),
+        request=_request(),
+        contracts=_contracts(),
+        mandatory=(),
     )
     outcome_reordered = await design_graph_or_fallback(
         designer=FakeGraphDesigner(reordered),
         request=_request(),
         contracts=_contracts(),
+        mandatory=(),
     )
 
     assert (
@@ -253,7 +270,10 @@ async def test_reordered_edges_produce_the_same_hash() -> None:
 
 async def test_a_genuinely_different_topology_produces_a_different_hash() -> None:
     """노드 하나가 늘거나 엣지가 다른 곳으로 이어지면 다른 그래프이므로 해시도
-    달라야 한다 -- 같은 해시만 나오는 상수 구현을 잡아낸다."""
+    달라야 한다 -- 같은 해시만 나오는 상수 구현을 잡아낸다.
+
+    'a'/'b' 는 response_generator 가 아니므로 `mandatory=()` 로 I1 의 기본
+    게이트를 명시적으로 끈다(위 두 해시 테스트와 같은 이유)."""
 
     bigger = GraphTopology(
         nodes=("a", "b"), edges=((START, "a"), ("a", "b"), ("b", END))
@@ -263,12 +283,62 @@ async def test_a_genuinely_different_topology_produces_a_different_hash() -> Non
         designer=FakeGraphDesigner(_valid_topology()),
         request=_request(),
         contracts=_contracts(),
+        mandatory=(),
     )
     outcome_bigger = await design_graph_or_fallback(
-        designer=FakeGraphDesigner(bigger), request=_request(), contracts=_contracts()
+        designer=FakeGraphDesigner(bigger),
+        request=_request(),
+        contracts=_contracts(),
+        mandatory=(),
     )
 
     assert (
         _accepted_event(outcome_small).payload["topology_hash"]
         != _accepted_event(outcome_bigger).payload["topology_hash"]
     )
+
+
+async def test_a_topology_without_the_response_generator_is_rejected_by_default() -> (
+    None
+):
+    """I1: `mandatory` 를 아예 넘기지 않으면 기본값이 response_generator 를
+    필수로 못박는다 -- 응답을 만드는 노드가 없는 설계는 (C1 이 고친
+    `initial_writes` 문제와 무관하게) 여전히 "그럴듯하지만 빈 산출물" 이므로
+    `missing_mandatory` 로 거부돼야 한다. `mandatory` 인자를 생략해 기본값이
+    실제로 적용되는지를 본다 -- 앞의 해시 테스트들처럼 명시적으로 끄지 않는다."""
+
+    topology = GraphTopology(nodes=("a",), edges=((START, "a"), ("a", END)))
+    outcome = await design_graph_or_fallback(
+        designer=FakeGraphDesigner(topology),
+        request=_request(),
+        contracts=_contracts(),
+    )
+    rejected = next(e for e in outcome.events if e.kind == "graph_design_rejected")
+    assert "missing_mandatory" in {v["rule"] for v in rejected.payload["violations"]}
+    assert outcome.topology is None
+
+
+async def test_a_topology_with_the_response_generator_passes_the_mandatory_gate() -> (
+    None
+):
+    """response_generator 노드가 있으면 I1 의 기본 mandatory 게이트를
+    통과한다 -- `missing_mandatory` 위반이 뜨지 않는다."""
+
+    contracts = dict(_contracts())
+    contracts[WorkflowNode.RESP_GENERATOR.value] = _contract(
+        WorkflowNode.RESP_GENERATOR.value
+    )
+    topology = GraphTopology(
+        nodes=(WorkflowNode.RESP_GENERATOR.value,),
+        edges=(
+            (START, WorkflowNode.RESP_GENERATOR.value),
+            (WorkflowNode.RESP_GENERATOR.value, END),
+        ),
+    )
+    outcome = await design_graph_or_fallback(
+        designer=FakeGraphDesigner(topology),
+        request=_request(),
+        contracts=contracts,
+    )
+    accepted = next(e for e in outcome.events if e.kind == "graph_design_accepted")
+    assert accepted.payload["nodes"] == (WorkflowNode.RESP_GENERATOR.value,)

@@ -15,10 +15,15 @@ Task 8 까지는 토폴로지를 설계·검증·기록할 뿐, 그 토폴로지
 
 승인 게이트(`execution_approval`/`mission_approval`)는 정적 그래프에서
 checkpointer + `interrupt_before` 로만 사람 승인을 기다린다.
-`build_ephemeral_workflow` 는 아직 그 둘을 받지 않으므로, 이 두 노드를 포함한
-토폴로지를 조용히 컴파일하는 대신 `EphemeralApprovalGateUnsupported` 로
-명시적으로 거부한다 -- `test_build_ephemeral_workflow_refuses_a_topology_
-with_an_approval_gate` 가 그 계약을 고정한다.
+`build_ephemeral_workflow` 는 이제 그 둘을 인자로 받아 정적 경로와 같은 방식
+으로 `compile()` 에 넘긴다(I3). checkpointer 가 없거나, checkpointer 는
+있어도 게이트 노드를 `interrupt_before` 에 넣지 않으면 여전히
+`EphemeralApprovalGateUnsupported` 로 명시적으로 거부한다 --
+`test_build_ephemeral_workflow_refuses_a_topology_with_an_approval_gate_and_
+no_checkpointer` 가 그 남은 계약을 고정하고,
+`test_build_ephemeral_workflow_honours_interrupt_before_with_a_checkpointer`
+가 checkpointer + interrupt_before 를 제대로 주면 더는 거부되지 않고 그
+설정이 실제로 컴파일된 그래프에 반영됨을 확인한다.
 """
 
 import hashlib
@@ -168,19 +173,8 @@ def test_an_ephemeral_graph_can_actually_run() -> None:
     assert result is not None
 
 
-@pytest.mark.parametrize(
-    "gated_node",
-    [WorkflowNode.EXECUTION_APPROVAL.value, WorkflowNode.MISSION_APPROVAL.value],
-)
-def test_build_ephemeral_workflow_refuses_a_topology_with_an_approval_gate(
-    gated_node: str,
-) -> None:
-    """정적 그래프에서 이 두 노드는 checkpointer + interrupt_before 로만
-    사람 승인을 기다린다. build_ephemeral_workflow 는 그 둘을 받지 않으므로,
-    이 노드를 포함한 토폴로지를 조용히 컴파일해 승인 게이트를 잃어버리는
-    대신 명시적으로 거부해야 한다."""
-
-    topology = GraphTopology(
+def _gated_topology(gated_node: str) -> GraphTopology:
+    return GraphTopology(
         nodes=(WorkflowNode.QUERY_CLS.value, gated_node),
         edges=(
             (START, WorkflowNode.QUERY_CLS.value),
@@ -188,8 +182,69 @@ def test_build_ephemeral_workflow_refuses_a_topology_with_an_approval_gate(
             (gated_node, END),
         ),
     )
+
+
+@pytest.mark.parametrize(
+    "gated_node",
+    [WorkflowNode.EXECUTION_APPROVAL.value, WorkflowNode.MISSION_APPROVAL.value],
+)
+def test_build_ephemeral_workflow_refuses_a_topology_with_an_approval_gate_and_no_checkpointer(
+    gated_node: str,
+) -> None:
+    """정적 그래프에서 이 두 노드는 checkpointer + interrupt_before 로만
+    사람 승인을 기다린다. checkpointer 없이 컴파일하면 interrupt_before 를
+    넘겨도 상태가 저장되지 않아 재개할 지점이 없다 -- build_ephemeral_workflow
+    는 그 토폴로지를 조용히 컴파일해 승인 게이트를 잃어버리는 대신 명시적으로
+    거부해야 한다(I3, checkpointer 가 없는 경우로 범위가 좁아진 refusal)."""
+
     with pytest.raises(EphemeralApprovalGateUnsupported):
-        build_ephemeral_workflow(_harness(), topology)
+        build_ephemeral_workflow(_harness(), _gated_topology(gated_node))
+
+
+@pytest.mark.parametrize(
+    "gated_node",
+    [WorkflowNode.EXECUTION_APPROVAL.value, WorkflowNode.MISSION_APPROVAL.value],
+)
+def test_build_ephemeral_workflow_refuses_a_checkpointer_that_omits_the_gated_node(
+    gated_node: str,
+) -> None:
+    """checkpointer 를 줘도 게이트 노드를 interrupt_before 에 넣지 않으면
+    그 노드는 인터럽트 없이 그냥 지나가며 실행돼 사람 승인이 조용히
+    생략된다 -- 이 경우도 여전히 거부해야 한다."""
+
+    from langgraph.checkpoint.memory import MemorySaver
+
+    with pytest.raises(EphemeralApprovalGateUnsupported):
+        build_ephemeral_workflow(
+            _harness(),
+            _gated_topology(gated_node),
+            checkpointer=MemorySaver(),
+            interrupt_before=(),
+        )
+
+
+@pytest.mark.parametrize(
+    "gated_node",
+    [WorkflowNode.EXECUTION_APPROVAL.value, WorkflowNode.MISSION_APPROVAL.value],
+)
+def test_build_ephemeral_workflow_honours_interrupt_before_with_a_checkpointer(
+    gated_node: str,
+) -> None:
+    """I3: checkpointer 와 그 안에 게이트 노드를 담은 interrupt_before 를
+    함께 주면, 더 이상 거부되지 않고 정적 경로(`workflow.compile(checkpointer=
+    ..., interrupt_before=...)`)와 똑같은 방식으로 컴파일된다 -- 컴파일된
+    그래프의 `interrupt_before_nodes` 로 실제로 그 설정이 반영됐는지까지
+    확인한다(조립만 되고 설정이 무시되는 것과 구별하기 위해)."""
+
+    from langgraph.checkpoint.memory import MemorySaver
+
+    compiled = build_ephemeral_workflow(
+        _harness(),
+        _gated_topology(gated_node),
+        checkpointer=MemorySaver(),
+        interrupt_before=[gated_node],
+    )
+    assert list(compiled.interrupt_before_nodes) == [gated_node]
 
 
 def test_the_static_path_does_not_carry_a_shared_designed_topology_slot() -> None:

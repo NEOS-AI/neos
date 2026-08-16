@@ -1,5 +1,8 @@
 import pytest
 
+import neos.workflow.graph  # noqa: F401 -- 임포트만으로 NODE_CONTRACTS 를 채운다
+from neos.workflow.contracts import NODE_CONTRACTS
+from neos.workflow.enums import WorkflowNode
 from neos.workflow.graph_designer import (
     DesignRequest,
     FakeGraphDesigner,
@@ -7,7 +10,13 @@ from neos.workflow.graph_designer import (
     load_graph_design_prompt,
     parse_topology,
 )
-from neos.workflow.topology import END, START, GraphTopology
+from neos.workflow.topology import (
+    END,
+    GRAPH_ENTRY_WRITES,
+    START,
+    GraphTopology,
+    validate_topology,
+)
 
 
 def test_parse_topology_accepts_a_well_formed_payload() -> None:
@@ -33,6 +42,41 @@ def test_parse_topology_rejects_a_malformed_edge() -> None:
             {"nodes": ["a"], "edges": [["a"]]},
             known_nodes=frozenset({"a"}),
         )
+
+
+def test_parse_topology_fills_in_the_graph_entry_contract() -> None:
+    """C1: `parse_topology` 는 `initial_writes` 를 `GRAPH_ENTRY_WRITES` 로
+    채워야 한다 -- 이 필드가 비어 있으면 `original_query` 등을 요구하는
+    진입 노드가 있는 설계가 전부 `unsatisfied_requires` 로 거부된다."""
+    topology = parse_topology(
+        {"nodes": ["a"], "edges": [[START, "a"], ["a", END]]},
+        known_nodes=frozenset({"a"}),
+    )
+    assert topology.initial_writes == GRAPH_ENTRY_WRITES
+
+
+def test_a_designed_topology_of_real_nodes_is_no_longer_rejected_for_original_query() -> (
+    None
+):
+    """C1 회귀 확인: `parse_topology` 가 `initial_writes` 를 빠뜨리던 시절엔
+    `query_classifier` 처럼 `original_query` 를 요구하는 자연스러운 진입
+    노드가 있는 설계가 거의 전부 `unsatisfied_requires` 로 거부됐다(아홉 개
+    계약이 초기 상태 키를 요구하는데, 그중 하나가 진입 노드였다). 이제는
+    그 키가 START 부터 보장된 것으로 검증기에 전달돼, 이 위반이 사라져야
+    한다."""
+
+    payload = {
+        "nodes": [WorkflowNode.QUERY_CLS.value, WorkflowNode.RESP_GENERATOR.value],
+        "edges": [
+            [START, WorkflowNode.QUERY_CLS.value],
+            [WorkflowNode.QUERY_CLS.value, WorkflowNode.RESP_GENERATOR.value],
+            [WorkflowNode.RESP_GENERATOR.value, END],
+        ],
+    }
+    topology = parse_topology(payload, known_nodes=frozenset(NODE_CONTRACTS))
+    violations = validate_topology(topology, contracts=NODE_CONTRACTS)
+
+    assert not any(v.key == "original_query" for v in violations)
 
 
 def test_the_prompt_file_survives_the_substitution_task_7_will_do() -> None:

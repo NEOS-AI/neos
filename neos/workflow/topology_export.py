@@ -30,22 +30,13 @@ from collections.abc import Mapping
 
 from neos.workflow import graph as graph_module
 from neos.workflow.enums import WorkflowNode, WorkflowPathway
-from neos.workflow.topology import END, START, GraphTopology
+from neos.workflow.topology import END, GRAPH_ENTRY_WRITES, START, GraphTopology
 
-# `MultiAgentWorkflow._create_initial_state` (neos/workflow/graph.py) 가 그래프
-# 실행 전에 `user_input[...]` 필수 접근(=`.get()` 이 아니라 서브스크립트)으로
-# 채우는 키들 -- 노드가 하나도 안 써도 START 이전부터 항상 진짜 값이 들어
-# 있다. `user_id`/`session_id`/`original_query` 는 각각 `user_input["user_id"]`
-# / `["session_id"]` / `["query"]` 로 대입되고(누락되면 그래프가 시작하기도
-# 전에 KeyError), `execution_start` 는 `datetime.now()` 로 무조건 대입된다.
-# 이 넷 말고 `_create_initial_state` 가 채우는 나머지 필드(`search_results=[]`,
-# `mission_id=None` 등)는 전부 `.get()` 이거나 빈 컨테이너/None 기본값이라
-# "항상 의미 있는 값" 이 아니므로 여기 넣지 않는다 -- 그런 필드를 requires 하는
-# 노드가 실제로 빈 값을 받는 경로는 이 함수가 아니라 진짜 그래프 배선(또는
-# 계약)의 문제이지, 초기 상태의 문제가 아니다.
-_INITIAL_WRITES = frozenset(
-    {"user_id", "session_id", "original_query", "execution_start"}
-)
+# `GRAPH_ENTRY_WRITES` (그래프 실행 전 `_create_initial_state` 가 이미 채워
+# 넣는 키 넷)는 `topology.py` 의 그래프 어휘다 -- 이 모듈 하나의 관심사가
+# 아니라 `graph_designer.parse_topology` 도 똑같이 채워야 하는 "그래프 진입
+# 계약" 이라서, 정의를 여기 사설(private)로 복제하지 않고 그쪽에서 그대로
+# 임포트해 쓴다. 두 곳에 따로 적으면 한쪽만 고쳐져 드리프트할 수 있다.
 
 # `_create_workflow_graph` 안 `if settings.X:` 분기가 참조하는 속성 이름을
 # `flags` 딕셔너리 키로 매핑한다. 여기 없는 `settings.*` 속성을 조건식에서
@@ -178,7 +169,7 @@ def static_topology(*, flags: Mapping[str, bool] | None = None) -> GraphTopology
         nodes=tuple(sorted(extractor.nodes)),
         edges=tuple(extractor.edges),
         loop_bounds=loop_bounds,
-        initial_writes=_INITIAL_WRITES,
+        initial_writes=GRAPH_ENTRY_WRITES,
     )
 
 

@@ -1,4 +1,5 @@
 from typing import Dict, Any, Optional
+from collections.abc import Sequence
 from datetime import datetime
 import asyncio
 import hashlib
@@ -144,27 +145,44 @@ _TOPOLOGY_SENTINEL_TO_LANGGRAPH: dict[str, str] = {
 # 로 지정되고, 그 지정 자체가 `use_checkpointer=True` 일 때만 (PostgreSQL
 # checkpointer 가 실행 상태를 저장할 수 있을 때만) 의미가 있다 -- 상태가
 # 저장되지 않으면 "여기서 멈춰서 사람 승인을 기다린다" 는 인터럽트가 재개할
-# 지점 자체를 잃는다. `build_ephemeral_workflow` 는 checkpointer 도
-# interrupt_before 도 받지 않으므로, 이 두 노드를 포함한 토폴로지를 그냥
-# `compile()` 하면 사람 승인 게이트가 아무 신호 없이 사라진다 -- 이 플랜
-# 전체가 잡으려는 "조용한 폴백/조용한 degrade" 와 같은 실패 유형이다.
+# 지점 자체를 잃는다. `build_ephemeral_workflow` 는 이제 checkpointer 와
+# interrupt_before 를 인자로 받아 정적 경로와 같은 방식으로 `compile()` 에
+# 넘긴다 -- 그래도 호출자가 checkpointer 를 안 주거나, checkpointer 는 줬는데
+# 게이트 노드를 interrupt_before 에 넣는 걸 깜빡하면 여전히 같은 위험이
+# 남는다(아래 `EphemeralApprovalGateUnsupported` 참고).
 _INTERRUPT_GATED_NODES: frozenset[str] = frozenset(
     {WorkflowNode.EXECUTION_APPROVAL.value, WorkflowNode.MISSION_APPROVAL.value}
 )
 
 
 class EphemeralApprovalGateUnsupported(ValueError):
-    """설계된 토폴로지가 사람 승인 게이트 노드(`execution_approval`/
-    `mission_approval`)를 포함하는데, `build_ephemeral_workflow` 는 아직
-    checkpointer/interrupt_before 를 지원하지 않아 그 게이트를 실제로
-    구현할 수 없다는 뜻이다. checkpointer 를 받아 정적 경로와 동등하게
-    지원하는 일은, 실제 배선(다음 태스크)이 checkpointer 를 어떤 모양으로
-    이 함수까지 넘길지 결정한 뒤에 하는 편이 낫다고 판단해 지금은 조용히
-    컴파일하는 대신 명시적으로 거부한다."""
+    """`build_ephemeral_workflow` 가 사람 승인 게이트 노드(`execution_approval`/
+    `mission_approval`)를 포함한 토폴로지를, 그 게이트를 실제로 지킬 수 없는
+    설정으로 컴파일하려 할 때만 던진다.
+
+    checkpointer + interrupt_before 를 받는 이번 변경 전에는 이 두 노드가
+    토폴로지에 있기만 하면 무조건 거부했다 -- `build_ephemeral_workflow` 가
+    그 둘을 아예 받지 않았기 때문이다. 지금은 정적 경로와 동등하게 그 둘을
+    받아 적용할 수 있으므로, 게이트 노드 자체는 더 이상 무조건 거부 대상이
+    아니다. 이 예외가 여전히 남아서 거부하는 경우는 정확히 둘 중 하나다:
+
+    1. `checkpointer` 가 `None` 이다 -- checkpointer 없이 컴파일하면
+       `interrupt_before` 를 넘겨도 상태가 저장되지 않아 재개할 지점이 없다
+       (`compile()` 자체는 조용히 성공하지만 인터럽트가 실질적으로 무의미해진다).
+    2. `checkpointer` 는 있지만 게이트 노드가 `interrupt_before` 목록에
+       없다 -- 그러면 그 노드는 checkpointer 가 있어도 그냥 지나가며 실행돼
+       사람 승인이 조용히 생략된다.
+
+    두 경우 모두 "조용히 컴파일해서 승인 게이트를 잃어버리는" 것보다 명시적
+    거부가 낫다는, 이 클래스가 태어난 이유 그대로다."""
 
 
 def build_ephemeral_workflow(
-    workflow: "MultiAgentWorkflow", topology: GraphTopology
+    workflow: "MultiAgentWorkflow",
+    topology: GraphTopology,
+    *,
+    checkpointer: Any | None = None,
+    interrupt_before: Sequence[str] = (),
 ) -> Any:
     """검증을 통과한 `GraphTopology` 하나를 그 자리에서 조립해 컴파일한다.
 
@@ -185,20 +203,31 @@ def build_ephemeral_workflow(
     모든 목적지로 펼쳐서 보므로, 분기가 필요한 설계는 애초에 정적 엣지로
     표현된다(브리프의 의도적 범위 제한).
 
-    `EXECUTION_APPROVAL`/`MISSION_APPROVAL` 노드가 토폴로지에 있으면
-    `EphemeralApprovalGateUnsupported` 를 던진다 -- checkpointer/
-    interrupt_before 없이 그 노드를 컴파일하면 사람 승인 게이트가 조용히
-    사라지기 때문이다(위 `_INTERRUPT_GATED_NODES` 주석 참고).
+    `checkpointer`/`interrupt_before` 는 정적 경로(`_create_workflow_graph`
+    의 `workflow.compile(checkpointer=checkpointer, interrupt_before=interrupt_nodes)`)
+    와 같은 방식으로 그대로 `graph.compile()` 에 전달한다 -- 이 함수는 어느
+    checkpointer 구현체를 쓸지 모르므로(`await get_checkpointer()` 로 얻는
+    PostgreSQL checkpointer 든, 테스트용 `MemorySaver` 든) 호출자가 이미
+    만들어 둔 인스턴스를 그대로 받는다.
+
+    `EXECUTION_APPROVAL`/`MISSION_APPROVAL` 노드가 토폴로지에 있는데
+    `checkpointer` 가 없거나 그 노드가 `interrupt_before` 에 없으면
+    `EphemeralApprovalGateUnsupported` 를 던진다 -- 그 상태로 컴파일하면
+    사람 승인 게이트가 조용히 사라지기 때문이다(클래스 docstring 참고).
     """
 
     gated_nodes = sorted(set(topology.nodes) & _INTERRUPT_GATED_NODES)
-    if gated_nodes:
+    ungated_gated_nodes = [node for node in gated_nodes if node not in interrupt_before]
+    if gated_nodes and (checkpointer is None or ungated_gated_nodes):
         raise EphemeralApprovalGateUnsupported(
-            "ephemeral_checkpointer_unsupported: "
+            "ephemeral_approval_gate_unsupported: "
             f"{gated_nodes} 는 checkpointer + interrupt_before 로만 사람 "
-            "승인을 기다릴 수 있는 노드인데, build_ephemeral_workflow 는 "
-            "아직 그 둘을 받지 않는다. 이 노드들을 포함한 토폴로지는 "
-            "checkpointer 지원이 추가되기 전까지 조립할 수 없다."
+            "승인을 기다릴 수 있는 노드다. "
+            + (
+                "checkpointer 가 주어지지 않았다."
+                if checkpointer is None
+                else f"{ungated_gated_nodes} 가 interrupt_before 목록에 없다."
+            )
         )
 
     graph = StateGraph(AgentState)
@@ -214,6 +243,10 @@ def build_ephemeral_workflow(
             _TOPOLOGY_SENTINEL_TO_LANGGRAPH.get(target, target),
         )
 
+    if checkpointer is not None:
+        return graph.compile(
+            checkpointer=checkpointer, interrupt_before=list(interrupt_before)
+        )
     return graph.compile()
 
 
