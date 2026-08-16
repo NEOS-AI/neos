@@ -36,7 +36,8 @@
 | **C. 프론트엔드** | ✅ job 마이그레이션 완료, ✅ 가시성 갭 해소(FE1·FE4) | §5.3의 저위험 잔여(FE2·FE3)와 신규 FE5·FE6·FE7 |
 | **D. 프레임워크 이탈·계측 통일** | 🟢 **D1 완료** (a·b·c) · **D3a 완료** | **D2/D4/D3b** — 전부 규모가 크다. D4는 §9 D-7(SDK 채택 범위) 확정이 선행 |
 | **E. 코딩 에이전트** | 🔵 **플랜 13/14 완료**, 14번째가 Task 4/10에서 멈춰 있다 | **CA2 소유권 판정** → Task 5. dev에는 마이그레이션 044까지만 있고 045는 워크트리 전용 (§12) |
-| **F. 그래프 엔지니어링 루프** | ⚪ **계획만** (2026-08-14 신설, §13) — 표본 #1~#17로 16회 돌린 개선-측정-판정 루프의 서브에이전트화 | **F1 진단자 백테스트** — 라이브 표본을 쓰지 않고 #11~#16의 기록된 정답으로 잰다. 선행 조건은 트랙 A의 S5 |
+| **F. 개선 루프의 서브에이전트화** | ⚪ **계획만** (2026-08-14 신설, §13) — 표본 #1~#17로 16회 돌린 개선-측정-판정 루프의 서브에이전트화 | **F1 진단자 백테스트** — 라이브 표본을 쓰지 않고 #11~#16의 기록된 정답으로 잰다. 선행 조건은 트랙 A의 S5 |
+| **G. 워크플로우 그래프 계약·검증** | 🟢 **C1·C2 완료, dev 병합됨** (2026-08-16, §14) — 노드 30개 계약 선언 + 토폴로지 검증기. C3·C4는 구현됐으나 **호출자가 없어 비활성** | **G1 프로덕션 배선 버그 7건** (사용자에게 사과가 나가는 경로 포함, §14.2) → **G2 설계자 배선** (§14.3). ⚠️ **트랙 F와 이름이 겹치지만 다른 것이다** |
 
 **트랙 A 한 줄 요약 (2026-08-07 라이브 표본 `20260807T164924Z`로 갱신):**
 **마무리가 처음으로 출력을 냈다.** 574 run 동안 0건이던 `synth_pass`가 6 run에서
@@ -2670,7 +2671,103 @@ D51이 이 트랙의 존재 이유이자 경고다. 나는 "재시도가 예산�
 
 ---
 
-## 14. 참조
+## 14. 트랙 G — 워크플로우 그래프 계약·검증 (2026-08-16 신설)
+
+> ⚠️ **트랙 F와 이름이 겹치지만 다른 것이다.** F는 *심층분석 표본의 개선-측정-판정
+> 루프*를 서브에이전트로 나눈다(§13). G는 *`graph.py`의 노드 배선*을 데이터로 만들고
+> 검증한다. 겹치는 것은 "서브에이전트"라는 단어뿐이고 도메인·산출물·관문이 전부 다르다.
+> 둘을 한 트랙으로 읽으면 F의 선행 조건(S5)이 G에도 걸리는 것으로 오해하게 된다 — 걸리지 않는다.
+
+### 14.0 상태 — C1·C2 완료, C3·C4는 비활성
+
+`dev` 병합 완료 (`6c025854`, 브랜치 `feature/graph-engineering-loop` 18커밋).
+
+| 컴포넌트 | 상태 |
+|---|---|
+| **C1 노드 계약** | ✅ `add_node` 대상 30개 전부 `reads`/`writes`/`requires` 선언 |
+| **C2 토폴로지 검증기** | ✅ 규칙 8종. 정적 그래프에 상시 적용 |
+| **C3 설계 서브에이전트** | 🟡 구현됐으나 **호출자 없음**. `workflow.graph_design_enabled` 기본 `False` |
+| **C4 ephemeral 실행 + 원장** | 🟡 조립기와 이벤트 4종은 있으나 **live 경로에 배선되지 않음** |
+
+**핵심 규칙:** 노드 N이 키 K를 `requires`하면 START에서 N에 이르는 **모든 경로**에
+K를 쓰는 노드가 있어야 한다. 한 분기에만 있으면 다른 분기로 들어온 실행이 `state.get()`
+기본값을 읽고 **조용히 빈 산출물**을 낸다 — §3.2가 이 저장소의 관통 주제로 적은 그 실패다.
+
+### 14.1 이미 회수한 것 — 서브에이전트를 한 번도 실행하지 않고
+
+| 발견 | 내용 |
+|---|---|
+| `AgentState` 미선언 키 **9개** | 런타임에 읽고 쓰는데 `TypedDict`가 강제하지 않아 아무도 잡지 못했다 |
+| **프로덕션 배선 버그 7건** | 아래 §14.2 |
+
+### 14.2 🔴 G1 — 프로덕션 배선 버그 7건 (미수정, 고정만 됨)
+
+검증기를 **출하 중인 그래프**에 겨눈 결과다. 고치지 않았고
+`tests/workflow/test_static_graph_contract.py`가 **양방향으로** 고정한다 — 새 위반도,
+사라진 위반도 실패시킨다(누가 고치면 기대값이 낡은 것이므로 의도적 편집이어야 한다).
+
+| # | 경로 | 증상 |
+|---|---|---|
+| **G1-a** (3건) | `skip_orchestrators` 빠른 경로 → `response_generator` | 재료 없이 도달해 `response_parts`가 비고, `_construct_final_response`가 **"죄송합니다… 관련 정보를 찾지 못했습니다"**를 돌려준다. **단순 대화형 질의가 답 대신 사과를 받는다** |
+| **G1-b** (4건) | `RECURSIVE`/`HYPER_DEEP` → `RESULT_INTEGRATOR` | 두 경로가 `search_results`·`analysis_results`·`generation_results`를 채우지 않는데 `result_integrator`·`quality_validator`가 무조건 재계산한다. ROMA가 답을 낸 뒤 REGENERATE 루프로 **레거시 파이프라인 전체를 헛돌 수 있다** |
+
+> **수정 시 규율.** 고친 뒤 `_KNOWN_VIOLATIONS`에서 지운다. 다만 **계약을 고쳐서
+> 위반을 없애는 것은 수정이 아니다** — `.get()` 기본값을 추가해 `requires`를 떨어뜨리면
+> 테스트는 "해소" 방향으로 실패하고 항목이 지워지지만 **사용자가 보는 버그는 그대로다.**
+> 종료 조건은 배선 수정이다.
+
+### 14.3 🟡 G2 — 설계자 배선 (C3·C4를 live로)
+
+지금 `design_graph_or_fallback`에 **호출자가 없다.** 플래그를 켜도 아무것도 바뀌지
+않는다 — 즉 **플래그의 존재와 부재가 구별되지 않는다.**
+
+`8a1cdd47`이 배선의 선행 조건 셋을 한 커밋에 넣었다(따로 넣으면 중간 상태가 더 나쁘다):
+
+- **C1** `parse_topology`가 `GRAPH_ENTRY_WRITES`를 싣는다 — 없으면 진입 노드가 요구하는
+  `original_query` 때문에 설계가 100% 가까이 거부된다
+- **I1** 원장이 응답 생성 노드를 `mandatory`로 요구한다 — 없으면 **답을 못 내는 그래프가
+  통과**한다
+- **I3** `build_ephemeral_workflow`가 `checkpointer`·`interrupt_before`를 받는다 — 없으면
+  ephemeral 실행이 PostgreSQL 영속화와 **승인 게이트를 말없이 잃는다**
+
+**남은 일:**
+
+| 항목 | 내용 |
+|---|---|
+| G2-a | `execute_workflow`에 호출부. `graph_design_enabled` 게이트 |
+| G2-b | astream 진행 추적 재작업 — **정적 노드 목록을 가정**하므로 설계된 그래프는 진행 이벤트를 조용히 흘린다 |
+| G2-c | 토폴로지를 **호출 스코프로** 나른다. `MultiAgentWorkflow`는 오래 살고 요청 간 공유되므로 인스턴스 상태에 두면 경쟁한다 |
+| G2-d | `interrupt_before`를 토폴로지의 게이트 노드에서 계산 — 없으면 `EphemeralApprovalGateUnsupported`가 계속 거부한다 |
+| G2-e | 정적 run 쪽 토폴로지 해시. 지금은 조인 키만 있고 조인이 없다 |
+
+### 14.4 정직성 지표 — 무엇이 기계 검증되지 않는가
+
+| 필드 | 기계 검증 |
+|---|---|
+| `reads` | 30개 중 19개 (11개는 `hand_curated=True`) |
+| `writes` | 30개 중 5개 (25개는 `writes_hand_curated=True`) |
+| `requires` | **0개** — `requires ⊆ reads`만 강제되고 나머지는 사람 판단이다 |
+
+검증기가 `unsatisfied_requires`를 계산할 때 쓰는 필드는 `writes`와 `requires`다.
+**그 둘이 가장 덜 검증된다.** `state_keys_written`이 위임 체인을 따라가지 않는 것이
+25/30의 직접 원인이며(`state_keys_read`는 따라간다), 이를 좁히는 것이 다음 개선점이다.
+
+> 한계 하나 더: 카나리아는 *선언된* 키와 *추출된* 키를 비교하므로 **양쪽에 다 없는 키는
+> 영원히 침묵한다.** 실재 사례가 있다 — `search_orchestrator`가 런타임 선택된
+> `SearchStrategy`로 디스패치하고 `search_strategies.py`가 6개 키를 더 읽는다.
+> 정적 비교로는 못 닫고, 통합 테스트 중 `AgentState` 접근을 계측하는 쪽이 맞다.
+
+### 14.5 참조
+
+- 설계: `docs/superpowers/specs/2026-08-14-subagent-graph-engineering-loop-design.md`
+- 계획: `docs/superpowers/plans/2026-08-15-subagent-graph-engineering-loop.md`
+- 원장: `.superpowers/sdd/2026-08-15-subagent-graph-engineering-loop/progress.md` (gitignore, 판정 근거 전체)
+- 코드: `neos/workflow/contracts.py` · `topology.py` · `topology_export.py` ·
+  `graph_designer.py` · `graph_designer_llm.py` · `graph_design_ledger.py`
+
+---
+
+## 15. 참조
 
 - 설계 정본: [DEEP_ANALYSIS_HARNESS_DESIGN.md](DEEP_ANALYSIS_HARNESS_DESIGN.md)
 - 재개 문서: [deep_analysis_task_task_resume.md](archive/deep_analysis_task_task_resume.md),
