@@ -485,6 +485,25 @@ sandbox:
     network_mode: none
     user: "10001:10001"
     allow_unpinned_image: false
+  managed:
+    enabled: false
+    shadow_admission: true
+    global_kill_switch: false
+    provider: fake
+    region: local
+    admission_reevaluation_seconds: 30
+    reservation_lease_seconds: 60
+    allocation_lease_seconds: 60
+    cleanup_batch_size: 100
+    cleanup_slo_seconds: 300
+    health_window_size: 20
+    degraded_failure_ratio: 0.25
+    unavailable_failure_ratio: 0.5
+    concurrent_quota: 3
+    daily_allocation_quota: 50
+    daily_active_seconds_quota: 43200
+    archive_bytes_quota: 5368709120
+    daily_cost_micros_quota: 10000000
 
 contextual_retrieval:
   enabled: false

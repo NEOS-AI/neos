@@ -22,6 +22,16 @@ from neos.coding.loop.fake import FakeDurableCodingLoop
 from neos.coding.loop.anthropic import AnthropicCodingLoop, AnthropicLoopConfig
 from neos.coding.model.anthropic import AnthropicCodingModel
 from neos.dataset.adapters import TrackedCodingModel
+from neos.coding.managed.adapters import (
+    DockerShadowManagedAdapter,
+    ManagedNetworkPolicy,
+)
+from neos.coding.managed.allocation import ManagedSandboxAllocationService
+from neos.coding.managed.crypto import (
+    AesGcmProviderReferenceCipher,
+    decode_provider_reference_key,
+)
+from neos.coding.managed.repository import PostgresManagedSandboxRepository
 from neos.coding.repositories.sandbox_repository import PostgresSandboxBindingRepository
 from neos.coding.sandbox.base import SandboxLimits
 from neos.coding.sandbox.bindings import SandboxBindingService
@@ -195,6 +205,111 @@ def create_coding_runtime(
     )
 
 
+def _managed_adapter_registry(
+    *, config: AppConfig, sandboxes
+) -> dict[str, DockerShadowManagedAdapter]:
+    """관리형이 꺼져 있으면 아무것도 만들지 않는다 -- 기존 동작 불변.
+
+    claim_lease_seconds 를 여기서 넘긴다 -- `DockerShadowManagedAdapter`가
+    받는 kwarg지만 지금까지 아무도 호출하지 않아 config 값이 죽어 있었다.
+    """
+    managed = config.sandbox.managed
+    if not managed.enabled:
+        return {}
+    return {
+        "docker": DockerShadowManagedAdapter(
+            provider=sandboxes,
+            claim_lease_seconds=managed.claim_lease_seconds,
+        )
+    }
+
+
+def _managed_sandbox_resource_limits(config: AppConfig) -> SandboxLimits:
+    """관리형 할당의 provider 컨테이너 자체가 지킬 배치 정책 한도.
+
+    `_prepare_real_coding_loop`가 도구 실행용 `limits`를 채우는 것과 같은
+    방식으로 `config.sandbox.resources`에서 채운다. 다만 도구 호출 타임아웃
+    (`coding.tool_timeout_sec`)으로 깎지는 않는다 -- 그건 도구 클레임의
+    한도이지 provider 컨테이너의 자원 상한이 아니다.
+    """
+    resources = config.sandbox.resources
+    execution = config.sandbox.execution
+    return SandboxLimits(
+        cpu_count=resources.cpu_count,
+        memory_bytes=resources.memory_bytes,
+        pids=resources.pids,
+        workspace_bytes=resources.workspace_bytes,
+        command_timeout_sec=execution.command_timeout_sec,
+        max_output_bytes=execution.max_output_bytes,
+        max_stdin_bytes=execution.max_stdin_bytes,
+    )
+
+
+def _managed_provider_reference_cipher(
+    *, config: AppConfig, allocation_id: str, provider: str, generation: int
+) -> AesGcmProviderReferenceCipher:
+    """AAD 에 allocation_id:provider:generation 을 묶어 다른 할당의 봉인을
+    가져다 쓰는 것을 막는다.
+
+    `ManagedSandboxCipher` 프로토콜(`neos.coding.managed.allocation`)은
+    `encrypt(value)`/`decrypt(value)`만 받고 호출마다 문맥을 넘기지 않는다 --
+    그래서 이 cipher는 서비스 생성자에 한 번 박아 넣고 재사용할 수 없고,
+    advance() 대상 할당을 이미 아는 호출자가 매 할당마다 새로 만들어야 한다.
+    """
+    managed = config.sandbox.managed
+    secret = config.secrets.managed_provider_reference_key
+    if not secret:
+        # AppConfig.validate_managed_provider_reference_key 가 managed.enabled=true
+        # 인 구성에서는 이미 막았어야 한다 -- 여기 도달하면 그 가드를 우회해
+        # 호출된 것이므로 조용히 진행하지 않는다.
+        raise RuntimeError("managed_provider_reference_key_missing")
+    key = decode_provider_reference_key(secret)
+    return AesGcmProviderReferenceCipher(
+        key=key,
+        key_version=managed.provider_reference_key_version,
+        associated_data=f"{allocation_id}:{provider}:{generation}",
+    )
+
+
+def _managed_sandbox_repository(
+    session_factory=None,
+) -> PostgresManagedSandboxRepository:
+    """`PostgresSandboxBindingRepository`가 이미 쓰는 것과 같은
+    session_factory 대체 규칙을 따른다."""
+    return PostgresManagedSandboxRepository(session_factory or db_manager.get_session)
+
+
+def create_managed_sandbox_allocation_service(
+    *,
+    config: AppConfig,
+    sandboxes,
+    repository,
+    cipher,
+) -> ManagedSandboxAllocationService | None:
+    """관리형 할당 서비스를 config 로 배선한다.
+
+    레지스트리가 비어 있으면(=`sandbox.managed.enabled`가 꺼져 있으면) 아무것도
+    만들지 않는다 -- 기존 경로를 불변으로 둔다. resource_limits·network_policy·
+    image_identity·lease_seconds 는 배치 정책이라 할당별로 저장하지 않고
+    (`ManagedSandboxAllocationService`·`AllocationPlan` 문서 참고) 여기서 매번
+    config 로부터 채운다. `cipher`는 이 함수가 만들지 않는다 -- 호출자가
+    `_managed_provider_reference_cipher()`로 advance() 대상 할당에 맞춰 만들어
+    넘겨야 한다(그 함수 문서 참고).
+    """
+    adapters = _managed_adapter_registry(config=config, sandboxes=sandboxes)
+    if not adapters:
+        return None
+    return ManagedSandboxAllocationService(
+        repository=repository,
+        adapters=adapters,
+        cipher=cipher,
+        resource_limits=_managed_sandbox_resource_limits(config),
+        network_policy=ManagedNetworkPolicy.BLOCK_ALL,
+        image_identity=sandboxes.image_identity,
+        lease_seconds=config.sandbox.managed.allocation_lease_seconds,
+    )
+
+
 def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
     coding = config.coding_model
     coding_model = resolve_model(
@@ -265,7 +380,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
             limits=limits,
             snapshot_cadence=coding.mutation_snapshot_interval,
         )
-        return AnthropicCodingLoop(
+        loop = AnthropicCodingLoop(
             model=model,
             tools=tools,
             executor=executor,
@@ -274,6 +389,16 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
             metrics=metrics,
             audit=LoggingCodingAuditSink(),
         )
+        # 코딩 루프의 model 축(TrackedCodingModel 계측, 위)과 이 sandbox
+        # provider 축은 직교한다 -- 관리형이 꺼져 있으면(기본값) 빈 dict라
+        # 아래는 부작용이 없다. 실제 ManagedSandboxAllocationService는
+        # create_managed_sandbox_allocation_service()가 따로 조립한다: cipher는
+        # 할당마다 새로 만들어야 해서(_managed_provider_reference_cipher 문서
+        # 참고) 여기서 함께 만들 수 없다.
+        loop.managed_adapters = _managed_adapter_registry(
+            config=config, sandboxes=sandboxes
+        )
+        return loop
 
     return finish
 

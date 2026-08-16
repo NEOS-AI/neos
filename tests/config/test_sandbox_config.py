@@ -1,3 +1,5 @@
+import base64
+
 import pytest
 from pydantic import ValidationError
 
@@ -20,6 +22,90 @@ def test_development_defaults_to_memory_provider() -> None:
     assert config.sandbox.workspace.ticket_ttl_seconds == 30
     assert config.sandbox.workspace.pty_idle_ttl_seconds == 1_800
     assert config.sandbox.workspace.pty_max_sessions == 3
+
+
+def test_managed_sandbox_defaults_are_safe_for_shadow_admission() -> None:
+    config = AppConfig.model_validate({"environment": "development"})
+
+    assert config.sandbox.managed.enabled is False
+    assert config.sandbox.managed.shadow_admission is True
+    assert config.sandbox.managed.global_kill_switch is False
+    assert config.sandbox.managed.provider == "fake"
+    assert config.sandbox.managed.region == "local"
+    assert config.sandbox.managed.admission_reevaluation_seconds == 30
+    assert config.sandbox.managed.reservation_lease_seconds == 60
+    assert config.sandbox.managed.allocation_lease_seconds == 60
+    assert config.sandbox.managed.cleanup_batch_size == 100
+    assert config.sandbox.managed.cleanup_slo_seconds == 300
+    assert config.sandbox.managed.health_window_size == 20
+    assert config.sandbox.managed.degraded_failure_ratio == 0.25
+    assert config.sandbox.managed.unavailable_failure_ratio == 0.5
+    assert config.sandbox.managed.concurrent_quota == 3
+    assert config.sandbox.managed.daily_allocation_quota == 50
+    assert config.sandbox.managed.daily_active_seconds_quota == 43_200
+    assert config.sandbox.managed.archive_bytes_quota == 5 * 1024**3
+    assert config.sandbox.managed.daily_cost_micros_quota == 10_000_000
+    assert config.sandbox.managed.provider_reference_key_version == 1
+
+
+def test_managed_enabled_without_provider_reference_key_refuses_to_start() -> None:
+    with pytest.raises(ValidationError, match="managed_provider_reference_key"):
+        AppConfig.model_validate({"sandbox": {"managed": {"enabled": True}}})
+
+
+def test_managed_enabled_with_non_base64_reference_key_refuses_to_start() -> None:
+    with pytest.raises(ValidationError, match="base64"):
+        AppConfig.model_validate(
+            {
+                "sandbox": {"managed": {"enabled": True}},
+                "secrets": {"managed_provider_reference_key": "not-base64!!"},
+            }
+        )
+
+
+def test_managed_enabled_with_wrong_length_reference_key_refuses_to_start() -> None:
+    short_key_b64 = "AAAA"  # 3 bytes, decoded -- not a valid AES key length.
+    with pytest.raises(ValidationError, match="16, 24, or 32 bytes"):
+        AppConfig.model_validate(
+            {
+                "sandbox": {"managed": {"enabled": True}},
+                "secrets": {"managed_provider_reference_key": short_key_b64},
+            }
+        )
+
+
+def test_managed_enabled_with_valid_reference_key_starts() -> None:
+    key_b64 = base64.b64encode(bytes(32)).decode("ascii")
+    config = AppConfig.model_validate(
+        {
+            "sandbox": {"managed": {"enabled": True}},
+            "secrets": {"managed_provider_reference_key": key_b64},
+        }
+    )
+
+    assert config.sandbox.managed.enabled is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("admission_reevaluation_seconds", 0),
+        ("reservation_lease_seconds", 601),
+        ("allocation_lease_seconds", 0),
+        ("cleanup_batch_size", 1_001),
+        ("health_window_size", 3),
+        ("degraded_failure_ratio", 1.1),
+        ("unavailable_failure_ratio", -0.1),
+        ("concurrent_quota", 0),
+        ("daily_allocation_quota", 0),
+        ("daily_active_seconds_quota", 0),
+        ("archive_bytes_quota", 0),
+        ("daily_cost_micros_quota", 0),
+    ],
+)
+def test_managed_sandbox_limits_are_bounded(field: str, value: int | float) -> None:
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"sandbox": {"managed": {field: value}}})
 
 
 @pytest.mark.parametrize(
@@ -87,3 +173,59 @@ def test_lifecycle_timeout_relationships_are_validated() -> None:
                 }
             }
         )
+
+
+def test_claim_lease_must_outlast_the_worst_case_create_sequence() -> None:
+    """claim_lease_seconds 가 create_timeout_sec 에 비해 너무 짧으면 안 된다.
+
+    짧으면, 아직 create() 를 진행 중인 살아있는 소유자를 죽은 것으로 오판해
+    회수한다 -- 같은 idempotency_key 로 컨테이너가 두 개 생기는 사고로 이어진다.
+    관리형 sandbox 를 쓰지 않는 배포에는 이 불변식이 무의미하므로
+    `managed.enabled` 가 켜져 있을 때만 적용된다.
+    """
+    key_b64 = base64.b64encode(bytes(32)).decode("ascii")
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(
+            {
+                "sandbox": {
+                    "lifecycle": {"create_timeout_sec": 30},
+                    "managed": {"enabled": True, "claim_lease_seconds": 1},
+                },
+                "secrets": {"managed_provider_reference_key": key_b64},
+            }
+        )
+
+
+def test_claim_lease_that_comfortably_outlasts_create_is_accepted() -> None:
+    key_b64 = base64.b64encode(bytes(32)).decode("ascii")
+    config = AppConfig.model_validate(
+        {
+            "sandbox": {
+                "lifecycle": {"create_timeout_sec": 30},
+                "managed": {"enabled": True, "claim_lease_seconds": 300},
+            },
+            "secrets": {"managed_provider_reference_key": key_b64},
+        }
+    )
+
+    assert config.sandbox.managed.claim_lease_seconds == 300
+
+
+def test_claim_lease_check_is_skipped_when_managed_sandbox_is_disabled() -> None:
+    """관리형 sandbox 를 쓰지 않는 배포는 이 불변식을 무시해야 한다.
+
+    `sandbox.enabled` 와 `sandbox.managed.enabled` 모두 꺼진 상태에서
+    `create_timeout_sec` 를 상한(300)까지 올려도, claim_lease_seconds 는
+    기본값 그대로 통과해야 한다 -- 이 기능을 전혀 쓰지 않는 배포가
+    막히면 안 된다.
+    """
+    config = AppConfig.model_validate(
+        {
+            "sandbox": {
+                "enabled": False,
+                "lifecycle": {"create_timeout_sec": 50},
+            }
+        }
+    )
+
+    assert config.sandbox.managed.enabled is False
