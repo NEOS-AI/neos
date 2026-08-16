@@ -48,6 +48,16 @@ class NodeContract:
     # 공허하다. 사람이 위임 대상 소스를 직접 읽고 채웠다는 표시이며, 붙일 때
     # 마다 무엇을 보고 채웠는지 데코레이터 옆 주석에 남긴다.
     hand_curated: bool = False
+    # `writes` 판의 `hand_curated` -- True 면 `state_keys_written` 이 이 계약이
+    # 선언한 writes 전부를 노드 자신의 소스에서 확인하지 못했다는 뜻이다.
+    # `_guaranteed_keys`(topology.py) 는 정확히 이 `writes` 필드로
+    # `unsatisfied_requires` 규칙 전체를 계산한다 -- writes 를 과잉 선언하면
+    # (실제로는 안 쓰는 키를 썼다고 주장하면) 검증기가 깨진 토폴로지를 승인해
+    # 버리는데, `state_keys_written` 은 위임 체인을 따라가지 않으므로(이번
+    # 라운드는 인라인 구현만 커버) `self.<attr>.<method>(state)` 로 위임하는
+    # 노드는 예외 없이 이 플래그가 True 다. 붙일 때마다 왜 검증되지 않는지
+    # 데코레이터 옆 주석에 남긴다.
+    writes_hand_curated: bool = False
 
     def __post_init__(self) -> None:
         if not self.requires <= self.reads:
@@ -64,6 +74,7 @@ def node_contract(
     writes: Iterable[str] = (),
     requires: Iterable[str] = (),
     hand_curated: bool = False,
+    writes_hand_curated: bool = False,
 ):
     """노드 메서드에 계약을 붙이고 전역 레지스트리에 등록한다."""
 
@@ -75,6 +86,7 @@ def node_contract(
             requires=frozenset(requires),
             handler=fn,
             hand_curated=hand_curated,
+            writes_hand_curated=writes_hand_curated,
         )
         if contract.node in NODE_CONTRACTS:
             raise ValueError(f"{contract.node}: 계약이 두 번 선언됐다")
@@ -261,3 +273,58 @@ def state_keys_read(fn: Callable) -> set[str]:
     잡지 못한다 -- 그런 노드는 `hand_curated=True` 로 명시해야 한다.
     """
     return _state_keys_read(fn, owner=None, depth=0, visited=set())
+
+
+def _literal_state_keys_written(tree: ast.AST) -> set[str]:
+    """AST 트리에서 상태에 실제로 쓰이는 것으로 확인 가능한 리터럴 키만 뽑는다.
+
+    두 형태만 인식한다: `state["x"] = ...` (Subscript 의 Store 컨텍스트) 와,
+    함수가 반환하는 dict 리터럴의 최상위 키(`return {"x": ..., "y": ...}`).
+    `**other` 로 언패킹해 섞여 들어오는 키, 지역 변수에 먼저 담았다가
+    이름으로 반환하는 키(`result = {...}; return result`), 위임 호출이
+    돌려주는 dict 를 그대로 반환하는 경우(`return await self.x.y(state)`)는
+    잡지 않는다 -- `reads` 추출기(`state_keys_read`)와 달리 위임 체인도
+    따라가지 않는다. 이 저장소의 노드 30개 중 16개가 한 줄 위임이라, 그런
+    노드는 이 함수가 `writes` 를 사실상 전혀 못 본다 -- 그래서
+    `NodeContract.writes_hand_curated` 가 존재한다.
+    """
+    keys: set[str] = set()
+    for item in ast.walk(tree):
+        if (
+            isinstance(item, ast.Subscript)
+            and isinstance(item.value, ast.Name)
+            and item.value.id == "state"
+            and isinstance(item.ctx, ast.Store)
+            and isinstance(item.slice, ast.Constant)
+            and isinstance(item.slice.value, str)
+        ):
+            keys.add(item.slice.value)
+        if isinstance(item, ast.Return) and isinstance(item.value, ast.Dict):
+            for key_node in item.value.keys:
+                if isinstance(key_node, ast.Constant) and isinstance(
+                    key_node.value, str
+                ):
+                    keys.add(key_node.value)
+    return keys
+
+
+def state_keys_written(fn: Callable) -> set[str]:
+    """소스에서 상태에 실제로 쓰이는 것으로 정적으로 확인 가능한 리터럴 키를 뽑는다.
+
+    `state_keys_read` 와 짝을 이루지만 훨씬 더 보수적이다 -- 위임 체인을
+    따라가지 않고(`fn` 자신의 소스만 본다), `return {...}` 형태의 최상위 dict
+    리터럴과 `state["x"] = ...` 대입만 본다. `writes` 가 계산에 쓰이는 방향은
+    `reads` 와 정반대다: `reads` 는 "선언이 실제보다 적으면 위험"
+    (`actual - declared`) 이지만, `writes` 는 "선언이 실제보다 많으면 위험"
+    (`declared - actual`) 이다 -- `_guaranteed_keys`(topology.py) 가 이
+    `writes` 를 그대로 믿고 `unsatisfied_requires` 를 계산하므로, 실제로는 안
+    쓰는 키를 썼다고 과잉 선언하면 검증기가 깨진 토폴로지를 조용히 승인한다.
+    이 함수가 확인하지 못하는 declared write 는 반드시
+    `writes_hand_curated=True` 로 명시해야 한다.
+    """
+    try:
+        source = textwrap.dedent(inspect.getsource(fn))
+    except (OSError, TypeError):
+        return set()
+    tree = ast.parse(source)
+    return _literal_state_keys_written(tree)

@@ -69,11 +69,20 @@ class GraphTopology:
 
 @dataclass(frozen=True, slots=True)
 class TopologyViolation:
-    """토폴로지 규칙 위반 하나. `rule` 은 안정적인 snake_case 식별자다."""
+    """토폴로지 규칙 위반 하나. `rule` 은 안정적인 snake_case 식별자다.
+
+    `key` 는 위반이 특정 `AgentState` 키에 관한 것일 때만 채워진다(현재는
+    `unsatisfied_requires` 뿐). 예전에는 이 정보가 한국어 `detail` 문장 안에만
+    있어서, 이 위반 집합을 핀으로 고정하는 회귀 테스트가 정규식으로 `detail`
+    에서 키를 파싱해야 했다 -- 문구를 다듬기만 해도 그 테스트가 깨질 수
+    있었다. `key` 를 구조화된 필드로 분리해 그 결합을 끊는다. `detail` 은
+    사람이 읽는 설명으로 그대로 남는다.
+    """
 
     rule: str
     node: str | None
     detail: str
+    key: str | None = None
 
 
 def validate_topology(
@@ -199,6 +208,22 @@ def validate_topology(
     for node in topology.nodes:
         contract = contracts.get(node)
         if contract is None:
+            # 방어선이 실패 시 열리면 안 된다: 계약이 없는 노드를 "요구하는 게
+            # 없다"로 취급해 조용히 넘어가면, 계약을 깜빡 붙이지 않은 노드
+            # 하나만으로 requires 검증 전체가 그 노드에서 무력화된다 --
+            # `budget_exceeded`가 비용 미선언 노드를 "무료"로 보지 않고 그
+            # 자체로 위반으로 보는 것과 정확히 같은 이유(fail closed)다.
+            # `NODE_CONTRACTS` 는 `neos.workflow.graph` 를 임포트해야 채워지는
+            # 전역 레지스트리라, 호출자가 그 임포트를 빼먹으면 `contracts={}`
+            # 가 넘어와 이 분기가 모든 노드에서 조용히 통과를 내줄 수 있었다.
+            violations.append(
+                TopologyViolation(
+                    rule="missing_contract",
+                    node=node,
+                    detail=f"'{node}' 에 계약(NodeContract)이 선언되지 않아 requires 를 검증할 수 없다",
+                    key=None,
+                )
+            )
             continue
         missing_keys = contract.requires - guaranteed.get(node, frozenset())
         for key in sorted(missing_keys):
@@ -210,6 +235,7 @@ def validate_topology(
                         f"'{node}' 가 요구하는 키 '{key}' 가 START 에서 "
                         f"'{node}' 에 이르는 모든 경로에서 보장되지 않는다"
                     ),
+                    key=key,
                 )
             )
 

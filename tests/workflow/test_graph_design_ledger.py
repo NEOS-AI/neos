@@ -49,15 +49,18 @@ def _contract(node: str, *, requires: tuple[str, ...] = ()) -> NodeContract:
 
 
 def _contracts() -> dict[str, NodeContract]:
-    """검증 대상 두 토폴로지가 함께 쓰는 계약 카탈로그.
+    """검증 대상 토폴로지들이 함께 쓰는 계약 카탈로그.
 
     'a' 는 아무것도 요구하지 않아 `_valid_topology` 를 그대로 통과시키고,
     'integrate' 는 'search_results' 를 요구하지만 이 카탈로그 어디서도 그
     키를 쓰는 노드가 없어 `_topology_missing_requires` 를 반드시 위반시킨다.
+    'b' 는 해시 테스트들이 쓰는 두 번째 노드 -- 계약이 없으면 `missing_contract`
+    가 떠 그 토폴로지가 거부되고 만다(FIX 1: 계약 없는 노드는 fail-closed).
     """
 
     return {
         "a": _contract("a"),
+        "b": _contract("b"),
         "integrate": _contract("integrate", requires=("search_results",)),
     }
 

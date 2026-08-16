@@ -1,5 +1,3 @@
-import re
-
 from neos.workflow.contracts import NODE_CONTRACTS
 from neos.workflow.topology import validate_topology
 from neos.workflow.topology_export import static_topology
@@ -50,11 +48,9 @@ _KNOWN_VIOLATIONS: frozenset[tuple[str, str, str]] = frozenset(
     }
 )
 
-# `unsatisfied_requires` 의 `detail` 은 topology.py 에서
-# f"...키 '{key}' 가 START 에서..." 형태로 고정돼 있다 -- 그 리터럴 키를
-# 뽑아내 (rule, node, key) 3튜플로 정규화한다. `TopologyViolation` 이 key를
-# 별도 필드로 노출하지 않으므로 이 파싱이 유일한 추출 경로다.
-_REQUIRES_KEY_PATTERN = re.compile(r"키 '([^']+)'")
+# `TopologyViolation.key` 가 구조화된 필드로 노출하는 값을 그대로 쓴다 --
+# 예전에는 `detail` 한국어 문장에서 정규식으로 키를 뽑아냈는데, 그러면 문구를
+# 다듬기만 해도 이 핀이 깨질 수 있었다.
 
 
 def _violation_signature(violation) -> tuple[str, str, str]:
@@ -62,8 +58,7 @@ def _violation_signature(violation) -> tuple[str, str, str]:
         # 이 목록은 unsatisfied_requires 전용이다 -- 다른 규칙(unreachable_node
         # 등)이 새로 뜨면 키 추출 없이도 곧바로 눈에 띄어야 한다.
         return (violation.rule, violation.node or "", violation.detail)
-    match = _REQUIRES_KEY_PATTERN.search(violation.detail)
-    key = match.group(1) if match else violation.detail
+    key = violation.key if violation.key is not None else violation.detail
     return (violation.rule, violation.node or "", key)
 
 

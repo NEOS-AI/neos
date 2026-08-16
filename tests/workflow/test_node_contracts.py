@@ -9,6 +9,7 @@ from neos.workflow.contracts import (  # noqa: F401 (NodeContract는 공개 인�
     NODE_CONTRACTS,
     NodeContract,
     state_keys_read,
+    state_keys_written,
 )
 from neos.workflow.enums import WorkflowNode
 from neos.workflow.state import AgentState
@@ -105,4 +106,47 @@ def test_a_contract_the_extractor_cannot_reach_is_marked_as_hand_curated(
             f"{name}: 추출기가 다음 read를 소스에서 확인하지 못했다: "
             f"{sorted(unverified)}. 그 키들에는 드리프트 가드가 공허하므로 "
             f"hand_curated=True 로 명시하고 근거를 주석에 남길 것"
+        )
+
+
+@pytest.mark.parametrize("name", ALL_NODES)
+def test_declared_writes_cover_what_the_source_actually_writes(name: str) -> None:
+    """선언하지 않고 쓰는 키가 있으면 검증기가 그 키를 하류에 보장하지 못한다.
+
+    `_guaranteed_keys`(topology.py)는 `writes` 만 보고 START 에서 각 노드에
+    이르는 모든 경로에서 어떤 키가 이미 쓰였는지 계산한다 -- 소스가 실제로
+    쓰는 키를 `writes` 에 선언하지 않으면, 그 키가 실제로는 있는데도 이
+    검증기 눈에는 보장되지 않는 것으로 남는다. `state_keys_read` 짝인
+    `state_keys_written` 은 위임 체인은 따라가지 않지만(더 보수적이다),
+    `return {"x": ...}` 형태의 리터럴 dict 반환과 `state["x"] = ...` 대입은
+    본다 -- 그 범위 안에서 조용히 빠뜨린 선언은 여기서 잡는다.
+    """
+    contract = NODE_CONTRACTS[name]
+    actual = state_keys_written(contract.handler)
+    undeclared = actual - contract.writes
+    assert undeclared == set(), f"{name}: 선언되지 않은 쓰기 {sorted(undeclared)}"
+
+
+@pytest.mark.parametrize("name", ALL_NODES)
+def test_a_contract_whose_writes_the_extractor_cannot_verify_is_marked_hand_curated(
+    name: str,
+) -> None:
+    """writes 중 추출기가 소스에서 확인하지 못하는 키가 하나라도 있으면, `writes` 가
+    선언한 만큼 실제로 쓰이는지에 대한 드리프트 가드는 그 키에 대해서는
+    **작동하지 않는다.** `hand_curated` 가 reads 쪽의 이 구멍을 명시하는 것과
+    똑같이, `writes_hand_curated` 가 writes 쪽을 명시해야 한다.
+
+    이 저장소의 노드 30개 중 16개는 한 줄 위임(`return await
+    self.<attr>.<method>(state)`)이다 -- `state_keys_written` 은 위임 체인을
+    따라가지 않으므로(이번 라운드는 인라인 구현만 커버) 그런 노드는 선언한
+    writes 를 소스에서 전혀 확인할 수 없고, 예외 없이 `writes_hand_curated`
+    가 True 여야 한다.
+    """
+    contract = NODE_CONTRACTS[name]
+    unverified = contract.writes - state_keys_written(contract.handler)
+    if unverified:
+        assert contract.writes_hand_curated, (
+            f"{name}: 추출기가 다음 write를 소스에서 확인하지 못했다: "
+            f"{sorted(unverified)}. 그 키들에는 드리프트 가드가 공허하므로 "
+            f"writes_hand_curated=True 로 명시하고 근거를 주석에 남길 것"
         )

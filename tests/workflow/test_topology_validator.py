@@ -22,11 +22,14 @@ def _contract(node, *, reads=(), writes=(), requires=()) -> NodeContract:
 
 
 def test_a_linear_topology_is_valid() -> None:
+    # 두 노드 다 계약을 선언해야 한다 -- 계약이 없는 노드는 FIX 1(fail-closed)
+    # 이후 `missing_contract` 위반이 되어 이 토폴로지가 더는 "유효"하지 않다.
+    contracts = {"a": _contract("a"), "b": _contract("b")}
     topology = GraphTopology(
         nodes=("a", "b"),
         edges=((START, "a"), ("a", "b"), ("b", END)),
     )
-    assert validate_topology(topology, contracts={}) == ()
+    assert validate_topology(topology, contracts=contracts) == ()
 
 
 def test_an_empty_topology_is_rejected_unconditionally() -> None:
@@ -264,3 +267,45 @@ def test_an_unbypassable_loop_guarantees_the_key_written_inside_it() -> None:
         loop_bounds={"entry": 5, "body": 5},
     )
     assert validate_topology(topology, contracts=contracts) == ()
+
+
+def test_a_node_without_a_contract_fails_closed() -> None:
+    """계약이 없는 노드는 "요구하는 게 없다" 로 통과되지 않는다 (FIX 1).
+
+    `contracts={}` 를 넘기면 `requires` 를 아예 계산할 수 없으므로, 예전에는
+    이 상태를 "이 노드는 아무것도 요구하지 않는다" 로 오인해 위반 0개로
+    통과시켰다 -- `NODE_CONTRACTS` 가 `neos.workflow.graph` 를 임포트해야
+    채워지는 전역 레지스트리라, 그 임포트를 빼먹은 호출자는 이 구멍으로
+    아무 위반 없이 통과했다. 지금은 계약이 없는 노드 자체가 `missing_contract`
+    위반이고, 어느 노드가 계약을 빠뜨렸는지 `node` 필드에 남는다.
+    """
+    topology = GraphTopology(
+        nodes=("a",),
+        edges=((START, "a"), ("a", END)),
+    )
+    violations = validate_topology(topology, contracts={})
+    assert "missing_contract" in _rules(violations)
+    assert any(v.rule == "missing_contract" and v.node == "a" for v in violations)
+
+
+def test_violation_key_is_populated_only_for_key_specific_rules() -> None:
+    """`TopologyViolation.key` 는 특정 `AgentState` 키에 관한 위반에서만 채워진다.
+
+    `unsatisfied_requires` 는 어떤 키가 보장되지 않는지가 곧 위반의 정체라
+    `key` 가 그 키로 채워져야 한다. 반면 `unreachable_node` 처럼 키와 무관한
+    구조적 위반은 `key` 가 `None` 으로 남아야 한다 -- 예전에는 이 정보가
+    한국어 `detail` 문장 안에만 있어서 회귀 테스트가 정규식으로 파싱해야
+    했다.
+    """
+    contracts = {"integrate": _contract("integrate", requires=("search_results",))}
+    topology = GraphTopology(
+        nodes=("integrate", "orphan"),
+        edges=((START, "integrate"), ("integrate", END)),
+    )
+    violations = validate_topology(topology, contracts=contracts)
+
+    requires_violation = next(v for v in violations if v.rule == "unsatisfied_requires")
+    assert requires_violation.key == "search_results"
+
+    unreachable_violation = next(v for v in violations if v.rule == "unreachable_node")
+    assert unreachable_violation.key is None
