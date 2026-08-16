@@ -23,6 +23,17 @@ def _coerce_quality_score(value: Any, default: float = 0.0) -> float:
         return default
 
 
+# LLM 이 답을 못 냈을 때의 문구. **사과문이 아니다** -- 사과문은
+# `_construct_final_response` 가 검색 결과가 없을 때 쓰는 것이고, G1-a 는
+# 검색이 필요 없는 질의가 그 문장을 받는 문제였다.
+_DIRECT_FALLBACKS = {
+    "ko": "무엇을 도와드릴까요?",
+    "en": "How can I help?",
+    "ja": "ご用件をどうぞ。",
+    "zh": "有什么可以帮您的吗？",
+}
+
+
 class ResponseGenerator:
     """최종 응답 생성"""
 
@@ -158,6 +169,101 @@ class ResponseGenerator:
         })
 
         return state
+
+    async def generate_direct_response(self, state: AgentState) -> Dict[str, Any]:
+        """검색을 타지 않는 질의에 **직접** 답한다 (G1-a).
+
+        `skip_orchestrators` 경로는 오케스트레이터를 건너뛰고 곧장 응답 생성으로
+        온다. 그런데 `generate_response()` 는 검색·분석·생성 **결과를 요약하는
+        일만** 하므로 셋이 다 비면 `response_parts` 가 비고,
+        `_construct_final_response` 가 사과문을 돌려준다:
+
+            "죄송합니다. 요청하신 주제에 대한 관련 정보를 찾지 못했습니다."
+
+        그 경로로 오는 질의는 정확히 *검색이 필요 없다고 판정된 것*들이다
+        (`OrchestratorRouter.base_route`: 필수 에이전트 없음 · 도구 없음 ·
+        복잡도 0.5 미만 · 질문 형태 아님 · 검색 키워드 없음). 즉 **인사와 잡담이
+        답 대신 사과를 받고 있었다.** 요약할 것이 없는 게 아니라 요약할 일이
+        아니었다.
+
+        그래서 이 경로에는 답을 만드는 노드가 필요하다. 여기서 만든
+        `final_response` 는 `generate_response()` 의 첫 분기가 그대로 보존한다.
+
+        LLM 이 실패하면 사과문으로 되돌아가지 않는다 -- 그것이 이 함수가
+        없애려는 바로 그 문장이다. 대신 언어별 중립 문구를 준다.
+        """
+        query = state.get("original_query", "") or ""
+        language = state.get("detected_language", "ko") or "ko"
+
+        try:
+            llm = create_tracked_llm(
+                llm=self._get_llm(temperature=0.7, max_tokens=1000),
+                session_id=state.get("session_id", "") or "",
+                user_id=state.get("user_id", "") or "",
+                workflow_step="direct_response",
+                agent_name="response_generator",
+                tags=["direct_response", f"language:{language}"],
+                custom_metadata={"query": query, "purpose": "conversational_reply"},
+            )
+            response = await llm.ainvoke(
+                [HumanMessage(content=self._direct_response_prompt(state, language))]
+            )
+            answer = extract_text_from_response(response).strip()
+        except Exception as error:
+            logger.error("[ResponseGenerator] Direct response failed: %s", error)
+            answer = ""
+
+        if not answer:
+            answer = _DIRECT_FALLBACKS.get(language, _DIRECT_FALLBACKS["en"])
+
+        return {
+            "final_response": answer,
+            # 이 세 키를 **비운 채로 명시한다.** 아래 `response_generator` 는
+            # 이것들을 요약해 답을 만들도록 계약돼 있고(`requires`), 이 경로는
+            # 그것을 채우는 노드를 하나도 지나지 않는다. "결과는 없고 그것이
+            # 최종이다" 를 상태에 적어 그 계약을 이 경로에서 참으로 만든다.
+            #
+            # 다만 이것으로 검증기의 위반 3건이 사라지지는 **않는다.**
+            # `response_generator` 로 들어오는 7개 경로 중 여섯(task_scheduling,
+            # mission_*, execution_approval, self_reflection)도 이 키들을 쓰지
+            # 않기 때문이다. 그 여섯은 스스로 `final_response` 를 채워
+            # `_preserve_existing_response` 로 빠지므로 실제로는 멀쩡하다 --
+            # 계약이 "final_response 가 없을 때만 필요" 라는 조건을 표현하지
+            # 못할 뿐이다. 자세한 것은 로드맵 §14.2.
+            "search_results": [],
+            "analysis_results": [],
+            "generation_results": [],
+            "execution_steps": [
+                *state.get("execution_steps", []),
+                {
+                    "step": "direct_response",
+                    "result": "completed",
+                    "timestamp": datetime.now().isoformat(),
+                },
+            ],
+        }
+
+    def _direct_response_prompt(self, state: AgentState, language: str) -> str:
+        context = state.get("conversation_context") or ""
+        query = state.get("original_query", "") or ""
+        instructions = {
+            "ko": (
+                "너는 대화형 어시스턴트다. 아래 사용자 발화에 자연스럽게 답하라.\n"
+                "이 발화는 외부 검색이 필요 없다고 판정됐다. 검색 결과가 없다는 "
+                "말이나 사과로 시작하지 마라. 모르는 사실을 지어내지 마라 -- "
+                "사실 확인이 필요하면 그렇게 말하라."
+            ),
+            "en": (
+                "You are a conversational assistant. Reply naturally to the "
+                "user's message below. It was classified as needing no external "
+                "search, so do not apologise or mention missing search results. "
+                "Do not invent facts; say when something needs checking."
+            ),
+        }
+        header = instructions.get(language, instructions["en"])
+        if context:
+            return f"{header}\n\n[대화 맥락]\n{context}\n\n[사용자]\n{query}"
+        return f"{header}\n\n[사용자]\n{query}"
 
     def _preserve_existing_response(self, state: AgentState) -> Dict[str, Any]:
         execution_time = int(

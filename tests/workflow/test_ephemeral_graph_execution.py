@@ -104,8 +104,14 @@ from neos.workflow.topology import END, START, GraphTopology  # noqa: E402
 # 아래 상수를 교체하고, 왜 배선이 바뀌었는지를 커밋 메시지에 남긴다 -- 이
 # 테스트가 실패했다고 해시만 바꿔치기하면 "정적 그래프가 안 바뀌었다" 는
 # 보증 자체가 조용히 사라진다.
+# 2026-08-16 (G1-a): 위 스크립트로 재캡처했다. 정적 배선이 **의도적으로**
+# 바뀌었다 -- `skip_orchestrators` 가 `response_generator` 대신
+# `direct_response` 로 가고, `direct_response -> response_generator` 엣지가
+# 생겼다. 검색이 필요 없다고 판정된 질의(인사·잡담)가 요약할 결과가 없다는
+# 이유로 사과문을 받던 것이 G1-a 이며, 그 경로에 답을 만드는 노드가 하나도
+# 없었던 것이 원인이다. 이전 값: 79fada0e...
 _STATIC_GRAPH_SNAPSHOT_SHA256 = (
-    "79fada0ebc474cc6167e6a146aa0862189b9a99ce4f643f31593386a0fc5ba0f"
+    "a78abc14a1c0cdea097f4f05e9fc03345258d5a518e628f473b53300205afa37"
 )
 
 

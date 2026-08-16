@@ -473,6 +473,11 @@ class MultiAgentWorkflow:
         workflow.add_node(WorkflowNode.MISSION_VALIDATOR.value, self._mission_validator_node)
         workflow.add_node(WorkflowNode.MISSION_INTEGRATOR.value, self._mission_integrator_node)
         workflow.add_node(WorkflowNode.RESP_GENERATOR.value, self._generate_response_node)
+        # G1-a: `skip_orchestrators` 는 요약할 결과를 만드는 노드를 하나도
+        # 지나지 않는다. 이 노드가 그 자리에서 직접 답을 만든다.
+        # (엣지는 아래 엣지 절에 있다 -- `test_create_workflow_graph` 가
+        # 첫 add_edge 가 START 에서 나가는 것임을 고정한다.)
+        workflow.add_node(WorkflowNode.DIRECT_RESPONSE.value, self._direct_response_node)
 
         # ROMA: Recursive Orchestrator 노드 (피처 플래그로 격리)
         if settings.RECURSIVE_AGENT_ENABLED:
@@ -497,6 +502,9 @@ class MultiAgentWorkflow:
         # 엣지 정의
         # 1. START → refinement_checker (가장 먼저 쿼리 개선 필요 여부 체크)
         workflow.add_edge(START, WorkflowNode.REFINEMENT_CHECKER.value)
+        # G1-a: 직접 응답 노드는 답을 만든 뒤 응답 생성기로 넘어가고,
+        # 거기서 `_preserve_existing_response` 가 그 답을 그대로 반환한다.
+        workflow.add_edge(WorkflowNode.DIRECT_RESPONSE.value, WorkflowNode.RESP_GENERATOR.value)
 
         # 2. refinement_checker → 조건부 분기 (개선 필요 여부 + continuation 체크)
         workflow.add_conditional_edges(
@@ -535,7 +543,7 @@ class MultiAgentWorkflow:
                 or settings.DEEP_ANALYSIS_ENABLED
                 or settings.EXECUTION_APPROVAL_ENABLED or settings.A2UI_ENABLED):
             _routing_map = {
-                WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
+                WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.DIRECT_RESPONSE.value,
                 WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
                 "mission": WorkflowNode.MISSION_PLANNER.value,
             }
@@ -577,7 +585,7 @@ class MultiAgentWorkflow:
             # A2UI_ENABLED에 따라 라우팅 맵과 노드 등록을 동시에 조건부 처리
             # (노드 미등록 상태에서 라우팅 맵에 키만 있으면 LangGraph 경고 발생)
             _else_routing = {
-                WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.RESP_GENERATOR.value,
+                WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.DIRECT_RESPONSE.value,
                 WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
                 "mission": WorkflowNode.MISSION_PLANNER.value,
                 "task_scheduling": WorkflowNode.TASK_SCHEDULING_NODE.value,
@@ -2010,6 +2018,47 @@ class MultiAgentWorkflow:
     async def _generate_response_node(self, state: AgentState) -> Dict[str, Any]:
         """응답 생성 노드"""
         return await self.response_generator.generate_response(state)
+
+    @node_contract(
+        node=WorkflowNode.DIRECT_RESPONSE,
+        reads={
+            "original_query",
+            "detected_language",
+            "conversation_context",
+            "session_id",
+            "user_id",
+            "execution_steps",
+        },
+        writes={
+            "final_response",
+            "search_results",
+            "analysis_results",
+            "generation_results",
+            "execution_steps",
+        },
+        # `original_query` 가 비어도 LLM 은 호출되고, 실패하면 언어별 중립
+        # 문구로 떨어진다 -- 예외도 빈 결과도 아니므로 requires 에 넣지 않는다.
+        #
+        # `conversation_context` 는 위임 대상이 아니라 그 **헬퍼**
+        # (`ResponseGenerator._direct_response_prompt`) 안에서 읽힌다. 추출기는
+        # 위임 한 단계까지만 따라가므로 이 키를 확인하지 못한다.
+        hand_curated=True,
+        # writes 전부가 위임 대상의 반환 리터럴에서 나온다 -- 이 노드 자신의
+        # 소스에는 근거가 없다.
+        writes_hand_curated=True,
+    )
+    async def _direct_response_node(self, state: AgentState) -> Dict[str, Any]:
+        """G1-a: 검색이 필요 없다고 판정된 질의에 직접 답하는 노드.
+
+        `skip_orchestrators` 는 오케스트레이터를 건너뛰고 곧장 응답 생성으로
+        갔는데, 응답 생성기는 **결과를 요약하는 일만** 한다. 그래서 요약할
+        것이 없는 인사·잡담이 "죄송합니다… 관련 정보를 찾지 못했습니다" 를
+        받았다. 그 경로에 답을 만드는 노드가 없었던 것이 원인이다.
+
+        여기서 채운 `final_response` 를 다음 노드(`response_generator`)의 첫
+        분기가 그대로 보존한다 -- `task_scheduling_node` 와 같은 방식이다.
+        """
+        return await self.response_generator.generate_direct_response(state)
 
     @node_contract(
         node=WorkflowNode.RECURSIVE_ORCHESTRATOR,
