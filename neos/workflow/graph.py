@@ -1,4 +1,5 @@
 from typing import Dict, Any, Optional
+from collections.abc import Sequence
 from datetime import datetime
 import asyncio
 import hashlib
@@ -14,9 +15,11 @@ from neos.utils.smart_cache_manager import smart_cache_manager
 from neos.config.settings import settings
 from neos.tools.tool_selector import tool_selector
 
+from .contracts import NODE_CONTRACTS, node_contract
 from .enums import WorkflowNode, WorkflowPathway, IntentType, AutonomyLevel
 from .state import AgentState, WorkflowConfig
 from .harness.cache_policy import should_cache_harness_result
+from .topology import END as TOPOLOGY_END, GraphTopology, START as TOPOLOGY_START
 from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationOrchestrator
 from .processors import (
     ResultProcessor,
@@ -127,6 +130,124 @@ def _mission_validation_passed(result: Dict[str, Any]) -> bool:
 def _get_priority_routing(state: AgentState) -> str | None:
     """최우선 라우팅 경로 반환. 해당 없으면 None."""
     return _PRIORITY_ROUTING_MAP.get(state.get("query_intent", ""))
+
+
+# `neos.workflow.topology` 의 START/END 는 langgraph 와 무관한 우리 자신의
+# 센티널이다 -- 오늘은 둘 다 "__start__"/"__end__" 문자열이라 우연히 같지만,
+# 그 우연에 기대지 않고 명시적으로 대응시킨다. langgraph 가 자신의 센티널
+# 값을 바꾸거나 우리 쪽 센티널이 바뀌어도 이 매핑 하나만 고치면 된다.
+_TOPOLOGY_SENTINEL_TO_LANGGRAPH: dict[str, str] = {
+    TOPOLOGY_START: START,
+    TOPOLOGY_END: END,
+}
+
+# 정적 그래프(`_create_workflow_graph`)에서는 이 두 노드가 `interrupt_before`
+# 로 지정되고, 그 지정 자체가 `use_checkpointer=True` 일 때만 (PostgreSQL
+# checkpointer 가 실행 상태를 저장할 수 있을 때만) 의미가 있다 -- 상태가
+# 저장되지 않으면 "여기서 멈춰서 사람 승인을 기다린다" 는 인터럽트가 재개할
+# 지점 자체를 잃는다. `build_ephemeral_workflow` 는 이제 checkpointer 와
+# interrupt_before 를 인자로 받아 정적 경로와 같은 방식으로 `compile()` 에
+# 넘긴다 -- 그래도 호출자가 checkpointer 를 안 주거나, checkpointer 는 줬는데
+# 게이트 노드를 interrupt_before 에 넣는 걸 깜빡하면 여전히 같은 위험이
+# 남는다(아래 `EphemeralApprovalGateUnsupported` 참고).
+_INTERRUPT_GATED_NODES: frozenset[str] = frozenset(
+    {WorkflowNode.EXECUTION_APPROVAL.value, WorkflowNode.MISSION_APPROVAL.value}
+)
+
+
+class EphemeralApprovalGateUnsupported(ValueError):
+    """`build_ephemeral_workflow` 가 사람 승인 게이트 노드(`execution_approval`/
+    `mission_approval`)를 포함한 토폴로지를, 그 게이트를 실제로 지킬 수 없는
+    설정으로 컴파일하려 할 때만 던진다.
+
+    checkpointer + interrupt_before 를 받는 이번 변경 전에는 이 두 노드가
+    토폴로지에 있기만 하면 무조건 거부했다 -- `build_ephemeral_workflow` 가
+    그 둘을 아예 받지 않았기 때문이다. 지금은 정적 경로와 동등하게 그 둘을
+    받아 적용할 수 있으므로, 게이트 노드 자체는 더 이상 무조건 거부 대상이
+    아니다. 이 예외가 여전히 남아서 거부하는 경우는 정확히 둘 중 하나다:
+
+    1. `checkpointer` 가 `None` 이다 -- checkpointer 없이 컴파일하면
+       `interrupt_before` 를 넘겨도 상태가 저장되지 않아 재개할 지점이 없다
+       (`compile()` 자체는 조용히 성공하지만 인터럽트가 실질적으로 무의미해진다).
+    2. `checkpointer` 는 있지만 게이트 노드가 `interrupt_before` 목록에
+       없다 -- 그러면 그 노드는 checkpointer 가 있어도 그냥 지나가며 실행돼
+       사람 승인이 조용히 생략된다.
+
+    두 경우 모두 "조용히 컴파일해서 승인 게이트를 잃어버리는" 것보다 명시적
+    거부가 낫다는, 이 클래스가 태어난 이유 그대로다."""
+
+
+def build_ephemeral_workflow(
+    workflow: "MultiAgentWorkflow",
+    topology: GraphTopology,
+    *,
+    checkpointer: Any | None = None,
+    interrupt_before: Sequence[str] = (),
+) -> Any:
+    """검증을 통과한 `GraphTopology` 하나를 그 자리에서 조립해 컴파일한다.
+
+    `design_graph_or_fallback` 이 승인한(=`validate_topology` 를 통과한) 토폴로지만
+    이 함수에 들어온다는 전제 위에 서 있다 -- 이 함수 자신은 재검증하지 않는다.
+
+    `NODE_CONTRACTS[name].handler` 는 언바운드 함수다 (contracts.py 의
+    `node_contract` 데코레이터가 클래스 조립 이전 시점의 원본 함수를 그대로
+    돌려주고 등록만 하기 때문에, `self` 를 쥔 바운드 메서드가 아니다). 그래서
+    `handler.__get__(workflow, type(workflow))` 로 디스크립터 프로토콜을 직접
+    호출해 주어진 `workflow` 인스턴스에 바인딩한다 -- `getattr(workflow, name)`
+    을 쓰지 않는 이유는, 노드 이름과 파이썬 메서드 이름이 항상 같지 않을 수
+    있어(예: 헬퍼 이름이 노드 이름과 다르게 지어진 경우) 계약이 쥔 핸들러
+    자체를 바인딩 대상으로 삼는 편이 더 정확하기 때문이다.
+
+    설계된 토폴로지는 정적 엣지만 갖는다 -- 조건부 엣지(`add_conditional_edges`)
+    는 이 함수의 범위 밖이다. 검증기의 "모든 경로" 분석이 조건부 엣지를 이미
+    모든 목적지로 펼쳐서 보므로, 분기가 필요한 설계는 애초에 정적 엣지로
+    표현된다(브리프의 의도적 범위 제한).
+
+    `checkpointer`/`interrupt_before` 는 정적 경로(`_create_workflow_graph`
+    의 `workflow.compile(checkpointer=checkpointer, interrupt_before=interrupt_nodes)`)
+    와 같은 방식으로 그대로 `graph.compile()` 에 전달한다 -- 이 함수는 어느
+    checkpointer 구현체를 쓸지 모르므로(`await get_checkpointer()` 로 얻는
+    PostgreSQL checkpointer 든, 테스트용 `MemorySaver` 든) 호출자가 이미
+    만들어 둔 인스턴스를 그대로 받는다.
+
+    `EXECUTION_APPROVAL`/`MISSION_APPROVAL` 노드가 토폴로지에 있는데
+    `checkpointer` 가 없거나 그 노드가 `interrupt_before` 에 없으면
+    `EphemeralApprovalGateUnsupported` 를 던진다 -- 그 상태로 컴파일하면
+    사람 승인 게이트가 조용히 사라지기 때문이다(클래스 docstring 참고).
+    """
+
+    gated_nodes = sorted(set(topology.nodes) & _INTERRUPT_GATED_NODES)
+    ungated_gated_nodes = [node for node in gated_nodes if node not in interrupt_before]
+    if gated_nodes and (checkpointer is None or ungated_gated_nodes):
+        raise EphemeralApprovalGateUnsupported(
+            "ephemeral_approval_gate_unsupported: "
+            f"{gated_nodes} 는 checkpointer + interrupt_before 로만 사람 "
+            "승인을 기다릴 수 있는 노드다. "
+            + (
+                "checkpointer 가 주어지지 않았다."
+                if checkpointer is None
+                else f"{ungated_gated_nodes} 가 interrupt_before 목록에 없다."
+            )
+        )
+
+    graph = StateGraph(AgentState)
+
+    for node_name in topology.nodes:
+        contract = NODE_CONTRACTS[node_name]
+        bound_handler = contract.handler.__get__(workflow, type(workflow))
+        graph.add_node(node_name, bound_handler)
+
+    for source, target in topology.edges:
+        graph.add_edge(
+            _TOPOLOGY_SENTINEL_TO_LANGGRAPH.get(source, source),
+            _TOPOLOGY_SENTINEL_TO_LANGGRAPH.get(target, target),
+        )
+
+    if checkpointer is not None:
+        return graph.compile(
+            checkpointer=checkpointer, interrupt_before=list(interrupt_before)
+        )
+    return graph.compile()
 
 
 class MultiAgentWorkflow:
@@ -252,6 +373,14 @@ class MultiAgentWorkflow:
         self._graph_uses_checkpointer = False
         self._orchestrator_router = OrchestratorRouter()
         self._quality_router = QualityRouter()
+        # 의도적으로 "설계된 토폴로지" 를 담는 인스턴스 속성을 두지 않는다.
+        # `MultiAgentWorkflow` 는 오래 살아남고 요청들이 공유하는 객체다
+        # (`self.graph`/`self._graphs_by_checkpointer` 가 이미 그렇듯). 설계된
+        # 토폴로지는 질의 하나에 종속된 값이므로, 여기 인스턴스 속성으로
+        # 얹으면 동시 요청 두 개가 같은 슬롯을 덮어써 서로의 그래프를 실행하는
+        # 경합을 만든다. 다음 태스크가 실제 배선을 만들 때는 이 값을 인스턴스
+        # 상태가 아니라 호출 스코프(함수 인자/반환값, 또는 요청별 로컬 변수)
+        # 로만 들고 다녀야 한다.
 
 
     def _initialize_agents(self) -> Dict[str, Any]:
@@ -600,22 +729,118 @@ class MultiAgentWorkflow:
         self._graph_uses_checkpointer = use_checkpointer
 
 
+    @node_contract(
+        node=WorkflowNode.REFINEMENT_CHECKER,
+        reads={"original_query"},
+        writes={"needs_refinement", "refinement_reasons", "refinement_check_time_ms"},
+        # original_query 가 없으면 `state["original_query"]` 에서 즉시 KeyError --
+        # 개선 여부를 판단할 대상 자체가 없다.
+        requires={"original_query"},
+        # 한 줄 위임(`return await self.refinement_checker.check(state)`)이라
+        # writes 전부가 위임 대상의 반환값에서 나온다 -- `state_keys_written`
+        # 은 이 노드 자신의 소스만 보므로 근거를 찾지 못한다.
+        writes_hand_curated=True,
+    )
     async def _check_refinement_node(self, state: AgentState) -> Dict[str, Any]:
         """쿼리 개선 필요 여부 체크 노드"""
         return await self.refinement_checker.check(state)
 
+    @node_contract(
+        node=WorkflowNode.QUERY_REFINEMENT,
+        reads={
+            "original_query",
+            "needs_refinement",
+            "refinement_reasons",
+            "conversation_context",
+            "detected_language",
+        },
+        writes={
+            "refined_query",
+            "original_query_backup",
+            "refinement_applied",
+            "refinement_time_ms",
+        },
+        # original_query 가 없으면 `state["original_query"]` 에서 즉시 KeyError.
+        # needs_refinement 는 없어도 `.get(default False)` 로 "개선 불필요"로
+        # 취급해 안전하게 스킵한다 -- 의미 있는 기본 동작이다.
+        requires={"original_query"},
+        # 한 줄 위임(`return await self.query_refinement_agent.refine(state)`)
+        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
+        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
+        # 못한다.
+        writes_hand_curated=True,
+    )
     async def _refine_query_node(self, state: AgentState) -> Dict[str, Any]:
         """쿼리 개선 노드"""
         return await self.query_refinement_agent.refine(state)
 
+    @node_contract(
+        node=WorkflowNode.RESEARCH_CONTINUATION,
+        reads={
+            "research_session_id",
+            "user_id",
+            "original_query",
+            "conversation_context",
+            # 아래 세 개는 read라기보다 `state["x"] = ...` 대입이다. 이 추출기는
+            # Subscript 의 Load/Store 를 구분하지 않아 대입도 read로 잡힌다
+            # (기존부터 있던 특성, Task 2 범위 밖).
+            "accumulated_knowledge",
+            "explored_subtopics",
+            "remaining_questions",
+        },
+        writes={
+            "accumulated_knowledge",
+            "explored_subtopics",
+            "remaining_questions",
+            "conversation_context",
+        },
+        # 전부 `.get()` 기본값 경로다 -- research_session_id 가 없으면 "이전
+        # 세션 없음"으로 취급해 새 연구로 진행하는 것이 의도된 정상 분기다.
+        # 한 줄 위임(`return await self.research_continuation_processor.process(state)`)
+        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
+        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
+        # 못한다.
+        writes_hand_curated=True,
+    )
     async def _research_continuation_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 2.2: 후속 연구 컨텍스트 로드 노드"""
         return await self.research_continuation_processor.process(state)
 
+    @node_contract(
+        node=WorkflowNode.SELF_REFLECTION,
+        reads={
+            "integrated_results",
+            "search_results",
+            "query_classification",
+            "original_query",
+            "detected_language",
+            # `state["reflection_result"] = ...` 대입이 Subscript Store로 잡힌다.
+            "reflection_result",
+        },
+        writes={"reflection_result"},
+        # 경량 쿼리(complexity<0.4 & search_results<3)는 명시적으로 skip
+        # 처리되고 reflection_result에 그 사실이 기록된다 -- 조용한 빈 결과가
+        # 아니라 신호가 있는 정상 분기다.
+        # 한 줄 위임(`return await self.self_reflection_processor.reflect(state)`)
+        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
+        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
+        # 못한다.
+        writes_hand_curated=True,
+    )
     async def _self_reflection_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 2.6: Self-reflection 노드"""
         return await self.self_reflection_processor.reflect(state)
 
+    @node_contract(
+        node=WorkflowNode.HYPOTHESIS_GENERATION,
+        reads={"query_intent", "query_classification", "original_query"},
+        writes={"hypotheses"},
+        # query_intent 가 대상 의도가 아니거나 complexity 가 낮으면 의도적으로
+        # state 를 그대로 반환한다(정상 스킵). 하지만 그 게이트를 통과했는데
+        # original_query 가 없으면 빈 문자열로 LLM에 가설 생성을 요청해
+        # 의미 없는 가설을 조용히 만들어낸다 -- (c) 케이스.
+        requires={"original_query"},
+    )
     async def _hypothesis_generation_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 2.5: 검색 전 경쟁 가설 생성 (DEEP_RESEARCH/COMPLEX_ANALYSIS + high complexity만)"""
         intent = state.get("query_intent", "")
@@ -634,6 +859,14 @@ class MultiAgentWorkflow:
         logger.info(f"[Hypothesis] Generated {len(hypotheses)} hypotheses")
         return {"hypotheses": hypotheses}
 
+    @node_contract(
+        node=WorkflowNode.HYPOTHESIS_EVALUATION,
+        reads={"hypotheses", "search_results"},
+        writes={"hypothesis_results"},
+        # hypotheses 가 비어 있으면 의도적으로 state 그대로 반환(정상 스킵).
+        # search_results 가 비어 있어도 evaluate_hypotheses가 낮은 confidence로
+        # 평가를 만들어낸다 -- 실패가 아니라 "증거 부족"이라는 유효한 결과다.
+    )
     async def _hypothesis_evaluation_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 2.5: 검색 후 가설 평가 및 종합"""
         hypotheses = state.get("hypotheses", [])
@@ -648,10 +881,95 @@ class MultiAgentWorkflow:
         logger.info(f"[Hypothesis] Evaluation complete: strongest={evaluation.get('strongest')}")
         return {"hypothesis_results": evaluation}
 
+    @node_contract(
+        node=WorkflowNode.REPLANNER,
+        reads={
+            "replan_count",
+            "query_classification",
+            "search_results",
+            "original_query",
+            # `state["answered_questions"] = ...` / `state["remaining_questions"]
+            # = ...` 대입이 Subscript Store로 잡힌다.
+            "answered_questions",
+            "remaining_questions",
+        },
+        writes={"answered_questions", "replan_count", "remaining_questions"},
+        # replan_count 초과나 sub_topics 없음/결과 충분함은 모두 명시적으로
+        # state 그대로 반환하는 정상 스킵 분기다. 모두 `.get()` 기본값 경로.
+        # 한 줄 위임(`return await self.research_replanner.evaluate_and_replan(state)`)
+        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
+        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
+        # 못한다.
+        writes_hand_curated=True,
+    )
     async def _replanner_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 2.4: 중간 결과 기반 적응형 연구 재계획"""
         return await self.research_replanner.evaluate_and_replan(state)
 
+    @node_contract(
+        node=WorkflowNode.QUERY_CLS,
+        reads={
+            "original_query",
+            "refined_query",
+            "template_id",
+            "conversation_context",
+            # 아래는 위임 대상 QueryClassifier.classify_query 안에서 발견된다
+            # (Task 2: 추출기가 위임 체인을 따라가도록 고친 뒤 드러남). 대부분은
+            # `state["x"] = ...` 대입이다 -- 이 추출기는 Subscript 접근의
+            # Load/Store 를 구분하지 않아 쓰기도 읽기로 잡힌다 (기존부터 있던
+            # 특성, Task 2 범위 밖). required_agents/query_classification/
+            # needs_ui 는 재분류 시 이전 값 존재 여부를 `state.get(...)` 로도
+            # 실제로 참조한다.
+            "required_agents",
+            "needs_ui",
+            "query_classification",
+            "detected_language",
+            "query_intent",
+            "execution_steps",
+            # thinking_strategy/query_embedding 는 classify_query() 자신이
+            # 아니라 같은 클래스의 헬퍼 `_attach_thinking_strategy`/
+            # `_generate_embedding` (neos/workflow/utils/query_classifier.py:
+            # 209,447,455-458) 안에서 읽고 쓴다 -- classify_query 안에서 두
+            # 갈래(LLM/keyword fallback) 모두 무조건 호출한다. 같은 인스턴스의
+            # 다른 메서드 호출이라 추출기가 따라가지 못해 재감사(Task 2 fix
+            # round 1)로 찾아 손으로 채웠다.
+            "thinking_strategy",
+            "query_embedding",
+        },
+        writes={
+            "detected_language",
+            "query_intent",
+            "required_agents",
+            "query_classification",
+            "needs_ui",
+            "template_id",
+            "template_config",
+            "thinking_strategy",
+            "query_embedding",
+            # 노드 자신이 `state["original_query"] = query_to_classify` 로
+            # 임시로 바꿔치기했다가 분류가 끝나면 `state["original_query"] =
+            # original_backup` 으로 되돌린다 -- `state_keys_written` 은
+            # Subscript Store 를 리터럴로 잡을 뿐 그 값이 나중에 원상복구되는지는
+            # 모르므로, 선언하지 않으면 드리프트 가드가 이 대입을 "선언 안 된
+            # 쓰기"로 잡는다. original_query 는 이미 이 노드의 requires 라
+            # 여기 추가해도 하류 보장에 해가 되지 않는다(복원된 값과 같다).
+            "original_query",
+        },
+        # original_query 가 없으면 `state["original_query"]` 에서 즉시 KeyError --
+        # 분류할 대상 자체가 없으므로 이 노드의 실행이 무의미하다.
+        # refined_query/template_id/conversation_context 는 없어도 의미 있는
+        # 기본 동작(원본 쿼리 사용, 템플릿 자동선택, 컨텍스트 보강 생략)으로 진행한다.
+        requires={"original_query"},
+        # 추출기는 classify_query() 자신이 읽는 8개만 보고, 위 두 헬퍼 안의
+        # thinking_strategy/query_embedding 은 보지 못한다.
+        hand_curated=True,
+        # write 쪽도 마찬가지다: 이 노드는 `state["original_query"]` 대입
+        # 둘을 빼면 나머지 9개 전부를 위임 대상 QueryClassifier.classify_query
+        # 가 만들어 돌려주는 `result` dict(불투명한 반환값)에서 얻는다 --
+        # `state_keys_written` 은 위임 체인을 따라가지 않으므로 이 9개를 전혀
+        # 확인하지 못한다.
+        writes_hand_curated=True,
+    )
     async def _classify_query_node(self, state: AgentState) -> Dict[str, Any]:
         """쿼리 분류 노드"""
         # refined_query가 있으면 그것을 사용, 없으면 original_query 사용
@@ -711,6 +1029,28 @@ class MultiAgentWorkflow:
         except Exception as e:
             logger.debug(f"[TemplateSelector] Template selection skipped: {e}")
 
+    @node_contract(
+        node=WorkflowNode.SKILL_TOOL_SELECTOR,
+        reads={
+            "original_query",
+            "session_id",
+            "user_id",
+            "detected_language",
+            "query_classification",
+            "query_intent",
+            "required_agents",
+            "autonomy_level",
+        },
+        writes={
+            "selected_skills",
+            "selected_tools",
+            "selection_reasoning",
+            "pending_approvals",
+            "approval_decision",
+        },
+        # 전부 `.get()` 기본값 경로 -- original_query 가 비어 있어도 스킬
+        # 선택기가 빈 선택으로 응답하며 예외를 던지지 않는다.
+    )
     async def _select_skills_tools_node(self, state: AgentState) -> Dict[str, Any]:
         """Skill and Tool selection 노드"""
         logger.debug("[SkillToolSelector] Executing skill/tool selection")
@@ -822,10 +1162,59 @@ class MultiAgentWorkflow:
                 "selection_reasoning": f"Selection failed: {str(e)}"
             }
 
+    @node_contract(
+        node=WorkflowNode.CONVERSATION_CTX_PROC,
+        reads={
+            "enable_history_context",
+            "chat_history",
+            "original_query",
+            "memory_context",
+            "channel_type",
+            "recursive_task_tree",
+            "final_response",
+            "user_id",
+            "execution_steps",
+            "errors",
+        },
+        writes={
+            "conversation_context",
+            "history_metadata",
+            "execution_steps",
+            "assembled_context",
+            "errors",
+        },
+        # enable_history_context/chat_history 가 없으면 명시적으로 빈 dict를
+        # 반환하는 정상 스킵이다. 하지만 그 게이트를 통과했는데 original_query
+        # 가 없으면 `state["original_query"]` 에서 즉시 KeyError.
+        requires={"original_query"},
+        # 한 줄 위임(`return await self.conversation_context_processor.process(state)`)
+        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
+        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
+        # 못한다.
+        writes_hand_curated=True,
+    )
     async def _process_conversation_context_node(self, state: AgentState) -> Dict[str, Any]:
         """대화 컨텍스트 처리 노드"""
         return await self.conversation_context_processor.process(state)
 
+    @node_contract(
+        node=WorkflowNode.EXECUTION_APPROVAL,
+        reads={"pending_approvals", "approval_decision"},
+        writes={
+            "pending_approvals",
+            "approval_decision",
+            "approval_outcome",
+            "final_response",
+        },
+        # approval_decision 이 None/미지정이면 ApprovalProcessor가 안전하게
+        # "rejected" 로 폴백한다 -- 조용한 빈 결과가 아니라 명시적 안전장치다.
+        # pending_approvals/approval_decision 은 초기화 실패 시 폴백 분기의
+        # 리터럴 dict 반환에서 추출기가 확인한다. approval_outcome/
+        # final_response 는 정상 경로가 위임하는
+        # `self.approval_processor.process(state)` 의 반환값에서만 나와
+        # `state_keys_written` 이 위임 체인을 따라가지 않는 한 확인할 수 없다.
+        writes_hand_curated=True,
+    )
     async def _execution_approval_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 2 (OpenClaw Execution Approval): 실행 승인 노드
 
@@ -837,6 +1226,49 @@ class MultiAgentWorkflow:
             return {"pending_approvals": [], "approval_decision": None}
         return await self.approval_processor.process(state)
 
+    @node_contract(
+        node=WorkflowNode.MISSION_PLANNER,
+        reads={
+            "user_id",
+            "session_id",
+            "autonomy_level",
+            "original_query",
+            "query_intent",
+            # required_agents 는 plan() 자신이 아니라 같은 클래스의 헬퍼
+            # `_build_plan`/`_mission_type_for_state`
+            # (neos/workflow/mission/planner.py:96,240) 안에서 읽힌다 -- 같은
+            # 인스턴스의 다른 메서드 호출이라 추출기가 따라가지 못해
+            # 재감사(Task 2 fix round 1)로 찾아 손으로 채웠다.
+            "required_agents",
+        },
+        writes={
+            "mission_id",
+            "mission",
+            "mission_plan",
+            "validation_contract",
+            "mission_status",
+            "mission_task_results",
+            "validator_runs",
+            "validation_summary",
+            "pending_approvals",
+            "approval_decision",
+            "approval_outcome",
+            "final_response",
+        },
+        # original_query 가 없으면 예외는 안 나지만 각 MissionTask.inputs가
+        # 빈 쿼리로 채워져 mission_plan 전체가 조용히 무의미해진다 -- (c) 케이스.
+        requires={"original_query"},
+        # 추출기는 plan() 자신이 읽는 5개만 보고, 두 헬퍼 안의 required_agents
+        # 는 보지 못한다.
+        hand_curated=True,
+        # write 쪽은 더 심하다: 이 노드는 `result = await self.mission_planner
+        # .plan(state)` 로 위임 대상의 반환값을 지역 변수에 담고, 승인 불가
+        # 분기에서만 `result.update({...})` 로 몇 개를 덧붙인 뒤 `return
+        # result` 로 그 변수를 반환한다 -- `state_keys_written` 은 `return
+        # {...}` 형태의 최상위 dict 리터럴만 보므로 이름으로 반환하는 변수도,
+        # `.update()` 로 채워 넣는 키도 전혀 못 본다.
+        writes_hand_curated=True,
+    )
     async def _mission_planner_node(self, state: AgentState) -> Dict[str, Any]:
         """Mission Runtime: MissionPlan과 ValidationContract 생성."""
         result = await self.mission_planner.plan(state)
@@ -862,6 +1294,23 @@ class MultiAgentWorkflow:
             and self.approval_processor is not None
         )
 
+    @node_contract(
+        node=WorkflowNode.MISSION_APPROVAL,
+        reads={"pending_approvals", "approval_decision"},
+        writes={
+            "pending_approvals",
+            "approval_decision",
+            "approval_outcome",
+            "final_response",
+        },
+        # EXECUTION_APPROVAL과 동일한 ApprovalProcessor.process 위임 -- decision
+        # 미지정 시 안전하게 "rejected" 로 폴백한다.
+        # pending_approvals/approval_decision/approval_outcome 은 초기화 실패
+        # 시 폴백 분기의 리터럴 dict 반환에서 추출기가 확인한다. final_response
+        # 는 정상 경로가 위임하는 `self.approval_processor.process(state)` 의
+        # 반환값에서만 나와 확인할 수 없다.
+        writes_hand_curated=True,
+    )
     async def _mission_approval_node(self, state: AgentState) -> Dict[str, Any]:
         """Mission Runtime: 실행 전 mission-level 승인 처리."""
         if self.approval_processor is None:
@@ -873,18 +1322,121 @@ class MultiAgentWorkflow:
             }
         return await self.approval_processor.process(state)
 
+    @node_contract(
+        node=WorkflowNode.MISSION_EXECUTOR,
+        reads={"mission_plan", "mission_task_results"},
+        writes={
+            "mission_task_results",
+            "mission_status",
+            "search_results",
+            "analysis_results",
+            "generation_results",
+            "execution_steps",
+            "errors",
+        },
+        # mission_plan 이 비어 있으면(`.get(... or {})`) tasks=[] 로 루프가
+        # 전혀 돌지 않고도 mission_status="completed" 를 조용히 써낸다 --
+        # 아무 일도 안 했는데 성공한 것처럼 보이는 (c) 케이스.
+        requires={"mission_plan"},
+        # 한 줄 위임(`return await self.mission_executor.execute(state)`)이라
+        # writes 전부가 위임 대상의 반환값에서 나온다 -- `state_keys_written`
+        # 은 이 노드 자신의 소스만 보므로 근거를 찾지 못한다.
+        writes_hand_curated=True,
+    )
     async def _mission_executor_node(self, state: AgentState) -> Dict[str, Any]:
         """Mission Runtime: 기존 orchestrator를 task wrapper로 순차 실행."""
         return await self.mission_executor.execute(state)
 
+    @node_contract(
+        node=WorkflowNode.MISSION_VALIDATOR,
+        reads={
+            "harness_score",
+            "harness_failed_checks",
+            "harness_mode",
+            "quality_score",
+            "search_results",
+            "validator_runs",
+            "validation_contract",
+            "harness_verdict",
+            "mission_id",
+            # execution_steps/quality_feedback 는 validate() 자신이 아니라
+            # 같은 클래스의 헬퍼 `_ensure_quality_score`
+            # (neos/workflow/mission/validators.py:113-116) 안에서 읽힌다 --
+            # quality_score 가 이미 있으면(무료 검증 재사용 경로) 그 두 값을
+            # 그대로 전달하려고 참조한다. 같은 인스턴스의 다른 메서드 호출이라
+            # 추출기가 따라가지 못해 재감사(Task 2 fix round 1)로 찾아 손으로
+            # 채웠다.
+            "execution_steps",
+            "quality_feedback",
+        },
+        writes={
+            "validator_runs",
+            "validation_summary",
+            "mission_status",
+            "quality_score",
+            "quality_feedback",
+            "execution_steps",
+        },
+        # 전부 `.get()` 기본값 경로 -- validation_contract 가 비어 있으면
+        # required_sources=0/min_quality=0.0 으로 완화되어 "통과"로 판정된다
+        # (의도된 완화 동작, quality_validator 위임에서 quality_score를 직접
+        # 계산해 보정하므로 무의미한 침묵이 아니다).
+        # 추출기는 validate() 자신과 위임된 ContractCoverageValidator.validate
+        # 가 읽는 9개만 보고, _ensure_quality_score 안의 execution_steps/
+        # quality_feedback 은 보지 못한다.
+        hand_curated=True,
+        # 한 줄 위임(`return await self.mission_validator.validate(state)`)
+        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
+        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
+        # 못한다.
+        writes_hand_curated=True,
+    )
     async def _mission_validator_node(self, state: AgentState) -> Dict[str, Any]:
         """Mission Runtime: ValidationContract 기반 검증."""
         return await self.mission_validator.validate(state)
 
+    @node_contract(
+        node=WorkflowNode.MISSION_INTEGRATOR,
+        reads={
+            "response_metadata",
+            "mission_id",
+            "mission_status",
+            "mission_plan",
+            "validation_summary",
+            "mission_task_results",
+        },
+        writes={"response_metadata"},
+        # mission_id 가 없으면 메타데이터 병합을 건너뛰고 기존 response_metadata
+        # 를 그대로 반환한다 -- non-mission 경로에서의 의도된 정상 통과.
+        # 한 줄 위임(`return await self.mission_integrator.integrate(state)`)
+        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
+        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
+        # 못한다.
+        writes_hand_curated=True,
+    )
     async def _mission_integrator_node(self, state: AgentState) -> Dict[str, Any]:
         """Mission Runtime: mission 결과 메타데이터 통합."""
         return await self.mission_integrator.integrate(state)
 
+    @node_contract(
+        node=WorkflowNode.UI_FRAME_GENERATOR,
+        reads={
+            "original_query",
+            "session_id",
+            "conversation_context",
+            "conversation_id",
+            "user_id",
+            "_event_handler",
+        },
+        writes={"ui_frame", "needs_ui"},
+        # original_query 가 없어도 LLM 호출 실패 시와 동일한 fallback 폼으로
+        # 안전하게 진행한다 -- 예외도 없고 특별히 더 "빈" 결과도 아니다.
+        # needs_ui 는 초기화 실패 시 폴백 분기의 리터럴 dict 반환에서
+        # 추출기가 확인한다. ui_frame 은 정상 경로가 위임하는
+        # `self.ui_frame_generator.generate(state)` 의 반환값에서만 나와
+        # 확인할 수 없다.
+        writes_hand_curated=True,
+    )
     async def _ui_frame_generator_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 8 (OpenClaw A2UI): UIFrame 생성 노드 래퍼.
 
@@ -896,6 +1448,14 @@ class MultiAgentWorkflow:
             return {"needs_ui": False}
         return await self.ui_frame_generator.generate(state)
 
+    @node_contract(
+        node=WorkflowNode.TASK_SCHEDULING_NODE,
+        reads={"original_query", "user_id", "channel_type", "channel_id"},
+        writes={"final_response"},
+        # original_query 가 없으면 CronSkill이 파싱에 실패해 명시적인 실패
+        # 메시지를 final_response로 채운다 -- 조용한 빈 결과가 아니라 사용자가
+        # 보게 되는 정의된 실패 경로다.
+    )
     async def _handle_task_scheduling_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 4 (OpenClaw Cron): 자연어 스케줄 등록 노드.
 
@@ -970,35 +1530,380 @@ class MultiAgentWorkflow:
             logger.debug(f"[ApprovalCheck] Allowlist DB query failed: {e} — requiring approval")
             return False
 
+    @node_contract(
+        node=WorkflowNode.SEARCH_ORCHESTRATOR,
+        reads={
+            "conversation_context",
+            "original_query",
+            "query_classification",
+            "required_agents",
+            "session_id",
+            # SearchOrchestrator.orchestrate 가 에이전트 없음 분기에서
+            # `state["execution_steps"].append(...)` 로 직접 건드린다 (Task 2:
+            # 위임 추적을 켜기 전에는 보이지 않던 read).
+            "execution_steps",
+            # errors/query_embedding/search_results 는 orchestrate() 자신이
+            # 아니라 같은 클래스의 헬퍼 `_augment_with_cache_hybrid`(query_embedding
+            # 읽기, search_results 에 append)/`_execute_with_fallback`(errors 에
+            # append) 안에서 읽힌다. 두 헬퍼 모두 orchestrate() 가 무조건 또는
+            # 정상 경로에서 호출한다 -- 같은 인스턴스의 다른 메서드 호출이라
+            # 추출기가 따라가지 못해 재감사(Task 2 fix round 1)로 찾아 손으로
+            # 채웠다.
+            "errors",
+            "query_embedding",
+            "search_results",
+        },
+        writes={"search_results", "search_metadata", "search_synthesis"},
+        # original_query 가 없으면 `state["original_query"]` 에서 즉시 KeyError.
+        # required_agents 도 `state["required_agents"]` 로 서브스크립트 접근하므로
+        # 없으면 KeyError -- 있어도 비어 있으면 "실행할 검색 에이전트가 없습니다"
+        # 경고만 찍고 그대로 반환한다(조용히 빈 산출물, (c) 케이스). 어느 쪽이든
+        # required_agents 없이 이 노드를 돌리는 것은 무의미하다.
+        # conversation_context/query_classification/session_id 는 없어도 각각
+        # 컨텍스트 보강 생략·경고 로그·빈 문자열 기본값으로 의미 있게 진행한다.
+        requires={"original_query", "required_agents"},
+        # 추출기는 orchestrate() 자신이 읽는 6개만 보고, 두 헬퍼 안의
+        # errors/query_embedding/search_results 는 보지 못한다.
+        #
+        # 이보다 더 넓은 두 번째 사각지대가 있다: `_execute_with_fallback` 이
+        # 지역 변수로 선택한 `SearchStrategy` 서브클래스 인스턴스에
+        # `strategy.execute(state, search_agents, self.agents,
+        # self.tool_selector)` 로 위임하고, `search_strategies.py`
+        # (MultiHopSearchStrategy/IterativeSearchStrategy/StandardSearchStrategy)
+        # 가 그 안에서 detected_language/query_intent/search_metadata/
+        # use_iterative_search/use_multi_hop_search/user_id 를 읽는다. `strategy`
+        # 가 런타임에 다형적으로 선택되는 지역 변수라(`self.<attr>` 형태가
+        # 아님) 추출기가 원천적으로 따라갈 수 없고, 이 계약도 이 여섯 개를
+        # 선언하지 않는다 -- 양쪽 다 놓치므로 카나리아는 조용하다. 이건 현재
+        # 추출기의 설계 한계(다형적 전략 디스패치)이지 이번 라운드에서 닫을
+        # 결함이 아니다.
+        hand_curated=True,
+        # 한 줄 위임(`return await self.search_orchestrator.orchestrate(state)`)
+        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
+        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
+        # 못한다.
+        writes_hand_curated=True,
+    )
     async def _orchestrate_search_node(self, state: AgentState) -> Dict[str, Any]:
         """검색 오케스트레이션 노드"""
         return await self.search_orchestrator.orchestrate(state)
 
+    @node_contract(
+        node=WorkflowNode.ANALYSIS_ORCHESTRATOR,
+        reads={
+            "required_agents",
+            "search_results",
+            "execution_steps",
+            # 아래는 orchestrate() 자신이 아니라 같은 클래스의 헬퍼
+            # `_create_analysis_tasks`/`_process_analysis_results`
+            # (neos/workflow/orchestrators/analysis_orchestrator.py:49-54,59,
+            # 89,107,110) 안에서 리터럴 서브스크립트로 읽힌다. 추출기는
+            # `self.<attr>.<method>` 형태만 따라가므로(같은 인스턴스의 다른
+            # 메서드 호출은 추적 밖) 소스를 직접 읽어 손으로 채웠다 --
+            # GENERATION_ORCHESTRATOR 계약에서 같은 부류의 누락이 코드 리뷰에
+            # 걸린 뒤(Task 2 fix round 1), 구조가 동일한 이 계약도 재감사해
+            # 같은 문제를 확인했다.
+            "user_id",
+            "session_id",
+            "original_query",
+            "errors",
+            "query_intent",
+            "analysis_results",
+        },
+        writes={"analysis_results", "errors", "execution_steps"},
+        # required_agents/search_results 는 orchestrate() 자신이 `state["x"]`
+        # 리터럴 서브스크립트로 읽는다 -- try/except 밖이라 없으면 즉시
+        # KeyError, (a) 케이스. user_id/session_id/original_query 는
+        # _create_analysis_tasks 안에서 에이전트별 `try/except Exception`
+        # (analysis_orchestrator.py:44-59)에 감싸여 읽힌다 -- 없으면
+        # KeyError가 나긴 하지만 그 자리에서 잡혀 `state["errors"]`에
+        # 추가되고 해당 에이전트의 태스크만 조용히 빠진다. 크래시가 아니라
+        # (c) 케이스: 태스크 목록이 비거나 줄어들어 "분석을 실행할 게
+        # 없습니다"로 조용히 저하된다. errors/analysis_results/
+        # execution_steps 는 `_create_initial_state` 가 항상 `[]`로 초기화하는
+        # 누적용 필드라 requires 에서 제외한다. query_intent 는 `.get()` 기본값
+        # 경로라 제외한다.
+        requires={
+            "required_agents",
+            "search_results",
+            "user_id",
+            "session_id",
+            "original_query",
+        },
+        # 추출기는 orchestrate() 자신이 읽는 required_agents/search_results/
+        # execution_steps만 보고, 위 헬퍼 메서드 안의 나머지는 보지 못한다.
+        hand_curated=True,
+        # 한 줄 위임(`return await self.analysis_orchestrator.orchestrate(state)`)
+        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
+        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
+        # 못한다.
+        writes_hand_curated=True,
+    )
     async def _orchestrate_analysis_node(self, state: AgentState) -> Dict[str, Any]:
         """분석 오케스트레이션 노드"""
         return await self.analysis_orchestrator.orchestrate(state)
 
+    @node_contract(
+        node=WorkflowNode.GENERATION_ORCHESTRATOR,
+        reads={
+            "required_agents",
+            "execution_steps",
+            # 아래는 orchestrate() 자신이 아니라 같은 클래스의 헬퍼
+            # `_create_generation_tasks`/`_process_generation_results`
+            # (neos/workflow/orchestrators/generation_orchestrator.py:49-55,60,
+            # 90,108,111) 안에서 리터럴 서브스크립트로 읽힌다. 추출기는
+            # `self.<attr>.<method>` 형태만 따라가므로(같은 인스턴스의 다른
+            # 메서드 호출은 추적 밖) 소스를 직접 읽어 손으로 채웠다 -- 코드
+            # 리뷰(Task 2 fix round 1)가 search_results/analysis_results 옆에
+            # 나란히 있던 user_id/session_id/original_query/errors 가 빠져
+            # 있었음을 잡아냈고, 재감사에서 query_intent(선택적 .get)와
+            # generation_results(자기 자신에 append 하려고 먼저 서브스크립트로
+            # 읽음)도 함께 빠져 있었음을 확인했다.
+            "search_results",
+            "analysis_results",
+            "user_id",
+            "session_id",
+            "original_query",
+            "errors",
+            "query_intent",
+            "generation_results",
+        },
+        writes={"generation_results", "errors", "execution_steps"},
+        # required_agents 는 orchestrate() 자신이 try/except 밖에서 리터럴
+        # 서브스크립트로 읽는다 -- 없으면 즉시 KeyError, (a) 케이스.
+        # search_results/analysis_results/user_id/session_id/original_query 는
+        # _create_generation_tasks 안에서 에이전트별 `try/except Exception`
+        # (generation_orchestrator.py:44-60)에 감싸여 읽힌다 -- 없으면
+        # KeyError가 나긴 하지만 그 자리에서 잡혀 `state["errors"]`에 추가되고
+        # 해당 에이전트의 태스크만 조용히 빠진다. 크래시가 아니라 (c) 케이스:
+        # 태스크 목록이 비거나 줄어들어 "생성을 실행할 게 없습니다"로 조용히
+        # 저하된다. errors/generation_results/execution_steps 는
+        # `_create_initial_state` 가 항상 `[]`로 초기화하는 누적용 필드라 다른
+        # 계약과 동일하게 requires 에서 제외한다. query_intent 는 `.get()`
+        # 기본값 경로라 제외한다.
+        requires={
+            "required_agents",
+            "search_results",
+            "analysis_results",
+            "user_id",
+            "session_id",
+            "original_query",
+        },
+        # 추출기는 orchestrate() 자신이 읽는 required_agents/execution_steps만
+        # 보고, 위 헬퍼 메서드 안의 나머지 여섯 개는 보지 못한다 -- 드리프트
+        # 가드가 이 계약에서는 부분적으로만 작동한다.
+        hand_curated=True,
+        # 한 줄 위임(`return await self.generation_orchestrator.orchestrate(state)`)
+        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
+        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
+        # 못한다.
+        writes_hand_curated=True,
+    )
     async def _orchestrate_generation_node(self, state: AgentState) -> Dict[str, Any]:
         """생성 오케스트레이션 노드"""
         return await self.generation_orchestrator.orchestrate(state)
 
+    @node_contract(
+        node=WorkflowNode.RESULT_INTEGRATOR,
+        reads={
+            "search_results",
+            "analysis_results",
+            "generation_results",
+            # ResultProcessor.integrate_results 자신이 `state["integrated_results"]`
+            # 에 대입하고 `state["execution_steps"].append(...)` 를 직접 건드린다
+            # (Task 2: 위임 추적을 켜기 전에는 보이지 않던 read).
+            "integrated_results",
+            "execution_steps",
+        },
+        writes={"integrated_results"},
+        # search_results 가 없으면(검색 노드가 아직 안 돌았으면) search_summary와
+        # total_sources가 전부 0/빈 값으로 채워진 integrated_results 를 조용히
+        # 만들어낸다 -- (c) 케이스. 순서가 틀려도 예외 없이 빈 통합 결과가 나오는
+        # 것이 정확히 이 기능이 잡으려는 실패다. analysis_results/generation_results
+        # 는 검색만 필요한 쿼리에서는 정상적으로 비어 있을 수 있어 requires 에서 뺀다.
+        requires={"search_results"},
+        # 한 줄 위임(`return await self.result_processor.integrate_results(state)`)
+        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
+        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
+        # 못한다.
+        writes_hand_curated=True,
+    )
     async def _integrate_results_node(self, state: AgentState) -> Dict[str, Any]:
         """결과 통합 노드"""
         return await self.result_processor.integrate_results(state)
 
+    @node_contract(
+        node=WorkflowNode.FACT_CHECK,
+        reads={
+            "query_classification",
+            "search_results",
+            "detected_language",
+            "user_id",
+            "session_id",
+            "execution_steps",
+        },
+        writes={"fact_check_result", "fact_check_skipped", "execution_steps"},
+        # FACT_CHECK_ENABLED=False, complexity 낮음, search_results 없음 모두
+        # 명시적으로 fact_check_skipped=True 를 써서 스킵을 신호한다 -- 조용한
+        # 빈 결과가 아니라 왜 스킵했는지가 상태에 남는다.
+        # 한 줄 위임(`return await self.fact_check_processor.check_facts(state)`)
+        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
+        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
+        # 못한다.
+        writes_hand_curated=True,
+    )
     async def _fact_check_node(self, state: AgentState) -> Dict[str, Any]:
         """Fact-check 노드 (조건부 실행)"""
         return await self.fact_check_processor.check_facts(state)
 
+    @node_contract(
+        node=WorkflowNode.QUALITY_VALIDATOR,
+        reads={
+            "quality_score",
+            "quality_feedback",
+            "retry_count",
+            "execution_steps",
+            # required_agents/search_results/analysis_results/generation_results/
+            # errors 는 validate_quality() 자신이 아니라 같은 클래스의
+            # _calculate_completeness/_calculate_relevance/_calculate_coherence
+            # 안에서 리터럴 서브스크립트로 읽힌다. 세 헬퍼 모두 조건 없이
+            # 항상 호출되므로(가드 없음) 손으로 채워야 정확하다.
+            "required_agents",
+            "search_results",
+            "analysis_results",
+            "generation_results",
+            "errors",
+        },
+        writes={"quality_score", "quality_feedback", "retry_count", "execution_steps"},
+        # validate_quality() 는 무조건 세 헬퍼를 호출하고, 그 안에서
+        # required_agents/search_results/analysis_results/generation_results/
+        # errors 를 전부 `state["x"]` 로 읽는다 -- 없으면 즉시 KeyError.
+        requires={
+            "required_agents",
+            "search_results",
+            "analysis_results",
+            "generation_results",
+            "errors",
+        },
+        # 추출기는 validate_quality() 자신이 읽는 quality_score/quality_feedback/
+        # retry_count/execution_steps 만 보고, 세 헬퍼 안에서 읽히는
+        # requires 5개(required_agents 외)는 전혀 보지 못한다 -- 위 두 헬퍼가
+        # `self.<attr>.<method>` 형태가 아닌 같은 인스턴스 메서드 호출이라
+        # 추적 밖이다. 이 5개는 소스를 직접 읽어 확인했고(위 주석) 조건 없이
+        # 항상 실행되므로 requires 판정도 정확하다 -- 검증 안 되는 게 아니라
+        # 검증 못 하는 것뿐이므로 hand_curated 로 명시한다.
+        hand_curated=True,
+        # 한 줄 위임(`return await self.quality_validator.validate_quality(state)`)
+        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
+        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
+        # 못한다.
+        writes_hand_curated=True,
+    )
     async def _validate_quality_node(self, state: AgentState) -> Dict[str, Any]:
         """품질 검증 노드"""
         return await self.quality_validator.validate_quality(state)
 
+    @node_contract(
+        node=WorkflowNode.RESEARCH_HARNESS,
+        reads={
+            "harness_repair_attempts",
+            "_event_handler",
+            "session_id",
+            "user_id",
+            "harness_runs",
+            "thinking_trace",
+            "response_metadata",
+            "execution_steps",
+            # report/sources/context 입력은 `neos.workflow.harness.adapters.
+            # workflow_state` 의 일반 함수(build_harness_contract,
+            # extract_report_text, extract_sources, extract_context)가 읽는다.
+            # 이들은 `self.<attr>.<method>` 형태가 아닌 평범한 함수 호출이라
+            # 추출기가 따라가지 못한다 -- SearchOrchestrator가
+            # search_strategies.py로 갈라지는 것과 같은 부류의 사각지대.
+        },
+        writes={
+            "harness_mode",
+            "harness_contract",
+            "harness_runs",
+            "harness_verdict",
+            "harness_score",
+            "harness_failed_checks",
+            "harness_repair_plan",
+            "harness_repair_attempts",
+            "thinking_trace",
+            "harness_metadata",
+            "response_metadata",
+            "execution_steps",
+        },
+        # 전부 `.get()` 기본값 경로 -- report/sources 가 비어 있어도 harness가
+        # 낮은 점수의 verdict를 명시적으로 산출한다(침묵이 아니라 검증 결과).
+        # 위 네 함수(build_harness_contract/extract_report_text/extract_sources/
+        # extract_context)가 읽는 나머지 키(final_response, search_synthesis,
+        # search_results, generation_results, analysis_results,
+        # integrated_results, fact_check_result, quality_score,
+        # processing_time_ms, token_usage, harness_config 등)는 여기 선언하지
+        # 않았다 -- declared reads(process() 자신의 8개)가 extractor가 찾는
+        # 것과 정확히 같아서 `reads - state_keys_read(...)` 가 비어 있으므로
+        # 카나리아가 조용하다(=미검증인데 검증된 것처럼 보인다, Task 2 fix
+        # round 2가 잡아낸 그 허점). 완전한 확장은 AgentState 필드를 8개
+        # 안팎 새로 추가해야 하는 규모라 이번 라운드에서는 의도적으로 미루고
+        # hand_curated=True로만 명시한다.
+        hand_curated=True,
+        # `return {**state, **updates}` 는 `ast.Dict` 리터럴이지만 키가 전부
+        # `**` 언패킹(리터럴 문자열 키 없음)이라 `state_keys_written` 이 아무
+        # 것도 못 찾는다 -- writes 전부가 위임 대상
+        # `research_harness_processor.process(state)` 의 반환값(updates)에서
+        # 나온다.
+        writes_hand_curated=True,
+    )
     async def _research_harness_node(self, state: AgentState) -> Dict[str, Any]:
         """Research harness validation node."""
         updates = await self.research_harness_processor.process(state)
         return {**state, **updates}
 
+    @node_contract(
+        node=WorkflowNode.RESEARCH_HARNESS_REPAIR,
+        reads={
+            "harness_repair_attempts",
+            "harness_contract",
+            "original_query",
+            "harness_metadata",
+            "required_agents",
+            "_event_handler",
+            "execution_steps",
+            # attempts 소진 시 `"errors": list(state.get("errors") or []) + [...]`
+            # 로 읽어 반환한다.
+            "errors",
+        },
+        writes={
+            "harness_repair_plan",
+            "harness_repair_attempts",
+            "required_agents",
+            "execution_steps",
+            "errors",
+            "final_response",
+            "response_metadata",
+            # 복구 액션이 있으면 이 래퍼가 search_orchestrator/result_processor/
+            # response_generator 를 `repaired_state` (다른 이름의 변수) 로
+            # 연쇄 호출한다 -- 리터럴 인자명이 "state"가 아니라 추출기가 따라가지
+            # 못하지만, 실제로는 search_results/integrated_results/final_response
+            # 등을 다시 쓴다.
+            "search_results",
+            "search_metadata",
+            "search_synthesis",
+            "integrated_results",
+        },
+        # harness_repair_attempts/harness_contract/required_agents 모두
+        # `.get()` 기본값 경로 -- 없으면 각각 0/빈 계약/빈 목록으로 안전하게
+        # 진행한다(의미 있는 기본 동작).
+        # 이 노드는 `repaired_state = {**state, **updates}` 로 시작해 조건부로
+        # `self.search_orchestrator.orchestrate`/`self.result_processor
+        # .integrate_results`/`self.response_generator.generate_response` 를
+        # `repaired_state`(리터럴 이름이 "state"가 아님) 로 연쇄 호출하고 그
+        # 결과를 그대로 반환한다 -- `**` 언패킹뿐인 dict 리터럴과 이름으로
+        # 반환하는 변수뿐이라 `state_keys_written` 이 아무 것도 못 찾는다.
+        writes_hand_curated=True,
+    )
     async def _research_harness_repair_node(self, state: AgentState) -> Dict[str, Any]:
         """Plan and execute bounded repair work before harness revalidation."""
         updates = await self.research_harness_repair_processor.process(state)
@@ -1026,10 +1931,129 @@ class MultiAgentWorkflow:
         repaired_state = await self.response_generator.generate_response(repaired_state)
         return repaired_state
 
+    @node_contract(
+        node=WorkflowNode.RESP_GENERATOR,
+        reads={
+            "final_response",
+            "search_results",
+            "analysis_results",
+            "generation_results",
+            "detected_language",
+            "search_metadata",
+            "errors",
+            "original_query",
+            "session_id",
+            "user_id",
+            "fact_check_result",
+            "executive_summary",
+            "execution_start",
+            "execution_steps",
+            "response_metadata",
+            # `state["execution_time_ms"] = ...` 대입이 Subscript Store로
+            # 잡힌다 (research_continuation과 동일한 추출기 특성).
+            "execution_time_ms",
+            # 아래 14개는 generate_response() 자신이 아니라 같은 클래스의
+            # 헬퍼 세 개 안에서 읽힌다 -- `_create_response_metadata`
+            # (neos/workflow/processors/response_generator.py:210-241, 항상
+            # 호출됨), `_apply_citations`(524,548, final_response와
+            # CITATIONS_ENABLED 조건부 호출), `_format_harness_repair_instructions`
+            # (176, 부분 성공/에러 시 응답 정제 조건부 호출). 같은 인스턴스의
+            # 다른 메서드 호출이라 추출기가 따라가지 못한다. 처음 이 파일을
+            # 200줄까지만 읽어 뒷부분(전체 572줄)을 놓쳤던 게 원인이었고,
+            # 재감사(Task 2 fix round 1)로 전체를 다시 읽어 찾았다.
+            "mission_id",
+            "mission_status",
+            "mission_plan",
+            "validation_summary",
+            "mission_task_results",
+            "harness_verdict",
+            "harness_mode",
+            "harness_score",
+            "harness_failed_checks",
+            "harness_repair_attempts",
+            "quality_score",
+            "citation_style",
+            "citation_only_cited",
+            "harness_repair_plan",
+        },
+        writes={
+            "final_response",
+            "execution_time_ms",
+            "response_metadata",
+            "executive_summary",
+            "execution_steps",
+        },
+        # final_response 가 이미 있으면 _preserve_existing_response 로 빠지지만
+        # 그 분기도 execution_start 를 `state["execution_start"]` 로 무조건
+        # 읽는다. 정상 생성 경로는 search_results/analysis_results/
+        # generation_results 를 전부 `state["x"]` 로 무조건 읽는다 -- 셋 다
+        # 없으면 KeyError, 있어도 전부 비었으면 기본 "찾지 못했습니다" 메시지로
+        # 조용히 낮은 품질 응답을 낸다. original_query 는 응답 정제/요약
+        # 기능(ENABLE_RESPONSE_REFINEMENT, EXECUTIVE_SUMMARY_ENABLED)에서만
+        # 조건부로 서브스크립트 접근하므로 여기서는 제외한다. 새로 찾은 14개는
+        # 전부 `.get()` 기본값 경로라 requires 에 넣지 않는다.
+        requires={
+            "execution_start",
+            "search_results",
+            "analysis_results",
+            "generation_results",
+        },
+        # 추출기는 generate_response() 자신이 읽는 15개만 보고, 세 헬퍼 안의
+        # 나머지 14개는 보지 못한다.
+        hand_curated=True,
+        # 한 줄 위임(`return await self.response_generator.generate_response(state)`)
+        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
+        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
+        # 못한다.
+        writes_hand_curated=True,
+    )
     async def _generate_response_node(self, state: AgentState) -> Dict[str, Any]:
         """응답 생성 노드"""
         return await self.response_generator.generate_response(state)
 
+    @node_contract(
+        node=WorkflowNode.RECURSIVE_ORCHESTRATOR,
+        reads={
+            "original_query",
+            "cumulative_cost",
+            "execution_steps",
+            # session_id/user_id/detected_language/search_synthesis/
+            # conversation_context/_event_handler 는 execute() 자신이 아니라
+            # 같은 클래스의 헬퍼 `_build_context(state)`
+            # (neos/workflow/recursive/orchestrator.py:298-317) 안에서 읽힌다 --
+            # 같은 인스턴스의 다른 메서드 호출이라 추출기가 따라가지 못해 손으로
+            # 채웠다. _event_handler 는 SSE 스트림 콜백(`_stream_callback`)으로
+            # 전달된다 (코드 리뷰, Task 2 fix round 1이 누락을 잡아냄).
+            "session_id",
+            "user_id",
+            "detected_language",
+            "search_synthesis",
+            "conversation_context",
+            "_event_handler",
+        },
+        writes={
+            "final_response",
+            "recursive_task_tree",
+            "recursive_mode",
+            "recursive_current_depth",
+            "recursive_budget_remaining",
+            "recursive_completed_tasks",
+            "cumulative_cost",
+            "execution_steps",
+        },
+        # 전부 `.get()` 기본값 경로 -- original_query 없이도 ROMA가 빈 문자열
+        # 태스크로 진행하며 예외를 던지지 않는다(결과 품질은 낮아지지만 이는
+        # 별도의 품질 검증 단계가 잡는다).
+        # 추출기는 execute() 자신이 읽는 original_query/cumulative_cost/
+        # execution_steps만 보고, _build_context 안의 나머지 여섯 개는 보지
+        # 못한다 -- 드리프트 가드가 이 계약에서는 부분적으로만 작동한다.
+        hand_curated=True,
+        # final_response 는 초기화 실패 시 폴백 분기의 리터럴 dict 반환에서
+        # 추출기가 확인한다. 나머지 7개는 정상 경로가 위임하는
+        # `self.recursive_orchestrator.execute(state)` 의 반환값에서만 나와
+        # 확인할 수 없다.
+        writes_hand_curated=True,
+    )
     async def _recursive_orchestrator_node(self, state: AgentState) -> Dict[str, Any]:
         """ROMA: 재귀 오케스트레이터 노드"""
         if self.recursive_orchestrator is None:
@@ -1037,6 +2061,45 @@ class MultiAgentWorkflow:
             return {"final_response": "재귀 에이전트가 초기화되지 않았습니다."}
         return await self.recursive_orchestrator.execute(state)
 
+    @node_contract(
+        node=WorkflowNode.HYPER_DEEP_ORCHESTRATOR,
+        reads={
+            "original_query",
+            "cumulative_cost",
+            "execution_steps",
+            # RECURSIVE_ORCHESTRATOR 와 동일한 이유(_build_context 헬퍼,
+            # neos/workflow/recursive/orchestrator.py:298-317) -- RAY_ENABLED
+            # 여부에 따라 DistributedRecursiveOrchestrator 또는
+            # RecursiveOrchestrator 가 주입되지만 둘 다 execute()/_build_context
+            # 를 오버라이드하지 않아 결국 같은 RecursiveOrchestrator.execute /
+            # _build_context 로 귀결된다. _event_handler 는 SSE 스트림 콜백으로
+            # 전달된다 (코드 리뷰, Task 2 fix round 1이 누락을 잡아냄).
+            "session_id",
+            "user_id",
+            "detected_language",
+            "search_synthesis",
+            "conversation_context",
+            "_event_handler",
+        },
+        writes={
+            "final_response",
+            "recursive_task_tree",
+            "recursive_mode",
+            "recursive_current_depth",
+            "recursive_budget_remaining",
+            "recursive_completed_tasks",
+            "cumulative_cost",
+            "execution_steps",
+        },
+        # RECURSIVE_ORCHESTRATOR 와 동일하게 추출기가 execute() 자신의 세 키만
+        # 보고 _build_context 안의 나머지는 보지 못한다.
+        hand_curated=True,
+        # final_response 는 초기화 실패 시 폴백 분기의 리터럴 dict 반환에서
+        # 추출기가 확인한다. 나머지 7개는 정상 경로가 위임하는
+        # `self.hyper_deep_orchestrator.execute(state)` 의 반환값에서만 나와
+        # 확인할 수 없다.
+        writes_hand_curated=True,
+    )
     async def _hyper_deep_orchestrator_node(self, state: AgentState) -> Dict[str, Any]:
         """HyperDeep Recursive: ROMA + HyperDeepResearchAgent 오케스트레이터 노드"""
         if self.hyper_deep_orchestrator is None:
@@ -1048,6 +2111,23 @@ class MultiAgentWorkflow:
         )
         return await self.hyper_deep_orchestrator.execute(state)
 
+    @node_contract(
+        node=WorkflowNode.DEEP_ANALYSIS_DISPATCH,
+        reads={
+            "refined_query",
+            "original_query",
+            "conversation_id",
+            "user_id",
+            "_event_handler",
+            "execution_steps",
+        },
+        writes={"final_response", "deep_analysis_run_id", "execution_steps"},
+        # refined_query/original_query 둘 다 없으면(둘 다 `.get()` 경로) 빈
+        # 쿼리로 job이 그대로 제출된다 -- 예외는 없지만 아무 의미 없는 분석
+        # run이 조용히 시작되는 (c) 케이스. original_query 는 항상 최종
+        # fallback이므로 이것만 requires 로 둔다.
+        requires={"original_query"},
+    )
     async def _deep_analysis_dispatch_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Phase 3b(D23): 심층 분석을 job으로 제출하고 즉시 반환한다.
 

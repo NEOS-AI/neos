@@ -231,6 +231,20 @@ class WorkflowConfig(StrictConfigModel):
     timeout_seconds: int = 300
     cache_enabled: bool = True
     cache_ttl: int = 3600
+    # 설계 서브에이전트로 질의별 그래프를 짤지 여부. 기본은 꺼짐이다 -- 정적
+    # 그래프가 기본 경로다. 질의마다 LLM 으로 토폴로지를 새로 짜는 비용(지연,
+    # 비용, 비결정성)은 라우팅에서 "매 요청마다 LLM 으로 난이도를 분류"하는
+    # 안을 기각한 이유와 같다.
+    graph_design_enabled: bool = Field(
+        default=False,
+        description="설계 서브에이전트로 질의별 그래프를 짤지 여부. 기본은 정적 그래프다.",
+    )
+    graph_design_timeout_sec: float = Field(
+        default=20.0,
+        gt=0,
+        le=120,
+        description="설계 서브에이전트 호출 타임아웃. 넘으면 정적 그래프로 폴백한다.",
+    )
 
 
 class ResearchHarnessModelChecksConfig(StrictConfigModel):
