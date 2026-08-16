@@ -109,6 +109,33 @@ _STATIC_GRAPH_SNAPSHOT_SHA256 = (
 )
 
 
+@pytest.fixture(autouse=True)
+def no_ambient_embedding_backend(monkeypatch):
+    """쿼리 분류가 임베딩을 만들지 못하게 한다 -- 이 파일이 재는 것은 배선이다.
+
+    `test_an_ephemeral_graph_can_actually_run` 은 진짜 `QUERY_CLS` 핸들러를
+    돌리고, 그 경로는 이렇게 흐른다:
+
+        _classify_query_node -> classify_query -> _generate_embedding
+          -> embedding_manager.get_embedding -> cache_manager.get -> Redis
+
+    개발 기계에는 Redis 가 떠 있어서 통과했지만 CI 에는 없다. 2026-08-16 dev
+    에서 `workflow-tests` 가 이것으로 붉었다. 죽은 포트를 물려 실측하니
+    `tests/workflow` + `tests/api` 1,457건 중 **Redis 에 실제로 기대는 것은 이
+    한 건뿐**이라, 잡에 Redis 를 붙이는 대신 의존을 끊는다.
+
+    같은 자리가 실제 임베딩 프로바이더도 부른다(`provider.get_embedding`).
+    캐시가 비면 API 키가 있는 기계에서 **진짜 호출이 나간다** -- 게이트에
+    돈과 네트워크를 섞지 않는다는 같은 이유로 여기서 함께 끊는다.
+    """
+    from neos.utils.embeddings import embedding_manager
+
+    async def fake_get_embedding(text, use_cache=True):
+        return [0.0] * 8
+
+    monkeypatch.setattr(embedding_manager, "get_embedding", fake_get_embedding)
+
+
 def _harness(*, graph_design_enabled: bool = False) -> MultiAgentWorkflow:
     """실제 `MultiAgentWorkflow` 인스턴스를 만들되, 설계 플래그를 명시적으로
     맞춰 준다. 오늘은 이 플래그를 읽어 인스턴스 상태를 채우는 코드가 없어
