@@ -567,12 +567,22 @@ class MultiAgentWorkflow:
                 self._route_after_skill_tool_selector,
                 _routing_map,
             )
+            # G1-b: 두 재귀 경로는 **스스로 `final_response` 를 만든다.** 예전에는
+            # 거기서 RESULT_INTEGRATOR 로 합류시켰는데, 그 뒤의 레거시 체인
+            # (result_integrator → fact_check → quality_validator)은
+            # search/analysis/generation 결과를 입력으로 요구한다. 재귀 경로는
+            # 그 셋을 하나도 채우지 않으므로 체인 전체가 **빈 입력 위에서**
+            # 돌았다 -- integrated_results 는 비고, quality_validator 는 빈
+            # 상태로 점수를 매겨 REGENERATE 를 낼 수 있었다. 그러면 ROMA 가
+            # 이미 낸 답을 두고 레거시 파이프라인이 통째로 헛돈다.
+            #
+            # 답을 만든 노드는 응답 생성기로 바로 간다 -- task_scheduling_node ·
+            # mission_integrator · direct_response 와 같은 모양이고, 거기서
+            # `_preserve_existing_response` 가 그 답을 그대로 돌려준다.
             if settings.RECURSIVE_AGENT_ENABLED:
-                # RECURSIVE_ORCHESTRATOR → RESULT_INTEGRATOR (결과 통합 후 정상 파이프라인 합류)
-                workflow.add_edge(WorkflowNode.RECURSIVE_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
+                workflow.add_edge(WorkflowNode.RECURSIVE_ORCHESTRATOR.value, WorkflowNode.RESP_GENERATOR.value)
             if settings.HYPER_DEEP_AGENT_ENABLED:
-                # HYPER_DEEP_ORCHESTRATOR → RESULT_INTEGRATOR (결과 통합 후 정상 파이프라인 합류)
-                workflow.add_edge(WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
+                workflow.add_edge(WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value, WorkflowNode.RESP_GENERATOR.value)
             if settings.DEEP_ANALYSIS_ENABLED:
                 # 디스패치 노드는 END로 단락한다 — 챗 턴은 job 핸들을 낸 뒤
                 # 즉시 끝나야 하며(AC2), 후속 노드가 기다릴 결과가 없다.

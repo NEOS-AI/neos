@@ -32,19 +32,45 @@ from neos.workflow.topology_export import static_topology
 #    를 다시 계산하고, 점수가 낮으면 ROMA/HyperDeep이 이미 끝낸 뒤에도
 #    레거시 검색→분석→생성 파이프라인 전체를 불필요하게 재실행할 수 있다.
 #
-# 두 원인 다 그래프 배선(엣지) 또는 처리기 로직을 바꿔야 하는 프로덕션 동작
-# 변경이라 이 태스크 범위 밖에 남겨 뒀다. 전체 근거·추적은
+# 2026-08-16 갱신 -- 둘 다 고쳤고, 결과가 대칭이 아니다.
+#
+# 원인 2(G1-b)는 해소됐다: 두 재귀 경로를 RESULT_INTEGRATOR 가 아니라
+# RESP_GENERATOR 로 직행시켰다(둘 다 이미 `final_response` 를 쓴다). 이제
+# result_integrator 의 유일한 진입은 generation_orchestrator 뿐이고 그 경로는
+# 세 결과를 전부 채우므로, 위반 4건이 아래 목록에서 사라졌다.
+#
+# 원인 1(G1-a)은 **버그는 고쳤지만 위반은 남는다.** skip 경로에
+# `direct_response` 노드를 놓아 사과문 대신 실제 답을 만든다. 그러나
+# response_generator 로 들어오는 7개 경로 중 여섯도 같은 세 키를 쓰지 않는데,
+# 그것들은 스스로 `final_response` 를 채워 `_preserve_existing_response` 로
+# 빠지므로 실제로는 멀쩡하다 -- 계약이 "final_response 가 없을 때만 필요" 라는
+# 조건을 표현하지 못해 **진짜 버그와 무해한 경로가 같은 서명**을 낸다. 그래서
+# 이 세 건은 지우지 않는다. G1-a 의 수정은
+# `tests/workflow/test_direct_response_path.py` 가 행동으로 고정한다.
+#
+# (아래는 발견 당시 서술이다.) 두 원인 다 그래프 배선(엣지) 또는 처리기
+# 로직을 바꿔야 하는 프로덕션 동작 변경이라 그 태스크 범위 밖에 남겨 뒀었다. 전체 근거·추적은
 # `.superpowers/sdd/2026-08-15-subagent-graph-engineering-loop/task-5-report.md`
 # "Fix round 1" 절 참고.
 _KNOWN_VIOLATIONS: frozenset[tuple[str, str, str]] = frozenset(
     {
+        # 2026-08-16: G1-b 를 고치면서 4건이 사라졌다 -- result_integrator 1건과
+        # quality_validator 3건. 재귀 경로(RECURSIVE/HYPER_DEEP)가 스스로 만든
+        # `final_response` 를 두고 레거시 체인에 합류하던 것을 응답 생성기로
+        # 직행시켰다. 이제 result_integrator 의 유일한 진입은
+        # generation_orchestrator 뿐이고, 그 경로는 세 결과를 전부 채운다.
+        #
+        # 남은 3건(response_generator)은 **G1-a 를 고쳐도 사라지지 않는다.**
+        # 이 노드로 들어오는 7개 경로 중 여섯(task_scheduling, mission_*,
+        # execution_approval, self_reflection, direct_response 를 제외한 나머지)
+        # 이 같은 세 키를 쓰지 않는데, 그것들은 스스로 `final_response` 를 채워
+        # `_preserve_existing_response` 로 빠지므로 실제로는 멀쩡하다. 계약이
+        # "final_response 가 없을 때만 필요" 라는 조건을 표현하지 못해서 진짜
+        # 버그와 무해한 경로가 같은 서명을 낸다 -- G1-a 의 실제 수정은
+        # `tests/workflow/test_direct_response_path.py` 가 행동으로 고정한다.
         ("unsatisfied_requires", "response_generator", "analysis_results"),
         ("unsatisfied_requires", "response_generator", "generation_results"),
         ("unsatisfied_requires", "response_generator", "search_results"),
-        ("unsatisfied_requires", "result_integrator", "search_results"),
-        ("unsatisfied_requires", "quality_validator", "analysis_results"),
-        ("unsatisfied_requires", "quality_validator", "generation_results"),
-        ("unsatisfied_requires", "quality_validator", "search_results"),
     }
 )
 
