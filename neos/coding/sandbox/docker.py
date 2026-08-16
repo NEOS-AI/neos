@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import os
 import tempfile
@@ -35,6 +38,7 @@ from neos.coding.sandbox.archive import (
 from neos.coding.sandbox.command import (
     DockerCommandRunner,
     DockerInteractiveProcess,
+    _label_args,
     build_create_args,
 )
 from neos.coding.sandbox.events import (
@@ -149,6 +153,13 @@ def _validate_archive(path: Path, maximum: int) -> None:
             Path(root),
             max_expanded_bytes=maximum,
         )
+
+
+# 관리형 컨트롤 플레인이 이 provider가 만드는 리소스에 라벨을 얹는 공개 경로.
+# ContextVar 이므로 같은 프로세스의 동시 create 가 서로 오염되지 않는다.
+_MANAGED_LABELS: ContextVar[Mapping[str, str]] = ContextVar(
+    "neos_docker_managed_labels", default={}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,6 +302,39 @@ class DockerSandboxProvider:
         self._records: dict[str, _DockerRecord] = {}
         self._lock = asyncio.Lock()
 
+    @contextmanager
+    def resource_labels(self, labels: Mapping[str, str]):
+        """블록 안에서 만들어지는 컨테이너·볼륨에 `labels` 를 붙인다."""
+        token = _MANAGED_LABELS.set(dict(labels))
+        try:
+            yield
+        finally:
+            _MANAGED_LABELS.reset(token)
+
+    @property
+    def command_runner(self) -> DockerCommandRunner:
+        """관리형 어댑터가 자기 리소스를 다룰 docker 클라이언트.
+
+        읽기 전용이다 -- 이 러너를 **교체**하는 것이 CA5-a 가 없애려는 결함이었다.
+        """
+        return self._runner
+
+    @property
+    def network_mode(self) -> str:
+        return self._config.network_mode
+
+    @property
+    def image_identity(self) -> str:
+        return self._config.image
+
+    @property
+    def create_timeout_sec(self) -> float:
+        return self._config.create_timeout_sec
+
+    @property
+    def operation_timeout_sec(self) -> float:
+        return self._config.operation_timeout_sec
+
     async def create(
         self,
         *,
@@ -311,6 +355,7 @@ class DockerSandboxProvider:
         )
         volume_created = False
         container_created = False
+        managed_labels = _MANAGED_LABELS.get()
         try:
             await self._runner.run(
                 "volume",
@@ -319,26 +364,27 @@ class DockerSandboxProvider:
                 "com.neos.coding.sandbox=true",
                 "--label",
                 f"com.neos.coding.sandbox-id={sandbox_id}",
+                *_label_args(managed_labels),
                 volume_name,
                 timeout_sec=self._config.create_timeout_sec,
             )
             volume_created = True
-            create_args = list(build_create_args(
-                sandbox_id=sandbox_id,
-                image=self._config.image,
-                limits=limits,
-                network_mode=self._config.network_mode,
-                allow_unpinned_image=self._config.allow_unpinned_image,
-                tmpfs_bytes=self._config.tmpfs_bytes,
-            ))
-            metadata_labels = (
-                f"com.neos.coding.owner-id={owner_id}",
-                f"com.neos.coding.created-at={now.isoformat()}",
-                "com.neos.coding.workspace-revision=0",
+            create_args = list(
+                build_create_args(
+                    sandbox_id=sandbox_id,
+                    image=self._config.image,
+                    limits=limits,
+                    network_mode=self._config.network_mode,
+                    allow_unpinned_image=self._config.allow_unpinned_image,
+                    tmpfs_bytes=self._config.tmpfs_bytes,
+                    extra_labels={
+                        "com.neos.coding.owner-id": owner_id,
+                        "com.neos.coding.created-at": now.isoformat(),
+                        "com.neos.coding.workspace-revision": "0",
+                        **managed_labels,
+                    },
+                )
             )
-            insertion = create_args.index("--user")
-            for label in reversed(metadata_labels):
-                create_args[insertion:insertion] = ["--label", label]
             await self._runner.run(
                 *create_args,
                 timeout_sec=self._config.create_timeout_sec,

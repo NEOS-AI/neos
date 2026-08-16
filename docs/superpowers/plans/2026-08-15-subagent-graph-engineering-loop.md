@@ -306,10 +306,54 @@ GOOGLE_API_KEY=test-key /Users/ywsung/Desktop/neos/.venv/bin/pytest -q \
 
 Expected: FAIL — 파일럿 3개를 뺀 나머지가 `missing`에 나열된다.
 
-- [ ] **Step 2: 남은 노드에 계약을 붙인다**
+> 🔴 **정정 (2026-08-15, Task 1 실측).** 계획은 노드 메서드에서 `state.get(...)`을 뽑으면
+> 된다고 가정했다. **`add_node` 대상 30개 중 16개가 한 줄 위임**이라 그 자리에서는 아무것도
+> 안 읽는다 — `return await self.search_orchestrator.orchestrate(state)` 같은 모양이다.
+>
+> **그 결과 드리프트 가드가 위임 노드에서 공허해진다.** Task 1 리뷰가 변조 테스트로 증명했다:
+> `search_orchestrator`의 `reads`를 **빈 집합으로 바꿔도 세 테스트가 전부 통과**한다.
+> `state_keys_read(handler)`가 `set()`을 돌려주므로 `undeclared = set() - reads`는 `reads`가
+> 무엇이든 항상 비어 있다. 직접 구현 노드 14개에서는 가드가 제대로 작동한다(같은 변조를
+> `query_classifier`에 하면 실패한다).
+>
+> 따라서 이 태스크는 **가드를 먼저 고치고** 계약을 채운다.
 
-Task 1 Step 4의 추출 명령을 나머지 노드에 대해 돌려 `reads`를 채우고, 반환 dict에서
-`writes`를 채운다. `requires`는 노드마다 판단한다.
+- [ ] **Step 2: 위임을 따라가도록 추출기를 고친다**
+
+`neos/workflow/contracts.py`의 `state_keys_read`를 **위임 체인을 따라가게** 바꾼다.
+`self.<attr>.<method>(state)` 형태의 호출을 만나면 그 대상의 소스로 내려가 같은 추출을
+반복한다. 순환과 폭주를 막기 위해 **방문한 함수를 기록하고 깊이 상한을 설정 상수로 둔다**
+(매직넘버 금지).
+
+재귀로 전부 닿을 수는 없다 — `SearchOrchestrator.orchestrate`는 다시
+`search_strategies.py`의 전략 구현들로 갈라진다. 그래서 **닿지 못한 계약을 침묵시키지 않고
+드러내는 카나리아**를 함께 넣는다:
+
+```python
+@pytest.mark.parametrize("name", tuple(NODE_CONTRACTS))
+def test_a_contract_the_extractor_cannot_reach_is_marked_as_hand_curated(name: str) -> None:
+    """추출기가 아무 키도 못 뽑았는데 reads 가 비어 있지 않으면, 그 계약의 드리프트
+    가드는 **작동하지 않는다.** 조용히 통과시키지 말고 손으로 큐레이션했다고 명시하게 한다.
+
+    Task 1 리뷰가 변조 테스트로 증명한 구멍이다 -- reads 를 빈 집합으로 바꿔도 통과했다.
+    """
+    contract = NODE_CONTRACTS[name]
+    if contract.reads and not state_keys_read(contract.handler):
+        assert contract.hand_curated, (
+            f"{name}: 추출기가 소스에서 키를 못 찾았다. 가드가 공허하므로 "
+            f"hand_curated=True 로 명시하고 근거를 주석에 남길 것"
+        )
+```
+
+`NodeContract`에 `hand_curated: bool = False`를 추가하고 `node_contract`에도 같은 인자를
+낸다. **이 플래그를 붙인 계약은 CI가 검증하지 못한다는 뜻**이므로, 붙일 때마다 무엇을 보고
+채웠는지 주석에 남긴다.
+
+- [ ] **Step 3: 남은 노드에 계약을 붙인다**
+
+고친 추출기를 나머지 노드에 돌려 `reads`를 채우고, 반환 dict에서 `writes`를 채운다.
+추출기가 닿지 못한 노드는 위임 대상을 손으로 읽어 채우고 `hand_curated=True`를 붙인다.
+`requires`는 노드마다 판단한다.
 
 **`requires` 판정 기준:** 그 키가 비어 있을 때 노드가 (a) 예외를 내면 → `requires`,
 (b) 의미 있는 기본 동작을 하면 → `requires` 아님, (c) **조용히 빈 산출물을 내면 →

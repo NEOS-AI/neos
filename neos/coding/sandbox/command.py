@@ -9,7 +9,7 @@ import re
 import signal
 import struct
 import termios
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 
 from neos.coding.sandbox.base import (
@@ -152,6 +152,25 @@ class DockerInteractiveProcess:
         return code
 
 
+_LABEL_VALUE_FORBIDDEN = ("\n", "\r", "\x00")
+
+
+def _label_args(labels: Mapping[str, str] | None) -> tuple[str, ...]:
+    """관리형 라벨을 `--label key=value` 쌍으로 렌더링한다.
+
+    개행·NUL이 섞이면 argv 인젝션으로 이어질 수 있어 여기서 차단한다.
+    """
+    if not labels:
+        return ()
+    rendered: list[str] = []
+    for key, value in labels.items():
+        text = f"{key}={value}"
+        if any(bad in text for bad in _LABEL_VALUE_FORBIDDEN):
+            raise SandboxPolicyViolation("docker_label_invalid")
+        rendered.extend(("--label", text))
+    return tuple(rendered)
+
+
 def build_create_args(
     *,
     sandbox_id: str,
@@ -160,6 +179,7 @@ def build_create_args(
     network_mode: str = "none",
     allow_unpinned_image: bool = False,
     tmpfs_bytes: int = 64 * 1024 * 1024,
+    extra_labels: Mapping[str, str] | None = None,
 ) -> tuple[str, ...]:
     if not _SANDBOX_ID.fullmatch(sandbox_id):
         raise SandboxPolicyViolation("sandbox_id_invalid")
@@ -179,6 +199,7 @@ def build_create_args(
         "com.neos.coding.sandbox=true",
         "--label",
         f"com.neos.coding.sandbox-id={sandbox_id}",
+        *_label_args(extra_labels),
         "--user",
         "10001:10001",
         "--cap-drop",
