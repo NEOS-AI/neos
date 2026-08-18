@@ -861,6 +861,7 @@ class Orchestrator:
                 confidence_cap_two=config.confidence_cap[2],
                 confidence_cap_three_plus=config.confidence_cap[3],
                 subq_adopt_threshold=config.subq_adopt_threshold,
+                resolve_threshold=config.resolve_threshold,
             )
             assignments.append(
                 Assignment(
@@ -913,6 +914,7 @@ class Orchestrator:
                     for i, p in enumerate(proposals)
                 ),
                 subq_adopt_threshold=config.subq_adopt_threshold,
+                resolve_threshold=config.resolve_threshold,
             )
             data, _response = await call_json(
                 judge_model,
