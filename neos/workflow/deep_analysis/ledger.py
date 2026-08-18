@@ -846,6 +846,29 @@ class Ledger:
                 "new_claims": len(result.claims),
                 "verified": verified_count,
                 "tokens": result.tokens_spent,
+                # 질문이 닫히는지를 결정하는 유일한 수인데 여태 원장에 없었다.
+                # 해결 조건은 `verified_any AND max(self_assessment) >=
+                # resolve_threshold` 이고, 표본 #16~#19 에서 645개 질문 중 9개만
+                # 그 문턱을 넘었다. 그런데 이 값이 패스마다 얼마였는지는 어디에도
+                # 남지 않아, "워커가 낮게 매긴다" 와 "높게 매긴 패스가 있었는데
+                # 다른 조건에 걸렸다" 를 구분할 수 없었다.
+                #
+                # `resolved_gate` 는 그 판정을 그대로 적는다 -- 세 갈래(문턱 미달 /
+                # 검증 클레임 0 / 실패 상태) 중 무엇이 막았는지 사후에 세려면
+                # 계산된 결과가 필요하다. 사유를 나중에 재구성하려 들면 D59 처럼
+                # 지표가 틀린다.
+                "self_assessment": result.self_assessment,
+                "question_confidence": question.confidence,
+                "resolve_threshold": self.resolve_threshold,
+                "resolved_gate": (
+                    "resolved"
+                    if question.status == "resolved"
+                    else "failed_status"
+                    if result.status == "failed"
+                    else "no_verified_claim"
+                    if not verified_any
+                    else "below_threshold"
+                ),
                 "confidence_clamped_count": sum(clamp_counts.values()),
                 "confidence_clamped_by_source_count": clamp_counts,
                 **{

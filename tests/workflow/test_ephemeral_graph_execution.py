@@ -104,9 +104,42 @@ from neos.workflow.topology import END, START, GraphTopology  # noqa: E402
 # 아래 상수를 교체하고, 왜 배선이 바뀌었는지를 커밋 메시지에 남긴다 -- 이
 # 테스트가 실패했다고 해시만 바꿔치기하면 "정적 그래프가 안 바뀌었다" 는
 # 보증 자체가 조용히 사라진다.
+# 2026-08-16 (G1-a): 위 스크립트로 재캡처했다. 정적 배선이 **의도적으로**
+# 바뀌었다 -- `skip_orchestrators` 가 `response_generator` 대신
+# `direct_response` 로 가고, `direct_response -> response_generator` 엣지가
+# 생겼다. 검색이 필요 없다고 판정된 질의(인사·잡담)가 요약할 결과가 없다는
+# 이유로 사과문을 받던 것이 G1-a 이며, 그 경로에 답을 만드는 노드가 하나도
+# 없었던 것이 원인이다. 이전 값: 79fada0e...
 _STATIC_GRAPH_SNAPSHOT_SHA256 = (
-    "79fada0ebc474cc6167e6a146aa0862189b9a99ce4f643f31593386a0fc5ba0f"
+    "a78abc14a1c0cdea097f4f05e9fc03345258d5a518e628f473b53300205afa37"
 )
+
+
+@pytest.fixture(autouse=True)
+def no_ambient_embedding_backend(monkeypatch):
+    """쿼리 분류가 임베딩을 만들지 못하게 한다 -- 이 파일이 재는 것은 배선이다.
+
+    `test_an_ephemeral_graph_can_actually_run` 은 진짜 `QUERY_CLS` 핸들러를
+    돌리고, 그 경로는 이렇게 흐른다:
+
+        _classify_query_node -> classify_query -> _generate_embedding
+          -> embedding_manager.get_embedding -> cache_manager.get -> Redis
+
+    개발 기계에는 Redis 가 떠 있어서 통과했지만 CI 에는 없다. 2026-08-16 dev
+    에서 `workflow-tests` 가 이것으로 붉었다. 죽은 포트를 물려 실측하니
+    `tests/workflow` + `tests/api` 1,457건 중 **Redis 에 실제로 기대는 것은 이
+    한 건뿐**이라, 잡에 Redis 를 붙이는 대신 의존을 끊는다.
+
+    같은 자리가 실제 임베딩 프로바이더도 부른다(`provider.get_embedding`).
+    캐시가 비면 API 키가 있는 기계에서 **진짜 호출이 나간다** -- 게이트에
+    돈과 네트워크를 섞지 않는다는 같은 이유로 여기서 함께 끊는다.
+    """
+    from neos.utils.embeddings import embedding_manager
+
+    async def fake_get_embedding(text, use_cache=True):
+        return [0.0] * 8
+
+    monkeypatch.setattr(embedding_manager, "get_embedding", fake_get_embedding)
 
 
 def _harness(*, graph_design_enabled: bool = False) -> MultiAgentWorkflow:

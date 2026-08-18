@@ -10,6 +10,10 @@ from typing import Any
 
 from neos.providers.anthropic import normalize_anthropic_request
 from neos.config.settings import settings
+from neos.workflow.deep_analysis.prompt_loader import (
+    UnfilledPlaceholder,
+    unfilled_placeholders,
+)
 from neos.workflow.deep_analysis.token_budget import (
     TokenBudgetExhausted,
     active_token_budget,
@@ -348,6 +352,21 @@ async def call_llm(
     cassette=None,
     stage: str = "llm",
 ) -> LLMResponse:
+    # 채워지지 않은 치환 자리를 가진 프롬프트는 모델에 보내지 않는다.
+    #
+    # `prompt_loader.render` 는 키마다 `str.replace` 이고 부분 렌더가 설계다
+    # (오케스트레이터가 `{fetched_evidence}` 를 남기면 워커가 나중에 채운다).
+    # 그래서 렌더 시점에는 검사할 수 없고, 여기가 마지막 관문이다.
+    #
+    # 조용히 통과시키면 모델은 `{resolve_threshold} 이상이면` 같은 문장을 받고도
+    # 그럴듯한 답을 돌려준다 -- 산출물을 봐서는 프롬프트가 반쯤 비었다는 것을
+    # 알 수 없다. 프롬프트에 새 자리를 더하면서 호출 지점 하나를 빠뜨리는 것이
+    # 이 검사가 막는 실제 사고다.
+    unfilled = unfilled_placeholders(prompt)
+    if unfilled:
+        raise UnfilledPlaceholder(
+            f"stage {stage!r} would send a prompt still holding {unfilled}"
+        )
     messages = [{"role": "user", "content": prompt}]
 
     async def invoke(limit: int, dispatch: _DispatchState) -> LLMResponse:

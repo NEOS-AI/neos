@@ -49,6 +49,11 @@ class WorkflowNode(Enum):
     # Phase 8 (OpenClaw A2UI): 동적 UI 컴포넌트 생성 노드
     UI_FRAME_GENERATOR = "ui_frame_generator"
 
+    # G1-a: 검색이 필요 없다고 판정된 질의(`skip_orchestrators`)에 직접 답한다.
+    # 이 노드가 없을 때 그 경로는 요약기로 직행했고, 요약할 결과가 없으니
+    # 사용자가 사과문을 받았다.
+    DIRECT_RESPONSE = "direct_response"
+
     # result processors
     RESULT_INTEGRATOR = "result_integrator"
     FACT_CHECK = "fact_check"

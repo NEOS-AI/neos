@@ -29,7 +29,13 @@ EXPECTED_PROMPT_VERSIONS = {
     # (`subq_adopt_threshold`)을 적용할 값이 없어 D11·D13 이 두 번 연기한
     # 트리 채택이 계속 불가능했다. 표본 #16 에서 고유 제안 161건이 버려지고
     # 실제 조사된 질문은 82건이었다.
-    "worker_brief": 4,
+    #
+    # v5 (D73, 2026-08-18): `self_assessment` 규칙. 이 수 하나가 질문이 닫히는지를
+    # 결정하는데(`verified_any AND max(self_assessment) >= resolve_threshold`)
+    # 프롬프트는 그것을 **JSON 예시에 한 번 보여줄 뿐** 무엇인지도, 무엇을
+    # 결정하는지도 말하지 않았다. 표본 #16~#19 에서 645개 질문 중 9개만 문턱을
+    # 넘었고, 판정자의 반려 사유는 계속 "핵심 축이 미확인으로 남았다" 였다.
+    "worker_brief": 5,
     "judge": 1,
     "node_summary": 1,
     # v1 (D68, 2026-08-15): §6.3.2 의 독립 심사자. D11 -> D13 -> D65 가 세 번

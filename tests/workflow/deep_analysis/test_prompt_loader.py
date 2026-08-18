@@ -46,7 +46,7 @@ def test_worker_brief_keeps_verified_findings_before_repairs():
     assert "self_assessment" in output
 
 
-def test_worker_brief_v4_scopes_claims_and_scores_subquestions():
+def test_worker_brief_v5_scopes_claims_scores_subquestions_and_explains_the_gate():
     output = render(
         "worker_brief",
         question_text="q",
@@ -59,10 +59,11 @@ def test_worker_brief_v4_scopes_claims_and_scores_subquestions():
         confidence_cap_two=0.75,
         confidence_cap_three_plus=0.9,
         subq_adopt_threshold=0.3,
+        resolve_threshold=0.7,
         fetched_evidence="<evidence>source</evidence>",
     )
 
-    assert "<!-- version: 4 -->" in output
+    assert "<!-- version: 5 -->" in output
     assert "한 기관·한 결론·한 비교축" in output
     assert "기관별로 별도 claim" in output
     assert "비교 대상과 비교 방향을 모두 직접 명시" in output
@@ -77,6 +78,13 @@ def test_worker_brief_v4_scopes_claims_and_scores_subquestions():
     assert "분리하거나 지지 범위로 좁히고" in output
     assert "지지되지 않는 나머지는 버린다" in output
     assert "고유 source_url" in output
+    # v5: `self_assessment` 가 무엇이고 무엇을 결정하는지 말한다. 이 수 하나가
+    # 질문이 닫히는지를 정하는데(`verified_any AND max(self_assessment) >=
+    # resolve_threshold`) v4 까지는 JSON 예시에 숫자 하나로만 등장했다 --
+    # 워커는 자기가 무엇을 채점하는지 모른 채 채점했다(D73).
+    assert "이 질문이 지금 답해졌는가" in output
+    assert "0.7 이상이고 검증된 클레임이 하나라도 있으면" in output
+    assert "{resolve_threshold}" not in output
     assert "1개 0.55" in output
     assert "2개 0.75" in output
     assert "3개 이상 0.9" in output

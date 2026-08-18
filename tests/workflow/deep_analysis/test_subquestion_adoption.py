@@ -168,9 +168,11 @@ async def test_adoption_stops_at_the_cap_and_takes_the_most_valuable():
     )
 
     assert len(ledger.opened) == cap
-    # 값이 높은 것부터.
+    # 값이 높은 것부터. 제안은 0..cap+4 이고 값이 i 와 함께 커지므로 상위 cap
+    # 개는 cap+4 부터 5 까지다 -- `range(cap + 4, cap, -1)` 로 적으면 cap == 4
+    # 일 때만 우연히 맞는다(2026-08-16 에 상한을 2 로 내리면서 드러났다).
     assert [text for _q, text, *_r in ledger.opened] == [
-        f"제안 {i}" for i in range(cap + 4, cap, -1)
+        f"제안 {i}" for i in range(cap + 4, 4, -1)
     ]
 
 
