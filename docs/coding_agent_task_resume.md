@@ -42,14 +42,37 @@
 |---|---|---|---|
 | dev 대비 | +11 / **−17** | +11 / **−232** | `a9f37c6a`로 **합류 완료** (충돌 0건) |
 | 미커밋 변경 | 2파일 | **2파일 그대로 — 2주째 미해결** | ✅ **종결** — CA5-b 구현으로 판정·채택 (`c7876999`) |
-| `tests/coding` | — | — | **587 passed / 22 skipped** (`5aa31a22` 기준) |
+| `tests/coding` | — | — | **587 passed / 22 skipped** (`5aa31a22` 기준) → **602 passed / 9 skipped** (2026-08-19, DB 지정) |
 
-> ⚠️ **위 22개 skip은 전부 `@pytest.mark.integration`이다.** `CODING_TEST_DATABASE_URL`이
-> 설정되지 않아 **한 번도 실행되지 않았다** — 펜싱·클레임 상태 필터·CLEANED 컬럼
-> 클리어링·조인 쿼리는 *발행되는 SQL과 바인드 파라미터*만 검증됐고 실제 Postgres에서는
-> 미검증이다. **CHECK 제약 위반은 지금까지 실행된 어떤 테스트도 잡지 못한다.**
-> 재개하는 사람이 가장 먼저 할 일은 DB를 붙이고
-> `CODING_TEST_DATABASE_URL=... pytest -m integration tests/coding/managed`를 한 번 돌리는 것이다.
+> ✅ **이 경고는 2026-08-19에 해소됐다 (원문은 계보를 위해 아래 인용).** 실제 Postgres를
+> 붙여 돌린 결과 **588 passed / 23 skipped → 602 passed / 9 skipped**로 **14건이 처음
+> 실행됐다.** 남은 9건은 DB와 무관하다 — Docker 8건(`CODING_TEST_DOCKER=1` + digest 고정
+> 이미지)과 실제 Anthropic 키 1건.
+>
+> **첫 실행이 결함을 하나 잡았다.**
+> `test_workspace_edit_claim_checkpoint_and_events_are_atomic`이
+> `coding_checkpoints_task_id_seq_key`(task_id, seq 유일)를 위반했다. 원인은 제품이 아니라
+> **테스트가 심은 도달 불가능한 상태**다: 체크포인트를 seq=1로 직접 넣으면서
+> `coding_tasks.last_seq`는 0으로 남겨, `_allocate_sequence_in_session`(`last_seq + 1`)의
+> 첫 할당이 1을 다시 내줬다. 프로덕션에서 체크포인트 seq는 **항상** 그 할당기를 거치므로
+> 그런 상태는 만들어질 수 없다. 수정은 심은 seq만큼 `last_seq`도 올리는 것이고,
+> 그 이유를 테스트에 주석으로 못박았다.
+>
+> **이것이 이 경고가 옳았던 증거다** — *발행되는 SQL*만 보는 검증으로는 유일성 위반을
+> 원리적으로 잡을 수 없다.
+>
+> 원문: *"위 22개 skip은 전부 `@pytest.mark.integration`이다. `CODING_TEST_DATABASE_URL`이
+> 설정되지 않아 한 번도 실행되지 않았다 — 펜싱·클레임 상태 필터·CLEANED 컬럼 클리어링·조인
+> 쿼리는 발행되는 SQL과 바인드 파라미터만 검증됐고 실제 Postgres에서는 미검증이다.
+> CHECK 제약 위반은 지금까지 실행된 어떤 테스트도 잡지 못한다."*
+
+**재현 명령** (개발 DB의 `coding_*` 테이블이 비어 있을 때만 안전하다 — 픽스처가 자기
+소유 테이블을 `DROP ... CASCADE` 후 재생성한다):
+
+```bash
+CODING_TEST_DATABASE_URL="$(grep -oE '^DATABASE_URL=.*' .env | cut -d= -f2-)" \
+  HOME=/tmp/neos-test-home .venv/bin/pytest tests/coding -q
+```
 
 > 🔴 **−232라는 숫자에 겁먹지 말 것. 드리프트는 커밋 수가 아니라 공유 파일의 겹침으로 잰다.**
 > 이 브랜치가 건드린 24파일 중 **19개가 신규 파일**(`neos/coding/managed/**` ·
