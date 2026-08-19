@@ -9,6 +9,7 @@ import json
 import re
 from collections import defaultdict
 from collections.abc import Sequence
+from itertools import combinations
 
 EventRow = tuple[str, int, str, str]
 
@@ -122,3 +123,47 @@ def build_summary(
         },
         "config": dict(config_fingerprint),
     }
+
+
+def score_sample(
+    candidates,
+    *,
+    truth,
+    contemporaneous,
+    valid_event_ids,
+) -> dict:
+    kept, discarded = [], []
+    for candidate in candidates:
+        evidence = candidate.get("evidence") or []
+        if evidence and all(e in valid_event_ids for e in evidence):
+            kept.append(candidate["label"])
+        else:
+            discarded.append(candidate["label"])
+
+    hits = [label for label in truth if label in kept]
+    return {
+        "recall": len(hits) / len(truth) if truth else 0.0,
+        "hits": hits,
+        "kept": kept,
+        "discarded": discarded,
+        "reproduced_contemporaneous": (
+            not hits and any(label in kept for label in contemporaneous)
+        ),
+    }
+
+
+def constant_best(key: dict, labels, k: int = 3) -> float:
+    """정답을 읽지 않는 최선의 고정 예측이 받는 평균 recall.
+
+    모든 k-라벨 조합을 훑는다. 표본 창이 한 병목을 해상도를 높여가며 쫓던
+    구간이면 이 값이 높게 나오고, 그것이 관문의 기준이 되어야 한다.
+    """
+    best = 0.0
+    for combo in combinations(sorted(labels), k):
+        chosen = set(combo)
+        total = 0.0
+        for entry in key.values():
+            truth = entry["truth"]
+            total += len([t for t in truth if t in chosen]) / len(truth)
+        best = max(best, total / len(key))
+    return best
