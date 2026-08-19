@@ -62,6 +62,7 @@ EXPECTED_PROMPT_VERSIONS = {
     # 나빠졌다(.400/.435/.714).
     "final_compose": 5,
     "report_judge": 1,
+    "diagnose_bottleneck": 1,
 }
 
 
