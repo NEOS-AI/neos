@@ -1,0 +1,56 @@
+# D53~D63 (DECISIONS.md) 을 직접 읽고 만든 정답키.
+# truth = 최종 확립된 병목(나중 표본의 정정 포함).
+# contemporaneous = 그 시점에 사람이 그 표본만 보고 내린 결론.
+# 둘이 갈리는 것은 나중 표본이 그때의 읽기를 뒤집었을 때뿐이다.
+#
+# 각 항목은 DECISIONS.md 의 본문을 직접 열어 truth/contemporaneous 를
+# 대조했다 (초안은 「다음」 절만 보고 뽑았었다). 대조 결과 여섯 항목 모두
+# 본문과 일치해 값을 바꾸지 않았다. 특히 #13(D57)은 "원인을 확정하지
+# 못했고, 그 이유가 관측 구멍이다" / "다음 수는 고치는 것이 아니라 재는
+# 것이다" 로 당시엔 판별 불가(instrumentation)였음을 본문이 그대로 확인하고,
+# 실제 병목(assembly_clamp)은 D59("병목은 순수하게 절삭이다")와
+# D61("리포트 층이 맞다")이 확정한다.
+samples:
+  "11":
+    artifact: 20260809T125612Z
+    decision: D53
+    truth: [assembly_clamp, degraded_join]
+    contemporaneous: [assembly_clamp, degraded_join]
+    quote: "root_answer 를 clamp 대상에 넣는 것이 지금 가장 큰 한 수다"
+  "12":
+    artifact: 20260809T160315Z
+    decision: D55
+    truth: [budget_floor_formula]
+    contemporaneous: [budget_floor_formula]
+    quote: "call_text 의 절단 확장이 조립 예산의 3배를 쓰는데 바닥은 2배만 잡는다"
+  "13":
+    artifact: 20260810T110354Z
+    decision: D57
+    # 당시에는 원인을 가를 수 없었고(계측 부족), 실제 병목은 #14·#15가 확정했다.
+    truth: [assembly_clamp]
+    contemporaneous: [instrumentation]
+    quote: "다음 수는 고치는 것이 아니라 재는 것이다"
+  "14":
+    artifact: 20260810T154952Z
+    decision: D59
+    truth: [assembly_clamp, instrumentation]
+    contemporaneous: [assembly_clamp, instrumentation]
+    quote: "병목은 순수하게 절삭이다, 그리고 내 계측이 반쯤 틀렸다"
+  "15":
+    artifact: 20260811T103154Z
+    decision: D61
+    truth: [assembly_clamp]
+    contemporaneous: [assembly_clamp]
+    quote: "절삭이 마커를 인지하게 만들면 어떤 분포에서도 클레임 생존이 오른다"
+  "16":
+    artifact: 20260811T152942Z
+    decision: D63
+    truth: [subquestion_coverage]
+    contemporaneous: [subquestion_coverage]
+    quote: "남은 판정자 불만은 커버리지 하나이고, 그것은 조사 깊이의 문제다"
+
+# 이 정답키에서 계산한 constant_best. Task 3 의 테스트가 계산값과 대조한다.
+# 손으로 고치지 말고 `constant_best()` 로 계산해 적을 것.
+# {assembly_clamp, budget_floor_formula, subquestion_coverage} 가 유일한
+# 최댓값 조합이다 (재검증: 위 truth 목록에 변경이 없었으므로 초안의 값과 같다).
+baseline_constant_best: 0.8333333333333334

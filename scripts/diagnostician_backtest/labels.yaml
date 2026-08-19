@@ -1,0 +1,22 @@
+# 닫힌 라벨 집합. 진단자는 여기서만 고른다.
+# 파이프라인(설계 §3.1)의 단계마다 하나씩 두었고, 표본 #11~#16의 정답이
+# 어디였는지를 보고 만들지 않았다 -- 정답 쪽으로 치우쳤는지는 "모든 단계에
+# 라벨이 있는가"로 검사할 수 있다.
+labels:
+  - search_recall          # 검색이 후보를 못 가져온다
+  - source_quality         # 1차 기관 출처를 못 잡는다
+  - worker_extraction      # 워커가 증거에서 클레임을 못 뽑는다
+  - claim_grading          # 결정론 채점이 과하게 버린다
+  - entailment_filter      # entailment가 과하게 버린다
+  - subquestion_coverage   # 조사 축이 빠진다
+  - investigation_budget   # 조사 예산이 소진돼 패스가 거절된다
+  - budget_floor_formula   # 바닥 산식이 실제 비용을 못 덮는다
+  - reduction_layer        # node_reduction이 클레임을 잃는다
+  - degraded_join          # 강등 요약 join이 무계로 커진다
+  - assembly_clamp         # 조립 프롬프트 클램프가 재료를 버린다
+  - assembly_truncation    # 조립 출력이 상한에 잘린다
+  - writer_prompt          # 작성자가 받은 재료를 안 쓴다
+  - citation_render        # 렌더/마커 해소 경로
+  - gate_definition        # 게이트가 세는 대상이 틀렸다
+  - judge_budget           # 판정자가 굶는다
+  - instrumentation        # 계측이 없거나 틀려 원인을 가를 수 없다

@@ -1,0 +1,20 @@
+# 라벨마다 "이 병목이 있다면 고정 요약의 어느 필드에 나타나야 하는가".
+# 필드 경로는 Task 2 가 만들 요약 스키마를 가리킨다 -- 지금은 검증 불가능하다.
+signals:
+  search_recall:         [evidence.tier1_selected, evidence.candidates]
+  source_quality:        [evidence.tier1_ratio]
+  worker_extraction:     [passes.verified_total, passes.claims_per_pass]
+  claim_grading:         [events.claim_rejected, events.claim_verified]
+  entailment_filter:     [events.entailment_filter_skipped]
+  subquestion_coverage:  [questions.open, questions.resolved, questions.abandoned]
+  investigation_budget:  [passes.zero_token, stop_reasons]
+  budget_floor_formula:  [budget.by_stage, events.report_assembly_degraded]
+  reduction_layer:       [events.node_reduction_degraded, budget.by_stage]
+  degraded_join:         [clamp.anchor_chars_before, clamp.anchor_chars_after]
+  assembly_clamp:        [clamp.exhausted, clamp.dropped_primary, clamp.primary_chars_after]
+  assembly_truncation:   [events.llm_truncated, budget.by_stage]
+  writer_prompt:         [delivered.footnotes, clamp.distinct_claims_after]
+  citation_render:       [delivered.raw_markers, delivered.sources_section]
+  gate_definition:       [gate.codes, gate.uncited_ratio]
+  judge_budget:          [gate.judge_states]
+  instrumentation:       []   # 빈 목록 = 어떤 필드로도 확정할 수 없다는 주장 자체
