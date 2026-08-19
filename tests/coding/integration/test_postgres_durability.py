@@ -541,6 +541,23 @@ async def test_workspace_edit_claim_checkpoint_and_events_are_atomic(
                     "now": NOW,
                 },
             )
+            # 심은 체크포인트의 seq 만큼 `last_seq` 도 올린다. 프로덕션에서
+            # 체크포인트 seq 는 항상 `_allocate_sequence_in_session` 이
+            # 발급하고 그 함수가 `coding_tasks.last_seq` 를 증가시키므로,
+            # seq=1 짜리 체크포인트가 있는데 last_seq=0 인 상태는 **도달할 수
+            # 없다.** 그 상태를 심으면 저장소의 다음 할당이 1 을 다시 내주고
+            # `coding_checkpoints_task_id_seq_key` 를 위반한다 -- 발행되는
+            # SQL 만 검증하던 시절에는 보이지 않던 실패다.
+            await session.execute(
+                text(
+                    """
+                    UPDATE coding_tasks
+                    SET last_seq = :seq
+                    WHERE task_id = :task_id
+                    """
+                ),
+                {"task_id": task_id, "seq": checkpoint.seq},
+            )
             await session.execute(
                 text(
                     """

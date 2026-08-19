@@ -953,6 +953,45 @@ class DeepAnalysisConfig(StrictConfigModel):
     # absorbs 1-3 above.
     grading_input_ratio: float = Field(default=5.0, gt=0.0)
 
+    # How many worst-case assembly attempts `report_floor_tokens` funds.
+    #
+    # Was `report_retry_cap + 1` (= all of them). That sized the tier for the
+    # case where every attempt truncates AND every call consumes 100% of its
+    # reservation: 2 * (7,926 + 9,926) = 35,704 against a 36,000 tier, a
+    # margin of 296. The comment on the test that pinned it said why -- "the
+    # floor is a reservation guarantee, not an expectation" -- and D53/D55
+    # earned it, having measured the assembly retry refused in four of six
+    # runs.
+    #
+    # 1.2 (2026-08-19, D78) gives that guarantee up deliberately. Samples
+    # #16-#20 measured what the report tier actually occupies, counting
+    # settled tokens plus the reservation outstanding at that moment (the
+    # quantity `reserve` checks, not the settled total D77 first used):
+    #
+    #     dev      peak 38,170 of 57,600  (66%)
+    #     default  peak 64,684 of 113,600 (57%)
+    #
+    # across 30 runs. At 1.2 the tier is 21,600 (dev) / 43,200 (prod) and the
+    # whole report floor becomes 43,200 / 84,800 -- still above every observed
+    # peak, by 1.13x (dev) and 1.31x (prod). One full worst-case round
+    # (17,852 dev) still fits with 21% to spare; the SECOND one no longer
+    # does.
+    #
+    # What that costs if the tail arrives: a run whose assembly truncates on
+    # both rounds and consumes its full reservation on each loses the second
+    # round to `input_bound` -- exactly the D53/D55 failure. 30 runs is not
+    # many; this is a measured bet, not a proof. Sample #21 watches
+    # `report_assembly_degraded`, clamp `exhausted`, and the delivered
+    # footnote median for precisely that.
+    #
+    # What it buys is small and was quantified before shipping: 14,400 tokens
+    # for dev, and a productive pass costs 11,542 including the grading and
+    # entailment it drags along -- about +1.2 passes against a run-to-run
+    # standard deviation of 2.19. The pass count cannot judge this. Sample
+    # #21 judges it on investigation tokens settled, which is near
+    # deterministic (66,848-70,788 across 25 dev runs).
+    report_floor_funded_attempts: float = Field(default=1.2, gt=0.0)
+
     max_stall_rounds: int = 3
     claim_retry_cap: int = 2
     # 2 -> 1 (2026-08-09). The extra attempt was buying nothing: sample #9's
@@ -1155,15 +1194,26 @@ class DeepAnalysisConfig(StrictConfigModel):
         )
 
     def report_floor_tokens(self, synthesis_max_tokens: int) -> int:
-        """The INNER floor tier: `report_retry_cap + 1` rounds of one
-        assembly plus one judge, counted in the input+output currency
-        `TokenBudget.reserve` actually charges.
+        """The INNER floor tier: every judge attempt plus
+        `report_floor_funded_attempts` worth of assembly, counted in the
+        input+output currency `TokenBudget.reserve` actually charges.
 
         `node_reduction` cannot draw on this (token_budget.REPORT_STAGES).
-        Sizing it for the whole retry loop is deliberate: `_finalize`
-        re-assembles up to `report_retry_cap` times and grades every draft,
-        so a tier covering one round leaves the later rounds to fail open --
-        the failure this split exists to end.
+
+        Until 2026-08-19 this funded `report_retry_cap + 1` rounds of BOTH
+        terms, and the docstring said why: `_finalize` re-assembles up to
+        `report_retry_cap` times and grades every draft, so a tier covering
+        one round leaves the later rounds to fail open -- the failure this
+        split exists to end.
+
+        D78 kept that reasoning for the judge and gave it up for the
+        assembly. The judge term is unchanged because
+        `(report_retry_cap + 1) * grading` IS `grading_floor_tokens`, so
+        there was never slack in it. The assembly term is now 1.2 rounds
+        rather than 2, sized against 30 runs of measured tier occupancy
+        rather than against the case where every call consumes its whole
+        reservation -- see `report_floor_funded_attempts` for what that
+        trades away and what sample #21 watches to catch it.
 
         The `assembly` term counts the truncation expansion, for the same
         reason `grading_floor_tokens` does (D56, 2026-08-10). `call_text`
@@ -1202,7 +1252,15 @@ class DeepAnalysisConfig(StrictConfigModel):
             self.grading_input_ratio * synthesis_max_tokens
             + self.report_judge_max_output_tokens
         )
-        return (self.report_retry_cap + 1) * (assembly + grading)
+        # The grading contribution is left at `report_retry_cap + 1` attempts
+        # because that product IS `grading_floor_tokens` (dev 21,600, prod
+        # 41,600) -- two un-expanded judge calls and one expanded judge call
+        # are the same number, and the ledger shows one `report_grading`
+        # reservation per run. There is nothing to recover there; cutting it
+        # would put this tier below its own inner tier (D78).
+        return (self.report_retry_cap + 1) * grading + int(
+            self.report_floor_funded_attempts * assembly
+        )
 
     def finalization_floor_tokens(self, synthesis_max_tokens: int) -> int:
         """The TOTAL floor: the report tier plus

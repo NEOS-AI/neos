@@ -163,16 +163,19 @@ def test_the_floor_counts_input_not_only_output():
     # 같은 프롬프트를 출력 2배로 다시 보내므로 입력이 2회, 출력이 1+2회다 --
     # 2*3.0*4000 + 3*4000 = 36,000. grading 5.0*4000+800 = 20,800.
     # -> attempt 56,800 * (report_retry_cap 1 + 1) = 113,600
-    assert config.report_floor_tokens(4_000) == 113_600
+    # grading 20,800 * (report_retry_cap+1) = 41,600 -- 이것이
+    # `grading_floor_tokens` 와 같은 수다. assembly 36,000 *
+    # `report_floor_funded_attempts` 1.2 = 43,200 (D78).
+    assert config.report_floor_tokens(4_000) == 84_800
     # reduction (1.6+1)*4000=10,400 * allowance 2 = 20,800
-    assert config.finalization_floor_tokens(4_000) == 113_600 + 20_800
+    assert config.finalization_floor_tokens(4_000) == 84_800 + 20_800
 
     # dev 프로파일 (synthesis_max_tokens=2000)
     # assembly 2*3.0*2000 + 3*2000 = 18,000 -- 표본 #12 가 실측한 절단 시도
     # 1회 비용 17,852 를 덮는다. 옛 값 8,000 은 못 덮었고, 그래서 시도 1 이
     # 6개 run 중 4개에서 예약을 거절당했다.
-    assert config.report_floor_tokens(2_000) == 57_600
-    assert config.finalization_floor_tokens(2_000) == 68_000
+    assert config.report_floor_tokens(2_000) == 43_200
+    assert config.finalization_floor_tokens(2_000) == 53_600
 
 
 def test_the_assembly_tier_funds_every_attempt_including_its_truncation_retry():
@@ -201,15 +204,30 @@ def test_the_assembly_tier_funds_every_attempt_including_its_truncation_retry():
     attempt = input_bound + smt
     expansion = input_bound + int(config.truncation_retry_multiplier * smt)
     attempts = config.report_retry_cap + 1
+    one_round = attempt + expansion
 
-    # 모든 시도가 절단되는 최악의 경우까지 덮어야 한다 -- 바닥은 예약
-    # 보증이지 기대값이 아니다.
-    assert assembly_tier >= attempts * (attempt + expansion)
+    # **한 라운드**는 절단까지 포함해 반드시 덮는다. 이것을 깨면 조립이
+    # 시도 0 조차 예약하지 못하고, 그것이 D53·D55 가 측정한 실패다.
+    assert assembly_tier >= one_round
 
-    # 그리고 옛 공식으로는 못 덮었다는 것이 이 테스트의 요점이다.
+    # 그리고 옛 조립항으로는 그 한 라운드도 못 덮었다는 것이 D56 의 요점이다.
     old_assembly = int((config.assembly_input_ratio + 1) * smt)
-    old_tier = attempts * old_assembly
-    assert old_tier < attempts * (attempt + expansion)
+    assert old_assembly < one_round
+
+    # ⚠️ **모든 라운드를 덮지는 않는다 -- 2026-08-19 D78 이 의도적으로 포기한
+    # 보증이다.** 옛 계약은 "모든 시도가 절단되고 각 호출이 예약을 100% 쓰는"
+    # 최악(2 x 17,852 = 35,704)을 36,000 으로 덮었다(여유 296).
+    #
+    # 표본 #16~#20 에서 리포트 계층의 실제 점유(정산 누적 + 그 순간의 예약)는
+    # 30 run 내내 dev 38,170 / default 64,684 를 넘지 않았고, 그것은 각각
+    # report_floor 의 66% · 57% 다. `report_floor_funded_attempts` 1.2 는 그
+    # 관측 위에 1.13배(dev) 여유를 남기고 나머지를 조사에 돌린다.
+    #
+    # **이 단언은 방향을 고정한다.** 다시 `attempts` 전부를 덮게 되면(= 누가
+    # 1.2 를 되돌리면) 여기서 실패한다 -- 되돌리는 것이 나쁘다는 뜻이 아니라,
+    # 그것이 표본 #21 의 판정을 뒤집는 의도적 변경이어야 한다는 뜻이다.
+    assert assembly_tier < attempts * one_round
+    assert config.report_floor_funded_attempts < attempts
 
 
 def test_the_shipped_defaults_do_not_trip_the_finalization_floor_warning():
