@@ -85,6 +85,21 @@ class _FakeAnthropicClient:
         return Response()
 
 
+class _FailingClient:
+    """전송 계층이 죽은 가짜. `_call_live_provider`가 임의 예외를
+    `LLMProviderError`로 감싼다(llm.py) -- 파싱 실패와는 원인이 다른 실패다.
+    """
+
+    def __init__(self):
+        self.chat = self
+        self.completions = self
+        self.calls = 0
+
+    async def create(self, **kwargs):
+        self.calls += 1
+        raise RuntimeError("connection reset")
+
+
 def test_prompt_carries_the_label_set_and_the_summary():
     prompt = render_prompt({"events": {"claim_verified": 3}}, LABELS)
     assert "assembly_clamp" in prompt
@@ -148,3 +163,17 @@ async def test_truncated_response_is_reported_as_truncated_not_unparseable():
                             model="claude-haiku-4-5-20251001", client=client)
     assert result["candidates"] == []
     assert result["failure"] == "truncated"
+
+
+@pytest.mark.asyncio
+async def test_provider_error_costs_only_this_repetition():
+    """전송 계층 실패는 "truncated"로 뭉개지지도, 백테스트를 죽이지도 않는다.
+
+    한 백테스트 실행은 표본 18개를 부른다 -- 한 번의 반짝 실패로 전체를
+    던지면 이미 끝난 표본들의 결과까지 날아간다. `diagnose`는 대신 이
+    반복 하나만 `failure="provider_error"`로 기록하고 돌아온다.
+    """
+    result = await diagnose({"events": {}}, LABELS, model="fake",
+                            client=_FailingClient())
+    assert result["candidates"] == []
+    assert result["failure"] == "provider_error"

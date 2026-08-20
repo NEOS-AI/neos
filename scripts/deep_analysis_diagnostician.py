@@ -201,7 +201,13 @@ async def diagnose(
     `retries=0`이다 -- 파싱될 때까지 다시 묻는 것은 점수를 부풀린다(스펙 §8).
     실패는 삼키지 않고 `failure`에 사유를 남긴다: `"unparseable"` (JSON이
     아니었다), `"truncated"` (상한에 잘렸고 확장 재시도도 잘렸다),
-    `"off_label"` (닫힌 라벨 집합 밖의 라벨만 나왔다).
+    `"off_label"` (닫힌 라벨 집합 밖의 라벨만 나왔다), `"provider_error"`
+    (전송 계층 자체가 실패했다 -- 인증, 네트워크, 레이트리밋 등). 마지막
+    것은 위 세 사유와 원인이 다르다: 응답이 왔는데 그 내용이 문제인 게
+    아니라 응답 자체가 없었다. 이걸 삼켜서 예외로 전파시키면 백테스트 한
+    번이 표본 18개를 부르는데 그중 하나가 반짝 실패해도 이미 끝난 표본들의
+    결과까지 통째로 날아간다 -- 그래서 그 반복 하나의 값으로만 기록하고
+    나머지는 계속 돈다.
 
     `TruncatedResponseError`는 `JSONParseError`의 하위클래스다
     (`neos/workflow/deep_analysis/llm.py`) -- 그래서 반드시 그것을 먼저
@@ -209,6 +215,7 @@ async def diagnose(
     """
     from neos.workflow.deep_analysis.llm import (
         JSONParseError,
+        LLMProviderError,
         TruncatedResponseError,
         call_json,
     )
@@ -228,6 +235,8 @@ async def diagnose(
         return {"candidates": [], "failure": "truncated"}
     except JSONParseError:
         return {"candidates": [], "failure": "unparseable"}
+    except LLMProviderError:
+        return {"candidates": [], "failure": "provider_error"}
 
     allowed = set(labels)
     candidates: list[dict] = []
