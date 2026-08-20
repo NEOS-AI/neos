@@ -5,20 +5,39 @@
 """
 from __future__ import annotations
 
+import argparse
+import asyncio
 import json
 import re
+import subprocess
 from collections import defaultdict
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from itertools import combinations
 from pathlib import Path
 
+import yaml
+from sqlalchemy import select, text
+
+from neos.config.model_routing import resolve_model
+from neos.config.settings import settings
+from neos.database.connection import get_session_ctx
+from neos.database.deep_analysis_models import DAEvent
+
 EventRow = tuple[str, int, str, str]
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 _PROMPT_PATH = (
-    Path(__file__).resolve().parent.parent
+    _REPO_ROOT
     / "neos" / "workflow" / "deep_analysis" / "prompts" / "diagnose_bottleneck.md"
 )
+_BACKTEST_DIR = Path(__file__).resolve().parent / "diagnostician_backtest"
+_ANSWER_KEY_PATH = _BACKTEST_DIR / "answer_key.yaml"
+_LABELS_PATH = _BACKTEST_DIR / "labels.yaml"
 _MAX_CANDIDATES = 3
+
+ARTIFACT_ROOT = Path("artifacts/deep-analysis-funnel")
+BACKTEST_ROOT = Path("artifacts/diagnostician-backtest")
 
 _FOOTNOTE = re.compile(r"\[\d+\]")
 _RAW_MARKER = re.compile(r"\[C:[0-9a-f]+\]")
@@ -261,3 +280,297 @@ async def diagnose(
         "failure": failure,
         "output_tokens": getattr(response, "output_tokens", None),
     }
+
+
+async def load_sample(
+    sample_id: str, entry: dict, *, session
+) -> tuple[list[EventRow], str, dict]:
+    """표본 하나의 원장 행·리포트·설정 지문을 읽어온다.
+
+    `entry`는 정답키 항목이지만, 이 함수가 보는 건 `entry["artifact"]`
+    (표본 폴더 타임스탬프) 뿐이다 -- `truth`/`contemporaneous`는 손대지
+    않는다. 정답키 파일 자체를 여는 건 호출자(`main`)의 몫이다: 이
+    모듈은 import 시점은 물론 어떤 경로로도 `answer_key.yaml`을 직접
+    열지 않는다 (모듈 docstring, 스펙 §2).
+
+    `sample_id`는 조회에 쓰이지 않는다(그건 `entry["artifact"]`가 전부
+    한다) -- 표본 폴더를 못 찾았을 때 에러 메시지에 "표본 몇 번인지"를
+    남기기 위해서만 쓴다. 그게 없으면 `FileNotFoundError`가 타임스탬프만
+    가리키고, 정답키의 어느 항목이 잘못됐는지는 사람이 다시 대조해야 한다.
+    """
+    sample_dir = ARTIFACT_ROOT / entry["artifact"]
+    try:
+        manifest = json.loads((sample_dir / "manifest.json").read_text())
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"sample {sample_id!r}: no manifest at {sample_dir / 'manifest.json'}"
+        ) from exc
+    run_ids = [
+        r["run_id"] for r in manifest.get("dev_runs", []) if r.get("run_id")
+    ]
+    default_run = manifest.get("default_run") or {}
+    if default_run.get("run_id"):
+        run_ids.append(default_run["run_id"])
+
+    result = await session.execute(
+        select(DAEvent.run_id, DAEvent.seq, DAEvent.kind, DAEvent.payload)
+        .where(DAEvent.run_id.in_(run_ids))
+        .order_by(DAEvent.run_id, DAEvent.seq)
+    )
+    rows: list[EventRow] = [tuple(row) for row in result.all()]
+    report = (sample_dir / "report.md").read_text(encoding="utf-8")
+    return rows, report, dict(manifest.get("config_fingerprint", {}))
+
+
+def write_artifacts(root: Path, *, manifest, inputs, outputs, score) -> Path:
+    """빗나갔을 때 '그 신호가 요약에 있었나'를 사람이 확인할 수 있게 한다.
+
+    입력(진단자가 실제로 본 요약)과 출력(모델이 낸 후보)을 나란히 남긴다
+    -- 답만 남기면 그 질문에 영원히 답할 수 없다 (스펙 §7).
+    """
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    out = root / stamp
+    (out / "inputs").mkdir(parents=True, exist_ok=True)
+    (out / "outputs").mkdir(parents=True, exist_ok=True)
+
+    def _dump(path: Path, payload) -> None:
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    _dump(out / "manifest.json", {"generated_at": stamp, **manifest})
+    _dump(out / "score.json", score)
+    for sample_id, summary in inputs.items():
+        _dump(out / "inputs" / f"{sample_id}.json", summary)
+    for sample_id, repeats in outputs.items():
+        for index, result in enumerate(repeats):
+            _dump(out / "outputs" / f"{sample_id}-{index}.json", result)
+    return out
+
+
+class PreflightError(RuntimeError):
+    """필요한 프로덕션 의존성(자격 증명·DB)이 없을 때."""
+
+
+def _git(*args: str) -> str:
+    """git 조회 하나, 실패하면 `"unavailable"`.
+
+    절대 예외를 던지지 않는다 -- 영수증에 SHA 하나가 빠지는 것과
+    백테스트 전체가 죽는 것은 다른 무게다 (`deep_analysis_funnel_sample.
+    py`의 같은 이름 헬퍼와 동일한 계약).
+    """
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=_REPO_ROOT,
+            check=True,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return "unavailable"
+    return completed.stdout.strip()
+
+
+def _answer_key_sha() -> str:
+    """정답키를 마지막으로 건드린 커밋.
+
+    점수를 흔드는 네 가지(모델·반복 횟수·정답키·트리 상태) 중 정답키
+    쪽을 가리키는 필드 -- 정답키가 바뀌면 이전 점수와 지금 점수는
+    비교 대상이 아니다.
+    """
+    sha = _git(
+        "log", "-1", "--format=%H", "--",
+        str(_ANSWER_KEY_PATH.relative_to(_REPO_ROOT)),
+    )
+    return sha or "unavailable"
+
+
+def _git_tree_clean() -> bool | str:
+    status = _git("status", "--porcelain")
+    if status == "unavailable":
+        return "unavailable"
+    return status == ""
+
+
+def _resolved_model() -> str:
+    """`powerful` 역할이 해석하는 모델 ID.
+
+    설계가 지목하는 역할이 `powerful`이다 -- 이 백테스트가 재는 건
+    실제 운영에서 진단을 맡길 모델의 성능이지, 저비용 모델의 성능이
+    아니다. `deep_analysis_discard_recall.py`의 `_resolved_model`과
+    같은 호출 형태(오버라이드 없이 role default)를 따른다.
+    """
+    return resolve_model(
+        config=settings.config.model_routing,
+        provider="anthropic",
+        role="powerful",
+    ).model
+
+
+async def _preflight() -> None:
+    if not getattr(settings, "ANTHROPIC_API_KEY", None):
+        raise PreflightError("missing required credential: ANTHROPIC_API_KEY")
+    async with get_session_ctx() as session:
+        await session.execute(text("SELECT 1"))
+
+
+def _load_answer_key() -> dict:
+    """정답키를 연다.
+
+    모듈이 금지하는 건 이 파일을 import 시점에 여는 것과, 진단자가 보는
+    값(`build_summary`/`render_prompt`의 인자)에 진실이 섞여 드는 것이다
+    (모듈 docstring, 스펙 §2). 최종 recall을 계산하려면 어차피 진실이
+    필요하고, 그 채점 경로가 여기 -- `main()` 안 -- 다.
+    """
+    return yaml.safe_load(_ANSWER_KEY_PATH.read_text(encoding="utf-8"))
+
+
+def _load_labels() -> list[str]:
+    return yaml.safe_load(_LABELS_PATH.read_text(encoding="utf-8"))["labels"]
+
+
+async def _run_sample(
+    sample_id: str, entry: dict, *,
+    labels: Sequence[str], model: str, repeats: int, session,
+) -> tuple[dict, list[dict]]:
+    """표본 하나: 요약을 만들고, `repeats`번 진단을 돌려 각각 채점한다.
+
+    `diagnose()`는 이미 `provider_error`/`unparseable`/`truncated`/
+    `off_label`을 삼켜 `failure`로 반환한다 (그 함수의 docstring). 여기
+    추가하는 `except Exception`은 마지막 안전망이다 -- 분류되지 않은
+    예외 하나가 나머지 반복과 나머지 표본까지 끌고 내려가지 않도록,
+    그 반복 하나만 실패로 기록하고 계속 돈다(스펙 §8, 이 태스크 항목 4).
+    """
+    rows, report, config_fingerprint = await load_sample(
+        sample_id, entry, session=session
+    )
+    summary = build_summary(
+        rows, report_markdown=report, config_fingerprint=config_fingerprint
+    )
+    valid_event_ids = {
+        f"{run_id}:{seq}" for run_id, seq, _kind, _payload in rows
+    }
+
+    repeat_results: list[dict] = []
+    for _ in range(repeats):
+        try:
+            result = await diagnose(summary, labels, model=model)
+        except Exception as exc:  # noqa: BLE001 -- one bad repetition must not sink the run
+            result = {
+                "candidates": [],
+                "failure": "unexpected_error",
+                "error": str(exc),
+            }
+        score = score_sample(
+            result.get("candidates", []),
+            truth=entry["truth"],
+            contemporaneous=entry["contemporaneous"],
+            valid_event_ids=valid_event_ids,
+        )
+        repeat_results.append({**result, "score": score})
+    return summary, repeat_results
+
+
+def _aggregate(outputs: dict[str, list[dict]]) -> dict:
+    """`mean_recall`: 표본 안 반복을 먼저 평균하고, 그다음 표본을 평균한다.
+
+    반복을 먼저 접지 않고 전체를 평균하면 반복 횟수가 다른 표본이 있을 때
+    (예: 실패로 조기 종료) 반복이 많은 표본 쪽으로 가중치가 쏠린다.
+    """
+    per_sample: dict[str, float] = {}
+    for sample_id, repeat_results in outputs.items():
+        recalls = [r["score"]["recall"] for r in repeat_results]
+        per_sample[sample_id] = sum(recalls) / len(recalls) if recalls else 0.0
+    mean_recall = sum(per_sample.values()) / len(per_sample) if per_sample else 0.0
+    return {"mean_recall": mean_recall, "per_sample_recall": per_sample}
+
+
+async def _main(
+    repeats: int, sample_ids: list[str] | None, output_root: Path
+) -> Path:
+    answer_key = _load_answer_key()
+    labels = _load_labels()
+    all_samples = answer_key["samples"]
+
+    if sample_ids:
+        unknown = set(sample_ids) - set(all_samples)
+        if unknown:
+            raise SystemExit(
+                "unknown --sample id(s): " + ", ".join(sorted(unknown))
+            )
+        samples = {sid: all_samples[sid] for sid in sample_ids}
+    else:
+        samples = all_samples
+
+    await _preflight()
+    model = _resolved_model()
+    started_at = datetime.now(UTC)
+
+    inputs: dict[str, dict] = {}
+    outputs: dict[str, list[dict]] = {}
+    async with get_session_ctx() as session:
+        for sample_id, entry in samples.items():
+            summary, repeat_results = await _run_sample(
+                sample_id, entry, labels=labels, model=model,
+                repeats=repeats, session=session,
+            )
+            inputs[sample_id] = summary
+            outputs[sample_id] = repeat_results
+
+    finished_at = datetime.now(UTC)
+
+    score = {
+        **_aggregate(outputs),
+        "constant_best": constant_best(samples, labels),
+        "baseline_constant_best": answer_key.get("baseline_constant_best"),
+    }
+    manifest = {
+        "model": model,
+        "repeats": repeats,
+        "sample_ids": list(samples),
+        "answer_key_sha": _answer_key_sha(),
+        "git_tree_clean": _git_tree_clean(),
+        "started_at": started_at.isoformat().replace("+00:00", "Z"),
+        "finished_at": finished_at.isoformat().replace("+00:00", "Z"),
+    }
+    return write_artifacts(
+        output_root, manifest=manifest, inputs=inputs, outputs=outputs,
+        score=score,
+    )
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the read-only diagnostician against the pre-registered "
+            "answer key and write an auditable artifact directory."
+        )
+    )
+    parser.add_argument(
+        "--repeats", type=int, default=3,
+        help="LLM calls per sample (default: 3)",
+    )
+    parser.add_argument(
+        "--sample", action="append", dest="samples", default=None,
+        help=(
+            "Restrict the run to this answer-key sample id (repeatable). "
+            "Default: every sample in answer_key.yaml. Use this to smoke-"
+            "test the command cheaply before spending the full budget."
+        ),
+    )
+    parser.add_argument(
+        "--output-root", type=Path, default=BACKTEST_ROOT,
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = _parse_args()
+    out = asyncio.run(_main(args.repeats, args.samples, args.output_root))
+    print(out)
+
+
+if __name__ == "__main__":
+    main()
