@@ -4060,3 +4060,66 @@ S5 판정(D76)의 기준선과 **같은 수**다 -- 이 변경은 고정값 세 
 **인용**에 관한 구간이다 -- 모델은 실제로 그 거짓 신호를 근거로 삼고 있었다.
 `DeepAnalysisAnalyticsService.report_bodies()` 로 실제 본문을 읽도록 고친 뒤
 #16 의 각주 중앙값이 0 → 9 가 됐다(D63 이 기록한 8 과 일치한다).
+
+## D80. D79 를 정정한다 -- `questions.open`/`questions.resolved` 는 고칠 이름이
+아니라 존재한 적 없는 필드였다 (2026-08-21)
+
+D79 는 "질문 상태(open/resolved/abandoned/dead_end)를 0 을 포함해 항상 같은
+키로 싣고, 신호 지도의 경로와 이름을 맞춘다" 를 다음 수로 적었다. 그 처방을
+실행하려다 막혔다: **`resolved` 는 이벤트 kind 로 원장에 존재한 적이 없다.**
+`Ledger._transition`(ledger.py:305)이 `question.status = to_status` 로 상태만
+바꾸고 이벤트를 로그하지 않기 때문이다 -- "이름을 맞춘다" 로 고칠 수 있는
+결함이 아니라, 그 축을 실을 이벤트 자체가 없었다.
+
+질문이 닫히는지/왜 안 닫혔는지는 다른 경로로 이미 기록돼 있었다:
+`pass_completed` 의 `resolved_gate` 필드(ledger.py:863, 9a2431d6 이 D73 뒤에
+추가)가 `resolved`/`failed_status`/`no_verified_claim`/`below_threshold` 네
+갈래로 그 판정을 그대로 적는다. `build_summary` 는 이미 `pass_completed` 를
+읽으면서 이 필드를 버리고 있었다(`payload.get("tokens")`/`"verified"` 만
+꺼내고 나머지는 무시).
+
+### 고친 것
+
+- `build_summary`: `questions` 블록이 이제 `resolved_gate` 를 접어 나른다.
+  `question_opened`/`abandoned`/`dead_end` 세 이벤트 kind 와 `resolved_gate`
+  의 네 값 모두 **항상 명시적 0 을 포함해** 싣는다 -- 발생하지 않은 상태도
+  키가 빠지지 않는다. `resolved` 라는 이름의 kind 는 여전히 없다(그런 이벤트가
+  없으므로), 그 대신 `questions.resolved_gate.resolved` 가 그 수를 나른다.
+- `signal_map.yaml` 의 `subquestion_coverage` 를 존재하는 경로
+  (`questions.resolved_gate`, `questions.abandoned`, `questions.dead_end`) 로
+  고쳤다. `answer_key.yaml` 은 사전 등록이라 손대지 않았다.
+- `diagnose_bottleneck.md` 규칙 6 을 정정했다: "키가 없으면 0" 은 실제 이벤트
+  kind 를 세는 넷(`events`/`stop_reasons`/`gate.codes`/`budget.by_stage`)에만
+  참이다. `questions` 와 `questions.resolved_gate` 는 다르다 -- 있을 수 있는
+  상태를 항상 전부 명시적으로 실어서 키가 빠지는 일 자체가 없다. 버전 2 → 3,
+  `EXPECTED_PROMPT_VERSIONS` 를 함께 올렸다.
+- `test_signal_map_covers_every_label` 은 라벨 집합만 대조했다 -- #16 을
+  죽인 결함(존재하지 않는 경로)은 이 테스트를 통과한 채로 숨어 있었다.
+  이벤트 kind 전부를 한 번씩 낸 합성 원장으로 `summary_field_paths` 를 계산해
+  신호 지도의 모든 경로가 실제로 있는지 확인하는 검증을 추가했다
+  (`test_signal_map_paths_resolve_in_the_summary_schema`).
+- `config.git.commit` (표본을 만든 정확한 저장소 SHA) 을 요약에서 뗐다 --
+  오늘은 진단자가 저장소를 못 읽어 무해하지만, 읽게 되는 순간 표본 식별
+  경로가 된다.
+- `{"candidates": []}` 로 정직하게 답한 응답이 `failure="unparseable"` 로
+  적히던 것을 `"no_candidates"` 로 분리했다 -- JSON 은 파싱됐고 `candidates`
+  키도 있었다, 응답이 없었던 게 아니라 "없다" 는 응답이 왔다. `provider_error`
+  를 만들며 넓힌 취지(사유를 정직하게 남긴다)를 이 필드에도 적용했다.
+
+### 라이브 표본 #16 으로 확인한 것 -- 그리고 한 가지 시간차
+
+`load_sample` 로 표본 #16 (D63, 2026-08-11 실행) 을 실제 DB 에서 다시 읽어
+`build_summary` 를 통과시켰다: `question_opened=82`, `abandoned=0`,
+`dead_end=72`. 커버리지 축이 이제 요약에 실제로 존재하고, 82 개 중 72 개가
+`dead_end` 로 끝났다는 강한 신호를 낸다 -- D63 의 "남은 판정자 불만은
+커버리지 하나" 라는 기록과 방향이 맞는다.
+
+그런데 `resolved_gate` 네 값은 전부 0 이었다. 원인은 결함이 아니라 **시간차**
+다: `resolved_gate` 필드는 9a2431d6(2026-08-18) 이 D73(2026-08-13, 그 자체가
+`self_assessment` 규칙을 처음 도입한 결정) 뒤에 추가했는데, 표본 #16 은
+2026-08-11 에 실행돼 둘 다보다 앞선다. DB 에서 실제로 읽은 `pass_completed`
+페이로드를 확인하면 `status: "partial"` 만 있고 `resolved_gate`도
+`self_assessment`도 없다 -- 그 스키마가 존재하기 전에 기록된 데이터라
+소급 복원이 불가능하다. **이후 실행되는 표본은 이 문제가 없다.** #16 을 다시
+백테스트에 돌리면(별도 승인 필요, 이번엔 안 돌렸다) 커버리지 신호는
+`question_opened`/`dead_end` 만으로도 이미 진단자에게 주어진다.
