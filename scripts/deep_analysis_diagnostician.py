@@ -34,6 +34,7 @@ _PROMPT_PATH = (
 _BACKTEST_DIR = Path(__file__).resolve().parent / "diagnostician_backtest"
 _ANSWER_KEY_PATH = _BACKTEST_DIR / "answer_key.yaml"
 _LABELS_PATH = _BACKTEST_DIR / "labels.yaml"
+_SIGNAL_MAP_PATH = _BACKTEST_DIR / "signal_map.yaml"
 _MAX_CANDIDATES = 3
 
 ARTIFACT_ROOT = Path("artifacts/deep-analysis-funnel")
@@ -151,23 +152,79 @@ def build_summary(
     }
 
 
+def summary_field_paths(summary: dict) -> set[str]:
+    """요약 안에서 점(`.`) 표기로 인용 가능한 모든 경로.
+
+    리프뿐 아니라 중간 노드도 낸다 -- `clamp.exhausted`도, `clamp`도
+    둘 다 인용 가능해야 한다(태스크 3). `summary`가 만드는 값에 리스트가
+    없으므로(`build_summary`의 스키마) dict만 재귀한다; 스칼라 값은
+    그 자체가 리프 경로로 이미 부모 순회에서 나온다.
+    """
+    paths: set[str] = set()
+
+    def _walk(node: dict, prefix: str) -> None:
+        for key, value in node.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            paths.add(path)
+            if isinstance(value, dict):
+                _walk(value, path)
+
+    _walk(summary, "")
+    return paths
+
+
+def _evidence_matches_signal(path: str, signal_paths: Sequence[str]) -> bool:
+    """`path`가 신호 지도의 한 항목과 겹치는가.
+
+    정확히 같거나, 한쪽이 다른 쪽의 조상 경로(점으로 이어지는 접두)일
+    때 겹친다고 본다 -- 모델이 `clamp`를 대면 `clamp.exhausted`를 가리킨
+    셈이고, 그 반대도 마찬가지다.
+    """
+    for signal in signal_paths:
+        if path == signal or path.startswith(f"{signal}.") or signal.startswith(f"{path}."):
+            return True
+    return False
+
+
 def score_sample(
     candidates,
     *,
     truth,
     contemporaneous,
-    valid_event_ids,
+    valid_paths,
+    signal_map: dict[str, Sequence[str]] | None = None,
 ) -> dict:
+    """후보를 채점한다.
+
+    `valid_paths`는 그 표본의 요약(`summary_field_paths`의 출력)에 실제로
+    존재하는 점(`.`) 표기 경로 집합이다 -- 예전의 `run_id:seq` 이벤트 id가
+    아니다(스펙 §5 정정). 근거가 없거나, 하나라도 요약에 없는 경로를
+    대면 그 후보는 여전히 폐기된다.
+
+    `signal_map`이 주어지면 폐기되지 않은 각 후보마다 `evidence_on_target`을
+    함께 기록한다: 댄 경로 중 하나라도 신호 지도가 그 라벨에 적어둔 경로와
+    겹치는가. **이것은 기록만 한다 -- recall이나 폐기 여부에 관여하지
+    않는다.** 신호 지도는 정답을 읽은 사람이 썼으므로(태스크 4), 그것으로
+    채점을 흔들면 오염이 채점 경로로 되돌아온다.
+    """
     kept, discarded = [], []
+    evidence_on_target: list[dict] = []
     for candidate in candidates:
         evidence = candidate.get("evidence") or []
-        if evidence and all(e in valid_event_ids for e in evidence):
-            kept.append(candidate["label"])
+        label = candidate["label"]
+        if evidence and all(e in valid_paths for e in evidence):
+            kept.append(label)
+            if signal_map is not None:
+                signals = signal_map.get(label, [])
+                on_target = any(
+                    _evidence_matches_signal(path, signals) for path in evidence
+                )
+                evidence_on_target.append({"label": label, "on_target": on_target})
         else:
-            discarded.append(candidate["label"])
+            discarded.append(label)
 
     hits = [label for label in truth if label in kept]
-    return {
+    result = {
         "recall": len(hits) / len(truth) if truth else 0.0,
         "hits": hits,
         "kept": kept,
@@ -176,6 +233,9 @@ def score_sample(
             not hits and any(label in kept for label in contemporaneous)
         ),
     }
+    if signal_map is not None:
+        result["evidence_on_target"] = evidence_on_target
+    return result
 
 
 def constant_best(key: dict, labels, k: int = 3) -> float:
@@ -431,9 +491,14 @@ def _load_labels() -> list[str]:
     return yaml.safe_load(_LABELS_PATH.read_text(encoding="utf-8"))["labels"]
 
 
+def _load_signal_map() -> dict[str, list[str]]:
+    return yaml.safe_load(_SIGNAL_MAP_PATH.read_text(encoding="utf-8"))["signals"]
+
+
 async def _run_sample(
     sample_id: str, entry: dict, *,
     labels: Sequence[str], model: str, repeats: int, session,
+    signal_map: dict[str, Sequence[str]] | None = None,
 ) -> tuple[dict, list[dict]]:
     """표본 하나: 요약을 만들고, `repeats`번 진단을 돌려 각각 채점한다.
 
@@ -442,6 +507,11 @@ async def _run_sample(
     추가하는 `except Exception`은 마지막 안전망이다 -- 분류되지 않은
     예외 하나가 나머지 반복과 나머지 표본까지 끌고 내려가지 않도록,
     그 반복 하나만 실패로 기록하고 계속 돈다(스펙 §8, 이 태스크 항목 4).
+
+    유효한 근거 경로 집합은 이 표본 자신의 요약에서 만든다
+    (`summary_field_paths`) -- 예전의 이벤트 id 집합과 달리 표본마다
+    스키마는 같아도 실제로 채워진 경로(예: `budget.by_stage.<stage명>`)는
+    다르므로 표본별로 다시 계산해야 한다.
     """
     rows, report, config_fingerprint = await load_sample(
         sample_id, entry, session=session
@@ -449,9 +519,7 @@ async def _run_sample(
     summary = build_summary(
         rows, report_markdown=report, config_fingerprint=config_fingerprint
     )
-    valid_event_ids = {
-        f"{run_id}:{seq}" for run_id, seq, _kind, _payload in rows
-    }
+    valid_paths = summary_field_paths(summary)
 
     repeat_results: list[dict] = []
     for _ in range(repeats):
@@ -467,10 +535,24 @@ async def _run_sample(
             result.get("candidates", []),
             truth=entry["truth"],
             contemporaneous=entry["contemporaneous"],
-            valid_event_ids=valid_event_ids,
+            valid_paths=valid_paths,
+            signal_map=signal_map,
         )
         repeat_results.append({**result, "score": score})
     return summary, repeat_results
+
+
+def _evidence_validity_rate(repeat_results: Sequence[dict]) -> float:
+    """`kept / (kept + discarded)`, 후보가 하나도 없으면 0.0.
+
+    후보를 하나도 안 낸(또는 전부 폐기된) 반복은 분모에 아무것도 보태지
+    않는다 -- `failure` 사유(`unparseable` 등)로 이미 따로 잡히므로 여기서
+    0으로 나누는 대신 그 반복은 조용히 건너뛴다.
+    """
+    kept = sum(len(r["score"]["kept"]) for r in repeat_results)
+    discarded = sum(len(r["score"]["discarded"]) for r in repeat_results)
+    total = kept + discarded
+    return kept / total if total else 0.0
 
 
 def _aggregate(outputs: dict[str, list[dict]]) -> dict:
@@ -478,13 +560,27 @@ def _aggregate(outputs: dict[str, list[dict]]) -> dict:
 
     반복을 먼저 접지 않고 전체를 평균하면 반복 횟수가 다른 표본이 있을 때
     (예: 실패로 조기 종료) 반복이 많은 표본 쪽으로 가중치가 쏠린다.
+
+    `evidence_validity_rate`: 채점기가 유효한 근거로 인정한(폐기되지 않은)
+    후보의 비율, 전체와 표본별로 각각. 태스크 5 -- 관문(스펙 §6)의 절반은
+    recall이 아니라 이 값이 지키므로, 표본을 뭉개기 전에 표본별 값도 함께
+    남긴다.
     """
     per_sample: dict[str, float] = {}
+    per_sample_validity: dict[str, float] = {}
     for sample_id, repeat_results in outputs.items():
         recalls = [r["score"]["recall"] for r in repeat_results]
         per_sample[sample_id] = sum(recalls) / len(recalls) if recalls else 0.0
+        per_sample_validity[sample_id] = _evidence_validity_rate(repeat_results)
     mean_recall = sum(per_sample.values()) / len(per_sample) if per_sample else 0.0
-    return {"mean_recall": mean_recall, "per_sample_recall": per_sample}
+
+    all_results = [r for repeat_results in outputs.values() for r in repeat_results]
+    return {
+        "mean_recall": mean_recall,
+        "per_sample_recall": per_sample,
+        "evidence_validity_rate": _evidence_validity_rate(all_results),
+        "per_sample_evidence_validity_rate": per_sample_validity,
+    }
 
 
 async def _main(
@@ -492,6 +588,7 @@ async def _main(
 ) -> Path:
     answer_key = _load_answer_key()
     labels = _load_labels()
+    signal_map = _load_signal_map()
     all_samples = answer_key["samples"]
 
     if sample_ids:
@@ -514,7 +611,7 @@ async def _main(
         for sample_id, entry in samples.items():
             summary, repeat_results = await _run_sample(
                 sample_id, entry, labels=labels, model=model,
-                repeats=repeats, session=session,
+                repeats=repeats, session=session, signal_map=signal_map,
             )
             inputs[sample_id] = summary
             outputs[sample_id] = repeat_results

@@ -62,7 +62,13 @@ EXPECTED_PROMPT_VERSIONS = {
     # 나빠졌다(.400/.435/.714).
     "final_compose": 5,
     "report_judge": 1,
-    "diagnose_bottleneck": 1,
+    # v2 (2026-08-21): 근거 단위를 `run_id:seq` 이벤트 id에서 요약 필드
+    # 경로(`clamp.exhausted` 같은 점 표기)로 바꿨다. `build_summary`가
+    # 만드는 요약에는 이벤트 id가 아예 없어서, 순응하는 모델도 채점기가
+    # id 하나를 못 찾아 후보를 전부 폐기당했다 -- 진단이 아무리 맞아도
+    # 표본마다 0점이었다. 필드 경로는 모델이 실제로 읽은 요약 안에 있어
+    # 기계적으로 검증 가능하다.
+    "diagnose_bottleneck": 2,
 }
 
 
