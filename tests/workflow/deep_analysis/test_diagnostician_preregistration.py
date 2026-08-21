@@ -81,9 +81,11 @@ def test_every_key_label_is_in_the_closed_set():
             assert not unknown, f"#{sample_id} {field}에 집합 밖 라벨: {unknown}"
 
 
-def test_answer_key_covers_samples_11_through_16():
+def test_answer_key_covers_samples_6_through_16():
     samples = _load("answer_key.yaml")["samples"]
-    assert set(samples) == {"11", "12", "13", "14", "15", "16"}
+    assert set(samples) == {
+        "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16",
+    }
     for entry in samples.values():
         assert entry["quote"], "인용 없는 정답은 근거 없는 정답이다"
         assert entry["decision"].startswith("D")
