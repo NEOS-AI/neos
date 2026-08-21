@@ -111,10 +111,15 @@ def test_summary_delivered_is_all_none_and_zero_when_no_body_ever_arrives():
 
 
 def test_summary_schema_is_identical_for_empty_and_full_input():
-    """최상위 키, `delivered`, `questions`(와 그 안의 `questions.
-    resolved_gate`)는 표본이 무엇을 보든 항상 같은 스키마다 --
-    `build_summary`가 이 블록들의 있을 수 있는 모든 상태를 항상 명시적으로,
-    0을 포함해 채우기 때문이다(태스크 1, D79 정정).
+    """최상위 키, `delivered`, `questions`의 세 카운터는 표본이 무엇을 보든
+    항상 같은 스키마다 -- `build_summary`가 있을 수 있는 상태를 항상
+    명시적으로, 0을 포함해 채우기 때문이다(태스크 1, D79 정정).
+
+    **`questions.resolved_gate`는 예외이며 의도된 예외다.** 그 필드가 원장에
+    존재하지 않던 시절에 실행된 표본에서는 `null`이 실린다 -- 네 값을 0으로
+    채우면 "아무것도 해소되지 않았다"와 "그때는 재지 않았다"가 같은 모양이
+    되고, 계측 정직성을 재는 실험이 그 자리에서 거짓말을 하게 된다(F1-m1).
+    그래서 여기서는 두 상태를 각각 고정한다.
 
     `events`·`gate.codes`·`budget.by_stage`·`stop_reasons`는 다르다 --
     그 표본에서 실제로 일어난 이벤트 kind만 키로 올리는 카운터라서, 표본마다
@@ -150,19 +155,18 @@ def test_summary_schema_is_identical_for_empty_and_full_input():
     assert set(empty) == set(full)
     assert set(empty["delivered"]) == set(full["delivered"])
 
-    # 항상 완전한 스키마: 아무 일도 없었던 empty 도 full 과 정확히 같은
-    # `questions` 키 집합을 낸다 -- 값만 0이지 키가 빠지지 않는다.
-    assert empty["questions"] == {
-        "question_opened": 0, "abandoned": 0, "dead_end": 0,
-        "resolved_gate": {
-            "resolved": 0, "failed_status": 0,
-            "no_verified_claim": 0, "below_threshold": 0,
-        },
+    # 세 카운터는 항상 완전하다 -- 값만 0이지 키가 빠지지 않는다.
+    for block in (empty["questions"], full["questions"]):
+        assert {"question_opened", "abandoned", "dead_end"} <= set(block)
+
+    # `resolved_gate`의 두 상태를 각각 고정한다.
+    # (a) 그 필드를 실은 `pass_completed`가 하나도 없으면 -> null
+    assert empty["questions"]["resolved_gate"] is None
+    # (b) 하나라도 있으면 -> 네 값이 전부, 0을 포함해
+    assert full["questions"]["resolved_gate"] == {
+        "resolved": 1, "failed_status": 0,
+        "no_verified_claim": 0, "below_threshold": 0,
     }
-    assert set(empty["questions"]) == set(full["questions"])
-    assert set(empty["questions"]["resolved_gate"]) == set(
-        full["questions"]["resolved_gate"]
-    )
 
     # 동적 카운터 넷은 반대로 실제로 일어난 kind에 따라 키 집합 자체가
     # 달라진다 -- empty는 비어 있고, full은 그 표본이 낸 kind만큼 찬다.
@@ -263,3 +267,42 @@ def test_the_aggregator_never_branches_on_a_sample_identifier():
     source = inspect.getsource(mod.build_summary)
     for forbidden in ("2026080", "2026081", "#11", "#16", "sample_id"):
         assert forbidden not in source, f"집계가 표본을 안다: {forbidden}"
+
+
+def test_resolved_gate_is_null_when_the_sample_predates_the_field():
+    """0 과 "그때는 재지 않았다" 는 다른 사실이다.
+
+    `resolved_gate` 는 9a2431d6(2026-08-18)이 추가했고 표본 #11~#16 은
+    2026-08-09~11 에 실행됐다. 그 페이로드에는 필드가 아예 없다. 네 값을
+    전부 0 으로 실으면 진단자는 "아무것도 해소되지 않았다" 로 읽는데,
+    사실은 확인할 수 없는 것이다 -- 계측 정직성을 재는 실험이 바로 그
+    자리에서 거짓말을 하게 된다 (F1-m1).
+    """
+    rows = [
+        _row("r1", 1, "pass_completed", {"status": "partial", "tokens": 900}),
+        _row("r1", 2, "question_opened", {}),
+    ]
+    summary = build_summary(
+        rows, run_ids=["r1"], report_bodies={}, config_fingerprint={}
+    )
+    assert summary["questions"]["resolved_gate"] is None
+    # 실제로 기록된 축은 그대로 실린다 -- null 은 이 필드 하나에 대한 것이지
+    # 커버리지 전체가 없다는 뜻이 아니다.
+    assert summary["questions"]["question_opened"] == 1
+
+
+def test_resolved_gate_carries_explicit_zeros_once_the_field_exists():
+    """반대로 계측된 표본에서는 일어나지 않은 상태도 키가 빠지지 않는다."""
+    rows = [
+        _row("r1", 1, "pass_completed",
+             {"status": "completed", "tokens": 900, "resolved_gate": "resolved"}),
+    ]
+    summary = build_summary(
+        rows, run_ids=["r1"], report_bodies={}, config_fingerprint={}
+    )
+    gate = summary["questions"]["resolved_gate"]
+    assert gate["resolved"] == 1
+    assert gate["no_verified_claim"] == 0
+    assert set(gate) == {
+        "resolved", "failed_status", "no_verified_claim", "below_threshold",
+    }

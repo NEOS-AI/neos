@@ -76,7 +76,7 @@ EXPECTED_PROMPT_VERSIONS = {
     # `build_summary`가 `pass_completed.resolved_gate`를 `questions.
     # resolved_gate`로 접어 항상 명시적 0을 포함해 싣도록 고치면서, 규칙도
     # "이벤트 kind 집계"와 "항상 완전한 questions 블록"을 구분하도록 정정했다.
-    "diagnose_bottleneck": 3,
+    "diagnose_bottleneck": 4,
 }
 
 

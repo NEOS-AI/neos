@@ -150,6 +150,11 @@ def build_summary(
     resolved_gate: dict[str, int] = {
         value: 0 for value in _RESOLVED_GATE_VALUES
     }
+    # 이 표본의 원장에 `resolved_gate` 라는 필드가 **존재하기는 하는가**.
+    # 전부 0 인 것과 그 필드가 태어나기 전에 실행된 것은 다른 사실인데,
+    # 0 으로만 실으면 진단자가 둘을 가를 수 없다 -- 그리고 이 백테스트의
+    # 주제가 바로 계측 정직성이다 (F1-m1).
+    resolved_gate_instrumented = False
     evidence = {"candidates": 0, "tier1_selected": 0}
     stop_reasons: dict[str, int] = defaultdict(int)
 
@@ -185,9 +190,11 @@ def build_summary(
             passes["verified_total"] += int(payload.get("verified", 0) or 0)
             evidence["candidates"] += int(payload.get("candidates", 0) or 0)
             evidence["tier1_selected"] += int(payload.get("tier1", 0) or 0)
-            gate_value = payload.get("resolved_gate")
-            if gate_value in resolved_gate:
-                resolved_gate[gate_value] += 1
+            if "resolved_gate" in payload:
+                resolved_gate_instrumented = True
+                gate_value = payload.get("resolved_gate")
+                if gate_value in resolved_gate:
+                    resolved_gate[gate_value] += 1
         elif kind in _QUESTION_EVENT_KINDS:
             questions[kind] += 1
 
@@ -213,7 +220,15 @@ def build_summary(
             ),
             "total": total_pass,
         },
-        "questions": {**questions, "resolved_gate": dict(resolved_gate)},
+        "questions": {
+            **questions,
+            # 계측 이전 표본에는 `null` 이 실린다. 0 이 아니다 --
+            # "아무것도 해소되지 않았다" 와 "그때는 재지 않았다" 는
+            # 다른 사실이고, 이 실험은 정확히 그 구분을 다룬다.
+            "resolved_gate": (
+                dict(resolved_gate) if resolved_gate_instrumented else None
+            ),
+        },
         "evidence": {
             **evidence,
             "tier1_ratio": (
