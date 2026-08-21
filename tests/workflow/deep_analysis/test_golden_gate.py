@@ -62,6 +62,21 @@ EXPECTED_PROMPT_VERSIONS = {
     # 나빠졌다(.400/.435/.714).
     "final_compose": 5,
     "report_judge": 1,
+    # v2 (2026-08-21): 근거 단위를 `run_id:seq` 이벤트 id에서 요약 필드
+    # 경로(`clamp.exhausted` 같은 점 표기)로 바꿨다. `build_summary`가
+    # 만드는 요약에는 이벤트 id가 아예 없어서, 순응하는 모델도 채점기가
+    # id 하나를 못 찾아 후보를 전부 폐기당했다 -- 진단이 아무리 맞아도
+    # 표본마다 0점이었다. 필드 경로는 모델이 실제로 읽은 요약 안에 있어
+    # 기계적으로 검증 가능하다.
+    #
+    # v3 (D79 정정, 2026-08-21): 규칙 6이 "키가 없으면 0회"라고 모든
+    # 하위 집계에 걸쳐 말했는데, `questions.resolved`는 애초에 이벤트
+    # kind로 존재한 적이 없다(`Ledger._transition`은 상태만 바꾸고 로그하지
+    # 않는다) -- 그래서 표본 #16에서 커버리지 축 자체가 입력에서 사라졌다.
+    # `build_summary`가 `pass_completed.resolved_gate`를 `questions.
+    # resolved_gate`로 접어 항상 명시적 0을 포함해 싣도록 고치면서, 규칙도
+    # "이벤트 kind 집계"와 "항상 완전한 questions 블록"을 구분하도록 정정했다.
+    "diagnose_bottleneck": 4,
 }
 
 
