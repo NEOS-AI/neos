@@ -23,6 +23,7 @@ from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 from neos.database.connection import get_session_ctx
 from neos.database.deep_analysis_models import DAEvent
+from neos.workflow.deep_analysis.analytics import DeepAnalysisAnalyticsService
 
 EventRow = tuple[str, int, str, str]
 
@@ -50,10 +51,52 @@ _STOP_KINDS = (
 )
 
 
+def _count_footnotes(body: str) -> int:
+    """배달된 리포트 본문 안 서로 다른 각주 번호 수."""
+    return len(set(int(m[1:-1]) for m in _FOOTNOTE.findall(body)))
+
+
+def _median(values: Sequence[int]) -> int | None:
+    """`gate.uncited_ratio`와 같은 규칙: 값이 없으면 `None`, 있으면 정렬한
+    가운데(짝수 길이는 위쪽) 원소. 이 프로젝트의 "배달 각주 중앙값" 어휘가
+    가리키는 계산이 바로 이것이다.
+    """
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[len(ordered) // 2]
+
+
+def _delivered_summary(
+    run_ids: Sequence[str], report_bodies: dict[str, str]
+) -> dict:
+    """표본의 배달 리포트 요약 -- run당 하나씩, 분포(중앙값)로 접는다.
+
+    본문이 없는 run은 그 자체가 신호다(태스크 3) -- 빈 문자열로 조용히
+    섞으면 `footnotes_median`이 실제로 배달된 본문들의 중앙값이 아니라
+    "본문 없음"에 끌려간다. 그래서 `runs_missing_body`로 따로 세고,
+    분포 계산에서는 아예 뺀다.
+    """
+    bodies = [report_bodies[rid] for rid in run_ids if rid in report_bodies]
+    runs_with_body = len(bodies)
+    return {
+        "runs_total": len(run_ids),
+        "runs_with_body": runs_with_body,
+        "runs_missing_body": len(run_ids) - runs_with_body,
+        "chars_median": _median([len(b) for b in bodies]),
+        "footnotes_median": _median([_count_footnotes(b) for b in bodies]),
+        "raw_markers_median": _median(
+            [len(_RAW_MARKER.findall(b)) for b in bodies]
+        ),
+        "sources_section_count": sum(1 for b in bodies if "## 출처" in b),
+    }
+
+
 def build_summary(
     rows: Sequence[EventRow],
     *,
-    report_markdown: str,
+    run_ids: Sequence[str],
+    report_bodies: dict[str, str],
     config_fingerprint: dict,
 ) -> dict:
     events: dict[str, int] = defaultdict(int)
@@ -142,12 +185,7 @@ def build_summary(
                 if evidence["candidates"] else 0.0
             ),
         },
-        "delivered": {
-            "chars": len(report_markdown),
-            "footnotes": len(set(int(m[1:-1]) for m in _FOOTNOTE.findall(report_markdown))) if _FOOTNOTE.findall(report_markdown) else 0,
-            "raw_markers": len(_RAW_MARKER.findall(report_markdown)),
-            "sources_section": "## 출처" in report_markdown,
-        },
+        "delivered": _delivered_summary(run_ids, report_bodies),
         "config": dict(config_fingerprint),
     }
 
@@ -344,8 +382,8 @@ async def diagnose(
 
 async def load_sample(
     sample_id: str, entry: dict, *, session
-) -> tuple[list[EventRow], str, dict]:
-    """표본 하나의 원장 행·리포트·설정 지문을 읽어온다.
+) -> tuple[list[EventRow], list[str], dict[str, str], dict]:
+    """표본 하나의 원장 행·run별 배달 리포트·설정 지문을 읽어온다.
 
     `entry`는 정답키 항목이지만, 이 함수가 보는 건 `entry["artifact"]`
     (표본 폴더 타임스탬프) 뿐이다 -- `truth`/`contemporaneous`는 손대지
@@ -357,6 +395,15 @@ async def load_sample(
     한다) -- 표본 폴더를 못 찾았을 때 에러 메시지에 "표본 몇 번인지"를
     남기기 위해서만 쓴다. 그게 없으면 `FileNotFoundError`가 타임스탬프만
     가리키고, 정답키의 어느 항목이 잘못됐는지는 사람이 다시 대조해야 한다.
+
+    배달된 리포트 본문은 `sample_dir / "report.md"`가 아니다 -- 그건 퍼널
+    러너 자신의 사례별 집계표이지, 심층분석이 낸 리포트가 아니다(표본마다
+    형태가 동일하고 약 1.1KB). 진짜 본문은 `deep_analysis_runs.report_path`가
+    아니라 DB의 `job_completed` 이벤트 페이로드에 실린다(`Ledger.
+    report_markdown()` 문서 참조) -- 그래서 `DeepAnalysisAnalyticsService.
+    report_bodies()`로 이 표본의 run들을 한 번에 조회한다. 본문이 없는
+    run은 반환 dict에서 그냥 빠진다(빈 문자열로 채우지 않는다) -- 호출자가
+    "본문 없음"을 신호로 셀 수 있어야 한다.
     """
     sample_dir = ARTIFACT_ROOT / entry["artifact"]
     try:
@@ -378,8 +425,10 @@ async def load_sample(
         .order_by(DAEvent.run_id, DAEvent.seq)
     )
     rows: list[EventRow] = [tuple(row) for row in result.all()]
-    report = (sample_dir / "report.md").read_text(encoding="utf-8")
-    return rows, report, dict(manifest.get("config_fingerprint", {}))
+    report_bodies = await DeepAnalysisAnalyticsService(session).report_bodies(
+        run_ids
+    )
+    return rows, run_ids, report_bodies, dict(manifest.get("config_fingerprint", {}))
 
 
 def write_artifacts(root: Path, *, manifest, inputs, outputs, score) -> Path:
@@ -513,11 +562,12 @@ async def _run_sample(
     스키마는 같아도 실제로 채워진 경로(예: `budget.by_stage.<stage명>`)는
     다르므로 표본별로 다시 계산해야 한다.
     """
-    rows, report, config_fingerprint = await load_sample(
+    rows, run_ids, report_bodies, config_fingerprint = await load_sample(
         sample_id, entry, session=session
     )
     summary = build_summary(
-        rows, report_markdown=report, config_fingerprint=config_fingerprint
+        rows, run_ids=run_ids, report_bodies=report_bodies,
+        config_fingerprint=config_fingerprint,
     )
     valid_paths = summary_field_paths(summary)
 
