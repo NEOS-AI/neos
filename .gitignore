@@ -43,3 +43,4 @@ jest-cache/
 .worktrees/
 /artifacts/deep-analysis-funnel/
 /artifacts/deep-analysis-discard-recall/
+/artifacts/diagnostician-backtest/
