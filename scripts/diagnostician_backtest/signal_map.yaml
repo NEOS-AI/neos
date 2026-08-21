@@ -1,12 +1,17 @@
 # 라벨마다 "이 병목이 있다면 고정 요약의 어느 필드에 나타나야 하는가".
-# 필드 경로는 Task 2 가 만들 요약 스키마를 가리킨다 -- 지금은 검증 불가능하다.
+# 필드 경로는 `build_summary`(scripts/deep_analysis_diagnostician.py)가 실제로
+# 내는 스키마를 가리켜야 한다 -- D79 를 정정한 판정: `questions.open` /
+# `questions.resolved`는 존재한 적이 없었다(`resolved`는 이벤트 kind가
+# 아니다, `Ledger._transition`은 상태만 바꾸고 로그하지 않는다). 질문이
+# 닫혔는지/왜 안 닫혔는지는 `pass_completed.resolved_gate`가 나르고,
+# `build_summary`가 그것을 `questions.resolved_gate`로 접는다.
 signals:
   search_recall:         [evidence.tier1_selected, evidence.candidates]
   source_quality:        [evidence.tier1_ratio]
   worker_extraction:     [passes.verified_total, passes.claims_per_pass]
   claim_grading:         [events.claim_rejected, events.claim_verified]
   entailment_filter:     [events.entailment_filter_skipped]
-  subquestion_coverage:  [questions.open, questions.resolved, questions.abandoned]
+  subquestion_coverage:  [questions.resolved_gate, questions.abandoned, questions.dead_end]
   investigation_budget:  [passes.zero_token, stop_reasons]
   budget_floor_formula:  [budget.by_stage, events.report_assembly_degraded]
   reduction_layer:       [events.node_reduction_degraded, budget.by_stage]

@@ -140,6 +140,35 @@ async def test_more_than_three_candidates_are_truncated_to_three():
 
 
 @pytest.mark.asyncio
+async def test_honest_empty_candidates_is_reported_as_no_candidates():
+    """모델이 정직하게 "이 표본은 후보가 없다"고 답하면(`{"candidates": []}`)
+    JSON은 파싱됐고 `candidates` 키도 있었다 -- 이건 응답을 못 읽은 것과
+    다른 사건이라 `"unparseable"`이 아니라 제 이름을 받아야 한다(태스크 6).
+    이 필드가 정직하려고 넓혀졌는데(`provider_error` 등) 여기서 거짓말을
+    하면 그 취지가 무색해진다.
+    """
+    payload = json.dumps({"candidates": []})
+    result = await diagnose({"events": {}}, LABELS, model="fake",
+                            client=_FakeClient(payload))
+    assert result["candidates"] == []
+    assert result["failure"] == "no_candidates"
+
+
+@pytest.mark.asyncio
+async def test_missing_candidates_key_is_still_unparseable():
+    """`candidates` 키 자체가 없으면(빈 목록이 아니라 구조가 다르면)
+    `"no_candidates"`가 아니라 여전히 `"unparseable"`이다 -- 모델이 "후보
+    없음"이라고 명시적으로 답한 것과, 요청한 형식 자체를 안 지킨 것은 다른
+    사건이다.
+    """
+    payload = json.dumps({"not_candidates": []})
+    result = await diagnose({"events": {}}, LABELS, model="fake",
+                            client=_FakeClient(payload))
+    assert result["candidates"] == []
+    assert result["failure"] == "unparseable"
+
+
+@pytest.mark.asyncio
 async def test_unparseable_response_is_reported_not_swallowed():
     result = await diagnose({"events": {}}, LABELS, model="fake",
                             client=_FakeClient("이건 JSON이 아니다"))

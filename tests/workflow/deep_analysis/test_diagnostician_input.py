@@ -1,6 +1,10 @@
 import json
 
+import pytest
+
 from scripts.deep_analysis_diagnostician import build_summary
+
+pytestmark = pytest.mark.no_db
 
 
 def _row(run_id: str, seq: int, kind: str, payload: dict):
@@ -107,18 +111,143 @@ def test_summary_delivered_is_all_none_and_zero_when_no_body_ever_arrives():
 
 
 def test_summary_schema_is_identical_for_empty_and_full_input():
-    """표본마다 같은 스키마여야 비교가 성립한다."""
+    """최상위 키, `delivered`, `questions`(와 그 안의 `questions.
+    resolved_gate`)는 표본이 무엇을 보든 항상 같은 스키마다 --
+    `build_summary`가 이 블록들의 있을 수 있는 모든 상태를 항상 명시적으로,
+    0을 포함해 채우기 때문이다(태스크 1, D79 정정).
+
+    `events`·`gate.codes`·`budget.by_stage`·`stop_reasons`는 다르다 --
+    그 표본에서 실제로 일어난 이벤트 kind만 키로 올리는 카운터라서, 표본마다
+    키 집합 자체가 달라진다. 그건 결함이 아니라 이 네 블록의 정의다: 빈
+    표본은 이 블록들이 전부 비어 있고, 이벤트가 난 표본은 그 kind만큼만
+    채워진다. 이 테스트는 그 비대칭을 숨기지 않고 그대로 고정한다.
+    """
     empty = build_summary(
         [], run_ids=[], report_bodies={}, config_fingerprint={}
     )
     full = build_summary(
-        [_row("r1", 1, "claim_verified", {})],
+        [
+            _row("r1", 1, "claim_verified", {}),
+            _row("r1", 2, "token_budget_reserved",
+                 {"reservation_id": "a", "reserved_tokens": 10,
+                  "stage": "worker_analysis"}),
+            _row("r1", 3, "token_budget_settled",
+                 {"reservation_id": "a", "actual_tokens": 5}),
+            _row("r1", 4, "finalization_prompt_clamped", {"exhausted": True}),
+            _row("r1", 5, "report_graded", {"code": "OK", "judge": "present"}),
+            _row("r1", 6, "pass_completed",
+                 {"status": "completed", "tokens": 5,
+                  "resolved_gate": "resolved"}),
+            _row("r1", 7, "question_opened", {"depth": 0, "value_est": 1.0}),
+            _row("r1", 8, "abandoned", {}),
+            _row("r1", 9, "dead_end", {"text": "x"}),
+            _row("r1", 10, "token_budget_exhausted", {}),
+        ],
         run_ids=["r1"],
         report_bodies={"r1": "x"},
         config_fingerprint={"global_token_cap": 140000},
     )
     assert set(empty) == set(full)
     assert set(empty["delivered"]) == set(full["delivered"])
+
+    # 항상 완전한 스키마: 아무 일도 없었던 empty 도 full 과 정확히 같은
+    # `questions` 키 집합을 낸다 -- 값만 0이지 키가 빠지지 않는다.
+    assert empty["questions"] == {
+        "question_opened": 0, "abandoned": 0, "dead_end": 0,
+        "resolved_gate": {
+            "resolved": 0, "failed_status": 0,
+            "no_verified_claim": 0, "below_threshold": 0,
+        },
+    }
+    assert set(empty["questions"]) == set(full["questions"])
+    assert set(empty["questions"]["resolved_gate"]) == set(
+        full["questions"]["resolved_gate"]
+    )
+
+    # 동적 카운터 넷은 반대로 실제로 일어난 kind에 따라 키 집합 자체가
+    # 달라진다 -- empty는 비어 있고, full은 그 표본이 낸 kind만큼 찬다.
+    assert empty["events"] == {}
+    assert set(full["events"]) == {
+        "claim_verified", "token_budget_reserved", "token_budget_settled",
+        "finalization_prompt_clamped", "report_graded", "pass_completed",
+        "question_opened", "abandoned", "dead_end",
+        "token_budget_exhausted",
+    }
+    assert empty["gate"]["codes"] == {}
+    assert set(full["gate"]["codes"]) == {"OK"}
+    assert empty["budget"]["by_stage"] == {}
+    assert set(full["budget"]["by_stage"]) == {"worker_analysis"}
+    assert empty["stop_reasons"] == {}
+    assert set(full["stop_reasons"]) == {"token_budget_exhausted"}
+
+
+def test_summary_folds_resolved_gate_into_questions():
+    """`resolved`는 이벤트 kind가 아니다 -- `Ledger._transition`이 상태만
+    바꾸고 로그하지 않는다 (D79 정정). 해소 여부는 `pass_completed`의
+    `resolved_gate`가 나른다: `build_summary`가 그것을
+    `questions.resolved_gate`로 접어야 커버리지 축이 요약에 실제로 존재한다
+    (태스크 1).
+    """
+    rows = [
+        _row("r1", 1, "pass_completed",
+             {"status": "completed", "tokens": 5, "resolved_gate": "resolved"}),
+        _row("r1", 2, "pass_completed",
+             {"status": "completed", "tokens": 5, "resolved_gate": "resolved"}),
+        _row("r1", 3, "pass_completed",
+             {"status": "completed", "tokens": 5,
+              "resolved_gate": "below_threshold"}),
+        _row("r1", 4, "pass_completed",
+             {"status": "failed", "tokens": 0,
+              "resolved_gate": "failed_status"}),
+        _row("r1", 5, "pass_completed",
+             {"status": "completed", "tokens": 0,
+              "resolved_gate": "no_verified_claim"}),
+        _row("r1", 6, "question_opened", {"depth": 0, "value_est": 1.0}),
+        _row("r1", 7, "abandoned", {}),
+    ]
+    summary = build_summary(
+        rows, run_ids=["r1"], report_bodies={}, config_fingerprint={}
+    )
+    assert summary["questions"]["resolved_gate"] == {
+        "resolved": 2, "below_threshold": 1,
+        "failed_status": 1, "no_verified_claim": 1,
+    }
+    assert summary["questions"]["question_opened"] == 1
+    assert summary["questions"]["abandoned"] == 1
+    assert summary["questions"]["dead_end"] == 0
+    # `resolved`는 `events`에서도 kind로 나타나지 않는다 -- 원장에 그 이름의
+    # 이벤트가 없기 때문이다. `pass_completed`만 있다.
+    assert "resolved" not in summary["events"]
+
+
+def test_summary_drops_the_git_commit_sha_from_config():
+    """`config.git.commit`은 이 표본의 저장소 SHA다 -- 진단이 오늘 저장소를
+    읽지 못해 무해하지만, 읽게 되는 순간 표본을 식별하는 통로가 된다
+    (태스크 5). `branch`/`dirty`처럼 특정 실행을 가리키지 않는 필드는 남는다.
+    """
+    summary = build_summary(
+        [], run_ids=[], report_bodies={}, config_fingerprint={
+            "global_token_cap": 140000,
+            "git": {
+                "branch": "dev",
+                "commit": "6031fe005400f1721d8a5504757d9643883661d7",
+                "dirty": False,
+                "dirty_paths": [],
+            },
+        },
+    )
+    assert "commit" not in summary["config"]["git"]
+    assert summary["config"]["git"]["branch"] == "dev"
+    assert summary["config"]["global_token_cap"] == 140000
+
+
+def test_summary_config_without_a_git_block_is_left_alone():
+    summary = build_summary(
+        [], run_ids=[], report_bodies={}, config_fingerprint={
+            "global_token_cap": 140000,
+        },
+    )
+    assert summary["config"] == {"global_token_cap": 140000}
 
 
 def test_the_aggregator_never_branches_on_a_sample_identifier():

@@ -50,6 +50,18 @@ _STOP_KINDS = (
     "investigation_stopped_at_input_bound",
 )
 
+# 질문 하나의 일생 중 그 자체가 이벤트 kind 로 원장에 남는 세 갈래.
+# `resolved`는 이 목록에 없다 -- `Ledger._transition`(ledger.py:305)이 상태만
+# 바꾸고 이벤트를 남기지 않기 때문이다(D79 를 정정한 판정 참조). 해소 여부는
+# `pass_completed`의 `resolved_gate` 필드가 대신 나른다 (ledger.py:863).
+_QUESTION_EVENT_KINDS = ("question_opened", "abandoned", "dead_end")
+
+# `pass_completed.resolved_gate`가 낼 수 있는 네 값 전부(ledger.py:863-871).
+# 하나는 닫힘("resolved"), 셋은 왜 안 닫혔는지의 사유다.
+_RESOLVED_GATE_VALUES = (
+    "resolved", "failed_status", "no_verified_claim", "below_threshold",
+)
+
 
 def _count_footnotes(body: str) -> int:
     """배달된 리포트 본문 안 서로 다른 각주 번호 수."""
@@ -92,6 +104,24 @@ def _delivered_summary(
     }
 
 
+def _scrub_config(config_fingerprint: dict) -> dict:
+    """설정 지문에서 표본을 특정하는 정체 정보를 뗀다.
+
+    `git.commit`은 이 표본을 만든 실행이 체크아웃하고 있던 정확한 저장소
+    SHA다 -- 진단자가 저장소를 읽지 못하는 오늘은 무해하지만, 읽을 수 있는
+    진단자가 생기는 순간 표본을 저장소 이력과 대조해 식별하는 경로가 된다
+    (태스크 5). 병목 진단에 커밋 SHA가 쓰일 이유가 없으므로 프롬프트에
+    넣기 전에 뗀다. `branch`/`dirty`는 SHA와 달리 특정 실행을 가리키지
+    않으므로 남긴다.
+    """
+    scrubbed = dict(config_fingerprint)
+    git_info = scrubbed.get("git")
+    if isinstance(git_info, dict) and "commit" in git_info:
+        git_info = {k: v for k, v in git_info.items() if k != "commit"}
+        scrubbed["git"] = git_info
+    return scrubbed
+
+
 def build_summary(
     rows: Sequence[EventRow],
     *,
@@ -116,7 +146,10 @@ def build_summary(
                                        "judge_states": defaultdict(int)}
     uncited: list[float] = []
     passes = {"zero_token": 0, "productive": 0, "verified_total": 0}
-    questions: dict[str, int] = defaultdict(int)
+    questions: dict[str, int] = {kind: 0 for kind in _QUESTION_EVENT_KINDS}
+    resolved_gate: dict[str, int] = {
+        value: 0 for value in _RESOLVED_GATE_VALUES
+    }
     evidence = {"candidates": 0, "tier1_selected": 0}
     stop_reasons: dict[str, int] = defaultdict(int)
 
@@ -152,7 +185,10 @@ def build_summary(
             passes["verified_total"] += int(payload.get("verified", 0) or 0)
             evidence["candidates"] += int(payload.get("candidates", 0) or 0)
             evidence["tier1_selected"] += int(payload.get("tier1", 0) or 0)
-        elif kind in ("question_opened", "resolved", "abandoned", "dead_end"):
+            gate_value = payload.get("resolved_gate")
+            if gate_value in resolved_gate:
+                resolved_gate[gate_value] += 1
+        elif kind in _QUESTION_EVENT_KINDS:
             questions[kind] += 1
 
     total_pass = passes["productive"] + passes["zero_token"]
@@ -177,7 +213,7 @@ def build_summary(
             ),
             "total": total_pass,
         },
-        "questions": dict(questions),
+        "questions": {**questions, "resolved_gate": dict(resolved_gate)},
         "evidence": {
             **evidence,
             "tier1_ratio": (
@@ -186,7 +222,7 @@ def build_summary(
             ),
         },
         "delivered": _delivered_summary(run_ids, report_bodies),
-        "config": dict(config_fingerprint),
+        "config": _scrub_config(config_fingerprint),
     }
 
 
@@ -317,14 +353,16 @@ async def diagnose(
 
     `retries=0`이다 -- 파싱될 때까지 다시 묻는 것은 점수를 부풀린다(스펙 §8).
     실패는 삼키지 않고 `failure`에 사유를 남긴다: `"unparseable"` (JSON이
-    아니었다), `"truncated"` (상한에 잘렸고 확장 재시도도 잘렸다),
-    `"off_label"` (닫힌 라벨 집합 밖의 라벨만 나왔다), `"provider_error"`
-    (전송 계층 자체가 실패했다 -- 인증, 네트워크, 레이트리밋 등). 마지막
-    것은 위 세 사유와 원인이 다르다: 응답이 왔는데 그 내용이 문제인 게
-    아니라 응답 자체가 없었다. 이걸 삼켜서 예외로 전파시키면 백테스트 한
-    번이 표본 18개를 부르는데 그중 하나가 반짝 실패해도 이미 끝난 표본들의
-    결과까지 통째로 날아간다 -- 그래서 그 반복 하나의 값으로만 기록하고
-    나머지는 계속 돈다.
+    아니었거나, `candidates` 키 자체가 구조적으로 없었다), `"no_candidates"`
+    (JSON은 파싱됐고 `candidates` 키도 있었지만 빈 목록이었다 -- 모델이
+    정직하게 "후보 없음"이라 답한 경우다, 태스크 6), `"truncated"` (상한에
+    잘렸고 확장 재시도도 잘렸다), `"off_label"` (닫힌 라벨 집합 밖의 라벨만
+    나왔다), `"provider_error"` (전송 계층 자체가 실패했다 -- 인증, 네트워크,
+    레이트리밋 등). 마지막 것은 앞의 사유들과 원인이 다르다: 응답이 왔는데
+    그 내용이 문제인 게 아니라 응답 자체가 없었다. 이걸 삼켜서 예외로
+    전파시키면 백테스트 한 번이 표본 18개를 부르는데 그중 하나가 반짝
+    실패해도 이미 끝난 표본들의 결과까지 통째로 날아간다 -- 그래서 그 반복
+    하나의 값으로만 기록하고 나머지는 계속 돈다.
 
     `TruncatedResponseError`는 `JSONParseError`의 하위클래스다
     (`neos/workflow/deep_analysis/llm.py`) -- 그래서 반드시 그것을 먼저
@@ -356,9 +394,10 @@ async def diagnose(
         return {"candidates": [], "failure": "provider_error"}
 
     allowed = set(labels)
+    raw_candidates = data.get("candidates")
     candidates: list[dict] = []
     off_label = False
-    for raw in data.get("candidates", []) or []:
+    for raw in raw_candidates or []:
         label = raw.get("label")
         if label not in allowed:
             off_label = True
@@ -372,7 +411,17 @@ async def diagnose(
     truncated = candidates[:_MAX_CANDIDATES]
     failure = None
     if not truncated:
-        failure = "off_label" if off_label else "unparseable"
+        if off_label:
+            failure = "off_label"
+        elif raw_candidates == []:
+            # 모델이 정직하게 "이 표본은 후보가 없다"고 답했다 -- JSON은
+            # 파싱됐고 `candidates` 키도 있었다, 다만 비어 있었다. 이걸
+            # "unparseable"로 적으면 이 필드가 정직하려고 넓힌 취지(태스크 6)
+            # 가 무색해진다: 응답이 안 왔거나 못 읽은 것과 응답이 "없음"이라고
+            # 말한 것은 다른 사건이다.
+            failure = "no_candidates"
+        else:
+            failure = "unparseable"
     return {
         "candidates": truncated,
         "failure": failure,
@@ -551,8 +600,9 @@ async def _run_sample(
 ) -> tuple[dict, list[dict]]:
     """표본 하나: 요약을 만들고, `repeats`번 진단을 돌려 각각 채점한다.
 
-    `diagnose()`는 이미 `provider_error`/`unparseable`/`truncated`/
-    `off_label`을 삼켜 `failure`로 반환한다 (그 함수의 docstring). 여기
+    `diagnose()`는 이미 `provider_error`/`unparseable`/`no_candidates`/
+    `truncated`/`off_label`을 삼켜 `failure`로 반환한다 (그 함수의
+    docstring). 여기
     추가하는 `except Exception`은 마지막 안전망이다 -- 분류되지 않은
     예외 하나가 나머지 반복과 나머지 표본까지 끌고 내려가지 않도록,
     그 반복 하나만 실패로 기록하고 계속 돈다(스펙 §8, 이 태스크 항목 4).
