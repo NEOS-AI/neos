@@ -5,9 +5,11 @@ import { useEffect, useState } from "react";
 import { CodingApprovalCard } from "@/features/coding/components/coding-approval-card";
 import { CodingDetailPanel } from "@/features/coding/components/coding-detail-panel";
 import { CodingOutputLedger } from "@/features/coding/components/coding-output-ledger";
+import { CodingSandboxStatus } from "@/features/coding/components/coding-sandbox-status";
 import { CodingSteerComposer } from "@/features/coding/components/coding-steer-composer";
 import { PhaseTimeline } from "@/features/coding/components/phase-timeline";
 import { CodingWorkspaceDock } from "@/features/coding/components/workspace/coding-workspace-dock";
+import { useSandboxStatus } from "@/features/coding/sandbox/use-sandbox-status";
 import { useCodingStream } from "@/features/coding/stream/use-coding-stream";
 
 const connectionMessages = {
@@ -18,6 +20,7 @@ const connectionMessages = {
 
 export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
   const { projection, connection } = useCodingStream(taskId);
+  const sandbox = useSandboxStatus(taskId);
   const [selectedPhase, setSelectedPhase] = useState<string | null>(null);
   useEffect(() => {
     const active = projection.phases.find((phase) => phase.status === "active");
@@ -62,6 +65,7 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
           {projection.connectionBasis === "live"
             ? "Live"
             : "Checkpoint restored"}
+          <CodingSandboxStatus status={sandbox} />
         </div>
       </header>
 
@@ -112,9 +116,19 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
               </section>
             ) : null}
             <div className="mt-5">
+              {/*
+                실행만 막고 초안은 그대로 둔다. `CodingSteerComposer` 는
+                disabled 여도 입력값을 자기 상태로 들고 있으므로, 샌드박스가
+                돌아오면 사용자가 쓰던 문장이 그 자리에 남아 있다 -- 여기서
+                컴포넌트를 언마운트하면 그 초안이 사라진다.
+                게이팅 근거는 서버 불리언(`sandbox.canRun`)이지 상태 이름이
+                아니다.
+              */}
               <CodingSteerComposer
                 disabled={
-                  connection === "unauthorized" || connection === "not_found"
+                  connection === "unauthorized" ||
+                  connection === "not_found" ||
+                  !sandbox.canRun
                 }
                 taskId={taskId}
               />
@@ -126,7 +140,12 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
             ) : null}
           </div>
         </section>
+        {/*
+          독은 그대로 둔다 -- 파일·diff 읽기는 샌드박스가 아파도 계속
+          제공한다. 막는 것은 실행 표면(제출·PTY 생성)뿐이다.
+        */}
         <CodingWorkspaceDock
+          canOpenTerminal={sandbox.canOpenTerminal}
           codingConnection={connection}
           projection={projection}
           taskId={taskId}

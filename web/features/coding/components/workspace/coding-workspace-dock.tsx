@@ -24,10 +24,17 @@ export function CodingWorkspaceDock({
   taskId,
   projection,
   codingConnection,
+  canOpenTerminal = false,
 }: {
   taskId: string;
   projection: CodingProjectionState;
   codingConnection: string;
+  /**
+   * 서버가 준 불리언 그대로. 상태 이름으로 다시 판정하지 않는다.
+   * 기본값이 `false` 인 것이 의도다 -- 넘기는 것을 잊으면 터미널이 열리지
+   * 않을 뿐, 죽은 샌드박스에 PTY 를 만들지는 않는다.
+   */
+  canOpenTerminal?: boolean;
 }) {
   const api = useCodingWorkspace(taskId);
   const [tab, setTab] = useState<WorkspaceDockTab>("files");
@@ -86,7 +93,7 @@ export function CodingWorkspaceDock({
 
   function content() {
     if (tab === "terminal") {
-      return <CodingTerminal taskId={taskId} />;
+      return <CodingTerminal canOpenTerminal={canOpenTerminal} taskId={taskId} />;
     }
     if (tab === "diff") {
       return <CodingDiffViewer diff={api.workspace.diff} />;

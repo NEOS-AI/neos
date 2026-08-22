@@ -8,7 +8,13 @@ import {
   reducePtyFrame,
 } from "@/features/coding/workspace/workspace-stream-client";
 
-export function CodingTerminal({ taskId }: { taskId: string }) {
+export function CodingTerminal({
+  taskId,
+  canOpenTerminal = false,
+}: {
+  taskId: string;
+  canOpenTerminal?: boolean;
+}) {
   const [terminal, setTerminal] = useState(() => emptyPtyState());
   const [input, setInput] = useState("");
   const surfaceRef = useRef<HTMLPreElement>(null);
@@ -20,6 +26,12 @@ export function CodingTerminal({ taskId }: { taskId: string }) {
   }, [terminal]);
 
   useEffect(() => {
+    // PTY 생성을 서버 불리언으로 막는다. 여기서 소켓을 열지 않으면
+    // 백엔드가 정리 중이라고 말한 샌드박스에 새 셸이 붙지 않는다 --
+    // 파일·diff 읽기는 독의 다른 탭에서 그대로 된다.
+    if (!canOpenTerminal) {
+      return;
+    }
     let disposed = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
@@ -81,7 +93,7 @@ export function CodingTerminal({ taskId }: { taskId: string }) {
       }
       socketRef.current?.close(1000, "Terminal view closed");
     };
-  }, [taskId]);
+  }, [canOpenTerminal, taskId]);
 
   useEffect(() => {
     const surface = surfaceRef.current;
@@ -124,7 +136,7 @@ export function CodingTerminal({ taskId }: { taskId: string }) {
       <div className="flex items-center justify-between border-white/10 border-b px-3 py-2 font-mono text-[10px] uppercase tracking-wider">
         <span>{terminal.ptyId ?? "New terminal"}</span>
         <span className={terminal.issue ? "text-red-300" : "text-emerald-300"}>
-          {terminal.issue ?? terminal.connection}
+          {canOpenTerminal ? (terminal.issue ?? terminal.connection) : "unavailable"}
         </span>
       </div>
       <pre
@@ -132,13 +144,16 @@ export function CodingTerminal({ taskId }: { taskId: string }) {
         className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-3 font-mono text-[12px] leading-[18px]"
         ref={surfaceRef}
       >
-        {terminal.output || "Connecting to isolated terminal…"}
+        {canOpenTerminal
+          ? terminal.output || "Connecting to isolated terminal…"
+          : "This sandbox cannot open a terminal right now. Files and diffs remain available."}
       </pre>
       <form className="flex border-white/10 border-t" onSubmit={submit}>
         <span className="px-3 py-2 font-mono text-amber-300 text-xs">$</span>
         <input
           aria-label="Terminal input"
-          className="min-w-0 flex-1 bg-transparent py-2 pr-3 font-mono text-xs outline-none"
+          className="min-w-0 flex-1 bg-transparent py-2 pr-3 font-mono text-xs outline-none disabled:opacity-40"
+          disabled={!canOpenTerminal}
           onChange={(event) => setInput(event.target.value)}
           value={input}
         />
