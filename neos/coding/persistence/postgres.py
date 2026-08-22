@@ -128,6 +128,36 @@ class PostgresCodingService:
             self._wake_outbox()
         return event
 
+    async def append_in_session(
+        self,
+        session: AsyncSession,
+        *,
+        task_id: str,
+        event_type: str,
+        payload: Mapping[str, Any],
+        now: datetime,
+        run_id: str | None = None,
+    ) -> CodingEvent:
+        """호출자가 소유한 트랜잭션 안에서 이벤트 하나를 덧붙인다.
+
+        `append()`와 달리 세션을 열지 않는다 -- 다른 테이블 쓰기와 **원자적**
+        이어야 하는 호출자를 위한 것이다(관리형 복구 승인이 새 세대 생성과
+        감사 기록을 함께 커밋한다).
+
+        seq 할당을 스스로 하지 말 것. `coding_tasks`를 `FOR UPDATE`로 잠그고
+        `last_seq + 1`을 `RETURNING` 하는 이 경로를 우회하면
+        `coding_checkpoints_task_id_seq_key` 위반과 같은 계열의 사고가 난다.
+        outbox 발행도 여기서 함께 일어난다.
+        """
+        return await self._append_in_session(
+            session,
+            task_id=task_id,
+            event_type=event_type,
+            payload=payload,
+            now=now,
+            run_id=run_id,
+        )
+
     async def _append_in_session(
         self,
         session: AsyncSession,

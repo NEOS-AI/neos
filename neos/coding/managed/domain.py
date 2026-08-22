@@ -182,7 +182,14 @@ _ALLOWED_ALLOCATION_TRANSITIONS: dict[
             ManagedSandboxState.MANUAL_RECOVERY_REQUIRED,
         }
     ),
-    ManagedSandboxState.MANUAL_RECOVERY_REQUIRED: frozenset(),
+    # 운영자 승인 복구(`neos.coding.managed.archive`)가 원본 세대를 **종결**
+    # 하고 새 행으로 generation + 1 을 만든다. 그래서 FAILED 로 가는 간선
+    # 하나만 연다 -- ACTIVE/ADMITTED 로 되돌아가는 간선을 열면 그 순간
+    # 운영자 승인 없이 제자리 부활하는 경로가 생기고, 그것이 바로 이 상태가
+    # 막으려던 것이다(자동 크로스 프로바이더 failover 금지).
+    ManagedSandboxState.MANUAL_RECOVERY_REQUIRED: frozenset(
+        {ManagedSandboxState.FAILED}
+    ),
     ManagedSandboxState.CLEANUP_PENDING: frozenset(
         {ManagedSandboxState.CLEANED, ManagedSandboxState.CLEANUP_RETRY}
     ),

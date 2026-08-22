@@ -44,6 +44,14 @@ class ManagedSandboxNotFound(LookupError):
     """`allocation_id`에 해당하는 할당 행이 없다."""
 
 
+class ManagedArchiveImportUnavailable(RuntimeError):
+    """복구 세대인데 아카이브 복원기가 배선되지 않았다.
+
+    "복원할 것이 없다"가 아니라 "복원할 수단이 없다"이다 -- 전자는 정상이고
+    후자는 배선 사고다.
+    """
+
+
 class ManagedSandboxNotClaimable(RuntimeError):
     """할당이 claim 가능한 상태가 아니다 -- "이미 끝났거나 다른 단계에
     있다"는 뜻이다. 리스가 살아 있어서 지는 것(`StaleManagedSandboxLease`)과
@@ -121,6 +129,29 @@ class ManagedSandboxCipher(Protocol):
     def encrypt(self, value: str) -> bytes: ...
 
     def decrypt(self, value: bytes) -> str: ...
+
+
+class PortableArchiveImporter(Protocol):
+    """복구 세대의 워크스페이스를 갓 만든 provider 샌드박스에 되살린다.
+
+    `ManagedSandboxAdapter`에 넣지 않았다. 어댑터는 **provider 능력** 표면이고
+    공유 conformance 스위트가 그 계약을 강제하는데, 아카이브 복원은 provider
+    능력이 아니라 워크스페이스 계층의 일이라 모든 provider 가 구현할 성질의
+    것이 아니다.
+
+    **워크스페이스만 되살린다.** PTY 도 백그라운드 프로세스도 재생성하지
+    않는다 -- 코딩 런은 기존 내구 루프가 하던 대로 마지막 체크포인트에서만
+    이어진다. 죽은 세대의 실행 중 상태를 흉내 내면 사용자는 이어졌다고
+    믿지만 실제로는 아무것도 돌고 있지 않다.
+    """
+
+    async def import_archive(
+        self,
+        *,
+        allocation: ManagedSandboxAllocation,
+        provider_ref: str,
+        archive_id: str,
+    ) -> None: ...
 
 
 _ADVANCEABLE_STATES = frozenset(
@@ -213,6 +244,7 @@ class ManagedSandboxAllocationService:
         network_policy: ManagedNetworkPolicy,
         image_identity: str,
         lease_seconds: int,
+        archive_importer: PortableArchiveImporter | None = None,
         clock=None,
     ) -> None:
         self._repository = repository
@@ -222,6 +254,7 @@ class ManagedSandboxAllocationService:
         self._network_policy = network_policy
         self._image_identity = image_identity
         self._lease_seconds = lease_seconds
+        self._archive_importer = archive_importer
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def advance(
@@ -239,6 +272,30 @@ class ManagedSandboxAllocationService:
         if plan.allocation.state is ManagedSandboxState.ADMITTED:
             return await self._allocate(lease, plan, adapter, now=now)
         return await self._rediscover(lease, plan, adapter, now=now)
+
+    async def _import_archive(
+        self, plan: AllocationPlan, result: AllocationResult
+    ) -> None:
+        """복구 세대라면 워크스페이스를 되살린다. 아니면 아무 일도 하지 않는다.
+
+        `commit_active` **전에** 부른다. 빈 워크스페이스를 든 샌드박스를
+        `ACTIVE`로 적으면 사용자는 복구가 끝난 줄 알고 그 위에서 일한다 --
+        그 시점에는 되돌릴 수 없다.
+        """
+        archive_id = plan.allocation.archive_ref
+        if archive_id is None:
+            return
+        if self._archive_importer is None:
+            # 조용히 건너뛰지 않는다. 복원기가 배선되지 않은 채 복구 세대를
+            # ACTIVE 로 적으면 사용자는 워크스페이스가 돌아온 줄 알지만 실제로는
+            # 빈 샌드박스다 -- 이 저장소가 반복해서 다친 "조용한 degrade"의
+            # 정확한 모양이다. 호출자가 잡아 원장에 사유를 남긴다.
+            raise ManagedArchiveImportUnavailable(archive_id)
+        await self._archive_importer.import_archive(
+            allocation=plan.allocation,
+            provider_ref=result.provider_ref,
+            archive_id=archive_id,
+        )
 
     async def _allocate(
         self,
@@ -293,7 +350,7 @@ class ManagedSandboxAllocationService:
         # 재클레임 가능해졌기 때문이다(이번 라운드의 두 번째 수정): 이
         # advance() 호출이 예외로 죽어도 행은 ALLOCATING에 리스만 남긴 채
         # 남고, 리스가 만료되면 다음 워커가 재발견 경로로 다시 들어온다.
-        return await self._commit_result(lease, result, now=now)
+        return await self._commit_result(lease, plan, result, now=now)
 
     async def _rediscover(
         self,
@@ -318,15 +375,43 @@ class ManagedSandboxAllocationService:
             ownership_digest=found.ownership_digest,
             state=found.state,
         )
-        return await self._commit_result(lease, result, now=now)
+        return await self._commit_result(lease, plan, result, now=now)
 
     async def _commit_result(
         self,
         lease: ManagedAllocationLease,
+        plan: AllocationPlan,
         result: AllocationResult,
         *,
         now: datetime,
     ) -> ManagedSandboxAllocation:
+        try:
+            await self._import_archive(plan, result)
+        except Exception:
+            # 복원이 실패했는데 ACTIVE 로 적으면 사용자가 **빈 워크스페이스**
+            # 위에서 일하게 된다 -- 그 시점에는 되돌릴 수 없다.
+            #
+            # 정확히 한 번 재시도하고 그 다음은 운영자에게 넘긴다. 첫 실패
+            # (ALLOCATING 에서 왔다)는 `RECOVERY_PENDING`으로 가고, 다음
+            # advance()가 재발견 뒤 복원을 다시 시도한다. 그 시도마저 실패하면
+            # (RECOVERY_PENDING 에서 왔다) `MANUAL_RECOVERY_REQUIRED`다:
+            # 아카이브는 승인 시점에 이미 검증됐으므로 두 번 연속 실패는
+            # 재시도로 풀 문제가 아니라는 신호다.
+            #
+            # 전이표를 그대로 따르는 것이기도 하다 -- RECOVERY_PENDING 은
+            # 자기 자신으로 가는 간선이 없다. 여기서 자기 자신을 커밋하면
+            # 원장에만 불법 전이가 남는다(Task 6이 같은 함정을 만났다).
+            escalate = plan.allocation.state is ManagedSandboxState.RECOVERY_PENDING
+            return await self._repository.commit_state(
+                lease,
+                (
+                    ManagedSandboxState.MANUAL_RECOVERY_REQUIRED
+                    if escalate
+                    else ManagedSandboxState.RECOVERY_PENDING
+                ),
+                now=now,
+                error_code=ProviderErrorCode.ARCHIVE_INVALID,
+            )
         encrypted = self._cipher.encrypt(result.provider_ref)
         return await self._repository.commit_active(
             lease, result, encrypted_ref=encrypted, now=now

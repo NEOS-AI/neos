@@ -285,6 +285,7 @@ def create_managed_sandbox_allocation_service(
     sandboxes,
     repository,
     cipher,
+    archive_importer=None,
 ) -> ManagedSandboxAllocationService | None:
     """관리형 할당 서비스를 config 로 배선한다.
 
@@ -307,6 +308,12 @@ def create_managed_sandbox_allocation_service(
         network_policy=ManagedNetworkPolicy.BLOCK_ALL,
         image_identity=sandboxes.image_identity,
         lease_seconds=config.sandbox.managed.allocation_lease_seconds,
+        # 복구 세대(`archive_ref`가 있는 할당)만 이 포트를 쓴다. 배선되지
+        # 않은 채 복구 세대가 오면 서비스가 조용히 넘어가지 않고
+        # `ManagedArchiveImportUnavailable`를 올려 원장에 사유를 남긴다
+        # (`ManagedSandboxAllocationService._import_archive`). 프로덕션
+        # 구현체 배선은 Task 8/9 몫이다.
+        archive_importer=archive_importer,
     )
 
 

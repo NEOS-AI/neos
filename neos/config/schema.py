@@ -1411,6 +1411,24 @@ class ManagedSandboxConfig(StrictConfigModel):
         le=3600,
         description="provider 헬스 프로브 beat 주기.",
     )
+    archive_max_bytes: int = Field(
+        default=512 * 1024 * 1024,
+        gt=0,
+        description="portable 아카이브 본문의 상한. 검증은 이 값을 넘는 본문을 읽지 않는다.",
+    )
+    archive_max_entries: int = Field(
+        default=100_000,
+        gt=0,
+        description="portable 아카이브가 담을 수 있는 tar 멤버 수 상한.",
+    )
+    archive_retention_seconds: int = Field(
+        default=7 * 24 * 3600,
+        gt=0,
+        description=(
+            "아카이브 보존 기한. 만료된 아카이브로는 복구를 승인하지 않는다 -- "
+            "오래된 워크스페이스로 되살리면 사용자가 잃어버린 줄도 모르는 작업이 생긴다."
+        ),
+    )
     health_window_size: int = Field(default=20, ge=4, le=100)
     degraded_failure_ratio: float = Field(default=0.25, ge=0, le=1)
     unavailable_failure_ratio: float = Field(default=0.5, ge=0, le=1)

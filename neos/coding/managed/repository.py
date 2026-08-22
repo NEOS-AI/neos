@@ -6,6 +6,7 @@ from sqlalchemy import text
 
 from neos.coding.managed.adapters import AllocationResult
 from neos.coding.managed.admission import AdmissionRequest, AdmissionResult
+from neos.coding.managed.archive import PortableRecoveryConflict
 from neos.coding.managed.allocation import (
     _ADVANCEABLE_STATES,
     AllocationPlan,
@@ -29,7 +30,7 @@ from neos.coding.managed.lifecycle import (
     LifecycleCandidates,
 )
 from neos.coding.domain.models import CodingTaskStatus
-from neos.coding.persistence.postgres import SessionFactory
+from neos.coding.persistence.postgres import PostgresCodingService, SessionFactory
 
 
 _POLICY_VERSION = "managed-v1"
@@ -819,6 +820,228 @@ class PostgresManagedSandboxRepository:
                     },
                 )
         return _allocation_from_row(row)
+
+    async def approve_recovery_generation(
+        self,
+        *,
+        allocation_id: str,
+        operator_id: str,
+        archive_id: str,
+        checksum: str,
+        policy_version: str,
+        lifetime_seconds: int,
+        reservation_lease_seconds: int,
+        now: datetime,
+    ) -> ManagedSandboxAllocation:
+        """원본 세대를 종결하고 generation + 1 을 **한 트랜잭션**에서 만든다.
+
+        갈라질 수 없다. 045의 부분 유니크 인덱스
+        (`idx_coding_managed_sandboxes_current_task`)가 태스크당 살아 있는
+        할당을 하나로 강제하므로, 원본을 먼저 `FAILED`로 닫지 않으면 새 행
+        INSERT 가 인덱스에 걸린다. 반대로 원본만 닫고 새 행을 못 만들면
+        태스크는 샌드박스 없는 상태로 남는다.
+
+        멱등하다. 새 admission 의 `idempotency_key`가
+        `recovery:{allocation_id}:g{n}` 으로 **결정론적**이라, 같은 승인이 두 번
+        오면 `UNIQUE (tenant_id, idempotency_key)`가 두 번째를 막는다 -- 운영자가
+        버튼을 두 번 눌러 세대가 둘 생기는 일이 없다.
+
+        쿼터는 원본의 예약액을 그대로 옮긴다. 살아 있는 할당 수가 순증하지
+        않기 때문이다 -- 원본이 같은 트랜잭션에서 `FAILED`(=`_LIVE_QUOTA_STATES`
+        밖)로 닫힌다. 새 `reservation_id`와 새 리스를 주므로 예약 자체는
+        신선하다.
+
+        감사 기록은 `coding_events`에 남긴다. seq 할당을 여기서 다시 만들지
+        않고 `PostgresCodingService.append_in_session()`을 그대로 쓴다.
+        본문은 절대 싣지 않는다 -- 식별자·체크섬·정책 버전·결과뿐이다.
+        """
+        _require_timezone_aware("approval time", now)
+        if lifetime_seconds <= 0 or reservation_lease_seconds <= 0:
+            raise ValueError("recovery lifetimes must be positive")
+        async with await self._session_factory() as session:
+            async with session.begin():
+                source = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT sandbox.allocation_id, sandbox.tenant_id,
+                                   sandbox.task_id, sandbox.run_id,
+                                   sandbox.provider, sandbox.region,
+                                   sandbox.state, sandbox.generation,
+                                   sandbox.image_identity,
+                                   sandbox.toolchain_identity,
+                                   admission.reserved_active_seconds,
+                                   admission.reserved_archive_bytes,
+                                   admission.reserved_cost_micros
+                              FROM coding_managed_sandboxes AS sandbox
+                              JOIN coding_sandbox_admissions AS admission
+                                ON admission.admission_id = sandbox.admission_id
+                             WHERE sandbox.allocation_id = :allocation_id
+                               FOR UPDATE OF sandbox, admission
+                            """
+                        ),
+                        {"allocation_id": allocation_id},
+                    )
+                ).one_or_none()
+                if source is None:
+                    raise ManagedSandboxNotFound(allocation_id)
+                if source.state != ManagedSandboxState.MANUAL_RECOVERY_REQUIRED.value:
+                    raise PortableRecoveryConflict("recovery_not_required")
+
+                # ⚠️ 이 검사는 **지금 도달 불가능한 심층 방어**다.
+                # 045의 부분 유니크 인덱스
+                # (`idx_coding_managed_sandboxes_current_task`)가
+                # `manual_recovery_required` 를 '살아 있음'으로 세므로
+                # (`state NOT IN ('cleaned','failed')`), "복구 대기 중인 원본 +
+                # 같은 태스크의 살아 있는 다른 세대"는 DB 가 애초에 표현하지
+                # 못한다 -- 통합 테스트가 그것을 확인했다
+                # (`test_postgres_recovery.py::
+                #   test_a_stuck_allocation_cannot_coexist_with_a_live_generation`).
+                # 그 인덱스가 완화되면 이 검사가 유일한 방어선이 되므로
+                # 남겨 두되, **이것이 지금 무언가를 막고 있다고 읽지 말 것.**
+                live = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT 1
+                              FROM coding_managed_sandboxes
+                             WHERE task_id = :task_id
+                               AND allocation_id <> :allocation_id
+                               AND cleaned_at IS NULL
+                               AND state NOT IN ('cleaned', 'failed')
+                             LIMIT 1
+                            """
+                        ),
+                        {
+                            "task_id": source.task_id,
+                            "allocation_id": allocation_id,
+                        },
+                    )
+                ).one_or_none()
+                if live is not None:
+                    raise PortableRecoveryConflict("recovery_generation_exists")
+
+                generation = int(source.generation) + 1
+                new_allocation_id = f"msa_{uuid4().hex}"
+                new_admission_id = f"adm_{uuid4().hex}"
+                absolute_expires_at = now + timedelta(seconds=lifetime_seconds)
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_managed_sandboxes
+                           SET state = 'failed',
+                               lease_expires_at = NULL,
+                               version = version + 1,
+                               updated_at = :now
+                         WHERE allocation_id = :allocation_id
+                        """
+                    ),
+                    {"allocation_id": allocation_id, "now": now},
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_sandbox_admissions (
+                            admission_id, idempotency_key, tenant_id, task_id,
+                            provider, region, policy_version, decision, reason,
+                            reservation_id, reservation_expires_at,
+                            reserved_active_seconds, reserved_archive_bytes,
+                            reserved_cost_micros, reservation_state, created_at
+                        ) VALUES (
+                            :admission_id, :idempotency_key, :tenant_id,
+                            :task_id, :provider, :region, :policy_version,
+                            'admitted', 'allowed', :reservation_id,
+                            :reservation_expires_at, :reserved_active_seconds,
+                            :reserved_archive_bytes, :reserved_cost_micros,
+                            'reserved', :now
+                        )
+                        """
+                    ),
+                    {
+                        "admission_id": new_admission_id,
+                        "idempotency_key": (
+                            f"recovery:{allocation_id}:g{generation}"
+                        ),
+                        "tenant_id": source.tenant_id,
+                        "task_id": source.task_id,
+                        "provider": source.provider,
+                        "region": source.region,
+                        "policy_version": policy_version,
+                        "reservation_id": f"rsv_{uuid4().hex}",
+                        "reservation_expires_at": (
+                            now + timedelta(seconds=reservation_lease_seconds)
+                        ),
+                        "reserved_active_seconds": source.reserved_active_seconds,
+                        "reserved_archive_bytes": source.reserved_archive_bytes,
+                        "reserved_cost_micros": source.reserved_cost_micros,
+                        "now": now,
+                    },
+                )
+                created = (
+                    await session.execute(
+                        text(
+                            """
+                            INSERT INTO coding_managed_sandboxes (
+                                allocation_id, admission_id, tenant_id, task_id,
+                                run_id, provider, region, provider_ref,
+                                ownership_digest, state, generation,
+                                fencing_token, lease_expires_at,
+                                absolute_expires_at, version, error_code,
+                                snapshot_ref, archive_ref, image_identity,
+                                toolchain_identity, created_at, updated_at
+                            ) VALUES (
+                                :allocation_id, :admission_id, :tenant_id,
+                                :task_id, :run_id, :provider, :region, NULL,
+                                NULL, 'admitted', :generation, 1, NULL,
+                                :absolute_expires_at, 1, NULL, NULL,
+                                :archive_ref, :image_identity,
+                                :toolchain_identity, :now, :now
+                            )
+                         RETURNING allocation_id, tenant_id, task_id, run_id,
+                                   provider, region, provider_ref,
+                                   ownership_digest, state, generation,
+                                   fencing_token, lease_expires_at,
+                                   absolute_expires_at, version, error_code,
+                                   snapshot_ref, archive_ref, image_identity
+                            """
+                        ),
+                        {
+                            "allocation_id": new_allocation_id,
+                            "admission_id": new_admission_id,
+                            "tenant_id": source.tenant_id,
+                            "task_id": source.task_id,
+                            "run_id": source.run_id,
+                            "provider": source.provider,
+                            "region": source.region,
+                            "generation": generation,
+                            "absolute_expires_at": absolute_expires_at,
+                            "archive_ref": archive_id,
+                            "image_identity": source.image_identity,
+                            "toolchain_identity": source.toolchain_identity,
+                            "now": now,
+                        },
+                    )
+                ).one()
+                await PostgresCodingService(
+                    self._session_factory
+                ).append_in_session(
+                    session,
+                    task_id=str(source.task_id),
+                    event_type="managed_sandbox_recovery_approved",
+                    payload={
+                        "source_allocation_id": allocation_id,
+                        "recovery_allocation_id": new_allocation_id,
+                        "generation": generation,
+                        "operator_id": operator_id,
+                        "archive_id": archive_id,
+                        "archive_checksum": checksum,
+                        "policy_version": policy_version,
+                        "outcome": "approved",
+                    },
+                    now=now,
+                    run_id=str(source.run_id),
+                )
+        return _allocation_from_row(created)
 
     async def discover_lifecycle_candidates(
         self, *, now: datetime, limit: int

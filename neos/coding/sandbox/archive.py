@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -164,6 +165,30 @@ def extract_workspace_archive(
             with source, destination.open("wb") as output:
                 shutil.copyfileobj(source, output, length=1024 * 1024)
             os.chmod(destination, member.mode & 0o777)
+
+
+def validate_workspace_archive_bytes(
+    body: bytes,
+    *,
+    max_entries: int = 100_000,
+) -> int:
+    """멤버 경로·타입만 검증하고 **펼치지는 않는다.** 펼쳤을 때의 크기를 낸다.
+
+    `extract_workspace_archive()`가 쓰는 것과 **같은** 멤버 검증을 재사용한다 --
+    관리형 복구(`neos.coding.managed.archive`)는 아카이브를 받아들일지
+    말지를 디스크에 풀기 전에 정해야 하는데, 그 판단이 추출 경로와 갈라지면
+    "검증은 통과했는데 추출은 거부하는" 아카이브가 생긴다.
+    """
+    with tarfile.open(fileobj=io.BytesIO(body), mode="r:*") as archive:
+        members = archive.getmembers()
+        if len(members) > max_entries:
+            raise SandboxPolicyViolation("archive_entry_count_exceeded")
+        expanded = 0
+        for member in members:
+            _validate_archive_member(member)
+            if member.isfile():
+                expanded += member.size
+    return expanded
 
 
 def _validate_archive_member(member: tarfile.TarInfo) -> PurePosixPath:
