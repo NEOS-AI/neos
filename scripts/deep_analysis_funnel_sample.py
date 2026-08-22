@@ -25,12 +25,44 @@ from neos.workflow.deep_analysis.funnel_sample_runner import (
 )
 from neos.workflow.deep_analysis.jobs import execute_run
 from neos.workflow.deep_analysis.manifest import MANIFEST_VERSION
-from neos.workflow.deep_analysis.manifest_reader import manifests_for
+from neos.workflow.deep_analysis.manifest_reader import (
+    manifests_for,
+    runs_without_manifest,
+)
 from neos.workflow.deep_analysis.service import build_orchestrator
 
 
 class NoCompletedDevRunsError(RuntimeError):
     """Raised when a sample has no successful dev observation."""
+
+
+class MissingManifestError(RuntimeError):
+    """매니페스트 없는 런이 표본에 있다 (로드맵 §15.4 금지 3번).
+
+    지침이 아니라 기계가 거부한다. 이 예외가 나면 아티팩트를 쓰지 않는다 --
+    무엇으로 조립됐는지 모르는 런은 나중에 판독할 수 없고, 판독할 수 없는
+    표본은 §10.2 의 "정확히 1회" 규칙 때문에 다시 낼 기회가 없다.
+    """
+
+    def __init__(self, run_ids: list[str]) -> None:
+        super().__init__(
+            "매니페스트 없는 런: " + ", ".join(run_ids) + " -- 표본이 아니다"
+        )
+        self.run_ids = run_ids
+
+
+async def _gate_and_read_manifests(session, run_ids: list[str]) -> dict:
+    """모든 런이 매니페스트를 가졌는지 확인하고 그것들을 돌려준다.
+
+    로드맵 §15.4 금지 3번의 집행 지점. 거부는 여기 한 곳뿐이며
+    `Orchestrator.run()` 은 건드리지 않는다 -- 금지가 겨누는 것은 '런' 이
+    아니라 '표본' 이고, 오케스트레이터에 걸면 그것을 직접 짓는 골든·통합
+    테스트 수십 건이 깨진다.
+    """
+    missing = await runs_without_manifest(session, run_ids)
+    if missing:
+        raise MissingManifestError(missing)
+    return await manifests_for(session, run_ids)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -264,7 +296,7 @@ async def _main(
             run_ids.append(default_run["run_id"])
 
         async with get_session_ctx() as session:
-            manifests = await manifests_for(session, run_ids)
+            manifests = await _gate_and_read_manifests(session, run_ids)
 
         artifact_dir = write_artifacts(
             result,
