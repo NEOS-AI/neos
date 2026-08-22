@@ -498,10 +498,14 @@ def test_main_threads_a_recording_cassette_through_build_orchestrator(
         captured["manifests_for_run_ids"] = list(run_ids)
         return fake_manifests
 
+    async def fake_runs_without_manifest(session, run_ids):
+        return []
+
     monkeypatch.setattr(cli, "preflight", successful_preflight)
     monkeypatch.setattr(cli, "run_sample", fake_run_sample)
     monkeypatch.setattr(cli, "get_session_ctx", fake_session_ctx)
     monkeypatch.setattr(cli, "manifests_for", fake_manifests_for)
+    monkeypatch.setattr(cli, "runs_without_manifest", fake_runs_without_manifest)
     monkeypatch.setattr(
         sys,
         "argv",
