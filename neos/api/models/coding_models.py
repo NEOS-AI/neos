@@ -174,3 +174,60 @@ class CodingSteerRequest(BaseModel):
 class CodingSteerResponse(BaseModel):
     steering_id: str
     mode: Literal["safe_point", "interrupt_now"]
+
+
+class CodingSandboxStatusResponse(BaseModel):
+    """소유자에게 나가는 샌드박스 상태.
+
+    **필드가 계약이다.** provider·region·provider 참조·할당 식별자·서킷 상세·
+    raw 에러는 여기 없고, 추가하려면 `neos.coding.managed.projection`의
+    경계를 먼저 다시 생각해야 한다.
+    """
+
+    state: Literal[
+        "preparing",
+        "ready",
+        "suspended",
+        "provider_recovery_pending",
+        "operator_recovery_required",
+        "cleaning_up",
+        "cleaned",
+    ]
+    can_run: bool
+    can_open_terminal: bool
+    recovered_from_checkpoint: bool
+    updated_at: datetime
+
+
+class CodingSandboxDrainRequest(BaseModel):
+    region: str = Field(default="local", min_length=1, max_length=64)
+    drained: bool = True
+
+
+class CodingSandboxDrainResponse(BaseModel):
+    provider: str
+    region: str
+    drained: bool
+    circuit: Literal["healthy", "degraded", "unavailable"]
+    scope: Literal["process_local"]
+
+
+class CodingSandboxCleanupRetryResponse(BaseModel):
+    allocation_id: str
+    state: str
+
+
+class CodingSandboxRecoveryRequest(BaseModel):
+    """복구 승인 요청.
+
+    체크섬이 승인의 **유일한** 결속 수단이므로 모양 검증을 경계에서 끝낸다 --
+    `neos.coding.managed.archive.archive_checksum()`이 내는 정본 표기와 같다.
+    """
+
+    archive_checksum: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class CodingSandboxRecoveryResponse(BaseModel):
+    allocation_id: str
+    generation: int
+    state: str

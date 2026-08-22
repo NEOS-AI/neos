@@ -9,6 +9,7 @@ from neos.api.models.coding_models import (
     CodingSteerResponse,
     CodingTaskResponse,
     CodingProjectionSnapshotResponse,
+    CodingSandboxStatusResponse,
     CodingWorkspaceDiffResponse,
     CodingWorkspaceFileResponse,
     CodingWorkspaceFileSaveRequest,
@@ -31,12 +32,14 @@ from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.models import CodingTask
 from neos.coding.domain.phases import SteeringMode
 from neos.coding.domain.workspace_edits import WorkspaceEditConflict
+from neos.coding.managed.admin import ManagedSandboxStatusService
 from neos.coding.runtime import (
     coding_run_service,
     coding_approval_service,
     coding_service,
     coding_snapshot_service,
     coding_workspace_service,
+    managed_sandbox_status_service,
     get_coding_ticket_store,
     get_workspace_ticket_store,
 )
@@ -77,6 +80,10 @@ def get_coding_workspace_service() -> CodingWorkspaceService:
 
 def get_workspace_stream_ticket_store() -> WorkspaceTicketStore:
     return get_workspace_ticket_store()
+
+
+def get_managed_sandbox_service() -> ManagedSandboxStatusService:
+    return managed_sandbox_status_service()
 
 
 def _raise_workspace_error(error: WorkspaceEditConflict) -> None:
@@ -212,6 +219,29 @@ async def get_coding_task_snapshot(
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Coding task not found")
     return snapshot
+
+
+@router.get(
+    "/tasks/{task_id}/sandbox-status",
+    response_model=CodingSandboxStatusResponse,
+)
+async def get_coding_sandbox_status(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    sandboxes: ManagedSandboxStatusService = Depends(get_managed_sandbox_service),
+):
+    """소유자에게 보이는 샌드박스 상태.
+
+    비소유자와 "샌드박스 없음"이 **같은 404**다. 둘을 구별하면 남의 태스크가
+    존재한다는 사실이 샌다 -- 소유권 검사는 조회 질의 안에 있다
+    (`PostgresManagedSandboxRepository.read_owner_sandbox`).
+    """
+    status_view = await sandboxes.owner_status(
+        task_id=task_id, owner_id=current_user.user_id
+    )
+    if status_view is None:
+        raise HTTPException(status_code=404, detail="Coding sandbox not found")
+    return status_view.to_payload()
 
 
 @router.get(

@@ -9,13 +9,13 @@
 참조로 죽었는지가 덮어써져 사고 조사 근거가 사라진다.
 """
 
-import hashlib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from neos.coding.managed.archive import (
+    archive_checksum,
     InMemoryPortableArchiveStore,
     ManagedSandboxArchiveService,
     PortableRecoveryConflict,
@@ -154,7 +154,7 @@ def recovery_service(
 
 
 def _checksum(body: bytes) -> str:
-    return hashlib.sha256(body).hexdigest()
+    return archive_checksum(body)
 
 
 # --- 검증이 원장보다 먼저다 -----------------------------------------------
