@@ -1,5 +1,6 @@
 import asyncio
 import threading
+from pathlib import Path
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -30,13 +31,22 @@ from neos.coding.managed.admin import (
     ManagedSandboxAdminService,
     ManagedSandboxStatusService,
 )
+from neos.coding.managed.archive import (
+    LocalPortableArchiveStore,
+    ManagedSandboxArchiveService,
+    SessionPortableArchiveBuilder,
+    SessionPortableArchiveImporter,
+)
 from neos.coding.managed.health_store import create_provider_health_store
 from neos.coding.managed.allocation import ManagedSandboxAllocationService
 from neos.coding.managed.crypto import (
     AesGcmProviderReferenceCipher,
     decode_provider_reference_key,
 )
-from neos.coding.managed.repository import PostgresManagedSandboxRepository
+from neos.coding.managed.repository import (
+    MANAGED_POLICY_VERSION,
+    PostgresManagedSandboxRepository,
+)
 from neos.coding.repositories.sandbox_repository import PostgresSandboxBindingRepository
 from neos.coding.sandbox.base import SandboxLimits
 from neos.coding.sandbox.bindings import SandboxBindingService
@@ -284,6 +294,97 @@ def _managed_sandbox_repository(
     return PostgresManagedSandboxRepository(session_factory or db_manager.get_session)
 
 
+def _managed_archive_store(config: AppConfig) -> LocalPortableArchiveStore:
+    """로컬 파일시스템 스토어.
+
+    객체 스토어로 갈아 끼우려면 `PortableArchiveStore` 프로토콜만 만족하면
+    된다 -- 서비스도 빌더도 구현체를 모른다.
+    """
+    return LocalPortableArchiveStore(Path(config.sandbox.managed.archive_root))
+
+
+def create_managed_archive_service(
+    *, config: AppConfig, repository, session_factory=None
+) -> ManagedSandboxArchiveService:
+    """아카이브 검증과 복구 승인 서비스."""
+    del session_factory
+    managed = config.sandbox.managed
+    return ManagedSandboxArchiveService(
+        repository=repository,
+        store=_managed_archive_store(config),
+        image_identity=config.sandbox.docker.image,
+        toolchain_identity=managed.toolchain_identity,
+        max_archive_bytes=managed.archive_max_bytes,
+        max_archive_entries=managed.archive_max_entries,
+        policy_version=MANAGED_POLICY_VERSION,
+        lifetime_seconds=int(config.sandbox.lifecycle.max_lifetime_sec),
+        reservation_lease_seconds=managed.reservation_lease_seconds,
+    )
+
+
+def create_managed_archive_importer(
+    *, config: AppConfig, sandboxes
+) -> SessionPortableArchiveImporter:
+    """복구 세대의 워크스페이스를 되살리는 포트의 프로덕션 구현.
+
+    provider 참조로 세션을 연다 -- 세션 계약만 쓰므로 provider 가 무엇이든
+    같은 코드가 돈다.
+    """
+    managed = config.sandbox.managed
+    return SessionPortableArchiveImporter(
+        store=_managed_archive_store(config),
+        open_session=sandboxes.open_session,
+        max_archive_bytes=managed.archive_max_bytes,
+        max_archive_entries=managed.archive_max_entries,
+    )
+
+
+def create_managed_archive_taker(*, config: AppConfig, repository, sandboxes):
+    """`allocation_id -> PortableArchiveManifest` 콜러블을 조립한다.
+
+    provider 참조는 봉인돼 있으므로 **할당별 cipher** 로 열어야 한다
+    (`_managed_provider_reference_cipher` 문서 참조). 그 조립이 여기 있는
+    이유이고, 관리자 서비스가 콜러블만 받는 이유다.
+    """
+
+    async def take(allocation_id: str):
+        allocation = await repository.read_allocation(allocation_id)
+        if allocation.provider_ref is None:
+            # 아직 provider 리소스가 없다. 뜰 워크스페이스 자체가 없으므로
+            # 조용히 빈 아카이브를 만들지 않는다.
+            raise RuntimeError("managed_sandbox_not_allocated")
+        cipher = _managed_provider_reference_cipher(
+            config=config,
+            allocation_id=allocation_id,
+            provider=allocation.provider,
+            generation=allocation.generation,
+        )
+        session = await sandboxes.open_session(
+            cipher.decrypt(allocation.provider_ref)
+        )
+        managed = config.sandbox.managed
+        manifest = await SessionPortableArchiveBuilder(
+            store=_managed_archive_store(config),
+            image_identity=sandboxes.image_identity,
+            toolchain_identity=managed.toolchain_identity,
+            max_archive_bytes=managed.archive_max_bytes,
+            max_archive_entries=managed.archive_max_entries,
+            retention_seconds=managed.archive_retention_seconds,
+        ).build(
+            session,
+            allocation_id=allocation_id,
+            generation=allocation.generation,
+        )
+        await repository.set_archive_ref(
+            allocation_id,
+            archive_id=manifest.archive_id,
+            now=datetime.now(UTC),
+        )
+        return manifest
+
+    return take
+
+
 def managed_sandbox_status_service(
     session_factory=None,
 ) -> ManagedSandboxStatusService:
@@ -306,16 +407,23 @@ def managed_sandbox_admin_service(
     드레인은 **내구 저장소**를 거친다(마이그레이션 046) -- API 프로세스에서
     켠 드레인을 Celery 워커의 admission 이 곧바로 본다.
 
-    아카이브 서비스는 **스토어가 배선된 뒤에야** 붙는다(CA10) -- 지금은
-    `None`이라 복구 승인이 `RuntimeError`로 거절된다. 조용히 성공한 척하는
-    것보다 낫다.
+    아카이브 서비스도 배선돼 있다(CA10 종결) -- 복구 승인이 실제로 검증된
+    아카이브 위에서 일어난다.
     """
     factory = session_factory or db_manager.get_session
+    config = settings.config
+    repository = _managed_sandbox_repository(factory)
+    provider = create_sandbox_provider(config.sandbox)
     return ManagedSandboxAdminService(
-        repository=_managed_sandbox_repository(factory),
-        archives=None,
+        repository=repository,
+        archives=create_managed_archive_service(
+            config=config, repository=repository
+        ),
+        archiver=create_managed_archive_taker(
+            config=config, repository=repository, sandboxes=provider
+        ),
         drains=create_provider_health_store(
-            factory, config=settings.config.sandbox.managed
+            factory, config=config.sandbox.managed
         ),
     )
 

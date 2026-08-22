@@ -233,3 +233,16 @@ class CodingSandboxRecoveryResponse(BaseModel):
     allocation_id: str
     generation: int
     state: str
+
+
+class CodingSandboxArchiveResponse(BaseModel):
+    """아카이브를 뜬 결과. **본문도 경로도 나가지 않는다** -- 식별자와 체크섬뿐이다.
+
+    `checksum` 은 그대로 복구 승인 요청에 넣는 값이다(`sha256:<64 hex>`).
+    """
+
+    allocation_id: str
+    archive_id: str
+    checksum: str
+    content_bytes: int
+    expires_at: datetime

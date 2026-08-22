@@ -66,6 +66,7 @@ class FakeManagedAdminService:
     def __init__(self) -> None:
         self.drains: list[tuple[str, str, bool]] = []
         self.retries: list[str] = []
+        self.archives: list[str] = []
         self.approvals: list[tuple[str, str, str]] = []
         self.conflict: PortableRecoveryConflict | None = None
 
@@ -80,6 +81,16 @@ class FakeManagedAdminService:
             "circuit": "unavailable" if drained else "healthy",
             # 마이그레이션 046 이후 드레인은 클러스터 범위다 (CA11 종결).
             "scope": "cluster",
+        }
+
+    async def archive_allocation(self, *, allocation_id: str):
+        self.archives.append(allocation_id)
+        return {
+            "allocation_id": allocation_id,
+            "archive_id": "pa_" + "a" * 32,
+            "checksum": _CHECKSUM,
+            "content_bytes": 2048,
+            "expires_at": NOW,
         }
 
     async def retry_cleanup(self, *, allocation_id: str):
@@ -195,6 +206,7 @@ def test_owner_status_requires_authentication() -> None:
     [
         ("post", "/api/v1/admin/coding/providers/e2b/drain", {"drained": True}),
         ("post", "/api/v1/admin/coding/allocations/msa_1/retry-cleanup", None),
+        ("post", "/api/v1/admin/coding/allocations/msa_1/archive", None),
         (
             "post",
             "/api/v1/admin/coding/allocations/msa_1/approve-recovery",
@@ -211,6 +223,7 @@ def test_non_admin_cannot_reach_admin_routes(method, path, payload) -> None:
     assert response.status_code in {401, 403}
     assert admin_service.drains == []
     assert admin_service.retries == []
+    assert admin_service.archives == []
     assert admin_service.approvals == []
 
 
@@ -238,6 +251,30 @@ def test_retry_cleanup_is_admin_only_and_bounded() -> None:
     assert response.status_code == 200
     assert admin_service.retries == ["msa_1"]
     assert set(response.json()) == {"allocation_id", "state"}
+
+
+def test_taking_an_archive_returns_the_checksum_recovery_will_need() -> None:
+    """뜬 결과의 체크섬이 그대로 복구 승인 요청에 들어간다.
+
+    두 값이 다른 표기면 운영자가 손으로 변환해야 하고, 그 변환이 틀리면
+    모든 승인이 거절된다.
+    """
+    client, _sandboxes, admin_service = make_client(admin=True)
+
+    response = client.post("/api/v1/admin/coding/allocations/msa_1/archive")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert admin_service.archives == ["msa_1"]
+    assert body["checksum"] == _CHECKSUM
+    # 본문도 경로도 나가지 않는다.
+    assert set(body) == {
+        "allocation_id",
+        "archive_id",
+        "checksum",
+        "content_bytes",
+        "expires_at",
+    }
 
 
 def test_recovery_approval_is_checksum_bound() -> None:

@@ -69,11 +69,16 @@ class ManagedSandboxAdminService:
         *,
         repository,
         archives=None,
+        archiver=None,
         drains: ProviderDrainStore | None = None,
         clock=None,
     ) -> None:
         self._repository = repository
         self._archives = archives
+        # `archiver(allocation_id) -> PortableArchiveManifest`. 콜러블로 받는
+        # 이유는 아카이브를 뜨려면 provider 세션과 할당별 cipher 가 필요한데,
+        # 그 조립은 런타임의 일이지 이 서비스의 일이 아니기 때문이다.
+        self._archiver = archiver
         self._drains = drains
         self._clock = clock or (lambda: datetime.now(UTC))
 
@@ -109,6 +114,27 @@ class ManagedSandboxAdminService:
             "drained": record.drained,
             "circuit": resolve_admission_health(record).value,
             "scope": "cluster",
+        }
+
+    async def archive_allocation(self, *, allocation_id: str) -> dict:
+        """살아 있는 할당의 워크스페이스를 지금 아카이브로 뜬다.
+
+        **복구의 재료를 만드는 유일한 경로다.** 아카이브는 샌드박스가 건강할
+        때 떠 둬야 의미가 있다 -- `MANUAL_RECOVERY_REQUIRED` 에 빠진 뒤에는
+        워크스페이스에 접근할 방법이 없다(그래서 이 조치는 그 전에 쓴다).
+
+        상태를 바꾸지 않는다. 아카이브를 뜨는 것은 라이프사이클 전이가 아니라
+        부수적인 기록이다.
+        """
+        if self._archiver is None:
+            raise RuntimeError("managed_sandbox_archiver_unavailable")
+        manifest = await self._archiver(allocation_id)
+        return {
+            "allocation_id": allocation_id,
+            "archive_id": manifest.archive_id,
+            "checksum": manifest.checksum,
+            "content_bytes": manifest.content_bytes,
+            "expires_at": manifest.expires_at,
         }
 
     async def retry_cleanup(self, *, allocation_id: str) -> dict:

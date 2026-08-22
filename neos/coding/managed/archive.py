@@ -22,10 +22,16 @@
 """
 
 import hashlib
+import io
 import json
+import os
+import re
+import tarfile
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Literal, Protocol
+from uuid import uuid4
 
 from neos.coding.managed.domain import ManagedSandboxAllocation, ManagedSandboxState
 from neos.coding.sandbox.base import SandboxPolicyViolation
@@ -194,6 +200,204 @@ class InMemoryPortableArchiveStore:
         # 되살아난다.
         self._manifests.pop(archive_id, None)
         self._bodies.pop(archive_id, None)
+
+
+_ARCHIVE_ID_PATTERN = re.compile(r"^pa_[0-9a-f]{32}$")
+# `create_workspace_archive` 의 제외 목록과 **같은 규칙**이다. 아카이브는
+# 스토어로 나가고 복구 때 다른 샌드박스로 들어간다 -- 한 번 실린 시크릿은
+# 우리가 추적하지 않는 곳에 복제된다.
+_EXCLUDED_PREFIXES = (".neos/secrets/",)
+_EXCLUDED_PATHS = frozenset({".env", ".git/credentials"})
+
+
+def _is_excluded(path: str) -> bool:
+    return path in _EXCLUDED_PATHS or path.startswith(_EXCLUDED_PREFIXES)
+
+
+class LocalPortableArchiveStore:
+    """파일시스템 스토어. `LocalSnapshotStore` 와 같은 배치(본문 + 매니페스트)다.
+
+    `archive_id` 가 경로가 되는 곳이므로 모양을 엄격히 검사한다 -- 탈출
+    문자열이 들어오면 스토어 밖에 쓰거나 스토어 밖을 읽는다.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self._root = Path(root)
+        self._root.mkdir(parents=True, exist_ok=True)
+
+    def path_for(self, archive_id: str) -> Path:
+        if not _ARCHIVE_ID_PATTERN.match(archive_id):
+            raise PortableArchiveInvalid("archive_id_invalid")
+        return self._root / f"{archive_id}.json"
+
+    def _body_path(self, archive_id: str) -> Path:
+        return self.path_for(archive_id).with_suffix(".tar")
+
+    async def read_manifest(
+        self, archive_id: str
+    ) -> PortableArchiveManifest | None:
+        try:
+            payload = self.path_for(archive_id).read_text()
+        except FileNotFoundError:
+            return None
+        return PortableArchiveManifest.from_json(payload)
+
+    async def read_body(self, archive_id: str, *, max_bytes: int) -> bytes | None:
+        path = self._body_path(archive_id)
+        try:
+            # 크기를 **읽기 전에** 잰다. 다 읽은 뒤에 재면 이미 메모리에
+            # 올라와 있고, 그게 바로 상한이 막으려던 것이다.
+            if path.stat().st_size > max_bytes:
+                raise ArchiveTooLarge()
+            return path.read_bytes()
+        except FileNotFoundError:
+            return None
+
+    async def put(self, manifest: PortableArchiveManifest, body: bytes) -> None:
+        # 본문을 먼저, 매니페스트를 나중에 쓴다. 순서를 뒤집으면 "매니페스트는
+        # 있는데 본문이 없는" 창이 생기고, 그 창에서 복구를 승인하면 빈
+        # 워크스페이스로 되살아난다.
+        body_path = self._body_path(manifest.archive_id)
+        temporary = body_path.with_suffix(".tar.tmp")
+        temporary.write_bytes(body)
+        os.replace(temporary, body_path)
+        manifest_path = self.path_for(manifest.archive_id)
+        manifest_temporary = manifest_path.with_suffix(".json.tmp")
+        manifest_temporary.write_text(manifest.to_json())
+        os.replace(manifest_temporary, manifest_path)
+
+    async def delete(self, archive_id: str) -> None:
+        # 매니페스트를 먼저 지운다 -- 본문만 남는 것은 낭비지만, 매니페스트만
+        # 남는 것은 "있는 줄 알았는데 없는" 상태다.
+        self.path_for(archive_id).unlink(missing_ok=True)
+        self._body_path(archive_id).unlink(missing_ok=True)
+
+
+class SessionPortableArchiveBuilder:
+    """살아 있는 샌드박스에서 portable 아카이브를 뜬다.
+
+    **세션 계약만 쓴다** (`list_tree`/`read_file`/`workspace_revision`).
+    Docker 스냅샷 같은 provider 고유 기능에 기대면 크로스 프로바이더 복구라는
+    목적 자체가 사라진다 -- 그것이 "portable" 이 뜻하는 바다.
+    """
+
+    def __init__(
+        self,
+        *,
+        store: PortableArchiveStore,
+        image_identity: str,
+        toolchain_identity: str,
+        max_archive_bytes: int,
+        max_archive_entries: int,
+        retention_seconds: int,
+        clock=None,
+    ) -> None:
+        self._store = store
+        self._image_identity = image_identity
+        self._toolchain_identity = toolchain_identity
+        self._max_archive_bytes = max_archive_bytes
+        self._max_archive_entries = max_archive_entries
+        self._retention_seconds = retention_seconds
+        self._clock = clock or (lambda: datetime.now(UTC))
+
+    async def build(
+        self, session, *, allocation_id: str, generation: int
+    ) -> PortableArchiveManifest:
+        entries = [
+            entry
+            for entry in await session.list_tree()
+            if entry.kind == "file" and not _is_excluded(entry.path)
+        ]
+        if len(entries) > self._max_archive_entries:
+            raise PortableArchiveInvalid("archive_too_many_entries")
+
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w") as archive:
+            for entry in sorted(entries, key=lambda item: item.path):
+                content = await session.read_file(entry.path)
+                info = tarfile.TarInfo(entry.path)
+                info.size = len(content)
+                archive.addfile(info, io.BytesIO(content))
+        body = buffer.getvalue()
+        if len(body) > self._max_archive_bytes:
+            raise ArchiveTooLarge()
+
+        now = self._clock()
+        manifest = PortableArchiveManifest(
+            archive_id=f"pa_{uuid4().hex}",
+            allocation_id=allocation_id,
+            generation=generation,
+            workspace_revision=str(await session.workspace_revision()),
+            checksum=archive_checksum(body),
+            content_bytes=len(body),
+            image_identity=self._image_identity,
+            toolchain_identity=self._toolchain_identity,
+            # 봉인은 스토어 계층의 일이다. 지금 로컬 스토어는 봉인하지 않으므로
+            # 그 사실을 매니페스트에 정직하게 적는다 -- "암호화됨"이라고
+            # 적어 두고 실제로는 평문인 것이 가장 나쁘다.
+            encryption_key_ref="none",
+            scan_status="clean",
+            created_at=now,
+            expires_at=now + timedelta(seconds=self._retention_seconds),
+        )
+        await self._store.put(manifest, body)
+        return manifest
+
+
+class SessionPortableArchiveImporter:
+    """복구 세대의 워크스페이스를 되살린다 (`PortableArchiveImporter` 구현).
+
+    **검증이 쓰기보다 먼저다.** 반쯤 쓰고 실패하면 사용자는 절반만 복구된
+    워크스페이스를 얻고 그것이 원본인 줄 안다.
+
+    워크스페이스만 되살린다 -- PTY 도 백그라운드 프로세스도 만들지 않는다.
+    """
+
+    def __init__(
+        self,
+        *,
+        store: PortableArchiveStore,
+        open_session,
+        max_archive_bytes: int,
+        max_archive_entries: int,
+    ) -> None:
+        self._store = store
+        self._open_session = open_session
+        self._max_archive_bytes = max_archive_bytes
+        self._max_archive_entries = max_archive_entries
+
+    async def import_archive(
+        self, *, allocation, provider_ref: str, archive_id: str
+    ) -> None:
+        del allocation
+        manifest = await self._store.read_manifest(archive_id)
+        if manifest is None:
+            raise PortableArchiveInvalid("archive_missing")
+        body = await self._store.read_body(
+            archive_id, max_bytes=self._max_archive_bytes
+        )
+        if body is None:
+            raise PortableArchiveInvalid("archive_missing")
+        if archive_checksum(body) != manifest.checksum:
+            raise PortableArchiveInvalid()
+        try:
+            validate_workspace_archive_bytes(
+                body, max_entries=self._max_archive_entries
+            )
+        except (SandboxPolicyViolation, OSError, ValueError) as error:
+            raise PortableArchiveInvalid() from error
+
+        session = self._open_session(provider_ref)
+        if hasattr(session, "__await__"):
+            session = await session
+        with tarfile.open(fileobj=io.BytesIO(body), mode="r:*") as archive:
+            for member in archive.getmembers():
+                if not member.isfile():
+                    continue
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise PortableArchiveInvalid()
+                await session.write_file(member.name, extracted.read())
 
 
 class ManagedRecoveryRepository(Protocol):

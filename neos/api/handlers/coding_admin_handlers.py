@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from neos.api.dependencies.auth import get_current_admin_user
 from neos.api.models.coding_models import (
+    CodingSandboxArchiveResponse,
     CodingSandboxCleanupRetryResponse,
     CodingSandboxDrainRequest,
     CodingSandboxDrainResponse,
@@ -59,6 +60,28 @@ async def drain_managed_provider(
         drained=request.drained,
         operator_id=current_admin.user_id,
     )
+
+
+@router.post(
+    "/allocations/{allocation_id}/archive",
+    response_model=CodingSandboxArchiveResponse,
+)
+async def archive_managed_allocation(
+    allocation_id: str,
+    admin: ManagedSandboxAdminService = Depends(get_managed_admin_service),
+):
+    """살아 있는 할당의 워크스페이스를 아카이브로 뜬다.
+
+    **복구의 재료를 만드는 유일한 경로다.** 샌드박스가 건강할 때 떠 둬야
+    의미가 있다 -- `manual_recovery_required` 에 빠진 뒤에는 워크스페이스에
+    접근할 방법이 없다.
+    """
+    try:
+        return await admin.archive_allocation(allocation_id=allocation_id)
+    except ManagedSandboxNotFound as error:
+        raise HTTPException(status_code=404, detail="allocation_not_found") from error
+    except PortableRecoveryConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.post(

@@ -1486,10 +1486,28 @@ generation + 1 이 **새 행 + 새 admission** 으로 생긴다. 감사 기록�
 
 `operator_id` 는 요청 본문이 아니라 **인증된 관리자 신원**에서 온다.
 
-⚠️ 아카이브를 **뜨는** 경로와 `PortableArchiveStore` 프로덕션 구현체는 아직
-없다. 그래서 복구는 구조상 가능하지만 운영상 재료가 없다. 복원기가 배선되지
-않은 채 복구 세대가 할당되면 조용히 넘어가지 않고 원장에 `archive_invalid` 로
-남는다.
+**아카이브는 이렇게 뜬다** (2026-08-23, CA10 종결):
+
+```
+POST /api/v1/admin/coding/allocations/{allocation_id}/archive
+```
+
+응답은 `archive_id` 와 `checksum` 을 준다 -- 그 체크섬을 그대로 복구 승인
+요청에 넣는다(표기가 같으므로 손으로 변환할 것이 없다).
+
+⚠️ **샌드박스가 건강할 때 떠 둬야 한다.** `manual_recovery_required` 에 빠진
+뒤에는 워크스페이스에 접근할 방법이 없다 -- 그때는 이미 늦다. 아카이브를
+언제 뜰지(정기적으로 / 위험한 작업 전에 / 운영자 판단으로)는 배치 정책이며
+자동 트리거는 아직 없다.
+
+아카이브는 **세션 계약만** 써서 뜬다(`list_tree`/`read_file`/`write_file`) --
+Docker 스냅샷 같은 provider 고유 기능에 기대지 않으므로 provider 를 넘나드는
+복구가 성립한다. `.env` 와 `.neos/secrets/` 는 제외된다.
+
+⚠️ **로컬 스토어는 봉인하지 않는다.** `sandbox.managed.archive_root` 는
+샌드박스 밖이어야 하고 백업 대상에서 제외해야 한다. 매니페스트의
+`encryption_key_ref` 가 `"none"` 인 것이 그 사실을 정직하게 적은 것이다 --
+"암호화됨"이라 적어 두고 평문인 것이 가장 나쁘다.
 
 ### 24.8 provider 이탈
 

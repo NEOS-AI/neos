@@ -33,7 +33,11 @@ from neos.coding.domain.models import CodingTaskStatus
 from neos.coding.persistence.postgres import PostgresCodingService, SessionFactory
 
 
-_POLICY_VERSION = "managed-v1"
+# admission 과 복구 승인이 **같은** 정책 버전을 적어야 한다. 두 곳이
+# 문자열을 따로 들고 있으면 언젠가 갈라지고, 갈라진 감사 기록은 어느 정책
+# 아래서 승인됐는지 답하지 못한다.
+MANAGED_POLICY_VERSION = "managed-v1"
+_POLICY_VERSION = MANAGED_POLICY_VERSION
 _LIVE_QUOTA_STATES = (
     ManagedSandboxState.ALLOCATING.value,
     ManagedSandboxState.ACTIVE.value,
@@ -807,6 +811,46 @@ class PostgresManagedSandboxRepository:
                     {"allocation_id": allocation_id, "now": now},
                 )
         return ManagedSandboxState(state.state)
+
+    async def set_archive_ref(
+        self, allocation_id: str, *, archive_id: str, now: datetime
+    ) -> ManagedSandboxAllocation:
+        """할당이 어떤 아카이브를 들고 있는지 기록한다.
+
+        상태를 바꾸지 않는다 -- 아카이브를 뜨는 것은 라이프사이클 전이가
+        아니라 부수적인 기록이다. 펜스도 요구하지 않는다: 이 값은 복구가
+        **읽기만** 하고, 최신 아카이브로 덮어쓰는 것이 언제나 옳다.
+        """
+        _require_timezone_aware("archive time", now)
+        async with await self._session_factory() as session:
+            async with session.begin():
+                row = (
+                    await session.execute(
+                        text(
+                            """
+                            UPDATE coding_managed_sandboxes
+                               SET archive_ref = :archive_ref,
+                                   version = version + 1,
+                                   updated_at = :now
+                             WHERE allocation_id = :allocation_id
+                         RETURNING allocation_id, tenant_id, task_id, run_id,
+                                   provider, region, provider_ref,
+                                   ownership_digest, state, generation,
+                                   fencing_token, lease_expires_at,
+                                   absolute_expires_at, version, error_code,
+                                   snapshot_ref, archive_ref, image_identity
+                            """
+                        ),
+                        {
+                            "allocation_id": allocation_id,
+                            "archive_ref": archive_id,
+                            "now": now,
+                        },
+                    )
+                ).one_or_none()
+        if row is None:
+            raise ManagedSandboxNotFound(allocation_id)
+        return _allocation_from_row(row)
 
     async def cleanup_attempt_count(self, allocation_id: str) -> int:
         """이 할당에 대해 이미 기록된 정리 시도 수 -- 백오프 인덱스가 된다.
