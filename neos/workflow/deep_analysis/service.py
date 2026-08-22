@@ -4,14 +4,22 @@ from __future__ import annotations
 
 from neos.config.settings import settings
 
+from .citation import CitationRenderer
 from .graders.agentic import AgenticGrader
 from .graders.deterministic import DeterministicGrader
 from .graders.report import ReportGrader
 from .ledger import Ledger
-from .manifest import MANIFEST_KIND, build_manifest, component_id, prompt_hashes
+from .manifest import (
+    MANIFEST_KIND,
+    build_manifest,
+    component_id,
+    component_id_for_class,
+    prompt_hashes,
+)
 from .model_roles import resolve_all, resolve_harness_model
 from .orchestrator import Orchestrator
 from .skill_selector import SkillSelector
+from .synthesizer import Synthesizer
 from .worker import Worker
 
 
@@ -167,8 +175,11 @@ async def build_orchestrator(
             "grader": component_id(grader),
             "agentic_grader": component_id(agentic_grader),
             "report_grader": component_id(report_grader),
-            "synthesizer": None,
-            "citation_renderer": None,
+            # `build_orchestrator` 는 이 kwargs 를 항상 None 으로 넘기지만
+            # `Orchestrator.__init__` 은 그럴 때 Synthesizer/CitationRenderer 를
+            # 무조건 만든다 -- 인스턴스가 없을 뿐 부품은 항상 배선된다.
+            "synthesizer": component_id_for_class(Synthesizer),
+            "citation_renderer": component_id_for_class(CitationRenderer),
             "search_fn": getattr(search_fn, "__qualname__", None),
             "fetch_fn": getattr(fetch_fn, "__qualname__", None),
             "cassette": cassette is not None,

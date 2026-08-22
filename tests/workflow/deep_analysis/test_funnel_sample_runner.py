@@ -539,6 +539,137 @@ def test_main_threads_a_recording_cassette_through_build_orchestrator(
     assert not captured["cassette"].path.parent.exists()
 
 
+def test_gate_only_examines_completed_runs_so_one_failure_does_not_block_the_rest(
+    monkeypatch, tmp_path
+):
+    """FIX 2: the gate must not destroy a sample it exists to protect.
+
+    A run that dies before its first checkpoint never gets a `run_manifest`
+    committed -- `Ledger.log` only flushes, and `Orchestrator.run`'s failure
+    handler calls `db.rollback()` before `fail_run()`. Before this fix the
+    gate examined every run_id (including failed ones), so one early
+    failure out of six would raise `MissingManifestError` and the five
+    completed runs' artifact would never be written -- with no chance to
+    re-run, since samples are exactly-once."""
+    captured = {}
+
+    async def successful_preflight(*args):
+        return None
+
+    async def fake_run_sample(**kwargs):
+        return {
+            "schema_version": "1",
+            "question_set_version": "mixed-v1",
+            "questions": {
+                "schema_version": "1",
+                "items": _declared_questions(),
+            },
+            "dev_runs": [
+                _completed(case, "dev", order=i)
+                for i, case in enumerate(QUESTION_CASES)
+            ],
+            "selection": None,
+            "default_run": {
+                "case_id": QUESTION_CASES[0].case_id,
+                "category": QUESTION_CASES[0].category,
+                "profile": "default",
+                "status": "failed",
+                "run_id": "default-run-died-early",
+                "error": {"type": "RuntimeError", "stage": "execution"},
+            },
+            "dev_funnel": {},
+        }
+
+    @asynccontextmanager
+    async def fake_session_ctx():
+        yield object()
+
+    async def fake_runs_without_manifest(session, run_ids):
+        captured["gated_run_ids"] = list(run_ids)
+        return []
+
+    async def fake_manifests_for(session, run_ids):
+        return {run_id: {"manifest_version": 1} for run_id in run_ids}
+
+    monkeypatch.setattr(cli, "preflight", successful_preflight)
+    monkeypatch.setattr(cli, "run_sample", fake_run_sample)
+    monkeypatch.setattr(cli, "get_session_ctx", fake_session_ctx)
+    monkeypatch.setattr(cli, "runs_without_manifest", fake_runs_without_manifest)
+    monkeypatch.setattr(cli, "manifests_for", fake_manifests_for)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["deep_analysis_funnel_sample", "--output-root", str(tmp_path)],
+    )
+
+    cli.main()  # must not raise
+
+    expected_completed_ids = [
+        case.case_id + "-run" for case in QUESTION_CASES
+    ]
+    assert captured["gated_run_ids"] == expected_completed_ids
+    assert "default-run-died-early" not in captured["gated_run_ids"]
+
+    artifact_dirs = list(tmp_path.iterdir())
+    assert len(artifact_dirs) == 1
+
+
+def test_gate_still_raises_when_a_completed_run_is_missing_its_manifest(
+    monkeypatch, tmp_path
+):
+    """Narrowing the gate to completed runs must not weaken it: a run whose
+    status *is* `completed` but has no manifest is still refused."""
+
+    async def successful_preflight(*args):
+        return None
+
+    async def fake_run_sample(**kwargs):
+        return {
+            "schema_version": "1",
+            "question_set_version": "mixed-v1",
+            "questions": {
+                "schema_version": "1",
+                "items": _declared_questions(),
+            },
+            "dev_runs": [
+                _completed(case, "dev", order=i)
+                for i, case in enumerate(QUESTION_CASES)
+            ],
+            "selection": None,
+            "default_run": None,
+            "dev_funnel": {},
+        }
+
+    @asynccontextmanager
+    async def fake_session_ctx():
+        yield object()
+
+    missing_run_id = QUESTION_CASES[0].case_id + "-run"
+
+    async def fake_runs_without_manifest(session, run_ids):
+        return [missing_run_id]
+
+    async def fake_manifests_for(session, run_ids):
+        pytest.fail("manifests_for must not be called when a run is missing")
+
+    monkeypatch.setattr(cli, "preflight", successful_preflight)
+    monkeypatch.setattr(cli, "run_sample", fake_run_sample)
+    monkeypatch.setattr(cli, "get_session_ctx", fake_session_ctx)
+    monkeypatch.setattr(cli, "runs_without_manifest", fake_runs_without_manifest)
+    monkeypatch.setattr(cli, "manifests_for", fake_manifests_for)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["deep_analysis_funnel_sample", "--output-root", str(tmp_path)],
+    )
+
+    with pytest.raises(cli.MissingManifestError) as caught:
+        cli.main()
+
+    assert caught.value.run_ids == [missing_run_id]
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_main_cleans_up_cassette_temp_dir_when_sample_raises(
     monkeypatch, tmp_path
 ):

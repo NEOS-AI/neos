@@ -113,12 +113,23 @@ def _scrub_config(config_fingerprint: dict) -> dict:
     (태스크 5). 병목 진단에 커밋 SHA가 쓰일 이유가 없으므로 프롬프트에
     넣기 전에 뗀다. `branch`/`dirty`는 SHA와 달리 특정 실행을 가리키지
     않으므로 남긴다.
+
+    `runs`(H1 이후 `{run_id: manifest}` 맵)의 키인 run_id 도 같은 이유로
+    뗀다 -- run_id 는 커밋 SHA보다 더 강한 손잡이다. SHA 는 같은 커밋을
+    공유하는 모든 표본을 하나로 묶을 뿐이지만, run_id 는 정확히 이 표본의
+    정확히 이 런 하나를 가리킨다. 매니페스트의 *내용*(모델·예산·프롬프트
+    해시 등)은 병목 진단에 쓰이므로 남기고, 그것을 어느 run 이 냈는지
+    구별하는 키만 뗀다 -- `runs` 를 dict 에서 매니페스트 값들의 list 로
+    바꾼다.
     """
     scrubbed = dict(config_fingerprint)
     git_info = scrubbed.get("git")
     if isinstance(git_info, dict) and "commit" in git_info:
         git_info = {k: v for k, v in git_info.items() if k != "commit"}
         scrubbed["git"] = git_info
+    runs = scrubbed.get("runs")
+    if isinstance(runs, dict):
+        scrubbed["runs"] = list(runs.values())
     return scrubbed
 
 

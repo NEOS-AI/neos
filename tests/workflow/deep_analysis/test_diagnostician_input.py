@@ -254,6 +254,46 @@ def test_summary_config_without_a_git_block_is_left_alone():
     assert summary["config"] == {"global_token_cap": 140000}
 
 
+def test_summary_drops_run_ids_from_the_runs_map():
+    """FIX 3: run_id 는 커밋 SHA보다 강한 손잡이다.
+
+    H1 이후 `config_fingerprint.runs`는 `{run_id: manifest}` 맵이다. SHA는
+    같은 커밋을 공유하는 여러 표본을 묶을 뿐이지만 run_id는 정확히 이
+    표본의 정확히 이 런 하나를 가리킨다. 매니페스트 내용(모델·예산 등)은
+    병목 진단에 쓰이므로 남기고, 그것을 누구의 런인지 구별하는 키만 뗀다.
+    """
+    summary = build_summary(
+        [],
+        run_ids=[],
+        report_bodies={},
+        config_fingerprint={
+            "manifest_version": 1,
+            "git": {"branch": "dev", "commit": "deadbeef", "dirty": False},
+            "runs": {
+                "run-aaaaaaaa-1111-2222-3333-444455556666": {
+                    "profile": "dev",
+                    "budget": {"global_token_cap": 140000},
+                },
+                "run-bbbbbbbb-1111-2222-3333-444455556666": {
+                    "profile": "default",
+                    "budget": {"global_token_cap": 300000},
+                },
+            },
+        },
+    )
+
+    serialized = json.dumps(summary["config"])
+    assert "run-aaaaaaaa-1111-2222-3333-444455556666" not in serialized
+    assert "run-bbbbbbbb-1111-2222-3333-444455556666" not in serialized
+    assert isinstance(summary["config"]["runs"], list)
+    assert {"profile": "dev", "budget": {"global_token_cap": 140000}} in (
+        summary["config"]["runs"]
+    )
+    assert {"profile": "default", "budget": {"global_token_cap": 300000}} in (
+        summary["config"]["runs"]
+    )
+
+
 def test_the_aggregator_never_branches_on_a_sample_identifier():
     """표본별로 요약을 고르면 정답을 아는 사람이 답을 흘릴 수 있다.
 
