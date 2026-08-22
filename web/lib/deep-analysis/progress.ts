@@ -142,6 +142,10 @@ function activityLabel(event: DeepAnalysisJobEvent): string | null {
   if (kind === "recovered") {
     return "중단된 질문 회수";
   }
+  if (kind === "run_manifest") {
+    const profile = asString(payload.profile);
+    return profile ? `구성 확정 · ${profile} 프로파일` : "구성 확정";
+  }
   if (kind === "synth_pass") {
     return "리포트 조립";
   }

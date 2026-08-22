@@ -287,3 +287,22 @@ test("모르는 kind는 여전히 커서를 전진시킨다", () => {
   assert.equal(state.lastActivity, null);
   assert.deepEqual(state.degradations, []);
 });
+
+test("run_manifest에 라벨이 붙는다 (FE1 재발 방지)", () => {
+  const state = applyAll([
+    event(1, "job_started"),
+    event(2, "run_manifest", { profile: "dev" }),
+  ]);
+  assert.equal(state.lastActivity, "구성 확정 · dev 프로파일");
+  assert.equal(state.cursor, 2);
+});
+
+test("프로파일이 없어도 run_manifest 라벨은 null이 아니다", () => {
+  const state = applyAll([event(1, "run_manifest", {})]);
+  assert.equal(state.lastActivity, "구성 확정");
+});
+
+test("run_manifest는 강등이 아니다", () => {
+  const state = applyAll([event(1, "run_manifest", { profile: "dev" })]);
+  assert.deepEqual(state.degradations, []);
+});
