@@ -14,7 +14,6 @@ import tempfile
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 from neos.database.connection import get_session_ctx
 from neos.workflow.deep_analysis.cassette import Cassette
@@ -25,6 +24,8 @@ from neos.workflow.deep_analysis.funnel_sample_runner import (
     write_artifacts,
 )
 from neos.workflow.deep_analysis.jobs import execute_run
+from neos.workflow.deep_analysis.manifest import MANIFEST_VERSION
+from neos.workflow.deep_analysis.manifest_reader import manifests_for
 from neos.workflow.deep_analysis.service import build_orchestrator
 
 
@@ -102,41 +103,6 @@ def _git_identity() -> dict:
     }
 
 
-def _resolved_models(config) -> dict:
-    """The model IDs that will actually run, not the config that selects them.
-
-    `deep_analysis.models.*` are all `None` -- the routing contract's "use
-    the role default" -- so every past manifest recorded four nulls and
-    could not answer the one question this sample is read against: was the
-    judge the same model as the SCOUT worker? (E3, roadmap §6 ①.)
-
-    The roles mirror the call sites exactly and must stay in step with them:
-    `service.py` (judge), `worker.py` (scout/dig), `synthesizer.py` and
-    `orchestrator.py` (synth/dig). A role guessed here would put a lie in
-    the one artifact that cannot be regenerated.
-    """
-    roles = {
-        "scout": ("everyday", config.models.scout),
-        "judge": ("everyday", config.models.judge),
-        "dig": ("powerful", config.models.dig),
-        "synth": ("powerful", config.models.synth),
-    }
-    resolved = {}
-    for name, (role, override) in roles.items():
-        resolution = resolve_model(
-            config=settings.config.model_routing,
-            provider="anthropic",
-            role=role,
-            feature_override=override,
-        )
-        resolved[name] = {
-            "role": role,
-            "model": resolution.model,
-            "source": str(getattr(resolution, "source", "unknown")),
-        }
-    return resolved
-
-
 def _verification(test_report: Path | None) -> dict:
     """The pre-run gates §10.2 lists in the execution receipt.
 
@@ -178,52 +144,21 @@ def _verification(test_report: Path | None) -> dict:
     return {"ruff": ruff, "tests": tests}
 
 
-def _fingerprint() -> dict:
-    """Non-secret runtime configuration in effect for this sample run.
+def _fingerprint(manifests: dict[str, dict]) -> dict:
+    """이 표본의 런별 구성. 계산하지 않는다 -- 원장이 답한다.
 
-    Caps, thresholds, and model IDs only — never credentials. Model IDs are
-    configuration, not secrets.
+    이전에는 이 함수가 설정을 다시 읽어 지문을 만들었고, 그래서 dev 런
+    5건에 기본 프로파일 캡을 적었다(표본 #20). 이제 값의 출처는
+    `build_orchestrator` 가 발행한 이벤트 하나뿐이다.
+
+    `git` 이 `runs` 밖에 있는 이유: 저장소 상태는 런의 구성이 아니라
+    표본의 구성이고, `deep_analysis_diagnostician.py` 의 `_scrub_config()`
+    가 이 자리에서 `git.commit` 을 떼어낸다.
     """
-    config = settings.config.deep_analysis
     return {
-        "global_token_cap": config.global_token_cap,
-        "max_depth": config.max_depth,
-        "quote_match_threshold": config.quote_match_threshold,
-        # Raised 1500 -> 3200 on 2026-07-28 after truncated decompose JSON
-        # failed 5 of 7 runs. Recorded so a later reader can tell which
-        # samples ran under which cap.
-        "decompose_max_tokens": config.decompose_max_tokens,
-        "judge_max_output_tokens": config.judge_max_output_tokens,
-        "entailment_max_output_tokens": config.entailment_max_output_tokens,
-        "fetch_user_agent": config.fetch_user_agent,
-        # 하위 질문 채택(D65)과 그 예산·심사 정책(D68). 표본 #17 은 이것들이
-        # 지문에 없어서, 영수증만 봐서는 어떤 채택 정책으로 돌았는지 알 수
-        # 없었다 -- 두 표본이 다른 정책으로 돌아도 지문이 같아 보인다.
-        "subquestions": {
-            "adopt_threshold": config.subq_adopt_threshold,
-            "adopt_cap": config.subq_adopt_cap,
-            "budget_policy": config.subq_budget_policy,
-            "reviewer_enabled": config.subq_reviewer_enabled,
-        },
-        "models": {
-            "scout": config.models.scout,
-            "dig": config.models.dig,
-            "synth": config.models.synth,
-            "judge": config.models.judge,
-        },
-        # `models` above is the *configuration* (all None = role default).
-        # This is what those defaults resolve to -- the only way a later
-        # reader can tell judge and scout apart. Both are kept: the config
-        # says what was chosen, the resolution says what ran.
-        "resolved_models": _resolved_models(config),
+        "manifest_version": MANIFEST_VERSION,
         "git": _git_identity(),
-        "effort": {
-            name: {
-                "token_cap": effort.token_cap,
-                "wall_clock_cap": effort.wall_clock_cap,
-            }
-            for name, effort in config.effort.items()
-        },
+        "runs": manifests,
     }
 
 
@@ -308,7 +243,7 @@ async def _main(
                 receipt=_receipt(
                     started_at, finished_at, 1, verification=verification
                 ),
-                fingerprint=_fingerprint(),
+                fingerprint=_fingerprint({}),
             )
             _finalize_cassette(cassette, artifact_dir)
             raise
@@ -318,15 +253,7 @@ async def _main(
             item.get("status") == "completed" for item in result["dev_runs"]
         ):
             raise NoCompletedDevRunsError("no dev runs completed")
-        artifact_dir = write_artifacts(
-            result,
-            output_root,
-            receipt=_receipt(
-                started_at, finished_at, 0, verification=verification
-            ),
-            fingerprint=_fingerprint(),
-        )
-        _finalize_cassette(cassette, artifact_dir)
+
         run_ids = [
             item["run_id"]
             for item in result["dev_runs"]
@@ -335,6 +262,19 @@ async def _main(
         default_run = result.get("default_run")
         if default_run and default_run.get("run_id"):
             run_ids.append(default_run["run_id"])
+
+        async with get_session_ctx() as session:
+            manifests = await manifests_for(session, run_ids)
+
+        artifact_dir = write_artifacts(
+            result,
+            output_root,
+            receipt=_receipt(
+                started_at, finished_at, 0, verification=verification
+            ),
+            fingerprint=_fingerprint(manifests),
+        )
+        _finalize_cassette(cassette, artifact_dir)
         return artifact_dir, run_ids
     finally:
         shutil.rmtree(cassette_tmp_dir, ignore_errors=True)
