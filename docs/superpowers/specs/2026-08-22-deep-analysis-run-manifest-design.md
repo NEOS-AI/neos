@@ -164,9 +164,9 @@ await ledger.log(MANIFEST_KIND, None, manifest)
               "source": "role_default", "override": null},
     "dig":   {"role": "powerful", "model": "claude-opus-5",  "source": "role_default", "override": null},
     "synth": {"role": "powerful", "model": "claude-opus-5",  "source": "role_default", "override": null},
-    "judge": {"role": "everyday", "model": "claude-sonnet-5","source": "role_default", "override": null},
-    "judge_equals_scout": true
+    "judge": {"role": "everyday", "model": "claude-sonnet-5","source": "role_default", "override": null}
   },
+  "judge_equals_scout": true,
   "budget": {
     "global_token_cap": 140000,
     "synthesis_max_tokens": 2000,
@@ -223,12 +223,19 @@ dev  global_token_cap 140000 · synthesis_max_tokens 2000
    시점엔 remaining = cap이다. 중복이지만, **세 번 틀린 것이 정확히 이 뺄셈**이다
    (D75의 82,400 → D77의 72,000 → D78의 86,400). 읽는 사람이 계산하게 두면 네 번째가 온다.
 
-2. **`judge_equals_scout`을 계산해서 싣는다.** E3(§6 ①)은 "둘 다 `None`이라 같은
+2. **`judge_equals_scout`을 계산해서 싣는다 — `models` 안이 아니라 최상위에.**
+   E3(§6 ①)은 "둘 다 `None`이라 같은
    역할로 해석"돼 생겼고, 지금도 깨져 있다. 매니페스트가 그것을 **자백하게** 만든다.
    §15.4 금지 4번("judge 플러그인과 worker 플러그인은 같은 인스턴스일 수 없다")이
    플러그인 층에서 세우려는 방어선을, 모델 층에서 먼저 관측 가능하게 만드는 것이다.
    ⚠️ **이 필드는 관측이지 강제가 아니다** — E3는 §8 W4가 해소하며 이 설계는
    모델 선택을 바꾸지 않는다(바꾸면 이전 표본과 비교 불가해진다, §6 ①).
+
+   > 📌 **2026-08-22 정정 (구현 중, 룰링 R4).** 이 문서는 처음에 이 필드를 `models`
+   > **안에** 그렸다. `models`의 다른 값은 전부 해석 dict인데 하나만 bool이 되어,
+   > `models.items()`를 도는 소비자가 깨진다. 지금은 그것을 도는 소비자가 없어서
+   > 옮기는 값이 0이고 — `manifest_version: 1`이 표본에 실리고 나면 같은 이동이
+   > 버전 범프를 요구한다. 그래서 **지금** 최상위로 옮겼다.
 
 3. **`models.*.override`를 해석 결과와 나란히 싣는다.** `config`(무엇을 골랐나)와
    `resolution`(무엇이 돌았나)은 다른 사실이고, 기존 지문이 둘을 모두 보존한
