@@ -189,8 +189,9 @@ class FakeManagedSandboxAdapter:
         if self._destroy_result is not None:
             return self._destroy_result
         del self._records[provider_ref]
-        del self._idempotency[state.idempotency_key]
-        del self._requests[state.idempotency_key]
+        self._idempotency.pop(state.idempotency_key, None)
+        # `seed()`로 심은 리소스는 allocate 를 거치지 않아 원본 요청이 없다.
+        self._requests.pop(state.idempotency_key, None)
         return DestroyResult(
             confirmed=True,
             ownership_verified=True,
@@ -216,6 +217,33 @@ class FakeManagedSandboxAdapter:
             region=region,
             state=ProviderCircuitState.HEALTHY,
         )
+
+    def seed(
+        self,
+        *,
+        provider_ref: str,
+        allocation_id: str,
+        idempotency_key: str,
+        ownership_digest: str,
+        state: ManagedSandboxState = ManagedSandboxState.ACTIVE,
+    ) -> None:
+        """이미 provider 쪽에 리소스가 있는 상태를 만든다.
+
+        `allocate()`를 거치지 않고 시작해야 하는 테스트(정리·재발견 등)를
+        위한 것이다 -- `forget_all()`의 반대 방향이다. `_requests`는 채우지
+        않는다: 그건 `allocate()`가 같은 키로 다시 불렸을 때 요청이 바뀌지
+        않았는지 대조하는 용도라서, allocate 를 거치지 않은 리소스에는
+        대조할 원본 요청이 애초에 없다.
+        """
+        self._records[provider_ref] = ProviderSandboxState(
+            provider_ref=provider_ref,
+            allocation_id=allocation_id,
+            idempotency_key=idempotency_key,
+            state=state,
+            ownership_digest=ownership_digest,
+            ownership_verified=True,
+        )
+        self._idempotency[idempotency_key] = provider_ref
 
     def forget_all(self) -> None:
         """내부 기록을 모두 비운다 -- 재발견이 아무것도 못 찾게 만드는 테스트

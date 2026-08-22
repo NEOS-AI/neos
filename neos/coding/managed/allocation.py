@@ -131,22 +131,28 @@ _ADVANCEABLE_STATES = frozenset(
     }
 )
 
-_VALIDATION_ERROR_CODES: dict[type[ManagedAdapterError], ProviderErrorCode] = {
+_ADAPTER_ERROR_CODES: dict[type[ManagedAdapterError], ProviderErrorCode] = {
+    ManagedAdapterTimeoutError: ProviderErrorCode.PROVIDER_TIMEOUT,
     ManagedAdapterValidationError: ProviderErrorCode.POLICY_DENIED,
     ManagedAdapterOwnershipError: ProviderErrorCode.PROVIDER_AUTH_ERROR,
     ManagedAdapterNotFoundError: ProviderErrorCode.PROVIDER_NOT_FOUND,
 }
 
 
-def _error_code(error: ManagedAdapterError) -> ProviderErrorCode:
-    """확정 실패(typed error)를 원장에 남길 `ProviderErrorCode`로 옮긴다.
+def provider_error_code(error: ManagedAdapterError) -> ProviderErrorCode:
+    """어댑터 실패를 원장에 남길 `ProviderErrorCode`로 옮긴다.
 
-    `ManagedAdapterTimeoutError`는 여기 오지 않는다 -- 호출자가 모호성으로
-    먼저 갈라낸다. `isinstance` 순서는 무관하다: 매핑에 있는 세 타입은
-    서로의 하위 클래스가 아니다(`ManagedAdapterCapabilityError`만
-    `ManagedAdapterValidationError`의 하위이고, `isinstance`가 그대로 잡는다).
+    `isinstance` 순서는 무관하다: 매핑에 있는 네 타입은 서로의 하위 클래스가
+    아니다(`ManagedAdapterCapabilityError`만 `ManagedAdapterValidationError`의
+    하위이고, `isinstance`가 그대로 잡는다).
+
+    타임아웃도 매핑에 있다 -- 할당 경로(`_allocate`)는 이 함수에 닿기 전에
+    타임아웃을 **모호성**으로 먼저 갈라내므로 거기서는 쓰이지 않지만,
+    정리 경로(`neos.coding.managed.lifecycle`)에는 재발견 같은 갈래가 없어
+    타임아웃도 그냥 재시도 사유로 기록한다. 매핑을 총함수로 두는 편이
+    호출자마다 빠진 갈래를 다시 발명하는 것보다 안전하다.
     """
-    for error_type, code in _VALIDATION_ERROR_CODES.items():
+    for error_type, code in _ADAPTER_ERROR_CODES.items():
         if isinstance(error, error_type):
             return code
     return ProviderErrorCode.OTHER
@@ -277,7 +283,7 @@ class ManagedSandboxAllocationService:
                 lease,
                 ManagedSandboxState.FAILED,
                 now=now,
-                error_code=_error_code(error),
+                error_code=provider_error_code(error),
             )
         # 여기서 안 잡히는 예외(어댑터의 버그성 RuntimeError, 또는 뒤이은
         # commit_state/commit_active 자체의 실패 등 ManagedAdapterError

@@ -69,6 +69,17 @@ app.conf.update(
         'neos.coding.workers.celery_tasks.execute_coding_task': {
             'queue': settings.CODING_CELERY_QUEUE
         },
+        # 관리형 샌드박스 컨트롤 플레인 — 처음에는 기존 coding 큐를 그대로
+        # 쓴다(플랜 14 Task 6). 전용 큐는 실제 부하를 본 뒤에 가른다.
+        'neos.coding.managed.allocate': {'queue': settings.CODING_CELERY_QUEUE},
+        'neos.coding.managed.reconcile': {'queue': settings.CODING_CELERY_QUEUE},
+        'neos.coding.managed.cleanup': {'queue': settings.CODING_CELERY_QUEUE},
+        'neos.coding.managed.reconcile_quota': {
+            'queue': settings.CODING_CELERY_QUEUE
+        },
+        'neos.coding.managed.probe_health': {
+            'queue': settings.CODING_CELERY_QUEUE
+        },
     },
 
     # 큐 정의 (우선순위 지원)
@@ -163,6 +174,45 @@ def configure_coding_beat_schedule(
         schedule.pop("expire-coding-approvals", None)
 
 
+_MANAGED_SANDBOX_BEAT_ENTRIES = (
+    "reconcile-managed-sandboxes",
+    "reconcile-managed-sandbox-quota",
+    "probe-managed-sandbox-health",
+)
+
+
+def configure_managed_sandbox_beat_schedule(
+    schedule: dict,
+    *,
+    enabled: bool,
+    reconciliation_interval: float,
+    health_interval: float,
+) -> None:
+    """관리형 컨트롤 플레인의 beat 항목.
+
+    `sandbox.managed.enabled` **하나**에만 묶는다 -- `global_kill_switch`는
+    신규 admission 만 막는 스위치라서 여기 들어오면 안 된다. 킬 스위치를 켠
+    동안에도 이미 만들어진 리소스의 정리·조정은 계속 돌아야 한다
+    (`neos.coding.managed.workers.managed_control_plane_enabled` 참조).
+    """
+    if enabled:
+        schedule["reconcile-managed-sandboxes"] = {
+            "task": "neos.coding.managed.reconcile",
+            "schedule": reconciliation_interval,
+        }
+        schedule["reconcile-managed-sandbox-quota"] = {
+            "task": "neos.coding.managed.reconcile_quota",
+            "schedule": reconciliation_interval,
+        }
+        schedule["probe-managed-sandbox-health"] = {
+            "task": "neos.coding.managed.probe_health",
+            "schedule": health_interval,
+        }
+    else:
+        for entry in _MANAGED_SANDBOX_BEAT_ENTRIES:
+            schedule.pop(entry, None)
+
+
 # Celery Beat 스케줄 (주기적 태스크)
 app.conf.beat_schedule = {
     # 예: 매일 자정에 오래된 체크포인트 정리
@@ -201,6 +251,16 @@ configure_coding_beat_schedule(
     app.conf.beat_schedule,
     enabled=settings.CODING_CELERY_ENABLED,
     interval=settings.CODING_CELERY_RECONCILIATION_SECONDS,
+)
+
+_managed_sandbox_config = settings.config.sandbox.managed
+configure_managed_sandbox_beat_schedule(
+    app.conf.beat_schedule,
+    enabled=_managed_sandbox_config.enabled,
+    reconciliation_interval=(
+        _managed_sandbox_config.reconciliation_interval_seconds
+    ),
+    health_interval=_managed_sandbox_config.health_probe_interval_seconds,
 )
 
 

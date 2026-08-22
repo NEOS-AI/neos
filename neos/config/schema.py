@@ -1379,6 +1379,38 @@ class ManagedSandboxConfig(StrictConfigModel):
     )
     cleanup_batch_size: int = Field(default=100, gt=0, le=1000)
     cleanup_slo_seconds: int = Field(default=300, gt=0)
+    cleanup_retry_backoff_seconds: tuple[int, ...] = Field(
+        default=(5, 15, 45, 120, 300),
+        description=(
+            "정리 실패 후 다음 시도까지의 대기 시간 수열. 마지막 값이 상한이며 "
+            "그 뒤로는 재시도가 멈추지 않고 그 간격으로 계속된다 -- 증명되지 "
+            "않은 provider 리소스를 '정리됨'으로 적는 것보다 영원히 재시도하는 "
+            "편이 fail-closed 다. 정체는 cleanup_slo_seconds 와 "
+            "coding_sandbox_cleanup_age_seconds 게이지가 드러낸다."
+        ),
+    )
+    lifecycle_lease_seconds: int = Field(
+        default=120,
+        gt=0,
+        le=3600,
+        description=(
+            "정리 워커가 잡는 리스의 수명. destroy 호출 한 번을 덮을 만큼 "
+            "길어야 하고, 워커가 죽었을 때 다음 조정 주기가 회수할 수 있을 "
+            "만큼 짧아야 한다."
+        ),
+    )
+    reconciliation_interval_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        le=3600,
+        description="조정·정리·쿼터 beat 주기.",
+    )
+    health_probe_interval_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        le=3600,
+        description="provider 헬스 프로브 beat 주기.",
+    )
     health_window_size: int = Field(default=20, ge=4, le=100)
     degraded_failure_ratio: float = Field(default=0.25, ge=0, le=1)
     unavailable_failure_ratio: float = Field(default=0.5, ge=0, le=1)
@@ -1392,6 +1424,22 @@ class ManagedSandboxConfig(StrictConfigModel):
         ge=1,
         description="provider 참조 봉인에 쓰는 키 버전.",
     )
+
+    @field_validator("cleanup_retry_backoff_seconds")
+    @classmethod
+    def validate_cleanup_retry_backoff(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        """빈 수열과 뒷걸음질을 거부한다.
+
+        빈 수열이면 다음 시도 시각을 계산할 수 없고, 뒷걸음질하는 수열은
+        백오프가 아니라 진동이라 장애 중인 provider 를 더 세게 때린다.
+        """
+        if not value:
+            raise ValueError("cleanup_retry_backoff_seconds must not be empty")
+        if any(delay <= 0 for delay in value):
+            raise ValueError("cleanup_retry_backoff_seconds must be positive")
+        if any(later < earlier for earlier, later in zip(value, value[1:])):
+            raise ValueError("cleanup_retry_backoff_seconds must not decrease")
+        return value
 
 
 class SandboxConfig(StrictConfigModel):
