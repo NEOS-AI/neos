@@ -1,5 +1,7 @@
 import inspect
 
+import pytest
+
 from neos.config.model_routing import ModelResolution, ResolutionSource
 from neos.workflow.deep_analysis.manifest import (
     MANIFEST_KIND,
@@ -93,14 +95,14 @@ def test_build_manifest_confesses_judge_equals_scout():
     (로드맵 §6 ①)이고 지금도 깨져 있다. 관측이지 강제가 아니다 --
     모델을 바꾸면 이전 표본과 비교 불가해진다.
     """
-    assert _build()["models"]["judge_equals_scout"] is True
+    assert _build()["judge_equals_scout"] is True
 
 
 def test_build_manifest_reports_distinct_judge_and_scout():
     models = dict(_MODELS)
     models["judge"] = _resolution("claude-opus-5", "powerful")
 
-    assert _build(models=models)["models"]["judge_equals_scout"] is False
+    assert _build(models=models)["judge_equals_scout"] is False
 
 
 def test_build_manifest_carries_budget_values_unchanged():
@@ -141,6 +143,18 @@ def test_prompt_hashes_covers_every_run_prompt():
 
     assert set(hashes) == set(RUN_PROMPTS)
     assert all(value.startswith("sha256:") for value in hashes.values())
+
+
+def test_prompt_hashes_returned_mapping_rejects_mutation():
+    """`lru_cache` 는 매 호출에 같은 객체를 돌려준다.
+
+    가변 dict 였다면 한 호출자의 변형이 프로세스의 나머지 전부를
+    감지 불가능하게 오염시킨다.
+    """
+    hashes = prompt_hashes()
+
+    with pytest.raises(TypeError):
+        hashes["decompose"] = "sha256:tampered"
 
 
 def test_component_id_strips_the_harness_package_prefix():

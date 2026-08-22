@@ -15,7 +15,8 @@ from __future__ import annotations
 import hashlib
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
 from neos.config.model_routing import ModelResolution
 
@@ -41,17 +42,20 @@ _PACKAGE_PREFIX = "neos.workflow.deep_analysis."
 
 
 @lru_cache(maxsize=1)
-def prompt_hashes() -> dict[str, str]:
+def prompt_hashes() -> Mapping[str, str]:
     """런 경로 프롬프트 8개의 내용 해시.
 
     캐시하는 이유는 `load_prompt` 와 같다 -- 파일은 프로세스 수명 동안
-    바뀌지 않는다.
+    바뀌지 않는다. `lru_cache` 는 매 호출에 같은 dict 객체를 돌려주므로,
+    가변 dict 를 그대로 반환하면 한 호출자의 변형이 프로세스의 나머지
+    전부를 감지 불가능하게 오염시킨다. `MappingProxyType` 으로 감싸서
+    반환값을 읽기 전용으로 만든다.
     """
     digests = {}
     for name in RUN_PROMPTS:
         raw = (_PROMPT_DIR / f"{name}.md").read_bytes()
         digests[name] = "sha256:" + hashlib.sha256(raw).hexdigest()
-    return digests
+    return MappingProxyType(digests)
 
 
 def component_id(obj: object | None) -> str | None:
@@ -93,15 +97,21 @@ def build_manifest(
         for name, resolution in sorted(models.items())
     }
     # E3 를 자백한다. 관측이지 강제가 아니다 -- 해소는 로드맵 §8 W4 다.
+    # 최상위 키다: `models` 의 다른 모든 값은 resolution dict 라서, 같은
+    # 키 아래 bool 을 두면 `models.items()` 를 순회하는 소비자가 전부
+    # 깨진다. 지금이 이 결정을 고칠 수 있는 유일한 무료 순간이다 --
+    # `manifest_version: 1` 이 표본에 한 번 찍히고 나면 같은 이동에
+    # 버전 상승이 든다.
     judge = models.get("judge")
     scout = models.get("scout")
-    resolved["judge_equals_scout"] = (
+    judge_equals_scout = (
         judge is not None and scout is not None and judge.model == scout.model
     )
     return {
         "manifest_version": MANIFEST_VERSION,
         "profile": profile,
         "models": resolved,
+        "judge_equals_scout": judge_equals_scout,
         "budget": dict(budget),
         "prompts": dict(prompts),
         "skills": None if skills is None else list(skills),
