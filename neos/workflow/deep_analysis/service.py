@@ -8,7 +8,8 @@ from .graders.agentic import AgenticGrader
 from .graders.deterministic import DeterministicGrader
 from .graders.report import ReportGrader
 from .ledger import Ledger
-from .model_roles import resolve_harness_model
+from .manifest import MANIFEST_KIND, build_manifest, component_id, prompt_hashes
+from .model_roles import resolve_all, resolve_harness_model
 from .orchestrator import Orchestrator
 from .skill_selector import SkillSelector
 from .worker import Worker
@@ -128,6 +129,78 @@ async def build_orchestrator(
     )
     report_floor_tokens = config.report_floor_tokens(synthesis_max_tokens)
     grading_floor_tokens = config.grading_floor_tokens(synthesis_max_tokens)
+
+    # 매니페스트는 여기서 낸다. `build_orchestrator` 는 프로파일과 유도값을
+    # 아는 유일한 곳이고, Orchestrator 는 floor 를 주입받을 뿐 프로파일을
+    # 모른다(위 주석 참조 -- 골든 테스트가 캡 1000 으로 그것을 짓는다).
+    # Orchestrator 안에서 내면 §2.1 이 막으려는 재계산이 되살아난다.
+    manifest = build_manifest(
+        profile=profile,
+        models=resolve_all(),
+        budget={
+            "global_token_cap": global_token_cap,
+            "synthesis_max_tokens": synthesis_max_tokens,
+            "finalization_floor_tokens": finalization_floor_tokens,
+            "report_floor_tokens": report_floor_tokens,
+            "grading_floor_tokens": grading_floor_tokens,
+            "min_viable_output_tokens": config.min_viable_output_tokens,
+            # 파생값이지만 일부러 싣는다 -- D75 -> D77 -> D78 이 세 번
+            # 틀린 것이 정확히 이 뺄셈이다.
+            "available_for_investigation": max(
+                0, global_token_cap - finalization_floor_tokens
+            ),
+            "report_floor_funded_attempts": config.report_floor_funded_attempts,
+        },
+        prompts=prompt_hashes(),
+        skills=(
+            None
+            if skill_registry is None
+            else sorted(
+                (
+                    {"name": info.name, "version": info.version}
+                    for info in skill_registry.list_skills()
+                ),
+                key=lambda item: item["name"],
+            )
+        ),
+        components={
+            "grader": component_id(grader),
+            "agentic_grader": component_id(agentic_grader),
+            "report_grader": component_id(report_grader),
+            "synthesizer": None,
+            "citation_renderer": None,
+            "search_fn": getattr(search_fn, "__qualname__", None),
+            "fetch_fn": getattr(fetch_fn, "__qualname__", None),
+            "cassette": cassette is not None,
+        },
+        config={
+            "max_depth": max_depth,
+            "parallel_workers": parallel_workers,
+            "quote_match_threshold": config.quote_match_threshold,
+            "confidence_cap": config.confidence_cap,
+            "agentic_threshold": config.agentic_threshold,
+            "agentic_sample_rate": config.agentic_sample_rate,
+            "claim_retry_cap": config.claim_retry_cap,
+            "decompose_max_tokens": config.decompose_max_tokens,
+            "judge_max_output_tokens": config.judge_max_output_tokens,
+            "entailment_max_output_tokens": config.entailment_max_output_tokens,
+            "subquestions": {
+                "adopt_threshold": config.subq_adopt_threshold,
+                "adopt_cap": config.subq_adopt_cap,
+                "budget_policy": config.subq_budget_policy,
+                "reviewer_enabled": config.subq_reviewer_enabled,
+            },
+            "effort": {
+                name: {
+                    "token_cap": effort.token_cap,
+                    "wall_clock_cap": effort.wall_clock_cap,
+                }
+                for name, effort in config.effort.items()
+            },
+        },
+    )
+    await ledger.log(MANIFEST_KIND, None, manifest)
+
     return Orchestrator(
         session,
         run_id,
