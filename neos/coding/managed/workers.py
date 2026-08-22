@@ -111,22 +111,24 @@ async def probe_provider_health(
         try:
             probe = await adapter.health(region)
         except ManagedAdapterError as error:
-            circuit.observe(
+            await _observe(
+                circuit,
                 ProviderObservation(
                     provider=provider,
                     region=region,
                     error_code=provider_error_code(error),
                     is_health_probe=True,
-                )
+                ),
             )
             continue
-        circuit.observe(
+        await _observe(
+            circuit,
             ProviderObservation(
                 provider=probe.provider,
                 region=probe.region,
                 error_code=probe.error_code,
                 is_health_probe=True,
-            )
+            ),
         )
         probes.append(probe)
     return tuple(probes)
@@ -326,14 +328,17 @@ async def release_managed_sandbox_quota(
 async def probe_managed_sandbox_health(*, circuit=None) -> tuple[str, ...]:
     """설정된 provider 의 헬스를 재고 서킷 게이지를 갱신한다.
 
-    ⚠️ 서킷은 **호출마다 새로 만들어진다.** 045에 서킷 상태를 담을 컬럼이
-    없어서(Task 3이 `ProviderHealthCircuit`을 순수 인메모리로 지었다) beat
-    호출 사이에 롤링 윈도가 이어지지 않는다. 즉 이 프로브가 지금 하는 일은
-    **프로브 1회의 결과를 게이지로 내는 것**이고, 여러 프로브에 걸친 비율
-    판정은 하지 못한다. 롤링 판정을 살리려면 서킷 상태를 영속화하는
-    마이그레이션이 필요하다 -- 이 트랙의 미해결 항목으로 남긴다.
+    ✅ **2026-08-23부터 롤링 판정이 성립한다** (마이그레이션 046, CA8 종결).
+    관측 창이 `coding_sandbox_provider_health` 에 남으므로 beat 호출 사이에
+    이어진다 -- 프로브 하나하나가 같은 창 위에서 판정된다. 그 전에는 호출마다
+    새 서킷을 만들어 비율 판정이 **아예 성립하지 않았다.**
+
+    DB 를 열 수 없으면 인메모리 서킷으로 떨어진다. 그 경우 이번 프로브의
+    결과만 게이지에 실리고 롤링 판정은 없다 -- 조용히 그러지 않도록 경고를
+    남긴다.
     """
     from neos.coding.managed.health import ProviderHealthCircuit
+    from neos.coding.managed.health_store import create_provider_health_store
     from neos.coding.runtime import _managed_adapter_registry
     from neos.coding.sandbox.factory import create_sandbox_provider
 
@@ -342,14 +347,30 @@ async def probe_managed_sandbox_health(*, circuit=None) -> tuple[str, ...]:
         return ()
     managed = config.sandbox.managed
     provider = create_sandbox_provider(config.sandbox)
+    manager = DatabaseManager()
     try:
+        if circuit is None:
+            try:
+                await manager.initialize()
+                circuit = create_provider_health_store(
+                    manager.get_session, config=managed
+                )
+            except Exception:
+                logger.warning(
+                    "Managed sandbox health store unavailable; "
+                    "falling back to a process-local circuit without "
+                    "rolling judgement",
+                    exc_info=True,
+                )
+                circuit = ProviderHealthCircuit.from_config(managed)
         probes = await probe_provider_health(
             adapters=_managed_adapter_registry(config=config, sandboxes=provider),
             region=managed.region,
-            circuit=circuit or ProviderHealthCircuit.from_config(managed),
+            circuit=circuit,
         )
     finally:
         await provider.close()
+        await manager.close()
     for probe in probes:
         metrics.coding_sandbox_provider_circuit.labels(
             provider=probe.provider,
@@ -357,6 +378,18 @@ async def probe_managed_sandbox_health(*, circuit=None) -> tuple[str, ...]:
             state=probe.state.value,
         ).set(1)
     return tuple(probe.state.value for probe in probes)
+
+
+async def _observe(circuit, observation: ProviderObservation) -> None:
+    """인메모리 서킷과 내구 저장소를 같은 자리에서 받는다.
+
+    전자는 동기 `observe()`, 후자는 코루틴이다. 호출자마다 분기하게 두면
+    한쪽을 await 하지 않는 실수가 조용히 지나간다 -- 관측이 그냥 사라지고,
+    사라진 관측은 어디에도 안 남는다.
+    """
+    result = circuit.observe(observation)
+    if hasattr(result, "__await__"):
+        await result
 
 
 def _celery_dispatcher():

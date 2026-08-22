@@ -69,14 +69,17 @@ class FakeManagedAdminService:
         self.approvals: list[tuple[str, str, str]] = []
         self.conflict: PortableRecoveryConflict | None = None
 
-    async def drain_provider(self, *, provider: str, region: str, drained: bool):
-        self.drains.append((provider, region, drained))
+    async def drain_provider(
+        self, *, provider: str, region: str, drained: bool, operator_id=None
+    ):
+        self.drains.append((provider, region, drained, operator_id))
         return {
             "provider": provider,
             "region": region,
             "drained": drained,
             "circuit": "unavailable" if drained else "healthy",
-            "scope": "process_local",
+            # 마이그레이션 046 이후 드레인은 클러스터 범위다 (CA11 종결).
+            "scope": "cluster",
         }
 
     async def retry_cleanup(self, *, allocation_id: str):
@@ -220,7 +223,9 @@ def test_drain_only_touches_the_configured_provider_circuit() -> None:
     )
 
     assert response.status_code == 200
-    assert admin_service.drains == [("e2b", "us-east-1", True)]
+    # operator_id 는 요청 본문이 아니라 인증된 신원에서 온다.
+    assert admin_service.drains == [("e2b", "us-east-1", True, "u1")]
+    assert response.json()["scope"] == "cluster"
 
 
 def test_retry_cleanup_is_admin_only_and_bounded() -> None:

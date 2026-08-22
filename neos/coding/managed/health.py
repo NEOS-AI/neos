@@ -1,6 +1,7 @@
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 
 from neos.coding.managed.domain import ProviderCircuitState, ProviderErrorCode
 from neos.config.schema import ManagedSandboxConfig
@@ -28,6 +29,52 @@ class ProviderObservation:
             raise ValueError("provider must not be empty")
         if not self.region:
             raise ValueError("region must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderHealthRecord:
+    """`coding_sandbox_provider_health` 한 행의 도메인 형태 (마이그레이션 046).
+
+    **드레인과 서킷 상태는 서로 다른 값이다.** 합치면 정상 프로브 한 번이
+    운영자의 드레인을 지운다 -- 046이 컬럼을 나눈 이유이고, 둘을 합치는 것은
+    읽는 쪽(`resolve_admission_health`)의 일이다.
+    """
+
+    provider: str
+    region: str
+    circuit_state: ProviderCircuitState
+    failure_window: tuple[bool, ...]
+    drained: bool
+    drained_at: datetime | None = None
+    drained_by: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.drained and self.drained_at is None:
+            # 언제 드레인됐는지 없으면 감사 기록이 반쪽이다. 046의 CHECK 와
+            # 같은 규칙을 도메인에서도 강제한다.
+            raise ValueError("drained record requires drained_at")
+        if not self.drained and (
+            self.drained_at is not None or self.drained_by is not None
+        ):
+            raise ValueError("undrained record must not carry drained_at metadata")
+
+
+def resolve_admission_health(
+    record: "ProviderHealthRecord | None",
+) -> ProviderCircuitState:
+    """신규 admission 이 보는 하나의 값으로 접는다.
+
+    드레인이 서킷을 **이긴다** -- 운영자의 결정이 관측보다 우선이다.
+
+    행이 없으면 `HEALTHY` 다. 반대로 두면(=기본 `UNAVAILABLE`) 새 provider 를
+    추가하는 순간 아무도 admission 을 받지 못하고, 그 원인이 원장 어디에도
+    남지 않는다.
+    """
+    if record is None:
+        return ProviderCircuitState.HEALTHY
+    if record.drained:
+        return ProviderCircuitState.UNAVAILABLE
+    return record.circuit_state
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +147,40 @@ class ProviderHealthCircuit:
             window_size=config.health_window_size,
             degraded_ratio=config.degraded_failure_ratio,
             unavailable_ratio=config.unavailable_failure_ratio,
+        )
+
+    def restore(
+        self,
+        provider: str,
+        region: str,
+        *,
+        failure_window: Iterable[bool],
+        state: ProviderCircuitState,
+    ) -> None:
+        """영속화된 창과 상태를 그대로 되살린다.
+
+        `PostgresProviderHealthStore` 가 관측 한 건을 처리할 때 쓴다:
+        DB 에서 창을 꺼내 여기에 넣고, `observe()` 한 번을 돌리고, 결과를 다시
+        저장한다. **비율 판정을 SQL 로 옮기지 않기 위한 것**이다 -- 판정이 두
+        곳에 생기면 언젠가 갈라지고, 갈라진 쪽은 아무도 모른다.
+
+        창이 `window_size` 보다 길면 뒤에서부터 자른다. 설정이 줄었을 때
+        옛 창을 그대로 받으면 `deque(maxlen=...)` 이 앞을 버리는데, 그러면
+        가장 최근 관측이 아니라 가장 오래된 관측이 남는다.
+        """
+        window = deque(failure_window, maxlen=self._window_size)
+        key = (provider, region)
+        self._windows[key] = window
+        self._states[key] = state
+
+    def export(
+        self, provider: str, region: str
+    ) -> tuple[tuple[bool, ...], ProviderCircuitState]:
+        """`restore()` 의 역방향. 저장할 창과 상태를 낸다."""
+        key = (provider, region)
+        return (
+            tuple(self._windows.get(key, ())),
+            self._states.get(key, ProviderCircuitState.HEALTHY),
         )
 
     def observe(self, observation: ProviderObservation) -> ProviderHealthSnapshot:

@@ -209,7 +209,9 @@ class CodingSandboxDrainResponse(BaseModel):
     region: str
     drained: bool
     circuit: Literal["healthy", "degraded", "unavailable"]
-    scope: Literal["process_local"]
+    # 마이그레이션 046 이후 드레인은 클러스터 전체에 걸린다. 이 값이 계약이므로
+    # 다시 프로세스 로컬로 되돌리려면 여기부터 바뀌어야 한다.
+    scope: Literal["cluster"]
 
 
 class CodingSandboxCleanupRetryResponse(BaseModel):

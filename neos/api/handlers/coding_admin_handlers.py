@@ -45,10 +45,19 @@ def get_managed_admin_service() -> ManagedSandboxAdminService:
 async def drain_managed_provider(
     provider: str,
     request: CodingSandboxDrainRequest,
+    current_admin: User = Depends(get_current_admin_user),
     admin: ManagedSandboxAdminService = Depends(get_managed_admin_service),
 ):
+    """드레인은 신규 admission 만 막는다 -- 기존 할당과 정리는 계속 돈다.
+
+    `operator_id` 는 인증된 신원에서 온다(복구 승인과 같은 규율) -- 드레인도
+    원장에 누가 했는지가 남아야 하는 조치다.
+    """
     return await admin.drain_provider(
-        provider=provider, region=request.region, drained=request.drained
+        provider=provider,
+        region=request.region,
+        drained=request.drained,
+        operator_id=current_admin.user_id,
     )
 
 

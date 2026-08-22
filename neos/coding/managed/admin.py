@@ -7,50 +7,38 @@
   싣지 않는다: 봉인된 참조를 평문으로 꺼낼 이유가 운영자에게도 없다
   (그것을 여는 유일한 자리는 정리 서비스의 destroy 호출이다).
 
-> ⚠️ **드레인은 지금 프로세스 로컬이다.** `ProviderHealthCircuit`이 인메모리라
-> (045에 서킷 상태 컬럼이 없다 -- CA8) API 프로세스에서 드레인을 켜도 Celery
-> 워커의 서킷은 모른다. 그래서 응답에 `scope`를 실어 **그 사실을 계약에
-> 적는다** -- 조용히 안 듣는 것보다 낫다. 진짜 드레인은 서킷 상태를 영속화한
-> 뒤에야 가능하다.
+> ✅ **드레인은 2026-08-23부터 내구적이다** (마이그레이션 046, CA8·CA11 종결).
+> `PostgresProviderHealthStore` 가 `coding_sandbox_provider_health` 에 쓰므로
+> API 프로세스에서 켠 드레인을 Celery 워커의 admission 이 곧바로 본다.
+> 응답의 `scope` 는 이제 `"cluster"` 다 -- 그 값이 계약이므로 다시 프로세스
+> 로컬로 되돌리려면 이 문자열도 함께 바뀌어야 한다.
 """
 
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
-from neos.coding.managed.domain import ManagedSandboxState, ProviderCircuitState
+from neos.coding.managed.domain import ManagedSandboxState
+from neos.coding.managed.health import (
+    ProviderHealthRecord,
+    resolve_admission_health,
+)
 from neos.coding.managed.projection import (
     OwnerSandboxStatus,
     project_owner_sandbox_status,
 )
 
 
-class ProviderDrainRegistry(Protocol):
-    def set_drained(self, *, provider: str, region: str, drained: bool) -> None: ...
+class ProviderDrainStore(Protocol):
+    """드레인을 **모든 프로세스가 보는 곳**에 쓰는 계약 (마이그레이션 046)."""
 
-    def is_drained(self, *, provider: str, region: str) -> bool: ...
-
-
-@dataclass
-class InProcessProviderDrainRegistry:
-    """드레인 상태를 프로세스 안에만 들고 있는 기본 구현.
-
-    영속화가 생기면 이 자리를 갈아 끼운다. 지금은 `scope="process_local"`이
-    응답에 실려 호출자가 그 한계를 알 수 있다.
-    """
-
-    def __post_init__(self) -> None:
-        self._drained: set[tuple[str, str]] = set()
-
-    def set_drained(self, *, provider: str, region: str, drained: bool) -> None:
-        key = (provider, region)
-        if drained:
-            self._drained.add(key)
-        else:
-            self._drained.discard(key)
-
-    def is_drained(self, *, provider: str, region: str) -> bool:
-        return (provider, region) in self._drained
+    async def set_drained(
+        self,
+        *,
+        provider: str,
+        region: str,
+        drained: bool,
+        operator_id: str | None = None,
+    ) -> ProviderHealthRecord: ...
 
 
 class ManagedSandboxStatusService:
@@ -81,37 +69,46 @@ class ManagedSandboxAdminService:
         *,
         repository,
         archives=None,
-        drains: ProviderDrainRegistry | None = None,
-        circuit=None,
+        drains: ProviderDrainStore | None = None,
         clock=None,
     ) -> None:
         self._repository = repository
         self._archives = archives
-        self._drains = drains or InProcessProviderDrainRegistry()
-        self._circuit = circuit
+        self._drains = drains
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def drain_provider(
-        self, *, provider: str, region: str, drained: bool
+        self,
+        *,
+        provider: str,
+        region: str,
+        drained: bool,
+        operator_id: str | None = None,
     ) -> dict:
         """provider/region 하나를 신규 admission 에서 뺀다.
 
         기존 할당은 건드리지 않는다 -- 드레인은 "더 안 받는다"이지 "지금 있는
         것을 죽인다"가 아니다. 정리·조정도 계속 돈다(그것을 멈추면 드레인이
         곧 자원 방치가 된다).
+
+        응답의 `circuit` 은 **드레인과 관측을 합친 뒤의 값**이다. 드레인을
+        풀었다고 무조건 `healthy` 를 내지 않는다 -- 장애 중인 provider 를
+        잠깐 드레인했다 푸는 것만으로 서킷이 초기화된 것처럼 보이면 안 된다.
         """
-        self._drains.set_drained(provider=provider, region=region, drained=drained)
+        if self._drains is None:
+            raise RuntimeError("managed_sandbox_drain_store_unavailable")
+        record = await self._drains.set_drained(
+            provider=provider,
+            region=region,
+            drained=drained,
+            operator_id=operator_id,
+        )
         return {
             "provider": provider,
             "region": region,
-            "drained": drained,
-            "circuit": (
-                ProviderCircuitState.UNAVAILABLE.value
-                if drained
-                else ProviderCircuitState.HEALTHY.value
-            ),
-            # 계약에 한계를 적는다 -- 모듈 docstring 의 경고 참조.
-            "scope": "process_local",
+            "drained": record.drained,
+            "circuit": resolve_admission_health(record).value,
+            "scope": "cluster",
         }
 
     async def retry_cleanup(self, *, allocation_id: str) -> dict:

@@ -1354,6 +1354,13 @@ Docker provider는 digest-pinned image, non-root user, read-only root, capabilit
 세 테이블을 만든다 — `coding_sandbox_admissions`,
 `coding_managed_sandboxes`, `coding_sandbox_cleanup_attempts`.
 
+마이그레이션 **046**(`046_add_coding_sandbox_provider_health.sql`)이
+`coding_sandbox_provider_health` 를 더한다 — provider 서킷의 **관측 창**과
+운영자 **드레인**을 프로세스 밖으로 옮긴 것이다(CA8·CA11). 두 값은 같은 행에
+있지만 **다른 컬럼**이고, 서로를 덮어쓰지 않는다: 관측 UPSERT 는 드레인을
+건드리지 않고, 드레인 UPSERT 는 창을 건드리지 않는다. 합치는 것은 읽는
+쪽(`resolve_admission_health()`)의 일이고 그때 **드레인이 이긴다.**
+
 두 불변식을 기억할 것.
 
 - `idx_coding_managed_sandboxes_current_task` 는 태스크당 **살아 있는 할당을
@@ -1410,6 +1417,8 @@ from neos.coding.managed.benchmark import run_managed_sandbox_benchmark
    `reconcile-managed-sandboxes`, `reconcile-managed-sandbox-quota`,
    `probe-managed-sandbox-health`.
 4. `shadow_admission: false` 로 내리고 소수 tenant 에만 쿼터를 연다.
+   문제가 보이면 **드레인**(§24.5)으로 그 provider/region 의 신규 admission 만
+   즉시 닫는다 -- 재배포가 필요 없고 진행 중인 것은 건드리지 않는다.
 5. 소유자 화면(`GET /api/v1/coding/tasks/{task_id}/sandbox-status`)이 상태를
    내는지, 실행 게이팅이 서버 불리언을 따르는지 확인한다.
 
@@ -1423,10 +1432,23 @@ POST /api/v1/admin/coding/providers/{provider}/drain
 드레인은 **신규 admission 만** 막는다. 기존 할당은 그대로 두고 정리·조정도
 계속 돈다 — 그것을 멈추면 드레인이 곧 자원 방치가 된다.
 
-⚠️ **현재 드레인은 프로세스 로컬이다.** 서킷이 인메모리라 API 프로세스에서
-켠 드레인을 Celery 워커가 모른다. 응답의 `"scope": "process_local"` 이 그
-한계를 계약에 적어 둔 것이다. 전 워커에 걸친 드레인이 필요하면 지금은
-`global_kill_switch` 를 쓰고, 근본 해결은 서킷 상태 영속화다.
+드레인은 **클러스터 범위**다(마이그레이션 046). API 프로세스에서 켠 드레인을
+Celery 워커의 admission 이 곧바로 본다 — 응답의 `"scope": "cluster"` 가 그
+사실을 계약에 적은 것이다.
+
+`operator_id` 는 요청 본문이 아니라 **인증된 관리자 신원**에서 온다.
+`drained_at` · `drained_by` 가 함께 남고, 드레인을 풀면 두 값이 NULL 로
+돌아간다 — "지금 드레인됐다"와 "예전에 드레인된 적 있다"를 구별하기 위해서다.
+
+⚠️ **드레인은 신규 admission 만 막는다.** `admit()` 은 `(tenant_id,
+idempotency_key)` 에 멱등하므로 **이미 admit 된 키는 결정을 유지한다** — 그게
+옳다. 뒤집으면 같은 요청을 재시도하는 클라이언트가 이미 만들어진 샌드박스를
+잃는다. 진행 중인 것까지 멈추려면 드레인이 아니라 `global_kill_switch` 와
+정리 경로를 쓴다.
+
+⚠️ **드레인을 풀어도 서킷은 초기화되지 않는다.** 그동안의 관측 창이 그대로
+남아 있으므로, 장애 중인 provider 를 잠깐 드레인했다 푸는 것으로 서킷을
+되돌릴 수 없다.
 
 ### 24.6 정리 SLO
 

@@ -27,10 +27,10 @@ from neos.coding.managed.adapters import (
     ManagedNetworkPolicy,
 )
 from neos.coding.managed.admin import (
-    InProcessProviderDrainRegistry,
     ManagedSandboxAdminService,
     ManagedSandboxStatusService,
 )
+from neos.coding.managed.health_store import create_provider_health_store
 from neos.coding.managed.allocation import ManagedSandboxAllocationService
 from neos.coding.managed.crypto import (
     AesGcmProviderReferenceCipher,
@@ -284,9 +284,6 @@ def _managed_sandbox_repository(
     return PostgresManagedSandboxRepository(session_factory or db_manager.get_session)
 
 
-_managed_drain_registry = InProcessProviderDrainRegistry()
-
-
 def managed_sandbox_status_service(
     session_factory=None,
 ) -> ManagedSandboxStatusService:
@@ -306,14 +303,20 @@ def managed_sandbox_admin_service(
 ) -> ManagedSandboxAdminService:
     """운영자 조치 서비스.
 
+    드레인은 **내구 저장소**를 거친다(마이그레이션 046) -- API 프로세스에서
+    켠 드레인을 Celery 워커의 admission 이 곧바로 본다.
+
     아카이브 서비스는 **스토어가 배선된 뒤에야** 붙는다(CA10) -- 지금은
     `None`이라 복구 승인이 `RuntimeError`로 거절된다. 조용히 성공한 척하는
     것보다 낫다.
     """
+    factory = session_factory or db_manager.get_session
     return ManagedSandboxAdminService(
-        repository=_managed_sandbox_repository(session_factory),
+        repository=_managed_sandbox_repository(factory),
         archives=None,
-        drains=_managed_drain_registry,
+        drains=create_provider_health_store(
+            factory, config=settings.config.sandbox.managed
+        ),
     )
 
 

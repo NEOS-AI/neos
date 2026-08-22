@@ -14,6 +14,17 @@ _OWNED_TABLES_CHILD_FIRST = (
     "coding_sandbox_cleanup_attempts",
     "coding_managed_sandboxes",
     "coding_sandbox_admissions",
+    # 046. FK 가 없으므로 순서는 무관하지만 목록에는 있어야 테스트 간
+    # 격리가 유지된다 -- 빠지면 드레인 한 건이 다음 테스트로 새어 나간다.
+    "coding_sandbox_provider_health",
+)
+
+# 이 스위트가 소유하는 마이그레이션. 새 마이그레이션을 추가하면 여기에
+# 더한다 -- 빠뜨리면 그 테이블을 쓰는 테스트가 "관계가 없다"로 죽고,
+# 원인이 제품이 아니라 픽스처라는 것을 알아내는 데 시간이 든다.
+_OWNED_MIGRATIONS = (
+    "db/migrations/045_add_coding_managed_sandboxes.sql",
+    "db/migrations/046_add_coding_sandbox_provider_health.sql",
 )
 
 
@@ -36,12 +47,12 @@ async def managed_postgres_session_factory():
     if not url:
         pytest.skip("CODING_TEST_DATABASE_URL is not configured")
     engine = create_async_engine(url)
-    migration = Path("db/migrations/045_add_coding_managed_sandboxes.sql")
     async with engine.begin() as connection:
         await _drop_owned_tables(connection)
-        for statement in migration.read_text().split(";"):
-            if statement.strip() not in {"BEGIN", "COMMIT"}:
-                await connection.exec_driver_sql(statement)
+        for migration_path in _OWNED_MIGRATIONS:
+            for statement in Path(migration_path).read_text().split(";"):
+                if statement.strip() not in {"BEGIN", "COMMIT"}:
+                    await connection.exec_driver_sql(statement)
     maker = async_sessionmaker(engine, expire_on_commit=False)
 
     async def session_factory():
