@@ -111,6 +111,32 @@ curl -X POST http://localhost:8518/api/v1/query \
   -d '{"query": "Analyze AI trends in 2024"}'
 ```
 
+### 6. Optional test suites
+
+Most suites run with no external services. These need explicit opt-in:
+
+```bash
+# Managed sandbox control plane against a real PostgreSQL
+CODING_TEST_DATABASE_URL='postgresql+asyncpg://user:pass@host/db' \
+  .venv/bin/pytest -q tests/coding/managed/integration -rs
+
+# Vendor sandbox smokes (each creates one sandbox, <=300s, network blocked,
+# destroyed in finally)
+CODING_TEST_E2B=1 E2B_API_KEY=<key> \
+  .venv/bin/pytest -q tests/coding/managed/integration/test_e2b_opt_in.py -rs
+
+CODING_TEST_MODAL=1 MODAL_TOKEN_ID=<id> MODAL_TOKEN_SECRET=<secret> \
+  .venv/bin/pytest -q tests/coding/managed/integration/test_modal_opt_in.py -rs
+
+# Docker sandbox gateway
+CODING_TEST_DOCKER=1 \
+  CODING_TEST_DOCKER_IMAGE='registry/neos-sandbox@sha256:<digest>' \
+  .venv/bin/pytest -q tests/coding/integration/test_docker_workspace_gateway.py -rs
+```
+
+Skipped suites report the exact variable to set. Operations runbook:
+[docs/NEOS_CODING.md](docs/NEOS_CODING.md) §24.
+
 ## 🎯 Usage Examples
 
 ### CLI Commands
