@@ -1421,6 +1421,23 @@ class ManagedSandboxConfig(StrictConfigModel):
         gt=0,
         description="portable 아카이브가 담을 수 있는 tar 멤버 수 상한.",
     )
+    toolchain_identity: str = Field(
+        default="unset",
+        min_length=1,
+        description=(
+            "아카이브 호환성 판정에 쓰는 툴체인 식별자. 이미지와 달리 런타임이 "
+            "스스로 알 수 없어 배포가 선언한다 -- 값이 바뀌면 옛 아카이브는 "
+            "`archive_incompatible` 로 거절된다(그게 의도다)."
+        ),
+    )
+    archive_root: str = Field(
+        default=".neos/managed-archives",
+        min_length=1,
+        description=(
+            "portable 아카이브 스토어의 루트. 로컬 스토어는 봉인하지 않으므로 "
+            "이 경로는 샌드박스 밖이어야 하고 백업 대상에서 제외돼야 한다."
+        ),
+    )
     archive_retention_seconds: int = Field(
         default=7 * 24 * 3600,
         gt=0,

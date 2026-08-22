@@ -58,6 +58,22 @@ def prompt_hashes() -> Mapping[str, str]:
     return MappingProxyType(digests)
 
 
+def component_id_for_class(cls: type) -> str:
+    """`component_id` 와 같은 식별자를, 인스턴스 없이 클래스만으로 낸다.
+
+    `build_orchestrator` 는 `synthesizer`/`citation_renderer` kwargs 를 항상
+    `None` 으로 넘긴다 -- 그런데 `Orchestrator.__init__` 은 그 경우 기본으로
+    `Synthesizer`/`CitationRenderer` 를 **무조건** 만든다. 즉 인스턴스가
+    없다고 해서 부품이 안 조립된 것이 아니라, `build_orchestrator` 가 그
+    인스턴스를 쥐고 있지 않을 뿐이다. 무엇이 실제로 도는지는 클래스로 이미
+    알 수 있으므로, 인스턴스를 만들지 않고도 같은 식별자를 낸다.
+    """
+    module = cls.__module__
+    if module.startswith(_PACKAGE_PREFIX):
+        module = module[len(_PACKAGE_PREFIX):]
+    return f"{module}:{cls.__qualname__}"
+
+
 def component_id(obj: object | None) -> str | None:
     """이 런이 조립한 부품의 식별자.
 
@@ -67,14 +83,13 @@ def component_id(obj: object | None) -> str | None:
 
     소스 해시는 넣지 않는다 -- 클래스 이름이 같고 내용이 바뀐 경우는
     아티팩트의 `git` 항(commit + dirty)이 답한다.
+
+    `obj` 가 `None` 이면 "배선 안 됨" 이다 -- 실제로 조립되는 부품을 클래스만
+    아는 상태로 기록해야 한다면 `component_id_for_class` 를 대신 쓴다.
     """
     if obj is None:
         return None
-    cls = type(obj)
-    module = cls.__module__
-    if module.startswith(_PACKAGE_PREFIX):
-        module = module[len(_PACKAGE_PREFIX):]
-    return f"{module}:{cls.__qualname__}"
+    return component_id_for_class(type(obj))
 
 
 def build_manifest(

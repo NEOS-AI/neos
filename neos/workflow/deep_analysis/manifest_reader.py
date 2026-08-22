@@ -9,6 +9,7 @@ seq 시점의 구성이 필요해지면 그때 seq 인자를 받는 함수를 �
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Sequence
 
 from sqlalchemy import select
@@ -16,6 +17,8 @@ from sqlalchemy import select
 from neos.database.deep_analysis_models import DAEvent
 
 from .manifest import MANIFEST_KIND
+
+logger = logging.getLogger(__name__)
 
 
 async def manifests_for(
@@ -36,6 +39,15 @@ async def manifests_for(
         try:
             parsed = json.loads(payload)
         except (TypeError, ValueError):
+            # FIX 2 이후 이 스킵은 "매니페스트 없음"과 구별되지 않는 채로
+            # 표본을 통째로 거부시킬 수 있다 (`runs_without_manifest`가
+            # 이 run_id를 없는 것으로 본다) -- 어느 run이 망가진 페이로드를
+            # 냈는지 최소한 로그에는 남긴다.
+            logger.warning(
+                "run_manifest payload for run %s is not valid JSON; "
+                "treating it as missing",
+                run_id,
+            )
             continue
         if isinstance(parsed, dict):
             # seq 오름차순이므로 마지막 것이 남는다.

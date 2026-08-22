@@ -1339,3 +1339,225 @@ CODING_TEST_DOCKER_IMAGE='registry/neos-sandbox@sha256:<digest>' \
 ```
 
 Docker provider는 digest-pinned image, non-root user, read-only root, capability drop, resource/PID 한도와 `network=none` 정책을 유지한다.
+
+---
+
+## 24. 관리형 샌드박스 컨트롤 플레인 운영 계약
+
+플랜 14(Task 1~10)가 지은 `neos.coding.managed` 의 운영 문서다. 기존
+`SandboxProvider`/`SandboxSession` 은 **실행 데이터 플레인**으로 그대로 남고,
+이 컨트롤 플레인이 admission·할당·헬스·정리·아카이브 복구를 소유한다.
+
+### 24.1 스키마와 플래그
+
+마이그레이션 **045**(`db/migrations/045_add_coding_managed_sandboxes.sql`)가
+세 테이블을 만든다 — `coding_sandbox_admissions`,
+`coding_managed_sandboxes`, `coding_sandbox_cleanup_attempts`.
+
+마이그레이션 **046**(`046_add_coding_sandbox_provider_health.sql`)이
+`coding_sandbox_provider_health` 를 더한다 — provider 서킷의 **관측 창**과
+운영자 **드레인**을 프로세스 밖으로 옮긴 것이다(CA8·CA11). 두 값은 같은 행에
+있지만 **다른 컬럼**이고, 서로를 덮어쓰지 않는다: 관측 UPSERT 는 드레인을
+건드리지 않고, 드레인 UPSERT 는 창을 건드리지 않는다. 합치는 것은 읽는
+쪽(`resolve_admission_health()`)의 일이고 그때 **드레인이 이긴다.**
+
+두 불변식을 기억할 것.
+
+- `idx_coding_managed_sandboxes_current_task` 는 태스크당 **살아 있는 할당을
+  하나로** 강제한다. `manual_recovery_required` 도 '살아 있음'으로 센다
+  (`state NOT IN ('cleaned','failed')`) — 그래서 복구 승인은 원본을 먼저
+  `failed` 로 닫아야 새 세대를 만들 수 있다.
+- `cleaned` 행은 `provider_ref`·`ownership_digest`·`lease_expires_at` 이 전부
+  NULL 이고 `cleaned_at` 이 NOT NULL 이어야 한다. 도메인 객체
+  (`ManagedSandboxAllocation.__post_init__`)가 같은 규칙을 메모리에서 지킨다.
+
+기본 플래그는 전부 꺼져 있다.
+
+```yaml
+sandbox:
+  enabled: false
+  managed:
+    enabled: false            # 컨트롤 플레인 전체
+    shadow_admission: true    # 판정만 하고 provider 는 부르지 않는다
+    global_kill_switch: false # 신규 admission 만 막는다 (정리는 계속 돈다)
+```
+
+### 24.2 shadow admission 과 Docker 비교
+
+`shadow_admission: true` 는 admission 판정을 원장에 남기되 provider 를 부르지
+않는다. 실제 트래픽으로 쿼터·정책·헬스 판정을 관측한 뒤에 할당을 켜는
+순서다. 같은 구간에서 `DockerShadowManagedAdapter` 가 기존 Docker provider 를
+관리형 어댑터 계약으로 감싸므로, **provider 를 바꾸지 않고** 컨트롤 플레인의
+동작을 비교할 수 있다.
+
+### 24.3 벤치마크 리포트
+
+```python
+from neos.coding.managed.benchmark import run_managed_sandbox_benchmark
+```
+
+할당 → 조회 → 스냅샷 → 재개 → 재발견 → 정리를 한 번씩 재고 **반드시 정리**
+한다. 결과에는 식별자·명령 출력·raw 에러가 없다.
+
+⚠️ `network_block_verified` 는 **정책 확인**이다 — 어댑터가
+`network_block_all` 능력을 선언했고 `BLOCK_ALL` 요청을 거절 없이 받았다는
+뜻이지, 샌드박스 안에서 실제로 바깥에 못 나간다는 경험적 증명이 아니다. 그
+증명은 명령 실행이 필요하고 그것은 데이터 플레인의 일이다.
+
+지원하지 않는 능력은 `None` 으로 기록한다 — `0` 으로 적으면 "0ms 에 끝났다"와
+"할 수 없다"가 같은 숫자가 되어 provider 비교가 거짓말을 한다.
+
+### 24.4 canary 활성화
+
+1. `sandbox.managed.enabled: true`, `shadow_admission: true` 로 켜고 admission
+   판정만 관측한다.
+2. `secrets.managed_provider_reference_key` 를 넣는다(base64, 16/24/32바이트).
+   없으면 `AppConfig.validate_managed_provider_reference_key` 가 기동을 막는다.
+3. Celery beat 에 관리형 항목 셋이 붙는지 확인한다 —
+   `reconcile-managed-sandboxes`, `reconcile-managed-sandbox-quota`,
+   `probe-managed-sandbox-health`.
+4. `shadow_admission: false` 로 내리고 소수 tenant 에만 쿼터를 연다.
+   문제가 보이면 **드레인**(§24.5)으로 그 provider/region 의 신규 admission 만
+   즉시 닫는다 -- 재배포가 필요 없고 진행 중인 것은 건드리지 않는다.
+5. 소유자 화면(`GET /api/v1/coding/tasks/{task_id}/sandbox-status`)이 상태를
+   내는지, 실행 게이팅이 서버 불리언을 따르는지 확인한다.
+
+### 24.5 서킷 드레인
+
+```
+POST /api/v1/admin/coding/providers/{provider}/drain
+{"region": "us-east-1", "drained": true}
+```
+
+드레인은 **신규 admission 만** 막는다. 기존 할당은 그대로 두고 정리·조정도
+계속 돈다 — 그것을 멈추면 드레인이 곧 자원 방치가 된다.
+
+드레인은 **클러스터 범위**다(마이그레이션 046). API 프로세스에서 켠 드레인을
+Celery 워커의 admission 이 곧바로 본다 — 응답의 `"scope": "cluster"` 가 그
+사실을 계약에 적은 것이다.
+
+`operator_id` 는 요청 본문이 아니라 **인증된 관리자 신원**에서 온다.
+`drained_at` · `drained_by` 가 함께 남고, 드레인을 풀면 두 값이 NULL 로
+돌아간다 — "지금 드레인됐다"와 "예전에 드레인된 적 있다"를 구별하기 위해서다.
+
+⚠️ **드레인은 신규 admission 만 막는다.** `admit()` 은 `(tenant_id,
+idempotency_key)` 에 멱등하므로 **이미 admit 된 키는 결정을 유지한다** — 그게
+옳다. 뒤집으면 같은 요청을 재시도하는 클라이언트가 이미 만들어진 샌드박스를
+잃는다. 진행 중인 것까지 멈추려면 드레인이 아니라 `global_kill_switch` 와
+정리 경로를 쓴다.
+
+⚠️ **드레인을 풀어도 서킷은 초기화되지 않는다.** 그동안의 관측 창이 그대로
+남아 있으므로, 장애 중인 provider 를 잠깐 드레인했다 푸는 것으로 서킷을
+되돌릴 수 없다.
+
+### 24.6 정리 SLO
+
+정리는 **포기하지 않는다.** 백오프
+(`cleanup_retry_backoff_seconds`, 기본 5·15·45·120·300초)를 다 쓰면 마지막
+간격으로 계속 재시도한다. 증명되지 않은 provider 리소스를 '정리됨'으로 적는
+것보다 낫기 때문이다.
+
+정체는 `coding_sandbox_cleanup_age_seconds{provider,region}` 게이지가 드러
+낸다. 이 값이 `cleanup_slo_seconds`(기본 300)를 넘으면 조정자가 경고 로그를
+남긴다. 밀린 건을 즉시 다시 시도하려면:
+
+```
+POST /api/v1/admin/coding/allocations/{allocation_id}/retry-cleanup
+```
+
+상태는 바꾸지 않고 백오프만 걷어낸다.
+
+**확정 파괴와 NotFound 둘 다 소유권 증명을 요구한다.** 증명 없는 파괴는 남의
+리소스를 지웠을 수도 있다는 뜻이라 `CLEANUP_RETRY` 로 남는다.
+
+### 24.7 아카이브 복구 승인
+
+```
+POST /api/v1/admin/coding/allocations/{allocation_id}/approve-recovery
+{"archive_checksum": "sha256:<64 hex>"}
+```
+
+복구는 **검증된 아카이브**와 **그 체크섬에 묶인 운영자 결정**이 둘 다 있어야
+일어난다. 검증(체크섬·크기·경로·스캔·이미지/툴체인·보존기한)은 원장을
+건드리기 전에 끝난다. 승인되면 원본 세대는 `failed` 로 종결돼 증거로 남고,
+generation + 1 이 **새 행 + 새 admission** 으로 생긴다. 감사 기록은
+`coding_events` 에 `managed_sandbox_recovery_approved` 로 남으며 아카이브
+본문은 절대 저장하지 않는다.
+
+`operator_id` 는 요청 본문이 아니라 **인증된 관리자 신원**에서 온다.
+
+**아카이브는 이렇게 뜬다** (2026-08-23, CA10 종결):
+
+```
+POST /api/v1/admin/coding/allocations/{allocation_id}/archive
+```
+
+응답은 `archive_id` 와 `checksum` 을 준다 -- 그 체크섬을 그대로 복구 승인
+요청에 넣는다(표기가 같으므로 손으로 변환할 것이 없다).
+
+⚠️ **샌드박스가 건강할 때 떠 둬야 한다.** `manual_recovery_required` 에 빠진
+뒤에는 워크스페이스에 접근할 방법이 없다 -- 그때는 이미 늦다. 아카이브를
+언제 뜰지(정기적으로 / 위험한 작업 전에 / 운영자 판단으로)는 배치 정책이며
+자동 트리거는 아직 없다.
+
+아카이브는 **세션 계약만** 써서 뜬다(`list_tree`/`read_file`/`write_file`) --
+Docker 스냅샷 같은 provider 고유 기능에 기대지 않으므로 provider 를 넘나드는
+복구가 성립한다. `.env` 와 `.neos/secrets/` 는 제외된다.
+
+⚠️ **로컬 스토어는 봉인하지 않는다.** `sandbox.managed.archive_root` 는
+샌드박스 밖이어야 하고 백업 대상에서 제외해야 한다. 매니페스트의
+`encryption_key_ref` 가 `"none"` 인 것이 그 사실을 정직하게 적은 것이다 --
+"암호화됨"이라 적어 두고 평문인 것이 가장 나쁘다.
+
+### 24.8 provider 이탈
+
+**자동 크로스 프로바이더 failover 는 금지다.** 기존 할당은 원래 provider 로만
+재접속하고, 다른 provider 로 옮기려면 검증된 portable 아카이브와 운영자 승인이
+필요하다(§24.7). provider 를 빼려면: 드레인 → 기존 할당이 자연 종료되거나
+절대 만료로 정리되기를 기다림 → 어댑터 레지스트리에서 제거. 레지스트리에서
+먼저 빼면 남은 할당의 정리가 `CLEANUP_UNCONFIRMED` 로 돌기만 한다.
+
+### 24.9 시크릿 로테이션
+
+`secrets.managed_provider_reference_key` 는
+`sandbox.managed.provider_reference_key_version` 과 짝이다. AAD 가
+`allocation_id:provider:generation` 이라 할당마다 cipher 가 다르다. 로테이션은
+**살아 있는 할당이 없을 때** 한다 — 옛 키로 봉인된 참조는 새 키로 열리지
+않고, 그 실패는 정리 경로에서 `provider_auth_error` 로 나타난다.
+
+### 24.10 rollback
+
+`sandbox.managed.enabled: false` 는 **신규 admission 만** 막는다. 되돌려도
+inspect·같은 provider 복구·아카이브·정리 경로는 유지한다. 마이그레이션 045 와
+원장 행은 보존한다 — `deep_analysis_events` 와 달리 이 테이블에는 UPDATE/DELETE
+거부 트리거가 없지만, 정리 증거를 지우면 무엇이 provider 에 남아 있는지 아무도
+모르게 된다.
+
+### 24.11 검증
+
+기본 CI 는 벤더 없이 전부 돈다 — 결정론적 fake 어댑터, 공유 적합성 스위트,
+수직 슬라이스(`tests/coding/managed/test_vertical_slice.py`).
+
+실제 Postgres 통합:
+
+```bash
+CODING_TEST_DATABASE_URL='postgresql+asyncpg://user:pass@host/db' \
+  .venv/bin/pytest -q tests/coding/managed/integration -rs
+```
+
+벤더 스모크는 opt-in 이고, 각각 샌드박스를 하나만 만들고 수명 300초 이하,
+네트워크 차단, `finally` 파괴, 비용 상한을 지킨다.
+
+```bash
+CODING_TEST_E2B=1 E2B_API_KEY=<key> \
+  .venv/bin/pytest -q tests/coding/managed/integration/test_e2b_opt_in.py -rs
+
+CODING_TEST_MODAL=1 MODAL_TOKEN_ID=<id> MODAL_TOKEN_SECRET=<secret> \
+  .venv/bin/pytest -q tests/coding/managed/integration/test_modal_opt_in.py -rs
+```
+
+⚠️ 벤더 SDK 결합은 **의도적으로 비어 있다** — `create_e2b_adapter` /
+`create_modal_adapter` 는 클라이언트를 주입하지 않으면 `*_client_not_bound` 로
+멈춘다. 검증되지 않은 SDK 호출을 저장소에 심으면 '구현됐다'고 보이지만 아무도
+실행해 본 적이 없는 코드가 된다. 어댑터의 **번역 로직**은 주입된 클라이언트로
+완전히 검증돼 있고, 남은 것은 그 좁은 프로토콜을 실제 SDK 에 잇는 일이다.

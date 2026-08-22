@@ -14,6 +14,17 @@ _HARNESS_DIR = (
     Path(__file__).resolve().parents[3]
     / "neos" / "workflow" / "deep_analysis"
 )
+_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
+
+# F1 진단 도구 자신의 LLM 호출을 위한 모델 해석이다 -- "이 런이 무엇으로
+# 조립됐나"를 답하는 하네스 역할 테이블(model_roles.HARNESS_ROLES)과는 다른
+# 관심사다. 표본을 사후에 *읽는* 쪽이지 만드는 쪽이 아니라서, 이 두 파일의
+# `resolve_model(...)` 은 하네스 역할 테이블의 열한 번째 사본이 아니다 --
+# `diagnose_bottleneck` 프롬프트를 `RUN_PROMPTS`에서 빼는 것과 같은 경계다.
+_SCRIPT_EXCLUSIONS = {
+    "deep_analysis_diagnostician.py",
+    "deep_analysis_discard_recall.py",
+}
 
 
 def test_role_table_matches_pre_migration_call_sites():
@@ -75,6 +86,11 @@ def test_no_direct_resolve_model_call_in_harness():
     사본이 다시 생기는 것을 기계가 막는다. 이 테스트가 없으면 다음 사람이
     호출 지점 하나를 추가하면서 역할을 손으로 적고, 매니페스트는 그것을
     모른 채 다른 값을 적는다.
+
+    FIX 8: 스캔 대상이 `neos/workflow/deep_analysis/` 뿐이던 시절에는
+    역할 테이블의 열 번째 사본이 `scripts/deep_analysis_funnel_sample.py`에
+    생겨도 이 테스트가 못 잡았다 -- 그 파일이 하네스가 실제로 조립하는
+    표본의 관문이었는데도. `scripts/deep_analysis_*.py`를 스캔에 더한다.
     """
     offenders = []
     for path in sorted(_HARNESS_DIR.rglob("*.py")):
@@ -83,5 +99,12 @@ def test_no_direct_resolve_model_call_in_harness():
         source = path.read_text(encoding="utf-8")
         if "resolve_model(" in source:
             offenders.append(str(path.relative_to(_HARNESS_DIR)))
+
+    for path in sorted(_SCRIPTS_DIR.glob("deep_analysis_*.py")):
+        if path.name in _SCRIPT_EXCLUSIONS:
+            continue
+        source = path.read_text(encoding="utf-8")
+        if "resolve_model(" in source:
+            offenders.append(str(path.relative_to(_SCRIPTS_DIR.parent)))
 
     assert offenders == []

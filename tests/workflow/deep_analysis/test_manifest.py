@@ -1,4 +1,6 @@
 import inspect
+import re
+from pathlib import Path
 
 import pytest
 
@@ -118,24 +120,35 @@ def test_skills_none_is_not_empty_list():
     assert _build(skills=[])["skills"] == []
 
 
-def test_run_prompts_excludes_the_diagnostician_prompt():
-    """`diagnose_bottleneck` 은 런의 구성이 아니다.
+def test_run_prompts_matches_every_render_call_site_under_the_harness():
+    """FIX 4: 하드코딩된 리터럴이 아니라 소스를 스캔해 독립적으로 유도한다.
 
-    F1 진단자(표본을 *읽는* 쪽) 전용이고
-    `scripts/deep_analysis_diagnostician.py:33` 만 로드한다. 넣으면 그
-    파일을 고칠 때마다 실제로 동일한 두 런이 서로 달라 보인다.
+    이전 버전은 `set(RUN_PROMPTS) == {...하드코딩된 8개...}` 였다 -- 이건
+    상수를 잘못 옮겨 적는 실수는 잡지만, 진짜 위험한 실패는 못 잡는다:
+    누군가 아홉 번째 런 경로 프롬프트를 추가하고 `RUN_PROMPTS`에 넣는 것을
+    잊으면, 하드코딩된 리터럴도 똑같이 8개인 채로 남아 테스트가 계속
+    통과한다. 그러면 매니페스트는 조용히 그 프롬프트를 놓친다.
+
+    대신 `neos/workflow/deep_analysis/` 전체에서 `render("<name>", ...)`
+    호출부(줄바꿈 포함)를 스캔해 이름 집합을 독립적으로 유도하고
+    `RUN_PROMPTS`와 대조한다. `render(` 정의 자체(`prompt_loader.py`)나
+    `citation_renderer.render(draft)` 같은 무관한 메서드 호출은 다음 토큰이
+    문자열 리터럴이 아니라서 매치되지 않는다.
     """
-    assert "diagnose_bottleneck" not in RUN_PROMPTS
-    assert set(RUN_PROMPTS) == {
-        "decompose",
-        "worker_brief",
-        "subq_review",
-        "final_compose",
-        "node_summary",
-        "claim_entailment",
-        "judge",
-        "report_judge",
-    }
+    harness_root = Path(__file__).resolve().parents[3] / "neos" / "workflow" / "deep_analysis"
+    call_site_pattern = re.compile(r'render\(\s*"([a-z_]+)"')
+
+    found: set[str] = set()
+    for path in harness_root.rglob("*.py"):
+        found |= set(call_site_pattern.findall(path.read_text()))
+
+    assert found, "스캔이 호출부를 하나도 못 찾았다 -- 패턴이 깨졌다"
+    # `diagnose_bottleneck`은 F1 진단자(표본을 *읽는* 쪽) 전용이고
+    # `scripts/deep_analysis_diagnostician.py`만 로드한다 -- 하네스 트리
+    # 밖이라 스캔에 잡히지 않는다. 넣으면 그 무관한 파일을 고칠 때마다
+    # 실제로 동일한 두 런이 서로 달라 보이므로 일부러 뺀다.
+    assert "diagnose_bottleneck" not in found
+    assert set(RUN_PROMPTS) == found
 
 
 def test_prompt_hashes_covers_every_run_prompt():

@@ -110,6 +110,22 @@ async def test_manifest_records_wired_components(fake_ledger):
 
 
 @pytest.mark.asyncio
+async def test_manifest_records_synthesizer_and_citation_renderer(fake_ledger):
+    """FIX 1: 이 두 부품은 kwargs 로 넘겨지지 않아도 항상 조립된다.
+
+    `Orchestrator.__init__` 은 `synthesizer`/`citation_renderer` 가 `None`
+    이면 각각 `Synthesizer`/`CitationRenderer` 를 무조건 만든다
+    (`build_orchestrator` 는 그 kwargs 를 절대 채우지 않는다). 매니페스트가
+    이 칸을 `null` 로 적으면 "안 쓰였다" 는 거짓을 말하는 것이다.
+    """
+    await build_orchestrator(object(), "run0007", profile="dev")
+    components = _manifest(fake_ledger)["components"]
+
+    assert components["synthesizer"] == "synthesizer:Synthesizer"
+    assert components["citation_renderer"] == "citation:CitationRenderer"
+
+
+@pytest.mark.asyncio
 async def test_manifest_skills_is_none_without_a_registry(fake_ledger):
     await build_orchestrator(object(), "run0006", profile="dev")
 

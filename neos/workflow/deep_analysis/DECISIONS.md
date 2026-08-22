@@ -4349,3 +4349,139 @@ D82 가 실행 전에 고정한 규칙 그대로다:
 - 다시 시도한다면 바꿀 것은 프롬프트가 아니라 **진단자가 표본을 구별하게
   만드는 것**이다 -- 예컨대 표본 둘을 나란히 주고 무엇이 다른지 묻는 형태.
   그것은 이 스펙이 아니라 새 설계이고, 새 사전 등록이 필요하다.
+
+## D84. H1 구성 매니페스트 -- 원장이 런의 구성을 답한다 (2026-08-22)
+
+트랙 H(로드맵 §15) 첫 단계. 런 하나가 무엇으로 조립됐는지를 `run_manifest`
+이벤트 하나에 못 박는다. 스펙:
+`docs/superpowers/specs/2026-08-22-deep-analysis-run-manifest-design.md`.
+표본을 한 건도 쓰지 않고(§15.3 H1의 관문 정의 그대로) 과거 아티팩트만으로
+검증했다.
+
+    commits  4fc2165b(역할 테이블) -> abd9c75c(호출 지점 9곳 이전)
+             -> e8a909c0+bcde20fb(매니페스트 빌더) -> bcdb7715(발행)
+             -> 6e3851d2(FE 라벨) -> 8d02e73b+ea30fd59(아티팩트 층이 원장을 읽는다)
+             -> 87b42194+596a1efd(표본 경계 게이트) -> d4e79d1d+5b6df3e5(백테스트)
+
+### H-1 -- 새 이벤트 kind, 컬럼이 아니다
+
+매니페스트는 `deep_analysis_runs`에 컬럼을 더하는 대신 **새 이벤트 kind**
+`run_manifest`로 둔다(로드맵 §15.5 H-1).
+
+- **마이그레이션 0건.** `DAEvent.kind`는 `String(40)`
+  (`neos/database/deep_analysis_models.py:203`)이고 `"run_manifest"`는
+  12자다. 이것이 급한 이유는 취향이 아니라 **SCHEMA1**이다 -- 로드맵 §7이
+  적었듯 마이그레이션 44개를 신선한 DB에 순서대로 적용하면 **7개가 실패한다.**
+  마이그레이션이 필요한 설계는 이미 나쁜 기반 위에 하나를 더 얹는 것이다.
+- **append-only(D8)와 맞다.** 컬럼은 UPDATE를 요구하지만 이벤트는 그렇지
+  않다. §15.2 ㉯("쓰고 나서 제거한다"와 append-only 원장의 충돌)의 해소가
+  "제거도 이벤트다"였는데, 매니페스트를 컬럼으로 뒀으면 그 해소 자체가
+  성립하지 않았다.
+- **컬럼이었다면 SCHEMA2(§7, run 삭제 관련 보존기한 요구)가 걸린다.** 이벤트가
+  하나라도 있는 run은 지워지지 않으므로, run 레코드를 넓히는 쪽이 나중에
+  보존기한 요구가 생겼을 때 더 아프다.
+
+### 거부 지점은 표본 경계뿐이다
+
+`scripts/deep_analysis_funnel_sample.py`의 `_gate_and_read_manifests`가
+`write_artifacts` 직전에 표본의 모든 run_id에 대해 매니페스트 존재를
+검사하고, 하나라도 없으면 아티팩트를 쓰지 않는다(`MissingManifestError`,
+commits 87b42194·596a1efd). **`Orchestrator.run()`은 건드리지 않는다.**
+그 안에 게이트를 넣으면 Orchestrator를 직접 짓는 골든·통합 테스트 수십 건이
+깨지고, 로드맵 §15.4 금지 3번의 문구가 금지하는 것은 "런"이 아니라
+**"표본"**이다.
+
+### 로드맵의 "그래프 토폴로지 해시" 항은 컴포넌트 배선 지문으로 바뀐다
+
+§15.3 H1이 원래 적은 항목은 "그래프 토폴로지 해시"였다. 구현하지 않았다 --
+**심층분석 런은 LangGraph 그래프를 타지 않는다.** 자체 오케스트레이터
+루프다. 대신 `components` 칸에 부품 배선을 적는다: grader·agentic_grader·
+report_grader·synthesizer·citation_renderer·search_fn·fetch_fn·cassette
+각각을 `type(obj).__module__:type(obj).__qualname__`(`neos.workflow.deep_analysis.`
+접두어는 뗀다)로 지문 낸다. 소스 파일 해시는 넣지 않는다 -- 클래스 이름이
+같고 내용만 바뀐 경우(D58·D60·D62의 절삭기 교체가 정확히 그랬다)는 아티팩트
+층이 이미 붙이는 `git` 항(commit + dirty)이 답하고, 파일 해시는 그것과
+중복이면서 런마다 파일 읽기를 추가한다.
+
+### 프롬프트는 8개다, 9개가 아니다
+
+`prompts/` 디렉터리에는 9개 파일이 있지만 매니페스트가 싣는 것은 런 경로가
+실제로 로드하는 **8개**뿐이다: `decompose`·`worker_brief`·`subq_review`
+(orchestrator.py) · `final_compose`·`node_summary`(synthesizer.py) ·
+`claim_entailment`(worker.py) · `judge`(graders/agentic.py) ·
+`report_judge`(graders/report.py). **`diagnose_bottleneck`은 뺀다** --
+그것은 F1 진단자(D79~D83, 표본을 사후에 *읽는* 쪽) 전용이고
+`scripts/deep_analysis_diagnostician.py:33`만 로드한다. 런의 구성이 아니다.
+넣으면 그 파일을 고칠 때마다 **실제로 동일한 두 런이 서로 달라 보인다** --
+매니페스트가 재는 것은 "저장소에 무엇이 있나"가 아니라 "이 런이 무엇을
+썼나"다.
+
+### 실측 근거 -- 표본 #20이 지금도 틀린 캡을 적고 있다
+
+매니페스트가 없던 시절 아티팩트가 실제로 무엇을 놓쳤는지 표본 #20으로
+확인했다:
+
+    artifacts/deep-analysis-funnel/20260818T111321Z/manifest.json
+      config_fingerprint.global_token_cap : 300000   (기본 프로파일 값)
+      dev_runs                            : 5개 런 -- 실제로는 140000 캡의 dev 프로파일
+
+    dev available_for_investigation = 140000 - 53600 = 86400
+
+**86,400은 D78이 D75 -> D77 -> D78 세 번의 정정 끝에 도달한 바로 그
+숫자다.** 매니페스트가 있었다면 이 값은 표본 #17이 돌기 전에 이미 원장에
+있었을 것이다 -- D75 -> D77 -> D78의 세 번은 이 한 줄의 뺄셈을 손으로 다시
+계산한 것이었다.
+
+### 백테스트 관문 결과
+
+`scripts/manifest_backtest.py`로 표본 #16~#20(모두 이 기능 이전 아티팩트)을
+검사했다(`docs/superpowers/plans/artifacts/2026-08-22-manifest-backtest.md`).
+
+| 표본 | profile | models | budget | prompts | skills | components | config |
+|---|---|---|---|---|---|---|---|
+| #16~#20 (5건 전부) | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ |
+
+**옛 지문(`config_fingerprint`)에서 부분 복원되는 것은 `models`·`budget`·
+`config` 뿐이고, `profile`·`prompts`·`skills`·`components`는 다섯 표본
+어디에도 없다.** 이 넷은 옛 아티팩트의 구조적 한계이지 백테스트 도구의
+결함이 아니다 -- 이 기능 도입 후 기록된 아티팩트는 같은 도구로 전부 ✅다
+(`test_new_artifact_recovers_every_field`).
+
+**더 날카로운 발견 -- `budget`은 ✅인데 그 값이 틀리다.** 표본 #20의
+`global_token_cap`은 300000 하나만 적혀 있지만 6런 중 5런은 dev 프로파일
+140000 캡으로 돌았고 실제 `tokens_spent`는 36,620~59,380이다. `budget` 칸이
+✅인 것은 지문에 값이 "있다"는 뜻일 뿐 **그 값이 모든 런에 대해 옳다**는
+뜻이 아니다. 즉 `profile` 칸의 부재는 정보 하나를 잃는 데 그치지 않고
+**남아 있는 `budget` 칸을 오독하게 만든다.**
+
+### 구현 중 결정한 이탈 -- `judge_equals_scout`을 최상위로
+
+스펙 초안(§3.3)은 `judge_equals_scout`을 `models` 안에 그렸다. 구현 리뷰에서
+`models`의 다른 모든 값은 해석 결과 dict인데 이것만 bool이라
+`models.items()`를 도는 소비자가 깨진다는 지적이 나왔고(fix round 1,
+commit bcde20fb), **최상위 키로 옮기는 쪽을 채택했다.** 지금 그 값을 도는
+소비자가 없어(T6 reader는 kind로만 필터, 백테스트는 `field in sample`, FE는
+`profile`만 읽는다) 옮기는 비용이 0이지만, `manifest_version: 1`이 표본에
+실리고 나면 같은 이동이 버전 범프를 요구한다 -- **지금이 공짜로 고칠 수
+있는 유일한 시점**이었다. 스펙 문서도 같은 커밋 대(Task 9)에서 정정했다
+(정정 상자 포함, 원문은 지우지 않음).
+
+### 남기는 것
+
+- **H-2** -- 동적 합성이 라이브 표본 경로에 들어오는 시점. §15.2 ㉰(같은
+  사전 등록 아래 런마다 도구가 다르면 비교 불가)이 통계 문제라 설계로
+  닫히지 않는다. 이 설계는 답하지 않는다.
+- **H-3** -- 플러그인 버전 고정 정책. `skills[].version`을 매니페스트에
+  싣지만 **고정하지는 않는다.**
+- **갈림 감지 정책(`divergent_manifest_fields`)은 의도적으로 미구현이다**
+  (R2 재정). 표본 하나 안에서 run마다 매니페스트가 다를 때 중단할지, 기록만
+  하고 진행할지, 항목별로 나눌지는 §4가 사람의 판단으로 남긴 자리다. 함수
+  시그니처와 판단 재료(§4)는 스펙에 있으나 `_main()`에 배선하지 않았다 --
+  호출자 없는 함수를 만들면 죽은 코드이고, 이 지점은 소유자가 채운다.
+- **`skills`는 선언만 되고 채워지지 않는 칸이다 (2026-08-23 최종 리뷰 정정).**
+  스키마에는 칸이 있지만 `build_orchestrator`에 `skill_registry`를 넘기는
+  호출자가 지금 하나도 없다 -- 그 kwarg 사용처를 찾으면 `service.py` 자신뿐이다.
+  즉 프로덕션의 모든 런에서 `skills`는 항상 `null`이다. 레지스트리를 배선하는
+  것은 이 결정의 범위 밖이다 -- 별도의 미해결 질문과 얽혀 있다. `docs/superpowers/plans/artifacts/2026-08-22-manifest-backtest.md`도
+  같은 정정을 받았다 -- 그 문서의 "전부 ✅"는 체커가 값이 아니라 키의 존재를
+  채점한다는 뜻이었다.

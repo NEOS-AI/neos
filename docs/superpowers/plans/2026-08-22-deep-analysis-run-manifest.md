@@ -1390,10 +1390,13 @@ async def test_gate_raises_before_reading_manifests(monkeypatch):
     경로와 섞이면 "거부했는데 아티팩트는 써졌다" 가 가능해진다.
     """
     read = []
+
+    async def _spy_manifests_for(*_args, **_kwargs):
+        read.append("called")
+        return {}
+
     monkeypatch.setattr(sample, "runs_without_manifest", _async_return(["r2"]))
-    monkeypatch.setattr(
-        sample, "manifests_for", _async_return(read.append("called") or {})
-    )
+    monkeypatch.setattr(sample, "manifests_for", _spy_manifests_for)
 
     with pytest.raises(MissingManifestError) as caught:
         await sample._gate_and_read_manifests(object(), ["r1", "r2"])

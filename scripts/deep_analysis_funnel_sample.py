@@ -295,8 +295,29 @@ async def _main(
         if default_run and default_run.get("run_id"):
             run_ids.append(default_run["run_id"])
 
+        # 관문은 완료된 런만 본다. 체크포인트 이전에 죽은 런은 매니페스트가
+        # 롤백되어 사라지므로(`Ledger.log`는 flush 만 하고, `Orchestrator.run`
+        # 의 예외 처리기가 `fail_run()` 전에 `db.rollback()` 을 부른다) 실패한
+        # 런 하나가 나머지 완료된 런들의 증거까지 통째로 버리게 된다. 표본은
+        # 정확히 1회이므로 그 다섯 런은 다시 돌릴 기회가 없다. 실패한 런은
+        # 여전히 `result["dev_runs"]`(아티팩트의 런 목록)에 남는다 -- 여기서
+        # 바꾸는 것은 관문이 무엇을 검사하는지 뿐이다.
+        completed_run_ids = [
+            item["run_id"]
+            for item in result["dev_runs"]
+            if item.get("run_id") and item.get("status") == "completed"
+        ]
+        if (
+            default_run
+            and default_run.get("run_id")
+            and default_run.get("status") == "completed"
+        ):
+            completed_run_ids.append(default_run["run_id"])
+
         async with get_session_ctx() as session:
-            manifests = await _gate_and_read_manifests(session, run_ids)
+            manifests = await _gate_and_read_manifests(
+                session, completed_run_ids
+            )
 
         artifact_dir = write_artifacts(
             result,
