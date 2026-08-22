@@ -1,8 +1,14 @@
+from types import SimpleNamespace
+
 import pytest
 
 from neos.coding.workers import celery_tasks
 from neos.coding.workers.execution import CodingTaskOutcome
-from neos.workflow.celery_app import app, configure_coding_beat_schedule
+from neos.workflow.celery_app import (
+    app,
+    configure_coding_beat_schedule,
+    configure_managed_sandbox_beat_schedule,
+)
 
 
 class RecordingMetric:
@@ -247,6 +253,89 @@ def test_coding_tasks_are_routed_to_dedicated_queue() -> None:
     route = app.conf.task_routes["neos.coding.workers.celery_tasks.execute_coding_task"]
     assert route == {"queue": "coding"}
     assert "coding" in {queue.name for queue in app.conf.task_queues}
+
+
+_MANAGED_TASK_NAMES = (
+    "neos.coding.managed.allocate",
+    "neos.coding.managed.reconcile",
+    "neos.coding.managed.cleanup",
+    "neos.coding.managed.reconcile_quota",
+    "neos.coding.managed.probe_health",
+)
+
+
+@pytest.mark.parametrize("name", _MANAGED_TASK_NAMES)
+def test_managed_sandbox_tasks_are_registered_on_the_coding_queue(name: str) -> None:
+    assert name in app.tasks
+    assert app.conf.task_routes[name] == {"queue": "coding"}
+
+
+def test_managed_allocate_returns_only_bounded_identity(monkeypatch) -> None:
+    """리턴값은 결과 백엔드에 저장된다 -- 상태 이름과 식별자 말고는 싣지 않는다."""
+
+    async def advance(**kwargs):
+        return SimpleNamespace(
+            allocation_id=kwargs["allocation_id"], state=SimpleNamespace(value="active")
+        )
+
+    monkeypatch.setattr(celery_tasks, "advance_managed_allocation", advance)
+
+    assert celery_tasks.advance_managed_sandbox.run("msa_1", 2) == {
+        "allocation_id": "msa_1",
+        "state": "active",
+    }
+
+
+def test_managed_cleanup_returns_only_bounded_identity(monkeypatch) -> None:
+    async def clean(**kwargs):
+        return SimpleNamespace(
+            allocation_id=kwargs["allocation_id"],
+            state=SimpleNamespace(value="cleanup_retry"),
+            error_code=SimpleNamespace(value="cleanup_unconfirmed"),
+        )
+
+    monkeypatch.setattr(celery_tasks, "clean_managed_allocation", clean)
+
+    assert celery_tasks.clean_managed_sandbox.run("msa_1", None) == {
+        "allocation_id": "msa_1",
+        "state": "cleanup_retry",
+        "error_code": "cleanup_unconfirmed",
+    }
+
+
+def test_managed_reconcile_returns_bounded_counts(monkeypatch) -> None:
+    async def reconcile(**kwargs):
+        return {"cleanup": 2, "recovery": 1, "failed": 0}
+
+    monkeypatch.setattr(celery_tasks, "reconcile_managed_sandboxes", reconcile)
+
+    assert celery_tasks.reconcile_managed_sandbox_lifecycle.run() == {
+        "cleanup": 2,
+        "recovery": 1,
+        "failed": 0,
+    }
+
+
+def test_managed_sandbox_beat_schedule_follows_the_managed_flag() -> None:
+    """관리형 beat 는 `sandbox.managed.enabled` 하나에만 묶인다."""
+    schedule = {}
+
+    configure_managed_sandbox_beat_schedule(
+        schedule, enabled=True, reconciliation_interval=30.0, health_interval=60.0
+    )
+    assert schedule["reconcile-managed-sandboxes"] == {
+        "task": "neos.coding.managed.reconcile",
+        "schedule": 30.0,
+    }
+    assert schedule["probe-managed-sandbox-health"] == {
+        "task": "neos.coding.managed.probe_health",
+        "schedule": 60.0,
+    }
+
+    configure_managed_sandbox_beat_schedule(
+        schedule, enabled=False, reconciliation_interval=30.0, health_interval=60.0
+    )
+    assert not any(key.endswith("managed-sandboxes") for key in schedule)
 
 
 def test_coding_reconciliation_schedule_follows_feature_flag() -> None:

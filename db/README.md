@@ -184,4 +184,7 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/039_add_c
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/040_add_coding_execution_leases.sql
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/041_add_coding_sandbox_bindings.sql
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/042_add_coding_approvals.sql
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/043_add_coding_text_parts.sql
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/044_add_coding_workspace_edits.sql
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/045_add_coding_managed_sandboxes.sql
 ```

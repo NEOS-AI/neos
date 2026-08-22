@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
 from .graders.agentic import AgenticGrader
 from .graders.deterministic import DeterministicGrader
 from .graders.report import ReportGrader
 from .ledger import Ledger
+from .model_roles import resolve_harness_model
 from .orchestrator import Orchestrator
 from .skill_selector import SkillSelector
 from .worker import Worker
@@ -58,12 +58,7 @@ async def build_orchestrator(
     skill_registry=None,
 ) -> Orchestrator:
     config = settings.config.deep_analysis
-    judge_model = resolve_model(
-        config=settings.config.model_routing,
-        provider="anthropic",
-        role="everyday",
-        feature_override=config.models.judge,
-    ).model
+    judge_model = resolve_harness_model("judge").model
     ledger = Ledger(session, run_id)
     grader = DeterministicGrader(
         ledger,

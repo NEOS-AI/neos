@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import re
 
-from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
 from .llm import call_json, call_text, prompt_input_bound
+from .model_roles import resolve_harness_model
 from .models import ConflictNote, NodeSummary
 from .prompt_clamp import clamp_prompt, halve
 from .prompt_loader import render
@@ -268,13 +268,7 @@ class Synthesizer:
             # "{revision_note}" in the prompt is worse than an empty one.
             revision_note="(없음 -- 재시도 없는 경로)",
         )
-        config = settings.config.deep_analysis
-        synth_model = resolve_model(
-            config=settings.config.model_routing,
-            provider="anthropic",
-            role="powerful",
-            feature_override=config.models.synth,
-        ).model
+        synth_model = resolve_harness_model("synth").model
         response = await self.llm_call(
             synth_model,
             prompt,
@@ -324,13 +318,7 @@ class Synthesizer:
             else f"- [{child.question_id}] {child.answer}"
             for child in child_summaries
         ]
-        config = settings.config.deep_analysis
-        synth_model = resolve_model(
-            config=settings.config.model_routing,
-            provider="anthropic",
-            role="powerful",
-            feature_override=config.models.synth,
-        ).model
+        synth_model = resolve_harness_model("synth").model
         qid = root_summary.question_id if root_summary is not None else ""
 
         def render_assembly(
@@ -493,12 +481,7 @@ class Synthesizer:
         child_lines = [
             f"[{c.question_id}] {c.answer}" for c in child_summaries
         ]
-        synth_model = resolve_model(
-            config=settings.config.model_routing,
-            provider="anthropic",
-            role="powerful",
-            feature_override=settings.config.deep_analysis.models.synth,
-        ).model
+        synth_model = resolve_harness_model("synth").model
 
         def render_node(
             claims: list[str], children: list[str], _anchor: str = ""
@@ -624,12 +607,7 @@ class Synthesizer:
         report as literal text where a citation belongs.
         """
 
-        synth_model = resolve_model(
-            config=settings.config.model_routing,
-            provider="anthropic",
-            role="powerful",
-            feature_override=settings.config.deep_analysis.models.synth,
-        ).model
+        synth_model = resolve_harness_model("synth").model
         ceiling = self.synthesis_max_tokens
         text = answer
         while text and prompt_input_bound(synth_model, text) > ceiling:

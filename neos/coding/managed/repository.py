@@ -6,7 +6,9 @@ from sqlalchemy import text
 
 from neos.coding.managed.adapters import AllocationResult
 from neos.coding.managed.admission import AdmissionRequest, AdmissionResult
+from neos.coding.managed.archive import PortableRecoveryConflict
 from neos.coding.managed.allocation import (
+    _ADVANCEABLE_STATES,
     AllocationPlan,
     ManagedAllocationLease,
     ManagedSandboxNotClaimable,
@@ -20,7 +22,15 @@ from neos.coding.managed.domain import (
     ManagedSandboxState,
     ProviderErrorCode,
 )
-from neos.coding.persistence.postgres import SessionFactory
+from neos.coding.managed.lifecycle import (
+    _CLEANABLE_STATES,
+    _CLEANUP_SOURCE_STATES,
+    CleanupAttemptOutcome,
+    CleanupCandidate,
+    LifecycleCandidates,
+)
+from neos.coding.domain.models import CodingTaskStatus
+from neos.coding.persistence.postgres import PostgresCodingService, SessionFactory
 
 
 _POLICY_VERSION = "managed-v1"
@@ -49,6 +59,31 @@ _CLAIMABLE_STATES = (
     ManagedSandboxState.RECOVERY_PENDING.value,
     ManagedSandboxState.CLEANUP_PENDING.value,
     ManagedSandboxState.CLEANUP_RETRY.value,
+)
+# 아래 셋은 파생값이다 -- 원본을 각각 `lifecycle`·`allocation` 이 소유하고
+# 여기서는 SQL 바인드용 문자열로만 옮긴다. 상태 집합을 이 파일에서 다시
+# 손으로 적으면 `_CLAIMABLE_STATES`가 `claimable_at()`과 갈라졌던 것과 같은
+# 사고가 반복된다.
+_CLEANUP_SOURCE_STATE_VALUES = tuple(
+    state.value for state in _CLEANUP_SOURCE_STATES
+)
+_CLEANABLE_STATE_VALUES = tuple(
+    sorted(state.value for state in _CLEANABLE_STATES)
+)
+_RECOVERY_STATE_VALUES = tuple(sorted(state.value for state in _ADVANCEABLE_STATES))
+# `coding_tasks.status`가 이 값이면 샌드박스를 더 붙들고 있을 이유가 없다.
+# `workspace_stream_service._TERMINAL_TASK_STATUSES`와 같은 집합이다.
+_TERMINAL_TASK_STATUS_VALUES = tuple(
+    sorted(
+        status.value
+        for status in (
+            CodingTaskStatus.COMPLETED,
+            CodingTaskStatus.FAILED,
+            CodingTaskStatus.CANCELLED,
+            CodingTaskStatus.EXPIRED,
+            CodingTaskStatus.ARCHIVED,
+        )
+    )
 )
 
 
@@ -606,32 +641,9 @@ class PostgresManagedSandboxRepository:
         _require_timezone_aware("commit time", now)
         async with await self._session_factory() as session:
             async with session.begin():
-                row = (
-                    await session.execute(
-                        text(
-                            f"""
-                            UPDATE coding_managed_sandboxes
-                               SET {assignments},
-                                   version = version + 1,
-                                   updated_at = :now
-                             WHERE allocation_id = :allocation_id
-                               AND fencing_token = :fencing_token
-                         RETURNING allocation_id, tenant_id, task_id, run_id,
-                                   provider, region, provider_ref,
-                                   ownership_digest, state, generation,
-                                   fencing_token, lease_expires_at,
-                                   absolute_expires_at, version, error_code,
-                                   snapshot_ref, archive_ref, image_identity
-                            """
-                        ),
-                        {
-                            **params,
-                            "allocation_id": lease.allocation_id,
-                            "fencing_token": lease.fencing_token,
-                            "now": now,
-                        },
-                    )
-                ).one_or_none()
+                row = await _execute_fenced_commit(
+                    session, lease, now=now, assignments=assignments, params=params
+                )
         if row is None:
             raise StaleManagedSandboxLease(lease.allocation_id)
         return _allocation_from_row(row)
@@ -671,6 +683,520 @@ class PostgresManagedSandboxRepository:
         return AllocationPlan(
             allocation=_allocation_from_row(row),
             idempotency_key=str(row.idempotency_key),
+        )
+
+    async def read_allocation(self, allocation_id: str) -> ManagedSandboxAllocation:
+        """할당 행 하나를 읽는다 (admission 조인 없이).
+
+        정리 경로는 `idempotency_key`가 필요 없다 -- destroy 는 봉인된
+        `provider_ref`와 `ownership_digest`만 쓴다. 조인을 빼면 admission 이
+        아직 없는 행도 읽히지만, 045의 FK 가 그런 행을 애초에 못 만들게 한다.
+        """
+        async with await self._session_factory() as session:
+            async with session.begin():
+                row = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT allocation_id, tenant_id, task_id, run_id,
+                                   provider, region, provider_ref,
+                                   ownership_digest, state, generation,
+                                   fencing_token, lease_expires_at,
+                                   absolute_expires_at, version, error_code,
+                                   snapshot_ref, archive_ref, image_identity
+                              FROM coding_managed_sandboxes
+                             WHERE allocation_id = :allocation_id
+                            """
+                        ),
+                        {"allocation_id": allocation_id},
+                    )
+                ).one_or_none()
+        if row is None:
+            raise ManagedSandboxNotFound(allocation_id)
+        return _allocation_from_row(row)
+
+    async def cleanup_attempt_count(self, allocation_id: str) -> int:
+        """이 할당에 대해 이미 기록된 정리 시도 수 -- 백오프 인덱스가 된다.
+
+        시도 행이 append-only 라서 개수가 곧 인덱스다. 별도 카운터 컬럼을
+        두지 않는 이유는 그것이 시도 기록과 갈라질 수 있기 때문이다.
+        """
+        async with await self._session_factory() as session:
+            async with session.begin():
+                count = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT COUNT(*)
+                              FROM coding_sandbox_cleanup_attempts
+                             WHERE allocation_id = :allocation_id
+                            """
+                        ),
+                        {"allocation_id": allocation_id},
+                    )
+                ).scalar_one()
+        return int(count)
+
+    async def commit_cleanup_outcome(
+        self,
+        lease: ManagedAllocationLease,
+        *,
+        target: ManagedSandboxState,
+        outcome: CleanupAttemptOutcome,
+        error_code: ProviderErrorCode | None,
+        retry_at: datetime | None,
+        started_at: datetime,
+        now: datetime,
+    ) -> ManagedSandboxAllocation:
+        """상태 전이와 시도 기록을 **한 트랜잭션**에서 커밋한다.
+
+        갈라지면 원장이 거짓말을 한다 -- 상태만 남으면 백오프 인덱스가
+        전진하지 않아 정리가 5초마다 provider 를 때리고, 시도만 남으면
+        상태가 영원히 CLEANUP_PENDING 이라 다음 조정이 같은 일을 또 시킨다.
+
+        전이 자체는 `commit_state()`와 같은 펜싱 UPDATE 를 쓴다 -- 낡은
+        리스를 든 워커의 커밋은 0행을 갱신하고 `StaleManagedSandboxLease`가
+        된다. 그 경우 시도 행도 쓰이지 않는다 (예외가 트랜잭션을 되돌린다).
+
+        리스는 두 결과 모두에서 비운다. CLEANED 는 045의 CHECK 가 요구해서고,
+        CLEANUP_RETRY 는 다음 시도가 리스 만료를 기다릴 이유가 없어서다 --
+        다음 시각은 `next_retry_at`이 정한다.
+        """
+        _require_timezone_aware("cleanup commit time", now)
+        _require_timezone_aware("cleanup start time", started_at)
+        assignments = [
+            "state = :state",
+            "error_code = :error_code",
+            "lease_expires_at = NULL",
+        ]
+        params: dict[str, object] = {
+            "state": target.value,
+            "error_code": error_code.value if error_code is not None else None,
+        }
+        if target is ManagedSandboxState.CLEANED:
+            assignments.extend(
+                (
+                    "provider_ref = NULL",
+                    "ownership_digest = NULL",
+                    "cleaned_at = :now",
+                )
+            )
+        async with await self._session_factory() as session:
+            async with session.begin():
+                row = await _execute_fenced_commit(
+                    session,
+                    lease,
+                    now=now,
+                    assignments=", ".join(assignments),
+                    params=params,
+                )
+                if row is None:
+                    raise StaleManagedSandboxLease(lease.allocation_id)
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_sandbox_cleanup_attempts (
+                            cleanup_attempt_id, allocation_id,
+                            claimed_fencing_token, outcome, error_code,
+                            next_retry_at, started_at, finished_at
+                        ) VALUES (
+                            :cleanup_attempt_id, :allocation_id,
+                            :claimed_fencing_token, :outcome, :error_code,
+                            :next_retry_at, :started_at, :finished_at
+                        )
+                        """
+                    ),
+                    {
+                        "cleanup_attempt_id": f"msc_{uuid4().hex}",
+                        "allocation_id": lease.allocation_id,
+                        "claimed_fencing_token": lease.fencing_token,
+                        "outcome": outcome.value,
+                        "error_code": (
+                            error_code.value if error_code is not None else None
+                        ),
+                        "next_retry_at": retry_at,
+                        "started_at": started_at,
+                        "finished_at": now,
+                    },
+                )
+        return _allocation_from_row(row)
+
+    async def approve_recovery_generation(
+        self,
+        *,
+        allocation_id: str,
+        operator_id: str,
+        archive_id: str,
+        checksum: str,
+        policy_version: str,
+        lifetime_seconds: int,
+        reservation_lease_seconds: int,
+        now: datetime,
+    ) -> ManagedSandboxAllocation:
+        """원본 세대를 종결하고 generation + 1 을 **한 트랜잭션**에서 만든다.
+
+        갈라질 수 없다. 045의 부분 유니크 인덱스
+        (`idx_coding_managed_sandboxes_current_task`)가 태스크당 살아 있는
+        할당을 하나로 강제하므로, 원본을 먼저 `FAILED`로 닫지 않으면 새 행
+        INSERT 가 인덱스에 걸린다. 반대로 원본만 닫고 새 행을 못 만들면
+        태스크는 샌드박스 없는 상태로 남는다.
+
+        멱등하다. 새 admission 의 `idempotency_key`가
+        `recovery:{allocation_id}:g{n}` 으로 **결정론적**이라, 같은 승인이 두 번
+        오면 `UNIQUE (tenant_id, idempotency_key)`가 두 번째를 막는다 -- 운영자가
+        버튼을 두 번 눌러 세대가 둘 생기는 일이 없다.
+
+        쿼터는 원본의 예약액을 그대로 옮긴다. 살아 있는 할당 수가 순증하지
+        않기 때문이다 -- 원본이 같은 트랜잭션에서 `FAILED`(=`_LIVE_QUOTA_STATES`
+        밖)로 닫힌다. 새 `reservation_id`와 새 리스를 주므로 예약 자체는
+        신선하다.
+
+        감사 기록은 `coding_events`에 남긴다. seq 할당을 여기서 다시 만들지
+        않고 `PostgresCodingService.append_in_session()`을 그대로 쓴다.
+        본문은 절대 싣지 않는다 -- 식별자·체크섬·정책 버전·결과뿐이다.
+        """
+        _require_timezone_aware("approval time", now)
+        if lifetime_seconds <= 0 or reservation_lease_seconds <= 0:
+            raise ValueError("recovery lifetimes must be positive")
+        async with await self._session_factory() as session:
+            async with session.begin():
+                source = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT sandbox.allocation_id, sandbox.tenant_id,
+                                   sandbox.task_id, sandbox.run_id,
+                                   sandbox.provider, sandbox.region,
+                                   sandbox.state, sandbox.generation,
+                                   sandbox.image_identity,
+                                   sandbox.toolchain_identity,
+                                   admission.reserved_active_seconds,
+                                   admission.reserved_archive_bytes,
+                                   admission.reserved_cost_micros
+                              FROM coding_managed_sandboxes AS sandbox
+                              JOIN coding_sandbox_admissions AS admission
+                                ON admission.admission_id = sandbox.admission_id
+                             WHERE sandbox.allocation_id = :allocation_id
+                               FOR UPDATE OF sandbox, admission
+                            """
+                        ),
+                        {"allocation_id": allocation_id},
+                    )
+                ).one_or_none()
+                if source is None:
+                    raise ManagedSandboxNotFound(allocation_id)
+                if source.state != ManagedSandboxState.MANUAL_RECOVERY_REQUIRED.value:
+                    raise PortableRecoveryConflict("recovery_not_required")
+
+                # ⚠️ 이 검사는 **지금 도달 불가능한 심층 방어**다.
+                # 045의 부분 유니크 인덱스
+                # (`idx_coding_managed_sandboxes_current_task`)가
+                # `manual_recovery_required` 를 '살아 있음'으로 세므로
+                # (`state NOT IN ('cleaned','failed')`), "복구 대기 중인 원본 +
+                # 같은 태스크의 살아 있는 다른 세대"는 DB 가 애초에 표현하지
+                # 못한다 -- 통합 테스트가 그것을 확인했다
+                # (`test_postgres_recovery.py::
+                #   test_a_stuck_allocation_cannot_coexist_with_a_live_generation`).
+                # 그 인덱스가 완화되면 이 검사가 유일한 방어선이 되므로
+                # 남겨 두되, **이것이 지금 무언가를 막고 있다고 읽지 말 것.**
+                live = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT 1
+                              FROM coding_managed_sandboxes
+                             WHERE task_id = :task_id
+                               AND allocation_id <> :allocation_id
+                               AND cleaned_at IS NULL
+                               AND state NOT IN ('cleaned', 'failed')
+                             LIMIT 1
+                            """
+                        ),
+                        {
+                            "task_id": source.task_id,
+                            "allocation_id": allocation_id,
+                        },
+                    )
+                ).one_or_none()
+                if live is not None:
+                    raise PortableRecoveryConflict("recovery_generation_exists")
+
+                generation = int(source.generation) + 1
+                new_allocation_id = f"msa_{uuid4().hex}"
+                new_admission_id = f"adm_{uuid4().hex}"
+                absolute_expires_at = now + timedelta(seconds=lifetime_seconds)
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_managed_sandboxes
+                           SET state = 'failed',
+                               lease_expires_at = NULL,
+                               version = version + 1,
+                               updated_at = :now
+                         WHERE allocation_id = :allocation_id
+                        """
+                    ),
+                    {"allocation_id": allocation_id, "now": now},
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_sandbox_admissions (
+                            admission_id, idempotency_key, tenant_id, task_id,
+                            provider, region, policy_version, decision, reason,
+                            reservation_id, reservation_expires_at,
+                            reserved_active_seconds, reserved_archive_bytes,
+                            reserved_cost_micros, reservation_state, created_at
+                        ) VALUES (
+                            :admission_id, :idempotency_key, :tenant_id,
+                            :task_id, :provider, :region, :policy_version,
+                            'admitted', 'allowed', :reservation_id,
+                            :reservation_expires_at, :reserved_active_seconds,
+                            :reserved_archive_bytes, :reserved_cost_micros,
+                            'reserved', :now
+                        )
+                        """
+                    ),
+                    {
+                        "admission_id": new_admission_id,
+                        "idempotency_key": (
+                            f"recovery:{allocation_id}:g{generation}"
+                        ),
+                        "tenant_id": source.tenant_id,
+                        "task_id": source.task_id,
+                        "provider": source.provider,
+                        "region": source.region,
+                        "policy_version": policy_version,
+                        "reservation_id": f"rsv_{uuid4().hex}",
+                        "reservation_expires_at": (
+                            now + timedelta(seconds=reservation_lease_seconds)
+                        ),
+                        "reserved_active_seconds": source.reserved_active_seconds,
+                        "reserved_archive_bytes": source.reserved_archive_bytes,
+                        "reserved_cost_micros": source.reserved_cost_micros,
+                        "now": now,
+                    },
+                )
+                created = (
+                    await session.execute(
+                        text(
+                            """
+                            INSERT INTO coding_managed_sandboxes (
+                                allocation_id, admission_id, tenant_id, task_id,
+                                run_id, provider, region, provider_ref,
+                                ownership_digest, state, generation,
+                                fencing_token, lease_expires_at,
+                                absolute_expires_at, version, error_code,
+                                snapshot_ref, archive_ref, image_identity,
+                                toolchain_identity, created_at, updated_at
+                            ) VALUES (
+                                :allocation_id, :admission_id, :tenant_id,
+                                :task_id, :run_id, :provider, :region, NULL,
+                                NULL, 'admitted', :generation, 1, NULL,
+                                :absolute_expires_at, 1, NULL, NULL,
+                                :archive_ref, :image_identity,
+                                :toolchain_identity, :now, :now
+                            )
+                         RETURNING allocation_id, tenant_id, task_id, run_id,
+                                   provider, region, provider_ref,
+                                   ownership_digest, state, generation,
+                                   fencing_token, lease_expires_at,
+                                   absolute_expires_at, version, error_code,
+                                   snapshot_ref, archive_ref, image_identity
+                            """
+                        ),
+                        {
+                            "allocation_id": new_allocation_id,
+                            "admission_id": new_admission_id,
+                            "tenant_id": source.tenant_id,
+                            "task_id": source.task_id,
+                            "run_id": source.run_id,
+                            "provider": source.provider,
+                            "region": source.region,
+                            "generation": generation,
+                            "absolute_expires_at": absolute_expires_at,
+                            "archive_ref": archive_id,
+                            "image_identity": source.image_identity,
+                            "toolchain_identity": source.toolchain_identity,
+                            "now": now,
+                        },
+                    )
+                ).one()
+                await PostgresCodingService(
+                    self._session_factory
+                ).append_in_session(
+                    session,
+                    task_id=str(source.task_id),
+                    event_type="managed_sandbox_recovery_approved",
+                    payload={
+                        "source_allocation_id": allocation_id,
+                        "recovery_allocation_id": new_allocation_id,
+                        "generation": generation,
+                        "operator_id": operator_id,
+                        "archive_id": archive_id,
+                        "archive_checksum": checksum,
+                        "policy_version": policy_version,
+                        "outcome": "approved",
+                    },
+                    now=now,
+                    run_id=str(source.run_id),
+                )
+        return _allocation_from_row(created)
+
+    async def discover_lifecycle_candidates(
+        self, *, now: datetime, limit: int
+    ) -> LifecycleCandidates:
+        """정리 후보와 전진 후보를 한 트랜잭션에서 고른다.
+
+        provider 를 부르지 않는다 -- provider 가 죽어 있어도 **발견은 계속**
+        돌아야 밀린 양이 보인다.
+
+        정리 후보는 두 갈래를 합친 것이다.
+        (a) 아직 살아 있는데 정리해야 하는 행 -- 태스크가 종료/삭제됐거나
+            절대 만료가 지났다. 이쪽은 이 호출이 **원자적으로**
+            `CLEANUP_PENDING` 으로 옮긴다.
+        (b) 이미 정리 단계에 있는데 아무도 진행시키지 않는 행 -- 워커가 죽어
+            리스가 만료됐거나, 재시도 시각이 됐다.
+
+        전진 후보는 `advance()`가 받는 상태에서 리스가 죽어 있고 아직 절대
+        만료 전인 행이다. ADMITTED 도 여기 들어온다 -- 아직 시작하지 않은
+        할당과 좌초한 할당은 원장에서 구별되지 않고, 어차피 둘 다
+        `advance()` 한 번이 정답이다.
+        """
+        _require_timezone_aware("discovery time", now)
+        if not 1 <= limit <= 1000:
+            raise ValueError("discovery limit must be between 1 and 1000")
+        async with await self._session_factory() as session:
+            async with session.begin():
+                promoted = (
+                    await session.execute(
+                        text(
+                            """
+                            WITH candidates AS (
+                                SELECT sandbox.allocation_id
+                                  FROM coding_managed_sandboxes AS sandbox
+                                  JOIN coding_tasks AS task
+                                    ON task.task_id = sandbox.task_id
+                                 WHERE sandbox.state = ANY(
+                                           CAST(:source_states AS VARCHAR[])
+                                       )
+                                   AND (
+                                       task.deleted_at IS NOT NULL
+                                       OR task.status = ANY(
+                                           CAST(:terminal_statuses AS VARCHAR[])
+                                       )
+                                       OR sandbox.absolute_expires_at <= :now
+                                   )
+                                 ORDER BY sandbox.absolute_expires_at,
+                                          sandbox.allocation_id
+                                 LIMIT :limit
+                                   FOR UPDATE OF sandbox SKIP LOCKED
+                            )
+                            UPDATE coding_managed_sandboxes AS sandbox
+                               SET state = :cleanup_pending,
+                                   lease_expires_at = NULL,
+                                   version = sandbox.version + 1,
+                                   updated_at = :now
+                              FROM candidates
+                             WHERE sandbox.allocation_id =
+                                   candidates.allocation_id
+                         RETURNING sandbox.allocation_id, sandbox.provider,
+                                   sandbox.region
+                            """
+                        ),
+                        {
+                            "now": now,
+                            "limit": limit,
+                            "source_states": list(_CLEANUP_SOURCE_STATE_VALUES),
+                            "terminal_statuses": list(_TERMINAL_TASK_STATUS_VALUES),
+                            "cleanup_pending": (
+                                ManagedSandboxState.CLEANUP_PENDING.value
+                            ),
+                        },
+                    )
+                ).all()
+                stalled = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT sandbox.allocation_id, sandbox.provider,
+                                   sandbox.region, sandbox.updated_at
+                              FROM coding_managed_sandboxes AS sandbox
+                             WHERE sandbox.state = ANY(
+                                       CAST(:cleanup_states AS VARCHAR[])
+                                   )
+                               AND (
+                                   sandbox.lease_expires_at IS NULL
+                                   OR sandbox.lease_expires_at <= :now
+                               )
+                               AND NOT EXISTS (
+                                   SELECT 1
+                                     FROM coding_sandbox_cleanup_attempts
+                                          AS attempt
+                                    WHERE attempt.allocation_id =
+                                          sandbox.allocation_id
+                                      AND attempt.next_retry_at > :now
+                               )
+                             ORDER BY sandbox.updated_at, sandbox.allocation_id
+                             LIMIT :limit
+                            """
+                        ),
+                        {
+                            "now": now,
+                            "limit": limit,
+                            "cleanup_states": list(_CLEANABLE_STATE_VALUES),
+                        },
+                    )
+                ).all()
+                recovery = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT allocation_id
+                              FROM coding_managed_sandboxes
+                             WHERE state = ANY(
+                                       CAST(:recovery_states AS VARCHAR[])
+                                   )
+                               AND (
+                                   lease_expires_at IS NULL
+                                   OR lease_expires_at <= :now
+                               )
+                               AND absolute_expires_at > :now
+                             ORDER BY updated_at, allocation_id
+                             LIMIT :limit
+                            """
+                        ),
+                        {
+                            "now": now,
+                            "limit": limit,
+                            "recovery_states": list(_RECOVERY_STATE_VALUES),
+                        },
+                    )
+                ).all()
+        # (a)가 방금 옮긴 행은 (b)의 SELECT 에도 잡힌다 -- 같은 트랜잭션이라
+        # UPDATE 가 보인다. allocation_id 로 중복을 걷어내되 (b)가 들고 온
+        # 실제 대기 시작 시각(updated_at)을 살린다: (a)의 `now`를 쓰면 방금
+        # 승격한 것처럼 보여 적체 나이가 0으로 리셋된다.
+        candidates: dict[str, CleanupCandidate] = {}
+        for row in promoted:
+            candidates[str(row.allocation_id)] = CleanupCandidate(
+                allocation_id=str(row.allocation_id),
+                provider=str(row.provider),
+                region=str(row.region),
+                pending_since=now,
+            )
+        for row in stalled:
+            candidates[str(row.allocation_id)] = CleanupCandidate(
+                allocation_id=str(row.allocation_id),
+                provider=str(row.provider),
+                region=str(row.region),
+                pending_since=row.updated_at,
+            )
+        return LifecycleCandidates(
+            cleanup=tuple(
+                candidates[key] for key in sorted(candidates)
+            ),
+            recovery=tuple(str(row.allocation_id) for row in recovery),
         )
 
     @staticmethod
@@ -870,6 +1396,52 @@ async def _raise_claim_failure(session, allocation_id: str) -> None:
     if row.state not in _CLAIMABLE_STATES:
         raise ManagedSandboxNotClaimable(allocation_id)
     raise StaleManagedSandboxLease(allocation_id)
+
+
+async def _execute_fenced_commit(
+    session,
+    lease: ManagedAllocationLease,
+    *,
+    now: datetime,
+    assignments: str,
+    params: dict[str, object],
+):
+    """펜싱 UPDATE 한 번. 호출자가 트랜잭션을 소유한다.
+
+    `_commit()`은 이것만 하고 끝나지만 `commit_cleanup_outcome()`은 같은
+    트랜잭션에서 시도 행도 함께 넣어야 해서 세션을 밖에서 연다. 갱신된 행이
+    없으면(=낡은 펜스) `None`을 돌려주고, 그것을
+    `StaleManagedSandboxLease`로 올릴지는 호출자가 정한다.
+
+    `assignments`는 이 모듈 안에서 만든 리터럴 문자열만 들어간다
+    (사용자 입력이 아니다). 값은 전부 바인드 파라미터다.
+    """
+    return (
+        await session.execute(
+            text(
+                f"""
+                UPDATE coding_managed_sandboxes
+                   SET {assignments},
+                       version = version + 1,
+                       updated_at = :now
+                 WHERE allocation_id = :allocation_id
+                   AND fencing_token = :fencing_token
+             RETURNING allocation_id, tenant_id, task_id, run_id,
+                       provider, region, provider_ref,
+                       ownership_digest, state, generation,
+                       fencing_token, lease_expires_at,
+                       absolute_expires_at, version, error_code,
+                       snapshot_ref, archive_ref, image_identity
+                """
+            ),
+            {
+                **params,
+                "allocation_id": lease.allocation_id,
+                "fencing_token": lease.fencing_token,
+                "now": now,
+            },
+        )
+    ).one_or_none()
 
 
 def _allocation_from_row(row) -> ManagedSandboxAllocation:

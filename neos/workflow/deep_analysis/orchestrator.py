@@ -6,7 +6,6 @@ import asyncio
 import inspect
 from dataclasses import replace
 
-from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
 from .budgeter import Budgeter
@@ -14,6 +13,7 @@ from .citation import CitationRenderer, OrphanCitationError
 from .conflict import resolve_conflicts
 from .ledger import Ledger
 from .llm import call_json
+from .model_roles import resolve_harness_model
 from .models import Assignment, Effort, NodeSummary, Verdict, WorkerResult
 from .prompt_loader import render
 from .synthesizer import Synthesizer
@@ -703,12 +703,7 @@ class Orchestrator:
 
     async def _decompose(self, root_text: str) -> list[dict]:
         config = settings.config.deep_analysis
-        dig_model = resolve_model(
-            config=settings.config.model_routing,
-            provider="anthropic",
-            role="powerful",
-            feature_override=config.models.dig,
-        ).model
+        dig_model = resolve_harness_model("dig").model
         prompt = render(
             "decompose",
             question_text=root_text,
@@ -727,12 +722,7 @@ class Orchestrator:
 
     async def _default_split_decompose(self, text, verified_summaries, dead_ends):
         config = settings.config.deep_analysis
-        dig_model = resolve_model(
-            config=settings.config.model_routing,
-            provider="anthropic",
-            role="powerful",
-            feature_override=config.models.dig,
-        ).model
+        dig_model = resolve_harness_model("dig").model
         prompt = render(
             "decompose",
             question_text=text,
@@ -900,12 +890,7 @@ class Orchestrator:
             return proposals
 
         try:
-            judge_model = resolve_model(
-                config=settings.config.model_routing,
-                provider="anthropic",
-                role="everyday",
-                feature_override=config.models.judge,
-            ).model
+            judge_model = resolve_harness_model("judge").model
             prompt = render(
                 "subq_review",
                 question_text=question.text,
