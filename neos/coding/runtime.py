@@ -26,6 +26,11 @@ from neos.coding.managed.adapters import (
     DockerShadowManagedAdapter,
     ManagedNetworkPolicy,
 )
+from neos.coding.managed.admin import (
+    InProcessProviderDrainRegistry,
+    ManagedSandboxAdminService,
+    ManagedSandboxStatusService,
+)
 from neos.coding.managed.allocation import ManagedSandboxAllocationService
 from neos.coding.managed.crypto import (
     AesGcmProviderReferenceCipher,
@@ -277,6 +282,39 @@ def _managed_sandbox_repository(
     """`PostgresSandboxBindingRepository`가 이미 쓰는 것과 같은
     session_factory 대체 규칙을 따른다."""
     return PostgresManagedSandboxRepository(session_factory or db_manager.get_session)
+
+
+_managed_drain_registry = InProcessProviderDrainRegistry()
+
+
+def managed_sandbox_status_service(
+    session_factory=None,
+) -> ManagedSandboxStatusService:
+    """소유자 조회 서비스. `sandbox.managed.enabled`와 무관하게 조립된다.
+
+    플래그가 꺼져 있으면 할당 행이 아예 없어서 조회가 `None`을 내고 API 는
+    404 를 낸다 -- 별도 분기를 두지 않는 편이 "꺼져 있음"과 "샌드박스 없음"을
+    같은 답으로 유지한다.
+    """
+    return ManagedSandboxStatusService(
+        repository=_managed_sandbox_repository(session_factory)
+    )
+
+
+def managed_sandbox_admin_service(
+    session_factory=None,
+) -> ManagedSandboxAdminService:
+    """운영자 조치 서비스.
+
+    아카이브 서비스는 **스토어가 배선된 뒤에야** 붙는다(CA10) -- 지금은
+    `None`이라 복구 승인이 `RuntimeError`로 거절된다. 조용히 성공한 척하는
+    것보다 낫다.
+    """
+    return ManagedSandboxAdminService(
+        repository=_managed_sandbox_repository(session_factory),
+        archives=None,
+        drains=_managed_drain_registry,
+    )
 
 
 def create_managed_sandbox_allocation_service(

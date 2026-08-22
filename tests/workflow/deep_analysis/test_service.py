@@ -10,6 +10,29 @@ from neos.workflow.deep_analysis.service import (
 pytestmark = pytest.mark.no_db
 
 
+class _FakeLedger:
+    """Swallows `Ledger.log` so `build_orchestrator`'s manifest emission
+    doesn't need a real session. These tests pass `object()` as the
+    session and only care about the values `build_orchestrator` derives
+    and wires, not about ledger persistence.
+    """
+
+    def __init__(self):
+        self.events = []
+
+    async def log(self, kind, qid, payload):
+        self.events.append((kind, qid, payload))
+
+
+def _install_fake_ledger(monkeypatch) -> _FakeLedger:
+    ledger = _FakeLedger()
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.service.Ledger",
+        lambda session, run_id: ledger,
+    )
+    return ledger
+
+
 class FakeSearchResult:
     success = True
     data = [
@@ -75,6 +98,8 @@ async def test_build_orchestrator_uses_dev_cap_and_pure_worker(monkeypatch):
     `tests/workflow/deep_analysis` still green apart from this assertion.
     """
 
+    _install_fake_ledger(monkeypatch)
+
     async def search_fn(query, k):
         return []
 
@@ -124,6 +149,7 @@ async def test_build_orchestrator_resolves_judge_at_construction_boundary(
         "judge",
         feature_model,
     )
+    _install_fake_ledger(monkeypatch)
 
     orchestrator = await build_orchestrator(
         object(),

@@ -8,7 +8,6 @@
 여기서 새는 것은 곧바로 "복구했더니 남의 워크스페이스" 가 된다.
 """
 
-import hashlib
 import io
 import tarfile
 from datetime import UTC, datetime, timedelta
@@ -16,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from neos.coding.managed.archive import (
+    archive_checksum,
     InMemoryPortableArchiveStore,
     ManagedSandboxArchiveService,
     PortableArchiveInvalid,
@@ -65,7 +65,7 @@ def manifest_for(
         allocation_id="msa_1",
         generation=1,
         workspace_revision="rev_7",
-        checksum=checksum or hashlib.sha256(body).hexdigest(),
+        checksum=checksum or archive_checksum(body),
         content_bytes=len(body) if content_bytes is None else content_bytes,
         image_identity=image_identity,
         toolchain_identity=toolchain_identity,
@@ -265,4 +265,4 @@ def test_archive_state_is_not_a_sandbox_state() -> None:
 
 
 def _checksum(body: bytes) -> str:
-    return hashlib.sha256(body).hexdigest()
+    return archive_checksum(body)

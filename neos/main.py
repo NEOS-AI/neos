@@ -39,6 +39,7 @@ from neos.api.handlers.approval_handlers import router as approval_router  # Pha
 from neos.api.handlers.autonomy_handlers import router as autonomy_router
 from neos.api.handlers.scheduled_tasks_handlers import router as scheduled_tasks_router  # Phase 4: Cron 스케줄
 from neos.api.handlers.ui_submit_handlers import router as ui_submit_router  # Phase 8: A2UI
+from neos.api.handlers.coding_admin_handlers import router as coding_admin_router
 from neos.api.handlers.coding_handlers import router as coding_router
 from neos.api.handlers.coding_ws_handlers import router as coding_ws_router
 from neos.api.handlers.coding_workspace_ws_handlers import (
@@ -598,6 +599,11 @@ _include_router_for_runtime(autonomy_router, prefix=settings.API_V1_PREFIX, tags
 _include_router_for_runtime(scheduled_tasks_router, prefix=settings.API_V1_PREFIX, tags=["Scheduled Tasks"])  # Phase 4: OpenClaw Cron
 _include_router_for_runtime(ui_submit_router, prefix=settings.API_V1_PREFIX, tags=["A2UI"])  # Phase 8: OpenClaw A2UI
 _include_router_for_runtime(coding_router, prefix=settings.API_V1_PREFIX, tags=["Coding Agent"])
+# 관리형 샌드박스 운영자 제어 — 관리자 의존성은 라우터 자체에 박혀 있다
+# (`coding_admin_handlers.router`), 그래서 여기서 다시 걸지 않는다.
+_include_router_for_runtime(
+    coding_admin_router, prefix=settings.API_V1_PREFIX, tags=["Coding Agent Admin"]
+)
 app.include_router(
     coding_ws_router,
     prefix=settings.API_V1_PREFIX,

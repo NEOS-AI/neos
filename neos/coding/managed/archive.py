@@ -35,6 +35,18 @@ from neos.coding.sandbox.archive import validate_workspace_archive_bytes
 _SCAN_STATUSES = frozenset({"clean", "rejected"})
 
 
+def archive_checksum(body: bytes) -> str:
+    """아카이브 체크섬의 **정본 표기**: `sha256:<hex>`.
+
+    맨 hexdigest 가 아니라 알고리즘 라벨을 붙인다. 두 가지 이유가 있다 --
+    (1) `_ownership_digest_for()`가 이미 같은 표기를 쓰고, (2) 관리자 API 가
+    `^sha256:[0-9a-f]{64}$` 로 요청을 검증하므로 저장 형식이 다르면 경계에서
+    벗기고 붙이는 변환이 생기고, 그 변환이 한쪽에서만 빠지면 **모든 승인이
+    조용히 거절**된다.
+    """
+    return f"sha256:{hashlib.sha256(body).hexdigest()}"
+
+
 class PortableRecoveryConflict(RuntimeError):
     """복구를 진행할 수 없다. 메시지는 **안정적인 사유 코드**다.
 
@@ -267,7 +279,7 @@ class ManagedSandboxArchiveService:
             raise PortableArchiveInvalid("archive_missing")
         if len(body) != manifest.content_bytes:
             raise PortableArchiveInvalid()
-        if hashlib.sha256(body).hexdigest() != manifest.checksum:
+        if archive_checksum(body) != manifest.checksum:
             raise PortableArchiveInvalid()
         try:
             validate_workspace_archive_bytes(

@@ -12,7 +12,6 @@ import pytest
 
 import scripts.deep_analysis_funnel_sample as cli
 import neos.workflow.deep_analysis.funnel_sample_runner as runner
-from neos.config.settings import settings
 from neos.workflow.deep_analysis.funnel_sample import QUESTION_CASES, QuestionCase
 from neos.workflow.deep_analysis.funnel_sample_runner import (
     PreflightError,
@@ -197,14 +196,23 @@ def test_write_artifacts_records_execution_receipt(tmp_path):
             "ruff_passed": True,
             "preflight_passed": True,
         },
-        fingerprint={"global_token_cap": 20000, "quote_threshold": 0.85},
+        fingerprint={
+            "manifest_version": 1,
+            "git": {"commit": "abc123"},
+            "runs": {"run0001": {"budget": {"global_token_cap": 20000}}},
+        },
     )
 
     manifest = json.loads((artifact_dir / "manifest.json").read_text())
 
     assert manifest["execution_receipt"]["pid"] == 4242
     assert manifest["execution_receipt"]["exit_status"] == 0
-    assert manifest["config_fingerprint"]["global_token_cap"] == 20000
+    assert (
+        manifest["config_fingerprint"]["runs"]["run0001"]["budget"][
+            "global_token_cap"
+        ]
+        == 20000
+    )
 
 
 def test_write_artifacts_omits_provenance_when_not_supplied(tmp_path):
@@ -408,10 +416,7 @@ def test_cli_writes_execution_receipt_and_reraises_when_sample_run_fails(
     assert isinstance(receipt["pid"], int)
 
     assert manifest["config_fingerprint"] is not None
-    assert (
-        manifest["config_fingerprint"]["global_token_cap"]
-        == settings.config.deep_analysis.global_token_cap
-    )
+    assert manifest["config_fingerprint"]["runs"] == {}
 
 
 def test_finalize_cassette_flushes_and_moves_into_artifact_dir(tmp_path):
@@ -476,8 +481,31 @@ def test_main_threads_a_recording_cassette_through_build_orchestrator(
             "dev_funnel": {},
         }
 
+    fake_run_id = QUESTION_CASES[0].case_id + "-run"
+    fake_manifests = {
+        fake_run_id: {
+            "manifest_version": 1,
+            "profile": "dev",
+            "budget": {"global_token_cap": 140000},
+        }
+    }
+
+    @asynccontextmanager
+    async def fake_session_ctx():
+        yield object()
+
+    async def fake_manifests_for(session, run_ids):
+        captured["manifests_for_run_ids"] = list(run_ids)
+        return fake_manifests
+
+    async def fake_runs_without_manifest(session, run_ids):
+        return []
+
     monkeypatch.setattr(cli, "preflight", successful_preflight)
     monkeypatch.setattr(cli, "run_sample", fake_run_sample)
+    monkeypatch.setattr(cli, "get_session_ctx", fake_session_ctx)
+    monkeypatch.setattr(cli, "manifests_for", fake_manifests_for)
+    monkeypatch.setattr(cli, "runs_without_manifest", fake_runs_without_manifest)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -485,6 +513,8 @@ def test_main_threads_a_recording_cassette_through_build_orchestrator(
     )
 
     cli.main()
+
+    assert captured["manifests_for_run_ids"] == [fake_run_id]
 
     build_fn = captured["execute_fn"].keywords["build_orchestrator_fn"]
     assert build_fn.func is cli.build_orchestrator
@@ -496,6 +526,13 @@ def test_main_threads_a_recording_cassette_through_build_orchestrator(
     assert cassette_path.exists()
     recorded = json.loads(cassette_path.read_text())
     assert recorded  # not empty -- the recorded call survived save + move
+
+    # The seam this task introduces: what `manifests_for` returns must be
+    # the thing that lands in the written manifest's config_fingerprint,
+    # not merely be *called*. Without this, reverting the success path to
+    # `_fingerprint({})` would leave the whole suite green.
+    manifest = json.loads((artifact_dirs[0] / "manifest.json").read_text())
+    assert manifest["config_fingerprint"]["runs"] == fake_manifests
 
     # The private temp directory is cleaned up, not left behind.
     assert not captured["cassette"].path.exists()
@@ -544,27 +581,23 @@ def test_main_cleans_up_cassette_temp_dir_when_sample_raises(
     assert not captured["cassette"].path.parent.exists()
 
 
-def test_fingerprint_reports_real_config_without_credential_shaped_keys():
-    config = settings.config.deep_analysis
-
-    fingerprint = cli._fingerprint()
-
-    assert fingerprint["global_token_cap"] == config.global_token_cap
-    assert fingerprint["max_depth"] == config.max_depth
-    assert fingerprint["quote_match_threshold"] == config.quote_match_threshold
-    assert fingerprint["models"] == {
-        "scout": config.models.scout,
-        "dig": config.models.dig,
-        "synth": config.models.synth,
-        "judge": config.models.judge,
-    }
-    assert fingerprint["effort"] == {
-        name: {
-            "token_cap": effort.token_cap,
-            "wall_clock_cap": effort.wall_clock_cap,
+def test_fingerprint_reports_ledger_manifests_without_credential_shaped_keys():
+    """`_fingerprint` no longer recomputes config -- it just wraps whatever
+    the ledger already handed it, alongside git identity, and never invents
+    credential-shaped keys of its own."""
+    manifests = {
+        "run0001": {
+            "profile": "dev",
+            "budget": {"global_token_cap": 20000},
+            "models": {"judge": {"model": "claude-sonnet-5"}},
         }
-        for name, effort in config.effort.items()
     }
+
+    fingerprint = cli._fingerprint(manifests)
+
+    assert fingerprint["manifest_version"] == cli.MANIFEST_VERSION
+    assert fingerprint["runs"] == manifests
+    assert "commit" in fingerprint["git"]
 
     serialized = json.dumps(fingerprint).lower()
     for forbidden in (

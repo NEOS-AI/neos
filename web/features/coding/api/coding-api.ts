@@ -17,6 +17,7 @@ import type {
   CodingApprovalView,
   CodingProjectionSnapshot,
 } from "@/features/coding/types/projection";
+import type { CodingSandboxStatus } from "@/features/coding/sandbox/types";
 import type {
   WorkspaceDiff,
   WorkspaceFile,
@@ -77,6 +78,20 @@ export async function getCodingTaskSnapshot(
   );
   if (!response.ok) {
     throw await responseError(response, "Could not restore coding task");
+  }
+  return response.json();
+}
+
+export async function getCodingSandboxStatus(
+  taskId: string
+): Promise<CodingSandboxStatus> {
+  // GET 전용이다 -- 이 경로에는 할당을 만들거나 되살리는 메서드를 두지 않는다
+  // (BFF 라우트 주석 참조).
+  const response = await fetch(
+    `/api/coding/tasks/${encodeURIComponent(taskId)}/sandbox-status`
+  );
+  if (!response.ok) {
+    throw await responseError(response, "Could not read sandbox status");
   }
   return response.json();
 }

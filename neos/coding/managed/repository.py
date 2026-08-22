@@ -715,6 +715,99 @@ class PostgresManagedSandboxRepository:
             raise ManagedSandboxNotFound(allocation_id)
         return _allocation_from_row(row)
 
+    async def read_owner_sandbox(
+        self, *, task_id: str, owner_id: str
+    ) -> tuple[ManagedSandboxAllocation, datetime] | None:
+        """소유자 범위로 살아 있는 할당 하나를 읽는다. `updated_at`을 같이 낸다.
+
+        **소유권 검사가 질의 안에 있다.** 먼저 읽고 나중에 비교하면 "그
+        태스크는 존재한다"가 응답 시간과 분기로 샌다 -- 비소유자는 없는 것과
+        구별할 수 없어야 한다.
+
+        `cleaned`/`failed` 행은 제외하지 않는다: 사용자가 "정리됐다"를 보는
+        것도 정당한 답이다. 대신 045의 부분 유니크 인덱스가 살아 있는 행을
+        하나로 강제하므로, 정리된 세대가 여럿 쌓여도 가장 최근 것을 고른다.
+        """
+        async with await self._session_factory() as session:
+            async with session.begin():
+                row = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT sandbox.allocation_id, sandbox.tenant_id,
+                                   sandbox.task_id, sandbox.run_id,
+                                   sandbox.provider, sandbox.region,
+                                   sandbox.provider_ref,
+                                   sandbox.ownership_digest, sandbox.state,
+                                   sandbox.generation, sandbox.fencing_token,
+                                   sandbox.lease_expires_at,
+                                   sandbox.absolute_expires_at, sandbox.version,
+                                   sandbox.error_code, sandbox.snapshot_ref,
+                                   sandbox.archive_ref, sandbox.image_identity,
+                                   sandbox.updated_at
+                              FROM coding_managed_sandboxes AS sandbox
+                              JOIN coding_tasks AS task
+                                ON task.task_id = sandbox.task_id
+                             WHERE sandbox.task_id = :task_id
+                               AND task.owner_id = :owner_id
+                               AND task.deleted_at IS NULL
+                             ORDER BY sandbox.generation DESC,
+                                      sandbox.updated_at DESC
+                             LIMIT 1
+                            """
+                        ),
+                        {"task_id": task_id, "owner_id": owner_id},
+                    )
+                ).one_or_none()
+        if row is None:
+            return None
+        return _allocation_from_row(row), row.updated_at
+
+    async def clear_cleanup_retry(
+        self, allocation_id: str, *, now: datetime
+    ) -> ManagedSandboxState:
+        """다음 정리 시도를 **지금** 가능하게 만든다 (관리자 조치).
+
+        상태를 바꾸지 않는다 -- 백오프만 걷어낸다. 조정자의 정리 후보 질의가
+        `next_retry_at > now` 인 시도 행이 있으면 그 할당을 건너뛰므로, 그
+        미래 시각을 지우면 다음 주기가 바로 집는다.
+
+        상태 검사가 먼저다. 정리 단계가 아닌 할당의 시도 행을 건드리면
+        원장이 "정리 중"이라고 말하는데 실제로는 아무 단계도 아닌 상태가 된다.
+        """
+        _require_timezone_aware("retry clear time", now)
+        async with await self._session_factory() as session:
+            async with session.begin():
+                state = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT state
+                              FROM coding_managed_sandboxes
+                             WHERE allocation_id = :allocation_id
+                               FOR UPDATE
+                            """
+                        ),
+                        {"allocation_id": allocation_id},
+                    )
+                ).one_or_none()
+                if state is None:
+                    raise ManagedSandboxNotFound(allocation_id)
+                if state.state not in _CLEANABLE_STATE_VALUES:
+                    raise ManagedSandboxNotClaimable(allocation_id)
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_sandbox_cleanup_attempts
+                           SET next_retry_at = NULL
+                         WHERE allocation_id = :allocation_id
+                           AND next_retry_at > :now
+                        """
+                    ),
+                    {"allocation_id": allocation_id, "now": now},
+                )
+        return ManagedSandboxState(state.state)
+
     async def cleanup_attempt_count(self, allocation_id: str) -> int:
         """이 할당에 대해 이미 기록된 정리 시도 수 -- 백오프 인덱스가 된다.
 
