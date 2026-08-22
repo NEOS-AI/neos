@@ -6,7 +6,6 @@ import json
 import logging
 from typing import Callable
 
-from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 
 from .claim_entailment import apply_entailment_results
@@ -19,6 +18,7 @@ from .llm import (
     TruncatedResponseError,
     call_json,
 )
+from .model_roles import resolve_harness_model
 from .models import (
     Effort,
     ProposedBlob,
@@ -313,15 +313,8 @@ class Worker:
         self._search_augmentation = {}
 
         config = settings.config.deep_analysis
-        role = "everyday" if effort == Effort.SCOUT else "powerful"
-        feature_override = (
-            config.models.scout if effort == Effort.SCOUT else config.models.dig
-        )
-        self._model = resolve_model(
-            config=settings.config.model_routing,
-            provider="anthropic",
-            role=role,
-            feature_override=feature_override,
+        self._model = resolve_harness_model(
+            "scout" if effort == Effort.SCOUT else "dig"
         ).model
         effort_config = config.effort[effort.value]
 
