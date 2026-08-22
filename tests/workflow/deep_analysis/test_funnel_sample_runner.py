@@ -481,13 +481,22 @@ def test_main_threads_a_recording_cassette_through_build_orchestrator(
             "dev_funnel": {},
         }
 
+    fake_run_id = QUESTION_CASES[0].case_id + "-run"
+    fake_manifests = {
+        fake_run_id: {
+            "manifest_version": 1,
+            "profile": "dev",
+            "budget": {"global_token_cap": 140000},
+        }
+    }
+
     @asynccontextmanager
     async def fake_session_ctx():
         yield object()
 
     async def fake_manifests_for(session, run_ids):
         captured["manifests_for_run_ids"] = list(run_ids)
-        return {}
+        return fake_manifests
 
     monkeypatch.setattr(cli, "preflight", successful_preflight)
     monkeypatch.setattr(cli, "run_sample", fake_run_sample)
@@ -501,9 +510,7 @@ def test_main_threads_a_recording_cassette_through_build_orchestrator(
 
     cli.main()
 
-    assert captured["manifests_for_run_ids"] == [
-        QUESTION_CASES[0].case_id + "-run"
-    ]
+    assert captured["manifests_for_run_ids"] == [fake_run_id]
 
     build_fn = captured["execute_fn"].keywords["build_orchestrator_fn"]
     assert build_fn.func is cli.build_orchestrator
@@ -515,6 +522,13 @@ def test_main_threads_a_recording_cassette_through_build_orchestrator(
     assert cassette_path.exists()
     recorded = json.loads(cassette_path.read_text())
     assert recorded  # not empty -- the recorded call survived save + move
+
+    # The seam this task introduces: what `manifests_for` returns must be
+    # the thing that lands in the written manifest's config_fingerprint,
+    # not merely be *called*. Without this, reverting the success path to
+    # `_fingerprint({})` would leave the whole suite green.
+    manifest = json.loads((artifact_dirs[0] / "manifest.json").read_text())
+    assert manifest["config_fingerprint"]["runs"] == fake_manifests
 
     # The private temp directory is cleaned up, not left behind.
     assert not captured["cassette"].path.exists()
