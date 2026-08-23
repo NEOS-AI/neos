@@ -2665,14 +2665,6 @@ class MultiAgentWorkflow:
                 add_span_event(span, "redis_cache_miss")
             set_span_attributes(span, {"cache.hit": False})
 
-            # 캐시가 전부 빗나간 뒤에만 그래프를 정한다. 반환값은 이 호출의
-            # 로컬이며 인스턴스에 남지 않는다(G2-c).
-            execution_graph = await self._resolve_execution_graph(
-                user_input=user_input,
-                use_checkpointer=use_checkpointer,
-                span=span,
-            )
-
             # 초기 상태 생성 (event_handler를 상태에 포함)
             initial_state = self._create_initial_state(user_input)
             initial_state["_event_handler"] = event_handler
@@ -2687,6 +2679,38 @@ class MultiAgentWorkflow:
             await self._record_session_start(user_input)
 
             try:
+                # 캐시가 전부 빗나간 뒤에만 그래프를 정한다. 반환값은 이 호출의
+                # 로컬이며 인스턴스에 남지 않는다(G2-c).
+                #
+                # 이 호출이 `try` **안**에 있어야 하는 이유: 정적 경로조차
+                # `static_topology` 를 거쳐 `inspect.getsource` + `ast.parse` 를
+                # 돈다. 소스를 못 읽거나(`OSError`) 추출이 실패하면
+                # (`_StaticExtractionError`) 밖에서는 아무도 받지 않아 예외가
+                # 그대로 호출자에게 나가고, `on_workflow_error` 도 에러 결과도
+                # 없다. 그것도 **플래그가 꺼진 경로**에서 그렇다 -- 꺼진 run 이
+                # 이전과 구별되지 않아야 한다는 이 기능의 전제와 정면으로
+                # 어긋난다. 다른 실패와 같은 경로로 끝나게 둔다.
+                execution_graph = await self._resolve_execution_graph(
+                    user_input=user_input,
+                    use_checkpointer=use_checkpointer,
+                    span=span,
+                )
+
+                # G2-e: 조인 키를 이 run 이 **실제로 남기게** 한다. 값을
+                # `ExecutionGraph` 에 싣기만 하고 아무 데도 내보내지 않으면
+                # 정적 run 은 여전히 해시가 없는 run 이고, 설계된 run 과 비교할
+                # 상대가 없다 -- "조인 키만 있고 조인이 없다" 는 그대로다.
+                set_span_attributes(span, {
+                    "graph.topology_hash": execution_graph.topology_hash,
+                    "graph.source": execution_graph.source,
+                })
+                logger.info(
+                    "[ExecuteWorkflow] graph.source=%s graph.topology_hash=%s nodes=%d",
+                    execution_graph.source,
+                    execution_graph.topology_hash,
+                    len(execution_graph.nodes),
+                )
+
                 # 워크플로우 실행
                 add_span_event(span, "starting_graph_execution")
                 if use_checkpointer:
@@ -2732,40 +2756,48 @@ class MultiAgentWorkflow:
                         name for name in chunk if name in trackable_nodes
                     ]
 
-                    for finished in previous_nodes:
-                        record_node_end(finished, wf_id)
+                    # 노드 키가 하나도 없는 chunk(`__interrupt__` 같은 신호)는
+                    # 이번 실행의 진행을 서술하지 않는다. 그런 chunk 로
+                    # 대기 중인 종료를 끊으면 그 노드의 측정 구간이 신호까지로
+                    # 잘려 ~0초 표본이 ETA 히스토리에 들어가고(중앙값이 그만큼
+                    # 내려간다), `previous_nodes` 를 빈 목록으로 덮으면 방금 돈
+                    # 노드의 종료가 통째로 사라진다. 대기 중인 종료는 **다음에
+                    # 실제로 노드가 도착할 때** 닫는다.
+                    if chunk_nodes:
+                        for finished in previous_nodes:
+                            record_node_end(finished, wf_id)
 
-                    for node_name in chunk_nodes:
-                        current_step += 1
-                        seen_nodes.add(node_name)
+                        for node_name in chunk_nodes:
+                            current_step += 1
+                            seen_nodes.add(node_name)
 
-                        add_span_event(span, f"node_{node_name}_start", {
-                            "step": current_step,
-                            "max_steps": max_steps,
-                        })
+                            add_span_event(span, f"node_{node_name}_start", {
+                                "step": current_step,
+                                "max_steps": max_steps,
+                            })
 
-                        record_node_start(node_name, wf_id)
+                            record_node_start(node_name, wf_id)
 
-                        remaining = tuple(
-                            node for node in execution_graph.nodes
-                            if node not in seen_nodes
-                        )
-                        await event_handler.on_node_start(
-                            node_name,
-                            current_step,
-                            max_steps,
-                            step_name=get_node_label(node_name),
-                            estimated_remaining_s=estimate_remaining_time(
-                                node_name, candidates=remaining
-                            ),
-                        )
+                            remaining = tuple(
+                                node for node in execution_graph.nodes
+                                if node not in seen_nodes
+                            )
+                            await event_handler.on_node_start(
+                                node_name,
+                                current_step,
+                                max_steps,
+                                step_name=get_node_label(node_name),
+                                estimated_remaining_s=estimate_remaining_time(
+                                    node_name, candidates=remaining
+                                ),
+                            )
 
-                        await event_handler.on_node_complete(
-                            node_name, {"node": node_name, "step": current_step}
-                        )
-                        add_span_event(span, f"node_{node_name}_complete")
+                            await event_handler.on_node_complete(
+                                node_name, {"node": node_name, "step": current_step}
+                            )
+                            add_span_event(span, f"node_{node_name}_complete")
 
-                    previous_nodes = chunk_nodes
+                        previous_nodes = chunk_nodes
 
                     for _node_name, state in chunk.items():
                         final_state = state

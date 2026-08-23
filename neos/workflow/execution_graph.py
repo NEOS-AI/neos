@@ -44,6 +44,14 @@ class ExecutionGraph:
     쓰지 않는 이유는 그 목록이 이 그래프를 서술한다는 보장이 없기 때문이다.
     `source` 를 싣는 이유는 로그가 "이 run 이 설계된 것인가" 를 추측하지
     않게 하기 위해서다.
+
+    ⚠️ **`nodes` 의 순서는 실행 순서가 아니다.** 정적 경로에서는
+    `static_topology` 의 `tuple(sorted(...))`(`topology_export.py:177`) 이라
+    **알파벳순**이고, 설계 경로에서는 승인된 `GraphTopology.nodes` 의 순서다.
+    어느 쪽도 이 run 이 노드를 밟는 순서를 말하지 않는다 -- 집합(멤버십)과
+    개수(상한)로만 써야 한다. `nodes[i - 1]` 로 "직전 노드" 를 고르는 순간
+    이 브랜치가 걷어낸 버그(`workflow_nodes.index(node) - 1` 이 이 run 이
+    건너뛴 노드를 골라 그 종료 시각을 기록했다)가 그대로 되살아난다.
     """
 
     compiled: Any

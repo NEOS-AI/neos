@@ -340,7 +340,7 @@ async def test_the_query_is_truncated_before_it_reaches_logs_and_traces(
 
     long_query = "가" * 500
     workflow = MultiAgentWorkflow()
-    settings_module.settings.config.workflow.graph_design_enabled = True
+    _enable_design(monkeypatch)
     monkeypatch.setattr(workflow, "_build_graph_designer", lambda: _FakeDesigner(_MINIMAL))
     await workflow._ensure_graph_initialized(use_checkpointer=False)
     await workflow._resolve_execution_graph(
