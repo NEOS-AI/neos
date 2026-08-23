@@ -5,8 +5,18 @@
 오래 살고 요청들이 공유하는 객체라, 질의 하나에 종속된 값을 인스턴스
 속성에 얹으면 동시 요청 두 개가 서로의 그래프를 실행한다.
 
-`graph.py` 를 임포트하지 않는다 -- `topology_export` 만 쓴다. 그래야 이
-모듈의 단위 테스트가 `MultiAgentWorkflow` 인스턴스 없이 돈다.
+이 모듈은 `graph.py` 를 직접 임포트하지 않는다 -- `compiled: Any` 로
+충분해서 `MultiAgentWorkflow` 의 타입이 필요 없다. 다만 `topology_export`
+가 모듈 스코프에서 `graph.py` 를 임포트하므로(그 안에서 싱글턴을
+인스턴스화한다) 전이 의존은 실제로 존재한다: 이 모듈을 임포트하면
+`MultiAgentWorkflow` 도 함께 만들어진다. 이 모듈을 `graph.py` 와 무관한
+것으로 읽지 말 것. 다음 태스크가 `graph.py` 에 `from .execution_graph
+import ...` 를 추가하면 `graph.py → execution_graph → topology_export →
+graph.py` 순환이 생기지만, 이는 깨진 채로 남는 순환이 아니다:
+`topology_export` 는 `graph_module` 을 함수 본문 안에서만 쓰고(모듈
+로드 시점에는 쓰지 않는다) 파이썬은 `sys.modules` 에 이미 등록된
+부분 초기화 모듈을 `from package import submodule` 로 해석하므로
+ImportError 없이 통과한다.
 """
 
 from collections.abc import Mapping
