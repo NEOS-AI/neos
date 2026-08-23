@@ -203,15 +203,20 @@ async def design_graph_or_fallback(
             kind="graph_design_accepted",
             payload={
                 "nodes": topology.nodes,
-                "topology_hash": _topology_hash(topology),
+                "topology_hash": topology_hash(topology),
             },
         )
     )
     return DesignOutcome(topology=topology, events=tuple(events))
 
 
-def _topology_hash(topology: GraphTopology) -> str:
+def topology_hash(topology: GraphTopology) -> str:
     """토폴로지의 **논리적** 정체성을 나타내는 안정적 해시.
+
+    **공개 함수인 이유:** 설계된 run 과 정적 run 을 이 해시로 조인한다
+    (§14.3 G2-e). 정적 경로가 자기 산식을 따로 두면 두 값은 다르기만 하고
+    아무도 그것이 틀렸다는 것을 알 수 없다 -- 해시의 실패는 조용하다.
+    그래서 산식을 하나로 두고 양쪽이 이 함수를 부른다.
 
     노드가 나열된 순서, 엣지가 나열된 순서는 우연이다 -- 설계 서브에이전트가
     같은 그래프를 두 번 제안해도 모델이 그때그때 다른 순서로 JSON 을 낼 수

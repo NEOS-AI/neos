@@ -342,3 +342,35 @@ async def test_a_topology_with_the_response_generator_passes_the_mandatory_gate(
     )
     accepted = next(e for e in outcome.events if e.kind == "graph_design_accepted")
     assert accepted.payload["nodes"] == (WorkflowNode.RESP_GENERATOR.value,)
+
+
+def test_topology_hash_is_public_so_static_and_designed_runs_share_one_formula() -> None:
+    """설계된 run 과 정적 run 이 **같은 산식**으로 해시를 계산해야 조인이
+    성립한다. 산식이 둘로 갈리면 조인은 조용히 깨진다 -- 해시는 다르기만
+    하면 되므로 아무도 눈치채지 못한다."""
+
+    from neos.workflow.graph_design_ledger import topology_hash
+
+    topology = GraphTopology(
+        nodes=("response_generator",),
+        edges=(("__start__", "response_generator"), ("response_generator", "__end__")),
+    )
+    assert topology_hash(topology) == topology_hash(topology)
+    assert len(topology_hash(topology)) == 16
+
+
+def test_topology_hash_ignores_the_order_nodes_and_edges_arrived_in() -> None:
+    """모델이 같은 그래프를 두 번 제안해도 JSON 순서는 그때그때 다르다.
+    논리적으로 같은 설계가 다른 해시를 받으면 비교 자체가 무의미해진다."""
+
+    from neos.workflow.graph_design_ledger import topology_hash
+
+    forward = GraphTopology(
+        nodes=("a", "b"),
+        edges=(("__start__", "a"), ("a", "b"), ("b", "__end__")),
+    )
+    shuffled = GraphTopology(
+        nodes=("b", "a"),
+        edges=(("b", "__end__"), ("__start__", "a"), ("a", "b")),
+    )
+    assert topology_hash(forward) == topology_hash(shuffled)
