@@ -433,7 +433,7 @@ def static_execution_graph(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `HOME=/tmp/neos-test-home .venv/bin/pytest tests/workflow/test_execution_graph.py -v`
-Expected: PASS (5 passed)
+Expected: PASS (4 passed)
 
 - [ ] **Step 5: Commit**
 
@@ -590,7 +590,7 @@ from .execution_graph import ExecutionGraph, current_static_flags, static_execut
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `HOME=/tmp/neos-test-home .venv/bin/pytest tests/workflow/test_execution_graph.py -v`
-Expected: PASS (7 passed)
+Expected: PASS (6 passed — Task 3의 4건 + 이번 2건)
 
 - [ ] **Step 5: Run the two standing guards**
 
