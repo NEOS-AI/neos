@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional
 from collections.abc import Sequence
 from datetime import datetime
+from pathlib import Path
 import asyncio
 import hashlib
 import logging
@@ -12,10 +13,15 @@ from langgraph.graph import StateGraph, START, END
 from neos.agents.skill_based_tool_selector import SkillBasedToolSelector
 from neos.utils.cache import cache_manager
 from neos.utils.smart_cache_manager import smart_cache_manager
+from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 from neos.tools.tool_selector import tool_selector
+from neos.utils.llm_factory import LLMFactory
 
 from .contracts import NODE_CONTRACTS, node_contract
+from .graph_designer import DesignRequest
+from .graph_design_ledger import LedgerEvent, design_graph_or_fallback, topology_hash
+from .graph_designer_llm import LlmGraphDesigner
 from .enums import WorkflowNode, WorkflowPathway, IntentType, AutonomyLevel
 from .state import AgentState, WorkflowConfig
 from .harness.cache_policy import should_cache_harness_result
@@ -762,13 +768,103 @@ class MultiAgentWorkflow:
         캐시로 그대로 남는다: 없애면 매 요청 재컴파일이다. 바뀌는 것은
         "`execute_workflow` 가 그것을 직접 읽는가" 뿐이다.
 
-        지금은 정적 분기 하나뿐이고, 설계 분기는 다음 태스크가 넣는다.
+        분기는 셋뿐이고 **재설계 루프는 없다**: 위반이든 예외든 타임아웃이든
+        반응은 항상 정적 폴백이다. 되돌려 다시 설계시키면 질의 하나가 LLM
+        설계를 여러 번 태워 지연이 상한 없이 늘어난다
+        (`graph_design_ledger.py:20-25`).
         """
 
         await self._ensure_graph_initialized(use_checkpointer=use_checkpointer)
-        return static_execution_graph(
+        static = static_execution_graph(
             compiled=self.graph, flags=current_static_flags()
         )
+
+        if not settings.config.workflow.graph_design_enabled:
+            return static
+
+        outcome = await design_graph_or_fallback(
+            designer=self._build_graph_designer(),
+            request=DesignRequest(
+                query=user_input["query"],
+                catalog=tuple(NODE_CONTRACTS.values()),
+                budget=settings.config.workflow.graph_design_budget_hint,
+            ),
+            contracts=NODE_CONTRACTS,
+            # `mandatory` 는 기본값(response_generator)을 쓴다 -- 덮으면
+            # "응답 없는 설계를 허용한다" 는 뜻이고 챗 경로에서 그것은
+            # 언제나 오답이다.
+            # `budget`/`node_costs` 는 넘기지 않는다: node_costs 없이
+            # budget 만 주면 fail-closed 규칙이 모든 노드를 "비용 미선언"
+            # 위반으로 잡아 **모든 설계가 거부된다**.
+        )
+        self._record_design_events(outcome.events, span)
+
+        if outcome.topology is None:
+            return static
+
+        # G2-d: 게이트할 노드를 토폴로지에서 계산한다. 하드코딩 목록을 다시
+        # 쓰지 않는 이유는 G2-b 와 같다 -- 이번 그래프에 실제로 있는 노드만
+        # 게이트한다.
+        interrupt_before = sorted(
+            set(outcome.topology.nodes) & _INTERRUPT_GATED_NODES
+        )
+        checkpointer = await get_checkpointer() if use_checkpointer else None
+
+        try:
+            compiled = build_ephemeral_workflow(
+                self,
+                outcome.topology,
+                checkpointer=checkpointer,
+                interrupt_before=interrupt_before,
+            )
+        except EphemeralApprovalGateUnsupported as exc:
+            # `design_graph_or_fallback` 은 검증까지만 하고 컴파일은 여기서
+            # 한다 -- 그래서 이 실패는 그 함수의 이벤트 4종에 잡히지 않는다.
+            # 밖으로 흘리면 설계 실패가 사용자 요청을 죽이고, 조용히 삼키면
+            # "모든 실패가 성공처럼 보였다" 를 되풀이한다. 기존 kind 를
+            # 사유로 구분해 재사용한다(새 kind 는 FE 라벨 부채를 만든다).
+            self._record_design_events(
+                (
+                    LedgerEvent(
+                        kind="graph_design_fallback",
+                        payload={"reason": f"ephemeral_approval_gate_unsupported: {exc}"},
+                    ),
+                ),
+                span,
+            )
+            return static
+
+        return ExecutionGraph(
+            compiled=compiled,
+            nodes=outcome.topology.nodes,
+            topology_hash=topology_hash(outcome.topology),
+            source="designed",
+        )
+
+    def _build_graph_designer(self) -> Any:
+        """설계 서브에이전트를 조립한다. 모델은 **여기서 한 번만** 해석한다.
+
+        provider 를 모델명으로 추측하지 않는다 -- `"claude" in model` 같은
+        판정은 카탈로그 조회로 대체된 안티패턴이다(라우팅 작업이 잡은
+        프로덕션 버그 중 하나). 배포가 정한 프로바이더를 쓰고, 모델은
+        `resolve_model` 이 `None` 을 역할 기본값으로 푼다.
+        """
+
+        provider = settings.LLM_PROVIDER
+        model_name = resolve_model(
+            config=settings.config.model_routing,
+            provider=provider,
+            role="everyday",
+            feature_override=settings.config.workflow.graph_design_model,
+        ).model
+        llm = LLMFactory.create_llm(provider=provider, model=model_name)
+        prompt_path = Path(__file__).parent / "prompts" / "graph_design.md"
+        return LlmGraphDesigner(model=llm, prompt_path=prompt_path)
+
+    def _record_design_events(self, events: Sequence[Any], span: Any) -> None:
+        """설계 이벤트를 기록한다. Task 7 이 로그·span 목적지를 채운다."""
+
+        return None
 
     def graph_astream_source(
         self, execution_graph: ExecutionGraph, initial_state: AgentState, config: Dict[str, Any]
