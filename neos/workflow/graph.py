@@ -782,8 +782,33 @@ class MultiAgentWorkflow:
         if not settings.config.workflow.graph_design_enabled:
             return static
 
+        try:
+            designer = self._build_graph_designer()
+        except Exception as exc:  # noqa: BLE001
+            # 설계자 **조립** 은 `design_graph_or_fallback` 의 try 바깥이다 --
+            # 인자를 만드는 코드는 함수가 호출되기 전에 돈다. 그래서 여기서
+            # 따로 막지 않으면 조립 실패가 그대로 밖으로 나가 사용자 요청을
+            # 죽인다. 가상의 위험이 아니다: `settings.LLM_PROVIDER` 는 자유
+            # 문자열이라 `gemini`/`ollama` 배포에서 `resolve_model` 이
+            # `ValueError: Unknown model provider` 를 던지고, API 키가 없으면
+            # `LLMFactory.create_llm` 이 같은 모양으로 실패한다. 기본이 꺼져
+            # 있는 기능이 요청을 죽이는 일은 없어야 한다.
+            # `asyncio.CancelledError` 는 `BaseException` 이라 여기 안 걸린다.
+            self._record_design_events(
+                (
+                    LedgerEvent(
+                        kind="graph_design_fallback",
+                        payload={
+                            "reason": f"designer_unavailable: {type(exc).__name__}: {exc}"
+                        },
+                    ),
+                ),
+                span,
+            )
+            return static
+
         outcome = await design_graph_or_fallback(
-            designer=self._build_graph_designer(),
+            designer=designer,
             request=DesignRequest(
                 query=user_input["query"],
                 catalog=tuple(NODE_CONTRACTS.values()),

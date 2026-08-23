@@ -1,9 +1,16 @@
 """설계 경로의 배선 -- 승인되면 그 그래프가 돌고, 아니면 정적으로 내려간다.
 
-**요청은 절대 죽지 않는다.** 설계 실패 네 갈래(타임아웃·예외·위반·게이트
-거부)가 전부 정적 폴백으로 끝난다. 조용히 끝나지도 않는다 --
+**요청은 절대 죽지 않는다.** 설계 실패 다섯 갈래(설계자 조립 실패·타임아웃·
+예외·위반·게이트 거부)가 전부 정적 폴백으로 끝난다. 조용히 끝나지도 않는다 --
 `graph_design_ledger` 의 존재 이유가 "이벤트를 하나도 남기지 않는 폴백은
 성공과 구별되지 않는다" 이기 때문이다.
+
+**메타데이터만 보는 단언은 이 배선을 지키지 못한다.** `source`/`nodes` 는
+`ExecutionGraph` 가 스스로 실어 나르는 라벨일 뿐이라, 정적 그래프에
+`source="designed"` 를 붙여 놓아도 통과한다(실제로 `compiled=self.graph` 로
+바꿔 보면 그런 단언만 있는 테스트는 전부 초록이었다). 그래서 승인 경로는
+**컴파일된 그래프 자체** 를 본다: 정적 그래프와 다른 객체인가, 그리고 설계된
+노드가 실제로 그 안에 배선되어 있는가.
 """
 
 import pytest
@@ -23,6 +30,18 @@ class _FakeDesigner:
         return self._result
 
 
+def _chain_topology(chain):
+    return GraphTopology(
+        nodes=chain,
+        edges=(
+            ("__start__", chain[0]),
+            *((chain[i], chain[i + 1]) for i in range(len(chain) - 1)),
+            (chain[-1], "__end__"),
+        ),
+        initial_writes=GRAPH_ENTRY_WRITES,
+    )
+
+
 # 🔴 승인 **가능한** 최소 체인이다. `response_generator` 하나짜리 토폴로지는
 # 어떤 경우에도 통과하지 못한다 -- 그 노드의 requires 는 {analysis_results,
 # execution_start, generation_results, search_results} 이고
@@ -38,40 +57,90 @@ _CHAIN = (
     "generation_orchestrator",
     "response_generator",
 )
-_MINIMAL = GraphTopology(
-    nodes=_CHAIN,
-    edges=(
-        ("__start__", _CHAIN[0]),
-        *((_CHAIN[i], _CHAIN[i + 1]) for i in range(len(_CHAIN) - 1)),
-        (_CHAIN[-1], "__end__"),
-    ),
-    initial_writes=GRAPH_ENTRY_WRITES,
-)
+_MINIMAL = _chain_topology(_CHAIN)
+
+# 🔴 이 토폴로지도 **검증을 통과해야** 한다. 검증에서 거부되면 컴파일
+# 단계에 도달하지 못하고, 게이트 테스트는 `source == "static"` 으로 통과하지만
+# **다른 이유로** 통과한다 -- 게이트 처리를 지우고 돌려도 초록인 가짜
+# 테스트가 된다. 실측: 아래 체인의 위반 0건이며
+# `execution_approval.requires` 는 비어 있다.
+_GATED_CHAIN = ("query_classifier", "execution_approval") + _CHAIN[1:]
+_GATED = _chain_topology(_GATED_CHAIN)
+
+
+def _enable_design(monkeypatch, enabled=True):
+    """플래그를 `monkeypatch` 로 켠다 -- 직접 대입하면 테스트가 끝나도 전역
+    설정에 남아, `-k` 필터나 `pytest-randomly` 의 무작위 순서에서 뒤에 도는
+    다른 테스트가 이 플래그를 켠 채로 돈다."""
+
+    monkeypatch.setattr(
+        settings_module.settings.config.workflow, "graph_design_enabled", enabled
+    )
 
 
 async def _resolve_with(monkeypatch, designer, *, use_checkpointer=False):
+    """`(workflow, resolved)` 를 돌려준다 -- `resolved.compiled` 가 정적
+    그래프와 **다른 객체** 인지 보려면 호출한 workflow 도 필요하다."""
+
     workflow = MultiAgentWorkflow()
-    settings_module.settings.config.workflow.graph_design_enabled = True
+    _enable_design(monkeypatch)
     monkeypatch.setattr(workflow, "_build_graph_designer", lambda: designer)
     await workflow._ensure_graph_initialized(use_checkpointer=use_checkpointer)
-    return await workflow._resolve_execution_graph(
+    resolved = await workflow._resolve_execution_graph(
         user_input={"query": "테스트 질의", "session_id": "s1"},
         use_checkpointer=use_checkpointer,
         span=None,
     )
+    return workflow, resolved
 
 
 @pytest.mark.asyncio
 async def test_an_approved_design_is_what_actually_runs(monkeypatch) -> None:
-    resolved = await _resolve_with(monkeypatch, _FakeDesigner(_MINIMAL))
+    workflow, resolved = await _resolve_with(monkeypatch, _FakeDesigner(_MINIMAL))
 
     assert resolved.source == "designed"
     assert resolved.nodes == _CHAIN
+    # 🔴 여기부터가 이 테스트의 이름값이다. 위 두 줄은 `ExecutionGraph` 가
+    # 실어 나르는 라벨일 뿐이라, 정적 그래프를 "designed" 라고 부르기만 해도
+    # 통과한다. 실행되는 것이 **설계된 그래프** 인지는 컴파일된 객체를 봐야
+    # 안다.
+    assert resolved.compiled is not workflow.graph
+    assert set(resolved.compiled.get_graph().nodes) >= set(_CHAIN)
+
+
+@pytest.mark.asyncio
+async def test_a_designer_that_cannot_be_built_falls_back_to_static(
+    monkeypatch,
+) -> None:
+    """설계자 **조립** 은 `design_graph_or_fallback` 의 try 바깥에서 돈다 --
+    인자를 만드는 코드이기 때문이다. 그래서 그 실패는 원장 함수가 잡아 주지
+    않고, 막지 않으면 그대로 사용자 요청을 죽인다.
+
+    가상의 위험이 아니다: `settings.LLM_PROVIDER` 는 자유 문자열이라
+    `gemini`/`ollama` 배포에서 `resolve_model` 이 `ValueError: Unknown model
+    provider` 를 던지고, API 키가 없으면 `LLMFactory.create_llm` 이 같은
+    모양으로 실패한다."""
+
+    def _explode():
+        raise ValueError("Unknown model provider: gemini")
+
+    workflow = MultiAgentWorkflow()
+    _enable_design(monkeypatch)
+    monkeypatch.setattr(workflow, "_build_graph_designer", _explode)
+    await workflow._ensure_graph_initialized(use_checkpointer=False)
+
+    resolved = await workflow._resolve_execution_graph(
+        user_input={"query": "테스트 질의", "session_id": "s1"},
+        use_checkpointer=False,
+        span=None,
+    )
+
+    assert resolved.source == "static"
 
 
 @pytest.mark.asyncio
 async def test_a_designer_exception_falls_back_to_static(monkeypatch) -> None:
-    resolved = await _resolve_with(
+    _, resolved = await _resolve_with(
         monkeypatch, _FakeDesigner(RuntimeError("model exploded"))
     )
 
@@ -80,7 +149,7 @@ async def test_a_designer_exception_falls_back_to_static(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_a_timeout_falls_back_to_static(monkeypatch) -> None:
-    resolved = await _resolve_with(monkeypatch, _FakeDesigner(TimeoutError()))
+    _, resolved = await _resolve_with(monkeypatch, _FakeDesigner(TimeoutError()))
 
     assert resolved.source == "static"
 
@@ -98,7 +167,7 @@ async def test_a_topology_that_violates_the_rules_falls_back_to_static(
         edges=(("__start__", "query_classifier"), ("query_classifier", "__end__")),
         initial_writes=GRAPH_ENTRY_WRITES,
     )
-    resolved = await _resolve_with(monkeypatch, _FakeDesigner(no_response))
+    _, resolved = await _resolve_with(monkeypatch, _FakeDesigner(no_response))
 
     assert resolved.source == "static"
 
@@ -113,27 +182,86 @@ async def test_an_approval_gate_without_a_checkpointer_falls_back_instead_of_rai
     설계 실패가 **사용자 요청을 죽인다** -- 기본 꺼짐인 기능이 할 일이
     아니다."""
 
-    # 🔴 이 토폴로지는 **검증을 통과해야** 한다. 검증에서 거부되면 컴파일
-    # 단계에 도달하지 못하고, 테스트는 `source == "static"` 으로 통과하지만
-    # **다른 이유로** 통과한다 -- 게이트 처리를 지우고 돌려도 초록인 가짜
-    # 테스트가 된다. 실측: 아래 체인의 위반 0건이며
-    # `execution_approval.requires` 는 비어 있다.
-    gated_chain = ("query_classifier", "execution_approval") + _CHAIN[1:]
-    gated = GraphTopology(
-        nodes=gated_chain,
-        edges=(
-            ("__start__", gated_chain[0]),
-            *(
-                (gated_chain[i], gated_chain[i + 1])
-                for i in range(len(gated_chain) - 1)
-            ),
-            (gated_chain[-1], "__end__"),
-        ),
-        initial_writes=GRAPH_ENTRY_WRITES,
-    )
-    resolved = await _resolve_with(monkeypatch, _FakeDesigner(gated))
+    _, resolved = await _resolve_with(monkeypatch, _FakeDesigner(_GATED))
 
     assert resolved.source == "static"
+
+
+@pytest.mark.asyncio
+async def test_an_approval_gate_with_a_checkpointer_runs_as_designed(
+    monkeypatch,
+) -> None:
+    """G2-d: `interrupt_before` 를 **이번 토폴로지에서** 계산하는 것이
+    실제로 필요한 이유.
+
+    위 테스트(체크포인터 없음)만 있으면 `interrupt_before=()` 로 고정해도
+    전부 초록이다 -- 그 경우 게이트 노드는 항상 거부되니까. 그 돌연변이의
+    진짜 결과는 "체크포인터가 있어도 게이트가 들어간 설계는 영원히 못
+    돈다" 이고, 그건 이 테스트만 잡는다."""
+
+    from langgraph.checkpoint.memory import MemorySaver
+
+    saver = MemorySaver()
+
+    async def _fake_get_checkpointer():
+        return saver
+
+    # `_ensure_graph_initialized(use_checkpointer=True)` 도 같은 이름을 부른다
+    # -- 모듈 레벨 이름 하나를 갈아 끼우면 정적·설계 양쪽이 다 덮인다
+    # (진짜 PostgreSQL 체크포인터는 이 테스트에 필요 없다).
+    monkeypatch.setattr(
+        "neos.workflow.graph.get_checkpointer", _fake_get_checkpointer
+    )
+
+    _, resolved = await _resolve_with(
+        monkeypatch, _FakeDesigner(_GATED), use_checkpointer=True
+    )
+
+    assert resolved.source == "designed"
+    assert resolved.nodes == _GATED_CHAIN
+    # 게이트가 실제로 걸렸는가 -- 노드만 있고 인터럽트가 없으면 사람 승인이
+    # 조용히 생략된다.
+    assert "execution_approval" in resolved.compiled.interrupt_before_nodes
+
+
+@pytest.mark.asyncio
+async def test_the_designed_graph_leaves_no_trace_on_the_shared_instance(
+    monkeypatch,
+) -> None:
+    """G2-c 불변식을 **설계 분기 위에서** 지킨다.
+
+    `tests/workflow/test_execution_graph.py` 의 리크 가드는
+    `graph_design_enabled = False` 로 돌아 정적 분기만 걷는다 -- 그쪽에서는
+    `self.graph` 에 같은 객체를 다시 대입해도 티가 안 나므로, `self.graph =
+    compiled` 같은 리크를 넣어도 초록이었다. 리크가 실제로 가능한 분기는
+    설계 분기 하나뿐이라(거기서만 진짜 다른 컴파일 그래프가 생긴다), 그
+    분기 위에 가드를 하나 더 세운다."""
+
+    workflow = MultiAgentWorkflow()
+    _enable_design(monkeypatch)
+    monkeypatch.setattr(workflow, "_build_graph_designer", lambda: _FakeDesigner(_MINIMAL))
+    await workflow._ensure_graph_initialized(use_checkpointer=False)
+
+    graph_before = workflow.graph
+    checkpointer_cache_before = dict(workflow._graphs_by_checkpointer)
+    instance_attrs_before = set(vars(workflow))
+    class_attrs_before = set(vars(MultiAgentWorkflow))
+
+    resolved = await workflow._resolve_execution_graph(
+        user_input={"query": "q", "session_id": "s1"},
+        use_checkpointer=False,
+        span=None,
+    )
+
+    # 설계가 실제로 승인됐는지 먼저 확인한다 -- 폴백으로 내려갔다면 아래
+    # 단언들은 공허하게 참이 된다(정적 분기는 애초에 리크할 그래프가 없다).
+    assert resolved.source == "designed"
+    assert resolved.compiled is not graph_before
+
+    assert workflow.graph is graph_before
+    assert dict(workflow._graphs_by_checkpointer) == checkpointer_cache_before
+    assert set(vars(workflow)) == instance_attrs_before
+    assert set(vars(MultiAgentWorkflow)) == class_attrs_before
 
 
 @pytest.mark.asyncio
@@ -147,7 +275,7 @@ async def test_the_flag_being_off_skips_the_designer_entirely(monkeypatch) -> No
             return _MINIMAL
 
     workflow = MultiAgentWorkflow()
-    settings_module.settings.config.workflow.graph_design_enabled = False
+    _enable_design(monkeypatch, enabled=False)
     monkeypatch.setattr(workflow, "_build_graph_designer", lambda: _Tripwire())
     await workflow._ensure_graph_initialized(use_checkpointer=False)
 
