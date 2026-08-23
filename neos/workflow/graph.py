@@ -20,6 +20,7 @@ from .enums import WorkflowNode, WorkflowPathway, IntentType, AutonomyLevel
 from .state import AgentState, WorkflowConfig
 from .harness.cache_policy import should_cache_harness_result
 from .topology import END as TOPOLOGY_END, GraphTopology, START as TOPOLOGY_START
+from .execution_graph import ExecutionGraph, current_static_flags, static_execution_graph
 from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationOrchestrator
 from .processors import (
     ResultProcessor,
@@ -745,6 +746,29 @@ class MultiAgentWorkflow:
         self.graph = self._graphs_by_checkpointer[use_checkpointer]
         self._graph_initialized = True
         self._graph_uses_checkpointer = use_checkpointer
+
+    async def _resolve_execution_graph(
+        self,
+        *,
+        user_input: Dict[str, Any],
+        use_checkpointer: bool,
+        span: Any,
+    ) -> ExecutionGraph:
+        """이번 호출이 실행할 그래프를 정한다.
+
+        반환값을 **호출 스코프로만** 흘린다 -- 인스턴스 속성에 얹으면
+        동시 요청 두 개가 서로의 그래프를 실행한다(`__init__` 의 주석 참고).
+        `self.graph` 와 `_graphs_by_checkpointer` 는 정적 그래프의 컴파일
+        캐시로 그대로 남는다: 없애면 매 요청 재컴파일이다. 바뀌는 것은
+        "`execute_workflow` 가 그것을 직접 읽는가" 뿐이다.
+
+        지금은 정적 분기 하나뿐이고, 설계 분기는 다음 태스크가 넣는다.
+        """
+
+        await self._ensure_graph_initialized(use_checkpointer=use_checkpointer)
+        return static_execution_graph(
+            compiled=self.graph, flags=current_static_flags()
+        )
 
 
     @node_contract(
@@ -2483,8 +2507,13 @@ class MultiAgentWorkflow:
                 add_span_event(span, "redis_cache_miss")
             set_span_attributes(span, {"cache.hit": False})
 
-            # Ensure graph is initialized only after cache paths miss.
-            await self._ensure_graph_initialized(use_checkpointer=use_checkpointer)
+            # 캐시가 전부 빗나간 뒤에만 그래프를 정한다. 반환값은 이 호출의
+            # 로컬이며 인스턴스에 남지 않는다(G2-c).
+            execution_graph = await self._resolve_execution_graph(
+                user_input=user_input,
+                use_checkpointer=use_checkpointer,
+                span=span,
+            )
 
             # 초기 상태 생성 (event_handler를 상태에 포함)
             initial_state = self._create_initial_state(user_input)
@@ -2539,7 +2568,7 @@ class MultiAgentWorkflow:
                 final_state = None
 
                 # 스트리밍으로 워크플로우 실행하며 이벤트 emit
-                async for chunk in self.graph.astream(initial_state, config):
+                async for chunk in execution_graph.compiled.astream(initial_state, config):
                     # chunk는 {node_name: state} 형식
                     for node_name, state in chunk.items():
                         if node_name in workflow_nodes:
@@ -2660,7 +2689,7 @@ class MultiAgentWorkflow:
                     from langgraph.errors import GraphInterrupt
                     if isinstance(e, GraphInterrupt):
                         add_span_event(span, "workflow_interrupted_for_approval")
-                        current_graph_state = await self.graph.aget_state(config)
+                        current_graph_state = await execution_graph.compiled.aget_state(config)
                         pending = current_graph_state.values.get("pending_approvals", [])
                         session_id = user_input.get("session_id", "")
                         await event_handler.on_approval_request(pending, session_id)

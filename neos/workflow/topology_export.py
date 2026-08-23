@@ -28,7 +28,6 @@ import inspect
 import textwrap
 from collections.abc import Mapping
 
-from neos.workflow import graph as graph_module
 from neos.workflow.enums import WorkflowNode, WorkflowPathway
 from neos.workflow.topology import END, GRAPH_ENTRY_WRITES, START, GraphTopology
 
@@ -146,6 +145,15 @@ def static_topology(*, flags: Mapping[str, bool] | None = None) -> GraphTopology
         if unknown_keys:
             raise ValueError(f"알 수 없는 플래그: {sorted(unknown_keys)}")
         resolved_flags.update(flags)
+
+    # 함수 본문에서만 임포트한다 -- 모듈 스코프에서 `graph_module`을 들여오면
+    # `graph.py`가 이 모듈을 임포트하는 진입 방향(정상 경로, `sys.modules`
+    # 부분 초기화로 안전하다)과 반대로, 이 모듈이 먼저 임포트되는 진입
+    # 방향(예: 테스트가 `topology_export`/`execution_graph`를 직접 임포트)
+    # 에서 `graph.py -> execution_graph -> topology_export`로 되돌아오며
+    # `topology_export`가 아직 이 함수를 정의하기 전이라 순환 임포트가
+    # 실패한다. 여기서만 쓰므로 지역 임포트로 양방향을 다 안전하게 만든다.
+    from neos.workflow import graph as graph_module
 
     source = textwrap.dedent(
         inspect.getsource(graph_module.MultiAgentWorkflow._create_workflow_graph)

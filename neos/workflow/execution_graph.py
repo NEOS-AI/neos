@@ -6,17 +6,18 @@
 속성에 얹으면 동시 요청 두 개가 서로의 그래프를 실행한다.
 
 이 모듈은 `graph.py` 를 직접 임포트하지 않는다 -- `compiled: Any` 로
-충분해서 `MultiAgentWorkflow` 의 타입이 필요 없다. 다만 `topology_export`
-가 모듈 스코프에서 `graph.py` 를 임포트하므로(그 안에서 싱글턴을
-인스턴스화한다) 전이 의존은 실제로 존재한다: 이 모듈을 임포트하면
-`MultiAgentWorkflow` 도 함께 만들어진다. 이 모듈을 `graph.py` 와 무관한
-것으로 읽지 말 것. 다음 태스크가 `graph.py` 에 `from .execution_graph
-import ...` 를 추가하면 `graph.py → execution_graph → topology_export →
-graph.py` 순환이 생기지만, 이는 깨진 채로 남는 순환이 아니다:
-`topology_export` 는 `graph_module` 을 함수 본문 안에서만 쓰고(모듈
-로드 시점에는 쓰지 않는다) 파이썬은 `sys.modules` 에 이미 등록된
-부분 초기화 모듈을 `from package import submodule` 로 해석하므로
-ImportError 없이 통과한다.
+충분해서 `MultiAgentWorkflow` 의 타입이 필요 없다. `graph.py` 는
+`from .execution_graph import ...` 를 모듈 상단에서 실행하므로
+`graph.py → execution_graph → topology_export → graph.py` 순환이 실제로
+존재한다. `topology_export.static_topology` 는 `graph_module` 을 함수
+본문 안에서 지역 임포트로만 쓴다(모듈 로드 시점에는 임포트조차 하지
+않는다) -- 그래서 어느 쪽이 먼저 임포트되든(`graph.py` 가 먼저든,
+`execution_graph`/`topology_export` 가 먼저든) 순환의 되돌아오는 변이
+함수 정의가 끝난 뒤에만 일어나 ImportError 없이 통과한다. 이전에는 그
+임포트문 자체가 `topology_export` 모듈 스코프에 있어서 진입 방향에
+따라 깨졌다 -- `topology_export`/`execution_graph` 를 먼저 임포트하면
+`graph.py` 가 아직 `_FLAG_ATTR_TO_KEY` 정의 이전인 `topology_export`
+로 되돌아와 실패했다.
 """
 
 from collections.abc import Mapping
