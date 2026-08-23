@@ -287,3 +287,70 @@ async def test_the_flag_being_off_skips_the_designer_entirely(monkeypatch) -> No
 
     assert resolved.source == "static"
     assert called is False
+
+
+class _SpanSpy:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_records_its_reason(monkeypatch) -> None:
+    """"이벤트를 하나도 남기지 않는 폴백은 성공과 구별되지 않는다" --
+    `graph_design_ledger` 모듈의 존재 이유다. 목적지를 붙이는 것이 배선의
+    절반이다."""
+
+    from neos.workflow import graph as graph_module
+
+    recorded: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        graph_module,
+        "add_span_event",
+        lambda span, name, attrs=None: recorded.append((name, dict(attrs or {}))),
+    )
+
+    await _resolve_with(monkeypatch, _FakeDesigner(RuntimeError("model exploded")))
+
+    kinds = [name for name, _attrs in recorded]
+    assert "graph_design_requested" in kinds
+    assert "graph_design_fallback" in kinds
+    reason = next(
+        attrs["reason"] for name, attrs in recorded if name == "graph_design_fallback"
+    )
+    assert "RuntimeError" in reason
+
+
+@pytest.mark.asyncio
+async def test_the_query_is_truncated_before_it_reaches_logs_and_traces(
+    monkeypatch,
+) -> None:
+    """`graph_design_requested.payload["query"]` 는 질의 **전문**이다
+    (`graph_design_ledger.py:143`). 그대로 흘리면 사용자 질의가 로그와
+    트레이스에 통째로 남는다. 이 저장소에는 이미 자르는 규율이 있다 --
+    `graph.py:2444` 의 `query_preview` 가 100자다."""
+
+    from neos.workflow import graph as graph_module
+
+    recorded: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        graph_module,
+        "add_span_event",
+        lambda span, name, attrs=None: recorded.append((name, dict(attrs or {}))),
+    )
+
+    long_query = "가" * 500
+    workflow = MultiAgentWorkflow()
+    settings_module.settings.config.workflow.graph_design_enabled = True
+    monkeypatch.setattr(workflow, "_build_graph_designer", lambda: _FakeDesigner(_MINIMAL))
+    await workflow._ensure_graph_initialized(use_checkpointer=False)
+    await workflow._resolve_execution_graph(
+        user_input={"query": long_query, "session_id": "s1"},
+        use_checkpointer=False,
+        span=None,
+    )
+
+    requested = next(
+        attrs for name, attrs in recorded if name == "graph_design_requested"
+    )
+    assert "query" not in requested
+    assert len(requested["query_preview"]) <= 100

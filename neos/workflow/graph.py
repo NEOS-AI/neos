@@ -161,6 +161,12 @@ _INTERRUPT_GATED_NODES: frozenset[str] = frozenset(
     {WorkflowNode.EXECUTION_APPROVAL.value, WorkflowNode.MISSION_APPROVAL.value}
 )
 
+# 설계 이벤트에 싣는 질의 미리보기 길이. `execute_workflow` 의
+# `query_preview`(`add_span_event(span, "workflow_started", ...)`)와 같은 값을
+# 쓴다 -- 같은 span 에 두 길이의 미리보기가 섞이면 읽는 사람이 어느 쪽이
+# 잘린 것인지 모른다.
+_DESIGN_QUERY_PREVIEW_CHARS = 100
+
 
 class EphemeralApprovalGateUnsupported(ValueError):
     """`build_ephemeral_workflow` 가 사람 승인 게이트 노드(`execution_approval`/
@@ -887,9 +893,28 @@ class MultiAgentWorkflow:
         return LlmGraphDesigner(model=llm, prompt_path=prompt_path)
 
     def _record_design_events(self, events: Sequence[Any], span: Any) -> None:
-        """설계 이벤트를 기록한다. Task 7 이 로그·span 목적지를 채운다."""
+        """설계 이벤트를 구조적 로그와 OTel span 두 곳에 남긴다.
 
-        return None
+        목적지가 이 둘인 이유: `execute_workflow` 가 이미
+        `trace_workflow_node` span 을 쥐고 있어 새 배관이 필요 없고,
+        마이그레이션이 0건이라 SCHEMA1(마이그레이션 44개 중 7개가 신선한
+        DB 에서 실패한다)을 악화시키지 않는다.
+
+        payload 는 `design_graph_or_fallback` 이 정한다 -- 이벤트의 내용을
+        정하는 자리와 목적지를 정하는 자리를 섞지 않는다. **다만 질의만
+        예외다**: `graph_design_requested.payload["query"]` 는 전문이라
+        그대로 흘리면 사용자 질의가 로그에 통째로 남는다. 축약은 원본을
+        고치는 것이 아니라 *기록하는 쪽* 의 책임이다.
+        """
+
+        for event in events:
+            payload = dict(event.payload)
+            query = payload.pop("query", None)
+            if query is not None:
+                payload["query_preview"] = str(query)[:_DESIGN_QUERY_PREVIEW_CHARS]
+
+            add_span_event(span, event.kind, payload)
+            logger.info("[GraphDesign] %s %s", event.kind, payload)
 
     def graph_astream_source(
         self, execution_graph: ExecutionGraph, initial_state: AgentState, config: Dict[str, Any]
