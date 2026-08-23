@@ -770,6 +770,18 @@ class MultiAgentWorkflow:
             compiled=self.graph, flags=current_static_flags()
         )
 
+    def graph_astream_source(
+        self, execution_graph: ExecutionGraph, initial_state: AgentState, config: Dict[str, Any]
+    ):
+        """`astream` 을 한 겹 감싸 테스트가 chunk 시퀀스를 주입할 수 있게 한다.
+
+        진행 추적의 계약(어느 노드가 몇 번째로 나오는가)을 검증하려면 실제
+        LLM 없이 chunk 를 흘려보낼 수 있어야 한다. 프로덕션 동작은 그대로
+        `compiled.astream` 이다.
+        """
+
+        return execution_graph.compiled.astream(initial_state, config)
+
 
     @node_contract(
         node=WorkflowNode.REFINEMENT_CHECKER,
@@ -2543,84 +2555,80 @@ class MultiAgentWorkflow:
                         "recursion_limit": 50  # 재시도를 위한 recursion limit 증가
                     }
 
-                # 노드별 진행 상황 추적을 위해 astream 사용
-                workflow_nodes = [
-                    WorkflowNode.QUERY_CLS.value, WorkflowNode.SKILL_TOOL_SELECTOR.value,
-                    WorkflowNode.HYPOTHESIS_GENERATION.value,  # Phase 2.5
-                    WorkflowNode.SEARCH_ORCHESTRATOR.value,
-                    WorkflowNode.HYPOTHESIS_EVALUATION.value,  # Phase 2.5
-                    WorkflowNode.REPLANNER.value,  # Phase 2.4
-                    WorkflowNode.ANALYSIS_ORCHESTRATOR.value,
-                    WorkflowNode.GENERATION_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value,
-                    WorkflowNode.FACT_CHECK.value, WorkflowNode.QUALITY_VALIDATOR.value,
-                    WorkflowNode.MISSION_PLANNER.value,
-                    WorkflowNode.MISSION_APPROVAL.value,
-                    WorkflowNode.MISSION_EXECUTOR.value,
-                    WorkflowNode.MISSION_VALIDATOR.value,
-                    WorkflowNode.MISSION_INTEGRATOR.value,
-                    WorkflowNode.RESP_GENERATOR.value,
-                    WorkflowNode.RESEARCH_HARNESS.value,
-                    WorkflowNode.RESEARCH_HARNESS_REPAIR.value,
-                ]
+                # 진행 추적의 근거는 **이번 실행의 그래프**다. 손으로 나열한
+                # 목록을 쓰지 않는 이유는 그 목록이 이 그래프를 서술한다는
+                # 보장이 없기 때문이다 -- 조건부 분기로 절반을 건너뛰어도
+                # `total_steps` 가 19 로 고정돼 있었고, 설계된 그래프의 노드는
+                # 목록에 아예 없었다.
+                from .events import (
+                    get_node_label, estimate_remaining_time,
+                    record_node_start, record_node_end,
+                )
+
+                trackable_nodes = set(execution_graph.nodes)
+                # 분기 때문에 실제 실행 수는 이보다 적을 수 있다 -- 이름이
+                # 그 사실을 말하게 둔다. `total_steps` 라고 부르면 다음 사람이
+                # 이것을 정확한 총계로 읽는다.
+                max_steps = len(execution_graph.nodes)
 
                 current_step = 0
-                total_steps = len(workflow_nodes)
                 final_state = None
+                wf_id = user_input.get("session_id", "")
+                # 실제로 직전 chunk 에서 본 노드들. 목록 인덱스로 추정하지
+                # 않는다 -- 옛 코드는 `workflow_nodes.index(node) - 1` 로
+                # "이전 노드" 를 골라, 이 run 이 건너뛴 노드의 종료 시각을
+                # 기록했다.
+                previous_nodes: list[str] = []
+                seen_nodes: set[str] = set()
 
-                # 스트리밍으로 워크플로우 실행하며 이벤트 emit
-                async for chunk in execution_graph.compiled.astream(initial_state, config):
-                    # chunk는 {node_name: state} 형식
-                    for node_name, state in chunk.items():
-                        if node_name in workflow_nodes:
-                            current_step += 1
+                async for chunk in self.graph_astream_source(execution_graph, initial_state, config):
+                    chunk_nodes = [
+                        name for name in chunk if name in trackable_nodes
+                    ]
 
-                            # Tracing: 노드 실행 이벤트
-                            add_span_event(span, f"node_{node_name}_start", {
-                                "step": current_step,
-                                "total_steps": total_steps
-                            })
+                    for finished in previous_nodes:
+                        record_node_end(finished, wf_id)
 
-                            # 이전 노드의 실행 시간 기록 (동적 ETA용)
-                            from .events import (
-                                get_node_label, estimate_remaining_time,
-                                record_node_start, record_node_end,
-                            )
-                            wf_id = user_input.get("session_id", "")
-                            if current_step > 1:
-                                # 이전 노드 완료 기록
-                                prev_idx = workflow_nodes.index(node_name) - 1
-                                if prev_idx >= 0:
-                                    record_node_end(workflow_nodes[prev_idx], wf_id)
+                    for node_name in chunk_nodes:
+                        current_step += 1
+                        seen_nodes.add(node_name)
 
-                            # 현재 노드 시작 기록
-                            record_node_start(node_name, wf_id)
+                        add_span_event(span, f"node_{node_name}_start", {
+                            "step": current_step,
+                            "max_steps": max_steps,
+                        })
 
-                            # 노드 시작 이벤트 (structured progress)
-                            await event_handler.on_node_start(
-                                node_name,
-                                current_step,
-                                total_steps,
-                                step_name=get_node_label(node_name),
-                                estimated_remaining_s=estimate_remaining_time(node_name),
-                            )
+                        record_node_start(node_name, wf_id)
 
-                            # 노드 완료 이벤트 (state에서 필요한 정보 추출)
-                            node_result = {
-                                "node": node_name,
-                                "step": current_step
-                            }
-                            await event_handler.on_node_complete(node_name, node_result)
+                        remaining = tuple(
+                            node for node in execution_graph.nodes
+                            if node not in seen_nodes
+                        )
+                        await event_handler.on_node_start(
+                            node_name,
+                            current_step,
+                            max_steps,
+                            step_name=get_node_label(node_name),
+                            estimated_remaining_s=estimate_remaining_time(
+                                node_name, candidates=remaining
+                            ),
+                        )
 
-                            # Tracing: 노드 완료 이벤트
-                            add_span_event(span, f"node_{node_name}_complete")
+                        await event_handler.on_node_complete(
+                            node_name, {"node": node_name, "step": current_step}
+                        )
+                        add_span_event(span, f"node_{node_name}_complete")
 
-                        # 마지막 상태 저장
+                    previous_nodes = chunk_nodes
+
+                    for _node_name, state in chunk.items():
                         final_state = state
 
-                # 마지막 노드의 실행 시간 기록
-                if workflow_nodes:
-                    from .events import record_node_end
-                    record_node_end(workflow_nodes[-1], user_input.get("session_id", ""))
+                # 마지막으로 **실제로 본** 노드의 종료를 기록한다. 옛 코드는
+                # `workflow_nodes[-1]`(목록의 마지막)을 썼는데, 그 노드는 이
+                # run 에서 돌지 않았을 수 있다.
+                for finished in previous_nodes:
+                    record_node_end(finished, wf_id)
 
                 # 결과 생성
                 add_span_event(span, "generating_result")

@@ -9,6 +9,7 @@ import statistics
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
+from collections.abc import Sequence
 from typing import Dict, Any, Optional
 from datetime import datetime
 
@@ -133,17 +134,26 @@ def get_node_label(node_name: str) -> str:
     return NODE_LABELS.get(node_name, node_name.replace("_", " ").title())
 
 
-def estimate_remaining_time(current_node: str) -> float:
-    """현재 노드 이후 남은 예상 시간(초)을 계산합니다.
+def estimate_remaining_time(
+    current_node: str, *, candidates: Sequence[str]
+) -> float:
+    """아직 도달하지 않은 노드들의 예상 소요 시간 합.
 
-    히스토리가 있는 노드는 동적 값을, 없는 노드는 정적 값을 사용합니다.
+    `candidates` 를 호출자가 넘기는 이유: 옛 구현은 모듈 전역
+    `WORKFLOW_NODE_ORDER` 를 기준으로 `index(current_node)` 이후를 셌다.
+    그 목록에 없는 노드에는 `ValueError` 를 잡아 **0.0** 을 돌려줬는데,
+    설계된 그래프(`graph_design_enabled`)의 노드는 전부 그 목록 밖이라
+    사용자가 매 단계 "남은 시간 0초" 를 보게 된다. 이벤트가 아예 안 나가는
+    것보다 나쁘다 -- 사용자는 틀린 값을 안다고 믿는다.
+
+    ⚠️ **여전히 과대추정이다.** 조건부 분기로 실제로는 가지 않을 노드가
+    `candidates` 에 섞여 있다. 정확히 하려면 런타임 상태에 의존하는 분기
+    조건을 실행 전에 알아야 하는데 그럴 수 없다. 이 값은 **상한**이며,
+    지금과 달라진 것은 (a) 이 그래프에 없는 노드가 빠지고 (b) 0 이라
+    거짓말하지 않는다는 두 가지다.
     """
-    try:
-        idx = WORKFLOW_NODE_ORDER.index(current_node)
-        remaining = WORKFLOW_NODE_ORDER[idx + 1:]
-        return sum(get_estimated_duration(n) for n in remaining)
-    except ValueError:
-        return 0.0
+
+    return sum(get_estimated_duration(node) for node in candidates)
 
 
 def get_duration_stats() -> Dict[str, Any]:
