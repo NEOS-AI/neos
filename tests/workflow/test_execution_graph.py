@@ -89,9 +89,20 @@ async def test_resolve_execution_graph_returns_the_static_graph_when_design_is_o
 
 
 @pytest.mark.asyncio
-async def test_two_concurrent_resolutions_do_not_share_a_designed_slot() -> None:
-    """G2-c 의 경합 가드. 두 호출이 각자의 값을 받고, 그 값이 인스턴스
-    속성에 남지 않는다 -- 남으면 나중 요청이 앞 요청의 그래프를 덮어쓴다."""
+async def test_resolving_the_execution_graph_leaves_no_per_call_state_on_the_shared_instance() -> None:
+    """G2-c 의 핵심 가드. `MultiAgentWorkflow` 는 모듈 레벨 싱글턴이라 요청들이
+    공유한다(`graph.py:376-383`) -- `_resolve_execution_graph` 의 반환값이
+    인스턴스나 클래스 어디에든 남으면 나중 요청이 앞 요청의 그래프를
+    실행한다. 이 테스트는 "존재 여부"(속성 이름의 집합)가 아니라 "정확히
+    그 객체·그 내용인가"를 본다 -- `self.graph = 설계된_그래프` 처럼 **기존**
+    속성에 다른 값을 덮어쓰는 리크는 이름 집합만 보는 검사로는 안 잡힌다.
+
+    이름에 "concurrent"를 쓰지 않는다: 이미 초기화된 경로에서
+    `_ensure_graph_initialized` 는 실제로 양보하는 await 지점이 없으므로,
+    `asyncio.gather` 로 감싸도 두 코루틴은 사실상 순차 실행된다 -- 이
+    경로에서는 진짜 인터리빙을 재현할 수 없다. 그래서 이름과 문서를
+    실제로 검증하는 성질(공유 인스턴스에 흔적이 남지 않는다)에 맞춘다.
+    """
 
     import asyncio as _asyncio
 
@@ -102,7 +113,12 @@ async def test_two_concurrent_resolutions_do_not_share_a_designed_slot() -> None
     settings_module.settings.config.workflow.graph_design_enabled = False
     await workflow._ensure_graph_initialized(use_checkpointer=False)
 
-    before = set(vars(workflow))
+    # 넷 다 "호출 전" 스냅샷 -- 이후 비교는 전부 이 스냅샷 대비다.
+    graph_before = workflow.graph
+    checkpointer_cache_before = dict(workflow._graphs_by_checkpointer)
+    instance_attrs_before = set(vars(workflow))
+    class_attrs_before = set(vars(MultiAgentWorkflow))
+
     first, second = await _asyncio.gather(
         workflow._resolve_execution_graph(
             user_input={"query": "q1", "session_id": "s1"},
@@ -116,6 +132,17 @@ async def test_two_concurrent_resolutions_do_not_share_a_designed_slot() -> None
         ),
     )
 
-    assert first.topology_hash == second.topology_hash  # 둘 다 정적이므로 같다
-    # 핵심 단언: 해석이 인스턴스에 새 슬롯을 남기지 않았다.
-    assert set(vars(workflow)) == before
+    assert first.source == "static"
+    assert second.source == "static"
+
+    # 동일 객체인가(존재가 아니라) -- `self.graph = r.compiled` 형태의 리크를 잡는다.
+    assert workflow.graph is graph_before
+    # 키 집합이 아니라 내용 전체 -- `_graphs_by_checkpointer[새_키] = ...` 형태의
+    # 리크를 잡는다. `setdefault` 처럼 키가 이미 있으면 아무것도 안 남기는
+    # 경로와, 새 키를 얹는 경로를 구별한다.
+    assert dict(workflow._graphs_by_checkpointer) == checkpointer_cache_before
+    # 인스턴스에 새 속성 이름이 안 생겼는가.
+    assert set(vars(workflow)) == instance_attrs_before
+    # 클래스에도 새 속성 이름이 안 생겼는가 -- `MultiAgentWorkflow._designed = r`
+    # 처럼 인스턴스가 아니라 클래스에 얹는 리크는 `vars(workflow)` 로는 안 보인다.
+    assert set(vars(MultiAgentWorkflow)) == class_attrs_before
