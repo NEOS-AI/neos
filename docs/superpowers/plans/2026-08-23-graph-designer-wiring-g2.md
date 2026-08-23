@@ -279,11 +279,11 @@ import dataclasses
 import pytest
 
 from neos.workflow.execution_graph import (
+    STATIC_FLAG_KEYS,
     ExecutionGraph,
     current_static_flags,
     static_execution_graph,
 )
-from neos.workflow.topology_export import _FLAG_ATTR_TO_KEY
 
 
 def test_execution_graph_is_frozen_so_a_request_cannot_mutate_anothers_view() -> None:
@@ -302,13 +302,13 @@ def test_current_static_flags_covers_every_flag_the_extractor_knows() -> None:
     그래서 매핑 전체를 덮는지 길이로 단언한다."""
 
     flags = current_static_flags()
-    assert set(flags) == set(_FLAG_ATTR_TO_KEY.values())
+    assert set(flags) == set(STATIC_FLAG_KEYS)
     assert len(flags) == 5
 
 
 def test_static_execution_graph_reports_static_source_and_a_stable_hash() -> None:
     compiled = object()
-    flags = dict.fromkeys(_FLAG_ATTR_TO_KEY.values(), True)
+    flags = dict.fromkeys(STATIC_FLAG_KEYS, True)
 
     first = static_execution_graph(compiled=compiled, flags=flags)
     second = static_execution_graph(compiled=compiled, flags=flags)
@@ -325,7 +325,7 @@ def test_a_disabled_flag_changes_the_static_hash() -> None:
     """플래그가 그래프를 바꾸면 해시도 바뀌어야 한다. 안 바뀌면 서로 다른
     배포의 run 이 같은 해시로 조인돼 비교가 거짓이 된다."""
 
-    all_on = dict.fromkeys(_FLAG_ATTR_TO_KEY.values(), True)
+    all_on = dict.fromkeys(STATIC_FLAG_KEYS, True)
     recursive_off = {**all_on, "recursive": False}
 
     assert (
@@ -363,6 +363,12 @@ from typing import Any, Literal
 from neos.config.settings import settings
 from neos.workflow.graph_design_ledger import topology_hash
 from neos.workflow.topology_export import _FLAG_ATTR_TO_KEY, static_topology
+
+# `topology_export` 의 플래그 키를 공개 표면으로 다시 내보낸다. 본체가
+# `_FLAG_ATTR_TO_KEY` 를 그대로 쓰는 것은 매핑을 두 벌 유지하지 않기
+# 위해서고, 이 상수는 **테스트와 바깥 호출자가 private 이름을 임포트하지
+# 않게** 하기 위한 것이다.
+STATIC_FLAG_KEYS: frozenset[str] = frozenset(_FLAG_ATTR_TO_KEY.values())
 
 
 @dataclass(frozen=True, slots=True)
@@ -800,6 +806,14 @@ from collections.abc import Sequence
 import pytest
 
 
+class _AsyncNoop:
+    """`execute_workflow` 가 부르는 DB·캐시·메모리 협력자의 자리를 채운다.
+    `None` 을 돌려주는 async 호출 하나면 충분하다."""
+
+    async def __call__(self, *args, **kwargs):
+        return None
+
+
 class _RecordingHandler:
     """`on_node_start` 로 들어온 (노드, step, max_steps) 를 그대로 모은다."""
 
@@ -848,6 +862,25 @@ async def test_node_end_is_recorded_for_the_node_actually_seen_not_the_list_neig
             yield {name: {"final_response": "ok"}}
 
     monkeypatch.setattr(workflow, "graph_astream_source", _fake_stream)
+
+    # `execute_workflow` 를 부르려면 DB·캐시·메모리를 타는 여덟 곳을 막아야
+    # 한다. 목록은 `tests/test_workflow_graph.py:338-348` 이 확립한 것을
+    # 그대로 쓴다 -- 같은 것을 두 방식으로 테스트하면 다음 사람이 어느 쪽이
+    # 정본인지 모른다.
+    from neos.workflow import graph as workflow_graph_module
+
+    monkeypatch.setattr(workflow_graph_module.settings, "SMART_CACHE_ENABLED", False)
+    for name in (
+        "_check_cached_response",
+        "_load_memory_context",
+        "_apply_research_template",
+        "_record_session_start",
+        "_save_episode_memory",
+        "_record_session_complete",
+        "_cache_workflow_result",
+        "_auto_save_dataset",
+    ):
+        monkeypatch.setattr(workflow, name, _AsyncNoop())
 
     handler = _RecordingHandler()
     await workflow.execute_workflow(
@@ -921,7 +954,7 @@ import pytest
 
 from neos.config import settings as settings_module
 from neos.workflow.graph import MultiAgentWorkflow
-from neos.workflow.topology import GraphTopology
+from neos.workflow.topology import GRAPH_ENTRY_WRITES, GraphTopology
 
 
 class _FakeDesigner:
@@ -934,10 +967,29 @@ class _FakeDesigner:
         return self._result
 
 
+# 🔴 승인 **가능한** 최소 체인이다. `response_generator` 하나짜리 토폴로지는
+# 어떤 경우에도 통과하지 못한다 -- 그 노드의 requires 는 {analysis_results,
+# execution_start, generation_results, search_results} 이고
+# GRAPH_ENTRY_WRITES 는 {execution_start, original_query, session_id, user_id}
+# 라, 세 키를 채우는 노드가 경로에 있어야 한다. `query_classifier` 가 앞에
+# 오는 이유는 세 orchestrator 가 전부 `required_agents` 를 요구하고 그것을
+# 쓰는 노드가 `query_classifier` 이기 때문이다.
+# 실측: 이 체인의 `validate_topology` 위반 0건.
+_CHAIN = (
+    "query_classifier",
+    "search_orchestrator",
+    "analysis_orchestrator",
+    "generation_orchestrator",
+    "response_generator",
+)
 _MINIMAL = GraphTopology(
-    nodes=("response_generator",),
-    edges=(("__start__", "response_generator"), ("response_generator", "__end__")),
-    initial_writes=frozenset({"original_query"}),
+    nodes=_CHAIN,
+    edges=(
+        ("__start__", _CHAIN[0]),
+        *((_CHAIN[i], _CHAIN[i + 1]) for i in range(len(_CHAIN) - 1)),
+        (_CHAIN[-1], "__end__"),
+    ),
+    initial_writes=GRAPH_ENTRY_WRITES,
 )
 
 
@@ -984,10 +1036,11 @@ async def test_a_topology_that_violates_the_rules_falls_back_to_static(
     """`response_generator` 가 없는 설계는 mandatory 규칙에 걸린다 -- 구조적
     으로 성립해도 사용자에게 돌려줄 응답을 만들지 않는 그래프다."""
 
+    # 실측: 위반 1건 `missing_mandatory/response_generator`.
     no_response = GraphTopology(
         nodes=("query_classifier",),
         edges=(("__start__", "query_classifier"), ("query_classifier", "__end__")),
-        initial_writes=frozenset({"original_query"}),
+        initial_writes=GRAPH_ENTRY_WRITES,
     )
     resolved = await _resolve_with(monkeypatch, _FakeDesigner(no_response))
 
@@ -1004,14 +1057,23 @@ async def test_an_approval_gate_without_a_checkpointer_falls_back_instead_of_rai
     설계 실패가 **사용자 요청을 죽인다** -- 기본 꺼짐인 기능이 할 일이
     아니다."""
 
+    # 🔴 이 토폴로지는 **검증을 통과해야** 한다. 검증에서 거부되면 컴파일
+    # 단계에 도달하지 못하고, 테스트는 `source == "static"` 으로 통과하지만
+    # **다른 이유로** 통과한다 -- 게이트 처리를 지우고 돌려도 초록인 가짜
+    # 테스트가 된다. 실측: 아래 체인의 위반 0건이며
+    # `execution_approval.requires` 는 비어 있다.
+    gated_chain = ("query_classifier", "execution_approval") + _CHAIN[1:]
     gated = GraphTopology(
-        nodes=("execution_approval", "response_generator"),
+        nodes=gated_chain,
         edges=(
-            ("__start__", "execution_approval"),
-            ("execution_approval", "response_generator"),
-            ("response_generator", "__end__"),
+            ("__start__", gated_chain[0]),
+            *(
+                (gated_chain[i], gated_chain[i + 1])
+                for i in range(len(gated_chain) - 1)
+            ),
+            (gated_chain[-1], "__end__"),
         ),
-        initial_writes=frozenset({"original_query"}),
+        initial_writes=GRAPH_ENTRY_WRITES,
     )
     resolved = await _resolve_with(monkeypatch, _FakeDesigner(gated))
 
