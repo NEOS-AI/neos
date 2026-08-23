@@ -252,6 +252,28 @@ class WorkflowConfig(StrictConfigModel):
         le=120,
         description="설계 서브에이전트 호출 타임아웃. 넘으면 정적 그래프로 폴백한다.",
     )
+    graph_design_model: str | None = Field(
+        default=None,
+        description=(
+            "설계 서브에이전트가 쓸 모델. None 이면 프로바이더 × everyday 역할 "
+            "기본값으로 해석한다 (deep_analysis.models.* 와 같은 계약)."
+        ),
+    )
+    # `DesignRequest.budget` 에 실려 프롬프트의 {budget} 으로 치환되는 값이다.
+    # **강제되지 않는다** -- `prompts/graph_design.md` 자신이 그렇게 적었다:
+    # "이 예산 제약은 현재 노드별 비용 표가 없어 검증기가 자동으로 강제하지
+    # 않는다 -- 비용 표가 추가되기 전까지는 참고용 상한이다." 이름에 `_hint`
+    # 를 단 이유가 그것이다: `budget` 이라고만 부르면 다음 사람이 이 값을
+    # `validate_topology(budget=...)` 로 흘려보내고, 그러면 node_costs 가
+    # 없으므로 fail-closed 규칙이 **모든 설계를 거부**한다.
+    # 기본값 1000 은 근거가 없다 -- 기존 테스트가 쓰는 값과 같게 두어 배선이
+    # 동작 차이를 만들지 않게 한 것뿐이다. 근거 있는 값은 노드별 비용 표가
+    # 생겨야 나온다.
+    graph_design_budget_hint: int = Field(
+        default=1000,
+        gt=0,
+        description="설계 프롬프트에 박히는 참고용 노드 비용 상한. 검증기가 강제하지 않는다.",
+    )
 
 
 class ResearchHarnessModelChecksConfig(StrictConfigModel):
