@@ -73,6 +73,13 @@ _TOPOLOGY_HASH_HEX_LENGTH = 16
 # 넘겨 이 기본값을 오버라이드할 수 있다 -- 그 선택은 호출자 책임으로 드러난다.
 _DEFAULT_MANDATORY_NODES: tuple[str, ...] = (WorkflowNode.RESP_GENERATOR.value,)
 
+# I1 을 **키로** 표현한 것. 노드 이름으로 적었더니 옳은 설계를 거부했다 -- 표본
+# `20260824T101448Z` 에서 대화형 질의 5건이 전부 `missing_mandatory` 로 반려됐고,
+# 그 설계들(`[direct_response]` 등)은 검색·분석을 건너뛴 **맞는 그래프**였다.
+# `direct_response` 도 `final_response` 를 쓰기 때문이며(§14.2 G1-a), 요구를 노드
+# 이름으로 적는 순간 "응답이 만들어지는가" 와 "어느 노드가 만드는가" 가 섞인다.
+_DEFAULT_MUST_WRITE: frozenset[str] = frozenset({"final_response"})
+
 
 @dataclass(frozen=True, slots=True)
 class LedgerEvent:
@@ -109,7 +116,10 @@ async def design_graph_or_fallback(
     # 정말 응답 없는 설계를 원하면(예: 순수 부수효과 파이프라인) `mandatory=()`
     # 를 명시적으로 넘겨 이 기본값을 오버라이드한다 -- 그 선택은 호출자 책임
     # 으로 코드에 드러난다.
-    mandatory: Sequence[str] = _DEFAULT_MANDATORY_NODES,
+    # 노드 이름 기반 요구는 이제 기본값이 비어 있다 -- I1 은 아래 `must_write` 가
+    # 표현한다. 호출자가 특정 노드의 존재를 요구하고 싶으면 명시적으로 넘긴다.
+    mandatory: Sequence[str] = (),
+    must_write: frozenset[str] = _DEFAULT_MUST_WRITE,
     # 예산: `prompts/graph_design.md` 는 서브에이전트에게 "노드 비용 합계가
     # budget 을 넘지 않아야 한다"고 지시하지만, 오늘 이 트리 어디에도 노드별
     # 실제 비용 표(`node_costs`)가 없다 -- 그 표를 지어내면(추측한 숫자를
@@ -160,6 +170,7 @@ async def design_graph_or_fallback(
             topology,
             contracts=contracts,
             mandatory=mandatory,
+            must_write=must_write,
             budget=budget,
             node_costs=node_costs,
         )

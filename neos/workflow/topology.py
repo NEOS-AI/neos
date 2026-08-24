@@ -114,6 +114,7 @@ def validate_topology(
     *,
     contracts: Mapping[str, _ContractLike],
     mandatory: Sequence[str] = (),
+    must_write: frozenset[str] = frozenset(),
     budget: int | None = None,
     node_costs: Mapping[str, int] | None = None,
 ) -> tuple[TopologyViolation, ...]:
@@ -274,6 +275,41 @@ def validate_topology(
                     detail=f"필수 노드 '{name}' 가 토폴로지에 없다",
                 )
             )
+
+    # -- 반드시 쓰여야 하는 키 -------------------------------------------------
+    #
+    # `mandatory` 와 같은 요구(I1: "응답 없는 설계를 승인하지 않는다")를 **노드
+    # 이름이 아니라 키**로 적는다. 둘의 차이가 실측으로 드러났다 -- 표본
+    # `20260824T101448Z` 에서 대화형 질의 5건이 전부 `missing_mandatory` 로
+    # 거부됐는데, 거부된 설계(`[direct_response]` 등)는 **옳은 그래프**였다.
+    # "고마워요" 에 검색·분석·생성 오케스트레이터를 지나갈 이유가 없다.
+    #
+    # 원인은 표현이다: `direct_response` 도 `final_response` 를 쓴다(§14.2의
+    # G1-a 가 그 노드를 응답 생산자로 인정한 그대로다). 요구를 노드 이름으로
+    # 적는 순간 **진짜 요구(응답이 만들어지는가)와 구현 세부(어느 노드가
+    # 만드는가)가 섞인다.**
+    #
+    # `mandatory` 를 지우지 않는 이유: 그쪽은 "이 노드가 반드시 있어야 한다"는
+    # 다른 요구를 여전히 표현할 수 있다(예: 감사 로깅 노드). 둘은 대체가 아니라
+    # 다른 질문이고, 기본값이 no-op 이라 안 쓰면 돌지 않는다.
+    if must_write:
+        written_anywhere: set[str] = set()
+        for name in topology.nodes:
+            contract = contracts.get(name)
+            if contract is not None:
+                written_anywhere |= set(contract.writes)
+        for key in sorted(must_write):
+            if key not in written_anywhere:
+                violations.append(
+                    TopologyViolation(
+                        rule="no_writer_for_required_key",
+                        node=None,
+                        detail=(
+                            f"'{key}' 를 쓰는 노드가 토폴로지에 하나도 없다 -- "
+                            "구조적으로 성립해도 이 설계는 그 값을 만들지 않는다"
+                        ),
+                    )
+                )
 
     # -- 예산 -----------------------------------------------------------------
     # 방어선이 실패 시 열리면 안 된다: 비용이 선언되지 않은 노드를 0 으로 취급해

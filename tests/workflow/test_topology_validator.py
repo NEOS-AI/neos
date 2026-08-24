@@ -309,3 +309,73 @@ def test_violation_key_is_populated_only_for_key_specific_rules() -> None:
 
     unreachable_violation = next(v for v in violations if v.rule == "unreachable_node")
     assert unreachable_violation.key is None
+
+
+# --- must_write: I1 불변식을 노드 이름이 아니라 "쓰여야 하는 키" 로 --------------
+#
+# `mandatory=(response_generator,)` 는 I1("응답 없는 설계를 승인하지 않는다")을
+# **특정 노드가 있어야 한다**로 적었다. 그런데 `direct_response` 도
+# `final_response` 를 쓴다 -- §14.2의 G1-a 가 그 노드를 응답 생산자로 인정한
+# 그대로다. 표본 `20260824T101448Z` 에서 대화형 질의 5건이 전부 거부됐고, 그
+# 설계들(`[direct_response]` 등)은 **옳은 그래프**였다. 요구를 키로 적으면
+# 구현 세부(어느 노드가 응답을 만드는가)와 진짜 요구(응답이 만들어지는가)가
+# 갈린다.
+
+def _writer(name: str, writes: set[str]):
+    """`_ContractLike` 를 구조적으로 만족하는 최소 계약."""
+    class _C:
+        pass
+    c = _C()
+    c.writes = frozenset(writes)
+    c.requires = frozenset()
+    return c
+
+
+def test_a_topology_whose_only_node_writes_the_key_is_accepted() -> None:
+    """`[direct_response]` 는 통과해야 한다 -- 응답을 만드는 그래프다."""
+
+    topology = GraphTopology(
+        nodes=("direct_response",),
+        edges=(("__start__", "direct_response"), ("direct_response", "__end__")),
+    )
+    violations = validate_topology(
+        topology,
+        contracts={"direct_response": _writer("direct_response", {"final_response"})},
+        must_write=frozenset({"final_response"}),
+    )
+    assert violations == ()
+
+
+def test_a_topology_with_no_writer_for_the_key_is_still_refused() -> None:
+    """🔴 이 테스트가 규칙 완화와 규칙 정정을 가른다.
+
+    `[query_classifier]` 는 구조적으로 성립하지만 응답을 만들지 않는다. 그것을
+    통과시키면 §14.2가 금지한 "계약을 고쳐서 위반을 없애기" 이고, I1 이 막으려던
+    '그럴듯하지만 빈 산출물' 이 그대로 돌아온다."""
+
+    topology = GraphTopology(
+        nodes=("query_classifier",),
+        edges=(("__start__", "query_classifier"), ("query_classifier", "__end__")),
+    )
+    violations = validate_topology(
+        topology,
+        contracts={"query_classifier": _writer("query_classifier", {"query_type"})},
+        must_write=frozenset({"final_response"}),
+    )
+    assert [v.rule for v in violations] == ["no_writer_for_required_key"]
+    assert "final_response" in violations[0].detail
+
+
+def test_any_writer_satisfies_the_key_not_a_particular_node() -> None:
+    """`response_generator` 로도 통과한다 -- 키를 쓰는 노드면 무엇이든 된다."""
+
+    topology = GraphTopology(
+        nodes=("response_generator",),
+        edges=(("__start__", "response_generator"), ("response_generator", "__end__")),
+    )
+    violations = validate_topology(
+        topology,
+        contracts={"response_generator": _writer("response_generator", {"final_response"})},
+        must_write=frozenset({"final_response"}),
+    )
+    assert violations == ()
