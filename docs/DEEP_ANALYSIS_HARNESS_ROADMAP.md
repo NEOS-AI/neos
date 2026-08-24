@@ -365,7 +365,7 @@ D25가 `report_floor_tokens` 안쪽 tier + 입력 통화 사이징으로 둘 다
 
 | 항목 | 내용 |
 |---|---|
-| ~~SKILL.md 누락 6개~~ | ✅ **5개 해소 (2026-08-24, `063e368b`)** — auto-discovery **9 → 14**. 🔴 **`cron` 하나는 SKILL.md 로 해결되지 않는다**: `load_skill_class` 가 `skill.py` 를 파일 경로에서 독립 모듈로 로드하는데 `cron` 만 `from .parser import` 상대 import 를 써서 `ImportError` 가 난다. 로더를 패키지 import 로 바꾸거나 `parser.py` 를 흡수해야 한다. ⚠️ **카운트가 아니라 이름 집합으로 검증할 것** — 카운트는 '5개 늘었다'만 말하고 누가 빠졌는지 말하지 않는다 |
+| ~~SKILL.md 누락 6개~~ | ✅ **전부 해소.** 5개는 `063e368b`(SKILL.md 추가), `cron` 은 `f0a1` 계열(로더 수정) — auto-discovery **9 → 15**. `cron` 은 헬퍼 모듈을 상대 import 하는 유일한 스킬이라 `load_skill_class` 의 `spec_from_file_location` 경로에서 `__package__` 가 없어 깨졌다. 로더가 정상 패키지 import 를 먼저 시도하고 실패 시에만 파일 경로로 폴백한다 |
 | `deep_analysis_*` 테이블 잔여물 | 과거 실행 약 1.6만 행. `cleanup_test_data`가 안 지운다. 지금 실패는 없으나 무한 누적 |
 | `fast` 역할 | 도입 보류 결정 유지. 도입하려면 `WorkloadRole` Literal + `ProviderModelRolesConfig`를 **함께** 확장 (테스트가 반쪽 변경을 막는다) |
 

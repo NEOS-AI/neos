@@ -13,13 +13,6 @@ allowed_tools: ""
 
 # Cron Skill
 
-> 🔴 **이 스킬은 SKILL.md 가 있어도 auto-discovery 에 등록되지 않는다 (2026-08-24 실측).**
-> `load_skill_class` 가 `skill.py` 를 **파일 경로에서 독립 모듈로** 로드하는데,
-> 이 스킬은 `from .parser import ...` 상대 import 를 쓰는 **유일한** 스킬이라 패키지
-> 컨텍스트가 없어 `ImportError` 가 난다(`import neos.skills.builtin.cron.skill` 은
-> 성공한다 -- discovery 경로에서만 깨진다). 고치려면 로더가 패키지로 import 하게
-> 하거나 `parser.py` 를 흡수해야 한다. **SKILL.md 로는 해결되지 않는다.**
-
 ## Description
 사용자의 반복 태스크를 스케줄로 등록합니다. 자연어 표현("매일 아침 9시")을 cron
 표현식으로 파싱하며, `cron_expression` 을 직접 넘기면 파싱을 건너뜁니다.
