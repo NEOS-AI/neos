@@ -87,7 +87,7 @@ sandbox = [
 ]
 channels = [
     "python-telegram-bot>=21.0",
-    "discord.py>=2.3.0",
+    "discord.py>=2.7.1",
     "slack-bolt>=1.18.0",
 ]
 ollama = [
