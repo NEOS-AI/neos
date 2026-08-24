@@ -9,7 +9,18 @@ import { isAbortError } from "@/lib/stream-errors";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
-export const maxDuration = 60;
+// 이 라우트는 백엔드의 `/messages/stream` 을 프록시한다(아래 POST 참고) --
+// 요청 하나가 모델이 답을 다 쓸 때까지 열려 있는다. 60초는 그보다 짧아서 긴
+// 답변이 중간에 끊겼다.
+//
+// 300은 `app/(chat)/api/deep-analysis/[runId]/events/route.ts` 와 같은 값이다.
+// 둘은 같은 종류의 것 -- 오래 열려 있는 SSE 프록시 -- 이므로 값을 따로 두면
+// 한쪽만 고쳐질 때 왜 다른지 아무도 설명하지 못하게 된다.
+//
+// ⚠️ 심층분석이 여기서 도는 것은 **아니다.** D23 이후 챗 노드는 job 을 제출만
+// 하므로(`graph.py:1051-1122`) 그쪽 시간은 이 상한과 무관하다. 이 값이 지키는
+// 것은 일반 챗 스트림이다.
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
   let requestBody: PostRequestBody;
