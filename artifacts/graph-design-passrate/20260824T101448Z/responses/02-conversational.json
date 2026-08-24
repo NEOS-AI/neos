@@ -1,0 +1,25 @@
+{
+  "nodes": [
+    "refinement_checker",
+    "query_classifier",
+    "direct_response"
+  ],
+  "edges": [
+    [
+      "__start__",
+      "refinement_checker"
+    ],
+    [
+      "refinement_checker",
+      "query_classifier"
+    ],
+    [
+      "query_classifier",
+      "direct_response"
+    ],
+    [
+      "direct_response",
+      "__end__"
+    ]
+  ]
+}
