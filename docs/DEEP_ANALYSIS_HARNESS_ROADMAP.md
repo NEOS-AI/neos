@@ -1532,13 +1532,13 @@ codex/anthropic-caching-advisor  0fe2fa29   커밋 7개 (2026-07-11)
 | ✅ | **CA11** | **종결** (2026-08-23, `686f3b96`). 드레인이 046 의 별도 컬럼에 남아 **클러스터 범위**가 됐다 — drain 응답의 `scope` 가 `"cluster"` 다. 관측 UPSERT 와 드레인 UPSERT 가 서로를 덮어쓰지 않는다 |
 | ✅ | **CA10** | **종결** (2026-08-23, `ddecb0ec`). `LocalPortableArchiveStore` · 세션 기반 빌더/복원기가 배선됐고, 아카이브를 **뜨는 경로**(관리자 `POST .../archive`)가 생겼다. 세션 계약만 쓰므로 provider 를 넘나든다. ⚠️ 언제 뜰지는 배치 정책이며 **자동 트리거는 없다** |
 | ✅ | **CA8** | **종결** (2026-08-23, `686f3b96`). 마이그레이션 046 이 관측 창을 `coding_sandbox_provider_health` 에 싣는다 — beat 호출 사이에 창이 이어져 **비율 판정이 처음으로 성립한다.** 판정 자체는 여전히 `ProviderHealthCircuit` 한 곳에서 한다(SQL 로 옮기지 않았다) |
-| 🟢 | **CA9** | 045의 `idx_coding_sandbox_cleanup_attempts_pending`(`WHERE finished_at IS NULL`)이 쓰이지 않는다 — 시도 행을 완료 시점에 한 번만 쓰므로 그 부분 인덱스에 걸리는 행이 없다. 인덱스를 지우거나 시도 행을 시작 시점에 먼저 넣는 설계로 바꿔야 정합이 맞는다 (Task 6 유예 minor) |
+| 🟢 | **CA9** | 045의 `idx_coding_sandbox_cleanup_attempts_pending`(`WHERE finished_at IS NULL`)이 쓰이지 않는다 — 시도 행을 완료 시점에 한 번만 쓰므로 그 부분 인덱스에 걸리는 행이 없다 (Task 6 유예 minor). ⚠️ **SCHEMA1과 함께 처리한다 (2026-08-25 판단).** 인덱스 하나를 지우려고 마이그레이션 047을 늘리면 "신선한 DB에서 44개 중 7개 실패"가 45개 중 7개가 된다 — 지금 아무것도 망가뜨리지 않는 인덱스의 비용치고 크다 |
 | ✅ | **CA2** | **종결** (2026-08-11, `c7876999`). `docker_shadow.py`(+305/−33)·`test_docker_shadow.py`(+206)의 출처 불명 미커밋 변경을 **CA5-b(크로스 프로세스 원자적 create) 구현으로 판정하고 채택**했다. 판정 근거는 스펙 §1.1(`docs/superpowers/specs/2026-08-11-coding-agent-track-e-resume-design.md`) |
 | ✅ | **CA3** | **종결** (`a9f37c6a`). dev → 워크트리 방향 merge로 합류했다. `git merge-tree` 실측 충돌 0건(§12.3). 리베이스를 쓰지 않은 이유는 11커밋 해시 재작성이 CA4 정리의 근거를 지우기 때문 |
 | ✅ | **CA4** | **종결** (`472856b7`). 이중 기록 + Task 4 누락을 정정했다 — 기존 24줄을 보존한 채 정정 블록을 덧붙였다 |
 | ✅ | **CA5** | **종결.** CA5-a(공개 관리형 라벨 확장점, `51a21fc4`..`0148d7fa`) / CA5-b(크로스 프로세스 원자적 create, `c7876999`)로 분리해 둘 다 해소했다 |
 | 🟢 | **CA6** | `codex/anthropic-caching-advisor` 7커밋의 병합·폐기 결정 미결 (§12.5) |
-| 🟢 | **CA7** | 코딩 에이전트 트랙이 `docs/ROADMAP.md`에 **한 번도 등장하지 않는다.** 마스터 로드맵과 이 문서 사이에 트랙 하나만큼의 공백이 있다 |
+| ✅ | **CA7** | **종결 (2026-08-25).** `docs/ROADMAP.md`의 "로드맵에 아예 없었으나 구현된 자산" 표에 코딩 에이전트 행을 추가했다 — 그 표의 취지에 가장 정확히 해당하면서 가장 늦게 실린 항목이다 |
 
 ---
 

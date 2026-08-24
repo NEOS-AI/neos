@@ -150,6 +150,13 @@ PDF/Word/Excel/PPT 파서 4종 모두 실제 라이브러리를 사용하는 구
 | **시맨틱 캐시** | `neos/utils/semantic_cache.py`, `smart_cache_manager.py`, `cache_invalidation.py` | |
 | **리포트 익스포트** | `neos/api/handlers/export_handlers.py` — markdown/html/pdf/canvas | |
 | **Open Responses 호환** | `neos/api/models/open_responses.py`, `docs/OPEN_RESPONSES_SPEC.md` | |
+| **코딩 에이전트** | `neos/coding/` (loop·model·sandbox·tools·workers·transport·outbox·persistence·repositories) + `neos/coding/managed/`(관리형 샌드박스 컨트롤 플레인), `db/migrations/038..046`, `docs/NEOS_CODING.md` | 플랜 14개 전부 완료. **기본 꺼짐** — `sandbox.enabled`·`coding_model.enabled` 둘 다 `False`. 출하 기준은 `DEEP_ANALYSIS_HARNESS_ROADMAP.md` §12.6의 E-S1~E-S4 |
+
+> 📌 **코딩 에이전트 행은 2026-08-25에 추가됐다 (CA7).** 트랙 하나가 이 문서에
+> 통째로 빠져 있었다 — `docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md` §12가 70여 파일과
+> 마이그레이션 아홉 개를 추적하는 동안 마스터 로드맵은 그것을 몰랐다. 이 표의
+> 취지("로드맵 밖에서 일어난 작업")에 가장 정확히 해당하는 항목이면서 가장 늦게
+> 실렸다.
 
 ---
 
