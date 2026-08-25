@@ -533,9 +533,19 @@ def topology_from_payload(payload: Mapping[str, Any]) -> GraphTopology:
             raise TopologyPayloadError(f"간선이 2-튜플이 아니다: {edge!r}")
         edges.append((str(edge[0]), str(edge[1])))
 
+    try:
+        loop_bounds_dict = dict(payload.get("loop_bounds") or {})
+    except (ValueError, TypeError) as error:
+        raise TopologyPayloadError(f"loop_bounds 를 변환할 수 없다: {error}") from error
+
+    try:
+        initial_writes_set = frozenset(payload.get("initial_writes") or ())
+    except (ValueError, TypeError) as error:
+        raise TopologyPayloadError(f"initial_writes 를 변환할 수 없다: {error}") from error
+
     return GraphTopology(
         nodes=tuple(str(node) for node in raw_nodes),
         edges=tuple(edges),
-        loop_bounds=dict(payload.get("loop_bounds") or {}),
-        initial_writes=frozenset(payload.get("initial_writes") or ()),
+        loop_bounds=loop_bounds_dict,
+        initial_writes=initial_writes_set,
     )

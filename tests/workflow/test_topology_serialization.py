@@ -61,3 +61,35 @@ def test_a_malformed_edge_is_rejected():
     `build_ephemeral_workflow` 안에서 알아보기 어려운 모양으로 터진다."""
     with pytest.raises(TopologyPayloadError):
         topology_from_payload({"nodes": ["a"], "edges": [["a"]]})
+
+
+def test_every_field_survives_the_round_trip():
+    """해시 단언만으로는 부족하다 -- `topology_hash` 의 정본 dict 는
+    `nodes`/`edges`/`loop_bounds` 뿐이라 **`initial_writes` 를 보지 않는다.**
+    그 필드를 통째로 잃어도 위의 해시 테스트 둘은 통과한다.
+
+    필드를 손으로 나열하지 않고 `dataclasses.fields()` 를 도는 이유는,
+    나열한 목록이 `GraphTopology` 에 필드가 하나 늘어나는 순간 낡기 때문이다 --
+    이 저장소가 반복해서 다친 실패 모드다.
+    """
+    import dataclasses
+
+    restored = topology_from_payload(topology_to_payload(_TOPOLOGY))
+
+    for field in dataclasses.fields(_TOPOLOGY):
+        assert getattr(restored, field.name) == getattr(_TOPOLOGY, field.name), (
+            f"{field.name} 이 왕복에서 바뀌었다"
+        )
+
+
+def test_malformed_loop_bounds_are_rejected():
+    """`TopologyPayloadError` 로 나가야 한다 -- 재개 경로가 그 타입만 잡아
+    503 으로 바꾸므로, raw 예외가 새면 500 이 되고 fail-closed 가 깨진다."""
+    with pytest.raises(TopologyPayloadError):
+        topology_from_payload({"nodes": ["a"], "edges": [], "loop_bounds": "oops"})
+
+
+def test_malformed_initial_writes_are_rejected():
+    """위와 같은 이유."""
+    with pytest.raises(TopologyPayloadError):
+        topology_from_payload({"nodes": ["a"], "edges": [], "initial_writes": 5})
