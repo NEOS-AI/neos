@@ -84,9 +84,16 @@ CREATE TABLE IF NOT EXISTS similar_messages_cache (
 -- ============================================================================
 
 -- 벡터 유사도 검색 인덱스 (HNSW - Hierarchical Navigable Small World)
+--
+-- ⚠️ halfvec 캐스팅이 필수다 (2026-08-25, SCHEMA1). pgvector 는 hnsw 에
+-- 2000 차원까지만 허용하는데 embedding 은 vector(3072) 다. 캐스팅 없이 쓰면
+-- 이 구문이 `column cannot have more than 2000 dimensions` 로 죽고, psql 은
+-- ON_ERROR_STOP 으로 멈추므로 **이 파일의 나머지 246줄이 통째로 미적용**된다
+-- (함수 6개·뷰 2개·인덱스 10개). 저장은 vector(3072), 인덱싱만 halfvec(3072).
+-- 같은 방식이 db/migrations/003 에도 있다.
 CREATE INDEX IF NOT EXISTS idx_message_embeddings_vector
 ON message_embeddings
-USING hnsw (embedding vector_cosine_ops)
+USING hnsw ((embedding::halfvec(3072)) halfvec_cosine_ops)
 WITH (m = 16, ef_construction = 64);
 
 -- IVFFlat 인덱스 (대안 - 데이터가 많을 때)
@@ -103,9 +110,10 @@ CREATE INDEX IF NOT EXISTS idx_message_embeddings_role ON message_embeddings(rol
 CREATE INDEX IF NOT EXISTS idx_message_embeddings_created_at ON message_embeddings(created_at DESC);
 
 -- conversation_embeddings 인덱스
+-- 위와 같은 이유로 halfvec 캐스팅 (summary_embedding 도 vector(3072) 다)
 CREATE INDEX IF NOT EXISTS idx_conversation_embeddings_vector
 ON conversation_embeddings
-USING hnsw (summary_embedding vector_cosine_ops)
+USING hnsw ((summary_embedding::halfvec(3072)) halfvec_cosine_ops)
 WITH (m = 16, ef_construction = 64);
 
 CREATE INDEX IF NOT EXISTS idx_conversation_embeddings_updated ON conversation_embeddings(updated_at DESC);
