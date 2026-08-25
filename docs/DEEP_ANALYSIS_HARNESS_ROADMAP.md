@@ -489,6 +489,7 @@ run_id 보관(`active-run-store.ts`), 장시간 스트림용 `maxDuration = 300`
 | 🟢 | **FE6** | 강등 판정 규칙이 두 언어로 구현돼 있다 (`ledger.py._degradation_kind()` / `progress.ts.degradationKind()`). 문구는 FE 한 곳뿐이라 중복 없음. 갈라지면 과소 보고 쪽으로 기운다. 통합하려면 BE가 어휘를 API로 노출하거나 공유 스키마가 필요 — 별도 판단 | C×A |
 | 🟢 | **FE7** | 복원 경로는 kind별 유일성을 백엔드의 불변식에 기댈 뿐 스스로 강제하지 않는다 — `metadata.ts`의 `asDegradations()`가 dedupe하지 않는다. 지금은 `Ledger.degradations()`(`ledger.py`)가 유일한 작성자이고 kind를 키로 한 `counts` dict로 집계해 넘기므로 중복이 나올 수 없지만, 그 경로를 우회하는 새 작성자가 생기면 React key가 겹친다. 라이브 경로는 `withDegradation`이 합치므로 안전하다 | C |
 | 🟢 | — | SKILL.md 누락 6개 / `deep_analysis_*` 테이블 1.6만 행 | B |
+| 🟢 | **FE8** | `web/tsconfig.tsbuildinfo`(빌드 부산물)가 git 에 추적되고 `.gitignore` 에도 없다 — `tsc --noEmit` 을 돌릴 때마다 작업 트리가 dirty 해진다. gitignore 추가 + `git rm --cached` 면 끝나지만, 그 파일을 참조하는 CI 단계가 있는지 먼저 확인할 것 (2026-08-25 관측) | C |
 | 🟢 | W1-m1 | `node_summary.prompt_chars`가 이제 **클램프된** 프롬프트를 잰다 — 이 경계 전후로 비교 불가. 비교하려면 `finalization_prompt_clamped`와 조인해야 한다 | A |
 | 🟢 | W1-m2 | `Synthesizer.assembly_input_allowance`는 외부에서 만든 Synthesizer를 주입하면 **전역** `synthesis_max_tokens`로 떨어진다(프로파일 값이 아니라). 프로덕션 경로는 일관되지만 주석은 이 경우를 부정한다 | A |
 | 🟢 | W1-m3 | `tests/workflow/deep_analysis/test_synthesizer.py`의 docstring이 옛 dev 프로파일(15x / 20,000)을 서술한다. 단언은 의존하지 않는다 | A |
