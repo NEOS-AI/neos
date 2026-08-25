@@ -821,9 +821,11 @@ class MultiAgentWorkflow:
                 budget=settings.config.workflow.graph_design_budget_hint,
             ),
             contracts=NODE_CONTRACTS,
-            # `mandatory` 는 기본값(response_generator)을 쓴다 -- 덮으면
+            # `must_write` 는 기본값(`{"final_response"}`)을 쓴다 -- 덮으면
             # "응답 없는 설계를 허용한다" 는 뜻이고 챗 경로에서 그것은
-            # 언제나 오답이다.
+            # 언제나 오답이다. `mandatory`(노드 이름 기반)는 넘기지 않는다:
+            # 노드 이름으로 요구하면 `direct_response` 로 답하는 옳은 설계까지
+            # 거부한다 -- 표본 `20260824T101448Z` 의 실패 5건이 그것이었다.
             # `budget`/`node_costs` 는 넘기지 않는다: node_costs 없이
             # budget 만 주면 fail-closed 규칙이 모든 노드를 "비용 미선언"
             # 위반으로 잡아 **모든 설계가 거부된다**.
@@ -839,6 +841,41 @@ class MultiAgentWorkflow:
         interrupt_before = sorted(
             set(outcome.topology.nodes) & _INTERRUPT_GATED_NODES
         )
+
+        # 승인 게이트가 있는 설계는 쓰지 않는다 -- 정적으로 폴백한다.
+        #
+        # 재개(`approval_handlers.py`)는 `multi_agent_workflow.graph`, 즉 **정적
+        # 컴파일 그래프**를 상대로 `aget_state`/`aupdate_state`/`astream(None)`
+        # 을 부른다. 설계된 그래프는 호출 스코프의 ephemeral 객체라 어디에도
+        # 캐시되지 않는다 -- 설계된 run 이 게이트에서 멈추면 재개는 **다른
+        # 그래프** 위에서 일어나고, 체크포인트의 노드가 정적 그래프에 없거나
+        # 간선이 다르면 엉뚱한 경로로 가거나 실패한다.
+        #
+        # 그래서 멈출 수 있는 설계는 애초에 만들지 않는다. **사람 승인을
+        # 포기하는 것이 아니다** -- 승인이 필요한 질의는 정적 경로가 그대로
+        # 처리하고, 설계 경로는 승인이 필요 없는 질의만 가져간다. 게이트 노드를
+        # 토폴로지에서 빼고 실행하는 안은 택하지 않았다: 승인 노드가 **멈추지
+        # 않고 실행되면** `pending_approvals` 를 만들어 놓고 아무도 응답하지
+        # 않는 상태가 된다.
+        #
+        # 제대로 닫으려면 "이 스레드가 어떤 토폴로지로 멈췄는가" 를 재개 시점에
+        # 복원해야 한다(토폴로지를 체크포인트와 같은 수명으로 영속화).
+        # 상세는 `docs/superpowers/specs/2026-08-23-graph-designer-wiring-g2-design.md` §8.
+        if interrupt_before:
+            self._record_design_events(
+                (
+                    LedgerEvent(
+                        kind="graph_design_fallback",
+                        payload={
+                            "reason": "approval_gate_in_designed_topology",
+                            "gated_nodes": interrupt_before,
+                        },
+                    ),
+                ),
+                span,
+            )
+            return static
+
         checkpointer = await get_checkpointer() if use_checkpointer else None
 
         try:
@@ -849,6 +886,13 @@ class MultiAgentWorkflow:
                 interrupt_before=interrupt_before,
             )
         except EphemeralApprovalGateUnsupported as exc:
+            # 🔍 **지금 이 분기는 도달 불가능하다.** 바로 위에서 게이트 노드가
+            # 하나라도 있으면 정적으로 폴백하므로 `build_ephemeral_workflow` 는
+            # 게이트 없는 토폴로지만 받는다. 심층 방어로 남기되 **이것이 지금
+            # 무언가를 막고 있다고 읽지 말 것** -- 위 폴백을 걷어내면 다시
+            # 살아난다. (같은 종류의 표기를 트랙 E 가 `recovery_generation_exists`
+            # 가드에 대해 쓴다.)
+            #
             # `design_graph_or_fallback` 은 검증까지만 하고 컴파일은 여기서
             # 한다 -- 그래서 이 실패는 그 함수의 이벤트 4종에 잡히지 않는다.
             # 밖으로 흘리면 설계 실패가 사용자 요청을 죽이고, 조용히 삼키면
