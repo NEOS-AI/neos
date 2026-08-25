@@ -21,7 +21,7 @@ START 에서 N 에 이르는 **모든** 경로에 K 를 `writes` 하는 노드�
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 # START/END 는 실제 노드가 아니라 그래프의 진입점·종료점을 나타내는 센티널이다.
 # `NODE_CONTRACTS` 에 존재하지 않으며, 어떤 계약도 요구하지 않는다.
@@ -483,3 +483,59 @@ def _strongly_connected_components(
         components.append(frozenset(component))
 
     return components
+
+
+class TopologyPayloadError(ValueError):
+    """저장된 토폴로지 페이로드를 `GraphTopology` 로 되돌릴 수 없다.
+
+    재개 경로가 이것을 잡아 **정적으로 흐르지 않고** 거부한다 -- 복원할 수 없는
+    토폴로지로 재개하는 것은 다른 그래프로 재개하는 것과 같다.
+    """
+
+
+def topology_to_payload(topology: GraphTopology) -> dict[str, Any]:
+    """`GraphTopology` 를 JSON 에 실을 수 있는 dict 로 만든다.
+
+    상태에 실려 체크포인트에 저장되므로 JSON 안전해야 한다. tuple 은 list 가
+    되고 `topology_from_payload` 가 되돌린다.
+    """
+    return {
+        "nodes": list(topology.nodes),
+        "edges": [list(edge) for edge in topology.edges],
+        "loop_bounds": dict(topology.loop_bounds),
+        "initial_writes": sorted(topology.initial_writes),
+    }
+
+
+def topology_from_payload(payload: Mapping[str, Any]) -> GraphTopology:
+    """`topology_to_payload` 의 역. 모양이 틀리면 `TopologyPayloadError`.
+
+    관대하게 받지 않는다 -- 여기서 통과시킨 이상한 페이로드는
+    `build_ephemeral_workflow` 안에서 알아보기 어려운 예외가 된다.
+    """
+    if not isinstance(payload, Mapping):
+        raise TopologyPayloadError(f"페이로드가 매핑이 아니다: {type(payload).__name__}")
+
+    try:
+        raw_nodes = payload["nodes"]
+        raw_edges = payload["edges"]
+    except KeyError as error:
+        raise TopologyPayloadError(f"페이로드에 {error} 가 없다") from error
+
+    if not isinstance(raw_nodes, (list, tuple)):
+        raise TopologyPayloadError("nodes 가 시퀀스가 아니다")
+    if not isinstance(raw_edges, (list, tuple)):
+        raise TopologyPayloadError("edges 가 시퀀스가 아니다")
+
+    edges: list[tuple[str, str]] = []
+    for edge in raw_edges:
+        if not isinstance(edge, (list, tuple)) or len(edge) != 2:
+            raise TopologyPayloadError(f"간선이 2-튜플이 아니다: {edge!r}")
+        edges.append((str(edge[0]), str(edge[1])))
+
+    return GraphTopology(
+        nodes=tuple(str(node) for node in raw_nodes),
+        edges=tuple(edges),
+        loop_bounds=dict(payload.get("loop_bounds") or {}),
+        initial_writes=frozenset(payload.get("initial_writes") or ()),
+    )
