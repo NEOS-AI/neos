@@ -16,9 +16,12 @@ import { callBackendAPI } from "@/lib/backend-api";
 export const dynamic = "force-dynamic";
 
 /**
- * 챗 라우트의 `maxDuration = 60`은 장시간 job 스트림과 충돌한다(감사 §6-3).
- * 상한을 올리되, 어차피 끊길 수 있다는 전제로 클라이언트가 커서를 들고
- * 재구독한다(`hooks/use-deep-analysis-stream.ts`). 끊김은 손실이 아니다.
+ * 기본 상한(60초)은 장시간 job 스트림과 충돌한다(감사 §6-3). 상한을 올리되,
+ * 어차피 끊길 수 있다는 전제로 클라이언트가 커서를 들고 재구독한다
+ * (`hooks/use-deep-analysis-stream.ts`). 끊김은 손실이 아니다.
+ *
+ * ⚠️ 원문은 "챗 라우트의 `maxDuration = 60`"이라 적었다. 챗 라우트도
+ * 2026-08-25 에 300 으로 올라갔으므로(TODO #14) 그 대비는 더 이상 참이 아니다.
  */
 export const maxDuration = 300;
 
