@@ -25,7 +25,12 @@ from .graph_designer_llm import LlmGraphDesigner
 from .enums import WorkflowNode, WorkflowPathway, IntentType, AutonomyLevel
 from .state import AgentState, WorkflowConfig
 from .harness.cache_policy import should_cache_harness_result
-from .topology import END as TOPOLOGY_END, GraphTopology, START as TOPOLOGY_START
+from .topology import (
+    END as TOPOLOGY_END,
+    GraphTopology,
+    START as TOPOLOGY_START,
+    topology_to_payload,
+)
 from .execution_graph import ExecutionGraph, current_static_flags, static_execution_graph
 from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationOrchestrator
 from .processors import (
@@ -914,7 +919,21 @@ class MultiAgentWorkflow:
             nodes=outcome.topology.nodes,
             topology_hash=topology_hash(outcome.topology),
             source="designed",
+            topology=outcome.topology,
         )
+
+    def execution_topology_payload(
+        self, execution_graph: ExecutionGraph
+    ) -> dict[str, Any] | None:
+        """이 실행이 상태에 남길 토폴로지 페이로드. 정적이면 None.
+
+        재개(`approval_handlers`)가 읽는 유일한 근거이며, 상태에 실리므로
+        체크포인트와 **같은 수명**을 갖는다 -- 곁 테이블을 두지 않은 이유가
+        그것이다(스펙 §3.1).
+        """
+        if execution_graph.topology is None:
+            return None
+        return topology_to_payload(execution_graph.topology)
 
     def _build_graph_designer(self) -> Any:
         """설계 서브에이전트를 조립한다. 모델은 **여기서 한 번만** 해석한다.
@@ -2738,6 +2757,16 @@ class MultiAgentWorkflow:
                     user_input=user_input,
                     use_checkpointer=use_checkpointer,
                     span=span,
+                )
+
+                # 재개(`approval_handlers`)가 읽을 유일한 근거를 상태에 싣는다.
+                # `initial_state` 와 `execution_graph` 가 둘 다 스코프에 들어오는
+                # 첫 지점이 여기다 -- `initial_state` 는 위(L2713)에서, `execution_graph`
+                # 는 방금 위에서 만들어졌다. 정적 run 은 `execution_topology_payload`
+                # 가 None 을 돌려줘 이 키가 `None` 으로 남는다(Task 3-6 주석대로
+                # 정적 run 에는 토폴로지를 싣지 않는다).
+                initial_state["execution_topology"] = self.execution_topology_payload(
+                    execution_graph
                 )
 
                 # G2-e: 조인 키를 이 run 이 **실제로 남기게** 한다. 값을

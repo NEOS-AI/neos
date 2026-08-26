@@ -27,6 +27,7 @@ from typing import Any, Literal
 
 from neos.config.settings import settings
 from neos.workflow.graph_design_ledger import topology_hash
+from neos.workflow.topology import GraphTopology
 from neos.workflow.topology_export import _FLAG_ATTR_TO_KEY, static_topology
 
 # `topology_export` 의 플래그 키를 공개 표면으로 다시 내보낸다. 본체가
@@ -58,6 +59,12 @@ class ExecutionGraph:
     nodes: tuple[str, ...]
     topology_hash: str
     source: Literal["static", "designed"]
+    # 설계된 run 이 재개될 때 다시 지을 원본. 정적이면 None 이다.
+    #
+    # `topology_hash` 로는 복원할 수 없다 -- 해시는 정체성이지 내용이 아니다.
+    # 그리고 정적 run 에 정적 토폴로지를 실지 않는 이유는, 재개가 정적 run 마다
+    # 그래프를 새로 짓게 되어 지금 동작을 바꾸기 때문이다.
+    topology: "GraphTopology | None" = None
 
 
 def current_static_flags() -> dict[str, bool]:
