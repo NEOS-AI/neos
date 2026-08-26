@@ -50,6 +50,34 @@ async def test_a_static_run_resumes_on_the_static_graph():
 
 
 @pytest.mark.asyncio
+async def test_a_run_missing_the_topology_key_resumes_on_the_static_graph():
+    """`execution_topology` 키 자체가 없는 상태(이 기능이 생기기 전에 쓰인
+    체크포인트)도 `None` 과 같게 취급해 정적 그래프로 재개한다 -- 하위 호환."""
+    workflow = await _workflow()
+
+    graph = await resume_graph_for({}, workflow=workflow, checkpointer=MemorySaver())
+
+    assert graph is workflow.graph
+
+
+@pytest.mark.asyncio
+async def test_an_empty_topology_payload_is_refused_not_downgraded():
+    """`execution_topology` 가 빈 dict(`{}`)로 도착하는 경우 -- 잘린 JSON 컬럼,
+    미래의 부분 상태 쓰기, 수동 DB 수정 등에서 나올 수 있다 -- 는 정적 run 이
+    아니라 손상된 설계된 run 페이로드다. `if not payload:` 로 되돌리면 빈
+    dict 가 falsy 라 로그도 503 도 없이 정적 그래프로 조용히 재개된다 --
+    이 테스트가 그 회귀를 잡는다."""
+    workflow = await _workflow()
+
+    with pytest.raises(ResumeGraphUnavailable) as caught:
+        await resume_graph_for(
+            {"execution_topology": {}}, workflow=workflow, checkpointer=MemorySaver()
+        )
+
+    assert "payload" in caught.value.reason
+
+
+@pytest.mark.asyncio
 async def test_a_designed_run_resumes_on_a_rebuilt_graph():
     """라벨이 아니라 **컴파일된 그래프 자체**를 본다. 정적 그래프에
     source='designed' 를 붙여 놓아도 통과하는 단언은 이 배선을 지키지 못한다

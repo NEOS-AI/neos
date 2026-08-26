@@ -55,10 +55,15 @@ async def test_a_resolvable_graph_is_returned_as_is(monkeypatch):
 @pytest.mark.asyncio
 async def test_a_designed_resume_records_which_topology_it_used(monkeypatch, caplog):
     """해시를 남기지 않으면 스펙 §1의 관문을 프로덕션에서 확인할 수 없다.
-    `graph_design_accepted` 의 topology_hash 와 조인할 수 있어야 한다."""
+    `graph_design_accepted` 의 topology_hash 와 조인할 수 있어야 한다.
+
+    라벨(`"topology_hash"`)만 있고 값 계산이 깨진 변이는 "라벨이 있는가"만
+    보는 단언을 통과한다 -- 그래서 이 테스트가 만든 토폴로지로 `topology_hash`
+    를 직접 계산해 그 값이 로그 레코드에 실제로 실리는지까지 확인한다."""
     import logging
 
     from neos.api.handlers import approval_handlers
+    from neos.workflow.graph_design_ledger import topology_hash
     from neos.workflow.topology import GRAPH_ENTRY_WRITES, GraphTopology, topology_to_payload
 
     topology = GraphTopology(
@@ -84,4 +89,5 @@ async def test_a_designed_resume_records_which_topology_it_used(monkeypatch, cap
             checkpointer=None,
         )
 
-    assert any("topology_hash" in record.message for record in caplog.records)
+    expected_hash = topology_hash(topology)
+    assert any(expected_hash in record.message for record in caplog.records)

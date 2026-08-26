@@ -56,7 +56,7 @@ async def resume_graph_for(
     from neos.workflow.graph import _INTERRUPT_GATED_NODES, build_ephemeral_workflow
 
     payload = state_values.get("execution_topology")
-    if not payload:
+    if payload is None:
         return workflow.graph
 
     try:
