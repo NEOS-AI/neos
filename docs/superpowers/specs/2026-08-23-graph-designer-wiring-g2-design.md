@@ -375,6 +375,12 @@ chunk 도착은 노드 *시작*이 아니라 *완료* 신호다. 그런데 현�
 
 ### 승인 재개는 정적 그래프에 묶여 있다 — 설계된 run 은 재개할 수 없다
 
+> ✅ **해소됨 (2026-08-26).** 토폴로지가 `AgentState.execution_topology` 에 실려
+> 체크포인트와 같은 수명을 갖고, 재개는 그것을 읽어 재검증한 뒤 그래프를 다시
+> 짓는다. 설계는 `2026-08-25-designed-run-approval-resume-design.md`.
+> **이 절이 이 작업을 미룬 근거("SCHEMA1 위에 마이그레이션을 한 칸 더")는
+> 2026-08-25 에 SCHEMA1 이 닫히면서 사라졌고, 실제로 마이그레이션은 0건이다.**
+
 `neos/api/handlers/approval_handlers.py:131`이 `multi_agent_workflow.graph`,
 즉 **정적 컴파일 그래프**를 읽고 그 위에서 `aget_state`(139) ·
 `aupdate_state`(176) · `astream(None)`(198)을 부른다. 그런데 설계된 run 의
