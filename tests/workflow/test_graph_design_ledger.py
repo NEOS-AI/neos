@@ -36,14 +36,16 @@ KINDS = (
 )
 
 
-def _contract(node: str, *, requires: tuple[str, ...] = ()) -> NodeContract:
+def _contract(
+    node: str, *, requires: tuple[str, ...] = (), writes: tuple[str, ...] = ()
+) -> NodeContract:
     """테스트용 최소 노드 계약. `requires` 는 항상 `reads` 의 부분집합이어야
     한다는 `NodeContract.__post_init__` 제약을 그대로 만족시킨다."""
 
     return NodeContract(
         node=node,
         reads=frozenset(requires),
-        writes=frozenset(),
+        writes=frozenset(writes),
         requires=frozenset(requires),
         handler=lambda state: state,
     )
@@ -104,6 +106,7 @@ async def test_a_valid_design_is_accepted_and_recorded() -> None:
         request=_request(),
         contracts=_contracts(),
         mandatory=(),
+        must_write=frozenset(),
     )
     kinds = [e.kind for e in outcome.events]
     assert kinds == ["graph_design_requested", "graph_design_accepted"]
@@ -120,6 +123,7 @@ async def test_a_rejected_design_records_the_rule_and_node() -> None:
         request=_request(),
         contracts=_contracts(),
         mandatory=(),
+        must_write=frozenset(),
     )
     rejected = next(e for e in outcome.events if e.kind == "graph_design_rejected")
     assert rejected.payload["violations"]
@@ -133,6 +137,7 @@ async def test_a_designer_error_falls_back_with_a_reason() -> None:
         request=_request(),
         contracts=_contracts(),
         mandatory=(),
+        must_write=frozenset(),
     )
     fallback = next(e for e in outcome.events if e.kind == "graph_design_fallback")
     assert "unknown_node" in fallback.payload["reason"]
@@ -145,6 +150,7 @@ async def test_a_designer_timeout_falls_back_with_a_reason() -> None:
         request=_request(),
         contracts=_contracts(),
         mandatory=(),
+        must_write=frozenset(),
         timeout_sec=0.01,
     )
     fallback = next(e for e in outcome.events if e.kind == "graph_design_fallback")
@@ -195,6 +201,7 @@ async def test_a_bare_exception_from_the_designer_also_falls_back() -> None:
         request=_request(),
         contracts=_contracts(),
         mandatory=(),
+        must_write=frozenset(),
     )
     fallback = next(e for e in outcome.events if e.kind == "graph_design_fallback")
     assert "model client blew up" in fallback.payload["reason"]
@@ -220,12 +227,14 @@ async def test_the_accepted_payload_carries_a_stable_topology_hash() -> None:
         request=_request(),
         contracts=_contracts(),
         mandatory=(),
+        must_write=frozenset(),
     )
     outcome_2 = await design_graph_or_fallback(
         designer=FakeGraphDesigner(_valid_topology()),
         request=_request(),
         contracts=_contracts(),
         mandatory=(),
+        must_write=frozenset(),
     )
     hash_1 = _accepted_event(outcome_1).payload["topology_hash"]
     hash_2 = _accepted_event(outcome_2).payload["topology_hash"]
@@ -254,12 +263,14 @@ async def test_reordered_edges_produce_the_same_hash() -> None:
         request=_request(),
         contracts=_contracts(),
         mandatory=(),
+        must_write=frozenset(),
     )
     outcome_reordered = await design_graph_or_fallback(
         designer=FakeGraphDesigner(reordered),
         request=_request(),
         contracts=_contracts(),
         mandatory=(),
+        must_write=frozenset(),
     )
 
     assert (
@@ -284,12 +295,14 @@ async def test_a_genuinely_different_topology_produces_a_different_hash() -> Non
         request=_request(),
         contracts=_contracts(),
         mandatory=(),
+        must_write=frozenset(),
     )
     outcome_bigger = await design_graph_or_fallback(
         designer=FakeGraphDesigner(bigger),
         request=_request(),
         contracts=_contracts(),
         mandatory=(),
+        must_write=frozenset(),
     )
 
     assert (
@@ -298,7 +311,7 @@ async def test_a_genuinely_different_topology_produces_a_different_hash() -> Non
     )
 
 
-async def test_a_topology_without_the_response_generator_is_rejected_by_default() -> (
+async def test_a_topology_that_writes_no_final_response_is_rejected_by_default() -> (
     None
 ):
     """I1: `mandatory` 를 아예 넘기지 않으면 기본값이 response_generator 를
@@ -314,19 +327,24 @@ async def test_a_topology_without_the_response_generator_is_rejected_by_default(
         contracts=_contracts(),
     )
     rejected = next(e for e in outcome.events if e.kind == "graph_design_rejected")
-    assert "missing_mandatory" in {v["rule"] for v in rejected.payload["violations"]}
+    assert "no_writer_for_required_key" in {
+        v["rule"] for v in rejected.payload["violations"]
+    }
     assert outcome.topology is None
 
 
-async def test_a_topology_with_the_response_generator_passes_the_mandatory_gate() -> (
+async def test_a_topology_that_writes_final_response_passes_the_default_gate() -> (
     None
 ):
-    """response_generator 노드가 있으면 I1 의 기본 mandatory 게이트를
-    통과한다 -- `missing_mandatory` 위반이 뜨지 않는다."""
+    """`final_response` 를 쓰는 노드가 있으면 I1 의 기본 게이트를 통과한다.
+
+    노드 **이름** 이 아니라 쓰는 **키** 로 판정한다는 것이 요점이다 -- 여기서는
+    `response_generator` 가 그 노드이지만, `direct_response` 여도 같은 결과여야
+    한다(표본 `20260824T101448Z` 가 그 차이로 옳은 설계 5건을 잃었다)."""
 
     contracts = dict(_contracts())
     contracts[WorkflowNode.RESP_GENERATOR.value] = _contract(
-        WorkflowNode.RESP_GENERATOR.value
+        WorkflowNode.RESP_GENERATOR.value, writes=("final_response",)
     )
     topology = GraphTopology(
         nodes=(WorkflowNode.RESP_GENERATOR.value,),
@@ -342,3 +360,35 @@ async def test_a_topology_with_the_response_generator_passes_the_mandatory_gate(
     )
     accepted = next(e for e in outcome.events if e.kind == "graph_design_accepted")
     assert accepted.payload["nodes"] == (WorkflowNode.RESP_GENERATOR.value,)
+
+
+def test_topology_hash_is_public_so_static_and_designed_runs_share_one_formula() -> None:
+    """설계된 run 과 정적 run 이 **같은 산식**으로 해시를 계산해야 조인이
+    성립한다. 산식이 둘로 갈리면 조인은 조용히 깨진다 -- 해시는 다르기만
+    하면 되므로 아무도 눈치채지 못한다."""
+
+    from neos.workflow.graph_design_ledger import topology_hash
+
+    topology = GraphTopology(
+        nodes=("response_generator",),
+        edges=(("__start__", "response_generator"), ("response_generator", "__end__")),
+    )
+    assert topology_hash(topology) == topology_hash(topology)
+    assert len(topology_hash(topology)) == 16
+
+
+def test_topology_hash_ignores_the_order_nodes_and_edges_arrived_in() -> None:
+    """모델이 같은 그래프를 두 번 제안해도 JSON 순서는 그때그때 다르다.
+    논리적으로 같은 설계가 다른 해시를 받으면 비교 자체가 무의미해진다."""
+
+    from neos.workflow.graph_design_ledger import topology_hash
+
+    forward = GraphTopology(
+        nodes=("a", "b"),
+        edges=(("__start__", "a"), ("a", "b"), ("b", "__end__")),
+    )
+    shuffled = GraphTopology(
+        nodes=("b", "a"),
+        edges=(("b", "__end__"), ("__start__", "a"), ("a", "b")),
+    )
+    assert topology_hash(forward) == topology_hash(shuffled)

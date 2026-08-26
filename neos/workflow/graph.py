@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional
 from collections.abc import Sequence
 from datetime import datetime
+from pathlib import Path
 import asyncio
 import hashlib
 import logging
@@ -12,14 +13,25 @@ from langgraph.graph import StateGraph, START, END
 from neos.agents.skill_based_tool_selector import SkillBasedToolSelector
 from neos.utils.cache import cache_manager
 from neos.utils.smart_cache_manager import smart_cache_manager
+from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 from neos.tools.tool_selector import tool_selector
+from neos.utils.llm_factory import LLMFactory
 
 from .contracts import NODE_CONTRACTS, node_contract
+from .graph_designer import DesignRequest
+from .graph_design_ledger import LedgerEvent, design_graph_or_fallback, topology_hash
+from .graph_designer_llm import LlmGraphDesigner
 from .enums import WorkflowNode, WorkflowPathway, IntentType, AutonomyLevel
 from .state import AgentState, WorkflowConfig
 from .harness.cache_policy import should_cache_harness_result
-from .topology import END as TOPOLOGY_END, GraphTopology, START as TOPOLOGY_START
+from .topology import (
+    END as TOPOLOGY_END,
+    GraphTopology,
+    START as TOPOLOGY_START,
+    topology_to_payload,
+)
+from .execution_graph import ExecutionGraph, current_static_flags, static_execution_graph
 from .orchestrators import SearchOrchestrator, AnalysisOrchestrator, GenerationOrchestrator
 from .processors import (
     ResultProcessor,
@@ -153,6 +165,12 @@ _TOPOLOGY_SENTINEL_TO_LANGGRAPH: dict[str, str] = {
 _INTERRUPT_GATED_NODES: frozenset[str] = frozenset(
     {WorkflowNode.EXECUTION_APPROVAL.value, WorkflowNode.MISSION_APPROVAL.value}
 )
+
+# 설계 이벤트에 싣는 질의 미리보기 길이. `execute_workflow` 의
+# `query_preview`(`add_span_event(span, "workflow_started", ...)`)와 같은 값을
+# 쓴다 -- 같은 span 에 두 길이의 미리보기가 섞이면 읽는 사람이 어느 쪽이
+# 잘린 것인지 모른다.
+_DESIGN_QUERY_PREVIEW_CHARS = 100
 
 
 class EphemeralApprovalGateUnsupported(ValueError):
@@ -745,6 +763,196 @@ class MultiAgentWorkflow:
         self.graph = self._graphs_by_checkpointer[use_checkpointer]
         self._graph_initialized = True
         self._graph_uses_checkpointer = use_checkpointer
+
+    async def _resolve_execution_graph(
+        self,
+        *,
+        user_input: Dict[str, Any],
+        use_checkpointer: bool,
+        span: Any,
+    ) -> ExecutionGraph:
+        """이번 호출이 실행할 그래프를 정한다.
+
+        반환값을 **호출 스코프로만** 흘린다 -- 인스턴스 속성에 얹으면
+        동시 요청 두 개가 서로의 그래프를 실행한다(`__init__` 의 주석 참고).
+        `self.graph` 와 `_graphs_by_checkpointer` 는 정적 그래프의 컴파일
+        캐시로 그대로 남는다: 없애면 매 요청 재컴파일이다. 바뀌는 것은
+        "`execute_workflow` 가 그것을 직접 읽는가" 뿐이다.
+
+        분기는 셋뿐이고 **재설계 루프는 없다**: 위반이든 예외든 타임아웃이든
+        반응은 항상 정적 폴백이다. 되돌려 다시 설계시키면 질의 하나가 LLM
+        설계를 여러 번 태워 지연이 상한 없이 늘어난다
+        (`graph_design_ledger.py:20-25`).
+        """
+
+        await self._ensure_graph_initialized(use_checkpointer=use_checkpointer)
+        static = static_execution_graph(
+            compiled=self.graph, flags=current_static_flags()
+        )
+
+        if not settings.config.workflow.graph_design_enabled:
+            return static
+
+        try:
+            designer = self._build_graph_designer()
+        except Exception as exc:  # noqa: BLE001
+            # 설계자 **조립** 은 `design_graph_or_fallback` 의 try 바깥이다 --
+            # 인자를 만드는 코드는 함수가 호출되기 전에 돈다. 그래서 여기서
+            # 따로 막지 않으면 조립 실패가 그대로 밖으로 나가 사용자 요청을
+            # 죽인다. 가상의 위험이 아니다: `settings.LLM_PROVIDER` 는 자유
+            # 문자열이라 `gemini`/`ollama` 배포에서 `resolve_model` 이
+            # `ValueError: Unknown model provider` 를 던지고, API 키가 없으면
+            # `LLMFactory.create_llm` 이 같은 모양으로 실패한다. 기본이 꺼져
+            # 있는 기능이 요청을 죽이는 일은 없어야 한다.
+            # `asyncio.CancelledError` 는 `BaseException` 이라 여기 안 걸린다.
+            self._record_design_events(
+                (
+                    LedgerEvent(
+                        kind="graph_design_fallback",
+                        payload={
+                            "reason": f"designer_unavailable: {type(exc).__name__}: {exc}"
+                        },
+                    ),
+                ),
+                span,
+            )
+            return static
+
+        outcome = await design_graph_or_fallback(
+            designer=designer,
+            request=DesignRequest(
+                query=user_input["query"],
+                catalog=tuple(NODE_CONTRACTS.values()),
+                budget=settings.config.workflow.graph_design_budget_hint,
+            ),
+            contracts=NODE_CONTRACTS,
+            # `must_write` 는 기본값(`{"final_response"}`)을 쓴다 -- 덮으면
+            # "응답 없는 설계를 허용한다" 는 뜻이고 챗 경로에서 그것은
+            # 언제나 오답이다. `mandatory`(노드 이름 기반)는 넘기지 않는다:
+            # 노드 이름으로 요구하면 `direct_response` 로 답하는 옳은 설계까지
+            # 거부한다 -- 표본 `20260824T101448Z` 의 실패 5건이 그것이었다.
+            # `budget`/`node_costs` 는 넘기지 않는다: node_costs 없이
+            # budget 만 주면 fail-closed 규칙이 모든 노드를 "비용 미선언"
+            # 위반으로 잡아 **모든 설계가 거부된다**.
+        )
+        self._record_design_events(outcome.events, span)
+
+        if outcome.topology is None:
+            return static
+
+        # G2-d: 게이트할 노드를 토폴로지에서 계산한다. 하드코딩 목록을 다시
+        # 쓰지 않는 이유는 G2-b 와 같다 -- 이번 그래프에 실제로 있는 노드만
+        # 게이트한다.
+        interrupt_before = sorted(
+            set(outcome.topology.nodes) & _INTERRUPT_GATED_NODES
+        )
+
+        checkpointer = await get_checkpointer() if use_checkpointer else None
+
+        try:
+            compiled = build_ephemeral_workflow(
+                self,
+                outcome.topology,
+                checkpointer=checkpointer,
+                interrupt_before=interrupt_before,
+            )
+        except EphemeralApprovalGateUnsupported as exc:
+            # 체크포인터 없이 게이트 노드를 컴파일하면 여기로 온다(챗 경로,
+            # `use_checkpointer=False`). 재개는 체크포인트가 있어야 성립하므로
+            # 이 경로는 여전히 유효한 방어다.
+            #
+            # `design_graph_or_fallback` 은 검증까지만 하고 컴파일은 여기서
+            # 한다 -- 그래서 이 실패는 그 함수의 이벤트 4종에 잡히지 않는다.
+            # 밖으로 흘리면 설계 실패가 사용자 요청을 죽이고, 조용히 삼키면
+            # "모든 실패가 성공처럼 보였다" 를 되풀이한다. 기존 kind 를
+            # 사유로 구분해 재사용한다(새 kind 는 FE 라벨 부채를 만든다).
+            self._record_design_events(
+                (
+                    LedgerEvent(
+                        kind="graph_design_fallback",
+                        payload={"reason": f"ephemeral_approval_gate_unsupported: {exc}"},
+                    ),
+                ),
+                span,
+            )
+            return static
+
+        return ExecutionGraph(
+            compiled=compiled,
+            nodes=outcome.topology.nodes,
+            topology_hash=topology_hash(outcome.topology),
+            source="designed",
+            topology=outcome.topology,
+        )
+
+    def execution_topology_payload(
+        self, execution_graph: ExecutionGraph
+    ) -> dict[str, Any] | None:
+        """이 실행이 상태에 남길 토폴로지 페이로드. 정적이면 None.
+
+        재개(`approval_handlers`)가 읽는 유일한 근거이며, 상태에 실리므로
+        체크포인트와 **같은 수명**을 갖는다 -- 곁 테이블을 두지 않은 이유가
+        그것이다(스펙 §3.1).
+        """
+        if execution_graph.topology is None:
+            return None
+        return topology_to_payload(execution_graph.topology)
+
+    def _build_graph_designer(self) -> Any:
+        """설계 서브에이전트를 조립한다. 모델은 **여기서 한 번만** 해석한다.
+
+        provider 를 모델명으로 추측하지 않는다 -- `"claude" in model` 같은
+        판정은 카탈로그 조회로 대체된 안티패턴이다(라우팅 작업이 잡은
+        프로덕션 버그 중 하나). 배포가 정한 프로바이더를 쓰고, 모델은
+        `resolve_model` 이 `None` 을 역할 기본값으로 푼다.
+        """
+
+        provider = settings.LLM_PROVIDER
+        model_name = resolve_model(
+            config=settings.config.model_routing,
+            provider=provider,
+            role="everyday",
+            feature_override=settings.config.workflow.graph_design_model,
+        ).model
+        llm = LLMFactory.create_llm(provider=provider, model=model_name)
+        prompt_path = Path(__file__).parent / "prompts" / "graph_design.md"
+        return LlmGraphDesigner(model=llm, prompt_path=prompt_path)
+
+    def _record_design_events(self, events: Sequence[Any], span: Any) -> None:
+        """설계 이벤트를 구조적 로그와 OTel span 두 곳에 남긴다.
+
+        목적지가 이 둘인 이유: `execute_workflow` 가 이미
+        `trace_workflow_node` span 을 쥐고 있어 새 배관이 필요 없고,
+        마이그레이션이 0건이라 SCHEMA1(마이그레이션 44개 중 7개가 신선한
+        DB 에서 실패한다)을 악화시키지 않는다.
+
+        payload 는 `design_graph_or_fallback` 이 정한다 -- 이벤트의 내용을
+        정하는 자리와 목적지를 정하는 자리를 섞지 않는다. **다만 질의만
+        예외다**: `graph_design_requested.payload["query"]` 는 전문이라
+        그대로 흘리면 사용자 질의가 로그에 통째로 남는다. 축약은 원본을
+        고치는 것이 아니라 *기록하는 쪽* 의 책임이다.
+        """
+
+        for event in events:
+            payload = dict(event.payload)
+            query = payload.pop("query", None)
+            if query is not None:
+                payload["query_preview"] = str(query)[:_DESIGN_QUERY_PREVIEW_CHARS]
+
+            add_span_event(span, event.kind, payload)
+            logger.info("[GraphDesign] %s %s", event.kind, payload)
+
+    def graph_astream_source(
+        self, execution_graph: ExecutionGraph, initial_state: AgentState, config: Dict[str, Any]
+    ):
+        """`astream` 을 한 겹 감싸 테스트가 chunk 시퀀스를 주입할 수 있게 한다.
+
+        진행 추적의 계약(어느 노드가 몇 번째로 나오는가)을 검증하려면 실제
+        LLM 없이 chunk 를 흘려보낼 수 있어야 한다. 프로덕션 동작은 그대로
+        `compiled.astream` 이다.
+        """
+
+        return execution_graph.compiled.astream(initial_state, config)
 
 
     @node_contract(
@@ -2483,9 +2691,6 @@ class MultiAgentWorkflow:
                 add_span_event(span, "redis_cache_miss")
             set_span_attributes(span, {"cache.hit": False})
 
-            # Ensure graph is initialized only after cache paths miss.
-            await self._ensure_graph_initialized(use_checkpointer=use_checkpointer)
-
             # 초기 상태 생성 (event_handler를 상태에 포함)
             initial_state = self._create_initial_state(user_input)
             initial_state["_event_handler"] = event_handler
@@ -2500,6 +2705,48 @@ class MultiAgentWorkflow:
             await self._record_session_start(user_input)
 
             try:
+                # 캐시가 전부 빗나간 뒤에만 그래프를 정한다. 반환값은 이 호출의
+                # 로컬이며 인스턴스에 남지 않는다(G2-c).
+                #
+                # 이 호출이 `try` **안**에 있어야 하는 이유: 정적 경로조차
+                # `static_topology` 를 거쳐 `inspect.getsource` + `ast.parse` 를
+                # 돈다. 소스를 못 읽거나(`OSError`) 추출이 실패하면
+                # (`_StaticExtractionError`) 밖에서는 아무도 받지 않아 예외가
+                # 그대로 호출자에게 나가고, `on_workflow_error` 도 에러 결과도
+                # 없다. 그것도 **플래그가 꺼진 경로**에서 그렇다 -- 꺼진 run 이
+                # 이전과 구별되지 않아야 한다는 이 기능의 전제와 정면으로
+                # 어긋난다. 다른 실패와 같은 경로로 끝나게 둔다.
+                execution_graph = await self._resolve_execution_graph(
+                    user_input=user_input,
+                    use_checkpointer=use_checkpointer,
+                    span=span,
+                )
+
+                # 재개(`approval_handlers`)가 읽을 유일한 근거를 상태에 싣는다.
+                # `initial_state` 와 `execution_graph` 가 둘 다 스코프에 들어오는
+                # 첫 지점이 여기다 -- `initial_state` 는 위(L2713)에서, `execution_graph`
+                # 는 방금 위에서 만들어졌다. 정적 run 은 `execution_topology_payload`
+                # 가 None 을 돌려줘 이 키가 `None` 으로 남는다(Task 3-6 주석대로
+                # 정적 run 에는 토폴로지를 싣지 않는다).
+                initial_state["execution_topology"] = self.execution_topology_payload(
+                    execution_graph
+                )
+
+                # G2-e: 조인 키를 이 run 이 **실제로 남기게** 한다. 값을
+                # `ExecutionGraph` 에 싣기만 하고 아무 데도 내보내지 않으면
+                # 정적 run 은 여전히 해시가 없는 run 이고, 설계된 run 과 비교할
+                # 상대가 없다 -- "조인 키만 있고 조인이 없다" 는 그대로다.
+                set_span_attributes(span, {
+                    "graph.topology_hash": execution_graph.topology_hash,
+                    "graph.source": execution_graph.source,
+                })
+                logger.info(
+                    "[ExecuteWorkflow] graph.source=%s graph.topology_hash=%s nodes=%d",
+                    execution_graph.source,
+                    execution_graph.topology_hash,
+                    len(execution_graph.nodes),
+                )
+
                 # 워크플로우 실행
                 add_span_event(span, "starting_graph_execution")
                 if use_checkpointer:
@@ -2514,84 +2761,88 @@ class MultiAgentWorkflow:
                         "recursion_limit": 50  # 재시도를 위한 recursion limit 증가
                     }
 
-                # 노드별 진행 상황 추적을 위해 astream 사용
-                workflow_nodes = [
-                    WorkflowNode.QUERY_CLS.value, WorkflowNode.SKILL_TOOL_SELECTOR.value,
-                    WorkflowNode.HYPOTHESIS_GENERATION.value,  # Phase 2.5
-                    WorkflowNode.SEARCH_ORCHESTRATOR.value,
-                    WorkflowNode.HYPOTHESIS_EVALUATION.value,  # Phase 2.5
-                    WorkflowNode.REPLANNER.value,  # Phase 2.4
-                    WorkflowNode.ANALYSIS_ORCHESTRATOR.value,
-                    WorkflowNode.GENERATION_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value,
-                    WorkflowNode.FACT_CHECK.value, WorkflowNode.QUALITY_VALIDATOR.value,
-                    WorkflowNode.MISSION_PLANNER.value,
-                    WorkflowNode.MISSION_APPROVAL.value,
-                    WorkflowNode.MISSION_EXECUTOR.value,
-                    WorkflowNode.MISSION_VALIDATOR.value,
-                    WorkflowNode.MISSION_INTEGRATOR.value,
-                    WorkflowNode.RESP_GENERATOR.value,
-                    WorkflowNode.RESEARCH_HARNESS.value,
-                    WorkflowNode.RESEARCH_HARNESS_REPAIR.value,
-                ]
+                # 진행 추적의 근거는 **이번 실행의 그래프**다. 손으로 나열한
+                # 목록을 쓰지 않는 이유는 그 목록이 이 그래프를 서술한다는
+                # 보장이 없기 때문이다 -- 조건부 분기로 절반을 건너뛰어도
+                # `total_steps` 가 19 로 고정돼 있었고, 설계된 그래프의 노드는
+                # 목록에 아예 없었다.
+                from .events import (
+                    get_node_label, estimate_remaining_time,
+                    record_node_start, record_node_end,
+                )
+
+                trackable_nodes = set(execution_graph.nodes)
+                # 분기 때문에 실제 실행 수는 이보다 적을 수 있다 -- 이름이
+                # 그 사실을 말하게 둔다. `total_steps` 라고 부르면 다음 사람이
+                # 이것을 정확한 총계로 읽는다.
+                max_steps = len(execution_graph.nodes)
 
                 current_step = 0
-                total_steps = len(workflow_nodes)
                 final_state = None
+                wf_id = user_input.get("session_id", "")
+                # 실제로 직전 chunk 에서 본 노드들. 목록 인덱스로 추정하지
+                # 않는다 -- 옛 코드는 `workflow_nodes.index(node) - 1` 로
+                # "이전 노드" 를 골라, 이 run 이 건너뛴 노드의 종료 시각을
+                # 기록했다.
+                previous_nodes: list[str] = []
+                seen_nodes: set[str] = set()
 
-                # 스트리밍으로 워크플로우 실행하며 이벤트 emit
-                async for chunk in self.graph.astream(initial_state, config):
-                    # chunk는 {node_name: state} 형식
-                    for node_name, state in chunk.items():
-                        if node_name in workflow_nodes:
+                async for chunk in self.graph_astream_source(execution_graph, initial_state, config):
+                    chunk_nodes = [
+                        name for name in chunk if name in trackable_nodes
+                    ]
+
+                    # 노드 키가 하나도 없는 chunk(`__interrupt__` 같은 신호)는
+                    # 이번 실행의 진행을 서술하지 않는다. 그런 chunk 로
+                    # 대기 중인 종료를 끊으면 그 노드의 측정 구간이 신호까지로
+                    # 잘려 ~0초 표본이 ETA 히스토리에 들어가고(중앙값이 그만큼
+                    # 내려간다), `previous_nodes` 를 빈 목록으로 덮으면 방금 돈
+                    # 노드의 종료가 통째로 사라진다. 대기 중인 종료는 **다음에
+                    # 실제로 노드가 도착할 때** 닫는다.
+                    if chunk_nodes:
+                        for finished in previous_nodes:
+                            record_node_end(finished, wf_id)
+
+                        for node_name in chunk_nodes:
                             current_step += 1
+                            seen_nodes.add(node_name)
 
-                            # Tracing: 노드 실행 이벤트
                             add_span_event(span, f"node_{node_name}_start", {
                                 "step": current_step,
-                                "total_steps": total_steps
+                                "max_steps": max_steps,
                             })
 
-                            # 이전 노드의 실행 시간 기록 (동적 ETA용)
-                            from .events import (
-                                get_node_label, estimate_remaining_time,
-                                record_node_start, record_node_end,
-                            )
-                            wf_id = user_input.get("session_id", "")
-                            if current_step > 1:
-                                # 이전 노드 완료 기록
-                                prev_idx = workflow_nodes.index(node_name) - 1
-                                if prev_idx >= 0:
-                                    record_node_end(workflow_nodes[prev_idx], wf_id)
-
-                            # 현재 노드 시작 기록
                             record_node_start(node_name, wf_id)
 
-                            # 노드 시작 이벤트 (structured progress)
+                            remaining = tuple(
+                                node for node in execution_graph.nodes
+                                if node not in seen_nodes
+                            )
                             await event_handler.on_node_start(
                                 node_name,
                                 current_step,
-                                total_steps,
+                                max_steps,
                                 step_name=get_node_label(node_name),
-                                estimated_remaining_s=estimate_remaining_time(node_name),
+                                estimated_remaining_s=estimate_remaining_time(
+                                    node_name, candidates=remaining
+                                ),
                             )
 
-                            # 노드 완료 이벤트 (state에서 필요한 정보 추출)
-                            node_result = {
-                                "node": node_name,
-                                "step": current_step
-                            }
-                            await event_handler.on_node_complete(node_name, node_result)
-
-                            # Tracing: 노드 완료 이벤트
+                            await event_handler.on_node_complete(
+                                node_name, {"node": node_name, "step": current_step}
+                            )
                             add_span_event(span, f"node_{node_name}_complete")
 
-                        # 마지막 상태 저장
+                        previous_nodes = chunk_nodes
+
+                    for _node_name, state in chunk.items():
                         final_state = state
 
-                # 마지막 노드의 실행 시간 기록
-                if workflow_nodes:
-                    from .events import record_node_end
-                    record_node_end(workflow_nodes[-1], user_input.get("session_id", ""))
+                # 마지막으로 **실제로 본** 노드의 종료를 기록한다. 옛 코드는
+                # `workflow_nodes[-1]`(목록의 마지막)을 썼는데, 그 노드는 이
+                # run 에서 돌지 않았을 수 있다.
+                for finished in previous_nodes:
+                    record_node_end(finished, wf_id)
 
                 # 결과 생성
                 add_span_event(span, "generating_result")
@@ -2660,7 +2911,7 @@ class MultiAgentWorkflow:
                     from langgraph.errors import GraphInterrupt
                     if isinstance(e, GraphInterrupt):
                         add_span_event(span, "workflow_interrupted_for_approval")
-                        current_graph_state = await self.graph.aget_state(config)
+                        current_graph_state = await execution_graph.compiled.aget_state(config)
                         pending = current_graph_state.values.get("pending_approvals", [])
                         session_id = user_input.get("session_id", "")
                         await event_handler.on_approval_request(pending, session_id)

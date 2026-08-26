@@ -1,0 +1,35 @@
+{
+  "nodes": [
+    "query_classifier",
+    "search_orchestrator",
+    "analysis_orchestrator",
+    "generation_orchestrator",
+    "response_generator"
+  ],
+  "edges": [
+    [
+      "__start__",
+      "query_classifier"
+    ],
+    [
+      "query_classifier",
+      "search_orchestrator"
+    ],
+    [
+      "search_orchestrator",
+      "analysis_orchestrator"
+    ],
+    [
+      "analysis_orchestrator",
+      "generation_orchestrator"
+    ],
+    [
+      "generation_orchestrator",
+      "response_generator"
+    ],
+    [
+      "response_generator",
+      "__end__"
+    ]
+  ]
+}

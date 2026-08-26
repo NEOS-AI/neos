@@ -28,11 +28,45 @@ from neos.api.dependencies.resource_access import require_stream_session_owner
 from neos.database.connection import db_manager
 from neos.database.models import User
 from neos.workflow.graph import multi_agent_workflow
+from neos.workflow.resume_graph import ResumeGraphUnavailable, resume_graph_for
 from neos.workflow.stream_manager import stream_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/approval", tags=["Execution Approval"])
+
+
+async def _resolve_resume_graph(*, state_values, workflow, checkpointer):
+    """재개에 쓸 그래프를 고르고, 고를 수 없으면 503 으로 거부한다.
+
+    **정적으로 내려가지 않는다.** 복원 실패 시 정적 그래프로 재개하는 것이
+    이 작업이 고치는 원래 버그다 -- 그 run 은 설계가 의도한 것과 다른 경로로
+    계속 가면서 성공한 것처럼 보인다.
+
+    503 인 이유: 이것은 "요청이 틀렸다" 가 아니라 "서버가 지금 이 스레드를
+    재개할 수 없다" 이고, 계약을 되돌리는 배포가 나가면 같은 요청이 성공한다.
+    초기화되지 않은 그래프에 대해 이 핸들러가 이미 쓰는 코드와 같다.
+    """
+    try:
+        graph = await resume_graph_for(
+            state_values, workflow=workflow, checkpointer=checkpointer
+        )
+        payload = state_values.get("execution_topology")
+        if payload:
+            from neos.workflow.graph_design_ledger import topology_hash
+            from neos.workflow.topology import topology_from_payload
+
+            logger.info(
+                "[ApprovalHandler] resumed on the designed graph "
+                f"topology_hash={topology_hash(topology_from_payload(payload))}"
+            )
+        return graph
+    except ResumeGraphUnavailable as error:
+        logger.error(f"[ApprovalHandler] resume graph unavailable: {error.reason}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"이 실행을 재개할 수 없습니다 (topology): {error.reason}",
+        ) from error
 
 
 class ApprovalResponse(BaseModel):
@@ -145,6 +179,12 @@ async def respond_to_approval(
             detail=f"워크플로우 상태 조회 실패: {str(e)}",
         )
 
+    resume_graph = await _resolve_resume_graph(
+        state_values=current_graph_state.values,
+        workflow=multi_agent_workflow,
+        checkpointer=multi_agent_workflow.graph.checkpointer,
+    )
+
     valid_ids = {p["request_id"] for p in pending}
     if body.request_id not in valid_ids:
         raise HTTPException(
@@ -173,7 +213,7 @@ async def respond_to_approval(
 
     try:
         # 1. 상태 업데이트: approval_decision 설정
-        await graph.aupdate_state(
+        await resume_graph.aupdate_state(
             config=config,
             values={"approval_decision": decision},
         )
@@ -195,7 +235,7 @@ async def respond_to_approval(
     async def _resume():
         try:
             final_state = None
-            async for chunk in graph.astream(None, config=config):
+            async for chunk in resume_graph.astream(None, config=config):
                 for node_name, state in chunk.items():
                     await stream_manager.add_event(
                         session_id, "node_complete", {"node": node_name}

@@ -1,0 +1,20 @@
+{
+  "nodes": [
+    "conversation_context_processor",
+    "direct_response"
+  ],
+  "edges": [
+    [
+      "__start__",
+      "conversation_context_processor"
+    ],
+    [
+      "conversation_context_processor",
+      "direct_response"
+    ],
+    [
+      "direct_response",
+      "__end__"
+    ]
+  ]
+}

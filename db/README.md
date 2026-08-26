@@ -55,6 +55,15 @@ docker push neos960518/neos-valkey:latest
 
 Pre-requisite: `CREATE DATABASE neos;` in PostgreSQL
 
+> ⚠️ **적용 순서의 정본은 이 절이 아니라 [`db/BOOTSTRAP_ORDER.txt`](BOOTSTRAP_ORDER.txt)다**
+> (2026-08-25, SCHEMA1). 아래 명령 나열은 사람이 읽는 사본이고, 둘이 어긋나면
+> 정본이 이긴다. 산문에만 있던 시절 `046` 이 목록에서 빠져 있었고 — 그대로
+> 배포하면 `coding_sandbox_provider_health` 가 없다 — 순서가 번호순이 아닌
+> **이유**도 어디에도 적혀 있지 않았다.
+>
+> 검증: `python scripts/verify_schema_bootstrap.py`
+> (목록 완전성만 보려면 `--check-list-only`, Docker 불필요)
+
 ```bash
 # add schemas for initial setup
 psql -U postgres -d neos --port 5432 --host localhost -f db/init.sql
@@ -187,4 +196,10 @@ psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/042_add_c
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/043_add_coding_text_parts.sql
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/044_add_coding_workspace_edits.sql
 psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/045_add_coding_managed_sandboxes.sql
+
+# Provider health / drain 을 프로세스 밖으로 (CA8·CA11)
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/046_add_coding_sandbox_provider_health.sql
+
+# 쓰이지 않는 부분 인덱스 제거 (CA9)
+psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/047_drop_unused_cleanup_attempts_index.sql
 ```

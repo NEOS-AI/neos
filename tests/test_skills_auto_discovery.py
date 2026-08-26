@@ -259,3 +259,63 @@ class TestSkillNamingRule:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# --- 상대 import 를 쓰는 스킬 (2026-08-24) ------------------------------------
+#
+# `cron` 은 헬퍼 모듈(`parser.py`)을 가진 유일한 스킬이라 `from .parser import ...`
+# 를 쓰는 유일한 스킬이기도 하다. `load_skill_class` 가 `skill.py` 를
+# `spec_from_file_location` 으로 **독립 모듈** 로 로드하면 `__package__` 가 잡히지
+# 않아 그 import 가 깨진다 -- `import neos.skills.builtin.cron.skill` 은 성공하는데
+# discovery 경로에서만 실패한다.
+#
+# SKILL.md 를 여섯 개 추가했을 때 다섯만 등록되고 이것만 빠졌다. **카운트가 아니라
+# 이름 집합으로 검증했기 때문에 잡혔다** -- 카운트는 "5개 늘었다" 만 말한다.
+
+def _forget(module_name: str) -> None:
+    """`sys.modules` 에서 모듈을 지운다.
+
+    🔴 **이것이 없으면 테스트가 거짓으로 통과한다.** `load_skill_class` 는 "이미
+    로드된 모듈이면 재사용" 분기를 갖고 있어서, 수집 중 다른 곳이 이 스킬을 정상
+    import 해 두면 로더가 file-location 경로를 **아예 타지 않는다.** 프로덕션
+    discovery 는 깨끗한 프로세스에서 도므로 그 분기를 반드시 지나간다."""
+
+    import sys
+
+    sys.modules.pop(module_name, None)
+
+
+def test_a_skill_with_a_relative_import_is_discovered() -> None:
+    """헬퍼 모듈을 상대 import 하는 스킬도 발견돼야 한다.
+
+    `cron/skill.py` 의 `from .parser import ...` 는 정상적인 파이썬이다.
+    그것을 다루지 못하는 쪽이 로더이므로, 스킬이 아니라 로더가 고쳐진다."""
+
+    from pathlib import Path
+
+    from neos.skills.manager.auto_discovery import discover_skills
+
+    _forget("neos.skills.builtin.cron.skill")
+    infos = discover_skills(Path("neos/skills/builtin"))
+    names = {info.name for info in infos}
+    assert "cron" in names, (
+        "cron 이 발견되지 않았다 -- load_skill_class 가 상대 import 를 가진 "
+        f"skill.py 를 로드하지 못한다. 발견된 것: {sorted(names)}"
+    )
+
+
+def test_discovering_a_relative_import_skill_does_not_drop_the_others() -> None:
+    """§4.1 의 사고 재발 방지: 깨진 스킬 하나가 discovery 전체를 중단시킨 적이 있다.
+    한 스킬을 살리는 변경이 나머지를 떨어뜨리지 않는지 이름으로 확인한다."""
+
+    from pathlib import Path
+
+    from neos.skills.manager.auto_discovery import discover_skills
+
+    names = {info.name for info in discover_skills(Path("neos/skills/builtin"))}
+    for expected in (
+        "arxiv", "github-search", "google-scholar", "news-api",
+        "openalex", "pubmed", "reddit", "sec-edgar",
+        "semantic-scholar", "wikipedia",
+    ):
+        assert expected in names, f"{expected} 가 사라졌다: {sorted(names)}"

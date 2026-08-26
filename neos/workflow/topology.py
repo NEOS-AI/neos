@@ -21,7 +21,7 @@ START 에서 N 에 이르는 **모든** 경로에 K 를 `writes` 하는 노드�
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 # START/END 는 실제 노드가 아니라 그래프의 진입점·종료점을 나타내는 센티널이다.
 # `NODE_CONTRACTS` 에 존재하지 않으며, 어떤 계약도 요구하지 않는다.
@@ -114,6 +114,7 @@ def validate_topology(
     *,
     contracts: Mapping[str, _ContractLike],
     mandatory: Sequence[str] = (),
+    must_write: frozenset[str] = frozenset(),
     budget: int | None = None,
     node_costs: Mapping[str, int] | None = None,
 ) -> tuple[TopologyViolation, ...]:
@@ -274,6 +275,41 @@ def validate_topology(
                     detail=f"필수 노드 '{name}' 가 토폴로지에 없다",
                 )
             )
+
+    # -- 반드시 쓰여야 하는 키 -------------------------------------------------
+    #
+    # `mandatory` 와 같은 요구(I1: "응답 없는 설계를 승인하지 않는다")를 **노드
+    # 이름이 아니라 키**로 적는다. 둘의 차이가 실측으로 드러났다 -- 표본
+    # `20260824T101448Z` 에서 대화형 질의 5건이 전부 `missing_mandatory` 로
+    # 거부됐는데, 거부된 설계(`[direct_response]` 등)는 **옳은 그래프**였다.
+    # "고마워요" 에 검색·분석·생성 오케스트레이터를 지나갈 이유가 없다.
+    #
+    # 원인은 표현이다: `direct_response` 도 `final_response` 를 쓴다(§14.2의
+    # G1-a 가 그 노드를 응답 생산자로 인정한 그대로다). 요구를 노드 이름으로
+    # 적는 순간 **진짜 요구(응답이 만들어지는가)와 구현 세부(어느 노드가
+    # 만드는가)가 섞인다.**
+    #
+    # `mandatory` 를 지우지 않는 이유: 그쪽은 "이 노드가 반드시 있어야 한다"는
+    # 다른 요구를 여전히 표현할 수 있다(예: 감사 로깅 노드). 둘은 대체가 아니라
+    # 다른 질문이고, 기본값이 no-op 이라 안 쓰면 돌지 않는다.
+    if must_write:
+        written_anywhere: set[str] = set()
+        for name in topology.nodes:
+            contract = contracts.get(name)
+            if contract is not None:
+                written_anywhere |= set(contract.writes)
+        for key in sorted(must_write):
+            if key not in written_anywhere:
+                violations.append(
+                    TopologyViolation(
+                        rule="no_writer_for_required_key",
+                        node=None,
+                        detail=(
+                            f"'{key}' 를 쓰는 노드가 토폴로지에 하나도 없다 -- "
+                            "구조적으로 성립해도 이 설계는 그 값을 만들지 않는다"
+                        ),
+                    )
+                )
 
     # -- 예산 -----------------------------------------------------------------
     # 방어선이 실패 시 열리면 안 된다: 비용이 선언되지 않은 노드를 0 으로 취급해
@@ -447,3 +483,69 @@ def _strongly_connected_components(
         components.append(frozenset(component))
 
     return components
+
+
+class TopologyPayloadError(ValueError):
+    """저장된 토폴로지 페이로드를 `GraphTopology` 로 되돌릴 수 없다.
+
+    재개 경로가 이것을 잡아 **정적으로 흐르지 않고** 거부한다 -- 복원할 수 없는
+    토폴로지로 재개하는 것은 다른 그래프로 재개하는 것과 같다.
+    """
+
+
+def topology_to_payload(topology: GraphTopology) -> dict[str, Any]:
+    """`GraphTopology` 를 JSON 에 실을 수 있는 dict 로 만든다.
+
+    상태에 실려 체크포인트에 저장되므로 JSON 안전해야 한다. tuple 은 list 가
+    되고 `topology_from_payload` 가 되돌린다.
+    """
+    return {
+        "nodes": list(topology.nodes),
+        "edges": [list(edge) for edge in topology.edges],
+        "loop_bounds": dict(topology.loop_bounds),
+        "initial_writes": sorted(topology.initial_writes),
+    }
+
+
+def topology_from_payload(payload: Mapping[str, Any]) -> GraphTopology:
+    """`topology_to_payload` 의 역. 모양이 틀리면 `TopologyPayloadError`.
+
+    관대하게 받지 않는다 -- 여기서 통과시킨 이상한 페이로드는
+    `build_ephemeral_workflow` 안에서 알아보기 어려운 예외가 된다.
+    """
+    if not isinstance(payload, Mapping):
+        raise TopologyPayloadError(f"페이로드가 매핑이 아니다: {type(payload).__name__}")
+
+    try:
+        raw_nodes = payload["nodes"]
+        raw_edges = payload["edges"]
+    except KeyError as error:
+        raise TopologyPayloadError(f"페이로드에 {error} 가 없다") from error
+
+    if not isinstance(raw_nodes, (list, tuple)):
+        raise TopologyPayloadError("nodes 가 시퀀스가 아니다")
+    if not isinstance(raw_edges, (list, tuple)):
+        raise TopologyPayloadError("edges 가 시퀀스가 아니다")
+
+    edges: list[tuple[str, str]] = []
+    for edge in raw_edges:
+        if not isinstance(edge, (list, tuple)) or len(edge) != 2:
+            raise TopologyPayloadError(f"간선이 2-튜플이 아니다: {edge!r}")
+        edges.append((str(edge[0]), str(edge[1])))
+
+    try:
+        loop_bounds_dict = dict(payload.get("loop_bounds") or {})
+    except (ValueError, TypeError) as error:
+        raise TopologyPayloadError(f"loop_bounds 를 변환할 수 없다: {error}") from error
+
+    try:
+        initial_writes_set = frozenset(payload.get("initial_writes") or ())
+    except (ValueError, TypeError) as error:
+        raise TopologyPayloadError(f"initial_writes 를 변환할 수 없다: {error}") from error
+
+    return GraphTopology(
+        nodes=tuple(str(node) for node in raw_nodes),
+        edges=tuple(edges),
+        loop_bounds=loop_bounds_dict,
+        initial_writes=initial_writes_set,
+    )

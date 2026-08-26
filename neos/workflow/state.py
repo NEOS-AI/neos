@@ -1,4 +1,4 @@
-from typing import TypedDict, List, Dict, Any, Optional, Annotated, Union
+from typing import TypedDict, List, Dict, Any, Optional, Annotated, NotRequired, Union
 from dataclasses import dataclass
 from datetime import datetime
 import operator
@@ -241,6 +241,14 @@ class AgentState(TypedDict):
     mission_task_results: Optional[List[Dict[str, Any]]]
     validator_runs: Optional[List[Dict[str, Any]]]
     validation_summary: Optional[Dict[str, Any]]
+
+    # 이 실행이 어떤 그래프로 돌고 있는가. 정적 실행이면 None.
+    #
+    # **오케스트레이터만 쓴다. 어떤 노드도 읽지 않는다.** 노드가 읽으면 자기
+    # 그래프 모양에 따라 행동을 바꾸게 되고, 그것은 C1 계약(`reads`/`writes`)이
+    # 표현하려는 것과 정반대 방향의 결합이다. 승인 재개가 "이 스레드가 어떤
+    # 토폴로지로 멈췄는가" 를 복원하는 데만 쓴다.
+    execution_topology: NotRequired[dict[str, Any] | None]
 
 
 class WorkflowConfig:

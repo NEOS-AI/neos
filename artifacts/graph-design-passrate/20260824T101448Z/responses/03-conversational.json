@@ -1,0 +1,15 @@
+{
+  "nodes": [
+    "direct_response"
+  ],
+  "edges": [
+    [
+      "__start__",
+      "direct_response"
+    ],
+    [
+      "direct_response",
+      "__end__"
+    ]
+  ]
+}

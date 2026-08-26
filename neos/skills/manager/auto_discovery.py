@@ -165,7 +165,28 @@ def load_skill_class(skill_py_path: Path, expected_name: str) -> Type[BaseSkill]
         logger.debug(f"Module already loaded: {module_name}")
         module = sys.modules[module_name]
     else:
-        # 동적 모듈 로드
+        # 1) 먼저 **정상 패키지 import** 를 시도한다.
+        #
+        # `spec_from_file_location` 으로 만든 모듈은 `__package__` 가 잡히지 않아
+        # 상대 import(`from .parser import ...`)가 부모 패키지를 찾지 못한다.
+        # `cron` 이 헬퍼 모듈을 가진 유일한 스킬이라 이 경로에서만 깨졌고,
+        # `import neos.skills.builtin.cron.skill` 은 멀쩡히 성공하는데 discovery
+        # 만 실패해 원인이 늦게 드러났다. 상대 import 는 정상적인 파이썬이므로
+        # 고칠 곳은 스킬이 아니라 로더다.
+        #
+        # 2) 실패하면 기존 파일 경로 로드로 폴백한다 -- `discover_skills` 는
+        # `skills_dir` 를 인자로 받으므로 패키지 트리 **밖** 의 디렉터리도
+        # 지원해야 하고, 그 경우 dotted path 가 실제 패키지에 대응하지 않는다.
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            module = None
+
+        if module is not None:
+            logger.debug(f"Imported as package: {module_name}")
+            return _require_skill_class(module, skill_py_path)
+
+        # 동적 모듈 로드 (패키지 트리 밖의 스킬)
         spec = importlib.util.spec_from_file_location(module_name, skill_py_path)
         if spec is None or spec.loader is None:
             raise ImportError(f"Failed to create module spec for {skill_py_path}")
@@ -180,7 +201,16 @@ def load_skill_class(skill_py_path: Path, expected_name: str) -> Type[BaseSkill]
             del sys.modules[module_name]
             raise ImportError(f"Failed to execute module {module_name}: {e}")
 
-    # BaseSkill을 상속한 클래스 찾기
+    return _require_skill_class(module, skill_py_path)
+
+
+def _require_skill_class(module, skill_py_path: Path) -> Type[BaseSkill]:
+    """로드된 모듈에서 `BaseSkill` 하위 클래스를 꺼낸다. 없으면 거절한다.
+
+    두 로드 경로(패키지 import / 파일 경로)가 같은 판정을 쓰도록 따로 뺐다 --
+    한쪽만 검사하면 그쪽으로 들어온 스킬만 조용히 통과한다.
+    """
+
     skill_class = find_skill_class_in_module(module)
 
     if skill_class is None:

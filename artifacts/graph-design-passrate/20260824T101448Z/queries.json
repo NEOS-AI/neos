@@ -1,0 +1,82 @@
+[
+  {
+    "kind": "conversational",
+    "query": "안녕하세요, 오늘 기분이 어때요?"
+  },
+  {
+    "kind": "conversational",
+    "query": "당신은 무엇을 할 수 있나요?"
+  },
+  {
+    "kind": "conversational",
+    "query": "고마워요, 도움이 됐어요."
+  },
+  {
+    "kind": "conversational",
+    "query": "방금 한 말을 더 짧게 요약해 줄래요?"
+  },
+  {
+    "kind": "conversational",
+    "query": "당신의 이름은 무엇인가요?"
+  },
+  {
+    "kind": "search",
+    "query": "2026년 한국의 최저임금은 얼마인가요?"
+  },
+  {
+    "kind": "search",
+    "query": "최근 발표된 pgvector 최신 버전과 주요 변경점을 알려줘"
+  },
+  {
+    "kind": "search",
+    "query": "OpenAI 와 Anthropic 의 최신 모델 가격을 비교해줘"
+  },
+  {
+    "kind": "search",
+    "query": "서울시 전기차 보조금 신청 방법을 알려줘"
+  },
+  {
+    "kind": "search",
+    "query": "LangGraph 1.0 의 체크포인터 API 가 어떻게 바뀌었나요?"
+  },
+  {
+    "kind": "analysis",
+    "query": "우리 회사가 Kubernetes 로 옮기는 게 타당한지 분석해줘"
+  },
+  {
+    "kind": "analysis",
+    "query": "이 주장이 사실인가: 재택근무가 생산성을 20% 높인다"
+  },
+  {
+    "kind": "analysis",
+    "query": "Rust 와 Go 중 어느 쪽이 우리 백엔드에 맞는지 판단해줘"
+  },
+  {
+    "kind": "analysis",
+    "query": "전기차 배터리 가격 하락 추세가 2030년까지 이어질까?"
+  },
+  {
+    "kind": "analysis",
+    "query": "이 코드베이스의 순환 의존성 문제를 어떻게 봐야 하나?"
+  },
+  {
+    "kind": "composite",
+    "query": "경쟁사 세 곳의 가격 정책을 조사하고 우리 전략을 제안해줘"
+  },
+  {
+    "kind": "composite",
+    "query": "AI 규제 동향을 조사해서 우리 제품 로드맵에 미칠 영향을 보고서로 써줘"
+  },
+  {
+    "kind": "composite",
+    "query": "최근 벡터 DB 벤치마크를 찾아보고 우리 스택 교체 여부를 판단해 문서로 정리해줘"
+  },
+  {
+    "kind": "composite",
+    "query": "국내 핀테크 규제를 조사하고 리스크를 정리한 뒤 대응 계획을 세워줘"
+  },
+  {
+    "kind": "composite",
+    "query": "기후 정책 논문 몇 편을 찾아 요약하고 상충하는 주장을 정리해줘"
+  }
+]
