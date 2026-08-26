@@ -34,6 +34,7 @@ def _graph_with_pending(*pending):
             )
         ),
         aupdate_state=AsyncMock(),
+        checkpointer=Mock(),
     )
 
 
