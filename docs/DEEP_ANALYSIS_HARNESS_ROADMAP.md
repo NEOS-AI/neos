@@ -1953,6 +1953,17 @@ K를 쓰는 노드가 있어야 한다. 한 분기에만 있으면 다른 분기
 >    지금은 게이트 노드가 있는 설계도 컴파일·실행되고, 승인 지점에서 멈춘
 >    뒤 같은 토폴로지로 재개한다 — 그 왕복을
 >    `tests/workflow/test_designed_resume_round_trip.py` 가 관문으로 잰다
+>
+>    🔴 **그러나 재개 경로가 하나 더 있고 그것은 아직 정적 그래프를 쓴다 —
+>    플래그를 켜기 전에 반드시 닫을 것.** `neos/tasks/scheduled_task_runner.py:300`
+>    의 `_inject_timeout_rejection` 이 `multi_agent_workflow.graph.aupdate_state`
+>    로 타임아웃 자동 거부를 쓴다. 스트림을 돌리지 않으므로 정적 그래프에서
+>    *실행*되지는 않지만, LangGraph 의 `update_state` 는 **업데이트를 수행하는
+>    그래프**로 `as_node` 를 풀고 후속 트리거 채널을 올린다 — 설계된 run 에서는
+>    정적 후속을 트리거하거나 `InvalidUpdateError` 가 308줄의
+>    `except ... non-critical` 에 삼켜진다. **이 작업이 닫은 것과 같은 클래스**이고
+>    변환하지 않은 유일한 resume-adjacent write 다. 지금은 플래그가 꺼져 있어
+>    도달 불가라 별도 작업으로 남긴다(최종 브랜치 리뷰 F2, 2026-08-26)
 > 3. ✅ **gemini·ollama 폴백은 조용하지 않다** — `graph_design_fallback` 이
 >    `designer_unavailable: <예외>` 를 싣는다(`graph.py:803`). 원문의 "조용히"는
 >    부정확한 서술이었다. 남는 것은 낭비뿐이다(그 배포에서는 요청마다 조립을
