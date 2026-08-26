@@ -79,6 +79,12 @@ def _enable_design(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_designed_graph_carries_its_topology(monkeypatch):
+    """설계 분기가 `ExecutionGraph.topology` 를 채우는가.
+
+    이 필드가 `None` 인 채로 남으면(예: `_resolve_execution_graph` 의 마지막
+    `return ExecutionGraph(...)` 에서 `topology=` 인자를 빠뜨리면)
+    `execution_topology_payload` 가 모든 설계된 run 에서도 `None` 을 돌려주고,
+    재개는 설계된 run 과 정적 run 을 구별할 수 없게 된다."""
     workflow = MultiAgentWorkflow()
     _enable_design(monkeypatch)
     monkeypatch.setattr(workflow, "_build_graph_designer", lambda: _FakeDesigner())
@@ -131,6 +137,11 @@ async def test_the_state_payload_round_trips_back_to_the_same_graph(monkeypatch)
 
 
 def test_a_static_graph_yields_no_payload():
+    """정적 `ExecutionGraph` 에서 `execution_topology_payload` 가 `None` 을 내는가.
+
+    여기서 `None` 대신 정적 토폴로지를 실으면(`topology=static_topology(...)`
+    처럼), 재개 경로가 그 페이로드를 보고 "이 run 은 설계됐다" 고 오인해 정적
+    run 마다 그래프를 새로 짓는다 -- 지금은 존재하지 않는 동작이다."""
     workflow = MultiAgentWorkflow()
 
     from neos.workflow.execution_graph import ExecutionGraph
@@ -140,3 +151,95 @@ def test_a_static_graph_yields_no_payload():
     )
 
     assert workflow.execution_topology_payload(static) is None
+
+
+def _capture_initial_state(captured):
+    """`graph_astream_source` 를 갈음해 `initial_state` 를 가로챈다.
+
+    `graph_astream_source` 는 이 목적(실제 LLM 없이 chunk 흐름을 주입)으로
+    이미 존재하는 이음매다(`graph.py` 의 그 메서드 docstring 참고). 실제
+    `astream` 을 돌리지 않는 이유는 이 테스트가 재는 것이 배선이지 실행이
+    아니기 때문이다 -- 빈 async generator 를 돌려주면 `execute_workflow` 의
+    루프가 즉시 끝나고, 그 뒤의 실패(예: `final_state` 가 `None`)는 이미
+    감싸인 `except Exception` 경로로 삼켜진다."""
+
+    def _capture(execution_graph, initial_state, config):
+        captured["state"] = initial_state
+
+        async def _empty():
+            return
+            yield
+
+        return _empty()
+
+    return _capture
+
+
+@pytest.mark.asyncio
+async def test_the_initial_state_actually_carries_the_payload_for_a_designed_run(
+    monkeypatch,
+):
+    """배선 자체(`initial_state["execution_topology"] = ...`)를 잡는 테스트다.
+
+    위 테스트들은 `_resolve_execution_graph` 의 반환값이나
+    `execution_topology_payload` 의 반환값에서 멈춘다 -- 즉
+    `execute_workflow` 안의 `initial_state["execution_topology"] = ...` 한
+    줄이 통째로 사라져도 전부 통과한다. 그 배선이 깨지면 설계된 run 이 상태에
+    토폴로지를 남기지 않고, 재개가 정적 그래프로 떨어진다. 이 플랜이 고치려는
+    버그가 정확히 그것이라, 여기서 `execute_workflow` 를 실제로 돌려 그것이
+    핸들러에 넘기는 `initial_state` 를 직접 검사한다."""
+    workflow = MultiAgentWorkflow()
+    _enable_design(monkeypatch)
+    monkeypatch.setattr(workflow, "_build_graph_designer", lambda: _FakeDesigner())
+    await workflow._ensure_graph_initialized(use_checkpointer=False)
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        workflow, "graph_astream_source", _capture_initial_state(captured)
+    )
+
+    await workflow.execute_workflow(
+        {
+            "query": "테스트 질의",
+            "session_id": "s-designed",
+            "user_id": "u1",
+            "bypass_cache": True,
+        },
+        use_checkpointer=False,
+    )
+
+    assert "state" in captured, "graph_astream_source 가 아예 호출되지 않았다"
+    payload = captured["state"]["execution_topology"]
+    assert payload is not None
+    assert payload["nodes"] == list(_CHAIN)
+
+
+@pytest.mark.asyncio
+async def test_the_initial_state_carries_no_payload_for_a_static_run(monkeypatch):
+    """정적 run 이 같은 배선을 타도 `execution_topology` 가 `None` 으로
+    남는가. 설계가 꺼져 있으면 `_resolve_execution_graph` 가 정적
+    `ExecutionGraph` 를 돌려주고, `execution_topology_payload` 가 그것을
+    `None` 으로 매핑한다 -- 그 `None` 이 실제로 `initial_state` 까지
+    전달되는지가 `test_a_static_graph_yields_no_payload` 가 재지 못하는
+    부분이다."""
+    workflow = MultiAgentWorkflow()
+    await workflow._ensure_graph_initialized(use_checkpointer=False)
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        workflow, "graph_astream_source", _capture_initial_state(captured)
+    )
+
+    await workflow.execute_workflow(
+        {
+            "query": "테스트 질의",
+            "session_id": "s-static",
+            "user_id": "u1",
+            "bypass_cache": True,
+        },
+        use_checkpointer=False,
+    )
+
+    assert "state" in captured, "graph_astream_source 가 아예 호출되지 않았다"
+    assert "execution_topology" in captured["state"]
+    assert captured["state"]["execution_topology"] is None
