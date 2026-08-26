@@ -179,10 +179,10 @@ async def test_an_approval_gate_without_a_checkpointer_falls_back_instead_of_rai
     """승인 게이트 노드가 들어간 설계는 **요청을 죽이지 않고** 정적으로
     내려간다.
 
-    ⚠️ 이 테스트가 처음 쓰였을 때의 기전은 `build_ephemeral_workflow` 가
-    던지는 `EphemeralApprovalGateUnsupported` 를 잡는 것이었다. 지금은 그
-    지점에 **도달하지 않는다** -- 게이트 노드가 있으면 컴파일 전에 폴백한다
-    (아래 테스트가 이유를 적는다). 바깥에서 본 성질은 같으므로 남긴다."""
+    체크포인터가 없으면 `build_ephemeral_workflow` 가
+    `EphemeralApprovalGateUnsupported` 를 던지고, 그것을 잡아 정적으로
+    내려간다. 재개는 체크포인트가 있어야 성립하므로 이 경로는 여전히
+    유효하다."""
 
     _, resolved = await _resolve_with(monkeypatch, _FakeDesigner(_GATED))
 
@@ -190,70 +190,45 @@ async def test_an_approval_gate_without_a_checkpointer_falls_back_instead_of_rai
 
 
 @pytest.mark.asyncio
-async def test_an_approval_gate_falls_back_even_when_a_checkpointer_exists(
+async def test_an_approval_gate_with_a_checkpointer_runs_as_designed(
     monkeypatch,
 ) -> None:
-    """체크포인터가 있어도 **게이트가 들어간 설계는 쓰지 않는다.**
+    """체크포인터가 있으면 게이트가 들어간 설계도 그대로 돈다.
 
-    ⚠️ 이 테스트는 2026-08-25 에 기대를 뒤집었다. 원래는
-    `test_an_approval_gate_with_a_checkpointer_runs_as_designed` 였고
-    "체크포인터가 있으면 설계된 그래프가 게이트를 걸고 돈다" 를 고정했다.
-    그 행동에는 재개 경로가 없다 -- `approval_handlers.py` 는
-    `multi_agent_workflow.graph`(정적 컴파일 그래프)를 상대로 재개하는데
-    설계된 그래프는 호출 스코프의 ephemeral 객체라 어디에도 캐시되지 않는다.
-    즉 멈춘 run 은 **다른 그래프** 위에서 재개된다.
+    ⚠️ **이 기대는 두 번 뒤집혔다. 계보를 남긴다.**
+    처음에는 이 이름이었고, 2026-08-25 에
+    `test_an_approval_gate_falls_back_even_when_a_checkpointer_exists` 로
+    뒤집혔다 -- 설계된 run 이 게이트에서 멈추면 재개가 **정적 그래프** 위에서
+    일어나 다른 파이프라인이 돌기 때문이었고, 그때는 재개 경로가 없어서
+    "멈출 수 있는 설계를 만들지 않는다" 가 유일한 안전책이었다.
 
-    그래서 멈출 수 있는 설계를 애초에 만들지 않는다. 사람 승인을 포기하는
-    것이 아니다 -- 승인이 필요한 질의는 정적 경로가 그대로 처리한다.
+    지금은 재개가 상태에 실린 토폴로지로 그래프를 다시 짓는다
+    (`neos/workflow/resume_graph.py`). 우회로가 필요 없어졌으므로 되돌린다.
 
     **이 테스트가 지키는 돌연변이:** `interrupt_before` 계산이 죽어 항상 빈
-    목록이 되면 게이트 설계가 그대로 실행된다. 위 테스트(체크포인터 없음)는
-    그 돌연변이를 잡지 못한다 -- 거기서는 어차피 정적으로 떨어지기 때문이다.
+    목록이 되면 게이트가 걸리지 않아 사람 승인이 조용히 생략된다.
     """
 
     from langgraph.checkpoint.memory import MemorySaver
-
-    from neos.workflow import graph as graph_module
 
     saver = MemorySaver()
 
     async def _fake_get_checkpointer():
         return saver
 
-    # `_ensure_graph_initialized(use_checkpointer=True)` 도 같은 이름을 부른다
-    # -- 모듈 레벨 이름 하나를 갈아 끼우면 정적·설계 양쪽이 다 덮인다
-    # (진짜 PostgreSQL 체크포인터는 이 테스트에 필요 없다).
     monkeypatch.setattr(
         "neos.workflow.graph.get_checkpointer", _fake_get_checkpointer
-    )
-
-    recorded: list[tuple[str, dict]] = []
-    monkeypatch.setattr(
-        graph_module,
-        "add_span_event",
-        lambda span, name, attrs=None: recorded.append((name, dict(attrs or {}))),
     )
 
     _, resolved = await _resolve_with(
         monkeypatch, _FakeDesigner(_GATED), use_checkpointer=True
     )
 
-    assert resolved.source == "static"
-
-    # 폴백은 조용하지 않다 -- **어느 노드 때문인지** 원장이 말한다. 사유 없는
-    # 폴백은 정적 실행과 구별되지 않는다.
-    reason = next(
-        attrs["reason"]
-        for name, attrs in recorded
-        if name == "graph_design_fallback"
-    )
-    assert reason == "approval_gate_in_designed_topology"
-    gated = next(
-        attrs["gated_nodes"]
-        for name, attrs in recorded
-        if name == "graph_design_fallback"
-    )
-    assert "execution_approval" in gated
+    assert resolved.source == "designed"
+    assert resolved.nodes == _GATED_CHAIN
+    # 게이트가 실제로 걸렸는가 -- 노드만 있고 인터럽트가 없으면 사람 승인이
+    # 조용히 생략된다.
+    assert "execution_approval" in resolved.compiled.interrupt_before_nodes
 
 
 @pytest.mark.asyncio
