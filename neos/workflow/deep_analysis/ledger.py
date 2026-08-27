@@ -1115,3 +1115,36 @@ class Ledger:
         if question is None:
             raise KeyError(question_id)
         return max(0, question.cap_tokens - question.spent_tokens)
+
+
+async def purge_run(db: AsyncSession, run_id: str) -> int:
+    """run 하나와 그에 딸린 모든 행을 지운다. 지워진 run 수(0 또는 1).
+
+    **왜 모듈 함수인가.** `Ledger` 는 run 하나에 바인딩된 단일 작성자이고
+    (설계 §1 P2), purge 는 그 run 의 *생애 밖에서* 일어나는 관리 작업이다.
+    인스턴스 메서드로 두면 "자기 자신을 지운 원장" 이라는 쓸 수 없는 객체가
+    남는다.
+
+    **왜 플래그가 필요한가.** `deep_analysis_events` 에는 UPDATE/DELETE 를
+    거부하는 트리거가 있고(036), `runs → events` FK 는 `ON DELETE CASCADE` 다.
+    겹치면 이벤트가 하나라도 있는 run 은 삭제할 수 없다 -- 마이그레이션 048 이
+    그 트리거를 "이 세션 변수가 켜져 있을 때만 통과" 로 바꿨다.
+
+    ⚠️ **`SET LOCAL` 이어야 한다.** 그냥 `SET` 이면 플래그가 커넥션에 남고,
+    그 커넥션이 풀로 돌아간 뒤 **다음 요청이 append-only 없이 돈다.** 커넥션
+    풀에서는 조용하고 재현이 어려운 종류의 사고다. `SET LOCAL` 은 트랜잭션과
+    함께 끝난다 -- 그래서 이 함수는 호출자의 트랜잭션 안에서 돌아야 하며,
+    커밋은 호출자가 한다.
+
+    ⚠️ **이 함수를 부르는 프로덕션 경로는 아직 없다.** 로드맵 §7 SCHEMA2 가
+    말한 것은 "구조적으로 불가능" 이었고, 이 함수가 그것을 "정책이 정하면
+    가능" 으로 바꾼다. 무엇을 언제 지울지는 별개 결정이다 -- §10.1 이
+    `deep_analysis_events` 를 "지우면 재현 불가" 로 못박았으므로 가볍게 부르지
+    말 것.
+    """
+    await db.execute(text("SET LOCAL deep_analysis.allow_purge = 'on'"))
+    result = await db.execute(
+        text("DELETE FROM deep_analysis_runs WHERE id = :run_id"),
+        {"run_id": run_id},
+    )
+    return result.rowcount or 0
