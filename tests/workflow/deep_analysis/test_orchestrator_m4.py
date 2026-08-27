@@ -134,6 +134,16 @@ class FlakyRenderer:
             raise OrphanCitationError("aaaaaaaa")
         return draft + "\n[1] http://x"
 
+    async def render_best_effort(self, draft):
+        """진짜 `CitationRenderer` 와 같은 계약: `(텍스트, orphan id 목록)`.
+
+        이 스텁이 계약을 따라야 하는 이유 -- 오케스트레이터가 캡 소진 시
+        이것을 부르고, 여기서 `getattr` 로 방어하면 스텁이 계약을 어겨도
+        테스트가 초록이 된다. 이 렌더러는 언제나 orphan 을 내는 쪽이므로
+        해소된 각주 없이 원본 draft 와 orphan 하나를 돌려준다.
+        """
+        return draft, ["aaaaaaaa"]
+
 
 class OkGrader:
     async def grade(self, report, root_id):
@@ -469,10 +479,17 @@ async def test_cap_exhaustion_ships_the_rendered_draft_not_the_raw_one():
 
 
 @pytest.mark.asyncio
-async def test_cap_exhaustion_falls_back_to_the_raw_draft_when_nothing_rendered():
+async def test_cap_exhaustion_falls_back_to_best_effort_when_nothing_rendered():
     """모든 시도가 orphan 이면 렌더된 텍스트가 존재하지 않는다.
 
-    그 경우에만 원본 draft 로 떨어진다 -- 빈손으로 나가는 것보다 낫다(§6.8).
+    그 경우 **원본 draft 를 그대로 내보내지 않고** `render_best_effort` 를
+    거친다 -- 유효한 인용이 섞여 있으면 그것만이라도 각주로 살린다(ORPHAN1).
+    표본 #17 의 run `9d9daa8b` 가 각주 0개·원본 마커 32개로 배달된 경로이며,
+    하나의 지어낸 id 가 나머지 인용을 전부 잃게 만들었다.
+
+    그리고 **부록이 사유를 말한다.** 남은 `[C:...]` 가 출처가 아니라 해소되지
+    못한 내부 주소라는 것을 사용자가 알 수 없으면, D10 이 `[미검증]` 치환을
+    기각하며 막으려던 것("실패를 리포트 안에 숨긴다")이 다른 모양으로 돌아온다.
     """
     ledger = FakeLedger()
     synth = FakeSynth()
@@ -484,6 +501,17 @@ async def test_cap_exhaustion_falls_back_to_the_raw_draft_when_nothing_rendered(
     assert f"DRAFT-{_ATTEMPTS}" in report
     assert "[1] http://x" not in report
     assert "## 부록: 미해결 사유" in report
+    # 사유가 구체적이다 -- "캡 소진" 만으로는 마커의 정체를 말하지 않는다.
+    assert "aaaaaaaa" in report
+    assert "출처가 아니다" in report
+    # 그리고 조용하지 않다: 원장이 배달된 orphan 을 기록한다.
+    degraded = [
+        payload
+        for kind, _qid, payload in ledger.events
+        if kind == "report_assembly_degraded"
+        and payload.get("reason") == "orphan_citations_delivered"
+    ]
+    assert degraded and degraded[0]["orphans"] == ["aaaaaaaa"]
 
 
 @pytest.mark.asyncio

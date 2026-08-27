@@ -1596,13 +1596,34 @@ class Orchestrator:
         # exact text the grader judged, so the `uncited_ratio` recorded in the
         # ledger now describes what was actually delivered.
         #
-        # `last` remains the fallback for the case where every attempt
-        # orphaned: there is no rendered text then, and a raw draft still
-        # beats exiting empty-handed.
+        # When every attempt orphaned there is no rendered text at all, and
+        # `last` (the raw draft) used to ship as-is. Sample #17's run
+        # `9d9daa8b` left by that path with **32 raw markers and zero
+        # footnotes** -- W3-a's failure, back again (ORPHAN1).
+        #
+        # `render_best_effort` narrows that: one invented claim id no longer
+        # costs the report every *other* citation it earned. The orphan
+        # markers stay visible on purpose -- D10 rejected substituting them
+        # away, because removing the raw marker hides the integrity failure
+        # instead of reporting it. So the appendix names them instead.
         chosen = _best_rejected_draft(rejected)
-        report = (chosen or last_rendered or last or "") + (
-            "\n\n## 부록: 미해결 사유\n조립/채점 재시도 캡 소진."
-        )
+        reason = "조립/채점 재시도 캡 소진."
+        best = chosen or last_rendered
+        if best is None and last:
+            best, orphans = await self.citation_renderer.render_best_effort(last)
+            if orphans:
+                await self.ledger.log(
+                    "report_assembly_degraded",
+                    root_id,
+                    {"reason": "orphan_citations_delivered", "orphans": orphans},
+                )
+                reason = (
+                    "조립/채점 재시도 캡 소진. 그리고 조립기가 존재하지 않는 "
+                    f"클레임 id 를 인용했다({', '.join(orphans)}) -- 본문에 남은 "
+                    "`[C:...]` 표기는 각주로 해소되지 못한 내부 주소이며 "
+                    "출처가 아니다."
+                )
+        report = (best or "") + f"\n\n## 부록: 미해결 사유\n{reason}"
         await self.ledger.complete_run()
         return report
 
