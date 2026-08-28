@@ -1,12 +1,24 @@
+import re
 from pathlib import Path
+
+
+def _creates_table(sql: str, name: str) -> bool:
+    """045 가 그 테이블을 만드는가.
+
+    `IF NOT EXISTS` 를 선택적으로 받는 이유: 이 단언의 의도는 "045 가 이 세
+    테이블을 만든다" 이지 정확한 철자가 아니다. 2026-08-28 에 재적용 멱등성을
+    위해 `IF NOT EXISTS` 를 넣자(SCHEMA3) 문자열 비교가 깨졌는데, **바뀐 것은
+    계약이 아니라 서식**이었다.
+    """
+    return re.search(rf"CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?{re.escape(name)}\b", sql) is not None
 
 
 def test_migration_045_has_single_current_generation_and_cleanup_ledger() -> None:
     sql = Path("db/migrations/045_add_coding_managed_sandboxes.sql").read_text()
 
-    assert "CREATE TABLE coding_sandbox_admissions" in sql
-    assert "CREATE TABLE coding_managed_sandboxes" in sql
-    assert "CREATE TABLE coding_sandbox_cleanup_attempts" in sql
+    assert _creates_table(sql, "coding_sandbox_admissions")
+    assert _creates_table(sql, "coding_managed_sandboxes")
+    assert _creates_table(sql, "coding_sandbox_cleanup_attempts")
     assert "idx_coding_managed_sandboxes_current_task" in sql
     assert "WHERE cleaned_at IS NULL" in sql
     assert "CHECK (state = 'cleaned' OR cleaned_at IS NULL)" in sql

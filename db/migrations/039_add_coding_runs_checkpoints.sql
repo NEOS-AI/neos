@@ -24,10 +24,20 @@ ALTER TABLE coding_events
     ADD COLUMN IF NOT EXISTS checkpoint_id VARCHAR(64)
     REFERENCES coding_checkpoints(checkpoint_id);
 
-ALTER TABLE coding_runs
-    ADD CONSTRAINT fk_coding_runs_resume_checkpoint
-    FOREIGN KEY (resume_from_checkpoint_id)
-    REFERENCES coding_checkpoints(checkpoint_id);
+-- 제약에는 `IF NOT EXISTS` 가 없으므로 카탈로그를 직접 본다 (SCHEMA3).
+-- 가드가 없으면 재적용에서 죽고 **이 파일의 나머지가 미적용으로 남는다.**
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_coding_runs_resume_checkpoint'
+    ) THEN
+        ALTER TABLE coding_runs
+            ADD CONSTRAINT fk_coding_runs_resume_checkpoint
+            FOREIGN KEY (resume_from_checkpoint_id)
+            REFERENCES coding_checkpoints(checkpoint_id);
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS coding_phases (
     phase_id VARCHAR(128) PRIMARY KEY,

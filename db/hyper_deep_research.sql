@@ -122,24 +122,24 @@ CREATE TABLE IF NOT EXISTS hyper_research_criticism_feedback (
 
 
 -- 인덱스 생성
-CREATE INDEX idx_hyper_reports_user_id ON hyper_research_reports(user_id);
-CREATE INDEX idx_hyper_reports_session_id ON hyper_research_reports(session_id);
-CREATE INDEX idx_hyper_reports_status ON hyper_research_reports(research_status);
-CREATE INDEX idx_hyper_reports_created_at ON hyper_research_reports(created_at);
+CREATE INDEX IF NOT EXISTS idx_hyper_reports_user_id ON hyper_research_reports(user_id);
+CREATE INDEX IF NOT EXISTS idx_hyper_reports_session_id ON hyper_research_reports(session_id);
+CREATE INDEX IF NOT EXISTS idx_hyper_reports_status ON hyper_research_reports(research_status);
+CREATE INDEX IF NOT EXISTS idx_hyper_reports_created_at ON hyper_research_reports(created_at);
 
-CREATE INDEX idx_hyper_sections_report_id ON hyper_research_sections(report_id);
-CREATE INDEX idx_hyper_sections_order ON hyper_research_sections(report_id, section_order);
-CREATE INDEX idx_hyper_sections_type ON hyper_research_sections(section_type);
-CREATE INDEX idx_hyper_sections_status ON hyper_research_sections(section_status);
-CREATE INDEX idx_hyper_sections_parent ON hyper_research_sections(parent_section_id);
+CREATE INDEX IF NOT EXISTS idx_hyper_sections_report_id ON hyper_research_sections(report_id);
+CREATE INDEX IF NOT EXISTS idx_hyper_sections_order ON hyper_research_sections(report_id, section_order);
+CREATE INDEX IF NOT EXISTS idx_hyper_sections_type ON hyper_research_sections(section_type);
+CREATE INDEX IF NOT EXISTS idx_hyper_sections_status ON hyper_research_sections(section_status);
+CREATE INDEX IF NOT EXISTS idx_hyper_sections_parent ON hyper_research_sections(parent_section_id);
 
-CREATE INDEX idx_hyper_data_collection_report_id ON hyper_research_data_collection(report_id);
-CREATE INDEX idx_hyper_data_collection_section_id ON hyper_research_data_collection(section_id);
-CREATE INDEX idx_hyper_data_collection_phase ON hyper_research_data_collection(search_phase);
+CREATE INDEX IF NOT EXISTS idx_hyper_data_collection_report_id ON hyper_research_data_collection(report_id);
+CREATE INDEX IF NOT EXISTS idx_hyper_data_collection_section_id ON hyper_research_data_collection(section_id);
+CREATE INDEX IF NOT EXISTS idx_hyper_data_collection_phase ON hyper_research_data_collection(search_phase);
 
 -- add index for deleted_at and research_status for efficient soft delete queries
-CREATE INDEX idx_hyper_reports_deleted_at ON hyper_research_reports(deleted_at);
-CREATE INDEX idx_hyper_reports_research_status ON hyper_research_reports(research_status);
+CREATE INDEX IF NOT EXISTS idx_hyper_reports_deleted_at ON hyper_research_reports(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_hyper_reports_research_status ON hyper_research_reports(research_status);
 
 
 -- 트리거: 보고서 업데이트 시간 자동 갱신
@@ -151,6 +151,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_update_hyper_report_updated_at ON hyper_research_reports;
 CREATE TRIGGER trigger_update_hyper_report_updated_at
     BEFORE UPDATE ON hyper_research_reports
     FOR EACH ROW
@@ -173,6 +174,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_update_hyper_report_section_count ON hyper_research_sections;
 CREATE TRIGGER trigger_update_hyper_report_section_count
     AFTER INSERT OR DELETE ON hyper_research_sections
     FOR EACH ROW

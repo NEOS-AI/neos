@@ -48,6 +48,7 @@ BEGIN
 END;
 $$ LANGUAGE 'plpgsql';
 
+DROP TRIGGER IF EXISTS update_scheduled_tasks_updated_at ON scheduled_tasks;
 CREATE TRIGGER update_scheduled_tasks_updated_at
     BEFORE UPDATE ON scheduled_tasks
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

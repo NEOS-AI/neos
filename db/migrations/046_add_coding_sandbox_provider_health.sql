@@ -15,7 +15,7 @@ BEGIN;
 --   2. `drained` 는 서킷이 쓰는 컬럼이 **아니다.** 같은 컬럼에 합치면 정상
 --      프로브 한 번이 운영자의 드레인을 지운다. 읽는 쪽에서 합친다:
 --      "드레인됐거나 서킷이 UNAVAILABLE 이면 신규 admission 을 막는다".
-CREATE TABLE coding_sandbox_provider_health (
+CREATE TABLE IF NOT EXISTS coding_sandbox_provider_health (
     provider VARCHAR(64) NOT NULL,
     region VARCHAR(64) NOT NULL,
     circuit_state VARCHAR(16) NOT NULL DEFAULT 'healthy'

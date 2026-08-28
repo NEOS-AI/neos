@@ -226,38 +226,38 @@ CREATE TABLE IF NOT EXISTS web_search_metrics (
 -- ============================================================================
 
 -- 검색 엔진 인덱스
-CREATE INDEX idx_search_engines_name ON search_engines(engine_name);
-CREATE INDEX idx_search_engines_type ON search_engines(engine_type);
-CREATE INDEX idx_search_engines_active ON search_engines(is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_search_engines_name ON search_engines(engine_name);
+CREATE INDEX IF NOT EXISTS idx_search_engines_type ON search_engines(engine_type);
+CREATE INDEX IF NOT EXISTS idx_search_engines_active ON search_engines(is_active) WHERE is_active = TRUE;
 
 -- 검색 쿼리 인덱스
-CREATE INDEX idx_web_search_queries_executed_at ON web_search_queries(executed_at DESC);
-CREATE INDEX idx_web_search_queries_engine_id ON web_search_queries(engine_id);
-CREATE INDEX idx_web_search_queries_user_session ON web_search_queries(user_id, session_id);
-CREATE INDEX idx_web_search_queries_status ON web_search_queries(status);
-CREATE INDEX idx_web_search_queries_hash ON web_search_queries(query_hash);
-CREATE INDEX idx_web_search_queries_parent ON web_search_queries(parent_query_id);
+CREATE INDEX IF NOT EXISTS idx_web_search_queries_executed_at ON web_search_queries(executed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_web_search_queries_engine_id ON web_search_queries(engine_id);
+CREATE INDEX IF NOT EXISTS idx_web_search_queries_user_session ON web_search_queries(user_id, session_id);
+CREATE INDEX IF NOT EXISTS idx_web_search_queries_status ON web_search_queries(status);
+CREATE INDEX IF NOT EXISTS idx_web_search_queries_hash ON web_search_queries(query_hash);
+CREATE INDEX IF NOT EXISTS idx_web_search_queries_parent ON web_search_queries(parent_query_id);
 
 -- 검색 결과 인덱스
-CREATE INDEX idx_web_search_results_query_id ON web_search_results(query_id);
-CREATE INDEX idx_web_search_results_url_hash ON web_search_results(url_hash);
-CREATE INDEX idx_web_search_results_domain ON web_search_results(domain);
-CREATE INDEX idx_web_search_results_captured_at ON web_search_results(captured_at DESC);
-CREATE INDEX idx_web_search_results_latest ON web_search_results(result_url, is_latest_version) WHERE is_latest_version = TRUE;
-CREATE INDEX idx_web_search_results_content_type ON web_search_results(content_type);
+CREATE INDEX IF NOT EXISTS idx_web_search_results_query_id ON web_search_results(query_id);
+CREATE INDEX IF NOT EXISTS idx_web_search_results_url_hash ON web_search_results(url_hash);
+CREATE INDEX IF NOT EXISTS idx_web_search_results_domain ON web_search_results(domain);
+CREATE INDEX IF NOT EXISTS idx_web_search_results_captured_at ON web_search_results(captured_at DESC);
+CREATE INDEX IF NOT EXISTS idx_web_search_results_latest ON web_search_results(result_url, is_latest_version) WHERE is_latest_version = TRUE;
+CREATE INDEX IF NOT EXISTS idx_web_search_results_content_type ON web_search_results(content_type);
 
 -- 검색 결과 변경 이력 인덱스
-CREATE INDEX idx_web_search_result_history_result_id ON web_search_result_history(result_id);
-CREATE INDEX idx_web_search_result_history_changed_at ON web_search_result_history(changed_at DESC);
-CREATE INDEX idx_web_search_result_history_type ON web_search_result_history(change_type);
+CREATE INDEX IF NOT EXISTS idx_web_search_result_history_result_id ON web_search_result_history(result_id);
+CREATE INDEX IF NOT EXISTS idx_web_search_result_history_changed_at ON web_search_result_history(changed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_web_search_result_history_type ON web_search_result_history(change_type);
 
 -- 검색 결과 관계 인덱스
-CREATE INDEX idx_web_search_result_relations_source ON web_search_result_relations(source_result_id);
-CREATE INDEX idx_web_search_result_relations_target ON web_search_result_relations(target_result_id);
+CREATE INDEX IF NOT EXISTS idx_web_search_result_relations_source ON web_search_result_relations(source_result_id);
+CREATE INDEX IF NOT EXISTS idx_web_search_result_relations_target ON web_search_result_relations(target_result_id);
 
 -- 검색 메트릭 인덱스
-CREATE INDEX idx_web_search_metrics_query_id ON web_search_metrics(query_id);
-CREATE INDEX idx_web_search_metrics_recorded_at ON web_search_metrics(recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_web_search_metrics_query_id ON web_search_metrics(query_id);
+CREATE INDEX IF NOT EXISTS idx_web_search_metrics_recorded_at ON web_search_metrics(recorded_at DESC);
 
 -- ============================================================================
 -- ParadeDB BM25 전문 검색 인덱스 (검색 쿼리 텍스트)
@@ -304,6 +304,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_update_search_engine_stats ON web_search_queries;
 CREATE TRIGGER trigger_update_search_engine_stats
     AFTER INSERT ON web_search_queries
     FOR EACH ROW
@@ -318,6 +319,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_update_search_engine_updated_at ON search_engines;
 CREATE TRIGGER trigger_update_search_engine_updated_at
     BEFORE UPDATE ON search_engines
     FOR EACH ROW
@@ -345,6 +347,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_manage_search_result_versions ON web_search_results;
 CREATE TRIGGER trigger_manage_search_result_versions
     BEFORE INSERT ON web_search_results
     FOR EACH ROW
@@ -398,6 +401,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_track_search_result_changes ON web_search_results;
 CREATE TRIGGER trigger_track_search_result_changes
     AFTER UPDATE ON web_search_results
     FOR EACH ROW

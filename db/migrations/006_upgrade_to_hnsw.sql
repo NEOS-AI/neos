@@ -32,7 +32,7 @@
 DO $$
 DECLARE
     target_definition CONSTANT TEXT :=
-        'CREATE INDEX idx_query_cache_vector ON query_cache '
+        'CREATE INDEX IF NOT EXISTS idx_query_cache_vector ON query_cache '
         'USING hnsw ((query_vector::halfvec(3072)) halfvec_cosine_ops) '
         'WITH (m = 16, ef_construction = 64)';
     existing_is_hnsw BOOLEAN;
