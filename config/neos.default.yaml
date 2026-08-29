@@ -458,6 +458,32 @@ hyper_deep_agent:
 #     브로커가 없으면 job 제출이 그대로 실패한다.
 deep_analysis:
   enabled: true
+  models:
+    # E3 해소 (2026-08-29). scout·dig·synth 는 `null` = 역할 기본값이고,
+    # judge 만 명시한다.
+    #
+    # **왜 명시가 필요한가.** judge 와 scout 이 둘 다 `null` 이면 둘 다
+    # `everyday` 로 해석돼 `claude-sonnet-5` 하나로 수렴한다 -- SCOUT 워커가
+    # 만든 클레임을 **같은 모델**이 심사하는 자기 승인 편향 구조이고,
+    # 설계 §6.5 가 명시적으로 금지한 것이다(로드맵 §2.3 의 타협 불가 항목).
+    #
+    # **judge 는 scout·dig·synth 셋 모두와 달라야 한다.** scout 만 보고
+    # `claude-opus-5` 를 넣었다가 되돌렸다 -- dig·synth 가 이미 powerful 역할로
+    # opus-5 라, 그러면 위반의 위치가 scout 에서 dig 로 옮겨갈 뿐이다.
+    # (`test_manifest_records_the_configuration_that_produced_the_number` 가
+    # 그것을 잡았다.)
+    #
+    # **왜 크로스 프로바이더인가.** Anthropic 카탈로그에서 셋 모두와 다르면서
+    # 워커보다 약하지 않은 후보는 구형 opus 하나뿐이고 그것은 은퇴 예정이다.
+    # 그리고 같은 가족은 실패 모드를 공유하므로 모델명만 다른 분리는 애초에
+    # 약하다 -- 자기 승인 편향을 실제로 끊는 것은 다른 가족이다.
+    #
+    # 대가를 정확히: deep_analysis 가 OPENAI_API_KEY 에 의존하게 되고 장애 면이
+    # 둘로 늘어난다. 키가 없으면 판정이 실패하지 조용히 통과하지 않는다.
+    #
+    # ⚠️ **이것은 표본 비교 경계다.** 판정자 모델이 바뀌면 #1~#21 과 채점
+    # 결과를 직접 비교할 수 없다. 다음 사전 등록이 그 사실을 적어야 한다.
+    judge: gpt-5.6-sol
 
 ray:
   enabled: false

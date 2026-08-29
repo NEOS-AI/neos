@@ -13,8 +13,14 @@ from __future__ import annotations
 from neos.config.model_routing import ModelResolution, resolve_model
 from neos.config.settings import settings
 
-# 프로바이더는 `"anthropic"` 고정이다 -- 이전 전 9개 호출 지점 전부가 그랬다.
-# 이것을 설정으로 여는 것은 로드맵 §4.2 라우팅 불변식에 닿으므로 H1 범위 밖이다.
+# 역할 기본값의 프로바이더. 이전 전 9개 호출 지점 전부가 anthropic 이었다.
+#
+# ⚠️ **설정으로 여는 것이 아니다.** 이 상수는 여전히 *역할 기본값*의
+# 프로바이더이고, 바뀌는 것은 기능 오버라이드가 명시적으로 다른 프로바이더의
+# 모델을 지목했을 때 **보고되는 값**뿐이다(아래 `resolve_harness_model`).
+# 로드맵 §4.2 가 금지한 것은 크로스 프로바이더 **폴백**이지 운영자의 명시
+# 선택이 아니며, "user → conversation → feature override → role default"
+# 우선순위는 그대로다.
 _PROVIDER = "anthropic"
 
 HARNESS_ROLES: dict[str, str] = {
@@ -36,10 +42,36 @@ def resolve_harness_model(name: str) -> ModelResolution:
     override = getattr(settings.config.deep_analysis.models, name)
     return resolve_model(
         config=settings.config.model_routing,
-        provider=_PROVIDER,
+        provider=_provider_for(override),
         role=role,
         feature_override=override,
     )
+
+
+def _provider_for(override: str | None) -> str:
+    """오버라이드가 지목한 모델의 **실제** 프로바이더.
+
+    `resolve_model` 은 오버라이드가 이겨도 넘겨받은 `provider` 를 그대로 되돌려
+    준다. 그래서 `judge: gpt-5.6-sol` 같은 크로스 프로바이더 오버라이드에
+    `_PROVIDER` 를 그냥 넘기면 `ModelResolution(model="gpt-5.6-sol",
+    provider="anthropic")` 이 나온다 -- **이 모듈 독스트링이 경고한 바로 그
+    거짓말**이고("A role guessed here would put a lie in the one artifact that
+    cannot be regenerated"), H1 매니페스트가 그것을 재생성 불가능한 아티팩트에
+    싣는다.
+
+    실제 호출 경로는 이미 옳다 -- `llm.py` 의 `_is_anthropic_model` 이
+    카탈로그로 클라이언트와 페이로드 형태를 고른다. 틀린 것은 **보고**뿐이었고,
+    보고가 틀리면 판정할 때 무엇이 돌았는지 알 수 없다.
+
+    카탈로그가 모르는 모델이면 `_PROVIDER` 로 둔다 -- 카탈로그는 allowlist 가
+    아니므로(§ Model Catalog) 새 모델이 등재 전에도 돌아야 하고, 그 경우
+    `_is_anthropic_model` 도 같은 방향으로 폴백한다.
+    """
+    if not override:
+        return _PROVIDER
+    from neos.config.model_config import provider_for_model
+
+    return provider_for_model(override) or _PROVIDER
 
 
 def resolve_all() -> dict[str, ModelResolution]:

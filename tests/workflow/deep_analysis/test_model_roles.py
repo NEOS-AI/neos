@@ -108,3 +108,49 @@ def test_no_direct_resolve_model_call_in_harness():
             offenders.append(str(path.relative_to(_SCRIPTS_DIR.parent)))
 
     assert offenders == []
+
+
+def test_the_judge_is_not_the_model_it_judges():
+    """E3: `judge != worker` (설계 §6.5 · 로드맵 §2.3 타협 불가).
+
+    scout 워커가 만든 클레임을 **같은 모델**이 심사하면 자기 승인 편향이
+    구조적으로 들어온다. `scout` 과 `judge` 가 둘 다 `None` 이면 둘 다
+    `everyday` 로 해석돼 한 모델로 수렴하고, 그것이 2026-08-29 까지의 상태였다
+    (로드맵 §6 ①).
+
+    **역할이 아니라 해석된 모델을 본다.** `HARNESS_ROLES` 는 여전히
+    `judge=everyday` 이고 그것은 바뀌지 않았다 -- 분리는 기능 오버라이드
+    (`deep_analysis.models.judge`)로 한다. 역할만 단언하면 오버라이드를
+    지워도 통과한다.
+    """
+    judge = resolve_harness_model("judge")
+    workers = {
+        name: resolve_harness_model(name).model
+        for name in ("scout", "dig", "synth")
+    }
+
+    # **워커 전부와 달라야 한다.** scout 만 보면 부족하다 -- 2026-08-29 에
+    # judge 를 `claude-opus-5` 로 넣었다가 되돌렸는데, dig·synth 가 이미
+    # powerful 역할로 opus-5 라 위반의 위치가 scout 에서 dig 로 옮겨갔을 뿐이다.
+    # dig 도 클레임을 만드는 워커다.
+    collisions = {n: m for n, m in workers.items() if m == judge.model}
+    assert not collisions, (
+        f"judge({judge.model}) 가 워커와 같은 모델이다: {collisions} -- "
+        "자기 승인 편향 구조다"
+    )
+
+
+def test_the_judge_override_is_a_real_catalog_model():
+    """오타로 분리하면 안 된다.
+
+    존재하지 않는 모델명을 넣어도 `judge != scout` 은 참이 되므로 위 테스트만
+    으로는 오타를 잡지 못한다. 그리고 카탈로그 밖 모델은 **가격이 없어 비용이
+    0 으로 집계**된다 -- §6 ③ 이 여섯 모델을 은퇴시킨 바로 그 이유다.
+    """
+    from neos.config.model_config import pricing_for
+
+    judge = resolve_harness_model("judge")
+
+    assert pricing_for(judge.provider, judge.model) is not None, (
+        f"judge 모델 {judge.model} 이 카탈로그에 없다"
+    )

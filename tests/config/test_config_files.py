@@ -45,7 +45,18 @@ def test_committed_config_profiles_exist_and_validate():
         assert config.deep_analysis.models.scout is None
         assert config.deep_analysis.models.dig is None
         assert config.deep_analysis.models.synth is None
-        assert config.deep_analysis.models.judge is None
+        # judge 만 예외다 (E3, 2026-08-29). `None` 이면 `everyday` 로 해석돼
+        # scout 과 같은 모델이 되고, 그것이 설계 §6.5 가 금지한 자기 승인
+        # 편향이다. 배포 기본값은 `neos.default.yaml` 이 정하고 나머지
+        # 프로파일은 **건드리지 않아야** 한다 -- 로더가 default 를 계층으로
+        # 병합하므로(loader.py:388) 그래야 모든 환경이 같은 판정자를 쓴다.
+        if path.name == "neos.default.yaml":
+            assert config.deep_analysis.models.judge == "gpt-5.6-sol"
+        else:
+            assert config.deep_analysis.models.judge is None, (
+                f"{path.name} 이 judge 를 덮어썼다 -- 분리가 환경마다 "
+                "달라지면 표본 판정이 어느 판정자의 것인지 알 수 없다"
+            )
 
 
 def test_committed_config_profiles_do_not_contain_secrets():
