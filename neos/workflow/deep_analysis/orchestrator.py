@@ -649,14 +649,29 @@ class Orchestrator:
                     "agentic_label": agentic_verdict.label,
                 },
             )
-        except TokenBudgetExhausted:
+        except TokenBudgetExhausted as exc:
+            # C3-m1: `reserve()` refuses *before* dispatch, so the attempt
+            # that raised spent nothing -- but `call_json` stamps `exc.
+            # tokens_spent` with what earlier attempts in the *same* judge
+            # call already burned (llm.py's `_charge`). Those tokens were
+            # really sent to the provider and are already deducted from the
+            # global `TokenBudget`; the only thing missing is attributing
+            # them to this question. Dropping them here (as the old code
+            # did, via the deterministic `verdict` whose `tokens_spent` is
+            # always 0) would silently write off real spend, which is
+            # exactly the bug this task closes -- so they are carried
+            # forward instead. `judge_tokens` mirrors `tokens_spent` in the
+            # diagnostics, same as every other branch in
+            # `AgenticGrader._diagnostics`, so the two never diverge.
             return replace(
                 verdict,
                 diagnostics={
                     **verdict.diagnostics,
                     "agentic": "exhausted",
                     "agentic_label": None,
+                    "judge_tokens": exc.tokens_spent,
                 },
+                tokens_spent=exc.tokens_spent,
             )
 
     async def _regrade_pending(self, question_id, value_est):
@@ -1293,13 +1308,31 @@ class Orchestrator:
             # verdicts는 claim 텍스트로 키잉한다. 이는 Ledger의 hash 기반
             # 병합(§6.1.3, D3)과 정합적이다 — 동일 텍스트 클레임은 커밋 시
             # 하나의 claim으로 병합되므로 텍스트당 verdict 하나가 맞다.
+            #
+            # That same keying is lossy for *token accounting* (C3-m1
+            # Finding 2): when `result.claims` holds the same text twice,
+            # `_grade()` still runs -- and the agentic judge can still
+            # dispatch -- both times, but the second write into `verdicts`
+            # overwrites the first. Deriving a token total from
+            # `verdicts.values()` after the loop would silently drop the
+            # first (real, already-billed-against-the-global-budget) judge
+            # dispatch. So the total is accumulated per `_grade()` call
+            # here, never read back out of the dict. This does not change
+            # what gets graded or how many times -- only how the spend is
+            # summed; deduping the loop itself is a separate decision with
+            # its own measurement implications (it would change which
+            # claims get judged), left untouched here.
             verdicts = {}
+            judge_tokens_spent = 0
             for claim in result.claims:
-                verdicts[claim.text] = await self._grade(claim, value_est)
+                verdict = await self._grade(claim, value_est)
+                judge_tokens_spent += verdict.tokens_spent
+                verdicts[claim.text] = verdict
             await self.ledger.commit_pass(
                 result.question_id,
                 result,
                 verdicts,
+                judge_tokens_spent=judge_tokens_spent,
             )
             await self._regrade_pending(result.question_id, value_est)
             # D15: assess progress and trip the stall valve if this

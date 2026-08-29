@@ -54,3 +54,75 @@ async def test_remaining_budget():
         await led.commit_pass(qid, WorkerResult(question_id=qid, status="partial", tokens_spent=300), {})
         assert await led.remaining_budget(qid) == 700
         await s.rollback()
+
+
+# --- C3-m1: the judge's tokens now bill against the question, not just the
+# worker's, via `commit_pass`'s `judge_tokens_spent` total. This is a
+# ledger-level guarantee only: `commit_pass` adds the number it is given
+# exactly once, regardless of how many claims (or repeated claim texts)
+# `result` carries. It does NOT prove the *caller* computed that number
+# correctly when a claim text repeats within a pass -- that is a dispatch-
+# loop concern, covered by `test_duplicate_claim_text_does_not_drop_the_
+# first_judges_tokens` in test_orchestrator_unit.py, since it requires
+# driving `_grade()` twice for the same text and watching the `verdicts`
+# dict overwrite, which is above the Ledger's abstraction level.
+
+
+@pytest.mark.asyncio
+async def test_commit_pass_bills_worker_and_judge_tokens():
+    async with await db_manager.get_session() as s:
+        run_id = await _run(s)
+        led = Ledger(s, run_id)
+        qid = await led.open_question("q?", None, 1.0, 5000, 0)
+        await led._transition(qid, "investigating")
+        blob = ProposedBlob(content_hash="hh", source_url="http://x", http_status=200, raw_text="body fact text")
+        ev = ProposedEvidence(source_url="http://x", excerpt="body fact text", raw_ref="hh")
+        result = WorkerResult(
+            question_id=qid,
+            status="completed",
+            blobs=[blob],
+            claims=[ProposedClaim(text="a fact", confidence=0.55, evidence=[ev])],
+            tokens_spent=100,  # worker's own search/entailment spend
+        )
+        verdict = Verdict(ok=True, tokens_spent=42, diagnostics={"judge_tokens": 42})
+        await led.commit_pass(qid, result, {"a fact": verdict}, judge_tokens_spent=42)
+        q = await led.get_question(qid)
+        assert q.spent_tokens == 142  # 100 (worker) + 42 (judge), not either alone
+        await s.rollback()
+
+
+@pytest.mark.asyncio
+async def test_commit_pass_bills_the_passed_total_exactly_once():
+    async with await db_manager.get_session() as s:
+        run_id = await _run(s)
+        led = Ledger(s, run_id)
+        qid = await led.open_question("q?", None, 1.0, 5000, 0)
+        await led._transition(qid, "investigating")
+        blob = ProposedBlob(content_hash="hh", source_url="http://x", http_status=200, raw_text="body fact text")
+        ev = ProposedEvidence(source_url="http://x", excerpt="body fact text", raw_ref="hh")
+        # Same text twice in one pass -- _upsert_claim merges both into the
+        # same DAClaim by hash, and `verdicts` (keyed by text) only ever has
+        # one entry for it. `commit_pass` must not derive a token total from
+        # that dict (it would only see the surviving Verdict once anyway) --
+        # it must bill exactly the `judge_tokens_spent` it was given, once,
+        # not once per claim in `result.claims`.
+        claims = [
+            ProposedClaim(text="a fact", confidence=0.55, evidence=[ev])
+            for _ in range(2)
+        ]
+        result = WorkerResult(
+            question_id=qid,
+            status="completed",
+            blobs=[blob],
+            claims=claims,
+            tokens_spent=100,
+        )
+        verdict = Verdict(ok=True, tokens_spent=42, diagnostics={"judge_tokens": 42})
+        # The real, accumulated total across both (hypothetical) `_grade()`
+        # dispatches -- what the orchestrator's loop would have computed.
+        await led.commit_pass(
+            qid, result, {"a fact": verdict}, judge_tokens_spent=64
+        )
+        q = await led.get_question(qid)
+        assert q.spent_tokens == 164  # 100 + 64, not 100 + 42*2 and not 100 + 42
+        await s.rollback()

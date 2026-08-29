@@ -70,6 +70,9 @@ class AgenticGrader:
         통과시키는 경로를 닫는다. 대신 E_UNSUPPORTED로 반려해 재조사시키고,
         재시도 캡 소진 시 unverified→보고서 "한계" 섹션에 남긴다. Ledger가
         이 verdict을 claim_rejected/claim_unverified 이벤트로 기록한다.
+
+        실패한 판정도 토큰을 태웠다 -- `tokens_spent` 는 `_diagnostics()` 의
+        `judge_tokens` 와 같은 `tokens` 값을 쓴다 (C3-m1).
         """
         if mandatory:
             return Verdict(
@@ -80,21 +83,26 @@ class AgenticGrader:
                 diagnostics=self._diagnostics(
                     "attempted_rejected", None, tokens
                 ),
+                tokens_spent=tokens,
             )
         return Verdict(
             ok=True,
             label=None,
             detail=note,
             diagnostics=self._diagnostics("attempted_passed", None, tokens),
+            tokens_spent=tokens,
         )
 
     async def grade(self, claim: ProposedClaim, value_est: float) -> Verdict:
         mandatory = self.is_mandatory(value_est, claim.confidence)
         if not mandatory and self.sampler() >= self.sample_rate:
+            # 디스패치가 없었으므로 tokens_spent=0 -- judge_tokens 와 같은 값
+            # (둘 다 리터럴 0).
             return Verdict(
                 ok=True,
                 label=None,
                 diagnostics=self._diagnostics("skipped", None, 0),
+                tokens_spent=0,
             )
         evidence_block = "\n".join(
             f"<evidence>{e.excerpt}</evidence>" for e in claim.evidence
@@ -124,6 +132,7 @@ class AgenticGrader:
                 diagnostics=self._diagnostics(
                     "attempted_rejected", None, exc.tokens_spent
                 ),
+                tokens_spent=exc.tokens_spent,
             )
         except JSONParseError as exc:
             return self._judge_failed(
@@ -140,4 +149,7 @@ class AgenticGrader:
             verdict.label,
             tokens,
         )
+        # 성공한 판정도 토큰을 태웠다 -- diagnostics 의 judge_tokens 와 반드시
+        # 같은 값이어야 원장이 자기모순에 빠지지 않는다.
+        verdict.tokens_spent = tokens
         return verdict

@@ -109,10 +109,10 @@ class FakeLedger:
         for blob in blobs:
             self.blobs[blob.content_hash] = blob
 
-    async def commit_pass(self, question_id, result, verdicts):
+    async def commit_pass(self, question_id, result, verdicts, judge_tokens_spent=0):
         item = next(item for item in self.items if item.id == question_id)
         item.status = "resolved"
-        item.spent_tokens += result.tokens_spent
+        item.spent_tokens += result.tokens_spent + judge_tokens_spent
 
     async def log(self, kind, qid, payload):
         self.events.append((kind, qid, payload))
@@ -200,6 +200,100 @@ async def test_orchestrator_stages_blobs_before_grading():
     assert ledger.items[0].status == "split"
     assert ledger.items[1].status == "resolved"
     assert ledger.completed
+
+
+class RecordingLedger(FakeLedger):
+    """FakeLedger that also records exactly what each `commit_pass` call
+    received, so a test can inspect the (possibly lossy) `verdicts` dict
+    separately from the accumulated `judge_tokens_spent` total."""
+
+    def __init__(self):
+        super().__init__()
+        self.commit_calls = []
+
+    async def commit_pass(self, question_id, result, verdicts, judge_tokens_spent=0):
+        self.commit_calls.append((question_id, dict(verdicts), judge_tokens_spent))
+        await super().commit_pass(question_id, result, verdicts, judge_tokens_spent)
+
+
+class DuplicateTextWorker:
+    """Returns two claims with identical text in one pass -- the case
+    §6.1.3/D3's hash-based merge in `_upsert_claim` anticipates, and the
+    case C3-m1 Finding 2 flagged as lossy for token accounting."""
+
+    async def investigate(self, brief, effort, question_id, repairs=None, question_text=""):
+        return WorkerResult(
+            question_id=question_id,
+            status="completed",
+            claims=[
+                ProposedClaim("dup fact", 0.6),
+                ProposedClaim("dup fact", 0.6),
+            ],
+            tokens_spent=0,
+            self_assessment=0.8,
+        )
+
+
+class PassGrader:
+    async def grade(self, claim):
+        return Verdict(ok=True)
+
+
+class CountingAgenticGrader:
+    """Dispatches (and spends real tokens) on every call -- mirrors
+    `AgenticGrader` continuing to grade both duplicate-text claims rather
+    than deduping."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def grade(self, claim, value_est):
+        self.calls += 1
+        return Verdict(ok=True, tokens_spent=10 * self.calls)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_claim_text_does_not_drop_the_first_judges_tokens():
+    """C3-m1 Finding 2: `verdicts` is keyed by claim text, so a duplicate
+    text in one pass overwrites the first `_grade()` call's Verdict with
+    the second's before `commit_pass` ever sees the dict. Both calls could
+    still dispatch the agentic judge and both are real, billed spend --
+    the orchestrator must accumulate the total as it grades, not derive it
+    from the (lossy) dict afterwards.
+    """
+    ledger = RecordingLedger()
+    agentic = CountingAgenticGrader()
+
+    async def no_decomposition(_root):
+        return []
+
+    orchestrator = Orchestrator(
+        object(),
+        "run00001",
+        worker_factory=DuplicateTextWorker,
+        grader=PassGrader(),
+        agentic_grader=agentic,
+        ledger=ledger,
+        decompose_fn=no_decomposition,
+        synthesizer=FakeSynthesizer(),
+        citation_renderer=FakeCitationRenderer(),
+        global_token_cap=1000,
+    )
+
+    await orchestrator.run("root")
+
+    # Both duplicate claims were graded -- no dedup was added to the loop.
+    assert agentic.calls == 2
+    assert len(ledger.commit_calls) == 1
+    _, verdicts, judge_tokens_spent = ledger.commit_calls[0]
+    # The dict itself is exactly as lossy as Finding 2 described: one entry,
+    # holding only the second call's Verdict (10*2=20).
+    assert len(verdicts) == 1
+    assert verdicts["dup fact"].tokens_spent == 20
+    # But the billed total is both dispatches (10 + 20 = 30), not just what
+    # survived the dict overwrite (20) and not zero (dropped entirely).
+    assert judge_tokens_spent == 30
+    assert ledger.items[0].spent_tokens == 30
 
 
 @pytest.mark.asyncio

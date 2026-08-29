@@ -673,6 +673,15 @@ class Ledger:
         Reuses `_apply_verdict` so retry-cap + label handling stay identical
         to the fresh-claim path in `_record_verdict`. No new evidence is
         created here -- only existing evidence rows are updated.
+
+        C3-m1 Finding 3: this path also dispatches the agentic judge (a
+        weakened/negated claim pushed back to `pending` gets a fresh
+        `_grade()` in `Orchestrator._regrade_pending`, which runs *after*
+        `commit_pass` and so is not part of that call's `judge_tokens_spent`
+        total). Billing goes here, not in `_apply_verdict`, because
+        `_apply_verdict` is shared with `_record_verdict` -- the fresh-claim
+        path already billed through `commit_pass`'s aggregate, and adding it
+        again in the shared code would double-count that path.
         """
         claim = await self.get_claim(claim_id)
         if claim is None or claim.question_id != question_id:
@@ -680,6 +689,10 @@ class Ledger:
         await self._lock()
         evidence_rows = await self._evidence_for_claim(claim_id)
         result = await self._apply_verdict(question_id, claim, evidence_rows, verdict)
+        if verdict.tokens_spent:
+            question = await self.get_question(question_id)
+            if question is not None:
+                question.spent_tokens += verdict.tokens_spent
         await self.db.flush()
         return result
 
@@ -774,7 +787,22 @@ class Ledger:
         question_id: str,
         result: WorkerResult,
         verdicts: dict[str, Verdict],
+        judge_tokens_spent: int = 0,
     ) -> None:
+        """`judge_tokens_spent`: 이번 패스에서 판정자가 실제로 쓴 토큰의 총합.
+
+        `verdicts.values()` 를 여기서 다시 더하지 않는다 -- `verdicts` 는
+        클레임 텍스트로 키잉되어 있어(§6.1.3/D3 Ledger의 해시 병합과
+        맞추려는 것) **조회용**이지 **집계용**이 아니다. 한 패스 안에서
+        같은 텍스트 클레임이 두 번 나오면(`_upsert_claim`이 해시로 병합하는
+        바로 그 경우) `_grade()` 는 두 번 다 돌고 판정자도 두 번 다
+        디스패치될 수 있는데, dict에는 두 번째 판정만 남는다. 그래서 호출부
+        (오케스트레이터의 채점 루프)가 `_grade()` 를 호출할 때마다 실제로
+        쓴 토큰을 직접 누적해 여기로 넘긴다 -- dict를 다시 훑지 않으므로
+        두 번째가 첫 번째를 덮어써도 유실되지 않는다 (C3-m1 Finding 2).
+        기본값 0은 판정자 토큰이 전혀 없던 옛 호출부(테스트 등)를 그대로
+        통과시키기 위한 것이다.
+        """
         if result.question_id != question_id:
             raise ValueError(
                 "worker result question does not match commit target"
@@ -816,7 +844,20 @@ class Ledger:
         for dead_end in result.dead_ends:
             await self.log("dead_end", question_id, {"text": dead_end})
 
-        question.spent_tokens += result.tokens_spent
+        # C3-m1: `result.tokens_spent` 는 워커 자신의 지출(검색·entailment·
+        # repair 호출)일 뿐, 워커가 낸 클레임을 심사하는 판정자의 지출은
+        # 들어 있지 않았다. `judge_tokens_spent` 는 호출부가 누적해 넘긴
+        # 값이다 -- 왜 여기서 `verdicts.values()` 를 다시 더하지 않는지는
+        # 위 독스트링 참고 (dict는 조회용이라 중복 텍스트에서 유실된다).
+        # 워커 지출과 판정자 지출은 서로 다른 LLM 호출의 합계라 겹칠 수
+        # 없다 -- 워커는 심사하지 않고 판정자는 검색하지 않는다.
+        #
+        # 이 변경으로 `DAQuestion.spent_tokens`(그리고 `total_spent()`,
+        # `budgeter.should_stop()`)가 이전보다 커진다: 판정자의 토큰은
+        # 원래도 전역 `TokenBudget`에서 실제로 빠져나간 지출이었고, 질문별
+        # 원장에만 안 잡혔을 뿐이다. 조사가 같은 예산으로 조금 더 일찍
+        # 멈추는 것은 의도된 보정이지 되돌려야 할 회귀가 아니다.
+        question.spent_tokens += result.tokens_spent + judge_tokens_spent
         question.confidence = max(
             question.confidence,
             result.self_assessment,

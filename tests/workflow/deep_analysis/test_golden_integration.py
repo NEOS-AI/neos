@@ -130,7 +130,7 @@ class MemoryLedger:
     async def get_blob(self, content_hash):
         return self.blobs.get(content_hash)
 
-    async def commit_pass(self, question_id, result, verdicts):
+    async def commit_pass(self, question_id, result, verdicts, judge_tokens_spent=0):
         for proposed in result.claims:
             claim_id = "c1a1c1a1"
             verdict = verdicts[proposed.text]
@@ -150,7 +150,7 @@ class MemoryLedger:
                 for item in proposed.evidence
             ]
         question = self.questions_by_id[question_id]
-        question.spent_tokens += result.tokens_spent
+        question.spent_tokens += result.tokens_spent + judge_tokens_spent
         question.status = "resolved"
         await self.log(
             "pass_completed",

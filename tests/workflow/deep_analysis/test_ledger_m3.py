@@ -166,6 +166,48 @@ async def test_weaken_repair_replaces_text_and_resolves_feedback():
 
 
 @pytest.mark.asyncio
+async def test_regrade_claim_bills_judge_tokens():
+    """C3-m1 Finding 3: a repaired claim pushed back to `pending` gets
+    re-graded by `regrade_claim` (via `Orchestrator._regrade_pending`),
+    outside of `commit_pass`. That re-grade can dispatch the agentic judge
+    just like a fresh claim's grade does, but `regrade_claim` never billed
+    `question.spent_tokens` at all -- a second unbilled path, same shape as
+    the one `commit_pass` just closed.
+    """
+    async with await db_manager.get_session() as s:
+        run_id = await create_run(s, "root", "dev")
+        led = Ledger(s, run_id)
+        await _blob(s, run_id)
+        qid = await _investigating(led)
+        await led.commit_pass(
+            qid,
+            WorkerResult(
+                question_id=qid, status="completed", claims=[_claim("overclaim")]
+            ),
+            {"overclaim": Verdict(ok=False, code="E_OVERCLAIM", label="PARTIAL")},
+        )
+        cid = (
+            await s.execute(
+                sql("SELECT id FROM deep_analysis_claims WHERE run_id=:r"),
+                {"r": run_id},
+            )
+        ).scalar()
+        await led._transition(qid, "investigating")
+        rep = RepairResult(claim_id=cid, action="weakened", new_text="weaker claim")
+        await led.commit_pass(
+            qid, WorkerResult(question_id=qid, status="completed", repairs=[rep]), {}
+        )
+        spent_before = (await led.get_question(qid)).spent_tokens
+
+        verdict = Verdict(ok=True, tokens_spent=17, diagnostics={"judge_tokens": 17})
+        await led.regrade_claim(qid, cid, verdict)
+
+        q = await led.get_question(qid)
+        assert q.spent_tokens == spent_before + 17
+        await s.rollback()
+
+
+@pytest.mark.asyncio
 async def test_verified_pass_resets_fail_streak():
     async with await db_manager.get_session() as s:
         run_id = await create_run(s, "root", "dev")

@@ -161,6 +161,13 @@ class Verdict:
     # (W3-h). In-process only: the orchestrator logs `code` and
     # `diagnostics`, never this, so report prose stays out of the ledger.
     revision_hints: list[str] = field(default_factory=list)
+    # 이 판정을 만드는 데 판정자(judge)가 쓴 토큰 (C3-m1). 기본값 0 은
+    # `Verdict` 를 짓는 곳이 결정론 채점기 등 여럿이라 전부 고칠 일이 아니기
+    # 때문이다 -- 판정자가 관여하지 않은 verdict 은 0 이 정확한 값이다.
+    # `AgenticGrader` 가 채우는 값은 `_diagnostics()` 의 `judge_tokens` 와
+    # 항상 같아야 한다: 두 수가 갈라지면 원장(`judge_tokens` 로 보이는 값)과
+    # 실제 청구액(`tokens_spent` 로 나가는 값)이 서로 다른 이야기를 하게 된다.
+    tokens_spent: int = 0
 
 
 @dataclass
