@@ -1799,7 +1799,7 @@ codex/anthropic-caching-advisor  0fe2fa29   커밋 7개 (2026-07-11)
 | # | 기준 | 현재 | 측정 방법 |
 |---|---|---|---|
 | **E-S1** | 플랜 14가 dev에 병합돼 있다 | ✅ **충족** (2026-08-16). `db/migrations/045`가 dev에 있고 `tests/coding/managed`가 통과한다. 단 Task 6–10은 여전히 미착수(CA1) | `db/migrations/045` 존재 + `tests/coding/managed` 통과 |
-| **E-S2** | 실 루프가 정책 검증을 통과한다 | ❌ 두 플래그 모두 `False`. ✅ **결정 (2026-08-29): 아직 켜지 않는다** — 먼저 이 절의 마지막 경고가 적은 **구멍 둘**을 닫는다: provider-reference AES-GCM 암호화가 어느 프로덕션 호출부에도 배선되지 않았고(`decrypt()` 가 불리지 않는다), `ownership_digest` 가 `_rediscover()` 복구 경로에서 비교되지 않는다. 둘 다 fail-closed 의 근거이자 사고 조사의 근거다 | `validate_coding_model_policy()` — sandbox 활성 · Anthropic 크리덴셜 · 양수 가격 · staging/prod Docker |
+| **E-S2** | 실 루프가 정책 검증을 통과한다 | ❌ 두 플래그 모두 `False`. ✅ **결정 (2026-08-29): 아직 켜지 않는다** ‖ 🟢 **막고 있던 구멍 둘은 같은 날 닫혔다** — ①(AES-GCM)은 **이미 닫혀 있었고 경고가 낡은 것**, ②(`ownership_digest` 비교)는 `609b7c0e`. **남은 것은 순수한 배포 결정이다.** 원래 서술: provider-reference AES-GCM 암호화가 어느 프로덕션 호출부에도 배선되지 않았고(`decrypt()` 가 불리지 않는다), `ownership_digest` 가 `_rediscover()` 복구 경로에서 비교되지 않는다. 둘 다 fail-closed 의 근거이자 사고 조사의 근거다 | `validate_coding_model_policy()` — sandbox 활성 · Anthropic 크리덴셜 · 양수 가격 · staging/prod Docker |
 | **E-S3** | fail-closed가 실제로 지켜진다 | ✅ **충족** (2026-08-23, Task 5~10 + CA8·CA10·CA11) — 승인 없는 부활 간선이 도메인 전이표에 없고, 승인은 아카이브 체크섬에 묶이며, 소유자 투영이 provider 참조·raw 에러를 구조적으로 배제하고(키 집합 고정 + 유출 테스트), **브라우저가 그 투영만 소비한다**(어휘 대조 테스트가 두 언어의 드리프트를 막는다). SQL 은 실제 Postgres 에서 실행됐다(통합 31건). ✅ **2026-08-23에 운영 재료까지 갖췄다** — 아카이브를 뜨는 경로(CA10)와 클러스터 범위 드레인(CA11)이 들어왔다. 남은 것은 실제 켜는 결정(E-S2)뿐이다 | 자동 크로스 프로바이더 failover **0건** · 브라우저 투영에 provider 참조·raw 에러 **0건** |
 | **E-S4** | 코딩 루프의 LLM 호출이 전부 원장에 남는다 | ✅ | `tests/coding/sandbox/test_runtime_ownership.py::test_real_loop_wraps_the_production_model_for_collection`(`fe626bef`) — 2026-08-11 이전에는 측정법만 있고 **그것을 실행하는 테스트가 없었다** |
 
@@ -1829,6 +1829,33 @@ codex/anthropic-caching-advisor  0fe2fa29   커밋 7개 (2026-07-11)
 > 할당의 ciphertext를 다른 할당 행에 재생해도 걸러지지 않았을 것이다) — Celery
 > 조정자 몫으로 남는다. 그리고 결정론적으로 계산되는 `ownership_digest`는
 > `_rediscover()` 복구 경로에서 **아직 비교되지 않는다** — 비교할 수 있게
+>
+> ---
+>
+> ✅ **위 마지막 두 문장은 2026-08-29 에 둘 다 무효가 됐다.**
+>
+> **① AES-GCM 은 이미 배선돼 있었다 — 경고가 낡은 것이다.** `runtime.py` 의
+> `_managed_provider_reference_cipher` 가 **할당마다** 실물
+> `AesGcmProviderReferenceCipher` 를 만든다. AAD 는
+> `allocation_id:provider:generation` 이고, 그것은 바로 위 문단이 "지금의 Protocol 로는
+> 실을 수 없다" 고 적은 그 per-allocation 결합이다 — 해법은 cipher 를 서비스 생성자에
+>박지 않고 **할당을 이미 아는 호출자가 매번 만드는 것**이었다. `lifecycle.py:316` 이
+> 그것으로 `decrypt()` 하고, 키가 없으면 조용히 진행하지 않는다
+> (`managed_provider_reference_key_missing`; 기동에서
+> `AppConfig.validate_managed_provider_reference_key` 가 먼저 막는다).
+> Task 6(`e94185be`)이 이 경고가 쓰인 **뒤에** 배선했고 아무도 경고로 돌아오지 않았다.
+>
+> **② `ownership_digest` 비교는 실재하는 결함이었고 닫혔다** (`609b7c0e`).
+> `_rediscover()` 가 이제 어댑터의 `ownership_verified` 와 유도한 digest 를 **둘 다**
+> 요구하고(`hmac.compare_digest`), 어긋나면
+> `MANUAL_RECOVERY_REQUIRED`/`PROVIDER_AUTH_ERROR` 로 거부한다 — 못 찾은 경우와 같은
+> 처분인데 **증명할 수 없는 것을 찾은 것은 못 찾은 것보다 낫지 않기** 때문이다.
+> 🔍 이 검사가 기존 테스트 하나를 깨뜨렸는데 **픽스처가 틀린 쪽이었다**: 자리표시자
+> `sha256:seed` 를 심었으나 프로덕션은 유도값만 박으므로 그 상태는 만들어질 수 없다
+> — Task 6 이 045 의 CHECK 에서 겪은 것과 같은 종류다.
+>
+> 📌 **읽는 법:** ①은 이 문서가 반복해서 치르는 대가(문서가 코드보다 늦게 낡는다)의
+> 또 한 사례이고, ②는 진짜였다. **둘을 구별하는 유일한 방법은 코드를 여는 것이다.**
 > 만들었을 뿐, 비교하는 코드 경로는 없다.
 
 ### 12.7 미해결 인벤토리
