@@ -19,6 +19,15 @@ from neos.services.context_optimizer import context_optimizer
 from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 from neos.providers.anthropic import normalize_anthropic_request
+from neos.providers.anthropic_features import (
+    build_cache_control,
+    build_tool_policy,
+    serialize_content_block,
+)
+from neos.providers.anthropic_usage import (
+    calculate_anthropic_cost,
+    normalize_anthropic_usage,
+)
 from neos.tools.tool_search.search_tools_handler import SEARCH_TOOLS_TOOL
 
 logger = get_logger(__name__)
@@ -88,7 +97,14 @@ class ChatLLMService:
 
         return messages
 
-    def _extract_usage_from_response(self, response: Any) -> Dict[str, int]:
+    def _extract_usage_from_response(
+        self,
+        response: Any,
+        *,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        cache_requested: bool = False,
+    ) -> Dict[str, Any]:
         """응답에서 토큰 사용량 추출"""
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
@@ -97,7 +113,48 @@ class ChatLLMService:
             metadata = response.response_metadata
 
             # Anthropic 형식
-            if "usage" in metadata:
+            if provider == "anthropic":
+                usage_metadata = getattr(response, "usage_metadata", None)
+                if usage_metadata:
+                    input_token_details = (
+                        usage_metadata.get("input_token_details", {}) or {}
+                    )
+                    cache_read_tokens = int(
+                        input_token_details.get("cache_read", 0) or 0
+                    )
+                    cache_creation_tokens = int(
+                        input_token_details.get("cache_creation", 0) or 0
+                    )
+                    if not cache_creation_tokens:
+                        cache_creation_tokens = sum(
+                            int(input_token_details.get(key, 0) or 0)
+                            for key in (
+                                "ephemeral_5m_input_tokens",
+                                "ephemeral_1h_input_tokens",
+                            )
+                        )
+                    total_input_tokens = int(
+                        usage_metadata.get("input_tokens", 0) or 0
+                    )
+                    anthropic_usage = {
+                        "input_tokens": max(
+                            0,
+                            total_input_tokens
+                            - cache_creation_tokens
+                            - cache_read_tokens,
+                        ),
+                        "cache_creation_input_tokens": cache_creation_tokens,
+                        "cache_read_input_tokens": cache_read_tokens,
+                        "output_tokens": usage_metadata.get("output_tokens", 0),
+                    }
+                else:
+                    anthropic_usage = metadata.get("usage", {})
+                return normalize_anthropic_usage(
+                    anthropic_usage,
+                    model=model or self.default_model,
+                    cache_requested=cache_requested,
+                )
+            elif "usage" in metadata:
                 anthropic_usage = metadata["usage"]
                 usage["prompt_tokens"] = anthropic_usage.get("input_tokens", 0)
                 usage["completion_tokens"] = anthropic_usage.get("output_tokens", 0)
@@ -154,6 +211,8 @@ class ChatLLMService:
         """
         model = resolve_conversation_chat_model(model_name)
         provider = self._extract_provider_from_model(model)
+        prompt_cache_config = settings.config.llm.prompt_caching
+        cache_control = build_cache_control(prompt_cache_config)
 
         start_time = time.time()
 
@@ -186,21 +245,36 @@ class ChatLLMService:
             messages = self._build_messages(optimized_messages, system_prompt)
 
             # LLM 호출
-            response = await llm.ainvoke(messages)
+            invoke_kwargs: Dict[str, Any] = {}
+            if provider == "anthropic" and cache_control:
+                invoke_kwargs["cache_control"] = cache_control
+            response = await llm.ainvoke(messages, **invoke_kwargs)
 
             # 응답 처리 (handles thinking blocks properly)
             content = extract_text_from_response(response)
-            usage = self._extract_usage_from_response(response)
+            usage = self._extract_usage_from_response(
+                response,
+                provider=provider,
+                model=model,
+                cache_requested="cache_control" in invoke_kwargs,
+            )
             finish_reason = self._extract_finish_reason(response)
             latency_ms = int((time.time() - start_time) * 1000)
 
             # 비용 계산 (기록은 호출자가 메시지 저장 후 수행)
-            cost_info = await cost_calculator.calculate_cost(
+            cost_kwargs: Dict[str, Any] = dict(
                 provider=provider,
                 model_name=model,
                 prompt_tokens=usage["prompt_tokens"],
                 completion_tokens=usage["completion_tokens"],
             )
+            if provider == "anthropic":
+                cost_kwargs.update(
+                    cache_creation_tokens=usage["cache_creation_tokens"],
+                    cache_read_tokens=usage["cache_read_tokens"],
+                    cache_ttl=prompt_cache_config.ttl,
+                )
+            cost_info = await cost_calculator.calculate_cost(**cost_kwargs)
 
             logger.info(
                 f"Generated response: {len(content)} chars, "
@@ -256,6 +330,8 @@ class ChatLLMService:
         """
         model = resolve_conversation_chat_model(model_name)
         provider = self._extract_provider_from_model(model)
+        prompt_cache_config = settings.config.llm.prompt_caching
+        cache_control = build_cache_control(prompt_cache_config)
 
         start_time = time.time()
         full_content = ""
@@ -293,7 +369,10 @@ class ChatLLMService:
             yield {"type": "start", "model": model, "provider": provider}
 
             # 스트리밍 호출
-            async for chunk in llm.astream(messages):
+            invoke_kwargs: Dict[str, Any] = {}
+            if provider == "anthropic" and cache_control:
+                invoke_kwargs["cache_control"] = cache_control
+            async for chunk in llm.astream(messages, **invoke_kwargs):
                 if hasattr(chunk, "content") and chunk.content:
                     content = chunk.content
 
@@ -329,7 +408,12 @@ class ChatLLMService:
 
                 # 마지막 청크에서 usage 정보 추출
                 if hasattr(chunk, "response_metadata"):
-                    usage_info = self._extract_usage_from_response(chunk)
+                    usage_info = self._extract_usage_from_response(
+                        chunk,
+                        provider=provider,
+                        model=model,
+                        cache_requested="cache_control" in invoke_kwargs,
+                    )
                     finish_reason_value = self._extract_finish_reason(chunk)
 
             # 스트리밍 완료 후 usage 정보가 없으면 추정
@@ -339,22 +423,39 @@ class ChatLLMService:
                     len(msg.get("content", "")) // 4 for msg in conversation_messages
                 )
                 estimated_completion_tokens = len(full_content) // 4
-                usage_info = {
-                    "prompt_tokens": estimated_prompt_tokens,
-                    "completion_tokens": estimated_completion_tokens,
-                    "total_tokens": estimated_prompt_tokens
-                    + estimated_completion_tokens,
-                }
+                if provider == "anthropic":
+                    usage_info = normalize_anthropic_usage(
+                        {
+                            "input_tokens": estimated_prompt_tokens,
+                            "output_tokens": estimated_completion_tokens,
+                        },
+                        model=model,
+                        cache_requested="cache_control" in invoke_kwargs,
+                    )
+                else:
+                    usage_info = {
+                        "prompt_tokens": estimated_prompt_tokens,
+                        "completion_tokens": estimated_completion_tokens,
+                        "total_tokens": estimated_prompt_tokens
+                        + estimated_completion_tokens,
+                    }
 
             latency_ms = int((time.time() - start_time) * 1000)
 
             # 비용 계산 (기록은 호출자가 메시지 저장 후 수행)
-            cost_info = await cost_calculator.calculate_cost(
+            cost_kwargs: Dict[str, Any] = dict(
                 provider=provider,
                 model_name=model,
                 prompt_tokens=usage_info["prompt_tokens"],
                 completion_tokens=usage_info["completion_tokens"],
             )
+            if provider == "anthropic":
+                cost_kwargs.update(
+                    cache_creation_tokens=usage_info["cache_creation_tokens"],
+                    cache_read_tokens=usage_info["cache_read_tokens"],
+                    cache_ttl=prompt_cache_config.ttl,
+                )
+            cost_info = await cost_calculator.calculate_cost(**cost_kwargs)
 
             logger.info(
                 f"Stream completed: {len(full_content)} chars, "
@@ -424,6 +525,8 @@ class ChatLLMService:
         """
         model = resolve_conversation_chat_model(model_name)
         provider = self._extract_provider_from_model(model)
+        prompt_cache_config = settings.config.llm.prompt_caching
+        cache_control = build_cache_control(prompt_cache_config)
         start_time = time.time()
         full_content = ""
         usage_info = None
@@ -473,6 +576,8 @@ class ChatLLMService:
                 },
                 thinking_enabled=True,
             )
+            if cache_control:
+                stream_kwargs["cache_control"] = cache_control
             async with client.messages.stream(**stream_kwargs) as stream:
                 # 스트리밍 이벤트 처리
                 async for event in stream:
@@ -516,11 +621,11 @@ class ChatLLMService:
                 final_message = await stream.get_final_message()
 
                 # Usage 정보 추출
-                usage_info = {
-                    "prompt_tokens": final_message.usage.input_tokens,
-                    "completion_tokens": final_message.usage.output_tokens,
-                    "total_tokens": final_message.usage.input_tokens + final_message.usage.output_tokens
-                }
+                usage_info = normalize_anthropic_usage(
+                    final_message.usage,
+                    model=model,
+                    cache_requested=bool(cache_control),
+                )
 
                 # Tool use 확인
                 for content_block in final_message.content:
@@ -543,6 +648,9 @@ class ChatLLMService:
                 model_name=model,
                 prompt_tokens=usage_info["prompt_tokens"],
                 completion_tokens=usage_info["completion_tokens"],
+                cache_creation_tokens=usage_info["cache_creation_tokens"],
+                cache_read_tokens=usage_info["cache_read_tokens"],
+                cache_ttl=prompt_cache_config.ttl,
             )
 
             logger.info(
@@ -606,9 +714,21 @@ class ChatLLMService:
         """
         model = resolve_conversation_chat_model(model_name)
         provider = self._extract_provider_from_model(model)
+        prompt_cache_config = settings.config.llm.prompt_caching.model_copy(deep=True)
+        advisor_config = settings.config.llm.advisor.model_copy(deep=True)
+        cache_control = build_cache_control(prompt_cache_config)
         start_time = time.time()
         full_content = ""
-        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        aggregate_usage = {
+            "input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+            "iterations": [],
+        }
+        advisor_result_count = 0
+        advisor_error_codes: list[str] = []
+        tool_policy = None
 
         try:
             if provider != "anthropic":
@@ -626,9 +746,17 @@ class ChatLLMService:
 
             client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
-            # 1. 초기 도구 세트: 코어 도구 + search_tools
-            active_tools_dicts = list(core_tools)
-            active_tools_dicts.append(SEARCH_TOOLS_TOOL)
+            # 1. 초기 도구 세트: 코어 도구 + search_tools + 선택적 Advisor
+            tool_policy = build_tool_policy(
+                [*core_tools, SEARCH_TOOLS_TOOL],
+                executor_model=model,
+                prompt_caching=prompt_cache_config,
+                advisor=advisor_config,
+            )
+            active_tools_dicts = list(tool_policy.tools)
+            messages_api = (
+                client.beta.messages if tool_policy.use_beta else client.messages
+            )
 
             # 메시지 변환
             anthropic_messages = []
@@ -641,24 +769,28 @@ class ChatLLMService:
             yield {"type": "start", "model": model, "provider": "anthropic"}
 
             round_count = 0
+            pause_turn_count = 0
 
             while round_count < max_tool_rounds:
-                round_count += 1
-
                 # 2. Claude API 호출
                 stream_kwargs = normalize_anthropic_request(
                     model,
                     {
                         "model": model,
-                        "messages": anthropic_messages,
-                        "tools": active_tools_dicts,
+                        "messages": list(anthropic_messages),
+                        "tools": list(active_tools_dicts),
                         "system": system_prompt or "",
                         "temperature": temperature,
                         "max_tokens": max_tokens or 4096,
                     },
                     thinking_enabled=True,
                 )
-                async with client.messages.stream(**stream_kwargs) as stream:
+                if cache_control:
+                    stream_kwargs["cache_control"] = cache_control
+                if tool_policy.use_beta:
+                    stream_kwargs["betas"] = list(tool_policy.betas)
+
+                async with messages_api.stream(**stream_kwargs) as stream:
                     async for event in stream:
                         if not hasattr(event, 'type'):
                             continue
@@ -670,7 +802,7 @@ class ChatLLMService:
                                 elif event.content_block.type == "tool_use":
                                     logger.debug(
                                         f"Tool use started: {event.content_block.name} "
-                                        f"(round {round_count})"
+                                        f"(round {round_count + 1})"
                                     )
 
                         elif event.type == "content_block_delta":
@@ -687,12 +819,90 @@ class ChatLLMService:
                     # 최종 메시지 가져오기
                     final_message = await stream.get_final_message()
 
-                # Usage 누적
-                total_usage["prompt_tokens"] += final_message.usage.input_tokens
-                total_usage["completion_tokens"] += final_message.usage.output_tokens
-                total_usage["total_tokens"] = (
-                    total_usage["prompt_tokens"] + total_usage["completion_tokens"]
+                # Usage 누적: 요청별 정규화 후 비용 계산용 원시 키로 합친다.
+                request_usage = normalize_anthropic_usage(
+                    final_message.usage,
+                    model=model,
+                    cache_requested=bool(cache_control),
                 )
+                aggregate_usage["input_tokens"] += request_usage["prompt_tokens"]
+                aggregate_usage["cache_creation_input_tokens"] += request_usage[
+                    "cache_creation_tokens"
+                ]
+                aggregate_usage["cache_read_input_tokens"] += request_usage[
+                    "cache_read_tokens"
+                ]
+                aggregate_usage["output_tokens"] += request_usage[
+                    "completion_tokens"
+                ]
+                request_iterations = request_usage["iterations"]
+                if tool_policy.use_beta and not request_iterations:
+                    request_iterations = [
+                        {
+                            "type": "message",
+                            "model": None,
+                            "input_tokens": request_usage["prompt_tokens"],
+                            "cache_creation_tokens": request_usage[
+                                "cache_creation_tokens"
+                            ],
+                            "cache_read_tokens": request_usage["cache_read_tokens"],
+                            "output_tokens": request_usage["completion_tokens"],
+                        }
+                    ]
+                aggregate_usage["iterations"].extend(
+                    {
+                        "type": iteration["type"],
+                        "model": iteration["model"],
+                        "input_tokens": iteration["input_tokens"],
+                        "cache_creation_input_tokens": iteration[
+                            "cache_creation_tokens"
+                        ],
+                        "cache_read_input_tokens": iteration["cache_read_tokens"],
+                        "output_tokens": iteration["output_tokens"],
+                    }
+                    for iteration in request_iterations
+                )
+
+                serialized_content = [
+                    serialize_content_block(block)
+                    for block in final_message.content
+                ]
+                for block in final_message.content:
+                    if getattr(block, "type", None) != "advisor_tool_result":
+                        continue
+                    advisor_result_count += 1
+                    result = getattr(block, "content", None)
+                    result_type = (
+                        result.get("type")
+                        if isinstance(result, dict)
+                        else getattr(result, "type", None)
+                    )
+                    if result_type == "advisor_tool_result_error":
+                        error_code = (
+                            result.get("error_code")
+                            if isinstance(result, dict)
+                            else getattr(result, "error_code", None)
+                        )
+                        if error_code:
+                            advisor_error_codes.append(error_code)
+
+                if final_message.stop_reason == "pause_turn":
+                    pause_turn_count += 1
+                    if pause_turn_count > advisor_config.max_pause_turns:
+                        yield {
+                            "type": "error",
+                            "error": (
+                                "Anthropic Advisor pause_turn exceeded configured "
+                                f"limit ({advisor_config.max_pause_turns})"
+                            ),
+                        }
+                        return
+                    anthropic_messages.append(
+                        {"role": "assistant", "content": serialized_content}
+                    )
+                    continue
+
+                round_count += 1
 
                 # 3. tool_use 블록 확인
                 tool_uses = [
@@ -761,21 +971,9 @@ class ChatLLMService:
                     break
 
                 # 5. assistant 응답 + tool_results를 messages에 추가
-                def _serialize_content_block(b) -> dict:
-                    if hasattr(b, 'model_dump'):
-                        return b.model_dump()
-                    block: dict = {"type": b.type}
-                    if b.type == "text":
-                        block["text"] = b.text
-                    elif b.type == "tool_use":
-                        block.update({"id": b.id, "name": b.name, "input": b.input})
-                    elif b.type == "thinking":
-                        block["thinking"] = getattr(b, "thinking", "")
-                    return block
-
                 anthropic_messages.append({
                     "role": "assistant",
-                    "content": [_serialize_content_block(b) for b in final_message.content],
+                    "content": serialized_content,
                 })
                 anthropic_messages.append({
                     "role": "user",
@@ -784,17 +982,44 @@ class ChatLLMService:
 
             latency_ms = int((time.time() - start_time) * 1000)
 
-            # 비용 계산
-            cost_info = await cost_calculator.calculate_cost(
-                provider="anthropic",
-                model_name=model,
-                prompt_tokens=total_usage["prompt_tokens"],
-                completion_tokens=total_usage["completion_tokens"],
+            usage_info = normalize_anthropic_usage(
+                aggregate_usage,
+                model=model,
+                cache_requested=bool(cache_control),
             )
+            cost_info = await calculate_anthropic_cost(
+                aggregate_usage,
+                executor_model=model,
+                executor_cache_ttl=prompt_cache_config.ttl,
+                advisor_cache_ttl=advisor_config.prompt_caching.ttl,
+                calculator=cost_calculator.calculate_cost,
+            )
+            advisor_usage = dict(cost_info.get("advisor", {}))
+            advisor_usage["call_count"] = max(
+                advisor_usage.get("call_count", 0), advisor_result_count
+            )
+            advisor_usage["error_codes"] = list(
+                dict.fromkeys(
+                    [
+                        *advisor_usage.get("error_codes", []),
+                        *advisor_error_codes,
+                    ]
+                )
+            )
+            cost_info["advisor"] = advisor_usage
+            usage_info["anthropic"] = {
+                "prompt_caching": {"status": usage_info["cache_status"]},
+                "advisor": {
+                    "enabled": advisor_config.enabled,
+                    "injected": tool_policy.advisor.injected,
+                    "skip_reason": tool_policy.advisor.skip_reason,
+                    **advisor_usage,
+                },
+            }
 
             logger.info(
                 f"Tool search stream completed: {len(full_content)} chars, "
-                f"{total_usage['total_tokens']} tokens, "
+                f"{usage_info['total_tokens']} tokens, "
                 f"${cost_info['total_cost']:.6f}, "
                 f"{latency_ms}ms, {round_count} rounds"
             )
@@ -804,12 +1029,23 @@ class ChatLLMService:
                 "full_content": full_content,
                 "model_name": model,
                 "provider": "anthropic",
-                "usage": total_usage,
+                "usage": usage_info,
                 "cost": cost_info,
                 "latency_ms": latency_ms,
                 "tool_search_rounds": round_count,
             }
 
+        except anthropic.BadRequestError as e:
+            if tool_policy is not None and tool_policy.use_beta:
+                error_message = (
+                    "Anthropic Advisor beta API rejected configured model pair "
+                    f"(executor={model}, advisor={advisor_config.model}): {e}"
+                )
+                logger.error(error_message)
+                yield {"type": "error", "error": error_message}
+                return
+            logger.error(f"Tool search stream error: {e}")
+            yield {"type": "error", "error": str(e)}
         except Exception as e:
             logger.error(f"Tool search stream error: {e}")
             yield {"type": "error", "error": str(e)}

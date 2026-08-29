@@ -325,6 +325,15 @@ class ChatStreamPipeline:
                     total_tokens=acc.usage_info["total_tokens"],
                     latency_ms=acc.latency_ms,
                     finish_reason="end_turn",
+                    cache_creation_tokens=acc.usage_info.get(
+                        "cache_creation_tokens", 0
+                    ),
+                    cache_read_tokens=acc.usage_info.get("cache_read_tokens", 0),
+                    cache_ttl=app_settings.config.llm.prompt_caching.ttl,
+                    additional_cost_usd=acc.cost_info.get("additional_cost", 0),
+                    metadata={
+                        "anthropic": acc.usage_info.get("anthropic", {})
+                    },
                 )
 
             # ── Step 9: response.completed + [DONE] ──────────────────

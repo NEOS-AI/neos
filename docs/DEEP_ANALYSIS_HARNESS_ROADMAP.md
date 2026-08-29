@@ -22,7 +22,8 @@
 | [coding_agent_task_resume.md](coding_agent_task_resume.md) | 코딩 에이전트 계보와 재개 절차 (트랙 E의 상세 원장) |
 | [TODO_260729.md](TODO_260729.md) | 미해결 백로그 원장 — A·B·C·D·E·F·G 계열 실측 수치 |
 | [FE_AUDIT_260717.md](FE_AUDIT_260717.md) | 프론트엔드 감사 — §6이 job 서비스 전환 준비도를 판정 (트랙 C의 기준선) |
-| `neos/workflow/deep_analysis/DECISIONS.md` | 결정 원장 D1–D75 — **표본 판정의 정본** |
+| `neos/workflow/deep_analysis/DECISIONS.md` | 결정 원장 D1–D86 — **표본 판정의 정본**. 유효 결정은 전문, 지난 표본·튜닝 이력은 요약 |
+| `neos/workflow/deep_analysis/DECISIONS_ARCHIVE_2026-08.md` | 위에서 요약된 항목(D7·D11·D13·D18·D29–D77·D79–D83)의 **원문** |
 
 > ⚠️ **진행 상황의 근거 규칙.** 플랜 문서(`docs/superpowers/plans/*`)의 체크박스는
 > 43개 전부 `- [x]`가 0개다. **신뢰하지 말 것.** 실제 진행은 (1) git 커밋,
@@ -2332,7 +2333,8 @@ K를 쓰는 노드가 있어야 한다. 한 분기에만 있으면 다른 분기
 - 트랙 E 원장: `.worktrees/managed-sandbox-control-plane/.superpowers/sdd/2026-07-25-managed-sandbox-control-plane/progress.md`
   (⚠️ 이중 기록 — CA4), 플랜 `docs/superpowers/plans/2026-07-25-managed-sandbox-control-plane.md`
 - 코딩 에이전트 설계: [NEOS_CODING.md](NEOS_CODING.md)
-- 결정 원장: `neos/workflow/deep_analysis/DECISIONS.md` (D1–D75) — 표본 원장 §8.1의 상세
+- 결정 원장: `neos/workflow/deep_analysis/DECISIONS.md` (D1–D86) — 표본 원장 §8.1의 상세.
+  요약된 항목의 원문은 `neos/workflow/deep_analysis/DECISIONS_ARCHIVE_2026-08.md`
 - 설정·모델 정본: [CONFIGURATION.md](CONFIGURATION.md) — Model Catalog / Model Routing 절
 - L5 운영: [deep_analysis_l5.md](deep_analysis_l5.md)
 - 전체 로드맵: [ROADMAP.md](ROADMAP.md) — Loop 아키텍처 통합 3단계

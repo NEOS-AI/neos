@@ -132,10 +132,20 @@ class ContextualRetrieval:
                     chunk_index=idx,
                 )
 
-        tasks = [
-            _generate_single(chunk, idx) for idx, chunk in enumerate(chunks_to_process)
+        raw_results: list[ContextualChunk | Exception] = []
+        try:
+            raw_results.append(await _generate_single(chunks_to_process[0], 0))
+        except Exception as exc:
+            raw_results.append(exc)
+
+        remaining_tasks = [
+            _generate_single(chunk, idx)
+            for idx, chunk in enumerate(chunks_to_process[1:], start=1)
         ]
-        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+        if remaining_tasks:
+            raw_results.extend(
+                await asyncio.gather(*remaining_tasks, return_exceptions=True)
+            )
 
         # 결과 수집 + 비용 초과 시 이후 fallback
         contextual_chunks: List[ContextualChunk] = []

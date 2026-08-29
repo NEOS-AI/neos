@@ -4,7 +4,7 @@ LLM 비용 계산 유틸리티
 실시간으로 LLM 호출 비용을 계산하고 DB에 기록합니다.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Literal, Optional
 from decimal import Decimal
 
 from neos.database.connection import db_manager
@@ -114,6 +114,7 @@ class CostCalculator:
         completion_tokens: int,
         cache_creation_tokens: int = 0,
         cache_read_tokens: int = 0,
+        cache_ttl: Literal["5m", "1h"] = "5m",
     ) -> Dict[str, Any]:
         """
         토큰 사용량 기반 비용 계산
@@ -150,8 +151,11 @@ class CostCalculator:
         output_cost = (Decimal(str(completion_tokens)) * pricing["output"]) / Decimal(
             "1000000"
         )
+        cache_creation_price = pricing["cache_creation"]
+        if provider == "anthropic" and cache_ttl == "1h":
+            cache_creation_price = pricing["input"] * Decimal("2")
         cache_creation_cost = (
-            Decimal(str(cache_creation_tokens)) * pricing["cache_creation"]
+            Decimal(str(cache_creation_tokens)) * cache_creation_price
         ) / Decimal("1000000")
         cache_read_cost = (
             Decimal(str(cache_read_tokens)) * pricing["cache_read"]
@@ -184,6 +188,8 @@ class CostCalculator:
         cache_creation_tokens: int = 0,
         cache_read_tokens: int = 0,
         metadata: Optional[Dict[str, Any]] = None,
+        cache_ttl: Literal["5m", "1h"] = "5m",
+        additional_cost_usd: Decimal | float = 0,
     ) -> Dict[str, Any]:
         """
         메시지 비용을 계산하고 DB에 기록
@@ -199,7 +205,13 @@ class CostCalculator:
             completion_tokens=completion_tokens,
             cache_creation_tokens=cache_creation_tokens,
             cache_read_tokens=cache_read_tokens,
+            cache_ttl=cache_ttl,
         )
+        additional_cost = Decimal(str(additional_cost_usd))
+        cost_info["additional_cost_usd"] = additional_cost
+        cost_info["total_cost"] += additional_cost
+        cost_metadata = dict(metadata or {})
+        cost_metadata["additional_cost_usd"] = float(additional_cost)
 
         # DB에 기록
         # Note: This might fail if the message hasn't been saved yet due to FK constraint
@@ -254,7 +266,7 @@ class CostCalculator:
                 float(cost_info["output_price_per_1m"]),
                 latency_ms,
                 finish_reason,
-                json.dumps(metadata or {}),
+                json.dumps(cost_metadata),
             )
 
             logger.info(
@@ -284,6 +296,11 @@ class CostCalculator:
         total_tokens: int,
         latency_ms: Optional[int] = None,
         finish_reason: Optional[str] = None,
+        cache_creation_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        metadata: Optional[Dict[str, Any]] = None,
+        cache_ttl: Literal["5m", "1h"] = "5m",
+        additional_cost_usd: Decimal | float = 0,
     ) -> Optional[Dict[str, Any]]:
         """
         이미 저장된 메시지에 대해 비용을 기록
@@ -300,6 +317,11 @@ class CostCalculator:
             total_tokens=total_tokens,
             latency_ms=latency_ms,
             finish_reason=finish_reason,
+            cache_creation_tokens=cache_creation_tokens,
+            cache_read_tokens=cache_read_tokens,
+            metadata=metadata,
+            cache_ttl=cache_ttl,
+            additional_cost_usd=additional_cost_usd,
         )
 
     @staticmethod
