@@ -521,24 +521,33 @@ async def test_rejected_report_reports_the_ratio_and_its_denominator():
     assert diag["uncited_ratio"] == 1.0
 
 
-def test_latin_proper_nouns_do_not_count_when_a_korean_particle_follows():
-    """`\\b[A-Z][A-Za-z]{2,}\\b` cannot fire on "Act가" or "OpenAI가".
+def test_latin_proper_nouns_count_even_when_a_korean_particle_follows():
+    """G3-m1 (2026-08-29): 한글 조사가 붙어도 고유명사를 센다.
 
-    Python's `\\b` sees no boundary between Latin and Hangul -- both are word
-    characters -- and Korean attaches its particles directly. So in Korean
-    prose the proper-noun half of the assertion heuristic is nearly dead and
-    the gate is driven almost entirely by digits.
+    이 테스트는 **뒤집힌 것**이다. 원래 이름은
+    `test_latin_proper_nouns_do_not_count_when_a_korean_particle_follows` 였고
+    결함을 의도적으로 고정하고 있었다 -- 그 독스트링이 스스로 "not because the
+    behaviour is desirable" 이라 적었다.
 
-    That shrinks the denominator, which is what makes the 0.20 threshold so
-    easy to breach: at four assertions a single uncited sentence is already
-    0.25. Pinned because it is load-bearing for any threshold calibration,
-    not because the behaviour is desirable.
+    **결함:** 파이썬의 `\\b` 는 라틴과 한글 사이에 경계를 만들지 않는다(둘 다
+    word character 다). 한국어는 조사를 어간에 붙여 쓰므로 "Act가"·"OpenAI가"
+    에서 고유명사 절반의 휴리스틱이 사실상 죽고, 게이트의 분모가 거의 "숫자를
+    담은 문장" 뿐이 된다.
+
+    **고친 방법:** 경계를 `\\b` 가 아니라 **라틴 문자에 대한 lookaround** 로
+    표현한다. 한글은 라틴이 아니므로 경계가 된다.
+
+    🔴 **이것은 표본 비교 경계다.** 분모가 커지므로 `uncited_ratio` 를 표본
+    #1~#21 과 직접 비교할 수 없다. 다음 사전 등록이 그 사실을 적어야 한다.
     """
     from neos.workflow.deep_analysis.graders.report import _PROPER_NOUN
 
-    assert _PROPER_NOUN.findall("EU AI Act가 적용된다.") == []
-    assert _PROPER_NOUN.findall("OpenAI가 발표했다.") == []
+    assert _PROPER_NOUN.findall("EU AI Act가 적용된다.") == ["Act"]
+    assert _PROPER_NOUN.findall("OpenAI가 발표했다.") == ["OpenAI"]
+    # 영문 문장의 동작은 바뀌지 않는다 -- 뒤집은 것은 한글 경계뿐이다.
     assert _PROPER_NOUN.findall("The Act applies.") == ["The", "Act"]
+    # 단어 중간의 대문자는 여전히 잡지 않는다(camelCase 오탐 방지).
+    assert _PROPER_NOUN.findall("someWordHere") == []
 
 
 @pytest.mark.asyncio

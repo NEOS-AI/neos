@@ -58,7 +58,7 @@ dependencies = [
     "psutil>=6.1.0",
     "celery>=5.4.0",
     "kombu>=5.6.2",
-    "pybreaker>=1.2.0",
+    "pybreaker>=1.4.1",
     "tiktoken>=0.5.0",
     "arxiv>=2.1.0",
     "wikipedia>=1.4.0",
@@ -76,6 +76,7 @@ dependencies = [
     "ray[default]>=2.57.0",
     "croniter>=2.0.0",
     "hiredis>=3.4.1",
+    "discord-py>=2.7.1",
 ]
 
 [project.optional-dependencies]
