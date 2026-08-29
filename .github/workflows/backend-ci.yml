@@ -32,7 +32,16 @@ jobs:
         with:
           enable-cache: true
           version: "0.11.16"
-      - run: uv sync --frozen --group dev
+      # --frozen 이 아니라 --locked 다. --frozen 은 "락파일을 갱신하지 마라"일
+      # 뿐, 락이 pyproject.toml 과 맞는지는 검사하지 않는다. 2026-08-29 에 dev
+      # 그룹의 pytest-timeout 이 pyproject.toml 에만 추가되고 uv.lock 에는 없는
+      # 채로 머지됐다. 저자의 .venv 에는 그 패키지가 손으로 설치돼 있어 로컬은
+      # 초록이었고, CI 는 어긋남을 "락 불일치"라고 말해주는 대신 엉뚱한 곳에서
+      # 터졌다 -- tests/test_workflow_improvements_integration.py 수집 실패
+      # ('timeout' not found in `markers`). 플러그인이 없으니 그 마커를 등록해줄
+      # 주체가 없고 addopts 의 --strict-markers 가 거부한 것이다. --locked 는
+      # 같은 상황을 원인의 이름 그대로, 테스트를 돌리기도 전에 실패시킨다.
+      - run: uv sync --locked --group dev
       # 파일 나열이 아니라 디렉터리다. 예전 판은 네 파일만 검사했고, 그래서
       # 2026-08-13 에 `tests/config/test_test_environment_policy.py` 를 고치며
       # 남긴 미사용 임포트가 **린트 대상 안에 있었는데도** 그 파일만 통과시켜
@@ -79,7 +88,7 @@ jobs:
         with:
           enable-cache: true
           version: "0.11.16"
-      - run: uv sync --frozen --group dev
+      - run: uv sync --locked --group dev
       # db/init.sql 이 요구하는 확장 전부(vector + pg_trgm). 목록을 여기 적으면
       # 확장이 늘어날 때 낡으므로 스크립트가 그 파일에서 읽는다.
       - name: Enable database extensions
@@ -111,7 +120,7 @@ jobs:
         with:
           enable-cache: true
           version: "0.11.16"
-      - run: uv sync --frozen --group dev
+      - run: uv sync --locked --group dev
       # db/init.sql 이 요구하는 확장 전부(vector + pg_trgm). 목록을 여기 적으면
       # 확장이 늘어날 때 낡으므로 스크립트가 그 파일에서 읽는다.
       - name: Enable database extensions
@@ -151,7 +160,7 @@ jobs:
         with:
           enable-cache: true
           version: "0.11.16"
-      - run: uv sync --frozen --group dev
+      - run: uv sync --locked --group dev
       # db/init.sql 이 요구하는 확장 전부(vector + pg_trgm). 목록을 여기 적으면
       # 확장이 늘어날 때 낡으므로 스크립트가 그 파일에서 읽는다.
       - name: Enable database extensions
