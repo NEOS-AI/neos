@@ -177,6 +177,7 @@ async def test_reinvestigation_reopens_resolved_question_and_is_durable():
             child_id,
             result,
             {c.text: Verdict(ok=True) for c in result.claims},
+            judge_tokens_spent=0,
         )
         child = await ledger.get_question(child_id)
         assert child.status == "resolved"

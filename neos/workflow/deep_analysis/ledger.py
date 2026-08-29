@@ -787,7 +787,8 @@ class Ledger:
         question_id: str,
         result: WorkerResult,
         verdicts: dict[str, Verdict],
-        judge_tokens_spent: int = 0,
+        *,
+        judge_tokens_spent: int,
     ) -> None:
         """`judge_tokens_spent`: 이번 패스에서 판정자가 실제로 쓴 토큰의 총합.
 
@@ -800,8 +801,12 @@ class Ledger:
         (오케스트레이터의 채점 루프)가 `_grade()` 를 호출할 때마다 실제로
         쓴 토큰을 직접 누적해 여기로 넘긴다 -- dict를 다시 훑지 않으므로
         두 번째가 첫 번째를 덮어써도 유실되지 않는다 (C3-m1 Finding 2).
-        기본값 0은 판정자 토큰이 전혀 없던 옛 호출부(테스트 등)를 그대로
-        통과시키기 위한 것이다.
+
+        **기본값이 없고 keyword-only 다 (C3-m2).** 회계 인자에 기본값 0을 두면
+        빠뜨린 호출자가 에러 없이 **덜 청구**한다 -- C3-m1 이 닫은 침묵 과소
+        계상과 같은 모양이다. 판정자가 없어 참값이 0인 호출부도 `0` 을 직접
+        적는다: "판정자가 안 돌았다" 와 "넘기는 것을 잊었다" 는 원장에서
+        구별되지 않으므로, 구별을 호출부에 남긴다.
         """
         if result.question_id != question_id:
             raise ValueError(

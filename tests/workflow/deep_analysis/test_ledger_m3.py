@@ -48,6 +48,7 @@ async def test_retry_cap_marks_unverified_after_two_rejections():
             qid,
             WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
             {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")},
+            judge_tokens_spent=0,
         )
         # attempt 2 reject (same hash) -> feedback attempt 2
         await led._transition(qid, "investigating")
@@ -55,6 +56,7 @@ async def test_retry_cap_marks_unverified_after_two_rejections():
             qid,
             WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
             {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")},
+            judge_tokens_spent=0,
         )
         # attempt 3 reject -> retry cap(2) hit -> unverified, no 3rd feedback
         await led._transition(qid, "investigating")
@@ -62,6 +64,7 @@ async def test_retry_cap_marks_unverified_after_two_rejections():
             qid,
             WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
             {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")},
+            judge_tokens_spent=0,
         )
         row = await s.execute(
             sql("SELECT status FROM deep_analysis_claims WHERE run_id=:r"),
@@ -102,6 +105,7 @@ async def test_retry_cap_resolves_pending_feedback():
             qid,
             WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
             {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")},
+            judge_tokens_spent=0,
         )
         # attempt 2 reject (same hash) -> feedback attempt 2
         await led._transition(qid, "investigating")
@@ -109,6 +113,7 @@ async def test_retry_cap_resolves_pending_feedback():
             qid,
             WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
             {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")},
+            judge_tokens_spent=0,
         )
         # attempt 3 reject -> retry cap(2) hit -> unverified, feedback must be resolved
         await led._transition(qid, "investigating")
@@ -116,6 +121,7 @@ async def test_retry_cap_resolves_pending_feedback():
             qid,
             WorkerResult(question_id=qid, status="completed", claims=[_claim()]),
             {"fact": Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED")},
+            judge_tokens_spent=0,
         )
         row = await s.execute(
             sql("SELECT status FROM deep_analysis_claims WHERE run_id=:r"),
@@ -139,6 +145,7 @@ async def test_weaken_repair_replaces_text_and_resolves_feedback():
                 question_id=qid, status="completed", claims=[_claim("overclaim")]
             ),
             {"overclaim": Verdict(ok=False, code="E_OVERCLAIM", label="PARTIAL")},
+            judge_tokens_spent=0,
         )
         cid = (
             await s.execute(
@@ -149,7 +156,8 @@ async def test_weaken_repair_replaces_text_and_resolves_feedback():
         await led._transition(qid, "investigating")
         rep = RepairResult(claim_id=cid, action="weakened", new_text="weaker claim")
         await led.commit_pass(
-            qid, WorkerResult(question_id=qid, status="completed", repairs=[rep]), {}
+            qid, WorkerResult(question_id=qid, status="completed", repairs=[rep]), {},
+            judge_tokens_spent=0,
         )
         row = await s.execute(
             sql("SELECT text, status FROM deep_analysis_claims WHERE run_id=:r"),
@@ -185,6 +193,7 @@ async def test_regrade_claim_bills_judge_tokens():
                 question_id=qid, status="completed", claims=[_claim("overclaim")]
             ),
             {"overclaim": Verdict(ok=False, code="E_OVERCLAIM", label="PARTIAL")},
+            judge_tokens_spent=0,
         )
         cid = (
             await s.execute(
@@ -195,7 +204,8 @@ async def test_regrade_claim_bills_judge_tokens():
         await led._transition(qid, "investigating")
         rep = RepairResult(claim_id=cid, action="weakened", new_text="weaker claim")
         await led.commit_pass(
-            qid, WorkerResult(question_id=qid, status="completed", repairs=[rep]), {}
+            qid, WorkerResult(question_id=qid, status="completed", repairs=[rep]), {},
+            judge_tokens_spent=0,
         )
         spent_before = (await led.get_question(qid)).spent_tokens
 
@@ -215,7 +225,7 @@ async def test_verified_pass_resets_fail_streak():
         await _blob(s, run_id)
         qid = await _investigating(led)
         # a failed pass bumps streak
-        await led.commit_pass(qid, WorkerResult(question_id=qid, status="failed"), {})
+        await led.commit_pass(qid, WorkerResult(question_id=qid, status="failed"), {}, judge_tokens_spent=0)
         await led._transition(qid, "investigating")
         await led.commit_pass(
             qid,
@@ -226,6 +236,7 @@ async def test_verified_pass_resets_fail_streak():
                 self_assessment=0.9,
             ),
             {"fact": Verdict(ok=True)},
+            judge_tokens_spent=0,
         )
         q = await led.get_question(qid)
         assert q.fail_streak == 0 and q.status == "resolved"
@@ -260,6 +271,7 @@ async def test_repair_converging_on_an_existing_claim_does_not_break_the_round()
                 "survivor": Verdict(ok=True),
                 "doomed": Verdict(ok=False, code="E_OVERCLAIM", label="PARTIAL"),
             },
+            judge_tokens_spent=0,
         )
         doomed_id = (
             await s.execute(
@@ -285,6 +297,7 @@ async def test_repair_converging_on_an_existing_claim_does_not_break_the_round()
                 ],
             ),
             {},
+            judge_tokens_spent=0,
         )
 
         # 제약 위반 없이 진행되고, 중복 행이 생기지 않아야 한다.

@@ -109,7 +109,7 @@ class FakeLedger:
         for blob in blobs:
             self.blobs[blob.content_hash] = blob
 
-    async def commit_pass(self, question_id, result, verdicts, judge_tokens_spent=0):
+    async def commit_pass(self, question_id, result, verdicts, *, judge_tokens_spent):
         item = next(item for item in self.items if item.id == question_id)
         item.status = "resolved"
         item.spent_tokens += result.tokens_spent + judge_tokens_spent
@@ -211,9 +211,9 @@ class RecordingLedger(FakeLedger):
         super().__init__()
         self.commit_calls = []
 
-    async def commit_pass(self, question_id, result, verdicts, judge_tokens_spent=0):
+    async def commit_pass(self, question_id, result, verdicts, *, judge_tokens_spent):
         self.commit_calls.append((question_id, dict(verdicts), judge_tokens_spent))
-        await super().commit_pass(question_id, result, verdicts, judge_tokens_spent)
+        await super().commit_pass(question_id, result, verdicts, judge_tokens_spent=judge_tokens_spent)
 
 
 class DuplicateTextWorker:
