@@ -49,12 +49,63 @@ test("강등 키가 없으면 status만 복원한다", () => {
 });
 
 test("run_id가 있는데 status가 없으면 completed로 본다", () => {
-  // 백엔드는 완료된 run 만 메시지로 영속화한다 (deep_analysis_job_task.py).
+  // FE5 이후 백엔드는 실패한 run 도 영속화하되 status 를 **명시**한다
+  // (deep_analysis_job_task.py). 비어 있는 것은 FE5 이전에 쓰인 옛 메시지뿐이고
+  // 그것들은 전부 완료된 run 이다.
   const result = deepAnalysisFromMessageMetadata({
     deep_analysis_run_id: "a1b2c3d4",
   });
 
   assert.equal(result?.status, "completed");
+});
+
+test("실패한 run 의 메시지는 failed 로 읽힌다", () => {
+  // FE5: 실패 run 도 메시지를 갖는다. 강등은 그 메시지에만 남는다.
+  const result = deepAnalysisFromMessageMetadata({
+    deep_analysis_run_id: "a1b2c3d4",
+    research_status: "failed",
+    deep_analysis_degradations: [
+      { kind: "node_reduction_degraded", count: 2 },
+    ],
+  });
+
+  assert.equal(result?.status, "failed");
+  assert.deepEqual(result?.degradations, [
+    { kind: "node_reduction_degraded", count: 2 },
+  ]);
+});
+
+// FE7: 지금은 `Ledger.degradations()` 가 유일한 작성자라 중복이 나올 수 없지만,
+// 그 경로를 우회하는 새 작성자가 생기면 컴포넌트의 React key 가 겹친다. 라이브
+// 경로(`withDegradation`)와 **같은 규칙**으로 접는다 — 합산하고 최초 순서 유지.
+test("같은 kind 가 두 번 오면 접어서 합산한다", () => {
+  const result = deepAnalysisFromMessageMetadata({
+    deep_analysis_run_id: "a1b2c3d4",
+    deep_analysis_degradations: [
+      { kind: "report_assembly_degraded", count: 2 },
+      { kind: "node_reduction_degraded", count: 1 },
+      { kind: "report_assembly_degraded", count: 3 },
+    ],
+  });
+
+  assert.deepEqual(result?.degradations, [
+    { kind: "report_assembly_degraded", count: 5 },
+    { kind: "node_reduction_degraded", count: 1 },
+  ]);
+});
+
+test("접기가 깨진 횟수도 1로 세어 합산한다", () => {
+  const result = deepAnalysisFromMessageMetadata({
+    deep_analysis_run_id: "a1b2c3d4",
+    deep_analysis_degradations: [
+      { kind: "node_reduction_degraded", count: "셋" },
+      { kind: "node_reduction_degraded" },
+    ],
+  });
+
+  assert.deepEqual(result?.degradations, [
+    { kind: "node_reduction_degraded", count: 2 },
+  ]);
 });
 
 test("깨진 강등 값에 던지지 않는다", () => {

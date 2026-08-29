@@ -36,6 +36,21 @@ function asStatus(value: unknown): DeepAnalysisStatus | undefined {
     : undefined;
 }
 
+/**
+ * 복원 경로의 강등 목록을 읽는다 — kind별로 **접어서** 돌려준다.
+ *
+ * 접는 이유(FE7): 이 함수는 kind별 유일성을 백엔드의 불변식에 기대고 있었지
+ * 스스로 강제하지 않았다. 지금은 `Ledger.degradations()`가 유일한 작성자이고
+ * kind를 키로 한 dict로 집계해 넘기므로 중복이 나올 수 없다. 그러나 그 경로를
+ * 우회하는 새 작성자가 생기면 같은 kind가 두 번 들어오고, 컴포넌트가 `kind`를
+ * React key로 쓰므로 **키가 겹친다**.
+ *
+ * 라이브 경로(`progress.ts`의 `withDegradation`)는 이미 같은 규칙으로 접는다.
+ * 여기서 접지 않으면 같은 데이터가 스트림으로 왔을 때와 새로고침 후에 서로
+ * 다른 모양이 되고, 그 불일치는 화면에서만 드러난다.
+ *
+ * 규칙도 `withDegradation`과 같아야 한다: 합산하고, **최초 발생 순서**를 지킨다.
+ */
 function asDegradations(value: unknown): DegradationEntry[] | undefined {
   if (!Array.isArray(value)) {
     return;
@@ -52,7 +67,15 @@ function asDegradations(value: unknown): DegradationEntry[] | undefined {
     // 횟수가 깨졌으면 1로 본다 — 사건이 있었다는 사실이 횟수보다 중요하다.
     const valid =
       typeof count === "number" && Number.isFinite(count) && count > 0;
-    entries.push({ kind, count: valid ? count : 1 });
+    const resolved = valid ? count : 1;
+    // `find`는 O(n²)이지만 n은 강등 종류 수(한 자릿수)다. Map을 쓰면 순서
+    // 보존을 따로 관리해야 하고, 그 복잡도가 이득보다 크다.
+    const existing = entries.find((entry) => entry.kind === kind);
+    if (existing) {
+      existing.count += resolved;
+    } else {
+      entries.push({ kind, count: resolved });
+    }
   }
   return entries.length > 0 ? entries : undefined;
 }
@@ -75,8 +98,13 @@ export function deepAnalysisFromMessageMetadata(
     }
     return {
       run_id: runId,
-      // 백엔드는 **완료된** run 만 메시지로 영속화하므로, run_id 가 있는데
       // 상태가 없으면 완료로 본다.
+      //
+      // ⚠️ 근거가 바뀌었다. 예전에는 "백엔드가 **완료된** run 만 영속화하므로"
+      // 였는데, FE5 로 실패한 run 도 메시지를 갖게 됐다 — 다만 그때는 백엔드가
+      // `research_status: "failed"` 를 **명시**한다. 그래서 상태가 비어 있는
+      // 메시지는 이제 "FE5 이전에 쓰인 옛 메시지"라는 뜻이고, 그것들은 전부
+      // 완료된 run 이다. 기본값은 그대로 옳지만 이유가 다르다.
       status: asStatus(metadata[STATUS_KEY]) ?? "completed",
       degradations: asDegradations(metadata[DEGRADATIONS_KEY]),
     };
