@@ -151,12 +151,23 @@ class TestRetryStrategies:
         assert attempt_count == 3  # Failed twice, succeeded on third
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(60)
     async def test_retry_with_strategy_exhausted(self):
         """Test retry exhaustion after max attempts
 
         Note: Currently retry_with_strategy tries to raise WorkflowError (a dataclass),
         which causes TypeError. This test verifies the retry attempts happen correctly
         even though the final raise fails.
+
+        진짜로 잔다 — mock 이 아니라 `retry_with_strategy` 의 실제 지수 백오프를
+        태운다. NETWORK_ERROR 는 max_retries=5, base_delay=1.0 이라
+        1+2+4+8+16=31초를 실제로 sleep 한다(`neos/workflow/utils/retry.py`).
+        실측 32.76초(`.venv/bin/python -m pytest ...::test_retry_with_strategy_exhausted
+        -p no:randomly --timeout=300 -q`, 2026-08-29) — 전역 기본값 30초보다
+        길어 pytest.ini 의 전역 타임아웃에 그대로 맡기면 이 테스트만 죽는다.
+        전역값을 이 테스트 하나 때문에 올리는 대신(나머지 스위트의 실측
+        최댓값은 6.5초대라 30초면 충분하다), 여기 개별 오버라이드로 여유
+        (~1.8배)를 준다.
         """
         attempt_count = 0
 

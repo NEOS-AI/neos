@@ -242,23 +242,42 @@ class TestCheckpointerGlobalInstance:
 
     @pytest.mark.asyncio
     async def test_get_checkpointer_singleton(self):
-        """Test that get_checkpointer returns singleton"""
-        with patch('neos.workflow.checkpointer.PostgreSQLCheckpointer') as mock_class:
-            mock_instance = AsyncMock()
-            mock_instance.initialize = AsyncMock()
-            mock_class.return_value = mock_instance
+        """Test that get_checkpointer returns singleton.
 
-            # Import fresh to reset module state
-            from neos.workflow import checkpointer as cp_module
+        ⚠️ 이 테스트는 전역을 되돌려야 한다. `patch` 는 **클래스**를 복원하지만
+        그 클래스가 만든 **인스턴스가 `_checkpointer` 전역에 캐시된 것**은 복원하지
+        않는다 -- `with` 블록을 나가도 AsyncMock 이 눌러앉아 있다.
+
+        그러면 이후 순서에 오는 아무 테스트나 `use_checkpointer=True` 로 그래프를
+        컴파일할 때 LangGraph 가 거부한다("Received AsyncMock"). 단독 실행에서는
+        절대 보이지 않고 시드에 따라 다른 파일이 실패하므로, 증상만 보면 원인을
+        찾을 수 없다. §10.3 이 이미 이름 붙인 "전역 싱글턴이 바뀐 채 남음" 이다.
+        """
+        from neos.workflow import checkpointer as cp_module
+
+        try:
+            with patch(
+                'neos.workflow.checkpointer.PostgreSQLCheckpointer'
+            ) as mock_class:
+                mock_instance = AsyncMock()
+                mock_instance.initialize = AsyncMock()
+                mock_class.return_value = mock_instance
+
+                cp_module._checkpointer = None
+
+                cp1 = await cp_module.get_checkpointer()
+                cp2 = await cp_module.get_checkpointer()
+
+                # Should be same instance
+                assert cp1 is cp2
+                # Initialize should be called only once
+                assert mock_instance.initialize.call_count == 1
+        finally:
             cp_module._checkpointer = None
 
-            cp1 = await cp_module.get_checkpointer()
-            cp2 = await cp_module.get_checkpointer()
-
-            # Should be same instance
-            assert cp1 is cp2
-            # Initialize should be called only once
-            assert mock_instance.initialize.call_count == 1
+        # 되돌렸다는 것 자체를 단언한다 -- 정리를 잊으면 여기서 바로 드러나고,
+        # 며칠 뒤 무관한 파일의 순서 의존 실패로 나타나지 않는다.
+        assert cp_module._checkpointer is None
 
     @pytest.mark.asyncio
     async def test_cleanup_checkpointer(self):

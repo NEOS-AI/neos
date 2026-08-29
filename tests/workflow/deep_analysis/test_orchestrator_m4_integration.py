@@ -172,7 +172,8 @@ async def _build_depth3_and_reduce(session, num_grandchildren):
             self_assessment=0.9,
         )
         await ledger.commit_pass(
-            gid, result, {c.text: Verdict(ok=True) for c in result.claims}
+            gid, result, {c.text: Verdict(ok=True) for c in result.claims},
+            judge_tokens_spent=0,
         )
     await ledger.record_split(child_id, gc_ids)
     await ledger.record_split(root_id, [child_id])

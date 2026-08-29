@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field, replace
-from typing import Any
+from typing import Any, TypeVar
 
 from neos.providers.anthropic import normalize_anthropic_request
 from neos.config.settings import settings
@@ -21,8 +21,34 @@ from neos.workflow.deep_analysis.token_budget import (
 )
 
 
+#: What a failed call already spent, in tokens. A class attribute rather than
+#: an `__init__` argument on purpose (C3): the site that *raises* -- `reserve`,
+#: `parse_json`, the provider wrapper -- does not know what earlier attempts in
+#: the same `call_json` loop cost. Only `call_json` knows, and it stamps the
+#: total on the way out. Defaulting to 0 on the class keeps every existing
+#: construction site and every `except` block valid without a change, so
+#: consumers can read `exc.tokens_spent` unconditionally.
+#:
+#: 0 also means "spent nothing we can prove". A provider call that fails before
+#: returning has no `usage` field, and §A5 forbids estimating one -- so a
+#: dispatch that died mid-flight contributes 0 here even though the budget
+#: conservatively keeps its whole reservation outstanding (`TokenBudget.abandon`).
+_TOKENS_SPENT_DEFAULT = 0
+
+_E = TypeVar("_E", bound=BaseException)
+
+
 class JSONParseError(ValueError):
-    """Raised when an LLM response does not contain one valid JSON object."""
+    """Raised when an LLM response does not contain one valid JSON object.
+
+    Carries `tokens_spent`: what the whole `call_json` invocation burned
+    before giving up. Without it the tokens of a failed call vanished from
+    `WorkerResult.tokens_spent` and so from `DAQuestion.spent_tokens` --
+    the run looked cheaper than it was, and exactly on the calls that
+    produced nothing (C3).
+    """
+
+    tokens_spent: int = _TOKENS_SPENT_DEFAULT
 
 
 class TruncatedResponseError(JSONParseError):
@@ -36,6 +62,14 @@ class TruncatedResponseError(JSONParseError):
 
 class LLMProviderError(RuntimeError):
     """Raised when a live LLM provider call fails."""
+
+    tokens_spent: int = _TOKENS_SPENT_DEFAULT
+
+
+def _charge(exc: _E, tokens: int) -> _E:
+    """Stamp what this failed call already spent onto the exception (C3)."""
+    exc.tokens_spent = tokens
+    return exc
 
 
 @dataclass(frozen=True)
@@ -546,6 +580,11 @@ async def call_json(
     budget clamps the expanded attempt to something between the original
     and expanded ceilings): that is not a bug, it is the expanded ceiling
     being visible in the payload.
+
+    Every exception that leaves this function carries `tokens_spent` -- the
+    sum over every attempt that returned a response (C3). Callers that swallow
+    the failure must add it to their own accounting, or the run under-reports
+    exactly the calls that yielded nothing.
     """
 
     from neos.config.settings import settings
@@ -556,17 +595,30 @@ async def call_json(
     expanded = False
     last_error: JSONParseError | None = None
     attempts_left = retries + 1
+    # C3: every attempt's usage, whether or not this invocation ends up
+    # returning one. The loop can burn several attempts and then raise, and
+    # before this the caller had no way to learn what those cost.
+    spent = 0
 
     while attempts_left > 0:
-        response = await call_llm(
-            model,
-            prompt,
-            max_tokens=limit,
-            temperature=temperature,
-            client=client,
-            cassette=cassette,
-            stage=stage,
-        )
+        try:
+            response = await call_llm(
+                model,
+                prompt,
+                max_tokens=limit,
+                temperature=temperature,
+                client=client,
+                cassette=cassette,
+                stage=stage,
+            )
+        except (LLMProviderError, TokenBudgetExhausted) as exc:
+            # This attempt produced no `usage`, so it adds nothing (§A5 forbids
+            # estimating). Earlier attempts in this loop did, and they are what
+            # would otherwise be lost -- a first attempt that parsed badly
+            # followed by a refused retry used to report zero.
+            _charge(exc, spent)
+            raise
+        spent += response.input_tokens + response.output_tokens
         try:
             parsed = parse_json(response.text)
         except JSONParseError as exc:
@@ -607,7 +659,7 @@ async def call_json(
                 granted=response.granted_max_output_tokens,
                 action=action,
             )
-            raise TruncatedResponseError(str(last_error))
+            raise _charge(TruncatedResponseError(str(last_error)), spent)
 
         # The expansion is a separate axis from `retries`: it answers a
         # different failure, so it does not consume a malformed-response
@@ -617,5 +669,7 @@ async def call_json(
         limit = int(limit * multiplier)
 
     if last_error is None:
-        raise JSONParseError("JSON parsing failed without a response")
-    raise last_error
+        raise _charge(
+            JSONParseError("JSON parsing failed without a response"), spent
+        )
+    raise _charge(last_error, spent)

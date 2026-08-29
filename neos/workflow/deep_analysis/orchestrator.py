@@ -649,14 +649,29 @@ class Orchestrator:
                     "agentic_label": agentic_verdict.label,
                 },
             )
-        except TokenBudgetExhausted:
+        except TokenBudgetExhausted as exc:
+            # C3-m1: `reserve()` refuses *before* dispatch, so the attempt
+            # that raised spent nothing -- but `call_json` stamps `exc.
+            # tokens_spent` with what earlier attempts in the *same* judge
+            # call already burned (llm.py's `_charge`). Those tokens were
+            # really sent to the provider and are already deducted from the
+            # global `TokenBudget`; the only thing missing is attributing
+            # them to this question. Dropping them here (as the old code
+            # did, via the deterministic `verdict` whose `tokens_spent` is
+            # always 0) would silently write off real spend, which is
+            # exactly the bug this task closes -- so they are carried
+            # forward instead. `judge_tokens` mirrors `tokens_spent` in the
+            # diagnostics, same as every other branch in
+            # `AgenticGrader._diagnostics`, so the two never diverge.
             return replace(
                 verdict,
                 diagnostics={
                     **verdict.diagnostics,
                     "agentic": "exhausted",
                     "agentic_label": None,
+                    "judge_tokens": exc.tokens_spent,
                 },
+                tokens_spent=exc.tokens_spent,
             )
 
     async def _regrade_pending(self, question_id, value_est):
@@ -695,10 +710,17 @@ class Orchestrator:
             partial.status = "partial"
             return partial
         except Exception as exc:  # noqa: BLE001 - A1: any other failure -> failed
+            # C3: a bare result reports 0 tokens, but the worker may have run
+            # several billed calls before the one that raised. The timeout
+            # branch above never had this problem -- `flush_partial` reads the
+            # same counter -- so the loss was confined to this branch and to
+            # the failure modes it catches, which is why it stayed invisible.
             return WorkerResult(
                 question_id=assignment.question_id,
                 status="failed",
                 fail_reason=str(exc),
+                tokens_spent=worker.tokens_spent,
+                model=worker.model,
             )
 
     async def _decompose(self, root_text: str) -> list[dict]:
@@ -1250,12 +1272,16 @@ class Orchestrator:
             # and the single writer records it here -- the same shape the
             # discarded-claim loop below already uses.
             if result.entailment_skipped:
+                # C4: the reason used to be the constant
+                # "entailment_unavailable" for all five causes, so a discard
+                # count of 0 could not be traced back to *which* thing broke.
+                # The worker is the only layer that knows; it now says.
                 await self.ledger.log(
                     "entailment_filter_skipped",
                     result.question_id,
                     {
                         "claim_count": len(result.claims),
-                        "reason": "entailment_unavailable",
+                        "reason": result.entailment_skipped,
                     },
                 )
             # Recall measurement: entailment drops claims before grading, so
@@ -1282,13 +1308,31 @@ class Orchestrator:
             # verdicts는 claim 텍스트로 키잉한다. 이는 Ledger의 hash 기반
             # 병합(§6.1.3, D3)과 정합적이다 — 동일 텍스트 클레임은 커밋 시
             # 하나의 claim으로 병합되므로 텍스트당 verdict 하나가 맞다.
+            #
+            # That same keying is lossy for *token accounting* (C3-m1
+            # Finding 2): when `result.claims` holds the same text twice,
+            # `_grade()` still runs -- and the agentic judge can still
+            # dispatch -- both times, but the second write into `verdicts`
+            # overwrites the first. Deriving a token total from
+            # `verdicts.values()` after the loop would silently drop the
+            # first (real, already-billed-against-the-global-budget) judge
+            # dispatch. So the total is accumulated per `_grade()` call
+            # here, never read back out of the dict. This does not change
+            # what gets graded or how many times -- only how the spend is
+            # summed; deduping the loop itself is a separate decision with
+            # its own measurement implications (it would change which
+            # claims get judged), left untouched here.
             verdicts = {}
+            judge_tokens_spent = 0
             for claim in result.claims:
-                verdicts[claim.text] = await self._grade(claim, value_est)
+                verdict = await self._grade(claim, value_est)
+                judge_tokens_spent += verdict.tokens_spent
+                verdicts[claim.text] = verdict
             await self.ledger.commit_pass(
                 result.question_id,
                 result,
                 verdicts,
+                judge_tokens_spent=judge_tokens_spent,
             )
             await self._regrade_pending(result.question_id, value_est)
             # D15: assess progress and trip the stall valve if this
@@ -1596,13 +1640,34 @@ class Orchestrator:
         # exact text the grader judged, so the `uncited_ratio` recorded in the
         # ledger now describes what was actually delivered.
         #
-        # `last` remains the fallback for the case where every attempt
-        # orphaned: there is no rendered text then, and a raw draft still
-        # beats exiting empty-handed.
+        # When every attempt orphaned there is no rendered text at all, and
+        # `last` (the raw draft) used to ship as-is. Sample #17's run
+        # `9d9daa8b` left by that path with **32 raw markers and zero
+        # footnotes** -- W3-a's failure, back again (ORPHAN1).
+        #
+        # `render_best_effort` narrows that: one invented claim id no longer
+        # costs the report every *other* citation it earned. The orphan
+        # markers stay visible on purpose -- D10 rejected substituting them
+        # away, because removing the raw marker hides the integrity failure
+        # instead of reporting it. So the appendix names them instead.
         chosen = _best_rejected_draft(rejected)
-        report = (chosen or last_rendered or last or "") + (
-            "\n\n## 부록: 미해결 사유\n조립/채점 재시도 캡 소진."
-        )
+        reason = "조립/채점 재시도 캡 소진."
+        best = chosen or last_rendered
+        if best is None and last:
+            best, orphans = await self.citation_renderer.render_best_effort(last)
+            if orphans:
+                await self.ledger.log(
+                    "report_assembly_degraded",
+                    root_id,
+                    {"reason": "orphan_citations_delivered", "orphans": orphans},
+                )
+                reason = (
+                    "조립/채점 재시도 캡 소진. 그리고 조립기가 존재하지 않는 "
+                    f"클레임 id 를 인용했다({', '.join(orphans)}) -- 본문에 남은 "
+                    "`[C:...]` 표기는 각주로 해소되지 못한 내부 주소이며 "
+                    "출처가 아니다."
+                )
+        report = (best or "") + f"\n\n## 부록: 미해결 사유\n{reason}"
         await self.ledger.complete_run()
         return report
 

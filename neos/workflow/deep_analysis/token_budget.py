@@ -57,7 +57,15 @@ class TokenBudgetExhausted(RuntimeError):
 
     Every field defaults, so `TokenBudgetExhausted("cap")` stays valid; the
     default `cause` is the reading the bare exception always carried.
+
+    `tokens_spent` is stamped from outside, by `call_json`, and is documented
+    with the other C3 machinery in `llm.py`. `reserve` cannot fill it in: the
+    refusal happens *before* dispatch, so from here the answer is always 0 --
+    what the field carries is what earlier attempts in the same `call_json`
+    loop already burned.
     """
+
+    tokens_spent: int = 0
 
     def __init__(
         self,

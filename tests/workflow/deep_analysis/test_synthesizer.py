@@ -330,9 +330,17 @@ async def test_the_composer_is_told_which_question_each_answer_answers():
 
 @pytest.mark.asyncio
 async def test_synthesizer_uses_the_injected_ceiling():
-    """dev는 cap을 15배 줄이면서 합성 상한은 물려받았다.
+    """dev 는 예산을 줄이면서 합성 상한은 물려받았다 -- 그것이 이 배선의 유래다.
 
-    상한을 주입받지 못하면 20000 예산에 4000짜리 호출을 세 번 넣게 된다.
+    ⚠️ **W1-m3: 여기 있던 수치("15배", "20000 예산에 4000짜리")는 낡았다.**
+    그 시절 dev 는 `global_token_cap` 20,000 · `synthesis_max_tokens` 4,000
+    이었고, 지금은 D-4(캡 상향)와 이후 재조정을 거쳐 **140,000 · 2,000** 이다.
+    단언은 그 수치에 의존한 적이 없다(주입한 1200 이 그대로 나오는지만 본다)
+    므로 서술만 고친다 -- 정본은 `neos/config/schema.py` 의 dev 프로파일이고,
+    여기에 수치를 다시 적으면 다음 조정에서 또 낡는다.
+
+    고정하는 불변식: **주입된 상한이 이긴다.** 물려받기만 하면 남은 예산보다
+    큰 호출을 반복해 넣게 된다.
     """
     seen = []
 
@@ -375,8 +383,9 @@ async def test_reduce_uses_the_injected_ceiling():
     """§7: 세 호출부(assemble/reduce/reduce_node) 모두 주입된 상한을 써야 한다.
 
     `assemble`만 검증되어 있었다 -- `reduce`가 여전히 전역 설정을 직접 읽는
-    회귀는 dev 프로파일에서 20000 예산에 4000짜리 호출을 넣는 바로 그 결함을
-    되살린다.
+    회귀는 dev 프로파일이 남은 예산보다 큰 호출을 넣는 바로 그 결함을
+    되살린다. (W1-m3: 여기 있던 "20000 예산에 4000짜리" 는 옛 dev 프로파일의
+    수치다. 위 `test_synthesizer_uses_the_injected_ceiling` 의 상자 참조.)
     """
     seen = []
 

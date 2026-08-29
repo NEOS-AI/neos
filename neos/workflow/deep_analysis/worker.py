@@ -20,6 +20,11 @@ from .llm import (
 )
 from .model_roles import resolve_harness_model
 from .models import (
+    ENTAILMENT_BUDGET_EXHAUSTED,
+    ENTAILMENT_PROVIDER_FAILED,
+    ENTAILMENT_SCHEMA_INVALID,
+    ENTAILMENT_TRUNCATED,
+    ENTAILMENT_UNPARSEABLE,
     Effort,
     ProposedBlob,
     ProposedClaim,
@@ -162,8 +167,38 @@ class Worker:
         self._tokens = 0
         self._model = ""
         self._confidence_clamped_by_source_count: dict[str, int] = {}
-        self._entailment_skipped = False
+        self._entailment_skipped: str | None = None
         self._search_augmentation: dict[str, int] = {}
+
+    @property
+    def tokens_spent(self) -> int:
+        """What this worker has burned so far, including on failed calls (C3).
+
+        The orchestrator needs this on the path where `investigate()` raises:
+        it builds a `failed` result there, and a bare one reports 0 tokens
+        for a worker that may have run several billed calls first.
+        """
+        return self._tokens
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    async def _billed_call_json(self, *args, **kwargs):
+        """`call_json` that charges this worker whether or not it succeeds.
+
+        Every exception `call_json` raises carries `tokens_spent` (C3). Without
+        this wrapper the tokens of a failed analysis or repair call vanished --
+        and those are exactly the calls that returned no claims, so the run
+        looked cheapest precisely where it got the least.
+        """
+        try:
+            data, response = await call_json(*args, **kwargs)
+        except (JSONParseError, LLMProviderError, TokenBudgetExhausted) as exc:
+            self._tokens += exc.tokens_spent
+            raise
+        self._tokens += response.input_tokens + response.output_tokens
+        return data, response
 
     def flush_partial(self, question_id: str) -> WorkerResult:
         return WorkerResult(
@@ -309,7 +344,7 @@ class Worker:
         self._blobs = []
         self._tokens = 0
         self._confidence_clamped_by_source_count = {}
-        self._entailment_skipped = False
+        self._entailment_skipped = None
         self._search_augmentation = {}
 
         config = settings.config.deep_analysis
@@ -385,7 +420,7 @@ class Worker:
         evidence_context = "\n\n".join(evidence_blocks) or "(검색 결과 없음)"
         prompt = brief.replace("{fetched_evidence}", evidence_context)
 
-        data, response = await call_json(
+        data, _response = await self._billed_call_json(
             self._model,
             prompt,
             # effort.token_cap is the effort's BUDGET, not a per-response
@@ -399,7 +434,6 @@ class Worker:
             cassette=self.cassette,
             stage="worker_analysis",
         )
-        self._tokens += response.input_tokens + response.output_tokens
 
         for raw_claim in data.get("claims", []):
             evidence_items = []
@@ -517,32 +551,36 @@ class Worker:
                 # The truncation expansion is a separate axis and still runs.
                 retries=0,
             )
-        except TokenBudgetExhausted:
+        except TokenBudgetExhausted as exc:
             # The batch propagates unrefined via `investigate()`'s
             # `flush_partial` -- flag the skip here so that unfiltered batch
             # is never silently mistaken for "entailment found nothing to
             # discard".
-            self._entailment_skipped = True
+            self._tokens += exc.tokens_spent
+            self._entailment_skipped = ENTAILMENT_BUDGET_EXHAUSTED
             raise
         except LLMProviderError as exc:
             logger.warning(
                 "Claim entailment provider failed: error_type=%s",
                 type(exc).__name__,
             )
-            self._entailment_skipped = True
+            self._tokens += exc.tokens_spent
+            self._entailment_skipped = ENTAILMENT_PROVIDER_FAILED
             return claims
-        except TruncatedResponseError:
+        except TruncatedResponseError as exc:
             # A filter, not a gate: these claims still face the deterministic
             # and agentic graders. Dropping or rejecting the batch would
             # manufacture the very recall loss the discard measurement exists
             # to detect. Pass them through, but record that the filter never
             # ran on them.
             logger.warning("Claim entailment response was cut off")
-            self._entailment_skipped = True
+            self._tokens += exc.tokens_spent
+            self._entailment_skipped = ENTAILMENT_TRUNCATED
             return claims
-        except JSONParseError:
+        except JSONParseError as exc:
             logger.warning("Claim entailment response was not valid JSON")
-            self._entailment_skipped = True
+            self._tokens += exc.tokens_spent
+            self._entailment_skipped = ENTAILMENT_UNPARSEABLE
             return claims
 
         self._tokens += response.input_tokens + response.output_tokens
@@ -550,7 +588,9 @@ class Worker:
         outcome = apply_entailment_results(claims, payload)
         if outcome is None:
             logger.warning("Claim entailment response failed validation")
-            self._entailment_skipped = True
+            # The only skip cause that is not a failed call: the model answered,
+            # the tokens are already counted above, and the *shape* was wrong.
+            self._entailment_skipped = ENTAILMENT_SCHEMA_INVALID
             return claims
         self._discarded_claims = list(outcome.discarded)
         return outcome.refined
@@ -624,7 +664,7 @@ class Worker:
             f"\n\n수리 대상:\n{repair_lines}"
         )
 
-        data, response = await call_json(
+        data, _response = await self._billed_call_json(
             self._model,
             prompt,
             max_tokens=min(
@@ -635,7 +675,6 @@ class Worker:
             cassette=self.cassette,
             stage="worker_repair",
         )
-        self._tokens += response.input_tokens + response.output_tokens
 
         repair_results = []
         for raw in data.get("repairs", []):

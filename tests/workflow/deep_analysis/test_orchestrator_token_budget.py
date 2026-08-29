@@ -231,6 +231,46 @@ async def test_optional_agentic_exhaustion_keeps_deterministic_verdict():
     assert verdict.diagnostics["deterministic"] == "passed"
     assert verdict.diagnostics["agentic"] == "exhausted"
     assert verdict.diagnostics["agentic_label"] is None
+    # A refusal with nothing stamped on it (the ordinary case: reserve()
+    # refused on the very first attempt) carries 0 forward.
+    assert verdict.tokens_spent == 0
+    assert verdict.diagnostics["judge_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_carries_forward_what_earlier_judge_attempts_spent():
+    """C3-m1: `reserve()` refuses before dispatch, so the refusing attempt
+    itself spent nothing -- but `call_json` stamps `exc.tokens_spent` with
+    what earlier attempts in the *same* judge call already burned
+    (llm.py `_charge`). That is real spend already deducted from the global
+    `TokenBudget`; dropping it here would silently write it off.
+    """
+
+    class ExhaustedAgentic:
+        async def grade(self, claim, value_est):
+            exc = TokenBudgetExhausted("cap")
+            exc.tokens_spent = 65  # what a prior attempt in this call burned
+            raise exc
+
+    orchestrator = Orchestrator(
+        object(),
+        "run",
+        worker_factory=lambda: None,
+        grader=Grader(),
+        agentic_grader=ExhaustedAgentic(),
+        ledger=ExhaustedLedger(),
+        synthesizer=Synthesizer(),
+        citation_renderer=CitationRenderer(),
+        global_token_cap=20,
+    )
+
+    verdict = await orchestrator._grade(ProposedClaim("fact", 0.8), 0.9)
+
+    assert verdict.diagnostics["agentic"] == "exhausted"
+    assert verdict.tokens_spent == 65
+    assert verdict.diagnostics["judge_tokens"] == 65
+    # The two channels must never diverge -- see agentic.py's _diagnostics.
+    assert verdict.tokens_spent == verdict.diagnostics["judge_tokens"]
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,9 @@ import pytest
 from neos.config.settings import settings
 from neos.workflow.deep_analysis.cassette import Cassette
 from neos.workflow.deep_analysis.models import (
+    ENTAILMENT_BUDGET_EXHAUSTED,
+    ENTAILMENT_TRUNCATED,
+    ENTAILMENT_UNPARSEABLE,
     Effort,
     ProposedBlob,
     ProposedClaim,
@@ -172,10 +175,13 @@ async def test_scout_analysis_is_not_capped_by_the_effort_budget():
 @pytest.mark.parametrize(
     "entailment, expected_tokens",
     [
-        # call_json only hands back a response alongside a successfully
-        # parsed payload -- a response that never parses at all never
-        # reaches the line that adds its tokens to the running total.
-        ("not json", 15),
+        # 이 줄은 예전에 15 였고, 그 15 가 C3 그 자체였다. 옛 주석은 누수를
+        # **기대 동작으로 서술**하고 있었다: "call_json 은 파싱에 성공했을 때만
+        # 응답을 돌려주므로, 끝내 파싱되지 않은 응답은 토큰을 더하는 줄에
+        # 도달하지 못한다." 맞는 서술이었지만 그것은 설명이지 정당화가 아니다 --
+        # 그 호출은 실제로 15 토큰을 태웠고 원장은 0 을 적었다.
+        # 이제 예외가 `tokens_spent` 를 싣고 오므로 두 번의 시도가 다 잡힌다.
+        ("not json", 30),
         ('{"results":[{"index":0,"action":"keep"}]}', 30),
         (
             '{"results":[{"index":0,"action":"unknown"},'
@@ -276,8 +282,10 @@ async def test_entailment_token_exhaustion_flags_the_skip(monkeypatch):
     그 사실이 `entailment_skipped`로 남아야 한다.
 
     이게 없으면 `flush_partial`이 반환하는 미필터 claim 배치가
-    `entailment_skipped=False`를 달고 나가 "버릴 게 없었다"와 "필터가 안
+    `entailment_skipped=None`을 달고 나가 "버릴 게 없었다"와 "필터가 안
     돌았다"가 다시 구분 불가능해진다.
+
+    C4 이후로는 **어느 쪽으로** 안 돌았는지까지 남는다.
     """
     from neos.workflow.deep_analysis.llm import call_json as real_call_json
 
@@ -300,7 +308,7 @@ async def test_entailment_token_exhaustion_flags_the_skip(monkeypatch):
 
     assert result.status == "partial"
     assert [claim.text for claim in result.claims] == ["keep", "broad", "drop"]
-    assert result.entailment_skipped is True
+    assert result.entailment_skipped == ENTAILMENT_BUDGET_EXHAUSTED
 
 
 @pytest.mark.asyncio
@@ -416,7 +424,7 @@ async def test_truncated_entailment_passes_claims_through_and_flags_the_skip():
 
     assert [claim.text for claim in result.claims] == ["keep", "broad", "drop"]
     assert result.discarded_claims == []
-    assert result.entailment_skipped is True
+    assert result.entailment_skipped == ENTAILMENT_TRUNCATED
     # 생성 1회 + entailment 1회 + 확장 재시도 1회
     assert llm.calls == 3
 
@@ -439,7 +447,7 @@ async def test_successful_entailment_does_not_flag_a_skip():
         Search(), fetch_fn=Fetch(), llm_client=llm
     ).investigate("Q\n{fetched_evidence}", Effort.SCOUT, "q")
 
-    assert result.entailment_skipped is False
+    assert result.entailment_skipped is None
 
 
 @pytest.mark.asyncio
@@ -452,5 +460,5 @@ async def test_malformed_entailment_flags_the_skip_without_retrying():
     ).investigate("Q\n{fetched_evidence}", Effort.SCOUT, "q")
 
     assert [claim.text for claim in result.claims] == ["keep", "broad", "drop"]
-    assert result.entailment_skipped is True
+    assert result.entailment_skipped == ENTAILMENT_UNPARSEABLE
     assert len(llm.prompts) == 2   # 생성 1 + entailment 1, 재시도 없음

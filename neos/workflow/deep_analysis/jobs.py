@@ -54,6 +54,9 @@ JOB_STARTED = "job_started"
 JOB_RESUMED = "job_resumed"
 JOB_COMPLETED = "job_completed"
 JOB_FAILED = "job_failed"
+#: 리포트를 대화 메시지로 저장하지 못했다. **터미널 이벤트가 아니다** --
+#: 이 시점에 run 은 이미 `job_completed`/`job_failed` 로 끝나 있다.
+MESSAGE_PERSIST_FAILED = "assistant_message_persist_failed"
 
 #: 스트림이 이 kind를 보면 종료한다.
 TERMINAL_JOB_KINDS = frozenset({JOB_COMPLETED, JOB_FAILED})
@@ -107,6 +110,84 @@ async def _record_failure(
             "failed to persist job_failed for deep_analysis run %s",
             run_id,
             exc_info=True,
+        )
+
+
+async def load_degradations(session_factory, run_id: str) -> list[dict[str, Any]]:
+    """이 run 의 강등 집계를 **새 세션**에서 읽는다 (FE5).
+
+    실패 경로 전용이다. 성공 경로는 `execute_run` 이 자기 세션에서 이미 읽는다.
+    실패한 뒤에는 그 세션이 롤백/오류 상태일 수 있어 재사용하지 않는다 --
+    `_record_failure` 가 새 세션을 여는 것과 같은 이유다.
+
+    읽기 전용이라 P2(원장 단일 작성자)를 건드리지 않는다. 여기서 예외가 나면
+    강등 없이 진행한다: 실패 run 의 강등 목록을 못 읽었다고 실패 자체의
+    기록까지 잃으면 안 된다.
+    """
+    try:
+        async with session_factory() as session:
+            return await Ledger(session, run_id).degradations()
+    except Exception:  # noqa: BLE001 - 강등을 못 읽는 것이 실패 기록을 막으면 안 된다
+        logger.warning(
+            "failed to read degradations for deep_analysis run %s",
+            run_id,
+            exc_info=True,
+        )
+        return []
+
+
+async def record_message_persist_failure(
+    session_factory,
+    run_id: str,
+    *,
+    status: str,
+    error_type: str,
+    degradations_lost: int,
+) -> None:
+    """리포트를 대화에 남기지 못한 사실을 원장에 적는다 (P1 #8).
+
+    `_persist_assistant_message` 는 예외를 삼킨다 -- 그래야 한다. run 은
+    성공했고 리포트는 이미 `job_completed` 페이로드에 있으므로, 메시지 저장
+    실패로 job 을 죽이면 더 나쁘다. 삼키는 것 자체는 옳고, 문제는 흔적이
+    `logger.warning` 하나뿐이라 **조회할 수 없다**는 것이었다. FE5 이후
+    실패한 run 도 이 경로를 타므로 여기서 예외가 나면 실패 사실과 강등이
+    둘 다 대화에서 사라진다. §3.2 의 규칙 -- 새 fallback 에는 그것이 남기는
+    이벤트가 따라온다 -- 을 뒤늦게 적용한다.
+
+    **`str(exc)` 를 싣지 않고 `error_type` 만 싣는다.** 이 페이로드는 이벤트
+    스트림을 타고 브라우저까지 갈 수 있다. `_failure_body` 가 대화 본문에
+    대해 내린 것과 같은 판단이고, `_record_failure` 가 `error[:500]` 로
+    자르는 것보다 한 단계 더 보수적이다 -- 저쪽은 하네스가 만든 문자열이지만
+    이쪽은 DB 드라이버가 만든 것이라 접속 문자열이 섞일 수 있다.
+
+    **절대 던지지 않는다.** `except` 블록 안에서 불리므로 여기서 예외가
+    올라가면 원래 예외를 가린다.
+    """
+    try:
+        async with session_factory() as session:
+            await _log_lifecycle(
+                session,
+                run_id,
+                MESSAGE_PERSIST_FAILED,
+                {
+                    "status": status,
+                    "error_type": error_type,
+                    "degradations_lost": degradations_lost,
+                },
+            )
+    except Exception as exc:  # noqa: BLE001 - 흔적을 못 남기는 것이 job 을 죽이면 안 된다
+        # 🔴 `exc_info=True` 를 쓰지 말 것. 이 함수는 `except` 블록 안에서
+        # 불리므로 여기서 잡힌 예외는 **원래 예외를 `__context__` 로 달고
+        # 있고**, 트레이스백을 찍으면 원래 예외의 메시지(접속 문자열이 섞일 수
+        # 있는 그것)가 로그로 새어 나온다. 이 저장소의 테스트가 그것을 잡았다
+        # (`test_lookup_failure_is_swallowed_and_logged_without_payload`).
+        # 다른 곳의 `exc_info=True` 를 보고 여기에도 되돌리지 말 것 -- 저기는
+        # except 안에서 불리지 않는다.
+        logger.error(
+            "failed to record assistant_message_persist_failed: "
+            "run=%s error_type=%s",
+            run_id,
+            type(exc).__name__,
         )
 
 

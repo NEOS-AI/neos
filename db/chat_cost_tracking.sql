@@ -156,20 +156,20 @@ GROUP BY c.conversation_id, c.user_id, c.title, c.model_name, c.created_at;
 -- ============================================================================
 
 -- llm_model_pricing 인덱스
-CREATE INDEX idx_llm_pricing_provider_model ON llm_model_pricing(provider, model_name);
-CREATE INDEX idx_llm_pricing_active ON llm_model_pricing(is_active) WHERE is_active = TRUE;
-CREATE INDEX idx_llm_pricing_effective ON llm_model_pricing(effective_from, effective_until);
+CREATE INDEX IF NOT EXISTS idx_llm_pricing_provider_model ON llm_model_pricing(provider, model_name);
+CREATE INDEX IF NOT EXISTS idx_llm_pricing_active ON llm_model_pricing(is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_llm_pricing_effective ON llm_model_pricing(effective_from, effective_until);
 
 -- message_costs 인덱스
-CREATE INDEX idx_message_costs_message_id ON message_costs(message_id);
-CREATE INDEX idx_message_costs_conversation_id ON message_costs(conversation_id);
-CREATE INDEX idx_message_costs_created_at ON message_costs(created_at DESC);
-CREATE INDEX idx_message_costs_provider_model ON message_costs(provider, model_name);
+CREATE INDEX IF NOT EXISTS idx_message_costs_message_id ON message_costs(message_id);
+CREATE INDEX IF NOT EXISTS idx_message_costs_conversation_id ON message_costs(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_message_costs_created_at ON message_costs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_message_costs_provider_model ON message_costs(provider, model_name);
 
 -- user_cost_summary 인덱스
-CREATE INDEX idx_user_cost_summary_user_id ON user_cost_summary(user_id);
-CREATE INDEX idx_user_cost_summary_period ON user_cost_summary(period_type, period_start);
-CREATE INDEX idx_user_cost_summary_user_period ON user_cost_summary(user_id, period_type, period_start);
+CREATE INDEX IF NOT EXISTS idx_user_cost_summary_user_id ON user_cost_summary(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_cost_summary_period ON user_cost_summary(period_type, period_start);
+CREATE INDEX IF NOT EXISTS idx_user_cost_summary_user_period ON user_cost_summary(user_id, period_type, period_start);
 
 -- ============================================================================
 -- 트리거 및 함수
@@ -190,6 +190,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_update_conversation_cost_on_message ON message_costs;
 CREATE TRIGGER trigger_update_conversation_cost_on_message
     AFTER INSERT ON message_costs
     FOR EACH ROW
@@ -210,6 +211,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_update_conversation_cost_on_delete ON message_costs;
 CREATE TRIGGER trigger_update_conversation_cost_on_delete
     AFTER DELETE ON message_costs
     FOR EACH ROW
@@ -224,6 +226,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_update_llm_pricing_updated_at ON llm_model_pricing;
 CREATE TRIGGER trigger_update_llm_pricing_updated_at
     BEFORE UPDATE ON llm_model_pricing
     FOR EACH ROW

@@ -14,6 +14,11 @@ class HangingWorker:
         return WorkerResult(question_id=qid, status="partial", claims=list(self._claims))
 
 class BoomWorker:
+    # C3: 실패 경로가 워커의 누적 지출을 읽으므로 테스트 더블도 그것을 답해야 한다.
+    # 값이 0 이 아닌 것이 요점이다 -- 0 이면 옛 동작(전부 버림)과 구별되지 않는다.
+    tokens_spent = 137
+    model = "claude-sonnet-5"
+
     async def investigate(self, brief, effort, qid, repairs=None, question_text=""): raise RuntimeError("boom")
     def flush_partial(self, qid): return WorkerResult(question_id=qid, status="partial")
 
@@ -35,6 +40,11 @@ async def test_exception_becomes_failed():
     orch = _orch(lambda: BoomWorker())
     r = await orch._run_worker(Assignment(question_id="q", brief="b", effort=Effort.SCOUT))
     assert r.status == "failed" and "boom" in r.fail_reason
+    # C3: 예전에는 여기가 0 이었다 -- 실패한 워커가 태운 토큰이 통째로 사라졌다.
+    # 바로 위 타임아웃 분기는 `flush_partial` 을 써서 같은 문제가 없었고,
+    # 그 비대칭이 이 누수를 오래 숨겼다.
+    assert r.tokens_spent == 137
+    assert r.model == "claude-sonnet-5"
 
 
 @pytest.mark.asyncio

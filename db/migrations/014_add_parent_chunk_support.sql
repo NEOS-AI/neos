@@ -18,7 +18,7 @@ BEGIN
             ALTER TABLE document_chunks
             ADD COLUMN parent_chunk_id INTEGER REFERENCES document_chunks(id) ON DELETE CASCADE;
 
-            CREATE INDEX idx_document_chunks_parent ON document_chunks(parent_chunk_id);
+            CREATE INDEX IF NOT EXISTS idx_document_chunks_parent ON document_chunks(parent_chunk_id);
 
             RAISE NOTICE 'Added parent_chunk_id column to document_chunks';
         END IF;
@@ -33,7 +33,7 @@ BEGIN
             ALTER TABLE document_chunks
             ADD COLUMN chunking_strategy VARCHAR(20) DEFAULT 'sentence';
 
-            CREATE INDEX idx_document_chunks_strategy ON document_chunks(chunking_strategy);
+            CREATE INDEX IF NOT EXISTS idx_document_chunks_strategy ON document_chunks(chunking_strategy);
 
             RAISE NOTICE 'Added chunking_strategy column to document_chunks';
         END IF;

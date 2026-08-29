@@ -1,6 +1,6 @@
 BEGIN;
 
-CREATE TABLE coding_sandbox_admissions (
+CREATE TABLE IF NOT EXISTS coding_sandbox_admissions (
     admission_id VARCHAR(64) PRIMARY KEY,
     idempotency_key VARCHAR(128) NOT NULL,
     tenant_id VARCHAR(255) NOT NULL,
@@ -49,7 +49,7 @@ CREATE TABLE coding_sandbox_admissions (
     )
 );
 
-CREATE TABLE coding_managed_sandboxes (
+CREATE TABLE IF NOT EXISTS coding_managed_sandboxes (
     allocation_id VARCHAR(64) PRIMARY KEY,
     admission_id VARCHAR(64) NOT NULL UNIQUE
         REFERENCES coding_sandbox_admissions(admission_id) ON DELETE RESTRICT,
@@ -96,12 +96,12 @@ CREATE TABLE coding_managed_sandboxes (
     )
 );
 
-CREATE UNIQUE INDEX idx_coding_managed_sandboxes_current_task
+CREATE UNIQUE INDEX IF NOT EXISTS idx_coding_managed_sandboxes_current_task
 ON coding_managed_sandboxes(task_id)
 WHERE cleaned_at IS NULL
   AND state NOT IN ('cleaned', 'failed');
 
-CREATE TABLE coding_sandbox_cleanup_attempts (
+CREATE TABLE IF NOT EXISTS coding_sandbox_cleanup_attempts (
     cleanup_attempt_id VARCHAR(64) PRIMARY KEY,
     allocation_id VARCHAR(64) NOT NULL
         REFERENCES coding_managed_sandboxes(allocation_id) ON DELETE CASCADE,
@@ -120,7 +120,7 @@ CREATE TABLE coding_sandbox_cleanup_attempts (
     finished_at TIMESTAMPTZ
 );
 
-CREATE INDEX idx_coding_sandbox_cleanup_attempts_pending
+CREATE INDEX IF NOT EXISTS idx_coding_sandbox_cleanup_attempts_pending
     ON coding_sandbox_cleanup_attempts(allocation_id, next_retry_at)
     WHERE finished_at IS NULL;
 

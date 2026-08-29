@@ -48,6 +48,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS tool_registry_search_vector_trigger ON tool_registry;
 CREATE TRIGGER tool_registry_search_vector_trigger
 BEFORE INSERT OR UPDATE ON tool_registry
 FOR EACH ROW EXECUTE FUNCTION tool_registry_update_search_vector();

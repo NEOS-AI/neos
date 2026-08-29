@@ -207,6 +207,18 @@ function activityLabel(event: DeepAnalysisJobEvent): string | null {
   if (kind === "claim_discarded") {
     return "클레임 폐기됨";
   }
+  if (kind === "assistant_message_persist_failed") {
+    // 이 이벤트는 **터미널 이벤트 뒤에** 온다 -- run 은 이미 끝났고, 실패한
+    // 것은 리포트를 대화에 저장하는 일이다. 라이브 스트림은 보통 그전에
+    // 닫히므로 이 라벨이 실제로 뜨는 곳은 `after=0` 전체 재생 경로다.
+    // 그래도 라벨을 두는 이유는 §3.2 의 짝 규칙이다: 새 이벤트에는 FE
+    // 라벨이 따라온다. FE1 이 이벤트 8종에서 이것을 빠뜨려 §5.2 를 치렀다.
+    //
+    // 강등 어휘(`degradationKind`)에는 넣지 않는다 -- 이 실패의 정의상 그
+    // 메시지는 저장되지 않았으므로, 새로고침 복원 경로에는 그릴 메시지 자체가
+    // 없다. 강등으로 세면 셀 수 없는 것을 세게 된다.
+    return "리포트를 대화에 저장하지 못함 (원장에는 남아 있음)";
+  }
   if (kind === JOB_STARTED) {
     return "분석 시작";
   }

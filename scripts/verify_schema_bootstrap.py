@@ -144,8 +144,22 @@ def apply_all(container: str, database: str, order: list[str]) -> list[Failure]:
     return failures
 
 
-def verify_against_fresh_database(image: str, keep: bool) -> list[Failure]:
-    """일회용 컨테이너를 띄워 빈 DB 에 정본 순서를 전량 적용한다."""
+def verify_against_fresh_database(
+    image: str, keep: bool, *, check_reapply: bool = True
+) -> tuple[list[Failure], list[Failure]]:
+    """일회용 컨테이너를 띄워 정본 순서를 적용한다. `(1회차 실패, 2회차 실패)`.
+
+    두 번 적용하는 이유: 신선한 DB 재현(SCHEMA1)과 **재적용 멱등성**(SCHEMA3)은
+    다른 성질이고 둘 다 실제로 쓰인다. `tests/conftest.py` 는 세션마다 전량을
+    다시 적용하므로 후자가 오히려 일상 경로다.
+
+    멱등하지 않을 때의 대가는 추상적이지 않다 -- 2026-08-27 에 개발 DB 에
+    **append-only 트리거가 아예 없는 것**이 발견됐다. 036 이 중간에서 죽어
+    `CREATE TRIGGER` 에 도달하지 못했고, "재적용은 원래 몇 개 실패한다" 는
+    상태가 그것을 가리고 있었다.
+
+    1회차가 실패하면 2회차는 돌리지 않는다 -- 무엇이 원인인지 섞인다.
+    """
     container = f"neos-schema-verify-{uuid.uuid4().hex[:8]}"
     database = "neos_verify"
 
@@ -167,7 +181,13 @@ def verify_against_fresh_database(image: str, keep: bool) -> list[Failure]:
         )
         if created.returncode != 0:
             raise RuntimeError(f"DB 생성 실패: {created.stderr.strip()}")
-        return apply_all(container, database, bootstrap_order())
+        order = bootstrap_order()
+        first = apply_all(container, database, order)
+        if first or not check_reapply:
+            return first, []
+        # 두 번째 적용 -- 이미 적용된 DB 에 다시 돌려도 실패가 없어야 한다.
+        # `tests/conftest.py` 가 세션마다 전량 적용하므로 이것이 일상 경로다.
+        return first, apply_all(container, database, order)
     finally:
         if keep:
             print(f"\n컨테이너를 남긴다: {container} (docker rm -f {container} 로 정리)")
@@ -184,6 +204,11 @@ def main() -> int:
     )
     parser.add_argument("--image", default=_DEFAULT_IMAGE, help="사용할 postgres 이미지")
     parser.add_argument("--keep", action="store_true", help="검증 컨테이너를 남긴다")
+    parser.add_argument(
+        "--skip-reapply",
+        action="store_true",
+        help="재적용 멱등성 검사를 건너뛴다 (1회차만 본다)",
+    )
     args = parser.parse_args()
 
     problems = check_list()
@@ -198,15 +223,29 @@ def main() -> int:
     if args.check_list_only:
         return 0
 
-    failures = verify_against_fresh_database(args.image, args.keep)
-    if failures:
-        print(f"\n신선한 DB 에서 {len(failures)}개가 실패한다:")
-        for failure in failures:
+    first, second = verify_against_fresh_database(
+        args.image, args.keep, check_reapply=not args.skip_reapply
+    )
+    if first:
+        print(f"\n신선한 DB 에서 {len(first)}개가 실패한다:")
+        for failure in first:
             print(f"  - {failure.path}")
             print(f"      {failure.message}")
         print(
             "\n파일 하나가 죽으면 그 파일의 **나머지 구문이 통째로 미적용**이다. "
             "실패 건수가 아니라 잃은 객체를 세야 한다."
+        )
+        return 1
+    if second:
+        print(f"\n신선한 DB 적용 통과 -- {len(order)}개 전부 성공")
+        print(f"그러나 **재적용에서 {len(second)}개가 실패한다** (SCHEMA3):")
+        for failure in second:
+            print(f"  - {failure.path}")
+            print(f"      {failure.message}")
+        print(
+            "\n`tests/conftest.py` 가 세션마다 전량을 다시 적용하므로 이것이 일상 "
+            "경로다. 멱등하지 않으면 그 파일의 나머지가 미적용으로 남고, "
+            "'재적용은 원래 몇 개 실패한다' 는 상태가 진짜 실패를 가린다."
         )
         return 1
 

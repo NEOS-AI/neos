@@ -248,11 +248,13 @@ async def _expire_pending_approvals_async() -> None:
     rejected_count = 0
     for item in expired:
         try:
-            await _inject_timeout_rejection(
+            # 실제로 결정을 쓴 것만 센다. 건너뜀과 복원 실패는 거부가 아니다 --
+            # 세면 아래 로그의 N 이 원장과 어긋난다.
+            if await _inject_timeout_rejection(
                 session_id=item.session_id,
                 request_id=item.request_id,
-            )
-            rejected_count += 1
+            ):
+                rejected_count += 1
         except Exception as exc:
             logger.warning(
                 "Failed to inject timeout rejection for request_id=%s: %s",
@@ -266,50 +268,80 @@ async def _expire_pending_approvals_async() -> None:
     )
 
 
-async def _inject_timeout_rejection(session_id: str, request_id: str) -> None:
-    """만료된 승인 요청에 대해 워크플로우 상태에 rejection을 주입한다."""
-    try:
-        from neos.workflow.graph import multi_agent_workflow
+async def _inject_timeout_rejection(session_id: str, request_id: str) -> bool:
+    """만료된 승인 요청에 대해 워크플로우 상태에 rejection을 주입한다.
 
-        if (
-            not multi_agent_workflow._graph_initialized
-            or not multi_agent_workflow._graph_uses_checkpointer
-        ):
-            logger.debug(
-                "[ExpirePendingApprovals] Graph not in checkpointer mode, skipping injection "
-                "for session=%s",
-                session_id,
-            )
-            return
+    **결정은 재개와 같은 그래프에 쓴다.** 설계된 run 은 `execution_topology`
+    를 상태에 싣고 멈추므로, 정적 그래프로 쓰면 LangGraph 가 정적 간선으로
+    `as_node` 를 풀어 엉뚱한 후속 노드를 트리거하거나 `InvalidUpdateError` 를
+    낸다. 핸들러 경로(`approval_handlers.respond_to_approval`)가 이미 쓰는
+    `resume_graph_for` 를 여기서도 쓴다 -- 사람이 누른 거부와 타임아웃이 낸
+    거부가 서로 다른 그래프에 쓸 이유가 없다.
 
-        graph = multi_agent_workflow.graph
-        config = {"configurable": {"thread_id": session_id}}
+    반환값은 **실제로 결정을 썼는지**다. 건너뜀(체크포인터 미사용·이미
+    결정됨·pending 아님)과 복원 실패는 전부 `False` 이며, 호출부는 이것으로
+    "Auto-rejected N개" 를 센다. 예외는 삼키지 않고 호출부로 올린다 -- 예전의
+    `except Exception ... non-critical` 은 바깥 루프의 try/except 를 죽은
+    코드로 만들어 실패한 주입까지 성공으로 세게 했다.
+    """
+    from neos.workflow.graph import multi_agent_workflow
+    from neos.workflow.resume_graph import ResumeGraphUnavailable, resume_graph_for
 
-        current_state = await graph.aget_state(config)
-        if current_state is None:
-            return
-
-        pending = current_state.values.get("pending_approvals") or []
-        # 이미 다른 결정이 내려졌으면 스킵
-        if current_state.values.get("approval_decision") is not None:
-            return
-        # 해당 request_id가 아직 pending 상태인지 확인
-        if not any(p.get("request_id") == request_id for p in pending):
-            return
-
-        await graph.aupdate_state(
-            config=config,
-            values={"approval_decision": "rejected"},
+    if (
+        not multi_agent_workflow._graph_initialized
+        or not multi_agent_workflow._graph_uses_checkpointer
+    ):
+        logger.debug(
+            "[ExpirePendingApprovals] Graph not in checkpointer mode, skipping injection "
+            "for session=%s",
+            session_id,
         )
-        logger.info(
-            "[ExpirePendingApprovals] Injected timeout rejection: session=%s request_id=%s",
+        return False
+
+    graph = multi_agent_workflow.graph
+    config = {"configurable": {"thread_id": session_id}}
+
+    current_state = await graph.aget_state(config)
+    if current_state is None:
+        return False
+
+    pending = current_state.values.get("pending_approvals") or []
+    # 이미 다른 결정이 내려졌으면 스킵
+    if current_state.values.get("approval_decision") is not None:
+        return False
+    # 해당 request_id가 아직 pending 상태인지 확인
+    if not any(p.get("request_id") == request_id for p in pending):
+        return False
+
+    try:
+        resume_graph = await resume_graph_for(
+            current_state.values,
+            workflow=multi_agent_workflow,
+            checkpointer=graph.checkpointer,
+        )
+    except ResumeGraphUnavailable as error:
+        # **정적 그래프로 내려가지 않는다.** 내려가면 타임아웃이 처리된 것처럼
+        # 보이면서 설계가 의도한 것과 다른 파이프라인이 트리거된다. 쓰지 않으면
+        # `pending_approvals` 가 그대로 남아 상태가 사실과 어긋나지 않는다.
+        logger.error(
+            "[ExpirePendingApprovals] resume graph unavailable, not injecting: "
+            "session=%s request_id=%s reason=%s",
             session_id,
             request_id,
+            error.reason,
         )
-    except Exception as exc:
-        logger.warning(
-            "[ExpirePendingApprovals] _inject_timeout_rejection failed (non-critical): %s", exc
-        )
+        return False
+
+    await resume_graph.aupdate_state(
+        config=config,
+        values={"approval_decision": "rejected"},
+    )
+    logger.info(
+        "[ExpirePendingApprovals] Injected timeout rejection: session=%s request_id=%s",
+        session_id,
+        request_id,
+    )
+    return True
 
 
 # ── Phase 8 (A2UI): 만료된 UIFrameSession 정리 ──────────────────────────────

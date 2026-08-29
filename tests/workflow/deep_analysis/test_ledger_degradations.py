@@ -3,11 +3,19 @@
 test_ledger_report_body.py 와 같은 규율을 따른다: 실제 DB에 쓰고 각 테스트
 끝에서 롤백한다. 남는 쓰기가 있으면 안 된다.
 
-⚠️ 🟡 이 파일의 CANONICAL_FIXTURE 는 **정본 fixture 목록**이다. 같은 목록이
-`web/tests/source/deep-analysis-degradation.test.ts` 에도 있다. 강등 어휘를
-바꾸면 **반드시 양쪽을 함께** 고칠 것 -- 규칙이 두 언어로 구현돼 있기 때문이다
-(설계 §3.3, 로드맵 §7 FE6).
+🔍 **정본 fixture 는 이제 이 파일에 없다** -- `tests/fixtures/`의 JSON 하나이고
+프론트 테스트(`web/tests/source/deep-analysis-degradation.test.ts`)도 **같은
+파일**을 읽는다. 판정 규칙은 여전히 두 언어에 각각 구현돼 있지만(설계 §3.3,
+로드맵 §7 FE6), 어휘가 갈라지면 이제 반대쪽 테스트가 빨개진다.
+
+예전에는 같은 목록이 두 파일에 손으로 복사돼 있었고 동기화를 강제하는 것은
+주석뿐이었다. 트랙 E가 `projection.py` enum ↔ `types.ts` 유니온에 쓴 것과 같은
+규율이며, 그때의 교훈(**대조 테스트 자체가 덜 검사할 수 있다**)에 따라 길이
+단언을 함께 건다.
 """
+
+import json
+import pathlib
 
 import pytest
 
@@ -15,28 +23,16 @@ import neos.database.models  # noqa: F401 - register FK targets on Base
 from neos.database.connection import db_manager
 from neos.workflow.deep_analysis.ledger import Ledger, create_run
 
+FIXTURE_PATH = (
+    pathlib.Path(__file__).resolve().parents[2]
+    / "fixtures"
+    / "deep_analysis_degradation_kinds.json"
+)
+
 # (kind, payload, 기대 결과 kind 또는 None)
 CANONICAL_FIXTURE = [
-    ("report_assembly_degraded", {"reason": "token_budget_exhausted"},
-     "report_assembly_degraded"),
-    ("node_reduction_degraded", {"reason": "token_budget_exhausted"},
-     "node_reduction_degraded"),
-    ("finalization_prompt_clamped", {"exhausted": True, "stage": "report_assembly"},
-     "finalization_prompt_clamped"),
-    ("finalization_prompt_clamped", {"exhausted": False, "stage": "report_assembly"},
-     None),
-    ("report_graded", {"ok": True, "judge": "budget_exhausted"},
-     "judge_unreviewed:budget_exhausted"),
-    ("report_graded", {"ok": True, "judge": "truncated"},
-     "judge_unreviewed:truncated"),
-    ("report_graded", {"ok": True, "judge": "unparseable"},
-     "judge_unreviewed:unparseable"),
-    ("report_graded", {"ok": True, "uncited_ratio": 0.1}, None),
-    ("investigation_stopped_at_floor", {"floor_tokens": 41040}, None),
-    ("investigation_stopped_at_input_bound",
-     {"stage": "worker_analysis", "input_bound": 17723, "ceiling": 12000}, None),
-    ("claim_discarded", {}, None),
-    ("llm_truncated", {"stage": "worker_analysis"}, None),
+    (case["kind"], case["payload"], case["resolved"])
+    for case in json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))["cases"]
 ]
 
 
@@ -115,3 +111,23 @@ async def test_degradations_survives_a_malformed_payload():
 
         assert await ledger.degradations() == []
         await s.rollback()
+
+
+@pytest.mark.no_db
+def test_the_shared_fixture_did_not_shrink():
+    """대조 테스트가 덜 검사하는 사고에 대한 가드.
+
+    트랙 E 에서 실제로 겪었다 -- `types.ts` 유니온을 파싱하는 정규식이 마지막
+    멤버를 놓쳐 **조용히 6개만 비교**했다. fixture 를 파일로 옮기면 같은 종류의
+    사고가 "파일은 읽었는데 케이스가 줄었다"의 모양으로 온다. 길이를 못박아
+    두면 줄어든 순간 드러난다.
+
+    양성 사례(강등으로 판정되는 것)와 음성 사례를 따로 센다: 음성만 남아도
+    12개는 12개이기 때문이다.
+    """
+    resolved = [case for _, _, case in CANONICAL_FIXTURE if case is not None]
+    ignored = [case for _, _, case in CANONICAL_FIXTURE if case is None]
+
+    assert len(CANONICAL_FIXTURE) == 12
+    assert len(resolved) == 6
+    assert len(ignored) == 6

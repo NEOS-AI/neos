@@ -103,7 +103,12 @@ async def test_unsampled_passes_without_calling_judge():
     )
     v = await g.grade(_claim(conf=0.01), value_est=0.01)  # 0.0001<0.35, not sampled
     assert v.ok is True and v.label is None and judge.calls == 0
-    assert v.diagnostics == {"agentic": "skipped", "agentic_label": None}
+    # No dispatch means no cost -- 0 here is a measurement, not a placeholder.
+    assert v.diagnostics == {
+        "agentic": "skipped",
+        "agentic_label": None,
+        "judge_tokens": 0,
+    }
 
 
 async def test_attempted_judgment_reports_pass_or_rejection_state():
@@ -125,10 +130,12 @@ async def test_attempted_judgment_reports_pass_or_rejection_state():
     assert passed.diagnostics == {
         "agentic": "attempted_passed",
         "agentic_label": "SUPPORTS",
+        "judge_tokens": 8,
     }
     assert rejected.diagnostics == {
         "agentic": "attempted_rejected",
         "agentic_label": "PARTIAL",
+        "judge_tokens": 8,
     }
 
 
@@ -304,3 +311,139 @@ async def test_malformed_judge_still_fails_open_for_a_sampled_claim(monkeypatch)
 
     assert verdict.ok is True
     assert verdict.detail == "judge_unparseable"
+
+
+@pytest.mark.asyncio
+async def test_failed_judgement_reports_what_it_burned(monkeypatch):
+    """C3(부분): 판정자는 질문 지출로 가는 채널이 없다 -- 최소한 보이게 한다.
+
+    성공한 판정과 **같은 키**로 적는 것이 요점이다. 실패 경로만 세면 원장은
+    "판정이 태운 토큰"을 물었을 때 실패분만 돌려주고, 그것은 없는 것보다
+    나쁜 수다.
+    """
+
+    async def truncated(*args, **kwargs):
+        error = TruncatedResponseError("cut off")
+        error.tokens_spent = 42
+        raise error
+
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.graders.agentic.call_json", truncated
+    )
+    g = AgenticGrader(
+        judge_model="j", threshold=0.35, sample_rate=1.0, max_output_tokens=800
+    )
+
+    verdict = await g.grade(_claim(), value_est=1.0)
+
+    assert verdict.diagnostics["judge_tokens"] == 42
+
+
+@pytest.mark.asyncio
+async def test_unparseable_judgement_reports_what_it_burned(monkeypatch):
+    async def unparseable(*args, **kwargs):
+        error = JSONParseError("not json")
+        error.tokens_spent = 17
+        raise error
+
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.graders.agentic.call_json", unparseable
+    )
+    g = AgenticGrader(
+        judge_model="j", threshold=0.35, sample_rate=1.0, max_output_tokens=800
+    )
+
+    verdict = await g.grade(_claim(), value_est=1.0)
+
+    assert verdict.detail.startswith("judge_unparseable")
+    assert verdict.diagnostics["judge_tokens"] == 17
+
+
+# --- C3-m1: Verdict.tokens_spent opens the real spend channel that
+# `judge_tokens` (above) only made visible. The two must never diverge --
+# a caller reading one and a caller reading the other would otherwise see
+# different totals for the same pass.
+
+
+async def test_skipped_verdict_has_zero_tokens_spent():
+    g = AgenticGrader(
+        judge_model="j",
+        threshold=0.35,
+        sample_rate=0.0,
+        max_output_tokens=800,
+        sampler=lambda: 0.99,
+    )
+    v = await g.grade(_claim(conf=0.01), value_est=0.01)  # not sampled -> no dispatch
+    assert v.diagnostics["agentic"] == "skipped"
+    assert v.tokens_spent == 0
+    assert v.tokens_spent == v.diagnostics["judge_tokens"]
+
+
+async def test_success_and_rejection_tokens_spent_match_judge_tokens():
+    passed = await AgenticGrader(
+        judge_model="claude-j",
+        threshold=0.0,
+        sample_rate=1.0,
+        max_output_tokens=800,
+        llm_client=FakeJudge("SUPPORTS"),
+    ).grade(_claim(), value_est=1.0)
+    rejected = await AgenticGrader(
+        judge_model="claude-j",
+        threshold=0.0,
+        sample_rate=1.0,
+        max_output_tokens=800,
+        llm_client=FakeJudge("PARTIAL"),
+    ).grade(_claim(), value_est=1.0)
+
+    assert passed.tokens_spent == passed.diagnostics["judge_tokens"] == 8
+    assert rejected.tokens_spent == rejected.diagnostics["judge_tokens"] == 8
+
+
+async def test_unknown_label_tokens_spent_matches_judge_tokens():
+    v = await AgenticGrader(
+        judge_model="claude-j",
+        threshold=0.35,
+        sample_rate=1.0,
+        max_output_tokens=800,
+        llm_client=FakeJudge("WOBBLE"),
+    ).grade(_claim(), value_est=1.0)
+    assert v.ok is False
+    assert v.tokens_spent == v.diagnostics["judge_tokens"] == 8
+
+
+@pytest.mark.asyncio
+async def test_truncated_judgement_tokens_spent_matches_judge_tokens(monkeypatch):
+    async def truncated(*args, **kwargs):
+        error = TruncatedResponseError("cut off")
+        error.tokens_spent = 42
+        raise error
+
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.graders.agentic.call_json", truncated
+    )
+    g = AgenticGrader(
+        judge_model="j", threshold=0.35, sample_rate=1.0, max_output_tokens=800
+    )
+
+    verdict = await g.grade(_claim(), value_est=1.0)
+
+    assert verdict.tokens_spent == verdict.diagnostics["judge_tokens"] == 42
+
+
+@pytest.mark.asyncio
+async def test_unparseable_judgement_tokens_spent_matches_judge_tokens(monkeypatch):
+    async def unparseable(*args, **kwargs):
+        error = JSONParseError("not json")
+        error.tokens_spent = 17
+        raise error
+
+    monkeypatch.setattr(
+        "neos.workflow.deep_analysis.graders.agentic.call_json", unparseable
+    )
+    g = AgenticGrader(
+        judge_model="j", threshold=0.35, sample_rate=1.0, max_output_tokens=800
+    )
+
+    verdict = await g.grade(_claim(), value_est=1.0)
+
+    assert verdict.tokens_spent == verdict.diagnostics["judge_tokens"] == 17

@@ -99,6 +99,7 @@ async def test_ac_b_same_hash_merges_evidence_and_bumps_confidence():
             question_id,
             first,
             {first.claims[0].text: Verdict(ok=True)},
+            judge_tokens_spent=0,
         )
         await ledger._transition(question_id, "investigating")
         second = _result(question_id, self_assessment=0.8)
@@ -106,6 +107,7 @@ async def test_ac_b_same_hash_merges_evidence_and_bumps_confidence():
             question_id,
             second,
             {second.claims[0].text: Verdict(ok=True)},
+            judge_tokens_spent=0,
         )
 
         row = await session.execute(
@@ -171,7 +173,7 @@ async def test_ac_d_identical_claims_do_not_merge_across_runs():
             )
             await ledger._transition(question_id, "investigating")
             result = _result(question_id, text_value="identical fact")
-            await ledger.commit_pass(question_id, result, {})
+            await ledger.commit_pass(question_id, result, {}, judge_tokens_spent=0)
 
         for run_id in run_ids:
             row = await session.execute(
@@ -234,6 +236,7 @@ async def test_commit_pass_stores_blob_before_evidence_and_records_events():
                     },
                 )
             },
+            judge_tokens_spent=0,
         )
 
         blob_count = await session.scalar(

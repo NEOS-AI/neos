@@ -550,6 +550,61 @@ class ChatRepository:
         return message_id
 
     @staticmethod
+    async def upsert_message(
+        message_id: str,
+        conversation_id: str,
+        role: str,
+        content: str,
+        model_name: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """message_id 를 키로 메시지를 쓰거나 덮어쓴다.
+
+        `add_message` 와 **의미가 다르다.** 저쪽에서 중복 message_id 는 에러이고,
+        그것이 챗 경로에서는 옳다 -- 같은 id 가 두 번 오면 무언가 잘못된 것이다.
+
+        이쪽이 필요한 곳은 **같은 논리적 메시지를 여러 번 쓰는 작성자**다.
+        deep_analysis job 이 그렇다: 실패하면 강등을 실어 한 번 쓰고, Celery
+        재시도가 resume=True 로 완주하면 진짜 리포트로 덮어써야 한다. 저쪽
+        `add_message` 로 그 둘째 쓰기를 하면 UNIQUE 위반이 나고, 그 예외를
+        `_persist_assistant_message` 가 삼키므로 **실패 메시지가 남고 성공한
+        리포트는 영영 저장되지 않는다** -- 성공처럼 보이는 실패가 하나 더 는다.
+
+        `content`/`metadata` 만 갱신한다. `sequence_number` 와 `created_at` 은
+        최초 쓰기의 것을 유지한다 -- 덮어쓰기는 새 메시지가 아니라 같은 메시지의
+        갱신이므로 대화 안에서 자리를 옮기면 안 된다.
+        """
+        query = """
+        INSERT INTO messages (
+            message_id,
+            conversation_id,
+            role,
+            content,
+            model_name,
+            metadata,
+            status
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'completed')
+        ON CONFLICT (message_id) DO UPDATE SET
+            content = EXCLUDED.content,
+            model_name = EXCLUDED.model_name,
+            metadata = EXCLUDED.metadata,
+            updated_at = CURRENT_TIMESTAMP
+        RETURNING message_id
+        """
+
+        await db_manager.execute(
+            query,
+            message_id,
+            conversation_id,
+            role,
+            content,
+            model_name,
+            json.dumps(metadata or {})
+        )
+
+        return message_id
+
+    @staticmethod
     async def get_message(message_id: str) -> Optional[Message]:
         """메시지 조회
 

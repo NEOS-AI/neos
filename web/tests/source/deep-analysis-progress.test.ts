@@ -306,3 +306,26 @@ test("run_manifest는 강등이 아니다", () => {
   const state = applyAll([event(1, "run_manifest", { profile: "dev" })]);
   assert.deepEqual(state.degradations, []);
 });
+
+// ---------------------------------------------------------------------------
+// P1 #8: 리포트를 대화에 저장하지 못한 사실이 화면에도 이름을 갖는다.
+
+test("메시지 저장 실패는 라벨을 갖되 강등으로 세지 않는다", () => {
+  const state = applyAll([
+    event(1, "assistant_message_persist_failed", {
+      status: "failed",
+      error_type: "ValueError",
+      degradations_lost: 2,
+    }),
+  ]);
+
+  assert.equal(
+    state.lastActivity,
+    "리포트를 대화에 저장하지 못함 (원장에는 남아 있음)",
+  );
+  // 강등 어휘에는 들지 않는다 -- 이 실패의 정의상 그 메시지는 저장되지
+  // 않았으므로 새로고침 복원 경로에 그릴 것이 없다. 강등으로 세면 셀 수
+  // 없는 것을 세게 되고, `degradations` 를 그리는 앰버 블록이 영원히
+  // 나타나지 않을 사건을 광고한다.
+  assert.deepEqual(state.degradations, []);
+});

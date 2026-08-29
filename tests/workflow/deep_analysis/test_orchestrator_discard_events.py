@@ -19,6 +19,7 @@ from neos.workflow.deep_analysis.citation import CitationRenderer
 from neos.workflow.deep_analysis.ledger import Ledger, create_run
 from neos.workflow.deep_analysis.llm import LLMResponse
 from neos.workflow.deep_analysis.models import (
+    ENTAILMENT_TRUNCATED,
     ProposedBlob,
     ProposedClaim,
     ProposedEvidence,
@@ -95,7 +96,7 @@ def _evidence():
 class DiscardWorker:
     """One completed pass: one surviving claim, two discarded."""
 
-    def __init__(self, discarded=2, entailment_skipped=False):
+    def __init__(self, discarded=2, entailment_skipped=None):
         self.discarded = discarded
         self.entailment_skipped = entailment_skipped
 
@@ -219,7 +220,7 @@ async def test_orchestrator_logs_one_event_when_entailment_was_skipped():
             session,
             run_id,
             ledger,
-            lambda: DiscardWorker(discarded=0, entailment_skipped=True),
+            lambda: DiscardWorker(discarded=0, entailment_skipped=ENTAILMENT_TRUNCATED),
         )
         await orch.run("root?")
 
@@ -228,9 +229,11 @@ async def test_orchestrator_logs_one_event_when_entailment_was_skipped():
     assert len(events) == 1
     qid, payload = events[0]
     assert qid
+    # C4: 예전에는 다섯 원인이 전부 상수 "entailment_unavailable" 로 적혔다.
+    # 이제 워커가 아는 실제 사유가 그대로 원장에 남는다.
     assert json.loads(payload) == {
         "claim_count": 1,
-        "reason": "entailment_unavailable",
+        "reason": ENTAILMENT_TRUNCATED,
     }
 
 
@@ -243,7 +246,7 @@ async def test_orchestrator_logs_no_skip_event_on_a_normal_pass():
             session,
             run_id,
             ledger,
-            lambda: DiscardWorker(discarded=2, entailment_skipped=False),
+            lambda: DiscardWorker(discarded=2, entailment_skipped=None),
         )
         await orch.run("root?")
 

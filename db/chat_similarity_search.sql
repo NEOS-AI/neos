@@ -135,6 +135,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_update_message_embeddings_updated_at ON message_embeddings;
 CREATE TRIGGER trigger_update_message_embeddings_updated_at
     BEFORE UPDATE ON message_embeddings
     FOR EACH ROW

@@ -96,9 +96,9 @@ class DurableLedger:
         for blob in blobs:
             self.blobs[blob.content_hash] = blob
 
-    async def commit_pass(self, question_id, result, verdicts):
+    async def commit_pass(self, question_id, result, verdicts, *, judge_tokens_spent):
         item = next(i for i in self.items if i.id == question_id)
-        item.spent_tokens += result.tokens_spent
+        item.spent_tokens += result.tokens_spent + judge_tokens_spent
         item.status = "open"  # 미해결로 남겨 다음 라운드에 재선택 가능하게
 
     async def pending_claims(self, question_id):

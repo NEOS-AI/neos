@@ -77,9 +77,11 @@ async def test_round_checkpoints_once_per_pass_not_once_per_round():
 
         original_commit_pass = ledger.commit_pass
 
-        async def counting_commit_pass(question_id, result, verdicts):
+        async def counting_commit_pass(question_id, result, verdicts, *, judge_tokens_spent):
             passes.append(question_id)
-            return await original_commit_pass(question_id, result, verdicts)
+            return await original_commit_pass(
+                question_id, result, verdicts, judge_tokens_spent=judge_tokens_spent
+            )
 
         ledger.commit_pass = counting_commit_pass
 
