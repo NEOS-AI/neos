@@ -695,10 +695,17 @@ class Orchestrator:
             partial.status = "partial"
             return partial
         except Exception as exc:  # noqa: BLE001 - A1: any other failure -> failed
+            # C3: a bare result reports 0 tokens, but the worker may have run
+            # several billed calls before the one that raised. The timeout
+            # branch above never had this problem -- `flush_partial` reads the
+            # same counter -- so the loss was confined to this branch and to
+            # the failure modes it catches, which is why it stayed invisible.
             return WorkerResult(
                 question_id=assignment.question_id,
                 status="failed",
                 fail_reason=str(exc),
+                tokens_spent=worker.tokens_spent,
+                model=worker.model,
             )
 
     async def _decompose(self, root_text: str) -> list[dict]:
@@ -1250,12 +1257,16 @@ class Orchestrator:
             # and the single writer records it here -- the same shape the
             # discarded-claim loop below already uses.
             if result.entailment_skipped:
+                # C4: the reason used to be the constant
+                # "entailment_unavailable" for all five causes, so a discard
+                # count of 0 could not be traced back to *which* thing broke.
+                # The worker is the only layer that knows; it now says.
                 await self.ledger.log(
                     "entailment_filter_skipped",
                     result.question_id,
                     {
                         "claim_count": len(result.claims),
-                        "reason": "entailment_unavailable",
+                        "reason": result.entailment_skipped,
                     },
                 )
             # Recall measurement: entailment drops claims before grading, so

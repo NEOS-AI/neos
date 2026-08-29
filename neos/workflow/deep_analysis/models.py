@@ -83,6 +83,29 @@ class RepairResult:
     new_evidence: list[ProposedEvidence] = field(default_factory=list)
 
 
+#: `WorkerResult.entailment_skipped` 의 어휘 (C4).
+#:
+#: 넷은 호출이 실패한 것이고 마지막 하나는 **성공한 호출의 응답 모양이 틀린**
+#: 것이다. 이 구별이 실질적인 이유: 앞의 넷은 재시도나 상한 조정으로 줄일 수
+#: 있고, `schema_invalid` 는 프롬프트나 파서의 문제라 고칠 곳이 다르다.
+#: 옛 단일 사유 `"entailment_unavailable"` 은 다섯을 전부 같은 이름으로 적었다.
+ENTAILMENT_BUDGET_EXHAUSTED = "budget_exhausted"
+ENTAILMENT_PROVIDER_FAILED = "provider_failed"
+ENTAILMENT_TRUNCATED = "truncated"
+ENTAILMENT_UNPARSEABLE = "unparseable"
+ENTAILMENT_SCHEMA_INVALID = "schema_invalid"
+
+ENTAILMENT_SKIP_CAUSES = frozenset(
+    {
+        ENTAILMENT_BUDGET_EXHAUSTED,
+        ENTAILMENT_PROVIDER_FAILED,
+        ENTAILMENT_TRUNCATED,
+        ENTAILMENT_UNPARSEABLE,
+        ENTAILMENT_SCHEMA_INVALID,
+    }
+)
+
+
 @dataclass
 class WorkerResult:
     question_id: str
@@ -103,9 +126,18 @@ class WorkerResult:
     confidence_clamped_by_source_count: dict[str, int] = field(
         default_factory=dict
     )
-    # entailment 배치가 필터를 적용하지 못하고 원본 claim을 그대로 통과시켰는가.
-    # discard 0건의 두 원인("버릴 게 없었다" / "필터가 안 돌았다")을 가른다.
-    entailment_skipped: bool = False
+    # entailment 배치가 필터를 적용하지 못하고 원본 claim을 그대로 통과시켰다면
+    # **왜** 그랬는가 (`ENTAILMENT_SKIP_CAUSES` 중 하나), 정상 동작했으면 `None`.
+    #
+    # discard 0건의 두 원인("버릴 게 없었다" / "필터가 안 돌았다")을 가르는 것이
+    # 원래 목적이었고 그때는 bool 이었다. 그런데 후자가 다시 다섯 갈래로
+    # 갈라진다 -- 그중 넷은 호출이 실패한 것이고 하나(`schema_invalid`)는
+    # 호출이 성공한 것이라, 뭉뚱그리면 C1 재측정이 "필터가 왜 안 돌았는지"에
+    # 답하지 못한다 (C4).
+    #
+    # `str | None` 이라 진리값은 bool 시절과 같다 -- `if result.entailment_skipped:`
+    # 로 읽는 호출부가 그대로 동작한다.
+    entailment_skipped: str | None = None
     # 1차 출처 증강 질의가 무엇을 바꿨는가. 키:
     # `base_candidates`/`base_tier1` (기저 질의가 가져온 것),
     # `added_candidates`/`added_tier1` (증강 질의만 가져온 것),

@@ -3,6 +3,7 @@ import pytest
 from neos.workflow.deep_analysis.cassette import Cassette
 from neos.workflow.deep_analysis.llm import (
     JSONParseError,
+    LLMProviderError,
     LLMResponse,
     TruncatedResponseError,
     call_json,
@@ -146,6 +147,102 @@ async def test_call_json_retries_once_after_parse_failure():
     assert data == {"ok": True}
     assert response.input_tokens == 10
     assert client.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_call_json_charges_the_raised_error_with_every_attempt(
+    monkeypatch,
+):
+    """C3: a call that yields nothing still costs, and now says how much.
+
+    Two attempts run (`retries=1`), both parse-fail, both bill 10+5. Before
+    C3 the raised error carried no number at all, so the worker's
+    `except JSONParseError` added zero and `DAQuestion.spent_tokens`
+    under-reported precisely the calls that produced nothing.
+    """
+    client = FakeAnthropic(["garbage", "still garbage"])
+
+    with pytest.raises(JSONParseError) as raised:
+        await call_json(
+            "claude-haiku-4-5-20251001",
+            "prompt",
+            max_tokens=100,
+            client=client,
+        )
+
+    assert client.calls == 2
+    assert raised.value.tokens_spent == 30
+
+
+@pytest.mark.asyncio
+async def test_truncated_response_error_carries_the_cut_attempts_tokens():
+    client = FakeAnthropic(
+        ["{cut", "{cut again"],
+        stop_reasons=["max_tokens", "max_tokens"],
+    )
+
+    with pytest.raises(TruncatedResponseError) as raised:
+        await call_json(
+            "claude-haiku-4-5-20251001",
+            "prompt",
+            max_tokens=100,
+            client=client,
+            retries=0,
+        )
+
+    # The expansion axis is independent of `retries`, so a cut response earns
+    # one larger attempt: two dispatches, both billed.
+    assert client.calls == 2
+    assert raised.value.tokens_spent == 30
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_carries_what_earlier_attempts_spent():
+    """The failed dispatch itself adds nothing -- §A5 forbids estimating.
+
+    What must survive is the *earlier* attempt, which did return `usage`.
+    """
+
+    class FailsOnSecondCall(FakeAnthropic):
+        async def create(self, **kwargs):
+            if self.calls >= 1:
+                self.calls += 1
+                raise RuntimeError("provider is down")
+            return await super().create(**kwargs)
+
+    client = FailsOnSecondCall(["garbage"])
+
+    with pytest.raises(LLMProviderError) as raised:
+        await call_json(
+            "claude-haiku-4-5-20251001",
+            "prompt",
+            max_tokens=100,
+            client=client,
+        )
+
+    assert raised.value.tokens_spent == 15
+
+
+@pytest.mark.asyncio
+async def test_budget_refusal_mid_loop_still_reports_the_first_attempt():
+    """A refused retry used to erase the attempt that preceded it."""
+    client = FakeAnthropic(["garbage", '{"ok": true}'])
+    # Sized so the first reservation fits (input bound 162 + the requested 100)
+    # and the second cannot: after settling 15, the 93 tokens left over the
+    # input bound fall short of the viability floor and `reserve` refuses.
+    budget = TokenBudget(270, min_viable_output_tokens=100)
+
+    with token_budget_scope(budget):
+        with pytest.raises(TokenBudgetExhausted) as raised:
+            await call_json(
+                "claude-haiku-4-5-20251001",
+                "prompt",
+                max_tokens=100,
+                client=client,
+            )
+
+    assert client.calls == 1
+    assert raised.value.tokens_spent == 15
 
 
 @pytest.mark.asyncio
