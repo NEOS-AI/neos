@@ -1,0 +1,88 @@
+{
+  "$comment": [
+    "강등 판정의 정본 fixture (로드맵 §7 FE6).",
+    "",
+    "판정 규칙은 두 언어에 각각 구현돼 있다 -- 백엔드",
+    "`ledger.py._degradation_kind()` 가 새로고침 후 복원을, 프론트",
+    "`progress.ts.degradationKind()` 가 라이브 스트림을 담당한다. 규칙을",
+    "합치려면 프론트가 이벤트를 스스로 접는 설계를 버려야 하므로 합치지",
+    "않는다. 대신 **표본을 하나로** 두고 양쪽 테스트가 이 파일을 읽는다.",
+    "",
+    "그래서 어휘를 한쪽만 고치면 반대쪽 테스트가 빨개진다. 이전에는 같은",
+    "목록이 두 테스트 파일에 손으로 복사돼 있었고, 지키라는 말은 주석뿐이었다.",
+    "",
+    "읽는 곳:",
+    "  tests/workflow/deep_analysis/test_ledger_degradations.py",
+    "  web/tests/source/deep-analysis-degradation.test.ts",
+    "",
+    "`resolved` 가 null 이면 '이 이벤트는 강등이 아니다'라는 뜻이다 -- 그",
+    "음성 사례들이 목록의 절반인 것은 의도다. 조사 범위나 검증 강도를 깎은",
+    "것은 강등에 들지 않는다는 D26 의 판정이 여기서 지켜진다."
+  ],
+  "cases": [
+    {
+      "kind": "report_assembly_degraded",
+      "payload": { "reason": "token_budget_exhausted" },
+      "resolved": "report_assembly_degraded"
+    },
+    {
+      "kind": "node_reduction_degraded",
+      "payload": { "reason": "token_budget_exhausted" },
+      "resolved": "node_reduction_degraded"
+    },
+    {
+      "kind": "finalization_prompt_clamped",
+      "payload": { "exhausted": true, "stage": "report_assembly" },
+      "resolved": "finalization_prompt_clamped"
+    },
+    {
+      "kind": "finalization_prompt_clamped",
+      "payload": { "exhausted": false, "stage": "report_assembly" },
+      "resolved": null
+    },
+    {
+      "kind": "report_graded",
+      "payload": { "ok": true, "judge": "budget_exhausted" },
+      "resolved": "judge_unreviewed:budget_exhausted"
+    },
+    {
+      "kind": "report_graded",
+      "payload": { "ok": true, "judge": "truncated" },
+      "resolved": "judge_unreviewed:truncated"
+    },
+    {
+      "kind": "report_graded",
+      "payload": { "ok": true, "judge": "unparseable" },
+      "resolved": "judge_unreviewed:unparseable"
+    },
+    {
+      "kind": "report_graded",
+      "payload": { "ok": true, "uncited_ratio": 0.1 },
+      "resolved": null
+    },
+    {
+      "kind": "investigation_stopped_at_floor",
+      "payload": { "floor_tokens": 41040 },
+      "resolved": null
+    },
+    {
+      "kind": "investigation_stopped_at_input_bound",
+      "payload": {
+        "stage": "worker_analysis",
+        "input_bound": 17723,
+        "ceiling": 12000
+      },
+      "resolved": null
+    },
+    {
+      "kind": "claim_discarded",
+      "payload": {},
+      "resolved": null
+    },
+    {
+      "kind": "llm_truncated",
+      "payload": { "stage": "worker_analysis" },
+      "resolved": null
+    }
+  ]
+}

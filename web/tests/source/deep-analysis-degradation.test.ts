@@ -2,14 +2,21 @@
  * 강등 → 문구. 컴포넌트가 아니라 여기서 테스트하는 이유는 `test:source`가
  * `tsx --test`라 DOM이 없기 때문이다(설계 §2).
  *
- * ⚠️ 🟡 CANONICAL_FIXTURE 는 **정본 fixture 목록**이다. 같은 목록이
- * `tests/workflow/deep_analysis/test_ledger_degradations.py` 에도 있다.
- * 강등 어휘를 바꾸면 **반드시 양쪽을 함께** 고칠 것 — 규칙이 두 언어로
- * 구현돼 있기 때문이다(설계 §3.3, 로드맵 §7 FE6).
+ * 🔍 정본 fixture 는 이 파일에 없다 —
+ * `tests/fixtures/deep_analysis_degradation_kinds.json` 하나이고 백엔드
+ * 테스트(`tests/workflow/deep_analysis/test_ledger_degradations.py`)도 **같은
+ * 파일**을 읽는다. 판정 규칙은 여전히 두 언어에 각각 구현돼 있지만(설계 §3.3,
+ * 로드맵 §7 FE6), 어휘가 갈라지면 이제 반대쪽 테스트가 빨개진다.
+ *
+ * 저장소 밖이 아니라 위쪽을 읽는다 — 테스트 시점의 파일 읽기라 번들에는
+ * 들어가지 않는다. `test:source` 가 `tsx --test`(node:test)라 `node:fs` 를 쓸 수 있다.
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   degradationLabel,
   degradationNotices,
@@ -19,40 +26,30 @@ import {
   reduceDeepAnalysisEvent,
 } from "../../lib/deep-analysis/progress";
 
-// [kind, payload, 기대 결과 kind 또는 null]
-// test_ledger_degradations.py 의 CANONICAL_FIXTURE 와 같은 내용이어야 한다.
-const CANONICAL_FIXTURE: [string, Record<string, unknown>, string | null][] = [
-  ["report_assembly_degraded", { reason: "token_budget_exhausted" },
-    "report_assembly_degraded"],
-  ["node_reduction_degraded", { reason: "token_budget_exhausted" },
-    "node_reduction_degraded"],
-  ["finalization_prompt_clamped", { exhausted: true, stage: "report_assembly" },
-    "finalization_prompt_clamped"],
-  ["finalization_prompt_clamped", { exhausted: false, stage: "report_assembly" },
-    null],
-  ["report_graded", { ok: true, judge: "budget_exhausted" },
-    "judge_unreviewed:budget_exhausted"],
-  ["report_graded", { ok: true, judge: "truncated" },
-    "judge_unreviewed:truncated"],
-  ["report_graded", { ok: true, judge: "unparseable" },
-    "judge_unreviewed:unparseable"],
-  ["report_graded", { ok: true, uncited_ratio: 0.1 }, null],
-  ["investigation_stopped_at_floor", { floor_tokens: 41040 }, null],
-  ["investigation_stopped_at_input_bound",
-    { stage: "worker_analysis", input_bound: 17723, ceiling: 12000 }, null],
-  ["claim_discarded", {}, null],
-  ["llm_truncated", { stage: "worker_analysis" }, null],
-];
+const FIXTURE_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../tests/fixtures/deep_analysis_degradation_kinds.json"
+);
+
+type FixtureCase = {
+  kind: string;
+  payload: Record<string, unknown>;
+  resolved: string | null;
+};
+
+const CANONICAL_FIXTURE: FixtureCase[] = JSON.parse(
+  readFileSync(FIXTURE_PATH, "utf8")
+).cases;
 
 test("정본 fixture가 백엔드와 같은 kind 집합을 만든다", () => {
   const state = CANONICAL_FIXTURE.reduce(
-    (acc, [kind, payload], index) =>
+    (acc, { kind, payload }, index) =>
       reduceDeepAnalysisEvent(acc, { seq: index + 1, kind, payload }),
     initialDeepAnalysisProgress()
   );
 
   const expected: { kind: string; count: number }[] = [];
-  for (const [, , resolved] of CANONICAL_FIXTURE) {
+  for (const { resolved } of CANONICAL_FIXTURE) {
     if (resolved === null) continue;
     const existing = expected.find((entry) => entry.kind === resolved);
     if (existing) {
@@ -63,6 +60,18 @@ test("정본 fixture가 백엔드와 같은 kind 집합을 만든다", () => {
   }
 
   assert.deepEqual(state.degradations, expected);
+});
+
+// 대조 테스트 자체가 덜 검사할 수 있다 — 트랙 E 에서 정규식이 마지막 멤버를
+// 놓쳐 조용히 6개만 비교한 전례가 있다. 파일을 읽는 방식에서는 같은 사고가
+// "파싱은 됐는데 케이스가 줄었다"로 온다. 백엔드의 같은 이름 테스트와 쌍이다.
+test("공유 fixture가 줄어들지 않았다", () => {
+  const resolved = CANONICAL_FIXTURE.filter((c) => c.resolved !== null);
+  const ignored = CANONICAL_FIXTURE.filter((c) => c.resolved === null);
+
+  assert.equal(CANONICAL_FIXTURE.length, 12);
+  assert.equal(resolved.length, 6);
+  assert.equal(ignored.length, 6);
 });
 
 test("알려진 kind는 저마다 다른 문구를 낸다", () => {
