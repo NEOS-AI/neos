@@ -393,3 +393,78 @@ def test_lifecycle_kinds_cannot_collide_with_harness_event_kinds():
     assert lifecycle & harness_kinds == set()
     assert all(kind.startswith("job_") for kind in lifecycle)
     assert jobs.TERMINAL_JOB_KINDS == {jobs.JOB_COMPLETED, jobs.JOB_FAILED}
+
+
+# --- P1 #8: `_persist_assistant_message` 는 예외를 삼킨다(그래야 한다 -- run 은
+# 성공했고 리포트는 이미 `job_completed` 에 실려 있다). 문제는 삼킨 자리에
+# `logger.warning` 하나밖에 안 남는다는 것이었다. FE5 로 실패한 run 도 이
+# 경로를 타게 되면서 사정거리가 넓어졌다: 여기서 예외가 나면 **실패 사실과
+# 강등이 둘 다** 대화에서 사라진다. §3.2 의 규칙("새 fallback 에는 그것이
+# 남기는 이벤트를 함께 정의한다")을 뒤늦게 적용해 흔적을 원장으로 올린다.
+
+
+@pytest.mark.asyncio
+async def test_message_persist_failure_leaves_a_queryable_event():
+    session = FakeSession()
+
+    await jobs.record_message_persist_failure(
+        make_factory([session]),
+        "run00001",
+        status="failed",
+        error_type="ValueError",
+        degradations_lost=3,
+    )
+
+    assert kinds(session) == [jobs.MESSAGE_PERSIST_FAILED]
+    assert json.loads(session.added[-1].payload) == {
+        "status": "failed",
+        "error_type": "ValueError",
+        "degradations_lost": 3,
+    }
+    # 커밋이 필수다 -- flush 만 하면 다른 프로세스의 커서 리더가 못 본다.
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_message_persist_failure_never_carries_the_exception_text():
+    """`error_type` 만 싣는다.
+
+    `str(exc)` 는 접속 문자열이나 내부 경로를 실을 수 있고, 이 페이로드는
+    이벤트 스트림을 타고 브라우저까지 간다 -- `_failure_body` 가 대화 본문에
+    대해 내린 것과 같은 판단이다.
+    """
+    session = FakeSession()
+
+    await jobs.record_message_persist_failure(
+        make_factory([session]),
+        "run00001",
+        status="completed",
+        error_type="ConnectionError",
+        degradations_lost=0,
+    )
+
+    payload = session.added[-1].payload
+    assert "ConnectionError" in payload
+    assert "postgresql://" not in payload
+
+
+@pytest.mark.asyncio
+async def test_recording_the_failure_never_raises():
+    """이 함수는 `except` 블록 안에서 불린다.
+
+    여기서 예외가 올라가면 원래 예외를 가리고, 최악의 경우 job 을 죽인다 --
+    run 은 성공했는데 메시지 저장 실패 때문에 실패로 뒤집히는 것이다.
+    """
+
+    @asynccontextmanager
+    async def exploding_factory():
+        raise ConnectionError("db is down")
+        yield  # pragma: no cover
+
+    await jobs.record_message_persist_failure(
+        exploding_factory,
+        "run00001",
+        status="completed",
+        error_type="ValueError",
+        degradations_lost=0,
+    )

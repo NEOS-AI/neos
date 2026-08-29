@@ -83,8 +83,9 @@ async def _persist_assistant_message(
 
     ⚠️ 다만 **강등은 이 경로에만 있다.** 여기서 예외가 나면 새로고침 후 UI가
     다시 침묵한다 -- 로드맵 §7 P1 #8(예외를 삼키는 영속화)의 새 피해자다.
-    삼키는 동작 자체는 이번 범위 밖이라 유지하되, 로그에 강등 건수를 남겨
-    사라진 사실이 흔적을 갖게 한다.
+    삼키는 동작은 유지한다(run 은 성공했고 리포트는 `job_completed` 에 있다).
+    ✅ **P1 #8: 흔적을 원장으로 올렸다** -- 예전에는 `logger.warning` 하나뿐이라
+    조회할 수 없었다. 이제 `assistant_message_persist_failed` 이벤트가 남는다.
 
     **`upsert` 여야 한다 (FE5).** 실패한 run 도 여기로 오게 되면서 같은
     `message_id` 가 두 번 쓰일 수 있게 됐다 -- 실패로 한 번, Celery 재시도가
@@ -121,13 +122,27 @@ async def _persist_assistant_message(
             },
         )
     except Exception as exc:  # noqa: BLE001
+        lost = len(degradations or [])
         logger.warning(
             "failed to persist deep_analysis report message: "
             "run=%s status=%s error_type=%s degradations_lost=%d",
             run_id,
             status,
             type(exc).__name__,
-            len(degradations or []),
+            lost,
+        )
+        # P1 #8: 로그는 조회할 수 없다. 같은 사실을 원장에도 남긴다 -- 이
+        # 경로의 실패는 사용자가 리포트도 강등도 못 보게 만드는데, 지금까지
+        # 그 사실 자체가 어디에도 durable 하게 없었다. `record_...` 는 절대
+        # 던지지 않으므로 이 except 블록의 의미를 바꾸지 않는다.
+        from neos.workflow.deep_analysis import jobs
+
+        await jobs.record_message_persist_failure(
+            get_session_ctx,
+            run_id,
+            status=status,
+            error_type=type(exc).__name__,
+            degradations_lost=lost,
         )
 
 

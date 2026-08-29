@@ -133,6 +133,104 @@ async def test_message_failure_is_swallowed_with_bounded_log(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_stage", ["lookup", "session_entry", "message"]
+)
+async def test_a_swallowed_failure_is_recorded_in_the_ledger(
+    monkeypatch,
+    failure_stage,
+):
+    """P1 #8: 삼킨 자리에 원장 흔적을 남긴다.
+
+    삼키는 것 자체는 옳다 -- run 은 성공했고 리포트는 이미 `job_completed`
+    페이로드에 있다. 문제는 흔적이 `logger.warning` 하나뿐이라 조회할 수
+    없다는 것이었다. FE5 이후 실패한 run 도 이 경로를 타므로, 여기서 예외가
+    나면 **실패 사실과 강등이 둘 다** 대화에서 사라진다.
+
+    세 실패 지점 전부를 건다 -- 하나만 걸면 나머지 둘은 계속 침묵한다.
+    """
+    from neos.tasks import deep_analysis_job_task as task_mod
+
+    # jobs 를 **먼저** 임포트한다 -- `_install_persistence_dependencies` 가
+    # `neos.database.deep_analysis_models` 를 DARun 하나짜리 스텁으로 갈아
+    # 끼우므로, 그 뒤에 처음 임포트하면 jobs 가 DABlob 을 못 찾는다.
+    from neos.workflow.deep_analysis import jobs as jobs_mod
+
+    run = SimpleNamespace(conversation_id="c1", assistant_message_id="m1")
+    session = SimpleNamespace(get=AsyncMock(return_value=run))
+    upsert_message = AsyncMock()
+    session_context = FakeSessionContext(session)
+
+    if failure_stage == "lookup":
+        session.get = AsyncMock(side_effect=RuntimeError("secret db url"))
+    elif failure_stage == "session_entry":
+        session_context = FakeSessionContext(
+            enter_error=ConnectionError("secret connection")
+        )
+    else:
+        upsert_message = AsyncMock(side_effect=ValueError("secret message"))
+
+    _install_persistence_dependencies(
+        monkeypatch,
+        session_context=session_context,
+        upsert_message=upsert_message,
+    )
+
+    recorded = []
+
+    async def fake_record(session_factory, run_id, **kwargs):
+        recorded.append((run_id, kwargs))
+
+    monkeypatch.setattr(jobs_mod, "record_message_persist_failure", fake_record)
+
+    await task_mod._persist_assistant_message(
+        "run6",
+        "secret report",
+        [{"kind": "report_assembly_degraded", "count": 2}],
+        status="failed",
+    )
+
+    assert len(recorded) == 1
+    run_id, kwargs = recorded[0]
+    assert run_id == "run6"
+    assert kwargs["status"] == "failed"
+    assert kwargs["degradations_lost"] == 1
+    assert kwargs["error_type"] in {
+        "RuntimeError",
+        "ConnectionError",
+        "ValueError",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_successful_persist_records_nothing(monkeypatch):
+    """성공 경로는 이벤트를 남기지 않는다 -- 남기면 원장에서 실패를
+    찾는 질의가 정상 run 으로 오염된다."""
+    from neos.tasks import deep_analysis_job_task as task_mod
+    from neos.workflow.deep_analysis import jobs as jobs_mod
+
+    run = SimpleNamespace(conversation_id="c1", assistant_message_id="m1")
+    _install_persistence_dependencies(
+        monkeypatch,
+        session_context=FakeSessionContext(
+            SimpleNamespace(get=AsyncMock(return_value=run))
+        ),
+        upsert_message=AsyncMock(),
+    )
+
+    recorded = []
+
+    async def fake_record(session_factory, run_id, **kwargs):
+        recorded.append(run_id)
+
+    monkeypatch.setattr(jobs_mod, "record_message_persist_failure", fake_record)
+
+    await task_mod._persist_assistant_message("run7", "report")
+
+    assert recorded == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure_stage", ["lookup", "message"])
 async def test_cancellation_propagates(monkeypatch, failure_stage):
     from neos.tasks import deep_analysis_job_task as task_mod
