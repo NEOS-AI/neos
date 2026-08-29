@@ -101,6 +101,10 @@ dev = [
     # pytest 는 수집 순서대로 돌았고, 그것은 "결정론적" 이지 "순서에
     # 의존하지 않는다" 가 아니다.
     "pytest-randomly>=3.15",
+    # §7.4 멈춤(시드 7, 10시간 46분 무응답)을 사람이 아니라 pytest 가 잡게
+    # 하기 위해서다. 컨트롤러가 .venv 에 2.4.0 을 이미 깔아뒀다 — 그 버전과
+    # 호환되는 하한만 선언한다(옆의 pytest-randomly 처럼 상한은 두지 않는다).
+    "pytest-timeout>=2.4.0",
 ]
 
 [tool.setuptools.packages.find]
