@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, AsyncGenerator, Any
 import uuid
 
 from neos.api.services.chat_service import ChatService
+from neos.config.settings import settings as app_settings
 from neos.services.chat_llm_service import chat_llm_service
 from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
@@ -114,7 +115,20 @@ class BaseChatMessageProcessor(ABC):
                 completion_tokens=llm_response["usage"]["completion_tokens"],
                 total_tokens=llm_response["usage"]["total_tokens"],
                 latency_ms=llm_response.get("latency_ms"),
-                finish_reason=llm_response.get("finish_reason")
+                finish_reason=llm_response.get("finish_reason"),
+                cache_creation_tokens=llm_response["usage"].get(
+                    "cache_creation_tokens", 0
+                ),
+                cache_read_tokens=llm_response["usage"].get(
+                    "cache_read_tokens", 0
+                ),
+                cache_ttl=app_settings.config.llm.prompt_caching.ttl,
+                additional_cost_usd=llm_response["cost"].get(
+                    "additional_cost", 0
+                ),
+                metadata={
+                    "anthropic": llm_response["usage"].get("anthropic", {})
+                },
             )
 
             # 8. 후처리 (임베딩 생성 등)
@@ -251,7 +265,20 @@ class BaseChatMessageProcessor(ABC):
                 completion_tokens=llm_response["usage"]["completion_tokens"],
                 total_tokens=llm_response["usage"]["total_tokens"],
                 latency_ms=llm_response["latency_ms"],
-                finish_reason=llm_response["finish_reason"]
+                finish_reason=llm_response["finish_reason"],
+                cache_creation_tokens=llm_response["usage"].get(
+                    "cache_creation_tokens", 0
+                ),
+                cache_read_tokens=llm_response["usage"].get(
+                    "cache_read_tokens", 0
+                ),
+                cache_ttl=app_settings.config.llm.prompt_caching.ttl,
+                additional_cost_usd=llm_response["cost"].get(
+                    "additional_cost", 0
+                ),
+                metadata={
+                    "anthropic": llm_response["usage"].get("anthropic", {})
+                },
             )
 
             # 8. 후처리

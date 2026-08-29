@@ -68,6 +68,24 @@ llm:
   timeout: 120
   research_planning_timeout: 180
   fast_model: claude-haiku-4-5-20251001
+  prompt_caching:
+    enabled: true
+    ttl: 5m
+
+  advisor:
+    # 🔴 켜기 전에 이 모델이 `neos/config/models.yaml` 에 가격과 함께 있어야 한다.
+    # advisor 호출은 `calculate_anthropic_cost` 를 거쳐 카탈로그에서 가격을 찾는데,
+    # 없으면 §6 ③ 의 고장이 그대로 난다 -- 비용이 조용히 0 으로 집계된다.
+    # 지금은 `enabled: false` 라 잠들어 있고, 켜면
+    # `neos_llm_unpriced_calls_total{provider,model}` 이 그 사실을 알린다.
+    enabled: false
+    model: claude-opus-4-8
+    max_uses: 2
+    max_tokens: 2048
+    max_pause_turns: 3
+    prompt_caching:
+      enabled: false
+      ttl: 5m
 
 embedding:
   provider: gemini

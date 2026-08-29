@@ -101,3 +101,45 @@ def test_default_autonomy_level_is_constrained():
 
     with pytest.raises(ValidationError):
         AppConfig.model_validate({"execution_approval": {"default_autonomy_level": 3}})
+
+
+@pytest.mark.parametrize("ttl", ["5m", "1h"])
+def test_anthropic_feature_config_accepts_supported_cache_ttls(ttl):
+    config = AppConfig.model_validate(
+        {
+            "llm": {
+                "prompt_caching": {"ttl": ttl},
+                "advisor": {"prompt_caching": {"ttl": ttl}},
+            }
+        }
+    )
+
+    assert config.llm.prompt_caching.ttl == ttl
+    assert config.llm.advisor.prompt_caching.ttl == ttl
+
+
+def test_anthropic_feature_config_defaults():
+    config = AppConfig()
+
+    assert config.llm.prompt_caching.enabled is True
+    assert config.llm.prompt_caching.ttl == "5m"
+    assert config.llm.advisor.enabled is False
+    assert config.llm.advisor.model == "claude-opus-4-8"
+    assert config.llm.advisor.max_uses == 2
+    assert config.llm.advisor.max_tokens == 2048
+    assert config.llm.advisor.max_pause_turns == 3
+    assert config.llm.advisor.prompt_caching.enabled is False
+
+
+@pytest.mark.parametrize(
+    "advisor",
+    [
+        {"max_uses": 0},
+        {"max_tokens": 1023},
+        {"max_pause_turns": -1},
+        {"prompt_caching": {"ttl": "30m"}},
+    ],
+)
+def test_anthropic_feature_config_rejects_invalid_values(advisor):
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"llm": {"advisor": advisor}})

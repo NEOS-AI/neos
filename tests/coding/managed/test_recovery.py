@@ -452,11 +452,20 @@ async def test_a_second_failed_restore_escalates_to_an_operator() -> None:
     )
     # 첫 시도에서 provider 리소스는 실제로 만들어졌고 복원만 실패한 상황이다 --
     # 재발견이 그것을 찾아야 복원 재시도까지 간다.
+    #
+    # digest 는 **유도한 값**이어야 한다. 자리표시자를 심으면 재발견이 소유권
+    # 대조에서 먼저 거부해(`PROVIDER_AUTH_ERROR`) 이 테스트의 주제인 아카이브
+    # 복원 실패에 도달하지 못한다 -- 그리고 프로덕션에서는 provider 에 박히는
+    # 값이 항상 `_ownership_digest_for` 의 결과이므로 자리표시자 상태는
+    # 애초에 만들어질 수 없다.
+    from neos.coding.managed.allocation import _ownership_digest_for
+    from tests.coding.managed.test_allocation_service import _admitted_allocation
+
     adapter.seed(
         provider_ref="fake_msa_1",
         allocation_id="msa_1",
         idempotency_key="idem_1",
-        ownership_digest="sha256:seed",
+        ownership_digest=_ownership_digest_for(_admitted_allocation()),
     )
 
     result = await service.advance("msa_1", worker_id="worker_2")

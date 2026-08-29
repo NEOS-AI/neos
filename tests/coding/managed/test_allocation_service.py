@@ -329,3 +329,64 @@ async def test_advance_rejects_a_non_advanceable_state(allocation_service) -> No
 
     assert adapter.allocate_calls == 0
     assert adapter.rediscovery_calls == 0
+
+
+async def test_rediscovery_refuses_a_sandbox_we_cannot_prove_is_ours(
+    allocation_service,
+) -> None:
+    """재발견이 돌려준 리소스의 소유권을 **대조한다.**
+
+    `_ownership_digest_for` 는 난수가 아니라 `tenant_id:allocation_id` 에서
+    결정론적으로 유도되고, 그 독스트링이 이유를 명시한다 -- "재발견 경로가
+    이 값을 다시 유도해 되찾은 provider 리소스의 소유권을 확인해야 하기
+    때문이다". 그 확인을 하는 코드가 없었다.
+
+    **왜 위험한가.** 재발견은 idempotency key 로만 찾는다. provider 쪽에서
+    그 키가 다른 테넌트의 리소스에 붙어 있으면(키 재사용·충돌·provider 버그)
+    우리는 남의 샌드박스를 우리 원장에 ACTIVE 로 적고, 사용자를 그 안에서
+    일하게 한다. 이 저장소가 fail-closed 로 세운 나머지 전부 -- 승인 없는
+    부활 금지, 크로스 프로바이더 failover 금지 -- 를 우회하는 경로다.
+
+    거부는 `MANUAL_RECOVERY_REQUIRED` 다. 못 찾은 경우와 같은 처분인데,
+    **증명할 수 없는 것을 찾은 것은 못 찾은 것보다 낫지 않기 때문**이다.
+    """
+    service, adapter = allocation_service(
+        adapter=FakeManagedSandboxAdapter(allocate_fault=CreateThenTimeout())
+    )
+
+    first = await service.advance("msa_1", worker_id="worker_1")
+    assert first.state is ManagedSandboxState.RECOVERY_PENDING
+
+    # provider 가 같은 idempotency key 로 **우리 것이 아닌** 리소스를 돌려준다.
+    provider_ref = adapter._idempotency[_IDEMPOTENCY_KEY]
+    ours = adapter._records[provider_ref]
+    assert ours.ownership_digest == _ownership_digest_for(_admitted_allocation())
+    adapter._records[provider_ref] = replace(
+        ours, ownership_digest="sha256:" + "f" * 64
+    )
+
+    second = await service.advance("msa_1", worker_id="worker_2")
+
+    assert second.state is ManagedSandboxState.MANUAL_RECOVERY_REQUIRED
+    # 채택하지 않았다는 것이 요점이다 -- ACTIVE 로 적었다면 사용자가 남의
+    # 샌드박스 안에서 일하게 된다.
+    assert second.state is not ManagedSandboxState.ACTIVE
+
+
+async def test_rediscovery_accepts_a_sandbox_whose_ownership_matches(
+    allocation_service,
+) -> None:
+    """대조가 정상 복구를 막지 않는다.
+
+    위 테스트만 있으면 "항상 거부" 로 고쳐도 통과한다 -- 이 테스트가 그 방향의
+    회귀를 막는다.
+    """
+    service, adapter = allocation_service(
+        adapter=FakeManagedSandboxAdapter(allocate_fault=CreateThenTimeout())
+    )
+
+    await service.advance("msa_1", worker_id="worker_1")
+    second = await service.advance("msa_1", worker_id="worker_2")
+
+    assert second.state is ManagedSandboxState.ACTIVE
+    assert adapter.allocate_calls == 1

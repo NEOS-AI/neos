@@ -412,6 +412,23 @@ Providers outside the routing policy (`gemini`, `ollama`) have no role mapping,
 so they require an explicit `model=` or a configured `llm.model`; otherwise
 `create_llm()` raises a `ValueError` naming the provider.
 
+### Anthropic prompt caching and Advisor
+
+`llm.prompt_caching` enables Anthropic prompt caching on eligible request paths.
+It is enabled by default with a `5m` TTL; operators can select `1h` when request
+reuse justifies the longer cache lifetime.
+
+`llm.advisor` configures Anthropic's Advisor tool and is disabled by default.
+Advisor is injected only when the executor and Advisor model combination is
+documented as compatible and the executor path supports the complete beta
+server-tool protocol. Incompatible or unknown executor models continue without
+Advisor while retaining prompt caching.
+
+`llm.advisor.max_pause_turns` caps automatic `pause_turn` continuations and
+defaults to `3`, preventing an indefinite server-tool loop. Advisor-side prompt
+caching is separately disabled by default because `max_uses` defaults to `2`;
+enable it only when observed requests regularly make at least three Advisor
+calls, Anthropic's approximate cache break-even threshold.
 ## Staging and Production
 
 Select profile config with bootstrap env:
