@@ -1,3 +1,4 @@
+import asyncio
 import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -54,6 +55,36 @@ def _configure_workflow(monkeypatch, graph):
 
 def _close_created_task(coro, *, name):
     coro.close()
+
+
+class _AsyncioProxy:
+    """`approval_handlers` 안에서만 보이는 asyncio 대역.
+
+    🔴 **`monkeypatch.setattr(approval_handlers.asyncio, "create_task", ...)` 로
+    쓰면 안 된다.** `approval_handlers.asyncio` 는 이 모듈의 지역 별칭이 아니라
+    **전역 `asyncio` 모듈 객체 그 자체**다. 그 속성을 바꾸면 프로세스 전체의
+    `asyncio.create_task` 가 Mock 이 된다.
+
+    그러면 같은 테스트 안의 `TestClient(...)` 가 매달린다: starlette 이 앱
+    lifespan 을 돌리려고 띄우는 anyio blocking portal 이 그 Mock 을 받아
+    코루틴이 닫힌 채 Task 가 만들어지지 않고, 포털 스레드가 영원히 준비되지
+    않아 `__enter__` 의 정리가 `join()` 에서 멈춘다. **실패가 아니라 멈춤이라
+    pytest 가 세지도 않는다** -- 전체 스위트가 시드에 따라 10시간씩 매달렸다
+    (로드맵 §7.4).
+
+    순서 의존이었던 이유: 앞선 테스트가 패치 없이 `TestClient` 를 한 번 띄워
+    두면 그 경로가 예열돼 통과했다. 그래서 파일 전체로는 초록이고 **그 테스트만
+    따로 돌리면 멈췄다** -- 단독 실행이 오히려 더 정직한 신호였다.
+
+    가로챌 곳은 공유 모듈이 아니라 **모듈이 들고 있는 이름**이다.
+    """
+
+    def __init__(self, create_task):
+        self.create_task = create_task
+
+    def __getattr__(self, name):
+        # 인스턴스 속성 조회가 실패했을 때만 온다 -- `create_task` 는 여기 안 온다.
+        return getattr(asyncio, name)
 
 
 @pytest.mark.asyncio
@@ -130,7 +161,9 @@ def test_approval_response_hides_other_users_approval_before_graph(monkeypatch):
     create_task = Mock(side_effect=_close_created_task)
     monkeypatch.setattr(approval_handlers.db_manager, "fetch_one", fetch_one)
     monkeypatch.setattr(approval_handlers.db_manager, "execute", execute)
-    monkeypatch.setattr(approval_handlers.asyncio, "create_task", create_task)
+    monkeypatch.setattr(
+        approval_handlers, "asyncio", _AsyncioProxy(create_task)
+    )
     _configure_workflow(monkeypatch, graph)
 
     with TestClient(
@@ -200,7 +233,9 @@ async def test_approval_response_hides_foreign_stream_before_state_mutation(
     monkeypatch.setattr(approval_handlers.db_manager, "fetch_one", fetch_one)
     monkeypatch.setattr(approval_handlers.db_manager, "execute", execute)
     create_task = Mock(side_effect=_close_created_task)
-    monkeypatch.setattr(approval_handlers.asyncio, "create_task", create_task)
+    monkeypatch.setattr(
+        approval_handlers, "asyncio", _AsyncioProxy(create_task)
+    )
     monkeypatch.setattr(
         approval_handlers.stream_manager,
         "get_session",
@@ -244,7 +279,9 @@ async def test_graph_skill_must_match_persisted_approval_without_allowlist(
         "get_session",
         lambda _session_id: SimpleNamespace(user_id="user-a"),
     )
-    monkeypatch.setattr(approval_handlers.asyncio, "create_task", create_task)
+    monkeypatch.setattr(
+        approval_handlers, "asyncio", _AsyncioProxy(create_task)
+    )
     _configure_workflow(monkeypatch, graph)
 
     with pytest.raises(HTTPException) as exc:
@@ -274,7 +311,9 @@ async def test_allowlist_skill_must_match_persisted_approval(monkeypatch):
     monkeypatch.setattr(approval_handlers.db_manager, "fetch_one", fetch_one)
     monkeypatch.setattr(approval_handlers.db_manager, "execute", execute)
     create_task = Mock(side_effect=_close_created_task)
-    monkeypatch.setattr(approval_handlers.asyncio, "create_task", create_task)
+    monkeypatch.setattr(
+        approval_handlers, "asyncio", _AsyncioProxy(create_task)
+    )
     monkeypatch.setattr(
         approval_handlers.stream_manager,
         "get_session",
@@ -329,7 +368,9 @@ async def test_approval_response_creates_owned_stream_before_state_mutation(
         "create_session",
         create_session,
     )
-    monkeypatch.setattr(approval_handlers.asyncio, "create_task", create_task)
+    monkeypatch.setattr(
+        approval_handlers, "asyncio", _AsyncioProxy(create_task)
+    )
     _configure_workflow(monkeypatch, graph)
 
     result = await approval_handlers.respond_to_approval(
@@ -374,7 +415,9 @@ async def test_created_stream_session_owner_is_verified_before_state_mutation(
         "create_session",
         create_session,
     )
-    monkeypatch.setattr(approval_handlers.asyncio, "create_task", create_task)
+    monkeypatch.setattr(
+        approval_handlers, "asyncio", _AsyncioProxy(create_task)
+    )
     _configure_workflow(monkeypatch, graph)
 
     with pytest.raises(HTTPException) as exc:
@@ -409,7 +452,9 @@ def test_approval_response_owner_preserves_http_response_schema(monkeypatch):
         "get_session",
         lambda _session_id: SimpleNamespace(user_id="user-a"),
     )
-    monkeypatch.setattr(approval_handlers.asyncio, "create_task", create_task)
+    monkeypatch.setattr(
+        approval_handlers, "asyncio", _AsyncioProxy(create_task)
+    )
     _configure_workflow(monkeypatch, graph)
 
     with TestClient(
