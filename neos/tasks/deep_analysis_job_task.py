@@ -82,7 +82,7 @@ async def _persist_assistant_message(
     이미 job_completed 이벤트에 실려 있다.
 
     ⚠️ 다만 **강등은 이 경로에만 있다.** 여기서 예외가 나면 새로고침 후 UI가
-    다시 침묵한다 -- 로드맵 §7 P1 #8(예외를 삼키는 영속화)의 새 피해자다.
+    다시 침묵한다 -- 로드맵 §7.2 P1 #8(예외를 삼키는 영속화)의 새 피해자다.
     삼키는 동작은 유지한다(run 은 성공했고 리포트는 `job_completed` 에 있다).
     ✅ **P1 #8: 흔적을 원장으로 올렸다** -- 예전에는 `logger.warning` 하나뿐이라
     조회할 수 없었다. 이제 `assistant_message_persist_failed` 이벤트가 남는다.
