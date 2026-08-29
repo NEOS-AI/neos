@@ -137,10 +137,21 @@ class Synthesizer:
     def assembly_input_allowance(self) -> int:
         """Input bytes report_assembly's prompt may occupy.
 
-        Derived here rather than injected: `synthesis_max_tokens` above is
-        already the profile-resolved value, and the ratio is global policy.
-        Threading two more constructor arguments through service.py would
-        give the same number two sources.
+        Derived here rather than injected: the ratio is global policy, and
+        `synthesis_max_tokens` above is whatever ceiling this Synthesizer was
+        built with. Threading two more constructor arguments through
+        service.py would give the same number two sources.
+
+        W1-m2 -- be precise about "whatever ceiling it was built with". On the
+        production path `service.py` passes the profile-resolved value, so the
+        allowance is profile-scoped. A Synthesizer constructed elsewhere
+        WITHOUT `synthesis_max_tokens` falls back to the **global** setting
+        (see the property above), and its allowance is global too. That is the
+        documented fallback, not a bug -- `test_synthesizer_falls_back_to_the_
+        global_ceiling` fixes it -- but the earlier wording here claimed the
+        value was "already profile-resolved" unconditionally, which is false
+        for that construction and would mislead anyone sizing a prompt against
+        it outside the production path.
         """
         ratio = settings.config.deep_analysis.assembly_input_ratio
         return int(ratio * self.synthesis_max_tokens)
