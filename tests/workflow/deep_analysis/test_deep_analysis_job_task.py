@@ -124,19 +124,33 @@ async def test_background_task_is_strongly_referenced_until_it_finishes(
 
 
 @pytest.mark.asyncio
-async def test_execute_does_not_persist_message_after_timeout(monkeypatch):
+async def test_execute_persists_a_failed_message_after_timeout(monkeypatch):
+    """FE5: 이 테스트는 예전에 "영속화하지 않는다"를 단언했다.
+
+    그 결정이 만든 구멍이 FE5다 -- 실패한 run 은 메시지가 **아예 만들어지지
+    않아서**, 라이브 스트림에서 보이던 강등이 새로고침 한 번에 사라졌다.
+    이제 영속화하되, 리포트가 아니라 실패로 표시하고 강등을 싣는다.
+    """
     from neos.workflow.deep_analysis import jobs
 
-    persisted = False
+    captured = {}
 
     async def timed_out(*args, **kwargs):
         raise asyncio.TimeoutError
 
-    async def persist(*args, **kwargs):
-        nonlocal persisted
-        persisted = True
+    async def persist(run_id, body, degradations, *, status="completed"):
+        captured.update(
+            run_id=run_id,
+            body=body,
+            degradations=degradations,
+            status=status,
+        )
+
+    async def degradations(_factory, _run_id):
+        return [{"kind": "node_reduction_degraded", "count": 2}]
 
     monkeypatch.setattr(jobs, "execute_run", timed_out)
+    monkeypatch.setattr(jobs, "load_degradations", degradations)
     monkeypatch.setattr(task_module, "_persist_assistant_message", persist)
 
     with pytest.raises(asyncio.TimeoutError):
@@ -148,7 +162,44 @@ async def test_execute_does_not_persist_message_after_timeout(monkeypatch):
             timeout_seconds=0.01,
         )
 
-    assert persisted is False
+    assert captured["status"] == "failed"
+    assert captured["degradations"] == [
+        {"kind": "node_reduction_degraded", "count": 2}
+    ]
+    # 리포트 본문이 아니다 -- 나오지 않은 리포트를 지어내면 안 된다.
+    assert "제한 시간" in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_failure_body_never_leaks_the_exception_text(monkeypatch):
+    """진단은 원장(운영자)으로, 대화에는 사용자용 문장만.
+
+    `str(exc)` 를 그대로 대화에 실으면 내부 경로나 접속 문자열이 사용자에게
+    노출될 수 있다. `job_failed` 페이로드가 이미 그 진단을 들고 있다.
+    """
+    from neos.workflow.deep_analysis import jobs
+
+    secret = "postgresql://user:hunter2@db.internal:5432/neos"
+    captured = {}
+
+    async def exploded(*args, **kwargs):
+        raise RuntimeError(secret)
+
+    async def persist(run_id, body, degradations, *, status="completed"):
+        captured["body"] = body
+
+    async def degradations(_factory, _run_id):
+        return []
+
+    monkeypatch.setattr(jobs, "execute_run", exploded)
+    monkeypatch.setattr(jobs, "load_degradations", degradations)
+    monkeypatch.setattr(task_module, "_persist_assistant_message", persist)
+
+    with pytest.raises(RuntimeError):
+        await task_module._execute("run00001", "질문", "dev", False)
+
+    assert secret not in captured["body"]
+    assert "hunter2" not in captured["body"]
 
 
 @pytest.mark.asyncio
@@ -287,7 +338,7 @@ async def test_persisted_message_metadata_carries_the_degradations(monkeypatch):
 
     class FakeChatService:
         @staticmethod
-        async def add_message(**kwargs):
+        async def upsert_message(**kwargs):
             captured.update(kwargs)
 
     class FakeRun:
@@ -317,3 +368,72 @@ async def test_persisted_message_metadata_carries_the_degradations(monkeypatch):
         {"kind": "judge_unreviewed:budget_exhausted", "count": 1}
     ]
     assert captured["metadata"]["deep_analysis_run_id"] == "run00001"
+
+
+@pytest.mark.asyncio
+async def test_a_retry_that_succeeds_overwrites_the_failure_message(monkeypatch):
+    """FE5 의 함정 자체를 잠근다.
+
+    Celery 실패 경로는 `resume=True` 로 **재큐잉**한다. 그래서 실패로 한 번,
+    재시도 성공으로 또 한 번, 같은 `assistant_message_id` 에 쓰게 된다.
+    `add_message` 는 순수 INSERT 이고 `message_id` 는 UNIQUE 라 둘째 쓰기가
+    던지는데 `_persist_assistant_message` 가 그 예외를 삼킨다 -- 그러면
+    **실패 메시지가 남고 사용자는 완성된 리포트를 영영 못 본다.**
+
+    upsert 는 그 순서를 성립시킨다: 마지막에 쓴 것이 남는다.
+    """
+    from contextlib import asynccontextmanager
+
+    import neos.api.services.chat_service as chat_service_module
+    import neos.database.connection as connection_module
+
+    store: dict[str, dict] = {}
+
+    class FakeChatService:
+        @staticmethod
+        async def upsert_message(*, message_id, content, metadata, **kwargs):
+            store[message_id] = {"content": content, "metadata": metadata}
+
+        @staticmethod
+        async def add_message(*, message_id, **kwargs):
+            # 실제 저장소의 UNIQUE 제약을 모사한다 -- upsert 로 갈아타지 않은
+            # 코드가 이 경로로 새면 여기서 드러난다.
+            raise AssertionError(
+                "deep_analysis must not use add_message: a retry would violate "
+                "the message_id UNIQUE constraint and lose the real report"
+            )
+
+    class FakeRun:
+        conversation_id = "conv-1"
+        assistant_message_id = "msg-1"
+
+    class FakeSession:
+        async def get(self, model, key):
+            return FakeRun()
+
+    @asynccontextmanager
+    async def fake_session_ctx():
+        yield FakeSession()
+
+    monkeypatch.setattr(chat_service_module, "ChatService", FakeChatService)
+    monkeypatch.setattr(connection_module, "get_session_ctx", fake_session_ctx)
+
+    # 1) 첫 시도가 실패했다.
+    await task_module._persist_assistant_message(
+        "run00001",
+        task_module._FAILURE_BODY,
+        [{"kind": "node_reduction_degraded", "count": 1}],
+        status="failed",
+    )
+    assert store["msg-1"]["metadata"]["research_status"] == "failed"
+
+    # 2) resume 재시도가 완주했다.
+    await task_module._persist_assistant_message(
+        "run00001",
+        "## 요약\n진짜 리포트",
+        [],
+    )
+
+    assert store["msg-1"]["content"] == "## 요약\n진짜 리포트"
+    assert store["msg-1"]["metadata"]["research_status"] == "completed"
+    assert store["msg-1"]["metadata"]["deep_analysis_degradations"] == []

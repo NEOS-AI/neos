@@ -256,6 +256,32 @@ class ChatService:
         return await ChatService.get_message(message_id)
 
     @staticmethod
+    async def upsert_message(
+        conversation_id: str,
+        role: str,
+        content: str,
+        message_id: str,
+        model_name: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """같은 message_id 로 다시 써도 되는 메시지 저장.
+
+        `add_message` 와의 차이는 `ChatRepository.upsert_message` 주석 참조.
+        `message_id` 가 **필수**다 -- 생성해 주지 않는다. 덮어쓸 대상을 모르면서
+        upsert 를 부르는 것은 호출부의 실수이지 기본값으로 메울 일이 아니다.
+        """
+        await ChatRepository.upsert_message(
+            message_id=message_id,
+            conversation_id=conversation_id,
+            role=role,
+            content=content,
+            model_name=model_name,
+            metadata=metadata
+        )
+
+        return await ChatService.get_message(message_id)
+
+    @staticmethod
     async def get_message(message_id: str) -> Optional[Dict[str, Any]]:
         """메시지 조회"""
         from neos.api.services.chat_service_helper import message_to_dict

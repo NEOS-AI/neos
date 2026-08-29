@@ -110,6 +110,29 @@ async def _record_failure(
         )
 
 
+async def load_degradations(session_factory, run_id: str) -> list[dict[str, Any]]:
+    """이 run 의 강등 집계를 **새 세션**에서 읽는다 (FE5).
+
+    실패 경로 전용이다. 성공 경로는 `execute_run` 이 자기 세션에서 이미 읽는다.
+    실패한 뒤에는 그 세션이 롤백/오류 상태일 수 있어 재사용하지 않는다 --
+    `_record_failure` 가 새 세션을 여는 것과 같은 이유다.
+
+    읽기 전용이라 P2(원장 단일 작성자)를 건드리지 않는다. 여기서 예외가 나면
+    강등 없이 진행한다: 실패 run 의 강등 목록을 못 읽었다고 실패 자체의
+    기록까지 잃으면 안 된다.
+    """
+    try:
+        async with session_factory() as session:
+            return await Ledger(session, run_id).degradations()
+    except Exception:  # noqa: BLE001 - 강등을 못 읽는 것이 실패 기록을 막으면 안 된다
+        logger.warning(
+            "failed to read degradations for deep_analysis run %s",
+            run_id,
+            exc_info=True,
+        )
+        return []
+
+
 async def record_dispatch_failure(session_factory, run_id: str) -> None:
     """Persist a bounded terminal event for a failed Celery enqueue."""
 

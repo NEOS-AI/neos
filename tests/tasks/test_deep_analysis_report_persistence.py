@@ -35,14 +35,14 @@ def _install_persistence_dependencies(
     monkeypatch,
     *,
     session_context,
-    add_message,
+    upsert_message,
 ):
     connection_module = ModuleType("neos.database.connection")
     connection_module.get_session_ctx = lambda: session_context
     models_module = ModuleType("neos.database.deep_analysis_models")
     models_module.DARun = type("DARun", (), {})
     chat_module = ModuleType("neos.api.services.chat_service")
-    chat_module.ChatService = SimpleNamespace(add_message=add_message)
+    chat_module.ChatService = SimpleNamespace(upsert_message=upsert_message)
     monkeypatch.setitem(
         sys.modules,
         "neos.database.connection",
@@ -70,11 +70,11 @@ async def test_lookup_failure_is_swallowed_and_logged_without_payload(
     session = SimpleNamespace(
         get=AsyncMock(side_effect=RuntimeError("secret db url"))
     )
-    add_message = AsyncMock()
+    upsert_message = AsyncMock()
     _install_persistence_dependencies(
         monkeypatch,
         session_context=FakeSessionContext(session),
-        add_message=add_message,
+        upsert_message=upsert_message,
     )
 
     with caplog.at_level(logging.WARNING):
@@ -84,7 +84,7 @@ async def test_lookup_failure_is_swallowed_and_logged_without_payload(
     assert "error_type=RuntimeError" in caplog.text
     assert "secret db url" not in caplog.text
     assert "secret report" not in caplog.text
-    add_message.assert_not_awaited()
+    upsert_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -96,7 +96,7 @@ async def test_session_entry_failure_is_swallowed(monkeypatch, caplog):
         session_context=FakeSessionContext(
             enter_error=ConnectionError("secret connection")
         ),
-        add_message=AsyncMock(),
+        upsert_message=AsyncMock(),
     )
 
     with caplog.at_level(logging.WARNING):
@@ -116,11 +116,11 @@ async def test_message_failure_is_swallowed_with_bounded_log(
 
     run = SimpleNamespace(conversation_id="c1", assistant_message_id="m1")
     session = SimpleNamespace(get=AsyncMock(return_value=run))
-    add_message = AsyncMock(side_effect=ValueError("secret message"))
+    upsert_message = AsyncMock(side_effect=ValueError("secret message"))
     _install_persistence_dependencies(
         monkeypatch,
         session_context=FakeSessionContext(session),
-        add_message=add_message,
+        upsert_message=upsert_message,
     )
 
     with caplog.at_level(logging.WARNING):
@@ -139,15 +139,15 @@ async def test_cancellation_propagates(monkeypatch, failure_stage):
 
     run = SimpleNamespace(conversation_id="c1", assistant_message_id="m1")
     lookup = AsyncMock(return_value=run)
-    add_message = AsyncMock()
+    upsert_message = AsyncMock()
     if failure_stage == "lookup":
         lookup.side_effect = asyncio.CancelledError()
     else:
-        add_message.side_effect = asyncio.CancelledError()
+        upsert_message.side_effect = asyncio.CancelledError()
     _install_persistence_dependencies(
         monkeypatch,
         session_context=FakeSessionContext(SimpleNamespace(get=lookup)),
-        add_message=add_message,
+        upsert_message=upsert_message,
     )
 
     with pytest.raises(asyncio.CancelledError):
@@ -160,16 +160,16 @@ async def test_missing_conversation_binding_is_noop(monkeypatch):
 
     run = SimpleNamespace(conversation_id=None, assistant_message_id=None)
     session = SimpleNamespace(get=AsyncMock(return_value=run))
-    add_message = AsyncMock()
+    upsert_message = AsyncMock()
     _install_persistence_dependencies(
         monkeypatch,
         session_context=FakeSessionContext(session),
-        add_message=add_message,
+        upsert_message=upsert_message,
     )
 
     await task_mod._persist_assistant_message("run5", "report")
 
-    add_message.assert_not_awaited()
+    upsert_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio

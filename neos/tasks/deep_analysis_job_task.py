@@ -46,10 +46,34 @@ def _celery_enabled() -> bool:
     return bool(getattr(settings, "CELERY_ENABLED", False))
 
 
+_FAILURE_BODY = (
+    "심층분석을 완료하지 못했습니다. 실패 사유는 실행 원장에 기록되었습니다."
+)
+_TIMEOUT_BODY = (
+    "심층분석이 제한 시간 안에 끝나지 않았습니다. "
+    "실패 사유는 실행 원장에 기록되었습니다."
+)
+
+
+def _failure_body(exc: BaseException) -> str:
+    """실패한 run 이 대화에 남길 본문.
+
+    **예외 문자열을 싣지 않는다.** 진단은 이미 `job_failed` 페이로드에 있고
+    그쪽은 운영자용이다. 이 문자열은 대화에 남는 **사용자용**이라, 내부 경로나
+    접속 정보가 섞일 수 있는 `str(exc)` 를 그대로 흘리면 안 된다.
+
+    가르는 것은 사용자가 실제로 다르게 행동할 수 있는 한 가지, 시간 초과뿐이다
+    -- 그때는 다시 물어보는 것이 의미가 있고, 다른 실패는 그렇지 않다.
+    """
+    return _TIMEOUT_BODY if isinstance(exc, TimeoutError) else _FAILURE_BODY
+
+
 async def _persist_assistant_message(
     run_id: str,
     report_markdown: str,
     degradations: list[dict[str, object]] | None = None,
+    *,
+    status: str = "completed",
 ) -> None:
     """리포트를 대화 메시지로 저장한다(대화에 묶인 run만).
 
@@ -61,6 +85,13 @@ async def _persist_assistant_message(
     다시 침묵한다 -- 로드맵 §7 P1 #8(예외를 삼키는 영속화)의 새 피해자다.
     삼키는 동작 자체는 이번 범위 밖이라 유지하되, 로그에 강등 건수를 남겨
     사라진 사실이 흔적을 갖게 한다.
+
+    **`upsert` 여야 한다 (FE5).** 실패한 run 도 여기로 오게 되면서 같은
+    `message_id` 가 두 번 쓰일 수 있게 됐다 -- 실패로 한 번, Celery 재시도가
+    `resume=True` 로 완주하면 진짜 리포트로 다시. `add_message` 는 순수
+    INSERT 이고 `message_id` 는 UNIQUE 라 둘째 쓰기가 예외를 내는데, 바로 위
+    `except` 가 그것을 삼킨다. 그러면 **실패 메시지가 남고 성공한 리포트는
+    영영 저장되지 않는다** -- 고치려던 조용한 실패를 하나 더 만드는 셈이다.
     """
     from neos.api.services.chat_service import ChatService
     from neos.database.connection import get_session_ctx
@@ -75,7 +106,7 @@ async def _persist_assistant_message(
         if not conversation_id or not message_id:
             return
 
-        await ChatService.add_message(
+        await ChatService.upsert_message(
             conversation_id=conversation_id,
             role="assistant",
             content=report_markdown,
@@ -83,7 +114,7 @@ async def _persist_assistant_message(
             model_name="deep-analysis-harness",
             metadata={
                 "deep_analysis_run_id": run_id,
-                "research_status": "completed",
+                "research_status": status,
                 # 프론트 브리지(`web/lib/deep-analysis/metadata.ts`)가 읽는 키다.
                 # 이름을 바꾸면 새로고침 후 강등 경고가 조용히 사라진다.
                 "deep_analysis_degradations": degradations or [],
@@ -92,8 +123,9 @@ async def _persist_assistant_message(
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "failed to persist deep_analysis report message: "
-            "run=%s error_type=%s degradations_lost=%d",
+            "run=%s status=%s error_type=%s degradations_lost=%d",
             run_id,
+            status,
             type(exc).__name__,
             len(degradations or []),
         )
@@ -109,22 +141,42 @@ async def _execute(
 ) -> dict[str, object]:
     """두 실행자가 공유하는 async 본문."""
     from neos.database.connection import get_session_ctx
-    from neos.workflow.deep_analysis.jobs import execute_run, resume_run
+    from neos.workflow.deep_analysis.jobs import (
+        execute_run,
+        load_degradations,
+        resume_run,
+    )
 
-    if resume:
-        result = await resume_run(
-            get_session_ctx,
+    try:
+        if resume:
+            result = await resume_run(
+                get_session_ctx,
+                run_id,
+                timeout_seconds=timeout_seconds,
+            )
+        else:
+            result = await execute_run(
+                get_session_ctx,
+                run_id,
+                question,
+                profile,
+                timeout_seconds=timeout_seconds,
+            )
+    except Exception as exc:  # noqa: BLE001 - 원래 예외를 그대로 다시 던진다
+        # FE5: 실패한 run 의 강등은 여태 메시지에 남지 않았다 -- 이 경로가
+        # 없어서 **메시지 자체가 만들어지지 않았기** 때문이다. 라이브 스트림을
+        # 보고 있던 사용자는 강등을 봤지만 새로고침하면 사라졌고, 나중에
+        # 이력을 여는 사용자는 애초에 못 봤다.
+        #
+        # 강등은 원장에 남아 있으므로 여기서 읽어 붙인다. 실패 자체의 기록
+        # (`job_failed`)은 이미 `execute_run` 이 새 세션에서 확정했다.
+        await _persist_assistant_message(
             run_id,
-            timeout_seconds=timeout_seconds,
+            _failure_body(exc),
+            await load_degradations(get_session_ctx, run_id),
+            status="failed",
         )
-    else:
-        result = await execute_run(
-            get_session_ctx,
-            run_id,
-            question,
-            profile,
-            timeout_seconds=timeout_seconds,
-        )
+        raise
 
     await _persist_assistant_message(
         run_id,
