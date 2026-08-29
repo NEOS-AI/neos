@@ -51,7 +51,7 @@ def test_committed_config_profiles_exist_and_validate():
         # 프로파일은 **건드리지 않아야** 한다 -- 로더가 default 를 계층으로
         # 병합하므로(loader.py:388) 그래야 모든 환경이 같은 판정자를 쓴다.
         if path.name == "neos.default.yaml":
-            assert config.deep_analysis.models.judge == "gpt-5.6-sol"
+            assert config.deep_analysis.models.judge == "claude-opus-4-8"
         else:
             assert config.deep_analysis.models.judge is None, (
                 f"{path.name} 이 judge 를 덮어썼다 -- 분리가 환경마다 "

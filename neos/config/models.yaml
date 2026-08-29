@@ -31,6 +31,30 @@ models:
     max_tokens: 8192
     pricing: {input: 5.00, output: 25.00, cache_creation: 6.25, cache_read: 0.50}
 
+  # 심층분석 판정자 전용 (E3, 2026-08-30). 피커에 올리지 않으므로 tiers 없이
+  # `selectable: false` 다 -- `deep_analysis.models.judge` 기능 오버라이드로만
+  # 쓰인다. 카탈로그에 넣는 이유는 §6 ③ 하나다: 등재하지 않으면 가격을 못 찾아
+  # 판정자 비용이 조용히 0 으로 집계된다.
+  #
+  # `thinking: adaptive` 는 **추측이 아니라 실측이다** (2026-08-30). 실제 호출로
+  # 두 형태를 다 재 봤다 -- `temperature` 를 실으면
+  # `400 invalid_request_error: temperature is deprecated for this model` 이고,
+  # `thinking={"type":"adaptive"}` 로 보내면 정상 응답한다. 이 값이 틀리면
+  # `normalize_anthropic_request` 가 잘못된 페이로드를 만들어 판정자가 전부
+  # 실패한다(그 경로가 실제로 쓰인다 -- `deep_analysis/llm.py:190`).
+  #
+  # ⚠️ **가격은 미검증이다.** 저장소 안의 유일한 출처가 `codex/anthropic-caching-advisor`
+  # 브랜치이고 그 값은 opus-5 와 **정확히 같다**(복붙일 수도 있다). 같은 브랜치의
+  # haiku 가격은 카탈로그와 어긋났다. 공식 요율로 대조해 고칠 것 -- 등재돼 있으므로
+  # `neos_llm_unpriced_calls_total` 은 울리지 않는다. 즉 **틀려도 조용하다.**
+  claude-opus-4-8:
+    provider: anthropic
+    selectable: false
+    thinking: adaptive
+    description: "Anthropic Claude Opus 4.8 (deep-analysis judge)"
+    max_tokens: 8192
+    pricing: {input: 5.00, output: 25.00, cache_creation: 6.25, cache_read: 0.50}
+
   claude-haiku-4-5-20251001:
     provider: anthropic
     tiers: [fast]
