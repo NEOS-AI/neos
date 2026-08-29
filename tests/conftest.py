@@ -2,6 +2,7 @@
 
 import os
 import pathlib
+import sys
 from typing import AsyncGenerator
 
 import pytest
@@ -105,6 +106,34 @@ def _skip_database_fixtures(request: pytest.FixtureRequest) -> bool:
         or "tests/workflow/test_harness_" in nodeid
         or "tests/workflow/processors/test_research_harness_processor.py" in nodeid
     )
+
+
+@pytest.fixture(scope="function", autouse=True)
+def restore_checkpointer_singleton():
+    """`neos.workflow.checkpointer._checkpointer` 를 테스트 경계에서 되돌린다.
+
+    §10.3 이 "전역 싱글턴이 바뀐 채 남음" 으로 이름 붙인 계열의 세 번째 사례를
+    막는다. 이 전역이 특별히 위험한 이유는 **오염된 값이 즉시 터지지 않는 것**이다:
+    `get_checkpointer()` 가 캐시한 AsyncMock 은 그것을 심은 테스트에서는 정상
+    동작하고, 한참 뒤 `use_checkpointer=True` 로 그래프를 컴파일하는 **무관한
+    파일**에서 LangGraph 가 거부하면서 터진다. 시드가 바뀌면 실패하는 파일도
+    바뀌므로 증상에서 원인으로 가는 길이 없다.
+
+    `unittest.mock.patch` 로는 못 막는다 -- 그쪽은 **클래스**를 복원하지만
+    캐시된 **인스턴스**는 건드리지 않는다. 되돌릴 곳은 캐시 쪽이다.
+
+    이미 import 된 경우에만 손댄다: 로드되지 않은 모듈은 오염될 수도 없으므로,
+    가드 때문에 무거운 import(langgraph 등)를 끌어오지 않는다.
+    """
+    module = sys.modules.get("neos.workflow.checkpointer")
+    before = getattr(module, "_checkpointer", None) if module else None
+
+    yield
+
+    # 테스트 도중에 처음 import 됐을 수 있다. 그때 되돌릴 값은 초기값 None 이다.
+    module = sys.modules.get("neos.workflow.checkpointer")
+    if module is not None and getattr(module, "_checkpointer", None) is not before:
+        module._checkpointer = before
 
 
 @pytest.fixture(scope="function", autouse=True)
