@@ -9,6 +9,7 @@ WHERE 절에 넣어 낡은 워커가 갱신하는 행 수를 0으로 만든다.
 """
 
 import hashlib
+from hmac import compare_digest
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -369,6 +370,33 @@ class ManagedSandboxAllocationService:
                 ManagedSandboxState.MANUAL_RECOVERY_REQUIRED,
                 now=now,
                 error_code=ProviderErrorCode.PROVIDER_NOT_FOUND,
+            )
+        # 되찾은 리소스가 **우리 것임을 증명**한 뒤에만 채택한다.
+        # `_ownership_digest_for` 가 난수가 아니라 tenant_id:allocation_id 에서
+        # 결정론적으로 유도되는 이유가 이것이고(그 독스트링이 명시한다), 그
+        # 확인을 하는 코드가 여기 없었다.
+        #
+        # 재발견은 idempotency key 로만 찾는다. provider 쪽에서 그 키가 다른
+        # 테넌트의 리소스에 붙어 있으면(키 재사용·충돌·provider 버그) 남의
+        # 샌드박스를 ACTIVE 로 적고 사용자를 그 안에서 일하게 한다 -- 이
+        # 저장소가 fail-closed 로 세운 나머지 전부(승인 없는 부활 금지,
+        # 크로스 프로바이더 failover 금지)를 우회하는 경로다.
+        #
+        # `ownership_verified` 도 함께 본다: digest 가 같아도 어댑터가 대조에
+        # 실패했다면 그 값은 우리가 심은 것이 아니라 우연히 같은 문자열일 수
+        # 있다. 둘 다 참이어야 한다.
+        expected_digest = _ownership_digest_for(plan.allocation)
+        if not found.ownership_verified or not compare_digest(
+            found.ownership_digest or "", expected_digest
+        ):
+            # 못 찾은 경우와 같은 처분이다 -- **증명할 수 없는 것을 찾은 것은
+            # 못 찾은 것보다 낫지 않다.** 코드는 `_destroy` 가 봉인 해제에
+            # 실패했을 때와 같다: 둘 다 "우리 것이라고 말할 근거가 없다"이다.
+            return await self._repository.commit_state(
+                lease,
+                ManagedSandboxState.MANUAL_RECOVERY_REQUIRED,
+                now=now,
+                error_code=ProviderErrorCode.PROVIDER_AUTH_ERROR,
             )
         result = AllocationResult(
             provider_ref=found.provider_ref,
