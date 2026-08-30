@@ -752,12 +752,36 @@ async def healthy_session_factory():
     yield HealthySession()
 
 
+def _keyed_settings():
+    return SimpleNamespace(
+        ANTHROPIC_API_KEY="sk-ant-fake", TAVILY_API_KEY="tvly-fake"
+    )
+
+
+class _Probe:
+    """Records what was probed and fails the models it was told to fail."""
+
+    def __init__(self, failing: dict[str, Exception] | None = None) -> None:
+        self.asked: list[str] = []
+        self._failing = failing or {}
+
+    async def __call__(self, model: str) -> None:
+        self.asked.append(model)
+        failure = self._failing.get(model)
+        if failure is not None:
+            raise failure
+
+
 @pytest.mark.asyncio
 async def test_preflight_requires_anthropic_tavily_and_database():
-    fake_settings = SimpleNamespace(
-        ANTHROPIC_API_KEY="anthropic", TAVILY_API_KEY="tavily"
+    probe = _Probe()
+    await preflight(
+        _keyed_settings(),
+        healthy_session_factory,
+        probe=probe,
+        models=("m-1",),
     )
-    await preflight(fake_settings, healthy_session_factory)
+    assert probe.asked == ["m-1"]
 
 
 @pytest.mark.asyncio
@@ -766,7 +790,120 @@ async def test_preflight_lists_missing_names_without_values():
     with pytest.raises(
         PreflightError, match="ANTHROPIC_API_KEY, TAVILY_API_KEY"
     ):
-        await preflight(fake_settings, healthy_session_factory)
+        await preflight(
+            fake_settings,
+            healthy_session_factory,
+            probe=_Probe(),
+            models=("m-1",),
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_present_but_rejected_key_no_longer_passes_preflight():
+    """키가 있다는 것과 그 키가 산다는 것은 다르다.
+
+    D88 이 정확히 이 구멍에 빠졌다 -- `OPENAI_API_KEY` 가 존재했고 401 이었고
+    preflight 는 통과했다. 못 도는 판정자는 통과처럼 보이므로(§8.1.1) 이것을
+    표본 안에서 발견하면 §10.2 의 "정확히 1회" 때문에 다시 뜰 기회가 없다.
+    """
+    probe = _Probe({"m-judge": RuntimeError("Error code: 401")})
+
+    with pytest.raises(PreflightError, match="m-judge"):
+        await preflight(
+            _keyed_settings(),
+            healthy_session_factory,
+            probe=probe,
+            models=("m-worker", "m-judge"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_preflight_names_every_failing_model_not_just_the_first():
+    """하나를 고치고 다시 돌렸다가 다음 것에 물리지 않게 한다.
+
+    프로브는 표본 전에 도는 값싼 호출이고, 한 번에 전부 말하지 않으면
+    사람이 그 왕복을 모델 수만큼 반복한다.
+    """
+    probe = _Probe(
+        {
+            "m-a": RuntimeError("Error code: 401"),
+            "m-b": RuntimeError("model not found"),
+        }
+    )
+
+    with pytest.raises(PreflightError) as excinfo:
+        await preflight(
+            _keyed_settings(),
+            healthy_session_factory,
+            probe=probe,
+            models=("m-a", "m-b", "m-c"),
+        )
+
+    message = str(excinfo.value)
+    assert "m-a" in message and "m-b" in message
+    assert probe.asked == ["m-a", "m-b", "m-c"]
+
+
+@pytest.mark.asyncio
+async def test_preflight_refuses_to_pass_when_there_is_nothing_to_probe():
+    """잴 것이 없는 것은 통과가 아니다.
+
+    빈 모델 집합은 역할 해석이 깨졌다는 뜻이고, 그것을 통과로 읽으면 이
+    변경이 없애려는 침묵을 그대로 재건한다.
+    """
+    with pytest.raises(PreflightError, match="probe"):
+        await preflight(
+            _keyed_settings(),
+            healthy_session_factory,
+            probe=_Probe(),
+            models=(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_preflight_failure_does_not_carry_the_credential():
+    """실패 메시지에 키가 실리면 안 된다.
+
+    P1 #8 이 이미 치른 값이다 -- `exc_info=True` 하나가 원래 예외의 접속
+    문자열을 로그로 흘렸다. 여기서는 프로바이더 예외가 키를 물고 올 수 있다.
+    """
+    settings_obj = _keyed_settings()
+    probe = _Probe(
+        {"m-a": RuntimeError(f"auth failed for {settings_obj.ANTHROPIC_API_KEY}")}
+    )
+
+    with pytest.raises(PreflightError) as excinfo:
+        await preflight(
+            settings_obj, healthy_session_factory, probe=probe, models=("m-a",)
+        )
+
+    message = str(excinfo.value)
+    assert settings_obj.ANTHROPIC_API_KEY not in message
+    assert "<redacted>" in message
+    # 진단은 남는다 -- D88 을 가른 것이 "401" 이라는 사실 자체였다.
+    assert "auth failed" in message
+
+
+def test_harness_models_dedupes_and_covers_every_role(monkeypatch):
+    """넷을 다 재되 같은 모델을 두 번 부르지 않는다.
+
+    dig 와 synth 는 실제 배포에서 같은 모델(opus-5)이다. 중복을 안 접으면
+    프로브가 매번 한 번씩 더 돌고, 그것은 비용이 아니라 **E3 위반을 못 보게
+    만드는 노이즈**다 -- 역할 수와 모델 수가 다르다는 사실이 여기서 보인다.
+    """
+    mapping = {
+        "scout": "m-sonnet",
+        "dig": "m-opus",
+        "synth": "m-opus",
+        "judge": "m-judge",
+    }
+    monkeypatch.setattr(
+        runner,
+        "resolve_harness_model",
+        lambda role: SimpleNamespace(model=mapping[role], provider="anthropic"),
+    )
+
+    assert runner.harness_models() == ("m-judge", "m-opus", "m-sonnet")
 
 
 def test_sanitize_error_exposes_only_type_and_fixed_stage():
