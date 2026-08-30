@@ -554,6 +554,8 @@ class Synthesizer:
                 "node_summary_unparseable",
                 pairs,
             )
+        # Read before logging, because the two counts below need it (CITE1).
+        answer = str(data.get("answer") or "")
         await self.ledger.log(
             "node_summary",
             question.id,
@@ -562,6 +564,22 @@ class Synthesizer:
                 "prompt_chars": len(prompt),
                 "child_count": len(child_summaries),
                 "own_claims": len(pairs),
+                # CITE1. D91 put the citation-production loss in this tier
+                # and could go no further: it ruled out the clamp (1 of 27
+                # non-root clamps cut a claim) and showed the assembly gets
+                # exactly what the root reduction got, but `NodeSummary.
+                # answer` is persisted nowhere, so no stored data could say
+                # whether the model carried its markers into the prose.
+                #
+                # These two answer that. `prompt` rather than `claim_lines`
+                # is the denominator on purpose: the model may cite anything
+                # it was shown, including a child answer's markers, and it
+                # matches `distinct_claims_after` at `finalization_prompt_
+                # clamped` -- so a clamped reduction reports the same number
+                # twice and the two instruments check each other. An
+                # unclamped one now reports it at all, which is new.
+                "distinct_claims_prompt": len(_distinct_claims(prompt)),
+                "distinct_claims_answer": len(_distinct_claims(answer)),
             },
         )
         conflicts: list[ConflictNote] = []
@@ -594,7 +612,7 @@ class Synthesizer:
             caveats = []
         return NodeSummary(
             question_id=question.id,
-            answer=str(data.get("answer") or ""),
+            answer=answer,
             key_claim_ids=key_claim_ids,
             confidence=confidence,
             caveats=caveats,
@@ -676,11 +694,20 @@ class Synthesizer:
             c.answer for c in child_summaries if c.answer.strip()
         )
         claim_ids: list[str] = []
+        # Which branch ran is not recoverable after the fact, and that cost a
+        # measurement (CITE1). `answer_chars` is logged *below* this
+        # reassignment, so a non-zero value says nothing about which text it
+        # counted -- backtesting #21/#22 could only bound the own-claims drop,
+        # never measure it, and the bound was loose enough to be useless (one
+        # run's "at risk" set was its entire claim inventory while 14 of 17
+        # markers demonstrably reached the assembly).
+        answer_source = "children_join" if answer else "empty"
         if not answer and pairs:
             answer = " ".join(
                 f"[C:{claim.id}] {claim.text}" for claim, _evidence in pairs
             )
             claim_ids = [claim.id for claim, _evidence in pairs]
+            answer_source = "own_claims"
         bounded = self._bound_degraded_answer(answer)
         await self.ledger.log(
             "node_reduction_degraded",
@@ -694,6 +721,18 @@ class Synthesizer:
                 # or 40,000, and the latter is what breaks the assembly.
                 "answer_chars": len(answer),
                 "answer_truncated": len(bounded) < len(answer),
+                "answer_source": answer_source,
+                # `children_join` with own claims present is the silent drop:
+                # this node had verified claims and joined its children
+                # instead, so those markers end here. Recording what was
+                # available -- not just what was used -- is what makes the
+                # drop countable rather than inferable.
+                "own_claims_available": len(pairs or []),
+                # Bounding halves until it fits, and halving takes markers
+                # with it. Separated from the join so a truncation loss is
+                # not read as a join loss: they need different fixes.
+                "distinct_claims_before_bound": len(_distinct_claims(answer)),
+                "distinct_claims_after_bound": len(_distinct_claims(bounded)),
             },
         )
         answer = bounded

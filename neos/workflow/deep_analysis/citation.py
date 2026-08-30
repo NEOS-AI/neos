@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import re
 
+from neos.utils.citations import (
+    SOURCE_HEADING_KO,
+    attach_source_section,
+    numbered_source_lines,
+)
 
 _MARKER = re.compile(r"\[C:([0-9a-f]{8})\]")
-_SOURCE_HEADING = re.compile(r"(?m)^## 출처\s*$")
 
 
 class OrphanCitationError(ValueError):
@@ -60,7 +64,7 @@ class CitationRenderer:
         서술하는 대상이 둘로 갈린다(W3-a 가 고친 문제).
         """
         claim_ids = list(dict.fromkeys(_MARKER.findall(draft)))
-        footnotes: list[str] = []
+        sources: list[str] = []
         orphans: list[str] = []
         number = 0
 
@@ -85,14 +89,20 @@ class CitationRenderer:
                         urls.append(evidence.source_url)
 
             draft = draft.replace(f"[C:{claim_id}]", f"[{number}]")
-            footnotes.append(
-                f"[{number}] {'; '.join(urls) or '(출처 없음)'}"
-            )
+            sources.append("; ".join(urls) or "(출처 없음)")
 
-        if not footnotes:
-            return draft, orphans
-
-        footnote_block = "\n".join(footnotes)
-        if _SOURCE_HEADING.search(draft):
-            return f"{draft.rstrip()}\n{footnote_block}\n", orphans
-        return f"{draft.rstrip()}\n\n## 출처\n{footnote_block}\n", orphans
+        # 번호와 절 조립은 공용 렌더러가 한다 (D-6). **해석은 여기 남는다** --
+        # 위 루프의 원장 대조와 orphan 건너뛰기가 이 모듈의 일이고, 그것이
+        # 조립 재시도를 유발하는 D10 계약을 진다. 아래 두 줄은 서식일 뿐이다.
+        #
+        # `numbered_source_lines` 가 1부터 조밀하게 매기는 것이 위 루프의
+        # "orphan 은 번호를 소비하지 않는다" 와 정확히 맞물린다 -- 걸러진
+        # 항목은 애초에 `sources` 에 들어오지 않는다.
+        return (
+            attach_source_section(
+                draft,
+                numbered_source_lines(sources),
+                heading=SOURCE_HEADING_KO,
+            ),
+            orphans,
+        )

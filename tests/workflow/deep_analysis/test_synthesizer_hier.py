@@ -494,3 +494,141 @@ async def test_reduce_tree_terminates_on_back_edge_cycle():
     summaries = await synth.reduce_tree("root")
     assert "root" in summaries
     assert "child" in summaries
+
+
+def _logged(ledger, kind):
+    """kind 로 이벤트를 고른다. 인덱스로 고르면 안 된다 -- `reduce_node` 는
+    절삭이 발동하면 `finalization_prompt_clamped` 를 먼저 남기므로 0번이
+    상황에 따라 다른 이벤트가 된다."""
+    for args, _kwargs in ledger.logged:
+        if args[0] == kind:
+            return args[2]
+    raise AssertionError(f"{kind} 이벤트가 없다: {[a[0][0] for a in ledger.logged]}")
+
+
+# --- CITE1: 리덕션 층이 마커를 몇 개 실어 올렸는지 원장이 답한다 -------------
+#
+# D91 은 인용 생산 손실을 이 층으로 좁히고 거기서 멈췄다 -- `NodeSummary.answer`
+# 가 어디에도 영속화되지 않아 "모델이 마커를 산문에 실었는가" 를 저장된 데이터로
+# 물을 수 없었다. 아래 넷이 그 질문을 원장 안으로 들여온다.
+
+
+async def test_node_summary_records_markers_the_model_dropped():
+    """성공한 리덕션의 캐리율. **떨어뜨렸을 때 떨어뜨렸다고 말해야 한다.**
+
+    프롬프트에 마커 둘을 넣고 답에는 하나만 싣는다 -- §8.1.2 가 적은 대로
+    계측기를 보는 것은 통과를 보는 게 아니라 **실패해야 할 때 실패하는지**
+    보는 것이다. 두 수가 같기만 하면 공허하게 성립하는 단언이 된다.
+    """
+    q = SimpleNamespace(id="n1", text="Q", status="open", value_est=0.8)
+    led = FakeLedger(
+        {
+            "n1": [
+                (_claim("aaaaaaaa", "claim a"), [_ev("ex a")]),
+                (_claim("bbbbbbbb", "claim b"), [_ev("ex b")]),
+            ]
+        }
+    )
+    cj = CapturingJSON(
+        [
+            {
+                "question_id": "n1",
+                "answer": "모델은 하나만 인용했다 [C:aaaaaaaa]",
+                "key_claim_ids": ["aaaaaaaa"],
+                "confidence": 0.8,
+                "caveats": [],
+                "conflicts": [],
+            }
+        ]
+    )
+    synth = Synthesizer(led, json_call=cj)
+    await synth.reduce_node(q, [])
+
+    payload = _logged(led, "node_summary")
+    assert payload["distinct_claims_prompt"] == 2
+    assert payload["distinct_claims_answer"] == 1
+
+
+async def test_degraded_join_names_the_branch_it_took():
+    """🔴 이 한 문자열이 CITE1 의 핵심이다.
+
+    `answer_chars` 는 분기 **뒤에** 기록되므로 0 이 아니라는 사실만으로는
+    자식 join 인지 자기 클레임 join 인지 알 수 없다. #21·#22 백테스트가
+    자기 클레임 유실을 **상한으로만** 잴 수 있었던 이유이고, 그 상한은
+    쓸모없을 만큼 헐거웠다.
+
+    여기서는 자식이 답을 갖고 있고 이 노드도 자기 클레임을 갖는다 --
+    `if not answer and pairs` 가 **발동하지 않으므로 자기 클레임이 버려진다.**
+    """
+    q = SimpleNamespace(id="n1", text="Q", status="open", value_est=0.8)
+    led = FakeLedger({"n1": [(_claim("aaaaaaaa", "버려지는 클레임"), [_ev("ex")])]})
+
+    async def json_call(model, prompt, **kw):
+        raise RuntimeError("리덕션 실패 -- 강등 경로로 간다")
+
+    child = NodeSummary(
+        question_id="n2",
+        answer="자식 답 [C:bbbbbbbb]",
+        key_claim_ids=["bbbbbbbb"],
+        confidence=0.5,
+        caveats=[],
+    )
+    synth = Synthesizer(led, json_call=json_call)
+    summary = await synth.reduce_node(q, [child])
+
+    payload = _logged(led, "node_reduction_degraded")
+    assert payload["answer_source"] == "children_join"
+    # 버려졌다는 것이 원장에서 읽힌다: 쓸 수 있었던 클레임이 1개인데
+    # 답에는 자식의 마커만 있다.
+    assert payload["own_claims_available"] == 1
+    assert "[C:aaaaaaaa]" not in summary.answer
+
+
+async def test_degraded_leaf_says_it_used_its_own_claims():
+    """같은 이벤트의 반대쪽 값. 둘을 구별하지 못하면 이름이 무의미하다."""
+    q = SimpleNamespace(id="n1", text="Q", status="open", value_est=0.8)
+    led = FakeLedger({"n1": [(_claim("aaaaaaaa", "자기 클레임"), [_ev("ex")])]})
+
+    async def json_call(model, prompt, **kw):
+        raise RuntimeError("리덕션 실패")
+
+    synth = Synthesizer(led, json_call=json_call)
+    summary = await synth.reduce_node(q, [])
+
+    payload = _logged(led, "node_reduction_degraded")
+    assert payload["answer_source"] == "own_claims"
+    assert payload["own_claims_available"] == 1
+    assert "[C:aaaaaaaa]" in summary.answer
+
+
+async def test_degraded_bounding_reports_the_markers_halving_took():
+    """절단 손실을 join 손실과 분리해 센다 -- 고칠 곳이 다르다.
+
+    자식 답들이 상한을 크게 넘고 **뒤쪽 자식이 마커를 든다.** 반절씩 자르는
+    `_bound_degraded_answer` 가 그 마커들을 가져간다.
+    """
+    q = SimpleNamespace(id="n1", text="Q", status="open", value_est=0.8)
+    led = FakeLedger({})
+
+    async def json_call(model, prompt, **kw):
+        raise RuntimeError("리덕션 실패")
+
+    children = [
+        NodeSummary(
+            question_id=f"n{i}",
+            answer=("가" * 3_000) + f" [C:{chr(97 + i) * 8}]",
+            key_claim_ids=[],
+            confidence=0.4,
+            caveats=[],
+        )
+        for i in range(4)
+    ]
+    synth = Synthesizer(led, json_call=json_call, synthesis_max_tokens=300)
+    await synth.reduce_node(q, children)
+
+    payload = _logged(led, "node_reduction_degraded")
+    assert payload["answer_truncated"] is True
+    assert payload["distinct_claims_before_bound"] == 4
+    # 절단이 실제로 마커를 가져갔다는 것을 주장한다 -- "<=" 로 쓰면 절단이
+    # 아무것도 안 가져가도 통과하고, 그것이 D60 이 고친 공허한 불변식이다.
+    assert payload["distinct_claims_after_bound"] < 4

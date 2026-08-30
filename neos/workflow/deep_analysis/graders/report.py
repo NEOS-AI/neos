@@ -32,7 +32,17 @@ _FOOTNOTE_REF = re.compile(r"\[\d+\]")
 # Heuristic "factual assertion" signal: a digit, or an uppercase-initial
 # proper-noun-like token (model/company/product names, acronyms, etc.).
 _DIGIT = re.compile(r"\d")
-_PROPER_NOUN = re.compile(r"\b[A-Z][A-Za-z]{2,}\b")
+# G3-m1 (2026-08-29): 경계를 `\b` 가 아니라 **라틴 문자 lookaround** 로 쓴다.
+#
+# `\b[A-Z][A-Za-z]{2,}\b` 는 한국어 산문에서 거의 발화하지 않았다 -- 파이썬의
+# `\b` 는 라틴과 한글 사이에 경계를 만들지 않고(둘 다 word character 다)
+# 한국어는 조사를 어간에 붙여 쓰므로 "Act가"·"OpenAI가" 가 통째로 매칭에서
+# 빠졌다. 그래서 이 절반의 휴리스틱이 죽고 분모가 사실상 "숫자를 담은 문장"
+# 뿐이 됐다.
+#
+# lookaround 는 한글을 경계로 삼으면서 camelCase 오탐은 그대로 막는다
+# ("someWordHere" 의 W 는 앞이 라틴이라 매칭되지 않는다).
+_PROPER_NOUN = re.compile(r"(?<![A-Za-z])[A-Z][A-Za-z]{2,}(?![A-Za-z])")
 
 _SOURCE_HEADING = re.compile(r"(?m)^##\s*출처\s*$")
 
