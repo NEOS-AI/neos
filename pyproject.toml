@@ -111,3 +111,6 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["neos*"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
