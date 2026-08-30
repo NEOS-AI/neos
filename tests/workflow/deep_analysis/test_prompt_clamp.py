@@ -859,6 +859,14 @@ async def test_a_degraded_reduction_leaves_a_trace():
         # 조립을 망가뜨리는 것은 후자다.
         "answer_chars": 4,
         "answer_truncated": False,
+        # CITE1: 어느 분기가 답을 만들었는지, 그리고 쓸 수 있었던 자기 클레임이
+        # 몇 개였는지. 이 노드는 자식 답이 있어 `children_join` 을 타고, 자기
+        # 클레임은 0개라 이 사례에서는 버려진 것이 없다 -- 값이 0 이라는 것과
+        # 키가 없다는 것은 다르다.
+        "answer_source": "children_join",
+        "own_claims_available": 0,
+        "distinct_claims_before_bound": 0,
+        "distinct_claims_after_bound": 0,
     }
 
 
