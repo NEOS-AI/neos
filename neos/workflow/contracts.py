@@ -148,6 +148,121 @@ def _delegate_calls(tree: ast.AST) -> list[tuple[str, str]]:
     return calls
 
 
+def _returned_delegate_calls(tree: ast.AST) -> list[tuple[str, str]]:
+    """`return (await)? self.<attr>.<method>(state, ...)` 만 (attr, method) 로 뽑는다.
+
+    `_delegate_calls` 보다 **훨씬 좁다**, 그리고 그것이 요점이다. `reads` 는
+    위임 호출이 어디에 있든 그 대상이 읽는 키를 이 노드도 읽으므로 전부
+    따라가면 된다. `writes` 는 반대다 -- 위임 대상이 쓰는 키가 이 노드의
+    `writes` 가 되려면 **그 반환값이 곧 이 노드의 반환값**이어야 한다.
+    중간에서 받아 다른 dict 에 담으면(`result = await self.x.y(state)` 뒤
+    `return {"a": result}`) 대상의 키는 상태로 나가지 않는다.
+
+    방향이 다른 이유는 §14.4 가 적은 대로다: `reads` 는 선언이 실제보다
+    적으면 위험하고(`actual - declared`), `writes` 는 선언이 실제보다 많으면
+    위험하다(`declared - actual`). 추출기가 실제로 쓰지 않는 키를 "확인" 해
+    주면 `_guaranteed_keys` 가 그것을 믿고 **깨진 토폴로지를 조용히
+    승인한다.** 그래서 이 추출기는 확신할 수 없으면 아무 말도 하지 않는다.
+    """
+    calls: list[tuple[str, str]] = []
+    for item in ast.walk(tree):
+        if not isinstance(item, ast.Return) or item.value is None:
+            continue
+        value = item.value
+        if isinstance(value, ast.Await):
+            value = value.value
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and isinstance(value.func.value, ast.Attribute)
+            and isinstance(value.func.value.value, ast.Name)
+            and value.func.value.value.id == "self"
+            and value.args
+            and isinstance(value.args[0], ast.Name)
+            and value.args[0].id == "state"
+        ):
+            calls.append((value.func.value.attr, value.func.attr))
+    return calls
+
+
+def _mutated_names(tree: ast.AST) -> set[str]:
+    """키가 **사라질 수 있는** 지역 이름. 이 이름들은 추적하지 않는다.
+
+    `del result["x"]` 와 `result.pop("x")` 가 그 둘이다. 추가만 하는 연산
+    (`result["x"] = ...`)은 추출을 과소하게 만들 뿐이라 안전하지만, 제거는
+    추출을 **과대**하게 만들어 검증기가 없는 write 를 믿게 한다.
+    """
+    names: set[str] = set()
+    for item in ast.walk(tree):
+        if isinstance(item, ast.Delete):
+            for target in item.targets:
+                if isinstance(target, ast.Subscript) and isinstance(
+                    target.value, ast.Name
+                ):
+                    names.add(target.value.id)
+        if (
+            isinstance(item, ast.Call)
+            and isinstance(item.func, ast.Attribute)
+            and item.func.attr == "pop"
+            and isinstance(item.func.value, ast.Name)
+        ):
+            names.add(item.func.value.id)
+    return names
+
+
+def _returned_local_dict_keys(tree: ast.AST) -> set[str]:
+    """`result = {...}` 뒤 `return result` 형태에서 최상위 키를 뽑는다.
+
+    이 저장소에서 노드가 상태를 쓰는 둘째 흔한 모양이고, `return {...}` 만
+    보던 추출기는 이것을 통째로 놓쳤다.
+
+    이름이 **정확히 한 번** 대입된 경우만 본다. 두 번 이상이면 어느 대입이
+    반환에 도달하는지가 제어 흐름의 문제가 되고, 정적으로 틀리면 과대 추출
+    쪽으로 틀린다 -- `writes` 에서 그 방향은 검증기를 깨뜨린다.
+    """
+    single_assign: dict[str, int] = {}
+    literals: dict[str, set[str]] = {}
+    for item in ast.walk(tree):
+        if (
+            isinstance(item, ast.Assign)
+            and len(item.targets) == 1
+            and isinstance(item.targets[0], ast.Name)
+        ):
+            name = item.targets[0].id
+            single_assign[name] = single_assign.get(name, 0) + 1
+            if isinstance(item.value, ast.Dict):
+                literals[name] = {
+                    key.value
+                    for key in item.value.keys
+                    if isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)
+                }
+
+    subscript_adds: dict[str, set[str]] = {}
+    for item in ast.walk(tree):
+        if (
+            isinstance(item, ast.Subscript)
+            and isinstance(item.value, ast.Name)
+            and isinstance(item.ctx, ast.Store)
+            and isinstance(item.slice, ast.Constant)
+            and isinstance(item.slice.value, str)
+        ):
+            subscript_adds.setdefault(item.value.id, set()).add(
+                item.slice.value
+            )
+
+    unsafe = _mutated_names(tree)
+    keys: set[str] = set()
+    for item in ast.walk(tree):
+        if not (isinstance(item, ast.Return) and isinstance(item.value, ast.Name)):
+            continue
+        name = item.value.id
+        if name in unsafe or single_assign.get(name) != 1 or name not in literals:
+            continue
+        keys |= literals[name] | subscript_adds.get(name, set())
+    return keys
+
+
 def _owning_class(fn: Callable) -> type | None:
     """`fn` 을 정의한 클래스를 `__qualname__` 과 정의 모듈에서 찾는다.
 
@@ -308,23 +423,59 @@ def _literal_state_keys_written(tree: ast.AST) -> set[str]:
     return keys
 
 
-def state_keys_written(fn: Callable) -> set[str]:
-    """소스에서 상태에 실제로 쓰이는 것으로 정적으로 확인 가능한 리터럴 키를 뽑는다.
+def _state_keys_written(
+    fn: Callable, owner: type | None, depth: int, visited: set[int]
+) -> set[str]:
+    if id(fn) in visited or depth >= MAX_DELEGATE_DEPTH:
+        return set()
+    visited.add(id(fn))
 
-    `state_keys_read` 와 짝을 이루지만 훨씬 더 보수적이다 -- 위임 체인을
-    따라가지 않고(`fn` 자신의 소스만 본다), `return {...}` 형태의 최상위 dict
-    리터럴과 `state["x"] = ...` 대입만 본다. `writes` 가 계산에 쓰이는 방향은
-    `reads` 와 정반대다: `reads` 는 "선언이 실제보다 적으면 위험"
-    (`actual - declared`) 이지만, `writes` 는 "선언이 실제보다 많으면 위험"
-    (`declared - actual`) 이다 -- `_guaranteed_keys`(topology.py) 가 이
-    `writes` 를 그대로 믿고 `unsatisfied_requires` 를 계산하므로, 실제로는 안
-    쓰는 키를 썼다고 과잉 선언하면 검증기가 깨진 토폴로지를 조용히 승인한다.
-    이 함수가 확인하지 못하는 declared write 는 반드시
-    `writes_hand_curated=True` 로 명시해야 한다.
-    """
     try:
         source = textwrap.dedent(inspect.getsource(fn))
     except (OSError, TypeError):
         return set()
     tree = ast.parse(source)
-    return _literal_state_keys_written(tree)
+    keys = _literal_state_keys_written(tree) | _returned_local_dict_keys(tree)
+
+    if owner is None:
+        owner = _owning_class(fn)
+    if owner is None:
+        return keys
+
+    attr_class_names = _attr_class_names(owner)
+    for attr, method_name in _returned_delegate_calls(tree):
+        class_name = attr_class_names.get(attr)
+        if class_name is None:
+            continue
+        target_cls = _resolve_class(owner, class_name)
+        if target_cls is None:
+            continue
+        target_fn = inspect.getattr_static(target_cls, method_name, None)
+        if not callable(target_fn):
+            continue
+        keys |= _state_keys_written(target_fn, target_cls, depth + 1, visited)
+    return keys
+
+
+def state_keys_written(fn: Callable) -> set[str]:
+    """소스에서 상태에 실제로 쓰이는 것으로 정적으로 확인 가능한 리터럴 키를 뽑는다.
+
+    `state_keys_read` 와 짝을 이루지만 **여전히 더 보수적이다.** 셋을 본다:
+    `return {...}` 최상위 dict 리터럴, `state["x"] = ...` 대입, 그리고
+    `result = {...}; return result` 형태의 지역 리터럴. 위임 체인은
+    따라가되 **반환 위치의 위임만** 따라간다(`_returned_delegate_calls`) --
+    `reads` 가 모든 위임 호출을 따라가는 것과 다르다.
+
+    비대칭의 이유는 두 필드가 계산에 쓰이는 방향이 정반대이기 때문이다:
+    `reads` 는 "선언이 실제보다 적으면 위험"(`actual - declared`) 이지만,
+    `writes` 는 "선언이 실제보다 많으면 위험"(`declared - actual`) 이다 --
+    `_guaranteed_keys`(topology.py) 가 이 `writes` 를 그대로 믿고
+    `unsatisfied_requires` 를 계산하므로, 실제로는 안 쓰는 키를 썼다고
+    확인해 주면 검증기가 **깨진 토폴로지를 조용히 승인한다.** 그래서
+    확신할 수 없는 모양에서는 아무 말도 하지 않는다.
+
+    여전히 확인하지 못하는 declared write 는 `writes_hand_curated=True` 로
+    명시해야 한다 -- §14.4 가 이 함수를 "다음 개선점" 으로 적은 이유이고,
+    이 확장이 그 격차를 좁힌 만큼만 좁힌 것이지 없앤 것은 아니다.
+    """
+    return _state_keys_written(fn, owner=None, depth=0, visited=set())

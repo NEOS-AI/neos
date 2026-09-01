@@ -962,10 +962,6 @@ class MultiAgentWorkflow:
         # original_query 가 없으면 `state["original_query"]` 에서 즉시 KeyError --
         # 개선 여부를 판단할 대상 자체가 없다.
         requires={"original_query"},
-        # 한 줄 위임(`return await self.refinement_checker.check(state)`)이라
-        # writes 전부가 위임 대상의 반환값에서 나온다 -- `state_keys_written`
-        # 은 이 노드 자신의 소스만 보므로 근거를 찾지 못한다.
-        writes_hand_curated=True,
     )
     async def _check_refinement_node(self, state: AgentState) -> Dict[str, Any]:
         """쿼리 개선 필요 여부 체크 노드"""
@@ -990,11 +986,6 @@ class MultiAgentWorkflow:
         # needs_refinement 는 없어도 `.get(default False)` 로 "개선 불필요"로
         # 취급해 안전하게 스킵한다 -- 의미 있는 기본 동작이다.
         requires={"original_query"},
-        # 한 줄 위임(`return await self.query_refinement_agent.refine(state)`)
-        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
-        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
-        # 못한다.
-        writes_hand_curated=True,
     )
     async def _refine_query_node(self, state: AgentState) -> Dict[str, Any]:
         """쿼리 개선 노드"""
@@ -1022,11 +1013,6 @@ class MultiAgentWorkflow:
         },
         # 전부 `.get()` 기본값 경로다 -- research_session_id 가 없으면 "이전
         # 세션 없음"으로 취급해 새 연구로 진행하는 것이 의도된 정상 분기다.
-        # 한 줄 위임(`return await self.research_continuation_processor.process(state)`)
-        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
-        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
-        # 못한다.
-        writes_hand_curated=True,
     )
     async def _research_continuation_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 2.2: 후속 연구 컨텍스트 로드 노드"""
@@ -1047,11 +1033,6 @@ class MultiAgentWorkflow:
         # 경량 쿼리(complexity<0.4 & search_results<3)는 명시적으로 skip
         # 처리되고 reflection_result에 그 사실이 기록된다 -- 조용한 빈 결과가
         # 아니라 신호가 있는 정상 분기다.
-        # 한 줄 위임(`return await self.self_reflection_processor.reflect(state)`)
-        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
-        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
-        # 못한다.
-        writes_hand_curated=True,
     )
     async def _self_reflection_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 2.6: Self-reflection 노드"""
@@ -1122,11 +1103,6 @@ class MultiAgentWorkflow:
         writes={"answered_questions", "replan_count", "remaining_questions"},
         # replan_count 초과나 sub_topics 없음/결과 충분함은 모두 명시적으로
         # state 그대로 반환하는 정상 스킵 분기다. 모두 `.get()` 기본값 경로.
-        # 한 줄 위임(`return await self.research_replanner.evaluate_and_replan(state)`)
-        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
-        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
-        # 못한다.
-        writes_hand_curated=True,
     )
     async def _replanner_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 2.4: 중간 결과 기반 적응형 연구 재계획"""
@@ -1434,12 +1410,6 @@ class MultiAgentWorkflow:
         },
         # approval_decision 이 None/미지정이면 ApprovalProcessor가 안전하게
         # "rejected" 로 폴백한다 -- 조용한 빈 결과가 아니라 명시적 안전장치다.
-        # pending_approvals/approval_decision 은 초기화 실패 시 폴백 분기의
-        # 리터럴 dict 반환에서 추출기가 확인한다. approval_outcome/
-        # final_response 는 정상 경로가 위임하는
-        # `self.approval_processor.process(state)` 의 반환값에서만 나와
-        # `state_keys_written` 이 위임 체인을 따라가지 않는 한 확인할 수 없다.
-        writes_hand_curated=True,
     )
     async def _execution_approval_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 2 (OpenClaw Execution Approval): 실행 승인 노드
@@ -1531,11 +1501,6 @@ class MultiAgentWorkflow:
         },
         # EXECUTION_APPROVAL과 동일한 ApprovalProcessor.process 위임 -- decision
         # 미지정 시 안전하게 "rejected" 로 폴백한다.
-        # pending_approvals/approval_decision/approval_outcome 은 초기화 실패
-        # 시 폴백 분기의 리터럴 dict 반환에서 추출기가 확인한다. final_response
-        # 는 정상 경로가 위임하는 `self.approval_processor.process(state)` 의
-        # 반환값에서만 나와 확인할 수 없다.
-        writes_hand_curated=True,
     )
     async def _mission_approval_node(self, state: AgentState) -> Dict[str, Any]:
         """Mission Runtime: 실행 전 mission-level 승인 처리."""
@@ -1634,11 +1599,6 @@ class MultiAgentWorkflow:
         writes={"response_metadata"},
         # mission_id 가 없으면 메타데이터 병합을 건너뛰고 기존 response_metadata
         # 를 그대로 반환한다 -- non-mission 경로에서의 의도된 정상 통과.
-        # 한 줄 위임(`return await self.mission_integrator.integrate(state)`)
-        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
-        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
-        # 못한다.
-        writes_hand_curated=True,
     )
     async def _mission_integrator_node(self, state: AgentState) -> Dict[str, Any]:
         """Mission Runtime: mission 결과 메타데이터 통합."""
@@ -1657,11 +1617,6 @@ class MultiAgentWorkflow:
         writes={"ui_frame", "needs_ui"},
         # original_query 가 없어도 LLM 호출 실패 시와 동일한 fallback 폼으로
         # 안전하게 진행한다 -- 예외도 없고 특별히 더 "빈" 결과도 아니다.
-        # needs_ui 는 초기화 실패 시 폴백 분기의 리터럴 dict 반환에서
-        # 추출기가 확인한다. ui_frame 은 정상 경로가 위임하는
-        # `self.ui_frame_generator.generate(state)` 의 반환값에서만 나와
-        # 확인할 수 없다.
-        writes_hand_curated=True,
     )
     async def _ui_frame_generator_node(self, state: AgentState) -> Dict[str, Any]:
         """Phase 8 (OpenClaw A2UI): UIFrame 생성 노드 래퍼.
@@ -1948,11 +1903,6 @@ class MultiAgentWorkflow:
         # 것이 정확히 이 기능이 잡으려는 실패다. analysis_results/generation_results
         # 는 검색만 필요한 쿼리에서는 정상적으로 비어 있을 수 있어 requires 에서 뺀다.
         requires={"search_results"},
-        # 한 줄 위임(`return await self.result_processor.integrate_results(state)`)
-        # 이라 writes 전부가 위임 대상의 반환값에서 나온다 --
-        # `state_keys_written` 은 이 노드 자신의 소스만 보므로 근거를 찾지
-        # 못한다.
-        writes_hand_curated=True,
     )
     async def _integrate_results_node(self, state: AgentState) -> Dict[str, Any]:
         """결과 통합 노드"""
@@ -2261,9 +2211,6 @@ class MultiAgentWorkflow:
         # (`ResponseGenerator._direct_response_prompt`) 안에서 읽힌다. 추출기는
         # 위임 한 단계까지만 따라가므로 이 키를 확인하지 못한다.
         hand_curated=True,
-        # writes 전부가 위임 대상의 반환 리터럴에서 나온다 -- 이 노드 자신의
-        # 소스에는 근거가 없다.
-        writes_hand_curated=True,
     )
     async def _direct_response_node(self, state: AgentState) -> Dict[str, Any]:
         """G1-a: 검색이 필요 없다고 판정된 질의에 직접 답하는 노드.
@@ -2315,11 +2262,6 @@ class MultiAgentWorkflow:
         # execution_steps만 보고, _build_context 안의 나머지 여섯 개는 보지
         # 못한다 -- 드리프트 가드가 이 계약에서는 부분적으로만 작동한다.
         hand_curated=True,
-        # final_response 는 초기화 실패 시 폴백 분기의 리터럴 dict 반환에서
-        # 추출기가 확인한다. 나머지 7개는 정상 경로가 위임하는
-        # `self.recursive_orchestrator.execute(state)` 의 반환값에서만 나와
-        # 확인할 수 없다.
-        writes_hand_curated=True,
     )
     async def _recursive_orchestrator_node(self, state: AgentState) -> Dict[str, Any]:
         """ROMA: 재귀 오케스트레이터 노드"""
@@ -2361,11 +2303,6 @@ class MultiAgentWorkflow:
         # RECURSIVE_ORCHESTRATOR 와 동일하게 추출기가 execute() 자신의 세 키만
         # 보고 _build_context 안의 나머지는 보지 못한다.
         hand_curated=True,
-        # final_response 는 초기화 실패 시 폴백 분기의 리터럴 dict 반환에서
-        # 추출기가 확인한다. 나머지 7개는 정상 경로가 위임하는
-        # `self.hyper_deep_orchestrator.execute(state)` 의 반환값에서만 나와
-        # 확인할 수 없다.
-        writes_hand_curated=True,
     )
     async def _hyper_deep_orchestrator_node(self, state: AgentState) -> Dict[str, Any]:
         """HyperDeep Recursive: ROMA + HyperDeepResearchAgent 오케스트레이터 노드"""
