@@ -4,6 +4,10 @@ import pytest
 from types import SimpleNamespace
 from neos.workflow.deep_analysis.synthesizer import Synthesizer
 from neos.workflow.deep_analysis.models import NodeSummary
+from neos.workflow.deep_analysis.token_budget import (
+    TokenBudget,
+    token_budget_scope,
+)
 
 pytestmark = pytest.mark.no_db
 
@@ -632,3 +636,145 @@ async def test_degraded_bounding_reports_the_markers_halving_took():
     # 절단이 실제로 마커를 가져갔다는 것을 주장한다 -- "<=" 로 쓰면 절단이
     # 아무것도 안 가져가도 통과하고, 그것이 D60 이 고친 공허한 불변식이다.
     assert payload["distinct_claims_after_bound"] < 4
+
+
+# --- BUDGET2: 리덕션 클램프가 예산 잔량을 안다 -------------------------------
+#
+# D92 실측: #21·#22 열 런에서 `node_summary` 79 대 `node_reduction_degraded`
+# 152 이고 **152 전부** `reason=input_bound` 다. 단일 기전이고, 그 기전은
+# 클램프가 고정 허용치를 겨누는 동안 `reserve()` 는 줄어드는 티어 잔량으로
+# 채점한 것이다. 아래 넷이 그 두 수를 잇는다.
+
+
+def _budget(*, remaining: int, report_floor: int, min_viable: int = 2048):
+    """`available_for_reduction = remaining - report_floor` 인 예산.
+
+    `cap_tokens` 를 소비 0 으로 두면 `remaining_tokens` 가 곧 `cap_tokens` 다.
+    """
+    return TokenBudget(
+        cap_tokens=remaining,
+        floor_tokens=report_floor,
+        report_floor_tokens=report_floor,
+        grading_floor_tokens=0,
+        min_viable_output_tokens=min_viable,
+    )
+
+
+async def test_reduction_allowance_is_the_static_one_when_no_budget_is_scoped():
+    """예산 밖에서는 BUDGET2 이전과 **정확히** 같아야 한다.
+
+    이 메서드는 허용치를 내릴 수만 있고 올릴 수는 없다. 스코프가 없을 때
+    static 이 아닌 값이 나오면 테스트·스크립트 경로가 프로덕션과 다른 크기의
+    프롬프트를 만들게 되고, 그러면 카세트가 재생되지 않는다.
+    """
+    synth = Synthesizer(FakeLedger({}), synthesis_max_tokens=1_000)
+    assert (
+        synth.effective_reduction_allowance()
+        == synth.reduction_input_allowance
+    )
+
+
+async def test_reduction_allowance_falls_to_what_the_tier_can_actually_grant():
+    """티어가 고정 허용치보다 좁아지면 허용치가 따라 내려간다.
+
+    이것이 152 건의 기전이다: 조사가 진행될수록 `available_for_reduction` 은
+    줄어드는데 `reduction_input_allowance` 는 런 내내 상수다.
+    """
+    synth = Synthesizer(FakeLedger({}), synthesis_max_tokens=1_000)
+    static = synth.reduction_input_allowance
+    budget = _budget(
+        remaining=static + 2_048 - 500, report_floor=0, min_viable=2_048
+    )
+    with token_budget_scope(budget):
+        assert synth.effective_reduction_allowance() == static - 500
+
+
+async def test_reduction_allowance_subtracts_the_viability_margin():
+    """`reserve()` 는 맞는 프롬프트가 아니라 **답할 자리가 남는** 프롬프트를 허가한다.
+
+    거절 조건이 `ceiling - input_bound < viability` 이므로 이 여백을 빼지
+    않으면 허용치가 정확히 한 번의 유효 호출만큼 높게 겨누고, 같은 거절이
+    더 작은 크기에서 재현된다 -- G8 이 출력 쪽에서 배운 것과 같은 규칙이다.
+    """
+    synth = Synthesizer(FakeLedger({}), synthesis_max_tokens=1_000)
+    static = synth.reduction_input_allowance
+    generous = _budget(
+        remaining=static + 2_048, report_floor=0, min_viable=2_048
+    )
+    with token_budget_scope(generous):
+        # 딱 여백만큼 여유가 있으면 static 이 그대로 산다.
+        assert synth.effective_reduction_allowance() == static
+
+    tight = _budget(
+        remaining=static + 2_048 - 1, report_floor=0, min_viable=2_048
+    )
+    with token_budget_scope(tight):
+        assert synth.effective_reduction_allowance() == static - 1
+
+
+async def test_reduction_allowance_never_goes_negative():
+    """티어가 비면 0 이다. 음수를 클램프에 넘기면 종료 조건이 무의미해진다."""
+    synth = Synthesizer(FakeLedger({}), synthesis_max_tokens=1_000)
+    with token_budget_scope(_budget(remaining=0, report_floor=0)):
+        assert synth.effective_reduction_allowance() == 0
+
+
+async def test_a_starved_tier_degrades_instead_of_writing_an_uncitable_summary():
+    """BUDGET2 의 가드. 마커가 전부 잘려나간 프롬프트는 LLM 에 보내지 않는다.
+
+    클램프를 예산에 맞추면 티어가 아주 좁을 때 클레임 줄이 통째로 떨어질 수
+    있다. 그 프롬프트로도 모델은 유창한 산문을 쓰지만 **인용할 수 있는 것이
+    하나도 없다** -- 강등 join 은 같은 클레임을 `[C:...]` 를 달고 결정론적으로
+    잇는다. 예약을 태워 인용 가능한 텍스트를 인용 불가능한 텍스트로 바꾸는
+    것은 §3.2 가 이 저장소의 관통 주제로 적은 조용한 실패다.
+    """
+    q = SimpleNamespace(id="n1", text="Q", status="open", value_est=0.8)
+    led = FakeLedger(
+        {"n1": [(_claim("aaaaaaaa", "가" * 4_000), [_ev("ex a")])]}
+    )
+
+    called = []
+
+    async def json_call(model, prompt, **kw):
+        called.append(prompt)
+        raise AssertionError("굶은 티어에서는 모델을 부르지 않는다")
+
+    synth = Synthesizer(led, json_call=json_call, synthesis_max_tokens=1_000)
+    with token_budget_scope(_budget(remaining=0, report_floor=0)):
+        summary = await synth.reduce_node(q, [])
+
+    assert called == []
+    payload = _logged(led, "node_reduction_degraded")
+    assert payload["reason"] == "reduction_allowance_below_claim_floor"
+    # 강등이 클레임을 되살린다 -- 가드가 지키려는 것이 정확히 이것이다.
+    assert payload["answer_source"] == "own_claims"
+    assert "[C:aaaaaaaa]" in summary.answer
+
+
+async def test_a_claim_free_node_still_reaches_the_model_when_starved():
+    """가드는 **잃을 것이 있을 때만** 발동한다.
+
+    검증 클레임도 인용된 자식도 없는 노드는 프롬프트에 마커가 0 개인 것이
+    정상이다. 그것을 강등으로 돌리면 가드가 자기 조건과 무관한 노드를
+    삼키고, `reason` 어휘가 거짓을 말하기 시작한다.
+    """
+    q = SimpleNamespace(id="n1", text="Q", status="open", value_est=0.8)
+    led = FakeLedger({"n1": []})
+    cj = CapturingJSON(
+        [
+            {
+                "question_id": "n1",
+                "answer": "마커 없는 답",
+                "key_claim_ids": [],
+                "confidence": 0.3,
+                "caveats": [],
+                "conflicts": [],
+            }
+        ]
+    )
+    synth = Synthesizer(led, json_call=cj, synthesis_max_tokens=1_000)
+    with token_budget_scope(_budget(remaining=0, report_floor=0)):
+        summary = await synth.reduce_node(q, [])
+
+    assert len(cj.prompts) == 1
+    assert summary.answer == "마커 없는 답"
