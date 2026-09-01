@@ -14,6 +14,7 @@ import pytest
 
 import scripts.deep_analysis_discard_recall as cli
 from neos.config.settings import settings
+from neos.workflow.deep_analysis.discard_recall import ScoringSession
 from neos.workflow.deep_analysis.models import (
     ProposedClaim,
     ProposedEvidence,
@@ -570,3 +571,94 @@ def test_main_dedupes_run_ids_and_makes_an_unknown_run_visible(
     # is graded once, not twice -- proof the duplicate didn't double-count.
     assert recall["total_discarded"] == 1
 
+
+# --- C1 누적: 디스크에서 이전 세션을 읽는다 ---------------------------------
+
+
+def _write_session(root, name, *, fingerprint, run_ids, total, verified):
+    directory = root / name
+    directory.mkdir(parents=True)
+    (directory / "manifest.json").write_text(
+        json.dumps({"config_fingerprint": fingerprint, "run_ids": run_ids})
+    )
+    (directory / "recall.json").write_text(
+        json.dumps({"total_discarded": total, "verified": verified})
+    )
+    return directory
+
+
+def test_prior_sessions_are_loaded_in_a_stable_order(tmp_path):
+    fp = {"judge_model": "j-1"}
+    _write_session(
+        tmp_path, "20260902T000000Z", fingerprint=fp, run_ids=["r2"],
+        total=20, verified=1,
+    )
+    _write_session(
+        tmp_path, "20260901T000000Z", fingerprint=fp, run_ids=["r1"],
+        total=16, verified=0,
+    )
+
+    sessions = cli.load_prior_sessions(tmp_path)
+
+    assert [s.artifact for s in sessions] == [
+        "20260901T000000Z",
+        "20260902T000000Z",
+    ]
+    assert [s.total_discarded for s in sessions] == [16, 20]
+    assert sessions[0].run_ids == ("r1",)
+
+
+def test_a_half_written_artifact_is_not_counted_as_a_session(tmp_path):
+    """반쯤 쓰인 디렉터리가 분모에 들어가면 근거 없는 수가 섞인다.
+
+    이 스크립트는 채점 도중 죽을 수 있고(판정자 호출 수십 건), 그때 남는
+    것이 정확히 이 모양이다 -- `manifest.json` 만 있고 `recall.json` 이
+    없거나, 둘 다 있는데 키가 빈 것.
+    """
+    fp = {"judge_model": "j-1"}
+    _write_session(
+        tmp_path, "good", fingerprint=fp, run_ids=["r1"], total=16, verified=0
+    )
+    (tmp_path / "manifest-only").mkdir()
+    (tmp_path / "manifest-only" / "manifest.json").write_text(
+        json.dumps({"config_fingerprint": fp, "run_ids": ["r9"]})
+    )
+    (tmp_path / "truncated").mkdir()
+    (tmp_path / "truncated" / "manifest.json").write_text("{not json")
+    (tmp_path / "truncated" / "recall.json").write_text("{}")
+    (tmp_path / "no-counts").mkdir()
+    (tmp_path / "no-counts" / "manifest.json").write_text(
+        json.dumps({"config_fingerprint": fp, "run_ids": ["r8"]})
+    )
+    (tmp_path / "no-counts" / "recall.json").write_text(json.dumps({}))
+
+    sessions = cli.load_prior_sessions(tmp_path)
+
+    assert [s.artifact for s in sessions] == ["good"]
+
+
+def test_an_absent_output_root_yields_no_sessions_rather_than_raising(tmp_path):
+    """첫 채점에는 이전 아티팩트가 없다. 그것이 오류일 이유가 없다."""
+    assert cli.load_prior_sessions(tmp_path / "never-written") == []
+
+
+def test_accumulating_reports_how_many_more_discards_a_verdict_needs(tmp_path):
+    fp = {"judge_model": "j-1"}
+    _write_session(
+        tmp_path, "20260901T000000Z", fingerprint=fp, run_ids=["r1"],
+        total=16, verified=0,
+    )
+    current = ScoringSession(
+        artifact="(this run)",
+        fingerprint=fp,
+        run_ids=("r2",),
+        total_discarded=10,
+        verified=0,
+    )
+
+    pooled = cli._accumulated(tmp_path, current)
+
+    assert pooled["total_discarded"] == 26
+    assert pooled["verdict"] == "inconclusive"
+    # 사람이 손으로 풀던 산술을 아티팩트가 답한다: 앞으로 9개.
+    assert pooled["additional_discards_for_safe"] == 9
