@@ -1,35 +1,5 @@
 # 심층분석 하네스 + 역할 기반 모델 라우팅 + 코딩 에이전트 + 서브에이전트 기반 그래프 엔지니어링 — 통합 로드맵
 
-**작성일:** 2026-08-04
-**작업 브랜치:** `dev` (worktree 없이 직접 작업 중)
-**범위:** `neos/workflow/deep_analysis/` 하네스와 `neos/config/model_routing.py` 계열의
-모델 라우팅, 두 트랙을 소비하는 프론트엔드(`web/`), 프레임워크 이탈·계측 통일,
-`neos/coding/` 코딩 에이전트, 그 하네스를 개선하는 루프 자체의 기계화,
-워크플로우 그래프 계약, 그리고 그 전부를 교체 가능한 플러그인으로 만드는 런타임 —
-**여덟 트랙(A~H)**의 로드맵,
-진행 경과, 미해결 이슈, 실행 순서, 최종 방향성
-
-> 📌 **"여섯 트랙(A~F)"이던 이 줄은 2026-08-19에 고쳤다.** 트랙 G(§14)가 2026-08-16에
-> 신설됐는데 범위 문장이 따라오지 않았다. 트랙 H(§15) 신설과 함께 정정한다.
-
-**근거 문서 (이 문서는 이들의 종합이며 대체가 아니다):**
-
-| 문서 | 역할 |
-|---|---|
-| [DEEP_ANALYSIS_HARNESS_DESIGN.md](DEEP_ANALYSIS_HARNESS_DESIGN.md) | 설계 정본 — 5원칙·DDL·컴포넌트 명세·마일스톤 |
-| [deep_analysis_task_task_resume.md](archive/deep_analysis_task_task_resume.md) | 하네스 작업 계보와 재개 절차 |
-| [role_based_model_routing_task_resume.md](archive/role_based_model_routing_task_resume.md) | 라우팅 작업 결과와 잔여 이슈 |
-| [coding_agent_task_resume.md](coding_agent_task_resume.md) | 코딩 에이전트 계보와 재개 절차 (트랙 E의 상세 원장) |
-| [TODO_260729.md](TODO_260729.md) | 미해결 백로그 원장 — A·B·C·D·E·F·G 계열 실측 수치 |
-| [FE_AUDIT_260717.md](FE_AUDIT_260717.md) | 프론트엔드 감사 — §6이 job 서비스 전환 준비도를 판정 (트랙 C의 기준선) |
-| `neos/workflow/deep_analysis/DECISIONS.md` | 결정 원장 D1–D92 — **표본 판정의 정본**. 유효 결정은 전문, 지난 표본·튜닝 이력은 요약 |
-| `neos/workflow/deep_analysis/DECISIONS_ARCHIVE_2026-08.md` | 위에서 요약된 항목(D7·D11·D13·D18·D29–D77·D79–D83)의 **원문** |
-
-> ⚠️ **진행 상황의 근거 규칙.** 플랜 문서(`docs/superpowers/plans/*`)의 체크박스는
-> 43개 전부 `- [x]`가 0개다. **신뢰하지 말 것.** 실제 진행은 (1) git 커밋,
-> (2) `.superpowers/sdd/<plan>/progress.md`, (3) `DECISIONS.md`의 D 번호,
-> (4) `deep_analysis_events` 테이블의 실측에만 기록되어 있다.
-
 ---
 
 ## 1. 한눈에 보는 현재 상태
@@ -1445,19 +1415,7 @@ citation은 더 근본적으로 맞지 않는다. 스킬 계약은 `execute(para
 
 #### (기록) crewai는 이미 죽은 코드였다 (2026-08-07 실측)
 
-| 심볼 | 외부 호출자 |
-|---|---|
-| `BaseAgent.run_crew` | **0곳** |
-| `BaseAgent.create_task` | **0곳** (동명의 `service.create_task`는 무관) |
-| `self.agent` (crewai `Agent`) | **0곳** |
-
-즉 현재 상태는 **모든 BaseAgent 인스턴스가 생성 시 `crewai.Agent`를 하나씩 만들고
-아무도 쓰지 않는 것**이다(`base.py:31,34-44`). 삭제 대상은 import 1줄 + 메서드 2개
-+ 필드 1개 + `pyproject.toml` 의존성 1줄이다.
-
-> **부수 효과가 본체보다 크다.** §10.3 오염원 2번("litellm·crewai가 import 시
-> `load_dotenv()`로 `.env`를 `os.environ`에 복사", `4b37a3fe`)에서 crewai가 빠진다.
-> 회피책을 고치는 게 아니라 **원인 하나를 제거**하는 것이다.
+제거 완료
 
 #### D3b. langgraph — 살아 있는 실행 엔진이다
 
@@ -1588,11 +1546,6 @@ neos/config/schema.py:1094   coding_model.enabled  = False
 기존 `SandboxProvider`/`SandboxSession`은 **실행 데이터 플레인**으로 남기고,
 별도 `neos.coding.managed`가 PostgreSQL 원장 · 애플리케이션 서비스 · Celery 조정자 ·
 capability 인식 어댑터로 **admission · 할당 · 헬스 · 아카이브 복구 · 정리**를 소유한다.
-
-**핵심 설계 원칙 — 의도적 fail-closed.** 선택된 provider가 불가용이면 신규 태스크를
-거부하고, 기존 태스크는 **동일 provider에서만** 재접속한다. **자동 크로스 프로바이더
-failover는 금지**이며, 크로스 프로바이더 복구는 검증된 portable 아카이브에서
-운영자 승인 시에만 허용한다.
 
 | Task | 내용 | 상태 |
 |---|---|---|
@@ -2150,7 +2103,6 @@ K를 쓰는 노드가 있어야 한다. 한 분기에만 있으면 다른 분기
 
 #### 발견 당시 서술 (원문)
 
-
 검증기를 **출하 중인 그래프**에 겨눈 결과다. 고치지 않았고
 `tests/workflow/test_static_graph_contract.py`가 **양방향으로** 고정한다 — 새 위반도,
 사라진 위반도 실패시킨다(누가 고치면 기대값이 낡은 것이므로 의도적 편집이어야 한다).
@@ -2563,16 +2515,6 @@ H1 매니페스트가 싣는 일곱 칸 중 하나(`prompts` 해시)다.
 - 백로그 원장: [TODO_260729.md](TODO_260729.md) — G 계열 실측 수치의 원본
 - 프론트엔드 감사: [FE_AUDIT_260717.md](FE_AUDIT_260717.md) — §6이 트랙 C의 기준선.
   ⚠️ 2026-07-17 시점이며 §1이 "나머지 항목은 재확인하지 않았다"고 명시한다
-- 트랙 C 코드 표면: `web/lib/deep-analysis/` (reader·subscription·progress·events·
-  active-run-store), `web/hooks/use-deep-analysis-stream.ts`,
-  `web/components/deep-analysis-status.tsx`,
-  `web/app/(chat)/api/deep-analysis/[runId]/events/route.ts` (GET 전용 프록시)
-- 트랙 E 코드 표면: `neos/coding/` (loop·model·sandbox·tools·workers·transport·
-  outbox·persistence·repositories), `neos/coding/runtime.py`(D1c 배선 지점),
-  `db/migrations/038..044`. **미병합**: `neos/coding/managed/` +
-  `db/migrations/045` (브랜치 `feature/managed-sandbox-control-plane`)
-- 트랙 E 원장: `.worktrees/managed-sandbox-control-plane/.superpowers/sdd/2026-07-25-managed-sandbox-control-plane/progress.md`
-  (⚠️ 이중 기록 — CA4), 플랜 `docs/superpowers/plans/2026-07-25-managed-sandbox-control-plane.md`
 - 코딩 에이전트 설계: [NEOS_CODING.md](NEOS_CODING.md)
 - 결정 원장: `neos/workflow/deep_analysis/DECISIONS.md` (D1–D86) — 표본 원장 §8.1의 상세.
   요약된 항목의 원문은 `neos/workflow/deep_analysis/DECISIONS_ARCHIVE_2026-08.md`

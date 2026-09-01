@@ -15,6 +15,7 @@ from neos.config.model_config import (
     thinking_contract,
 )
 from neos.config.settings import settings
+from neos.utils.anthropic_client import anthropic_default_headers
 from .base import ModelProviderBase
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,13 @@ class AnthropicProvider(ModelProviderBase):
         }
         if max_tokens:
             params["max_tokens"] = max_tokens
+        # identity-linked 키는 워크스페이스 헤더 없이 모든 요청이 400 이다.
+        # `default_headers` 를 **빈 값일 때는 넣지 않는다** -- 빈 dict 를 넘기면
+        # LangChain 이 그것을 SDK 로 전달하고, 그 경로가 지금과 같다는 보장이
+        # 없다. 아무것도 안 하는 것이 지금과 같다는 유일한 보장이다.
+        workspace_headers = anthropic_default_headers()
+        if workspace_headers:
+            params["default_headers"] = workspace_headers
         params.update(kwargs)
 
         # Thinking Blocks 제어 — 계약은 카탈로그가 선언한다

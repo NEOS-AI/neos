@@ -10,6 +10,7 @@ import neos.coding.runtime as runtime_module
 from neos.coding.runtime import create_coding_runtime
 from neos.config.schema import AppConfig
 from tests.coding.fakes import InMemoryCodingRunRepository
+import neos.utils.anthropic_client as anthropic_client_module
 
 
 NOW = datetime(2026, 7, 19, 10, tzinfo=UTC)
@@ -101,7 +102,9 @@ def test_real_loop_resolves_coding_model_at_runtime_boundary(
             "secrets": {"anthropic_api_key": "test"},
         }
     )
-    monkeypatch.setattr(runtime_module, "AsyncAnthropic", lambda **kwargs: object())
+    monkeypatch.setattr(
+        anthropic_client_module, "AsyncAnthropic", lambda **kwargs: object()
+    )
 
     finish = runtime_module._prepare_real_coding_loop(config=config)
     loop = finish(object())
@@ -171,7 +174,9 @@ def test_real_loop_wraps_the_production_model_for_collection(monkeypatch) -> Non
             "secrets": {"anthropic_api_key": "test"},
         }
     )
-    monkeypatch.setattr(runtime_module, "AsyncAnthropic", lambda **kwargs: object())
+    monkeypatch.setattr(
+        anthropic_client_module, "AsyncAnthropic", lambda **kwargs: object()
+    )
 
     finish = runtime_module._prepare_real_coding_loop(config=config)
     loop = finish(object())

@@ -324,7 +324,7 @@ async def test_direct_anthropic_tool_stream_receives_automatic_cache_control():
     calculate_cost = AsyncMock(return_value=_cost_response())
 
     with patch(
-        "neos.services.chat_llm_service.anthropic.AsyncAnthropic",
+        "neos.utils.anthropic_client.AsyncAnthropic",
         return_value=client,
     ), patch(
         "neos.services.chat_llm_service.cost_calculator.calculate_cost",

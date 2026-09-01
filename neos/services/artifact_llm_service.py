@@ -8,9 +8,9 @@ Anthropic SDK를 직접 사용하여 스트리밍 생성을 지원합니다.
 from typing import AsyncGenerator, Dict, Any, Optional
 import time
 import json
-import anthropic
 
 from neos.config.settings import settings
+from neos.utils.anthropic_client import build_async_anthropic
 from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
 
@@ -57,7 +57,7 @@ class ArtifactLLMService:
         self.model = settings.ARTIFACT_LLM_MODEL
         self.temperature = settings.ARTIFACT_LLM_TEMPERATURE
         self.max_tokens = settings.ARTIFACT_LLM_MAX_TOKENS
-        self.client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        self.client = build_async_anthropic()
 
     async def stream_text_generation(
         self,

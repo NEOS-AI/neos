@@ -34,9 +34,9 @@ class ClaudeVision(VisionModel):
             raise ValueError("Anthropic API key not configured")
 
         try:
-            from anthropic import AsyncAnthropic
+            from neos.utils.anthropic_client import build_async_anthropic
 
-            client = AsyncAnthropic(api_key=self.api_key)
+            client = build_async_anthropic(api_key=self.api_key)
 
             # 이미지 미디어 타입 감지
             media_type = detect_image_media_type(

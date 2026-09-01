@@ -344,6 +344,10 @@ class ThinkingEngineConfig(StrictConfigModel):
 class SecretsConfig(StrictConfigModel):
     openai_api_key: str | None = Field(default=None, repr=False)
     anthropic_api_key: str | None = Field(default=None, repr=False)
+    # 시크릿은 아니지만 키와 **짝**이다 -- identity-linked 키는 이 값 없이
+    # 모든 요청이 400 이고, 키를 바꾸면 워크스페이스도 바뀔 수 있다. 정책이
+    # 아니라 배포 신원이므로 YAML 이 아니라 키 옆(.env)에 둔다.
+    anthropic_workspace_id: str | None = Field(default=None, repr=False)
     google_api_key: str | None = Field(default=None, repr=False)
     tavily_api_key: str | None = Field(default=None, repr=False)
     youtube_api_key: str | None = Field(default=None, repr=False)
