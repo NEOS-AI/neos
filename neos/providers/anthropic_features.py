@@ -4,46 +4,19 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from neos.config.model_config import (
+    advisor_targets as _advisor_targets,
+    canonical_model_family as _canonical_model_family,
+)
 from neos.config.schema import AdvisorConfig, PromptCachingConfig
 
 ADVISOR_BETA = "advisor-tool-2026-03-01"
 
-_MODEL_PREFIXES = (
-    ("claude-haiku-4-5", "haiku-4.5"),
-    ("claude-sonnet-4-5", "sonnet-4.5"),
-    ("claude-sonnet-4-6", "sonnet-4.6"),
-    ("claude-sonnet-5", "sonnet-5"),
-    ("claude-opus-4-6", "opus-4.6"),
-    ("claude-opus-4-7", "opus-4.7"),
-    ("claude-opus-4-8", "opus-4.8"),
-    ("claude-fable-5", "fable-5"),
-    ("claude-mythos-5", "mythos-5"),
-)
-
-_ADVISOR_COMPATIBILITY = {
-    "haiku-4.5": {
-        "sonnet-4.6",
-        "opus-4.6",
-        "opus-4.7",
-        "opus-4.8",
-        "fable-5",
-        "mythos-5",
-    },
-    "sonnet-4.6": {
-        "sonnet-4.6",
-        "opus-4.6",
-        "opus-4.7",
-        "opus-4.8",
-        "fable-5",
-        "mythos-5",
-    },
-    "sonnet-5": {"opus-4.7", "opus-4.8", "fable-5", "mythos-5"},
-    "opus-4.6": {"opus-4.6", "opus-4.7", "opus-4.8", "fable-5", "mythos-5"},
-    "opus-4.7": {"opus-4.7", "opus-4.8", "fable-5", "mythos-5"},
-    "opus-4.8": {"opus-4.7", "opus-4.8", "fable-5", "mythos-5"},
-    "fable-5": {"fable-5"},
-    "mythos-5": {"mythos-5"},
-}
+# CA12: 세대 접두사 표와 advisor 호환표는 `neos/config/models.yaml` 의
+# `anthropic_families:` 로 옮겼다. 여기 있던 시절 그 둘은 카탈로그가 갖지
+# 않는 **둘째 모델 사실 테이블**이었고 -- 가격이 아니어서 병합 범위 밖에
+# 있었다 -- 카탈로그 config화가 끝낸 드리프트를 다른 이름으로 되살렸다.
+# 새 Claude 세대를 더할 때 이 파일은 손대지 않는다.
 
 
 @dataclass(frozen=True)
@@ -68,11 +41,12 @@ def build_cache_control(config: PromptCachingConfig) -> dict[str, str] | None:
 
 
 def canonical_model_family(model: str) -> str | None:
-    normalized = model.lower()
-    for prefix, family in _MODEL_PREFIXES:
-        if normalized.startswith(prefix):
-            return family
-    return None
+    """카탈로그가 아는 세대 이름. 모르면 `None`.
+
+    이 저장소의 기존 호출부를 위해 이름을 남긴다 -- 구현만 카탈로그로
+    옮겼고 계약(모르는 모델은 `None`)은 그대로다.
+    """
+    return _canonical_model_family(model)
 
 
 def build_tool_policy(
@@ -91,8 +65,8 @@ def build_tool_policy(
         advisor_family = canonical_model_family(advisor.model)
         if executor_family is None:
             decision = AdvisorDecision(True, False, "unknown_executor_model")
-        elif advisor_family is None or advisor_family not in _ADVISOR_COMPATIBILITY.get(
-            executor_family, set()
+        elif advisor_family is None or advisor_family not in _advisor_targets(
+            executor_family
         ):
             decision = AdvisorDecision(True, False, "incompatible_model_pair")
         else:

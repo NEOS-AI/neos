@@ -3,6 +3,10 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Awaitable, Callable
 
+from neos.config.model_config import (
+    cache_minimum_tokens as _cache_minimum_tokens,
+)
+
 
 def _field(value: Any, name: str, default: Any = 0) -> Any:
     if isinstance(value, dict):
@@ -15,18 +19,15 @@ def _tokens(value: Any, name: str) -> int:
 
 
 def cache_minimum_tokens(model: str) -> int:
-    normalized = model.lower()
-    if normalized.startswith(("claude-fable-5", "claude-mythos-5")):
-        return 512
-    if normalized.startswith(
-        ("claude-opus-4-7", "claude-mythos-preview", "claude-3-5-haiku")
-    ):
-        return 2048
-    if normalized.startswith(
-        ("claude-opus-4-5", "claude-opus-4-6", "claude-haiku-4-5")
-    ):
-        return 4096
-    return 1024
+    """프롬프트 캐시가 성립하는 최소 입력 토큰.
+
+    CA12: 세대별 값은 `neos/config/models.yaml` 의 `anthropic_families:` 에
+    있다. 여기 있던 시절 이 함수는 advisor 호환표와 함께 **카탈로그가 갖지
+    않는 둘째 모델 사실 테이블**이었고, 두 표가 서로 다른 접두사 어휘를
+    쓰고 있었다는 것도 옮기면서 드러났다(`claude-opus-4-5` 등 셋은 캐시
+    표에만 있었다). 지금은 한 블록이 둘 다 답한다.
+    """
+    return _cache_minimum_tokens(model)
 
 
 def normalize_anthropic_usage(
