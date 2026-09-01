@@ -1176,6 +1176,20 @@ class DeepAnalysisConfig(StrictConfigModel):
     fetch_user_agent: str = (
         "NEOS-DeepAnalysis/0.23 (+https://github.com/NEOS-AI/neos)"
     )
+    # ── Retrieval 회복 (트랙 A D2) ─────────────────────────────────────
+    # 재시도 **총 시도 횟수**다. 1 이면 재시도 없음 = 이 기능 도입 전 동작.
+    #
+    # 3 인 이유는 429 의 성질이다: 속도 제한은 대개 짧은 창이라 한 번의
+    # 백오프로 풀리고, 안 풀리면 그 창이 이 fetch 보다 길다는 뜻이라 더
+    # 기다리는 것은 워커의 벽시계만 태운다. 조사 예산은 유한하고
+    # (`available_for_investigation`), 한 URL 을 오래 기다리는 것은 다른
+    # URL 을 안 가져오는 것과 같다.
+    fetch_max_attempts: int = Field(default=3, ge=1)
+    # 지수 백오프의 첫 대기(초). 서버가 `Retry-After` 를 주면 그것이 이긴다.
+    fetch_retry_base_seconds: float = Field(default=1.0, ge=0.0)
+    # `Retry-After` 를 그대로 믿지 않는 상한(초). 어떤 서버는 분 단위를
+    # 돌려주는데, 그것을 따르면 조사 하나가 한 URL 에 묶인다.
+    fetch_retry_max_sleep_seconds: float = Field(default=8.0, ge=0.0)
     evidence_context_chars: int = 2000
     excerpt_max_chars: int = 500
     # 1500이었을 때 실측 캐소트(20260728T104241Z)에서 decompose 응답 3건이

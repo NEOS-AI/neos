@@ -147,6 +147,15 @@ class WorkerResult:
     # `site:` 문법이나 다른 기전이 필요하다는 뜻이다 -- 이 필드가 있어야
     # 그 반증이 가능하다.
     search_augmentation: dict[str, int] = field(default_factory=dict)
+    # HTTP 시도 하나당 한 칸 (트랙 A D2). 키: `ok`/`retrying`/`exhausted`/
+    # `refused`/`transport_error`, 그리고 각각의 `_<status>` 판.
+    #
+    # 이 필드가 없던 시절 `fetch_url` 에는 재시도가 없었고 429 한 번이 그
+    # 출처를 영구히 잃게 만들었는데, 잃었다는 사실이 어디에도 남지 않았다 --
+    # 실패한 fetch 는 `raw_text=""` 인 blob 이 되고 그것은 **정말로 빈
+    # 페이지**와 구별되지 않는다. D2 가 "403 잔존·429 backoff 없음" 으로
+    # 적어둔 두 질문은 이 수 없이는 답이 나오지 않는다.
+    retrieval_outcomes: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass

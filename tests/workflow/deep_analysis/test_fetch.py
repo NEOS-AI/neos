@@ -351,3 +351,230 @@ async def test_fetch_keeps_legacy_text_only_response_compatible():
     blob = await fetch_url("https://example.com/legacy", client=LegacyClient())
 
     assert blob.raw_text == "legacy html"
+
+
+# --- 트랙 A D2: retrieval 회복과 그 회계 -------------------------------------
+#
+# 이 기능 이전에는 재시도가 한 줄도 없었다. 429 한 번이면 그 출처를 **영구히**
+# 잃고, 잃었다는 사실조차 남지 않았다 -- 실패한 fetch 는 `raw_text=""` 인
+# blob 이 되고 그것은 정말로 빈 페이지와 구별되지 않는다.
+
+
+class ScriptedHttpClient:
+    """호출 순서대로 다른 응답을 낸다. 재시도를 관찰하려면 필요하다."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = 0
+
+    async def get(self, url):
+        self.calls += 1
+        status, body, hdrs = self._responses[
+            min(self.calls - 1, len(self._responses) - 1)
+        ]
+
+        class Response:
+            # `hdrs` 로 받는 이유: 클래스 본문에서 같은 이름에 대입하면
+            # 그 이름은 바깥 함수 스코프를 닫지 않아 NameError 가 난다.
+            status_code = status
+            headers = hdrs or {}
+            content = body.encode("utf-8")
+            text = body
+
+        return Response()
+
+
+def _recorder():
+    seen = []
+
+    def on_attempt(status, outcome):
+        seen.append((status, outcome))
+
+    return seen, on_attempt
+
+
+@pytest.mark.asyncio
+async def test_a_429_is_retried_and_the_second_attempt_is_kept():
+    client = ScriptedHttpClient(
+        [(429, "", None), (200, "<p>rate limit lifted</p>", None)]
+    )
+    seen, on_attempt = _recorder()
+    slept = []
+
+    blob = await fetch_url(
+        "https://example.com",
+        client=client,
+        on_attempt=on_attempt,
+        sleep=lambda d: slept.append(d) or _noop(),
+    )
+
+    assert client.calls == 2
+    assert blob.http_status == 200
+    assert blob.raw_text == "rate limit lifted"
+    assert seen == [(429, "retrying"), (200, "ok")]
+    assert slept and slept[0] > 0
+
+
+async def _noop():
+    return None
+
+
+@pytest.mark.asyncio
+async def test_a_403_is_counted_but_never_retried():
+    """403 은 "이 클라이언트에게는 안 준다" 이므로 다시 물어도 같은 답이다.
+
+    재시도는 답을 바꾸지 못하면서 상대에게는 봇이 우기는 것으로 보인다 --
+    `fetch_user_agent` 가 브라우저를 흉내내지 않기로 한 것과 같은 판단이다.
+    세는 것은 별개다: D2 가 묻는 것이 "403 이 얼마나 남았나" 이고, 세지
+    않으면 답할 수 없다.
+    """
+    client = ScriptedHttpClient([(403, "", None)])
+    seen, on_attempt = _recorder()
+
+    blob = await fetch_url(
+        "https://example.com", client=client, on_attempt=on_attempt
+    )
+
+    assert client.calls == 1
+    assert blob.http_status == 403
+    assert seen == [(403, "refused")]
+
+
+@pytest.mark.asyncio
+async def test_a_retry_after_header_beats_the_exponential_guess():
+    """서버가 말했으면 추측보다 낫다."""
+    client = ScriptedHttpClient(
+        [(429, "", {"Retry-After": "2.5"}), (200, "<p>ok</p>", None)]
+    )
+    slept = []
+
+    await fetch_url(
+        "https://example.com",
+        client=client,
+        sleep=lambda d: slept.append(d) or _noop(),
+    )
+
+    assert slept == [2.5]
+
+
+@pytest.mark.asyncio
+async def test_a_huge_retry_after_is_capped_so_one_url_cannot_own_the_worker():
+    client = ScriptedHttpClient(
+        [(429, "", {"Retry-After": "600"}), (200, "<p>ok</p>", None)]
+    )
+    slept = []
+
+    await fetch_url(
+        "https://example.com",
+        client=client,
+        sleep=lambda d: slept.append(d) or _noop(),
+    )
+
+    cap = settings.config.deep_analysis.fetch_retry_max_sleep_seconds
+    assert slept == [cap]
+
+
+@pytest.mark.asyncio
+async def test_an_unparseable_retry_after_falls_back_rather_than_crashing():
+    """RFC 7231 은 날짜 형식도 허용한다. 파싱하지 않고 지수 백오프로 떨어진다."""
+    client = ScriptedHttpClient(
+        [
+            (429, "", {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}),
+            (200, "<p>ok</p>", None),
+        ]
+    )
+    slept = []
+
+    blob = await fetch_url(
+        "https://example.com",
+        client=client,
+        sleep=lambda d: slept.append(d) or _noop(),
+    )
+
+    assert blob.http_status == 200
+    assert slept == [settings.config.deep_analysis.fetch_retry_base_seconds]
+
+
+@pytest.mark.asyncio
+async def test_exhausting_the_retries_reports_exhausted_not_ok():
+    """마지막 시도까지 429 면 그렇게 말해야 한다.
+
+    `retrying` 으로 끝나면 원장은 "재시도했다" 만 알고 "그래서 실패했다" 를
+    모른다 -- 그 둘의 차이가 D2 가 재려는 것 전부다.
+    """
+    client = ScriptedHttpClient([(429, "", None)])
+    seen, on_attempt = _recorder()
+
+    blob = await fetch_url(
+        "https://example.com",
+        client=client,
+        on_attempt=on_attempt,
+        sleep=lambda d: _noop(),
+    )
+
+    attempts = settings.config.deep_analysis.fetch_max_attempts
+    assert client.calls == attempts
+    assert blob.http_status == 429
+    assert seen[-1] == (429, "exhausted")
+    assert sum(1 for _s, o in seen if o == "retrying") == attempts - 1
+
+
+@pytest.mark.asyncio
+async def test_a_transport_error_is_retried_and_then_raised_not_swallowed():
+    """마지막까지 실패하면 던진다.
+
+    삼켜서 빈 blob 을 만들면 "가져왔는데 비었다" 와 "못 가져왔다" 가 원장에서
+    같은 모양이 되고, 그것이 §3.2 가 이 저장소의 관통 주제로 적은 실패다.
+    호출자(`Worker`)는 이 예외를 이미 다룬다.
+    """
+    import httpx
+
+    class FailingClient:
+        def __init__(self):
+            self.calls = 0
+
+        async def get(self, url):
+            self.calls += 1
+            raise httpx.ConnectError("connection reset")
+
+    client = FailingClient()
+    seen, on_attempt = _recorder()
+
+    with pytest.raises(httpx.HTTPError):
+        await fetch_url(
+            "https://example.com",
+            client=client,
+            on_attempt=on_attempt,
+            sleep=lambda d: _noop(),
+        )
+
+    assert client.calls == settings.config.deep_analysis.fetch_max_attempts
+    assert all(outcome == "transport_error" for _s, outcome in seen)
+
+
+@pytest.mark.asyncio
+async def test_a_replayed_fetch_reports_no_attempts(tmp_path):
+    """재생된 fetch 는 HTTP 요청을 한 적이 없다.
+
+    거기서 재시도 수를 보고하면 원장이 일어나지 않은 일을 적는다.
+    """
+    path = tmp_path / "fetch.json"
+    record = Cassette(path, "record")
+    await fetch_url(
+        "https://example.com",
+        client=ScriptedHttpClient([(429, "", None), (200, "<p>ok</p>", None)]),
+        cassette=record,
+        sleep=lambda d: _noop(),
+    )
+    record.save()
+
+    seen, on_attempt = _recorder()
+    blob = await fetch_url(
+        "https://example.com",
+        client=ScriptedHttpClient([(500, "", None)]),
+        cassette=Cassette(path, "replay"),
+        on_attempt=on_attempt,
+    )
+
+    assert blob.http_status == 200
+    assert seen == []
