@@ -8,11 +8,15 @@ Generated from `neos/config/settings.py`, `.env.template`, and the config refact
 - Env template keys command: `rg "^[A-Z][A-Z0-9_]+=" .env.template -n`
 - Public uppercase settings fields: `355`
 - Assignment-like `.env.template` keys: `227`
-- Combined unique inventory keys, including target bootstrap controls: `366`
+  - ⚠️ **This figure is stale.** Re-running the command above yields `46`; the
+    template was cut to secrets-only by I1 (`59d98aa6`) and this line was not
+    re-measured. Left as-is rather than guessed at, and flagged so it is not
+    read as current.
+- Combined unique inventory keys, including target bootstrap controls: `367`
 
 ## Classification Summary
 
-- `secret_env`: `33`
+- `secret_env`: `34`
 - `control_env`: `8`
 - `yaml`: `309`
 - `constant`: `14`
@@ -46,6 +50,7 @@ Generated from `neos/config/settings.py`, `.env.template`, and the config refact
 | `SMART_CACHE_TTL_GENERATION` | settings.py | `yaml` | `smart_cache.ttl.generation` | Non-secret runtime behavior belongs in validated YAML. |
 | `OPENAI_API_KEY` | settings.py + .env.template | `secret_env` | `secrets.openai_api_key` | Secret, credential ID, token, or credential-bearing URL remains env-sourced. |
 | `ANTHROPIC_API_KEY` | settings.py + .env.template | `secret_env` | `secrets.anthropic_api_key` | Secret, credential ID, token, or credential-bearing URL remains env-sourced. |
+| `ANTHROPIC_WORKSPACE_ID` | .env.template | `secret_env` | `secrets.anthropic_workspace_id` | Not itself secret, but paired with the key: an identity-linked key rejects every request without it, and rotating the key can change the workspace. Kept beside the key rather than in YAML. |
 | `GOOGLE_API_KEY` | settings.py | `secret_env` | `secrets.google_api_key` | Secret, credential ID, token, or credential-bearing URL remains env-sourced. |
 | `TAVILY_API_KEY` | settings.py + .env.template | `secret_env` | `secrets.tavily_api_key` | Secret, credential ID, token, or credential-bearing URL remains env-sourced. |
 | `YOUTUBE_API_KEY` | settings.py + .env.template | `secret_env` | `secrets.youtube_api_key` | Secret, credential ID, token, or credential-bearing URL remains env-sourced. |

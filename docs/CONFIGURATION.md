@@ -98,7 +98,18 @@ DATABASE_URL=postgresql+asyncpg://postgres:password@localhost/neos
 REDIS_URL=redis://localhost:6379
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
+# Only for identity-linked Anthropic keys. Leave empty otherwise --
+# an empty value sends no header, which is what non-linked keys expect.
+ANTHROPIC_WORKSPACE_ID=
 ```
+
+> **Identity-linked Anthropic keys.** Such a key rejects every request with
+> `400 invalid_request_error` unless `anthropic-workspace-id` accompanies it.
+> Set `ANTHROPIC_WORKSPACE_ID` (Anthropic Console → Settings → Workspaces) and
+> every Anthropic call carries it: all clients are built by
+> `neos/utils/anthropic_client.py`, which is the only place in the repo that
+> constructs one. Leaving it empty sends no header at all -- deployments with
+> ordinary keys are unaffected.
 
 Put non-secret runtime changes in `config/neos.local.yaml`:
 
