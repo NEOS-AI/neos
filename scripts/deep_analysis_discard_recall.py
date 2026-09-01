@@ -10,9 +10,8 @@ import sys
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
-from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 from neos.database.connection import get_session_ctx
 from neos.database.deep_analysis_models import DAClaim, DAEvent
@@ -22,11 +21,19 @@ from neos.workflow.deep_analysis.discard_recall import (
     stopping_verdict,
     wilson_interval,
 )
+from neos.workflow.deep_analysis.funnel_sample_runner import (
+    # Re-exported on purpose: `PreflightError` is this module's public failure
+    # type for its callers and tests, and a second class by the same name
+    # would let one be raised and the other caught.
+    PreflightError as PreflightError,
+    preflight as _shared_preflight,
+)
 from neos.workflow.deep_analysis.graders.agentic import AgenticGrader
 from neos.workflow.deep_analysis.graders.deterministic import (
     DeterministicGrader,
 )
 from neos.workflow.deep_analysis.ledger import Ledger
+from neos.workflow.deep_analysis.model_roles import resolve_harness_model
 
 
 # Exhaustive by design. AgenticGrader.grade() has a sampling gate
@@ -38,9 +45,10 @@ from neos.workflow.deep_analysis.ledger import Ledger
 # recorded in the manifest fingerprint.
 _EXHAUSTIVE_SAMPLE_RATE = 1.0
 
-
-class PreflightError(RuntimeError):
-    """Raised when required production dependencies are unavailable."""
+#: 이 스크립트가 요구하는 시크릿. 표본 러너와 달리 검색을 하지 않으므로
+#: `TAVILY_API_KEY` 는 빠진다 -- 쓰지 않는 것을 요구하면 사람이 검사를 끄는
+#: 법을 배우고, 그러면 아래 프로브까지 함께 꺼진다.
+_REQUIRED_CREDENTIALS = ("ANTHROPIC_API_KEY",)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -61,24 +69,33 @@ def _dedupe_preserving_order(run_ids: list[str]) -> list[str]:
     return list(dict.fromkeys(run_ids))
 
 
-async def preflight(settings_obj, session_factory) -> None:
+async def preflight(settings_obj, session_factory, **kwargs) -> None:
     """Fail before any judge token is spent, not partway through.
 
-    Checks credential *presence* only -- never the value -- and that the
-    database is reachable. Mirrors the shape of
-    ``funnel_sample_runner.preflight``.
+    Delegates to ``funnel_sample_runner.preflight`` rather than mirroring its
+    shape (PREFLIGHT2). The earlier version *said* it mirrored that function
+    and, as of D94, no longer did: the sample runner had been taught to place
+    a real call, while this one still checked that ``ANTHROPIC_API_KEY`` was
+    a non-empty string. That gap matters more here than the docstring drift
+    suggests -- this script spends judge tokens on **every discarded claim**
+    in the requested runs, so a present-but-rejected key means the whole
+    exhaustive pass fails claim by claim into ``counters["grade_errors"]``,
+    each one counted **not verified**, and the artifact reports a
+    false-discard rate produced by a dead credential.
+
+    Only the judge is probed because only the judge is called: the
+    deterministic grader does no LLM work, and the worker models appear in
+    the fingerprint for the ``judge != worker`` check, not on any call path
+    here. Probing them would spend tokens to prove something this run does
+    not depend on.
     """
-    missing = [
-        name
-        for name in ("ANTHROPIC_API_KEY",)
-        if not getattr(settings_obj, name, None)
-    ]
-    if missing:
-        raise PreflightError(
-            "missing required credentials: " + ", ".join(missing)
-        )
-    async with session_factory() as session:
-        await session.execute(text("SELECT 1"))
+    await _shared_preflight(
+        settings_obj,
+        session_factory,
+        models=(resolve_harness_model("judge").model,),
+        credentials=_REQUIRED_CREDENTIALS,
+        **kwargs,
+    )
 
 
 async def _load_events(session, run_ids: list[str]) -> list[dict]:
@@ -109,18 +126,18 @@ async def _kept_hashes(session, run_ids: list[str]) -> set[str]:
     return {value for (value,) in rows}
 
 
-def _resolved_model(role: str, feature_override) -> str:
-    return resolve_model(
-        config=settings.config.model_routing,
-        provider="anthropic",
-        role=role,
-        feature_override=feature_override,
-    ).model
-
-
 def _judge_model() -> str:
-    # Same role/override pair the pipeline's own grader uses (service.py:60-66).
-    return _resolved_model("everyday", settings.config.deep_analysis.models.judge)
+    """The model the pipeline's own grader resolves to.
+
+    Via ``model_roles`` rather than a local ``resolve_model`` call: that
+    module exists to be the single caller, and this script was holding the
+    eleventh copy of the role literals it was created to collapse. The copy
+    also passed ``provider="anthropic"`` unconditionally, which is the exact
+    misreport ``_provider_for`` was written to stop -- harmless while the
+    judge happens to be an Anthropic model, silent the moment it is not, and
+    it lands in an artifact that cannot be regenerated.
+    """
+    return resolve_harness_model("judge").model
 
 
 def _graders(session, run_id: str):
@@ -229,11 +246,11 @@ def _fingerprint() -> dict:
         "confidence_cap": config.confidence_cap,
         "agentic_sample_rate_override": _EXHAUSTIVE_SAMPLE_RATE,
         "worker_models": {
-            # Roles mirror the pipeline: worker.py:180-189 (scout/dig),
-            # synthesizer.py:76-81 (synth).
-            "scout": _resolved_model("everyday", config.models.scout),
-            "dig": _resolved_model("powerful", config.models.dig),
-            "synth": _resolved_model("powerful", config.models.synth),
+            # Roles come from `HARNESS_ROLES`, not from literals repeated
+            # here -- the pipeline and this fingerprint must not be able to
+            # disagree about which role a worker plays.
+            name: resolve_harness_model(name).model
+            for name in ("scout", "dig", "synth")
         },
     }
 

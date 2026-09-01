@@ -216,15 +216,90 @@ async def _healthy_session_factory():
     yield _HealthySession()
 
 
+def _answering_probe(probed: list[str] | None = None):
+    async def probe(model: str) -> None:
+        if probed is not None:
+            probed.append(model)
+
+    return probe
+
+
 def test_preflight_passes_with_anthropic_key_and_reachable_database():
     fake_settings = SimpleNamespace(ANTHROPIC_API_KEY="sk-configured")
-    asyncio.run(cli.preflight(fake_settings, _healthy_session_factory))
+    asyncio.run(
+        cli.preflight(
+            fake_settings, _healthy_session_factory, probe=_answering_probe()
+        )
+    )
 
 
 def test_preflight_lists_missing_anthropic_key_without_its_value():
     fake_settings = SimpleNamespace(ANTHROPIC_API_KEY=None)
     with pytest.raises(cli.PreflightError, match="ANTHROPIC_API_KEY"):
-        asyncio.run(cli.preflight(fake_settings, _healthy_session_factory))
+        asyncio.run(
+            cli.preflight(
+                fake_settings,
+                _healthy_session_factory,
+                probe=_answering_probe(),
+            )
+        )
+
+
+def test_preflight_probes_the_judge_because_the_judge_is_what_it_spends():
+    """PREFLIGHT2 -- presence of a key is not evidence that it works.
+
+    This script grades **every** discarded claim with a real judge call. A
+    present-but-rejected key does not stop it: `grade_fn` swallows the
+    provider error per claim into `grade_errors` and returns "not verified",
+    so a dead credential produces a complete artifact reporting a
+    false-discard rate that is an artefact of the outage. D94 taught the
+    sample runner to place a real call; this caller kept its own
+    presence-only copy, so the lesson arrived in one place only.
+    """
+    fake_settings = SimpleNamespace(ANTHROPIC_API_KEY="sk-configured")
+    probed: list[str] = []
+    asyncio.run(
+        cli.preflight(
+            fake_settings,
+            _healthy_session_factory,
+            probe=_answering_probe(probed),
+        )
+    )
+    assert probed == [cli._judge_model()]
+
+
+def test_preflight_fails_when_the_judge_model_refuses_the_probe():
+    fake_settings = SimpleNamespace(ANTHROPIC_API_KEY="sk-live-but-revoked")
+
+    async def rejecting_probe(model: str) -> None:
+        raise RuntimeError("401 authentication_error")
+
+    with pytest.raises(cli.PreflightError, match="401") as excinfo:
+        asyncio.run(
+            cli.preflight(
+                fake_settings, _healthy_session_factory, probe=rejecting_probe
+            )
+        )
+    assert "sk-live-but-revoked" not in str(excinfo.value)
+
+
+def test_preflight_does_not_spend_probes_on_models_this_script_never_calls():
+    """Only the judge runs here -- the workers are fingerprint, not callers.
+
+    Probing them would burn tokens proving a dependency this measurement does
+    not have, and would make an unrelated worker outage block a scoring pass
+    that would have succeeded.
+    """
+    fake_settings = SimpleNamespace(ANTHROPIC_API_KEY="sk-configured")
+    probed: list[str] = []
+    asyncio.run(
+        cli.preflight(
+            fake_settings,
+            _healthy_session_factory,
+            probe=_answering_probe(probed),
+        )
+    )
+    assert len(probed) == 1
 
 
 def _result():
@@ -494,3 +569,4 @@ def test_main_dedupes_run_ids_and_makes_an_unknown_run_visible(
     # The one discarded claim was deterministic-rejected by the stub, so it
     # is graded once, not twice -- proof the duplicate didn't double-count.
     assert recall["total_discarded"] == 1
+

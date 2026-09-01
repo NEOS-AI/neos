@@ -343,6 +343,11 @@ _CREDENTIAL_NAMES = (
     "OPENAI_API_KEY",
 )
 
+#: 라이브 표본이 요구하는 시크릿. 다른 호출자는 자기 것을 넘긴다 --
+#: discard-recall 채점은 검색을 하지 않으므로 `TAVILY_API_KEY` 가 없어도
+#: 돌아야 하고, 없는 것을 요구하면 사람이 검사를 끄는 법을 배운다.
+SAMPLE_CREDENTIALS: tuple[str, ...] = ("ANTHROPIC_API_KEY", "TAVILY_API_KEY")
+
 
 def harness_models() -> tuple[str, ...]:
     """하네스 역할 넷이 실제로 부르는 **고유** 모델 이름.
@@ -400,17 +405,31 @@ async def preflight(
     *,
     probe: Callable[[str], Awaitable[None]] = _probe_model,
     models: Sequence[str] | None = None,
+    credentials: Sequence[str] | None = None,
 ) -> None:
-    """표본을 뜨기 전에 의존성이 **실제로 작동하는지** 확인한다.
+    """LLM 토큰을 태우기 전에 의존성이 **실제로 작동하는지** 확인한다.
 
-    셋을 본다: 시크릿의 존재, DB 도달, 그리고 하네스가 부를 모든 모델이
-    응답한다는 것. 셋째가 2026-08-30 에 더해졌다 -- 그날 preflight 는
-    통과했는데 세 역할 전부가 401 이었다.
+    셋을 본다: 시크릿의 존재, DB 도달, 그리고 부를 모든 모델이 응답한다는
+    것. 셋째가 2026-08-30 에 더해졌다 -- 그날 preflight 는 통과했는데 세
+    역할 전부가 401 이었다.
+
+    `models` 와 `credentials` 가 열려 있는 것은 **호출자가 둘이기 때문이다**
+    (PREFLIGHT2). discard-recall 채점(`scripts/deep_analysis_discard_recall.py`)
+    은 판정자 하나만 부르고 검색을 하지 않으므로 다른 집합을 넘긴다. 그 두
+    번째 호출자는 이 함수가 D94 로 고쳐진 뒤에도 **자기 사본을 들고 존재만
+    검사하고 있었다** -- 사본이 남아 있으면 고침은 한 곳에만 도착한다.
     """
+    required = (
+        SAMPLE_CREDENTIALS if credentials is None else tuple(credentials)
+    )
+    if not required:
+        # 빈 모델 집합과 같은 이유로 실패다: 요구할 것이 없다는 것은 검사가
+        # 성립하지 않는다는 뜻이지 통과가 아니다.
+        raise PreflightError(
+            "no credential to check -- preflight would pass vacuously"
+        )
     missing = [
-        name
-        for name in ("ANTHROPIC_API_KEY", "TAVILY_API_KEY")
-        if not getattr(settings_obj, name, None)
+        name for name in required if not getattr(settings_obj, name, None)
     ]
     if missing:
         raise PreflightError(
