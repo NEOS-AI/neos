@@ -1,0 +1,69 @@
+name: Frontend CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# ⚠️ **`paths:` 필터를 두지 않는다 -- 되돌리지 말 것.**
+#
+# `web/**` 로 좁히고 싶은 유혹이 있으나, 그러면 이 워크플로가 지키려는 바로 그
+# 시나리오에서 꺼진다. `web/tests/source/` 의 두 테스트가 저장소 **루트**의
+# `tests/fixtures/deep_analysis_*.json` 을 읽는다(FE6 · FE9 의 공유 fixture).
+# 즉 백엔드만 고치면서 fixture 를 함께 바꾼 커밋은 `web/` 를 하나도 건드리지
+# 않고, 필터가 있으면 프론트 절반의 검증이 그때 안 돈다. "어휘를 한쪽만
+# 고치면 반대쪽이 빨개진다" 는 약속이 정확히 거기서 깨진다.
+#
+# `test_frontend_ci_has_no_paths_filter` 가 이 결정을 기계로 고정한다.
+
+jobs:
+  # 프론트 단위 테스트 + 타입체크. 감사 §7 #1(P0, "나머지 모든 수정의 안전망")
+  # 이 이 잡이 없는 상태를 가리켰다 -- 2026-09-02 실측으로 `web/tests/source/`
+  # 35파일 199건이 **CI 에서 한 번도 돈 적이 없었다.**
+  #
+  # 그 공백은 특히 트랙 C 를 무력화했다: FE6·FE9 의 공유 fixture 설계는 양쪽
+  # 테스트가 같은 파일을 읽어 어휘 분기를 잡는다는 것인데, CI 에서 빨개질 수
+  # 있는 쪽이 백엔드 하나뿐이면 그 보증은 절반이다.
+  source-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          # 버전을 여기 적지 않는다. `web/package.json` 의 `packageManager` 가
+          # 정본이고, 두 곳에 적으면 한쪽만 올라가는 순간 어긋난다.
+          # 이 경로는 `defaults.working-directory` 가 아니라 **저장소 루트**
+          # 기준이다(액션이 그렇게 정의한다) -- `web/` 를 붙여야 한다.
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      # `--frozen-lockfile` 이어야 한다. 백엔드 잡이 `uv sync --locked` 로
+      # 배운 것과 같다 -- 락과 매니페스트가 어긋난 채 머지되면 CI 는 그 사실을
+      # 이름 그대로 말해주는 대신 엉뚱한 곳에서 터진다.
+      - run: pnpm install --frozen-lockfile
+      # tsx --test 는 실패 시 exit 1 이다(2026-09-02 변이 테스트로 실측).
+      # 게이트가 실제로 무는지 확인하지 않고 세우면 없느니만 못하다.
+      - run: pnpm test:source
+      - run: pnpm exec tsc --noEmit
+
+      # 린트는 **일부러 없다.** `web/lib/deep-analysis/progress.ts` 에 biome
+      # 경고 2건이 남아 있어(한 줄 `if` 스타일) 지금 게이트로 세우면 첫 실행부터
+      # 빨갛다. 백엔드 CI 가 ruff 를 저장소 전체가 아니라 "현재 0건인 세
+      # 디렉터리" 에만 거는 것과 같은 판단이다 -- 정리한 뒤에 세운다.
+      #
+      # e2e(Playwright)도 없다. 실제 백엔드와 실제 LLM 을 요구하므로(감사 §5)
+      # CI 에서 상시 실행이 불가능하다.
