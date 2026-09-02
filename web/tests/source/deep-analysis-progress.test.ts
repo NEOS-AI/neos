@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import type { DeepAnalysisJobEvent } from "../../lib/deep-analysis/events";
 import {
   initialDeepAnalysisProgress,
@@ -172,7 +175,7 @@ test("리포트 품질을 깎은 사건은 뒤따르는 이벤트가 덮어쓰�
 
 test("조사 범위만 깎은 사건은 라벨은 붙되 강등으로 세지 않는다", () => {
   const state = applyAll([
-    event(1, "investigation_stopped_at_floor", { floor_tokens: 41040 }),
+    event(1, "investigation_stopped_at_floor", { floor_tokens: 41_040 }),
     event(2, "claim_discarded"),
     event(3, "llm_truncated", { stage: "worker_analysis" }),
     event(4, "entailment_filter_skipped"),
@@ -263,21 +266,60 @@ test("굶은 판정자가 통과시킨 리포트는 승인된 리포트와 다�
   assert.ok(starved.lastActivity?.includes("판정자"));
 });
 
-test("새 실패 이벤트 전부가 라벨을 가진다", () => {
-  const kinds = [
-    "report_assembly_degraded",
-    "node_reduction_degraded",
-    "finalization_prompt_clamped",
-    "investigation_stopped_at_floor",
-    "investigation_stopped_at_input_bound",
-    "llm_truncated",
-    "truncation_handled",
-    "entailment_filter_skipped",
-    "claim_discarded",
-  ];
-  for (const kind of kinds) {
+// ---------------------------------------------------------------------------
+// 라벨 커버리지는 정본 fixture 가 정한다.
+//
+// 예전에는 kind 9개가 이 파일에 손으로 적혀 있었다. 그 목록은 **백엔드가
+// 이벤트를 늘려도 자라지 않으므로**, 막으려던 실패(FE1 -- 8종이 한꺼번에
+// 라벨 없이 배포된 것, 로드맵 §5.2)를 그대로 통과시킨다. 실제로 그 상태에서
+// 원장 kind 9종이 라벨 없이 쌓여 있었다.
+//
+// 이제 목록의 출처는 `tests/fixtures/deep_analysis_event_kinds.json` 하나이고,
+// 백엔드 테스트(`tests/workflow/deep_analysis/test_event_kinds.py`)가 소스를
+// AST 로 훑어 그 파일이 실제 어휘와 일치함을 강제한다. 강등 어휘에 FE6 이
+// 붙인 것과 같은 규율이다.
+
+const EVENT_KINDS_FIXTURE_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../tests/fixtures/deep_analysis_event_kinds.json"
+);
+
+type EventKindCase = { kind: string; labeled: boolean; reason?: string };
+
+const CANONICAL_EVENT_KINDS: EventKindCase[] = JSON.parse(
+  readFileSync(EVENT_KINDS_FIXTURE_PATH, "utf8")
+).kinds;
+
+test("fixture 가 라벨을 약속한 kind 는 전부 문구를 낸다", () => {
+  const labeled = CANONICAL_EVENT_KINDS.filter((entry) => entry.labeled);
+  // 대조 테스트가 덜 검사할 수 있다(FE6 의 교훈) — fixture 를 잘못 읽어 빈
+  // 배열이 되면 아래 루프는 0회 돌고 조용히 통과한다.
+  assert.ok(labeled.length > 25, "fixture 를 읽지 못했다");
+
+  for (const { kind } of labeled) {
     const state = applyAll([event(1, kind)]);
-    assert.notEqual(state.lastActivity, null, `${kind} 에 라벨이 없다`);
+    assert.notEqual(
+      state.lastActivity,
+      null,
+      `${kind} 에 라벨이 없다 — activityLabel() 에 추가하거나 fixture 에서 사유와 함께 면제할 것`
+    );
+  }
+});
+
+test("fixture 가 면제한 kind 는 문구를 내지 않는다", () => {
+  // 반대 방향도 건다. 한쪽만 걸면 면제 목록이 조용히 낡는다 — 나중에 라벨이
+  // 붙어도 fixture 의 `labeled: false` 와 그 사유가 그대로 남아, 다음 사람이
+  // 읽는 근거와 코드가 어긋난다.
+  const exempt = CANONICAL_EVENT_KINDS.filter((entry) => !entry.labeled);
+  assert.ok(exempt.length > 0, "fixture 를 읽지 못했다");
+
+  for (const { kind } of exempt) {
+    const state = applyAll([event(1, kind)]);
+    assert.equal(
+      state.lastActivity,
+      null,
+      `${kind} 에 라벨이 생겼다 — fixture 의 labeled 를 true 로 바꾸고 사유를 지울 것`
+    );
   }
 });
 
@@ -321,7 +363,7 @@ test("메시지 저장 실패는 라벨을 갖되 강등으로 세지 않는다"
 
   assert.equal(
     state.lastActivity,
-    "리포트를 대화에 저장하지 못함 (원장에는 남아 있음)",
+    "리포트를 대화에 저장하지 못함 (원장에는 남아 있음)"
   );
   // 강등 어휘에는 들지 않는다 -- 이 실패의 정의상 그 메시지는 저장되지
   // 않았으므로 새로고침 복원 경로에 그릴 것이 없다. 강등으로 세면 셀 수

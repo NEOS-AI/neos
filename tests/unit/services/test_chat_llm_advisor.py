@@ -36,6 +36,7 @@ os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 from neos.config.schema import AdvisorConfig, PromptCachingConfig
 from neos.services import chat_llm_service as chat_module
 from neos.services.chat_llm_service import ChatLLMService
+import neos.utils.anthropic_client as anthropic_client_module
 
 
 CORE_TOOL = {
@@ -222,7 +223,7 @@ async def _collect_events(
 ) -> tuple[list[dict[str, Any]], AsyncMock]:
     calculator = calculator or AsyncMock(return_value=_cost_result())
     monkeypatch.setattr(
-        chat_module.anthropic,
+        anthropic_client_module,
         "AsyncAnthropic",
         MagicMock(return_value=client),
     )

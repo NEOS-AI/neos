@@ -1,0 +1,102 @@
+{
+  "$comment": [
+    "원장 이벤트 어휘의 정본 fixture (로드맵 §5.3).",
+    "",
+    "`tests/fixtures/deep_analysis_degradation_kinds.json` 와 같은 규율이고,",
+    "겨누는 대상만 다르다. 저쪽은 **어떤 이벤트가 강등인가**를 고정하고 이쪽은",
+    "**어떤 이벤트에 화면 문구가 있는가**를 고정한다.",
+    "",
+    "읽는 곳:",
+    "  tests/workflow/deep_analysis/test_event_kinds.py",
+    "  web/tests/source/deep-analysis-progress.test.ts",
+    "",
+    "백엔드 테스트는 `neos/workflow/deep_analysis/**` 와",
+    "`neos/tasks/deep_analysis_job_task.py` 를 AST 로 훑어 실제로 `Ledger.log()`",
+    "에 도달하는 kind 를 모으고 이 목록과 **정확히 일치**함을 주장한다. 새 kind 를",
+    "추가하면 빨개지고, 사라진 kind 를 여기 남겨 둬도 빨개진다.",
+    "",
+    "프론트 테스트는 `labeled` 를 **양방향으로** 검증한다: true 면",
+    "`activityLabel()` 이 문구를 내야 하고, false 면 null 을 내야 한다. 한 방향만",
+    "걸면 면제 목록이 조용히 낡는다 -- 나중에 라벨이 붙어도 여기 `false` 가",
+    "남아 있으면 아무도 모른다.",
+    "",
+    "`labeled: false` 에는 반드시 `reason` 이 붙는다. 라벨의 부재는 사고가 아니라",
+    "판단이어야 하고, 그 판단은 적혀 있어야 한다. FE1 이 이벤트 8종에서 라벨을",
+    "빠뜨렸을 때 없었던 것이 정확히 이 파일이다(§5.2).",
+    "",
+    "⚠️ 여기 있는 것은 **원장에 쓰이는** kind 뿐이다. 오케스트레이터의",
+    "`_emit`(event_sink)만 타는 이벤트는 job 경로에서 발행되지 않으므로",
+    "(`jobs.py` 가 싱크를 배선하지 않는다) 프론트에 도달할 수 없다."
+  ],
+  "kinds": [
+    { "kind": "abandoned", "labeled": true },
+    { "kind": "assistant_message_persist_failed", "labeled": true },
+    { "kind": "claim_discarded", "labeled": true },
+    {
+      "kind": "claim_graded",
+      "labeled": false,
+      "reason": "채점 결과는 claim_verified / claim_rejected / claim_unverified 가 이미 말한다. 클레임마다 발행되므로 라벨을 붙이면 활동 줄이 채점 로그로 뒤덮인다."
+    },
+    { "kind": "claim_rejected", "labeled": true },
+    { "kind": "claim_unverified", "labeled": true },
+    { "kind": "claim_verified", "labeled": true },
+    { "kind": "conflict_reinvestigation", "labeled": true },
+    { "kind": "dead_end", "labeled": true },
+    { "kind": "entailment_filter_skipped", "labeled": true },
+    { "kind": "finalization_prompt_clamped", "labeled": true },
+    { "kind": "investigation_stopped_at_floor", "labeled": true },
+    { "kind": "investigation_stopped_at_input_bound", "labeled": true },
+    {
+      "kind": "job_completed",
+      "labeled": false,
+      "reason": "종결은 phase 배지('완료')와 뒤따르는 리포트 본문이 말한다. 컴포넌트는 완료 후 활동 줄 자체를 감추므로(deep-analysis-status.tsx) 라벨을 붙여도 그릴 자리가 없다."
+    },
+    {
+      "kind": "job_failed",
+      "labeled": false,
+      "reason": "종결은 phase 배지('실패')와 에러 블록이 말한다. 활동 줄에 같은 사실을 한 번 더 쓰면 두 줄이 된다."
+    },
+    { "kind": "job_resumed", "labeled": true },
+    { "kind": "job_started", "labeled": true },
+    { "kind": "llm_truncated", "labeled": true },
+    { "kind": "node_reduction_degraded", "labeled": true },
+    {
+      "kind": "node_summary",
+      "labeled": false,
+      "reason": "리덕션 노드마다 발행되는 계측이다. 강등된 경우는 node_reduction_degraded 가 따로 말하고 그쪽에는 라벨이 있다."
+    },
+    { "kind": "pass_completed", "labeled": true },
+    { "kind": "question_opened", "labeled": true },
+    { "kind": "question_reopened", "labeled": true },
+    { "kind": "recovered", "labeled": true },
+    { "kind": "report_assembly_degraded", "labeled": true },
+    { "kind": "report_graded", "labeled": true },
+    { "kind": "run_manifest", "labeled": true },
+    { "kind": "split", "labeled": true },
+    { "kind": "stall_terminated", "labeled": true },
+    { "kind": "subq_adopted", "labeled": true },
+    { "kind": "subq_proposed", "labeled": true },
+    { "kind": "subq_review_failed", "labeled": true },
+    { "kind": "subq_reviewed", "labeled": true },
+    { "kind": "synth_pass", "labeled": true },
+    { "kind": "systemic_failure_terminated", "labeled": true },
+    { "kind": "token_budget_exhausted", "labeled": true },
+    {
+      "kind": "token_budget_released",
+      "labeled": false,
+      "reason": "LLM 호출 하나가 예약·정산·해제를 최대 세 건 남긴다. 예산이 실제로 바닥난 사실은 token_budget_exhausted 가, 조사가 멈춘 사실은 investigation_stopped_at_* 가 말한다."
+    },
+    {
+      "kind": "token_budget_reserved",
+      "labeled": false,
+      "reason": "token_budget_released 와 같은 이유 -- 호출마다 나는 회계 항목이다."
+    },
+    {
+      "kind": "token_budget_settled",
+      "labeled": false,
+      "reason": "token_budget_released 와 같은 이유 -- 호출마다 나는 회계 항목이다."
+    },
+    { "kind": "truncation_handled", "labeled": true },
+    { "kind": "worker_result_mismatch", "labeled": true }
+  ]
+}

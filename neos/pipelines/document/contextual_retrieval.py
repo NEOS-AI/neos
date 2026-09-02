@@ -16,9 +16,9 @@ import time
 from dataclasses import dataclass
 from typing import List, Optional
 
-import anthropic
 
 from neos.config.settings import settings
+from neos.utils.anthropic_client import build_async_anthropic
 from neos.pipelines.document.chunker import DocumentChunk
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ class ContextualRetrieval:
         self.budget_cap_usd = budget_cap_usd if budget_cap_usd is not None else settings.CONTEXTUAL_BUDGET_CAP_USD
 
         # anthropic SDK 직접 사용 (LLMFactory는 cache_control content block 미지원)
-        self._client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        self._client = build_async_anthropic()
 
     async def generate_contexts(
         self,

@@ -1,0 +1,41 @@
+{
+  // 테스트 전용 tsconfig.
+  //
+  // 두 가지를 고친다.
+  //
+  // ① **JSX.** 루트 `tsconfig.json` 은 `**/*.test.ts(x)` 를 `exclude` 하므로
+  //    테스트 파일에는 `jsx: "react-jsx"` 가 적용되지 않는다. 그러면 esbuild
+  //    가 classic 변환으로 떨어져 컴포넌트 테스트가 `React is not defined` 로
+  //    죽는다. 여기서 자동 런타임을 다시 켠다.
+  //
+  // ② **타입체크 범위.** 같은 `exclude` 때문에 `tsc --noEmit` 이 테스트 파일을
+  //    **한 건도** 보지 않았다. 실제로 오류 셋이 숨어 있었고 그중 둘이
+  //    `deep-analysis-reader.test.ts` 였다. `pnpm typecheck:tests` 가 이
+  //    설정으로 돌고 CI 가 그것을 돌린다.
+  //
+  // e2e 는 제외한다 -- Playwright 러너가 자기 타입 환경에서 돌리고, 여기 넣으면
+  // `@playwright/test` 의 전역과 node:test 의 전역이 한 프로그램에서 겹친다.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "incremental": false
+  },
+  "include": [
+    "next-env.d.ts",
+    "tests/dom-setup.ts",
+    "tests/source/**/*.ts",
+    "tests/source/**/*.tsx",
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "components/**/*.ts",
+    "components/**/*.tsx",
+    "features/**/*.ts",
+    "features/**/*.tsx",
+    "hooks/**/*.ts",
+    "hooks/**/*.tsx",
+    "lib/**/*.ts",
+    "lib/**/*.tsx"
+  ],
+  "exclude": ["node_modules", ".next", "tests/e2e"]
+}

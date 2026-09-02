@@ -169,6 +169,11 @@ class Worker:
         self._confidence_clamped_by_source_count: dict[str, int] = {}
         self._entailment_skipped: str | None = None
         self._search_augmentation: dict[str, int] = {}
+        # 트랙 A D2. 시도 하나당 한 칸. 키는 `<outcome>` 또는
+        # `<outcome>_<status>` 이고, 오케스트레이터가 `fetch_` 를 붙여
+        # `pass_completed` 에 싣는다 -- 워커는 세고 원장은 오케스트레이터가
+        # 쓴다(P2).
+        self._fetch_outcomes: dict[str, int] = {}
 
     @property
     def tokens_spent(self) -> int:
@@ -217,7 +222,25 @@ class Worker:
             ),
             entailment_skipped=self._entailment_skipped,
             search_augmentation=dict(self._search_augmentation),
+            retrieval_outcomes=dict(self._fetch_outcomes),
         )
+
+    def _record_fetch_attempt(self, status: int, outcome: str) -> None:
+        """Count one HTTP attempt (트랙 A D2).
+
+        Two keys per attempt, not one: `outcome` answers "did retrieval work"
+        and `outcome_status` answers "which status". Rolling them together
+        would make the headline number unreadable -- `refused` pools 403 with
+        404, and those are different problems (one is a policy decision about
+        this client, the other is a dead link). Rolling them apart *only*
+        would lose the headline, since new statuses keep appearing.
+
+        Counting attempts rather than URLs is deliberate: a URL that took
+        three tries is the thing D2 is asking about, and a per-URL count
+        cannot express it.
+        """
+        for key in (outcome, f"{outcome}_{status}"):
+            self._fetch_outcomes[key] = self._fetch_outcomes.get(key, 0) + 1
 
     async def _search(self, query: str, limit: int) -> list[dict]:
         async def produce():
@@ -346,6 +369,7 @@ class Worker:
         self._confidence_clamped_by_source_count = {}
         self._entailment_skipped = None
         self._search_augmentation = {}
+        self._fetch_outcomes = {}
 
         config = settings.config.deep_analysis
         self._model = resolve_harness_model(
@@ -397,6 +421,7 @@ class Worker:
                     url,
                     client=self.http_client,
                     cassette=self.cassette,
+                    on_attempt=self._record_fetch_attempt,
                 )
             except PDFExtractionError as exc:
                 logger.warning(
@@ -506,6 +531,7 @@ class Worker:
             self_assessment=self_assessment,
             fail_reason=str(data.get("fail_reason", "")),
             search_augmentation=dict(self._search_augmentation),
+            retrieval_outcomes=dict(self._fetch_outcomes),
             confidence_clamped_count=sum(
                 self._confidence_clamped_by_source_count.values()
             ),

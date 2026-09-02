@@ -75,11 +75,70 @@ class ModelSpec(StrictConfigModel):
     pricing: ModelPricing | None = None
 
 
+#: 프롬프트 캐시 최소 입력 토큰의 기본값. 가족이 값을 선언하지 않거나
+#: 어느 가족에도 안 걸리는 모델이 받는 수다.
+DEFAULT_CACHE_MINIMUM_TOKENS = 1024
+
+
+class AnthropicFamily(StrictConfigModel):
+    """Anthropic **세대**의 사실 (CA12).
+
+    개별 모델이 아니라 접두사로 걸리는 이유는 Anthropic 이 이 두 기능을
+    세대로 정의하기 때문이다 -- `claude-opus-4-7-20260101` 같은 날짜 변종은
+    카탈로그에 없어도 같은 캐시 하한과 같은 advisor 호환성을 갖는다.
+    """
+
+    prefix: str
+    # advisor 짝짓기에 쓰는 세대 이름. `None` 이면 그 접두사의 모델은
+    # advisor executor 가 될 수 없다 -- `canonical_model_family` 가 `None` 을
+    # 돌려주고 `build_tool_policy` 가 `unknown_executor_model` 로 끝낸다.
+    family: str | None = None
+    cache_minimum_tokens: int = DEFAULT_CACHE_MINIMUM_TOKENS
+    # 이 세대가 executor 일 때 advisor 로 허용되는 family 목록. 빈 목록은
+    # "이 세대는 advisor 를 못 쓴다"(`incompatible_model_pair`)를 뜻하며,
+    # `family` 가 있는데 목록이 비는 경우가 실제로 있다(sonnet-4.5).
+    advisor_targets: list[str] = Field(default_factory=list)
+
+
 class ModelCatalog(StrictConfigModel):
     models: dict[str, ModelSpec] = Field(default_factory=dict)
+    anthropic_families: list[AnthropicFamily] = Field(default_factory=list)
     # 레거시 별칭 API용. {group: {alias: model_name}}
     aliases: dict[str, dict[str, str]] = Field(default_factory=dict)
     defaults: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_families(self) -> "ModelCatalog":
+        """접두사는 서로 중첩될 수 없고, advisor 대상은 실재해야 한다.
+
+        중첩을 금지하는 이유가 이 표를 코드에서 옮겨 온 이유와 같다: 파이썬
+        튜플 시절에는 **선언 순서**가 승자를 정했고 그 사실이 어디에도 적혀
+        있지 않았다. 중첩이 없으면 순서가 결과를 바꾸지 못하므로 YAML 의
+        나열 순서를 사람이 자유롭게 바꿔도 안전하다.
+        """
+        seen: dict[str, str] = {}
+        for entry in self.anthropic_families:
+            if entry.prefix in seen:
+                raise ValueError(
+                    f"duplicate anthropic family prefix {entry.prefix!r}"
+                )
+            seen[entry.prefix] = entry.family or ""
+        for prefix in seen:
+            for other in seen:
+                if prefix != other and other.startswith(prefix):
+                    raise ValueError(
+                        f"anthropic family prefix {prefix!r} is a prefix of "
+                        f"{other!r}; nesting hides which one wins"
+                    )
+        known = {e.family for e in self.anthropic_families if e.family}
+        for entry in self.anthropic_families:
+            unknown = sorted(set(entry.advisor_targets) - known)
+            if unknown:
+                raise ValueError(
+                    f"anthropic family {entry.prefix!r} lists advisor targets "
+                    f"that no family declares: {', '.join(unknown)}"
+                )
+        return self
 
     @model_validator(mode="after")
     def _validate_references(self) -> "ModelCatalog":
@@ -145,6 +204,38 @@ class ModelCatalog(StrictConfigModel):
         if spec is None or spec.provider != provider:
             return None
         return spec.pricing
+
+    def _anthropic_family_for(self, model: str) -> AnthropicFamily | None:
+        """`model` 에 걸리는 가족. 가장 **긴** 접두사가 이긴다.
+
+        `_validate_families` 가 중첩을 금지하므로 후보는 사실상 하나뿐이고,
+        `max` 는 그 사실이 깨졌을 때 조용히 다른 답을 내지 않기 위한 것이다.
+        """
+        normalized = model.lower()
+        matches = [
+            entry
+            for entry in self.anthropic_families
+            if normalized.startswith(entry.prefix)
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda entry: len(entry.prefix))
+
+    def canonical_model_family(self, model: str) -> str | None:
+        entry = self._anthropic_family_for(model)
+        return entry.family if entry else None
+
+    def cache_minimum_tokens(self, model: str) -> int:
+        entry = self._anthropic_family_for(model)
+        if entry is None:
+            return DEFAULT_CACHE_MINIMUM_TOKENS
+        return entry.cache_minimum_tokens
+
+    def advisor_targets(self, family: str) -> frozenset[str]:
+        for entry in self.anthropic_families:
+            if entry.family == family:
+                return frozenset(entry.advisor_targets)
+        return frozenset()
 
     def resolve_alias(self, group: str, alias: str) -> str:
         entries = self.aliases.get(group, {})
@@ -412,6 +503,21 @@ def thinking_contract(model: str) -> ThinkingContract:
 
 def pricing_for(provider: str, model: str) -> ModelPricing | None:
     return model_config.catalog.pricing_for(provider, model)
+
+
+def canonical_model_family(model: str) -> str | None:
+    """모델이 속한 Anthropic 세대. advisor 짝짓기의 어휘다 (CA12)."""
+    return model_config.catalog.canonical_model_family(model)
+
+
+def cache_minimum_tokens(model: str) -> int:
+    """프롬프트 캐시가 성립하는 최소 입력 토큰 (CA12)."""
+    return model_config.catalog.cache_minimum_tokens(model)
+
+
+def advisor_targets(family: str) -> frozenset[str]:
+    """`family` 가 executor 일 때 advisor 로 쓸 수 있는 family 집합 (CA12)."""
+    return model_config.catalog.advisor_targets(family)
 
 
 def provider_for_model(model: str, default: str | None = None) -> str | None:

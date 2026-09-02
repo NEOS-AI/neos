@@ -11,7 +11,7 @@ from .model_roles import resolve_harness_model
 from .models import ConflictNote, NodeSummary
 from .prompt_clamp import clamp_prompt, halve
 from .prompt_loader import render
-from .token_budget import TokenBudgetExhausted
+from .token_budget import TokenBudgetExhausted, active_token_budget
 
 # A `[C:` that the truncation cut through, with fewer than the 8 hex digits
 # and the closing bracket a real marker carries.
@@ -160,6 +160,50 @@ class Synthesizer:
     def reduction_input_allowance(self) -> int:
         ratio = settings.config.deep_analysis.reduction_input_ratio
         return int(ratio * self.synthesis_max_tokens)
+
+    def effective_reduction_allowance(self) -> int:
+        """`reduction_input_allowance`, capped by what the tier can grant.
+
+        BUDGET2. The static allowance is a *policy* number -- a ratio of
+        `synthesis_max_tokens`, fixed for the whole run. What `reserve()`
+        charges against is `available_for_reduction`, which **shrinks with
+        every reduction that has already run**. The clamp was aiming at the
+        first and being graded by the second, so once the tier fell below the
+        allowance the clamp declared the prompt "fitting" and `reserve()`
+        refused it. That is the whole of the 152: sample #21/#22 recorded
+        `node_summary` 79 against `node_reduction_degraded` 152, and **all
+        152** carried `reason=input_bound` -- a single mechanism, not a
+        distribution of causes.
+
+        `min_viable_output_tokens` is subtracted because a reservation is not
+        granted for fitting; it is granted for leaving room to answer.
+        `reserve()` refuses when `ceiling - input_bound < viability`, so an
+        allowance that ignores that margin aims one viable call too high and
+        reproduces the same refusal at a smaller size (G8 learned the
+        output-side half of this: a budget floor must ask "can one valid call
+        be made", not "is one token left").
+
+        Returns the static allowance when no budget is in scope. That is the
+        test and script path, and it is the pre-BUDGET2 behaviour exactly --
+        this method can only *lower* an allowance, never raise one.
+
+        **`assemble` deliberately does not get the same treatment.** The same
+        arithmetic gap exists there (`assembly_input_allowance` is static,
+        `available_for_assembly` shrinks), but that tier is not currently
+        failing this way -- sample #21 recorded clamp `exhausted` at **0**.
+        Changing a healthy tier would add a second sample boundary to answer
+        a question nobody has asked, and §13.5 already costs one boundary for
+        this change. If assembly starts refusing with `input_bound`, this is
+        the shape of the fix.
+        """
+        static = self.reduction_input_allowance
+        budget = active_token_budget()
+        if budget is None:
+            return static
+        grantable = (
+            budget.available_for_reduction - budget.min_viable_output_tokens
+        )
+        return max(0, min(static, grantable))
 
     async def _log_clamp(
         self,
@@ -507,9 +551,14 @@ class Synthesizer:
                 child_summaries="\n".join(children) or "(없음)",
             )
 
+        # BUDGET2: the budget-aware allowance, not the static one. See
+        # `effective_reduction_allowance` -- clamping to a number the tier can
+        # no longer grant is what turned two of every three reductions into an
+        # `input_bound` degradation.
+        allowance = self.effective_reduction_allowance()
         clamp = clamp_prompt(
             model=synth_model,
-            allowance=self.reduction_input_allowance,
+            allowance=allowance,
             render_prompt=render_node,
             primary=claim_lines,
             secondary=child_lines,
@@ -519,7 +568,7 @@ class Synthesizer:
             "node_reduction",
             question.id,
             clamp,
-            self.reduction_input_allowance,
+            allowance,
             # Reductions carry markers too, and a marker lost here never
             # reaches the assembly to be lost there -- attributing the drop
             # to the report tier requires ruling this tier out first.
@@ -534,6 +583,29 @@ class Synthesizer:
             ),
         )
         prompt = clamp.prompt
+        # BUDGET2's guard. Clamping to a shrinking tier is right up to the
+        # point where it strips every claim address out of the prompt: past
+        # that the model can still write fluent prose, but nothing it writes
+        # is citable, and an uncitable summary is *worse* than degrading --
+        # `_degraded_summary` joins the same claims with their `[C:...]`
+        # markers intact and deterministically. Spending a reservation to
+        # replace citable text with uncitable text is the silent-failure
+        # shape this repo keeps paying for (§3.2), so the guard reports a
+        # named reason instead of a fluent answer.
+        #
+        # Only fires when input carried claims and the clamped prompt carries
+        # none: a genuinely claim-free node (no verified claims, no cited
+        # children) has nothing to lose and goes to the model as before.
+        had_claims = _distinct_claims(
+            "\n".join(claim_lines), "\n".join(child_lines)
+        )
+        if had_claims and not _distinct_claims(prompt):
+            return await self._degraded_summary(
+                question,
+                child_summaries,
+                "reduction_allowance_below_claim_floor",
+                pairs,
+            )
         try:
             data, resp = await self.json_call(
                 synth_model,

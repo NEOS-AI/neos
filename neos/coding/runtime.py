@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
-from anthropic import AsyncAnthropic
+from neos.utils.anthropic_client import build_async_anthropic
 
 from neos.coding.application.run_service import (
     CodingRunService,
@@ -503,7 +503,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
     # 바로 디스크에 남으므로 flush 지점을 지나갈 필요가 없다.
     model = TrackedCodingModel(
         AnthropicCodingModel(
-            AsyncAnthropic(api_key=config.secrets.anthropic_api_key)
+            build_async_anthropic(api_key=config.secrets.anthropic_api_key)
         ),
         workflow_step="coding_loop",
     )

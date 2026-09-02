@@ -139,9 +139,9 @@ def _is_anthropic_model(model: str) -> bool:
 
 def _default_client(model: str):
     if _is_anthropic_model(model):
-        from anthropic import AsyncAnthropic
+        from neos.utils.anthropic_client import build_async_anthropic
 
-        return AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        return build_async_anthropic()
 
     from openai import AsyncOpenAI
 

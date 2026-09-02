@@ -191,6 +191,90 @@ models:
     thinking: none
     selectable: false
 
+# ---- Anthropic 모델 가족 (CA12) ----
+#
+# `models:` 위쪽은 **개별 모델**의 사실이고, 여기는 **가족**의 사실이다.
+# 둘을 나눈 이유는 Anthropic 이 두 기능을 모델 이름이 아니라 세대로 정의하기
+# 때문이다 — advisor 짝 호환성과 프롬프트 캐시 최소 길이는 `claude-opus-4-7`
+# 로 시작하는 **모든** 이름에 똑같이 걸리므로, 날짜 접미사가 붙은 변종을
+# 하나씩 등재하게 만들면 카탈로그가 그 변종을 모를 때 사실이 조용히 사라진다.
+#
+# 🔴 **이 블록이 존재하는 이유는 드리프트다.** 아래 세 사실이 원래
+# `neos/providers/anthropic_features.py` 와 `anthropic_usage.py` 에 파이썬
+# 리터럴로 하드코딩돼 있었다(CA6 가 들여왔다). 가격이 아니라 **카탈로그가
+# 갖지 않던 새 사실 범주**였고, 그래서 카탈로그 config화(2026-07-27)가 끝낸
+# 드리프트가 다른 이름으로 다시 시작된 것이었다. 새 Claude 세대를 더할 때
+# 손댈 곳은 이제 이 파일 하나다.
+#
+# 필드:
+#   prefix                 모델 이름의 접두사. 가장 **긴** 일치가 이긴다
+#   family                 advisor 짝짓기에 쓰는 세대 이름. 생략하면 그 접두사의
+#                          모델은 advisor 를 쓸 수 없다(`unknown_executor_model`)
+#   cache_minimum_tokens   프롬프트 캐시가 성립하는 최소 입력 토큰. 생략 시 1024
+#   advisor_targets        이 세대가 executor 일 때 advisor 로 쓸 수 있는 family
+#                          목록. 생략하면 빈 집합(`incompatible_model_pair`)
+#
+# ⚠️ 한 접두사가 다른 접두사의 접두사가 되면 로더가 거부한다 — 그런 쌍이
+# 생기면 어느 쪽이 이기는지가 선언 순서에 숨고, 그것이 이 표가 코드에 있던
+# 시절의 실제 상태였다.
+anthropic_families:
+  - prefix: claude-fable-5
+    family: fable-5
+    cache_minimum_tokens: 512
+    advisor_targets: [fable-5]
+
+  - prefix: claude-mythos-5
+    family: mythos-5
+    cache_minimum_tokens: 512
+    advisor_targets: [mythos-5]
+
+  - prefix: claude-opus-4-8
+    family: opus-4.8
+    advisor_targets: [opus-4.7, opus-4.8, fable-5, mythos-5]
+
+  - prefix: claude-opus-4-7
+    family: opus-4.7
+    cache_minimum_tokens: 2048
+    advisor_targets: [opus-4.7, opus-4.8, fable-5, mythos-5]
+
+  - prefix: claude-opus-4-6
+    family: opus-4.6
+    cache_minimum_tokens: 4096
+    advisor_targets: [opus-4.6, opus-4.7, opus-4.8, fable-5, mythos-5]
+
+  - prefix: claude-sonnet-5
+    family: sonnet-5
+    advisor_targets: [opus-4.7, opus-4.8, fable-5, mythos-5]
+
+  - prefix: claude-sonnet-4-6
+    family: sonnet-4.6
+    advisor_targets: [sonnet-4.6, opus-4.6, opus-4.7, opus-4.8, fable-5, mythos-5]
+
+  # sonnet-4.5 는 family 를 갖되 `advisor_targets` 가 없다 — 코드에 있던
+  # `_ADVISOR_COMPATIBILITY` 에도 이 키가 없었고, `.get(family, set())` 이
+  # 빈 집합을 돌려주어 `incompatible_model_pair` 로 끝났다. 생략이 그 동작을
+  # 그대로 표현한다.
+  - prefix: claude-sonnet-4-5
+    family: sonnet-4.5
+
+  - prefix: claude-haiku-4-5
+    family: haiku-4.5
+    cache_minimum_tokens: 4096
+    advisor_targets: [sonnet-4.6, opus-4.6, opus-4.7, opus-4.8, fable-5, mythos-5]
+
+  # 아래 셋은 **family 가 없다.** 캐시 최소 길이만 아는 세대이고, advisor
+  # 표에는 원래도 없었다 — `canonical_model_family` 가 `None` 을 돌려주어
+  # `unknown_executor_model` 로 끝나는 것이 기존 동작이다.
+  - prefix: claude-opus-4-5
+    cache_minimum_tokens: 4096
+
+  - prefix: claude-mythos-preview
+    cache_minimum_tokens: 2048
+
+  - prefix: claude-3-5-haiku
+    cache_minimum_tokens: 2048
+
+
 # 레거시 별칭 API — get_vision_model_id / get_llm_model_id / get_embedding_model_id
 aliases:
   vision:

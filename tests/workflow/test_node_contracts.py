@@ -150,3 +150,28 @@ def test_a_contract_whose_writes_the_extractor_cannot_verify_is_marked_hand_cura
             f"{sorted(unverified)}. 그 키들에는 드리프트 가드가 공허하므로 "
             f"writes_hand_curated=True 로 명시하고 근거를 주석에 남길 것"
         )
+
+
+@pytest.mark.parametrize("name", ALL_NODES)
+def test_a_writes_contract_the_extractor_can_verify_is_not_marked_hand_curated(
+    name: str,
+) -> None:
+    """반대 방향도 고정한다 -- 낡은 면제는 조용히 가드를 끈다.
+
+    `writes_hand_curated=True` 는 "이 노드의 writes 는 기계가 못 본다" 는
+    **주장**이고, 그 주장이 참인 동안 위 테스트는 그 노드를 검사하지 않는다.
+    주장이 낡으면(추출기가 좋아지거나 노드가 단순해지면) 실제로는 검사할 수
+    있는 노드가 계속 면제된 채로 남고, 그 사이에 생긴 드리프트는 아무도
+    잡지 못한다.
+
+    §14.4 를 좁히면서 실제로 그 상태가 됐다 -- 위임 체인 확장 뒤 13개 노드의
+    플래그가 한꺼번에 낡았다. 한 방향만 고정하면 그런 순간이 조용히 지나간다.
+    """
+    contract = NODE_CONTRACTS[name]
+    unverified = contract.writes - state_keys_written(contract.handler)
+    if not unverified:
+        assert not contract.writes_hand_curated, (
+            f"{name}: 추출기가 선언된 writes 를 전부 확인할 수 있는데 "
+            f"writes_hand_curated=True 로 면제돼 있다. 면제를 지우면 이 노드가 "
+            f"드리프트 가드 안으로 들어온다"
+        )

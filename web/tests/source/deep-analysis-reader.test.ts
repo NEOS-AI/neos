@@ -29,6 +29,10 @@ test("SSE 본문에서 검증된 이벤트만 뽑는다", async () => {
     ]),
     (event) => {
       seen.push(event);
+      // 리더의 계약은 "`false` 를 반환하면 멈춘다" 이므로 계속 읽겠다는 뜻을
+      // 명시한다. 아무것도 반환하지 않으면 `void` 라 타입이 맞지 않는데,
+      // 루트 tsconfig 가 테스트를 `exclude` 해서 그동안 아무도 몰랐다.
+      return true;
     }
   );
 
@@ -47,6 +51,10 @@ test("청크 경계로 잘린 이벤트를 이어 붙인다", async () => {
     streamOf(['data: {"seq":7,"type":"claim_ver', 'ified","payload":{}}\n\n']),
     (event) => {
       seen.push(event);
+      // 리더의 계약은 "`false` 를 반환하면 멈춘다" 이므로 계속 읽겠다는 뜻을
+      // 명시한다. 아무것도 반환하지 않으면 `void` 라 타입이 맞지 않는데,
+      // 루트 tsconfig 가 테스트를 `exclude` 해서 그동안 아무도 몰랐다.
+      return true;
     }
   );
 

@@ -924,6 +924,14 @@ class Ledger:
                     )
                     if isinstance(value, int)
                 },
+                # 트랙 A D2. `search_*` 와 같은 모양이되 접두사가 다른 이유는
+                # 다른 질문에 답하기 때문이다 -- `search_*` 는 "무엇을
+                # 찾았는가", 이쪽은 "찾은 것을 실제로 가져왔는가" 다.
+                **{
+                    f"fetch_{key}": value
+                    for key, value in sorted(result.retrieval_outcomes.items())
+                    if isinstance(value, int)
+                },
             },
         )
         await self.db.flush()

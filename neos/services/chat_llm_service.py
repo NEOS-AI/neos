@@ -11,6 +11,7 @@ import time
 import anthropic
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
+from neos.utils.anthropic_client import build_async_anthropic
 from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import extract_text_from_response
 from neos.utils.cost_calculator import cost_calculator
@@ -546,7 +547,7 @@ class ChatLLMService:
                 return
 
             # Anthropic 클라이언트 초기화
-            client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+            client = build_async_anthropic()
 
             # 메시지 형식 변환 (LangChain 형식에서 Anthropic 형식으로)
             anthropic_messages = []
@@ -744,7 +745,7 @@ class ChatLLMService:
                     yield event
                 return
 
-            client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+            client = build_async_anthropic()
 
             # 1. 초기 도구 세트: 코어 도구 + search_tools + 선택적 Advisor
             tool_policy = build_tool_policy(

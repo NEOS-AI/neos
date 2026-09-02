@@ -73,11 +73,18 @@ llm:
     ttl: 5m
 
   advisor:
-    # 🔴 켜기 전에 이 모델이 `neos/config/models.yaml` 에 가격과 함께 있어야 한다.
-    # advisor 호출은 `calculate_anthropic_cost` 를 거쳐 카탈로그에서 가격을 찾는데,
-    # 없으면 §6 ③ 의 고장이 그대로 난다 -- 비용이 조용히 0 으로 집계된다.
-    # 지금은 `enabled: false` 라 잠들어 있고, 켜면
-    # `neos_llm_unpriced_calls_total{provider,model}` 이 그 사실을 알린다.
+    # ✅ 이 모델은 이제 카탈로그에 있다 (E3 가 심층분석 판정자로 등재했다).
+    # 그러니 "켜기 전에 등재하라" 던 원래 경고는 해소됐다 -- 다만 그 가격은
+    # **미검증**이라고 `models.yaml` 이 그 자리에 적어 두었고, 등재된 값은
+    # 틀려도 `neos_llm_unpriced_calls_total` 을 울리지 않는다. 즉 §6 ③ 의
+    # 고장(비용이 조용히 0)은 막혔지만 **조용히 틀린 값**은 아직 가능하다.
+    #
+    # 🔴 켜기 전에 남은 조건 하나: `claude-opus-5` 는 카탈로그의 Anthropic
+    # 모델 중 유일하게 세대 사실이 없다(§CA12, `tests/config/
+    # test_anthropic_model_families.py` 의 `_UNCOVERED`). executor 가 opus-5
+    # 면 advisor 는 `unknown_executor_model` 로 **조용히 미주입**된다 --
+    # 켜는 것이 아무 일도 안 하는 상태이므로, 켜기 전에 그 세대의
+    # `anthropic_families` 항목을 실측으로 채울 것.
     enabled: false
     model: claude-opus-4-8
     max_uses: 2

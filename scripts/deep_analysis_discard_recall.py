@@ -10,23 +10,33 @@ import sys
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
-from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 from neos.database.connection import get_session_ctx
 from neos.database.deep_analysis_models import DAClaim, DAEvent
 from neos.workflow.deep_analysis.discard_recall import (
+    ScoringSession,
+    discards_needed_for_safe,
     false_discard_rate,
+    pool_sessions,
     score_discards,
     stopping_verdict,
     wilson_interval,
+)
+from neos.workflow.deep_analysis.funnel_sample_runner import (
+    # Re-exported on purpose: `PreflightError` is this module's public failure
+    # type for its callers and tests, and a second class by the same name
+    # would let one be raised and the other caught.
+    PreflightError as PreflightError,
+    preflight as _shared_preflight,
 )
 from neos.workflow.deep_analysis.graders.agentic import AgenticGrader
 from neos.workflow.deep_analysis.graders.deterministic import (
     DeterministicGrader,
 )
 from neos.workflow.deep_analysis.ledger import Ledger
+from neos.workflow.deep_analysis.model_roles import resolve_harness_model
 
 
 # Exhaustive by design. AgenticGrader.grade() has a sampling gate
@@ -38,9 +48,10 @@ from neos.workflow.deep_analysis.ledger import Ledger
 # recorded in the manifest fingerprint.
 _EXHAUSTIVE_SAMPLE_RATE = 1.0
 
-
-class PreflightError(RuntimeError):
-    """Raised when required production dependencies are unavailable."""
+#: 이 스크립트가 요구하는 시크릿. 표본 러너와 달리 검색을 하지 않으므로
+#: `TAVILY_API_KEY` 는 빠진다 -- 쓰지 않는 것을 요구하면 사람이 검사를 끄는
+#: 법을 배우고, 그러면 아래 프로브까지 함께 꺼진다.
+_REQUIRED_CREDENTIALS = ("ANTHROPIC_API_KEY",)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -53,6 +64,18 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("artifacts/deep-analysis-discard-recall"),
     )
+    parser.add_argument(
+        "--accumulate",
+        action="store_true",
+        help=(
+            "Pool this scoring with every prior artifact under --output-root "
+            "(C1). The pre-registered rule cannot return 'safe' below n=35 "
+            "distinct discards and one 5+1 run yields roughly 16, so a "
+            "verdict requires pooling across sittings. Refuses to pool "
+            "sessions whose config fingerprints differ or whose run sets "
+            "overlap."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -61,24 +84,33 @@ def _dedupe_preserving_order(run_ids: list[str]) -> list[str]:
     return list(dict.fromkeys(run_ids))
 
 
-async def preflight(settings_obj, session_factory) -> None:
+async def preflight(settings_obj, session_factory, **kwargs) -> None:
     """Fail before any judge token is spent, not partway through.
 
-    Checks credential *presence* only -- never the value -- and that the
-    database is reachable. Mirrors the shape of
-    ``funnel_sample_runner.preflight``.
+    Delegates to ``funnel_sample_runner.preflight`` rather than mirroring its
+    shape (PREFLIGHT2). The earlier version *said* it mirrored that function
+    and, as of D94, no longer did: the sample runner had been taught to place
+    a real call, while this one still checked that ``ANTHROPIC_API_KEY`` was
+    a non-empty string. That gap matters more here than the docstring drift
+    suggests -- this script spends judge tokens on **every discarded claim**
+    in the requested runs, so a present-but-rejected key means the whole
+    exhaustive pass fails claim by claim into ``counters["grade_errors"]``,
+    each one counted **not verified**, and the artifact reports a
+    false-discard rate produced by a dead credential.
+
+    Only the judge is probed because only the judge is called: the
+    deterministic grader does no LLM work, and the worker models appear in
+    the fingerprint for the ``judge != worker`` check, not on any call path
+    here. Probing them would spend tokens to prove something this run does
+    not depend on.
     """
-    missing = [
-        name
-        for name in ("ANTHROPIC_API_KEY",)
-        if not getattr(settings_obj, name, None)
-    ]
-    if missing:
-        raise PreflightError(
-            "missing required credentials: " + ", ".join(missing)
-        )
-    async with session_factory() as session:
-        await session.execute(text("SELECT 1"))
+    await _shared_preflight(
+        settings_obj,
+        session_factory,
+        models=(resolve_harness_model("judge").model,),
+        credentials=_REQUIRED_CREDENTIALS,
+        **kwargs,
+    )
 
 
 async def _load_events(session, run_ids: list[str]) -> list[dict]:
@@ -109,18 +141,18 @@ async def _kept_hashes(session, run_ids: list[str]) -> set[str]:
     return {value for (value,) in rows}
 
 
-def _resolved_model(role: str, feature_override) -> str:
-    return resolve_model(
-        config=settings.config.model_routing,
-        provider="anthropic",
-        role=role,
-        feature_override=feature_override,
-    ).model
-
-
 def _judge_model() -> str:
-    # Same role/override pair the pipeline's own grader uses (service.py:60-66).
-    return _resolved_model("everyday", settings.config.deep_analysis.models.judge)
+    """The model the pipeline's own grader resolves to.
+
+    Via ``model_roles`` rather than a local ``resolve_model`` call: that
+    module exists to be the single caller, and this script was holding the
+    eleventh copy of the role literals it was created to collapse. The copy
+    also passed ``provider="anthropic"`` unconditionally, which is the exact
+    misreport ``_provider_for`` was written to stop -- harmless while the
+    judge happens to be an Anthropic model, silent the moment it is not, and
+    it lands in an artifact that cannot be regenerated.
+    """
+    return resolve_harness_model("judge").model
 
 
 def _graders(session, run_id: str):
@@ -229,13 +261,77 @@ def _fingerprint() -> dict:
         "confidence_cap": config.confidence_cap,
         "agentic_sample_rate_override": _EXHAUSTIVE_SAMPLE_RATE,
         "worker_models": {
-            # Roles mirror the pipeline: worker.py:180-189 (scout/dig),
-            # synthesizer.py:76-81 (synth).
-            "scout": _resolved_model("everyday", config.models.scout),
-            "dig": _resolved_model("powerful", config.models.dig),
-            "synth": _resolved_model("powerful", config.models.synth),
+            # Roles come from `HARNESS_ROLES`, not from literals repeated
+            # here -- the pipeline and this fingerprint must not be able to
+            # disagree about which role a worker plays.
+            name: resolve_harness_model(name).model
+            for name in ("scout", "dig", "synth")
         },
     }
+
+
+def load_prior_sessions(output_root: Path) -> list[ScoringSession]:
+    """`output_root` 아래의 이전 채점 아티팩트를 읽는다 (C1 누적).
+
+    읽지 못하는 디렉터리는 **건너뛰지 않고 무시한다** -- 정확히는, 두 파일이
+    다 없거나 형태가 틀린 디렉터리는 채점 세션이 아니므로 세션 목록에
+    들어가지 않는다. 반쯤 쓰인 아티팩트를 세션으로 받아들이면 분모에 근거
+    없는 수가 들어가고, 그것이 이 측정에서 가장 비싼 실수다.
+    """
+    sessions: list[ScoringSession] = []
+    if not output_root.is_dir():
+        return sessions
+    for entry in sorted(output_root.iterdir()):
+        manifest_path = entry / "manifest.json"
+        recall_path = entry / "recall.json"
+        if not (manifest_path.is_file() and recall_path.is_file()):
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text())
+            recall = json.loads(recall_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(manifest, dict) or not isinstance(recall, dict):
+            continue
+        if "config_fingerprint" not in manifest:
+            continue
+        try:
+            total = int(recall["total_discarded"])
+            verified = int(recall["verified"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        sessions.append(
+            ScoringSession(
+                artifact=entry.name,
+                fingerprint=manifest["config_fingerprint"],
+                run_ids=tuple(manifest.get("run_ids") or ()),
+                total_discarded=total,
+                verified=verified,
+            )
+        )
+    return sessions
+
+
+def _accumulated(
+    output_root: Path,
+    current: ScoringSession,
+) -> dict:
+    """이번 채점을 이전 것들과 합친 결과. 합칠 수 없으면 그 사유를 담는다."""
+    config = settings.config.deep_analysis.discard_recall
+    pooled = pool_sessions(
+        [*load_prior_sessions(output_root), current],
+        wilson_z=config.wilson_z,
+        safe_upper=config.safe_upper_bound,
+        over_discard_lower=config.over_discard_lower_bound,
+    )
+    if "total_discarded" in pooled:
+        pooled["additional_discards_for_safe"] = discards_needed_for_safe(
+            pooled["verified"],
+            pooled["total_discarded"],
+            wilson_z=config.wilson_z,
+            safe_upper=config.safe_upper_bound,
+        )
+    return pooled
 
 
 def _receipt(started_at: datetime, finished_at: datetime) -> dict:
@@ -256,6 +352,7 @@ def _write_artifact(
     fingerprint: dict,
     per_run=None,
     claims=None,
+    accumulated=None,
 ) -> Path:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     artifact_dir = output_root / timestamp
@@ -282,6 +379,13 @@ def _write_artifact(
     (artifact_dir / "recall.json").write_text(
         json.dumps(result, **options) + "\n"
     )
+    # 별도 파일이다. `recall.json` 은 **이번 채점**의 수이고 여기는 여러
+    # 세션을 합친 수라, 한 파일에 담으면 다음 사람이 어느 분모를 인용하는지
+    # 알 수 없다 -- D48 이 지표 이름 하나로 표본 하나를 치른 그 실수다.
+    if accumulated is not None:
+        (artifact_dir / "accumulated.json").write_text(
+            json.dumps(accumulated, **options) + "\n"
+        )
     # Separate file, not folded into recall.json -- spec §2.2 requires a
     # human to adjudicate the claims the grader flagged, and that needs the
     # claim text and per-stage outcome the aggregate alone can't provide.
@@ -318,7 +422,9 @@ def _write_artifact(
     return artifact_dir
 
 
-async def _main(run_ids: list[str], output_root: Path) -> Path:
+async def _main(
+    run_ids: list[str], output_root: Path, *, accumulate: bool = False
+) -> Path:
     run_ids = _dedupe_preserving_order(run_ids)
     await preflight(settings, get_session_ctx)
     config = settings.config.deep_analysis.discard_recall
@@ -384,18 +490,40 @@ async def _main(run_ids: list[str], output_root: Path) -> Path:
         "wilson_high": high,
         "verdict": verdict,
     }
+    fingerprint = _fingerprint()
+    # 이전 아티팩트는 **쓰기 전에** 읽는다. 쓴 뒤에 읽으면 이번 세션이
+    # 디스크에서 한 번, 인자로 한 번 -- 두 번 세어져 분모가 부풀고 Wilson
+    # 구간이 실제보다 좁아진다. `pool_sessions` 의 run 중복 검사가 그것을
+    # 잡겠지만, 잡히지 않게 부르는 것이 낫다.
+    accumulated = (
+        _accumulated(
+            output_root,
+            ScoringSession(
+                artifact="(this run)",
+                fingerprint=fingerprint,
+                run_ids=tuple(run_ids),
+                total_discarded=totals["total_discarded"],
+                verified=totals["verified"],
+            ),
+        )
+        if accumulate
+        else None
+    )
     return _write_artifact(
         output_root,
         run_ids,
         result,
         receipt=_receipt(started_at, datetime.now(timezone.utc)),
-        fingerprint=_fingerprint(),
+        fingerprint=fingerprint,
         per_run=per_run,
         claims=claims_log,
+        accumulated=accumulated,
     )
 
 
 if __name__ == "__main__":
     args = _parse_args()
-    artifact = asyncio.run(_main(args.run_id, args.output_root))
+    artifact = asyncio.run(
+        _main(args.run_id, args.output_root, accumulate=args.accumulate)
+    )
     print(artifact)

@@ -98,7 +98,18 @@ DATABASE_URL=postgresql+asyncpg://postgres:password@localhost/neos
 REDIS_URL=redis://localhost:6379
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
+# Only for identity-linked Anthropic keys. Leave empty otherwise --
+# an empty value sends no header, which is what non-linked keys expect.
+ANTHROPIC_WORKSPACE_ID=
 ```
+
+> **Identity-linked Anthropic keys.** Such a key rejects every request with
+> `400 invalid_request_error` unless `anthropic-workspace-id` accompanies it.
+> Set `ANTHROPIC_WORKSPACE_ID` (Anthropic Console → Settings → Workspaces) and
+> every Anthropic call carries it: all clients are built by
+> `neos/utils/anthropic_client.py`, which is the only place in the repo that
+> constructs one. Leaving it empty sends no header at all -- deployments with
+> ordinary keys are unaffected.
 
 Put non-secret runtime changes in `config/neos.local.yaml`:
 
@@ -155,6 +166,10 @@ new model silently breaking `list_models()` order or landing with no price. Do
 not delete or relax them when adding a model; update them alongside
 `models.yaml`.
 
+A new **Anthropic** model has a third obligation: decide whether it belongs to
+a declared generation, and record the answer. See *Generation facts* below —
+`test_anthropic_model_families.py` fails until you do.
+
 ```yaml
 models:
   claude-sonnet-5:
@@ -199,6 +214,48 @@ Derivation applies to Anthropic and OpenAI only. Gemini keeps a static
 server at `/api/tags`, so neither list can be derived. Their `tiers` still live
 in the catalog so `get_recommended_models()` covers all four providers, and
 their entries are marked `selectable: false` to make that split explicit.
+
+#### Generation facts (Anthropic)
+
+Two Anthropic features are defined by *generation*, not by model id: which
+Advisor models an executor may pair with, and the minimum prompt length at
+which caching becomes eligible. `anthropic_families:` carries both.
+
+```yaml
+anthropic_families:
+  - prefix: claude-opus-4-7        # longest matching prefix wins
+    family: opus-4.7               # omit -> this generation cannot use Advisor
+    cache_minimum_tokens: 2048     # omit -> 1024
+    advisor_targets: [opus-4.7, opus-4.8, fable-5, mythos-5]
+```
+
+| Field | Consumer |
+|---|---|
+| `family` | `canonical_model_family()` → `build_tool_policy()` |
+| `advisor_targets` | `build_tool_policy()` — the executor→advisor compatibility check |
+| `cache_minimum_tokens` | `normalize_anthropic_usage()` — decides `cache_status: ineligible` |
+
+Matching is by **prefix** rather than by model id on purpose: a dated variant
+such as `claude-opus-4-7-20260101` shares its generation's facts whether or not
+the catalog lists it, and requiring each variant to be registered would make
+those facts disappear silently the moment one is not. The loader rejects a
+prefix nested inside another — in the Python table this replaced, declaration
+order decided the winner and nothing said so.
+
+`family` and `cache_minimum_tokens` are independent. An entry may carry cache
+facts with no `family` (`claude-opus-4-5` does), which reproduces the state the
+two separate Python tables were in: they used different prefix vocabularies,
+and merging them preserved that asymmetry rather than inventing entries to
+erase it.
+
+> **Known gap — `claude-opus-5` has no generation facts.** It is the deep
+> analysis `powerful` worker and the `powerful` picker tier, but the table this
+> block replaced only ever knew opus-4.5 through 4.8. With Advisor enabled it
+> is skipped as `unknown_executor_model`, and its cache floor is the unverified
+> 1024 default. No values are guessed here — measure them before filling the
+> entry. `_UNCOVERED` in `tests/config/test_anthropic_model_families.py` pins
+> the gap in both directions, so closing it also fails until that list is
+> updated. This is harmless while `llm.advisor.enabled` is `false`.
 
 #### The catalog is not an allowlist
 
@@ -423,6 +480,13 @@ Advisor is injected only when the executor and Advisor model combination is
 documented as compatible and the executor path supports the complete beta
 server-tool protocol. Incompatible or unknown executor models continue without
 Advisor while retaining prompt caching.
+
+That compatibility table lives in the catalog, not in code — see *Generation
+facts (Anthropic)* above. **Before enabling this, check that the executor
+models you actually route to have a `family` there.** `claude-opus-5` does not,
+so with the default role routing turning Advisor on today changes nothing at
+all: every deep analysis worker would be skipped as `unknown_executor_model`,
+and a feature that silently does nothing is worse than one that is off.
 
 `llm.advisor.max_pause_turns` caps automatic `pause_turn` continuations and
 defaults to `3`, preventing an indefinite server-tool loop. Advisor-side prompt

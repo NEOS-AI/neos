@@ -10,6 +10,7 @@ from neos.api.models.chat_models import (
 from neos.api.services import chat_service
 from neos.api.services.chat_service import ChatService, resolve_new_chat_model
 from neos.services import chat_llm_service
+import neos.utils.anthropic_client as anthropic_client_module
 from neos.services.chat_llm_service import (
     ChatLLMService,
     resolve_conversation_chat_model,
@@ -185,7 +186,7 @@ async def test_claude_5_tool_streams_normalize_direct_sdk_kwargs(
 ) -> None:
     sdk_calls: list[dict] = []
     monkeypatch.setattr(
-        chat_llm_service.anthropic,
+        anthropic_client_module,
         "AsyncAnthropic",
         lambda **_: _RecordingAnthropicClient(sdk_calls),
     )
@@ -230,7 +231,7 @@ async def test_explicit_openai_tool_streams_use_openai_provider_boundary(
 
     monkeypatch.setattr(chat_llm_service, "create_llm", fake_create_llm)
     monkeypatch.setattr(
-        chat_llm_service.anthropic,
+        anthropic_client_module,
         "AsyncAnthropic",
         lambda **_: pytest.fail("explicit OpenAI selection called Anthropic"),
     )

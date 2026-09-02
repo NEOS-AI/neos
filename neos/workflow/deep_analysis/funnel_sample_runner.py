@@ -28,6 +28,10 @@ from neos.workflow.deep_analysis.funnel_sample import (
 )
 from neos.workflow.deep_analysis.jobs import execute_run
 from neos.workflow.deep_analysis.ledger import Ledger, create_run
+from neos.workflow.deep_analysis.model_roles import (
+    HARNESS_ROLES,
+    resolve_harness_model,
+)
 
 
 class PreflightError(RuntimeError):
@@ -327,11 +331,105 @@ def write_artifacts(
     return artifact_dir
 
 
-async def preflight(settings_obj, session_factory) -> None:
+#: 프로브가 요청하는 출력 상한. 작을수록 싸지만, adaptive thinking 모델이
+#: 지나치게 작은 상한을 거절할 수 있어 넉넉히 잡는다. 거절되면 preflight 는
+#: **실패**하고, 그 방향이 옳다 -- 거짓 경보는 되돌릴 수 있지만 거짓 통과는
+#: 표본 하나를 태우고 §10.2 때문에 다시 뜰 기회가 없다.
+PROBE_MAX_TOKENS = 64
+
+_CREDENTIAL_NAMES = (
+    "ANTHROPIC_API_KEY",
+    "TAVILY_API_KEY",
+    "OPENAI_API_KEY",
+)
+
+#: 라이브 표본이 요구하는 시크릿. 다른 호출자는 자기 것을 넘긴다 --
+#: discard-recall 채점은 검색을 하지 않으므로 `TAVILY_API_KEY` 가 없어도
+#: 돌아야 하고, 없는 것을 요구하면 사람이 검사를 끄는 법을 배운다.
+SAMPLE_CREDENTIALS: tuple[str, ...] = ("ANTHROPIC_API_KEY", "TAVILY_API_KEY")
+
+
+def harness_models() -> tuple[str, ...]:
+    """하네스 역할 넷이 실제로 부르는 **고유** 모델 이름.
+
+    역할 넷이 늘 모델 넷은 아니다 -- 배포에서 `dig` 와 `synth` 는 같은
+    opus-5 다. 중복을 접는 것은 비용 때문이 아니라, 역할 수와 모델 수가
+    다르다는 사실이 이 함수의 출력에서 보여야 하기 때문이다(E3 가 깨졌을
+    때 넷이 하나로 수렴한다).
+    """
+    return tuple(
+        sorted({resolve_harness_model(role).model for role in HARNESS_ROLES})
+    )
+
+
+def _redact(message: str, secrets: Iterable[str | None]) -> str:
+    """예외 문구에서 알려진 시크릿 값을 지운다.
+
+    프로바이더 예외는 요청을 통째로 물고 오기도 한다. P1 #8 이 같은 종류의
+    누출을 한 번 치렀다 -- `exc_info=True` 하나가 접속 문자열을 로그로
+    흘렸고, 그것을 잡은 것은 저장소의 기존 테스트였다.
+    """
+    for secret in secrets:
+        if secret:
+            message = message.replace(secret, "<redacted>")
+    return message
+
+
+async def _probe_model(model: str) -> None:
+    """모델 하나에 가장 작은 호출을 보낸다. 응답이 오면 살아 있는 것이다.
+
+    키가 **있는지**가 아니라 **먹히는지**를 본다. D88 이 그 차이에 걸렸다 --
+    `OPENAI_API_KEY` 는 존재했고 401 이었고 preflight 는 통과했으며, 판정자가
+    못 도는 것은 편향보다 나쁘다(못 돈 판정자는 통과처럼 보인다, §8.1.1).
+
+    카탈로그에 새로 등재한 모델의 **서빙 가능 여부**도 여기서 걸린다. E3 가
+    `claude-opus-4-8` 을 넣었을 때 검증되지 않은 채 남은 것이 그것이다.
+
+    런 밖에서 돈다. `active_token_budget()` 이 없으므로 `reserve()` 를 거치지
+    않고, 그래서 어느 런의 floor 산식도 건드리지 않는다 -- 이 호출의 토큰은
+    표본 회계 밖에 있고 그것이 의도다.
+    """
+    from neos.workflow.deep_analysis.llm import call_llm
+
+    await call_llm(
+        model,
+        "ping",
+        max_tokens=PROBE_MAX_TOKENS,
+        stage="preflight",
+    )
+
+
+async def preflight(
+    settings_obj,
+    session_factory,
+    *,
+    probe: Callable[[str], Awaitable[None]] = _probe_model,
+    models: Sequence[str] | None = None,
+    credentials: Sequence[str] | None = None,
+) -> None:
+    """LLM 토큰을 태우기 전에 의존성이 **실제로 작동하는지** 확인한다.
+
+    셋을 본다: 시크릿의 존재, DB 도달, 그리고 부를 모든 모델이 응답한다는
+    것. 셋째가 2026-08-30 에 더해졌다 -- 그날 preflight 는 통과했는데 세
+    역할 전부가 401 이었다.
+
+    `models` 와 `credentials` 가 열려 있는 것은 **호출자가 둘이기 때문이다**
+    (PREFLIGHT2). discard-recall 채점(`scripts/deep_analysis_discard_recall.py`)
+    은 판정자 하나만 부르고 검색을 하지 않으므로 다른 집합을 넘긴다. 그 두
+    번째 호출자는 이 함수가 D94 로 고쳐진 뒤에도 **자기 사본을 들고 존재만
+    검사하고 있었다** -- 사본이 남아 있으면 고침은 한 곳에만 도착한다.
+    """
+    required = (
+        SAMPLE_CREDENTIALS if credentials is None else tuple(credentials)
+    )
+    if not required:
+        # 빈 모델 집합과 같은 이유로 실패다: 요구할 것이 없다는 것은 검사가
+        # 성립하지 않는다는 뜻이지 통과가 아니다.
+        raise PreflightError(
+            "no credential to check -- preflight would pass vacuously"
+        )
     missing = [
-        name
-        for name in ("ANTHROPIC_API_KEY", "TAVILY_API_KEY")
-        if not getattr(settings_obj, name, None)
+        name for name in required if not getattr(settings_obj, name, None)
     ]
     if missing:
         raise PreflightError(
@@ -339,6 +437,32 @@ async def preflight(settings_obj, session_factory) -> None:
         )
     async with session_factory() as session:
         await session.execute(text("SELECT 1"))
+
+    targets = tuple(harness_models() if models is None else models)
+    if not targets:
+        # 잴 것이 없는 것은 통과가 아니다. 빈 집합은 역할 해석이 깨졌다는
+        # 뜻이고, 그것을 통과로 읽으면 이 검사가 없애려는 침묵이 그대로
+        # 돌아온다 -- 검사가 있다고 믿는 만큼 더 나쁘다.
+        raise PreflightError(
+            "no harness model to probe -- role resolution produced none"
+        )
+
+    secrets = [getattr(settings_obj, name, None) for name in _CREDENTIAL_NAMES]
+    failures: list[str] = []
+    for model in targets:
+        # 첫 실패에서 멈추지 않는다. 프로브는 표본 전에 도는 값싼 호출이고,
+        # 하나씩 알려주면 사람이 그 왕복을 모델 수만큼 반복한다.
+        try:
+            await probe(model)
+        except Exception as exc:  # noqa: BLE001 - 사유를 가리지 않고 전부 보고
+            detail = _redact(str(exc), secrets) or type(exc).__name__
+            failures.append(f"{model} ({type(exc).__name__}: {detail})")
+
+    if failures:
+        raise PreflightError(
+            "credentials are present but these models did not answer: "
+            + "; ".join(failures)
+        )
 
 
 def sanitize_error(
