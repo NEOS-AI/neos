@@ -82,7 +82,15 @@ export const ToolHeader = ({
 }: ToolHeaderProps) => (
   <CollapsibleTrigger
     className={cn(
-      "flex w-full min-w-0 items-center justify-between gap-2 p-3",
+      // `group` 이 있어야 아래 셰브론의 `group-data-[state=open]:rotate-180` 이
+      // 걸린다. 없는 동안 **셰브론은 한 번도 회전한 적이 없다** -- Tailwind 의
+      // `group-*` 는 조상에 `group` 클래스를 요구하는데 `Tool`(Collapsible
+      // Root)에도 여기에도 없었다. 형제인 `./task.tsx` 는 같은 자리에 `group`
+      // 을 갖고 있고 그쪽 셰브론은 돈다. 즉 판단이 아니라 누락이다.
+      //
+      // 이 컴포넌트는 6곳이 쓴다(심층분석·하네스·승인·workflow agent·weather·
+      // toolbar). 열림/닫힘의 유일한 시각 신호가 이것이므로 여섯 전부에 닿는다.
+      "group flex w-full min-w-0 items-center justify-between gap-2 p-3",
       className
     )}
     {...props}
