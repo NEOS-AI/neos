@@ -145,9 +145,17 @@ def test_ci_workflow_covers_every_test_file():
 
 _FRONTEND_WORKFLOW = pathlib.Path(".github/workflows/frontend-ci.yml")
 
-#: 프론트 잡이 반드시 돌려야 하는 것. 테스트만 돌리고 타입체크를 빼면
-#: `tsc --noEmit` 이 잡던 계약 어긋남이 CI 밖에 남는다.
-_REQUIRED_FRONTEND_COMMANDS = ("pnpm test:source", "tsc --noEmit")
+#: 프론트 잡이 반드시 돌려야 하는 것.
+#:
+#: `typecheck:tests` 가 따로 있는 이유: 루트 `tsconfig.json` 이
+#: `**/*.test.ts(x)` 를 `exclude` 하므로 `tsc --noEmit` 은 **테스트 파일을 한
+#: 건도 보지 않는다.** 2026-09-02 에 처음 돌려 보니 오류 셋이 숨어 있었고 그중
+#: 둘이 `deep-analysis-reader.test.ts` 였다. 둘은 서로를 대신하지 못한다.
+_REQUIRED_FRONTEND_COMMANDS = (
+    "pnpm test:source",
+    "tsc --noEmit",
+    "pnpm typecheck:tests",
+)
 
 
 def _frontend_workflow():
@@ -221,29 +229,79 @@ def test_frontend_ci_has_no_paths_filter():
             )
 
 
-def test_frontend_ci_covers_every_source_test_file():
-    """`web/tests/source/` 의 파일 전부가 실행되는 glob 안에 있는가.
-
-    `package.json` 의 `test:source` 가 `tests/source/**/*.test.ts` 를 넘긴다.
-    누군가 그것을 파일 목록으로 바꾸면(백엔드 CI 가 ruff 에서 실제로 겪은 일이다
-    -- 네 파일만 검사하는 목록이 조용히 낡았다) 새 테스트가 CI 밖에 남는다.
-    """
+def _test_source_command() -> str:
     import json
 
     package_json = pathlib.Path("web/package.json")
     scripts = json.loads(package_json.read_text(encoding="utf-8"))["scripts"]
     command = scripts.get("test:source", "")
     assert command, "web/package.json 에 test:source 스크립트가 없다"
+    return command
 
-    on_disk = sorted(pathlib.Path("web/tests/source").glob("*.test.ts"))
-    assert on_disk, "web/tests/source 에서 테스트 파일을 하나도 못 찾았다"
 
-    # glob 하나로 전부 도는 것이 현재 형태다. 목록으로 바뀌면 파일마다 확인한다.
-    if "tests/source/**/*.test.ts" in command:
-        return
+def test_frontend_ci_covers_every_source_test_file():
+    """`web/tests/source/` 의 파일 전부가 실행되는 glob 안에 있는가.
 
-    uncovered = [str(p) for p in on_disk if p.name not in command]
-    assert not uncovered, (
-        f"{len(uncovered)}개 프론트 테스트 파일이 `test:source` 밖에 있다:\n  "
-        + "\n  ".join(uncovered)
+    누군가 `test:source` 를 파일 목록으로 바꾸면(백엔드 CI 가 ruff 에서 실제로
+    겪은 일이다 -- 네 파일만 검사하는 목록이 조용히 낡았다) 새 테스트가 CI 밖에
+    남는다.
+
+    🔴 **이 가드는 한 번 운으로 통과했다.** 확장자마다 glob 을 하나씩 넘기게
+    바뀌었을 때(`*.test.ts` 와 `*.test.tsx`), 옛 판은 "옛 glob 문자열이 명령에
+    들어 있는가" 만 보고 그냥 통과했다 -- **새로 생긴 `.tsx` 두 개를 세지도
+    않은 채로.** 지금은 확장자별로 glob 의 존재를 요구한다.
+    """
+    command = _test_source_command()
+
+    for suffix in ("ts", "tsx"):
+        on_disk = sorted(pathlib.Path("web/tests/source").glob(f"*.test.{suffix}"))
+        if not on_disk:
+            continue
+        glob = f"tests/source/**/*.test.{suffix}"
+        if glob in command:
+            continue
+        uncovered = [str(p) for p in on_disk if p.name not in command]
+        assert not uncovered, (
+            f"{len(uncovered)}개 프론트 테스트 파일이 `test:source` 밖에 "
+            f"있다(`{glob}` 도 없다):\n  " + "\n  ".join(uncovered)
+        )
+
+
+#: 프론트 테스트 파일이 살 수 있는 곳과, 그것을 실제로 돌리는 러너.
+#: 여기 없는 곳의 `*.test.ts(x)` 는 아무도 돌리지 않는다.
+_FRONTEND_TEST_HOMES = {
+    "web/tests/source": "pnpm test:source (tsx --test)",
+    "web/tests/e2e": "playwright (testMatch: /e2e\\/.*.test.ts/)",
+}
+
+
+def test_no_orphan_frontend_test_files():
+    """어느 러너도 집지 않는 `*.test.ts(x)` 가 있는가.
+
+    2026-09-02 실측: `web/lib/ai/models.test.ts` 가 정확히 그랬다. `test:source`
+    의 glob(`tests/source/**`) 밖이라 실행되지 않았고, 루트 tsconfig 가
+    `**/*.test.ts` 를 `exclude` 해서 타입체크도 되지 않았다. 그래서 존재하지
+    않는 모듈(`@/tests/prompts/utils`)을 임포트한 채 **아무 신호 없이** 남아
+    있었다 -- Vercel 템플릿 잔재였고, 테스트도 아니었다(모의 모델 픽스처).
+
+    §5 의 FE3 과 같은 종류다: 아무도 돌리지 않는 파일은 다음 사람에게
+    "여기 커버리지가 있다" 는 거짓 신호를 준다.
+    """
+    web = pathlib.Path("web")
+    homes = tuple(pathlib.Path(home) for home in _FRONTEND_TEST_HOMES)
+
+    orphans = sorted(
+        str(path)
+        for suffix in ("ts", "tsx")
+        for path in web.rglob(f"*.test.{suffix}")
+        if "node_modules" not in path.parts
+        and not any(home in path.parents for home in homes)
+    )
+
+    assert not orphans, (
+        f"{len(orphans)}개 테스트 파일을 아무 러너도 집지 않는다:\n  "
+        + "\n  ".join(orphans)
+        + "\n둘 중 하나로 옮기거나(각각 "
+        + " · ".join(f"{k} → {v}" for k, v in _FRONTEND_TEST_HOMES.items())
+        + ") 지울 것."
     )

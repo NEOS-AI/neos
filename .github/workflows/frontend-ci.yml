@@ -59,6 +59,11 @@ jobs:
       # 게이트가 실제로 무는지 확인하지 않고 세우면 없느니만 못하다.
       - run: pnpm test:source
       - run: pnpm exec tsc --noEmit
+      # 루트 `tsconfig.json` 이 `**/*.test.ts(x)` 를 `exclude` 하므로 위 줄은
+      # **테스트 파일을 한 건도 보지 않는다.** 2026-09-02 에 처음 돌려 보니
+      # 숨어 있던 오류가 셋이었고 그중 둘이 `deep-analysis-reader.test.ts`
+      # 였다. 이 줄이 `tsconfig.test.json` 으로 그 구멍을 덮는다.
+      - run: pnpm typecheck:tests
 
       # 린트는 **일부러 없다.** `web/lib/deep-analysis/progress.ts` 에 biome
       # 경고 2건이 남아 있어(한 줄 `if` 스타일) 지금 게이트로 세우면 첫 실행부터
