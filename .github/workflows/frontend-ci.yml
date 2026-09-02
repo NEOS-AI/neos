@@ -64,6 +64,14 @@ jobs:
       # 숨어 있던 오류가 셋이었고 그중 둘이 `deep-analysis-reader.test.ts`
       # 였다. 이 줄이 `tsconfig.test.json` 으로 그 구멍을 덮는다.
       - run: pnpm typecheck:tests
+      # 빌드는 위 셋 중 **어느 것도 잡지 못하는 것**을 잡는다. dev 에는
+      # `export const dynamic`(`cacheComponents` 와 비호환)과 `server-only`
+      # 위반이 남아 있었는데 `tsc` 도 `test:source` 도 초록이었다 -- 둘 다
+      # 번들러 경계의 문제라 타입에도 단위 테스트에도 걸리지 않는다.
+      #
+      # 2026-09-03 에 초록이 된 뒤에야 게이트로 세운다. 빨간 것을 CI 에 올리면
+      # 첫 실행부터 무시되는 신호가 하나 생긴다.
+      - run: pnpm build
 
       # 린트는 **일부러 없다.** `web/lib/deep-analysis/progress.ts` 에 biome
       # 경고 2건이 남아 있어(한 줄 `if` 스타일) 지금 게이트로 세우면 첫 실행부터
