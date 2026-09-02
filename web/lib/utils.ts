@@ -9,6 +9,7 @@ import { formatISO } from 'date-fns';
 import { twMerge } from 'tailwind-merge';
 import type { DBMessage, Document } from '@/lib/db/schema';
 import { deepAnalysisFromMessageMetadata } from './deep-analysis/metadata';
+import { applyHarnessMetadata } from './harness/metadata';
 import { ChatSDKError, type ErrorCode } from './errors';
 import type { ChatMessage, ChatTools, CustomUIDataTypes } from './types';
 
@@ -145,6 +146,13 @@ export function convertBackendMessagesToUI(
     if (deepAnalysis) {
       metadata.deep_analysis = deepAnalysis;
     }
+
+    // `harness` 는 백엔드가 같은 이름으로 쓰므로 위 통과 경로가 이미 복사해
+    // 뒀다 -- **검증하지 않은 채로.** 스키마에 맞으면 검증된 값으로 바꾸고,
+    // 아니면 지운다. 지우지 않으면 통과 경로가 남긴 원본이 그대로 컴포넌트에
+    // 도달하고, 잘못된 모양 다섯 중 하나는 렌더를 던져 그 메시지 전체가
+    // 에러 카드로 대체된다(`lib/harness/metadata.ts` 주석).
+    applyHarnessMetadata(metadata, msg.metadata);
 
     return {
       id: msg.message_id,

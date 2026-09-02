@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HarnessStatus } from "../../components/harness-status";
 import type { HarnessMetadata } from "../../lib/types";
+import { convertBackendMessagesToUI } from "../../lib/utils";
 import { renderComponent } from "../render";
 
 /**
@@ -160,4 +161,48 @@ test("점수 막대에 이름이 있다", async () => {
     "하네스 점수",
     "이름이 없으면 'progressbar 76%' 로만 읽힌다"
   );
+});
+
+// ---------------------------------------------------------------------------
+// FE17: 이력 로드 경로가 실제로 크래시를 막는가 (통합).
+// ---------------------------------------------------------------------------
+
+test("잘못된 harness 는 이력 변환에서 걸러져 렌더에 도달하지 않는다", async () => {
+  // 프로브가 보여준 다섯 중 하나. 예전에는 통과 경로가 이 값을 그대로 옮겨
+  // `verdict?.replaceAll` 에서 던졌고, 그 메시지가 에러 카드로 대체됐다.
+  const [message] = convertBackendMessagesToUI([
+    {
+      message_id: "m1",
+      role: "assistant",
+      content: "리포트 본문",
+      metadata: { harness: { status: "passed", verdict: 5 } },
+    },
+  ]);
+
+  assert.equal(
+    message.metadata?.harness,
+    undefined,
+    "검증에 실패한 harness 가 메타데이터에 남았다"
+  );
+
+  // 그리고 그 메시지는 여전히 렌더된다 -- 본문이 살아 있는 것이 요점이다.
+  const host = await renderComponent(
+    <div>{message.parts.map((p) => (p as { text?: string }).text)}</div>
+  );
+  assert.ok(host.textContent?.includes("리포트 본문"));
+});
+
+test("정상 harness 는 이력 변환을 거쳐 카드로 그려진다", async () => {
+  const [message] = convertBackendMessagesToUI([
+    {
+      message_id: "m2",
+      role: "assistant",
+      content: "본문",
+      metadata: { harness: { status: "failed", failed_checks: ["citation"] } },
+    },
+  ]);
+
+  assert.ok(message.metadata?.harness);
+  const host = await renderCard(message.metadata.harness);
+  assert.ok(host.textContent?.includes("citation"));
 });
