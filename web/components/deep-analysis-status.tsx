@@ -74,15 +74,58 @@ const PhaseIcon = ({ phase }: { phase: DeepAnalysisProgress["phase"] }) => {
   return <MicroscopeIcon className="size-4 text-purple-600" />;
 };
 
-type Stat = { label: string; value: number };
+/** `DeepAnalysisProgress` 의 숫자 필드 키. */
+type NumericKey<T> = {
+  [K in keyof T]-?: T[K] extends number ? K : never;
+}[keyof T];
 
+/** 그중 카운터인 것 — `cursor` 는 재구독 위치이지 세는 값이 아니다. */
+type CounterKey = Exclude<NumericKey<DeepAnalysisProgress>, "cursor">;
+
+type StatSpec = { label: string; hint?: string };
+
+/**
+ * 카운터 → 화면 문구. **`Record` 라 키 하나라도 빠지면 컴파일이 안 된다.**
+ *
+ * 이 표가 배열이던 시절 리듀서는 일곱을 셌고 화면은 넷만 그렸다 — 그리고
+ * 어디에도 "일부러 뺐다"는 표시가 없어서 **판단인지 누락인지 구별되지
+ * 않았다**(FE12). `claimsUnverified` 가 특히 그랬다: 기각과 형제인 품질
+ * 신호인데 기각만 보여줬다. FE9 가 라벨에서 고친 것과 같은 결함이고,
+ * 여기서는 타입이 그 역할을 한다 — 리듀서에 카운터를 더하면 `tsc --noEmit`
+ * 이 막고, 그 `tsc` 는 이제 CI 에서 돈다(FE10).
+ *
+ * 안 그리기로 했다면 `null` 과 사유를 적는다. 지금은 일곱 다 그린다.
+ * 카운터가 아닌 숫자 필드가 생기면 여기도 답을 요구하는데, 그때 `null` 을
+ * 적는 것이 정확히 옳은 처리다.
+ *
+ * **선언 순서가 표시 순서다** — 파이프라인 순으로 둔다.
+ */
+const STAT_SPECS: Record<CounterKey, StatSpec | null> = {
+  questionsOpened: { label: "질문" },
+  splits: { label: "질문 분해" },
+  passesCompleted: { label: "패스" },
+  claimsVerified: { label: "검증 클레임" },
+  claimsRejected: { label: "기각 클레임" },
+  claimsUnverified: {
+    label: "미검증 클레임",
+    // 기각과 다르다. 기각은 판정자가 내린 결론이고 이쪽은 결론에 이르지
+    // 못한 것이다 — 라벨만 보면 구별되지 않아 툴팁으로 갈라 준다.
+    hint: "재시도 캡이 소진돼 검증도 기각도 하지 못한 클레임",
+  },
+  gradeAttempts: {
+    label: "채점 시도",
+    hint: "리포트를 조립하고 채점한 횟수. 1보다 크면 재조립이 있었다",
+  },
+};
+
+type Stat = StatSpec & { value: number };
+
+/** 값이 0인 항목은 빼므로, 표가 길어져도 조용한 run 은 조용하다. */
 const stats = (progress: DeepAnalysisProgress): Stat[] =>
-  [
-    { label: "질문", value: progress.questionsOpened },
-    { label: "패스", value: progress.passesCompleted },
-    { label: "검증 클레임", value: progress.claimsVerified },
-    { label: "기각 클레임", value: progress.claimsRejected },
-  ].filter((stat) => stat.value > 0);
+  (Object.entries(STAT_SPECS) as [CounterKey, StatSpec | null][]).flatMap(
+    ([key, spec]) =>
+      spec && progress[key] > 0 ? [{ ...spec, value: progress[key] }] : []
+  );
 
 export type DeepAnalysisStatusProps = {
   deepAnalysis: DeepAnalysisMetadata;
@@ -244,6 +287,9 @@ export function DeepAnalysisStatus({
                 <div
                   className="flex items-center justify-between rounded-md border bg-background/60 px-2.5 py-2 text-xs"
                   key={stat.label}
+                  // 라벨만으로 갈리지 않는 항목이 있다(미검증 ↔ 기각).
+                  // `hint` 가 없으면 속성 자체가 붙지 않는다.
+                  title={stat.hint}
                 >
                   <span className="truncate">{stat.label}</span>
                   <span className="ml-2 shrink-0 text-muted-foreground tabular-nums">
