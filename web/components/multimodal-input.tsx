@@ -26,7 +26,7 @@ import {
   ModelSelectorLogo,
   ModelSelectorName,
   ModelSelectorTrigger,
-} from "@/components/ai-elements/model-selector";
+} from "@/components/elements/model-selector";
 import {
   chatModels,
   DEFAULT_CHAT_MODEL,
