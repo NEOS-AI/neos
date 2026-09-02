@@ -130,17 +130,64 @@ function activityLabel(event: DeepAnalysisJobEvent): string | null {
   if (kind === "conflict_reinvestigation") {
     return "모순 재조사";
   }
+  if (kind === "question_reopened") {
+    return "질문 재개방 — 모순 재조사";
+  }
+  if (kind === "subq_proposed") {
+    const text = asString(payload.text);
+    return text ? `하위질문 제안 · ${text}` : "하위질문 제안";
+  }
+  if (kind === "subq_reviewed") {
+    const before = asCount(payload.before);
+    const after = asCount(payload.after);
+    return before === undefined || after === undefined
+      ? "하위질문 심사 완료"
+      : `하위질문 심사 완료 · ${before}개 중 ${after}개 통과`;
+  }
+  if (kind === "subq_review_failed") {
+    // 조용한 실패다. 심사가 죽어도 오케스트레이터는 원안을 그대로 채택하고
+    // 계속 간다(`orchestrator.py` 의 `return proposals`) — 즉 run 은 성공하되
+    // 하위질문의 품질 게이트만 사라진다. 라벨이 없으면 그 사실이 원장에서 멈춘다.
+    const proposals = asCount(payload.proposals);
+    return proposals === undefined
+      ? "하위질문 심사 실패 — 원안 그대로 진행"
+      : `하위질문 심사 실패 — 제안 ${proposals}개를 심사 없이 진행`;
+  }
+  if (kind === "subq_adopted") {
+    return "하위질문 채택";
+  }
   if (kind === "stall_terminated") {
     return "정체 감지 — 질문 종료";
+  }
+  if (kind === "systemic_failure_terminated") {
+    // 실행을 죽이는 사건이다(`SystemicWorkerFailure`). `job_failed` 가 뒤따르지만
+    // 그쪽 error 문자열은 사용자용 한 문장이라 **왜** 죽었는지는 여기에만 있다.
+    const rounds = asCount(payload.rounds);
+    return rounds === undefined
+      ? "워커가 연속 실패 — 실행 종료"
+      : `워커가 ${rounds}라운드 연속 실패 — 실행 종료`;
+  }
+  if (kind === "token_budget_exhausted") {
+    // 정지 사유다. 강등 어휘에는 넣지 않는다 — 조사 범위를 깎았지 리포트를
+    // 깎지 않았고, 그 구별이 D26 의 판정이다(`degradationKind()` 주석 참조).
+    return "토큰 예산 소진 — 더 조사하지 못함";
+  }
+  if (kind === "worker_result_mismatch") {
+    // 워커가 투입된 것과 다른 질문 id 를 돌려줘 패스를 통째로 버렸다. 질문은
+    // open 으로 복귀하므로 run 은 계속되지만, 그 패스에 쓴 토큰은 돌아오지 않는다.
+    return "워커 결과 불일치 — 패스 폐기 후 질문 복구";
+  }
+  if (kind === "recovered") {
+    const questions = asCount(payload.questions);
+    return questions === undefined
+      ? "중단된 질문 회수"
+      : `중단된 질문 ${questions}개 회수`;
   }
   if (kind === "dead_end") {
     return "막다른 길 기록";
   }
   if (kind === "abandoned") {
     return "질문 포기";
-  }
-  if (kind === "recovered") {
-    return "중단된 질문 회수";
   }
   if (kind === "run_manifest") {
     const profile = asString(payload.profile);

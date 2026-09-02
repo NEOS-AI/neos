@@ -1677,6 +1677,17 @@ class Orchestrator:
             try:
                 recovered = await self.ledger.recover()
                 if recovered:
+                    # 원장에도 적는다. `_emit` 만으로는 **job 경로에서 이 사실이
+                    # 사라진다** -- `jobs.py` 가 event_sink 를 의도적으로 배선하지
+                    # 않으므로(중복 적재 방지) 싱크는 인라인 실행에서만 산다.
+                    # 프론트는 원장 스트림만 읽으므로 `activityLabel()` 의
+                    # `recovered` 분기가 절대 뜨지 않는 죽은 코드였다.
+                    #
+                    # 재개마다 1건씩 남는 것이 맞다 -- 두 번 재개하며 각각 회수했다면
+                    # 그것은 서로 다른 두 사건이다.
+                    await self.ledger.log(
+                        "recovered", None, {"questions": recovered}
+                    )
                     await self._emit("recovered", {"questions": recovered})
                     await self._checkpoint()
 
