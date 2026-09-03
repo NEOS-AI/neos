@@ -19,21 +19,29 @@
  * 던지지 않는다.
  */
 
-import type { DeepAnalysisMetadata } from "../types";
+import type { z } from "zod";
+import {
+  type DeepAnalysisMetadata,
+  deepAnalysisMetadataSchema,
+} from "../types";
 import type { DegradationEntry } from "./progress";
 
 const RUN_ID_KEY = "deep_analysis_run_id";
 const STATUS_KEY = "research_status";
 const DEGRADATIONS_KEY = "deep_analysis_degradations";
 
-const STATUSES = ["pending", "running", "completed", "failed"] as const;
-type DeepAnalysisStatus = (typeof STATUSES)[number];
+/**
+ * 상태 값은 **스키마에서 가져온다.** 예전에는 같은 넷이 여기 손으로 복사돼
+ * 있었고, `deepAnalysisMetadataSchema` 가 정본인데도 그 사실을 강제하는 것이
+ * 없었다 — 백엔드가 상태를 하나 늘리면 스키마만 고치고 이 목록은 남는다.
+ * 이 저장소가 강등 어휘(FE6)와 이벤트 kind(FE9)에서 두 번 치른 값이다.
+ */
+const statusSchema = deepAnalysisMetadataSchema.shape.status;
+type DeepAnalysisStatus = NonNullable<z.infer<typeof statusSchema>>;
 
 function asStatus(value: unknown): DeepAnalysisStatus | undefined {
-  return typeof value === "string" &&
-    (STATUSES as readonly string[]).includes(value)
-    ? (value as DeepAnalysisStatus)
-    : undefined;
+  const parsed = statusSchema.safeParse(value);
+  return parsed.success ? (parsed.data ?? undefined) : undefined;
 }
 
 /**

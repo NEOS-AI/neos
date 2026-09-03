@@ -297,7 +297,11 @@ class ChatService:
         before_sequence: Optional[int] = None,
         after_sequence: Optional[int] = None
     ) -> List[Dict[str, Any]]:
-        """대화의 메시지 목록 조회"""
+        """대화의 메시지 목록 조회
+
+        커서가 없거나 before_sequence만 있으면 가장 최근 limit개를 오름차순으로 반환하고,
+        after_sequence가 있으면 그 이후를 앞에서부터 limit개 오름차순으로 반환한다(꼬리 아님).
+        """
         from neos.api.services.chat_service_helper import messages_to_dict_list
 
         messages = await ChatRepository.get_conversation_messages(

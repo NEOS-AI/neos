@@ -9,6 +9,7 @@ import { formatISO } from 'date-fns';
 import { twMerge } from 'tailwind-merge';
 import type { DBMessage, Document } from '@/lib/db/schema';
 import { deepAnalysisFromMessageMetadata } from './deep-analysis/metadata';
+import { applyHarnessMetadata } from './harness/metadata';
 import { ChatSDKError, type ErrorCode } from './errors';
 import type { ChatMessage, ChatTools, CustomUIDataTypes } from './types';
 
@@ -109,6 +110,59 @@ export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
   }));
 }
 
+/**
+ * BE `MessageResponse.attachments` (`{type, url, name, size, metadata}`) 를
+ * FE file 파트로 되살린다.
+ *
+ * FE file 파트의 필드명은 `filename` 이다 (`name` 이 아니다) — Task 3 이 정한
+ * 정본 모양이고 `components/message.tsx` 가 `attachment.filename` 을 읽는다.
+ * `mediaType` 은 `attachment.metadata.mediaType` 에 들어 있다
+ * (`extractAttachments`, `lib/message-parts.ts:97`가 내보낼 때 그 자리에 넣는다).
+ *
+ * 방어: `attachments` 가 없거나 배열이 아니거나 항목에 `url` 이 없으면 그
+ * 항목(또는 전체)을 조용히 건너뛴다 — 첨부 하나가 깨졌다고 메시지 렌더가
+ * 죽으면 안 된다 (`lib/harness/metadata.ts` 와 같은 이유).
+ */
+function attachmentsToFileParts(
+  attachments: unknown
+): UIMessagePart<CustomUIDataTypes, ChatTools>[] {
+  if (!Array.isArray(attachments)) {
+    return [];
+  }
+
+  const fileParts: UIMessagePart<CustomUIDataTypes, ChatTools>[] = [];
+
+  for (const attachment of attachments) {
+    if (!attachment || typeof attachment !== 'object') {
+      continue;
+    }
+
+    const { url, name, metadata } = attachment as {
+      url?: unknown;
+      name?: unknown;
+      metadata?: unknown;
+    };
+
+    if (typeof url !== 'string') {
+      continue;
+    }
+
+    const mediaType =
+      metadata && typeof metadata === 'object'
+        ? (metadata as Record<string, unknown>).mediaType
+        : undefined;
+
+    fileParts.push({
+      type: 'file',
+      url,
+      ...(typeof name === 'string' ? { filename: name } : {}),
+      ...(typeof mediaType === 'string' ? { mediaType } : {}),
+    } as UIMessagePart<CustomUIDataTypes, ChatTools>);
+  }
+
+  return fileParts;
+}
+
 export function convertBackendMessagesToUI(
   backendMessages: any[]
 ): ChatMessage[] {
@@ -146,6 +200,13 @@ export function convertBackendMessagesToUI(
       metadata.deep_analysis = deepAnalysis;
     }
 
+    // `harness` 는 백엔드가 같은 이름으로 쓰므로 위 통과 경로가 이미 복사해
+    // 뒀다 -- **검증하지 않은 채로.** 스키마에 맞으면 검증된 값으로 바꾸고,
+    // 아니면 지운다. 지우지 않으면 통과 경로가 남긴 원본이 그대로 컴포넌트에
+    // 도달하고, 잘못된 모양 다섯 중 하나는 렌더를 던져 그 메시지 전체가
+    // 에러 카드로 대체된다(`lib/harness/metadata.ts` 주석).
+    applyHarnessMetadata(metadata, msg.metadata);
+
     return {
       id: msg.message_id,
       role: msg.role as 'user' | 'assistant' | 'system',
@@ -154,6 +215,7 @@ export function convertBackendMessagesToUI(
           type: 'text' as const,
           text: msg.content,
         },
+        ...attachmentsToFileParts(msg.attachments),
       ] as UIMessagePart<CustomUIDataTypes, ChatTools>[],
       metadata,
     };

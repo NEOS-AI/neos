@@ -26,7 +26,7 @@ import {
   ModelSelectorLogo,
   ModelSelectorName,
   ModelSelectorTrigger,
-} from "@/components/ai-elements/model-selector";
+} from "@/components/elements/model-selector";
 import {
   chatModels,
   DEFAULT_CHAT_MODEL,
@@ -142,7 +142,7 @@ function PureMultimodalInput({
         ...attachments.map((attachment) => ({
           type: "file" as const,
           url: attachment.url,
-          name: attachment.name,
+          filename: attachment.name,
           mediaType: attachment.contentType,
         })),
         {
