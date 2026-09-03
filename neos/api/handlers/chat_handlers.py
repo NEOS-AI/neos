@@ -176,7 +176,11 @@ async def get_conversation_with_messages(
     before_sequence: Optional[int] = None,
     _conversation: dict = Depends(get_readable_conversation),
 ):
-    """대화와 메시지 함께 조회 (주어진 conversation_id에 해당하는 대화 및 메시지 목록 반환)"""
+    """대화와 메시지 함께 조회 (주어진 conversation_id에 해당하는 대화 및 메시지 목록 반환)
+
+    messages는 커서 없음/before_sequence 지정 시 가장 최근 limit개를 sequence_number
+    오름차순으로 정렬해 반환한다.
+    """
     try:
         conversation = await ChatService.get_conversation(conversation_id)
         if not conversation:
@@ -522,7 +526,11 @@ async def get_conversation_messages(
     after_sequence: Optional[int] = None,
     _conversation: dict = Depends(get_readable_conversation),
 ):
-    """대화의 메시지 목록 조회"""
+    """대화의 메시지 목록 조회
+
+    커서 없음/before_sequence: 가장 최근(마지막) limit개를 sequence_number 오름차순으로 반환한다.
+    after_sequence: 해당 시퀀스 이후를 앞에서부터 limit개 오름차순으로 반환한다(꼬리가 아니라 이후 따라잡기).
+    """
     try:
         messages = await ChatService.get_conversation_messages(
             conversation_id=conversation_id,
