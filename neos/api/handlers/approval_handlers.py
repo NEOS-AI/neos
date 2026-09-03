@@ -29,7 +29,7 @@ from neos.database.connection import db_manager
 from neos.database.models import User
 from neos.workflow.graph import multi_agent_workflow
 from neos.workflow.resume_graph import ResumeGraphUnavailable, resume_graph_for
-from neos.workflow.stream_manager import stream_manager
+from neos.workflow.stream_manager import StreamEvent, stream_manager
 
 logger = logging.getLogger(__name__)
 
@@ -309,7 +309,19 @@ async def stream_resume_result(
                 if event.event in ("completed", "error"):
                     break
         except asyncio.TimeoutError:
-            yield f"data: {json.dumps({'event': 'error', 'message': '워크플로우 응답 대기 타임아웃'})}\n\n"
+            # 정상 경로와 같은 포맷터를 태운다 -- 손으로 `data:` 한 줄만
+            # 내보내면 `event:` 줄이 빠져서, event: 줄로만 종류를 판별하는
+            # 소비자에게 이 payload가 유실된다 (감사 finding #3).
+            session.last_event_id += 1
+            timeout_event = StreamEvent(
+                id=str(session.last_event_id),
+                event="error",
+                data=json.dumps(
+                    {"event": "error", "message": "워크플로우 응답 대기 타임아웃"},
+                    ensure_ascii=False,
+                ),
+            )
+            yield timeout_event.to_sse_format()
 
     return StreamingResponse(
         generate(),
