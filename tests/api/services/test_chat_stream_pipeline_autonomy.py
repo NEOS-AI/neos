@@ -73,6 +73,156 @@ class _FakeWorkflow:
         return {"success": True, "interrupted": True, "response": None}
 
 
+class _ScriptedWorkflow:
+    """큐에 지정된 이벤트를 그대로 발행하고 완료하는 워크플로우.
+
+    `WorkflowStreamCallback._create_event`가 만드는 모양
+    (`event` / `node_name` / `content` / `data` / `progress_percent`)을 흉내낸다.
+    """
+
+    def __init__(self, events):
+        self._events = events
+
+    async def execute_workflow(self, user_input, event_handler, use_checkpointer):
+        for event in self._events:
+            await event_handler.event_queue.put(event)
+        await event_handler.event_queue.put(
+            SimpleNamespace(
+                event="completed",
+                data={},
+                node_name=None,
+                progress_percent=100,
+                content=None,
+            )
+        )
+        return {"success": True, "response": "done"}
+
+
+class _PassthroughCallback:
+    def __init__(self, session_id, event_queue, enable_db_logging, user_id):
+        self.event_queue = event_queue
+
+
+def _run_scripted_workflow(events):
+    """`_run_workflow`를 돌려 SSE payload 목록을 돌려준다."""
+    pipeline = ChatStreamPipeline(
+        chat_llm_service=object(),
+        cost_calculator=object(),
+        get_core_tools_fn=lambda: None,
+        get_search_handler_fn=lambda: None,
+        chat_service_cls=object(),
+        multi_agent_workflow=_ScriptedWorkflow(events),
+        workflow_callback_cls=_PassthroughCallback,
+        map_node_to_agent_fn=lambda node: node,
+    )
+    stream_state, _ = create_stream_generator(
+        response_id="conversation_123",
+        message_id="message_123",
+    )
+    return pipeline, stream_state
+
+
+async def _collect_payloads(pipeline, stream_state):
+    payloads = []
+    async for chunk in pipeline._run_workflow(
+        conversation_id="conversation_123",
+        user_content="analyse this",
+        current_user=SimpleNamespace(user_id="user_123"),
+        history_messages=[],
+        stream_state=stream_state,
+        wf_ctx=_WorkflowCtx(),
+        autonomy_level=1,
+    ):
+        for line in chunk.splitlines():
+            if line.startswith("data: {"):
+                payloads.append(json.loads(line.removeprefix("data: ").strip()))
+    return payloads
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_forwards_deep_analysis_started_handle():
+    """D23: job 핸들이 챗 SSE로 나가지 않으면 프론트가 run에 붙을 방법이 없다."""
+    pipeline, stream_state = _run_scripted_workflow(
+        [
+            SimpleNamespace(
+                event="deep_analysis_started",
+                data={
+                    "run_id": "run-abc",
+                    "events_url": "/api/v1/deep-analysis/run-abc/events",
+                    "assistant_message_id": "assistant-1",
+                },
+                node_name="deep_analysis",
+                progress_percent=10,
+                content=None,
+            )
+        ]
+    )
+
+    payloads = await _collect_payloads(pipeline, stream_state)
+
+    started = [p for p in payloads if p["type"] == "neos:deep_analysis_started"]
+    assert len(started) == 1
+    assert started[0]["run_id"] == "run-abc"
+    assert started[0]["events_url"] == "/api/v1/deep-analysis/run-abc/events"
+    assert started[0]["assistant_message_id"] == "assistant-1"
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_converts_harness_progress_to_harness_event():
+    """하네스 진행은 `neos:harness`여야 한다 — JSON 문자열을 progress에 실어 보내면 안 된다."""
+    pipeline, stream_state = _run_scripted_workflow(
+        [
+            SimpleNamespace(
+                event="agent_progress",
+                data={},
+                node_name="research_harness",
+                progress_percent=40,
+                content=json.dumps(
+                    {
+                        "event": "harness_check_completed",
+                        "run_id": "run-abc",
+                        "timestamp": "2026-09-03T00:00:00Z",
+                        "data": {"check": "citation", "passed": True},
+                    }
+                ),
+            )
+        ]
+    )
+
+    payloads = await _collect_payloads(pipeline, stream_state)
+
+    harness = [p for p in payloads if p["type"] == "neos:harness"]
+    assert len(harness) == 1
+    assert harness[0]["event"] == "harness_check_completed"
+    assert harness[0]["run_id"] == "run-abc"
+    assert harness[0]["data"] == {"check": "citation", "passed": True}
+    assert not [p for p in payloads if p["type"] == "neos:workflow_progress"]
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_keeps_plain_progress_as_workflow_progress():
+    """하네스가 아닌 노드의 진행은 그대로 `neos:workflow_progress`로 남는다."""
+    pipeline, stream_state = _run_scripted_workflow(
+        [
+            SimpleNamespace(
+                event="agent_progress",
+                data={},
+                node_name="search_orchestrator",
+                progress_percent=55,
+                content="검색 중",
+            )
+        ]
+    )
+
+    payloads = await _collect_payloads(pipeline, stream_state)
+
+    progress = [p for p in payloads if p["type"] == "neos:workflow_progress"]
+    assert len(progress) == 1
+    assert progress[0]["progress_percent"] == 55
+    assert progress[0]["message"] == "검색 중"
+    assert not [p for p in payloads if p["type"] == "neos:harness"]
+
+
 class _FakeChatService:
     messages = []
     parent_messages = {}
