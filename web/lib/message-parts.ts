@@ -41,7 +41,7 @@ export type SupportedAttachmentMimeType =
 export type AnyMessagePart =
   | { type: "text"; text: string }
   | { type: "input_text"; text: string }
-  | { type: "file"; url: string; name: string; mediaType: string }
+  | { type: "file"; url: string; filename: string; mediaType: string }
   | {
       type: "input_file";
       file: { url: string; name: string; media_type: string };
@@ -74,7 +74,7 @@ export function extractTextContent(parts: readonly AnyMessagePart[]): string {
 /**
  * file 계열 파트를 백엔드 `attachments` 배열로 변환한다.
  *
- * legacy(`{type:"file", url, name, mediaType}`)와
+ * legacy(`{type:"file", url, filename, mediaType}`)와
  * OpenResponses(`{type:"input_file", file:{url, name, media_type}}`) 두 형식을 모두 받는다.
  * 두 형식 모두 `app/(chat)/api/chat/schema.ts`의 `partSchema`가 허용하기 때문이다.
  */
@@ -87,13 +87,13 @@ export function extractAttachments(
     if (part.type === "file") {
       const filePart = part as {
         url?: string;
-        name?: string;
+        filename?: string;
         mediaType?: string;
       };
       attachments.push({
         type: "file",
         url: filePart.url ?? null,
-        name: filePart.name ?? null,
+        name: filePart.filename ?? null,
         metadata: filePart.mediaType ? { mediaType: filePart.mediaType } : {},
       });
       continue;

@@ -12,8 +12,14 @@
 
 import { callBackendAPI } from "@/lib/backend-api";
 
-// SSE는 정적 최적화 대상이 아니다.
-export const dynamic = "force-dynamic";
+// SSE는 정적 최적화 대상이 아니다 — 다만 그것을 `export const dynamic` 으로
+// 말하지 않는다. `next.config.ts` 가 `cacheComponents: true` 라 그 세그먼트
+// 설정 자체가 금지돼 있고(빌드가 "not compatible with nextConfig.cacheComponents"
+// 로 거부한다), **저장소 전체에서 이 파일 하나만 그것을 쓰고 있었다.**
+//
+// 필요도 없다. 이 핸들러는 `request.url` 을 읽고 `request.signal` 을 넘기므로
+// 요청 시점 API 를 쓰는 것이 곧 동적이라는 뜻이다 — cacheComponents 모드에서
+// 동적 여부는 선언이 아니라 **무엇을 읽는가**로 정해진다.
 
 /**
  * 기본 상한(60초)은 장시간 job 스트림과 충돌한다(감사 §6-3). 상한을 올리되,

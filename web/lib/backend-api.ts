@@ -1,9 +1,21 @@
 /**
- * 백엔드 API 호출 유틸리티
+ * 백엔드 API 호출 유틸리티 (**서버 전용**)
  *
  * NextAuth 세션에서 백엔드 JWT 토큰을 가져와서
  * 백엔드 API를 호출하는 헬퍼 함수들
+ *
+ * ## `import "server-only"` 를 스스로 단 이유
+ *
+ * 이 모듈은 `auth()` 와 `lib/server-config` 를 통해 이미 서버 전용이었지만
+ * 그 사실을 **자기가 말하지 않았다.** 클라이언트 컴포넌트가 실수로 임포트하면
+ * 빌드는 깨지되 오류가 `lib/server-config.ts:1` 을 가리켜, 정작 건드리면 안 되는
+ * 모듈이 어느 것인지 말해주지 않았다(실제로 그 상태로 dev 에 남아 있었다).
+ *
+ * 명시적으로 달아 두면 위반 지점이 여기로 찍힌다. 클라이언트에서 부를 것은
+ * `lib/ui-frame-client.ts` 처럼 **서버 임포트가 없는 모듈**에 둔다.
  */
+
+import "server-only";
 
 import { auth } from "@/app/(auth)/auth";
 import { getBackendUrl } from "@/lib/server-config";
@@ -124,38 +136,5 @@ export async function callBackendAPIWithKey(
     },
   });
 
-  return response;
-}
-
-/**
- * Phase 8 (A2UI): UI 폼 제출 — 서버사이드 Route Handler를 거쳐 백엔드로 전달
- *
- * POST /api/v1/ui/submit 은 인증 토큰이 필요하므로,
- * Next.js Route Handler (/api/ui-submit) 경유 방식을 사용한다.
- * 클라이언트 컴포넌트에서 직접 호출 가능.
- */
-export async function submitUIFrameClient(
-  frameId: string,
-  sessionId: string,
-  values: Record<string, unknown>,
-  conversationId?: string
-): Promise<Response> {
-  const response = await fetch("/api/ui-submit", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      frame_id: frameId,
-      session_id: sessionId,
-      values,
-      conversation_id: conversationId,
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.detail || err.message || `UI submit failed (${response.status})`);
-  }
-
-  // 호출자가 SSE 스트림을 직접 읽음
   return response;
 }
