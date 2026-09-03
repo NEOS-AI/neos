@@ -2,6 +2,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import equal from "fast-deep-equal";
 import { memo, useState } from "react";
+import { readApprovalResumeStream } from "@/lib/approval-stream";
 import { forgetActiveRun } from "@/lib/deep-analysis/active-run-store";
 import type { Vote } from "@/lib/db/schema";
 import type { ApprovalRequest } from "@/lib/open-responses-types";
@@ -167,52 +168,22 @@ const PurePreviewMessage = ({
     settleDeepAnalysis("failed");
   };
 
-  const readApprovalResumeStream = async (sessionId: string) => {
+  /**
+   * approval resume 결과를 스트리밍으로 받아온다. 실제 SSE 파싱은
+   * `readApprovalResumeStream`(`@/lib/approval-stream`)에 있는 순수
+   * 함수가 맡는다 -- 여기서는 fetch만 하고 바이트 파싱은 위임한다.
+   */
+  const fetchApprovalResumeStream = async (sessionId: string) => {
     const response = await fetch(
       `/api/approval/stream/${encodeURIComponent(sessionId)}`
     );
     if (!response.ok) {
       throw new Error("Failed to resume approval stream");
     }
-    if (!response.body) return;
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let eventName = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        if (line.startsWith("event: ")) {
-          eventName = line.slice("event: ".length).trim();
-          continue;
-        }
-        if (!line.startsWith("data: ")) continue;
-
-        const payloadText = line.slice("data: ".length).trim();
-        const payload = JSON.parse(payloadText);
-        if (eventName === "completed") {
-          const responseText =
-            payload.response || payload.data?.response || "";
-          updateApprovalMessage({
-            text: responseText,
-            responseStatus: "completed",
-            clearApprovals: true,
-          });
-          return;
-        }
-        if (eventName === "error") {
-          throw new Error(payload.message || "Approval resume failed");
-        }
-      }
+    if (!response.body) {
+      return { status: "ended" as const };
     }
+    return readApprovalResumeStream(response.body);
   };
 
   const respondToApproval = async (
@@ -244,7 +215,23 @@ const PurePreviewMessage = ({
         ...prev,
         [approval.request_id]: decision,
       }));
-      await readApprovalResumeStream(sessionId);
+
+      const outcome = await fetchApprovalResumeStream(sessionId);
+      if (outcome.status !== "completed") {
+        // 종결 이벤트(completed/error) 없이 스트림이 끝난 경우도 포함한다
+        // -- 그것은 성공이 아니다. 아래 catch가 실패로 확정한다.
+        throw new Error(
+          outcome.status === "error"
+            ? outcome.message
+            : "Approval resume stream ended without a result"
+        );
+      }
+
+      updateApprovalMessage({
+        text: outcome.text,
+        responseStatus: "completed",
+        clearApprovals: true,
+      });
       setApprovalStatuses((prev) => ({
         ...prev,
         [approval.request_id]: "completed",
