@@ -110,6 +110,59 @@ export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
   }));
 }
 
+/**
+ * BE `MessageResponse.attachments` (`{type, url, name, size, metadata}`) 를
+ * FE file 파트로 되살린다.
+ *
+ * FE file 파트의 필드명은 `filename` 이다 (`name` 이 아니다) — Task 3 이 정한
+ * 정본 모양이고 `components/message.tsx` 가 `attachment.filename` 을 읽는다.
+ * `mediaType` 은 `attachment.metadata.mediaType` 에 들어 있다
+ * (`extractAttachments`, `lib/message-parts.ts:97`가 내보낼 때 그 자리에 넣는다).
+ *
+ * 방어: `attachments` 가 없거나 배열이 아니거나 항목에 `url` 이 없으면 그
+ * 항목(또는 전체)을 조용히 건너뛴다 — 첨부 하나가 깨졌다고 메시지 렌더가
+ * 죽으면 안 된다 (`lib/harness/metadata.ts` 와 같은 이유).
+ */
+function attachmentsToFileParts(
+  attachments: unknown
+): UIMessagePart<CustomUIDataTypes, ChatTools>[] {
+  if (!Array.isArray(attachments)) {
+    return [];
+  }
+
+  const fileParts: UIMessagePart<CustomUIDataTypes, ChatTools>[] = [];
+
+  for (const attachment of attachments) {
+    if (!attachment || typeof attachment !== 'object') {
+      continue;
+    }
+
+    const { url, name, metadata } = attachment as {
+      url?: unknown;
+      name?: unknown;
+      metadata?: unknown;
+    };
+
+    if (typeof url !== 'string') {
+      continue;
+    }
+
+    const mediaType =
+      metadata && typeof metadata === 'object'
+        ? (metadata as Record<string, unknown>).mediaType
+        : undefined;
+
+    fileParts.push({
+      type: 'file',
+      url,
+      ...(typeof name === 'string' ? { filename: name } : {}),
+      ...(typeof mediaType === 'string' ? { mediaType } : {}),
+    } as UIMessagePart<CustomUIDataTypes, ChatTools>);
+  }
+
+  return fileParts;
+}
+
 export function convertBackendMessagesToUI(
   backendMessages: any[]
 ): ChatMessage[] {
@@ -162,6 +215,7 @@ export function convertBackendMessagesToUI(
           type: 'text' as const,
           text: msg.content,
         },
+        ...attachmentsToFileParts(msg.attachments),
       ] as UIMessagePart<CustomUIDataTypes, ChatTools>[],
       metadata,
     };
