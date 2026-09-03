@@ -55,6 +55,25 @@ test("직전 이벤트 이름이 이벤트 경계를 넘어 새지 않는다", a
   assert.equal(result.status, "ended");
 });
 
+test("이벤트 경계를 넘으면 event: 줄이 없는 payload가 직전 이름으로 오판되지 않는다 (실제 감사 와이어 형태)", async () => {
+  // 감사 finding #3의 실제 재현 형태: node_complete 다음에 event: 줄 없이
+  // payload.event === "error"만 있는 데이터가 온다. eventName이 이벤트
+  // 경계(빈 줄)에서 리셋되지 않으면 `kind = eventName || payload.event`가
+  // 여전히 "node_complete"를 골라 error도 completed도 아닌 채로 스트림이
+  // 끝나 { status: "ended" }가 나온다 -- 이는 "성공"이 아닌데도 예전 호출부는
+  // 이걸 완료로 오판했다. eventName 리셋이 있어야만 payload.event로 폴백해
+  // error를 제대로 잡는다. (기존 :43 테스트는 이 사례를 못 잡는다 -- 거기선
+  // payload에 event 키 자체가 없어서 리셋 여부와 무관하게 결과가 "ended"로 같다.)
+  const result = await readApprovalResumeStream(
+    streamOf([
+      'event: node_complete\ndata: {"node": "a"}\n\n',
+      'data: {"event": "error", "message": "타임아웃"}\n\n',
+    ])
+  );
+
+  assert.deepEqual(result, { status: "error", message: "타임아웃" });
+});
+
 test("깨진 JSON 줄은 건너뛰고 스트림 전체를 죽이지 않는다", async () => {
   const result = await readApprovalResumeStream(
     streamOf([

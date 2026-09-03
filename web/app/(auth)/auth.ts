@@ -58,7 +58,6 @@ async function refreshAccessToken(token: any) {
  * (#7). TTL "계산"은 여기서 하지 않는다 — 원값을 그대로 옮길 뿐이고,
  * 실제 계산은 전부 `resolveAccessTokenExpiry`가 한다.
  */
-// biome-ignore lint/suspicious/noExplicitAny: BE JSON 응답은 이미 이 파일 전체에서 `any`로 다룬다
 export function extractBackendTokenFields(data: any) {
   return {
     backendAccessToken: data?.access_token,
