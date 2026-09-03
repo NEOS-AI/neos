@@ -6,6 +6,7 @@ import {
   extractTextContent,
   SUPPORTED_ATTACHMENT_MIME_TYPES,
 } from "../../lib/message-parts";
+import { postRequestBodySchema } from "../../app/(chat)/api/chat/schema";
 
 /**
  * 회귀 테스트: 채팅 라우트가 file 파트를 전량 폐기하던 문제(FE_AUDIT_260717 §3.2).
@@ -18,7 +19,7 @@ describe("message parts → backend payload", () => {
       {
         type: "file",
         url: "https://x/a.png",
-        name: "a.png",
+        filename: "a.png",
         mediaType: "image/png",
       },
       { type: "text", text: "second" },
@@ -27,13 +28,13 @@ describe("message parts → backend payload", () => {
     assert.equal(content, "first\nsecond");
   });
 
-  test("file 파트가 백엔드 attachments로 보존된다 (폐기되지 않는다)", () => {
+  test("legacy file 파트(filename)가 백엔드 attachments(name)로 변환된다 (폐기되지 않는다)", () => {
     const attachments = extractAttachments([
       { type: "text", text: "설명해줘" },
       {
         type: "file",
         url: "https://storage/report.pdf",
-        name: "report.pdf",
+        filename: "report.pdf",
         mediaType: "application/pdf",
       },
     ]);
@@ -85,13 +86,13 @@ describe("message parts → backend payload", () => {
       {
         type: "file",
         url: "https://x/1.png",
-        name: "1.png",
+        filename: "1.png",
         mediaType: "image/png",
       },
       {
         type: "file",
         url: "https://x/2.pdf",
-        name: "2.pdf",
+        filename: "2.pdf",
         mediaType: "application/pdf",
       },
     ]);
@@ -100,6 +101,87 @@ describe("message parts → backend payload", () => {
       attachments.map((a) => a.name),
       ["1.png", "2.pdf"]
     );
+  });
+});
+
+/**
+ * 경계 고정: FE 파트 = `filename`, 와이어(BE·OpenResponses) = `name`.
+ * (2026-09-03 히스토리 감사 Task 3 — 작성기가 `name`을 쓰고 렌더러가
+ * `filename`을 읽어서 모든 첨부가 새로고침 전에도 "file"로만 보이던 버그)
+ */
+describe("FE/wire boundary: filename ↔ name", () => {
+  test("legacy file 파트가 filename을 쓰면 BackendAttachment.name으로 변환된다", () => {
+    const attachments = extractAttachments([
+      {
+        type: "file",
+        url: "https://storage/spec.docx",
+        filename: "spec.docx",
+        mediaType:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      },
+    ]);
+
+    assert.deepEqual(attachments, [
+      {
+        type: "file",
+        url: "https://storage/spec.docx",
+        name: "spec.docx",
+        metadata: {
+          mediaType:
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        },
+      },
+    ]);
+  });
+
+  test("input_file 파트는 여전히 file.name을 읽는다 (외부 스펙 필드 불변)", () => {
+    const attachments = extractAttachments([
+      {
+        type: "input_file",
+        file: {
+          url: "https://storage/spec.docx",
+          name: "spec.docx",
+          media_type:
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        },
+      },
+    ]);
+
+    assert.deepEqual(attachments, [
+      {
+        type: "file",
+        url: "https://storage/spec.docx",
+        name: "spec.docx",
+        metadata: {
+          mediaType:
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        },
+      },
+    ]);
+  });
+
+  test("작성기가 만드는 legacy file 파트(filename)가 postRequestBodySchema.parse를 통과한다", () => {
+    const body = {
+      id: "5b7b6d8e-8e0b-4b8a-9c0b-0e6b1a2b3c4d",
+      message: {
+        id: "6c8c7e9f-9f1c-5c9b-ad1c-1f7c2b3c4d5e",
+        role: "user" as const,
+        parts: [
+          { type: "text" as const, text: "이 파일 봐줘" },
+          {
+            type: "file" as const,
+            url: "https://storage/report.pdf",
+            filename: "report.pdf",
+            mediaType: "application/pdf" as const,
+          },
+        ],
+      },
+      selectedChatModel: "claude-sonnet-5",
+      selectedVisibilityType: "private" as const,
+    };
+
+    const result = postRequestBodySchema.parse(body);
+    assert.equal(result.message.parts.length, 2);
   });
 });
 

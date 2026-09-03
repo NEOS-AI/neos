@@ -55,7 +55,7 @@ const textPartSchema = z.object({
 const filePartSchema = z.object({
   type: z.enum(["file"]),
   mediaType: attachmentMediaTypeSchema,
-  name: z.string().min(1).max(100),
+  filename: z.string().min(1).max(100),
   url: z.string().url(),
 });
 
@@ -131,7 +131,7 @@ export function convertToOpenResponsesPart(
       file: {
         url: part.url,
         media_type: part.mediaType,
-        name: part.name,
+        name: part.filename,
       },
     };
   }
@@ -156,7 +156,7 @@ export function convertToLegacyPart(
       type: "file",
       url: part.file.url,
       mediaType: part.file.media_type,
-      name: part.file.name,
+      filename: part.file.name,
     };
   }
   // Already in legacy format
