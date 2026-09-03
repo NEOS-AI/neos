@@ -685,11 +685,17 @@ class ChatRepository:
     ) -> List[Message]:
         """대화의 메시지 목록 조회
 
+        커서 없음: sequence_number 기준 가장 최근(마지막) limit개를 오름차순으로 반환한다.
+        before_sequence 지정: 해당 시퀀스보다 작은 메시지 중 가장 최근 limit개를 오름차순으로 반환한다
+        (과거로 페이지네이션).
+        after_sequence 지정: 해당 시퀀스보다 큰 메시지 중 앞에서부터 limit개를 오름차순으로 반환한다
+        (꼬리가 아니라 커서 이후를 앞에서부터 따라잡는 것).
+
         Args:
             conversation_id: 대화 ID
             limit: 최대 결과 수
-            before_sequence: 이전 시퀀스 번호
-            after_sequence: 이후 시퀀스 번호
+            before_sequence: 이 시퀀스 번호 미만 중 최신 limit개 (과거 페이지네이션)
+            after_sequence: 이 시퀀스 번호 초과 중 앞에서부터 limit개 (이후 따라잡기)
 
         Returns:
             메시지 목록

@@ -29,7 +29,7 @@ from neos.database.connection import db_manager
 from neos.database.models import User
 from neos.workflow.graph import multi_agent_workflow
 from neos.workflow.resume_graph import ResumeGraphUnavailable, resume_graph_for
-from neos.workflow.stream_manager import stream_manager
+from neos.workflow.stream_manager import StreamEvent, stream_manager
 
 logger = logging.getLogger(__name__)
 
@@ -309,7 +309,25 @@ async def stream_resume_result(
                 if event.event in ("completed", "error"):
                     break
         except asyncio.TimeoutError:
-            yield f"data: {json.dumps({'event': 'error', 'message': '워크플로우 응답 대기 타임아웃'})}\n\n"
+            # 정상 경로와 같은 포맷터를 태운다 -- 손으로 `data:` 한 줄만
+            # 내보내면 `event:` 줄이 빠져서, event: 줄로만 종류를 판별하는
+            # 소비자에게 이 payload가 유실된다 (감사 finding #3).
+            #
+            # id는 비워 둔다: 이 분기는 항상 스트림의 마지막 이벤트이고
+            # (루프가 여기서 끝난다) session.event_buffer에도 남기지
+            # 않으므로, id를 발급해 봐야 대응하는 버퍼 항목 없는 빈
+            # 구멍만 세션의 id 시퀀스에 남긴다. 리뷰 지적 반영 -- 최초
+            # 구현은 session.last_event_id를 증가시켰지만 event_buffer에는
+            # 추가하지 않아 그 절반짜리 미러링 자체가 문제였다.
+            timeout_event = StreamEvent(
+                id="",
+                event="error",
+                data=json.dumps(
+                    {"event": "error", "message": "워크플로우 응답 대기 타임아웃"},
+                    ensure_ascii=False,
+                ),
+            )
+            yield timeout_event.to_sse_format()
 
     return StreamingResponse(
         generate(),

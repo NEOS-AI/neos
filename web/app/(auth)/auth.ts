@@ -2,10 +2,7 @@ import NextAuth, { type DefaultSession } from "next-auth";
 import type { DefaultJWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
-import {
-  DEFAULT_ACCESS_TOKEN_TTL_MS,
-  mergeRefreshedTokens,
-} from "@/lib/auth-tokens";
+import { mergeRefreshedTokens, resolveAccessTokenExpiry } from "@/lib/auth-tokens";
 import { DUMMY_PASSWORD } from "@/lib/constants";
 import { getBackendUrl, getGoogleOAuthConfig } from "@/lib/server-config";
 import { compare } from "bcrypt-ts";
@@ -54,6 +51,45 @@ async function refreshAccessToken(token: any) {
   }
 }
 
+/**
+ * BE 로그인/게스트/구글-OAuth 응답에서 토큰 관련 필드만 뽑는다.
+ * `authorize()` 세 곳과 google `signIn` 콜백이 이 함수 하나를 공유한다 —
+ * `expires_in`을 셋 중 하나라도 빼먹으면 그 경로만 하드코딩 15분으로 되돌아간다
+ * (#7). TTL "계산"은 여기서 하지 않는다 — 원값을 그대로 옮길 뿐이고,
+ * 실제 계산은 전부 `resolveAccessTokenExpiry`가 한다.
+ */
+export function extractBackendTokenFields(data: any) {
+  return {
+    backendAccessToken: data?.access_token,
+    backendRefreshToken: data?.refresh_token,
+    expiresIn: data?.expires_in,
+  };
+}
+
+/**
+ * `jwt` 콜백에서 `accessTokenExpires`를 결정하는 부분만 순수 함수로 뺐다 —
+ * 콜백 자체는 NextAuth 내부 배선이라 직접 호출해 테스트하기 어렵다.
+ *
+ * TTL 계산은 전부 `resolveAccessTokenExpiry`(`lib/auth-tokens.ts`)에 위임한다.
+ * 여기서 고르는 것은 "어느 값을 넣을지"뿐이다:
+ * - 로그인/가입 시점(`user`가 있음): 방금 로그인한 `user.expiresIn` (BE `expires_in`)
+ * - 세션 갱신 시점(`trigger === "update"`): 클라이언트가 실어 보낸 `session.expiresIn`
+ *   (없으면 헬퍼가 기본 TTL로 폴백한다 — 이 분기는 BE 응답이 없으므로 그 값을
+ *   신뢰하는 것이 아니라 폴백을 보장하는 것이 목적이다)
+ */
+export function computeAccessTokenExpiry(params: {
+  user?: { expiresIn?: unknown } | null;
+  trigger?: "signIn" | "signUp" | "update";
+  session?: { expiresIn?: unknown } | null;
+  now?: number;
+}): number {
+  const now = params.now ?? Date.now();
+  if (params.user) {
+    return resolveAccessTokenExpiry(params.user.expiresIn, now);
+  }
+  return resolveAccessTokenExpiry(params.session?.expiresIn, now);
+}
+
 declare module "next-auth" {
   interface Session extends DefaultSession {
     user: {
@@ -80,6 +116,8 @@ declare module "next-auth" {
     usageQuota?: number;
     backendAccessToken?: string;
     backendRefreshToken?: string;
+    /** BE `expires_in`(초). 원값 그대로 실어 나른다 — 계산은 `computeAccessTokenExpiry`가 한다. */
+    expiresIn?: unknown;
   }
 }
 
@@ -142,8 +180,7 @@ export const {
             backendRole: data.user.role,
             subscriptionTier: data.user.subscription_tier,
             usageQuota: data.user.usage_quota,
-            backendAccessToken: data.access_token,
-            backendRefreshToken: data.refresh_token,
+            ...extractBackendTokenFields(data),
           };
         } catch (error) {
           console.error("Backend login failed:", error);
@@ -177,8 +214,7 @@ export const {
             name: data.user.username,
             type: "guest" as UserType,
             backendUserId: data.user.user_id,
-            backendAccessToken: data.access_token,
-            backendRefreshToken: data.refresh_token,
+            ...extractBackendTokenFields(data),
           };
         } catch (error) {
           console.error("Backend guest login failed:", error);
@@ -208,8 +244,7 @@ export const {
 
           user.id = data.user.user_id;   // BE user_id를 직접 사용
           user.backendUserId = data.user.user_id;
-          user.backendAccessToken = data.access_token;
-          user.backendRefreshToken = data.refresh_token;
+          Object.assign(user, extractBackendTokenFields(data));
           user.type = mapBackendRole(data.user.role ?? "user");
           user.backendRole = data.user.role;
           user.subscriptionTier = data.user.subscription_tier;
@@ -232,13 +267,13 @@ export const {
         token.usageQuota = user.usageQuota;
         token.backendAccessToken = user.backendAccessToken;
         token.backendRefreshToken = user.backendRefreshToken;
-        token.accessTokenExpires = Date.now() + DEFAULT_ACCESS_TOKEN_TTL_MS;
+        token.accessTokenExpires = computeAccessTokenExpiry({ user });
         token.error = undefined;
       }
 
       if (trigger === "update" && session?.backendAccessToken) {
         token.backendAccessToken = session.backendAccessToken;
-        token.accessTokenExpires = Date.now() + DEFAULT_ACCESS_TOKEN_TTL_MS;
+        token.accessTokenExpires = computeAccessTokenExpiry({ trigger, session });
       }
 
       if (token.accessTokenExpires && token.backendRefreshToken) {
