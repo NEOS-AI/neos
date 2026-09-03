@@ -23,9 +23,12 @@
   },
   "include": [
     "next-env.d.ts",
-    "tests/dom-setup.ts",
-    "tests/source/**/*.ts",
-    "tests/source/**/*.tsx",
+    // `tests/**` 전부다. 처음에는 `tests/dom-setup.ts` 와 `tests/source/**` 만
+    // 적었는데, 그러면 `tests/render.tsx` 같은 헬퍼가 **여기서도 빠진다** --
+    // 이 파일이 존재하는 이유(테스트가 타입체크 밖에 있었다)를 헬퍼에 대해
+    // 그대로 반복하는 셈이다. 목록으로 적으면 새 파일마다 조용히 낡는다.
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
     "app/**/*.ts",
     "app/**/*.tsx",
     "components/**/*.ts",

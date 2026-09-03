@@ -28,11 +28,13 @@ from neos.api.adapters.stream_adapter import (
     create_stream_generator,
     format_done_token,
     format_sse_event,
+    parse_harness_progress_event,
 )
 from neos.api.models.open_responses import (
     ErrorInfo,
     ItemStatus,
     NeosApprovalRequestEvent,
+    NeosDeepAnalysisStartedEvent,
     NeosUIFrameEvent,
     NeosWorkflowProgressEvent,
     OutputItemDoneEvent,
@@ -441,14 +443,41 @@ class ChatStreamPipeline:
                             ))
 
                     elif event.event == "agent_progress":
-                        yield format_sse_event(NeosWorkflowProgressEvent(
-                            progress_percent=event.progress_percent,
-                            message=event.content if event.content else None,
-                        ))
+                        # 하네스 노드의 진행은 JSON 페이로드를 content에 실어 보낸다.
+                        # 그것을 `neos:harness`로 풀어주지 않으면 프론트의
+                        # 하네스 카드가 켜지지 않고, 날 JSON이 진행 메시지로 샌다.
+                        #
+                        # ⚠️ `on_node_progress`는 `agent_progress`로 발행한다
+                        # (`workflow_stream_handlers.py:202`). `node_progress`를
+                        # 기다리면 영원히 오지 않는다 — 그 이름은 DB 로깅용이다.
+                        harness_event = parse_harness_progress_event(
+                            node_name=event.node_name,
+                            message=event.content,
+                        )
+                        if harness_event is not None:
+                            yield format_sse_event(harness_event)
+                        else:
+                            yield format_sse_event(NeosWorkflowProgressEvent(
+                                progress_percent=event.progress_percent,
+                                message=event.content if event.content else None,
+                            ))
 
                     elif event.event == "ui_frame":
                         yield format_sse_event(NeosUIFrameEvent(
                             ui_frame=event.data.get("ui_frame", {})
+                        ))
+
+                    # Phase 3b (D23): deep analysis job 핸들 → 챗 SSE.
+                    # 이 이벤트가 유실되면 job은 돌면서 과금되지만 프론트는
+                    # run_id를 몰라 `GET /{run_id}/events`를 열지 못한다.
+                    # 챗 턴 자체는 여기서 멈추지 않는다 — 진행은 전용 스트림이 나른다.
+                    elif event.event == "deep_analysis_started":
+                        yield format_sse_event(NeosDeepAnalysisStartedEvent(
+                            run_id=event.data.get("run_id", ""),
+                            events_url=event.data.get("events_url", ""),
+                            assistant_message_id=event.data.get(
+                                "assistant_message_id"
+                            ),
                         ))
 
                     elif event.event == "approval_request":

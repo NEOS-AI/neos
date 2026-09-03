@@ -1,4 +1,15 @@
-"""legacy 스트림 이벤트 → neos:deep_analysis_started 변환 고정 (D23)."""
+"""legacy 스트림 이벤트 → neos:deep_analysis_started 변환 고정 (D23).
+
+챗 SSE 배관(워크플로우 이벤트 → `neos:deep_analysis_started`)은
+`tests/api/services/test_chat_stream_pipeline_autonomy.py`가
+`_run_workflow`를 실제로 돌려서 고정한다.
+
+여기 있던 `test_chat_handler_maps_deep_analysis_started`는 그 배관을
+`chat_handlers.py`의 **소스 문자열**로 확인했는데, 그 파일에서 분기를 갖고
+있던 것은 프론트가 쓰지 않는 `stream_message_legacy` 쪽이었다. 운영 경로
+(`ChatStreamPipeline`)에는 분기가 없는데도 테스트는 초록이었다 —
+문자열 검사는 "어느 코드가 실행되는가"를 묻지 못한다. 그래서 지웠다.
+"""
 
 import pytest
 
@@ -30,17 +41,3 @@ def test_adapter_converts_deep_analysis_started():
     assert dumped["run_id"] == "run00009"
     assert dumped["events_url"] == "/api/v1/deep-analysis/run00009/events"
     assert dumped["assistant_message_id"] == "msg-9"
-
-
-def test_chat_handler_maps_deep_analysis_started():
-    """챗 SSE 루프가 이 이벤트를 흘려보내는지 소스 수준으로 고정한다.
-
-    챗 스트리밍 루프는 LLM/DB에 깊이 얽혀 있어 단위 실행이 비싸다. 배관이
-    빠지면 프론트가 job 핸들을 아예 못 받으므로(AC4 파손) 최소한 존재는
-    강제한다.
-    """
-    from pathlib import Path
-
-    source = Path("neos/api/handlers/chat_handlers.py").read_text(encoding="utf-8")
-    assert 'event.event == "deep_analysis_started"' in source
-    assert "NeosDeepAnalysisStartedEvent" in source

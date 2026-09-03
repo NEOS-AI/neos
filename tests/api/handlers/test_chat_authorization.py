@@ -66,6 +66,23 @@ def _route(path: str, method: str) -> APIRoute:
     return next(route for route in routes if route.path == path and method in route.methods)
 
 
+def test_chat_router_exposes_exactly_one_streaming_route():
+    """스트리밍 구현은 하나여야 한다.
+
+    구현이 둘로 갈라져 있던 동안, 워크플로우 이벤트 두 종류
+    (`deep_analysis_started` · 하네스 진행)를 한쪽만 처리했고 프론트가 쓰는
+    쪽이 처리하지 않는 쪽이었다. 갈라짐 자체가 그 버그의 매개였으므로,
+    "스트리밍 경로가 하나"라는 사실을 테스트로 고정한다.
+    """
+    streaming_paths = {
+        route.path
+        for route in chat_handlers.router.routes
+        if isinstance(route, APIRoute) and "messages/stream" in route.path
+    }
+
+    assert streaming_paths == {"/conversations/{conversation_id}/messages/stream"}
+
+
 def _analytics() -> dict:
     return {
         "conversation_id": "c1",
@@ -356,7 +373,6 @@ def test_message_routes_declare_access_dependencies():
         ("/messages/{message_id}", "DELETE"): "get_owned_message",
         ("/messages/{message_id}/regenerate", "POST"): "get_owned_message",
         ("/conversations/{conversation_id}/messages/stream", "POST"): "get_owned_conversation",
-        ("/conversations/{conversation_id}/messages/stream_legacy", "POST"): "get_owned_conversation",
     }
 
     for (path, method), dependency_name in expected.items():
@@ -447,9 +463,8 @@ def test_stream_message_hides_non_owner_and_missing_before_pipeline(
     [
         ("messages", False),
         ("messages/stream", True),
-        ("messages/stream_legacy", False),
     ],
-    ids=["ordinary", "current-stream", "legacy-stream"],
+    ids=["ordinary", "current-stream"],
 )
 @pytest.mark.parametrize(
     ("parent_message_id", "parent_message", "parent_conversation"),
@@ -513,8 +528,8 @@ def test_message_creation_routes_hide_invalid_parent_before_write(
 
 @pytest.mark.parametrize(
     "route_suffix",
-    ["messages", "messages/stream", "messages/stream_legacy"],
-    ids=["ordinary", "current-stream", "legacy-stream"],
+    ["messages", "messages/stream"],
+    ids=["ordinary", "current-stream"],
 )
 @pytest.mark.parametrize(
     "parent_message_id",
@@ -572,11 +587,6 @@ def test_message_creation_routes_preserve_valid_parent_success(
         assert response.text == "data: [DONE]\n\n"
     else:
         assert add_message.await_args_list[0].kwargs["parent_message_id"] == parent_message_id
-        if route_suffix == "messages/stream_legacy":
-            assert response.headers["content-type"].startswith("text/event-stream")
-            assert "response.completed" in response.text
-            assert "response.failed" not in response.text
-            assert response.text.endswith("data: [DONE]\n\n")
 
 
 def test_edit_message_request_accepts_omitted_deprecated_user_id():
