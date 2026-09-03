@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import type { UIFramePayload, UIFrameComponent } from "@/lib/open-responses-types";
-import { submitUIFrameClient } from "@/lib/backend-api";
+import { submitUIFrameClient } from "@/lib/ui-frame-client";
 import { readSseStream } from "@/lib/sse-stream";
 import { TextField } from "./components/TextField";
 import { DatePicker } from "./components/DatePicker";

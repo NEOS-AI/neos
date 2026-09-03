@@ -151,10 +151,16 @@ _FRONTEND_WORKFLOW = pathlib.Path(".github/workflows/frontend-ci.yml")
 #: `**/*.test.ts(x)` 를 `exclude` 하므로 `tsc --noEmit` 은 **테스트 파일을 한
 #: 건도 보지 않는다.** 2026-09-02 에 처음 돌려 보니 오류 셋이 숨어 있었고 그중
 #: 둘이 `deep-analysis-reader.test.ts` 였다. 둘은 서로를 대신하지 못한다.
+#: `pnpm build` 가 있는 이유: 앞의 셋이 **원리적으로 못 잡는** 것이 있다.
+#: dev 에 `export const dynamic`(`cacheComponents` 와 비호환)과 `server-only`
+#: 위반이 남아 있었는데 셋 다 초록이었다 -- 둘 다 번들러 경계의 문제라 타입에도
+#: 단위 테스트에도 걸리지 않는다. 그리고 CI 가 build 를 안 돌려서, 배포할 수
+#: 없는 상태가 알려지지 않은 채였다(2026-09-03, §5.8).
 _REQUIRED_FRONTEND_COMMANDS = (
     "pnpm test:source",
     "tsc --noEmit",
     "pnpm typecheck:tests",
+    "pnpm build",
 )
 
 
