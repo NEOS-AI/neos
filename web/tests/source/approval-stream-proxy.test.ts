@@ -19,25 +19,21 @@ import { before, beforeEach, describe, test } from "node:test";
  * 상태 코드 통과, 스트림 본문 통과.
  */
 
-// biome-ignore lint/suspicious/noExplicitAny: Node 내부 로더는 공개 타입이 없다
 type CallBackendAPIStub = (endpoint: string, options: any) => Promise<Response>;
 
 let capturedEndpoint: string | undefined;
-// biome-ignore lint/suspicious/noExplicitAny: 캡처 대상은 fetch RequestInit 형태 그대로
 let capturedOptions: any;
 let stubResponse: Response;
 
-const stubCallBackendAPI: CallBackendAPIStub = async (endpoint, options) => {
+const stubCallBackendAPI: CallBackendAPIStub = (endpoint, options) => {
   capturedEndpoint = endpoint;
   capturedOptions = options;
-  return stubResponse;
+  return Promise.resolve(stubResponse);
 };
 
 async function importRoute() {
-  // biome-ignore lint/suspicious/noExplicitAny: Node 내부 로더는 공개 타입이 없다
   const ModuleAny = Module as any;
   const originalLoad = ModuleAny._load;
-  // biome-ignore lint/suspicious/noExplicitAny: 위와 동일
   ModuleAny._load = (request: string, ...rest: any[]) => {
     if (request === "@/lib/backend-api") {
       return { callBackendAPI: stubCallBackendAPI };
@@ -53,8 +49,10 @@ async function importRoute() {
   }
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: 동적 import 결과 형태를 미리 좁힐 수 없다
 let route: any;
+
+const COMMENT_PATTERN = /\/\*[\s\S]*?\*\/|\/\/.*$/gm;
+const EXPORT_DYNAMIC_PATTERN = /export const dynamic/;
 
 before(async () => {
   route = await importRoute();
@@ -83,9 +81,9 @@ test("cacheComponents 빌드에서 금지된 `export const dynamic`을 쓰지 �
     "../../app/(chat)/api/approval/stream/[sessionId]/route.ts"
   );
   const source = readFileSync(routePath, "utf8");
-  const code = source.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+  const code = source.replace(COMMENT_PATTERN, "");
   assert.equal(
-    /export const dynamic/.test(code),
+    EXPORT_DYNAMIC_PATTERN.test(code),
     false,
     "이 라우트는 request.signal을 읽으므로 요청 시점 API 사용 자체로 이미 " +
       "동적이다 — `export const dynamic`을 따로 선언할 필요도, 여지도 없다"

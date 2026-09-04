@@ -56,6 +56,7 @@ const PurePreviewMessage = ({
 }) => {
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [approvalStatuses, setApprovalStatuses] = useState<Record<string, string>>({});
+  const [approvalErrors, setApprovalErrors] = useState<Record<string, string>>({});
 
   const attachmentsFromMessage = message.parts.filter(
     (part) => part.type === "file"
@@ -195,6 +196,10 @@ const PurePreviewMessage = ({
       ...prev,
       [approval.request_id]: "submitting",
     }));
+    setApprovalErrors((prev) => {
+      const { [approval.request_id]: _stale, ...rest } = prev;
+      return rest;
+    });
 
     try {
       const response = await fetch("/api/approval/respond", {
@@ -240,6 +245,13 @@ const PurePreviewMessage = ({
       setApprovalStatuses((prev) => ({
         ...prev,
         [approval.request_id]: "error",
+      }));
+      // 백엔드가 준 이유(예: "워크플로우 응답 대기 타임아웃")를 그대로 보여준다
+      // -- 실패했다는 사실만이 아니라 왜인지도 화면에 도달해야 한다.
+      setApprovalErrors((prev) => ({
+        ...prev,
+        [approval.request_id]:
+          error instanceof Error ? error.message : "Approval response failed",
       }));
       updateApprovalMessage({
         responseStatus: "failed",
@@ -369,7 +381,8 @@ const PurePreviewMessage = ({
                       </Button>
                       {approvalStatuses[approval.request_id] === "error" && (
                         <span className="self-center text-destructive text-xs">
-                          Approval response failed
+                          {approvalErrors[approval.request_id] ??
+                            "Approval response failed"}
                         </span>
                       )}
                     </div>

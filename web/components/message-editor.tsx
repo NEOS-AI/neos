@@ -88,9 +88,20 @@ export function MessageEditor({
               const index = messages.findIndex((m) => m.id === message.id);
 
               if (index !== -1) {
+                // 텍스트만 갈아치우고 file 파트는 보존한다. 순서는 텍스트가
+                // 먼저, 첨부가 뒤 -- `convertBackendMessagesToUI`
+                // (`lib/utils.ts`)가 새로고침 복원 시 만드는 순서와 같게
+                // 맞춘다. 그래야 편집한 메시지와 새로고침한 메시지가 같은
+                // 모양이 된다.
+                const attachmentParts = message.parts.filter(
+                  (part) => part.type === "file"
+                );
                 const updatedMessage: ChatMessage = {
                   ...message,
-                  parts: [{ type: "text", text: draftContent }],
+                  parts: [
+                    { type: "text", text: draftContent },
+                    ...attachmentParts,
+                  ],
                 };
 
                 return [...messages.slice(0, index), updatedMessage];

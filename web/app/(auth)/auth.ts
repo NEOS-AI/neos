@@ -76,6 +76,13 @@ export function extractBackendTokenFields(data: any) {
  * - 세션 갱신 시점(`trigger === "update"`): 클라이언트가 실어 보낸 `session.expiresIn`
  *   (없으면 헬퍼가 기본 TTL로 폴백한다 — 이 분기는 BE 응답이 없으므로 그 값을
  *   신뢰하는 것이 아니라 폴백을 보장하는 것이 목적이다)
+ *
+ * 분기는 `trigger === "update"`로 정한다 (예전엔 `params.user`의 truthiness가
+ * 정했는데, 그러면 `trigger` 파라미터를 받아만 놓고 읽지는 않는 꼴이었다).
+ * 두 호출부(`jwt` 콜백의 로그인 분기·갱신 분기) 중 어느 쪽도 `user`와
+ * `trigger: "update"`를 동시에 넘기지 않으므로 이 전환은 동작을 바꾸지
+ * 않는다 -- 세션 갱신이 아니면 항상 `user` 쪽을, 갱신이면 항상 `session`
+ * 쪽을 본다.
  */
 export function computeAccessTokenExpiry(params: {
   user?: { expiresIn?: unknown } | null;
@@ -84,10 +91,10 @@ export function computeAccessTokenExpiry(params: {
   now?: number;
 }): number {
   const now = params.now ?? Date.now();
-  if (params.user) {
-    return resolveAccessTokenExpiry(params.user.expiresIn, now);
+  if (params.trigger === "update") {
+    return resolveAccessTokenExpiry(params.session?.expiresIn, now);
   }
-  return resolveAccessTokenExpiry(params.session?.expiresIn, now);
+  return resolveAccessTokenExpiry(params.user?.expiresIn, now);
 }
 
 declare module "next-auth" {
