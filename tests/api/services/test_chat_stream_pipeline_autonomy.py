@@ -418,6 +418,66 @@ async def test_run_rejects_unknown_per_turn_model_override(monkeypatch, caplog):
     assert "totally-bogus-model" in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_run_rejects_non_selectable_catalog_model_override(monkeypatch, caplog):
+    """🔴 카탈로그 *멤버*이지만 selectable: false인 모델은 여전히 거부된다 (#6 fix round 1).
+
+    `claude-opus-4-8`은 심층분석 판정자 전용 내부 모델이다
+    (`neos/config/models.yaml`: "피커에 올리지 않으므로... selectable: false").
+    카탈로그에 있다는 사실만으로 통과시키면 사용자가 선택할 수 없어야 할,
+    가격이 미검증인 내부 모델을 그 턴의 실제 LLM 호출로 끌어올 수 있다.
+    """
+    monkeypatch.setattr(
+        "neos.api.services.chat_stream_pipeline.app_settings.ENABLE_WORKFLOW_IN_CHAT",
+        False,
+    )
+    history = [{"role": "user", "content": "hello"}]
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        kwargs, _ = await _run_pipeline_and_capture_llm_kwargs(
+            history, "hello", metadata={"model": "claude-opus-4-8"}
+        )
+
+    assert kwargs["model_name"] == "gpt-4o-mini", (
+        "selectable: false 모델(claude-opus-4-8)이 그 턴의 LLM 호출에 도달했다"
+    )
+    assert "claude-opus-4-8" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "non_string_model",
+    [["claude-sonnet-5"], {"id": "claude-sonnet-5"}],
+    ids=["list", "dict"],
+)
+async def test_run_rejects_non_string_model_override_without_raising(
+    monkeypatch, caplog, non_string_model
+):
+    """🔴 metadata.model이 list/dict여도 턴 전체가 죽지 않고 대화 모델로 떨어진다 (#6 fix round 1).
+
+    `metadata`는 `Dict[str, Any]`이므로 `model` 필드가 문자열이 아닐 수 있다.
+    카탈로그 조회(dict.get)에 해시 불가능한 값을 그대로 넘기면 TypeError가
+    나서 파이프라인의 바깥 `except Exception`까지 번져 턴 전체가
+    `response.failed`로 끝난다 — "경고 후 폴백" 계약과 다른, 더 나쁜 실패다.
+    """
+    monkeypatch.setattr(
+        "neos.api.services.chat_stream_pipeline.app_settings.ENABLE_WORKFLOW_IN_CHAT",
+        False,
+    )
+    history = [{"role": "user", "content": "hello"}]
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        kwargs, _ = await _run_pipeline_and_capture_llm_kwargs(
+            history, "hello", metadata={"model": non_string_model}
+        )
+
+    assert kwargs["model_name"] == "gpt-4o-mini"
+
+
 class _FakeChatService:
     messages = []
     parent_messages = {}

@@ -44,7 +44,7 @@ from neos.api.models.open_responses import (
 from neos.api.services.chat_chunk_dispatcher import ChunkEventDispatcher, StreamAccumulator
 from neos.api.services.chat_stream_strategy import resolve_llm_strategy
 from neos.api.services.chat_system_prompt_builder import SystemPromptBuilder
-from neos.config.model_config import get_model_spec
+from neos.config.model_config import get_model_spec, models_for_provider
 from neos.config.settings import settings as app_settings
 from neos.utils.logger import get_logger
 
@@ -84,6 +84,24 @@ async def resolve_authorized_parent_message(
     return parent_message
 
 
+def _is_user_selectable_model(model: str) -> bool:
+    """`model`이 사용자가 고를 수 있는 카탈로그 모델인가.
+
+    단순 멤버십(`get_model_spec(model) is not None`)만으로는 부족하다 —
+    카탈로그에는 `selectable: false`인 내부 전용 모델도 있다(예:
+    `claude-opus-4-8`, 심층분석 판정자 전용, `neos/config/models.yaml` 참고).
+    그런 모델은 존재는 하되 피커에 올라가지 않고, 가격도 미검증인 경우가
+    있다. `models_for_provider()`가 바로 그 "선택 가능한 목록"이다 —
+    `AnthropicProvider.list_models()`/`OpenAIProvider.list_models()`가 이미
+    이 함수로 피커 노출 여부를 결정하므로, `spec.selectable`을 직접 읽는
+    대신 이 함수를 재사용해 판단 기준을 하나로 유지한다.
+    """
+    spec = get_model_spec(model)
+    if spec is None:
+        return False
+    return model in models_for_provider(spec.provider)
+
+
 def resolve_turn_model_name(
     request_metadata: Dict[str, Any],
     conversation: Dict[str, Any],
@@ -91,10 +109,16 @@ def resolve_turn_model_name(
     """이 턴에 쓸 모델명을 고른다.
 
     `request_metadata["model"]`은 매 메시지 FE 셀렉터 값이 실려 오는,
-    사용자가 통제하는 문자열이 모델 라우팅에 도달하는 경로다(#6). 카탈로그
-    (`neos/config/models.yaml`, 조회는 `get_model_spec`)에 없는 이름이면
-    받아들이지 않고 `conversation["model_name"]`으로 떨어진다 — 임의
-    문자열이 프로바이더까지 새어 나가면 안 되는 것이 이 함수의 보안 경계다.
+    사용자가 통제하는 값이 모델 라우팅에 도달하는 경로다(#6). 이 함수는
+    두 가지를 거부하고 `conversation["model_name"]`으로 떨어진다 —
+    조용히가 아니라 `logger.warning`을 남기고:
+
+    1. 문자열이 아닌 값 (`metadata`는 `Dict[str, Any]`라 list/dict가 올 수
+       있다 — 그대로 카탈로그 조회에 넘기면 `dict.get()`이 해시 불가능한
+       키에 `TypeError`를 내고, 그게 바깥 `except Exception`까지 번져
+       턴 전체가 `response.failed`로 죽는다. 절대 그 지점까지 가면 안 된다).
+    2. 사용자가 선택할 수 없는 모델 (`_is_user_selectable_model` 참고 —
+       카탈로그 *멤버*인 것과 *선택 가능*한 것은 다르다).
 
     설계 결정: 이 오버라이드는 **그 턴에만** 적용되고
     `conversation["model_name"]`에는 쓰이지 않는다. FE 셀렉터는
@@ -104,11 +128,20 @@ def resolve_turn_model_name(
     conversation_model = conversation.get("model_name")
     if not requested_model:
         return conversation_model
-    if get_model_spec(requested_model) is None:
+    if not isinstance(requested_model, str):
         logger.warning(
-            "Ignoring unknown per-turn model override %r (not declared in the "
-            "model catalog neos/config/models.yaml) — falling back to "
-            "conversation model %r",
+            "Ignoring non-string per-turn model override %r (type %s); "
+            "falling back to conversation model %r",
+            requested_model,
+            type(requested_model).__name__,
+            conversation_model,
+        )
+        return conversation_model
+    if not _is_user_selectable_model(requested_model):
+        logger.warning(
+            "Ignoring unknown or non-selectable per-turn model override %r "
+            "(not in the user-selectable model catalog neos/config/models.yaml) "
+            "— falling back to conversation model %r",
             requested_model,
             conversation_model,
         )
