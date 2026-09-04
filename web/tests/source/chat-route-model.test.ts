@@ -18,11 +18,9 @@ import { before, beforeEach, describe, test } from "node:test";
  * 같은 기법이다.
  */
 
-// biome-ignore lint/suspicious/noExplicitAny: Node 내부 로더는 공개 타입이 없다
 type CallBackendAPIStub = (endpoint: string, options?: any) => Promise<Response>;
 
 let capturedStreamEndpoint: string | undefined;
-// biome-ignore lint/suspicious/noExplicitAny: 캡처 대상은 요청 본문 JSON 그대로
 let capturedStreamBody: any;
 
 const BACKEND_USER_ID = "backend-user-1";
@@ -62,10 +60,8 @@ const stubAuth = async () => ({
 });
 
 async function importRoute() {
-  // biome-ignore lint/suspicious/noExplicitAny: Node 내부 로더는 공개 타입이 없다
   const ModuleAny = Module as any;
   const originalLoad = ModuleAny._load;
-  // biome-ignore lint/suspicious/noExplicitAny: 위와 동일
   ModuleAny._load = (request: string, ...rest: any[]) => {
     if (request === "@/lib/backend-api") {
       return { callBackendAPI: stubCallBackendAPI };
@@ -82,7 +78,6 @@ async function importRoute() {
   }
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: 동적 import 결과 형태를 미리 좁힐 수 없다
 let route: any;
 
 before(async () => {

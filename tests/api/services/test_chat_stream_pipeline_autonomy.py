@@ -390,7 +390,8 @@ async def test_run_falls_back_to_conversation_model_when_no_override(monkeypatch
 
     kwargs, _ = await _run_pipeline_and_capture_llm_kwargs(history, "hello", metadata={})
 
-    # _HistoryChatService.get_conversation()이 고정으로 돌려주는 값
+    # run()이 쓰는 authorized_conversation이 고정으로 실어 오는 값
+    # (get_conversation()이 아니다 — chat_stream_pipeline.py:262 참고)
     assert kwargs["model_name"] == "gpt-4o-mini"
 
 

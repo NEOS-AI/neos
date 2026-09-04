@@ -39,10 +39,8 @@ import { DEFAULT_ACCESS_TOKEN_TTL_MS } from "../../lib/auth-tokens";
  * 이 테스트 프로세스의 모듈 해석 한 번만 우회할 뿐이다.
  */
 async function importAuthModule() {
-  // biome-ignore lint/suspicious/noExplicitAny: Node 내부 로더는 공개 타입이 없다
   const ModuleAny = Module as any;
   const originalLoad = ModuleAny._load;
-  // biome-ignore lint/suspicious/noExplicitAny: 위와 동일
   ModuleAny._load = (request: string, ...rest: any[]) => {
     if (request === "server-only") {
       return {};
@@ -56,7 +54,6 @@ async function importAuthModule() {
   }
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: 동적 import 결과 형태를 미리 좁힐 수 없다
 let authModule: any;
 
 before(async () => {

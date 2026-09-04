@@ -47,18 +47,6 @@ export const chatModels: ChatModel[] = [
     provider: "openai",
     description: "Most capable OpenAI model",
   },
-  {
-    id: "openai/gpt-4o-mini",
-    name: "GPT-4o Mini",
-    provider: "openai",
-    description: "Fast and cost-effective for simple tasks",
-  },
-  {
-    id: "openai/gpt-4o",
-    name: "GPT-4o",
-    provider: "openai",
-    description: "Previous-generation OpenAI model",
-  },
   // Reasoning models (extended thinking).
   // The id must keep "thinking"/"reasoning" — lib/ai/prompts.ts branches on it.
   {
@@ -96,17 +84,24 @@ const MODEL_MAP: Record<string, string> = {
   // OpenAI - remove provider prefix
   "openai/gpt-5.6-terra": "gpt-5.6-terra",
   "openai/gpt-5.6-sol": "gpt-5.6-sol",
-  "openai/gpt-4o": "gpt-4o",
-  "openai/gpt-4o-mini": "gpt-4o-mini",
 };
 
 // Retired from the picker but still present in stored `chat-model` cookies.
 // The cookie is read verbatim and validated only as z.string(), so dropping an
 // entry here would leak the raw gateway ID to the backend.
-const RETIRED_MODEL_MAP: Record<string, string> = {
-  // Renamed picker entries — keep serving what they always served.
-  "openai/gpt-4.1": "gpt-4o",
-  "openai/gpt-4.1-mini": "gpt-4o-mini",
+export const RETIRED_MODEL_MAP: Record<string, string> = {
+  // gpt-4o / gpt-4o-mini are `selectable: false` in neos/config/models.yaml
+  // ("가격·별칭만 아는 레거시" — legacy, pricing/aliases only, unverified) so
+  // the backend's per-turn override now rejects them outright. Route to the
+  // current-generation OpenAI models: mini -> the smaller/faster tier, full
+  // -> the larger/powerful tier.
+  "openai/gpt-4o": "gpt-5.6-sol",
+  "openai/gpt-4o-mini": "gpt-5.6-terra",
+  // Renamed picker entries — these used to serve gpt-4o/gpt-4o-mini, which are
+  // now themselves non-selectable (see above), so chase the chain to the same
+  // current-generation targets rather than bouncing through a dead model.
+  "openai/gpt-4.1": "gpt-5.6-sol",
+  "openai/gpt-4.1-mini": "gpt-5.6-terra",
   "anthropic/claude-3.7-sonnet-thinking": "claude-sonnet-4-5-20250929",
   // claude-opus-4-6 was retired from the backend catalog (no known price, so
   // its cost aggregated as zero). Serve its replacement.
