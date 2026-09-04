@@ -273,8 +273,10 @@ async def _noop_record_cost(**kwargs):
     return None
 
 
-async def _run_pipeline_and_capture_messages(history_messages, user_content):
-    """`pipeline.run()`을 끝까지 돌려 LLM에 실제로 전달된 메시지 배열을 돌려준다."""
+async def _run_pipeline_and_capture_llm_kwargs(
+    history_messages, user_content, metadata=None
+):
+    """`pipeline.run()`을 끝까지 돌려 LLM에 실제로 전달된 kwargs를 돌려준다."""
     llm_service = _RecordingLLMService()
     chat_service = _HistoryChatService(history_messages)
     pipeline = ChatStreamPipeline(
@@ -294,7 +296,7 @@ async def _run_pipeline_and_capture_messages(history_messages, user_content):
         content=user_content,
         attachments=[],
         parent_message_id=None,
-        metadata={},
+        metadata=metadata or {},
     )
 
     _ = [
@@ -306,12 +308,21 @@ async def _run_pipeline_and_capture_messages(history_messages, user_content):
             authorized_conversation={
                 "conversation_id": "conversation_123",
                 "user_id": "user_123",
+                "model_name": "gpt-4o-mini",
             },
         )
     ]
 
     assert llm_service.received_kwargs is not None, "LLM stream was never invoked"
-    return llm_service.received_kwargs["conversation_messages"], chat_service
+    return llm_service.received_kwargs, chat_service
+
+
+async def _run_pipeline_and_capture_messages(history_messages, user_content):
+    """`pipeline.run()`을 끝까지 돌려 LLM에 실제로 전달된 메시지 배열을 돌려준다."""
+    kwargs, chat_service = await _run_pipeline_and_capture_llm_kwargs(
+        history_messages, user_content
+    )
+    return kwargs["conversation_messages"], chat_service
 
 
 @pytest.mark.asyncio
@@ -350,6 +361,61 @@ async def test_run_keeps_user_turn_when_conversation_has_no_prior_history(monkey
     messages, _ = await _run_pipeline_and_capture_messages(history, "first message ever")
 
     assert messages == [{"role": "user", "content": "first message ever"}]
+
+
+@pytest.mark.asyncio
+async def test_run_uses_per_turn_model_override_when_valid(monkeypatch):
+    """metadata.model이 카탈로그의 유효한 모델이면 LLM 호출이 그것을 받는다 (#6)."""
+    monkeypatch.setattr(
+        "neos.api.services.chat_stream_pipeline.app_settings.ENABLE_WORKFLOW_IN_CHAT",
+        False,
+    )
+    history = [{"role": "user", "content": "hello"}]
+
+    kwargs, _ = await _run_pipeline_and_capture_llm_kwargs(
+        history, "hello", metadata={"model": "claude-sonnet-5"}
+    )
+
+    assert kwargs["model_name"] == "claude-sonnet-5"
+
+
+@pytest.mark.asyncio
+async def test_run_falls_back_to_conversation_model_when_no_override(monkeypatch):
+    """metadata.model이 없으면 conversation.model_name을 받는다 (#6)."""
+    monkeypatch.setattr(
+        "neos.api.services.chat_stream_pipeline.app_settings.ENABLE_WORKFLOW_IN_CHAT",
+        False,
+    )
+    history = [{"role": "user", "content": "hello"}]
+
+    kwargs, _ = await _run_pipeline_and_capture_llm_kwargs(history, "hello", metadata={})
+
+    # _HistoryChatService.get_conversation()이 고정으로 돌려주는 값
+    assert kwargs["model_name"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_run_rejects_unknown_per_turn_model_override(monkeypatch, caplog):
+    """🔴 카탈로그에 없는 metadata.model은 무시되고 대화 모델로 떨어진다 (#6).
+
+    이 값은 사용자가 통제하는 문자열이 모델 라우팅에 도달하는 경로다 —
+    임의 문자열이 프로바이더로 새어 나가면 안 된다.
+    """
+    monkeypatch.setattr(
+        "neos.api.services.chat_stream_pipeline.app_settings.ENABLE_WORKFLOW_IN_CHAT",
+        False,
+    )
+    history = [{"role": "user", "content": "hello"}]
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        kwargs, _ = await _run_pipeline_and_capture_llm_kwargs(
+            history, "hello", metadata={"model": "totally-bogus-model; DROP TABLE"}
+        )
+
+    assert kwargs["model_name"] == "gpt-4o-mini"
+    assert "totally-bogus-model" in caplog.text
 
 
 class _FakeChatService:

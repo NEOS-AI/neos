@@ -44,6 +44,7 @@ from neos.api.models.open_responses import (
 from neos.api.services.chat_chunk_dispatcher import ChunkEventDispatcher, StreamAccumulator
 from neos.api.services.chat_stream_strategy import resolve_llm_strategy
 from neos.api.services.chat_system_prompt_builder import SystemPromptBuilder
+from neos.config.model_config import get_model_spec
 from neos.config.settings import settings as app_settings
 from neos.utils.logger import get_logger
 
@@ -81,6 +82,38 @@ async def resolve_authorized_parent_message(
         return None
 
     return parent_message
+
+
+def resolve_turn_model_name(
+    request_metadata: Dict[str, Any],
+    conversation: Dict[str, Any],
+) -> Optional[str]:
+    """이 턴에 쓸 모델명을 고른다.
+
+    `request_metadata["model"]`은 매 메시지 FE 셀렉터 값이 실려 오는,
+    사용자가 통제하는 문자열이 모델 라우팅에 도달하는 경로다(#6). 카탈로그
+    (`neos/config/models.yaml`, 조회는 `get_model_spec`)에 없는 이름이면
+    받아들이지 않고 `conversation["model_name"]`으로 떨어진다 — 임의
+    문자열이 프로바이더까지 새어 나가면 안 되는 것이 이 함수의 보안 경계다.
+
+    설계 결정: 이 오버라이드는 **그 턴에만** 적용되고
+    `conversation["model_name"]`에는 쓰이지 않는다. FE 셀렉터는
+    `chat-model` 쿠키 기반 전역 기본값이라 대화별 상태가 아니기 때문이다.
+    """
+    requested_model = request_metadata.get("model")
+    conversation_model = conversation.get("model_name")
+    if not requested_model:
+        return conversation_model
+    if get_model_spec(requested_model) is None:
+        logger.warning(
+            "Ignoring unknown per-turn model override %r (not declared in the "
+            "model catalog neos/config/models.yaml) — falling back to "
+            "conversation model %r",
+            requested_model,
+            conversation_model,
+        )
+        return conversation_model
+    return requested_model
 
 
 @dataclass
@@ -194,6 +227,7 @@ class ChatStreamPipeline:
 
             # ── Step 3: 대화 정보 및 히스토리 로드 ───────────────────
             conversation = authorized_conversation
+            turn_model_name = resolve_turn_model_name(request_metadata, conversation)
             history_messages = await self._ChatService.get_conversation_messages(
                 conversation_id=conversation_id,
                 limit=20,
@@ -260,7 +294,7 @@ class ChatStreamPipeline:
                 conversation_id=conversation_id,
                 message_id=assistant_message_id,
                 messages=messages,
-                model_name=conversation.get("model_name"),
+                model_name=turn_model_name,
                 system_prompt=system_prompt,
                 temperature=conversation.get("temperature", 0.7),
                 max_tokens=conversation.get("max_tokens"),
@@ -305,7 +339,7 @@ class ChatStreamPipeline:
                 role="assistant",
                 content=acc.full_content,
                 message_id=assistant_message_id,
-                model_name=conversation.get("model_name"),
+                model_name=turn_model_name,
                 total_tokens=acc.usage_info["total_tokens"] if acc.usage_info else 0,
                 prompt_tokens=acc.usage_info["prompt_tokens"] if acc.usage_info else 0,
                 completion_tokens=acc.usage_info["completion_tokens"] if acc.usage_info else 0,
@@ -316,14 +350,14 @@ class ChatStreamPipeline:
             if acc.usage_info and acc.cost_info:
                 provider = (
                     "anthropic"
-                    if "claude" in (conversation.get("model_name") or "").lower()
+                    if "claude" in (turn_model_name or "").lower()
                     else "openai"
                 )
                 await self._cost_calc.record_cost_for_existing_message(
                     message_id=assistant_message_id,
                     conversation_id=conversation_id,
                     provider=provider,
-                    model_name=conversation.get("model_name"),
+                    model_name=turn_model_name,
                     prompt_tokens=acc.usage_info["prompt_tokens"],
                     completion_tokens=acc.usage_info["completion_tokens"],
                     total_tokens=acc.usage_info["total_tokens"],
