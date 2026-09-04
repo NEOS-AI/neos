@@ -247,7 +247,9 @@ class ChatStreamPipeline:
                 get_core_tools_fn=self._get_core_tools_fn,
                 get_search_handler_fn=self._get_search_handler_fn,
             )
-            messages = history_messages + [{"role": "user", "content": request.content}]
+            # history_messages는 이미 방금 Step 1에서 저장한 유저 턴으로 끝난다
+            # (tail 조회이므로) — 여기서 다시 append하면 중복된다.
+            messages = history_messages
             dispatcher = ChunkEventDispatcher(
                 stream_state=stream_state,
                 accumulator=acc,

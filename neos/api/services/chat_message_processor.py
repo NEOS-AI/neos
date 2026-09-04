@@ -409,8 +409,10 @@ class BaseChatMessageProcessor(ABC):
         """
         LLM 응답 생성 (기본 구현 제공, 필요시 오버라이드)
         """
-        # 컨텍스트 메시지 포함
-        messages = history_messages + [{"role": "user", "content": user_content}]
+        # history_messages는 이미 방금 저장한 유저 턴(user_content)으로 끝난다
+        # (tail 조회이므로) — 여기서 다시 append하면 중복된다.
+        # user_content 파라미터는 서브클래스 오버라이드 계약을 위해 시그니처에 남긴다.
+        messages = history_messages
 
         return await chat_llm_service.generate_response(
             conversation_id=conversation_id,
@@ -435,7 +437,10 @@ class BaseChatMessageProcessor(ABC):
         """
         LLM 스트리밍 응답 생성 (기본 구현 제공, 필요시 오버라이드)
         """
-        messages = history_messages + [{"role": "user", "content": user_content}]
+        # history_messages는 이미 방금 저장한 유저 턴(user_content)으로 끝난다
+        # (tail 조회이므로) — 여기서 다시 append하면 중복된다.
+        # user_content 파라미터는 서브클래스 오버라이드 계약을 위해 시그니처에 남긴다.
+        messages = history_messages
 
         async for chunk in chat_llm_service.generate_response_stream(
             conversation_id=conversation_id,

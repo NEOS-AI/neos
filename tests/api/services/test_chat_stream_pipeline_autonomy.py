@@ -223,6 +223,135 @@ async def test_run_workflow_keeps_plain_progress_as_workflow_progress():
     assert not [p for p in payloads if p["type"] == "neos:harness"]
 
 
+class _RecordingLLMService:
+    """`generate_response_stream_with_tools`에 실제로 전달된 kwargs를 포착한다."""
+
+    def __init__(self):
+        self.received_kwargs = None
+
+    async def generate_response_stream_with_tools(self, **kwargs):
+        self.received_kwargs = kwargs
+        yield {
+            "type": "complete",
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            "cost": {"total_cost": 0},
+            "latency_ms": 0,
+        }
+
+
+class _HistoryChatService:
+    """`get_conversation_messages`가 설정 가능한 히스토리를 돌려주는 페이크."""
+
+    def __init__(self, history_messages):
+        self._history_messages = history_messages
+        self.saved_messages = []
+        self.received_history_kwargs = None
+
+    async def add_message(self, **kwargs):
+        self.saved_messages.append(kwargs)
+        return {"message_id": kwargs.get("message_id") or "generated-id", **kwargs}
+
+    async def get_conversation(self, conversation_id):
+        return {
+            "conversation_id": conversation_id,
+            "user_id": "user_123",
+            "system_prompt": "",
+            "model_name": "gpt-4o-mini",
+            "temperature": 0.7,
+            "max_tokens": None,
+        }
+
+    async def get_message(self, message_id):
+        return None
+
+    async def get_conversation_messages(self, conversation_id, limit=20):
+        self.received_history_kwargs = {"conversation_id": conversation_id, "limit": limit}
+        return self._history_messages
+
+
+async def _noop_record_cost(**kwargs):
+    return None
+
+
+async def _run_pipeline_and_capture_messages(history_messages, user_content):
+    """`pipeline.run()`을 끝까지 돌려 LLM에 실제로 전달된 메시지 배열을 돌려준다."""
+    llm_service = _RecordingLLMService()
+    chat_service = _HistoryChatService(history_messages)
+    pipeline = ChatStreamPipeline(
+        chat_llm_service=llm_service,
+        cost_calculator=SimpleNamespace(
+            record_cost_for_existing_message=_noop_record_cost
+        ),
+        get_core_tools_fn=lambda: None,
+        get_search_handler_fn=lambda: None,
+        chat_service_cls=chat_service,
+        multi_agent_workflow=object(),
+        workflow_callback_cls=object(),
+        map_node_to_agent_fn=lambda node: node,
+    )
+    request = SimpleNamespace(
+        role=SimpleNamespace(value="user"),
+        content=user_content,
+        attachments=[],
+        parent_message_id=None,
+        metadata={},
+    )
+
+    _ = [
+        chunk
+        async for chunk in pipeline.run(
+            "conversation_123",
+            request,
+            SimpleNamespace(user_id="user_123"),
+            authorized_conversation={
+                "conversation_id": "conversation_123",
+                "user_id": "user_123",
+            },
+        )
+    ]
+
+    assert llm_service.received_kwargs is not None, "LLM stream was never invoked"
+    return llm_service.received_kwargs["conversation_messages"], chat_service
+
+
+@pytest.mark.asyncio
+async def test_run_sends_history_tail_user_turn_exactly_once(monkeypatch):
+    """히스토리가 이미 방금 저장한 유저 턴으로 끝나면, 수동 append가 그것을 중복시켜선 안 된다."""
+    monkeypatch.setattr(
+        "neos.api.services.chat_stream_pipeline.app_settings.ENABLE_WORKFLOW_IN_CHAT",
+        False,
+    )
+    history = [
+        {"role": "assistant", "content": "hi, how can I help?"},
+        {"role": "user", "content": "what is the weather today?"},
+    ]
+
+    messages, chat_service = await _run_pipeline_and_capture_messages(
+        history, "what is the weather today?"
+    )
+
+    user_turns = [m for m in messages if m.get("content") == "what is the weather today?"]
+    assert len(user_turns) == 1, (
+        f"expected the user turn exactly once, found {len(user_turns)} in {messages!r}"
+    )
+    assert messages[-1] == {"role": "user", "content": "what is the weather today?"}
+    assert chat_service.received_history_kwargs["limit"] == 20
+
+
+@pytest.mark.asyncio
+async def test_run_keeps_user_turn_when_conversation_has_no_prior_history(monkeypatch):
+    """대화의 첫 턴: 히스토리 조회가 방금 저장한 유저 턴 하나만 돌려줘도 유실되면 안 된다."""
+    monkeypatch.setattr(
+        "neos.api.services.chat_stream_pipeline.app_settings.ENABLE_WORKFLOW_IN_CHAT",
+        False,
+    )
+    history = [{"role": "user", "content": "first message ever"}]
+
+    messages, _ = await _run_pipeline_and_capture_messages(history, "first message ever")
+
+    assert messages == [{"role": "user", "content": "first message ever"}]
+
+
 class _FakeChatService:
     messages = []
     parent_messages = {}

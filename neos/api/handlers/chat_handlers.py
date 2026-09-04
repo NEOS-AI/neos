@@ -455,7 +455,9 @@ async def send_message(
             llm_response = await chat_llm_service.generate_response(
                 conversation_id=conversation_id,
                 message_id=assistant_message_id,
-                conversation_messages=history_messages + [{"role": "user", "content": request.content}],
+                # history_messages는 이미 방금 저장한 유저 턴으로 끝난다
+                # (tail 조회이므로) — 여기서 다시 append하면 중복된다.
+                conversation_messages=history_messages,
                 model_name=conversation.get("model_name"),
                 system_prompt=conversation.get("system_prompt"),
                 temperature=conversation.get("temperature", 0.7),

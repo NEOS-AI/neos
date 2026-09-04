@@ -85,7 +85,9 @@ async def send_rag_message(
             llm_response = await rag_chat_llm_service.generate_response_with_rag(
                 conversation_id=conversation_id,
                 message_id=assistant_message_id,
-                conversation_messages=history_messages + [{"role": "user", "content": request.content}],
+                # history_messages는 이미 방금 저장한 유저 턴으로 끝난다
+                # (tail 조회이므로) — 여기서 다시 append하면 중복된다.
+                conversation_messages=history_messages,
                 user_query=request.content,
                 user_id=conversation.get("user_id"),
                 model_name=conversation.get("model_name"),
