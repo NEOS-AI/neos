@@ -213,7 +213,16 @@ const PurePreviewMessage = ({
         }),
       });
       if (!response.ok) {
-        throw new Error("Approval response failed");
+        // `app/(chat)/api/approval/respond/route.ts`가 비정상 응답에
+        // `{ error: <백엔드 사유> }`를 실어 보낸다(예: 세션이 이미 종결됨,
+        // 잘못된 decision). 파싱에 실패하거나 `error`가 없으면 그때만
+        // 정적 문구로 떨어진다 -- 3b와 같은 원칙, 다른 실패 지점.
+        const body = await response.json().catch(() => null);
+        const reason =
+          body && typeof body.error === "string" && body.error
+            ? body.error
+            : "Approval response failed";
+        throw new Error(reason);
       }
 
       setApprovalStatuses((prev) => ({

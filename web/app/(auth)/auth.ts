@@ -73,28 +73,26 @@ export function extractBackendTokenFields(data: any) {
  * TTL 계산은 전부 `resolveAccessTokenExpiry`(`lib/auth-tokens.ts`)에 위임한다.
  * 여기서 고르는 것은 "어느 값을 넣을지"뿐이다:
  * - 로그인/가입 시점(`user`가 있음): 방금 로그인한 `user.expiresIn` (BE `expires_in`)
- * - 세션 갱신 시점(`trigger === "update"`): 클라이언트가 실어 보낸 `session.expiresIn`
+ * - 세션 갱신 시점(`user`가 없음): 클라이언트가 실어 보낸 `session.expiresIn`
  *   (없으면 헬퍼가 기본 TTL로 폴백한다 — 이 분기는 BE 응답이 없으므로 그 값을
  *   신뢰하는 것이 아니라 폴백을 보장하는 것이 목적이다)
  *
- * 분기는 `trigger === "update"`로 정한다 (예전엔 `params.user`의 truthiness가
- * 정했는데, 그러면 `trigger` 파라미터를 받아만 놓고 읽지는 않는 꼴이었다).
- * 두 호출부(`jwt` 콜백의 로그인 분기·갱신 분기) 중 어느 쪽도 `user`와
- * `trigger: "update"`를 동시에 넘기지 않으므로 이 전환은 동작을 바꾸지
- * 않는다 -- 세션 갱신이 아니면 항상 `user` 쪽을, 갱신이면 항상 `session`
- * 쪽을 본다.
+ * 분기는 `params.user`의 truthiness만 본다. `trigger`를 받아 분기에 쓰는
+ * 버전을 시도한 적이 있는데, 현재 두 호출부가 우연히 `user`와
+ * `trigger: "update"`를 동시에 넘기지 않아서만 안전했다 -- 그 안전성은
+ * 함수가 아니라 호출부 모양에 있었고, 제3의 호출부가 생기면 조용히
+ * 깨질 수 있었다. `trigger`를 아예 받지 않으면 그 발산 자체가 불가능하다.
  */
 export function computeAccessTokenExpiry(params: {
   user?: { expiresIn?: unknown } | null;
-  trigger?: "signIn" | "signUp" | "update";
   session?: { expiresIn?: unknown } | null;
   now?: number;
 }): number {
   const now = params.now ?? Date.now();
-  if (params.trigger === "update") {
-    return resolveAccessTokenExpiry(params.session?.expiresIn, now);
+  if (params.user) {
+    return resolveAccessTokenExpiry(params.user.expiresIn, now);
   }
-  return resolveAccessTokenExpiry(params.user?.expiresIn, now);
+  return resolveAccessTokenExpiry(params.session?.expiresIn, now);
 }
 
 declare module "next-auth" {
@@ -280,7 +278,7 @@ export const {
 
       if (trigger === "update" && session?.backendAccessToken) {
         token.backendAccessToken = session.backendAccessToken;
-        token.accessTokenExpires = computeAccessTokenExpiry({ trigger, session });
+        token.accessTokenExpires = computeAccessTokenExpiry({ session });
       }
 
       if (token.accessTokenExpires && token.backendRefreshToken) {
