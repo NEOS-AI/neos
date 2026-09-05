@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from neos.services import attachment_blocks
@@ -182,6 +184,26 @@ async def test_unresolvable_attachment_is_demoted_on_an_older_turn(stub_io) -> N
 
 
 @pytest.mark.asyncio
+async def test_null_file_size_does_not_bypass_the_download_budget(stub_io) -> None:
+    # Finding 4 — `Document.file_size or 0` means a NULL row sails through the
+    # pre-download check; the actual downloaded byte count must still be
+    # checked against the remaining budget before the attachment is included.
+    docs, downloads = stub_io
+    docs[1] = _Doc("image/png", storage_key="huge", file_size=None)
+    downloads["huge"] = b"x" * (attachment_blocks.MAX_ATTACHMENT_BYTES + 1)
+
+    plan = await resolve_attachments(
+        [_message("봐줘", [_attachment("huge.png", "image/png", document_id=1)])],
+        model="seeing-model",
+    )
+
+    resolved = plan.by_index[0][0]
+    assert resolved.data is None
+    assert "huge.png" in resolved.text
+    assert any("huge.png" in notice for notice in plan.notices)
+
+
+@pytest.mark.asyncio
 async def test_two_attachments_in_one_message_keep_their_order(stub_io) -> None:
     docs, downloads = stub_io
     docs[1] = _Doc("image/png", storage_key="first")
@@ -204,3 +226,46 @@ async def test_two_attachments_in_one_message_keep_their_order(stub_io) -> None:
 
     assert [a.name for a in plan.by_index[0]] == ["first.png", "second.png"]
     assert [a.data for a in plan.by_index[0]] == [b"1", b"2"]
+
+
+# ---------------------------------------------------------------------------
+# Finding 3 — the download must not build a fresh provider every call, and
+# must not block the event loop.
+# ---------------------------------------------------------------------------
+
+
+def test_get_provider_is_cached_across_calls(monkeypatch) -> None:
+    attachment_blocks._get_provider.cache_clear()
+    calls: list[str] = []
+
+    def fake_create_provider(provider_type: str, **kwargs):
+        calls.append(provider_type)
+        return object()
+
+    monkeypatch.setattr(
+        attachment_blocks.StorageService, "create_provider", staticmethod(fake_create_provider)
+    )
+
+    first = attachment_blocks._get_provider("s3")
+    second = attachment_blocks._get_provider("s3")
+
+    assert first is second
+    assert calls == ["s3"], "provider was rebuilt on the second call"
+
+
+@pytest.mark.asyncio
+async def test_download_runs_the_blocking_call_off_the_event_loop(monkeypatch) -> None:
+    main_thread_id = threading.get_ident()
+    seen: dict[str, int] = {}
+
+    class FakeProvider:
+        async def download(self, key: str) -> bytes:
+            seen["thread_id"] = threading.get_ident()
+            return b"payload"
+
+    monkeypatch.setattr(attachment_blocks, "_get_provider", lambda name: FakeProvider())
+
+    data = await attachment_blocks._download("some-key")
+
+    assert data == b"payload"
+    assert seen["thread_id"] != main_thread_id, "download ran on the event loop thread"

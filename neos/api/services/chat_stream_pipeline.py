@@ -337,6 +337,8 @@ class ChatStreamPipeline:
                 message_metadata["artifact"] = acc.artifact_info
             if acc.inline_viz_list:
                 message_metadata["inline_visualizations"] = acc.inline_viz_list
+            if acc.attachment_notices:
+                message_metadata["attachment_notices"] = acc.attachment_notices
             if wf_ctx.agents:
                 message_metadata["workflow_agents"] = wf_ctx.agents
             workflow_metadata = (wf_ctx.result or {}).get("metadata") or {}
