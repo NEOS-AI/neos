@@ -1,4 +1,5 @@
 import os
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -74,20 +75,6 @@ async def test_send_rag_message_sends_history_tail_user_turn_once(
     )
     monkeypatch.setattr(
         rag_chat_handlers.ChatService,
-        "get_conversation",
-        AsyncMock(
-            return_value={
-                "conversation_id": "c1",
-                "user_id": "user_123",
-                "system_prompt": "",
-                "model_name": "gpt-4o-mini",
-                "temperature": 0.7,
-                "max_tokens": None,
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        rag_chat_handlers.ChatService,
         "get_conversation_messages",
         AsyncMock(return_value=history),
     )
@@ -99,8 +86,22 @@ async def test_send_rag_message_sends_history_tail_user_turn_once(
 
     request = RAGSendMessageRequest(content="what's new?", enable_rag=True)
     background_tasks = BackgroundTasks()
+    authorized_conversation = {
+        "conversation_id": "c1",
+        "user_id": "user_123",
+        "system_prompt": "",
+        "model_name": "gpt-4o-mini",
+        "temperature": 0.7,
+        "max_tokens": None,
+    }
 
-    await rag_chat_handlers.send_rag_message("c1", request, background_tasks)
+    await rag_chat_handlers.send_rag_message(
+        "c1",
+        request,
+        background_tasks,
+        authorized_conversation=authorized_conversation,
+        current_user=SimpleNamespace(user_id="user_123", is_active=True),
+    )
 
     sent_messages = generate_response_with_rag.await_args.kwargs["conversation_messages"]
     user_turns = [m for m in sent_messages if m.get("content") == "what's new?"]
