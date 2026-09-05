@@ -78,12 +78,15 @@ class _ScriptedWorkflow:
 
     `WorkflowStreamCallback._create_event`가 만드는 모양
     (`event` / `node_name` / `content` / `data` / `progress_percent`)을 흉내낸다.
+    실제로 워크플로우에 전달된 `user_input`도 포착해 둔다 (테스트 검증용).
     """
 
     def __init__(self, events):
         self._events = events
+        self.user_input = None
 
     async def execute_workflow(self, user_input, event_handler, use_checkpointer):
+        self.user_input = user_input
         for event in self._events:
             await event_handler.event_queue.put(event)
         await event_handler.event_queue.put(
@@ -221,6 +224,141 @@ async def test_run_workflow_keeps_plain_progress_as_workflow_progress():
     assert progress[0]["progress_percent"] == 55
     assert progress[0]["message"] == "검색 중"
     assert not [p for p in payloads if p["type"] == "neos:harness"]
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_excludes_current_turn_from_chat_history():
+    """현재 턴은 `query`가 나른다 — `chat_history`에도 있으면 워크플로우가 두 번 본다."""
+    workflow = _ScriptedWorkflow(events=[])
+    pipeline = ChatStreamPipeline(
+        chat_llm_service=object(),
+        cost_calculator=object(),
+        get_core_tools_fn=lambda: None,
+        get_search_handler_fn=lambda: None,
+        chat_service_cls=object(),
+        multi_agent_workflow=workflow,
+        workflow_callback_cls=_PassthroughCallback,
+        map_node_to_agent_fn=lambda node: node,
+    )
+    stream_state, _ = create_stream_generator(
+        response_id="conversation_123",
+        message_id="message_123",
+    )
+    # `history_messages`는 ascending order의 tail 조회라, 방금 저장한 현재
+    # 유저 턴이 마지막 원소다 (chat_stream_pipeline.py Step 1/3 참고).
+    history = [
+        {"role": "assistant", "content": "hi, how can I help?"},
+        {"role": "user", "content": "what is the weather today?"},
+    ]
+
+    [
+        chunk
+        async for chunk in pipeline._run_workflow(
+            conversation_id="conversation_123",
+            user_content="what is the weather today?",
+            current_user=SimpleNamespace(user_id="user_123"),
+            history_messages=history,
+            stream_state=stream_state,
+            wf_ctx=_WorkflowCtx(),
+            autonomy_level=1,
+        )
+    ]
+
+    assert workflow.user_input["query"] == "what is the weather today?"
+    chat_history = workflow.user_input["chat_history"]
+    contents = [m["content"] for m in chat_history]
+    assert "what is the weather today?" not in contents, (
+        f"current turn leaked into chat_history: {chat_history!r}"
+    )
+    assert contents == ["hi, how can I help?"]
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_history_keeps_most_recent_n_in_ascending_order(monkeypatch):
+    """히스토리가 MAX_HISTORY_MESSAGES보다 길면 **최근** N개가 오름차순으로 가야 한다."""
+    monkeypatch.setattr(
+        "neos.api.services.chat_stream_pipeline.app_settings.MAX_HISTORY_MESSAGES",
+        2,
+    )
+    workflow = _ScriptedWorkflow(events=[])
+    pipeline = ChatStreamPipeline(
+        chat_llm_service=object(),
+        cost_calculator=object(),
+        get_core_tools_fn=lambda: None,
+        get_search_handler_fn=lambda: None,
+        chat_service_cls=object(),
+        multi_agent_workflow=workflow,
+        workflow_callback_cls=_PassthroughCallback,
+        map_node_to_agent_fn=lambda node: node,
+    )
+    stream_state, _ = create_stream_generator(
+        response_id="conversation_123",
+        message_id="message_123",
+    )
+    # 오름차순 tail. 마지막 원소가 방금 저장된 현재 턴.
+    history = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": "reply 1"},
+        {"role": "user", "content": "turn 2"},
+        {"role": "assistant", "content": "reply 2"},
+        {"role": "user", "content": "turn 3 (current)"},
+    ]
+
+    [
+        chunk
+        async for chunk in pipeline._run_workflow(
+            conversation_id="conversation_123",
+            user_content="turn 3 (current)",
+            current_user=SimpleNamespace(user_id="user_123"),
+            history_messages=history,
+            stream_state=stream_state,
+            wf_ctx=_WorkflowCtx(),
+            autonomy_level=1,
+        )
+    ]
+
+    chat_history = workflow.user_input["chat_history"]
+    contents = [m["content"] for m in chat_history]
+    # 오래된 2개("turn 1", "reply 1")가 아니라, 최근 2개("turn 2", "reply 2")여야 한다.
+    assert contents == ["turn 2", "reply 2"], (
+        f"expected the most recent 2 prior messages in ascending order, got {contents!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_history_empty_when_only_current_turn():
+    """대화의 첫 메시지: 히스토리가 현재 턴 하나뿐이면 제외 후 빈 리스트가 되어야 한다."""
+    workflow = _ScriptedWorkflow(events=[])
+    pipeline = ChatStreamPipeline(
+        chat_llm_service=object(),
+        cost_calculator=object(),
+        get_core_tools_fn=lambda: None,
+        get_search_handler_fn=lambda: None,
+        chat_service_cls=object(),
+        multi_agent_workflow=workflow,
+        workflow_callback_cls=_PassthroughCallback,
+        map_node_to_agent_fn=lambda node: node,
+    )
+    stream_state, _ = create_stream_generator(
+        response_id="conversation_123",
+        message_id="message_123",
+    )
+    history = [{"role": "user", "content": "first message ever"}]
+
+    [
+        chunk
+        async for chunk in pipeline._run_workflow(
+            conversation_id="conversation_123",
+            user_content="first message ever",
+            current_user=SimpleNamespace(user_id="user_123"),
+            history_messages=history,
+            stream_state=stream_state,
+            wf_ctx=_WorkflowCtx(),
+            autonomy_level=1,
+        )
+    ]
+
+    assert workflow.user_input["chat_history"] == []
 
 
 class _RecordingLLMService:

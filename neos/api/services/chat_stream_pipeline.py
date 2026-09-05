@@ -439,13 +439,24 @@ class ChatStreamPipeline:
 
             formatted_history: List[Dict] = []
             if app_settings.CHAT_HISTORY_ENABLED and history_messages:
+                # `history_messages`는 오름차순 tail 조회라 방금 저장한 현재 유저
+                # 턴이 마지막 원소다(run() Step 1/3 참고). 그 턴은 `query`가
+                # 이미 나르므로 여기서 다시 넣으면 워크플로우가 같은 턴을 두 번
+                # 본다 — ce12b080이 LLM 메시지 배열에서 고친 것과 같은 모양이다.
+                prior_messages = history_messages[:-1]
+                # "최근 N개"가 의도이므로 tail의 **끝**에서 잘라야 한다.
+                # 오름차순 순서는 그대로 유지한다(소비자가 시간순을 가정한다).
+                max_history = app_settings.MAX_HISTORY_MESSAGES
+                recent_messages = (
+                    prior_messages[-max_history:] if max_history > 0 else []
+                )
                 formatted_history = [
                     {
                         "role": msg["role"],
                         "content": msg["content"],
                         "timestamp": msg.get("created_at"),
                     }
-                    for msg in history_messages[: app_settings.MAX_HISTORY_MESSAGES]
+                    for msg in recent_messages
                 ]
                 logger.info(
                     f"[ChatPipeline] Passing {len(formatted_history)} history messages to workflow"
