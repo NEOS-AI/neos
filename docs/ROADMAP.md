@@ -330,9 +330,45 @@ HTTP 200 → `E_SOURCE_DEAD` **미발동** → 바이너리가 mojibake로 디�
 - **의존:** 단계 1 (cassette `"skill"` + golden 재녹화)
 - **규모:** 소
 
-### N8. 첨부 → LLM 멀티모달 입력 (FE↔BE 감사 #4b)
+### N8. 첨부 → LLM 멀티모달 입력 (FE↔BE 감사 #4b) — ✅ **종결 (2026-09-06)**
 
-**현황:** 첨부 왕복은 **프론트와 DB까지만** 닫혀 있다. 업로드
+**무엇이 닫혔나.** 첨부가 실제로 모델에 도달한다. 정책은 `neos/services/attachment_blocks.py`
+하나에 있고(분류·거부 게이트·해석·상한·렌더), `chat_llm_service` 의 **세 메시지 조립 사본이
+전부** 그것을 부른다 — 넷째가 생기면 빨개지는 가드 테스트가 붙어 있다. 카탈로그에 `vision`
+플래그가 생겼고 그 유일한 독자는 거부 게이트다. 이미지 4종·PDF 는 원본으로, TXT·MD 는 텍스트
+블록으로, DOC/DOCX 는 `word_parser` 추출 텍스트로 간다. vision 없는 모델에 이미지·PDF 를
+붙이면 스트림은 `code:"attachment_unsupported"` 로, 비스트림은 422 로 **이유와 함께 거부한다.**
+설계는 `docs/superpowers/specs/2026-09-05-n8-attachment-multimodal-design.md`,
+계획은 `docs/superpowers/plans/2026-09-05-n8-attachment-multimodal.md`.
+
+**설계 결정 다섯 중 둘은 코드가 이미 답을 갖고 있었다** — 프로바이더별 블록 조립은 필요 없었고
+(LangChain 표준 블록 + 프로바이더 번역기), URL 전달은 애초에 불가능했다(`storage_url` 이
+`s3://`·`file://`). 나머지 셋만 실제 결정이었다.
+
+> 🔴 **이 기능은 병합 직전까지 테스트 밖에서 동작한 적이 없었다.** 최종 전체 브랜치 리뷰가
+> 잡았다 — `multimodal-input.tsx` 가 업로드 응답에서 `pathname` 을 구조분해하는데 라우트는
+> `name` 을 돌려주므로 `filename` 이 통째로 빠지고, `postRequestBodySchema` 의
+> `filename: z.string().min(1)` 이 **첨부 달린 채팅 요청 전체를 400 으로 거부**했다. 선재
+> 결함이고 한 줄이었다. 태스크별 리뷰는 여섯 번 다 통과했는데, 이음매를 보는 리뷰만이 이것을
+> 볼 수 있었다. 이제 업로드 라우트의 **실제 응답 모양**을 **실제 스키마**에 통과시키는
+> e2e 테스트가 `web/tests/source/attachment-upload-to-chat-schema.test.ts` 에 있다.
+
+**닫히지 않은 것 (후속).**
+
+- 🔴 `_load_document` 의 `int(document_id)` 가 문자열 id 에 `ValueError` 를 낸다 —
+  zod 스키마는 문자열 id 를 허용하므로 실제로 500 이 날 수 있다. **후속 1순위**
+- 🟡 `tests/services/test_attachment_resolution.py` 가 `_get_provider.cache_clear()` 를
+  진입시에만 불러 모듈 전역 `lru_cache` 에 스텁이 남는다 — 수집 순서 의존 실패의 씨앗
+- 🟡 카탈로그에 없는 Ollama 비전 모델은 `supports_vision → False` 로 오거부된다
+  (`list_models()` 는 라이브 서버 조회인데 카탈로그에는 두 항목뿐이다)
+- 🟡 사본 가드가 `chat_llm_service` 안의 두 변수명만 본다 — 다른 모듈의 사본은 못 잡는다
+- 🟡 `attachment_notices` 는 백엔드 밖으로 나가지만 **프론트가 아직 그리지 않는다**
+- ⬜ (b) 고아 `/api/v1/multimodal/*` 는 여전히 아무도 부르지 않는다 — 별도 항목
+- ⬜ (c) `supports_video` 는 여전히 죽은 필드다 — 이번 범위 밖으로 두었다
+
+---
+
+**착수 당시 현황:** 첨부 왕복은 **프론트와 DB까지만** 닫혀 있다. 업로드
 (`app/(chat)/api/files/upload/route.ts`) → `extractAttachments`
 (`web/lib/message-parts.ts:81`) → BE `MessageAttachment`(`chat_models.py:131`) 저장
 (`chat_stream_pipeline.py:180`) → 새로고침 시 file 파트로 복원
@@ -412,7 +448,7 @@ image·vision·base64·media 처리가 **한 줄도 없다**(2026-09-04 확인).
 | 4 | **N7** L5 → golden 연결 | 소 | 단계 1 |
 | 5 | **단계 2** 엔진 재배치 | 중 | 없음 (단계 1과 병렬 가능) |
 | 6 | **N3** 오디오 STT | 소~중 | 없음 (독립) |
-| 7 | **N8** 첨부 → LLM 멀티모달 입력 | 중~대 (재추정 대상) | 없음 — 단, **설계 확정이 선행**((a)~(d)) |
+| ~~7~~ | ~~**N8** 첨부 → LLM 멀티모달 입력~~ | — | ✅ **2026-09-06 종결** (10 커밋 + 최종 수정 웨이브) |
 | 8 | **단계 3** 분리 (Job 서비스) | 대 | 단계 1·2 + **FE 조율** |
 | 9 | **N4+N5** 감사 로그 + 테넌시 강제 | 대 | 단계 3 |
 | 10 | **N6** 플러그인(외부 스킬) | 중 | 단계 1 + N1 |
