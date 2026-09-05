@@ -39,6 +39,7 @@ from neos.api.services.chat_service import ChatService
 from neos.api.handlers.workflow_stream_handlers import WorkflowStreamCallback
 from neos.database.connection import db_manager
 from neos.database.models import User
+from neos.services.attachment_blocks import AttachmentNotSupportedError
 from neos.services.chat_llm_service import chat_llm_service
 from neos.api.services.chat_stream_pipeline import (
     ChatStreamPipeline,
@@ -525,6 +526,8 @@ async def send_message(
             errors=[]
         )
 
+    except AttachmentNotSupportedError as e:
+        raise HTTPException(status_code=422, detail=e.human_message()) from e
     except Exception as e:
         logger.error(f"Failed to send message: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -706,6 +709,8 @@ async def regenerate_message(
 
     except HTTPException:
         raise
+    except AttachmentNotSupportedError as e:
+        raise HTTPException(status_code=422, detail=e.human_message()) from e
     except Exception as e:
         logger.error(f"Failed to regenerate message: {e}")
         raise HTTPException(status_code=500, detail=str(e))

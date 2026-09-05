@@ -29,6 +29,14 @@ from neos.providers.anthropic_usage import (
     calculate_anthropic_cost,
     normalize_anthropic_usage,
 )
+from neos.services.attachment_blocks import (
+    AttachmentNotSupportedError,
+    AttachmentPlan,
+    merge_into_content,
+    render_anthropic,
+    render_langchain,
+    resolve_attachments,
+)
 from neos.tools.tool_search.search_tools_handler import SEARCH_TOOLS_TOOL
 
 logger = get_logger(__name__)
@@ -76,21 +84,31 @@ class ChatLLMService:
         self,
         conversation_messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
+        plan: Optional[AttachmentPlan] = None,
     ) -> List:
-        """대화 메시지를 LangChain 메시지 형식으로 변환"""
+        """대화 메시지를 LangChain 메시지 형식으로 변환.
+
+        `plan` 이 있으면 그 메시지의 첨부를 표준 content block 으로 병합한다.
+        없으면 종전과 같이 문자열 content 를 만든다.
+        """
         messages = []
 
-        # 시스템 프롬프트 추가
         if system_prompt:
             messages.append(SystemMessage(content=system_prompt))
 
-        # 대화 메시지 변환
-        for msg in conversation_messages:
+        for index, msg in enumerate(conversation_messages):
             role = msg.get("role", "user")
             content = msg.get("content", "")
 
             if role == "user":
-                messages.append(HumanMessage(content=content))
+                attachments = (plan.by_index.get(index) if plan else None) or []
+                messages.append(
+                    HumanMessage(
+                        content=merge_into_content(
+                            content, attachments, render_langchain
+                        )
+                    )
+                )
             elif role == "assistant":
                 messages.append(AIMessage(content=content))
             elif role == "system":
@@ -243,7 +261,12 @@ class ChatLLMService:
             llm = create_llm(provider=provider, **llm_params)
 
             # 메시지 구성
-            messages = self._build_messages(optimized_messages, system_prompt)
+            attachment_plan = await resolve_attachments(
+                optimized_messages, model=model
+            )
+            messages = self._build_messages(
+                optimized_messages, system_prompt, plan=attachment_plan
+            )
 
             # LLM 호출
             invoke_kwargs: Dict[str, Any] = {}
@@ -364,7 +387,12 @@ class ChatLLMService:
             llm = create_llm(provider=provider, **llm_params)
 
             # 메시지 구성
-            messages = self._build_messages(optimized_messages, system_prompt)
+            attachment_plan = await resolve_attachments(
+                optimized_messages, model=model
+            )
+            messages = self._build_messages(
+                optimized_messages, system_prompt, plan=attachment_plan
+            )
 
             # 시작 이벤트
             yield {"type": "start", "model": model, "provider": provider}
@@ -483,6 +511,14 @@ class ChatLLMService:
 
             yield complete_event
 
+        except AttachmentNotSupportedError as e:
+            logger.info(f"[ChatLLM] 첨부 거부: {e.human_message()}")
+            yield {
+                "type": "error",
+                "error": e.human_message(),
+                "code": e.code,
+            }
+            return
         except Exception as e:
             logger.error(f"Stream error: {e}")
             yield {"type": "error", "error": str(e)}
@@ -493,7 +529,7 @@ class ChatLLMService:
         conversation_id: str,
         message_id: str,
         conversation_messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
         model_name: Optional[str] = None,
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
@@ -550,15 +586,24 @@ class ChatLLMService:
             client = build_async_anthropic()
 
             # 메시지 형식 변환 (LangChain 형식에서 Anthropic 형식으로)
+            attachment_plan = await resolve_attachments(
+                conversation_messages, model=model
+            )
+
             anthropic_messages = []
-            for msg in conversation_messages:
+            for index, msg in enumerate(conversation_messages):
                 role = msg.get("role", "user")
                 content = msg.get("content", "")
 
                 if role in ["user", "assistant"]:
+                    attachments = (
+                        attachment_plan.by_index.get(index) if role == "user" else None
+                    ) or []
                     anthropic_messages.append({
                         "role": role,
-                        "content": content
+                        "content": merge_into_content(
+                            content, attachments, render_anthropic
+                        ),
                     })
 
             # 시작 이벤트
@@ -672,6 +717,14 @@ class ChatLLMService:
                 "latency_ms": latency_ms,
             }
 
+        except AttachmentNotSupportedError as e:
+            logger.info(f"[ChatLLM] 첨부 거부: {e.human_message()}")
+            yield {
+                "type": "error",
+                "error": e.human_message(),
+                "code": e.code,
+            }
+            return
         except Exception as e:
             logger.error(f"Tool-enabled stream error: {e}")
             yield {"type": "error", "error": str(e)}
@@ -682,8 +735,8 @@ class ChatLLMService:
         conversation_id: str,
         message_id: str,
         conversation_messages: List[Dict[str, Any]],
-        core_tools: List[Dict[str, Any]],
-        search_handler: Any,
+        core_tools: Optional[List[Dict[str, Any]]] = None,
+        search_handler: Any = None,
         tool_executor: Optional[Any] = None,
         model_name: Optional[str] = None,
         system_prompt: Optional[str] = None,
@@ -749,7 +802,7 @@ class ChatLLMService:
 
             # 1. 초기 도구 세트: 코어 도구 + search_tools + 선택적 Advisor
             tool_policy = build_tool_policy(
-                [*core_tools, SEARCH_TOOLS_TOOL],
+                [*(core_tools or []), SEARCH_TOOLS_TOOL],
                 executor_model=model,
                 prompt_caching=prompt_cache_config,
                 advisor=advisor_config,
@@ -760,12 +813,24 @@ class ChatLLMService:
             )
 
             # 메시지 변환
+            attachment_plan = await resolve_attachments(
+                conversation_messages, model=model
+            )
+
             anthropic_messages = []
-            for msg in conversation_messages:
+            for index, msg in enumerate(conversation_messages):
                 role = msg.get("role", "user")
                 content = msg.get("content", "")
                 if role in ["user", "assistant"]:
-                    anthropic_messages.append({"role": role, "content": content})
+                    attachments = (
+                        attachment_plan.by_index.get(index) if role == "user" else None
+                    ) or []
+                    anthropic_messages.append({
+                        "role": role,
+                        "content": merge_into_content(
+                            content, attachments, render_anthropic
+                        ),
+                    })
 
             yield {"type": "start", "model": model, "provider": "anthropic"}
 
@@ -1036,6 +1101,14 @@ class ChatLLMService:
                 "tool_search_rounds": round_count,
             }
 
+        except AttachmentNotSupportedError as e:
+            logger.info(f"[ChatLLM] 첨부 거부: {e.human_message()}")
+            yield {
+                "type": "error",
+                "error": e.human_message(),
+                "code": e.code,
+            }
+            return
         except anthropic.BadRequestError as e:
             if tool_policy is not None and tool_policy.use_beta:
                 error_message = (
