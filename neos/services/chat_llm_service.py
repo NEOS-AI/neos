@@ -321,6 +321,11 @@ class ChatLLMService:
             if optimization_stats:
                 result["context_optimization"] = optimization_stats
 
+            # 첨부 안내 추가
+            if attachment_plan.notices:
+                logger.info(f"[ChatLLM] Attachment notices: {attachment_plan.notices}")
+                result["attachment_notices"] = attachment_plan.notices
+
             return result
 
         except Exception as e:
@@ -509,6 +514,11 @@ class ChatLLMService:
             if optimization_stats:
                 complete_event["context_optimization"] = optimization_stats
 
+            # 첨부 안내 추가
+            if attachment_plan.notices:
+                logger.info(f"[ChatLLM] Attachment notices: {attachment_plan.notices}")
+                complete_event["attachment_notices"] = attachment_plan.notices
+
             yield complete_event
 
         except AttachmentNotSupportedError as e:
@@ -529,7 +539,7 @@ class ChatLLMService:
         conversation_id: str,
         message_id: str,
         conversation_messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        tools: List[Dict[str, Any]],
         model_name: Optional[str] = None,
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
@@ -707,7 +717,7 @@ class ChatLLMService:
             )
 
             # 완료 이벤트
-            yield {
+            complete_event_tools = {
                 "type": "complete",
                 "full_content": full_content,
                 "model_name": model,
@@ -716,6 +726,13 @@ class ChatLLMService:
                 "cost": cost_info,
                 "latency_ms": latency_ms,
             }
+
+            # 첨부 안내 추가
+            if attachment_plan.notices:
+                logger.info(f"[ChatLLM] Attachment notices: {attachment_plan.notices}")
+                complete_event_tools["attachment_notices"] = attachment_plan.notices
+
+            yield complete_event_tools
 
         except AttachmentNotSupportedError as e:
             logger.info(f"[ChatLLM] 첨부 거부: {e.human_message()}")
@@ -735,8 +752,8 @@ class ChatLLMService:
         conversation_id: str,
         message_id: str,
         conversation_messages: List[Dict[str, Any]],
-        core_tools: Optional[List[Dict[str, Any]]] = None,
-        search_handler: Any = None,
+        core_tools: List[Dict[str, Any]],
+        search_handler: Any,
         tool_executor: Optional[Any] = None,
         model_name: Optional[str] = None,
         system_prompt: Optional[str] = None,
@@ -802,7 +819,7 @@ class ChatLLMService:
 
             # 1. 초기 도구 세트: 코어 도구 + search_tools + 선택적 Advisor
             tool_policy = build_tool_policy(
-                [*(core_tools or []), SEARCH_TOOLS_TOOL],
+                [*core_tools, SEARCH_TOOLS_TOOL],
                 executor_model=model,
                 prompt_caching=prompt_cache_config,
                 advisor=advisor_config,
@@ -1090,7 +1107,7 @@ class ChatLLMService:
                 f"{latency_ms}ms, {round_count} rounds"
             )
 
-            yield {
+            complete_event_search = {
                 "type": "complete",
                 "full_content": full_content,
                 "model_name": model,
@@ -1100,6 +1117,13 @@ class ChatLLMService:
                 "latency_ms": latency_ms,
                 "tool_search_rounds": round_count,
             }
+
+            # 첨부 안내 추가
+            if attachment_plan.notices:
+                logger.info(f"[ChatLLM] Attachment notices: {attachment_plan.notices}")
+                complete_event_search["attachment_notices"] = attachment_plan.notices
+
+            yield complete_event_search
 
         except AttachmentNotSupportedError as e:
             logger.info(f"[ChatLLM] 첨부 거부: {e.human_message()}")
