@@ -7,7 +7,10 @@ N8. 정책(분류·게이트·상한·해석)은 전부 이 모듈에 있고, `c
 
 from __future__ import annotations
 
+import base64
+from dataclasses import dataclass
 from enum import Enum
+from typing import Callable
 
 from neos.config.model_config import supports_vision
 
@@ -91,3 +94,77 @@ def assert_model_accepts(
     ]
     if blocked:
         raise AttachmentNotSupportedError(model=model, items=blocked)
+
+
+@dataclass(frozen=True)
+class ResolvedAttachment:
+    """해석이 끝난 첨부 하나. 렌더 직전 상태다."""
+
+    name: str
+    mime_type: str
+    kind: AttachmentKind
+    #: IMAGE·FILE·FILE_TEXT 의 원본 바이트
+    data: bytes | None
+    #: EXTRACT 의 추출 텍스트, 또는 상한/해석 실패로 강등된 첨부의 안내 문구
+    text: str | None
+
+
+def _b64(data: bytes) -> str:
+    return base64.b64encode(data).decode("ascii")
+
+
+def render_langchain(att: ResolvedAttachment) -> dict:
+    """LangChain 표준 content block. 프로바이더 번역은 LangChain 이 한다."""
+    block_type = "image" if att.kind is AttachmentKind.IMAGE else "file"
+    return {
+        "type": block_type,
+        "base64": _b64(att.data or b""),
+        "mime_type": att.mime_type,
+    }
+
+
+def render_anthropic(att: ResolvedAttachment) -> dict:
+    """Anthropic 네이티브 block. raw SDK 를 쓰는 두 경로용이다."""
+    if att.kind is AttachmentKind.IMAGE:
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": att.mime_type,
+                "data": _b64(att.data or b""),
+            },
+        }
+    return {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": att.mime_type,
+            "data": _b64(att.data or b""),
+        },
+    }
+
+
+def merge_into_content(
+    content: str,
+    attachments: list[ResolvedAttachment],
+    renderer: Callable[[ResolvedAttachment], dict],
+) -> str | list[dict]:
+    """본문과 첨부를 하나의 content 로 합친다.
+
+    첨부가 없으면 문자열을 그대로 돌려준다 — 기존 동작을 바꾸지 않기 위해서다.
+    미디어 블록은 본문 앞에 온다(프로바이더 권장 순서).
+    """
+    if not attachments:
+        return content
+
+    blocks: list[dict] = []
+    for att in attachments:
+        if att.data is not None:
+            blocks.append(renderer(att))
+        elif att.text:
+            blocks.append(
+                {"type": "text", "text": f"[첨부 {att.name} 의 텍스트]\n{att.text}"}
+            )
+
+    blocks.append({"type": "text", "text": content})
+    return blocks

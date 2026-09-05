@@ -1,9 +1,15 @@
+import base64
+
 import pytest
 
 from neos.services.attachment_blocks import (
     AttachmentKind,
     AttachmentNotSupportedError,
+    ResolvedAttachment,
     classify,
+    merge_into_content,
+    render_anthropic,
+    render_langchain,
 )
 
 
@@ -73,3 +79,78 @@ def test_gate_lets_extracted_text_through_without_vision(monkeypatch) -> None:
         model="blind-model",
         kinds=[(AttachmentKind.EXTRACT, "memo.docx", "application/msword")],
     )
+
+
+def _image() -> ResolvedAttachment:
+    return ResolvedAttachment(
+        name="scan.png",
+        mime_type="image/png",
+        kind=AttachmentKind.IMAGE,
+        data=b"\x89PNG-bytes",
+        text=None,
+    )
+
+
+def test_render_langchain_emits_a_standard_image_block() -> None:
+    block = render_langchain(_image())
+
+    assert block == {
+        "type": "image",
+        "base64": base64.b64encode(b"\x89PNG-bytes").decode("ascii"),
+        "mime_type": "image/png",
+    }
+
+
+def test_render_anthropic_emits_a_native_image_block() -> None:
+    block = render_anthropic(_image())
+
+    assert block == {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": base64.b64encode(b"\x89PNG-bytes").decode("ascii"),
+        },
+    }
+
+
+def test_render_anthropic_emits_a_document_block_for_pdf() -> None:
+    pdf = ResolvedAttachment(
+        name="report.pdf",
+        mime_type="application/pdf",
+        kind=AttachmentKind.FILE,
+        data=b"%PDF-bytes",
+        text=None,
+    )
+
+    assert render_anthropic(pdf)["type"] == "document"
+    assert render_langchain(pdf)["type"] == "file"
+
+
+def test_merge_returns_plain_text_when_there_are_no_attachments() -> None:
+    assert merge_into_content("안녕", [], render_langchain) == "안녕"
+
+
+def test_merge_puts_blocks_before_the_text() -> None:
+    merged = merge_into_content("이 이미지 설명해줘", [_image()], render_langchain)
+
+    assert isinstance(merged, list)
+    assert merged[0]["type"] == "image"
+    assert merged[-1] == {"type": "text", "text": "이 이미지 설명해줘"}
+
+
+def test_extracted_text_joins_the_text_block_not_a_media_block() -> None:
+    docx = ResolvedAttachment(
+        name="memo.docx",
+        mime_type="application/msword",
+        kind=AttachmentKind.EXTRACT,
+        data=None,
+        text="분기 실적 요약",
+    )
+
+    merged = merge_into_content("요약해줘", [docx], render_langchain)
+
+    assert merged == [
+        {"type": "text", "text": "[첨부 memo.docx 의 텍스트]\n분기 실적 요약"},
+        {"type": "text", "text": "요약해줘"},
+    ]
