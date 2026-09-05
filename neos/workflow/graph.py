@@ -2168,11 +2168,23 @@ class MultiAgentWorkflow:
         # 기능(ENABLE_RESPONSE_REFINEMENT, EXECUTIVE_SUMMARY_ENABLED)에서만
         # 조건부로 서브스크립트 접근하므로 여기서는 제외한다. 새로 찾은 14개는
         # 전부 `.get()` 기본값 경로라 requires 에 넣지 않는다.
-        requires={
-            "execution_start",
-            "search_results",
-            "analysis_results",
-            "generation_results",
+        # execution_start 는 두 분기가 다 읽으므로 무조건이다.
+        requires={"execution_start"},
+        # 결과 셋은 **정상 생성 경로에서만** 필요하다. `final_response` 가 이미
+        # 있는 경로는 `_preserve_existing_response` 로 빠져 셋을 읽지 않는다.
+        # 계약이 이 조건을 표현하지 못하던 동안 그 사실이 위반 3건으로 나왔고,
+        # `_KNOWN_VIOLATIONS` 의 면제가 그것을 덮으면서 **이 노드의 새 회귀까지
+        # 함께** 덮고 있었다(G1-a).
+        #
+        # 실측(2026-09-05): 진입 간선 9개 중 여덟이 `final_response` 를
+        # 보장하고, `self_reflection` 하나가 결과 셋 전부를 보장한다. 새 간선이
+        # 둘 중 아무것도 안 주면 검증기가 **그 간선 이름과 함께** 빨개진다.
+        requires_unless={
+            "final_response": {
+                "search_results",
+                "analysis_results",
+                "generation_results",
+            }
         },
         # 추출기는 generate_response() 자신이 읽는 15개만 보고, 세 헬퍼 안의
         # 나머지 14개는 보지 못한다.

@@ -44,6 +44,7 @@ from neos.api.services.chat_stream_pipeline import (
     ChatStreamPipeline,
     resolve_authorized_parent_message,
 )
+from neos.config.model_config import is_user_selectable_model
 from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
 from neos.workflow.graph import multi_agent_workflow
@@ -98,6 +99,13 @@ async def _get_core_tools_cached() -> list:
 # Helper Functions
 # ============================================================================
 
+# 대화 생성/재생성이 받는 model_name은 사용자가 통제하는 값이다 — 턴 오버라이드와
+# 같은 selectable 게이트를 통과해야 한다(neos.config.model_config.is_user_selectable_model).
+# "선택 불가 모델"과 "존재하지 않는 모델"을 같은 메시지로 응답해, 어떤 내부 모델이
+# 존재하는지 흘리지 않는다.
+_MODEL_NOT_SELECTABLE_DETAIL = "Requested model is not available for selection"
+
+
 def map_node_to_agent(node_name: str) -> str:
     """
     워크플로우 노드명을 사용자 친화적인 에이전트명으로 매핑
@@ -131,6 +139,8 @@ async def create_conversation(
     current_user: User = Depends(get_current_active_user),
 ):
     """새 대화 생성"""
+    if request.model_name and not is_user_selectable_model(request.model_name):
+        raise HTTPException(status_code=400, detail=_MODEL_NOT_SELECTABLE_DETAIL)
     try:
         conversation = await ChatService.create_conversation(
             user_id=current_user.user_id,
@@ -455,7 +465,9 @@ async def send_message(
             llm_response = await chat_llm_service.generate_response(
                 conversation_id=conversation_id,
                 message_id=assistant_message_id,
-                conversation_messages=history_messages + [{"role": "user", "content": request.content}],
+                # history_messages는 이미 방금 저장한 유저 턴으로 끝난다
+                # (tail 조회이므로) — 여기서 다시 append하면 중복된다.
+                conversation_messages=history_messages,
                 model_name=conversation.get("model_name"),
                 system_prompt=conversation.get("system_prompt"),
                 temperature=conversation.get("temperature", 0.7),
@@ -622,6 +634,8 @@ async def regenerate_message(
     original_message: dict = Depends(get_owned_message),
 ):
     """메시지 재생성 (alternative response)"""
+    if request.model_name and not is_user_selectable_model(request.model_name):
+        raise HTTPException(status_code=400, detail=_MODEL_NOT_SELECTABLE_DETAIL)
     try:
         # 대화 정보 및 히스토리 가져오기
         conversation = await ChatService.get_conversation(original_message["conversation_id"])

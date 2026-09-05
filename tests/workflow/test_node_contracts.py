@@ -175,3 +175,154 @@ def test_a_writes_contract_the_extractor_can_verify_is_not_marked_hand_curated(
             f"writes_hand_curated=True 로 면제돼 있다. 면제를 지우면 이 노드가 "
             f"드리프트 가드 안으로 들어온다"
         )
+
+
+# --- requires 의 기계 검증 (§14.4 의 0/30) -----------------------------------
+#
+# `requires` 는 세 필드 중 유일하게 기계 검증이 **0개**였다 -- `requires ⊆ reads`
+# 만 강제되고 나머지는 전부 사람 판단이었다. 그런데 `_guaranteed_keys` 는 바로
+# 이 필드로 `unsatisfied_requires` 규칙 전체를 계산한다: 가장 덜 검증되는 필드가
+# 가장 많이 쓰인다.
+#
+# 위험 방향이 `reads`·`writes` 와 또 다르다. `requires` 는 **과소 선언이
+# 위험**하다 -- 필요한 키를 안 적으면 검증기가 그 키의 경로 보장을 아예 검사하지
+# 않고, 그 노드는 빈 값을 읽거나(조용한 저하) KeyError 로 죽는다.
+#
+# 기계가 증명할 수 있는 것은 그 하한이다: `state["k"]` 로 읽는 키(없으면 즉시
+# KeyError)는 셋 중 하나여야 한다 -- requires 로 선언됐거나, 자기가 먼저 썼거나,
+# 그래프 호출자가 진입 시 채워 주거나. 셋 다 아니면 그것은 판단이 아니라 결함이다.
+#
+# `requires` 가 무엇을 **의미**하는지(= "있기만 하면 되는가, 의미 있는 값이어야
+# 하는가")까지는 기계가 못 답한다. 그 부분은 여전히 사람 판단이고, 아래 두 표를
+# 구별하는 테스트가 그 경계를 못박는다.
+
+import ast as _ast
+import inspect as _inspect
+import textwrap as _textwrap
+
+from neos.workflow.contracts import state_keys_hard_read
+from neos.workflow.graph import MultiAgentWorkflow
+from neos.workflow.topology import GRAPH_ENTRY_WRITES
+
+
+def _entry_initialized_keys() -> frozenset[str]:
+    """`_create_initial_state` 가 실제로 채우는 키를 소스에서 뽑는다.
+
+    손으로 적은 목록을 두지 않는 이유는 이 저장소가 CA12 에서 이미 치른
+    대가다 -- 같은 사실을 적은 표가 둘이면 언젠가 한쪽만 고쳐진다.
+    """
+    source = _textwrap.dedent(
+        _inspect.getsource(MultiAgentWorkflow._create_initial_state)
+    )
+    keys: set[str] = set()
+    for item in _ast.walk(_ast.parse(source)):
+        if (
+            isinstance(item, _ast.Call)
+            and isinstance(item.func, _ast.Name)
+            and item.func.id == "AgentState"
+        ):
+            keys.update(kw.arg for kw in item.keywords if kw.arg)
+    return frozenset(keys)
+
+
+ENTRY_INITIALIZED = _entry_initialized_keys()
+
+
+@pytest.mark.parametrize("name", ALL_NODES)
+def test_a_key_read_without_a_default_is_required_written_or_present_at_entry(
+    name: str,
+) -> None:
+    """`state["k"]` 는 없으면 KeyError 다 -- 그 위험이 어디선가 덮여야 한다.
+
+    세 가지가 덮을 수 있다: `requires` 선언(검증기가 경로 보장을 검사한다),
+    같은 핸들러가 먼저 쓴 것(`research_continuation` 이 40번 줄에서 쓰고 57번
+    줄에서 읽는 형태), 그래프 호출자의 진입 초기화. 어느 것도 아니면 그 키는
+    **어떤 경로에서는 없을 수 있는데 기본값 없이 읽히는** 키다.
+    """
+    contract = NODE_CONTRACTS[name]
+    conditional = frozenset().union(
+        *contract.requires_unless.values(), frozenset()
+    )
+    covered = (
+        contract.requires
+        | conditional
+        | state_keys_written(contract.handler)
+        | ENTRY_INITIALIZED
+    )
+    uncovered = state_keys_hard_read(contract.handler) - covered
+    assert uncovered == set(), (
+        f"{name}: {sorted(uncovered)} 를 `state[...]` 로 기본값 없이 읽는데 "
+        "requires 에도 없고, 자기가 쓰지도 않고, 진입 초기화도 아니다 -- "
+        "그 경로로 들어오면 KeyError 다"
+    )
+
+
+def test_the_entry_table_and_the_guarantee_table_answer_different_questions() -> None:
+    """진입 초기화 목록과 `GRAPH_ENTRY_WRITES` 는 **다른 질문의 답**이다.
+
+    `_create_initial_state` 는 58개를 채우지만 `GRAPH_ENTRY_WRITES` 는 4개만
+    선언한다. 이 격차는 결함이 아니라 의도다 -- 나머지는 `[]`/`None` 로
+    초기화되는 빈 누적 필드라 **존재하지만 의미가 없다.**
+
+    두 질문을 구별한다:
+    - 진입 초기화: "키가 있는가" -> KeyError 위험을 덮는다 (위 테스트)
+    - `GRAPH_ENTRY_WRITES`: "의미 있는 값이 있는가" -> 조용한 저하를 덮는다
+
+    이 테스트가 막는 것은 다음 사람이 "격차를 메우는" 것이다. `GRAPH_ENTRY_WRITES`
+    를 진입 초기화 전체로 넓히면 `analysis_results=[]` 가 "보장됨" 이 되고,
+    §14.0 이 이 저장소의 관통 주제로 적은 "조용히 빈 산출물" 을 검증기가 더는
+    잡지 못한다 -- G1-a 가 겨눈 실패가 통째로 사라진다.
+    """
+    assert GRAPH_ENTRY_WRITES < ENTRY_INITIALIZED, (
+        "GRAPH_ENTRY_WRITES 는 진입 초기화의 진부분집합이어야 한다"
+    )
+    empty_accumulators = {"analysis_results", "generation_results", "search_results"}
+    assert empty_accumulators <= ENTRY_INITIALIZED, (
+        "누적 필드는 진입에서 초기화된다 -- 그래서 KeyError 는 안 난다"
+    )
+    assert not (empty_accumulators & GRAPH_ENTRY_WRITES), (
+        "빈 누적 필드를 GRAPH_ENTRY_WRITES 에 넣으면 검증기가 '보장됨' 으로 읽어 "
+        "조용한 저하를 더는 잡지 못한다"
+    )
+
+
+def test_the_hard_read_guard_actually_fires_when_nothing_covers_the_key() -> None:
+    """위 가드가 **구조적으로 죽어 있지 않은지**를 고정한다.
+
+    실측(2026-09-05): 지금 이 저장소에서 위 파라미터 테스트는 31개 노드 전부에
+    대해 즉시 통과하고, 그 이유는 `requires` 가 잘 선언돼서가 아니라
+    **`_create_initial_state` 가 58개 키를 전부 채우기 때문**이다. 즉 오늘
+    그 가드에서 `requires` 항은 공허하다.
+
+    공허한 가드는 §14.4 가 "검증기가 있다는 사실만으로 안심하게 된다" 고 적은
+    바로 그 상태다. 그래서 가드가 **덮이지 않은 키를 실제로 잡는다**는 것을
+    여기서 따로 증명한다 -- 앞으로 `AgentState` 에 진입 초기화 없는 키가 생기고
+    누군가 그것을 `state["k"]` 로 읽으면 위 테스트가 빨개진다.
+    """
+
+    class _Node:
+        def handler(self, state):
+            # 진입 초기화에도 없고, 자기가 쓰지도 않고, 선언도 안 한 키.
+            return state["a_key_nobody_initializes"]
+
+    hard = state_keys_hard_read(_Node.handler)
+    assert hard == {"a_key_nobody_initializes"}
+    assert not (hard & ENTRY_INITIALIZED), (
+        "이 테스트가 성립하려면 그 키가 진입 초기화에 없어야 한다"
+    )
+
+
+def test_a_defaulted_read_is_not_counted_as_a_hard_read() -> None:
+    """`state.get("k")` 는 없어도 죽지 않는다 -- 하드 리드가 아니다.
+
+    이 구별이 무너지면 가드가 `.get()` 경로까지 requires 선언을 요구하게 되고,
+    그러면 `requires` 가 `reads` 와 같은 것이 되어 두 필드를 나눈 이유가
+    사라진다.
+    """
+
+    class _Node:
+        def handler(self, state):
+            state["written"] = 1
+            return state.get("soft"), state["hard"]
+
+    assert state_keys_hard_read(_Node.handler) == {"hard"}

@@ -5,7 +5,7 @@ RAG Chat API Handlers
 일반 채팅 API와 분리되어 있지만 필요한 코드는 공유
 """
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from typing import AsyncGenerator
 import json
@@ -23,6 +23,13 @@ from neos.api.models.rag_chat_models import (
     CreateEmbeddingResponse
 )
 from neos.api.services.chat_service import ChatService
+from neos.api.dependencies.auth import get_current_active_user
+from neos.api.dependencies.resource_access import (
+    get_owned_conversation,
+    get_owned_message,
+    require_same_user_id,
+)
+from neos.database.models import User
 from neos.services.rag_chat_llm_service import rag_chat_llm_service
 from neos.services.similarity_search_service import similarity_search_service
 from neos.services.message_embedding_service import message_embedding_service
@@ -41,7 +48,9 @@ router = APIRouter()
 async def send_rag_message(
     conversation_id: str,
     request: RAGSendMessageRequest,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    authorized_conversation: dict = Depends(get_owned_conversation),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     RAG 기반 메시지 전송
@@ -74,8 +83,8 @@ async def send_rag_message(
         assistant_message_id = str(uuid.uuid4())
 
         if request.role.value == "user" and request.enable_rag:
-            # 대화 정보 및 히스토리 가져오기
-            conversation = await ChatService.get_conversation(conversation_id)
+            # 대화 정보는 이미 get_owned_conversation 의존성이 조회·검증했다
+            conversation = authorized_conversation
             history_messages = await ChatService.get_conversation_messages(
                 conversation_id=conversation_id,
                 limit=20
@@ -85,7 +94,9 @@ async def send_rag_message(
             llm_response = await rag_chat_llm_service.generate_response_with_rag(
                 conversation_id=conversation_id,
                 message_id=assistant_message_id,
-                conversation_messages=history_messages + [{"role": "user", "content": request.content}],
+                # history_messages는 이미 방금 저장한 유저 턴으로 끝난다
+                # (tail 조회이므로) — 여기서 다시 append하면 중복된다.
+                conversation_messages=history_messages,
                 user_query=request.content,
                 user_id=conversation.get("user_id"),
                 model_name=conversation.get("model_name"),
@@ -150,7 +161,9 @@ async def send_rag_message(
 @router.post("/conversations/{conversation_id}/messages/rag/stream")
 async def stream_rag_message(
     conversation_id: str,
-    request: RAGSendMessageRequest
+    request: RAGSendMessageRequest,
+    authorized_conversation: dict = Depends(get_owned_conversation),
+    current_user: User = Depends(get_current_active_user),
 ):
     """RAG 기반 스트리밍 메시지"""
 
@@ -178,8 +191,8 @@ async def stream_rag_message(
             # 시작 이벤트
             yield f"data: {json.dumps({'type': 'start', 'message_id': user_message['message_id']})}\n\n"
 
-            # 대화 정보 및 히스토리 가져오기
-            conversation = await ChatService.get_conversation(conversation_id)
+            # 대화 정보는 이미 get_owned_conversation 의존성이 조회·검증했다
+            conversation = authorized_conversation
             history_messages = await ChatService.get_conversation_messages(
                 conversation_id=conversation_id,
                 limit=20
@@ -274,7 +287,8 @@ async def stream_rag_message(
 @router.post("/conversations/{conversation_id}/search", response_model=SimilaritySearchResponse)
 async def search_similar_messages(
     conversation_id: str,
-    request: SimilaritySearchRequest
+    request: SimilaritySearchRequest,
+    _authorized_conversation: dict = Depends(get_owned_conversation),
 ):
     """대화 내 유사 메시지 검색"""
     try:
@@ -304,9 +318,11 @@ async def search_similar_messages(
 @router.post("/users/{user_id}/search", response_model=SimilaritySearchResponse)
 async def search_across_conversations(
     user_id: str,
-    request: SimilaritySearchRequest
+    request: SimilaritySearchRequest,
+    current_user: User = Depends(get_current_active_user),
 ):
     """사용자의 모든 대화에서 유사 메시지 검색"""
+    require_same_user_id(user_id, current_user)
     try:
         results = await similarity_search_service.search(
             query=request.query,
@@ -338,14 +354,13 @@ async def search_across_conversations(
 @router.post("/messages/{message_id}/embedding", response_model=CreateEmbeddingResponse)
 async def create_message_embedding(
     message_id: str,
-    request: CreateEmbeddingRequest
+    request: CreateEmbeddingRequest,
+    authorized_message: dict = Depends(get_owned_message),
 ):
     """메시지 임베딩 생성"""
     try:
-        # 메시지 조회
-        message = await ChatService.get_message(message_id)
-        if not message:
-            raise HTTPException(status_code=404, detail="Message not found")
+        # 메시지는 이미 get_owned_message 의존성이 조회·검증했다
+        message = authorized_message
 
         # 임베딩 생성
         success = await message_embedding_service.create_message_embedding(
@@ -373,8 +388,12 @@ async def create_message_embedding(
 
 
 @router.get("/users/{user_id}/embeddings/stats", response_model=EmbeddingStatsResponse)
-async def get_user_embedding_stats(user_id: str):
+async def get_user_embedding_stats(
+    user_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """사용자 임베딩 통계"""
+    require_same_user_id(user_id, current_user)
     try:
         stats = await message_embedding_service.get_user_embeddings_stats(user_id)
         return EmbeddingStatsResponse(**stats)
@@ -384,7 +403,10 @@ async def get_user_embedding_stats(user_id: str):
 
 
 @router.delete("/messages/{message_id}/embedding")
-async def delete_message_embedding(message_id: str):
+async def delete_message_embedding(
+    message_id: str,
+    _authorized_message: dict = Depends(get_owned_message),
+):
     """메시지 임베딩 삭제"""
     try:
         success = await message_embedding_service.delete_message_embedding(message_id)

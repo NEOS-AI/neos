@@ -493,6 +493,28 @@ def models_for_provider(provider: str) -> list[str]:
     return model_config.catalog.models_for_provider(provider)
 
 
+def is_user_selectable_model(model: str) -> bool:
+    """`model`이 사용자가 고를 수 있는 카탈로그 모델인가.
+
+    단순 멤버십(`get_model_spec(model) is not None`)만으로는 부족하다 —
+    카탈로그에는 `selectable: false`인 내부 전용 모델도 있다(예:
+    `claude-opus-4-8`, 심층분석 판정자 전용, `neos/config/models.yaml` 참고).
+    그런 모델은 존재는 하되 피커에 올라가지 않고, 가격도 미검증인 경우가
+    있다. `models_for_provider()`가 바로 그 "선택 가능한 목록"이다 —
+    `AnthropicProvider.list_models()`/`OpenAIProvider.list_models()`가 이미
+    이 함수로 피커 노출 여부를 결정하므로, `spec.selectable`을 직접 읽는
+    대신 이 함수를 재사용해 판단 기준을 하나로 유지한다.
+
+    사용자가 통제하는 모델 문자열이 도달하는 문(door)마다 이 함수를 쓴다 —
+    턴 오버라이드(`chat_stream_pipeline.resolve_turn_model_name`), 대화 생성,
+    메시지 재생성. 문은 여럿이지만 규칙은 하나여야 한다.
+    """
+    spec = get_model_spec(model)
+    if spec is None:
+        return False
+    return model in models_for_provider(spec.provider)
+
+
 def tiers_for_provider(provider: str) -> dict[str, str]:
     return model_config.catalog.tiers_for_provider(provider)
 

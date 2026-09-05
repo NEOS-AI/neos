@@ -21,8 +21,8 @@ import ast
 import importlib
 import inspect
 import textwrap
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 
 from neos.workflow.enums import WorkflowNode
 
@@ -58,10 +58,32 @@ class NodeContract:
     # 노드는 예외 없이 이 플래그가 True 다. 붙일 때마다 왜 검증되지 않는지
     # 데코레이터 옆 주석에 남긴다.
     writes_hand_curated: bool = False
+    # 조건부 요구: `면제 키 -> 그 키가 보장되면 필요 없어지는 키들`.
+    # `requires` 가 "모든 경로에서 필요" 라면 이쪽은 "그 경로에서 면제 키를
+    # 얻지 못했을 때만 필요" 다. 조건이 성립하는 단위는 노드가 아니라 **진입
+    # 경로**이므로(`_guaranteed_keys` 는 모든 경로의 교집합이라 한 경로만
+    # 면제 키를 안 줘도 노드 수준에서는 "보장 안 됨" 이다), 검증기는 이 필드를
+    # 선행 노드별로 검사한다 -- topology.py 의 `_conditional_violations`.
+    requires_unless: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.requires <= self.reads:
             raise ValueError(f"{self.node}: requires 는 reads 의 부분집합이어야 한다")
+        conditional = frozenset().union(
+            *self.requires_unless.values(), frozenset()
+        )
+        if not conditional <= self.reads:
+            raise ValueError(
+                f"{self.node}: requires_unless 의 키도 reads 의 부분집합이어야 한다"
+            )
+        overlap = conditional & self.requires
+        if overlap:
+            # 한쪽은 "모든 경로에서 필요", 다른 쪽은 "이 경로에서는 불필요" 다.
+            # 함께 두면 어느 쪽이 이기는지가 선언이 아니라 검사 순서로 정해진다.
+            raise ValueError(
+                f"{self.node}: {sorted(overlap)} 가 requires 와 requires_unless 에 "
+                "동시에 있다 -- 무조건 필요한 키는 조건부일 수 없다"
+            )
 
 
 NODE_CONTRACTS: dict[str, NodeContract] = {}
@@ -73,6 +95,7 @@ def node_contract(
     reads: Iterable[str] = (),
     writes: Iterable[str] = (),
     requires: Iterable[str] = (),
+    requires_unless: Mapping[str, Iterable[str]] | None = None,
     hand_curated: bool = False,
     writes_hand_curated: bool = False,
 ):
@@ -84,6 +107,10 @@ def node_contract(
             reads=frozenset(reads),
             writes=frozenset(writes),
             requires=frozenset(requires),
+            requires_unless={
+                waiver: frozenset(keys)
+                for waiver, keys in (requires_unless or {}).items()
+            },
             handler=fn,
             hand_curated=hand_curated,
             writes_hand_curated=writes_hand_curated,
@@ -388,6 +415,82 @@ def state_keys_read(fn: Callable) -> set[str]:
     잡지 못한다 -- 그런 노드는 `hand_curated=True` 로 명시해야 한다.
     """
     return _state_keys_read(fn, owner=None, depth=0, visited=set())
+
+
+def _literal_hard_read_keys(tree: ast.AST) -> set[str]:
+    """`state["x"]` 중 **읽기** 접근만 뽑는다 -- `state.get("x")` 는 제외.
+
+    `_literal_state_keys`(reads 용)와의 차이가 이 함수의 전부다: 저쪽은 두
+    형태를 합쳐 "이 노드가 무엇을 보는가" 를 답하고, 이쪽은 "없으면 그 자리에서
+    죽는가" 를 답한다. `state.get("x")` 는 없으면 `None` 을 돌려주므로 위험이
+    다르다 -- 죽지 않고 **조용히** 빈 값으로 진행한다.
+
+    `ctx` 를 봐야 하는 이유: `state["x"] = ...` 는 같은 `Subscript` 노드지만
+    Store 컨텍스트이고 그것은 쓰기다. 읽기로 세면 자기가 쓴 키를 자기가
+    요구한다고 주장하게 된다.
+    """
+    keys: set[str] = set()
+    for item in ast.walk(tree):
+        if (
+            isinstance(item, ast.Subscript)
+            and isinstance(item.value, ast.Name)
+            and item.value.id == "state"
+            and isinstance(item.slice, ast.Constant)
+            and isinstance(item.slice.value, str)
+            and isinstance(item.ctx, ast.Load)
+        ):
+            keys.add(item.slice.value)
+    return keys
+
+
+def _state_keys_hard_read(
+    fn: Callable, owner: type | None, depth: int, visited: set[int]
+) -> set[str]:
+    if id(fn) in visited or depth >= MAX_DELEGATE_DEPTH:
+        return set()
+    visited.add(id(fn))
+
+    try:
+        source = textwrap.dedent(inspect.getsource(fn))
+    except (OSError, TypeError):
+        return set()
+    tree = ast.parse(source)
+    keys = _literal_hard_read_keys(tree)
+
+    if owner is None:
+        owner = _owning_class(fn)
+    if owner is None:
+        return keys
+
+    attr_class_names = _attr_class_names(owner)
+    for attr, method_name in _delegate_calls(tree):
+        class_name = attr_class_names.get(attr)
+        if class_name is None:
+            continue
+        target_cls = _resolve_class(owner, class_name)
+        if target_cls is None:
+            continue
+        target_fn = inspect.getattr_static(target_cls, method_name, None)
+        if not callable(target_fn):
+            continue
+        keys |= _state_keys_hard_read(target_fn, target_cls, depth + 1, visited)
+    return keys
+
+
+def state_keys_hard_read(fn: Callable) -> set[str]:
+    """기본값 없이 읽는 키 -- 없으면 그 자리에서 `KeyError` 다.
+
+    `state_keys_read` 와 같은 위임 체인을 따라간다(모든 위임 호출). 방향이
+    같기 때문이다: 위임 대상이 기본값 없이 읽으면 이 노드로 들어온 실행도
+    거기서 죽는다. `writes` 쪽이 반환 위치의 위임만 따라가는 것과 다르다 --
+    저쪽은 "선언이 실제보다 많으면 위험" 이라 확신 없으면 침묵해야 하지만,
+    이쪽은 **놓치는 것이 위험**이라 넓게 본다.
+
+    놓치는 것: 변수로 감싼 접근(`s = state; s["x"]`), 지역 변수 키
+    (`state[key]`), 정적으로 못 푸는 위임. 그래서 이 추출기가 만드는 것은
+    **하한**이다 -- "이만큼은 확실히 하드 리드다" 이지 "이게 전부다" 가 아니다.
+    """
+    return _state_keys_hard_read(fn, owner=None, depth=0, visited=set())
 
 
 def _literal_state_keys_written(tree: ast.AST) -> set[str]:

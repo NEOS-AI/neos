@@ -68,9 +68,13 @@ _KNOWN_VIOLATIONS: frozenset[tuple[str, str, str]] = frozenset(
         # "final_response 가 없을 때만 필요" 라는 조건을 표현하지 못해서 진짜
         # 버그와 무해한 경로가 같은 서명을 낸다 -- G1-a 의 실제 수정은
         # `tests/workflow/test_direct_response_path.py` 가 행동으로 고정한다.
-        ("unsatisfied_requires", "response_generator", "analysis_results"),
-        ("unsatisfied_requires", "response_generator", "generation_results"),
-        ("unsatisfied_requires", "response_generator", "search_results"),
+        # 2026-09-05: 셋을 지웠다. 면제가 아니라 **해소**다 -- 계약이
+        # `requires_unless` 로 조건을 표현하게 됐고, 검증기가 진입 경로마다
+        # "면제 키 또는 요구 키" 를 검사한다. 실측으로 확인한 것: 진입 간선은
+        # 주석이 적던 7개가 아니라 **9개**이고, 그중 여덟이 `final_response` 를
+        # 보장하며 나머지 하나(`self_reflection`)는 결과 셋 전부를 보장한다.
+        # 즉 아홉 경로 전부가 둘 중 하나를 준다 -- "무해하다" 는 판정은 옳았고
+        # 세는 수가 틀렸다.
     }
 )
 

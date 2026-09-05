@@ -780,6 +780,107 @@ def test_list_user_conversations_maps_model_validation_error_to_500(monkeypatch)
     assert "Invalid cursor" not in response.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    ("history", "expected_messages"),
+    [
+        (
+            [
+                {"role": "assistant", "content": "hi, how can I help?"},
+                {"role": "user", "content": "what's the weather?"},
+            ],
+            [
+                {"role": "assistant", "content": "hi, how can I help?"},
+                {"role": "user", "content": "what's the weather?"},
+            ],
+        ),
+        (
+            [{"role": "user", "content": "what's the weather?"}],
+            [{"role": "user", "content": "what's the weather?"}],
+        ),
+    ],
+    ids=["history-tail-already-user-turn", "first-turn-conversation"],
+)
+def test_send_message_sends_history_tail_user_turn_once(
+    monkeypatch,
+    history,
+    expected_messages,
+):
+    """History가 tail이 된 뒤 방금 저장한 유저 턴을 항상 포함하므로,
+    수동 append는 그것을 중복시킨다 — LLM에 실제로 전달된 배열로 검증한다."""
+    generate_response = AsyncMock(
+        return_value={
+            "content": "ok",
+            "model_name": "gpt-4o-mini",
+            "provider": "openai",
+            "usage": {"total_tokens": 1, "prompt_tokens": 1, "completion_tokens": 0},
+            "cost": {"total_cost": 0},
+            "latency_ms": 1,
+            "finish_reason": "stop",
+        }
+    )
+    monkeypatch.setattr(
+        chat_handlers.chat_llm_service, "generate_response", generate_response
+    )
+    monkeypatch.setattr(
+        chat_handlers.ChatService, "get_conversation", AsyncMock(return_value=_conversation())
+    )
+    monkeypatch.setattr(
+        chat_handlers.ChatService,
+        "get_conversation_messages",
+        AsyncMock(return_value=history),
+    )
+    monkeypatch.setattr(
+        chat_handlers.ChatService,
+        "add_message",
+        AsyncMock(
+            side_effect=[
+                {
+                    "message_id": "u1",
+                    "conversation_id": "c1",
+                    "role": "user",
+                    "content": "what's the weather?",
+                    "sequence_number": 1,
+                    "parent_message_id": None,
+                    "status": "completed",
+                    "created_at": "2026-07-01T00:00:00",
+                    "updated_at": "2026-07-01T00:00:00",
+                },
+                {
+                    "message_id": "a1",
+                    "conversation_id": "c1",
+                    "role": "assistant",
+                    "content": "ok",
+                    "sequence_number": 2,
+                    "parent_message_id": "u1",
+                    "status": "completed",
+                    "created_at": "2026-07-01T00:00:00",
+                    "updated_at": "2026-07-01T00:00:00",
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        chat_handlers.cost_calculator,
+        "record_cost_for_existing_message",
+        AsyncMock(),
+    )
+    current_user = SimpleNamespace(user_id="owner", is_active=True)
+
+    with TestClient(_chat_app(current_user)) as client:
+        response = client.post(
+            "/conversations/c1/messages",
+            json={"content": "what's the weather?", "role": "user"},
+        )
+
+    assert response.status_code == 200
+    sent_messages = generate_response.await_args.kwargs["conversation_messages"]
+    user_turns = [m for m in sent_messages if m.get("content") == "what's the weather?"]
+    assert len(user_turns) == 1, (
+        f"expected the user turn exactly once, found {len(user_turns)} in {sent_messages!r}"
+    )
+    assert sent_messages == expected_messages
+
+
 def test_list_user_conversations_malformed_cursor_still_400(monkeypatch):
     """Genuine cursor-decode failures (ValueError from ChatService.list_conversations,
     which propagates decode_conversation_cursor errors) must still map to 400."""

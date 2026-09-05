@@ -39,10 +39,8 @@ import { DEFAULT_ACCESS_TOKEN_TTL_MS } from "../../lib/auth-tokens";
  * 이 테스트 프로세스의 모듈 해석 한 번만 우회할 뿐이다.
  */
 async function importAuthModule() {
-  // biome-ignore lint/suspicious/noExplicitAny: Node 내부 로더는 공개 타입이 없다
   const ModuleAny = Module as any;
   const originalLoad = ModuleAny._load;
-  // biome-ignore lint/suspicious/noExplicitAny: 위와 동일
   ModuleAny._load = (request: string, ...rest: any[]) => {
     if (request === "server-only") {
       return {};
@@ -56,7 +54,6 @@ async function importAuthModule() {
   }
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: 동적 import 결과 형태를 미리 좁힐 수 없다
 let authModule: any;
 
 before(async () => {
@@ -171,10 +168,14 @@ describe("computeAccessTokenExpiry — 로그인/가입 시점 (user가 있음)"
   });
 });
 
-describe("computeAccessTokenExpiry — 세션 갱신 시점 (trigger === update)", () => {
+describe("computeAccessTokenExpiry — 세션 갱신 시점 (user가 없음)", () => {
+  // fix round 1: `computeAccessTokenExpiry`에서 `trigger` 파라미터를 없앴다
+  // (안 읽는 파라미터를 안전하지 않은 방식으로 "읽게" 만드는 대신 삭제 --
+  // 분기는 여전히 `params.user`의 truthiness만 본다). `jwt` 콜백 쪽의
+  // `trigger === "update"` 게이트는 그대로 남아 있다 -- 이 함수를 호출할지
+  // 말지를 결정할 뿐, 넘기는 인자 모양에는 관여하지 않는다.
   test("세션이 expiresIn을 실어 오면 그 값을 쓴다", () => {
     const expires = authModule.computeAccessTokenExpiry({
-      trigger: "update",
       session: { expiresIn: 7200 },
       now: 0,
     });
@@ -184,7 +185,6 @@ describe("computeAccessTokenExpiry — 세션 갱신 시점 (trigger === update)
 
   test("세션에 값이 없으면 15분 기본값으로 폴백한다 (이 경로엔 BE 응답이 없다)", () => {
     const expires = authModule.computeAccessTokenExpiry({
-      trigger: "update",
       session: undefined,
       now: 0,
     });

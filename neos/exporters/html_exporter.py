@@ -3,7 +3,7 @@
 import logging
 from typing import Optional
 
-from .base import BaseExporter, ResearchReport
+from .base import BaseExporter, ResearchReport, safe_url
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,9 @@ class HTMLExporter(BaseExporter):
             sections.append("<h2>Sources</h2>")
             for i, c in enumerate(report.citations, 1):
                 title = _escape(c.get("title", "Untitled"))
-                url = c.get("url", "#")
+                # 제목만 이스케이프하고 URL 은 날것으로 넣고 있었다 -- citations
+                # 의 url 은 검색 결과에서 오는 외부 데이터다(`safe_url` 독스트링).
+                url = safe_url(c.get("url") or "")
                 sections.append(
                     f'<div class="citation"><strong>{i}.</strong> '
                     f'<a href="{url}" target="_blank">{title}</a></div>'
@@ -145,7 +147,9 @@ class HTMLExporter(BaseExporter):
             sections.append("<h2>Detailed Search Results</h2>")
             for i, r in enumerate(report.search_results[:10], 1):
                 title = _escape(r.get("title", "Untitled"))
-                url = r.get("url", "#")
+                # citations 와 **같은 외부 데이터**이고 같은 구멍이었다. 이쪽은
+                # URL 을 본문 텍스트로도 내보내므로 두 자리 다 거쳐야 한다.
+                url = safe_url(r.get("url") or "")
                 content = _escape((r.get("content") or "")[:300])
                 sections.append(
                     f'<div class="search-result">'

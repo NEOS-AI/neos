@@ -65,6 +65,7 @@ class _ContractLike(Protocol):
 
     writes: frozenset[str]
     requires: frozenset[str]
+    requires_unless: Mapping[str, frozenset[str]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +108,12 @@ class TopologyViolation:
     node: str | None
     detail: str
     key: str | None = None
+    # 위반이 **특정 진입 경로**에서만 성립할 때 그 선행 노드 이름. 조건부 요구
+    # (`requires_unless`) 검사만 채운다 -- 그 검사는 경로별로 돌기 때문에 범인을
+    # 지목할 수 있고, 경로가 아홉인 노드에서 키 이름만 주면 어디를 고쳐야
+    # 하는지 알 수 없다. 모든 경로의 교집합으로 계산하는 무조건 `requires`
+    # 위반은 특정 경로의 잘못이 아니므로 `None` 으로 남는다.
+    via: str | None = None
 
 
 def validate_topology(
@@ -263,6 +270,11 @@ def validate_topology(
                     key=key,
                 )
             )
+        violations.extend(
+            _conditional_violations(
+                node, contract, topology, writes_by_node, guaranteed
+            )
+        )
 
     # -- 필수 노드 -----------------------------------------------------------
     declared_nodes = frozenset(topology.nodes)
@@ -341,6 +353,59 @@ def validate_topology(
                 )
 
     return tuple(violations)
+
+
+def _conditional_violations(
+    node: str,
+    contract: _ContractLike,
+    topology: GraphTopology,
+    writes: Mapping[str, frozenset[str]],
+    guaranteed: Mapping[str, frozenset[str]],
+) -> list[TopologyViolation]:
+    """`requires_unless` 를 **진입 경로마다** 검사한다.
+
+    무조건 `requires` 는 `_guaranteed_keys` 의 교집합 하나로 판정하면 되지만
+    조건부 요구는 그럴 수 없다. 교집합은 "모든 경로에서 참인 것" 이므로, 아홉
+    경로 중 여덟이 면제 키를 줘도 한 경로가 안 주면 노드 수준에서는 면제 키가
+    없는 것으로 나온다 -- 노드 단위로 면제를 판정하면 **면제가 발동조차 하지
+    않는다.** 조건이 성립하는 단위가 경로이므로 경로별로 본다.
+
+    한 경로가 합법인 조건은 둘 중 하나다: 면제 키를 얻었거나(그 경로로 들어온
+    실행은 조건부 키를 읽지 않는다), 조건부 키를 전부 얻었거나. 둘 다 아니면
+    그 경로로 들어온 실행은 **빈 값을 읽고 조용히 저하된다** -- §14.0 이
+    이 저장소의 관통 주제로 적은 실패다.
+    """
+    if not contract.requires_unless:
+        return []
+
+    predecessors = sorted({source for source, target in topology.edges if target == node})
+    violations: list[TopologyViolation] = []
+    for waiver, keys in sorted(contract.requires_unless.items()):
+        for pred in predecessors:
+            if pred == START:
+                # START 경로에서 쓸 수 있는 것은 호출자가 채워 준 것뿐이다.
+                available = topology.initial_writes
+            else:
+                available = guaranteed.get(pred, frozenset()) | writes.get(
+                    pred, frozenset()
+                )
+            if waiver in available:
+                continue
+            for key in sorted(keys - available):
+                violations.append(
+                    TopologyViolation(
+                        rule="unsatisfied_requires",
+                        node=node,
+                        detail=(
+                            f"'{node}' 가 '{pred}' 경로로 들어올 때 키 '{key}' 가 "
+                            f"보장되지 않는다 -- 그 경로는 면제 키 '{waiver}' 도 "
+                            "주지 않는다"
+                        ),
+                        key=key,
+                        via=pred,
+                    )
+                )
+    return violations
 
 
 def _guaranteed_keys(

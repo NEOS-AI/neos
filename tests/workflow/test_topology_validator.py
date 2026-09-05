@@ -1,3 +1,6 @@
+import pytest
+
+
 from neos.workflow.contracts import NodeContract
 from neos.workflow.topology import (
     END,
@@ -328,6 +331,9 @@ def _writer(name: str, writes: set[str]):
     c = _C()
     c.writes = frozenset(writes)
     c.requires = frozenset()
+    # `_ContractLike` 가 요구하는 셋째 필드. 빈 매핑이면 조건부 검사가 바로
+    # 빠져나가므로 이 스텁이 겨누는 `no_writer_for_required_key` 규칙과 무관하다.
+    c.requires_unless = {}
     return c
 
 
@@ -379,3 +385,127 @@ def test_any_writer_satisfies_the_key_not_a_particular_node() -> None:
         must_write=frozenset({"final_response"}),
     )
     assert violations == ()
+
+
+# --- 조건부 요구 (`requires_unless`) -----------------------------------------
+#
+# G1-a 가 만든 문제다. `response_generator` 는 결과 셋(search/analysis/
+# generation)을 무조건 읽지만, `final_response` 가 이미 있는 경로에서는
+# `_preserve_existing_response` 로 빠져 그 셋을 읽지 않는다. 계약이 그 조건을
+# 표현하지 못해 **진짜 버그와 무해한 경로가 같은 서명**을 냈고, 위반 3건이
+# `_KNOWN_VIOLATIONS` 에 면제로 박혀 그 노드의 새 회귀까지 함께 가렸다.
+#
+# 조건이 성립하는 단위가 노드가 아니라 **진입 경로**라는 것이 핵심이다.
+# `_guaranteed_keys` 는 모든 경로의 교집합이므로, 한 경로라도 면제 키를 주지
+# 않으면 노드 수준에서는 면제 키가 "보장 안 됨" 이다 -- 노드 단위 면제로
+# 썼다면 발동조차 하지 않았을 것이다.
+
+
+def _conditional(node, *, requires_unless, reads=(), writes=()) -> NodeContract:
+    return NodeContract(
+        node=node,
+        reads=frozenset(reads) | frozenset().union(*requires_unless.values()),
+        writes=frozenset(writes),
+        requires=frozenset(),
+        requires_unless={k: frozenset(v) for k, v in requires_unless.items()},
+        handler=lambda state: state,
+    )
+
+
+def test_a_conditional_requirement_is_waived_on_the_path_that_guarantees_the_waiver() -> (
+    None
+):
+    """면제 키를 주는 경로와 요구 키를 주는 경로가 섞여 있어도 유효하다.
+
+    `answered` 는 `final_response` 를 쓰고 `researched` 는 결과 셋을 쓴다.
+    둘 다 합법인데, 노드 단위 교집합으로는 어느 쪽도 보장되지 않는다.
+    """
+    contracts = {
+        "answered": _contract("answered", writes=("final_response",)),
+        "researched": _contract("researched", writes=("search_results",)),
+        "gen": _conditional(
+            "gen", requires_unless={"final_response": ("search_results",)}
+        ),
+    }
+    topology = GraphTopology(
+        nodes=("answered", "researched", "gen"),
+        edges=(
+            (START, "answered"),
+            (START, "researched"),
+            ("answered", "gen"),
+            ("researched", "gen"),
+            ("gen", END),
+        ),
+    )
+    assert validate_topology(topology, contracts=contracts) == ()
+
+
+def test_a_conditional_requirement_fires_on_the_path_that_guarantees_neither() -> None:
+    """면제 키도 요구 키도 주지 않는 경로가 하나라도 있으면 위반이다."""
+    contracts = {
+        "answered": _contract("answered", writes=("final_response",)),
+        "empty_handed": _contract("empty_handed", writes=("unrelated",)),
+        "gen": _conditional(
+            "gen", requires_unless={"final_response": ("search_results",)}
+        ),
+    }
+    topology = GraphTopology(
+        nodes=("answered", "empty_handed", "gen"),
+        edges=(
+            (START, "answered"),
+            (START, "empty_handed"),
+            ("answered", "gen"),
+            ("empty_handed", "gen"),
+            ("gen", END),
+        ),
+    )
+    violations = validate_topology(topology, contracts=contracts)
+    assert "unsatisfied_requires" in _rules(violations)
+    assert any(v.key == "search_results" for v in violations)
+
+
+def test_a_conditional_violation_names_the_path_that_caused_it() -> None:
+    """위반이 **어느 선행 노드**로 들어온 경로인지 이름을 댄다.
+
+    지금 `unsatisfied_requires` 는 키 이름만 주므로, 진입 경로가 아홉인
+    노드에서 어디를 고쳐야 하는지 알 수 없다. 조건부 검사는 경로별로 돌므로
+    범인을 지목할 수 있고, 그 정보를 버리면 검사를 정밀하게 만든 이유가
+    절반 사라진다.
+    """
+    contracts = {
+        "answered": _contract("answered", writes=("final_response",)),
+        "empty_handed": _contract("empty_handed", writes=("unrelated",)),
+        "gen": _conditional(
+            "gen", requires_unless={"final_response": ("search_results",)}
+        ),
+    }
+    topology = GraphTopology(
+        nodes=("answered", "empty_handed", "gen"),
+        edges=(
+            (START, "answered"),
+            (START, "empty_handed"),
+            ("answered", "gen"),
+            ("empty_handed", "gen"),
+            ("gen", END),
+        ),
+    )
+    violations = validate_topology(topology, contracts=contracts)
+    offenders = {v.via for v in violations if v.rule == "unsatisfied_requires"}
+    assert offenders == {"empty_handed"}
+
+
+def test_a_key_cannot_be_both_unconditionally_and_conditionally_required() -> None:
+    """같은 키를 `requires` 와 `requires_unless` 양쪽에 적으면 모순이다.
+
+    한쪽은 "모든 경로에서 필요" 이고 다른 쪽은 "이 경로에서는 불필요" 다.
+    둘을 함께 두면 어느 쪽이 이기는지가 선언이 아니라 **검사 순서**로 정해진다.
+    """
+    with pytest.raises(ValueError, match="requires_unless"):
+        NodeContract(
+            node="gen",
+            reads=frozenset({"search_results"}),
+            writes=frozenset(),
+            requires=frozenset({"search_results"}),
+            requires_unless={"final_response": frozenset({"search_results"})},
+            handler=lambda state: state,
+        )

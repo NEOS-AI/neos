@@ -13,7 +13,7 @@ import logging
 import re
 from typing import Optional
 
-from .base import BaseExporter, ResearchReport
+from .base import BaseExporter, ResearchReport, safe_url
 
 logger = logging.getLogger(__name__)
 
@@ -217,11 +217,13 @@ def _markdown_to_html(md: str) -> str:
 
 
 def _safe_url(url: str) -> str:
-    """http/https 스킴만 허용. 그 외는 '#'으로 대체 (CR-P6-02: javascript: URI 차단)."""
-    stripped = url.strip()
-    if stripped.startswith(("http://", "https://")):
-        return _escape(stripped)
-    return "#"
+    """http/https 스킴만 허용. 그 외는 '#'으로 대체 (CR-P6-02: javascript: URI 차단).
+
+    구현은 `base.safe_url` 로 옮겼다 -- 이 수정이 canvas 에만 도착해 있었고
+    html_exporter 는 뚫린 채였다(2026-09-05). 이름을 남기는 것은 이 모듈 안의
+    호출부(`_inline`) 때문이고, 로직 사본은 하나다.
+    """
+    return safe_url(url)
 
 
 def _inline(text: str) -> str:

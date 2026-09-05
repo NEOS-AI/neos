@@ -44,6 +44,7 @@ from neos.api.models.open_responses import (
 from neos.api.services.chat_chunk_dispatcher import ChunkEventDispatcher, StreamAccumulator
 from neos.api.services.chat_stream_strategy import resolve_llm_strategy
 from neos.api.services.chat_system_prompt_builder import SystemPromptBuilder
+from neos.config.model_config import is_user_selectable_model
 from neos.config.settings import settings as app_settings
 from neos.utils.logger import get_logger
 
@@ -81,6 +82,54 @@ async def resolve_authorized_parent_message(
         return None
 
     return parent_message
+
+
+def resolve_turn_model_name(
+    request_metadata: Dict[str, Any],
+    conversation: Dict[str, Any],
+) -> Optional[str]:
+    """이 턴에 쓸 모델명을 고른다.
+
+    `request_metadata["model"]`은 매 메시지 FE 셀렉터 값이 실려 오는,
+    사용자가 통제하는 값이 모델 라우팅에 도달하는 경로다(#6). 이 함수는
+    두 가지를 거부하고 `conversation["model_name"]`으로 떨어진다 —
+    조용히가 아니라 `logger.warning`을 남기고:
+
+    1. 문자열이 아닌 값 (`metadata`는 `Dict[str, Any]`라 list/dict가 올 수
+       있다 — 그대로 카탈로그 조회에 넘기면 `dict.get()`이 해시 불가능한
+       키에 `TypeError`를 내고, 그게 바깥 `except Exception`까지 번져
+       턴 전체가 `response.failed`로 죽는다. 절대 그 지점까지 가면 안 된다).
+    2. 사용자가 선택할 수 없는 모델
+       (`neos.config.model_config.is_user_selectable_model` 참고 —
+       카탈로그 *멤버*인 것과 *선택 가능*한 것은 다르다).
+
+    설계 결정: 이 오버라이드는 **그 턴에만** 적용되고
+    `conversation["model_name"]`에는 쓰이지 않는다. FE 셀렉터는
+    `chat-model` 쿠키 기반 전역 기본값이라 대화별 상태가 아니기 때문이다.
+    """
+    requested_model = request_metadata.get("model")
+    conversation_model = conversation.get("model_name")
+    if not requested_model:
+        return conversation_model
+    if not isinstance(requested_model, str):
+        logger.warning(
+            "Ignoring non-string per-turn model override %r (type %s); "
+            "falling back to conversation model %r",
+            requested_model,
+            type(requested_model).__name__,
+            conversation_model,
+        )
+        return conversation_model
+    if not is_user_selectable_model(requested_model):
+        logger.warning(
+            "Ignoring unknown or non-selectable per-turn model override %r "
+            "(not in the user-selectable model catalog neos/config/models.yaml) "
+            "— falling back to conversation model %r",
+            requested_model,
+            conversation_model,
+        )
+        return conversation_model
+    return requested_model
 
 
 @dataclass
@@ -194,6 +243,7 @@ class ChatStreamPipeline:
 
             # ── Step 3: 대화 정보 및 히스토리 로드 ───────────────────
             conversation = authorized_conversation
+            turn_model_name = resolve_turn_model_name(request_metadata, conversation)
             history_messages = await self._ChatService.get_conversation_messages(
                 conversation_id=conversation_id,
                 limit=20,
@@ -247,7 +297,9 @@ class ChatStreamPipeline:
                 get_core_tools_fn=self._get_core_tools_fn,
                 get_search_handler_fn=self._get_search_handler_fn,
             )
-            messages = history_messages + [{"role": "user", "content": request.content}]
+            # history_messages는 이미 방금 Step 1에서 저장한 유저 턴으로 끝난다
+            # (tail 조회이므로) — 여기서 다시 append하면 중복된다.
+            messages = history_messages
             dispatcher = ChunkEventDispatcher(
                 stream_state=stream_state,
                 accumulator=acc,
@@ -258,7 +310,7 @@ class ChatStreamPipeline:
                 conversation_id=conversation_id,
                 message_id=assistant_message_id,
                 messages=messages,
-                model_name=conversation.get("model_name"),
+                model_name=turn_model_name,
                 system_prompt=system_prompt,
                 temperature=conversation.get("temperature", 0.7),
                 max_tokens=conversation.get("max_tokens"),
@@ -303,7 +355,7 @@ class ChatStreamPipeline:
                 role="assistant",
                 content=acc.full_content,
                 message_id=assistant_message_id,
-                model_name=conversation.get("model_name"),
+                model_name=turn_model_name,
                 total_tokens=acc.usage_info["total_tokens"] if acc.usage_info else 0,
                 prompt_tokens=acc.usage_info["prompt_tokens"] if acc.usage_info else 0,
                 completion_tokens=acc.usage_info["completion_tokens"] if acc.usage_info else 0,
@@ -314,14 +366,14 @@ class ChatStreamPipeline:
             if acc.usage_info and acc.cost_info:
                 provider = (
                     "anthropic"
-                    if "claude" in (conversation.get("model_name") or "").lower()
+                    if "claude" in (turn_model_name or "").lower()
                     else "openai"
                 )
                 await self._cost_calc.record_cost_for_existing_message(
                     message_id=assistant_message_id,
                     conversation_id=conversation_id,
                     provider=provider,
-                    model_name=conversation.get("model_name"),
+                    model_name=turn_model_name,
                     prompt_tokens=acc.usage_info["prompt_tokens"],
                     completion_tokens=acc.usage_info["completion_tokens"],
                     total_tokens=acc.usage_info["total_tokens"],
@@ -387,13 +439,24 @@ class ChatStreamPipeline:
 
             formatted_history: List[Dict] = []
             if app_settings.CHAT_HISTORY_ENABLED and history_messages:
+                # `history_messages`는 오름차순 tail 조회라 방금 저장한 현재 유저
+                # 턴이 마지막 원소다(run() Step 1/3 참고). 그 턴은 `query`가
+                # 이미 나르므로 여기서 다시 넣으면 워크플로우가 같은 턴을 두 번
+                # 본다 — ce12b080이 LLM 메시지 배열에서 고친 것과 같은 모양이다.
+                prior_messages = history_messages[:-1]
+                # "최근 N개"가 의도이므로 tail의 **끝**에서 잘라야 한다.
+                # 오름차순 순서는 그대로 유지한다(소비자가 시간순을 가정한다).
+                max_history = app_settings.MAX_HISTORY_MESSAGES
+                recent_messages = (
+                    prior_messages[-max_history:] if max_history > 0 else []
+                )
                 formatted_history = [
                     {
                         "role": msg["role"],
                         "content": msg["content"],
                         "timestamp": msg.get("created_at"),
                     }
-                    for msg in history_messages[: app_settings.MAX_HISTORY_MESSAGES]
+                    for msg in recent_messages
                 ]
                 logger.info(
                     f"[ChatPipeline] Passing {len(formatted_history)} history messages to workflow"

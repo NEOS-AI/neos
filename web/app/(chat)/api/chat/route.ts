@@ -135,7 +135,7 @@ export async function POST(request: Request) {
           attachments: messageAttachments,
           metadata: {
             fe_chat_id: id,
-            model: selectedChatModel,
+            model: mapToBackendModelName(selectedChatModel),
             visibility: selectedVisibilityType,
             autonomy_level: autonomyLevel,
           },

@@ -1,11 +1,73 @@
 import { strict as assert } from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   chatModels,
   DEFAULT_CHAT_MODEL,
   mapToBackendModelName,
+  RETIRED_MODEL_MAP,
 } from "../../lib/ai/models";
+
+/**
+ * Derives "which backend model ids the catalog will actually accept" from
+ * the real catalog source (`neos/config/models.yaml`), instead of a
+ * hand-typed list of retired names. Finding 1 slipped past the old
+ * hand-maintained `retired` set precisely because that set never covered
+ * `selectable: false` entries — see git history for
+ * `web/tests/source/ai-models.test.ts` around 2026-09-04.
+ *
+ * This is a light-weight structural scan, not a full YAML parser (no `yaml`
+ * package is a web/ dependency). It only needs to know, per top-level key
+ * under `models:`, whether that key's block contains `selectable: false`.
+ * The `models:` section is bounded by the next top-level key
+ * (`anthropic_families:`) so unrelated sections (aliases, families) can't
+ * leak in.
+ */
+function loadSelectableBackendModelIds(): Set<string> {
+  const yamlPath = fileURLToPath(
+    new URL("../../../neos/config/models.yaml", import.meta.url)
+  );
+  const source = readFileSync(yamlPath, "utf8");
+
+  const modelsStart = source.indexOf("\nmodels:\n");
+  const modelsEnd = source.indexOf("\nanthropic_families:\n");
+  assert.ok(
+    modelsStart >= 0 && modelsEnd > modelsStart,
+    "neos/config/models.yaml structure changed — can't locate the models: block"
+  );
+  const modelsBlock = source.slice(modelsStart, modelsEnd);
+
+  // Top-level (2-space indent) keys, quoted or bare (e.g. "llama3.1:8b":).
+  const keyRe = /^ {2}(?:"([^"\n]+)"|([^"\s:][^:\n]*?)):\s*$/gm;
+  const keys: { name: string; index: number }[] = [];
+  let match: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex-exec-in-loop idiom
+  while ((match = keyRe.exec(modelsBlock))) {
+    keys.push({ name: match[1] ?? match[2], index: match.index });
+  }
+  assert.ok(
+    keys.length > 5,
+    "found suspiciously few model keys — the scan regex likely broke"
+  );
+
+  const selectable = new Set<string>();
+  for (let i = 0; i < keys.length; i++) {
+    const end = i + 1 < keys.length ? keys[i + 1].index : modelsBlock.length;
+    const body = modelsBlock.slice(keys[i].index, end);
+    // Field lines are 4-space indented; comments describing an *upcoming*
+    // entry sit at 2-space indent and can themselves contain the literal
+    // text "selectable: false" in prose (e.g. claude-opus-4-8's docstring).
+    // Anchor to the real field line only.
+    if (!/^ {4}selectable:\s*false\s*$/m.test(body)) {
+      selectable.add(keys[i].name);
+    }
+  }
+  return selectable;
+}
+
+const SELECTABLE_BACKEND_MODEL_IDS = loadSelectableBackendModelIds();
 
 describe("curated AI models", () => {
   test("defaults chats to Claude Sonnet 5", () => {
@@ -85,22 +147,28 @@ describe("curated AI models", () => {
     );
   });
 
-  test("never maps onto a model the backend catalog retired", () => {
-    // These were selectable without a price, so their cost aggregated as zero.
-    const retired = new Set([
-      "claude-sonnet-4-6",
-      "claude-opus-4-6",
-      "gpt-5-mini-2025-08-07",
-      "gpt-5-2025-08-07",
-      "o3",
-      "o3-mini",
-    ]);
+  test("never maps onto a model the backend catalog would reject", () => {
+    // Covers both "retired / never existed" (not in models.yaml at all) and
+    // "exists but selectable: false" (Finding 1: gpt-4o / gpt-4o-mini) —
+    // anything not in SELECTABLE_BACKEND_MODEL_IDS fails the backend's
+    // `_is_user_selectable_model` check (chat_stream_pipeline.py) and gets
+    // silently dropped to the conversation's existing model.
+    //
+    // Checks every id `mapToBackendModelName` can produce: current picker
+    // entries AND every RETIRED_MODEL_MAP target (cookies/stored
+    // conversations can still send retired gateway ids).
+    const idsToCheck = [
+      ...chatModels.map((model) => model.id),
+      ...Object.keys(RETIRED_MODEL_MAP),
+    ];
 
-    for (const model of chatModels) {
+    for (const id of idsToCheck) {
+      const backendId = mapToBackendModelName(id);
       assert.equal(
-        retired.has(mapToBackendModelName(model.id)),
-        false,
-        `${model.id} maps onto retired backend model ${mapToBackendModelName(model.id)}`
+        SELECTABLE_BACKEND_MODEL_IDS.has(backendId),
+        true,
+        `${id} maps to backend id "${backendId}", which neos/config/models.yaml ` +
+          "does not mark selectable (or doesn't define at all)"
       );
     }
   });
@@ -135,12 +203,17 @@ describe("curated AI models", () => {
       chatModels.map((model) => [model.id, model.name])
     );
 
-    assert.equal(labelled.get("openai/gpt-4o"), "GPT-4o");
-    assert.equal(labelled.get("openai/gpt-4o-mini"), "GPT-4o Mini");
     assert.equal(
       labelled.get("anthropic/claude-sonnet-4.5-thinking"),
       "Claude Sonnet 4.5 (Thinking)"
     );
+  });
+
+  test("does not offer gpt-4o / gpt-4o-mini — the backend catalog marks both non-selectable", () => {
+    const ids = new Set(chatModels.map((model) => model.id));
+
+    assert.equal(ids.has("openai/gpt-4o"), false);
+    assert.equal(ids.has("openai/gpt-4o-mini"), false);
   });
 
   test("keeps the reasoning entry detectable by prompt selection", () => {
@@ -169,12 +242,20 @@ describe("curated AI models", () => {
     }
   });
 
-  test("keeps retired OpenAI and reasoning IDs on their previous models", () => {
-    assert.equal(mapToBackendModelName("openai/gpt-4.1"), "gpt-4o");
-    assert.equal(mapToBackendModelName("openai/gpt-4.1-mini"), "gpt-4o-mini");
+  test("keeps retired OpenAI and reasoning IDs on current, servable models", () => {
+    // gpt-4.1 / gpt-4.1-mini used to bounce through gpt-4o / gpt-4o-mini,
+    // which are themselves now non-selectable (Finding 1) — both now chase
+    // straight to the current-generation models.
+    assert.equal(mapToBackendModelName("openai/gpt-4.1"), "gpt-5.6-sol");
+    assert.equal(mapToBackendModelName("openai/gpt-4.1-mini"), "gpt-5.6-terra");
     assert.equal(
       mapToBackendModelName("anthropic/claude-3.7-sonnet-thinking"),
       "claude-sonnet-4-5-20250929"
     );
+  });
+
+  test("routes the retired gpt-4o / gpt-4o-mini picker ids to current-generation models", () => {
+    assert.equal(mapToBackendModelName("openai/gpt-4o"), "gpt-5.6-sol");
+    assert.equal(mapToBackendModelName("openai/gpt-4o-mini"), "gpt-5.6-terra");
   });
 });

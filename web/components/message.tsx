@@ -56,6 +56,7 @@ const PurePreviewMessage = ({
 }) => {
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [approvalStatuses, setApprovalStatuses] = useState<Record<string, string>>({});
+  const [approvalErrors, setApprovalErrors] = useState<Record<string, string>>({});
 
   const attachmentsFromMessage = message.parts.filter(
     (part) => part.type === "file"
@@ -195,6 +196,10 @@ const PurePreviewMessage = ({
       ...prev,
       [approval.request_id]: "submitting",
     }));
+    setApprovalErrors((prev) => {
+      const { [approval.request_id]: _stale, ...rest } = prev;
+      return rest;
+    });
 
     try {
       const response = await fetch("/api/approval/respond", {
@@ -208,7 +213,16 @@ const PurePreviewMessage = ({
         }),
       });
       if (!response.ok) {
-        throw new Error("Approval response failed");
+        // `app/(chat)/api/approval/respond/route.ts`가 비정상 응답에
+        // `{ error: <백엔드 사유> }`를 실어 보낸다(예: 세션이 이미 종결됨,
+        // 잘못된 decision). 파싱에 실패하거나 `error`가 없으면 그때만
+        // 정적 문구로 떨어진다 -- 3b와 같은 원칙, 다른 실패 지점.
+        const body = await response.json().catch(() => null);
+        const reason =
+          body && typeof body.error === "string" && body.error
+            ? body.error
+            : "Approval response failed";
+        throw new Error(reason);
       }
 
       setApprovalStatuses((prev) => ({
@@ -240,6 +254,13 @@ const PurePreviewMessage = ({
       setApprovalStatuses((prev) => ({
         ...prev,
         [approval.request_id]: "error",
+      }));
+      // 백엔드가 준 이유(예: "워크플로우 응답 대기 타임아웃")를 그대로 보여준다
+      // -- 실패했다는 사실만이 아니라 왜인지도 화면에 도달해야 한다.
+      setApprovalErrors((prev) => ({
+        ...prev,
+        [approval.request_id]:
+          error instanceof Error ? error.message : "Approval response failed",
       }));
       updateApprovalMessage({
         responseStatus: "failed",
@@ -369,7 +390,8 @@ const PurePreviewMessage = ({
                       </Button>
                       {approvalStatuses[approval.request_id] === "error" && (
                         <span className="self-center text-destructive text-xs">
-                          Approval response failed
+                          {approvalErrors[approval.request_id] ??
+                            "Approval response failed"}
                         </span>
                       )}
                     </div>
