@@ -1,5 +1,6 @@
 import ast
 import inspect
+from types import SimpleNamespace
 
 import pytest
 
@@ -254,11 +255,55 @@ async def test_tool_path_surfaces_attachment_notices(monkeypatch) -> None:
             notices=[notice],
         )
 
-    def fake_normalize(model, kwargs, *, thinking_enabled=True):
-        raise RuntimeError("stop-after-assembly")
+    # Fake the Anthropic client to run the path to completion
+    class _FakeStream:
+        def __aiter__(self):
+            async def _empty():
+                return
+                yield  # pragma: no cover
+            return _empty()
+
+        async def get_final_message(self):
+            return SimpleNamespace(
+                usage=SimpleNamespace(
+                    input_tokens=10,
+                    output_tokens=5,
+                ),
+                content=[],
+                stop_reason="end_turn",
+            )
+
+    class _FakeStreamCM:
+        async def __aenter__(self):
+            return _FakeStream()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _FakeMessages:
+        def stream(self, **kwargs):
+            return _FakeStreamCM()
+
+    class _FakeClient:
+        messages = _FakeMessages()
 
     monkeypatch.setattr(chat_llm_service, "resolve_attachments", fake_resolve)
-    monkeypatch.setattr(chat_llm_service, "normalize_anthropic_request", fake_normalize)
+    monkeypatch.setattr(
+        chat_llm_service, "build_async_anthropic", lambda *a, **k: _FakeClient()
+    )
+    monkeypatch.setattr(
+        chat_llm_service, "normalize_anthropic_usage",
+        lambda usage, **kwargs: {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_read_tokens": 0,
+            "total_input_tokens": 0,
+            "cache_status": "disabled",
+            "iterations": [],
+        },
+    )
 
     service = chat_llm_service.ChatLLMService()
     events = [
@@ -272,9 +317,10 @@ async def test_tool_path_surfaces_attachment_notices(monkeypatch) -> None:
         )
     ]
 
-    # Stops after assembly, so we won't get a complete event — but if we get here
-    # without error, the notices were successfully wired (not tested here but in next test)
-    pass
+    complete_events = [e for e in events if e.get("type") == "complete"]
+    assert complete_events, f"완료 이벤트가 없다: {events}"
+    assert "attachment_notices" in complete_events[0], f"첨부 안내가 없다: {complete_events[0]}"
+    assert complete_events[0]["attachment_notices"] == [notice]
 
 
 @pytest.mark.asyncio
@@ -288,19 +334,121 @@ async def test_tool_search_path_surfaces_attachment_notices(monkeypatch) -> None
             notices=[notice],
         )
 
-    def fake_normalize(model, kwargs, *, thinking_enabled=True):
-        raise RuntimeError("stop-after-assembly")
+    # Fake the Anthropic client to run the path to completion
+    class _FakeStream:
+        def __aiter__(self):
+            async def _empty():
+                return
+                yield  # pragma: no cover
+            return _empty()
+
+        async def get_final_message(self):
+            return SimpleNamespace(
+                usage=SimpleNamespace(
+                    input_tokens=10,
+                    output_tokens=5,
+                ),
+                content=[],
+                stop_reason="end_turn",
+            )
+
+    class _FakeStreamCM:
+        async def __aenter__(self):
+            return _FakeStream()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _FakeMessages:
+        def stream(self, **kwargs):
+            return _FakeStreamCM()
+
+    class _FakeBetaMessages:
+        def stream(self, **kwargs):
+            return _FakeStreamCM()
+
+    class _FakeClient:
+        messages = _FakeMessages()
+        beta = SimpleNamespace(messages=_FakeBetaMessages())
 
     monkeypatch.setattr(chat_llm_service, "resolve_attachments", fake_resolve)
-    monkeypatch.setattr(chat_llm_service, "normalize_anthropic_request", fake_normalize)
+    monkeypatch.setattr(
+        chat_llm_service, "build_async_anthropic", lambda *a, **k: _FakeClient()
+    )
+    monkeypatch.setattr(
+        chat_llm_service, "normalize_anthropic_usage",
+        lambda usage, **kwargs: {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_read_tokens": 0,
+            "total_input_tokens": 0,
+            "cache_status": "disabled",
+            "iterations": [],
+        },
+    )
 
     service = chat_llm_service.ChatLLMService()
-    async for _event in service.generate_response_stream_with_tool_search(
+    events = [
+        event
+        async for event in service.generate_response_stream_with_tool_search(
+            conversation_id="c",
+            message_id="m",
+            conversation_messages=[{"role": "user", "content": "help"}],
+            core_tools=[],
+            search_handler=object(),
+            model_name="claude-sonnet-5",
+        )
+    ]
+
+    complete_events = [e for e in events if e.get("type") == "complete"]
+    assert complete_events, f"완료 이벤트가 없다: {events}"
+    assert "attachment_notices" in complete_events[0], f"첨부 안내가 없다: {complete_events[0]}"
+    assert complete_events[0]["attachment_notices"] == [notice]
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_response_surfaces_attachment_notices(monkeypatch) -> None:
+    """비스트림 경로도 첨부 안내를 응답 딕셔너리에 실린다."""
+    notice = {"index": 0, "name": "too_large.pdf", "reason": "byte_budget"}
+
+    async def fake_resolve(messages, *, model):
+        return AttachmentPlan(
+            by_index={},
+            notices=[notice],
+        )
+
+    class FakeResponse:
+        def __init__(self):
+            self.content = "test response"
+            self.response_metadata = {
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                }
+            }
+
+    async def fake_ainvoke(messages, **kwargs):
+        return FakeResponse()
+
+    class FakeLLM:
+        async def ainvoke(self, messages, **kwargs):
+            return await fake_ainvoke(messages, **kwargs)
+
+    def fake_create_llm(**kwargs):
+        return FakeLLM()
+
+    monkeypatch.setattr(chat_llm_service, "resolve_attachments", fake_resolve)
+    monkeypatch.setattr(chat_llm_service, "create_llm", fake_create_llm)
+
+    service = chat_llm_service.ChatLLMService()
+    result = await service.generate_response(
         conversation_id="c",
         message_id="m",
         conversation_messages=[{"role": "user", "content": "help"}],
-        core_tools=[],
-        search_handler=object(),
         model_name="claude-sonnet-5",
-    ):
-        pass
+    )
+
+    assert "attachment_notices" in result, f"첨부 안내가 없다: {result}"
+    assert result["attachment_notices"] == [notice]
