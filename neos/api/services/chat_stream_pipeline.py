@@ -44,7 +44,7 @@ from neos.api.models.open_responses import (
 from neos.api.services.chat_chunk_dispatcher import ChunkEventDispatcher, StreamAccumulator
 from neos.api.services.chat_stream_strategy import resolve_llm_strategy
 from neos.api.services.chat_system_prompt_builder import SystemPromptBuilder
-from neos.config.model_config import get_model_spec, models_for_provider
+from neos.config.model_config import is_user_selectable_model
 from neos.config.settings import settings as app_settings
 from neos.utils.logger import get_logger
 
@@ -84,24 +84,6 @@ async def resolve_authorized_parent_message(
     return parent_message
 
 
-def _is_user_selectable_model(model: str) -> bool:
-    """`model`이 사용자가 고를 수 있는 카탈로그 모델인가.
-
-    단순 멤버십(`get_model_spec(model) is not None`)만으로는 부족하다 —
-    카탈로그에는 `selectable: false`인 내부 전용 모델도 있다(예:
-    `claude-opus-4-8`, 심층분석 판정자 전용, `neos/config/models.yaml` 참고).
-    그런 모델은 존재는 하되 피커에 올라가지 않고, 가격도 미검증인 경우가
-    있다. `models_for_provider()`가 바로 그 "선택 가능한 목록"이다 —
-    `AnthropicProvider.list_models()`/`OpenAIProvider.list_models()`가 이미
-    이 함수로 피커 노출 여부를 결정하므로, `spec.selectable`을 직접 읽는
-    대신 이 함수를 재사용해 판단 기준을 하나로 유지한다.
-    """
-    spec = get_model_spec(model)
-    if spec is None:
-        return False
-    return model in models_for_provider(spec.provider)
-
-
 def resolve_turn_model_name(
     request_metadata: Dict[str, Any],
     conversation: Dict[str, Any],
@@ -117,7 +99,8 @@ def resolve_turn_model_name(
        있다 — 그대로 카탈로그 조회에 넘기면 `dict.get()`이 해시 불가능한
        키에 `TypeError`를 내고, 그게 바깥 `except Exception`까지 번져
        턴 전체가 `response.failed`로 죽는다. 절대 그 지점까지 가면 안 된다).
-    2. 사용자가 선택할 수 없는 모델 (`_is_user_selectable_model` 참고 —
+    2. 사용자가 선택할 수 없는 모델
+       (`neos.config.model_config.is_user_selectable_model` 참고 —
        카탈로그 *멤버*인 것과 *선택 가능*한 것은 다르다).
 
     설계 결정: 이 오버라이드는 **그 턴에만** 적용되고
@@ -137,7 +120,7 @@ def resolve_turn_model_name(
             conversation_model,
         )
         return conversation_model
-    if not _is_user_selectable_model(requested_model):
+    if not is_user_selectable_model(requested_model):
         logger.warning(
             "Ignoring unknown or non-selectable per-turn model override %r "
             "(not in the user-selectable model catalog neos/config/models.yaml) "
