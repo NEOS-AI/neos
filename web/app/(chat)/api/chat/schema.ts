@@ -29,6 +29,7 @@ const inputFilePartSchema = z.object({
     url: z.string().url(),
     media_type: attachmentMediaTypeSchema,
     name: z.string().min(1).max(100),
+    document_id: z.union([z.string(), z.number()]).optional(),
   }),
 });
 
@@ -57,6 +58,7 @@ const filePartSchema = z.object({
   mediaType: attachmentMediaTypeSchema,
   filename: z.string().min(1).max(100),
   url: z.string().url(),
+  documentId: z.union([z.string(), z.number()]).optional(),
 });
 
 /**
@@ -132,6 +134,7 @@ export function convertToOpenResponsesPart(
         url: part.url,
         media_type: part.mediaType,
         name: part.filename,
+        document_id: part.documentId,
       },
     };
   }

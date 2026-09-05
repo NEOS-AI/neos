@@ -81,6 +81,32 @@ describe("message parts → backend payload", () => {
     assert.deepEqual(extractAttachments([{ type: "text", text: "hi" }]), []);
   });
 
+  test("file 파트의 documentId가 metadata로 보존된다", () => {
+    const attachments = extractAttachments([
+      {
+        type: "file",
+        url: "s3://bucket/key",
+        filename: "scan.png",
+        mediaType: "image/png",
+        documentId: 42,
+      },
+    ]);
+
+    assert.equal(attachments.length, 1);
+    assert.deepEqual(attachments[0].metadata, {
+      mediaType: "image/png",
+      documentId: 42,
+    });
+  });
+
+  test("documentId가 없는 옛 형식도 그대로 통과한다", () => {
+    const attachments = extractAttachments([
+      { type: "file", url: "s3://bucket/key", filename: "old.png", mediaType: "image/png" },
+    ]);
+
+    assert.deepEqual(attachments[0].metadata, { mediaType: "image/png" });
+  });
+
   test("여러 첨부가 순서대로 보존된다", () => {
     const attachments = extractAttachments([
       {

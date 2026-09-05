@@ -199,6 +199,7 @@ export type Attachment = {
   name: string;
   url: string;
   contentType: string;
+  documentId?: string | number;
 };
 
 export type AutonomyLevel = 0 | 1 | 2;
