@@ -330,6 +330,40 @@ HTTP 200 → `E_SOURCE_DEAD` **미발동** → 바이너리가 mojibake로 디�
 - **의존:** 단계 1 (cassette `"skill"` + golden 재녹화)
 - **규모:** 소
 
+### N8. 첨부 → LLM 멀티모달 입력 (FE↔BE 감사 #4b)
+
+**현황:** 첨부 왕복은 **프론트와 DB까지만** 닫혀 있다. 업로드
+(`app/(chat)/api/files/upload/route.ts`) → `extractAttachments`
+(`web/lib/message-parts.ts:81`) → BE `MessageAttachment`(`chat_models.py:131`) 저장
+(`chat_stream_pipeline.py:180`) → 새로고침 시 file 파트로 복원
+(`web/lib/utils.ts`)까지 동작하고 화면에도 파일명과 함께 뜬다.
+
+**끊긴 곳은 모델 직전이다.** `chat_llm_service._build_messages`
+(`neos/services/chat_llm_service.py:88-97`)가 각 메시지에서 `role`과 `content`만 읽고
+나머지를 버린다. `neos/services/chat_llm_service.py`와 `neos/providers/` 어디에도
+image·vision·base64·media 처리가 **한 줄도 없다**(2026-09-04 확인). 즉 사용자가 붙인
+파일은 저장되고 보이지만 **모델은 한 번도 본 적이 없다.**
+
+배선을 잇는 작업이 아니라 프로바이더별 멀티모달 입력 지원을 새로 만드는 작업이며,
+착수 전에 정해야 할 것이 다음처럼 여럿이다:
+
+- **프로바이더별 content block 포맷** — Anthropic과 OpenAI의 이미지 블록 모양이 다르다.
+  `ModelProviderBase` 계약을 어디까지 공통화할지가 첫 갈림길
+- **모델별 지원 여부** — 카탈로그가 모델 사실의 단일 원천이므로 `vision` 류 능력 플래그는
+  `neos/config/models.yaml`에 두는 것이 `selectable`과 일관된다
+- **이미지 대 문서 분기** — 허용 MIME 9종 중 PDF·DOCX·TXT·MD는 이미지가 아니다.
+  텍스트 추출(`pipelines/`의 기존 파서 재사용) 대 원본 첨부 중 무엇을 보낼 것인가
+- **URL 대 base64** — 저장이 S3/RustFS `storage_url`이라 프로바이더가 URL을 받는지,
+  받더라도 서명 URL 수명이 요청보다 긴지
+- **미지원 모델 fallback** — 첨부가 있는 대화에서 vision 미지원 모델을 고르면
+  거부할 것인가, 텍스트만 보낼 것인가, 조용히 무시할 것인가
+
+- **왜 지금은 아닌가:** 위 다섯이 전부 설계 결정이라 구현부터 시작하면 되돌리기 비싸다.
+  brainstorming으로 설계를 먼저 확정할 것
+- **의존:** 없음(기능적으로는 독립). 다만 `_build_messages`를 건드리므로
+  LLM 입력을 만지는 다른 작업과 같은 시기에 하지 않는 편이 안전하다
+- **규모:** 중~대 — 프로바이더 계층·카탈로그 스키마·파이프라인 재사용이 함께 걸린다
+
 ### 우선순위 요약
 
 | 순위 | 항목 | 규모 | 차단 요소 |
@@ -340,9 +374,10 @@ HTTP 200 → `E_SOURCE_DEAD` **미발동** → 바이너리가 mojibake로 디�
 | 4 | **N7** L5 → golden 연결 | 소 | 단계 1 |
 | 5 | **단계 2** 엔진 재배치 | 중 | 없음 (단계 1과 병렬 가능) |
 | 6 | **N3** 오디오 STT | 소~중 | 없음 (독립) |
-| 7 | **단계 3** 분리 (Job 서비스) | 대 | 단계 1·2 + **FE 조율** |
-| 8 | **N4+N5** 감사 로그 + 테넌시 강제 | 대 | 단계 3 |
-| 9 | **N6** 플러그인(외부 스킬) | 중 | 단계 1 + N1 |
+| 7 | **N8** 첨부 → LLM 멀티모달 입력 | 중~대 | 없음 — 단, **설계 확정이 선행** |
+| 8 | **단계 3** 분리 (Job 서비스) | 대 | 단계 1·2 + **FE 조율** |
+| 9 | **N4+N5** 감사 로그 + 테넌시 강제 | 대 | 단계 3 |
+| 10 | **N6** 플러그인(외부 스킬) | 중 | 단계 1 + N1 |
 
 ---
 
