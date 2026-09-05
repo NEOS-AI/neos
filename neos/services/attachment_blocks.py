@@ -360,8 +360,4 @@ async def resolve_attachments(
 
         by_index.setdefault(item.index, []).append(resolved)
 
-    # 1패스가 최신 메시지부터 돌았으므로 메시지 안의 순서를 되돌린다
-    for index in by_index:
-        by_index[index].reverse()
-
     return AttachmentPlan(by_index=by_index, notices=notices)

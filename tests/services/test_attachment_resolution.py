@@ -179,3 +179,28 @@ async def test_unresolvable_attachment_is_demoted_on_an_older_turn(stub_io) -> N
 
     assert plan.by_index[0][0].data is None
     assert "gone.png" in plan.by_index[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_two_attachments_in_one_message_keep_their_order(stub_io) -> None:
+    docs, downloads = stub_io
+    docs[1] = _Doc("image/png", storage_key="first")
+    docs[2] = _Doc("image/png", storage_key="second")
+    downloads["first"] = b"1"
+    downloads["second"] = b"2"
+
+    plan = await resolve_attachments(
+        [
+            _message(
+                "둘 다 봐줘",
+                [
+                    _attachment("first.png", "image/png", document_id=1),
+                    _attachment("second.png", "image/png", document_id=2),
+                ],
+            )
+        ],
+        model="seeing-model",
+    )
+
+    assert [a.name for a in plan.by_index[0]] == ["first.png", "second.png"]
+    assert [a.data for a in plan.by_index[0]] == [b"1", b"2"]
