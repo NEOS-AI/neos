@@ -70,6 +70,10 @@ class ModelSpec(StrictConfigModel):
     selectable: bool = True
     max_tokens: int | None = None
     description: str | None = None
+    # 이미지·PDF 입력을 받는가. 유일한 독자는 첨부 게이트
+    # (neos/services/attachment_blocks.py) — 읽는 곳 없이 스키마만
+    # 늘리지 않기 위해 게이트와 같은 변경으로 들어왔다.
+    vision: bool = False
     supports_video: bool = False
     dimension: int | None = None
     pricing: ModelPricing | None = None
@@ -487,6 +491,12 @@ def get_embedding_model_id(model_name: str | None = None) -> str:
 
 def get_model_spec(model: str) -> ModelSpec | None:
     return model_config.catalog.get_model_spec(model)
+
+
+def supports_vision(model: str) -> bool:
+    """모델이 이미지·PDF 입력을 받는가. 카탈로그가 유일한 원천이다."""
+    spec = model_config.catalog.get_model_spec(model)
+    return bool(spec and spec.vision)
 
 
 def models_for_provider(provider: str) -> list[str]:
