@@ -508,6 +508,55 @@ async def test_load_document_filters_by_owner_on_both_lookup_paths(real_db_io) -
 
 
 # ---------------------------------------------------------------------------
+# Fix round 2, Item 3 — a non-numeric documentId must not crash with a 500.
+#
+# `_load_document` did `int(document_id)` on a client-supplied value; a
+# client sending `metadata.documentId: "abc"` raised ValueError out of
+# `resolve_attachments` instead of taking the existing "unresolved" path.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_non_numeric_document_id_is_refused_like_a_missing_one_on_current_turn(
+    real_db_io,
+) -> None:
+    with pytest.raises(AttachmentNotSupportedError) as excinfo:
+        await resolve_attachments(
+            [_message("봐줘", [_attachment("scan.png", "image/png", document_id="abc")])],
+            model="seeing-model",
+            owner_user_id=OWNER,
+        )
+
+    assert excinfo.value.items[0]["reason"] == "unresolved"
+
+
+@pytest.mark.asyncio
+async def test_non_numeric_document_id_is_demoted_like_a_missing_one_on_an_older_turn(
+    real_db_io, monkeypatch
+) -> None:
+    rows, _ = real_db_io
+    rows.append(_RealRow(id=2, user_id=OWNER))
+    monkeypatch.setattr(attachment_blocks, "supports_vision", lambda model: True)
+
+    async def fake_download(storage_key):
+        return b"bytes"
+
+    monkeypatch.setattr(attachment_blocks, "_download", fake_download)
+
+    plan = await resolve_attachments(
+        [
+            _message("옛 턴", [_attachment("bad.png", "image/png", document_id="abc")]),
+            _message("새 턴", [_attachment("ok.png", "image/png", document_id=2)]),
+        ],
+        model="seeing-model",
+        owner_user_id=OWNER,
+    )
+
+    assert plan.by_index[0][0].data is None
+    assert "bad.png" in plan.by_index[0][0].text
+
+
+# ---------------------------------------------------------------------------
 # Finding 7 — empty EXTRACT text must not vanish silently.
 # ---------------------------------------------------------------------------
 

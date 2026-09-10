@@ -233,15 +233,25 @@ async def _load_document(*, document_id=None, storage_url=None, owner_user_id):
     """
     async for session in get_session():
         if document_id is not None:
-            result = await session.execute(
-                select(Document).where(
-                    Document.id == int(document_id),
-                    Document.user_id == owner_user_id,
+            try:
+                numeric_id = int(document_id)
+            except (TypeError, ValueError):
+                # 클라이언트가 documentId 로 숫자 아닌 값(예: "abc")을 보내는
+                # 경우다. 그런 id 는 그냥 아무것도 가리키지 않는 id 와 같으니
+                # 여기서 500 을 내지 않고 storage_url 폴백/미해결 경로로 그냥
+                # 흘려보낸다(§4.5 는 새 사유가 아니라 기존 "찾을 수 없음"
+                # 경로로 이어져야 한다).
+                numeric_id = None
+            if numeric_id is not None:
+                result = await session.execute(
+                    select(Document).where(
+                        Document.id == numeric_id,
+                        Document.user_id == owner_user_id,
+                    )
                 )
-            )
-            document = result.scalar_one_or_none()
-            if document is not None:
-                return document
+                document = result.scalar_one_or_none()
+                if document is not None:
+                    return document
         if storage_url:
             result = await session.execute(
                 select(Document).where(
