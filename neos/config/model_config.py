@@ -74,7 +74,6 @@ class ModelSpec(StrictConfigModel):
     # (neos/services/attachment_blocks.py) — 읽는 곳 없이 스키마만
     # 늘리지 않기 위해 게이트와 같은 변경으로 들어왔다.
     vision: bool = False
-    supports_video: bool = False
     dimension: int | None = None
     pricing: ModelPricing | None = None
 
@@ -261,7 +260,7 @@ _LEGACY_GROUPS: tuple[tuple[str, str], ...] = (
 )
 # 옛 파일은 Gemini provider를 "google"로 적었다. LLMFactory 키로 정규화한다.
 _PROVIDER_ALIASES = {"google": "gemini"}
-_LEGACY_SPEC_FIELDS = ("description", "max_tokens", "supports_video", "dimension")
+_LEGACY_SPEC_FIELDS = ("description", "max_tokens", "dimension")
 
 
 def _looks_legacy(data: dict[str, Any]) -> bool:

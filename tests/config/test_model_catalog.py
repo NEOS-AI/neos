@@ -174,13 +174,11 @@ def test_legacy_shape_file_is_converted(tmp_path: Path) -> None:
                     "provider": "openai",
                     "description": "OpenAI GPT-4o Vision",
                     "max_tokens": 4096,
-                    "supports_video": False,
                 },
                 "gemini": {
                     "model_id": "gemini-1.5-pro-latest",
                     "provider": "google",
                     "max_tokens": 8192,
-                    "supports_video": True,
                 },
             },
             "llm_models": {
@@ -208,7 +206,6 @@ def test_legacy_shape_file_is_converted(tmp_path: Path) -> None:
     assert catalog.aliases["embedding"]["openai_small"] == "text-embedding-3-small"
     # provider "google"은 LLMFactory 키 "gemini"로 정규화된다
     assert catalog.models["gemini-1.5-pro-latest"].provider == "gemini"
-    assert catalog.models["gemini-1.5-pro-latest"].supports_video is True
     assert catalog.models["text-embedding-3-small"].dimension == 1536
     # 옛 형태에는 tier·pricing·thinking이 없다
     assert catalog.models["claude-sonnet-5"].tiers == []

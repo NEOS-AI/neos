@@ -190,7 +190,6 @@ models:
     description: "Google Gemini 1.5 Pro"
     max_tokens: 8192
     vision: true
-    supports_video: true
 
   # ---- Ollama (tier만 이관. list_models()는 라이브 서버 조회 유지) ----
   # 키에 콜론이 있으므로 반드시 인용한다 — 인용하지 않으면 PyYAML이 파싱에 실패한다.
