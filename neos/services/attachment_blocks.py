@@ -222,19 +222,32 @@ class AttachmentPlan:
     notices: list[str]
 
 
-async def _load_document(*, document_id=None, storage_url=None):
-    """documentId 우선, 없으면 storage_url 역조회. 못 찾으면 None."""
+async def _load_document(*, document_id=None, storage_url=None, owner_user_id):
+    """documentId 우선, 없으면 storage_url 역조회. 못 찾으면 None.
+
+    두 경로 모두 `Document.user_id == owner_user_id` 를 반드시 건다 — 이게
+    없으면 documentId 는 그냥 순차 PK 라 다른 사용자의 문서를 이름만 대고
+    자기 대화 안으로 끌어올 수 있다(N8 리뷰 Finding 1). 존재하지만 소유가
+    아닌 문서는 여기서 이미 없는 것과 같은 결과(None)가 되어야 한다 — 별도
+    "forbidden" 사유를 만들면 그 자체로 문서 존재를 확인해 주는 신호가 된다.
+    """
     async for session in get_session():
         if document_id is not None:
             result = await session.execute(
-                select(Document).where(Document.id == int(document_id))
+                select(Document).where(
+                    Document.id == int(document_id),
+                    Document.user_id == owner_user_id,
+                )
             )
             document = result.scalar_one_or_none()
             if document is not None:
                 return document
         if storage_url:
             result = await session.execute(
-                select(Document).where(Document.storage_url == storage_url)
+                select(Document).where(
+                    Document.storage_url == storage_url,
+                    Document.user_id == owner_user_id,
+                )
             )
             return result.scalar_one_or_none()
         return None
@@ -288,12 +301,16 @@ class _Prepared:
 
 
 async def resolve_attachments(
-    conversation_messages: list[dict], *, model: str
+    conversation_messages: list[dict], *, model: str, owner_user_id: str
 ) -> AttachmentPlan:
     """첨부를 해석해 요청 한 번 분의 계획을 만든다.
 
     1패스가 DB 만 보고 게이트를 세운 뒤에야 2패스가 스토리지를 연다 — 거부될
     턴에서 스토리지 오류가 거부 메시지를 가리지 않게 하기 위해서다.
+
+    `owner_user_id` 는 이 턴을 낸 사용자다. 필수 인자다 — 대화를 못 찾은
+    호출자는 필터 없는 조회로 물러나지 말고, 뭐가 됐든(예: None) 이 자리에
+    넘겨 모든 첨부가 "찾을 수 없음" 경로를 타게 해야 한다.
     """
     indexed = [
         (index, message)
@@ -303,7 +320,16 @@ async def resolve_attachments(
     if not indexed:
         return AttachmentPlan(by_index={}, notices=[])
 
-    current_index = indexed[-1][0]
+    # "현재 턴"은 대화의 마지막 유저 메시지다 — 첨부가 없어도 마찬가지다.
+    # `indexed`의 마지막 항목(첨부를 낸 마지막 메시지)과 다를 수 있다: 과거에
+    # 첨부를 낸 턴 뒤로 순수 텍스트 턴이 이어지면 그 텍스트 턴이 현재 턴이고,
+    # 그 턴엔 게이트에 걸 첨부가 없다(N8 리뷰 Finding 2).
+    current_index = max(
+        index
+        for index, message in enumerate(conversation_messages)
+        if message.get("role") == "user"
+    )
+    vision_ok = supports_vision(model)
 
     # ---- 1패스: 조회와 분류 (DB 만) ----
     prepared: list[_Prepared] = []
@@ -318,6 +344,7 @@ async def resolve_attachments(
             document = await _load_document(
                 document_id=metadata.get("documentId"),
                 storage_url=attachment.get("url"),
+                owner_user_id=owner_user_id,
             )
             mime_type = (
                 getattr(document, "mime_type", None)
@@ -337,7 +364,11 @@ async def resolve_attachments(
                     )
                 continue
 
-            kinds_for_gate.append((kind, name, mime_type))
+            # 게이트는 현재 턴의 첨부만 본다 — 과거 턴에 있던 이미지 때문에
+            # vision 없는 모델로 바뀐 뒤의 모든 텍스트 턴까지 거부되면 안
+            # 된다(N8 리뷰 Finding 2). 과거 턴 몫은 2패스에서 강등한다.
+            if index == current_index:
+                kinds_for_gate.append((kind, name, mime_type))
             prepared.append(_Prepared(index, name, mime_type, kind, document))
 
     # ---- 게이트: 스토리지를 열기 전에 거부를 확정한다 ----
@@ -359,6 +390,14 @@ async def resolve_attachments(
                 item.name, item.mime_type, AttachmentKind.EXTRACT, "해석할 수 없어 제외됨"
             )
             notices.append(f"{item.name}: 해석할 수 없어 제외됨")
+        elif item.kind in _KINDS_REQUIRING_VISION and not vision_ok:
+            # 현재 턴이었다면 위 게이트에서 이미 거부되었을 것이다 — 여기
+            # 남아 있다는 건 과거 턴 몫이라는 뜻이므로 조용히 빼지 않고
+            # 강등한다.
+            resolved = _demoted(
+                item.name, item.mime_type, item.kind, "이 모델은 이 첨부를 받지 않음"
+            )
+            notices.append(f"{item.name}: 모델이 지원하지 않아 제외됨")
         else:
             page_count = getattr(item.document, "page_count", None)
             size = getattr(item.document, "file_size", None) or 0
@@ -388,13 +427,38 @@ async def resolve_attachments(
 
                 if item.kind is AttachmentKind.EXTRACT:
                     parsed = await parse_word(file_content=data)
-                    resolved = ResolvedAttachment(
-                        name=item.name,
-                        mime_type=item.mime_type,
-                        kind=item.kind,
-                        data=None,
-                        text=parsed.get("text") or "",
-                    )
+                    text = parsed.get("text") or ""
+                    if not text.strip():
+                        resolved = _demoted(
+                            item.name,
+                            item.mime_type,
+                            item.kind,
+                            "추출된 텍스트가 없어 제외됨",
+                        )
+                        notices.append(f"{item.name}: 추출된 텍스트가 없어 제외됨")
+                    else:
+                        extracted_bytes = len(text.encode("utf-8"))
+                        if extracted_bytes > budget:
+                            # EXTRACT 는 원본 파일 크기가 아니라 추출된 텍스트의
+                            # 바이트 길이로 같은 예산을 소모한다(N8 리뷰
+                            # Finding 8) — 안 그러면 큰 .docx 하나가 상한을
+                            # 완전히 우회한다.
+                            resolved = _demoted(
+                                item.name,
+                                item.mime_type,
+                                item.kind,
+                                "길이 상한으로 이번 요청에 포함되지 않음",
+                            )
+                            notices.append(f"{item.name}: 길이 상한으로 제외됨")
+                        else:
+                            budget -= extracted_bytes
+                            resolved = ResolvedAttachment(
+                                name=item.name,
+                                mime_type=item.mime_type,
+                                kind=item.kind,
+                                data=None,
+                                text=text,
+                            )
                 elif len(data) > budget:
                     # 사전검사는 Document.file_size 를 본다 — NULL 이면 0 으로
                     # 취급돼 통과한다. 실제로 받은 바이트 수로 다시 확인해야

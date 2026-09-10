@@ -11,6 +11,7 @@ import time
 import anthropic
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
+from neos.database.repositories.chat_repository import ChatRepository
 from neos.utils.anthropic_client import build_async_anthropic
 from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import extract_text_from_response
@@ -40,6 +41,17 @@ from neos.services.attachment_blocks import (
 from neos.tools.tool_search.search_tools_handler import SEARCH_TOOLS_TOOL
 
 logger = get_logger(__name__)
+
+
+async def _resolve_owner_user_id(conversation_id: str) -> Optional[str]:
+    """이 턴이 첨부를 볼 자격이 있는 사용자를 정한다.
+
+    대화를 못 찾으면 필터 없는 조회로 물러나지 않는다 — None 을 돌려주면
+    `resolve_attachments` 가 모든 첨부를 "찾을 수 없음" 경로로 보낸다
+    (N8 리뷰 Finding 1).
+    """
+    conversation = await ChatRepository.get_conversation(conversation_id)
+    return conversation.user_id if conversation else None
 
 
 def resolve_conversation_chat_model(model_name: str | None) -> str:
@@ -261,8 +273,9 @@ class ChatLLMService:
             llm = create_llm(provider=provider, **llm_params)
 
             # 메시지 구성
+            owner_user_id = await _resolve_owner_user_id(conversation_id)
             attachment_plan = await resolve_attachments(
-                optimized_messages, model=model
+                optimized_messages, model=model, owner_user_id=owner_user_id
             )
             messages = self._build_messages(
                 optimized_messages, system_prompt, plan=attachment_plan
@@ -392,8 +405,9 @@ class ChatLLMService:
             llm = create_llm(provider=provider, **llm_params)
 
             # 메시지 구성
+            owner_user_id = await _resolve_owner_user_id(conversation_id)
             attachment_plan = await resolve_attachments(
-                optimized_messages, model=model
+                optimized_messages, model=model, owner_user_id=owner_user_id
             )
             messages = self._build_messages(
                 optimized_messages, system_prompt, plan=attachment_plan
@@ -596,8 +610,9 @@ class ChatLLMService:
             client = build_async_anthropic()
 
             # 메시지 형식 변환 (LangChain 형식에서 Anthropic 형식으로)
+            owner_user_id = await _resolve_owner_user_id(conversation_id)
             attachment_plan = await resolve_attachments(
-                conversation_messages, model=model
+                conversation_messages, model=model, owner_user_id=owner_user_id
             )
 
             anthropic_messages = []
@@ -830,8 +845,9 @@ class ChatLLMService:
             )
 
             # 메시지 변환
+            owner_user_id = await _resolve_owner_user_id(conversation_id)
             attachment_plan = await resolve_attachments(
-                conversation_messages, model=model
+                conversation_messages, model=model, owner_user_id=owner_user_id
             )
 
             anthropic_messages = []

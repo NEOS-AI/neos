@@ -23,6 +23,16 @@ KNOWN_ASSEMBLERS = {
 MESSAGE_LIST_NAMES = {"conversation_messages", "optimized_messages"}
 
 
+async def _fake_owner_user_id(conversation_id: str) -> str:
+    """실제 DB 를 건드리지 않고 소유자 조회를 가짜로 채운다.
+
+    `resolve_attachments` 자체도 각 테스트에서 가짜로 갈아끼우므로
+    `owner_user_id` 값 자체은 이 테스트 스위트에서 검증 대상이 아니다 —
+    Finding 1 커버리지는 `test_attachment_resolution.py` 가 진다.
+    """
+    return "u1"
+
+
 def _iterates_message_list(node: ast.For) -> bool:
     """`for … in messages:` 와 `for i, m in enumerate(messages):` 둘 다 센다.
 
@@ -103,7 +113,7 @@ async def test_tool_path_carries_the_attachment_block(monkeypatch) -> None:
     """raw SDK 경로도 첨부를 싣는다 — 여기가 비면 툴 대화에서만 조용히 사라진다."""
     captured = {}
 
-    async def fake_resolve(messages, *, model):
+    async def fake_resolve(messages, *, model, owner_user_id=None):
         return _plan_with_image(0)
 
     def fake_normalize(model, kwargs, *, thinking_enabled=True):
@@ -111,6 +121,9 @@ async def test_tool_path_carries_the_attachment_block(monkeypatch) -> None:
         raise RuntimeError("stop-after-assembly")
 
     monkeypatch.setattr(chat_llm_service, "resolve_attachments", fake_resolve)
+    monkeypatch.setattr(
+        chat_llm_service, "_resolve_owner_user_id", _fake_owner_user_id
+    )
     monkeypatch.setattr(chat_llm_service, "normalize_anthropic_request", fake_normalize)
 
     service = chat_llm_service.ChatLLMService()
@@ -134,13 +147,16 @@ async def test_tool_path_carries_the_attachment_block(monkeypatch) -> None:
 async def test_stream_path_reports_a_refusal_as_an_error_event(monkeypatch) -> None:
     from neos.services.attachment_blocks import AttachmentNotSupportedError
 
-    async def fake_resolve(messages, *, model):
+    async def fake_resolve(messages, *, model, owner_user_id=None):
         raise AttachmentNotSupportedError(
             model="blind-model",
             items=[{"name": "scan.png", "mime": "image/png", "reason": "vision_unsupported"}],
         )
 
     monkeypatch.setattr(chat_llm_service, "resolve_attachments", fake_resolve)
+    monkeypatch.setattr(
+        chat_llm_service, "_resolve_owner_user_id", _fake_owner_user_id
+    )
 
     service = chat_llm_service.ChatLLMService()
     events = [
@@ -164,7 +180,7 @@ async def test_tool_search_path_carries_the_attachment_block(monkeypatch) -> Non
     """세 번째 사본. 앞의 둘이 초록이어도 여기가 비면 tool search 대화에서 사라진다."""
     captured = {}
 
-    async def fake_resolve(messages, *, model):
+    async def fake_resolve(messages, *, model, owner_user_id=None):
         return _plan_with_image(0)
 
     def fake_normalize(model, kwargs, *, thinking_enabled=True):
@@ -172,6 +188,9 @@ async def test_tool_search_path_carries_the_attachment_block(monkeypatch) -> Non
         raise RuntimeError("stop-after-assembly")
 
     monkeypatch.setattr(chat_llm_service, "resolve_attachments", fake_resolve)
+    monkeypatch.setattr(
+        chat_llm_service, "_resolve_owner_user_id", _fake_owner_user_id
+    )
     monkeypatch.setattr(chat_llm_service, "normalize_anthropic_request", fake_normalize)
 
     service = chat_llm_service.ChatLLMService()
@@ -196,7 +215,7 @@ async def test_stream_path_surfaces_attachment_notices(monkeypatch) -> None:
     """첨부 안내가 완료 이벤트에 나타난다."""
     notice = {"index": 0, "name": "demoted.pdf", "reason": "byte_budget"}
 
-    async def fake_resolve(messages, *, model):
+    async def fake_resolve(messages, *, model, owner_user_id=None):
         return AttachmentPlan(
             by_index={},
             notices=[notice],
@@ -225,6 +244,9 @@ async def test_stream_path_surfaces_attachment_notices(monkeypatch) -> None:
         return FakeLLM()
 
     monkeypatch.setattr(chat_llm_service, "resolve_attachments", fake_resolve)
+    monkeypatch.setattr(
+        chat_llm_service, "_resolve_owner_user_id", _fake_owner_user_id
+    )
     monkeypatch.setattr(chat_llm_service, "create_llm", fake_create_llm)
 
     service = chat_llm_service.ChatLLMService()
@@ -249,7 +271,7 @@ async def test_tool_path_surfaces_attachment_notices(monkeypatch) -> None:
     """도구 경로도 첨부 안내를 완료 이벤트에 실린다."""
     notice = {"index": 0, "name": "blocked.docx", "reason": "vision_unsupported"}
 
-    async def fake_resolve(messages, *, model):
+    async def fake_resolve(messages, *, model, owner_user_id=None):
         return AttachmentPlan(
             by_index={},
             notices=[notice],
@@ -288,6 +310,9 @@ async def test_tool_path_surfaces_attachment_notices(monkeypatch) -> None:
         messages = _FakeMessages()
 
     monkeypatch.setattr(chat_llm_service, "resolve_attachments", fake_resolve)
+    monkeypatch.setattr(
+        chat_llm_service, "_resolve_owner_user_id", _fake_owner_user_id
+    )
     monkeypatch.setattr(
         chat_llm_service, "build_async_anthropic", lambda *a, **k: _FakeClient()
     )
@@ -328,7 +353,7 @@ async def test_tool_search_path_surfaces_attachment_notices(monkeypatch) -> None
     """도구 검색 경로도 첨부 안내를 완료 이벤트에 실린다."""
     notice = {"index": 1, "name": "oversized.zip", "reason": "byte_budget"}
 
-    async def fake_resolve(messages, *, model):
+    async def fake_resolve(messages, *, model, owner_user_id=None):
         return AttachmentPlan(
             by_index={},
             notices=[notice],
@@ -373,6 +398,9 @@ async def test_tool_search_path_surfaces_attachment_notices(monkeypatch) -> None
 
     monkeypatch.setattr(chat_llm_service, "resolve_attachments", fake_resolve)
     monkeypatch.setattr(
+        chat_llm_service, "_resolve_owner_user_id", _fake_owner_user_id
+    )
+    monkeypatch.setattr(
         chat_llm_service, "build_async_anthropic", lambda *a, **k: _FakeClient()
     )
     monkeypatch.setattr(
@@ -413,7 +441,7 @@ async def test_non_streaming_response_surfaces_attachment_notices(monkeypatch) -
     """비스트림 경로도 첨부 안내를 응답 딕셔너리에 실린다."""
     notice = {"index": 0, "name": "too_large.pdf", "reason": "byte_budget"}
 
-    async def fake_resolve(messages, *, model):
+    async def fake_resolve(messages, *, model, owner_user_id=None):
         return AttachmentPlan(
             by_index={},
             notices=[notice],
@@ -440,6 +468,9 @@ async def test_non_streaming_response_surfaces_attachment_notices(monkeypatch) -
         return FakeLLM()
 
     monkeypatch.setattr(chat_llm_service, "resolve_attachments", fake_resolve)
+    monkeypatch.setattr(
+        chat_llm_service, "_resolve_owner_user_id", _fake_owner_user_id
+    )
     monkeypatch.setattr(chat_llm_service, "create_llm", fake_create_llm)
 
     service = chat_llm_service.ChatLLMService()
