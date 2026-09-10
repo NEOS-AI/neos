@@ -146,6 +146,7 @@ class ChunkEventDispatcher:
         self._state.response.error = ErrorInfo(
             type="server_error",
             message=chunk.get("error", "Unknown error"),
+            code=chunk.get("code"),
         )
         # format_done_token()은 pipeline이 상태 확인 후 직접 yield한다
         yield format_sse_event(ResponseFailedEvent(response=self._state.response))
