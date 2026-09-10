@@ -20,7 +20,16 @@ KNOWN_ASSEMBLERS = {
 }
 
 
-MESSAGE_LIST_NAMES = {"conversation_messages", "optimized_messages"}
+#: 메시지 목록을 만지지만 **조립하지는 않는** 지점. 가드가 이 둘을 알아야
+#: 새로 나타난 이름이 진짜 넷째 사본인지 아닌지가 드러난다.
+KNOWN_MESSAGE_READERS = {
+    "_has_any_attachment",              # 지연 소유자 조회를 위한 판정
+    "generate_response_stream",         # usage 추정용 content 길이 합산
+}
+
+#: 이름이 이것으로 끝나면 메시지 목록으로 본다. 특정 두 이름만 보던 옛 가드는
+#: 다른 이름을 쓰는 사본을 놓쳤다.
+MESSAGE_LIST_SUFFIX = "messages"
 
 
 async def _fake_owner_user_id(conversation_id: str) -> str:
@@ -33,39 +42,81 @@ async def _fake_owner_user_id(conversation_id: str) -> str:
     return "u1"
 
 
-def _iterates_message_list(node: ast.For) -> bool:
-    """`for … in messages:` 와 `for i, m in enumerate(messages):` 둘 다 센다.
-
-    배선이 enumerate 를 도입하므로 Name 만 보면 사본을 놓친다.
-    """
-    target = node.iter
-    if isinstance(target, ast.Call) and isinstance(target.func, ast.Name):
-        if target.func.id != "enumerate" or not target.args:
-            return False
+def _iterated_name(iter_node: ast.expr) -> str | None:
+    """순회 대상의 이름. `enumerate(...)` 로 감싼 것도 벗겨서 본다."""
+    target = iter_node
+    if (
+        isinstance(target, ast.Call)
+        and isinstance(target.func, ast.Name)
+        and target.func.id == "enumerate"
+        and target.args
+    ):
         target = target.args[0]
-    return isinstance(target, ast.Name) and target.id in MESSAGE_LIST_NAMES
+    return target.id if isinstance(target, ast.Name) else None
 
 
-def _functions_iterating_conversation_messages() -> set[str]:
-    source = inspect.getsource(chat_llm_service)
+def _iterates_message_list(iter_node: ast.expr) -> bool:
+    """이름이 `…messages` 로 끝나는 목록을 순회하는가."""
+    name = _iterated_name(iter_node)
+    return bool(name) and name.endswith(MESSAGE_LIST_SUFFIX)
+
+
+def _functions_touching_message_lists(source: str) -> set[str]:
+    """메시지 목록을 순회하는 함수 이름 전부.
+
+    `for` 와 `async for` 뿐 아니라 **컴프리헨션**까지 본다 — for 문만 보면
+    `[render(m) for m in messages]` 로 쓴 사본이 가드를 그냥 지나간다.
+    """
     tree = ast.parse(source)
     found = set()
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for inner in ast.walk(node):
-            if isinstance(inner, ast.For) and _iterates_message_list(inner):
+            if isinstance(inner, (ast.For, ast.AsyncFor)):
+                iter_node = inner.iter
+            elif isinstance(inner, ast.comprehension):
+                iter_node = inner.iter
+            else:
+                continue
+            if _iterates_message_list(iter_node):
                 found.add(node.name)
     return found
 
 
 def test_no_fourth_message_assembler_appears() -> None:
-    found = _functions_iterating_conversation_messages()
+    found = _functions_touching_message_lists(inspect.getsource(chat_llm_service))
+    expected = KNOWN_ASSEMBLERS | KNOWN_MESSAGE_READERS
 
-    assert found == KNOWN_ASSEMBLERS, (
-        "메시지 조립 사본이 바뀌었다. 새 사본이면 첨부 병합을 함께 배선하고 "
-        f"KNOWN_ASSEMBLERS 에 이름을 더할 것. 실제: {sorted(found)}"
+    assert found == expected, (
+        "메시지 목록을 만지는 지점이 바뀌었다. 새 이름이 나왔다면 그것이 "
+        "**조립기**인지(첨부 병합을 함께 배선하고 KNOWN_ASSEMBLERS 에 더한다) "
+        "단순 **독자**인지(KNOWN_MESSAGE_READERS 에 더한다) 사람이 판정할 것. "
+        f"실제: {sorted(found)}"
     )
+
+
+def test_guard_catches_a_comprehension_based_assembler() -> None:
+    """옛 가드가 놓쳤을 모양 — for 문이 아니라 컴프리헨션으로 쓴 사본."""
+    sample = (
+        "def sneaky_fourth_assembler(conversation_messages):\n"
+        "    return [render(m) for m in conversation_messages]\n"
+    )
+
+    assert _functions_touching_message_lists(sample) == {"sneaky_fourth_assembler"}
+
+
+def test_guard_catches_a_differently_named_message_list() -> None:
+    """옛 가드는 이름 두 개만 알아서 `history_messages` 를 놓쳤다."""
+    sample = (
+        "def another_assembler(history_messages):\n"
+        "    out = []\n"
+        "    for index, message in enumerate(history_messages):\n"
+        "        out.append(message)\n"
+        "    return out\n"
+    )
+
+    assert _functions_touching_message_lists(sample) == {"another_assembler"}
 
 
 def _plan_with_image(index: int) -> AttachmentPlan:
