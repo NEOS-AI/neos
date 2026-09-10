@@ -163,6 +163,40 @@ function attachmentsToFileParts(
   return fileParts;
 }
 
+/**
+ * 백엔드 메시지 메타데이터 → 첨부 안내 문자열 목록 (런타임 검증)
+ *
+ * 백엔드는 상한(20MB)·PDF 페이지 수·해석 실패로 **모델에 싣지 못한** 첨부의
+ * 사유를 `attachment_notices` 로 남긴다. 그것이 화면에 닿지 않으면 사용자는
+ * 모델이 왜 그 파일을 못 봤는지 알 수 없다 — 첨부 기능이 고치려던 조용한
+ * 실패가 마지막 한 홉에서 되살아난다.
+ *
+ * `convertBackendMessagesToUI` 의 일반 통과 경로가 이 키를 **무검증으로**
+ * 복사하므로, `lib/harness/metadata.ts` 와 같은 이유로 여기서 모양을 확정한다:
+ * 배열이 아니면 렌더의 `.map` 이 터지고 그 어시스턴트 메시지 전체가 에러
+ * 카드로 대체된다. 문자열이 아닌 항목은 걸러내고, 남는 것이 없으면 undefined
+ * 를 돌려 "보여줄 안내 없음" 과 "빈 배열" 을 같게 만든다.
+ */
+export function attachmentNoticesFromMessageMetadata(
+  metadata: unknown
+): string[] | undefined {
+  if (!metadata || typeof metadata !== 'object') {
+    return undefined;
+  }
+
+  const raw = (metadata as Record<string, unknown>).attachment_notices;
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+
+  const notices = raw.filter(
+    (notice): notice is string => typeof notice === 'string'
+  );
+
+  return notices.length > 0 ? notices : undefined;
+}
+
+
 export function convertBackendMessagesToUI(
   backendMessages: any[]
 ): ChatMessage[] {
@@ -206,6 +240,16 @@ export function convertBackendMessagesToUI(
     // 도달하고, 잘못된 모양 다섯 중 하나는 렌더를 던져 그 메시지 전체가
     // 에러 카드로 대체된다(`lib/harness/metadata.ts` 주석).
     applyHarnessMetadata(metadata, msg.metadata);
+
+    // `attachment_notices` 도 백엔드가 같은 이름으로 쓰므로 위 통과 경로가 이미
+    // 복사해 뒀다 -- 역시 무검증으로. 검증본으로 갈아끼우거나, 모양이 아니면
+    // 지운다.
+    const attachmentNotices = attachmentNoticesFromMessageMetadata(msg.metadata);
+    if (attachmentNotices) {
+      metadata.attachment_notices = attachmentNotices;
+    } else {
+      delete metadata.attachment_notices;
+    }
 
     return {
       id: msg.message_id,

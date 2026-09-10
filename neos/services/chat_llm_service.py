@@ -11,6 +11,7 @@ import time
 import anthropic
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
+from neos.database.repositories.chat_repository import ChatRepository
 from neos.utils.anthropic_client import build_async_anthropic
 from neos.utils.llm_factory import create_llm
 from neos.utils.llm_wrapper import extract_text_from_response
@@ -29,9 +30,50 @@ from neos.providers.anthropic_usage import (
     calculate_anthropic_cost,
     normalize_anthropic_usage,
 )
+from neos.services.attachment_blocks import (
+    AttachmentNotSupportedError,
+    AttachmentPlan,
+    merge_into_content,
+    render_anthropic,
+    render_langchain,
+    resolve_attachments,
+)
 from neos.tools.tool_search.search_tools_handler import SEARCH_TOOLS_TOOL
 
 logger = get_logger(__name__)
+
+
+async def _resolve_owner_user_id(conversation_id: str) -> Optional[str]:
+    """이 턴이 첨부를 볼 자격이 있는 사용자를 정한다.
+
+    대화를 못 찾으면 필터 없는 조회로 물러나지 않는다 — None 을 돌려주면
+    `resolve_attachments` 가 모든 첨부를 "찾을 수 없음" 경로로 보낸다
+    (N8 리뷰 Finding 1).
+    """
+    conversation = await ChatRepository.get_conversation(conversation_id)
+    return conversation.user_id if conversation else None
+
+
+def _has_any_attachment(conversation_messages: List[Dict[str, Any]]) -> bool:
+    return any(
+        message.get("role") == "user" and message.get("attachments")
+        for message in conversation_messages
+    )
+
+
+async def _resolve_owner_user_id_if_needed(
+    conversation_id: str, conversation_messages: List[Dict[str, Any]]
+) -> Optional[str]:
+    """첨부가 하나도 없으면 대화 조회조차 하지 않는다.
+
+    `resolve_attachments` 자체도 첨부 없는 대화는 DB/스토리지 앞에서 조기
+    반환하지만, owner_user_id 를 그보다 먼저 무조건 채우면 그 시점에 이미
+    `conversations` 테이블 왕복이 일어난 뒤다 — 첨부 없는 턴은 이 모듈 때문에
+    DB 를 추가로 건드리면 안 된다는 제약을 깨는 것이다(Fix round 2, Item 2).
+    """
+    if not _has_any_attachment(conversation_messages):
+        return None
+    return await _resolve_owner_user_id(conversation_id)
 
 
 def resolve_conversation_chat_model(model_name: str | None) -> str:
@@ -76,21 +118,31 @@ class ChatLLMService:
         self,
         conversation_messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
+        plan: Optional[AttachmentPlan] = None,
     ) -> List:
-        """대화 메시지를 LangChain 메시지 형식으로 변환"""
+        """대화 메시지를 LangChain 메시지 형식으로 변환.
+
+        `plan` 이 있으면 그 메시지의 첨부를 표준 content block 으로 병합한다.
+        없으면 종전과 같이 문자열 content 를 만든다.
+        """
         messages = []
 
-        # 시스템 프롬프트 추가
         if system_prompt:
             messages.append(SystemMessage(content=system_prompt))
 
-        # 대화 메시지 변환
-        for msg in conversation_messages:
+        for index, msg in enumerate(conversation_messages):
             role = msg.get("role", "user")
             content = msg.get("content", "")
 
             if role == "user":
-                messages.append(HumanMessage(content=content))
+                attachments = (plan.by_index.get(index) if plan else None) or []
+                messages.append(
+                    HumanMessage(
+                        content=merge_into_content(
+                            content, attachments, render_langchain
+                        )
+                    )
+                )
             elif role == "assistant":
                 messages.append(AIMessage(content=content))
             elif role == "system":
@@ -235,15 +287,28 @@ class ChatLLMService:
                         f"applied: {optimization_stats['optimizations_applied']}"
                     )
 
+            # 메시지 구성 — LLM 클라이언트보다 **먼저** 온다.
+            #
+            # `resolve_attachments` 는 거부(AttachmentNotSupportedError)를 낼 수
+            # 있고, 거부될 턴에 프로바이더 클라이언트를 지을 이유가 없다. 순서가
+            # 반대면 프로바이더 설정 오류(예: API 키 부재)가 먼저 터져 "이 모델은
+            # 이미지를 받지 않는다" 는 진짜 사유를 가린다.
+            owner_user_id = await _resolve_owner_user_id_if_needed(
+                conversation_id, optimized_messages
+            )
+            attachment_plan = await resolve_attachments(
+                optimized_messages, model=model, owner_user_id=owner_user_id
+            )
+            messages = self._build_messages(
+                optimized_messages, system_prompt, plan=attachment_plan
+            )
+
             # LLM 생성
             llm_params = {"model": model, "temperature": temperature}
             if max_tokens:
                 llm_params["max_tokens"] = max_tokens
 
             llm = create_llm(provider=provider, **llm_params)
-
-            # 메시지 구성
-            messages = self._build_messages(optimized_messages, system_prompt)
 
             # LLM 호출
             invoke_kwargs: Dict[str, Any] = {}
@@ -297,6 +362,11 @@ class ChatLLMService:
             # 최적화 통계 추가
             if optimization_stats:
                 result["context_optimization"] = optimization_stats
+
+            # 첨부 안내 추가
+            if attachment_plan.notices:
+                logger.info(f"[ChatLLM] Attachment notices: {attachment_plan.notices}")
+                result["attachment_notices"] = attachment_plan.notices
 
             return result
 
@@ -356,15 +426,24 @@ class ChatLLMService:
                         f"{optimization_stats['optimized_tokens']} tokens"
                     )
 
+            # 메시지 구성 — LLM 클라이언트보다 **먼저** 온다 (사유는
+            # `generate_response` 의 같은 자리 주석 참조).
+            owner_user_id = await _resolve_owner_user_id_if_needed(
+                conversation_id, optimized_messages
+            )
+            attachment_plan = await resolve_attachments(
+                optimized_messages, model=model, owner_user_id=owner_user_id
+            )
+            messages = self._build_messages(
+                optimized_messages, system_prompt, plan=attachment_plan
+            )
+
             # LLM 생성
             llm_params = {"model": model, "temperature": temperature, "streaming": True}
             if max_tokens:
                 llm_params["max_tokens"] = max_tokens
 
             llm = create_llm(provider=provider, **llm_params)
-
-            # 메시지 구성
-            messages = self._build_messages(optimized_messages, system_prompt)
 
             # 시작 이벤트
             yield {"type": "start", "model": model, "provider": provider}
@@ -481,8 +560,21 @@ class ChatLLMService:
             if optimization_stats:
                 complete_event["context_optimization"] = optimization_stats
 
+            # 첨부 안내 추가
+            if attachment_plan.notices:
+                logger.info(f"[ChatLLM] Attachment notices: {attachment_plan.notices}")
+                complete_event["attachment_notices"] = attachment_plan.notices
+
             yield complete_event
 
+        except AttachmentNotSupportedError as e:
+            logger.info(f"[ChatLLM] 첨부 거부: {e.human_message()}")
+            yield {
+                "type": "error",
+                "error": e.human_message(),
+                "code": e.code,
+            }
+            return
         except Exception as e:
             logger.error(f"Stream error: {e}")
             yield {"type": "error", "error": str(e)}
@@ -550,15 +642,27 @@ class ChatLLMService:
             client = build_async_anthropic()
 
             # 메시지 형식 변환 (LangChain 형식에서 Anthropic 형식으로)
+            owner_user_id = await _resolve_owner_user_id_if_needed(
+                conversation_id, conversation_messages
+            )
+            attachment_plan = await resolve_attachments(
+                conversation_messages, model=model, owner_user_id=owner_user_id
+            )
+
             anthropic_messages = []
-            for msg in conversation_messages:
+            for index, msg in enumerate(conversation_messages):
                 role = msg.get("role", "user")
                 content = msg.get("content", "")
 
                 if role in ["user", "assistant"]:
+                    attachments = (
+                        attachment_plan.by_index.get(index) if role == "user" else None
+                    ) or []
                     anthropic_messages.append({
                         "role": role,
-                        "content": content
+                        "content": merge_into_content(
+                            content, attachments, render_anthropic
+                        ),
                     })
 
             # 시작 이벤트
@@ -662,7 +766,7 @@ class ChatLLMService:
             )
 
             # 완료 이벤트
-            yield {
+            complete_event_tools = {
                 "type": "complete",
                 "full_content": full_content,
                 "model_name": model,
@@ -672,6 +776,21 @@ class ChatLLMService:
                 "latency_ms": latency_ms,
             }
 
+            # 첨부 안내 추가
+            if attachment_plan.notices:
+                logger.info(f"[ChatLLM] Attachment notices: {attachment_plan.notices}")
+                complete_event_tools["attachment_notices"] = attachment_plan.notices
+
+            yield complete_event_tools
+
+        except AttachmentNotSupportedError as e:
+            logger.info(f"[ChatLLM] 첨부 거부: {e.human_message()}")
+            yield {
+                "type": "error",
+                "error": e.human_message(),
+                "code": e.code,
+            }
+            return
         except Exception as e:
             logger.error(f"Tool-enabled stream error: {e}")
             yield {"type": "error", "error": str(e)}
@@ -760,12 +879,27 @@ class ChatLLMService:
             )
 
             # 메시지 변환
+            owner_user_id = await _resolve_owner_user_id_if_needed(
+                conversation_id, conversation_messages
+            )
+            attachment_plan = await resolve_attachments(
+                conversation_messages, model=model, owner_user_id=owner_user_id
+            )
+
             anthropic_messages = []
-            for msg in conversation_messages:
+            for index, msg in enumerate(conversation_messages):
                 role = msg.get("role", "user")
                 content = msg.get("content", "")
                 if role in ["user", "assistant"]:
-                    anthropic_messages.append({"role": role, "content": content})
+                    attachments = (
+                        attachment_plan.by_index.get(index) if role == "user" else None
+                    ) or []
+                    anthropic_messages.append({
+                        "role": role,
+                        "content": merge_into_content(
+                            content, attachments, render_anthropic
+                        ),
+                    })
 
             yield {"type": "start", "model": model, "provider": "anthropic"}
 
@@ -1025,7 +1159,7 @@ class ChatLLMService:
                 f"{latency_ms}ms, {round_count} rounds"
             )
 
-            yield {
+            complete_event_search = {
                 "type": "complete",
                 "full_content": full_content,
                 "model_name": model,
@@ -1036,6 +1170,21 @@ class ChatLLMService:
                 "tool_search_rounds": round_count,
             }
 
+            # 첨부 안내 추가
+            if attachment_plan.notices:
+                logger.info(f"[ChatLLM] Attachment notices: {attachment_plan.notices}")
+                complete_event_search["attachment_notices"] = attachment_plan.notices
+
+            yield complete_event_search
+
+        except AttachmentNotSupportedError as e:
+            logger.info(f"[ChatLLM] 첨부 거부: {e.human_message()}")
+            yield {
+                "type": "error",
+                "error": e.human_message(),
+                "code": e.code,
+            }
+            return
         except anthropic.BadRequestError as e:
             if tool_policy is not None and tool_policy.use_beta:
                 error_message = (

@@ -56,6 +56,7 @@ class StreamAccumulator:
     usage_info: Optional[Dict[str, Any]] = None
     cost_info: Optional[Dict[str, Any]] = None
     latency_ms: Optional[float] = None
+    attachment_notices: Optional[List[str]] = None
 
 
 class ChunkEventDispatcher:
@@ -138,12 +139,14 @@ class ChunkEventDispatcher:
         self._acc.usage_info = chunk["usage"]
         self._acc.cost_info = chunk["cost"]
         self._acc.latency_ms = chunk["latency_ms"]
+        self._acc.attachment_notices = chunk.get("attachment_notices")
 
     async def _handle_error(self, chunk: Dict) -> AsyncGenerator[str, None]:
         self._state.response.status = ResponseStatus.FAILED
         self._state.response.error = ErrorInfo(
             type="server_error",
             message=chunk.get("error", "Unknown error"),
+            code=chunk.get("code"),
         )
         # format_done_token()은 pipeline이 상태 확인 후 직접 yield한다
         yield format_sse_event(ResponseFailedEvent(response=self._state.response))

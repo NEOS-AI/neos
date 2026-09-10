@@ -144,6 +144,7 @@ function PureMultimodalInput({
           url: attachment.url,
           filename: attachment.name,
           mediaType: attachment.contentType,
+          documentId: attachment.documentId,
         })),
         {
           type: "text",
@@ -184,12 +185,13 @@ function PureMultimodalInput({
 
       if (response.ok) {
         const data = await response.json();
-        const { url, pathname, contentType } = data;
+        const { url, name, contentType, documentId } = data;
 
         return {
           url,
-          name: pathname,
+          name,
           contentType,
+          documentId,
         };
       }
       const { error } = await response.json();

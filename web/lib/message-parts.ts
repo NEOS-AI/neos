@@ -41,10 +41,21 @@ export type SupportedAttachmentMimeType =
 export type AnyMessagePart =
   | { type: "text"; text: string }
   | { type: "input_text"; text: string }
-  | { type: "file"; url: string; filename: string; mediaType: string }
+  | {
+      type: "file";
+      url: string;
+      filename: string;
+      mediaType: string;
+      documentId?: string | number;
+    }
   | {
       type: "input_file";
-      file: { url: string; name: string; media_type: string };
+      file: {
+        url: string;
+        name: string;
+        media_type: string;
+        document_id?: string | number;
+      };
     }
   | { type: string; [key: string]: unknown };
 
@@ -89,28 +100,50 @@ export function extractAttachments(
         url?: string;
         filename?: string;
         mediaType?: string;
+        documentId?: string | number;
       };
+      const metadata: Record<string, unknown> = {};
+      if (filePart.mediaType) {
+        metadata.mediaType = filePart.mediaType;
+      }
+      if (filePart.documentId !== undefined) {
+        metadata.documentId = filePart.documentId;
+      }
       attachments.push({
         type: "file",
         url: filePart.url ?? null,
         name: filePart.filename ?? null,
-        metadata: filePart.mediaType ? { mediaType: filePart.mediaType } : {},
+        metadata,
       });
       continue;
     }
 
     if (part.type === "input_file") {
       const file = (
-        part as { file?: { url?: string; name?: string; media_type?: string } }
+        part as {
+          file?: {
+            url?: string;
+            name?: string;
+            media_type?: string;
+            document_id?: string | number;
+          };
+        }
       ).file;
       if (!file) {
         continue;
+      }
+      const metadata: Record<string, unknown> = {};
+      if (file.media_type) {
+        metadata.mediaType = file.media_type;
+      }
+      if (file.document_id !== undefined) {
+        metadata.documentId = file.document_id;
       }
       attachments.push({
         type: "file",
         url: file.url ?? null,
         name: file.name ?? null,
-        metadata: file.media_type ? { mediaType: file.media_type } : {},
+        metadata,
       });
     }
   }

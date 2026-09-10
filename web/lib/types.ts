@@ -129,6 +129,8 @@ export const messageMetadataSchema = z.object({
   approval_session_id: z.string().optional(),
   // Runtime research harness validation and repair progress.
   harness: harnessMetadataSchema.optional(),
+  // 상한·해석 실패로 모델에 싣지 못한 첨부의 사유 (백엔드가 남긴다).
+  attachment_notices: z.array(z.string()).optional(),
   // 비동기 deep_analysis job 핸들 (챗 턴은 제출만 하고 즉시 끝난다).
   deep_analysis: deepAnalysisMetadataSchema.optional(),
   // Phase 8 (A2UI): UIFrame payload for form rendering
@@ -199,6 +201,7 @@ export type Attachment = {
   name: string;
   url: string;
   contentType: string;
+  documentId?: string | number;
 };
 
 export type AutonomyLevel = 0 | 1 | 2;

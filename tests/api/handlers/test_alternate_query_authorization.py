@@ -10,12 +10,11 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 
 from neos.api.dependencies.auth import get_current_active_user
-from neos.api.handlers import multimodal_handlers, unified_handlers
+from neos.api.handlers import unified_handlers
 from neos.api.models.unified_models import (
     UnifiedProcessingRequest,
     UnifiedStreamEvent,
 )
-from neos.api.services.multimodal_service import MultimodalService
 from neos.api.services.query_service import QueryService
 from neos.api.services.unified_processor import UnifiedProcessingService
 
@@ -30,10 +29,6 @@ async def _unauthenticated():
 
 def _app(current_user=None):
     app = FastAPI()
-    app.include_router(
-        multimodal_handlers.router,
-        prefix="/api/v1/multimodal",
-    )
     app.include_router(unified_handlers.router)
     app.dependency_overrides[get_current_active_user] = (
         (lambda: current_user) if current_user else _unauthenticated
@@ -67,22 +62,6 @@ def _unified_result(session_id: str = "s1"):
     [
         (
             "POST",
-            "/api/v1/multimodal/query",
-            {
-                "data": {"query": "hello", "user_id": "attacker"},
-                "files": [("files", ("image.png", b"image", "image/png"))],
-            },
-        ),
-        (
-            "POST",
-            "/api/v1/multimodal/image/analyze",
-            {
-                "data": {"user_id": "attacker"},
-                "files": {"image": ("image.png", b"image", "image/png")},
-            },
-        ),
-        (
-            "POST",
             "/api/v1/unified/process",
             {"json": {"query": "hello", "user_id": "attacker"}},
         ),
@@ -109,14 +88,12 @@ def _unified_result(session_id: str = "s1"):
         ),
     ],
 )
-def test_multimodal_and_unified_routes_reject_unauthenticated_before_services(
+def test_unified_routes_reject_unauthenticated_before_services(
     monkeypatch,
     method,
     path,
     request_kwargs,
 ):
-    multimodal = AsyncMock(return_value={})
-    analyze = AsyncMock(return_value={})
     process = AsyncMock(return_value=_unified_result())
     get_user = AsyncMock()
     stream_started = Mock()
@@ -126,12 +103,6 @@ def test_multimodal_and_unified_routes_reject_unauthenticated_before_services(
         yield UnifiedStreamEvent(event="completed", session_id="s1")
 
     monkeypatch.setattr(QueryService, "get_or_create_user", get_user)
-    monkeypatch.setattr(
-        MultimodalService,
-        "process_multimodal_query",
-        multimodal,
-    )
-    monkeypatch.setattr(MultimodalService, "analyze_image", analyze)
     monkeypatch.setattr(UnifiedProcessingService, "process", process)
     monkeypatch.setattr(UnifiedProcessingService, "process_stream", process_stream)
 
@@ -139,84 +110,9 @@ def test_multimodal_and_unified_routes_reject_unauthenticated_before_services(
         response = client.request(method, path, **request_kwargs)
 
     assert response.status_code == 401
-    multimodal.assert_not_awaited()
-    analyze.assert_not_awaited()
     process.assert_not_awaited()
     get_user.assert_not_awaited()
     stream_started.assert_not_called()
-
-
-def test_multimodal_supported_types_rejects_unauthenticated_before_service(monkeypatch):
-    get_supported_types = AsyncMock(return_value={})
-    monkeypatch.setattr(
-        MultimodalService,
-        "get_supported_types",
-        get_supported_types,
-    )
-
-    with TestClient(_app()) as client:
-        response = client.get("/api/v1/multimodal/supported-types")
-
-    assert response.status_code == 401
-    get_supported_types.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_multimodal_query_ignores_spoofed_user(monkeypatch):
-    get_user = AsyncMock()
-    process = AsyncMock(
-        return_value={
-            "success": True,
-            "response": "ok",
-            "session_id": "s1",
-            "input_type": "multimodal",
-            "metadata": {},
-            "processing_time_ms": 1,
-            "errors": [],
-            "warnings": [],
-        }
-    )
-    monkeypatch.setattr(QueryService, "get_or_create_user", get_user)
-    monkeypatch.setattr(MultimodalService, "convert_upload_files_to_dict", AsyncMock(return_value=[]))
-    monkeypatch.setattr(MultimodalService, "process_multimodal_query", process)
-
-    await multimodal_handlers.process_multimodal_query(
-        background_tasks=SimpleNamespace(),
-        query="hello",
-        files=[_upload()],
-        user_id="attacker",
-        session_id="s1",
-        language="ko",
-        current_user=_user(),
-    )
-
-    get_user.assert_awaited_once_with("owner")
-    assert process.await_args.kwargs["user_id"] == "owner"
-
-
-@pytest.mark.asyncio
-async def test_image_analysis_ignores_spoofed_user(monkeypatch):
-    analyze = AsyncMock(
-        return_value={
-            "success": True,
-            "filename": "image.png",
-            "description": "ok",
-            "objects": [],
-            "image_metadata": {},
-            "processing_time_ms": 1,
-        }
-    )
-    monkeypatch.setattr(MultimodalService, "analyze_image", analyze)
-
-    await multimodal_handlers.analyze_image(
-        image=_upload(),
-        query=None,
-        user_id="attacker",
-        language="ko",
-        current_user=_user(),
-    )
-
-    assert analyze.await_args.kwargs["user_id"] == "owner"
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,520 @@
+"""첨부 → 모델 입력 블록.
+
+N8. 정책(분류·게이트·상한·해석)은 전부 이 모듈에 있고, `chat_llm_service`의
+세 메시지 조립 사본은 렌더 결과만 병합한다. 설계는
+`docs/superpowers/specs/2026-09-05-n8-attachment-multimodal-design.md`.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import logging
+from dataclasses import dataclass
+from enum import Enum
+from functools import lru_cache
+from typing import Callable
+
+from sqlalchemy import select
+
+from neos.config.model_config import model_known, supports_vision
+from neos.config.settings import settings
+from neos.database.connection import get_session
+from neos.database.models import Document
+from neos.storage.storage_service import StorageService
+from neos.workflow.pipelines.word_parser import parse_word
+
+logger = logging.getLogger(__name__)
+
+#: 원본 바이트 합계 상한. Anthropic 요청 한도 32MB 를 base64 팽창(약 1.37배)
+#: 뒤에도 넘지 않도록 20MB 로 둔다.
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+#: PDF 페이지 상한.
+MAX_PDF_PAGES = 600
+
+_DOCX_MIME = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
+
+_KIND_BY_MIME = {
+    "image/jpeg": "IMAGE",
+    "image/png": "IMAGE",
+    "image/gif": "IMAGE",
+    "image/webp": "IMAGE",
+    "application/pdf": "FILE",
+    "text/plain": "FILE_TEXT",
+    "text/markdown": "FILE_TEXT",
+    "application/msword": "EXTRACT",
+    _DOCX_MIME: "EXTRACT",
+}
+
+
+class AttachmentKind(str, Enum):
+    """첨부가 모델에 어떤 모양으로 가는가."""
+
+    IMAGE = "IMAGE"          # 이미지 블록
+    FILE = "FILE"            # 문서 블록 (PDF 원본)
+    FILE_TEXT = "FILE_TEXT"  # 문서 블록 (텍스트 원본)
+    EXTRACT = "EXTRACT"      # 텍스트로 추출해 본문에 붙인다
+
+
+def classify(mime_type: str) -> AttachmentKind | None:
+    """허용 9종을 종류로 가른다. 목록 밖이면 None."""
+    kind = _KIND_BY_MIME.get((mime_type or "").lower())
+    return AttachmentKind(kind) if kind else None
+
+
+class AttachmentNotSupportedError(Exception):
+    """첨부를 이 모델로 보낼 수 없다. 조용히 버리지 않는다."""
+
+    code = "attachment_unsupported"
+
+    def __init__(self, model: str, items: list[dict]) -> None:
+        self.model = model
+        self.items = items
+        super().__init__(self.human_message())
+
+    def human_message(self) -> str:
+        names = ", ".join(item["name"] for item in self.items)
+        return (
+            f"{self.model}는 첨부 {len(self.items)}개({names})를 받지 않습니다. "
+            "이미지·PDF를 보내려면 vision 지원 모델을 선택하세요."
+        )
+
+
+#: vision 능력을 요구하는 종류. EXTRACT 는 word_parser 가 텍스트로 뽑아내므로
+#: 빠지고, FILE_TEXT(text/plain·text/markdown)도 렌더러가 base64 문서가 아니라
+#: 순수 텍스트 블록으로 싣기 때문에(Anthropic 의 document 소스는 PDF 전용이고
+#: OpenAI 의 input_file 도 PDF 전용이라 텍스트 MIME 을 문서로 보내면 프로바이더가
+#: 400 을 낸다) vision 없는 모델도 받을 수 있어 빠진다.
+_KINDS_REQUIRING_VISION = (AttachmentKind.IMAGE, AttachmentKind.FILE)
+
+
+def assert_model_accepts(
+    model: str, kinds: list[tuple[AttachmentKind, str, str]]
+) -> None:
+    """모델이 못 받는 첨부가 있으면 AttachmentNotSupportedError 를 올린다.
+
+    Args:
+        model: 이 턴이 쓰는 모델 식별자
+        kinds: (종류, 파일명, MIME) 튜플 목록
+    """
+    if not model_known(model):
+        # 카탈로그가 모르는 모델은 능력도 모른다. 거부하지 않는다.
+        #
+        # Ollama 의 `list_models()` 는 라이브 서버를 조회하므로 로컬에 설치한
+        # vision 모델이 선택될 수 있는데 그 이름은 models.yaml 에 없다. 모른다는
+        # 이유로 거부하면 볼 수 있는 모델이 이미지를 거절당한다.
+        #
+        # 대가: 오타 난 모델명도 여기를 통과해 프로바이더까지 간다. 그쪽이 낫다고
+        # 본다 -- 프로바이더 오류는 시끄럽고, 능력 있는 모델을 조용히 막는 것이
+        # 더 나쁜 실패다.
+        return
+
+    if supports_vision(model):
+        return
+
+    blocked = [
+        {"name": name, "mime": mime, "reason": "vision_unsupported"}
+        for kind, name, mime in kinds
+        if kind in _KINDS_REQUIRING_VISION
+    ]
+    if blocked:
+        raise AttachmentNotSupportedError(model=model, items=blocked)
+
+
+@dataclass(frozen=True)
+class ResolvedAttachment:
+    """해석이 끝난 첨부 하나. 렌더 직전 상태다."""
+
+    name: str
+    mime_type: str
+    kind: AttachmentKind
+    #: IMAGE·FILE·FILE_TEXT 의 원본 바이트
+    data: bytes | None
+    #: EXTRACT 의 추출 텍스트, 또는 상한/해석 실패로 강등된 첨부의 안내 문구
+    text: str | None
+
+
+def _b64(data: bytes) -> str:
+    return base64.b64encode(data).decode("ascii")
+
+
+def _decode_file_text(att: ResolvedAttachment) -> dict:
+    """FILE_TEXT(text/plain·text/markdown)를 순수 텍스트 블록으로.
+
+    Anthropic 의 document base64 소스는 PDF 전용(media_type 이
+    'application/pdf'인 리터럴)이고 OpenAI 의 input_file 도 PDF 전용이라, 텍스트
+    MIME 을 문서 블록으로 실으면 두 프로바이더 다 400 을 낸다. 텍스트는 텍스트
+    블록으로 보낸다 — EXTRACT 강등 플레이스홀더와 같은 모양이다.
+    """
+    text = (att.data or b"").decode("utf-8", errors="replace")
+    return {"type": "text", "text": f"[첨부 {att.name} 의 내용]\n{text}"}
+
+
+def render_langchain(att: ResolvedAttachment) -> dict:
+    """LangChain 표준 content block. 프로바이더 번역은 LangChain 이 한다."""
+    if att.kind is AttachmentKind.FILE_TEXT:
+        return _decode_file_text(att)
+    if att.kind is AttachmentKind.IMAGE:
+        return {
+            "type": "image",
+            "base64": _b64(att.data or b""),
+            "mime_type": att.mime_type,
+        }
+    # FILE(PDF). langchain_openai's translator falls back to the placeholder
+    # filename "LC_AUTOGENERATED" (and warns) when this key is absent.
+    return {
+        "type": "file",
+        "base64": _b64(att.data or b""),
+        "mime_type": att.mime_type,
+        "filename": att.name,
+    }
+
+
+def render_anthropic(att: ResolvedAttachment) -> dict:
+    """Anthropic 네이티브 block. raw SDK 를 쓰는 두 경로용이다."""
+    if att.kind is AttachmentKind.FILE_TEXT:
+        return _decode_file_text(att)
+    if att.kind is AttachmentKind.IMAGE:
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": att.mime_type,
+                "data": _b64(att.data or b""),
+            },
+        }
+    return {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": att.mime_type,
+            "data": _b64(att.data or b""),
+        },
+    }
+
+
+def merge_into_content(
+    content: str,
+    attachments: list[ResolvedAttachment],
+    renderer: Callable[[ResolvedAttachment], dict],
+) -> str | list[dict]:
+    """본문과 첨부를 하나의 content 로 합친다.
+
+    첨부가 없으면 문자열을 그대로 돌려준다 — 기존 동작을 바꾸지 않기 위해서다.
+    미디어 블록은 본문 앞에 온다(프로바이더 권장 순서).
+    """
+    if not attachments:
+        return content
+
+    blocks: list[dict] = []
+    for att in attachments:
+        if att.data is not None:
+            blocks.append(renderer(att))
+        elif att.text:
+            blocks.append(
+                {"type": "text", "text": f"[첨부 {att.name} 의 텍스트]\n{att.text}"}
+            )
+
+    blocks.append({"type": "text", "text": content})
+    return blocks
+
+
+@dataclass(frozen=True)
+class AttachmentPlan:
+    """요청 한 번 분의 해석 결과.
+
+    `by_index` 는 `conversation_messages` 의 인덱스로 건다 — 메시지 dict 를
+    변형하지 않아야 세 조립 사본이 각자 자기 형식으로 병합할 수 있다.
+    """
+
+    by_index: dict[int, list[ResolvedAttachment]]
+    notices: list[str]
+
+
+async def _load_document(*, document_id=None, storage_url=None, owner_user_id):
+    """documentId 우선, 없으면 storage_url 역조회. 못 찾으면 None.
+
+    두 경로 모두 `Document.user_id == owner_user_id` 를 반드시 건다 — 이게
+    없으면 documentId 는 그냥 순차 PK 라 다른 사용자의 문서를 이름만 대고
+    자기 대화 안으로 끌어올 수 있다(N8 리뷰 Finding 1). 존재하지만 소유가
+    아닌 문서는 여기서 이미 없는 것과 같은 결과(None)가 되어야 한다 — 별도
+    "forbidden" 사유를 만들면 그 자체로 문서 존재를 확인해 주는 신호가 된다.
+    """
+    async for session in get_session():
+        if document_id is not None:
+            try:
+                numeric_id = int(document_id)
+            except (TypeError, ValueError):
+                # 클라이언트가 documentId 로 숫자 아닌 값(예: "abc")을 보내는
+                # 경우다. 그런 id 는 그냥 아무것도 가리키지 않는 id 와 같으니
+                # 여기서 500 을 내지 않고 storage_url 폴백/미해결 경로로 그냥
+                # 흘려보낸다(§4.5 는 새 사유가 아니라 기존 "찾을 수 없음"
+                # 경로로 이어져야 한다).
+                numeric_id = None
+            if numeric_id is not None:
+                result = await session.execute(
+                    select(Document).where(
+                        Document.id == numeric_id,
+                        Document.user_id == owner_user_id,
+                    )
+                )
+                document = result.scalar_one_or_none()
+                if document is not None:
+                    return document
+        if storage_url:
+            result = await session.execute(
+                select(Document).where(
+                    Document.storage_url == storage_url,
+                    Document.user_id == owner_user_id,
+                )
+            )
+            return result.scalar_one_or_none()
+        return None
+    return None
+
+
+@lru_cache(maxsize=None)
+def _get_provider(provider_type: str):
+    """프로바이더를 첫 호출에만 만든다. 매 첨부마다 boto3 클라이언트를 새로
+    만들면(구 코드) 20MB 첨부 하나가 이벤트 루프를 통째로 막는 원인 중 하나였다.
+    """
+    return StorageService.create_provider(provider_type)
+
+
+def _download_sync(provider, storage_key: str) -> bytes:
+    """`provider.download`는 `async def`지만 내부는 동기 boto3 호출이다.
+
+    스레드 안에서 새 이벤트 루프로 그 코루틴을 돌려, 블로킹 I/O가 호출자의
+    이벤트 루프를 막지 않게 한다.
+    """
+    return asyncio.run(provider.download(storage_key))
+
+
+async def _download(storage_key: str) -> bytes:
+    provider = _get_provider(settings.STORAGE_PROVIDER)
+    return await asyncio.to_thread(_download_sync, provider, storage_key)
+
+
+def _demoted(
+    name: str, mime_type: str, kind: AttachmentKind, why: str
+) -> ResolvedAttachment:
+    return ResolvedAttachment(
+        name=name,
+        mime_type=mime_type,
+        kind=kind,
+        data=None,
+        text=f"[첨부: {name} — {why}]",
+    )
+
+
+@dataclass(frozen=True)
+class _Prepared:
+    """1패스의 산출. 게이트를 통과한 뒤에만 2패스가 이것을 소비한다."""
+
+    index: int
+    name: str
+    mime_type: str
+    #: None 이면 해석 실패 — 과거 턴이므로 강등 대상이다
+    kind: AttachmentKind | None
+    document: object | None
+
+
+async def resolve_attachments(
+    conversation_messages: list[dict], *, model: str, owner_user_id: str
+) -> AttachmentPlan:
+    """첨부를 해석해 요청 한 번 분의 계획을 만든다.
+
+    1패스가 DB 만 보고 게이트를 세운 뒤에야 2패스가 스토리지를 연다 — 거부될
+    턴에서 스토리지 오류가 거부 메시지를 가리지 않게 하기 위해서다.
+
+    `owner_user_id` 는 이 턴을 낸 사용자다. 필수 인자다 — 대화를 못 찾은
+    호출자는 필터 없는 조회로 물러나지 말고, 뭐가 됐든(예: None) 이 자리에
+    넘겨 모든 첨부가 "찾을 수 없음" 경로를 타게 해야 한다.
+    """
+    indexed = [
+        (index, message)
+        for index, message in enumerate(conversation_messages)
+        if message.get("role") == "user" and message.get("attachments")
+    ]
+    if not indexed:
+        return AttachmentPlan(by_index={}, notices=[])
+
+    # "현재 턴"은 대화의 마지막 유저 메시지다 — 첨부가 없어도 마찬가지다.
+    # `indexed`의 마지막 항목(첨부를 낸 마지막 메시지)과 다를 수 있다: 과거에
+    # 첨부를 낸 턴 뒤로 순수 텍스트 턴이 이어지면 그 텍스트 턴이 현재 턴이고,
+    # 그 턴엔 게이트에 걸 첨부가 없다(N8 리뷰 Finding 2).
+    current_index = max(
+        index
+        for index, message in enumerate(conversation_messages)
+        if message.get("role") == "user"
+    )
+    vision_ok = supports_vision(model)
+
+    # ---- 1패스: 조회와 분류 (DB 만) ----
+    prepared: list[_Prepared] = []
+    unresolved_now: list[dict] = []
+    kinds_for_gate: list[tuple[AttachmentKind, str, str]] = []
+
+    # 최신 메시지부터 본다 — 2패스의 예산이 같은 순서로 채워진다
+    for index, message in reversed(indexed):
+        for attachment in message.get("attachments") or []:
+            # 첨부 dict 의 각 필드는 클라이언트가 그대로 채운다
+            # (`SendMessageRequest.attachments`는 `List[Dict[str, Any]]`라
+            # 값 자체는 검증되지 않는다). 타입이 어긋난 값은 "정보가 없는
+            # 값"과 같게 다룬다 — documentId 에 숫자 아닌 값을 매핑한 것과
+            # 같은 처리다(N8 리뷰 라운드 2, Item 3). 여기서 막지 않으면
+            # `metadata.get(...)`/`", ".join(...)` 이 바로 아래나
+            # `human_message()`에서 터진다(라운드 3, Item 1·2).
+            raw_metadata = attachment.get("metadata")
+            metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+            raw_name = attachment.get("name")
+            name = raw_name if isinstance(raw_name, str) and raw_name else "attachment"
+            raw_url = attachment.get("url")
+            storage_url = raw_url if isinstance(raw_url, str) else None
+            document = await _load_document(
+                document_id=metadata.get("documentId"),
+                storage_url=storage_url,
+                owner_user_id=owner_user_id,
+            )
+            raw_media_type = metadata.get("mediaType")
+            client_media_type = raw_media_type if isinstance(raw_media_type, str) else None
+            mime_type = (
+                getattr(document, "mime_type", None)
+                or client_media_type
+                or ""
+            )
+            kind = classify(mime_type)
+
+            if document is None or kind is None:
+                if index == current_index:
+                    unresolved_now.append(
+                        {"name": name, "mime": mime_type, "reason": "unresolved"}
+                    )
+                else:
+                    prepared.append(
+                        _Prepared(index, name, mime_type, None, None)
+                    )
+                continue
+
+            # 게이트는 현재 턴의 첨부만 본다 — 과거 턴에 있던 이미지 때문에
+            # vision 없는 모델로 바뀐 뒤의 모든 텍스트 턴까지 거부되면 안
+            # 된다(N8 리뷰 Finding 2). 과거 턴 몫은 2패스에서 강등한다.
+            if index == current_index:
+                kinds_for_gate.append((kind, name, mime_type))
+            prepared.append(_Prepared(index, name, mime_type, kind, document))
+
+    # ---- 게이트: 스토리지를 열기 전에 거부를 확정한다 ----
+    if unresolved_now:
+        raise AttachmentNotSupportedError(model=model, items=unresolved_now)
+
+    assert_model_accepts(model=model, kinds=kinds_for_gate)
+
+    # ---- 2패스: 다운로드 · 추출 · 상한 ----
+    by_index: dict[int, list[ResolvedAttachment]] = {}
+    notices: list[str] = []
+    budget = MAX_ATTACHMENT_BYTES
+
+    for item in prepared:
+        resolved: ResolvedAttachment
+
+        if item.kind is None:
+            resolved = _demoted(
+                item.name, item.mime_type, AttachmentKind.EXTRACT, "해석할 수 없어 제외됨"
+            )
+            notices.append(f"{item.name}: 해석할 수 없어 제외됨")
+        elif item.kind in _KINDS_REQUIRING_VISION and not vision_ok:
+            # 현재 턴이었다면 위 게이트에서 이미 거부되었을 것이다 — 여기
+            # 남아 있다는 건 과거 턴 몫이라는 뜻이므로 조용히 빼지 않고
+            # 강등한다.
+            resolved = _demoted(
+                item.name, item.mime_type, item.kind, "이 모델은 이 첨부를 받지 않음"
+            )
+            notices.append(f"{item.name}: 모델이 지원하지 않아 제외됨")
+        else:
+            page_count = getattr(item.document, "page_count", None)
+            size = getattr(item.document, "file_size", None) or 0
+
+            if (
+                item.kind is AttachmentKind.FILE
+                and page_count
+                and page_count > MAX_PDF_PAGES
+            ):
+                resolved = _demoted(
+                    item.name,
+                    item.mime_type,
+                    item.kind,
+                    f"{MAX_PDF_PAGES}페이지 상한 초과",
+                )
+                notices.append(f"{item.name}: 페이지 상한 초과로 제외됨")
+            elif item.kind is not AttachmentKind.EXTRACT and size > budget:
+                resolved = _demoted(
+                    item.name,
+                    item.mime_type,
+                    item.kind,
+                    "길이 상한으로 이번 요청에 포함되지 않음",
+                )
+                notices.append(f"{item.name}: 길이 상한으로 제외됨")
+            else:
+                data = await _download(item.document.storage_key)
+
+                if item.kind is AttachmentKind.EXTRACT:
+                    parsed = await parse_word(file_content=data)
+                    text = parsed.get("text") or ""
+                    if not text.strip():
+                        resolved = _demoted(
+                            item.name,
+                            item.mime_type,
+                            item.kind,
+                            "추출된 텍스트가 없어 제외됨",
+                        )
+                        notices.append(f"{item.name}: 추출된 텍스트가 없어 제외됨")
+                    else:
+                        extracted_bytes = len(text.encode("utf-8"))
+                        if extracted_bytes > budget:
+                            # EXTRACT 는 원본 파일 크기가 아니라 추출된 텍스트의
+                            # 바이트 길이로 같은 예산을 소모한다(N8 리뷰
+                            # Finding 8) — 안 그러면 큰 .docx 하나가 상한을
+                            # 완전히 우회한다.
+                            resolved = _demoted(
+                                item.name,
+                                item.mime_type,
+                                item.kind,
+                                "길이 상한으로 이번 요청에 포함되지 않음",
+                            )
+                            notices.append(f"{item.name}: 길이 상한으로 제외됨")
+                        else:
+                            budget -= extracted_bytes
+                            resolved = ResolvedAttachment(
+                                name=item.name,
+                                mime_type=item.mime_type,
+                                kind=item.kind,
+                                data=None,
+                                text=text,
+                            )
+                elif len(data) > budget:
+                    # 사전검사는 Document.file_size 를 본다 — NULL 이면 0 으로
+                    # 취급돼 통과한다. 실제로 받은 바이트 수로 다시 확인해야
+                    # 예산을 완전히 우회하는 첨부가 없다.
+                    resolved = _demoted(
+                        item.name,
+                        item.mime_type,
+                        item.kind,
+                        "길이 상한으로 이번 요청에 포함되지 않음",
+                    )
+                    notices.append(f"{item.name}: 길이 상한으로 제외됨")
+                else:
+                    budget -= len(data)
+                    resolved = ResolvedAttachment(
+                        name=item.name,
+                        mime_type=item.mime_type,
+                        kind=item.kind,
+                        data=data,
+                        text=None,
+                    )
+
+        by_index.setdefault(item.index, []).append(resolved)
+
+    return AttachmentPlan(by_index=by_index, notices=notices)

@@ -174,13 +174,11 @@ def test_legacy_shape_file_is_converted(tmp_path: Path) -> None:
                     "provider": "openai",
                     "description": "OpenAI GPT-4o Vision",
                     "max_tokens": 4096,
-                    "supports_video": False,
                 },
                 "gemini": {
                     "model_id": "gemini-1.5-pro-latest",
                     "provider": "google",
                     "max_tokens": 8192,
-                    "supports_video": True,
                 },
             },
             "llm_models": {
@@ -208,7 +206,6 @@ def test_legacy_shape_file_is_converted(tmp_path: Path) -> None:
     assert catalog.aliases["embedding"]["openai_small"] == "text-embedding-3-small"
     # provider "google"은 LLMFactory 키 "gemini"로 정규화된다
     assert catalog.models["gemini-1.5-pro-latest"].provider == "gemini"
-    assert catalog.models["gemini-1.5-pro-latest"].supports_video is True
     assert catalog.models["text-embedding-3-small"].dimension == 1536
     # 옛 형태에는 tier·pricing·thinking이 없다
     assert catalog.models["claude-sonnet-5"].tiers == []
@@ -570,3 +567,32 @@ def test_warn_unknown_routed_models_does_not_log_empty_error_for_a_good_catalog(
         warn_unknown_routed_models(ModelRoutingConfig())
 
     assert not [r for r in caplog.records if r.levelname == "ERROR"]
+
+
+# ---- vision capability flag ----
+
+
+def test_vision_flag_defaults_to_false_and_parses(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "seeing-model": {"provider": "anthropic", "vision": True},
+                "blind-model": {"provider": "openai"},
+            }
+        },
+    )
+
+    catalog = load_catalog(path)
+
+    assert catalog.models["seeing-model"].vision is True
+    assert catalog.models["blind-model"].vision is False
+
+
+def test_supports_vision_reads_the_live_catalog() -> None:
+    from neos.config.model_config import supports_vision
+
+    # 카탈로그에 없는 모델은 능력을 주장하지 않는다
+    assert supports_vision("no-such-model-xyz") is False
+    # 카탈로그가 True 로 적은 모델은 True 다
+    assert supports_vision("claude-sonnet-5") is True

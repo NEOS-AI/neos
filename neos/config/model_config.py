@@ -70,7 +70,10 @@ class ModelSpec(StrictConfigModel):
     selectable: bool = True
     max_tokens: int | None = None
     description: str | None = None
-    supports_video: bool = False
+    # 이미지·PDF 입력을 받는가. 유일한 독자는 첨부 게이트
+    # (neos/services/attachment_blocks.py) — 읽는 곳 없이 스키마만
+    # 늘리지 않기 위해 게이트와 같은 변경으로 들어왔다.
+    vision: bool = False
     dimension: int | None = None
     pricing: ModelPricing | None = None
 
@@ -257,7 +260,7 @@ _LEGACY_GROUPS: tuple[tuple[str, str], ...] = (
 )
 # 옛 파일은 Gemini provider를 "google"로 적었다. LLMFactory 키로 정규화한다.
 _PROVIDER_ALIASES = {"google": "gemini"}
-_LEGACY_SPEC_FIELDS = ("description", "max_tokens", "supports_video", "dimension")
+_LEGACY_SPEC_FIELDS = ("description", "max_tokens", "dimension")
 
 
 def _looks_legacy(data: dict[str, Any]) -> bool:
@@ -487,6 +490,26 @@ def get_embedding_model_id(model_name: str | None = None) -> str:
 
 def get_model_spec(model: str) -> ModelSpec | None:
     return model_config.catalog.get_model_spec(model)
+
+
+def model_known(model: str) -> bool:
+    """카탈로그가 이 모델을 아는가.
+
+    `supports_vision()` 의 False 는 두 가지를 뭉뚱그린다 -- "카탈로그가 이 모델을
+    알고, vision 이 없다고 적었다" 와 "카탈로그가 이 모델을 모른다". 능력 판정은
+    그 둘을 갈라야 하므로 이 함수가 따로 있다.
+    """
+    return model_config.catalog.get_model_spec(model) is not None
+
+
+def supports_vision(model: str) -> bool:
+    """모델이 이미지·PDF 입력을 받는가. 카탈로그가 유일한 원천이다.
+
+    카탈로그에 없는 모델도 False 를 받는다 -- 모른다는 뜻이지 못 한다는 뜻이
+    아니므로, 능력 게이트는 `model_known()` 과 함께 읽어야 한다.
+    """
+    spec = model_config.catalog.get_model_spec(model)
+    return bool(spec and spec.vision)
 
 
 def models_for_provider(provider: str) -> list[str]:

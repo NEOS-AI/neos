@@ -9,14 +9,12 @@ from importlib import import_module
 _ROUTER_EXPORTS = {
     "query_router": "neos.api.handlers.query_handlers",
     "document_router": "neos.api.handlers.document_handlers",
-    "multimodal_router": "neos.api.handlers.multimodal_handlers",
     "analytics_router": "neos.api.handlers.analytics_handlers",
 }
 
 __all__ = [
     "query_router",
     "document_router",
-    "multimodal_router",
     "analytics_router",
 ]
 
