@@ -17,7 +17,7 @@ from typing import Callable
 
 from sqlalchemy import select
 
-from neos.config.model_config import supports_vision
+from neos.config.model_config import model_known, supports_vision
 from neos.config.settings import settings
 from neos.database.connection import get_session
 from neos.database.models import Document
@@ -100,6 +100,18 @@ def assert_model_accepts(
         model: 이 턴이 쓰는 모델 식별자
         kinds: (종류, 파일명, MIME) 튜플 목록
     """
+    if not model_known(model):
+        # 카탈로그가 모르는 모델은 능력도 모른다. 거부하지 않는다.
+        #
+        # Ollama 의 `list_models()` 는 라이브 서버를 조회하므로 로컬에 설치한
+        # vision 모델이 선택될 수 있는데 그 이름은 models.yaml 에 없다. 모른다는
+        # 이유로 거부하면 볼 수 있는 모델이 이미지를 거절당한다.
+        #
+        # 대가: 오타 난 모델명도 여기를 통과해 프로바이더까지 간다. 그쪽이 낫다고
+        # 본다 -- 프로바이더 오류는 시끄럽고, 능력 있는 모델을 조용히 막는 것이
+        # 더 나쁜 실패다.
+        return
+
     if supports_vision(model):
         return
 

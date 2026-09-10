@@ -66,6 +66,9 @@ def stub_io(monkeypatch):
 
     monkeypatch.setattr(attachment_blocks, "_load_document", fake_load_document)
     monkeypatch.setattr(attachment_blocks, "_download", fake_download)
+    # 이 스위트는 카탈로그와 격리한다 — 게이트 의미론(모르는 모델은
+    # 거부하지 않는다)은 test_attachment_blocks.py 가 실물 카탈로그로 덮는다.
+    monkeypatch.setattr(attachment_blocks, "model_known", lambda model: True)
     monkeypatch.setattr(attachment_blocks, "supports_vision", lambda model: True)
     return docs, downloads
 
@@ -126,6 +129,9 @@ async def test_docx_is_extracted_to_text(stub_io, monkeypatch) -> None:
 async def test_gate_refuses_when_the_model_has_no_vision(stub_io, monkeypatch) -> None:
     docs, _ = stub_io
     docs[1] = _Doc("image/png")
+    # 이 스위트는 카탈로그와 격리한다 — 게이트 의미론(모르는 모델은
+    # 거부하지 않는다)은 test_attachment_blocks.py 가 실물 카탈로그로 덮는다.
+    monkeypatch.setattr(attachment_blocks, "model_known", lambda model: True)
     monkeypatch.setattr(attachment_blocks, "supports_vision", lambda model: False)
 
     with pytest.raises(AttachmentNotSupportedError):
@@ -166,6 +172,9 @@ async def test_history_attachment_needing_vision_is_demoted_not_refused(
     """
     docs, _ = stub_io
     docs[1] = _Doc("image/png")
+    # 이 스위트는 카탈로그와 격리한다 — 게이트 의미론(모르는 모델은
+    # 거부하지 않는다)은 test_attachment_blocks.py 가 실물 카탈로그로 덮는다.
+    monkeypatch.setattr(attachment_blocks, "model_known", lambda model: True)
     monkeypatch.setattr(attachment_blocks, "supports_vision", lambda model: False)
 
     plan = await resolve_attachments(
@@ -190,6 +199,9 @@ async def test_current_turn_attachment_needing_vision_still_refuses(
     docs, _ = stub_io
     docs[1] = _Doc("image/png", user_id=OWNER)
     docs[2] = _Doc("image/png", user_id=OWNER)
+    # 이 스위트는 카탈로그와 격리한다 — 게이트 의미론(모르는 모델은
+    # 거부하지 않는다)은 test_attachment_blocks.py 가 실물 카탈로그로 덮는다.
+    monkeypatch.setattr(attachment_blocks, "model_known", lambda model: True)
     monkeypatch.setattr(attachment_blocks, "supports_vision", lambda model: False)
 
     with pytest.raises(AttachmentNotSupportedError):
@@ -415,6 +427,9 @@ async def test_other_users_document_is_refused_like_a_missing_one_on_current_tur
 ) -> None:
     rows, _ = real_db_io
     rows.append(_RealRow(id=1, user_id=OTHER))
+    # 이 스위트는 카탈로그와 격리한다 — 게이트 의미론(모르는 모델은
+    # 거부하지 않는다)은 test_attachment_blocks.py 가 실물 카탈로그로 덮는다.
+    monkeypatch.setattr(attachment_blocks, "model_known", lambda model: True)
     monkeypatch.setattr(attachment_blocks, "supports_vision", lambda model: True)
 
     with pytest.raises(AttachmentNotSupportedError) as excinfo:
@@ -436,6 +451,9 @@ async def test_other_users_document_is_demoted_like_a_missing_one_on_an_older_tu
     rows, _ = real_db_io
     rows.append(_RealRow(id=1, user_id=OTHER, storage_key="secret-key"))
     rows.append(_RealRow(id=2, user_id=OWNER, storage_key="ok-key"))
+    # 이 스위트는 카탈로그와 격리한다 — 게이트 의미론(모르는 모델은
+    # 거부하지 않는다)은 test_attachment_blocks.py 가 실물 카탈로그로 덮는다.
+    monkeypatch.setattr(attachment_blocks, "model_known", lambda model: True)
     monkeypatch.setattr(attachment_blocks, "supports_vision", lambda model: True)
 
     async def fake_download(storage_key):
@@ -536,6 +554,9 @@ async def test_non_numeric_document_id_is_demoted_like_a_missing_one_on_an_older
 ) -> None:
     rows, _ = real_db_io
     rows.append(_RealRow(id=2, user_id=OWNER))
+    # 이 스위트는 카탈로그와 격리한다 — 게이트 의미론(모르는 모델은
+    # 거부하지 않는다)은 test_attachment_blocks.py 가 실물 카탈로그로 덮는다.
+    monkeypatch.setattr(attachment_blocks, "model_known", lambda model: True)
     monkeypatch.setattr(attachment_blocks, "supports_vision", lambda model: True)
 
     async def fake_download(storage_key):

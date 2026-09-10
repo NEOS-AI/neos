@@ -55,29 +55,61 @@ def test_error_names_every_blocked_attachment_and_the_model() -> None:
     assert "report.pdf" in message
 
 
-def test_gate_blocks_image_for_a_model_without_vision(monkeypatch) -> None:
-    from neos.services import attachment_blocks
+#: 카탈로그가 아는, vision 을 갖지 않는 실제 모델. 스텁 대신 실물을 쓰면
+#: 게이트가 카탈로그와 어긋나는 순간 테스트가 알려준다.
+KNOWN_BLIND_MODEL = "gpt-3.5-turbo"
 
-    monkeypatch.setattr(attachment_blocks, "supports_vision", lambda model: False)
+#: 카탈로그가 아는, vision 을 갖는 실제 모델.
+KNOWN_SEEING_MODEL = "claude-sonnet-5"
+
+#: 카탈로그에 없는 모델. Ollama 처럼 list_models() 가 라이브 서버를 조회하는
+#: 프로바이더에서는 이런 이름이 실제로 선택될 수 있다.
+UNKNOWN_MODEL = "llava:13b-not-in-catalog"
+
+
+def test_gate_blocks_image_for_a_model_the_catalog_says_has_no_vision() -> None:
+    from neos.services import attachment_blocks
 
     with pytest.raises(AttachmentNotSupportedError) as excinfo:
         attachment_blocks.assert_model_accepts(
-            model="blind-model",
+            model=KNOWN_BLIND_MODEL,
             kinds=[(AttachmentKind.IMAGE, "scan.png", "image/png")],
         )
 
     assert excinfo.value.items[0]["reason"] == "vision_unsupported"
 
 
-def test_gate_lets_extracted_text_through_without_vision(monkeypatch) -> None:
+def test_gate_lets_extracted_text_through_without_vision() -> None:
     from neos.services import attachment_blocks
-
-    monkeypatch.setattr(attachment_blocks, "supports_vision", lambda model: False)
 
     # EXTRACT 는 결과가 텍스트라 vision 없는 모델도 받는다
     attachment_blocks.assert_model_accepts(
-        model="blind-model",
+        model=KNOWN_BLIND_MODEL,
         kinds=[(AttachmentKind.EXTRACT, "memo.docx", "application/msword")],
+    )
+
+
+def test_gate_passes_a_model_the_catalog_knows_has_vision() -> None:
+    from neos.services import attachment_blocks
+
+    attachment_blocks.assert_model_accepts(
+        model=KNOWN_SEEING_MODEL,
+        kinds=[(AttachmentKind.IMAGE, "scan.png", "image/png")],
+    )
+
+
+def test_gate_does_not_refuse_a_model_the_catalog_does_not_know() -> None:
+    """모르는 것과 못 하는 것은 다르다.
+
+    Ollama 의 list_models() 는 라이브 서버를 조회하므로 로컬에 설치한 vision
+    모델이 선택될 수 있는데, 그 이름은 models.yaml 에 없다. 예전 게이트는
+    "카탈로그에 없음 = vision 없음" 으로 보고 볼 수 있는 모델을 거부했다.
+    """
+    from neos.services import attachment_blocks
+
+    attachment_blocks.assert_model_accepts(
+        model=UNKNOWN_MODEL,
+        kinds=[(AttachmentKind.IMAGE, "scan.png", "image/png")],
     )
 
 
