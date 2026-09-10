@@ -476,6 +476,14 @@ async def send_message(
             )
 
             # 어시스턴트 메시지 저장
+            assistant_metadata = {
+                "cost_usd": float(llm_response["cost"]["total_cost"]),
+                "latency_ms": llm_response["latency_ms"],
+                "finish_reason": llm_response["finish_reason"]
+            }
+            if llm_response.get("attachment_notices"):
+                assistant_metadata["attachment_notices"] = llm_response["attachment_notices"]
+
             assistant_message = await ChatService.add_message(
                 conversation_id=conversation_id,
                 role="assistant",
@@ -485,11 +493,7 @@ async def send_message(
                 total_tokens=llm_response["usage"]["total_tokens"],
                 prompt_tokens=llm_response["usage"]["prompt_tokens"],
                 completion_tokens=llm_response["usage"]["completion_tokens"],
-                metadata={
-                    "cost_usd": float(llm_response["cost"]["total_cost"]),
-                    "latency_ms": llm_response["latency_ms"],
-                    "finish_reason": llm_response["finish_reason"]
-                }
+                metadata=assistant_metadata
             )
 
             # 메시지 저장 후 비용 기록 (FK 제약 위반 방지)
@@ -665,6 +669,15 @@ async def regenerate_message(
         )
 
         # 새 메시지 저장
+        new_message_metadata = {
+            "cost_usd": float(llm_response["cost"]["total_cost"]),
+            "latency_ms": llm_response["latency_ms"],
+            "finish_reason": llm_response["finish_reason"],
+            "regenerated_from": message_id
+        }
+        if llm_response.get("attachment_notices"):
+            new_message_metadata["attachment_notices"] = llm_response["attachment_notices"]
+
         new_message = await ChatService.add_message(
             conversation_id=original_message["conversation_id"],
             role="assistant",
@@ -675,12 +688,7 @@ async def regenerate_message(
             total_tokens=llm_response["usage"]["total_tokens"],
             prompt_tokens=llm_response["usage"]["prompt_tokens"],
             completion_tokens=llm_response["usage"]["completion_tokens"],
-            metadata={
-                "cost_usd": float(llm_response["cost"]["total_cost"]),
-                "latency_ms": llm_response["latency_ms"],
-                "finish_reason": llm_response["finish_reason"],
-                "regenerated_from": message_id
-            }
+            metadata=new_message_metadata
         )
 
         # 메시지 저장 후 비용 기록 (FK 제약 위반 방지)
