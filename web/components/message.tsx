@@ -404,6 +404,26 @@ const PurePreviewMessage = ({
             <HarnessStatus harness={message.metadata.harness} />
           )}
 
+          {message.role === "assistant" &&
+            message.metadata?.attachment_notices && (
+              /*
+               * 모델에 싣지 못한 첨부의 사유. 백엔드가 상한·해석 실패로
+               * 제외한 첨부를 여기에 남긴다 — 이 줄이 없으면 사용자는 모델이
+               * 왜 그 파일을 못 봤는지 알 수 없다.
+               */
+              <div
+                className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-amber-900 text-xs dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-200"
+                data-testid="attachment-notices"
+              >
+                <span className="font-medium">첨부 일부가 전달되지 않았습니다</span>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                  {message.metadata.attachment_notices.map((notice) => (
+                    <li key={notice}>{notice}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
           {message.role === "assistant" && message.metadata?.deep_analysis && (
             <DeepAnalysisStatus
               deepAnalysis={message.metadata.deep_analysis}
