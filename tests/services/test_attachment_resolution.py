@@ -1,6 +1,7 @@
 import threading
 
 import pytest
+from sqlalchemy.sql.elements import BinaryExpression, BooleanClauseList
 
 from neos.services import attachment_blocks
 from neos.services.attachment_blocks import (
@@ -306,15 +307,115 @@ async def test_two_attachments_in_one_message_keep_their_order(stub_io) -> None:
 
 # ---------------------------------------------------------------------------
 # Finding 1 — attachment document lookup must be scoped to its owner.
+#
+# These tests do NOT stub `_load_document` — `stub_io`'s fake filters by
+# owner itself, so it would keep "passing" even if the real ownership filter
+# were deleted (Fix round 2, Item 1: a test that cannot fail is not
+# coverage). Instead they fake only `get_session`, so the real `select(...)
+# .where(...)` construction in `_load_document` runs and is evaluated
+# structurally against a tiny in-memory row set.
 # ---------------------------------------------------------------------------
+
+
+def _eq_conditions(clause) -> dict:
+    """Column == literal 조건들을 (컬럼명 -> 값) 로 펼친다.
+
+    `_load_document`가 실제로 조립한 SQLAlchemy WHERE 절의 표현식 트리를
+    그대로 걷는다 — 문자열 매칭이 아니다. 컬럼 이름이 빠지면(회귀) 이 매핑도
+    비어 그 조건 없이 매치되어 버린다.
+    """
+    conditions: dict = {}
+
+    def walk(node) -> None:
+        if node is None:
+            return
+        if isinstance(node, BooleanClauseList):
+            for inner in node.clauses:
+                walk(inner)
+        elif isinstance(node, BinaryExpression):
+            left, right = node.left, node.right
+            if hasattr(left, "key") and hasattr(right, "value"):
+                conditions[left.key] = right.value
+
+    walk(clause)
+    return conditions
+
+
+class _RealRow:
+    """`Document` ORM 행의 최소 대역 — 실제 컬럼 이름으로 걸러진다."""
+
+    def __init__(
+        self,
+        *,
+        id,
+        user_id,
+        storage_url=None,
+        mime_type="image/png",
+        file_size=10,
+        page_count=None,
+        storage_key="k",
+    ):
+        self.id = id
+        self.user_id = user_id
+        self.storage_url = storage_url
+        self.mime_type = mime_type
+        self.file_size = file_size
+        self.page_count = page_count
+        self.storage_key = storage_key
+
+
+class _RealResult:
+    def __init__(self, row):
+        self._row = row
+
+    def scalar_one_or_none(self):
+        return self._row
+
+
+class _RealSession:
+    """`_load_document`가 조립한 WHERE 절을 진짜로 평가한다.
+
+    소유권 조건이 where 절에서 빠지면 `_eq_conditions`도 그 조건 없이
+    돌려주므로, 다른 사용자의 행이 그냥 매치되어 버린다 — 스텁이 대신
+    걸러주는 게 아니라 이 세션이 실제 조건으로 판정한다.
+    """
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.captured_statements: list = []
+
+    async def execute(self, stmt):
+        self.captured_statements.append(stmt)
+        conditions = _eq_conditions(stmt.whereclause)
+        for row in self._rows:
+            if all(
+                getattr(row, key, object()) == value
+                for key, value in conditions.items()
+            ):
+                return _RealResult(row)
+        return _RealResult(None)
+
+
+@pytest.fixture
+def real_db_io(monkeypatch):
+    """`_load_document`는 스텁하지 않고 `get_session`만 가짜로 바꾼다."""
+    rows: list[_RealRow] = []
+    session = _RealSession(rows)
+
+    async def fake_get_session():
+        yield session
+
+    monkeypatch.setattr(attachment_blocks, "get_session", fake_get_session)
+    return rows, session
 
 
 @pytest.mark.asyncio
 async def test_other_users_document_is_refused_like_a_missing_one_on_current_turn(
-    stub_io,
+    real_db_io, monkeypatch
 ) -> None:
-    docs, _ = stub_io
-    docs[1] = _Doc("image/png", user_id=OTHER)
+    rows, _ = real_db_io
+    rows.append(_RealRow(id=1, user_id=OTHER))
+    monkeypatch.setattr(attachment_blocks, "supports_vision", lambda model: True)
 
     with pytest.raises(AttachmentNotSupportedError) as excinfo:
         await resolve_attachments(
@@ -330,11 +431,17 @@ async def test_other_users_document_is_refused_like_a_missing_one_on_current_tur
 
 @pytest.mark.asyncio
 async def test_other_users_document_is_demoted_like_a_missing_one_on_an_older_turn(
-    stub_io,
+    real_db_io, monkeypatch
 ) -> None:
-    docs, _ = stub_io
-    docs[1] = _Doc("image/png", user_id=OTHER)
-    docs[2] = _Doc("image/png", user_id=OWNER)
+    rows, _ = real_db_io
+    rows.append(_RealRow(id=1, user_id=OTHER, storage_key="secret-key"))
+    rows.append(_RealRow(id=2, user_id=OWNER, storage_key="ok-key"))
+    monkeypatch.setattr(attachment_blocks, "supports_vision", lambda model: True)
+
+    async def fake_download(storage_key):
+        return b"bytes"
+
+    monkeypatch.setattr(attachment_blocks, "_download", fake_download)
 
     plan = await resolve_attachments(
         [
@@ -347,38 +454,57 @@ async def test_other_users_document_is_demoted_like_a_missing_one_on_an_older_tu
 
     assert plan.by_index[0][0].data is None
     assert "secret.png" in plan.by_index[0][0].text
+    # 진짜 소유자의 문서(id=2)는 정상적으로 해석된다 — 필터가 전부를
+    # 막아버린 게 아니라 소유권만 가려낸다는 걸 함께 보인다.
+    assert plan.by_index[1][0].data == b"bytes"
 
 
 @pytest.mark.asyncio
-async def test_load_document_filters_by_owner_on_both_lookup_paths(monkeypatch) -> None:
+async def test_load_document_filters_by_owner_on_both_lookup_paths(real_db_io) -> None:
     """`_load_document` 자체가 documentId 경로와 storage_url 경로 둘 다에
-    소유권 조건을 건다 — 실제 SQL 조립을 검증한다(스텁이 아니라)."""
-    captured_wheres = []
+    소유권 조건을 건다 — 진짜 세션 위에서 동작(다른 소유자는 못 찾고, 진짜
+    소유자는 찾는다)과 조립된 WHERE 절의 구조를 함께 확인한다."""
+    rows, session = real_db_io
+    rows.append(_RealRow(id=1, user_id=OTHER, storage_url="s3://bucket/secret"))
 
-    class _FakeResult:
-        def scalar_one_or_none(self):
-            return None
-
-    class _FakeSession:
-        async def execute(self, stmt):
-            captured_wheres.append(str(stmt))
-            return _FakeResult()
-
-    async def fake_get_session():
-        yield _FakeSession()
-
-    monkeypatch.setattr(attachment_blocks, "get_session", fake_get_session)
-
-    await attachment_blocks._load_document(
-        document_id=1, storage_url=None, owner_user_id=OWNER
+    # documentId 경로: 다른 소유자로는 못 찾고, 진짜 소유자로는 찾는다.
+    assert (
+        await attachment_blocks._load_document(
+            document_id=1, storage_url=None, owner_user_id=OWNER
+        )
+        is None
     )
-    await attachment_blocks._load_document(
-        document_id=None, storage_url="s3://bucket/k", owner_user_id=OWNER
+    assert (
+        await attachment_blocks._load_document(
+            document_id=1, storage_url=None, owner_user_id=OTHER
+        )
+        is not None
     )
 
-    assert len(captured_wheres) == 2
-    for where_clause in captured_wheres:
-        assert "user_id" in where_clause
+    # storage_url 경로도 마찬가지다.
+    assert (
+        await attachment_blocks._load_document(
+            document_id=None, storage_url="s3://bucket/secret", owner_user_id=OWNER
+        )
+        is None
+    )
+    assert (
+        await attachment_blocks._load_document(
+            document_id=None, storage_url="s3://bucket/secret", owner_user_id=OTHER
+        )
+        is not None
+    )
+
+    # 구조 확인: 두 경로 모두 실제로 조립한 WHERE 절이 `documents.user_id`를
+    # 그 호출의 owner_user_id 리터럴로 건다 — 컬럼 목록이 아니라 조건이다.
+    assert len(session.captured_statements) == 4
+    for stmt, expected_owner in zip(
+        session.captured_statements, [OWNER, OTHER, OWNER, OTHER]
+    ):
+        compiled = str(
+            stmt.compile(compile_kwargs={"literal_binds": True})
+        )
+        assert f"documents.user_id = '{expected_owner}'" in compiled, compiled
 
 
 # ---------------------------------------------------------------------------
