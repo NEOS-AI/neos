@@ -269,13 +269,6 @@ def test_production_query_workflow_routes_have_explicit_authorization_matrix():
         ): "get_current_active_user",
         (f"{API_PREFIX}/hyper-research", "GET"): "get_current_active_user",
         (f"{API_PREFIX}/query/stream", "POST"): "get_current_active_user",
-        (f"{API_PREFIX}/multimodal/query", "POST"): "get_current_active_user",
-        (
-            f"{API_PREFIX}/multimodal/image/analyze",
-            "POST",
-        ): "get_current_active_user",
-        (f"{API_PREFIX}/multimodal/supported-types", "GET"): "get_current_active_user",
-        (f"{API_PREFIX}/multimodal/health", "GET"): None,
         (f"{API_PREFIX}/unified/process", "POST"): "get_current_active_user",
         (
             f"{API_PREFIX}/unified/process/stream",

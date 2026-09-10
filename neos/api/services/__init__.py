@@ -3,7 +3,6 @@
 __all__ = [
     "QueryService",
     "DocumentService",
-    "MultimodalService",
     "WorkflowService",
 ]
 
@@ -17,10 +16,6 @@ def __getattr__(name: str):
         from neos.api.services.document_service import DocumentService
 
         return DocumentService
-    if name == "MultimodalService":
-        from neos.api.services.multimodal_service import MultimodalService
-
-        return MultimodalService
     if name == "WorkflowService":
         from neos.api.services.workflow_service import WorkflowService
 

@@ -1,3 +1,8 @@
+# 2026-09-10: 이 워크플로의 HTTP 진입점(`/api/v1/multimodal/*`)을 삭제했다.
+# 프론트엔드가 한 번도 그 경로를 부르지 않았고, 챗 첨부는 이제
+# `neos/services/attachment_blocks.py` 를 통해 모델에 닿는다.
+# 그래서 이 모듈과 그것이 끌어쓰는 ImagePipeline·pipelines/vision/ 은 현재
+# 어디에서도 import 되지 않는다. 방치가 아니라 의도적으로 남긴 것이다.
 """
 멀티모달 워크플로우 통합
 
