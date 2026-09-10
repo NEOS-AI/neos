@@ -28,6 +28,7 @@ from neos.api.services.similarity_chat_processor import (
     SimilarityChatProcessor
 )
 from neos.database.models import User
+from neos.services.attachment_blocks import AttachmentNotSupportedError
 from neos.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -112,6 +113,8 @@ async def send_similarity_message(
 
     except HTTPException:
         raise
+    except AttachmentNotSupportedError as e:
+        raise HTTPException(status_code=422, detail=e.human_message()) from e
     except Exception as e:
         logger.error(f"Failed to send similarity message: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -231,6 +234,8 @@ async def send_cross_conversation_similarity_message(
 
     except HTTPException:
         raise
+    except AttachmentNotSupportedError as e:
+        raise HTTPException(status_code=422, detail=e.human_message()) from e
     except Exception as e:
         logger.error(f"Failed to send cross-conversation similarity message: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -282,6 +287,8 @@ async def send_high_confidence_similarity_message(
 
     except HTTPException:
         raise
+    except AttachmentNotSupportedError as e:
+        raise HTTPException(status_code=422, detail=e.human_message()) from e
     except Exception as e:
         logger.error(f"Failed to send high-confidence similarity message: {e}")
         raise HTTPException(status_code=500, detail=str(e))

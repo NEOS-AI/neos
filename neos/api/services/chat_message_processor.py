@@ -225,6 +225,20 @@ class BaseChatMessageProcessor(ABC):
                 context_data=context_data,
                 **kwargs
             ):
+                # LLM 쪽 오류(예: 첨부 거부)를 빈 content 청크로 둔갑시키면
+                # 안 된다 — 그러면 여기서 answer 가 조용히 빈 문자열이 되고
+                # llm_metadata 도 채워지지 않은 채 아래 usage 읽기가 깨진다.
+                # 그대로 오류로 전달하고 루프를 끝낸다(메시지 저장으로
+                # 이어지지 않는다).
+                if chunk.get("type") == "error":
+                    yield {
+                        "type": "error",
+                        "content": chunk.get("error", ""),
+                        "error": chunk.get("error"),
+                        "code": chunk.get("code"),
+                    }
+                    return
+
                 full_content += chunk.get("content", "")
                 if chunk.get("metadata"):
                     llm_metadata.update(chunk["metadata"])
