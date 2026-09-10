@@ -534,3 +534,80 @@ async def test_non_streaming_response_surfaces_attachment_notices(monkeypatch) -
 
     assert "attachment_notices" in result, f"첨부 안내가 없다: {result}"
     assert result["attachment_notices"] == [notice]
+
+
+@pytest.mark.asyncio
+async def test_refusal_happens_before_the_llm_client_is_built(monkeypatch) -> None:
+    """거부될 턴에는 프로바이더 클라이언트를 짓지 않는다.
+
+    순서가 반대면 프로바이더 설정 오류(API 키 부재 등)가 첨부 거부보다 먼저
+    터져 진짜 사유를 가린다. CI 는 키가 없으므로 그 순서가 뒤집히면 여기서
+    잡힌다 — 로컬은 키가 있어 조용히 통과하던 자리다.
+    """
+    from neos.services.attachment_blocks import AttachmentNotSupportedError
+
+    created = []
+
+    async def refusing_resolve(messages, *, model, owner_user_id):
+        raise AttachmentNotSupportedError(
+            model=model,
+            items=[
+                {"name": "scan.png", "mime": "image/png", "reason": "vision_unsupported"}
+            ],
+        )
+
+    def tracking_create_llm(*args, **kwargs):
+        created.append(kwargs.get("model"))
+        raise AssertionError("거부될 턴인데 LLM 클라이언트를 지었다")
+
+    monkeypatch.setattr(chat_llm_service, "resolve_attachments", refusing_resolve)
+    monkeypatch.setattr(chat_llm_service, "create_llm", tracking_create_llm)
+
+    service = chat_llm_service.ChatLLMService()
+    events = [
+        event
+        async for event in service.generate_response_stream(
+            conversation_id="c",
+            message_id="m",
+            conversation_messages=[{"role": "user", "content": "봐줘"}],
+            model_name="claude-sonnet-5",
+        )
+    ]
+
+    assert created == [], "LLM 클라이언트가 거부보다 먼저 만들어졌다"
+    error_events = [e for e in events if e.get("type") == "error"]
+    assert error_events and error_events[0]["code"] == "attachment_unsupported"
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_refusal_also_precedes_the_llm_client(monkeypatch) -> None:
+    """비스트림 경로도 같은 순서를 지킨다."""
+    from neos.services.attachment_blocks import AttachmentNotSupportedError
+
+    created = []
+
+    async def refusing_resolve(messages, *, model, owner_user_id):
+        raise AttachmentNotSupportedError(
+            model=model,
+            items=[
+                {"name": "scan.png", "mime": "image/png", "reason": "vision_unsupported"}
+            ],
+        )
+
+    def tracking_create_llm(*args, **kwargs):
+        created.append(kwargs.get("model"))
+        raise AssertionError("거부될 턴인데 LLM 클라이언트를 지었다")
+
+    monkeypatch.setattr(chat_llm_service, "resolve_attachments", refusing_resolve)
+    monkeypatch.setattr(chat_llm_service, "create_llm", tracking_create_llm)
+
+    service = chat_llm_service.ChatLLMService()
+    with pytest.raises(AttachmentNotSupportedError):
+        await service.generate_response(
+            conversation_id="c",
+            message_id="m",
+            conversation_messages=[{"role": "user", "content": "봐줘"}],
+            model_name="claude-sonnet-5",
+        )
+
+    assert created == [], "LLM 클라이언트가 거부보다 먼저 만들어졌다"

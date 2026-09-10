@@ -287,14 +287,12 @@ class ChatLLMService:
                         f"applied: {optimization_stats['optimizations_applied']}"
                     )
 
-            # LLM 생성
-            llm_params = {"model": model, "temperature": temperature}
-            if max_tokens:
-                llm_params["max_tokens"] = max_tokens
-
-            llm = create_llm(provider=provider, **llm_params)
-
-            # 메시지 구성
+            # 메시지 구성 — LLM 클라이언트보다 **먼저** 온다.
+            #
+            # `resolve_attachments` 는 거부(AttachmentNotSupportedError)를 낼 수
+            # 있고, 거부될 턴에 프로바이더 클라이언트를 지을 이유가 없다. 순서가
+            # 반대면 프로바이더 설정 오류(예: API 키 부재)가 먼저 터져 "이 모델은
+            # 이미지를 받지 않는다" 는 진짜 사유를 가린다.
             owner_user_id = await _resolve_owner_user_id_if_needed(
                 conversation_id, optimized_messages
             )
@@ -304,6 +302,13 @@ class ChatLLMService:
             messages = self._build_messages(
                 optimized_messages, system_prompt, plan=attachment_plan
             )
+
+            # LLM 생성
+            llm_params = {"model": model, "temperature": temperature}
+            if max_tokens:
+                llm_params["max_tokens"] = max_tokens
+
+            llm = create_llm(provider=provider, **llm_params)
 
             # LLM 호출
             invoke_kwargs: Dict[str, Any] = {}
@@ -421,14 +426,8 @@ class ChatLLMService:
                         f"{optimization_stats['optimized_tokens']} tokens"
                     )
 
-            # LLM 생성
-            llm_params = {"model": model, "temperature": temperature, "streaming": True}
-            if max_tokens:
-                llm_params["max_tokens"] = max_tokens
-
-            llm = create_llm(provider=provider, **llm_params)
-
-            # 메시지 구성
+            # 메시지 구성 — LLM 클라이언트보다 **먼저** 온다 (사유는
+            # `generate_response` 의 같은 자리 주석 참조).
             owner_user_id = await _resolve_owner_user_id_if_needed(
                 conversation_id, optimized_messages
             )
@@ -438,6 +437,13 @@ class ChatLLMService:
             messages = self._build_messages(
                 optimized_messages, system_prompt, plan=attachment_plan
             )
+
+            # LLM 생성
+            llm_params = {"model": model, "temperature": temperature, "streaming": True}
+            if max_tokens:
+                llm_params["max_tokens"] = max_tokens
+
+            llm = create_llm(provider=provider, **llm_params)
 
             # 시작 이벤트
             yield {"type": "start", "model": model, "provider": provider}
