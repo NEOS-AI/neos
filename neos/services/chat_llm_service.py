@@ -54,6 +54,28 @@ async def _resolve_owner_user_id(conversation_id: str) -> Optional[str]:
     return conversation.user_id if conversation else None
 
 
+def _has_any_attachment(conversation_messages: List[Dict[str, Any]]) -> bool:
+    return any(
+        message.get("role") == "user" and message.get("attachments")
+        for message in conversation_messages
+    )
+
+
+async def _resolve_owner_user_id_if_needed(
+    conversation_id: str, conversation_messages: List[Dict[str, Any]]
+) -> Optional[str]:
+    """첨부가 하나도 없으면 대화 조회조차 하지 않는다.
+
+    `resolve_attachments` 자체도 첨부 없는 대화는 DB/스토리지 앞에서 조기
+    반환하지만, owner_user_id 를 그보다 먼저 무조건 채우면 그 시점에 이미
+    `conversations` 테이블 왕복이 일어난 뒤다 — 첨부 없는 턴은 이 모듈 때문에
+    DB 를 추가로 건드리면 안 된다는 제약을 깨는 것이다(Fix round 2, Item 2).
+    """
+    if not _has_any_attachment(conversation_messages):
+        return None
+    return await _resolve_owner_user_id(conversation_id)
+
+
 def resolve_conversation_chat_model(model_name: str | None) -> str:
     """Resolve a stored conversation choice or the everyday chat role."""
     return resolve_model(
@@ -273,7 +295,9 @@ class ChatLLMService:
             llm = create_llm(provider=provider, **llm_params)
 
             # 메시지 구성
-            owner_user_id = await _resolve_owner_user_id(conversation_id)
+            owner_user_id = await _resolve_owner_user_id_if_needed(
+                conversation_id, optimized_messages
+            )
             attachment_plan = await resolve_attachments(
                 optimized_messages, model=model, owner_user_id=owner_user_id
             )
@@ -405,7 +429,9 @@ class ChatLLMService:
             llm = create_llm(provider=provider, **llm_params)
 
             # 메시지 구성
-            owner_user_id = await _resolve_owner_user_id(conversation_id)
+            owner_user_id = await _resolve_owner_user_id_if_needed(
+                conversation_id, optimized_messages
+            )
             attachment_plan = await resolve_attachments(
                 optimized_messages, model=model, owner_user_id=owner_user_id
             )
@@ -610,7 +636,9 @@ class ChatLLMService:
             client = build_async_anthropic()
 
             # 메시지 형식 변환 (LangChain 형식에서 Anthropic 형식으로)
-            owner_user_id = await _resolve_owner_user_id(conversation_id)
+            owner_user_id = await _resolve_owner_user_id_if_needed(
+                conversation_id, conversation_messages
+            )
             attachment_plan = await resolve_attachments(
                 conversation_messages, model=model, owner_user_id=owner_user_id
             )
@@ -845,7 +873,9 @@ class ChatLLMService:
             )
 
             # 메시지 변환
-            owner_user_id = await _resolve_owner_user_id(conversation_id)
+            owner_user_id = await _resolve_owner_user_id_if_needed(
+                conversation_id, conversation_messages
+            )
             attachment_plan = await resolve_attachments(
                 conversation_messages, model=model, owner_user_id=owner_user_id
             )
