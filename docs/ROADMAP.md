@@ -353,18 +353,52 @@ HTTP 200 → `E_SOURCE_DEAD` **미발동** → 바이너리가 mojibake로 디�
 > 볼 수 있었다. 이제 업로드 라우트의 **실제 응답 모양**을 **실제 스키마**에 통과시키는
 > e2e 테스트가 `web/tests/source/attachment-upload-to-chat-schema.test.ts` 에 있다.
 
-**닫히지 않은 것 (후속).**
+> 🔴 **그리고 통과한 리뷰 여덟 번이 보안 결함 하나를 놓쳤다 (2026-09-10).**
+> 검증 절차를 다시 돌리자 `_load_document` 가 클라이언트가 준 `documentId`(작은
+> 순차 PK)로 `Document` 를 조회하면서 **소유권을 검사하지 않는다**는 것이 나왔다.
+> 저장소에는 이미 강제 패턴이 있었고(`get_owned_document`, `document_service` 의
+> `user_id` 필터) 첨부 경로만 그것을 우회했다 — 자기 대화에 남의 문서 id 를 넣어
+> 그 내용을 모델에게 읽히는 것이 가능했다. `resolve_attachments` 가 대화 소유자를
+> 받아 두 조회 모두 거르고, 소유하지 않은 문서는 **없는 문서와 구별되지 않는다**
+> (존재를 확인해주지 않기 위해서다). 태스크별 리뷰도 전체 브랜치 리뷰도 이것을
+> 보지 못했다 — 과거 커밋이 세운 규약을 읽는 **git 이력 렌즈**만이 잡았다.
+>
+> 그 수정을 검증하니 이번엔 **테스트가 수정을 지키지 못하고 있었다.** 단언이
+> `"user_id" in str(stmt)` 였는데 그건 WHERE 절이 없어도 SELECT 컬럼 목록만으로
+> 참이라, 필터 두 줄을 지워도 19개가 전부 초록이었다. 지금은 컴파일된 SQL 의
+> WHERE 를 보고, 필터를 지우면 3개가 빨개진다.
 
-- 🔴 `_load_document` 의 `int(document_id)` 가 문자열 id 에 `ValueError` 를 낸다 —
-  zod 스키마는 문자열 id 를 허용하므로 실제로 500 이 날 수 있다. **후속 1순위**
-- 🟡 `tests/services/test_attachment_resolution.py` 가 `_get_provider.cache_clear()` 를
-  진입시에만 불러 모듈 전역 `lru_cache` 에 스텁이 남는다 — 수집 순서 의존 실패의 씨앗
-- 🟡 카탈로그에 없는 Ollama 비전 모델은 `supports_vision → False` 로 오거부된다
-  (`list_models()` 는 라이브 서버 조회인데 카탈로그에는 두 항목뿐이다)
-- 🟡 사본 가드가 `chat_llm_service` 안의 두 변수명만 본다 — 다른 모듈의 사본은 못 잡는다
-- 🟡 `attachment_notices` 는 백엔드 밖으로 나가지만 **프론트가 아직 그리지 않는다**
-- ⬜ (b) 고아 `/api/v1/multimodal/*` 는 여전히 아무도 부르지 않는다 — 별도 항목
-- ⬜ (c) `supports_video` 는 여전히 죽은 필드다 — 이번 범위 밖으로 두었다
+**이후 닫은 것 (2026-09-06 ~ 09-11).**
+
+- ✅ **소유권 검사** — `resolve_attachments(…, owner_user_id)`, 두 조회 경로 모두 필터
+- ✅ **게이트 범위** — 대화 전체가 아니라 **현재 턴**의 첨부만 판정한다. 예전에는
+  이미지를 한 번 올린 대화를 vision 없는 모델로 바꾸면 텍스트 질문까지 영구히 막혔다
+- ✅ **거부가 모든 경로에 도달** — similarity 챗 경로가 오류 청크를 빈 content 로
+  둔갑시키던 것을 고쳤다(`chat_message_processor`), 세 엔드포인트에 422 매핑 추가
+- ✅ **`attachment_notices` 가 화면까지** — 비스트림 핸들러가 버리던 것을 실었고,
+  프론트가 어시스턴트 메시지 위에 사유를 그린다. 값은 통과 경로를 믿지 않고
+  `attachmentNoticesFromMessageMetadata` 가 모양을 확정한 뒤 넘긴다
+- ✅ **거부 `code` 전달** — 디스패처가 `attachment_unsupported` 를 흘리지 않는다
+- ✅ **클라이언트 입력 방어** — `documentId`·`metadata`·`name` 이 잘못된 타입이면
+  500 이 아니라 §4.5 의 거부/강등으로 간다. 세 번 같은 모양으로 터졌기에 잘못된
+  필드 표를 훑는 테스트를 두어 네 번째를 막는다
+- ✅ **예산 우회** — EXTRACT(Word 추출 텍스트)도 UTF-8 바이트로 예산에 계상된다
+- ✅ **Ollama 오거부** — `model_known()` 이 "모른다"와 "못 한다"를 가른다. 카탈로그가
+  아는 모델이 `vision: false` 일 때만 거부하고, 모르는 모델은 프로바이더가 말한다
+- ✅ **사본 가드 확장** — 이름 두 개·`for` 문만 보던 것을 `…messages` 전반과
+  컴프리헨션까지 넓혔다. 그 과정에서 걸린 비조립기 둘은 "독자"로 따로 기록해,
+  새 이름이 나오면 사람이 조립기인지 독자인지 판정하게 만들었다
+- ✅ **(b) 고아 API 삭제** — `/api/v1/multimodal/*` 네 라우트와 핸들러·서비스를 지웠다
+- ✅ **(c) `supports_video` 제거** — 읽는 곳 없는 필드를 카탈로그에서 뺐다
+- ✅ `lru_cache` 오염, `int(document_id)` 500, 빈 추출 텍스트의 조용한 소실
+
+**남은 것.**
+
+- 🟡 `multimodal_workflow` · `ImagePipeline` · `pipelines/vision/` 은 HTTP 진입점이
+  사라져 **현재 아무도 import 하지 않는다.** 지우지 않기로 한 결정이며 해당 모듈
+  상단에 그 사실과 날짜가 적혀 있다 — 방치와 구별하기 위해서다
+- 🟡 사본 가드는 여전히 `chat_llm_service` **한 모듈 안**만 본다. 다른 모듈에 생긴
+  조립 사본은 잡지 못한다 — 넓히려면 별개 작업이다
 
 ---
 
