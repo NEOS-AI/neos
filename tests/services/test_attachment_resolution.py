@@ -557,6 +557,51 @@ async def test_non_numeric_document_id_is_demoted_like_a_missing_one_on_an_older
 
 
 # ---------------------------------------------------------------------------
+# Fix round 3, Items 1-2 — every client-controlled attachment field must
+# degrade to "no information" rather than crash `resolve_attachments`.
+#
+# `metadata` a non-dict blew up on `metadata.get(...)`; a non-string `name`
+# blew up later inside `AttachmentNotSupportedError.human_message()`'s
+# `", ".join(...)`. This is the third client-supplied field to crash this
+# function (after the non-numeric documentId in round 2) — this table is
+# the guard against a fourth instance, walking several malformed shapes at
+# once instead of one field at a time.
+# ---------------------------------------------------------------------------
+
+MALFORMED_ATTACHMENTS = [
+    pytest.param({"name": "a.png", "metadata": "abc"}, id="metadata-is-a-string"),
+    pytest.param({"name": "a.png", "metadata": ["x"]}, id="metadata-is-a-list"),
+    pytest.param({"name": {"k": 1}, "metadata": {}}, id="name-is-a-dict"),
+    pytest.param({"name": 123, "metadata": {}}, id="name-is-an-int"),
+    pytest.param(
+        {"name": "a.png", "metadata": {"documentId": {"x": 1}}},
+        id="documentId-is-a-dict",
+    ),
+    pytest.param(
+        {"name": "a.png", "metadata": {}, "url": 12345}, id="url-is-a-number"
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("malformed", MALFORMED_ATTACHMENTS)
+async def test_malformed_attachment_fields_never_escape_resolve_attachments(
+    real_db_io, malformed
+) -> None:
+    """어떤 필드가 잘못된 타입이어도 `resolve_attachments`는 §4.5 의 두 갈래
+    (거부/강등) 중 하나로만 끝난다 — 원시 예외가 새어 나가면 안 된다."""
+    with pytest.raises(AttachmentNotSupportedError) as excinfo:
+        await resolve_attachments(
+            [_message("봐줘", [malformed])],
+            model="seeing-model",
+            owner_user_id=OWNER,
+        )
+
+    # 문서를 못 찾은 것과 똑같은 "unresolved" 경로를 탄다 — 새 사유가 아니다.
+    assert excinfo.value.items[0]["reason"] == "unresolved"
+
+
+# ---------------------------------------------------------------------------
 # Finding 7 — empty EXTRACT text must not vanish silently.
 # ---------------------------------------------------------------------------
 

@@ -349,16 +349,29 @@ async def resolve_attachments(
     # 최신 메시지부터 본다 — 2패스의 예산이 같은 순서로 채워진다
     for index, message in reversed(indexed):
         for attachment in message.get("attachments") or []:
-            metadata = attachment.get("metadata") or {}
-            name = attachment.get("name") or "attachment"
+            # 첨부 dict 의 각 필드는 클라이언트가 그대로 채운다
+            # (`SendMessageRequest.attachments`는 `List[Dict[str, Any]]`라
+            # 값 자체는 검증되지 않는다). 타입이 어긋난 값은 "정보가 없는
+            # 값"과 같게 다룬다 — documentId 에 숫자 아닌 값을 매핑한 것과
+            # 같은 처리다(N8 리뷰 라운드 2, Item 3). 여기서 막지 않으면
+            # `metadata.get(...)`/`", ".join(...)` 이 바로 아래나
+            # `human_message()`에서 터진다(라운드 3, Item 1·2).
+            raw_metadata = attachment.get("metadata")
+            metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+            raw_name = attachment.get("name")
+            name = raw_name if isinstance(raw_name, str) and raw_name else "attachment"
+            raw_url = attachment.get("url")
+            storage_url = raw_url if isinstance(raw_url, str) else None
             document = await _load_document(
                 document_id=metadata.get("documentId"),
-                storage_url=attachment.get("url"),
+                storage_url=storage_url,
                 owner_user_id=owner_user_id,
             )
+            raw_media_type = metadata.get("mediaType")
+            client_media_type = raw_media_type if isinstance(raw_media_type, str) else None
             mime_type = (
                 getattr(document, "mime_type", None)
-                or metadata.get("mediaType")
+                or client_media_type
                 or ""
             )
             kind = classify(mime_type)
