@@ -162,10 +162,10 @@ PDF/Word/Excel/PPT 파서 4종 모두 실제 라이브러리를 사용하는 구
 | **시맨틱 캐시** | `neos/utils/semantic_cache.py`, `smart_cache_manager.py`, `cache_invalidation.py` | |
 | **리포트 익스포트** | `neos/api/handlers/export_handlers.py` — markdown/html/pdf/canvas | |
 | **Open Responses 호환** | `neos/api/models/open_responses.py`, `docs/OPEN_RESPONSES_SPEC.md` | |
-| **코딩 에이전트** | `neos/coding/` (loop·model·sandbox·tools·workers·transport·outbox·persistence·repositories) + `neos/coding/managed/`(관리형 샌드박스 컨트롤 플레인), `db/migrations/038..046`, `docs/NEOS_CODING.md` | 플랜 14개 전부 완료. **기본 꺼짐** — `sandbox.enabled`·`coding_model.enabled` 둘 다 `False`. 출하 기준은 `DEEP_ANALYSIS_HARNESS_ROADMAP.md` §12.6의 E-S1~E-S4 |
+| **코딩 에이전트** | `neos/coding/` (loop·model·sandbox·tools·workers·transport·outbox·persistence·repositories) + `neos/coding/managed/`(관리형 샌드박스 컨트롤 플레인), `db/migrations/038..046`, `docs/NEOS_CODING.md` | 플랜 14개 전부 완료. **기본 꺼짐** — `sandbox.enabled`·`coding_model.enabled` 둘 다 `False`. 출하 기준은 `DEEP_ANALYSIS_HARNESS_ROADMAP.md` §8-E의 E-S1~E-S4 |
 
 > 📌 **코딩 에이전트 행은 2026-08-25에 추가됐다 (CA7).** 트랙 하나가 이 문서에
-> 통째로 빠져 있었다 — `docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md` §12가 70여 파일과
+> 통째로 빠져 있었다 — `docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md` §8-E가 70여 파일과
 > 마이그레이션 아홉 개를 추적하는 동안 마스터 로드맵은 그것을 몰랐다. 이 표의
 > 취지("로드맵 밖에서 일어난 작업")에 가장 정확히 해당하는 항목이면서 가장 늦게
 > 실렸다.
@@ -467,7 +467,7 @@ image·vision·base64·media 처리가 **한 줄도 없다**(2026-09-04 확인).
   없다는 서술은 그대로 맞지만 **저장소에 없다는 뜻은 아니다.** 다만 이들은 SDK 직호출이고
   챗 경로는 LangChain 메시지 계약이라 그대로는 못 쓴다 → **첫 갈림길은 "공통화를 어디까지"가
   아니라 "두 층을 합칠까, 나란히 둘까"다.** 나란히 두면 프로바이더별 블록 조립 사본이
-  둘이 된다 — `DEEP_ANALYSIS_HARNESS_ROADMAP.md` §7 WORKSPACE1이 아홉 사본을 하나로 모은
+  둘이 된다 — `DEEP_ANALYSIS_HARNESS_ROADMAP.md` §3 WORKSPACE1이 아홉 사본을 하나로 모은
   것과 같은 범주의 부채를 새로 만드는 선택이다
 - **(b) 그 층은 라이브인데 아무도 부르지 않는다.** `/api/v1/multimodal/query`·`/image/analyze`·
   `/supported-types`가 `main.py:576`으로 마운트돼 있고 셋 다 `get_current_active_user`를
