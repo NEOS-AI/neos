@@ -268,9 +268,7 @@ class DurableCodingLoop:
             state = await self._load_workspace_instructions(state, bound)
         request = ModelRequest(
             system=await coding_turn_system(self._config.system, input.owner_id),
-            messages=self._expand_artifact_refs(
-                state.transcript, state.compacted_bodies
-            ),
+            messages=state.transcript,
             tools=self._tool_definitions(state),
             model=self._config.model,
             limits=self._model_limits(state),
@@ -279,6 +277,7 @@ class DurableCodingLoop:
             turn_id=f"turn_{uuid4().hex}",
         )
         part_id = f"ctp_{uuid4().hex}"
+        persisted_stream = False
         try:
             started = await deps.repository.start_model_text_part(
                 lease=deps.lease,
@@ -326,8 +325,10 @@ class DurableCodingLoop:
                         )
                     except TextPartConflict as error:
                         raise CodingLoopFailure(str(error), retryable=False) from error
+                    persisted_stream = True
                     yield committed.event
                 elif isinstance(model_event, ToolInputDelta):
+                    persisted_stream = True
                     yield await deps.events.append(
                         task_id=input.task_id,
                         event_type="model.tool_input_delta",
@@ -368,9 +369,13 @@ class DurableCodingLoop:
                 )
                 yield committed.event
                 return
-            raise CodingLoopFailure(error.code, retryable=error.retryable) from error
+            raise CodingLoopFailure(
+                error.code, retryable=error.retryable and not persisted_stream
+            ) from error
         if completion is None:
-            raise CodingLoopFailure("model_stream_incomplete", retryable=True)
+            raise CodingLoopFailure(
+                "model_stream_incomplete", retryable=not persisted_stream
+            )
         try:
             completed_part = await deps.repository.complete_model_text_part(
                 lease=deps.lease,
@@ -490,8 +495,8 @@ class DurableCodingLoop:
         if batch is not None:
             hook_blocked = False
             for _call, validated in batch:
-                decision, _reason = await self._pre_tool_decision(validated)
-                if decision in {"deny", "retry"}:
+                decision, _reason, updated = await self._pre_tool_decision(validated)
+                if decision in {"deny", "retry"} or updated:
                     hook_blocked = True
                     break
             if not hook_blocked:
@@ -529,7 +534,15 @@ class DurableCodingLoop:
                 outcome="allowed",
             )
         )
-        hook_decision, hook_reason = await self._pre_tool_decision(validated)
+        hook_decision, hook_reason, updated_input = await self._pre_tool_decision(
+            validated
+        )
+        if hook_decision == "allow" and updated_input is not None:
+            try:
+                validated = self._tools.validate(validated.name, dict(updated_input))
+            except ToolValidationError:
+                hook_decision = "deny"
+                hook_reason = "hook_updated_input_invalid"
         if hook_decision == "deny":
             event, denied_state = await self._commit_denied_tool(
                 input, state, bound, deps, call, "policy_hook_denied"
@@ -895,25 +908,34 @@ class DurableCodingLoop:
         if current.consecutive_tool_errors >= self._config.max_consecutive_tool_errors:
             raise CodingLoopFailure("tool_error_budget_exceeded", retryable=False)
 
-    async def _pre_tool_decision(self, validated) -> tuple[str, str]:
+    async def _pre_tool_decision(
+        self, validated
+    ) -> tuple[str, str, Mapping[str, Any] | None]:
         try:
             raw = await asyncio.wait_for(
                 self._hooks.pre_tool(validated),
                 timeout=PRE_TOOL_HOOK_TIMEOUT_SEC,
             )
         except TimeoutError:
-            return "deny", "hook_timeout"
+            return "deny", "hook_timeout", None
         except Exception:
-            return "deny", "hook_error"
+            return "deny", "hook_error", None
         if raw is None:
-            return "allow", ""
+            return "allow", "", None
         if not isinstance(raw, Mapping):
-            return "deny", "hook_error"
+            return "deny", "hook_error", None
         decision = raw.get("decision")
         if decision not in {"allow", "deny", "retry"}:
-            return "deny", "hook_error"
+            return "deny", "hook_error", None
         reason = raw.get("reason")
-        return str(decision), str(reason) if reason is not None else ""
+        updated = raw.get("updatedInput")
+        if updated is not None and not isinstance(updated, Mapping):
+            return "deny", "hook_error", None
+        return (
+            str(decision),
+            str(reason) if reason is not None else "",
+            updated if decision == "allow" else None,
+        )
 
     def _with_hook_retry(self, state: AgentLoopState, validated, reason: str):
         del validated, reason
@@ -1067,7 +1089,13 @@ class DurableCodingLoop:
                 code, retryable=validated.risk is ToolRisk.READ_ONLY
             ) from error
         result = dict(executed.to_mapping())
-        await self._hooks.post_tool(validated, result)
+        try:
+            await asyncio.wait_for(
+                self._hooks.post_tool(validated, result),
+                timeout=PRE_TOOL_HOOK_TIMEOUT_SEC,
+            )
+        except Exception:
+            pass
         return result
 
     async def _audit_execute_result(self, bound, tool_name, result) -> None:
@@ -1724,7 +1752,6 @@ class DurableCodingLoop:
             remaining.pop(0)
         return remaining
 
-    @staticmethod
     @staticmethod
     def _expand_artifact_refs(transcript, bodies: Mapping[str, str]):
         if not bodies:

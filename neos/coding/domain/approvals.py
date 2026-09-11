@@ -220,9 +220,29 @@ def approval_display_summary(call: ValidatedToolCall) -> Mapping[str, object]:
         return summary
     if call.name == "ask_user.v1":
         questions = call.input.get("questions")
-        if isinstance(questions, list):
-            return {"questions": [str(item) for item in questions]}
-        return {"questions": []}
+        if not isinstance(questions, list):
+            return {"questions": []}
+        rendered: list[str] = []
+        options: list[list[str]] = []
+        for item in questions:
+            if isinstance(item, Mapping):
+                rendered.append(str(item.get("prompt") or ""))
+                raw_options = item.get("options") or []
+                labels = []
+                if isinstance(raw_options, (list, tuple)):
+                    for option in raw_options:
+                        if isinstance(option, Mapping):
+                            labels.append(str(option.get("label") or ""))
+                        elif option:
+                            labels.append(str(option))
+                options.append(labels)
+            else:
+                rendered.append(str(item))
+                options.append([])
+        summary: dict[str, object] = {"questions": rendered}
+        if any(options):
+            summary["options"] = options
+        return summary
     path = call.input.get("path")
     if isinstance(path, str):
         return {"path": path}

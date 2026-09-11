@@ -30,5 +30,8 @@ test("ask_user approval card collects answers instead of echoing questions", () 
 
   assert.match(card, /ask_user\.v1/);
   assert.match(card, /answers/);
+  assert.match(card, /type="radio"/);
+  assert.match(card, /Other/);
+  assert.match(card, /warnings/);
   assert.match(api, /answers/);
 });

@@ -550,6 +550,8 @@ sandbox:
     network_mode: none
     user: "10001:10001"
     allow_unpinned_image: false
+    image_allowlist: []
+    custom_images: {}
   managed:
     enabled: false
     shadow_admission: true

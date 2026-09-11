@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -167,6 +167,7 @@ class SandboxToolExecutor:
         self._max_preview_bytes = max_preview_bytes
         self._max_entries = max_entries
         self._read_paths: dict[str, set[str]] = {}
+        self._read_stamps: dict[str, dict[str, tuple[datetime, str, bool]]] = {}
 
     async def execute(
         self,
@@ -240,7 +241,9 @@ class SandboxToolExecutor:
             already_truncated=omitted,
             original_bytes=len(content),
         )
-        self._mark_read(session, path)
+        await self._mark_read(
+            session, path, content, full=offset <= 1 and raw_limit is None
+        )
         return result
 
     async def _write_file(
@@ -256,16 +259,23 @@ class SandboxToolExecutor:
         )
         if denied is not None:
             return denied
+        stale = await self._deny_stale_since_read(session, path)
+        if stale is not None:
+            return stale
+        payload = str(call.input["content"]).encode()
         try:
             revision = await session.write_file(
                 path,
-                str(call.input["content"]).encode(),
+                payload,
                 **_write_file_kwargs(session.write_file, call),
             )
         except (FileNotFoundError, OSError, SandboxPolicyViolation) as error:
             if _is_missing_parent_error(error):
                 return _missing_parent_result()
             raise
+        await self._mark_read(
+            session, path, payload, full=True, modified=datetime.now(UTC)
+        )
         return ToolResult.ok(workspace_revision=str(revision))
 
     async def _edit_file(
@@ -281,6 +291,9 @@ class SandboxToolExecutor:
         )
         if denied is not None:
             return denied
+        stale = await self._deny_stale_since_read(session, path)
+        if stale is not None:
+            return stale
         content = await session.read_file(path)
         try:
             text = content.decode("utf-8")
@@ -309,6 +322,13 @@ class SandboxToolExecutor:
             if _is_missing_parent_error(error):
                 return _missing_parent_result()
             raise
+        await self._mark_read(
+            session,
+            path,
+            updated.encode("utf-8"),
+            full=True,
+            modified=datetime.now(UTC),
+        )
         return ToolResult.ok(workspace_revision=str(revision))
 
     async def _deny_unread_existing(
@@ -321,8 +341,27 @@ class SandboxToolExecutor:
         if not await self._path_exists(session, path):
             return None
         if self._was_read(session, path, known_reads=known_reads):
+            stamp = self._stamp_for(session, path)
+            if stamp is not None and not stamp[2]:
+                return await self._denied(session, "precondition_read_required")
             return None
         return await self._denied(session, "precondition_read_required")
+
+    async def _deny_stale_since_read(
+        self, session: SandboxSession, path: str
+    ) -> ToolResult | None:
+        stamp = self._stamp_for(session, path)
+        if stamp is None:
+            return None
+        try:
+            entry = await session.stat(path)
+            disk = await session.read_file(path)
+        except (SandboxNotFound, FileNotFoundError, SandboxPolicyViolation):
+            return None
+        digest = hashlib.sha256(disk).hexdigest()
+        if entry.modified_at > stamp[0] and digest != stamp[1]:
+            return await self._denied(session, "precondition_stale_read")
+        return None
 
     async def _path_exists(self, session: SandboxSession, path: str) -> bool:
         try:
@@ -335,10 +374,34 @@ class SandboxToolExecutor:
             raise
         return True
 
-    def _mark_read(self, session: SandboxSession, path: str) -> None:
-        self._read_paths.setdefault(session.sandbox_id, set()).add(
-            str(normalize_workspace_path(path))
+    async def _mark_read(
+        self,
+        session: SandboxSession,
+        path: str,
+        content: bytes,
+        *,
+        full: bool,
+        modified: datetime | None = None,
+    ) -> None:
+        normalized = str(normalize_workspace_path(path))
+        self._read_paths.setdefault(session.sandbox_id, set()).add(normalized)
+        if modified is None:
+            try:
+                entry = await session.stat(path)
+                modified = entry.modified_at
+            except Exception:
+                modified = datetime.now(UTC)
+        self._read_stamps.setdefault(session.sandbox_id, {})[normalized] = (
+            modified,
+            hashlib.sha256(content).hexdigest(),
+            full,
         )
+
+    def _stamp_for(
+        self, session: SandboxSession, path: str
+    ) -> tuple[datetime, str, bool] | None:
+        stamps = self._read_stamps.get(session.sandbox_id) or {}
+        return stamps.get(str(normalize_workspace_path(path)))
 
     def _was_read(
         self,
@@ -470,17 +533,31 @@ class SandboxToolExecutor:
 
     @staticmethod
     def _ask_user(call: ValidatedToolCall) -> ToolResult:
-        questions = [str(item) for item in call.input["questions"]]
+        questions = []
+        for item in call.input["questions"]:
+            if isinstance(item, Mapping):
+                questions.append(dict(item))
+            else:
+                questions.append(str(item))
         raw_answers = call.input.get("answers")
         answers = (
             [str(item) for item in raw_answers]
             if isinstance(raw_answers, list)
             else []
         )
-        pairs = [
-            {"question": question, "answer": answers[index] if index < len(answers) else ""}
-            for index, question in enumerate(questions)
-        ]
+        pairs = []
+        for index, question in enumerate(questions):
+            prompt = (
+                str(question.get("prompt") or "")
+                if isinstance(question, Mapping)
+                else str(question)
+            )
+            pairs.append(
+                {
+                    "question": prompt,
+                    "answer": answers[index] if index < len(answers) else "",
+                }
+            )
         return ToolResult.ok(
             workspace_revision="unknown",
             entries=({"questions": questions, "answers": answers, "pairs": pairs},),

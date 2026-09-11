@@ -11,12 +11,32 @@ pytestmark = pytest.mark.no_db
 
 
 class FakeWorkflow:
-    def __init__(self) -> None:
+    def __init__(self, *, interrupt: bool = False) -> None:
         self.calls: list[object] = []
+        self.interrupt = interrupt
 
     async def execute_workflow(self, payload, use_checkpointer=True):
         self.calls.append(payload)
+        if self.interrupt:
+            return {
+                "success": True,
+                "interrupted": True,
+                "response": None,
+                "pending_approvals": [
+                    {"request_id": "apr_wf", "skill_name": "exec"}
+                ],
+            }
         return {"final_response": "workflow-ok"}
+
+
+class FakeWorkflowApprovals:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, bool]] = []
+
+    async def decide(self, *, session_id, request_id, owner_id, approve):
+        del owner_id
+        self.calls.append((session_id, request_id, approve))
+        return f"{request_id} {'approved' if approve else 'denied'}"
 
 
 class FakeCoding:
@@ -71,6 +91,52 @@ def _gateway(
     workflow = FakeWorkflow()
     coding = FakeCoding()
     return ChannelGateway(workflow, coding=coding), workflow, coding
+
+
+async def test_workflow_interrupt_returns_waiting_approval_card(monkeypatch):
+    install_channel_settings(
+        monkeypatch,
+        allowed_users=["U_alice"],
+        coding_invoke=True,
+        coding_owner_user_id="u_owner",
+    )
+    approvals = FakeWorkflowApprovals()
+    gateway = ChannelGateway(
+        FakeWorkflow(interrupt=True),
+        coding=FakeCoding(),
+        workflow_approvals=approvals,
+    )
+
+    reply = await gateway.dispatch(_message("please run this"))
+    decided = await gateway.dispatch(_message("/approve apr_wf"))
+
+    assert reply == "v2:slack:T:C:1 waiting_approval apr_wf workflow"
+    assert decided == "apr_wf approved"
+    assert approvals.calls == [("v2:slack:T:C:1", "apr_wf", True)]
+
+
+async def test_workflow_input_includes_channel_attachment_blocks(monkeypatch):
+    install_channel_settings(
+        monkeypatch,
+        allowed_users=["U_alice"],
+        coding_invoke=True,
+        coding_owner_user_id="u_owner",
+        inbound_media=True,
+    )
+    workflow = FakeWorkflow()
+    gateway = ChannelGateway(workflow, coding=FakeCoding())
+    message = _message("see file")
+    message.metadata["attachments"] = [
+        {"name": "shot.png", "content_type": "image/png", "bytes": b"\x89PNG"}
+    ]
+
+    await gateway.dispatch(message)
+
+    blocks = workflow.calls[0]["channel_attachments"]
+    assert blocks[0]["kind"] == "IMAGE"
+    assert blocks[0]["size"] == 4
+    assert blocks[0]["data_b64"]
+    assert "4 bytes" in workflow.calls[0]["query"]
 
 
 async def test_plain_text_runs_workflow_not_coding(monkeypatch):

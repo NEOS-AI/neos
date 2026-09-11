@@ -39,6 +39,16 @@ async def test_in_memory_bind_is_visible_across_store_clients() -> None:
     assert found.owner_id == "u_owner"
 
 
+async def test_in_memory_bind_is_visible_by_task_id() -> None:
+    store = InMemoryChannelCodingBindStore()
+    await store.bind("v2:slack:T:C:1", "ct_shared", "u_owner")
+
+    found = await store.get_by_task("ct_shared")
+
+    assert found is not None
+    assert found.session_id == "v2:slack:T:C:1"
+
+
 async def test_bind_from_gateway_a_is_visible_to_gateway_b(monkeypatch):
     store = InMemoryChannelCodingBindStore()
     coding = FakeCoding()

@@ -51,6 +51,8 @@ class ChannelCodingBindStore(Protocol):
 
     async def get(self, session_id: str) -> ChannelCodingBinding | None: ...
 
+    async def get_by_task(self, task_id: str) -> ChannelCodingBinding | None: ...
+
     async def unbind(self, session_id: str) -> None: ...
 
 
@@ -78,6 +80,12 @@ class InMemoryChannelCodingBindStore:
 
     async def get(self, session_id: str) -> ChannelCodingBinding | None:
         return self._items.get(session_id)
+
+    async def get_by_task(self, task_id: str) -> ChannelCodingBinding | None:
+        for binding in self._items.values():
+            if binding.task_id == task_id:
+                return binding
+        return None
 
     async def unbind(self, session_id: str) -> None:
         self._items.pop(session_id, None)
@@ -144,6 +152,32 @@ class PostgresChannelCodingBindStore:
                         """
                     ),
                     {"session_id": session_id},
+                )
+                row = result.first()
+        if row is None:
+            return None
+        return ChannelCodingBinding(
+            session_id=row[0],
+            task_id=row[1],
+            owner_id=row[2],
+            created_at=row[3],
+            updated_at=row[4],
+        )
+
+    async def get_by_task(self, task_id: str) -> ChannelCodingBinding | None:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        """
+                        SELECT session_id, task_id, owner_id, created_at, updated_at
+                        FROM channel_coding_bindings
+                        WHERE task_id = :task_id
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {"task_id": task_id},
                 )
                 row = result.first()
         if row is None:

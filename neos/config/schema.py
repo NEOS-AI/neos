@@ -1416,6 +1416,18 @@ class SandboxDockerConfig(StrictConfigModel):
     network_mode: str = "none"
     user: str = "10001:10001"
     allow_unpinned_image: bool = False
+    image_allowlist: list[str] = Field(default_factory=list)
+    custom_images: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_custom_image_keys(self) -> "SandboxDockerConfig":
+        reserved = {"default", "python", "node"}
+        for key in self.custom_images:
+            if key in reserved or (self.image and key == self.image):
+                raise ValueError(
+                    "custom sandbox image key shadows a reserved preset"
+                )
+        return self
 
 
 class SandboxMemoryConfig(StrictConfigModel):

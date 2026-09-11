@@ -31,6 +31,22 @@ logger = logging.getLogger(__name__)
 _SLACK_MAX_CHARS = 3000  # Slack 단일 메시지 안전 길이 (공식 4000자 제한)
 
 
+def _parse_slack_display_name(payload: Any) -> str:
+    user = payload.get("user") if isinstance(payload, dict) else None
+    if not isinstance(user, dict):
+        user = payload if isinstance(payload, dict) else {}
+    profile = user.get("profile") if isinstance(user.get("profile"), dict) else {}
+    for candidate in (
+        profile.get("display_name"),
+        profile.get("real_name"),
+        user.get("real_name"),
+        user.get("name"),
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return ""
+
+
 class SlackAdapter(ChannelAdapterBase):
     """Slack Bot 어댑터 (Socket Mode).
 
@@ -48,6 +64,8 @@ class SlackAdapter(ChannelAdapterBase):
         self._handler_task: Optional[asyncio.Task] = None
         self._bot_user_id: Optional[str] = None
         self._team_id: Optional[str] = None
+        self._user_names: dict[tuple[str, str], str] = {}
+        self._seen_file_shares: set[str] = set()
 
     async def start(self) -> None:
         """Slack Socket Mode 핸들러를 시작한다."""
@@ -154,6 +172,9 @@ class SlackAdapter(ChannelAdapterBase):
             "thread_id": thread_id,
             "idempotency_key": str(raw_ts or ""),
         }
+        display = await self._resolve_user_name(slack_user_id, self._team_scope(raw))
+        if display:
+            metadata["slack_user_name"] = display
         if settings.config.channels.inbound_media:
             from neos.api.channels.media import collect_slack_attachments
 
@@ -275,6 +296,10 @@ class SlackAdapter(ChannelAdapterBase):
         async def handle_code_action(ack: Any, body: dict) -> None:
             await ack()
             await self._handle_block_action(body)
+
+        @self._app.event("file_shared")
+        async def handle_file_shared(event: dict) -> None:
+            await self._handle_file_shared(event)
 
     async def _handle_block_action(self, body: dict) -> None:
         actions = body.get("actions") or []
@@ -398,6 +423,79 @@ class SlackAdapter(ChannelAdapterBase):
             channel_id,
             thread_id or "-",
         )
+
+    async def _resolve_user_name(self, user_id: str, team_id: str) -> str:
+        if not user_id:
+            return ""
+        key = (team_id or "", user_id)
+        if key in self._user_names:
+            return self._user_names[key]
+        payload: Any = None
+        lookup = getattr(self, "_users_info", None)
+        try:
+            if lookup is not None:
+                payload = await lookup(user_id)
+            elif self._app is not None:
+                payload = await self._app.client.users_info(user=user_id)
+        except Exception:
+            payload = None
+        name = _parse_slack_display_name(payload)
+        self._user_names[key] = name
+        return name
+
+    async def _handle_file_shared(self, event: dict, say: Any = None) -> None:
+        from neos.config.settings import settings
+
+        if not settings.config.channels.inbound_media:
+            return
+        file_id = str(event.get("file_id") or "")
+        if not file_id or file_id in self._seen_file_shares:
+            return
+        channel_id = str(
+            event.get("channel_id") or event.get("channel") or ""
+        )
+        if not channel_id:
+            return
+        info = await self._lookup_slack_file(file_id)
+        if info is None:
+            return
+        mime = str(info.get("mimetype") or "")
+        if not mime.startswith("video/"):
+            return
+        ts = str(info.get("timestamp") or event.get("event_ts") or file_id)
+        if ts in self._seen_file_shares:
+            return
+        self._seen_file_shares.add(file_id)
+        self._seen_file_shares.add(ts)
+        synthesized = {
+            "user": event.get("user_id") or event.get("user") or "",
+            "channel": channel_id,
+            "text": "",
+            "channel_type": "channel",
+            "team": event.get("team_id") or event.get("team"),
+            "ts": ts,
+            "thread_ts": event.get("thread_ts"),
+            "files": [info],
+        }
+        await self._handle_message(synthesized, say, client=None)
+
+    async def _lookup_slack_file(self, file_id: str) -> dict[str, Any] | None:
+        lookup = getattr(self, "_files_info", None)
+        try:
+            if lookup is not None:
+                payload = await lookup(file_id)
+            elif self._app is not None:
+                payload = await self._app.client.files_info(file=file_id)
+            else:
+                return None
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        file_obj = payload.get("file")
+        if isinstance(file_obj, dict):
+            return file_obj
+        return payload if payload.get("mimetype") else None
 
     def _team_scope(self, raw: Any) -> str:
         team = None

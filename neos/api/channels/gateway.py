@@ -60,6 +60,16 @@ def _with_sender_prefix(message: ChannelMessage, text: str) -> str:
     return f"{label} {body}"
 
 
+def _attachment_bytes(item: dict[str, Any]) -> bytes:
+    raw = item.get("bytes")
+    if isinstance(raw, (bytes, bytearray)):
+        return bytes(raw)
+    raw = item.get("data")
+    if isinstance(raw, (bytes, bytearray)):
+        return bytes(raw)
+    return b""
+
+
 def _attachment_prompt(message: ChannelMessage) -> str:
     attachments = list((message.metadata or {}).get("attachments") or [])
     if not attachments:
@@ -70,12 +80,49 @@ def _attachment_prompt(message: ChannelMessage) -> str:
             continue
         name = neutralize_untrusted_inline(str(item.get("name") or "file")) or "file"
         content_type = str(item.get("content_type") or "application/octet-stream")
-        data = item.get("data") or b""
-        size = len(data) if isinstance(data, (bytes, bytearray)) else 0
+        size = len(_attachment_bytes(item))
         lines.append(f"- {name} ({content_type}, {size} bytes)")
     if not lines:
         return ""
     return "\n\nUser attached files:\n" + "\n".join(lines)
+
+
+def _channel_attachment_blocks(message: ChannelMessage) -> list[dict[str, Any]]:
+    from neos.config.settings import settings
+
+    if not settings.config.channels.inbound_media:
+        return []
+    attachments = list((message.metadata or {}).get("attachments") or [])
+    blocks: list[dict[str, Any]] = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        data = _attachment_bytes(item)
+        if not data:
+            continue
+        mime = str(item.get("content_type") or "application/octet-stream")
+        try:
+            from neos.services.attachment_blocks import classify
+
+            kind = classify(mime)
+        except Exception:
+            kind = None
+        block: dict[str, Any] = {
+            "name": neutralize_untrusted_inline(str(item.get("name") or "file"))
+            or "file",
+            "content_type": mime,
+            "kind": getattr(kind, "value", None),
+            "size": len(data),
+        }
+        kind_name = getattr(kind, "value", None)
+        if kind_name == "IMAGE":
+            import base64
+
+            block["data_b64"] = base64.b64encode(data).decode("ascii")
+        elif kind_name in {"FILE_TEXT", "EXTRACT"}:
+            block["text"] = data.decode("utf-8", errors="replace")[:8000]
+        blocks.append(block)
+    return blocks
 
 
 class ChannelGateway:
@@ -94,9 +141,12 @@ class ChannelGateway:
         coding: Any | None = None,
         inflight: SessionInflightLock | None = None,
         binds: Any | None = None,
+        workflow_approvals: Any | None = None,
     ) -> None:
         self._workflow = workflow
         self._coding = coding
+        self._workflow_approvals = workflow_approvals
+        self._workflow_pending: Dict[str, Dict[str, str]] = {}
         self._inflight = inflight or SessionInflightLock()
         if binds is None:
             from .session_bind import InMemoryChannelCodingBindStore
@@ -202,6 +252,7 @@ class ChannelGateway:
         if not query.strip():
             query = "The user sent a message with no text."
         query = _with_sender_prefix(message, query)
+        channel_attachments = _channel_attachment_blocks(message)
 
         workflow_input: Dict[str, Any] = {
             "user_id": user_id,
@@ -224,6 +275,7 @@ class ChannelGateway:
             "analysis_results": [],
             "generation_results": [],
             "retry_count": 0,
+            "channel_attachments": channel_attachments,
         }
 
         # 워크플로우 실행 (checkpointer 사용 — 세션 지속성 보장)
@@ -232,7 +284,19 @@ class ChannelGateway:
             use_checkpointer=True,
         )
 
-        final_response = result.get("final_response") or ""
+        if result.get("interrupted"):
+            pending = result.get("pending_approvals") or []
+            first = pending[0] if pending else {}
+            request_id = str(first.get("request_id") or "")
+            self._workflow_pending[message.session_id] = {
+                "request_id": request_id,
+                "owner_id": user_id,
+            }
+            if request_id:
+                return f"{message.session_id} waiting_approval {request_id} workflow"
+            return f"{message.session_id} waiting_approval"
+
+        final_response = result.get("final_response") or result.get("response") or ""
         if not final_response:
             final_response = "응답을 생성하지 못했습니다. 다시 시도해주세요."
 
@@ -282,6 +346,12 @@ class ChannelGateway:
 
         binding = await self._binds.get(message.session_id)
         if binding is None:
+            pending = self._workflow_pending.get(message.session_id)
+            if pending and command.kind in {
+                ChannelCommandKind.APPROVE,
+                ChannelCommandKind.DENY,
+            }:
+                return await self._resume_workflow_approval(message, command, pending)
             return _NO_TASK
         task_id = binding.task_id
         owner = binding.owner_id or settings.config.channels.coding_owner_user_id
@@ -352,6 +422,24 @@ class ChannelGateway:
             if key[0] != message.session_id
         }
         return _SESSION_RESET
+
+    async def _resume_workflow_approval(
+        self, message: ChannelMessage, command, pending: Dict[str, str]
+    ) -> str:
+        request_id = command.rest or pending.get("request_id") or ""
+        approve = command.kind is ChannelCommandKind.APPROVE
+        port = self._workflow_approvals
+        if port is None:
+            return f"{request_id} {'approved' if approve else 'denied'}"
+        result = await port.decide(
+            session_id=message.session_id,
+            request_id=request_id,
+            owner_id=pending.get("owner_id") or "",
+            approve=approve,
+        )
+        if approve or command.kind is ChannelCommandKind.DENY:
+            self._workflow_pending.pop(message.session_id, None)
+        return str(result)
 
     async def bind_session(
         self, session_id: str, task_id: str, owner_id: str

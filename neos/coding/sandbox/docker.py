@@ -78,20 +78,42 @@ before = max(0, min(int(before), 20))
 after = max(0, min(int(after), 20))
 if output_mode not in {'files', 'content', 'count'}:
     output_mode = 'content'
+skip_dirs = {'.git','node_modules','__pycache__','.venv','venv','dist','build','.svn','.hg','.tox','.mypy_cache','.pytest_cache'}
+def load_ignores():
+    pats = []
+    for name in ('.gitignore', '.ignore'):
+        ig = Path('/workspace') / name
+        if ig.is_file():
+            for line in ig.read_text(errors='replace').splitlines():
+                s = line.strip()
+                if s and not s.startswith('#'): pats.append(s)
+    return pats
+def ignored(relative, pats):
+    parts = Path(relative).parts
+    if any(part in skip_dirs for part in parts): return True
+    name = Path(relative).name
+    if name == '.env' or name.startswith('.env.'): return True
+    if '.ssh' in parts or name == 'id_rsa': return True
+    if '.aws' in parts:
+        try:
+            if parts[parts.index('.aws') + 1] == 'credentials': return True
+        except IndexError:
+            pass
+    hit = False
+    for raw in pats:
+        neg = raw.startswith('!')
+        pat = raw[1:] if neg else raw
+        pat = pat.lstrip('/').rstrip('/')
+        if not pat: continue
+        if fnmatch.fnmatch(relative, pat) or fnmatch.fnmatch(name, pat) or any(fnmatch.fnmatch(part, pat) for part in parts):
+            hit = not neg
+    return hit
+ignores = load_ignores()
 matches = []
 for p in sorted(Path('/workspace').rglob('*')):
     if not p.is_file() or p.is_symlink(): continue
     relative = p.relative_to('/workspace').as_posix()
-    if '.git' in Path(relative).parts: continue
-    name = Path(relative).name
-    parts = Path(relative).parts
-    if name == '.env' or name.startswith('.env.'): continue
-    if '.ssh' in parts or name == 'id_rsa': continue
-    if '.aws' in parts:
-        try:
-            if parts[parts.index('.aws') + 1] == 'credentials': continue
-        except IndexError:
-            pass
+    if ignored(relative, ignores): continue
     if not any(fnmatch.fnmatch(relative, pattern) or
                (pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:]))
                for pattern in patterns): continue
@@ -127,20 +149,42 @@ pattern, limit = sys.argv[1], int(sys.argv[2])
 if '..' in Path(pattern).parts:
     raise SystemExit(2)
 limit = max(1, min(limit, 500))
+skip_dirs = {'.git','node_modules','__pycache__','.venv','venv','dist','build','.svn','.hg','.tox','.mypy_cache','.pytest_cache'}
+def load_ignores():
+    pats = []
+    for name in ('.gitignore', '.ignore'):
+        ig = Path('/workspace') / name
+        if ig.is_file():
+            for line in ig.read_text(errors='replace').splitlines():
+                s = line.strip()
+                if s and not s.startswith('#'): pats.append(s)
+    return pats
+def ignored(relative, pats):
+    parts = Path(relative).parts
+    if any(part in skip_dirs for part in parts): return True
+    name = Path(relative).name
+    if name == '.env' or name.startswith('.env.'): return True
+    if '.ssh' in parts or name == 'id_rsa': return True
+    if '.aws' in parts:
+        try:
+            if parts[parts.index('.aws') + 1] == 'credentials': return True
+        except IndexError:
+            pass
+    hit = False
+    for raw in pats:
+        neg = raw.startswith('!')
+        pat = raw[1:] if neg else raw
+        pat = pat.lstrip('/').rstrip('/')
+        if not pat: continue
+        if fnmatch.fnmatch(relative, pat) or fnmatch.fnmatch(name, pat) or any(fnmatch.fnmatch(part, pat) for part in parts):
+            hit = not neg
+    return hit
+ignores = load_ignores()
 found = []
 for p in sorted(Path('/workspace').rglob('*')):
     if p.is_symlink(): continue
     relative = p.relative_to('/workspace').as_posix()
-    if '.git' in Path(relative).parts: continue
-    name = Path(relative).name
-    parts = Path(relative).parts
-    if name == '.env' or name.startswith('.env.'): continue
-    if '.ssh' in parts or name == 'id_rsa': continue
-    if '.aws' in parts:
-        try:
-            if parts[parts.index('.aws') + 1] == 'credentials': continue
-        except IndexError:
-            pass
+    if ignored(relative, ignores): continue
     if fnmatch.fnmatch(relative, pattern) or (
         pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:])
     ):

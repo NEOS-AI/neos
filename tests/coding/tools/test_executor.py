@@ -20,6 +20,7 @@ from neos.coding.sandbox.base import (
 from neos.coding.tools.executor import SandboxToolExecutor, ToolResult
 from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
 
+pytestmark = pytest.mark.no_db
 
 NOW = datetime(2026, 7, 19, tzinfo=UTC)
 
@@ -30,6 +31,7 @@ class FakeSession:
     def __init__(self) -> None:
         self.called: tuple[str, Any] | None = None
         self.files: dict[str, bytes] = {}
+        self.modified: dict[str, datetime] = {}
         self.revision = 7
         self.command_result = CommandResult(0, b"stdout", b"stderr")
         self.error: Exception | None = None
@@ -54,7 +56,12 @@ class FakeSession:
         if path not in self.files:
             raise SandboxPolicyViolation("workspace_path_not_resolvable")
         self.called = ("stat", path)
-        return FileEntry(path, "file", len(self.files[path]), NOW)
+        return FileEntry(
+            path,
+            "file",
+            len(self.files[path]),
+            self.modified.get(path, NOW),
+        )
 
     async def read_file(self, path: str) -> bytes:
         self._raise()
@@ -71,6 +78,7 @@ class FakeSession:
         if parent not in {".", ""} and not parents:
             raise SandboxPolicyViolation("workspace_path_not_resolvable")
         self.files[path] = content
+        self.modified[path] = NOW
         self.revision += 1
         self.called = ("write_file", (path, content))
         return self.revision
@@ -628,6 +636,25 @@ async def test_write_existing_path_without_read_is_denied() -> None:
 
 
 @pytest.mark.asyncio
+async def test_write_existing_path_after_stale_read_is_denied() -> None:
+    session = FakeSession()
+    session.files["exists.txt"] = b"old"
+    executor = SandboxToolExecutor(64, 10)
+    await executor.execute(session, call("read_file.v1", {"path": "exists.txt"}))
+    session.files["exists.txt"] = b"changed-on-disk"
+    session.modified["exists.txt"] = datetime(2026, 8, 1, tzinfo=UTC)
+
+    result = await executor.execute(
+        session, call("write_file.v1", {"path": "exists.txt", "content": "new"})
+    )
+
+    assert (result.status, result.reason_code) == (
+        "denied",
+        "precondition_stale_read",
+    )
+    assert session.files["exists.txt"] == b"changed-on-disk"
+
+
 async def test_write_existing_path_after_read_succeeds() -> None:
     session = FakeSession()
     session.files["exists.txt"] = b"old"

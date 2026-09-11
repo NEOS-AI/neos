@@ -480,3 +480,114 @@ async def test_spawn_agent_still_aborts_when_interrupt_is_pending() -> None:
     result = completed_events[-1].payload["result"]
     assert result["status"] == "error"
     assert result["reason_code"] == "aborted"
+
+
+@pytest.mark.asyncio
+async def test_model_request_keeps_compact_preview_instead_of_expanding() -> None:
+    old_body = {"entries": [{"text": "x" * 5000}]}
+    digest = _sha256_payload(old_body)
+    compacted = {
+        "compacted": True,
+        "sha256": digest,
+        "preview": "xxxx",
+        "path": f"artifact://{digest}",
+    }
+    transcript = (
+        CanonicalMessage("user", (TextContent("start"),)),
+        *_pair("old", compacted),
+    )
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    state = replace(
+        h.loop._restore(INPUT, None),
+        transcript=transcript,
+        compacted_bodies={
+            digest: json.dumps(old_body, sort_keys=True, separators=(",", ":"))
+        },
+        transcript_digest=h.loop._digest(transcript),
+        instructions_loaded=True,
+    )
+    dumped = h.loop._dump_state(INPUT, state)
+    checkpoint = CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW)
+    await collect(h, checkpoint)
+    results = {
+        item.tool_call_id: dict(item.content)
+        for message in h.model.requests[0].messages
+        for item in message.content
+        if isinstance(item, ToolResultContent)
+    }
+    assert results["old"]["compacted"] is True
+    assert results["old"]["preview"] == "xxxx"
+    assert "x" * 5000 not in json.dumps(results)
+
+
+@pytest.mark.asyncio
+async def test_post_tool_timeout_or_error_skips_without_failing_tool(
+    monkeypatch,
+) -> None:
+    from neos.coding.loop import durable as durable_mod
+
+    monkeypatch.setattr(durable_mod, "PRE_TOOL_HOOK_TIMEOUT_SEC", 0.01)
+
+    class BoomPost(_DecisionHook):
+        async def pre_tool(self, call):
+            return {"decision": "allow"}
+
+        async def post_tool(self, call, result) -> None:
+            await asyncio.sleep(0.2)
+            raise RuntimeError("post failed")
+
+    h = harness([[tool_call(), completed()]], hooks=BoomPost("allow"))
+    events = await collect(h)
+    assert h.executor.calls
+    assert any(event.type == "tool.completed" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_model_error_after_delta_is_not_retryable() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+
+    class PartialThenError:
+        async def stream(self, request):
+            del request
+            yield TextDelta("hello")
+            raise CodingModelError("model_rate_limited", retryable=True)
+
+    h.loop._model = PartialThenError()
+    with pytest.raises(CodingLoopFailure, match="model_rate_limited") as caught:
+        await collect(h)
+    assert caught.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_model_error_before_delta_keeps_retryable() -> None:
+    h = harness([CodingModelError("model_rate_limited", retryable=True)])
+    with pytest.raises(CodingLoopFailure, match="model_rate_limited") as caught:
+        await collect(h)
+    assert caught.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_updated_input_is_revalidated_before_execute() -> None:
+    class RewriteHook(_DecisionHook):
+        async def pre_tool(self, call):
+            return {
+                "decision": "allow",
+                "updatedInput": {"path": "rewritten.txt", "content": "ok"},
+            }
+
+    h = harness([[tool_call(), completed()]], hooks=RewriteHook("allow"))
+    await collect(h)
+    assert h.executor.calls[0].input["path"] == "rewritten.txt"
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_invalid_updated_input_denies() -> None:
+    class BadRewrite(_DecisionHook):
+        async def pre_tool(self, call):
+            return {"decision": "allow", "updatedInput": {"surprise": True}}
+
+    h = harness([[tool_call(), completed()]], hooks=BadRewrite("allow"))
+    events = await collect(h)
+    assert h.executor.calls == []
+    assert events[-1].type == "tool.denied"
+    assert events[-1].payload["reason_code"] == "policy_hook_denied"

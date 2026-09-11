@@ -12,6 +12,7 @@ from neos.coding.tools.registry import ValidatedToolCall
 class HookDecision(TypedDict):
     decision: Literal["allow", "deny", "retry"]
     reason: NotRequired[str]
+    updatedInput: NotRequired[Mapping[str, Any]]
 
 
 class StopDecision(TypedDict):

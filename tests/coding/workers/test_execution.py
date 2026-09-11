@@ -90,6 +90,31 @@ async def test_runner_returns_waiting_without_retrying_approval_checkpoint() -> 
     assert runs.fail_calls == []
 
 
+async def test_runner_emits_lifecycle_for_approval_and_completion() -> None:
+    seen: list[tuple[str, str]] = []
+
+    async def on_lifecycle(task_id: str, status: str, payload: dict) -> None:
+        del payload
+        seen.append((task_id, status))
+
+    waiting = RecordingRuns(
+        [SimpleNamespace(type="approval.requested", payload={"approval_id": "ca_1"})]
+    )
+    await CodingTaskRunner(runs=waiting, on_lifecycle=on_lifecycle).run(
+        task_id="ct_1",
+        worker_id="worker-1",
+        failure_error_code="worker_retry_exhausted",
+    )
+    done = RecordingRuns([SimpleNamespace(type="run.completed", payload={})])
+    await CodingTaskRunner(runs=done, on_lifecycle=on_lifecycle).run(
+        task_id="ct_1",
+        worker_id="worker-1",
+        failure_error_code="worker_retry_exhausted",
+    )
+
+    assert seen == [("ct_1", "waiting_approval"), ("ct_1", "completed")]
+
+
 @pytest.mark.parametrize(
     ("effect", "expected"),
     [

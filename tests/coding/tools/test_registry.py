@@ -9,6 +9,8 @@ from neos.coding.tools.registry import (
     ToolValidationError,
 )
 
+pytestmark = pytest.mark.no_db
+
 
 def registry() -> CodingToolRegistry:
     return CodingToolRegistry.default(
@@ -309,6 +311,44 @@ def test_command_policy_denies_unsafe_argv(
 
     assert decision.allowed is False
     assert decision.reason_code == reason
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["cat", "README.md"], ["rg", "needle"], ["find", "."], ["grep", "x"]],
+)
+def test_dedicated_tools_are_hard_denied_even_when_allowlisted(
+    argv: list[str],
+) -> None:
+    unsafe = CodingToolRegistry.default(
+        command_allowlist=frozenset({argv[0], "pytest"}),
+        allowed_env_names=frozenset(),
+    )
+
+    decision = unsafe.decide("execute.v1", {"argv": argv})
+
+    assert decision.allowed is False
+    assert decision.reason_code == "policy_dedicated_tool_required"
+
+
+def test_ask_user_accepts_mcq_questions() -> None:
+    call = registry().validate(
+        "ask_user.v1",
+        {
+            "questions": [
+                {
+                    "prompt": "Which runner?",
+                    "options": [
+                        {"label": "pytest", "description": "default"},
+                        {"label": "nox"},
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert call.input["questions"][0]["prompt"] == "Which runner?"
+    assert len(call.input["questions"][0]["options"]) == 2
 
 
 @pytest.mark.parametrize(

@@ -17,6 +17,26 @@ from neos.coding.sandbox.paths import (
 )
 
 _DEFAULT_DEFERRED_TOOLS_THRESHOLD = 20
+_DEDICATED_EXECUTE_DENY = frozenset(
+    {
+        "cat",
+        "tac",
+        "head",
+        "tail",
+        "less",
+        "more",
+        "nl",
+        "rg",
+        "grep",
+        "egrep",
+        "fgrep",
+        "ag",
+        "ack",
+        "find",
+        "fd",
+        "fdfind",
+    }
+)
 
 
 def _deferred_tools_threshold() -> int:
@@ -144,8 +164,19 @@ class _SetPhaseInput(_ToolInput):
     phase: Literal["explore", "plan", "implement", "verify"]
 
 
+class _AskUserOption(_ToolInput):
+    label: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=240)
+
+
+class _AskUserQuestion(_ToolInput):
+    prompt: str = Field(min_length=1, max_length=500)
+    options: list[_AskUserOption] = Field(min_length=2, max_length=4)
+    multi_select: bool = False
+
+
 class _AskUserInput(_ToolInput):
-    questions: list[str] = Field(min_length=1, max_length=4)
+    questions: list[str | _AskUserQuestion] = Field(min_length=1, max_length=4)
 
 
 class _LoadSkillInput(_ToolInput):
@@ -323,6 +354,7 @@ class CodingToolRegistry:
             "ask_user.v1",
             (
                 "Ask the user 1-4 preference questions and wait for answers. "
+                "Each question may be a string or {prompt, options[2-4], multi_select}. "
                 "Requires approval. Do not assume the answer. "
                 "Do not use execute.v1 to pose questions. "
                 "On policy_* denial, do not retry the same questions."
@@ -535,6 +567,8 @@ class CodingToolRegistry:
         if PurePosixPath(argv[0]).name != argv[0]:
             raise ToolValidationError("policy_executable_path_denied")
         executable = PurePosixPath(argv[0]).name
+        if executable in _DEDICATED_EXECUTE_DENY:
+            raise ToolValidationError("policy_dedicated_tool_required")
         if executable in {"sh", "bash", "zsh"} and len(argv) > 1 and argv[1] == "-c":
             raise ToolValidationError("policy_shell_command_denied")
         if executable in {

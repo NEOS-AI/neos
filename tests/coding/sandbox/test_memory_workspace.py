@@ -185,6 +185,31 @@ async def test_memory_search_text_skips_git_directory(tmp_path: Path) -> None:
     await provider.close()
 
 
+async def test_memory_search_skips_node_modules_and_gitignore(tmp_path: Path) -> None:
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    workspace = provider.workspace_path(sandbox.sandbox_id)
+    (workspace / "src").mkdir()
+    (workspace / "src" / "app.py").write_text("needle\n", encoding="utf-8")
+    nested = workspace / "node_modules" / "pkg"
+    nested.mkdir(parents=True)
+    (nested / "index.js").write_text("needle\n", encoding="utf-8")
+    (workspace / ".gitignore").write_text("ignored.py\n", encoding="utf-8")
+    (workspace / "ignored.py").write_text("needle\n", encoding="utf-8")
+
+    matches = await session.search_text("needle")
+    files = await session.glob_files("**/*")
+
+    assert [match.path for match in matches] == ["src/app.py"]
+    assert "node_modules/pkg/index.js" not in files
+    assert "ignored.py" not in files
+    await provider.close()
+
+
 async def test_memory_search_text_files_and_count_modes(tmp_path: Path) -> None:
     provider = MemorySandboxProvider(root=tmp_path)
     sandbox = await provider.create(

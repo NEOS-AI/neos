@@ -577,7 +577,7 @@ class MemorySandboxSession:
             if not item.is_file() or item.is_symlink():
                 continue
             relative = item.relative_to(self._record.workspace).as_posix()
-            if self._is_git_path(relative) or self._is_secret_path(relative):
+            if self._should_skip_walk(relative):
                 continue
             if not any(self._matches_path(relative, pattern) for pattern in paths):
                 continue
@@ -638,7 +638,7 @@ class MemorySandboxSession:
             if item.is_symlink():
                 continue
             relative = item.relative_to(self._record.workspace).as_posix()
-            if self._is_git_path(relative) or self._is_secret_path(relative):
+            if self._should_skip_walk(relative):
                 continue
             if self._matches_path(relative, pattern):
                 found.append(relative)
@@ -835,6 +835,13 @@ class MemorySandboxSession:
             for path in sorted(before.keys() - after.keys())
         )
         return tuple(changes)
+
+    def _should_skip_walk(self, path: str) -> bool:
+        from neos.coding.sandbox.ignore import load_ignore_patterns, should_skip_walk
+
+        return should_skip_walk(
+            path, patterns=load_ignore_patterns(self._record.workspace)
+        )
 
     @staticmethod
     def _is_git_path(path: str) -> bool:

@@ -24,6 +24,14 @@ export function CodingApprovalCard({
         (item): item is string => typeof item === "string"
       )
     : [];
+  const optionGroups = Array.isArray(approval.display_summary.options)
+    ? approval.display_summary.options
+    : [];
+  const warnings = Array.isArray(approval.display_summary.warnings)
+    ? approval.display_summary.warnings.filter(
+        (item): item is string => typeof item === "string"
+      )
+    : [];
   const [answers, setAnswers] = useState<string[]>(() => questions.map(() => ""));
   const disabled = !live || approval.status !== "pending" || submitting !== null;
   const command = approval.risk === "command";
@@ -85,13 +93,65 @@ export function CodingApprovalCard({
         </span>
       </div>
 
+      {warnings.length > 0 ? (
+        <ul className="mt-3 space-y-1 border border-rose-400/40 bg-rose-500/10 px-3 py-2">
+          {warnings.map((warning) => (
+            <li
+              className="font-mono text-[11px] text-rose-300"
+              key={warning}
+            >
+              {warning.replaceAll("_", " ")}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
       {asking ? (
         <div className="mt-4 space-y-2">
-          {questions.map((question, index) => (
+          {questions.map((question, index) => {
+            const choices = Array.isArray(optionGroups[index])
+              ? optionGroups[index].filter(
+                  (item): item is string => typeof item === "string" && item.length > 0
+                )
+              : [];
+            return (
             <label className="block" key={question}>
               <span className="font-mono text-[10px] text-muted-foreground">
                 {question}
               </span>
+              {choices.length >= 2 ? (
+                <div className="mt-1 space-y-1">
+                  {choices.map((choice) => (
+                    <label className="flex items-center gap-2 font-mono text-xs" key={choice}>
+                      <input
+                        checked={answers[index] === choice}
+                        disabled={disabled}
+                        name={`ask-${approval.approval_id}-${index}`}
+                        onChange={() => {
+                          const next = [...answers];
+                          next[index] = choice;
+                          setAnswers(next);
+                        }}
+                        type="radio"
+                        value={choice}
+                      />
+                      {choice}
+                    </label>
+                  ))}
+                  <input
+                    aria-label="Other"
+                    className="mt-1 w-full border border-border/70 bg-background px-2 py-1 font-mono text-xs"
+                    disabled={disabled}
+                    onChange={(event) => {
+                      const next = [...answers];
+                      next[index] = event.target.value;
+                      setAnswers(next);
+                    }}
+                    placeholder="Other"
+                    value={choices.includes(answers[index] ?? "") ? "" : answers[index] ?? ""}
+                  />
+                </div>
+              ) : (
               <input
                 className="mt-1 w-full border border-border/70 bg-background px-2 py-1 font-mono text-xs"
                 disabled={disabled}
@@ -102,12 +162,16 @@ export function CodingApprovalCard({
                 }}
                 value={answers[index] ?? ""}
               />
+              )}
             </label>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <dl className="mt-4 grid gap-px border border-border/60 bg-border/60 sm:grid-cols-2">
-          {Object.entries(approval.display_summary).map(([label, value]) => (
+          {Object.entries(approval.display_summary)
+            .filter(([label]) => label !== "warnings")
+            .map(([label, value]) => (
             <div className="bg-background/90 px-3 py-2" key={label}>
               <dt className="font-mono text-[9px] text-muted-foreground uppercase tracking-wider">
                 {label.replaceAll("_", " ")}

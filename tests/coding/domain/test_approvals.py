@@ -14,6 +14,8 @@ from neos.coding.domain.approvals import (
 )
 from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
 
+pytestmark = pytest.mark.no_db
+
 
 def call(
     name: str,
@@ -192,6 +194,22 @@ def test_set_phase_to_implement_from_plan_requires_approval() -> None:
     )
     assert requires_approval_answers("ask_user.v1")
     assert not requires_approval_answers("write_file.v1")
+    mcq = approval_display_summary(
+        call(
+            "ask_user.v1",
+            {
+                "questions": [
+                    {
+                        "prompt": "Which runner?",
+                        "options": [{"label": "pytest"}, {"label": "nox"}],
+                    }
+                ]
+            },
+            ToolRisk.USER_QUESTION,
+        )
+    )
+    assert mcq["questions"] == ["Which runner?"]
+    assert mcq["options"] == [["pytest", "nox"]]
 
 
 def test_canonical_hash_is_deterministic_and_binding_sensitive() -> None:
