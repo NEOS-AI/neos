@@ -22,6 +22,7 @@ from neos.api.channels.authz import (
     policy_from_settings,
     telegram_text_mentions_bot,
 )
+from neos.api.channels.session_key import build_session_key
 
 from ..base import ChannelAdapterBase, ChannelMessage
 
@@ -166,12 +167,22 @@ class TelegramAdapter(ChannelAdapterBase):
         """
         from neos.config.settings import settings
 
-        chat_id = str(raw.effective_chat.id)
-        text = (raw.effective_message.text or "").strip()
+        chat = raw.effective_chat
+        message = raw.effective_message
+        chat_id = str(chat.id)
+        text = (message.text or "").strip()
+        is_private = getattr(chat, "type", None) == "private"
+        message_thread_id = getattr(message, "message_thread_id", None)
+        message_id = getattr(message, "message_id", None)
 
         return ChannelMessage(
             user_id=settings.CHANNEL_BOT_USER_ID,
-            session_id=f"telegram_{chat_id}",  # chat_id 기반 세션 — 대화 지속성 보장
+            session_id=build_session_key(
+                "telegram",
+                "dm" if is_private else chat_id,
+                chat_id,
+                str(message_thread_id) if message_thread_id else "-",
+            ),
             text=text,
             channel_type=self.channel_type,
             channel_id=chat_id,
@@ -181,10 +192,13 @@ class TelegramAdapter(ChannelAdapterBase):
                 "telegram_username": (
                     raw.effective_user.username if raw.effective_user else None
                 ),
+                "thread_id": str(message_id) if message_id is not None else None,
             },
         )
 
-    async def send_response(self, channel_id: str, content: str) -> None:
+    async def send_response(
+        self, channel_id: str, content: str, *, thread_id: str | None = None
+    ) -> None:
         """
         Telegram chat_id로 응답 텍스트를 전송한다.
 
@@ -194,6 +208,7 @@ class TelegramAdapter(ChannelAdapterBase):
         Args:
             channel_id: Telegram chat_id
             content: 전송할 텍스트
+            thread_id: 원본 message_id — 설정 시 해당 메시지에 reply
         """
         if not self._app:
             logger.warning("[TelegramAdapter] send_response called before start()")
@@ -208,10 +223,13 @@ class TelegramAdapter(ChannelAdapterBase):
             content[i : i + _TELEGRAM_MAX_CHARS]
             for i in range(0, len(content), _TELEGRAM_MAX_CHARS)
         ]
+        send_kwargs: dict[str, Any] = {}
+        if thread_id:
+            send_kwargs["reply_to_message_id"] = int(thread_id)
 
         for chunk in chunks:
             try:
-                await bot.send_message(chat_id=channel_id, text=chunk)
+                await bot.send_message(chat_id=channel_id, text=chunk, **send_kwargs)
             except Exception as e:
                 logger.error(f"[TelegramAdapter] send_message failed to {channel_id}: {e}")
 
@@ -263,7 +281,11 @@ class TelegramAdapter(ChannelAdapterBase):
             await update.effective_chat.send_action(action="typing")
 
             response = await self._gateway.dispatch(channel_message)
-            await self.send_response(channel_message.channel_id, response)
+            await self.send_response(
+                channel_message.channel_id,
+                response,
+                thread_id=channel_message.metadata.get("thread_id"),
+            )
 
         except Exception as e:
             logger.error(f"[TelegramAdapter] _handle_message error: {e}")

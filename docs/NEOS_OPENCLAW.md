@@ -722,6 +722,8 @@ psql $DATABASE_URL -f db/migrations/024_add_ui_frame_sessions.sql
 | `CHANNEL_{SLACK,DISCORD,TELEGRAM}_ALLOWED_USERS` | inherit | 0 | 플랫폼 오버라이드 (비어 있으면 글로벌) |
 | `CHANNEL_{SLACK,DISCORD,TELEGRAM}_ALLOWED_CHANNELS` | inherit | 0 | 플랫폼 오버라이드 |
 | `CHANNEL_{SLACK,DISCORD,TELEGRAM}_IGNORED_CHANNELS` | union | 0 | 글로벌과 합집합 |
+| `CHANNEL_CODING_INVOKE` | `false` | 0 | `/code`로 코딩 태스크 생성. 기본 꺼짐 |
+| `CHANNEL_CODING_OWNER_USER_ID` | `""` | 0 | 코딩 태스크 owner. 비어 있으면 `/code` 거부 |
 | `EXECUTION_APPROVAL_ENABLED` | `false` | 2 | 실행 승인 시스템 활성화 |
 | `APPROVAL_REQUIRED_SKILLS` | (목록) | 2 | 승인 필요 스킬 이름 목록 |
 | `APPROVAL_TIMEOUT_SECONDS` | `60` | 2 | 승인 대기 타임아웃 (초) |

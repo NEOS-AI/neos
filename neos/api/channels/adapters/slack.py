@@ -19,6 +19,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..base import ChannelAdapterBase, ChannelMessage
+from ..session_key import build_session_key
 
 if TYPE_CHECKING:
     from ..gateway import ChannelGateway
@@ -132,21 +133,36 @@ class SlackAdapter(ChannelAdapterBase):
         channel_id = str(raw.get("channel", ""))
         text = (raw.get("text") or "").strip()
         slack_user_id = str(raw.get("user", ""))
+        raw_team = raw.get("team")
+        raw_thread = raw.get("thread_ts")
+        raw_ts = raw.get("ts")
+        # Session key uses thread_ts only when present; do not fall back to ts.
+        session_id = build_session_key(
+            "slack",
+            str(raw_team) if raw_team else "dm",
+            channel_id,
+            str(raw_thread) if raw_thread else "-",
+        )
+        # Replies start/continue a thread from thread_ts, or the message ts.
+        thread_id = str(raw_thread or raw_ts or "")
 
         return ChannelMessage(
             user_id=settings.CHANNEL_BOT_USER_ID,
-            session_id=f"slack_{channel_id}",
+            session_id=session_id,
             text=text,
             channel_type=self.channel_type,
             channel_id=channel_id,
             raw_data=raw,
             metadata={
                 "slack_user_id": slack_user_id,
-                "slack_message_ts": raw.get("ts", ""),
+                "slack_message_ts": raw_ts or "",
+                "thread_id": thread_id,
             },
         )
 
-    async def send_response(self, channel_id: str, content: str) -> None:
+    async def send_response(
+        self, channel_id: str, content: str, *, thread_id: str | None = None
+    ) -> None:
         """Slack channel_id로 응답을 전송한다. 3000자 제한 준수."""
         if not self._app:
             logger.warning("[SlackAdapter] send_response called before start()")
@@ -158,16 +174,34 @@ class SlackAdapter(ChannelAdapterBase):
             content[i : i + _SLACK_MAX_CHARS]
             for i in range(0, len(content), _SLACK_MAX_CHARS)
         ]
+        post_kwargs: dict[str, Any] = {}
+        if thread_id:
+            post_kwargs["thread_ts"] = thread_id
         for chunk in chunks:
             try:
                 await self._app.client.chat_postMessage(
                     channel=channel_id,
                     text=chunk,
+                    **post_kwargs,
                 )
             except Exception as e:
                 logger.error(
                     "[SlackAdapter] chat_postMessage failed to %s: %s", channel_id, e
                 )
+
+    async def _add_reaction(
+        self, client: Any, channel_id: str, timestamp: str, name: str
+    ) -> None:
+        if client is None or not timestamp:
+            return
+        try:
+            await client.reactions_add(
+                channel=channel_id,
+                timestamp=timestamp,
+                name=name,
+            )
+        except Exception:
+            pass
 
     async def _handle_message(self, message: dict, say: Any, client: Any) -> None:
         """@app.message() 핸들러."""
@@ -213,10 +247,25 @@ class SlackAdapter(ChannelAdapterBase):
                 channel_message.channel_id,
                 channel_message.text[:50],
             )
+            ts = str(message.get("ts") or "")
+            await self._add_reaction(client, channel_message.channel_id, ts, "eyes")
             response = await self._gateway.dispatch(channel_message)
-            await self.send_response(channel_message.channel_id, response)
+            await self.send_response(
+                channel_message.channel_id,
+                response,
+                thread_id=channel_message.metadata.get("thread_id"),
+            )
+            await self._add_reaction(
+                client, channel_message.channel_id, ts, "white_check_mark"
+            )
         except Exception as e:
             logger.error("[SlackAdapter] _handle_message error: %s", e)
+            await self._add_reaction(
+                client,
+                str(message.get("channel") or ""),
+                str(message.get("ts") or ""),
+                "x",
+            )
             try:
                 await say("죄송합니다. 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
             except Exception:

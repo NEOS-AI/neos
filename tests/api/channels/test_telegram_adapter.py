@@ -35,6 +35,8 @@ def _fake_update(
     chat_type: str = "supergroup",
     is_bot: bool = False,
     username: str = "alice",
+    message_id: int = 42,
+    message_thread_id: int | None = None,
 ) -> SimpleNamespace:
     chat = SimpleNamespace(
         id=chat_id,
@@ -43,7 +45,12 @@ def _fake_update(
         send_message=AsyncMock(),
     )
     user = SimpleNamespace(id=user_id, is_bot=is_bot, username=username)
-    message = SimpleNamespace(text=text, entities=[])
+    message = SimpleNamespace(
+        text=text,
+        entities=[],
+        message_id=message_id,
+        message_thread_id=message_thread_id,
+    )
     return SimpleNamespace(
         effective_chat=chat,
         effective_user=user,
@@ -190,3 +197,17 @@ async def test_ignored_channel_is_silent_even_if_mentioned(
     await adapter._handle_message(update, None)
 
     _assert_silent(update, gateway, adapter)
+
+
+async def test_session_id_starts_with_v2_telegram_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_channel_settings(monkeypatch, allowed_users=[str(ALLOWLISTED_USER_ID)])
+    gateway = FakeGateway()
+    adapter = _make_adapter(gateway)
+    update = _fake_update(text=f"hey @{BOT_USERNAME} help")
+
+    await adapter._handle_message(update, None)
+
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0].session_id.startswith("v2:telegram:")

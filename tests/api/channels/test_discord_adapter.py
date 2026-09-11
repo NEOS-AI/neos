@@ -18,6 +18,7 @@ OTHER_USER_ID = 1002
 CHANNEL_ID = 2001
 IGNORED_CHANNEL_ID = 2002
 GUILD_ID = 3001
+MESSAGE_ID = 4001
 
 
 class FakeGateway:
@@ -77,8 +78,10 @@ def _message(
     channel: FakeChannel | None = None,
     guild: object | None = ...,
     mentions: list[Any] | None = None,
+    message_id: int = MESSAGE_ID,
 ) -> SimpleNamespace:
     return SimpleNamespace(
+        id=message_id,
         author=author or _author(),
         content=content,
         channel=channel or FakeChannel(CHANNEL_ID),
@@ -137,9 +140,10 @@ async def test_mentioned_allowlisted_user_is_dispatched(
     )
     assert len(gateway.calls) == 1
     dispatched = gateway.calls[0]
-    assert dispatched.session_id == f"discord_{CHANNEL_ID}"
+    assert dispatched.session_id == f"v2:discord:{GUILD_ID}:{CHANNEL_ID}:-"
     assert dispatched.channel_id == str(CHANNEL_ID)
     assert dispatched.text == _mentioned_content()
+    assert dispatched.metadata["thread_id"] == str(MESSAGE_ID)
 
 
 async def test_channel_message_without_mention_is_silent(
@@ -218,7 +222,7 @@ async def test_dm_without_mention_is_dispatched_for_allowlisted_user(
         require_mention=True,
     )
     assert len(gateway.calls) == 1
-    assert gateway.calls[0].session_id == f"discord_{CHANNEL_ID}"
+    assert gateway.calls[0].session_id == f"v2:discord:dm:{CHANNEL_ID}:-"
 
 
 async def test_bot_or_self_message_is_dropped(
@@ -273,3 +277,22 @@ async def test_ignored_channel_is_dropped_even_when_mentioned(
     assert gateway.calls == []
     assert channel.sent == []
     assert channel.typing_started is False
+
+
+async def test_session_id_starts_with_v2_discord(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = FakeChannel(CHANNEL_ID)
+    message = _message(
+        content=_mentioned_content(),
+        channel=channel,
+        mentions=[_bot_mention()],
+    )
+    gateway = await _handle(
+        monkeypatch,
+        message,
+        channel,
+        allowed_users=[str(USER_ID)],
+    )
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0].session_id.startswith("v2:discord:")

@@ -588,6 +588,8 @@ channels:
   allowed_users: []
   allowed_channels: []
   ignored_channels: []
+  coding_invoke: false
+  coding_owner_user_id: ""
 
 context_assembly:
   max_tokens: 8000

@@ -64,7 +64,9 @@ class ChannelAdapterBase(ABC):
         ...
 
     @abstractmethod
-    async def send_response(self, channel_id: str, content: str) -> None:
+    async def send_response(
+        self, channel_id: str, content: str, *, thread_id: str | None = None
+    ) -> None:
         """
         채널에 응답 텍스트를 전송한다.
 

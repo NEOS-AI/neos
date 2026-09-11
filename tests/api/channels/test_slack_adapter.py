@@ -175,3 +175,60 @@ async def test_ignored_channel_is_dropped_even_when_mentioned(
 
     assert gateway.calls == []
     assert say.calls == []
+
+
+async def test_session_id_is_v2_slack_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+
+    await adapter._handle_message(
+        _slack_message(team="T_workspace", ts="123.456"),
+        say,
+        client=None,
+    )
+
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0].session_id == "v2:slack:T_workspace:C_general:-"
+    assert gateway.calls[0].metadata["thread_id"] == "123.456"
+
+
+async def test_session_id_uses_thread_ts_not_message_ts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+
+    await adapter._handle_message(
+        _slack_message(team="T1", ts="999.000", thread_ts="111.222"),
+        say,
+        client=None,
+    )
+
+    assert gateway.calls[0].session_id == "v2:slack:T1:C_general:111.222"
+    assert gateway.calls[0].metadata["thread_id"] == "111.222"
+
+
+async def test_send_response_is_called_with_thread_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    sent: list[dict[str, Any]] = []
+
+    async def _record(
+        channel_id: str, content: str, *, thread_id: str | None = None
+    ) -> None:
+        sent.append(
+            {"channel_id": channel_id, "content": content, "thread_id": thread_id}
+        )
+
+    adapter.send_response = _record  # type: ignore[method-assign]
+
+    await adapter._handle_message(
+        _slack_message(ts="123.456"),
+        say,
+        client=None,
+    )
+
+    assert sent == [
+        {"channel_id": "C_general", "content": "ok", "thread_id": "123.456"}
+    ]

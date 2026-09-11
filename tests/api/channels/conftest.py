@@ -33,6 +33,8 @@ def install_channel_settings(
     slack: SlackChannelConfig | None = None,
     discord: DiscordChannelConfig | None = None,
     telegram: TelegramChannelConfig | None = None,
+    coding_invoke: bool = False,
+    coding_owner_user_id: str = "",
 ) -> Settings:
     import neos.config.settings as settings_module
 
@@ -45,6 +47,8 @@ def install_channel_settings(
             slack=slack or SlackChannelConfig(),
             discord=discord or DiscordChannelConfig(),
             telegram=telegram or TelegramChannelConfig(),
+            coding_invoke=coding_invoke,
+            coding_owner_user_id=coding_owner_user_id,
         )
     )
     installed = Settings(config=config)

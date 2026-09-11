@@ -1665,6 +1665,8 @@ class ChannelConfig(StrictConfigModel):
     allowed_users: list[str] = Field(default_factory=list)
     allowed_channels: list[str] = Field(default_factory=list)
     ignored_channels: list[str] = Field(default_factory=list)
+    coding_invoke: bool = False
+    coding_owner_user_id: str = ""
 
     @field_validator(
         "allowed_users", "allowed_channels", "ignored_channels", mode="before"

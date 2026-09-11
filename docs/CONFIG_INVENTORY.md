@@ -368,6 +368,8 @@ Generated from `neos/config/settings.py`, `.env.template`, and the config refact
 | `CHANNEL_ALLOWED_USERS` | settings.py | `yaml` | `channels.allowed_users` | Non-secret runtime behavior belongs in validated YAML. Empty = fail-closed. |
 | `CHANNEL_ALLOWED_CHANNELS` | settings.py | `yaml` | `channels.allowed_channels` | Non-secret runtime behavior belongs in validated YAML. Empty = any room. |
 | `CHANNEL_IGNORED_CHANNELS` | settings.py | `yaml` | `channels.ignored_channels` | Non-secret runtime behavior belongs in validated YAML. |
+| `CHANNEL_CODING_INVOKE` | settings.py | `yaml` | `channels.coding_invoke` | Non-secret runtime behavior belongs in validated YAML. Default false. |
+| `CHANNEL_CODING_OWNER_USER_ID` | settings.py | `yaml` | `channels.coding_owner_user_id` | Non-secret runtime behavior belongs in validated YAML. Empty refuses /code. |
 | `CONTEXT_MAX_TOKENS` | settings.py + .env.template | `yaml` | `context_assembly.max_tokens` | Non-secret runtime behavior belongs in validated YAML. |
 | `CONTEXT_SHORT_TERM_RATIO` | settings.py + .env.template | `yaml` | `context_assembly.short_term_ratio` | Non-secret runtime behavior belongs in validated YAML. |
 | `CONTEXT_LONG_TERM_RATIO` | settings.py + .env.template | `yaml` | `context_assembly.long_term_ratio` | Non-secret runtime behavior belongs in validated YAML. |

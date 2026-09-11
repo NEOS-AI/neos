@@ -21,6 +21,7 @@ from neos.api.channels.authz import (
     evaluate_channel_gate,
     policy_from_settings,
 )
+from neos.api.channels.session_key import build_session_key
 
 from ..base import ChannelAdapterBase, ChannelMessage
 
@@ -120,12 +121,24 @@ class DiscordAdapter(ChannelAdapterBase):
         """discord.Message를 ChannelMessage로 변환한다."""
         from neos.config.settings import settings
 
-        channel_id = str(raw.channel.id)
+        channel = raw.channel
+        channel_id = str(channel.id)
         text = (raw.content or "").strip()
+        guild = getattr(raw, "guild", None)
+        guild_id = str(guild.id) if guild is not None else None
+        parent_id = getattr(channel, "parent_id", None)
+        if parent_id:
+            chat = str(parent_id) or channel_id
+            thread = channel_id
+        else:
+            chat = channel_id
+            thread = "-"
 
         return ChannelMessage(
             user_id=settings.CHANNEL_BOT_USER_ID,
-            session_id=f"discord_{channel_id}",
+            session_id=build_session_key(
+                "discord", guild_id or "dm", chat, thread
+            ),
             text=text,
             channel_type=self.channel_type,
             channel_id=channel_id,
@@ -134,10 +147,13 @@ class DiscordAdapter(ChannelAdapterBase):
                 "discord_user_id": str(raw.author.id),
                 "discord_username": str(raw.author),
                 "discord_guild_id": str(raw.guild.id) if raw.guild else None,
+                "thread_id": str(raw.id),
             },
         )
 
-    async def send_response(self, channel_id: str, content: str) -> None:
+    async def send_response(
+        self, channel_id: str, content: str, *, thread_id: str | None = None
+    ) -> None:
         """Discord channel_id로 응답을 전송한다. 2000자 제한 준수."""
         if not self._client:
             logger.warning("[DiscordAdapter] send_response called before start()")
@@ -159,12 +175,16 @@ class DiscordAdapter(ChannelAdapterBase):
             content[i : i + _DISCORD_MAX_CHARS]
             for i in range(0, len(content), _DISCORD_MAX_CHARS)
         ]
+        reply_to = await _fetch_reply_target(channel, thread_id)
         for chunk in chunks:
             try:
-                await channel.send(chunk)
+                if reply_to is not None:
+                    await reply_to.reply(chunk)
+                else:
+                    await channel.send(chunk)
             except Exception as e:
                 logger.error(
-                    "[DiscordAdapter] channel.send() failed to %s: %s", channel_id, e
+                    "[DiscordAdapter] send failed to %s: %s", channel_id, e
                 )
 
     async def _handle_message(self, message: Any) -> None:
@@ -197,9 +217,19 @@ class DiscordAdapter(ChannelAdapterBase):
                 channel_message.channel_id,
                 channel_message.text[:50],
             )
-            async with message.channel.typing():
-                response = await self._gateway.dispatch(channel_message)
-                await self.send_response(channel_message.channel_id, response)
+            await _add_reaction_safe(message, "👀")
+            try:
+                async with message.channel.typing():
+                    response = await self._gateway.dispatch(channel_message)
+                    await self.send_response(
+                        channel_message.channel_id,
+                        response,
+                        thread_id=channel_message.metadata.get("thread_id"),
+                    )
+            except Exception:
+                await _add_reaction_safe(message, "❌")
+                raise
+            await _add_reaction_safe(message, "✅")
         except Exception as e:
             logger.error("[DiscordAdapter] _handle_message error: %s", e)
             try:
@@ -208,6 +238,31 @@ class DiscordAdapter(ChannelAdapterBase):
                 )
             except Exception:
                 pass
+
+
+async def _fetch_reply_target(channel: Any, thread_id: str | None) -> Any | None:
+    if not thread_id or channel is None:
+        return None
+    fetch_message = getattr(channel, "fetch_message", None)
+    if fetch_message is None:
+        return None
+    try:
+        target = await fetch_message(int(thread_id))
+    except Exception:
+        return None
+    if target is not None and callable(getattr(target, "reply", None)):
+        return target
+    return None
+
+
+async def _add_reaction_safe(message: Any, emoji: str) -> None:
+    add_reaction = getattr(message, "add_reaction", None)
+    if add_reaction is None:
+        return
+    try:
+        await add_reaction(emoji)
+    except Exception:
+        pass
 
 
 def _message_mentions_bot(message: Any, bot_user: Any) -> bool:

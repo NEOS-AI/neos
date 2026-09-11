@@ -18,8 +18,16 @@ if TYPE_CHECKING:
     from neos.workflow.graph import MultiAgentWorkflow
 
 from .base import ChannelMessage
+from .commands import ChannelCommandKind, parse_channel_command
+from .inflight import SessionInflightLock
 
 logger = logging.getLogger(__name__)
+
+_BUSY = "Already working on this thread."
+_CODE_USAGE = "Usage: /code <task>"
+_CODE_DISABLED = "Coding invoke is disabled."
+_CODE_NO_OWNER = "Coding owner is not configured."
+_NO_TASK = "No coding task in this thread."
 
 
 class ChannelGateway:
@@ -31,8 +39,17 @@ class ChannelGateway:
     - channel_source를 초기 state에 포함하여 워크플로우 시작 시점에 올바르게 기록
     """
 
-    def __init__(self, workflow: "MultiAgentWorkflow") -> None:
+    def __init__(
+        self,
+        workflow: "MultiAgentWorkflow",
+        *,
+        coding: Any | None = None,
+        inflight: SessionInflightLock | None = None,
+    ) -> None:
         self._workflow = workflow
+        self._coding = coding
+        self._inflight = inflight or SessionInflightLock()
+        self._task_by_session: Dict[str, str] = {}
         # 채널별 async circuit_breaker (lazy init)
         self._breakers: Dict[str, Any] = {}
 
@@ -74,20 +91,29 @@ class ChannelGateway:
             f"user={message.user_id}, session={message.session_id}"
         )
 
+        if not self._inflight.acquire(message.session_id):
+            return _BUSY
         breaker = self._get_breaker(message.channel_type)
-
         try:
             if breaker is not None:
-                response = await breaker.call(self._run_workflow, message)
+                response = await breaker.call(self._route, message)
             else:
-                response = await self._run_workflow(message)
+                response = await self._route(message)
         except Exception as e:
             logger.error(
-                f"[ChannelGateway] Workflow execution failed for channel={message.channel_type}: {e}"
+                f"[ChannelGateway] dispatch failed for channel={message.channel_type}: {e}"
             )
             response = "죄송합니다. 요청을 처리하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+        finally:
+            self._inflight.release(message.session_id)
 
         return response
+
+    async def _route(self, message: ChannelMessage) -> str:
+        command = parse_channel_command(message.text)
+        if command.kind is ChannelCommandKind.CHAT:
+            return await self._run_workflow(message)
+        return await self._run_coding_command(message, command)
 
     async def _run_workflow(self, message: ChannelMessage) -> str:
         """
@@ -132,3 +158,43 @@ class ChannelGateway:
             final_response = "응답을 생성하지 못했습니다. 다시 시도해주세요."
 
         return final_response
+
+    async def _run_coding_command(self, message: ChannelMessage, command) -> str:
+        from neos.config.settings import settings
+
+        if command.kind is ChannelCommandKind.CODE:
+            if not command.rest:
+                return _CODE_USAGE
+            if not settings.config.channels.coding_invoke:
+                return _CODE_DISABLED
+            owner = settings.config.channels.coding_owner_user_id
+            if not owner:
+                return _CODE_NO_OWNER
+            coding = self._coding_port()
+            task_id = await coding.start_task(owner_id=owner, prompt=command.rest)
+            self._task_by_session[message.session_id] = task_id
+            return f"Started coding task {task_id}"
+
+        task_id = self._task_by_session.get(message.session_id)
+        if not task_id:
+            return _NO_TASK
+        owner = settings.config.channels.coding_owner_user_id
+        coding = self._coding_port()
+        if command.kind is ChannelCommandKind.STOP:
+            await coding.stop_task(task_id=task_id, owner_id=owner)
+            return f"Stopped {task_id}"
+        if command.kind is ChannelCommandKind.STATUS:
+            return await coding.status(task_id=task_id, owner_id=owner)
+        return await coding.decide(
+            task_id=task_id,
+            owner_id=owner,
+            approve=command.kind is ChannelCommandKind.APPROVE,
+            approval_id=command.rest,
+        )
+
+    def _coding_port(self):
+        if self._coding is None:
+            from .coding_bridge import RuntimeChannelCoding
+
+            self._coding = RuntimeChannelCoding()
+        return self._coding
