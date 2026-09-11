@@ -1015,6 +1015,24 @@ class InMemoryCodingRunRepository:
     async def queue_steering(self, request) -> None:
         self.steering_requests.append(request)
 
+    async def has_pending_interrupt(self, task_id: str) -> bool:
+        return any(
+            item.task_id == task_id
+            and item.mode is SteeringMode.INTERRUPT_NOW
+            and item not in self.applied_steering
+            for item in self.steering_requests
+        )
+
+    async def claim_pending_interrupt(self, task_id: str):
+        for request in self.steering_requests:
+            if (
+                request.task_id == task_id
+                and request.mode is SteeringMode.INTERRUPT_NOW
+                and request not in self.applied_steering
+            ):
+                return request
+        return None
+
     async def claim_pending_steering(self, task_id: str):
         for request in self.steering_requests:
             if request.task_id == task_id and request not in self.applied_steering:

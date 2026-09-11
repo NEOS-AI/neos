@@ -16,7 +16,13 @@ from neos.coding.domain.approvals import (
     ApprovalPolicyOutcome,
     evaluate_approval,
 )
-from neos.coding.domain.phases import CodingCheckpoint, CodingRun, CodingRunStatus
+from neos.coding.domain.phases import (
+    CodingCheckpoint,
+    CodingRun,
+    CodingRunStatus,
+    SteeringMode,
+    SteeringRequest,
+)
 from neos.coding.domain.events import make_event
 from neos.coding.loop.anthropic import (
     AnthropicCodingLoop,
@@ -730,6 +736,50 @@ async def test_cancel_synthesizes_aborted_results_for_pending_tool_ids() -> None
     assert [item["tool_call_id"] for item in result_items] == ["one", "two"]
     assert all(item["status"] == "error" for item in result_items)
     assert all(item["content"]["reason_code"] == "aborted" for item in result_items)
+
+
+@pytest.mark.asyncio
+@pytest.mark.no_db
+async def test_pending_interrupt_aborts_in_flight_model_turn() -> None:
+    started = asyncio.Event()
+    resume = asyncio.Event()
+    commits: list[dict] = []
+
+    class GatedModel:
+        async def stream(self, request):
+            yield TextDelta("working")
+            started.set()
+            await resume.wait()
+            yield ModelCompleted("end_turn", ModelUsage(2, 1))
+
+    h = harness([[TextDelta("unused"), completed()]])
+    h.model = GatedModel()
+    h.loop._model = h.model
+    original = h.repository.commit_model_checkpoint
+
+    async def recording_commit(**kwargs):
+        commits.append(dict(kwargs.get("event_payload") or {}))
+        return await original(**kwargs)
+
+    h.repository.commit_model_checkpoint = recording_commit
+    task = asyncio.create_task(collect(h))
+    await started.wait()
+    await h.repository.queue_steering(
+        SteeringRequest(
+            steering_id="cs_stop",
+            task_id="ct_1",
+            mode=SteeringMode.INTERRUPT_NOW,
+            instruction="stop",
+            requested_at=NOW,
+        )
+    )
+    resume.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert h.repository.checkpoints
+    assert commits
+    assert commits[-1]["reason_code"] == "aborted"
 
 
 @pytest.mark.asyncio

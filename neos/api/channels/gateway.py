@@ -45,11 +45,16 @@ class ChannelGateway:
         *,
         coding: Any | None = None,
         inflight: SessionInflightLock | None = None,
+        binds: Any | None = None,
     ) -> None:
         self._workflow = workflow
         self._coding = coding
         self._inflight = inflight or SessionInflightLock()
-        self._task_by_session: Dict[str, str] = {}
+        if binds is None:
+            from .session_bind import InMemoryChannelCodingBindStore
+
+            binds = InMemoryChannelCodingBindStore()
+        self._binds = binds
         # 채널별 async circuit_breaker (lazy init)
         self._breakers: Dict[str, Any] = {}
 
@@ -172,13 +177,14 @@ class ChannelGateway:
                 return _CODE_NO_OWNER
             coding = self._coding_port()
             task_id = await coding.start_task(owner_id=owner, prompt=command.rest)
-            self._task_by_session[message.session_id] = task_id
+            await self._binds.bind(message.session_id, task_id, owner)
             return f"Started coding task {task_id}"
 
-        task_id = self._task_by_session.get(message.session_id)
-        if not task_id:
+        binding = await self._binds.get(message.session_id)
+        if binding is None:
             return _NO_TASK
-        owner = settings.config.channels.coding_owner_user_id
+        task_id = binding.task_id
+        owner = binding.owner_id or settings.config.channels.coding_owner_user_id
         coding = self._coding_port()
         if command.kind is ChannelCommandKind.STOP:
             await coding.stop_task(task_id=task_id, owner_id=owner)

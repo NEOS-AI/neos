@@ -8,6 +8,7 @@ from uuid import uuid4
 from neos.coding.domain.durability import (
     RunAlreadyLeased,
     StaleExecutionLease,
+    SteeringApplication,
 )
 from neos.coding.domain.errors import CodingTaskNotFound
 from neos.coding.domain.phases import (
@@ -214,6 +215,12 @@ class CodingRunService:
                 worker_id=worker_id,
             )
             if applied:
+                if (
+                    getattr(applied, "request", None) is not None
+                    and applied.request.mode is SteeringMode.INTERRUPT_NOW
+                ):
+                    await self._release_lease(applied.lease)
+                    return applied.event
                 checkpoint = applied.checkpoint
                 run = applied.run
                 lease = applied.lease
@@ -372,7 +379,7 @@ class CodingRunService:
                         self._metrics.coding_lease_contention_total.labels(
                             outcome="busy"
                         ).inc()
-                    raise RunAlreadyLeased(task_id)
+                    return request
                 await self._interrupt_active_run(task_id, request, lease)
         return request
 
@@ -389,6 +396,15 @@ class CodingRunService:
             if checkpoint is None:
                 raise ValueError("checkpoint is required for atomic steering")
             now = self._clock()
+            interrupted = await self._apply_interrupt_now_at_safe_point(
+                task_id=task_id,
+                lease=lease,
+                checkpoint=checkpoint,
+                worker_id=worker_id or lease.worker_id,
+                now=now,
+            )
+            if interrupted is not None:
+                return interrupted
             applied = await self._runs.apply_steering_at_safe_point(
                 lease=lease,
                 checkpoint=checkpoint,
@@ -408,7 +424,32 @@ class CodingRunService:
                 ).observe(latency)
             return applied
         request = await self._runs.claim_pending_steering(task_id)
-        if request is None or request.mode is not SteeringMode.SAFE_POINT:
+        if request is None:
+            return False
+        if request.mode is SteeringMode.INTERRUPT_NOW:
+            run = await self._runs.latest_run(task_id)
+            if run is not None:
+                await self._runs.update_run(
+                    replace(
+                        run,
+                        status=CodingRunStatus.CANCELLED,
+                        completed_at=self._clock(),
+                    )
+                )
+            applied = replace(request, applied_checkpoint_id=checkpoint_id)
+            await self._runs.apply_steering(applied)
+            await self._append(
+                task_id=task_id,
+                event_type="steer.applied",
+                payload={
+                    "steering_id": request.steering_id,
+                    "mode": request.mode.value,
+                    "instruction": request.instruction,
+                },
+                checkpoint_id=checkpoint_id,
+            )
+            return True
+        if request.mode is not SteeringMode.SAFE_POINT:
             return False
         run = await self._runs.latest_run(task_id)
         if run is None:
@@ -477,12 +518,72 @@ class CodingRunService:
         return True
 
     async def stop(self, *, task_id: str) -> None:
+        task = await self._tasks.get(task_id)
+        if task is None:
+            return
+        await self.steer(
+            task_id=task_id,
+            owner_id=task.owner_id,
+            instruction="stop",
+            mode=SteeringMode.INTERRUPT_NOW,
+        )
+
+    async def _apply_interrupt_now_at_safe_point(
+        self,
+        *,
+        task_id: str,
+        lease,
+        checkpoint: CodingCheckpoint,
+        worker_id: str,
+        now: datetime,
+    ) -> SteeringApplication | None:
+        claim = getattr(self._runs, "claim_pending_interrupt", None)
+        if claim is not None:
+            request = await claim(task_id)
+        else:
+            checker = getattr(self._runs, "has_pending_interrupt", None)
+            if checker is None or not await checker(task_id):
+                return None
+            request = await self._runs.claim_pending_steering(task_id)
+            if request is None or request.mode is not SteeringMode.INTERRUPT_NOW:
+                return None
+        if request is None:
+            return None
         run = await self._runs.latest_run(task_id)
         if run is None:
-            return
-        await self._interrupter.interrupt(run.run_id)
-        await self._runs.update_run(
-            replace(run, status=CodingRunStatus.CANCELLED, completed_at=self._clock())
+            applied = replace(request, applied_checkpoint_id=checkpoint.checkpoint_id)
+            await self._runs.apply_steering(applied)
+            return None
+        cancelled = replace(
+            run,
+            status=CodingRunStatus.CANCELLED,
+            completed_at=now,
+        )
+        await self._runs.update_run(cancelled)
+        applied = replace(request, applied_checkpoint_id=checkpoint.checkpoint_id)
+        await self._runs.apply_steering(applied)
+        event = await self._append(
+            task_id=task_id,
+            event_type="steer.applied",
+            payload={
+                "steering_id": request.steering_id,
+                "mode": request.mode.value,
+                "instruction": request.instruction,
+            },
+            checkpoint_id=checkpoint.checkpoint_id,
+        )
+        if self._metrics is not None:
+            latency = max(0.0, (now - request.requested_at).total_seconds())
+            self._metrics.coding_steering_latency_seconds.labels(
+                outcome="applied"
+            ).observe(latency)
+        return SteeringApplication(
+            request=applied,
+            checkpoint=checkpoint,
+            previous_run=cancelled,
+            run=cancelled,
+            lease=lease,
+            event=event,
         )
 
     async def _interrupt_active_run(self, task_id, request, lease) -> None:

@@ -25,9 +25,15 @@ class RuntimeChannelCoding:
         return task.task_id
 
     async def stop_task(self, *, task_id: str, owner_id: str) -> None:
+        from neos.coding.domain.phases import SteeringMode
         from neos.coding.runtime import coding_run_service
 
-        await coding_run_service.stop(task_id=task_id)
+        await coding_run_service.steer(
+            task_id=task_id,
+            owner_id=owner_id,
+            instruction="stop",
+            mode=SteeringMode.INTERRUPT_NOW,
+        )
 
     async def status(self, *, task_id: str, owner_id: str) -> str:
         from neos.coding.runtime import coding_service

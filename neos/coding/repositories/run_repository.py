@@ -2844,6 +2844,62 @@ class PostgresCodingRunRepository:
                     },
                 )
 
+    async def has_pending_interrupt(self, task_id: str) -> bool:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        """
+                        SELECT 1
+                        FROM coding_steering_requests
+                        WHERE task_id = :task_id
+                          AND mode = 'interrupt_now'
+                          AND status = 'pending'
+                        LIMIT 1
+                        """
+                    ),
+                    {"task_id": task_id},
+                )
+                return result.first() is not None
+
+    async def claim_pending_interrupt(self, task_id: str) -> SteeringRequest | None:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        """
+                        WITH pending AS (
+                            SELECT steering_id
+                            FROM coding_steering_requests
+                            WHERE task_id = :task_id
+                              AND mode = 'interrupt_now'
+                              AND status = 'pending'
+                            ORDER BY requested_at, steering_id
+                            LIMIT 1
+                            FOR UPDATE SKIP LOCKED
+                        )
+                        UPDATE coding_steering_requests request
+                        SET status = 'claimed'
+                        FROM pending
+                        WHERE request.steering_id = pending.steering_id
+                        RETURNING request.steering_id, request.task_id,
+                                  request.mode, request.instruction,
+                                  request.requested_at
+                        """
+                    ),
+                    {"task_id": task_id},
+                )
+                row = result.first()
+        if row is None:
+            return None
+        return SteeringRequest(
+            steering_id=row[0],
+            task_id=row[1],
+            mode=SteeringMode(row[2]),
+            instruction=row[3],
+            requested_at=row[4],
+        )
+
     async def queue_steering(self, request: SteeringRequest) -> None:
         async with await self._session_factory() as session:
             async with session.begin():

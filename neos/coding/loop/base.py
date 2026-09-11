@@ -215,6 +215,8 @@ class CodingRunRepository(Protocol):
         now: datetime,
     ) -> ModelTextPartCommit: ...
 
+    async def has_pending_interrupt(self, task_id: str) -> bool: ...
+
     async def apply_steering_at_safe_point(
         self,
         *,

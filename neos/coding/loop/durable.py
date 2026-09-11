@@ -236,7 +236,15 @@ class DurableCodingLoop:
         completion: ModelCompleted | None = None
         prefetch_tasks: dict[str, asyncio.Task] = {}
         try:
+            if await self._has_pending_interrupt(deps, input.task_id):
+                await self._persist_abort_after_cancel(input, state, bound, deps)
+                raise asyncio.CancelledError
             async for model_event in iter_model_turn(self._model, request):
+                if await self._has_pending_interrupt(deps, input.task_id):
+                    for task in prefetch_tasks.values():
+                        task.cancel()
+                    await self._persist_abort_after_cancel(input, state, bound, deps)
+                    raise asyncio.CancelledError
                 folded = fold_model_event(
                     model_event, text_parts=text_parts, tool_calls=calls
                 )
@@ -812,6 +820,12 @@ class DurableCodingLoop:
             tool=tool_name, outcome=metric_outcome
         ).inc()
 
+    async def _has_pending_interrupt(self, deps, task_id: str) -> bool:
+        checker = getattr(deps.repository, "has_pending_interrupt", None)
+        if checker is None:
+            return False
+        return bool(await checker(task_id))
+
     async def _persist_abort_after_cancel(self, input, state, bound, deps) -> None:
         """Finish the abort checkpoint even if this Task is already cancelled.
 
@@ -844,8 +858,6 @@ class DurableCodingLoop:
         pending = [
             call for call in remaining if call.tool_call_id not in existing
         ]
-        if not pending:
-            return
         after = state
         for call in pending:
             after = await self._after_result(
@@ -860,7 +872,7 @@ class DurableCodingLoop:
             )
         await deps.repository.commit_model_checkpoint(
             lease=deps.lease,
-            event_type="tool.completed",
+            event_type="tool.completed" if pending else "model.completed",
             event_payload={"reason_code": "aborted"},
             loop_state=self._dump_state(input, after),
             workspace_revision=str(bound.binding.workspace_revision),

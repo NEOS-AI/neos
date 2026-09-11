@@ -157,6 +157,85 @@ async def test_interrupt_steering_creates_new_run_from_checkpoint() -> None:
     assert repository.active_run.status is CodingRunStatus.RUNNING
 
 
+@pytest.mark.no_db
+async def test_interrupt_now_while_lease_held_queues_without_raising() -> None:
+    repository = InMemoryCodingRunRepository(active_run=run_fixture("cr_1"))
+    service = await make_run_service(repository)
+    lease = await repository.acquire_execution_lease(
+        task_id="ct_1",
+        run_id="cr_1",
+        worker_id="worker-a",
+        now=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+    )
+    assert lease is not None
+
+    request = await service.steer(
+        task_id="ct_1",
+        owner_id="u1",
+        instruction="stop",
+        mode=SteeringMode.INTERRUPT_NOW,
+    )
+
+    assert request.mode is SteeringMode.INTERRUPT_NOW
+    assert request.instruction == "stop"
+    assert repository.steering_requests[-1].steering_id == request.steering_id
+    assert repository.interrupt_calls == []
+    assert repository.active_run.status is CodingRunStatus.RUNNING
+
+
+@pytest.mark.no_db
+async def test_pending_interrupt_now_is_applied_at_next_safe_point() -> None:
+    run = run_fixture("cr_1")
+    repository = InMemoryCodingRunRepository(
+        active_run=run,
+        task_prompts={"ct_1": "Fix it"},
+    )
+    repository.created_runs.append(run)
+    repository.task_statuses["ct_1"] = "running"
+    checkpoint = CodingCheckpoint(
+        checkpoint_id="cc_5",
+        task_id="ct_1",
+        run_id="cr_1",
+        seq=5,
+        loop_state={
+            "phase_index": 1,
+            "transcript": [],
+            "current_instruction": "Fix it",
+            "pending_instruction": None,
+        },
+        workspace_revision="rev_5",
+        created_at=NOW,
+    )
+    await repository.save_checkpoint(checkpoint)
+    lease = await repository.acquire_execution_lease(
+        task_id="ct_1",
+        run_id="cr_1",
+        worker_id="worker-a",
+        now=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+    )
+    service = await make_run_service(repository, loop=ModelCheckpointLoop())
+    await service.steer(
+        task_id="ct_1",
+        owner_id="u1",
+        instruction="stop",
+        mode=SteeringMode.INTERRUPT_NOW,
+    )
+
+    applied = await service.on_safe_point(
+        task_id="ct_1",
+        checkpoint_id=checkpoint.checkpoint_id,
+        lease=lease,
+        checkpoint=checkpoint,
+        worker_id="worker-a",
+    )
+
+    assert applied is not False
+    assert applied.request.mode is SteeringMode.INTERRUPT_NOW
+    assert repository.active_run.status is CodingRunStatus.CANCELLED
+
+
 async def test_safe_point_steering_uses_atomic_repository_transition() -> None:
     repository = InMemoryCodingRunRepository(active_run=run_fixture("cr_1"))
     service = await make_run_service(repository)
