@@ -136,15 +136,15 @@ class SlackAdapter(ChannelAdapterBase):
         raw_team = raw.get("team")
         raw_thread = raw.get("thread_ts")
         raw_ts = raw.get("ts")
-        # Session key uses thread_ts only when present; do not fall back to ts.
+        # Reply in the existing thread, or start one from this message's ts.
+        # Session thread must match that id so follow-ups keep the bind.
+        thread_id = str(raw_thread or raw_ts or "")
         session_id = build_session_key(
             "slack",
             str(raw_team) if raw_team else "dm",
             channel_id,
-            str(raw_thread) if raw_thread else "-",
+            thread_id or "-",
         )
-        # Replies start/continue a thread from thread_ts, or the message ts.
-        thread_id = str(raw_thread or raw_ts or "")
 
         return ChannelMessage(
             user_id=settings.CHANNEL_BOT_USER_ID,

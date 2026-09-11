@@ -43,8 +43,16 @@ class _Typing:
 
 
 class FakeChannel:
-    def __init__(self, channel_id: int) -> None:
+    def __init__(
+        self,
+        channel_id: int,
+        *,
+        parent_id: int | None = None,
+        type_name: str = "text",
+    ) -> None:
         self.id = channel_id
+        self.parent_id = parent_id
+        self.type = SimpleNamespace(name=type_name)
         self.sent: list[str] = []
         self.typing_started = False
 
@@ -296,3 +304,39 @@ async def test_session_id_starts_with_v2_discord(
     )
     assert len(gateway.calls) == 1
     assert gateway.calls[0].session_id.startswith("v2:discord:")
+
+
+async def test_category_parent_is_not_treated_as_a_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = FakeChannel(CHANNEL_ID, parent_id=5555, type_name="text")
+    message = _message(
+        content=_mentioned_content(),
+        channel=channel,
+        mentions=[_bot_mention()],
+    )
+    gateway = await _handle(
+        monkeypatch,
+        message,
+        channel,
+        allowed_users=[str(USER_ID)],
+    )
+    assert gateway.calls[0].session_id == f"v2:discord:{GUILD_ID}:{CHANNEL_ID}:-"
+
+
+async def test_real_thread_uses_parent_as_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = FakeChannel(CHANNEL_ID, parent_id=5555, type_name="public_thread")
+    message = _message(
+        content=_mentioned_content(),
+        channel=channel,
+        mentions=[_bot_mention()],
+    )
+    gateway = await _handle(
+        monkeypatch,
+        message,
+        channel,
+        allowed_users=[str(USER_ID)],
+    )
+    assert gateway.calls[0].session_id == f"v2:discord:{GUILD_ID}:5555:{CHANNEL_ID}"

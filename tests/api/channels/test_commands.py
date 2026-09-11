@@ -11,6 +11,7 @@ pytestmark = pytest.mark.no_db
         ("/code fix the test", ChannelCommandKind.CODE, "fix the test"),
         ("!code fix the test", ChannelCommandKind.CODE, "fix the test"),
         ("<@U_BOT> /code fix it", ChannelCommandKind.CODE, "fix it"),
+        ("/code@NeosBot fix it", ChannelCommandKind.CODE, "fix it"),
         ("/stop", ChannelCommandKind.STOP, ""),
         ("!status", ChannelCommandKind.STATUS, ""),
         ("!approve ca_1", ChannelCommandKind.APPROVE, "ca_1"),

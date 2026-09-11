@@ -189,7 +189,7 @@ async def test_session_id_is_v2_slack_key(
     )
 
     assert len(gateway.calls) == 1
-    assert gateway.calls[0].session_id == "v2:slack:T_workspace:C_general:-"
+    assert gateway.calls[0].session_id == "v2:slack:T_workspace:C_general:123.456"
     assert gateway.calls[0].metadata["thread_id"] == "123.456"
 
 
@@ -206,6 +206,24 @@ async def test_session_id_uses_thread_ts_not_message_ts(
 
     assert gateway.calls[0].session_id == "v2:slack:T1:C_general:111.222"
     assert gateway.calls[0].metadata["thread_id"] == "111.222"
+
+
+async def test_follow_up_in_bot_started_thread_keeps_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    await adapter._handle_message(
+        _slack_message(team="T1", ts="123.456"),
+        say,
+        client=None,
+    )
+    await adapter._handle_message(
+        _slack_message(team="T1", ts="123.789", thread_ts="123.456"),
+        say,
+        client=None,
+    )
+    assert gateway.calls[0].session_id == gateway.calls[1].session_id
+    assert gateway.calls[0].session_id == "v2:slack:T1:C_general:123.456"
 
 
 async def test_send_response_is_called_with_thread_id(

@@ -42,6 +42,8 @@ def parse_channel_command(text: str) -> ChannelCommand:
         return ChannelCommand(ChannelCommandKind.CHAT, "")
     head, _, tail = stripped.partition(" ")
     token = head.lower()
+    if token.startswith("/") and "@" in token:
+        token = token.split("@", 1)[0]
     rest = tail.strip()
     mapping = {
         "/code": ChannelCommandKind.CODE,

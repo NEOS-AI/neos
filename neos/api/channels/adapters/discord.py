@@ -126,9 +126,8 @@ class DiscordAdapter(ChannelAdapterBase):
         text = (raw.content or "").strip()
         guild = getattr(raw, "guild", None)
         guild_id = str(guild.id) if guild is not None else None
-        parent_id = getattr(channel, "parent_id", None)
-        if parent_id:
-            chat = str(parent_id) or channel_id
+        if _is_discord_thread(channel):
+            chat = str(getattr(channel, "parent_id", None) or channel_id)
             thread = channel_id
         else:
             chat = channel_id
@@ -263,6 +262,13 @@ async def _add_reaction_safe(message: Any, emoji: str) -> None:
         await add_reaction(emoji)
     except Exception:
         pass
+
+
+def _is_discord_thread(channel: Any) -> bool:
+    type_name = getattr(getattr(channel, "type", None), "name", "") or ""
+    if type_name.endswith("thread"):
+        return True
+    return type(channel).__name__ == "Thread"
 
 
 def _message_mentions_bot(message: Any, bot_user: Any) -> bool:

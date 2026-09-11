@@ -110,7 +110,7 @@ class TelegramAdapter(ChannelAdapterBase):
 
             # 텍스트 메시지 핸들러 등록
             self._app.add_handler(
-                MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
+                MessageHandler(filters.TEXT, self._handle_message)
             )
 
             # 봇 초기화
