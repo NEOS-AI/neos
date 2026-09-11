@@ -93,8 +93,6 @@ from neos.coding.sandbox.observability import LoggingCodingAuditSink
 from neos.database.connection import db_manager
 from neos.config.settings import settings
 from neos.config.schema import AppConfig
-from neos.learn.lessons import approved_texts, get_lesson_store
-from neos.learn.policy import namespace
 from neos.observability.metrics import metrics
 
 
@@ -519,13 +517,6 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         max_preview_bytes=execution.max_output_bytes,
         max_entries=1000,
     )
-    owner = None
-    approved_lessons: tuple[str, ...] = ()
-    if config.learn.coding_lessons and owner:
-        approved_lessons = approved_texts(
-            get_lesson_store(),
-            namespace(owner or "coding"),
-        )
     loop_config = CodingLoopConfig(
         model=coding_model,
         provider=selection.provider,
@@ -533,7 +524,6 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
             tools.definitions(),
             env=CodingPromptEnv(
                 command_allowlist=tuple(sorted(allowlist)),
-                approved_lessons=approved_lessons,
             ),
         ),
         max_output_tokens=coding.max_output_tokens,

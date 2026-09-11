@@ -45,6 +45,7 @@ class LoopInput:
     run_id: str
     instruction: str
     workspace_edits: tuple[WorkspaceEditContext, ...] = ()
+    owner_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

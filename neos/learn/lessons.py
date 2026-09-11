@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import uuid4
 
 from neos.learn.policy import write_approval_required
+
+SessionFactory = Callable[[], Awaitable[Any]]
 
 
 class LessonStatus(StrEnum):
@@ -39,14 +42,18 @@ class LessonStore(Protocol):
     def update(self, lesson: Lesson) -> None: ...
 
 
+def force_stage_on_write(lesson: Lesson) -> Lesson:
+    if write_approval_required() and lesson.status is LessonStatus.APPROVED:
+        return replace(lesson, status=LessonStatus.STAGED)
+    return lesson
+
+
 class InMemoryLessonStore:
     def __init__(self) -> None:
         self._items: dict[str, Lesson] = {}
 
     def add(self, lesson: Lesson) -> Lesson:
-        stored = lesson
-        if write_approval_required() and stored.status is LessonStatus.APPROVED:
-            stored = replace(stored, status=LessonStatus.STAGED)
+        stored = force_stage_on_write(lesson)
         self._items[stored.lesson_id] = stored
         return stored
 
@@ -93,6 +100,28 @@ def approved_texts(store: LessonStore, namespace: str) -> tuple[str, ...]:
 
 
 _STORE: InMemoryLessonStore | None = None
+_SESSION_FACTORY: SessionFactory | None = None
+_USE_MEMORY_ONLY = False
+
+
+def set_lesson_session_factory(factory: SessionFactory | None) -> None:
+    global _SESSION_FACTORY, _USE_MEMORY_ONLY
+    _SESSION_FACTORY = factory
+    _USE_MEMORY_ONLY = factory is None
+
+
+def resolve_lesson_session_factory() -> SessionFactory | None:
+    if _USE_MEMORY_ONLY:
+        return None
+    if _SESSION_FACTORY is not None:
+        return _SESSION_FACTORY
+    try:
+        from neos.database.connection import db_manager
+    except Exception:
+        return None
+    if getattr(db_manager, "session_factory", None) is None:
+        return None
+    return db_manager.get_session
 
 
 def get_lesson_store() -> InMemoryLessonStore:
@@ -103,6 +132,8 @@ def get_lesson_store() -> InMemoryLessonStore:
 
 
 def reset_lesson_store() -> InMemoryLessonStore:
-    global _STORE
+    global _STORE, _SESSION_FACTORY, _USE_MEMORY_ONLY
     _STORE = InMemoryLessonStore()
+    _SESSION_FACTORY = None
+    _USE_MEMORY_ONLY = True
     return _STORE

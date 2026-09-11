@@ -82,3 +82,4 @@ db/migrations/045_add_coding_managed_sandboxes.sql
 db/migrations/046_add_coding_sandbox_provider_health.sql
 db/migrations/047_drop_unused_cleanup_attempts_index.sql
 db/migrations/048_allow_deliberate_deep_analysis_purge.sql
+db/migrations/049_add_learned_lessons.sql

@@ -131,7 +131,7 @@ class CodingRunService:
         try:
             task = await self._tasks.get(task_id)
             payload = dict(committed.event.payload)
-            stage_coding_lesson(
+            await stage_coding_lesson(
                 owner_id=task.owner_id if task is not None else None,
                 task_id=task_id,
                 outcome="failed",
@@ -228,10 +228,10 @@ class CodingRunService:
             if workspace_application is not None:
                 checkpoint = workspace_application.checkpoint
 
+        task = await self._tasks.get(task_id)
         if checkpoint is not None:
             instruction = str(checkpoint.loop_state["current_instruction"])
         else:
-            task = await self._tasks.get(task_id)
             if task is None:
                 raise CodingTaskNotFound(task_id)
             instruction = task.prompt
@@ -241,6 +241,7 @@ class CodingRunService:
                 run_id=run.run_id,
                 instruction=instruction,
                 workspace_edits=self._workspace_edit_contexts(checkpoint),
+                owner_id=task.owner_id if task is not None else None,
             ),
             checkpoint,
             LoopDependencies(

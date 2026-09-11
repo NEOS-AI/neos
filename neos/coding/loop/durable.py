@@ -20,6 +20,7 @@ from neos.coding.domain.approvals import (
 from neos.coding.domain.phases import CodingCheckpoint, CodingPhaseKind
 from neos.coding.harness import fold_model_event, iter_model_turn
 from neos.coding.instructions import INSTRUCTION_CANDIDATES, load_workspace_instructions
+from neos.coding.learn_lessons import coding_turn_system
 from neos.coding.loop.base import LoopDependencies, LoopInput
 from neos.coding.model.errors import CodingModelError
 from neos.coding.model.base import (
@@ -210,7 +211,7 @@ class DurableCodingLoop:
         if not state.instructions_loaded:
             state = await self._load_workspace_instructions(state, bound)
         request = ModelRequest(
-            system=self._config.system,
+            system=await coding_turn_system(self._config.system, input.owner_id),
             messages=state.transcript,
             tools=self._tool_definitions(state),
             model=self._config.model,
