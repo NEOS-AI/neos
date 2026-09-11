@@ -724,6 +724,39 @@ async def test_cancel_synthesizes_aborted_results_for_pending_tool_ids() -> None
 
 
 @pytest.mark.asyncio
+async def test_task_cancel_still_persists_aborted_checkpoint() -> None:
+    started = asyncio.Event()
+
+    class BlockingExecutor(Executor):
+        async def execute(self, session, call, **kwargs):
+            started.set()
+            await asyncio.sleep(3600)
+            return await super().execute(session, call, **kwargs)
+
+    h = harness(
+        [
+            [
+                tool_call("one"),
+                tool_call("two", input={"path": "b.txt", "content": "y"}),
+                completed(),
+            ]
+        ],
+        executor=BlockingExecutor(),
+    )
+    task = asyncio.create_task(collect(h))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    state = h.repository.checkpoints[-1].loop_state
+    use_ids = _transcript_tool_ids(state["transcript"], "tool_use")
+    result_ids = _transcript_tool_ids(state["transcript"], "tool_result")
+    assert use_ids == ["one", "two"]
+    assert result_ids == ["one", "two"]
+
+
+@pytest.mark.asyncio
 async def test_two_leading_reads_share_one_checkpoint_excluding_following_write() -> None:
     h = harness(
         [

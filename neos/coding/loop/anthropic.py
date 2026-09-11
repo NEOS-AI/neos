@@ -252,7 +252,7 @@ class AnthropicCodingLoop:
                 elif isinstance(model_event, ModelCompleted):
                     completion = model_event
         except asyncio.CancelledError:
-            await self._checkpoint_aborted(input, state, bound, deps)
+            await self._persist_abort_after_cancel(input, state, bound, deps)
             raise
         except CodingModelError as error:
             raise CodingLoopFailure(error.code, retryable=error.retryable) from error
@@ -305,7 +305,7 @@ class AnthropicCodingLoop:
             ):
                 yield event
         except asyncio.CancelledError:
-            await self._checkpoint_aborted(input, current, bound, deps)
+            await self._persist_abort_after_cancel(input, current, bound, deps)
             raise
 
     async def _advance_one_tool_body(self, input, state, bound, deps):
@@ -701,6 +701,27 @@ class AnthropicCodingLoop:
         self._metrics.coding_tool_execution_total.labels(
             tool=tool_name, outcome=metric_outcome
         ).inc()
+
+    async def _persist_abort_after_cancel(self, input, state, bound, deps) -> None:
+        """Finish the abort checkpoint even if this Task is already cancelled.
+
+        Python 3.12+ re-raises CancelledError at the next await while
+        ``Task.cancelling() > 0``. interrupt() uses ``task.cancel()``, so a
+        bare ``await _checkpoint_aborted`` never commits. Clear the cancel
+        count, shield the write, then restore cancelled state.
+        """
+        current = asyncio.current_task()
+        cleared = 0
+        if current is not None:
+            while current.cancelling() > 0:
+                current.uncancel()
+                cleared += 1
+        try:
+            await asyncio.shield(self._checkpoint_aborted(input, state, bound, deps))
+        finally:
+            if current is not None:
+                for _ in range(cleared):
+                    current.cancel()
 
     async def _checkpoint_aborted(self, input, state, bound, deps) -> None:
         remaining = state.pending_tool_calls[state.pending_tool_index :]
