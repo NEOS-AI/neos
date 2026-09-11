@@ -9,6 +9,7 @@ import re
 import signal
 import shutil
 import struct
+import tempfile
 import termios
 import uuid
 from dataclasses import dataclass, replace
@@ -40,6 +41,7 @@ from neos.coding.sandbox.archive import (
 from neos.coding.sandbox.paths import (
     ensure_mutable_workspace_path,
     normalize_workspace_path,
+    resolve_mutable_workspace_path,
     resolve_workspace_path,
 )
 from neos.coding.sandbox.process import BoundedProcessRunner
@@ -431,6 +433,23 @@ class MemorySandboxProvider:
         record.ptys.clear()
 
 
+def _write_atomic_bytes(path: Path, content: bytes) -> None:
+    fd, temporary = tempfile.mkstemp(
+        prefix=".neos-write-",
+        dir=str(path.parent),
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 class MemorySandboxSession:
     def __init__(
         self,
@@ -496,8 +515,12 @@ class MemorySandboxSession:
             raise SandboxPolicyViolation("file_read_limit_exceeded")
         return await asyncio.to_thread(item.read_bytes)
 
-    async def write_file(self, path: str, content: bytes) -> int:
-        return await self._write_file(path, content, expected_revision=None)
+    async def write_file(
+        self, path: str, content: bytes, *, parents: bool = True
+    ) -> int:
+        return await self._write_file(
+            path, content, expected_revision=None, parents=parents
+        )
 
     async def write_file_if_revision(
         self,
@@ -518,6 +541,7 @@ class MemorySandboxSession:
         content: bytes,
         *,
         expected_revision: int | None,
+        parents: bool = True,
     ) -> int:
         await self._require_running()
         if len(content) > self._record.sandbox.limits.workspace_bytes:
@@ -531,14 +555,14 @@ class MemorySandboxSession:
                 != expected_revision
             ):
                 raise SandboxStateConflict("workspace_revision_conflict")
-            self._create_safe_parents(relative.parent)
-            item = resolve_workspace_path(
+            if parents:
+                self._create_safe_parents(relative.parent)
+            item = resolve_mutable_workspace_path(
                 self._record.workspace,
                 relative.as_posix(),
-                allow_missing_leaf=True,
             )
             existed = item.exists()
-            await asyncio.to_thread(item.write_bytes, content)
+            await asyncio.to_thread(_write_atomic_bytes, item, content)
             revision = await self._provider._increment_revision(self._record)
             await self._record.watcher.record(
                 WorkspaceChange(
@@ -790,13 +814,16 @@ class MemorySandboxSession:
     def _create_safe_parents(self, parent: PurePosixPath) -> None:
         current = PurePosixPath(".")
         for part in parent.parts:
+            if part == ".":
+                continue
             current /= part
-            candidate = resolve_workspace_path(
-                self._record.workspace,
-                current.as_posix(),
-                allow_missing_leaf=True,
-            )
-            candidate.mkdir(exist_ok=True)
+            candidate = self._record.workspace.joinpath(*current.parts)
+            if candidate.is_symlink():
+                raise SandboxPolicyViolation("workspace_symlink_parent")
+            if not candidate.exists():
+                candidate.mkdir(exist_ok=True)
+            if candidate.is_symlink():
+                raise SandboxPolicyViolation("workspace_symlink_parent")
 
     def _pty(self, pty_id: str) -> MemoryPty:
         terminal = self._record.ptys.get(pty_id)

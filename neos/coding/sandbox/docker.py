@@ -63,11 +63,39 @@ if not p.is_file() or p.is_symlink(): raise SystemExit(2)
 sys.stdout.buffer.write(p.read_bytes())
 """
 _WRITE_FILE_HELPER = """\
+import os, sys, tempfile
 from pathlib import Path
-import sys
-p = Path('/workspace') / sys.argv[1]
-p.parent.mkdir(parents=True, exist_ok=True)
-p.write_bytes(sys.stdin.buffer.read())
+rel, make_parents = sys.argv[1], sys.argv[2] == '1'
+root = Path('/workspace')
+parts = Path(rel).parts
+p = root.joinpath(*parts)
+cur = root
+for part in parts[:-1]:
+    cur = cur / part
+    if cur.is_symlink():
+        raise SystemExit(3)
+    if cur.exists():
+        if not cur.is_dir():
+            raise SystemExit(2)
+        continue
+    if not make_parents:
+        raise SystemExit(2)
+    cur.mkdir(exist_ok=True)
+    if cur.is_symlink() or not cur.is_dir():
+        raise SystemExit(3 if cur.is_symlink() else 2)
+if p.is_symlink():
+    raise SystemExit(4)
+fd, tmp = tempfile.mkstemp(prefix='.neos-write-', dir=str(p.parent))
+try:
+    with os.fdopen(fd, 'wb') as handle:
+        handle.write(sys.stdin.buffer.read())
+    os.replace(tmp, p)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
 """
 _SEARCH_TEXT_HELPER = """\
 import fnmatch, json, re, sys
@@ -921,8 +949,12 @@ class DockerSandboxSession:
         result = await self._run_helper(_READ_FILE_HELPER, relative.as_posix())
         return result.stdout
 
-    async def write_file(self, path: str, content: bytes) -> int:
-        return await self._write_file(path, content, expected_revision=None)
+    async def write_file(
+        self, path: str, content: bytes, *, parents: bool = True
+    ) -> int:
+        return await self._write_file(
+            path, content, expected_revision=None, parents=parents
+        )
 
     async def write_file_if_revision(
         self,
@@ -943,6 +975,7 @@ class DockerSandboxSession:
         content: bytes,
         *,
         expected_revision: int | None,
+        parents: bool = True,
     ) -> int:
         relative = ensure_mutable_workspace_path(path)
         limits = self._record.sandbox.limits
@@ -956,11 +989,26 @@ class DockerSandboxSession:
                 != expected_revision
             ):
                 raise SandboxStateConflict("workspace_revision_conflict")
-            await self._run_helper(
-                _WRITE_FILE_HELPER,
-                relative.as_posix(),
-                input=content,
-            )
+            try:
+                await self._run_helper(
+                    _WRITE_FILE_HELPER,
+                    relative.as_posix(),
+                    "1" if parents else "0",
+                    input=content,
+                )
+            except SandboxUnavailable as error:
+                code = str(error)
+                if code == "docker_command_failed:2":
+                    raise FileNotFoundError(relative.as_posix()) from error
+                if code == "docker_command_failed:3":
+                    raise SandboxPolicyViolation(
+                        "workspace_symlink_parent"
+                    ) from error
+                if code == "docker_command_failed:4":
+                    raise SandboxPolicyViolation(
+                        "workspace_symlink_leaf"
+                    ) from error
+                raise
             existed = relative.as_posix() in self._record.known_paths
             self._record.known_paths.add(relative.as_posix())
             self._record.sandbox = replace(

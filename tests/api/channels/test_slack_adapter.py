@@ -58,12 +58,14 @@ def _make_adapter(
     allowed_users: list[str],
     require_mention: bool = True,
     ignored_channels: list[str] | None = None,
+    inbound_media: bool = False,
 ) -> tuple[SlackAdapter, FakeGateway, FakeSay]:
     install_channel_settings(
         monkeypatch,
         allowed_users=allowed_users,
         require_mention=require_mention,
         ignored_channels=ignored_channels,
+        inbound_media=inbound_media,
     )
     gateway = FakeGateway()
     adapter = SlackAdapter(token="xoxb-test", gateway=gateway)
@@ -568,6 +570,11 @@ async def test_block_action_status_and_approve_dispatch_commands(
         "/approve ca_1",
         "/deny ca_1",
     ]
+    assert [call.metadata["idempotency_key"] for call in gateway.calls] == [
+        "123.456:neos_code_status",
+        "123.456:neos_code_approve",
+        "123.456:neos_code_deny",
+    ]
     assert all(call.session_id == "v2:slack:T1:C_general:111.222" for call in gateway.calls)
 
 
@@ -584,31 +591,40 @@ async def test_users_info_display_name_is_prefixed(monkeypatch: pytest.MonkeyPat
     assert gateway.calls[0].metadata["slack_user_name"] == "Alice"
 
 
-async def test_file_shared_video_dispatches_when_media_enabled(
-    monkeypatch: pytest.MonkeyPatch,
+def _slack_video_file(
+    *,
+    channel_id: str = "C_general",
+    ts: str = "999.000",
+    thread_ts: str | None = "111.222",
+    file_id: str = "F123",
+) -> dict[str, object]:
+    share: dict[str, object] = {"ts": ts}
+    if thread_ts is not None:
+        share["thread_ts"] = thread_ts
+    bucket = "private" if channel_id.startswith("D") else "public"
+    return {
+        "file": {
+            "id": file_id,
+            "mimetype": "video/mp4",
+            "url_private": f"https://files.slack.com/files-pri/T/{file_id}",
+            "name": "clip.mp4",
+            "size": 12,
+            "timestamp": "555.000",
+            "shares": {bucket: {channel_id: [share]}},
+        }
+    }
+
+
+def _install_slack_video_file(
+    adapter: SlackAdapter, info: dict[str, object] | None = None
 ) -> None:
-    install_channel_settings(
-        monkeypatch,
-        allowed_users=["U_alice"],
-        require_mention=False,
-        inbound_media=True,
-    )
-    gateway = FakeGateway()
-    adapter = SlackAdapter(token="xoxb-test", gateway=gateway)
-    adapter._bot_user_id = "U_BOT"
+    payload = info or _slack_video_file()
+    file_obj = payload["file"]
+    assert isinstance(file_obj, dict)
 
     async def files_info(file_id: str) -> dict[str, object]:
-        assert file_id == "F123"
-        return {
-            "file": {
-                "id": "F123",
-                "mimetype": "video/mp4",
-                "url_private": "https://files.slack.com/files-pri/T/F123",
-                "name": "clip.mp4",
-                "size": 12,
-                "timestamp": "555.000",
-            }
-        }
+        assert file_id == file_obj["id"]
+        return payload
 
     async def fetch(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
         del url, headers
@@ -617,6 +633,18 @@ async def test_file_shared_video_dispatches_when_media_enabled(
     adapter._files_info = files_info
     adapter._media_fetch = fetch
     adapter._media_resolve = lambda _host: ["1.2.3.4"]
+
+
+async def test_file_shared_video_dispatches_when_media_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, _say = _make_adapter(
+        monkeypatch,
+        allowed_users=["U_alice"],
+        require_mention=False,
+        inbound_media=True,
+    )
+    _install_slack_video_file(adapter)
 
     await adapter._handle_file_shared(
         {
@@ -628,23 +656,93 @@ async def test_file_shared_video_dispatches_when_media_enabled(
     )
 
     assert len(gateway.calls) == 1
-    attachments = gateway.calls[0].metadata.get("attachments") or []
+    dispatched = gateway.calls[0]
+    assert dispatched.session_id == "v2:slack:T1:C_general:111.222"
+    assert dispatched.metadata["thread_id"] == "111.222"
+    assert dispatched.metadata["slack_message_ts"] == "999.000"
+    attachments = dispatched.metadata.get("attachments") or []
     assert attachments[0]["name"] == "clip.mp4"
     assert attachments[0]["bytes"] == b"video-bytes"
 
 
-async def test_file_shared_image_is_ignored_as_message_fallback(
+async def test_file_shared_video_wakes_bound_thread_without_mention(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    install_channel_settings(
+    adapter, gateway, say = _make_adapter(
+        monkeypatch, allowed_users=["U_alice"], inbound_media=True
+    )
+    await gateway.bind_session("v2:slack:T1:C_general:111.222", "ct_abc", "u_owner")
+    _install_slack_video_file(adapter)
+
+    await adapter._handle_file_shared(
+        {
+            "file_id": "F123",
+            "channel_id": "C_general",
+            "user_id": "U_alice",
+            "team_id": "T1",
+        }
+    )
+
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0].session_id == "v2:slack:T1:C_general:111.222"
+    assert say.calls == []
+
+
+async def test_file_shared_video_dm_dispatches_without_mention(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(
+        monkeypatch, allowed_users=["U_alice"], inbound_media=True
+    )
+    _install_slack_video_file(adapter, _slack_video_file(channel_id="D_alice"))
+
+    await adapter._handle_file_shared(
+        {
+            "file_id": "F123",
+            "channel_id": "D_alice",
+            "user_id": "U_alice",
+            "team_id": "T1",
+        }
+    )
+
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0].channel_id == "D_alice"
+    assert say.calls == []
+
+
+async def test_file_shared_uses_context_team_when_event_omits_team(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, _say = _make_adapter(
         monkeypatch,
         allowed_users=["U_alice"],
         require_mention=False,
         inbound_media=True,
     )
-    gateway = FakeGateway()
-    adapter = SlackAdapter(token="xoxb-test", gateway=gateway)
-    adapter._bot_user_id = "U_BOT"
+    _install_slack_video_file(adapter)
+
+    await adapter._handle_file_shared(
+        {
+            "file_id": "F123",
+            "channel_id": "C_general",
+            "user_id": "U_alice",
+        },
+        context={"team_id": "T_from_bolt"},
+    )
+
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0].session_id == "v2:slack:T_from_bolt:C_general:111.222"
+
+
+async def test_file_shared_image_is_ignored_as_message_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, _say = _make_adapter(
+        monkeypatch,
+        allowed_users=["U_alice"],
+        require_mention=False,
+        inbound_media=True,
+    )
 
     async def files_info(file_id: str) -> dict[str, object]:
         return {"file": {"id": file_id, "mimetype": "image/png"}}

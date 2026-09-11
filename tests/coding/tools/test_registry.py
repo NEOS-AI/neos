@@ -234,8 +234,28 @@ def test_write_file_is_workspace_write_and_denies_git_control_files() -> None:
     )
 
     assert allowed.risk is ToolRisk.WORKSPACE_WRITE
+    assert allowed.input["parents"] is False
     assert denied.allowed is False
     assert denied.reason_code == "policy_protected_git_path"
+
+
+def test_write_file_parents_defaults_to_false_and_is_opt_in() -> None:
+    defaulted = registry().validate(
+        "write_file.v1", {"path": "src/main.py", "content": "pass\n"}
+    )
+    enabled = registry().validate(
+        "write_file.v1",
+        {"path": "nested/a.txt", "content": "x", "parents": True},
+    )
+    denied = registry().decide(
+        "write_file.v1",
+        {"path": "src/main.py", "content": "pass\n", "parents": "sometimes"},
+    )
+
+    assert defaulted.input["parents"] is False
+    assert enabled.input["parents"] is True
+    assert denied.allowed is False
+    assert denied.reason_code == "policy_schema_invalid"
 
 
 def test_edit_file_is_workspace_write_and_denies_git_control_files() -> None:

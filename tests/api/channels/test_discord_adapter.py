@@ -684,6 +684,7 @@ async def test_button_stop_dispatches_after_gate(
     assert len(gateway.calls) == 1
     assert gateway.calls[0].text == "/stop"
     assert gateway.calls[0].session_id == f"v2:discord:{GUILD_ID}:5555:{CHANNEL_ID}"
+    assert gateway.calls[0].metadata["idempotency_key"] == "neos_code_stop:ct_abc"
 
 
 async def test_button_unallowlisted_user_is_silent(

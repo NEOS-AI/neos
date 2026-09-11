@@ -17,6 +17,7 @@ from neos.coding.domain.approvals import (
     ApprovalMode,
     ApprovalPolicyOutcome,
     ApprovalStatus,
+    denial_envelope,
     evaluate_approval,
 )
 from neos.coding.domain.phases import CodingCheckpoint
@@ -49,6 +50,7 @@ from neos.coding.phases import (
     write_risk_blocked,
 )
 from neos.coding.hooks import CodingHookPort, NullCodingHooks
+from neos.coding.redact import redact_sensitive
 from neos.coding.sandbox.bindings import SandboxBindingService
 from neos.coding.sandbox.observability import (
     CodingToolAuditEvent,
@@ -175,6 +177,7 @@ class AgentLoopState:
     hook_retry_count: int = 0
     compacted_bodies: Mapping[str, str] = field(default_factory=dict)
     stop_retry_count: int = 0
+    read_stamps: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
 
     @property
     def has_pending_tool(self) -> bool:
@@ -262,6 +265,7 @@ class DurableCodingLoop:
             yield event
 
     async def _advance_one_model_turn(self, input, state, bound, deps):
+        self._check_usage_budgets(state)
         if state.turn_count >= self._config.max_turns:
             raise CodingLoopFailure("turn_budget_exceeded", retryable=False)
         if not state.instructions_loaded:
@@ -605,7 +609,7 @@ class DurableCodingLoop:
                 denied = ToolResultContent(
                     call.tool_call_id,
                     "denied",
-                    {"reason_code": reason_code},
+                    denial_envelope(call, reason_code),
                 )
                 denied_state = await self._after_result(
                     state, denied, tool_name=call.name, tool_input=call.input
@@ -683,6 +687,7 @@ class DurableCodingLoop:
                         deps,
                         validated,
                         known_reads=state.read_paths,
+                        known_stamps=state.read_stamps,
                         prefetched=prefetch.get(call.tool_call_id),
                     )
             except CodingLoopFailure as error:
@@ -838,6 +843,7 @@ class DurableCodingLoop:
                 deps,
                 validated,
                 known_reads=state.read_paths,
+                known_stamps=state.read_stamps,
                 prefetched=prefetch.get(call.tool_call_id),
             )
             await self._audit_execute_result(bound, call.name, result)
@@ -1057,7 +1063,7 @@ class DurableCodingLoop:
         yield committed.event, after
 
     async def _execute_validated(
-        self, bound, deps, validated, *, known_reads, prefetched=None
+        self, bound, deps, validated, *, known_reads, known_stamps, prefetched=None
     ):
         try:
             if prefetched is not None:
@@ -1067,6 +1073,7 @@ class DurableCodingLoop:
                     bound.session,
                     validated,
                     known_reads=known_reads,
+                    known_stamps=known_stamps,
                 )
         except asyncio.CancelledError:
             raise
@@ -1089,14 +1096,17 @@ class DurableCodingLoop:
                 code, retryable=validated.risk is ToolRisk.READ_ONLY
             ) from error
         result = dict(executed.to_mapping())
+        rewritten = None
         try:
-            await asyncio.wait_for(
+            rewritten = await asyncio.wait_for(
                 self._hooks.post_tool(validated, result),
                 timeout=PRE_TOOL_HOOK_TIMEOUT_SEC,
             )
         except Exception:
             pass
-        return result
+        if isinstance(rewritten, Mapping):
+            result = dict(rewritten)
+        return redact_sensitive(result)
 
     async def _audit_execute_result(self, bound, tool_name, result) -> None:
         result_status = str(result.get("status", "ok"))
@@ -1129,7 +1139,7 @@ class DurableCodingLoop:
             )
         )
         denied = ToolResultContent(
-            call.tool_call_id, "denied", {"reason_code": reason_code}
+            call.tool_call_id, "denied", denial_envelope(call, reason_code)
         )
         denied_state = await self._after_result(
             state, denied, tool_name=call.name, tool_input=call.input
@@ -1271,12 +1281,18 @@ class DurableCodingLoop:
         else:
             errors = state.consecutive_tool_errors + 1
         read_paths = state.read_paths
+        read_stamps = dict(state.read_stamps)
         if tool_name == "read_file.v1" and result.status == "ok":
             raw_path = tool_input.get("path")
             if raw_path:
                 read_paths = read_paths | {
                     str(normalize_workspace_path(str(raw_path)))
                 }
+        if (
+            result.status == "ok"
+            and tool_name in {"read_file.v1", "write_file.v1", "edit_file.v1"}
+        ):
+            read_stamps.update(_executor_read_stamps(self._executor))
         todos = state.todos
         if tool_name == "todo_write.v1" and result.status == "ok":
             raw_todos = tool_input.get("todos")
@@ -1306,6 +1322,7 @@ class DurableCodingLoop:
             transcript_digest=self._digest(transcript),
             terminal_pending=False,
             read_paths=read_paths,
+            read_stamps=read_stamps,
             todos=todos,
             phase=phase,
             revealed_tools=revealed,
@@ -1392,7 +1409,10 @@ class DurableCodingLoop:
             return None
         return asyncio.create_task(
             self._executor.execute(
-                bound.session, validated, known_reads=state.read_paths
+                bound.session,
+                validated,
+                known_reads=state.read_paths,
+                known_stamps=state.read_stamps,
             )
         )
 
@@ -1574,6 +1594,7 @@ class DurableCodingLoop:
             int(raw.get("hook_retry_count", 0)),
             _string_mapping(raw.get("compacted_bodies")),
             int(raw.get("stop_retry_count", 0)),
+            _read_stamps_mapping(raw.get("read_stamps")),
         )
 
     @staticmethod
@@ -1626,6 +1647,14 @@ class DurableCodingLoop:
             "hook_retry_count": state.hook_retry_count,
             "compacted_bodies": dict(state.compacted_bodies),
             "stop_retry_count": state.stop_retry_count,
+            "read_stamps": {
+                path: {
+                    "mtime": stamp["mtime"],
+                    "digest": stamp["digest"],
+                    "full": bool(stamp["full"]),
+                }
+                for path, stamp in sorted(state.read_stamps.items())
+            },
         }
 
     @staticmethod
@@ -1878,6 +1907,37 @@ def _string_mapping(value: object) -> dict[str, str]:
         for key, item in value.items()
         if isinstance(key, str) and isinstance(item, str)
     }
+
+
+def _read_stamps_mapping(value: object) -> dict[str, dict[str, object]]:
+    if not isinstance(value, Mapping):
+        return {}
+    stamps: dict[str, dict[str, object]] = {}
+    for raw_path, raw_stamp in value.items():
+        if not isinstance(raw_stamp, Mapping):
+            continue
+        mtime = raw_stamp.get("mtime")
+        digest = raw_stamp.get("digest")
+        if not isinstance(mtime, str) or not isinstance(digest, str):
+            continue
+        path = str(normalize_workspace_path(str(raw_path)))
+        stamps[path] = {
+            "mtime": mtime,
+            "digest": digest,
+            "full": bool(raw_stamp.get("full", True)),
+        }
+    return stamps
+
+
+def _executor_read_stamps(executor: object) -> dict[str, dict[str, object]]:
+    method = getattr(executor, "export_read_stamps", None)
+    if not callable(method):
+        return {}
+    try:
+        exported = method()
+    except TypeError:
+        return {}
+    return _read_stamps_mapping(exported)
 
 
 def _read_paths_from_transcript(transcript: tuple[CanonicalMessage, ...]) -> frozenset[str]:

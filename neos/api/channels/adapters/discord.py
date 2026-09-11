@@ -427,6 +427,8 @@ class DiscordAdapter(ChannelAdapterBase):
             return
 
         channel_message = await self.receive_message(shim)
+        if custom_id:
+            channel_message.metadata["idempotency_key"] = custom_id
         response = await self._gateway.dispatch(channel_message)
         await self.send_response(channel_id, response)
 

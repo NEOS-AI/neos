@@ -49,6 +49,21 @@ async def test_in_memory_bind_is_visible_by_task_id() -> None:
     assert found.session_id == "v2:slack:T:C:1"
 
 
+async def test_second_bind_of_same_session_keeps_first_task() -> None:
+    store = InMemoryChannelCodingBindStore()
+    first = await store.bind("v2:slack:T:C:1", "ct_first", "u_owner")
+    second = await store.bind("v2:slack:T:C:1", "ct_other", "u_eve")
+
+    assert second.task_id == "ct_first"
+    assert second.owner_id == "u_owner"
+    assert second.created_at == first.created_at
+    assert second.updated_at == first.updated_at
+    found = await store.get("v2:slack:T:C:1")
+    assert found is not None
+    assert found.task_id == "ct_first"
+    assert found.owner_id == "u_owner"
+
+
 async def test_bind_from_gateway_a_is_visible_to_gateway_b(monkeypatch):
     store = InMemoryChannelCodingBindStore()
     coding = FakeCoding()
@@ -97,4 +112,33 @@ async def test_channel_stop_does_not_call_execute_workflow(monkeypatch):
     reply = await gateway.dispatch(_message("/stop", "sess-stop"))
 
     assert reply == "Stopped ct_channel"
+    assert workflow.calls == []
+
+
+async def test_new_unbinds_so_later_code_can_bind_a_new_task(monkeypatch):
+    class CountingCoding(FakeCoding):
+        def __init__(self) -> None:
+            super().__init__()
+            self._n = 0
+
+        async def start_task(self, *, owner_id: str, prompt: str) -> str:
+            self._n += 1
+            self.started.append((owner_id, prompt))
+            return f"ct_{self._n}"
+
+    store = InMemoryChannelCodingBindStore()
+    coding = CountingCoding()
+    gateway, workflow, _ = _gateway(monkeypatch, binds=store, coding=coding)
+
+    first = await gateway.dispatch(_message("/code one", "sess-rebind"))
+    reset = await gateway.dispatch(_message("/new", "sess-rebind"))
+    second = await gateway.dispatch(_message("/code two", "sess-rebind"))
+
+    assert first == "Started coding task ct_1"
+    assert reset == "Session reset."
+    assert second == "Started coding task ct_2"
+    bound = await store.get("sess-rebind")
+    assert bound is not None
+    assert bound.task_id == "ct_2"
+    assert coding.stopped == ["ct_1"]
     assert workflow.calls == []

@@ -103,6 +103,65 @@ def test_coding_skill_without_required_sections_is_rejected(tmp_path: Path) -> N
     assert catalog.get("full") is not None
 
 
+def test_coding_skill_with_empty_required_sections_is_rejected(tmp_path: Path) -> None:
+    root = tmp_path / "coding"
+    root.mkdir()
+    (root / "empty.md").write_text(
+        "# empty\n\n## When to Use\n\n## Boundaries\n\n",
+        encoding="utf-8",
+    )
+    catalog = MarkdownSkillCatalog(roots=(("coding", root),))
+    assert catalog.get("empty") is None
+
+
+def test_coding_skill_when_to_use_this_skill_heading_is_rejected(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "coding"
+    root.mkdir()
+    (root / "loose.md").write_text(
+        "# loose\n\n## When to Use This Skill\n\nUse it.\n\n"
+        "## Boundaries\n\nDo not invent.\n",
+        encoding="utf-8",
+    )
+    catalog = MarkdownSkillCatalog(roots=(("coding", root),))
+    assert catalog.get("loose") is None
+
+
+def test_coding_skill_name_must_match_directory(tmp_path: Path) -> None:
+    root = tmp_path / "coding"
+    skill_dir = root / "foo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: other\ndescription: Mismatch\n---\n\n"
+        "## When to Use\n\nUse it.\n\n## Boundaries\n\nDo not invent.\n",
+        encoding="utf-8",
+    )
+    catalog = MarkdownSkillCatalog(roots=(("coding", root),))
+    assert catalog.get("other") is None
+    assert catalog.get("foo") is None
+
+
+def test_research_missing_sections_still_indexes(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    missing = root / "thin"
+    missing.mkdir(parents=True)
+    (missing / "SKILL.md").write_text(
+        "---\nname: thin\ndescription: Note\n---\n\n# thin\n\nJust a note.\n",
+        encoding="utf-8",
+    )
+    empty = root / "empty"
+    empty.mkdir()
+    (empty / "SKILL.md").write_text(
+        "---\nname: empty\ndescription: Empty sections\n---\n\n"
+        "## When to Use\n\n## Boundaries\n\n",
+        encoding="utf-8",
+    )
+    catalog = MarkdownSkillCatalog(roots=(("repo", root),))
+    assert catalog.get("thin") is not None
+    assert catalog.get("empty") is not None
+
+
 def test_reload_picks_up_new_skill(tmp_path: Path) -> None:
     root = tmp_path / "skills"
     first = root / "hello"

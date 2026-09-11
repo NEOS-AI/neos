@@ -235,7 +235,9 @@ class SandboxSession(Protocol):
 
     async def read_file(self, path: str) -> bytes: ...
 
-    async def write_file(self, path: str, content: bytes) -> int: ...
+    async def write_file(
+        self, path: str, content: bytes, *, parents: bool = True
+    ) -> int: ...
 
     async def write_file_if_revision(
         self,

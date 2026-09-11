@@ -66,13 +66,15 @@ class InMemoryChannelCodingBindStore:
     async def bind(
         self, session_id: str, task_id: str, owner_id: str
     ) -> ChannelCodingBinding:
-        now = self._clock()
         existing = self._items.get(session_id)
+        if existing is not None:
+            return existing
+        now = self._clock()
         binding = ChannelCodingBinding(
             session_id=session_id,
             task_id=task_id,
             owner_id=owner_id,
-            created_at=existing.created_at if existing is not None else now,
+            created_at=now,
             updated_at=now,
         )
         self._items[session_id] = binding
@@ -114,10 +116,7 @@ class PostgresChannelCodingBindStore:
                             (session_id, task_id, owner_id, created_at, updated_at)
                         VALUES
                             (:session_id, :task_id, :owner_id, :now, :now)
-                        ON CONFLICT (session_id) DO UPDATE
-                        SET task_id = EXCLUDED.task_id,
-                            owner_id = EXCLUDED.owner_id,
-                            updated_at = EXCLUDED.updated_at
+                        ON CONFLICT (session_id) DO NOTHING
                         RETURNING session_id, task_id, owner_id,
                                   created_at, updated_at
                         """
@@ -130,6 +129,19 @@ class PostgresChannelCodingBindStore:
                     },
                 )
                 row = result.first()
+                if row is None:
+                    result = await session.execute(
+                        text(
+                            """
+                            SELECT session_id, task_id, owner_id,
+                                   created_at, updated_at
+                            FROM channel_coding_bindings
+                            WHERE session_id = :session_id
+                            """
+                        ),
+                        {"session_id": session_id},
+                    )
+                    row = result.first()
         if row is None:
             return ChannelCodingBinding(session_id, task_id, owner_id, now, now)
         return ChannelCodingBinding(

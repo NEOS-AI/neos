@@ -23,7 +23,9 @@ class StopDecision(TypedDict):
 class CodingHookPort(Protocol):
     async def pre_tool(self, call: ValidatedToolCall) -> HookDecision | None: ...
 
-    async def post_tool(self, call: ValidatedToolCall, result: Mapping[str, Any]) -> None: ...
+    async def post_tool(
+        self, call: ValidatedToolCall, result: Mapping[str, Any]
+    ) -> Mapping[str, Any] | None: ...
 
     async def stop(self, reason: str) -> StopDecision | None: ...
 
@@ -38,7 +40,9 @@ class NullCodingHooks:
     async def pre_tool(self, call: ValidatedToolCall) -> HookDecision | None:
         return None
 
-    async def post_tool(self, call: ValidatedToolCall, result: Mapping[str, Any]) -> None:
+    async def post_tool(
+        self, call: ValidatedToolCall, result: Mapping[str, Any]
+    ) -> Mapping[str, Any] | None:
         return None
 
     async def stop(self, reason: str) -> StopDecision | None:

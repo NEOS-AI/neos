@@ -9,9 +9,11 @@ from neos.coding.domain.approvals import (
     ApprovalStatus,
     approval_display_summary,
     canonical_approval_hash,
+    denial_envelope,
     evaluate_approval,
     requires_approval_answers,
 )
+from neos.coding.redact import redact_sensitive
 from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
 
 pytestmark = pytest.mark.no_db
@@ -326,3 +328,65 @@ def test_approval_status_has_only_durable_contract_values() -> None:
         "expired",
         "invalidated",
     }
+
+
+def test_redact_sensitive_masks_secret_keys_and_clips_long_strings() -> None:
+    redacted = redact_sensitive(
+        {
+            "path": "src/main.py",
+            "API_TOKEN": "s3cret",
+            "nested": {"password": "hunter2", "ok": 1},
+            "note": "x" * 401,
+        }
+    )
+    assert redacted["path"] == "src/main.py"
+    assert redacted["API_TOKEN"] == "<redacted>"
+    assert redacted["nested"]["password"] == "<redacted>"
+    assert redacted["nested"]["ok"] == 1
+    assert redacted["note"] == ("x" * 400) + "…"
+
+
+def test_redact_sensitive_caps_depth() -> None:
+    nested: object = {"leaf": "ok"}
+    for _ in range(7):
+        nested = {"child": nested}
+    redacted = redact_sensitive(nested)
+    cursor = redacted
+    for _ in range(6):
+        assert isinstance(cursor, dict)
+        cursor = cursor["child"]
+    assert cursor == "<redacted>"
+
+
+def test_denial_envelope_uses_hook_or_policy_and_redacts_excerpt() -> None:
+    write = call(
+        "write_file.v1",
+        {"path": "src/main.py", "content": "raw-secret"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+    hooked = denial_envelope(write, "policy_hook_denied")
+    assert hooked["reason_code"] == "policy_hook_denied"
+    assert hooked["status"] == "denied"
+    assert hooked["denied_by"] == "hook"
+    assert hooked["function_id"] == "write_file.v1"
+    assert hooked["reason"] == "policy_hook_denied"
+    assert hooked["args_excerpt"] == {"path": "src/main.py"}
+    assert "raw-secret" not in json.dumps(hooked)
+
+    command = call(
+        "execute.v1",
+        {
+            "argv": ["pytest", "secret_test.py"],
+            "env": {"TOKEN": "raw-secret-token"},
+        },
+        ToolRisk.COMMAND,
+    )
+    denied = denial_envelope(command, "policy_approval_denied")
+    assert denied["denied_by"] == "user"
+    assert denied["function_id"] == "execute.v1"
+    assert denied["args_excerpt"] == {
+        "executable": "pytest",
+        "argument_count": 1,
+    }
+    assert "raw-secret-token" not in json.dumps(denied)
+    assert "secret_test.py" not in json.dumps(denied)

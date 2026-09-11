@@ -11,6 +11,7 @@ from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.phases import CodingCheckpoint
 from neos.coding.phases import phase_change_requires_approval
+from neos.coding.redact import redact_sensitive
 
 
 class ApprovalStatus(StrEnum):
@@ -209,7 +210,7 @@ def approval_display_summary(call: ValidatedToolCall) -> Mapping[str, object]:
     if call.name == "execute.v1":
         argv = call.input.get("argv")
         if not isinstance(argv, list) or not argv:
-            return {"executable": "unknown", "argument_count": 0}
+            return redact_sensitive({"executable": "unknown", "argument_count": 0})
         summary: dict[str, object] = {
             "executable": str(argv[0]),
             "argument_count": max(len(argv) - 1, 0),
@@ -217,11 +218,11 @@ def approval_display_summary(call: ValidatedToolCall) -> Mapping[str, object]:
         warnings = _execute_warning_codes(argv)
         if warnings:
             summary["warnings"] = warnings
-        return summary
+        return redact_sensitive(summary)
     if call.name == "ask_user.v1":
         questions = call.input.get("questions")
         if not isinstance(questions, list):
-            return {"questions": []}
+            return redact_sensitive({"questions": []})
         rendered: list[str] = []
         options: list[list[str]] = []
         for item in questions:
@@ -242,11 +243,33 @@ def approval_display_summary(call: ValidatedToolCall) -> Mapping[str, object]:
         summary: dict[str, object] = {"questions": rendered}
         if any(options):
             summary["options"] = options
-        return summary
+        return redact_sensitive(summary)
     path = call.input.get("path")
     if isinstance(path, str):
-        return {"path": path}
-    return {"operation": call.name}
+        return redact_sensitive({"path": path})
+    return redact_sensitive({"operation": call.name})
+
+
+def denial_envelope(call, reason_code: str) -> dict[str, object]:
+    if reason_code.startswith("policy_hook_"):
+        denied_by = "hook"
+    elif reason_code in {"approval_denied", "policy_approval_denied"}:
+        denied_by = "user"
+    else:
+        denied_by = "policy"
+    summary_call = (
+        call
+        if isinstance(call, ValidatedToolCall)
+        else ValidatedToolCall(call.name, dict(call.input), ToolRisk.READ_ONLY)
+    )
+    return {
+        "reason_code": reason_code,
+        "status": "denied",
+        "denied_by": denied_by,
+        "function_id": call.name,
+        "reason": reason_code,
+        "args_excerpt": redact_sensitive(dict(approval_display_summary(summary_call))),
+    }
 
 
 def _execute_warning_codes(argv: list[object]) -> list[str]:

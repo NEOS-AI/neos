@@ -13,7 +13,7 @@ async def test_null_hooks_are_silent() -> None:
     hooks = NullCodingHooks()
     call = ValidatedToolCall("read_file.v1", {"path": "a"}, ToolRisk.READ_ONLY)
     assert await hooks.pre_tool(call) is None
-    await hooks.post_tool(call, {"status": "ok"})
+    assert await hooks.post_tool(call, {"status": "ok"}) is None
     assert await hooks.stop("end_turn") is None
     await hooks.compact((), ())
 

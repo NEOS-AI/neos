@@ -793,6 +793,53 @@ async def test_known_reads_allow_write_on_a_fresh_executor() -> None:
 
 
 @pytest.mark.asyncio
+async def test_write_after_hydrate_from_known_stamps_denies_stale_read() -> None:
+    session = FakeSession()
+    session.files["exists.txt"] = b"changed-on-disk"
+    session.modified["exists.txt"] = datetime(2026, 8, 1, tzinfo=UTC)
+    result = await SandboxToolExecutor(64, 10).execute(
+        session,
+        call("write_file.v1", {"path": "exists.txt", "content": "new"}),
+        known_reads=frozenset({"exists.txt"}),
+        known_stamps={
+            "exists.txt": {
+                "mtime": NOW.isoformat(),
+                "digest": hashlib.sha256(b"old").hexdigest(),
+                "full": True,
+            }
+        },
+    )
+    assert (result.status, result.reason_code) == (
+        "denied",
+        "precondition_stale_read",
+    )
+    assert session.files["exists.txt"] == b"changed-on-disk"
+
+
+@pytest.mark.asyncio
+async def test_write_after_hydrate_from_partial_stamp_is_denied() -> None:
+    session = FakeSession()
+    session.files["exists.txt"] = b"old"
+    result = await SandboxToolExecutor(64, 10).execute(
+        session,
+        call("write_file.v1", {"path": "exists.txt", "content": "new"}),
+        known_reads=frozenset({"exists.txt"}),
+        known_stamps={
+            "exists.txt": {
+                "mtime": NOW.isoformat(),
+                "digest": hashlib.sha256(b"old").hexdigest(),
+                "full": False,
+            }
+        },
+    )
+    assert (result.status, result.reason_code) == (
+        "denied",
+        "precondition_read_required",
+    )
+    assert session.files["exists.txt"] == b"old"
+
+
+@pytest.mark.asyncio
 async def test_memory_sandbox_write_creates_new_file_without_prior_read(
     tmp_path,
 ) -> None:
@@ -923,6 +970,45 @@ async def test_write_missing_parent_is_retryable_and_retries_with_parents_fix() 
     assert session.files["nested/a.txt"] == b"hi"
     assert session.called == ("write_file", ("nested/a.txt", b"hi"))
     assert result.workspace_revision == "8"
+
+
+@pytest.mark.asyncio
+async def test_write_missing_parent_retries_against_memory_session(
+    tmp_path,
+) -> None:
+    from neos.coding.sandbox.base import SandboxLimits
+    from neos.coding.sandbox.memory import MemorySandboxProvider
+
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1", limits=SandboxLimits.safe_defaults()
+    )
+    inner = await provider.open_session(sandbox.sandbox_id)
+
+    class TrackingSession:
+        def __init__(self) -> None:
+            self.parents_seen: list[bool] = []
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(inner, name)
+
+        async def write_file(
+            self, path: str, content: bytes, *, parents: bool = True
+        ) -> int:
+            self.parents_seen.append(parents)
+            return await inner.write_file(path, content, parents=parents)
+
+    session = TrackingSession()
+    result = await SandboxToolExecutor(10, 10).execute(
+        session,
+        call("write_file.v1", {"path": "nested/a.txt", "content": "hi"}),
+    )
+
+    assert result.status == "ok"
+    assert session.parents_seen == [False, True]
+    assert await inner.read_file("nested/a.txt") == b"hi"
+    assert result.workspace_revision == "1"
+    await provider.close()
 
 
 @pytest.mark.asyncio

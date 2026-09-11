@@ -177,6 +177,25 @@ def test_compacted_bodies_round_trip_in_loop_state() -> None:
     assert dict(restored.compacted_bodies) == {"abc": "full text"}
 
 
+def test_read_stamps_round_trip_in_loop_state() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    stamps = {
+        "exists.txt": {
+            "mtime": "2026-07-19T00:00:00+00:00",
+            "digest": "abc123",
+            "full": False,
+        }
+    }
+    state = replace(h.loop._restore(INPUT, None), read_stamps=stamps)
+    dumped = h.loop._dump_state(INPUT, state)
+    restored = h.loop._restore(
+        INPUT,
+        CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
+    )
+    assert dumped["read_stamps"] == stamps
+    assert dict(restored.read_stamps) == stamps
+
+
 @pytest.mark.asyncio
 async def test_unknown_mutation_commits_synthetic_result_and_run_lives() -> None:
     audit = RecordingCodingAuditSink()
@@ -591,3 +610,110 @@ async def test_pre_tool_invalid_updated_input_denies() -> None:
     assert h.executor.calls == []
     assert events[-1].type == "tool.denied"
     assert events[-1].payload["reason_code"] == "policy_hook_denied"
+
+
+@pytest.mark.asyncio
+async def test_tool_result_secrets_are_redacted_before_persist() -> None:
+    class SecretExecutor(Executor):
+        async def execute(self, session, call, **kwargs):
+            self.calls.append(call)
+            session.writes += 1
+            return SimpleNamespace(
+                to_mapping=lambda: {
+                    "status": "ok",
+                    "workspace_revision": "1",
+                    "env": {"API_TOKEN": "s3cret"},
+                }
+            )
+
+    h = harness([[tool_call(), completed()]], executor=SecretExecutor())
+    events = await collect(h)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    result = completed_events[-1].payload["result"]
+    assert result["env"]["API_TOKEN"] == "<redacted>"
+    assert "s3cret" not in json.dumps(result)
+    results = [
+        item
+        for message in h.repository.checkpoints[-1].loop_state["transcript"]
+        for item in message["content"]
+        if item.get("type") == "tool_result"
+    ]
+    assert results[-1]["content"]["env"]["API_TOKEN"] == "<redacted>"
+
+
+@pytest.mark.asyncio
+async def test_post_tool_rewrite_is_applied_then_redacted() -> None:
+    class RewritePost(_DecisionHook):
+        async def pre_tool(self, call):
+            return {"decision": "allow"}
+
+        async def post_tool(self, call, result):
+            rewritten = dict(result)
+            rewritten["hooked"] = True
+            rewritten["API_TOKEN"] = "s3cret"
+            return rewritten
+
+    h = harness([[tool_call(), completed()]], hooks=RewritePost("allow"))
+    events = await collect(h)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    result = completed_events[-1].payload["result"]
+    assert result["hooked"] is True
+    assert result["API_TOKEN"] == "<redacted>"
+    assert "s3cret" not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_denied_tool_content_is_denial_envelope() -> None:
+    h = harness(
+        [
+            [
+                tool_call(
+                    "toolu_1",
+                    "write_file.v1",
+                    {"path": "a.txt", "content": "raw-secret"},
+                ),
+                completed(),
+            ]
+        ],
+        hooks=_DecisionHook("deny"),
+    )
+    events = await collect(h)
+    assert events[-1].type == "tool.denied"
+    assert events[-1].payload["reason_code"] == "policy_hook_denied"
+    results = [
+        item
+        for message in h.repository.checkpoints[-1].loop_state["transcript"]
+        for item in message["content"]
+        if item.get("type") == "tool_result"
+    ]
+    content = results[-1]["content"]
+    assert content["reason_code"] == "policy_hook_denied"
+    assert content["status"] == "denied"
+    assert content["denied_by"] == "hook"
+    assert content["function_id"] == "write_file.v1"
+    assert content["reason"] == "policy_hook_denied"
+    assert content["args_excerpt"] == {"path": "a.txt"}
+    assert "raw-secret" not in json.dumps(content)
+
+
+@pytest.mark.asyncio
+async def test_pre_turn_budget_veto_skips_model_request() -> None:
+    h = harness(
+        [[TextDelta("must not run"), ModelCompleted("end_turn", ModelUsage(1, 1))]],
+        config=AnthropicLoopConfig(
+            model="claude-test",
+            system="code",
+            max_total_tokens=10,
+        ),
+    )
+    state = h.loop._restore(INPUT, None)
+    dumped = h.loop._dump_state(INPUT, state)
+    dumped["input_tokens"] = 11
+    dumped["instructions_loaded"] = True
+    checkpoint = CodingCheckpoint("cc_budget", "ct_1", "cr_1", 1, dumped, "1", NOW)
+    with pytest.raises(CodingLoopFailure, match="token_budget_exceeded") as caught:
+        await collect(h, checkpoint)
+    assert caught.value.retryable is False
+    assert h.model.requests == []

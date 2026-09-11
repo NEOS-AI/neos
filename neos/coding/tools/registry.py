@@ -139,6 +139,7 @@ class _EditFileInput(_PathInput):
 
 class _WriteFileInput(_PathInput):
     content: str
+    parents: bool = False
 
 
 class _TodoItem(_ToolInput):

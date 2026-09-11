@@ -12,6 +12,8 @@ from neos.coding.sandbox.base import (
 )
 from neos.coding.sandbox.memory import MemorySandboxProvider
 
+pytestmark = pytest.mark.no_db
+
 
 async def test_memory_session_reads_searches_and_executes(
     tmp_path: Path,
@@ -285,4 +287,71 @@ async def test_memory_glob_files_matches_limit_and_rejects_escape(
         await session.glob_files("**/*.py", limit=0)
     with pytest.raises(SandboxPolicyViolation, match="workspace_path_escape"):
         await session.glob_files("../secret.py")
+    await provider.close()
+
+
+async def test_memory_write_file_parents_false_requires_existing_parent(
+    tmp_path: Path,
+) -> None:
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+
+    with pytest.raises((FileNotFoundError, SandboxPolicyViolation)):
+        await session.write_file("nested/a.txt", b"x", parents=False)
+
+    created = await session.write_file("nested/a.txt", b"x", parents=True)
+    defaulted = await session.write_file("src/app.py", b"print(1)\n")
+
+    assert created == 1
+    assert defaulted == 2
+    assert await session.read_file("nested/a.txt") == b"x"
+    assert await session.read_file("src/app.py") == b"print(1)\n"
+    await provider.close()
+
+
+async def test_memory_write_refuses_symlink_leaf_and_parent(
+    tmp_path: Path,
+) -> None:
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    workspace = provider.workspace_path(sandbox.sandbox_id)
+    outside = tmp_path / "outside-secret"
+    outside.write_bytes(b"secret")
+    outside_dir = tmp_path / "outside-dir"
+    outside_dir.mkdir()
+    (workspace / "inside.txt").write_bytes(b"orig")
+    (workspace / "link.txt").symlink_to(outside)
+    (workspace / "inside-link.txt").symlink_to(workspace / "inside.txt")
+    (workspace / "ext").symlink_to(outside_dir)
+
+    with pytest.raises(SandboxPolicyViolation, match="workspace_symlink_leaf"):
+        await session.write_file("link.txt", b"new")
+    with pytest.raises(SandboxPolicyViolation, match="workspace_symlink_leaf"):
+        await session.write_file("inside-link.txt", b"new")
+    with pytest.raises(
+        SandboxPolicyViolation, match="workspace_symlink_parent"
+    ):
+        await session.write_file("ext/x.txt", b"x")
+
+    await session.write_file("ok.txt", b"complete")
+
+    assert outside.read_bytes() == b"secret"
+    assert (workspace / "inside.txt").read_bytes() == b"orig"
+    assert (workspace / "link.txt").is_symlink()
+    assert not (outside_dir / "x.txt").exists()
+    assert await session.read_file("ok.txt") == b"complete"
+    leftovers = [
+        path
+        for path in workspace.iterdir()
+        if path.name.startswith(".neos-write-") or path.name.endswith(".tmp")
+    ]
+    assert leftovers == []
     await provider.close()

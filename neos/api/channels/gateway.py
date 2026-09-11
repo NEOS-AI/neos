@@ -35,6 +35,7 @@ _CODE_DISABLED = "Coding invoke is disabled."
 _CODE_NO_OWNER = "Coding owner is not configured."
 _NO_OWNER = "Owner is not configured."
 _NO_TASK = "No coding task in this thread."
+_APPROVAL_NOT_CONFIGURED = "Workflow approval is not configured."
 _LEARN_DISABLED = "Learning is disabled."
 _LEARN_STAGED = "Lesson staged."
 _LEARN_USAGE = "Usage: /learn <text>"
@@ -141,6 +142,7 @@ class ChannelGateway:
         coding: Any | None = None,
         inflight: SessionInflightLock | None = None,
         binds: Any | None = None,
+        inbound: Any | None = None,
         workflow_approvals: Any | None = None,
     ) -> None:
         self._workflow = workflow
@@ -153,10 +155,15 @@ class ChannelGateway:
 
             binds = InMemoryChannelCodingBindStore()
         self._binds = binds
+        if inbound is None:
+            from .inbound_idempotency import InMemoryChannelInboundIdempotencyStore
+
+            inbound = InMemoryChannelInboundIdempotencyStore()
+        self._inbound = inbound
         # 채널별 async circuit_breaker (lazy init)
         self._breakers: Dict[str, Any] = {}
         # Process-local /code start dedupe: (session_id, idempotency_key) → task_id.
-        # Not durable across processes or restarts.
+        # Not durable across processes or restarts. Durable store is source of truth.
         self._code_starts: Dict[tuple[str, str], str] = {}
 
     def _get_breaker(self, channel_type: str):
@@ -197,18 +204,34 @@ class ChannelGateway:
             f"user={message.user_id}, session={message.session_id}"
         )
 
+        idem = str((message.metadata or {}).get("idempotency_key") or "")
+        if idem:
+            prior = await self._inbound.get(message.session_id, idem)
+            if prior is not None and prior.outcome:
+                return prior.outcome
+
         if not self._inflight.acquire(message.session_id):
             return _BUSY
         breaker = self._get_breaker(message.channel_type)
         try:
+            if idem:
+                won, prior = await self._inbound.claim(message.session_id, idem)
+                if not won:
+                    if prior is not None and prior.outcome:
+                        return prior.outcome
+                    return _BUSY
             if breaker is not None:
                 response = await breaker.call(self._route, message)
             else:
                 response = await self._route(message)
+            if idem:
+                await self._inbound.remember(message.session_id, idem, response)
         except Exception as e:
             logger.error(
                 f"[ChannelGateway] dispatch failed for channel={message.channel_type}: {e}"
             )
+            if idem:
+                await self._inbound.abandon(message.session_id, idem)
             response = "죄송합니다. 요청을 처리하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
         finally:
             self._inflight.release(message.session_id)
@@ -218,6 +241,15 @@ class ChannelGateway:
     async def _route(self, message: ChannelMessage) -> str:
         command = parse_channel_command(message.text)
         if command.kind is ChannelCommandKind.CHAT:
+            binding = await self._binds.get(message.session_id)
+            if binding is not None:
+                coding = self._coding_port()
+                instruction = _with_sender_prefix(message, message.text)
+                return await coding.steer(
+                    task_id=binding.task_id,
+                    owner_id=binding.owner_id,
+                    instruction=instruction,
+                )
             return await self._run_workflow(message)
         if command.kind is ChannelCommandKind.LEARN:
             return await self._run_learn(message, command)
@@ -339,10 +371,10 @@ class ChannelGateway:
                 if idem:
                     self._code_starts.pop(start_key, None)
                 raise
-            await self._binds.bind(message.session_id, task_id, owner)
+            binding = await self._binds.bind(message.session_id, task_id, owner)
             if idem:
-                self._code_starts[start_key] = task_id
-            return f"Started coding task {task_id}"
+                self._code_starts[start_key] = binding.task_id
+            return f"Started coding task {binding.task_id}"
 
         binding = await self._binds.get(message.session_id)
         if binding is None:
@@ -416,30 +448,49 @@ class ChannelGateway:
                 task_id=binding.task_id, owner_id=binding.owner_id
             )
         await self._binds.unbind(message.session_id)
+        self._workflow_pending.pop(message.session_id, None)
         self._code_starts = {
             key: value
             for key, value in self._code_starts.items()
             if key[0] != message.session_id
         }
+        await self._inbound.clear_session(message.session_id)
         return _SESSION_RESET
 
     async def _resume_workflow_approval(
         self, message: ChannelMessage, command, pending: Dict[str, str]
     ) -> str:
+        from neos.config.settings import settings
+
+        from .principals import platform_user_id_from_message, resolve_channel_principal
+
+        channels = settings.config.channels
+        if channels.principals:
+            actor = resolve_channel_principal(
+                platform=message.channel_type,
+                platform_user_id=platform_user_id_from_message(message),
+                channels=channels,
+            )
+            if actor != pending.get("owner_id"):
+                return _NO_OWNER
+
         request_id = command.rest or pending.get("request_id") or ""
         approve = command.kind is ChannelCommandKind.APPROVE
         port = self._workflow_approvals
         if port is None:
-            return f"{request_id} {'approved' if approve else 'denied'}"
+            return _APPROVAL_NOT_CONFIGURED
         result = await port.decide(
             session_id=message.session_id,
             request_id=request_id,
             owner_id=pending.get("owner_id") or "",
             approve=approve,
         )
-        if approve or command.kind is ChannelCommandKind.DENY:
+        applied = str(result)
+        if (approve or command.kind is ChannelCommandKind.DENY) and (
+            applied.endswith(" approved") or applied.endswith(" denied")
+        ):
             self._workflow_pending.pop(message.session_id, None)
-        return str(result)
+        return applied
 
     async def bind_session(
         self, session_id: str, task_id: str, owner_id: str
@@ -448,6 +499,12 @@ class ChannelGateway:
 
     async def get_binding(self, session_id: str) -> Any:
         return await self._binds.get(session_id)
+
+    async def workflow_pending_owner(self, session_id: str) -> str | None:
+        pending = self._workflow_pending.get(session_id)
+        if not pending:
+            return None
+        return pending.get("owner_id") or None
 
     async def unbind_session(self, session_id: str) -> None:
         await self._binds.unbind(session_id)

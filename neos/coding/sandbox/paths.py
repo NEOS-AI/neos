@@ -61,3 +61,28 @@ def resolve_workspace_path(
     if not resolved.is_relative_to(root_real):
         raise SandboxPolicyViolation("workspace_symlink_escape")
     return resolved
+
+
+def resolve_mutable_workspace_path(root: Path, path: str) -> Path:
+    """Resolve a mutation target without following parent or leaf symlinks."""
+    relative = normalize_workspace_path(path)
+    try:
+        root_real = root.resolve(strict=True)
+    except (FileNotFoundError, RuntimeError) as error:
+        raise SandboxPolicyViolation("workspace_path_not_resolvable") from error
+
+    parts = tuple(part for part in relative.parts if part != ".")
+    current = root_real
+    for index, part in enumerate(parts):
+        current = current / part
+        is_leaf = index == len(parts) - 1
+        if current.is_symlink():
+            code = (
+                "workspace_symlink_leaf"
+                if is_leaf
+                else "workspace_symlink_parent"
+            )
+            raise SandboxPolicyViolation(code)
+        if not is_leaf and not current.exists():
+            raise FileNotFoundError(str(current))
+    return current

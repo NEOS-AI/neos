@@ -16,6 +16,8 @@ class ChannelCodingPort(Protocol):
         self, *, task_id: str, owner_id: str, approve: bool, approval_id: str
     ) -> str: ...
 
+    async def steer(self, *, task_id: str, owner_id: str, instruction: str) -> str: ...
+
 
 class RuntimeChannelCoding:
     async def start_task(self, *, owner_id: str, prompt: str) -> str:
@@ -99,3 +101,19 @@ class RuntimeChannelCoding:
                 return "Answer this question in the Code UI."
             raise
         return f"{commit.approval.approval_id} {commit.approval.status.value}"
+
+    async def steer(self, *, task_id: str, owner_id: str, instruction: str) -> str:
+        from neos.coding.domain.errors import CodingTaskNotFound
+        from neos.coding.domain.phases import SteeringMode
+        from neos.coding.runtime import coding_run_service
+
+        try:
+            await coding_run_service.steer(
+                task_id=task_id,
+                owner_id=owner_id,
+                instruction=instruction,
+                mode=SteeringMode.SAFE_POINT,
+            )
+        except CodingTaskNotFound:
+            return "No coding task in this thread."
+        return f"Steered {task_id}"

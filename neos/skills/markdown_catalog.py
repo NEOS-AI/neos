@@ -46,9 +46,57 @@ def research_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
     )
 
 
+_REQUIRED_SECTION_HEADINGS = ("## When to Use", "## Boundaries")
+
+
 def _has_required_sections(content: str) -> bool:
+    """Loose substring check. Research catalogs warn-only with this."""
     lowered = content.lower()
     return "## when to use" in lowered and "## boundaries" in lowered
+
+
+def _atx_h2_heading(line: str) -> str | None:
+    heading = line.rstrip()
+    if heading.startswith("## ") and not heading.startswith("###"):
+        return heading
+    return None
+
+
+def _coding_sections_valid(content: str) -> bool:
+    """Exact ATX ``## When to Use`` / ``## Boundaries`` with non-empty bodies."""
+    wanted = set(_REQUIRED_SECTION_HEADINGS)
+    found: set[str] = set()
+    current: str | None = None
+    has_body = False
+
+    def close_section() -> bool:
+        nonlocal current, has_body
+        if current is None:
+            return True
+        if not has_body:
+            return False
+        found.add(current)
+        current = None
+        has_body = False
+        return True
+
+    for line in content.splitlines():
+        heading = _atx_h2_heading(line)
+        if heading is not None:
+            if not close_section():
+                return False
+            if heading in wanted:
+                current = heading
+            continue
+        if current is None:
+            continue
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            has_body = True
+
+    if not close_section():
+        return False
+    return found == wanted
 
 
 def _is_safe_name(name: str) -> bool:
@@ -99,6 +147,14 @@ def _parse_markdown_skill(
             raw_name = parsed.get("name")
             if isinstance(raw_name, str) and raw_name.strip():
                 name = raw_name.strip()
+                if source == "coding" and name != fallback_name:
+                    logger.warning(
+                        "Skipping coding skill %r whose name does not match %r at %s",
+                        name,
+                        fallback_name,
+                        path,
+                    )
+                    return None
             raw_desc = parsed.get("description")
             if isinstance(raw_desc, str):
                 description = raw_desc.strip()
@@ -114,14 +170,15 @@ def _parse_markdown_skill(
         return None
 
     body_text = body if body is not None else content
-    if not _has_required_sections(body_text):
-        if source == "coding":
+    if source == "coding":
+        if not _coding_sections_valid(body_text):
             logger.warning(
                 "Skipping coding skill %r without When to Use / Boundaries at %s",
                 name,
                 path,
             )
             return None
+    elif not _has_required_sections(body_text):
         logger.warning(
             "Skill %r is missing When to Use / Boundaries at %s",
             name,

@@ -6,8 +6,11 @@ from neos.coding.sandbox.base import SandboxPolicyViolation
 from neos.coding.sandbox.paths import (
     ensure_mutable_workspace_path,
     normalize_workspace_path,
+    resolve_mutable_workspace_path,
     resolve_workspace_path,
 )
+
+pytestmark = pytest.mark.no_db
 
 
 @pytest.mark.parametrize(
@@ -75,3 +78,64 @@ def test_regular_workspace_path_is_mutable() -> None:
     assert ensure_mutable_workspace_path("src/app.py") == PurePosixPath(
         "src/app.py"
     )
+
+
+def test_resolve_mutable_rejects_symlink_leaf(tmp_path: Path) -> None:
+    (tmp_path / "link.txt").symlink_to(tmp_path / "missing.txt")
+
+    with pytest.raises(
+        SandboxPolicyViolation, match="workspace_symlink_leaf"
+    ):
+        resolve_mutable_workspace_path(tmp_path, "link.txt")
+
+
+def test_resolve_mutable_rejects_symlink_parent(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside-dir"
+    outside.mkdir()
+    (tmp_path / "ext").symlink_to(outside)
+
+    with pytest.raises(
+        SandboxPolicyViolation, match="workspace_symlink_parent"
+    ):
+        resolve_mutable_workspace_path(tmp_path, "ext/x.txt")
+
+
+def test_resolve_mutable_rejects_internal_symlink_parent(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "real").mkdir()
+    (tmp_path / "ext").symlink_to(tmp_path / "real")
+
+    with pytest.raises(
+        SandboxPolicyViolation, match="workspace_symlink_parent"
+    ):
+        resolve_mutable_workspace_path(tmp_path, "ext/x.txt")
+
+
+def test_resolve_workspace_path_still_follows_internal_parent_symlink(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "real").mkdir()
+    (tmp_path / "real" / "x.txt").write_text("ok")
+    (tmp_path / "ext").symlink_to(tmp_path / "real")
+
+    resolved = resolve_workspace_path(tmp_path, "ext/x.txt")
+
+    assert resolved == (tmp_path / "real" / "x.txt").resolve()
+
+
+def test_resolve_mutable_allows_missing_leaf_under_real_parent(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+
+    resolved = resolve_mutable_workspace_path(tmp_path, "src/new.py")
+
+    assert resolved == tmp_path / "src/new.py"
+
+
+def test_resolve_mutable_missing_parent_is_file_not_found(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(FileNotFoundError):
+        resolve_mutable_workspace_path(tmp_path, "nested/a.txt")

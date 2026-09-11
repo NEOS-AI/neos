@@ -298,8 +298,11 @@ class SlackAdapter(ChannelAdapterBase):
             await self._handle_block_action(body)
 
         @self._app.event("file_shared")
-        async def handle_file_shared(event: dict) -> None:
-            await self._handle_file_shared(event)
+        async def handle_file_shared(event: dict, context: Any = None) -> None:
+            team_id = _context_team_id(context)
+            if team_id and not event.get("team") and not event.get("team_id"):
+                event = {**event, "team": team_id}
+            await self._handle_file_shared(event, context=context)
 
     async def _handle_block_action(self, body: dict) -> None:
         actions = body.get("actions") or []
@@ -376,6 +379,8 @@ class SlackAdapter(ChannelAdapterBase):
             )
             return
 
+        card_ts = str(message.get("ts") or thread_ts or "")
+        action_id = str(action.get("action_id") or "")
         channel_message = await self.receive_message(
             {
                 "user": user_id,
@@ -383,9 +388,11 @@ class SlackAdapter(ChannelAdapterBase):
                 "text": text,
                 "team": team.get("id") or self._team_id,
                 "thread_ts": thread_ts or None,
-                "ts": message.get("ts") or thread_ts,
+                "ts": card_ts,
             }
         )
+        if card_ts and action_id:
+            channel_message.metadata["idempotency_key"] = f"{card_ts}:{action_id}"
         response = await self._gateway.dispatch(channel_message)
         await self.send_response(
             channel_message.channel_id,
@@ -443,11 +450,16 @@ class SlackAdapter(ChannelAdapterBase):
         self._user_names[key] = name
         return name
 
-    async def _handle_file_shared(self, event: dict, say: Any = None) -> None:
+    async def _handle_file_shared(
+        self, event: dict, say: Any = None, context: Any = None
+    ) -> None:
         from neos.config.settings import settings
 
         if not settings.config.channels.inbound_media:
             return
+        team_id = _context_team_id(context)
+        if team_id and not event.get("team") and not event.get("team_id"):
+            event = {**event, "team": team_id}
         file_id = str(event.get("file_id") or "")
         if not file_id or file_id in self._seen_file_shares:
             return
@@ -462,7 +474,15 @@ class SlackAdapter(ChannelAdapterBase):
         mime = str(info.get("mimetype") or "")
         if not mime.startswith("video/"):
             return
-        ts = str(info.get("timestamp") or event.get("event_ts") or file_id)
+        share = _file_share_entry(info, channel_id)
+        # files.info timestamp is created time; the share message ts is in shares.
+        ts = str(
+            share.get("ts")
+            or info.get("timestamp")
+            or event.get("event_ts")
+            or file_id
+        )
+        thread_ts = share.get("thread_ts") or event.get("thread_ts") or None
         if ts in self._seen_file_shares:
             return
         self._seen_file_shares.add(file_id)
@@ -471,10 +491,10 @@ class SlackAdapter(ChannelAdapterBase):
             "user": event.get("user_id") or event.get("user") or "",
             "channel": channel_id,
             "text": "",
-            "channel_type": "channel",
+            "channel_type": "im" if channel_id.startswith("D") else "channel",
             "team": event.get("team_id") or event.get("team"),
             "ts": ts,
-            "thread_ts": event.get("thread_ts"),
+            "thread_ts": thread_ts,
             "files": [info],
         }
         await self._handle_message(synthesized, say, client=None)
@@ -598,3 +618,19 @@ def _context_team_id(context: Any) -> str:
     if not team_id and isinstance(context, dict):
         team_id = context.get("team_id")
     return str(team_id or "").strip()
+
+
+def _file_share_entry(info: dict[str, Any], channel_id: str) -> dict[str, Any]:
+    shares = info.get("shares")
+    if not isinstance(shares, dict):
+        return {}
+    for bucket in ("public", "private"):
+        by_channel = shares.get(bucket)
+        if not isinstance(by_channel, dict):
+            continue
+        entries = by_channel.get(channel_id)
+        if isinstance(entries, list) and entries:
+            first = entries[0]
+            if isinstance(first, dict):
+                return first
+    return {}

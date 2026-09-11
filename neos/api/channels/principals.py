@@ -70,14 +70,19 @@ async def coding_action_actor_allowed(
     if get_binding is None:
         return False
     binding = await get_binding(session_id)
-    if binding is None:
-        return True
     actor = resolve_channel_principal(
         platform=platform,
         platform_user_id=platform_user_id,
         channels=channels,
     )
-    return actor is not None and actor == binding.owner_id
+    if binding is not None:
+        return actor is not None and actor == binding.owner_id
+    pending_owner_fn = getattr(gateway, "workflow_pending_owner", None)
+    if pending_owner_fn is not None:
+        pending_owner = await pending_owner_fn(session_id)
+        if pending_owner:
+            return actor is not None and actor == pending_owner
+    return True
 
 
 def resolve_coding_owner(

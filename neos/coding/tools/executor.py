@@ -33,6 +33,22 @@ _MISSING_PARENT_REASON = "workspace_path_not_resolvable"
 _PARENTS_FIX: dict[str, object] = {"parents": True}
 
 
+def _parse_known_stamp(
+    raw: Mapping[str, object],
+) -> tuple[datetime, str, bool] | None:
+    mtime_raw = raw.get("mtime")
+    digest = raw.get("digest")
+    if not isinstance(mtime_raw, str) or not isinstance(digest, str) or not digest:
+        return None
+    try:
+        parsed = datetime.fromisoformat(mtime_raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed, digest, bool(raw.get("full", True))
+
+
 def _write_accepts_parents(write_file: Any) -> bool:
     try:
         return "parents" in inspect.signature(write_file).parameters
@@ -41,13 +57,12 @@ def _write_accepts_parents(write_file: Any) -> bool:
 
 
 def _write_file_kwargs(write_file: Any, call: ValidatedToolCall) -> dict[str, bool]:
-    if call.input.get("parents") is not True and call.input.get(
-        "create_parents"
-    ) is not True:
+    if not _write_accepts_parents(write_file):
         return {}
-    if _write_accepts_parents(write_file):
-        return {"parents": True}
-    return {}
+    return {
+        "parents": call.input.get("parents") is True
+        or call.input.get("create_parents") is True
+    }
 
 
 def _is_missing_parent_error(error: BaseException) -> bool:
@@ -175,7 +190,9 @@ class SandboxToolExecutor:
         call: ValidatedToolCall,
         *,
         known_reads: frozenset[str] = frozenset(),
+        known_stamps: Mapping[str, Mapping[str, object]] | None = None,
     ) -> ToolResult:
+        self._hydrate_stamps(session, known_stamps)
         result = await self._attempt(session, call, known_reads=known_reads)
         if result.status != "error" or not result.retryable or result.fix is None:
             return result
@@ -185,6 +202,34 @@ class SandboxToolExecutor:
             call.risk,
         )
         return await self._attempt(session, merged, known_reads=known_reads)
+
+    def export_read_stamps(self) -> dict[str, dict[str, object]]:
+        exported: dict[str, dict[str, object]] = {}
+        for stamps in self._read_stamps.values():
+            for path, (mtime, digest, full) in stamps.items():
+                exported[path] = {
+                    "mtime": mtime.isoformat(),
+                    "digest": digest,
+                    "full": full,
+                }
+        return exported
+
+    def _hydrate_stamps(
+        self,
+        session: SandboxSession,
+        known_stamps: Mapping[str, Mapping[str, object]] | None,
+    ) -> None:
+        if not known_stamps:
+            return
+        dest = self._read_stamps.setdefault(session.sandbox_id, {})
+        for raw_path, raw_stamp in known_stamps.items():
+            if not isinstance(raw_stamp, Mapping):
+                continue
+            parsed = _parse_known_stamp(raw_stamp)
+            if parsed is None:
+                continue
+            normalized = str(normalize_workspace_path(str(raw_path)))
+            dest.setdefault(normalized, parsed)
 
     async def _attempt(
         self,
