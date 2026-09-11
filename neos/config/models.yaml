@@ -111,6 +111,14 @@ models:
     vision: true
     pricing: {input: 5.00, output: 30.00}
 
+  gpt-6-astra:
+    provider: openai
+    thinking: none
+    vision: true
+    description: "OpenAI GPT-6 Astra"
+    max_tokens: 128000
+    pricing: {input: 10.00, output: 50.00, cache_creation: 12.50, cache_read: 1.00}
+
   # gpt-5-mini-2025-08-07 / gpt-5-2025-08-07 / o3-mini / o3은 은퇴했다.
   # 가격을 모르는 채로 선택 가능해서 비용이 0으로 집계됐다.
   # gpt-5-mini와 o3-mini는 gpt-5.6-terra가, gpt-5와 o3은 gpt-5.6-sol이 대신한다.
@@ -174,19 +182,23 @@ models:
     description: "OpenAI Embedding Ada v2 (legacy)"
     dimension: 1536
 
-  # ---- Gemini (tier만 이관. list_models()는 정적 목록 유지) ----
+  # ---- Gemini ----
   gemini-2.0-flash-exp:
     provider: gemini
     tiers: [fast]
     thinking: none
-    selectable: false
     vision: true
+
+  gemini-2.5-flash-lite:
+    provider: gemini
+    thinking: none
+    vision: true
+    description: "Google Gemini 2.5 Flash Lite"
 
   gemini-1.5-pro-latest:
     provider: gemini
     tiers: [balanced, powerful]
     thinking: none
-    selectable: false
     description: "Google Gemini 1.5 Pro"
     max_tokens: 8192
     vision: true

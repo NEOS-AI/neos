@@ -20,6 +20,7 @@ def test_catalog_decides_for_known_models() -> None:
     assert provider_for_model("claude-opus-5") == "anthropic"
     assert provider_for_model("gpt-5.6-terra") == "openai"
     assert provider_for_model("gpt-5.6-sol") == "openai"
+    assert provider_for_model("gpt-6-astra") == "openai"
     assert provider_for_model("gpt-4o") == "openai"
 
 
@@ -105,6 +106,7 @@ class TestDeepAnalysisInference:
             ("claude-opus-5", True),
             ("gpt-5.6-terra", False),
             ("gpt-5.6-sol", False),
+            ("gpt-6-astra", False),
             ("gpt-4o", False),
         ):
             assert llm._is_anthropic_model(model) is expected

@@ -15,8 +15,11 @@ from neos.config.model_config import (
     thinking_contract,
 )
 from neos.config.settings import settings
-from neos.utils.anthropic_client import anthropic_default_headers
-from .base import ModelProviderBase
+from neos.utils.anthropic_client import (
+    anthropic_default_headers,
+    build_async_anthropic,
+)
+from .base import CodingCapabilities, ModelProviderBase
 
 logger = logging.getLogger(__name__)
 
@@ -129,3 +132,26 @@ class AnthropicProvider(ModelProviderBase):
                 logger.info("Set max_tokens=%d for thinking blocks", params["max_tokens"])
 
         return ChatAnthropic(**params)
+
+    def coding_capabilities(self) -> CodingCapabilities:
+        return CodingCapabilities(
+            supported=True, streaming_tools=True, prompt_cache=True
+        )
+
+    def create_coding_model(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        max_tool_input_bytes: int = 65_536,
+        max_tool_input_depth: int = 16,
+        **kwargs: Any,
+    ):
+        from neos.coding.model.anthropic import AnthropicCodingModel
+
+        del base_url
+        return AnthropicCodingModel(
+            build_async_anthropic(api_key=api_key, **kwargs),
+            max_tool_input_bytes=max_tool_input_bytes,
+            max_tool_input_depth=max_tool_input_depth,
+        )

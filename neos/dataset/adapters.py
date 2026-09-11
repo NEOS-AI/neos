@@ -103,7 +103,7 @@ class TrackedCodingModel:
         self,
         inner,
         *,
-        provider: str = "anthropic",
+        provider: str = "anthropic",  # 기본값만. 런타임이 실제 벤더를 넘긴다.
         workflow_step: str = "coding_loop",
         session_id: str = "",
         user_id: str = "",

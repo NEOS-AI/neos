@@ -277,6 +277,32 @@ class LLMFactory:
         except (ValueError, ImportError):
             return []
 
+    @classmethod
+    def create_coding_model(
+        cls,
+        *,
+        provider: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        **kwargs,
+    ):
+        """코딩 루프용 네이티브 `CodingModel` 을 프로바이더에 위임해 만든다.
+
+        LangChain `create_llm()` 과 섞지 않는다. 프로바이더 생성자의
+        환경변수 검사는 건너뛴다 — 런타임이 `config.secrets` 에서 키를
+        넘긴다.
+        """
+        if provider not in cls._providers:
+            raise ValueError(f"Unsupported LLM provider: {provider}")
+        provider_class = cls._providers[provider]
+        instance = provider_class.__new__(provider_class)
+        capabilities = instance.coding_capabilities()
+        if not capabilities.supported:
+            raise ValueError(f"{provider} does not support the coding loop")
+        return instance.create_coding_model(
+            api_key=api_key, base_url=base_url, **kwargs
+        )
+
 
 # 전역 LLM Factory 인스턴스
 llm_factory = LLMFactory()
@@ -307,6 +333,10 @@ def create_gemini_llm(**kwargs) -> BaseLanguageModel:
 def create_ollama_llm(**kwargs) -> BaseLanguageModel:
     """Ollama 로컬 LLM 생성 (langchain-ollama 설치 필요)."""
     return llm_factory.create_llm(provider="ollama", **kwargs)
+
+
+def create_coding_model(*, provider: str, **kwargs):
+    return llm_factory.create_coding_model(provider=provider, **kwargs)
 
 
 def get_recommended_models(provider: str) -> dict[str, str]:

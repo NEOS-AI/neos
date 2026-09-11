@@ -49,7 +49,7 @@ def test_provider_catalogs_include_current_and_legacy_models():
         "claude-haiku-4-5-20251001",
         "claude-sonnet-4-5-20250929",
     } <= set(anthropic_models)
-    assert {"gpt-5.6-terra", "gpt-5.6-sol"} <= set(openai_models)
+    assert {"gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"} <= set(openai_models)
 
 
 def test_retired_unpriced_models_are_not_offered():

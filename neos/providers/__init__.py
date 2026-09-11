@@ -10,13 +10,14 @@ Phase 5 (OpenClaw ModelProvider 플러그인)
     LLMFactory.register_provider("my_provider", MyProvider)
 """
 
-from .base import ModelProviderBase
+from .base import CodingCapabilities, ModelProviderBase
 from .anthropic import AnthropicProvider
 from .openai import OpenAIProvider
 from .gemini import GeminiProvider
 from .ollama import OllamaProvider
 
 __all__ = [
+    "CodingCapabilities",
     "ModelProviderBase",
     "AnthropicProvider",
     "OpenAIProvider",

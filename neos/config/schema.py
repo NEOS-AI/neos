@@ -1571,7 +1571,7 @@ class SandboxConfig(StrictConfigModel):
 
 class CodingModelConfig(StrictConfigModel):
     enabled: bool = False
-    provider: Literal["anthropic"] = "anthropic"
+    provider: Literal["anthropic", "openai", "gemini", "ollama"] = "anthropic"
     model: str | None = None
     model_timeout_sec: float = Field(default=120, gt=0, le=600)
     tool_timeout_sec: float = Field(default=30, gt=0, le=300)
@@ -1863,9 +1863,17 @@ class AppConfig(StrictConfigModel):
     def validate_coding_model_policy(self) -> "AppConfig":
         if not self.coding_model.enabled:
             return self
-        if not self.sandbox.enabled or not self.secrets.anthropic_api_key:
+        from neos.config.coding_selection import (
+            coding_credential_for,
+            resolve_coding_selection_from_app,
+        )
+
+        selection = resolve_coding_selection_from_app(self)
+        credential = coding_credential_for(self, selection.provider)
+        if not self.sandbox.enabled or not credential:
             raise ValueError(
-                "coding real loop requires an enabled sandbox and Anthropic credential"
+                "coding real loop requires an enabled sandbox and "
+                f"{selection.provider} credential"
             )
         if (
             self.coding_model.input_cost_micros_per_million <= 0

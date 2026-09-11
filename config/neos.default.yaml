@@ -2,6 +2,8 @@ environment: development
 
 coding_model:
   enabled: false
+  # anthropic | openai | gemini | ollama. 모델이 카탈로그에 있으면 벤더는
+  # 카탈로그가 이긴다 (`gpt-6-astra` 를 적으면 openai 로 간다).
   provider: anthropic
   model_timeout_sec: 120
   tool_timeout_sec: 30

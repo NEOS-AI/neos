@@ -40,6 +40,7 @@ def test_estimate_matches_the_catalog_for_every_priced_model() -> None:
         ("anthropic", "claude-haiku-4-5-20251001"),
         ("openai", "gpt-5.6-terra"),
         ("openai", "gpt-5.6-sol"),
+        ("openai", "gpt-6-astra"),
         ("openai", "gpt-4o"),
     ):
         pricing = pricing_for(provider, model)

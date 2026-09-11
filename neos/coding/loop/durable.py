@@ -18,9 +18,10 @@ from neos.coding.domain.approvals import (
     evaluate_approval,
 )
 from neos.coding.domain.phases import CodingCheckpoint, CodingPhaseKind
+from neos.coding.harness import fold_model_event, iter_model_turn
 from neos.coding.instructions import INSTRUCTION_CANDIDATES, load_workspace_instructions
 from neos.coding.loop.base import LoopDependencies, LoopInput
-from neos.coding.model.anthropic import CodingModelError
+from neos.coding.model.errors import CodingModelError
 from neos.coding.model.base import (
     CanonicalMessage,
     CodingModel,
@@ -65,9 +66,10 @@ class CodingLoopWaitingApproval(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
-class AnthropicLoopConfig:
+class CodingLoopConfig:
     model: str
     system: str
+    provider: str = "anthropic"
     max_output_tokens: int = 4096
     timeout_sec: float = 120
     tool_claim_ttl_sec: float = 30
@@ -101,18 +103,20 @@ class AnthropicLoopConfig:
             self.approval_ttl_sec,
         )
         if not self.model or not self.system or any(value <= 0 for value in numeric):
-            raise ValueError("anthropic loop configuration limits must be positive")
+            raise ValueError("coding loop configuration limits must be positive")
+        if not self.provider:
+            raise ValueError("coding loop provider is required")
         if not (
             self.max_text_delta_bytes
             <= self.max_public_text_bytes
             <= self.max_transcript_bytes
         ):
-            raise ValueError("anthropic public text byte limits are invalid")
+            raise ValueError("coding public text byte limits are invalid")
         if (
             self.input_cost_micros_per_million < 0
             or self.output_cost_micros_per_million < 0
         ):
-            raise ValueError("anthropic model prices cannot be negative")
+            raise ValueError("coding model prices cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,7 +147,7 @@ class AgentLoopState:
         return self.pending_tool_index < len(self.pending_tool_calls)
 
 
-class AnthropicCodingLoop:
+class DurableCodingLoop:
     def __init__(
         self,
         *,
@@ -151,7 +155,7 @@ class AnthropicCodingLoop:
         tools: CodingToolRegistry,
         executor: SandboxToolExecutor,
         bindings: SandboxBindingService,
-        config: AnthropicLoopConfig,
+        config: CodingLoopConfig,
         metrics=None,
         audit=None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -224,14 +228,18 @@ class AnthropicCodingLoop:
         completion: ModelCompleted | None = None
         prefetch_tasks: dict[str, asyncio.Task] = {}
         try:
-            async for model_event in self._model.stream(request):
+            async for model_event in iter_model_turn(self._model, request):
+                folded = fold_model_event(
+                    model_event, text_parts=text_parts, tool_calls=calls
+                )
+                if folded is not None:
+                    completion = folded
                 if isinstance(model_event, TextDelta):
                     delta_bytes = len(model_event.text.encode("utf-8"))
                     if delta_bytes > self._config.max_text_delta_bytes:
                         raise CodingLoopFailure(
                             "model_text_delta_too_large", retryable=False
                         )
-                    text_parts.append(model_event.text)
                     try:
                         committed = await deps.repository.append_model_text_delta(
                             lease=deps.lease,
@@ -258,14 +266,11 @@ class AnthropicCodingLoop:
                         tool_call_id=model_event.tool_call_id,
                     )
                 elif isinstance(model_event, ToolCallCompleted):
-                    calls.append(model_event)
                     task = self._maybe_prefetch_readonly(
                         model_event, bound, state
                     )
                     if task is not None:
                         prefetch_tasks[model_event.tool_call_id] = task
-                elif isinstance(model_event, ModelCompleted):
-                    completion = model_event
         except asyncio.CancelledError:
             for task in prefetch_tasks.values():
                 task.cancel()
@@ -309,7 +314,7 @@ class AnthropicCodingLoop:
                 else "other"
             )
             self._metrics.coding_model_turn_total.labels(
-                provider="anthropic", outcome=outcome
+                provider=self._config.provider, outcome=outcome
             ).inc()
         if (
             not calls

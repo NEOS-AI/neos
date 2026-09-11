@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass
+from collections.abc import AsyncIterator
 from typing import Any
 
 import anthropic
@@ -16,27 +15,16 @@ from neos.coding.model.base import (
     ModelUsage,
     TextContent,
     TextDelta,
-    ToolCallCompleted,
     ToolInputDelta,
     ToolResultContent,
     ToolUseContent,
 )
+from neos.coding.model.buffers import ToolArgumentBuffer, complete_tool_buffer
+from neos.coding.model.errors import CodingModelError
+from neos.coding.model.stop import normalize_stop_reason
 from neos.coding.prompts import SYSTEM_PROMPT_DYNAMIC_BOUNDARY
 
-
-class CodingModelError(RuntimeError):
-    def __init__(self, code: str, *, retryable: bool) -> None:
-        super().__init__(code)
-        self.code = code
-        self.retryable = retryable
-
-
-@dataclass(slots=True)
-class _ToolBuffer:
-    tool_call_id: str
-    name: str
-    fragments: list[str]
-    size_bytes: int = 0
+__all__ = ["AnthropicCodingModel", "CodingModelError"]
 
 
 class AnthropicCodingModel:
@@ -56,7 +44,7 @@ class AnthropicCodingModel:
     async def stream(
         self, request: ModelRequest
     ) -> AsyncIterator[ModelEvent]:
-        buffers: dict[int, _ToolBuffer] = {}
+        buffers: dict[int, ToolArgumentBuffer] = {}
         input_tokens = 0
         try:
             async with asyncio.timeout(request.limits.timeout_sec):
@@ -74,10 +62,9 @@ class AnthropicCodingModel:
                         if event_type == "content_block_start":
                             block = raw.content_block
                             if getattr(block, "type", "") == "tool_use":
-                                buffers[int(raw.index)] = _ToolBuffer(
+                                buffers[int(raw.index)] = ToolArgumentBuffer(
                                     tool_call_id=str(block.id),
                                     name=str(block.name),
-                                    fragments=[],
                                 )
                             continue
                         if event_type == "content_block_delta":
@@ -92,13 +79,10 @@ class AnthropicCodingModel:
                                         "tool_input_without_start",
                                         retryable=False,
                                     )
-                                fragment = str(delta.partial_json)
-                                buffer.size_bytes += len(fragment.encode("utf-8"))
-                                if buffer.size_bytes > self._max_tool_input_bytes:
-                                    raise CodingModelError(
-                                        "tool_input_too_large", retryable=False
-                                    )
-                                buffer.fragments.append(fragment)
+                                fragment = buffer.append(
+                                    str(delta.partial_json),
+                                    max_bytes=self._max_tool_input_bytes,
+                                )
                                 yield ToolInputDelta(
                                     buffer.tool_call_id,
                                     buffer.name,
@@ -108,7 +92,10 @@ class AnthropicCodingModel:
                         if event_type == "content_block_stop":
                             buffer = buffers.pop(int(raw.index), None)
                             if buffer is not None:
-                                yield self._complete_tool(buffer)
+                                yield complete_tool_buffer(
+                                    buffer,
+                                    max_depth=self._max_tool_input_depth,
+                                )
                             continue
                         if event_type == "message_delta":
                             usage = getattr(raw, "usage", None)
@@ -117,7 +104,7 @@ class AnthropicCodingModel:
                             )
                             stop_reason = getattr(raw.delta, "stop_reason", None)
                             yield ModelCompleted(
-                                stop_reason=str(stop_reason or "unknown"),
+                                stop_reason=normalize_stop_reason(stop_reason),
                                 usage=ModelUsage(
                                     input_tokens=input_tokens,
                                     output_tokens=output_tokens,
@@ -147,23 +134,6 @@ class AnthropicCodingModel:
             raise CodingModelError(
                 "model_provider_failed", retryable=error.status_code >= 500
             ) from error
-
-    def _complete_tool(self, buffer: _ToolBuffer) -> ToolCallCompleted:
-        try:
-            value = json.loads("".join(buffer.fragments))
-        except (json.JSONDecodeError, UnicodeError) as error:
-            raise CodingModelError(
-                "tool_input_invalid", retryable=False
-            ) from error
-        if not isinstance(value, Mapping):
-            raise CodingModelError("tool_input_invalid", retryable=False)
-        if _json_depth(value) > self._max_tool_input_depth:
-            raise CodingModelError("tool_input_too_deep", retryable=False)
-        return ToolCallCompleted(
-            tool_call_id=buffer.tool_call_id,
-            name=buffer.name,
-            input=dict(value),
-        )
 
 
 def _to_anthropic_request(request: ModelRequest) -> dict[str, object]:
@@ -223,15 +193,3 @@ def _content_to_anthropic(content: object) -> dict[str, object]:
             "is_error": content.status != "ok",
         }
     raise TypeError("unsupported canonical content")
-
-
-def _json_depth(value: object) -> int:
-    if isinstance(value, Mapping):
-        if not value:
-            return 1
-        return 1 + max(_json_depth(item) for item in value.values())
-    if isinstance(value, list):
-        if not value:
-            return 1
-        return 1 + max(_json_depth(item) for item in value)
-    return 0
