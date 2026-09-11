@@ -1627,16 +1627,33 @@ class ExecutionApprovalConfig(StrictConfigModel):
         return _split_csv(value)
 
 
-class TelegramChannelConfig(StrictConfigModel):
+class ChannelPlatformConfig(StrictConfigModel):
+    """Per-platform channel flags. None/empty inherit from ChannelConfig."""
+
     enabled: bool = False
+    require_mention: bool | None = None
+    allowed_users: list[str] = Field(default_factory=list)
+    allowed_channels: list[str] = Field(default_factory=list)
+    ignored_channels: list[str] = Field(default_factory=list)
+
+    @field_validator(
+        "allowed_users", "allowed_channels", "ignored_channels", mode="before"
+    )
+    @classmethod
+    def parse_channel_csv(cls, value: Any) -> Any:
+        return _split_csv(value)
 
 
-class DiscordChannelConfig(StrictConfigModel):
-    enabled: bool = False
+class TelegramChannelConfig(ChannelPlatformConfig):
+    pass
 
 
-class SlackChannelConfig(StrictConfigModel):
-    enabled: bool = False
+class DiscordChannelConfig(ChannelPlatformConfig):
+    pass
+
+
+class SlackChannelConfig(ChannelPlatformConfig):
+    pass
 
 
 class ChannelConfig(StrictConfigModel):
@@ -1644,6 +1661,17 @@ class ChannelConfig(StrictConfigModel):
     discord: DiscordChannelConfig = Field(default_factory=DiscordChannelConfig)
     slack: SlackChannelConfig = Field(default_factory=SlackChannelConfig)
     bot_user_id: str = ""
+    require_mention: bool = True
+    allowed_users: list[str] = Field(default_factory=list)
+    allowed_channels: list[str] = Field(default_factory=list)
+    ignored_channels: list[str] = Field(default_factory=list)
+
+    @field_validator(
+        "allowed_users", "allowed_channels", "ignored_channels", mode="before"
+    )
+    @classmethod
+    def parse_channel_csv(cls, value: Any) -> Any:
+        return _split_csv(value)
 
 
 class ContextAssemblyConfig(StrictConfigModel):

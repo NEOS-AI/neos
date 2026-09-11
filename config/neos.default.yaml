@@ -584,6 +584,10 @@ channels:
   slack:
     enabled: false
   bot_user_id: ""
+  require_mention: true
+  allowed_users: []
+  allowed_channels: []
+  ignored_channels: []
 
 context_assembly:
   max_tokens: 8000

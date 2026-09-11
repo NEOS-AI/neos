@@ -16,6 +16,13 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
+from neos.api.channels.authz import (
+    GateContext,
+    evaluate_channel_gate,
+    policy_from_settings,
+    telegram_text_mentions_bot,
+)
+
 from ..base import ChannelAdapterBase, ChannelMessage
 
 if TYPE_CHECKING:
@@ -25,6 +32,31 @@ logger = logging.getLogger(__name__)
 
 # Telegram 단일 메시지 최대 길이 (HTML/Markdown 포함 시 4096)
 _TELEGRAM_MAX_CHARS = 4096
+
+
+def _telegram_update_mentions_bot(update: Any, text: str, bot: Any) -> bool:
+    bot_username = getattr(bot, "username", None) or "" if bot is not None else ""
+    if telegram_text_mentions_bot(text, bot_username):
+        return True
+    if bot is None:
+        return False
+    message = getattr(update, "effective_message", None)
+    entities = getattr(message, "entities", None) or ()
+    bot_id = getattr(bot, "id", None)
+    username = bot_username.lstrip("@").lower()
+    for entity in entities:
+        etype = getattr(entity, "type", None)
+        if etype == "text_mention":
+            user = getattr(entity, "user", None)
+            if bot_id is not None and user is not None and getattr(user, "id", None) == bot_id:
+                return True
+        elif etype == "mention" and username:
+            offset = getattr(entity, "offset", 0)
+            length = getattr(entity, "length", 0)
+            token = text[offset : offset + length]
+            if token.lstrip("@").lower() == username:
+                return True
+    return False
 
 
 class TelegramAdapter(ChannelAdapterBase):
@@ -189,6 +221,35 @@ class TelegramAdapter(ChannelAdapterBase):
         메시지를 ChannelMessage로 변환 후 ChannelGateway에 위임하고 응답을 전송한다.
         """
         if not update.effective_message or not update.effective_message.text:
+            return
+
+        effective_user = update.effective_user
+        effective_chat = update.effective_chat
+        text = update.effective_message.text or ""
+        bot = getattr(self._app, "bot", None) if self._app is not None else None
+        bot_id = getattr(bot, "id", None) if bot is not None else None
+        ctx = GateContext(
+            channel_type=self.channel_type,
+            platform_user_id=str(effective_user.id) if effective_user is not None else "",
+            channel_id=str(effective_chat.id) if effective_chat is not None else "",
+            text=text,
+            is_dm=bool(effective_chat is not None and effective_chat.type == "private"),
+            is_bot=bool(getattr(effective_user, "is_bot", False)),
+            is_self=bool(
+                bot_id is not None
+                and effective_user is not None
+                and effective_user.id == bot_id
+            ),
+            mentioned=_telegram_update_mentions_bot(update, text, bot),
+        )
+        decision = evaluate_channel_gate(ctx, policy_from_settings(self.channel_type))
+        if not decision.allowed:
+            logger.info(
+                "[TelegramAdapter] drop reason=%s channel=%s user=%s",
+                decision.reason,
+                ctx.channel_id,
+                ctx.platform_user_id,
+            )
             return
 
         try:

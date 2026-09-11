@@ -34,6 +34,18 @@ def test_string_true_values_parse_for_boolean_fields(raw):
     assert config.tool_search.enabled is True
 
 
+def test_channel_gate_defaults_are_fail_closed():
+    config = AppConfig()
+
+    assert config.channels.require_mention is True
+    assert config.channels.allowed_users == []
+    assert config.channels.allowed_channels == []
+    assert config.channels.ignored_channels == []
+    assert config.channels.slack.require_mention is None
+    assert config.channels.discord.allowed_users == []
+    assert config.channels.telegram.ignored_channels == []
+
+
 def test_schema_defaults_match_current_runtime_policy():
     config = AppConfig()
 

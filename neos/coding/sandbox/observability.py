@@ -26,6 +26,7 @@ _CODING_TOOLS = {
     "git_status.v1",
     "git_diff.v1",
     "git_log.v1",
+    "edit_file.v1",
     "write_file.v1",
     "execute.v1",
 }
@@ -46,6 +47,10 @@ _CODING_ERROR_CODES = {
     "policy_command_stdin_exceeded",
     "policy_environment_name_denied",
     "policy_protected_git_path",
+    "precondition_read_required",
+    "edit_old_string_not_found",
+    "edit_old_string_not_unique",
+    "edit_not_text",
     "sandbox_timeout",
     "sandbox_policy_violation",
     "sandbox_not_found",

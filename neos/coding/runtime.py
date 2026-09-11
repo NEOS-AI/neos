@@ -21,6 +21,7 @@ from neos.coding.application.workspace_stream_service import (
 from neos.coding.loop.base import CodingLoop
 from neos.coding.loop.fake import FakeDurableCodingLoop
 from neos.coding.loop.anthropic import AnthropicCodingLoop, AnthropicLoopConfig
+from neos.coding.prompts import CodingPromptEnv, build_coding_system_prompt
 from neos.coding.model.anthropic import AnthropicCodingModel
 from neos.dataset.adapters import TrackedCodingModel
 from neos.coding.managed.adapters import (
@@ -513,7 +514,12 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
     )
     loop_config = AnthropicLoopConfig(
         model=coding_model,
-        system="Work safely in the provided sandbox and complete the coding task.",
+        system=build_coding_system_prompt(
+            tools.definitions(),
+            env=CodingPromptEnv(
+                command_allowlist=tuple(sorted(allowlist)),
+            ),
+        ),
         max_output_tokens=coding.max_output_tokens,
         timeout_sec=coding.model_timeout_sec,
         tool_claim_ttl_sec=coding.tool_timeout_sec,

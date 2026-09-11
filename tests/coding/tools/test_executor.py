@@ -28,12 +28,13 @@ class FakeSession:
 
     def __init__(self) -> None:
         self.called: tuple[str, Any] | None = None
-        self.file_content = b"abcdef"
+        self.files: dict[str, bytes] = {}
+        self.revision = 7
         self.command_result = CommandResult(0, b"stdout", b"stderr")
         self.error: Exception | None = None
 
     async def workspace_revision(self) -> int:
-        return 7
+        return self.revision
 
     def _raise(self) -> None:
         if self.error is not None:
@@ -46,18 +47,24 @@ class FakeSession:
 
     async def stat(self, path: str) -> FileEntry:
         self._raise()
+        if path not in self.files:
+            raise FileNotFoundError(path)
         self.called = ("stat", path)
-        return FileEntry(path, "file", 3, NOW)
+        return FileEntry(path, "file", len(self.files[path]), NOW)
 
     async def read_file(self, path: str) -> bytes:
         self._raise()
+        if path not in self.files:
+            raise FileNotFoundError(path)
         self.called = ("read_file", path)
-        return self.file_content
+        return self.files[path]
 
     async def write_file(self, path: str, content: bytes) -> int:
         self._raise()
+        self.files[path] = content
+        self.revision += 1
         self.called = ("write_file", (path, content))
-        return 8
+        return self.revision
 
     async def search_text(self, query: str, **kwargs: Any) -> tuple[SearchMatch, ...]:
         self._raise()
@@ -86,33 +93,65 @@ class FakeSession:
 
 
 def call(name: str, input: dict[str, object]) -> ValidatedToolCall:
-    risk = ToolRisk.COMMAND if name == "execute.v1" else ToolRisk.READ_ONLY
-    if name == "write_file.v1":
+    if name == "execute.v1":
+        risk = ToolRisk.COMMAND
+    elif name in {"write_file.v1", "edit_file.v1"}:
         risk = ToolRisk.WORKSPACE_WRITE
+    else:
+        risk = ToolRisk.READ_ONLY
     return ValidatedToolCall(name, input, risk)
 
 
 @pytest.mark.asyncio
 async def test_read_file_truncates_and_checksums_original_content() -> None:
     session = FakeSession()
+    session.files["a.txt"] = b"abcdef"
     executor = SandboxToolExecutor(max_preview_bytes=4, max_entries=10)
     result = await executor.execute(session, call("read_file.v1", {"path": "a.txt"}))
+    numbered = b"     1|abcdef"
     assert result.status == "ok"
-    assert result.preview == "abcd"
+    assert result.preview == numbered[:4].decode()
     assert result.original_bytes == 6
     assert result.truncated is True
-    assert result.checksum == hashlib.sha256(b"abcdef").hexdigest()
+    assert result.checksum == hashlib.sha256(numbered).hexdigest()
     assert result.workspace_revision == "7"
 
 
 @pytest.mark.asyncio
 async def test_read_file_decodes_invalid_utf8_with_replacement() -> None:
     session = FakeSession()
-    session.file_content = b"a\xffb"
-    result = await SandboxToolExecutor(10, 10).execute(
+    session.files["a"] = b"a\xffb"
+    result = await SandboxToolExecutor(32, 10).execute(
         session, call("read_file.v1", {"path": "a"})
     )
-    assert result.preview == "a\ufffdb"
+    assert result.preview == "     1|a\ufffdb"
+
+
+@pytest.mark.asyncio
+async def test_read_file_offset_limit_uses_cat_n_prefixes() -> None:
+    session = FakeSession()
+    session.files["lines.txt"] = b"alpha\nbeta\ngamma\n"
+    result = await SandboxToolExecutor(64, 10).execute(
+        session,
+        call("read_file.v1", {"path": "lines.txt", "offset": 2, "limit": 1}),
+    )
+    assert result.status == "ok"
+    assert result.preview == "     2|beta\n"
+    assert result.original_bytes == len(b"alpha\nbeta\ngamma\n")
+    assert result.truncated is True
+
+
+@pytest.mark.asyncio
+async def test_read_file_works_when_path_is_seeded() -> None:
+    session = FakeSession()
+    session.files["seeded.txt"] = b"hello"
+    result = await SandboxToolExecutor(64, 10).execute(
+        session, call("read_file.v1", {"path": "seeded.txt"})
+    )
+    assert result.status == "ok"
+    assert result.preview == "     1|hello"
+    assert result.original_bytes == 5
+    assert result.truncated is False
 
 
 @pytest.mark.asyncio
@@ -137,6 +176,8 @@ async def test_dispatches_every_non_read_registered_tool(
     name: str, input: dict[str, object], method: str
 ) -> None:
     session = FakeSession()
+    if name == "stat.v1":
+        session.files[str(input["path"])] = b"data"
     result = await SandboxToolExecutor(10, 10).execute(session, call(name, input))
     assert session.called is not None and session.called[0] == method
     assert result.status == "ok"
@@ -276,3 +317,145 @@ async def test_original_error_is_sanitized_when_revision_lookup_also_fails() -> 
     assert "input secret" not in payload
     assert "revision secret" not in payload
     assert "sensitive-name" not in payload
+
+
+@pytest.mark.asyncio
+async def test_write_new_path_succeeds_without_prior_read() -> None:
+    session = FakeSession()
+    result = await SandboxToolExecutor(10, 10).execute(
+        session, call("write_file.v1", {"path": "new.txt", "content": "hi"})
+    )
+    assert result.status == "ok"
+    assert session.files["new.txt"] == b"hi"
+    assert session.called == ("write_file", ("new.txt", b"hi"))
+    assert result.workspace_revision == "8"
+
+
+@pytest.mark.asyncio
+async def test_write_existing_path_without_read_is_denied() -> None:
+    session = FakeSession()
+    session.files["exists.txt"] = b"old"
+    result = await SandboxToolExecutor(10, 10).execute(
+        session, call("write_file.v1", {"path": "exists.txt", "content": "new"})
+    )
+    assert (result.status, result.reason_code) == (
+        "denied",
+        "precondition_read_required",
+    )
+    assert session.files["exists.txt"] == b"old"
+    assert session.called is None or session.called[0] != "write_file"
+
+
+@pytest.mark.asyncio
+async def test_write_existing_path_after_read_succeeds() -> None:
+    session = FakeSession()
+    session.files["exists.txt"] = b"old"
+    executor = SandboxToolExecutor(64, 10)
+    read = await executor.execute(
+        session, call("read_file.v1", {"path": "exists.txt"})
+    )
+    assert read.status == "ok"
+    result = await executor.execute(
+        session, call("write_file.v1", {"path": "exists.txt", "content": "new"})
+    )
+    assert result.status == "ok"
+    assert session.files["exists.txt"] == b"new"
+    assert result.workspace_revision == "8"
+
+
+@pytest.mark.asyncio
+async def test_edit_unique_old_string_after_read_replaces_once() -> None:
+    session = FakeSession()
+    session.files["app.py"] = b"foo bar foo"
+    executor = SandboxToolExecutor(64, 10)
+    await executor.execute(session, call("read_file.v1", {"path": "app.py"}))
+    result = await executor.execute(
+        session,
+        call(
+            "edit_file.v1",
+            {"path": "app.py", "old_string": "bar", "new_string": "baz"},
+        ),
+    )
+    assert result.status == "ok"
+    assert session.files["app.py"] == b"foo baz foo"
+    assert result.workspace_revision == "8"
+
+
+@pytest.mark.asyncio
+async def test_edit_non_unique_old_string_without_replace_all_is_denied() -> None:
+    session = FakeSession()
+    session.files["app.py"] = b"foo foo"
+    executor = SandboxToolExecutor(64, 10)
+    await executor.execute(session, call("read_file.v1", {"path": "app.py"}))
+    result = await executor.execute(
+        session,
+        call(
+            "edit_file.v1",
+            {"path": "app.py", "old_string": "foo", "new_string": "bar"},
+        ),
+    )
+    assert (result.status, result.reason_code) == (
+        "denied",
+        "edit_old_string_not_unique",
+    )
+    assert session.files["app.py"] == b"foo foo"
+
+
+@pytest.mark.asyncio
+async def test_edit_missing_old_string_is_denied() -> None:
+    session = FakeSession()
+    session.files["app.py"] = b"foo"
+    executor = SandboxToolExecutor(64, 10)
+    await executor.execute(session, call("read_file.v1", {"path": "app.py"}))
+    result = await executor.execute(
+        session,
+        call(
+            "edit_file.v1",
+            {"path": "app.py", "old_string": "zzz", "new_string": "bar"},
+        ),
+    )
+    assert (result.status, result.reason_code) == (
+        "denied",
+        "edit_old_string_not_found",
+    )
+    assert session.files["app.py"] == b"foo"
+
+
+@pytest.mark.asyncio
+async def test_edit_without_prior_read_is_denied() -> None:
+    session = FakeSession()
+    session.files["app.py"] = b"foo"
+    result = await SandboxToolExecutor(64, 10).execute(
+        session,
+        call(
+            "edit_file.v1",
+            {"path": "app.py", "old_string": "foo", "new_string": "bar"},
+        ),
+    )
+    assert (result.status, result.reason_code) == (
+        "denied",
+        "precondition_read_required",
+    )
+    assert session.files["app.py"] == b"foo"
+
+
+@pytest.mark.asyncio
+async def test_edit_replace_all_replaces_every_occurrence() -> None:
+    session = FakeSession()
+    session.files["app.py"] = b"foo foo"
+    executor = SandboxToolExecutor(64, 10)
+    await executor.execute(session, call("read_file.v1", {"path": "app.py"}))
+    result = await executor.execute(
+        session,
+        call(
+            "edit_file.v1",
+            {
+                "path": "app.py",
+                "old_string": "foo",
+                "new_string": "bar",
+                "replace_all": True,
+            },
+        ),
+    )
+    assert result.status == "ok"
+    assert session.files["app.py"] == b"bar bar"

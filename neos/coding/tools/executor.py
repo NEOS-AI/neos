@@ -18,6 +18,7 @@ from neos.coding.sandbox.base import (
     SearchMatch,
 )
 from neos.coding.sandbox.observability import bounded_executable_category
+from neos.coding.sandbox.paths import normalize_workspace_path
 from neos.coding.tools.registry import ValidatedToolCall
 
 
@@ -50,6 +51,7 @@ class SandboxToolExecutor:
             raise ValueError("executor limits must be positive")
         self._max_preview_bytes = max_preview_bytes
         self._max_entries = max_entries
+        self._read_paths: dict[str, set[str]] = {}
 
     async def execute(
         self, session: SandboxSession, call: ValidatedToolCall
@@ -69,16 +71,108 @@ class SandboxToolExecutor:
         self, session: SandboxSession, call: ValidatedToolCall
     ) -> ToolResult:
         if call.name == "read_file.v1":
-            content = await session.read_file(str(call.input["path"]))
-            return self._bounded_bytes(
-                content, workspace_revision=await self._revision(session)
-            )
+            return await self._read_file(session, call)
         if call.name == "write_file.v1":
-            revision = await session.write_file(
-                str(call.input["path"]), str(call.input["content"]).encode()
-            )
-            return ToolResult.ok(workspace_revision=str(revision))
+            return await self._write_file(session, call)
+        if call.name == "edit_file.v1":
+            return await self._edit_file(session, call)
         return await self._dispatch_non_file_tool(session, call)
+
+    async def _read_file(
+        self, session: SandboxSession, call: ValidatedToolCall
+    ) -> ToolResult:
+        path = str(call.input["path"])
+        offset = int(call.input.get("offset", 1))
+        raw_limit = call.input.get("limit")
+        limit = int(raw_limit) if raw_limit is not None else None
+        content = await session.read_file(path)
+        lines = content.decode("utf-8", errors="replace").splitlines(keepends=True)
+        start = max(offset - 1, 0)
+        end = None if limit is None else start + limit
+        sliced = lines[start:end]
+        omitted = start > 0 or (end is not None and end < len(lines))
+        numbered = "".join(
+            f"{number:>6}|{line}" for number, line in enumerate(sliced, start=offset)
+        )
+        result = self._bounded_bytes(
+            numbered.encode("utf-8"),
+            workspace_revision=await self._revision(session),
+            already_truncated=omitted,
+            original_bytes=len(content),
+        )
+        self._mark_read(session, path)
+        return result
+
+    async def _write_file(
+        self, session: SandboxSession, call: ValidatedToolCall
+    ) -> ToolResult:
+        path = str(call.input["path"])
+        denied = await self._deny_unread_existing(session, path)
+        if denied is not None:
+            return denied
+        revision = await session.write_file(
+            path, str(call.input["content"]).encode()
+        )
+        return ToolResult.ok(workspace_revision=str(revision))
+
+    async def _edit_file(
+        self, session: SandboxSession, call: ValidatedToolCall
+    ) -> ToolResult:
+        path = str(call.input["path"])
+        denied = await self._deny_unread_existing(session, path)
+        if denied is not None:
+            return denied
+        content = await session.read_file(path)
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            return await self._denied(session, "edit_not_text")
+        old_string = str(call.input["old_string"])
+        new_string = str(call.input["new_string"])
+        replace_all = bool(call.input.get("replace_all", False))
+        matches = text.count(old_string)
+        if matches == 0:
+            return await self._denied(session, "edit_old_string_not_found")
+        if matches > 1 and not replace_all:
+            return await self._denied(session, "edit_old_string_not_unique")
+        updated = (
+            text.replace(old_string, new_string)
+            if replace_all
+            else text.replace(old_string, new_string, 1)
+        )
+        revision = await session.write_file(path, updated.encode("utf-8"))
+        return ToolResult.ok(workspace_revision=str(revision))
+
+    async def _deny_unread_existing(
+        self, session: SandboxSession, path: str
+    ) -> ToolResult | None:
+        try:
+            await session.stat(path)
+        except (SandboxNotFound, FileNotFoundError):
+            return None
+        if self._was_read(session, path):
+            return None
+        return await self._denied(session, "precondition_read_required")
+
+    def _mark_read(self, session: SandboxSession, path: str) -> None:
+        self._read_paths.setdefault(session.sandbox_id, set()).add(
+            str(normalize_workspace_path(path))
+        )
+
+    def _was_read(self, session: SandboxSession, path: str) -> bool:
+        recorded = self._read_paths.get(session.sandbox_id, set())
+        return str(normalize_workspace_path(path)) in recorded
+
+    async def _denied(self, session: SandboxSession, reason: str) -> ToolResult:
+        return ToolResult(
+            "denied",
+            reason,
+            None,
+            None,
+            False,
+            None,
+            await self._revision(session),
+        )
 
     async def _dispatch_non_file_tool(
         self, session: SandboxSession, call: ValidatedToolCall
@@ -132,13 +226,20 @@ class SandboxToolExecutor:
             await self._revision(session),
         )
 
-    def _bounded_bytes(self, content: bytes, *, workspace_revision: str) -> ToolResult:
-        bounded = self._bytes_mapping(content)
+    def _bounded_bytes(
+        self,
+        content: bytes,
+        *,
+        workspace_revision: str,
+        already_truncated: bool = False,
+        original_bytes: int | None = None,
+    ) -> ToolResult:
+        bounded = self._bytes_mapping(content, already_truncated=already_truncated)
         return ToolResult(
             status="ok",
             reason_code="ok",
             preview=str(bounded["preview"]),
-            original_bytes=len(content),
+            original_bytes=len(content) if original_bytes is None else original_bytes,
             truncated=bool(bounded["truncated"]),
             checksum=str(bounded["checksum"]),
             workspace_revision=workspace_revision,

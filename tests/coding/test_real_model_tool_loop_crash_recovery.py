@@ -17,6 +17,11 @@ async def test_crash_after_write_has_unknown_outcome_without_second_write(
     harness = await real_loop_harness(
         script=[
             tool_turn(
+                "read_file.v1",
+                {"path": "calc.py"},
+                tool_call_id="tool_read",
+            ),
+            tool_turn(
                 "write_file.v1",
                 {"path": "calc.py", "content": "changed\n"},
                 tool_call_id="tool_1",
@@ -31,6 +36,7 @@ async def test_crash_after_write_has_unknown_outcome_without_second_write(
         crash_after="write_file",
     )
 
+    await harness.advance(worker_id="worker-1")
     with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown"):
         await harness.advance(worker_id="worker-1")
     harness.elapse(timedelta(seconds=31))
@@ -49,6 +55,11 @@ async def test_crash_after_durable_tool_completion_reuses_result(
     harness = await real_loop_harness(
         script=[
             tool_turn(
+                "read_file.v1",
+                {"path": "calc.py"},
+                tool_call_id="tool_read",
+            ),
+            tool_turn(
                 "write_file.v1",
                 {"path": "calc.py", "content": "changed\n"},
                 tool_call_id="tool_1",
@@ -64,6 +75,9 @@ async def test_crash_after_durable_tool_completion_reuses_result(
         audit=audit,
     )
 
+    harness.repository.crash_after = None
+    await harness.advance(worker_id="worker-1")
+    harness.repository.crash_after = "complete_tool_execution"
     with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown"):
         await harness.advance(worker_id="worker-1")
     harness.elapse(timedelta(seconds=31))
@@ -71,7 +85,7 @@ async def test_crash_after_durable_tool_completion_reuses_result(
     await harness.advance_until_complete(worker_id="worker-2")
 
     assert harness.write_count == 1
-    assert harness.completed_tool_ids == {"tool_1"}
+    assert harness.completed_tool_ids == {"tool_read", "tool_1"}
     assert any(event["outcome"] == "reused" for event in audit.events)
 
 

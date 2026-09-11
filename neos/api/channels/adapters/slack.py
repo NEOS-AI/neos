@@ -43,6 +43,7 @@ class SlackAdapter(ChannelAdapterBase):
         self._app: Optional[Any] = None  # AsyncApp
         self._handler: Optional[Any] = None  # AsyncSocketModeHandler
         self._handler_task: Optional[asyncio.Task] = None
+        self._bot_user_id: Optional[str] = None
 
     async def start(self) -> None:
         """Slack Socket Mode 핸들러를 시작한다."""
@@ -77,6 +78,11 @@ class SlackAdapter(ChannelAdapterBase):
 
         try:
             self._app = AsyncApp(token=self._bot_token)
+            try:
+                auth = await self._app.client.auth_test()
+                self._bot_user_id = auth.get("user_id")
+            except Exception as e:
+                logger.warning("[SlackAdapter] auth_test failed (non-critical): %s", e)
 
             # 메시지 핸들러 등록 (bot 메시지 자동 제외)
             @self._app.message()
@@ -169,6 +175,35 @@ class SlackAdapter(ChannelAdapterBase):
         if message.get("bot_id"):
             return
         if not message.get("text"):
+            return
+
+        from neos.api.channels.authz import (
+            GateContext,
+            evaluate_channel_gate,
+            policy_from_settings,
+            slack_text_mentions_bot,
+        )
+
+        text = message.get("text") or ""
+        ctx = GateContext(
+            channel_type=self.channel_type,
+            platform_user_id=str(message.get("user") or ""),
+            channel_id=str(message.get("channel") or ""),
+            text=text,
+            is_dm=message.get("channel_type") == "im",
+            is_bot=bool(message.get("bot_id")) or message.get("subtype") == "bot_message",
+            is_self=bool(self._bot_user_id)
+            and str(message.get("user")) == self._bot_user_id,
+            mentioned=slack_text_mentions_bot(text, self._bot_user_id or ""),
+        )
+        decision = evaluate_channel_gate(ctx, policy_from_settings(self.channel_type))
+        if not decision.allowed:
+            logger.info(
+                "[SlackAdapter] drop reason=%s channel=%s user=%s",
+                decision.reason,
+                ctx.channel_id,
+                ctx.platform_user_id,
+            )
             return
 
         try:

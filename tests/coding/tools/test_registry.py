@@ -32,17 +32,33 @@ def test_default_registry_exports_stable_versioned_definitions() -> None:
         "git_status.v1",
         "git_diff.v1",
         "git_log.v1",
+        "edit_file.v1",
         "write_file.v1",
         "execute.v1",
     ]
     assert all(item.input_schema["additionalProperties"] is False for item in definitions)
+    names = [item.name for item in definitions]
+    assert names.index("edit_file.v1") == names.index("write_file.v1") - 1
 
 
 def test_read_file_is_read_only_and_normalizes_path() -> None:
     call = registry().validate("read_file.v1", {"path": "src/./main.py"})
 
     assert call.risk is ToolRisk.READ_ONLY
-    assert call.input == {"path": "src/main.py"}
+    assert call.input == {"path": "src/main.py", "offset": 1, "limit": None}
+
+
+def test_read_file_accepts_optional_offset_and_limit() -> None:
+    sliced = registry().validate(
+        "read_file.v1", {"path": "src/main.py", "offset": 3, "limit": 20}
+    )
+    extra = registry().decide(
+        "read_file.v1", {"path": "src/main.py", "surprise": True}
+    )
+
+    assert sliced.input == {"path": "src/main.py", "offset": 3, "limit": 20}
+    assert extra.allowed is False
+    assert extra.reason_code == "policy_schema_invalid"
 
 
 def test_write_file_is_workspace_write_and_denies_git_control_files() -> None:
@@ -57,6 +73,50 @@ def test_write_file_is_workspace_write_and_denies_git_control_files() -> None:
     assert allowed.risk is ToolRisk.WORKSPACE_WRITE
     assert denied.allowed is False
     assert denied.reason_code == "policy_protected_git_path"
+
+
+def test_edit_file_is_workspace_write_and_denies_git_control_files() -> None:
+    allowed = registry().validate(
+        "edit_file.v1",
+        {
+            "path": "src/./main.py",
+            "old_string": "pass",
+            "new_string": "return 1",
+        },
+    )
+    denied = registry().decide(
+        "edit_file.v1",
+        {
+            "path": ".git/hooks/pre-commit",
+            "old_string": "exit 0",
+            "new_string": "exit 1",
+        },
+    )
+
+    assert allowed.risk is ToolRisk.WORKSPACE_WRITE
+    assert allowed.input == {
+        "path": "src/main.py",
+        "old_string": "pass",
+        "new_string": "return 1",
+        "replace_all": False,
+    }
+    assert denied.allowed is False
+    assert denied.reason_code == "policy_protected_git_path"
+
+
+def test_tool_descriptions_state_when_not_to_use_execute_or_write() -> None:
+    descriptions = {item.name: item.description for item in registry().definitions()}
+    search = descriptions["search_text.v1"]
+    execute = descriptions["execute.v1"]
+    edit = descriptions["edit_file.v1"]
+
+    assert "execute.v1" in search
+    assert "rg" in search or "grep" in search
+    assert "-c" in execute
+    assert "network" in execute or "git" in execute
+    assert "old_string" in edit
+    assert "unique" in edit
+    assert "read first" in edit.lower()
 
 
 @pytest.mark.parametrize("path", ["/etc/passwd", "../secret", "bad\0name"])
@@ -192,8 +252,15 @@ def test_execute_environment_names_are_allowlisted() -> None:
     [
         ("unknown.v1", {}),
         ("read_file.v1", {"path": "a", "surprise": True}),
+        ("read_file.v1", {"path": "a", "offset": 0}),
+        ("read_file.v1", {"path": "a", "limit": 0}),
+        ("read_file.v1", {"path": "a", "limit": 5001}),
         ("search_text.v1", {"query": "x", "limit": 0}),
         ("git_log.v1", {"limit": 101}),
+        (
+            "edit_file.v1",
+            {"path": "a", "old_string": "x", "new_string": "y", "surprise": True},
+        ),
         ("execute.v1", {"argv": []}),
     ],
 )

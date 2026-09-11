@@ -16,6 +16,12 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
+from neos.api.channels.authz import (
+    GateContext,
+    evaluate_channel_gate,
+    policy_from_settings,
+)
+
 from ..base import ChannelAdapterBase, ChannelMessage
 
 if TYPE_CHECKING:
@@ -163,10 +169,25 @@ class DiscordAdapter(ChannelAdapterBase):
 
     async def _handle_message(self, message: Any) -> None:
         """on_message 이벤트 핸들러."""
-        # 봇 자신의 메시지 무시 (무한 루프 방지)
-        if message.author == self._client.user:
-            return
-        if not message.content:
+        bot_user = self._client.user if self._client is not None else None
+        ctx = GateContext(
+            channel_type=self.channel_type,
+            platform_user_id=str(getattr(message.author, "id", "")),
+            channel_id=str(message.channel.id),
+            text=message.content or "",
+            is_dm=getattr(message, "guild", None) is None,
+            is_bot=bool(getattr(message.author, "bot", False)),
+            is_self=self._client is not None and message.author == self._client.user,
+            mentioned=_message_mentions_bot(message, bot_user),
+        )
+        decision = evaluate_channel_gate(ctx, policy_from_settings(self.channel_type))
+        if not decision.allowed:
+            logger.info(
+                "[DiscordAdapter] drop reason=%s channel=%s user=%s",
+                decision.reason,
+                ctx.channel_id,
+                ctx.platform_user_id,
+            )
             return
 
         try:
@@ -187,3 +208,17 @@ class DiscordAdapter(ChannelAdapterBase):
                 )
             except Exception:
                 pass
+
+
+def _message_mentions_bot(message: Any, bot_user: Any) -> bool:
+    if bot_user is None:
+        return False
+    bot_id = getattr(bot_user, "id", None)
+    if bot_id is None:
+        return False
+    for mentioned in getattr(message, "mentions", []) or []:
+        if getattr(mentioned, "id", None) == bot_id:
+            return True
+    content = getattr(message, "content", None) or ""
+    bot_id_s = str(bot_id)
+    return f"<@{bot_id_s}>" in content or f"<@!{bot_id_s}>" in content

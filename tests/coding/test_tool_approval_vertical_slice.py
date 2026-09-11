@@ -15,6 +15,11 @@ async def test_reconnect_approve_executes_exact_mutation_once(real_loop_harness)
     harness = await real_loop_harness(
         script=[
             tool_turn(
+                "read_file.v1",
+                {"path": "calc.py"},
+                tool_call_id="tool_read",
+            ),
+            tool_turn(
                 "write_file.v1",
                 {"path": "calc.py", "content": secret_content},
                 tool_call_id="tool_approval",
@@ -24,6 +29,7 @@ async def test_reconnect_approve_executes_exact_mutation_once(real_loop_harness)
         approval_evaluator=evaluate_approval,
     )
 
+    await harness.advance(worker_id="worker-before-reconnect")
     requested_event = await harness.advance(worker_id="worker-before-reconnect")
     requested = next(iter(harness.repository.approvals.values()))
     assert harness.write_count == 0

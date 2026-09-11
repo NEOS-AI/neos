@@ -364,6 +364,10 @@ Generated from `neos/config/settings.py`, `.env.template`, and the config refact
 | `CHANNEL_SLACK_BOT_TOKEN` | settings.py + .env.template | `secret_env` | `secrets.channel_slack_bot_token` | Secret, credential ID, token, or credential-bearing URL remains env-sourced. |
 | `CHANNEL_SLACK_APP_TOKEN` | settings.py + .env.template | `secret_env` | `secrets.channel_slack_app_token` | Secret, credential ID, token, or credential-bearing URL remains env-sourced. |
 | `CHANNEL_BOT_USER_ID` | settings.py + .env.template | `yaml` | `channels.bot_user_id` | Non-secret runtime behavior belongs in validated YAML. |
+| `CHANNEL_REQUIRE_MENTION` | settings.py | `yaml` | `channels.require_mention` | Non-secret runtime behavior belongs in validated YAML. Default true. |
+| `CHANNEL_ALLOWED_USERS` | settings.py | `yaml` | `channels.allowed_users` | Non-secret runtime behavior belongs in validated YAML. Empty = fail-closed. |
+| `CHANNEL_ALLOWED_CHANNELS` | settings.py | `yaml` | `channels.allowed_channels` | Non-secret runtime behavior belongs in validated YAML. Empty = any room. |
+| `CHANNEL_IGNORED_CHANNELS` | settings.py | `yaml` | `channels.ignored_channels` | Non-secret runtime behavior belongs in validated YAML. |
 | `CONTEXT_MAX_TOKENS` | settings.py + .env.template | `yaml` | `context_assembly.max_tokens` | Non-secret runtime behavior belongs in validated YAML. |
 | `CONTEXT_SHORT_TERM_RATIO` | settings.py + .env.template | `yaml` | `context_assembly.short_term_ratio` | Non-secret runtime behavior belongs in validated YAML. |
 | `CONTEXT_LONG_TERM_RATIO` | settings.py + .env.template | `yaml` | `context_assembly.long_term_ratio` | Non-secret runtime behavior belongs in validated YAML. |

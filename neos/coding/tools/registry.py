@@ -73,6 +73,17 @@ class _GitLogInput(_ToolInput):
     limit: int = Field(default=20, ge=1, le=100)
 
 
+class _ReadFileInput(_PathInput):
+    offset: int = Field(default=1, ge=1)
+    limit: int | None = Field(default=None, ge=1, le=5000)
+
+
+class _EditFileInput(_PathInput):
+    old_string: str
+    new_string: str
+    replace_all: bool = False
+
+
 class _WriteFileInput(_PathInput):
     content: str
 
@@ -104,20 +115,111 @@ class _RegisteredTool:
 class CodingToolRegistry:
     _TOOL_SPECS: ClassVar[tuple[_RegisteredTool, ...]] = (
         _RegisteredTool(
-            "list_tree.v1", "List workspace entries.", ToolRisk.READ_ONLY, _ListTreeInput
+            "list_tree.v1",
+            (
+                "List a workspace directory. Use this to inspect entries before choosing a path. "
+                "Do not use this to read file contents (`read_file.v1`). "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.READ_ONLY,
+            _ListTreeInput,
         ),
-        _RegisteredTool("stat.v1", "Inspect a workspace path.", ToolRisk.READ_ONLY, _PathInput),
-        _RegisteredTool("read_file.v1", "Read a workspace file.", ToolRisk.READ_ONLY, _PathInput),
         _RegisteredTool(
-            "search_text.v1", "Search workspace text.", ToolRisk.READ_ONLY, _SearchTextInput
+            "stat.v1",
+            (
+                "Inspect workspace path metadata only. "
+                "Prefer this over reading a whole file just to see size. "
+                "Do not use this to read file contents. "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.READ_ONLY,
+            _PathInput,
         ),
-        _RegisteredTool("git_status.v1", "Read Git status.", ToolRisk.READ_ONLY, _EmptyInput),
-        _RegisteredTool("git_diff.v1", "Read Git diff.", ToolRisk.READ_ONLY, _GitDiffInput),
-        _RegisteredTool("git_log.v1", "Read Git history.", ToolRisk.READ_ONLY, _GitLogInput),
         _RegisteredTool(
-            "write_file.v1", "Write a workspace file.", ToolRisk.WORKSPACE_WRITE, _WriteFileInput
+            "read_file.v1",
+            (
+                "Read a workspace file. Use offset/limit for large files. "
+                "Existing files must be read before edit_file.v1 or write_file.v1. "
+                "Do not use execute.v1 to print file contents. "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.READ_ONLY,
+            _ReadFileInput,
         ),
-        _RegisteredTool("execute.v1", "Run an allowed command.", ToolRisk.COMMAND, _ExecuteInput),
+        _RegisteredTool(
+            "search_text.v1",
+            (
+                "Search workspace text. Use this instead of a shell search. "
+                "Do not use execute.v1 with rg/grep/find. "
+                "On policy_* denial, do not retry the same query."
+            ),
+            ToolRisk.READ_ONLY,
+            _SearchTextInput,
+        ),
+        _RegisteredTool(
+            "git_status.v1",
+            (
+                "Read Git status. Prefer this over execute.v1 git. "
+                "Do not use execute.v1 for status. "
+                "On policy_* denial, do not retry the same call."
+            ),
+            ToolRisk.READ_ONLY,
+            _EmptyInput,
+        ),
+        _RegisteredTool(
+            "git_diff.v1",
+            (
+                "Read Git diff. Prefer this over execute.v1 git. "
+                "Do not use execute.v1 for diff. "
+                "On policy_* denial, do not retry the same call."
+            ),
+            ToolRisk.READ_ONLY,
+            _GitDiffInput,
+        ),
+        _RegisteredTool(
+            "git_log.v1",
+            (
+                "Read Git history. Prefer this over execute.v1 git. "
+                "Do not use execute.v1 for log. "
+                "On policy_* denial, do not retry the same call."
+            ),
+            ToolRisk.READ_ONLY,
+            _GitLogInput,
+        ),
+        _RegisteredTool(
+            "edit_file.v1",
+            (
+                "Exact string replace in a workspace file. "
+                "old_string must be unique unless replace_all. Read first. "
+                "Prefer edit over write for existing files. "
+                "On policy_* denial, do not retry the same old_string."
+            ),
+            ToolRisk.WORKSPACE_WRITE,
+            _EditFileInput,
+        ),
+        _RegisteredTool(
+            "write_file.v1",
+            (
+                "Create or replace an entire workspace file. "
+                "Existing files require a prior read_file.v1 in this sandbox. "
+                "Prefer edit_file.v1 for partial edits. "
+                "Do not add unrequested README/docs. "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.WORKSPACE_WRITE,
+            _WriteFileInput,
+        ),
+        _RegisteredTool(
+            "execute.v1",
+            (
+                "Run an allowlisted argv command. argv only. "
+                "No sh|bash|zsh -c. No network clients. No package install. "
+                "git via execute is status/diff/log only. Prefer dedicated tools. "
+                "On policy_* denial, do not retry the same argv."
+            ),
+            ToolRisk.COMMAND,
+            _ExecuteInput,
+        ),
     )
 
     def __init__(
@@ -206,7 +308,7 @@ class CodingToolRegistry:
             if "path" in data:
                 normalizer = (
                     ensure_mutable_workspace_path
-                    if name == "write_file.v1"
+                    if name in {"write_file.v1", "edit_file.v1"}
                     else normalize_workspace_path
                 )
                 data["path"] = str(normalizer(data["path"]))

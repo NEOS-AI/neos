@@ -714,6 +714,14 @@ psql $DATABASE_URL -f db/migrations/024_add_ui_frame_sessions.sql
 | `CHANNEL_SLACK_BOT_TOKEN` | — | 1 | Slack Bot 토큰 |
 | `CHANNEL_SLACK_APP_TOKEN` | — | 1 | Slack App 소켓 모드 토큰 |
 | `CHANNEL_BOT_USER_ID` | — | 1 | 채널 요청 매핑용 서비스 계정 ID |
+| `CHANNEL_REQUIRE_MENTION` | `true` | 0 | 채널 메시지에 봇 멘션이 있어야 처리. DM은 면제 |
+| `CHANNEL_ALLOWED_USERS` | `[]` (fail-closed) | 0 | 플랫폼 user id CSV. 비어 있으면 전원 침묵 |
+| `CHANNEL_ALLOWED_CHANNELS` | `[]` (제한 없음) | 0 | 비어 있으면 모든 채널(ignored 제외) |
+| `CHANNEL_IGNORED_CHANNELS` | `[]` | 0 | 멘션이 있어도 침묵 |
+| `CHANNEL_{SLACK,DISCORD,TELEGRAM}_REQUIRE_MENTION` | inherit | 0 | 플랫폼 오버라이드 (`null`이면 글로벌) |
+| `CHANNEL_{SLACK,DISCORD,TELEGRAM}_ALLOWED_USERS` | inherit | 0 | 플랫폼 오버라이드 (비어 있으면 글로벌) |
+| `CHANNEL_{SLACK,DISCORD,TELEGRAM}_ALLOWED_CHANNELS` | inherit | 0 | 플랫폼 오버라이드 |
+| `CHANNEL_{SLACK,DISCORD,TELEGRAM}_IGNORED_CHANNELS` | union | 0 | 글로벌과 합집합 |
 | `EXECUTION_APPROVAL_ENABLED` | `false` | 2 | 실행 승인 시스템 활성화 |
 | `APPROVAL_REQUIRED_SKILLS` | (목록) | 2 | 승인 필요 스킬 이름 목록 |
 | `APPROVAL_TIMEOUT_SECONDS` | `60` | 2 | 승인 대기 타임아웃 (초) |
