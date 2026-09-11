@@ -73,6 +73,34 @@ async def test_expiry_reconciliation_owns_database_manager(monkeypatch) -> None:
     assert manager.calls == ["initialize", "close"]
 
 
+async def test_delivery_binds_lesson_store_to_worker_database(
+    monkeypatch,
+) -> None:
+    from neos.learn.lessons import reset_lesson_store, resolve_lesson_session_factory
+
+    reset_lesson_store()
+    manager = RecordingDatabaseManager()
+    bound: list[object] = []
+
+    class BindingRunner(RecordingRunner):
+        async def run(self, **kwargs):
+            bound.append(resolve_lesson_session_factory())
+            return await super().run(**kwargs)
+
+    runner = BindingRunner(CodingTaskOutcome.COMPLETED)
+    monkeypatch.setattr(celery_runtime, "_build_runner", lambda manager: runner)
+
+    await celery_runtime.run_coding_delivery(
+        task_id="ct_1",
+        worker_id="celery-1",
+        expected_checkpoint_id=None,
+        database_manager=manager,
+    )
+
+    assert bound == [manager.get_session]
+    assert resolve_lesson_session_factory() is None
+
+
 async def test_delivery_initializes_and_closes_its_database_manager(
     monkeypatch,
 ) -> None:

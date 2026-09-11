@@ -25,6 +25,7 @@ from neos.coding.workers.execution import (
 )
 from neos.database.connection import DatabaseManager
 from neos.config.settings import settings
+from neos.learn.lessons import set_lesson_session_factory
 from neos.observability.metrics import metrics
 
 
@@ -121,8 +122,11 @@ async def run_coding_delivery(
 ) -> CodingTaskOutcome:
     manager = database_manager or DatabaseManager()
     runtime = None
+    bound_lessons = False
     try:
         await manager.initialize()
+        set_lesson_session_factory(manager.get_session)
+        bound_lessons = True
         if settings.config.coding_model.enabled:
             # The real loop's provider is owned by a CodingRuntime so there is
             # exactly one shutdown path for sandbox resources.
@@ -166,6 +170,8 @@ async def run_coding_delivery(
     finally:
         if runtime is not None:
             await runtime.close()
+        if bound_lessons:
+            set_lesson_session_factory(None)
         await manager.close()
 
 

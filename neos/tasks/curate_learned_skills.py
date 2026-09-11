@@ -5,8 +5,9 @@ import asyncio
 from celery import shared_task
 
 from neos.config.settings import get_settings
-from neos.learn.curator import curate_lessons, curate_lessons_async
-from neos.learn.lessons import get_lesson_store, resolve_lesson_session_factory
+from neos.database.connection import DatabaseManager
+from neos.learn.curator import curate_lessons_async
+from neos.learn.lessons import resolve_lesson_session_factory, set_lesson_session_factory
 from neos.learn.postgres import PostgresLessonStore
 from neos.utils.logger import get_logger
 
@@ -15,17 +16,24 @@ logger = get_logger(__name__)
 
 async def _curate_learned_skills(*, stale_days: int, archive_days: int) -> dict[str, int]:
     factory = resolve_lesson_session_factory()
-    if factory is None:
-        return curate_lessons(
-            get_lesson_store(),
+    if factory is not None:
+        return await curate_lessons_async(
+            PostgresLessonStore(factory),
             stale_days=stale_days,
             archive_days=archive_days,
         )
-    return await curate_lessons_async(
-        PostgresLessonStore(factory),
-        stale_days=stale_days,
-        archive_days=archive_days,
-    )
+    manager = DatabaseManager()
+    try:
+        await manager.initialize()
+        set_lesson_session_factory(manager.get_session)
+        return await curate_lessons_async(
+            PostgresLessonStore(manager.get_session),
+            stale_days=stale_days,
+            archive_days=archive_days,
+        )
+    finally:
+        set_lesson_session_factory(None)
+        await manager.close()
 
 
 @shared_task(name="neos.tasks.curate_learned_skills")
