@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -37,6 +37,7 @@ from neos.coding.sandbox.observability import (
     CodingToolAuditEvent,
     NullCodingAuditSink,
 )
+from neos.coding.sandbox.paths import normalize_workspace_path
 from neos.coding.tools.executor import SandboxToolExecutor
 from neos.coding.tools.registry import (
     CodingToolRegistry,
@@ -122,6 +123,7 @@ class AgentLoopState:
     output_tokens: int = 0
     cost_micros: int = 0
     terminal_pending: bool = False
+    read_paths: frozenset[str] = frozenset()
 
     @property
     def has_pending_tool(self) -> bool:
@@ -306,7 +308,9 @@ class AnthropicCodingLoop:
             denied = ToolResultContent(
                 call.tool_call_id, "denied", {"reason_code": error.reason_code}
             )
-            denied_state = self._after_result(state, denied)
+            denied_state = self._after_result(
+                state, denied, tool_name=call.name, tool_input=call.input
+            )
             committed = await deps.repository.commit_model_checkpoint(
                 lease=deps.lease,
                 event_type="tool.denied",
@@ -359,7 +363,9 @@ class AnthropicCodingLoop:
                     "denied",
                     {"reason_code": reason_code},
                 )
-                denied_state = self._after_result(state, denied)
+                denied_state = self._after_result(
+                    state, denied, tool_name=call.name, tool_input=call.input
+                )
                 committed = await deps.repository.commit_model_checkpoint(
                     lease=deps.lease,
                     event_type="tool.denied",
@@ -408,7 +414,11 @@ class AnthropicCodingLoop:
             )
         else:
             try:
-                executed = await self._executor.execute(bound.session, validated)
+                executed = await self._executor.execute(
+                    bound.session,
+                    validated,
+                    known_reads=state.read_paths,
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -499,6 +509,8 @@ class AnthropicCodingLoop:
         after = self._after_result(
             state,
             ToolResultContent(call.tool_call_id, canonical_status, result),
+            tool_name=call.name,
+            tool_input=call.input,
         )
         revision = str(
             result.get("workspace_revision", bound.binding.workspace_revision)
@@ -537,38 +549,42 @@ class AnthropicCodingLoop:
             )
             // 1_000_000
         )
-        return AgentLoopState(
-            transcript,
-            state.turn_count + 1,
-            state.tool_count,
-            state.consecutive_tool_errors,
-            tuple(calls),
-            0,
-            self._digest(transcript),
-            state.input_tokens + usage.input_tokens,
-            state.output_tokens + usage.output_tokens,
-            cost,
+        return replace(
+            state,
+            transcript=transcript,
+            turn_count=state.turn_count + 1,
+            pending_tool_calls=tuple(calls),
+            pending_tool_index=0,
+            transcript_digest=self._digest(transcript),
+            input_tokens=state.input_tokens + usage.input_tokens,
+            output_tokens=state.output_tokens + usage.output_tokens,
+            cost_micros=cost,
+            terminal_pending=False,
         )
 
-    def _after_result(self, state, result):
+    def _after_result(self, state, result, *, tool_name: str, tool_input: Mapping[str, object]):
         has_more_tools = state.pending_tool_index + 1 < len(state.pending_tool_calls)
         transcript = self._compact(
             state.transcript + (CanonicalMessage("tool", (result,)),),
             preserve_tools=has_more_tools,
         )
         errors = 0 if result.status == "ok" else state.consecutive_tool_errors + 1
-        return AgentLoopState(
-            transcript,
-            state.turn_count,
-            state.tool_count + 1,
-            errors,
-            state.pending_tool_calls,
-            state.pending_tool_index + 1,
-            self._digest(transcript),
-            state.input_tokens,
-            state.output_tokens,
-            state.cost_micros,
-            False,
+        read_paths = state.read_paths
+        if tool_name == "read_file.v1" and result.status == "ok":
+            raw_path = tool_input.get("path")
+            if raw_path:
+                read_paths = read_paths | {
+                    str(normalize_workspace_path(str(raw_path)))
+                }
+        return replace(
+            state,
+            transcript=transcript,
+            tool_count=state.tool_count + 1,
+            consecutive_tool_errors=errors,
+            pending_tool_index=state.pending_tool_index + 1,
+            transcript_digest=self._digest(transcript),
+            terminal_pending=False,
+            read_paths=read_paths,
         )
 
     def _check_usage_budgets(self, state):
@@ -597,6 +613,13 @@ class AnthropicCodingLoop:
             ToolCallCompleted(item["tool_call_id"], item["name"], item["input"])
             for item in raw.get("pending_tool_calls", [])
         )
+        stored = raw.get("read_paths")
+        if stored:
+            read_paths = frozenset(
+                str(normalize_workspace_path(str(path))) for path in stored
+            )
+        else:
+            read_paths = _read_paths_from_transcript(transcript)
         return AgentLoopState(
             transcript,
             int(raw.get("turn_count", 0)),
@@ -609,6 +632,7 @@ class AnthropicCodingLoop:
             int(raw.get("output_tokens", 0)),
             int(raw.get("cost_micros", 0)),
             bool(raw.get("terminal_pending", False)),
+            read_paths,
         )
 
     @staticmethod
@@ -649,23 +673,12 @@ class AnthropicCodingLoop:
             "output_tokens": state.output_tokens,
             "cost_micros": state.cost_micros,
             "terminal_pending": state.terminal_pending,
+            "read_paths": sorted(state.read_paths),
         }
 
     @staticmethod
     def _with_terminal_pending(state: AgentLoopState) -> AgentLoopState:
-        return AgentLoopState(
-            state.transcript,
-            state.turn_count,
-            state.tool_count,
-            state.consecutive_tool_errors,
-            state.pending_tool_calls,
-            state.pending_tool_index,
-            state.transcript_digest,
-            state.input_tokens,
-            state.output_tokens,
-            state.cost_micros,
-            True,
-        )
+        return replace(state, terminal_pending=True)
 
     def _compact(self, transcript, *, preserve_tools: bool = False):
         transcript = tuple(transcript)
@@ -767,6 +780,22 @@ class AnthropicCodingLoop:
             ensure_ascii=False,
         )
         return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _read_paths_from_transcript(transcript: tuple[CanonicalMessage, ...]) -> frozenset[str]:
+    pending: dict[str, str] = {}
+    read_paths: set[str] = set()
+    for message in transcript:
+        for item in message.content:
+            if isinstance(item, ToolUseContent) and item.name == "read_file.v1":
+                raw_path = item.input.get("path")
+                if raw_path:
+                    pending[item.tool_call_id] = str(raw_path)
+            elif isinstance(item, ToolResultContent) and item.status == "ok":
+                raw_path = pending.get(item.tool_call_id)
+                if raw_path:
+                    read_paths.add(str(normalize_workspace_path(raw_path)))
+    return frozenset(read_paths)
 
 
 def _message_to_mapping(message: CanonicalMessage) -> dict[str, Any]:

@@ -54,10 +54,14 @@ class SandboxToolExecutor:
         self._read_paths: dict[str, set[str]] = {}
 
     async def execute(
-        self, session: SandboxSession, call: ValidatedToolCall
+        self,
+        session: SandboxSession,
+        call: ValidatedToolCall,
+        *,
+        known_reads: frozenset[str] = frozenset(),
     ) -> ToolResult:
         try:
-            return await self._execute(session, call)
+            return await self._execute(session, call, known_reads=known_reads)
         except SandboxTimeout:
             return self._failure("error", "sandbox_timeout")
         except SandboxPolicyViolation:
@@ -68,14 +72,18 @@ class SandboxToolExecutor:
             return self._failure("error", "sandbox_error")
 
     async def _execute(
-        self, session: SandboxSession, call: ValidatedToolCall
+        self,
+        session: SandboxSession,
+        call: ValidatedToolCall,
+        *,
+        known_reads: frozenset[str],
     ) -> ToolResult:
         if call.name == "read_file.v1":
             return await self._read_file(session, call)
         if call.name == "write_file.v1":
-            return await self._write_file(session, call)
+            return await self._write_file(session, call, known_reads=known_reads)
         if call.name == "edit_file.v1":
-            return await self._edit_file(session, call)
+            return await self._edit_file(session, call, known_reads=known_reads)
         return await self._dispatch_non_file_tool(session, call)
 
     async def _read_file(
@@ -104,10 +112,16 @@ class SandboxToolExecutor:
         return result
 
     async def _write_file(
-        self, session: SandboxSession, call: ValidatedToolCall
+        self,
+        session: SandboxSession,
+        call: ValidatedToolCall,
+        *,
+        known_reads: frozenset[str],
     ) -> ToolResult:
         path = str(call.input["path"])
-        denied = await self._deny_unread_existing(session, path)
+        denied = await self._deny_unread_existing(
+            session, path, known_reads=known_reads
+        )
         if denied is not None:
             return denied
         revision = await session.write_file(
@@ -116,10 +130,16 @@ class SandboxToolExecutor:
         return ToolResult.ok(workspace_revision=str(revision))
 
     async def _edit_file(
-        self, session: SandboxSession, call: ValidatedToolCall
+        self,
+        session: SandboxSession,
+        call: ValidatedToolCall,
+        *,
+        known_reads: frozenset[str],
     ) -> ToolResult:
         path = str(call.input["path"])
-        denied = await self._deny_unread_existing(session, path)
+        denied = await self._deny_unread_existing(
+            session, path, known_reads=known_reads
+        )
         if denied is not None:
             return denied
         content = await session.read_file(path)
@@ -144,24 +164,46 @@ class SandboxToolExecutor:
         return ToolResult.ok(workspace_revision=str(revision))
 
     async def _deny_unread_existing(
-        self, session: SandboxSession, path: str
+        self,
+        session: SandboxSession,
+        path: str,
+        *,
+        known_reads: frozenset[str],
     ) -> ToolResult | None:
+        if not await self._path_exists(session, path):
+            return None
+        if self._was_read(session, path, known_reads=known_reads):
+            return None
+        return await self._denied(session, "precondition_read_required")
+
+    async def _path_exists(self, session: SandboxSession, path: str) -> bool:
         try:
             await session.stat(path)
         except (SandboxNotFound, FileNotFoundError):
-            return None
-        if self._was_read(session, path):
-            return None
-        return await self._denied(session, "precondition_read_required")
+            return False
+        except SandboxPolicyViolation as error:
+            if str(error) == "workspace_path_not_resolvable":
+                return False
+            raise
+        return True
 
     def _mark_read(self, session: SandboxSession, path: str) -> None:
         self._read_paths.setdefault(session.sandbox_id, set()).add(
             str(normalize_workspace_path(path))
         )
 
-    def _was_read(self, session: SandboxSession, path: str) -> bool:
+    def _was_read(
+        self,
+        session: SandboxSession,
+        path: str,
+        *,
+        known_reads: frozenset[str],
+    ) -> bool:
+        normalized = str(normalize_workspace_path(path))
+        if normalized in known_reads:
+            return True
         recorded = self._read_paths.get(session.sandbox_id, set())
-        return str(normalize_workspace_path(path)) in recorded
+        return normalized in recorded
 
     async def _denied(self, session: SandboxSession, reason: str) -> ToolResult:
         return ToolResult(

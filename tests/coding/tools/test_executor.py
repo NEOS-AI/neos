@@ -48,7 +48,7 @@ class FakeSession:
     async def stat(self, path: str) -> FileEntry:
         self._raise()
         if path not in self.files:
-            raise FileNotFoundError(path)
+            raise SandboxPolicyViolation("workspace_path_not_resolvable")
         self.called = ("stat", path)
         return FileEntry(path, "file", len(self.files[path]), NOW)
 
@@ -459,3 +459,46 @@ async def test_edit_replace_all_replaces_every_occurrence() -> None:
     )
     assert result.status == "ok"
     assert session.files["app.py"] == b"bar bar"
+
+
+@pytest.mark.asyncio
+async def test_known_reads_allow_write_on_a_fresh_executor() -> None:
+    session = FakeSession()
+    session.files["exists.txt"] = b"old"
+    first = SandboxToolExecutor(64, 10)
+    await first.execute(session, call("read_file.v1", {"path": "exists.txt"}))
+    second = SandboxToolExecutor(64, 10)
+    denied = await second.execute(
+        session, call("write_file.v1", {"path": "exists.txt", "content": "new"})
+    )
+    allowed = await second.execute(
+        session,
+        call("write_file.v1", {"path": "exists.txt", "content": "new"}),
+        known_reads=frozenset({"exists.txt"}),
+    )
+    assert (denied.status, denied.reason_code) == (
+        "denied",
+        "precondition_read_required",
+    )
+    assert allowed.status == "ok"
+    assert session.files["exists.txt"] == b"new"
+
+
+@pytest.mark.asyncio
+async def test_memory_sandbox_write_creates_new_file_without_prior_read(
+    tmp_path,
+) -> None:
+    from neos.coding.sandbox.base import SandboxLimits
+    from neos.coding.sandbox.memory import MemorySandboxProvider
+
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1", limits=SandboxLimits.safe_defaults()
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    result = await SandboxToolExecutor(64, 10).execute(
+        session, call("write_file.v1", {"path": "created.py", "content": "ok\n"})
+    )
+    assert result.status == "ok"
+    assert await session.read_file("created.py") == b"ok\n"
+    await provider.close()

@@ -79,7 +79,7 @@ class Executor:
         self.calls = []
         self.fail_after_mutation = fail_after_mutation
 
-    async def execute(self, session, call):
+    async def execute(self, session, call, **kwargs):
         self.calls.append(call)
         session.writes += call.name == "write_file.v1"
         if self.fail_after_mutation:
@@ -640,7 +640,7 @@ async def test_tool_error_budget_checkpoints_before_failure_and_does_not_repeat_
         model="claude-test", system="code", max_consecutive_tool_errors=1
     )
     h = harness([[tool_call(), completed()]], config=config)
-    h.executor.execute = lambda session, call: _error_result()
+    h.executor.execute = lambda session, call, **_kwargs: _error_result()
 
     first_events = []
     with pytest.raises(CodingLoopFailure, match="tool_error_budget_exceeded"):

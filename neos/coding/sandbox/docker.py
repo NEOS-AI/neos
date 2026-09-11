@@ -102,7 +102,12 @@ def encode(item):
     return {'path': item.relative_to(root).as_posix(), 'kind': kind,
             'size': value.st_size,
             'modified_at': datetime.fromtimestamp(value.st_mtime, UTC).isoformat()}
-result = [encode(item) for item in sorted(p.rglob('*'))] if sys.argv[2] == 'tree' else encode(p)
+if sys.argv[2] == 'tree':
+    result = [encode(item) for item in sorted(p.rglob('*'))]
+else:
+    if not p.exists() and not p.is_symlink():
+        raise SystemExit(2)
+    result = encode(p)
 sys.stdout.write(json.dumps(result))
 """
 _SNAPSHOT_HELPER = """\
@@ -797,11 +802,16 @@ class DockerSandboxSession:
 
     async def stat(self, path: str) -> FileEntry:
         relative = normalize_workspace_path(path)
-        result = await self._run_helper(
-            _FILE_METADATA_HELPER,
-            relative.as_posix(),
-            "stat",
-        )
+        try:
+            result = await self._run_helper(
+                _FILE_METADATA_HELPER,
+                relative.as_posix(),
+                "stat",
+            )
+        except SandboxUnavailable as error:
+            if str(error) == "docker_command_failed:2":
+                raise SandboxNotFound(relative.as_posix()) from error
+            raise
         return self._file_entry(self._load_json(result.stdout))
 
     async def read_file(self, path: str) -> bytes:
