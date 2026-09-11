@@ -64,10 +64,11 @@ def test_research_procedure_is_document_only() -> None:
     lesson = extract_research_procedure(
         owner_id="u1",
         pipeline="pdf-html-gate",
-        steps=("fetch pdf", "html gate", "cite"),
+        steps=("fetch pdf", "html gate", "cite", "write skill.py"),
     )
     assert "skill.py" not in lesson.body
     assert lesson.kind == "procedure"
+    assert lesson.title == "pdf-html-gate"
     assert lesson.body.split("\n", 1)[0].__len__() <= 60
 
 

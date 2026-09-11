@@ -151,14 +151,15 @@ export async function decideCodingApproval(
   taskId: string,
   approvalId: string,
   decision: "approve" | "deny",
-  answers: string[] = []
+  answers: string[] = [],
+  remember = false
 ): Promise<CodingApprovalView> {
   const response = await fetch(
     `/api/coding/tasks/${encodeURIComponent(taskId)}/approvals/${encodeURIComponent(approvalId)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision, answers }),
+      body: JSON.stringify({ decision, answers, remember }),
     }
   );
   if (!response.ok) {

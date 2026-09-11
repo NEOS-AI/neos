@@ -24,10 +24,19 @@ MESSAGE_ID = 4001
 class FakeGateway:
     def __init__(self) -> None:
         self.calls: list[Any] = []
+        from neos.api.channels.session_bind import InMemoryChannelCodingBindStore
+
+        self.binds = InMemoryChannelCodingBindStore()
 
     async def dispatch(self, message: Any) -> str:
         self.calls.append(message)
         return "ok"
+
+    async def get_binding(self, session_id: str) -> Any:
+        return await self.binds.get(session_id)
+
+    async def bind_session(self, session_id: str, task_id: str, owner_id: str) -> None:
+        await self.binds.bind(session_id, task_id, owner_id)
 
 
 class _Typing:
@@ -54,6 +63,7 @@ class FakeChannel:
         self.parent_id = parent_id
         self.type = SimpleNamespace(name=type_name)
         self.sent: list[str] = []
+        self.sent_payloads: list[dict[str, Any]] = []
         self.typing_started = False
         self.threads: list["FakeChannel"] = []
         self.name = ""
@@ -61,8 +71,9 @@ class FakeChannel:
     def typing(self) -> _Typing:
         return _Typing(self)
 
-    async def send(self, content: str) -> None:
+    async def send(self, content: str, **kwargs: Any) -> None:
         self.sent.append(content)
+        self.sent_payloads.append({"content": content, **kwargs})
 
 
 def _bot_user() -> SimpleNamespace:
@@ -161,6 +172,41 @@ async def test_mentioned_allowlisted_user_is_dispatched(
     assert dispatched.channel_id == str(CHANNEL_ID)
     assert dispatched.text == _mentioned_content()
     assert dispatched.metadata["thread_id"] == str(MESSAGE_ID)
+    assert dispatched.metadata["idempotency_key"] == str(MESSAGE_ID)
+
+
+async def test_bound_session_without_mention_dispatches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = FakeChannel(CHANNEL_ID)
+    message = _message(content="status please", channel=channel, mentions=[])
+    install_channel_settings(monkeypatch, allowed_users=[str(USER_ID)])
+    gateway = FakeGateway()
+    await gateway.bind_session(
+        f"v2:discord:{GUILD_ID}:{CHANNEL_ID}:-", "ct_abc", "u_owner"
+    )
+    adapter = _adapter(gateway, channel)
+    await adapter._handle_message(message)
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0].text == "status please"
+    assert gateway.calls[0].session_id == f"v2:discord:{GUILD_ID}:{CHANNEL_ID}:-"
+
+
+async def test_unbound_session_without_mention_is_silent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = FakeChannel(CHANNEL_ID)
+    message = _message(content="status please", channel=channel, mentions=[])
+    gateway = await _handle(
+        monkeypatch,
+        message,
+        channel,
+        allowed_users=[str(USER_ID)],
+        require_mention=True,
+    )
+    assert gateway.calls == []
+    assert channel.sent == []
+    assert channel.typing_started is False
 
 
 async def test_channel_message_without_mention_is_silent(
@@ -517,6 +563,146 @@ async def test_thread_create_failure_replies_in_parent(
     assert created == []
     assert channel.sent == ["Started coding task ct_abc"]
     assert len(gateway.calls) == 1
+
+
+async def test_receive_message_uses_bot_when_principals_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_channel_settings(
+        monkeypatch, allowed_users=[str(USER_ID)], bot_user_id="bot-fallback"
+    )
+    channel = FakeChannel(CHANNEL_ID)
+    adapter = _adapter(FakeGateway(), channel)
+    message = await adapter.receive_message(
+        _message(content=_mentioned_content(), channel=channel, mentions=[_bot_mention()])
+    )
+    assert message.user_id == "bot-fallback"
+
+
+async def test_receive_message_does_not_fall_back_to_bot_when_unmapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from neos.config.schema import ChannelPrincipal
+
+    install_channel_settings(
+        monkeypatch,
+        allowed_users=[str(USER_ID), str(OTHER_USER_ID)],
+        bot_user_id="bot-fallback",
+        principals=[
+            ChannelPrincipal(
+                platform="discord",
+                platform_user_id=str(USER_ID),
+                user_id="u_alice",
+            )
+        ],
+    )
+    channel = FakeChannel(CHANNEL_ID)
+    adapter = _adapter(FakeGateway(), channel)
+    mapped = await adapter.receive_message(
+        _message(content=_mentioned_content(), channel=channel, mentions=[_bot_mention()])
+    )
+    unmapped = await adapter.receive_message(
+        _message(
+            author=_author(user_id=OTHER_USER_ID),
+            content=_mentioned_content(),
+            channel=channel,
+            mentions=[_bot_mention()],
+        )
+    )
+    assert mapped.user_id == "u_alice"
+    assert unmapped.user_id == ""
+
+
+def _view_custom_ids(channel: FakeChannel) -> list[str]:
+    if not channel.sent_payloads:
+        return []
+    view = channel.sent_payloads[-1].get("view")
+    if view is None:
+        return []
+    buttons = getattr(view, "buttons", None)
+    if buttons is None:
+        buttons = getattr(view, "children", None) or []
+    ids: list[str] = []
+    for button in buttons:
+        if isinstance(button, dict):
+            ids.append(str(button.get("custom_id") or ""))
+        else:
+            ids.append(str(getattr(button, "custom_id", "") or ""))
+    return ids
+
+
+async def test_coding_start_reply_includes_stop_status_buttons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = FakeChannel(CHANNEL_ID)
+    message = _message(
+        content=_code_content(),
+        channel=channel,
+        mentions=[_bot_mention()],
+    )
+    created = _attach_create_thread(message, channel)
+    await _handle_code(monkeypatch, message, channel, allowed_users=[str(USER_ID)])
+    assert _view_custom_ids(created[0]) == [
+        "neos_code_stop:ct_abc",
+        "neos_code_status:ct_abc",
+    ]
+
+
+async def test_ask_user_view_omits_approve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_channel_settings(monkeypatch, allowed_users=[str(USER_ID)])
+    channel = FakeChannel(CHANNEL_ID)
+    adapter = _adapter(FakeGateway(), channel)
+    await adapter.send_response(
+        str(CHANNEL_ID), "ct_1 waiting_approval ca_9 ask_user.v1"
+    )
+    assert _view_custom_ids(channel) == [
+        "neos_code_stop:ct_1",
+        "neos_code_deny:ca_9",
+    ]
+
+
+async def test_button_stop_dispatches_after_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_channel_settings(monkeypatch, allowed_users=[str(USER_ID)])
+    channel = FakeChannel(CHANNEL_ID, parent_id=5555, type_name="public_thread")
+    gateway = FakeGateway()
+    await gateway.bind_session(
+        f"v2:discord:{GUILD_ID}:5555:{CHANNEL_ID}", "ct_abc", "u_owner"
+    )
+    adapter = _adapter(gateway, channel)
+    await adapter._handle_code_action(
+        user_id=str(USER_ID),
+        channel=channel,
+        guild_id=str(GUILD_ID),
+        custom_id="neos_code_stop:ct_abc",
+        is_dm=False,
+        is_bot=False,
+    )
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0].text == "/stop"
+    assert gateway.calls[0].session_id == f"v2:discord:{GUILD_ID}:5555:{CHANNEL_ID}"
+
+
+async def test_button_unallowlisted_user_is_silent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_channel_settings(monkeypatch, allowed_users=[str(USER_ID)])
+    channel = FakeChannel(CHANNEL_ID)
+    gateway = FakeGateway()
+    adapter = _adapter(gateway, channel)
+    await adapter._handle_code_action(
+        user_id=str(OTHER_USER_ID),
+        channel=channel,
+        guild_id=str(GUILD_ID),
+        custom_id="neos_code_stop:ct_abc",
+        is_dm=False,
+        is_bot=False,
+    )
+    assert gateway.calls == []
+    assert channel.sent == []
 
 
 async def test_stop_in_autothread_resolves_bind(

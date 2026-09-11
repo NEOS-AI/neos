@@ -36,6 +36,9 @@ def install_channel_settings(
     telegram: TelegramChannelConfig | None = None,
     coding_invoke: bool = False,
     coding_owner_user_id: str = "",
+    bot_user_id: str = "",
+    inbound_media: bool = False,
+    draft_streaming: bool = False,
     principals: list[ChannelPrincipal] | None = None,
 ) -> Settings:
     import neos.config.settings as settings_module
@@ -51,6 +54,9 @@ def install_channel_settings(
             telegram=telegram or TelegramChannelConfig(),
             coding_invoke=coding_invoke,
             coding_owner_user_id=coding_owner_user_id,
+            bot_user_id=bot_user_id,
+            inbound_media=inbound_media,
+            draft_streaming=draft_streaming,
             principals=principals or [],
         )
     )

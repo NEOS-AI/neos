@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from neos.learn.lessons import Lesson, new_lesson
-from neos.learn.policy import clip_knowledge, namespace, should_capture_coding_signal
+from neos.learn.policy import (
+    clip_knowledge,
+    is_executable_lesson_source,
+    namespace,
+    should_capture_coding_signal,
+)
 
 _FAILURE_MARKERS = (
     "tool_outcome_unknown",
@@ -55,18 +60,33 @@ def extract_research_procedure(
     pipeline: str,
     steps: Sequence[str],
 ) -> Lesson:
-    description = clip_knowledge(f"{pipeline}: " + "; ".join(steps))
+    pipeline_name, safe_steps = _document_procedure(pipeline, steps)
+    description = clip_knowledge(f"{pipeline_name}: " + "; ".join(safe_steps))
     if len(description) > 60:
         description = description[:60]
     body = clip_knowledge(
-        "## Procedure\n" + "\n".join(f"- {step}" for step in steps)
+        "## Procedure\n" + "\n".join(f"- {step}" for step in safe_steps)
     )
     return new_lesson(
         namespace=namespace(owner_id),
-        title=pipeline,
+        title=pipeline_name,
         body=f"{description}\n\n{body}",
         kind="procedure",
     )
+
+
+def _document_procedure(
+    pipeline: str, steps: Sequence[str]
+) -> tuple[str, tuple[str, ...]]:
+    name = str(pipeline or "").strip() or "research"
+    if is_executable_lesson_source(name):
+        name = "research"
+    safe: list[str] = []
+    for step in steps:
+        text = str(step).strip()
+        if text and not is_executable_lesson_source(text):
+            safe.append(text)
+    return name, tuple(safe)
 
 
 def _events_look_failed(events: Sequence[Mapping[str, object]]) -> bool:

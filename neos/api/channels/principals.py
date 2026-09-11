@@ -35,6 +35,26 @@ def resolve_channel_principal(
     return None
 
 
+def resolve_message_user_id(
+    *,
+    platform: str,
+    platform_user_id: str,
+    channels: ChannelConfig,
+    bot_user_id: str,
+) -> str:
+    """Map a chat user. Fail-closed to "" when a principals map exists."""
+    mapped = resolve_channel_principal(
+        platform=platform,
+        platform_user_id=platform_user_id,
+        channels=channels,
+    )
+    if mapped:
+        return mapped
+    if channels.principals:
+        return ""
+    return bot_user_id
+
+
 def resolve_coding_owner(
     *,
     message: ChannelMessage,

@@ -112,6 +112,32 @@ def test_owner_can_resolve_coding_approval() -> None:
     assert response.json()["display_summary"] == {"path": "a.py"}
 
 
+def test_owner_can_remember_workspace_write_approval() -> None:
+    client, _ = make_client("owner")
+    captured = {}
+
+    class Approvals:
+        async def resolve(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(approval=SimpleNamespace(
+                approval_id="ca_1", tool_name="write_file.v1",
+                risk=SimpleNamespace(value="workspace_write"),
+                status=SimpleNamespace(value="approved"),
+                requested_at=datetime(2026, 7, 21, tzinfo=UTC),
+                expires_at=datetime(2026, 7, 21, 0, 15, tzinfo=UTC),
+                display_summary={"path": "a.py", "remember": True},
+            ))
+
+    client.app.dependency_overrides[get_coding_approval_service] = Approvals
+    response = client.post(
+        "/api/v1/coding/tasks/ct_1/approvals/ca_1",
+        json={"decision": "approve", "remember": True},
+    )
+    assert response.status_code == 200
+    assert captured["remember"] is True
+    assert response.json()["display_summary"]["remember"] is True
+
+
 def test_approval_not_found_and_conflict_are_sanitized() -> None:
     client, _ = make_client()
 

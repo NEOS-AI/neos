@@ -244,6 +244,7 @@ async def resolve_coding_approval(
             owner_id=current_user.user_id,
             decision=ApprovalDecision(body.decision),
             answers=tuple(body.answers),
+            remember=body.remember,
         )
     except ApprovalNotFound as error:
         raise HTTPException(status_code=404, detail="Coding approval not found") from error

@@ -30,6 +30,8 @@ async def test_reconnect_approve_executes_exact_mutation_once(real_loop_harness)
     )
 
     await harness.advance(worker_id="worker-before-reconnect")
+    await harness.advance(worker_id="worker-before-reconnect")
+    await harness.advance(worker_id="worker-before-reconnect")
     requested_event = await harness.advance(worker_id="worker-before-reconnect")
     requested = next(iter(harness.repository.approvals.values()))
     assert harness.write_count == 0
@@ -81,6 +83,7 @@ async def test_denial_resumes_without_executing_mutation(real_loop_harness) -> N
         ],
         approval_evaluator=evaluate_approval,
     )
+    await harness.advance()
     await harness.advance()
     requested = next(iter(harness.repository.approvals.values()))
 

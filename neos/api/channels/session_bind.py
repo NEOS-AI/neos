@@ -22,6 +22,19 @@ class ChannelCodingBinding:
     updated_at: datetime
 
 
+async def session_is_bound(gateway: object, session_id: str) -> bool:
+    """True when gateway exposes a bind store and this session is bound."""
+    if not session_id:
+        return False
+    get_binding = getattr(gateway, "get_binding", None)
+    if get_binding is None:
+        return False
+    try:
+        return await get_binding(session_id) is not None
+    except Exception:
+        return False
+
+
 class ChannelCodingBindStore(Protocol):
     async def bind(
         self, session_id: str, task_id: str, owner_id: str

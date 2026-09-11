@@ -12,7 +12,16 @@ pytestmark = pytest.mark.no_db
 async def test_null_hooks_are_silent() -> None:
     hooks = NullCodingHooks()
     call = ValidatedToolCall("read_file.v1", {"path": "a"}, ToolRisk.READ_ONLY)
-    await hooks.pre_tool(call)
+    assert await hooks.pre_tool(call) is None
     await hooks.post_tool(call, {"status": "ok"})
     await hooks.stop("end_turn")
     await hooks.compact((), ())
+
+
+def test_hook_decision_typed_shape() -> None:
+    allow = {"decision": "allow"}
+    deny = {"decision": "deny", "reason": "blocked"}
+    retry = {"decision": "retry", "reason": "try again"}
+    assert allow["decision"] in {"allow", "deny", "retry"}
+    assert deny["decision"] == "deny"
+    assert retry["reason"] == "try again"

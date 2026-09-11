@@ -136,37 +136,43 @@ class SlackAdapter(ChannelAdapterBase):
         channel_id = str(raw.get("channel", ""))
         text = (raw.get("text") or "").strip()
         slack_user_id = str(raw.get("user", ""))
-        raw_thread = raw.get("thread_ts")
         raw_ts = raw.get("ts")
-        # Reply in the existing thread, or start one from this message's ts.
-        # Session thread must match that id so follow-ups keep the bind.
-        thread_id = str(raw_thread or raw_ts or "")
-        session_id = build_session_key(
-            "slack",
-            self._team_scope(raw),
-            channel_id,
-            thread_id or "-",
-        )
+        thread_id = self._thread_id(raw)
+        session_id = self._session_id(raw)
 
-        from neos.api.channels.principals import resolve_channel_principal
+        from neos.api.channels.principals import resolve_message_user_id
 
-        mapped = resolve_channel_principal(
+        user_id = resolve_message_user_id(
             platform="slack",
             platform_user_id=slack_user_id,
             channels=settings.config.channels,
+            bot_user_id=settings.CHANNEL_BOT_USER_ID,
         )
+        metadata: dict[str, Any] = {
+            "slack_user_id": slack_user_id,
+            "slack_message_ts": raw_ts or "",
+            "thread_id": thread_id,
+            "idempotency_key": str(raw_ts or ""),
+        }
+        if settings.config.channels.inbound_media:
+            from neos.api.channels.media import collect_slack_attachments
+
+            attachments = await collect_slack_attachments(
+                list(raw.get("files") or []),
+                token=self._bot_token,
+                fetch=getattr(self, "_media_fetch", None),
+                resolve_host=getattr(self, "_media_resolve", None),
+            )
+            if attachments:
+                metadata["attachments"] = attachments
         return ChannelMessage(
-            user_id=mapped or settings.CHANNEL_BOT_USER_ID,
+            user_id=user_id,
             session_id=session_id,
             text=text,
             channel_type=self.channel_type,
             channel_id=channel_id,
             raw_data=raw,
-            metadata={
-                "slack_user_id": slack_user_id,
-                "slack_message_ts": raw_ts or "",
-                "thread_id": thread_id,
-            },
+            metadata=metadata,
         )
 
     async def send_response(
@@ -218,6 +224,27 @@ class SlackAdapter(ChannelAdapterBase):
                         e,
                     )
 
+    async def send_draft(
+        self, channel_id: str, content: str, *, thread_id: str | None = None
+    ) -> None:
+        from neos.config.settings import settings
+
+        if not settings.config.channels.draft_streaming:
+            return
+        if not self._app or not content:
+            return
+        try:
+            if thread_id:
+                await self._app.client.chat_update(
+                    channel=channel_id, ts=thread_id, text=content
+                )
+            else:
+                await self._app.client.chat_postMessage(
+                    channel=channel_id, text=content
+                )
+        except Exception as e:
+            logger.warning("[SlackAdapter] send_draft failed to %s: %s", channel_id, e)
+
     def _register_handlers(self) -> None:
         if self._app is None:
             return
@@ -261,6 +288,17 @@ class SlackAdapter(ChannelAdapterBase):
         user_id = str(user.get("id") or "")
         channel_id = str(channel.get("id") or "")
         thread_ts = str(message.get("thread_ts") or message.get("ts") or "")
+        raw = {
+            "user": user_id,
+            "channel": channel_id,
+            "text": text,
+            "team": team.get("id") or self._team_id,
+            "thread_ts": thread_ts or None,
+            "ts": message.get("ts") or thread_ts,
+        }
+        from neos.api.channels.session_bind import session_is_bound
+
+        bound = await session_is_bound(self._gateway, self._session_id(raw))
         ctx = GateContext(
             channel_type=self.channel_type,
             platform_user_id=user_id,
@@ -270,6 +308,7 @@ class SlackAdapter(ChannelAdapterBase):
             is_bot=False,
             is_self=bool(self._bot_user_id) and user_id == self._bot_user_id,
             mentioned=True,
+            bound_session=bound,
         )
         decision = evaluate_channel_gate(ctx, policy_from_settings(self.channel_type))
         if not decision.allowed:
@@ -312,6 +351,23 @@ class SlackAdapter(ChannelAdapterBase):
         except Exception:
             pass
 
+    def _thread_id(self, raw: Any) -> str:
+        if not isinstance(raw, dict):
+            return ""
+        return str(raw.get("thread_ts") or raw.get("ts") or "")
+
+    def _session_id(self, raw: Any) -> str:
+        channel_id = ""
+        if isinstance(raw, dict):
+            channel_id = str(raw.get("channel") or "")
+        thread_id = self._thread_id(raw)
+        return build_session_key(
+            "slack",
+            self._team_scope(raw),
+            channel_id,
+            thread_id or "-",
+        )
+
     def _team_scope(self, raw: Any) -> str:
         team = None
         if isinstance(raw, dict):
@@ -332,9 +388,8 @@ class SlackAdapter(ChannelAdapterBase):
         # bot_id가 있는 메시지 = 봇이 보낸 메시지 — 무시
         if message.get("bot_id"):
             return
-        if not message.get("text"):
-            return
 
+        from neos.config.settings import settings
         from neos.api.channels.authz import (
             GateContext,
             evaluate_channel_gate,
@@ -343,6 +398,13 @@ class SlackAdapter(ChannelAdapterBase):
         )
 
         text = message.get("text") or ""
+        files = list(message.get("files") or [])
+        has_attachment = bool(settings.config.channels.inbound_media and files)
+        if not text.strip() and not has_attachment:
+            return
+        from neos.api.channels.session_bind import session_is_bound
+
+        bound = await session_is_bound(self._gateway, self._session_id(message))
         ctx = GateContext(
             channel_type=self.channel_type,
             platform_user_id=str(message.get("user") or ""),
@@ -353,6 +415,8 @@ class SlackAdapter(ChannelAdapterBase):
             is_self=bool(self._bot_user_id)
             and str(message.get("user")) == self._bot_user_id,
             mentioned=slack_text_mentions_bot(text, self._bot_user_id or ""),
+            bound_session=bound,
+            has_attachment=has_attachment,
         )
         decision = evaluate_channel_gate(ctx, policy_from_settings(self.channel_type))
         if not decision.allowed:

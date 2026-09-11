@@ -15,7 +15,9 @@ export function CodingApprovalCard({
   approval: CodingApprovalView;
   live: boolean;
 }) {
-  const [submitting, setSubmitting] = useState<"approve" | "deny" | null>(null);
+  const [submitting, setSubmitting] = useState<
+    "approve" | "deny" | "remember" | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const questions = Array.isArray(approval.display_summary.questions)
     ? approval.display_summary.questions.filter(
@@ -25,17 +27,19 @@ export function CodingApprovalCard({
   const [answers, setAnswers] = useState<string[]>(() => questions.map(() => ""));
   const disabled = !live || approval.status !== "pending" || submitting !== null;
   const command = approval.risk === "command";
+  const workspaceWrite = approval.risk === "workspace_write";
   const asking = approval.tool_name === "ask_user.v1" || questions.length > 0;
 
-  async function decide(decision: "approve" | "deny") {
-    setSubmitting(decision);
+  async function decide(decision: "approve" | "deny", remember = false) {
+    setSubmitting(remember ? "remember" : decision);
     setError(null);
     try {
       await decideCodingApproval(
         taskId,
         approval.approval_id,
         decision,
-        asking ? answers : []
+        asking ? answers : [],
+        remember
       );
     } catch (caught) {
       setError(
@@ -129,6 +133,18 @@ export function CodingApprovalCard({
           >
             {submitting === "deny" ? "Denying…" : "Deny"}
           </Button>
+          {workspaceWrite ? (
+            <Button
+              aria-label="Approve tool for this run"
+              disabled={disabled}
+              onClick={() => decide("approve", true)}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              {submitting === "remember" ? "Approving…" : "Approve for this run"}
+            </Button>
+          ) : null}
           <Button
             aria-label="Approve tool request"
             disabled={disabled}

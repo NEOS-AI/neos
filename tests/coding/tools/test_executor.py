@@ -16,7 +16,7 @@ from neos.coding.sandbox.base import (
     SandboxTimeout,
     SearchMatch,
 )
-from neos.coding.tools.executor import SandboxToolExecutor
+from neos.coding.tools.executor import SandboxToolExecutor, ToolResult
 from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
 
 
@@ -708,3 +708,155 @@ async def test_memory_sandbox_write_creates_new_file_without_prior_read(
     assert result.status == "ok"
     assert await session.read_file("created.py") == b"ok\n"
     await provider.close()
+
+
+def test_tool_result_to_mapping_includes_retryable_and_fix() -> None:
+    ok = ToolResult.ok(workspace_revision="1")
+    mapping = ok.to_mapping()
+    assert mapping["retryable"] is False
+    assert mapping["fix"] is None
+
+    failed = ToolResult(
+        "error",
+        "sandbox_not_found",
+        None,
+        None,
+        False,
+        None,
+        "unknown",
+        retryable=True,
+        fix={"parents": True},
+    )
+    failed_mapping = failed.to_mapping()
+    assert failed_mapping["retryable"] is True
+    assert failed_mapping["fix"] == {"parents": True}
+    json.dumps(failed_mapping)
+
+
+@pytest.mark.asyncio
+async def test_execute_merges_retryable_fix_once_into_same_call() -> None:
+    class FixOnceExecutor(SandboxToolExecutor):
+        def __init__(self) -> None:
+            super().__init__(10, 10)
+            self.seen: list[tuple[str, dict[str, object]]] = []
+
+        async def _execute(self, session, call, *, known_reads):
+            payload = dict(call.input)
+            self.seen.append((call.name, payload))
+            if payload.get("parents") is True:
+                return ToolResult.ok(workspace_revision="8")
+            return ToolResult(
+                "error",
+                "sandbox_not_found",
+                None,
+                None,
+                False,
+                None,
+                "unknown",
+                retryable=True,
+                fix={"parents": True},
+            )
+
+    executor = FixOnceExecutor()
+    result = await executor.execute(
+        FakeSession(),
+        call("write_file.v1", {"path": "nested/a.txt", "content": "hi"}),
+    )
+
+    assert result.status == "ok"
+    assert executor.seen == [
+        ("write_file.v1", {"path": "nested/a.txt", "content": "hi"}),
+        (
+            "write_file.v1",
+            {"path": "nested/a.txt", "content": "hi", "parents": True},
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_stops_when_retried_call_repeats_reason_code() -> None:
+    class AlwaysRetryableExecutor(SandboxToolExecutor):
+        def __init__(self) -> None:
+            super().__init__(10, 10)
+            self.seen: list[dict[str, object]] = []
+
+        async def _execute(self, session, call, *, known_reads):
+            self.seen.append(dict(call.input))
+            return ToolResult(
+                "error",
+                "sandbox_not_found",
+                None,
+                None,
+                False,
+                None,
+                "unknown",
+                retryable=True,
+                fix={"parents": True},
+            )
+
+    executor = AlwaysRetryableExecutor()
+    result = await executor.execute(
+        FakeSession(),
+        call("write_file.v1", {"path": "nested/a.txt", "content": "hi"}),
+    )
+
+    assert (result.status, result.reason_code) == ("error", "sandbox_not_found")
+    assert result.retryable is True
+    assert result.fix == {"parents": True}
+    assert executor.seen == [
+        {"path": "nested/a.txt", "content": "hi"},
+        {"path": "nested/a.txt", "content": "hi", "parents": True},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_does_not_retry_without_fix_or_when_not_retryable() -> None:
+    class RecordingExecutor(SandboxToolExecutor):
+        def __init__(self, result: ToolResult) -> None:
+            super().__init__(10, 10)
+            self.result = result
+            self.calls = 0
+
+        async def _execute(self, session, call, *, known_reads):
+            self.calls += 1
+            return self.result
+
+    retryable_without_fix = RecordingExecutor(
+        ToolResult(
+            "error",
+            "sandbox_not_found",
+            None,
+            None,
+            False,
+            None,
+            "unknown",
+            retryable=True,
+        )
+    )
+    nonretryable_with_fix = RecordingExecutor(
+        ToolResult(
+            "error",
+            "sandbox_not_found",
+            None,
+            None,
+            False,
+            None,
+            "unknown",
+            retryable=False,
+            fix={"parents": True},
+        )
+    )
+
+    first = await retryable_without_fix.execute(
+        FakeSession(), call("write_file.v1", {"path": "a", "content": "x"})
+    )
+    second = await nonretryable_with_fix.execute(
+        FakeSession(), call("write_file.v1", {"path": "a", "content": "x"})
+    )
+
+    assert first.retryable is True
+    assert first.fix is None
+    assert second.retryable is False
+    assert second.fix == {"parents": True}
+    assert retryable_without_fix.calls == 1
+    assert nonretryable_with_fix.calls == 1

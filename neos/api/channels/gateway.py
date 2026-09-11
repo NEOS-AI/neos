@@ -27,6 +27,7 @@ _BUSY = "Already working on this thread."
 _CODE_USAGE = "Usage: /code <task>"
 _CODE_DISABLED = "Coding invoke is disabled."
 _CODE_NO_OWNER = "Coding owner is not configured."
+_NO_OWNER = "Owner is not configured."
 _NO_TASK = "No coding task in this thread."
 
 
@@ -57,6 +58,9 @@ class ChannelGateway:
         self._binds = binds
         # 채널별 async circuit_breaker (lazy init)
         self._breakers: Dict[str, Any] = {}
+        # Process-local /code start dedupe: (session_id, idempotency_key) → task_id.
+        # Not durable across processes or restarts.
+        self._code_starts: Dict[tuple[str, str], str] = {}
 
     def _get_breaker(self, channel_type: str):
         """채널 유형별 async circuit_breaker를 lazy-init하여 반환한다."""
@@ -129,8 +133,22 @@ class ChannelGateway:
         """
         from neos.config.settings import settings
 
+        from .principals import platform_user_id_from_message, resolve_channel_principal
+
+        channels = settings.config.channels
+        user_id = message.user_id
+        if channels.principals:
+            mapped = resolve_channel_principal(
+                platform=message.channel_type,
+                platform_user_id=platform_user_id_from_message(message),
+                channels=channels,
+            )
+            if not mapped:
+                return _NO_OWNER
+            user_id = mapped
+
         workflow_input: Dict[str, Any] = {
-            "user_id": message.user_id,
+            "user_id": user_id,
             "session_id": message.session_id,
             "query": message.text,           # execute_workflow(graph.py)가 필수로 읽는 키
             "original_query": message.text,
@@ -179,9 +197,16 @@ class ChannelGateway:
             )
             if not owner:
                 return _CODE_NO_OWNER
+            idem = str((message.metadata or {}).get("idempotency_key") or "")
+            if idem:
+                prior = self._code_starts.get((message.session_id, idem))
+                if prior is not None:
+                    return f"Started coding task {prior}"
             coding = self._coding_port()
             task_id = await coding.start_task(owner_id=owner, prompt=command.rest)
             await self._binds.bind(message.session_id, task_id, owner)
+            if idem:
+                self._code_starts[(message.session_id, idem)] = task_id
             return f"Started coding task {task_id}"
 
         binding = await self._binds.get(message.session_id)

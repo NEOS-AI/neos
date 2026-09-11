@@ -83,6 +83,11 @@ def is_protected_name(name: str) -> bool:
     return name in PROTECTED_SKILL_NAMES
 
 
+def is_executable_lesson_source(text: str) -> bool:
+    """Pipeline names and steps are DATA, never executable artifacts."""
+    return "skill.py" in (text or "").lower()
+
+
 def write_approval_required() -> bool:
     return bool(settings.config.learn.write_approval)
 

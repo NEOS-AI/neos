@@ -37,6 +37,8 @@ async def test_crash_after_write_has_unknown_outcome_without_second_write(
     )
 
     await harness.advance(worker_id="worker-1")
+    await harness.advance(worker_id="worker-1")
+    await harness.advance(worker_id="worker-1")
     with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown"):
         await harness.advance(worker_id="worker-1")
     harness.elapse(timedelta(seconds=31))

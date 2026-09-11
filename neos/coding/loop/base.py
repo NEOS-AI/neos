@@ -155,6 +155,7 @@ class CodingRunRepository(Protocol):
         decision: ApprovalDecision,
         now: datetime,
         answers: tuple[str, ...] = (),
+        remember: bool = False,
     ) -> ApprovalResolutionCommit: ...
 
     async def expire_pending_approvals(

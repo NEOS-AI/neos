@@ -619,6 +619,8 @@ class MemoryConfig(StrictConfigModel):
 class LearnConfig(StrictConfigModel):
     write_approval: bool = True
     coding_lessons: bool = False
+    research_procedures: bool = False
+    session_search_tool: bool = False
     curator: bool = True
     stale_days: int = 30
     archive_days: int = 90
@@ -1688,6 +1690,8 @@ class ChannelConfig(StrictConfigModel):
     ignored_channels: list[str] = Field(default_factory=list)
     coding_invoke: bool = False
     coding_owner_user_id: str = ""
+    inbound_media: bool = False
+    draft_streaming: bool = False
     principals: list[ChannelPrincipal] = Field(default_factory=list)
 
     @field_validator(

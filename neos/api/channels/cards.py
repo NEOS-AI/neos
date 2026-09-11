@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from neos.coding.domain.approvals import requires_approval_answers
@@ -26,6 +27,7 @@ _TEXT_ONLY = frozenset(
         "Usage: /code <task>",
         "Coding invoke is disabled.",
         "Coding owner is not configured.",
+        "Owner is not configured.",
     }
 )
 
@@ -59,6 +61,14 @@ _ACTION_COMMANDS = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class CodingAction:
+    label: str
+    action_id: str
+    value: str
+    style: str | None = None
+
+
 def started_task_id(text: str) -> str | None:
     match = _STARTED.fullmatch((text or "").strip())
     return match.group(1) if match else None
@@ -72,6 +82,74 @@ def command_for_action(action_id: str, value: str = "") -> str | None:
         approval_id = value.rsplit(":", 1)[-1]
         return f"{command} {approval_id}"
     return command
+
+
+def parse_action_payload(data: str) -> tuple[str, str] | None:
+    raw = (data or "").strip()
+    if not raw.startswith(ACTION_PREFIX):
+        return None
+    action_id, sep, value = raw.partition(":")
+    if not sep or action_id not in _ACTION_COMMANDS:
+        return None
+    return action_id, value
+
+
+def coding_actions(text: str) -> list[CodingAction]:
+    blocks = coding_blocks(text)
+    if not blocks:
+        return []
+    actions: list[CodingAction] = []
+    for block in blocks:
+        if block.get("type") != "actions":
+            continue
+        for element in block.get("elements") or []:
+            action_id = str(element.get("action_id") or "")
+            if not action_id:
+                continue
+            label = ""
+            label_obj = element.get("text")
+            if isinstance(label_obj, dict):
+                label = str(label_obj.get("text") or "")
+            actions.append(
+                CodingAction(
+                    label=label or action_id,
+                    action_id=action_id,
+                    value=str(element.get("value") or ""),
+                    style=element.get("style"),
+                )
+            )
+    return actions
+
+
+def telegram_inline_keyboard(text: str) -> dict[str, Any] | None:
+    actions = coding_actions(text)
+    if not actions:
+        return None
+    return {
+        "inline_keyboard": [
+            [
+                {
+                    "text": action.label,
+                    "callback_data": f"{action.action_id}:{action.value}",
+                }
+                for action in actions
+            ]
+        ]
+    }
+
+
+def discord_buttons(text: str) -> list[dict[str, str]] | None:
+    actions = coding_actions(text)
+    if not actions:
+        return None
+    return [
+        {
+            "label": action.label,
+            "custom_id": f"{action.action_id}:{action.value}",
+            "style": action.style or "",
+        }
+        for action in actions
+    ]
 
 
 def coding_blocks(text: str) -> list[dict[str, Any]] | None:

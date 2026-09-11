@@ -23,6 +23,7 @@ class ApprovalRepository(Protocol):
         decision: ApprovalDecision,
         now: datetime,
         answers: tuple[str, ...] = (),
+        remember: bool = False,
     ) -> ApprovalResolutionCommit: ...
 
     async def expire_pending_approvals(
@@ -77,6 +78,7 @@ class CodingApprovalService:
         owner_id: str,
         decision: ApprovalDecision,
         answers: tuple[str, ...] = (),
+        remember: bool = False,
     ) -> ApprovalResolutionCommit:
         commit = await self._repository.resolve_tool_approval(
             task_id=task_id,
@@ -85,6 +87,7 @@ class CodingApprovalService:
             decision=decision,
             now=self._clock(),
             answers=answers,
+            remember=remember,
         )
         await self._record(commit)
         await self._wake(commit.approval.task_id, commit.approval.checkpoint_id)

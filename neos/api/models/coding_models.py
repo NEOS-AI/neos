@@ -71,6 +71,7 @@ class CodingToolSnapshot(BaseModel):
 class CodingApprovalDecisionRequest(BaseModel):
     decision: Literal["approve", "deny"]
     answers: list[str] = Field(default_factory=list)
+    remember: bool = False
 
 
 class CodingApprovalSnapshot(BaseModel):

@@ -69,6 +69,15 @@ def test_empty_text_is_dropped() -> None:
     assert decision.reason is DropReason.EMPTY_TEXT
 
 
+def test_empty_text_with_attachment_is_not_dropped() -> None:
+    decision = evaluate_channel_gate(
+        _ctx(text="   ", mentioned=True, has_attachment=True),
+        _policy(),
+    )
+    assert decision.allowed is True
+    assert decision.reason is None
+
+
 def test_ignored_channel_is_dropped_even_when_mentioned() -> None:
     decision = evaluate_channel_gate(
         _ctx(channel_id="C_noise", mentioned=True),
@@ -108,6 +117,52 @@ def test_dm_skips_mention_requirement() -> None:
         _policy(require_mention=True),
     )
     assert decision.allowed is True
+
+
+def test_bound_session_skips_mention_requirement() -> None:
+    decision = evaluate_channel_gate(
+        _ctx(mentioned=False, is_dm=False, text="hello", bound_session=True),
+        _policy(require_mention=True),
+    )
+    assert decision.allowed is True
+    assert decision.reason is None
+
+
+def test_bound_session_still_requires_allowlist() -> None:
+    decision = evaluate_channel_gate(
+        _ctx(
+            mentioned=False,
+            bound_session=True,
+            platform_user_id="U_eve",
+            text="hello",
+        ),
+        _policy(require_mention=True, allowed_users=frozenset({"U_alice"})),
+    )
+    assert decision.allowed is False
+    assert decision.reason is DropReason.USER_NOT_ALLOWED
+
+
+def test_bound_session_still_drops_ignored_channel() -> None:
+    decision = evaluate_channel_gate(
+        _ctx(
+            mentioned=False,
+            bound_session=True,
+            channel_id="C_noise",
+            text="hello",
+        ),
+        _policy(require_mention=True, ignored_channels=frozenset({"C_noise"})),
+    )
+    assert decision.allowed is False
+    assert decision.reason is DropReason.IGNORED_CHANNEL
+
+
+def test_unbound_session_still_requires_mention() -> None:
+    decision = evaluate_channel_gate(
+        _ctx(mentioned=False, is_dm=False, text="hello", bound_session=False),
+        _policy(require_mention=True),
+    )
+    assert decision.allowed is False
+    assert decision.reason is DropReason.MENTION_REQUIRED
 
 
 def test_mention_not_required_when_disabled() -> None:
@@ -177,6 +232,13 @@ def test_slack_mention_token_detects_bot_user() -> None:
     assert slack_text_mentions_bot("hey <@U_OTHER>", "U0BOT") is False
     assert slack_text_mentions_bot("", "U0BOT") is False
     assert slack_text_mentions_bot("<@U0BOT>", "") is False
+
+
+def test_inbound_media_and_draft_streaming_default_off() -> None:
+    channels = ChannelConfig()
+    assert channels.inbound_media is False
+    assert channels.draft_streaming is False
+    assert channels.coding_invoke is False
 
 
 def test_legacy_settings_expose_gate_fields() -> None:

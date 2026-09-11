@@ -958,6 +958,7 @@ class PostgresCodingRunRepository:
         decision: ApprovalDecision,
         now: datetime,
         answers: tuple[str, ...] = (),
+        remember: bool = False,
     ) -> ApprovalResolutionCommit:
         async with await self._session_factory() as session:
             async with session.begin():
@@ -1027,6 +1028,8 @@ class PostgresCodingRunRepository:
                 display_summary = dict(approval.display_summary)
                 if answers:
                     display_summary["answers"] = list(answers)
+                if remember:
+                    display_summary["remember"] = True
                 resolved = self._resolved_approval(
                     approval=approval,
                     status=status,

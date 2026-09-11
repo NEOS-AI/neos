@@ -16,6 +16,9 @@ test("approval cards precede steering and remain event-driven", () => {
   assert.match(workspace, /pendingApprovals/);
   assert.match(card, /decideCodingApproval/);
   assert.match(card, /Approve once/);
+  assert.match(card, /Approve for this run/);
+  assert.match(card, /workspace_write/);
+  assert.match(card, /remember/);
 });
 
 test("ask_user approval card collects answers instead of echoing questions", () => {

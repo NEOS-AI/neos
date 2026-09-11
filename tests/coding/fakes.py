@@ -607,7 +607,7 @@ class InMemoryCodingRunRepository:
             return self.approvals.get((task_id, run_id, tool_call_id))
 
     async def resolve_tool_approval(
-        self, *, task_id, approval_id, owner_id, decision, now, answers=()
+        self, *, task_id, approval_id, owner_id, decision, now, answers=(), remember=False
     ):
         async with self._durability_lock:
             item = next(
@@ -645,6 +645,8 @@ class InMemoryCodingRunRepository:
                 summary = dict(approval.display_summary)
                 if answers:
                     summary["answers"] = list(answers)
+                if remember:
+                    summary["remember"] = True
                 resolved = replace(
                     approval,
                     status=status,

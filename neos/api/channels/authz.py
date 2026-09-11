@@ -37,6 +37,8 @@ class GateContext:
     is_bot: bool = False
     is_self: bool = False
     mentioned: bool = False
+    bound_session: bool = False
+    has_attachment: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,13 +58,18 @@ class GateDecision:
 def evaluate_channel_gate(ctx: GateContext, policy: ChannelGatePolicy) -> GateDecision:
     if ctx.is_bot or ctx.is_self:
         return GateDecision(False, DropReason.SELF_OR_BOT)
-    if not ctx.text.strip():
+    if not ctx.text.strip() and not ctx.has_attachment:
         return GateDecision(False, DropReason.EMPTY_TEXT)
     if ctx.channel_id in policy.ignored_channels:
         return GateDecision(False, DropReason.IGNORED_CHANNEL)
     if policy.allowed_channels and ctx.channel_id not in policy.allowed_channels:
         return GateDecision(False, DropReason.CHANNEL_NOT_ALLOWED)
-    if policy.require_mention and not ctx.is_dm and not ctx.mentioned:
+    if (
+        policy.require_mention
+        and not ctx.is_dm
+        and not ctx.mentioned
+        and not ctx.bound_session
+    ):
         return GateDecision(False, DropReason.MENTION_REQUIRED)
     if ctx.platform_user_id not in policy.allowed_users:
         return GateDecision(False, DropReason.USER_NOT_ALLOWED)

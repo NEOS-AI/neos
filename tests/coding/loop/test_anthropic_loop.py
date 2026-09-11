@@ -36,12 +36,15 @@ from neos.coding.loop.base import (
 )
 from neos.coding.model.anthropic import CodingModelError
 from neos.coding.model.base import (
+    CanonicalMessage,
     ModelCompleted,
     ModelUsage,
+    TextContent,
     TextDelta,
     ToolCallCompleted,
     ToolInputDelta,
     ToolResultContent,
+    ToolUseContent,
 )
 from neos.coding.tools.executor import ToolResult
 from neos.coding.tools.registry import CodingToolRegistry
@@ -156,6 +159,7 @@ def harness(
     audit=None,
     bindings=None,
     approval_evaluator=lambda _call: ApprovalPolicyOutcome.ALLOW,
+    hooks=None,
 ):
     repository = InMemoryCodingRunRepository(completed_tools=completed_tools)
     repository.execution_leases["ct_1"] = LEASE
@@ -176,6 +180,7 @@ def harness(
         audit=audit,
         clock=lambda: NOW,
         approval_evaluator=approval_evaluator,
+        hooks=hooks,
     )
     deps = LoopDependencies(repository=repository, events=events, lease=LEASE)
     return Harness(loop, repository, events, model, executor, bindings, deps)
@@ -221,6 +226,38 @@ async def test_one_invocation_executes_and_checkpoints_one_tool_call() -> None:
 
 
 @pytest.mark.asyncio
+async def test_model_tool_use_is_checkpointed_before_first_execute() -> None:
+    h = harness([[tool_call(), completed()]])
+    order: list[str] = []
+    original_commit = h.repository.commit_model_checkpoint
+    original_execute = h.executor.execute
+
+    async def recording_commit(**kwargs):
+        pending = list(kwargs["loop_state"].get("pending_tool_calls") or ())
+        if pending and int(kwargs["loop_state"].get("pending_tool_index", 0)) == 0:
+            order.append("commit")
+        return await original_commit(**kwargs)
+
+    async def recording_execute(session, call, **kwargs):
+        order.append("execute")
+        assert any(
+            list(item.loop_state.get("pending_tool_calls") or ())
+            and int(item.loop_state.get("pending_tool_index", 0)) == 0
+            for item in h.repository.checkpoints
+        )
+        return await original_execute(session, call, **kwargs)
+
+    h.repository.commit_model_checkpoint = recording_commit
+    h.executor.execute = recording_execute
+
+    await collect(h)
+
+    assert "commit" in order
+    assert "execute" in order
+    assert order.index("commit") < order.index("execute")
+
+
+@pytest.mark.asyncio
 async def test_workspace_write_requests_approval_before_claim_or_execution() -> None:
     h = harness([[tool_call(), completed()]], approval_evaluator=evaluate_approval)
 
@@ -229,6 +266,7 @@ async def test_workspace_write_requests_approval_before_claim_or_execution() -> 
     assert [event.type for event in events] == [
         "model.text_part.started",
         "model.text_part.completed",
+        "model.completed",
         "approval.requested",
         "task.status.changed",
     ]
@@ -269,6 +307,39 @@ async def test_denied_write_commits_result_without_execution() -> None:
     assert h.bindings.session.writes == 0
     assert events[-1].type == "tool.denied"
     assert h.repository.checkpoints[-1].loop_state["pending_tool_index"] == 1
+
+
+@pytest.mark.asyncio
+async def test_remember_write_approval_adds_tool_to_approved_always() -> None:
+    h = harness(
+        [
+            [tool_call("w1"), completed()],
+            [
+                tool_call("w2", input={"path": "b.txt", "content": "y"}),
+                completed(),
+            ],
+        ],
+        approval_evaluator=evaluate_approval,
+    )
+    await collect(h)
+    requested = next(iter(h.repository.approvals.values()))
+    await h.repository.resolve_tool_approval(
+        task_id="ct_1",
+        approval_id=requested.approval_id,
+        owner_id="test-owner",
+        decision=ApprovalDecision.APPROVE,
+        now=NOW + timedelta(seconds=1),
+        remember=True,
+    )
+
+    await collect(h, h.repository.checkpoints[-1])
+    assert "write_file.v1" in h.repository.checkpoints[-1].loop_state["approved_always"]
+
+    events = await collect(h, h.repository.checkpoints[-1])
+
+    assert not any(event.type == "approval.requested" for event in events)
+    assert h.bindings.session.writes == 2
+    assert "write_file.v1" in h.repository.checkpoints[-1].loop_state["approved_always"]
 
 
 @pytest.mark.asyncio
@@ -908,6 +979,104 @@ async def test_compact_over_budget_keeps_matching_active_tool_pair_ids() -> None
     assert use_ids[-1] == result_ids[-1] == "active"
 
 
+def test_compact_prefix_drop_never_splits_tool_use_result_pairs() -> None:
+    config = AnthropicLoopConfig(
+        model="claude-test",
+        system="code",
+        max_transcript_messages=4,
+    )
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]], config=config)
+
+    def pair(call_id: str) -> tuple[CanonicalMessage, CanonicalMessage]:
+        return (
+            CanonicalMessage(
+                "assistant",
+                (ToolUseContent(call_id, "read_file.v1", {"path": f"{call_id}.txt"}),),
+            ),
+            CanonicalMessage(
+                "tool",
+                (ToolResultContent(call_id, "ok", {"body": "x" * 20}),),
+            ),
+        )
+
+    transcript = (
+        CanonicalMessage("user", (TextContent("start"),)),
+        *pair("old_1"),
+        *pair("old_2"),
+        *pair("active"),
+    )
+
+    compacted = h.loop._compact(transcript)
+    use_ids = [
+        item.tool_call_id
+        for message in compacted
+        for item in message.content
+        if isinstance(item, ToolUseContent)
+    ]
+    result_ids = [
+        item.tool_call_id
+        for message in compacted
+        for item in message.content
+        if isinstance(item, ToolResultContent)
+    ]
+
+    assert set(use_ids) == set(result_ids)
+    assert "active" in use_ids
+    assert "old_1" not in use_ids
+    assert "old_1" not in result_ids
+
+
+def test_compact_shrinks_old_results_to_preview_and_sha256() -> None:
+    config = AnthropicLoopConfig(
+        model="claude-test",
+        system="code",
+        max_transcript_bytes=900,
+        max_text_delta_bytes=900,
+        max_public_text_bytes=900,
+    )
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]], config=config)
+    old_body = {
+        "preview": "Z" * 400,
+        "path": "src/a.py",
+        "entries": [{"text": "full file body"}],
+    }
+    digest = __import__("hashlib").sha256(
+        json.dumps(
+            old_body, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+    ).hexdigest()
+    transcript = (
+        CanonicalMessage("user", (TextContent("start"),)),
+        CanonicalMessage(
+            "assistant",
+            (ToolUseContent("old", "read_file.v1", {"path": "src/a.py"}),),
+        ),
+        CanonicalMessage("tool", (ToolResultContent("old", "ok", old_body),)),
+        CanonicalMessage(
+            "assistant",
+            (ToolUseContent("active", "read_file.v1", {"path": "src/b.py"}),),
+        ),
+        CanonicalMessage(
+            "tool",
+            (ToolResultContent("active", "ok", {"preview": "kept"}),),
+        ),
+    )
+
+    compacted = h.loop._compact(transcript)
+    results = {
+        item.tool_call_id: dict(item.content)
+        for message in compacted
+        for item in message.content
+        if isinstance(item, ToolResultContent)
+    }
+
+    assert results["old"]["compacted"] is True
+    assert results["old"]["sha256"] == digest
+    assert results["old"]["preview"] == "Z" * 200
+    assert results["old"]["path"] == "src/a.py"
+    assert results["active"] == {"preview": "kept"}
+
+
 @pytest.mark.asyncio
 async def test_first_turn_loads_agents_md_as_fenced_user_message() -> None:
     h = harness(
@@ -1205,6 +1374,57 @@ async def test_spawn_agent_is_not_batched_with_other_readonly_tools() -> None:
 
 
 @pytest.mark.asyncio
+async def test_spawn_agent_stops_inner_loop_on_interrupt() -> None:
+    h = harness(
+        [
+            [
+                tool_call(
+                    "s1",
+                    "spawn_agent.v1",
+                    {"prompt": "look around", "max_turns": 8},
+                ),
+                completed(),
+            ],
+            [
+                tool_call("c1", "read_file.v1", {"path": "a.txt"}),
+                completed(),
+            ],
+            [TextDelta("must not run"), completed()],
+            [TextDelta("must not run either"), ModelCompleted("end_turn", ModelUsage(1, 1))],
+        ]
+    )
+    spawn_requests = {"n": 0}
+    original = h.model.stream
+
+    async def gated_stream(request):
+        if getattr(request, "task_id", None) == "spawn":
+            spawn_requests["n"] += 1
+            if spawn_requests["n"] >= 1:
+                await h.repository.queue_steering(
+                    SteeringRequest(
+                        steering_id="cs_stop",
+                        task_id="ct_1",
+                        mode=SteeringMode.INTERRUPT_NOW,
+                        instruction="stop",
+                        requested_at=NOW,
+                    )
+                )
+        async for event in original(request):
+            yield event
+
+    h.model.stream = gated_stream
+    events = await collect(h)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+
+    assert completed_events
+    result = completed_events[-1].payload["result"]
+    assert result["status"] == "error"
+    assert result["reason_code"] == "aborted"
+    assert spawn_requests["n"] == 1
+    assert h.model.turns  # unused child turns remain
+
+
+@pytest.mark.asyncio
 async def test_llm_compact_keeps_first_user_instruction() -> None:
     from neos.coding.model.base import CanonicalMessage, TextContent
 
@@ -1225,3 +1445,54 @@ async def test_llm_compact_keeps_first_user_instruction() -> None:
     assert attempts == 1
     assert compacted[0].content[0].text == "Fix it"
     assert "old files were edited" in compacted[1].content[0].text
+
+
+class _DecisionHook:
+    def __init__(self, decision: str, reason: str = "blocked") -> None:
+        self.decision = decision
+        self.reason = reason
+
+    async def pre_tool(self, call):
+        return {"decision": self.decision, "reason": self.reason}
+
+    async def post_tool(self, call, result) -> None:
+        return None
+
+    async def stop(self, reason: str) -> None:
+        return None
+
+    async def compact(self, before, after) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_deny_commits_policy_hook_denied_without_execute() -> None:
+    h = harness([[tool_call(), completed()]], hooks=_DecisionHook("deny"))
+
+    events = await collect(h)
+
+    assert h.executor.calls == []
+    assert events[-1].type == "tool.denied"
+    assert events[-1].payload["reason_code"] == "policy_hook_denied"
+    assert h.repository.checkpoints[-1].loop_state["pending_tool_index"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_retry_injects_user_meta_and_returns_without_execute() -> None:
+    h = harness([[tool_call(), completed()]], hooks=_DecisionHook("retry", "try later"))
+
+    events = await collect(h)
+
+    assert h.executor.calls == []
+    assert any(event.type == "model.completed" for event in events)
+    state = h.repository.checkpoints[-1].loop_state
+    assert state["hook_retry_count"] == 1
+    assert state["pending_tool_index"] == 0
+    texts = [
+        item["text"]
+        for message in state["transcript"]
+        if message["role"] == "user"
+        for item in message["content"]
+        if item.get("type") == "text"
+    ]
+    assert any("retry" in text.lower() and "write_file.v1" in text for text in texts)

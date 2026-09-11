@@ -3248,6 +3248,16 @@ class MultiAgentWorkflow:
         if not result.get("success"):
             return
         try:
+            from neos.learn.research_lessons import stage_research_procedure_from_run
+
+            await stage_research_procedure_from_run(
+                user_input=user_input,
+                result=result,
+                final_state=final_state,
+            )
+        except Exception as e:
+            logger.debug(f"[Workflow] Research procedure staging skipped: {e}")
+        try:
             from neos.memory.manager import memory_manager
             sources = []
             for sr in (final_state.get("search_results") or []):

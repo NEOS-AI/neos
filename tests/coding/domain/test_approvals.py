@@ -79,6 +79,25 @@ def test_approval_gate_denies_listed_tools_and_fail_closes() -> None:
     assert manual_seed is ApprovalPolicyOutcome.REQUIRE_APPROVAL
 
 
+def test_approved_always_allows_named_workspace_writes_only() -> None:
+    write = call(
+        "write_file.v1",
+        {"path": "src/main.py", "content": "value"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+    edit = call(
+        "edit_file.v1",
+        {"path": "src/main.py", "old_string": "a", "new_string": "b"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+    command = call("execute.v1", {"argv": ["pytest"]}, ToolRisk.COMMAND)
+    gate = ApprovalGate(approved_always=frozenset({"write_file.v1"}))
+
+    assert evaluate_approval(write, gate) is ApprovalPolicyOutcome.ALLOW
+    assert evaluate_approval(edit, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(command, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+
+
 def test_set_phase_to_implement_from_plan_requires_approval() -> None:
     jump = call("set_phase.v1", {"phase": "implement"}, ToolRisk.READ_ONLY)
     assert (

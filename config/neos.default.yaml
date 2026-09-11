@@ -393,6 +393,8 @@ memory:
 learn:
   write_approval: true
   coding_lessons: false
+  research_procedures: false
+  session_search_tool: false
   curator: true
   stale_days: 30
   archive_days: 90
@@ -600,6 +602,8 @@ channels:
   ignored_channels: []
   coding_invoke: false
   coding_owner_user_id: ""
+  inbound_media: false
+  draft_streaming: false
 
 context_assembly:
   max_tokens: 8000

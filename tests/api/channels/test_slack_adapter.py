@@ -18,10 +18,19 @@ pytestmark = pytest.mark.no_db
 class FakeGateway:
     def __init__(self) -> None:
         self.calls: list[Any] = []
+        from neos.api.channels.session_bind import InMemoryChannelCodingBindStore
+
+        self.binds = InMemoryChannelCodingBindStore()
 
     async def dispatch(self, message: Any) -> str:
         self.calls.append(message)
         return "ok"
+
+    async def get_binding(self, session_id: str) -> Any:
+        return await self.binds.get(session_id)
+
+    async def bind_session(self, session_id: str, task_id: str, owner_id: str) -> None:
+        await self.binds.bind(session_id, task_id, owner_id)
 
 
 class FakeSay:
@@ -72,6 +81,44 @@ async def test_mentioned_allowlisted_user_dispatches_once(
     assert len(gateway.calls) == 1
     assert gateway.calls[0].text == "hello <@U_BOT>"
     assert gateway.calls[0].channel_id == "C_general"
+    assert say.calls == []
+
+
+async def test_bound_session_without_mention_dispatches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    await gateway.bind_session("v2:slack:T1:C_general:111.222", "ct_abc", "u_owner")
+
+    await adapter._handle_message(
+        _slack_message(
+            text="status please",
+            team="T1",
+            ts="999.000",
+            thread_ts="111.222",
+        ),
+        say,
+        client=None,
+    )
+
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0].text == "status please"
+    assert gateway.calls[0].session_id == "v2:slack:T1:C_general:111.222"
+    assert say.calls == []
+
+
+async def test_unbound_session_without_mention_is_silent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+
+    await adapter._handle_message(
+        _slack_message(text="status please", team="T1", ts="111.222"),
+        say,
+        client=None,
+    )
+
+    assert gateway.calls == []
     assert say.calls == []
 
 
@@ -177,6 +224,18 @@ async def test_ignored_channel_is_dropped_even_when_mentioned(
     assert say.calls == []
 
 
+async def test_idempotency_key_is_slack_ts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    await adapter._handle_message(
+        _slack_message(team="T_workspace", ts="123.456"),
+        say,
+        client=None,
+    )
+    assert gateway.calls[0].metadata["idempotency_key"] == "123.456"
+
+
 async def test_session_id_is_v2_slack_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -255,12 +314,16 @@ async def test_send_response_is_called_with_thread_id(
 class FakeSlackClient:
     def __init__(self, *, fail_blocks: bool = False) -> None:
         self.posted: list[dict[str, Any]] = []
+        self.updated: list[dict[str, Any]] = []
         self._fail_blocks = fail_blocks
 
     async def chat_postMessage(self, **kwargs: Any) -> None:
         if self._fail_blocks and kwargs.get("blocks"):
             raise RuntimeError("invalid_blocks")
         self.posted.append(kwargs)
+
+    async def chat_update(self, **kwargs: Any) -> None:
+        self.updated.append(kwargs)
 
 
 def _action_ids(blocks: list[dict[str, Any]]) -> list[str]:
@@ -279,6 +342,28 @@ def _attach_slack_client(
     client = FakeSlackClient(fail_blocks=fail_blocks)
     adapter._app = type("FakeApp", (), {"client": client})()
     return client
+
+
+async def test_send_draft_is_noop_when_flag_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _gateway, _say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    client = _attach_slack_client(adapter)
+    await adapter.send_draft("C_general", "thinking...")
+    assert client.posted == []
+    assert client.updated == []
+
+
+async def test_send_draft_may_edit_when_flag_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _gateway, _say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    install_channel_settings(
+        monkeypatch, allowed_users=["U_alice"], draft_streaming=True
+    )
+    client = _attach_slack_client(adapter)
+    await adapter.send_draft("C_general", "thinking...", thread_id="123.456")
+    assert client.updated or client.posted
 
 
 async def test_coding_start_reply_includes_stop_and_status_blocks(
@@ -417,6 +502,41 @@ async def test_status_card_includes_stop_until_terminal(
     assert _action_ids(client.posted[0]["blocks"]) == ["neos_code_stop"]
     assert client.posted[1]["blocks"][0]["type"] == "section"
     assert _action_ids(client.posted[1]["blocks"]) == []
+
+
+async def test_receive_message_uses_bot_when_principals_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _gateway, _say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    install_channel_settings(
+        monkeypatch, allowed_users=["U_alice"], bot_user_id="bot-fallback"
+    )
+    message = await adapter.receive_message(_slack_message(user="U_alice"))
+    assert message.user_id == "bot-fallback"
+
+
+async def test_receive_message_does_not_fall_back_to_bot_when_unmapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from neos.config.schema import ChannelPrincipal
+
+    adapter, _gateway, _say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    install_channel_settings(
+        monkeypatch,
+        allowed_users=["U_alice", "U_eve"],
+        bot_user_id="bot-fallback",
+        principals=[
+            ChannelPrincipal(
+                platform="slack",
+                platform_user_id="U_alice",
+                user_id="u_alice",
+            )
+        ],
+    )
+    mapped = await adapter.receive_message(_slack_message(user="U_alice"))
+    unmapped = await adapter.receive_message(_slack_message(user="U_eve"))
+    assert mapped.user_id == "u_alice"
+    assert unmapped.user_id == ""
 
 
 async def test_block_action_status_and_approve_dispatch_commands(

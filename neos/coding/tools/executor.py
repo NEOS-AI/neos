@@ -101,6 +101,8 @@ class ToolResult:
     stderr: Mapping[str, object] | None = None
     exit_code: int | None = None
     audit: Mapping[str, object] | None = None
+    retryable: bool = False
+    fix: dict[str, object] | None = None
 
     @classmethod
     def ok(
@@ -129,6 +131,23 @@ class SandboxToolExecutor:
         call: ValidatedToolCall,
         *,
         known_reads: frozenset[str] = frozenset(),
+    ) -> ToolResult:
+        result = await self._attempt(session, call, known_reads=known_reads)
+        if result.status != "error" or not result.retryable or result.fix is None:
+            return result
+        merged = ValidatedToolCall(
+            call.name,
+            {**dict(call.input), **result.fix},
+            call.risk,
+        )
+        return await self._attempt(session, merged, known_reads=known_reads)
+
+    async def _attempt(
+        self,
+        session: SandboxSession,
+        call: ValidatedToolCall,
+        *,
+        known_reads: frozenset[str],
     ) -> ToolResult:
         try:
             return await self._execute(session, call, known_reads=known_reads)

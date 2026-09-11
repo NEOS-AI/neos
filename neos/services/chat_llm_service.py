@@ -38,6 +38,11 @@ from neos.services.attachment_blocks import (
     render_langchain,
     resolve_attachments,
 )
+from neos.learn.session_search_tool import (
+    SEARCH_USER_SESSIONS_NAME,
+    handle_search_user_sessions,
+    list_chat_research_tools,
+)
 from neos.tools.tool_search.search_tools_handler import SEARCH_TOOLS_TOOL
 
 logger = get_logger(__name__)
@@ -809,6 +814,7 @@ class ChatLLMService:
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         max_tool_rounds: int = 3,
+        user_id: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Advanced Tool Search 패턴의 멀티턴 도구 호출 루프 스트리밍
@@ -866,9 +872,9 @@ class ChatLLMService:
 
             client = build_async_anthropic()
 
-            # 1. 초기 도구 세트: 코어 도구 + search_tools + 선택적 Advisor
+            # 1. 초기 도구 세트: 코어 도구 + search_tools + 선택적 세션 검색 + Advisor
             tool_policy = build_tool_policy(
-                [*core_tools, SEARCH_TOOLS_TOOL],
+                [*core_tools, SEARCH_TOOLS_TOOL, *list_chat_research_tools()],
                 executor_model=model,
                 prompt_caching=prompt_cache_config,
                 advisor=advisor_config,
@@ -1075,6 +1081,30 @@ class ChatLLMService:
                             f"found {len(search_result.get('found_tools', []))} tools, "
                             f"active tools now: {len(active_tools_dicts)}"
                         )
+                    elif tool_use.name == SEARCH_USER_SESSIONS_NAME:
+                        auth_user_id = (user_id or "").strip()
+                        if not auth_user_id:
+                            auth_user_id = (
+                                await _resolve_owner_user_id(conversation_id) or ""
+                            )
+                        try:
+                            session_result = await handle_search_user_sessions(
+                                tool_use.input or {},
+                                user_id=auth_user_id,
+                            )
+                        except ValueError as exc:
+                            session_result = {
+                                "type": "tool_result",
+                                "error": str(exc),
+                                "snippets": [],
+                            }
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use.id,
+                            "content": json.dumps(
+                                session_result, ensure_ascii=False
+                            ),
+                        })
                     else:
                         # 일반 도구 호출
                         yield {

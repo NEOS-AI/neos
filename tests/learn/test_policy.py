@@ -3,6 +3,7 @@ import pytest
 from neos.learn.policy import (
     PROTECTED_SKILL_NAMES,
     clip_knowledge,
+    is_executable_lesson_source,
     is_imperative,
     is_protected_name,
     namespace,
@@ -24,6 +25,11 @@ def test_namespace_and_protected_names() -> None:
     assert is_protected_name("pdf")
     assert "wikipedia" in PROTECTED_SKILL_NAMES
     assert not is_protected_name("my-custom-lesson")
+
+
+def test_pipeline_source_is_data_not_executable() -> None:
+    assert is_executable_lesson_source("write skill.py")
+    assert not is_executable_lesson_source("fetch pdf")
 
 
 def test_clip_knowledge_respects_cap() -> None:

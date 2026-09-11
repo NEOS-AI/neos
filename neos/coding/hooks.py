@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Protocol
+from typing import Any, Literal, NotRequired, Protocol, TypedDict
 
 from neos.coding.model.base import CanonicalMessage
 from neos.coding.tools.registry import ValidatedToolCall
 
 
+class HookDecision(TypedDict):
+    decision: Literal["allow", "deny", "retry"]
+    reason: NotRequired[str]
+
+
 class CodingHookPort(Protocol):
-    async def pre_tool(self, call: ValidatedToolCall) -> None: ...
+    async def pre_tool(self, call: ValidatedToolCall) -> HookDecision | None: ...
 
     async def post_tool(self, call: ValidatedToolCall, result: Mapping[str, Any]) -> None: ...
 
@@ -24,7 +29,7 @@ class CodingHookPort(Protocol):
 
 
 class NullCodingHooks:
-    async def pre_tool(self, call: ValidatedToolCall) -> None:
+    async def pre_tool(self, call: ValidatedToolCall) -> HookDecision | None:
         return None
 
     async def post_tool(self, call: ValidatedToolCall, result: Mapping[str, Any]) -> None:
