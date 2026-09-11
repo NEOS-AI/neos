@@ -1,6 +1,7 @@
 import pytest
 
 from neos.config.coding_selection import (
+    coding_credential_for,
     resolve_coding_selection,
     resolve_coding_selection_from_app,
 )
@@ -73,6 +74,16 @@ def test_gemini_default_comes_from_catalog() -> None:
     assert selected.provider == "gemini"
     assert selected.model == "gemini-2.0-flash-exp"
     assert selected.source == "provider_default"
+
+
+def test_ollama_credential_is_the_configured_base_url() -> None:
+    config = AppConfig.model_validate({})
+    assert coding_credential_for(config, "ollama") == "http://localhost:11434"
+
+    empty = AppConfig.model_validate(
+        {"model_providers": {"ollama": {"base_url": "   "}}}
+    )
+    assert coding_credential_for(empty, "ollama") is None
 
 
 def test_app_config_openai_astra_round_trip() -> None:

@@ -27,5 +27,4 @@ def normalize_stop_reason(
         return "tool_use"
     if raw is None:
         return "unknown"
-    mapped = _STOP_REASON_ALIASES.get(str(raw))
-    return mapped or str(raw) or "unknown"
+    return _STOP_REASON_ALIASES.get(str(raw), "unknown")

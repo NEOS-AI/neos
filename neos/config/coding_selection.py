@@ -104,5 +104,6 @@ def coding_credential_for(config: "AppConfig", provider: str) -> str | None:
     if provider == "gemini":
         return secrets.google_api_key
     if provider == "ollama":
-        return "local"
+        base_url = (config.model_providers.ollama.base_url or "").strip()
+        return base_url or None
     return None

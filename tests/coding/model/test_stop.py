@@ -13,6 +13,9 @@ from neos.coding.model.stop import normalize_stop_reason
         ("max_tokens", False, "max_tokens"),
         ("stop", True, "tool_use"),
         (None, False, "unknown"),
+        ("content_filter", False, "unknown"),
+        ("SAFETY", False, "unknown"),
+        ("1", False, "unknown"),
     ],
 )
 def test_vendor_finish_reasons_collapse_to_loop_vocabulary(

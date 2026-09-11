@@ -44,6 +44,7 @@ class OpenAICodingModel:
         buffers: dict[int, ToolArgumentBuffer] = {}
         input_tokens = 0
         output_tokens = 0
+        seen_usage = False
         finish_reason: str | None = None
         try:
             async with asyncio.timeout(request.limits.timeout_sec):
@@ -53,6 +54,7 @@ class OpenAICodingModel:
                 async for raw in stream:
                     usage = getattr(raw, "usage", None)
                     if usage is not None:
+                        seen_usage = True
                         input_tokens = int(
                             getattr(usage, "prompt_tokens", 0)
                             or getattr(usage, "input_tokens", 0)
@@ -106,8 +108,12 @@ class OpenAICodingModel:
             stop_reason=normalize_stop_reason(
                 finish_reason, has_tool_calls=bool(buffers)
             ),
-            usage=ModelUsage(
-                input_tokens=input_tokens, output_tokens=output_tokens
+            usage=(
+                ModelUsage(
+                    input_tokens=input_tokens, output_tokens=output_tokens
+                )
+                if seen_usage
+                else None
             ),
         )
 

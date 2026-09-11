@@ -65,6 +65,13 @@ class CodingLoopWaitingApproval(RuntimeError):
     pass
 
 
+def _usage_tokens(completion: ModelCompleted) -> tuple[int, int]:
+    usage = completion.usage
+    if usage is None:
+        return 0, 0
+    return usage.input_tokens, usage.output_tokens
+
+
 @dataclass(frozen=True, slots=True)
 class CodingLoopConfig:
     model: str
@@ -321,12 +328,13 @@ class DurableCodingLoop:
             and completion.stop_reason == "max_tokens"
             and state.output_token_escalations < 1
         ):
+            in_tokens, out_tokens = _usage_tokens(completion)
             retry_state = replace(
                 state,
                 instructions_loaded=True,
                 output_token_escalations=state.output_token_escalations + 1,
-                input_tokens=state.input_tokens + completion.usage.input_tokens,
-                output_tokens=state.output_tokens + completion.usage.output_tokens,
+                input_tokens=state.input_tokens + in_tokens,
+                output_tokens=state.output_tokens + out_tokens,
             )
             self._check_usage_budgets(retry_state)
             committed = await deps.repository.commit_model_checkpoint(
@@ -872,12 +880,12 @@ class DurableCodingLoop:
         transcript = await self._compact_with_hook(
             transcript, preserve_tools=bool(calls)
         )
-        usage = completion.usage
+        in_tokens, out_tokens = _usage_tokens(completion)
         cost = (
             state.cost_micros
             + (
-                usage.input_tokens * self._config.input_cost_micros_per_million
-                + usage.output_tokens * self._config.output_cost_micros_per_million
+                in_tokens * self._config.input_cost_micros_per_million
+                + out_tokens * self._config.output_cost_micros_per_million
             )
             // 1_000_000
         )
@@ -888,8 +896,8 @@ class DurableCodingLoop:
             pending_tool_calls=tuple(calls),
             pending_tool_index=0,
             transcript_digest=self._digest(transcript),
-            input_tokens=state.input_tokens + usage.input_tokens,
-            output_tokens=state.output_tokens + usage.output_tokens,
+            input_tokens=state.input_tokens + in_tokens,
+            output_tokens=state.output_tokens + out_tokens,
             cost_micros=cost,
             terminal_pending=False,
         )

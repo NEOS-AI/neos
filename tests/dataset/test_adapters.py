@@ -176,3 +176,25 @@ async def test_a_coding_stream_is_instrumented_once_per_completion(collected):
     assert record.prompt_tokens == 11
     assert record.completion_tokens == 22
     assert record.output_text == "코드 조각"
+
+
+@pytest.mark.asyncio
+async def test_coding_stream_without_usage_is_not_recorded(collected):
+    from neos.dataset.adapters import TrackedCodingModel
+
+    class _Completed:
+        stop_reason = "end_turn"
+        usage = None
+
+    class _Request:
+        model = "gpt-6-astra"
+        messages = []
+
+    class _Inner:
+        async def stream(self, request):
+            yield _Completed()
+
+    tracked = TrackedCodingModel(_Inner(), provider="openai", workflow_step="coding_loop")
+    _ = [event async for event in tracked.stream(_Request())]
+
+    assert collected == []

@@ -147,6 +147,22 @@ def test_openai_coding_loop_requires_openai_credential() -> None:
         )
 
 
+def test_ollama_coding_loop_requires_a_base_url() -> None:
+    with pytest.raises(ValidationError, match="ollama credential"):
+        AppConfig.model_validate(
+            priced_real_config(
+                coding_model={
+                    "enabled": True,
+                    "provider": "ollama",
+                    "input_cost_micros_per_million": 1,
+                    "output_cost_micros_per_million": 1,
+                },
+                sandbox={"enabled": True},
+                model_providers={"ollama": {"base_url": ""}},
+            )
+        )
+
+
 def test_openai_coding_loop_accepts_openai_credential() -> None:
     config = AppConfig.model_validate(
         priced_real_config(

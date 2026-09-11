@@ -142,6 +142,15 @@ async def test_text_and_stop_are_normalized() -> None:
     assert events[-1].stop_reason == "end_turn"
 
 
+@pytest.mark.asyncio
+async def test_missing_usage_is_omitted_not_invented_as_zero() -> None:
+    client = FakeOpenAIClient([event(content="hello"), event(finish_reason="stop")])
+
+    events = [item async for item in OpenAICodingModel(client).stream(request())]
+
+    assert events[-1].usage is None
+
+
 def test_gpt6_astra_uses_max_completion_tokens() -> None:
     payload = _to_openai_request(request(model="gpt-6-astra"))
 

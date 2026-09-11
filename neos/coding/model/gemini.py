@@ -40,6 +40,7 @@ class GeminiCodingModel:
         buffers: dict[str, ToolArgumentBuffer] = {}
         input_tokens = 0
         output_tokens = 0
+        seen_usage = False
         finish_reason: str | None = None
         try:
             async with asyncio.timeout(request.limits.timeout_sec):
@@ -51,6 +52,7 @@ class GeminiCodingModel:
                 async for raw in stream:
                     usage = getattr(raw, "usage_metadata", None)
                     if usage is not None:
+                        seen_usage = True
                         input_tokens = int(
                             getattr(usage, "prompt_token_count", 0) or 0
                         )
@@ -90,8 +92,12 @@ class GeminiCodingModel:
             stop_reason=normalize_stop_reason(
                 finish_reason, has_tool_calls=bool(buffers)
             ),
-            usage=ModelUsage(
-                input_tokens=input_tokens, output_tokens=output_tokens
+            usage=(
+                ModelUsage(
+                    input_tokens=input_tokens, output_tokens=output_tokens
+                )
+                if seen_usage
+                else None
             ),
         )
 

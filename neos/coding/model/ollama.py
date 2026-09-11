@@ -47,6 +47,7 @@ class OllamaCodingModel:
         buffers: dict[str, ToolArgumentBuffer] = {}
         seen_text = ""
         finish_reason: str | None = None
+        usage: ModelUsage | None = None
         try:
             async with asyncio.timeout(request.limits.timeout_sec):
                 async with self._client.stream(
@@ -89,6 +90,18 @@ class OllamaCodingModel:
                             finish_reason = str(
                                 payload.get("done_reason") or "stop"
                             )
+                            if (
+                                "prompt_eval_count" in payload
+                                or "eval_count" in payload
+                            ):
+                                usage = ModelUsage(
+                                    input_tokens=int(
+                                        payload.get("prompt_eval_count") or 0
+                                    ),
+                                    output_tokens=int(
+                                        payload.get("eval_count") or 0
+                                    ),
+                                )
         except CodingModelError:
             raise
         except TimeoutError as error:
@@ -108,7 +121,7 @@ class OllamaCodingModel:
             stop_reason=normalize_stop_reason(
                 finish_reason, has_tool_calls=bool(buffers)
             ),
-            usage=ModelUsage(input_tokens=0, output_tokens=0),
+            usage=usage,
         )
 
     async def _consume_call(
