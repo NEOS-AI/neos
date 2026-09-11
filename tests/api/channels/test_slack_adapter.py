@@ -304,6 +304,35 @@ async def test_coding_start_reply_includes_stop_and_status_blocks(
     assert values == ["ct_abc", "ct_abc"]
 
 
+async def test_block_action_matches_code_session_when_message_omits_team(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    adapter._team_id = "T1"
+
+    await adapter._handle_message(
+        _slack_message(text="<@U_BOT> /code fix it", ts="111.222"),
+        say,
+        client=None,
+    )
+    await adapter._handle_block_action(
+        {
+            "user": {"id": "U_alice"},
+            "channel": {"id": "C_general"},
+            "team": {"id": "T1"},
+            "message": {"ts": "999.000", "thread_ts": "111.222"},
+            "actions": [
+                {"action_id": "neos_code_stop", "value": "ct_abc", "type": "button"}
+            ],
+        }
+    )
+
+    assert [call.session_id for call in gateway.calls] == [
+        "v2:slack:T1:C_general:111.222",
+        "v2:slack:T1:C_general:111.222",
+    ]
+
+
 async def test_block_action_stop_dispatches_stop_same_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

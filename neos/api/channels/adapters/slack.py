@@ -47,6 +47,7 @@ class SlackAdapter(ChannelAdapterBase):
         self._handler: Optional[Any] = None  # AsyncSocketModeHandler
         self._handler_task: Optional[asyncio.Task] = None
         self._bot_user_id: Optional[str] = None
+        self._team_id: Optional[str] = None
 
     async def start(self) -> None:
         """Slack Socket Mode 핸들러를 시작한다."""
@@ -84,6 +85,9 @@ class SlackAdapter(ChannelAdapterBase):
             try:
                 auth = await self._app.client.auth_test()
                 self._bot_user_id = auth.get("user_id")
+                team_id = auth.get("team_id")
+                if team_id:
+                    self._team_id = str(team_id)
             except Exception as e:
                 logger.warning("[SlackAdapter] auth_test failed (non-critical): %s", e)
 
@@ -132,7 +136,6 @@ class SlackAdapter(ChannelAdapterBase):
         channel_id = str(raw.get("channel", ""))
         text = (raw.get("text") or "").strip()
         slack_user_id = str(raw.get("user", ""))
-        raw_team = raw.get("team")
         raw_thread = raw.get("thread_ts")
         raw_ts = raw.get("ts")
         # Reply in the existing thread, or start one from this message's ts.
@@ -140,7 +143,7 @@ class SlackAdapter(ChannelAdapterBase):
         thread_id = str(raw_thread or raw_ts or "")
         session_id = build_session_key(
             "slack",
-            str(raw_team) if raw_team else "dm",
+            self._team_scope(raw),
             channel_id,
             thread_id or "-",
         )
@@ -213,7 +216,12 @@ class SlackAdapter(ChannelAdapterBase):
             return
 
         @self._app.message()
-        async def handle_message(message: dict, say: Any, client: Any) -> None:
+        async def handle_message(
+            message: dict, say: Any, client: Any, context: Any = None
+        ) -> None:
+            team_id = _context_team_id(context)
+            if team_id and not message.get("team") and not message.get("team_id"):
+                message = {**message, "team": team_id}
             await self._handle_message(message, say, client)
 
         @self._app.action(re.compile(rf"^{re.escape(ACTION_PREFIX)}"))
@@ -271,7 +279,7 @@ class SlackAdapter(ChannelAdapterBase):
                 "user": user_id,
                 "channel": channel_id,
                 "text": text,
-                "team": team.get("id"),
+                "team": team.get("id") or self._team_id,
                 "thread_ts": thread_ts or None,
                 "ts": message.get("ts") or thread_ts,
             }
@@ -296,6 +304,21 @@ class SlackAdapter(ChannelAdapterBase):
             )
         except Exception:
             pass
+
+    def _team_scope(self, raw: Any) -> str:
+        team = None
+        if isinstance(raw, dict):
+            team = raw.get("team")
+            if team is None:
+                team = raw.get("team_id")
+        if isinstance(team, dict):
+            team = team.get("id")
+        team_id = str(team or "").strip()
+        if team_id:
+            return team_id
+        if self._team_id:
+            return self._team_id
+        return "dm"
 
     async def _handle_message(self, message: dict, say: Any, client: Any) -> None:
         """@app.message() 핸들러."""
@@ -364,3 +387,12 @@ class SlackAdapter(ChannelAdapterBase):
                 await say("죄송합니다. 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
             except Exception:
                 pass
+
+
+def _context_team_id(context: Any) -> str:
+    if context is None:
+        return ""
+    team_id = getattr(context, "team_id", None)
+    if not team_id and isinstance(context, dict):
+        team_id = context.get("team_id")
+    return str(team_id or "").strip()
