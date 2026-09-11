@@ -468,8 +468,11 @@ async def test_transcript_digest_and_compaction_are_deterministic() -> None:
     first = h.repository.checkpoints[-1]
     await collect(h, first)
     state = h.repository.checkpoints[-1].loop_state
-    assert len(state["transcript"]) <= 2
     assert len(state["transcript_digest"]) == 64
+    use_ids = _transcript_tool_ids(state["transcript"], "tool_use")
+    result_ids = _transcript_tool_ids(state["transcript"], "tool_result")
+    assert "one" in use_ids and "two" in use_ids
+    assert "one" in result_ids and "two" in result_ids
 
 
 @pytest.mark.asyncio
@@ -477,31 +480,48 @@ async def test_transcript_byte_cap_preserves_pending_multi_tool_structure() -> N
     config = AnthropicLoopConfig(
         model="claude-test",
         system="code",
-        max_transcript_bytes=700,
-        max_text_delta_bytes=700,
-        max_public_text_bytes=700,
+        max_transcript_bytes=1600,
+        max_text_delta_bytes=1600,
+        max_public_text_bytes=1600,
     )
-    calls = [
-        tool_call("one", input={"content": "x" * 4000}),
-        tool_call("two", input={"content": "y" * 4000}),
-    ]
-    h = harness([[TextDelta("z" * 600), *calls, completed()]], config=config)
+    h = harness(
+        [
+            [
+                TextDelta("z" * 700),
+                tool_call("old", input={"content": "w" * 400}),
+                completed(),
+            ],
+            [
+                tool_call("one", input={"content": "x"}),
+                tool_call("two", input={"content": "y"}),
+                completed(),
+            ],
+        ],
+        config=config,
+    )
 
     await collect(h)
+    await collect(h, h.repository.checkpoints[-1])
     state = h.repository.checkpoints[-1].loop_state
     encoded = json.dumps(
         state["transcript"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
 
-    assert len(encoded) <= 700
+    assert len(encoded) <= 1600
     assert [call["tool_call_id"] for call in state["pending_tool_calls"]] == [
         "one",
         "two",
     ]
     assistant = next(
-        message for message in state["transcript"] if message["role"] == "assistant"
+        message
+        for message in reversed(state["transcript"])
+        if message["role"] == "assistant"
     )
-    assert [item["tool_call_id"] for item in assistant["content"]] == ["one", "two"]
+    assert [
+        item["tool_call_id"]
+        for item in assistant["content"]
+        if item.get("type") == "tool_use"
+    ] == ["one", "two"]
 
 
 @pytest.mark.asyncio
@@ -658,3 +678,139 @@ async def _error_result():
     return ToolResult(
         "error", "command_failed", None, None, False, None, "1", exit_code=1
     )
+
+
+def _transcript_tool_ids(transcript, content_type: str) -> list[str]:
+    return [
+        item["tool_call_id"]
+        for message in transcript
+        for item in message["content"]
+        if item.get("type") == content_type
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancel_synthesizes_aborted_results_for_pending_tool_ids() -> None:
+    class CancellingExecutor(Executor):
+        async def execute(self, session, call, **kwargs):
+            raise asyncio.CancelledError()
+
+    h = harness(
+        [
+            [
+                tool_call("one"),
+                tool_call("two", input={"path": "b.txt", "content": "y"}),
+                completed(),
+            ]
+        ],
+        executor=CancellingExecutor(),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await collect(h)
+
+    state = h.repository.checkpoints[-1].loop_state
+    use_ids = _transcript_tool_ids(state["transcript"], "tool_use")
+    result_items = [
+        item
+        for message in state["transcript"]
+        for item in message["content"]
+        if item.get("type") == "tool_result"
+    ]
+    assert use_ids == ["one", "two"]
+    assert [item["tool_call_id"] for item in result_items] == ["one", "two"]
+    assert all(item["status"] == "error" for item in result_items)
+    assert all(item["content"]["reason_code"] == "aborted" for item in result_items)
+
+
+@pytest.mark.asyncio
+async def test_two_leading_reads_share_one_checkpoint_excluding_following_write() -> None:
+    h = harness(
+        [
+            [
+                tool_call("read_a", "read_file.v1", {"path": "a.txt"}),
+                tool_call("read_b", "read_file.v1", {"path": "b.txt"}),
+                tool_call("write_c", input={"path": "c.txt", "content": "z"}),
+                completed(),
+            ]
+        ]
+    )
+
+    events = await collect(h)
+
+    assert [call.name for call in h.executor.calls] == [
+        "read_file.v1",
+        "read_file.v1",
+    ]
+    assert h.bindings.session.writes == 0
+    assert sum(event.type == "phase.completed" for event in events) == 1
+    assert sum(event.type == "tool.completed" for event in events) == 2
+    state = h.repository.checkpoints[-1].loop_state
+    assert state["pending_tool_index"] == 2
+    assert [call["tool_call_id"] for call in state["pending_tool_calls"]] == [
+        "read_a",
+        "read_b",
+        "write_c",
+    ]
+
+    await collect(h, h.repository.checkpoints[-1])
+
+    assert h.bindings.session.writes == 1
+    assert h.repository.checkpoints[-1].loop_state["pending_tool_index"] == 3
+    assert len(h.executor.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_pending_instruction_is_appended_as_user_text_then_cleared() -> None:
+    h = harness(
+        [
+            [tool_call(), completed()],
+            [ModelCompleted("end_turn", ModelUsage(2, 1))],
+        ]
+    )
+    await collect(h)
+    checkpoint = h.repository.checkpoints[-1]
+    checkpoint.loop_state["pending_instruction"] = "Inspect cache first"
+
+    await collect(h, checkpoint)
+
+    texts = [
+        item.text
+        for message in h.model.requests[-1].messages
+        if message.role == "user"
+        for item in message.content
+        if hasattr(item, "text")
+    ]
+    assert "Inspect cache first" in texts
+    assert h.repository.checkpoints[-1].loop_state["pending_instruction"] is None
+
+
+@pytest.mark.asyncio
+async def test_compact_over_budget_keeps_matching_active_tool_pair_ids() -> None:
+    config = AnthropicLoopConfig(
+        model="claude-test",
+        system="code",
+        max_transcript_messages=2,
+    )
+    h = harness(
+        [
+            [
+                tool_call("old", input={"path": "a.txt", "content": "x" * 80}),
+                completed(),
+            ],
+            [
+                tool_call("active", input={"path": "b.txt", "content": "y" * 80}),
+                completed(),
+            ],
+        ],
+        config=config,
+    )
+    await collect(h)
+    await collect(h, h.repository.checkpoints[-1])
+
+    state = h.repository.checkpoints[-1].loop_state
+    use_ids = _transcript_tool_ids(state["transcript"], "tool_use")
+    result_ids = _transcript_tool_ids(state["transcript"], "tool_result")
+    assert "active" in use_ids
+    assert "active" in result_ids
+    assert use_ids[-1] == result_ids[-1] == "active"

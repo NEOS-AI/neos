@@ -32,6 +32,7 @@ from neos.coding.model.base import (
     ToolResultContent,
     ToolUseContent,
 )
+from neos.coding.hooks import CodingHookPort, NullCodingHooks
 from neos.coding.sandbox.bindings import SandboxBindingService
 from neos.coding.sandbox.observability import (
     CodingToolAuditEvent,
@@ -39,6 +40,7 @@ from neos.coding.sandbox.observability import (
 )
 from neos.coding.sandbox.paths import normalize_workspace_path
 from neos.coding.tools.executor import SandboxToolExecutor
+from neos.coding.tools.orchestrator import partition_leading_readonly
 from neos.coding.tools.registry import (
     CodingToolRegistry,
     ToolRisk,
@@ -124,6 +126,8 @@ class AgentLoopState:
     cost_micros: int = 0
     terminal_pending: bool = False
     read_paths: frozenset[str] = frozenset()
+    pending_instruction: str | None = None
+    todos: tuple[Mapping[str, object], ...] = ()
 
     @property
     def has_pending_tool(self) -> bool:
@@ -145,6 +149,7 @@ class AnthropicCodingLoop:
         approval_evaluator: Callable[
             [ValidatedToolCall], ApprovalPolicyOutcome
         ] = evaluate_approval,
+        hooks: CodingHookPort | None = None,
     ) -> None:
         self._model = model
         self._tools = tools
@@ -155,6 +160,7 @@ class AnthropicCodingLoop:
         self._audit = audit or NullCodingAuditSink()
         self._clock = clock
         self._approval_evaluator = approval_evaluator
+        self._hooks = hooks or NullCodingHooks()
 
     async def run(
         self,
@@ -246,6 +252,7 @@ class AnthropicCodingLoop:
                 elif isinstance(model_event, ModelCompleted):
                     completion = model_event
         except asyncio.CancelledError:
+            await self._checkpoint_aborted(input, state, bound, deps)
             raise
         except CodingModelError as error:
             raise CodingLoopFailure(error.code, retryable=error.retryable) from error
@@ -270,7 +277,7 @@ class AnthropicCodingLoop:
             self._metrics.coding_model_turn_total.labels(
                 provider="anthropic", outcome=outcome
             ).inc()
-        next_state = self._completed_turn(state, text_parts, calls, completion)
+        next_state = await self._completed_turn(state, text_parts, calls, completion)
         self._check_usage_budgets(next_state)
         if not calls:
             if completion.stop_reason != "end_turn":
@@ -285,13 +292,32 @@ class AnthropicCodingLoop:
                 now=self._clock(),
             )
             yield committed.event
+            await self._hooks.stop(completion.stop_reason)
             return
         async for event in self._advance_one_tool(input, next_state, bound, deps):
             yield event
 
     async def _advance_one_tool(self, input, state, bound, deps):
+        current = state
+        try:
+            async for event, current in self._advance_one_tool_body(
+                input, state, bound, deps
+            ):
+                yield event
+        except asyncio.CancelledError:
+            await self._checkpoint_aborted(input, current, bound, deps)
+            raise
+
+    async def _advance_one_tool_body(self, input, state, bound, deps):
         if state.tool_count >= self._config.max_tools:
             raise CodingLoopFailure("tool_budget_exceeded", retryable=False)
+        batch = self._leading_readonly_batch(state)
+        if batch is not None:
+            async for event, current in self._advance_readonly_batch(
+                input, state, bound, deps, batch
+            ):
+                yield event, current
+            return
         call = state.pending_tool_calls[state.pending_tool_index]
         try:
             validated = self._tools.validate(call.name, call.input)
@@ -308,7 +334,7 @@ class AnthropicCodingLoop:
             denied = ToolResultContent(
                 call.tool_call_id, "denied", {"reason_code": error.reason_code}
             )
-            denied_state = self._after_result(
+            denied_state = await self._after_result(
                 state, denied, tool_name=call.name, tool_input=call.input
             )
             committed = await deps.repository.commit_model_checkpoint(
@@ -319,7 +345,7 @@ class AnthropicCodingLoop:
                 workspace_revision=str(bound.binding.workspace_revision),
                 now=self._clock(),
             )
-            yield committed.event
+            yield committed.event, denied_state
             return
         await self._audit.emit(
             CodingToolAuditEvent.from_result(
@@ -348,7 +374,7 @@ class AnthropicCodingLoop:
                     expires_at=now + timedelta(seconds=self._config.approval_ttl_sec),
                 )
                 for event in committed.events:
-                    yield event
+                    yield event, state
                 return
             if approval.status is ApprovalStatus.PENDING:
                 raise CodingLoopWaitingApproval(approval.approval_id)
@@ -363,7 +389,7 @@ class AnthropicCodingLoop:
                     "denied",
                     {"reason_code": reason_code},
                 )
-                denied_state = self._after_result(
+                denied_state = await self._after_result(
                     state, denied, tool_name=call.name, tool_input=call.input
                 )
                 committed = await deps.repository.commit_model_checkpoint(
@@ -374,7 +400,7 @@ class AnthropicCodingLoop:
                     workspace_revision=str(bound.binding.workspace_revision),
                     now=self._clock(),
                 )
-                yield committed.event
+                yield committed.event, denied_state
                 return
         claim = await deps.repository.claim_tool_execution(
             lease=deps.lease,
@@ -394,7 +420,7 @@ class AnthropicCodingLoop:
             lease=deps.lease, kind=CodingPhaseKind.IMPLEMENT, now=self._clock()
         )
         if started.event is not None:
-            yield started.event
+            yield started.event, state
         if claim.disposition is ToolExecutionDisposition.COMPLETED:
             result = dict(claim.result or {})
             await self._audit.emit(
@@ -413,33 +439,9 @@ class AnthropicCodingLoop:
                 tool_call_id=call.tool_call_id,
             )
         else:
-            try:
-                executed = await self._executor.execute(
-                    bound.session,
-                    validated,
-                    known_reads=state.read_paths,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                code = (
-                    "tool_outcome_unknown"
-                    if validated.risk is not ToolRisk.READ_ONLY
-                    else "tool_execution_failed"
-                )
-                await self._audit.emit(
-                    CodingToolAuditEvent.from_result(
-                        provider=bound.binding.provider,
-                        tool=call.name,
-                        operation="execute",
-                        outcome="error",
-                        error_code=code,
-                    )
-                )
-                raise CodingLoopFailure(
-                    code, retryable=validated.risk is ToolRisk.READ_ONLY
-                ) from error
-            result = dict(executed.to_mapping())
+            result = await self._execute_validated(
+                bound, deps, validated, known_reads=state.read_paths
+            )
             if validated.risk is not ToolRisk.READ_ONLY:
                 try:
                     await self._bindings.record_mutation(
@@ -452,7 +454,7 @@ class AnthropicCodingLoop:
                     await self._audit.emit(
                         CodingToolAuditEvent.from_result(
                             provider=bound.binding.provider,
-                            tool=call.name,
+                            tool=validated.name,
                             operation="execute",
                             outcome="error",
                             error_code="tool_outcome_unknown",
@@ -478,43 +480,20 @@ class AnthropicCodingLoop:
                 raise CodingLoopFailure(
                     "tool_outcome_unknown", retryable=False
                 ) from error
-            result_status = str(result.get("status", "ok"))
-            await self._audit.emit(
-                CodingToolAuditEvent.from_result(
-                    provider=bound.binding.provider,
-                    tool=call.name,
-                    operation="execute",
-                    outcome=(
-                        result_status
-                        if result_status in {"ok", "error", "denied"}
-                        else "error"
-                    ),
-                    error_code=(
-                        str(result.get("reason_code"))
-                        if result_status != "ok"
-                        else None
-                    ),
-                )
-            )
-        if self._metrics is not None:
-            metric_outcome = str(result.get("status", "ok"))
-            if metric_outcome not in {"ok", "error", "denied"}:
-                metric_outcome = "error"
-            self._metrics.coding_tool_execution_total.labels(
-                tool=call.name, outcome=metric_outcome
-            ).inc()
-        yield tool_event
+            await self._audit_execute_result(bound, call.name, result)
+        self._record_tool_metric(call.name, result)
+        yield tool_event, state
         status = str(result.get("status", "ok"))
         canonical_status = status if status in {"ok", "error", "denied"} else "ok"
-        after = self._after_result(
+        after = await self._after_result(
             state,
             ToolResultContent(call.tool_call_id, canonical_status, result),
             tool_name=call.name,
             tool_input=call.input,
         )
-        revision = str(
-            result.get("workspace_revision", bound.binding.workspace_revision)
-        )
+        revision = str(result.get("workspace_revision") or "")
+        if revision in {"", "unknown"}:
+            revision = str(bound.binding.workspace_revision)
         committed = await deps.repository.commit_phase_checkpoint(
             lease=deps.lease,
             phase=started.phase,
@@ -524,11 +503,240 @@ class AnthropicCodingLoop:
             workspace_revision=revision,
             now=self._clock(),
         )
-        yield committed.event
+        yield committed.event, after
         if after.consecutive_tool_errors >= self._config.max_consecutive_tool_errors:
             raise CodingLoopFailure("tool_error_budget_exceeded", retryable=False)
 
-    def _completed_turn(self, state, text_parts, calls, completion):
+    def _leading_readonly_batch(self, state):
+        remaining = state.pending_tool_calls[state.pending_tool_index :]
+        remaining_budget = self._config.max_tools - state.tool_count
+        if len(remaining) < 2 or remaining_budget < 2:
+            return None
+        pairs: list[tuple[ToolCallCompleted, ValidatedToolCall]] = []
+        for call in remaining:
+            try:
+                validated = self._tools.validate(call.name, call.input)
+            except ToolValidationError:
+                break
+            pairs.append((call, validated))
+        if len(pairs) < 2:
+            return None
+        batch, _rest = partition_leading_readonly(
+            tuple(validated for _call, validated in pairs),
+            max_batch=min(10, remaining_budget),
+        )
+        if len(batch) < 2:
+            return None
+        return tuple(pairs[: len(batch)])
+
+    async def _advance_readonly_batch(self, input, state, bound, deps, pairs):
+        current = state
+        claims = []
+        for call, validated in pairs:
+            await self._audit.emit(
+                CodingToolAuditEvent.from_result(
+                    provider=bound.binding.provider,
+                    tool=call.name,
+                    operation="validate",
+                    outcome="allowed",
+                )
+            )
+            claim = await deps.repository.claim_tool_execution(
+                lease=deps.lease,
+                tool_call_id=call.tool_call_id,
+                now=self._clock(),
+                claim_expires_at=self._clock()
+                + timedelta(seconds=self._config.tool_claim_ttl_sec),
+            )
+            if claim.disposition is ToolExecutionDisposition.BUSY:
+                raise CodingLoopFailure("tool_execution_busy", retryable=True)
+            claims.append((call, validated, claim))
+        started = await deps.repository.begin_phase(
+            lease=deps.lease, kind=CodingPhaseKind.IMPLEMENT, now=self._clock()
+        )
+        if started.event is not None:
+            yield started.event, current
+
+        async def run_one(call, validated, claim):
+            if claim.disposition is ToolExecutionDisposition.COMPLETED:
+                result = dict(claim.result or {})
+                await self._audit.emit(
+                    CodingToolAuditEvent.from_result(
+                        provider=bound.binding.provider,
+                        tool=call.name,
+                        operation="execute",
+                        outcome="reused",
+                    )
+                )
+                return result, True
+            result = await self._execute_validated(
+                bound, deps, validated, known_reads=state.read_paths
+            )
+            await self._audit_execute_result(bound, call.name, result)
+            return result, False
+
+        gathered = await asyncio.gather(
+            *(
+                run_one(call, validated, claim)
+                for call, validated, claim in claims
+            )
+        )
+        last_call = claims[-1][0]
+        last_result: dict[str, Any] = {}
+        for (call, _validated, claim), (result, reused) in zip(
+            claims, gathered, strict=True
+        ):
+            if reused:
+                tool_event = await deps.events.append(
+                    task_id=input.task_id,
+                    event_type="tool.completed",
+                    payload={"result": result, "reused": True},
+                    run_id=input.run_id,
+                    tool_call_id=call.tool_call_id,
+                )
+            else:
+                try:
+                    tool_event = await deps.repository.complete_tool_execution(
+                        claim, result=result, now=self._clock()
+                    )
+                except Exception as error:
+                    await self._audit.emit(
+                        CodingToolAuditEvent.from_result(
+                            provider=bound.binding.provider,
+                            tool=call.name,
+                            operation="execute",
+                            outcome="error",
+                            error_code="tool_outcome_unknown",
+                        )
+                    )
+                    raise CodingLoopFailure(
+                        "tool_outcome_unknown", retryable=False
+                    ) from error
+            self._record_tool_metric(call.name, result)
+            yield tool_event, current
+            status = str(result.get("status", "ok"))
+            canonical_status = status if status in {"ok", "error", "denied"} else "ok"
+            current = await self._after_result(
+                current,
+                ToolResultContent(call.tool_call_id, canonical_status, result),
+                tool_name=call.name,
+                tool_input=call.input,
+            )
+            last_call = call
+            last_result = result
+        revision = str(
+            last_result.get("workspace_revision", bound.binding.workspace_revision)
+        )
+        committed = await deps.repository.commit_phase_checkpoint(
+            lease=deps.lease,
+            phase=started.phase,
+            tool_call_id=last_call.tool_call_id,
+            result=last_result,
+            loop_state=self._dump_state(input, current),
+            workspace_revision=revision,
+            now=self._clock(),
+        )
+        yield committed.event, current
+        if current.consecutive_tool_errors >= self._config.max_consecutive_tool_errors:
+            raise CodingLoopFailure("tool_error_budget_exceeded", retryable=False)
+
+    async def _execute_validated(self, bound, deps, validated, *, known_reads):
+        await self._hooks.pre_tool(validated)
+        try:
+            executed = await self._executor.execute(
+                bound.session,
+                validated,
+                known_reads=known_reads,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            code = (
+                "tool_outcome_unknown"
+                if validated.risk is not ToolRisk.READ_ONLY
+                else "tool_execution_failed"
+            )
+            await self._audit.emit(
+                CodingToolAuditEvent.from_result(
+                    provider=bound.binding.provider,
+                    tool=validated.name,
+                    operation="execute",
+                    outcome="error",
+                    error_code=code,
+                )
+            )
+            raise CodingLoopFailure(
+                code, retryable=validated.risk is ToolRisk.READ_ONLY
+            ) from error
+        result = dict(executed.to_mapping())
+        await self._hooks.post_tool(validated, result)
+        return result
+
+    async def _audit_execute_result(self, bound, tool_name, result) -> None:
+        result_status = str(result.get("status", "ok"))
+        await self._audit.emit(
+            CodingToolAuditEvent.from_result(
+                provider=bound.binding.provider,
+                tool=tool_name,
+                operation="execute",
+                outcome=(
+                    result_status
+                    if result_status in {"ok", "error", "denied"}
+                    else "error"
+                ),
+                error_code=(
+                    str(result.get("reason_code"))
+                    if result_status != "ok"
+                    else None
+                ),
+            )
+        )
+
+    def _record_tool_metric(self, tool_name, result) -> None:
+        if self._metrics is None:
+            return
+        metric_outcome = str(result.get("status", "ok"))
+        if metric_outcome not in {"ok", "error", "denied"}:
+            metric_outcome = "error"
+        self._metrics.coding_tool_execution_total.labels(
+            tool=tool_name, outcome=metric_outcome
+        ).inc()
+
+    async def _checkpoint_aborted(self, input, state, bound, deps) -> None:
+        remaining = state.pending_tool_calls[state.pending_tool_index :]
+        existing = {
+            item.tool_call_id
+            for message in state.transcript
+            for item in message.content
+            if isinstance(item, ToolResultContent)
+        }
+        pending = [
+            call for call in remaining if call.tool_call_id not in existing
+        ]
+        if not pending:
+            return
+        after = state
+        for call in pending:
+            after = await self._after_result(
+                after,
+                ToolResultContent(
+                    call.tool_call_id,
+                    "error",
+                    {"reason_code": "aborted"},
+                ),
+                tool_name=call.name,
+                tool_input=call.input,
+            )
+        await deps.repository.commit_model_checkpoint(
+            lease=deps.lease,
+            event_type="tool.completed",
+            event_payload={"reason_code": "aborted"},
+            loop_state=self._dump_state(input, after),
+            workspace_revision=str(bound.binding.workspace_revision),
+            now=self._clock(),
+        )
+
+    async def _completed_turn(self, state, text_parts, calls, completion):
         content = []
         text = "".join(text_parts)
         if text:
@@ -539,7 +747,9 @@ class AnthropicCodingLoop:
         transcript = state.transcript
         if content:
             transcript += (CanonicalMessage("assistant", tuple(content)),)
-        transcript = self._compact(transcript, preserve_tools=bool(calls))
+        transcript = await self._compact_with_hook(
+            transcript, preserve_tools=bool(calls)
+        )
         usage = completion.usage
         cost = (
             state.cost_micros
@@ -562,9 +772,11 @@ class AnthropicCodingLoop:
             terminal_pending=False,
         )
 
-    def _after_result(self, state, result, *, tool_name: str, tool_input: Mapping[str, object]):
+    async def _after_result(
+        self, state, result, *, tool_name: str, tool_input: Mapping[str, object]
+    ):
         has_more_tools = state.pending_tool_index + 1 < len(state.pending_tool_calls)
-        transcript = self._compact(
+        transcript = await self._compact_with_hook(
             state.transcript + (CanonicalMessage("tool", (result,)),),
             preserve_tools=has_more_tools,
         )
@@ -576,6 +788,15 @@ class AnthropicCodingLoop:
                 read_paths = read_paths | {
                     str(normalize_workspace_path(str(raw_path)))
                 }
+        todos = state.todos
+        if tool_name == "todo_write.v1" and result.status == "ok":
+            raw_todos = tool_input.get("todos")
+            if isinstance(raw_todos, (list, tuple)):
+                todos = tuple(
+                    dict(item)
+                    for item in raw_todos
+                    if isinstance(item, Mapping)
+                )
         return replace(
             state,
             transcript=transcript,
@@ -585,6 +806,7 @@ class AnthropicCodingLoop:
             transcript_digest=self._digest(transcript),
             terminal_pending=False,
             read_paths=read_paths,
+            todos=todos,
         )
 
     def _check_usage_budgets(self, state):
@@ -620,6 +842,22 @@ class AnthropicCodingLoop:
             )
         else:
             read_paths = _read_paths_from_transcript(transcript)
+        pending_instruction = raw.get("pending_instruction")
+        terminal_pending = bool(raw.get("terminal_pending", False))
+        digest = str(raw.get("transcript_digest", self._digest(transcript)))
+        if isinstance(pending_instruction, str) and pending_instruction:
+            transcript = transcript + (
+                CanonicalMessage("user", (TextContent(pending_instruction),)),
+            )
+            pending_instruction = None
+            terminal_pending = False
+            digest = self._digest(transcript)
+        else:
+            pending_instruction = None
+        raw_todos = raw.get("todos") or ()
+        todos = tuple(
+            dict(item) for item in raw_todos if isinstance(item, Mapping)
+        )
         return AgentLoopState(
             transcript,
             int(raw.get("turn_count", 0)),
@@ -627,12 +865,14 @@ class AnthropicCodingLoop:
             int(raw.get("consecutive_tool_errors", 0)),
             pending,
             int(raw.get("pending_tool_index", 0)),
-            str(raw.get("transcript_digest", self._digest(transcript))),
+            digest,
             int(raw.get("input_tokens", 0)),
             int(raw.get("output_tokens", 0)),
             int(raw.get("cost_micros", 0)),
-            bool(raw.get("terminal_pending", False)),
+            terminal_pending,
             read_paths,
+            pending_instruction,
+            todos,
         )
 
     @staticmethod
@@ -661,8 +901,9 @@ class AnthropicCodingLoop:
         return {
             "phase_index": state.tool_count - 1,
             "current_instruction": input.instruction,
-            "pending_instruction": None,
+            "pending_instruction": state.pending_instruction,
             "transcript": [_message_to_mapping(item) for item in state.transcript],
+            "todos": [dict(item) for item in state.todos],
             "turn_count": state.turn_count,
             "tool_count": state.tool_count,
             "consecutive_tool_errors": state.consecutive_tool_errors,
@@ -680,24 +921,31 @@ class AnthropicCodingLoop:
     def _with_terminal_pending(state: AgentLoopState) -> AgentLoopState:
         return replace(state, terminal_pending=True)
 
-    def _compact(self, transcript, *, preserve_tools: bool = False):
-        transcript = tuple(transcript)
-        if (
-            len(transcript) <= self._config.max_transcript_messages
-            and self._serialized_bytes(transcript)
-            <= self._config.max_transcript_bytes
-        ):
-            return tuple(transcript)
-        digest = self._digest(transcript)
-        compacted_notice = (
-            CanonicalMessage(
-                "user",
-                (TextContent(f"Prior transcript compacted; sha256={digest}"),),
-            ),
+    async def _compact_with_hook(self, transcript, *, preserve_tools: bool = False):
+        before = tuple(transcript)
+        after = self._compact(before, preserve_tools=preserve_tools)
+        if after != before:
+            await self._hooks.compact(before, after)
+        return after
+
+    def _over_budget(self, transcript) -> bool:
+        return (
+            len(transcript) > self._config.max_transcript_messages
+            or self._serialized_bytes(transcript)
+            > self._config.max_transcript_bytes
         )
-        if not preserve_tools:
-            return self._require_transcript_fit(compacted_notice)
-        tool_start = next(
+
+    def _over_bytes(self, transcript) -> bool:
+        return (
+            self._serialized_bytes(transcript) > self._config.max_transcript_bytes
+        )
+
+    def _compact(self, transcript, *, preserve_tools: bool = False):
+        del preserve_tools
+        transcript = tuple(transcript)
+        if not self._over_budget(transcript):
+            return transcript
+        active_start = next(
             (
                 index
                 for index in range(len(transcript) - 1, -1, -1)
@@ -709,15 +957,32 @@ class AnthropicCodingLoop:
             ),
             None,
         )
-        if tool_start is None:
-            return self._require_transcript_fit(compacted_notice)
-        active = tuple(
-            self._compact_tool_message(message) for message in transcript[tool_start:]
-        )
-        candidate = compacted_notice + active
-        if self._serialized_bytes(candidate) <= self._config.max_transcript_bytes:
+        if active_start is None:
+            prefix = transcript
+            active: tuple[CanonicalMessage, ...] = ()
+        else:
+            prefix = transcript[:active_start]
+            active = transcript[active_start:]
+        prefix = tuple(self._shrink_old_tool_results(message) for message in prefix)
+        candidate = prefix + active
+        if not self._over_budget(candidate):
             return candidate
-        return self._require_transcript_fit(active)
+        notice = CanonicalMessage(
+            "user",
+            (TextContent("Prior transcript compacted; kept tool pairs."),),
+        )
+        remaining = list(prefix)
+        while remaining and self._over_budget((notice,) + tuple(remaining) + active):
+            remaining.pop(0)
+        if remaining:
+            candidate = (notice,) + tuple(remaining) + active
+        elif active:
+            candidate = (notice,) + active
+        else:
+            candidate = (notice,)
+        if not self._over_budget(candidate) or not self._over_bytes(candidate):
+            return candidate
+        return self._require_transcript_fit(candidate)
 
     def _require_transcript_fit(self, transcript):
         if self._serialized_bytes(transcript) > self._config.max_transcript_bytes:
@@ -727,27 +992,18 @@ class AnthropicCodingLoop:
         return tuple(transcript)
 
     @staticmethod
-    def _compact_tool_message(message: CanonicalMessage) -> CanonicalMessage:
+    def _shrink_old_tool_results(message: CanonicalMessage) -> CanonicalMessage:
         content = []
+        changed = False
         for item in message.content:
-            if isinstance(item, TextContent):
-                continue
-            if isinstance(item, ToolUseContent):
+            if isinstance(item, ToolResultContent) and not item.content.get(
+                "compacted"
+            ):
                 digest = hashlib.sha256(
                     json.dumps(
-                        dict(item.input), sort_keys=True, separators=(",", ":"),
-                        ensure_ascii=False,
-                    ).encode("utf-8")
-                ).hexdigest()
-                content.append(
-                    ToolUseContent(
-                        item.tool_call_id, item.name, {"compacted_sha256": digest}
-                    )
-                )
-            else:
-                digest = hashlib.sha256(
-                    json.dumps(
-                        dict(item.content), sort_keys=True, separators=(",", ":"),
+                        dict(item.content),
+                        sort_keys=True,
+                        separators=(",", ":"),
                         ensure_ascii=False,
                     ).encode("utf-8")
                 ).hexdigest()
@@ -755,9 +1011,14 @@ class AnthropicCodingLoop:
                     ToolResultContent(
                         item.tool_call_id,
                         item.status,
-                        {"compacted_sha256": digest},
+                        {"compacted": True, "sha256": digest},
                     )
                 )
+                changed = True
+            else:
+                content.append(item)
+        if not changed:
+            return message
         return CanonicalMessage(message.role, tuple(content))
 
     @staticmethod

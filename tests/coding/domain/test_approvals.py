@@ -40,10 +40,12 @@ def test_policy_allows_reads_and_requires_exact_approval_for_mutations() -> None
         ToolRisk.WORKSPACE_WRITE,
     )
     command = call("execute.v1", {"argv": ["pytest"]}, ToolRisk.COMMAND)
+    lint = call("execute.v1", {"argv": ["ruff", "check"]}, ToolRisk.COMMAND)
 
     assert evaluate_approval(read) is ApprovalPolicyOutcome.ALLOW
     assert evaluate_approval(write) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
     assert evaluate_approval(command) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(lint) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
 
 
 def test_canonical_hash_is_deterministic_and_binding_sensitive() -> None:
@@ -88,9 +90,68 @@ def test_command_summary_exposes_executable_and_count_but_not_values() -> None:
 
     encoded = json.dumps(summary)
     assert summary == {"executable": "pytest", "argument_count": 2}
+    assert "warnings" not in summary
     assert "private_test.py" not in encoded
     assert "raw-secret-token" not in encoded
     assert "raw-secret-stdin" not in encoded
+
+
+def test_command_summary_warns_on_recursive_delete() -> None:
+    for argv in (
+        ["rm", "-rf", "tmp/build-cache"],
+        ["rm", "-r", "tmp/build-cache"],
+        ["rm", "-fr", "tmp/build-cache"],
+    ):
+        summary = approval_display_summary(
+            call("execute.v1", {"argv": argv}, ToolRisk.COMMAND)
+        )
+        encoded = json.dumps(summary)
+        assert summary == {
+            "executable": "rm",
+            "argument_count": 2,
+            "warnings": ["destructive_recursive_delete"],
+        }
+        assert "tmp/build-cache" not in encoded
+        assert all(warning.isidentifier() for warning in summary["warnings"])
+
+
+def test_command_summary_warns_on_git_reset_hard() -> None:
+    summary = approval_display_summary(
+        call(
+            "execute.v1",
+            {"argv": ["git", "reset", "--hard", "origin/topic-branch"]},
+            ToolRisk.COMMAND,
+        )
+    )
+
+    encoded = json.dumps(summary)
+    assert summary == {
+        "executable": "git",
+        "argument_count": 3,
+        "warnings": ["destructive_git_reset"],
+    }
+    assert "origin/topic-branch" not in encoded
+    assert "--hard" not in encoded
+
+
+def test_command_summary_warns_on_force_push() -> None:
+    for argv in (
+        ["git", "push", "--force", "origin", "topic-branch"],
+        ["git", "push", "-f", "origin", "topic-branch"],
+    ):
+        summary = approval_display_summary(
+            call("execute.v1", {"argv": argv}, ToolRisk.COMMAND)
+        )
+        encoded = json.dumps(summary)
+        assert summary == {
+            "executable": "git",
+            "argument_count": 4,
+            "warnings": ["destructive_force_push"],
+        }
+        assert "topic-branch" not in encoded
+        assert "origin" not in encoded
+        assert "--force" not in encoded
+        assert "-f" not in encoded
 
 
 def test_approval_status_has_only_durable_contract_values() -> None:

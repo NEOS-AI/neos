@@ -1,0 +1,41 @@
+"""No-op hook ports for the coding loop (Phase 2)."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from typing import Any, Protocol
+
+from neos.coding.model.base import CanonicalMessage
+from neos.coding.tools.registry import ValidatedToolCall
+
+
+class CodingHookPort(Protocol):
+    async def pre_tool(self, call: ValidatedToolCall) -> None: ...
+
+    async def post_tool(self, call: ValidatedToolCall, result: Mapping[str, Any]) -> None: ...
+
+    async def stop(self, reason: str) -> None: ...
+
+    async def compact(
+        self,
+        before: Sequence[CanonicalMessage],
+        after: Sequence[CanonicalMessage],
+    ) -> None: ...
+
+
+class NullCodingHooks:
+    async def pre_tool(self, call: ValidatedToolCall) -> None:
+        return None
+
+    async def post_tool(self, call: ValidatedToolCall, result: Mapping[str, Any]) -> None:
+        return None
+
+    async def stop(self, reason: str) -> None:
+        return None
+
+    async def compact(
+        self,
+        before: Sequence[CanonicalMessage],
+        after: Sequence[CanonicalMessage],
+    ) -> None:
+        return None

@@ -34,11 +34,13 @@ def test_default_registry_exports_stable_versioned_definitions() -> None:
         "git_log.v1",
         "edit_file.v1",
         "write_file.v1",
+        "todo_write.v1",
         "execute.v1",
     ]
     assert all(item.input_schema["additionalProperties"] is False for item in definitions)
     names = [item.name for item in definitions]
     assert names.index("edit_file.v1") == names.index("write_file.v1") - 1
+    assert names.index("todo_write.v1") == names.index("execute.v1") - 1
 
 
 def test_read_file_is_read_only_and_normalizes_path() -> None:
@@ -59,6 +61,30 @@ def test_read_file_accepts_optional_offset_and_limit() -> None:
     assert sliced.input == {"path": "src/main.py", "offset": 3, "limit": 20}
     assert extra.allowed is False
     assert extra.reason_code == "policy_schema_invalid"
+
+
+def test_todo_write_is_read_only_and_accepts_optional_id() -> None:
+    call = registry().validate(
+        "todo_write.v1",
+        {
+            "todos": [
+                {
+                    "id": "t1",
+                    "content": "Read the file",
+                    "status": "in_progress",
+                },
+                {"content": "Edit the file", "status": "pending"},
+                {"content": "Run tests", "status": "completed"},
+            ]
+        },
+    )
+
+    assert call.risk is ToolRisk.READ_ONLY
+    assert call.input["todos"] == [
+        {"id": "t1", "content": "Read the file", "status": "in_progress"},
+        {"id": None, "content": "Edit the file", "status": "pending"},
+        {"id": None, "content": "Run tests", "status": "completed"},
+    ]
 
 
 def test_write_file_is_workspace_write_and_denies_git_control_files() -> None:
@@ -117,6 +143,9 @@ def test_tool_descriptions_state_when_not_to_use_execute_or_write() -> None:
     assert "old_string" in edit
     assert "unique" in edit
     assert "read first" in edit.lower()
+    todo = descriptions["todo_write.v1"]
+    assert "3+" in todo
+    assert "one-line" in todo
 
 
 @pytest.mark.parametrize("path", ["/etc/passwd", "../secret", "bad\0name"])
@@ -261,6 +290,10 @@ def test_execute_environment_names_are_allowlisted() -> None:
             "edit_file.v1",
             {"path": "a", "old_string": "x", "new_string": "y", "surprise": True},
         ),
+        ("todo_write.v1", {"todos": []}),
+        ("todo_write.v1", {"todos": [{"content": "", "status": "pending"}]}),
+        ("todo_write.v1", {"todos": [{"content": "x", "status": "blocked"}]}),
+        ("todo_write.v1", {"todos": [{"content": "x", "status": "pending", "surprise": True}]}),
         ("execute.v1", {"argv": []}),
     ],
 )

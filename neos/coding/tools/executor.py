@@ -38,8 +38,13 @@ class ToolResult:
     audit: Mapping[str, object] | None = None
 
     @classmethod
-    def ok(cls, *, workspace_revision: str) -> ToolResult:
-        return cls("ok", "ok", None, None, False, None, workspace_revision)
+    def ok(
+        cls,
+        *,
+        workspace_revision: str,
+        entries: tuple[Mapping[str, object], ...] = (),
+    ) -> ToolResult:
+        return cls("ok", "ok", None, None, False, None, workspace_revision, entries)
 
     def to_mapping(self) -> Mapping[str, object]:
         return asdict(self)
@@ -219,6 +224,8 @@ class SandboxToolExecutor:
     async def _dispatch_non_file_tool(
         self, session: SandboxSession, call: ValidatedToolCall
     ) -> ToolResult:
+        if call.name == "todo_write.v1":
+            return self._todo_write(call)
         if call.name == "list_tree.v1":
             entries = await session.list_tree(str(call.input["path"]))
             return self._entry_result(entries, await self._revision(session))
@@ -267,6 +274,11 @@ class SandboxToolExecutor:
             None,
             await self._revision(session),
         )
+
+    @staticmethod
+    def _todo_write(call: ValidatedToolCall) -> ToolResult:
+        entries = tuple(dict(item) for item in call.input["todos"])
+        return ToolResult.ok(workspace_revision="unknown", entries=entries)
 
     def _bounded_bytes(
         self,

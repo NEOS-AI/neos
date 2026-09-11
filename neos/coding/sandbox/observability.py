@@ -28,6 +28,7 @@ _CODING_TOOLS = {
     "git_log.v1",
     "edit_file.v1",
     "write_file.v1",
+    "todo_write.v1",
     "execute.v1",
 }
 _CODING_OPERATIONS = {"validate", "claim", "execute", "checkpoint"}

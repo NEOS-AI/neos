@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -86,6 +86,16 @@ class _EditFileInput(_PathInput):
 
 class _WriteFileInput(_PathInput):
     content: str
+
+
+class _TodoItem(_ToolInput):
+    id: str | None = None
+    content: str = Field(min_length=1)
+    status: Literal["pending", "in_progress", "completed"]
+
+
+class _TodoWriteInput(_ToolInput):
+    todos: list[_TodoItem] = Field(min_length=1)
 
 
 class _ExecuteInput(_ToolInput):
@@ -208,6 +218,17 @@ class CodingToolRegistry:
             ),
             ToolRisk.WORKSPACE_WRITE,
             _WriteFileInput,
+        ),
+        _RegisteredTool(
+            "todo_write.v1",
+            (
+                "Replace the coding-task checklist. "
+                "Use this for 3+ step work. "
+                "Do not use this for a one-line edit. "
+                "On policy_* denial, do not retry the same todos."
+            ),
+            ToolRisk.READ_ONLY,
+            _TodoWriteInput,
         ),
         _RegisteredTool(
             "execute.v1",

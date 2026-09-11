@@ -39,7 +39,19 @@ class RunInterrupter(Protocol):
 
 
 class InProcessRunInterrupter:
+    def __init__(self) -> None:
+        self._tasks: dict[str, asyncio.Task] = {}
+
+    def bind(self, run_id: str, task: asyncio.Task) -> None:
+        self._tasks[run_id] = task
+
+    def unbind(self, run_id: str) -> None:
+        self._tasks.pop(run_id, None)
+
     async def interrupt(self, run_id: str) -> InterruptionResult:
+        task = self._tasks.get(run_id)
+        if task is not None and not task.done():
+            task.cancel()
         return InterruptionResult(
             workspace_revision=f"fake-interrupt:{run_id}",
             process_stopped=True,
@@ -219,6 +231,11 @@ class CodingRunService:
             ),
         )
         phase_started: dict[str, datetime] = {}
+        bind = getattr(self._interrupter, "bind", None)
+        unbind = getattr(self._interrupter, "unbind", None)
+        current = asyncio.current_task()
+        if bind is not None and current is not None:
+            bind(run.run_id, current)
         try:
             async for event in stream:
                 if event.type == "phase.started":
@@ -265,6 +282,9 @@ class CodingRunService:
                 ).inc()
             await self._release_lease(lease)
             raise
+        finally:
+            if unbind is not None:
+                unbind(run.run_id)
         return None
 
     @staticmethod

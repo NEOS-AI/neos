@@ -1059,7 +1059,7 @@ class InMemoryCodingRunRepository:
             loop_state = dict(checkpoint.loop_state)
             loop_state["phase_index"] = -1
             loop_state["current_instruction"] = request.instruction
-            loop_state["pending_instruction"] = None
+            loop_state["pending_instruction"] = request.instruction
             steering_checkpoint = CodingCheckpoint(
                 checkpoint_id=f"cc_steer_{request.steering_id}",
                 task_id=lease.task_id,

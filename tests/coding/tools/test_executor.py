@@ -289,6 +289,28 @@ async def test_command_timed_out_flag_maps_to_timeout() -> None:
 
 
 @pytest.mark.asyncio
+async def test_todo_write_returns_ok_entries_without_sandbox_io() -> None:
+    session = FakeSession()
+    session.error = SandboxTimeout("todo_write must not touch the sandbox")
+    todos = [
+        {"id": "t1", "content": "Read the file", "status": "in_progress"},
+        {"content": "Edit the file", "status": "pending"},
+        {"content": "Run tests", "status": "completed"},
+    ]
+    result = await SandboxToolExecutor(10, 10).execute(
+        session, call("todo_write.v1", {"todos": todos})
+    )
+
+    assert (result.status, result.reason_code) == ("ok", "ok")
+    assert session.called is None
+    assert result.entries == (
+        {"id": "t1", "content": "Read the file", "status": "in_progress"},
+        {"content": "Edit the file", "status": "pending"},
+        {"content": "Run tests", "status": "completed"},
+    )
+
+
+@pytest.mark.asyncio
 async def test_unknown_validated_call_fails_closed() -> None:
     result = await SandboxToolExecutor(10, 10).execute(
         FakeSession(), call("future.v1", {})

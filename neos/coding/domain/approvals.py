@@ -120,11 +120,43 @@ def approval_display_summary(call: ValidatedToolCall) -> Mapping[str, object]:
         argv = call.input.get("argv")
         if not isinstance(argv, list) or not argv:
             return {"executable": "unknown", "argument_count": 0}
-        return {
+        summary: dict[str, object] = {
             "executable": str(argv[0]),
             "argument_count": max(len(argv) - 1, 0),
         }
+        warnings = _execute_warning_codes(argv)
+        if warnings:
+            summary["warnings"] = warnings
+        return summary
     path = call.input.get("path")
     if isinstance(path, str):
         return {"path": path}
     return {"operation": call.name}
+
+
+def _execute_warning_codes(argv: list[object]) -> list[str]:
+    parts = [str(part) for part in argv]
+    if not parts:
+        return []
+    executable = parts[0]
+    flags = parts[1:]
+    warnings: list[str] = []
+    if executable == "rm" and any(_is_recursive_rm_flag(flag) for flag in flags):
+        warnings.append("destructive_recursive_delete")
+    if executable == "git" and "reset" in flags and "--hard" in flags:
+        warnings.append("destructive_git_reset")
+    if executable == "git" and "push" in flags and _has_force_push_flag(flags):
+        warnings.append("destructive_force_push")
+    return warnings
+
+
+def _is_recursive_rm_flag(flag: str) -> bool:
+    return flag in {"-r", "-R", "-rf", "-fr", "-Rf", "-fR"} or (
+        flag.startswith("-")
+        and not flag.startswith("--")
+        and "r" in flag.lower()
+    )
+
+
+def _has_force_push_flag(flags: list[str]) -> bool:
+    return any(flag == "--force" or flag == "-f" for flag in flags)
