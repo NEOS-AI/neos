@@ -296,9 +296,11 @@ class SlackAdapter(ChannelAdapterBase):
             "thread_ts": thread_ts or None,
             "ts": message.get("ts") or thread_ts,
         }
-        from neos.api.channels.session_bind import session_is_bound
+        from neos.api.channels.session_bind import session_wakes_without_mention
 
-        bound = await session_is_bound(self._gateway, self._session_id(raw))
+        bound = await session_wakes_without_mention(
+            self._gateway, self._session_id(raw)
+        )
         ctx = GateContext(
             channel_type=self.channel_type,
             platform_user_id=user_id,
@@ -317,6 +319,22 @@ class SlackAdapter(ChannelAdapterBase):
                 decision.reason,
                 ctx.channel_id,
                 ctx.platform_user_id,
+            )
+            return
+        from neos.api.channels.principals import coding_action_actor_allowed
+        from neos.config.settings import settings
+
+        if not await coding_action_actor_allowed(
+            gateway=self._gateway,
+            session_id=self._session_id(raw),
+            platform="slack",
+            platform_user_id=user_id,
+            channels=settings.config.channels,
+        ):
+            logger.info(
+                "[SlackAdapter] drop action: not task owner channel=%s user=%s",
+                ctx.channel_id,
+                user_id,
             )
             return
 
@@ -402,9 +420,11 @@ class SlackAdapter(ChannelAdapterBase):
         has_attachment = bool(settings.config.channels.inbound_media and files)
         if not text.strip() and not has_attachment:
             return
-        from neos.api.channels.session_bind import session_is_bound
+        from neos.api.channels.session_bind import session_wakes_without_mention
 
-        bound = await session_is_bound(self._gateway, self._session_id(message))
+        bound = await session_wakes_without_mention(
+            self._gateway, self._session_id(message)
+        )
         ctx = GateContext(
             channel_type=self.channel_type,
             platform_user_id=str(message.get("user") or ""),

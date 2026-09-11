@@ -212,15 +212,81 @@ async def test_duplicate_code_same_idempotency_key_starts_once(monkeypatch):
     assert workflow.calls == []
 
 
-async def test_duplicate_code_different_keys_start_twice(monkeypatch):
+async def test_second_code_in_same_session_reuses_bound_task(monkeypatch):
     gateway, _workflow, coding = _gateway(monkeypatch)
     first = _message("<@U_BOT> /code one", "sess-a")
     first.metadata["idempotency_key"] = "1"
     second = _message("<@U_BOT> /code two", "sess-a")
     second.metadata["idempotency_key"] = "2"
-    await gateway.dispatch(first)
-    await gateway.dispatch(second)
-    assert coding.started == [("u_owner", "one"), ("u_owner", "two")]
+    reply1 = await gateway.dispatch(first)
+    reply2 = await gateway.dispatch(second)
+    assert coding.started == [("u_owner", "one")]
+    assert reply1 == reply2
+
+
+async def test_code_prompt_includes_attachment_names(monkeypatch):
+    gateway, _workflow, coding = _gateway(monkeypatch)
+    message = _message("<@U_BOT> /code fix from screenshot")
+    message.metadata["attachments"] = [
+        {
+            "name": "bug.png",
+            "content_type": "image/png",
+            "data": b"png",
+        }
+    ]
+    await gateway.dispatch(message)
+    assert coding.started[0][1].startswith("fix from screenshot")
+    assert "bug.png" in coding.started[0][1]
+
+
+async def test_workflow_query_includes_attachment_names(monkeypatch):
+    gateway, workflow, _coding = _gateway(monkeypatch)
+    message = _message("hello <@U_BOT>")
+    message.metadata["attachments"] = [
+        {"name": "note.txt", "content_type": "text/plain", "data": b"hi"}
+    ]
+    await gateway.dispatch(message)
+    assert "note.txt" in workflow.calls[0]["query"]
+
+
+async def test_coding_action_requires_mapped_owner(monkeypatch):
+    from neos.api.channels.principals import coding_action_actor_allowed
+    from neos.config.schema import ChannelPrincipal
+
+    gateway, _workflow, _coding = _gateway(
+        monkeypatch,
+        principals=[
+            ChannelPrincipal(
+                platform="slack",
+                platform_user_id="U_alice",
+                user_id="u_alice",
+            ),
+            ChannelPrincipal(
+                platform="slack",
+                platform_user_id="U_eve",
+                user_id="u_eve",
+            ),
+        ],
+    )
+    await gateway.bind_session("v2:slack:T:C:1", "ct_1", "u_alice")
+    from neos.config.settings import settings
+
+    allowed = await coding_action_actor_allowed(
+        gateway=gateway,
+        session_id="v2:slack:T:C:1",
+        platform="slack",
+        platform_user_id="U_alice",
+        channels=settings.config.channels,
+    )
+    denied = await coding_action_actor_allowed(
+        gateway=gateway,
+        session_id="v2:slack:T:C:1",
+        platform="slack",
+        platform_user_id="U_eve",
+        channels=settings.config.channels,
+    )
+    assert allowed is True
+    assert denied is False
 
 
 async def test_inflight_second_message_is_dropped(monkeypatch):

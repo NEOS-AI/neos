@@ -1478,7 +1478,7 @@ async def test_pre_tool_deny_commits_policy_hook_denied_without_execute() -> Non
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_retry_injects_user_meta_and_returns_without_execute() -> None:
+async def test_pre_tool_retry_returns_without_execute_or_splitting_pairs() -> None:
     h = harness([[tool_call(), completed()]], hooks=_DecisionHook("retry", "try later"))
 
     events = await collect(h)
@@ -1488,11 +1488,10 @@ async def test_pre_tool_retry_injects_user_meta_and_returns_without_execute() ->
     state = h.repository.checkpoints[-1].loop_state
     assert state["hook_retry_count"] == 1
     assert state["pending_tool_index"] == 0
-    texts = [
-        item["text"]
+    roles = [message["role"] for message in state["transcript"]]
+    assert "user" not in roles[1:] or all(
+        item.get("type") != "text" or "Hook requested" not in item.get("text", "")
         for message in state["transcript"]
         if message["role"] == "user"
         for item in message["content"]
-        if item.get("type") == "text"
-    ]
-    assert any("retry" in text.lower() and "write_file.v1" in text for text in texts)
+    )

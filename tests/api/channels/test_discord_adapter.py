@@ -178,18 +178,18 @@ async def test_mentioned_allowlisted_user_is_dispatched(
 async def test_bound_session_without_mention_dispatches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    channel = FakeChannel(CHANNEL_ID)
-    message = _message(content="status please", channel=channel, mentions=[])
+    thread = FakeChannel(MESSAGE_ID, parent_id=CHANNEL_ID, type_name="public_thread")
+    message = _message(content="status please", channel=thread, mentions=[])
     install_channel_settings(monkeypatch, allowed_users=[str(USER_ID)])
     gateway = FakeGateway()
     await gateway.bind_session(
-        f"v2:discord:{GUILD_ID}:{CHANNEL_ID}:-", "ct_abc", "u_owner"
+        f"v2:discord:{GUILD_ID}:{CHANNEL_ID}:{MESSAGE_ID}", "ct_abc", "u_owner"
     )
-    adapter = _adapter(gateway, channel)
+    adapter = _adapter(gateway, thread)
     await adapter._handle_message(message)
     assert len(gateway.calls) == 1
     assert gateway.calls[0].text == "status please"
-    assert gateway.calls[0].session_id == f"v2:discord:{GUILD_ID}:{CHANNEL_ID}:-"
+    assert gateway.calls[0].session_id == f"v2:discord:{GUILD_ID}:{CHANNEL_ID}:{MESSAGE_ID}"
 
 
 async def test_unbound_session_without_mention_is_silent(

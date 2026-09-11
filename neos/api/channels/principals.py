@@ -55,6 +55,31 @@ def resolve_message_user_id(
     return bot_user_id
 
 
+async def coding_action_actor_allowed(
+    *,
+    gateway: object,
+    session_id: str,
+    platform: str,
+    platform_user_id: str,
+    channels: ChannelConfig,
+) -> bool:
+    """Allowlist already ran. When a principal map exists, actor must be the task owner."""
+    if not channels.principals:
+        return True
+    get_binding = getattr(gateway, "get_binding", None)
+    if get_binding is None:
+        return False
+    binding = await get_binding(session_id)
+    if binding is None:
+        return True
+    actor = resolve_channel_principal(
+        platform=platform,
+        platform_user_id=platform_user_id,
+        channels=channels,
+    )
+    return actor is not None and actor == binding.owner_id
+
+
 def resolve_coding_owner(
     *,
     message: ChannelMessage,

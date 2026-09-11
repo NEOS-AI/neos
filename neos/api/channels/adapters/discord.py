@@ -238,10 +238,10 @@ class DiscordAdapter(ChannelAdapterBase):
     async def _handle_message(self, message: Any) -> None:
         """on_message 이벤트 핸들러."""
         from neos.config.settings import settings
-        from neos.api.channels.session_bind import session_is_bound
+        from neos.api.channels.session_bind import session_wakes_without_mention
 
         bot_user = self._client.user if self._client is not None else None
-        bound = await session_is_bound(self._gateway, _discord_session_id(message))
+        bound = await session_wakes_without_mention(self._gateway, _discord_session_id(message))
         attachments = list(getattr(message, "attachments", None) or [])
         has_attachment = bool(settings.config.channels.inbound_media and attachments)
         ctx = GateContext(
@@ -362,7 +362,7 @@ class DiscordAdapter(ChannelAdapterBase):
         if not text:
             return
 
-        from neos.api.channels.session_bind import session_is_bound
+        from neos.api.channels.session_bind import session_wakes_without_mention
 
         channel_id = str(getattr(channel, "id", "") or "")
         shim = SimpleNamespace(
@@ -372,7 +372,7 @@ class DiscordAdapter(ChannelAdapterBase):
             content=text,
             id=getattr(channel, "id", ""),
         )
-        bound = await session_is_bound(self._gateway, _discord_session_id(shim))
+        bound = await session_wakes_without_mention(self._gateway, _discord_session_id(shim))
         bot_user = self._client.user if self._client is not None else None
         ctx = GateContext(
             channel_type=self.channel_type,
@@ -394,6 +394,22 @@ class DiscordAdapter(ChannelAdapterBase):
                 decision.reason,
                 ctx.channel_id,
                 ctx.platform_user_id,
+            )
+            return
+        from neos.api.channels.principals import coding_action_actor_allowed
+        from neos.config.settings import settings
+
+        if not await coding_action_actor_allowed(
+            gateway=self._gateway,
+            session_id=_discord_session_id(shim),
+            platform="discord",
+            platform_user_id=str(user_id),
+            channels=settings.config.channels,
+        ):
+            logger.info(
+                "[DiscordAdapter] drop action: not task owner channel=%s user=%s",
+                ctx.channel_id,
+                user_id,
             )
             return
 

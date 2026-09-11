@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from neos.config.schema import ChannelConfig, DiscordChannelConfig, SlackChannelConfig
+from neos.api.channels.session_key import session_key_is_thread
 from neos.api.channels.authz import (
     ChannelGatePolicy,
     DropReason,
@@ -154,6 +155,33 @@ def test_bound_session_still_drops_ignored_channel() -> None:
     )
     assert decision.allowed is False
     assert decision.reason is DropReason.IGNORED_CHANNEL
+
+
+@pytest.mark.asyncio
+async def test_parent_room_bind_does_not_wake_without_mention() -> None:
+    from neos.api.channels.session_bind import (
+        InMemoryChannelCodingBindStore,
+        session_wakes_without_mention,
+    )
+
+    class Gateway:
+        def __init__(self) -> None:
+            self._binds = InMemoryChannelCodingBindStore()
+
+        async def get_binding(self, session_id: str):
+            return await self._binds.get(session_id)
+
+    gateway = Gateway()
+    await gateway._binds.bind("v2:discord:G:C:-", "ct_1", "u1")
+    await gateway._binds.bind("v2:discord:G:C:99", "ct_1", "u1")
+    assert await session_wakes_without_mention(gateway, "v2:discord:G:C:-") is False
+    assert await session_wakes_without_mention(gateway, "v2:discord:G:C:99") is True
+
+
+def test_parent_room_session_key_is_not_a_thread() -> None:
+    assert session_key_is_thread("v2:discord:G:C:-") is False
+    assert session_key_is_thread("v2:discord:G:C:123") is True
+    assert session_key_is_thread("v2:slack:T:C:1.2") is True
 
 
 def test_unbound_session_still_requires_mention() -> None:

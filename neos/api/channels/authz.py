@@ -3,8 +3,9 @@
 Adapters MUST call `evaluate_channel_gate` before `ChannelGateway.dispatch`.
 A dropped message is silent — no workflow, no error reply.
 
-Order: self/bot → empty text → ignored channel → allowed-channel
-whitelist → mention (DMs exempt) → user allowlist (empty = fail-closed).
+Order: self/bot → empty text (attachments exempt) → ignored channel →
+allowed-channel whitelist → mention (DMs and bound *threads* exempt) →
+user allowlist (empty = fail-closed).
 """
 
 from __future__ import annotations

@@ -89,8 +89,8 @@ class TelegramAdapter(ChannelAdapterBase):
         별도 스레드나 asyncio.run() 중첩이 불필요하다.
 
     채널 사용자 → NEOS user_id 매핑:
-        현재는 settings.CHANNEL_BOT_USER_ID(서비스 계정)를 공유한다.
-        향후 Telegram user_id → NEOS user_id 조회 테이블을 추가할 수 있다.
+        channels.principals가 있으면 platform user → NEOS user.
+        맵이 비면 CHANNEL_BOT_USER_ID로 폴백한다.
     """
 
     channel_type = "telegram"
@@ -311,7 +311,7 @@ class TelegramAdapter(ChannelAdapterBase):
             return
 
         from neos.config.settings import settings
-        from neos.api.channels.session_bind import session_is_bound
+        from neos.api.channels.session_bind import session_wakes_without_mention
 
         effective_user = update.effective_user
         effective_chat = update.effective_chat
@@ -326,7 +326,7 @@ class TelegramAdapter(ChannelAdapterBase):
             return
         bot = getattr(self._app, "bot", None) if self._app is not None else None
         bot_id = getattr(bot, "id", None) if bot is not None else None
-        bound = await session_is_bound(self._gateway, _telegram_session_id(update))
+        bound = await session_wakes_without_mention(self._gateway, _telegram_session_id(update))
         ctx = GateContext(
             channel_type=self.channel_type,
             platform_user_id=str(effective_user.id) if effective_user is not None else "",
@@ -391,7 +391,7 @@ class TelegramAdapter(ChannelAdapterBase):
             pass
 
         from neos.api.channels.cards import command_for_action, parse_action_payload
-        from neos.api.channels.session_bind import session_is_bound
+        from neos.api.channels.session_bind import session_wakes_without_mention
 
         parsed = parse_action_payload(str(getattr(query, "data", "") or ""))
         if parsed is None:
@@ -408,7 +408,7 @@ class TelegramAdapter(ChannelAdapterBase):
         source = getattr(query, "message", None) or update.effective_message
         bot = getattr(self._app, "bot", None) if self._app is not None else None
         bot_id = getattr(bot, "id", None) if bot is not None else None
-        bound = await session_is_bound(
+        bound = await session_wakes_without_mention(
             self._gateway,
             _telegram_session_id(
                 SimpleNamespace(
@@ -438,6 +438,29 @@ class TelegramAdapter(ChannelAdapterBase):
             logger.info(
                 "[TelegramAdapter] drop callback reason=%s channel=%s user=%s",
                 decision.reason,
+                ctx.channel_id,
+                ctx.platform_user_id,
+            )
+            return
+        from neos.api.channels.principals import coding_action_actor_allowed
+        from neos.config.settings import settings
+
+        callback_session = _telegram_session_id(
+            SimpleNamespace(
+                effective_chat=effective_chat,
+                effective_message=source,
+                effective_user=effective_user,
+            )
+        )
+        if not await coding_action_actor_allowed(
+            gateway=self._gateway,
+            session_id=callback_session,
+            platform="telegram",
+            platform_user_id=str(effective_user.id) if effective_user else "",
+            channels=settings.config.channels,
+        ):
+            logger.info(
+                "[TelegramAdapter] drop callback: not task owner channel=%s user=%s",
                 ctx.channel_id,
                 ctx.platform_user_id,
             )

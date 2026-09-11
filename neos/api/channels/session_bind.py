@@ -35,6 +35,15 @@ async def session_is_bound(gateway: object, session_id: str) -> bool:
         return False
 
 
+async def session_wakes_without_mention(gateway: object, session_id: str) -> bool:
+    """Mention-wake only for an already-bound *thread* session, not the parent room."""
+    from neos.api.channels.session_key import session_key_is_thread
+
+    if not session_key_is_thread(session_id):
+        return False
+    return await session_is_bound(gateway, session_id)
+
+
 class ChannelCodingBindStore(Protocol):
     async def bind(
         self, session_id: str, task_id: str, owner_id: str

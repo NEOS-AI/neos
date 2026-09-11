@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import re
 import socket
+import urllib.error
 import urllib.request
 from typing import Any, Awaitable, Callable, Mapping
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +100,11 @@ async def download_inbound_media(
         else:
             status, body = await _default_fetch(url, request_headers)
     except Exception as exc:
-        logger.info("[channel-media] download failed url=%s err=%s", url, exc)
+        logger.info(
+            "[channel-media] download failed url=%s err=%s",
+            safe_url_for_log(url),
+            exc,
+        )
         return None
     if status != 200 or body is None:
         return None
@@ -107,16 +113,48 @@ async def download_inbound_media(
     return body
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def safe_url_for_log(url: str) -> str:
+    return re.sub(r"/bot[^/]+/", "/bot***/", url or "")
+
+
+def next_media_url(current: str, location: str) -> str | None:
+    if not location:
+        return None
+    nxt = urljoin(current, location)
+    if not _url_allowed(nxt):
+        return None
+    return nxt
+
+
 async def _default_fetch(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
-    request = urllib.request.Request(url, headers=headers, method="GET")
-    opener = urllib.request.build_opener(
-        urllib.request.HTTPHandler,
-        urllib.request.HTTPSHandler,
-    )
-    with opener.open(request, timeout=10) as response:
-        status = int(getattr(response, "status", 200) or 200)
-        body = response.read(MAX_INBOUND_MEDIA_BYTES + 1)
-    return status, body
+    current = url
+    for _ in range(4):
+        if not _url_allowed(current):
+            raise OSError("blocked media url")
+        request = urllib.request.Request(current, headers=headers, method="GET")
+        opener = urllib.request.build_opener(
+            urllib.request.HTTPHandler,
+            urllib.request.HTTPSHandler,
+            _NoRedirect,
+        )
+        try:
+            with opener.open(request, timeout=10) as response:
+                status = int(getattr(response, "status", 200) or 200)
+                body = response.read(MAX_INBOUND_MEDIA_BYTES + 1)
+            return status, body
+        except urllib.error.HTTPError as error:
+            if error.code not in {301, 302, 303, 307, 308}:
+                raise
+            nxt = next_media_url(current, error.headers.get("Location") or "")
+            if nxt is None:
+                raise OSError("blocked media redirect")
+            current = nxt
+    raise OSError("too many media redirects")
 
 
 def _attachment(

@@ -10,6 +10,8 @@ from neos.api.channels.media import (
     MAX_INBOUND_MEDIA_BYTES,
     download_inbound_media,
     is_blocked_ip,
+    next_media_url,
+    safe_url_for_log,
 )
 from tests.api.channels.conftest import install_channel_settings
 
@@ -71,6 +73,22 @@ async def test_download_respects_size_cap() -> None:
         resolve_host=lambda _host: ["1.2.3.4"],
     )
     assert data is None
+
+
+def test_redirect_to_private_ip_is_rejected() -> None:
+    assert (
+        next_media_url(
+            "https://files.slack.com/files-pri/T/download/x",
+            "https://169.254.169.254/latest/meta-data/",
+        )
+        is None
+    )
+
+
+def test_telegram_bot_token_is_redacted_in_logs() -> None:
+    raw = "https://api.telegram.org/file/bot123:secret/photos/x"
+    assert "secret" not in safe_url_for_log(raw)
+    assert "bot***" in safe_url_for_log(raw)
 
 
 async def test_download_allowlisted_public_host() -> None:

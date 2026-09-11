@@ -855,17 +855,9 @@ class DurableCodingLoop:
         return str(decision), str(reason) if reason is not None else ""
 
     def _with_hook_retry(self, state: AgentLoopState, validated, reason: str):
-        detail = f": {reason}" if reason else ""
-        transcript = state.transcript + (
-            CanonicalMessage(
-                "user",
-                (TextContent(f"Hook requested a retry of {validated.name}{detail}."),),
-            ),
-        )
+        del validated, reason
         return replace(
             state,
-            transcript=transcript,
-            transcript_digest=self._digest(transcript),
             hook_retry_count=state.hook_retry_count + 1,
             terminal_pending=False,
         )

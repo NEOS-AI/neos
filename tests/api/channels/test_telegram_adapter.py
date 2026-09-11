@@ -153,15 +153,15 @@ async def test_bound_session_without_mention_dispatches(
     gateway = FakeGateway()
     adapter = _make_adapter(gateway)
     await gateway.bind_session(
-        f"v2:telegram:{GROUP_CHAT_ID}:{GROUP_CHAT_ID}:-", "ct_abc", "u_owner"
+        f"v2:telegram:{GROUP_CHAT_ID}:{GROUP_CHAT_ID}:99", "ct_abc", "u_owner"
     )
-    update = _fake_update(text="status please")
+    update = _fake_update(text="status please", message_thread_id=99)
 
     await adapter._handle_message(update, None)
 
     assert len(gateway.calls) == 1
     assert gateway.calls[0].text == "status please"
-    assert gateway.calls[0].session_id == f"v2:telegram:{GROUP_CHAT_ID}:{GROUP_CHAT_ID}:-"
+    assert gateway.calls[0].session_id == f"v2:telegram:{GROUP_CHAT_ID}:{GROUP_CHAT_ID}:99"
 
 
 async def test_unbound_session_without_mention_is_silent(

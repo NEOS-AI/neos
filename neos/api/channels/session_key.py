@@ -17,6 +17,14 @@ def build_session_key(
     )
 
 
+def session_key_is_thread(session_id: str) -> bool:
+    """True when the v2 key names a real thread, not the parent-room '-' slot."""
+    parts = (session_id or "").split(":")
+    if len(parts) < 5 or parts[0] != "v2":
+        return False
+    return parts[-1] not in {"", "-"}
+
+
 def _part(value: str | None, default: str) -> str:
     text = (value or "").strip()
     if not text:

@@ -56,6 +56,7 @@ def _clamp_limit(raw: Any) -> int:
 
 
 def _reject_model_user_id(tool_input: Mapping[str, Any], user_id: str) -> None:
+    """Ignore model-supplied user ids; only the authenticated user may search."""
     supplied = tool_input.get("user_id")
     if supplied is None:
         return

@@ -31,6 +31,24 @@ _NO_OWNER = "Owner is not configured."
 _NO_TASK = "No coding task in this thread."
 
 
+def _attachment_prompt(message: ChannelMessage) -> str:
+    attachments = list((message.metadata or {}).get("attachments") or [])
+    if not attachments:
+        return ""
+    lines = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "file")
+        content_type = str(item.get("content_type") or "application/octet-stream")
+        data = item.get("data") or b""
+        size = len(data) if isinstance(data, (bytes, bytearray)) else 0
+        lines.append(f"- {name} ({content_type}, {size} bytes)")
+    if not lines:
+        return ""
+    return "\n\nUser attached files:\n" + "\n".join(lines)
+
+
 class ChannelGateway:
     """
     채널 어댑터 → NEOS 워크플로우 라우팅 게이트웨이
@@ -147,11 +165,15 @@ class ChannelGateway:
                 return _NO_OWNER
             user_id = mapped
 
+        query = (message.text or "").strip() + _attachment_prompt(message)
+        if not query.strip():
+            query = "The user sent a message with no text."
+
         workflow_input: Dict[str, Any] = {
             "user_id": user_id,
             "session_id": message.session_id,
-            "query": message.text,           # execute_workflow(graph.py)가 필수로 읽는 키
-            "original_query": message.text,
+            "query": query,
+            "original_query": query,
             # Phase 3 state 필드: 채널 정보 전달
             "channel_type": message.channel_type,
             "channel_id": message.channel_id,
@@ -197,16 +219,29 @@ class ChannelGateway:
             )
             if not owner:
                 return _CODE_NO_OWNER
+            existing = await self._binds.get(message.session_id)
+            if existing is not None:
+                return f"Started coding task {existing.task_id}"
             idem = str((message.metadata or {}).get("idempotency_key") or "")
+            start_key = (message.session_id, idem)
             if idem:
-                prior = self._code_starts.get((message.session_id, idem))
-                if prior is not None:
+                prior = self._code_starts.get(start_key)
+                if prior:
                     return f"Started coding task {prior}"
+                if prior is not None:
+                    return _BUSY
+                self._code_starts[start_key] = ""
+            prompt = command.rest + _attachment_prompt(message)
             coding = self._coding_port()
-            task_id = await coding.start_task(owner_id=owner, prompt=command.rest)
+            try:
+                task_id = await coding.start_task(owner_id=owner, prompt=prompt)
+            except Exception:
+                if idem:
+                    self._code_starts.pop(start_key, None)
+                raise
             await self._binds.bind(message.session_id, task_id, owner)
             if idem:
-                self._code_starts[(message.session_id, idem)] = task_id
+                self._code_starts[start_key] = task_id
             return f"Started coding task {task_id}"
 
         binding = await self._binds.get(message.session_id)
