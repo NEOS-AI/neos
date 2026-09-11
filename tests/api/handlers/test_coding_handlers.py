@@ -2,6 +2,7 @@ import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -33,6 +34,9 @@ from neos.coding.application.task_service import (
 from neos.coding.events.store import InMemoryCodingEventStore
 from neos.coding.domain.workspace_edits import WorkspaceEditConflict
 from tests.coding.fakes import InMemoryCodingRunRepository
+
+
+pytestmark = pytest.mark.no_db
 
 
 def make_client(user_id="u1"):
@@ -437,3 +441,99 @@ def test_snapshot_returns_phase_and_checkpoint_state() -> None:
         }
     ]
     assert "content_bytes" not in body["parts"][0]
+
+
+def test_list_tasks_is_owner_scoped() -> None:
+    owner, service = make_client("owner-a")
+    asyncio.run(service.create_task(owner_id="owner-a", prompt="Alpha task"))
+    asyncio.run(service.create_task(owner_id="owner-b", prompt="Bravo task"))
+
+    response = owner.get("/api/v1/coding/tasks")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert list(body) == ["tasks"]
+    assert [item["prompt"] for item in body["tasks"]] == ["Alpha task"]
+    assert all(item["status"] == "queued" for item in body["tasks"])
+
+
+def test_list_tasks_omits_deleted_and_orders_by_recency() -> None:
+    client, service = make_client("u1")
+    asyncio.run(
+        service.create_task(owner_id="u1", prompt="Older", task_id="ct_old")
+    )
+    asyncio.run(
+        service.create_task(owner_id="u1", prompt="Tie A", task_id="ct_tie_a")
+    )
+    asyncio.run(
+        service.create_task(owner_id="u1", prompt="Tie B", task_id="ct_tie_b")
+    )
+    asyncio.run(
+        service.create_task(owner_id="u1", prompt="Gone", task_id="ct_gone")
+    )
+    service.tasks.record_activity(
+        "ct_old", datetime(2026, 7, 20, tzinfo=UTC)
+    )
+    same = datetime(2026, 7, 21, tzinfo=UTC)
+    service.tasks.record_activity("ct_tie_a", same)
+    service.tasks.record_activity("ct_tie_b", same)
+    service.tasks.record_activity(
+        "ct_gone", datetime(2026, 7, 22, tzinfo=UTC)
+    )
+    service.tasks.mark_deleted("ct_gone")
+
+    response = client.get("/api/v1/coding/tasks")
+
+    assert response.status_code == 200
+    items = response.json()["tasks"]
+    assert [item["prompt"] for item in items] == ["Tie B", "Tie A", "Older"]
+    assert [item["task_id"] for item in items] == [
+        "ct_tie_b",
+        "ct_tie_a",
+        "ct_old",
+    ]
+
+
+def test_list_tasks_clamps_limit_and_truncates_prompt() -> None:
+    client, service = make_client("u1")
+    long_prompt = "x" * 200
+    for index in range(51):
+        asyncio.run(
+            service.create_task(
+                owner_id="u1",
+                prompt=long_prompt if index == 50 else f"Task {index:02d}",
+                task_id=f"ct_{index:02d}",
+            )
+        )
+        service.tasks.record_activity(
+            f"ct_{index:02d}",
+            datetime(2026, 7, 21, 0, index, tzinfo=UTC),
+        )
+
+    defaulted = client.get("/api/v1/coding/tasks")
+    clamped_high = client.get("/api/v1/coding/tasks?limit=100")
+    clamped_low = client.get("/api/v1/coding/tasks?limit=0")
+    explicit = client.get("/api/v1/coding/tasks?limit=2")
+
+    assert defaulted.status_code == 200
+    assert len(defaulted.json()["tasks"]) == 20
+    assert len(clamped_high.json()["tasks"]) == 50
+    assert [item["task_id"] for item in clamped_low.json()["tasks"]] == [
+        "ct_50"
+    ]
+    assert [item["task_id"] for item in explicit.json()["tasks"]] == [
+        "ct_50",
+        "ct_49",
+    ]
+    assert clamped_high.json()["tasks"][0]["prompt"] == "x" * 160
+    assert asyncio.run(service.tasks.get("ct_50")).prompt == long_prompt
+    listed = defaulted.json()["tasks"][0]
+    assert set(listed) == {
+        "task_id",
+        "status",
+        "version",
+        "last_seq",
+        "created_at",
+        "updated_at",
+        "prompt",
+    }

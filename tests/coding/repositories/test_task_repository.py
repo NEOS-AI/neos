@@ -1,14 +1,23 @@
+import pytest
+
 from neos.coding.repositories.task_repository import CodingTaskRepository
+
+pytestmark = pytest.mark.no_db
 
 
 class FakeDB:
-    def __init__(self, row=None):
+    def __init__(self, row=None, rows=None):
         self.row = row
+        self.rows = rows or []
         self.calls = []
 
     async def fetch_one(self, query, *params):
         self.calls.append((query, params))
         return self.row
+
+    async def fetch_all(self, query, *params):
+        self.calls.append((query, params))
+        return self.rows
 
 
 async def test_get_owned_scopes_query_to_task_and_owner() -> None:
@@ -43,4 +52,17 @@ async def test_get_owned_maps_task_row() -> None:
     assert task.task_id == "ct_1"
     assert task.last_seq == 3
     assert task.status.value == "queued"
+
+
+async def test_list_owned_scopes_query_to_owner_and_orders_by_activity() -> None:
+    db = FakeDB()
+
+    tasks = await CodingTaskRepository(db).list_owned("user_1", limit=20)
+
+    assert tasks == []
+    query, params = db.calls[0]
+    assert "owner_id = $1" in query
+    assert "deleted_at IS NULL" in query
+    assert "ORDER BY last_activity_at DESC, task_id DESC" in query
+    assert params == ("user_1", 20)
 

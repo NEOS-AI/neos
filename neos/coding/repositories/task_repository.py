@@ -6,6 +6,7 @@ from neos.coding.domain.models import CodingTask, CodingTaskStatus
 
 class Database(Protocol):
     async def fetch_one(self, query: str, *params): ...
+    async def fetch_all(self, query: str, *params): ...
 
 
 class CodingTaskRepository:
@@ -36,6 +37,25 @@ class CodingTaskRepository:
             owner_id,
         )
         return _task_from_row(row)
+
+    async def list_owned(self, owner_id: str, *, limit: int) -> list[CodingTask]:
+        rows = await self._database.fetch_all(
+            """
+            SELECT task_id, owner_id, prompt, status, version, last_seq,
+                   created_at, updated_at
+            FROM coding_tasks
+            WHERE owner_id = $1 AND deleted_at IS NULL
+            ORDER BY last_activity_at DESC, task_id DESC
+            LIMIT $2
+            """,
+            owner_id,
+            max(1, min(int(limit), 50)),
+        )
+        return [
+            task
+            for row in rows or ()
+            if (task := _task_from_row(row)) is not None
+        ]
 
 
 def _task_from_row(row) -> CodingTask | None:

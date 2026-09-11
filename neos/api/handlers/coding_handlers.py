@@ -7,6 +7,7 @@ from neos.api.models.coding_models import (
     CodingEventListResponse,
     CodingSteerRequest,
     CodingSteerResponse,
+    CodingTaskListResponse,
     CodingTaskResponse,
     CodingProjectionSnapshotResponse,
     CodingSandboxStatusResponse,
@@ -26,7 +27,10 @@ from neos.coding.domain.approvals import (
 from neos.coding.application.run_service import CodingRunService
 from neos.coding.application.snapshot_service import CodingSnapshotService
 from neos.coding.application.workspace_service import CodingWorkspaceService
-from neos.coding.application.task_service import CodingTaskService
+from neos.coding.application.task_service import (
+    CodingTaskService,
+    clamp_task_list_limit,
+)
 from neos.coding.domain.errors import CodingTaskNotFound
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.models import CodingTask
@@ -115,6 +119,9 @@ def _approval_response(approval) -> dict:
     }
 
 
+_LIST_PROMPT_MAX = 160
+
+
 def _task_response(task: CodingTask) -> dict:
     return {
         "task_id": task.task_id,
@@ -124,6 +131,13 @@ def _task_response(task: CodingTask) -> dict:
         "created_at": task.created_at,
         "updated_at": task.updated_at,
     }
+
+
+def _list_item(task: CodingTask) -> dict:
+    prompt = task.prompt
+    if len(prompt) > _LIST_PROMPT_MAX:
+        prompt = prompt[:_LIST_PROMPT_MAX]
+    return {**_task_response(task), "prompt": prompt}
 
 
 def event_response(event: CodingEvent) -> dict:
@@ -153,6 +167,18 @@ async def create_coding_task(
     return _task_response(
         await service.create_task(owner_id=current_user.user_id, prompt=body.prompt)
     )
+
+
+@router.get("/tasks", response_model=CodingTaskListResponse)
+async def list_coding_tasks(
+    limit: int = Query(20),
+    current_user: User = Depends(get_current_user),
+    service: CodingTaskService = Depends(get_coding_service),
+):
+    tasks = await service.list_owned(
+        current_user.user_id, limit=clamp_task_list_limit(limit)
+    )
+    return {"tasks": [_list_item(task) for task in tasks]}
 
 
 @router.post(

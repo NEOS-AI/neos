@@ -17,6 +17,14 @@ class CodingTaskResponse(BaseModel):
     updated_at: datetime
 
 
+class CodingTaskListItem(CodingTaskResponse):
+    prompt: str
+
+
+class CodingTaskListResponse(BaseModel):
+    tasks: list[CodingTaskListItem]
+
+
 class CodingEventResponse(BaseModel):
     v: int
     task_id: str

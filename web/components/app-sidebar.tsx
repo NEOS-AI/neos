@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Code2Icon, MessageCircleIcon } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import type { User } from "next-auth";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -20,6 +20,7 @@ import {
   SidebarMenu,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { CodingTaskList } from "@/features/coding/components/coding-task-list";
 import { getChatHistoryPaginationKey } from "@/lib/chat-history-pagination";
 import {
   AlertDialog,
@@ -35,6 +36,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function AppSidebar({ user }: { user: User | undefined }) {
   const router = useRouter();
+  const pathname = usePathname() ?? "";
+  const isCode = pathname.startsWith("/code");
   const { setOpenMobile } = useSidebar();
   const { mutate } = useSWRConfig();
   const [showDeleteAllDialog, setShowDeleteAllDialog] = useState(false);
@@ -134,7 +137,16 @@ export function AppSidebar({ user }: { user: User | undefined }) {
               Code
             </Link>
           </nav>
-          <SidebarHistory user={user} />
+          {isCode ? (
+            <div className="px-1 pb-3">
+              <p className="px-2 pb-1 font-mono text-[10px] text-amber-400 uppercase tracking-[0.18em]">
+                Recent
+              </p>
+              <CodingTaskList compact />
+            </div>
+          ) : (
+            <SidebarHistory user={user} />
+          )}
         </SidebarContent>
         <SidebarFooter>{user && <SidebarUserNav user={user} />}</SidebarFooter>
       </Sidebar>

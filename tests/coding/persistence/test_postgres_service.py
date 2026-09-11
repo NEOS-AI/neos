@@ -2,6 +2,8 @@ import pytest
 
 from neos.coding.persistence.postgres import PostgresCodingService
 
+pytestmark = pytest.mark.no_db
+
 
 class FakeResult:
     def __init__(self, row=None):
@@ -208,3 +210,25 @@ async def test_postgres_notifier_failure_does_not_rollback_task() -> None:
 
     assert task.task_id
     assert any("INSERT INTO coding_tasks" in sql for sql, _ in session.statements)
+
+
+async def test_list_owned_scopes_to_owner_and_orders_by_activity() -> None:
+    session = FakeSession()
+
+    async def session_factory():
+        return session
+
+    service = PostgresCodingService(session_factory)
+    tasks = await service.list_owned("owner-a", limit=100)
+
+    sql, params = next(
+        (sql, params)
+        for sql, params in session.statements
+        if "FROM coding_tasks" in sql and "LIMIT" in sql
+    )
+    assert tasks == []
+    assert "owner_id = :owner" in sql
+    assert "deleted_at IS NULL" in sql
+    assert "ORDER BY last_activity_at DESC, task_id DESC" in sql
+    assert params["owner"] == "owner-a"
+    assert params["limit"] == 50

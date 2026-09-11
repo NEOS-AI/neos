@@ -7,6 +7,14 @@ export type CodingTask = {
   updated_at: string;
 };
 
+export type CodingTaskListItem = CodingTask & {
+  prompt: string;
+};
+
+export type CodingTaskList = {
+  tasks: CodingTaskListItem[];
+};
+
 export type CodingWsTicket = {
   ticket: string;
   expires_in: number;
@@ -53,6 +61,17 @@ export async function createCodingTask(prompt: string): Promise<CodingTask> {
   });
   if (!response.ok) {
     throw await responseError(response, "Could not start coding task");
+  }
+  return response.json();
+}
+
+export async function listCodingTasks(
+  limit = 20
+): Promise<CodingTaskList> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  const response = await fetch(`/api/coding/tasks?${query}`);
+  if (!response.ok) {
+    throw await responseError(response, "Could not load coding tasks");
   }
   return response.json();
 }
