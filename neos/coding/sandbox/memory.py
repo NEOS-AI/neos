@@ -560,10 +560,14 @@ class MemorySandboxSession:
         paths: tuple[str, ...] = ("**/*",),
         regex: bool = False,
         limit: int = 100,
+        before: int = 0,
+        after: int = 0,
     ) -> tuple[SearchMatch, ...]:
         await self._require_running()
         if not query or limit < 1:
             raise SandboxPolicyViolation("invalid_search_request")
+        before = max(0, min(int(before), 20))
+        after = max(0, min(int(after), 20))
         expression = re.compile(query if regex else re.escape(query))
         matches: list[SearchMatch] = []
         for item in sorted(self._record.workspace.rglob("*")):
@@ -573,24 +577,45 @@ class MemorySandboxSession:
             if not any(self._matches_path(relative, pattern) for pattern in paths):
                 continue
             try:
-                text = item.read_text(errors="replace")
+                lines = item.read_text(errors="replace").splitlines()
             except OSError:
                 continue
-            for line_number, line in enumerate(text.splitlines(), start=1):
+            for line_number, line in enumerate(lines, start=1):
                 match = expression.search(line)
                 if match is None:
                     continue
+                start = max(0, line_number - 1 - before)
                 matches.append(
                     SearchMatch(
                         path=relative,
                         line=line_number,
                         column=match.start() + 1,
                         text=line,
+                        before=tuple(lines[start : line_number - 1]),
+                        after=tuple(lines[line_number : line_number + after]),
                     )
                 )
                 if len(matches) >= limit:
                     return tuple(matches)
         return tuple(matches)
+
+    async def glob_files(self, pattern: str, *, limit: int = 100) -> tuple[str, ...]:
+        await self._require_running()
+        from neos.coding.sandbox.paths import normalize_workspace_path
+
+        if not pattern or limit < 1:
+            raise SandboxPolicyViolation("invalid_glob_request")
+        normalize_workspace_path(pattern.replace("*", "x").replace("?", "x") or "x")
+        found: list[str] = []
+        for item in sorted(self._record.workspace.rglob("*")):
+            if item.is_symlink():
+                continue
+            relative = item.relative_to(self._record.workspace).as_posix()
+            if self._matches_path(relative, pattern):
+                found.append(relative)
+                if len(found) >= limit:
+                    break
+        return tuple(found)
 
     async def git_status(self) -> CommandResult:
         return await self.execute(

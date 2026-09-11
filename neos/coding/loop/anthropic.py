@@ -42,7 +42,7 @@ from neos.coding.sandbox.observability import (
     NullCodingAuditSink,
 )
 from neos.coding.sandbox.paths import normalize_workspace_path
-from neos.coding.tools.executor import SandboxToolExecutor
+from neos.coding.tools.executor import SandboxToolExecutor, ToolResult
 from neos.coding.tools.orchestrator import partition_leading_readonly
 from neos.coding.tools.registry import (
     CodingToolRegistry,
@@ -135,6 +135,8 @@ class AgentLoopState:
     instructions_loaded: bool = False
     prompt_compact_retries: int = 0
     output_token_escalations: int = 0
+    llm_compact_attempts: int = 0
+    revealed_tools: frozenset[str] = frozenset()
 
     @property
     def has_pending_tool(self) -> bool:
@@ -199,7 +201,7 @@ class AnthropicCodingLoop:
         request = ModelRequest(
             system=self._config.system,
             messages=state.transcript,
-            tools=self._tool_definitions(state.phase),
+            tools=self._tool_definitions(state),
             model=self._config.model,
             limits=self._model_limits(state),
             task_id=input.task_id,
@@ -220,6 +222,7 @@ class AnthropicCodingLoop:
         text_parts: list[str] = []
         calls: list[ToolCallCompleted] = []
         completion: ModelCompleted | None = None
+        prefetch_tasks: dict[str, asyncio.Task] = {}
         try:
             async for model_event in self._model.stream(request):
                 if isinstance(model_event, TextDelta):
@@ -256,12 +259,21 @@ class AnthropicCodingLoop:
                     )
                 elif isinstance(model_event, ToolCallCompleted):
                     calls.append(model_event)
+                    task = self._maybe_prefetch_readonly(
+                        model_event, bound, state
+                    )
+                    if task is not None:
+                        prefetch_tasks[model_event.tool_call_id] = task
                 elif isinstance(model_event, ModelCompleted):
                     completion = model_event
         except asyncio.CancelledError:
+            for task in prefetch_tasks.values():
+                task.cancel()
             await self._persist_abort_after_cancel(input, state, bound, deps)
             raise
         except CodingModelError as error:
+            for task in prefetch_tasks.values():
+                task.cancel()
             if (
                 error.code == "prompt_too_long"
                 and state.prompt_compact_retries < 1
@@ -324,6 +336,7 @@ class AnthropicCodingLoop:
             return
         next_state = await self._completed_turn(state, text_parts, calls, completion)
         self._check_usage_budgets(next_state)
+        prefetch = await self._await_prefetch(prefetch_tasks)
         if not calls:
             if completion.stop_reason != "end_turn":
                 raise CodingLoopFailure("model_output_incomplete", retryable=False)
@@ -339,27 +352,30 @@ class AnthropicCodingLoop:
             yield committed.event
             await self._hooks.stop(completion.stop_reason)
             return
-        async for event in self._advance_one_tool(input, next_state, bound, deps):
+        async for event in self._advance_one_tool(
+            input, next_state, bound, deps, prefetch=prefetch
+        ):
             yield event
 
-    async def _advance_one_tool(self, input, state, bound, deps):
+    async def _advance_one_tool(self, input, state, bound, deps, prefetch=None):
         current = state
         try:
             async for event, current in self._advance_one_tool_body(
-                input, state, bound, deps
+                input, state, bound, deps, prefetch=prefetch or {}
             ):
                 yield event
         except asyncio.CancelledError:
             await self._persist_abort_after_cancel(input, current, bound, deps)
             raise
 
-    async def _advance_one_tool_body(self, input, state, bound, deps):
+    async def _advance_one_tool_body(self, input, state, bound, deps, prefetch=None):
+        prefetch = prefetch or {}
         if state.tool_count >= self._config.max_tools:
             raise CodingLoopFailure("tool_budget_exceeded", retryable=False)
         batch = self._leading_readonly_batch(state)
         if batch is not None:
             async for event, current in self._advance_readonly_batch(
-                input, state, bound, deps, batch
+                input, state, bound, deps, batch, prefetch=prefetch
             ):
                 yield event, current
             return
@@ -470,9 +486,16 @@ class AnthropicCodingLoop:
                 tool_call_id=call.tool_call_id,
             )
         else:
-            result = await self._execute_validated(
-                bound, deps, validated, known_reads=state.read_paths
-            )
+            if call.name == "spawn_agent.v1":
+                result = await self._run_spawn_agent(call, bound, state)
+            else:
+                result = await self._execute_validated(
+                    bound,
+                    deps,
+                    validated,
+                    known_reads=state.read_paths,
+                    prefetched=prefetch.get(call.tool_call_id),
+                )
             if validated.risk is not ToolRisk.READ_ONLY:
                 try:
                     await self._bindings.record_mutation(
@@ -562,7 +585,10 @@ class AnthropicCodingLoop:
             return None
         return tuple(pairs[: len(batch)])
 
-    async def _advance_readonly_batch(self, input, state, bound, deps, pairs):
+    async def _advance_readonly_batch(
+        self, input, state, bound, deps, pairs, prefetch=None
+    ):
+        prefetch = prefetch or {}
         current = state
         claims = []
         for call, validated in pairs:
@@ -603,7 +629,11 @@ class AnthropicCodingLoop:
                 )
                 return result, True
             result = await self._execute_validated(
-                bound, deps, validated, known_reads=state.read_paths
+                bound,
+                deps,
+                validated,
+                known_reads=state.read_paths,
+                prefetched=prefetch.get(call.tool_call_id),
             )
             await self._audit_execute_result(bound, call.name, result)
             return result, False
@@ -673,14 +703,19 @@ class AnthropicCodingLoop:
         if current.consecutive_tool_errors >= self._config.max_consecutive_tool_errors:
             raise CodingLoopFailure("tool_error_budget_exceeded", retryable=False)
 
-    async def _execute_validated(self, bound, deps, validated, *, known_reads):
+    async def _execute_validated(
+        self, bound, deps, validated, *, known_reads, prefetched=None
+    ):
         await self._hooks.pre_tool(validated)
         try:
-            executed = await self._executor.execute(
-                bound.session,
-                validated,
-                known_reads=known_reads,
-            )
+            if prefetched is not None:
+                executed = prefetched
+            else:
+                executed = await self._executor.execute(
+                    bound.session,
+                    validated,
+                    known_reads=known_reads,
+                )
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -880,6 +915,14 @@ class AnthropicCodingLoop:
         phase = state.phase
         if tool_name == "set_phase.v1" and result.status == "ok":
             phase = parse_phase(tool_input.get("phase")).value
+        revealed = state.revealed_tools
+        if tool_name == "search_tools.v1" and result.status == "ok":
+            names = {
+                str(item.get("name"))
+                for item in result.content.get("entries", ())
+                if isinstance(item, Mapping) and item.get("name")
+            }
+            revealed = revealed | names
         return replace(
             state,
             transcript=transcript,
@@ -891,6 +934,7 @@ class AnthropicCodingLoop:
             read_paths=read_paths,
             todos=todos,
             phase=phase,
+            revealed_tools=revealed,
         )
 
     def _check_usage_budgets(self, state):
@@ -921,19 +965,20 @@ class AnthropicCodingLoop:
             instructions_loaded=True,
         )
 
-    def _tool_definitions(self, phase: str):
+    def _tool_definitions(self, state: AgentLoopState):
         method = self._tools.definitions
         try:
             parameters = inspect.signature(method).parameters
         except (TypeError, ValueError):
             parameters = {}
-        accepts_phase = "phase" in parameters or any(
-            param.kind is inspect.Parameter.VAR_KEYWORD
-            for param in parameters.values()
-        )
-        if accepts_phase:
-            return method(phase=phase)
-        hidden = hidden_tools_for_phase(phase)
+        kwargs: dict[str, object] = {}
+        if "phase" in parameters:
+            kwargs["phase"] = state.phase
+        if "revealed" in parameters:
+            kwargs["revealed"] = state.revealed_tools
+        if kwargs:
+            return method(**kwargs)
+        hidden = hidden_tools_for_phase(state.phase)
         return tuple(item for item in method() if item.name not in hidden)
 
     def _model_limits(self, state: AgentLoopState) -> ModelLimits:
@@ -945,6 +990,7 @@ class AnthropicCodingLoop:
     async def _compact_after_prompt_too_long(self, state: AgentLoopState) -> AgentLoopState:
         before = state.transcript
         after = self._compact(before, force=True)
+        after, attempts = await self._maybe_llm_compact(state, after)
         if after != before:
             await self._hooks.compact(before, after)
         return replace(
@@ -952,7 +998,169 @@ class AnthropicCodingLoop:
             transcript=after,
             transcript_digest=self._digest(after),
             prompt_compact_retries=state.prompt_compact_retries + 1,
+            llm_compact_attempts=attempts,
         )
+
+    def _maybe_prefetch_readonly(self, call: ToolCallCompleted, bound, state):
+        if call.name == "spawn_agent.v1":
+            return None
+        if not tool_allowed_in_phase(call.name, state.phase):
+            return None
+        try:
+            validated = self._tools.validate(call.name, call.input)
+        except ToolValidationError:
+            return None
+        if validated.risk is not ToolRisk.READ_ONLY:
+            return None
+        return asyncio.create_task(
+            self._executor.execute(
+                bound.session, validated, known_reads=state.read_paths
+            )
+        )
+
+    async def _await_prefetch(
+        self, tasks: dict[str, asyncio.Task]
+    ) -> dict[str, ToolResult]:
+        ready: dict[str, ToolResult] = {}
+        if not tasks:
+            return ready
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        for call_id, result in zip(tasks, results):
+            if isinstance(result, ToolResult):
+                ready[call_id] = result
+        return ready
+
+    async def _run_spawn_agent(self, call, bound, state) -> dict[str, Any]:
+        prompt = str(call.input.get("prompt") or "")
+        try:
+            max_turns = int(call.input.get("max_turns") or 4)
+        except (TypeError, ValueError):
+            max_turns = 4
+        max_turns = min(8, max(1, max_turns))
+        child_messages: tuple[CanonicalMessage, ...] = (
+            CanonicalMessage("user", (TextContent(prompt),)),
+        )
+        last_text = ""
+        explore_tools = self._tools.definitions(phase="explore")
+        for _ in range(max_turns):
+            request = ModelRequest(
+                system=self._config.system,
+                messages=child_messages,
+                tools=explore_tools,
+                model=self._config.model,
+                limits=ModelLimits(
+                    min(self._config.max_output_tokens, 2048),
+                    self._config.timeout_sec,
+                ),
+                task_id="spawn",
+                run_id="spawn",
+                turn_id=f"spawn_{uuid4().hex}",
+            )
+            text_parts: list[str] = []
+            child_calls: list[ToolCallCompleted] = []
+            try:
+                async for event in self._model.stream(request):
+                    if isinstance(event, TextDelta):
+                        text_parts.append(event.text)
+                    elif isinstance(event, ToolCallCompleted):
+                        child_calls.append(event)
+            except Exception:
+                break
+            last_text = "".join(text_parts)
+            if not child_calls:
+                break
+            assistant_items = []
+            tool_items = []
+            for child in child_calls:
+                if not tool_allowed_in_phase(child.name, "explore"):
+                    continue
+                try:
+                    validated = self._tools.validate(child.name, child.input)
+                except ToolValidationError:
+                    continue
+                executed = await self._executor.execute(
+                    bound.session, validated, known_reads=state.read_paths
+                )
+                mapping = executed.to_mapping()
+                assistant_items.append(
+                    ToolUseContent(child.tool_call_id, child.name, child.input)
+                )
+                tool_items.append(
+                    ToolResultContent(
+                        child.tool_call_id,
+                        str(mapping.get("status", "ok")),
+                        mapping,
+                    )
+                )
+            if not assistant_items:
+                break
+            child_messages = child_messages + (
+                CanonicalMessage("assistant", tuple(assistant_items)),
+                CanonicalMessage("tool", tuple(tool_items)),
+            )
+        return ToolResult.ok(
+            workspace_revision=str(bound.binding.workspace_revision),
+            entries=({"summary": last_text or "no output"},),
+        ).to_mapping()
+
+    async def _maybe_llm_compact(
+        self, state: AgentLoopState, transcript: tuple[CanonicalMessage, ...]
+    ) -> tuple[tuple[CanonicalMessage, ...], int]:
+        attempts = state.llm_compact_attempts
+        if attempts >= 1 or len(transcript) < 3:
+            return transcript, attempts
+        head = transcript[0]
+        tail_start = next(
+            (
+                index
+                for index in range(len(transcript) - 1, -1, -1)
+                if transcript[index].role == "assistant"
+                and any(
+                    isinstance(item, ToolUseContent)
+                    for item in transcript[index].content
+                )
+            ),
+            len(transcript),
+        )
+        prefix = transcript[1:tail_start]
+        if not prefix:
+            return transcript, attempts
+        blob = json.dumps(
+            [_message_to_mapping(item) for item in prefix],
+            ensure_ascii=False,
+        )[:12_000]
+        request = ModelRequest(
+            system="Summarize prior coding context as facts only. <= 200 words.",
+            messages=(
+                CanonicalMessage(
+                    "user",
+                    (TextContent(f"Summarize this transcript prefix:\n{blob}"),),
+                ),
+            ),
+            tools=(),
+            model=self._config.model,
+            limits=ModelLimits(512, min(self._config.timeout_sec, 30)),
+            task_id="compact",
+            run_id="compact",
+            turn_id=f"compact_{uuid4().hex}",
+        )
+        parts: list[str] = []
+        try:
+            async for event in self._model.stream(request):
+                if isinstance(event, TextDelta):
+                    parts.append(event.text)
+        except Exception:
+            return transcript, attempts + 1
+        summary = "".join(parts).strip()
+        if not summary:
+            return transcript, attempts + 1
+        compacted = (head,) + (
+            CanonicalMessage(
+                "user",
+                (TextContent(f"Prior context summary:\n{summary}"),),
+            ),
+        ) + transcript[tail_start:]
+        return compacted, attempts + 1
 
     def _restore(self, input, checkpoint):
         if checkpoint is None:
@@ -1016,6 +1224,8 @@ class AnthropicCodingLoop:
             bool(raw.get("instructions_loaded", False)),
             int(raw.get("prompt_compact_retries", 0)),
             int(raw.get("output_token_escalations", 0)),
+            int(raw.get("llm_compact_attempts", 0)),
+            frozenset(str(name) for name in raw.get("revealed_tools") or ()),
         )
 
     @staticmethod
@@ -1062,6 +1272,8 @@ class AnthropicCodingLoop:
             "instructions_loaded": state.instructions_loaded,
             "prompt_compact_retries": state.prompt_compact_retries,
             "output_token_escalations": state.output_token_escalations,
+            "llm_compact_attempts": state.llm_compact_attempts,
+            "revealed_tools": sorted(state.revealed_tools),
         }
 
     @staticmethod

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import urllib.error
+import urllib.request
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 _SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
 _ALLOWED_SKILLS = frozenset({"verify", "commit"})
@@ -23,7 +27,68 @@ from neos.coding.sandbox.base import (
 )
 from neos.coding.sandbox.observability import bounded_executable_category
 from neos.coding.sandbox.paths import normalize_workspace_path
-from neos.coding.tools.registry import ValidatedToolCall
+from neos.coding.tools.registry import CodingToolRegistry, ValidatedToolCall
+
+_WEB_FETCH_TIMEOUT_SEC = 15
+_WEB_FETCH_MAX_BYTES = 200_000
+
+
+class _WebFetchHostDenied(Exception):
+    pass
+
+
+def _web_fetch_hosts() -> tuple[str, ...]:
+    try:
+        from neos.config.settings import settings
+
+        return tuple(settings.config.coding_model.web_fetch_hosts)
+    except Exception:
+        return ()
+
+
+def _web_fetch_host_allowed(host: str | None, allowlist: tuple[str, ...]) -> bool:
+    if not allowlist or not host:
+        return False
+    candidate = host.lower().rstrip(".")
+    for raw in allowlist:
+        allowed = raw.strip().lower()
+        if not allowed:
+            continue
+        if allowed.startswith("."):
+            suffix = allowed.lstrip(".")
+            if candidate == suffix or candidate.endswith("." + suffix):
+                return True
+        elif candidate == allowed:
+            return True
+    return False
+
+
+def _web_fetch_url_allowed(url: str, allowlist: tuple[str, ...]) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    return _web_fetch_host_allowed(parsed.hostname, allowlist)
+
+
+def _http_get(url: str, allowlist: tuple[str, ...]) -> tuple[str, bytes]:
+    if not _web_fetch_url_allowed(url, allowlist):
+        raise _WebFetchHostDenied
+    request = urllib.request.Request(url, method="GET")
+    response: urllib.request.addinfourl | urllib.error.HTTPError | None = None
+    try:
+        try:
+            response = urllib.request.urlopen(
+                request, timeout=_WEB_FETCH_TIMEOUT_SEC
+            )
+        except urllib.error.HTTPError as error:
+            response = error
+        final_url = response.geturl()
+        if not _web_fetch_url_allowed(final_url, allowlist):
+            raise _WebFetchHostDenied
+        return final_url, response.read(_WEB_FETCH_MAX_BYTES)
+    finally:
+        if response is not None:
+            response.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +301,30 @@ class SandboxToolExecutor:
             return self._ask_user(call)
         if call.name == "load_skill.v1":
             return self._load_skill(call)
+        if call.name == "search_tools.v1":
+            return self._search_tools(call)
+        if call.name == "spawn_agent.v1":
+            return self._spawn_agent()
+        if call.name == "web_fetch.v1":
+            return await self._web_fetch(session, call)
+        if call.name == "glob_files.v1":
+            paths = await session.glob_files(
+                str(call.input["pattern"]),
+                limit=int(call.input.get("limit", 100)),
+            )
+            entries = tuple(
+                {"path": path} for path in paths[: self._max_entries]
+            )
+            return ToolResult(
+                "ok",
+                "ok",
+                None,
+                None,
+                len(paths) > len(entries),
+                None,
+                await self._revision(session),
+                entries,
+            )
         if call.name == "list_tree.v1":
             entries = await session.list_tree(str(call.input["path"]))
             return self._entry_result(entries, await self._revision(session))
@@ -248,6 +337,8 @@ class SandboxToolExecutor:
                 paths=tuple(str(path) for path in call.input["paths"]),
                 regex=bool(call.input["regex"]),
                 limit=int(call.input["limit"]),
+                before=int(call.input.get("before", 0)),
+                after=int(call.input.get("after", 0)),
             )
             return self._entry_result(matches, await self._revision(session))
         if call.name == "git_status.v1":
@@ -303,6 +394,51 @@ class SandboxToolExecutor:
         return ToolResult.ok(
             workspace_revision="unknown",
             entries=({"questions": questions},),
+        )
+
+    @staticmethod
+    def _search_tools(call: ValidatedToolCall) -> ToolResult:
+        entries = CodingToolRegistry.search_definitions(str(call.input["query"]))
+        return ToolResult.ok(workspace_revision="unknown", entries=entries)
+
+    @staticmethod
+    def _spawn_agent() -> ToolResult:
+        return ToolResult.ok(
+            workspace_revision="unknown",
+            entries=({"delegated": True},),
+        )
+
+    async def _web_fetch(
+        self, session: SandboxSession, call: ValidatedToolCall
+    ) -> ToolResult:
+        url = str(call.input["url"])
+        allowlist = _web_fetch_hosts()
+        if not _web_fetch_url_allowed(url, allowlist):
+            return await self._denied(session, "policy_web_fetch_host_denied")
+        try:
+            final_url, body = await asyncio.to_thread(_http_get, url, allowlist)
+        except _WebFetchHostDenied:
+            return await self._denied(session, "policy_web_fetch_host_denied")
+        except TimeoutError:
+            return self._failure("error", "sandbox_timeout")
+        except urllib.error.URLError as error:
+            reason = error.reason
+            if isinstance(reason, TimeoutError):
+                return self._failure("error", "sandbox_timeout")
+            return self._failure("error", "sandbox_error")
+        except OSError:
+            return self._failure("error", "sandbox_error")
+        text = body.decode("utf-8", errors="replace")
+        bounded = self._bytes_mapping(body)
+        return ToolResult(
+            status="ok",
+            reason_code="ok",
+            preview=str(bounded["preview"]),
+            original_bytes=len(body),
+            truncated=bool(bounded["truncated"]),
+            checksum=str(bounded["checksum"]),
+            workspace_revision=await self._revision(session),
+            entries=({"url": final_url, "text": text},),
         )
 
     @staticmethod

@@ -188,7 +188,72 @@ async def test_session_file_tree_search_and_git_use_fixed_helpers() -> None:
     assert [(match.path, match.line) for match in matches] == [
         ("src/app.py", 1)
     ]
+    assert matches[0].before == ()
+    assert matches[0].after == ()
     assert status.stdout == b"?? src/app.py\n"
+
+
+async def test_session_search_context_and_glob_use_fixed_helpers() -> None:
+    runner = ScriptedDockerRunner()
+    provider = DockerSandboxProvider(runner=runner, config=_config())
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    runner.results.extend(
+        [
+            DockerCommandResult(
+                exit_code=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "path": "src/app.py",
+                            "line": 2,
+                            "column": 6,
+                            "text": "beta needle",
+                            "before": ["alpha"],
+                            "after": ["gamma", "delta"],
+                        }
+                    ]
+                ).encode(),
+                stderr=b"",
+            ),
+            DockerCommandResult(
+                exit_code=0,
+                stdout=json.dumps(["src/app.py", "src/util.py"]).encode(),
+                stderr=b"",
+            ),
+        ]
+    )
+
+    matches = await session.search_text(
+        "needle",
+        paths=("src/**",),
+        limit=10,
+        before=1,
+        after=2,
+    )
+    found = await session.glob_files("src/*.py", limit=1000)
+    calls_after_glob = len(runner.calls)
+
+    assert matches[0].before == ("alpha",)
+    assert matches[0].after == ("gamma", "delta")
+    assert found == ("src/app.py", "src/util.py")
+    assert runner.calls[-2][-6:] == (
+        "needle",
+        "0",
+        "10",
+        "1",
+        "2",
+        "src/**",
+    )
+    assert runner.calls[-1][-2:] == ("src/*.py", "500")
+    with pytest.raises(SandboxPolicyViolation, match="workspace_path_escape"):
+        await session.glob_files("../secret.py")
+    with pytest.raises(SandboxPolicyViolation, match="invalid_glob_request"):
+        await session.glob_files("", limit=10)
+    assert len(runner.calls) == calls_after_glob
 
 
 async def test_conditional_write_rejects_stale_revision_before_docker_exec() -> None:

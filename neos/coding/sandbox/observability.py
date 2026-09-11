@@ -23,9 +23,11 @@ _CODING_TOOLS = {
     "stat.v1",
     "read_file.v1",
     "search_text.v1",
+    "glob_files.v1",
     "git_status.v1",
     "git_diff.v1",
     "git_log.v1",
+    "web_fetch.v1",
     "edit_file.v1",
     "write_file.v1",
     "todo_write.v1",
@@ -33,6 +35,8 @@ _CODING_TOOLS = {
     "set_phase.v1",
     "ask_user.v1",
     "load_skill.v1",
+    "search_tools.v1",
+    "spawn_agent.v1",
 }
 _CODING_OPERATIONS = {"validate", "claim", "execute", "checkpoint"}
 _CODING_OUTCOMES = {"allowed", "denied", "ok", "error", "reused"}
@@ -51,6 +55,7 @@ _CODING_ERROR_CODES = {
     "policy_command_stdin_exceeded",
     "policy_environment_name_denied",
     "policy_protected_git_path",
+    "policy_web_fetch_host_denied",
     "precondition_read_required",
     "edit_old_string_not_found",
     "edit_old_string_not_unique",

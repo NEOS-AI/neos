@@ -15,9 +15,16 @@ class CodingAgentPhase(StrEnum):
 
 _HIDDEN: dict[CodingAgentPhase, frozenset[str]] = {
     CodingAgentPhase.EXPLORE: frozenset(
-        {"edit_file.v1", "write_file.v1", "execute.v1"}
+        {
+            "edit_file.v1",
+            "write_file.v1",
+            "execute.v1",
+            "spawn_agent.v1",
+        }
     ),
-    CodingAgentPhase.VERIFY: frozenset({"edit_file.v1", "write_file.v1"}),
+    CodingAgentPhase.VERIFY: frozenset(
+        {"edit_file.v1", "write_file.v1", "spawn_agent.v1"}
+    ),
     CodingAgentPhase.IMPLEMENT: frozenset(),
 }
 

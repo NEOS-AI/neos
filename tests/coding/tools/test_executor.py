@@ -71,6 +71,11 @@ class FakeSession:
         self.called = ("search_text", (query, kwargs))
         return (SearchMatch("a.py", 2, 3, "needle"),)
 
+    async def glob_files(self, pattern: str, *, limit: int = 100) -> tuple[str, ...]:
+        self._raise()
+        self.called = ("glob_files", (pattern, limit))
+        return (f"{pattern}",)
+
     async def git_status(self) -> CommandResult:
         self._raise()
         self.called = ("git_status", None)
@@ -163,6 +168,7 @@ async def test_read_file_works_when_path_is_seeded() -> None:
         ("list_tree.v1", {"path": "src"}, "list_tree"),
         ("stat.v1", {"path": "a.py"}, "stat"),
         ("search_text.v1", {"query": "x", "paths": ["src"], "regex": True, "limit": 4}, "search_text"),
+        ("glob_files.v1", {"pattern": "**/*.py", "limit": 12}, "glob_files"),
         ("git_status.v1", {}, "git_status"),
         ("git_diff.v1", {"staged": True}, "git_diff"),
         ("git_log.v1", {"limit": 4}, "git_log"),
@@ -288,6 +294,103 @@ async def test_command_timed_out_flag_maps_to_timeout() -> None:
         call("execute.v1", {"argv": ["pytest"], "cwd": ".", "env": {}, "stdin": "", "timeout_sec": 1, "max_output_bytes": 10}),
     )
     assert (result.status, result.reason_code) == ("error", "sandbox_timeout")
+
+
+@pytest.mark.asyncio
+async def test_search_text_forwards_before_and_after() -> None:
+    session = FakeSession()
+    result = await SandboxToolExecutor(10, 10).execute(
+        session,
+        call(
+            "search_text.v1",
+            {
+                "query": "needle",
+                "paths": ["src"],
+                "regex": False,
+                "limit": 10,
+                "before": 2,
+                "after": 3,
+            },
+        ),
+    )
+    assert result.status == "ok"
+    assert session.called == (
+        "search_text",
+        (
+            "needle",
+            {
+                "paths": ("src",),
+                "regex": False,
+                "limit": 10,
+                "before": 2,
+                "after": 3,
+            },
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_glob_files_forwards_pattern_and_limit() -> None:
+    session = FakeSession()
+    result = await SandboxToolExecutor(10, 10).execute(
+        session, call("glob_files.v1", {"pattern": "**/*.py", "limit": 12})
+    )
+    assert result.status == "ok"
+    assert session.called == ("glob_files", ("**/*.py", 12))
+    assert result.entries == ({"path": "**/*.py"},)
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_denied_when_allowlist_empty(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "neos.coding.tools.executor._web_fetch_hosts", lambda: ()
+    )
+    result = await SandboxToolExecutor(10, 10).execute(
+        FakeSession(),
+        call("web_fetch.v1", {"url": "https://example.com/doc"}),
+    )
+    assert (result.status, result.reason_code) == (
+        "denied",
+        "policy_web_fetch_host_denied",
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_tools_returns_matching_tool_schema() -> None:
+    session = FakeSession()
+    session.error = SandboxTimeout("search_tools must not touch the sandbox")
+    glob_result = await SandboxToolExecutor(10, 10).execute(
+        session, call("search_tools.v1", {"query": "glob"})
+    )
+    spawn_result = await SandboxToolExecutor(10, 10).execute(
+        session, call("search_tools.v1", {"query": "spawn"})
+    )
+    assert glob_result.status == "ok"
+    assert spawn_result.status == "ok"
+    assert session.called is None
+    glob_names = {entry["name"] for entry in glob_result.entries}
+    spawn_names = {entry["name"] for entry in spawn_result.entries}
+    assert "glob_files.v1" in glob_names or "spawn_agent.v1" in spawn_names
+    match = next(
+        entry
+        for entry in (*glob_result.entries, *spawn_result.entries)
+        if entry["name"] in {"glob_files.v1", "spawn_agent.v1"}
+    )
+    assert "description" in match
+    assert "input_schema" in match
+
+
+@pytest.mark.asyncio
+async def test_spawn_agent_returns_delegated_without_sandbox_io() -> None:
+    session = FakeSession()
+    session.error = SandboxTimeout("spawn_agent must not write")
+    result = await SandboxToolExecutor(10, 10).execute(
+        session,
+        call("spawn_agent.v1", {"prompt": "find the bug", "max_turns": 3}),
+    )
+    assert (result.status, result.reason_code) == ("ok", "ok")
+    assert session.called is None
+    assert result.entries == ({"delegated": True},)
 
 
 @pytest.mark.asyncio

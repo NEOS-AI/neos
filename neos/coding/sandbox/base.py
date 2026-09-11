@@ -185,6 +185,8 @@ class SearchMatch:
     line: int
     column: int
     text: str
+    before: tuple[str, ...] = ()
+    after: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,7 +251,13 @@ class SandboxSession(Protocol):
         paths: tuple[str, ...] = ("**/*",),
         regex: bool = False,
         limit: int = 100,
+        before: int = 0,
+        after: int = 0,
     ) -> tuple[SearchMatch, ...]: ...
+
+    async def glob_files(
+        self, pattern: str, *, limit: int = 100
+    ) -> tuple[str, ...]: ...
 
     async def git_status(self) -> CommandResult: ...
 

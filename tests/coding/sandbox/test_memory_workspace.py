@@ -40,6 +40,8 @@ async def test_memory_session_reads_searches_and_executes(
     assert [(match.path, match.line) for match in matches] == [
         ("src/app.py", 1)
     ]
+    assert matches[0].before == ()
+    assert matches[0].after == ()
     result = await session.execute(
         CommandRequest(argv=(sys.executable, "src/app.py"))
     )
@@ -123,3 +125,66 @@ async def test_destroy_is_idempotent_and_removes_workspace(
     assert not workspace.exists()
     with pytest.raises(SandboxNotFound):
         await provider.get(sandbox.sandbox_id)
+
+
+async def test_memory_search_text_includes_clamped_before_after_context(
+    tmp_path: Path,
+) -> None:
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    await session.write_file(
+        "src/app.py",
+        b"alpha\nbeta needle\ngamma\ndelta\n",
+    )
+
+    matches = await session.search_text(
+        "needle",
+        paths=("src/**",),
+        before=1,
+        after=2,
+    )
+    clamped = await session.search_text("needle", before=100, after=100)
+
+    assert len(matches) == 1
+    assert matches[0].path == "src/app.py"
+    assert matches[0].line == 2
+    assert matches[0].text == "beta needle"
+    assert matches[0].before == ("alpha",)
+    assert matches[0].after == ("gamma", "delta")
+    assert clamped[0].before == ("alpha",)
+    assert clamped[0].after == ("gamma", "delta")
+    await provider.close()
+
+
+async def test_memory_glob_files_matches_limit_and_rejects_escape(
+    tmp_path: Path,
+) -> None:
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    await session.write_file("src/app.py", b"print(1)\n")
+    await session.write_file("src/nested/util.py", b"print(2)\n")
+    await session.write_file("README.md", b"# readme\n")
+
+    assert await session.glob_files("**/*.py") == (
+        "src/app.py",
+        "src/nested/util.py",
+    )
+    assert await session.glob_files("src/*.py") == ("src/app.py",)
+    assert await session.glob_files("*.md") == ("README.md",)
+    assert await session.glob_files("**/*.py", limit=1) == ("src/app.py",)
+
+    with pytest.raises(SandboxPolicyViolation, match="invalid_glob_request"):
+        await session.glob_files("", limit=10)
+    with pytest.raises(SandboxPolicyViolation, match="invalid_glob_request"):
+        await session.glob_files("**/*.py", limit=0)
+    with pytest.raises(SandboxPolicyViolation, match="workspace_path_escape"):
+        await session.glob_files("../secret.py")
+    await provider.close()

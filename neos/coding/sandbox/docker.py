@@ -72,8 +72,10 @@ p.write_bytes(sys.stdin.buffer.read())
 _SEARCH_TEXT_HELPER = """\
 import fnmatch, json, re, sys
 from pathlib import Path
-query, regex, limit, *patterns = sys.argv[1:]
+query, regex, limit, before, after, *patterns = sys.argv[1:]
 expression = re.compile(query if regex == '1' else re.escape(query))
+before = max(0, min(int(before), 20))
+after = max(0, min(int(after), 20))
 matches = []
 for p in sorted(Path('/workspace').rglob('*')):
     if not p.is_file() or p.is_symlink(): continue
@@ -81,14 +83,36 @@ for p in sorted(Path('/workspace').rglob('*')):
     if not any(fnmatch.fnmatch(relative, pattern) or
                (pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:]))
                for pattern in patterns): continue
-    for number, line in enumerate(p.read_text(errors='replace').splitlines(), 1):
+    lines = p.read_text(errors='replace').splitlines()
+    for number, line in enumerate(lines, 1):
         match = expression.search(line)
         if match:
+            start = max(0, number - 1 - before)
             matches.append({'path': relative, 'line': number,
-                            'column': match.start() + 1, 'text': line})
+                            'column': match.start() + 1, 'text': line,
+                            'before': lines[start:number - 1],
+                            'after': lines[number:number + after]})
             if len(matches) >= int(limit): break
     if len(matches) >= int(limit): break
 sys.stdout.write(json.dumps(matches))
+"""
+_GLOB_FILES_HELPER = """\
+import fnmatch, json, sys
+from pathlib import Path
+pattern, limit = sys.argv[1], int(sys.argv[2])
+if '..' in Path(pattern).parts:
+    raise SystemExit(2)
+limit = max(1, min(limit, 500))
+found = []
+for p in sorted(Path('/workspace').rglob('*')):
+    if p.is_symlink(): continue
+    relative = p.relative_to('/workspace').as_posix()
+    if fnmatch.fnmatch(relative, pattern) or (
+        pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:])
+    ):
+        found.append(relative)
+        if len(found) >= limit: break
+sys.stdout.write(json.dumps(found))
 """
 _FILE_METADATA_HELPER = """\
 import json, sys
@@ -891,9 +915,13 @@ class DockerSandboxSession:
         paths: tuple[str, ...] = ("**/*",),
         regex: bool = False,
         limit: int = 100,
+        before: int = 0,
+        after: int = 0,
     ) -> tuple[SearchMatch, ...]:
         if not query or limit < 1:
             raise SandboxPolicyViolation("invalid_search_request")
+        before = max(0, min(int(before), 20))
+        after = max(0, min(int(after), 20))
         for path in paths:
             normalize_workspace_path(path)
         result = await self._run_helper(
@@ -901,11 +929,45 @@ class DockerSandboxSession:
             query,
             "1" if regex else "0",
             str(limit),
+            str(before),
+            str(after),
             *paths,
         )
         try:
             values = json.loads(result.stdout)
-            return tuple(SearchMatch(**value) for value in values)
+            return tuple(
+                SearchMatch(
+                    path=value["path"],
+                    line=value["line"],
+                    column=value["column"],
+                    text=value["text"],
+                    before=tuple(value.get("before") or ()),
+                    after=tuple(value.get("after") or ()),
+                )
+                for value in values
+            )
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            TypeError,
+            KeyError,
+        ) as error:
+            raise SandboxUnavailable("docker_helper_output_invalid") from error
+
+    async def glob_files(self, pattern: str, *, limit: int = 100) -> tuple[str, ...]:
+        if not pattern or limit < 1:
+            raise SandboxPolicyViolation("invalid_glob_request")
+        normalize_workspace_path(
+            pattern.replace("*", "x").replace("?", "x") or "x"
+        )
+        result = await self._run_helper(
+            _GLOB_FILES_HELPER,
+            pattern,
+            str(min(int(limit), 500)),
+        )
+        try:
+            values = json.loads(result.stdout)
+            return tuple(values)
         except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as error:
             raise SandboxUnavailable("docker_helper_output_invalid") from error
 

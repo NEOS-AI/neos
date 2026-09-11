@@ -16,6 +16,17 @@ from neos.coding.sandbox.paths import (
     normalize_workspace_path,
 )
 
+_DEFAULT_DEFERRED_TOOLS_THRESHOLD = 20
+
+
+def _deferred_tools_threshold() -> int:
+    try:
+        from neos.config.settings import settings
+
+        return int(settings.config.coding_model.deferred_tools_threshold)
+    except Exception:
+        return _DEFAULT_DEFERRED_TOOLS_THRESHOLD
+
 
 class ToolRisk(StrEnum):
     READ_ONLY = "read_only"
@@ -60,6 +71,26 @@ class _SearchTextInput(_ToolInput):
     paths: list[str] = Field(default_factory=lambda: ["**/*"], min_length=1)
     regex: bool = False
     limit: int = Field(default=100, ge=1, le=100)
+    before: int = Field(default=0, ge=0, le=20)
+    after: int = Field(default=0, ge=0, le=20)
+
+
+class _GlobFilesInput(_ToolInput):
+    pattern: str = Field(min_length=1)
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+class _WebFetchInput(_ToolInput):
+    url: str = Field(min_length=1)
+
+
+class _SearchToolsInput(_ToolInput):
+    query: str = Field(min_length=1)
+
+
+class _SpawnAgentInput(_ToolInput):
+    prompt: str = Field(min_length=1)
+    max_turns: int = Field(default=4, ge=1, le=8)
 
 
 class _EmptyInput(_ToolInput):
@@ -180,6 +211,16 @@ class CodingToolRegistry:
             _SearchTextInput,
         ),
         _RegisteredTool(
+            "glob_files.v1",
+            (
+                "Find workspace paths by glob pattern. Use this instead of find. "
+                "Do not use execute.v1 with find. "
+                "On policy_* denial, do not retry the same pattern."
+            ),
+            ToolRisk.READ_ONLY,
+            _GlobFilesInput,
+        ),
+        _RegisteredTool(
             "git_status.v1",
             (
                 "Read Git status. Prefer this over execute.v1 git. "
@@ -208,6 +249,16 @@ class CodingToolRegistry:
             ),
             ToolRisk.READ_ONLY,
             _GitLogInput,
+        ),
+        _RegisteredTool(
+            "web_fetch.v1",
+            (
+                "Fetch an allowlisted http(s) URL as text. "
+                "Only allowlisted hosts; do not use execute.v1 curl. "
+                "On policy_* denial, do not retry the same url."
+            ),
+            ToolRisk.READ_ONLY,
+            _WebFetchInput,
         ),
         _RegisteredTool(
             "edit_file.v1",
@@ -287,6 +338,44 @@ class CodingToolRegistry:
             ToolRisk.READ_ONLY,
             _LoadSkillInput,
         ),
+        _RegisteredTool(
+            "search_tools.v1",
+            (
+                "Search registered coding tools by name or description. "
+                "Use this to discover deferred tools before calling them. "
+                "On policy_* denial, do not retry the same query."
+            ),
+            ToolRisk.READ_ONLY,
+            _SearchToolsInput,
+        ),
+        _RegisteredTool(
+            "spawn_agent.v1",
+            (
+                "Spawn a nested explore-only coding agent. "
+                "The parent loop intercepts this call. Do not use this to write files. "
+                "On policy_* denial, do not retry the same prompt."
+            ),
+            ToolRisk.READ_ONLY,
+            _SpawnAgentInput,
+        ),
+    )
+
+    _CORE_TOOL_NAMES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "read_file.v1",
+            "search_text.v1",
+            "glob_files.v1",
+            "list_tree.v1",
+            "stat.v1",
+            "edit_file.v1",
+            "write_file.v1",
+            "execute.v1",
+            "todo_write.v1",
+            "set_phase.v1",
+            "ask_user.v1",
+            "load_skill.v1",
+            "search_tools.v1",
+        }
     )
 
     def __init__(
@@ -329,15 +418,51 @@ class CodingToolRegistry:
             allowed_env_names=allowed_env_names,
         )
 
-    def definitions(self, *, phase: str = "implement") -> tuple[ToolDefinition, ...]:
+    def definitions(
+        self,
+        *,
+        phase: str = "implement",
+        revealed: frozenset[str] | None = None,
+    ) -> tuple[ToolDefinition, ...]:
         from neos.coding.phases import hidden_tools_for_phase
 
         hidden = hidden_tools_for_phase(phase)
+        revealed_names = revealed or frozenset()
+        defer = len(self._TOOL_SPECS) > _deferred_tools_threshold()
         return tuple(
             tool.definition()
             for tool in self._TOOL_SPECS
             if tool.name not in hidden
+            and (
+                not defer
+                or tool.name in self._CORE_TOOL_NAMES
+                or tool.name in revealed_names
+            )
         )
+
+    @classmethod
+    def search_definitions(
+        cls, query: str, *, limit: int = 8
+    ) -> tuple[Mapping[str, object], ...]:
+        needle = query.casefold()
+        matches: list[Mapping[str, object]] = []
+        for tool in cls._TOOL_SPECS:
+            if (
+                needle not in tool.name.casefold()
+                and needle not in tool.description.casefold()
+            ):
+                continue
+            definition = tool.definition()
+            matches.append(
+                {
+                    "name": definition.name,
+                    "description": definition.description,
+                    "input_schema": definition.input_schema,
+                }
+            )
+            if len(matches) >= limit:
+                break
+        return tuple(matches)
 
     def decide(
         self, name: str, input: Mapping[str, object]
@@ -386,6 +511,8 @@ class CodingToolRegistry:
                     else normalize_workspace_path
                 )
                 data["path"] = str(normalizer(data["path"]))
+            if "pattern" in data:
+                data["pattern"] = str(normalize_workspace_path(data["pattern"]))
             if "paths" in data:
                 data["paths"] = [
                     str(normalize_workspace_path(path)) for path in data["paths"]

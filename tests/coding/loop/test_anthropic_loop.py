@@ -1,6 +1,6 @@
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -1017,3 +1017,65 @@ async def test_hidden_tool_in_explore_phase_is_denied() -> None:
     assert events[-1].payload["reason_code"] == "policy_phase_denied"
     assert h.bindings.session.writes == 0
     assert h.executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_readonly_tools_are_prefetched_once_during_model_stream() -> None:
+    h = harness(
+        [
+            [
+                tool_call("r1", "read_file.v1", {"path": "a.txt"}),
+                tool_call("r2", "read_file.v1", {"path": "b.txt"}),
+                completed(),
+            ]
+        ]
+    )
+    await collect(h)
+    names = [call.name for call in h.executor.calls]
+    assert names.count("read_file.v1") == 2
+
+
+@pytest.mark.asyncio
+async def test_spawn_agent_returns_child_summary() -> None:
+    h = harness(
+        [
+            [
+                tool_call(
+                    "s1",
+                    "spawn_agent.v1",
+                    {"prompt": "look around", "max_turns": 1},
+                ),
+                completed(),
+            ],
+            [TextDelta("child saw files"), ModelCompleted("end_turn", ModelUsage(1, 1))],
+        ]
+    )
+    events = await collect(h)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    payload = completed_events[-1].payload["result"]
+    entries = payload.get("entries") or ()
+    assert any("child saw files" in str(item) for item in entries)
+
+
+@pytest.mark.asyncio
+async def test_llm_compact_keeps_first_user_instruction() -> None:
+    from neos.coding.model.base import CanonicalMessage, TextContent
+
+    h = harness(
+        [[TextDelta("old files were edited"), ModelCompleted("end_turn", ModelUsage(1, 1))]]
+    )
+    state = h.loop._restore(INPUT, None)
+    long_prefix = tuple(
+        CanonicalMessage("user", (TextContent(f"note {index} " + ("x" * 20)),))
+        for index in range(4)
+    )
+    state = replace(
+        state,
+        transcript=(state.transcript[0],) + long_prefix,
+        llm_compact_attempts=0,
+    )
+    compacted, attempts = await h.loop._maybe_llm_compact(state, state.transcript)
+    assert attempts == 1
+    assert compacted[0].content[0].text == "Fix it"
+    assert "old files were edited" in compacted[1].content[0].text

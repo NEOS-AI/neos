@@ -30,9 +30,11 @@ def test_default_registry_exports_stable_versioned_definitions() -> None:
         "stat.v1",
         "read_file.v1",
         "search_text.v1",
+        "glob_files.v1",
         "git_status.v1",
         "git_diff.v1",
         "git_log.v1",
+        "web_fetch.v1",
         "edit_file.v1",
         "write_file.v1",
         "todo_write.v1",
@@ -40,6 +42,8 @@ def test_default_registry_exports_stable_versioned_definitions() -> None:
         "set_phase.v1",
         "ask_user.v1",
         "load_skill.v1",
+        "search_tools.v1",
+        "spawn_agent.v1",
     ]
     assert all(item.input_schema["additionalProperties"] is False for item in definitions)
     names = [item.name for item in definitions]
@@ -54,9 +58,12 @@ def test_explore_definitions_omit_write_and_execute() -> None:
     assert "write_file.v1" not in names
     assert "execute.v1" not in names
     assert "read_file.v1" in names
+    assert "glob_files.v1" in names
+    assert "search_tools.v1" in names
     assert "set_phase.v1" in names
     assert "ask_user.v1" in names
     assert "load_skill.v1" in names
+    assert "spawn_agent.v1" not in names
     hidden = registry().validate(
         "write_file.v1", {"path": "src/main.py", "content": "pass\n"}
     )
@@ -70,6 +77,71 @@ def test_ask_user_requires_approval() -> None:
 
     assert call.risk is ToolRisk.USER_QUESTION
     assert evaluate_approval(call) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+
+
+def test_search_text_accepts_before_and_after_context() -> None:
+    call = registry().validate(
+        "search_text.v1",
+        {"query": "needle", "before": 2, "after": 3},
+    )
+    denied = registry().decide(
+        "search_text.v1", {"query": "needle", "before": 21}
+    )
+
+    assert call.risk is ToolRisk.READ_ONLY
+    assert call.input["before"] == 2
+    assert call.input["after"] == 3
+    assert denied.allowed is False
+    assert denied.reason_code == "policy_schema_invalid"
+
+
+def test_glob_files_is_read_only_and_rejects_escape() -> None:
+    allowed = registry().validate(
+        "glob_files.v1", {"pattern": "src/**/*.py", "limit": 20}
+    )
+    denied = registry().decide("glob_files.v1", {"pattern": "../secret"})
+
+    assert allowed.risk is ToolRisk.READ_ONLY
+    assert allowed.input == {"pattern": "src/**/*.py", "limit": 20}
+    assert denied.allowed is False
+    assert denied.reason_code.startswith("policy_workspace_path_")
+
+
+def test_spawn_agent_and_web_fetch_are_read_only() -> None:
+    spawn = registry().validate(
+        "spawn_agent.v1", {"prompt": "inspect src", "max_turns": 2}
+    )
+    fetch = registry().validate(
+        "web_fetch.v1", {"url": "https://example.com/doc"}
+    )
+
+    assert spawn.risk is ToolRisk.READ_ONLY
+    assert spawn.input == {"prompt": "inspect src", "max_turns": 2}
+    assert fetch.risk is ToolRisk.READ_ONLY
+    assert fetch.input == {"url": "https://example.com/doc"}
+
+
+def test_definitions_defer_non_core_until_revealed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "neos.coding.tools.registry._deferred_tools_threshold",
+        lambda: 1,
+    )
+    tools = registry()
+    names = [item.name for item in tools.definitions()]
+
+    assert "search_tools.v1" in names
+    assert "read_file.v1" in names
+    assert "glob_files.v1" in names
+    assert "spawn_agent.v1" not in names
+    assert "web_fetch.v1" not in names
+    assert "git_status.v1" not in names
+
+    revealed = [
+        item.name
+        for item in tools.definitions(revealed=frozenset({"spawn_agent.v1"}))
+    ]
+    assert "spawn_agent.v1" in revealed
+    assert "web_fetch.v1" not in revealed
 
 
 def test_read_file_is_read_only_and_normalizes_path() -> None:
@@ -314,6 +386,15 @@ def test_execute_environment_names_are_allowlisted() -> None:
         ("read_file.v1", {"path": "a", "limit": 0}),
         ("read_file.v1", {"path": "a", "limit": 5001}),
         ("search_text.v1", {"query": "x", "limit": 0}),
+        ("search_text.v1", {"query": "x", "before": 21}),
+        ("search_text.v1", {"query": "x", "after": -1}),
+        ("glob_files.v1", {"pattern": ""}),
+        ("glob_files.v1", {"pattern": "*.py", "limit": 0}),
+        ("glob_files.v1", {"pattern": "*.py", "limit": 501}),
+        ("web_fetch.v1", {}),
+        ("search_tools.v1", {"query": ""}),
+        ("spawn_agent.v1", {"prompt": "x", "max_turns": 0}),
+        ("spawn_agent.v1", {"prompt": "x", "max_turns": 9}),
         ("git_log.v1", {"limit": 101}),
         (
             "edit_file.v1",
