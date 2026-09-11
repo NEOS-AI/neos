@@ -85,3 +85,20 @@ def test_runtime_uses_the_builder_instead_of_the_one_liner() -> None:
         "Work safely in the provided sandbox and complete the coding task."
         not in source
     )
+
+
+def test_approved_lessons_appear_under_lessons_heading() -> None:
+    prompt = build_coding_system_prompt(
+        _tools(),
+        env=CodingPromptEnv(approved_lessons=("The rate limit is 60.",)),
+    )
+    assert "## Lessons" in prompt
+    lessons_at = prompt.index("## Lessons")
+    assert "The rate limit is 60." in prompt[lessons_at:]
+
+
+def test_staged_text_does_not_appear_unless_passed() -> None:
+    staged = "Staged lesson must stay out of the prompt."
+    prompt = build_coding_system_prompt(_tools())
+    assert "## Lessons" not in prompt
+    assert staged not in prompt

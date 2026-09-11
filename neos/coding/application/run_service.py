@@ -17,6 +17,7 @@ from neos.coding.domain.phases import (
     SteeringMode,
     SteeringRequest,
 )
+from neos.coding.learn_lessons import stage_coding_lesson
 from neos.coding.loop.base import (
     CodingLoop,
     LoopDependencies,
@@ -127,6 +128,24 @@ class CodingRunService:
             await self._release_lease(lease)
             raise
         await self._release_lease(lease)
+        try:
+            task = await self._tasks.get(task_id)
+            payload = dict(committed.event.payload)
+            stage_coding_lesson(
+                owner_id=task.owner_id if task is not None else None,
+                task_id=task_id,
+                outcome="failed",
+                events=(
+                    {
+                        "type": committed.event.type,
+                        "event_type": committed.event.type,
+                        "error_code": payload.get("error_code") or error_code,
+                        "reason_code": payload.get("reason_code"),
+                    },
+                ),
+            )
+        except Exception:
+            pass
         return committed.event
 
     async def start(self, *, task_id: str, instruction: str) -> CodingRun:

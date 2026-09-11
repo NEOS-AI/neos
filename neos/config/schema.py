@@ -616,6 +616,15 @@ class MemoryConfig(StrictConfigModel):
     max_context_items: int = 10
 
 
+class LearnConfig(StrictConfigModel):
+    write_approval: bool = True
+    coding_lessons: bool = False
+    curator: bool = True
+    stale_days: int = 30
+    archive_days: int = 90
+    max_knowledge_chars: int = 400
+
+
 class QueryClassifierConfig(StrictConfigModel):
     use_llm: bool = False
     llm_model: str = "claude-haiku-4-5-20251001"
@@ -1755,6 +1764,7 @@ class AppConfig(StrictConfigModel):
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     celery: CeleryConfig = Field(default_factory=CeleryConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    learn: LearnConfig = Field(default_factory=LearnConfig)
     query_classifier: QueryClassifierConfig = Field(default_factory=QueryClassifierConfig)
     executive_summary: ExecutiveSummaryConfig = Field(default_factory=ExecutiveSummaryConfig)
     query_expansion: QueryExpansionConfig = Field(default_factory=QueryExpansionConfig)

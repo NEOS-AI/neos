@@ -3255,7 +3255,7 @@ class MultiAgentWorkflow:
 
             key_findings = result.get("response", "")[:500]  # 핵심 발견 요약 (앞 500자)
 
-            await memory_manager.save_episode(
+            saved = await memory_manager.save_episode(
                 user_id=user_input.get("user_id", ""),
                 session_id=user_input.get("session_id", ""),
                 query=user_input.get("query", ""),
@@ -3267,6 +3267,21 @@ class MultiAgentWorkflow:
                     "intent": final_state.get("query_intent"),
                 },
             )
+            if saved:
+                from neos.learn.policy import is_imperative
+
+                query = user_input.get("query", "")
+                knowledge = f"Query about {query[:80]}: {key_findings[:200]}"
+                if user_input.get("user_id") and not is_imperative(knowledge):
+                    await memory_manager.learn(
+                        user_input.get("user_id", ""),
+                        key=f"episode:{user_input.get('session_id', '')}",
+                        knowledge=knowledge,
+                        metadata={
+                            "category": "episode",
+                            "intent": final_state.get("query_intent"),
+                        },
+                    )
         except Exception as e:
             logger.debug(f"[Workflow] Episode memory save skipped: {e}")
 

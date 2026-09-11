@@ -3,6 +3,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from neos.config.settings import settings
+from neos.learn.policy import clip_knowledge, is_imperative
 from neos.memory.base import MemoryItem
 from neos.memory.short_term import ShortTermMemory
 from neos.memory.long_term import LongTermMemory
@@ -173,6 +174,11 @@ class MemoryManager:
         """사용자 학습 내용을 장기 메모리에 저장"""
         if not getattr(settings, "MEMORY_LONG_TERM_ENABLED", True):
             return False
+
+        if isinstance(knowledge, str):
+            if is_imperative(knowledge):
+                return False
+            knowledge = clip_knowledge(knowledge)
 
         self._ensure_initialized()
         return await self._long_term.store(user_id, key, knowledge, metadata)

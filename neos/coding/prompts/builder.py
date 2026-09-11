@@ -16,6 +16,7 @@ from neos.coding.model.base import ToolDefinition
 class CodingPromptEnv:
     workspace_root: str = "/workspace"
     command_allowlist: tuple[str, ...] = ()
+    approved_lessons: tuple[str, ...] = ()
 
 
 def build_coding_system_prompt(
@@ -23,14 +24,17 @@ def build_coding_system_prompt(
     env: CodingPromptEnv | None = None,
 ) -> str:
     resolved = env or CodingPromptEnv()
-    sections = (
+    sections = [
         _intro(resolved),
         _system(),
         _tasks(),
         _actions(),
         _tools(tools, resolved),
-        _tone(),
-    )
+    ]
+    lessons = _lessons(resolved)
+    if lessons is not None:
+        sections.append(lessons)
+    sections.append(_tone())
     return "\n\n".join(sections)
 
 
@@ -88,6 +92,12 @@ def _tools(tools: Sequence[ToolDefinition], env: CodingPromptEnv) -> str:
     for tool in tools:
         lines.append(f"- {tool.name}: {tool.description}")
     return "\n".join(lines)
+
+
+def _lessons(env: CodingPromptEnv) -> str | None:
+    if not env.approved_lessons:
+        return None
+    return "## Lessons\n" + "\n".join(env.approved_lessons)
 
 
 def _tone() -> str:

@@ -388,6 +388,14 @@ memory:
   episodic_enabled: true
   max_context_items: 10
 
+learn:
+  write_approval: true
+  coding_lessons: false
+  curator: true
+  stale_days: 30
+  archive_days: 90
+  max_knowledge_chars: 400
+
 query_classifier:
   use_llm: false
   llm_model: claude-haiku-4-5-20251001

@@ -44,6 +44,8 @@ def test_channel_gate_defaults_are_fail_closed():
     assert config.channels.slack.require_mention is None
     assert config.channels.discord.allowed_users == []
     assert config.channels.telegram.ignored_channels == []
+    assert config.learn.write_approval is True
+    assert config.learn.coding_lessons is False
 
 
 def test_schema_defaults_match_current_runtime_policy():

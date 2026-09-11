@@ -220,6 +220,8 @@ LEGACY_EXACT_PATHS = {
     "CHANNEL_IGNORED_CHANNELS": "channels.ignored_channels",
     "CHANNEL_CODING_INVOKE": "channels.coding_invoke",
     "CHANNEL_CODING_OWNER_USER_ID": "channels.coding_owner_user_id",
+    "LEARN_WRITE_APPROVAL": "learn.write_approval",
+    "LEARN_CODING_LESSONS": "learn.coding_lessons",
     "CONTEXT_MAX_TOKENS": "context_assembly.max_tokens",
     "CONTEXT_SHORT_TERM_RATIO": "context_assembly.short_term_ratio",
     "CONTEXT_LONG_TERM_RATIO": "context_assembly.long_term_ratio",

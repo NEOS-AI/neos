@@ -13,6 +13,7 @@ from .deep_analysis_job_task import (
     run_deep_analysis_job,
     submit_deep_analysis_job,
 )
+from .curate_learned_skills import curate_learned_skills
 
 __all__ = [
     "poll_and_run_scheduled_tasks",
@@ -20,4 +21,5 @@ __all__ = [
     "compute_deep_analysis_improvement_report",
     "run_deep_analysis_job",
     "submit_deep_analysis_job",
+    "curate_learned_skills",
 ]
