@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -155,6 +156,121 @@ async def test_interrupt_steering_creates_new_run_from_checkpoint() -> None:
     )
     assert repository.created_runs[-1].attempt == 2
     assert repository.active_run.status is CodingRunStatus.RUNNING
+
+
+@pytest.mark.no_db
+async def test_stop_with_free_lease_cancels_task_without_new_run() -> None:
+    repository = InMemoryCodingRunRepository(active_run=run_fixture("cr_1"))
+    repository.task_statuses["ct_1"] = "running"
+    service = await make_run_service(repository)
+
+    await service.stop(task_id="ct_1", owner_id="u1")
+
+    assert repository.interrupt_calls == []
+    assert repository.active_run.status is CodingRunStatus.CANCELLED
+    assert repository.task_statuses["ct_1"] == "cancelled"
+    assert all(run.attempt == 1 for run in repository.created_runs)
+    assert all(run.status is not CodingRunStatus.RUNNING for run in repository.created_runs)
+    task = await service._tasks.get("ct_1")
+    assert task is not None
+    assert task.status is CodingTaskStatus.CANCELLED
+
+
+@pytest.mark.no_db
+async def test_stop_while_lease_held_marks_task_cancelled() -> None:
+    repository = InMemoryCodingRunRepository(active_run=run_fixture("cr_1"))
+    repository.task_statuses["ct_1"] = "running"
+    service = await make_run_service(repository)
+    lease = await repository.acquire_execution_lease(
+        task_id="ct_1",
+        run_id="cr_1",
+        worker_id="worker-a",
+        now=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+    )
+    assert lease is not None
+
+    await service.stop(task_id="ct_1", owner_id="u1")
+
+    assert repository.interrupt_calls == []
+    assert repository.active_run.status is CodingRunStatus.RUNNING
+    assert repository.task_statuses["ct_1"] == "cancelled"
+    task = await service._tasks.get("ct_1")
+    assert task is not None
+    assert task.status is CodingTaskStatus.CANCELLED
+    assert any(item.mode is SteeringMode.CANCEL for item in repository.steering_requests)
+
+
+@pytest.mark.no_db
+async def test_pending_cancel_at_safe_point_terminals_run_and_task() -> None:
+    run = run_fixture("cr_1")
+    repository = InMemoryCodingRunRepository(
+        active_run=run,
+        task_prompts={"ct_1": "Fix it"},
+    )
+    repository.created_runs.append(run)
+    repository.task_statuses["ct_1"] = "running"
+    checkpoint = CodingCheckpoint(
+        checkpoint_id="cc_5",
+        task_id="ct_1",
+        run_id="cr_1",
+        seq=5,
+        loop_state={
+            "phase_index": 1,
+            "transcript": [],
+            "current_instruction": "Fix it",
+            "pending_instruction": None,
+        },
+        workspace_revision="rev_5",
+        created_at=NOW,
+    )
+    await repository.save_checkpoint(checkpoint)
+    lease = await repository.acquire_execution_lease(
+        task_id="ct_1",
+        run_id="cr_1",
+        worker_id="worker-a",
+        now=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+    )
+    service = await make_run_service(repository, loop=ModelCheckpointLoop())
+    await service.stop(task_id="ct_1", owner_id="u1")
+
+    applied = await service.on_safe_point(
+        task_id="ct_1",
+        checkpoint_id=checkpoint.checkpoint_id,
+        lease=lease,
+        checkpoint=checkpoint,
+        worker_id="worker-a",
+    )
+
+    assert applied is not False
+    assert applied.request.mode is SteeringMode.CANCEL
+    assert applied.event.type == "run.cancelled"
+    assert repository.active_run.status is CodingRunStatus.CANCELLED
+    assert repository.task_statuses["ct_1"] == "cancelled"
+    assert all(item.attempt == 1 for item in repository.created_runs)
+
+
+@pytest.mark.no_db
+async def test_advance_on_cancelled_task_terminals_the_run() -> None:
+    repository = InMemoryCodingRunRepository(
+        active_run=run_fixture("cr_1"),
+        task_prompts={"ct_1": "Fix it"},
+    )
+    repository.task_statuses["ct_1"] = "cancelled"
+    service = await make_run_service(repository, loop=ModelCheckpointLoop())
+    task = await service._tasks.get("ct_1")
+    assert task is not None
+    await service._tasks.save(replace(task, status=CodingTaskStatus.CANCELLED))
+
+    event = await service.advance_one_safe_point(
+        task_id="ct_1", worker_id="worker-a"
+    )
+
+    assert event is not None
+    assert event.type == "run.cancelled"
+    assert repository.active_run.status is CodingRunStatus.CANCELLED
+    assert repository.task_statuses["ct_1"] == "cancelled"
 
 
 @pytest.mark.no_db

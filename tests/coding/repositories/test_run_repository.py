@@ -105,7 +105,8 @@ async def test_has_pending_interrupt_only_reads_interrupt_now_rows() -> None:
     found = await repository.has_pending_interrupt("ct_1")
 
     sql = "\n".join(session.sql)
-    assert "mode = 'interrupt_now'" in sql
+    assert "interrupt_now" in sql
+    assert "cancel" in sql
     assert "status = 'pending'" in sql
     assert found is True
 

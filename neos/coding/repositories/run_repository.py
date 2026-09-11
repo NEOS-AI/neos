@@ -214,6 +214,34 @@ class PostgresCodingRunRepository:
             now=now,
         )
 
+    async def cancel_run(
+        self, *, lease: ExecutionLease, now: datetime
+    ) -> RunLifecycleCommit:
+        return await self._commit_terminal_run(
+            lease=lease,
+            status=CodingRunStatus.CANCELLED,
+            payload={"status": "cancelled"},
+            now=now,
+        )
+
+    async def mark_task_cancelled(self, *, task_id: str, now: datetime) -> None:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_tasks
+                        SET status = 'cancelled', updated_at = :now
+                        WHERE task_id = :task_id
+                          AND deleted_at IS NULL
+                          AND status NOT IN (
+                              'completed', 'failed', 'cancelled', 'archived'
+                          )
+                        """
+                    ),
+                    {"task_id": task_id, "now": now},
+                )
+
     async def _commit_terminal_run(
         self,
         *,
@@ -2853,7 +2881,7 @@ class PostgresCodingRunRepository:
                         SELECT 1
                         FROM coding_steering_requests
                         WHERE task_id = :task_id
-                          AND mode = 'interrupt_now'
+                          AND mode IN ('interrupt_now', 'cancel')
                           AND status = 'pending'
                         LIMIT 1
                         """
@@ -2872,7 +2900,7 @@ class PostgresCodingRunRepository:
                             SELECT steering_id
                             FROM coding_steering_requests
                             WHERE task_id = :task_id
-                              AND mode = 'interrupt_now'
+                              AND mode IN ('interrupt_now', 'cancel')
                               AND status = 'pending'
                             ORDER BY requested_at, steering_id
                             LIMIT 1

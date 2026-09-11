@@ -265,6 +265,23 @@ class InMemoryCodingRunRepository:
             now=now,
         )
 
+    async def cancel_run(self, *, lease, now):
+        return await self._commit_terminal_run(
+            lease=lease,
+            status=CodingRunStatus.CANCELLED,
+            payload={"status": "cancelled"},
+            now=now,
+        )
+
+    async def mark_task_cancelled(self, *, task_id, now):
+        del now
+        if self.task_statuses.get(task_id) not in {
+            "completed",
+            "failed",
+            "cancelled",
+        }:
+            self.task_statuses[task_id] = "cancelled"
+
     async def _commit_terminal_run(self, *, lease, status, payload, now):
         async with self._durability_lock:
             self._require_current_lease(lease, now=now)
@@ -1018,7 +1035,7 @@ class InMemoryCodingRunRepository:
     async def has_pending_interrupt(self, task_id: str) -> bool:
         return any(
             item.task_id == task_id
-            and item.mode is SteeringMode.INTERRUPT_NOW
+            and item.mode in {SteeringMode.INTERRUPT_NOW, SteeringMode.CANCEL}
             and item not in self.applied_steering
             for item in self.steering_requests
         )
@@ -1027,7 +1044,7 @@ class InMemoryCodingRunRepository:
         for request in self.steering_requests:
             if (
                 request.task_id == task_id
-                and request.mode is SteeringMode.INTERRUPT_NOW
+                and request.mode in {SteeringMode.INTERRUPT_NOW, SteeringMode.CANCEL}
                 and request not in self.applied_steering
             ):
                 return request

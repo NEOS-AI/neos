@@ -120,6 +120,8 @@ class CodingTaskRunner:
             failures = 0
             if event is None or event.type == "run.completed":
                 return CodingTaskOutcome.COMPLETED
+            if event.type == "run.cancelled":
+                return CodingTaskOutcome.FAILED
             if event.type == "approval.requested":
                 return CodingTaskOutcome.WAITING_APPROVAL
             if not self._advance_until_complete:
