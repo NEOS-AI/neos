@@ -101,6 +101,12 @@ class ApprovalNotFound(LookupError):
 def evaluate_approval(call: ValidatedToolCall) -> ApprovalPolicyOutcome:
     if call.risk is ToolRisk.READ_ONLY:
         return ApprovalPolicyOutcome.ALLOW
+    if call.risk in {
+        ToolRisk.WORKSPACE_WRITE,
+        ToolRisk.COMMAND,
+        ToolRisk.USER_QUESTION,
+    }:
+        return ApprovalPolicyOutcome.REQUIRE_APPROVAL
     return ApprovalPolicyOutcome.REQUIRE_APPROVAL
 
 

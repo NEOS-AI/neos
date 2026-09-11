@@ -21,6 +21,7 @@ from neos.coding.model.base import (
     ToolResultContent,
     ToolUseContent,
 )
+from neos.coding.prompts import SYSTEM_PROMPT_DYNAMIC_BOUNDARY
 
 
 class CodingModelError(RuntimeError):
@@ -139,6 +140,10 @@ class AnthropicCodingModel:
                 "model_transport_failed", retryable=True
             ) from error
         except anthropic.APIStatusError as error:
+            if error.status_code == 413:
+                raise CodingModelError(
+                    "prompt_too_long", retryable=True
+                ) from error
             raise CodingModelError(
                 "model_provider_failed", retryable=error.status_code >= 500
             ) from error
@@ -164,7 +169,7 @@ class AnthropicCodingModel:
 def _to_anthropic_request(request: ModelRequest) -> dict[str, object]:
     return {
         "model": request.model,
-        "system": request.system,
+        "system": _system_to_anthropic(request.system),
         "messages": [_message_to_anthropic(item) for item in request.messages],
         "tools": [
             {
@@ -176,6 +181,20 @@ def _to_anthropic_request(request: ModelRequest) -> dict[str, object]:
         ],
         "max_tokens": request.limits.max_output_tokens,
     }
+
+
+def _system_to_anthropic(system: str) -> str | list[dict[str, object]]:
+    if SYSTEM_PROMPT_DYNAMIC_BOUNDARY not in system:
+        return system
+    static, dynamic = system.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY, 1)
+    return [
+        {
+            "type": "text",
+            "text": static,
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"type": "text", "text": dynamic},
+    ]
 
 
 def _message_to_anthropic(message: CanonicalMessage) -> dict[str, object]:

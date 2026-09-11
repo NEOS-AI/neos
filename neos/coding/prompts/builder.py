@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 from neos.coding.model.base import ToolDefinition
 
+SYSTEM_PROMPT_DYNAMIC_BOUNDARY = "<!-- neos:dynamic -->"
+
 
 @dataclass(frozen=True, slots=True)
 class CodingPromptEnv:
@@ -29,6 +31,7 @@ def build_coding_system_prompt(
         _system(),
         _tasks(),
         _actions(),
+        SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
         _tools(tools, resolved),
     ]
     lessons = _lessons(resolved)

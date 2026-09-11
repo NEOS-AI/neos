@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from neos.coding.domain.approvals import ApprovalPolicyOutcome, evaluate_approval
 from neos.coding.tools.registry import (
     CodingToolRegistry,
     ToolRisk,
@@ -36,11 +37,39 @@ def test_default_registry_exports_stable_versioned_definitions() -> None:
         "write_file.v1",
         "todo_write.v1",
         "execute.v1",
+        "set_phase.v1",
+        "ask_user.v1",
+        "load_skill.v1",
     ]
     assert all(item.input_schema["additionalProperties"] is False for item in definitions)
     names = [item.name for item in definitions]
     assert names.index("edit_file.v1") == names.index("write_file.v1") - 1
     assert names.index("todo_write.v1") == names.index("execute.v1") - 1
+
+
+def test_explore_definitions_omit_write_and_execute() -> None:
+    names = [item.name for item in registry().definitions(phase="explore")]
+
+    assert "edit_file.v1" not in names
+    assert "write_file.v1" not in names
+    assert "execute.v1" not in names
+    assert "read_file.v1" in names
+    assert "set_phase.v1" in names
+    assert "ask_user.v1" in names
+    assert "load_skill.v1" in names
+    hidden = registry().validate(
+        "write_file.v1", {"path": "src/main.py", "content": "pass\n"}
+    )
+    assert hidden.name == "write_file.v1"
+
+
+def test_ask_user_requires_approval() -> None:
+    call = registry().validate(
+        "ask_user.v1", {"questions": ["Which test runner should I keep?"]}
+    )
+
+    assert call.risk is ToolRisk.USER_QUESTION
+    assert evaluate_approval(call) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
 
 
 def test_read_file_is_read_only_and_normalizes_path() -> None:
@@ -295,6 +324,10 @@ def test_execute_environment_names_are_allowlisted() -> None:
         ("todo_write.v1", {"todos": [{"content": "x", "status": "blocked"}]}),
         ("todo_write.v1", {"todos": [{"content": "x", "status": "pending", "surprise": True}]}),
         ("execute.v1", {"argv": []}),
+        ("set_phase.v1", {"phase": "plan"}),
+        ("ask_user.v1", {"questions": []}),
+        ("ask_user.v1", {"questions": ["a", "b", "c", "d", "e"]}),
+        ("load_skill.v1", {"name": "foo"}),
     ],
 )
 def test_unknown_or_invalid_calls_fail_closed(

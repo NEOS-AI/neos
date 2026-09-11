@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import asdict, dataclass, replace
@@ -17,6 +18,7 @@ from neos.coding.domain.approvals import (
     evaluate_approval,
 )
 from neos.coding.domain.phases import CodingCheckpoint, CodingPhaseKind
+from neos.coding.instructions import INSTRUCTION_CANDIDATES, load_workspace_instructions
 from neos.coding.loop.base import LoopDependencies, LoopInput
 from neos.coding.model.anthropic import CodingModelError
 from neos.coding.model.base import (
@@ -32,6 +34,7 @@ from neos.coding.model.base import (
     ToolResultContent,
     ToolUseContent,
 )
+from neos.coding.phases import hidden_tools_for_phase, parse_phase, tool_allowed_in_phase
 from neos.coding.hooks import CodingHookPort, NullCodingHooks
 from neos.coding.sandbox.bindings import SandboxBindingService
 from neos.coding.sandbox.observability import (
@@ -128,6 +131,10 @@ class AgentLoopState:
     read_paths: frozenset[str] = frozenset()
     pending_instruction: str | None = None
     todos: tuple[Mapping[str, object], ...] = ()
+    phase: str = "implement"
+    instructions_loaded: bool = False
+    prompt_compact_retries: int = 0
+    output_token_escalations: int = 0
 
     @property
     def has_pending_tool(self) -> bool:
@@ -187,14 +194,14 @@ class AnthropicCodingLoop:
     async def _advance_one_model_turn(self, input, state, bound, deps):
         if state.turn_count >= self._config.max_turns:
             raise CodingLoopFailure("turn_budget_exceeded", retryable=False)
+        if not state.instructions_loaded:
+            state = await self._load_workspace_instructions(state, bound)
         request = ModelRequest(
             system=self._config.system,
             messages=state.transcript,
-            tools=self._tools.definitions(),
+            tools=self._tool_definitions(state.phase),
             model=self._config.model,
-            limits=ModelLimits(
-                self._config.max_output_tokens, self._config.timeout_sec
-            ),
+            limits=self._model_limits(state),
             task_id=input.task_id,
             run_id=input.run_id,
             turn_id=f"turn_{uuid4().hex}",
@@ -255,6 +262,20 @@ class AnthropicCodingLoop:
             await self._persist_abort_after_cancel(input, state, bound, deps)
             raise
         except CodingModelError as error:
+            if (
+                error.code == "prompt_too_long"
+                and state.prompt_compact_retries < 1
+            ):
+                compacted = await self._compact_after_prompt_too_long(state)
+                await deps.repository.commit_model_checkpoint(
+                    lease=deps.lease,
+                    event_type="model.completed",
+                    event_payload={"reason_code": "prompt_too_long"},
+                    loop_state=self._dump_state(input, compacted),
+                    workspace_revision=str(bound.binding.workspace_revision),
+                    now=self._clock(),
+                )
+                raise CodingLoopFailure("prompt_too_long", retryable=True) from error
             raise CodingLoopFailure(error.code, retryable=error.retryable) from error
         if completion is None:
             raise CodingLoopFailure("model_stream_incomplete", retryable=True)
@@ -279,6 +300,24 @@ class AnthropicCodingLoop:
             ).inc()
         next_state = await self._completed_turn(state, text_parts, calls, completion)
         self._check_usage_budgets(next_state)
+        if (
+            not calls
+            and completion.stop_reason == "max_tokens"
+            and next_state.output_token_escalations < 1
+        ):
+            next_state = replace(
+                next_state,
+                output_token_escalations=next_state.output_token_escalations + 1,
+            )
+            await deps.repository.commit_model_checkpoint(
+                lease=deps.lease,
+                event_type="model.completed",
+                event_payload={"stop_reason": completion.stop_reason},
+                loop_state=self._dump_state(input, next_state),
+                workspace_revision=str(bound.binding.workspace_revision),
+                now=self._clock(),
+            )
+            raise CodingLoopFailure("max_output_tokens_escalate", retryable=True)
         if not calls:
             if completion.stop_reason != "end_turn":
                 raise CodingLoopFailure("model_output_incomplete", retryable=False)
@@ -319,33 +358,19 @@ class AnthropicCodingLoop:
                 yield event, current
             return
         call = state.pending_tool_calls[state.pending_tool_index]
+        if not tool_allowed_in_phase(call.name, state.phase):
+            event, denied_state = await self._commit_denied_tool(
+                input, state, bound, deps, call, "policy_phase_denied"
+            )
+            yield event, denied_state
+            return
         try:
             validated = self._tools.validate(call.name, call.input)
         except ToolValidationError as error:
-            await self._audit.emit(
-                CodingToolAuditEvent.from_result(
-                    provider=bound.binding.provider,
-                    tool=call.name,
-                    operation="validate",
-                    outcome="denied",
-                    error_code=error.reason_code,
-                )
+            event, denied_state = await self._commit_denied_tool(
+                input, state, bound, deps, call, error.reason_code
             )
-            denied = ToolResultContent(
-                call.tool_call_id, "denied", {"reason_code": error.reason_code}
-            )
-            denied_state = await self._after_result(
-                state, denied, tool_name=call.name, tool_input=call.input
-            )
-            committed = await deps.repository.commit_model_checkpoint(
-                lease=deps.lease,
-                event_type="tool.denied",
-                event_payload={"reason_code": error.reason_code},
-                loop_state=self._dump_state(input, denied_state),
-                workspace_revision=str(bound.binding.workspace_revision),
-                now=self._clock(),
-            )
-            yield committed.event, denied_state
+            yield event, denied_state
             return
         await self._audit.emit(
             CodingToolAuditEvent.from_result(
@@ -514,6 +539,8 @@ class AnthropicCodingLoop:
             return None
         pairs: list[tuple[ToolCallCompleted, ValidatedToolCall]] = []
         for call in remaining:
+            if not tool_allowed_in_phase(call.name, state.phase):
+                break
             try:
                 validated = self._tools.validate(call.name, call.input)
             except ToolValidationError:
@@ -692,6 +719,32 @@ class AnthropicCodingLoop:
             )
         )
 
+    async def _commit_denied_tool(self, input, state, bound, deps, call, reason_code):
+        await self._audit.emit(
+            CodingToolAuditEvent.from_result(
+                provider=bound.binding.provider,
+                tool=call.name,
+                operation="validate",
+                outcome="denied",
+                error_code=reason_code,
+            )
+        )
+        denied = ToolResultContent(
+            call.tool_call_id, "denied", {"reason_code": reason_code}
+        )
+        denied_state = await self._after_result(
+            state, denied, tool_name=call.name, tool_input=call.input
+        )
+        committed = await deps.repository.commit_model_checkpoint(
+            lease=deps.lease,
+            event_type="tool.denied",
+            event_payload={"reason_code": reason_code},
+            loop_state=self._dump_state(input, denied_state),
+            workspace_revision=str(bound.binding.workspace_revision),
+            now=self._clock(),
+        )
+        return committed.event, denied_state
+
     def _record_tool_metric(self, tool_name, result) -> None:
         if self._metrics is None:
             return
@@ -818,6 +871,9 @@ class AnthropicCodingLoop:
                     for item in raw_todos
                     if isinstance(item, Mapping)
                 )
+        phase = state.phase
+        if tool_name == "set_phase.v1" and result.status == "ok":
+            phase = parse_phase(tool_input.get("phase")).value
         return replace(
             state,
             transcript=transcript,
@@ -828,6 +884,7 @@ class AnthropicCodingLoop:
             terminal_pending=False,
             read_paths=read_paths,
             todos=todos,
+            phase=phase,
         )
 
     def _check_usage_budgets(self, state):
@@ -835,6 +892,61 @@ class AnthropicCodingLoop:
             raise CodingLoopFailure("token_budget_exceeded", retryable=False)
         if state.cost_micros > self._config.max_cost_micros:
             raise CodingLoopFailure("cost_budget_exceeded", retryable=False)
+
+    async def _load_workspace_instructions(self, state, bound) -> AgentLoopState:
+        files: dict[str, bytes] = {}
+        for name in INSTRUCTION_CANDIDATES:
+            try:
+                files[name] = await bound.session.read_file(name)
+            except Exception:
+                continue
+        text = load_workspace_instructions(files)
+        transcript = state.transcript
+        digest = state.transcript_digest
+        if text:
+            transcript = transcript + (
+                CanonicalMessage("user", (TextContent(text),)),
+            )
+            digest = self._digest(transcript)
+        return replace(
+            state,
+            transcript=transcript,
+            transcript_digest=digest,
+            instructions_loaded=True,
+        )
+
+    def _tool_definitions(self, phase: str):
+        method = self._tools.definitions
+        try:
+            parameters = inspect.signature(method).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+        accepts_phase = "phase" in parameters or any(
+            param.kind is inspect.Parameter.VAR_KEYWORD
+            for param in parameters.values()
+        )
+        if accepts_phase:
+            return method(phase=phase)
+        hidden = hidden_tools_for_phase(phase)
+        return tuple(item for item in method() if item.name not in hidden)
+
+    def _model_limits(self, state: AgentLoopState) -> ModelLimits:
+        max_output_tokens = self._config.max_output_tokens
+        if state.output_token_escalations:
+            max_output_tokens = min(max_output_tokens * 4, 64_000)
+        return ModelLimits(max_output_tokens, self._config.timeout_sec)
+
+    async def _compact_after_prompt_too_long(self, state: AgentLoopState) -> AgentLoopState:
+        before = state.transcript
+        after = self._compact(before, force=True)
+        if after != before:
+            await self._hooks.compact(before, after)
+        return replace(
+            state,
+            transcript=after,
+            transcript_digest=self._digest(after),
+            prompt_compact_retries=state.prompt_compact_retries + 1,
+        )
 
     def _restore(self, input, checkpoint):
         if checkpoint is None:
@@ -894,6 +1006,10 @@ class AnthropicCodingLoop:
             read_paths,
             pending_instruction,
             todos,
+            parse_phase(raw.get("phase")).value,
+            bool(raw.get("instructions_loaded", False)),
+            int(raw.get("prompt_compact_retries", 0)),
+            int(raw.get("output_token_escalations", 0)),
         )
 
     @staticmethod
@@ -936,6 +1052,10 @@ class AnthropicCodingLoop:
             "cost_micros": state.cost_micros,
             "terminal_pending": state.terminal_pending,
             "read_paths": sorted(state.read_paths),
+            "phase": state.phase,
+            "instructions_loaded": state.instructions_loaded,
+            "prompt_compact_retries": state.prompt_compact_retries,
+            "output_token_escalations": state.output_token_escalations,
         }
 
     @staticmethod
@@ -961,10 +1081,10 @@ class AnthropicCodingLoop:
             self._serialized_bytes(transcript) > self._config.max_transcript_bytes
         )
 
-    def _compact(self, transcript, *, preserve_tools: bool = False):
+    def _compact(self, transcript, *, preserve_tools: bool = False, force: bool = False):
         del preserve_tools
         transcript = tuple(transcript)
-        if not self._over_budget(transcript):
+        if not force and not self._over_budget(transcript):
             return transcript
         active_start = next(
             (
@@ -986,13 +1106,15 @@ class AnthropicCodingLoop:
             active = transcript[active_start:]
         prefix = tuple(self._shrink_old_tool_results(message) for message in prefix)
         candidate = prefix + active
-        if not self._over_budget(candidate):
+        if not force and not self._over_budget(candidate):
             return candidate
         notice = CanonicalMessage(
             "user",
             (TextContent("Prior transcript compacted; kept tool pairs."),),
         )
         remaining = list(prefix)
+        if force and remaining:
+            remaining.pop(0)
         while remaining and self._over_budget((notice,) + tuple(remaining) + active):
             remaining.pop(0)
         if remaining:

@@ -4,7 +4,11 @@ import hashlib
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
+
+_SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
+_ALLOWED_SKILLS = frozenset({"verify", "commit"})
 
 from neos.coding.sandbox.base import (
     CommandRequest,
@@ -226,6 +230,12 @@ class SandboxToolExecutor:
     ) -> ToolResult:
         if call.name == "todo_write.v1":
             return self._todo_write(call)
+        if call.name == "set_phase.v1":
+            return self._set_phase(call)
+        if call.name == "ask_user.v1":
+            return self._ask_user(call)
+        if call.name == "load_skill.v1":
+            return self._load_skill(call)
         if call.name == "list_tree.v1":
             entries = await session.list_tree(str(call.input["path"]))
             return self._entry_result(entries, await self._revision(session))
@@ -279,6 +289,39 @@ class SandboxToolExecutor:
     def _todo_write(call: ValidatedToolCall) -> ToolResult:
         entries = tuple(dict(item) for item in call.input["todos"])
         return ToolResult.ok(workspace_revision="unknown", entries=entries)
+
+    @staticmethod
+    def _set_phase(call: ValidatedToolCall) -> ToolResult:
+        return ToolResult.ok(
+            workspace_revision="unknown",
+            entries=({"phase": str(call.input["phase"])},),
+        )
+
+    @staticmethod
+    def _ask_user(call: ValidatedToolCall) -> ToolResult:
+        questions = [str(item) for item in call.input["questions"]]
+        return ToolResult.ok(
+            workspace_revision="unknown",
+            entries=({"questions": questions},),
+        )
+
+    @staticmethod
+    def _load_skill(call: ValidatedToolCall) -> ToolResult:
+        name = str(call.input.get("name", ""))
+        if name not in _ALLOWED_SKILLS:
+            return ToolResult(
+                "denied", "unknown_skill", None, None, False, None, "unknown"
+            )
+        path = _SKILLS_DIR / f"{name}.md"
+        if not path.is_file():
+            return ToolResult(
+                "denied", "unknown_skill", None, None, False, None, "unknown"
+            )
+        markdown = path.read_text(encoding="utf-8")
+        return ToolResult.ok(
+            workspace_revision="unknown",
+            entries=({"name": name, "markdown": markdown},),
+        )
 
     def _bounded_bytes(
         self,

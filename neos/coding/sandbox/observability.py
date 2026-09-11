@@ -30,6 +30,9 @@ _CODING_TOOLS = {
     "write_file.v1",
     "todo_write.v1",
     "execute.v1",
+    "set_phase.v1",
+    "ask_user.v1",
+    "load_skill.v1",
 }
 _CODING_OPERATIONS = {"validate", "claim", "execute", "checkpoint"}
 _CODING_OUTCOMES = {"allowed", "denied", "ok", "error", "reused"}

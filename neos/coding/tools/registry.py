@@ -21,6 +21,7 @@ class ToolRisk(StrEnum):
     READ_ONLY = "read_only"
     WORKSPACE_WRITE = "workspace_write"
     COMMAND = "command"
+    USER_QUESTION = "user_question"
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +106,18 @@ class _ExecuteInput(_ToolInput):
     stdin: str = ""
     timeout_sec: float = Field(default=30, gt=0)
     max_output_bytes: int = Field(default=1024 * 1024, gt=0)
+
+
+class _SetPhaseInput(_ToolInput):
+    phase: Literal["explore", "implement", "verify"]
+
+
+class _AskUserInput(_ToolInput):
+    questions: list[str] = Field(min_length=1, max_length=4)
+
+
+class _LoadSkillInput(_ToolInput):
+    name: Literal["verify", "commit"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +254,39 @@ class CodingToolRegistry:
             ToolRisk.COMMAND,
             _ExecuteInput,
         ),
+        _RegisteredTool(
+            "set_phase.v1",
+            (
+                "Set the coding-agent phase to explore, implement, or verify. "
+                "explore hides write and execute tools. verify hides writes. "
+                "Do not use this to bypass a policy_* denial. "
+                "On policy_* denial, do not retry the same phase."
+            ),
+            ToolRisk.READ_ONLY,
+            _SetPhaseInput,
+        ),
+        _RegisteredTool(
+            "ask_user.v1",
+            (
+                "Ask the user 1-4 preference questions and wait for answers. "
+                "Requires approval. Do not assume the answer. "
+                "Do not use execute.v1 to pose questions. "
+                "On policy_* denial, do not retry the same questions."
+            ),
+            ToolRisk.USER_QUESTION,
+            _AskUserInput,
+        ),
+        _RegisteredTool(
+            "load_skill.v1",
+            (
+                "Load a bundled coding skill (verify or commit). "
+                "Returns the skill markdown. Do not skip hooks. "
+                "Do not invent skill names. "
+                "On policy_* denial, do not retry the same name."
+            ),
+            ToolRisk.READ_ONLY,
+            _LoadSkillInput,
+        ),
     )
 
     def __init__(
@@ -283,8 +329,15 @@ class CodingToolRegistry:
             allowed_env_names=allowed_env_names,
         )
 
-    def definitions(self) -> tuple[ToolDefinition, ...]:
-        return tuple(tool.definition() for tool in self._TOOL_SPECS)
+    def definitions(self, *, phase: str = "implement") -> tuple[ToolDefinition, ...]:
+        from neos.coding.phases import hidden_tools_for_phase
+
+        hidden = hidden_tools_for_phase(phase)
+        return tuple(
+            tool.definition()
+            for tool in self._TOOL_SPECS
+            if tool.name not in hidden
+        )
 
     def decide(
         self, name: str, input: Mapping[str, object]

@@ -16,7 +16,7 @@ from neos.coding.domain.approvals import (
     ApprovalPolicyOutcome,
     evaluate_approval,
 )
-from neos.coding.domain.phases import CodingRun, CodingRunStatus
+from neos.coding.domain.phases import CodingCheckpoint, CodingRun, CodingRunStatus
 from neos.coding.domain.events import make_event
 from neos.coding.loop.anthropic import (
     AnthropicCodingLoop,
@@ -35,6 +35,7 @@ from neos.coding.model.base import (
     TextDelta,
     ToolCallCompleted,
     ToolInputDelta,
+    ToolResultContent,
 )
 from neos.coding.tools.executor import ToolResult
 from neos.coding.tools.registry import CodingToolRegistry
@@ -88,8 +89,8 @@ class Executor:
 
 
 class Bindings:
-    def __init__(self, *, mutation_error=None):
-        self.session = Session()
+    def __init__(self, *, mutation_error=None, files=None):
+        self.session = Session(files=files)
         self.mutation_error = mutation_error
 
     async def resolve(self, lease):
@@ -105,11 +106,20 @@ class Bindings:
 
 
 class Session:
-    def __init__(self) -> None:
+    def __init__(self, files=None) -> None:
         self.writes = 0
+        self.files = {
+            name: value if isinstance(value, bytes) else value.encode("utf-8")
+            for name, value in dict(files or {}).items()
+        }
 
     async def workspace_revision(self) -> int:
         return self.writes + 1
+
+    async def read_file(self, path: str) -> bytes:
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
 
 
 @dataclass
@@ -642,9 +652,8 @@ async def test_text_completion_marks_terminal_intent_for_next_invocation() -> No
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stop_reason", ["max_tokens", "future_reason"])
-async def test_nonterminal_no_tool_stop_reasons_fail_closed(stop_reason) -> None:
-    h = harness([[TextDelta("partial"), ModelCompleted(stop_reason, ModelUsage(2, 1))]])
+async def test_nonterminal_no_tool_stop_reasons_fail_closed() -> None:
+    h = harness([[TextDelta("partial"), ModelCompleted("future_reason", ModelUsage(2, 1))]])
 
     with pytest.raises(CodingLoopFailure) as caught:
         await collect(h)
@@ -847,3 +856,160 @@ async def test_compact_over_budget_keeps_matching_active_tool_pair_ids() -> None
     assert "active" in use_ids
     assert "active" in result_ids
     assert use_ids[-1] == result_ids[-1] == "active"
+
+
+@pytest.mark.asyncio
+async def test_first_turn_loads_agents_md_as_fenced_user_message() -> None:
+    h = harness(
+        [[ModelCompleted("end_turn", ModelUsage(5, 3))]],
+        bindings=Bindings(files={"AGENTS.md": b"Use ruff."}),
+    )
+
+    await collect(h)
+
+    request = h.model.requests[0]
+    assert request.system == "code"
+    assert "Use ruff." not in request.system
+    assert "begin workspace instructions" not in request.system
+    texts = [
+        item.text
+        for message in request.messages
+        if message.role == "user"
+        for item in message.content
+        if hasattr(item, "text")
+    ]
+    fenced = next(text for text in texts if "begin workspace instructions" in text)
+    assert "Use ruff." in fenced
+    assert "Source: AGENTS.md" in fenced
+    assert h.repository.checkpoints[-1].loop_state["instructions_loaded"] is True
+
+
+@pytest.mark.asyncio
+async def test_explore_phase_omits_write_file_from_model_tools() -> None:
+    h = harness(
+        [
+            [ModelCompleted("end_turn", ModelUsage(5, 3))],
+            [ModelCompleted("end_turn", ModelUsage(2, 1))],
+        ]
+    )
+    await collect(h)
+    checkpoint = h.repository.checkpoints[-1]
+    checkpoint.loop_state["phase"] = "explore"
+    checkpoint.loop_state["terminal_pending"] = False
+    checkpoint.loop_state["pending_instruction"] = "Look around"
+
+    await collect(h, checkpoint)
+
+    names = [tool.name for tool in h.model.requests[-1].tools]
+    assert "write_file.v1" not in names
+    assert "edit_file.v1" not in names
+    assert "execute.v1" not in names
+    assert "read_file.v1" in names
+
+
+@pytest.mark.asyncio
+async def test_prompt_too_long_is_retryable_and_increments_compact_retry() -> None:
+    h = harness([CodingModelError("prompt_too_long", retryable=True)])
+
+    with pytest.raises(CodingLoopFailure) as caught:
+        await collect(h)
+
+    assert caught.value.code == "prompt_too_long"
+    assert caught.value.retryable is True
+    assert h.repository.checkpoints[-1].loop_state["prompt_compact_retries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_max_tokens_once_is_retryable_escalate() -> None:
+    h = harness([[TextDelta("partial"), ModelCompleted("max_tokens", ModelUsage(2, 1))]])
+
+    with pytest.raises(CodingLoopFailure) as caught:
+        await collect(h)
+
+    assert caught.value.code == "max_output_tokens_escalate"
+    assert caught.value.retryable is True
+    assert h.repository.checkpoints[-1].loop_state["output_token_escalations"] == 1
+
+
+@pytest.mark.asyncio
+async def test_second_max_tokens_without_tools_is_incomplete() -> None:
+    h = harness(
+        [
+            [TextDelta("partial"), ModelCompleted("max_tokens", ModelUsage(2, 1))],
+            [TextDelta("still"), ModelCompleted("max_tokens", ModelUsage(2, 1))],
+        ]
+    )
+    with pytest.raises(CodingLoopFailure, match="max_output_tokens_escalate"):
+        await collect(h)
+    checkpoint = h.repository.checkpoints[-1]
+
+    with pytest.raises(CodingLoopFailure) as caught:
+        await collect(h, checkpoint)
+
+    assert caught.value.code == "model_output_incomplete"
+    assert caught.value.retryable is False
+    assert h.model.requests[-1].limits.max_output_tokens == min(4096 * 4, 64_000)
+
+
+@pytest.mark.asyncio
+async def test_set_phase_success_updates_loop_state_phase() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    state = h.loop._restore(INPUT, None)
+    after = await h.loop._after_result(
+        state,
+        ToolResultContent("phase_1", "ok", {}),
+        tool_name="set_phase.v1",
+        tool_input={"phase": "explore"},
+    )
+
+    assert after.phase == "explore"
+    assert h.loop._dump_state(INPUT, after)["phase"] == "explore"
+
+
+@pytest.mark.asyncio
+async def test_hidden_tool_in_explore_phase_is_denied() -> None:
+    h = harness([[tool_call(), completed()]])
+    checkpoint = CodingCheckpoint(
+        "cc_explore",
+        "ct_1",
+        "cr_1",
+        1,
+        {
+            "transcript": [
+                {"role": "user", "content": [{"type": "text", "text": "Fix it"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "tool_call_id": "toolu_1",
+                            "name": "write_file.v1",
+                            "input": {"path": "a.txt", "content": "x"},
+                        }
+                    ],
+                },
+            ],
+            "pending_tool_calls": [
+                {
+                    "tool_call_id": "toolu_1",
+                    "name": "write_file.v1",
+                    "input": {"path": "a.txt", "content": "x"},
+                }
+            ],
+            "pending_tool_index": 0,
+            "phase": "explore",
+            "turn_count": 1,
+            "tool_count": 0,
+            "transcript_digest": "x",
+            "instructions_loaded": True,
+        },
+        "1",
+        NOW,
+    )
+
+    events = await collect(h, checkpoint)
+
+    assert events[-1].type == "tool.denied"
+    assert events[-1].payload["reason_code"] == "policy_phase_denied"
+    assert h.bindings.session.writes == 0
+    assert h.executor.calls == []

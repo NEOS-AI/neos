@@ -34,6 +34,7 @@ def test_prompt_contains_required_sections_in_order() -> None:
     headings = ["## Intro", "## System", "## Tasks", "## Actions", "## Tools", "## Tone"]
     positions = [prompt.index(heading) for heading in headings]
     assert positions == sorted(positions)
+    assert prompt.index("<!-- neos:dynamic -->") < prompt.index("## Tools")
 
 
 def test_prompt_states_the_six_behavior_contracts() -> None:

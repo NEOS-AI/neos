@@ -97,6 +97,8 @@ def call(name: str, input: dict[str, object]) -> ValidatedToolCall:
         risk = ToolRisk.COMMAND
     elif name in {"write_file.v1", "edit_file.v1"}:
         risk = ToolRisk.WORKSPACE_WRITE
+    elif name == "ask_user.v1":
+        risk = ToolRisk.USER_QUESTION
     else:
         risk = ToolRisk.READ_ONLY
     return ValidatedToolCall(name, input, risk)
@@ -308,6 +310,56 @@ async def test_todo_write_returns_ok_entries_without_sandbox_io() -> None:
         {"content": "Edit the file", "status": "pending"},
         {"content": "Run tests", "status": "completed"},
     )
+
+
+@pytest.mark.asyncio
+async def test_set_phase_returns_ok_entries_without_sandbox_io() -> None:
+    session = FakeSession()
+    session.error = SandboxTimeout("set_phase must not touch the sandbox")
+    result = await SandboxToolExecutor(10, 10).execute(
+        session, call("set_phase.v1", {"phase": "explore"})
+    )
+
+    assert (result.status, result.reason_code) == ("ok", "ok")
+    assert session.called is None
+    assert result.entries == ({"phase": "explore"},)
+
+
+@pytest.mark.asyncio
+async def test_ask_user_returns_ok_entries_without_sandbox_io() -> None:
+    session = FakeSession()
+    session.error = SandboxTimeout("ask_user must not touch the sandbox")
+    questions = ["Which runner?", "Keep the hook?"]
+    result = await SandboxToolExecutor(10, 10).execute(
+        session, call("ask_user.v1", {"questions": questions})
+    )
+
+    assert (result.status, result.reason_code) == ("ok", "ok")
+    assert session.called is None
+    assert result.entries == ({"questions": questions},)
+
+
+@pytest.mark.asyncio
+async def test_load_skill_verify_returns_bundled_markdown() -> None:
+    session = FakeSession()
+    session.error = SandboxTimeout("load_skill must not touch the sandbox")
+    result = await SandboxToolExecutor(10, 10).execute(
+        session, call("load_skill.v1", {"name": "verify"})
+    )
+
+    assert (result.status, result.reason_code) == ("ok", "ok")
+    assert session.called is None
+    text = json.dumps(result.to_mapping())
+    assert "Do not skip hooks" in text or "hooks" in text
+
+
+@pytest.mark.asyncio
+async def test_load_skill_unknown_name_is_denied() -> None:
+    result = await SandboxToolExecutor(10, 10).execute(
+        FakeSession(), call("load_skill.v1", {"name": "foo"})
+    )
+
+    assert result.status == "denied"
 
 
 @pytest.mark.asyncio
