@@ -21,6 +21,8 @@ from neos.api.channels.authz import (
     evaluate_channel_gate,
     policy_from_settings,
 )
+from neos.api.channels.cards import started_task_id
+from neos.api.channels.commands import ChannelCommandKind, parse_channel_command
 from neos.api.channels.session_key import build_session_key
 
 from ..base import ChannelAdapterBase, ChannelMessage
@@ -220,10 +222,13 @@ class DiscordAdapter(ChannelAdapterBase):
             try:
                 async with message.channel.typing():
                     response = await self._gateway.dispatch(channel_message)
+                    reply_channel_id, reply_thread_id = await self._maybe_autothread(
+                        message, channel_message, response
+                    )
                     await self.send_response(
-                        channel_message.channel_id,
+                        reply_channel_id,
                         response,
-                        thread_id=channel_message.metadata.get("thread_id"),
+                        thread_id=reply_thread_id,
                     )
             except Exception:
                 await _add_reaction_safe(message, "❌")
@@ -237,6 +242,69 @@ class DiscordAdapter(ChannelAdapterBase):
                 )
             except Exception:
                 pass
+
+    async def _maybe_autothread(
+        self, message: Any, channel_message: ChannelMessage, response: str
+    ) -> tuple[str, str | None]:
+        channel_id = channel_message.channel_id
+        thread_id = channel_message.metadata.get("thread_id")
+        if not _should_create_code_thread(message, channel_message, response):
+            return channel_id, thread_id
+        task_id = started_task_id(response)
+        create_thread = getattr(message, "create_thread", None)
+        if task_id is None or create_thread is None:
+            return channel_id, thread_id
+        try:
+            thread = await create_thread(name=_code_thread_name(task_id))
+        except Exception as e:
+            logger.warning("[DiscordAdapter] create_thread failed: %s", e)
+            return channel_id, thread_id
+        await self._bind_autothread(channel_message, thread, task_id)
+        return str(thread.id), None
+
+    async def _bind_autothread(
+        self, channel_message: ChannelMessage, thread: Any, task_id: str
+    ) -> None:
+        bind_session = getattr(self._gateway, "bind_session", None)
+        if bind_session is None:
+            return
+        guild_id = channel_message.metadata.get("discord_guild_id") or "dm"
+        parent_id = str(
+            getattr(thread, "parent_id", None) or channel_message.channel_id
+        )
+        thread_session = build_session_key(
+            "discord", str(guild_id), parent_id, str(thread.id)
+        )
+        owner_id = None
+        bound_task_id = task_id
+        get_binding = getattr(self._gateway, "get_binding", None)
+        if get_binding is not None:
+            parent = await get_binding(channel_message.session_id)
+            if parent is not None:
+                bound_task_id = parent.task_id
+                owner_id = parent.owner_id
+        if not owner_id:
+            from neos.config.settings import settings
+
+            owner_id = settings.config.channels.coding_owner_user_id
+        if bound_task_id and owner_id:
+            await bind_session(thread_session, bound_task_id, owner_id)
+
+
+def _should_create_code_thread(
+    message: Any, channel_message: ChannelMessage, response: str
+) -> bool:
+    if started_task_id(response) is None:
+        return False
+    if parse_channel_command(channel_message.text).kind is not ChannelCommandKind.CODE:
+        return False
+    if getattr(message, "guild", None) is None:
+        return False
+    return not _is_discord_thread(getattr(message, "channel", None))
+
+
+def _code_thread_name(task_id: str) -> str:
+    return f"code {task_id}"[:100]
 
 
 async def _fetch_reply_target(channel: Any, thread_id: str | None) -> Any | None:

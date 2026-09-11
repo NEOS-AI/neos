@@ -198,6 +198,14 @@ class ChannelGateway:
             approval_id=command.rest,
         )
 
+    async def bind_session(
+        self, session_id: str, task_id: str, owner_id: str
+    ) -> None:
+        await self._binds.bind(session_id, task_id, owner_id)
+
+    async def get_binding(self, session_id: str) -> Any:
+        return await self._binds.get(session_id)
+
     def _coding_port(self):
         if self._coding is None:
             from .coding_bridge import RuntimeChannelCoding

@@ -55,6 +55,8 @@ class FakeChannel:
         self.type = SimpleNamespace(name=type_name)
         self.sent: list[str] = []
         self.typing_started = False
+        self.threads: list["FakeChannel"] = []
+        self.name = ""
 
     def typing(self) -> _Typing:
         return _Typing(self)
@@ -100,10 +102,17 @@ def _message(
 
 def _adapter(gateway: FakeGateway, channel: FakeChannel) -> DiscordAdapter:
     adapter = DiscordAdapter(token="test-token", gateway=gateway)
+    registry = {int(channel.id): channel}
 
     def get_channel(channel_id: int) -> FakeChannel | None:
-        if int(channel_id) == int(channel.id):
-            return channel
+        found = registry.get(int(channel_id))
+        if found is not None:
+            return found
+        for known in list(registry.values()):
+            for thread in known.threads:
+                registry[int(thread.id)] = thread
+                if int(thread.id) == int(channel_id):
+                    return thread
         return None
 
     adapter._client = SimpleNamespace(user=_bot_user(), get_channel=get_channel)
@@ -340,3 +349,209 @@ async def test_real_thread_uses_parent_as_chat(
         allowed_users=[str(USER_ID)],
     )
     assert gateway.calls[0].session_id == f"v2:discord:{GUILD_ID}:5555:{CHANNEL_ID}"
+
+
+THREAD_ID = 5001
+
+
+class CodingFakeGateway(FakeGateway):
+    def __init__(self, reply: str = "Started coding task ct_abc") -> None:
+        super().__init__()
+        self.reply = reply
+        from neos.api.channels.session_bind import InMemoryChannelCodingBindStore
+
+        self.binds = InMemoryChannelCodingBindStore()
+
+    async def dispatch(self, message: Any) -> str:
+        self.calls.append(message)
+        from neos.api.channels.commands import ChannelCommandKind, parse_channel_command
+
+        command = parse_channel_command(message.text)
+        if command.kind is ChannelCommandKind.CODE and command.rest:
+            await self.binds.bind(message.session_id, "ct_abc", "u_owner")
+            return self.reply
+        return "ok"
+
+    async def bind_session(self, session_id: str, task_id: str, owner_id: str) -> None:
+        await self.binds.bind(session_id, task_id, owner_id)
+
+    async def get_binding(self, session_id: str) -> Any:
+        return await self.binds.get(session_id)
+
+
+def _code_content() -> str:
+    return f"<@{BOT_ID}> /code fix the tests"
+
+
+def _attach_create_thread(
+    message: SimpleNamespace,
+    channel: FakeChannel,
+    *,
+    error: Exception | None = None,
+    thread_id: int = THREAD_ID,
+) -> list[FakeChannel]:
+    created: list[FakeChannel] = []
+
+    async def create_thread(name: str, **_kwargs: Any) -> FakeChannel:
+        if error is not None:
+            raise error
+        thread = FakeChannel(thread_id, parent_id=channel.id, type_name="public_thread")
+        thread.name = name
+        channel.threads.append(thread)
+        created.append(thread)
+        return thread
+
+    message.create_thread = create_thread
+    message.created_threads = created
+    return created
+
+
+async def _handle_code(
+    monkeypatch: pytest.MonkeyPatch,
+    message: SimpleNamespace,
+    channel: FakeChannel,
+    *,
+    allowed_users: list[str],
+    require_mention: bool = True,
+    gateway: FakeGateway | None = None,
+) -> FakeGateway:
+    install_channel_settings(
+        monkeypatch,
+        allowed_users=allowed_users,
+        require_mention=require_mention,
+        coding_invoke=True,
+        coding_owner_user_id="u_owner",
+    )
+    gateway = gateway or CodingFakeGateway()
+    adapter = _adapter(gateway, channel)
+    await adapter._handle_message(message)
+    return gateway
+
+
+async def test_guild_code_creates_thread_and_replies_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = FakeChannel(CHANNEL_ID)
+    message = _message(
+        content=_code_content(),
+        channel=channel,
+        mentions=[_bot_mention()],
+    )
+    created = _attach_create_thread(message, channel)
+
+    gateway = await _handle_code(
+        monkeypatch, message, channel, allowed_users=[str(USER_ID)]
+    )
+
+    assert len(gateway.calls) == 1
+    assert len(created) == 1
+    thread = created[0]
+    assert thread.name == "code ct_abc"
+    assert thread.sent == ["Started coding task ct_abc"]
+    assert channel.sent == []
+    thread_bind = await gateway.get_binding(
+        f"v2:discord:{GUILD_ID}:{CHANNEL_ID}:{THREAD_ID}"
+    )
+    parent_bind = await gateway.get_binding(f"v2:discord:{GUILD_ID}:{CHANNEL_ID}:-")
+    assert parent_bind is not None
+    assert thread_bind is not None
+    assert thread_bind.task_id == parent_bind.task_id == "ct_abc"
+
+
+async def test_code_already_in_thread_does_not_create_another(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = FakeChannel(CHANNEL_ID, parent_id=5555, type_name="public_thread")
+    message = _message(
+        content=_code_content(),
+        channel=channel,
+        mentions=[_bot_mention()],
+    )
+    created = _attach_create_thread(message, channel)
+
+    await _handle_code(monkeypatch, message, channel, allowed_users=[str(USER_ID)])
+
+    assert created == []
+    assert channel.sent == ["Started coding task ct_abc"]
+
+
+async def test_dm_code_does_not_create_a_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = FakeChannel(CHANNEL_ID)
+    message = _message(
+        content="/code fix the tests",
+        channel=channel,
+        guild=None,
+        mentions=[],
+    )
+    created = _attach_create_thread(message, channel)
+
+    await _handle_code(
+        monkeypatch,
+        message,
+        channel,
+        allowed_users=[str(USER_ID)],
+        require_mention=True,
+    )
+
+    assert created == []
+    assert channel.sent == ["Started coding task ct_abc"]
+
+
+async def test_thread_create_failure_replies_in_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = FakeChannel(CHANNEL_ID)
+    message = _message(
+        content=_code_content(),
+        channel=channel,
+        mentions=[_bot_mention()],
+    )
+    created = _attach_create_thread(message, channel, error=RuntimeError("no threads"))
+
+    gateway = await _handle_code(
+        monkeypatch, message, channel, allowed_users=[str(USER_ID)]
+    )
+
+    assert created == []
+    assert channel.sent == ["Started coding task ct_abc"]
+    assert len(gateway.calls) == 1
+
+
+async def test_stop_in_autothread_resolves_bind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from neos.api.channels.gateway import ChannelGateway
+    from tests.api.channels.test_gateway_router import FakeCoding, FakeWorkflow
+
+    install_channel_settings(
+        monkeypatch,
+        allowed_users=[str(USER_ID)],
+        coding_invoke=True,
+        coding_owner_user_id="u_owner",
+    )
+    coding = FakeCoding()
+    gateway = ChannelGateway(FakeWorkflow(), coding=coding)
+    channel = FakeChannel(CHANNEL_ID)
+    start = _message(
+        content=_code_content(),
+        channel=channel,
+        mentions=[_bot_mention()],
+    )
+    created = _attach_create_thread(start, channel)
+    adapter = _adapter(gateway, channel)
+
+    await adapter._handle_message(start)
+    assert created
+    thread = created[0]
+    await adapter._handle_message(
+        _message(
+            content=f"<@{BOT_ID}> /stop",
+            channel=thread,
+            mentions=[_bot_mention()],
+        )
+    )
+
+    assert coding.stopped == ["ct_channel"]
+    assert thread.sent[-1] == "Stopped ct_channel"

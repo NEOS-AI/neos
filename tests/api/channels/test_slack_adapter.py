@@ -250,3 +250,173 @@ async def test_send_response_is_called_with_thread_id(
     assert sent == [
         {"channel_id": "C_general", "content": "ok", "thread_id": "123.456"}
     ]
+
+
+class FakeSlackClient:
+    def __init__(self, *, fail_blocks: bool = False) -> None:
+        self.posted: list[dict[str, Any]] = []
+        self._fail_blocks = fail_blocks
+
+    async def chat_postMessage(self, **kwargs: Any) -> None:
+        if self._fail_blocks and kwargs.get("blocks"):
+            raise RuntimeError("invalid_blocks")
+        self.posted.append(kwargs)
+
+
+def _action_ids(blocks: list[dict[str, Any]]) -> list[str]:
+    ids: list[str] = []
+    for block in blocks:
+        for element in block.get("elements") or []:
+            action_id = element.get("action_id")
+            if action_id:
+                ids.append(str(action_id))
+    return ids
+
+
+def _attach_slack_client(
+    adapter: SlackAdapter, *, fail_blocks: bool = False
+) -> FakeSlackClient:
+    client = FakeSlackClient(fail_blocks=fail_blocks)
+    adapter._app = type("FakeApp", (), {"client": client})()
+    return client
+
+
+async def test_coding_start_reply_includes_stop_and_status_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _gateway, _say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    client = _attach_slack_client(adapter)
+
+    await adapter.send_response("C_general", "Started coding task ct_abc")
+
+    assert len(client.posted) == 1
+    payload = client.posted[0]
+    assert payload["text"] == "Started coding task ct_abc"
+    assert payload["channel"] == "C_general"
+    blocks = payload["blocks"]
+    assert _action_ids(blocks) == ["neos_code_stop", "neos_code_status"]
+    values = [
+        element.get("value")
+        for block in blocks
+        for element in block.get("elements") or []
+        if element.get("action_id")
+    ]
+    assert values == ["ct_abc", "ct_abc"]
+
+
+async def test_block_action_stop_dispatches_stop_same_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, _say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+
+    await adapter._handle_block_action(
+        {
+            "user": {"id": "U_alice"},
+            "channel": {"id": "C_general"},
+            "team": {"id": "T1"},
+            "message": {"ts": "999.000", "thread_ts": "111.222"},
+            "actions": [
+                {"action_id": "neos_code_stop", "value": "ct_abc", "type": "button"}
+            ],
+        }
+    )
+
+    assert len(gateway.calls) == 1
+    dispatched = gateway.calls[0]
+    assert dispatched.text == "/stop"
+    assert dispatched.session_id == "v2:slack:T1:C_general:111.222"
+    assert dispatched.metadata["thread_id"] == "111.222"
+    assert dispatched.channel_id == "C_general"
+
+
+async def test_non_coding_chat_reply_has_no_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _gateway, _say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    client = _attach_slack_client(adapter)
+
+    await adapter.send_response("C_general", "ok")
+
+    assert len(client.posted) == 1
+    assert client.posted[0]["text"] == "ok"
+    assert "blocks" not in client.posted[0]
+
+
+async def test_block_action_unallowlisted_user_is_silent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+
+    await adapter._handle_block_action(
+        {
+            "user": {"id": "U_eve"},
+            "channel": {"id": "C_general"},
+            "team": {"id": "T1"},
+            "message": {"ts": "123.456"},
+            "actions": [
+                {"action_id": "neos_code_stop", "value": "ct_abc", "type": "button"}
+            ],
+        }
+    )
+
+    assert gateway.calls == []
+    assert say.calls == []
+
+
+async def test_block_kit_post_falls_back_to_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _gateway, _say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    client = _attach_slack_client(adapter, fail_blocks=True)
+
+    await adapter.send_response("C_general", "Started coding task ct_abc")
+
+    assert len(client.posted) == 1
+    assert client.posted[0]["text"] == "Started coding task ct_abc"
+    assert "blocks" not in client.posted[0]
+
+
+async def test_status_card_includes_stop_until_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _gateway, _say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    client = _attach_slack_client(adapter)
+
+    await adapter.send_response("C_general", "ct_abc queued")
+    await adapter.send_response("C_general", "ct_abc completed")
+
+    assert _action_ids(client.posted[0]["blocks"]) == ["neos_code_stop"]
+    assert client.posted[1]["blocks"][0]["type"] == "section"
+    assert _action_ids(client.posted[1]["blocks"]) == []
+
+
+async def test_block_action_status_and_approve_dispatch_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, _say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    body = {
+        "user": {"id": "U_alice"},
+        "channel": {"id": "C_general"},
+        "team": {"id": "T1"},
+        "message": {"ts": "123.456", "thread_ts": "111.222"},
+    }
+
+    await adapter._handle_block_action(
+        {**body, "actions": [{"action_id": "neos_code_status", "value": "ct_abc"}]}
+    )
+    await adapter._handle_block_action(
+        {
+            **body,
+            "actions": [{"action_id": "neos_code_approve", "value": "ca_1"}],
+        }
+    )
+    await adapter._handle_block_action(
+        {**body, "actions": [{"action_id": "neos_code_deny", "value": "ca_1"}]}
+    )
+
+    assert [call.text for call in gateway.calls] == [
+        "/status",
+        "/approve ca_1",
+        "/deny ca_1",
+    ]
+    assert all(call.session_id == "v2:slack:T1:C_general:111.222" for call in gateway.calls)

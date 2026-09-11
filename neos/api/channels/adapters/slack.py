@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..base import ChannelAdapterBase, ChannelMessage
+from ..cards import ACTION_PREFIX, coding_blocks, command_for_action
 from ..session_key import build_session_key
 
 if TYPE_CHECKING:
@@ -85,10 +87,7 @@ class SlackAdapter(ChannelAdapterBase):
             except Exception as e:
                 logger.warning("[SlackAdapter] auth_test failed (non-critical): %s", e)
 
-            # 메시지 핸들러 등록 (bot 메시지 자동 제외)
-            @self._app.message()
-            async def handle_message(message: dict, say: Any, client: Any) -> None:
-                await self._handle_message(message, say, client)
+            self._register_handlers()
 
             self._handler = AsyncSocketModeHandler(self._app, app_token)
             self._handler_task = asyncio.create_task(
@@ -177,17 +176,112 @@ class SlackAdapter(ChannelAdapterBase):
         post_kwargs: dict[str, Any] = {}
         if thread_id:
             post_kwargs["thread_ts"] = thread_id
+        blocks = coding_blocks(content) if len(chunks) == 1 else None
         for chunk in chunks:
-            try:
-                await self._app.client.chat_postMessage(
-                    channel=channel_id,
-                    text=chunk,
-                    **post_kwargs,
-                )
-            except Exception as e:
-                logger.error(
-                    "[SlackAdapter] chat_postMessage failed to %s: %s", channel_id, e
-                )
+            posted = False
+            if blocks:
+                try:
+                    await self._app.client.chat_postMessage(
+                        channel=channel_id,
+                        text=chunk,
+                        blocks=blocks,
+                        **post_kwargs,
+                    )
+                    posted = True
+                except Exception as e:
+                    logger.warning(
+                        "[SlackAdapter] Block Kit post failed to %s: %s",
+                        channel_id,
+                        e,
+                    )
+            if not posted:
+                try:
+                    await self._app.client.chat_postMessage(
+                        channel=channel_id,
+                        text=chunk,
+                        **post_kwargs,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "[SlackAdapter] chat_postMessage failed to %s: %s",
+                        channel_id,
+                        e,
+                    )
+
+    def _register_handlers(self) -> None:
+        if self._app is None:
+            return
+
+        @self._app.message()
+        async def handle_message(message: dict, say: Any, client: Any) -> None:
+            await self._handle_message(message, say, client)
+
+        @self._app.action(re.compile(rf"^{re.escape(ACTION_PREFIX)}"))
+        async def handle_code_action(ack: Any, body: dict) -> None:
+            await ack()
+            await self._handle_block_action(body)
+
+    async def _handle_block_action(self, body: dict) -> None:
+        actions = body.get("actions") or []
+        if not actions:
+            return
+        action = actions[0]
+        text = command_for_action(
+            str(action.get("action_id") or ""),
+            str(action.get("value") or ""),
+        )
+        if not text:
+            return
+
+        from neos.api.channels.authz import (
+            GateContext,
+            evaluate_channel_gate,
+            policy_from_settings,
+        )
+
+        user = body.get("user") or {}
+        channel = body.get("channel") or {}
+        team = body.get("team") or {}
+        message = body.get("message") or {}
+        user_id = str(user.get("id") or "")
+        channel_id = str(channel.get("id") or "")
+        thread_ts = str(message.get("thread_ts") or message.get("ts") or "")
+        ctx = GateContext(
+            channel_type=self.channel_type,
+            platform_user_id=user_id,
+            channel_id=channel_id,
+            text=text,
+            is_dm=channel_id.startswith("D"),
+            is_bot=False,
+            is_self=bool(self._bot_user_id) and user_id == self._bot_user_id,
+            mentioned=True,
+        )
+        decision = evaluate_channel_gate(ctx, policy_from_settings(self.channel_type))
+        if not decision.allowed:
+            logger.info(
+                "[SlackAdapter] drop reason=%s channel=%s user=%s",
+                decision.reason,
+                ctx.channel_id,
+                ctx.platform_user_id,
+            )
+            return
+
+        channel_message = await self.receive_message(
+            {
+                "user": user_id,
+                "channel": channel_id,
+                "text": text,
+                "team": team.get("id"),
+                "thread_ts": thread_ts or None,
+                "ts": message.get("ts") or thread_ts,
+            }
+        )
+        response = await self._gateway.dispatch(channel_message)
+        await self.send_response(
+            channel_message.channel_id,
+            response,
+            thread_id=channel_message.metadata.get("thread_id"),
+        )
 
     async def _add_reaction(
         self, client: Any, channel_id: str, timestamp: str, name: str
